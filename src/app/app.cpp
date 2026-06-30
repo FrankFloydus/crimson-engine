@@ -12,6 +12,7 @@
 #include "assets/material_document.hpp"
 #include "core/logger.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
+#include "platform/platform_file_dialog.hpp"
 #include "platform/sdl_event_utils.hpp"
 
 #include <SDL3/SDL.h>
@@ -26,6 +27,25 @@ namespace {
 constexpr Sint32 kActiveFrameWaitMs = 1;
 constexpr Sint32 kIdleFrameWaitMs = 100;
 constexpr Sint32 kSuspendedWindowWaitMs = 250;
+
+std::filesystem::path defaultProjectSaveFileName(const QuaderProjectApi& project) {
+    std::string name = project.metadata().name.empty() ? "Untitled Project" : project.metadata().name;
+    name.append(".qdr");
+    return std::filesystem::path(std::move(name));
+}
+
+PlatformFileDialogOptions projectFileDialogOptions(void* ownerWindowHandle, const QuaderProjectApi& project) {
+    PlatformFileDialogOptions options;
+    options.ownerWindowHandle = ownerWindowHandle;
+    const std::filesystem::path& currentPath = project.path();
+    if (!currentPath.empty()) {
+        options.initialDirectory = currentPath.parent_path();
+        options.initialFileName = currentPath.filename();
+    } else {
+        options.initialFileName = defaultProjectSaveFileName(project);
+    }
+    return options;
+}
 
 } // namespace
 
@@ -80,6 +100,16 @@ bool App::initialize(const std::filesystem::path& executablePath, AppOptions opt
     createStartupScene();
     editor_ = std::make_unique<QuaderEditorApi>(
             QuaderApiSessionInternalAccess::fromProjectSession(projectSession_));
+    editor_->project().setRuntimeHooks(QuaderProjectRuntimeHooks{
+            .chooseOpenPath = [this]() {
+                return platformOpenProjectFileDialog(
+                        projectFileDialogOptions(window_.nativeWindowHandle(), editor_->project()));
+            },
+            .chooseSaveAsPath = [this]() {
+                return platformSaveProjectFileDialog(
+                        projectFileDialogOptions(window_.nativeWindowHandle(), editor_->project()));
+            },
+    });
     window_.setLiveResizeFrameCallback([this]() {
         if (!running_ || shutdownComplete_ || renderingFrame_) {
             return;
@@ -240,6 +270,7 @@ bool App::renderFrame(const FrameTiming& frameTiming) {
         return running_;
     }
     ui_.setViewportRenderResizeSuspended(window_.chromeResizeActive());
+    ui_.setRenderPerformanceStats(renderSystem_.framePerformanceStats());
     ui_.beginFrame(frameTiming);
     bool quitRequested = false;
     ui_.draw(*editor_,

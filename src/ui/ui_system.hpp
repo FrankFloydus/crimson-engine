@@ -83,6 +83,7 @@ public:
             const AssetRegistry& assets);
     void renderViewports(RenderSystem& renderSystem);
     void render(RenderSystem& renderSystem);
+    void setRenderPerformanceStats(RenderFramePerformanceStats stats);
     void setViewportRenderResizeSuspended(bool suspended);
     [[nodiscard]] bool needsContinuousRendering() const;
     std::optional<WindowChromeAction> takeWindowChromeAction();
@@ -139,6 +140,7 @@ private:
     bool relativeMouseCaptureWarningIssued_ = false;
     QVec2 relativeMouseDelta_ = {};
     FrameTiming currentFrameTiming_ = {};
+    RenderFramePerformanceStats renderPerformanceStats_;
     UIPanelId focusedPanel_ = UIPanelId::Viewport;
     std::optional<WindowChromeAction> pendingChromeAction_;
     bool viewportRenderResizeSuspended_ = false;

@@ -622,7 +622,8 @@ void QuaderCommandsApi::Impl::registerCommands() {
     registerCommand(
             QuaderCommand::ProjectSaveAs,
             "Save Project As",
-            [this] { return project_.saveAs({}); });
+            [this] { return project_.saveAs({}); },
+            "Ctrl+Shift+S");
     registerCommand(
             QuaderCommand::SceneCreatePointLight,
             "Create Point Light",

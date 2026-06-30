@@ -9,6 +9,7 @@
 #include "render/backend.hpp"
 #include "render/filament_environment_library.hpp"
 #include "render/filament_material_library.hpp"
+#include "render/render_performance_stats.hpp"
 #include "render/texture_registry.hpp"
 
 #include <filament/Engine.h>
@@ -17,6 +18,7 @@
 #include <filament/Skybox.h>
 #include <filament/SwapChain.h>
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
 
@@ -76,6 +78,7 @@ public:
     bool beginFrame();
     bool beginFrame(filament::SwapChain* swapChain);
     void endFrame();
+    [[nodiscard]] RenderFramePerformanceStats framePerformanceStats() const { return framePerformanceStats_; }
     RenderAdditionalSwapChain createAdditionalSwapChain(
             void* nativeWindow,
             SwapChainPresentationColorSpace colorSpace = SwapChainPresentationColorSpace::Native);
@@ -95,6 +98,9 @@ public:
     void applySceneSettings(const SceneSettingsComponent& settings);
 
 private:
+    bool beginFrameWithSwapChain(filament::SwapChain* swapChain);
+    void updateFramePerformanceStatsAfterEndFrame();
+
     filament::Engine* engine_ = nullptr;
     filament::Renderer* renderer_ = nullptr;
     filament::SwapChain* swapChain_ = nullptr;
@@ -102,6 +108,9 @@ private:
     FilamentEnvironmentLibrary environmentLibrary_;
     FilamentMaterialLibrary materialLibrary_;
     TextureRegistry textureRegistry_;
+    RenderFramePerformanceStats framePerformanceStats_;
+    std::chrono::steady_clock::time_point frameCpuBegin_{};
+    bool frameCpuActive_ = false;
 };
 
 } // namespace quader

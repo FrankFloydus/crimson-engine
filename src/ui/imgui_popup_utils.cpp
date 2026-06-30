@@ -8,6 +8,8 @@
 
 #include <imgui_internal.h>
 
+#include <string_view>
+
 namespace quader {
 namespace {
 
@@ -19,6 +21,18 @@ bool anyMouseButtonClicked() {
     return ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
             ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
             ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
+}
+
+bool openComboPopupExists(const ImGuiContext& context) {
+    for (const ImGuiPopupData& popup : context.OpenPopupStack) {
+        if (popup.Window == nullptr || popup.Window->Name == nullptr) {
+            continue;
+        }
+        if (std::string_view(popup.Window->Name).starts_with("##Combo_")) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace
@@ -56,7 +70,7 @@ bool imguiClosePopupForPassThroughClick(ImVec2 passThroughMin, ImVec2 passThroug
     return true;
 }
 
-bool imguiClosePopupForClickOutside(ImVec2 exclusionMin, ImVec2 exclusionMax) {
+bool imguiCloseComboPopupForClickInside(ImVec2 targetMin, ImVec2 targetMax, ImVec2 exclusionMin, ImVec2 exclusionMax) {
     if (!anyMouseButtonClicked()) {
         return false;
     }
@@ -65,9 +79,14 @@ bool imguiClosePopupForClickOutside(ImVec2 exclusionMin, ImVec2 exclusionMax) {
     if (context == nullptr || context->OpenPopupStack.empty()) {
         return false;
     }
+    if (!openComboPopupExists(*context)) {
+        return false;
+    }
 
     const ImVec2 mouse = ImGui::GetMousePos();
-    if (screenPointInside(mouse, exclusionMin, exclusionMax) || imguiOpenPopupContainsScreenPoint(mouse)) {
+    if (!screenPointInside(mouse, targetMin, targetMax) ||
+            screenPointInside(mouse, exclusionMin, exclusionMax) ||
+            imguiOpenPopupContainsScreenPoint(mouse)) {
         return false;
     }
 

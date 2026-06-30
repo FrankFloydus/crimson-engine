@@ -23,6 +23,7 @@ public:
     QuaderApiVoidResult save();
     QuaderApiVoidResult saveAs(const std::filesystem::path& path);
     QuaderApiVoidResult close();
+    void setRuntimeHooks(QuaderProjectRuntimeHooks hooks);
 
     [[nodiscard]] bool dirty() const;
     [[nodiscard]] const std::filesystem::path& path() const;
@@ -30,9 +31,13 @@ public:
 
 private:
     [[nodiscard]] QuaderApiVoidResult unsupported(std::string message) const;
+    [[nodiscard]] QuaderApiVoidResult saveToPath(const std::filesystem::path& path, bool updatePath);
+    [[nodiscard]] std::optional<std::filesystem::path> chooseOpenPath() const;
+    [[nodiscard]] std::optional<std::filesystem::path> chooseSaveAsPath() const;
 
     QuaderApiSession session_;
     std::filesystem::path path_;
+    QuaderProjectRuntimeHooks runtimeHooks_;
 };
 
 } // namespace quader

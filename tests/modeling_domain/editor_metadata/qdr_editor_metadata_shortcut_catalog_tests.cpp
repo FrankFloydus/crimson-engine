@@ -86,7 +86,7 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractSelectionModeCatalogExpo
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutTargetsResolveToDescriptorOnlyCatalogs) {
 	const std::span<const qhc::HostShortcutDescriptor> shortcuts = qhc::shortcut_catalog();
-	EXPECT_TRUE(shortcuts.size() == 43U);
+	EXPECT_TRUE(shortcuts.size() == 44U);
 
 	for (const qhc::HostShortcutDescriptor& shortcut : shortcuts) {
 		EXPECT_FALSE(shortcut.id.empty());
@@ -164,7 +164,15 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogPreserves
 	const qhc::HostShortcutDescriptor& save_document = require_shortcut("save_document");
 	EXPECT_TRUE(same_text(save_document.key, "S"));
 	EXPECT_TRUE(save_document.primary_modifier);
+	EXPECT_FALSE(save_document.shift);
 	EXPECT_TRUE(save_document.registration_policy == qhc::HostShortcutRegistrationPolicy::quader_local);
+
+	const qhc::HostShortcutDescriptor& save_as_document = require_shortcut("save_as_document");
+	EXPECT_TRUE(same_text(save_as_document.key, "S"));
+	EXPECT_TRUE(save_as_document.primary_modifier);
+	EXPECT_TRUE(save_as_document.shift);
+	EXPECT_TRUE(same_text(save_as_document.target_id, "save_as_document"));
+	EXPECT_TRUE(save_as_document.registration_policy == qhc::HostShortcutRegistrationPolicy::quader_local);
 
 	const qhc::HostShortcutDescriptor& delete_key = require_shortcut("delete");
 	EXPECT_TRUE(same_text(delete_key.key, "Delete"));

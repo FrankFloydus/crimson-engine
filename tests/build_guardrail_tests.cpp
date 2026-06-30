@@ -1135,7 +1135,8 @@ TEST(BuildGuardrailTests, ImGuiRuntimeResourcesArePackagedWithRuntime) {
     expectContains(quaderWidgets, "drawComboCaret");
     expectContains(quaderWidgets, "ClosePopupToLevel");
     expectContains(quaderWidgets, "##QuaderComboWasOpen");
-    expectContains(quaderWidgets, "ImGuiWindowFlags_NoScrollbar");
+    expectContains(quaderWidgets, "BeginComboPopup");
+    expectContains(quaderWidgets, "ImGuiComboFlags_HeightMask_");
     expectContains(quaderWidgets, "kPhosphorCaretDown");
     expectContains(quaderWidgets, "kPhosphorCaretRight");
     expectContains(styleSource, "Phosphor.ttf");

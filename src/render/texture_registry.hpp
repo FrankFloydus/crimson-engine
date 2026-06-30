@@ -21,6 +21,7 @@ constexpr RenderTextureHandle InvalidRenderTextureHandle = 0u;
  */
 enum class TextureSampleColorSpace {
     DisplaySrgb,
+    DisplaySrgbPremultipliedAlpha,
     LinearSrgb
 };
 

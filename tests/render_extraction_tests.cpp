@@ -25,6 +25,8 @@
 #include "scene/scene_document.hpp"
 #include "support/guardrail_file_scan.hpp"
 
+#include <mesh/polygon/document.hpp>
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -32,6 +34,7 @@
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -80,6 +83,30 @@ MeshAsset makeOverlayTriangleMesh() {
     };
     mesh.indices = {0u, 1u, 2u};
     mesh.primitives = {MeshPrimitiveSpan{.indexOffset = 0u, .indexCount = 3u, .materialSlot = 0u}};
+    return mesh;
+}
+
+MeshAsset makeAuthoredQuadMesh() {
+    MeshAsset mesh;
+    mesh.name = "Authored Quad";
+    mesh.vertices = {
+            MeshVertex{.position = {-1.0f, 0.0f, -1.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {0.0f, 0.0f}},
+            MeshVertex{.position = {1.0f, 0.0f, -1.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {1.0f, 0.0f}},
+            MeshVertex{.position = {1.0f, 0.0f, 1.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {1.0f, 1.0f}},
+            MeshVertex{.position = {-1.0f, 0.0f, 1.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {0.0f, 1.0f}},
+    };
+    mesh.indices = {0u, 1u, 2u, 0u, 2u, 3u};
+    mesh.primitives = {MeshPrimitiveSpan{.indexOffset = 0u, .indexCount = 6u, .materialSlot = 0u}};
+    quader_poly::Document document;
+    document.vertices = {
+            {.id = 1u, .position = mesh.vertices[0].position},
+            {.id = 2u, .position = mesh.vertices[1].position},
+            {.id = 3u, .position = mesh.vertices[2].position},
+            {.id = 4u, .position = mesh.vertices[3].position},
+    };
+    document.faces.push_back({.id = 1u, .vertices = {1u, 2u, 3u, 4u}});
+    mesh.hasAuthoredPolygonDocument = true;
+    mesh.authoredPolygonDocument = std::make_shared<quader_poly::Document>(std::move(document));
     return mesh;
 }
 
@@ -449,10 +476,11 @@ TEST(ViewportSceneOverlayBuilderTests, BuildsWireframeOverlayWithoutObjectFaceFi
     EXPECT_EQ(triangleCountFor(objectFrame, ViewportOverlayLayer::SelectedVisibleFace), 0u);
     EXPECT_EQ(triangleCountFor(objectFrame, ViewportOverlayLayer::HoverFace), 0u);
     EXPECT_EQ(triangleCountFor(objectFrame, ViewportOverlayLayer::ToolPreviewFill), 1u);
-    EXPECT_EQ(lineCountFor(objectFrame, ViewportOverlayLayer::WireframeBase), 3u);
+    EXPECT_EQ(lineCountFor(objectFrame, ViewportOverlayLayer::WireframeBase), 0u);
+    EXPECT_EQ(lineCountFor(objectFrame, ViewportOverlayLayer::WireframeXray), 3u);
     EXPECT_TRUE(std::all_of(objectFrame.lines.begin(), objectFrame.lines.end(), [](const ViewportOverlayLine& line) {
-        return line.layer != ViewportOverlayLayer::WireframeBase ||
-                (line.color == rgba8(255, 255, 255) &&
+        return line.layer != ViewportOverlayLayer::WireframeXray ||
+                (line.color == kOverlayWireframeXrayColor &&
                         line.styleRole == ViewportOverlayStyleRole::WireframeBase &&
                         line.source == ViewportOverlaySource::SceneWireframe);
     }));
@@ -463,7 +491,27 @@ TEST(ViewportSceneOverlayBuilderTests, BuildsWireframeOverlayWithoutObjectFaceFi
     EXPECT_EQ(triangleCountFor(faceFrame, ViewportOverlayLayer::SelectedVisibleFace), 1u);
     EXPECT_EQ(triangleCountFor(faceFrame, ViewportOverlayLayer::HoverFace), 1u);
     EXPECT_EQ(triangleCountFor(faceFrame, ViewportOverlayLayer::ToolPreviewFill), 1u);
-    EXPECT_EQ(lineCountFor(faceFrame, ViewportOverlayLayer::WireframeBase), 3u);
+    EXPECT_EQ(lineCountFor(faceFrame, ViewportOverlayLayer::WireframeBase), 0u);
+    EXPECT_EQ(lineCountFor(faceFrame, ViewportOverlayLayer::WireframeXray), 3u);
+}
+
+TEST(ViewportSceneOverlayBuilderTests, WireframeModeUsesAuthoredTopologyWithoutTriangleDiagonal) {
+    AssetRegistry assets;
+    SceneDocument document;
+    const AssetId mesh = assets.addMesh(makeAuthoredQuadMesh());
+    const EntityId entity = document.createEntity("Authored Quad", EntityKind::Mesh);
+    document.setMesh(entity, MeshComponent{.mesh = mesh});
+
+    const ViewportOverlayFrame frame =
+            ViewportSceneOverlayBuilder::buildWireframeFrame({}, ModelingSelectionMode::Object, document, assets);
+
+    EXPECT_EQ(lineCountFor(frame, ViewportOverlayLayer::WireframeBase), 0u);
+    EXPECT_EQ(lineCountFor(frame, ViewportOverlayLayer::WireframeXray), 4u);
+    EXPECT_TRUE(std::all_of(frame.lines.begin(), frame.lines.end(), [](const ViewportOverlayLine& line) {
+        return line.layer != ViewportOverlayLayer::WireframeXray ||
+                (line.styleRole == ViewportOverlayStyleRole::WireframeBase &&
+                        line.source == ViewportOverlaySource::SceneWireframe);
+    }));
 }
 
 TEST(OverlayLineMeshBuilderTests, ClipsAndExpandsLinesToDeviceSpaceQuads) {
@@ -994,9 +1042,14 @@ TEST(ViewportRenderPassCoordinatorTests, SeparatesSceneAndOverlayLayerMasks) {
 
     EXPECT_EQ(coordinator.sceneVisibleLayerMask(),
             static_cast<std::uint8_t>(kViewportShadedSceneLayerMask | kViewportToolPreviewLayerMask));
-    EXPECT_EQ(coordinator.overlayVisibleLayerMask(), gridLayerMask);
+    EXPECT_EQ(coordinator.overlayVisibleLayerMask(),
+            static_cast<std::uint8_t>(gridLayerMask | kViewportOverlayLayerMask));
     EXPECT_EQ(coordinator.visibleLayerMask(),
-            static_cast<std::uint8_t>(kViewportShadedSceneLayerMask | kViewportToolPreviewLayerMask | gridLayerMask));
+            static_cast<std::uint8_t>(
+                    kViewportShadedSceneLayerMask |
+                    kViewportToolPreviewLayerMask |
+                    gridLayerMask |
+                    kViewportOverlayLayerMask));
 
     EXPECT_TRUE(coordinator.setGridVisible(false));
     EXPECT_EQ(coordinator.sceneVisibleLayerMask(),
@@ -1008,16 +1061,26 @@ TEST(ViewportRenderPassCoordinatorTests, SeparatesSceneAndOverlayLayerMasks) {
     EXPECT_TRUE(coordinator.setOverlayVisible(true));
     EXPECT_EQ(coordinator.sceneVisibleLayerMask(),
             static_cast<std::uint8_t>(kViewportShadedSceneLayerMask | kViewportToolPreviewLayerMask));
-    EXPECT_EQ(coordinator.overlayVisibleLayerMask(), gridLayerMask);
+    EXPECT_EQ(coordinator.overlayVisibleLayerMask(),
+            static_cast<std::uint8_t>(gridLayerMask | kViewportOverlayLayerMask));
     EXPECT_EQ(coordinator.visibleLayerMask(),
-            static_cast<std::uint8_t>(kViewportShadedSceneLayerMask | kViewportToolPreviewLayerMask | gridLayerMask));
+            static_cast<std::uint8_t>(
+                    kViewportShadedSceneLayerMask |
+                    kViewportToolPreviewLayerMask |
+                    gridLayerMask |
+                    kViewportOverlayLayerMask));
 
     EXPECT_TRUE(coordinator.setSceneLayerMask(kViewportRenderedSceneLayerMask));
     EXPECT_EQ(coordinator.sceneVisibleLayerMask(),
             static_cast<std::uint8_t>(kViewportRenderedSceneLayerMask | kViewportToolPreviewLayerMask));
-    EXPECT_EQ(coordinator.overlayVisibleLayerMask(), gridLayerMask);
+    EXPECT_EQ(coordinator.overlayVisibleLayerMask(),
+            static_cast<std::uint8_t>(gridLayerMask | kViewportOverlayLayerMask));
     EXPECT_EQ(coordinator.visibleLayerMask(),
-            static_cast<std::uint8_t>(kViewportRenderedSceneLayerMask | kViewportToolPreviewLayerMask | gridLayerMask));
+            static_cast<std::uint8_t>(
+                    kViewportRenderedSceneLayerMask |
+                    kViewportToolPreviewLayerMask |
+                    gridLayerMask |
+                    kViewportOverlayLayerMask));
 
     EXPECT_TRUE(coordinator.setSceneVisible(false));
     EXPECT_EQ(coordinator.sceneVisibleLayerMask(), 0u);

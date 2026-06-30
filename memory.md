@@ -9,6 +9,57 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-06-30 - ImGui Combo Icons Must Preserve Popup Stack Ownership
+
+Task/context: replacing native combo/collapsing arrows with Phosphor glyphs regressed the top menu
+and left/right sidebar visibility. The custom combo helper had recreated ImGui combo popups by hand,
+which could desynchronize global popup/menu state used by `BeginMenu`; the top menu helper also
+contained a manual "click an already-open menu to close it" path that could consume menu-bar popup
+opens. A later viewport pass-through helper also closed any open popup after the menu bar drew, so
+top-level menus could open and then immediately disappear in the same frame.
+The rightmost `Layout` menu could also fall past the native borderless chrome's left interactive
+strip and be treated as title-bar drag.
+
+Invariant:
+
+- Custom combo drawing may own the frame, preview text, caret glyph, and toggle decision, but popup
+  creation must go through ImGui's combo popup owner (`BeginComboPopup`) so callers can keep using
+  `ImGui::EndCombo()`.
+- Main menu bars must use ImGui's normal `BeginMenu`/`EndMenu` popup lifecycle. Do not add manual
+  `IsPopupOpen`/`CloseCurrentPopup` toggle logic to top-level menus unless the behavior is verified
+  against real menu-bar clicks.
+- Viewport navigation pass-through may auto-close viewport combo popups, but it must be scoped to
+  combo popup windows (`##Combo_`) and to clicks inside the viewport pane. It must not close menu
+  popups created by the top chrome, sidebars, or other non-viewport surfaces.
+- Borderless chrome hit testing must leave the whole top menu row in the left interactive strip. If
+  menu labels change, update `PlatformWindowChromeHitTest::leftInteractiveWidth` and the chrome
+  hit-test regression so rightmost menu entries such as `Layout` are not draggable title bar.
+- Strip small combo height flags for Quader icon combos when the current option lists should auto-fit
+  without scrollbars.
+- Local panel visibility lives in `%LOCALAPPDATA%\Quader\ui_settings.ini`; if outliner/inspector are
+  false, source defaults will not make them appear until settings are restored or changed through UI.
+
+Affected owners/files:
+
+- `src/ui/imgui_quader_widgets.cpp`
+- `src/ui/imgui_popup_utils.cpp`
+- `src/ui/imgui_popup_utils.hpp`
+- `src/ui/main_menu_bar.cpp`
+- `src/ui/viewport_panel.cpp`
+- `src/platform/platform_window.hpp`
+- `tests/core_tests.cpp`
+- `tests/ui_layout_guardrail_tests.cpp`
+- `tests/build_guardrail_tests.cpp`
+- local user config `%LOCALAPPDATA%\Quader\ui_settings.ini`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.ImGuiRuntimeResourcesArePackagedWithRuntime:UiLayoutGuardrailTests.ViewportChromeCombosSharePopupPassThroughClickHandling:UiLayoutGuardrailTests.MainMenuDropdownsUsePopupPaddingAndVerticalSpacing`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.AppVersionMetadataUsesRootVersionSource`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.ImGuiShellViewportAndControlStylingStayVisible`
+- `cmake --build --preset vs2026-debug --target quader`
+
 ## 2026-06-30 - Vertex Snap Must Not Steal Plain Gizmo-Overlapped Selection Clicks
 
 Task/context: with vertex snap enabled, clicking a vertex that was overlapped by the move gizmo could
@@ -1243,6 +1294,49 @@ Verification:
 - `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=QuaderMeshMaterialTests.*:SceneRenderBridgeTests.*:ViewportRendererTests.*:ViewportRenderPassCoordinatorTests.*:OverlayRenderableCacheTests.*:RenderExtractionTests.*`
 - `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime:WindowGuardrailTests.*:UiLayoutGuardrailTests.*`
 
+## 2026-06-30 - Viewport Overlays Use Separate Display-Space Composite
+
+Task/context: Rendered mode camera exposure and combined viewport texture presentation still made
+editor overlays look dark/noisy. The first failure was reusing the scene Filament camera for the
+overlay view; the remaining failure was compositing transparent overlays into the scene texture
+before the UI presentation pass.
+
+Invariants:
+
+- Filament camera exposure is scene render state. Editor overlay colors must remain stable across
+  scene camera aperture, shutter speed, and sensitivity changes.
+- The overlay camera is not a separate user camera. It must mirror the scene camera look-at and
+  projection every frame, then keep neutral exposure for editor-space compositing.
+- Texture-backed viewports must keep scene color and editor overlay color in separate render targets.
+  The scene target is sampled as linear sRGB by the UI. The overlay target is transparent,
+  display-sRGB, premultiplied-alpha editor presentation sampled over the scene image.
+- When overlays are hidden, the separate overlay target must still be cleared transparent so stale
+  editor pixels cannot remain from a previous frame.
+
+Affected owners/files:
+
+- `src/render/viewport_renderer.*`
+- `src/render/viewport_render_target.*`
+- `src/render/viewport_render_pass_coordinator.*`
+- `src/render/texture_registry.*`
+- `src/render/imgui_filament_renderer.cpp`
+- `resources/materials/imgui.mat`
+- `src/ui/viewport_panel.cpp`
+- `tests/core_tests.cpp`
+
+Resolved approach:
+
+- `ViewportRenderer` owns a second Filament camera for the overlay view. The overlay camera shares
+  the scene camera transform/projection but resets to neutral exposure on initialization, camera
+  updates, and scene-setting application.
+- `ViewportRenderer` owns a second `ViewportRenderTarget` for overlays. The scene view renders into
+  the linear viewport texture; the overlay view renders into a transparent premultiplied display
+  texture. `ViewportPanel` draws the scene texture first, then the overlay texture with ImGui.
+- `TextureRegistry` and the ImGui material distinguish straight-alpha display/linear textures from
+  premultiplied display textures so the overlay target is not premultiplied a second time.
+- Added a source guardrail test so future changes cannot route the overlay view back through the
+  scene camera, scene exposure path, or combined viewport texture path.
+
 ## 2026-06-29 - Selection Locks, Scene Delete, And Environment Clear Color
 
 Task/context: Editor selection, outliner delete, inspector defaults, and viewport background behavior
@@ -1481,3 +1575,87 @@ Verification:
 - `cmake --build --preset vs2026-debug --target quader`
 - Manual smoke: launched `build\vs2026\Debug\quader.exe --borderless-window`, minimized, restored,
   maximized, restored, and confirmed the process/window stayed alive.
+
+## 2026-06-30 - Project Save/Open Restored Through QDR Owners
+
+Task/context: File menu Save, Save As, and Open needed to be restored with `Ctrl+S`,
+`Ctrl+Shift+S`, and `Ctrl+O`.
+
+Invariants:
+
+- UI and shortcuts must execute `QuaderCommand::ProjectOpen`, `ProjectSave`, and `ProjectSaveAs`;
+  the File menu does not read or write project files directly.
+- `QuaderProjectApi` owns project path state and routes durable persistence through
+  `QdrDocumentReader::readProjectDocument(...)` and
+  `QdrDocumentWriter::writeProjectDocumentAtomic(...)`.
+- `ProjectSession::replaceDocument(...)` replaces the live `ProjectDocument` in place so existing
+  public API services keep valid references, clears history, rehydrates modeling runtime state from
+  authored polygon mesh assets, and marks the opened document clean.
+- Document replacement must advance the loaded `SceneDocument` revision past the previous live scene
+  revision. The QDR payload can be correct while renderer/UI revision subscribers miss the replacement
+  if an opened document's scene/asset counters collide with the prior document.
+- QDR project serialization is scene/entity/component based: import-specific Unity/Godot runtime junk
+  belongs in import adapters, while durable placeable scene state belongs in `SceneDocument` components
+  and `src/io/qdr` component codecs.
+- Empty project paths are supplied by runtime hooks from the native shell. Headless/API callers must
+  pass explicit paths or install hooks.
+
+Affected owners/files:
+
+- `src/api/quader_project_api.*`
+- `src/scene/scene_document.*`
+- `src/scene/document/project_session.*`
+- `src/editor/modeling/services/modeling_session_service.*`
+- `src/platform/platform_file_dialog.*`
+- `src/app/app.cpp`
+- `src/ui/main_menu_bar.cpp`
+- `resources/locales/*.lang`
+- `src/editor/metadata/host_contract.cpp`
+- `src/viewport/host_viewport_contract_adapter.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `cmake --build --preset vs2026-debug --target quader_modeling_domain_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=EditorApiTests.AggregatesDocumentApisAndCommandRouting:EditorApiTests.ProjectDocumentCommandsRouteThroughProjectApi:EditorApiTests.ProjectSaveAsSaveAndOpenUseQdrDocumentIo:EditorApiTests.ProjectCommandsUseRuntimePathHooksForEmptyPaths:EditorApiTests.GlobalCommandKeybindingsResolveWithoutViewportFocus`
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=LocalizationResourceTests.*:LocalizationServiceTests.*`
+- `build\vs2026\Debug\quader_modeling_domain_tests.exe --gtest_filter=QdrEditorMetadata*.*`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_filter=UiLayoutGuardrailTests.MainMenuDropdownsUsePopupPaddingAndVerticalSpacing`
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=EditorApiTests.ProjectSaveAsSaveAndOpenUseQdrDocumentIo:ProjectSessionTests.ReplaceDocumentAdvancesSceneRevisionPastPreviousDocument:QdrDocumentIoTests.WritesAndReadsProjectDocumentPayloadWithStableIdsAndBindings`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-06-30 - Wireframe Viewport Mode Uses X-Ray Authored Topology
+
+Task/context: Wireframe viewport mode was showing an unselected mesh as a mostly solid depth-tested
+shape, with hidden topology and the grid masked by invisible mesh depth.
+
+Invariants:
+
+- Wireframe viewport mode is a viewport mode, not selected-object wire styling. It must emit
+  unselected scene topology on `ViewportOverlayLayer::WireframeXray` so back/hidden edges remain
+  visible and are not occluded by mesh depth proxies.
+- `WireframeBase` remains the depth-tested selection/base-wire policy layer. Do not reuse it for
+  wireframe viewport scene topology.
+- Scene wireframe extraction prefers `MeshAsset::authoredPolygonDocument` when present so authored
+  quads/ngons display their real topology instead of baked triangle diagonals. Triangle-index
+  extraction is only the fallback for meshes without authored polygon data.
+- Depth-only mesh proxies belong to the shared `kViewportOverlayLayerMask` overlay-depth layer, and
+  `ViewportRenderPassCoordinator` must include that layer only while the shaded/rendered scene is
+  visible. Wireframe mode hides the scene and must exclude the depth-proxy layer so grid and x-ray
+  wires are not masked by invisible mesh depth.
+
+Affected owners/files:
+
+- `src/render/viewport_overlay_frame.hpp`
+- `src/render/viewport_overlay_policy.*`
+- `src/render/overlay/viewport_scene_overlay_builder.cpp`
+- `src/render/overlay/viewport_overlay_style_resolver.cpp`
+- `src/render/viewport_renderer.cpp`
+- `tests/render_extraction_tests.cpp`
+- `tests/core_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportSceneOverlayBuilderTests.*:ViewportOverlayPolicyTests.*:ViewportRendererTests.MultiViewportRenderDoesNotMutateSceneInsideFilamentFrame:ViewportRendererTests.PresentsSceneAndOverlayViewportTexturesThroughUiEncoder:ViewportRendererTests.OverlayPassUsesNeutralExposureCamera`

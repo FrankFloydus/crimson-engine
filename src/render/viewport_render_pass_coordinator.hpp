@@ -44,7 +44,7 @@ public:
     void render(filament::Renderer& renderer,
             filament::View* sceneView,
             filament::View* overlayView,
-            filament::RenderTarget* renderTarget) const;
+            bool overlayUsesSeparateTarget) const;
 
 private:
     bool groundGridVisible_ = true;

@@ -9,6 +9,7 @@
 #include "core/frame_timing.hpp"
 #include "core/types.hpp"
 #include "math/types.hpp"
+#include "render/render_performance_stats.hpp"
 #include "ui/ui_icon_set.hpp"
 #include "ui/ui_panel.hpp"
 #include "viewport/viewport_settings.hpp"
@@ -43,6 +44,7 @@ struct UIContext {
     UISettings& settings;
     ViewportSettings& viewportSettings;
     FrameTiming frameTiming = {};
+    RenderFramePerformanceStats renderPerformance = {};
     QVec2 viewportRelativeMouseDelta = {};
     bool viewportRenderResizeSuspended = false;
     bool* viewportCursorCaptureRequested = nullptr;

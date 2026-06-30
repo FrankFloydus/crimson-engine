@@ -45,6 +45,7 @@ inline constexpr std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> kV
         ViewportOverlayLayer::SelectedVisibleFace,
         ViewportOverlayLayer::SelectedFaceMask,
         ViewportOverlayLayer::WireframeBase,
+        ViewportOverlayLayer::WireframeXray,
         ViewportOverlayLayer::SelectedXrayFace,
         ViewportOverlayLayer::HoverFace,
         ViewportOverlayLayer::SourceWireDepthStamp,
@@ -70,6 +71,7 @@ inline constexpr std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> kV
 
 inline constexpr std::uint32_t kOverlaySelectionFaceColor = 0x081facffU;
 inline constexpr std::uint32_t kOverlaySelectionWireColor = 0xff1fd3ffU;
+inline constexpr std::uint32_t kOverlayWireframeXrayColor = rgba8(238, 242, 247, 230);
 inline constexpr std::uint32_t kOverlaySourceWireColor = 0xebffe05cU;
 inline constexpr std::uint32_t kOverlayOpenEdgeColor = 0xff00ffffU;
 inline constexpr std::uint32_t kOverlayDiagnosticEdgeColor = 0xff0000ffU;
@@ -117,6 +119,7 @@ inline constexpr float kOverlayFillDepthBias = 0.035f;
 inline constexpr float kOverlayDeviceDepthBiasPerNearPlane = 0.0025f;
 inline constexpr float kOverlayLineFeatherPixels = 1.0f;
 inline constexpr float kOverlayWireframeBaseLineWidthPixels = 1.0f;
+inline constexpr float kOverlayWireframeXrayLineWidthPixels = 1.35f;
 inline constexpr float kOverlaySourceWireLineWidthPixels = 1.5f;
 inline constexpr float kOverlaySelectionWireLineWidthPixels = 2.5f;
 inline constexpr float kOverlayHoverWireLineWidthPixels = 2.5f;

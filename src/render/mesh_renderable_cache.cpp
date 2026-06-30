@@ -154,7 +154,7 @@ void MeshRenderableCache::syncMesh(EntityId entityId,
                 false,
                 doubleSided,
                 materialRevision,
-                kViewportPerPaneEditorLayerMask,
+                kViewportOverlayLayerMask,
                 true,
                 true,
                 kViewportOverlayDepthChannel);

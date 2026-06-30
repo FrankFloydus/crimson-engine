@@ -125,6 +125,7 @@ public:
     bool isEffectivelyLocked(EntityId id) const;
     QMat4 localTransformMatrix(EntityId id) const;
     QMat4 worldTransformMatrix(EntityId id) const;
+    void advanceRevisionForReplacement(std::uint64_t previousRevision);
 
     entt::entity enttEntity(EntityId id) const;
     EntityId entityId(entt::entity entity) const;

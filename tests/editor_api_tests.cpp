@@ -100,6 +100,18 @@ void expectSceneSettingsEq(
     EXPECT_EQ(actual.postProcess.toneMapping, expected.postProcess.toneMapping);
 }
 
+void expectLightEq(
+        const quader::QuaderLightComponent& actual,
+        const quader::QuaderLightComponent& expected) {
+    EXPECT_EQ(actual.type, expected.type);
+    EXPECT_FLOAT_EQ(actual.color.x, expected.color.x);
+    EXPECT_FLOAT_EQ(actual.color.y, expected.color.y);
+    EXPECT_FLOAT_EQ(actual.color.z, expected.color.z);
+    EXPECT_FLOAT_EQ(actual.intensity, expected.intensity);
+    EXPECT_FLOAT_EQ(actual.range, expected.range);
+    EXPECT_EQ(actual.castsShadows, expected.castsShadows);
+}
+
 std::vector<quader::EntityId> selectedEntities(const quader::QuaderEditorApi& editor) {
     std::vector<quader::EntityId> selected;
     for (const quader::QuaderEntitySnapshot& snapshot : editor.query().entities()) {
@@ -314,6 +326,14 @@ std::filesystem::path keybindingTestPath(std::string_view name) {
     return path;
 }
 
+std::filesystem::path projectTestPath(std::string_view name) {
+    std::filesystem::path path = std::filesystem::temp_directory_path() /
+            ("quader-project-" + std::string(name) + ".qdr");
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+    return path;
+}
+
 std::string readTextFile(const std::filesystem::path& path) {
     std::ifstream file(path);
     std::string text;
@@ -423,7 +443,7 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ProjectNew), "Ctrl+N");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ProjectOpen), "Ctrl+O");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ProjectSave), "Ctrl+S");
-    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ProjectSaveAs), "");
+    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ProjectSaveAs), "Ctrl+Shift+S");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::SceneCreatePointLight), "");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::SceneCreateDirectionalLight), "");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ViewportFrameSelection), "Home");
@@ -501,6 +521,136 @@ TEST(EditorApiTests, ProjectDocumentCommandsRouteThroughProjectApi) {
     compareProjectCommand(quader::QuaderCommand::ProjectSaveAs, [](quader::QuaderProjectApi& project) {
         return project.saveAs({});
     });
+}
+
+TEST(EditorApiTests, ProjectSaveAsSaveAndOpenUseQdrDocumentIo) {
+    const std::filesystem::path path = projectTestPath("roundtrip");
+    CommandTestHarness saveHarness;
+    quader::QuaderEditorApi& editor = saveHarness.editor;
+    const quader::QuaderModelingObjectRef box = createSelectedBox(editor, "Persisted Box");
+    ASSERT_NE(box.entity, quader::InvalidEntityId);
+
+    const std::optional<quader::QuaderEntitySnapshot> root = sceneRoot(editor);
+    ASSERT_TRUE(root.has_value());
+    ASSERT_TRUE(root->hasSceneSettings);
+    quader::QuaderSceneSettings settings = root->sceneSettings;
+    settings.environment.environmentId = "pillars_2k";
+    settings.environment.enabled = false;
+    settings.environment.showBackground = false;
+    settings.environment.clearColor = {0.2f, 0.3f, 0.4f};
+    settings.environment.intensity = 2.25f;
+    settings.environment.backgroundIntensity = 0.5f;
+    settings.environment.rotationY = 1.25f;
+    settings.camera.aperture = 8.0f;
+    settings.camera.shutterSpeed = 1.0f / 60.0f;
+    settings.camera.sensitivity = 320.0f;
+    settings.camera.nearPlane = 0.1f;
+    settings.camera.farPlane = 500.0f;
+    settings.postProcess.enabled = true;
+    settings.postProcess.antiAliasing = false;
+    settings.postProcess.ambientOcclusion = true;
+    settings.postProcess.ambientOcclusionIntensity = 2.5f;
+    settings.postProcess.ambientOcclusionRadius = 1.1f;
+    settings.postProcess.bloom = true;
+    settings.postProcess.bloomStrength = 0.65f;
+    settings.postProcess.dithering = false;
+    settings.postProcess.toneMapping = quader::QuaderToneMapping::DisplayRange;
+    ASSERT_TRUE(editor.scene().setSceneSettings(root->id, settings).ok());
+
+    quader::QuaderCreatePointLightArgs lightArgs;
+    lightArgs.name = "Persisted Key Light";
+    lightArgs.transform.position = {3.0f, 4.0f, 5.0f};
+    lightArgs.light = quader::QuaderLightComponent{
+            .type = quader::QuaderLightType::Point,
+            .color = {1.0f, 0.75f, 0.5f},
+            .intensity = 950.0f,
+            .range = 16.0f,
+            .castsShadows = true,
+    };
+    lightArgs.selectCreated = true;
+    const quader::QuaderApiResult<quader::QuaderEntityRef> light = editor.scene().createPointLight(lightArgs);
+    ASSERT_TRUE(light.ok()) << light.errorMessage();
+    ASSERT_NE(light.value().id, quader::InvalidEntityId);
+    EXPECT_TRUE(editor.project().dirty());
+
+    const quader::QuaderApiVoidResult saved = editor.project().saveAs(path);
+    ASSERT_TRUE(saved.ok()) << saved.errorMessage();
+    EXPECT_TRUE(saved.changed());
+    EXPECT_EQ(editor.project().path(), path);
+    EXPECT_FALSE(editor.project().dirty());
+    EXPECT_TRUE(std::filesystem::exists(path));
+    const std::string savedText = readTextFile(path);
+    EXPECT_NE(savedText.find("\"kind\": \"quader.project-document\""), std::string::npos);
+    EXPECT_NE(savedText.find("\"sceneSettings\""), std::string::npos);
+    EXPECT_NE(savedText.find("\"environmentId\": \"pillars_2k\""), std::string::npos);
+    EXPECT_NE(savedText.find("\"postProcess\""), std::string::npos);
+    EXPECT_NE(savedText.find("\"light\""), std::string::npos);
+    EXPECT_NE(savedText.find("\"Persisted Key Light\""), std::string::npos);
+    EXPECT_EQ(savedText.find("\"session\""), std::string::npos);
+
+    CommandTestHarness openHarness;
+    quader::QuaderEditorApi& opened = openHarness.editor;
+    const quader::QuaderRevisionStamp beforeOpenRevisions = opened.revisions();
+    const quader::QuaderApiVoidResult openResult = opened.project().open(path);
+    ASSERT_TRUE(openResult.ok()) << openResult.errorMessage();
+    EXPECT_TRUE(openResult.changed());
+    EXPECT_EQ(opened.project().path(), path);
+    EXPECT_FALSE(opened.project().dirty());
+    EXPECT_GT(opened.revisions().sceneRevision, beforeOpenRevisions.sceneRevision);
+    EXPECT_TRUE(entityNamed(opened, "Persisted Box").has_value());
+    EXPECT_EQ(userEntityCount(opened), 2u);
+    expectSceneSettingsEq(sceneRootSettings(opened), settings);
+    const std::optional<quader::QuaderEntitySnapshot> openedLight =
+            entityNamed(opened, "Persisted Key Light");
+    ASSERT_TRUE(openedLight.has_value());
+    ASSERT_TRUE(openedLight->hasLight);
+    EXPECT_EQ(openedLight->kind, quader::QuaderEntityKind::Light);
+    EXPECT_FLOAT_EQ(openedLight->transform.position.x, 3.0f);
+    EXPECT_FLOAT_EQ(openedLight->transform.position.y, 4.0f);
+    EXPECT_FLOAT_EQ(openedLight->transform.position.z, 5.0f);
+    expectLightEq(openedLight->light, lightArgs.light);
+    EXPECT_EQ(selectedEntities(opened), std::vector<quader::EntityId>{openedLight->id});
+
+    const quader::QuaderApiVoidResult moved = opened.modeling().moveSelection({0.25f, 0.0f, 0.0f});
+    ASSERT_TRUE(moved.ok()) << moved.errorMessage();
+    EXPECT_TRUE(moved.changed());
+    EXPECT_TRUE(opened.project().dirty());
+    const quader::QuaderApiVoidResult savedAgain = opened.project().save();
+    ASSERT_TRUE(savedAgain.ok()) << savedAgain.errorMessage();
+    EXPECT_FALSE(opened.project().dirty());
+}
+
+TEST(EditorApiTests, ProjectCommandsUseRuntimePathHooksForEmptyPaths) {
+    const std::filesystem::path path = projectTestPath("runtime-hooks");
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+    int savePathRequests = 0;
+    int openPathRequests = 0;
+    editor.project().setRuntimeHooks(quader::QuaderProjectRuntimeHooks{
+            .chooseOpenPath = [&]() -> std::optional<std::filesystem::path> {
+                ++openPathRequests;
+                return path;
+            },
+            .chooseSaveAsPath = [&]() -> std::optional<std::filesystem::path> {
+                ++savePathRequests;
+                return path;
+            },
+    });
+
+    (void)createSelectedBox(editor, "Hook Saved Box");
+    const quader::QuaderApiVoidResult saved = editor.commands().execute(quader::QuaderCommand::ProjectSave);
+    ASSERT_TRUE(saved.ok()) << saved.errorMessage();
+    EXPECT_EQ(savePathRequests, 1);
+    EXPECT_EQ(editor.project().path(), path);
+    EXPECT_TRUE(std::filesystem::exists(path));
+
+    ASSERT_TRUE(editor.commands().execute(quader::QuaderCommand::ProjectNew).ok());
+    EXPECT_FALSE(entityNamed(editor, "Hook Saved Box").has_value());
+
+    const quader::QuaderApiVoidResult opened = editor.commands().execute(quader::QuaderCommand::ProjectOpen);
+    ASSERT_TRUE(opened.ok()) << opened.errorMessage();
+    EXPECT_EQ(openPathRequests, 1);
+    EXPECT_TRUE(entityNamed(editor, "Hook Saved Box").has_value());
 }
 
 TEST(EditorApiTests, PublicAssetApiOwnsStandaloneMeshReplacementPolicy) {
@@ -776,6 +926,21 @@ TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithoutViewportFocus) {
     createSelectedBox(editor, "Global Undo Shortcut Box");
 
     quader::ViewportToolState state;
+    const quader::QuaderViewportKeybindingDispatch openDispatch =
+            editor.commands().dispatchViewportInputBinding(singleInputChord("Ctrl+O"), state, false, false);
+    ASSERT_EQ(openDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(openDispatch.commandId, quader::QuaderCommand::ProjectOpen.string());
+
+    const quader::QuaderViewportKeybindingDispatch saveDispatch =
+            editor.commands().dispatchViewportInputBinding(singleInputChord("Ctrl+S"), state, false, false);
+    ASSERT_EQ(saveDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(saveDispatch.commandId, quader::QuaderCommand::ProjectSave.string());
+
+    const quader::QuaderViewportKeybindingDispatch saveAsDispatch =
+            editor.commands().dispatchViewportInputBinding(singleInputChord("Ctrl+Shift+S"), state, false, false);
+    ASSERT_EQ(saveAsDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(saveAsDispatch.commandId, quader::QuaderCommand::ProjectSaveAs.string());
+
     const quader::QuaderViewportKeybindingDispatch undoDispatch =
             editor.commands().dispatchViewportInputBinding(singleInputChord("Ctrl+Z"), state, false, false);
     ASSERT_EQ(undoDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);

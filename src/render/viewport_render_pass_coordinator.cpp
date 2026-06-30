@@ -61,10 +61,14 @@ std::uint8_t ViewportRenderPassCoordinator::sceneVisibleLayerMask() const {
 }
 
 std::uint8_t ViewportRenderPassCoordinator::overlayVisibleLayerMask() const {
-    if (groundGridVisible_ || overlayVisible_) {
-        return gridLayerMask_;
+    if (!groundGridVisible_ && !overlayVisible_) {
+        return 0u;
     }
-    return 0u;
+    std::uint8_t layerMask = gridLayerMask_;
+    if (sceneVisible_) {
+        layerMask = static_cast<std::uint8_t>(layerMask | kViewportOverlayLayerMask);
+    }
+    return layerMask;
 }
 
 std::uint8_t ViewportRenderPassCoordinator::visibleLayerMask() const {
@@ -84,8 +88,7 @@ void ViewportRenderPassCoordinator::render(
         filament::Renderer& renderer,
         filament::View* sceneView,
         filament::View* overlayView,
-        filament::RenderTarget* renderTarget) const {
-    (void)renderTarget;
+        bool overlayUsesSeparateTarget) const {
     if (!sceneView) {
         return;
     }
@@ -97,13 +100,14 @@ void ViewportRenderPassCoordinator::render(
     renderer.setClearOptions(clear);
     renderer.render(sceneView);
 
-    if (!overlayView || overlayVisibleLayerMask() == 0u) {
+    if (!overlayView || (overlayVisibleLayerMask() == 0u && !overlayUsesSeparateTarget)) {
         return;
     }
 
     filament::Renderer::ClearOptions overlayClear;
-    overlayClear.clear = false;
+    overlayClear.clear = overlayUsesSeparateTarget;
     overlayClear.discard = false;
+    overlayClear.clearColor = {0.0f, 0.0f, 0.0f, 0.0f};
     renderer.setClearOptions(overlayClear);
     renderer.render(overlayView);
     renderer.setClearOptions(clear);

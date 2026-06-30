@@ -12,6 +12,9 @@ ui.action.apply=Applica
 ui.action.cancel=Annulla
 
 ui.menu.file=File
+ui.menu.file.open=Apri...
+ui.menu.file.save=Salva
+ui.menu.file.save_as=Salva con nome...
 ui.menu.file.exit=Esci
 ui.menu.edit=Modifica
 ui.menu.edit.undo=Annulla
@@ -43,6 +46,7 @@ ui.menu.view.focus_selection=Centra selezione
 ui.menu.view.grid=Griglia
 ui.menu.view.gizmos=Gizmo
 ui.menu.view.overlays=Overlay
+ui.menu.view.show_info=Mostra info
 ui.menu.view.toolbars=Barre strumenti
 ui.menu.layout=Layout
 
@@ -222,6 +226,13 @@ viewport.view.left=Sinistra
 viewport.shading.wireframe=Wireframe
 viewport.shading.shaded=Ombreggiato
 viewport.shading.rendered=Renderizzato
+ui.viewport.info.fps=FPS
+ui.viewport.info.cpu=CPU
+ui.viewport.info.gpu=GPU
+ui.viewport.info.objects=Oggetti
+ui.viewport.info.primitives=Primitive
+ui.viewport.info.draw_calls=Draw call
+ui.viewport.info.unavailable=--
 
 viewport.layout.single.label=Vista singola
 viewport.layout.two_horizontal.label=Due viste orizzontali
@@ -289,6 +300,7 @@ viewport.settings.GizmoSize.label=Dimensione
 viewport.settings.ShowGrid.label=Mostra griglia
 viewport.settings.ShowGizmos.label=Mostra gizmo
 viewport.settings.ShowOverlays.label=Mostra overlay
+viewport.settings.ShowInfo.label=Mostra info
 viewport.settings.GridSnap.label=Snap griglia
 viewport.settings.VertexSnap.label=Snap vertice
 

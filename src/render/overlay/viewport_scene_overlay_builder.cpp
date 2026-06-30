@@ -8,6 +8,7 @@
 
 #include "assets/asset_registry.hpp"
 #include "math/glm_bridge.hpp"
+#include "mesh/polygon/document.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
@@ -191,6 +192,97 @@ void appendMeshSelectionWire(
     }
 }
 
+void appendWireEdge(
+        std::unordered_map<WireEdgeKey, WireEdgeRecord, WireEdgeKeyHash>& edges,
+        QVec3 start,
+        QVec3 end) {
+    const WireEdgeKey key = wireEdgeKey(start, end);
+    WireEdgeRecord& record = edges[key];
+    if (record.count == 0u) {
+        record.start = start;
+        record.end = end;
+    }
+    ++record.count;
+}
+
+void emitWireframeEdges(ViewportOverlayFrame& frame, const std::unordered_map<WireEdgeKey, WireEdgeRecord, WireEdgeKeyHash>& edges) {
+    for (const auto& [key, edge] : edges) {
+        (void)key;
+        frame.lines.push_back(ViewportOverlayLine{
+                .layer = ViewportOverlayLayer::WireframeXray,
+                .start = edge.start,
+                .end = edge.end,
+                .color = kOverlayWireframeXrayColor,
+                .widthPixels = 0.0f,
+                .styleRole = ViewportOverlayStyleRole::WireframeBase,
+                .source = ViewportOverlaySource::SceneWireframe,
+        });
+    }
+}
+
+bool appendAuthoredPolygonWireframe(
+        ViewportOverlayFrame& frame,
+        const MeshAsset& mesh,
+        const QMat4& worldFromLocal) {
+    if (!mesh.hasAuthoredPolygonDocument || !mesh.authoredPolygonDocument) {
+        return false;
+    }
+
+    const quader_poly::Document& document = *mesh.authoredPolygonDocument;
+    std::unordered_map<quader_poly::ElementId, QVec3> vertices;
+    vertices.reserve(document.vertices.size());
+    for (const quader_poly::Vertex& vertex : document.vertices) {
+        vertices.emplace(vertex.id, transformPoint(worldFromLocal, vertex.position));
+    }
+
+    std::unordered_map<WireEdgeKey, WireEdgeRecord, WireEdgeKeyHash> edges;
+    for (const quader_poly::Face& face : document.faces) {
+        if (face.vertices.size() < 2u) {
+            continue;
+        }
+        for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+            const quader_poly::ElementId aId = face.vertices[index];
+            const quader_poly::ElementId bId = face.vertices[(index + 1u) % face.vertices.size()];
+            const auto a = vertices.find(aId);
+            const auto b = vertices.find(bId);
+            if (a == vertices.end() || b == vertices.end()) {
+                continue;
+            }
+            appendWireEdge(edges, a->second, b->second);
+        }
+    }
+    if (edges.empty()) {
+        return false;
+    }
+
+    emitWireframeEdges(frame, edges);
+    return true;
+}
+
+void appendTriangleMeshWireframe(
+        ViewportOverlayFrame& frame,
+        const MeshAsset& mesh,
+        const QMat4& worldFromLocal) {
+    std::unordered_map<WireEdgeKey, WireEdgeRecord, WireEdgeKeyHash> edges;
+    edges.reserve(mesh.indices.size());
+    auto appendTriangleEdge = [&](std::uint32_t a, std::uint32_t b) {
+        if (a >= mesh.vertices.size() || b >= mesh.vertices.size() || a == b) {
+            return;
+        }
+        appendWireEdge(
+                edges,
+                transformPoint(worldFromLocal, mesh.vertices[a].position),
+                transformPoint(worldFromLocal, mesh.vertices[b].position));
+    };
+
+    for (std::size_t index = 0; index + 2u < mesh.indices.size(); index += 3u) {
+        appendTriangleEdge(mesh.indices[index], mesh.indices[index + 1u]);
+        appendTriangleEdge(mesh.indices[index + 1u], mesh.indices[index + 2u]);
+        appendTriangleEdge(mesh.indices[index + 2u], mesh.indices[index]);
+    }
+    emitWireframeEdges(frame, edges);
+}
+
 void appendHierarchySelectionWires(
         ViewportOverlayFrame& frame,
         const SceneDocument& document,
@@ -342,15 +434,21 @@ void appendSceneWireframeOverlay(
         const SceneDocument& document,
         const AssetRegistry& assets) {
     for (const EntityId entity : document.entities()) {
-        appendMeshSelectionWire(
-                frame,
-                document,
-                assets,
-                entity,
-                rgba8(255, 255, 255),
-                ViewportOverlayLayer::WireframeBase,
-                ViewportOverlayStyleRole::WireframeBase,
-                ViewportOverlaySource::SceneWireframe);
+        if (!document.isEffectivelyVisible(entity)) {
+            continue;
+        }
+        const MeshComponent* meshComponent = document.mesh(entity);
+        if (meshComponent == nullptr) {
+            continue;
+        }
+        const MeshAsset* mesh = assets.mesh(meshComponent->mesh);
+        if (mesh == nullptr || mesh->vertices.empty() || mesh->indices.size() < 3u) {
+            continue;
+        }
+        const QMat4 worldFromLocal = document.worldTransformMatrix(entity);
+        if (!appendAuthoredPolygonWireframe(frame, *mesh, worldFromLocal)) {
+            appendTriangleMeshWireframe(frame, *mesh, worldFromLocal);
+        }
     }
 }
 

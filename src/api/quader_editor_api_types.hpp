@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <functional>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -43,6 +44,14 @@ enum class QuaderNotificationLevel {
 struct QuaderProjectMetadata {
     std::uint64_t id = 0;
     std::string name;
+};
+
+/**
+ * Represents Quader Project Runtime Hooks value used by the native shell.
+ */
+struct QuaderProjectRuntimeHooks {
+    std::function<std::optional<std::filesystem::path>()> chooseOpenPath;
+    std::function<std::optional<std::filesystem::path>()> chooseSaveAsPath;
 };
 
 /**

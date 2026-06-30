@@ -43,6 +43,7 @@ bool viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer layer) {
 
 bool viewportOverlayLineDrawsOnTop(ViewportOverlayLayer layer) {
     return layer == ViewportOverlayLayer::SourceWire ||
+            layer == ViewportOverlayLayer::WireframeXray ||
             layer == ViewportOverlayLayer::SelectedFaceEdge ||
             layer == ViewportOverlayLayer::SelectedEdge ||
             layer == ViewportOverlayLayer::HoverFaceEdge ||
@@ -129,6 +130,8 @@ float viewportOverlayLineWidthPixels(ViewportOverlayLayer layer, float nativeWid
     switch (layer) {
     case ViewportOverlayLayer::WireframeBase:
         return kOverlayWireframeBaseLineWidthPixels;
+    case ViewportOverlayLayer::WireframeXray:
+        return kOverlayWireframeXrayLineWidthPixels;
     case ViewportOverlayLayer::SourceWire:
         return kOverlaySourceWireLineWidthPixels;
     case ViewportOverlayLayer::SelectedFaceEdge:
@@ -210,6 +213,7 @@ bool viewportOverlayIsNativeSelectionWireColor(std::uint32_t color) {
 std::uint32_t viewportOverlayColorFor(ViewportOverlayLayer layer, std::uint32_t originalRgba) {
     switch (layer) {
     case ViewportOverlayLayer::WireframeBase:
+    case ViewportOverlayLayer::WireframeXray:
         return originalRgba;
     case ViewportOverlayLayer::SelectedVisibleFace:
     case ViewportOverlayLayer::SelectedXrayFace:

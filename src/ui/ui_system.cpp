@@ -466,6 +466,7 @@ void UISystem::draw(QuaderEditorApi& editor,
             .settings = settings_,
             .viewportSettings = viewportSettings_,
             .frameTiming = currentFrameTiming_,
+            .renderPerformance = renderPerformanceStats_,
             .viewportRelativeMouseDelta = relativeMouseDelta_,
             .viewportRenderResizeSuspended = viewportRenderResizeSuspended_,
             .viewportCursorCaptureRequested = &viewportCursorCaptureRequested,
@@ -540,6 +541,10 @@ void UISystem::renderViewports(RenderSystem& renderSystem) {
 
 void UISystem::render(RenderSystem& renderSystem) {
     renderer_.render(renderSystem.renderer());
+}
+
+void UISystem::setRenderPerformanceStats(RenderFramePerformanceStats stats) {
+    renderPerformanceStats_ = stats;
 }
 
 void UISystem::setViewportRenderResizeSuspended(bool suspended) {

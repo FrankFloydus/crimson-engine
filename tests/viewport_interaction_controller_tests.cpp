@@ -826,10 +826,16 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObj
 }
 
 TEST(ViewportInteractionControllerTests, MoveGizmoComponentAxisDragKeepsPickedAxisUnderMouse) {
+    /**
+     * Stores the component selection mode exercised by a gizmo axis drag case.
+     */
     struct ComponentModeCase {
         quader::QuaderSelectionMode mode = quader::QuaderSelectionMode::Vertex;
         const char* label = "";
     };
+    /**
+     * Stores the transform axis exercised by a gizmo drag case.
+     */
     struct AxisCase {
         quader_editor_core::TransformAxis axis = quader_editor_core::TransformAxis::x;
         const char* label = "";

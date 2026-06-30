@@ -112,12 +112,14 @@ std::string viewportGridPresetTargetId(int preset) {
 }
 
 std::span<const ViewportShortcutTargetDescriptor> viewportShortcutTargetCatalog() {
-    static const std::array<ViewportShortcutTargetDescriptor, 26> descriptors{{
+    static const std::array<ViewportShortcutTargetDescriptor, 27> descriptors{{
             {"new_document", QuaderCommand::ProjectNew.string(),
                     viewportTargetShortcut(ViewportShortcutKind::None, ViewportShortcutContext::Global)},
             {"open_document", QuaderCommand::ProjectOpen.string(),
                     viewportTargetShortcut(ViewportShortcutKind::None, ViewportShortcutContext::Global)},
             {"save_document", QuaderCommand::ProjectSave.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::None, ViewportShortcutContext::Global)},
+            {"save_as_document", QuaderCommand::ProjectSaveAs.string(),
                     viewportTargetShortcut(ViewportShortcutKind::None, ViewportShortcutContext::Global)},
             {"select_all", {},
                     viewportTargetShortcut(ViewportShortcutKind::SelectAll, ViewportShortcutContext::Global)},

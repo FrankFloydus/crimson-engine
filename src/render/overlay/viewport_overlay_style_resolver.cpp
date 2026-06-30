@@ -117,6 +117,7 @@ ViewportOverlayStyleRole ViewportOverlayStyleResolver::roleFor(const ViewportOve
     case ViewportOverlayLayer::GroupBounds:
         return ViewportOverlayStyleRole::GroupBounds;
     case ViewportOverlayLayer::WireframeBase:
+    case ViewportOverlayLayer::WireframeXray:
         return ViewportOverlayStyleRole::WireframeBase;
     case ViewportOverlayLayer::ToolPlaneLine:
         return ViewportOverlayStyleRole::ToolPlaneLine;

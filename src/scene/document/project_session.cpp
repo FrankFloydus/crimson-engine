@@ -71,6 +71,16 @@ ProjectAssetMutationResult ProjectSession::replaceStandaloneMesh(AssetId mesh, M
     return {.ok = true, .changed = true, .message = "Mesh replaced"};
 }
 
+void ProjectSession::replaceDocument(ProjectDocument document) {
+    const std::uint64_t previousSceneRevision = document_.scene().revision();
+    document_ = std::move(document);
+    (void)document_.ensureSceneRoot();
+    document_.scene().advanceRevisionForReplacement(previousSceneRevision);
+    history_->clear();
+    modeling_->resetFromScene();
+    markClean();
+}
+
 void ProjectSession::markClean() {
     cleanStamp_ = contentRevisionStamp();
 }

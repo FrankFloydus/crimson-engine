@@ -93,6 +93,7 @@ enum class ViewportBoolSettingId {
     ShowGrid,
     ShowGizmos,
     ShowOverlays,
+    ShowInfo,
     GridSnap,
     VertexSnap,
     Count,

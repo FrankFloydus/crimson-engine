@@ -145,10 +145,16 @@ visualization. Keep those concepts separate in tests and code.
 The policy owner is `src/render/viewport_overlay_policy.cpp`.
 
 - Draw-on-top lines include `SourceWire`, `SelectedFaceEdge`, `SelectedEdge`, `HoverFaceEdge`,
-  `HoverEdge`, `GroupBounds`, `DiagnosticEdge`, and tool line/handle layers.
+  `HoverEdge`, `GroupBounds`, `DiagnosticEdge`, `WireframeXray`, and tool line/handle layers.
 - Draw-on-top points include selected, hover, snap, and tool handles.
 - Depth-tested layers include base wireframe, open edges, and unselected vertices unless policy says
   otherwise.
+- `WireframeBase` is the depth-tested overlay policy layer. Wireframe viewport mode must use
+  `WireframeXray` for unselected scene topology so hidden/back edges remain visible and authored
+  polygon edges are not lost behind depth-only mesh proxies.
+- Global depth-only mesh proxies live on `kViewportOverlayLayerMask`; `ViewportRenderPassCoordinator`
+  includes that layer only while the shaded/rendered scene is visible. Wireframe mode excludes it so
+  invisible mesh depth cannot make the view read as a filled solid.
 - Filament uses reversed depth, so depth-tested overlay passes use `GreaterOrEqual`.
 - Line and point overlay bias is a small post-projection device-depth offset only. Never move line
   or point geometry in screen X/Y to fix z fighting.

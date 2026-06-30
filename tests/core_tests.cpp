@@ -907,7 +907,7 @@ TEST(PlatformWindowChromeTests, HitTestSupportsResizeEdgesToolbarDragAndWindowCo
             .windowHeight = 600,
             .resizeBorder = 6,
             .titleBarHeight = 35,
-            .leftInteractiveWidth = 320,
+            .leftInteractiveWidth = 440,
             .rightControlsWidth = 105,
     };
 
@@ -926,13 +926,15 @@ TEST(PlatformWindowChromeTests, HitTestSupportsResizeEdgesToolbarDragAndWindowCo
     EXPECT_EQ(hit(400, 599), SDL_HITTEST_RESIZE_BOTTOM);
     EXPECT_EQ(hit(0, 300), SDL_HITTEST_RESIZE_LEFT);
     EXPECT_EQ(hit(80, 24), SDL_HITTEST_NORMAL);
-    EXPECT_EQ(hit(400, 24), SDL_HITTEST_DRAGGABLE);
+    EXPECT_EQ(hit(400, 24), SDL_HITTEST_NORMAL);
+    EXPECT_EQ(hit(500, 24), SDL_HITTEST_DRAGGABLE);
     EXPECT_EQ(hit(700, 24), SDL_HITTEST_NORMAL);
     EXPECT_EQ(hit(400, 60), SDL_HITTEST_NORMAL);
 
     hitTest.maximized = true;
     EXPECT_EQ(hit(80, 24), SDL_HITTEST_NORMAL);
-    EXPECT_EQ(hit(400, 0), SDL_HITTEST_DRAGGABLE);
+    EXPECT_EQ(hit(400, 0), SDL_HITTEST_NORMAL);
+    EXPECT_EQ(hit(500, 0), SDL_HITTEST_DRAGGABLE);
     EXPECT_EQ(hit(799, 599), SDL_HITTEST_NORMAL);
 }
 
@@ -1110,10 +1112,11 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
     EXPECT_FLOAT_EQ(settings.floatValue(ViewportFloatSettingId::SelectionEdgeLineSize), 2.5f);
     EXPECT_FLOAT_EQ(settings.floatValue(ViewportFloatSettingId::PickVertexRadius), 0.3f);
     EXPECT_FLOAT_EQ(settings.floatValue(ViewportFloatSettingId::GizmoSize), 1.0f);
-    ASSERT_EQ(viewportBoolSettings().size(), 5u);
+    ASSERT_EQ(viewportBoolSettings().size(), 6u);
     EXPECT_TRUE(settings.boolValue(ViewportBoolSettingId::ShowGrid));
     EXPECT_TRUE(settings.boolValue(ViewportBoolSettingId::ShowGizmos));
     EXPECT_TRUE(settings.boolValue(ViewportBoolSettingId::ShowOverlays));
+    EXPECT_FALSE(settings.boolValue(ViewportBoolSettingId::ShowInfo));
     EXPECT_TRUE(settings.boolValue(ViewportBoolSettingId::GridSnap));
     EXPECT_TRUE(settings.boolValue(ViewportBoolSettingId::VertexSnap));
 }
@@ -1193,6 +1196,7 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
     EXPECT_TRUE(settings.setColor(ViewportColorSettingId::GridMinor, {0.25f, 0.5f, 0.75f, 0.6f}));
     EXPECT_TRUE(settings.setFloatValue(ViewportFloatSettingId::GizmoSize, 10.0f));
     EXPECT_TRUE(settings.setBoolValue(ViewportBoolSettingId::ShowGrid, false));
+    EXPECT_TRUE(settings.setBoolValue(ViewportBoolSettingId::ShowInfo, true));
     EXPECT_TRUE(settings.setBoolValue(ViewportBoolSettingId::GridSnap, false));
     EXPECT_TRUE(settings.setBoolValue(ViewportBoolSettingId::VertexSnap, false));
     ASSERT_TRUE(settings.save(path));
@@ -1201,6 +1205,7 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
     expectColorNear(loaded.color(ViewportColorSettingId::GridMinor), {0.25098f, 0.501961f, 0.74902f, 0.6f});
     EXPECT_FLOAT_EQ(loaded.floatValue(ViewportFloatSettingId::GizmoSize), 2.0f);
     EXPECT_FALSE(loaded.boolValue(ViewportBoolSettingId::ShowGrid));
+    EXPECT_TRUE(loaded.boolValue(ViewportBoolSettingId::ShowInfo));
     EXPECT_FALSE(loaded.boolValue(ViewportBoolSettingId::GridSnap));
     EXPECT_FALSE(loaded.boolValue(ViewportBoolSettingId::VertexSnap));
 
@@ -1213,6 +1218,7 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
         EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.GridMinorColor"), std::string::npos);
         EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.GizmoSize"), std::string::npos);
         EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.ShowGrid"), std::string::npos);
+        EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.ShowInfo"), std::string::npos);
         EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.GridSnap"), std::string::npos);
         EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.VertexSnap"), std::string::npos);
         EXPECT_EQ(source.find("QVertexWorks.Quader.Viewport.BackgroundColor"), std::string::npos);
@@ -1308,11 +1314,24 @@ TEST(OverlayMaterialTests, LineAndPointMaterialsUseScreenSpaceOverlayExpansion) 
     EXPECT_LT(innerRadiusGuard, outerCircleDiscard);
 }
 
+TEST(OverlayMaterialTests, ImGuiMaterialCanCompositePremultipliedDisplayTextures) {
+    const std::string source = readSourceFile("resources/materials/imgui.mat");
+    const std::string renderer = readSourceFile("src/render/imgui_filament_renderer.cpp");
+
+    EXPECT_NE(source.find("name : premultipliedAlpha"), std::string::npos);
+    EXPECT_NE(source.find("vec3 straightRgb = sampled.rgb * tint.rgb * alpha"), std::string::npos);
+    EXPECT_NE(source.find("vec3 premultipliedRgb = sampled.rgb * tint.rgb * tint.a"), std::string::npos);
+    EXPECT_NE(source.find("mix(straightRgb, premultipliedRgb, premultipliedAlpha)"), std::string::npos);
+    EXPECT_NE(renderer.find("TextureSampleColorSpace::DisplaySrgbPremultipliedAlpha"), std::string::npos);
+    EXPECT_NE(renderer.find("materialInstance->setParameter(\"premultipliedAlpha\", premultipliedAlpha)"), std::string::npos);
+}
+
 TEST(ViewportOverlayPolicyTests, MatchesNativeLayerDrawOrder) {
     const std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> expected{{
             ViewportOverlayLayer::SelectedVisibleFace,
             ViewportOverlayLayer::SelectedFaceMask,
             ViewportOverlayLayer::WireframeBase,
+            ViewportOverlayLayer::WireframeXray,
             ViewportOverlayLayer::SelectedXrayFace,
             ViewportOverlayLayer::HoverFace,
             ViewportOverlayLayer::SourceWireDepthStamp,
@@ -1344,6 +1363,7 @@ TEST(ViewportOverlayPolicyTests, MatchesNativeLayerDrawOrder) {
 
 TEST(ViewportOverlayPolicyTests, MatchesDepthAndHoverSuppressionContract) {
     EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::WireframeBase, ViewportOverlayGeometryKind::Lines));
+    EXPECT_FALSE(viewportOverlayDepthTested(ViewportOverlayLayer::WireframeXray, ViewportOverlayGeometryKind::Lines));
     EXPECT_FALSE(viewportOverlayDepthTested(ViewportOverlayLayer::SourceWire, ViewportOverlayGeometryKind::Lines));
     EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::OpenEdge, ViewportOverlayGeometryKind::Lines));
     EXPECT_FALSE(viewportOverlayDepthTested(ViewportOverlayLayer::HoverFaceEdge, ViewportOverlayGeometryKind::Lines));
@@ -1351,6 +1371,8 @@ TEST(ViewportOverlayPolicyTests, MatchesDepthAndHoverSuppressionContract) {
     EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::UnselectedVertex, ViewportOverlayGeometryKind::Points));
 
     EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::SourceWire, ViewportOverlayGeometryKind::Lines),
+            ViewportOverlayDepthMode::DrawOnTop);
+    EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::WireframeXray, ViewportOverlayGeometryKind::Lines),
             ViewportOverlayDepthMode::DrawOnTop);
     EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::SelectedFaceEdge, ViewportOverlayGeometryKind::Lines),
             ViewportOverlayDepthMode::DrawOnTop);
@@ -1397,6 +1419,7 @@ TEST(ViewportOverlayPolicyTests, MatchesNativeColorsAndRuntimePointSizes) {
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SelectedVisibleFace, rgba8(255, 255, 255)), kOverlaySelectionFaceColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SelectedFaceEdge, rgba8(255, 255, 255)), kOverlaySelectionWireColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::WireframeBase, rgba8(255, 255, 255)), rgba8(255, 255, 255));
+    EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::WireframeXray, rgba8(255, 255, 255)), rgba8(255, 255, 255));
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SourceWire, kOverlaySelectedVertexColor), kOverlaySelectionWireColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SourceWire, rgba8(255, 255, 255)), kOverlaySourceWireColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::HoverFace, kOverlayRemoveWireColor), kOverlayRemoveFaceColor);
@@ -1407,6 +1430,7 @@ TEST(ViewportOverlayPolicyTests, MatchesNativeColorsAndRuntimePointSizes) {
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::ToolHandle, rgba8(255, 255, 255)), kOverlayToolHandleColor);
 
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::WireframeBase, 0.0f), 1.0f);
+    EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::WireframeXray, 0.0f), kOverlayWireframeXrayLineWidthPixels);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::SourceWire, 3.0f), 3.0f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::SelectedEdge, 3.0f), 3.0f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::HoverEdge, 3.0f), 3.0f);
@@ -1848,6 +1872,22 @@ TEST(RenderSystemTests, ShadedViewportUsesClearColorWithoutSkybox) {
     EXPECT_EQ(source.find("Skybox::Builder()"), std::string::npos);
 }
 
+TEST(RenderSystemTests, ExposesCompletedFramePerformanceStatsFromRendererHistory) {
+    const std::string header = readSourceFile("src/render/render_system.hpp");
+    const std::string source = readSourceFile("src/render/render_system.cpp");
+
+    EXPECT_NE(header.find("RenderFramePerformanceStats framePerformanceStats() const"), std::string::npos);
+    EXPECT_NE(header.find("RenderFramePerformanceStats framePerformanceStats_"), std::string::npos);
+    EXPECT_NE(source.find("frameCpuBegin_ = std::chrono::steady_clock::now()"), std::string::npos);
+    EXPECT_NE(source.find("std::chrono::duration<double, std::milli>"), std::string::npos);
+    EXPECT_NE(source.find("renderer_->getFrameInfoHistory(historySize)"), std::string::npos);
+    EXPECT_NE(source.find("renderer_->getMaxFrameHistorySize()"), std::string::npos);
+    EXPECT_NE(source.find("info.denoisedGpuFrameDuration"), std::string::npos);
+    EXPECT_NE(source.find("info.gpuFrameDuration"), std::string::npos);
+    EXPECT_NE(source.find("filament::Renderer::FrameInfo::INVALID"), std::string::npos);
+    EXPECT_NE(source.find("filament::Renderer::FrameInfo::PENDING"), std::string::npos);
+}
+
 TEST(ViewportRendererTests, EnvironmentClearColorAndRenderedBackgroundPathsStaySceneOwned) {
     const std::string renderer = readSourceFile("src/render/viewport_renderer.cpp");
     const std::string environmentLibrary = readSourceFile("src/render/filament_environment_library.cpp");
@@ -1872,7 +1912,7 @@ TEST(RenderSystemTests, InitializeUnwindsPartialFilamentStateOnFailure) {
     EXPECT_NE(source.find("if (!renderer_)"), std::string::npos);
     EXPECT_NE(source.find("if (!scene_)"), std::string::npos);
     EXPECT_NE(source.find("if (!materialLibrary_.initialize(*engine_, executableDir))"), std::string::npos);
-    EXPECT_NE(source.find("return renderer_ != nullptr && swapChain_ != nullptr && renderer_->beginFrame(swapChain_)"),
+    EXPECT_NE(source.find("return beginFrameWithSwapChain(swapChain_)"),
             std::string::npos);
 }
 
@@ -2214,7 +2254,7 @@ TEST(SceneRenderBridgeTests, MeshRenderablesReceiveShadowsAndViewportEnablesShad
     EXPECT_NE(meshFactory.find(".channel(channel)"), std::string::npos);
     EXPECT_NE(meshCache.find("kViewportRenderedSceneLayerMask"), std::string::npos);
     EXPECT_NE(meshCache.find("kViewportShadedSceneLayerMask"), std::string::npos);
-    EXPECT_NE(meshCache.find("kViewportPerPaneEditorLayerMask"), std::string::npos);
+    EXPECT_NE(meshCache.find("kViewportOverlayLayerMask"), std::string::npos);
     EXPECT_NE(meshCache.find("kViewportOverlayDepthChannel"), std::string::npos);
     EXPECT_NE(meshCache.find("renderedMeshProxies_"), std::string::npos);
     EXPECT_NE(meshCache.find("shadedMeshProxies_"), std::string::npos);
@@ -2233,16 +2273,81 @@ TEST(SceneRenderBridgeTests, MeshRenderablesReceiveShadowsAndViewportEnablesShad
     EXPECT_NE(viewportPanel.find("paneState.renderer.setShadowingEnabled(paneWorkspace.shading == ViewportShadingMode::Rendered)"), std::string::npos);
 }
 
-TEST(ViewportRendererTests, PresentsLinearViewportTextureThroughUiEncoder) {
+TEST(ViewportRendererTests, OverlayPassUsesNeutralExposureCamera) {
+    const std::string header = readSourceFile({"src", "render", "viewport_renderer.hpp"});
+    const std::string source = readSourceFile({"src", "render", "viewport_renderer.cpp"});
+
+    EXPECT_NE(header.find("filament::Camera* overlayCamera_ = nullptr"), std::string::npos);
+    EXPECT_NE(header.find("utils::Entity overlayCameraEntity_"), std::string::npos);
+    EXPECT_NE(source.find("overlayCamera_ = engine_->createCamera(overlayCameraEntity_)"), std::string::npos);
+    EXPECT_NE(source.find("overlayView_->setCamera(overlayCamera_)"), std::string::npos);
+    EXPECT_EQ(source.find("overlayView_->setCamera(camera_)"), std::string::npos);
+    EXPECT_NE(source.find("applyLookAt(overlayCamera_)"), std::string::npos);
+    EXPECT_NE(source.find("applyProjection(overlayCamera_)"), std::string::npos);
+    EXPECT_NE(source.find("camera_->setExposure(\n            std::max(settings.camera.aperture"), std::string::npos);
+    EXPECT_NE(source.find("applyNeutralOverlayExposure(filament::Camera* camera)"), std::string::npos);
+    EXPECT_NE(source.find("kViewportOverlayCameraAperture"), std::string::npos);
+    EXPECT_NE(source.find("kViewportOverlayCameraShutterSpeed"), std::string::npos);
+    EXPECT_NE(source.find("kViewportOverlayCameraSensitivity"), std::string::npos);
+    EXPECT_EQ(countOccurrences(source, "overlayCamera_->setExposure("), 0u);
+    EXPECT_GE(countOccurrences(source, "applyNeutralOverlayExposure(overlayCamera_)"), 3u);
+}
+
+TEST(ViewportRendererTests, PresentsSceneAndOverlayViewportTexturesThroughUiEncoder) {
     const std::string source = readSourceFile("src/render/viewport_render_target.cpp");
+    const std::string rendererHeader = readSourceFile("src/render/viewport_renderer.hpp");
+    const std::string rendererSource = readSourceFile("src/render/viewport_renderer.cpp");
+    const std::string coordinatorSource = readSourceFile("src/render/viewport_render_pass_coordinator.cpp");
+    const std::string viewportPanelSource = readSourceFile("src/ui/viewport_panel.cpp");
     const std::string gridSource = readSourceFile("src/render/viewport_grid_renderer.cpp");
 
     EXPECT_NE(source.find(".format(Texture::InternalFormat::RGBA8)"), std::string::npos);
-    EXPECT_NE(source.find("TextureSampleColorSpace::LinearSrgb"), std::string::npos);
+    EXPECT_NE(source.find("textureRegistry_->registerTexture(creationGuard.colorTexture, sampleColorSpace_)"), std::string::npos);
+    EXPECT_NE(rendererHeader.find("RenderTextureHandle overlayTextureHandle() const"), std::string::npos);
+    EXPECT_NE(rendererHeader.find("ViewportRenderTarget overlayRenderTarget_"), std::string::npos);
+    EXPECT_NE(rendererSource.find("renderTarget_.resize(width_, height_, view_, TextureSampleColorSpace::LinearSrgb)"), std::string::npos);
+    EXPECT_NE(rendererSource.find("TextureSampleColorSpace::DisplaySrgbPremultipliedAlpha"), std::string::npos);
+    EXPECT_NE(coordinatorSource.find("overlayClear.clear = overlayUsesSeparateTarget"), std::string::npos);
+    EXPECT_NE(coordinatorSource.find("overlayClear.clearColor = {0.0f, 0.0f, 0.0f, 0.0f}"), std::string::npos);
+    EXPECT_NE(coordinatorSource.find("overlayVisibleLayerMask() == 0u && !overlayUsesSeparateTarget"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("paneState.renderer.overlayTextureHandle()"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("ImGui::GetWindowDrawList()->AddImage("), std::string::npos);
     EXPECT_NE(gridSource.find("settings.color(ViewportColorSettingId::GridMinor)"), std::string::npos);
     EXPECT_NE(gridSource.find("settings.floatValue(ViewportFloatSettingId::GridMinorLineSize)"), std::string::npos);
     EXPECT_NE(gridSource.find("setDepthCulling(controller.state().projection != ViewportProjection::Orthographic)"), std::string::npos);
     EXPECT_EQ(source.find(".format(Texture::InternalFormat::SRGB8_A8)"), std::string::npos);
+}
+
+TEST(ViewportRendererTests, ViewportInfoOverlayUsesRendererTimingAndVisibleMeshSubmissionStats) {
+    const std::string appSource = readSourceFile("src/app/app.cpp");
+    const std::string uiContextHeader = readSourceFile("src/ui/ui_context.hpp");
+    const std::string uiSystemHeader = readSourceFile("src/ui/ui_system.hpp");
+    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
+    const std::string viewportPanelHeader = readSourceFile("src/ui/viewport_panel.hpp");
+    const std::string viewportPanelSource = readSourceFile("src/ui/viewport_panel.cpp");
+
+    EXPECT_NE(appSource.find("ui_.setRenderPerformanceStats(renderSystem_.framePerformanceStats())"), std::string::npos);
+    EXPECT_NE(uiContextHeader.find("RenderFramePerformanceStats renderPerformance"), std::string::npos);
+    EXPECT_NE(uiSystemHeader.find("void setRenderPerformanceStats(RenderFramePerformanceStats stats)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find(".renderPerformance = renderPerformanceStats_"), std::string::npos);
+    EXPECT_NE(viewportPanelHeader.find("drawViewportInfoOverlay"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("collectViewportInfoSceneStats"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("document.isEffectivelyVisible(entityId)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("normalizedMeshPrimitiveSpans(*mesh)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("stats.drawCalls += spans.size()"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("stats.primitives += span.indexCount / 3u"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("ViewportBoolSettingId::ShowInfo"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("ui.viewport.info.draw_calls"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("1.0 / uiContext.frameTiming.rawDeltaSeconds"), std::string::npos);
+    EXPECT_EQ(viewportPanelSource.find("1000.0 / renderStats.gpuFrameMs"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("drawViewportInfoText("), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("drawList.AddText"), std::string::npos);
+    const std::size_t textHelper = viewportPanelSource.find("void drawViewportInfoText(");
+    const std::size_t nextHelper = viewportPanelSource.find("std::optional<int> hitDrawnPlaneCapturedPoint", textHelper);
+    ASSERT_NE(textHelper, std::string::npos);
+    ASSERT_NE(nextHelper, std::string::npos);
+    const std::string textHelperSource = viewportPanelSource.substr(textHelper, nextHelper - textHelper);
+    EXPECT_EQ(textHelperSource.find("AddRectFilled"), std::string::npos);
 }
 
 TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentFrame) {
@@ -2265,11 +2370,13 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
     EXPECT_NE(rendererSource.find("gridRenderer_.update(controller, width(), height(), gridWorldSpacing, settings, visible)"), std::string::npos);
     EXPECT_NE(gridRendererSource.find(".layerMask(kViewportAllLayerMask, gridLayerMask_)"), std::string::npos);
     EXPECT_NE(rendererSource.find("renderPassCoordinator_.applyVisibleLayers(view_, overlayView_)"), std::string::npos);
-    EXPECT_NE(rendererSource.find("renderPassCoordinator_.render(renderer, view_, overlayView_, renderTarget_.renderTarget())"), std::string::npos);
+    EXPECT_EQ(rendererSource.find("setChannelDepthClearEnabled("), std::string::npos);
+    EXPECT_NE(rendererSource.find("renderPassCoordinator_.render(\n            renderer,\n            view_,\n            overlayView_,\n            surface_ == ViewportRenderSurface::Texture)"), std::string::npos);
     EXPECT_NE(coordinatorSource.find("sceneView->setVisibleLayers(kViewportAllLayerMask, sceneVisibleLayerMask())"), std::string::npos);
     EXPECT_NE(coordinatorSource.find("overlayView->setVisibleLayers(kViewportAllLayerMask, overlayVisibleLayerMask())"), std::string::npos);
+    EXPECT_NE(coordinatorSource.find("layerMask | kViewportOverlayLayerMask"), std::string::npos);
     EXPECT_NE(coordinatorSource.find("clear.discard = false"), std::string::npos);
-    EXPECT_NE(coordinatorSource.find("overlayClear.clear = false"), std::string::npos);
+    EXPECT_NE(coordinatorSource.find("overlayClear.clear = overlayUsesSeparateTarget"), std::string::npos);
     EXPECT_NE(coordinatorSource.find("renderer.setClearOptions(clear);"), std::string::npos);
 
     const std::size_t prepareViewports =
@@ -2302,6 +2409,7 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
     EXPECT_NE(viewportPanelSource.find("ViewportBoolSettingId::ShowGrid"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("ViewportBoolSettingId::ShowGizmos"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("ViewportBoolSettingId::ShowOverlays"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("ViewportBoolSettingId::ShowInfo"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("paneState.renderer.updateGroundGrid(paneWorkspace.camera, gridWorldSize, settings, gridVisible)"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("paneState.renderer.setOverlayVisible(overlaysVisible ||"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("renderBridge.setOverlayFrame("), std::string::npos);
@@ -2330,6 +2438,7 @@ TEST(TextureRegistryTests, TracksPerTexturePresentationColorSpace) {
 
     EXPECT_NE(headerSource.find("enum class TextureSampleColorSpace"), std::string::npos);
     EXPECT_NE(headerSource.find("DisplaySrgb"), std::string::npos);
+    EXPECT_NE(headerSource.find("DisplaySrgbPremultipliedAlpha"), std::string::npos);
     EXPECT_NE(headerSource.find("LinearSrgb"), std::string::npos);
     EXPECT_NE(headerSource.find("using RenderTextureHandle = std::uintptr_t"), std::string::npos);
     EXPECT_NE(headerSource.find("TextureSampleColorSpace sampleColorSpace(RenderTextureHandle id) const"), std::string::npos);
@@ -2376,6 +2485,7 @@ TEST(AppLoopTests, SuspendsGpuSubmissionForNonDrawableWindowsAndIdlesBetweenFram
     EXPECT_NE(uiHeader.find("[[nodiscard]] bool needsContinuousRendering() const"), std::string::npos);
     EXPECT_NE(uiSource.find("relativeMouseCaptured_ ||"), std::string::npos);
     EXPECT_NE(viewportPanelHeader.find("lastFlyNavigationActive_"), std::string::npos);
+    EXPECT_NE(viewportPanelHeader.find("activeViewportSettings().boolValue(ViewportBoolSettingId::ShowInfo)"), std::string::npos);
     EXPECT_NE(viewportPanelHeader.find("navigationGizmo_.inputLocked()"), std::string::npos);
     EXPECT_NE(viewportPanelHeader.find("interactionController_.dragging()"), std::string::npos);
 }
@@ -5120,6 +5230,30 @@ TEST(ProjectSessionTests, DirtyStateAggregatesProjectSceneAssetAndModelingConten
     ASSERT_TRUE(movedSelection.ok()) << movedSelection.errorMessage();
     EXPECT_TRUE(movedSelection.changed());
     EXPECT_TRUE(editor.project().dirty());
+}
+
+TEST(ProjectSessionTests, ReplaceDocumentAdvancesSceneRevisionPastPreviousDocument) {
+    ProjectSession session;
+    for (int i = 0; i < 8; ++i) {
+        const EntityId entity = session.scene().createEntity("Previous Entity " + std::to_string(i));
+        ASSERT_NE(entity, InvalidEntityId);
+    }
+    const std::uint64_t previousSceneRevision = session.scene().revision();
+    session.markClean();
+    EXPECT_FALSE(session.dirty());
+
+    ProjectDocument replacement;
+    const EntityId light = replacement.scene().createEntity("Loaded Light", EntityKind::Light);
+    ASSERT_NE(light, InvalidEntityId);
+    replacement.scene().setLight(light, LightComponent{.type = LightType::Point});
+    ASSERT_LT(replacement.scene().revision(), previousSceneRevision);
+
+    session.replaceDocument(std::move(replacement));
+
+    EXPECT_GT(session.scene().revision(), previousSceneRevision);
+    EXPECT_FALSE(session.dirty());
+    ASSERT_NE(session.scene().light(light), nullptr);
+    EXPECT_EQ(session.scene().light(light)->type, LightType::Point);
 }
 
 TEST(ProjectSessionTests, PublicHistoryIgnoresUntrackedModelingSessionHistory) {

@@ -75,6 +75,7 @@ public:
     [[nodiscard]] ProjectContentRevisionStamp contentRevisionStamp() const;
     [[nodiscard]] bool dirty() const;
     [[nodiscard]] ProjectAssetMutationResult replaceStandaloneMesh(AssetId mesh, MeshAsset replacement);
+    void replaceDocument(ProjectDocument document);
     void markClean();
 
 private:

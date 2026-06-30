@@ -115,6 +115,7 @@ const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBool
         {ViewportBoolSettingId::ShowGrid, ViewportSettingsSectionId::Grid, "Show Grid", key("ShowGrid"), true},
         {ViewportBoolSettingId::ShowGizmos, ViewportSettingsSectionId::Gizmo, "Show Gizmos", key("ShowGizmos"), true},
         {ViewportBoolSettingId::ShowOverlays, ViewportSettingsSectionId::Overlay, "Show Overlays", key("ShowOverlays"), true},
+        {ViewportBoolSettingId::ShowInfo, ViewportSettingsSectionId::Overlay, "Show Info", key("ShowInfo"), false},
         {ViewportBoolSettingId::GridSnap, ViewportSettingsSectionId::Grid, "Grid Snap", key("GridSnap"), true},
         {ViewportBoolSettingId::VertexSnap, ViewportSettingsSectionId::Picking, "Vertex Snap", key("VertexSnap"), true},
 }};

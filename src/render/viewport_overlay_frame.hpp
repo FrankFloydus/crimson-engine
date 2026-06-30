@@ -42,9 +42,10 @@ enum class ViewportOverlayLayer {
     GroupBounds = 21,
     WireframeBase = 22,
     SourceWireDepthStamp = 23,
+    WireframeXray = 24,
 };
 
-inline constexpr std::size_t kViewportOverlayLayerCount = 24u;
+inline constexpr std::size_t kViewportOverlayLayerCount = 25u;
 
 /**
  * Enumerates ViewportOverlayStyleRole values used by the render layer.

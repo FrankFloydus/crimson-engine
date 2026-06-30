@@ -17,6 +17,10 @@
         {
             type : float,
             name : encodeToSrgb
+        },
+        {
+            type : float,
+            name : premultipliedAlpha
         }
     ]
 }
@@ -33,7 +37,11 @@ fragment {
         prepareMaterial(material);
         vec4 sampled = texture(materialParams_albedo, getUV0());
         sampled.rgb = mix(sampled.rgb, linearToSrgb(sampled.rgb), clamp(materialParams.encodeToSrgb, 0.0, 1.0));
-        vec4 color = sampled * getColor();
-        material.baseColor = vec4(color.rgb * color.a, color.a);
+        vec4 tint = getColor();
+        float alpha = sampled.a * tint.a;
+        vec3 straightRgb = sampled.rgb * tint.rgb * alpha;
+        vec3 premultipliedRgb = sampled.rgb * tint.rgb * tint.a;
+        float premultipliedAlpha = clamp(materialParams.premultipliedAlpha, 0.0, 1.0);
+        material.baseColor = vec4(mix(straightRgb, premultipliedRgb, premultipliedAlpha), alpha);
     }
 }

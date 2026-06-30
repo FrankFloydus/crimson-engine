@@ -32,6 +32,9 @@ public:
     [[nodiscard]] const quader_editor_core::TransformGizmoFrame* frame() const;
 
 private:
+    /**
+     * Stores a gizmo hit that is waiting for drag-threshold confirmation.
+     */
     struct PendingGizmoDrag {
         QuaderTransformDragBeginRequest beginRequest;
         ViewportToolId tool = ViewportToolId::Select;

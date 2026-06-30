@@ -80,6 +80,7 @@ public:
     [[nodiscard]] ModelingSessionMemento captureHistoryMemento() const;
     [[nodiscard]] ModelingSessionMemento captureActivePreviewHistoryMemento() const;
     ModelingCommandResult restoreHistoryMemento(const ModelingSessionMemento& memento);
+    void resetFromScene();
 
     ModelingCommandResult duplicateSelectedHierarchyForGroupDrag(DocumentCommandService& documentCommands);
     ModelingCommandResult duplicateSelectedEntityHierarchy(DocumentCommandService& documentCommands);

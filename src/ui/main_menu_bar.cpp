@@ -16,7 +16,6 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <imgui.h>
-#include <imgui_internal.h>
 
 #include <string>
 #include <string_view>
@@ -31,16 +30,8 @@ constexpr float kMenuPopupFramePaddingY = 5.0f;
 constexpr float kMenuPopupItemSpacingY = 4.0f;
 
 bool beginMenuWithPopupSpacing(const std::string& label) {
-    const ImGuiID menuId = ImGui::GetID(label.c_str());
-    const bool wasOpen = ImGui::IsPopupOpen(menuId, ImGuiPopupFlags_None);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{kMenuPopupPaddingX, kMenuPopupPaddingY});
     if (!ImGui::BeginMenu(label.c_str())) {
-        ImGui::PopStyleVar();
-        return false;
-    }
-    if (wasOpen && ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
-        ImGui::CloseCurrentPopup();
-        ImGui::EndMenu();
         ImGui::PopStyleVar();
         return false;
     }
@@ -125,6 +116,13 @@ bool drawViewportBoolSettingMenuItem(
 }
 
 void drawFileMenuContents(MainMenuBarContext& context) {
+    const std::vector<QuaderCommandDescriptor> commands = context.editor.commands().available();
+
+    (void)drawCommandMenuItem(context, commands, QuaderCommand::ProjectOpen, "ui.menu.file.open", "Open...");
+    (void)drawCommandMenuItem(context, commands, QuaderCommand::ProjectSave, "ui.menu.file.save", "Save");
+    (void)drawCommandMenuItem(context, commands, QuaderCommand::ProjectSaveAs, "ui.menu.file.save_as", "Save As...");
+    ImGui::Separator();
+
     const std::string exitLabel = context.localization.imguiLabel("ui.menu.file.exit", "ui.menu.file.exit", "Exit");
     if (ImGui::MenuItem(exitLabel.c_str())) {
         context.quitRequested = true;
@@ -289,6 +287,13 @@ void drawViewMenuContents(MainMenuBarContext& context, MainMenuBarResult& result
                     ViewportBoolSettingId::ShowOverlays,
                     "ui.menu.view.overlays",
                     "Overlays") ||
+            result.viewportSettingsChanged;
+    result.viewportSettingsChanged =
+            drawViewportBoolSettingMenuItem(
+                    context,
+                    ViewportBoolSettingId::ShowInfo,
+                    "ui.menu.view.show_info",
+                    "Show Info") ||
             result.viewportSettingsChanged;
     ImGui::Separator();
 

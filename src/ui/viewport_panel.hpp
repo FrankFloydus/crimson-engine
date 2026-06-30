@@ -76,6 +76,7 @@ public:
     bool flyNavigationActive() const { return lastFlyNavigationActive_; }
     bool needsContinuousRendering() const {
         return lastFlyNavigationActive_ ||
+                activeViewportSettings().boolValue(ViewportBoolSettingId::ShowInfo) ||
                 navigationGizmo_.inputLocked() ||
                 interactionController_.dragging() ||
                 splitHandleDragging_;
@@ -123,6 +124,12 @@ private:
             QuaderEditorApi& editor,
             ImVec2 itemMin,
             ImVec2 itemSize);
+    void drawViewportInfoOverlay(
+            const SceneDocument& document,
+            const AssetRegistry& assets,
+            const UIContext& uiContext,
+            ImVec2 itemMin,
+            ImVec2 itemSize) const;
     void refreshCachedSelectionOverlayFrame(const SceneDocument& document,
             const AssetRegistry& assets,
             ModelingSessionService& modeling);

@@ -36,7 +36,10 @@ public:
         return engine_ != nullptr && textureRegistry_ != nullptr;
     }
 
-    void resize(std::uint32_t width, std::uint32_t height, filament::View* view);
+    void resize(std::uint32_t width,
+            std::uint32_t height,
+            filament::View* view,
+            TextureSampleColorSpace sampleColorSpace = TextureSampleColorSpace::LinearSrgb);
     void destroy();
 
     filament::RenderTarget* renderTarget() const { return renderTarget_; }
@@ -53,6 +56,7 @@ private:
     filament::Texture* depthTexture_ = nullptr;
     filament::RenderTarget* renderTarget_ = nullptr;
     RenderTextureHandle textureHandle_ = InvalidRenderTextureHandle;
+    TextureSampleColorSpace sampleColorSpace_ = TextureSampleColorSpace::LinearSrgb;
     std::uint32_t width_ = 1;
     std::uint32_t height_ = 1;
 };

@@ -21,6 +21,20 @@
 namespace quader {
 namespace {
 
+constexpr float kViewportOverlayCameraAperture = 16.0f;
+constexpr float kViewportOverlayCameraShutterSpeed = 1.0f / 125.0f;
+constexpr float kViewportOverlayCameraSensitivity = 100.0f;
+
+void applyNeutralOverlayExposure(filament::Camera* camera) {
+    if (!camera) {
+        return;
+    }
+    camera->setExposure(
+            kViewportOverlayCameraAperture,
+            kViewportOverlayCameraShutterSpeed,
+            kViewportOverlayCameraSensitivity);
+}
+
 ViewportSettingColor viewportClearColor(const SceneEnvironmentSettings& environment, bool renderedMode) {
     if (renderedMode) {
         return {};
@@ -91,6 +105,7 @@ void ViewportRenderer::initialize(filament::Engine& engine,
     renderPassCoordinator_.initialize(resolvedGridLayerMask);
     if (surface_ == ViewportRenderSurface::Texture) {
         renderTarget_.initialize(engine, textureRegistry);
+        overlayRenderTarget_.initialize(engine, textureRegistry);
     }
     LOG_INFO("Creating viewport Filament view");
     view_ = engine_->createView();
@@ -112,8 +127,11 @@ void ViewportRenderer::initialize(filament::Engine& engine,
     LOG_INFO("Creating viewport camera");
     cameraEntity_ = utils::EntityManager::get().create();
     camera_ = engine_->createCamera(cameraEntity_);
+    overlayCameraEntity_ = utils::EntityManager::get().create();
+    overlayCamera_ = engine_->createCamera(overlayCameraEntity_);
+    applyNeutralOverlayExposure(overlayCamera_);
     view_->setCamera(camera_);
-    overlayView_->setCamera(camera_);
+    overlayView_->setCamera(overlayCamera_);
     gridRenderer_.initialize(engine, scene, groundGridMaterial, resolvedGridLayerMask);
     LOG_INFO("Creating initial viewport render target");
     resize(640, 480);
@@ -125,6 +143,7 @@ void ViewportRenderer::shutdown() {
     }
 
     renderTarget_.shutdown();
+    overlayRenderTarget_.shutdown();
     gridRenderer_.shutdown();
     if (view_) {
         view_->setColorGrading(nullptr);
@@ -142,9 +161,17 @@ void ViewportRenderer::shutdown() {
         engine_->destroy(view_);
         view_ = nullptr;
     }
+    if (overlayCamera_) {
+        engine_->destroyCameraComponent(overlayCameraEntity_);
+        overlayCamera_ = nullptr;
+    }
     if (camera_) {
         engine_->destroyCameraComponent(cameraEntity_);
         camera_ = nullptr;
+    }
+    if (overlayCameraEntity_) {
+        utils::EntityManager::get().destroy(overlayCameraEntity_);
+        overlayCameraEntity_.clear();
     }
     if (cameraEntity_) {
         utils::EntityManager::get().destroy(cameraEntity_);
@@ -160,11 +187,12 @@ void ViewportRenderer::resize(std::uint32_t width, std::uint32_t height) {
     width_ = std::max(1u, width);
     height_ = std::max(1u, height);
     if (surface_ == ViewportRenderSurface::Texture) {
-        renderTarget_.resize(width_, height_, view_);
-        if (overlayView_) {
-            overlayView_->setRenderTarget(renderTarget_.renderTarget());
-            overlayView_->setViewport({0, 0, width_, height_});
-        }
+        renderTarget_.resize(width_, height_, view_, TextureSampleColorSpace::LinearSrgb);
+        overlayRenderTarget_.resize(
+                width_,
+                height_,
+                overlayView_,
+                TextureSampleColorSpace::DisplaySrgbPremultipliedAlpha);
         return;
     }
 
@@ -180,22 +208,36 @@ void ViewportRenderer::resize(std::uint32_t width, std::uint32_t height) {
 
 void ViewportRenderer::updateCamera(const ViewportCameraController& controller) {
     const auto pose = controller.pose();
-    camera_->lookAt(
-            {pose.eye.x, pose.eye.y, pose.eye.z},
-            {pose.target.x, pose.target.y, pose.target.z},
-            {pose.up.x, pose.up.y, pose.up.z});
+    const auto applyLookAt = [&](filament::Camera* camera) {
+        if (camera) {
+            camera->lookAt(
+                    {pose.eye.x, pose.eye.y, pose.eye.z},
+                    {pose.target.x, pose.target.y, pose.target.z},
+                    {pose.up.x, pose.up.y, pose.up.z});
+        }
+    };
+    applyLookAt(camera_);
+    applyLookAt(overlayCamera_);
     const double aspect = static_cast<double>(width()) / static_cast<double>(height());
-    if (controller.state().projection == ViewportProjection::Orthographic) {
-        const double halfHeight = std::max(0.0001f, controller.state().orthographicSize * 0.5f);
-        const double halfWidth = halfHeight * aspect;
-        camera_->setProjection(filament::Camera::Projection::ORTHO,
-                -halfWidth, halfWidth,
-                -halfHeight, halfHeight,
-                cameraNearPlane_, cameraFarPlane_);
-    } else {
-        camera_->setProjection(controller.state().fovDegrees, aspect,
-                cameraNearPlane_, cameraFarPlane_);
-    }
+    const auto applyProjection = [&](filament::Camera* camera) {
+        if (!camera) {
+            return;
+        }
+        if (controller.state().projection == ViewportProjection::Orthographic) {
+            const double halfHeight = std::max(0.0001f, controller.state().orthographicSize * 0.5f);
+            const double halfWidth = halfHeight * aspect;
+            camera->setProjection(filament::Camera::Projection::ORTHO,
+                    -halfWidth, halfWidth,
+                    -halfHeight, halfHeight,
+                    cameraNearPlane_, cameraFarPlane_);
+        } else {
+            camera->setProjection(controller.state().fovDegrees, aspect,
+                    cameraNearPlane_, cameraFarPlane_);
+        }
+    };
+    applyProjection(camera_);
+    applyProjection(overlayCamera_);
+    applyNeutralOverlayExposure(overlayCamera_);
 }
 
 void ViewportRenderer::applySceneSettings(const SceneSettingsComponent& settings, bool renderedMode) {
@@ -242,6 +284,7 @@ void ViewportRenderer::applySceneSettings(const SceneSettingsComponent& settings
             std::max(settings.camera.aperture, 0.01f),
             std::max(settings.camera.shutterSpeed, 0.000001f),
             std::max(settings.camera.sensitivity, 1.0f));
+    applyNeutralOverlayExposure(overlayCamera_);
 }
 
 void ViewportRenderer::applyToneMapping(SceneToneMapping toneMapping, bool enabled) {
@@ -325,7 +368,11 @@ void ViewportRenderer::setShadowingEnabled(bool enabled) {
 }
 
 void ViewportRenderer::render(filament::Renderer& renderer) {
-    renderPassCoordinator_.render(renderer, view_, overlayView_, renderTarget_.renderTarget());
+    renderPassCoordinator_.render(
+            renderer,
+            view_,
+            overlayView_,
+            surface_ == ViewportRenderSurface::Texture);
 }
 
 void ViewportRenderer::updateVisibleLayers() {

@@ -943,6 +943,57 @@ public:
         };
     }
 
+    void resetFromScene() {
+        objectRegistry_.clear();
+        quader_editor_core::SessionState state;
+        state.selection_mode = quader_editor_core::SelectionMode::object;
+        const EntityId activeEntity = scene_.primarySelection();
+
+        for (const EntityId entity : scene_.entityTreeOrder()) {
+            const ModelingObjectComponent* modelingObject = scene_.modelingObject(entity);
+            const MeshComponent* meshComponent = scene_.mesh(entity);
+            if (modelingObject == nullptr ||
+                    modelingObject->objectId == InvalidModelingObjectId ||
+                    meshComponent == nullptr ||
+                    meshComponent->mesh == InvalidAssetId) {
+                continue;
+            }
+
+            const MeshAsset* mesh = assets_.mesh(meshComponent->mesh);
+            if (mesh == nullptr || !mesh->hasAuthoredPolygonDocument || !mesh->authoredPolygonDocument) {
+                continue;
+            }
+
+            quader_editor_core::PolygonObject object;
+            object.id = modelingObject->objectId;
+            object.material_id = static_cast<int>(modelingObject->materialSlot);
+            object.selected = scene_.selection(entity) != nullptr && scene_.selection(entity)->selected;
+            object.document = *mesh->authoredPolygonDocument;
+            state.objects.push_back(std::move(object));
+            objectRegistry_.bind(modelingObject->objectId, entity);
+            objectRegistry_.rememberSceneEntity(modelingObject->objectId, scene_, entity);
+            if (entity == activeEntity) {
+                state.active_object_id = modelingObject->objectId;
+            }
+        }
+
+        state.next_object_id = quader_editor_core::next_polygon_object_id(state.objects, 1);
+        state.content_revision = state.objects.empty() ? 0U : 1U;
+        state.selection_revision = 0U;
+        session_.set_state(std::move(state));
+        session_.mark_clean();
+        session_.clear_history();
+        runtime_.reset_document_state(session_);
+        sceneSyncService_.markSceneObjectsSynced(session_.state().content_revision);
+        (void)selectionProjectionService_.projectObjectSelectionFromScene(
+                session_,
+                scene_,
+                objectRegistry_,
+                true);
+        session_.mark_clean();
+        invalidateSelectionOverlayCaches();
+    }
+
     void syncObjectSelectionFromScene(bool forceObjectMode = false) {
         if (!selectionProjectionService_.shouldProjectObjectSelectionFromScene(session_, forceObjectMode)) {
             return;
@@ -3166,6 +3217,10 @@ ModelingSessionMemento ModelingSessionService::captureActivePreviewHistoryMement
 
 ModelingCommandResult ModelingSessionService::restoreHistoryMemento(const ModelingSessionMemento& memento) {
     return impl_->restoreHistoryMemento(memento);
+}
+
+void ModelingSessionService::resetFromScene() {
+    impl_->resetFromScene();
 }
 
 void ModelingSessionService::projectObjectSelectionFromScene(bool forceObjectMode) {

@@ -787,6 +787,10 @@ QMat4 SceneDocument::worldTransformMatrix(EntityId id) const {
     return sceneTransformMultiply(worldTransformMatrix(parentId), localTransformMatrix(id));
 }
 
+void SceneDocument::advanceRevisionForReplacement(std::uint64_t previousRevision) {
+    revision_ = std::max(revision_ + 1u, previousRevision + 1u);
+}
+
 entt::entity SceneDocument::enttEntity(EntityId id) const {
     return requireEntity(id);
 }

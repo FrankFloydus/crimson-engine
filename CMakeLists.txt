@@ -360,6 +360,7 @@ add_library(quader_runtime STATIC
     src/editor/viewport/viewport_selection_interaction.cpp
     src/editor/transform/scene_transform_drag_service.cpp
     src/platform/fatal_error_handler.cpp
+    src/platform/platform_file_dialog.cpp
     src/platform/platform_window.cpp
     src/platform/sdl_event_utils.cpp
     src/platform/sdl_input_adapter.cpp
@@ -438,7 +439,7 @@ target_link_libraries(quader_runtime
         lodepng
 )
 if(WIN32)
-    target_link_libraries(quader_runtime PUBLIC Dbghelp Dwmapi Advapi32)
+    target_link_libraries(quader_runtime PUBLIC Dbghelp Dwmapi Advapi32 Comdlg32)
 endif()
 add_dependencies(quader_runtime
     ${QUADER_FILAMENT_MATERIAL_TARGETS})

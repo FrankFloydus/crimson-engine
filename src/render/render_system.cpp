@@ -11,7 +11,10 @@
 #include <filament/Renderer.h>
 #include <math/vec4.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <cstddef>
 #include <string_view>
 #include <utility>
 
@@ -41,6 +44,17 @@ std::uint64_t swapChainFlagsFor(filament::Engine& engine, SwapChainPresentationC
         return filament::SwapChain::CONFIG_SRGB_COLORSPACE;
     }
     return 0u;
+}
+
+bool isFrameInfoDurationAvailable(filament::Renderer::FrameInfo::duration_ns duration) {
+    return duration > 0 &&
+            duration != filament::Renderer::FrameInfo::INVALID &&
+            duration != filament::Renderer::FrameInfo::PENDING;
+}
+
+double frameInfoDurationMs(filament::Renderer::FrameInfo::duration_ns duration) {
+    constexpr double kNanosecondsPerMillisecond = 1000000.0;
+    return static_cast<double>(duration) / kNanosecondsPerMillisecond;
 }
 
 } // namespace
@@ -147,20 +161,61 @@ void RenderSystem::shutdown() {
         swapChain_ = nullptr;
     }
 
+    framePerformanceStats_ = {};
+    frameCpuActive_ = false;
     filament::Engine::destroy(&engine_);
 }
 
 bool RenderSystem::beginFrame() {
-    return renderer_ != nullptr && swapChain_ != nullptr && renderer_->beginFrame(swapChain_);
+    return beginFrameWithSwapChain(swapChain_);
 }
 
 bool RenderSystem::beginFrame(filament::SwapChain* swapChain) {
-    return renderer_ != nullptr && swapChain != nullptr && renderer_->beginFrame(swapChain);
+    return beginFrameWithSwapChain(swapChain);
 }
 
 void RenderSystem::endFrame() {
     if (renderer_) {
         renderer_->endFrame();
+        updateFramePerformanceStatsAfterEndFrame();
+    }
+}
+
+bool RenderSystem::beginFrameWithSwapChain(filament::SwapChain* swapChain) {
+    if (renderer_ == nullptr || swapChain == nullptr || !renderer_->beginFrame(swapChain)) {
+        frameCpuActive_ = false;
+        return false;
+    }
+
+    frameCpuBegin_ = std::chrono::steady_clock::now();
+    frameCpuActive_ = true;
+    return true;
+}
+
+void RenderSystem::updateFramePerformanceStatsAfterEndFrame() {
+    if (frameCpuActive_) {
+        const std::chrono::steady_clock::time_point frameCpuEnd = std::chrono::steady_clock::now();
+        framePerformanceStats_.cpuFrameMs =
+                std::chrono::duration<double, std::milli>(frameCpuEnd - frameCpuBegin_).count();
+        framePerformanceStats_.cpuFrameMsAvailable = true;
+        frameCpuActive_ = false;
+    }
+
+    framePerformanceStats_.gpuFrameMsAvailable = false;
+    const std::size_t historySize = std::min<std::size_t>(renderer_->getMaxFrameHistorySize(), 8u);
+    const auto history = renderer_->getFrameInfoHistory(historySize);
+    for (std::size_t index = history.size(); index > 0u; --index) {
+        const filament::Renderer::FrameInfo& info = history[index - 1u];
+        if (isFrameInfoDurationAvailable(info.denoisedGpuFrameDuration)) {
+            framePerformanceStats_.gpuFrameMs = frameInfoDurationMs(info.denoisedGpuFrameDuration);
+            framePerformanceStats_.gpuFrameMsAvailable = true;
+            return;
+        }
+        if (isFrameInfoDurationAvailable(info.gpuFrameDuration)) {
+            framePerformanceStats_.gpuFrameMs = frameInfoDurationMs(info.gpuFrameDuration);
+            framePerformanceStats_.gpuFrameMsAvailable = true;
+            return;
+        }
     }
 }
 

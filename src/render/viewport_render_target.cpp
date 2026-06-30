@@ -66,7 +66,11 @@ void ViewportRenderTarget::shutdown() {
     textureRegistry_ = nullptr;
 }
 
-void ViewportRenderTarget::resize(std::uint32_t width, std::uint32_t height, filament::View* view) {
+void ViewportRenderTarget::resize(
+        std::uint32_t width,
+        std::uint32_t height,
+        filament::View* view,
+        TextureSampleColorSpace sampleColorSpace) {
     if (!engine_ || !textureRegistry_ || !view) {
         return;
     }
@@ -74,12 +78,19 @@ void ViewportRenderTarget::resize(std::uint32_t width, std::uint32_t height, fil
     width = std::max(1u, width);
     height = std::max(1u, height);
     if (renderTarget_ && width == width_ && height == height_) {
+        if (sampleColorSpace_ != sampleColorSpace) {
+            sampleColorSpace_ = sampleColorSpace;
+            textureRegistry_->updateTexture(textureHandle_, colorTexture_, sampleColorSpace_);
+        }
+        view->setRenderTarget(renderTarget_);
+        view->setViewport({0, 0, width_, height_});
         return;
     }
 
     destroyRenderResources();
     width_ = width;
     height_ = height;
+    sampleColorSpace_ = sampleColorSpace;
 
     using Texture = filament::Texture;
     LOG_INFO("Allocating viewport render target {}x{}", width, height);
@@ -115,9 +126,9 @@ void ViewportRenderTarget::resize(std::uint32_t width, std::uint32_t height, fil
     }
 
     if (textureHandle_ == InvalidRenderTextureHandle) {
-        textureHandle_ = textureRegistry_->registerTexture(creationGuard.colorTexture, TextureSampleColorSpace::LinearSrgb);
+        textureHandle_ = textureRegistry_->registerTexture(creationGuard.colorTexture, sampleColorSpace_);
     } else {
-        textureRegistry_->updateTexture(textureHandle_, creationGuard.colorTexture, TextureSampleColorSpace::LinearSrgb);
+        textureRegistry_->updateTexture(textureHandle_, creationGuard.colorTexture, sampleColorSpace_);
     }
     colorTexture_ = creationGuard.colorTexture;
     depthTexture_ = creationGuard.depthTexture;

@@ -9,7 +9,6 @@
 #include "ui/phosphor_icons.hpp"
 
 #include <algorithm>
-#include <cfloat>
 
 #include <imgui_internal.h>
 
@@ -44,62 +43,8 @@ void drawComboCaret(ImDrawList& drawList, const ImVec2 min, const ImVec2 max) {
     drawCaretText(drawList, {iconX, iconY}, ImGui::GetColorU32(ImGuiCol_Text), kPhosphorCaretDown);
 }
 
-bool beginQuaderComboPopup(ImGuiID popupId, const ImRect& frameRect) {
-    ImGuiContext& context = *GImGui;
-    if (!ImGui::IsPopupOpen(popupId, ImGuiPopupFlags_None)) {
-        context.NextWindowData.ClearFlags();
-        return false;
-    }
-
-    const float width = frameRect.GetWidth();
-    if ((context.NextWindowData.HasFlags & ImGuiNextWindowDataFlags_HasSizeConstraint) == 0) {
-        ImGui::SetNextWindowSizeConstraints({width, 0.0f}, {FLT_MAX, FLT_MAX});
-    } else {
-        context.NextWindowData.SizeConstraintRect.Min.x = std::max(context.NextWindowData.SizeConstraintRect.Min.x, width);
-        context.NextWindowData.SizeConstraintRect.Max.y = FLT_MAX;
-    }
-
-    char name[16];
-    ImFormatString(name, IM_COUNTOF(name), "##Combo_%02d", context.BeginComboDepth);
-    if (ImGuiWindow* popupWindow = ImGui::FindWindowByName(name)) {
-        if (popupWindow->WasActive) {
-            ImVec2 expectedSize = ImGui::CalcWindowNextAutoFitSize(popupWindow);
-            popupWindow->AutoPosLastDirection = ImGuiDir_Down;
-            ImRect outer = ImGui::GetPopupAllowedExtentRect(popupWindow);
-            ImVec2 position = ImGui::FindBestWindowPosForPopupEx(
-                    frameRect.GetBL(),
-                    expectedSize,
-                    &popupWindow->AutoPosLastDirection,
-                    outer,
-                    frameRect,
-                    ImGuiPopupPositionPolicy_ComboBox);
-            ImGui::SetNextWindowPos(position);
-        } else {
-            ImGui::SetNextWindowPos(frameRect.GetBL());
-        }
-    } else {
-        ImGui::SetNextWindowPos(frameRect.GetBL());
-    }
-
-    constexpr ImGuiWindowFlags windowFlags =
-            ImGuiWindowFlags_AlwaysAutoResize |
-            ImGuiWindowFlags_Popup |
-            ImGuiWindowFlags_NoTitleBar |
-            ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_NoSavedSettings |
-            ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_NoScrollWithMouse;
-    ImGui::PushStyleVarX(ImGuiStyleVar_WindowPadding, context.Style.FramePadding.x);
-    const bool visible = ImGui::Begin(name, nullptr, windowFlags);
-    ImGui::PopStyleVar();
-    if (!visible) {
-        ImGui::EndPopup();
-        return false;
-    }
-
-    ++context.BeginComboDepth;
-    return true;
+ImGuiComboFlags quaderComboPopupFlags(ImGuiComboFlags flags) {
+    return flags & ~ImGuiComboFlags_HeightMask_;
 }
 
 } // namespace
@@ -181,8 +126,7 @@ bool quaderBeginCombo(const char* label, const char* previewValue, ImGuiComboFla
     }
 
     context.NextWindowData.HasFlags = nextWindowFlags;
-    (void)flags;
-    const bool popupVisible = beginQuaderComboPopup(popupId, frameRect);
+    const bool popupVisible = ImGui::BeginComboPopup(popupId, frameRect, quaderComboPopupFlags(flags));
     window->StateStorage.SetInt(wasOpenStorageId, popupVisible ? 1 : 0);
     return popupVisible;
 }

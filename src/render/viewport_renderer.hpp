@@ -68,6 +68,7 @@ public:
     void render(filament::Renderer& renderer);
 
     RenderTextureHandle textureHandle() const { return renderTarget_.textureHandle(); }
+    RenderTextureHandle overlayTextureHandle() const { return overlayRenderTarget_.textureHandle(); }
     std::uint32_t width() const { return width_; }
     std::uint32_t height() const { return height_; }
 
@@ -82,11 +83,14 @@ private:
     filament::View* view_ = nullptr;
     filament::View* overlayView_ = nullptr;
     filament::Camera* camera_ = nullptr;
+    filament::Camera* overlayCamera_ = nullptr;
     filament::ColorGrading* colorGrading_ = nullptr;
     utils::Entity cameraEntity_;
+    utils::Entity overlayCameraEntity_;
     ViewportGridRenderer gridRenderer_;
     ViewportRenderPassCoordinator renderPassCoordinator_;
     ViewportRenderTarget renderTarget_;
+    ViewportRenderTarget overlayRenderTarget_;
     ViewportRenderSurface surface_ = ViewportRenderSurface::Texture;
     std::uint32_t width_ = 1u;
     std::uint32_t height_ = 1u;

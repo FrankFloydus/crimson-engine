@@ -12,6 +12,9 @@ ui.action.apply=Apply
 ui.action.cancel=Cancel
 
 ui.menu.file=File
+ui.menu.file.open=Open...
+ui.menu.file.save=Save
+ui.menu.file.save_as=Save As...
 ui.menu.file.exit=Exit
 ui.menu.edit=Edit
 ui.menu.edit.undo=Undo
@@ -43,6 +46,7 @@ ui.menu.view.focus_selection=Focus Selection
 ui.menu.view.grid=Grid
 ui.menu.view.gizmos=Gizmos
 ui.menu.view.overlays=Overlays
+ui.menu.view.show_info=Show Info
 ui.menu.view.toolbars=Toolbars
 ui.menu.layout=Layout
 
@@ -222,6 +226,13 @@ viewport.view.left=Left
 viewport.shading.wireframe=Wireframe
 viewport.shading.shaded=Shaded
 viewport.shading.rendered=Rendered
+ui.viewport.info.fps=FPS
+ui.viewport.info.cpu=CPU
+ui.viewport.info.gpu=GPU
+ui.viewport.info.objects=Objects
+ui.viewport.info.primitives=Primitives
+ui.viewport.info.draw_calls=Draw Calls
+ui.viewport.info.unavailable=--
 
 viewport.layout.single.label=Single View
 viewport.layout.two_horizontal.label=Two-View Horizontal
@@ -289,6 +300,7 @@ viewport.settings.GizmoSize.label=Size
 viewport.settings.ShowGrid.label=Show Grid
 viewport.settings.ShowGizmos.label=Show Gizmos
 viewport.settings.ShowOverlays.label=Show Overlays
+viewport.settings.ShowInfo.label=Show Info
 viewport.settings.GridSnap.label=Grid Snap
 viewport.settings.VertexSnap.label=Vertex Snap
 

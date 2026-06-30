@@ -9,6 +9,7 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
+#include "assets/mesh_asset.hpp"
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
 #include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
@@ -37,6 +38,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -152,6 +155,100 @@ float viewportShadingComboWidth(const LocalizationService& localization) {
         width = std::max(width, viewportChromeComboWidthForText(localizedViewportShadingModeLabel(localization, mode)));
     }
     return width;
+}
+
+/**
+ * Stores the scene-visible counters presented by the View > Show Info viewport overlay.
+ */
+struct ViewportInfoSceneStats {
+    std::uint64_t objects = 0;
+    std::uint64_t primitives = 0;
+    std::uint64_t drawCalls = 0;
+};
+
+ViewportInfoSceneStats collectViewportInfoSceneStats(const SceneDocument& document, const AssetRegistry& assets) {
+    ViewportInfoSceneStats stats;
+    for (const EntityId entityId : document.entities()) {
+        if (!document.isEffectivelyVisible(entityId)) {
+            continue;
+        }
+
+        const MeshComponent* meshComponent = document.mesh(entityId);
+        if (meshComponent == nullptr) {
+            continue;
+        }
+
+        const MeshAsset* mesh = assets.mesh(meshComponent->mesh);
+        if (mesh == nullptr || mesh->vertices.empty() || mesh->indices.empty()) {
+            continue;
+        }
+
+        const std::vector<MeshPrimitiveSpan> spans = normalizedMeshPrimitiveSpans(*mesh);
+        if (spans.empty()) {
+            continue;
+        }
+
+        ++stats.objects;
+        stats.drawCalls += spans.size();
+        for (const MeshPrimitiveSpan& span : spans) {
+            stats.primitives += span.indexCount / 3u;
+        }
+    }
+    return stats;
+}
+
+std::string formatViewportInfoNumber(std::uint64_t value) {
+    return std::to_string(value);
+}
+
+std::string formatViewportInfoMilliseconds(double value) {
+    if (!(value >= 0.0) || !std::isfinite(value)) {
+        return "--";
+    }
+    char buffer[32] = {};
+    std::snprintf(buffer, sizeof(buffer), "%.2f ms", value);
+    return buffer;
+}
+
+std::string formatViewportInfoFramesPerSecond(double value) {
+    if (!(value >= 0.0) || !std::isfinite(value)) {
+        return "--";
+    }
+    char buffer[32] = {};
+    std::snprintf(buffer, sizeof(buffer), "%.1f", value);
+    return buffer;
+}
+
+std::string viewportInfoLine(std::string_view label, const std::string& value) {
+    std::string line{label};
+    line.append(": ");
+    line.append(value);
+    return line;
+}
+
+void drawViewportInfoText(ImDrawList& drawList, ImVec2 itemMin, ImVec2 itemSize, std::span<const std::string> lines) {
+    if (lines.empty() || itemSize.x <= 32.0f || itemSize.y <= 32.0f) {
+        return;
+    }
+
+    const float padding = 10.0f;
+    const float lineAdvance = ImGui::GetTextLineHeightWithSpacing();
+    float width = 0.0f;
+    for (const std::string& line : lines) {
+        width = std::max(width, ImGui::CalcTextSize(line.c_str(), nullptr, false).x);
+    }
+    const float height = ImGui::GetTextLineHeight() + lineAdvance * static_cast<float>(lines.size() - 1u);
+    const float x = std::max(itemMin.x + padding, itemMin.x + itemSize.x - width - padding);
+    const float y = std::max(itemMin.y + padding, itemMin.y + itemSize.y - height - padding);
+    const ImU32 shadow = IM_COL32(0, 0, 0, 180);
+    const ImU32 foreground = IM_COL32(235, 238, 244, 230);
+
+    for (std::size_t index = 0; index < lines.size(); ++index) {
+        const std::string& line = lines[index];
+        const ImVec2 position{x, y + lineAdvance * static_cast<float>(index)};
+        drawList.AddText({position.x + 1.0f, position.y + 1.0f}, shadow, line.c_str());
+        drawList.AddText(position, foreground, line.c_str());
+    }
 }
 
 std::optional<int> hitDrawnPlaneCapturedPoint(
@@ -783,7 +880,7 @@ bool ViewportPanel::drawPaneChrome(
     };
     const ImRect chromeRect(comboPos, ImVec2(itemMax.x - 8.0f, comboPos.y + kComboHeight));
     bool consumesInput = chromeRect.Contains(ImGui::GetMousePos());
-    (void)imguiClosePopupForClickOutside(chromeRect.Min, chromeRect.Max);
+    (void)imguiCloseComboPopupForClickInside(itemMin, itemMax, chromeRect.Min, chromeRect.Max);
 
     ImGui::SetCursorScreenPos(comboPos);
     if (viewWidth >= 44.0f) {
@@ -994,6 +1091,12 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
         ImGui::PushID(static_cast<int>(viewportPaneIndex(placement.paneId)));
         ImGui::SetNextItemAllowOverlap();
         ImGui::Image(static_cast<ImTextureID>(paneState.renderer.textureHandle()), itemSize, {0.0f, 1.0f}, {1.0f, 0.0f});
+        ImGui::GetWindowDrawList()->AddImage(
+                static_cast<ImTextureID>(paneState.renderer.overlayTextureHandle()),
+                itemMin,
+                {itemMin.x + itemSize.x, itemMin.y + itemSize.y},
+                {0.0f, 1.0f},
+                {1.0f, 0.0f});
         DrawPane drawPane{
                 .pane = &paneState,
                 .itemMin = ImGui::GetItemRectMin(),
@@ -1079,6 +1182,15 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
                 drawPane.itemMin,
                 drawPane.itemSize);
     }
+    if (activeViewportSettings().boolValue(ViewportBoolSettingId::ShowInfo)) {
+        for (const DrawPane& drawPane : drawPanes) {
+            if (drawPane.pane->id != viewportWorkspace.focusedPane()) {
+                continue;
+            }
+            drawViewportInfoOverlay(document, assets, uiContext, drawPane.itemMin, drawPane.itemSize);
+            break;
+        }
+    }
     refreshCachedSelectionOverlayFrame(document, assets, modeling);
     ImGui::SetCursorScreenPos({canvasMin.x, canvasMin.y + available.y});
     ImGui::End();
@@ -1100,6 +1212,48 @@ void ViewportPanel::drawPaneDecorations(
     (void)modeling;
     (void)selection;
     (void)editor;
+}
+
+void ViewportPanel::drawViewportInfoOverlay(
+        const SceneDocument& document,
+        const AssetRegistry& assets,
+        const UIContext& uiContext,
+        ImVec2 itemMin,
+        ImVec2 itemSize) const {
+    const ViewportInfoSceneStats sceneStats = collectViewportInfoSceneStats(document, assets);
+    const RenderFramePerformanceStats& renderStats = uiContext.renderPerformance;
+
+    const bool fpsAvailable = uiContext.frameTiming.rawDeltaSeconds > 0.0001;
+    const double fps = fpsAvailable ? 1.0 / uiContext.frameTiming.rawDeltaSeconds : 0.0;
+
+    const std::string unavailable = uiContext.localization.text("ui.viewport.info.unavailable", "--");
+    const std::string cpuValue = renderStats.cpuFrameMsAvailable
+            ? formatViewportInfoMilliseconds(renderStats.cpuFrameMs)
+            : unavailable;
+    const std::string gpuValue = renderStats.gpuFrameMsAvailable
+            ? formatViewportInfoMilliseconds(renderStats.gpuFrameMs)
+            : unavailable;
+    const std::string fpsValue = fpsAvailable ? formatViewportInfoFramesPerSecond(fps) : unavailable;
+
+    const std::array<std::string, 6> lines{{
+            viewportInfoLine(uiContext.localization.text("ui.viewport.info.fps", "FPS"), fpsValue),
+            viewportInfoLine(uiContext.localization.text("ui.viewport.info.cpu", "CPU"), cpuValue),
+            viewportInfoLine(uiContext.localization.text("ui.viewport.info.gpu", "GPU"), gpuValue),
+            viewportInfoLine(
+                    uiContext.localization.text("ui.viewport.info.objects", "Objects"),
+                    formatViewportInfoNumber(sceneStats.objects)),
+            viewportInfoLine(
+                    uiContext.localization.text("ui.viewport.info.primitives", "Primitives"),
+                    formatViewportInfoNumber(sceneStats.primitives)),
+            viewportInfoLine(
+                    uiContext.localization.text("ui.viewport.info.draw_calls", "Draw Calls"),
+                    formatViewportInfoNumber(sceneStats.drawCalls)),
+    }};
+    drawViewportInfoText(
+            *ImGui::GetWindowDrawList(),
+            itemMin,
+            itemSize,
+            std::span<const std::string>(lines.data(), lines.size()));
 }
 
 void ViewportPanel::refreshCachedSelectionOverlayFrame(

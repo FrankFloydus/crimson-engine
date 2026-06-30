@@ -547,7 +547,7 @@ HostShortcutDescriptor shortcut(
 
 std::span<const HostShortcutDescriptor> shortcut_descriptors()
 {
-	static const std::array<HostShortcutDescriptor, 43> descriptors {{
+	static const std::array<HostShortcutDescriptor, 44> descriptors {{
 		shortcut("undo", HostShortcutContext::global, "Z", true, false, false,
 			HostShortcutTargetKind::editor_action, "undo"),
 		shortcut("redo_shift_z", HostShortcutContext::global, "Z", true, false, true,
@@ -560,6 +560,8 @@ std::span<const HostShortcutDescriptor> shortcut_descriptors()
 			HostShortcutTargetKind::editor_action, "open_document"),
 		shortcut("save_document", HostShortcutContext::global, "S", true, false, false,
 			HostShortcutTargetKind::editor_action, "save_document"),
+		shortcut("save_as_document", HostShortcutContext::global, "S", true, false, true,
+			HostShortcutTargetKind::editor_action, "save_as_document"),
 		shortcut("select_all", HostShortcutContext::global, "A", true, false, false,
 			HostShortcutTargetKind::editor_action, "select_all"),
 		shortcut("copy_meshes", HostShortcutContext::global, "C", true, false, false,

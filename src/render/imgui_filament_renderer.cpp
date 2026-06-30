@@ -299,6 +299,11 @@ void ImGuiFilamentRenderer::prepare(ImDrawData* drawData, std::uint32_t framebuf
             materialInstance->setParameter("albedo", primitive.texture, sampler);
             const float encodeToSrgb = primitive.sampleColorSpace == TextureSampleColorSpace::LinearSrgb ? 1.0f : 0.0f;
             materialInstance->setParameter("encodeToSrgb", encodeToSrgb);
+            const float premultipliedAlpha =
+                    primitive.sampleColorSpace == TextureSampleColorSpace::DisplaySrgbPremultipliedAlpha
+                    ? 1.0f
+                    : 0.0f;
+            materialInstance->setParameter("premultipliedAlpha", premultipliedAlpha);
             materialInstance->setScissor(primitive.scissorLeft, primitive.scissorBottom,
                     primitive.scissorWidth, primitive.scissorHeight);
             resource.materialInstances.push_back(materialInstance);

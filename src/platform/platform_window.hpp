@@ -37,7 +37,7 @@ struct PlatformWindowChromeHitTest {
     int pointY = 0;
     int resizeBorder = 6;
     int titleBarHeight = 35;
-    int leftInteractiveWidth = 320;
+    int leftInteractiveWidth = 440;
     int rightControlsWidth = 105;
     bool maximized = false;
 };

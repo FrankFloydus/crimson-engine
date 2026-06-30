@@ -57,8 +57,13 @@ inverted-mesh visualization rules, and regression test map.
 - Depth-tested overlay layers include `WireframeBase`, `OpenEdge`, and unselected vertices unless
   `ViewportOverlayPolicy` marks the layer/geometry draw-on-top.
 - Draw-on-top: `SourceWire`, `SelectedFaceEdge`, `SelectedEdge`, `HoverFaceEdge`, `HoverEdge`,
-  `GroupBounds`, `DiagnosticEdge`, selected/hover/snap vertices, tool line/handle overlays, and
-  tool fill layers such as `ToolPlane` and `ToolPreviewFill`.
+  `GroupBounds`, `DiagnosticEdge`, `WireframeXray`, selected/hover/snap vertices, tool line/handle
+  overlays, and tool fill layers such as `ToolPlane` and `ToolPreviewFill`.
+- Wireframe viewport mode uses `WireframeXray` for unselected scene topology. Do not route that
+  mode through the depth-tested `WireframeBase` layer.
+- Global depth-only mesh proxies live on `kViewportOverlayLayerMask` and must only be visible in the
+  overlay pass while the shaded/rendered scene is visible. Wireframe mode excludes the layer so
+  invisible mesh depth cannot mask the grid or x-ray topology.
 - Active source-wire topology is interactive edit geometry: component hover and pick paths must test the
   visible active source-wire handles before falling back to shaded surface-depth picking.
 - Active `SourceWire` handles are tested first, but accepted only when not occluded by the nearest
