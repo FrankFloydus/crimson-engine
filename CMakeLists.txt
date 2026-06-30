@@ -6,11 +6,38 @@
 ################################################################################
 cmake_minimum_required(VERSION 3.25)
 
-project(QuaderApp VERSION 0.1.0 LANGUAGES CXX)
+set(QUADER_VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
+if(NOT EXISTS "${QUADER_VERSION_FILE}")
+    message(FATAL_ERROR "Missing Quader version source: ${QUADER_VERSION_FILE}")
+endif()
+file(READ "${QUADER_VERSION_FILE}" QUADER_APP_VERSION)
+string(STRIP "${QUADER_APP_VERSION}" QUADER_APP_VERSION)
+if(NOT QUADER_APP_VERSION MATCHES "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
+    message(FATAL_ERROR "VERSION must use unpadded x.y.z numeric format.")
+endif()
+string(REGEX REPLACE "^([0-9]+)\\.([0-9]+)\\.([0-9]+)$" "\\1;\\2;\\3" QUADER_APP_VERSION_PARTS "${QUADER_APP_VERSION}")
+list(GET QUADER_APP_VERSION_PARTS 0 QUADER_APP_VERSION_MAJOR)
+list(GET QUADER_APP_VERSION_PARTS 1 QUADER_APP_VERSION_MINOR)
+list(GET QUADER_APP_VERSION_PARTS 2 QUADER_APP_VERSION_PATCH)
+if(NOT QUADER_APP_VERSION_MAJOR STREQUAL "0" OR NOT QUADER_APP_VERSION_MINOR STREQUAL "0")
+    message(FATAL_ERROR "For now, Quader app versions must keep major and minor at 0.0.")
+endif()
+if(QUADER_APP_VERSION_PATCH LESS 1 OR QUADER_APP_VERSION_PATCH GREATER 9999)
+    message(FATAL_ERROR "Quader app version patch must be between 1 and 9999.")
+endif()
+
+project(QuaderApp VERSION ${QUADER_APP_VERSION} LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(QUADER_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${QUADER_GENERATED_DIR}")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/core/quader_app_version.hpp.in"
+    "${QUADER_GENERATED_DIR}/quader_app_version.hpp"
+    @ONLY)
 
 include(cmake/QuaderBuildOptions.cmake)
 
@@ -281,7 +308,6 @@ find_package(SDL3 CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(lodepng CONFIG REQUIRED)
 
-set(QUADER_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(QUADER_MATERIAL_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/materials")
 file(MAKE_DIRECTORY "${QUADER_MATERIAL_OUTPUT_DIR}")
 
@@ -376,6 +402,7 @@ add_library(quader_runtime STATIC
     src/render/viewport_renderer.cpp
     src/ui/console_panel.cpp
     src/ui/imgui_popup_utils.cpp
+    src/ui/imgui_quader_widgets.cpp
     src/ui/inspector_panel.cpp
     src/ui/main_menu_bar.cpp
     src/ui/modal_tool_overlay_renderer.cpp
@@ -397,7 +424,7 @@ add_library(quader_runtime STATIC
 )
 
 quader_enable_common_pch(quader_runtime)
-target_include_directories(quader_runtime PUBLIC src)
+target_include_directories(quader_runtime PUBLIC src "${QUADER_GENERATED_DIR}")
 target_compile_definitions(quader_runtime
     PUBLIC
         QUADER_DEFAULT_FILAMENT_SDK_ROOT="${FILAMENT_SDK_ROOT}"
@@ -447,6 +474,9 @@ add_custom_command(TARGET quader POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/Inter.ttf"
             "$<TARGET_FILE_DIR:quader>/fonts/Inter.ttf"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/Phosphor.ttf"
+            "$<TARGET_FILE_DIR:quader>/fonts/Phosphor.ttf"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/OFL.txt"
             "$<TARGET_FILE_DIR:quader>/fonts/OFL.txt"

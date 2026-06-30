@@ -13,6 +13,7 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | Filament SDK and bundled IBL assets | https://github.com/google/filament | `v1.71.6` local SDK | Apache-2.0, see `licenses/filament-Apache-2.0.txt` | Vulkan renderer, materials, KTX IBL loading, and default `lightroom_14b` viewport environment. |
 | SDL3 | https://www.libsdl.org | vcpkg `3.4.8` | Zlib AND MIT AND Apache-2.0, see `licenses/sdl3-Zlib-MIT-Apache-2.0.txt` | Native windowing, events, and platform input. |
 | Dear ImGui | https://github.com/ocornut/imgui | vcpkg `1.92.8` | MIT, see `licenses/imgui-MIT.txt` | Immediate-mode editor shell, dockspace, panels, and SDL3 input backend. |
+| Phosphor Icons | https://github.com/phosphor-icons/web | `Phosphor.ttf` runtime font asset | MIT, see `licenses/phosphor-icons-MIT.txt` | ImGui icon glyphs for editor controls. |
 | GoogleTest | https://github.com/google/googletest | vcpkg `1.17.0` | BSD 3-Clause, see `licenses/gtest-BSD-3-Clause.txt` | Native C++ tests. |
 | lodepng | https://github.com/lvandeve/lodepng | vcpkg `2021-12-04` | zlib license, see `licenses/lodepng-Zlib.txt` | PNG image loading support. |
 | spdlog | https://github.com/gabime/spdlog | vcpkg `1.17.0` | MIT, see `licenses/spdlog-MIT.txt` | Runtime logging. |

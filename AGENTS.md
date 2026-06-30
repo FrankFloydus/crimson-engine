@@ -119,6 +119,11 @@ owner behavior first and expose it through a clean public API method instead of 
 The worktree may already be dirty. Do not revert changes you did not make unless the user explicitly
 asks. Work with existing edits when they affect the task, and ignore unrelated edits.
 
+## Versioning Rule
+
+Before final handoff builds after project-file changes, follow the app version bump rule in
+`agents/testing-build.md`.
+
 ## Expected Commands
 
 Set build/test command timeouts to at least 10 minutes (`600000` ms); short defaults often fail here.

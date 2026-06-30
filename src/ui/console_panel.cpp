@@ -8,6 +8,7 @@
 
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
+#include "ui/imgui_quader_widgets.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_layout.hpp"
 #include "ui/ui_style_tokens.hpp"
@@ -89,7 +90,7 @@ void ConsolePanel::drawContent(UIContext& context) {
     const std::string preview = context.localization.text(levelKey(filter_.minimumLevel), levelFallback(filter_.minimumLevel));
     ImGui::SetNextItemWidth(120.0f);
     const std::string levelLabel = context.localization.imguiLabel("ui.console.level", "ui.console.level", "Level");
-    if (ImGui::BeginCombo(levelLabel.c_str(), preview.c_str())) {
+    if (quaderBeginCombo(levelLabel.c_str(), preview.c_str())) {
         for (const spdlog::level::level_enum level : levels) {
             const bool selected = level == filter_.minimumLevel;
             std::string stableId = "ui.console.level.";

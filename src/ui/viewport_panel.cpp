@@ -24,6 +24,7 @@
 #include "render/render_layers.hpp"
 #include "render/render_system.hpp"
 #include "ui/imgui_popup_utils.hpp"
+#include "ui/imgui_quader_widgets.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/viewport_context_menu_policy.hpp"
 #include "ui/viewport_pane_controller.hpp"
@@ -782,16 +783,14 @@ bool ViewportPanel::drawPaneChrome(
     };
     const ImRect chromeRect(comboPos, ImVec2(itemMax.x - 8.0f, comboPos.y + kComboHeight));
     bool consumesInput = chromeRect.Contains(ImGui::GetMousePos());
-    if (imguiClosePopupForPassThroughClick(chromeRect.Min, chromeRect.Max)) {
-        consumesInput = true;
-    }
+    (void)imguiClosePopupForClickOutside(chromeRect.Min, chromeRect.Max);
 
     ImGui::SetCursorScreenPos(comboPos);
     if (viewWidth >= 44.0f) {
         ImGui::SetNextItemWidth(viewWidth);
         const ViewportView currentView = viewportWorkspace.view(paneState.id);
         const std::string preview = localizedViewportViewLabel(localization, currentView);
-        if (ImGui::BeginCombo("##ViewportView", preview.c_str(), ImGuiComboFlags_HeightSmall)) {
+        if (quaderBeginCombo("##ViewportView", preview.c_str(), ImGuiComboFlags_HeightSmall)) {
             consumesInput = true;
             for (const ViewportView view : kViewportChromeViews) {
                 const bool selected = currentView == view;
@@ -809,7 +808,7 @@ bool ViewportPanel::drawPaneChrome(
     }
     ImGui::SetNextItemWidth(shadingWidth);
     const std::string shadingPreview = localizedViewportShadingModeLabel(localization, paneWorkspace.shading);
-    if (ImGui::BeginCombo("##ViewportShading", shadingPreview.c_str(), ImGuiComboFlags_HeightSmall)) {
+    if (quaderBeginCombo("##ViewportShading", shadingPreview.c_str(), ImGuiComboFlags_HeightSmall)) {
         consumesInput = true;
         for (const ViewportShadingMode mode : kViewportChromeShadingModes) {
             const bool selected = paneWorkspace.shading == mode;

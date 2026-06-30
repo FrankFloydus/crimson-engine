@@ -12,5 +12,6 @@ namespace quader {
 
 [[nodiscard]] bool imguiOpenPopupContainsScreenPoint(ImVec2 screenPoint);
 bool imguiClosePopupForPassThroughClick(ImVec2 passThroughMin, ImVec2 passThroughMax);
+bool imguiClosePopupForClickOutside(ImVec2 exclusionMin, ImVec2 exclusionMax);
 
 } // namespace quader

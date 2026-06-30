@@ -15,6 +15,12 @@ bool screenPointInside(ImVec2 point, ImVec2 min, ImVec2 max) {
     return point.x >= min.x && point.x <= max.x && point.y >= min.y && point.y <= max.y;
 }
 
+bool anyMouseButtonClicked() {
+    return ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+            ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+            ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
+}
+
 } // namespace
 
 bool imguiOpenPopupContainsScreenPoint(ImVec2 screenPoint) {
@@ -32,7 +38,7 @@ bool imguiOpenPopupContainsScreenPoint(ImVec2 screenPoint) {
 }
 
 bool imguiClosePopupForPassThroughClick(ImVec2 passThroughMin, ImVec2 passThroughMax) {
-    if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    if (!anyMouseButtonClicked()) {
         return false;
     }
 
@@ -43,6 +49,25 @@ bool imguiClosePopupForPassThroughClick(ImVec2 passThroughMin, ImVec2 passThroug
 
     const ImVec2 mouse = ImGui::GetMousePos();
     if (!screenPointInside(mouse, passThroughMin, passThroughMax) || imguiOpenPopupContainsScreenPoint(mouse)) {
+        return false;
+    }
+
+    ImGui::ClosePopupsExceptModals();
+    return true;
+}
+
+bool imguiClosePopupForClickOutside(ImVec2 exclusionMin, ImVec2 exclusionMax) {
+    if (!anyMouseButtonClicked()) {
+        return false;
+    }
+
+    ImGuiContext* context = ImGui::GetCurrentContext();
+    if (context == nullptr || context->OpenPopupStack.empty()) {
+        return false;
+    }
+
+    const ImVec2 mouse = ImGui::GetMousePos();
+    if (screenPointInside(mouse, exclusionMin, exclusionMax) || imguiOpenPopupContainsScreenPoint(mouse)) {
         return false;
     }
 

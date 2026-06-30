@@ -24,6 +24,18 @@ file except through prior written authorization from Francesco Di Blasi.
 - Programmatic API and `BehaviorScenario` tests are always built in the app test target. Do not add
   `QUADER_TEST_HAS_PROGRAMMATIC_API` guards, skipped stubs, or fallback scenario shells.
 
+## App Versioning
+
+Root `VERSION` is the app version source of truth, and `vcpkg.json` `version-string` must mirror it.
+Use unpadded `x.y.z` numeric format; the app displays it as `vX.Y.Z`.
+
+For now, keep major/minor fixed at `0.0` and bump only the patch/build component. Patch must stay
+within `1..9999`; if it is already `9999`, stop and ask before rolling minor or major.
+
+After the initial `0.0.1` versioning implementation, agents must bump both `VERSION` and
+`vcpkg.json` once before the final handoff `quader` build when a task changes project files. Do not
+bump for planning, review, inspection-only, failed/no-change, or explanation-only turns.
+
 ## Expected Commands
 
 When launching these commands through Codex tools, set `timeout_ms` to at least 10 minutes

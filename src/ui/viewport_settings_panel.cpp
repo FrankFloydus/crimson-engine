@@ -7,6 +7,7 @@
 #include "ui/viewport_settings_panel.hpp"
 
 #include "core/localization_service.hpp"
+#include "ui/imgui_quader_widgets.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
@@ -60,7 +61,7 @@ void drawLocaleSettings(UIContext& context) {
     LocalizationService& localization = context.localization;
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen;
     const std::string header = localization.imguiLabel("ui.settings.interface", "ui.settings.interface", "Interface");
-    if (!ImGui::CollapsingHeader(header.c_str(), flags)) {
+    if (!quaderCollapsingHeader(header.c_str(), flags)) {
         return;
     }
 
@@ -72,7 +73,7 @@ void drawLocaleSettings(UIContext& context) {
 
     const std::string comboLabel = localization.imguiLabel("ui.settings.locale", "ui.settings.locale", "Language");
     ImGui::SetNextItemWidth(220.0f);
-    if (ImGui::BeginCombo(comboLabel.c_str(), preview.c_str())) {
+    if (quaderBeginCombo(comboLabel.c_str(), preview.c_str())) {
         for (const LocaleInfo& locale : localization.availableLocales()) {
             const bool selected = locale.id == selectedLocale;
             const std::string itemLabel = localization.imguiLabel(
@@ -123,7 +124,7 @@ void ViewportSettingsPanel::drawContent(UIContext& context, bool& open) {
             flags |= ImGuiTreeNodeFlags_DefaultOpen;
         }
         const std::string header = sectionLabel(context.localization, section);
-        if (!ImGui::CollapsingHeader(header.c_str(), flags)) {
+        if (!quaderCollapsingHeader(header.c_str(), flags)) {
             continue;
         }
 

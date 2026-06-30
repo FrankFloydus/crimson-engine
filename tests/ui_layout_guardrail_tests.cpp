@@ -116,7 +116,7 @@ TEST(UiLayoutGuardrailTests, InspectorSceneSettingsEditThroughPublicSceneApi) {
 TEST(UiLayoutGuardrailTests, InspectorSectionsStartCollapsed) {
     const std::string inspector = readSourceFile({"src", "ui", "inspector_panel.cpp"});
 
-    expectContains(inspector, "ImGui::CollapsingHeader(");
+    expectContains(inspector, "quaderCollapsingHeader(");
     expectMissing(inspector, "ImGuiTreeNodeFlags_DefaultOpen");
 }
 
@@ -293,13 +293,19 @@ TEST(UiLayoutGuardrailTests, ViewportInputHoverRespectsActiveDockingAndPanelItem
 
 TEST(UiLayoutGuardrailTests, ViewportChromeCombosSharePopupPassThroughClickHandling) {
     const std::string viewportPanel = readSourceFile({"src", "ui", "viewport_panel.cpp"});
+    const std::string popupUtils = readSourceFile({"src", "ui", "imgui_popup_utils.cpp"});
     const std::string chrome = sourceSlice(
             viewportPanel,
             "bool ViewportPanel::drawPaneChrome",
             "void ViewportPanel::setPaneView");
 
     expectContains(viewportPanel, "#include \"ui/imgui_popup_utils.hpp\"");
-    expectContains(chrome, "imguiClosePopupForPassThroughClick(chromeRect.Min, chromeRect.Max)");
-    expectContains(chrome, "ImGui::BeginCombo(\"##ViewportView\"");
-    expectContains(chrome, "ImGui::BeginCombo(\"##ViewportShading\"");
+    expectContains(viewportPanel, "#include \"ui/imgui_quader_widgets.hpp\"");
+    expectContains(popupUtils, "ImGuiMouseButton_Middle");
+    expectContains(chrome, "(void)imguiClosePopupForClickOutside(chromeRect.Min, chromeRect.Max)");
+    expectMissing(chrome, "imguiClosePopupForPassThroughClick(chromeRect.Min, chromeRect.Max)");
+    expectContains(chrome, "quaderBeginCombo(\"##ViewportView\", preview.c_str(), ImGuiComboFlags_HeightSmall)");
+    expectContains(chrome, "quaderBeginCombo(\"##ViewportShading\", shadingPreview.c_str(), ImGuiComboFlags_HeightSmall)");
+    expectMissing(chrome, "ImGuiComboFlags_HeightSmall, false");
+    expectMissing(chrome, "consumesInput = true;\n    }\n\n    ImGui::SetCursorScreenPos(comboPos)");
 }

@@ -316,6 +316,19 @@ bool endsWith(std::string_view value, std::string_view suffix) {
             value.substr(value.size() - suffix.size()) == suffix;
 }
 
+std::string trimmed(std::string value) {
+    const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char character) {
+        return std::isspace(character) != 0;
+    });
+    const auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char character) {
+        return std::isspace(character) != 0;
+    }).base();
+    if (first >= last) {
+        return {};
+    }
+    return {first, last};
+}
+
 /**
  * Describes manifest and license evidence required for a project dependency.
  */
@@ -336,6 +349,7 @@ const std::vector<ThirdPartyLicenseExpectation>& thirdPartyLicenseExpectations()
             {"glm", "OpenGL Mathematics (GLM)", "licenses/glm-MIT.txt", true},
             {"sdl3", "SDL3", "licenses/sdl3-Zlib-MIT-Apache-2.0.txt", true},
             {"imgui", "Dear ImGui", "licenses/imgui-MIT.txt", true},
+            {"", "Phosphor Icons", "licenses/phosphor-icons-MIT.txt", false},
             {"stduuid", "stduuid", "licenses/stduuid-MIT.txt", true},
             {"gtest", "GoogleTest", "licenses/gtest-BSD-3-Clause.txt", true},
             {"lodepng", "lodepng", "licenses/lodepng-Zlib.txt", true},
@@ -1085,6 +1099,9 @@ TEST(BuildGuardrailTests, LocalizationResourcesArePackagedWithRuntime) {
 TEST(BuildGuardrailTests, ImGuiRuntimeResourcesArePackagedWithRuntime) {
     const std::string rootCMake = readSourceFile("CMakeLists.txt");
     const std::string iconHeader = readSourceFile("src/ui/ui_icon_set.hpp");
+    const std::string phosphorHeader = readSourceFile("src/ui/phosphor_icons.hpp");
+    const std::string quaderWidgets = readSourceFile("src/ui/imgui_quader_widgets.cpp");
+    const std::string styleSource = readSourceFile("src/ui/ui_style_tokens.cpp");
     const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
 
     expectContains(rootCMake, "src/ui/ui_system.cpp");
@@ -1099,6 +1116,8 @@ TEST(BuildGuardrailTests, ImGuiRuntimeResourcesArePackagedWithRuntime) {
     expectContains(rootCMake, "quader_register_filament_material(imgui_material resources/materials/imgui.mat imgui)");
     expectContains(rootCMake, "resources/fonts/Inter.ttf");
     expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/fonts/Inter.ttf");
+    expectContains(rootCMake, "resources/fonts/Phosphor.ttf");
+    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/fonts/Phosphor.ttf");
     expectContains(rootCMake, "resources/icons");
     expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/icons");
     expectContains(rootCMake, "copy_if_different");
@@ -1111,11 +1130,23 @@ TEST(BuildGuardrailTests, ImGuiRuntimeResourcesArePackagedWithRuntime) {
     expectContains(uiSystemSource, "unlock_icon.png");
     expectContains(uiSystemSource, "hide_icon.png");
     expectContains(uiSystemSource, "show_icon.png");
+    expectContains(phosphorHeader, "kPhosphorCaretDown");
+    expectContains(phosphorHeader, "kPhosphorCaretRight");
+    expectContains(quaderWidgets, "drawComboCaret");
+    expectContains(quaderWidgets, "ClosePopupToLevel");
+    expectContains(quaderWidgets, "##QuaderComboWasOpen");
+    expectContains(quaderWidgets, "ImGuiWindowFlags_NoScrollbar");
+    expectContains(quaderWidgets, "kPhosphorCaretDown");
+    expectContains(quaderWidgets, "kPhosphorCaretRight");
+    expectContains(styleSource, "Phosphor.ttf");
+    expectContains(styleSource, "GlyphExcludeRanges = iconRanges");
+    expectContains(styleSource, "MergeMode = true");
 
     EXPECT_FALSE(readSourceFile("resources/materials/imgui.mat").empty());
     EXPECT_FALSE(readSourceFile("resources/materials/quader_mesh.mat").empty());
     EXPECT_FALSE(readSourceFile("resources/materials/quader_mesh_lit.mat").empty());
     EXPECT_FALSE(readSourceFile("resources/fonts/Inter.ttf").empty());
+    EXPECT_FALSE(readSourceFile("resources/fonts/Phosphor.ttf").empty());
     EXPECT_TRUE(std::filesystem::exists(sourcePath("resources/icons/logo.png")));
     EXPECT_TRUE(std::filesystem::exists(sourcePath("resources/icons/quader-logo@2x.png")));
     EXPECT_GT(std::filesystem::file_size(sourcePath("resources/icons/logo.png")), 512u);
@@ -1148,6 +1179,9 @@ TEST(BuildGuardrailTests, ImGuiShellViewportAndControlStylingStayVisible) {
     expectContains(uiSystemSource, "ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse");
     expectContains(uiSystemSource, "ImGuiWindowFlags_NoInputs");
     expectContains(uiSystemSource, "ImGui::Begin(\"Quader Static Bottom Bar\"");
+    expectContains(uiSystemSource, "quader_app_version.hpp");
+    expectContains(staticBottomBarSource, "const char* rightLabel = kQuaderAppVersionDisplay");
+    expectMissing(staticBottomBarSource, "rightLabel = \"Quader\"");
     expectContains(uiSystemSource, "ImGui::DockSpace(dockspaceId, dockspaceSize");
     expectContains(uiSystemSource, "uiPackedColor(118, 92, 168)");
     expectContains(uiSystemSource, "kWindowChromeHeight = 35.0f");
@@ -1213,6 +1247,53 @@ TEST(BuildGuardrailTests, RuntimeUiUsesNativeImGuiStackOnly) {
         expectMissing(source, "src/ui/components");
         expectMissing(source, "src/ui/core");
     }
+}
+
+TEST(BuildGuardrailTests, AppVersionMetadataUsesRootVersionSource) {
+    const std::string version = trimmed(readSourceFile("VERSION"));
+    std::smatch versionMatch;
+    ASSERT_TRUE(std::regex_match(
+            version,
+            versionMatch,
+            std::regex(R"((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))")));
+    ASSERT_EQ(versionMatch.size(), 4U);
+    EXPECT_EQ(versionMatch[1].str(), "0");
+    EXPECT_EQ(versionMatch[2].str(), "0");
+    const int patch = std::stoi(versionMatch[3].str());
+    EXPECT_GE(patch, 1);
+    EXPECT_LE(patch, 9999);
+
+    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+    const std::string manifest = readSourceFile("vcpkg.json");
+    const std::string versionTemplate = readSourceFile("src/core/quader_app_version.hpp.in");
+    const std::string agents = readSourceFile("AGENTS.md");
+    const std::string testingBuild = readSourceFile("agents/testing-build.md");
+
+    expectContains(rootCMake, "set(QUADER_VERSION_FILE \"${CMAKE_CURRENT_SOURCE_DIR}/VERSION\")");
+    expectContains(rootCMake, "file(READ \"${QUADER_VERSION_FILE}\" QUADER_APP_VERSION)");
+    expectContains(rootCMake, "project(QuaderApp VERSION ${QUADER_APP_VERSION} LANGUAGES CXX)");
+    expectContains(rootCMake, "configure_file(");
+    expectContains(rootCMake, "src/core/quader_app_version.hpp.in");
+    expectContains(rootCMake, "quader_app_version.hpp");
+    expectContains(rootCMake, "\"${QUADER_GENERATED_DIR}\"");
+    expectContains(manifest, "\"version-string\": \"" + version + "\"");
+
+    expectContains(versionTemplate, "kQuaderAppVersionMajor = @QUADER_APP_VERSION_MAJOR@U");
+    expectContains(versionTemplate, "kQuaderAppVersionMinor = @QUADER_APP_VERSION_MINOR@U");
+    expectContains(versionTemplate, "kQuaderAppVersionPatch = @QUADER_APP_VERSION_PATCH@U");
+    expectContains(versionTemplate, "kQuaderAppVersion = \"@QUADER_APP_VERSION@\"");
+    expectContains(versionTemplate, "kQuaderAppVersionDisplay = \"v@QUADER_APP_VERSION@\"");
+
+    expectContains(agents, "## Versioning Rule");
+    expectContains(agents, "follow the app version bump rule");
+    expectContains(testingBuild, "## App Versioning");
+    expectContains(testingBuild, "Root `VERSION` is the app version source of truth");
+    expectContains(testingBuild, "`vcpkg.json` `version-string` must mirror it");
+    expectContains(testingBuild, "major/minor fixed at `0.0`");
+    expectContains(testingBuild, "within `1..9999`");
+    expectContains(testingBuild, "before the final handoff `quader` build");
+    expectContains(testingBuild, "Do not");
+    expectContains(testingBuild, "planning, review, inspection-only, failed/no-change, or explanation-only");
 }
 
 TEST(BuildGuardrailTests, EditorAggregateStaysInRuntimeTarget) {

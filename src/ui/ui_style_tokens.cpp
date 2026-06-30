@@ -7,6 +7,7 @@
 #include "ui/ui_style_tokens.hpp"
 
 #include "core/logger.hpp"
+#include "ui/phosphor_icons.hpp"
 
 #include <cstdio>
 
@@ -78,9 +79,11 @@ void applyUIStyle(const UIStyleTokens& tokens) {
 
 void loadUIDefaultFont(const std::filesystem::path& executableDir, const UIStyleTokens& tokens) {
     ImGuiIO& io = ImGui::GetIO();
+    static constexpr ImWchar iconRanges[] = {kPhosphorIconRangeStart, kPhosphorIconRangeEnd, 0};
     const std::filesystem::path fontPath = executableDir / "fonts" / "Inter.ttf";
     ImFontConfig config;
     config.FontDataOwnedByAtlas = true;
+    config.GlyphExcludeRanges = iconRanges;
     std::snprintf(config.Name, sizeof(config.Name), "Inter");
 
     ImFont* font = io.Fonts->AddFontFromFileTTF(fontPath.string().c_str(), tokens.fontSize, &config);
@@ -92,6 +95,19 @@ void loadUIDefaultFont(const std::filesystem::path& executableDir, const UIStyle
 
     io.FontDefault = font;
     LOG_INFO("Loaded Inter as default ImGui font from {}", fontPath.string());
+
+    const std::filesystem::path iconFontPath = executableDir / "fonts" / "Phosphor.ttf";
+    ImFontConfig iconConfig;
+    iconConfig.FontDataOwnedByAtlas = true;
+    iconConfig.MergeMode = true;
+    iconConfig.PixelSnapH = true;
+    std::snprintf(iconConfig.Name, sizeof(iconConfig.Name), "Phosphor");
+    if (io.Fonts->AddFontFromFileTTF(iconFontPath.string().c_str(), tokens.fontSize, &iconConfig, iconRanges) == nullptr) {
+        LOG_WARN("Unable to load Phosphor icon font from {}; ImGui icon glyphs may be unavailable", iconFontPath.string());
+        return;
+    }
+
+    LOG_INFO("Merged Phosphor icon font into ImGui atlas from {}", iconFontPath.string());
 }
 
 ImVec4 uiLogLevelColor(const UIStyleTokens& tokens, spdlog::level::level_enum level) {

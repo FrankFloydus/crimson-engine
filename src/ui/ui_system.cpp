@@ -10,6 +10,7 @@
 #include "core/logger.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
+#include "quader_app_version.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
 #include "ui/console_panel.hpp"
 #include "ui/imgui_popup_utils.hpp"
@@ -250,7 +251,7 @@ void drawStaticBottomBar(const ImGuiViewport& viewport, const LocalizationServic
     const std::string ready = localization.text("ui.shell.status.ready", "Ready");
     drawList->AddText({min.x + 12.0f, textY}, uiPackedColor(216, 216, 216), ready.c_str());
 
-    const char* rightLabel = "Quader";
+    const char* rightLabel = kQuaderAppVersionDisplay;
     const ImVec2 rightLabelSize = ImGui::CalcTextSize(rightLabel);
     drawList->AddText(
             {std::max(min.x + 72.0f, max.x - rightLabelSize.x - 12.0f), textY},
