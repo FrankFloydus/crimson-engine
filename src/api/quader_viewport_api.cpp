@@ -58,6 +58,10 @@ std::size_t QuaderViewportApi::activePaneCount() const {
     return impl_->workspace.activePanePlacements().size();
 }
 
+ViewportPaneId QuaderViewportApi::focusedPane() const {
+    return impl_->workspace.focusedPane();
+}
+
 int QuaderViewportApi::gridPreset() const {
     return impl_->workspace.gridPreset();
 }
@@ -94,6 +98,10 @@ QuaderApiVoidResult QuaderViewportApi::focusOrigin(ViewportPaneId pane) {
         return impl_->hooks.focusOrigin(pane);
     }
     return runtimeStatus(impl_->workspace.focusOrigin(pane));
+}
+
+bool QuaderViewportApi::canSpawnWindow() const {
+    return static_cast<bool>(impl_->hooks.spawnWindow);
 }
 
 QuaderApiVoidResult QuaderViewportApi::spawnWindow() {

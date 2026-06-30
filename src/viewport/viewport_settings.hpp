@@ -27,7 +27,6 @@ struct ViewportSettingColor {
  * Enumerates ViewportSettingsSectionId values used by the viewport layer.
  */
 enum class ViewportSettingsSectionId {
-    Scene,
     Grid,
     Selection,
     Overlay,
@@ -41,7 +40,6 @@ enum class ViewportSettingsSectionId {
  * Enumerates ViewportColorSettingId values used by the viewport layer.
  */
 enum class ViewportColorSettingId {
-    Background,
     GridMinor,
     GridMajor,
     GridXAxis,
@@ -106,7 +104,7 @@ inline constexpr std::size_t kViewportBoolSettingCount =
  * Stores the Viewport Settings Section Descriptor data contract used by the viewport input, layout, and camera layer.
  */
 struct ViewportSettingsSectionDescriptor {
-    ViewportSettingsSectionId id = ViewportSettingsSectionId::Scene;
+    ViewportSettingsSectionId id = ViewportSettingsSectionId::Grid;
     std::string_view label;
     bool defaultExpanded = false;
 };
@@ -115,8 +113,8 @@ struct ViewportSettingsSectionDescriptor {
  * Stores the Viewport Color Setting Descriptor data contract used by the viewport input, layout, and camera layer.
  */
 struct ViewportColorSettingDescriptor {
-    ViewportColorSettingId id = ViewportColorSettingId::Background;
-    ViewportSettingsSectionId section = ViewportSettingsSectionId::Scene;
+    ViewportColorSettingId id = ViewportColorSettingId::GridMinor;
+    ViewportSettingsSectionId section = ViewportSettingsSectionId::Grid;
     std::string_view label;
     std::string_view key;
     ViewportSettingColor defaultValue;
@@ -140,7 +138,7 @@ struct ViewportFloatSettingDescriptor {
  */
 struct ViewportBoolSettingDescriptor {
     ViewportBoolSettingId id = ViewportBoolSettingId::Count;
-    ViewportSettingsSectionId section = ViewportSettingsSectionId::Scene;
+    ViewportSettingsSectionId section = ViewportSettingsSectionId::Grid;
     std::string_view label;
     std::string_view key;
     bool defaultValue = false;

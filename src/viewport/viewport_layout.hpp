@@ -25,9 +25,47 @@ std::string_view viewportLayoutLabel(ViewportLayoutId layoutId);
 std::string_view viewportPaneStableId(ViewportPaneId paneId);
 std::string_view viewportPaneLabel(ViewportPaneId paneId);
 ViewportView viewportViewForPane(ViewportPaneId paneId);
-std::string_view viewportViewStableId(ViewportView view);
+inline std::string_view viewportViewStableId(ViewportView view) {
+    switch (view) {
+    case ViewportView::Perspective:
+        return "perspective";
+    case ViewportView::Top:
+        return "top";
+    case ViewportView::Bottom:
+        return "bottom";
+    case ViewportView::Front:
+        return "front";
+    case ViewportView::Back:
+        return "back";
+    case ViewportView::Side:
+        return "right";
+    case ViewportView::Left:
+        return "left";
+    }
+    return "perspective";
+}
+
 std::optional<ViewportView> viewportViewFromStableId(std::string_view stableId);
-std::string_view viewportViewLabel(ViewportView view);
+inline std::string_view viewportViewLabel(ViewportView view) {
+    switch (view) {
+    case ViewportView::Perspective:
+        return "Perspective";
+    case ViewportView::Top:
+        return "Top";
+    case ViewportView::Bottom:
+        return "Bottom";
+    case ViewportView::Front:
+        return "Front";
+    case ViewportView::Back:
+        return "Back";
+    case ViewportView::Side:
+        return "Right";
+    case ViewportView::Left:
+        return "Left";
+    }
+    return "Perspective";
+}
+
 std::vector<ViewportPanePlacement> viewportLayoutPlacements(ViewportLayoutId layoutId);
 std::vector<ViewportPanePlacement> viewportLayoutPlacements(ViewportLayoutId layoutId, const ViewportLayoutState& state);
 std::vector<ViewportSplitHandle> viewportLayoutSplitHandles(ViewportLayoutId layoutId, const ViewportLayoutState& state);

@@ -32,7 +32,7 @@ public:
             const ViewportInteractionFrame& frame);
     [[nodiscard]] bool cancelActiveDrag(QuaderEditorApi& editor);
     [[nodiscard]] bool dragging() const;
-    void reset();
+    void reset(QuaderEditorApi* editor = nullptr);
 
     [[nodiscard]] const quader_editor_core::TransformGizmoFrame* transformGizmoFrame() const;
     [[nodiscard]] ViewportSelectionMarquee selectionMarquee() const;

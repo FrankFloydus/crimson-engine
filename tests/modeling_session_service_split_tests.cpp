@@ -370,10 +370,11 @@ TEST(ModelingSessionServiceSplitTests, SelectionProjectionServiceProjectsExplici
 
     const std::array<EntityId, 1> nonModeling{group};
     result = projection.projectObjectSelectionForSceneEntities(session, nonModeling, group, objectMap);
-    EXPECT_FALSE(result.ok);
-    EXPECT_FALSE(result.changed);
+    EXPECT_TRUE(result.ok);
+    EXPECT_TRUE(result.changed);
     EXPECT_FALSE(result.hasModelingObjects);
-    EXPECT_EQ(session.active_object_id(), 100);
+    EXPECT_TRUE(session.selected_object_ids().empty());
+    EXPECT_EQ(session.active_object_id(), -1);
 }
 
 TEST(ModelingSessionServiceSplitTests, SelectionProjectionServicePromotesToolObjectSelection) {
@@ -405,7 +406,7 @@ TEST(ModelingSessionServiceSplitTests, SelectionProjectionServicePromotesToolObj
     EXPECT_EQ(session.active_object_id(), 200);
 }
 
-TEST(ModelingSessionServiceSplitTests, SelectionProjectionServicePromotionFallsBackToRuntimeSelection) {
+TEST(ModelingSessionServiceSplitTests, SelectionProjectionServicePromotionClearsRuntimeForSceneOnlySelection) {
     SceneDocument scene;
     const EntityId group = scene.createEntity("Group", EntityKind::Empty);
     const EntityId first = scene.createEntity("First", EntityKind::Mesh);
@@ -426,10 +427,9 @@ TEST(ModelingSessionServiceSplitTests, SelectionProjectionServicePromotionFallsB
     const SelectionProjectionService projection;
     EXPECT_TRUE(projection.promoteObjectSelectionForTool(session, scene, objectMap));
 
-    std::vector<int> selectedObjectIds = session.selected_object_ids();
-    std::sort(selectedObjectIds.begin(), selectedObjectIds.end());
-    EXPECT_EQ(selectedObjectIds, (std::vector<int>{100, 200}));
-    EXPECT_EQ(session.active_object_id(), 200);
+    EXPECT_TRUE(session.selected_object_ids().empty());
+    EXPECT_EQ(session.active_object_id(), -1);
+    EXPECT_EQ(session.selection_mode(), quader_editor_core::SelectionMode::object);
 }
 
 TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapStaysOutOfServiceBucket) {
@@ -586,7 +586,8 @@ TEST(ModelingSessionServiceSplitTests, GroupDragHierarchyDuplicatePolicyLivesInF
     const std::string cmake = readSourceFile("CMakeLists.txt");
 
     EXPECT_NE(cmake.find("src/editor/modeling/services/modeling_hierarchy_duplicate_service.cpp"), std::string::npos);
-    EXPECT_NE(facade.find("hierarchyDuplicateService_.duplicateSelectedHierarchyForGroupDrag("), std::string::npos);
+    EXPECT_NE(facade.find("hierarchyDuplicateService_.duplicateSelectedEntityHierarchy("), std::string::npos);
+    EXPECT_NE(facade.find("duplicateSelectedHierarchyForGroupDrag("), std::string::npos);
     EXPECT_EQ(facade.find("std::unordered_map<EntityId, EntityId> cloneBySource"), std::string::npos);
     EXPECT_EQ(facade.find("auto copyCommonEntityState"), std::string::npos);
     EXPECT_NE(service.find("pairDuplicateMeshes("), std::string::npos);

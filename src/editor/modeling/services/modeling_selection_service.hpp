@@ -10,6 +10,7 @@
 #include "editor/modeling/picking/modeling_picking_cache.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 
+#include <optional>
 #include <vector>
 
 #include <editor/interactions/selection_box.hpp>
@@ -50,6 +51,11 @@ public:
             const SceneDocument& scene,
             const ModelingObjectRuntimeMap& objectMap,
             const ModelingPickSelectRequest& request) const;
+    [[nodiscard]] std::optional<int> pickObjectId(
+            const quader_editor_core::EditorSession& session,
+            const SceneDocument& scene,
+            const ModelingObjectRuntimeMap& objectMap,
+            const ModelingPickSelectRequest& request) const;
     [[nodiscard]] quader_editor_core::RectangleSelectionState rectangleSelectionState(
             const quader_editor_core::EditorSession& session) const;
     [[nodiscard]] quader_editor_core::RectangleSelectionUniverse rectangleSelectionUniverse(
@@ -57,6 +63,11 @@ public:
     [[nodiscard]] quader_editor_core::RectangleProjectedHitsRequest rectangleProjectedHitsRequest(
             const std::vector<quader_editor_core::PolygonObject>& pickingObjects,
             quader_editor_core::SelectionMode selectionMode,
+            const ModelingBoxSelectRequest& request) const;
+    [[nodiscard]] std::vector<int> boxPickObjectIds(
+            const quader_editor_core::EditorSession& session,
+            const SceneDocument& scene,
+            const ModelingObjectRuntimeMap& objectMap,
             const ModelingBoxSelectRequest& request) const;
     bool applyRectangleSelection(
             quader_editor_core::EditorSession& session,

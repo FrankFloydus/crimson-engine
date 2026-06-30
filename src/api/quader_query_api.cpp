@@ -7,6 +7,7 @@
 #include "api/quader_query_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 
+#include "api/quader_history_api.hpp"
 #include "api/quader_api_mutation_runner.hpp"
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
@@ -241,16 +242,7 @@ QuaderAssetSnapshot QuaderQueryApi::assets() const {
 }
 
 QuaderHistorySnapshot QuaderQueryApi::history() const {
-    QuaderHistorySnapshot result;
-    result.canUndo = mutations_.canUndo();
-    result.canRedo = projectSession(session_).history().canRedo();
-    if (const std::string* label = projectSession(session_).history().undoLabel()) {
-        result.undoLabel = *label;
-    }
-    if (const std::string* label = projectSession(session_).history().redoLabel()) {
-        result.redoLabel = *label;
-    }
-    return result;
+    return QuaderHistoryApi(session_, mutations_).snapshot();
 }
 
 QuaderOverlayFrame QuaderQueryApi::selectionOverlay() const {

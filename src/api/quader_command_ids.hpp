@@ -69,7 +69,7 @@ inline constexpr QuaderCommandId ViewportViewFront{"viewport.view.front"};
 inline constexpr QuaderCommandId ViewportViewBack{"viewport.view.back"};
 
 inline constexpr QuaderCommandId ModelingDeleteSelection{"edit.delete"};
-inline constexpr QuaderCommandId ModelingDuplicateMeshes{"edit.duplicate"};
+inline constexpr QuaderCommandId ModelingDuplicateMeshes{"modeling.duplicate_meshes"};
 inline constexpr QuaderCommandId ModelingBridge{"modeling.bridge"};
 inline constexpr QuaderCommandId ModelingExtractFaces{"modeling.extract_faces"};
 inline constexpr QuaderCommandId ModelingDetachFaces{"modeling.detach_faces"};
@@ -157,12 +157,6 @@ inline constexpr QuaderCommandId TypedCommandIds[] = {
         ProjectSaveAs,
         SceneCreatePointLight,
         SceneCreateDirectionalLight,
-        HistoryUndo,
-        HistoryRedo,
-        HistoryRepeatLastAction,
-        SelectionClear,
-        SelectionSelectAll,
-        SelectionInvert,
         ViewportFrameSelection,
         ViewportFocusOrigin,
         ViewportSpawnWindow,
@@ -173,7 +167,6 @@ inline constexpr QuaderCommandId TypedCommandIds[] = {
         ViewportViewRight,
         ViewportViewFront,
         ViewportViewBack,
-        ModelingDeleteSelection,
         ModelingDuplicateMeshes,
         ModelingBridge,
         ModelingExtractFaces,
@@ -225,7 +218,6 @@ inline constexpr QuaderCommandId TypedCommandIds[] = {
         ModelingMergeByDistance,
         ModelingFlipHorizontal,
         ModelingFlipVertical,
-        ModelingApplyActiveMaterial,
         ModelingApplyActivePreview,
         ModelingCancelActivePreview,
         ToolsActivateSelect,

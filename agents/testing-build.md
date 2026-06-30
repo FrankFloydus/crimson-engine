@@ -34,8 +34,14 @@ often needs more than 5 minutes before the build finishes.
 ```powershell
 cmake --preset vs2026
 cmake --build --preset vs2026-debug
+cmake --build --preset vs2026-debug --target quader
 ctest --preset vs2026-debug
 ```
+
+Whenever a task changes any project file, final verification must include building the native app
+executable with `cmake --build --preset vs2026-debug --target quader`. Do this even when the
+behavior was already covered by `quader_tests`; otherwise the user may launch an older
+`build/vs2026/Debug/quader.exe` that does not contain the fix.
 
 For local prototyping, the optional Ninja Multi-Config path keeps artifacts in `build/ninja-msvc`.
 Run it from a Visual Studio Developer PowerShell/CMD so `cl.exe` is on `PATH`; do not hardcode
@@ -140,6 +146,8 @@ in-app verification or runtime resource copying is part of the change. In a very
 pass comma-separated `-ChangedPath` values for the intended edit instead of letting the tool infer
 the whole diff. Docs, tooling, and source-policy changes should route to `quader_guardrail_tests`
 instead of forcing the app/runtime test executable to build.
+This routing only affects test selection; it does not replace the final `quader` executable build
+required after any changed file.
 To use the optional Ninja tree with the affected checker, pass the matching presets:
 
 ```powershell

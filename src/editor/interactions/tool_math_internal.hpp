@@ -101,6 +101,17 @@ static inline quader::QVec3 normalized_axis(quader::QVec3 value)
 	return tool_poly_vec3(quader_geometry::normalize_or_zero(tool_geometry_vec3(value), 0.000001F));
 }
 
+static inline quader::QVec3 vec3_normalize_or(
+		quader::QVec3 value,
+		quader::QVec3 fallback,
+		double epsilon = tool_epsilon)
+{
+	const quader_geometry::QVec3f geometry_value = tool_geometry_vec3(value);
+	return quader_geometry::length_squared(geometry_value) <= static_cast<float>(epsilon * epsilon) ?
+		fallback :
+		tool_poly_vec3(quader_geometry::normalize_or_zero(geometry_value));
+}
+
 static inline double safe_grid_size(double grid_size, double minimum)
 {
 	return std::max(grid_size, minimum);

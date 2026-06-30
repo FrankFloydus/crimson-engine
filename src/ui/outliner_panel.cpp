@@ -133,7 +133,7 @@ void deleteSelection(UIContext& context) {
 }
 
 void duplicateSelection(UIContext& context) {
-    (void)context.editor.scene().duplicateSelectedHierarchy();
+    (void)context.editor.commands().execute(QuaderCommand::DuplicateSelection);
 }
 
 ImTextureID iconFor(const UIIconSet& icons, EntityKind kind) {
@@ -279,6 +279,8 @@ void OutlinerPanel::drawContent(UIContext& context) {
         }
         if (!record.hasChildren) {
             treeFlags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+        } else {
+            treeFlags |= ImGuiTreeNodeFlags_DefaultOpen;
         }
 
         const bool open = ImGui::TreeNodeEx("##TreeNode", treeFlags);
@@ -391,13 +393,6 @@ void OutlinerPanel::drawContent(UIContext& context) {
     }
 
     ImGui::PopStyleVar(3);
-
-    if (!io.WantTextInput &&
-            ImGui::IsKeyPressed(ImGuiKey_G, false) &&
-            (io.KeyCtrl || io.KeySuper)) {
-        pendingAction = io.KeyShift ? PendingOutlinerAction::UngroupSelection : PendingOutlinerAction::Group;
-        pendingTarget = document.primarySelection();
-    }
 
     switch (pendingAction) {
     case PendingOutlinerAction::Delete:

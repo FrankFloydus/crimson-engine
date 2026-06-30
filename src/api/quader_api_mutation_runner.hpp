@@ -37,10 +37,6 @@ public:
     [[nodiscard]] EditorTransaction beginTransaction(std::string label);
     [[nodiscard]] ModelingSessionMemento captureModelingMemento() const;
     QuaderApiVoidResult restoreModelingMemento(const ModelingSessionMemento& memento, std::string_view label);
-    QuaderApiVoidResult recordModelingMementoTransaction(
-            std::string label,
-            ModelingSessionMemento before,
-            ModelingSessionMemento after);
 
     QuaderApiResult<QuaderEntityRef> createEntity(const QuaderCreateEntityArgs& args);
     QuaderApiResult<QuaderEntityRef> createPointLight(const QuaderCreatePointLightArgs& args);
@@ -63,6 +59,7 @@ public:
     QuaderApiVoidResult runAssetResult(bool changed, std::string_view label);
     QuaderApiVoidResult runAssetFailure(std::string message);
     [[nodiscard]] bool canUndo() const;
+    [[nodiscard]] bool canRedo() const;
     QuaderApiVoidResult undo();
     QuaderApiVoidResult redo();
     QuaderApiVoidResult repeatLastAction();

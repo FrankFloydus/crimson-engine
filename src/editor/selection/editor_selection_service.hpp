@@ -19,7 +19,6 @@
 
 namespace quader {
 
-class AssetRegistry;
 class DocumentCommandService;
 class ModelingSessionService;
 class SceneDocument;
@@ -88,7 +87,6 @@ public:
     EditorSelectionService(
             SceneDocument& scene,
             DocumentCommandService& documentCommands,
-            AssetRegistry& assets,
             ModelingSessionService& modeling);
 
     [[nodiscard]] EditorSelectionState state() const;
@@ -132,14 +130,11 @@ private:
             ModelingSelectionMode mode,
             ModelingSelectionEdit edit,
             const EditorSelectionBoxBaseline* baseline = nullptr);
-    [[nodiscard]] EntityId pickMeshEntityByBounds(const ModelingRay& ray) const;
-    [[nodiscard]] std::vector<EntityId> boxPickMeshEntitiesByBounds(const ModelingBoxSelectRequest& request) const;
     [[nodiscard]] EntityId nearestGroupAncestor(EntityId entity) const;
     [[nodiscard]] ModelingSelectionSummary sceneSummaryFor(ModelingSelectionMode mode) const;
 
     SceneDocument& scene_;
     DocumentCommandService& documentCommands_;
-    AssetRegistry& assets_;
     ModelingSessionService& modeling_;
 };
 

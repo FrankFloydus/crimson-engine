@@ -123,7 +123,7 @@ std::span<const ViewportShortcutTargetDescriptor> viewportShortcutTargetCatalog(
                     viewportTargetShortcut(ViewportShortcutKind::SelectAll, ViewportShortcutContext::Global)},
             {"copy_meshes", {},
                     viewportTargetShortcut(ViewportShortcutKind::Copy, ViewportShortcutContext::Global)},
-            {"duplicate_meshes", {},
+            {"duplicate_selection", QuaderCommand::DuplicateSelection.string(),
                     viewportTargetShortcut(ViewportShortcutKind::Duplicate, ViewportShortcutContext::Global)},
             {"invert_selection", {},
                     viewportTargetShortcut(ViewportShortcutKind::InvertSelection, ViewportShortcutContext::Global)},

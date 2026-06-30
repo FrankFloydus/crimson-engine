@@ -6,16 +6,10 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/commands/modeling/delete_selection_tool.hpp"
 
+#include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 
 namespace quader {
-namespace {
-
-[[nodiscard]] bool sceneAwareDeleteOwnsMode(ModelingSelectionMode mode) {
-    return mode == ModelingSelectionMode::Object || mode == ModelingSelectionMode::Group;
-}
-
-} // namespace
 
 ModelingCommandAvailability DeleteSelectionTool::customAvailability(
         const ModelingCommandExecutionContext& context) const {
@@ -23,7 +17,7 @@ ModelingCommandAvailability DeleteSelectionTool::customAvailability(
     if (!summary.hasSelection) {
         return ModelingCommandAvailability::unavailable("Command is disabled for the current selection.");
     }
-    if (sceneAwareDeleteOwnsMode(summary.mode)) {
+    if (sceneAwareDeleteUsesDocumentRoute(summary.mode)) {
         return ModelingCommandAvailability::unavailable("Delete selection uses the scene-aware command route.");
     }
     return ModelingCommandAvailability::available();

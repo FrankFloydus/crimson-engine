@@ -1138,3 +1138,206 @@ Verification:
   `quader.exe` instance holding the output executable open.
 - `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=QuaderMeshMaterialTests.*:SceneRenderBridgeTests.*:ViewportRendererTests.*:ViewportRenderPassCoordinatorTests.*:OverlayRenderableCacheTests.*:RenderExtractionTests.*`
 - `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime:WindowGuardrailTests.*:UiLayoutGuardrailTests.*`
+
+## 2026-06-29 - Selection Locks, Scene Delete, And Environment Clear Color
+
+Task/context: Editor selection, outliner delete, inspector defaults, and viewport background behavior
+regressed across scene entities, lock state, and environment settings.
+
+Invariants:
+
+- `DeleteSelection` must route any selected non-scene-root root scene entity through the scene-aware
+  document command path. Lights are scene entities, so keyboard delete, context delete, and outliner
+  delete must not depend on modeling object/group predicates.
+- User/editor selection filters must reject missing entities, effectively locked entities, and
+  entities with `VisibilityComponent::selectable == false`. Viewport picking keeps the existing
+  effective-visible filter in addition to this shared selectability rule.
+- Locking an entity removes that entity and effectively locked descendants from the current
+  selection inside the same undoable command or batch. Undo restores the previous selection; normal
+  unlock does not auto-select anything.
+- `SceneEnvironmentSettings::clearColor` owns the wireframe/shaded clear color. Rendered mode clears
+  black, and skybox background attachment requires environment enabled, `showBackground == true`,
+  and `backgroundIntensity > 0.0f`. IBL lighting intensity remains independent of background
+  intensity.
+- Outliner non-leaf nodes start expanded on first presentation; inspector collapsing sections start
+  collapsed unless a later product decision explicitly changes that default.
+
+Affected owners/files:
+
+- `src/editor/commands/modeling/scene_aware_delete_selection_command.*`
+- `src/editor/modeling/services/modeling_session_service.*`
+- `src/editor/selection/editor_selection_service.cpp`
+- `src/editor/commands/document_command_service.cpp`
+- `src/api/quader_scene_api.cpp`
+- `src/api/quader_api_mutation_runner.cpp`
+- `src/scene/components.hpp`
+- `src/io/qdr/qdr_document_reader.cpp`
+- `src/io/qdr/qdr_document_writer.cpp`
+- `src/render/viewport_renderer.cpp`
+- `src/render/filament_environment_library.cpp`
+- `src/viewport/viewport_settings.*`
+- `src/ui/inspector_panel.cpp`
+- `src/ui/outliner_panel.cpp`
+
+Resolved approach:
+
+- Replaced group/object-only scene-aware delete checks with
+  `documentCommandSelectedRootEntities(...)` and exposed that through `ModelingSessionService` for
+  command execution, availability, viewport context menus, and outliner delete.
+- Centralized user-selectable scene filtering in `EditorSelectionService` and projected scene
+  selection back into modeling selection after lock and undo/redo paths that mutate scene selection.
+- Appended selection cleanup commands after lock edits in `DocumentCommandService`, including batched
+  scene lock edits, so lock selection cleanup is part of the same undoable transaction.
+- Added `environment.clearColor` to internal/public scene settings, API conversions, QDR
+  serialization, inspector editing, and render clear behavior; removed the old viewport
+  `BackgroundColor` setting.
+- Updated UI guardrails so inspector sections remain collapsed by default and outliner branch nodes
+  default open.
+
+Verification:
+
+- `powershell -NoProfile -ExecutionPolicy Bypass -File tools\affected_check.ps1 -NoUntracked`
+
+## 2026-06-30 - Entity Selection Owns Scene Transform And Duplicate Paths
+
+Task/context: Selecting a light after mesh component selection could leave stale modeling runtime
+selection active, so immediate transforms and duplicate/delete command routing could operate on the
+old mesh instead of the selected scene entity.
+
+Invariants:
+
+- Object/Mesh selection is editor entity selection: selected meshes, lights, groups, empties, and
+  future scene entities are canonical `SceneDocument` `EntityId`s in `EditorSelectionService`.
+- Modeling runtime object selection is only a projection/cache for editable mesh workflows.
+  Selecting any scene entity through editor selection forces Object/entity mode; component modes are
+  polygon-only.
+- Entity-mode transforms route through scene/document transform commands and
+  `SceneTransformDragService`. Runtime polygon transforms stay only for component modes.
+- Public `DuplicateSelection` duplicates selected scene entity hierarchies. The mesh-only
+  `duplicate_meshes` action remains available as the generated modeling command id.
+
+Affected owners/files:
+
+- `src/editor/selection/editor_selection_service.cpp`
+- `src/editor/selection/selection_projection_service.cpp`
+- `src/editor/modeling/services/modeling_session_service.*`
+- `src/editor/modeling/services/modeling_hierarchy_duplicate_service.*`
+- `src/editor/transform/scene_transform_drag_service.*`
+- `src/api/quader_modeling_api.*`
+- `src/api/quader_commands_api.cpp`
+- `src/api/quader_api_mutation_runner.cpp`
+
+Resolved approach:
+
+- Forced editor scene selection to project as Object/entity mode and clear stale runtime selection
+  when the selected scene entities do not map to modeling objects.
+- Routed immediate entity-mode `moveSelection` and `transformSelection` through document transform
+  edits, while preserving runtime modeling transforms for component modes.
+- Added public entity-hierarchy duplicate routing behind `edit.duplicate` and kept mesh duplication
+  on `modeling.duplicate_meshes`, wrapping public duplicate in an editor transaction so undo/redo is
+  one coherent history step.
+- Reprojected runtime selection after undo/redo and light creation when scene selection changes to
+  non-modeling entities.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests quader_guardrail_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no`
+
+## 2026-06-30 - Undo/Redo And Entity Hierarchy Architecture Pass
+
+Task/context: Six-agent architecture pass on history, entity handling, public command routing, OOP
+boundaries, stale code, and DRY cleanup found that redo availability, scripts, duplicate routing,
+scene-aware delete predicates, batch lock planning, and repeated QDR/cut/component helpers could
+drift across owners.
+
+Invariants:
+
+- `QuaderApiMutationRunner` owns public undo/redo availability. Redo is unavailable while an active
+  modeling preview can be canceled by undo, and history availability stays false while an editor
+  transaction is active.
+- `QuaderScript` records through `EditorTransaction`; history steps are rejected inside a running
+  script, and a changed script records the final modeling memento so redo restores component
+  selection as well as document edits.
+- Public `edit.duplicate` is the scene-aware duplicate command. Mesh-only duplication stays on
+  `modeling.duplicate_meshes`; UI/host shortcuts must target `DuplicateSelection`.
+- Document hierarchy redo must reuse mesh clone entities already restored by modeling mementos
+  instead of recreating them.
+- Scene-aware delete route checks, QDR tone-mapping names, plane-cut request conversion, and
+  component-mode predicates each have one owner helper.
+- Scene batch transform validation plans against simulated parent/lock state, not only live
+  `SceneDocument` state before the batch.
+
+Affected owners/files:
+
+- `src/api/quader_api_mutation_runner.*`
+- `src/api/quader_script.cpp`
+- `src/api/quader_command_ids.hpp`
+- `src/api/quader_modeling_api.cpp`
+- `src/editor/history/editor_history_service.*`
+- `src/editor/commands/document_command_service.cpp`
+- `src/editor/commands/document/duplicate_selected_hierarchy_command.hpp`
+- `src/editor/commands/modeling/scene_aware_delete_selection_command.*`
+- `src/editor/modeling/services/modeling_hierarchy_duplicate_service.*`
+- `src/editor/modeling/runtime/session_operations.cpp`
+- `src/editor/modeling/services/selection_mode_adapter.hpp`
+- `src/editor/selection/editor_selection_service.cpp`
+- `src/io/qdr/qdr_project_codecs.*`
+- `src/ui/outliner_panel.cpp`
+- `src/ui/viewport_panel.*`
+- `src/viewport/host_viewport_contract_adapter.cpp`
+- `tools/affected_check.ps1`
+
+Resolved approach:
+
+- Added transaction-safe redo checks and script memento recording while keeping editor transactions
+  as the source of truth for grouped history.
+- Routed outliner and host shortcut duplicate actions through `QuaderCommand::DuplicateSelection`.
+- Kept direct document duplication from using selected modeling roots, while preserving document
+  group hierarchy duplication and clone reuse for mixed mesh/light redo.
+- Centralized repeated delete, QDR, cut, and component-mode helpers and removed stale viewport
+  pass-through APIs plus the obsolete cut policy header.
+- Added guardrails and behavior coverage for redo preview blocking, script history rejection,
+  mixed hierarchy duplicate/delete undo/redo, root protection, scene batch simulated locks, typed
+  command catalog uniqueness, and affected-check transform routing.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests quader_tests quader_modeling_domain_metadata_loop_tests quader_modeling_domain_polygon_loop_tests quader_modeling_domain_runtime_loop_tests quader_modeling_domain_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_brief=1 --gtest_filter=*:BuildGuardrailTests.*:DependencyLicenseGuardrailTests.*:ProgrammaticApiGuardrailTests.*:WindowGuardrailTests.*`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_brief=1 --gtest_filter=*:Console*:EditorApiTests.*:GroupingPublicApiTests.*:ProgrammaticApiTests.*:Qdr*:Viewport*:Window*`
+- `build\vs2026\Debug\quader_modeling_domain_tests.exe --gtest_color=no --gtest_brief=1 --gtest_filter=*`
+- `build\vs2026\Debug\quader_modeling_domain_metadata_loop_tests.exe --gtest_color=no --gtest_brief=1 --gtest_filter=QdrEditorMetadata*`
+- `build\vs2026\Debug\quader_modeling_domain_polygon_loop_tests.exe --gtest_color=no --gtest_brief=1 --gtest_filter=QdrIoDocumentTests.*`
+- `build\vs2026\Debug\quader_modeling_domain_runtime_loop_tests.exe --gtest_color=no --gtest_brief=1 --gtest_filter=QdrModelingRuntime*:QdrRuntimeIoCompatTests.*`
+- `ctest --preset vs2026-debug --output-on-failure`
+
+## 2026-06-30 - Scene Root Remains Selectable For Settings
+
+Task/context: after scene/entity selection filtering was centralized, the outliner scene root could
+no longer be selected, so the inspector scene settings were unreachable.
+
+Invariants:
+
+- Direct user selection of the scene root is allowed so the inspector can edit
+  `SceneSettingsComponent` through the public scene API.
+- Bulk object/group selection commands still exclude the scene root; root is an editor settings
+  entity, not a normal selectable transform/delete/duplicate target.
+- Public duplicate/delete command roots continue to come from
+  `documentCommandSelectedRootEntities(...)`, which filters the scene root.
+
+Affected owners/files:
+
+- `src/editor/selection/editor_selection_service.cpp`
+- `src/api/quader_commands_api.cpp`
+- `tests/editor_api_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=EditorApiTests.SceneRootSelectionCanEditSettingsButCannotBeDeletedOrDuplicated:EditorApiTests.ObjectSelectAllAndInvertUseSceneEntitiesAndExcludeLockedAndRoot:EditorApiTests.AggregatesDocumentApisAndCommandRouting:EditorApiTests.PublicDuplicateSelectionDuplicatesLightEntityThroughSceneHierarchy`
+- `build\vs2026\Debug\quader_tests.exe`
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe`
+- `cmake --build --preset vs2026-debug --target quader`

@@ -8,6 +8,7 @@
 
 #include "api/quader_editor_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
+#include "assets/default_material_catalog.hpp"
 #include "assets/material_document.hpp"
 #include "core/logger.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
@@ -158,17 +159,17 @@ void App::shutdown() {
 
 void App::createStartupScene() {
     TextureAsset albedo;
-    albedo.name = "Default Albedo";
+    albedo.name = std::string(kDefaultMaterialAlbedoTextureName);
     albedo.usage = TextureUsage::BaseColor;
     albedo.colorSpace = TextureColorSpace::Srgb;
-    albedo.sourcePath = "materials/default/default_albedo.png";
+    albedo.sourcePath = std::string(kDefaultMaterialAlbedoTexturePackagePath);
     const AssetId albedoTexture = projectSession_.assets().addTexture(std::move(albedo));
 
     TextureAsset roughness;
-    roughness.name = "Default Roughness";
+    roughness.name = std::string(kDefaultMaterialRoughnessTextureName);
     roughness.usage = TextureUsage::Roughness;
     roughness.colorSpace = TextureColorSpace::Linear;
-    roughness.sourcePath = "materials/default/default_roughness.png";
+    roughness.sourcePath = std::string(kDefaultMaterialRoughnessTexturePackagePath);
     projectSession_.assets().addTexture(std::move(roughness));
 
     MaterialDocument defaultMaterial = makeDefaultQuaderMaterial("Default Quader");

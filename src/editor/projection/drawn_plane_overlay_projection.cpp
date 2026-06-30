@@ -96,7 +96,7 @@ void DrawnPlaneOverlayProjection::append(
                 .layer = ViewportOverlayLayer::ToolHandle,
                 .position = points[index],
                 .color = kOverlayToolHandleColor,
-                .sizePixels = 8.0f,
+                .sizePixels = kOverlayDrawnPlanePointSizePixels,
                 .styleRole = ViewportOverlayStyleRole::ToolHandle,
                 .source = ViewportOverlaySource::Tool,
         });
@@ -111,7 +111,7 @@ void DrawnPlaneOverlayProjection::append(
             .start = points[0],
             .end = points[1],
             .color = kOverlayToolHandleColor,
-            .widthPixels = 2.0f,
+            .widthPixels = kOverlayDrawnPlaneLineWidthPixels,
             .styleRole = ViewportOverlayStyleRole::ToolHandle,
             .source = ViewportOverlaySource::Tool,
     });

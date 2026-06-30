@@ -21,6 +21,18 @@
 namespace quader {
 namespace {
 
+ViewportSettingColor viewportClearColor(const SceneEnvironmentSettings& environment, bool renderedMode) {
+    if (renderedMode) {
+        return {};
+    }
+    return {
+            environment.clearColor.x,
+            environment.clearColor.y,
+            environment.clearColor.z,
+            1.0f,
+    };
+}
+
 filament::ColorGrading* buildColorGrading(
         filament::Engine& engine,
         const filament::ToneMapper& toneMapper) {
@@ -211,6 +223,7 @@ void ViewportRenderer::applySceneSettings(const SceneSettingsComponent& settings
         overlayView_->setColorGrading(nullptr);
     }
     applyToneMapping(settings.postProcess.toneMapping, postProcessingEnabled);
+    renderPassCoordinator_.setBackgroundColor(viewportClearColor(settings.environment, renderedMode));
 
     filament::View::AmbientOcclusionOptions ao;
     ao.enabled = postProcessingEnabled && settings.postProcess.ambientOcclusion;
@@ -277,7 +290,6 @@ void ViewportRenderer::updateGroundGrid(
     }
 
     renderPassCoordinator_.setGridVisible(visible);
-    renderPassCoordinator_.setBackgroundColor(settings.color(ViewportColorSettingId::Background));
     updateVisibleLayers();
     gridRenderer_.update(controller, width(), height(), gridWorldSpacing, settings, visible);
 }

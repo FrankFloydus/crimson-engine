@@ -300,19 +300,30 @@ function(quader_compile_material target_name input_file output_name)
     set("${target_name}_OUTPUT" "${output_file}" PARENT_SCOPE)
 endfunction()
 
+set(QUADER_FILAMENT_MATERIAL_TARGETS)
+set(QUADER_FILAMENT_MATERIAL_COPY_COMMANDS)
+macro(quader_register_filament_material target_name input_file output_name)
+    quader_compile_material("${target_name}" "${input_file}" "${output_name}")
+    list(APPEND QUADER_FILAMENT_MATERIAL_TARGETS "${target_name}")
+    list(APPEND QUADER_FILAMENT_MATERIAL_COPY_COMMANDS
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${${target_name}_OUTPUT}"
+                "$<TARGET_FILE_DIR:quader>/materials/${output_name}.filamat")
+endmacro()
+
 set(QUADER_DEFAULT_MATERIAL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/modeling_assets/materials/default")
 set(QUADER_DEFAULT_ALBEDO_TEXTURE "${QUADER_DEFAULT_MATERIAL_SOURCE_DIR}/default_albedo.png")
 set(QUADER_DEFAULT_ROUGHNESS_TEXTURE "${QUADER_DEFAULT_MATERIAL_SOURCE_DIR}/default_roughness.png")
 quader_require_existing_path("${QUADER_DEFAULT_ALBEDO_TEXTURE}" "app-owned default material albedo texture")
 quader_require_existing_path("${QUADER_DEFAULT_ROUGHNESS_TEXTURE}" "app-owned default material roughness texture")
 
-quader_compile_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh)
-quader_compile_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit)
-quader_compile_material(vertex_color_overlay_material resources/materials/vertex_color_overlay.mat vertex_color_overlay)
-quader_compile_material(quader_overlay_line_material resources/materials/quader_overlay_line.mat quader_overlay_line)
-quader_compile_material(quader_overlay_point_material resources/materials/quader_overlay_point.mat quader_overlay_point)
-quader_compile_material(imgui_material resources/materials/imgui.mat imgui)
-quader_compile_material(ground_grid_material resources/materials/ground_grid.mat ground_grid)
+quader_register_filament_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh)
+quader_register_filament_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit)
+quader_register_filament_material(vertex_color_overlay_material resources/materials/vertex_color_overlay.mat vertex_color_overlay)
+quader_register_filament_material(quader_overlay_line_material resources/materials/quader_overlay_line.mat quader_overlay_line)
+quader_register_filament_material(quader_overlay_point_material resources/materials/quader_overlay_point.mat quader_overlay_point)
+quader_register_filament_material(imgui_material resources/materials/imgui.mat imgui)
+quader_register_filament_material(ground_grid_material resources/materials/ground_grid.mat ground_grid)
 
 add_library(quader_runtime STATIC
     src/app/app_frame_clock.cpp
@@ -403,24 +414,12 @@ if(WIN32)
     target_link_libraries(quader_runtime PUBLIC Dbghelp Dwmapi Advapi32)
 endif()
 add_dependencies(quader_runtime
-    quader_mesh_material
-    quader_mesh_lit_material
-    vertex_color_overlay_material
-    quader_overlay_line_material
-    quader_overlay_point_material
-    imgui_material
-    ground_grid_material)
+    ${QUADER_FILAMENT_MATERIAL_TARGETS})
 
 add_executable(quader WIN32 src/main.cpp)
 target_link_libraries(quader PRIVATE quader_runtime)
 add_dependencies(quader
-    quader_mesh_material
-    quader_mesh_lit_material
-    vertex_color_overlay_material
-    quader_overlay_line_material
-    quader_overlay_point_material
-    imgui_material
-    ground_grid_material)
+    ${QUADER_FILAMENT_MATERIAL_TARGETS})
 
 if(MSVC)
     target_link_options(quader PRIVATE /ENTRY:mainCRTStartup)
@@ -444,27 +443,7 @@ add_custom_command(TARGET quader POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/icons"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/ibl"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/locales"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${quader_mesh_material_OUTPUT}"
-            "$<TARGET_FILE_DIR:quader>/materials/quader_mesh.filamat"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${quader_mesh_lit_material_OUTPUT}"
-            "$<TARGET_FILE_DIR:quader>/materials/quader_mesh_lit.filamat"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${vertex_color_overlay_material_OUTPUT}"
-            "$<TARGET_FILE_DIR:quader>/materials/vertex_color_overlay.filamat"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${quader_overlay_line_material_OUTPUT}"
-            "$<TARGET_FILE_DIR:quader>/materials/quader_overlay_line.filamat"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${quader_overlay_point_material_OUTPUT}"
-            "$<TARGET_FILE_DIR:quader>/materials/quader_overlay_point.filamat"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${imgui_material_OUTPUT}"
-            "$<TARGET_FILE_DIR:quader>/materials/imgui.filamat"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${ground_grid_material_OUTPUT}"
-            "$<TARGET_FILE_DIR:quader>/materials/ground_grid.filamat"
+    ${QUADER_FILAMENT_MATERIAL_COPY_COMMANDS}
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/Inter.ttf"
             "$<TARGET_FILE_DIR:quader>/fonts/Inter.ttf"
@@ -535,6 +514,7 @@ if(QUADER_BUILD_TESTS)
         tests/support/modeling_test_events.cpp
     )
     quader_enable_common_pch(quader_tests)
+    target_include_directories(quader_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
     target_compile_definitions(quader_tests
         PRIVATE
             QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

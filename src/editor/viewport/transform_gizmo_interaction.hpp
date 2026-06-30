@@ -25,6 +25,7 @@ public:
             QuaderEditorApi& editor,
             const ViewportInteractionFrame& frame);
     [[nodiscard]] bool cancelActiveDrag(QuaderEditorApi& editor);
+    void reset(QuaderEditorApi* editor = nullptr);
 
     [[nodiscard]] bool dragging() const { return dragging_; }
     [[nodiscard]] const quader_editor_core::TransformGizmoFrame* frame() const;

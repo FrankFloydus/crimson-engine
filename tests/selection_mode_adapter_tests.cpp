@@ -43,6 +43,14 @@ TEST(SelectionModeAdapterTests, AppRuntimeMappingCollapsesGroupToObjectMode) {
     EXPECT_EQ(runtimeSelectionModeToApp(quader_editor_core::SelectionMode::object), ModelingSelectionMode::Object);
 }
 
+TEST(SelectionModeAdapterTests, SceneDocumentOwnsObjectAndGroupSelectionModes) {
+    EXPECT_FALSE(selectionModeUsesSceneDocument(ModelingSelectionMode::Vertex));
+    EXPECT_FALSE(selectionModeUsesSceneDocument(ModelingSelectionMode::Edge));
+    EXPECT_FALSE(selectionModeUsesSceneDocument(ModelingSelectionMode::Face));
+    EXPECT_TRUE(selectionModeUsesSceneDocument(ModelingSelectionMode::Object));
+    EXPECT_TRUE(selectionModeUsesSceneDocument(ModelingSelectionMode::Group));
+}
+
 TEST(SelectionModeAdapterTests, AppHostContractMappingKeepsGroupDistinct) {
     EXPECT_EQ(appSelectionModeToHostContract(ModelingSelectionMode::Vertex), quader_host_contract::HostSelectionMode::vertex);
     EXPECT_EQ(appSelectionModeToHostContract(ModelingSelectionMode::Edge), quader_host_contract::HostSelectionMode::edge);

@@ -22,9 +22,9 @@ auto created = editor.modeling().createBox({
 });
 
 if (created.ok()) {
-    editor.object(created.value())
-            .rename("Renamed API Box")
-            .select();
+    auto object = editor.object(created.value());
+    object.rename("Renamed API Box");
+    object.select();
     editor.commands().execute(quader::QuaderCommand::HistoryUndo);
 }
 ```
@@ -44,7 +44,7 @@ Common ergonomic patterns:
 ```cpp
 editor.scene().select(entity);
 editor.selection().selectObject(object.entity);
-editor.commands().execute(quader::QuaderCommand::ModelingDuplicateMeshes);
+editor.commands().execute(quader::QuaderCommand::DuplicateSelection);
 editor.mainViewport().setShadingMode(quader::QuaderShadingMode::Wireframe);
 
 editor.scene().batch("Arrange blockout")

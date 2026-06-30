@@ -108,7 +108,6 @@ void drawToolsMenuContents(MainMenuBarContext& context) {
             (void)context.viewportPanel->activateToolFromMenu(
                     tool->viewportTool(),
                     context.editor,
-                    context.document,
                     context.modeling);
         }
     }

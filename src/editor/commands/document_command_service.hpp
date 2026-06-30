@@ -77,7 +77,9 @@ public:
             SceneSettingsComponent settings,
             UndoRedoExecuteOptions options = {});
     DocumentCommandResult setTransform(EntityId entity, TransformComponent transform);
-    DocumentCommandResult setTransforms(std::vector<DocumentTransformEdit> edits);
+    DocumentCommandResult setTransforms(
+            std::vector<DocumentTransformEdit> edits,
+            std::string label = "Set Transform");
     DocumentCommandResult applySceneBatch(std::string label, std::vector<DocumentSceneBatchOperation> operations);
 
 private:

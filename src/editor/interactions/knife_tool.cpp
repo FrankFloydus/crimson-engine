@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/interactions/knife_tool.hpp>
+#include <editor/interactions/tool_math_internal.hpp>
 #include <editor/interactions/tool_snapping.hpp>
 #include <diagnostics/profile.hpp>
 #include <editor/modeling/runtime/tool_operation_contracts.hpp>
@@ -78,16 +79,6 @@ void KnifeToolImpl::reset_runtime_state(EditorRuntimeState& runtime, bool keep_a
 }
 
 namespace {
-
-quader_geometry::QVec3f to_geometry_vec3(quader::QVec3 value)
-{
-	return { value.x, value.y, value.z };
-}
-
-quader_geometry::QVec2d to_geometry_vec2(quader::QVec2 value)
-{
-	return { static_cast<double>(value.x), static_cast<double>(value.y) };
-}
 
 bool face_contains_edge(const quader_poly::Face& face, quader_poly::Edge edge)
 {
@@ -214,12 +205,6 @@ std::optional<quader::QVec3> edge_position_from_factor(
 	return a->position + ((b->position - a->position) * clamped);
 }
 
-quader::QVec3 normalize_or(quader::QVec3 value, quader::QVec3 fallback)
-{
-	const quader::QVec3 normalized = quader::normalize_or_zero(value);
-	return quader::length_squared(normalized) <= transform_point_epsilon ? fallback : normalized;
-}
-
 bool knife_object_allowed(const KnifeToolState& state, int object_id);
 
 quader::QVec3 project_point_to_plane(quader::QVec3 point, quader::QVec3 origin, quader::QVec3 normal)
@@ -292,7 +277,7 @@ bool fill_knife_vertex_target(
 	out_point.object_id = hit->object_id;
 	out_point.face_id = hit->face_id;
 	out_point.point = vertex->position;
-	out_point.normal = normalize_or(hit->local_normal, { 0.0F, 1.0F, 0.0F });
+	out_point.normal = vec3_normalize_or(hit->local_normal, { 0.0F, 1.0F, 0.0F }, transform_point_epsilon);
 	out_point.target.kind = quader_poly::KnifePointTargetKind::existing_vertex;
 	out_point.target.vertex_id = vertex->id;
 	out_point.target.face_id = hit->face_id;
@@ -338,7 +323,7 @@ bool fill_knife_edge_target(
 	out_point.object_id = hit->object_id;
 	out_point.face_id = hit->face_id;
 	out_point.point = *point;
-	out_point.normal = normalize_or(hit->local_normal, { 0.0F, 1.0F, 0.0F });
+	out_point.normal = vec3_normalize_or(hit->local_normal, { 0.0F, 1.0F, 0.0F }, transform_point_epsilon);
 	out_point.target.kind = quader_poly::KnifePointTargetKind::existing_edge;
 	out_point.target.edge = quader_poly::make_edge(hit->edge.a, hit->edge.b);
 	out_point.target.edge_factor = std::clamp(*factor, 0.01F, 0.99F);
@@ -389,7 +374,7 @@ bool fill_knife_face_point(
 	out_point.object_id = surface_hit.object_id;
 	out_point.face_id = surface_hit.face_id;
 	out_point.point = point;
-	out_point.normal = normalize_or(surface_hit.local_normal, { 0.0F, 1.0F, 0.0F });
+	out_point.normal = vec3_normalize_or(surface_hit.local_normal, { 0.0F, 1.0F, 0.0F }, transform_point_epsilon);
 	out_point.target.kind = quader_poly::KnifePointTargetKind::face_point;
 	out_point.target.face_id = surface_hit.face_id;
 	out_point.target.position = point;
@@ -494,8 +479,8 @@ float edge_factor_nearest_segment(
 
 	const quader_geometry::QSegmentFactorClosestPoint3<float> closest =
 		quader_geometry::closest_factor_on_segment_to_segment<float>(
-			{ to_geometry_vec3(edge_start->position), to_geometry_vec3(edge_end->position) },
-			{ to_geometry_vec3(segment_start), to_geometry_vec3(segment_end) },
+			{ tool_geometry_vec3(edge_start->position), tool_geometry_vec3(edge_end->position) },
+			{ tool_geometry_vec3(segment_start), tool_geometry_vec3(segment_end) },
 			options);
 	return closest.valid ? closest.segment_factor : 0.5F;
 }
@@ -515,7 +500,10 @@ std::optional<float> edge_factor_from_camera_cut_plane(
 	}
 
 	const quader::QVec3 camera_origin = camera.transform.origin;
-	const quader::QVec3 camera_forward = normalize_or(camera.transform.z_axis * -1.0F, { 0.0F, 0.0F, -1.0F });
+	const quader::QVec3 camera_forward = vec3_normalize_or(
+			camera.transform.z_axis * -1.0F,
+			{ 0.0F, 0.0F, -1.0F },
+			transform_point_epsilon);
 	const quader::QVec3 segment_delta = segment_end - segment_start;
 	quader::QVec3 cut_plane_normal;
 	if (camera.projection == CameraProjection::orthographic) {
@@ -528,11 +516,11 @@ std::optional<float> edge_factor_from_camera_cut_plane(
 	}
 
 	const quader_geometry::QPlane3<float> cut_plane = quader_geometry::plane_from_point_normal(
-		to_geometry_vec3(segment_start),
-		to_geometry_vec3(cut_plane_normal),
+		tool_geometry_vec3(segment_start),
+		tool_geometry_vec3(cut_plane_normal),
 		transform_point_epsilon);
 	const quader_geometry::QSegmentPlaneHit<float> hit = quader_geometry::intersect_segment_plane(
-		quader_geometry::QSegment3<float> { to_geometry_vec3(edge_start->position), to_geometry_vec3(edge_end->position) },
+		quader_geometry::QSegment3<float> { tool_geometry_vec3(edge_start->position), tool_geometry_vec3(edge_end->position) },
 		cut_plane,
 		transform_point_epsilon);
 	if (hit.type != quader_geometry::QPlaneIntersectionType::point) {
@@ -557,11 +545,6 @@ struct KnifeScreenEdgeHit {
 	quader::QVec3 position;
 };
 
-double vec2_distance_squared(quader::QVec2 left, quader::QVec2 right)
-{
-	return quader_geometry::length_squared(to_geometry_vec2(left) - to_geometry_vec2(right));
-}
-
 std::optional<std::pair<double, double>> screen_segment_intersection_factors(
 		quader::QVec2 line_start,
 		quader::QVec2 line_end,
@@ -570,10 +553,10 @@ std::optional<std::pair<double, double>> screen_segment_intersection_factors(
 {
 	const quader_geometry::QClassifiedSegmentIntersection2<double> intersection =
 		quader_geometry::intersect_segments_2d(
-			to_geometry_vec2(line_start),
-			to_geometry_vec2(line_end),
-			to_geometry_vec2(edge_start),
-			to_geometry_vec2(edge_end));
+			tool_geometry_vec2(line_start),
+			tool_geometry_vec2(line_end),
+			tool_geometry_vec2(edge_start),
+			tool_geometry_vec2(edge_end));
 	if (!intersection.hit || intersection.kind != quader_geometry::QSegmentIntersectionKind2::point) {
 		return std::nullopt;
 	}

@@ -9,15 +9,68 @@
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "scene/document/project_session.hpp"
-#include "editor/history/modeling_memento_command.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modeling/services/selection_mode_adapter.hpp"
 
 #include <memory>
 
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace quader {
+namespace {
+
+/**
+ * Captures scene selection before history replay so modeling selection can be reprojected when needed.
+ */
+struct SceneSelectionSnapshot {
+    std::vector<EntityId> selected;
+    EntityId active = InvalidEntityId;
+};
+
+SceneSelectionSnapshot captureSceneSelection(const ProjectSession& session) {
+    return {
+            .selected = session.scene().selectedEntities(),
+            .active = session.scene().primarySelection(),
+    };
+}
+
+bool sceneSelectionChanged(const SceneSelectionSnapshot& before, const ProjectSession& session) {
+    return before.selected != session.scene().selectedEntities() ||
+            before.active != session.scene().primarySelection();
+}
+
+bool sceneSelectionContainsNonModelingEntity(const ProjectSession& session) {
+    for (const EntityId entity : session.scene().selectedEntities()) {
+        if (session.scene().modelingObject(entity) == nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void projectObjectSelectionAfterHistorySelectionChange(
+        ProjectSession& session,
+        const SceneSelectionSnapshot& before,
+        const CommandResult& result) {
+    if (!result.ok || !result.changed || !sceneSelectionChanged(before, session)) {
+        return;
+    }
+
+    if (sceneSelectionContainsNonModelingEntity(session)) {
+        session.modeling().projectObjectSelectionFromScene(true);
+        return;
+    }
+
+    const ModelingSelectionSummary summary = session.modeling().selectionSummary();
+    if (!summary.hasSelection || selectionModeUsesSceneDocument(summary.mode)) {
+        session.modeling().projectObjectSelectionFromScene();
+    }
+}
+
+} // namespace
+
 QuaderApiMutationRunner::QuaderApiMutationRunner(
         ProjectSession& session,
         EditorHistoryService& history,
@@ -44,23 +97,6 @@ QuaderApiVoidResult QuaderApiMutationRunner::restoreModelingMemento(
         const ModelingSessionMemento& memento,
         std::string_view label) {
     return statusFrom(session_.modeling().restoreHistoryMemento(memento), QuaderMutationKind::Modeling, label);
-}
-
-QuaderApiVoidResult QuaderApiMutationRunner::recordModelingMementoTransaction(
-        std::string label,
-        ModelingSessionMemento before,
-        ModelingSessionMemento after) {
-    if (label.empty()) {
-        label = "Script";
-    }
-    return statusFrom(
-            history_.recordExecuted(std::make_unique<RecordedModelingMementoCommand>(
-                    session_.modeling(),
-                    std::move(label),
-                    std::move(before),
-                    std::move(after))),
-            QuaderMutationKind::Modeling,
-            "Record Script Transaction");
 }
 
 QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createEntity(const QuaderCreateEntityArgs& args) {
@@ -91,6 +127,9 @@ QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createPointLight(const
             toSceneTransform(args.transform),
             args.selectCreated);
     const EntityId createdEntity = command.entity;
+    if (command.ok && command.changed && args.selectCreated) {
+        session_.modeling().projectObjectSelectionFromScene(true);
+    }
 
     const QuaderApiVoidResult status = runDocumentResult(std::move(command), "Create Point Light");
     QuaderApiResult<QuaderEntityRef> result = quaderApiResultFromStatus<QuaderEntityRef>(status);
@@ -113,6 +152,9 @@ QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createDirectionalLight
             toSceneTransform(args.transform),
             args.selectCreated);
     const EntityId createdEntity = command.entity;
+    if (command.ok && command.changed && args.selectCreated) {
+        session_.modeling().projectObjectSelectionFromScene(true);
+    }
 
     const QuaderApiVoidResult status = runDocumentResult(std::move(command), "Create Directional Light");
     QuaderApiResult<QuaderEntityRef> result = quaderApiResultFromStatus<QuaderEntityRef>(status);
@@ -208,6 +250,13 @@ bool QuaderApiMutationRunner::canUndo() const {
     return history_.canUndo();
 }
 
+bool QuaderApiMutationRunner::canRedo() const {
+    if (session_.modeling().canCancelActivePreviewForUndo()) {
+        return false;
+    }
+    return history_.canRedo();
+}
+
 QuaderApiVoidResult QuaderApiMutationRunner::undo() {
     if (session_.modeling().canCancelActivePreviewForUndo()) {
         const ModelingCommandResult cancel = cancelActiveToolOrPreviewForUndo();
@@ -215,11 +264,20 @@ QuaderApiVoidResult QuaderApiMutationRunner::undo() {
             return statusFrom(cancel, QuaderMutationKind::Runtime, "Undo");
         }
     }
-    return statusFrom(editorCommands_.undo(), QuaderMutationKind::Document, "Undo");
+    const SceneSelectionSnapshot before = captureSceneSelection(session_);
+    CommandResult result = editorCommands_.undo();
+    projectObjectSelectionAfterHistorySelectionChange(session_, before, result);
+    return statusFrom(std::move(result), QuaderMutationKind::Document, "Undo");
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::redo() {
-    return statusFrom(editorCommands_.redo(), QuaderMutationKind::Document, "Redo");
+    if (!canRedo()) {
+        return statusFrom(commandInvalidResult("Redo is not available"), QuaderMutationKind::Document, "Redo");
+    }
+    const SceneSelectionSnapshot before = captureSceneSelection(session_);
+    CommandResult result = editorCommands_.redo();
+    projectObjectSelectionAfterHistorySelectionChange(session_, before, result);
+    return statusFrom(std::move(result), QuaderMutationKind::Document, "Redo");
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::repeatLastAction() {

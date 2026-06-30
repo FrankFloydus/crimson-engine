@@ -185,6 +185,63 @@ ModelingViewportTool fromRuntimeViewportTool(quader_editor_core::ViewportInterac
     return ModelingViewportTool::Select;
 }
 
+CommandResult modelingServiceCommandResultFrom(ModelingCommandResult result) {
+    return {
+            .ok = result.ok,
+            .changed = result.changed,
+            .message = std::move(result.message),
+    };
+}
+
+std::string transformDragHistoryLabel(quader_editor_core::ViewportInteractionTool tool) {
+    switch (tool) {
+    case quader_editor_core::ViewportInteractionTool::move:
+        return "Move Selection";
+    case quader_editor_core::ViewportInteractionTool::rotate:
+        return "Rotate Selection";
+    case quader_editor_core::ViewportInteractionTool::scale:
+        return "Scale Selection";
+    default:
+        return "Transform Selection";
+    }
+}
+
+/**
+ * Records an already-committed modeling preview as an editor history command.
+ */
+class RecordedModelingPreviewMementoCommand final : public IUndoableCommand {
+public:
+    using Restore = std::function<ModelingCommandResult(const ModelingSessionMemento&)>;
+
+    RecordedModelingPreviewMementoCommand(
+            Restore restore,
+            std::string label,
+            ModelingSessionMemento before,
+            ModelingSessionMemento after)
+        : restore_(std::move(restore))
+        , label_(std::move(label))
+        , before_(std::move(before))
+        , after_(std::move(after)) {}
+
+    [[nodiscard]] const std::string& label() const override {
+        return label_;
+    }
+
+    CommandResult undo() override {
+        return modelingServiceCommandResultFrom(restore_(before_));
+    }
+
+    CommandResult redo() override {
+        return modelingServiceCommandResultFrom(restore_(after_));
+    }
+
+private:
+    Restore restore_;
+    std::string label_;
+    ModelingSessionMemento before_;
+    ModelingSessionMemento after_;
+};
+
 quader_editor_core::CutMode toRuntime(ModelingCutMode mode) {
     switch (mode) {
     case ModelingCutMode::DiscardLeft:
@@ -715,6 +772,31 @@ public:
         return meshSyncService_.compileObjectMesh(*object);
     }
 
+    [[nodiscard]] std::optional<EntityId> pickObjectEntity(const ModelingPickSelectRequest& request) const {
+        const std::optional<int> objectId =
+                selectionService_.pickObjectId(session_, scene_, objectRegistry_, request);
+        if (!objectId.has_value()) {
+            return std::nullopt;
+        }
+        return objectRegistry_.entityForModelingObject(*objectId);
+    }
+
+    [[nodiscard]] std::vector<EntityId> boxPickObjectEntities(const ModelingBoxSelectRequest& request) const {
+        const std::vector<int> objectIds =
+                selectionService_.boxPickObjectIds(session_, scene_, objectRegistry_, request);
+        std::vector<EntityId> entities;
+        entities.reserve(objectIds.size());
+        for (const int objectId : objectIds) {
+            const std::optional<EntityId> entity = objectRegistry_.entityForModelingObject(objectId);
+            if (!entity.has_value() ||
+                    std::find(entities.begin(), entities.end(), *entity) != entities.end()) {
+                continue;
+            }
+            entities.push_back(*entity);
+        }
+        return entities;
+    }
+
     [[nodiscard]] std::optional<QVec3> selectionCenter() const {
         return selectionProjectionService_.worldSelectionCenter(session_, scene_, assets_, objectRegistry_);
     }
@@ -939,8 +1021,10 @@ public:
         }
     }
 
-    ModelingCommandResult duplicateSelectedHierarchyForGroupDrag(DocumentCommandService& documentCommands) {
-        return hierarchyDuplicateService_.duplicateSelectedHierarchyForGroupDrag(
+    ModelingCommandResult duplicateSelectedHierarchy(
+            DocumentCommandService& documentCommands,
+            ModelingSelectionMode resultSelectionMode) {
+        return hierarchyDuplicateService_.duplicateSelectedEntityHierarchy(
                 session_,
                 scene_,
                 objectRegistry_,
@@ -960,7 +1044,16 @@ public:
                         .duplicateSelectedMeshes = [&]() {
                             return executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes, false);
                         },
-                });
+                },
+                resultSelectionMode);
+    }
+
+    ModelingCommandResult duplicateSelectedHierarchyForGroupDrag(DocumentCommandService& documentCommands) {
+        return duplicateSelectedHierarchy(documentCommands, ModelingSelectionMode::Group);
+    }
+
+    ModelingCommandResult duplicateSelectedEntityHierarchy(DocumentCommandService& documentCommands) {
+        return duplicateSelectedHierarchy(documentCommands, ModelingSelectionMode::Object);
     }
 
     ModelingCommandResult setSelectionMode(ModelingSelectionMode mode) {
@@ -1037,7 +1130,7 @@ public:
 
     ModelingCommandResult deleteComponentSelection() {
         const ModelingSelectionSummary summary = selectionSummary();
-        if (summary.mode == ModelingSelectionMode::Object || summary.mode == ModelingSelectionMode::Group) {
+        if (sceneAwareDeleteUsesDocumentRoute(summary.mode)) {
             return {
                     .ok = false,
                     .changed = false,
@@ -1047,8 +1140,8 @@ public:
         return executeRuntimeNoSettings(quader_editor_core::EditorRuntimeCommandId::delete_selection, true);
     }
 
-    [[nodiscard]] bool hasSelectedSceneGroupRoot() const {
-        return sceneAwareDeleteHasSelectedSceneGroupRoot(scene_);
+    [[nodiscard]] bool hasSelectedSceneAwareDeleteRoot() const {
+        return sceneAwareDeleteHasSelectedRoot(scene_);
     }
 
     std::unique_ptr<IUndoableCommand> createDeleteSelectionCommand() {
@@ -1813,6 +1906,9 @@ public:
         const bool previewDriven = transformDragController_.previewDriven();
         const bool finishPreviewTransaction = previewDriven || transformDragController_.duplicateSelected();
         const quader_editor_core::TransformDragState repeatDrag = runtime_.transform_drag_state();
+        ModelingSessionMemento previewBefore = finishPreviewTransaction && previewDriven && history != nullptr
+                ? captureActivePreviewHistoryMemento()
+                : ModelingSessionMemento();
         bool changed = false;
 
         if (finishPreviewTransaction) {
@@ -1840,6 +1936,27 @@ public:
                         session_,
                         repeatDrag,
                         transformDragController_.duplicateSelected());
+            }
+            if (previewDriven && changed && history != nullptr && previewBefore.valid()) {
+                const ModelingSessionMemento previewAfter = captureHistoryMemento();
+                const CommandResult recorded = history->recordExecuted(
+                        std::make_unique<RecordedModelingPreviewMementoCommand>(
+                                [this](const ModelingSessionMemento& memento) {
+                                    return restoreHistoryMemento(memento);
+                                },
+                                transformDragHistoryLabel(repeatDrag.tool),
+                                std::move(previewBefore),
+                                previewAfter));
+                if (!recorded.ok) {
+                    clearTransformDragRuntimeState();
+                    return {
+                            .ok = false,
+                            .previewDriven = previewDriven,
+                            .message = recorded.message.empty()
+                                    ? "Could not record transform drag history."
+                                    : recorded.message,
+                    };
+                }
             }
         }
 
@@ -2996,6 +3113,14 @@ std::optional<MeshAsset> ModelingSessionService::compileObjectMesh(int modelingO
     return impl_->compileObjectMesh(modelingObjectId);
 }
 
+std::optional<EntityId> ModelingSessionService::pickObjectEntity(const ModelingPickSelectRequest& request) const {
+    return impl_->pickObjectEntity(request);
+}
+
+std::vector<EntityId> ModelingSessionService::boxPickObjectEntities(const ModelingBoxSelectRequest& request) const {
+    return impl_->boxPickObjectEntities(request);
+}
+
 std::optional<QVec3> ModelingSessionService::selectionCenter() const {
     return impl_->selectionCenter();
 }
@@ -3036,12 +3161,16 @@ ModelingCommandResult ModelingSessionService::restoreHistoryMemento(const Modeli
     return impl_->restoreHistoryMemento(memento);
 }
 
-void ModelingSessionService::projectObjectSelectionFromScene() {
-    impl_->syncObjectSelectionFromScene();
+void ModelingSessionService::projectObjectSelectionFromScene(bool forceObjectMode) {
+    impl_->syncObjectSelectionFromScene(forceObjectMode);
 }
 
 ModelingCommandResult ModelingSessionService::duplicateSelectedHierarchyForGroupDrag(DocumentCommandService& documentCommands) {
     return impl_->duplicateSelectedHierarchyForGroupDrag(documentCommands);
+}
+
+ModelingCommandResult ModelingSessionService::duplicateSelectedEntityHierarchy(DocumentCommandService& documentCommands) {
+    return impl_->duplicateSelectedEntityHierarchy(documentCommands);
 }
 
 ModelingCommandResult ModelingSessionService::setSelectionMode(ModelingSelectionMode mode) {
@@ -3064,8 +3193,8 @@ std::unique_ptr<IUndoableCommand> ModelingSessionService::createDeleteSelectionC
     return impl_->createDeleteSelectionCommand();
 }
 
-bool ModelingSessionService::hasSelectedSceneGroupRoot() const {
-    return impl_->hasSelectedSceneGroupRoot();
+bool ModelingSessionService::hasSelectedSceneAwareDeleteRoot() const {
+    return impl_->hasSelectedSceneAwareDeleteRoot();
 }
 
 ModelingCommandResult ModelingSessionService::deleteComponentSelection() {

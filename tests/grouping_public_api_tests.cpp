@@ -9,9 +9,12 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -84,6 +87,39 @@ void selectGroupForCommandDelete(BehaviorScenario& scenario, std::string_view gr
 
 void rememberRestoredSubtree(BehaviorScenario& scenario, std::string_view groupAlias, std::string_view groupName) {
     scenario.rememberEntityNamed(groupAlias, groupName);
+}
+
+std::optional<QuaderEntitySnapshot> entityById(const QuaderApi& api, EntityId entity) {
+    return api.query().entity(entity);
+}
+
+std::vector<QuaderEntitySnapshot> childrenOf(const QuaderApi& api, EntityId parent) {
+    std::vector<QuaderEntitySnapshot> children;
+    for (const QuaderEntitySnapshot& snapshot : api.query().entities()) {
+        if (snapshot.parent == parent) {
+            children.push_back(snapshot);
+        }
+    }
+    return children;
+}
+
+std::vector<EntityId> selectedEntities(const QuaderApi& api) {
+    std::vector<EntityId> selected;
+    for (const QuaderEntitySnapshot& snapshot : api.query().entities()) {
+        if (snapshot.selected) {
+            selected.push_back(snapshot.id);
+        }
+    }
+    return selected;
+}
+
+EntityId selectedEntityExcluding(const QuaderApi& api, EntityId excluded) {
+    for (const EntityId entity : selectedEntities(api)) {
+        if (entity != excluded) {
+            return entity;
+        }
+    }
+    return InvalidEntityId;
 }
 
 } // namespace
@@ -388,7 +424,7 @@ TEST(GroupingPublicApiTests, ObjectModeSceneSelectedGroupDeleteUsesSceneRoots) {
             .namedExists("Object Mode Decoy");
 }
 
-TEST(GroupingPublicApiTests, ComponentModeSceneSelectedGroupDeleteUsesSceneRoots) {
+TEST(GroupingPublicApiTests, ComponentModeSceneSelectedGroupForcesEntityModeAndDeleteUsesSceneRoots) {
     BehaviorScenario scenario = BehaviorScenario::newProject();
     givenBoxAt(scenario, "child", "Component Mode Child", {-1.0f, 0.0f, 0.0f});
     givenBoxAt(scenario, "sibling", "Component Mode Sibling", {1.0f, 0.0f, 0.0f});
@@ -396,7 +432,7 @@ TEST(GroupingPublicApiTests, ComponentModeSceneSelectedGroupDeleteUsesSceneRoots
     scenario.when().groupSelection("group", "Component Mode Group");
 
     scenario.given().selectionMode(QuaderSelectionMode::Face).selected("group");
-    scenario.then().selection().mode(QuaderSelectionMode::Face);
+    scenario.then().selection().mode(QuaderSelectionMode::Object);
 
     scenario.when().execute(QuaderCommand::ModelingDeleteSelection);
     scenario.then().command().okChanged();
@@ -579,9 +615,7 @@ TEST(GroupingPublicApiTests, DuplicateSelectedHierarchyCopiesStateSelectsCloneAn
     const AssetId material = createMaterial(scenario, "Duplicate Material");
     assignMaterial(scenario, "child", material);
     scenario.when().setVisible("group", false);
-    scenario.when().setLocked("group", true);
     scenario.when().setVisible("child", false);
-    scenario.when().setLocked("child", true);
 
     scenario.given().selectedAliases({"group", "child"}, "child");
     scenario.when().duplicateSelectedHierarchy("group.copy");
@@ -598,13 +632,13 @@ TEST(GroupingPublicApiTests, DuplicateSelectedHierarchyCopiesStateSelectsCloneAn
             .aliasName("group.copy", "Duplicate Source_1")
             .parent("group.copy", "parent")
             .visible("group.copy", false)
-            .locked("group.copy", true)
+            .locked("group.copy", false)
             .entityTransformNear("group.copy", groupExpected)
             .childCount("group.copy", 1u)
             .aliasName("child.copy", "Duplicate Child_1")
             .parent("child.copy", "group.copy")
             .visible("child.copy", false)
-            .locked("child.copy", true)
+            .locked("child.copy", false)
             .hasMesh("child.copy", childMesh)
             .hasMaterial("child.copy", material)
             .entityTransformNear("child.copy", childExpected)
@@ -627,4 +661,88 @@ TEST(GroupingPublicApiTests, DuplicateSelectedHierarchyCopiesStateSelectsCloneAn
             .hasAlias("group.copy")
             .childCount("group.copy", 1u)
             .selectedAliases({"group.copy"});
+}
+
+TEST(GroupingPublicApiTests, DuplicateMixedMeshAndLightHierarchyCopiesStateAndUndoRedoAsOneOperation) {
+    BehaviorScenario scenario = BehaviorScenario::newProject();
+    givenBoxAt(scenario, "mesh", "Mixed Duplicate Mesh", {-2.0f, 0.0f, 0.0f});
+
+    QuaderCreatePointLightArgs lightArgs;
+    lightArgs.name = "Mixed Duplicate Light";
+    lightArgs.transform.position = {3.0f, 1.0f, 0.0f};
+    const QuaderApiResult<QuaderEntityRef> light = scenario.api().scene().createPointLight(lightArgs);
+    ASSERT_TRUE(light.ok) << light.message;
+    scenario.remember("light", light.value);
+
+    scenario.given().selectedAliases({"mesh", "light"}, "light");
+    scenario.when().groupSelection("group", "Mixed Duplicate Group");
+    const EntityId sourceGroup = scenario.entity("group");
+
+    scenario.when().execute(QuaderCommand::DuplicateSelection);
+    scenario.then().command().okChanged();
+    const EntityId duplicateGroup = selectedEntityExcluding(scenario.api(), sourceGroup);
+    ASSERT_NE(duplicateGroup, InvalidEntityId);
+    scenario.remember("group.copy", duplicateGroup);
+
+    const std::vector<QuaderEntitySnapshot> children = childrenOf(scenario.api(), duplicateGroup);
+    ASSERT_EQ(children.size(), 2u);
+    EXPECT_TRUE(std::any_of(children.begin(), children.end(), [](const QuaderEntitySnapshot& child) {
+        return child.hasMesh;
+    }));
+    EXPECT_TRUE(std::any_of(children.begin(), children.end(), [](const QuaderEntitySnapshot& child) {
+        return child.hasLight && child.light.type == QuaderLightType::Point;
+    }));
+    scenario.then().history().undoLabel("Duplicate Selection");
+
+    scenario.when().undo();
+    EXPECT_FALSE(entityById(scenario.api(), duplicateGroup).has_value());
+    scenario.then().history().redoLabel("Duplicate Selection");
+
+    scenario.when().redo();
+    const EntityId redoneDuplicateGroup = selectedEntityExcluding(scenario.api(), sourceGroup);
+    ASSERT_NE(redoneDuplicateGroup, InvalidEntityId);
+    EXPECT_EQ(childrenOf(scenario.api(), redoneDuplicateGroup).size(), 2u);
+}
+
+TEST(GroupingPublicApiTests, DeleteMixedMeshAndLightHierarchyUndoRedoRestoresSceneComponents) {
+    BehaviorScenario scenario = BehaviorScenario::newProject();
+    givenBoxAt(scenario, "mesh", "Mixed Delete Mesh", {-1.0f, 0.0f, 0.0f});
+
+    QuaderCreatePointLightArgs lightArgs;
+    lightArgs.name = "Mixed Delete Light";
+    lightArgs.transform.position = {2.0f, 4.0f, 0.0f};
+    const QuaderApiResult<QuaderEntityRef> light = scenario.api().scene().createPointLight(lightArgs);
+    ASSERT_TRUE(light.ok) << light.message;
+    scenario.remember("light", light.value);
+
+    scenario.given().selectedAliases({"mesh", "light"}, "light");
+    scenario.when().groupSelection("group", "Mixed Delete Group");
+    const EntityId group = scenario.entity("group");
+    const EntityId mesh = scenario.entity("mesh");
+    const EntityId lightEntity = scenario.entity("light");
+    selectGroupForCommandDelete(scenario, "group");
+
+    scenario.when().execute(QuaderCommand::DeleteSelection);
+    scenario.then().command().okChanged();
+    EXPECT_FALSE(entityById(scenario.api(), group).has_value());
+    EXPECT_FALSE(entityById(scenario.api(), mesh).has_value());
+    EXPECT_FALSE(entityById(scenario.api(), lightEntity).has_value());
+    scenario.then().history().undoLabel("Delete Selection");
+
+    scenario.when().undo();
+    ASSERT_TRUE(entityById(scenario.api(), group).has_value());
+    const std::optional<QuaderEntitySnapshot> restoredMesh = entityById(scenario.api(), mesh);
+    const std::optional<QuaderEntitySnapshot> restoredLight = entityById(scenario.api(), lightEntity);
+    ASSERT_TRUE(restoredMesh.has_value());
+    ASSERT_TRUE(restoredLight.has_value());
+    EXPECT_TRUE(restoredMesh->hasMesh);
+    EXPECT_TRUE(restoredLight->hasLight);
+    EXPECT_EQ(restoredLight->light.type, QuaderLightType::Point);
+    EXPECT_EQ(restoredMesh->parent, group);
+    EXPECT_EQ(restoredLight->parent, group);
+
+    scenario.when().redo();
+    EXPECT_FALSE(entityById(scenario.api(), group).has_value());
+    EXPECT_FALSE(entityById(scenario.api(), mesh).has_value());
+    EXPECT_FALSE(entityById(scenario.api(), lightEntity).has_value());
 }

@@ -12,6 +12,7 @@
 #include "core/undo_redo_execute_options.hpp"
 #include "scene/document/project_session.hpp"
 #include "editor/commands/document/document_command_edits.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "scene/scene_bounds.hpp"
 
@@ -101,11 +102,44 @@ UndoRedoExecuteOptions toUndoRedoOptions(QuaderSceneEditOptions options) {
     };
 }
 
+QuaderApiVoidResult runLockDocumentResultAndProjectSelection(
+        QuaderApiMutationRunner& mutations,
+        ProjectSession& session,
+        DocumentCommandResult result,
+        std::string_view label) {
+    if (result.ok && result.changed) {
+        session.modeling().projectObjectSelectionFromScene(true);
+    }
+    return mutations.runDocumentResult(std::move(result), label);
+}
+
 } // namespace
 
 QuaderSceneBatch::QuaderSceneBatch(QuaderSceneApi& scene, std::string label)
     : scene_(&scene)
     , label_(batchLabelOrDefault(std::move(label))) {}
+
+QuaderSceneBatch::QuaderSceneBatch(QuaderSceneBatch&& other) noexcept
+    : scene_(other.scene_)
+    , label_(std::move(other.label_))
+    , operations_(std::move(other.operations_))
+    , committed_(other.committed_) {
+    other.scene_ = nullptr;
+    other.committed_ = true;
+}
+
+QuaderSceneBatch& QuaderSceneBatch::operator=(QuaderSceneBatch&& other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
+    scene_ = other.scene_;
+    label_ = std::move(other.label_);
+    operations_ = std::move(other.operations_);
+    committed_ = other.committed_;
+    other.scene_ = nullptr;
+    other.committed_ = true;
+    return *this;
+}
 
 QuaderSceneBatch& QuaderSceneBatch::rename(EntityId entity, std::string name) {
     operations_.push_back(Operation{
@@ -238,14 +272,20 @@ QuaderApiVoidResult QuaderSceneApi::setVisibility(std::span<const QuaderSceneVis
 }
 
 QuaderApiVoidResult QuaderSceneApi::setLocked(EntityId entity, bool locked) {
-    return mutations_.runDocumentResult(
-            projectSession(session_).documentCommands().setLocked(entity, locked),
+    ProjectSession& session = projectSession(session_);
+    return runLockDocumentResultAndProjectSelection(
+            mutations_,
+            session,
+            session.documentCommands().setLocked(entity, locked),
             "Set Lock");
 }
 
 QuaderApiVoidResult QuaderSceneApi::setLocks(std::span<const QuaderSceneLockEdit> edits) {
-    return mutations_.runDocumentResult(
-            projectSession(session_).documentCommands().setLocks(toDocumentLockEdits(edits)),
+    ProjectSession& session = projectSession(session_);
+    return runLockDocumentResultAndProjectSelection(
+            mutations_,
+            session,
+            session.documentCommands().setLocks(toDocumentLockEdits(edits)),
             "Set Lock");
 }
 
@@ -358,6 +398,7 @@ QuaderSceneBatch QuaderSceneApi::batch(std::string label) {
 QuaderApiVoidResult QuaderSceneApi::commitBatch(const QuaderSceneBatch& batch) {
     std::vector<DocumentSceneBatchOperation> operations;
     operations.reserve(batch.operations_.size());
+    bool projectSelectionAfterBatch = false;
     for (const QuaderSceneBatch::Operation& operation : batch.operations_) {
         DocumentSceneBatchOperation documentOperation{
                 .entity = operation.entity,
@@ -382,14 +423,18 @@ QuaderApiVoidResult QuaderSceneApi::commitBatch(const QuaderSceneBatch& batch) {
             break;
         case QuaderSceneBatch::OperationKind::SetLocked:
             documentOperation.kind = DocumentSceneBatchOperationKind::SetLocked;
+            projectSelectionAfterBatch = true;
             break;
         }
         operations.push_back(std::move(documentOperation));
     }
 
-    return mutations_.runDocumentResult(
-            projectSession(session_).documentCommands().applySceneBatch(batch.label_, std::move(operations)),
-            batch.label_);
+    ProjectSession& session = projectSession(session_);
+    DocumentCommandResult result = session.documentCommands().applySceneBatch(batch.label_, std::move(operations));
+    if (projectSelectionAfterBatch) {
+        return runLockDocumentResultAndProjectSelection(mutations_, session, std::move(result), batch.label_);
+    }
+    return mutations_.runDocumentResult(std::move(result), batch.label_);
 }
 
 } // namespace quader

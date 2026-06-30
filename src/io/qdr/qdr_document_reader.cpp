@@ -42,35 +42,6 @@ void requireObject(const json& value, std::string_view label) {
     }
 }
 
-QVec2 vec2FromJson(const json& value) {
-    return {
-            value.value("x", 0.0f),
-            value.value("y", 0.0f),
-    };
-}
-
-QVec3 vec3FromJson(const json& value, QVec3 fallback = {}) {
-    if (!value.is_object()) {
-        return fallback;
-    }
-    return {
-            value.value("x", fallback.x),
-            value.value("y", fallback.y),
-            value.value("z", fallback.z),
-    };
-}
-
-TransformComponent transformFromJson(const json& value) {
-    TransformComponent transform;
-    if (!value.is_object()) {
-        return transform;
-    }
-    transform.position = vec3FromJson(value.value("position", json::object()));
-    transform.rotationEuler = vec3FromJson(value.value("rotationEuler", json::object()));
-    transform.scale = vec3FromJson(value.value("scale", json::object()), {1.0f, 1.0f, 1.0f});
-    return transform;
-}
-
 QVec3 fromRuntime(quader::QVec3 value) {
     return {value.x, value.y, value.z};
 }
@@ -89,9 +60,9 @@ MeshAsset meshFromJson(const json& value) {
     mesh.hasStableCpuTopology = value.value("hasStableCpuTopology", true);
     for (const json& vertexJson : value.value("vertices", json::array())) {
         mesh.vertices.push_back(MeshVertex{
-                .position = vec3FromJson(vertexJson.value("position", json::object())),
-                .normal = vec3FromJson(vertexJson.value("normal", json::object()), {0.0f, 1.0f, 0.0f}),
-                .uv = vec2FromJson(vertexJson.value("uv", json::object())),
+                .position = qdrVec3FromJson(vertexJson.value("position", json::object())),
+                .normal = qdrVec3FromJson(vertexJson.value("normal", json::object()), {0.0f, 1.0f, 0.0f}),
+                .uv = qdrVec2FromJson(vertexJson.value("uv", json::object())),
                 .rgba = vertexJson.value("rgba", 0xffffffffu),
         });
     }
@@ -130,7 +101,7 @@ TextureAsset textureFromJson(const json& value) {
 MaterialDocument materialFromJson(const json& value) {
     MaterialDocument material;
     material.name = value.value("name", std::string("Material"));
-    material.baseColor = vec3FromJson(value.value("baseColor", json::object()), {1.0f, 1.0f, 1.0f});
+    material.baseColor = qdrVec3FromJson(value.value("baseColor", json::object()), {1.0f, 1.0f, 1.0f});
     material.roughness = value.value("roughness", 1.0f);
     material.metallic = value.value("metallic", 0.0f);
     material.nodeGraphReserved = value.value("nodeGraphReserved", true);
@@ -142,107 +113,6 @@ MaterialDocument materialFromJson(const json& value) {
         }
     }
     return material;
-}
-
-MeshComponent meshComponentFromJson(const json& value) {
-    MeshComponent mesh;
-    mesh.mesh = value.value("mesh", InvalidAssetId);
-    mesh.editorOnly = value.value("editorOnly", false);
-    mesh.castShadows = value.value("castShadows", true);
-    mesh.doubleSided = value.value("doubleSided", false);
-    mesh.generateCollisions = value.value("generateCollisions", true);
-    mesh.collisionType = qdrMeshCollisionTypeFromName(value.value("collisionType", std::string("box")));
-    mesh.displayCollision = value.value("displayCollision", false);
-    mesh.bodyType = qdrMeshPhysicsBodyTypeFromName(value.value("bodyType", std::string("staticBody")));
-    return mesh;
-}
-
-MaterialComponent materialComponentFromJson(const json& value) {
-    MaterialComponent material;
-    material.material = value.value("material", InvalidAssetId);
-    if (const auto slots = value.find("slots"); slots != value.end() && slots->is_object()) {
-        for (const auto& [slotText, materialId] : slots->items()) {
-            std::size_t consumed = 0u;
-            const unsigned long slot = std::stoul(slotText, &consumed, 10);
-            if (consumed != slotText.size() || slot > std::numeric_limits<std::uint32_t>::max()) {
-                throw std::runtime_error("QDR project document material slot binding contains an invalid slot id.");
-            }
-            material.materialSlots[static_cast<std::uint32_t>(slot)] = materialId.get<AssetId>();
-        }
-    }
-    return material;
-}
-
-LightComponent lightFromJson(const json& value) {
-    LightComponent light;
-    light.type = qdrLightTypeFromName(value.value("type", std::string("directional")));
-    light.color = vec3FromJson(value.value("color", json::object()), {1.0f, 1.0f, 1.0f});
-    light.intensity = value.value("intensity", 1.0f);
-    light.range = value.value("range", 10.0f);
-    light.castsShadows = value.value("castsShadows", false);
-    return light;
-}
-
-SceneToneMapping sceneToneMappingFromName(std::string_view name) {
-    if (name == "linear") {
-        return SceneToneMapping::Linear;
-    }
-    if (name == "acesLegacy") {
-        return SceneToneMapping::AcesLegacy;
-    }
-    if (name == "aces") {
-        return SceneToneMapping::Aces;
-    }
-    if (name == "filmic") {
-        return SceneToneMapping::Filmic;
-    }
-    if (name == "displayRange") {
-        return SceneToneMapping::DisplayRange;
-    }
-    return SceneToneMapping::Aces;
-}
-
-SceneSettingsComponent sceneSettingsFromJson(const json& value) {
-    SceneSettingsComponent settings;
-    if (!value.is_object()) {
-        return settings;
-    }
-    if (const auto environmentJson = value.find("environment");
-            environmentJson != value.end() && environmentJson->is_object()) {
-        settings.environment.environmentId = environmentJson->value("environmentId", settings.environment.environmentId);
-        settings.environment.enabled = environmentJson->value("enabled", settings.environment.enabled);
-        settings.environment.showBackground =
-                environmentJson->value("showBackground", settings.environment.showBackground);
-        settings.environment.intensity = environmentJson->value("intensity", settings.environment.intensity);
-        settings.environment.backgroundIntensity =
-                environmentJson->value("backgroundIntensity", settings.environment.backgroundIntensity);
-        settings.environment.rotationY = environmentJson->value("rotationY", settings.environment.rotationY);
-    }
-    if (const auto cameraJson = value.find("camera"); cameraJson != value.end() && cameraJson->is_object()) {
-        settings.camera.aperture = cameraJson->value("aperture", settings.camera.aperture);
-        settings.camera.shutterSpeed = cameraJson->value("shutterSpeed", settings.camera.shutterSpeed);
-        settings.camera.sensitivity = cameraJson->value("sensitivity", settings.camera.sensitivity);
-        settings.camera.nearPlane = cameraJson->value("nearPlane", settings.camera.nearPlane);
-        settings.camera.farPlane = cameraJson->value("farPlane", settings.camera.farPlane);
-    }
-    if (const auto postProcessJson = value.find("postProcess");
-            postProcessJson != value.end() && postProcessJson->is_object()) {
-        settings.postProcess.enabled = postProcessJson->value("enabled", settings.postProcess.enabled);
-        settings.postProcess.antiAliasing = postProcessJson->value("antiAliasing", settings.postProcess.antiAliasing);
-        settings.postProcess.ambientOcclusion =
-                postProcessJson->value("ambientOcclusion", settings.postProcess.ambientOcclusion);
-        settings.postProcess.ambientOcclusionIntensity =
-                postProcessJson->value("ambientOcclusionIntensity", settings.postProcess.ambientOcclusionIntensity);
-        settings.postProcess.ambientOcclusionRadius =
-                postProcessJson->value("ambientOcclusionRadius", settings.postProcess.ambientOcclusionRadius);
-        settings.postProcess.bloom = postProcessJson->value("bloom", settings.postProcess.bloom);
-        settings.postProcess.bloomStrength =
-                postProcessJson->value("bloomStrength", settings.postProcess.bloomStrength);
-        settings.postProcess.dithering = postProcessJson->value("dithering", settings.postProcess.dithering);
-        settings.postProcess.toneMapping = sceneToneMappingFromName(
-                postProcessJson->value("toneMapping", std::string("aces")));
-    }
-    return settings;
 }
 
 EditorObjectId editorObjectIdFromJson(const json& value) {
@@ -359,7 +229,7 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
             entitiesWithExplicitEditorObjectIds.insert(entity);
         }
 
-        document.scene().setTransform(entity, transformFromJson(entityJson.value("transform", json::object())));
+        document.scene().setTransform(entity, qdrTransformComponentFromJson(entityJson.value("transform", json::object())));
         if (const auto visibilityJson = entityJson.find("visibility");
                 visibilityJson != entityJson.end() && visibilityJson->is_object()) {
             document.scene().setVisible(entity, visibilityJson->value("visible", true));
@@ -374,22 +244,22 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
             });
         }
         if (const auto meshJson = entityJson.find("mesh"); meshJson != entityJson.end() && meshJson->is_object()) {
-            document.scene().setMesh(entity, meshComponentFromJson(*meshJson));
+            document.scene().setMesh(entity, qdrMeshComponentFromJson(*meshJson));
         }
         if (const auto materialJson = entityJson.find("material");
                 materialJson != entityJson.end() && materialJson->is_object()) {
-            MaterialComponent material = materialComponentFromJson(*materialJson);
+            MaterialComponent material = qdrMaterialComponentFromJson(*materialJson);
             if (material.material != InvalidAssetId) {
                 document.scene().setMaterial(entity, std::move(material));
             }
         }
         if (const auto lightJson = entityJson.find("light"); lightJson != entityJson.end() && lightJson->is_object()) {
-            document.scene().setLight(entity, lightFromJson(*lightJson));
+            document.scene().setLight(entity, qdrLightComponentFromJson(*lightJson));
         }
         if (entityJson.value("sceneRoot", false) ||
                 entityJson.find("sceneSettings") != entityJson.end()) {
             const json settingsJson = entityJson.value("sceneSettings", json::object());
-            if (!document.scene().setSceneSettings(entity, sceneSettingsFromJson(settingsJson))) {
+            if (!document.scene().setSceneSettings(entity, qdrSceneSettingsComponentFromJson(settingsJson))) {
                 throw std::runtime_error("QDR project document contains multiple scene root entities.");
             }
         }

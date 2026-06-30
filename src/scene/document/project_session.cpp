@@ -35,7 +35,6 @@ void ProjectSession::rebuildServices() {
     selection_ = std::make_unique<EditorSelectionService>(
             document_.scene(),
             *documentCommands_,
-            document_.assets(),
             *modeling_);
 }
 

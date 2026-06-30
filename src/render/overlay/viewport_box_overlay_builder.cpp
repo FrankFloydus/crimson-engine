@@ -7,6 +7,7 @@
 #include "render/overlay/viewport_box_overlay_builder.hpp"
 
 #include "render/overlay/viewport_overlay_dash.hpp"
+#include "render/overlay/viewport_overlay_geometry.hpp"
 #include "render/viewport_overlay_policy.hpp"
 
 #include <algorithm>
@@ -30,7 +31,7 @@ ViewportOverlayLine boxPreviewLine(QVec3 start, QVec3 end) {
             .start = start,
             .end = end,
             .color = kOverlayToolBoxPreviewLineColor,
-            .widthPixels = 2.0f,
+            .widthPixels = kOverlayToolBoxPreviewLineWidthPixels,
             .styleRole = ViewportOverlayStyleRole::ExplicitColor,
             .source = ViewportOverlaySource::Tool,
     };
@@ -40,18 +41,13 @@ void appendLine(ViewportOverlayFrame& overlayFrame, QVec3 start, QVec3 end) {
     overlayFrame.lines.push_back(boxPreviewLine(start, end));
 }
 
-QVec3 normalizedOr(QVec3 value, QVec3 fallback) {
-    const float magnitude = length(value);
-    return magnitude <= 0.000001f ? fallback : value / magnitude;
-}
-
 OverlayScreenPoint projectOverlayWorldPoint(const ViewportOverlayCamera& camera, QVec3 worldPoint) {
     const float width = std::max(camera.viewportSize.x, 1.0f);
     const float height = std::max(camera.viewportSize.y, 1.0f);
     const float aspect = width / height;
-    const QVec3 forward = normalizedOr(camera.forward, {0.0f, 0.0f, -1.0f});
-    const QVec3 right = normalizedOr(camera.right, {1.0f, 0.0f, 0.0f});
-    const QVec3 up = normalizedOr(camera.up, {0.0f, 1.0f, 0.0f});
+    const QVec3 forward = viewportOverlayNormalizeOr(camera.forward, {0.0f, 0.0f, -1.0f});
+    const QVec3 right = viewportOverlayNormalizeOr(camera.right, {1.0f, 0.0f, 0.0f});
+    const QVec3 up = viewportOverlayNormalizeOr(camera.up, {0.0f, 1.0f, 0.0f});
     const QVec3 cameraDelta = worldPoint - camera.eye;
     const float depth = dot(cameraDelta, forward);
     if (depth <= camera.nearPlane || depth >= camera.farPlane) {

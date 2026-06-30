@@ -104,11 +104,31 @@ TEST(UiLayoutGuardrailTests, InspectorSceneSettingsEditThroughPublicSceneApi) {
 
     expectContains(sceneSettingsSection, "context.editor.scene().setSceneSettings");
     expectContains(sceneSettingsSection, "toApiSceneSettings");
+    expectContains(sceneSettingsSection, "environment_clear_color");
+    expectContains(sceneSettingsSection, "ui.inspector.clear_color");
     expectContains(sceneSettingsSection, "post_process_tone_mapping");
     expectContains(sceneSettingsSection, "post_process_dithering");
     expectContains(sceneSettingsSection, "camera_near");
     expectContains(sceneSettingsSection, "camera_far");
     expectMissing(inspector, "document.setSceneSettings(");
+}
+
+TEST(UiLayoutGuardrailTests, InspectorSectionsStartCollapsed) {
+    const std::string inspector = readSourceFile({"src", "ui", "inspector_panel.cpp"});
+
+    expectContains(inspector, "ImGui::CollapsingHeader(");
+    expectMissing(inspector, "ImGuiTreeNodeFlags_DefaultOpen");
+}
+
+TEST(UiLayoutGuardrailTests, OutlinerNonLeafNodesStartExpanded) {
+    const std::string outliner = readSourceFile({"src", "ui", "outliner_panel.cpp"});
+    const std::string treeNodeSetup = sourceSlice(
+            outliner,
+            "ImGuiTreeNodeFlags treeFlags",
+            "const bool open = ImGui::TreeNodeEx");
+
+    expectContains(treeNodeSetup, "record.hasChildren");
+    expectContains(treeNodeSetup, "ImGuiTreeNodeFlags_DefaultOpen");
 }
 
 TEST(UiLayoutGuardrailTests, InspectorContinuousInputsLiveApplyWithMergeKeys) {

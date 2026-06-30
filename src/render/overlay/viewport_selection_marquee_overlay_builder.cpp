@@ -8,6 +8,7 @@
 
 #include "editor/viewport/viewport_selection_interaction.hpp"
 #include "render/overlay/viewport_overlay_dash.hpp"
+#include "render/overlay/viewport_overlay_geometry.hpp"
 #include "render/viewport_overlay_policy.hpp"
 
 #include <algorithm>
@@ -18,18 +19,13 @@
 namespace quader {
 namespace {
 
-QVec3 normalizedOr(QVec3 value, QVec3 fallback) {
-    const float magnitude = length(value);
-    return magnitude <= 0.000001f ? fallback : value / magnitude;
-}
-
 QVec3 marqueeWorldPoint(const ViewportOverlayCamera& camera, QVec2 screen) {
-    const QVec3 forward = normalizedOr(camera.forward, {0.0f, 0.0f, -1.0f});
-    QVec3 right = normalizedOr(camera.right, {1.0f, 0.0f, 0.0f});
+    const QVec3 forward = viewportOverlayNormalizeOr(camera.forward, {0.0f, 0.0f, -1.0f});
+    QVec3 right = viewportOverlayNormalizeOr(camera.right, {1.0f, 0.0f, 0.0f});
     if (std::abs(dot(right, forward)) > 0.999f) {
-        right = normalizedOr(cross(forward, {0.0f, 1.0f, 0.0f}), {1.0f, 0.0f, 0.0f});
+        right = viewportOverlayNormalizeOr(cross(forward, {0.0f, 1.0f, 0.0f}), {1.0f, 0.0f, 0.0f});
     }
-    const QVec3 up = normalizedOr(cross(right, forward), {0.0f, 1.0f, 0.0f});
+    const QVec3 up = viewportOverlayNormalizeOr(cross(right, forward), {0.0f, 1.0f, 0.0f});
     const float width = std::max(camera.viewportSize.x, 1.0f);
     const float height = std::max(camera.viewportSize.y, 1.0f);
     const float aspect = width / height;
@@ -65,7 +61,7 @@ void appendSegment(
             .start = marqueeWorldPoint(camera, start),
             .end = marqueeWorldPoint(camera, end),
             .color = color,
-            .widthPixels = 1.5f,
+            .widthPixels = kOverlaySelectionMarqueeLineWidthPixels,
             .styleRole = ViewportOverlayStyleRole::ExplicitColor,
             .source = ViewportOverlaySource::Tool,
     });

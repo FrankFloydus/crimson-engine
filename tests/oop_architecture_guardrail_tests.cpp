@@ -270,6 +270,38 @@ TEST(OopArchitectureGuardrailTests, UiShellDoesNotOwnToolImplementations) {
     }
 }
 
+TEST(OopArchitectureGuardrailTests, InteractionToolMathStaysInSharedOwner) {
+    const std::string owner = readFile(sourceRoot() / "src/editor/interactions/tool_math_internal.hpp");
+    const std::string extrude = readFile(sourceRoot() / "src/editor/interactions/extrude_tool.cpp");
+    const std::string knife = readFile(sourceRoot() / "src/editor/interactions/knife_tool.cpp");
+    const std::string snapping = readFile(sourceRoot() / "src/editor/interactions/tool_snapping.cpp");
+
+    EXPECT_NE(owner.find("tool_geometry_vec2"), std::string::npos);
+    EXPECT_NE(owner.find("tool_geometry_vec3"), std::string::npos);
+    EXPECT_NE(owner.find("tool_poly_vec2"), std::string::npos);
+    EXPECT_NE(owner.find("tool_poly_vec3"), std::string::npos);
+    EXPECT_NE(owner.find("vec3_normalize_or"), std::string::npos);
+    EXPECT_NE(extrude.find("tool_math_internal.hpp"), std::string::npos);
+    EXPECT_NE(extrude.find("normalized_axis("), std::string::npos);
+    EXPECT_NE(extrude.find("safe_grid_size("), std::string::npos);
+    EXPECT_NE(knife.find("vec3_normalize_or"), std::string::npos);
+    EXPECT_NE(knife.find("tool_geometry_vec2"), std::string::npos);
+    EXPECT_NE(knife.find("tool_geometry_vec3"), std::string::npos);
+    EXPECT_NE(snapping.find("vec3_normalize_or"), std::string::npos);
+
+    for (const std::string& source : {extrude, knife, snapping}) {
+        EXPECT_EQ(source.find("to_geometry_vec2"), std::string::npos);
+        EXPECT_EQ(source.find("to_geometry_vec3"), std::string::npos);
+        EXPECT_EQ(source.find("to_poly_vec2"), std::string::npos);
+        EXPECT_EQ(source.find("to_poly_vec3"), std::string::npos);
+        EXPECT_EQ(source.find("QVec3 normalize_or("), std::string::npos);
+        EXPECT_EQ(source.find("auto normalize_or"), std::string::npos);
+        EXPECT_EQ(source.find("QVec3 normalized_axis("), std::string::npos);
+        EXPECT_EQ(source.find("double safe_grid_size("), std::string::npos);
+        EXPECT_EQ(source.find("double vec2_distance_squared("), std::string::npos);
+    }
+}
+
 TEST(OopArchitectureGuardrailTests, UiShellLeavesSceneOverlayExtractionToRenderBuilder) {
     const std::string uiSystem = readFile(sourceRoot() / "src/ui/ui_system.cpp");
     const std::string viewportPanel = readFile(sourceRoot() / "src/ui/viewport_panel.cpp");
@@ -293,6 +325,31 @@ TEST(OopArchitectureGuardrailTests, UiShellLeavesSceneOverlayExtractionToRenderB
          }) {
         EXPECT_EQ(uiShell.find(forbidden), std::string::npos) << forbidden;
     }
+}
+
+TEST(OopArchitectureGuardrailTests, ViewportRuntimeAndResetUseDeclaredToolOwners) {
+    const std::string runtimeHeader = readFile(sourceRoot() / "src/editor/tools/viewport_tool_runtime.hpp");
+    const std::string runtimeSource = readFile(sourceRoot() / "src/editor/tools/viewport_tool_runtime.cpp");
+    const std::string interactionHeader =
+            readFile(sourceRoot() / "src/editor/viewport/viewport_interaction_controller.hpp");
+    const std::string interactionSource =
+            readFile(sourceRoot() / "src/editor/viewport/viewport_interaction_controller.cpp");
+    const std::string gizmoHeader = readFile(sourceRoot() / "src/editor/viewport/transform_gizmo_interaction.hpp");
+    const std::string gizmoSource = readFile(sourceRoot() / "src/editor/viewport/transform_gizmo_interaction.cpp");
+
+    EXPECT_EQ(runtimeHeader.find("modal_viewport_tool.hpp"), std::string::npos);
+    EXPECT_EQ(runtimeHeader.find("transform_viewport_tool.hpp"), std::string::npos);
+    EXPECT_EQ(runtimeSource.find("dynamic_cast"), std::string::npos);
+    EXPECT_NE(runtimeSource.find("tool.kind() == ToolKind::Modal"), std::string::npos);
+    EXPECT_NE(runtimeSource.find("tool.kind() == ToolKind::Transform"), std::string::npos);
+
+    EXPECT_NE(interactionHeader.find("reset(QuaderEditorApi* editor = nullptr)"), std::string::npos);
+    EXPECT_NE(interactionSource.find("transformGizmo_.reset(editor);"), std::string::npos);
+    EXPECT_NE(interactionSource.find("selection_.reset();"), std::string::npos);
+    EXPECT_NE(gizmoHeader.find("reset(QuaderEditorApi* editor = nullptr)"), std::string::npos);
+    EXPECT_NE(gizmoSource.find("cancelActiveDrag(*editor)"), std::string::npos);
+    EXPECT_NE(gizmoSource.find("clearFrame();"), std::string::npos);
+    EXPECT_NE(gizmoSource.find("currentFrame_.reset();"), std::string::npos);
 }
 
 TEST(OopArchitectureGuardrailTests, ViewportMaximizedStateBelongsToWorkspaceService) {
@@ -320,6 +377,96 @@ TEST(OopArchitectureGuardrailTests, ViewportMaximizedStateBelongsToWorkspaceServ
     EXPECT_NE(workspaceHeader.find("focusedPaneMaximized"), std::string::npos);
     EXPECT_NE(workspaceSource.find("focusedPaneMaximized_"), std::string::npos);
     EXPECT_NE(runtimeSource.find("result.maximizedToggleRequested = true"), std::string::npos);
+}
+
+TEST(OopArchitectureGuardrailTests, OverlayGeometryAndPixelPolicyStayShared) {
+    const std::string policy = readFile(sourceRoot() / "src/render/viewport_overlay_policy.hpp");
+    const std::string geometry = readFile(sourceRoot() / "src/render/overlay/viewport_overlay_geometry.hpp");
+    const std::string box = readFile(sourceRoot() / "src/render/overlay/viewport_box_overlay_builder.cpp");
+    const std::string marquee = readFile(sourceRoot() / "src/render/overlay/viewport_selection_marquee_overlay_builder.cpp");
+    const std::string gizmo = readFile(sourceRoot() / "src/render/overlay/viewport_transform_gizmo_overlay_builder.cpp");
+    const std::string interaction = readFile(sourceRoot() / "src/editor/viewport/transform_gizmo_interaction.cpp");
+    const std::string scene = readFile(sourceRoot() / "src/render/overlay/viewport_scene_overlay_builder.cpp");
+    const std::string drawnPlane = readFile(sourceRoot() / "src/editor/projection/drawn_plane_overlay_projection.cpp");
+
+    for (std::string_view constant : {
+                 std::string_view{"kOverlayToolBoxPreviewLineWidthPixels"},
+                 std::string_view{"kOverlaySelectionMarqueeLineWidthPixels"},
+                 std::string_view{"kOverlayDrawnPlanePointSizePixels"},
+                 std::string_view{"kOverlayDrawnPlaneLineWidthPixels"},
+                 std::string_view{"kOverlayLightMarkerPointSizePixels"},
+                 std::string_view{"kOverlayLightMarkerOutlineGrowthPixels"},
+                 std::string_view{"kOverlayTransformGizmoSizePixels"},
+                 std::string_view{"kOverlayTransformGizmoPickRadiusPixels"},
+                 std::string_view{"kOverlayTransformGizmoMoveCenterRadiusPixels"},
+                 std::string_view{"kOverlayTransformGizmoScaleHandleSizePixels"},
+                 std::string_view{"kOverlayTransformGizmoScaleCenterSizePixels"},
+                 std::string_view{"kOverlayTransformGizmoAxisLineWidthPixels"},
+         }) {
+        EXPECT_NE(policy.find(constant), std::string::npos) << constant;
+    }
+
+    EXPECT_NE(geometry.find("viewportOverlayNormalizeOr"), std::string::npos);
+    EXPECT_NE(geometry.find("viewportOverlayFallbackPerpendicular"), std::string::npos);
+    EXPECT_NE(box.find("viewportOverlayNormalizeOr"), std::string::npos);
+    EXPECT_NE(marquee.find("viewportOverlayNormalizeOr"), std::string::npos);
+    EXPECT_NE(gizmo.find("viewportOverlayNormalizeOr"), std::string::npos);
+    EXPECT_NE(gizmo.find("viewportOverlayFallbackPerpendicular"), std::string::npos);
+    EXPECT_NE(interaction.find("kOverlayTransformGizmoSizePixels"), std::string::npos);
+    EXPECT_NE(interaction.find("kOverlayTransformGizmoPickRadiusPixels"), std::string::npos);
+    EXPECT_NE(scene.find("kOverlayLightMarkerPointSizePixels"), std::string::npos);
+    EXPECT_NE(scene.find("kOverlayLightMarkerOutlineGrowthPixels"), std::string::npos);
+    EXPECT_NE(drawnPlane.find("kOverlayDrawnPlanePointSizePixels"), std::string::npos);
+    EXPECT_NE(drawnPlane.find("kOverlayDrawnPlaneLineWidthPixels"), std::string::npos);
+
+    for (const std::string& source : {box, marquee, gizmo}) {
+        EXPECT_EQ(source.find("normalizedOr("), std::string::npos);
+        EXPECT_EQ(source.find("safeNormalize("), std::string::npos);
+        EXPECT_EQ(source.find("fallbackPerpendicular("), std::string::npos);
+    }
+}
+
+TEST(OopArchitectureGuardrailTests, SceneEnvironmentCatalogOwnsIblResourceContract) {
+    const std::string catalog = readFile(sourceRoot() / "src/core/scene_environment_catalog.hpp");
+    const std::string sceneComponents = readFile(sourceRoot() / "src/scene/components.hpp");
+    const std::string apiTypes = readFile(sourceRoot() / "src/api/quader_api_types.hpp");
+    const std::string inspector = readFile(sourceRoot() / "src/ui/inspector_panel.cpp");
+    const std::string environmentLibrary = readFile(sourceRoot() / "src/render/filament_environment_library.cpp");
+
+    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/scene/scene_environment_catalog.hpp"));
+    EXPECT_NE(catalog.find("kDefaultSceneEnvironmentId"), std::string::npos);
+    EXPECT_NE(catalog.find("sceneEnvironmentCatalog()"), std::string::npos);
+    EXPECT_NE(catalog.find("sceneEnvironmentDescriptor("), std::string::npos);
+    EXPECT_NE(sceneComponents.find("core/scene_environment_catalog.hpp"), std::string::npos);
+    EXPECT_NE(apiTypes.find("core/scene_environment_catalog.hpp"), std::string::npos);
+    EXPECT_NE(inspector.find("sceneEnvironmentCatalog()"), std::string::npos);
+    EXPECT_NE(environmentLibrary.find("sceneEnvironmentDescriptor(environmentId)"), std::string::npos);
+    EXPECT_EQ(apiTypes.find("scene/scene_environment_catalog.hpp"), std::string::npos);
+}
+
+TEST(OopArchitectureGuardrailTests, RuntimeMaterialResourceContractsUseCatalogs) {
+    const std::string materialCatalog = readFile(sourceRoot() / "src/render/filament_material_catalog.hpp");
+    const std::string materialLibrary = readFile(sourceRoot() / "src/render/filament_material_library.cpp");
+    const std::string defaultCatalog = readFile(sourceRoot() / "src/assets/default_material_catalog.hpp");
+    const std::string app = readFile(sourceRoot() / "src/app/app.cpp");
+    const std::string host = readFile(sourceRoot() / "src/editor/metadata/host_contract.cpp");
+
+    EXPECT_NE(materialCatalog.find("kFilamentMaterialDirectory"), std::string::npos);
+    EXPECT_NE(materialCatalog.find("kQuaderMeshMaterialFile"), std::string::npos);
+    EXPECT_NE(materialCatalog.find("kImguiMaterialFile"), std::string::npos);
+    EXPECT_NE(materialLibrary.find("filament_material_catalog.hpp"), std::string::npos);
+    EXPECT_NE(materialLibrary.find("std::string(kFilamentMaterialDirectory)"), std::string::npos);
+    EXPECT_EQ(materialLibrary.find("\"materials\" / \"quader_mesh.filamat\""), std::string::npos);
+    EXPECT_EQ(materialLibrary.find("\"materials\" / \"imgui.filamat\""), std::string::npos);
+
+    EXPECT_NE(defaultCatalog.find("kDefaultMaterialAlbedoTexturePackagePath"), std::string::npos);
+    EXPECT_NE(defaultCatalog.find("kDefaultMaterialRoughnessTexturePackagePath"), std::string::npos);
+    EXPECT_NE(app.find("default_material_catalog.hpp"), std::string::npos);
+    EXPECT_NE(host.find("default_material_catalog.hpp"), std::string::npos);
+    EXPECT_NE(app.find("kDefaultMaterialAlbedoTexturePackagePath"), std::string::npos);
+    EXPECT_NE(host.find("kDefaultMaterialAlbedoTexturePackagePath"), std::string::npos);
+    EXPECT_EQ(app.find("\"materials/default/default_albedo.png\""), std::string::npos);
+    EXPECT_EQ(host.find("\"materials/default/default_albedo.png\""), std::string::npos);
 }
 
 TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPreviewTransactions) {

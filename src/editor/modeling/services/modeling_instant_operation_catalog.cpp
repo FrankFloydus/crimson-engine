@@ -96,9 +96,7 @@ std::span<const ModelingInstantOperationCatalogEntry> modelingInstantOperationCa
                     "Duplicate Meshes",
                     "Duplicate",
                     objectSelection(),
-                    RuntimeId::duplicate_meshes,
-                    "edit.duplicate",
-                    false),
+                    RuntimeId::duplicate_meshes),
             runtimeEntry(
                     ModelingInstantOperationId::CombineMeshes,
                     "combine_meshes",

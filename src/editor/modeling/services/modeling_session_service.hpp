@@ -69,6 +69,8 @@ public:
     [[nodiscard]] std::optional<EntityId> entityForModelingObject(int modelingObjectId) const;
     [[nodiscard]] std::optional<int> modelingObjectForEntity(EntityId entity) const;
     [[nodiscard]] std::optional<MeshAsset> compileObjectMesh(int modelingObjectId) const;
+    [[nodiscard]] std::optional<EntityId> pickObjectEntity(const ModelingPickSelectRequest& request) const;
+    [[nodiscard]] std::vector<EntityId> boxPickObjectEntities(const ModelingBoxSelectRequest& request) const;
     [[nodiscard]] std::optional<QVec3> selectionCenter() const;
     [[nodiscard]] ModelingSelectionMode selectionMode() const;
     [[nodiscard]] ModelingSelectionSummary selectionSummary() const;
@@ -80,12 +82,13 @@ public:
     ModelingCommandResult restoreHistoryMemento(const ModelingSessionMemento& memento);
 
     ModelingCommandResult duplicateSelectedHierarchyForGroupDrag(DocumentCommandService& documentCommands);
+    ModelingCommandResult duplicateSelectedEntityHierarchy(DocumentCommandService& documentCommands);
     ModelingCommandResult setSelectionMode(ModelingSelectionMode mode);
     ModelingCommandResult selectAll();
     ModelingCommandResult invertSelection();
     ModelingCommandResult clearSelection();
     std::unique_ptr<IUndoableCommand> createDeleteSelectionCommand();
-    [[nodiscard]] bool hasSelectedSceneGroupRoot() const;
+    [[nodiscard]] bool hasSelectedSceneAwareDeleteRoot() const;
     ModelingCommandResult deleteComponentSelection();
     ModelingCommandResult copySelection();
     ModelingCommandResult pasteSelection();
@@ -169,7 +172,7 @@ public:
     ModelingCreateBoxResult commitBox(std::string name);
     ModelingCommandResult cancelBox();
     ModelingCreateBoxResult createMesh(const ModelingCreateMeshRequest& request);
-    void projectObjectSelectionFromScene();
+    void projectObjectSelectionFromScene(bool forceObjectMode = false);
     ModelingCommandResult setObjectSelection(std::span<const EntityId> entities, EntityId active = InvalidEntityId);
     ModelingCommandResult setComponentSelection(const ModelingComponentSelectionRequest& request);
     ModelingCommandResult moveSelection(QVec3 delta);

@@ -10,7 +10,9 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
+#include "core/scene_environment_catalog.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/transform_pivot.hpp"
 #include "ui/ui_context.hpp"
@@ -76,12 +78,6 @@ const char* selectionModeFallback(ModelingSelectionMode mode) {
         return "Group";
     }
     return "Object";
-}
-
-bool componentSelectionMode(ModelingSelectionMode mode) {
-    return mode == ModelingSelectionMode::Vertex ||
-            mode == ModelingSelectionMode::Edge ||
-            mode == ModelingSelectionMode::Face;
 }
 
 const char* activeSelectionKindKey(ModelingActiveSelectionKind kind) {
@@ -437,15 +433,15 @@ void drawSceneSettingsInspector(
     };
 
     const std::string environmentLabel = localization.text("ui.inspector.environment", "Environment");
-    if (ImGui::CollapsingHeader(environmentLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader(environmentLabel.c_str())) {
         const std::string presetLabel = localization.text("ui.inspector.environment_preset", "Preset");
         std::string environmentId = settings.environment.environmentId;
-        const std::vector<std::pair<std::string, std::string>> environmentOptions{
-                {"lightroom_14b", localization.text("ui.inspector.environment.lightroom_14b", "Lightroom 14b")},
-                {"default_env", localization.text("ui.inspector.environment.default_env", "Default Studio")},
-                {"pillars_2k", localization.text("ui.inspector.environment.pillars_2k", "Pillars 2K")},
-                {"venetian_crossroads_2k", localization.text("ui.inspector.environment.venetian_crossroads_2k", "Venetian Crossroads 2K")},
-        };
+        std::vector<std::pair<std::string, std::string>> environmentOptions;
+        for (const SceneEnvironmentDescriptor& descriptor : sceneEnvironmentCatalog()) {
+            environmentOptions.emplace_back(
+                    std::string(descriptor.id),
+                    localization.text(std::string(descriptor.labelKey), std::string(descriptor.fallbackLabel)));
+        }
         if (comboWithLeftLabel("environment_preset", presetLabel.c_str(), &environmentId, environmentOptions)) {
             settings.environment.environmentId = environmentId;
             applySettings(settings);
@@ -463,6 +459,28 @@ void drawSceneSettingsInspector(
         if (checkboxWithLeftLabel("environment_background", backgroundLabel.c_str(), &showBackground)) {
             settings.environment.showBackground = showBackground;
             applySettings(settings);
+        }
+
+        float clearColor[3] = {
+                settings.environment.clearColor.x,
+                settings.environment.clearColor.y,
+                settings.environment.clearColor.z,
+        };
+        const std::string clearColorLabel = localization.text("ui.inspector.clear_color", "Clear Color");
+        const UIContinuousEditResult clearColorEdit = colorEdit3WithLeftLabel(
+                "environment_clear_color",
+                clearColorLabel.c_str(),
+                clearColor,
+                activeEdit,
+                entity,
+                selection);
+        if (clearColorEdit.shouldApply()) {
+            settings.environment.clearColor = {
+                    std::clamp(clearColor[0], 0.0f, 1.0f),
+                    std::clamp(clearColor[1], 0.0f, 1.0f),
+                    std::clamp(clearColor[2], 0.0f, 1.0f),
+            };
+            applySettings(settings, clearColorEdit.mergeKey);
         }
 
         float intensity = settings.environment.intensity;
@@ -522,7 +540,7 @@ void drawSceneSettingsInspector(
     }
 
     const std::string cameraLabel = localization.text("ui.inspector.camera", "Camera");
-    if (ImGui::CollapsingHeader(cameraLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader(cameraLabel.c_str())) {
         float aperture = settings.camera.aperture;
         const std::string apertureLabel = localization.text("ui.inspector.aperture", "Aperture");
         const UIContinuousEditResult apertureEdit = dragFloatWithLeftLabel(
@@ -615,7 +633,7 @@ void drawSceneSettingsInspector(
     }
 
     const std::string postProcessLabel = localization.text("ui.inspector.post_process", "Post Process");
-    if (ImGui::CollapsingHeader(postProcessLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader(postProcessLabel.c_str())) {
         bool enabled = settings.postProcess.enabled;
         const std::string enabledLabel = localization.text("ui.inspector.enabled", "Enabled");
         if (checkboxWithLeftLabel("post_process_enabled", enabledLabel.c_str(), &enabled)) {
@@ -862,7 +880,7 @@ void InspectorPanel::drawContent(UIContext& context) {
     }
     activeContinuousEdit_.resetIfEntityScopeChanged(primary, std::span<const EntityId>(selected.data(), selected.size()));
     const bool primaryIsSceneRoot = document.isSceneRoot(primary);
-    if (componentSelectionMode(selection.mode)) {
+    if (isComponentSelectionMode(selection.mode)) {
         const std::string active = localization.text(activeSelectionKindKey(selection.activeKind), activeSelectionKindFallback(selection.activeKind));
         ImGui::Text("%s: %s", activePrefix.c_str(), active.c_str());
         if (selection.selectedVertexCount > 0u) {
@@ -957,7 +975,7 @@ void InspectorPanel::drawContent(UIContext& context) {
         }
 
         const std::string transformLabel = localization.text("ui.inspector.transform", "Transform");
-        if (ImGui::CollapsingHeader(transformLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader(transformLabel.c_str())) {
             if (selected.size() > 1u) {
                 const std::string spatialEntities = localization.format(
                         "ui.inspector.spatial_entities",
@@ -1108,7 +1126,7 @@ void InspectorPanel::drawContent(UIContext& context) {
             };
 
             const std::string exportLabel = localization.text("ui.inspector.export", "Export");
-            if (ImGui::CollapsingHeader(exportLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::CollapsingHeader(exportLabel.c_str())) {
                 bool editorOnly = mesh.editorOnly;
                 const std::string editorOnlyLabel = localization.text("ui.inspector.editor_only", "Editor Only");
                 if (checkboxWithLeftLabel("editor_only", editorOnlyLabel.c_str(), &editorOnly)) {
@@ -1118,7 +1136,7 @@ void InspectorPanel::drawContent(UIContext& context) {
             }
 
             const std::string lightingLabel = localization.text("ui.inspector.lighting", "Lighting");
-            if (ImGui::CollapsingHeader(lightingLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::CollapsingHeader(lightingLabel.c_str())) {
                 bool castShadows = mesh.castShadows;
                 const std::string castShadowsLabel = localization.text("ui.inspector.cast_shadows", "Cast Shadows");
                 if (checkboxWithLeftLabel("cast_shadows", castShadowsLabel.c_str(), &castShadows)) {
@@ -1135,7 +1153,7 @@ void InspectorPanel::drawContent(UIContext& context) {
             }
 
             const std::string physicsLabel = localization.text("ui.inspector.physics", "Physics");
-            if (ImGui::CollapsingHeader(physicsLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::CollapsingHeader(physicsLabel.c_str())) {
                 bool generateCollisions = mesh.generateCollisions;
                 const std::string generateCollisionsLabel = localization.text("ui.inspector.generate_collisions", "Generate Collisions");
                 if (checkboxWithLeftLabel("generate_collisions", generateCollisionsLabel.c_str(), &generateCollisions)) {
@@ -1189,7 +1207,7 @@ void InspectorPanel::drawContent(UIContext& context) {
             };
 
             const std::string lightLabel = localization.text("ui.inspector.light", "Light");
-            if (ImGui::CollapsingHeader(lightLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::CollapsingHeader(lightLabel.c_str())) {
                 LightType type = light.type;
                 const std::string typeLabel = localization.text("ui.inspector.light_type", "Type");
                 const std::vector<std::pair<LightType, std::string>> typeOptions{
@@ -1277,7 +1295,7 @@ void InspectorPanel::drawContent(UIContext& context) {
         }
 
         const std::string componentsLabel = localization.text("ui.inspector.components", "Components");
-        if (ImGui::CollapsingHeader(componentsLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader(componentsLabel.c_str())) {
             const std::string meshesLabel = localization.text("ui.inspector.meshes", "Meshes");
             const std::string lightsLabel = localization.text("ui.inspector.lights", "Lights");
             ImGui::Text("%s: %llu", meshesLabel.c_str(), static_cast<unsigned long long>(meshCount));

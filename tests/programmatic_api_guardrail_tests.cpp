@@ -26,6 +26,7 @@ using quader::test::guardrail::linesContaining;
 using quader::test::guardrail::normalizedRelative;
 using quader::test::guardrail::readFile;
 using quader::test::guardrail::readSourceFile;
+using quader::test::guardrail::sourceSlice;
 using quader::test::guardrail::sourceFilesUnder;
 using quader::test::guardrail::sourceRoot;
 using quader::test::guardrail::splitLines;
@@ -139,6 +140,38 @@ bool endsWith(std::string_view value, std::string_view suffix) {
             value.substr(value.size() - suffix.size()) == suffix;
 }
 
+std::string trim(std::string value) {
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())) != 0) {
+        value.erase(value.begin());
+    }
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())) != 0) {
+        value.pop_back();
+    }
+    return value;
+}
+
+std::unordered_map<std::string, std::string> quaderCommandIdsByConstantName(const std::string& source) {
+    std::unordered_map<std::string, std::string> result;
+    constexpr std::string_view marker = "inline constexpr QuaderCommandId ";
+    for (const std::string& line : splitLines(source)) {
+        const std::size_t markerPosition = line.find(marker);
+        if (markerPosition == std::string::npos) {
+            continue;
+        }
+        const std::size_t nameBegin = markerPosition + marker.size();
+        const std::size_t nameEnd = line.find('{', nameBegin);
+        const std::size_t valueBegin = line.find("{\"", nameEnd);
+        const std::size_t valueEnd = line.find("\"}", valueBegin + 2u);
+        if (nameEnd == std::string::npos || valueBegin == std::string::npos || valueEnd == std::string::npos) {
+            continue;
+        }
+        result.emplace(
+                trim(line.substr(nameBegin, nameEnd - nameBegin)),
+                line.substr(valueBegin + 2u, valueEnd - valueBegin - 2u));
+    }
+    return result;
+}
+
 bool isPublicBehaviorTestName(std::string_view filename) {
     return endsWith(filename, "_api_tests.cpp") ||
             endsWith(filename, "_public_api_tests.cpp") ||
@@ -198,6 +231,58 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersAvoidRuntimeAndSdkInternals)
                              "\"entt/",
                      }))
                 << relative;
+    }
+}
+
+TEST(ProgrammaticApiGuardrailTests, ObjectHandleQueriesRouteThroughPublicQueryApi) {
+    const std::string handle = readFile(sourceRoot() / "src/api/quader_object_handle.cpp");
+
+    EXPECT_NE(handle.find("api_->query().modelingObjectForEntity(ref_.entity)"), std::string::npos);
+    EXPECT_NE(handle.find("api_->query().compiledObjectMesh(ref_)"), std::string::npos);
+    EXPECT_EQ(handle.find("QuaderApiSessionInternalAccess"), std::string::npos);
+    EXPECT_EQ(handle.find("ProjectSession"), std::string::npos);
+    EXPECT_EQ(handle.find("ModelingSessionService"), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests, PublicTypedCommandCatalogStaysCanonicalAndUnique) {
+    const std::string commandHeader = readFile(sourceRoot() / "src/api/quader_command_ids.hpp");
+    const std::unordered_map<std::string, std::string> idsByConstant =
+            quaderCommandIdsByConstantName(commandHeader);
+    const std::string typedCatalog = sourceSlice(
+            commandHeader,
+            "inline constexpr QuaderCommandId TypedCommandIds[]",
+            "[[nodiscard]] inline constexpr std::span");
+
+    std::set<std::string> seen;
+    for (std::string line : splitLines(typedCatalog)) {
+        line = trim(std::move(line));
+        if (!line.empty() && line.back() == ',') {
+            line.pop_back();
+        }
+        const auto found = idsByConstant.find(line);
+        if (found == idsByConstant.end()) {
+            continue;
+        }
+        EXPECT_TRUE(seen.insert(found->second).second) << found->second << " from " << line;
+    }
+
+    ASSERT_TRUE(idsByConstant.contains("DuplicateSelection"));
+    ASSERT_TRUE(idsByConstant.contains("ModelingDuplicateMeshes"));
+    EXPECT_EQ(idsByConstant.at("DuplicateSelection"), "edit.duplicate");
+    EXPECT_EQ(idsByConstant.at("ModelingDuplicateMeshes"), "modeling.duplicate_meshes");
+    EXPECT_NE(idsByConstant.at("DuplicateSelection"), idsByConstant.at("ModelingDuplicateMeshes"));
+
+    for (std::string_view alias : {
+                 std::string_view{"HistoryUndo"},
+                 std::string_view{"HistoryRedo"},
+                 std::string_view{"HistoryRepeatLastAction"},
+                 std::string_view{"SelectionClear"},
+                 std::string_view{"SelectionSelectAll"},
+                 std::string_view{"SelectionInvert"},
+                 std::string_view{"ModelingDeleteSelection"},
+                 std::string_view{"ModelingApplyActiveMaterial"},
+         }) {
+        EXPECT_EQ(typedCatalog.find(alias), std::string::npos) << alias;
     }
 }
 
@@ -469,6 +554,58 @@ TEST(ProgrammaticApiGuardrailTests, PublicSelectionApiDelegatesEntityEditPolicyT
     EXPECT_NE(serviceSource.find("resolveSceneSelectionEdit("), std::string::npos);
 }
 
+TEST(ProgrammaticApiGuardrailTests, ObjectAndGroupSelectionCommandsUseSceneDocumentSelectionOwner) {
+    const std::string adapter = readFile(sourceRoot() / "src/editor/modeling/services/selection_mode_adapter.hpp");
+    const std::string serviceSource = readFile(sourceRoot() / "src/editor/selection/editor_selection_service.cpp");
+    const std::string deleteSource =
+            readFile(sourceRoot() / "src/editor/commands/modeling/scene_aware_delete_selection_command.cpp");
+    const std::string modelingApi = readFile(sourceRoot() / "src/api/quader_modeling_api.cpp");
+    const std::string mutationRunner = readFile(sourceRoot() / "src/api/quader_api_mutation_runner.cpp");
+
+    EXPECT_NE(adapter.find("selectionModeUsesSceneDocument(ModelingSelectionMode mode)"), std::string::npos);
+    EXPECT_NE(serviceSource.find("selectionModeUsesSceneDocument("), std::string::npos);
+    EXPECT_NE(deleteSource.find("selectionModeUsesSceneDocument("), std::string::npos);
+    EXPECT_NE(modelingApi.find("selectionModeUsesSceneDocument("), std::string::npos);
+    EXPECT_NE(mutationRunner.find("selectionModeUsesSceneDocument("), std::string::npos);
+    EXPECT_EQ(serviceSource.find("sceneDocumentOwnsSelectionMode"), std::string::npos);
+    EXPECT_EQ(deleteSource.find("sceneAwareDeleteUsesDocumentRoute(ModelingSelectionMode mode) {\n    return mode == ModelingSelectionMode::Object"),
+            std::string::npos);
+    EXPECT_NE(serviceSource.find("userSelectableSceneEntitiesForMode"), std::string::npos);
+    EXPECT_NE(serviceSource.find("scene.isSceneRoot(entity)"), std::string::npos);
+    EXPECT_NE(serviceSource.find("setSceneSelection(selected, active)"), std::string::npos);
+    EXPECT_NE(serviceSource.find("setSceneSelection(std::span<const EntityId>{}, InvalidEntityId)"), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests, GroupSelectionPickingUsesModelingSelectionService) {
+    const std::string editorSelectionHeader =
+            readFile(sourceRoot() / "src/editor/selection/editor_selection_service.hpp");
+    const std::string editorSelectionSource =
+            readFile(sourceRoot() / "src/editor/selection/editor_selection_service.cpp");
+    const std::string modelingSessionHeader =
+            readFile(sourceRoot() / "src/editor/modeling/services/modeling_session_service.hpp");
+    const std::string modelingSessionSource =
+            readFile(sourceRoot() / "src/editor/modeling/services/modeling_session_service.cpp");
+    const std::string modelingSelectionHeader =
+            readFile(sourceRoot() / "src/editor/modeling/services/modeling_selection_service.hpp");
+    const std::string modelingSelectionSource =
+            readFile(sourceRoot() / "src/editor/modeling/services/modeling_session_services.cpp");
+
+    EXPECT_NE(modelingSelectionHeader.find("pickObjectId("), std::string::npos);
+    EXPECT_NE(modelingSelectionHeader.find("boxPickObjectIds("), std::string::npos);
+    EXPECT_NE(modelingSelectionSource.find("rectangle_hits_from_projected_candidates"), std::string::npos);
+    EXPECT_NE(modelingSessionHeader.find("pickObjectEntity("), std::string::npos);
+    EXPECT_NE(modelingSessionHeader.find("boxPickObjectEntities("), std::string::npos);
+    EXPECT_NE(modelingSessionSource.find("selectionService_.pickObjectId("), std::string::npos);
+    EXPECT_NE(modelingSessionSource.find("selectionService_.boxPickObjectIds("), std::string::npos);
+    EXPECT_NE(editorSelectionSource.find("modeling_.pickObjectEntity(request)"), std::string::npos);
+    EXPECT_NE(editorSelectionSource.find("modeling_.boxPickObjectEntities(request)"), std::string::npos);
+    EXPECT_EQ(editorSelectionHeader.find("AssetRegistry"), std::string::npos);
+    EXPECT_EQ(editorSelectionHeader.find("pickMeshEntityByBounds"), std::string::npos);
+    EXPECT_EQ(editorSelectionHeader.find("boxPickMeshEntitiesByBounds"), std::string::npos);
+    EXPECT_EQ(editorSelectionSource.find("EditorSelectionService::pickMeshEntityByBounds"), std::string::npos);
+    EXPECT_EQ(editorSelectionSource.find("EditorSelectionService::boxPickMeshEntitiesByBounds"), std::string::npos);
+}
+
 TEST(ProgrammaticApiGuardrailTests, ApiDoesNotTreatHostContractDescriptorsAsCommands) {
     for (const std::filesystem::path& file : sourceFilesUnder(sourceRoot() / "src/api")) {
         const std::string source = readFile(file);
@@ -672,12 +809,57 @@ TEST(ProgrammaticApiGuardrailTests, UiPanelRoutingUsesStableIdsAndNoDeadShowMenu
     EXPECT_NE(settingsSource.find("uiPanelStableId(UIPanelId::Outliner)"), std::string::npos);
 }
 
+TEST(ProgrammaticApiGuardrailTests, ViewportPanelDoesNotExposeWorkspacePassThroughs) {
+    const std::string header = readFile(sourceRoot() / "src/ui/viewport_panel.hpp");
+    const std::string source = readFile(sourceRoot() / "src/ui/viewport_panel.cpp");
+
+    EXPECT_NE(header.find("syncActiveToolFromEditor("), std::string::npos);
+    EXPECT_NE(source.find("ViewportPanel::syncActiveToolFromEditor("), std::string::npos);
+    EXPECT_NE(source.find("viewportWorkspace.activePanePlacements()"), std::string::npos);
+    EXPECT_NE(source.find("viewportWorkspace.activeSplitHandles()"), std::string::npos);
+    EXPECT_NE(source.find("ViewportPaneController::paneRectMin("), std::string::npos);
+    EXPECT_NE(source.find("ViewportPaneController::paneRectSize("), std::string::npos);
+    EXPECT_EQ(header.find("setViewportLayout("), std::string::npos);
+    EXPECT_EQ(header.find("setGridPreset("), std::string::npos);
+    EXPECT_EQ(header.find("paneShadingMode("), std::string::npos);
+    EXPECT_EQ(header.find("setPaneShadingMode("), std::string::npos);
+    EXPECT_EQ(header.find("paneView("), std::string::npos);
+    EXPECT_EQ(header.find("activePanePlacements()"), std::string::npos);
+    EXPECT_EQ(header.find("activeSplitHandles()"), std::string::npos);
+    EXPECT_EQ(header.find("paneRectMin("), std::string::npos);
+    EXPECT_EQ(header.find("paneRectSize("), std::string::npos);
+    EXPECT_EQ(header.find("SceneDocument& document,\n            ModelingSessionService& modeling"), std::string::npos);
+    EXPECT_EQ(source.find("ViewportPanel::setViewportLayout("), std::string::npos);
+    EXPECT_EQ(source.find("ViewportPanel::setGridPreset("), std::string::npos);
+    EXPECT_EQ(source.find("ViewportPanel::activePanePlacements("), std::string::npos);
+    EXPECT_EQ(source.find("ViewportPanel::activeSplitHandles("), std::string::npos);
+    EXPECT_EQ(source.find("ViewportPanel::paneRectMin("), std::string::npos);
+    EXPECT_EQ(source.find("ViewportPanel::paneRectSize("), std::string::npos);
+    EXPECT_EQ(source.find("fromModelingViewportTool"), std::string::npos);
+    EXPECT_NE(source.find("editor.tools().activate(tool)"), std::string::npos);
+    EXPECT_NE(source.find("viewportToolForModeling(modeling.toolStatus().activeTool)"), std::string::npos);
+}
+
 TEST(ProgrammaticApiGuardrailTests, OutlinerUsesDocumentCommandRootSelectionOwner) {
     const std::string outliner = readFile(sourceRoot() / "src/ui/outliner_panel.cpp");
+    const std::string viewport = readFile(sourceRoot() / "src/ui/viewport_panel.cpp");
+    const std::string sceneAwareDeleteHeader =
+            readFile(sourceRoot() / "src/editor/commands/modeling/scene_aware_delete_selection_command.hpp");
+    const std::string modelingExecution =
+            readFile(sourceRoot() / "src/editor/commands/modeling_command_execution_service.cpp");
 
     EXPECT_NE(outliner.find("documentCommandSelectedRootEntities"), std::string::npos);
+    EXPECT_NE(outliner.find("QuaderCommand::DuplicateSelection"), std::string::npos);
+    EXPECT_NE(viewport.find("sceneAwareDeleteHasSelectedRoot"), std::string::npos);
+    EXPECT_NE(sceneAwareDeleteHeader.find("sceneAwareDeleteHandlesSelection"), std::string::npos);
     EXPECT_EQ(outliner.find("std::vector<EntityId> selectedRootEntities("), std::string::npos);
     EXPECT_EQ(outliner.find("std::unordered_set<EntityId> selectedSet"), std::string::npos);
+    EXPECT_EQ(outliner.find("editor.scene().duplicateSelectedHierarchy"), std::string::npos);
+    EXPECT_EQ(outliner.find("ImGuiKey_G"), std::string::npos);
+    EXPECT_EQ(viewport.find("documentCommandSelectedRootEntities"), std::string::npos);
+    EXPECT_EQ(viewport.find("hasSelectedSceneGroupRoot"), std::string::npos);
+    EXPECT_EQ(modelingExecution.find("shouldUseSceneAwareDelete"), std::string::npos);
+    EXPECT_NE(modelingExecution.find("sceneAwareDeleteHandlesSelection"), std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotExposeRawHistoryOrDocumentCommandServices) {
@@ -765,6 +947,89 @@ TEST(ProgrammaticApiGuardrailTests, PublicHistoryDoesNotFallbackToModelingHistor
             }
         }
     }
+}
+
+TEST(ProgrammaticApiGuardrailTests, PublicHistoryAvailabilityRoutesThroughMutationRunner) {
+    const std::string mutationHeader = readFile(sourceRoot() / "src/api/quader_api_mutation_runner.hpp");
+    const std::string mutationSource = readFile(sourceRoot() / "src/api/quader_api_mutation_runner.cpp");
+    const std::string historyApi = readFile(sourceRoot() / "src/api/quader_history_api.cpp");
+    const std::string queryApi = readFile(sourceRoot() / "src/api/quader_query_api.cpp");
+    const std::string historyService = readFile(sourceRoot() / "src/editor/history/editor_history_service.cpp");
+
+    EXPECT_NE(mutationHeader.find("bool canRedo() const"), std::string::npos);
+    EXPECT_NE(mutationSource.find("QuaderApiMutationRunner::canRedo()"), std::string::npos);
+    EXPECT_NE(mutationSource.find("canCancelActivePreviewForUndo()"), std::string::npos);
+    EXPECT_NE(mutationSource.find("if (!canRedo())"), std::string::npos);
+    EXPECT_NE(historyApi.find("return mutations_.canRedo();"), std::string::npos);
+    EXPECT_NE(queryApi.find("return QuaderHistoryApi(session_, mutations_).snapshot();"), std::string::npos);
+    EXPECT_NE(historyService.find("activeTransaction_ == nullptr && undoRedo_->canUndo()"), std::string::npos);
+    EXPECT_NE(historyService.find("activeTransaction_ == nullptr && undoRedo_->canRedo()"), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests, ScriptHistoryUsesEditorTransactionAsSourceOfTruth) {
+    const std::string script = readFile(sourceRoot() / "src/api/quader_script.cpp");
+    const std::string mutationHeader = readFile(sourceRoot() / "src/api/quader_api_mutation_runner.hpp");
+    const std::string mutationSource = readFile(sourceRoot() / "src/api/quader_api_mutation_runner.cpp");
+
+    EXPECT_NE(script.find("transaction.commit()"), std::string::npos);
+    EXPECT_NE(script.find("History operations are not supported inside QuaderScript."), std::string::npos);
+    EXPECT_EQ(script.find("transaction.discard()"), std::string::npos);
+    EXPECT_EQ(script.find("recordModelingMementoTransaction"), std::string::npos);
+    EXPECT_EQ(mutationHeader.find("recordModelingMementoTransaction"), std::string::npos);
+    EXPECT_EQ(mutationSource.find("recordModelingMementoTransaction"), std::string::npos);
+    EXPECT_EQ(mutationSource.find("RecordedModelingMementoCommand"), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests, DocumentBatchTransformPlanningUsesSimulatedLockState) {
+    const std::string service = readFile(sourceRoot() / "src/editor/commands/document_command_service.cpp");
+    const std::string batchSource = sourceSlice(
+            service,
+            "DocumentCommandResult DocumentCommandService::applySceneBatch",
+            "\n}\n\n} // namespace quader");
+
+    EXPECT_NE(batchSource.find("simulatedEffectivelyLocked"), std::string::npos);
+    EXPECT_NE(batchSource.find("simulatedParent"), std::string::npos);
+    EXPECT_NE(batchSource.find("simulatedLocked"), std::string::npos);
+    EXPECT_EQ(batchSource.find("scene_.isEffectivelyLocked(operation.entity)"), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests, RepeatedCodecAndCutHelpersStayWithTheirOwners) {
+    const std::string codecsHeader = readFile(sourceRoot() / "src/io/qdr/qdr_project_codecs.hpp");
+    const std::string codecsSource = readFile(sourceRoot() / "src/io/qdr/qdr_project_codecs.cpp");
+    const std::string qdrReader = readFile(sourceRoot() / "src/io/qdr/qdr_document_reader.cpp");
+    const std::string qdrWriter = readFile(sourceRoot() / "src/io/qdr/qdr_document_writer.cpp");
+    const std::string sessionOps = readFile(sourceRoot() / "src/editor/modeling/runtime/session_operations.cpp");
+
+    EXPECT_NE(codecsHeader.find("qdrSceneToneMappingName"), std::string::npos);
+    EXPECT_NE(codecsHeader.find("qdrSceneToneMappingFromName"), std::string::npos);
+    EXPECT_NE(codecsHeader.find("qdrTransformComponentToJson"), std::string::npos);
+    EXPECT_NE(codecsHeader.find("qdrTransformComponentFromJson"), std::string::npos);
+    EXPECT_NE(codecsHeader.find("qdrMeshComponentToJson"), std::string::npos);
+    EXPECT_NE(codecsHeader.find("qdrMeshComponentFromJson"), std::string::npos);
+    EXPECT_NE(codecsHeader.find("qdrMaterialComponentToJson"), std::string::npos);
+    EXPECT_NE(codecsHeader.find("qdrMaterialComponentFromJson"), std::string::npos);
+    EXPECT_NE(codecsHeader.find("qdrLightComponentToJson"), std::string::npos);
+    EXPECT_NE(codecsHeader.find("qdrLightComponentFromJson"), std::string::npos);
+    EXPECT_NE(codecsHeader.find("qdrSceneSettingsComponentToJson"), std::string::npos);
+    EXPECT_NE(codecsHeader.find("qdrSceneSettingsComponentFromJson"), std::string::npos);
+    EXPECT_NE(codecsSource.find("qdrSceneToneMappingName"), std::string::npos);
+    EXPECT_NE(codecsSource.find("qdrSceneToneMappingFromName"), std::string::npos);
+    EXPECT_NE(codecsSource.find("qdrTransformComponentToJson"), std::string::npos);
+    EXPECT_NE(codecsSource.find("qdrSceneSettingsComponentFromJson"), std::string::npos);
+    EXPECT_EQ(qdrReader.find("SceneToneMapping sceneToneMappingFromName"), std::string::npos);
+    EXPECT_EQ(qdrWriter.find("sceneToneMappingName(SceneToneMapping"), std::string::npos);
+    EXPECT_EQ(qdrReader.find("transformComponentFromJson"), std::string::npos);
+    EXPECT_EQ(qdrReader.find("meshComponentFromJson"), std::string::npos);
+    EXPECT_EQ(qdrReader.find("materialComponentFromJson"), std::string::npos);
+    EXPECT_EQ(qdrReader.find("lightComponentFromJson"), std::string::npos);
+    EXPECT_EQ(qdrWriter.find("transformComponentToJson"), std::string::npos);
+    EXPECT_EQ(qdrWriter.find("meshComponentToJson"), std::string::npos);
+    EXPECT_EQ(qdrWriter.find("materialComponentToJson"), std::string::npos);
+    EXPECT_EQ(qdrWriter.find("lightComponentToJson"), std::string::npos);
+    EXPECT_EQ(sessionOps.find("to_plane_cut_mode("), std::string::npos);
+    EXPECT_EQ(sessionOps.find("plane_cut_request_from_state("), std::string::npos);
+    EXPECT_NE(sessionOps.find("plane_cut_request_from_cut_state(state)"), std::string::npos);
+    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/editor/modeling/runtime/cut_policy.hpp"));
 }
 
 TEST(ProgrammaticApiGuardrailTests, EditorHistoryBoundaryHidesCoreUndoRedoManager) {
@@ -894,6 +1159,15 @@ TEST(ProgrammaticApiGuardrailTests, PublicDocsExamplesManifestClassifiesEveryDoc
     }
 }
 
+TEST(ProgrammaticApiGuardrailTests, PublicDocsDoNotUseResultAsFluentObjectHandle) {
+    const std::string apiOverview = readFile(sourceRoot() / "docs/api-overview.md");
+
+    EXPECT_EQ(apiOverview.find(".rename(\"Renamed API Box\")\n            .select()"), std::string::npos);
+    EXPECT_NE(apiOverview.find("auto object = editor.object(created.value());"), std::string::npos);
+    EXPECT_NE(apiOverview.find("object.rename(\"Renamed API Box\");"), std::string::npos);
+    EXPECT_NE(apiOverview.find("object.select();"), std::string::npos);
+}
+
 TEST(ProgrammaticApiGuardrailTests, PublicExamplesAndDocsDoNotStartFromInternalOwnerHeaders) {
     for (const std::filesystem::path& file : publicDocAndExampleFiles()) {
         const std::string source = readFile(file);
@@ -1010,6 +1284,18 @@ TEST(ProgrammaticApiGuardrailTests, PublicCommandTargetsUseSharedPrefixOwner) {
     EXPECT_EQ(commandTool.find("std::string commandId(\"modeling."), std::string::npos);
     EXPECT_EQ(viewportAdapter.find("std::string commandId(\"tools.activate."), std::string::npos);
     EXPECT_EQ(viewportAdapter.find("constexpr std::string_view toolPrefix = \"tools.activate."), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests, DuplicateShortcutTargetsSceneAwarePublicCommand) {
+    const std::string hostContract = readFile(sourceRoot() / "src/editor/metadata/host_contract.cpp");
+    const std::string viewportAdapter = readFile(sourceRoot() / "src/viewport/host_viewport_contract_adapter.cpp");
+
+    EXPECT_NE(hostContract.find("{ \"duplicate_selection\", \"Duplicate Selection\""), std::string::npos);
+    EXPECT_NE(hostContract.find("shortcut(\"duplicate_selection\""), std::string::npos);
+    EXPECT_NE(viewportAdapter.find("{\"duplicate_selection\", QuaderCommand::DuplicateSelection.string()"),
+            std::string::npos);
+    EXPECT_EQ(hostContract.find("shortcut(\"duplicate_meshes\""), std::string::npos);
+    EXPECT_EQ(viewportAdapter.find("{\"duplicate_meshes\", {}"), std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, HostViewportContractAdapterKeepsImplementationOutOfHeader) {

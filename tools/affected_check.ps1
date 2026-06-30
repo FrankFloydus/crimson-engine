@@ -526,6 +526,15 @@ function Add-PathPlan {
         return
     }
 
+    if ($Path -match '^resources/ibl/') {
+        Add-BuildTarget "quader" "IBL resource changed"
+        Add-BuildTarget "quader_guardrail_tests" "IBL resource changed"
+        Add-BuildTarget "quader_tests" "IBL resource changed"
+        Add-GuardrailTestsFilter "BuildGuardrailTests.ImGuiRuntimeResourcesArePackagedWithRuntime:OopArchitectureGuardrailTests.SceneEnvironmentCatalogOwnsIblResourceContract" "verify IBL resource packaging and catalog contract"
+        Add-QuaderTestsFilter "Render*:SceneRenderBridge*:AppStartupTests.*" "verify render environment behavior"
+        return
+    }
+
     if ($Path -match '^resources/(fonts|icons|materials|modeling_assets)/') {
         Add-BuildTarget "quader" "runtime resource changed"
         Add-BuildTarget "quader_guardrail_tests" "runtime resource changed"
@@ -539,7 +548,7 @@ function Add-PathPlan {
         Add-BuildTarget "quader_example_create_box" "public example changed"
         Add-BuildTarget "quader_example_script_modeling_workflow" "public example changed"
         Add-BuildTarget "quader_guardrail_tests" "public example changed"
-        Add-GuardrailTestsFilter "ProgrammaticApiGuardrailTests.PublicCppExamplesAreCompiledOrMarkedDocumentationOnly:ProgrammaticApiGuardrailTests.PublicCppExamplesUseCallableResultHelpers:ProgrammaticApiGuardrailTests.PublicExamplesStartFromEditorApiOrScriptSurface" "verify public examples"
+        Add-GuardrailTestsFilter "ProgrammaticApiGuardrailTests.PublicCppExamplesAreCompiledOrMarkedDocumentationOnly:ProgrammaticApiGuardrailTests.PublicCppExamplesUseCallableResultHelpers:ProgrammaticApiGuardrailTests.PublicExamplesAndDocsDoNotStartFromInternalOwnerHeaders:ProgrammaticApiGuardrailTests.PublicExamplesStartFromEditorApiOrScriptSurface" "verify public examples"
         return
     }
 
@@ -601,6 +610,15 @@ function Add-PathPlan {
     if ($Path -match '^src/editor/metadata/') {
         Add-BuildTarget "quader_editor_metadata" "editor metadata source changed"
         Add-MetadataModelingLoopFilter "QdrEditorMetadata*" "editor metadata modeling-domain tests"
+        return
+    }
+
+    if ($Path -match '^src/editor/transform/') {
+        Add-BuildTarget "quader_modeling" "editor transform source changed"
+        Add-BuildTarget "quader_guardrail_tests" "editor transform source changed"
+        Add-BuildTarget "quader_tests" "editor transform source changed"
+        Add-GuardrailTestsFilter "ProgrammaticApiGuardrailTests.*" "transform/API source-policy guardrails"
+        Add-QuaderTestsFilter "EditorApiTests.*Transform*:EditorApiTests.*Move*:GroupingPublicApiTests.*:Viewport*" "editor transform behavior tests"
         return
     }
 

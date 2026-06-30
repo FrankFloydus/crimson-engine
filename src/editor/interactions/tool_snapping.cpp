@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/interactions/tool_snapping.hpp>
 
+#include <editor/interactions/tool_math_internal.hpp>
 #include <editor/modeling/runtime/tool_constants.hpp>
 
 #include <mesh/geometry/geometry.hpp>
@@ -25,24 +26,6 @@ struct InsertEdgeLoopSnapResult {
 	float factor = 0.5F;
 	bool snapped_to_existing_edge = false;
 };
-
-quader_geometry::QVec3f to_geometry_vec3(quader::QVec3 value)
-{
-	return { value.x, value.y, value.z };
-}
-
-quader::QVec3 to_poly_vec3(quader_geometry::QVec3f value)
-{
-	return { value.x, value.y, value.z };
-}
-
-quader::QVec3 normalize_or(quader::QVec3 value, quader::QVec3 fallback)
-{
-	const quader_geometry::QVec3f geometry_value = to_geometry_vec3(value);
-	return quader_geometry::length_squared(geometry_value) <= static_cast<float>(tool_epsilon * tool_epsilon) ?
-		fallback :
-		to_poly_vec3(quader_geometry::normalize_or_zero(geometry_value));
-}
 
 InsertEdgeLoopSnapResult snap_insert_edge_loop_factor_result(
 		const quader_poly::Document& document,
@@ -64,7 +47,7 @@ InsertEdgeLoopSnapResult snap_insert_edge_loop_factor_result(
 		return result;
 	}
 
-	const float edge_length = quader_geometry::length(to_geometry_vec3(b->position - a->position));
+	const float edge_length = quader_geometry::length(tool_geometry_vec3(b->position - a->position));
 	if (edge_length <= 0.0001F) {
 		return result;
 	}
@@ -132,14 +115,14 @@ quader::QVec3 constrain_knife_point_to_axis(
 		quader::QVec3 { 0.0F, 1.0F, 0.0F },
 		quader::QVec3 { 0.0F, 0.0F, 1.0F },
 	};
-	const quader::QVec3 normal = normalize_or(face_normal, { 0.0F, 1.0F, 0.0F });
-	const quader::QVec3 direction = normalize_or(delta, { 1.0F, 0.0F, 0.0F });
-	const quader_geometry::QVec3f geometry_normal = to_geometry_vec3(normal);
-	const quader_geometry::QVec3f geometry_direction = to_geometry_vec3(direction);
+	const quader::QVec3 normal = vec3_normalize_or(face_normal, { 0.0F, 1.0F, 0.0F });
+	const quader::QVec3 direction = vec3_normalize_or(delta, { 1.0F, 0.0F, 0.0F });
+	const quader_geometry::QVec3f geometry_normal = tool_geometry_vec3(normal);
+	const quader_geometry::QVec3f geometry_direction = tool_geometry_vec3(direction);
 	quader::QVec3 best_axis = axes[0];
 	double best_score = -std::numeric_limits<double>::infinity();
 	for (quader::QVec3 axis : axes) {
-		const quader_geometry::QVec3f geometry_axis = to_geometry_vec3(axis);
+		const quader_geometry::QVec3f geometry_axis = tool_geometry_vec3(axis);
 		const quader_geometry::QVec3f projected_axis =
 			quader_geometry::normalize_or_zero(geometry_axis - (geometry_normal * quader_geometry::dot(geometry_axis, geometry_normal)), 0.000001F);
 		if (quader_geometry::length_squared(projected_axis) <= 0.000001F) {
@@ -150,11 +133,11 @@ quader::QVec3 constrain_knife_point_to_axis(
 		const double score = plane_score * 2.0 + direction_score;
 		if (score > best_score) {
 			best_score = score;
-			best_axis = to_poly_vec3(projected_axis);
+			best_axis = tool_poly_vec3(projected_axis);
 		}
 	}
 
-	double distance = quader_geometry::dot(to_geometry_vec3(delta), to_geometry_vec3(best_axis));
+	double distance = quader_geometry::dot(tool_geometry_vec3(delta), tool_geometry_vec3(best_axis));
 	if (snap_enabled && std::isfinite(grid_size) && grid_size > 0.0001) {
 		distance = snap_world_value(distance, grid_size);
 	}

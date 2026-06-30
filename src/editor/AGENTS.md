@@ -21,7 +21,7 @@ for viewport tool behavior.
 - `ModelingSessionService` remains a thin adapter over real owners.
 - `delete_selection` is a split-route command. Component deletion goes through
   `DeleteSelectionTool` and `ModelingSessionService::deleteComponentSelection()`. Object/group
-  deletion and selected scene-group-root deletion go through the scene-aware document command route.
+  deletion and any selected non-scene-root root entity go through the scene-aware document command route.
 - Tool state machines belong under editor tools/interactions, not UI panels.
 - Add synthetic behavior coverage for selection, history, tools, transform previews, overlays, and
   modeling workflows whenever those states can be inspected headlessly.

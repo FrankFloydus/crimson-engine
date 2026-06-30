@@ -11,6 +11,7 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
+#include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
@@ -63,15 +64,6 @@ ViewportOverlaySelectionContext overlaySelectionContext(ModelingSelectionMode mo
         return ViewportOverlaySelectionContext::Object;
     }
     return ViewportOverlaySelectionContext::Any;
-}
-
-bool hasSelectedSceneGroupRoot(const SceneDocument& document) {
-    for (const EntityId selected : document.selectedEntities()) {
-        if (document.kind(selected) == EntityKind::Empty && document.hasChildren(selected)) {
-            return true;
-        }
-    }
-    return false;
 }
 
 float gridSizeForPreset(int preset) {
@@ -567,10 +559,6 @@ bool drawViewportDeletePopup(
     return changed;
 }
 
-ViewportToolId fromModelingViewportTool(ModelingViewportTool tool) {
-    return viewportToolForModeling(tool);
-}
-
 } // namespace
 
 ViewportPanel::ViewportPanel() {
@@ -690,48 +678,10 @@ void ViewportPanel::renderViewports(filament::Renderer& renderer) {
     }
 }
 
-void ViewportPanel::setViewportLayout(ViewportLayoutId layoutId) {
-    (void)workspace().setLayout(layoutId);
-}
-
-ViewportLayoutId ViewportPanel::viewportLayout() const {
-    return workspace().layout();
-}
-
-int ViewportPanel::gridPreset() const {
-    return workspace().gridPreset();
-}
-
-void ViewportPanel::setGridPreset(int preset) {
-    workspace().setGridPreset(preset);
-    inputRouter_.syncGridPresetSnapshot(workspace().gridPreset());
-}
-
-QuaderShadingMode ViewportPanel::paneShadingMode(ViewportPaneId paneId) const {
-    return quaderApiFromViewportShadingMode(workspace().shadingMode(paneId));
-}
-
-void ViewportPanel::setPaneShadingMode(ViewportPaneId paneId, QuaderShadingMode mode) {
-    const ViewportShadingMode next = quaderApiToViewportShadingMode(mode);
-    if (workspace().setShadingMode(paneId, next)) {
-        selectionOverlayCache_.markDirty();
-    }
-}
-
-ViewportView ViewportPanel::paneView(ViewportPaneId paneId) const {
-    return workspace().view(paneId);
-}
-
-void ViewportPanel::setPaneView(ViewportPaneId paneId, ViewportView view) {
-    setPaneView(pane(paneId), view);
-}
-
 bool ViewportPanel::activateToolFromMenu(
         ViewportToolId tool,
         QuaderEditorApi& editor,
-        SceneDocument& document,
         ModelingSessionService& modeling) {
-    (void)document;
     LOG_INFO("Tools menu requested viewport tool {}", viewportToolId(tool));
     const ViewportTool* toolDefinition = findViewportTool(tool);
     const QuaderApiVoidResult command = toolDefinition != nullptr ?
@@ -745,12 +695,12 @@ bool ViewportPanel::activateToolFromMenu(
         LOG_ERROR("Viewport tool activation failed: {}", command.message.empty() ? "Command failed." : command.message);
         return false;
     }
-    const ViewportToolId activeTool = fromModelingViewportTool(modeling.toolStatus().activeTool);
+    const ViewportToolId activeTool = viewportToolForModeling(modeling.toolStatus().activeTool);
     LOG_INFO("Viewport tool activated from menu: requested {}, active {}", viewportToolId(tool), viewportToolId(activeTool));
     inputRouter_.setActiveTool(activeTool);
     inputRouter_.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(editor.selection().summary().mode)));
     inputRouter_.clearModalToolState();
-    interactionController_.reset();
+    interactionController_.reset(&editor);
     hoverController_.invalidate();
     selectionOverlayCache_.markDirty();
     return true;
@@ -764,12 +714,18 @@ const ViewportPanel::Pane& ViewportPanel::pane(ViewportPaneId paneId) const {
     return panes_[viewportPaneIndex(paneId)];
 }
 
-std::vector<ViewportPanePlacement> ViewportPanel::activePanePlacements() const {
-    return workspace().activePanePlacements();
-}
+void ViewportPanel::syncActiveToolFromEditor(QuaderEditorApi& editor, ModelingSessionService& modeling) {
+    const ViewportToolId activeTool = viewportToolForModeling(modeling.toolStatus().activeTool);
+    if (inputRouter_.state().activeTool == activeTool) {
+        return;
+    }
 
-std::vector<ViewportSplitHandle> ViewportPanel::activeSplitHandles() const {
-    return workspace().activeSplitHandles();
+    LOG_INFO("Viewport tool synchronized from editor: {}", viewportToolId(activeTool));
+    inputRouter_.setActiveTool(activeTool);
+    inputRouter_.clearModalToolState();
+    interactionController_.reset(&editor);
+    hoverController_.invalidate();
+    selectionOverlayCache_.markDirty();
 }
 
 bool ViewportPanel::drawPaneChrome(
@@ -929,14 +885,6 @@ bool ViewportPanel::handleSplitInput(ImVec2 viewportMin, ImVec2 viewportSize, co
     return consumed || splitHandleDragging_;
 }
 
-ImVec2 ViewportPanel::paneRectMin(ImVec2 viewportMin, ImVec2 viewportSize, ViewportNormalizedRect normalizedRect) {
-    return ViewportPaneController::paneRectMin(viewportMin, viewportSize, normalizedRect);
-}
-
-ImVec2 ViewportPanel::paneRectSize(ImVec2 viewportSize, ViewportNormalizedRect normalizedRect) {
-    return ViewportPaneController::paneRectSize(viewportSize, normalizedRect);
-}
-
 const ViewportSettings& ViewportPanel::activeViewportSettings() const {
     return viewportSettings_ != nullptr ? *viewportSettings_ : fallbackViewportSettings_;
 }
@@ -976,6 +924,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
             QuaderViewportApiRuntimeAccess::workspace(uiContext.editor.viewports());
     workspace_ = &viewportWorkspace;
     inputRouter_.syncGridPresetSnapshot(viewportWorkspace.gridPreset());
+    syncActiveToolFromEditor(uiContext.editor, modeling);
     if (!visible) {
         for (Pane& paneState : panes_) {
             renderBridge.setOverlayFrame(
@@ -1012,12 +961,12 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
         bool chromeConsumesInput = false;
     };
     std::vector<DrawPane> drawPanes;
-    const std::vector<ViewportPanePlacement> placements = activePanePlacements();
+    const std::vector<ViewportPanePlacement> placements = viewportWorkspace.activePanePlacements();
     drawPanes.reserve(placements.size());
     for (const ViewportPanePlacement& placement : placements) {
         Pane& paneState = pane(placement.paneId);
-        const ImVec2 itemMin = paneRectMin(canvasMin, available, placement.normalizedRect);
-        const ImVec2 itemSize = paneRectSize(available, placement.normalizedRect);
+        const ImVec2 itemMin = ViewportPaneController::paneRectMin(canvasMin, available, placement.normalizedRect);
+        const ImVec2 itemSize = ViewportPaneController::paneRectSize(available, placement.normalizedRect);
         const QVec2 renderSize = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
         viewportWorkspace.setPaneRenderSize(placement.paneId, renderSize);
         viewportWorkspace.setPaneVisible(placement.paneId, true);
@@ -1043,7 +992,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
         ImGui::PopID();
     }
 
-    const std::vector<ViewportSplitHandle> splitHandles = activeSplitHandles();
+    const std::vector<ViewportSplitHandle> splitHandles = viewportWorkspace.activeSplitHandles();
     const bool splitConsumed = handleSplitInput(canvasMin, available, splitHandles);
     DrawPane* inputPane = nullptr;
     const bool transformDragLocksInput = interactionController_.dragging();
@@ -1323,14 +1272,14 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         }
         inputRouter_.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(uiContext.editor.selection().summary().mode)));
         inputRouter_.clearModalDragState();
-        interactionController_.reset();
+        interactionController_.reset(&uiContext.editor);
         hoverController_.invalidate();
         selectionOverlayCache_.markDirty();
     }
     if (result.toolChanged) {
         LOG_INFO("Viewport tool changed to {}", viewportToolId(inputRouter_.state().activeTool));
         inputRouter_.clearModalDragState();
-        interactionController_.reset();
+        interactionController_.reset(&uiContext.editor);
         hoverController_.invalidate();
         selectionOverlayCache_.markDirty();
         const ViewportTool* activeTool = inputRouter_.activeTool();
@@ -1370,7 +1319,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         const ModelingSelectionSummary deleteSummary = toModelingSelectionSummary(uiContext.editor.selection().summary());
         if (deleteSummary.mode == ModelingSelectionMode::Object ||
                 deleteSummary.mode == ModelingSelectionMode::Group ||
-                hasSelectedSceneGroupRoot(document)) {
+                sceneAwareDeleteHasSelectedRoot(document)) {
             deleteObjectsPopupOpen_ = true;
             deleteObjectsPopupPositionPending_ = true;
             deleteObjectsPopupPosition_ = ImVec2(itemMin.x + itemSize.x * 0.5f, itemMin.y + itemSize.y * 0.25f);
@@ -1399,7 +1348,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 .tool = inputRouter_.state().activeTool,
                 .exitActiveModalTool = exitTool,
         });
-        interactionController_.reset();
+        interactionController_.reset(&uiContext.editor);
         hoverController_.invalidate();
         selectionOverlayCache_.markDirty();
     };

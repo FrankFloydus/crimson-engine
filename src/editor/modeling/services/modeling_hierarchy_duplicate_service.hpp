@@ -42,6 +42,13 @@ public:
             ModelingObjectRuntimeMap& objectRegistry,
             DocumentCommandService& documentCommands,
             ModelingHierarchyDuplicateRuntime runtime) const;
+    ModelingCommandResult duplicateSelectedEntityHierarchy(
+            quader_editor_core::EditorSession& session,
+            SceneDocument& scene,
+            ModelingObjectRuntimeMap& objectRegistry,
+            DocumentCommandService& documentCommands,
+            ModelingHierarchyDuplicateRuntime runtime,
+            ModelingSelectionMode resultSelectionMode) const;
 };
 
 } // namespace quader

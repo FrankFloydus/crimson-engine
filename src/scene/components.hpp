@@ -7,6 +7,7 @@
 #pragma once
 
 #include "core/types.hpp"
+#include "core/scene_environment_catalog.hpp"
 #include "math/types.hpp"
 
 #include <cstdint>
@@ -204,9 +205,10 @@ struct LightComponent {
  * Stores scene-wide environment settings on the real scene root entity.
  */
 struct SceneEnvironmentSettings {
-    std::string environmentId = "lightroom_14b";
+    std::string environmentId = std::string(kDefaultSceneEnvironmentId);
     bool enabled = true;
     bool showBackground = true;
+    QVec3 clearColor = {0.0509804f, 0.0509804f, 0.0509804f};
     float intensity = 1.0f;
     float backgroundIntensity = 1.0f;
     float rotationY = 0.0f;
@@ -215,6 +217,9 @@ struct SceneEnvironmentSettings {
         return environmentId == other.environmentId &&
                 enabled == other.enabled &&
                 showBackground == other.showBackground &&
+                clearColor.x == other.clearColor.x &&
+                clearColor.y == other.clearColor.y &&
+                clearColor.z == other.clearColor.z &&
                 intensity == other.intensity &&
                 backgroundIntensity == other.backgroundIntensity &&
                 rotationY == other.rotationY;

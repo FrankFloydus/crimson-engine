@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/metadata/host_contract.hpp>
 
+#include <assets/default_material_catalog.hpp>
 #include <editor/modeling/operations/operation_registry.hpp>
 #include <editor/modeling/operations/operation_schema.hpp>
 #include <editor/modeling/runtime/session.hpp>
@@ -13,6 +14,7 @@
 #include <editor/interactions/cut_tool.hpp>
 #include <editor/interactions/tool_identity.hpp>
 #include <editor/modeling/runtime/tool_constants.hpp>
+#include <viewport/viewport_layout.hpp>
 
 #include <algorithm>
 #include <array>
@@ -418,7 +420,7 @@ std::span<const HostInteractionDescriptor> interaction_descriptors()
 		{ "redo", "Redo", HostInteractionKind::editor_action },
 		{ "select_all", "Select All", HostInteractionKind::editor_action },
 		{ "copy_meshes", "Copy Meshes", HostInteractionKind::editor_action },
-		{ "duplicate_meshes", "Duplicate Meshes", HostInteractionKind::editor_action },
+		{ "duplicate_selection", "Duplicate Selection", HostInteractionKind::editor_action },
 		{ "apply_active_material", "Apply Active Material", HostInteractionKind::editor_action },
 		{ "invert_selection", "Invert Selection", HostInteractionKind::editor_action },
 		{ "repeat_last_action", "Repeat Last Action", HostInteractionKind::editor_action },
@@ -562,8 +564,8 @@ std::span<const HostShortcutDescriptor> shortcut_descriptors()
 			HostShortcutTargetKind::editor_action, "select_all"),
 		shortcut("copy_meshes", HostShortcutContext::global, "C", true, false, false,
 			HostShortcutTargetKind::editor_action, "copy_meshes"),
-		shortcut("duplicate_meshes", HostShortcutContext::global, "D", true, false, false,
-			HostShortcutTargetKind::editor_action, "duplicate_meshes"),
+		shortcut("duplicate_selection", HostShortcutContext::global, "D", true, false, false,
+			HostShortcutTargetKind::editor_action, "duplicate_selection"),
 		shortcut("invert_selection", HostShortcutContext::global, "I", true, false, false,
 			HostShortcutTargetKind::editor_action, "invert_selection"),
 		shortcut("repeat_last_action", HostShortcutContext::global, "R", true, false, false,
@@ -1379,8 +1381,8 @@ std::span<const HostOverlayRenderPolicyDescriptor> overlay_render_policy_descrip
 std::span<const HostMaterialTextureAssetDescriptor> material_texture_asset_descriptors()
 {
 	static constexpr std::array<HostMaterialTextureAssetDescriptor, 2> descriptors {{
-		{ "default_albedo", "Default Albedo", HostMaterialTextureRole::base_color, "materials/default/default_albedo.png" },
-		{ "default_roughness", "Default Roughness", HostMaterialTextureRole::roughness, "materials/default/default_roughness.png" },
+		{ quader::kDefaultMaterialAlbedoTextureId, quader::kDefaultMaterialAlbedoTextureName, HostMaterialTextureRole::base_color, quader::kDefaultMaterialAlbedoTexturePackagePath },
+		{ quader::kDefaultMaterialRoughnessTextureId, quader::kDefaultMaterialRoughnessTextureName, HostMaterialTextureRole::roughness, quader::kDefaultMaterialRoughnessTexturePackagePath },
 	}};
 	return descriptors;
 }
@@ -1433,8 +1435,8 @@ std::span<const HostMaterialScalarDescriptor> default_material_scalars()
 std::span<const HostMaterialRecipeDescriptor> material_recipe_descriptors()
 {
 	static constexpr std::array<std::string_view, 2> texture_assets {{
-		"default_albedo",
-		"default_roughness",
+		quader::kDefaultMaterialAlbedoTextureId,
+		quader::kDefaultMaterialRoughnessTextureId,
 	}};
 	static constexpr std::array<std::string_view, 2> generated_textures {{
 		"default_metallic_smoothness",
@@ -1678,7 +1680,7 @@ std::span<const HostViewportViewDescriptor> viewport_view_catalog()
 		{ "bottom", "Bottom", true, { 0.0, -host_focus_origin_distance, 0.0 }, {}, { 0.0, 0.0, 1.0 } },
 		{ "front", "Front", true, { 0.0, 0.0, host_focus_origin_distance }, {}, { 0.0, 1.0, 0.0 } },
 		{ "back", "Back", true, { 0.0, 0.0, -host_focus_origin_distance }, {}, { 0.0, 1.0, 0.0 } },
-		{ "side", "Right", true, { host_focus_origin_distance, 0.0, 0.0 }, {}, { 0.0, 1.0, 0.0 } },
+		{ quader::viewportViewStableId(quader::ViewportView::Side), quader::viewportViewLabel(quader::ViewportView::Side), true, { host_focus_origin_distance, 0.0, 0.0 }, {}, { 0.0, 1.0, 0.0 } },
 		{ "left", "Left", true, { -host_focus_origin_distance, 0.0, 0.0 }, {}, { 0.0, 1.0, 0.0 } },
 	}};
 	return descriptors;

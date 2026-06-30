@@ -46,7 +46,6 @@ class LocalizationService;
 class QuaderEditorApi;
 class EditorSelectionService;
 class ModelingSessionService;
-enum class QuaderShadingMode;
 
 /**
  * Owns Viewport Panel behavior within the ImGui editor presentation layer.
@@ -69,19 +68,10 @@ public:
             const SceneDocument& document,
             const AssetRegistry& assets);
     void renderViewports(filament::Renderer& renderer);
-    void setViewportLayout(ViewportLayoutId layoutId);
-    int gridPreset() const;
-    void setGridPreset(int preset);
-    QuaderShadingMode paneShadingMode(ViewportPaneId paneId) const;
-    void setPaneShadingMode(ViewportPaneId paneId, QuaderShadingMode mode);
-    ViewportView paneView(ViewportPaneId paneId) const;
-    void setPaneView(ViewportPaneId paneId, ViewportView view);
     bool activateToolFromMenu(
             ViewportToolId tool,
             QuaderEditorApi& editor,
-            SceneDocument& document,
             ModelingSessionService& modeling);
-    ViewportLayoutId viewportLayout() const;
     const ViewportToolState& toolState() const { return inputRouter_.state(); }
     bool flyNavigationActive() const { return lastFlyNavigationActive_; }
     bool navigationGizmoVisible() const { return navigationGizmo_.visible(); }
@@ -134,14 +124,11 @@ private:
     const ViewportWorkspaceService& workspace() const;
     Pane& pane(ViewportPaneId paneId);
     const Pane& pane(ViewportPaneId paneId) const;
-    std::vector<ViewportPanePlacement> activePanePlacements() const;
-    std::vector<ViewportSplitHandle> activeSplitHandles() const;
+    void syncActiveToolFromEditor(QuaderEditorApi& editor, ModelingSessionService& modeling);
     bool drawPaneChrome(Pane& pane, ImVec2 itemMin, ImVec2 itemSize, const LocalizationService& localization);
     void setPaneView(Pane& pane, ViewportView view);
     bool handleSplitInput(ImVec2 viewportMin, ImVec2 viewportSize, const std::vector<ViewportSplitHandle>& handles);
     const ViewportSettings& activeViewportSettings() const;
-    static ImVec2 paneRectMin(ImVec2 viewportMin, ImVec2 viewportSize, ViewportNormalizedRect normalizedRect);
-    static ImVec2 paneRectSize(ImVec2 viewportSize, ViewportNormalizedRect normalizedRect);
 
     std::array<Pane, kViewportPaneCount> panes_;
     ViewportWorkspaceService* workspace_ = nullptr;

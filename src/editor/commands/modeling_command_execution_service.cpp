@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/commands/modeling_command_execution_service.hpp"
 
+#include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/history/modeling_preview_command_service.hpp"
 
@@ -72,14 +73,6 @@ ModelingCommandResult fromCommandResult(CommandResult result) {
     };
 }
 
-bool shouldUseSceneAwareDelete(ModelingSessionService& modeling) {
-    const ModelingSelectionSummary summary = modeling.selectionSummary();
-    return (summary.hasSelection &&
-            (summary.mode == ModelingSelectionMode::Object ||
-             summary.mode == ModelingSelectionMode::Group)) ||
-            modeling.hasSelectedSceneGroupRoot();
-}
-
 std::string commandLabel(const CommandTool* tool, std::string_view toolId) {
     if (tool == nullptr || tool->label().empty()) {
         return std::string(toolId);
@@ -99,7 +92,8 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
         return {.ok = false, .message = "Command tool is not registered."};
     }
 
-    if (tool->id() == "delete_selection" && shouldUseSceneAwareDelete(modeling)) {
+    if (tool->id() == "delete_selection" &&
+            sceneAwareDeleteHandlesSelection(modeling.selectionSummary(), modeling.hasSelectedSceneAwareDeleteRoot())) {
         return fromCommandResult(history.execute(modeling.createDeleteSelectionCommand()));
     }
 
@@ -183,7 +177,8 @@ ModelingCommandAvailability ModelingCommandExecutionService::availability(
         ModelingSessionService& modeling,
         std::string_view toolId,
         EditorSelectionService* selection) const {
-    if (toolId == std::string_view("delete_selection") && shouldUseSceneAwareDelete(modeling)) {
+    if (toolId == std::string_view("delete_selection") &&
+            sceneAwareDeleteHandlesSelection(modeling.selectionSummary(), modeling.hasSelectedSceneAwareDeleteRoot())) {
         return ModelingCommandAvailability::available();
     }
     return dispatcher_.availability(toolId, modeling, selection);

@@ -20,8 +20,6 @@ namespace {
 
 std::string_view sectionStableId(ViewportSettingsSectionId section) {
     switch (section) {
-    case ViewportSettingsSectionId::Scene:
-        return "scene";
     case ViewportSettingsSectionId::Grid:
         return "grid";
     case ViewportSettingsSectionId::Selection:

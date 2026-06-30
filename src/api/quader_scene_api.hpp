@@ -59,6 +59,10 @@ struct QuaderSceneLockEdit {
 class QuaderSceneBatch final {
 public:
     QuaderSceneBatch(QuaderSceneApi& scene, std::string label);
+    QuaderSceneBatch(const QuaderSceneBatch&) = delete;
+    QuaderSceneBatch& operator=(const QuaderSceneBatch&) = delete;
+    QuaderSceneBatch(QuaderSceneBatch&& other) noexcept;
+    QuaderSceneBatch& operator=(QuaderSceneBatch&& other) noexcept;
 
     QuaderSceneBatch& rename(EntityId entity, std::string name);
     QuaderSceneBatch& reparent(EntityId entity, EntityId parent, bool preserveWorldTransform = true);

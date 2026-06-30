@@ -247,7 +247,7 @@ void appendBoundsCage(ViewportOverlayFrame& frame, const SceneBounds& bounds) {
                 .start = corners[static_cast<std::size_t>(edge[0])],
                 .end = corners[static_cast<std::size_t>(edge[1])],
                 .color = kOverlayGroupBoundsColor,
-                .widthPixels = 1.5f,
+                .widthPixels = kOverlayGroupBoundsLineWidthPixels,
                 .styleRole = ViewportOverlayStyleRole::GroupBounds,
                 .source = ViewportOverlaySource::GroupBounds,
         });
@@ -270,7 +270,6 @@ void appendGroupSelectionCages(
 
 void appendSelectedLightMarkers(ViewportOverlayFrame& frame, const SceneDocument& document) {
     constexpr float kLightMarkerRadius = 0.28f;
-    constexpr float kLightMarkerPointSize = 13.0f;
     constexpr float kDirectionalLightLength = 0.85f;
     const std::array<QVec3, 3> axes{{
             {kLightMarkerRadius, 0.0f, 0.0f},
@@ -289,10 +288,10 @@ void appendSelectedLightMarkers(ViewportOverlayFrame& frame, const SceneDocument
                 .layer = ViewportOverlayLayer::SelectedVertex,
                 .position = position,
                 .color = kOverlaySelectedVertexColor,
-                .sizePixels = kLightMarkerPointSize,
+                .sizePixels = kOverlayLightMarkerPointSizePixels,
                 .styleRole = ViewportOverlayStyleRole::SelectedVertex,
                 .source = ViewportOverlaySource::Selection,
-                .outlineGrowthPixels = 2.0f,
+                .outlineGrowthPixels = kOverlayLightMarkerOutlineGrowthPixels,
         });
 
         if (light->type == LightType::Directional) {

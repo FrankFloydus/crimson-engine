@@ -8,6 +8,7 @@
 
 #include "core/logger.hpp"
 #include "render/render_layers.hpp"
+#include "core/scene_environment_catalog.hpp"
 
 #include <image/Ktx1Bundle.h>
 #include <ktxreader/Ktx1Reader.h>
@@ -126,8 +127,14 @@ bool FilamentEnvironmentLibrary::loadEnvironment(std::string environmentId) {
     detachEnvironment();
     destroyEnvironment();
 
-    const std::filesystem::path directory = resourceRoot_ / "ibl" / environmentId;
-    const std::filesystem::path prefix = directory / environmentId;
+    const SceneEnvironmentDescriptor* descriptor = sceneEnvironmentDescriptor(environmentId);
+    if (descriptor == nullptr) {
+        LOG_WARN("Unknown Filament IBL environment '{}'", environmentId);
+        return false;
+    }
+
+    const std::filesystem::path directory = resourceRoot_ / "ibl" / std::string(descriptor->directory);
+    const std::filesystem::path prefix = directory / std::string(descriptor->fileStem);
     const std::filesystem::path iblPath = prefix.string() + "_ibl.ktx";
     const std::filesystem::path skyboxPath = prefix.string() + "_skybox.ktx";
     const std::vector<std::uint8_t> iblBytes = readBinaryFile(iblPath);
@@ -184,7 +191,7 @@ void FilamentEnvironmentLibrary::attachEnvironment(const SceneEnvironmentSetting
         scene_->setIndirectLight(indirectLight_);
     }
 
-    if (settings.showBackground) {
+    if (settings.showBackground && settings.backgroundIntensity > 0.0f) {
         skybox_ = filament::Skybox::Builder()
                 .environment(skyboxTexture_)
                 .showSun(true)

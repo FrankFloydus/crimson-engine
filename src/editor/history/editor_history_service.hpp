@@ -34,6 +34,7 @@ public:
 
     CommandResult execute(std::unique_ptr<IUndoableCommand> command);
     CommandResult execute(std::unique_ptr<IUndoableCommand> command, UndoRedoExecuteOptions options);
+    CommandResult recordExecuted(std::unique_ptr<IUndoableCommand> command);
     CommandResult commit();
     CommandResult cancel();
     CommandResult discard();
@@ -42,6 +43,9 @@ public:
     [[nodiscard]] bool empty() const { return commands_.empty(); }
 
 private:
+    /**
+     * Stores a transaction child command with the merge key used when it was queued.
+     */
     struct TransactionCommand {
         std::unique_ptr<IUndoableCommand> command;
         std::string mergeKey;

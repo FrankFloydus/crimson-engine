@@ -255,6 +255,7 @@ std::vector<std::filesystem::path> guardrailSourceFiles() {
             "tools",
             "CMakeLists.txt",
             "CMakePresets.json",
+            "vcpkg.json",
     };
     const std::vector<std::string> extensions = {
             ".c",
@@ -308,6 +309,11 @@ std::size_t countOccurrences(std::string_view source, std::string_view needle) {
         offset += needle.size();
     }
     return count;
+}
+
+bool endsWith(std::string_view value, std::string_view suffix) {
+    return value.size() >= suffix.size() &&
+            value.substr(value.size() - suffix.size()) == suffix;
 }
 
 /**
@@ -587,15 +593,19 @@ TEST(BuildGuardrailTests, RootQuaderTestsListsEveryRootTestSource) {
     expectContains(rootCMake, "add_executable(quader_guardrail_tests");
     expectContains(rootCMake, "target_link_libraries(quader_guardrail_tests PRIVATE GTest::gtest GTest::gtest_main)");
     expectContains(guardrailTarget, "tests/agent_instruction_routing_tests.cpp");
-    expectContains(guardrailTarget, "tests/build_guardrail_tests.cpp");
-    expectContains(guardrailTarget, "tests/oop_architecture_guardrail_tests.cpp");
-    expectContains(guardrailTarget, "tests/programmatic_api_guardrail_tests.cpp");
     expectContains(guardrailTarget, "tests/support/guardrail_file_scan.cpp");
     expectMissing(guardrailTarget, "quader_runtime");
     expectMissing(appTarget, "tests/agent_instruction_routing_tests.cpp");
-    expectMissing(appTarget, "tests/build_guardrail_tests.cpp");
-    expectMissing(appTarget, "tests/oop_architecture_guardrail_tests.cpp");
-    expectMissing(appTarget, "tests/programmatic_api_guardrail_tests.cpp");
+
+    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "tests", ".cpp")) {
+        const std::string relative = normalizedRelative(file);
+        if (startsWith(relative, "tests/modeling_domain/") || !endsWith(relative, "_guardrail_tests.cpp")) {
+            continue;
+        }
+
+        expectContains(guardrailTarget, relative);
+        expectMissing(appTarget, relative);
+    }
 }
 
 TEST(BuildGuardrailTests, ProjectOwnedCppFilesUseSnakeCaseCppAndHppNames) {
@@ -896,14 +906,21 @@ TEST(BuildGuardrailTests, DefaultMaterialMetadataMatchesRuntimePackagePath) {
     const std::string rootCMake = readSourceFile("CMakeLists.txt");
     const std::string appSource = readSourceFile("src/app/app.cpp");
     const std::string hostContract = readSourceFile("src/editor/metadata/host_contract.cpp");
+    const std::string defaultCatalog = readSourceFile("src/assets/default_material_catalog.hpp");
 
     expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/materials/default/default_albedo.png");
     expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/materials/default/default_roughness.png");
-    expectContains(appSource, "materials/default/default_albedo.png");
-    expectContains(appSource, "materials/default/default_roughness.png");
-    expectContains(hostContract, "materials/default/default_albedo.png");
-    expectContains(hostContract, "materials/default/default_roughness.png");
+    expectContains(defaultCatalog, "kDefaultMaterialAlbedoTexturePackagePath");
+    expectContains(defaultCatalog, "kDefaultMaterialRoughnessTexturePackagePath");
+    expectContains(appSource, "default_material_catalog.hpp");
+    expectContains(appSource, "kDefaultMaterialAlbedoTexturePackagePath");
+    expectContains(appSource, "kDefaultMaterialRoughnessTexturePackagePath");
+    expectContains(hostContract, "default_material_catalog.hpp");
+    expectContains(hostContract, "kDefaultMaterialAlbedoTexturePackagePath");
+    expectContains(hostContract, "kDefaultMaterialRoughnessTexturePackagePath");
     expectMissing(hostContract, "assets/materials/default/");
+    expectMissing(appSource, "\"materials/default/default_albedo.png\"");
+    expectMissing(hostContract, "\"materials/default/default_albedo.png\"");
 }
 
 TEST(BuildGuardrailTests, LocalMachinePathsUseEnvironmentBackedDefaults) {
@@ -1002,11 +1019,16 @@ TEST(BuildGuardrailTests, AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogl
     expectContains(tool, "src/render/");
     expectContains(tool, "src/ui/");
     expectContains(tool, "src/mesh/polygon/");
+    expectContains(tool, "src/editor/transform/");
+    expectContains(tool, "EditorApiTests.*Transform*");
     expectContains(tool, "modeling/runtime");
     expectContains(tool, "src/editor/metadata/");
     expectContains(tool, "resources/locales/");
+    expectContains(tool, "resources/ibl/");
     expectContains(tool, "CMakeLists");
+    expectContains(tool, "vcpkg\\.json");
     expectContains(docsRoute, "ProgrammaticApiGuardrailTests.PublicExamplesStartFromEditorApiOrScriptSurface");
+    expectContains(docsRoute, "ProgrammaticApiGuardrailTests.PublicExamplesAndDocsDoNotStartFromInternalOwnerHeaders");
 
     expectContains(testingBuild, "tools/affected_check.ps1");
     expectContains(testingBuild, "quader_modeling_domain_polygon_loop_tests");
@@ -1062,21 +1084,33 @@ TEST(BuildGuardrailTests, LocalizationResourcesArePackagedWithRuntime) {
 
 TEST(BuildGuardrailTests, ImGuiRuntimeResourcesArePackagedWithRuntime) {
     const std::string rootCMake = readSourceFile("CMakeLists.txt");
+    const std::string iconHeader = readSourceFile("src/ui/ui_icon_set.hpp");
+    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
 
     expectContains(rootCMake, "src/ui/ui_system.cpp");
     expectContains(rootCMake, "src/ui/viewport_panel.cpp");
+    expectContains(rootCMake, "quader_register_filament_material");
+    expectContains(rootCMake, "QUADER_FILAMENT_MATERIAL_COPY_COMMANDS");
     expectContains(rootCMake, "resources/materials/quader_mesh.mat");
     expectContains(rootCMake, "resources/materials/quader_mesh_lit.mat");
-    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/materials/quader_mesh.filamat");
-    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/materials/quader_mesh_lit.filamat");
+    expectContains(rootCMake, "quader_register_filament_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh)");
+    expectContains(rootCMake, "quader_register_filament_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit)");
     expectContains(rootCMake, "resources/materials/imgui.mat");
-    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/materials/imgui.filamat");
+    expectContains(rootCMake, "quader_register_filament_material(imgui_material resources/materials/imgui.mat imgui)");
     expectContains(rootCMake, "resources/fonts/Inter.ttf");
     expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/fonts/Inter.ttf");
     expectContains(rootCMake, "resources/icons");
     expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/icons");
     expectContains(rootCMake, "copy_if_different");
     expectContains(rootCMake, "copy_directory");
+    expectContains(iconHeader, "lock");
+    expectContains(iconHeader, "unlock");
+    expectContains(iconHeader, "hide");
+    expectContains(iconHeader, "show");
+    expectContains(uiSystemSource, "lock_icon.png");
+    expectContains(uiSystemSource, "unlock_icon.png");
+    expectContains(uiSystemSource, "hide_icon.png");
+    expectContains(uiSystemSource, "show_icon.png");
 
     EXPECT_FALSE(readSourceFile("resources/materials/imgui.mat").empty());
     EXPECT_FALSE(readSourceFile("resources/materials/quader_mesh.mat").empty());
@@ -1154,8 +1188,10 @@ TEST(BuildGuardrailTests, ImGuiViewportApiKeepsMultiPaneLayoutWorkspace) {
     expectContains(viewportApiSource, "ViewportWorkspaceService workspace{ViewportWorkspaceLayoutPolicy::MultiPane}");
     expectMissing(viewportApiSource, "ViewportWorkspaceService workspace{ViewportWorkspaceLayoutPolicy::SinglePaneOnly}");
     expectContains(mainMenuSource, "context.editor.viewports().setLayout(option.id)");
-    expectContains(viewportPanelSource, "return workspace().activePanePlacements()");
-    expectContains(viewportPanelSource, "return workspace().activeSplitHandles()");
+    expectContains(viewportPanelSource, "viewportWorkspace.activePanePlacements()");
+    expectContains(viewportPanelSource, "viewportWorkspace.activeSplitHandles()");
+    expectMissing(viewportPanelSource, "return workspace().activePanePlacements()");
+    expectMissing(viewportPanelSource, "return workspace().activeSplitHandles()");
 }
 
 TEST(BuildGuardrailTests, RuntimeUiUsesNativeImGuiStackOnly) {

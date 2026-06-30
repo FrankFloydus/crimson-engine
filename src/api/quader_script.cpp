@@ -8,7 +8,10 @@
 
 #include "api/quader_api.hpp"
 #include "api/quader_api_mutation_runner.hpp"
+#include "api/quader_api_session_internal_access.hpp"
+#include "editor/history/modeling_memento_command.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "scene/document/project_session.hpp"
 
 #include <memory>
 #include <optional>
@@ -29,6 +32,15 @@ void mergeScriptStepStatus(QuaderScriptResult& result, const QuaderApiStatus& st
 
 std::string scriptTransactionLabel(std::string_view label) {
     return label.empty() ? std::string("Script") : std::string(label);
+}
+
+QuaderApiStatus scriptHistoryStepStatus(const QuaderApi& api) {
+    QuaderApiStatus status;
+    status.ok = false;
+    status.changed = false;
+    status.message = "History operations are not supported inside QuaderScript.";
+    status.revisions = api.revisions();
+    return status;
 }
 
 } // namespace
@@ -165,13 +177,13 @@ QuaderScript& QuaderScript::assignMaterialSlot(std::uint32_t materialSlot) {
 
 QuaderScript& QuaderScript::undo() {
     return addStep("undo", [this](QuaderScriptResult&) {
-        return quaderApiStatusFromResult(api_.history().undo());
+        return scriptHistoryStepStatus(api_);
     });
 }
 
 QuaderScript& QuaderScript::redo() {
     return addStep("redo", [this](QuaderScriptResult&) {
-        return quaderApiStatusFromResult(api_.history().redo());
+        return scriptHistoryStepStatus(api_);
     });
 }
 
@@ -222,23 +234,38 @@ QuaderScriptResult QuaderScript::run() {
         return result;
     }
 
-    ModelingSessionMemento after = mutations.captureModelingMemento();
-    const CommandResult discarded = transaction.discard();
-    if (!discarded.ok) {
+    if (result.changed) {
+        const ModelingSessionMemento after = mutations.captureModelingMemento();
+        const CommandResult recordedModeling = transaction.recordExecuted(
+                std::make_unique<RecordedModelingMementoCommand>(
+                        QuaderApiSessionInternalAccess::projectSession(api_.session()).modeling(),
+                        scriptTransactionLabel(label_),
+                        before,
+                        after));
+        if (!recordedModeling.ok) {
+            result.ok = false;
+            result.changed = false;
+            result.mutationKind = QuaderMutationKind::None;
+            result.message = recordedModeling.message;
+            result.revisions = api_.revisions();
+            result.finalSnapshot = api_.snapshot();
+            return result;
+        }
+    }
+
+    const CommandResult committed = transaction.commit();
+    if (!committed.ok) {
         result.ok = false;
         result.changed = false;
         result.mutationKind = QuaderMutationKind::None;
-        result.message = discarded.message;
+        result.message = committed.message;
         result.revisions = api_.revisions();
         result.finalSnapshot = api_.snapshot();
         return result;
     }
 
-    if (result.changed) {
-        const QuaderApiVoidResult recorded = mutations.recordModelingMementoTransaction(
-                scriptTransactionLabel(label_),
-                std::move(before),
-                std::move(after));
+    if (result.changed || committed.changed) {
+        const QuaderApiVoidResult recorded = mutations.runDocumentCommand(committed, scriptTransactionLabel(label_));
         copyQuaderApiStatus(result, recorded);
     } else {
         result.revisions = api_.revisions();

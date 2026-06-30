@@ -38,7 +38,8 @@ bool ViewportInteractionController::dragging() const {
     return transformGizmo_.dragging();
 }
 
-void ViewportInteractionController::reset() {
+void ViewportInteractionController::reset(QuaderEditorApi* editor) {
+    transformGizmo_.reset(editor);
     selection_.reset();
 }
 

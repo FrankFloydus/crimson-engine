@@ -9,7 +9,9 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
+#include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
+#include "render/viewport_overlay_policy.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 
@@ -17,12 +19,6 @@
 
 namespace quader {
 namespace {
-
-bool componentSelectionMode(QuaderSelectionMode mode) {
-    return mode == QuaderSelectionMode::Vertex ||
-            mode == QuaderSelectionMode::Edge ||
-            mode == QuaderSelectionMode::Face;
-}
 
 QuaderTransformAxis apiAxisFor(quader_editor_core::TransformAxis axis) {
     switch (axis) {
@@ -73,8 +69,8 @@ quader_editor_core::TransformGizmoFrameInput makeGizmoInput(
     input.pivot = pivot;
     input.camera = ViewportCameraAdapter::runtimeCamera(frame.camera, frame.input.viewportSize);
     input.grid_size = viewportGridWorldSizeForPreset(frame.input.gridPreset);
-    input.gizmo_size_pixels = 68.0;
-    input.pick_radius_pixels = 12.0;
+    input.gizmo_size_pixels = kOverlayTransformGizmoSizePixels;
+    input.pick_radius_pixels = kOverlayTransformGizmoPickRadiusPixels;
     input.gizmo_scale = std::max(frame.settings.floatValue(ViewportFloatSettingId::GizmoSize), 0.1f);
     input.ring_segments = 64;
     return input;
@@ -84,7 +80,7 @@ QuaderTransformOperation transformOperationFor(
         ViewportToolId tool,
         QuaderSelectionMode mode,
         ViewportModifiers modifiers) {
-    if (!modifiers.shift || !componentSelectionMode(mode)) {
+    if (!modifiers.shift || !isComponentSelectionMode(toModelingSelectionMode(mode))) {
         return QuaderTransformOperation::Transform;
     }
     if (tool == ViewportToolId::Move) {
@@ -177,7 +173,8 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
     }
 
     const ViewportRay startRay = frame.camera.rayFromViewportPoint(frame.leftClickLocal);
-    const bool duplicateSelected = !componentSelectionMode(selection.mode) && frame.input.modifiers.shift;
+    const bool duplicateSelected = !isComponentSelectionMode(toModelingSelectionMode(selection.mode)) &&
+            frame.input.modifiers.shift;
     const QuaderApiResult<QuaderTransformDragPreview> begin =
             editor.modeling().beginTransformDrag({
                     .tool = apiTransformToolFor(tool),
@@ -219,6 +216,15 @@ bool TransformGizmoInteraction::cancelActiveDrag(QuaderEditorApi& editor) {
     }
     resetDragState();
     return true;
+}
+
+void TransformGizmoInteraction::reset(QuaderEditorApi* editor) {
+    if (editor != nullptr && dragging_) {
+        (void)cancelActiveDrag(*editor);
+    } else {
+        resetDragState();
+    }
+    clearFrame();
 }
 
 const quader_editor_core::TransformGizmoFrame* TransformGizmoInteraction::frame() const {

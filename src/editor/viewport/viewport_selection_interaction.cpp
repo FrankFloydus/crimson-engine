@@ -68,12 +68,6 @@ bool liveBoxSelectionAllowed(QuaderSelectionEdit edit, QuaderSelectionMode mode)
     return true;
 }
 
-bool componentSelectionMode(QuaderSelectionMode mode) {
-    return mode == QuaderSelectionMode::Vertex ||
-            mode == QuaderSelectionMode::Edge ||
-            mode == QuaderSelectionMode::Face;
-}
-
 bool hoverTargetValid(const QuaderHoverTarget& target) {
     return target.kind != QuaderActiveSelectionKind::None && target.objectId > 0;
 }
@@ -341,7 +335,7 @@ void ViewportSelectionInteraction::handleFrame(
                     frame,
                     frame.leftClickLocal,
                     std::max(1, frame.leftClickCount));
-            paintSelectionActive_ = componentSelectionMode(summary.mode);
+            paintSelectionActive_ = isComponentSelectionMode(toModelingSelectionMode(summary.mode));
             suppressHoverAfterSelection(frame.leftClickLocal, hoveredBeforeSelection);
         }
         boxEdit_ = QuaderSelectionEdit::Replace;
@@ -365,7 +359,7 @@ void ViewportSelectionInteraction::handleFrame(
                 frame,
                 frame.input.mouseLocal,
                 0);
-        paintSelectionActive_ = componentSelectionMode(summary.mode);
+        paintSelectionActive_ = isComponentSelectionMode(toModelingSelectionMode(summary.mode));
         suppressHoverAfterSelection(frame.input.mouseLocal, hoveredBeforeSelection);
     }
 
@@ -443,7 +437,7 @@ QuaderSelectionSummary ViewportSelectionInteraction::pickContextMenuTarget(
             true,
             true,
             true);
-    paintSelectionActive_ = componentSelectionMode(summary.mode);
+    paintSelectionActive_ = isComponentSelectionMode(toModelingSelectionMode(summary.mode));
     hoverClearIssued_ = false;
     hoverSuppressedTarget_.reset();
     return summary;

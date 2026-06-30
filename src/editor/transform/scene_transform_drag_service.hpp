@@ -18,6 +18,7 @@
 namespace quader {
 
 class EditorHistoryService;
+class DocumentCommandService;
 class QuaderEditorApi;
 class SceneDocument;
 class AssetRegistry;
@@ -80,6 +81,16 @@ public:
             const AssetRegistry& assets,
             EntityId primary,
             QVec3 nextPrimaryScale,
+            std::string label = "Transform Selection");
+    DocumentCommandResult moveSelectedByWorldDelta(
+            DocumentCommandService& documentCommands,
+            SceneDocument& document,
+            QVec3 worldDelta,
+            std::string label = "Move Selection");
+    DocumentCommandResult transformSelectedByWorldDelta(
+            DocumentCommandService& documentCommands,
+            SceneDocument& document,
+            const QMat4& worldTransformDelta,
             std::string label = "Transform Selection");
 
 private:

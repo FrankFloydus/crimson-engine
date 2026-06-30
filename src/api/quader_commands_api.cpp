@@ -40,6 +40,22 @@ bool modelingActionRegistersDedicatedCommand(const CommandTool& tool) {
     return tool.registersPublicCommand();
 }
 
+bool duplicateSelectionAvailable(const QuaderApi& api) {
+    const QuaderSelectionSummary selection = api.query().selection();
+    if (!selection.hasSelection ||
+            (selection.mode != QuaderSelectionMode::Object &&
+                    selection.mode != QuaderSelectionMode::Group)) {
+        return false;
+    }
+
+    for (const auto& entity : api.query().entities()) {
+        if (entity.selected && !entity.isSceneRoot) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::string commandIdForToolActivation(std::string_view toolId) {
     return quaderToolActivationCommandTargetId(toolId);
 }
@@ -557,11 +573,12 @@ void QuaderCommandsApi::Impl::registerCommands() {
             "paste_selection",
             "Paste Selection",
             "Ctrl+V");
-    registerModelingToolPublicCommand(
+    registerCommand(
             QuaderCommand::DuplicateSelection,
-            "duplicate_meshes",
             "Duplicate Selection",
-            "Ctrl+D");
+            [this] { return api_.modeling().duplicateSelectedEntityHierarchy(); },
+            "Ctrl+D",
+            [this] { return duplicateSelectionAvailable(api_); });
     registerCommand(
             QuaderCommand::GroupSelection,
             "Group Selection",
@@ -627,16 +644,17 @@ void QuaderCommandsApi::Impl::registerCommands() {
     registerCommand(
             QuaderCommand::ViewportFrameSelection,
             "Frame Selection",
-            [this] { return viewports_.frameSelection(); });
+            [this] { return viewports_.frameSelection(viewports_.focusedPane()); });
     registerCommand(
             QuaderCommand::ViewportFocusOrigin,
             "Focus Origin",
-            [this] { return viewports_.focusOrigin(); });
+            [this] { return viewports_.focusOrigin(viewports_.focusedPane()); });
     registerCommand(
             QuaderCommand::ViewportSpawnWindow,
             "New Viewport Window",
             [this] { return viewports_.spawnWindow(); },
-            "F12");
+            {},
+            [this] { return viewports_.canSpawnWindow(); });
     registerViewportViewCommand(
             QuaderCommand::ViewportViewPerspective,
             "Perspective View",
@@ -709,7 +727,7 @@ void QuaderCommandsApi::Impl::registerViewportViewCommand(
             id,
             std::move(label),
             [this, view] {
-                return viewports_.setView(ViewportPaneId::Perspective, view);
+                return viewports_.setView(viewports_.focusedPane(), view);
             },
             std::move(shortcut));
 }

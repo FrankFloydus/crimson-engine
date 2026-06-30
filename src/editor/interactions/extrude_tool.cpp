@@ -8,6 +8,7 @@
 
 #include <editor/modeling/runtime/editor_tool.hpp>
 #include <editor/interactions/tool_drag_math.hpp>
+#include <editor/interactions/tool_math_internal.hpp>
 #include <editor/interactions/tool_transform_math.hpp>
 #include <editor/modeling/runtime/tool_constants.hpp>
 
@@ -21,51 +22,6 @@
 
 namespace quader_editor_core {
 namespace {
-
-quader_geometry::QVec2d to_geometry_vec2(quader::QVec2 value)
-{
-	return { value.x, value.y };
-}
-
-quader_geometry::QVec3d to_geometry_vec3(quader::QVec3 value)
-{
-	return { value.x, value.y, value.z };
-}
-
-quader::QVec2 to_poly_vec2(quader_geometry::QVec2d value)
-{
-	return { static_cast<float>(value.x), static_cast<float>(value.y) };
-}
-
-quader::QVec3 to_poly_vec3(quader_geometry::QVec3d value)
-{
-	return { static_cast<float>(value.x), static_cast<float>(value.y), static_cast<float>(value.z) };
-}
-
-bool vec3_is_tiny(quader::QVec3 value, double epsilon = tool_epsilon)
-{
-	return quader_geometry::length_squared(to_geometry_vec3(value)) <= epsilon * epsilon;
-}
-
-quader::QVec2 vec2_normalize_or(quader::QVec2 value, quader::QVec2 fallback)
-{
-	const quader_geometry::QVec2d geometry_value = to_geometry_vec2(value);
-	const double length_squared = quader_geometry::length_squared(geometry_value);
-	if (length_squared <= screen_epsilon) {
-		return fallback;
-	}
-	return to_poly_vec2(geometry_value / std::sqrt(length_squared));
-}
-
-quader::QVec3 normalized_axis(quader::QVec3 value)
-{
-	return to_poly_vec3(quader_geometry::normalize_or_zero(to_geometry_vec3(value), tool_epsilon));
-}
-
-double safe_grid_size(double grid_size, double minimum)
-{
-	return std::max(grid_size, minimum);
-}
 
 /**
  * Represents an Extrude Tool Status value used by the modal modeling interaction layer.

@@ -8,6 +8,7 @@
 
 #include <editor/modeling/runtime/tool_constants.hpp>
 #include <editor/metadata/host_contract.hpp>
+#include <viewport/viewport_layout.hpp>
 
 #include <string_view>
 
@@ -93,8 +94,8 @@ TEST(QdrEditorMetadataViewportCatalogTests, HostContractViewportViewCatalogDescr
 	EXPECT_TRUE(top.position.y == qhc::viewport_defaults().focus_origin_distance);
 	EXPECT_TRUE(top.up.z == -1.0);
 
-	const qhc::HostViewportViewDescriptor& side = require_view("side");
-	EXPECT_TRUE(same_text(side.label, "Right"));
+	const qhc::HostViewportViewDescriptor& side = require_view(quader::viewportViewStableId(quader::ViewportView::Side));
+	EXPECT_TRUE(same_text(side.label, quader::viewportViewLabel(quader::ViewportView::Side)));
 	EXPECT_TRUE(side.orthographic);
 	EXPECT_TRUE(side.position.x == qhc::viewport_defaults().focus_origin_distance);
 	EXPECT_TRUE(side.up.y == 1.0);

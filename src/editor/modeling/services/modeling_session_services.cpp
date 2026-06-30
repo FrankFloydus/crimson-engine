@@ -399,6 +399,30 @@ bool ModelingSelectionService::applyPickSelection(
     return result.applied;
 }
 
+std::optional<int> ModelingSelectionService::pickObjectId(
+        const quader_editor_core::EditorSession& session,
+        const SceneDocument& scene,
+        const ModelingObjectRuntimeMap& objectRegistry,
+        const ModelingPickSelectRequest& request) const {
+    const std::vector<quader_editor_core::PolygonObject>& cachedObjects =
+            cachedSceneTransformedObjectsForPicking(session, scene, objectRegistry);
+    quader_poly::PickOptions pickOptions = pickOptionsFromRequest(request);
+    pickOptions.mode = quader_poly::SelectionMode::face;
+    const std::optional<quader_editor_core::PickHitRecord> hit =
+            quader_editor_core::pick_nearest(
+                    cachedObjects,
+                    quader_editor_core::PickRequest{
+                            .ray = toRuntimeRay(request.ray),
+                            .options = pickOptions,
+                    },
+                    cachedPickObjectBounds(session, scene, objectRegistry),
+                    cachedPickFaceGeometry(session, scene, objectRegistry, pickOptions));
+    if (!hit || hit->object_id <= 0) {
+        return std::nullopt;
+    }
+    return hit->object_id;
+}
+
 quader_editor_core::RectangleSelectionState ModelingSelectionService::rectangleSelectionState(
         const quader_editor_core::EditorSession& session) const {
     quader_editor_core::RectangleSelectionState selection;
@@ -575,6 +599,22 @@ quader_editor_core::RectangleProjectedHitsRequest ModelingSelectionService::rect
         hitsRequest.objects.push_back(std::move(projectedObject));
     }
     return hitsRequest;
+}
+
+std::vector<int> ModelingSelectionService::boxPickObjectIds(
+        const quader_editor_core::EditorSession& session,
+        const SceneDocument& scene,
+        const ModelingObjectRuntimeMap& objectRegistry,
+        const ModelingBoxSelectRequest& request) const {
+    const std::vector<quader_editor_core::PolygonObject> pickingObjects =
+            sceneTransformedObjectsForPicking(session, scene, objectRegistry);
+    const quader_editor_core::RectangleSelectionHits hits =
+            quader_editor_core::rectangle_hits_from_projected_candidates(
+                    rectangleProjectedHitsRequest(
+                            pickingObjects,
+                            quader_editor_core::SelectionMode::object,
+                            request));
+    return hits.object_ids;
 }
 
 bool ModelingSelectionService::applyRectangleSelection(

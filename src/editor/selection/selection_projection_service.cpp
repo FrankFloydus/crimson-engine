@@ -218,12 +218,7 @@ RuntimeObjectSelectionProjectionResult SelectionProjectionService::projectObject
     const RuntimeObjectSelectionProjection projection =
             runtimeObjectSelectionForSceneEntities(entities, active, objectRegistry);
     result.hasModelingObjects = projection.hasModelingObjects;
-    if (projection.hasInputEntities && !projection.hasModelingObjects) {
-        result.ok = false;
-        return result;
-    }
-
-    result.changed = applyRuntimeObjectSelection(session, projection, false);
+    result.changed = applyRuntimeObjectSelection(session, projection, true);
     return result;
 }
 
@@ -236,7 +231,7 @@ bool SelectionProjectionService::promoteObjectSelectionForTool(
             selectedEntities,
             scene.primarySelection(),
             objectRegistry);
-    if (projection.hasModelingObjects) {
+    if (projection.hasInputEntities) {
         return applyRuntimeObjectSelection(session, projection, true);
     }
 

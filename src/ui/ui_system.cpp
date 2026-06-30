@@ -844,7 +844,9 @@ void UISystem::loadIcons(filament::Engine& engine, TextureRegistry& textures, co
     icons_.mesh = load("mesh_icon.png");
     icons_.empty = load("empty_icon.png");
     icons_.lock = load("lock_icon.png");
+    icons_.unlock = load("unlock_icon.png");
     icons_.hide = load("hide_icon.png");
+    icons_.show = load("show_icon.png");
 }
 
 void UISystem::destroyIcons() {

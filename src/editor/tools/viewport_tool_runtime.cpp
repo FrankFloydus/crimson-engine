@@ -85,7 +85,7 @@ bool ViewportToolController::activateTool(
 }
 
 bool ViewportModalToolController::handles(const ViewportTool& tool) const {
-    return dynamic_cast<const ModalViewportTool*>(&tool) != nullptr;
+    return tool.kind() == ToolKind::Modal;
 }
 
 bool ViewportModalToolController::ownsViewport(
@@ -101,7 +101,7 @@ bool ViewportModalToolController::blocksViewportFocusShortcuts(
 }
 
 bool ViewportTransformToolController::handles(const ViewportTool& tool) const {
-    return dynamic_cast<const TransformViewportTool*>(&tool) != nullptr;
+    return tool.kind() == ToolKind::Transform;
 }
 
 ModelingTransformTool ViewportTransformToolController::transformTool(const ViewportTool& tool) const {

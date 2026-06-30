@@ -7,8 +7,10 @@
 #include "render/filament_material_library.hpp"
 
 #include "core/logger.hpp"
+#include "render/filament_material_catalog.hpp"
 #include "render/material_compiler_service.hpp"
 
+#include <string>
 #include <stdexcept>
 #include <vector>
 
@@ -21,20 +23,21 @@ FilamentMaterialLibrary::~FilamentMaterialLibrary() {
 bool FilamentMaterialLibrary::initialize(filament::Engine& engine, const std::filesystem::path& executableDir) {
     engine_ = &engine;
     try {
+        const std::filesystem::path materialDir = executableDir / std::string(kFilamentMaterialDirectory);
         LOG_INFO("Loading Quader mesh material");
-        quaderMeshMaterial_ = load(executableDir / "materials" / "quader_mesh.filamat");
+        quaderMeshMaterial_ = load(materialDir / std::string(kQuaderMeshMaterialFile));
         LOG_INFO("Loading Quader lit mesh material");
-        quaderMeshLitMaterial_ = load(executableDir / "materials" / "quader_mesh_lit.filamat");
+        quaderMeshLitMaterial_ = load(materialDir / std::string(kQuaderMeshLitMaterialFile));
         LOG_INFO("Loading vertex color overlay material");
-        vertexColorOverlayMaterial_ = load(executableDir / "materials" / "vertex_color_overlay.filamat");
+        vertexColorOverlayMaterial_ = load(materialDir / std::string(kVertexColorOverlayMaterialFile));
         LOG_INFO("Loading overlay line material");
-        overlayLineMaterial_ = load(executableDir / "materials" / "quader_overlay_line.filamat");
+        overlayLineMaterial_ = load(materialDir / std::string(kOverlayLineMaterialFile));
         LOG_INFO("Loading overlay point material");
-        overlayPointMaterial_ = load(executableDir / "materials" / "quader_overlay_point.filamat");
+        overlayPointMaterial_ = load(materialDir / std::string(kOverlayPointMaterialFile));
         LOG_INFO("Loading ImGui material");
-        imguiMaterial_ = load(executableDir / "materials" / "imgui.filamat");
+        imguiMaterial_ = load(materialDir / std::string(kImguiMaterialFile));
         LOG_INFO("Loading ground grid material");
-        groundGridMaterial_ = load(executableDir / "materials" / "ground_grid.filamat");
+        groundGridMaterial_ = load(materialDir / std::string(kGroundGridMaterialFile));
     } catch (const std::exception& error) {
         LOG_ERROR("Material load failed: {}", error.what());
         shutdown();

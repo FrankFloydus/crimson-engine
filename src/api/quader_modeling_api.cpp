@@ -15,10 +15,13 @@
 #include "editor/commands/modeling/commit_box_preview_command.hpp"
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/selection/editor_selection_service.hpp"
+#include "editor/transform/scene_transform_drag_service.hpp"
+#include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "math/glm_bridge.hpp"
 
 #include <glm/gtc/quaternion.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <memory>
 #include <utility>
@@ -71,6 +74,25 @@ QuaderTransform3 scaleTransform(QVec3 scale) {
             .zAxis = {0.0f, 0.0f, scale.z},
             .origin = {},
     };
+}
+
+bool entitySelectionOwnsTransforms(ProjectSession& session) {
+    const ModelingSelectionSummary summary = session.selection().summary();
+    return summary.hasSelection && selectionModeUsesSceneDocument(summary.mode);
+}
+
+QMat4 worldTransformDeltaFromApiTransform(const QuaderTransform3& transform, QVec3 pivot) {
+    glm::mat4 localTransform{1.0f};
+    localTransform[0] = glm::vec4{toGlm(transform.xAxis), 0.0f};
+    localTransform[1] = glm::vec4{toGlm(transform.yAxis), 0.0f};
+    localTransform[2] = glm::vec4{toGlm(transform.zAxis), 0.0f};
+    localTransform[3] = glm::vec4{toGlm(transform.origin), 1.0f};
+
+    const glm::mat4 aroundPivot =
+            glm::translate(glm::mat4{1.0f}, toGlm(pivot)) *
+            localTransform *
+            glm::translate(glm::mat4{1.0f}, -toGlm(pivot));
+    return fromGlm(aroundPivot);
 }
 
 } // namespace
@@ -246,8 +268,20 @@ QuaderApiVoidResult QuaderModelingApi::cancelTransformDrag() {
 }
 
 QuaderApiVoidResult QuaderModelingApi::moveSelection(QVec3 delta) {
+    ProjectSession& session = projectSession(session_);
+    if (entitySelectionOwnsTransforms(session)) {
+        SceneTransformDragService transforms;
+        return mutations_.runDocumentResult(
+                transforms.moveSelectedByWorldDelta(
+                        session.documentCommands(),
+                        session.scene(),
+                        delta,
+                        "Move Selection"),
+                "Move Selection");
+    }
+
     return mutations_.runModelingCommand(
-            std::make_unique<MoveSelectionHistoryCommand>(projectSession(session_).modeling(), delta),
+            std::make_unique<MoveSelectionHistoryCommand>(session.modeling(), delta),
             "Move Selection");
 }
 
@@ -260,15 +294,78 @@ QuaderApiVoidResult QuaderModelingApi::scaleSelection(QVec3 scale, QVec3 pivot) 
 }
 
 QuaderApiVoidResult QuaderModelingApi::transformSelection(const QuaderTransform3& transform, QVec3 pivot) {
+    ProjectSession& session = projectSession(session_);
+    if (entitySelectionOwnsTransforms(session)) {
+        SceneTransformDragService transforms;
+        return mutations_.runDocumentResult(
+                transforms.transformSelectedByWorldDelta(
+                        session.documentCommands(),
+                        session.scene(),
+                        worldTransformDeltaFromApiTransform(transform, pivot),
+                        "Transform Selection"),
+                "Transform Selection");
+    }
+
     return mutations_.runModelingCommand(
-            std::make_unique<TransformSelectionHistoryCommand>(projectSession(session_).modeling(), toModelingTransform3(transform), pivot),
+            std::make_unique<TransformSelectionHistoryCommand>(session.modeling(), toModelingTransform3(transform), pivot),
             "Transform Selection");
 }
 
+QuaderApiVoidResult QuaderModelingApi::duplicateSelectedEntityHierarchy() {
+    ProjectSession& session = projectSession(session_);
+    EditorTransaction transaction = mutations_.beginTransaction("Duplicate Selection");
+    if (!transaction.active()) {
+        return mutations_.runDocumentCommand(
+                commandInvalidResult("Cannot duplicate selection while another editor transaction is active."),
+                "Duplicate Selection");
+    }
+    const ModelingCommandResult duplicate =
+            session.modeling().duplicateSelectedEntityHierarchy(session.documentCommands());
+    if (!duplicate.ok) {
+        const CommandResult cancel = transaction.cancel();
+        if (!cancel.ok) {
+            return mutations_.runDocumentCommand(cancel, "Duplicate Selection");
+        }
+        return mutations_.runModelingResult(duplicate, "Duplicate Selection");
+    }
+    if (!duplicate.changed) {
+        const CommandResult cancel = transaction.cancel();
+        if (!cancel.ok) {
+            return mutations_.runDocumentCommand(cancel, "Duplicate Selection");
+        }
+        return mutations_.runModelingResult(duplicate, "Duplicate Selection");
+    }
+
+    return mutations_.runDocumentCommand(transaction.commit(), "Duplicate Selection");
+}
+
 QuaderApiVoidResult QuaderModelingApi::duplicateSelectedHierarchyForGroupDrag() {
-    return mutations_.runModelingResult(
-            projectSession(session_).modeling().duplicateSelectedHierarchyForGroupDrag(projectSession(session_).documentCommands()),
-            "Duplicate Group Selection");
+    ProjectSession& session = projectSession(session_);
+    EditorTransaction transaction = mutations_.beginTransaction("Duplicate Group Selection");
+    if (!transaction.active()) {
+        return mutations_.runDocumentCommand(
+                commandInvalidResult("Cannot duplicate selection while another editor transaction is active."),
+                "Duplicate Group Selection");
+    }
+
+    const ModelingCommandResult duplicate =
+            session.modeling().duplicateSelectedHierarchyForGroupDrag(session.documentCommands());
+    if (!duplicate.ok) {
+        const CommandResult cancel = transaction.cancel();
+        if (!cancel.ok) {
+            return mutations_.runDocumentCommand(cancel, "Duplicate Group Selection");
+        }
+        return mutations_.runModelingResult(duplicate, "Duplicate Group Selection");
+    }
+    if (!duplicate.changed) {
+        const CommandResult cancel = transaction.cancel();
+        if (!cancel.ok) {
+            return mutations_.runDocumentCommand(cancel, "Duplicate Group Selection");
+        }
+        return mutations_.runModelingResult(duplicate, "Duplicate Group Selection");
+    }
+
+    return mutations_.runDocumentCommand(transaction.commit(), "Duplicate Group Selection");
 }
 
 QuaderApiVoidResult QuaderModelingApi::applyActiveMaterial(std::uint32_t materialSlot) {
@@ -321,7 +418,7 @@ std::vector<QuaderInstantOperationDescriptor> QuaderModelingApi::instantOperatio
 }
 
 QuaderSelectionSummary QuaderModelingApi::selectionSummary() const {
-    return toApiSelectionSummary(projectSession(session_).modeling().selectionSummary());
+    return toApiSelectionSummary(projectSession(session_).selection().summary());
 }
 
 std::vector<QuaderModelingObjectRecord> QuaderModelingApi::objects() const {

@@ -121,16 +121,17 @@ asks. Work with existing edits when they affect the task, and ignore unrelated e
 
 ## Expected Commands
 
-When launching builds, tests, or full verification commands through Codex tools, set the command
-timeout to at least 10 minutes (`600000` ms). Do not use short defaults such as 120 seconds for
-`cmake --build`, `ctest`, or wrapper scripts that run them; this project often needs more than
-5 minutes before the build finishes.
+Set build/test command timeouts to at least 10 minutes (`600000` ms); short defaults often fail here.
 
 ```powershell
 cmake --preset vs2026
 cmake --build --preset vs2026-debug
+cmake --build --preset vs2026-debug --target quader
 ctest --preset vs2026-debug
 ```
+
+After any file change, build the native app executable before handoff:
+`cmake --build --preset vs2026-debug --target quader`. Tests alone are not enough.
 
 More build/test/smoke details live in `agents/testing-build.md`.
 

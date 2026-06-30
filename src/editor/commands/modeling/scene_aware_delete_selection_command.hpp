@@ -33,7 +33,11 @@ struct SceneAwareDeleteRuntime {
     std::function<void()> invalidateSelectionOverlayCaches;
 };
 
-[[nodiscard]] bool sceneAwareDeleteHasSelectedSceneGroupRoot(const SceneDocument& scene);
+[[nodiscard]] bool sceneAwareDeleteHasSelectedRoot(const SceneDocument& scene);
+[[nodiscard]] bool sceneAwareDeleteUsesDocumentRoute(ModelingSelectionMode mode);
+[[nodiscard]] bool sceneAwareDeleteHandlesSelection(
+        ModelingSelectionSummary summary,
+        bool hasSelectedRoot);
 
 std::unique_ptr<IUndoableCommand> createSceneAwareDeleteSelectionCommand(
         SceneDocument& scene,

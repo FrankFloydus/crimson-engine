@@ -63,7 +63,6 @@ constexpr std::string_view key(std::string_view suffix) {
 }
 
 const std::array<ViewportSettingsSectionDescriptor, kViewportSettingsSectionCount> kSections{{
-        {ViewportSettingsSectionId::Scene, "Scene", true},
         {ViewportSettingsSectionId::Grid, "Grid", false},
         {ViewportSettingsSectionId::Selection, "Selection", false},
         {ViewportSettingsSectionId::Overlay, "Overlay", false},
@@ -73,7 +72,6 @@ const std::array<ViewportSettingsSectionDescriptor, kViewportSettingsSectionCoun
 }};
 
 const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kColorSettings{{
-        {ViewportColorSettingId::Background, ViewportSettingsSectionId::Scene, "Background", key("BackgroundColor"), rgba8(0x0d0d0dffU)},
         {ViewportColorSettingId::GridMinor, ViewportSettingsSectionId::Grid, "Minor", key("GridMinorColor"), color(0.8f, 0.8f, 0.8f, 0.05f)},
         {ViewportColorSettingId::GridMajor, ViewportSettingsSectionId::Grid, "Major", key("GridMajorColor"), color(0.298f, 0.298f, 0.298f, 0.459f)},
         {ViewportColorSettingId::GridXAxis, ViewportSettingsSectionId::Grid, "X QAxis", key("GridXAxisColor"), color(1.0f, 0.239f, 0.0f, 0.72f)},

@@ -115,6 +115,7 @@ ui.inspector.environment.pillars_2k=Pillars 2K
 ui.inspector.environment.venetian_crossroads_2k=Venetian Crossroads 2K
 ui.inspector.enabled=Attivo
 ui.inspector.background=Sfondo
+ui.inspector.clear_color=Colore sfondo
 ui.inspector.background_intensity=Intensita sfondo
 ui.inspector.camera=Camera
 ui.inspector.aperture=Apertura
@@ -224,7 +225,6 @@ viewport.tool.cut.label=Taglia
 viewport.tool.poly.label=Poligono
 viewport.tool.mirror.label=Specchia
 
-viewport.settings.section.scene.label=Scena
 viewport.settings.section.grid.label=Griglia
 viewport.settings.section.selection.label=Selezione
 viewport.settings.section.overlay.label=Overlay
@@ -232,7 +232,6 @@ viewport.settings.section.vertices.label=Vertici
 viewport.settings.section.picking.label=Picking
 viewport.settings.section.gizmo.label=Gizmo
 
-viewport.settings.BackgroundColor.label=Sfondo
 viewport.settings.GridMinorColor.label=Minore
 viewport.settings.GridMajorColor.label=Maggiore
 viewport.settings.GridXAxisColor.label=Asse X

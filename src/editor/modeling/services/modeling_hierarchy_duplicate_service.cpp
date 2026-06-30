@@ -18,6 +18,7 @@
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <editor/modeling/runtime/session.hpp>
@@ -82,10 +83,11 @@ std::vector<EntityId> selectedDuplicateMeshEntities(
 void restoreGroupSelection(
         DocumentCommandService& documentCommands,
         const ModelingHierarchyDuplicateRuntime& runtime,
-        const std::vector<EntityId>& roots) {
+        const std::vector<EntityId>& roots,
+        ModelingSelectionMode resultSelectionMode) {
     (void)documentCommands.selectEntities(roots, roots.empty() ? InvalidEntityId : roots.front());
     if (runtime.setSelectionMode) {
-        (void)runtime.setSelectionMode(ModelingSelectionMode::Group);
+        (void)runtime.setSelectionMode(resultSelectionMode);
     }
 }
 
@@ -107,9 +109,25 @@ ModelingCommandResult ModelingHierarchyDuplicateService::duplicateSelectedHierar
         ModelingObjectRuntimeMap& objectRegistry,
         DocumentCommandService& documentCommands,
         ModelingHierarchyDuplicateRuntime runtime) const {
+    return duplicateSelectedEntityHierarchy(
+            session,
+            scene,
+            objectRegistry,
+            documentCommands,
+            std::move(runtime),
+            ModelingSelectionMode::Group);
+}
+
+ModelingCommandResult ModelingHierarchyDuplicateService::duplicateSelectedEntityHierarchy(
+        quader_editor_core::EditorSession& session,
+        SceneDocument& scene,
+        ModelingObjectRuntimeMap& objectRegistry,
+        DocumentCommandService& documentCommands,
+        ModelingHierarchyDuplicateRuntime runtime,
+        ModelingSelectionMode resultSelectionMode) const {
     const std::vector<EntityId> roots = documentCommandSelectedRootEntities(scene);
     if (roots.empty()) {
-        return {.ok = false, .changed = false, .message = "Select a group to duplicate."};
+        return {.ok = false, .changed = false, .message = "Select an entity to duplicate."};
     }
 
     std::vector<EntityId> sourceMeshes = sourceMeshEntitiesInTreeOrder(scene, roots);
@@ -123,26 +141,26 @@ ModelingCommandResult ModelingHierarchyDuplicateService::duplicateSelectedHierar
     std::vector<EntityId> duplicateMeshes;
     if (!sourceMeshes.empty()) {
         if (!runtime.setSelectionMode || !runtime.projectObjectSelectionFromScene || !runtime.duplicateSelectedMeshes) {
-            restoreGroupSelection(documentCommands, runtime, roots);
+            restoreGroupSelection(documentCommands, runtime, roots, resultSelectionMode);
             return {.ok = false, .changed = false, .message = "Modeling hierarchy duplicate runtime is unavailable."};
         }
 
         const ModelingCommandResult objectMode = runtime.setSelectionMode(ModelingSelectionMode::Object);
         if (!objectMode.ok) {
-            restoreGroupSelection(documentCommands, runtime, roots);
+            restoreGroupSelection(documentCommands, runtime, roots, resultSelectionMode);
             return objectMode;
         }
         (void)documentCommands.selectEntities(sourceMeshes, sourceMeshes.front());
         runtime.projectObjectSelectionFromScene();
         const ModelingCommandResult duplicate = runtime.duplicateSelectedMeshes();
         if (!duplicate.ok) {
-            restoreGroupSelection(documentCommands, runtime, roots);
+            restoreGroupSelection(documentCommands, runtime, roots, resultSelectionMode);
             return duplicate;
         }
 
         duplicateMeshes = selectedDuplicateMeshEntities(session, objectRegistry);
         if (duplicateMeshes.size() != sourceMeshes.size()) {
-            restoreGroupSelection(documentCommands, runtime, roots);
+            restoreGroupSelection(documentCommands, runtime, roots, resultSelectionMode);
             return {
                     .ok = false,
                     .changed = duplicate.changed,
@@ -155,7 +173,7 @@ ModelingCommandResult ModelingHierarchyDuplicateService::duplicateSelectedHierar
     const DocumentDuplicateHierarchyResult duplicated =
             documentCommands.duplicateHierarchyWithExistingClones(roots, cloneBySource);
     if (!duplicated.ok || duplicated.duplicateRoots.empty()) {
-        restoreGroupSelection(documentCommands, runtime, roots);
+        restoreGroupSelection(documentCommands, runtime, roots, resultSelectionMode);
         return {
                 .ok = duplicated.ok,
                 .changed = duplicated.changed,
@@ -165,9 +183,9 @@ ModelingCommandResult ModelingHierarchyDuplicateService::duplicateSelectedHierar
 
     (void)documentCommands.selectEntities(duplicated.duplicateRoots, duplicated.duplicateRoots.front());
     if (runtime.setSelectionMode) {
-        (void)runtime.setSelectionMode(ModelingSelectionMode::Group);
+        (void)runtime.setSelectionMode(resultSelectionMode);
     }
-    return {.ok = true, .changed = true, .message = "Group duplicated."};
+    return {.ok = true, .changed = true, .message = "Selection duplicated."};
 }
 
 } // namespace quader

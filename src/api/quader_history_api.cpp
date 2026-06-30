@@ -41,7 +41,7 @@ bool QuaderHistoryApi::canUndo() const {
 }
 
 bool QuaderHistoryApi::canRedo() const {
-    return projectSession(session_).history().canRedo();
+    return mutations_.canRedo();
 }
 
 QuaderHistorySnapshot QuaderHistoryApi::snapshot() const {

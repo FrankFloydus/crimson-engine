@@ -173,6 +173,21 @@ CommandResult EditorTransaction::execute(std::unique_ptr<IUndoableCommand> comma
     return result;
 }
 
+CommandResult EditorTransaction::recordExecuted(std::unique_ptr<IUndoableCommand> command) {
+    if (history_ == nullptr) {
+        return commandInvalidResult("Editor transaction is not active");
+    }
+    if (!command) {
+        return commandInvalidResult("Command is missing");
+    }
+
+    commands_.push_back(TransactionCommand{
+            .command = std::move(command),
+            .mergeKey = {},
+    });
+    return commandChangedResult();
+}
+
 CommandResult EditorTransaction::commit() {
     if (history_ == nullptr) {
         return commandInvalidResult("Editor transaction is not active");
@@ -253,6 +268,9 @@ CommandResult EditorHistoryService::execute(std::unique_ptr<IUndoableCommand> co
 }
 
 CommandResult EditorHistoryService::recordExecuted(std::unique_ptr<IUndoableCommand> command) {
+    if (activeTransaction_ != nullptr) {
+        return activeTransaction_->recordExecuted(std::move(command));
+    }
     return undoRedo_->recordExecuted(std::move(command));
 }
 
@@ -271,11 +289,11 @@ CommandResult EditorHistoryService::redo() {
 }
 
 bool EditorHistoryService::canUndo() const {
-    return undoRedo_->canUndo();
+    return activeTransaction_ == nullptr && undoRedo_->canUndo();
 }
 
 bool EditorHistoryService::canRedo() const {
-    return undoRedo_->canRedo();
+    return activeTransaction_ == nullptr && undoRedo_->canRedo();
 }
 
 const std::string* EditorHistoryService::undoLabel() const {

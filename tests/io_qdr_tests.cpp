@@ -177,6 +177,7 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
     ASSERT_NE(sceneRoot, InvalidEntityId);
     SceneSettingsComponent sceneSettings;
     sceneSettings.environment.environmentId = "pillars_2k";
+    sceneSettings.environment.clearColor = {0.25f, 0.5f, 0.75f};
     sceneSettings.environment.rotationY = 1.25f;
     sceneSettings.camera.nearPlane = 0.2f;
     sceneSettings.camera.farPlane = 2500.0f;
@@ -239,6 +240,7 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
     EXPECT_NE(text.find("\"baseColorTexture\": 31"), std::string::npos);
     EXPECT_NE(text.find("\"roughnessTexture\": 32"), std::string::npos);
     EXPECT_NE(text.find("\"environmentId\": \"pillars_2k\""), std::string::npos);
+    EXPECT_NE(text.find("\"clearColor\""), std::string::npos);
     EXPECT_NE(text.find("\"nearPlane\": 0.2"), std::string::npos);
     EXPECT_NE(text.find("\"farPlane\": 2500"), std::string::npos);
     EXPECT_NE(text.find("\"dithering\": false"), std::string::npos);
@@ -264,6 +266,9 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
     EXPECT_EQ(loaded.scene().editorObjectId(wall), wallObject);
     ASSERT_NE(loaded.scene().sceneSettings(sceneRoot), nullptr);
     EXPECT_EQ(loaded.scene().sceneSettings(sceneRoot)->environment.environmentId, "pillars_2k");
+    EXPECT_FLOAT_EQ(loaded.scene().sceneSettings(sceneRoot)->environment.clearColor.x, 0.25f);
+    EXPECT_FLOAT_EQ(loaded.scene().sceneSettings(sceneRoot)->environment.clearColor.y, 0.5f);
+    EXPECT_FLOAT_EQ(loaded.scene().sceneSettings(sceneRoot)->environment.clearColor.z, 0.75f);
     EXPECT_FLOAT_EQ(loaded.scene().sceneSettings(sceneRoot)->environment.rotationY, 1.25f);
     EXPECT_FLOAT_EQ(loaded.scene().sceneSettings(sceneRoot)->camera.nearPlane, 0.2f);
     EXPECT_FLOAT_EQ(loaded.scene().sceneSettings(sceneRoot)->camera.farPlane, 2500.0f);
@@ -369,6 +374,59 @@ TEST(QdrDocumentIoTests, MissingMeshDoubleSidedFieldDefaultsToSingleSided) {
     ASSERT_TRUE(result.ok) << result.message;
     ASSERT_NE(result.document.scene().mesh(wall), nullptr);
     EXPECT_FALSE(result.document.scene().mesh(wall)->doubleSided);
+}
+
+TEST(QdrDocumentIoTests, MissingEnvironmentClearColorDefaultsToSceneEnvironmentDefault) {
+    ProjectDocument document(ProjectDocumentRecord{.id = 92u, .name = "Environment Defaults"});
+    const EntityId sceneRoot = document.scene().sceneRoot();
+    ASSERT_NE(sceneRoot, InvalidEntityId);
+
+    SceneSettingsComponent sceneSettings;
+    sceneSettings.environment.clearColor = {0.25f, 0.5f, 0.75f};
+    ASSERT_TRUE(document.scene().setSceneSettings(sceneRoot, sceneSettings));
+
+    std::string text = QdrDocumentWriter::serializeProjectDocument(document);
+    const std::size_t clearColorKey = text.find("\"clearColor\"");
+    ASSERT_NE(clearColorKey, std::string::npos);
+    const std::size_t blockBegin = text.rfind('\n', clearColorKey);
+    ASSERT_NE(blockBegin, std::string::npos);
+    const std::size_t valueBegin = text.find('{', clearColorKey);
+    ASSERT_NE(valueBegin, std::string::npos);
+    int depth = 0;
+    std::size_t blockEnd = valueBegin;
+    for (; blockEnd < text.size(); ++blockEnd) {
+        if (text[blockEnd] == '{') {
+            ++depth;
+        } else if (text[blockEnd] == '}') {
+            --depth;
+            if (depth == 0) {
+                ++blockEnd;
+                break;
+            }
+        }
+    }
+    ASSERT_EQ(depth, 0);
+    if (blockEnd < text.size() && text[blockEnd] == ',') {
+        ++blockEnd;
+    }
+    if (blockEnd < text.size() && text[blockEnd] == '\n') {
+        ++blockEnd;
+    }
+    text.erase(blockBegin + 1u, blockEnd - (blockBegin + 1u));
+
+    QdrProjectReadResult result = QdrDocumentReader::deserializeProjectDocument(text);
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_NE(result.document.scene().sceneSettings(sceneRoot), nullptr);
+    const SceneSettingsComponent defaults;
+    EXPECT_FLOAT_EQ(
+            result.document.scene().sceneSettings(sceneRoot)->environment.clearColor.x,
+            defaults.environment.clearColor.x);
+    EXPECT_FLOAT_EQ(
+            result.document.scene().sceneSettings(sceneRoot)->environment.clearColor.y,
+            defaults.environment.clearColor.y);
+    EXPECT_FLOAT_EQ(
+            result.document.scene().sceneSettings(sceneRoot)->environment.clearColor.z,
+            defaults.environment.clearColor.z);
 }
 
 TEST(QdrDocumentIoTests, ImportsLegacySessionPayloadButWritesProjectDocumentPayload) {

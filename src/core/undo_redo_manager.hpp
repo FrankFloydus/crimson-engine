@@ -36,6 +36,9 @@ public:
     void clear();
 
 private:
+    /**
+     * Stores one command and its optional merge key on an undo or redo stack.
+     */
     struct StackEntry {
         std::unique_ptr<IUndoableCommand> command;
         std::string mergeKey;

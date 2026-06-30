@@ -7,10 +7,6 @@
 #include "api/quader_object_handle.hpp"
 
 #include "api/quader_api.hpp"
-#include "api/quader_api_session_internal_access.hpp"
-#include "api/quader_api_type_conversions.hpp"
-#include "scene/document/project_session.hpp"
-#include "editor/modeling/services/modeling_session_service.hpp"
 
 #include <utility>
 
@@ -25,12 +21,11 @@ QuaderModelingObjectRef QuaderObjectHandle::ref() const {
 }
 
 bool QuaderObjectHandle::valid() const {
-    if (api_ == nullptr || ref_.entity == InvalidEntityId || ref_.modelingObjectId == InvalidModelingObjectId) {
+    if (api_ == nullptr || ref_.entity == InvalidEntityId || ref_.modelingObjectId == InvalidQuaderModelingObjectId) {
         return false;
     }
-    const ModelingObjectComponent* object =
-            QuaderApiSessionInternalAccess::projectSession(api_->session()).scene().modelingObject(ref_.entity);
-    return object != nullptr && object->objectId == ref_.modelingObjectId;
+    const std::optional<QuaderModelingObjectRef> queried = api_->query().modelingObjectForEntity(ref_.entity);
+    return queried.has_value() && queried->modelingObjectId == ref_.modelingObjectId;
 }
 
 std::optional<QuaderEntitySnapshot> QuaderObjectHandle::entity() const {
@@ -44,9 +39,7 @@ std::optional<QuaderMeshAsset> QuaderObjectHandle::compiledMesh() const {
     if (api_ == nullptr) {
         return std::nullopt;
     }
-    const std::optional<MeshAsset> mesh =
-            QuaderApiSessionInternalAccess::projectSession(api_->session()).modeling().compileObjectMesh(ref_.modelingObjectId);
-    return mesh ? std::optional<QuaderMeshAsset>{toApiMeshAsset(*mesh)} : std::nullopt;
+    return api_->query().compiledObjectMesh(ref_);
 }
 
 QuaderApiVoidResult QuaderObjectHandle::select() {

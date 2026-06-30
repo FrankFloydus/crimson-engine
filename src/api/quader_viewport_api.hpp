@@ -35,6 +35,7 @@ public:
     [[nodiscard]] ViewportLayoutId layout() const;
     QuaderApiVoidResult setLayout(ViewportLayoutId layout);
     [[nodiscard]] std::size_t activePaneCount() const;
+    [[nodiscard]] ViewportPaneId focusedPane() const;
 
     [[nodiscard]] int gridPreset() const;
     QuaderApiVoidResult setGridPreset(int preset);
@@ -47,6 +48,7 @@ public:
 
     QuaderApiVoidResult frameSelection(ViewportPaneId pane = ViewportPaneId::Perspective);
     QuaderApiVoidResult focusOrigin(ViewportPaneId pane = ViewportPaneId::Perspective);
+    [[nodiscard]] bool canSpawnWindow() const;
     QuaderApiVoidResult spawnWindow();
     QuaderApiVoidResult captureScreenshot(
             const std::filesystem::path& path,

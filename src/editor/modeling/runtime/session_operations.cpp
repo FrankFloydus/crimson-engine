@@ -78,32 +78,6 @@ bool selection_changed_since(
 	return !selection_snapshot_matches(before, capture_selection_snapshot(objects, mode, active_object_id));
 }
 
-quader_poly::PlaneCutMode to_plane_cut_mode(CutMode mode)
-{
-	switch (mode) {
-		case CutMode::keep_back:
-			return quader_poly::PlaneCutMode::keep_back;
-		case CutMode::keep_front:
-			return quader_poly::PlaneCutMode::keep_front;
-		case CutMode::keep_both:
-		default:
-			return quader_poly::PlaneCutMode::keep_both;
-	}
-}
-
-quader_poly::PlaneCutRequest plane_cut_request_from_state(const CutToolState& state)
-{
-	const std::vector<quader::QVec3> points = cut_plane_points(state);
-	quader_poly::PlaneCutRequest request;
-	request.mode = to_plane_cut_mode(state.mode);
-	if (points.size() >= 3) {
-		request.first_point = points[0];
-		request.second_point = points[1];
-		request.third_point = points[2];
-	}
-	return request;
-}
-
 } // namespace
 
 void EditorSession::set_selection_mode(SelectionMode mode)
@@ -836,7 +810,7 @@ CommandResult EditorSession::commit_cut_tool(CutToolState& state)
 		return error_result("Select meshes or elements before committing the cut.");
 	}
 
-	const quader_poly::PlaneCutRequest request = plane_cut_request_from_state(state);
+	const quader_poly::PlaneCutRequest request = plane_cut_request_from_cut_state(state);
 	const std::vector<int> target_object_ids = state.target_object_ids;
 	const CommandResult result = apply_history_command([&target_object_ids, &request](EditorSession& editor_session) {
 		return editor_session.plane_cut(target_object_ids, request);

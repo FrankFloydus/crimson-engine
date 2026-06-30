@@ -10,6 +10,7 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_scene_api.hpp"
 #include "assets/asset_registry.hpp"
+#include "editor/commands/document_command_service.hpp"
 #include "editor/commands/document/document_command_edits.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "math/glm_bridge.hpp"
@@ -464,6 +465,45 @@ QuaderApiVoidResult SceneTransformDragService::scaleSelectedToPrimaryScaleAround
                 return next;
             });
     QuaderApiVoidResult result = commitSceneTransformEditsThroughApi(editor, edits, label_);
+    reset();
+    return result;
+}
+
+DocumentCommandResult SceneTransformDragService::moveSelectedByWorldDelta(
+        DocumentCommandService& documentCommands,
+        SceneDocument& document,
+        QVec3 worldDelta,
+        std::string label) {
+    const QMat4 worldTransformDelta = fromGlm(glm::translate(glm::mat4{1.0f}, toGlm(worldDelta)));
+    return transformSelectedByWorldDelta(documentCommands, document, worldTransformDelta, std::move(label));
+}
+
+DocumentCommandResult SceneTransformDragService::transformSelectedByWorldDelta(
+        DocumentCommandService& documentCommands,
+        SceneDocument& document,
+        const QMat4& worldTransformDelta,
+        std::string label) {
+    reset();
+    label_ = label.empty() ? "Transform Selection" : std::move(label);
+    if (!captureTargets(document, {})) {
+        reset();
+        return documentCommandUnchangedResult();
+    }
+
+    const std::vector<DocumentTransformEdit> edits = buildTargetTransformEdits(
+            document,
+            targets_,
+            [&](const SceneTransformDragTarget& target) {
+                const QMat4 nextWorldTransform = sceneTransformMultiply(worldTransformDelta, target.worldTransform);
+                const EntityId parent = document.parent(target.entity);
+                const QMat4 parentWorldTransform = parent == InvalidEntityId
+                        ? sceneTransformIdentityMatrix()
+                        : document.worldTransformMatrix(parent);
+                return transformComponentFromMatrix(
+                        sceneLocalMatrixFromWorldMatrix(parentWorldTransform, nextWorldTransform),
+                        target.transform.rotationEuler);
+            });
+    DocumentCommandResult result = documentCommands.setTransforms(std::move(edits), label_);
     reset();
     return result;
 }

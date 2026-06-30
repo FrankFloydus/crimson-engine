@@ -30,29 +30,13 @@ std::string stringFromView(std::string_view value) {
     return std::string(value.data(), value.size());
 }
 
-json vec2ToJson(QVec2 value) {
-    return json{{"x", value.x}, {"y", value.y}};
-}
-
-json vec3ToJson(QVec3 value) {
-    return json{{"x", value.x}, {"y", value.y}, {"z", value.z}};
-}
-
-json transformToJson(const TransformComponent& transform) {
-    return json{
-            {"position", vec3ToJson(transform.position)},
-            {"rotationEuler", vec3ToJson(transform.rotationEuler)},
-            {"scale", vec3ToJson(transform.scale)},
-    };
-}
-
 json meshToJson(AssetId id, const MeshAsset& mesh) {
     json vertices = json::array();
     for (const MeshVertex& vertex : mesh.vertices) {
         vertices.push_back(json{
-                {"position", vec3ToJson(vertex.position)},
-                {"normal", vec3ToJson(vertex.normal)},
-                {"uv", vec2ToJson(vertex.uv)},
+                {"position", qdrVec3ToJson(vertex.position)},
+                {"normal", qdrVec3ToJson(vertex.normal)},
+                {"uv", qdrVec2ToJson(vertex.uv)},
                 {"rgba", vertex.rgba},
         });
     }
@@ -103,81 +87,11 @@ json materialToJson(AssetId id, const MaterialDocument& material) {
     return json{
             {"id", id},
             {"name", material.name},
-            {"baseColor", vec3ToJson(material.baseColor)},
+            {"baseColor", qdrVec3ToJson(material.baseColor)},
             {"roughness", material.roughness},
             {"metallic", material.metallic},
             {"textureSlots", textureSlots},
             {"nodeGraphReserved", material.nodeGraphReserved},
-    };
-}
-
-json meshComponentToJson(const MeshComponent& mesh) {
-    return json{
-            {"mesh", mesh.mesh},
-            {"editorOnly", mesh.editorOnly},
-            {"castShadows", mesh.castShadows},
-            {"doubleSided", mesh.doubleSided},
-            {"generateCollisions", mesh.generateCollisions},
-            {"collisionType", stringFromView(qdrMeshCollisionTypeName(mesh.collisionType))},
-            {"displayCollision", mesh.displayCollision},
-            {"bodyType", stringFromView(qdrMeshPhysicsBodyTypeName(mesh.bodyType))},
-    };
-}
-
-json lightToJson(const LightComponent& light) {
-    return json{
-            {"type", stringFromView(qdrLightTypeName(light.type))},
-            {"color", vec3ToJson(light.color)},
-            {"intensity", light.intensity},
-            {"range", light.range},
-            {"castsShadows", light.castsShadows},
-    };
-}
-
-std::string_view sceneToneMappingName(SceneToneMapping toneMapping) {
-    switch (toneMapping) {
-    case SceneToneMapping::Linear:
-        return "linear";
-    case SceneToneMapping::AcesLegacy:
-        return "acesLegacy";
-    case SceneToneMapping::Aces:
-        return "aces";
-    case SceneToneMapping::Filmic:
-        return "filmic";
-    case SceneToneMapping::DisplayRange:
-        return "displayRange";
-    }
-    return "aces";
-}
-
-json sceneSettingsToJson(const SceneSettingsComponent& settings) {
-    return json{
-            {"environment", json{
-                    {"environmentId", settings.environment.environmentId},
-                    {"enabled", settings.environment.enabled},
-                    {"showBackground", settings.environment.showBackground},
-                    {"intensity", settings.environment.intensity},
-                    {"backgroundIntensity", settings.environment.backgroundIntensity},
-                    {"rotationY", settings.environment.rotationY},
-            }},
-            {"camera", json{
-                    {"aperture", settings.camera.aperture},
-                    {"shutterSpeed", settings.camera.shutterSpeed},
-                    {"sensitivity", settings.camera.sensitivity},
-                    {"nearPlane", settings.camera.nearPlane},
-                    {"farPlane", settings.camera.farPlane},
-            }},
-            {"postProcess", json{
-                    {"enabled", settings.postProcess.enabled},
-                    {"antiAliasing", settings.postProcess.antiAliasing},
-                    {"ambientOcclusion", settings.postProcess.ambientOcclusion},
-                    {"ambientOcclusionIntensity", settings.postProcess.ambientOcclusionIntensity},
-                    {"ambientOcclusionRadius", settings.postProcess.ambientOcclusionRadius},
-                    {"bloom", settings.postProcess.bloom},
-                    {"bloomStrength", settings.postProcess.bloomStrength},
-                    {"dithering", settings.postProcess.dithering},
-                    {"toneMapping", stringFromView(sceneToneMappingName(settings.postProcess.toneMapping))},
-            }},
     };
 }
 
@@ -191,7 +105,7 @@ json entityToJson(const SceneDocument& scene, EntityId entity) {
             {"parent", scene.parent(entity)},
     };
     if (const TransformComponent* transform = scene.transform(entity)) {
-        value["transform"] = transformToJson(*transform);
+        value["transform"] = qdrTransformComponentToJson(*transform);
     }
     if (const VisibilityComponent* visibility = scene.visibility(entity)) {
         value["visibility"] = json{
@@ -213,25 +127,17 @@ json entityToJson(const SceneDocument& scene, EntityId entity) {
         };
     }
     if (const MeshComponent* mesh = scene.mesh(entity)) {
-        value["mesh"] = meshComponentToJson(*mesh);
+        value["mesh"] = qdrMeshComponentToJson(*mesh);
     }
     if (const MaterialComponent* material = scene.material(entity)) {
-        json materialJson{{"material", material->material}};
-        if (!material->materialSlots.empty()) {
-            json slots = json::object();
-            for (const auto& [slot, materialId] : material->materialSlots) {
-                slots[std::to_string(slot)] = materialId;
-            }
-            materialJson["slots"] = std::move(slots);
-        }
-        value["material"] = std::move(materialJson);
+        value["material"] = qdrMaterialComponentToJson(*material);
     }
     if (const LightComponent* light = scene.light(entity)) {
-        value["light"] = lightToJson(*light);
+        value["light"] = qdrLightComponentToJson(*light);
     }
     if (const SceneSettingsComponent* settings = scene.sceneSettings(entity)) {
         value["sceneRoot"] = scene.isSceneRoot(entity);
-        value["sceneSettings"] = sceneSettingsToJson(*settings);
+        value["sceneSettings"] = qdrSceneSettingsComponentToJson(*settings);
     }
     return value;
 }

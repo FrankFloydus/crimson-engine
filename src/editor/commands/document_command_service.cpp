@@ -69,6 +69,24 @@ DocumentCommandResult documentCommandSceneRootProtectedResult() {
     return documentCommandInvalidRequestResult("Scene root cannot be changed by this command");
 }
 
+bool documentCommandSelectionIncludesSceneRoot(const SceneDocument& scene) {
+    for (const EntityId entity : scene.selectedEntities()) {
+        if (scene.isSceneRoot(entity)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool documentCommandSelectedRootContainsModelingOwnedEntity(const SceneDocument& scene) {
+    for (const EntityId root : documentCommandSelectedRootEntities(scene)) {
+        if (documentCommandEntityIsModelingOwned(scene, root)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 EntityId normalizedCreateParent(const SceneDocument& scene, EntityId parent) {
     if (parent != InvalidEntityId) {
         return parent;
@@ -141,6 +159,65 @@ std::vector<DocumentLockEdit> normalizedLockEdits(
         return lhs.entity < rhs.entity;
     });
     return result;
+}
+
+bool documentCommandEffectivelyLockedAfterEdits(
+        const SceneDocument& scene,
+        EntityId entity,
+        const std::unordered_map<EntityId, bool>& lockedAfterByEntity) {
+    while (entity != InvalidEntityId && scene.exists(entity)) {
+        if (const auto edited = lockedAfterByEntity.find(entity); edited != lockedAfterByEntity.end()) {
+            if (edited->second) {
+                return true;
+            }
+        } else if (const LockComponent* lock = scene.lock(entity); lock != nullptr && lock->locked) {
+            return true;
+        }
+        entity = scene.parent(entity);
+    }
+    return false;
+}
+
+DocumentSelectionState documentCommandSelectionAfterLockEdits(
+        const SceneDocument& scene,
+        const std::vector<DocumentLockEdit>& edits) {
+    std::unordered_map<EntityId, bool> lockedAfterByEntity;
+    lockedAfterByEntity.reserve(edits.size());
+    for (const DocumentLockEdit& edit : edits) {
+        lockedAfterByEntity[edit.entity] = edit.after;
+    }
+
+    DocumentSelectionState after;
+    const std::vector<EntityId> beforeSelected = scene.selectedEntities();
+    after.selected.reserve(beforeSelected.size());
+    for (const EntityId selected : beforeSelected) {
+        if (!documentCommandEffectivelyLockedAfterEdits(scene, selected, lockedAfterByEntity)) {
+            after.selected.push_back(selected);
+        }
+    }
+
+    const EntityId beforeActive = scene.primarySelection();
+    after.active = std::find(after.selected.begin(), after.selected.end(), beforeActive) != after.selected.end()
+            ? beforeActive
+            : (after.selected.empty() ? InvalidEntityId : after.selected.back());
+    return after;
+}
+
+void appendSelectionCleanupAfterLockEdits(
+        SceneDocument& scene,
+        const std::vector<DocumentLockEdit>& edits,
+        std::vector<std::unique_ptr<IUndoableCommand>>& commands) {
+    if (edits.empty()) {
+        return;
+    }
+
+    const DocumentSelectionState before = documentCommandCaptureSelection(scene);
+    const DocumentSelectionState after = documentCommandSelectionAfterLockEdits(scene, edits);
+    if (documentCommandSameSelection(before, after)) {
+        return;
+    }
+
+    commands.push_back(std::make_unique<SelectEntitiesCommand>(scene, after.selected, after.active));
 }
 
 /**
@@ -277,6 +354,17 @@ DocumentDuplicateEntityResult DocumentCommandService::duplicateEntity(EntityId e
 }
 
 DocumentDuplicateHierarchyResult DocumentCommandService::duplicateSelectedHierarchy() {
+    if (documentCommandSelectionIncludesSceneRoot(scene_)) {
+        DocumentDuplicateHierarchyResult result;
+        assignDocumentCommandStatus(result, documentCommandSceneRootProtectedResult());
+        return result;
+    }
+    if (documentCommandSelectedRootContainsModelingOwnedEntity(scene_)) {
+        DocumentDuplicateHierarchyResult result;
+        assignDocumentCommandStatus(result, documentCommandModelingOwnedEntityResult());
+        return result;
+    }
+
     auto command = std::make_unique<DuplicateSelectedHierarchyCommand>(scene_);
     DuplicateSelectedHierarchyCommand* duplicateCommand = command.get();
     DocumentDuplicateHierarchyResult result;
@@ -484,10 +572,11 @@ DocumentCommandResult DocumentCommandService::setLocks(std::vector<DocumentLockE
     }
 
     std::vector<std::unique_ptr<IUndoableCommand>> commands;
-    commands.reserve(edits.size());
+    commands.reserve(edits.size() + 1u);
     for (const DocumentLockEdit& edit : edits) {
         commands.push_back(std::make_unique<SetLockCommand>(scene_, edit.entity, edit.before, edit.after));
     }
+    appendSelectionCleanupAfterLockEdits(scene_, edits, commands);
 
     return executeDocumentCommand(
             history_,
@@ -607,7 +696,12 @@ DocumentCommandResult DocumentCommandService::setTransform(EntityId entity, Tran
     }});
 }
 
-DocumentCommandResult DocumentCommandService::setTransforms(std::vector<DocumentTransformEdit> edits) {
+DocumentCommandResult DocumentCommandService::setTransforms(
+        std::vector<DocumentTransformEdit> edits,
+        std::string label) {
+    if (label.empty()) {
+        label = "Set Transform";
+    }
     edits = normalizedTransformEdits(scene_, std::move(edits));
     if (edits.empty()) {
         return documentCommandUnchangedResult();
@@ -621,12 +715,12 @@ DocumentCommandResult DocumentCommandService::setTransforms(std::vector<Document
                 edit.entity,
                 edit.before,
                 edit.after,
-                "Set Transform"));
+                label));
     }
 
     return executeDocumentCommand(
             history_,
-            std::make_unique<BatchDocumentCommand>("Set Transform", std::move(commands)));
+            std::make_unique<BatchDocumentCommand>(std::move(label), std::move(commands)));
 }
 
 DocumentCommandResult DocumentCommandService::applySceneBatch(
@@ -637,7 +731,8 @@ DocumentCommandResult DocumentCommandService::applySceneBatch(
     }
 
     std::vector<std::unique_ptr<IUndoableCommand>> commands;
-    commands.reserve(operations.size());
+    commands.reserve(operations.size() + 1u);
+    std::vector<DocumentLockEdit> lockEdits;
     std::unordered_map<EntityId, DocumentSceneBatchEntityState> simulated;
 
     auto failure = [](std::string message) {
@@ -664,6 +759,35 @@ DocumentCommandResult DocumentCommandService::applySceneBatch(
                 .locked = lock->locked,
         });
         return inserted->second;
+    };
+
+    auto simulatedParent = [&](EntityId entity) {
+        if (std::optional<std::reference_wrapper<DocumentSceneBatchEntityState>> state = simulatedState(entity)) {
+            return state->get().parent;
+        }
+        return scene_.parent(entity);
+    };
+
+    auto simulatedLocked = [&](EntityId entity) {
+        if (std::optional<std::reference_wrapper<DocumentSceneBatchEntityState>> state = simulatedState(entity)) {
+            return state->get().locked;
+        }
+        const LockComponent* lock = scene_.lock(entity);
+        return lock != nullptr && lock->locked;
+    };
+
+    auto simulatedEffectivelyLocked = [&](EntityId entity) {
+        std::unordered_set<EntityId> visited;
+        while (entity != InvalidEntityId && scene_.exists(entity)) {
+            if (!visited.insert(entity).second) {
+                return true;
+            }
+            if (simulatedLocked(entity)) {
+                return true;
+            }
+            entity = simulatedParent(entity);
+        }
+        return false;
     };
 
     for (const DocumentSceneBatchOperation& operation : operations) {
@@ -723,7 +847,7 @@ DocumentCommandResult DocumentCommandService::applySceneBatch(
             if (!state.has_value()) {
                 return failure("Batch entity has no transform.");
             }
-            if (state->get().locked || scene_.isEffectivelyLocked(operation.entity) ||
+            if (simulatedEffectivelyLocked(operation.entity) ||
                     documentCommandSameTransform(state->get().transform, operation.transform)) {
                 break;
             }
@@ -773,11 +897,18 @@ DocumentCommandResult DocumentCommandService::applySceneBatch(
                     operation.entity,
                     state->get().locked,
                     operation.flag));
+            lockEdits.push_back(DocumentLockEdit{
+                    .entity = operation.entity,
+                    .before = state->get().locked,
+                    .after = operation.flag,
+            });
             state->get().locked = operation.flag;
             break;
         }
         }
     }
+
+    appendSelectionCleanupAfterLockEdits(scene_, lockEdits, commands);
 
     if (commands.empty()) {
         return documentCommandUnchangedResult();

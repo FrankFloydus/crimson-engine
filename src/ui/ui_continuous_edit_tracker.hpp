@@ -118,6 +118,9 @@ public:
     }
 
 private:
+    /**
+     * Stores one active continuous edit gesture and its final values.
+     */
     struct State {
         std::string stableId;
         EntityId primary = InvalidEntityId;

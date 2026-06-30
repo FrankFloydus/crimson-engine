@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -169,6 +170,57 @@ TEST(ProgrammaticApiTests, ScriptRunsThroughPublicApiAndReturnsFinalSnapshot) {
     ASSERT_TRUE(redone.ok) << redone.message;
     EXPECT_EQ(userEntityCount(api), 1u);
     EXPECT_EQ(api.selection().summary().selectedVertexCount, 1u);
+}
+
+TEST(ProgrammaticApiTests, ScriptRecordsDocumentOwnedSelectionTransformsInOneHistoryEntry) {
+    ProgrammaticApiHarness harness;
+    quader::QuaderApi& api = harness.api;
+
+    quader::QuaderCreatePointLightArgs args;
+    args.name = "Script Light";
+    args.transform.position = {3.0f, 0.0f, 0.0f};
+    args.selectCreated = true;
+    const quader::QuaderApiResult<quader::QuaderEntityRef> light = api.scene().createPointLight(args);
+    ASSERT_TRUE(light.ok) << light.message;
+
+    const quader::QuaderScriptResult result = api.script("script moves light")
+            .moveSelection({2.0f, 0.0f, 0.0f})
+            .run();
+    ASSERT_TRUE(result.ok()) << result.errorMessage();
+    EXPECT_TRUE(result.changed());
+    EXPECT_EQ(api.history().snapshot().undoLabel, "script moves light");
+
+    std::optional<quader::QuaderEntitySnapshot> snapshot = api.query().entity(light.value.id);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_FLOAT_EQ(snapshot->transform.position.x, 5.0f);
+
+    const quader::QuaderApiVoidResult undone = api.history().undo();
+    ASSERT_TRUE(undone.ok) << undone.message;
+    snapshot = api.query().entity(light.value.id);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_FLOAT_EQ(snapshot->transform.position.x, 3.0f);
+    EXPECT_EQ(api.history().snapshot().redoLabel, "script moves light");
+
+    const quader::QuaderApiVoidResult redone = api.history().redo();
+    ASSERT_TRUE(redone.ok) << redone.message;
+    snapshot = api.query().entity(light.value.id);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_FLOAT_EQ(snapshot->transform.position.x, 5.0f);
+}
+
+TEST(ProgrammaticApiTests, ScriptRejectsHistoryStepsInsideActiveTransaction) {
+    ProgrammaticApiHarness harness;
+    quader::QuaderApi& api = harness.api;
+
+    const quader::QuaderScriptResult result = api.script("script history step")
+            .undo()
+            .run();
+
+    EXPECT_FALSE(result.ok());
+    ASSERT_EQ(result.steps.size(), 1u);
+    EXPECT_FALSE(result.steps.front().status.ok);
+    EXPECT_NE(result.steps.front().status.message.find("History operations are not supported"), std::string::npos);
+    EXPECT_FALSE(api.history().canUndo());
 }
 
 TEST(ProgrammaticApiTests, ScriptStopsAtMissingAliasAndReportsStep) {

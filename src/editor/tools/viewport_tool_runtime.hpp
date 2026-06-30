@@ -7,8 +7,6 @@
 #pragma once
 
 #include "editor/tools/viewport_tool.hpp"
-#include "editor/tools/base/modal_viewport_tool.hpp"
-#include "editor/tools/base/transform_viewport_tool.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_input_types.hpp"
 

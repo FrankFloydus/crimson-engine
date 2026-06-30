@@ -136,17 +136,49 @@ private:
             const EntityId parent = snapshot.originalParent != InvalidEntityId && scene().exists(snapshot.originalParent)
                     ? snapshot.originalParent
                     : InvalidEntityId;
-            const EntityId restored = documentCommandRestoreEntitySnapshotTree(
-                    scene(),
-                    snapshot,
-                    parent,
-                    remappedEntities);
+            const EntityId restored = restoreOrReuseDuplicateSnapshotTree(snapshot, parent, remappedEntities);
             if (restored == InvalidEntityId) {
                 return documentCommandInvalidRequestResult("Duplicated hierarchy could not be restored");
             }
             duplicateRoots_.push_back(restored);
         }
         return documentCommandChangedResult();
+    }
+
+    EntityId restoreOrReuseDuplicateSnapshotTree(
+            const DocumentEntitySnapshot& snapshot,
+            EntityId parent,
+            std::unordered_map<EntityId, EntityId>& remappedEntities) {
+        EntityId restored = InvalidEntityId;
+        if (scene().exists(snapshot.originalId)) {
+            restored = snapshot.originalId;
+            if (parent != InvalidEntityId && scene().exists(parent) && scene().parent(restored) != parent) {
+                if (!scene().setParent(restored, parent, false)) {
+                    return InvalidEntityId;
+                }
+            }
+            documentCommandApplyEntitySnapshotCommonState(scene(), restored, snapshot, snapshot.name);
+            documentCommandApplyEntitySnapshotComponents(scene(), restored, snapshot, true);
+        } else {
+            restored = documentCommandCreateEntityFromSnapshot(
+                    scene(),
+                    snapshot,
+                    parent,
+                    snapshot.name,
+                    true,
+                    true);
+            if (restored == InvalidEntityId) {
+                return InvalidEntityId;
+            }
+        }
+
+        remappedEntities[snapshot.originalId] = restored;
+        for (const DocumentEntitySnapshot& child : snapshot.children) {
+            if (restoreOrReuseDuplicateSnapshotTree(child, restored, remappedEntities) == InvalidEntityId) {
+                return InvalidEntityId;
+            }
+        }
+        return restored;
     }
 
     void destroyDuplicateRoots() {

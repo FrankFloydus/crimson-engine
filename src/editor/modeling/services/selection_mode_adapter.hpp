@@ -33,6 +33,17 @@ inline ViewportSelectionMode appSelectionModeToViewport(ModelingSelectionMode mo
     return ViewportSelectionMode::Object;
 }
 
+inline bool isComponentSelectionMode(ModelingSelectionMode mode) {
+    return mode == ModelingSelectionMode::Vertex ||
+            mode == ModelingSelectionMode::Edge ||
+            mode == ModelingSelectionMode::Face;
+}
+
+inline bool selectionModeUsesSceneDocument(ModelingSelectionMode mode) {
+    return mode == ModelingSelectionMode::Object ||
+            mode == ModelingSelectionMode::Group;
+}
+
 inline ModelingSelectionMode viewportSelectionModeToApp(ViewportSelectionMode mode) {
     switch (mode) {
     case ViewportSelectionMode::Vertex:

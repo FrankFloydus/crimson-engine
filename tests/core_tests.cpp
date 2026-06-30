@@ -278,7 +278,9 @@ struct EditorSelectionTestHarness {
             AssetRegistry& assets,
             ModelingSessionService& modeling)
         : documentCommands(scene, history)
-        , selection(scene, documentCommands, assets, modeling) {}
+        , selection(scene, documentCommands, modeling) {
+        (void)assets;
+    }
 
     EditorHistoryService history;
     DocumentCommandService documentCommands;
@@ -1071,17 +1073,15 @@ TEST(SdlEventUtilsTests, ExtractsWindowIdsForRuntimeRoutedEvents) {
 TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
     const ViewportSettings settings = ViewportSettings::defaults();
 
-    ASSERT_EQ(viewportSettingsSections().size(), 7u);
-    EXPECT_EQ(viewportSettingsSections()[0].label, "Scene");
-    EXPECT_TRUE(viewportSettingsSections()[0].defaultExpanded);
-    EXPECT_EQ(viewportSettingsSections()[1].label, "Grid");
-    EXPECT_EQ(viewportSettingsSections()[2].label, "Selection");
-    EXPECT_EQ(viewportSettingsSections()[3].label, "Overlay");
-    EXPECT_EQ(viewportSettingsSections()[4].label, "Vertices");
-    EXPECT_EQ(viewportSettingsSections()[5].label, "Picking");
-    EXPECT_EQ(viewportSettingsSections()[6].label, "Gizmo");
+    ASSERT_EQ(viewportSettingsSections().size(), 6u);
+    EXPECT_EQ(viewportSettingsSections()[0].label, "Grid");
+    EXPECT_FALSE(viewportSettingsSections()[0].defaultExpanded);
+    EXPECT_EQ(viewportSettingsSections()[1].label, "Selection");
+    EXPECT_EQ(viewportSettingsSections()[2].label, "Overlay");
+    EXPECT_EQ(viewportSettingsSections()[3].label, "Vertices");
+    EXPECT_EQ(viewportSettingsSections()[4].label, "Picking");
+    EXPECT_EQ(viewportSettingsSections()[5].label, "Gizmo");
 
-    expectColorNear(settings.color(ViewportColorSettingId::Background), {0.0509804f, 0.0509804f, 0.0509804f, 1.0f});
     expectColorNear(settings.color(ViewportColorSettingId::SelectionWire), overlayPolicySettingColor(kOverlaySelectionWireColor));
     expectColorNear(settings.color(ViewportColorSettingId::SourceWire), overlayPolicySettingColor(kOverlaySourceWireColor));
     EXPECT_FLOAT_EQ(settings.floatValue(ViewportFloatSettingId::GridMinorLineSize), 0.32f);
@@ -1148,12 +1148,12 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
     std::filesystem::remove(path);
 
     ViewportSettings settings = ViewportSettings::defaults();
-    EXPECT_TRUE(settings.setColor(ViewportColorSettingId::Background, {0.25f, 0.5f, 0.75f, 0.6f}));
+    EXPECT_TRUE(settings.setColor(ViewportColorSettingId::GridMinor, {0.25f, 0.5f, 0.75f, 0.6f}));
     EXPECT_TRUE(settings.setFloatValue(ViewportFloatSettingId::GizmoSize, 10.0f));
     ASSERT_TRUE(settings.save(path));
 
     const ViewportSettings loaded = ViewportSettings::load(path);
-    expectColorNear(loaded.color(ViewportColorSettingId::Background), {0.25098f, 0.501961f, 0.74902f, 0.6f});
+    expectColorNear(loaded.color(ViewportColorSettingId::GridMinor), {0.25098f, 0.501961f, 0.74902f, 0.6f});
     EXPECT_FLOAT_EQ(loaded.floatValue(ViewportFloatSettingId::GizmoSize), 2.0f);
 
     {
@@ -1162,8 +1162,9 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
         const std::string source{
                 std::istreambuf_iterator<char>(sourceFile),
                 std::istreambuf_iterator<char>()};
-        EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.BackgroundColor"), std::string::npos);
+        EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.GridMinorColor"), std::string::npos);
         EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.GizmoSize"), std::string::npos);
+        EXPECT_EQ(source.find("QVertexWorks.Quader.Viewport.BackgroundColor"), std::string::npos);
         EXPECT_EQ(source.find("QVertexWorks.Quader.Viewport.ShowSpecialTextures"), std::string::npos);
     }
 
@@ -1796,6 +1797,18 @@ TEST(RenderSystemTests, ShadedViewportUsesClearColorWithoutSkybox) {
     EXPECT_EQ(source.find("Skybox::Builder()"), std::string::npos);
 }
 
+TEST(ViewportRendererTests, EnvironmentClearColorAndRenderedBackgroundPathsStaySceneOwned) {
+    const std::string renderer = readSourceFile("src/render/viewport_renderer.cpp");
+    const std::string environmentLibrary = readSourceFile("src/render/filament_environment_library.cpp");
+
+    EXPECT_NE(renderer.find("viewportClearColor(settings.environment, renderedMode)"), std::string::npos);
+    EXPECT_NE(renderer.find("if (renderedMode)"), std::string::npos);
+    EXPECT_NE(renderer.find("environment.clearColor.x"), std::string::npos);
+    EXPECT_EQ(renderer.find("ViewportColorSettingId::Background"), std::string::npos);
+    EXPECT_EQ(renderer.find("settings.color(ViewportColorSettingId"), std::string::npos);
+    EXPECT_NE(environmentLibrary.find("settings.showBackground && settings.backgroundIntensity > 0.0f"), std::string::npos);
+}
+
 TEST(RenderSystemTests, InitializeUnwindsPartialFilamentStateOnFailure) {
     const std::string header = readSourceFile("src/render/render_system.hpp");
     const std::string source = readSourceFile("src/render/render_system.cpp");
@@ -2018,8 +2031,12 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
     EXPECT_EQ(appSource.find("const AssetId roughnessTexture = projectSession_.assets().addTexture"), std::string::npos);
     EXPECT_NE(appSource.find("renderSystem_.quaderMeshMaterial()"), std::string::npos);
     EXPECT_NE(appSource.find("renderSystem_.quaderMeshLitMaterial()"), std::string::npos);
-    EXPECT_NE(materialLibrarySource.find("materials\" / \"quader_mesh.filamat\""), std::string::npos);
-    EXPECT_NE(materialLibrarySource.find("materials\" / \"quader_mesh_lit.filamat\""), std::string::npos);
+    EXPECT_NE(materialLibrarySource.find("filament_material_catalog.hpp"), std::string::npos);
+    EXPECT_NE(materialLibrarySource.find("std::string(kFilamentMaterialDirectory)"), std::string::npos);
+    EXPECT_NE(materialLibrarySource.find("std::string(kQuaderMeshMaterialFile)"), std::string::npos);
+    EXPECT_NE(materialLibrarySource.find("std::string(kQuaderMeshLitMaterialFile)"), std::string::npos);
+    EXPECT_EQ(materialLibrarySource.find("materials\" / \"quader_mesh.filamat\""), std::string::npos);
+    EXPECT_EQ(materialLibrarySource.find("materials\" / \"quader_mesh_lit.filamat\""), std::string::npos);
     EXPECT_NE(sceneBridgeSource.find("materialBinding_.initialize(shadedMeshMaterial, renderedMeshMaterial, textureBinding_)"), std::string::npos);
     EXPECT_NE(factorySource.find("materialBinding_->createMeshMaterialInstance(assets, primitiveMaterial, doubleSided, editorUnlit)"), std::string::npos);
     EXPECT_NE(materialSource.find("editorUnlit ? *shadedMeshMaterial_ : *renderedMeshMaterial_"), std::string::npos);
@@ -5943,6 +5960,61 @@ TEST(DocumentCommandServiceTests, BatchesVisibilityAndTransforms) {
     EXPECT_FALSE(scene.lock(locked)->locked);
 }
 
+TEST(DocumentCommandServiceTests, LockCommandsClearSelectionInsideUndoableCommands) {
+    SceneDocument scene;
+    const EntityId parent = scene.createEntity("Lock Parent");
+    const EntityId child = scene.createEntity("Lock Child");
+    ASSERT_TRUE(scene.setParent(child, parent, false));
+    EditorHistoryService history;
+    DocumentCommandService commands(scene, history);
+
+    ASSERT_TRUE(commands.selectEntities({parent, child}, child).ok);
+    DocumentCommandResult result = commands.setLocked(parent, true);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_TRUE(result.changed);
+    ASSERT_NE(scene.lock(parent), nullptr);
+    EXPECT_TRUE(scene.lock(parent)->locked);
+    EXPECT_TRUE(scene.selectedEntities().empty());
+    EXPECT_EQ(scene.primarySelection(), InvalidEntityId);
+
+    ASSERT_TRUE(history.undo().ok);
+    EXPECT_FALSE(scene.lock(parent)->locked);
+    EXPECT_EQ(scene.selectedEntities().size(), 2u);
+    EXPECT_EQ(scene.primarySelection(), child);
+
+    ASSERT_TRUE(history.redo().ok);
+    EXPECT_TRUE(scene.lock(parent)->locked);
+    EXPECT_TRUE(scene.selectedEntities().empty());
+    EXPECT_EQ(scene.primarySelection(), InvalidEntityId);
+
+    ASSERT_TRUE(history.undo().ok);
+    ASSERT_TRUE(commands.selectEntities({child}, child).ok);
+
+    result = commands.applySceneBatch("Batch Lock Parent", {
+            DocumentSceneBatchOperation{
+                    .kind = DocumentSceneBatchOperationKind::SetLocked,
+                    .entity = parent,
+                    .flag = true,
+            },
+    });
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_TRUE(result.changed);
+    ASSERT_NE(history.undoLabel(), nullptr);
+    EXPECT_EQ(*history.undoLabel(), "Batch Lock Parent");
+    EXPECT_TRUE(scene.lock(parent)->locked);
+    EXPECT_TRUE(scene.selectedEntities().empty());
+    EXPECT_EQ(scene.primarySelection(), InvalidEntityId);
+
+    ASSERT_TRUE(history.undo().ok);
+    EXPECT_FALSE(scene.lock(parent)->locked);
+    EXPECT_EQ(scene.selectedEntities().size(), 1u);
+    EXPECT_EQ(scene.primarySelection(), child);
+
+    ASSERT_TRUE(history.redo().ok);
+    EXPECT_TRUE(scene.lock(parent)->locked);
+    EXPECT_TRUE(scene.selectedEntities().empty());
+}
+
 TEST(DocumentCommandServiceTests, AssetAwareServiceRejectsDanglingAssetReferences) {
     SceneDocument scene;
     AssetRegistry assets;
@@ -9150,6 +9222,80 @@ TEST(ModelingSessionServiceTests, PublicTransformDragObjectSelectionRecordsScene
     EXPECT_NEAR(session.scene().transform(box.value.entity)->position.x, 0.0f, 0.001f);
 }
 
+TEST(ModelingSessionServiceTests, PublicTransformDragFaceSelectionRecordsModelingHistory) {
+    ProjectSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::fromProjectSession(session));
+
+    const QuaderApiResult<QuaderModelingObjectRef> box = editor.modeling().createBox({
+            .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+            .name = "History Face Drag Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(editor.selection().setMode(QuaderSelectionMode::Face).ok());
+
+    QuaderPickSelectRequest pickFace;
+    pickFace.ray = {
+            .origin = {0.0f, 0.0f, 5.0f},
+            .direction = {0.0f, 0.0f, -1.0f},
+    };
+    const QuaderApiResult<QuaderSelectionSummary> picked = editor.selection().pickSelect(pickFace);
+    ASSERT_TRUE(picked.ok) << picked.message;
+    ASSERT_EQ(picked.value.selectedFaceCount, 1u);
+
+    auto meshBounds = [&]() {
+        const std::optional<MeshAsset> mesh = session.modeling().compileObjectMesh(box.value.modelingObjectId);
+        EXPECT_TRUE(mesh.has_value());
+        return mesh.has_value() ? localMeshBounds(*mesh) : std::optional<SceneBounds>{};
+    };
+    std::optional<SceneBounds> bounds = meshBounds();
+    ASSERT_TRUE(bounds.has_value());
+    EXPECT_NEAR(bounds->max.x, 1.0f, 0.001f);
+
+    auto dragFaceBy = [&](float screenX) {
+        QuaderTransformDragBeginRequest beginRequest = testApiXMoveDragBeginRequest();
+        if (const std::optional<QVec3> center = editor.query().selectionCenter()) {
+            beginRequest.pivot = *center;
+        }
+        QuaderApiResult<QuaderTransformDragPreview> begin = editor.modeling().beginTransformDrag(beginRequest);
+        EXPECT_TRUE(begin.ok) << begin.message;
+        EXPECT_TRUE(begin.value.active);
+        EXPECT_TRUE(begin.value.previewDriven);
+
+        QuaderApiResult<QuaderTransformDragPreview> update =
+                editor.modeling().updateTransformDrag(testApiXMoveDragUpdateRequest(screenX));
+        EXPECT_TRUE(update.ok) << update.message;
+        EXPECT_TRUE(update.value.previewDriven);
+
+        QuaderApiResult<QuaderTransformDragPreview> commit = editor.modeling().commitTransformDrag();
+        EXPECT_TRUE(commit.ok) << commit.message;
+        EXPECT_TRUE(commit.changed);
+    };
+
+    dragFaceBy(2.0f);
+    bounds = meshBounds();
+    ASSERT_TRUE(bounds.has_value());
+    EXPECT_NEAR(bounds->max.x, 3.0f, 0.001f);
+
+    dragFaceBy(2.0f);
+    bounds = meshBounds();
+    ASSERT_TRUE(bounds.has_value());
+    EXPECT_NEAR(bounds->max.x, 5.0f, 0.001f);
+
+    QuaderApiVoidResult undo = editor.history().undo();
+    ASSERT_TRUE(undo.ok) << undo.message;
+    EXPECT_TRUE(session.scene().exists(box.value.entity));
+    bounds = meshBounds();
+    ASSERT_TRUE(bounds.has_value());
+    EXPECT_NEAR(bounds->max.x, 3.0f, 0.001f);
+
+    undo = editor.history().undo();
+    ASSERT_TRUE(undo.ok) << undo.message;
+    EXPECT_TRUE(session.scene().exists(box.value.entity));
+    bounds = meshBounds();
+    ASSERT_TRUE(bounds.has_value());
+    EXPECT_NEAR(bounds->max.x, 1.0f, 0.001f);
+}
+
 TEST(ModelingSessionServiceTests, TransformDragShiftDuplicateUsesScenePreviewForRotatedObject) {
     SceneDocument scene;
     AssetRegistry assets;
@@ -9519,7 +9665,7 @@ TEST(ModelingSessionServiceTests, RepeatLastActionReplaysRecordedExtrudePreview)
     EXPECT_GT(afterRepeat->indices.size(), afterFirst->indices.size());
 }
 
-TEST(ModelingSessionServiceTests, SceneObjectSyncDoesNotResetComponentSelectionMode) {
+TEST(ModelingSessionServiceTests, EditorSceneSelectionForcesEntityObjectModeFromComponentMode) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
@@ -9539,8 +9685,9 @@ TEST(ModelingSessionServiceTests, SceneObjectSyncDoesNotResetComponentSelectionM
 
     ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {box.object.entity}).ok);
 
-    EXPECT_EQ(service.selectionMode(), ModelingSelectionMode::Vertex);
-    EXPECT_EQ(service.selectionSummary().mode, ModelingSelectionMode::Vertex);
+    EXPECT_EQ(service.selectionMode(), ModelingSelectionMode::Object);
+    EXPECT_EQ(service.selectionSummary().mode, ModelingSelectionMode::Object);
+    EXPECT_EQ(service.selectionSummary().activeObjectId, box.object.modelingObjectId);
 }
 
 TEST(ModelingSessionServiceTests, SelectionModeSwitchPreservesSceneOnlySelection) {

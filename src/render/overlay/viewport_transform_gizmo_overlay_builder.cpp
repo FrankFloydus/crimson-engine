@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/viewport_transform_gizmo_overlay_builder.hpp"
 
+#include "render/overlay/viewport_overlay_geometry.hpp"
 #include "render/viewport_overlay_policy.hpp"
 
 #include <algorithm>
@@ -20,10 +21,6 @@ namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kCircleTau = kPi * 2.0f;
-constexpr float kMoveCenterRadiusPixels = 3.5f;
-constexpr float kScaleHandleSizePixels = 13.0f;
-constexpr float kScaleCenterSizePixels = 14.0f;
-constexpr float kOldGizmoBaseSizePixels = 68.0f;
 constexpr int kConeSegments = 14;
 constexpr int kCenterCircleSegments = 18;
 
@@ -120,28 +117,6 @@ bool dragAxisIncludes(quader_editor_core::TransformAxis activeAxis, quader_edito
 
 bool dragPlaneIncludes(quader_editor_core::TransformAxis activeAxis, quader_editor_core::TransformAxis planeAxis) {
     return activeAxis == quader_editor_core::TransformAxis::none || activeAxis == planeAxis;
-}
-
-bool tiny(QVec3 value) {
-    return length_squared(value) <= 0.000001f;
-}
-
-QVec3 safeNormalize(QVec3 value, QVec3 fallback = {0.0f, 0.0f, 1.0f}) {
-    if (tiny(value)) {
-        return fallback;
-    }
-    return normalize(value);
-}
-
-QVec3 fallbackPerpendicular(QVec3 axis) {
-    QVec3 side = cross(axis, QVec3{0.0f, 1.0f, 0.0f});
-    if (tiny(side)) {
-        side = cross(axis, QVec3{1.0f, 0.0f, 0.0f});
-    }
-    if (tiny(side)) {
-        return {0.0f, 0.0f, 1.0f};
-    }
-    return normalize(side);
 }
 
 float signedArea(const std::array<QVec2, 4>& points) {
@@ -256,10 +231,10 @@ bool appendConeHandle(
     axis = axis / axisLength;
     const float coneLength = axisLength * 0.22f * sizeScale;
     const float radius = coneLength * 0.38f;
-    QVec3 u = fallbackPerpendicular(axis);
+    QVec3 u = viewportOverlayFallbackPerpendicular(axis);
     QVec3 v = cross(axis, u);
-    if (tiny(v)) {
-        v = fallbackPerpendicular(u);
+    if (viewportOverlayVec3Tiny(v)) {
+        v = viewportOverlayFallbackPerpendicular(u);
     } else {
         v = normalize(v);
     }
@@ -333,8 +308,8 @@ void appendCubeHandle(
             {0.0f, 0.0f, -1.0f},
     }};
 
-    const QVec3 viewDirection = safeNormalize(camera.eye - center, {0.0f, 0.0f, 1.0f});
-    const QVec3 lightDirection = safeNormalize({-0.45f, -0.65f, 0.62f});
+    const QVec3 viewDirection = viewportOverlayNormalizeOr(camera.eye - center, {0.0f, 0.0f, 1.0f});
+    const QVec3 lightDirection = viewportOverlayNormalizeOr({-0.45f, -0.65f, 0.62f}, {0.0f, 0.0f, 1.0f});
 
     for (std::size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
         const float facing = dot(normals[faceIndex], viewDirection);
@@ -372,8 +347,8 @@ void appendCenterCircle(
     if (radiusWorld <= 0.000001f) {
         return;
     }
-    const QVec3 right = safeNormalize(camera.right, {1.0f, 0.0f, 0.0f});
-    const QVec3 up = safeNormalize(camera.up, {0.0f, 1.0f, 0.0f});
+    const QVec3 right = viewportOverlayNormalizeOr(camera.right, {1.0f, 0.0f, 0.0f});
+    const QVec3 up = viewportOverlayNormalizeOr(camera.up, {0.0f, 1.0f, 0.0f});
     for (int i = 0; i < kCenterCircleSegments; ++i) {
         const float a0 = kCircleTau * static_cast<float>(i) / static_cast<float>(kCenterCircleSegments);
         const float a1 = kCircleTau * static_cast<float>(i + 1) / static_cast<float>(kCenterCircleSegments);
@@ -440,11 +415,13 @@ void appendMoveOrScaleGizmo(
                 axis.world_tip,
                 color,
                 ViewportOverlayLayer::ToolHandle,
-                2.25f * widthScale);
+                kOverlayTransformGizmoAxisLineWidthPixels * widthScale);
 
         const float axisLength = std::max(axisWorldLength(axis), 0.0001f);
         if (gizmoFrame.info.tool == quader_editor_core::ViewportInteractionTool::scale) {
-            const float worldSize = std::max(0.0001f, axisLength * (kScaleHandleSizePixels / kOldGizmoBaseSizePixels));
+            const float worldSize = std::max(
+                    0.0001f,
+                    axisLength * (kOverlayTransformGizmoScaleHandleSizePixels / kOverlayTransformGizmoSizePixels));
             appendCubeHandle(overlayFrame, camera, axis.world_tip, worldSize, color, isHighlighted);
         } else {
             (void)appendConeHandle(overlayFrame, axis.world_start, axis.world_tip, color, 1.0f);
@@ -457,7 +434,8 @@ void appendMoveOrScaleGizmo(
     if (gizmoFrame.info.tool == quader_editor_core::ViewportInteractionTool::scale) {
         const float worldSize = std::max(
                 0.0001f,
-                firstAxisWorldLength(gizmoFrame) * (kScaleCenterSizePixels / kOldGizmoBaseSizePixels));
+                firstAxisWorldLength(gizmoFrame) *
+                        (kOverlayTransformGizmoScaleCenterSizePixels / kOverlayTransformGizmoSizePixels));
         appendCubeHandle(
                 overlayFrame,
                 camera,
@@ -467,7 +445,8 @@ void appendMoveOrScaleGizmo(
                 centerHovered);
     } else {
         const float radiusWorld =
-                firstAxisWorldLength(gizmoFrame) * (kMoveCenterRadiusPixels / kOldGizmoBaseSizePixels);
+                firstAxisWorldLength(gizmoFrame) *
+                        (kOverlayTransformGizmoMoveCenterRadiusPixels / kOverlayTransformGizmoSizePixels);
         appendCenterCircle(overlayFrame, camera, gizmoFrame.info.pivot, radiusWorld, kOverlayToolCenterColor);
     }
 }

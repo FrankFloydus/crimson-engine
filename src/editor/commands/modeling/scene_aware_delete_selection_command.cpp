@@ -7,6 +7,7 @@
 #include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
 
 #include "editor/commands/document/document_command_scene_helpers.hpp"
+#include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "scene/scene_document.hpp"
 
 #include <algorithm>
@@ -318,13 +319,19 @@ private:
 
 } // namespace
 
-bool sceneAwareDeleteHasSelectedSceneGroupRoot(const SceneDocument& scene) {
-    for (const EntityId root : documentCommandSelectedRootEntities(scene)) {
-        if (!scene.isSceneRoot(root) && scene.kind(root) == EntityKind::Empty && scene.hasChildren(root)) {
-            return true;
-        }
-    }
-    return false;
+bool sceneAwareDeleteHasSelectedRoot(const SceneDocument& scene) {
+    return !documentCommandSelectedRootEntities(scene).empty();
+}
+
+bool sceneAwareDeleteUsesDocumentRoute(ModelingSelectionMode mode) {
+    return selectionModeUsesSceneDocument(mode);
+}
+
+bool sceneAwareDeleteHandlesSelection(
+        ModelingSelectionSummary summary,
+        bool hasSelectedRoot) {
+    const bool componentSelection = summary.hasSelection && !sceneAwareDeleteUsesDocumentRoute(summary.mode);
+    return hasSelectedRoot && !componentSelection;
 }
 
 std::unique_ptr<IUndoableCommand> createSceneAwareDeleteSelectionCommand(

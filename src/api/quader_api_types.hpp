@@ -8,6 +8,7 @@
 
 #include "core/types.hpp"
 #include "math/types.hpp"
+#include "core/scene_environment_catalog.hpp"
 
 #include <array>
 #include <cstdint>
@@ -779,12 +780,31 @@ struct QuaderLightComponent {
 };
 
 /**
+ * Returns the default public point light component used by point-light creation.
+ */
+[[nodiscard]] inline QuaderLightComponent defaultQuaderPointLightComponent() {
+    QuaderLightComponent light;
+    light.type = QuaderLightType::Point;
+    return light;
+}
+
+/**
+ * Returns the default public directional light component used by directional-light creation.
+ */
+[[nodiscard]] inline QuaderLightComponent defaultQuaderDirectionalLightComponent() {
+    QuaderLightComponent light;
+    light.type = QuaderLightType::Directional;
+    return light;
+}
+
+/**
  * Stores public scene environment settings.
  */
 struct QuaderSceneEnvironmentSettings {
-    std::string environmentId = "lightroom_14b";
+    std::string environmentId = std::string(kDefaultSceneEnvironmentId);
     bool enabled = true;
     bool showBackground = true;
+    QVec3 clearColor = {0.0509804f, 0.0509804f, 0.0509804f};
     float intensity = 1.0f;
     float backgroundIntensity = 1.0f;
     float rotationY = 0.0f;
@@ -843,7 +863,7 @@ struct QuaderCreatePointLightArgs {
     std::string name = "Point Light";
     EntityId parent = InvalidEntityId;
     QuaderTransform transform;
-    QuaderLightComponent light;
+    QuaderLightComponent light = defaultQuaderPointLightComponent();
     bool selectCreated = false;
 };
 
@@ -854,7 +874,7 @@ struct QuaderCreateDirectionalLightArgs {
     std::string name = "Directional Light";
     EntityId parent = InvalidEntityId;
     QuaderTransform transform;
-    QuaderLightComponent light{.type = QuaderLightType::Directional};
+    QuaderLightComponent light = defaultQuaderDirectionalLightComponent();
     bool selectCreated = false;
 };
 

@@ -129,8 +129,8 @@ TEST(ModelingToolCatalogTests, PublicCommandBridgeMetadataLivesOnCommandDescript
 
     const CommandTool* duplicate = findModelingCommandTool("duplicate_meshes");
     ASSERT_NE(duplicate, nullptr);
-    EXPECT_EQ(duplicate->publicCommandId(), QuaderCommand::DuplicateSelection.string());
-    EXPECT_FALSE(duplicate->registersPublicCommand());
+    EXPECT_TRUE(duplicate->publicCommandId().empty());
+    EXPECT_TRUE(duplicate->registersPublicCommand());
 
     const CommandTool* applyActiveMaterial = findModelingCommandTool("apply_active_material");
     ASSERT_NE(applyActiveMaterial, nullptr);
