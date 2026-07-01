@@ -55,6 +55,18 @@ bool validEntityUuid(std::string_view uuid) {
     return uuids::uuid::from_string(uuid).has_value();
 }
 
+bool sameTransform(const TransformComponent& left, const TransformComponent& right) {
+    return left.position.x == right.position.x &&
+            left.position.y == right.position.y &&
+            left.position.z == right.position.z &&
+            left.rotationEuler.x == right.rotationEuler.x &&
+            left.rotationEuler.y == right.rotationEuler.y &&
+            left.rotationEuler.z == right.rotationEuler.z &&
+            left.scale.x == right.scale.x &&
+            left.scale.y == right.scale.y &&
+            left.scale.z == right.scale.z;
+}
+
 } // namespace
 
 void SceneDocument::setEditorObjectIdAllocator(EditorObjectIdAllocator allocator) {
@@ -441,8 +453,31 @@ void SceneDocument::setTransform(EntityId id, TransformComponent transform) {
     if (entity == entt::null) {
         return;
     }
+    if (const TransformComponent* current = registry_.try_get<TransformComponent>(entity);
+            current != nullptr && sameTransform(*current, transform)) {
+        return;
+    }
     registry_.emplace_or_replace<TransformComponent>(entity, transform);
     markDirty();
+}
+
+void SceneDocument::setTransforms(std::span<const SceneTransformAssignment> transforms) {
+    bool changed = false;
+    for (const SceneTransformAssignment& assignment : transforms) {
+        const entt::entity entity = requireEntity(assignment.entity);
+        if (entity == entt::null) {
+            continue;
+        }
+        if (const TransformComponent* current = registry_.try_get<TransformComponent>(entity);
+                current != nullptr && sameTransform(*current, assignment.transform)) {
+            continue;
+        }
+        registry_.emplace_or_replace<TransformComponent>(entity, assignment.transform);
+        changed = true;
+    }
+    if (changed) {
+        markDirty();
+    }
 }
 
 void SceneDocument::setModelingObject(EntityId id, ModelingObjectComponent object) {

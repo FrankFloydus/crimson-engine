@@ -8,6 +8,7 @@
 
 #include "render/viewport_overlay_frame.hpp"
 #include "render/viewport_overlay_policy.hpp"
+#include "render/render_signature_builder.hpp"
 #include "render/overlay/overlay_mesh_types.hpp"
 
 #include <cstdint>
@@ -102,13 +103,20 @@ struct OverlayLayerBuildPlan {
 class OverlayRenderableBuilder {
 public:
     static std::uint64_t frameSignature(const ViewportOverlayFrame& frame);
+    static OverlayFrameSignatures frameSignatures(const ViewportOverlayFrame& frame);
     static std::uint64_t cameraSignature(const ViewportOverlayCamera& camera);
     static std::uint64_t layerSignature(const ViewportOverlayFrame& frame, ViewportOverlayLayer layer);
+    static std::uint64_t layerSignature(const OverlayFrameSignatures& signatures, ViewportOverlayLayer layer);
     static std::uint64_t layerBuildSignature(
             const ViewportOverlayFrame& frame,
             const ViewportOverlayCamera& camera,
             ViewportOverlayLayer layer);
+    static std::uint64_t layerBuildSignature(
+            const OverlayFrameSignatures& signatures,
+            const ViewportOverlayCamera& camera,
+            ViewportOverlayLayer layer);
     static bool layerBuildDependsOnCamera(ViewportOverlayLayer layer);
+    static bool layerHasRenderablePrimitives(const OverlayFrameSignatures& signatures, ViewportOverlayLayer layer);
 
     static OverlayRenderState makeState(
             ViewportOverlayLayer layer,
@@ -120,14 +128,14 @@ public:
     static OverlayLayerBuildPlan buildLayer(
             const ViewportOverlayFrame& frame,
             const ViewportOverlayCamera& camera,
-            ViewportOverlayLayer layer);
+            ViewportOverlayLayer layer,
+            const OverlayFrameSignatures* signatures = nullptr);
 
 private:
     /**
      * Stores the Line Batch Key data contract used by the render extraction and Filament resource layer.
      */
     struct LineBatchKey {
-        std::uint32_t color = 0;
         float widthPixels = 0.0f;
     };
 

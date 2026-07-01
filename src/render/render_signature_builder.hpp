@@ -13,11 +13,24 @@
 #include "render/viewport_overlay_frame.hpp"
 #include "scene/components.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 
 namespace quader {
+
+/**
+ * Stores one-pass overlay frame and layer signatures for render proxy invalidation.
+ */
+struct OverlayFrameSignatures {
+    std::uint64_t frameSignature = 0;
+    std::array<std::uint64_t, kViewportOverlayLayerCount> layerSignatures{};
+    std::array<std::size_t, kViewportOverlayLayerCount> triangleCounts{};
+    std::array<std::size_t, kViewportOverlayLayerCount> lineCounts{};
+    std::array<std::size_t, kViewportOverlayLayerCount> pointCounts{};
+    bool hasSourceWireDepthStamp = false;
+};
 
 /**
  * Builds stable render cache signatures for render extraction and proxy invalidation.
@@ -49,6 +62,7 @@ public:
     [[nodiscard]] static std::uint64_t lightSignature(const LightComponent& light);
     [[nodiscard]] static std::uint64_t lightTransformSignature(const QMat4& worldTransform);
     [[nodiscard]] static std::uint64_t overlayFrameSignature(const ViewportOverlayFrame& frame);
+    [[nodiscard]] static OverlayFrameSignatures overlayFrameSignatures(const ViewportOverlayFrame& frame);
     [[nodiscard]] static std::uint64_t overlayCameraSignature(const ViewportOverlayCamera& camera);
     [[nodiscard]] static std::uint64_t overlayLayerSignature(
             const ViewportOverlayFrame& frame,

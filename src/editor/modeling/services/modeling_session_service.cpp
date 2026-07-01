@@ -3134,11 +3134,11 @@ private:
             }
         }
 
-        {
-            QDR_PROFILE_SCOPE("Modeling transform drag invalidate overlay caches after apply");
-            invalidateSelectionOverlayCaches();
-        }
         if (transformDragController_.previewDriven()) {
+            {
+                QDR_PROFILE_SCOPE("Modeling transform drag invalidate overlay caches after apply");
+                invalidateSelectionOverlayCaches();
+            }
             {
                 QDR_PROFILE_SCOPE("Modeling transform drag sync scene objects after apply");
                 syncSceneObjectsFromModeling(true);

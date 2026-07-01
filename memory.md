@@ -9,6 +9,48 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-01 - Selected Overlay Navigation Must Stay Visible And Cheap
+
+Task/context: `14.tracy` showed selected-all navigation dropping to roughly 10 FPS with 395 objects.
+Navigation input was cheap; the cost came from selected overlays, outliner drawing, and transform
+preview invalidation. A temporary UI suppression experiment was rejected because it made overlays
+disappear during interaction.
+
+Invariants:
+
+- Do not hide selected overlays during navigation or transform drags to paper over CPU cost.
+- Object-mode selected overlays can be dense, so render-side cache invalidation must avoid repeated
+  whole-frame/per-layer signature scans and must reuse compatible line/point proxy resources on
+  camera-only rebuilds.
+- `SourceWireDepthStamp` visibility filtering is only meaningful when the frame actually contains
+  source-wire depth-stamp triangles; object-mode selected edges must not scan selected face-fill
+  triangles to build an empty visibility filter.
+- Scene transform previews for large object selections must batch scene transform writes and avoid
+  invalidating semantic/base selection overlay caches when only object transforms change.
+- The outliner must cache scene tree records by scene revision and skip custom drawing for rows
+  outside the visible clip rect.
+
+Affected owners/files:
+
+- `src/render/render_signature_builder.*`
+- `src/render/overlay/overlay_renderable_builder.*`
+- `src/render/overlay/overlay_renderable_cache.*`
+- `src/render/overlay/overlay_proxy_factory.*`
+- `src/editor/history/scene_transform_preview_transaction.hpp`
+- `src/editor/transform/scene_transform_drag_service.cpp`
+- `src/editor/modeling/services/modeling_session_service.cpp`
+- `src/scene/scene_document.*`
+- `src/ui/outliner_panel.*`
+- `src/ui/viewport_panel.*`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=RenderSignatureBuilderTests.*:OverlayLineMeshBuilderTests.*:OverlayRenderableBuilderTests.*:OverlayRenderableCacheTests.*:OverlayProxyFactoryTests.*:SceneRenderBridgeTests.SkipsOverlayProxyRebuildWhenOverlayPayloadIsUnchanged:SceneDocumentTests.BatchedTransformAssignmentsDirtyOnceAndSkipNoOps:DocumentCommandTests.SceneTransformPreviewTransaction*:DocumentCommandTests.SceneTransformDragServiceFiltersTargetsAndRecordsScenePreviewThroughApi:ModelingSessionServiceTests.TransformDragObjectSelectionUsesSceneTransformPreview:ViewportToolGuardrailTests.TransformGizmoAndSelectionUseSharedViewportRuntime`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=UiLayoutGuardrailTests.Outliner*:ProgrammaticApiGuardrailTests.OutlinerUsesDocumentCommandRootSelectionOwner`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=LocalStressTests.MyFirstProjectLargeWorkflow`
+
 ## 2026-06-30 - Tracy Profiling Boot Convention And Diagnostic Build
 
 Task/context: Tracy 0.13.1 was installed for local optimization captures. The user-provided profiler

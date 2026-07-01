@@ -242,6 +242,57 @@ TEST(RenderSignatureBuilderTests, CentralizesMaterialMeshAndOverlaySignatures) {
             RenderSignatureBuilder::overlayLayerSignature(frame, ViewportOverlayLayer::SourceWire));
 }
 
+TEST(RenderSignatureBuilderTests, BuildsOverlayFrameLayerSignaturesInOnePass) {
+    ViewportOverlayFrame frame;
+    frame.triangles.push_back({
+            .layer = ViewportOverlayLayer::SelectedXrayFace,
+            .a = {-0.5f, -0.5f, -1.0f},
+            .b = {0.5f, -0.5f, -1.0f},
+            .c = {0.0f, 0.5f, -1.0f},
+            .color = rgba8(255, 211, 31, 96),
+            .element = {.objectId = 7},
+    });
+    frame.triangles.push_back({
+            .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+            .a = {-0.5f, -0.5f, -1.0f},
+            .b = {0.5f, -0.5f, -1.0f},
+            .c = {0.0f, 0.5f, -1.0f},
+            .color = rgba8(255, 224, 92, 235),
+            .element = {.objectId = 7},
+    });
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SourceWire,
+            .start = {-0.5f, 0.0f, -1.0f},
+            .end = {0.5f, 0.0f, -1.0f},
+            .color = rgba8(255, 224, 92, 235),
+            .widthPixels = 2.0f,
+            .element = {.objectId = 7},
+    });
+    frame.points.push_back({
+            .layer = ViewportOverlayLayer::SelectedVertex,
+            .position = {0.0f, 0.0f, -1.0f},
+            .color = rgba8(255, 211, 31, 255),
+            .sizePixels = 8.0f,
+            .element = {.objectId = 7, .vertexId = 1},
+    });
+
+    const OverlayFrameSignatures signatures = OverlayRenderableBuilder::frameSignatures(frame);
+
+    EXPECT_EQ(signatures.frameSignature, OverlayRenderableBuilder::frameSignature(frame));
+    EXPECT_EQ(
+            signatures.layerSignatures[static_cast<std::size_t>(ViewportOverlayLayer::SourceWire)],
+            OverlayRenderableBuilder::layerSignature(frame, ViewportOverlayLayer::SourceWire));
+    EXPECT_TRUE(signatures.hasSourceWireDepthStamp);
+    EXPECT_EQ(signatures.triangleCounts[static_cast<std::size_t>(ViewportOverlayLayer::SelectedXrayFace)], 1u);
+    EXPECT_EQ(signatures.triangleCounts[static_cast<std::size_t>(ViewportOverlayLayer::SourceWireDepthStamp)], 1u);
+    EXPECT_EQ(signatures.lineCounts[static_cast<std::size_t>(ViewportOverlayLayer::SourceWire)], 1u);
+    EXPECT_EQ(signatures.pointCounts[static_cast<std::size_t>(ViewportOverlayLayer::SelectedVertex)], 1u);
+    EXPECT_TRUE(OverlayRenderableBuilder::layerHasRenderablePrimitives(signatures, ViewportOverlayLayer::SourceWire));
+    EXPECT_FALSE(OverlayRenderableBuilder::layerHasRenderablePrimitives(
+            signatures,
+            ViewportOverlayLayer::SourceWireDepthStamp));
+}
+
 TEST(MeshAssetTests, CoalescesContiguousPrimitiveSpansByMaterialSlotForRenderSubmission) {
     MeshAsset mesh;
     mesh.indices = {
@@ -602,6 +653,33 @@ TEST(OverlayLineMeshBuilderTests, ExpandsDiagonalLinesPerpendicularToScreenDirec
     ASSERT_EQ(mesh.vertices.size(), 4u);
     EXPECT_GT(std::fabs(mesh.vertices[0].position.x - mesh.vertices[3].position.x), 0.0001f);
     EXPECT_GT(std::fabs(mesh.vertices[0].position.y - mesh.vertices[3].position.y), 0.0001f);
+}
+
+TEST(OverlayLineMeshBuilderTests, BatchesSameWidthLinesWithDifferentColors) {
+    ViewportOverlayFrame frame;
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SelectedEdge,
+            .start = {-0.5f, 0.0f, -1.0f},
+            .end = {0.0f, 0.0f, -1.0f},
+            .color = rgba8(255, 211, 31, 255),
+            .widthPixels = 2.0f,
+    });
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SelectedEdge,
+            .start = {0.0f, 0.0f, -1.0f},
+            .end = {0.5f, 0.0f, -1.0f},
+            .color = rgba8(90, 170, 255, 255),
+            .widthPixels = 2.0f,
+    });
+
+    const OverlayLayerBuildPlan plan =
+            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SelectedEdge);
+
+    ASSERT_EQ(plan.lineBatches.size(), 1u);
+    const OverlayLineMesh& mesh = plan.lineBatches.front().mesh;
+    ASSERT_EQ(mesh.vertices.size(), 8u);
+    EXPECT_EQ(mesh.vertices[0].color, rgba8SrgbToLinear(rgba8(255, 211, 31, 255)));
+    EXPECT_EQ(mesh.vertices[4].color, rgba8SrgbToLinear(rgba8(90, 170, 255, 255)));
 }
 
 TEST(OverlayLineMeshBuilderTests, SourceWireDepthStampsCullOutwardOccludedHandles) {

@@ -23,6 +23,7 @@
 #include <optional>
 #include <span>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -265,7 +266,8 @@ DocumentCommandResult SceneTransformDragService::previewWorldTransformDelta(
         return documentCommandInvalidRequestResult("Transform preview is not active");
     }
 
-    bool changed = false;
+    std::vector<DocumentTransformEdit> previewEdits;
+    previewEdits.reserve(targets_.size());
     for (const SceneTransformDragTarget& target : targets_) {
         if (!document.exists(target.entity)) {
             continue;
@@ -278,13 +280,13 @@ DocumentCommandResult SceneTransformDragService::previewWorldTransformDelta(
         const TransformComponent previewTransform = transformComponentFromMatrix(
                 sceneLocalMatrixFromWorldMatrix(parentWorldTransform, previewWorldTransform),
                 target.transform.rotationEuler);
-        const DocumentCommandResult result = preview_->previewTransform(target.entity, previewTransform);
-        if (!result.ok) {
-            return result;
-        }
-        changed = changed || result.changed;
+        previewEdits.push_back(DocumentTransformEdit{
+                .entity = target.entity,
+                .before = target.transform,
+                .after = previewTransform,
+        });
     }
-    return changed ? documentCommandChangedResult() : documentCommandUnchangedResult();
+    return preview_->previewTransforms(std::move(previewEdits));
 }
 
 DocumentCommandResult SceneTransformDragService::accept() {

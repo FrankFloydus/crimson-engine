@@ -72,6 +72,7 @@ private:
      */
     struct OverlaySlot {
         ViewportOverlayFrame frame;
+        OverlayFrameSignatures signatures;
         std::uint64_t frameSignature = 0;
         ViewportOverlayCamera camera;
         std::uint64_t cameraSignature = 0;

@@ -446,9 +446,8 @@ TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalToo
             readSourceFile(root / "src" / "editor" / "viewport" / "viewport_selection_interaction.cpp");
     EXPECT_NE(selectionInteraction.find("frame.inputRouter.state().selectionMode == ViewportSelectionMode::Group"), std::string::npos);
     EXPECT_EQ(selectionInteraction.find("editor.selection().summary().mode == QuaderSelectionMode::Group"), std::string::npos);
-    EXPECT_NE(viewportPanel.find("selectionOverlaySuppressedForInteraction()"), std::string::npos);
-    EXPECT_NE(viewportPanel.find("!selectionOverlaySuppressed && selectionOverlayCache_.valid()"), std::string::npos);
-    EXPECT_NE(viewportPanel.find("if (selectionOverlaySuppressedForInteraction())"), std::string::npos);
+    EXPECT_EQ(viewportPanel.find("selectionOverlaySuppressedForInteraction()"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("overlaysVisible && selectionOverlayCache_.valid()"), std::string::npos);
 }
 
 TEST(ViewportToolGuardrailTests, EditorOwnsViewportToolRuntimeSources) {

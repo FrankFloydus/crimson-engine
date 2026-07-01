@@ -160,6 +160,11 @@ The policy owner is `src/render/viewport_overlay_policy.cpp`.
   or point geometry in screen X/Y to fix z fighting.
 - Device-domain line and point overlay renderables must disable renderable culling.
 - Layer order lives in `kViewportOverlayDrawOrder`; do not duplicate the order elsewhere.
+- Camera-only viewport navigation must keep selected overlays visible while avoiding whole-frame
+  signature rescans and Filament proxy churn. `OverlayRenderableCache` owns this by caching
+  `OverlayFrameSignatures`, rebuilding only camera-dependent layers, updating compatible line/point
+  proxy buffers in place, and constructing source-wire depth-stamp visibility filters only when the
+  frame actually contains `SourceWireDepthStamp` metadata.
 
 ## Regression Tests
 

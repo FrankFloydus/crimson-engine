@@ -47,6 +47,14 @@ struct EntityRecord {
 };
 
 /**
+ * Stores a scene transform assignment used by batched preview updates.
+ */
+struct SceneTransformAssignment {
+    EntityId entity = InvalidEntityId;
+    TransformComponent transform;
+};
+
+/**
  * Owns Scene Document behavior within the scene graph document layer.
  */
 class SceneDocument {
@@ -82,6 +90,7 @@ public:
     bool setParent(EntityId child, EntityId parent, bool preserveWorldTransform = true);
 
     void setTransform(EntityId id, TransformComponent transform);
+    void setTransforms(std::span<const SceneTransformAssignment> transforms);
     void setModelingObject(EntityId id, ModelingObjectComponent object);
     void setMesh(EntityId id, MeshComponent mesh);
     void setMaterial(EntityId id, MaterialComponent material);

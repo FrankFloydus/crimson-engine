@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -91,7 +92,11 @@ public:
 
         const bool changed = !documentCommandSameTransform(edit->after, transform);
         edit->after = transform;
-        scene_.setTransform(entity, transform);
+        const SceneTransformAssignment assignment{
+                .entity = entity,
+                .transform = transform,
+        };
+        scene_.setTransforms(std::span<const SceneTransformAssignment>(&assignment, 1u));
         return changed ? documentCommandChangedResult() : documentCommandUnchangedResult();
     }
 
@@ -101,13 +106,21 @@ public:
         }
 
         bool changed = false;
+        std::vector<SceneTransformAssignment> assignments;
+        assignments.reserve(edits.size());
         for (const DocumentTransformEdit& edit : edits) {
-            DocumentCommandResult result = previewTransform(edit.entity, edit.after);
-            if (!result.ok) {
-                return result;
+            DocumentTransformEdit* storedEdit = editFor(edit.entity);
+            if (storedEdit == nullptr || !scene_.exists(edit.entity) || scene_.isEffectivelyLocked(edit.entity)) {
+                return documentCommandMissingEntityResult();
             }
-            changed = changed || result.changed;
+            changed = changed || !documentCommandSameTransform(storedEdit->after, edit.after);
+            storedEdit->after = edit.after;
+            assignments.push_back(SceneTransformAssignment{
+                    .entity = edit.entity,
+                    .transform = edit.after,
+            });
         }
+        scene_.setTransforms(assignments);
         return changed ? documentCommandChangedResult() : documentCommandUnchangedResult();
     }
 

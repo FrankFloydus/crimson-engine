@@ -745,8 +745,7 @@ void ViewportPanel::prepareViewports(
         paneState.renderer.setOverlayVisible(overlaysVisible ||
                 gizmosVisible ||
                 paneWorkspace.shading == ViewportShadingMode::Wireframe);
-        const bool selectionOverlaySuppressed = selectionOverlaySuppressedForInteraction();
-        ViewportOverlayFrame overlayFrame = overlaysVisible && !selectionOverlaySuppressed && selectionOverlayCache_.valid()
+        ViewportOverlayFrame overlayFrame = overlaysVisible && selectionOverlayCache_.valid()
                 ? selectionOverlayCache_.frame()
                 : ViewportOverlayFrame{};
         const ModelingSelectionMode overlayMode = selectionOverlayCache_.valid()
@@ -1299,9 +1298,6 @@ void ViewportPanel::refreshCachedSelectionOverlayFrame(
         const SceneDocument& document,
         const AssetRegistry& assets,
         ModelingSessionService& modeling) {
-    if (selectionOverlaySuppressedForInteraction()) {
-        return;
-    }
     const ModelingSelectionSummary overlaySummary = [&]() {
         QDR_PROFILE_SCOPE("Viewport selection overlay summary");
         return modeling.selectionSummary();
@@ -1385,13 +1381,6 @@ void ViewportPanel::refreshCachedSelectionOverlayFrame(
     case ViewportPaneOverlayCacheRefreshReason::None:
         break;
     }
-}
-
-bool ViewportPanel::selectionOverlaySuppressedForInteraction() const {
-    return inputRouter_.navigating() ||
-            interactionController_.dragging() ||
-            navigationGizmo_.inputLocked() ||
-            splitHandleDragging_;
 }
 
 ViewportWorkspaceService& ViewportPanel::workspace() {

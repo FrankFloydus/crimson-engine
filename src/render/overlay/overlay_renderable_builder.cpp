@@ -35,6 +35,10 @@ bool overlayLayerUsesDepthStampVisibility(ViewportOverlayLayer layer) {
             layer == ViewportOverlayLayer::HoverVertex;
 }
 
+std::size_t overlayLayerIndex(ViewportOverlayLayer layer) {
+    return static_cast<std::size_t>(layer);
+}
+
 bool overlayLayerCanBuildFaceFill(ViewportOverlayLayer layer) {
     return layer == ViewportOverlayLayer::SelectedVisibleFace ||
             layer == ViewportOverlayLayer::SelectedXrayFace ||
@@ -235,6 +239,10 @@ std::uint64_t OverlayRenderableBuilder::frameSignature(const ViewportOverlayFram
     return RenderSignatureBuilder::overlayFrameSignature(frame);
 }
 
+OverlayFrameSignatures OverlayRenderableBuilder::frameSignatures(const ViewportOverlayFrame& frame) {
+    return RenderSignatureBuilder::overlayFrameSignatures(frame);
+}
+
 std::uint64_t OverlayRenderableBuilder::cameraSignature(const ViewportOverlayCamera& camera) {
     return RenderSignatureBuilder::overlayCameraSignature(camera);
 }
@@ -243,16 +251,38 @@ std::uint64_t OverlayRenderableBuilder::layerSignature(const ViewportOverlayFram
     return RenderSignatureBuilder::overlayLayerSignature(frame, layer);
 }
 
+std::uint64_t OverlayRenderableBuilder::layerSignature(
+        const OverlayFrameSignatures& signatures,
+        ViewportOverlayLayer layer) {
+    return signatures.layerSignatures[overlayLayerIndex(layer)];
+}
+
 bool OverlayRenderableBuilder::layerBuildDependsOnCamera(ViewportOverlayLayer layer) {
     return overlayLayerCanBuildLines(layer) || overlayLayerCanBuildPoints(layer);
+}
+
+bool OverlayRenderableBuilder::layerHasRenderablePrimitives(
+        const OverlayFrameSignatures& signatures,
+        ViewportOverlayLayer layer) {
+    const std::size_t layerIndex = overlayLayerIndex(layer);
+    return (overlayLayerCanBuildFaceFill(layer) && signatures.triangleCounts[layerIndex] > 0u) ||
+            (overlayLayerCanBuildLines(layer) && signatures.lineCounts[layerIndex] > 0u) ||
+            (overlayLayerCanBuildPoints(layer) && signatures.pointCounts[layerIndex] > 0u);
 }
 
 std::uint64_t OverlayRenderableBuilder::layerBuildSignature(
         const ViewportOverlayFrame& frame,
         const ViewportOverlayCamera& camera,
         ViewportOverlayLayer layer) {
+    return layerBuildSignature(frameSignatures(frame), camera, layer);
+}
+
+std::uint64_t OverlayRenderableBuilder::layerBuildSignature(
+        const OverlayFrameSignatures& signatures,
+        const ViewportOverlayCamera& camera,
+        ViewportOverlayLayer layer) {
     RenderSignatureBuilder signature;
-    signature.addValue(layerSignature(frame, layer));
+    signature.addValue(layerSignature(signatures, layer));
     if (layerBuildDependsOnCamera(layer)) {
         signature.addValue(cameraSignature(OverlayCameraProjector::sanitizedCamera(camera)));
     }
@@ -295,10 +325,17 @@ OverlayRenderState OverlayRenderableBuilder::makeState(
 OverlayLayerBuildPlan OverlayRenderableBuilder::buildLayer(
         const ViewportOverlayFrame& frame,
         const ViewportOverlayCamera& camera,
-        ViewportOverlayLayer layer) {
+        ViewportOverlayLayer layer,
+        const OverlayFrameSignatures* signatures) {
     QDR_PROFILE_FUNCTION();
     OverlayLayerBuildPlan plan;
     if (layer == ViewportOverlayLayer::SourceWireDepthStamp) {
+        return plan;
+    }
+
+    const OverlayFrameSignatures localSignatures = signatures == nullptr ? frameSignatures(frame) : OverlayFrameSignatures{};
+    const OverlayFrameSignatures& frameSignatures = signatures == nullptr ? localSignatures : *signatures;
+    if (!layerHasRenderablePrimitives(frameSignatures, layer)) {
         return plan;
     }
 
@@ -334,6 +371,7 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::buildLayer(
 
     std::optional<OverlayDepthStampVisibilityFilter> visibility;
     if (overlayLayerUsesDepthStampVisibility(layer) &&
+            frameSignatures.hasSourceWireDepthStamp &&
             (overlayLayerCanBuildLines(layer) || overlayLayerCanBuildPoints(layer))) {
         visibility.emplace(frame);
     }
@@ -349,8 +387,7 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::buildLayer(
             std::vector<const ViewportOverlayLine*> batchLines;
             batchLines.reserve(lines.size());
             for (const ViewportOverlayLine* line : lines) {
-                if (line->color != key.color ||
-                        viewportOverlayLineWidthPixels(layer, line->widthPixels) != key.widthPixels) {
+                if (viewportOverlayLineWidthPixels(layer, line->widthPixels) != key.widthPixels) {
                     continue;
                 }
                 batchLines.push_back(line);
@@ -428,11 +465,10 @@ std::vector<OverlayRenderableBuilder::LineBatchKey> OverlayRenderableBuilder::li
     std::vector<LineBatchKey> keys;
     for (const ViewportOverlayLine* line : lines) {
         const LineBatchKey key{
-                .color = line->color,
                 .widthPixels = viewportOverlayLineWidthPixels(layer, line->widthPixels),
         };
         const auto existing = std::find_if(keys.begin(), keys.end(), [&](const LineBatchKey& candidate) {
-            return candidate.color == key.color && candidate.widthPixels == key.widthPixels;
+            return candidate.widthPixels == key.widthPixels;
         });
         if (existing == keys.end()) {
             keys.push_back(key);

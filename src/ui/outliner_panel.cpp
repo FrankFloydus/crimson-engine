@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <memory>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -200,6 +201,21 @@ void drawHierarchyGuides(
 
 } // namespace
 
+struct OutlinerPanel::TreeCache {
+    bool valid = false;
+    std::uint64_t sceneRevision = 0;
+    std::vector<EntityRecord> records;
+    std::unordered_map<EntityId, std::size_t> recordIndexByEntity;
+    std::unordered_map<EntityId, std::vector<EntityId>> childrenByEntity;
+    std::vector<EntityId> roots;
+    std::vector<EntityId> selected;
+    EntityId primarySelection = InvalidEntityId;
+};
+
+OutlinerPanel::OutlinerPanel() = default;
+
+OutlinerPanel::~OutlinerPanel() = default;
+
 float OutlinerPanel::minimumWidth(const UIContext& context) const {
     // UIDockPanel applies setNextWindowMinWidth(context.style.sidebarMinWidth) before opening the window.
     return context.style.sidebarMinWidth;
@@ -216,14 +232,7 @@ ImGuiWindowFlags OutlinerPanel::windowFlags(const UIContext& context) const {
 void OutlinerPanel::drawContent(UIContext& context) {
     SceneDocument& document = context.document;
 
-    const std::vector<EntityRecord> records = document.entityRecordsTreeOrder();
-    std::unordered_map<EntityId, EntityRecord> recordByEntity;
-    recordByEntity.reserve(records.size());
-    for (const EntityRecord& record : records) {
-        recordByEntity.emplace(record.id, record);
-    }
-
-    const std::vector<EntityId> selected = document.selectedEntities();
+    const TreeCache& tree = refreshTreeCache(document);
     const ImGuiIO& io = ImGui::GetIO();
     PendingOutlinerAction pendingAction = PendingOutlinerAction::None;
     EntityId pendingTarget = InvalidEntityId;
@@ -241,12 +250,12 @@ void OutlinerPanel::drawContent(UIContext& context) {
         EntityId activeSelection = record.id;
         std::vector<EntityId> nextSelection;
         if (io.KeyShift) {
-            nextSelection = entityRangeSelection(records, outlinerAnchor_, record.id);
+            nextSelection = entityRangeSelection(tree.records, outlinerAnchor_, record.id);
         } else if (io.KeyCtrl || io.KeySuper) {
-            nextSelection = selected;
+            nextSelection = tree.selected;
             if (containsEntity(nextSelection, record.id)) {
                 nextSelection.erase(std::remove(nextSelection.begin(), nextSelection.end(), record.id), nextSelection.end());
-                activeSelection = document.primarySelection() == record.id ? InvalidEntityId : document.primarySelection();
+                activeSelection = tree.primarySelection == record.id ? InvalidEntityId : tree.primarySelection;
             } else {
                 nextSelection.push_back(record.id);
             }
@@ -258,11 +267,11 @@ void OutlinerPanel::drawContent(UIContext& context) {
     };
 
     std::function<void(EntityId)> drawNode = [&](EntityId entity) {
-        const auto recordIt = recordByEntity.find(entity);
-        if (recordIt == recordByEntity.end()) {
+        const auto recordIt = tree.recordIndexByEntity.find(entity);
+        if (recordIt == tree.recordIndexByEntity.end() || recordIt->second >= tree.records.size()) {
             return;
         }
-        const EntityRecord& record = recordIt->second;
+        const EntityRecord& record = tree.records[recordIt->second];
         ImGui::PushID(static_cast<int>(record.id));
 
         const bool subdued = !record.effectivelyVisible || record.effectivelyLocked;
@@ -383,15 +392,18 @@ void OutlinerPanel::drawContent(UIContext& context) {
         }
 
         if (open && record.hasChildren) {
-            for (const EntityId child : document.children(record.id)) {
-                drawNode(child);
+            if (const auto childrenIt = tree.childrenByEntity.find(record.id);
+                    childrenIt != tree.childrenByEntity.end()) {
+                for (const EntityId child : childrenIt->second) {
+                    drawNode(child);
+                }
             }
             ImGui::TreePop();
         }
         ImGui::PopID();
     };
 
-    for (const EntityId root : document.rootEntities()) {
+    for (const EntityId root : tree.roots) {
         drawNode(root);
     }
 
@@ -416,6 +428,35 @@ void OutlinerPanel::drawContent(UIContext& context) {
     case PendingOutlinerAction::None:
         break;
     }
+}
+
+const OutlinerPanel::TreeCache& OutlinerPanel::refreshTreeCache(const SceneDocument& document) {
+    if (!treeCache_) {
+        treeCache_ = std::make_unique<TreeCache>();
+    }
+    TreeCache& cache = *treeCache_;
+    if (cache.valid && cache.sceneRevision == document.revision()) {
+        return cache;
+    }
+
+    cache.sceneRevision = document.revision();
+    cache.records = document.entityRecordsTreeOrder();
+    cache.recordIndexByEntity.clear();
+    cache.recordIndexByEntity.reserve(cache.records.size());
+    cache.childrenByEntity.clear();
+    cache.childrenByEntity.reserve(cache.records.size());
+    for (std::size_t index = 0; index < cache.records.size(); ++index) {
+        const EntityRecord& record = cache.records[index];
+        cache.recordIndexByEntity.emplace(record.id, index);
+        if (record.parent != InvalidEntityId) {
+            cache.childrenByEntity[record.parent].push_back(record.id);
+        }
+    }
+    cache.roots = document.rootEntities();
+    cache.selected = document.selectedEntities();
+    cache.primarySelection = document.primarySelection();
+    cache.valid = true;
+    return cache;
 }
 
 } // namespace quader

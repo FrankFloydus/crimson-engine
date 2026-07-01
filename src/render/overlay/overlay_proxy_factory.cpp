@@ -160,6 +160,7 @@ void appendOverlayProxy(
         filament::Material& material,
         const std::vector<Vertex>& vertices,
         const std::vector<std::uint32_t>& indices,
+        OverlayRenderableProxyKind kind,
         const OverlayRenderState& state,
         std::uint8_t layerMask,
         std::vector<OverlayRenderableProxy>& proxies,
@@ -170,6 +171,9 @@ void appendOverlayProxy(
     }
 
     OverlayRenderableProxy proxy;
+    proxy.kind = kind;
+    proxy.vertexCount = static_cast<std::uint32_t>(vertices.size());
+    proxy.indexCount = static_cast<std::uint32_t>(indices.size());
     const utils::Entity entity = utils::EntityManager::get().create();
     proxy.entityId = toOverlayEntityId(entity);
     OverlayProxyCreationGuard creationGuard(engine, scene, proxy);
@@ -205,6 +209,47 @@ void appendOverlayProxy(
     creationGuard.markSceneAdded();
     proxies.push_back(std::move(proxy));
     creationGuard.release();
+}
+
+template <typename Vertex>
+bool proxyCanUpdateMesh(
+        const OverlayRenderableProxy& proxy,
+        OverlayRenderableProxyKind kind,
+        const OverlayMesh<Vertex>& mesh) {
+    return !mesh.empty() &&
+            proxy.kind == kind &&
+            proxy.vertexBuffer != nullptr &&
+            proxy.indexBuffer != nullptr &&
+            proxy.materialInstance != nullptr &&
+            proxy.vertexCount == mesh.vertices.size() &&
+            proxy.indexCount == mesh.indices.size();
+}
+
+void updateProxyLayerMask(
+        filament::Engine& engine,
+        OverlayRenderableProxy& proxy,
+        std::uint8_t layerMask) {
+    if (proxy.entityId == 0u) {
+        return;
+    }
+    filament::RenderableManager& renderables = engine.getRenderableManager();
+    const filament::RenderableManager::Instance instance =
+            renderables.getInstance(toFilamentEntity(proxy.entityId));
+    if (!instance) {
+        return;
+    }
+    renderables.setLayerMask(instance, kViewportAllLayerMask, layerMask);
+}
+
+template <typename Vertex>
+void updateProxyBuffers(
+        filament::Engine& engine,
+        OverlayRenderableProxy& proxy,
+        const OverlayMesh<Vertex>& mesh,
+        std::uint8_t layerMask) {
+    proxy.vertexBuffer->setBufferAt(engine, 0, FilamentBufferDescriptorFactory::vector(mesh.vertices));
+    proxy.indexBuffer->setBuffer(engine, FilamentBufferDescriptorFactory::vector(mesh.indices));
+    updateProxyLayerMask(engine, proxy, layerMask);
 }
 
 } // namespace
@@ -250,6 +295,62 @@ std::vector<OverlayRenderableProxy> OverlayProxyFactory::createLayerProxies(
     return proxies;
 }
 
+bool OverlayProxyFactory::updateLayerProxies(
+        std::vector<OverlayRenderableProxy>& proxies,
+        const OverlayLayerBuildPlan& plan,
+        std::uint8_t layerMask) {
+    if (!initialized() || proxies.size() != plannedProxyCount(plan)) {
+        return false;
+    }
+
+    std::size_t index = 0;
+    for (const OverlayFaceFillBatch& batch : plan.faceFillBatches) {
+        if (batch.mesh.empty()) {
+            continue;
+        }
+        if (index >= proxies.size() ||
+                !proxyCanUpdateMesh(proxies[index++], OverlayRenderableProxyKind::Triangle, batch.mesh)) {
+            return false;
+        }
+    }
+    for (const OverlayLineBatch& batch : plan.lineBatches) {
+        if (batch.mesh.empty()) {
+            continue;
+        }
+        if (index >= proxies.size() ||
+                !proxyCanUpdateMesh(proxies[index++], OverlayRenderableProxyKind::Line, batch.mesh)) {
+            return false;
+        }
+    }
+    for (const OverlayPointBatch& batch : plan.pointBatches) {
+        if (batch.mesh.empty()) {
+            continue;
+        }
+        if (index >= proxies.size() ||
+                !proxyCanUpdateMesh(proxies[index++], OverlayRenderableProxyKind::Point, batch.mesh)) {
+            return false;
+        }
+    }
+
+    index = 0;
+    for (const OverlayFaceFillBatch& batch : plan.faceFillBatches) {
+        if (!batch.mesh.empty()) {
+            updateTriangleProxy(proxies[index++], batch, layerMask);
+        }
+    }
+    for (const OverlayLineBatch& batch : plan.lineBatches) {
+        if (!batch.mesh.empty()) {
+            updateLineProxy(proxies[index++], batch, layerMask);
+        }
+    }
+    for (const OverlayPointBatch& batch : plan.pointBatches) {
+        if (!batch.mesh.empty()) {
+            updatePointProxy(proxies[index++], batch, layerMask);
+        }
+    }
+    return true;
+}
+
 void OverlayProxyFactory::destroy(OverlayRenderableProxy& proxy) {
     if (!engine_) {
         return;
@@ -286,6 +387,7 @@ void OverlayProxyFactory::createTriangleProxy(
             *overlayMaterial_,
             batch.mesh.vertices,
             batch.mesh.indices,
+            OverlayRenderableProxyKind::Triangle,
             batch.state,
             layerMask,
             proxies,
@@ -316,6 +418,7 @@ void OverlayProxyFactory::createLineProxy(
             *overlayLineMaterial_,
             batch.mesh.vertices,
             batch.mesh.indices,
+            OverlayRenderableProxyKind::Line,
             batch.state,
             layerMask,
             proxies,
@@ -349,6 +452,7 @@ void OverlayProxyFactory::createPointProxy(
             *overlayPointMaterial_,
             batch.mesh.vertices,
             batch.mesh.indices,
+            OverlayRenderableProxyKind::Point,
             batch.state,
             layerMask,
             proxies,
@@ -363,6 +467,33 @@ void OverlayProxyFactory::createPointProxy(
                 configureOverlayMaterial(material, batch.state);
                 material.setParameter("innerRadius", batch.innerRadius);
             });
+}
+
+void OverlayProxyFactory::updateTriangleProxy(
+        OverlayRenderableProxy& proxy,
+        const OverlayFaceFillBatch& batch,
+        std::uint8_t layerMask) {
+    updateProxyBuffers(*engine_, proxy, batch.mesh, layerMask);
+    configureOverlayMaterial(*proxy.materialInstance, batch.state);
+}
+
+void OverlayProxyFactory::updateLineProxy(
+        OverlayRenderableProxy& proxy,
+        const OverlayLineBatch& batch,
+        std::uint8_t layerMask) {
+    updateProxyBuffers(*engine_, proxy, batch.mesh, layerMask);
+    configureOverlayMaterial(*proxy.materialInstance, batch.state);
+    proxy.materialInstance->setParameter("lineWidth", batch.widthPixels);
+    proxy.materialInstance->setParameter("featherPixels", kOverlayLineFeatherPixels);
+}
+
+void OverlayProxyFactory::updatePointProxy(
+        OverlayRenderableProxy& proxy,
+        const OverlayPointBatch& batch,
+        std::uint8_t layerMask) {
+    updateProxyBuffers(*engine_, proxy, batch.mesh, layerMask);
+    configureOverlayMaterial(*proxy.materialInstance, batch.state);
+    proxy.materialInstance->setParameter("innerRadius", batch.innerRadius);
 }
 
 void OverlayProxyFactory::configureOverlayMaterial(

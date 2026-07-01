@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/render_signature_builder.hpp"
 
+#include <array>
 #include <bit>
 #include <functional>
 #include <optional>
@@ -18,6 +19,55 @@ namespace {
 
 constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
 constexpr std::uint64_t kFnvPrime = 1099511628211ull;
+constexpr std::array<ViewportOverlayLayer, 7u> kDepthStampVisibilityLayers{{
+        ViewportOverlayLayer::SourceWire,
+        ViewportOverlayLayer::SelectedFaceEdge,
+        ViewportOverlayLayer::SelectedEdge,
+        ViewportOverlayLayer::HoverFaceEdge,
+        ViewportOverlayLayer::HoverEdge,
+        ViewportOverlayLayer::SelectedVertex,
+        ViewportOverlayLayer::HoverVertex,
+}};
+
+std::size_t overlayLayerIndex(ViewportOverlayLayer layer) {
+    return static_cast<std::size_t>(layer);
+}
+
+void addFrameTriangleSignature(RenderSignatureBuilder& signature, const ViewportOverlayTriangle& triangle) {
+    signature.addValue(static_cast<std::uint32_t>(triangle.layer))
+            .addValue(triangle.color)
+            .addVec3(triangle.a)
+            .addVec3(triangle.b)
+            .addVec3(triangle.c);
+}
+
+void addLayerTriangleSignature(RenderSignatureBuilder& signature, const ViewportOverlayTriangle& triangle) {
+    signature.addValue(static_cast<std::uint32_t>(triangle.layer))
+            .addValue(triangle.color)
+            .addValue(triangle.element.objectId)
+            .addVec3(triangle.a)
+            .addVec3(triangle.b)
+            .addVec3(triangle.c);
+}
+
+void addLineSignature(RenderSignatureBuilder& signature, const ViewportOverlayLine& line) {
+    signature.addValue(static_cast<std::uint32_t>(line.layer))
+            .addValue(line.color)
+            .addFloat(line.widthPixels)
+            .addVec3(line.start)
+            .addVec3(line.end);
+}
+
+void addPointSignature(RenderSignatureBuilder& signature, const ViewportOverlayPoint& point) {
+    signature.addValue(static_cast<std::uint32_t>(point.layer))
+            .addValue(point.color)
+            .addFloat(point.sizePixels)
+            .addBool(point.outlineGrowthPixels.has_value());
+    if (point.outlineGrowthPixels.has_value()) {
+        signature.addFloat(*point.outlineGrowthPixels);
+    }
+    signature.addVec3(point.position);
+}
 
 } // namespace
 
@@ -155,35 +205,50 @@ std::uint64_t RenderSignatureBuilder::lightTransformSignature(const QMat4& world
 }
 
 std::uint64_t RenderSignatureBuilder::overlayFrameSignature(const ViewportOverlayFrame& frame) {
-    RenderSignatureBuilder signature;
-    signature.addSize(frame.triangles.size());
+    return overlayFrameSignatures(frame).frameSignature;
+}
+
+OverlayFrameSignatures RenderSignatureBuilder::overlayFrameSignatures(const ViewportOverlayFrame& frame) {
+    OverlayFrameSignatures result;
+    RenderSignatureBuilder frameSignature;
+    std::array<RenderSignatureBuilder, kViewportOverlayLayerCount> layerSignatures;
+    for (std::size_t layerIndex = 0; layerIndex < layerSignatures.size(); ++layerIndex) {
+        layerSignatures[layerIndex].addValue(static_cast<std::uint32_t>(layerIndex));
+    }
+
+    frameSignature.addSize(frame.triangles.size());
     for (const ViewportOverlayTriangle& triangle : frame.triangles) {
-        signature.addValue(static_cast<std::uint32_t>(triangle.layer))
-                .addValue(triangle.color)
-                .addVec3(triangle.a)
-                .addVec3(triangle.b)
-                .addVec3(triangle.c);
-    }
-    signature.addSize(frame.lines.size());
-    for (const ViewportOverlayLine& line : frame.lines) {
-        signature.addValue(static_cast<std::uint32_t>(line.layer))
-                .addValue(line.color)
-                .addFloat(line.widthPixels)
-                .addVec3(line.start)
-                .addVec3(line.end);
-    }
-    signature.addSize(frame.points.size());
-    for (const ViewportOverlayPoint& point : frame.points) {
-        signature.addValue(static_cast<std::uint32_t>(point.layer))
-                .addValue(point.color)
-                .addFloat(point.sizePixels)
-                .addBool(point.outlineGrowthPixels.has_value());
-        if (point.outlineGrowthPixels.has_value()) {
-            signature.addFloat(*point.outlineGrowthPixels);
+        addFrameTriangleSignature(frameSignature, triangle);
+        const std::size_t layerIndex = overlayLayerIndex(triangle.layer);
+        ++result.triangleCounts[layerIndex];
+        addLayerTriangleSignature(layerSignatures[layerIndex], triangle);
+        if (triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp) {
+            result.hasSourceWireDepthStamp = true;
+            for (const ViewportOverlayLayer visibleLayer : kDepthStampVisibilityLayers) {
+                addLayerTriangleSignature(layerSignatures[overlayLayerIndex(visibleLayer)], triangle);
+            }
         }
-        signature.addVec3(point.position);
     }
-    return signature.value();
+
+    frameSignature.addSize(frame.lines.size());
+    for (const ViewportOverlayLine& line : frame.lines) {
+        addLineSignature(frameSignature, line);
+        ++result.lineCounts[overlayLayerIndex(line.layer)];
+        addLineSignature(layerSignatures[overlayLayerIndex(line.layer)], line);
+    }
+
+    frameSignature.addSize(frame.points.size());
+    for (const ViewportOverlayPoint& point : frame.points) {
+        addPointSignature(frameSignature, point);
+        ++result.pointCounts[overlayLayerIndex(point.layer)];
+        addPointSignature(layerSignatures[overlayLayerIndex(point.layer)], point);
+    }
+
+    result.frameSignature = frameSignature.value();
+    for (std::size_t layerIndex = 0; layerIndex < layerSignatures.size(); ++layerIndex) {
+        result.layerSignatures[layerIndex] = layerSignatures[layerIndex].value();
+    }
+    return result;
 }
 
 std::uint64_t RenderSignatureBuilder::overlayCameraSignature(const ViewportOverlayCamera& camera) {
@@ -204,51 +269,7 @@ std::uint64_t RenderSignatureBuilder::overlayCameraSignature(const ViewportOverl
 std::uint64_t RenderSignatureBuilder::overlayLayerSignature(
         const ViewportOverlayFrame& frame,
         ViewportOverlayLayer layer) {
-    RenderSignatureBuilder signature;
-    signature.addValue(static_cast<std::uint32_t>(layer));
-    for (const ViewportOverlayTriangle& triangle : frame.triangles) {
-        if (triangle.layer != layer &&
-                !(triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp &&
-                    (layer == ViewportOverlayLayer::SourceWire ||
-                     layer == ViewportOverlayLayer::SelectedFaceEdge ||
-                     layer == ViewportOverlayLayer::SelectedEdge ||
-                     layer == ViewportOverlayLayer::HoverFaceEdge ||
-                     layer == ViewportOverlayLayer::HoverEdge ||
-                     layer == ViewportOverlayLayer::SelectedVertex ||
-                     layer == ViewportOverlayLayer::HoverVertex))) {
-            continue;
-        }
-        signature.addValue(static_cast<std::uint32_t>(triangle.layer))
-                .addValue(triangle.color)
-                .addValue(triangle.element.objectId)
-                .addVec3(triangle.a)
-                .addVec3(triangle.b)
-                .addVec3(triangle.c);
-    }
-    for (const ViewportOverlayLine& line : frame.lines) {
-        if (line.layer != layer) {
-            continue;
-        }
-        signature.addValue(static_cast<std::uint32_t>(line.layer))
-                .addValue(line.color)
-                .addFloat(line.widthPixels)
-                .addVec3(line.start)
-                .addVec3(line.end);
-    }
-    for (const ViewportOverlayPoint& point : frame.points) {
-        if (point.layer != layer) {
-            continue;
-        }
-        signature.addValue(static_cast<std::uint32_t>(point.layer))
-                .addValue(point.color)
-                .addFloat(point.sizePixels)
-                .addBool(point.outlineGrowthPixels.has_value());
-        if (point.outlineGrowthPixels.has_value()) {
-            signature.addFloat(*point.outlineGrowthPixels);
-        }
-        signature.addVec3(point.position);
-    }
-    return signature.value();
+    return overlayFrameSignatures(frame).layerSignatures[overlayLayerIndex(layer)];
 }
 
 } // namespace quader

@@ -2158,23 +2158,29 @@ TEST(SceneRenderBridgeTests, SkipsOverlayProxyRebuildWhenOverlayPayloadIsUnchang
     const std::string cacheSource = readSourceFile("src/render/overlay/overlay_renderable_cache.cpp");
     const std::string cacheHeader = readSourceFile("src/render/overlay/overlay_renderable_cache.hpp");
     const std::string builderSource = readSourceFile("src/render/overlay/overlay_renderable_builder.cpp");
+    const std::string signatureHeader = readSourceFile("src/render/render_signature_builder.hpp");
+    const std::string proxyFactorySource = readSourceFile("src/render/overlay/overlay_proxy_factory.cpp");
 
-    EXPECT_NE(cacheSource.find("OverlayRenderableBuilder::frameSignature"), std::string::npos);
-    EXPECT_NE(cacheSource.find("OverlayRenderableBuilder::layerSignature"), std::string::npos);
+    EXPECT_NE(cacheSource.find("OverlayRenderableBuilder::frameSignatures(frame)"), std::string::npos);
+    EXPECT_NE(cacheSource.find("OverlayRenderableBuilder::layerBuildSignature(slot.signatures"), std::string::npos);
     EXPECT_NE(cacheHeader.find("std::array<OverlaySlot, kMaxViewportOverlaySlots> slots_"), std::string::npos);
+    EXPECT_NE(cacheHeader.find("OverlayFrameSignatures signatures"), std::string::npos);
     EXPECT_NE(cacheSource.find("slot.proxyGroups"), std::string::npos);
-    EXPECT_NE(builderSource.find("RenderSignatureBuilder::overlayFrameSignature(frame)"), std::string::npos);
-    EXPECT_NE(builderSource.find("RenderSignatureBuilder::overlayLayerSignature(frame, layer)"), std::string::npos);
+    EXPECT_NE(signatureHeader.find("struct OverlayFrameSignatures"), std::string::npos);
+    EXPECT_NE(builderSource.find("RenderSignatureBuilder::overlayFrameSignatures(frame)"), std::string::npos);
     EXPECT_NE(cacheSource.find("slot.frameSignature"), std::string::npos);
     EXPECT_NE(cacheSource.find("OverlayRenderableBuilder::cameraSignature"), std::string::npos);
     EXPECT_NE(cacheSource.find("const bool cameraChanged = cameraSignature != slot.cameraSignature"), std::string::npos);
     EXPECT_NE(cacheSource.find("const bool layerChanged = layerMask != slot.layerMask"), std::string::npos);
-    EXPECT_NE(cacheSource.find("if (signature == slot.frameSignature && !cameraChanged && !layerChanged)"), std::string::npos);
+    EXPECT_NE(cacheSource.find("if (!frameChanged && !cameraChanged && !layerChanged)"), std::string::npos);
     EXPECT_NE(cacheSource.find("slot.frame = std::move(frame);\n        return false;"), std::string::npos);
     EXPECT_NE(cacheSource.find("group.signature = 0;"), std::string::npos);
-    EXPECT_NE(cacheSource.find("rebuildSlot(slot);"), std::string::npos);
+    EXPECT_NE(cacheSource.find("rebuildSlot(slot, frameChanged || layerChanged);"), std::string::npos);
     EXPECT_NE(cacheSource.find("if (group.signature == layerSignature)"), std::string::npos);
+    EXPECT_NE(cacheSource.find("layerHasRenderablePrimitives(slot.signatures, layer)"), std::string::npos);
+    EXPECT_NE(cacheSource.find("factory_->updateLayerProxies(group.proxies, plan, slot.layerMask)"), std::string::npos);
     EXPECT_NE(cacheSource.find("factory_->createLayerProxies(plan, slot.layerMask)"), std::string::npos);
+    EXPECT_NE(proxyFactorySource.find("bool OverlayProxyFactory::updateLayerProxies"), std::string::npos);
     EXPECT_NE(builderSource.find("viewportOverlayDrawOrder(layer) * 64"), std::string::npos);
 }
 
@@ -2620,6 +2626,29 @@ TEST(SceneEntityNamingTests, BatchAllocatorUsesDocumentNamesAndReservesGenerated
 
     names.reserveName("Mesh_4");
     EXPECT_EQ(names.nextNameForKind(SceneEntityKind::Mesh), "Mesh_5");
+}
+
+TEST(SceneDocumentTests, BatchedTransformAssignmentsDirtyOnceAndSkipNoOps) {
+    SceneDocument scene;
+    const EntityId first = scene.createEntity("First");
+    const EntityId second = scene.createEntity("Second");
+    const std::uint64_t before = scene.revision();
+
+    const std::array<SceneTransformAssignment, 2u> assignments{{
+            {.entity = first, .transform = TransformComponent{.position = {1.0f, 0.0f, 0.0f}}},
+            {.entity = second, .transform = TransformComponent{.position = {2.0f, 0.0f, 0.0f}}},
+    }};
+
+    scene.setTransforms(assignments);
+
+    EXPECT_EQ(scene.revision(), before + 1u);
+    ASSERT_NE(scene.transform(first), nullptr);
+    ASSERT_NE(scene.transform(second), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 1.0f);
+    EXPECT_FLOAT_EQ(scene.transform(second)->position.x, 2.0f);
+
+    scene.setTransforms(assignments);
+    EXPECT_EQ(scene.revision(), before + 1u);
 }
 
 TEST(SceneDocumentTests, TracksMultipleSelectedEntitiesInStableOrder) {
@@ -5795,6 +5824,7 @@ TEST(DocumentCommandTests, SceneTransformPreviewTransactionIndexesPreviewEditsBy
     EXPECT_NE(source.find("std::unordered_map<EntityId, std::size_t> editIndexByEntity_"), std::string::npos);
     EXPECT_NE(source.find("editIndexByEntity_.emplace(entity, editIndex)"), std::string::npos);
     EXPECT_NE(source.find("editIndexByEntity_.find(entity)"), std::string::npos);
+    EXPECT_NE(source.find("scene_.setTransforms(assignments)"), std::string::npos);
     EXPECT_EQ(source.find("std::find_if(edits_.begin()"), std::string::npos);
 }
 

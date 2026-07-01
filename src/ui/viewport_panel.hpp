@@ -133,7 +133,6 @@ private:
     void refreshCachedSelectionOverlayFrame(const SceneDocument& document,
             const AssetRegistry& assets,
             ModelingSessionService& modeling);
-    [[nodiscard]] bool selectionOverlaySuppressedForInteraction() const;
     ViewportWorkspaceService& workspace();
     const ViewportWorkspaceService& workspace() const;
     Pane& pane(ViewportPaneId paneId);

@@ -53,7 +53,8 @@ bool OverlayRenderableCache::setOverlayFrame(
     }
 
     OverlaySlot& slot = slots_[viewportIndex];
-    const std::uint64_t signature = OverlayRenderableBuilder::frameSignature(frame);
+    const OverlayFrameSignatures signatures = OverlayRenderableBuilder::frameSignatures(frame);
+    const std::uint64_t signature = signatures.frameSignature;
     camera = OverlayCameraProjector::sanitizedCamera(camera);
     const std::uint64_t cameraSignature = OverlayRenderableBuilder::cameraSignature(camera);
     const bool frameChanged = signature != slot.frameSignature;
@@ -66,6 +67,9 @@ bool OverlayRenderableCache::setOverlayFrame(
 
     slot.frame = std::move(frame);
     slot.frameSignature = signature;
+    if (frameChanged) {
+        slot.signatures = signatures;
+    }
     if (cameraChanged || layerChanged) {
         slot.camera = camera;
         slot.cameraSignature = cameraSignature;
@@ -124,17 +128,25 @@ void OverlayRenderableCache::rebuildSlot(OverlaySlot& slot, bool rebuildCameraIn
             continue;
         }
         const std::uint64_t layerSignature =
-                OverlayRenderableBuilder::layerBuildSignature(slot.frame, slot.camera, layer);
+                OverlayRenderableBuilder::layerBuildSignature(slot.signatures, slot.camera, layer);
         OverlayProxyGroup& group = slot.proxyGroups[static_cast<std::size_t>(layer)];
         if (group.signature == layerSignature) {
             continue;
         }
 
-        destroyGroup(group);
-        group.signature = layerSignature;
+        if (!OverlayRenderableBuilder::layerHasRenderablePrimitives(slot.signatures, layer)) {
+            destroyGroup(group);
+            group.signature = layerSignature;
+            continue;
+        }
 
-        const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::buildLayer(slot.frame, slot.camera, layer);
-        group.proxies = factory_->createLayerProxies(plan, slot.layerMask);
+        const OverlayLayerBuildPlan plan =
+                OverlayRenderableBuilder::buildLayer(slot.frame, slot.camera, layer, &slot.signatures);
+        if (!factory_->updateLayerProxies(group.proxies, plan, slot.layerMask)) {
+            destroyGroup(group);
+            group.proxies = factory_->createLayerProxies(plan, slot.layerMask);
+        }
+        group.signature = layerSignature;
     }
 }
 
@@ -143,7 +155,8 @@ void OverlayRenderableCache::destroySlot(OverlaySlot& slot) {
         destroyGroup(group);
     }
     slot.frame = {};
-    slot.frameSignature = OverlayRenderableBuilder::frameSignature(slot.frame);
+    slot.signatures = OverlayRenderableBuilder::frameSignatures(slot.frame);
+    slot.frameSignature = slot.signatures.frameSignature;
     slot.camera = {};
     slot.cameraSignature = 0;
     slot.layerMask = 0;

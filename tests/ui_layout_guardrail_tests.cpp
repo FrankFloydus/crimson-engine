@@ -131,6 +131,18 @@ TEST(UiLayoutGuardrailTests, OutlinerNonLeafNodesStartExpanded) {
     expectContains(treeNodeSetup, "ImGuiTreeNodeFlags_DefaultOpen");
 }
 
+TEST(UiLayoutGuardrailTests, OutlinerCachesTreeRecordsAndSkipsOffscreenCustomDrawing) {
+    const std::string outlinerHeader = readSourceFile({"src", "ui", "outliner_panel.hpp"});
+    const std::string outliner = readSourceFile({"src", "ui", "outliner_panel.cpp"});
+
+    expectContains(outlinerHeader, "std::unique_ptr<TreeCache> treeCache_");
+    expectContains(outliner, "cache.sceneRevision == document.revision()");
+    expectContains(outliner, "cache.records = document.entityRecordsTreeOrder()");
+    expectContains(outliner, "cache.childrenByEntity[record.parent].push_back(record.id)");
+    expectContains(outliner, "const bool rowVisible = ImGui::IsRectVisible(rowMin, rowMax)");
+    expectContains(outliner, "if (rowVisible)");
+}
+
 TEST(UiLayoutGuardrailTests, InspectorContinuousInputsLiveApplyWithMergeKeys) {
     const std::string inspector = readSourceFile({"src", "ui", "inspector_panel.cpp"});
     const std::string inspectorHeader = readSourceFile({"src", "ui", "inspector_panel.hpp"});

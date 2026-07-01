@@ -49,6 +49,10 @@ public:
     }
 
     std::vector<OverlayRenderableProxy> createLayerProxies(const OverlayLayerBuildPlan& plan, std::uint8_t layerMask);
+    bool updateLayerProxies(
+            std::vector<OverlayRenderableProxy>& proxies,
+            const OverlayLayerBuildPlan& plan,
+            std::uint8_t layerMask);
     void destroy(OverlayRenderableProxy& proxy);
 
     static std::size_t plannedProxyCount(const OverlayLayerBuildPlan& plan);
@@ -57,6 +61,9 @@ private:
     void createTriangleProxy(const OverlayFaceFillBatch& batch, std::uint8_t layerMask, std::vector<OverlayRenderableProxy>& proxies);
     void createLineProxy(const OverlayLineBatch& batch, std::uint8_t layerMask, std::vector<OverlayRenderableProxy>& proxies);
     void createPointProxy(const OverlayPointBatch& batch, std::uint8_t layerMask, std::vector<OverlayRenderableProxy>& proxies);
+    void updateTriangleProxy(OverlayRenderableProxy& proxy, const OverlayFaceFillBatch& batch, std::uint8_t layerMask);
+    void updateLineProxy(OverlayRenderableProxy& proxy, const OverlayLineBatch& batch, std::uint8_t layerMask);
+    void updatePointProxy(OverlayRenderableProxy& proxy, const OverlayPointBatch& batch, std::uint8_t layerMask);
     void configureOverlayMaterial(filament::MaterialInstance& material, const OverlayRenderState& state) const;
 
     filament::Engine* engine_ = nullptr;
