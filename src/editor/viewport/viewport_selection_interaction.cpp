@@ -386,7 +386,7 @@ void ViewportSelectionInteraction::handleFrame(
     }
 
     const bool boxDragging = boxState_.active && boxState_.dragging;
-    const bool groupSelectionMode = editor.selection().summary().mode == QuaderSelectionMode::Group;
+    const bool groupSelectionMode = frame.inputRouter.state().selectionMode == ViewportSelectionMode::Group;
     if (groupSelectionMode && !boxDragging && !frame.leftDown) {
         hoverSuppressedTarget_.reset();
         if (!hoverClearIssued_) {

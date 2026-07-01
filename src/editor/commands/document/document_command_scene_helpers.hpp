@@ -263,9 +263,12 @@ inline EntityId documentCommandDuplicateEntitySnapshotTree(
         const DocumentEntitySnapshot& snapshot,
         EntityId parent,
         bool includeModelingObject = false,
-        const std::unordered_map<EntityId, EntityId>* existingClonesBySource = nullptr) {
+        const std::unordered_map<EntityId, EntityId>* existingClonesBySource = nullptr,
+        SceneEntityNameAllocator* nameAllocator = nullptr) {
     EntityId duplicate = InvalidEntityId;
-    const std::string duplicateName = SceneEntityNaming::nextName(scene, snapshot.name);
+    const std::string duplicateName = nameAllocator != nullptr
+            ? nameAllocator->nextName(snapshot.name)
+            : SceneEntityNaming::nextName(scene, snapshot.name);
     if (existingClonesBySource != nullptr) {
         const auto existing = existingClonesBySource->find(snapshot.originalId);
         if (existing != existingClonesBySource->end()) {
@@ -298,7 +301,8 @@ inline EntityId documentCommandDuplicateEntitySnapshotTree(
                 child,
                 duplicate,
                 includeModelingObject,
-                existingClonesBySource);
+                existingClonesBySource,
+                nameAllocator);
         if (childDuplicate == InvalidEntityId) {
             return InvalidEntityId;
         }

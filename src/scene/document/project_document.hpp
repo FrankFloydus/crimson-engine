@@ -115,6 +115,7 @@ public:
     bool synchronizeObjectRecordsWithScene();
     EditorObjectId createObjectRecord(ProjectObjectRecord record);
     EditorObjectId upsertObjectRecord(ProjectObjectRecord record);
+    std::vector<EditorObjectId> upsertObjectRecords(std::vector<ProjectObjectRecord> records);
     std::optional<ProjectObjectRecord> objectRecord(EditorObjectId objectId) const;
     EditorObjectId objectIdForEntity(EntityId entity) const;
     EntityId entityForObjectId(EditorObjectId objectId) const;
@@ -132,6 +133,7 @@ private:
     void markDirty();
     void bindSceneObjectIdentityAllocator();
     bool syncObjectRecordsWithScene();
+    EditorObjectId upsertObjectRecordAfterSync(ProjectObjectRecord record);
     bool canAssignObjectId(EditorObjectId objectId, EntityId entity) const;
     std::optional<ProjectObjectRecord> storedObjectRecord(EditorObjectId objectId) const;
     ProjectObjectRecord recordForSceneEntity(EntityId entity, EditorObjectId objectId) const;

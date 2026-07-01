@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/ui_panel_manager.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "ui/ui_context.hpp"
 
 namespace quader {
@@ -65,7 +66,28 @@ void UIPanelManager::draw(UIContext& context) {
     for (std::size_t index = 0; index < panels_.size(); ++index) {
         UIPanel& panel = *panels_[index];
         if (!panel.canToggle() || visibility_[index]) {
-            panel.draw(context);
+            switch (panel.id()) {
+            case UIPanelId::Viewport: {
+                QDR_PROFILE_SCOPE("UI draw panel viewport");
+                panel.draw(context);
+                break;
+            }
+            case UIPanelId::Outliner: {
+                QDR_PROFILE_SCOPE("UI draw panel outliner");
+                panel.draw(context);
+                break;
+            }
+            case UIPanelId::Inspector: {
+                QDR_PROFILE_SCOPE("UI draw panel inspector");
+                panel.draw(context);
+                break;
+            }
+            case UIPanelId::Console: {
+                QDR_PROFILE_SCOPE("UI draw panel console");
+                panel.draw(context);
+                break;
+            }
+            }
         }
     }
 }

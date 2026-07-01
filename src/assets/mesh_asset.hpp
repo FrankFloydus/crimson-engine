@@ -11,6 +11,7 @@
 #include "math/types.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -68,6 +69,29 @@ inline std::vector<MeshPrimitiveSpan> normalizedMeshPrimitiveSpans(const MeshAss
                 .indexCount = static_cast<std::uint32_t>(mesh.indices.size()),
                 .materialSlot = 0,
         });
+    }
+    return spans;
+}
+
+inline std::vector<MeshPrimitiveSpan> coalescedMeshPrimitiveSpans(const MeshAsset& mesh) {
+    const std::vector<MeshPrimitiveSpan> normalized = normalizedMeshPrimitiveSpans(mesh);
+    std::vector<MeshPrimitiveSpan> spans;
+    spans.reserve(normalized.size());
+    for (const MeshPrimitiveSpan& primitive : normalized) {
+        if (!spans.empty()) {
+            MeshPrimitiveSpan& previous = spans.back();
+            const std::uint64_t previousEnd =
+                    static_cast<std::uint64_t>(previous.indexOffset) + static_cast<std::uint64_t>(previous.indexCount);
+            const std::uint64_t mergedCount =
+                    static_cast<std::uint64_t>(previous.indexCount) + static_cast<std::uint64_t>(primitive.indexCount);
+            if (previous.materialSlot == primitive.materialSlot &&
+                    previousEnd == primitive.indexOffset &&
+                    mergedCount <= static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max())) {
+                previous.indexCount = static_cast<std::uint32_t>(mergedCount);
+                continue;
+            }
+        }
+        spans.push_back(primitive);
     }
     return spans;
 }

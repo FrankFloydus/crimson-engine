@@ -1817,7 +1817,7 @@ TEST(SceneRenderBridgeTests, BindsNormalsAndBuildsPrimitiveSpans) {
 
     EXPECT_NE(source.find("tangentFrameFromNormal(vertex.normal)"), std::string::npos);
     EXPECT_NE(source.find("filament::VertexAttribute::TANGENTS"), std::string::npos);
-    EXPECT_NE(source.find("normalizedMeshPrimitiveSpans(mesh)"), std::string::npos);
+    EXPECT_NE(source.find("coalescedMeshPrimitiveSpans(mesh)"), std::string::npos);
     EXPECT_NE(source.find("primitive.indexOffset"), std::string::npos);
     EXPECT_NE(source.find("primitive.indexCount"), std::string::npos);
     EXPECT_NE(source.find("primitive.materialSlot"), std::string::npos);
@@ -2233,6 +2233,18 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
     EXPECT_EQ(splitSource.find("(void)pickOptions;"), std::string::npos);
 }
 
+TEST(ModelingSessionServiceTests, TransformDragBuildsVertexSnapCachesOnlyWhenRuntimeCanUseThem) {
+    const std::string source = readSourceFile("src/editor/modeling/services/modeling_session_service.cpp");
+
+    EXPECT_NE(source.find("bool transformDragCanUseVertexSnap("), std::string::npos);
+    EXPECT_NE(source.find("drag.tool == quader_editor_core::ViewportInteractionTool::move"), std::string::npos);
+    EXPECT_NE(source.find("drag.move.active"), std::string::npos);
+    EXPECT_NE(source.find("transformDragAxisSupportsVertexSnap(drag.axis)"), std::string::npos);
+    EXPECT_NE(
+            source.find("request.vertexSnapRadius > 0.0 && transformDragCanUseVertexSnap(dragBeforeUpdate)"),
+            std::string::npos);
+}
+
 TEST(SceneRenderBridgeTests, ConvertsSceneOverlayColorsToLinearBeforeViewportEncode) {
     const std::string source = readSourceFile("src/render/overlay/overlay_face_fill_builder.cpp");
 
@@ -2331,9 +2343,14 @@ TEST(ViewportRendererTests, ViewportInfoOverlayUsesRendererTimingAndVisibleMeshS
     EXPECT_NE(uiSystemHeader.find("void setRenderPerformanceStats(RenderFramePerformanceStats stats)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find(".renderPerformance = renderPerformanceStats_"), std::string::npos);
     EXPECT_NE(viewportPanelHeader.find("drawViewportInfoOverlay"), std::string::npos);
+    EXPECT_NE(viewportPanelHeader.find("viewportInfoCachedSceneRevision_"), std::string::npos);
+    EXPECT_NE(viewportPanelHeader.find("viewportInfoCachedAssetRevision_"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("collectViewportInfoSceneStats"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("document.isEffectivelyVisible(entityId)"), std::string::npos);
-    EXPECT_NE(viewportPanelSource.find("normalizedMeshPrimitiveSpans(*mesh)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("coalescedMeshPrimitiveSpans(*mesh)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("const bool cacheHit = viewportInfoSceneStatsValid_"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("sceneRevision = document.revision()"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("assetRevision = assets.revision()"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("stats.drawCalls += spans.size()"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("stats.primitives += span.indexCount / 3u"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("ViewportBoolSettingId::ShowInfo"), std::string::npos);
@@ -4981,6 +4998,55 @@ TEST(ProjectDocumentTests, OwnsSceneAssetsAndStableObjectRecords) {
     EXPECT_EQ(document.revision(), 4u);
 }
 
+TEST(ProjectDocumentTests, BulkUpsertsImportedObjectRecordsAfterOneSceneRecordSync) {
+    ProjectDocument document(ProjectDocumentRecord{
+            .id = 23,
+            .name = "Imported Batch Project",
+    });
+
+    MeshAsset meshAsset = makeTestTriangleMesh("Imported Mesh");
+    const AssetId mesh = document.assets().addMesh(std::move(meshAsset));
+    const EntityId first = document.scene().createEntity("First Imported Mesh", EntityKind::Mesh);
+    const EntityId second = document.scene().createEntity("Second Imported Mesh", EntityKind::Mesh);
+    document.scene().setMesh(first, MeshComponent{.mesh = mesh});
+    document.scene().setMesh(second, MeshComponent{.mesh = mesh});
+
+    const EditorObjectId firstObject = document.scene().editorObjectId(first);
+    const EditorObjectId secondObject = document.scene().editorObjectId(second);
+    ASSERT_NE(firstObject, InvalidEditorObjectId);
+    ASSERT_NE(secondObject, InvalidEditorObjectId);
+
+    const std::uint64_t revisionBeforeImport = document.revision();
+    const std::vector<EditorObjectId> imported = document.upsertObjectRecords({
+            ProjectObjectRecord{
+                    .id = firstObject,
+                    .sceneEntity = first,
+                    .mesh = mesh,
+                    .authoredName = "Authored First",
+            },
+            ProjectObjectRecord{
+                    .id = secondObject,
+                    .sceneEntity = second,
+                    .mesh = mesh,
+                    .authoredName = "Authored Second",
+            },
+    });
+
+    ASSERT_EQ(imported.size(), 2u);
+    EXPECT_EQ(imported[0], firstObject);
+    EXPECT_EQ(imported[1], secondObject);
+    EXPECT_EQ(document.revision(), revisionBeforeImport + 1u);
+    EXPECT_EQ(document.objectIdForEntity(first), firstObject);
+    EXPECT_EQ(document.objectIdForEntity(second), secondObject);
+
+    const std::optional<ProjectObjectRecord> firstRecord = document.objectRecord(firstObject);
+    const std::optional<ProjectObjectRecord> secondRecord = document.objectRecord(secondObject);
+    ASSERT_TRUE(firstRecord.has_value());
+    ASSERT_TRUE(secondRecord.has_value());
+    EXPECT_EQ(firstRecord->authoredName, "Authored First");
+    EXPECT_EQ(secondRecord->authoredName, "Authored Second");
+}
+
 TEST(ProjectDocumentTests, ValidatesAssetReferencesAtDocumentOwner) {
     ProjectDocument document(ProjectDocumentRecord{
             .id = 21,
@@ -5721,6 +5787,15 @@ TEST(DocumentCommandTests, SceneTransformPreviewTransactionCommitsAndCancelsThro
     ASSERT_TRUE(history.redo().ok);
     ASSERT_NE(scene.transform(entity), nullptr);
     EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 4.0f);
+}
+
+TEST(DocumentCommandTests, SceneTransformPreviewTransactionIndexesPreviewEditsByEntity) {
+    const std::string source = readSourceFile("src/editor/history/scene_transform_preview_transaction.hpp");
+
+    EXPECT_NE(source.find("std::unordered_map<EntityId, std::size_t> editIndexByEntity_"), std::string::npos);
+    EXPECT_NE(source.find("editIndexByEntity_.emplace(entity, editIndex)"), std::string::npos);
+    EXPECT_NE(source.find("editIndexByEntity_.find(entity)"), std::string::npos);
+    EXPECT_EQ(source.find("std::find_if(edits_.begin()"), std::string::npos);
 }
 
 TEST(DocumentCommandTests, SceneTransformDragServiceFiltersTargetsAndRecordsScenePreviewThroughApi) {

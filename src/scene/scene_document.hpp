@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -65,6 +66,7 @@ public:
             EditorObjectId editorObjectId = InvalidEditorObjectId);
     EntityId createEmpty(std::string name, EditorObjectId editorObjectId = InvalidEditorObjectId);
     bool destroyEntity(EntityId id);
+    bool destroyEntities(std::span<const EntityId> ids);
     bool exists(EntityId id) const;
 
     bool renameEntity(EntityId id, std::string name);

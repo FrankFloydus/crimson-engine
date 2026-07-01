@@ -352,6 +352,34 @@ TEST(QdrDocumentIoTests, WritesAndReadsUnreferencedProjectAssets) {
     EXPECT_NE(result.document.assets().texture(textureId), nullptr);
 }
 
+TEST(QdrDocumentIoTests, AtomicProjectWriteUsesCompactJsonWhileDebugSerializerStaysPretty) {
+    ProjectDocument document(ProjectDocumentRecord{.id = 90u, .name = "Compact Write"});
+    const AssetId meshId = document.assets().addMesh(12u, makeTriangleMesh("Triangle Mesh"));
+    const EntityId mesh = document.scene().createEntityWithId(200u, "Mesh", EntityKind::Mesh);
+    ASSERT_NE(mesh, InvalidEntityId);
+    document.scene().setMesh(mesh, MeshComponent{.mesh = meshId});
+
+    const std::string prettyText = QdrDocumentWriter::serializeProjectDocument(document);
+    EXPECT_NE(prettyText.find('\n'), std::string::npos);
+    EXPECT_NE(prettyText.find("\"kind\": \"quader.project-document\""), std::string::npos);
+
+    ScopedTempDirectory directory("compact-project-write");
+    const std::filesystem::path path = directory.path() / "compact.qdr";
+    const QdrProjectWriteResult write = QdrDocumentWriter::writeProjectDocumentAtomic(path, document);
+    ASSERT_TRUE(write.ok) << write.message;
+
+    std::ifstream file(path, std::ios::binary);
+    ASSERT_TRUE(file.is_open()) << path.string();
+    const std::string savedText((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    EXPECT_EQ(savedText.find('\n'), std::string::npos);
+    EXPECT_NE(savedText.find("\"kind\":\"quader.project-document\""), std::string::npos);
+
+    const QdrProjectReadResult result = QdrDocumentReader::deserializeProjectDocument(savedText);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_NE(result.document.assets().mesh(meshId), nullptr);
+    EXPECT_TRUE(result.document.scene().exists(mesh));
+}
+
 TEST(QdrDocumentIoTests, MissingMeshDoubleSidedFieldDefaultsToSingleSided) {
     ProjectDocument document(ProjectDocumentRecord{.id = 89u, .name = "Mesh Defaults"});
     const AssetId meshId = document.assets().addMesh(12u, makeTriangleMesh("Triangle Mesh"));
@@ -1092,6 +1120,8 @@ TEST(ProjectionOwnershipGuardrailTests, ProjectionIsReadOnlyAndModelingOwnsScene
     EXPECT_NE(meshSync.find("scene.destroyEntity"), std::string::npos);
     EXPECT_NE(meshSync.find("assets.addMesh"), std::string::npos);
     EXPECT_NE(meshSync.find("assets.replaceMesh"), std::string::npos);
+    EXPECT_NE(meshSync.find("projectedMeshSignatureKnown(object.id)"), std::string::npos);
+    EXPECT_NE(meshSync.find("Modeling mesh sync replace changed mesh asset"), std::string::npos);
 
     const char* forbiddenProjectionMutations[] = {
             "AssetRegistry",

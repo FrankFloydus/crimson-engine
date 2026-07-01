@@ -38,6 +38,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 using namespace quader;
 
@@ -239,6 +240,36 @@ TEST(RenderSignatureBuilderTests, CentralizesMaterialMeshAndOverlaySignatures) {
             RenderSignatureBuilder::overlayCameraSignature(testOverlayCamera()));
     EXPECT_EQ(OverlayRenderableBuilder::layerSignature(frame, ViewportOverlayLayer::SourceWire),
             RenderSignatureBuilder::overlayLayerSignature(frame, ViewportOverlayLayer::SourceWire));
+}
+
+TEST(MeshAssetTests, CoalescesContiguousPrimitiveSpansByMaterialSlotForRenderSubmission) {
+    MeshAsset mesh;
+    mesh.indices = {
+            0u, 1u, 2u,
+            3u, 4u, 5u,
+            6u, 7u, 8u,
+            9u, 10u, 11u,
+            12u, 13u, 14u,
+    };
+    mesh.primitives = {
+            MeshPrimitiveSpan{.indexOffset = 0u, .indexCount = 3u, .materialSlot = 0u},
+            MeshPrimitiveSpan{.indexOffset = 3u, .indexCount = 6u, .materialSlot = 0u},
+            MeshPrimitiveSpan{.indexOffset = 9u, .indexCount = 3u, .materialSlot = 2u},
+            MeshPrimitiveSpan{.indexOffset = 12u, .indexCount = 3u, .materialSlot = 0u},
+    };
+
+    const std::vector<MeshPrimitiveSpan> spans = coalescedMeshPrimitiveSpans(mesh);
+
+    ASSERT_EQ(spans.size(), 3u);
+    EXPECT_EQ(spans[0].indexOffset, 0u);
+    EXPECT_EQ(spans[0].indexCount, 9u);
+    EXPECT_EQ(spans[0].materialSlot, 0u);
+    EXPECT_EQ(spans[1].indexOffset, 9u);
+    EXPECT_EQ(spans[1].indexCount, 3u);
+    EXPECT_EQ(spans[1].materialSlot, 2u);
+    EXPECT_EQ(spans[2].indexOffset, 12u);
+    EXPECT_EQ(spans[2].indexCount, 3u);
+    EXPECT_EQ(spans[2].materialSlot, 0u);
 }
 
 TEST(RenderSignatureBuilderTests, KeepsRenderHashPolicyInSingleOwner) {

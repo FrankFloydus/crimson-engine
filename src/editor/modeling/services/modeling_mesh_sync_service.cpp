@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -26,6 +27,69 @@
 
 namespace quader {
 namespace {
+
+constexpr std::uint64_t kProjectedMeshSignatureSeed = 1469598103934665603ull;
+constexpr std::uint64_t kProjectedMeshSignaturePrime = 1099511628211ull;
+
+std::uint64_t mixProjectedMeshSignature(std::uint64_t hash, std::uint64_t value) {
+    return (hash ^ value) * kProjectedMeshSignaturePrime;
+}
+
+std::uint64_t mixProjectedMeshSignature(std::uint64_t hash, int value) {
+    return mixProjectedMeshSignature(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(value)));
+}
+
+std::uint64_t mixProjectedMeshSignature(std::uint64_t hash, std::uint32_t value) {
+    return mixProjectedMeshSignature(hash, static_cast<std::uint64_t>(value));
+}
+
+std::uint64_t mixProjectedMeshSignature(std::uint64_t hash, float value) {
+    std::uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return mixProjectedMeshSignature(hash, bits);
+}
+
+std::uint64_t mixProjectedMeshSignature(std::uint64_t hash, QVec2 value) {
+    hash = mixProjectedMeshSignature(hash, value.x);
+    hash = mixProjectedMeshSignature(hash, value.y);
+    return hash;
+}
+
+std::uint64_t mixProjectedMeshSignature(std::uint64_t hash, QVec3 value) {
+    hash = mixProjectedMeshSignature(hash, value.x);
+    hash = mixProjectedMeshSignature(hash, value.y);
+    hash = mixProjectedMeshSignature(hash, value.z);
+    return hash;
+}
+
+std::uint64_t projectedMeshSignature(const quader_editor_core::PolygonObject& object) {
+    std::uint64_t hash = mixProjectedMeshSignature(kProjectedMeshSignatureSeed, object.id);
+    hash = mixProjectedMeshSignature(hash, static_cast<std::uint64_t>(object.document.vertices.size()));
+    hash = mixProjectedMeshSignature(hash, static_cast<std::uint64_t>(object.document.faces.size()));
+    hash = mixProjectedMeshSignature(hash, static_cast<std::uint64_t>(object.document.hard_normal_edges.size()));
+    for (const quader_poly::Vertex& vertex : object.document.vertices) {
+        hash = mixProjectedMeshSignature(hash, vertex.id);
+        hash = mixProjectedMeshSignature(hash, vertex.position);
+    }
+    for (const quader_poly::Face& face : object.document.faces) {
+        hash = mixProjectedMeshSignature(hash, face.id);
+        hash = mixProjectedMeshSignature(hash, static_cast<std::uint64_t>(face.vertices.size()));
+        hash = mixProjectedMeshSignature(hash, static_cast<std::uint64_t>(face.uvs.size()));
+        hash = mixProjectedMeshSignature(hash, face.material_slot);
+        hash = mixProjectedMeshSignature(hash, static_cast<int>(face.normal_shading));
+        for (const quader_poly::ElementId vertexId : face.vertices) {
+            hash = mixProjectedMeshSignature(hash, vertexId);
+        }
+        for (const QVec2 uv : face.uvs) {
+            hash = mixProjectedMeshSignature(hash, uv);
+        }
+    }
+    for (const quader_poly::Edge edge : object.document.hard_normal_edges) {
+        hash = mixProjectedMeshSignature(hash, edge.a);
+        hash = mixProjectedMeshSignature(hash, edge.b);
+    }
+    return hash;
+}
 
 std::unordered_map<std::uint32_t, AssetId> materialSlotsForLiveModelingNodes(
         const SceneDocument& scene,
@@ -325,6 +389,7 @@ void reconcileModelingObjectSceneNodes(
             scene.destroyEntity(*entity);
         }
         objectMap.unbindObject(modelingObjectId);
+        sceneSync.forgetProjectedMeshSignature(modelingObjectId);
     }
 }
 
@@ -344,6 +409,7 @@ void projectModelingMeshesToScene(
     for (const quader_editor_core::PolygonObject& object : session.objects()) {
         QDR_PROFILE_SCOPE("Modeling mesh sync project object mesh");
         const std::uint32_t materialSlot = static_cast<std::uint32_t>(object.material_id);
+        const std::uint64_t meshSignature = projectedMeshSignature(object);
         const std::optional<EntityId> existing = objectRegistry.entityForModelingObject(object.id);
         if (!existing.has_value() || !scene.exists(*existing)) {
             projectedAllObjects = false;
@@ -351,6 +417,28 @@ void projectModelingMeshesToScene(
         }
 
         const EntityId entity = *existing;
+        const ModelingObjectComponent nextObject{
+                .objectId = object.id,
+                .materialSlot = materialSlot,
+        };
+        const ModelingObjectComponent* currentObject = scene.modelingObject(entity);
+        const bool hadProjectedMeshSignature = sceneSync.projectedMeshSignatureKnown(object.id);
+        if (!force) {
+            const MeshComponent* currentMesh = scene.mesh(entity);
+            if (currentMesh != nullptr &&
+                    currentMesh->mesh != InvalidAssetId &&
+                    assets.mesh(currentMesh->mesh) != nullptr &&
+                    sceneSync.projectedMeshSignatureMatches(object.id, meshSignature)) {
+                if (currentObject == nullptr ||
+                        currentObject->objectId != nextObject.objectId ||
+                        currentObject->materialSlot != nextObject.materialSlot) {
+                    scene.setModelingObject(entity, nextObject);
+                }
+                objectRegistry.rememberSceneEntity(object.id, scene, entity);
+                continue;
+            }
+        }
+
         MeshAsset mesh = [&]() {
             QDR_PROFILE_SCOPE("Modeling mesh sync compile object mesh");
             return MeshProjectionService::compileObjectMesh(object);
@@ -366,6 +454,24 @@ void projectModelingMeshesToScene(
         if (meshId == InvalidAssetId) {
             QDR_PROFILE_SCOPE("Modeling mesh sync add mesh asset");
             meshId = assets.addMesh(std::move(mesh));
+        } else if (!force && hadProjectedMeshSignature) {
+            const bool replaced = [&]() {
+                QDR_PROFILE_SCOPE("Modeling mesh sync replace changed mesh asset");
+                return assets.replaceMesh(meshId, std::move(mesh));
+            }();
+            if (replaced) {
+                meshContentsReplaced = true;
+            } else {
+                MeshAsset replacement = [&]() {
+                    QDR_PROFILE_SCOPE("Modeling mesh sync compile changed replacement mesh");
+                    return MeshProjectionService::compileObjectMesh(object);
+                }();
+                if (const NameComponent* name = scene.name(entity)) {
+                    replacement.name = name->name;
+                }
+                QDR_PROFILE_SCOPE("Modeling mesh sync add changed replacement mesh asset");
+                meshId = assets.addMesh(std::move(replacement));
+            }
         } else if (const MeshAsset* currentMesh = assets.mesh(meshId);
                 currentMesh != nullptr && modelingMeshAssetsEqual(*currentMesh, mesh)) {
             QDR_PROFILE_SCOPE("Modeling mesh sync keep unchanged mesh asset");
@@ -392,11 +498,6 @@ void projectModelingMeshesToScene(
                 meshId = assets.addMesh(std::move(replacement));
             }
         }
-        const ModelingObjectComponent nextObject{
-                .objectId = object.id,
-                .materialSlot = materialSlot,
-        };
-        const ModelingObjectComponent* currentObject = scene.modelingObject(entity);
         if (currentObject == nullptr ||
                 currentObject->objectId != nextObject.objectId ||
                 currentObject->materialSlot != nextObject.materialSlot) {
@@ -413,6 +514,7 @@ void projectModelingMeshesToScene(
             scene.setMesh(entity, nextMesh);
         }
         objectRegistry.rememberSceneEntity(object.id, scene, entity);
+        sceneSync.rememberProjectedMeshSignature(object.id, meshSignature);
     }
     if (projectedAllObjects) {
         sceneSync.markSceneObjectsSynced(session.state().content_revision);
@@ -502,6 +604,7 @@ ModelingCreateBoxResult ModelingMeshSyncService::createSceneObjectFromLatest(
     scene.setSelected(entity, true);
 
     sceneSync.objectMap().bind(object.id, entity);
+    sceneSync.rememberProjectedMeshSignature(object.id, projectedMeshSignature(object));
     sceneSync.markSceneObjectsSynced(session.state().content_revision);
 
     return {

@@ -10,6 +10,7 @@
 #include "diagnostics/profile.hpp"
 #include "io/qdr/qdr_atomic_write.hpp"
 #include "io/qdr/qdr_format.hpp"
+#include "io/qdr/qdr_parallel_tasks.hpp"
 #include "io/qdr/qdr_polygon_document_codec.hpp"
 #include "io/qdr/qdr_project_codecs.hpp"
 
@@ -20,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -36,6 +38,7 @@ json meshToJson(AssetId id, const MeshAsset& mesh) {
     json indices = json::array();
     json primitives = json::array();
     if (!mesh.hasAuthoredPolygonDocument || !mesh.authoredPolygonDocument) {
+        vertices.get_ref<json::array_t&>().reserve(mesh.vertices.size());
         for (const MeshVertex& vertex : mesh.vertices) {
             vertices.push_back(json{
                     {"position", qdrVec3ToJson(vertex.position)},
@@ -46,7 +49,9 @@ json meshToJson(AssetId id, const MeshAsset& mesh) {
         }
 
         indices = mesh.indices;
-        for (const MeshPrimitiveSpan& primitive : normalizedMeshPrimitiveSpans(mesh)) {
+        const std::vector<MeshPrimitiveSpan> normalizedPrimitives = normalizedMeshPrimitiveSpans(mesh);
+        primitives.get_ref<json::array_t&>().reserve(normalizedPrimitives.size());
+        for (const MeshPrimitiveSpan& primitive : normalizedPrimitives) {
             primitives.push_back(json{
                     {"indexOffset", primitive.indexOffset},
                     {"indexCount", primitive.indexCount},
@@ -167,33 +172,56 @@ json projectPayloadToJson(const ProjectDocument& document) {
     const AssetRegistry& assets = document.assets();
 
     json meshes = json::array();
-    for (const AssetId id : assets.meshIds()) {
+    const std::vector<AssetId> meshIds = assets.meshIds();
+    struct MeshToWrite {
+        AssetId id = InvalidAssetId;
+        const MeshAsset* mesh = nullptr;
+        json value;
+    };
+    std::vector<MeshToWrite> meshEntries;
+    meshEntries.reserve(meshIds.size());
+    for (const AssetId id : meshIds) {
         if (const MeshAsset* mesh = assets.mesh(id)) {
-            meshes.push_back(meshToJson(id, *mesh));
+            meshEntries.push_back(MeshToWrite{.id = id, .mesh = mesh});
         }
+    }
+    qdr_detail::runParallelIndexTasks(meshEntries.size(), "QDR mesh encode", [&](std::size_t index) {
+        meshEntries[index].value = meshToJson(meshEntries[index].id, *meshEntries[index].mesh);
+    });
+    meshes.get_ref<json::array_t&>().reserve(meshEntries.size());
+    for (MeshToWrite& entry : meshEntries) {
+        meshes.push_back(std::move(entry.value));
     }
 
     json materials = json::array();
-    for (const AssetId id : assets.materialIds()) {
+    const std::vector<AssetId> materialIds = assets.materialIds();
+    materials.get_ref<json::array_t&>().reserve(materialIds.size());
+    for (const AssetId id : materialIds) {
         if (const MaterialDocument* material = assets.material(id)) {
             materials.push_back(materialToJson(id, *material));
         }
     }
 
     json textures = json::array();
-    for (const AssetId id : assets.textureIds()) {
+    const std::vector<AssetId> textureIds = assets.textureIds();
+    textures.get_ref<json::array_t&>().reserve(textureIds.size());
+    for (const AssetId id : textureIds) {
         if (const TextureAsset* texture = assets.texture(id)) {
             textures.push_back(textureToJson(id, *texture));
         }
     }
 
     json entities = json::array();
-    for (const EntityId entity : scene.entityTreeOrder()) {
+    const std::vector<EntityId> entityIds = scene.entityTreeOrder();
+    entities.get_ref<json::array_t&>().reserve(entityIds.size());
+    for (const EntityId entity : entityIds) {
         entities.push_back(entityToJson(scene, entity));
     }
 
     json objectRecords = json::array();
-    for (const ProjectObjectRecord& record : document.objectRecords()) {
+    const std::vector<ProjectObjectRecord> records = document.objectRecords();
+    objectRecords.get_ref<json::array_t&>().reserve(records.size());
+    for (const ProjectObjectRecord& record : records) {
         objectRecords.push_back(objectRecordToJson(record));
     }
 
@@ -213,6 +241,19 @@ json projectPayloadToJson(const ProjectDocument& document) {
     };
 }
 
+json projectRootToJson(const ProjectDocument& document) {
+    return json{
+            {"format", stringFromView(kQdrFormatName)},
+            {"version", kQdrProjectFormatVersion},
+            {stringFromView(kQdrDocumentPayloadKey), projectPayloadToJson(document)},
+    };
+}
+
+std::string serializeProjectDocumentForDisk(const ProjectDocument& document) {
+    QDR_PROFILE_FUNCTION();
+    return projectRootToJson(document).dump();
+}
+
 QdrProjectWriteResult projectWriteResultFromAtomic(quader_io::QdrAtomicWriteResult result) {
     return {result.ok, std::move(result.message)};
 }
@@ -221,12 +262,7 @@ QdrProjectWriteResult projectWriteResultFromAtomic(quader_io::QdrAtomicWriteResu
 
 std::string QdrDocumentWriter::serializeProjectDocument(const ProjectDocument& document) {
     QDR_PROFILE_FUNCTION();
-    const json root{
-            {"format", stringFromView(kQdrFormatName)},
-            {"version", kQdrProjectFormatVersion},
-            {stringFromView(kQdrDocumentPayloadKey), projectPayloadToJson(document)},
-    };
-    return root.dump(2);
+    return projectRootToJson(document).dump(2);
 }
 
 QdrProjectWriteResult QdrDocumentWriter::writeProjectDocumentAtomic(
@@ -235,7 +271,7 @@ QdrProjectWriteResult QdrDocumentWriter::writeProjectDocumentAtomic(
     QDR_PROFILE_FUNCTION();
     const std::string serialized = [&]() {
         QDR_PROFILE_SCOPE("QDR serialize project document");
-        return serializeProjectDocument(document);
+        return serializeProjectDocumentForDisk(document);
     }();
     return projectWriteResultFromAtomic(quader_io::write_qdr_text_atomic(path, serialized));
 }

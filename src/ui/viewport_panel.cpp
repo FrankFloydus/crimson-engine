@@ -184,7 +184,7 @@ ViewportInfoSceneStats collectViewportInfoSceneStats(const SceneDocument& docume
             continue;
         }
 
-        const std::vector<MeshPrimitiveSpan> spans = normalizedMeshPrimitiveSpans(*mesh);
+        const std::vector<MeshPrimitiveSpan> spans = coalescedMeshPrimitiveSpans(*mesh);
         if (spans.empty()) {
             continue;
         }
@@ -695,6 +695,9 @@ void ViewportPanel::shutdown() {
     }
 
     shutdownComplete_ = true;
+    viewportInfoCachedDocument_ = nullptr;
+    viewportInfoCachedAssets_ = nullptr;
+    viewportInfoSceneStatsValid_ = false;
     for (Pane& paneState : panes_) {
         paneState.renderer.shutdown();
         paneState.initialized = false;
@@ -742,7 +745,8 @@ void ViewportPanel::prepareViewports(
         paneState.renderer.setOverlayVisible(overlaysVisible ||
                 gizmosVisible ||
                 paneWorkspace.shading == ViewportShadingMode::Wireframe);
-        ViewportOverlayFrame overlayFrame = overlaysVisible && selectionOverlayCache_.valid()
+        const bool selectionOverlaySuppressed = selectionOverlaySuppressedForInteraction();
+        ViewportOverlayFrame overlayFrame = overlaysVisible && !selectionOverlaySuppressed && selectionOverlayCache_.valid()
                 ? selectionOverlayCache_.frame()
                 : ViewportOverlayFrame{};
         const ModelingSelectionMode overlayMode = selectionOverlayCache_.valid()
@@ -1231,8 +1235,31 @@ void ViewportPanel::drawViewportInfoOverlay(
         const AssetRegistry& assets,
         const UIContext& uiContext,
         ImVec2 itemMin,
-        ImVec2 itemSize) const {
-    const ViewportInfoSceneStats sceneStats = collectViewportInfoSceneStats(document, assets);
+        ImVec2 itemSize) {
+    const std::uint64_t sceneRevision = document.revision();
+    const std::uint64_t assetRevision = assets.revision();
+    const bool cacheHit = viewportInfoSceneStatsValid_ &&
+            viewportInfoCachedDocument_ == &document &&
+            viewportInfoCachedAssets_ == &assets &&
+            viewportInfoCachedSceneRevision_ == sceneRevision &&
+            viewportInfoCachedAssetRevision_ == assetRevision;
+    ViewportInfoSceneStats sceneStats;
+    if (cacheHit) {
+        sceneStats.objects = viewportInfoCachedObjects_;
+        sceneStats.primitives = viewportInfoCachedPrimitives_;
+        sceneStats.drawCalls = viewportInfoCachedDrawCalls_;
+    } else {
+        QDR_PROFILE_SCOPE("Viewport info collect scene stats");
+        sceneStats = collectViewportInfoSceneStats(document, assets);
+        viewportInfoCachedDocument_ = &document;
+        viewportInfoCachedAssets_ = &assets;
+        viewportInfoCachedSceneRevision_ = sceneRevision;
+        viewportInfoCachedAssetRevision_ = assetRevision;
+        viewportInfoCachedObjects_ = sceneStats.objects;
+        viewportInfoCachedPrimitives_ = sceneStats.primitives;
+        viewportInfoCachedDrawCalls_ = sceneStats.drawCalls;
+        viewportInfoSceneStatsValid_ = true;
+    }
     const RenderFramePerformanceStats& renderStats = uiContext.renderPerformance;
 
     const bool fpsAvailable = uiContext.frameTiming.rawDeltaSeconds > 0.0001;
@@ -1272,6 +1299,9 @@ void ViewportPanel::refreshCachedSelectionOverlayFrame(
         const SceneDocument& document,
         const AssetRegistry& assets,
         ModelingSessionService& modeling) {
+    if (selectionOverlaySuppressedForInteraction()) {
+        return;
+    }
     const ModelingSelectionSummary overlaySummary = [&]() {
         QDR_PROFILE_SCOPE("Viewport selection overlay summary");
         return modeling.selectionSummary();
@@ -1355,6 +1385,13 @@ void ViewportPanel::refreshCachedSelectionOverlayFrame(
     case ViewportPaneOverlayCacheRefreshReason::None:
         break;
     }
+}
+
+bool ViewportPanel::selectionOverlaySuppressedForInteraction() const {
+    return inputRouter_.navigating() ||
+            interactionController_.dragging() ||
+            navigationGizmo_.inputLocked() ||
+            splitHandleDragging_;
 }
 
 ViewportWorkspaceService& ViewportPanel::workspace() {

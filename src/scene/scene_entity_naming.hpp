@@ -8,9 +8,11 @@
 
 #include "scene/scene_document.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -96,12 +98,16 @@ public:
     std::string nextName(std::string_view baseName) {
         const std::string base(baseName.empty() ? "Entity" : baseName);
         if (names_.insert(base).second) {
+            nextIndexByBase_.try_emplace(base, 1u);
             return base;
         }
 
-        for (std::size_t index = 1;; ++index) {
+        std::size_t& nextIndex = nextIndexByBase_[base];
+        nextIndex = std::max<std::size_t>(nextIndex, 1u);
+        for (std::size_t index = nextIndex;; ++index) {
             std::string candidate = base + "_" + std::to_string(index);
             if (names_.insert(candidate).second) {
+                nextIndex = index + 1u;
                 return candidate;
             }
         }
@@ -113,6 +119,7 @@ public:
 
 private:
     std::unordered_set<std::string> names_;
+    std::unordered_map<std::string, std::size_t> nextIndexByBase_;
 };
 
 } // namespace quader

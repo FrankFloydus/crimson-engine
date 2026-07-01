@@ -40,6 +40,13 @@ void destroyProxyMap(MeshRenderableFactory& factory, std::unordered_map<EntityId
     proxies.clear();
 }
 
+void destroyDetachedProxyVector(MeshRenderableFactory& factory, std::vector<MeshRenderableProxy>& proxies) {
+    for (MeshRenderableProxy& proxy : proxies) {
+        factory.destroyDetached(proxy);
+    }
+    proxies.clear();
+}
+
 } // namespace
 
 MeshRenderableCache::~MeshRenderableCache() {
@@ -58,6 +65,7 @@ void MeshRenderableCache::shutdown() {
     destroyProxyMap(*factory_, renderedMeshProxies_);
     destroyProxyMap(*factory_, shadedMeshProxies_);
     destroyProxyMap(*factory_, overlayDepthMeshProxies_);
+    destroyDetachedProxyVector(*factory_, retiredMeshProxies_);
     factory_ = nullptr;
 }
 
@@ -185,16 +193,16 @@ void MeshRenderableCache::remove(EntityId entityId) {
         return;
     }
 
-    if (const auto existing = renderedMeshProxies_.find(entityId); existing != renderedMeshProxies_.end()) {
-        factory_->destroy(existing->second);
+    if (auto existing = renderedMeshProxies_.find(entityId); existing != renderedMeshProxies_.end()) {
+        retireProxy(std::move(existing->second));
         renderedMeshProxies_.erase(existing);
     }
-    if (const auto existing = shadedMeshProxies_.find(entityId); existing != shadedMeshProxies_.end()) {
-        factory_->destroy(existing->second);
+    if (auto existing = shadedMeshProxies_.find(entityId); existing != shadedMeshProxies_.end()) {
+        retireProxy(std::move(existing->second));
         shadedMeshProxies_.erase(existing);
     }
-    if (const auto existing = overlayDepthMeshProxies_.find(entityId); existing != overlayDepthMeshProxies_.end()) {
-        factory_->destroy(existing->second);
+    if (auto existing = overlayDepthMeshProxies_.find(entityId); existing != overlayDepthMeshProxies_.end()) {
+        retireProxy(std::move(existing->second));
         overlayDepthMeshProxies_.erase(existing);
     }
 }
@@ -207,7 +215,7 @@ void MeshRenderableCache::removeExcept(const std::unordered_set<EntityId>& liveM
 
     for (auto it = renderedMeshProxies_.begin(); it != renderedMeshProxies_.end();) {
         if (!liveMeshEntities.contains(it->first)) {
-            factory_->destroy(it->second);
+            retireProxy(std::move(it->second));
             it = renderedMeshProxies_.erase(it);
         } else {
             ++it;
@@ -215,7 +223,7 @@ void MeshRenderableCache::removeExcept(const std::unordered_set<EntityId>& liveM
     }
     for (auto it = shadedMeshProxies_.begin(); it != shadedMeshProxies_.end();) {
         if (!liveMeshEntities.contains(it->first)) {
-            factory_->destroy(it->second);
+            retireProxy(std::move(it->second));
             it = shadedMeshProxies_.erase(it);
         } else {
             ++it;
@@ -223,7 +231,7 @@ void MeshRenderableCache::removeExcept(const std::unordered_set<EntityId>& liveM
     }
     for (auto it = overlayDepthMeshProxies_.begin(); it != overlayDepthMeshProxies_.end();) {
         if (!liveMeshEntities.contains(it->first)) {
-            factory_->destroy(it->second);
+            retireProxy(std::move(it->second));
             it = overlayDepthMeshProxies_.erase(it);
         } else {
             ++it;
@@ -231,8 +239,32 @@ void MeshRenderableCache::removeExcept(const std::unordered_set<EntityId>& liveM
     }
 }
 
+void MeshRenderableCache::drainRetiredDestroyQueue(std::size_t maxProxyCount) {
+    QDR_PROFILE_FUNCTION();
+    if (!factory_ || maxProxyCount == 0u) {
+        return;
+    }
+
+    for (std::size_t destroyed = 0u; destroyed < maxProxyCount && !retiredMeshProxies_.empty(); ++destroyed) {
+        QDR_PROFILE_SCOPE("Mesh renderable destroy retired proxy");
+        MeshRenderableProxy& proxy = retiredMeshProxies_.back();
+        factory_->destroyDetached(proxy);
+        retiredMeshProxies_.pop_back();
+    }
+}
+
 std::uint64_t MeshRenderableCache::meshAssetSignature(std::uint64_t hash, const MeshAsset& mesh) {
     return MeshRenderableFactory::meshAssetSignature(hash, mesh);
+}
+
+void MeshRenderableCache::retireProxy(MeshRenderableProxy&& proxy) {
+    if (!factory_ || !proxy.entity) {
+        return;
+    }
+
+    QDR_PROFILE_FUNCTION();
+    factory_->removeFromScene(proxy);
+    retiredMeshProxies_.push_back(std::move(proxy));
 }
 
 } // namespace quader

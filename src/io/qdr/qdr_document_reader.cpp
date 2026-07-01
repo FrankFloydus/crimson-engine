@@ -10,6 +10,7 @@
 #include "diagnostics/profile.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
 #include "io/qdr/qdr_format.hpp"
+#include "io/qdr/qdr_parallel_tasks.hpp"
 #include "io/qdr/qdr_polygon_document_codec.hpp"
 #include "io/qdr/qdr_project_codecs.hpp"
 #include "io/qdr/qdr_root.hpp"
@@ -37,6 +38,11 @@ namespace {
 
 using json = nlohmann::ordered_json;
 
+struct DecodedMeshAsset {
+    AssetId id = InvalidAssetId;
+    MeshAsset mesh;
+};
+
 void requireObject(const json& value, std::string_view label) {
     if (!value.is_object()) {
         throw std::runtime_error(std::string(label) + " must be an object.");
@@ -61,21 +67,28 @@ MeshAsset meshFromJson(const json& value) {
     MeshAsset mesh;
     mesh.name = value.value("name", std::string("Mesh"));
     mesh.hasStableCpuTopology = value.value("hasStableCpuTopology", true);
-    for (const json& vertexJson : value.value("vertices", json::array())) {
-        mesh.vertices.push_back(MeshVertex{
-                .position = qdrVec3FromJson(vertexJson.value("position", json::object())),
-                .normal = qdrVec3FromJson(vertexJson.value("normal", json::object()), {0.0f, 1.0f, 0.0f}),
-                .uv = qdrVec2FromJson(vertexJson.value("uv", json::object())),
-                .rgba = vertexJson.value("rgba", 0xffffffffu),
-        });
+    if (const auto verticesJson = value.find("vertices"); verticesJson != value.end() && verticesJson->is_array()) {
+        mesh.vertices.reserve(verticesJson->size());
+        for (const json& vertexJson : *verticesJson) {
+            mesh.vertices.push_back(MeshVertex{
+                    .position = qdrVec3FromJson(vertexJson.value("position", json::object())),
+                    .normal = qdrVec3FromJson(vertexJson.value("normal", json::object()), {0.0f, 1.0f, 0.0f}),
+                    .uv = qdrVec2FromJson(vertexJson.value("uv", json::object())),
+                    .rgba = vertexJson.value("rgba", 0xffffffffu),
+            });
+        }
     }
     mesh.indices = value.value("indices", std::vector<std::uint32_t>{});
-    for (const json& primitiveJson : value.value("primitives", json::array())) {
-        mesh.primitives.push_back(MeshPrimitiveSpan{
-                .indexOffset = primitiveJson.value("indexOffset", 0u),
-                .indexCount = primitiveJson.value("indexCount", 0u),
-                .materialSlot = primitiveJson.value("materialSlot", 0u),
-        });
+    if (const auto primitivesJson = value.find("primitives");
+            primitivesJson != value.end() && primitivesJson->is_array()) {
+        mesh.primitives.reserve(primitivesJson->size());
+        for (const json& primitiveJson : *primitivesJson) {
+            mesh.primitives.push_back(MeshPrimitiveSpan{
+                    .indexOffset = primitiveJson.value("indexOffset", 0u),
+                    .indexCount = primitiveJson.value("indexCount", 0u),
+                    .materialSlot = primitiveJson.value("materialSlot", 0u),
+            });
+        }
     }
     if (const auto polygon = value.find("polygonDocument"); polygon != value.end() && polygon->is_object()) {
         mesh.hasAuthoredPolygonDocument = true;
@@ -170,10 +183,17 @@ void requireValidAssetReferencesForQdr(const ProjectDocumentAssetReferenceReport
     }
 }
 
+const json& fieldOrDefault(const json& value, const char* key, const json& fallback) {
+    const auto found = value.find(key);
+    return found == value.end() ? fallback : *found;
+}
+
 ProjectDocument projectDocumentFromAppPayload(const json& payload) {
     QDR_PROFILE_FUNCTION();
     requireObject(payload, "QDR project document payload");
-    const json project = payload.value("project", json::object());
+    const json emptyObject = json::object();
+    const json emptyArray = json::array();
+    const json& project = fieldOrDefault(payload, "project", emptyObject);
     ProjectDocument document(
             ProjectDocumentRecord{
                     .id = project.value("id", 0ull),
@@ -181,17 +201,29 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
             },
             ProjectDocumentRootPolicy::DeferSceneRoot);
 
-    const json assetsJson = payload.value("assets", json::object());
+    const json& assetsJson = fieldOrDefault(payload, "assets", emptyObject);
     std::set<AssetId> meshAssetIds;
-    for (const json& meshJson : assetsJson.value("meshes", json::array())) {
+    const json& meshesJson = fieldOrDefault(assetsJson, "meshes", emptyArray);
+    std::vector<const json*> meshJsons;
+    meshJsons.reserve(meshesJson.size());
+    std::vector<DecodedMeshAsset> decodedMeshes;
+    decodedMeshes.reserve(meshesJson.size());
+    for (const json& meshJson : meshesJson) {
         const AssetId id = qdrAssetIdFromJson(meshJson, "mesh");
         requireUniqueAssetId(meshAssetIds, id, "mesh");
-        if (document.assets().addMesh(id, meshFromJson(meshJson)) == InvalidAssetId) {
+        meshJsons.push_back(&meshJson);
+        decodedMeshes.push_back(DecodedMeshAsset{.id = id});
+    }
+    qdr_detail::runParallelIndexTasks(meshJsons.size(), "QDR mesh decode", [&](std::size_t index) {
+        decodedMeshes[index].mesh = meshFromJson(*meshJsons[index]);
+    });
+    for (DecodedMeshAsset& decoded : decodedMeshes) {
+        if (document.assets().addMesh(decoded.id, std::move(decoded.mesh)) == InvalidAssetId) {
             throw std::runtime_error("QDR project document contains duplicate mesh asset ids.");
         }
     }
     std::set<AssetId> textureAssetIds;
-    for (const json& textureJson : assetsJson.value("textures", json::array())) {
+    for (const json& textureJson : fieldOrDefault(assetsJson, "textures", emptyArray)) {
         const AssetId id = qdrAssetIdFromJson(textureJson, "texture");
         requireUniqueAssetId(textureAssetIds, id, "texture");
         if (document.assets().addTexture(id, textureFromJson(textureJson)) == InvalidAssetId) {
@@ -199,7 +231,7 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
         }
     }
     std::set<AssetId> materialAssetIds;
-    for (const json& materialJson : assetsJson.value("materials", json::array())) {
+    for (const json& materialJson : fieldOrDefault(assetsJson, "materials", emptyArray)) {
         const AssetId id = qdrAssetIdFromJson(materialJson, "material");
         requireUniqueAssetId(materialAssetIds, id, "material");
         MaterialDocument material = materialFromJson(materialJson);
@@ -212,7 +244,7 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
     std::vector<std::pair<EntityId, EntityId>> parentLinks;
     std::set<EntityId> entitiesWithExplicitEditorObjectIds;
     EntityId activeSelection = InvalidEntityId;
-    for (const json& entityJson : payload.value("entities", json::array())) {
+    for (const json& entityJson : fieldOrDefault(payload, "entities", emptyArray)) {
         const EntityId requestedId = entityJson.value("id", InvalidEntityId);
         const bool hasExplicitEditorObjectId = entityJson.contains("editorObjectId");
         const EditorObjectId editorObjectId = hasExplicitEditorObjectId
@@ -301,7 +333,10 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
 
     std::set<EditorObjectId> objectRecordIds;
     std::set<EntityId> objectRecordEntities;
-    for (const json& recordJson : payload.value("objects", json::array())) {
+    const json& objectsJson = fieldOrDefault(payload, "objects", emptyArray);
+    std::vector<ProjectObjectRecord> objectRecords;
+    objectRecords.reserve(objectsJson.size());
+    for (const json& recordJson : objectsJson) {
         const ProjectObjectRecord record = objectRecordFromJson(recordJson);
         requireValidAssetReferencesForQdr(document.validateAssetReferences(record));
         if (!objectRecordIds.insert(record.id).second) {
@@ -314,9 +349,11 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
                 document.scene().editorObjectId(record.sceneEntity) != record.id) {
             throw std::runtime_error("QDR project object record id does not match the scene editor object id.");
         }
-        if (document.upsertObjectRecord(record) == InvalidEditorObjectId) {
-            throw std::runtime_error("QDR project object record conflicts with an existing editor object id.");
-        }
+        objectRecords.push_back(record);
+    }
+    const std::size_t objectRecordCount = objectRecords.size();
+    if (document.upsertObjectRecords(std::move(objectRecords)).size() != objectRecordCount) {
+        throw std::runtime_error("QDR project object record conflicts with an existing editor object id.");
     }
 
     const ProjectDocumentIdentityReport identity = document.validateObjectIdentityInvariants();

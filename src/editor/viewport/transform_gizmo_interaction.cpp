@@ -213,6 +213,7 @@ bool TransformGizmoInteraction::beginPendingDrag(QuaderEditorApi& editor, const 
 
     dragging_ = begin.value().active;
     activeAxis_ = dragging_ ? pending.axis : quader_editor_core::TransformAxis::none;
+    activeDragPivot_ = dragging_ ? begin.value().pivot : QVec3{};
     activeWorldDirection_ = dragging_ ? pending.beginRequest.worldDirection : QVec3{};
     rotationIndicatorStartDirection_ =
             dragging_ && viewportToolInteractionTool(pending.tool) == quader_editor_core::ViewportInteractionTool::rotate
@@ -244,18 +245,39 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
     ViewportBeforeToolInteractionResult result;
 
     const ViewportToolId tool = frame.inputRouter.state().activeTool;
-    const QuaderSelectionSummary selection = editor.query().selection();
-    const std::optional<QVec3> pivot = editor.query().selectionCenter();
     if (!frame.settings.boolValue(ViewportBoolSettingId::ShowGizmos) ||
-            !viewportToolSupportsTransformGizmo(tool) ||
-            !selection.hasSelection ||
-            !pivot.has_value()) {
+            !viewportToolSupportsTransformGizmo(tool)) {
         clearFrame();
         resetPendingDrag();
         if (dragging_) {
             result.gizmoConsumed = cancelActiveDrag(editor);
         }
         return result;
+    }
+
+    const bool cameraNavigationFrame = frame.inputResult.navigationActive || frame.inputResult.cameraChanged;
+    if (cameraNavigationFrame && !dragging_ && !pendingDrag_.has_value()) {
+        clearFrame();
+        hoverAxis_ = quader_editor_core::TransformAxis::none;
+        return result;
+    }
+
+    std::optional<QuaderSelectionSummary> selection;
+    QVec3 pivot = {};
+    if (dragging_) {
+        pivot = activeDragPivot_;
+    } else if (pendingDrag_.has_value()) {
+        pivot = pendingDrag_->beginRequest.pivot;
+    } else {
+        selection = editor.query().selection();
+        const std::optional<QVec3> queriedPivot = editor.query().selectionCenter();
+        if (!selection->hasSelection ||
+                !queriedPivot.has_value()) {
+            clearFrame();
+            resetPendingDrag();
+            return result;
+        }
+        pivot = *queriedPivot;
     }
 
     const bool suppressHover =
@@ -269,7 +291,7 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
             makeGizmoInput(
                     frame,
                     tool,
-                    *pivot,
+                    pivot,
                     dragging_
                             ? activeAxis_
                             : (pendingDrag_.has_value() ? pendingDrag_->axis : quader_editor_core::TransformAxis::none),
@@ -321,6 +343,7 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
         }
 
         const ViewportRay dragRay = frame.camera.rayFromViewportPoint(frame.input.mouseLocal);
+        const bool snapActive = viewportGridSnapActive(frame.settings, frame.input.modifiers.primary);
         const QuaderApiResult<QuaderTransformDragPreview> preview = [&]() {
             QDR_PROFILE_SCOPE("Transform gizmo update drag");
             return editor.modeling().updateTransformDrag({
@@ -331,13 +354,20 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
                     },
                     .camera = toApiViewportCamera(ViewportCameraAdapter::modelingCamera(frame.camera, frame.input.viewportSize)),
                     .gridSize = viewportGridWorldSizeForPreset(frame.input.gridPreset),
-                    .vertexSnapRadius = viewportVertexSnapRadius(frame.settings),
-                    .gridSnapEnabled = viewportGridSnapActive(frame.settings, frame.input.modifiers.primary),
+                    .vertexSnapRadius = snapActive ? viewportVertexSnapRadius(frame.settings) : 0.0,
+                    .gridSnapEnabled = snapActive,
                     .precision = frame.input.modifiers.primary,
             });
         }();
         if (!preview.ok) {
             LOG_ERROR("Transform drag update failed: {}", preview.message.empty() ? "Update failed." : preview.message);
+        }
+        if (preview.ok &&
+                preview.value().active) {
+            activeDragPivot_ = preview.value().pivot;
+            if (viewportToolInteractionTool(tool) == quader_editor_core::ViewportInteractionTool::move) {
+                activeDragPivot_ += preview.value().moveDelta;
+            }
         }
         if (preview.ok &&
                 preview.value().active &&
@@ -376,14 +406,15 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
     }
 
     const ViewportRay startRay = frame.camera.rayFromViewportPoint(frame.leftClickLocal);
-    const bool duplicateSelected = !isComponentSelectionMode(toModelingSelectionMode(selection.mode)) &&
+    const bool duplicateSelected = selection.has_value() &&
+            !isComponentSelectionMode(toModelingSelectionMode(selection->mode)) &&
             frame.input.modifiers.shift;
     pendingDrag_ = PendingGizmoDrag{
             .beginRequest = {
                     .tool = apiTransformToolFor(tool),
-                    .operation = transformOperationFor(tool, selection.mode, frame.input.modifiers),
+                    .operation = transformOperationFor(tool, selection->mode, frame.input.modifiers),
                     .axis = apiAxisFor(hit.axis),
-                    .pivot = *pivot,
+                    .pivot = pivot,
                     .screenPosition = frame.leftClickLocal,
                     .screenPivot = currentFrame_->info.screen_pivot,
                     .screenTip = hit.screen_tip,
@@ -445,6 +476,7 @@ const quader_editor_core::TransformGizmoFrame* TransformGizmoInteraction::frame(
 void TransformGizmoInteraction::resetDragState() {
     dragging_ = false;
     activeAxis_ = quader_editor_core::TransformAxis::none;
+    activeDragPivot_ = {};
     activeWorldDirection_ = {};
     rotationIndicatorStartDirection_.reset();
 }

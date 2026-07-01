@@ -14,6 +14,11 @@
 #include "render/scene_render_extraction.hpp"
 
 namespace quader {
+namespace {
+
+constexpr std::size_t kRetiredMeshProxyDestroyBudgetPerSync = 1u;
+
+} // namespace
 
 SceneRenderSyncService::~SceneRenderSyncService() {
     shutdown();
@@ -49,6 +54,10 @@ bool SceneRenderSyncService::sync(const SceneDocument& document, const AssetRegi
     QDR_PROFILE_FUNCTION();
     if (!initialized()) {
         return false;
+    }
+    {
+        QDR_PROFILE_SCOPE("Scene render drain retired mesh proxies");
+        meshCache_->drainRetiredDestroyQueue(kRetiredMeshProxyDestroyBudgetPerSync);
     }
 
     const bool documentUnchanged = hasSynced_ && syncedRevision_ == document.revision();

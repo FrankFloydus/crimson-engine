@@ -19,6 +19,7 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | spdlog | https://github.com/gabime/spdlog | vcpkg `1.17.0` | MIT, see `licenses/spdlog-MIT.txt` | Runtime logging. |
 | {fmt} | https://github.com/fmtlib/fmt | vcpkg `12.1.0` | MIT, see `licenses/fmt-MIT.txt` | spdlog default formatting backend. |
 | stduuid | https://github.com/mariusbancila/stduuid | vcpkg `1.2.3` | MIT, see `licenses/stduuid-MIT.txt` | Stable UUID generation and parsing for scene entity identity. |
+| Taskflow | https://github.com/taskflow/taskflow | vcpkg `4.0.0#1` | MIT, see `licenses/taskflow-MIT.txt` | Parallel QDR mesh decode/encode precompute for project load/save. |
 | Tracy Profiler | https://github.com/wolfpld/tracy | external checkout when `QUADER_ENABLE_TRACY=ON` | BSD 3-Clause, see `licenses/tracy-BSD-3-Clause.txt` | Optional diagnostic instrumentation for local performance captures. |
 
 ## OpenMesh Source Policy

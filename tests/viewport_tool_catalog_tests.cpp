@@ -428,9 +428,27 @@ TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalToo
     EXPECT_NE(viewportPanel.find("vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius)"), std::string::npos);
     EXPECT_NE(viewportPanel.find("constrainAxis = input.modifiers.shift"), std::string::npos);
     EXPECT_NE(transformGizmo.find("!frame.settings.boolValue(ViewportBoolSettingId::ShowGizmos)"), std::string::npos);
-    EXPECT_NE(transformGizmo.find(".vertexSnapRadius = viewportVertexSnapRadius(frame.settings)"), std::string::npos);
-    EXPECT_NE(transformGizmo.find(".gridSnapEnabled = viewportGridSnapActive(frame.settings, frame.input.modifiers.primary)"), std::string::npos);
+    EXPECT_NE(transformGizmo.find("const bool snapActive = viewportGridSnapActive(frame.settings, frame.input.modifiers.primary)"), std::string::npos);
+    EXPECT_NE(transformGizmo.find(".vertexSnapRadius = snapActive ? viewportVertexSnapRadius(frame.settings) : 0.0"), std::string::npos);
+    EXPECT_NE(transformGizmo.find(".gridSnapEnabled = snapActive"), std::string::npos);
     EXPECT_NE(transformGizmo.find(".precision = frame.input.modifiers.primary"), std::string::npos);
+    const std::size_t navigationSkip = transformGizmo.find("cameraNavigationFrame && !dragging_ && !pendingDrag_.has_value()");
+    const std::size_t selectionCenter = transformGizmo.find("editor.query().selectionCenter()");
+    ASSERT_NE(navigationSkip, std::string::npos);
+    ASSERT_NE(selectionCenter, std::string::npos);
+    EXPECT_LT(navigationSkip, selectionCenter);
+    const std::size_t activeDragPivot = transformGizmo.find("pivot = activeDragPivot_");
+    ASSERT_NE(activeDragPivot, std::string::npos);
+    EXPECT_LT(activeDragPivot, selectionCenter);
+    EXPECT_NE(transformGizmo.find("activeDragPivot_ = preview.value().pivot"), std::string::npos);
+
+    const std::string selectionInteraction =
+            readSourceFile(root / "src" / "editor" / "viewport" / "viewport_selection_interaction.cpp");
+    EXPECT_NE(selectionInteraction.find("frame.inputRouter.state().selectionMode == ViewportSelectionMode::Group"), std::string::npos);
+    EXPECT_EQ(selectionInteraction.find("editor.selection().summary().mode == QuaderSelectionMode::Group"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("selectionOverlaySuppressedForInteraction()"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("!selectionOverlaySuppressed && selectionOverlayCache_.valid()"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("if (selectionOverlaySuppressedForInteraction())"), std::string::npos);
 }
 
 TEST(ViewportToolGuardrailTests, EditorOwnsViewportToolRuntimeSources) {

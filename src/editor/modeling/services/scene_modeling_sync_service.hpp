@@ -9,6 +9,7 @@
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 
 #include <cstdint>
+#include <unordered_map>
 
 #include <editor/modeling/runtime/session.hpp>
 
@@ -30,6 +31,10 @@ public:
 
     void invalidateSceneObjects();
     void markSceneObjectsSynced(std::uint64_t contentRevision);
+    void rememberProjectedMeshSignature(int modelingObjectId, std::uint64_t signature);
+    void forgetProjectedMeshSignature(int modelingObjectId);
+    [[nodiscard]] bool projectedMeshSignatureKnown(int modelingObjectId) const;
+    [[nodiscard]] bool projectedMeshSignatureMatches(int modelingObjectId, std::uint64_t signature) const;
 
     [[nodiscard]] bool sceneObjectsSyncedForCurrentModelingContent(
             const quader_editor_core::EditorSession& session,
@@ -39,6 +44,7 @@ private:
     ModelingObjectRuntimeMap& objectMap_;
     bool sceneObjectsSyncValid_ = false;
     std::uint64_t syncedModelingContentRevision_ = 0;
+    std::unordered_map<int, std::uint64_t> projectedMeshSignaturesByObject_;
 };
 
 } // namespace quader

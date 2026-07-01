@@ -54,7 +54,9 @@ public:
             bool depthOnly = false,
             std::uint8_t channel = kViewportDefaultRenderableChannel);
     void updateTransform(const MeshRenderableProxy& proxy, const QMat4& worldTransform);
+    void removeFromScene(const MeshRenderableProxy& proxy);
     void destroy(MeshRenderableProxy& proxy);
+    void destroyDetached(MeshRenderableProxy& proxy);
 
     static std::uint64_t meshAssetSignature(std::uint64_t hash, const MeshAsset& mesh);
 

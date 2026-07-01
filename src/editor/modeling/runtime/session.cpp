@@ -2734,6 +2734,10 @@ std::vector<PolygonObject> selected_object_copies(const std::vector<PolygonObjec
 	if (mode != SelectionMode::object) {
 		return copied_objects;
 	}
+	copied_objects.reserve(static_cast<std::size_t>(std::count_if(
+		objects.begin(),
+		objects.end(),
+		[](const PolygonObject& object) { return object.selected; })));
 	for (const PolygonObject& object : objects) {
 		if (!object.selected) {
 			continue;
@@ -2762,6 +2766,7 @@ CommandResult duplicate_selected_objects(std::vector<PolygonObject>& objects, in
 	next_object_id = next_polygon_object_id(objects, next_object_id);
 	std::vector<int> duplicated_ids;
 	duplicated_ids.reserve(copied_objects.size());
+	objects.reserve(objects.size() + copied_objects.size());
 	for (PolygonObject& copy : copied_objects) {
 		QDR_PROFILE_SCOPE("Runtime duplicate polygon object");
 		copy.id = next_object_id++;

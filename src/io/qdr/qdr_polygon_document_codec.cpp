@@ -10,6 +10,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -91,9 +92,11 @@ bool contains_duplicate_ids(std::vector<quader_poly::ElementId> ids) {
     return std::adjacent_find(ids.begin(), ids.end()) != ids.end();
 }
 
-bool face_references_existing_vertices(const quader_poly::Document& document, const quader_poly::Face& face) {
-    return std::all_of(face.vertices.begin(), face.vertices.end(), [&document](quader_poly::ElementId id) {
-        return quader_poly::find_vertex(document, id) != nullptr;
+bool face_references_existing_vertices(
+        const std::unordered_set<quader_poly::ElementId>& vertex_ids,
+        const quader_poly::Face& face) {
+    return std::all_of(face.vertices.begin(), face.vertices.end(), [&vertex_ids](quader_poly::ElementId id) {
+        return vertex_ids.contains(id);
     });
 }
 
@@ -101,6 +104,7 @@ bool face_references_existing_vertices(const quader_poly::Document& document, co
 
 QdrJson qdr_polygon_document_to_json(const quader_poly::Document& document) {
     json vertices = json::array();
+    vertices.get_ref<json::array_t&>().reserve(document.vertices.size());
     for (const quader_poly::Vertex& vertex : document.vertices) {
         vertices.push_back({
                 {"id", vertex.id},
@@ -109,8 +113,10 @@ QdrJson qdr_polygon_document_to_json(const quader_poly::Document& document) {
     }
 
     json faces = json::array();
+    faces.get_ref<json::array_t&>().reserve(document.faces.size());
     for (const quader_poly::Face& face : document.faces) {
         json uvs = json::array();
+        uvs.get_ref<json::array_t&>().reserve(face.uvs.size());
         for (quader::QVec2 uv : face.uvs) {
             uvs.push_back(vec2_to_json(uv));
         }
@@ -124,18 +130,21 @@ QdrJson qdr_polygon_document_to_json(const quader_poly::Document& document) {
         });
     }
 
-    const std::vector<quader_poly::Edge> document_edges = quader_poly::document_edges(document);
     json hard_normal_edges = json::array();
-    std::set<std::pair<quader_poly::ElementId, quader_poly::ElementId>> serialized_hard_edges;
-    for (quader_poly::Edge edge : document.hard_normal_edges) {
-        edge = quader_poly::make_edge(edge.a, edge.b);
-        if (std::find(document_edges.begin(), document_edges.end(), edge) == document_edges.end()) {
-            continue;
+    if (!document.hard_normal_edges.empty()) {
+        hard_normal_edges.get_ref<json::array_t&>().reserve(document.hard_normal_edges.size());
+        const std::vector<quader_poly::Edge> document_edges = quader_poly::document_edges(document);
+        std::set<std::pair<quader_poly::ElementId, quader_poly::ElementId>> serialized_hard_edges;
+        for (quader_poly::Edge edge : document.hard_normal_edges) {
+            edge = quader_poly::make_edge(edge.a, edge.b);
+            if (std::find(document_edges.begin(), document_edges.end(), edge) == document_edges.end()) {
+                continue;
+            }
+            if (!serialized_hard_edges.insert({edge.a, edge.b}).second) {
+                continue;
+            }
+            hard_normal_edges.push_back(edge_to_json(edge));
         }
-        if (!serialized_hard_edges.insert({edge.a, edge.b}).second) {
-            continue;
-        }
-        hard_normal_edges.push_back(edge_to_json(edge));
     }
 
     return {
@@ -152,9 +161,12 @@ quader_poly::Document qdr_polygon_document_from_json(const QdrJson& value) {
     document.next_vertex_id = value.at("nextVertexId").get<quader_poly::ElementId>();
     document.next_face_id = value.at("nextFaceId").get<quader_poly::ElementId>();
 
-    std::set<quader_poly::ElementId> vertex_ids;
+    const json& vertices_json = value.at("vertices");
+    document.vertices.reserve(vertices_json.size());
+    std::unordered_set<quader_poly::ElementId> vertex_ids;
+    vertex_ids.reserve(vertices_json.size());
     quader_poly::ElementId max_vertex_id = 0;
-    for (const json& vertex_json : value.at("vertices")) {
+    for (const json& vertex_json : vertices_json) {
         quader_poly::Vertex vertex;
         vertex.id = vertex_json.at("id").get<quader_poly::ElementId>();
         vertex.position = vec3_from_json(vertex_json.at("position"));
@@ -165,14 +177,18 @@ quader_poly::Document qdr_polygon_document_from_json(const QdrJson& value) {
         document.vertices.push_back(vertex);
     }
 
-    std::set<quader_poly::ElementId> face_ids;
+    const json& faces_json = value.at("faces");
+    document.faces.reserve(faces_json.size());
+    std::unordered_set<quader_poly::ElementId> face_ids;
+    face_ids.reserve(faces_json.size());
     quader_poly::ElementId max_face_id = 0;
-    for (const json& face_json : value.at("faces")) {
+    for (const json& face_json : faces_json) {
         quader_poly::Face face;
         face.id = face_json.at("id").get<quader_poly::ElementId>();
         face.vertices = face_json.at("vertices").get<std::vector<quader_poly::ElementId>>();
         face.material_slot = face_json.value("materialSlot", 0U);
         face.normal_shading = parse_surface_shading(face_json.value("normalShading", std::string("flat")));
+        face.uvs.reserve(face_json.at("uvs").size());
         for (const json& uv_json : face_json.at("uvs")) {
             face.uvs.push_back(vec2_from_json(uv_json));
         }
@@ -193,13 +209,15 @@ quader_poly::Document qdr_polygon_document_from_json(const QdrJson& value) {
     }
 
     for (const quader_poly::Face& face : document.faces) {
-        if (!face_references_existing_vertices(document, face)) {
+        if (!face_references_existing_vertices(vertex_ids, face)) {
             throw std::runtime_error("Document contains a face that references a missing vertex.");
         }
     }
 
     std::set<std::pair<quader_poly::ElementId, quader_poly::ElementId>> hard_normal_edges;
-    if (const auto hard_edges_json = value.find("hardNormalEdges"); hard_edges_json != value.end()) {
+    if (const auto hard_edges_json = value.find("hardNormalEdges");
+            hard_edges_json != value.end() && !hard_edges_json->empty()) {
+        document.hard_normal_edges.reserve(hard_edges_json->size());
         const std::vector<quader_poly::Edge> valid_edges = quader_poly::document_edges(document);
         for (const json& edge_json : *hard_edges_json) {
             quader_poly::Edge edge = edge_from_json(edge_json);

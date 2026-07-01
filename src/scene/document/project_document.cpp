@@ -90,12 +90,38 @@ EditorObjectId ProjectDocument::createObjectRecord(ProjectObjectRecord record) {
 
 EditorObjectId ProjectDocument::upsertObjectRecord(ProjectObjectRecord record) {
     const bool recordsSynced = syncObjectRecordsWithScene();
-    const auto invalidResult = [&]() {
+    const EditorObjectId objectId = upsertObjectRecordAfterSync(std::move(record));
+    if (objectId == InvalidEditorObjectId) {
         if (recordsSynced) {
             markDirty();
         }
         return InvalidEditorObjectId;
-    };
+    }
+    markDirty();
+    return objectId;
+}
+
+std::vector<EditorObjectId> ProjectDocument::upsertObjectRecords(std::vector<ProjectObjectRecord> records) {
+    const bool recordsSynced = syncObjectRecordsWithScene();
+    std::vector<EditorObjectId> objectIds;
+    objectIds.reserve(records.size());
+    for (ProjectObjectRecord& record : records) {
+        const EditorObjectId objectId = upsertObjectRecordAfterSync(std::move(record));
+        if (objectId == InvalidEditorObjectId) {
+            if (recordsSynced || !objectIds.empty()) {
+                markDirty();
+            }
+            return {};
+        }
+        objectIds.push_back(objectId);
+    }
+    if (recordsSynced || !objectIds.empty()) {
+        markDirty();
+    }
+    return objectIds;
+}
+
+EditorObjectId ProjectDocument::upsertObjectRecordAfterSync(ProjectObjectRecord record) {
     if (record.sceneEntity != InvalidEntityId && scene_.exists(record.sceneEntity)) {
         EditorObjectId objectId = record.id;
         if (objectId == InvalidEditorObjectId) {
@@ -105,12 +131,12 @@ EditorObjectId ProjectDocument::upsertObjectRecord(ProjectObjectRecord record) {
             objectId = allocateObjectId(InvalidEditorObjectId);
         }
         if (!canAssignObjectId(objectId, record.sceneEntity)) {
-            return invalidResult();
+            return InvalidEditorObjectId;
         }
         (void)allocateObjectId(objectId);
         if (scene_.editorObjectId(record.sceneEntity) != objectId &&
                 !scene_.setEditorObjectId(record.sceneEntity, objectId)) {
-            return invalidResult();
+            return InvalidEditorObjectId;
         }
         record.id = objectId;
         if (const auto existing = objectByEntity_.find(record.sceneEntity);
@@ -120,11 +146,11 @@ EditorObjectId ProjectDocument::upsertObjectRecord(ProjectObjectRecord record) {
         }
     } else {
         if (record.id != InvalidEditorObjectId && scene_.entityForEditorObjectId(record.id) != InvalidEntityId) {
-            return invalidResult();
+            return InvalidEditorObjectId;
         }
         record.id = allocateObjectId(record.id);
         if (record.id == InvalidEditorObjectId) {
-            return invalidResult();
+            return InvalidEditorObjectId;
         }
     }
     const EditorObjectId objectId = record.id;
@@ -135,7 +161,6 @@ EditorObjectId ProjectDocument::upsertObjectRecord(ProjectObjectRecord record) {
     }
     indexRecord(record);
     objects_[objectId] = std::move(record);
-    markDirty();
     return objectId;
 }
 

@@ -228,7 +228,7 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
         proxy.indexBuffer->setBuffer(*engine_, FilamentBufferDescriptorFactory::vector(mesh.indices));
     }
 
-    const std::vector<MeshPrimitiveSpan> primitiveSpans = normalizedMeshPrimitiveSpans(mesh);
+    const std::vector<MeshPrimitiveSpan> primitiveSpans = coalescedMeshPrimitiveSpans(mesh);
     proxy.materialSlots.reserve(primitiveSpans.size());
     proxy.materialInstances.reserve(primitiveSpans.size());
     filament::RenderableManager::Builder builder(primitiveSpans.size());
@@ -289,12 +289,28 @@ void MeshRenderableFactory::updateTransform(const MeshRenderableProxy& proxy, co
     transformManager.setTransform(instance, makeTransform(worldTransform));
 }
 
+void MeshRenderableFactory::removeFromScene(const MeshRenderableProxy& proxy) {
+    if (!scene_ || !proxy.entity) {
+        return;
+    }
+
+    scene_->remove(proxy.entity);
+}
+
 void MeshRenderableFactory::destroy(MeshRenderableProxy& proxy) {
     if (!engine_) {
         return;
     }
 
     destroyMeshRenderableProxyResources(*engine_, scene_, proxy, true);
+}
+
+void MeshRenderableFactory::destroyDetached(MeshRenderableProxy& proxy) {
+    if (!engine_) {
+        return;
+    }
+
+    destroyMeshRenderableProxyResources(*engine_, nullptr, proxy, false);
 }
 
 std::uint64_t MeshRenderableFactory::meshAssetSignature(std::uint64_t hash, const MeshAsset& mesh) {

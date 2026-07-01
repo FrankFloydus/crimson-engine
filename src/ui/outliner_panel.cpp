@@ -286,6 +286,7 @@ void OutlinerPanel::drawContent(UIContext& context) {
         const bool open = ImGui::TreeNodeEx("##TreeNode", treeFlags);
         const ImVec2 rowMin = ImGui::GetItemRectMin();
         const ImVec2 rowMax = ImGui::GetItemRectMax();
+        const bool rowVisible = ImGui::IsRectVisible(rowMin, rowMax);
         const bool rowLeftClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen();
         const bool rowRightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
         ImGui::OpenPopupOnItemClick("EntityContext", ImGuiPopupFlags_MouseButtonRight);
@@ -293,56 +294,58 @@ void OutlinerPanel::drawContent(UIContext& context) {
             handleSelection(record);
         }
 
-        const ImTextureID icon = iconFor(context.icons, record.kind);
-        const float rowHeight = std::max(rowMax.y - rowMin.y, ImGui::GetTextLineHeight());
-        const float contentX = rowMin.x + ImGui::GetTreeNodeToLabelSpacing();
-        float textX = contentX;
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        const ImU32 guideColor = ImGui::GetColorU32(ImGuiCol_Border, 0.75f);
-        drawHierarchyGuides(drawList, rowMin, rowMax, contentX, record.depth, kOutlinerTreeIndent, guideColor);
-        if (icon != ImTextureID_Invalid) {
-            const ImVec2 iconMin{
-                    contentX,
-                    rowMin.y + std::max((rowHeight - kOutlinerIconSize) * 0.5f, 0.0f)};
-            const ImVec2 iconMax{iconMin.x + kOutlinerIconSize, iconMin.y + kOutlinerIconSize};
-            drawList->AddImage(icon, iconMin, iconMax);
-            textX += kOutlinerIconSize + kOutlinerIconTextGap;
-        }
-        const ImVec2 textPos{
-                textX,
-                rowMin.y + std::max((rowHeight - ImGui::GetTextLineHeight()) * 0.5f, 0.0f)};
-        float statusRight = rowMax.x - kOutlinerRowLeftPadding;
-        auto drawStatusIcon = [&](ImTextureID statusIcon) {
-            if (statusIcon == ImTextureID_Invalid) {
-                return;
+        if (rowVisible) {
+            const ImTextureID icon = iconFor(context.icons, record.kind);
+            const float rowHeight = std::max(rowMax.y - rowMin.y, ImGui::GetTextLineHeight());
+            const float contentX = rowMin.x + ImGui::GetTreeNodeToLabelSpacing();
+            float textX = contentX;
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            const ImU32 guideColor = ImGui::GetColorU32(ImGuiCol_Border, 0.75f);
+            drawHierarchyGuides(drawList, rowMin, rowMax, contentX, record.depth, kOutlinerTreeIndent, guideColor);
+            if (icon != ImTextureID_Invalid) {
+                const ImVec2 iconMin{
+                        contentX,
+                        rowMin.y + std::max((rowHeight - kOutlinerIconSize) * 0.5f, 0.0f)};
+                const ImVec2 iconMax{iconMin.x + kOutlinerIconSize, iconMin.y + kOutlinerIconSize};
+                drawList->AddImage(icon, iconMin, iconMax);
+                textX += kOutlinerIconSize + kOutlinerIconTextGap;
             }
-            const ImVec2 iconMax{
-                    statusRight,
-                    rowMin.y + std::max((rowHeight + kOutlinerStatusIconSize) * 0.5f, kOutlinerStatusIconSize)};
-            const ImVec2 iconMin{
-                    iconMax.x - kOutlinerStatusIconSize,
-                    iconMax.y - kOutlinerStatusIconSize};
-            drawList->AddImage(statusIcon, iconMin, iconMax);
-            statusRight = iconMin.x - kOutlinerIconTextGap;
-        };
-        if (!record.effectivelyVisible) {
-            drawStatusIcon(context.icons.hide);
+            const ImVec2 textPos{
+                    textX,
+                    rowMin.y + std::max((rowHeight - ImGui::GetTextLineHeight()) * 0.5f, 0.0f)};
+            float statusRight = rowMax.x - kOutlinerRowLeftPadding;
+            auto drawStatusIcon = [&](ImTextureID statusIcon) {
+                if (statusIcon == ImTextureID_Invalid) {
+                    return;
+                }
+                const ImVec2 iconMax{
+                        statusRight,
+                        rowMin.y + std::max((rowHeight + kOutlinerStatusIconSize) * 0.5f, kOutlinerStatusIconSize)};
+                const ImVec2 iconMin{
+                        iconMax.x - kOutlinerStatusIconSize,
+                        iconMax.y - kOutlinerStatusIconSize};
+                drawList->AddImage(statusIcon, iconMin, iconMax);
+                statusRight = iconMin.x - kOutlinerIconTextGap;
+            };
+            if (!record.effectivelyVisible) {
+                drawStatusIcon(context.icons.hide);
+            }
+            if (record.effectivelyLocked) {
+                drawStatusIcon(context.icons.lock);
+            }
+            const ImVec4 textClip{
+                    textX,
+                    rowMin.y,
+                    std::max(textX, statusRight - kOutlinerIconTextGap),
+                    rowMax.y};
+            drawOutlinerText(
+                    drawList,
+                    textPos,
+                    ImGui::GetColorU32(ImGuiCol_Text),
+                    record.name,
+                    subdued,
+                    textClip);
         }
-        if (record.effectivelyLocked) {
-            drawStatusIcon(context.icons.lock);
-        }
-        const ImVec4 textClip{
-                textX,
-                rowMin.y,
-                std::max(textX, statusRight - kOutlinerIconTextGap),
-                rowMax.y};
-        drawOutlinerText(
-                drawList,
-                textPos,
-                ImGui::GetColorU32(ImGuiCol_Text),
-                record.name,
-                subdued,
-                textClip);
 
         if (rowRightClicked) {
             if (!record.selected) {

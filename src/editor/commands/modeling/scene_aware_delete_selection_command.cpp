@@ -200,12 +200,7 @@ private:
     }
 
     ModelingCommandResult destroySceneAwareDeleteRoots() {
-        bool changed = false;
-        for (const EntityId root : state_.currentRoots) {
-            if (scene_.exists(root)) {
-                changed = scene_.destroyEntity(root) || changed;
-            }
-        }
+        const bool changed = scene_.destroyEntities(state_.currentRoots);
         state_.currentRoots.clear();
         invalidateSelectionOverlayCaches();
         return {.ok = true, .changed = changed};

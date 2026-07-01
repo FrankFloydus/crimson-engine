@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace quader {
 
@@ -61,14 +62,22 @@ public:
             std::uint64_t materialRevision);
     void remove(EntityId entityId);
     void removeExcept(const std::unordered_set<EntityId>& liveMeshEntities);
+    void drainRetiredDestroyQueue(std::size_t maxProxyCount);
+
+    std::size_t retiredProxyCount() const {
+        return retiredMeshProxies_.size();
+    }
 
     static std::uint64_t meshAssetSignature(std::uint64_t hash, const MeshAsset& mesh);
 
 private:
+    void retireProxy(MeshRenderableProxy&& proxy);
+
     MeshRenderableFactory* factory_ = nullptr;
     std::unordered_map<EntityId, MeshRenderableProxy> renderedMeshProxies_;
     std::unordered_map<EntityId, MeshRenderableProxy> shadedMeshProxies_;
     std::unordered_map<EntityId, MeshRenderableProxy> overlayDepthMeshProxies_;
+    std::vector<MeshRenderableProxy> retiredMeshProxies_;
 };
 
 } // namespace quader

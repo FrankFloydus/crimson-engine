@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -44,11 +45,13 @@ public:
             if (transform == nullptr) {
                 continue;
             }
+            const std::size_t editIndex = edits_.size();
             edits_.push_back(DocumentTransformEdit{
                     .entity = entity,
                     .before = *transform,
                     .after = *transform,
             });
+            editIndexByEntity_.emplace(entity, editIndex);
         }
         active_ = true;
     }
@@ -66,6 +69,7 @@ public:
         : scene_(other.scene_)
         , label_(std::move(other.label_))
         , edits_(std::move(other.edits_))
+        , editIndexByEntity_(std::move(other.editIndexByEntity_))
         , active_(other.active_) {
         other.active_ = false;
     }
@@ -180,15 +184,17 @@ public:
 
 private:
     DocumentTransformEdit* editFor(EntityId entity) {
-        auto it = std::find_if(edits_.begin(), edits_.end(), [entity](const DocumentTransformEdit& edit) {
-            return edit.entity == entity;
-        });
-        return it == edits_.end() ? nullptr : &(*it);
+        const auto it = editIndexByEntity_.find(entity);
+        if (it == editIndexByEntity_.end() || it->second >= edits_.size()) {
+            return nullptr;
+        }
+        return &edits_[it->second];
     }
 
     SceneDocument& scene_;
     std::string label_;
     std::vector<DocumentTransformEdit> edits_;
+    std::unordered_map<EntityId, std::size_t> editIndexByEntity_;
     bool active_ = false;
 };
 

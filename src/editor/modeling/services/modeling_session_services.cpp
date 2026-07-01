@@ -330,6 +330,11 @@ const std::vector<quader_editor_core::PickObjectFaceGeometry>& ModelingSelection
 
     std::vector<ModelingPickFaceGeometryCacheEntry> previousEntries = std::move(pickingCache_.faceGeometryEntries);
     std::vector<quader_editor_core::PickObjectFaceGeometry> previousGeometry = std::move(pickingCache_.faceGeometry);
+    std::unordered_map<int, std::size_t> previousEntryByObjectId;
+    previousEntryByObjectId.reserve(previousEntries.size());
+    for (std::size_t index = 0; index < previousEntries.size(); ++index) {
+        previousEntryByObjectId.emplace(previousEntries[index].objectId, index);
+    }
     std::vector<ModelingPickFaceGeometryCacheEntry> nextEntries;
     std::vector<quader_editor_core::PickObjectFaceGeometry> nextGeometry;
     nextEntries.reserve(objects.size());
@@ -337,17 +342,11 @@ const std::vector<quader_editor_core::PickObjectFaceGeometry>& ModelingSelection
 
     for (const quader_editor_core::PolygonObject& object : objects) {
         const std::uint64_t signature = PickingCacheProjection::objectFaceGeometrySignature(object, pickOptions);
-        auto reusable = previousEntries.end();
-        for (auto it = previousEntries.begin(); it != previousEntries.end(); ++it) {
-            if (it->objectId == object.id && it->geometrySignature == signature) {
-                reusable = it;
-                break;
-            }
-        }
-        if (reusable != previousEntries.end()) {
-            const std::size_t index = static_cast<std::size_t>(std::distance(previousEntries.begin(), reusable));
+        const auto reusable = previousEntryByObjectId.find(object.id);
+        if (reusable != previousEntryByObjectId.end() &&
+                previousEntries[reusable->second].geometrySignature == signature) {
+            const std::size_t index = reusable->second;
             nextGeometry.push_back(std::move(previousGeometry[index]));
-            reusable->objectId = -1;
         } else {
             nextGeometry.push_back({
                     object.id,
@@ -764,11 +763,29 @@ std::uint64_t SceneModelingSyncService::syncedModelingContentRevision() const {
 
 void SceneModelingSyncService::invalidateSceneObjects() {
     sceneObjectsSyncValid_ = false;
+    projectedMeshSignaturesByObject_.clear();
 }
 
 void SceneModelingSyncService::markSceneObjectsSynced(std::uint64_t contentRevision) {
     syncedModelingContentRevision_ = contentRevision;
     sceneObjectsSyncValid_ = true;
+}
+
+void SceneModelingSyncService::rememberProjectedMeshSignature(int modelingObjectId, std::uint64_t signature) {
+    projectedMeshSignaturesByObject_[modelingObjectId] = signature;
+}
+
+void SceneModelingSyncService::forgetProjectedMeshSignature(int modelingObjectId) {
+    projectedMeshSignaturesByObject_.erase(modelingObjectId);
+}
+
+bool SceneModelingSyncService::projectedMeshSignatureKnown(int modelingObjectId) const {
+    return projectedMeshSignaturesByObject_.contains(modelingObjectId);
+}
+
+bool SceneModelingSyncService::projectedMeshSignatureMatches(int modelingObjectId, std::uint64_t signature) const {
+    const auto found = projectedMeshSignaturesByObject_.find(modelingObjectId);
+    return found != projectedMeshSignaturesByObject_.end() && found->second == signature;
 }
 
 bool SceneModelingSyncService::sceneObjectsSyncedForCurrentModelingContent(
@@ -1003,6 +1020,11 @@ const quader_editor_core::SelectionOverlayFrame& ModelingOverlayService::selecti
     }
 
     std::vector<OverlayBaseObjectCacheEntry> previousEntries = std::move(overlayBaseCache_.objectEntries);
+    std::unordered_map<int, std::size_t> previousEntryByObjectId;
+    previousEntryByObjectId.reserve(previousEntries.size());
+    for (std::size_t index = 0; index < previousEntries.size(); ++index) {
+        previousEntryByObjectId.emplace(previousEntries[index].objectId, index);
+    }
     OverlayBaseCache next;
     next.valid = true;
     next.contentRevision = contentRevision;
@@ -1013,22 +1035,15 @@ const quader_editor_core::SelectionOverlayFrame& ModelingOverlayService::selecti
     const quader_editor_core::SelectionHoverState emptyHover;
     for (const quader_editor_core::PolygonObject& object : session.objects()) {
         const std::uint64_t signature = PickingCacheProjection::objectFaceGeometrySignature(object);
-        auto reusable = previousEntries.end();
-        for (auto it = previousEntries.begin(); it != previousEntries.end(); ++it) {
-            if (it->objectId == object.id &&
-                    it->geometrySignature == signature &&
-                    it->selectionMode == selectionMode &&
-                    it->selected == object.selected &&
-                    ModelingSelectionService::selectionMatches(it->selection, object.selection)) {
-                reusable = it;
-                break;
-            }
-        }
+        const auto reusable = previousEntryByObjectId.find(object.id);
 
         OverlayBaseObjectCacheEntry entry;
-        if (reusable != previousEntries.end()) {
-            entry = std::move(*reusable);
-            reusable->objectId = -1;
+        if (reusable != previousEntryByObjectId.end() &&
+                previousEntries[reusable->second].geometrySignature == signature &&
+                previousEntries[reusable->second].selectionMode == selectionMode &&
+                previousEntries[reusable->second].selected == object.selected &&
+                ModelingSelectionService::selectionMatches(previousEntries[reusable->second].selection, object.selection)) {
+            entry = std::move(previousEntries[reusable->second]);
         } else {
             entry.objectId = object.id;
             entry.geometrySignature = signature;

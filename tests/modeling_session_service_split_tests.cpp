@@ -583,6 +583,8 @@ TEST(ModelingSessionServiceSplitTests, GroupDragHierarchyDuplicatePolicyLivesInF
     const std::string facade = readSourceFile("src/editor/modeling/services/modeling_session_service.cpp");
     const std::string service = readSourceFile("src/editor/modeling/services/modeling_hierarchy_duplicate_service.cpp");
     const std::string documentHelpers = readSourceFile("src/editor/commands/document/document_command_scene_helpers.hpp");
+    const std::string duplicateCommand = readSourceFile("src/editor/commands/document/duplicate_selected_hierarchy_command.hpp");
+    const std::string namingHeader = readSourceFile("src/scene/scene_entity_naming.hpp");
     const std::string cmake = readSourceFile("CMakeLists.txt");
 
     EXPECT_NE(cmake.find("src/editor/modeling/services/modeling_hierarchy_duplicate_service.cpp"), std::string::npos);
@@ -595,6 +597,10 @@ TEST(ModelingSessionServiceSplitTests, GroupDragHierarchyDuplicatePolicyLivesInF
     EXPECT_EQ(service.find("copyCommonEntityState("), std::string::npos);
     EXPECT_EQ(service.find("cloneHierarchyEntity("), std::string::npos);
     EXPECT_NE(documentHelpers.find("documentCommandDuplicateEntitySnapshotTree("), std::string::npos);
+    EXPECT_NE(documentHelpers.find("SceneEntityNameAllocator* nameAllocator"), std::string::npos);
+    EXPECT_NE(duplicateCommand.find("SceneEntityNameAllocator nameAllocator(scene())"), std::string::npos);
+    EXPECT_NE(duplicateCommand.find("&nameAllocator"), std::string::npos);
+    EXPECT_NE(namingHeader.find("nextIndexByBase_"), std::string::npos);
 }
 
 TEST(ModelingSessionServiceSplitTests, SceneAwareDeletePolicyLivesInFocusedCommand) {
@@ -614,6 +620,8 @@ TEST(ModelingSessionServiceSplitTests, SceneAwareDeletePolicyLivesInFocusedComma
     EXPECT_EQ(facade.find("undoSceneAwareDelete"), std::string::npos);
     EXPECT_NE(commandHeader.find("entityForModelingObject"), std::string::npos);
     EXPECT_EQ(command.find("for (const EntityId entity : scene.entities())"), std::string::npos);
+    EXPECT_NE(command.find("scene_.destroyEntities(state_.currentRoots)"), std::string::npos);
+    EXPECT_EQ(command.find("scene_.destroyEntity(root)"), std::string::npos);
     EXPECT_NE(command.find("runtime.entityForModelingObject(snapshot.modelingObject->objectId)"), std::string::npos);
     EXPECT_NE(command.find("struct SceneAwareDeleteState"), std::string::npos);
     EXPECT_NE(command.find("class SceneAwareDeleteSelectionCommand"), std::string::npos);

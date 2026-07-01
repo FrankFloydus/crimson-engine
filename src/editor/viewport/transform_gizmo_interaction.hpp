@@ -54,6 +54,7 @@ private:
     std::optional<PendingGizmoDrag> pendingDrag_;
     quader_editor_core::TransformAxis activeAxis_ = quader_editor_core::TransformAxis::none;
     quader_editor_core::TransformAxis hoverAxis_ = quader_editor_core::TransformAxis::none;
+    quader::QVec3 activeDragPivot_ = {};
     quader::QVec3 activeWorldDirection_ = {};
     std::optional<quader::QVec3> rotationIndicatorStartDirection_;
     std::optional<quader_editor_core::TransformGizmoFrame> currentFrame_;

@@ -108,6 +108,7 @@ private:
         QDR_PROFILE_FUNCTION();
         duplicateSnapshots_.clear();
         duplicateSnapshots_.reserve(sourceSnapshots_.size());
+        SceneEntityNameAllocator nameAllocator(scene());
         for (const DocumentEntitySnapshot& snapshot : sourceSnapshots_) {
             QDR_PROFILE_SCOPE("Duplicate snapshot tree");
             const EntityId parent = snapshot.originalParent != InvalidEntityId && scene().exists(snapshot.originalParent)
@@ -118,7 +119,8 @@ private:
                     snapshot,
                     parent,
                     false,
-                    existingClonesBySource_.empty() ? nullptr : &existingClonesBySource_);
+                    existingClonesBySource_.empty() ? nullptr : &existingClonesBySource_,
+                    &nameAllocator);
             if (duplicate == InvalidEntityId) {
                 return documentCommandInvalidRequestResult("Selected hierarchy could not be duplicated");
             }

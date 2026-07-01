@@ -336,6 +336,29 @@ ModelingTransformAxis fromRuntime(quader_editor_core::TransformAxis axis) {
     return ModelingTransformAxis::None;
 }
 
+bool transformDragAxisSupportsVertexSnap(quader_editor_core::TransformAxis axis) {
+    switch (axis) {
+    case quader_editor_core::TransformAxis::x:
+    case quader_editor_core::TransformAxis::y:
+    case quader_editor_core::TransformAxis::z:
+        return true;
+    case quader_editor_core::TransformAxis::xy:
+    case quader_editor_core::TransformAxis::xz:
+    case quader_editor_core::TransformAxis::yz:
+    case quader_editor_core::TransformAxis::all:
+    case quader_editor_core::TransformAxis::none:
+        return false;
+    }
+    return false;
+}
+
+bool transformDragCanUseVertexSnap(const quader_editor_core::TransformDragState& drag) {
+    return drag.active &&
+            drag.tool == quader_editor_core::ViewportInteractionTool::move &&
+            drag.move.active &&
+            transformDragAxisSupportsVertexSnap(drag.axis);
+}
+
 quader_editor_core::ViewportInteractionTool toRuntime(ModelingTransformTool tool) {
     switch (tool) {
     case ModelingTransformTool::Move:
@@ -1505,12 +1528,16 @@ public:
 
         historyBridge_.recordOperation(command, result.command);
 
-        const ModelingCommandExecutor::SyncPlan syncPlan = commandExecutor_.operationSyncPlan(
+        ModelingCommandExecutor::SyncPlan syncPlan = commandExecutor_.operationSyncPlan(
                 phase,
                 previewBefore,
                 result,
                 contentBefore,
                 session_.state().content_revision);
+        if (runtimeOperation == quader_editor_core::EditorOperationId::duplicate_meshes &&
+                phase == quader_editor_core::EditorOperationCommandPhase::execute) {
+            syncPlan.forceMeshSync = false;
+        }
         if (syncPlan.invalidateOverlay) {
             invalidateSelectionOverlayCaches();
         }
@@ -3051,6 +3078,7 @@ private:
 
     ModelingTransformDragPreview applyTransformDragPreview(const ModelingTransformDragUpdateRequest& request) {
         QDR_PROFILE_FUNCTION();
+        const quader_editor_core::TransformDragState dragBeforeUpdate = runtime_.transform_drag_state();
         quader_editor_core::TransformDragPreviewInput input;
         input.camera = toRuntime(request.camera);
         input.screen_position = toRuntime(request.screenPosition);
@@ -3058,7 +3086,7 @@ private:
         input.grid_size = request.gridSize;
         input.grid_enabled = request.gridSnapEnabled;
         input.precision = request.precision;
-        if (request.vertexSnapRadius > 0.0) {
+        if (request.vertexSnapRadius > 0.0 && transformDragCanUseVertexSnap(dragBeforeUpdate)) {
             QDR_PROFILE_SCOPE("Modeling transform drag build snap caches");
             input.vertex_snap_enabled = true;
             input.vertex_snap_radius = request.vertexSnapRadius;

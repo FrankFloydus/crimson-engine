@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <random>
+#include <unordered_set>
 #include <string_view>
 #include <utility>
 
@@ -135,6 +136,8 @@ bool SceneDocument::destroyEntity(EntityId id) {
         return false;
     }
 
+    const bool activeDestroyed =
+            std::find(toDestroy.begin(), toDestroy.end(), activeSelection_) != toDestroy.end();
     for (auto it = toDestroy.rbegin(); it != toDestroy.rend(); ++it) {
         const EntityId entityId = *it;
         const entt::entity entity = requireEntity(entityId);
@@ -157,7 +160,63 @@ bool SceneDocument::destroyEntity(EntityId id) {
         idsByEntity_.erase(entityKey(entity));
     }
 
-    activeSelection_ = firstSelectedEntity();
+    if (activeDestroyed || !isSelected(activeSelection_)) {
+        activeSelection_ = firstSelectedEntity();
+    }
+    markDirty();
+    return true;
+}
+
+bool SceneDocument::destroyEntities(std::span<const EntityId> ids) {
+    std::unordered_set<EntityId> destroySet;
+    for (const EntityId id : ids) {
+        if (isSceneRoot(id)) {
+            continue;
+        }
+        const std::vector<EntityId> descendantsToDestroy = descendants(id, true);
+        destroySet.insert(descendantsToDestroy.begin(), descendantsToDestroy.end());
+    }
+    if (destroySet.empty()) {
+        return false;
+    }
+
+    std::vector<EntityId> toDestroy;
+    toDestroy.reserve(destroySet.size());
+    for (const EntityId entityId : entityTreeOrder()) {
+        if (destroySet.contains(entityId)) {
+            toDestroy.push_back(entityId);
+        }
+    }
+    if (toDestroy.empty()) {
+        return false;
+    }
+
+    const bool activeDestroyed = destroySet.contains(activeSelection_);
+    for (auto it = toDestroy.rbegin(); it != toDestroy.rend(); ++it) {
+        const EntityId entityId = *it;
+        const entt::entity entity = requireEntity(entityId);
+        if (entity == entt::null) {
+            continue;
+        }
+        if (HierarchyComponent* component = mutableHierarchy(entityId)) {
+            if (HierarchyComponent* parentHierarchy = mutableHierarchy(component->parent)) {
+                removeChild(parentHierarchy->children, entityId);
+            }
+        }
+        if (const EditorObjectIdentityComponent* identity = editorObjectIdentity(entityId)) {
+            entityByEditorObjectId_.erase(identity->id);
+        }
+        if (const EntityUuidComponent* identity = entityUuid(entityId)) {
+            entityByUuid_.erase(identity->uuid);
+        }
+        registry_.destroy(entity);
+        entities_.erase(entityId);
+        idsByEntity_.erase(entityKey(entity));
+    }
+
+    if (activeDestroyed || !isSelected(activeSelection_)) {
+        activeSelection_ = firstSelectedEntity();
+    }
     markDirty();
     return true;
 }

@@ -91,6 +91,7 @@ find_package(spdlog CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
 find_package(stduuid CONFIG REQUIRED)
+find_package(Taskflow CONFIG REQUIRED)
 
 if(QUADER_BUILD_TESTS)
     enable_testing()
@@ -202,7 +203,9 @@ quader_enable_common_pch(quader_core)
 target_include_directories(quader_core
     PUBLIC src
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
-target_link_libraries(quader_core PUBLIC spdlog::spdlog quader_modeling quader_qdr_shared_io PRIVATE stduuid quader_modeling_profile)
+target_link_libraries(quader_core
+    PUBLIC spdlog::spdlog quader_modeling quader_qdr_shared_io
+    PRIVATE stduuid Taskflow::Taskflow quader_modeling_profile)
 target_compile_definitions(quader_core
     PUBLIC
         GLM_ENABLE_EXPERIMENTAL)
@@ -529,6 +532,7 @@ if(QUADER_BUILD_TESTS)
     add_executable(quader_tests
         tests/app_frame_clock_tests.cpp
         tests/core_tests.cpp
+        tests/local_stress_tests.cpp
         tests/localization_tests.cpp
         tests/math_types_tests.cpp
         tests/qstr_tests.cpp

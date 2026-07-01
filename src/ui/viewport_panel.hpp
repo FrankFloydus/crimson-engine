@@ -129,10 +129,11 @@ private:
             const AssetRegistry& assets,
             const UIContext& uiContext,
             ImVec2 itemMin,
-            ImVec2 itemSize) const;
+            ImVec2 itemSize);
     void refreshCachedSelectionOverlayFrame(const SceneDocument& document,
             const AssetRegistry& assets,
             ModelingSessionService& modeling);
+    [[nodiscard]] bool selectionOverlaySuppressedForInteraction() const;
     ViewportWorkspaceService& workspace();
     const ViewportWorkspaceService& workspace() const;
     Pane& pane(ViewportPaneId paneId);
@@ -169,6 +170,14 @@ private:
     bool deleteObjectsPopupPositionPending_ = false;
     ImVec2 deleteObjectsPopupPosition_ = {};
     bool lastFlyNavigationActive_ = false;
+    const SceneDocument* viewportInfoCachedDocument_ = nullptr;
+    const AssetRegistry* viewportInfoCachedAssets_ = nullptr;
+    std::uint64_t viewportInfoCachedSceneRevision_ = 0;
+    std::uint64_t viewportInfoCachedAssetRevision_ = 0;
+    std::uint64_t viewportInfoCachedObjects_ = 0;
+    std::uint64_t viewportInfoCachedPrimitives_ = 0;
+    std::uint64_t viewportInfoCachedDrawCalls_ = 0;
+    bool viewportInfoSceneStatsValid_ = false;
     bool shutdownComplete_ = false;
 };
 
