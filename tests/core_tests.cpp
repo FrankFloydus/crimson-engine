@@ -1324,6 +1324,12 @@ TEST(OverlayMaterialTests, ImGuiMaterialCanCompositePremultipliedDisplayTextures
     EXPECT_NE(source.find("mix(straightRgb, premultipliedRgb, premultipliedAlpha)"), std::string::npos);
     EXPECT_NE(renderer.find("TextureSampleColorSpace::DisplaySrgbPremultipliedAlpha"), std::string::npos);
     EXPECT_NE(renderer.find("materialInstance->setParameter(\"premultipliedAlpha\", premultipliedAlpha)"), std::string::npos);
+    EXPECT_NE(renderer.find("clearOptions.discard = false"), std::string::npos);
+    EXPECT_NE(renderer.find("renderer.setClearOptions(clearOptions)"), std::string::npos);
+    EXPECT_NE(renderer.find("framebufferWidthInt"), std::string::npos);
+    EXPECT_NE(renderer.find("std::clamp(\n                    static_cast<int>(std::floor(clipMin.x))"), std::string::npos);
+    EXPECT_NE(renderer.find(".scissorBottom = static_cast<std::uint32_t>(framebufferHeightInt - scissorBottom)"), std::string::npos);
+    EXPECT_NE(renderer.find("materialInstance->unsetScissor();"), std::string::npos);
 }
 
 TEST(ViewportOverlayPolicyTests, MatchesNativeLayerDrawOrder) {
@@ -1867,6 +1873,7 @@ TEST(RenderSystemTests, ShadedViewportUsesClearColorWithoutSkybox) {
     const std::string source = readSourceFile("src/render/render_system.cpp");
 
     EXPECT_NE(source.find("renderer_->setClearOptions(clear)"), std::string::npos);
+    EXPECT_NE(source.find("clear.discard = false"), std::string::npos);
     EXPECT_NE(source.find("clear.clearColor = {environment.clearColor.x"), std::string::npos);
     EXPECT_EQ(source.find("scene_->setSkybox(skybox_)"), std::string::npos);
     EXPECT_EQ(source.find("Skybox::Builder()"), std::string::npos);
@@ -1913,6 +1920,8 @@ TEST(RenderSystemTests, InitializeUnwindsPartialFilamentStateOnFailure) {
     EXPECT_NE(source.find("if (!scene_)"), std::string::npos);
     EXPECT_NE(source.find("if (!materialLibrary_.initialize(*engine_, executableDir))"), std::string::npos);
     EXPECT_NE(source.find("return beginFrameWithSwapChain(swapChain_)"),
+            std::string::npos);
+    EXPECT_NE(source.find("if (!renderer_->beginFrame(swapChain))"),
             std::string::npos);
 }
 
@@ -2320,15 +2329,23 @@ TEST(ViewportRendererTests, PresentsSceneAndOverlayViewportTexturesThroughUiEnco
     const std::string gridSource = readSourceFile("src/render/viewport_grid_renderer.cpp");
 
     EXPECT_NE(source.find(".format(Texture::InternalFormat::RGBA8)"), std::string::npos);
+    EXPECT_NE(source.find("kViewportRenderTargetCapacityStep = 128u"), std::string::npos);
+    EXPECT_NE(source.find("viewportRenderTargetCapacityForSize"), std::string::npos);
+    EXPECT_NE(source.find("view->setViewport({0, 0, viewportWidth_, viewportHeight_})"), std::string::npos);
     EXPECT_NE(source.find("textureRegistry_->registerTexture(creationGuard.colorTexture, sampleColorSpace_)"), std::string::npos);
     EXPECT_NE(rendererHeader.find("RenderTextureHandle overlayTextureHandle() const"), std::string::npos);
     EXPECT_NE(rendererHeader.find("ViewportRenderTarget overlayRenderTarget_"), std::string::npos);
+    EXPECT_NE(rendererHeader.find("float textureMaxU() const"), std::string::npos);
+    EXPECT_NE(rendererHeader.find("float textureMaxV() const"), std::string::npos);
     EXPECT_NE(rendererSource.find("renderTarget_.resize(width_, height_, view_, TextureSampleColorSpace::LinearSrgb)"), std::string::npos);
+    EXPECT_NE(rendererSource.find("static_cast<float>(width_) / static_cast<float>(std::max(1u, renderTarget_.width()))"), std::string::npos);
     EXPECT_NE(rendererSource.find("TextureSampleColorSpace::DisplaySrgbPremultipliedAlpha"), std::string::npos);
     EXPECT_NE(coordinatorSource.find("overlayClear.clear = overlayUsesSeparateTarget"), std::string::npos);
     EXPECT_NE(coordinatorSource.find("overlayClear.clearColor = {0.0f, 0.0f, 0.0f, 0.0f}"), std::string::npos);
     EXPECT_NE(coordinatorSource.find("overlayVisibleLayerMask() == 0u && !overlayUsesSeparateTarget"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("paneState.renderer.overlayTextureHandle()"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("paneState.renderer.textureMaxU()"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("paneState.renderer.textureMaxV()"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("ImGui::GetWindowDrawList()->AddImage("), std::string::npos);
     EXPECT_NE(gridSource.find("settings.color(ViewportColorSettingId::GridMinor)"), std::string::npos);
     EXPECT_NE(gridSource.find("settings.floatValue(ViewportFloatSettingId::GridMinorLineSize)"), std::string::npos);
@@ -2405,9 +2422,9 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
     const std::size_t prepareViewports =
             appSource.find("ui_.prepareViewports(*editor_, renderBridge_, projectSession_.scene(), projectSession_.assets())");
     const std::size_t uiBeginFrame =
-            appSource.find("ui_.beginFrame(frameTiming)");
+            appSource.find("ui_.beginFrame(frameTiming, framebufferWidth, framebufferHeight)");
     const std::size_t prepareRenderData =
-            appSource.find("ui_.prepareRenderData(window_.widthPixels(), window_.heightPixels())");
+            appSource.find("ui_.prepareRenderData(framebufferWidth, framebufferHeight)");
     const std::size_t beginFrame = appSource.find("renderSystem_.beginFrame()");
     ASSERT_NE(prepareViewports, std::string::npos);
     ASSERT_NE(uiBeginFrame, std::string::npos);
@@ -2494,17 +2511,72 @@ TEST(AppLoopTests, SuspendsGpuSubmissionForNonDrawableWindowsAndIdlesBetweenFram
 
     EXPECT_NE(platformHeader.find("platformWindowCanRenderFrames"), std::string::npos);
     EXPECT_NE(platformHeader.find("[[nodiscard]] bool canRenderFrames() const"), std::string::npos);
+    EXPECT_NE(platformHeader.find("noteFramePresented(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight)"), std::string::npos);
+    EXPECT_NE(platformHeader.find("using LiveResizeFrameCallback = std::function<bool()>"), std::string::npos);
+    EXPECT_NE(platformHeader.find("scheduleLiveResizeFrameCallback"), std::string::npos);
+    EXPECT_NE(platformHeader.find("nativeLiveResizeFrameActive() const"), std::string::npos);
     EXPECT_NE(platformSource.find("SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN | SDL_WINDOW_OCCLUDED"), std::string::npos);
     EXPECT_NE(platformSource.find("pixelWidth > 0 && pixelHeight > 0"), std::string::npos);
+    EXPECT_NE(platformSource.find("GetClientRect(static_cast<HWND>(nativeChromeWindowHandle_), &clientRect)"), std::string::npos);
+    EXPECT_NE(platformSource.find("owner.nativeChromeMessageDepth_ == 0 && owner.liveResizeFrameCallbackPending_"), std::string::npos);
+    EXPECT_NE(platformSource.find("owner.scheduleLiveResizeFrameCallback()"), std::string::npos);
+    EXPECT_NE(platformSource.find("dispatchLiveResizeFrameCallback()"), std::string::npos);
+    EXPECT_NE(platformSource.find("kLiveResizeFrameMessage = WM_APP"), std::string::npos);
+    EXPECT_NE(platformSource.find("message == kLiveResizeFrameMessage"), std::string::npos);
+    EXPECT_NE(platformSource.find("message == WM_ERASEBKGND"), std::string::npos);
+    EXPECT_NE(platformSource.find("message == WM_PAINT"), std::string::npos);
+    EXPECT_NE(platformSource.find("liveResizeFramePaintScheduled_ = false"), std::string::npos);
+    EXPECT_NE(platformSource.find("BeginPaint(hwnd, &paint)"), std::string::npos);
+    EXPECT_NE(platformSource.find("EndPaint(hwnd, &paint)"), std::string::npos);
+    EXPECT_NE(platformSource.find("PostMessageW(hwnd, kLiveResizeFrameMessage"), std::string::npos);
+    EXPECT_NE(platformSource.find("nativeChromeMessageDepth_ > 0"), std::string::npos);
+    EXPECT_NE(platformSource.find("RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_NOERASE)"), std::string::npos);
+    EXPECT_EQ(platformSource.find("RDW_UPDATENOW"), std::string::npos);
+    EXPECT_EQ(platformSource.find("dispatchLiveResizeFrameCallback();\n            return;"), std::string::npos);
+    EXPECT_NE(platformSource.find("nativeLiveResizeFrameActive_ = true"), std::string::npos);
+    EXPECT_NE(platformSource.find("message == WM_SIZE && nativeMoveSizeActive_ && wParam != SIZE_MINIMIZED"), std::string::npos);
+    EXPECT_NE(platformSource.find("redrawNativeResizeFrame"), std::string::npos);
+    EXPECT_NE(platformSource.find("const bool redrawNativeResizeFrame =\n            (message != WM_SIZE || wParam != SIZE_MINIMIZED)"), std::string::npos);
+    EXPECT_EQ(platformSource.find("message == WM_SIZING ||\n                    message == WM_WINDOWPOSCHANGED"), std::string::npos);
+    EXPECT_EQ(platformSource.find("message == WM_WINDOWPOSCHANGED ||\n                    message == WM_DPICHANGED"), std::string::npos);
+    EXPECT_NE(platformSource.find("primeLiveResizeFrameCoalescing();"), std::string::npos);
+    EXPECT_NE(platformSource.find("liveResizeFramePendingWidthPixels_ = widthPixels_"), std::string::npos);
+    EXPECT_NE(platformSource.find("liveResizeFramePendingWidthPixels_ = pendingWidth"), std::string::npos);
+    EXPECT_NE(platformSource.find("liveResizeFramePendingHeightPixels_ = pendingHeight"), std::string::npos);
+    EXPECT_NE(platformSource.find("if (liveResizeFrameCallback_())"), std::string::npos);
+    EXPECT_NE(platformSource.find("noteFramePresented(pendingWidth, pendingHeight)"), std::string::npos);
+    EXPECT_EQ(platformSource.find("void PlatformWindow::primeLiveResizeFrameCoalescing() {\n    refreshPixelSize();\n    liveResizeFrameSizeValid_ = true;"), std::string::npos);
+    EXPECT_EQ(platformSource.find("nativeMoveSizeActive_ &&\n            nativeResizeActive_ &&"), std::string::npos);
+    EXPECT_EQ(platformSource.find("message == WM_MOVING"), std::string::npos);
+    EXPECT_EQ(platformSource.find("message == WM_TIMER"), std::string::npos);
+    EXPECT_EQ(platformSource.find("SetTimer("), std::string::npos);
+    EXPECT_EQ(platformSource.find("KillTimer("), std::string::npos);
     EXPECT_NE(appHeader.find("waitUntilNextFrame()"), std::string::npos);
     EXPECT_NE(appSource.find("if (window_.canRenderFrames()) {\n                renderFrame(frameTiming);"), std::string::npos);
+    EXPECT_NE(appSource.find("renderFrame(frameClock_.tick())"), std::string::npos);
+    EXPECT_NE(appSource.find("renderSystem_.beginFrame()"), std::string::npos);
+    EXPECT_NE(appSource.find("const std::uint32_t framebufferWidth = window_.widthPixels()"), std::string::npos);
+    EXPECT_NE(appSource.find("ui_.beginFrame(frameTiming, framebufferWidth, framebufferHeight)"), std::string::npos);
+    EXPECT_NE(appSource.find("ui_.prepareRenderData(framebufferWidth, framebufferHeight)"), std::string::npos);
+    EXPECT_NE(appSource.find("window_.noteFramePresented(framebufferWidth, framebufferHeight)"), std::string::npos);
+    EXPECT_NE(appSource.find("if (window_.nativeChromeMessageActive() && !window_.nativeLiveResizeFrameActive()) {\n        return false;"), std::string::npos);
+    EXPECT_NE(appSource.find("const bool frameSubmitted = renderFrame(frameClock_.tick())"), std::string::npos);
+    EXPECT_NE(appSource.find("return frameSubmitted;"), std::string::npos);
+    EXPECT_NE(appSource.find("ui_.setViewportRenderResizeSuspended(window_.chromeResizeActive() || window_.nativeChromeInteractionActive())"), std::string::npos);
+    EXPECT_NE(appSource.find("if (window_.nativeChromeInteractionActive()) {\n        return false;"), std::string::npos);
+    EXPECT_EQ(appSource.find("!window_.chromeResizeActive() && !window_.nativeChromeInteractionActive()"), std::string::npos);
+    EXPECT_NE(appSource.find("chromeActionInvalidatesCurrentFrame(*chromeAction)"), std::string::npos);
     EXPECT_NE(appSource.find("if (!window_.canRenderFrames()) {\n        renderingFrame_ = false;"), std::string::npos);
     EXPECT_NE(appSource.find("ui_.endFrameWithoutRender();"), std::string::npos);
     EXPECT_NE(appSource.find("SDL_WaitEventTimeout(nullptr, waitMs)"), std::string::npos);
+    EXPECT_NE(appSource.find("window_.nativeChromeInteractionActive()\n                            ? kActiveFrameWaitMs"), std::string::npos);
     EXPECT_NE(appSource.find("kIdleFrameWaitMs = 100"), std::string::npos);
     EXPECT_NE(appSource.find("kSuspendedWindowWaitMs = 250"), std::string::npos);
     EXPECT_NE(appSource.find("!window_.canRenderFrames())"), std::string::npos);
     EXPECT_NE(uiHeader.find("endFrameWithoutRender()"), std::string::npos);
+    EXPECT_NE(uiHeader.find("beginFrame(const FrameTiming& frameTiming, std::uint32_t framebufferWidth, std::uint32_t framebufferHeight)"), std::string::npos);
+    EXPECT_NE(uiSource.find("io.DisplaySize = {"), std::string::npos);
+    EXPECT_NE(uiSource.find("io.DisplayFramebufferScale = {1.0f, 1.0f}"), std::string::npos);
     EXPECT_NE(uiHeader.find("[[nodiscard]] bool needsContinuousRendering() const"), std::string::npos);
     EXPECT_NE(uiSource.find("relativeMouseCaptured_ ||"), std::string::npos);
     EXPECT_NE(viewportPanelHeader.find("lastFlyNavigationActive_"), std::string::npos);

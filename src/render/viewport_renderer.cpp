@@ -208,6 +208,26 @@ void ViewportRenderer::resize(std::uint32_t width, std::uint32_t height) {
     }
 }
 
+float ViewportRenderer::textureMaxU() const {
+    if (surface_ != ViewportRenderSurface::Texture) {
+        return 1.0f;
+    }
+    return std::clamp(
+            static_cast<float>(width_) / static_cast<float>(std::max(1u, renderTarget_.width())),
+            0.0f,
+            1.0f);
+}
+
+float ViewportRenderer::textureMaxV() const {
+    if (surface_ != ViewportRenderSurface::Texture) {
+        return 1.0f;
+    }
+    return std::clamp(
+            static_cast<float>(height_) / static_cast<float>(std::max(1u, renderTarget_.height())),
+            0.0f,
+            1.0f);
+}
+
 void ViewportRenderer::updateCamera(const ViewportCameraController& controller) {
     QDR_PROFILE_FUNCTION();
     const auto pose = controller.pose();

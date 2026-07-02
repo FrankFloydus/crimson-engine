@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -180,6 +181,10 @@ void ImGuiFilamentRenderer::prepare(ImDrawData* drawData, std::uint32_t framebuf
 
     const ImVec2 clipOffset = drawData->DisplayPos;
     const ImVec2 clipScale = drawData->FramebufferScale;
+    const int framebufferWidthInt = static_cast<int>(
+            std::min<std::uint32_t>(framebufferWidth, static_cast<std::uint32_t>(std::numeric_limits<int>::max())));
+    const int framebufferHeightInt = static_cast<int>(
+            std::min<std::uint32_t>(framebufferHeight, static_cast<std::uint32_t>(std::numeric_limits<int>::max())));
     const filament::TextureSampler sampler(
             filament::TextureSampler::MinFilter::LINEAR,
             filament::TextureSampler::MagFilter::LINEAR,
@@ -231,14 +236,22 @@ void ImGuiFilamentRenderer::prepare(ImDrawData* drawData, std::uint32_t framebuf
                     (command.ClipRect.z - clipOffset.x) * clipScale.x,
                     (command.ClipRect.w - clipOffset.y) * clipScale.y,
             };
-            clipMin.x = std::clamp(clipMin.x, 0.0f, static_cast<float>(framebufferWidth));
-            clipMin.y = std::clamp(clipMin.y, 0.0f, static_cast<float>(framebufferHeight));
-            clipMax.x = std::clamp(clipMax.x, 0.0f, static_cast<float>(framebufferWidth));
-            clipMax.y = std::clamp(clipMax.y, 0.0f, static_cast<float>(framebufferHeight));
-            const int scissorLeft = static_cast<int>(std::floor(clipMin.x));
-            const int scissorTop = static_cast<int>(std::floor(clipMin.y));
-            const int scissorRight = static_cast<int>(std::ceil(clipMax.x));
-            const int scissorBottom = static_cast<int>(std::ceil(clipMax.y));
+            const int scissorLeft = std::clamp(
+                    static_cast<int>(std::floor(clipMin.x)),
+                    0,
+                    framebufferWidthInt);
+            const int scissorTop = std::clamp(
+                    static_cast<int>(std::floor(clipMin.y)),
+                    0,
+                    framebufferHeightInt);
+            const int scissorRight = std::clamp(
+                    static_cast<int>(std::ceil(clipMax.x)),
+                    0,
+                    framebufferWidthInt);
+            const int scissorBottom = std::clamp(
+                    static_cast<int>(std::ceil(clipMax.y)),
+                    0,
+                    framebufferHeightInt);
             const int scissorWidth = scissorRight - scissorLeft;
             const int scissorHeight = scissorBottom - scissorTop;
             if (scissorWidth <= 0 || scissorHeight <= 0) {
@@ -275,7 +288,7 @@ void ImGuiFilamentRenderer::prepare(ImDrawData* drawData, std::uint32_t framebuf
                     .texture = texture,
                     .sampleColorSpace = textures_->sampleColorSpace(command.GetTexID()),
                     .scissorLeft = static_cast<std::uint32_t>(scissorLeft),
-                    .scissorBottom = framebufferHeight - static_cast<std::uint32_t>(scissorBottom),
+                    .scissorBottom = static_cast<std::uint32_t>(framebufferHeightInt - scissorBottom),
                     .scissorWidth = static_cast<std::uint32_t>(scissorWidth),
                     .scissorHeight = static_cast<std::uint32_t>(scissorHeight),
             });
@@ -328,6 +341,9 @@ void ImGuiFilamentRenderer::prepare(ImDrawData* drawData, std::uint32_t framebuf
             renderableManager.setGlobalBlendOrderEnabledAt(instance, primitiveIndex, true);
         }
         for (std::size_t primitiveIndex = primitives.size(); primitiveIndex < resource.primitiveCapacity; ++primitiveIndex) {
+            if (filament::MaterialInstance* materialInstance = resource.materialInstances[primitiveIndex]) {
+                materialInstance->unsetScissor();
+            }
             renderableManager.setGeometryAt(
                     instance,
                     primitiveIndex,
@@ -347,6 +363,11 @@ void ImGuiFilamentRenderer::render(filament::Renderer& renderer) {
     if (!view_) {
         return;
     }
+    filament::Renderer::ClearOptions clearOptions;
+    clearOptions.clear = true;
+    clearOptions.discard = false;
+    clearOptions.clearColor = {0.0f, 0.0f, 0.0f, 1.0f};
+    renderer.setClearOptions(clearOptions);
     if (clearView_) {
         renderer.render(clearView_);
     }

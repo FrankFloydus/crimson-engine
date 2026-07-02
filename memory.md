@@ -1806,3 +1806,69 @@ Verification:
 - `cmake --build --preset vs2026-debug --target quader_tests`
 - `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=OverlayRenderableBuilderTests.*:OverlayRenderableCacheTests.*:OverlayProxyFactoryTests.*:ViewportRenderPassCoordinatorTests.*`
 - `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportRendererTests.*`
+
+## 2026-07-01 - Native Window Shrink Resize Needs Size-Only Live Repaint
+
+Task/context: During Windows live resize, shrinking the app clipped the old larger UI frame until
+mouse-up. A prior timer/move repaint attempt made title dragging lag badly.
+
+Invariants:
+
+- `PlatformWindow` owns Win32 move/size tracking through the subclassed HWND proc. Install the
+  message hook for native-window mode too, but apply custom chrome styles only when borderless
+  chrome is enabled.
+- Live repaint is allowed for committed native client-size changes only: `WM_SIZE` and
+  `WM_DPICHANGED`. `WM_SIZING` tracks that the native move/size loop is resizing, but it must not
+  present. `WM_WINDOWPOSCHANGED` must not present; it can arrive around non-client and restore/move
+  transitions where the drawable is not stable enough for flicker-free GPU presentation.
+- Do not repaint continuously for `WM_MOVING`, and do not use a Win32 timer to force frames during
+  move/size. That reintroduces drag lag.
+- `requestLiveResizeFrame()` must coalesce against the last successfully presented client size, not
+  merely the last requested size. If Filament skips `beginFrame()`, the pending size must remain
+  eligible for a later live-resize draw instead of being swallowed until mouse-up.
+- Live-resize callbacks are success-aware (`bool` return). Size-bearing native messages schedule an
+  invalidate-only `WM_PAINT` with erase suppressed; do not use `RDW_UPDATENOW` or directly dispatch
+  the render callback from inside `WM_SIZE`/`WM_DPICHANGED`. If Filament declines `beginFrame()`,
+  restore the pending size so the repaint remains eligible instead of validating the client area and
+  dropping the frame.
+- Prime live-resize coalescing with the current client size on `WM_ENTERSIZEMOVE`; that prevents the
+  first move-only `WM_WINDOWPOSCHANGED` from repainting while still allowing the first actual size
+  change to redraw.
+- Do not force Filament `beginFrame()` during live resize. That experiment made resize sizes stick
+  unpredictably and introduced drag lag.
+- `App::renderFrame()` returns whether a Filament frame was submitted. Only set
+  `liveResizeFrameRendered_` after a true return; a skipped `beginFrame()` must not suppress the
+  next normal loop frame.
+- `App::renderFrame()` snapshots framebuffer width/height once after `refreshPixelSize()` and uses
+  that same size for ImGui frame setup, render-data preparation, and `noteFramePresented(...)`;
+  mixing separately queried sizes can create clipped UI/scissor state during rapid resize.
+- The Win32 subclass must handle `WM_ERASEBKGND` by returning handled for the GPU-backed client
+  surface. Letting `DefWindowProc` erase between live-resize frames causes whole-window flicker
+  even when Filament is successfully presenting during the drag.
+- The main swapchain and ImGui clear pass must use `discard = false`; discarded backbuffers can show
+  undefined contents when Windows live resize causes skipped frames.
+- During native whole-window live resize, suspend viewport render-target reallocations when stable
+  scene/overlay textures already exist. Keep panel splitter drags on the exact resize path and keep
+  renderer-capacity UVs so the viewport aspect ratio does not regress.
+- The ImGui dockspace must not force both sidebars to the full preferred 340 px width while the
+  window is at its 800 px minimum. Compress the per-frame sidebar minimum before the viewport or
+  sibling dock node collapses, and route panel minimums through that effective frame style.
+
+Affected owners/files:
+
+- `src/platform/platform_window.*`
+- `src/app/app.cpp`
+- `src/render/render_system.*`
+- `src/ui/ui_system.*`
+- `src/ui/viewport_panel.cpp`
+- `tests/core_tests.cpp`
+- `tests/build_guardrail_tests.cpp`
+- `tests/ui_layout_guardrail_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=AppLoopTests.SuspendsGpuSubmissionForNonDrawableWindowsAndIdlesBetweenFrames:PlatformWindowChromeTests.*:OverlayMaterialTests.ImGuiMaterialCanCompositePremultipliedDisplayTextures:ViewportRendererTests.PresentsSceneAndOverlayViewportTexturesThroughUiEncoder`
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=WindowGuardrailTests.*:UiLayoutGuardrailTests.ViewportUsesRendererCapacityUvsDuringPanelSplitterDrag`
+- `cmake --build --preset vs2026-debug --target quader`

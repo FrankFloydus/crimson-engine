@@ -40,6 +40,7 @@ std::filesystem::path executablePath(int argc, char** argv) {
  */
 struct CommandLineOptions {
     bool borderlessWindow = true;
+    quader::RendererBackend renderBackend = quader::RendererBackend::Vulkan;
 };
 
 CommandLineOptions parseCommandLine(int argc, char** argv) {
@@ -48,6 +49,12 @@ CommandLineOptions parseCommandLine(int argc, char** argv) {
         const std::string_view argument = argv[index] != nullptr ? std::string_view(argv[index]) : std::string_view();
         if (argument == "--borderless-window" || argument == "--window-borderless") {
             options.borderlessWindow = true;
+        } else if (argument == "--native-window" || argument == "--no-borderless-window") {
+            options.borderlessWindow = false;
+        } else if (argument == "--vulkan" || argument == "--render-backend=vulkan") {
+            options.renderBackend = quader::RendererBackend::Vulkan;
+        } else if (argument == "--opengl" || argument == "--render-backend=opengl") {
+            options.renderBackend = quader::RendererBackend::OpenGL;
         }
     }
     return options;
@@ -65,10 +72,12 @@ int main(int argc, char** argv) {
     if (commandLine.borderlessWindow) {
         LOG_INFO("Borderless window mode enabled");
     }
+    LOG_INFO("Render backend: {}", quader::toString(commandLine.renderBackend));
 
     try {
         auto app = std::make_unique<quader::App>();
-        if (!app->initialize(exe, {.borderlessWindow = commandLine.borderlessWindow})) {
+        if (!app->initialize(exe,
+                    {.borderlessWindow = commandLine.borderlessWindow, .renderBackend = commandLine.renderBackend})) {
             LOG_CRITICAL("Application initialization failed");
             app->shutdown();
             app.reset();

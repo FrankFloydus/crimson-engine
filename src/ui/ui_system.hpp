@@ -65,7 +65,7 @@ public:
     void shutdown();
 
     bool processEvent(const SDL_Event& event);
-    void beginFrame(const FrameTiming& frameTiming);
+    void beginFrame(const FrameTiming& frameTiming, std::uint32_t framebufferWidth, std::uint32_t framebufferHeight);
     void endFrameWithoutRender();
     void draw(QuaderEditorApi& editor,
             SceneRenderBridge& renderBridge,
@@ -100,10 +100,11 @@ private:
             QuaderEditorApi& editor,
             bool& quitRequested,
             SceneDocument& document,
-            ModelingSessionService& modeling);
+            ModelingSessionService& modeling,
+            float sidebarMinimumWidth);
     void buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize);
     void closeMenuPopupForPassThroughClick();
-    void enforceSidebarDockMinimums();
+    void enforceSidebarDockMinimums(float sidebarMinimumWidth);
     void setViewportCursorCaptured(bool captured);
     void warpCapturedCursor(QVec2 point);
     void loadIcons(filament::Engine& engine, TextureRegistry& textures, const std::filesystem::path& executableDir);

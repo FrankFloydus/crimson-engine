@@ -72,6 +72,12 @@ ViewportOverlaySelectionContext overlaySelectionContext(ModelingSelectionMode mo
     return ViewportOverlaySelectionContext::Any;
 }
 
+bool shouldDeferPaneRenderResize(const UIContext& uiContext, const ViewportRenderer& renderer) {
+    return uiContext.viewportRenderResizeSuspended &&
+            renderer.textureHandle() != InvalidRenderTextureHandle &&
+            renderer.overlayTextureHandle() != InvalidRenderTextureHandle;
+}
+
 float gridSizeForPreset(int preset) {
     return viewportGridWorldSizeForPreset(preset);
 }
@@ -1092,25 +1098,27 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
         const ImVec2 itemMin = ViewportPaneController::paneRectMin(canvasMin, available, placement.normalizedRect);
         const ImVec2 itemSize = ViewportPaneController::paneRectSize(available, placement.normalizedRect);
         const QVec2 renderSize = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
+        const std::uint32_t renderWidth = static_cast<std::uint32_t>(renderSize.x);
+        const std::uint32_t renderHeight = static_cast<std::uint32_t>(renderSize.y);
         viewportWorkspace.setPaneRenderSize(placement.paneId, renderSize);
         viewportWorkspace.setPaneVisible(placement.paneId, true);
-        if (!uiContext.viewportRenderResizeSuspended) {
-            paneState.renderer.resize(
-                    static_cast<std::uint32_t>(renderSize.x),
-                    static_cast<std::uint32_t>(renderSize.y));
+        if (!shouldDeferPaneRenderResize(uiContext, paneState.renderer)) {
+            paneState.renderer.resize(renderWidth, renderHeight);
         }
         activeRenderPanes_.push_back(placement.paneId);
 
+        const ImVec2 textureUvMin{0.0f, paneState.renderer.textureMaxV()};
+        const ImVec2 textureUvMax{paneState.renderer.textureMaxU(), 0.0f};
         ImGui::SetCursorScreenPos(itemMin);
         ImGui::PushID(static_cast<int>(viewportPaneIndex(placement.paneId)));
         ImGui::SetNextItemAllowOverlap();
-        ImGui::Image(static_cast<ImTextureID>(paneState.renderer.textureHandle()), itemSize, {0.0f, 1.0f}, {1.0f, 0.0f});
+        ImGui::Image(static_cast<ImTextureID>(paneState.renderer.textureHandle()), itemSize, textureUvMin, textureUvMax);
         ImGui::GetWindowDrawList()->AddImage(
                 static_cast<ImTextureID>(paneState.renderer.overlayTextureHandle()),
                 itemMin,
                 {itemMin.x + itemSize.x, itemMin.y + itemSize.y},
-                {0.0f, 1.0f},
-                {1.0f, 0.0f});
+                textureUvMin,
+                textureUvMax);
         DrawPane drawPane{
                 .pane = &paneState,
                 .itemMin = ImGui::GetItemRectMin(),

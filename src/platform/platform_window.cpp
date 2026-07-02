@@ -42,6 +42,7 @@ constexpr float kChromeDragRestoreThreshold = 4.0f;
 #if defined(_WIN32)
 constexpr wchar_t kDwmRegistryKey[] = L"SOFTWARE\\Microsoft\\Windows\\DWM";
 constexpr wchar_t kBorderlessChromeWindowProp[] = L"QuaderPlatformWindowChrome";
+constexpr UINT kLiveResizeFrameMessage = WM_APP + 0x51u;
 
 /**
  * Stores monitor and work-area rectangles used for native borderless maximize.
@@ -109,6 +110,10 @@ bool isNativeChromeResizeHit(SDL_HitTestResult hit) {
     default:
         return false;
     }
+}
+
+bool isNativeChromeSystemHit(SDL_HitTestResult hit) {
+    return isNativeChromeResizeHit(hit) || hit == SDL_HITTEST_DRAGGABLE;
 }
 
 std::optional<DWORD> readDwmRegistryDword(const wchar_t* valueName) {
@@ -469,8 +474,7 @@ bool PlatformWindow::create(const char* title, int width, int height, PlatformWi
 
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (options.borderless) {
-        flags |= SDL_WINDOW_BORDERLESS;
-        LOG_INFO("Creating borderless platform window");
+        LOG_INFO("Creating native-frame custom chrome platform window");
     }
 
     window_ = SDL_CreateWindow(
@@ -488,10 +492,14 @@ bool PlatformWindow::create(const char* title, int width, int height, PlatformWi
         LOG_WARN("SDL_SetWindowMinimumSize failed: {}", SDL_GetError());
     }
 
+#if defined(_WIN32)
+    installNativeChromeCursorHook();
+#endif
     refreshPixelSize();
     if (options.borderless) {
         installBorderlessChrome();
         applyNativeBorderlessChromeAdornments();
+        refreshPixelSize();
     }
     return true;
 }
@@ -499,7 +507,7 @@ bool PlatformWindow::create(const char* title, int width, int height, PlatformWi
 void PlatformWindow::destroy() {
     if (window_) {
 #if defined(_WIN32)
-        clearNativeResizeState();
+        clearNativeMoveSizeState();
 #endif
         cancelChromeInteraction();
         uninstallNativeChromeCursorHook();
@@ -534,6 +542,19 @@ void PlatformWindow::refreshPixelSize() {
         return;
     }
 
+#if defined(_WIN32)
+    if (nativeChromeWindowHandle_ != nullptr) {
+        RECT clientRect{};
+        if (GetClientRect(static_cast<HWND>(nativeChromeWindowHandle_), &clientRect)) {
+            widthPixels_ = static_cast<std::uint32_t>(
+                    std::max<LONG>(1, clientRect.right - clientRect.left));
+            heightPixels_ = static_cast<std::uint32_t>(
+                    std::max<LONG>(1, clientRect.bottom - clientRect.top));
+            return;
+        }
+    }
+#endif
+
     int w = 1;
     int h = 1;
     SDL_GetWindowSizeInPixels(window_, &w, &h);
@@ -541,7 +562,16 @@ void PlatformWindow::refreshPixelSize() {
     heightPixels_ = static_cast<std::uint32_t>(h > 0 ? h : 1);
 }
 
+void PlatformWindow::noteFramePresented(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight) {
+    liveResizeFrameSizeValid_ = true;
+    liveResizeFrameWidthPixels_ = std::max(1u, framebufferWidth);
+    liveResizeFrameHeightPixels_ = std::max(1u, framebufferHeight);
+}
+
 void PlatformWindow::refreshNativeChrome() {
+    if (!borderlessChrome_) {
+        return;
+    }
     applyNativeBorderlessChromeAdornments();
 }
 
@@ -770,8 +800,7 @@ bool PlatformWindow::processChromeEvent(const SDL_Event& event) {
         return false;
     }
 #if defined(_WIN32)
-    if (nativeChromeWindowHandle_ != nullptr &&
-            (isNativeChromeResizeHit(hit) || hit == SDL_HITTEST_DRAGGABLE)) {
+    if (nativeChromeWindowHandle_ != nullptr && isNativeChromeSystemHit(hit)) {
         return true;
     }
 #endif
@@ -801,6 +830,17 @@ bool PlatformWindow::canRenderFrames() const {
         return false;
     }
 
+#if defined(_WIN32)
+    if (nativeChromeWindowHandle_ != nullptr) {
+        RECT clientRect{};
+        if (GetClientRect(static_cast<HWND>(nativeChromeWindowHandle_), &clientRect)) {
+            const int pixelWidth = static_cast<int>(std::max<LONG>(0, clientRect.right - clientRect.left));
+            const int pixelHeight = static_cast<int>(std::max<LONG>(0, clientRect.bottom - clientRect.top));
+            return platformWindowCanRenderFrames(SDL_GetWindowFlags(window_), pixelWidth, pixelHeight);
+        }
+    }
+#endif
+
     int pixelWidth = 0;
     int pixelHeight = 0;
     SDL_GetWindowSizeInPixels(window_, &pixelWidth, &pixelHeight);
@@ -816,8 +856,41 @@ bool PlatformWindow::chromeResizeActive() const {
     return chromeInteraction_.active && chromeInteraction_.hit != SDL_HITTEST_DRAGGABLE;
 }
 
+bool PlatformWindow::nativeChromeMessageActive() const {
+#if defined(_WIN32)
+    return nativeChromeMessageDepth_ > 0;
+#else
+    return false;
+#endif
+}
+
+bool PlatformWindow::nativeLiveResizeFrameActive() const {
+#if defined(_WIN32)
+    return nativeLiveResizeFrameActive_;
+#else
+    return false;
+#endif
+}
+
+bool PlatformWindow::nativeChromeInteractionActive() const {
+#if defined(_WIN32)
+    return nativeMoveSizeActive_ || nativeChromeMessageDepth_ > 0;
+#else
+    return false;
+#endif
+}
+
 void PlatformWindow::setLiveResizeFrameCallback(LiveResizeFrameCallback callback) {
     liveResizeFrameCallback_ = std::move(callback);
+    if (!liveResizeFrameCallback_) {
+        liveResizeFrameCallbackPending_ = false;
+        liveResizeFramePendingWidthPixels_ = 0;
+        liveResizeFramePendingHeightPixels_ = 0;
+#if defined(_WIN32)
+        liveResizeFrameCallbackPosted_ = false;
+        liveResizeFramePaintScheduled_ = false;
+#endif
+    }
 }
 
 void PlatformWindow::installBorderlessChrome() {
@@ -827,6 +900,7 @@ void PlatformWindow::installBorderlessChrome() {
 
     borderlessChrome_ = true;
     installNativeChromeCursorHook();
+    applyNativeCustomChromeStyles();
 }
 
 void PlatformWindow::installNativeChromeCursorHook() {
@@ -859,6 +933,39 @@ void PlatformWindow::installNativeChromeCursorHook() {
 
     nativeChromeWindowHandle_ = hwnd;
     previousNativeChromeWindowProc_ = static_cast<std::intptr_t>(previousWindowProc);
+#endif
+}
+
+void PlatformWindow::applyNativeCustomChromeStyles() {
+#if defined(_WIN32)
+    HWND hwnd = static_cast<HWND>(nativeWindowHandle());
+    if (!hwnd) {
+        return;
+    }
+
+    const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    const LONG_PTR customChromeStyle = style |
+            WS_CAPTION |
+            WS_THICKFRAME |
+            WS_SYSMENU |
+            WS_MINIMIZEBOX |
+            WS_MAXIMIZEBOX;
+    if (customChromeStyle != style) {
+        SetLastError(ERROR_SUCCESS);
+        if (SetWindowLongPtrW(hwnd, GWL_STYLE, customChromeStyle) == 0 && GetLastError() != ERROR_SUCCESS) {
+            LOG_WARN("SetWindowLongPtrW failed while applying custom chrome window styles: {}", GetLastError());
+        }
+    }
+    if (!SetWindowPos(
+                hwnd,
+                nullptr,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED)) {
+        LOG_WARN("SetWindowPos frame refresh failed while applying custom chrome: {}", GetLastError());
+    }
 #endif
 }
 
@@ -937,6 +1044,40 @@ std::intptr_t PlatformWindow::handleNativeChromeWindowMessage(
         std::uintptr_t wParam,
         std::intptr_t lParam) {
     HWND hwnd = static_cast<HWND>(windowHandle);
+    if (message == WM_ERASEBKGND) {
+        return 1;
+    }
+    if (message == WM_PAINT) {
+        liveResizeFramePaintScheduled_ = false;
+        PAINTSTRUCT paint{};
+        BeginPaint(hwnd, &paint);
+        EndPaint(hwnd, &paint);
+        if (liveResizeFrameCallbackPending_) {
+            dispatchLiveResizeFrameCallback();
+        }
+        return 0;
+    }
+    if (message == kLiveResizeFrameMessage) {
+        liveResizeFrameCallbackPosted_ = false;
+        dispatchLiveResizeFrameCallback();
+        return 0;
+    }
+
+    struct NativeChromeMessageScope {
+        explicit NativeChromeMessageScope(PlatformWindow& owner) : owner(owner) {
+            ++owner.nativeChromeMessageDepth_;
+        }
+
+        ~NativeChromeMessageScope() {
+            owner.nativeChromeMessageDepth_ = std::max(0, owner.nativeChromeMessageDepth_ - 1);
+            if (owner.nativeChromeMessageDepth_ == 0 && owner.liveResizeFrameCallbackPending_) {
+                owner.scheduleLiveResizeFrameCallback();
+            }
+        }
+
+        PlatformWindow& owner;
+    } messageScope{*this};
+
     auto callPreviousWindowProc = [&]() -> std::intptr_t {
         if (previousNativeChromeWindowProc_ != 0) {
             return CallWindowProcW(
@@ -957,25 +1098,26 @@ std::intptr_t PlatformWindow::handleNativeChromeWindowMessage(
     }
 
     if (borderlessChrome_ && message == WM_NCCALCSIZE && wParam != 0 && lParam != 0) {
-        if (applyBorderlessChromeMaximizedClientArea(hwnd, *reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam))) {
-            return 0;
-        }
+        (void)applyBorderlessChromeMaximizedClientArea(hwnd, *reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam));
+        return 0;
     }
 
     if (borderlessChrome_ && !chromeInteraction_.active && message == WM_NCHITTEST) {
         const SDL_HitTestResult hit = nativeChromeHitTestFromScreenPoint(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
-        const LRESULT hitCode = nativeChromeHitTestCodeForHit(hit);
-        if (hitCode != HTCLIENT) {
-            return hitCode;
+        if (isNativeChromeSystemHit(hit)) {
+            return nativeChromeHitTestCodeForHit(hit);
         }
     }
 
-    if (borderlessChrome_) {
-        if (message == WM_ENTERSIZEMOVE) {
-            resetLiveResizeFrameCoalescing();
-        } else if (message == WM_SIZING) {
-            nativeResizeActive_ = true;
-        }
+    if (message == WM_ENTERSIZEMOVE) {
+        nativeMoveSizeActive_ = true;
+        nativeResizeActive_ = false;
+        primeLiveResizeFrameCoalescing();
+    } else if (message == WM_SIZING) {
+        nativeMoveSizeActive_ = true;
+        nativeResizeActive_ = true;
+    } else if (message == WM_SIZE && nativeMoveSizeActive_ && wParam != SIZE_MINIMIZED) {
+        nativeResizeActive_ = true;
     }
 
     if (borderlessChrome_ && !chromeInteraction_.active &&
@@ -991,6 +1133,10 @@ std::intptr_t PlatformWindow::handleNativeChromeWindowMessage(
                 }
             } else {
                 releaseChromeResizeCursor();
+                if (message == WM_SETCURSOR && hit == SDL_HITTEST_DRAGGABLE) {
+                    SetCursor(LoadCursor(nullptr, IDC_ARROW));
+                    return TRUE;
+                }
             }
         }
     }
@@ -1019,12 +1165,11 @@ std::intptr_t PlatformWindow::handleNativeChromeWindowMessage(
     }
 
     const bool redrawNativeResizeFrame =
-            borderlessChrome_ &&
-            (nativeResizeActive_ || IsZoomed(hwnd) != FALSE) &&
-            (message == WM_SIZE || message == WM_WINDOWPOSCHANGED || message == WM_DPICHANGED);
+            (message != WM_SIZE || wParam != SIZE_MINIMIZED) &&
+            (message == WM_SIZE ||
+                    message == WM_DPICHANGED);
     const bool clearNativeResize =
-            borderlessChrome_ &&
-            nativeResizeActive_ &&
+            nativeMoveSizeActive_ &&
             (message == WM_EXITSIZEMOVE ||
                     message == WM_CANCELMODE ||
                     message == WM_CAPTURECHANGED ||
@@ -1037,7 +1182,7 @@ std::intptr_t PlatformWindow::handleNativeChromeWindowMessage(
         requestLiveResizeFrame();
     }
     if (clearNativeResize) {
-        clearNativeResizeState();
+        clearNativeMoveSizeState();
         requestLiveResizeFrame(true);
     }
 
@@ -1057,7 +1202,8 @@ int PlatformWindow::nativeChromeResizeBorderForWindow(void* windowHandle) const 
             GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi));
 }
 
-void PlatformWindow::clearNativeResizeState() {
+void PlatformWindow::clearNativeMoveSizeState() {
+    nativeMoveSizeActive_ = false;
     nativeResizeActive_ = false;
     resetLiveResizeFrameCoalescing();
     releaseChromeResizeCursor();
@@ -1292,18 +1438,112 @@ void PlatformWindow::requestLiveResizeFrame(bool force) {
             liveResizeFrameHeightPixels_ == heightPixels_) {
         return;
     }
-    liveResizeFrameSizeValid_ = true;
-    liveResizeFrameWidthPixels_ = widthPixels_;
-    liveResizeFrameHeightPixels_ = heightPixels_;
-    if (liveResizeFrameCallback_) {
-        liveResizeFrameCallback_();
+    if (!liveResizeFrameCallback_) {
+        liveResizeFrameCallbackPending_ = false;
+        liveResizeFramePendingWidthPixels_ = 0;
+        liveResizeFramePendingHeightPixels_ = 0;
+        return;
     }
+    if (!force &&
+            liveResizeFrameCallbackPending_ &&
+            liveResizeFramePendingWidthPixels_ == widthPixels_ &&
+            liveResizeFramePendingHeightPixels_ == heightPixels_) {
+        return;
+    }
+    liveResizeFrameCallbackPending_ = true;
+    liveResizeFramePendingWidthPixels_ = widthPixels_;
+    liveResizeFramePendingHeightPixels_ = heightPixels_;
+    scheduleLiveResizeFrameCallback();
+}
+
+void PlatformWindow::scheduleLiveResizeFrameCallback() {
+    if (!liveResizeFrameCallback_ || !liveResizeFrameCallbackPending_) {
+        return;
+    }
+#if defined(_WIN32)
+    if (nativeChromeWindowHandle_ != nullptr) {
+        const HWND hwnd = static_cast<HWND>(nativeChromeWindowHandle_);
+        if (nativeChromeMessageDepth_ > 0) {
+            if (liveResizeFramePaintScheduled_) {
+                return;
+            }
+            if (RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_NOERASE)) {
+                liveResizeFramePaintScheduled_ = true;
+                return;
+            }
+            LOG_WARN("RedrawWindow failed while scheduling live resize paint frame: {}", GetLastError());
+            return;
+        }
+        if (liveResizeFrameCallbackPosted_) {
+            return;
+        }
+        if (PostMessageW(hwnd, kLiveResizeFrameMessage, 0, 0)) {
+            liveResizeFrameCallbackPosted_ = true;
+            return;
+        }
+        LOG_WARN("PostMessageW failed while scheduling live resize frame: {}", GetLastError());
+        if (nativeChromeMessageDepth_ > 0) {
+            return;
+        }
+    }
+#endif
+    dispatchLiveResizeFrameCallback();
+}
+
+void PlatformWindow::dispatchLiveResizeFrameCallback() {
+    if (!liveResizeFrameCallback_ || !liveResizeFrameCallbackPending_) {
+        return;
+    }
+    const std::uint32_t pendingWidth = liveResizeFramePendingWidthPixels_;
+    const std::uint32_t pendingHeight = liveResizeFramePendingHeightPixels_;
+    liveResizeFrameCallbackPending_ = false;
+    liveResizeFramePendingWidthPixels_ = 0;
+    liveResizeFramePendingHeightPixels_ = 0;
+    struct LiveResizeFrameDispatchScope {
+        explicit LiveResizeFrameDispatchScope(PlatformWindow& owner) : owner(owner) {
+#if defined(_WIN32)
+            owner.nativeLiveResizeFrameActive_ = true;
+#endif
+        }
+
+        ~LiveResizeFrameDispatchScope() {
+#if defined(_WIN32)
+            owner.nativeLiveResizeFrameActive_ = false;
+#endif
+        }
+
+        PlatformWindow& owner;
+    } dispatchScope{*this};
+    if (liveResizeFrameCallback_()) {
+        noteFramePresented(pendingWidth, pendingHeight);
+    } else {
+        liveResizeFrameCallbackPending_ = true;
+        liveResizeFramePendingWidthPixels_ = pendingWidth;
+        liveResizeFramePendingHeightPixels_ = pendingHeight;
+    }
+}
+
+void PlatformWindow::primeLiveResizeFrameCoalescing() {
+    refreshPixelSize();
+    liveResizeFrameCallbackPending_ = false;
+    liveResizeFramePendingWidthPixels_ = 0;
+    liveResizeFramePendingHeightPixels_ = 0;
+#if defined(_WIN32)
+    liveResizeFramePaintScheduled_ = false;
+#endif
 }
 
 void PlatformWindow::resetLiveResizeFrameCoalescing() {
     liveResizeFrameSizeValid_ = false;
     liveResizeFrameWidthPixels_ = 0;
     liveResizeFrameHeightPixels_ = 0;
+    liveResizeFrameCallbackPending_ = false;
+    liveResizeFramePendingWidthPixels_ = 0;
+    liveResizeFramePendingHeightPixels_ = 0;
+#if defined(_WIN32)
+    liveResizeFrameCallbackPosted_ = false;
+    liveResizeFramePaintScheduled_ = false;
+#endif
 }
 
 void PlatformWindow::updateChromeHoverCursor(float windowMouseX, float windowMouseY) {

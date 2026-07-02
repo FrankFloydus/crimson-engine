@@ -129,7 +129,7 @@ bool RenderSystem::initialize(void* nativeWindow, const std::filesystem::path& e
     const EnvironmentDocument& environment = config.settings.environment;
     filament::Renderer::ClearOptions clear;
     clear.clear = true;
-    clear.discard = true;
+    clear.discard = false;
     clear.clearColor = {environment.clearColor.x, environment.clearColor.y, environment.clearColor.z, environment.clearAlpha};
     renderer_->setClearOptions(clear);
 
@@ -187,7 +187,11 @@ void RenderSystem::endFrame() {
 
 bool RenderSystem::beginFrameWithSwapChain(filament::SwapChain* swapChain) {
     QDR_PROFILE_FUNCTION();
-    if (renderer_ == nullptr || swapChain == nullptr || !renderer_->beginFrame(swapChain)) {
+    if (renderer_ == nullptr || swapChain == nullptr) {
+        frameCpuActive_ = false;
+        return false;
+    }
+    if (!renderer_->beginFrame(swapChain)) {
         frameCpuActive_ = false;
         return false;
     }

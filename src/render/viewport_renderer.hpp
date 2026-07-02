@@ -71,6 +71,8 @@ public:
     RenderTextureHandle overlayTextureHandle() const { return overlayRenderTarget_.textureHandle(); }
     std::uint32_t width() const { return width_; }
     std::uint32_t height() const { return height_; }
+    float textureMaxU() const;
+    float textureMaxV() const;
 
 private:
     void updateVisibleLayers();

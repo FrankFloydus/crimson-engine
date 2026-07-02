@@ -11,9 +11,18 @@
 #include <filament/Viewport.h>
 
 #include <algorithm>
+#include <cstdint>
 
 namespace quader {
 namespace {
+
+constexpr std::uint32_t kViewportRenderTargetCapacityStep = 128u;
+
+std::uint32_t viewportRenderTargetCapacityForSize(std::uint32_t size) {
+    size = std::max(1u, size);
+    return ((size + kViewportRenderTargetCapacityStep - 1u) / kViewportRenderTargetCapacityStep) *
+            kViewportRenderTargetCapacityStep;
+}
 
 /**
  * Rolls back render-target textures and target allocation until resize records ownership.
@@ -75,25 +84,31 @@ void ViewportRenderTarget::resize(
         return;
     }
 
-    width = std::max(1u, width);
-    height = std::max(1u, height);
-    if (renderTarget_ && width == width_ && height == height_) {
+    viewportWidth_ = std::max(1u, width);
+    viewportHeight_ = std::max(1u, height);
+    const std::uint32_t capacityWidth = viewportRenderTargetCapacityForSize(viewportWidth_);
+    const std::uint32_t capacityHeight = viewportRenderTargetCapacityForSize(viewportHeight_);
+    if (renderTarget_ && capacityWidth == width_ && capacityHeight == height_) {
         if (sampleColorSpace_ != sampleColorSpace) {
             sampleColorSpace_ = sampleColorSpace;
             textureRegistry_->updateTexture(textureHandle_, colorTexture_, sampleColorSpace_);
         }
         view->setRenderTarget(renderTarget_);
-        view->setViewport({0, 0, width_, height_});
+        view->setViewport({0, 0, viewportWidth_, viewportHeight_});
         return;
     }
 
     destroyRenderResources();
-    width_ = width;
-    height_ = height;
+    width_ = capacityWidth;
+    height_ = capacityHeight;
     sampleColorSpace_ = sampleColorSpace;
 
     using Texture = filament::Texture;
-    LOG_INFO("Allocating viewport render target {}x{}", width, height);
+    LOG_INFO("Allocating viewport render target {}x{} for viewport {}x{}",
+            width_,
+            height_,
+            viewportWidth_,
+            viewportHeight_);
     RenderTargetCreationGuard creationGuard{*engine_};
     creationGuard.colorTexture = Texture::Builder()
             .width(width_)
@@ -134,8 +149,13 @@ void ViewportRenderTarget::resize(
     depthTexture_ = creationGuard.depthTexture;
     renderTarget_ = creationGuard.renderTarget;
     view->setRenderTarget(renderTarget_);
-    view->setViewport({0, 0, width_, height_});
-    LOG_INFO("Viewport render target ready {}x{} as texture handle {}", width_, height_, textureHandle_);
+    view->setViewport({0, 0, viewportWidth_, viewportHeight_});
+    LOG_INFO("Viewport render target ready {}x{} for viewport {}x{} as texture handle {}",
+            width_,
+            height_,
+            viewportWidth_,
+            viewportHeight_,
+            textureHandle_);
     creationGuard.release();
 }
 

@@ -29,6 +29,7 @@ class QuaderEditorApi;
  */
 struct AppOptions {
     bool borderlessWindow = true;
+    RendererBackend renderBackend = RendererBackend::Vulkan;
 };
 
 /**

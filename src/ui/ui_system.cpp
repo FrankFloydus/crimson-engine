@@ -53,6 +53,8 @@ constexpr float kChromeLogoSize = 18.0f;
 constexpr float kChromeLogoLeft = 16.0f;
 constexpr float kChromeMenuLeft = 48.0f;
 constexpr float kChromeMenuSpacing = 10.0f;
+constexpr float kCompressedSidebarMinWidth = 220.0f;
+constexpr float kReservedViewportDockWidth = 300.0f;
 
 ImVec4 uiColor(int red, int green, int blue, float alpha = 1.0f) {
     return {
@@ -105,6 +107,28 @@ void clampDockedWindowWidth(const char* windowName, float minimumWidth) {
         return;
     }
     clampDockLeafNodeWidth(window->DockNode, minimumWidth);
+}
+
+int visibleSidebarCount(const UIPanelManager& panels) {
+    int count = 0;
+    if (panels.isVisible(UIPanelId::Outliner)) {
+        ++count;
+    }
+    if (panels.isVisible(UIPanelId::Inspector)) {
+        ++count;
+    }
+    return count;
+}
+
+float effectiveSidebarMinimumWidth(float dockspaceWidth, const UIPanelManager& panels, float preferredMinimumWidth) {
+    const int sidebarCount = visibleSidebarCount(panels);
+    if (sidebarCount <= 0) {
+        return preferredMinimumWidth;
+    }
+
+    const float availableForSidebars = std::max(1.0f, dockspaceWidth - kReservedViewportDockWidth);
+    const float widthPerSidebar = availableForSidebars / static_cast<float>(sidebarCount);
+    return std::min(preferredMinimumWidth, std::max(kCompressedSidebarMinWidth, widthPerSidebar));
 }
 
 std::optional<UIPanelId> panelIdFromName(std::string_view name) {
@@ -344,7 +368,10 @@ bool UISystem::processEvent(const SDL_Event& event) {
     return ImGui_ImplSDL3_ProcessEvent(&event);
 }
 
-void UISystem::beginFrame(const FrameTiming& frameTiming) {
+void UISystem::beginFrame(
+        const FrameTiming& frameTiming,
+        std::uint32_t framebufferWidth,
+        std::uint32_t framebufferHeight) {
     QDR_PROFILE_FUNCTION();
     currentFrameTiming_ = frameTiming;
     renderer_.releaseFrameResources();
@@ -356,6 +383,12 @@ void UISystem::beginFrame(const FrameTiming& frameTiming) {
         relativeMouseDelta_ = {deltaX, deltaY};
     }
     ImGui_ImplSDL3_NewFrame();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = {
+            static_cast<float>(std::max(1u, framebufferWidth)),
+            static_cast<float>(std::max(1u, framebufferHeight)),
+    };
+    io.DisplayFramebufferScale = {1.0f, 1.0f};
     ImGui::GetIO().DeltaTime = static_cast<float>(std::max(currentFrameTiming_.deltaSeconds, 0.0));
     ImGui::NewFrame();
 }
@@ -454,7 +487,11 @@ void UISystem::draw(QuaderEditorApi& editor,
     }
     {
         QDR_PROFILE_SCOPE("UI draw dockspace");
-        drawDockspace(editor, quitRequested, document, modeling);
+        const float sidebarMinimumWidth = effectiveSidebarMinimumWidth(
+                ImGui::GetMainViewport()->Size.x,
+                panels_,
+                style_.sidebarMinWidth);
+        drawDockspace(editor, quitRequested, document, modeling, sidebarMinimumWidth);
     }
 
     bool viewportCursorCaptureRequested = false;
@@ -463,6 +500,11 @@ void UISystem::draw(QuaderEditorApi& editor,
     bool panelFocusChanged = false;
     bool commandShortcutConsumed = false;
     bool settingsChanged = false;
+    UIStyleTokens frameStyle = style_;
+    frameStyle.sidebarMinWidth = effectiveSidebarMinimumWidth(
+            ImGui::GetMainViewport()->Size.x,
+            panels_,
+            style_.sidebarMinWidth);
     UIContext context{
             .editor = editor,
             .renderBridge = renderBridge,
@@ -472,7 +514,7 @@ void UISystem::draw(QuaderEditorApi& editor,
             .selection = selection,
             .defaultMaterial = defaultMaterial,
             .quitRequested = quitRequested,
-            .style = style_,
+            .style = frameStyle,
             .icons = icons_,
             .localization = localization_,
             .settings = settings_,
@@ -530,7 +572,7 @@ void UISystem::draw(QuaderEditorApi& editor,
         }
         renderBridge.setToolPreviewMeshes(std::move(renderPreviewMeshes), assets);
     }
-    enforceSidebarDockMinimums();
+    enforceSidebarDockMinimums(frameStyle.sidebarMinWidth);
     setViewportCursorCaptured(viewportCursorCaptureRequested);
     if (viewportCursorCaptureRequested) {
         warpCapturedCursor(viewportCursorCapturePoint);
@@ -693,7 +735,8 @@ void UISystem::drawDockspace(
         QuaderEditorApi& editor,
         bool& quitRequested,
         SceneDocument& document,
-        ModelingSessionService& modeling) {
+        ModelingSessionService& modeling,
+        float sidebarMinimumWidth) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float chromeHeight = customChrome_ ? kWindowChromeHeight : 0.0f;
     ImGui::SetNextWindowPos({viewport->Pos.x, viewport->Pos.y + chromeHeight});
@@ -742,14 +785,14 @@ void UISystem::drawDockspace(
         dockLayoutBuilt_ = true;
     }
 
-    enforceSidebarDockMinimums();
+    enforceSidebarDockMinimums(sidebarMinimumWidth);
     const ImVec2 savedWindowMinSize = ImGui::GetStyle().WindowMinSize;
     ImGui::PushStyleVar(
             ImGuiStyleVar_WindowMinSize,
-            ImVec2(std::max(savedWindowMinSize.x, style_.sidebarMinWidth), savedWindowMinSize.y));
+            ImVec2(std::max(savedWindowMinSize.x, sidebarMinimumWidth), savedWindowMinSize.y));
     ImGui::DockSpace(dockspaceId, dockspaceSize, ImGuiDockNodeFlags_AutoHideTabBar);
     ImGui::PopStyleVar();
-    enforceSidebarDockMinimums();
+    enforceSidebarDockMinimums(sidebarMinimumWidth);
 
     ImGui::End();
 }
@@ -798,9 +841,9 @@ void UISystem::closeMenuPopupForPassThroughClick() {
     }
 }
 
-void UISystem::enforceSidebarDockMinimums() {
-    clampDockedWindowWidth(uiPanelKey(UIPanelId::Outliner), style_.sidebarMinWidth);
-    clampDockedWindowWidth(uiPanelKey(UIPanelId::Inspector), style_.sidebarMinWidth);
+void UISystem::enforceSidebarDockMinimums(float sidebarMinimumWidth) {
+    clampDockedWindowWidth(uiPanelKey(UIPanelId::Outliner), sidebarMinimumWidth);
+    clampDockedWindowWidth(uiPanelKey(UIPanelId::Inspector), sidebarMinimumWidth);
 }
 
 void UISystem::setViewportCursorCaptured(bool captured) {

@@ -46,6 +46,8 @@ public:
     RenderTextureHandle textureHandle() const { return textureHandle_; }
     std::uint32_t width() const { return width_; }
     std::uint32_t height() const { return height_; }
+    std::uint32_t viewportWidth() const { return viewportWidth_; }
+    std::uint32_t viewportHeight() const { return viewportHeight_; }
 
 private:
     void destroyRenderResources();
@@ -59,6 +61,8 @@ private:
     TextureSampleColorSpace sampleColorSpace_ = TextureSampleColorSpace::LinearSrgb;
     std::uint32_t width_ = 1;
     std::uint32_t height_ = 1;
+    std::uint32_t viewportWidth_ = 1;
+    std::uint32_t viewportHeight_ = 1;
 };
 
 } // namespace quader

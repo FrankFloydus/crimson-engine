@@ -311,6 +311,53 @@ TEST(UiLayoutGuardrailTests, ViewportInputHoverRespectsActiveDockingAndPanelItem
     expectMissing(paneCollection, "ImGuiHoveredFlags_AllowWhenBlockedByActiveItem");
 }
 
+TEST(UiLayoutGuardrailTests, ViewportUsesRendererCapacityUvsDuringPanelSplitterDrag) {
+    const std::string viewportPanelHeader = readSourceFile({"src", "ui", "viewport_panel.hpp"});
+    const std::string viewportPanel = readSourceFile({"src", "ui", "viewport_panel.cpp"});
+    const std::string paneImage = sourceSlice(
+            viewportPanel,
+            "const QVec2 renderSize = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};",
+            "DrawPane drawPane{");
+
+    expectContains(viewportPanel, "shouldDeferPaneRenderResize(const UIContext& uiContext, const ViewportRenderer& renderer)");
+    expectContains(viewportPanel, "uiContext.viewportRenderResizeSuspended");
+    expectContains(viewportPanel, "renderer.textureHandle() != InvalidRenderTextureHandle");
+    expectContains(viewportPanel, "renderer.overlayTextureHandle() != InvalidRenderTextureHandle");
+    expectContains(paneImage, "viewportWorkspace.setPaneRenderSize(placement.paneId, renderSize)");
+    expectContains(paneImage, "paneState.renderer.resize(renderWidth, renderHeight);");
+    expectContains(paneImage, "if (!shouldDeferPaneRenderResize(uiContext, paneState.renderer))");
+    expectContains(paneImage, "paneState.renderer.textureMaxV()");
+    expectContains(paneImage, "paneState.renderer.textureMaxU()");
+    expectContains(paneImage, "textureUvMin");
+    expectContains(paneImage, "textureUvMax");
+    expectMissing(paneImage, "activeRenderSize");
+    expectMissing(paneImage, "viewportPaneTextureUvRect(");
+    expectMissing(paneImage, "if (!uiContext.viewportRenderResizeSuspended)");
+}
+
+TEST(UiLayoutGuardrailTests, SidebarDockMinimumsCompressBeforeViewportCollapses) {
+    const std::string uiSystem = readSourceFile({"src", "ui", "ui_system.cpp"});
+    const std::string uiSystemHeader = readSourceFile({"src", "ui", "ui_system.hpp"});
+    const std::string outliner = readSourceFile({"src", "ui", "outliner_panel.cpp"});
+    const std::string inspector = readSourceFile({"src", "ui", "inspector_panel.cpp"});
+
+    expectContains(uiSystem, "kCompressedSidebarMinWidth = 220.0f");
+    expectContains(uiSystem, "kReservedViewportDockWidth = 300.0f");
+    expectContains(uiSystem, "visibleSidebarCount(const UIPanelManager& panels)");
+    expectContains(uiSystem, "effectiveSidebarMinimumWidth(float dockspaceWidth, const UIPanelManager& panels, float preferredMinimumWidth)");
+    expectContains(uiSystem, "dockspaceWidth - kReservedViewportDockWidth");
+    expectContains(uiSystem, "std::min(preferredMinimumWidth, std::max(kCompressedSidebarMinWidth, widthPerSidebar))");
+    expectContains(uiSystem, "frameStyle.sidebarMinWidth = effectiveSidebarMinimumWidth");
+    expectContains(uiSystem, "drawDockspace(editor, quitRequested, document, modeling, sidebarMinimumWidth)");
+    expectContains(uiSystem, "enforceSidebarDockMinimums(frameStyle.sidebarMinWidth)");
+    expectContains(uiSystemHeader, "drawDockspace(\n            QuaderEditorApi& editor,\n            bool& quitRequested,\n            SceneDocument& document,\n            ModelingSessionService& modeling,\n            float sidebarMinimumWidth)");
+    expectContains(uiSystemHeader, "enforceSidebarDockMinimums(float sidebarMinimumWidth)");
+    expectContains(outliner, "return context.style.sidebarMinWidth");
+    expectContains(inspector, "return context.style.sidebarMinWidth");
+    expectMissing(uiSystem, "clampDockedWindowWidth(uiPanelKey(UIPanelId::Outliner), style_.sidebarMinWidth)");
+    expectMissing(uiSystem, "ImVec2(std::max(savedWindowMinSize.x, style_.sidebarMinWidth)");
+}
+
 TEST(UiLayoutGuardrailTests, ViewportChromeCombosSharePopupPassThroughClickHandling) {
     const std::string viewportPanel = readSourceFile({"src", "ui", "viewport_panel.cpp"});
     const std::string popupUtils = readSourceFile({"src", "ui", "imgui_popup_utils.cpp"});
