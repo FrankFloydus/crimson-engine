@@ -31,115 +31,115 @@ class EditorSession;
  * Enumerates SelectionMode values used by the modeling layer.
  */
 enum class SelectionMode {
-	vertex = 0,
-	edge = 1,
-	face = 2,
-	object = 3,
+  Vertex = 0,
+  Edge = 1,
+  Face = 2,
+  Object = 3,
 };
 
 /**
  * Enumerates SelectionEditOperation values used by the modeling layer.
  */
 enum class SelectionEditOperation {
-	replace = 0,
-	add = 1,
-	remove = 2,
-	toggle = 3,
+  Replace = 0,
+  Add = 1,
+  Remove = 2,
+  Toggle = 3,
 };
 
 /**
  * Enumerates ActiveSelectionKind values used by the modeling layer.
  */
 enum class ActiveSelectionKind {
-	none,
-	object,
-	vertex,
-	edge,
-	face,
+  None,
+  Object,
+  Vertex,
+  Edge,
+  Face,
 };
 
 /**
  * Enumerates LightType values used by the modeling layer.
  */
 enum class LightType {
-	directional = 0,
-	point = 1,
-	spot = 2,
+  Directional = 0,
+  Point = 1,
+  Spot = 2,
 };
 
 /**
  * Enumerates LightShadowMode values used by the modeling layer.
  */
 enum class LightShadowMode {
-	none = 0,
-	hard = 1,
-	soft = 2,
+  None = 0,
+  Hard = 1,
+  Soft = 2,
 };
 
 /**
  * Enumerates LightFloatProperty values used by the modeling layer.
  */
 enum class LightFloatProperty {
-	intensity = 0,
-	range = 1,
-	spot_angle = 2,
-	inner_spot_angle = 3,
-	shadow_strength = 4,
-	shadow_bias = 5,
-	shadow_normal_bias = 6,
-	shadow_near_plane = 7,
+  Intensity = 0,
+  Range = 1,
+  SpotAngle = 2,
+  InnerSpotAngle = 3,
+  ShadowStrength = 4,
+  ShadowBias = 5,
+  ShadowNormalBias = 6,
+  ShadowNearPlane = 7,
 };
 
 /**
  * Enumerates SelectionHoverKind values used by the modeling layer.
  */
 enum class SelectionHoverKind {
-	none = 0,
-	object = 1,
-	vertex = 2,
-	edge = 3,
-	face = 4,
+  None = 0,
+  Object = 1,
+  Vertex = 2,
+  Edge = 3,
+  Face = 4,
 };
 
 /**
  * Enumerates SelectionOverlayLayer values used by the modeling layer.
  */
 enum class SelectionOverlayLayer {
-	selected_visible_face = 0,
-	selected_face_edge = 1,
-	unselected_vertex = 2,
-	selected_vertex = 3,
-	hover_face = 4,
-	hover_face_edge = 5,
-	hover_edge = 6,
-	hover_vertex = 7,
-	selected_edge = 8,
-	selected_xray_face = 9,
-	selected_face_mask = 10,
-	source_wire = 11,
-	open_edge = 12,
-	snap_target_vertex = 13,
-	diagnostic_edge = 14,
-	source_wire_depth_stamp = 15,
+  SelectedVisibleFace = 0,
+  SelectedFaceEdge = 1,
+  UnselectedVertex = 2,
+  SelectedVertex = 3,
+  HoverFace = 4,
+  HoverFaceEdge = 5,
+  HoverEdge = 6,
+  HoverVertex = 7,
+  SelectedEdge = 8,
+  SelectedXrayFace = 9,
+  SelectedFaceMask = 10,
+  SourceWire = 11,
+  OpenEdge = 12,
+  SnapTargetVertex = 13,
+  DiagnosticEdge = 14,
+  SourceWireDepthStamp = 15,
 };
 
 /**
  * Enumerates semantic SelectionOverlayStyleRole values emitted by the modeling runtime.
  */
 enum class SelectionOverlayStyleRole : std::uint32_t {
-	source_wire = 1,
-	selection_face = 2,
-	selection_wire = 3,
-	vertex = 4,
-	selected_vertex = 5,
-	hover_face = 6,
-	hover_wire = 7,
-	hover_vertex = 8,
-	remove_selection_face = 9,
-	remove_selection_wire = 10,
-	open_edge = 11,
-	snap_target_vertex = 12,
-	diagnostic_edge = 13,
+  SourceWire = 1,
+  SelectionFace = 2,
+  SelectionWire = 3,
+  Vertex = 4,
+  SelectedVertex = 5,
+  HoverFace = 6,
+  HoverWire = 7,
+  HoverVertex = 8,
+  RemoveSelectionFace = 9,
+  RemoveSelectionWire = 10,
+  OpenEdge = 11,
+  SnapTargetVertex = 12,
+  DiagnosticEdge = 13,
 };
 
 inline constexpr std::uint32_t kSelectionOverlayStyleRoleTokenMask = 0x51000000U;
@@ -162,20 +162,21 @@ inline constexpr std::uint32_t kSelectionOverlayStyleRoleTokenValueMask = 0x0000
 		return std::nullopt;
 	}
 	switch (static_cast<SelectionOverlayStyleRole>(token & kSelectionOverlayStyleRoleTokenValueMask)) {
-	case SelectionOverlayStyleRole::source_wire:
-	case SelectionOverlayStyleRole::selection_face:
-	case SelectionOverlayStyleRole::selection_wire:
-	case SelectionOverlayStyleRole::vertex:
-	case SelectionOverlayStyleRole::selected_vertex:
-	case SelectionOverlayStyleRole::hover_face:
-	case SelectionOverlayStyleRole::hover_wire:
-	case SelectionOverlayStyleRole::hover_vertex:
-	case SelectionOverlayStyleRole::remove_selection_face:
-	case SelectionOverlayStyleRole::remove_selection_wire:
-	case SelectionOverlayStyleRole::open_edge:
-	case SelectionOverlayStyleRole::snap_target_vertex:
-	case SelectionOverlayStyleRole::diagnostic_edge:
-		return static_cast<SelectionOverlayStyleRole>(token & kSelectionOverlayStyleRoleTokenValueMask);
+        case SelectionOverlayStyleRole::SourceWire:
+        case SelectionOverlayStyleRole::SelectionFace:
+        case SelectionOverlayStyleRole::SelectionWire:
+        case SelectionOverlayStyleRole::Vertex:
+        case SelectionOverlayStyleRole::SelectedVertex:
+        case SelectionOverlayStyleRole::HoverFace:
+        case SelectionOverlayStyleRole::HoverWire:
+        case SelectionOverlayStyleRole::HoverVertex:
+        case SelectionOverlayStyleRole::RemoveSelectionFace:
+        case SelectionOverlayStyleRole::RemoveSelectionWire:
+        case SelectionOverlayStyleRole::OpenEdge:
+        case SelectionOverlayStyleRole::SnapTargetVertex:
+        case SelectionOverlayStyleRole::DiagnosticEdge:
+          return static_cast<SelectionOverlayStyleRole>(
+              token & kSelectionOverlayStyleRoleTokenValueMask);
 	}
 	return std::nullopt;
 }
@@ -198,14 +199,14 @@ struct LightEntity {
 	int id = -1;
 	std::string name;
 	bool enabled = true;
-	LightType type = LightType::point;
-	bool selected = false;
+        LightType type = LightType::Point;
+        bool selected = false;
 	quader::QVec3 position { 0.0F, 3.0F, 0.0F };
 	quader::QVec3 direction { 0.0F, -1.0F, 0.0F };
 	std::uint32_t color_abgr = 0xFFFFFFFFU;
 	float intensity = 1.0F;
-	LightShadowMode shadow_mode = LightShadowMode::soft;
-	float shadow_strength = 1.0F;
+        LightShadowMode shadow_mode = LightShadowMode::Soft;
+        float shadow_strength = 1.0F;
 	float shadow_bias = 0.05F;
 	float shadow_normal_bias = 0.4F;
 	float shadow_near_plane = 0.2F;
@@ -246,12 +247,12 @@ struct Bounds3 {
  */
 struct ActiveSelection {
 	bool has_active = false;
-	ActiveSelectionKind kind = ActiveSelectionKind::none;
-	SelectionMode selection_mode = SelectionMode::object;
-	int object_id = -1;
-	quader_poly::ElementId vertex_id = quader_poly::invalid_element_id;
-	quader_poly::Edge edge;
-	quader_poly::ElementId face_id = quader_poly::invalid_element_id;
+        ActiveSelectionKind kind = ActiveSelectionKind::None;
+        SelectionMode selection_mode = SelectionMode::Object;
+        int object_id = -1;
+        quader_poly::ElementId vertex_id = quader_poly::kInvalidElementId;
+        quader_poly::Edge edge;
+        quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
 };
 
 /**
@@ -259,11 +260,11 @@ struct ActiveSelection {
  */
 struct SelectionHoverState {
 	int object_id = -1;
-	SelectionHoverKind kind = SelectionHoverKind::none;
-	quader_poly::ElementId vertex_id = quader_poly::invalid_element_id;
-	quader_poly::Edge edge;
-	quader_poly::ElementId face_id = quader_poly::invalid_element_id;
-	bool selected_modifier_pressed = false;
+        SelectionHoverKind kind = SelectionHoverKind::None;
+        quader_poly::ElementId vertex_id = quader_poly::kInvalidElementId;
+        quader_poly::Edge edge;
+        quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
+        bool selected_modifier_pressed = false;
 	int candidate_object_id = -1;
 };
 
@@ -279,66 +280,80 @@ struct SelectionHoverUpdateResult {
  * Represents a Selection Overlay Triangle value used by the modeling runtime domain.
  */
 struct SelectionOverlayTriangle {
-	SelectionOverlayLayer layer = SelectionOverlayLayer::selected_visible_face;
-	quader::QVec3 a;
-	quader::QVec3 b;
-	quader::QVec3 c;
-	std::uint32_t color_abgr = 0xffffffffU;
-	int object_id = -1;
-	quader_poly::ElementId face_id = quader_poly::invalid_element_id;
+  SelectionOverlayLayer layer = SelectionOverlayLayer::SelectedVisibleFace;
+  quader::QVec3 a;
+  quader::QVec3 b;
+  quader::QVec3 c;
+  std::uint32_t color_abgr = 0xffffffffU;
+  int object_id = -1;
+  quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
 };
 
 /**
  * Represents a Selection Overlay Line value used by the modeling runtime domain.
  */
 struct SelectionOverlayLine {
-	SelectionOverlayLayer layer = SelectionOverlayLayer::selected_face_edge;
-	quader::QVec3 start;
-	quader::QVec3 end;
-	std::uint32_t color_abgr = 0xffffffffU;
-	float width_pixels = 1.0F;
-	int object_id = -1;
-	quader_poly::ElementId face_id = quader_poly::invalid_element_id;
-	quader_poly::Edge edge;
+  SelectionOverlayLayer layer = SelectionOverlayLayer::SelectedFaceEdge;
+  quader::QVec3 start;
+  quader::QVec3 end;
+  std::uint32_t color_abgr = 0xffffffffU;
+  float width_pixels = 1.0F;
+  int object_id = -1;
+  quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
+  quader_poly::Edge edge;
 };
 
 /**
  * Represents a Selection Overlay Point value used by the modeling runtime domain.
  */
 struct SelectionOverlayPoint {
-	SelectionOverlayLayer layer = SelectionOverlayLayer::unselected_vertex;
-	quader::QVec3 position;
-	std::uint32_t color_abgr = 0xffffffffU;
-	float size_pixels = 8.0F;
-	int object_id = -1;
-	quader_poly::ElementId vertex_id = quader_poly::invalid_element_id;
+  SelectionOverlayLayer layer = SelectionOverlayLayer::UnselectedVertex;
+  quader::QVec3 position;
+  std::uint32_t color_abgr = 0xffffffffU;
+  float size_pixels = 8.0F;
+  int object_id = -1;
+  quader_poly::ElementId vertex_id = quader_poly::kInvalidElementId;
 };
 
 /**
  * Represents a Selection Overlay Style value used by the modeling runtime domain.
  */
 struct SelectionOverlayStyle {
-	std::uint32_t source_wire_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::source_wire);
-	std::uint32_t selection_face_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::selection_face);
-	std::uint32_t selected_edge_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::selection_wire);
-	std::uint32_t handle_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::vertex);
-	std::uint32_t selected_handle_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::selected_vertex);
-	std::uint32_t hover_face_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::hover_face);
-	std::uint32_t hover_face_edge_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::hover_wire);
-	std::uint32_t hover_edge_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::hover_wire);
-	std::uint32_t hover_vertex_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::hover_vertex);
-	std::uint32_t hover_selected_face_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::remove_selection_face);
-	std::uint32_t hover_selected_line_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::remove_selection_wire);
-	std::uint32_t open_edge_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::open_edge);
-	std::uint32_t snap_target_vertex_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::snap_target_vertex);
-	std::uint32_t diagnostic_edge_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::diagnostic_edge);
-	float edge_line_width_pixels = 3.0F;
-	float single_edge_line_width_pixels = 3.0F;
-	float open_edge_line_width_pixels = 2.0F;
-	float diagnostic_edge_line_width_pixels = 4.0F;
-	float vertex_point_size_pixels = 8.0F;
-	float selected_hover_point_growth_pixels = 1.0F;
-	float snap_target_point_size_pixels = 14.0F;
+  std::uint32_t source_wire_color_abgr =
+      selection_overlay_style_token(SelectionOverlayStyleRole::SourceWire);
+  std::uint32_t selection_face_color_abgr =
+      selection_overlay_style_token(SelectionOverlayStyleRole::SelectionFace);
+  std::uint32_t selected_edge_color_abgr =
+      selection_overlay_style_token(SelectionOverlayStyleRole::SelectionWire);
+  std::uint32_t handle_color_abgr =
+      selection_overlay_style_token(SelectionOverlayStyleRole::Vertex);
+  std::uint32_t selected_handle_color_abgr =
+      selection_overlay_style_token(SelectionOverlayStyleRole::SelectedVertex);
+  std::uint32_t hover_face_color_abgr =
+      selection_overlay_style_token(SelectionOverlayStyleRole::HoverFace);
+  std::uint32_t hover_face_edge_color_abgr =
+      selection_overlay_style_token(SelectionOverlayStyleRole::HoverWire);
+  std::uint32_t hover_edge_color_abgr =
+      selection_overlay_style_token(SelectionOverlayStyleRole::HoverWire);
+  std::uint32_t hover_vertex_color_abgr =
+      selection_overlay_style_token(SelectionOverlayStyleRole::HoverVertex);
+  std::uint32_t hover_selected_face_color_abgr = selection_overlay_style_token(
+      SelectionOverlayStyleRole::RemoveSelectionFace);
+  std::uint32_t hover_selected_line_color_abgr = selection_overlay_style_token(
+      SelectionOverlayStyleRole::RemoveSelectionWire);
+  std::uint32_t open_edge_color_abgr =
+      selection_overlay_style_token(SelectionOverlayStyleRole::OpenEdge);
+  std::uint32_t snap_target_vertex_color_abgr = selection_overlay_style_token(
+      SelectionOverlayStyleRole::SnapTargetVertex);
+  std::uint32_t diagnostic_edge_color_abgr =
+      selection_overlay_style_token(SelectionOverlayStyleRole::DiagnosticEdge);
+  float edge_line_width_pixels = 3.0F;
+  float single_edge_line_width_pixels = 3.0F;
+  float open_edge_line_width_pixels = 2.0F;
+  float diagnostic_edge_line_width_pixels = 4.0F;
+  float vertex_point_size_pixels = 8.0F;
+  float selected_hover_point_growth_pixels = 1.0F;
+  float snap_target_point_size_pixels = 14.0F;
 };
 
 /**
@@ -379,12 +394,12 @@ struct InsertEdgeLoopToolState {
  * Enumerates KnifeToolStatus values used by the modeling layer.
  */
 enum class KnifeToolStatus {
-	idle = 0,
-	hover_miss = 1,
-	preview = 2,
-	previous_set = 3,
-	committed = 4,
-	invalid_target = 5,
+  Idle = 0,
+  HoverMiss = 1,
+  Preview = 2,
+  PreviousSet = 3,
+  Committed = 4,
+  InvalidTarget = 5,
 };
 
 /**
@@ -405,8 +420,8 @@ struct KnifeToolState {
 	std::vector<quader::QVec3> point_positions;
 	std::vector<quader_poly::KnifeStrokeSegment> segments;
 	std::vector<quader::QVec3> intersection_preview_points;
-	KnifeToolStatus status = KnifeToolStatus::idle;
-	std::vector<SelectionOverlayLine> preview_lines;
+        KnifeToolStatus status = KnifeToolStatus::Idle;
+        std::vector<SelectionOverlayLine> preview_lines;
 	std::vector<SelectionOverlayPoint> preview_points;
 };
 
@@ -426,7 +441,7 @@ struct KnifeToolPreview {
 	std::uint32_t point_count = 0;
 	std::uint32_t segment_count = 0;
 	bool can_commit = false;
-	KnifeToolStatus status = KnifeToolStatus::idle;
+        KnifeToolStatus status = KnifeToolStatus::Idle;
 };
 
 /**
@@ -492,15 +507,15 @@ struct PickRequest {
  * Stores the Apply Pick Selection Request data contract used by the modeling runtime domain.
  */
 struct ApplyPickSelectionRequest {
-	SelectionEditOperation operation = SelectionEditOperation::replace;
-	quader_poly::Ray ray;
-	quader_poly::PickOptions pick_options;
-	int click_count = 1;
-	bool preserve_existing_component_selection_on_hit = false;
-	bool preserve_selection_on_selected_hit = false;
-	bool preserve_selection_on_miss = false;
-	std::span<const PickObjectBounds> object_bounds;
-	std::span<const PickObjectFaceGeometry> face_geometry;
+  SelectionEditOperation operation = SelectionEditOperation::Replace;
+  quader_poly::Ray ray;
+  quader_poly::PickOptions pick_options;
+  int click_count = 1;
+  bool preserve_existing_component_selection_on_hit = false;
+  bool preserve_selection_on_selected_hit = false;
+  bool preserve_selection_on_miss = false;
+  std::span<const PickObjectBounds> object_bounds;
+  std::span<const PickObjectFaceGeometry> face_geometry;
 };
 
 /**
@@ -520,11 +535,11 @@ struct PickHitRecord {
 	int object_id = -1;
 	int object_index = -1;
 	int material_id = 0;
-	quader_poly::ElementKind kind = quader_poly::ElementKind::face;
-	quader_poly::ElementId vertex_id = quader_poly::invalid_element_id;
-	quader_poly::Edge edge;
-	quader_poly::ElementId face_id = quader_poly::invalid_element_id;
-	quader::QVec3 local_position;
+        quader_poly::ElementKind kind = quader_poly::ElementKind::Face;
+        quader_poly::ElementId vertex_id = quader_poly::kInvalidElementId;
+        quader_poly::Edge edge;
+        quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
+        quader::QVec3 local_position;
 	quader::QVec3 local_normal;
 	float ray_distance = 0.0F;
 	float pick_distance = 0.0F;
@@ -536,21 +551,21 @@ struct PickHitRecord {
  */
 struct PickSelectionGroup {
 	int object_id = -1;
-	quader_poly::ElementKind kind = quader_poly::ElementKind::face;
-	quader_poly::ElementId face_id = quader_poly::invalid_element_id;
-	quader_poly::Edge edge;
-	quader_poly::ElementId vertex_id = quader_poly::invalid_element_id;
+        quader_poly::ElementKind kind = quader_poly::ElementKind::Face;
+        quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
+        quader_poly::Edge edge;
+        quader_poly::ElementId vertex_id = quader_poly::kInvalidElementId;
 };
 
 /**
  * Stores the Pick Selection State data contract used by the modeling runtime domain.
  */
 struct PickSelectionState {
-	SelectionMode mode = SelectionMode::object;
-	std::vector<int> selected_object_ids;
-	std::vector<PickSelectionGroup> selected_faces;
-	std::vector<PickSelectionGroup> selected_edges;
-	std::vector<PickSelectionGroup> selected_vertices;
+  SelectionMode mode = SelectionMode::Object;
+  std::vector<int> selected_object_ids;
+  std::vector<PickSelectionGroup> selected_faces;
+  std::vector<PickSelectionGroup> selected_edges;
+  std::vector<PickSelectionGroup> selected_vertices;
 };
 
 /**
@@ -583,17 +598,17 @@ struct RectangleSelectionVertex {
  * Stores the Rectangle Selection State data contract used by the modeling runtime domain.
  */
 struct RectangleSelectionState {
-	SelectionMode mode = SelectionMode::object;
-	int active_object_id = -1;
-	int active_face_index = -1;
-	std::vector<int> selected_object_ids;
-	std::vector<RectangleSelectionFace> selected_faces;
-	std::vector<RectangleSelectionEdge> selected_edges;
-	std::vector<int> active_edge_vertex_indices;
-	std::vector<int> selected_edge_full_object_ids;
-	std::vector<RectangleSelectionVertex> selected_vertices;
-	std::vector<int> active_vertex_indices;
-	std::vector<int> selected_vertex_full_object_ids;
+  SelectionMode mode = SelectionMode::Object;
+  int active_object_id = -1;
+  int active_face_index = -1;
+  std::vector<int> selected_object_ids;
+  std::vector<RectangleSelectionFace> selected_faces;
+  std::vector<RectangleSelectionEdge> selected_edges;
+  std::vector<int> active_edge_vertex_indices;
+  std::vector<int> selected_edge_full_object_ids;
+  std::vector<RectangleSelectionVertex> selected_vertices;
+  std::vector<int> active_vertex_indices;
+  std::vector<int> selected_vertex_full_object_ids;
 };
 
 /**
@@ -621,8 +636,8 @@ struct RectangleSelectionHits {
  */
 struct RectangleSelectionRequest {
 	RectangleSelectionState current_selection;
-	SelectionEditOperation operation = SelectionEditOperation::replace;
-	RectangleSelectionUniverse universe;
+        SelectionEditOperation operation = SelectionEditOperation::Replace;
+        RectangleSelectionUniverse universe;
 	RectangleSelectionHits hits;
 };
 
@@ -637,8 +652,8 @@ struct RectangleSelectionResult {
  * Enumerates SelectionSetCommand values used by the modeling layer.
  */
 enum class SelectionSetCommand {
-	select_all,
-	invert,
+  SelectAll,
+  Invert,
 };
 
 /**
@@ -647,7 +662,7 @@ enum class SelectionSetCommand {
 struct SelectionSetCommandRequest {
 	RectangleSelectionState current_selection;
 	RectangleSelectionUniverse universe;
-	SelectionSetCommand command = SelectionSetCommand::select_all;
+        SelectionSetCommand command = SelectionSetCommand::SelectAll;
 };
 
 /**
@@ -708,8 +723,8 @@ struct SelectionFaceRequest {
 struct SelectionObjectWideElementsRequest {
 	RectangleSelectionState current_selection;
 	int object_id = -1;
-	SelectionMode mode = SelectionMode::face;
-	std::vector<RectangleSelectionFace> object_faces;
+        SelectionMode mode = SelectionMode::Face;
+        std::vector<RectangleSelectionFace> object_faces;
 	bool additive = false;
 };
 
@@ -726,9 +741,9 @@ struct SelectionElementGroup {
  */
 struct SelectionActiveTarget {
 	bool has_active = false;
-	ActiveSelectionKind kind = ActiveSelectionKind::none;
-	SelectionMode selection_mode = SelectionMode::face;
-	int object_id = -1;
+        ActiveSelectionKind kind = ActiveSelectionKind::None;
+        SelectionMode selection_mode = SelectionMode::Face;
+        int object_id = -1;
 	int face_index = -1;
 	std::vector<int> vertex_indices;
 };
@@ -737,12 +752,12 @@ struct SelectionActiveTarget {
  * Represents a Selection Handle Target value used by the modeling runtime domain.
  */
 struct SelectionHandleTarget {
-	ActiveSelectionKind kind = ActiveSelectionKind::none;
-	int object_id = -1;
-	int face_index = -1;
-	std::vector<int> vertex_indices;
-	std::vector<SelectionElementGroup> element_groups;
-	quader::QVec3 position;
+  ActiveSelectionKind kind = ActiveSelectionKind::None;
+  int object_id = -1;
+  int face_index = -1;
+  std::vector<int> vertex_indices;
+  std::vector<SelectionElementGroup> element_groups;
+  quader::QVec3 position;
 };
 
 /**
@@ -776,7 +791,7 @@ struct SelectionHitRequest {
  */
 struct SelectionModeSwitchRequest {
 	RectangleSelectionState current_selection;
-	SelectionMode mode = SelectionMode::face;
+        SelectionMode mode = SelectionMode::Face;
 };
 
 /**
@@ -874,11 +889,11 @@ struct SelectionSourceWireSuppression {
  * Enumerates SelectionCenterStrategy values used by the modeling layer.
  */
 enum class SelectionCenterStrategy {
-	none,
-	selected_objects,
-	dense_full_objects,
-	sparse_elements,
-	fallback_points,
+  None,
+  SelectedObjects,
+  DenseFullObjects,
+  SparseElements,
+  FallbackPoints,
 };
 
 /**
@@ -896,8 +911,8 @@ struct SelectionCenterPlanRequest {
  */
 struct SelectionCenterPlan {
 	RectangleSelectionState normalized_selection;
-	SelectionCenterStrategy strategy = SelectionCenterStrategy::none;
-	std::vector<int> object_ids;
+        SelectionCenterStrategy strategy = SelectionCenterStrategy::None;
+        std::vector<int> object_ids;
 	bool ignored_selected_objects_for_element_entries = false;
 	bool has_element_entries = false;
 	int dense_reference_count = 0;
@@ -916,17 +931,17 @@ struct SelectionHandleTargetObjectRequest {
  * Enumerates ElementHandlePickKind values used by the modeling layer.
  */
 enum class ElementHandlePickKind {
-	vertex = 0,
-	edge = 1,
-	face = 2,
+  Vertex = 0,
+  Edge = 1,
+  Face = 2,
 };
 
 /**
  * Enumerates ViewportToolIntent values used by the modeling layer.
  */
 enum class ViewportToolIntent {
-	move = 0,
-	extend = 1,
+  Move = 0,
+  Extend = 1,
 };
 
 /**
@@ -934,8 +949,8 @@ enum class ViewportToolIntent {
  */
 struct ElementHandlePickCandidate {
 	int candidate_index = -1;
-	ElementHandlePickKind kind = ElementHandlePickKind::vertex;
-	int object_id = -1;
+        ElementHandlePickKind kind = ElementHandlePickKind::Vertex;
+        int object_id = -1;
 	int a_index = -1;
 	int b_index = -1;
 	quader::QVec2 screen_position;
@@ -992,21 +1007,21 @@ struct PickCycleStep {
  * Enumerates PickHitSet values used by the modeling layer.
  */
 enum class PickHitSet {
-	none,
-	handle,
-	surface,
+  None,
+  Handle,
+  Surface,
 };
 
 /**
  * Stores the Click Pick Request data contract used by the modeling runtime domain.
  */
 struct ClickPickRequest {
-	SelectionMode mode = SelectionMode::object;
-	SelectionEditOperation operation = SelectionEditOperation::replace;
-	bool handles_enabled = false;
-	bool can_pick_all = true;
-	quader::QVec2 screen_position;
-	float max_screen_distance = pick_cycle_default_max_screen_distance;
+  SelectionMode mode = SelectionMode::Object;
+  SelectionEditOperation operation = SelectionEditOperation::Replace;
+  bool handles_enabled = false;
+  bool can_pick_all = true;
+  quader::QVec2 screen_position;
+  float max_screen_distance = kPickCycleDefaultMaxScreenDistance;
 };
 
 /**
@@ -1014,8 +1029,8 @@ struct ClickPickRequest {
  */
 struct ClickPickPlan {
 	bool has_target = false;
-	PickHitSet hit_set = PickHitSet::none;
-	int hit_index = -1;
+        PickHitSet hit_set = PickHitSet::None;
+        int hit_index = -1;
 	bool preserve_selection = false;
 	bool clear_with_handle_state_on_miss = false;
 	bool used_pick_cycle = false;
@@ -1026,11 +1041,11 @@ struct ClickPickPlan {
  * Stores the Drag Seed Pick Request data contract used by the modeling runtime domain.
  */
 struct DragSeedPickRequest {
-	SelectionMode mode = SelectionMode::object;
-	bool additive = false;
-	bool handles_enabled = false;
-	bool allow_selected_target = false;
-	bool preserve_selected_additive_target = false;
+  SelectionMode mode = SelectionMode::Object;
+  bool additive = false;
+  bool handles_enabled = false;
+  bool allow_selected_target = false;
+  bool preserve_selected_additive_target = false;
 };
 
 /**
@@ -1039,8 +1054,8 @@ struct DragSeedPickRequest {
 struct DragSeedPickPlan {
 	bool has_target = false;
 	bool keep_existing_selection = false;
-	PickHitSet hit_set = PickHitSet::none;
-	int hit_index = -1;
+        PickHitSet hit_set = PickHitSet::None;
+        int hit_index = -1;
 	int preferred_object_id = -1;
 };
 
@@ -1075,22 +1090,22 @@ struct HistoryRestoreResult {
  * Enumerates PreviewTransactionKind values used by the modeling layer.
  */
 enum class PreviewTransactionKind {
-	none = 0,
-	bridge = 1,
-	edge_bevel = 2,
-	thicken = 3,
-	transform = 4,
-	slice_quad = 5,
-	merge_by_distance = 6,
+  None = 0,
+  Bridge = 1,
+  EdgeBevel = 2,
+  Thicken = 3,
+  Transform = 4,
+  SliceQuad = 5,
+  MergeByDistance = 6,
 };
 
 /**
  * Represents a Preview Transaction Status value used by the modeling runtime domain.
  */
 struct PreviewTransactionStatus {
-	PreviewTransactionKind kind = PreviewTransactionKind::none;
-	bool active = false;
-	bool changed = false;
+  PreviewTransactionKind kind = PreviewTransactionKind::None;
+  bool active = false;
+  bool changed = false;
 };
 
 /**
@@ -1111,8 +1126,8 @@ struct SessionState {
 	int next_light_id = 1;
 	int active_object_id = -1;
 	int active_light_id = -1;
-	SelectionMode selection_mode = SelectionMode::object;
-	bool dirty = false;
+        SelectionMode selection_mode = SelectionMode::Object;
+        bool dirty = false;
 	std::uint64_t content_revision = 0;
 	std::uint64_t selection_revision = 0;
 };
@@ -1129,11 +1144,11 @@ struct HistoryEntry {
  * Represents a Preview Transaction value used by the modeling runtime domain.
  */
 struct PreviewTransaction {
-	PreviewTransactionKind kind = PreviewTransactionKind::none;
-	bool active = false;
-	bool changed = false;
-	SessionState base_state;
-	SessionState history_state;
+  PreviewTransactionKind kind = PreviewTransactionKind::None;
+  bool active = false;
+  bool changed = false;
+  SessionState base_state;
+  SessionState history_state;
 };
 
 SessionState default_scene_state();
@@ -1401,12 +1416,19 @@ public:
 	HistoryRestoreResult undo();
 	HistoryRestoreResult redo();
 	[[nodiscard]] PreviewTransactionStatus preview_transaction_status() const;
-	[[nodiscard]] std::optional<SessionState> preview_transaction_history_state(PreviewTransactionKind expected_kind = PreviewTransactionKind::none) const;
-	void clear_preview_transaction();
+        [[nodiscard]] std::optional<SessionState>
+        preview_transaction_history_state(
+            PreviewTransactionKind expected_kind =
+                PreviewTransactionKind::None) const;
+        void clear_preview_transaction();
 	bool discard_preview_transactions(bool restore_transform_preview = false);
-	bool restore_preview_transaction_base_for_edit(PreviewTransactionKind expected_kind = PreviewTransactionKind::none);
-	bool capture_preview_transaction_base_after_edit(PreviewTransactionKind expected_kind = PreviewTransactionKind::none);
-	CommandResult begin_bridge_preview(int steps = 1);
+        bool restore_preview_transaction_base_for_edit(
+            PreviewTransactionKind expected_kind =
+                PreviewTransactionKind::None);
+        bool capture_preview_transaction_base_after_edit(
+            PreviewTransactionKind expected_kind =
+                PreviewTransactionKind::None);
+        CommandResult begin_bridge_preview(int steps = 1);
 	CommandResult begin_bridge_preview(BridgeOperationSettings settings);
 	CommandResult update_bridge_preview(int steps = 1);
 	CommandResult update_bridge_preview(BridgeOperationSettings settings);
@@ -1431,10 +1453,14 @@ public:
 	CommandResult update_transform_matrix_preview(const quader_poly::Transform3& transform, quader::QVec3 pivot, bool texture_lock_enabled = false, bool texture_lock_scale_enabled = false);
 	CommandResult update_transform_extrude_preview(quader::QVec3 offset, float closed_edge_ledge_size = 0.0F);
 	CommandResult update_transform_inset_preview(const quader_poly::Transform3& transform, quader::QVec3 pivot);
-	PreviewTransactionFinishResult commit_preview_transaction(PreviewTransactionKind expected_kind = PreviewTransactionKind::none);
-	PreviewTransactionFinishResult cancel_preview_transaction(PreviewTransactionKind expected_kind = PreviewTransactionKind::none);
+        PreviewTransactionFinishResult
+        commit_preview_transaction(PreviewTransactionKind expected_kind =
+                                       PreviewTransactionKind::None);
+        PreviewTransactionFinishResult
+        cancel_preview_transaction(PreviewTransactionKind expected_kind =
+                                       PreviewTransactionKind::None);
 
-	void set_selection_mode(SelectionMode mode);
+        void set_selection_mode(SelectionMode mode);
 	void clear_selection();
 	void set_selected_object_ids(const std::vector<int>& object_ids, int active_id = -1);
 	void set_component_selection(int object_id, quader_poly::Selection selection, SelectionMode mode);

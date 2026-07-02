@@ -20,33 +20,42 @@ FilamentMaterialLibrary::~FilamentMaterialLibrary() {
     shutdown();
 }
 
-bool FilamentMaterialLibrary::initialize(filament::Engine& engine, const std::filesystem::path& executableDir) {
-    engine_ = &engine;
-    try {
-        const std::filesystem::path materialDir = executableDir / std::string(kFilamentMaterialDirectory);
-        LOG_INFO("Loading Quader mesh material");
-        quaderMeshMaterial_ = load(materialDir / std::string(kQuaderMeshMaterialFile));
-        LOG_INFO("Loading Quader lit mesh material");
-        quaderMeshLitMaterial_ = load(materialDir / std::string(kQuaderMeshLitMaterialFile));
-        LOG_INFO("Loading vertex color overlay material");
-        vertexColorOverlayMaterial_ = load(materialDir / std::string(kVertexColorOverlayMaterialFile));
-        LOG_INFO("Loading overlay line material");
-        overlayLineMaterial_ = load(materialDir / std::string(kOverlayLineMaterialFile));
-        LOG_INFO("Loading selected object line material");
-        selectedObjectLineMaterial_ = load(materialDir / std::string(kSelectedObjectLineMaterialFile));
-        LOG_INFO("Loading overlay point material");
-        overlayPointMaterial_ = load(materialDir / std::string(kOverlayPointMaterialFile));
-        LOG_INFO("Loading ImGui material");
-        imguiMaterial_ = load(materialDir / std::string(kImguiMaterialFile));
-        LOG_INFO("Loading ground grid material");
-        groundGridMaterial_ = load(materialDir / std::string(kGroundGridMaterialFile));
-    } catch (const std::exception& error) {
-        LOG_ERROR("Material load failed: {}", error.what());
-        shutdown();
-        return false;
-    }
-    LOG_INFO("Filament materials loaded");
-    return true;
+bool FilamentMaterialLibrary::initialize(
+    filament::Engine &engine, const std::filesystem::path &executable_dir) {
+  engine_ = &engine;
+  try {
+    const std::filesystem::path material_dir =
+        executable_dir / std::string(kFilamentMaterialDirectory);
+    LOG_INFO("Loading Quader mesh material");
+    quader_mesh_material_ =
+        load(material_dir / std::string(kQuaderMeshMaterialFile));
+    LOG_INFO("Loading Quader lit mesh material");
+    quader_mesh_lit_material_ =
+        load(material_dir / std::string(kQuaderMeshLitMaterialFile));
+    LOG_INFO("Loading vertex color overlay material");
+    vertex_color_overlay_material_ =
+        load(material_dir / std::string(kVertexColorOverlayMaterialFile));
+    LOG_INFO("Loading overlay line material");
+    overlay_line_material_ =
+        load(material_dir / std::string(kOverlayLineMaterialFile));
+    LOG_INFO("Loading selected object line material");
+    selected_object_line_material_ =
+        load(material_dir / std::string(kSelectedObjectLineMaterialFile));
+    LOG_INFO("Loading overlay point material");
+    overlay_point_material_ =
+        load(material_dir / std::string(kOverlayPointMaterialFile));
+    LOG_INFO("Loading ImGui material");
+    imgui_material_ = load(material_dir / std::string(kImguiMaterialFile));
+    LOG_INFO("Loading ground grid material");
+    ground_grid_material_ =
+        load(material_dir / std::string(kGroundGridMaterialFile));
+  } catch (const std::exception &error) {
+    LOG_ERROR("Material load failed: {}", error.what());
+    shutdown();
+    return false;
+  }
+  LOG_INFO("Filament materials loaded");
+  return true;
 }
 
 void FilamentMaterialLibrary::shutdown() {
@@ -54,22 +63,23 @@ void FilamentMaterialLibrary::shutdown() {
         return;
     }
 
-    destroy(quaderMeshMaterial_);
-    destroy(quaderMeshLitMaterial_);
-    destroy(vertexColorOverlayMaterial_);
-    destroy(overlayLineMaterial_);
-    destroy(selectedObjectLineMaterial_);
-    destroy(overlayPointMaterial_);
-    destroy(imguiMaterial_);
-    destroy(groundGridMaterial_);
+    destroy(quader_mesh_material_);
+    destroy(quader_mesh_lit_material_);
+    destroy(vertex_color_overlay_material_);
+    destroy(overlay_line_material_);
+    destroy(selected_object_line_material_);
+    destroy(overlay_point_material_);
+    destroy(imgui_material_);
+    destroy(ground_grid_material_);
     engine_ = nullptr;
 }
 
 filament::Material* FilamentMaterialLibrary::load(const std::filesystem::path& path) const {
-    const std::vector<std::byte> package = MaterialCompilerService::loadPackage(path);
-    return filament::Material::Builder()
-            .package(package.data(), package.size())
-            .build(*engine_);
+  const std::vector<std::byte> package =
+      MaterialCompilerService::load_package(path);
+  return filament::Material::Builder()
+      .package(package.data(), package.size())
+      .build(*engine_);
 }
 
 void FilamentMaterialLibrary::destroy(filament::Material*& material) {

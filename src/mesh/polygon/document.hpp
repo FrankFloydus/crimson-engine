@@ -6,8 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "math/types/q_vec2.hpp"
-#include "math/types/q_vec3.hpp"
+#include "math/types/qvec2.hpp"
+#include "math/types/qvec3.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -21,7 +21,7 @@ namespace quader_poly {
 
 using ElementId = std::uint32_t;
 
-inline constexpr ElementId invalid_element_id = 0;
+inline constexpr ElementId kInvalidElementId = 0;
 
 /**
  * Represents a Transform3 value used by the polygon document and mesh editing core.
@@ -45,38 +45,38 @@ struct Ray {
  * Represents a Vertex value used by the polygon document and mesh editing core.
  */
 struct Vertex {
-    ElementId id = invalid_element_id;
-    quader::QVec3 position;
+  ElementId id = kInvalidElementId;
+  quader::QVec3 position;
 };
 
 /**
  * Represents an Edge value used by the polygon document and mesh editing core.
  */
 struct Edge {
-    ElementId a = invalid_element_id;
-    ElementId b = invalid_element_id;
+  ElementId a = kInvalidElementId;
+  ElementId b = kInvalidElementId;
 
-    friend bool operator==(const Edge& left, const Edge& right) = default;
+  friend bool operator==(const Edge &left, const Edge &right) = default;
 };
 
 /**
  * Enumerates SurfaceShading values used by the modeling layer.
  */
 enum class SurfaceShading {
-    flat,
-    smooth,
-    authored,
+  Flat,
+  Smooth,
+  Authored,
 };
 
 /**
  * Represents a Face value used by the polygon document and mesh editing core.
  */
 struct Face {
-    ElementId id = invalid_element_id;
-    std::vector<ElementId> vertices;
-    std::vector<quader::QVec2> uvs;
-    std::uint32_t material_slot = 0;
-    SurfaceShading normal_shading = SurfaceShading::flat;
+  ElementId id = kInvalidElementId;
+  std::vector<ElementId> vertices;
+  std::vector<quader::QVec2> uvs;
+  std::uint32_t material_slot = 0;
+  SurfaceShading normal_shading = SurfaceShading::Flat;
 };
 
 /**
@@ -111,14 +111,14 @@ struct Document {
  * Enumerates PrimitiveKind values used by the modeling layer.
  */
 enum class PrimitiveKind {
-    cube,
-    plane,
-    cylinder,
-    cone,
-    quad_sphere,
-    uv_sphere,
-    ico_sphere,
-    torus,
+  Cube,
+  Plane,
+  Cylinder,
+  Cone,
+  QuadSphere,
+  UvSphere,
+  IcoSphere,
+  Torus,
 };
 
 /**
@@ -203,36 +203,36 @@ struct TorusPrimitiveSpec {
  * Enumerates ElementKind values used by the modeling layer.
  */
 enum class ElementKind {
-    vertex,
-    edge,
-    face,
+  Vertex,
+  Edge,
+  Face,
 };
 
 /**
  * Enumerates SelectionMode values used by the modeling layer.
  */
 enum class SelectionMode {
-    vertex,
-    edge,
-    face,
+  Vertex,
+  Edge,
+  Face,
 };
 
 /**
  * Represents a Selection value used by the polygon document and mesh editing core.
  */
 struct Selection {
-    SelectionMode mode = SelectionMode::vertex;
-    std::vector<ElementId> vertices;
-    std::vector<Edge> edges;
-    std::vector<ElementId> faces;
-    bool has_active = false;
-    ElementKind active_kind = ElementKind::vertex;
-    ElementId active_vertex = invalid_element_id;
-    Edge active_edge;
-    ElementId active_face = invalid_element_id;
+  SelectionMode mode = SelectionMode::Vertex;
+  std::vector<ElementId> vertices;
+  std::vector<Edge> edges;
+  std::vector<ElementId> faces;
+  bool has_active = false;
+  ElementKind active_kind = ElementKind::Vertex;
+  ElementId active_vertex = kInvalidElementId;
+  Edge active_edge;
+  ElementId active_face = kInvalidElementId;
 
-    [[nodiscard]] bool empty() const;
-    void clear();
+  [[nodiscard]] bool empty() const;
+  void clear();
 };
 
 /**
@@ -275,9 +275,9 @@ struct OperationResult {
  * Enumerates PlaneCutMode values used by the modeling layer.
  */
 enum class PlaneCutMode {
-    keep_back = 0,
-    keep_front = 1,
-    keep_both = 2,
+  KeepBack = 0,
+  KeepFront = 1,
+  KeepBoth = 2,
 };
 
 /**
@@ -287,7 +287,7 @@ struct PlaneCutRequest {
     quader::QVec3 first_point;
     quader::QVec3 second_point;
     quader::QVec3 third_point;
-    PlaneCutMode mode = PlaneCutMode::keep_both;
+    PlaneCutMode mode = PlaneCutMode::KeepBoth;
 };
 
 /**
@@ -308,7 +308,7 @@ struct PlaneCutResult {
  * Enumerates BevelProfileType values used by the modeling layer.
  */
 enum class BevelProfileType {
-    offset = 0,
+  Offset = 0,
 };
 
 /**
@@ -318,7 +318,7 @@ struct EdgeBevelSettings {
     float width = 1.0F;
     // Profile in the 0..1 range; 0.5 is circular and 1 is the exact square endpoint.
     float profile = 0.5F;
-    BevelProfileType profile_type = BevelProfileType::offset;
+    BevelProfileType profile_type = BevelProfileType::Offset;
     int segments = 1;
 };
 
@@ -326,22 +326,22 @@ struct EdgeBevelSettings {
  * Enumerates KnifePointTargetKind values used by the modeling layer.
  */
 enum class KnifePointTargetKind {
-    existing_vertex,
-    existing_edge,
-    inserted_vertex,
-    face_point,
+  ExistingVertex,
+  ExistingEdge,
+  InsertedVertex,
+  FacePoint,
 };
 
 /**
  * Represents a Knife Point Target value used by the polygon document and mesh editing core.
  */
 struct KnifePointTarget {
-    KnifePointTargetKind kind = KnifePointTargetKind::existing_vertex;
-    ElementId vertex_id = invalid_element_id;
-    Edge edge;
-    float edge_factor = 0.5F;
-    ElementId face_id = invalid_element_id;
-    quader::QVec3 position;
+  KnifePointTargetKind kind = KnifePointTargetKind::ExistingVertex;
+  ElementId vertex_id = kInvalidElementId;
+  Edge edge;
+  float edge_factor = 0.5F;
+  ElementId face_id = kInvalidElementId;
+  quader::QVec3 position;
 };
 
 /**
@@ -372,18 +372,17 @@ namespace quader_poly {
  * Stores the Pick Options data contract used by the polygon document and mesh editing core.
  */
 struct PickOptions {
-    SelectionMode mode = SelectionMode::vertex;
-    float vertex_radius = 0.12F;
-    float edge_radius = 0.10F;
-    bool has_hidden_material_slot = false;
-    std::uint32_t hidden_material_slot = 0;
-    bool pick_backfaces = false;
-    bool prefer_front_facing_faces = true;
+  SelectionMode mode = SelectionMode::Vertex;
+  float vertex_radius = 0.12F;
+  float edge_radius = 0.10F;
+  bool has_hidden_material_slot = false;
+  std::uint32_t hidden_material_slot = 0;
+  bool pick_backfaces = false;
+  bool prefer_front_facing_faces = true;
 
-    [[nodiscard]] bool hides_material_slot(std::uint32_t material_slot) const
-    {
-        return has_hidden_material_slot && material_slot == hidden_material_slot;
-    }
+  [[nodiscard]] bool hides_material_slot(std::uint32_t material_slot) const {
+    return has_hidden_material_slot && material_slot == hidden_material_slot;
+  }
 };
 
 /**
@@ -391,10 +390,10 @@ struct PickOptions {
  */
 struct PickResult {
     bool hit = false;
-    ElementKind kind = ElementKind::vertex;
-    ElementId vertex_id = invalid_element_id;
+    ElementKind kind = ElementKind::Vertex;
+    ElementId vertex_id = kInvalidElementId;
     Edge edge;
-    ElementId face_id = invalid_element_id;
+    ElementId face_id = kInvalidElementId;
     float distance = 0.0F;
     quader::QVec3 position;
 };
@@ -403,13 +402,13 @@ struct PickResult {
  * Represents a Pick Face Triangle value used by the polygon document and mesh editing core.
  */
 struct PickFaceTriangle {
-    ElementId face_id = invalid_element_id;
-    quader::QVec3 a;
-    quader::QVec3 b;
-    quader::QVec3 c;
-    quader::QVec3 normal;
-    quader::QVec3 bounds_min;
-    quader::QVec3 bounds_max;
+  ElementId face_id = kInvalidElementId;
+  quader::QVec3 a;
+  quader::QVec3 b;
+  quader::QVec3 c;
+  quader::QVec3 normal;
+  quader::QVec3 bounds_min;
+  quader::QVec3 bounds_max;
 };
 
 /**
@@ -421,7 +420,7 @@ struct OverlayLine {
     std::uint32_t color = 0xffffffff;
     float width_pixels = 1.0F;
     Edge edge;
-    ElementId face_id = invalid_element_id;
+    ElementId face_id = kInvalidElementId;
 };
 
 /**
@@ -432,7 +431,7 @@ struct OverlayTriangle {
     quader::QVec3 b;
     quader::QVec3 c;
     std::uint32_t color = 0xffffffff;
-    ElementId face_id = invalid_element_id;
+    ElementId face_id = kInvalidElementId;
 };
 
 /**
@@ -442,7 +441,7 @@ struct OverlayPoint {
     quader::QVec3 position;
     std::uint32_t color = 0xffffffff;
     float size_pixels = 5.0F;
-    ElementId vertex_id = invalid_element_id;
+    ElementId vertex_id = kInvalidElementId;
 };
 
 /**
@@ -513,7 +512,9 @@ void shift_face_uvs_for_translation(Document& document, quader::QVec3 delta);
 [[nodiscard]] OperationResult apply_uv_operation(Document& document, const Selection& selection, std::string_view operation, float shift_world_amount = 1.0F);
 [[nodiscard]] OperationResult assign_selected_face_material_slot(Document& document, const Selection& selection, std::uint32_t material_slot);
 [[nodiscard]] OperationResult assign_face_material_slot(Document& document, ElementId face_id, std::uint32_t material_slot);
-[[nodiscard]] CompiledMesh compile_document(const Document& document, SurfaceShading shading = SurfaceShading::authored);
+[[nodiscard]] CompiledMesh
+compile_document(const Document &document,
+                 SurfaceShading shading = SurfaceShading::Authored);
 
 void select_only(Selection& selection, const PickResult& pick);
 void add_selection(Selection& selection, const PickResult& pick);

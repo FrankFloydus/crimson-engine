@@ -19,27 +19,27 @@ struct ViewportToolResult;
  */
 class ViewportInteractionController {
 public:
-    [[nodiscard]] ViewportBeforeToolInteractionResult handleBeforeActiveTool(
-            QuaderEditorApi& editor,
-            const ViewportInteractionFrame& frame);
-    void handleAfterActiveTool(
-            QuaderEditorApi& editor,
-            const ViewportInteractionFrame& frame,
-            const ViewportToolResult& toolResult,
-            const ViewportBeforeToolInteractionResult& beforeTool);
-    [[nodiscard]] QuaderSelectionSummary pickContextMenuTarget(
-            QuaderEditorApi& editor,
-            const ViewportInteractionFrame& frame);
-    [[nodiscard]] bool cancelActiveDrag(QuaderEditorApi& editor);
-    [[nodiscard]] bool dragging() const;
-    void reset(QuaderEditorApi* editor = nullptr);
+  [[nodiscard]] ViewportBeforeToolInteractionResult
+  handle_before_active_tool(QuaderEditorApi &editor,
+                            const ViewportInteractionFrame &frame);
+  void handle_after_active_tool(
+      QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+      const ViewportToolResult &tool_result,
+      const ViewportBeforeToolInteractionResult &before_tool);
+  [[nodiscard]] QuaderSelectionSummary
+  pick_context_menu_target(QuaderEditorApi &editor,
+                           const ViewportInteractionFrame &frame);
+  [[nodiscard]] bool cancel_active_drag(QuaderEditorApi &editor);
+  [[nodiscard]] bool dragging() const;
+  void reset(QuaderEditorApi *editor = nullptr);
 
-    [[nodiscard]] const quader_editor_core::TransformGizmoFrame* transformGizmoFrame() const;
-    [[nodiscard]] ViewportSelectionMarquee selectionMarquee() const;
+  [[nodiscard]] const quader_editor_core::TransformGizmoFrame *
+  transform_gizmo_frame() const;
+  [[nodiscard]] ViewportSelectionMarquee selection_marquee() const;
 
 private:
-    TransformGizmoInteraction transformGizmo_;
-    ViewportSelectionInteraction selection_;
+  TransformGizmoInteraction transform_gizmo_;
+  ViewportSelectionInteraction selection_;
 };
 
 } // namespace quader

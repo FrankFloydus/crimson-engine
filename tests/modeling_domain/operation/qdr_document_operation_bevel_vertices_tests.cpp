@@ -20,8 +20,8 @@ TEST(QdrDocumentOperationBevelVerticesTests, BevelVerticesTrimsTheSourceCornerAn
 	EXPECT_TRUE(find_vertex(fixture.document, fixture.bottom_left) == nullptr);
 	EXPECT_TRUE(fixture.document.vertices.size() == 5U);
 	EXPECT_TRUE(fixture.document.faces.size() == 1U);
-	EXPECT_TRUE(selection.mode == SelectionMode::vertex);
-	EXPECT_TRUE(selection.vertices.size() == 2U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
+        EXPECT_TRUE(selection.vertices.size() == 2U);
 	for (ElementId vertex_id : selection.vertices) {
 		EXPECT_TRUE(find_vertex(fixture.document, vertex_id) != nullptr);
 	}
@@ -42,8 +42,8 @@ TEST(QdrDocumentOperationBevelVerticesTests, BevelVerticesOnACubeCreatesAnOutwar
 	EXPECT_TRUE(document.vertices.size() == vertex_count_before + 2U);
 	EXPECT_TRUE(document.faces.size() == face_count_before + 1U);
 	EXPECT_TRUE(find_vertex(document, vertex_id) == nullptr);
-	EXPECT_TRUE(selection.mode == SelectionMode::vertex);
-	EXPECT_TRUE(selection.vertices.size() == 3U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
+        EXPECT_TRUE(selection.vertices.size() == 3U);
 	for (ElementId split_vertex_id : selection.vertices) {
 		const Vertex* split_vertex = find_vertex(document, split_vertex_id);
 		EXPECT_TRUE(split_vertex != nullptr);

@@ -21,26 +21,27 @@ namespace quader {
  */
 class ModelingToolSettingsService {
 public:
-    [[nodiscard]] const std::string& activePreviewActionId() const;
-    [[nodiscard]] const std::string& activePreviewOperationId() const;
-    [[nodiscard]] const std::string& activePreviewLabel() const;
+  [[nodiscard]] const std::string &active_preview_action_id() const;
+  [[nodiscard]] const std::string &active_preview_operation_id() const;
+  [[nodiscard]] const std::string &active_preview_label() const;
 
-    void setPreviewMetadata(std::string actionId, std::string operationId, std::string label);
-    void clearPreviewMetadata();
+  void set_preview_metadata(std::string action_id, std::string operation_id,
+                            std::string label);
+  void clear_preview_metadata();
 
-    [[nodiscard]] ModelingToolSettingsTarget operationPreviewTarget(
-            ModelingToolSettingsTargetKind kind,
-            std::string_view fallbackLabel,
-            std::string_view fallbackOperationId) const;
-    [[nodiscard]] ModelingToolSettingsTarget activePreviewTarget(
-            const quader_editor_core::PreviewTransactionStatus& preview) const;
-    [[nodiscard]] ModelingToolSettingsTarget activeRuntimeToolTarget(
-            const quader_editor_core::EditorRuntimeStatus& runtimeStatus) const;
+  [[nodiscard]] ModelingToolSettingsTarget
+  operation_preview_target(ModelingToolSettingsTargetKind kind,
+                           std::string_view fallback_label,
+                           std::string_view fallback_operation_id) const;
+  [[nodiscard]] ModelingToolSettingsTarget active_preview_target(
+      const quader_editor_core::PreviewTransactionStatus &preview) const;
+  [[nodiscard]] ModelingToolSettingsTarget active_runtime_tool_target(
+      const quader_editor_core::EditorRuntimeStatus &runtime_status) const;
 
 private:
-    std::string activePreviewActionId_;
-    std::string activePreviewOperationId_;
-    std::string activePreviewLabel_;
+  std::string active_preview_action_id_;
+  std::string active_preview_operation_id_;
+  std::string active_preview_label_;
 };
 
 } // namespace quader

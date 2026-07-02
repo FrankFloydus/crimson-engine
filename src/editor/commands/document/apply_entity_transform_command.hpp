@@ -36,34 +36,37 @@ public:
     }
 
     DocumentCommandResult redo() override {
-        if (documentCommandSameTransform(before_, after_)) {
-            return documentCommandUnchangedResult();
-        }
+      if (document_command_same_transform(before_, after_)) {
+        return document_command_unchanged_result();
+      }
         return apply(after_);
     }
 
-    bool mergeWith(const IUndoableCommand& newerCommand, std::string_view mergeKey) override {
-        if (mergeKey.empty()) {
-            return false;
-        }
-        const auto* newer = dynamic_cast<const ApplyEntityTransformCommand*>(&newerCommand);
-        if (newer == nullptr || &newer->scene() != &scene() || newer->entity_ != entity_) {
-            return false;
-        }
-        after_ = newer->after_;
-        return true;
+    bool merge_with(const IUndoableCommand &newer_command,
+                    std::string_view merge_key) override {
+      if (merge_key.empty()) {
+        return false;
+      }
+      const auto *newer =
+          dynamic_cast<const ApplyEntityTransformCommand *>(&newer_command);
+      if (newer == nullptr || &newer->scene() != &scene() ||
+          newer->entity_ != entity_) {
+        return false;
+      }
+      after_ = newer->after_;
+      return true;
     }
 
 private:
     DocumentCommandResult apply(const TransformComponent& transform) {
         if (!scene().exists(entity_)) {
-            return documentCommandMissingEntityResult();
+          return document_command_missing_entity_result();
         }
-        scene().setTransform(entity_, transform);
-        return documentCommandChangedResult();
+        scene().set_transform(entity_, transform);
+        return document_command_changed_result();
     }
 
-    EntityId entity_ = InvalidEntityId;
+    EntityId entity_ = kInvalidEntityId;
     TransformComponent before_;
     TransformComponent after_;
 };

@@ -22,32 +22,33 @@ namespace quader {
  */
 struct ViewportHoverWorkKey {
     bool valid = false;
-    ViewportPaneId paneId = ViewportPaneId::Perspective;
-    ViewportToolId activeTool = ViewportToolId::Select;
-    ViewportSelectionMode selectionMode = ViewportSelectionMode::Object;
-    ModelingBoxDragState boxDragState = ModelingBoxDragState::Idle;
-    int gridPreset = 0;
-    QVec2 mouseLocal = {};
-    QVec2 viewportSize = {};
-    QVec3 cameraEye = {};
-    QVec3 cameraForward = {0.0f, 0.0f, -1.0f};
-    QVec3 cameraRight = {1.0f, 0.0f, 0.0f};
-    QVec3 cameraUp = {0.0f, 1.0f, 0.0f};
-    ViewportOverlayProjection cameraProjection = ViewportOverlayProjection::Perspective;
-    float cameraOrthographicSize = 24.0f;
-    float cameraFovDegrees = 60.0f;
-    float cameraNearPlane = 0.05f;
-    float cameraFarPlane = 1000.0f;
-    bool primaryModifier = false;
-    bool shiftModifier = false;
-    bool altModifier = false;
-    bool gizmoConsumed = false;
-    double vertexRadius = 0.3;
-    double edgeRadius = 0.2;
-    std::uint64_t sceneRevision = 0;
-    std::uint64_t assetRevision = 0;
-    std::uint64_t contentRevision = 0;
-    std::uint64_t selectionRevision = 0;
+    ViewportPaneId pane_id = ViewportPaneId::Perspective;
+    ViewportToolId active_tool = ViewportToolId::Select;
+    ViewportSelectionMode selection_mode = ViewportSelectionMode::Object;
+    ModelingBoxDragState box_drag_state = ModelingBoxDragState::Idle;
+    int grid_preset = 0;
+    QVec2 mouse_local = {};
+    QVec2 viewport_size = {};
+    QVec3 camera_eye = {};
+    QVec3 camera_forward = {0.0f, 0.0f, -1.0f};
+    QVec3 camera_right = {1.0f, 0.0f, 0.0f};
+    QVec3 camera_up = {0.0f, 1.0f, 0.0f};
+    ViewportOverlayProjection camera_projection =
+        ViewportOverlayProjection::Perspective;
+    float camera_orthographic_size = 24.0f;
+    float camera_fov_degrees = 60.0f;
+    float camera_near_plane = 0.05f;
+    float camera_far_plane = 1000.0f;
+    bool primary_modifier = false;
+    bool shift_modifier = false;
+    bool alt_modifier = false;
+    bool gizmo_consumed = false;
+    double vertex_radius = 0.3;
+    double edge_radius = 0.2;
+    std::uint64_t scene_revision = 0;
+    std::uint64_t asset_revision = 0;
+    std::uint64_t content_revision = 0;
+    std::uint64_t selection_revision = 0;
 
     [[nodiscard]] bool matches(const ViewportHoverWorkKey& other) const;
 };
@@ -56,21 +57,21 @@ struct ViewportHoverWorkKey {
  * Stores the Viewport Hover Work Request data contract used by the ImGui editor presentation layer.
  */
 struct ViewportHoverWorkRequest {
-    ViewportPaneId paneId = ViewportPaneId::Perspective;
-    ViewportToolId activeTool = ViewportToolId::Select;
-    ViewportSelectionMode selectionMode = ViewportSelectionMode::Object;
-    ModelingBoxDragState boxDragState = ModelingBoxDragState::Idle;
-    int gridPreset = 0;
-    QVec2 mouseLocal = {};
-    QVec2 viewportSize = {};
-    ViewportModifiers modifiers = {};
-    bool gizmoConsumed = false;
-    double vertexRadius = 0.3;
-    double edgeRadius = 0.2;
-    std::uint64_t sceneRevision = 0;
-    std::uint64_t assetRevision = 0;
-    std::uint64_t contentRevision = 0;
-    std::uint64_t selectionRevision = 0;
+  ViewportPaneId pane_id = ViewportPaneId::Perspective;
+  ViewportToolId active_tool = ViewportToolId::Select;
+  ViewportSelectionMode selection_mode = ViewportSelectionMode::Object;
+  ModelingBoxDragState box_drag_state = ModelingBoxDragState::Idle;
+  int grid_preset = 0;
+  QVec2 mouse_local = {};
+  QVec2 viewport_size = {};
+  ViewportModifiers modifiers = {};
+  bool gizmo_consumed = false;
+  double vertex_radius = 0.3;
+  double edge_radius = 0.2;
+  std::uint64_t scene_revision = 0;
+  std::uint64_t asset_revision = 0;
+  std::uint64_t content_revision = 0;
+  std::uint64_t selection_revision = 0;
 };
 
 /**
@@ -78,15 +79,15 @@ struct ViewportHoverWorkRequest {
  */
 class ViewportHoverController {
 public:
-    [[nodiscard]] ViewportHoverWorkKey makeKey(
-            const ViewportCameraController& camera,
-            const ViewportHoverWorkRequest& request) const;
+  [[nodiscard]] ViewportHoverWorkKey
+  make_key(const ViewportCameraController &camera,
+           const ViewportHoverWorkRequest &request) const;
 
-    [[nodiscard]] bool claim(const ViewportHoverWorkKey& key);
-    void invalidate();
+  [[nodiscard]] bool claim(const ViewportHoverWorkKey &key);
+  void invalidate();
 
 private:
-    ViewportHoverWorkKey lastKey_;
+  ViewportHoverWorkKey last_key_;
 };
 
 } // namespace quader

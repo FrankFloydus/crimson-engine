@@ -14,37 +14,35 @@
 namespace quader {
 namespace {
 
-bool meshProxyNeedsRebuild(
-        const std::unordered_map<EntityId, MeshRenderableProxy>& proxies,
-        EntityId entityId,
-        AssetId meshId,
-        const MeshAsset& mesh,
-        AssetId materialId,
-        bool castShadows,
-        bool doubleSided,
-        std::uint64_t materialRevision) {
-    const auto existing = proxies.find(entityId);
-    return existing == proxies.end() ||
-            existing->second.mesh != meshId ||
-            existing->second.meshRevision != mesh.revision.value ||
-            existing->second.material != materialId ||
-            existing->second.castShadows != castShadows ||
-            existing->second.doubleSided != doubleSided ||
-            existing->second.materialRevision != materialRevision;
+bool mesh_proxy_needs_rebuild(
+    const std::unordered_map<EntityId, MeshRenderableProxy> &proxies,
+    EntityId entity_id, AssetId mesh_id, const MeshAsset &mesh,
+    AssetId material_id, bool cast_shadows, bool double_sided,
+    std::uint64_t material_revision) {
+  const auto existing = proxies.find(entity_id);
+  return existing == proxies.end() || existing->second.mesh != mesh_id ||
+         existing->second.mesh_revision != mesh.revision.value ||
+         existing->second.material != material_id ||
+         existing->second.cast_shadows != cast_shadows ||
+         existing->second.double_sided != double_sided ||
+         existing->second.material_revision != material_revision;
 }
 
-void destroyProxyMap(MeshRenderableFactory& factory, std::unordered_map<EntityId, MeshRenderableProxy>& proxies) {
-    for (auto& [id, proxy] : proxies) {
-        factory.destroy(proxy);
-    }
-    proxies.clear();
+void destroy_proxy_map(
+    MeshRenderableFactory &factory,
+    std::unordered_map<EntityId, MeshRenderableProxy> &proxies) {
+  for (auto &[id, proxy] : proxies) {
+    factory.destroy(proxy);
+  }
+  proxies.clear();
 }
 
-void destroyDetachedProxyVector(MeshRenderableFactory& factory, std::vector<MeshRenderableProxy>& proxies) {
-    for (MeshRenderableProxy& proxy : proxies) {
-        factory.destroyDetached(proxy);
-    }
-    proxies.clear();
+void destroy_detached_proxy_vector(MeshRenderableFactory &factory,
+                                   std::vector<MeshRenderableProxy> &proxies) {
+  for (MeshRenderableProxy &proxy : proxies) {
+    factory.destroy_detached(proxy);
+  }
+  proxies.clear();
 }
 
 } // namespace
@@ -62,209 +60,175 @@ void MeshRenderableCache::shutdown() {
         return;
     }
 
-    destroyProxyMap(*factory_, renderedMeshProxies_);
-    destroyProxyMap(*factory_, shadedMeshProxies_);
-    destroyProxyMap(*factory_, overlayDepthMeshProxies_);
-    destroyDetachedProxyVector(*factory_, retiredMeshProxies_);
+    destroy_proxy_map(*factory_, rendered_mesh_proxies_);
+    destroy_proxy_map(*factory_, shaded_mesh_proxies_);
+    destroy_proxy_map(*factory_, overlay_depth_mesh_proxies_);
+    destroy_detached_proxy_vector(*factory_, retired_mesh_proxies_);
     factory_ = nullptr;
 }
 
-bool MeshRenderableCache::contains(EntityId entityId) const {
-    return renderedMeshProxies_.contains(entityId) ||
-            shadedMeshProxies_.contains(entityId) ||
-            overlayDepthMeshProxies_.contains(entityId);
+bool MeshRenderableCache::contains(EntityId entity_id) const {
+  return rendered_mesh_proxies_.contains(entity_id) ||
+         shaded_mesh_proxies_.contains(entity_id) ||
+         overlay_depth_mesh_proxies_.contains(entity_id);
 }
 
-bool MeshRenderableCache::needsRebuild(EntityId entityId,
-        AssetId meshId,
-        const MeshAsset& mesh,
-        AssetId materialId,
-        bool castShadows,
-        bool doubleSided,
-        std::uint64_t materialRevision) const {
-    return meshProxyNeedsRebuild(
-                    renderedMeshProxies_,
-                    entityId,
-                    meshId,
-                    mesh,
-                    materialId,
-                    castShadows,
-                    doubleSided,
-                    materialRevision) ||
-            meshProxyNeedsRebuild(
-                    shadedMeshProxies_,
-                    entityId,
-                    meshId,
-                    mesh,
-                    materialId,
-                    false,
-                    doubleSided,
-                    materialRevision) ||
-            meshProxyNeedsRebuild(
-                    overlayDepthMeshProxies_,
-                    entityId,
-                    meshId,
-                    mesh,
-                    materialId,
-                    false,
-                    doubleSided,
-                    materialRevision);
+bool MeshRenderableCache::needs_rebuild(EntityId entity_id, AssetId mesh_id,
+                                        const MeshAsset &mesh,
+                                        AssetId material_id, bool cast_shadows,
+                                        bool double_sided,
+                                        std::uint64_t material_revision) const {
+  return mesh_proxy_needs_rebuild(rendered_mesh_proxies_, entity_id, mesh_id,
+                                  mesh, material_id, cast_shadows, double_sided,
+                                  material_revision) ||
+         mesh_proxy_needs_rebuild(shaded_mesh_proxies_, entity_id, mesh_id,
+                                  mesh, material_id, false, double_sided,
+                                  material_revision) ||
+         mesh_proxy_needs_rebuild(overlay_depth_mesh_proxies_, entity_id,
+                                  mesh_id, mesh, material_id, false,
+                                  double_sided, material_revision);
 }
 
-void MeshRenderableCache::syncMesh(EntityId entityId,
-        AssetId meshId,
-        const MeshAsset& mesh,
-        AssetId materialId,
-        const MaterialComponent* material,
-        const AssetRegistry& assets,
-        const QMat4& worldTransform,
-        bool castShadows,
-        bool doubleSided,
-        std::uint64_t materialRevision) {
-    QDR_PROFILE_FUNCTION();
-    if (!factory_) {
-        return;
-    }
+void MeshRenderableCache::sync_mesh(EntityId entity_id, AssetId mesh_id,
+                                    const MeshAsset &mesh, AssetId material_id,
+                                    const MaterialComponent *material,
+                                    const AssetRegistry &assets,
+                                    const QMat4 &world_transform,
+                                    bool cast_shadows, bool double_sided,
+                                    std::uint64_t material_revision) {
+  QDR_PROFILE_FUNCTION();
+  if (!factory_) {
+    return;
+  }
 
-    if (needsRebuild(entityId, meshId, mesh, materialId, castShadows, doubleSided, materialRevision)) {
-        QDR_PROFILE_SCOPE("Mesh renderable rebuild proxies");
-        remove(entityId);
-        MeshRenderableProxy renderedProxy = factory_->create(
-                entityId,
-                meshId,
-                mesh,
-                material,
-                assets,
-                worldTransform,
-                castShadows,
-                doubleSided,
-                materialRevision,
-                kViewportRenderedSceneLayerMask,
-                false);
-        renderedMeshProxies_.emplace(entityId, std::move(renderedProxy));
-        MeshRenderableProxy shadedProxy = factory_->create(
-                entityId,
-                meshId,
-                mesh,
-                material,
-                assets,
-                worldTransform,
-                false,
-                doubleSided,
-                materialRevision,
-                kViewportShadedSceneLayerMask,
-                true);
-        shadedMeshProxies_.emplace(entityId, std::move(shadedProxy));
-        MeshRenderableProxy overlayDepthProxy = factory_->create(
-                entityId,
-                meshId,
-                mesh,
-                material,
-                assets,
-                worldTransform,
-                false,
-                doubleSided,
-                materialRevision,
-                kViewportOverlayLayerMask,
-                true,
-                true,
-                kViewportOverlayDepthChannel);
-        overlayDepthMeshProxies_.emplace(entityId, std::move(overlayDepthProxy));
-        return;
-    }
+  if (needs_rebuild(entity_id, mesh_id, mesh, material_id, cast_shadows,
+                    double_sided, material_revision)) {
+    QDR_PROFILE_SCOPE("Mesh renderable rebuild proxies");
+    remove(entity_id);
+    MeshRenderableProxy rendered_proxy = factory_->create(
+        entity_id, mesh_id, mesh, material, assets, world_transform,
+        cast_shadows, double_sided, material_revision,
+        kViewportRenderedSceneLayerMask, false);
+    rendered_mesh_proxies_.emplace(entity_id, std::move(rendered_proxy));
+    MeshRenderableProxy shaded_proxy = factory_->create(
+        entity_id, mesh_id, mesh, material, assets, world_transform, false,
+        double_sided, material_revision, kViewportShadedSceneLayerMask, true);
+    shaded_mesh_proxies_.emplace(entity_id, std::move(shaded_proxy));
+    MeshRenderableProxy overlay_depth_proxy = factory_->create(
+        entity_id, mesh_id, mesh, material, assets, world_transform, false,
+        double_sided, material_revision, kViewportOverlayLayerMask, true, true,
+        kViewportOverlayDepthChannel);
+    overlay_depth_mesh_proxies_.emplace(entity_id,
+                                        std::move(overlay_depth_proxy));
+    return;
+  }
 
-    if (auto existing = renderedMeshProxies_.find(entityId); existing != renderedMeshProxies_.end()) {
-        QDR_PROFILE_SCOPE("Mesh renderable update rendered transform");
-        factory_->updateTransform(existing->second, worldTransform);
-    }
-    if (auto existing = shadedMeshProxies_.find(entityId); existing != shadedMeshProxies_.end()) {
-        QDR_PROFILE_SCOPE("Mesh renderable update shaded transform");
-        factory_->updateTransform(existing->second, worldTransform);
-    }
-    if (auto existing = overlayDepthMeshProxies_.find(entityId); existing != overlayDepthMeshProxies_.end()) {
-        QDR_PROFILE_SCOPE("Mesh renderable update depth transform");
-        factory_->updateTransform(existing->second, worldTransform);
-    }
+  if (auto existing = rendered_mesh_proxies_.find(entity_id);
+      existing != rendered_mesh_proxies_.end()) {
+    QDR_PROFILE_SCOPE("Mesh renderable update rendered transform");
+    factory_->update_transform(existing->second, world_transform);
+  }
+  if (auto existing = shaded_mesh_proxies_.find(entity_id);
+      existing != shaded_mesh_proxies_.end()) {
+    QDR_PROFILE_SCOPE("Mesh renderable update shaded transform");
+    factory_->update_transform(existing->second, world_transform);
+  }
+  if (auto existing = overlay_depth_mesh_proxies_.find(entity_id);
+      existing != overlay_depth_mesh_proxies_.end()) {
+    QDR_PROFILE_SCOPE("Mesh renderable update depth transform");
+    factory_->update_transform(existing->second, world_transform);
+  }
 }
 
-void MeshRenderableCache::remove(EntityId entityId) {
-    QDR_PROFILE_FUNCTION();
-    if (!factory_) {
-        return;
-    }
+void MeshRenderableCache::remove(EntityId entity_id) {
+  QDR_PROFILE_FUNCTION();
+  if (!factory_) {
+    return;
+  }
 
-    if (auto existing = renderedMeshProxies_.find(entityId); existing != renderedMeshProxies_.end()) {
-        retireProxy(std::move(existing->second));
-        renderedMeshProxies_.erase(existing);
-    }
-    if (auto existing = shadedMeshProxies_.find(entityId); existing != shadedMeshProxies_.end()) {
-        retireProxy(std::move(existing->second));
-        shadedMeshProxies_.erase(existing);
-    }
-    if (auto existing = overlayDepthMeshProxies_.find(entityId); existing != overlayDepthMeshProxies_.end()) {
-        retireProxy(std::move(existing->second));
-        overlayDepthMeshProxies_.erase(existing);
-    }
+  if (auto existing = rendered_mesh_proxies_.find(entity_id);
+      existing != rendered_mesh_proxies_.end()) {
+    retire_proxy(std::move(existing->second));
+    rendered_mesh_proxies_.erase(existing);
+  }
+  if (auto existing = shaded_mesh_proxies_.find(entity_id);
+      existing != shaded_mesh_proxies_.end()) {
+    retire_proxy(std::move(existing->second));
+    shaded_mesh_proxies_.erase(existing);
+  }
+  if (auto existing = overlay_depth_mesh_proxies_.find(entity_id);
+      existing != overlay_depth_mesh_proxies_.end()) {
+    retire_proxy(std::move(existing->second));
+    overlay_depth_mesh_proxies_.erase(existing);
+  }
 }
 
-void MeshRenderableCache::removeExcept(const std::unordered_set<EntityId>& liveMeshEntities) {
-    QDR_PROFILE_FUNCTION();
-    if (!factory_) {
-        return;
-    }
+void MeshRenderableCache::remove_except(
+    const std::unordered_set<EntityId> &live_mesh_entities) {
+  QDR_PROFILE_FUNCTION();
+  if (!factory_) {
+    return;
+  }
 
-    for (auto it = renderedMeshProxies_.begin(); it != renderedMeshProxies_.end();) {
-        if (!liveMeshEntities.contains(it->first)) {
-            retireProxy(std::move(it->second));
-            it = renderedMeshProxies_.erase(it);
-        } else {
-            ++it;
-        }
+  for (auto it = rendered_mesh_proxies_.begin();
+       it != rendered_mesh_proxies_.end();) {
+    if (!live_mesh_entities.contains(it->first)) {
+      retire_proxy(std::move(it->second));
+      it = rendered_mesh_proxies_.erase(it);
+    } else {
+      ++it;
     }
-    for (auto it = shadedMeshProxies_.begin(); it != shadedMeshProxies_.end();) {
-        if (!liveMeshEntities.contains(it->first)) {
-            retireProxy(std::move(it->second));
-            it = shadedMeshProxies_.erase(it);
-        } else {
-            ++it;
-        }
+  }
+  for (auto it = shaded_mesh_proxies_.begin();
+       it != shaded_mesh_proxies_.end();) {
+    if (!live_mesh_entities.contains(it->first)) {
+      retire_proxy(std::move(it->second));
+      it = shaded_mesh_proxies_.erase(it);
+    } else {
+      ++it;
     }
-    for (auto it = overlayDepthMeshProxies_.begin(); it != overlayDepthMeshProxies_.end();) {
-        if (!liveMeshEntities.contains(it->first)) {
-            retireProxy(std::move(it->second));
-            it = overlayDepthMeshProxies_.erase(it);
-        } else {
-            ++it;
-        }
+  }
+  for (auto it = overlay_depth_mesh_proxies_.begin();
+       it != overlay_depth_mesh_proxies_.end();) {
+    if (!live_mesh_entities.contains(it->first)) {
+      retire_proxy(std::move(it->second));
+      it = overlay_depth_mesh_proxies_.erase(it);
+    } else {
+      ++it;
     }
+  }
 }
 
-void MeshRenderableCache::drainRetiredDestroyQueue(std::size_t maxProxyCount) {
-    QDR_PROFILE_FUNCTION();
-    if (!factory_ || maxProxyCount == 0u) {
-        return;
-    }
+void MeshRenderableCache::drain_retired_destroy_queue(
+    std::size_t max_proxy_count) {
+  QDR_PROFILE_FUNCTION();
+  if (!factory_ || max_proxy_count == 0u) {
+    return;
+  }
 
-    for (std::size_t destroyed = 0u; destroyed < maxProxyCount && !retiredMeshProxies_.empty(); ++destroyed) {
-        QDR_PROFILE_SCOPE("Mesh renderable destroy retired proxy");
-        MeshRenderableProxy& proxy = retiredMeshProxies_.back();
-        factory_->destroyDetached(proxy);
-        retiredMeshProxies_.pop_back();
-    }
+  for (std::size_t destroyed = 0u;
+       destroyed < max_proxy_count && !retired_mesh_proxies_.empty();
+       ++destroyed) {
+    QDR_PROFILE_SCOPE("Mesh renderable destroy retired proxy");
+    MeshRenderableProxy &proxy = retired_mesh_proxies_.back();
+    factory_->destroy_detached(proxy);
+    retired_mesh_proxies_.pop_back();
+  }
 }
 
-std::uint64_t MeshRenderableCache::meshAssetSignature(std::uint64_t hash, const MeshAsset& mesh) {
-    return MeshRenderableFactory::meshAssetSignature(hash, mesh);
+std::uint64_t MeshRenderableCache::mesh_asset_signature(std::uint64_t hash,
+                                                        const MeshAsset &mesh) {
+  return MeshRenderableFactory::mesh_asset_signature(hash, mesh);
 }
 
-void MeshRenderableCache::retireProxy(MeshRenderableProxy&& proxy) {
-    if (!factory_ || !proxy.entity) {
-        return;
-    }
+void MeshRenderableCache::retire_proxy(MeshRenderableProxy &&proxy) {
+  if (!factory_ || !proxy.entity) {
+    return;
+  }
 
-    QDR_PROFILE_FUNCTION();
-    factory_->removeFromScene(proxy);
-    retiredMeshProxies_.push_back(std::move(proxy));
+  QDR_PROFILE_FUNCTION();
+  factory_->remove_from_scene(proxy);
+  retired_mesh_proxies_.push_back(std::move(proxy));
 }
 
 } // namespace quader

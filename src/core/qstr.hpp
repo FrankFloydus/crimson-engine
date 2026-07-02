@@ -28,13 +28,19 @@ class QStr final {
 public:
     QStr() = delete;
 
-    [[nodiscard]] static std::string trimAsciiWhitespace(std::string_view value);
-    [[nodiscard]] static std::string toAsciiLower(std::string_view value);
-    [[nodiscard]] static bool equalsAsciiIgnoreCase(std::string_view left, std::string_view right);
-    [[nodiscard]] static std::optional<bool> parseBoolToken(std::string_view value);
-    [[nodiscard]] static std::optional<float> parseFiniteFloatToken(std::string_view value);
-    [[nodiscard]] static std::optional<QStrSplitOnce> splitOnce(std::string_view value, char delimiter);
-    [[nodiscard]] static std::vector<std::string_view> splitLines(std::string_view value);
+    [[nodiscard]] static std::string
+    trim_ascii_whitespace(std::string_view value);
+    [[nodiscard]] static std::string to_ascii_lower(std::string_view value);
+    [[nodiscard]] static bool equals_ascii_ignore_case(std::string_view left,
+                                                       std::string_view right);
+    [[nodiscard]] static std::optional<bool>
+    parse_bool_token(std::string_view value);
+    [[nodiscard]] static std::optional<float>
+    parse_finite_float_token(std::string_view value);
+    [[nodiscard]] static std::optional<QStrSplitOnce>
+    split_once(std::string_view value, char delimiter);
+    [[nodiscard]] static std::vector<std::string_view>
+    split_lines(std::string_view value);
 };
 
 } // namespace quader

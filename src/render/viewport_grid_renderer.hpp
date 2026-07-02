@@ -33,40 +33,37 @@ public:
     ViewportGridRenderer& operator=(ViewportGridRenderer&&) = delete;
     ~ViewportGridRenderer();
 
-    void initialize(filament::Engine& engine,
-            filament::Scene& scene,
-            filament::Material& groundGridMaterial,
-            std::uint8_t gridLayerMask);
+    void initialize(filament::Engine &engine, filament::Scene &scene,
+                    filament::Material &ground_grid_material,
+                    std::uint8_t grid_layer_mask);
     void shutdown();
 
-    void update(const ViewportCameraController& controller,
-            std::uint32_t viewportWidth,
-            std::uint32_t viewportHeight,
-            float gridWorldSpacing,
-            const ViewportSettings& settings,
-            bool visible);
+    void update(const ViewportCameraController &controller,
+                std::uint32_t viewport_width, std::uint32_t viewport_height,
+                float grid_world_spacing, const ViewportSettings &settings,
+                bool visible);
 
     bool visible() const {
         return visible_;
     }
 
 private:
-    void createGroundGrid();
-    void setGroundGridVisible(bool visible);
-    void updateGroundGridMesh(float width, float height);
-    void destroyGroundGrid();
+  void create_ground_grid();
+  void set_ground_grid_visible(bool visible);
+  void update_ground_grid_mesh(float width, float height);
+  void destroy_ground_grid();
 
-    filament::Engine* engine_ = nullptr;
-    filament::Scene* scene_ = nullptr;
-    filament::Material* groundGridMaterial_ = nullptr;
-    utils::Entity groundGridEntity_;
-    filament::VertexBuffer* groundGridVertexBuffer_ = nullptr;
-    filament::IndexBuffer* groundGridIndexBuffer_ = nullptr;
-    filament::MaterialInstance* groundGridMaterialInstance_ = nullptr;
-    float groundGridMeshWidth_ = 0.0f;
-    float groundGridMeshHeight_ = 0.0f;
-    bool visible_ = true;
-    std::uint8_t gridLayerMask_ = 0x04u;
+  filament::Engine *engine_ = nullptr;
+  filament::Scene *scene_ = nullptr;
+  filament::Material *ground_grid_material_ = nullptr;
+  utils::Entity ground_grid_entity_;
+  filament::VertexBuffer *ground_grid_vertex_buffer_ = nullptr;
+  filament::IndexBuffer *ground_grid_index_buffer_ = nullptr;
+  filament::MaterialInstance *ground_grid_material_instance_ = nullptr;
+  float ground_grid_mesh_width_ = 0.0f;
+  float ground_grid_mesh_height_ = 0.0f;
+  bool visible_ = true;
+  std::uint8_t grid_layer_mask_ = 0x04u;
 };
 
 } // namespace quader

@@ -28,27 +28,25 @@ namespace {
 
 bool transform_axis_is_plane(TransformAxis axis)
 {
-	return axis == TransformAxis::xy ||
-		axis == TransformAxis::xz ||
-		axis == TransformAxis::yz;
+  return axis == TransformAxis::Xy || axis == TransformAxis::Xz ||
+         axis == TransformAxis::Yz;
 }
 
 bool transform_axis_is_single_axis(TransformAxis axis)
 {
-	return axis == TransformAxis::x ||
-		axis == TransformAxis::y ||
-		axis == TransformAxis::z;
+  return axis == TransformAxis::X || axis == TransformAxis::Y ||
+         axis == TransformAxis::Z;
 }
 
 double axis_coordinate(quader::QVec3 position, TransformAxis axis)
 {
 	switch (axis) {
-	case TransformAxis::x:
-		return position.x;
-	case TransformAxis::y:
-		return position.y;
-	case TransformAxis::z:
-		return position.z;
+        case TransformAxis::X:
+          return position.x;
+        case TransformAxis::Y:
+          return position.y;
+        case TransformAxis::Z:
+          return position.z;
 	default:
 		return 0.0;
 	}
@@ -56,52 +54,85 @@ double axis_coordinate(quader::QVec3 position, TransformAxis axis)
 
 quader::QVec3 transform_plane_normal(TransformAxis axis)
 {
-	if (axis == TransformAxis::xy) {
-		return { 0.0F, 0.0F, 1.0F };
-	}
-	if (axis == TransformAxis::xz) {
-		return { 0.0F, 1.0F, 0.0F };
-	}
-	if (axis == TransformAxis::yz) {
-		return { 1.0F, 0.0F, 0.0F };
-	}
-	return {};
+  if (axis == TransformAxis::Xy) {
+    return {0.0F, 0.0F, 1.0F};
+  }
+  if (axis == TransformAxis::Xz) {
+    return {0.0F, 1.0F, 0.0F};
+  }
+  if (axis == TransformAxis::Yz) {
+    return {1.0F, 0.0F, 0.0F};
+  }
+        return {};
 }
 
 quader::QVec3 plane_drag_delta(TransformAxis axis, quader::QVec3 raw_delta, double grid_size, bool grid_enabled)
 {
 	quader::QVec3 delta;
-	if (axis == TransformAxis::xy) {
-		delta.x = static_cast<float>(maybe_snap_world_value(raw_delta.x, grid_size, grid_enabled));
-		delta.y = static_cast<float>(maybe_snap_world_value(raw_delta.y, grid_size, grid_enabled));
-	} else if (axis == TransformAxis::xz) {
-		delta.x = static_cast<float>(maybe_snap_world_value(raw_delta.x, grid_size, grid_enabled));
-		delta.z = static_cast<float>(maybe_snap_world_value(raw_delta.z, grid_size, grid_enabled));
-	} else if (axis == TransformAxis::yz) {
-		delta.y = static_cast<float>(maybe_snap_world_value(raw_delta.y, grid_size, grid_enabled));
-		delta.z = static_cast<float>(maybe_snap_world_value(raw_delta.z, grid_size, grid_enabled));
-	}
-	return delta;
+        if (axis == TransformAxis::Xy) {
+          delta.x = static_cast<float>(
+              maybe_snap_world_value(raw_delta.x, grid_size, grid_enabled));
+          delta.y = static_cast<float>(
+              maybe_snap_world_value(raw_delta.y, grid_size, grid_enabled));
+        } else if (axis == TransformAxis::Xz) {
+          delta.x = static_cast<float>(
+              maybe_snap_world_value(raw_delta.x, grid_size, grid_enabled));
+          delta.z = static_cast<float>(
+              maybe_snap_world_value(raw_delta.z, grid_size, grid_enabled));
+        } else if (axis == TransformAxis::Yz) {
+          delta.y = static_cast<float>(
+              maybe_snap_world_value(raw_delta.y, grid_size, grid_enabled));
+          delta.z = static_cast<float>(
+              maybe_snap_world_value(raw_delta.z, grid_size, grid_enabled));
+        }
+        return delta;
 }
 
 quader::QVec3 snap_center_drag_delta(TransformAxis axis, quader::QVec3 center_world, quader::QVec3 raw_delta, double grid_size)
 {
 	quader::QVec3 delta;
-	if (axis == TransformAxis::x || axis == TransformAxis::xy || axis == TransformAxis::xz) {
-		delta.x = static_cast<float>(snap_world_value(static_cast<double>(center_world.x + raw_delta.x), grid_size) - center_world.x);
-	}
-	if (axis == TransformAxis::y || axis == TransformAxis::xy || axis == TransformAxis::yz) {
-		delta.y = static_cast<float>(snap_world_value(static_cast<double>(center_world.y + raw_delta.y), grid_size) - center_world.y);
-	}
-	if (axis == TransformAxis::z || axis == TransformAxis::xz || axis == TransformAxis::yz) {
-		delta.z = static_cast<float>(snap_world_value(static_cast<double>(center_world.z + raw_delta.z), grid_size) - center_world.z);
-	}
-	if (axis == TransformAxis::all) {
-		delta.x = static_cast<float>(snap_world_value(static_cast<double>(center_world.x + raw_delta.x), grid_size) - center_world.x);
-		delta.y = static_cast<float>(snap_world_value(static_cast<double>(center_world.y + raw_delta.y), grid_size) - center_world.y);
-		delta.z = static_cast<float>(snap_world_value(static_cast<double>(center_world.z + raw_delta.z), grid_size) - center_world.z);
-	}
-	return delta;
+        if (axis == TransformAxis::X || axis == TransformAxis::Xy ||
+            axis == TransformAxis::Xz) {
+          delta.x = static_cast<float>(
+              snap_world_value(
+                  static_cast<double>(center_world.x + raw_delta.x),
+                  grid_size) -
+              center_world.x);
+        }
+        if (axis == TransformAxis::Y || axis == TransformAxis::Xy ||
+            axis == TransformAxis::Yz) {
+          delta.y = static_cast<float>(
+              snap_world_value(
+                  static_cast<double>(center_world.y + raw_delta.y),
+                  grid_size) -
+              center_world.y);
+        }
+        if (axis == TransformAxis::Z || axis == TransformAxis::Xz ||
+            axis == TransformAxis::Yz) {
+          delta.z = static_cast<float>(
+              snap_world_value(
+                  static_cast<double>(center_world.z + raw_delta.z),
+                  grid_size) -
+              center_world.z);
+        }
+        if (axis == TransformAxis::All) {
+          delta.x = static_cast<float>(
+              snap_world_value(
+                  static_cast<double>(center_world.x + raw_delta.x),
+                  grid_size) -
+              center_world.x);
+          delta.y = static_cast<float>(
+              snap_world_value(
+                  static_cast<double>(center_world.y + raw_delta.y),
+                  grid_size) -
+              center_world.y);
+          delta.z = static_cast<float>(
+              snap_world_value(
+                  static_cast<double>(center_world.z + raw_delta.z),
+                  grid_size) -
+              center_world.z);
+        }
+        return delta;
 }
 
 bool edge_uses_vertex(quader_poly::Edge edge, quader_poly::ElementId vertex_id)
@@ -120,26 +151,30 @@ bool moving_selection_contains_vertex(
 		SelectionMode selection_mode,
 		quader_poly::ElementId vertex_id)
 {
-	if (!object.selected || vertex_id == quader_poly::invalid_element_id) {
-		return false;
-	}
-	if (selection_mode == SelectionMode::object) {
-		return true;
-	}
-	if (selection_mode == SelectionMode::vertex) {
-		return quader_poly::selection_contains(object.selection, vertex_id);
-	}
-	if (selection_mode == SelectionMode::edge) {
-		return std::any_of(object.selection.edges.begin(), object.selection.edges.end(), [vertex_id](quader_poly::Edge edge) {
-			return edge_uses_vertex(edge, vertex_id);
-		});
-	}
-	if (selection_mode == SelectionMode::face) {
-		return std::any_of(object.selection.faces.begin(), object.selection.faces.end(), [&object, vertex_id](quader_poly::ElementId face_id) {
-			return face_uses_vertex(object.document, face_id, vertex_id);
-		});
-	}
-	return false;
+  if (!object.selected || vertex_id == quader_poly::kInvalidElementId) {
+    return false;
+  }
+  if (selection_mode == SelectionMode::Object) {
+    return true;
+  }
+  if (selection_mode == SelectionMode::Vertex) {
+    return quader_poly::selection_contains(object.selection, vertex_id);
+  }
+  if (selection_mode == SelectionMode::Edge) {
+    return std::any_of(object.selection.edges.begin(),
+                       object.selection.edges.end(),
+                       [vertex_id](quader_poly::Edge edge) {
+                         return edge_uses_vertex(edge, vertex_id);
+                       });
+  }
+  if (selection_mode == SelectionMode::Face) {
+    return std::any_of(
+        object.selection.faces.begin(), object.selection.faces.end(),
+        [&object, vertex_id](quader_poly::ElementId face_id) {
+          return face_uses_vertex(object.document, face_id, vertex_id);
+        });
+  }
+        return false;
 }
 
 const PolygonObject* object_for_hit(const std::vector<PolygonObject>& objects, const PickHitRecord& hit)
@@ -172,29 +207,29 @@ std::optional<TransformSnapTarget> resolve_transform_vertex_snap_target(
 
 	quader_poly::PickOptions options =
 		selection_pick_options_from_radii(input.vertex_snap_radius, input.vertex_snap_radius);
-	options.mode = quader_poly::SelectionMode::vertex;
-	const std::vector<PickHitRecord> hits = pick_all(
+        options.mode = quader_poly::SelectionMode::Vertex;
+        const std::vector<PickHitRecord> hits = pick_all(
 		session.objects(),
 		{ input.ray, options },
 		input.snap_object_bounds,
 		input.snap_face_geometry);
 	const SelectionMode selection_mode = session.selection_mode();
 	for (const PickHitRecord& hit : hits) {
-		if (!hit.hit || hit.kind != quader_poly::ElementKind::vertex ||
-				hit.vertex_id == quader_poly::invalid_element_id) {
-			continue;
-		}
-		const PolygonObject* object = object_for_hit(session.objects(), hit);
+          if (!hit.hit || hit.kind != quader_poly::ElementKind::Vertex ||
+              hit.vertex_id == quader_poly::kInvalidElementId) {
+            continue;
+          }
+                const PolygonObject* object = object_for_hit(session.objects(), hit);
 		if (object != nullptr && moving_selection_contains_vertex(*object, selection_mode, hit.vertex_id)) {
 			continue;
 		}
-		return TransformSnapTarget {
-			TransformSnapLandmarkKind::vertex,
-			hit.object_id,
-			hit.vertex_id,
-			hit.local_position,
-		};
-	}
+                return TransformSnapTarget{
+                    TransformSnapLandmarkKind::Vertex,
+                    hit.object_id,
+                    hit.vertex_id,
+                    hit.local_position,
+                };
+        }
 	return std::nullopt;
 }
 
@@ -213,8 +248,8 @@ class MoveTool final : public EditorTool {
 public:
 	[[nodiscard]] ViewportInteractionTool tool_id() const override
 	{
-		return ViewportInteractionTool::move;
-	}
+          return ViewportInteractionTool::Move;
+        }
 
 	[[nodiscard]] std::string_view id() const override
 	{
@@ -280,12 +315,15 @@ public:
 			state.screen_axis = vec2_normalize_or(state.screen_axis, { 1.0F, 0.0F });
 		}
 		if (transform_axis_is_single_axis(input.axis) && input.has_start_ray) {
-			const DragDistanceResult start_distance =
-				axis_distance_from_ray(state.world_axis, state.center_world, input.start_ray, screen_epsilon);
-			if (start_distance.ok && std::isfinite(start_distance.distance)) {
-				state.has_axis_start_distance = true;
-				state.axis_start_distance = start_distance.distance;
-			}
+                  const DragDistanceResult start_distance =
+                      axis_distance_from_ray(state.world_axis,
+                                             state.center_world,
+                                             input.start_ray, kScreenEpsilon);
+                  if (start_distance.ok &&
+                      std::isfinite(start_distance.distance)) {
+                    state.has_axis_start_distance = true;
+                    state.axis_start_distance = start_distance.distance;
+                  }
 		}
 		return { true, {}, state };
 	}
@@ -295,9 +333,9 @@ public:
 		if (!state.active || vec3_is_tiny(state.world_axis) || vec3_is_tiny(ray.direction)) {
 			return std::numeric_limits<double>::infinity();
 		}
-		const DragDistanceResult distance =
-			axis_distance_from_ray(state.world_axis, state.center_world, ray, screen_epsilon);
-		return distance.ok ? distance.distance : std::numeric_limits<double>::infinity();
+                const DragDistanceResult distance = axis_distance_from_ray(
+                    state.world_axis, state.center_world, ray, kScreenEpsilon);
+                return distance.ok ? distance.distance : std::numeric_limits<double>::infinity();
 	}
 
 	[[nodiscard]] MovePreviewResult preview_move_from_distance(
@@ -322,8 +360,10 @@ public:
 			bool grid_enabled,
 			double grid_size) const
 	{
-		const double raw_distance = (pixels / move_pixels_per_grid_step) * grid_size;
-		return preview_move_from_distance(state, raw_distance, precision, grid_enabled, grid_size);
+          const double raw_distance =
+              (pixels / kMovePixelsPerGridStep) * grid_size;
+          return preview_move_from_distance(state, raw_distance, precision,
+                                            grid_enabled, grid_size);
 	}
 
 	[[nodiscard]] MovePreviewResult preview_move_to_axis_snap_target(
@@ -376,10 +416,11 @@ public:
 			const double ray_distance = move_axis_distance(state, ray);
 			if (state.has_axis_start_distance && std::isfinite(ray_distance)) {
 				const double ray_delta = ray_distance - state.axis_start_distance;
-				if (std::abs(ray_delta) > screen_epsilon || std::abs(pixel_delta) <= screen_epsilon) {
-					raw_distance = ray_delta;
-				}
-			}
+                                if (std::abs(ray_delta) > kScreenEpsilon ||
+                                    std::abs(pixel_delta) <= kScreenEpsilon) {
+                                  raw_distance = ray_delta;
+                                }
+                        }
 			if (snap_center_to_grid && grid_enabled) {
 				const quader::QVec3 raw_delta = vec3_scale(state.world_axis, raw_distance);
 				delta = snap_center_drag_delta(state.axis, state.center_world, raw_delta, grid_size);
@@ -409,20 +450,22 @@ public:
 			ViewportInteractionTool tool,
 			SelectionMode selection_mode) const
 	{
-		const bool component_topology_selection =
-			selection_mode == SelectionMode::face ||
-			selection_mode == SelectionMode::edge;
-		if (!component_topology_selection) {
-			return TransformDragOperation::transform;
-		}
-		if (operation == TransformDragOperation::extrude && tool == ViewportInteractionTool::move) {
-			return TransformDragOperation::extrude;
-		}
-		if (operation == TransformDragOperation::inset && tool == ViewportInteractionTool::scale) {
-			return TransformDragOperation::inset;
-		}
-		return TransformDragOperation::transform;
-	}
+          const bool component_topology_selection =
+              selection_mode == SelectionMode::Face ||
+              selection_mode == SelectionMode::Edge;
+          if (!component_topology_selection) {
+            return TransformDragOperation::Transform;
+          }
+          if (operation == TransformDragOperation::Extrude &&
+              tool == ViewportInteractionTool::Move) {
+            return TransformDragOperation::Extrude;
+          }
+          if (operation == TransformDragOperation::Inset &&
+              tool == ViewportInteractionTool::Scale) {
+            return TransformDragOperation::Inset;
+          }
+          return TransformDragOperation::Transform;
+        }
 
 	void reset_transform_drag(TransformDragState& state) const
 	{
@@ -440,98 +483,128 @@ public:
 		}
 
 		const double epsilon = std::max(input.epsilon, 0.0);
-		if (state.tool == ViewportInteractionTool::move) {
-			const quader::QVec3 previous_delta = state.move.preview_delta;
-			const TransformSnapTarget previous_snap_target = state.snap_target;
-			state.snap_target = {};
-			MovePreviewResult preview;
-			if (const std::optional<TransformSnapTarget> snap_target =
-						resolve_transform_vertex_snap_target(session, state, input)) {
-				state.snap_target = *snap_target;
-				preview = preview_move_to_axis_snap_target(state.move, snap_target->position);
-			} else {
-				preview = preview_move_from_viewport(
-					state.move,
-					input.screen_position,
-					input.ray,
-					input.camera,
-					input.precision,
-					input.grid_enabled,
-					input.grid_size,
-					state.scene_transform_preview_eligible && state.operation == TransformDragOperation::transform);
-			}
-			if (!preview.ok) {
-				return { false, false, preview.message.empty() ? "Move preview failed." : preview.message };
-			}
-			const bool snap_changed = !snap_targets_match(previous_snap_target, state.snap_target);
-			const bool non_zero_preview =
-				quader::length_squared(previous_delta) > static_cast<float>(epsilon * epsilon) ||
-				quader::length_squared(preview.preview_delta) > static_cast<float>(epsilon * epsilon);
-			if (!snap_changed && non_zero_preview && vec3_distance_squared(previous_delta, preview.preview_delta) <= epsilon * epsilon) {
-				return { true, false, {} };
-			}
-			if (state.scene_transform_preview_eligible && state.operation == TransformDragOperation::transform) {
-				return { true, non_zero_preview || snap_changed, {} };
-			}
-			if (state.operation == TransformDragOperation::extrude) {
-				return mark_snap_change(
-					session.update_transform_extrude_preview(preview.preview_delta, static_cast<float>(std::max(input.grid_size, 0.0001))),
-					snap_changed);
-			}
-			return mark_snap_change(
-				session.update_transform_translate_preview(preview.preview_delta, false),
-				snap_changed);
-		}
+                if (state.tool == ViewportInteractionTool::Move) {
+                  const quader::QVec3 previous_delta = state.move.preview_delta;
+                  const TransformSnapTarget previous_snap_target =
+                      state.snap_target;
+                  state.snap_target = {};
+                  MovePreviewResult preview;
+                  if (const std::optional<TransformSnapTarget> snap_target =
+                          resolve_transform_vertex_snap_target(session, state,
+                                                               input)) {
+                    state.snap_target = *snap_target;
+                    preview = preview_move_to_axis_snap_target(
+                        state.move, snap_target->position);
+                  } else {
+                    preview = preview_move_from_viewport(
+                        state.move, input.screen_position, input.ray,
+                        input.camera, input.precision, input.grid_enabled,
+                        input.grid_size,
+                        state.scene_transform_preview_eligible &&
+                            state.operation ==
+                                TransformDragOperation::Transform);
+                  }
+                  if (!preview.ok) {
+                    return {false, false,
+                            preview.message.empty() ? "Move preview failed."
+                                                    : preview.message};
+                  }
+                  const bool snap_changed = !snap_targets_match(
+                      previous_snap_target, state.snap_target);
+                  const bool non_zero_preview =
+                      quader::length_squared(previous_delta) >
+                          static_cast<float>(epsilon * epsilon) ||
+                      quader::length_squared(preview.preview_delta) >
+                          static_cast<float>(epsilon * epsilon);
+                  if (!snap_changed && non_zero_preview &&
+                      vec3_distance_squared(previous_delta,
+                                            preview.preview_delta) <=
+                          epsilon * epsilon) {
+                    return {true, false, {}};
+                  }
+                  if (state.scene_transform_preview_eligible &&
+                      state.operation == TransformDragOperation::Transform) {
+                    return {true, non_zero_preview || snap_changed, {}};
+                  }
+                  if (state.operation == TransformDragOperation::Extrude) {
+                    return mark_snap_change(
+                        session.update_transform_extrude_preview(
+                            preview.preview_delta,
+                            static_cast<float>(
+                                std::max(input.grid_size, 0.0001))),
+                        snap_changed);
+                  }
+                  return mark_snap_change(
+                      session.update_transform_translate_preview(
+                          preview.preview_delta, false),
+                      snap_changed);
+                }
 
-		if (state.tool == ViewportInteractionTool::rotate) {
-			const double previous_angle_degrees = state.rotate.preview_angle_degrees;
-			const RotatePreviewResult preview =
-				preview_rotate_from_screen_position(state.rotate,
-					input.screen_position,
-					input.grid_enabled ? input.rotate_snap_degrees : 0.0);
-			if (!preview.ok) {
-				return { false, false, preview.message.empty() ? "Rotate preview failed." : preview.message };
-			}
-			if (state.scene_transform_preview_eligible) {
-				return { true, std::abs(preview.preview_angle_degrees - previous_angle_degrees) > epsilon, {} };
-			}
-			if (std::abs(preview.preview_angle_degrees) <= epsilon) {
-				return session.update_transform_matrix_preview({}, state.pivot, false, false);
-			}
-			return session.update_transform_matrix_preview(preview.transform, state.pivot, false, false);
-		}
+                if (state.tool == ViewportInteractionTool::Rotate) {
+                  const double previous_angle_degrees =
+                      state.rotate.preview_angle_degrees;
+                  const RotatePreviewResult preview =
+                      preview_rotate_from_screen_position(
+                          state.rotate, input.screen_position,
+                          input.grid_enabled ? input.rotate_snap_degrees : 0.0);
+                  if (!preview.ok) {
+                    return {false, false,
+                            preview.message.empty() ? "Rotate preview failed."
+                                                    : preview.message};
+                  }
+                  if (state.scene_transform_preview_eligible) {
+                    return {true,
+                            std::abs(preview.preview_angle_degrees -
+                                     previous_angle_degrees) > epsilon,
+                            {}};
+                  }
+                  if (std::abs(preview.preview_angle_degrees) <= epsilon) {
+                    return session.update_transform_matrix_preview(
+                        {}, state.pivot, false, false);
+                  }
+                  return session.update_transform_matrix_preview(
+                      preview.transform, state.pivot, false, false);
+                }
 
-		if (state.tool == ViewportInteractionTool::scale) {
-			const quader::QVec3 previous_scale = state.scale.preview_scale;
-			const ScalePreviewResult preview =
-				preview_scale_from_screen_position(state.scale, input.screen_position, input.grid_enabled, input.grid_size);
-			if (!preview.ok) {
-				return { false, false, preview.message.empty() ? "Scale preview failed." : preview.message };
-			}
-			if (state.scene_transform_preview_eligible) {
-				const double preview_change =
-					std::abs(preview.preview_scale.x - previous_scale.x) +
-					std::abs(preview.preview_scale.y - previous_scale.y) +
-					std::abs(preview.preview_scale.z - previous_scale.z);
-				return { true, preview_change > epsilon, {} };
-			}
-			if (scale_delta(preview.preview_scale) <= epsilon) {
-				return session.update_transform_matrix_preview({}, state.pivot, false, false);
-			}
-			if (state.operation == TransformDragOperation::inset) {
-				return session.update_transform_inset_preview(preview.transform, state.pivot);
-			}
-			return session.update_transform_matrix_preview(preview.transform, state.pivot, false, false);
-		}
+                if (state.tool == ViewportInteractionTool::Scale) {
+                  const quader::QVec3 previous_scale =
+                      state.scale.preview_scale;
+                  const ScalePreviewResult preview =
+                      preview_scale_from_screen_position(
+                          state.scale, input.screen_position,
+                          input.grid_enabled, input.grid_size);
+                  if (!preview.ok) {
+                    return {false, false,
+                            preview.message.empty() ? "Scale preview failed."
+                                                    : preview.message};
+                  }
+                  if (state.scene_transform_preview_eligible) {
+                    const double preview_change =
+                        std::abs(preview.preview_scale.x - previous_scale.x) +
+                        std::abs(preview.preview_scale.y - previous_scale.y) +
+                        std::abs(preview.preview_scale.z - previous_scale.z);
+                    return {true, preview_change > epsilon, {}};
+                  }
+                  if (scale_delta(preview.preview_scale) <= epsilon) {
+                    return session.update_transform_matrix_preview(
+                        {}, state.pivot, false, false);
+                  }
+                  if (state.operation == TransformDragOperation::Inset) {
+                    return session.update_transform_inset_preview(
+                        preview.transform, state.pivot);
+                  }
+                  return session.update_transform_matrix_preview(
+                      preview.transform, state.pivot, false, false);
+                }
 
-		return { false, false, "Unknown transform drag tool." };
+                return { false, false, "Unknown transform drag tool." };
 	}
 };
 
 const MoveTool& move_tool_impl()
 {
-	static const MoveTool tool;
-	return tool;
+  static const MoveTool kTool;
+  return kTool;
 }
 
 } // namespace
@@ -614,49 +687,51 @@ std::vector<SelectionOverlayPoint> transform_drag_snap_overlay_points(
 		const TransformDragState& state,
 		const SelectionOverlayStyle& style)
 {
-	if (!state.active || state.snap_target.kind != TransformSnapLandmarkKind::vertex) {
-		return {};
-	}
-	return {
-		SelectionOverlayPoint {
-			SelectionOverlayLayer::hover_vertex,
-			state.snap_target.position,
-			style.hover_vertex_color_abgr,
-			style.vertex_point_size_pixels + style.selected_hover_point_growth_pixels,
-			state.snap_target.object_id,
-			state.snap_target.vertex_id,
-		},
-		SelectionOverlayPoint {
-			SelectionOverlayLayer::snap_target_vertex,
-			state.snap_target.position,
-			style.snap_target_vertex_color_abgr,
-			style.snap_target_point_size_pixels,
-			state.snap_target.object_id,
-			state.snap_target.vertex_id,
-		},
-	};
+  if (!state.active ||
+      state.snap_target.kind != TransformSnapLandmarkKind::Vertex) {
+    return {};
+  }
+  return {
+      SelectionOverlayPoint{
+          SelectionOverlayLayer::HoverVertex,
+          state.snap_target.position,
+          style.hover_vertex_color_abgr,
+          style.vertex_point_size_pixels +
+              style.selected_hover_point_growth_pixels,
+          state.snap_target.object_id,
+          state.snap_target.vertex_id,
+      },
+      SelectionOverlayPoint{
+          SelectionOverlayLayer::SnapTargetVertex,
+          state.snap_target.position,
+          style.snap_target_vertex_color_abgr,
+          style.snap_target_point_size_pixels,
+          state.snap_target.object_id,
+          state.snap_target.vertex_id,
+      },
+  };
 }
 
 ModalMoveDragTool modal_move_drag_tool_from_id(std::string_view tool_id)
 {
 	if (tool_id == "extend") {
-		return ModalMoveDragTool::extend;
-	}
+          return ModalMoveDragTool::Extend;
+        }
 	if (tool_id == "extrude") {
-		return ModalMoveDragTool::extrude;
-	}
-	return ModalMoveDragTool::move;
+          return ModalMoveDragTool::Extrude;
+        }
+        return ModalMoveDragTool::Move;
 }
 
 std::string modal_move_drag_tool_id(ModalMoveDragTool tool)
 {
-	if (tool == ModalMoveDragTool::extend) {
-		return "extend";
-	}
-	if (tool == ModalMoveDragTool::extrude) {
-		return "extrude";
-	}
-	return "move";
+  if (tool == ModalMoveDragTool::Extend) {
+    return "extend";
+  }
+  if (tool == ModalMoveDragTool::Extrude) {
+    return "extrude";
+  }
+        return "move";
 }
 
 ModalMoveBeginPlan plan_modal_move_drag_begin(const ModalMoveBeginInput& input)
@@ -681,20 +756,20 @@ ModalMoveUpdatePlan plan_modal_move_drag_update(const ModalMoveUpdateInput& inpu
 	}
 	plan.changed = true;
 	if (quader::length_squared(input.delta) <= static_cast<float>(epsilon)) {
-		plan.route = ModalMovePreviewRoute::clear_preview;
-		return plan;
+          plan.route = ModalMovePreviewRoute::ClearPreview;
+          return plan;
 	}
 	plan.preview_active = true;
-	if (input.tool == ModalMoveDragTool::extend) {
-		plan.route = ModalMovePreviewRoute::extend_patch_preview;
-	} else if (input.tool == ModalMoveDragTool::extrude) {
-		plan.route = ModalMovePreviewRoute::extrude_patch_preview;
-	} else if (input.preview_uses_transform) {
-		plan.route = ModalMovePreviewRoute::move_transform_preview;
-	} else {
-		plan.route = ModalMovePreviewRoute::move_patch_preview;
-	}
-	return plan;
+        if (input.tool == ModalMoveDragTool::Extend) {
+          plan.route = ModalMovePreviewRoute::ExtendPatchPreview;
+        } else if (input.tool == ModalMoveDragTool::Extrude) {
+          plan.route = ModalMovePreviewRoute::ExtrudePatchPreview;
+        } else if (input.preview_uses_transform) {
+          plan.route = ModalMovePreviewRoute::MoveTransformPreview;
+        } else {
+          plan.route = ModalMovePreviewRoute::MovePatchPreview;
+        }
+        return plan;
 }
 
 ModalMoveCommitPlan plan_modal_move_drag_commit(const ModalMoveCommitInput& input)
@@ -711,17 +786,17 @@ ModalMoveCommitPlan plan_modal_move_drag_commit(const ModalMoveCommitInput& inpu
 		return plan;
 	}
 	plan.model_changed = true;
-	if (input.tool == ModalMoveDragTool::extend) {
-		plan.route = ModalMoveCommitRoute::extend_patch;
-		plan.undo_action = "Quader Extend Face";
-	} else if (input.tool == ModalMoveDragTool::extrude) {
-		plan.route = ModalMoveCommitRoute::extrude_patch;
-		plan.undo_action = "Quader Extrude Face";
-	} else {
-		plan.route = ModalMoveCommitRoute::move_patch;
-		plan.undo_action = "Quader Move Selection";
-	}
-	return plan;
+        if (input.tool == ModalMoveDragTool::Extend) {
+          plan.route = ModalMoveCommitRoute::ExtendPatch;
+          plan.undo_action = "Quader Extend Face";
+        } else if (input.tool == ModalMoveDragTool::Extrude) {
+          plan.route = ModalMoveCommitRoute::ExtrudePatch;
+          plan.undo_action = "Quader Extrude Face";
+        } else {
+          plan.route = ModalMoveCommitRoute::MovePatch;
+          plan.undo_action = "Quader Move Selection";
+        }
+        return plan;
 }
 
 } // namespace quader_editor_core

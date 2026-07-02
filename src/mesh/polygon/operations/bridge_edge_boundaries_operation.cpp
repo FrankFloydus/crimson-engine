@@ -90,12 +90,16 @@ OperationResult bridge_edge_boundaries_impl(
         const std::size_t next_index = (edge_index + 1U) % vertex_count;
         const Edge first_edge = make_edge(first_vertices[edge_index], first_vertices[next_index]);
         const Edge second_edge = make_edge(second_vertices[edge_index], second_vertices[next_index]);
-        if (first_edge.a == invalid_element_id || first_edge.b == invalid_element_id ||
-                second_edge.a == invalid_element_id || second_edge.b == invalid_element_id ||
-                first_edge.a == first_edge.b || second_edge.a == second_edge.b ||
-                find_vertex(document, first_edge.a) == nullptr || find_vertex(document, first_edge.b) == nullptr ||
-                find_vertex(document, second_edge.a) == nullptr || find_vertex(document, second_edge.b) == nullptr) {
-            return { false, "Bridge needs valid boundary vertices." };
+        if (first_edge.a == kInvalidElementId ||
+            first_edge.b == kInvalidElementId ||
+            second_edge.a == kInvalidElementId ||
+            second_edge.b == kInvalidElementId ||
+            first_edge.a == first_edge.b || second_edge.a == second_edge.b ||
+            find_vertex(document, first_edge.a) == nullptr ||
+            find_vertex(document, first_edge.b) == nullptr ||
+            find_vertex(document, second_edge.a) == nullptr ||
+            find_vertex(document, second_edge.b) == nullptr) {
+          return {false, "Bridge needs valid boundary vertices."};
         }
         if (!used_edges.insert({ first_edge.a, first_edge.b }).second || !used_edges.insert({ second_edge.a, second_edge.b }).second) {
             return { false, "Bridge cannot reuse the same edge in multiple boundary segments." };
@@ -170,7 +174,7 @@ OperationResult bridge_edge_boundaries_impl(
 
     document = std::move(candidate);
     selection.clear();
-    selection.mode = SelectionMode::face;
+    selection.mode = SelectionMode::Face;
     selection.faces = std::move(bridge_face_ids);
     activate_face_selection(selection, selection.faces.back());
     return { true, {} };

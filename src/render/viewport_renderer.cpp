@@ -26,64 +26,64 @@ constexpr float kViewportOverlayCameraAperture = 16.0f;
 constexpr float kViewportOverlayCameraShutterSpeed = 1.0f / 125.0f;
 constexpr float kViewportOverlayCameraSensitivity = 100.0f;
 
-void applyNeutralOverlayExposure(filament::Camera* camera) {
-    if (!camera) {
-        return;
-    }
-    camera->setExposure(
-            kViewportOverlayCameraAperture,
-            kViewportOverlayCameraShutterSpeed,
-            kViewportOverlayCameraSensitivity);
+void apply_neutral_overlay_exposure(filament::Camera *camera) {
+  if (!camera) {
+    return;
+  }
+  camera->setExposure(kViewportOverlayCameraAperture,
+                      kViewportOverlayCameraShutterSpeed,
+                      kViewportOverlayCameraSensitivity);
 }
 
-ViewportSettingColor viewportClearColor(const SceneEnvironmentSettings& environment, bool renderedMode) {
-    if (renderedMode) {
-        return {};
-    }
-    return {
-            environment.clearColor.x,
-            environment.clearColor.y,
-            environment.clearColor.z,
-            1.0f,
-    };
+ViewportSettingColor
+viewport_clear_color(const SceneEnvironmentSettings &environment,
+                     bool rendered_mode) {
+  if (rendered_mode) {
+    return {};
+  }
+  return {
+      environment.clear_color.x,
+      environment.clear_color.y,
+      environment.clear_color.z,
+      1.0f,
+  };
 }
 
-filament::ColorGrading* buildColorGrading(
-        filament::Engine& engine,
-        const filament::ToneMapper& toneMapper) {
-    return filament::ColorGrading::Builder()
-            .quality(filament::ColorGrading::QualityLevel::MEDIUM)
-            .toneMapper(&toneMapper)
-            .build(engine);
+filament::ColorGrading *
+build_color_grading(filament::Engine &engine,
+                    const filament::ToneMapper &tone_mapper) {
+  return filament::ColorGrading::Builder()
+      .quality(filament::ColorGrading::QualityLevel::MEDIUM)
+      .toneMapper(&tone_mapper)
+      .build(engine);
 }
 
-filament::ColorGrading* buildColorGrading(
-        filament::Engine& engine,
-        SceneToneMapping toneMapping) {
-    switch (toneMapping) {
-    case SceneToneMapping::Linear: {
-        const filament::LinearToneMapper toneMapper;
-        return buildColorGrading(engine, toneMapper);
-    }
-    case SceneToneMapping::AcesLegacy: {
-        const filament::ACESLegacyToneMapper toneMapper;
-        return buildColorGrading(engine, toneMapper);
-    }
-    case SceneToneMapping::Aces: {
-        const filament::ACESToneMapper toneMapper;
-        return buildColorGrading(engine, toneMapper);
-    }
-    case SceneToneMapping::Filmic: {
-        const filament::FilmicToneMapper toneMapper;
-        return buildColorGrading(engine, toneMapper);
-    }
-    case SceneToneMapping::DisplayRange: {
-        const filament::DisplayRangeToneMapper toneMapper;
-        return buildColorGrading(engine, toneMapper);
-    }
-    }
-    const filament::ACESToneMapper toneMapper;
-    return buildColorGrading(engine, toneMapper);
+filament::ColorGrading *build_color_grading(filament::Engine &engine,
+                                            SceneToneMapping tone_mapping) {
+  switch (tone_mapping) {
+  case SceneToneMapping::Linear: {
+    const filament::LinearToneMapper tone_mapper;
+    return build_color_grading(engine, tone_mapper);
+  }
+  case SceneToneMapping::AcesLegacy: {
+    const filament::ACESLegacyToneMapper tone_mapper;
+    return build_color_grading(engine, tone_mapper);
+  }
+  case SceneToneMapping::Aces: {
+    const filament::ACESToneMapper tone_mapper;
+    return build_color_grading(engine, tone_mapper);
+  }
+  case SceneToneMapping::Filmic: {
+    const filament::FilmicToneMapper tone_mapper;
+    return build_color_grading(engine, tone_mapper);
+  }
+  case SceneToneMapping::DisplayRange: {
+    const filament::DisplayRangeToneMapper tone_mapper;
+    return build_color_grading(engine, tone_mapper);
+  }
+  }
+  const filament::ACESToneMapper tone_mapper;
+  return build_color_grading(engine, tone_mapper);
 }
 
 } // namespace
@@ -92,50 +92,52 @@ ViewportRenderer::~ViewportRenderer() {
     shutdown();
 }
 
-void ViewportRenderer::initialize(filament::Engine& engine,
-        filament::Scene& scene,
-        TextureRegistry& textureRegistry,
-        filament::Material& groundGridMaterial,
-        std::uint8_t gridLayerMask,
-        ViewportRenderSurface surface) {
-    engine_ = &engine;
-    scene_ = &scene;
-    textureRegistry_ = &textureRegistry;
-    surface_ = surface;
-    const std::uint8_t resolvedGridLayerMask = gridLayerMask == 0u ? viewportGridLayerMask(0) : gridLayerMask;
-    renderPassCoordinator_.initialize(resolvedGridLayerMask);
-    if (surface_ == ViewportRenderSurface::Texture) {
-        renderTarget_.initialize(engine, textureRegistry);
-        overlayRenderTarget_.initialize(engine, textureRegistry);
-    }
-    LOG_INFO("Creating viewport Filament view");
-    view_ = engine_->createView();
-    view_->setName("Main Viewport");
-    view_->setScene(scene_);
-    view_->setPostProcessingEnabled(false);
-    view_->setShadowingEnabled(true);
-    view_->setShadowType(filament::ShadowType::PCF);
-    overlayView_ = engine_->createView();
-    overlayView_->setName("Main Viewport Overlays");
-    overlayView_->setScene(scene_);
-    overlayView_->setPostProcessingEnabled(false);
-    overlayView_->setAntiAliasing(filament::AntiAliasing::NONE);
-    overlayView_->setDithering(filament::Dithering::NONE);
-    overlayView_->setShadowingEnabled(false);
-    overlayView_->setBlendMode(filament::View::BlendMode::TRANSLUCENT);
-    updateVisibleLayers();
+void ViewportRenderer::initialize(filament::Engine &engine,
+                                  filament::Scene &scene,
+                                  TextureRegistry &texture_registry,
+                                  filament::Material &ground_grid_material,
+                                  std::uint8_t grid_layer_mask,
+                                  ViewportRenderSurface surface) {
+  engine_ = &engine;
+  scene_ = &scene;
+  texture_registry_ = &texture_registry;
+  surface_ = surface;
+  const std::uint8_t resolved_grid_layer_mask =
+      grid_layer_mask == 0u ? viewport_grid_layer_mask(0) : grid_layer_mask;
+  render_pass_coordinator_.initialize(resolved_grid_layer_mask);
+  if (surface_ == ViewportRenderSurface::Texture) {
+    render_target_.initialize(engine, texture_registry);
+    overlay_render_target_.initialize(engine, texture_registry);
+  }
+  LOG_INFO("Creating viewport Filament view");
+  view_ = engine_->createView();
+  view_->setName("Main Viewport");
+  view_->setScene(scene_);
+  view_->setPostProcessingEnabled(false);
+  view_->setShadowingEnabled(true);
+  view_->setShadowType(filament::ShadowType::PCF);
+  overlay_view_ = engine_->createView();
+  overlay_view_->setName("Main Viewport Overlays");
+  overlay_view_->setScene(scene_);
+  overlay_view_->setPostProcessingEnabled(false);
+  overlay_view_->setAntiAliasing(filament::AntiAliasing::NONE);
+  overlay_view_->setDithering(filament::Dithering::NONE);
+  overlay_view_->setShadowingEnabled(false);
+  overlay_view_->setBlendMode(filament::View::BlendMode::TRANSLUCENT);
+  update_visible_layers();
 
-    LOG_INFO("Creating viewport camera");
-    cameraEntity_ = utils::EntityManager::get().create();
-    camera_ = engine_->createCamera(cameraEntity_);
-    overlayCameraEntity_ = utils::EntityManager::get().create();
-    overlayCamera_ = engine_->createCamera(overlayCameraEntity_);
-    applyNeutralOverlayExposure(overlayCamera_);
-    view_->setCamera(camera_);
-    overlayView_->setCamera(overlayCamera_);
-    gridRenderer_.initialize(engine, scene, groundGridMaterial, resolvedGridLayerMask);
-    LOG_INFO("Creating initial viewport render target");
-    resize(640, 480);
+  LOG_INFO("Creating viewport camera");
+  camera_entity_ = utils::EntityManager::get().create();
+  camera_ = engine_->createCamera(camera_entity_);
+  overlay_camera_entity_ = utils::EntityManager::get().create();
+  overlay_camera_ = engine_->createCamera(overlay_camera_entity_);
+  apply_neutral_overlay_exposure(overlay_camera_);
+  view_->setCamera(camera_);
+  overlay_view_->setCamera(overlay_camera_);
+  grid_renderer_.initialize(engine, scene, ground_grid_material,
+                            resolved_grid_layer_mask);
+  LOG_INFO("Creating initial viewport render target");
+  resize(640, 480);
 }
 
 void ViewportRenderer::shutdown() {
@@ -143,18 +145,18 @@ void ViewportRenderer::shutdown() {
         return;
     }
 
-    renderTarget_.shutdown();
-    overlayRenderTarget_.shutdown();
-    gridRenderer_.shutdown();
+    render_target_.shutdown();
+    overlay_render_target_.shutdown();
+    grid_renderer_.shutdown();
     if (view_) {
         view_->setColorGrading(nullptr);
     }
-    destroyColorGrading();
-    if (overlayView_) {
-        overlayView_->setCamera(nullptr);
-        overlayView_->setScene(nullptr);
-        engine_->destroy(overlayView_);
-        overlayView_ = nullptr;
+    destroy_color_grading();
+    if (overlay_view_) {
+      overlay_view_->setCamera(nullptr);
+      overlay_view_->setScene(nullptr);
+      engine_->destroy(overlay_view_);
+      overlay_view_ = nullptr;
     }
     if (view_) {
         view_->setCamera(nullptr);
@@ -162,26 +164,26 @@ void ViewportRenderer::shutdown() {
         engine_->destroy(view_);
         view_ = nullptr;
     }
-    if (overlayCamera_) {
-        engine_->destroyCameraComponent(overlayCameraEntity_);
-        overlayCamera_ = nullptr;
+    if (overlay_camera_) {
+      engine_->destroyCameraComponent(overlay_camera_entity_);
+      overlay_camera_ = nullptr;
     }
     if (camera_) {
-        engine_->destroyCameraComponent(cameraEntity_);
-        camera_ = nullptr;
+      engine_->destroyCameraComponent(camera_entity_);
+      camera_ = nullptr;
     }
-    if (overlayCameraEntity_) {
-        utils::EntityManager::get().destroy(overlayCameraEntity_);
-        overlayCameraEntity_.clear();
+    if (overlay_camera_entity_) {
+      utils::EntityManager::get().destroy(overlay_camera_entity_);
+      overlay_camera_entity_.clear();
     }
-    if (cameraEntity_) {
-        utils::EntityManager::get().destroy(cameraEntity_);
-        cameraEntity_.clear();
+    if (camera_entity_) {
+      utils::EntityManager::get().destroy(camera_entity_);
+      camera_entity_.clear();
     }
 
     engine_ = nullptr;
     scene_ = nullptr;
-    textureRegistry_ = nullptr;
+    texture_registry_ = nullptr;
 }
 
 void ViewportRenderer::resize(std::uint32_t width, std::uint32_t height) {
@@ -189,223 +191,226 @@ void ViewportRenderer::resize(std::uint32_t width, std::uint32_t height) {
     width_ = std::max(1u, width);
     height_ = std::max(1u, height);
     if (surface_ == ViewportRenderSurface::Texture) {
-        renderTarget_.resize(width_, height_, view_, TextureSampleColorSpace::LinearSrgb);
-        overlayRenderTarget_.resize(
-                width_,
-                height_,
-                overlayView_,
-                TextureSampleColorSpace::DisplaySrgbPremultipliedAlpha);
-        return;
+      render_target_.resize(width_, height_, view_,
+                            TextureSampleColorSpace::LinearSrgb);
+      overlay_render_target_.resize(
+          width_, height_, overlay_view_,
+          TextureSampleColorSpace::DisplaySrgbPremultipliedAlpha);
+      return;
     }
 
     if (view_) {
         view_->setRenderTarget(nullptr);
         view_->setViewport({0, 0, width_, height_});
     }
-    if (overlayView_) {
-        overlayView_->setRenderTarget(nullptr);
-        overlayView_->setViewport({0, 0, width_, height_});
+    if (overlay_view_) {
+      overlay_view_->setRenderTarget(nullptr);
+      overlay_view_->setViewport({0, 0, width_, height_});
     }
 }
 
-float ViewportRenderer::textureMaxU() const {
-    if (surface_ != ViewportRenderSurface::Texture) {
-        return 1.0f;
-    }
-    return std::clamp(
-            static_cast<float>(width_) / static_cast<float>(std::max(1u, renderTarget_.width())),
-            0.0f,
-            1.0f);
+float ViewportRenderer::texture_max_u() const {
+  if (surface_ != ViewportRenderSurface::Texture) {
+    return 1.0f;
+  }
+  return std::clamp(
+      static_cast<float>(width_) /
+          static_cast<float>(std::max(1u, render_target_.width())),
+      0.0f, 1.0f);
 }
 
-float ViewportRenderer::textureMaxV() const {
-    if (surface_ != ViewportRenderSurface::Texture) {
-        return 1.0f;
-    }
-    return std::clamp(
-            static_cast<float>(height_) / static_cast<float>(std::max(1u, renderTarget_.height())),
-            0.0f,
-            1.0f);
+float ViewportRenderer::texture_max_v() const {
+  if (surface_ != ViewportRenderSurface::Texture) {
+    return 1.0f;
+  }
+  return std::clamp(
+      static_cast<float>(height_) /
+          static_cast<float>(std::max(1u, render_target_.height())),
+      0.0f, 1.0f);
 }
 
-void ViewportRenderer::updateCamera(const ViewportCameraController& controller) {
-    QDR_PROFILE_FUNCTION();
-    const auto pose = controller.pose();
-    const auto applyLookAt = [&](filament::Camera* camera) {
-        if (camera) {
-            camera->lookAt(
-                    {pose.eye.x, pose.eye.y, pose.eye.z},
-                    {pose.target.x, pose.target.y, pose.target.z},
-                    {pose.up.x, pose.up.y, pose.up.z});
-        }
-    };
-    applyLookAt(camera_);
-    applyLookAt(overlayCamera_);
-    const double aspect = static_cast<double>(width()) / static_cast<double>(height());
-    const auto applyProjection = [&](filament::Camera* camera) {
-        if (!camera) {
-            return;
-        }
-        if (controller.state().projection == ViewportProjection::Orthographic) {
-            const double halfHeight = std::max(0.0001f, controller.state().orthographicSize * 0.5f);
-            const double halfWidth = halfHeight * aspect;
-            camera->setProjection(filament::Camera::Projection::ORTHO,
-                    -halfWidth, halfWidth,
-                    -halfHeight, halfHeight,
-                    cameraNearPlane_, cameraFarPlane_);
-        } else {
-            camera->setProjection(controller.state().fovDegrees, aspect,
-                    cameraNearPlane_, cameraFarPlane_);
-        }
-    };
-    applyProjection(camera_);
-    applyProjection(overlayCamera_);
-    applyNeutralOverlayExposure(overlayCamera_);
+void ViewportRenderer::update_camera(
+    const ViewportCameraController &controller) {
+  QDR_PROFILE_FUNCTION();
+  const auto pose = controller.pose();
+  const auto apply_look_at = [&](filament::Camera *camera) {
+    if (camera) {
+      camera->lookAt({pose.eye.x, pose.eye.y, pose.eye.z},
+                     {pose.target.x, pose.target.y, pose.target.z},
+                     {pose.up.x, pose.up.y, pose.up.z});
+    }
+  };
+  apply_look_at(camera_);
+  apply_look_at(overlay_camera_);
+  const double aspect =
+      static_cast<double>(width()) / static_cast<double>(height());
+  const auto apply_projection = [&](filament::Camera *camera) {
+    if (!camera) {
+      return;
+    }
+    if (controller.state().projection == ViewportProjection::Orthographic) {
+      const double half_height =
+          std::max(0.0001f, controller.state().orthographic_size * 0.5f);
+      const double half_width = half_height * aspect;
+      camera->setProjection(filament::Camera::Projection::ORTHO, -half_width,
+                            half_width, -half_height, half_height,
+                            camera_near_plane_, camera_far_plane_);
+    } else {
+      camera->setProjection(controller.state().fov_degrees, aspect,
+                            camera_near_plane_, camera_far_plane_);
+    }
+  };
+  apply_projection(camera_);
+  apply_projection(overlay_camera_);
+  apply_neutral_overlay_exposure(overlay_camera_);
 }
 
-void ViewportRenderer::applySceneSettings(const SceneSettingsComponent& settings, bool renderedMode) {
-    QDR_PROFILE_FUNCTION();
-    if (!view_ || !camera_) {
-        return;
-    }
+void ViewportRenderer::apply_scene_settings(
+    const SceneSettingsComponent &settings, bool rendered_mode) {
+  QDR_PROFILE_FUNCTION();
+  if (!view_ || !camera_) {
+    return;
+  }
 
-    const bool postProcessingEnabled = renderedMode && settings.postProcess.enabled;
-    cameraNearPlane_ = std::max(settings.camera.nearPlane, 0.001f);
-    cameraFarPlane_ = std::max(settings.camera.farPlane, cameraNearPlane_ + 0.001f);
-    view_->setPostProcessingEnabled(postProcessingEnabled);
-    view_->setAntiAliasing(
-            postProcessingEnabled && settings.postProcess.antiAliasing
-                    ? filament::AntiAliasing::FXAA
-                    : filament::AntiAliasing::NONE);
-    view_->setDithering(
-            postProcessingEnabled && settings.postProcess.dithering
-                    ? filament::Dithering::TEMPORAL
-                    : filament::Dithering::NONE);
-    if (overlayView_) {
-        overlayView_->setPostProcessingEnabled(false);
-        overlayView_->setAntiAliasing(filament::AntiAliasing::NONE);
-        overlayView_->setDithering(filament::Dithering::NONE);
-        overlayView_->setShadowingEnabled(false);
-        overlayView_->setColorGrading(nullptr);
-    }
-    applyToneMapping(settings.postProcess.toneMapping, postProcessingEnabled);
-    renderPassCoordinator_.setBackgroundColor(viewportClearColor(settings.environment, renderedMode));
+  const bool post_processing_enabled =
+      rendered_mode && settings.post_process.enabled;
+  camera_near_plane_ = std::max(settings.camera.near_plane, 0.001f);
+  camera_far_plane_ =
+      std::max(settings.camera.far_plane, camera_near_plane_ + 0.001f);
+  view_->setPostProcessingEnabled(post_processing_enabled);
+  view_->setAntiAliasing(post_processing_enabled &&
+                                 settings.post_process.anti_aliasing
+                             ? filament::AntiAliasing::FXAA
+                             : filament::AntiAliasing::NONE);
+  view_->setDithering(post_processing_enabled && settings.post_process.dithering
+                          ? filament::Dithering::TEMPORAL
+                          : filament::Dithering::NONE);
+  if (overlay_view_) {
+    overlay_view_->setPostProcessingEnabled(false);
+    overlay_view_->setAntiAliasing(filament::AntiAliasing::NONE);
+    overlay_view_->setDithering(filament::Dithering::NONE);
+    overlay_view_->setShadowingEnabled(false);
+    overlay_view_->setColorGrading(nullptr);
+  }
+  apply_tone_mapping(settings.post_process.tone_mapping,
+                     post_processing_enabled);
+  render_pass_coordinator_.set_background_color(
+      viewport_clear_color(settings.environment, rendered_mode));
 
-    filament::View::AmbientOcclusionOptions ao;
-    ao.enabled = postProcessingEnabled && settings.postProcess.ambientOcclusion;
-    ao.intensity = std::max(settings.postProcess.ambientOcclusionIntensity, 0.0f);
-    ao.radius = std::max(settings.postProcess.ambientOcclusionRadius, 0.0f);
-    ao.quality = filament::QualityLevel::MEDIUM;
-    ao.upsampling = filament::QualityLevel::MEDIUM;
-    view_->setAmbientOcclusionOptions(ao);
+  filament::View::AmbientOcclusionOptions ao;
+  ao.enabled =
+      post_processing_enabled && settings.post_process.ambient_occlusion;
+  ao.intensity =
+      std::max(settings.post_process.ambient_occlusion_intensity, 0.0f);
+  ao.radius = std::max(settings.post_process.ambient_occlusion_radius, 0.0f);
+  ao.quality = filament::QualityLevel::MEDIUM;
+  ao.upsampling = filament::QualityLevel::MEDIUM;
+  view_->setAmbientOcclusionOptions(ao);
 
-    filament::View::BloomOptions bloom;
-    bloom.enabled = postProcessingEnabled && settings.postProcess.bloom;
-    bloom.strength = std::clamp(settings.postProcess.bloomStrength, 0.0f, 1.0f);
-    view_->setBloomOptions(bloom);
+  filament::View::BloomOptions bloom;
+  bloom.enabled = post_processing_enabled && settings.post_process.bloom;
+  bloom.strength = std::clamp(settings.post_process.bloom_strength, 0.0f, 1.0f);
+  view_->setBloomOptions(bloom);
 
-    camera_->setExposure(
-            std::max(settings.camera.aperture, 0.01f),
-            std::max(settings.camera.shutterSpeed, 0.000001f),
-            std::max(settings.camera.sensitivity, 1.0f));
-    applyNeutralOverlayExposure(overlayCamera_);
+  camera_->setExposure(std::max(settings.camera.aperture, 0.01f),
+                       std::max(settings.camera.shutter_speed, 0.000001f),
+                       std::max(settings.camera.sensitivity, 1.0f));
+  apply_neutral_overlay_exposure(overlay_camera_);
 }
 
-void ViewportRenderer::applyToneMapping(SceneToneMapping toneMapping, bool enabled) {
-    if (!engine_ || !view_) {
-        return;
-    }
-    if (!enabled) {
-        view_->setColorGrading(nullptr);
-        return;
-    }
-    if (colorGrading_ != nullptr && hasColorGradingToneMapping_ && colorGradingToneMapping_ == toneMapping) {
-        view_->setColorGrading(colorGrading_);
-        return;
-    }
-
+void ViewportRenderer::apply_tone_mapping(SceneToneMapping tone_mapping,
+                                          bool enabled) {
+  if (!engine_ || !view_) {
+    return;
+  }
+  if (!enabled) {
     view_->setColorGrading(nullptr);
-    destroyColorGrading();
-    colorGrading_ = buildColorGrading(*engine_, toneMapping);
-    if (colorGrading_ == nullptr) {
-        hasColorGradingToneMapping_ = false;
-        return;
-    }
-    colorGradingToneMapping_ = toneMapping;
-    hasColorGradingToneMapping_ = true;
-    view_->setColorGrading(colorGrading_);
+    return;
+  }
+  if (color_grading_ != nullptr && has_color_grading_tone_mapping_ &&
+      color_grading_tone_mapping_ == tone_mapping) {
+    view_->setColorGrading(color_grading_);
+    return;
+  }
+
+  view_->setColorGrading(nullptr);
+  destroy_color_grading();
+  color_grading_ = build_color_grading(*engine_, tone_mapping);
+  if (color_grading_ == nullptr) {
+    has_color_grading_tone_mapping_ = false;
+    return;
+  }
+  color_grading_tone_mapping_ = tone_mapping;
+  has_color_grading_tone_mapping_ = true;
+  view_->setColorGrading(color_grading_);
 }
 
-void ViewportRenderer::destroyColorGrading() {
-    if (!engine_ || colorGrading_ == nullptr) {
-        colorGrading_ = nullptr;
-        hasColorGradingToneMapping_ = false;
-        return;
-    }
-    engine_->destroy(colorGrading_);
-    colorGrading_ = nullptr;
-    hasColorGradingToneMapping_ = false;
+void ViewportRenderer::destroy_color_grading() {
+  if (!engine_ || color_grading_ == nullptr) {
+    color_grading_ = nullptr;
+    has_color_grading_tone_mapping_ = false;
+    return;
+  }
+  engine_->destroy(color_grading_);
+  color_grading_ = nullptr;
+  has_color_grading_tone_mapping_ = false;
 }
 
-void ViewportRenderer::updateGroundGrid(
-        const ViewportCameraController& controller,
-        float gridWorldSpacing,
-        const ViewportSettings& settings,
-        bool visible) {
-    QDR_PROFILE_FUNCTION();
-    if (!engine_ || !scene_) {
-        return;
-    }
+void ViewportRenderer::update_ground_grid(
+    const ViewportCameraController &controller, float grid_world_spacing,
+    const ViewportSettings &settings, bool visible) {
+  QDR_PROFILE_FUNCTION();
+  if (!engine_ || !scene_) {
+    return;
+  }
 
-    renderPassCoordinator_.setGridVisible(visible);
-    updateVisibleLayers();
-    gridRenderer_.update(controller, width(), height(), gridWorldSpacing, settings, visible);
+  render_pass_coordinator_.set_grid_visible(visible);
+  update_visible_layers();
+  grid_renderer_.update(controller, width(), height(), grid_world_spacing,
+                        settings, visible);
 }
 
-void ViewportRenderer::setOverlayVisible(bool visible) {
-    if (!renderPassCoordinator_.setOverlayVisible(visible)) {
-        return;
-    }
-    updateVisibleLayers();
+void ViewportRenderer::set_overlay_visible(bool visible) {
+  if (!render_pass_coordinator_.set_overlay_visible(visible)) {
+    return;
+  }
+  update_visible_layers();
 }
 
-void ViewportRenderer::setSceneVisible(bool visible) {
-    if (!renderPassCoordinator_.setSceneVisible(visible)) {
-        return;
-    }
-    updateVisibleLayers();
+void ViewportRenderer::set_scene_visible(bool visible) {
+  if (!render_pass_coordinator_.set_scene_visible(visible)) {
+    return;
+  }
+  update_visible_layers();
 }
 
-void ViewportRenderer::setSceneLayerMask(std::uint8_t layerMask) {
-    if (!renderPassCoordinator_.setSceneLayerMask(layerMask)) {
-        return;
-    }
-    updateVisibleLayers();
+void ViewportRenderer::set_scene_layer_mask(std::uint8_t layer_mask) {
+  if (!render_pass_coordinator_.set_scene_layer_mask(layer_mask)) {
+    return;
+  }
+  update_visible_layers();
 }
 
-void ViewportRenderer::setShadowingEnabled(bool enabled) {
-    if (view_) {
-        view_->setShadowingEnabled(enabled);
-    }
-    if (overlayView_) {
-        overlayView_->setShadowingEnabled(false);
-    }
+void ViewportRenderer::set_shadowing_enabled(bool enabled) {
+  if (view_) {
+    view_->setShadowingEnabled(enabled);
+  }
+  if (overlay_view_) {
+    overlay_view_->setShadowingEnabled(false);
+  }
 }
 
 void ViewportRenderer::render(filament::Renderer& renderer) {
     QDR_PROFILE_FUNCTION();
-    renderPassCoordinator_.render(
-            renderer,
-            view_,
-            overlayView_,
-            surface_ == ViewportRenderSurface::Texture);
+    render_pass_coordinator_.render(renderer, view_, overlay_view_,
+                                    surface_ == ViewportRenderSurface::Texture);
 }
 
-void ViewportRenderer::updateVisibleLayers() {
-    if (!view_ && !overlayView_) {
-        return;
-    }
-    renderPassCoordinator_.applyVisibleLayers(view_, overlayView_);
+void ViewportRenderer::update_visible_layers() {
+  if (!view_ && !overlay_view_) {
+    return;
+  }
+  render_pass_coordinator_.apply_visible_layers(view_, overlay_view_);
 }
 
 } // namespace quader

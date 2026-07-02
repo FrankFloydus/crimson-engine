@@ -36,517 +36,622 @@
 namespace quader {
 namespace {
 
-using json = nlohmann::ordered_json;
+using Json = nlohmann::ordered_json;
 
 /**
  * Carries a decoded mesh and its target asset id before it is installed into the asset registry.
  */
 struct DecodedMeshAsset {
-    AssetId id = InvalidAssetId;
-    MeshAsset mesh;
+  AssetId id = kInvalidAssetId;
+  MeshAsset mesh;
 };
 
-void requireObject(const json& value, std::string_view label) {
-    if (!value.is_object()) {
-        throw std::runtime_error(std::string(label) + " must be an object.");
-    }
+void require_object(const Json &value, std::string_view label) {
+  if (!value.is_object()) {
+    throw std::runtime_error(std::string(label) + " must be an object.");
+  }
 }
 
-QVec3 fromRuntime(quader::QVec3 value) {
-    return {value.x, value.y, value.z};
+QVec3 from_runtime(quader::QVec3 value) { return {value.x, value.y, value.z}; }
+
+MeshAsset mesh_from_polygon_document(const quader_poly::Document &document,
+                                     std::string name) {
+  QDR_PROFILE_FUNCTION();
+  MeshAsset mesh =
+      MeshProjectionService::compile_polygon_document_mesh(document);
+  mesh.name = std::move(name);
+  mesh.has_authored_polygon_document = true;
+  mesh.authored_polygon_document =
+      std::make_shared<quader_poly::Document>(document);
+  return mesh;
 }
 
-MeshAsset meshFromPolygonDocument(const quader_poly::Document& document, std::string name) {
-    QDR_PROFILE_FUNCTION();
-    MeshAsset mesh = MeshProjectionService::compilePolygonDocumentMesh(document);
-    mesh.name = std::move(name);
-    mesh.hasAuthoredPolygonDocument = true;
-    mesh.authoredPolygonDocument = std::make_shared<quader_poly::Document>(document);
-    return mesh;
+MeshAsset mesh_from_json(const Json &value) {
+  QDR_PROFILE_FUNCTION();
+  MeshAsset mesh;
+  mesh.name = value.value("name", std::string("Mesh"));
+  mesh.has_stable_cpu_topology = value.value("hasStableCpuTopology", true);
+  if (const auto vertices_json = value.find("vertices");
+      vertices_json != value.end() && vertices_json->is_array()) {
+    mesh.vertices.reserve(vertices_json->size());
+    for (const Json &vertex_json : *vertices_json) {
+      mesh.vertices.push_back(MeshVertex{
+          .position =
+              qdr_vec3_from_json(vertex_json.value("position", Json::object())),
+          .normal = qdr_vec3_from_json(
+              vertex_json.value("normal", Json::object()), {0.0f, 1.0f, 0.0f}),
+          .uv = qdr_vec2_from_json(vertex_json.value("uv", Json::object())),
+          .rgba = vertex_json.value("rgba", 0xffffffffu),
+      });
+    }
+  }
+  mesh.indices = value.value("indices", std::vector<std::uint32_t>{});
+  if (const auto primitives_json = value.find("primitives");
+      primitives_json != value.end() && primitives_json->is_array()) {
+    mesh.primitives.reserve(primitives_json->size());
+    for (const Json &primitive_json : *primitives_json) {
+      mesh.primitives.push_back(MeshPrimitiveSpan{
+          .index_offset = primitive_json.value("indexOffset", 0u),
+          .index_count = primitive_json.value("indexCount", 0u),
+          .material_slot = primitive_json.value("materialSlot", 0u),
+      });
+    }
+  }
+  if (const auto polygon = value.find("polygonDocument");
+      polygon != value.end() && polygon->is_object()) {
+    mesh.has_authored_polygon_document = true;
+    mesh.authored_polygon_document = std::make_shared<quader_poly::Document>(
+        quader_io::qdr_polygon_document_from_json(*polygon));
+    if (mesh.vertices.empty() && mesh.indices.empty()) {
+      mesh = mesh_from_polygon_document(*mesh.authored_polygon_document,
+                                        mesh.name);
+    }
+  }
+  mesh.primitives = normalized_mesh_primitive_spans(mesh);
+  return mesh;
 }
 
-MeshAsset meshFromJson(const json& value) {
-    QDR_PROFILE_FUNCTION();
-    MeshAsset mesh;
-    mesh.name = value.value("name", std::string("Mesh"));
-    mesh.hasStableCpuTopology = value.value("hasStableCpuTopology", true);
-    if (const auto verticesJson = value.find("vertices"); verticesJson != value.end() && verticesJson->is_array()) {
-        mesh.vertices.reserve(verticesJson->size());
-        for (const json& vertexJson : *verticesJson) {
-            mesh.vertices.push_back(MeshVertex{
-                    .position = qdrVec3FromJson(vertexJson.value("position", json::object())),
-                    .normal = qdrVec3FromJson(vertexJson.value("normal", json::object()), {0.0f, 1.0f, 0.0f}),
-                    .uv = qdrVec2FromJson(vertexJson.value("uv", json::object())),
-                    .rgba = vertexJson.value("rgba", 0xffffffffu),
-            });
-        }
-    }
-    mesh.indices = value.value("indices", std::vector<std::uint32_t>{});
-    if (const auto primitivesJson = value.find("primitives");
-            primitivesJson != value.end() && primitivesJson->is_array()) {
-        mesh.primitives.reserve(primitivesJson->size());
-        for (const json& primitiveJson : *primitivesJson) {
-            mesh.primitives.push_back(MeshPrimitiveSpan{
-                    .indexOffset = primitiveJson.value("indexOffset", 0u),
-                    .indexCount = primitiveJson.value("indexCount", 0u),
-                    .materialSlot = primitiveJson.value("materialSlot", 0u),
-            });
-        }
-    }
-    if (const auto polygon = value.find("polygonDocument"); polygon != value.end() && polygon->is_object()) {
-        mesh.hasAuthoredPolygonDocument = true;
-        mesh.authoredPolygonDocument =
-                std::make_shared<quader_poly::Document>(quader_io::qdr_polygon_document_from_json(*polygon));
-        if (mesh.vertices.empty() && mesh.indices.empty()) {
-            mesh = meshFromPolygonDocument(*mesh.authoredPolygonDocument, mesh.name);
-        }
-    }
-    mesh.primitives = normalizedMeshPrimitiveSpans(mesh);
-    return mesh;
+TextureAsset texture_from_json(const Json &value) {
+  TextureAsset texture;
+  texture.name = value.value("name", std::string("Texture"));
+  texture.usage =
+      qdr_texture_usage_from_name(value.value("usage", std::string("unknown")));
+  texture.color_space = qdr_texture_color_space_from_name(
+      value.value("colorSpace", std::string("srgb")));
+  texture.width = value.value("width", 0u);
+  texture.height = value.value("height", 0u);
+  texture.source_path =
+      std::filesystem::path(value.value("source_path", std::string{}));
+  texture.generated = value.value("generated", false);
+  return texture;
 }
 
-TextureAsset textureFromJson(const json& value) {
-    TextureAsset texture;
-    texture.name = value.value("name", std::string("Texture"));
-    texture.usage = qdrTextureUsageFromName(value.value("usage", std::string("unknown")));
-    texture.colorSpace = qdrTextureColorSpaceFromName(value.value("colorSpace", std::string("srgb")));
-    texture.width = value.value("width", 0u);
-    texture.height = value.value("height", 0u);
-    texture.sourcePath = std::filesystem::path(value.value("sourcePath", std::string{}));
-    texture.generated = value.value("generated", false);
-    return texture;
+MaterialDocument material_from_json(const Json &value) {
+  MaterialDocument material;
+  material.name = value.value("name", std::string("Material"));
+  material.base_color = qdr_vec3_from_json(
+      value.value("baseColor", Json::object()), {1.0f, 1.0f, 1.0f});
+  material.roughness = value.value("roughness", 1.0f);
+  material.metallic = value.value("metallic", 0.0f);
+  material.node_graph_reserved = value.value("nodeGraphReserved", true);
+  if (const auto slots = value.find("textureSlots");
+      slots != value.end() && slots->is_object()) {
+    for (const auto &[slot, textureId] : slots->items()) {
+      if (!set_material_texture_slot(material, slot,
+                                     textureId.get<AssetId>())) {
+        throw std::runtime_error("QDR project document material is invalid: "
+                                 "Unsupported material texture slot.");
+      }
+    }
+  }
+  return material;
 }
 
-MaterialDocument materialFromJson(const json& value) {
-    MaterialDocument material;
-    material.name = value.value("name", std::string("Material"));
-    material.baseColor = qdrVec3FromJson(value.value("baseColor", json::object()), {1.0f, 1.0f, 1.0f});
-    material.roughness = value.value("roughness", 1.0f);
-    material.metallic = value.value("metallic", 0.0f);
-    material.nodeGraphReserved = value.value("nodeGraphReserved", true);
-    if (const auto slots = value.find("textureSlots"); slots != value.end() && slots->is_object()) {
-        for (const auto& [slot, textureId] : slots->items()) {
-            if (!setMaterialTextureSlot(material, slot, textureId.get<AssetId>())) {
-                throw std::runtime_error("QDR project document material is invalid: Unsupported material texture slot.");
-            }
-        }
-    }
-    return material;
+EditorObjectId editor_object_id_from_json(const Json &value) {
+  if (const auto editor_object_id = value.find("editorObjectId");
+      editor_object_id != value.end() &&
+      editor_object_id->is_number_unsigned()) {
+    return editor_object_id->get<EditorObjectId>();
+  }
+  return value.value("id", kInvalidEditorObjectId);
 }
 
-EditorObjectId editorObjectIdFromJson(const json& value) {
-    if (const auto editorObjectId = value.find("editorObjectId");
-            editorObjectId != value.end() && editorObjectId->is_number_unsigned()) {
-        return editorObjectId->get<EditorObjectId>();
-    }
-    return value.value("id", InvalidEditorObjectId);
+ProjectObjectRecord object_record_from_json(const Json &value) {
+  return ProjectObjectRecord{
+      .id = editor_object_id_from_json(value),
+      .scene_entity = value.value("sceneEntity", kInvalidEntityId),
+      .mesh = value.value("mesh", kInvalidAssetId),
+      .material = value.value("material", kInvalidAssetId),
+      .modeling_object =
+          value.value("modelingObject", kInvalidModelingObjectId),
+      .authored_name = value.value("authoredName", std::string{}),
+      .visible = value.value("visible", true),
+      .material_slot = value.value("materialSlot", 0u),
+  };
 }
 
-ProjectObjectRecord objectRecordFromJson(const json& value) {
-    return ProjectObjectRecord{
-            .id = editorObjectIdFromJson(value),
-            .sceneEntity = value.value("sceneEntity", InvalidEntityId),
-            .mesh = value.value("mesh", InvalidAssetId),
-            .material = value.value("material", InvalidAssetId),
-            .modelingObject = value.value("modelingObject", InvalidModelingObjectId),
-            .authoredName = value.value("authoredName", std::string{}),
-            .visible = value.value("visible", true),
-            .materialSlot = value.value("materialSlot", 0u),
-    };
+std::string asset_kind_label(std::string_view kind) {
+  return std::string(kind.data(), kind.size());
 }
 
-std::string assetKindLabel(std::string_view kind) {
-    return std::string(kind.data(), kind.size());
+AssetId qdr_asset_id_from_json(const Json &value, std::string_view kind) {
+  const AssetId id = value.value("id", kInvalidAssetId);
+  if (id == kInvalidAssetId) {
+    throw std::runtime_error("QDR project document contains an invalid " +
+                             asset_kind_label(kind) + " asset id.");
+  }
+  return id;
 }
 
-AssetId qdrAssetIdFromJson(const json& value, std::string_view kind) {
-    const AssetId id = value.value("id", InvalidAssetId);
-    if (id == InvalidAssetId) {
-        throw std::runtime_error("QDR project document contains an invalid " + assetKindLabel(kind) + " asset id.");
-    }
-    return id;
+void require_unique_asset_id(std::set<AssetId> &ids, AssetId id,
+                             std::string_view kind) {
+  if (!ids.insert(id).second) {
+    throw std::runtime_error("QDR project document contains duplicate " +
+                             asset_kind_label(kind) + " asset ids.");
+  }
 }
 
-void requireUniqueAssetId(std::set<AssetId>& ids, AssetId id, std::string_view kind) {
-    if (!ids.insert(id).second) {
-        throw std::runtime_error("QDR project document contains duplicate " + assetKindLabel(kind) + " asset ids.");
-    }
+void validate_material_asset_for_qdr(const AssetRegistry &assets,
+                                     const MaterialDocument &material) {
+  const AssetRegistryValidationResult validation =
+      assets.validate_material(material);
+  if (!validation.ok) {
+    throw std::runtime_error("QDR project document material is invalid: " +
+                             validation.message + ".");
+  }
 }
 
-void validateMaterialAssetForQdr(const AssetRegistry& assets, const MaterialDocument& material) {
-    const AssetRegistryValidationResult validation = assets.validateMaterial(material);
-    if (!validation.ok) {
-        throw std::runtime_error("QDR project document material is invalid: " + validation.message + ".");
-    }
+void require_valid_asset_references_for_qdr(
+    const ProjectDocumentAssetReferenceReport &report) {
+  if (!report.ok()) {
+    throw std::runtime_error("QDR project document " +
+                             report.issues.front().message);
+  }
 }
 
-void requireValidAssetReferencesForQdr(const ProjectDocumentAssetReferenceReport& report) {
-    if (!report.ok()) {
-        throw std::runtime_error("QDR project document " + report.issues.front().message);
-    }
+const Json &field_or_default(const Json &value, const char *key,
+                             const Json &fallback) {
+  const auto found = value.find(key);
+  return found == value.end() ? fallback : *found;
 }
 
-const json& fieldOrDefault(const json& value, const char* key, const json& fallback) {
-    const auto found = value.find(key);
-    return found == value.end() ? fallback : *found;
+ProjectDocument project_document_from_app_payload(const Json &payload) {
+  QDR_PROFILE_FUNCTION();
+  require_object(payload, "QDR project document payload");
+  const Json empty_object = Json::object();
+  const Json empty_array = Json::array();
+  const Json &project = field_or_default(payload, "project", empty_object);
+  ProjectDocument document(
+      ProjectDocumentRecord{
+          .id = project.value("id", 0ull),
+          .name = project.value("name", std::string("Untitled Project")),
+      },
+      ProjectDocumentRootPolicy::DeferSceneRoot);
+
+  const Json &assets_json = field_or_default(payload, "assets", empty_object);
+  std::set<AssetId> mesh_asset_ids;
+  const Json &meshes_json =
+      field_or_default(assets_json, "meshes", empty_array);
+  std::vector<const Json *> mesh_jsons;
+  mesh_jsons.reserve(meshes_json.size());
+  std::vector<DecodedMeshAsset> decoded_meshes;
+  decoded_meshes.reserve(meshes_json.size());
+  for (const Json &mesh_json : meshes_json) {
+    const AssetId id = qdr_asset_id_from_json(mesh_json, "mesh");
+    require_unique_asset_id(mesh_asset_ids, id, "mesh");
+    mesh_jsons.push_back(&mesh_json);
+    decoded_meshes.push_back(DecodedMeshAsset{.id = id});
+  }
+  qdr_detail::run_parallel_index_tasks(
+      mesh_jsons.size(), "QDR mesh decode", [&](std::size_t index) {
+        decoded_meshes[index].mesh = mesh_from_json(*mesh_jsons[index]);
+      });
+  for (DecodedMeshAsset &decoded : decoded_meshes) {
+    if (document.assets().add_mesh(decoded.id, std::move(decoded.mesh)) ==
+        kInvalidAssetId) {
+      throw std::runtime_error(
+          "QDR project document contains duplicate mesh asset ids.");
+    }
+  }
+  std::set<AssetId> texture_asset_ids;
+  for (const Json &texture_json :
+       field_or_default(assets_json, "textures", empty_array)) {
+    const AssetId id = qdr_asset_id_from_json(texture_json, "texture");
+    require_unique_asset_id(texture_asset_ids, id, "texture");
+    if (document.assets().add_texture(id, texture_from_json(texture_json)) ==
+        kInvalidAssetId) {
+      throw std::runtime_error(
+          "QDR project document contains duplicate texture asset ids.");
+    }
+  }
+  std::set<AssetId> material_asset_ids;
+  for (const Json &material_json :
+       field_or_default(assets_json, "materials", empty_array)) {
+    const AssetId id = qdr_asset_id_from_json(material_json, "material");
+    require_unique_asset_id(material_asset_ids, id, "material");
+    MaterialDocument material = material_from_json(material_json);
+    validate_material_asset_for_qdr(document.assets(), material);
+    if (document.assets().add_material(id, std::move(material)) ==
+        kInvalidAssetId) {
+      throw std::runtime_error("QDR project document contains duplicate or "
+                               "invalid material asset ids.");
+    }
+  }
+
+  std::vector<std::pair<EntityId, EntityId>> parent_links;
+  std::set<EntityId> entities_with_explicit_editor_object_ids;
+  EntityId active_selection = kInvalidEntityId;
+  for (const Json &entity_json :
+       field_or_default(payload, "entities", empty_array)) {
+    const EntityId requested_id = entity_json.value("id", kInvalidEntityId);
+    const bool has_explicit_editor_object_id =
+        entity_json.contains("editorObjectId");
+    const EditorObjectId editor_object_id =
+        has_explicit_editor_object_id
+            ? entity_json.value("editorObjectId", kInvalidEditorObjectId)
+            : kInvalidEditorObjectId;
+    const std::string name = entity_json.value("name", std::string("Entity"));
+    const EntityKind kind = qdr_entity_kind_from_name(
+        entity_json.value("kind", std::string("generic")));
+    const EntityId entity = document.scene().create_entity_with_id(
+        requested_id, name, kind, editor_object_id);
+    if (entity == kInvalidEntityId) {
+      throw std::runtime_error(
+          "QDR document contains a duplicate or invalid entity id.");
+    }
+    if (const auto uuid_json = entity_json.find("uuid");
+        uuid_json != entity_json.end() && uuid_json->is_string() &&
+        !document.scene().set_entity_uuid(entity,
+                                          uuid_json->get<std::string>())) {
+      throw std::runtime_error(
+          "QDR document contains a duplicate or invalid entity uuid.");
+    }
+    if (has_explicit_editor_object_id) {
+      entities_with_explicit_editor_object_ids.insert(entity);
+    }
+
+    document.scene().set_transform(
+        entity, qdr_transform_component_from_json(
+                    entity_json.value("transform", Json::object())));
+    if (const auto visibility_json = entity_json.find("visibility");
+        visibility_json != entity_json.end() && visibility_json->is_object()) {
+      document.scene().set_visible(entity,
+                                   visibility_json->value("visible", true));
+      document.scene().set_selectable(
+          entity, visibility_json->value("selectable", true));
+    }
+    document.scene().set_locked(entity, entity_json.value("locked", false));
+    if (const auto object_json = entity_json.find("modelingObject");
+        object_json != entity_json.end() && object_json->is_object()) {
+      document.scene().set_modeling_object(
+          entity, ModelingObjectComponent{
+                      .object_id = object_json->value("objectId",
+                                                      kInvalidModelingObjectId),
+                      .material_slot = object_json->value("materialSlot", 0u),
+                  });
+    }
+    if (const auto mesh_json = entity_json.find("mesh");
+        mesh_json != entity_json.end() && mesh_json->is_object()) {
+      document.scene().set_mesh(entity,
+                                qdr_mesh_component_from_json(*mesh_json));
+    }
+    if (const auto material_json = entity_json.find("material");
+        material_json != entity_json.end() && material_json->is_object()) {
+      MaterialComponent material =
+          qdr_material_component_from_json(*material_json);
+      if (material.material != kInvalidAssetId) {
+        document.scene().set_material(entity, std::move(material));
+      }
+    }
+    if (const auto light_json = entity_json.find("light");
+        light_json != entity_json.end() && light_json->is_object()) {
+      document.scene().set_light(entity,
+                                 qdr_light_component_from_json(*light_json));
+    }
+    if (entity_json.value("sceneRoot", false) ||
+        entity_json.find("sceneSettings") != entity_json.end()) {
+      const Json settings_json =
+          entity_json.value("sceneSettings", Json::object());
+      if (!document.scene().set_scene_settings(
+              entity, qdr_scene_settings_component_from_json(settings_json))) {
+        throw std::runtime_error(
+            "QDR project document contains multiple scene root entities.");
+      }
+    }
+
+    if (entity_json.value("selected", false)) {
+      document.scene().set_selected(entity, true);
+    }
+    if (entity_json.value("active", false)) {
+      active_selection = entity;
+    }
+    parent_links.emplace_back(entity,
+                              entity_json.value("parent", kInvalidEntityId));
+  }
+
+  for (const auto &[child, parent] : parent_links) {
+    if (parent != kInvalidEntityId) {
+      if (!document.scene().exists(parent)) {
+        throw std::runtime_error(
+            "QDR project document entity references a missing parent.");
+      }
+      if (!document.scene().set_parent(child, parent, false)) {
+        throw std::runtime_error(
+            "QDR project document contains an invalid entity hierarchy.");
+      }
+    }
+  }
+  if (active_selection != kInvalidEntityId) {
+    if (!document.scene().set_active_selection(active_selection)) {
+      throw std::runtime_error("QDR project document active selection must "
+                               "reference a selected entity.");
+    }
+  }
+
+  if (document.ensure_scene_root() == kInvalidEntityId) {
+    throw std::runtime_error(
+        "QDR project document could not create a scene root.");
+  }
+
+  require_valid_asset_references_for_qdr(document.validate_asset_references());
+
+  std::set<EditorObjectId> object_record_ids;
+  std::set<EntityId> object_record_entities;
+  const Json &objects_json = field_or_default(payload, "objects", empty_array);
+  std::vector<ProjectObjectRecord> object_records;
+  object_records.reserve(objects_json.size());
+  for (const Json &record_json : objects_json) {
+    const ProjectObjectRecord record = object_record_from_json(record_json);
+    require_valid_asset_references_for_qdr(
+        document.validate_asset_references(record));
+    if (!object_record_ids.insert(record.id).second) {
+      throw std::runtime_error(
+          "QDR project document contains duplicate object record ids.");
+    }
+    if (!object_record_entities.insert(record.scene_entity).second) {
+      throw std::runtime_error("QDR project document contains duplicate object "
+                               "record scene entities.");
+    }
+    if (entities_with_explicit_editor_object_ids.contains(
+            record.scene_entity) &&
+        document.scene().editor_object_id(record.scene_entity) != record.id) {
+      throw std::runtime_error("QDR project object record id does not match "
+                               "the scene editor object id.");
+    }
+    object_records.push_back(record);
+  }
+  const std::size_t object_record_count = object_records.size();
+  if (document.upsert_object_records(std::move(object_records)).size() !=
+      object_record_count) {
+    throw std::runtime_error("QDR project object record conflicts with an "
+                             "existing editor object id.");
+  }
+
+  const ProjectDocumentIdentityReport identity =
+      document.validate_object_identity_invariants();
+  if (!identity.ok()) {
+    throw std::runtime_error(
+        "QDR project document identity invariant failed: " +
+        identity.issues.front().message);
+  }
+
+  return document;
 }
 
-ProjectDocument projectDocumentFromAppPayload(const json& payload) {
-    QDR_PROFILE_FUNCTION();
-    requireObject(payload, "QDR project document payload");
-    const json emptyObject = json::object();
-    const json emptyArray = json::array();
-    const json& project = fieldOrDefault(payload, "project", emptyObject);
-    ProjectDocument document(
-            ProjectDocumentRecord{
-                    .id = project.value("id", 0ull),
-                    .name = project.value("name", std::string("Untitled Project")),
-            },
-            ProjectDocumentRootPolicy::DeferSceneRoot);
-
-    const json& assetsJson = fieldOrDefault(payload, "assets", emptyObject);
-    std::set<AssetId> meshAssetIds;
-    const json& meshesJson = fieldOrDefault(assetsJson, "meshes", emptyArray);
-    std::vector<const json*> meshJsons;
-    meshJsons.reserve(meshesJson.size());
-    std::vector<DecodedMeshAsset> decodedMeshes;
-    decodedMeshes.reserve(meshesJson.size());
-    for (const json& meshJson : meshesJson) {
-        const AssetId id = qdrAssetIdFromJson(meshJson, "mesh");
-        requireUniqueAssetId(meshAssetIds, id, "mesh");
-        meshJsons.push_back(&meshJson);
-        decodedMeshes.push_back(DecodedMeshAsset{.id = id});
-    }
-    qdr_detail::runParallelIndexTasks(meshJsons.size(), "QDR mesh decode", [&](std::size_t index) {
-        decodedMeshes[index].mesh = meshFromJson(*meshJsons[index]);
-    });
-    for (DecodedMeshAsset& decoded : decodedMeshes) {
-        if (document.assets().addMesh(decoded.id, std::move(decoded.mesh)) == InvalidAssetId) {
-            throw std::runtime_error("QDR project document contains duplicate mesh asset ids.");
-        }
-    }
-    std::set<AssetId> textureAssetIds;
-    for (const json& textureJson : fieldOrDefault(assetsJson, "textures", emptyArray)) {
-        const AssetId id = qdrAssetIdFromJson(textureJson, "texture");
-        requireUniqueAssetId(textureAssetIds, id, "texture");
-        if (document.assets().addTexture(id, textureFromJson(textureJson)) == InvalidAssetId) {
-            throw std::runtime_error("QDR project document contains duplicate texture asset ids.");
-        }
-    }
-    std::set<AssetId> materialAssetIds;
-    for (const json& materialJson : fieldOrDefault(assetsJson, "materials", emptyArray)) {
-        const AssetId id = qdrAssetIdFromJson(materialJson, "material");
-        requireUniqueAssetId(materialAssetIds, id, "material");
-        MaterialDocument material = materialFromJson(materialJson);
-        validateMaterialAssetForQdr(document.assets(), material);
-        if (document.assets().addMaterial(id, std::move(material)) == InvalidAssetId) {
-            throw std::runtime_error("QDR project document contains duplicate or invalid material asset ids.");
-        }
-    }
-
-    std::vector<std::pair<EntityId, EntityId>> parentLinks;
-    std::set<EntityId> entitiesWithExplicitEditorObjectIds;
-    EntityId activeSelection = InvalidEntityId;
-    for (const json& entityJson : fieldOrDefault(payload, "entities", emptyArray)) {
-        const EntityId requestedId = entityJson.value("id", InvalidEntityId);
-        const bool hasExplicitEditorObjectId = entityJson.contains("editorObjectId");
-        const EditorObjectId editorObjectId = hasExplicitEditorObjectId
-                ? entityJson.value("editorObjectId", InvalidEditorObjectId)
-                : InvalidEditorObjectId;
-        const std::string name = entityJson.value("name", std::string("Entity"));
-        const EntityKind kind = qdrEntityKindFromName(entityJson.value("kind", std::string("generic")));
-        const EntityId entity = document.scene().createEntityWithId(requestedId, name, kind, editorObjectId);
-        if (entity == InvalidEntityId) {
-            throw std::runtime_error("QDR document contains a duplicate or invalid entity id.");
-        }
-        if (const auto uuidJson = entityJson.find("uuid");
-                uuidJson != entityJson.end() && uuidJson->is_string() &&
-                !document.scene().setEntityUuid(entity, uuidJson->get<std::string>())) {
-            throw std::runtime_error("QDR document contains a duplicate or invalid entity uuid.");
-        }
-        if (hasExplicitEditorObjectId) {
-            entitiesWithExplicitEditorObjectIds.insert(entity);
-        }
-
-        document.scene().setTransform(entity, qdrTransformComponentFromJson(entityJson.value("transform", json::object())));
-        if (const auto visibilityJson = entityJson.find("visibility");
-                visibilityJson != entityJson.end() && visibilityJson->is_object()) {
-            document.scene().setVisible(entity, visibilityJson->value("visible", true));
-            document.scene().setSelectable(entity, visibilityJson->value("selectable", true));
-        }
-        document.scene().setLocked(entity, entityJson.value("locked", false));
-        if (const auto objectJson = entityJson.find("modelingObject");
-                objectJson != entityJson.end() && objectJson->is_object()) {
-            document.scene().setModelingObject(entity, ModelingObjectComponent{
-                    .objectId = objectJson->value("objectId", InvalidModelingObjectId),
-                    .materialSlot = objectJson->value("materialSlot", 0u),
-            });
-        }
-        if (const auto meshJson = entityJson.find("mesh"); meshJson != entityJson.end() && meshJson->is_object()) {
-            document.scene().setMesh(entity, qdrMeshComponentFromJson(*meshJson));
-        }
-        if (const auto materialJson = entityJson.find("material");
-                materialJson != entityJson.end() && materialJson->is_object()) {
-            MaterialComponent material = qdrMaterialComponentFromJson(*materialJson);
-            if (material.material != InvalidAssetId) {
-                document.scene().setMaterial(entity, std::move(material));
-            }
-        }
-        if (const auto lightJson = entityJson.find("light"); lightJson != entityJson.end() && lightJson->is_object()) {
-            document.scene().setLight(entity, qdrLightComponentFromJson(*lightJson));
-        }
-        if (entityJson.value("sceneRoot", false) ||
-                entityJson.find("sceneSettings") != entityJson.end()) {
-            const json settingsJson = entityJson.value("sceneSettings", json::object());
-            if (!document.scene().setSceneSettings(entity, qdrSceneSettingsComponentFromJson(settingsJson))) {
-                throw std::runtime_error("QDR project document contains multiple scene root entities.");
-            }
-        }
-
-        if (entityJson.value("selected", false)) {
-            document.scene().setSelected(entity, true);
-        }
-        if (entityJson.value("active", false)) {
-            activeSelection = entity;
-        }
-        parentLinks.emplace_back(entity, entityJson.value("parent", InvalidEntityId));
-    }
-
-    for (const auto& [child, parent] : parentLinks) {
-        if (parent != InvalidEntityId) {
-            if (!document.scene().exists(parent)) {
-                throw std::runtime_error("QDR project document entity references a missing parent.");
-            }
-            if (!document.scene().setParent(child, parent, false)) {
-                throw std::runtime_error("QDR project document contains an invalid entity hierarchy.");
-            }
-        }
-    }
-    if (activeSelection != InvalidEntityId) {
-        if (!document.scene().setActiveSelection(activeSelection)) {
-            throw std::runtime_error("QDR project document active selection must reference a selected entity.");
-        }
-    }
-
-    if (document.ensureSceneRoot() == InvalidEntityId) {
-        throw std::runtime_error("QDR project document could not create a scene root.");
-    }
-
-    requireValidAssetReferencesForQdr(document.validateAssetReferences());
-
-    std::set<EditorObjectId> objectRecordIds;
-    std::set<EntityId> objectRecordEntities;
-    const json& objectsJson = fieldOrDefault(payload, "objects", emptyArray);
-    std::vector<ProjectObjectRecord> objectRecords;
-    objectRecords.reserve(objectsJson.size());
-    for (const json& recordJson : objectsJson) {
-        const ProjectObjectRecord record = objectRecordFromJson(recordJson);
-        requireValidAssetReferencesForQdr(document.validateAssetReferences(record));
-        if (!objectRecordIds.insert(record.id).second) {
-            throw std::runtime_error("QDR project document contains duplicate object record ids.");
-        }
-        if (!objectRecordEntities.insert(record.sceneEntity).second) {
-            throw std::runtime_error("QDR project document contains duplicate object record scene entities.");
-        }
-        if (entitiesWithExplicitEditorObjectIds.contains(record.sceneEntity) &&
-                document.scene().editorObjectId(record.sceneEntity) != record.id) {
-            throw std::runtime_error("QDR project object record id does not match the scene editor object id.");
-        }
-        objectRecords.push_back(record);
-    }
-    const std::size_t objectRecordCount = objectRecords.size();
-    if (document.upsertObjectRecords(std::move(objectRecords)).size() != objectRecordCount) {
-        throw std::runtime_error("QDR project object record conflicts with an existing editor object id.");
-    }
-
-    const ProjectDocumentIdentityReport identity = document.validateObjectIdentityInvariants();
-    if (!identity.ok()) {
-        throw std::runtime_error("QDR project document identity invariant failed: " + identity.issues.front().message);
-    }
-
-    return document;
+QVec3 color_from_abgr(std::uint32_t color) {
+  const float r = static_cast<float>(color & 0xffu) / 255.0f;
+  const float g = static_cast<float>((color >> 8u) & 0xffu) / 255.0f;
+  const float b = static_cast<float>((color >> 16u) & 0xffu) / 255.0f;
+  return {r, g, b};
 }
 
-QVec3 colorFromAbgr(std::uint32_t color) {
-    const float r = static_cast<float>(color & 0xffu) / 255.0f;
-    const float g = static_cast<float>((color >> 8u) & 0xffu) / 255.0f;
-    const float b = static_cast<float>((color >> 16u) & 0xffu) / 255.0f;
-    return {r, g, b};
-}
-
-LightType lightTypeFromLegacy(quader_io::QdrLightType type) {
-    switch (type) {
-    case quader_io::QdrLightType::point:
-        return LightType::Point;
-    case quader_io::QdrLightType::spot:
-        return LightType::Spot;
-    case quader_io::QdrLightType::directional:
-        return LightType::Directional;
-    }
+LightType light_type_from_legacy(quader_io::QdrLightType type) {
+  switch (type) {
+  case quader_io::QdrLightType::Point:
     return LightType::Point;
+  case quader_io::QdrLightType::Spot:
+    return LightType::Spot;
+  case quader_io::QdrLightType::Directional:
+    return LightType::Directional;
+  }
+  return LightType::Point;
 }
 
-ProjectDocument projectDocumentFromLegacyQdr(const quader_io::QdrDocument& legacy) {
-    QDR_PROFILE_FUNCTION();
-    ProjectDocument document(
-            ProjectDocumentRecord{.name = "Imported QDR"},
-            ProjectDocumentRootPolicy::DeferSceneRoot);
-    std::unordered_map<std::uint32_t, AssetId> materialBySlot;
-    std::unordered_map<int, EntityId> entityByLegacyObject;
+ProjectDocument
+project_document_from_legacy_qdr(const quader_io::QdrDocument &legacy) {
+  QDR_PROFILE_FUNCTION();
+  ProjectDocument document(ProjectDocumentRecord{.name = "Imported QDR"},
+                           ProjectDocumentRootPolicy::DeferSceneRoot);
+  std::unordered_map<std::uint32_t, AssetId> material_by_slot;
+  std::unordered_map<int, EntityId> entity_by_legacy_object;
 
-    const auto materialForSlot = [&](std::uint32_t slot) {
-        if (const auto existing = materialBySlot.find(slot); existing != materialBySlot.end()) {
-            return existing->second;
-        }
-        MaterialDocument material = makeDefaultQuaderMaterial("QDR Material " + std::to_string(slot));
-        const AssetId id = document.assets().addMaterial(std::move(material));
-        materialBySlot[slot] = id;
-        return id;
-    };
-
-    for (const quader_io::QdrObject& object : legacy.objects) {
-        const std::string name = "Imported Object " + std::to_string(object.id);
-        MeshAsset mesh = meshFromPolygonDocument(object.document, name);
-        const AssetId meshId = document.assets().addMesh(std::move(mesh));
-        const AssetId materialId = materialForSlot(static_cast<std::uint32_t>(object.material_id));
-        const EntityId entity = document.scene().createEntity(name, EntityKind::Mesh);
-        document.scene().setModelingObject(entity, ModelingObjectComponent{
-                .objectId = object.id,
-                .materialSlot = static_cast<std::uint32_t>(object.material_id),
-        });
-        document.scene().setMesh(entity, MeshComponent{.mesh = meshId});
-        document.scene().setMaterial(entity, MaterialComponent{.material = materialId});
-        if (object.selected) {
-            document.scene().setSelected(entity, true);
-        }
-        document.createObjectRecord(ProjectObjectRecord{
-                .sceneEntity = entity,
-                .mesh = meshId,
-                .material = materialId,
-                .modelingObject = object.id,
-                .authoredName = name,
-                .visible = true,
-                .materialSlot = static_cast<std::uint32_t>(object.material_id),
-        });
-        entityByLegacyObject[object.id] = entity;
+  const auto material_for_slot = [&](std::uint32_t slot) {
+    if (const auto existing = material_by_slot.find(slot);
+        existing != material_by_slot.end()) {
+      return existing->second;
     }
+    MaterialDocument material =
+        make_default_quader_material("QDR Material " + std::to_string(slot));
+    const AssetId id = document.assets().add_material(std::move(material));
+    material_by_slot[slot] = id;
+    return id;
+  };
 
-    if (const auto active = entityByLegacyObject.find(legacy.active_object_id);
-            active != entityByLegacyObject.end()) {
-        document.scene().setSelected(active->second, true);
-        document.scene().setActiveSelection(active->second);
-    }
-
-    for (const quader_io::QdrLight& legacyLight : legacy.lights) {
-        const std::string name = legacyLight.name.empty()
-                ? "Imported Light " + std::to_string(legacyLight.id)
-                : legacyLight.name;
-        const EntityId entity = document.scene().createEntity(name, EntityKind::Light);
-        document.scene().setTransform(entity, TransformComponent{.position = fromRuntime(legacyLight.position)});
-        document.scene().setVisible(entity, legacyLight.enabled);
-        document.scene().setLight(entity, LightComponent{
-                .type = lightTypeFromLegacy(legacyLight.type),
-                .color = colorFromAbgr(legacyLight.color_abgr),
-                .intensity = legacyLight.intensity,
-                .range = legacyLight.range,
-                .castsShadows = legacyLight.shadow_mode != quader_io::QdrLightShadowMode::none,
+  for (const quader_io::QdrObject &object : legacy.objects) {
+    const std::string name = "Imported Object " + std::to_string(object.id);
+    MeshAsset mesh = mesh_from_polygon_document(object.document, name);
+    const AssetId mesh_id = document.assets().add_mesh(std::move(mesh));
+    const AssetId material_id =
+        material_for_slot(static_cast<std::uint32_t>(object.material_id));
+    const EntityId entity =
+        document.scene().create_entity(name, EntityKind::Mesh);
+    document.scene().set_modeling_object(
+        entity,
+        ModelingObjectComponent{
+            .object_id = object.id,
+            .material_slot = static_cast<std::uint32_t>(object.material_id),
         });
-        if (legacyLight.selected) {
-            document.scene().setSelected(entity, true);
-        }
+    document.scene().set_mesh(entity, MeshComponent{.mesh = mesh_id});
+    document.scene().set_material(entity,
+                                  MaterialComponent{.material = material_id});
+    if (object.selected) {
+      document.scene().set_selected(entity, true);
     }
+    document.create_object_record(ProjectObjectRecord{
+        .scene_entity = entity,
+        .mesh = mesh_id,
+        .material = material_id,
+        .modeling_object = object.id,
+        .authored_name = name,
+        .visible = true,
+        .material_slot = static_cast<std::uint32_t>(object.material_id),
+    });
+    entity_by_legacy_object[object.id] = entity;
+  }
 
-    (void)document.ensureSceneRoot();
-    return document;
+  if (const auto active = entity_by_legacy_object.find(legacy.active_object_id);
+      active != entity_by_legacy_object.end()) {
+    document.scene().set_selected(active->second, true);
+    document.scene().set_active_selection(active->second);
+  }
+
+  for (const quader_io::QdrLight &legacy_light : legacy.lights) {
+    const std::string name =
+        legacy_light.name.empty()
+            ? "Imported Light " + std::to_string(legacy_light.id)
+            : legacy_light.name;
+    const EntityId entity =
+        document.scene().create_entity(name, EntityKind::Light);
+    document.scene().set_transform(
+        entity,
+        TransformComponent{.position = from_runtime(legacy_light.position)});
+    document.scene().set_visible(entity, legacy_light.enabled);
+    document.scene().set_light(
+        entity, LightComponent{
+                    .type = light_type_from_legacy(legacy_light.type),
+                    .color = color_from_abgr(legacy_light.color_abgr),
+                    .intensity = legacy_light.intensity,
+                    .range = legacy_light.range,
+                    .casts_shadows = legacy_light.shadow_mode !=
+                                     quader_io::QdrLightShadowMode::None,
+                });
+    if (legacy_light.selected) {
+      document.scene().set_selected(entity, true);
+    }
+  }
+
+  (void)document.ensure_scene_root();
+  return document;
 }
 
-QdrProjectReadResult legacyReadResult(std::string_view text) {
-    QDR_PROFILE_FUNCTION();
-    quader_io::QdrReadResult legacy = quader_io::deserialize_document(text);
-    if (!legacy.ok) {
-        return {false, ProjectDocument{}, legacy.message, false};
-    }
-    return {true, projectDocumentFromLegacyQdr(legacy.document), {}, true};
+QdrProjectReadResult legacy_read_result(std::string_view text) {
+  QDR_PROFILE_FUNCTION();
+  quader_io::QdrReadResult legacy = quader_io::deserialize_document(text);
+  if (!legacy.ok) {
+    return {false, ProjectDocument{}, legacy.message, false};
+  }
+  return {true, project_document_from_legacy_qdr(legacy.document), {}, true};
 }
 
-QdrProjectReadResult readFromRoot(const json& root, std::string_view text) {
-    QDR_PROFILE_FUNCTION();
-    quader_io::require_qdr_root_object(root);
-    const quader_io::QdrRootHeader header = quader_io::read_qdr_root_header(root);
-    if (header.format != quader_io::qdr_string_from_view(kQdrFormatName)) {
-        return {false, ProjectDocument{}, "Unsupported Quader file format: " + header.format, false};
+QdrProjectReadResult read_from_root(const Json &root, std::string_view text) {
+  QDR_PROFILE_FUNCTION();
+  quader_io::require_qdr_root_object(root);
+  const quader_io::QdrRootHeader header = quader_io::read_qdr_root_header(root);
+  if (header.format != quader_io::qdr_string_from_view(kQdrFormatName)) {
+    return {false, ProjectDocument{},
+            "Unsupported Quader file format: " + header.format, false};
+  }
+
+  const int version = header.version;
+  if (version < kQdrMinSupportedFormatVersion ||
+      version > kQdrProjectFormatVersion) {
+    return {false, ProjectDocument{},
+            "Unsupported Quader file version: " + std::to_string(version),
+            false};
+  }
+
+  const auto document_payload =
+      root.find(quader_io::qdr_string_from_view(kQdrDocumentPayloadKey));
+  if (document_payload != root.end()) {
+    if (!document_payload->is_object()) {
+      return {false, ProjectDocument{},
+              "QDR document payload must be an object.", false};
     }
 
-    const int version = header.version;
-    if (version < kQdrMinSupportedFormatVersion || version > kQdrProjectFormatVersion) {
-        return {false, ProjectDocument{}, "Unsupported Quader file version: " + std::to_string(version), false};
+    const auto kind = document_payload->find("kind");
+    if (kind != document_payload->end()) {
+      if (!kind->is_string()) {
+        return {false, ProjectDocument{},
+                "QDR project document payload kind must be a string.", false};
+      }
+      const std::string kind_text = kind->get<std::string>();
+      if (kind_text !=
+          quader_io::qdr_string_from_view(kQdrProjectDocumentKind)) {
+        return {false, ProjectDocument{},
+                "Unsupported QDR project document payload kind: " + kind_text,
+                false};
+      }
+      if (version != kQdrProjectFormatVersion) {
+        return {false, ProjectDocument{},
+                "QDR project document payload requires version " +
+                    std::to_string(kQdrProjectFormatVersion) + ".",
+                false};
+      }
+      return {true,
+              project_document_from_app_payload(*document_payload),
+              {},
+              false};
     }
 
-    const auto documentPayload = root.find(quader_io::qdr_string_from_view(kQdrDocumentPayloadKey));
-    if (documentPayload != root.end()) {
-        if (!documentPayload->is_object()) {
-            return {false, ProjectDocument{}, "QDR document payload must be an object.", false};
-        }
-
-        const auto kind = documentPayload->find("kind");
-        if (kind != documentPayload->end()) {
-            if (!kind->is_string()) {
-                return {false, ProjectDocument{}, "QDR project document payload kind must be a string.", false};
-            }
-            const std::string kindText = kind->get<std::string>();
-            if (kindText != quader_io::qdr_string_from_view(kQdrProjectDocumentKind)) {
-                return {false, ProjectDocument{}, "Unsupported QDR project document payload kind: " + kindText, false};
-            }
-            if (version != kQdrProjectFormatVersion) {
-                return {false, ProjectDocument{}, "QDR project document payload requires version " +
-                                std::to_string(kQdrProjectFormatVersion) + ".", false};
-            }
-            return {true, projectDocumentFromAppPayload(*documentPayload), {}, false};
-        }
-
-        if (version == kQdrProjectFormatVersion) {
-            return {false, ProjectDocument{}, "QDR project document payload is missing its kind.", false};
-        }
-        return legacyReadResult(text);
+    if (version == kQdrProjectFormatVersion) {
+      return {false, ProjectDocument{},
+              "QDR project document payload is missing its kind.", false};
     }
+    return legacy_read_result(text);
+  }
 
-    if (root.find(quader_io::qdr_string_from_view(kQdrLegacySessionPayloadKey)) != root.end()) {
-        return legacyReadResult(text);
-    }
+  if (root.find(quader_io::qdr_string_from_view(kQdrLegacySessionPayloadKey)) !=
+      root.end()) {
+    return legacy_read_result(text);
+  }
 
-    return {false, ProjectDocument{}, "QDR document is missing its document payload.", false};
+  return {false, ProjectDocument{},
+          "QDR document is missing its document payload.", false};
 }
 
 } // namespace
 
-QdrProjectReadResult QdrDocumentReader::deserializeProjectDocument(std::string_view text) {
-    QDR_PROFILE_FUNCTION();
-    try {
-        const json root = [&]() {
-            QDR_PROFILE_SCOPE("QDR parse project JSON");
-            return json::parse(text.begin(), text.end());
-        }();
-        return readFromRoot(root, text);
-    } catch (const std::exception& exception) {
-        return {false, ProjectDocument{}, exception.what(), false};
-    } catch (...) {
-        return {false, ProjectDocument{}, "Unknown error reading QDR document.", false};
-    }
+QdrProjectReadResult
+QdrDocumentReader::deserialize_project_document(std::string_view text) {
+  QDR_PROFILE_FUNCTION();
+  try {
+    const Json root = [&]() {
+      QDR_PROFILE_SCOPE("QDR parse project JSON");
+      return Json::parse(text.begin(), text.end());
+    }();
+    return read_from_root(root, text);
+  } catch (const std::exception &exception) {
+    return {false, ProjectDocument{}, exception.what(), false};
+  } catch (...) {
+    return {false, ProjectDocument{}, "Unknown error reading QDR document.",
+            false};
+  }
 }
 
-QdrProjectReadResult QdrDocumentReader::readProjectDocument(const std::filesystem::path& path) {
-    QDR_PROFILE_FUNCTION();
-    std::ifstream stream(path, std::ios::binary);
-    if (!stream.is_open()) {
-        return {false, ProjectDocument{}, "Could not open QDR document: " + path.string(), false};
-    }
-    const std::string text = [&]() {
-        QDR_PROFILE_SCOPE("QDR read project file bytes");
-        return std::string{
-                std::istreambuf_iterator<char>(stream),
-                std::istreambuf_iterator<char>()};
-    }();
-    return deserializeProjectDocument(text);
+QdrProjectReadResult
+QdrDocumentReader::read_project_document(const std::filesystem::path &path) {
+  QDR_PROFILE_FUNCTION();
+  std::ifstream stream(path, std::ios::binary);
+  if (!stream.is_open()) {
+    return {false, ProjectDocument{},
+            "Could not open QDR document: " + path.string(), false};
+  }
+  const std::string text = [&]() {
+    QDR_PROFILE_SCOPE("QDR read project file bytes");
+    return std::string{std::istreambuf_iterator<char>(stream),
+                       std::istreambuf_iterator<char>()};
+  }();
+  return deserialize_project_document(text);
 }
 
 } // namespace quader

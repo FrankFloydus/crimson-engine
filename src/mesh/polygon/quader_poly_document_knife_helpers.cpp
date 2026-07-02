@@ -40,7 +40,7 @@ ElementId other_edge_vertex(Edge edge, ElementId vertex)
     if (edge.b == vertex) {
         return edge.a;
     }
-    return invalid_element_id;
+    return kInvalidElementId;
 }
 
 bool edge_exists(const Document& document, Edge edge)
@@ -112,8 +112,8 @@ void append_edge_loop_direction(const Document& document, Edge seed, ElementId t
 
         edges.push_back(*next);
         const ElementId next_vertex = other_edge_vertex(*next, vertex);
-        if (next_vertex == invalid_element_id) {
-            return;
+        if (next_vertex == kInvalidElementId) {
+          return;
         }
 
         current = *next;
@@ -249,7 +249,7 @@ ElementId split_vertex_for_edge(
     const Vertex* a = find_vertex(document, edge.a);
     const Vertex* b = find_vertex(document, edge.b);
     if (a == nullptr || b == nullptr) {
-        return invalid_element_id;
+      return kInvalidElementId;
     }
 
     const ElementId vertex_id = add_vertex(document, a->position + ((b->position - a->position) * factor));
@@ -289,8 +289,9 @@ ElementId split_vertex_for_knife_edge(
     float factor)
 {
     const std::pair<ElementId, ElementId> key = edge_key(edge);
-    if (key.first == invalid_element_id || key.second == invalid_element_id || key.first == key.second) {
-        return invalid_element_id;
+    if (key.first == kInvalidElementId || key.second == kInvalidElementId ||
+        key.first == key.second) {
+      return kInvalidElementId;
     }
 
     factor = knife_edge_factor_for_key(edge, factor);
@@ -304,7 +305,7 @@ ElementId split_vertex_for_knife_edge(
     const Vertex* a = find_vertex(document, key.first);
     const Vertex* b = find_vertex(document, key.second);
     if (a == nullptr || b == nullptr) {
-        return invalid_element_id;
+      return kInvalidElementId;
     }
 
     const ElementId vertex_id = add_vertex(document, a->position + ((b->position - a->position) * factor));
@@ -319,9 +320,10 @@ ElementId split_vertex_near_endpoint(
     ElementId neighbor_id,
     float distance)
 {
-    if (endpoint_id == invalid_element_id || neighbor_id == invalid_element_id || endpoint_id == neighbor_id) {
-        return invalid_element_id;
-    }
+  if (endpoint_id == kInvalidElementId || neighbor_id == kInvalidElementId ||
+      endpoint_id == neighbor_id) {
+    return kInvalidElementId;
+  }
 
     const std::pair<ElementId, ElementId> key { endpoint_id, neighbor_id };
     const auto existing = split_vertices.find(key);
@@ -332,16 +334,17 @@ ElementId split_vertex_near_endpoint(
     const Vertex* endpoint = find_vertex(document, endpoint_id);
     const Vertex* neighbor = find_vertex(document, neighbor_id);
     if (endpoint == nullptr || neighbor == nullptr) {
-        return invalid_element_id;
+      return kInvalidElementId;
     }
 
     const quader::QVec3 edge = neighbor->position - endpoint->position;
     const float edge_length = length(edge);
-    if (edge_length <= epsilon) {
-        return invalid_element_id;
+    if (edge_length <= kEpsilon) {
+      return kInvalidElementId;
     }
 
-    const float safe_distance = std::clamp(distance, min_primitive_dimension, edge_length * 0.45F);
+    const float safe_distance =
+        std::clamp(distance, kMinPrimitiveDimension, edge_length * 0.45F);
     const ElementId vertex_id = add_vertex(document, endpoint->position + ((edge / edge_length) * safe_distance));
     split_vertices[key] = vertex_id;
     return vertex_id;
@@ -349,7 +352,7 @@ ElementId split_vertex_near_endpoint(
 
 bool knife_target_is_edge(const KnifePointTarget& target)
 {
-    return target.kind == KnifePointTargetKind::existing_edge;
+  return target.kind == KnifePointTargetKind::ExistingEdge;
 }
 
 bool knife_targets_use_same_edge(const KnifePointTarget& left, const KnifePointTarget& right)
@@ -364,35 +367,38 @@ std::optional<ResolvedKnifeTarget> resolve_knife_target(
     std::string& message)
 {
     switch (target.kind) {
-    case KnifePointTargetKind::existing_vertex:
-    case KnifePointTargetKind::inserted_vertex: {
-        const Vertex* vertex = find_vertex(candidate, target.vertex_id);
-        if (vertex == nullptr) {
-            message = target.kind == KnifePointTargetKind::inserted_vertex ?
-                "Knife segment previous inserted vertex was not found." :
-                "Knife segment vertex target was not found.";
-            return std::nullopt;
-        }
-        return ResolvedKnifeTarget { vertex->id, vertex->position };
+    case KnifePointTargetKind::ExistingVertex:
+    case KnifePointTargetKind::InsertedVertex: {
+      const Vertex *vertex = find_vertex(candidate, target.vertex_id);
+      if (vertex == nullptr) {
+        message = target.kind == KnifePointTargetKind::InsertedVertex
+                      ? "Knife segment previous inserted vertex was not found."
+                      : "Knife segment vertex target was not found.";
+        return std::nullopt;
+      }
+      return ResolvedKnifeTarget{vertex->id, vertex->position};
     }
-    case KnifePointTargetKind::existing_edge: {
-        const Edge edge = target.edge;
-        const Edge normalized_edge = make_edge(edge.a, edge.b);
-        if (normalized_edge.a == invalid_element_id ||
-            normalized_edge.b == invalid_element_id ||
-            normalized_edge.a == normalized_edge.b ||
-            !edge_exists(candidate, normalized_edge)) {
-            message = "Knife segment edge target was not found.";
-            return std::nullopt;
-        }
-        const float factor = std::clamp(std::isfinite(target.edge_factor) ? target.edge_factor : 0.5F, 0.01F, 0.99F);
-        const ElementId vertex_id = split_vertex_for_edge(candidate, split_vertices, edge, factor);
-        const Vertex* vertex = find_vertex(candidate, vertex_id);
-        if (vertex == nullptr) {
-            message = "Knife segment could not split the target edge.";
-            return std::nullopt;
-        }
-        return ResolvedKnifeTarget { vertex_id, vertex->position };
+    case KnifePointTargetKind::ExistingEdge: {
+      const Edge edge = target.edge;
+      const Edge normalized_edge = make_edge(edge.a, edge.b);
+      if (normalized_edge.a == kInvalidElementId ||
+          normalized_edge.b == kInvalidElementId ||
+          normalized_edge.a == normalized_edge.b ||
+          !edge_exists(candidate, normalized_edge)) {
+        message = "Knife segment edge target was not found.";
+        return std::nullopt;
+      }
+      const float factor = std::clamp(
+          std::isfinite(target.edge_factor) ? target.edge_factor : 0.5F, 0.01F,
+          0.99F);
+      const ElementId vertex_id =
+          split_vertex_for_edge(candidate, split_vertices, edge, factor);
+      const Vertex *vertex = find_vertex(candidate, vertex_id);
+      if (vertex == nullptr) {
+        message = "Knife segment could not split the target edge.";
+        return std::nullopt;
+      }
+      return ResolvedKnifeTarget{vertex_id, vertex->position};
     }
     }
 
@@ -482,9 +488,10 @@ bool apply_knife_edge_splits_to_faces(Document& candidate, const KnifeEdgeSplitM
             }
 
             for (const KnifeEdgeSplit& split : ordered_splits) {
-                if (split.vertex_id == invalid_element_id || split.vertex_id == current || split.vertex_id == next) {
-                    continue;
-                }
+              if (split.vertex_id == kInvalidElementId ||
+                  split.vertex_id == current || split.vertex_id == next) {
+                continue;
+              }
                 expanded_loop.push_back(split.vertex_id);
                 face_changed = true;
             }
@@ -526,14 +533,18 @@ double knife_distance_squared_2d(const KnifePoint2& a, const KnifePoint2& b)
 
 bool knife_point_on_segment_2d(const KnifePoint2& point, const KnifePoint2& a, const KnifePoint2& b)
 {
-    constexpr double tolerance = 0.000001;
-    return quader_geometry::point_on_segment_2d(geometry_vec2(point), geometry_vec2(a), geometry_vec2(b), tolerance);
+  constexpr double kTolerance = 0.000001;
+  return quader_geometry::point_on_segment_2d(
+      geometry_vec2(point), geometry_vec2(a), geometry_vec2(b), kTolerance);
 }
 
 bool knife_segments_intersect_2d(const KnifePoint2& a, const KnifePoint2& b, const KnifePoint2& c, const KnifePoint2& d)
 {
-    constexpr double tolerance = 0.000001;
-    return quader_geometry::intersect_segments_2d(geometry_vec2(a), geometry_vec2(b), geometry_vec2(c), geometry_vec2(d), tolerance).hit;
+  constexpr double kTolerance = 0.000001;
+  return quader_geometry::intersect_segments_2d(
+             geometry_vec2(a), geometry_vec2(b), geometry_vec2(c),
+             geometry_vec2(d), kTolerance)
+      .hit;
 }
 
 double knife_signed_area_2d(std::span<const KnifePoint2> points)
@@ -559,12 +570,12 @@ std::vector<KnifePoint2> knife_face_projected_loop(const Document& document, con
 
 bool knife_point_in_or_on_polygon_2d(const KnifePoint2& point, std::span<const KnifePoint2> polygon)
 {
-    constexpr double tolerance = 0.000001;
-    const std::vector<quader_geometry::QVec2d> geometry_polygon = geometry_vec2_points(polygon);
-    return quader_geometry::point_in_or_on_polygon_2d(
-        geometry_vec2(point),
-        std::span<const quader_geometry::QVec2d>(geometry_polygon),
-        tolerance);
+  constexpr double kTolerance = 0.000001;
+  const std::vector<quader_geometry::QVec2d> geometry_polygon =
+      geometry_vec2_points(polygon);
+  return quader_geometry::point_in_or_on_polygon_2d(
+      geometry_vec2(point),
+      std::span<const quader_geometry::QVec2d>(geometry_polygon), kTolerance);
 }
 
 bool knife_vertex_is_on_face_boundary(const Face& face, ElementId vertex_id)
@@ -587,8 +598,9 @@ std::optional<KnifeBoundaryTarget> knife_face_boundary_target_at_position(
         const ElementId current = face.vertices[index];
         const ElementId next = face.vertices[(index + 1U) % face.vertices.size()];
         const Edge edge = make_edge(current, next);
-        if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b) {
-            continue;
+        if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+            edge.a == edge.b) {
+          continue;
         }
 
         const KnifePoint2 a = knife_project_vertex(document, edge.a, dropped_axis);
@@ -608,8 +620,8 @@ std::optional<KnifeBoundaryTarget> knife_face_boundary_target_at_position(
             return KnifeBoundaryTarget { edge.b, {}, 1.0F };
         }
 
-        return KnifeBoundaryTarget {
-            invalid_element_id,
+        return KnifeBoundaryTarget{
+            kInvalidElementId,
             edge,
             std::clamp(*factor, 0.01F, 0.99F),
         };
@@ -638,8 +650,9 @@ bool knife_segment_crosses_existing_edges(
 
     auto crosses_edge = [&](Edge edge) {
         edge = make_edge(edge.a, edge.b);
-        if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b) {
-            return false;
+        if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+            edge.a == edge.b) {
+          return false;
         }
         if (edge.a == segment.a || edge.a == segment.b || edge.b == segment.a || edge.b == segment.b) {
             return false;
@@ -704,8 +717,8 @@ std::optional<Edge> knife_best_connector_to_boundary(
         }
         const float left_distance = left_vertex != nullptr ? length_squared(left_vertex->position - interior->position) : std::numeric_limits<float>::infinity();
         const float right_distance = right_vertex != nullptr ? length_squared(right_vertex->position - interior->position) : std::numeric_limits<float>::infinity();
-        if (std::abs(left_distance - right_distance) > epsilon) {
-            return left_distance < right_distance;
+        if (std::abs(left_distance - right_distance) > kEpsilon) {
+          return left_distance < right_distance;
         }
         return left < right;
     });
@@ -805,15 +818,18 @@ bool knife_add_component_connectors(
                 const Vertex* left_vertex = find_vertex(document, left);
                 const Vertex* right_vertex = find_vertex(document, right);
                 if (left_vertex != nullptr && right_vertex != nullptr) {
-                    if (std::abs(left_vertex->position.x - right_vertex->position.x) > epsilon) {
-                        return left_vertex->position.x < right_vertex->position.x;
-                    }
-                    if (std::abs(left_vertex->position.y - right_vertex->position.y) > epsilon) {
-                        return left_vertex->position.y < right_vertex->position.y;
-                    }
-                    if (std::abs(left_vertex->position.z - right_vertex->position.z) > epsilon) {
-                        return left_vertex->position.z < right_vertex->position.z;
-                    }
+                  if (std::abs(left_vertex->position.x -
+                               right_vertex->position.x) > kEpsilon) {
+                    return left_vertex->position.x < right_vertex->position.x;
+                  }
+                  if (std::abs(left_vertex->position.y -
+                               right_vertex->position.y) > kEpsilon) {
+                    return left_vertex->position.y < right_vertex->position.y;
+                  }
+                  if (std::abs(left_vertex->position.z -
+                               right_vertex->position.z) > kEpsilon) {
+                    return left_vertex->position.z < right_vertex->position.z;
+                  }
                 }
                 return left < right;
             });
@@ -859,9 +875,10 @@ bool knife_validate_cut_edges_for_face(
 
     for (std::size_t index = 0; index < cut_edges.size(); ++index) {
         const Edge edge = cut_edges[index];
-        if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b) {
-            message = "Knife cut contains an invalid segment.";
-            return false;
+        if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+            edge.a == edge.b) {
+          message = "Knife cut contains an invalid segment.";
+          return false;
         }
     }
     return true;
@@ -873,12 +890,14 @@ std::optional<KnifePoint2> knife_proper_segment_intersection_2d(
     const KnifePoint2& c,
     const KnifePoint2& d)
 {
-    constexpr double tolerance = 0.000001;
-    const quader_geometry::QSegmentIntersection2<double> intersection =
-        quader_geometry::proper_segment_intersection_2d(geometry_vec2(a), geometry_vec2(b), geometry_vec2(c), geometry_vec2(d), tolerance);
-    if (!intersection.hit) {
-        return std::nullopt;
-    }
+  constexpr double kTolerance = 0.000001;
+  const quader_geometry::QSegmentIntersection2<double> intersection =
+      quader_geometry::proper_segment_intersection_2d(
+          geometry_vec2(a), geometry_vec2(b), geometry_vec2(c),
+          geometry_vec2(d), kTolerance);
+  if (!intersection.hit) {
+    return std::nullopt;
+  }
     return poly_vec2(intersection.point);
 }
 
@@ -886,24 +905,21 @@ quader::QVec3 knife_unproject_face_point(const Document& document, const Face& f
 {
     const Vertex* origin = !face.vertices.empty() ? find_vertex(document, face.vertices.front()) : nullptr;
     const quader::QVec3 normal = face_normal(document, face);
-    if (origin == nullptr || length_squared(normal) <= epsilon) {
-        return {};
+    if (origin == nullptr || length_squared(normal) <= kEpsilon) {
+      return {};
     }
 
-    const quader_geometry::QPlane3<float> plane = quader_geometry::plane_from_point_normal<float>(
-        geometry_vec3(origin->position),
-        geometry_vec3(normal),
-        epsilon);
-    if (quader_geometry::length_squared(plane.normal) <= epsilon) {
-        return {};
+    const quader_geometry::QPlane3<float> plane =
+        quader_geometry::plane_from_point_normal<float>(
+            geometry_vec3(origin->position), geometry_vec3(normal), kEpsilon);
+    if (quader_geometry::length_squared(plane.normal) <= kEpsilon) {
+      return {};
     }
 
     const quader_geometry::QDominantAxisUnprojectResult<float> unprojected =
         quader_geometry::unproject_dominant_axis_point_to_plane<float>(
-            { static_cast<float>(point[0]), static_cast<float>(point[1]) },
-            plane,
-            geometry_axis_from_dropped_axis(dropped_axis),
-            epsilon);
+            {static_cast<float>(point[0]), static_cast<float>(point[1])}, plane,
+            geometry_axis_from_dropped_axis(dropped_axis), kEpsilon);
     if (unprojected.valid) {
         return poly_vec3(unprojected.point);
     }
@@ -935,16 +951,19 @@ void knife_split_cut_edge_intersections(Document& document, const Face& face, st
         changed = false;
         for (std::size_t first_index = 0; first_index < cut_edges.size() && !changed; ++first_index) {
             const Edge first = cut_edges[first_index];
-            if (first.a == invalid_element_id || first.b == invalid_element_id || first.a == first.b) {
-                continue;
+            if (first.a == kInvalidElementId || first.b == kInvalidElementId ||
+                first.a == first.b) {
+              continue;
             }
             const KnifePoint2 first_a = knife_project_vertex(document, first.a, dropped_axis);
             const KnifePoint2 first_b = knife_project_vertex(document, first.b, dropped_axis);
             for (std::size_t second_index = first_index + 1U; second_index < cut_edges.size(); ++second_index) {
                 const Edge second = cut_edges[second_index];
-                if (second.a == invalid_element_id || second.b == invalid_element_id || second.a == second.b ||
-                    first.a == second.a || first.a == second.b || first.b == second.a || first.b == second.b) {
-                    continue;
+                if (second.a == kInvalidElementId ||
+                    second.b == kInvalidElementId || second.a == second.b ||
+                    first.a == second.a || first.a == second.b ||
+                    first.b == second.a || first.b == second.b) {
+                  continue;
                 }
 
                 const KnifePoint2 second_a = knife_project_vertex(document, second.a, dropped_axis);
@@ -980,9 +999,10 @@ void knife_split_cut_edge_intersections(Document& document, const Face& face, st
 
 bool knife_face_loop_is_valid(const Document& document, std::span<const ElementId> loop)
 {
-    if (loop.size() < 3U || has_repeated_vertex(loop) || face_loop_area_score(document, loop) <= face_area_score_epsilon) {
-        return false;
-    }
+  if (loop.size() < 3U || has_repeated_vertex(loop) ||
+      face_loop_area_score(document, loop) <= kFaceAreaScoreEpsilon) {
+    return false;
+  }
 
     Face face;
     face.vertices.assign(loop.begin(), loop.end());
@@ -1018,8 +1038,9 @@ std::vector<std::vector<ElementId>> knife_partition_open_chain_face_loops(
     std::map<ElementId, std::vector<ElementId>> adjacency;
     for (Edge edge : cut_edges) {
         edge = make_edge(edge.a, edge.b);
-        if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b || face_uses_edge(face, edge)) {
-            continue;
+        if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+            edge.a == edge.b || face_uses_edge(face, edge)) {
+          continue;
         }
         add_unique_id(adjacency[edge.a], edge.b);
         add_unique_id(adjacency[edge.b], edge.a);
@@ -1045,7 +1066,7 @@ std::vector<std::vector<ElementId>> knife_partition_open_chain_face_loops(
 
     std::vector<ElementId> chain;
     chain.reserve(adjacency.size());
-    ElementId previous = invalid_element_id;
+    ElementId previous = kInvalidElementId;
     ElementId current = endpoints[0];
     for (std::size_t guard = 0; guard <= adjacency.size(); ++guard) {
         chain.push_back(current);
@@ -1058,15 +1079,15 @@ std::vector<std::vector<ElementId>> knife_partition_open_chain_face_loops(
             return {};
         }
 
-        ElementId next = invalid_element_id;
+        ElementId next = kInvalidElementId;
         for (const ElementId candidate : found->second) {
             if (candidate != previous) {
                 next = candidate;
                 break;
             }
         }
-        if (next == invalid_element_id) {
-            return {};
+        if (next == kInvalidElementId) {
+          return {};
         }
         previous = current;
         current = next;
@@ -1124,8 +1145,9 @@ std::vector<std::vector<ElementId>> knife_partition_face_loops_for_turn(
     };
     const auto add_graph_edge = [&](Edge edge) {
         edge = make_edge(edge.a, edge.b);
-        if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b) {
-            return false;
+        if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+            edge.a == edge.b) {
+          return false;
         }
         if (!add_vertex(edge.a) || !add_vertex(edge.b)) {
             return false;
@@ -1250,8 +1272,9 @@ std::set<ElementId> knife_required_cut_vertices(const Face& face, std::span<cons
     std::set<ElementId> vertices;
     for (Edge edge : cut_edges) {
         edge = make_edge(edge.a, edge.b);
-        if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b || face_uses_edge(face, edge)) {
-            continue;
+        if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+            edge.a == edge.b || face_uses_edge(face, edge)) {
+          continue;
         }
         vertices.insert(edge.a);
         vertices.insert(edge.b);
@@ -1340,42 +1363,48 @@ std::vector<std::vector<ElementId>> knife_partition_face_loops_with_repairs(
     int dropped_axis,
     std::string& message)
 {
-    constexpr int max_repair_passes = 4;
-    std::vector<std::vector<ElementId>> loops;
-    for (int pass = 0; pass < max_repair_passes; ++pass) {
-        loops = knife_partition_open_chain_face_loops(document, face, cut_edges, dropped_axis);
-        if (loops.empty()) {
-            loops = knife_partition_face_loops(document, face, cut_edges, dropped_axis);
-        }
-
-        const std::set<ElementId> required_vertices = knife_required_cut_vertices(face, cut_edges);
-        if (!loops.empty() && knife_loops_cover_required_vertices(loops, required_vertices)) {
-            return loops;
-        }
-
-        bool repaired = false;
-        const std::vector<ElementId> uncovered_vertices = knife_uncovered_required_vertices(loops, required_vertices);
-        for (const ElementId vertex_id : uncovered_vertices) {
-            const std::optional<Edge> connector =
-                knife_best_connector_to_boundary(document, face, vertex_id, cut_edges, dropped_axis);
-            if (!connector.has_value()) {
-                continue;
-            }
-            const std::size_t before_size = cut_edges.size();
-            add_unique_edge(cut_edges, *connector);
-            repaired = cut_edges.size() != before_size || repaired;
-        }
-
-        if (!repaired) {
-            break;
-        }
-
-        knife_split_cut_edge_intersections(document, face, cut_edges, dropped_axis);
-        if (!knife_add_component_connectors(document, face, cut_edges, dropped_axis, message)) {
-            return {};
-        }
-        knife_split_cut_edge_intersections(document, face, cut_edges, dropped_axis);
+  constexpr int kMaxRepairPasses = 4;
+  std::vector<std::vector<ElementId>> loops;
+  for (int pass = 0; pass < kMaxRepairPasses; ++pass) {
+    loops = knife_partition_open_chain_face_loops(document, face, cut_edges,
+                                                  dropped_axis);
+    if (loops.empty()) {
+      loops =
+          knife_partition_face_loops(document, face, cut_edges, dropped_axis);
     }
+
+    const std::set<ElementId> required_vertices =
+        knife_required_cut_vertices(face, cut_edges);
+    if (!loops.empty() &&
+        knife_loops_cover_required_vertices(loops, required_vertices)) {
+      return loops;
+    }
+
+    bool repaired = false;
+    const std::vector<ElementId> uncovered_vertices =
+        knife_uncovered_required_vertices(loops, required_vertices);
+    for (const ElementId vertex_id : uncovered_vertices) {
+      const std::optional<Edge> connector = knife_best_connector_to_boundary(
+          document, face, vertex_id, cut_edges, dropped_axis);
+      if (!connector.has_value()) {
+        continue;
+      }
+      const std::size_t before_size = cut_edges.size();
+      add_unique_edge(cut_edges, *connector);
+      repaired = cut_edges.size() != before_size || repaired;
+    }
+
+    if (!repaired) {
+      break;
+    }
+
+    knife_split_cut_edge_intersections(document, face, cut_edges, dropped_axis);
+    if (!knife_add_component_connectors(document, face, cut_edges, dropped_axis,
+                                        message)) {
+      return {};
+    }
+    knife_split_cut_edge_intersections(document, face, cut_edges, dropped_axis);
+  }
 
     return loops;
 }
@@ -1390,16 +1419,21 @@ std::optional<ElementId> knife_segment_face_id(
     }
     const KnifeResolvedStrokePoint& first = points[segment.first_point];
     const KnifeResolvedStrokePoint& second = points[segment.second_point];
-    if (first.vertex_id == invalid_element_id || second.vertex_id == invalid_element_id || first.vertex_id == second.vertex_id) {
-        return std::nullopt;
+    if (first.vertex_id == kInvalidElementId ||
+        second.vertex_id == kInvalidElementId ||
+        first.vertex_id == second.vertex_id) {
+      return std::nullopt;
     }
 
-    if (first.face_id != invalid_element_id && second.face_id != invalid_element_id && first.face_id == second.face_id) {
-        const Face* face = find_face(document, first.face_id);
-        if (face != nullptr && knife_resolved_point_lies_on_face(*face, first) && knife_resolved_point_lies_on_face(*face, second)) {
-            return first.face_id;
-        }
-        return std::nullopt;
+    if (first.face_id != kInvalidElementId &&
+        second.face_id != kInvalidElementId &&
+        first.face_id == second.face_id) {
+      const Face *face = find_face(document, first.face_id);
+      if (face != nullptr && knife_resolved_point_lies_on_face(*face, first) &&
+          knife_resolved_point_lies_on_face(*face, second)) {
+        return first.face_id;
+      }
+      return std::nullopt;
     }
 
     std::vector<ElementId> matching_faces;
@@ -1444,9 +1478,9 @@ float knife_edge_factor_nearest_segment(
     }
 
     quader_geometry::QSegmentSegmentFactorOptions<float> options;
-    options.length_squared_epsilon = epsilon;
-    options.closest_epsilon = epsilon;
-    options.parameter_epsilon = epsilon;
+    options.length_squared_epsilon = kEpsilon;
+    options.closest_epsilon = kEpsilon;
+    options.parameter_epsilon = kEpsilon;
     options.min_factor = 0.01F;
     options.max_factor = 0.99F;
 
@@ -1460,10 +1494,10 @@ float knife_edge_factor_nearest_segment(
 
 float knife_distance_squared_to_segment(quader::QVec3 point, quader::QVec3 segment_start, quader::QVec3 segment_end)
 {
-    return quader_geometry::point_segment_distance_squared<float>(
-        geometry_vec3(point),
-        { geometry_vec3(segment_start), geometry_vec3(segment_end) },
-        std::sqrt(epsilon));
+  return quader_geometry::point_segment_distance_squared<float>(
+      geometry_vec3(point),
+      {geometry_vec3(segment_start), geometry_vec3(segment_end)},
+      std::sqrt(kEpsilon));
 }
 
 bool knife_add_face_graph_edge(
@@ -1478,8 +1512,9 @@ bool knife_add_face_graph_edge(
     }
 
     edge = make_edge(edge.a, edge.b);
-    if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b || face_uses_edge(*face, edge)) {
-        return false;
+    if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+        edge.a == edge.b || face_uses_edge(*face, edge)) {
+      return false;
     }
 
     KnifeFaceGraph& graph = face_graphs[face_id];
@@ -1508,12 +1543,13 @@ bool knife_ensure_point_connected_to_face_graph(
     const KnifeResolvedStrokePoint& point,
     std::string& message)
 {
-    if (point.vertex_id == invalid_element_id || knife_any_face_graph_uses_vertex(face_graphs, point.vertex_id)) {
-        return true;
-    }
-    if (point.face_id == invalid_element_id) {
-        return true;
-    }
+  if (point.vertex_id == kInvalidElementId ||
+      knife_any_face_graph_uses_vertex(face_graphs, point.vertex_id)) {
+    return true;
+  }
+  if (point.face_id == kInvalidElementId) {
+    return true;
+  }
 
     const Face* face = find_face(document, point.face_id);
     if (face == nullptr) {
@@ -1552,42 +1588,47 @@ KnifeStrokeCandidate build_knife_stroke_candidate(
 
     KnifeEdgeSplitMap split_vertices;
     for (const KnifePointTarget& target : targets) {
-        if (target.kind == KnifePointTargetKind::existing_edge) {
-            const Edge edge = target.edge;
-            const Edge normalized_edge = make_edge(edge.a, edge.b);
-            const float factor = std::clamp(std::isfinite(target.edge_factor) ? target.edge_factor : 0.5F, 0.01F, 0.99F);
-            if (normalized_edge.a == invalid_element_id ||
-                normalized_edge.b == invalid_element_id ||
-                normalized_edge.a == normalized_edge.b ||
-                !edge_exists(build.document, normalized_edge)) {
-                build.message = "Knife edge target was not found.";
-                return build;
-            }
-            const ElementId vertex_id = split_vertex_for_knife_edge(build.document, split_vertices, edge, factor);
-            if (vertex_id == invalid_element_id) {
-                build.message = "Knife could not split the target edge.";
-                return build;
-            }
-        } else if (target.kind == KnifePointTargetKind::face_point) {
-            const Face* face = find_face(build.document, target.face_id);
-            if (face == nullptr) {
-                build.message = "Knife face point target was not found.";
-                return build;
-            }
-
-            const quader::QVec3 normal = face_normal(build.document, *face);
-            const int dropped_axis = dropped_axis_for_normal(normal);
-            const std::optional<KnifeBoundaryTarget> boundary =
-                knife_face_boundary_target_at_position(build.document, *face, target.position, dropped_axis);
-            if (boundary.has_value() && boundary->vertex_id == invalid_element_id) {
-                const ElementId vertex_id =
-                    split_vertex_for_knife_edge(build.document, split_vertices, boundary->edge, boundary->edge_factor);
-                if (vertex_id == invalid_element_id) {
-                    build.message = "Knife could not split the target edge.";
-                    return build;
-                }
-            }
+      if (target.kind == KnifePointTargetKind::ExistingEdge) {
+        const Edge edge = target.edge;
+        const Edge normalized_edge = make_edge(edge.a, edge.b);
+        const float factor = std::clamp(
+            std::isfinite(target.edge_factor) ? target.edge_factor : 0.5F,
+            0.01F, 0.99F);
+        if (normalized_edge.a == kInvalidElementId ||
+            normalized_edge.b == kInvalidElementId ||
+            normalized_edge.a == normalized_edge.b ||
+            !edge_exists(build.document, normalized_edge)) {
+          build.message = "Knife edge target was not found.";
+          return build;
         }
+        const ElementId vertex_id = split_vertex_for_knife_edge(
+            build.document, split_vertices, edge, factor);
+        if (vertex_id == kInvalidElementId) {
+          build.message = "Knife could not split the target edge.";
+          return build;
+        }
+      } else if (target.kind == KnifePointTargetKind::FacePoint) {
+        const Face *face = find_face(build.document, target.face_id);
+        if (face == nullptr) {
+          build.message = "Knife face point target was not found.";
+          return build;
+        }
+
+        const quader::QVec3 normal = face_normal(build.document, *face);
+        const int dropped_axis = dropped_axis_for_normal(normal);
+        const std::optional<KnifeBoundaryTarget> boundary =
+            knife_face_boundary_target_at_position(
+                build.document, *face, target.position, dropped_axis);
+        if (boundary.has_value() && boundary->vertex_id == kInvalidElementId) {
+          const ElementId vertex_id = split_vertex_for_knife_edge(
+              build.document, split_vertices, boundary->edge,
+              boundary->edge_factor);
+          if (vertex_id == kInvalidElementId) {
+            build.message = "Knife could not split the target edge.";
+            return build;
+          }
+        }
+      }
     }
 
     if (!knife_edge_splits_empty(split_vertices) && !apply_knife_edge_splits_to_faces(build.document, split_vertices)) {
@@ -1600,69 +1641,80 @@ KnifeStrokeCandidate build_knife_stroke_candidate(
         KnifeResolvedStrokePoint resolved;
         resolved.face_id = target.face_id;
         switch (target.kind) {
-        case KnifePointTargetKind::existing_vertex:
-        case KnifePointTargetKind::inserted_vertex: {
-            const Vertex* vertex = find_vertex(build.document, target.vertex_id);
+        case KnifePointTargetKind::ExistingVertex:
+        case KnifePointTargetKind::InsertedVertex: {
+          const Vertex *vertex = find_vertex(build.document, target.vertex_id);
+          if (vertex == nullptr) {
+            build.message = "Knife vertex target was not found.";
+            return build;
+          }
+          resolved.vertex_id = vertex->id;
+          resolved.position = vertex->position;
+          break;
+        }
+        case KnifePointTargetKind::ExistingEdge: {
+          const Edge edge = target.edge;
+          const float factor = std::clamp(
+              std::isfinite(target.edge_factor) ? target.edge_factor : 0.5F,
+              0.01F, 0.99F);
+          const ElementId vertex_id = split_vertex_for_knife_edge(
+              build.document, split_vertices, edge, factor);
+          const Vertex *vertex = find_vertex(build.document, vertex_id);
+          if (vertex == nullptr) {
+            build.message = "Knife split vertex was not found.";
+            return build;
+          }
+          resolved.vertex_id = vertex->id;
+          resolved.position = vertex->position;
+          break;
+        }
+        case KnifePointTargetKind::FacePoint: {
+          const Face *face = find_face(build.document, target.face_id);
+          if (face == nullptr) {
+            build.message = "Knife face point target was not found.";
+            return build;
+          }
+          const quader::QVec3 normal = face_normal(build.document, *face);
+          const int dropped_axis = dropped_axis_for_normal(normal);
+          const std::vector<KnifePoint2> projected_face =
+              knife_face_projected_loop(build.document, *face, dropped_axis);
+          if (!knife_point_in_or_on_polygon_2d(
+                  knife_project_point(target.position, dropped_axis),
+                  projected_face)) {
+            build.message =
+                "Knife face point must stay inside the target face.";
+            return build;
+          }
+          const std::optional<KnifeBoundaryTarget> boundary =
+              knife_face_boundary_target_at_position(
+                  build.document, *face, target.position, dropped_axis);
+          if (boundary.has_value() &&
+              boundary->vertex_id != kInvalidElementId) {
+            const Vertex *vertex =
+                find_vertex(build.document, boundary->vertex_id);
             if (vertex == nullptr) {
-                build.message = "Knife vertex target was not found.";
-                return build;
+              build.message = "Knife face boundary vertex was not found.";
+              return build;
             }
             resolved.vertex_id = vertex->id;
             resolved.position = vertex->position;
-            break;
-        }
-        case KnifePointTargetKind::existing_edge: {
-            const Edge edge = target.edge;
-            const float factor = std::clamp(std::isfinite(target.edge_factor) ? target.edge_factor : 0.5F, 0.01F, 0.99F);
-            const ElementId vertex_id = split_vertex_for_knife_edge(build.document, split_vertices, edge, factor);
-            const Vertex* vertex = find_vertex(build.document, vertex_id);
+          } else if (boundary.has_value()) {
+            const ElementId vertex_id = split_vertex_for_knife_edge(
+                build.document, split_vertices, boundary->edge,
+                boundary->edge_factor);
+            const Vertex *vertex = find_vertex(build.document, vertex_id);
             if (vertex == nullptr) {
-                build.message = "Knife split vertex was not found.";
-                return build;
+              build.message = "Knife split vertex was not found.";
+              return build;
             }
             resolved.vertex_id = vertex->id;
             resolved.position = vertex->position;
-            break;
-        }
-        case KnifePointTargetKind::face_point: {
-            const Face* face = find_face(build.document, target.face_id);
-            if (face == nullptr) {
-                build.message = "Knife face point target was not found.";
-                return build;
-            }
-            const quader::QVec3 normal = face_normal(build.document, *face);
-            const int dropped_axis = dropped_axis_for_normal(normal);
-            const std::vector<KnifePoint2> projected_face = knife_face_projected_loop(build.document, *face, dropped_axis);
-            if (!knife_point_in_or_on_polygon_2d(knife_project_point(target.position, dropped_axis), projected_face)) {
-                build.message = "Knife face point must stay inside the target face.";
-                return build;
-            }
-            const std::optional<KnifeBoundaryTarget> boundary =
-                knife_face_boundary_target_at_position(build.document, *face, target.position, dropped_axis);
-            if (boundary.has_value() && boundary->vertex_id != invalid_element_id) {
-                const Vertex* vertex = find_vertex(build.document, boundary->vertex_id);
-                if (vertex == nullptr) {
-                    build.message = "Knife face boundary vertex was not found.";
-                    return build;
-                }
-                resolved.vertex_id = vertex->id;
-                resolved.position = vertex->position;
-            } else if (boundary.has_value()) {
-                const ElementId vertex_id =
-                    split_vertex_for_knife_edge(build.document, split_vertices, boundary->edge, boundary->edge_factor);
-                const Vertex* vertex = find_vertex(build.document, vertex_id);
-                if (vertex == nullptr) {
-                    build.message = "Knife split vertex was not found.";
-                    return build;
-                }
-                resolved.vertex_id = vertex->id;
-                resolved.position = vertex->position;
-            } else {
-                resolved.vertex_id = add_vertex(build.document, target.position);
-                resolved.position = target.position;
-            }
-            resolved.face_id = target.face_id;
-            break;
+          } else {
+            resolved.vertex_id = add_vertex(build.document, target.position);
+            resolved.position = target.position;
+          }
+          resolved.face_id = target.face_id;
+          break;
         }
         }
 
@@ -1695,8 +1747,14 @@ KnifeStrokeCandidate build_knife_stroke_candidate(
             continue;
         }
 
-        const Face* first_face = first_point.face_id != invalid_element_id ? find_face(build.document, first_point.face_id) : nullptr;
-        const Face* second_face = second_point.face_id != invalid_element_id ? find_face(build.document, second_point.face_id) : nullptr;
+        const Face *first_face =
+            first_point.face_id != kInvalidElementId
+                ? find_face(build.document, first_point.face_id)
+                : nullptr;
+        const Face *second_face =
+            second_point.face_id != kInvalidElementId
+                ? find_face(build.document, second_point.face_id)
+                : nullptr;
         if (first_face == nullptr || second_face == nullptr || first_face->id == second_face->id) {
             continue;
         }
@@ -1706,7 +1764,7 @@ KnifeStrokeCandidate build_knife_stroke_candidate(
             continue;
         }
 
-        ElementId boundary_vertex = invalid_element_id;
+        ElementId boundary_vertex = kInvalidElementId;
         if (knife_vertex_is_on_shared_face_boundary(*first_face, *second_face, first_point.vertex_id)) {
             boundary_vertex = first_point.vertex_id;
         } else if (knife_vertex_is_on_shared_face_boundary(*first_face, *second_face, second_point.vertex_id)) {
@@ -1737,8 +1795,9 @@ KnifeStrokeCandidate build_knife_stroke_candidate(
                 boundary_vertex = split_vertex_for_knife_edge(build.document, split_vertices, best_edge, best_factor);
             }
         }
-        if (boundary_vertex == invalid_element_id || find_vertex(build.document, boundary_vertex) == nullptr) {
-            continue;
+        if (boundary_vertex == kInvalidElementId ||
+            find_vertex(build.document, boundary_vertex) == nullptr) {
+          continue;
         }
 
         bool routed = false;
@@ -1770,12 +1829,13 @@ KnifeStrokeCandidate build_knife_stroke_candidate(
         used_face_ids.insert(face.id);
     }
     auto next_face_id = [&build, &used_face_ids]() {
-        while (build.document.next_face_id == invalid_element_id || used_face_ids.contains(build.document.next_face_id)) {
-            ++build.document.next_face_id;
-        }
-        const ElementId face_id = build.document.next_face_id++;
-        used_face_ids.insert(face_id);
-        return face_id;
+      while (build.document.next_face_id == kInvalidElementId ||
+             used_face_ids.contains(build.document.next_face_id)) {
+        ++build.document.next_face_id;
+      }
+      const ElementId face_id = build.document.next_face_id++;
+      used_face_ids.insert(face_id);
+      return face_id;
     };
 
     std::vector<Face> rebuilt_faces;
@@ -1908,9 +1968,10 @@ KnifeSegmentCandidate build_knife_segment_candidate(
     build.previous_position = previous_resolved->position;
     build.current_position = current_resolved->position;
     if (build.previous_vertex == build.current_vertex ||
-        length_squared(build.current_position - build.previous_position) <= epsilon) {
-        build.message = "Knife segment needs two distinct target points.";
-        return build;
+        length_squared(build.current_position - build.previous_position) <=
+            kEpsilon) {
+      build.message = "Knife segment needs two distinct target points.";
+      return build;
     }
 
     if (!split_vertices.empty() && !apply_knife_edge_splits_to_faces(build.document, split_vertices)) {

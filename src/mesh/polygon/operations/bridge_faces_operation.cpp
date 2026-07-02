@@ -43,9 +43,9 @@ BridgeFacesOperation::BridgeFacesOperation(int steps)
 
 OperationResult bridge_selected_faces_impl(Document& document, Selection& selection, int steps)
 {
-    if (selection.mode != SelectionMode::face || selection.faces.size() < 2) {
-        return { false, "Bridge Faces needs two selected faces or face islands." };
-    }
+  if (selection.mode != SelectionMode::Face || selection.faces.size() < 2) {
+    return {false, "Bridge Faces needs two selected faces or face islands."};
+  }
 
     const std::vector<Face> selected_faces = selected_face_copies(document, selection);
     if (selected_faces.size() < 2) {
@@ -100,7 +100,7 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
 
         document = std::move(candidate);
         selection.clear();
-        selection.mode = SelectionMode::face;
+        selection.mode = SelectionMode::Face;
         selection.faces = std::move(bridge_face_ids);
         activate_last_selection(selection);
         return { true, {} };
@@ -157,7 +157,7 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
 
     document = std::move(candidate);
     selection.clear();
-    selection.mode = SelectionMode::face;
+    selection.mode = SelectionMode::Face;
     selection.faces = std::move(bridge_face_ids);
     activate_last_selection(selection);
     return { true, {} };

@@ -30,36 +30,40 @@ public:
     }
 
     DocumentCommandResult redo() override {
-        if (documentCommandSameSceneSettings(before_, after_)) {
-            return documentCommandUnchangedResult();
-        }
+      if (document_command_same_scene_settings(before_, after_)) {
+        return document_command_unchanged_result();
+      }
         return apply(after_);
     }
 
-    bool mergeWith(const IUndoableCommand& newerCommand, std::string_view mergeKey) override {
-        if (mergeKey.empty()) {
-            return false;
-        }
-        const auto* newer = dynamic_cast<const SetSceneSettingsCommand*>(&newerCommand);
-        if (newer == nullptr || &newer->scene() != &scene() || newer->entity_ != entity_) {
-            return false;
-        }
-        after_ = newer->after_;
-        return true;
+    bool merge_with(const IUndoableCommand &newer_command,
+                    std::string_view merge_key) override {
+      if (merge_key.empty()) {
+        return false;
+      }
+      const auto *newer =
+          dynamic_cast<const SetSceneSettingsCommand *>(&newer_command);
+      if (newer == nullptr || &newer->scene() != &scene() ||
+          newer->entity_ != entity_) {
+        return false;
+      }
+      after_ = newer->after_;
+      return true;
     }
 
 private:
     DocumentCommandResult apply(const SceneSettingsComponent& settings) {
         if (!scene().exists(entity_)) {
-            return documentCommandMissingEntityResult();
+          return document_command_missing_entity_result();
         }
-        if (!scene().setSceneSettings(entity_, settings)) {
-            return documentCommandInvalidRequestResult("Scene settings cannot be changed");
+        if (!scene().set_scene_settings(entity_, settings)) {
+          return document_command_invalid_request_result(
+              "Scene settings cannot be changed");
         }
-        return documentCommandChangedResult();
+        return document_command_changed_result();
     }
 
-    EntityId entity_ = InvalidEntityId;
+    EntityId entity_ = kInvalidEntityId;
     SceneSettingsComponent before_;
     SceneSettingsComponent after_;
 };

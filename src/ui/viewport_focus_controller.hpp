@@ -16,8 +16,8 @@ struct UIContext;
  * Stores the Viewport Focus State data contract used by the ImGui editor presentation layer.
  */
 struct ViewportFocusState {
-    bool requestedThisFrame = false;
-    bool focused = false;
+  bool requested_this_frame = false;
+  bool focused = false;
 };
 
 /**
@@ -25,8 +25,10 @@ struct ViewportFocusState {
  */
 class ViewportFocusController {
 public:
-    [[nodiscard]] bool inputActive() const;
-    [[nodiscard]] ViewportFocusState resolve(bool focusHovered, const UIContext& uiContext, UIPanelId panelId) const;
+  [[nodiscard]] bool input_active() const;
+  [[nodiscard]] ViewportFocusState resolve(bool focus_hovered,
+                                           const UIContext &ui_context,
+                                           UIPanelId panel_id) const;
 };
 
 } // namespace quader

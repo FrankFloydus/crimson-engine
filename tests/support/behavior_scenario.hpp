@@ -42,30 +42,30 @@ class UndoRedoExpect;
  */
 class BehaviorScenario final {
 public:
-    static BehaviorScenario newProject();
+  static BehaviorScenario new_project();
 
-    BehaviorScenario(const BehaviorScenario&) = delete;
-    BehaviorScenario& operator=(const BehaviorScenario&) = delete;
-    BehaviorScenario(BehaviorScenario&&) = delete;
-    BehaviorScenario& operator=(BehaviorScenario&&) = delete;
+  BehaviorScenario(const BehaviorScenario &) = delete;
+  BehaviorScenario &operator=(const BehaviorScenario &) = delete;
+  BehaviorScenario(BehaviorScenario &&) = delete;
+  BehaviorScenario &operator=(BehaviorScenario &&) = delete;
 
-    [[nodiscard]] BehaviorGiven given();
-    [[nodiscard]] BehaviorWhen when();
-    [[nodiscard]] BehaviorThen then();
+  [[nodiscard]] BehaviorGiven given();
+  [[nodiscard]] BehaviorWhen when();
+  [[nodiscard]] BehaviorThen then();
 
-    [[nodiscard]] QuaderEditorApi& editor() { return editor_; }
-    [[nodiscard]] const QuaderEditorApi& editor() const { return editor_; }
-    [[nodiscard]] QuaderApi& api() { return editor_.api(); }
-    [[nodiscard]] const QuaderApi& api() const { return editor_.api(); }
+  [[nodiscard]] QuaderEditorApi &editor() { return editor_; }
+  [[nodiscard]] const QuaderEditorApi &editor() const { return editor_; }
+  [[nodiscard]] QuaderApi &api() { return editor_.api(); }
+  [[nodiscard]] const QuaderApi &api() const { return editor_.api(); }
 
-    [[nodiscard]] EntityId entity(std::string_view alias) const;
-    [[nodiscard]] QuaderModelingObjectRef object(std::string_view alias) const;
-    [[nodiscard]] ModelingObjectId modelingObject(std::string_view alias) const;
-    [[nodiscard]] BehaviorSnapshot snapshot(std::string label = {}) const;
-    void remember(std::string_view alias, QuaderModelingObjectRef object);
-    void remember(std::string_view alias, QuaderEntityRef entity);
-    void remember(std::string_view alias, EntityId entity);
-    void rememberEntityNamed(std::string_view alias, std::string_view name);
+  [[nodiscard]] EntityId entity(std::string_view alias) const;
+  [[nodiscard]] QuaderModelingObjectRef object(std::string_view alias) const;
+  [[nodiscard]] ModelingObjectId modeling_object(std::string_view alias) const;
+  [[nodiscard]] BehaviorSnapshot snapshot(std::string label = {}) const;
+  void remember(std::string_view alias, QuaderModelingObjectRef object);
+  void remember(std::string_view alias, QuaderEntityRef entity);
+  void remember(std::string_view alias, EntityId entity);
+  void remember_entity_named(std::string_view alias, std::string_view name);
 
 private:
     BehaviorScenario();
@@ -81,20 +81,22 @@ private:
     friend class ToolStatusExpect;
     friend class UndoRedoExpect;
 
-    void recordStatus(const QuaderApiStatus& status);
-    void recordSelection(const QuaderApiResult<QuaderSelectionSummary>& selection);
-    void recordDrag(const QuaderTransformDragPreview& drag);
-    void rememberSelectedCopyAlias();
-    [[nodiscard]] QuaderModelingObjectRef objectForEntity(EntityId entity) const;
-    [[nodiscard]] QVec3 worldPosition(EntityId entity) const;
-    [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame() const;
+    void record_status(const QuaderApiStatus &status);
+    void
+    record_selection(const QuaderApiResult<QuaderSelectionSummary> &selection);
+    void record_drag(const QuaderTransformDragPreview &drag);
+    void remember_selected_copy_alias();
+    [[nodiscard]] QuaderModelingObjectRef
+    object_for_entity(EntityId entity) const;
+    [[nodiscard]] QVec3 world_position(EntityId entity) const;
+    [[nodiscard]] ViewportOverlayFrame selection_overlay_frame() const;
 
     ProjectSession session_;
     QuaderEditorApi editor_;
     std::unordered_map<std::string, QuaderModelingObjectRef> aliases_;
-    QuaderApiStatus lastStatus_;
-    QuaderSelectionSummary lastSelection_;
-    QuaderTransformDragPreview lastDrag_;
+    QuaderApiStatus last_status_;
+    QuaderSelectionSummary last_selection_;
+    QuaderTransformDragPreview last_drag_;
 };
 
 /**
@@ -104,22 +106,22 @@ class BehaviorGiven final {
 public:
     explicit BehaviorGiven(BehaviorScenario& scenario) : scenario_(scenario) {}
 
-    BehaviorGiven& unitBox(std::string_view alias, std::string name = "Box");
+    BehaviorGiven &unit_box(std::string_view alias, std::string name = "Box");
     BehaviorGiven& box(std::string_view alias, QuaderBounds bounds, std::string name = "Box");
     BehaviorGiven& mesh(std::string_view alias, QuaderPolygonDocument document, std::string name = "Mesh");
-    BehaviorGiven& entity(
-            std::string_view alias,
-            std::string name,
-            QuaderEntityKind kind = QuaderEntityKind::Generic,
-            QuaderTransform transform = {},
-            std::string_view parentAlias = {});
-    BehaviorGiven& selectedAliases(std::initializer_list<std::string_view> aliases, std::string_view activeAlias);
+    BehaviorGiven &entity(std::string_view alias, std::string name,
+                          QuaderEntityKind kind = QuaderEntityKind::Generic,
+                          QuaderTransform transform = {},
+                          std::string_view parent_alias = {});
+    BehaviorGiven &
+    selected_aliases(std::initializer_list<std::string_view> aliases,
+                     std::string_view active_alias);
     BehaviorGiven& selected(std::string_view alias);
-    BehaviorGiven& selectionMode(QuaderSelectionMode mode);
-    BehaviorGiven& vertexSelected(std::string_view alias, int vertex);
-    BehaviorGiven& edgeSelected(std::string_view alias, int a, int b);
-    BehaviorGiven& faceSelected(std::string_view alias, int face);
-    BehaviorGiven& allComponentsSelected(QuaderSelectionMode mode);
+    BehaviorGiven &selection_mode(QuaderSelectionMode mode);
+    BehaviorGiven &vertex_selected(std::string_view alias, int vertex);
+    BehaviorGiven &edge_selected(std::string_view alias, int a, int b);
+    BehaviorGiven &face_selected(std::string_view alias, int face);
+    BehaviorGiven &all_components_selected(QuaderSelectionMode mode);
     BehaviorGiven& transform(std::string_view alias, QuaderTransform transform);
     BehaviorGiven& material(std::string_view alias, AssetId material);
 
@@ -135,47 +137,60 @@ public:
     explicit BehaviorWhen(BehaviorScenario& scenario) : scenario_(scenario) {}
 
     BehaviorWhen& activate(ModelingViewportTool tool);
-    BehaviorWhen& pick(QVec3 rayOrigin, PickOptions options = {});
-    BehaviorWhen& hover(QVec3 rayOrigin, HoverOptions options = {});
-    BehaviorWhen& hoverVertex(std::string_view alias, int vertex);
-    BehaviorWhen& clearHover();
+    BehaviorWhen &pick(QVec3 ray_origin, PickOptions options = {});
+    BehaviorWhen &hover(QVec3 ray_origin, HoverOptions options = {});
+    BehaviorWhen &hover_vertex(std::string_view alias, int vertex);
+    BehaviorWhen &clear_hover();
 
-    BehaviorWhen& beginTransformPreview(bool duplicateSelected = false);
-    BehaviorWhen& translatePreview(QVec3 delta);
-    BehaviorWhen& matrixPreview(const QuaderTransform3& transform, QVec3 pivot);
-    BehaviorWhen& commitTransformPreview();
-    BehaviorWhen& cancelTransformPreview();
+    BehaviorWhen &begin_transform_preview(bool duplicate_selected = false);
+    BehaviorWhen &translate_preview(QVec3 delta);
+    BehaviorWhen &matrix_preview(const QuaderTransform3 &transform,
+                                 QVec3 pivot);
+    BehaviorWhen &commit_transform_preview();
+    BehaviorWhen &cancel_transform_preview();
 
-    BehaviorWhen& beginTransformDrag(DragBeginOptions options = {});
-    BehaviorWhen& updateTransformDrag(QVec2 screenPosition);
-    BehaviorWhen& updateTransformDrag(float screenX);
-    BehaviorWhen& beginXMoveDrag(DragBeginOptions options = {});
-    BehaviorWhen& updateXMoveDrag(float screenX);
-    BehaviorWhen& commitDrag();
-    BehaviorWhen& cancelDrag();
+    BehaviorWhen &begin_transform_drag(DragBeginOptions options = {});
+    BehaviorWhen &update_transform_drag(QVec2 screen_position);
+    BehaviorWhen &update_transform_drag(float screen_x);
+    BehaviorWhen &begin_x_move_drag(DragBeginOptions options = {});
+    BehaviorWhen &update_x_move_drag(float screen_x);
+    BehaviorWhen &commit_drag();
+    BehaviorWhen &cancel_drag();
 
-    BehaviorWhen& executeTool(std::string_view toolId);
-    BehaviorWhen& dispatchViewportShortcut(const ViewportShortcut& shortcut);
+    BehaviorWhen &execute_tool(std::string_view tool_id);
+    BehaviorWhen &dispatch_viewport_shortcut(const ViewportShortcut &shortcut);
     BehaviorWhen& execute(QuaderCommandId command);
-    BehaviorWhen& execute(std::string_view commandId);
-    BehaviorWhen& assignMaterialSlot(std::uint32_t materialSlot);
-    BehaviorWhen& clearSceneSelection();
-    BehaviorWhen& groupSelection(std::string_view alias, std::string name, QuaderTransform transform = {});
-    BehaviorWhen& ungroupSelection();
-    BehaviorWhen& duplicateSelectedHierarchy(std::string_view rootAlias);
+    BehaviorWhen &execute(std::string_view command_id);
+    BehaviorWhen &assign_material_slot(std::uint32_t material_slot);
+    BehaviorWhen &clear_scene_selection();
+    BehaviorWhen &group_selection(std::string_view alias, std::string name,
+                                  QuaderTransform transform = {});
+    BehaviorWhen &ungroup_selection();
+    BehaviorWhen &duplicate_selected_hierarchy(std::string_view root_alias);
     BehaviorWhen& destroy(std::string_view alias);
     BehaviorWhen& rename(std::string_view alias, std::string name);
-    BehaviorWhen& reparent(std::string_view alias, std::string_view parentAlias, bool preserveWorldTransform = true);
-    BehaviorWhen& setTransform(std::string_view alias, QuaderTransform transform);
-    BehaviorWhen& setVisible(std::string_view alias, bool visible);
-    BehaviorWhen& setLocked(std::string_view alias, bool locked);
-    BehaviorWhen& setGroupFlags(std::string_view alias, QuaderTransform transform, bool visible, bool locked);
+    BehaviorWhen &reparent(std::string_view alias,
+                           std::string_view parent_alias,
+                           bool preserve_world_transform = true);
+    BehaviorWhen &set_transform(std::string_view alias,
+                                QuaderTransform transform);
+    BehaviorWhen &set_visible(std::string_view alias, bool visible);
+    BehaviorWhen &set_locked(std::string_view alias, bool locked);
+    BehaviorWhen &set_group_flags(std::string_view alias,
+                                  QuaderTransform transform, bool visible,
+                                  bool locked);
     BehaviorWhen& undo();
     BehaviorWhen& redo();
 
-    [[nodiscard]] const QuaderApiStatus& lastStatus() const { return scenario_.lastStatus_; }
-    [[nodiscard]] const QuaderSelectionSummary& lastSelection() const { return scenario_.lastSelection_; }
-    [[nodiscard]] const QuaderTransformDragPreview& lastDrag() const { return scenario_.lastDrag_; }
+    [[nodiscard]] const QuaderApiStatus &last_status() const {
+      return scenario_.last_status_;
+    }
+    [[nodiscard]] const QuaderSelectionSummary &last_selection() const {
+      return scenario_.last_selection_;
+    }
+    [[nodiscard]] const QuaderTransformDragPreview &last_drag() const {
+      return scenario_.last_drag_;
+    }
 
 private:
     BehaviorScenario& scenario_;

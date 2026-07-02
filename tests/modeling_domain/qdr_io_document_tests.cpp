@@ -25,10 +25,14 @@
 
 namespace {
 
-constexpr std::string_view stable_document_fixture_name = "stable_document_v3.qdr.json";
-constexpr std::string_view stable_document_v2_fixture_name = "stable_document_v2.qdr.json";
-constexpr std::string_view legacy_session_payload_fixture_name = "legacy_session_payload_v1.qdr.json";
-constexpr std::string_view malformed_duplicate_face_id_fixture_name = "malformed_duplicate_face_id_v1.qdr.json";
+constexpr std::string_view kStableDocumentFixtureName =
+    "stable_document_v3.qdr.json";
+constexpr std::string_view kStableDocumentV2FixtureName =
+    "stable_document_v2.qdr.json";
+constexpr std::string_view kLegacySessionPayloadFixtureName =
+    "legacy_session_payload_v1.qdr.json";
+constexpr std::string_view kMalformedDuplicateFaceIdFixtureName =
+    "malformed_duplicate_face_id_v1.qdr.json";
 
 std::filesystem::path io_fixture_path(std::string_view file_name)
 {
@@ -44,11 +48,11 @@ std::string read_io_fixture(std::string_view file_name)
 {
 	const std::filesystem::path path = io_fixture_path(file_name);
 	std::ifstream stream(path, std::ios::in | std::ios::binary);
-	require_test(stream.is_open(), "Missing IO fixture: " + path.string());
+	require_test(stream.is_open(), "Missing io fixture: " + path.string());
 
 	std::ostringstream contents;
 	contents << stream.rdbuf();
-	require_test(!stream.bad(), "Failed to read IO fixture: " + path.string());
+	require_test(!stream.bad(), "Failed to read io fixture: " + path.string());
 	return contents.str();
 }
 
@@ -139,7 +143,7 @@ std::string escaped_snippet(std::string_view text, std::size_t position)
 			snippet += "\\n";
 			break;
 		case '\r':
-			snippet += "\\r";
+			snippet += "\\R";
 			break;
 		case '\t':
 			snippet += "\\t";
@@ -192,41 +196,41 @@ quader_io::QdrDocument make_qdr_document_fixture()
 	object.material_id = 3;
 	object.selected = true;
 	object.document = make_triangle_document();
-	object.selection.mode = quader_poly::SelectionMode::face;
-	object.selection.faces = { object.document.faces.front().id };
+        object.selection.mode = quader_poly::SelectionMode::Face;
+        object.selection.faces = { object.document.faces.front().id };
 	object.selection.has_active = true;
-	object.selection.active_kind = quader_poly::ElementKind::face;
-	object.selection.active_face = object.document.faces.front().id;
+        object.selection.active_kind = quader_poly::ElementKind::Face;
+        object.selection.active_face = object.document.faces.front().id;
 
 	quader_io::QdrDocument document;
 	document.objects = { object };
-	document.lights = {
-		quader_io::QdrLight {
-			3,
-			"Key",
-			true,
-			quader_io::QdrLightType::spot,
-			true,
-			{ 0.0F, 4.0F, 0.0F },
-			{ 0.0F, -1.0F, 0.0F },
-			0xFFEFF7FFU,
-			8.0F,
-			quader_io::QdrLightShadowMode::soft,
-			0.75F,
-			0.06F,
-			0.45F,
-			0.25F,
-			12.0F,
-			45.0F,
-			30.0F,
-		},
-	};
-	document.next_object_id = 8;
+        document.lights = {
+            quader_io::QdrLight{
+                3,
+                "Key",
+                true,
+                quader_io::QdrLightType::Spot,
+                true,
+                {0.0F, 4.0F, 0.0F},
+                {0.0F, -1.0F, 0.0F},
+                0xFFEFF7FFU,
+                8.0F,
+                quader_io::QdrLightShadowMode::Soft,
+                0.75F,
+                0.06F,
+                0.45F,
+                0.25F,
+                12.0F,
+                45.0F,
+                30.0F,
+            },
+        };
+        document.next_object_id = 8;
 	document.next_light_id = 4;
 	document.active_object_id = 7;
 	document.active_light_id = 3;
-	document.selection_mode = quader_io::QdrSelectionMode::face;
-	document.content_revision = 123;
+        document.selection_mode = quader_io::QdrSelectionMode::Face;
+        document.content_revision = 123;
 	document.selection_revision = 45;
 	return document;
 }
@@ -327,25 +331,34 @@ void dto_roundtrip_preserves_portable_document_data()
 	require_test(result.document.objects.size() == 1, "DTO should preserve object count");
 	require_test(result.document.next_object_id == 8, "DTO should preserve next object id");
 	require_test(result.document.active_object_id == 7, "DTO should preserve active object id");
-	require_test(result.document.selection_mode == quader_io::QdrSelectionMode::face, "DTO should preserve selection mode");
-	require_test(result.document.objects.front().document.faces.front().material_slot == 9, "DTO should preserve face material slot");
-	require_test(result.document.objects.front().document.faces.front().normal_shading == quader_poly::SurfaceShading::flat, "DTO should preserve face normal shading");
-	require_test(result.document.objects.front().document.hard_normal_edges.empty(), "DTO should preserve hard normal edge state");
+        require_test(result.document.selection_mode ==
+                         quader_io::QdrSelectionMode::Face,
+                     "DTO should preserve selection mode");
+        require_test(result.document.objects.front().document.faces.front().material_slot == 9, "DTO should preserve face material slot");
+        require_test(result.document.objects.front()
+                             .document.faces.front()
+                             .normal_shading ==
+                         quader_poly::SurfaceShading::Flat,
+                     "DTO should preserve face normal shading");
+        require_test(result.document.objects.front().document.hard_normal_edges.empty(), "DTO should preserve hard normal edge state");
 	require_test(result.document.objects.front().selection.faces == document.objects.front().selection.faces, "DTO should preserve selected faces");
 	require_test(result.document.objects.front().document.faces.front().uvs.size() == 3, "DTO should preserve explicit UV loops");
 	require_test(result.document.lights.size() == 1, "DTO should preserve light count");
 	require_test(result.document.next_light_id == 4, "DTO should preserve next light id");
 	require_test(result.document.active_light_id == 3, "DTO should preserve active light id");
-	require_test(result.document.lights.front().type == quader_io::QdrLightType::spot, "DTO should preserve light type");
-	require_test(result.document.lights.front().color_abgr == 0xFFEFF7FFU, "DTO should preserve light color");
+        require_test(result.document.lights.front().type ==
+                         quader_io::QdrLightType::Spot,
+                     "DTO should preserve light type");
+        require_test(result.document.lights.front().color_abgr == 0xFFEFF7FFU, "DTO should preserve light color");
 	require_test(result.document.lights.front().inner_spot_angle == 30.0F, "DTO should preserve inner spot angle");
 }
 
 void dto_roundtrip_preserves_normal_control_data()
 {
 	quader_io::QdrDocument document = make_qdr_document_fixture();
-	document.objects.front().document.faces.front().normal_shading = quader_poly::SurfaceShading::smooth;
-	document.objects.front().document.hard_normal_edges = {
+        document.objects.front().document.faces.front().normal_shading =
+            quader_poly::SurfaceShading::Smooth;
+        document.objects.front().document.hard_normal_edges = {
 		quader_poly::make_edge(
 			document.objects.front().document.faces.front().vertices[0],
 			document.objects.front().document.faces.front().vertices[1]),
@@ -357,9 +370,12 @@ void dto_roundtrip_preserves_normal_control_data()
 
 	const quader_io::QdrReadResult result = quader_io::deserialize_document(text);
 	require_test(result.ok, result.message.empty() ? "normal-control DTO should deserialize" : result.message);
-	require_test(result.document.objects.front().document.faces.front().normal_shading == quader_poly::SurfaceShading::smooth,
-		"DTO should preserve smooth face shading");
-	require_test(result.document.objects.front().document.hard_normal_edges.size() == 1U,
+        require_test(result.document.objects.front()
+                             .document.faces.front()
+                             .normal_shading ==
+                         quader_poly::SurfaceShading::Smooth,
+                     "DTO should preserve smooth face shading");
+        require_test(result.document.objects.front().document.hard_normal_edges.size() == 1U,
 		"DTO should preserve hard normal edges");
 }
 
@@ -384,57 +400,110 @@ void dto_roundtrip_preserves_material_slot_assignment()
 
 void dto_reader_accepts_golden_stable_document_payload_v2_fixture()
 {
-	const std::string text = read_io_fixture(stable_document_v2_fixture_name);
-	const quader_io::QdrReadResult result = quader_io::deserialize_document(text);
-	require_test(result.ok, result.message.empty() ? "stable v2 golden fixture should deserialize" : result.message);
-	require_test(result.document.next_object_id == 8, "stable v2 golden fixture should preserve next object id");
-	require_test(result.document.active_object_id == 7, "stable v2 golden fixture should preserve active object id");
-	require_test(result.document.selection_mode == quader_io::QdrSelectionMode::face, "stable v2 golden fixture should preserve selection mode");
-	require_test(result.document.content_revision == 123, "stable v2 golden fixture should preserve content revision");
-	require_test(result.document.selection_revision == 45, "stable v2 golden fixture should preserve selection revision");
-	require_test(result.document.objects.size() == 1, "stable v2 golden fixture should preserve object count");
-	require_test(result.document.objects.front().id == 7, "stable v2 golden fixture should preserve object id");
-	require_test(result.document.objects.front().material_id == 3, "stable v2 golden fixture should preserve object material");
-	require_test(result.document.objects.front().document.vertices.size() == 3, "stable v2 golden fixture should preserve vertices");
-	require_test(result.document.objects.front().document.faces.size() == 1, "stable v2 golden fixture should preserve faces");
-	require_test(result.document.objects.front().document.faces.front().material_slot == 9, "stable v2 golden fixture should preserve face material slot");
-	require_test(result.document.objects.front().document.faces.front().normal_shading == quader_poly::SurfaceShading::flat, "stable v2 golden fixture should preserve face normal shading");
-	require_test(result.document.objects.front().document.hard_normal_edges.empty(), "stable v2 golden fixture should preserve hard normal edges");
-	require_test(result.document.objects.front().document.faces.front().uvs.size() == 3, "stable v2 golden fixture should preserve face UV loops");
-	require_test(result.document.objects.front().selection.has_active, "stable v2 golden fixture should preserve active selection");
-	require_test(result.document.lights.empty(), "stable v2 golden fixture should migrate with no light entities");
-	require_test(result.document.next_light_id == 1, "stable v2 golden fixture should default the next light id");
-	require_test(result.document.active_light_id == -1, "stable v2 golden fixture should default the active light id");
+  const std::string text = read_io_fixture(kStableDocumentV2FixtureName);
+  const quader_io::QdrReadResult result = quader_io::deserialize_document(text);
+  require_test(result.ok, result.message.empty()
+                              ? "stable v2 golden fixture should deserialize"
+                              : result.message);
+  require_test(result.document.next_object_id == 8,
+               "stable v2 golden fixture should preserve next object id");
+  require_test(result.document.active_object_id == 7,
+               "stable v2 golden fixture should preserve active object id");
+  require_test(result.document.selection_mode ==
+                   quader_io::QdrSelectionMode::Face,
+               "stable v2 golden fixture should preserve selection mode");
+  require_test(result.document.content_revision == 123,
+               "stable v2 golden fixture should preserve content revision");
+  require_test(result.document.selection_revision == 45,
+               "stable v2 golden fixture should preserve selection revision");
+  require_test(result.document.objects.size() == 1,
+               "stable v2 golden fixture should preserve object count");
+  require_test(result.document.objects.front().id == 7,
+               "stable v2 golden fixture should preserve object id");
+  require_test(result.document.objects.front().material_id == 3,
+               "stable v2 golden fixture should preserve object material");
+  require_test(result.document.objects.front().document.vertices.size() == 3,
+               "stable v2 golden fixture should preserve vertices");
+  require_test(result.document.objects.front().document.faces.size() == 1,
+               "stable v2 golden fixture should preserve faces");
+  require_test(
+      result.document.objects.front().document.faces.front().material_slot == 9,
+      "stable v2 golden fixture should preserve face material slot");
+  require_test(
+      result.document.objects.front().document.faces.front().normal_shading ==
+          quader_poly::SurfaceShading::Flat,
+      "stable v2 golden fixture should preserve face normal shading");
+  require_test(
+      result.document.objects.front().document.hard_normal_edges.empty(),
+      "stable v2 golden fixture should preserve hard normal edges");
+  require_test(
+      result.document.objects.front().document.faces.front().uvs.size() == 3,
+      "stable v2 golden fixture should preserve face UV loops");
+  require_test(result.document.objects.front().selection.has_active,
+               "stable v2 golden fixture should preserve active selection");
+  require_test(
+      result.document.lights.empty(),
+      "stable v2 golden fixture should migrate with no light entities");
+  require_test(result.document.next_light_id == 1,
+               "stable v2 golden fixture should default the next light id");
+  require_test(result.document.active_light_id == -1,
+               "stable v2 golden fixture should default the active light id");
 }
 
 void dto_writer_matches_golden_stable_document_payload_v2_fixture()
 {
-	const std::string expected = canonical_fixture_text(read_io_fixture(stable_document_fixture_name));
-	const std::string serialized = canonical_fixture_text(quader_io::serialize_document(make_qdr_document_fixture()));
-	require_test(serialized == expected, canonical_text_mismatch_message(expected, serialized));
+  const std::string expected =
+      canonical_fixture_text(read_io_fixture(kStableDocumentFixtureName));
+  const std::string serialized = canonical_fixture_text(
+      quader_io::serialize_document(make_qdr_document_fixture()));
+  require_test(serialized == expected,
+               canonical_text_mismatch_message(expected, serialized));
 
-	const quader_io::QdrReadResult result = quader_io::deserialize_document(expected);
-	require_test(result.ok, result.message.empty() ? "stable v3 golden fixture should deserialize before rewrite" : result.message);
-	const std::string rewritten = canonical_fixture_text(quader_io::serialize_document(result.document));
-	require_test(rewritten == expected, "DTO reader/writer should round-trip the stable v3 fixture to deterministic canonical output");
+  const quader_io::QdrReadResult result =
+      quader_io::deserialize_document(expected);
+  require_test(
+      result.ok,
+      result.message.empty()
+          ? "stable v3 golden fixture should deserialize before rewrite"
+          : result.message);
+  const std::string rewritten =
+      canonical_fixture_text(quader_io::serialize_document(result.document));
+  require_test(rewritten == expected,
+               "DTO reader/writer should round-trip the stable v3 fixture to "
+               "deterministic canonical output");
 
-	const quader_io::QdrReadResult rewritten_result = quader_io::deserialize_document(rewritten);
-	require_test(rewritten_result.ok, rewritten_result.message.empty() ? "rewritten stable v3 fixture should deserialize" : rewritten_result.message);
-	const std::string second_rewrite = canonical_fixture_text(quader_io::serialize_document(rewritten_result.document));
-	require_test(second_rewrite == rewritten, "canonical DTO serialization should be idempotent across repeated round-trips");
+  const quader_io::QdrReadResult rewritten_result =
+      quader_io::deserialize_document(rewritten);
+  require_test(rewritten_result.ok,
+               rewritten_result.message.empty()
+                   ? "rewritten stable v3 fixture should deserialize"
+                   : rewritten_result.message);
+  const std::string second_rewrite = canonical_fixture_text(
+      quader_io::serialize_document(rewritten_result.document));
+  require_test(second_rewrite == rewritten,
+               "canonical DTO serialization should be idempotent across "
+               "repeated round-trips");
 }
 
 void dto_reader_accepts_legacy_session_payload_alias_as_v1_migration()
 {
-	const std::string text = read_io_fixture(legacy_session_payload_fixture_name);
+  const std::string text = read_io_fixture(kLegacySessionPayloadFixtureName);
 
-	const quader_io::QdrReadResult result = quader_io::deserialize_document(text);
-	require_test(result.ok, result.message.empty() ? "DTO reader should accept legacy session payload alias" : result.message);
-	require_test(result.document.objects.front().id == 7, "legacy session payload alias should preserve object ids");
+  const quader_io::QdrReadResult result = quader_io::deserialize_document(text);
+  require_test(result.ok,
+               result.message.empty()
+                   ? "DTO reader should accept legacy session payload alias"
+                   : result.message);
+  require_test(result.document.objects.front().id == 7,
+               "legacy session payload alias should preserve object ids");
 
-	const std::string rewritten = quader_io::serialize_document(result.document);
-	require_test(rewritten.find("\"document\": {") != std::string::npos, "legacy session payload should migrate back to the stable document key when written");
-	require_test(rewritten.find("\"session\": {") == std::string::npos, "legacy session payload should not be re-emitted by the stable writer");
+  const std::string rewritten = quader_io::serialize_document(result.document);
+  require_test(rewritten.find("\"document\": {") != std::string::npos,
+               "legacy session payload should migrate back to the stable "
+               "document key when written");
+  require_test(
+      rewritten.find("\"session\": {") == std::string::npos,
+      "legacy session payload should not be re-emitted by the stable writer");
 }
 
 void dto_reader_prefers_stable_document_payload_over_legacy_session_alias()
@@ -451,12 +520,23 @@ void dto_reader_prefers_stable_document_payload_over_legacy_session_alias()
 
 void dto_version_support_is_explicit_and_current_only()
 {
-	require_test(quader_io::qdr_min_supported_format_version == 1, "v1 is the oldest supported QDR document version; add migration fixtures before lowering this guard");
-	require_test(quader_io::qdr_format_version == 3, "v3 is the current QDR document version; add current-version golden fixtures before bumping this guard");
-	require_test(quader_io::is_supported_document_version(quader_io::qdr_format_version), "current DTO format version should be supported");
-	require_test(quader_io::is_supported_document_version(quader_io::qdr_min_supported_format_version), "minimum DTO format version should be supported");
-	require_test(!quader_io::is_supported_document_version(0), "version zero should not be supported");
-	require_test(!quader_io::is_supported_document_version(quader_io::qdr_format_version + 1), "future DTO versions should require an explicit migration");
+  require_test(quader_io::kQdrMinSupportedFormatVersion == 1,
+               "v1 is the oldest supported QDR document version; add migration "
+               "fixtures before lowering this guard");
+  require_test(quader_io::kQdrFormatVersion == 3,
+               "v3 is the current QDR document version; add current-version "
+               "golden fixtures before bumping this guard");
+  require_test(
+      quader_io::is_supported_document_version(quader_io::kQdrFormatVersion),
+      "current DTO format version should be supported");
+  require_test(quader_io::is_supported_document_version(
+                   quader_io::kQdrMinSupportedFormatVersion),
+               "minimum DTO format version should be supported");
+  require_test(!quader_io::is_supported_document_version(0),
+               "version zero should not be supported");
+  require_test(!quader_io::is_supported_document_version(
+                   quader_io::kQdrFormatVersion + 1),
+               "future DTO versions should require an explicit migration");
 }
 
 void dto_reader_rejects_invalid_header_shapes()
@@ -471,24 +551,27 @@ void dto_reader_rejects_invalid_header_shapes()
 
 void dto_reader_rejects_future_versions_before_payload_migration()
 {
-	const std::string future_version_header = "\"version\": " + std::to_string(quader_io::qdr_format_version + 1);
-	const std::string future_document_payload = replace_once(
-		stable_document_payload_v2_fixture(),
-		"\"version\": 2",
-		future_version_header);
-	require_read_failure_contains(
-		future_document_payload,
-		"Unsupported Quader file version: " + std::to_string(quader_io::qdr_format_version + 1),
-		"DTO reader should reject future stable document payloads before parsing the payload");
+  const std::string future_version_header =
+      "\"version\": " + std::to_string(quader_io::kQdrFormatVersion + 1);
+  const std::string future_document_payload =
+      replace_once(stable_document_payload_v2_fixture(), "\"version\": 2",
+                   future_version_header);
+  require_read_failure_contains(
+      future_document_payload,
+      "Unsupported Quader file version: " +
+          std::to_string(quader_io::kQdrFormatVersion + 1),
+      "DTO reader should reject future stable document payloads before parsing "
+      "the payload");
 
-	const std::string future_legacy_payload = replace_once(
-		read_io_fixture(legacy_session_payload_fixture_name),
-		"\"version\": 1",
-		future_version_header);
-	require_read_failure_contains(
-		future_legacy_payload,
-		"Unsupported Quader file version: " + std::to_string(quader_io::qdr_format_version + 1),
-		"DTO reader should reject future legacy session aliases before applying v1 migration rules");
+  const std::string future_legacy_payload =
+      replace_once(read_io_fixture(kLegacySessionPayloadFixtureName),
+                   "\"version\": 1", future_version_header);
+  require_read_failure_contains(
+      future_legacy_payload,
+      "Unsupported Quader file version: " +
+          std::to_string(quader_io::kQdrFormatVersion + 1),
+      "DTO reader should reject future legacy session aliases before applying "
+      "v1 migration rules");
 }
 
 void dto_reader_rejects_malformed_payloads()
@@ -507,10 +590,12 @@ void dto_reader_rejects_malformed_payloads()
 	require_read_failure_contains("{\"format\":\"quader.qdr\",\"version\":1,\"document\":{\"nextObjectId\":0,\"activeObjectId\":-1,\"selectionMode\":\"object\",\"objects\":[]}}",
 		"invalid next object id",
 		"DTO reader should reject invalid next object ids");
-	require_read_failure_contains(read_io_fixture(malformed_duplicate_face_id_fixture_name),
-		"duplicate face id",
-		"DTO reader should reject malformed fixture with duplicate face ids");
-	require_read_failure_contains(replace_once(stable_document_payload_v2_fixture(), "\"uvs\": [\n                { \"x\": 0, \"y\": 0 },\n                { \"x\": 1, \"y\": 0 },\n                { \"x\": 0, \"y\": 1 }\n              ]", "\"uvs\": [{ \"x\": 0, \"y\": 0 }]"),
+        require_read_failure_contains(
+            read_io_fixture(kMalformedDuplicateFaceIdFixtureName),
+            "duplicate face id",
+            "DTO reader should reject malformed fixture with duplicate face "
+            "ids");
+        require_read_failure_contains(replace_once(stable_document_payload_v2_fixture(), "\"uvs\": [\n                { \"x\": 0, \"y\": 0 },\n                { \"x\": 1, \"y\": 0 },\n                { \"x\": 0, \"y\": 1 }\n              ]", "\"uvs\": [{ \"x\": 0, \"y\": 0 }]"),
 		"UV count",
 		"DTO reader should reject mismatched face UV counts");
 }

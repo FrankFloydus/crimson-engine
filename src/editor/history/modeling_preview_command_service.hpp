@@ -16,12 +16,13 @@
 
 namespace quader {
 
-inline ModelingCommandResult modelingCommandResultFromCommandResult(CommandResult result) {
-    return {
-            .ok = result.ok,
-            .changed = result.changed,
-            .message = std::move(result.message),
-    };
+inline ModelingCommandResult
+modeling_command_result_from_command_result(CommandResult result) {
+  return {
+      .ok = result.ok,
+      .changed = result.changed,
+      .message = std::move(result.message),
+  };
 }
 
 /**
@@ -33,14 +34,16 @@ public:
         : ModelingMementoCommand(modeling, std::move(label)) {}
 
 private:
-    ModelingSessionMemento captureBeforeMemento() override {
-        ModelingSessionMemento previewHistory = modeling().captureActivePreviewHistoryMemento();
-        return previewHistory.valid() ? std::move(previewHistory) : modeling().captureHistoryMemento();
-    }
+  ModelingSessionMemento capture_before_memento() override {
+    ModelingSessionMemento preview_history =
+        modeling().capture_active_preview_history_memento();
+    return preview_history.valid() ? std::move(preview_history)
+                                   : modeling().capture_history_memento();
+  }
 
-    ModelingCommandResult executeInitial() override {
-        return modeling().commitActiveOperationPreview();
-    }
+  ModelingCommandResult execute_initial() override {
+    return modeling().commit_active_operation_preview();
+  }
 };
 
 /**
@@ -49,12 +52,13 @@ private:
 class ModelingPreviewCommandService final {
 public:
     static ModelingCommandResult commit(EditorHistoryService& history, ModelingSessionService& modeling, std::string label) {
-        return modelingCommandResultFromCommandResult(
-                history.execute(std::make_unique<ModelingPreviewCommitCommand>(modeling, std::move(label))));
+      return modeling_command_result_from_command_result(
+          history.execute(std::make_unique<ModelingPreviewCommitCommand>(
+              modeling, std::move(label))));
     }
 
     static ModelingCommandResult cancel(ModelingSessionService& modeling) {
-        return modeling.cancelActiveOperationPreview();
+      return modeling.cancel_active_operation_preview();
     }
 };
 

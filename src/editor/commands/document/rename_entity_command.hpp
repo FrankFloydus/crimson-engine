@@ -30,17 +30,19 @@ public:
 
     DocumentCommandResult redo() override {
         if (before_ == after_) {
-            return documentCommandUnchangedResult();
+          return document_command_unchanged_result();
         }
         return apply(after_);
     }
 
 private:
     DocumentCommandResult apply(const std::string& name) {
-        return scene().renameEntity(entity_, name) ? documentCommandChangedResult() : documentCommandMissingEntityResult();
+      return scene().rename_entity(entity_, name)
+                 ? document_command_changed_result()
+                 : document_command_missing_entity_result();
     }
 
-    EntityId entity_ = InvalidEntityId;
+    EntityId entity_ = kInvalidEntityId;
     std::string before_;
     std::string after_;
 };

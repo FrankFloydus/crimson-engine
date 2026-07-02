@@ -15,12 +15,13 @@
 
 namespace quader {
 
-inline CommandResult modelingMementoCommandResult(ModelingCommandResult result) {
-    return {
-            .ok = result.ok,
-            .changed = result.changed,
-            .message = std::move(result.message),
-    };
+inline CommandResult
+modeling_memento_command_result(ModelingCommandResult result) {
+  return {
+      .ok = result.ok,
+      .changed = result.changed,
+      .message = std::move(result.message),
+  };
 }
 
 /**
@@ -32,21 +33,25 @@ public:
 
     CommandResult undo() override {
         if (!executed_) {
-            return commandInvalidResult("Modeling command has not been executed");
+          return command_invalid_result(
+              "Modeling command has not been executed");
         }
-        return modelingMementoCommandResult(modeling_.restoreHistoryMemento(before_));
+        return modeling_memento_command_result(
+            modeling_.restore_history_memento(before_));
     }
 
     CommandResult redo() override {
         if (executed_) {
-            return modelingMementoCommandResult(modeling_.restoreHistoryMemento(after_));
+          return modeling_memento_command_result(
+              modeling_.restore_history_memento(after_));
         }
 
-        before_ = captureBeforeMemento();
-        CommandResult result = modelingMementoCommandResult(executeInitial());
+        before_ = capture_before_memento();
+        CommandResult result =
+            modeling_memento_command_result(execute_initial());
         if (result.ok && result.changed) {
-            after_ = captureAfterMemento();
-            executed_ = true;
+          after_ = capture_after_memento();
+          executed_ = true;
         }
         return result;
     }
@@ -60,22 +65,22 @@ protected:
     [[nodiscard]] ModelingSessionService& modeling() { return modeling_; }
     [[nodiscard]] const ModelingSessionService& modeling() const { return modeling_; }
 
-    [[nodiscard]] virtual ModelingSessionMemento captureBeforeMemento() {
-        return modeling_.captureHistoryMemento();
+    [[nodiscard]] virtual ModelingSessionMemento capture_before_memento() {
+      return modeling_.capture_history_memento();
     }
 
-    [[nodiscard]] virtual ModelingSessionMemento captureAfterMemento() {
-        return modeling_.captureHistoryMemento();
+    [[nodiscard]] virtual ModelingSessionMemento capture_after_memento() {
+      return modeling_.capture_history_memento();
     }
 
 private:
-    virtual ModelingCommandResult executeInitial() = 0;
+  virtual ModelingCommandResult execute_initial() = 0;
 
-    ModelingSessionService& modeling_;
-    std::string label_;
-    ModelingSessionMemento before_;
-    ModelingSessionMemento after_;
-    bool executed_ = false;
+  ModelingSessionService &modeling_;
+  std::string label_;
+  ModelingSessionMemento before_;
+  ModelingSessionMemento after_;
+  bool executed_ = false;
 };
 
 /**
@@ -96,11 +101,13 @@ public:
     [[nodiscard]] const std::string& label() const override { return label_; }
 
     CommandResult undo() override {
-        return modelingMementoCommandResult(modeling_.restoreHistoryMemento(before_));
+      return modeling_memento_command_result(
+          modeling_.restore_history_memento(before_));
     }
 
     CommandResult redo() override {
-        return modelingMementoCommandResult(modeling_.restoreHistoryMemento(after_));
+      return modeling_memento_command_result(
+          modeling_.restore_history_memento(after_));
     }
 
 private:
@@ -122,14 +129,14 @@ public:
     [[nodiscard]] const ModelingCreateBoxResult& created() const { return created_; }
 
 private:
-    ModelingCommandResult executeInitial() override {
-        created_ = modeling().createBoxFromBounds(request_);
-        return {
-                .ok = created_.ok,
-                .changed = created_.changed,
-                .message = created_.message,
-        };
-    }
+  ModelingCommandResult execute_initial() override {
+    created_ = modeling().create_box_from_bounds(request_);
+    return {
+        .ok = created_.ok,
+        .changed = created_.changed,
+        .message = created_.message,
+    };
+  }
 
     ModelingCreateBoxRequest request_;
     ModelingCreateBoxResult created_;
@@ -147,14 +154,14 @@ public:
     [[nodiscard]] const ModelingCreateBoxResult& created() const { return created_; }
 
 private:
-    ModelingCommandResult executeInitial() override {
-        created_ = modeling().createMesh(std::move(request_));
-        return {
-                .ok = created_.ok,
-                .changed = created_.changed,
-                .message = created_.message,
-        };
-    }
+  ModelingCommandResult execute_initial() override {
+    created_ = modeling().create_mesh(std::move(request_));
+    return {
+        .ok = created_.ok,
+        .changed = created_.changed,
+        .message = created_.message,
+    };
+  }
 
     ModelingCreateMeshRequest request_;
     ModelingCreateBoxResult created_;
@@ -170,9 +177,9 @@ public:
         , delta_(delta) {}
 
 private:
-    ModelingCommandResult executeInitial() override {
-        return modeling().moveSelection(delta_);
-    }
+  ModelingCommandResult execute_initial() override {
+    return modeling().move_selection(delta_);
+  }
 
     QVec3 delta_;
 };
@@ -191,9 +198,9 @@ public:
         , pivot_(pivot) {}
 
 private:
-    ModelingCommandResult executeInitial() override {
-        return modeling().transformSelection(transform_, pivot_);
-    }
+  ModelingCommandResult execute_initial() override {
+    return modeling().transform_selection(transform_, pivot_);
+  }
 
     ModelingTransform3 transform_;
     QVec3 pivot_;
@@ -204,16 +211,17 @@ private:
  */
 class AssignMaterialSlotToSelectionHistoryCommand final : public ModelingMementoCommand {
 public:
-    AssignMaterialSlotToSelectionHistoryCommand(ModelingSessionService& modeling, std::uint32_t materialSlot)
-        : ModelingMementoCommand(modeling, "Assign Material Slot")
-        , materialSlot_(materialSlot) {}
+  AssignMaterialSlotToSelectionHistoryCommand(ModelingSessionService &modeling,
+                                              std::uint32_t material_slot)
+      : ModelingMementoCommand(modeling, "Assign Material Slot"),
+        material_slot_(material_slot) {}
 
 private:
-    ModelingCommandResult executeInitial() override {
-        return modeling().assignMaterialSlotToSelection(materialSlot_);
-    }
+  ModelingCommandResult execute_initial() override {
+    return modeling().assign_material_slot_to_selection(material_slot_);
+  }
 
-    std::uint32_t materialSlot_ = 0;
+  std::uint32_t material_slot_ = 0;
 };
 
 /**
@@ -221,24 +229,22 @@ private:
  */
 class AssignMaterialSlotToFaceHistoryCommand final : public ModelingMementoCommand {
 public:
-    AssignMaterialSlotToFaceHistoryCommand(
-            ModelingSessionService& modeling,
-            int modelingObjectId,
-            int face,
-            std::uint32_t materialSlot)
-        : ModelingMementoCommand(modeling, "Assign Face Material Slot")
-        , modelingObjectId_(modelingObjectId)
-        , face_(face)
-        , materialSlot_(materialSlot) {}
+  AssignMaterialSlotToFaceHistoryCommand(ModelingSessionService &modeling,
+                                         int modeling_object_id, int face,
+                                         std::uint32_t material_slot)
+      : ModelingMementoCommand(modeling, "Assign Face Material Slot"),
+        modeling_object_id_(modeling_object_id), face_(face),
+        material_slot_(material_slot) {}
 
 private:
-    ModelingCommandResult executeInitial() override {
-        return modeling().assignMaterialSlotToFace(modelingObjectId_, face_, materialSlot_);
-    }
+  ModelingCommandResult execute_initial() override {
+    return modeling().assign_material_slot_to_face(modeling_object_id_, face_,
+                                                   material_slot_);
+  }
 
-    int modelingObjectId_ = -1;
-    int face_ = -1;
-    std::uint32_t materialSlot_ = 0;
+  int modeling_object_id_ = -1;
+  int face_ = -1;
+  std::uint32_t material_slot_ = 0;
 };
 
 /**
@@ -250,9 +256,9 @@ public:
         : ModelingMementoCommand(modeling, "Paste Selection") {}
 
 private:
-    ModelingCommandResult executeInitial() override {
-        return modeling().pasteSelection();
-    }
+  ModelingCommandResult execute_initial() override {
+    return modeling().paste_selection();
+  }
 };
 
 /**
@@ -264,9 +270,9 @@ public:
         : ModelingMementoCommand(modeling, "Repeat Last Action") {}
 
 private:
-    ModelingCommandResult executeInitial() override {
-        return modeling().repeatLastAction();
-    }
+  ModelingCommandResult execute_initial() override {
+    return modeling().repeat_last_action();
+  }
 };
 
 /**
@@ -282,9 +288,9 @@ public:
         , operation_(operation) {}
 
 private:
-    ModelingCommandResult executeInitial() override {
-        return modeling().executeInstantOperation(operation_);
-    }
+  ModelingCommandResult execute_initial() override {
+    return modeling().execute_instant_operation(operation_);
+  }
 
     ModelingInstantOperationId operation_;
 };
@@ -298,9 +304,10 @@ public:
         : ModelingMementoCommand(modeling, "Duplicate Meshes") {}
 
 private:
-    ModelingCommandResult executeInitial() override {
-        return modeling().executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes);
-    }
+  ModelingCommandResult execute_initial() override {
+    return modeling().execute_instant_operation(
+        ModelingInstantOperationId::DuplicateMeshes);
+  }
 };
 
 /**
@@ -313,9 +320,9 @@ public:
         , axis_(axis) {}
 
 private:
-    ModelingCommandResult executeInitial() override {
-        return modeling().mirrorSelection(axis_);
-    }
+  ModelingCommandResult execute_initial() override {
+    return modeling().mirror_selection(axis_);
+  }
 
     ModelingMirrorAxis axis_;
 };
@@ -333,9 +340,9 @@ public:
         , orientation_(orientation) {}
 
 private:
-    ModelingCommandResult executeInitial() override {
-        return modeling().flipSelection(orientation_);
-    }
+  ModelingCommandResult execute_initial() override {
+    return modeling().flip_selection(orientation_);
+  }
 
     ModelingFlipOrientation orientation_;
 };
@@ -345,18 +352,17 @@ private:
  */
 class ApplyActiveMaterialHistoryCommand final : public ModelingMementoCommand {
 public:
-    explicit ApplyActiveMaterialHistoryCommand(
-            ModelingSessionService& modeling,
-            std::uint32_t materialSlot = 0)
-        : ModelingMementoCommand(modeling, "Apply Material")
-        , materialSlot_(materialSlot) {}
+  explicit ApplyActiveMaterialHistoryCommand(ModelingSessionService &modeling,
+                                             std::uint32_t material_slot = 0)
+      : ModelingMementoCommand(modeling, "Apply Material"),
+        material_slot_(material_slot) {}
 
 private:
-    ModelingCommandResult executeInitial() override {
-        return modeling().applyActiveMaterial(materialSlot_);
-    }
+  ModelingCommandResult execute_initial() override {
+    return modeling().apply_active_material(material_slot_);
+  }
 
-    std::uint32_t materialSlot_ = 0;
+  std::uint32_t material_slot_ = 0;
 };
 
 /**
@@ -368,14 +374,16 @@ public:
         : ModelingMementoCommand(modeling, "Transform Preview") {}
 
 private:
-    ModelingSessionMemento captureBeforeMemento() override {
-        ModelingSessionMemento previewHistory = modeling().captureActivePreviewHistoryMemento();
-        return previewHistory.valid() ? std::move(previewHistory) : modeling().captureHistoryMemento();
-    }
+  ModelingSessionMemento capture_before_memento() override {
+    ModelingSessionMemento preview_history =
+        modeling().capture_active_preview_history_memento();
+    return preview_history.valid() ? std::move(preview_history)
+                                   : modeling().capture_history_memento();
+  }
 
-    ModelingCommandResult executeInitial() override {
-        return modeling().commitTransformPreview();
-    }
+  ModelingCommandResult execute_initial() override {
+    return modeling().commit_transform_preview();
+  }
 };
 
 /**
@@ -387,9 +395,9 @@ public:
         : ModelingMementoCommand(modeling, "Commit Operation Preview") {}
 
 private:
-    ModelingCommandResult executeInitial() override {
-        return modeling().commitActiveOperationPreview();
-    }
+  ModelingCommandResult execute_initial() override {
+    return modeling().commit_active_operation_preview();
+  }
 };
 
 } // namespace quader

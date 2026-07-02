@@ -24,21 +24,21 @@ void select_only(Selection& selection, const PickResult& pick)
     }
 
     switch (pick.kind) {
-    case ElementKind::vertex:
-        selection.mode = SelectionMode::vertex;
-        selection.vertices.push_back(pick.vertex_id);
-        activate_pick_selection(selection, pick);
-        break;
-    case ElementKind::edge:
-        selection.mode = SelectionMode::edge;
-        selection.edges.push_back(make_edge(pick.edge.a, pick.edge.b));
-        activate_pick_selection(selection, pick);
-        break;
-    case ElementKind::face:
-        selection.mode = SelectionMode::face;
-        selection.faces.push_back(pick.face_id);
-        activate_pick_selection(selection, pick);
-        break;
+    case ElementKind::Vertex:
+      selection.mode = SelectionMode::Vertex;
+      selection.vertices.push_back(pick.vertex_id);
+      activate_pick_selection(selection, pick);
+      break;
+    case ElementKind::Edge:
+      selection.mode = SelectionMode::Edge;
+      selection.edges.push_back(make_edge(pick.edge.a, pick.edge.b));
+      activate_pick_selection(selection, pick);
+      break;
+    case ElementKind::Face:
+      selection.mode = SelectionMode::Face;
+      selection.faces.push_back(pick.face_id);
+      activate_pick_selection(selection, pick);
+      break;
     }
 }
 
@@ -54,24 +54,24 @@ void add_selection(Selection& selection, const PickResult& pick)
     }
 
     switch (pick.kind) {
-    case ElementKind::vertex:
-        if (!contains_id(selection.vertices, pick.vertex_id)) {
-            selection.vertices.push_back(pick.vertex_id);
-        }
-        activate_pick_selection(selection, pick);
-        break;
-    case ElementKind::edge:
-        if (!contains_edge(selection.edges, pick.edge)) {
-            selection.edges.push_back(make_edge(pick.edge.a, pick.edge.b));
-        }
-        activate_pick_selection(selection, pick);
-        break;
-    case ElementKind::face:
-        if (!contains_id(selection.faces, pick.face_id)) {
-            selection.faces.push_back(pick.face_id);
-        }
-        activate_pick_selection(selection, pick);
-        break;
+    case ElementKind::Vertex:
+      if (!contains_id(selection.vertices, pick.vertex_id)) {
+        selection.vertices.push_back(pick.vertex_id);
+      }
+      activate_pick_selection(selection, pick);
+      break;
+    case ElementKind::Edge:
+      if (!contains_edge(selection.edges, pick.edge)) {
+        selection.edges.push_back(make_edge(pick.edge.a, pick.edge.b));
+      }
+      activate_pick_selection(selection, pick);
+      break;
+    case ElementKind::Face:
+      if (!contains_id(selection.faces, pick.face_id)) {
+        selection.faces.push_back(pick.face_id);
+      }
+      activate_pick_selection(selection, pick);
+      break;
     }
 }
 
@@ -83,15 +83,15 @@ void remove_selection(Selection& selection, const PickResult& pick)
 
     bool removed = false;
     switch (pick.kind) {
-    case ElementKind::vertex:
-        removed = remove_id(selection.vertices, pick.vertex_id);
-        break;
-    case ElementKind::edge:
-        removed = remove_edge(selection.edges, pick.edge);
-        break;
-    case ElementKind::face:
-        removed = remove_id(selection.faces, pick.face_id);
-        break;
+    case ElementKind::Vertex:
+      removed = remove_id(selection.vertices, pick.vertex_id);
+      break;
+    case ElementKind::Edge:
+      removed = remove_edge(selection.edges, pick.edge);
+      break;
+    case ElementKind::Face:
+      removed = remove_id(selection.faces, pick.face_id);
+      break;
     }
     if (removed) {
         activate_last_selection(selection);
@@ -116,54 +116,58 @@ void convert_selection_mode(const Document& document, Selection& selection, Sele
     selection.mode = mode;
 
     switch (mode) {
-    case SelectionMode::vertex:
-        for (const ElementId vertex_id : source_vertices) {
-            if (find_vertex(document, vertex_id) != nullptr) {
-                add_unique_id(selection.vertices, vertex_id);
-            }
+    case SelectionMode::Vertex:
+      for (const ElementId vertex_id : source_vertices) {
+        if (find_vertex(document, vertex_id) != nullptr) {
+          add_unique_id(selection.vertices, vertex_id);
         }
-        break;
+      }
+      break;
 
-    case SelectionMode::edge:
-        if (source.mode == SelectionMode::face) {
-            for (const ElementId face_id : source.faces) {
-                const Face* face = find_face(document, face_id);
-                if (face == nullptr) {
-                    continue;
-                }
-                for (const Edge& edge : face_edges(*face)) {
-                    add_unique_edge(selection.edges, edge);
-                }
-            }
-        } else {
-            for (const Edge& edge : document_edges(document)) {
-                if (contains_id(source_vertices, edge.a) && contains_id(source_vertices, edge.b)) {
-                    add_unique_edge(selection.edges, edge);
-                }
-            }
+    case SelectionMode::Edge:
+      if (source.mode == SelectionMode::Face) {
+        for (const ElementId face_id : source.faces) {
+          const Face *face = find_face(document, face_id);
+          if (face == nullptr) {
+            continue;
+          }
+          for (const Edge &edge : face_edges(*face)) {
+            add_unique_edge(selection.edges, edge);
+          }
         }
-        break;
+      } else {
+        for (const Edge &edge : document_edges(document)) {
+          if (contains_id(source_vertices, edge.a) &&
+              contains_id(source_vertices, edge.b)) {
+            add_unique_edge(selection.edges, edge);
+          }
+        }
+      }
+      break;
 
-    case SelectionMode::face:
-        if (source.mode == SelectionMode::edge) {
-            for (const Face& face : document.faces) {
-                const std::vector<Edge> edges = face_edges(face);
-                if (!edges.empty() && std::ranges::all_of(edges, [&source](Edge edge) {
-                        return selection_contains(source, edge);
-                    })) {
-                    add_unique_id(selection.faces, face.id);
-                }
-            }
-        } else {
-            for (const Face& face : document.faces) {
-                if (!face.vertices.empty() && std::ranges::all_of(face.vertices, [&source_vertices](ElementId vertex_id) {
-                        return contains_id(source_vertices, vertex_id);
-                    })) {
-                    add_unique_id(selection.faces, face.id);
-                }
-            }
+    case SelectionMode::Face:
+      if (source.mode == SelectionMode::Edge) {
+        for (const Face &face : document.faces) {
+          const std::vector<Edge> edges = face_edges(face);
+          if (!edges.empty() &&
+              std::ranges::all_of(edges, [&source](Edge edge) {
+                return selection_contains(source, edge);
+              })) {
+            add_unique_id(selection.faces, face.id);
+          }
         }
-        break;
+      } else {
+        for (const Face &face : document.faces) {
+          if (!face.vertices.empty() &&
+              std::ranges::all_of(
+                  face.vertices, [&source_vertices](ElementId vertex_id) {
+                    return contains_id(source_vertices, vertex_id);
+                  })) {
+            add_unique_id(selection.faces, face.id);
+          }
+        }
+      }
+      break;
     }
     activate_last_selection(selection);
 }
@@ -203,8 +207,9 @@ std::vector<ElementId> selected_vertex_ids(const Document& document, const Selec
 std::vector<Edge> edge_loop_edges(const Document& document, Edge seed_edge)
 {
     const Edge seed = make_edge(seed_edge.a, seed_edge.b);
-    if (seed.a == invalid_element_id || seed.b == invalid_element_id || seed.a == seed.b || !edge_exists(document, seed)) {
-        return {};
+    if (seed.a == kInvalidElementId || seed.b == kInvalidElementId ||
+        seed.a == seed.b || !edge_exists(document, seed)) {
+      return {};
     }
 
     std::vector<Edge> edges;
@@ -221,14 +226,14 @@ void select_edge_loop(const Document& document, Selection& selection, Edge seed_
         return;
     }
 
-    if (selection.mode != SelectionMode::edge) {
-        selection.clear();
-        selection.mode = SelectionMode::edge;
+    if (selection.mode != SelectionMode::Edge) {
+      selection.clear();
+      selection.mode = SelectionMode::Edge;
     }
 
     if (!toggle) {
         selection.clear();
-        selection.mode = SelectionMode::edge;
+        selection.mode = SelectionMode::Edge;
         selection.edges = loop_edges;
         if (contains_edge(selection.edges, seed_edge)) {
             activate_edge_selection(selection, seed_edge);

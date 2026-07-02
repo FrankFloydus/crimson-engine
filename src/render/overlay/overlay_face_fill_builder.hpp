@@ -17,9 +17,11 @@ namespace quader {
  */
 class OverlayFaceFillBuilder {
 public:
-    static OverlayFaceFillMesh buildLayer(const ViewportOverlayFrame& frame, ViewportOverlayLayer layer);
+  static OverlayFaceFillMesh build_layer(const ViewportOverlayFrame &frame,
+                                         ViewportOverlayLayer layer);
 
-    static void appendTriangle(OverlayFaceFillMesh& mesh, const ViewportOverlayTriangle& triangle);
+  static void append_triangle(OverlayFaceFillMesh &mesh,
+                              const ViewportOverlayTriangle &triangle);
 };
 
 } // namespace quader

@@ -25,110 +25,116 @@
 
 namespace quader {
 
-std::span<const ViewportTool* const> viewportToolCatalog() {
-    static const SelectTool selectTool;
-    static const MoveTool moveTool;
-    static const ExtendTool extendTool;
-    static const ExtrudeTool extrudeTool;
-    static const RotateTool rotateTool;
-    static const ScaleTool scaleTool;
-    static const BoxTool boxTool;
-    static const InsertEdgeLoopTool insertEdgeLoopTool;
-    static const KnifeTool knifeTool;
-    static const CutTool cutTool;
-    static const PolyTool polyTool;
-    static const MirrorTool mirrorTool;
-    static const std::array<const ViewportTool*, 12> tools{{
-            &selectTool,
-            &moveTool,
-            &extendTool,
-            &extrudeTool,
-            &rotateTool,
-            &scaleTool,
-            &boxTool,
-            &insertEdgeLoopTool,
-            &knifeTool,
-            &cutTool,
-            &polyTool,
-            &mirrorTool,
-    }};
-    return {tools.data(), tools.size()};
+std::span<const ViewportTool *const> viewport_tool_catalog() {
+  static const SelectTool kSelectTool;
+  static const MoveTool kMoveTool;
+  static const ExtendTool kExtendTool;
+  static const ExtrudeTool kExtrudeTool;
+  static const RotateTool kRotateTool;
+  static const ScaleTool kScaleTool;
+  static const BoxTool kBoxTool;
+  static const InsertEdgeLoopTool kInsertEdgeLoopTool;
+  static const KnifeTool kNifeTool;
+  static const CutTool kCutTool;
+  static const PolyTool kPolyTool;
+  static const MirrorTool kMirrorTool;
+  static const std::array<const ViewportTool *, 12> kTools{{
+      &kSelectTool,
+      &kMoveTool,
+      &kExtendTool,
+      &kExtrudeTool,
+      &kRotateTool,
+      &kScaleTool,
+      &kBoxTool,
+      &kInsertEdgeLoopTool,
+      &kNifeTool,
+      &kCutTool,
+      &kPolyTool,
+      &kMirrorTool,
+  }};
+  return {kTools.data(), kTools.size()};
 }
 
-const ViewportTool* findViewportTool(ViewportToolId tool) {
-    const std::span<const ViewportTool* const> tools = viewportToolCatalog();
-    const auto found = std::find_if(tools.begin(), tools.end(), [&](const Tool* item) {
-        return item != nullptr && item->viewportTool() == tool;
-    });
-    return found == tools.end() ? nullptr : *found;
+const ViewportTool *find_viewport_tool(ViewportToolId tool) {
+  const std::span<const ViewportTool *const> tools = viewport_tool_catalog();
+  const auto found =
+      std::find_if(tools.begin(), tools.end(), [&](const Tool *item) {
+        return item != nullptr && item->viewport_tool() == tool;
+      });
+  return found == tools.end() ? nullptr : *found;
 }
 
-const ViewportTool* findViewportTool(std::string_view id) {
-    const std::span<const ViewportTool* const> tools = viewportToolCatalog();
-    const auto found = std::find_if(tools.begin(), tools.end(), [&](const Tool* item) {
+const ViewportTool *find_viewport_tool(std::string_view id) {
+  const std::span<const ViewportTool *const> tools = viewport_tool_catalog();
+  const auto found =
+      std::find_if(tools.begin(), tools.end(), [&](const Tool *item) {
         return item != nullptr && item->id() == id;
-    });
-    return found == tools.end() ? nullptr : *found;
+      });
+  return found == tools.end() ? nullptr : *found;
 }
 
-bool viewportToolAvailable(ViewportToolId tool) {
-    const ViewportTool* item = findViewportTool(tool);
-    return item != nullptr && viewportToolHasNativeController(item->viewportTool());
+bool viewport_tool_available(ViewportToolId tool) {
+  const ViewportTool *item = find_viewport_tool(tool);
+  return item != nullptr &&
+         viewport_tool_has_native_controller(item->viewport_tool());
 }
 
-std::string_view viewportToolCatalogId(ViewportToolId tool) {
-    const ViewportTool* item = findViewportTool(tool);
-    return item != nullptr ? item->id() : std::string_view{"unknown"};
+std::string_view viewport_tool_catalog_id(ViewportToolId tool) {
+  const ViewportTool *item = find_viewport_tool(tool);
+  return item != nullptr ? item->id() : std::string_view{"unknown"};
 }
 
-std::string_view viewportToolLabel(ViewportToolId tool) {
-    const ViewportTool* item = findViewportTool(tool);
-    return item != nullptr ? item->label() : std::string_view{"Unknown"};
+std::string_view viewport_tool_label(ViewportToolId tool) {
+  const ViewportTool *item = find_viewport_tool(tool);
+  return item != nullptr ? item->label() : std::string_view{"Unknown"};
 }
 
-bool viewportToolOwnsViewport(ViewportToolId tool) {
-    const ViewportTool* item = findViewportTool(tool);
-    return item != nullptr && item->ownsViewport();
+bool viewport_tool_owns_viewport(ViewportToolId tool) {
+  const ViewportTool *item = find_viewport_tool(tool);
+  return item != nullptr && item->owns_viewport();
 }
 
-bool viewportToolBlocksFocusShortcuts(ViewportToolId tool) {
-    const ViewportTool* item = findViewportTool(tool);
-    return item != nullptr && item->blocksViewportFocusShortcuts();
+bool viewport_tool_blocks_focus_shortcuts(ViewportToolId tool) {
+  const ViewportTool *item = find_viewport_tool(tool);
+  return item != nullptr && item->blocks_viewport_focus_shortcuts();
 }
 
-bool viewportToolSupportsTransformGizmo(ViewportToolId tool) {
-    const ViewportTool* item = findViewportTool(tool);
-    return item != nullptr && item->supportsTransformGizmo();
+bool viewport_tool_supports_transform_gizmo(ViewportToolId tool) {
+  const ViewportTool *item = find_viewport_tool(tool);
+  return item != nullptr && item->supports_transform_gizmo();
 }
 
-ModelingTransformTool viewportToolTransformTool(ViewportToolId tool) {
-    const ViewportTool* item = findViewportTool(tool);
-    return item != nullptr ? item->transformTool() : ModelingTransformTool::Move;
+ModelingTransformTool viewport_tool_transform_tool(ViewportToolId tool) {
+  const ViewportTool *item = find_viewport_tool(tool);
+  return item != nullptr ? item->transform_tool() : ModelingTransformTool::Move;
 }
 
-quader_editor_core::ViewportInteractionTool viewportToolInteractionTool(ViewportToolId tool) {
-    const ViewportTool* item = findViewportTool(tool);
-    if (item == nullptr) {
-        return quader_editor_core::ViewportInteractionTool::select;
-    }
-    const quader_editor_core::ViewportInteractionTool runtimeTool =
-            quader_editor_core::viewport_interaction_tool_from_id(item->id());
-    return runtimeTool == quader_editor_core::ViewportInteractionTool::unknown
-            ? quader_editor_core::ViewportInteractionTool::select
-            : runtimeTool;
+quader_editor_core::ViewportInteractionTool
+viewport_tool_interaction_tool(ViewportToolId tool) {
+  const ViewportTool *item = find_viewport_tool(tool);
+  if (item == nullptr) {
+    return quader_editor_core::ViewportInteractionTool::Select;
+  }
+  const quader_editor_core::ViewportInteractionTool runtime_tool =
+      quader_editor_core::viewport_interaction_tool_from_id(item->id());
+  return runtime_tool == quader_editor_core::ViewportInteractionTool::Unknown
+             ? quader_editor_core::ViewportInteractionTool::Select
+             : runtime_tool;
 }
 
-ModelingViewportTool modelingViewportToolFor(ViewportToolId tool) {
-    const ViewportTool* item = findViewportTool(tool);
-    return item != nullptr ? item->modelingTool() : ModelingViewportTool::Select;
+ModelingViewportTool modeling_viewport_tool_for(ViewportToolId tool) {
+  const ViewportTool *item = find_viewport_tool(tool);
+  return item != nullptr ? item->modeling_tool() : ModelingViewportTool::Select;
 }
 
-ViewportToolId viewportToolForModeling(ModelingViewportTool tool) {
-    const std::span<const ViewportTool* const> tools = viewportToolCatalog();
-    const auto found = std::find_if(tools.begin(), tools.end(), [&](const Tool* item) {
-        return item != nullptr && item->modelingTool() == tool;
-    });
-    return found == tools.end() ? ViewportToolId::Select : (*found)->viewportTool();
+ViewportToolId viewport_tool_for_modeling(ModelingViewportTool tool) {
+  const std::span<const ViewportTool *const> tools = viewport_tool_catalog();
+  const auto found =
+      std::find_if(tools.begin(), tools.end(), [&](const Tool *item) {
+        return item != nullptr && item->modeling_tool() == tool;
+      });
+  return found == tools.end() ? ViewportToolId::Select
+                              : (*found)->viewport_tool();
 }
 
 } // namespace quader

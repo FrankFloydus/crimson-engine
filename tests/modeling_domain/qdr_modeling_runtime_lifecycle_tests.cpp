@@ -39,8 +39,10 @@ void default_scene_reset_restores_stable_runtime_defaults()
 	require_test(session.objects().front().id == 1, "default scene should restart object ids at 1");
 	require_test(session.next_object_id() == 2, "default scene should reserve the next object id");
 	require_test(session.active_object_id() < 0, "default scene should not activate an object");
-	require_test(session.selection_mode() == quader_editor_core::SelectionMode::object, "default scene should use object selection mode");
-	require_test(session.dirty(), "default scene reset should mark the runtime content dirty");
+        require_test(session.selection_mode() ==
+                         quader_editor_core::SelectionMode::Object,
+                     "default scene should use object selection mode");
+        require_test(session.dirty(), "default scene reset should mark the runtime content dirty");
 	require_test(session.state().content_revision == 1, "default scene reset should restore content revision baseline");
 	require_test(session.state().selection_revision == 0, "default scene reset should restore selection revision baseline");
 	require_test(!session.history_status().can_undo && !session.history_status().can_redo, "default scene reset should clear undo and redo history");
@@ -121,13 +123,14 @@ void light_entities_track_selection_content_and_history()
 	session.reset_to_default_scene();
 	session.mark_clean();
 
-	const quader_editor_core::CommandResult create = session.apply_history_command([](quader_editor_core::EditorSession& editor_session) {
-		return editor_session.create_light(
-			quader_editor_core::LightType::spot,
-			{ 0.0F, 4.0F, 0.0F },
-			{ 0.0F, -1.0F, 0.0F });
-	});
-	require_test(create.ok && create.changed, "tracked light create should apply");
+        const quader_editor_core::CommandResult create =
+            session.apply_history_command(
+                [](quader_editor_core::EditorSession &editor_session) {
+                  return editor_session.create_light(
+                      quader_editor_core::LightType::Spot, {0.0F, 4.0F, 0.0F},
+                      {0.0F, -1.0F, 0.0F});
+                });
+        require_test(create.ok && create.changed, "tracked light create should apply");
 	require_test(session.lights().size() == 1, "light create should append a light entity");
 	require_test(session.lights().front().id == 1, "light create should allocate the first light id");
 	require_test(session.next_light_id() == 2, "light create should reserve the next light id");
@@ -142,10 +145,13 @@ void light_entities_track_selection_content_and_history()
 	require_test(redo_create.applied && session.lights().size() == 1, "redo should restore a created light");
 
 	session.mark_clean();
-	const quader_editor_core::CommandResult edit = session.apply_history_command([](quader_editor_core::EditorSession& editor_session) {
-		return editor_session.set_light_float(1, quader_editor_core::LightFloatProperty::range, 20.0F);
-	});
-	require_test(edit.ok && edit.changed, "tracked light property edit should apply");
+        const quader_editor_core::CommandResult edit =
+            session.apply_history_command(
+                [](quader_editor_core::EditorSession &editor_session) {
+                  return editor_session.set_light_float(
+                      1, quader_editor_core::LightFloatProperty::Range, 20.0F);
+                });
+        require_test(edit.ok && edit.changed, "tracked light property edit should apply");
 	require_test(session.lights().front().range == 20.0F, "light property edit should update range");
 	require_test(session.dirty(), "light property edit should dirty saved content");
 	require_test(session.undo().applied && session.lights().front().range == 10.0F, "undo should restore light range");
@@ -163,9 +169,12 @@ void selecting_a_light_clears_mesh_selection()
 {
 	quader_editor_core::EditorSession session;
 	session.reset_to_default_scene();
-	require_test(session.create_light(quader_editor_core::LightType::point, { 1.0F, 2.0F, 3.0F }, { 0.0F, -1.0F, 0.0F }).changed,
-		"fixture should create a light");
-	session.set_selected_object_ids({ 1 }, 1);
+        require_test(session
+                         .create_light(quader_editor_core::LightType::Point,
+                                       {1.0F, 2.0F, 3.0F}, {0.0F, -1.0F, 0.0F})
+                         .changed,
+                     "fixture should create a light");
+        session.set_selected_object_ids({ 1 }, 1);
 	require_test(session.selected_object_ids() == std::vector<int> { 1 }, "fixture should select the starter mesh");
 
 	const quader_editor_core::CommandResult select_light = session.select_light(1);
@@ -177,13 +186,13 @@ void selecting_a_light_clears_mesh_selection()
 void selected_lights_supply_transform_gizmo_center_and_bounds()
 {
 	quader_editor_core::EditorSession session;
-	require_test(session.create_light(
-		quader_editor_core::LightType::point,
-		{ 3.0F, 4.0F, 5.0F },
-		{ 0.0F, -1.0F, 0.0F }).changed,
-		"fixture should create a selected light");
+        require_test(session
+                         .create_light(quader_editor_core::LightType::Point,
+                                       {3.0F, 4.0F, 5.0F}, {0.0F, -1.0F, 0.0F})
+                         .changed,
+                     "fixture should create a selected light");
 
-	const std::optional<quader::QVec3> center = session.selection_center();
+        const std::optional<quader::QVec3> center = session.selection_center();
 	require_test(center.has_value(), "selected light should provide a transform center");
 	require_test(vec_near(*center, { 3.0F, 4.0F, 5.0F }), "selected light center should use the light position");
 
@@ -201,13 +210,13 @@ void selected_lights_supply_transform_gizmo_center_and_bounds()
 void selected_lights_move_and_rotate_with_transform_operations()
 {
 	quader_editor_core::EditorSession session;
-	require_test(session.create_light(
-		quader_editor_core::LightType::spot,
-		{ 1.0F, 0.0F, 0.0F },
-		{ 0.0F, -1.0F, 0.0F }).changed,
-		"fixture should create a selected spot light");
+        require_test(session
+                         .create_light(quader_editor_core::LightType::Spot,
+                                       {1.0F, 0.0F, 0.0F}, {0.0F, -1.0F, 0.0F})
+                         .changed,
+                     "fixture should create a selected spot light");
 
-	require_test(session.translate_selected({ 2.0F, 3.0F, 4.0F }).changed, "translate_selected should move selected lights");
+        require_test(session.translate_selected({ 2.0F, 3.0F, 4.0F }).changed, "translate_selected should move selected lights");
 	require_test(vec_near(session.lights().front().position, { 3.0F, 3.0F, 4.0F }), "selected light position should translate");
 
 	quader_poly::Transform3 rotate_z;
@@ -222,20 +231,22 @@ void selected_lights_move_and_rotate_with_transform_operations()
 void transform_preview_commit_and_history_apply_to_selected_lights()
 {
 	quader_editor_core::EditorSession session;
-	const quader_editor_core::CommandResult create = session.apply_history_command([](quader_editor_core::EditorSession& editor_session) {
-		return editor_session.create_light(
-			quader_editor_core::LightType::point,
-			{ 0.0F, 1.0F, 0.0F },
-			{ 0.0F, -1.0F, 0.0F });
-	});
-	require_test(create.ok && create.changed, "fixture should create a tracked selected light");
+        const quader_editor_core::CommandResult create =
+            session.apply_history_command(
+                [](quader_editor_core::EditorSession &editor_session) {
+                  return editor_session.create_light(
+                      quader_editor_core::LightType::Point, {0.0F, 1.0F, 0.0F},
+                      {0.0F, -1.0F, 0.0F});
+                });
+        require_test(create.ok && create.changed, "fixture should create a tracked selected light");
 
 	require_test(session.begin_transform_preview(true).ok, "selected light transform preview should start even when duplicate modifier is pressed");
 	require_test(session.update_transform_translate_preview({ 5.0F, 0.0F, 0.0F }).changed, "light transform preview should move the selected light");
 	require_test(vec_near(session.lights().front().position, { 5.0F, 1.0F, 0.0F }), "preview update should mutate the selected light position");
-	const quader_editor_core::PreviewTransactionFinishResult commit =
-		session.commit_preview_transaction(quader_editor_core::PreviewTransactionKind::transform);
-	require_test(commit.before.active && commit.before.changed, "light transform preview commit should finish an active changed preview");
+        const quader_editor_core::PreviewTransactionFinishResult commit =
+            session.commit_preview_transaction(
+                quader_editor_core::PreviewTransactionKind::Transform);
+        require_test(commit.before.active && commit.before.changed, "light transform preview commit should finish an active changed preview");
 	require_test(session.undo().applied, "undo should restore committed light transform preview");
 	require_test(vec_near(session.lights().front().position, { 0.0F, 1.0F, 0.0F }), "undo should restore the light position");
 	require_test(session.redo().applied, "redo should reapply committed light transform preview");

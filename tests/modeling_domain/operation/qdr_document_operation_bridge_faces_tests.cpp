@@ -16,8 +16,8 @@ TEST(QdrDocumentOperationBridgeFacesTests, BridgeFacesConnectsTwoOpenFaceIslands
 
 	EXPECT_TRUE(result.changed);
 	EXPECT_TRUE(document.faces.size() == 6U);
-	EXPECT_TRUE(selection.mode == SelectionMode::face);
-	EXPECT_TRUE(selection.faces.size() == 4U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Face);
+        EXPECT_TRUE(selection.faces.size() == 4U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }
 

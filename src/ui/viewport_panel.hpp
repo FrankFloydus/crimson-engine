@@ -56,33 +56,38 @@ public:
     ~ViewportPanel() override;
 
     UIPanelId id() const override { return UIPanelId::Viewport; }
-    const char* title() const override { return uiPanelKey(UIPanelId::Viewport); }
-    bool canToggle() const override { return false; }
+    const char* title() const override {
+      return ui_panel_key(UIPanelId::Viewport);
+    }
+    bool can_toggle() const override { return false; }
     void draw(UIContext& context) override;
 
-    void initialize(RenderSystem& renderSystem);
+    void initialize(RenderSystem &render_system);
     void shutdown();
-    void prepareViewports(
-            ViewportWorkspaceService& workspace,
-            SceneRenderBridge& renderBridge,
-            const SceneDocument& document,
-            const AssetRegistry& assets);
-    void renderViewports(filament::Renderer& renderer);
-    bool activateToolFromMenu(
-            ViewportToolId tool,
-            QuaderEditorApi& editor,
-            ModelingSessionService& modeling);
-    const ViewportToolState& toolState() const { return inputRouter_.state(); }
-    bool flyNavigationActive() const { return lastFlyNavigationActive_; }
-    bool needsContinuousRendering() const {
-        return lastFlyNavigationActive_ ||
-                activeViewportSettings().boolValue(ViewportBoolSettingId::ShowInfo) ||
-                navigationGizmo_.inputLocked() ||
-                interactionController_.dragging() ||
-                splitHandleDragging_;
+    void prepare_viewports(ViewportWorkspaceService &workspace,
+                           SceneRenderBridge &render_bridge,
+                           const SceneDocument &document,
+                           const AssetRegistry &assets);
+    void render_viewports(filament::Renderer &renderer);
+    bool activate_tool_from_menu(ViewportToolId tool, QuaderEditorApi &editor,
+                                 ModelingSessionService &modeling);
+    const ViewportToolState &tool_state() const {
+      return input_router_.state();
     }
-    bool navigationGizmoVisible() const { return navigationGizmo_.visible(); }
-    void setNavigationGizmoVisible(bool visible) { navigationGizmo_.setVisible(visible); }
+    bool fly_navigation_active() const { return last_fly_navigation_active_; }
+    bool needs_continuous_rendering() const {
+      return last_fly_navigation_active_ ||
+             active_viewport_settings().bool_value(
+                 ViewportBoolSettingId::ShowInfo) ||
+             navigation_gizmo_.input_locked() ||
+             interaction_controller_.dragging() || split_handle_dragging_;
+    }
+    bool navigation_gizmo_visible() const {
+      return navigation_gizmo_.visible();
+    }
+    void set_navigation_gizmo_visible(bool visible) {
+      navigation_gizmo_.set_visible(visible);
+    }
 
 private:
     /**
@@ -94,90 +99,80 @@ private:
         bool initialized = false;
     };
 
-    void draw(SceneRenderBridge& renderBridge,
-            SceneDocument& document,
-            AssetRegistry& assets,
-            ModelingSessionService& modeling,
-            AssetId defaultMaterial,
-            QVec2 capturedMouseDelta,
-            bool* viewportCursorCaptureRequested,
-            QVec2* viewportCursorCapturePoint,
-            const UIContext& uiContext);
-    void drawPaneContents(Pane& pane,
-            SceneDocument& document,
-            AssetRegistry& assets,
-            ModelingSessionService& modeling,
-            AssetId defaultMaterial,
-            QVec2 capturedMouseDelta,
-            bool* viewportCursorCaptureRequested,
-            QVec2* viewportCursorCapturePoint,
-            const UIContext& uiContext,
-            ImVec2 itemMin,
-            ImVec2 itemSize,
-            bool hovered,
-            bool focusHovered);
-    void drawPaneDecorations(Pane& pane,
-            SceneDocument& document,
-            const AssetRegistry& assets,
-            ModelingSessionService& modeling,
-            EditorSelectionService& selection,
-            QuaderEditorApi& editor,
-            ImVec2 itemMin,
-            ImVec2 itemSize);
-    void drawViewportInfoOverlay(
-            const SceneDocument& document,
-            const AssetRegistry& assets,
-            const UIContext& uiContext,
-            ImVec2 itemMin,
-            ImVec2 itemSize);
-    void refreshCachedSelectionOverlayFrame(const SceneDocument& document,
-            const AssetRegistry& assets,
-            ModelingSessionService& modeling);
+    void draw(SceneRenderBridge &render_bridge, SceneDocument &document,
+              AssetRegistry &assets, ModelingSessionService &modeling,
+              AssetId default_material, QVec2 captured_mouse_delta,
+              bool *viewport_cursor_capture_requested,
+              QVec2 *viewport_cursor_capture_point,
+              const UIContext &ui_context);
+    void draw_pane_contents(
+        Pane &pane, SceneDocument &document, AssetRegistry &assets,
+        ModelingSessionService &modeling, AssetId default_material,
+        QVec2 captured_mouse_delta, bool *viewport_cursor_capture_requested,
+        QVec2 *viewport_cursor_capture_point, const UIContext &ui_context,
+        ImVec2 item_min, ImVec2 item_size, bool hovered, bool focus_hovered);
+    void draw_pane_decorations(Pane &pane, SceneDocument &document,
+                               const AssetRegistry &assets,
+                               ModelingSessionService &modeling,
+                               EditorSelectionService &selection,
+                               QuaderEditorApi &editor, ImVec2 item_min,
+                               ImVec2 item_size);
+    void draw_viewport_info_overlay(const SceneDocument &document,
+                                    const AssetRegistry &assets,
+                                    const UIContext &ui_context,
+                                    ImVec2 item_min, ImVec2 item_size);
+    void
+    refresh_cached_selection_overlay_frame(const SceneDocument &document,
+                                           const AssetRegistry &assets,
+                                           ModelingSessionService &modeling);
     ViewportWorkspaceService& workspace();
     const ViewportWorkspaceService& workspace() const;
-    Pane& pane(ViewportPaneId paneId);
-    const Pane& pane(ViewportPaneId paneId) const;
-    void syncActiveToolFromEditor(QuaderEditorApi& editor, ModelingSessionService& modeling);
-    bool drawPaneChrome(Pane& pane, ImVec2 itemMin, ImVec2 itemSize, const LocalizationService& localization);
-    void setPaneView(Pane& pane, ViewportView view);
-    bool handleSplitInput(ImVec2 viewportMin, ImVec2 viewportSize, const std::vector<ViewportSplitHandle>& handles);
-    const ViewportSettings& activeViewportSettings() const;
+    Pane &pane(ViewportPaneId pane_id);
+    const Pane &pane(ViewportPaneId pane_id) const;
+    void sync_active_tool_from_editor(QuaderEditorApi &editor,
+                                      ModelingSessionService &modeling);
+    bool draw_pane_chrome(Pane &pane, ImVec2 item_min, ImVec2 item_size,
+                          const LocalizationService &localization);
+    void set_pane_view(Pane &pane, ViewportView view);
+    bool handle_split_input(ImVec2 viewport_min, ImVec2 viewport_size,
+                            const std::vector<ViewportSplitHandle> &handles);
+    const ViewportSettings &active_viewport_settings() const;
 
     std::array<Pane, kViewportPaneCount> panes_;
     ViewportWorkspaceService* workspace_ = nullptr;
-    ViewportSettings fallbackViewportSettings_ = ViewportSettings::defaults();
-    const ViewportSettings* viewportSettings_ = nullptr;
-    ViewportSplitHandle activeSplitHandle_;
-    bool splitHandleDragging_ = false;
-    std::vector<ViewportPaneId> activeRenderPanes_;
-    ViewportInputRouter inputRouter_;
-    ViewportInputFrameBuilder inputFrameBuilder_;
-    ViewportFocusController focusController_;
-    ViewportContextMenuPresenter contextMenuPresenter_;
-    ViewportShortcutController shortcutController_;
-    ViewportHoverController hoverController_;
-    ViewportInteractionController interactionController_;
-    ViewportPaneId interactionPaneId_ = ViewportPaneId::Perspective;
-    ModalToolOverlayRenderer modalToolOverlayRenderer_;
-    ViewportPaneOverlayCache selectionOverlayCache_;
-    QVec2 contextMenuRightPressScreen_ = {};
-    QVec2 contextMenuRightDragDelta_ = {};
-    bool contextMenuRightPressActive_ = false;
-    NavigationGizmo navigationGizmo_;
-    QVec2 flyCursorCaptureScreen_ = {};
-    bool deleteObjectsPopupOpen_ = false;
-    bool deleteObjectsPopupPositionPending_ = false;
-    ImVec2 deleteObjectsPopupPosition_ = {};
-    bool lastFlyNavigationActive_ = false;
-    const SceneDocument* viewportInfoCachedDocument_ = nullptr;
-    const AssetRegistry* viewportInfoCachedAssets_ = nullptr;
-    std::uint64_t viewportInfoCachedSceneRevision_ = 0;
-    std::uint64_t viewportInfoCachedAssetRevision_ = 0;
-    std::uint64_t viewportInfoCachedObjects_ = 0;
-    std::uint64_t viewportInfoCachedPrimitives_ = 0;
-    std::uint64_t viewportInfoCachedDrawCalls_ = 0;
-    bool viewportInfoSceneStatsValid_ = false;
-    bool shutdownComplete_ = false;
+    ViewportSettings fallback_viewport_settings_ = ViewportSettings::defaults();
+    const ViewportSettings *viewport_settings_ = nullptr;
+    ViewportSplitHandle active_split_handle_;
+    bool split_handle_dragging_ = false;
+    std::vector<ViewportPaneId> active_render_panes_;
+    ViewportInputRouter input_router_;
+    ViewportInputFrameBuilder input_frame_builder_;
+    ViewportFocusController focus_controller_;
+    ViewportContextMenuPresenter context_menu_presenter_;
+    ViewportShortcutController shortcut_controller_;
+    ViewportHoverController hover_controller_;
+    ViewportInteractionController interaction_controller_;
+    ViewportPaneId interaction_pane_id_ = ViewportPaneId::Perspective;
+    ModalToolOverlayRenderer modal_tool_overlay_renderer_;
+    ViewportPaneOverlayCache selection_overlay_cache_;
+    QVec2 context_menu_right_press_screen_ = {};
+    QVec2 context_menu_right_drag_delta_ = {};
+    bool context_menu_right_press_active_ = false;
+    NavigationGizmo navigation_gizmo_;
+    QVec2 fly_cursor_capture_screen_ = {};
+    bool delete_objects_popup_open_ = false;
+    bool delete_objects_popup_position_pending_ = false;
+    ImVec2 delete_objects_popup_position_ = {};
+    bool last_fly_navigation_active_ = false;
+    const SceneDocument *viewport_info_cached_document_ = nullptr;
+    const AssetRegistry *viewport_info_cached_assets_ = nullptr;
+    std::uint64_t viewport_info_cached_scene_revision_ = 0;
+    std::uint64_t viewport_info_cached_asset_revision_ = 0;
+    std::uint64_t viewport_info_cached_objects_ = 0;
+    std::uint64_t viewport_info_cached_primitives_ = 0;
+    std::uint64_t viewport_info_cached_draw_calls_ = 0;
+    bool viewport_info_scene_stats_valid_ = false;
+    bool shutdown_complete_ = false;
 };
 
 } // namespace quader

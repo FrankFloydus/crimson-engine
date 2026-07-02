@@ -32,19 +32,21 @@ enum class ViewportOverlaySelectionContext {
  */
 struct ViewportOverlayStyleOverride {
     ViewportOverlayStyleRole role = ViewportOverlayStyleRole::LayerDefault;
-    ViewportOverlaySelectionContext selectionMode = ViewportOverlaySelectionContext::Any;
+    ViewportOverlaySelectionContext selection_mode =
+        ViewportOverlaySelectionContext::Any;
     std::optional<std::uint32_t> color;
-    std::optional<float> lineWidthPixels;
-    std::optional<float> pointSizePixels;
-    std::optional<float> outlineGrowthPixels;
+    std::optional<float> line_width_pixels;
+    std::optional<float> point_size_pixels;
+    std::optional<float> outline_growth_pixels;
 };
 
 /**
  * Stores the Viewport Overlay Style Context data contract used by the render extraction and Filament resource layer.
  */
 struct ViewportOverlayStyleContext {
-    ViewportOverlaySelectionContext selectionMode = ViewportOverlaySelectionContext::Any;
-    std::vector<ViewportOverlayStyleOverride> overrides;
+  ViewportOverlaySelectionContext selection_mode =
+      ViewportOverlaySelectionContext::Any;
+  std::vector<ViewportOverlayStyleOverride> overrides;
 };
 
 /**
@@ -63,31 +65,30 @@ public:
             const ViewportOverlayStyleContext& context);
 
 private:
-    static ViewportOverlayStyleRole roleFor(const ViewportOverlayTriangle& triangle);
-    static ViewportOverlayStyleRole roleFor(const ViewportOverlayLine& line);
-    static ViewportOverlayStyleRole roleFor(const ViewportOverlayPoint& point);
-    static const ViewportOverlayStyleOverride* overrideFor(
-            ViewportOverlayStyleRole role,
-            const ViewportOverlayStyleContext& context);
-    static std::uint32_t colorFor(
-            ViewportOverlayStyleRole role,
-            std::uint32_t authoredColor,
-            const ViewportSettings& settings);
-    static float lineWidthFor(
-            ViewportOverlayStyleRole role,
-            ViewportOverlayLayer layer,
-            float authoredWidthPixels,
-            const ViewportSettings& settings);
-    static float pointSizeFor(
-            ViewportOverlayStyleRole role,
-            float authoredSizePixels,
-            const ViewportSettings& settings);
-    static std::optional<float> pointOutlineGrowthFor(
-            ViewportOverlayStyleRole role,
-            std::optional<float> authoredOutlineGrowthPixels,
-            const ViewportSettings& settings);
-    static std::uint32_t settingColorRgba(ViewportSettingColor color);
-    static std::uint32_t settingColor(const ViewportSettings& settings, ViewportColorSettingId id);
+  static ViewportOverlayStyleRole
+  role_for(const ViewportOverlayTriangle &triangle);
+  static ViewportOverlayStyleRole role_for(const ViewportOverlayLine &line);
+  static ViewportOverlayStyleRole role_for(const ViewportOverlayPoint &point);
+  static const ViewportOverlayStyleOverride *
+  override_for(ViewportOverlayStyleRole role,
+               const ViewportOverlayStyleContext &context);
+  static std::uint32_t color_for(ViewportOverlayStyleRole role,
+                                 std::uint32_t authored_color,
+                                 const ViewportSettings &settings);
+  static float line_width_for(ViewportOverlayStyleRole role,
+                              ViewportOverlayLayer layer,
+                              float authored_width_pixels,
+                              const ViewportSettings &settings);
+  static float point_size_for(ViewportOverlayStyleRole role,
+                              float authored_size_pixels,
+                              const ViewportSettings &settings);
+  static std::optional<float>
+  point_outline_growth_for(ViewportOverlayStyleRole role,
+                           std::optional<float> authored_outline_growth_pixels,
+                           const ViewportSettings &settings);
+  static std::uint32_t setting_color_rgba(ViewportSettingColor color);
+  static std::uint32_t setting_color(const ViewportSettings &settings,
+                                     ViewportColorSettingId id);
 };
 
 } // namespace quader

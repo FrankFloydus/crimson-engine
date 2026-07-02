@@ -28,26 +28,28 @@ struct CutPreviewPointKey {
     long long z = 0;
 };
 
-long long quantizeCutPreviewCoordinate(float value) {
-    return static_cast<long long>(std::llround(value / kCutPreviewPlaneQuantization));
+long long quantize_cut_preview_coordinate(float value) {
+  return static_cast<long long>(
+      std::llround(value / kCutPreviewPlaneQuantization));
 }
 
-CutPreviewPointKey cutPreviewPointKey(QVec3 value) {
-    return {
-            .x = quantizeCutPreviewCoordinate(value.x),
-            .y = quantizeCutPreviewCoordinate(value.y),
-            .z = quantizeCutPreviewCoordinate(value.z),
-    };
+CutPreviewPointKey cut_preview_point_key(QVec3 value) {
+  return {
+      .x = quantize_cut_preview_coordinate(value.x),
+      .y = quantize_cut_preview_coordinate(value.y),
+      .z = quantize_cut_preview_coordinate(value.z),
+  };
 }
 
-bool cutPreviewPointKeyLess(const CutPreviewPointKey& left, const CutPreviewPointKey& right) {
-    if (left.x != right.x) {
-        return left.x < right.x;
-    }
-    if (left.y != right.y) {
-        return left.y < right.y;
-    }
-    return left.z < right.z;
+bool cut_preview_point_key_less(const CutPreviewPointKey &left,
+                                const CutPreviewPointKey &right) {
+  if (left.x != right.x) {
+    return left.x < right.x;
+  }
+  if (left.y != right.y) {
+    return left.y < right.y;
+  }
+  return left.z < right.z;
 }
 
 /**
@@ -58,25 +60,25 @@ struct CutPreviewEdgeKey {
     CutPreviewPointKey b;
 
     CutPreviewEdgeKey(QVec3 first, QVec3 second) {
-        CutPreviewPointKey firstKey = cutPreviewPointKey(first);
-        CutPreviewPointKey secondKey = cutPreviewPointKey(second);
-        if (cutPreviewPointKeyLess(secondKey, firstKey)) {
-            a = secondKey;
-            b = firstKey;
-        } else {
-            a = firstKey;
-            b = secondKey;
-        }
+      CutPreviewPointKey first_key = cut_preview_point_key(first);
+      CutPreviewPointKey second_key = cut_preview_point_key(second);
+      if (cut_preview_point_key_less(second_key, first_key)) {
+        a = second_key;
+        b = first_key;
+      } else {
+        a = first_key;
+        b = second_key;
+      }
     }
 
     [[nodiscard]] bool operator<(const CutPreviewEdgeKey& other) const {
-        if (cutPreviewPointKeyLess(a, other.a)) {
-            return true;
-        }
-        if (cutPreviewPointKeyLess(other.a, a)) {
-            return false;
-        }
-        return cutPreviewPointKeyLess(b, other.b);
+      if (cut_preview_point_key_less(a, other.a)) {
+        return true;
+      }
+      if (cut_preview_point_key_less(other.a, a)) {
+        return false;
+      }
+      return cut_preview_point_key_less(b, other.b);
     }
 };
 
@@ -87,36 +89,38 @@ struct CutPreviewEdgeAccumulator {
     QVec3 a;
     QVec3 b;
     QVec3 normal;
-    bool hasNormal = false;
-    bool hasCapTriangle = false;
-    bool hasSideTriangle = false;
+    bool has_normal = false;
+    bool has_cap_triangle = false;
+    bool has_side_triangle = false;
     bool feature = false;
     int count = 0;
 
-    void add(QVec3 first, QVec3 second, bool onPlane, bool capTriangle, QVec3 triangleNormal) {
-        if (length(first - second) <= 0.000001f) {
-            return;
-        }
-        if (count == 0) {
-            a = first;
-            b = second;
-            normal = triangleNormal;
-            hasNormal = true;
-        } else if (hasNormal && std::fabs(dot(normal, triangleNormal)) < kCutPreviewFeatureEdgeCosine) {
-            feature = true;
-        }
+    void add(QVec3 first, QVec3 second, bool on_plane, bool cap_triangle,
+             QVec3 triangle_normal) {
+      if (length(first - second) <= 0.000001f) {
+        return;
+      }
+      if (count == 0) {
+        a = first;
+        b = second;
+        normal = triangle_normal;
+        has_normal = true;
+      } else if (has_normal && std::fabs(dot(normal, triangle_normal)) <
+                                   kCutPreviewFeatureEdgeCosine) {
+        feature = true;
+      }
 
-        ++count;
-        if (onPlane && capTriangle) {
-            hasCapTriangle = true;
-        }
-        if (!capTriangle) {
-            hasSideTriangle = true;
-        }
+      ++count;
+      if (on_plane && cap_triangle) {
+        has_cap_triangle = true;
+      }
+      if (!cap_triangle) {
+        has_side_triangle = true;
+      }
     }
 
     [[nodiscard]] bool seam() const {
-        return hasCapTriangle && hasSideTriangle;
+      return has_cap_triangle && has_side_triangle;
     }
 
     [[nodiscard]] bool outline() const {
@@ -124,195 +128,195 @@ struct CutPreviewEdgeAccumulator {
     }
 };
 
-float signedDistanceToPlane(QVec3 point, QVec3 planePoint, QVec3 planeNormal) {
-    return dot(point - planePoint, planeNormal);
+float signed_distance_to_plane(QVec3 point, QVec3 plane_point,
+                               QVec3 plane_normal) {
+  return dot(point - plane_point, plane_normal);
 }
 
-float previewMeshBoundsMagnitude(const CutPreviewOverlayProjection::PreviewTriangleMesh& mesh) {
-    if (mesh.vertices.empty()) {
-        return 0.0f;
-    }
+float preview_mesh_bounds_magnitude(
+    const CutPreviewOverlayProjection::PreviewTriangleMesh &mesh) {
+  if (mesh.vertices.empty()) {
+    return 0.0f;
+  }
 
-    QVec3 min = mesh.vertices.front();
-    QVec3 max = mesh.vertices.front();
-    for (const QVec3 vertex : mesh.vertices) {
-        min.x = std::min(min.x, vertex.x);
-        min.y = std::min(min.y, vertex.y);
-        min.z = std::min(min.z, vertex.z);
-        max.x = std::max(max.x, vertex.x);
-        max.y = std::max(max.y, vertex.y);
-        max.z = std::max(max.z, vertex.z);
-    }
-    return length(max - min);
+  QVec3 min = mesh.vertices.front();
+  QVec3 max = mesh.vertices.front();
+  for (const QVec3 vertex : mesh.vertices) {
+    min.x = std::min(min.x, vertex.x);
+    min.y = std::min(min.y, vertex.y);
+    min.z = std::min(min.z, vertex.z);
+    max.x = std::max(max.x, vertex.x);
+    max.y = std::max(max.y, vertex.y);
+    max.z = std::max(max.z, vertex.z);
+  }
+  return length(max - min);
 }
 
-void addCutPreviewEdge(
-        std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator>& edges,
-        QVec3 a,
-        QVec3 b,
-        bool onPlane,
-        bool capTriangle,
-        QVec3 triangleNormal) {
-    if (length(a - b) <= 0.000001f) {
-        return;
-    }
-    edges[CutPreviewEdgeKey(a, b)].add(a, b, onPlane, capTriangle, triangleNormal);
+void add_cut_preview_edge(
+    std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> &edges, QVec3 a,
+    QVec3 b, bool on_plane, bool cap_triangle, QVec3 triangle_normal) {
+  if (length(a - b) <= 0.000001f) {
+    return;
+  }
+  edges[CutPreviewEdgeKey(a, b)].add(a, b, on_plane, cap_triangle,
+                                     triangle_normal);
 }
 
-std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> collectPreviewEdges(
-        const CutPreviewOverlayProjection::PreviewTriangleMesh& mesh,
-        std::optional<QVec3> planePoint,
-        QVec3 planeNormal) {
-    std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> edges;
-    if (mesh.empty()) {
-        return edges;
-    }
-
-    const bool hasPlane = planePoint.has_value() && length(planeNormal) > 0.000001f;
-    const QVec3 normalizedPlaneNormal = hasPlane ? normalize(planeNormal) : QVec3{};
-    const float planeScale = std::max(1.0f, previewMeshBoundsMagnitude(mesh));
-    const float planeEpsilon = std::max(kCutPreviewPlaneQuantization * 8.0f, planeScale * 0.00002f);
-
-    for (std::size_t index = 0; index + 2U < mesh.indices.size(); index += 3U) {
-        const std::uint32_t ia = mesh.indices[index];
-        const std::uint32_t ib = mesh.indices[index + 1U];
-        const std::uint32_t ic = mesh.indices[index + 2U];
-        if (ia >= mesh.vertices.size() || ib >= mesh.vertices.size() || ic >= mesh.vertices.size()) {
-            continue;
-        }
-
-        const QVec3 a = mesh.vertices[ia];
-        const QVec3 b = mesh.vertices[ib];
-        const QVec3 c = mesh.vertices[ic];
-        QVec3 triangleNormal = cross(b - a, c - a);
-        if (length(triangleNormal) <= 0.000001f) {
-            continue;
-        }
-        triangleNormal = normalize(triangleNormal);
-
-        float da = 1.0f;
-        float db = 1.0f;
-        float dc = 1.0f;
-        bool capTriangle = false;
-        if (hasPlane) {
-            da = signedDistanceToPlane(a, *planePoint, normalizedPlaneNormal);
-            db = signedDistanceToPlane(b, *planePoint, normalizedPlaneNormal);
-            dc = signedDistanceToPlane(c, *planePoint, normalizedPlaneNormal);
-            capTriangle = std::fabs(da) <= planeEpsilon &&
-                    std::fabs(db) <= planeEpsilon &&
-                    std::fabs(dc) <= planeEpsilon;
-        }
-
-        addCutPreviewEdge(edges, a, b, hasPlane && std::fabs(da) <= planeEpsilon && std::fabs(db) <= planeEpsilon, capTriangle, triangleNormal);
-        addCutPreviewEdge(edges, b, c, hasPlane && std::fabs(db) <= planeEpsilon && std::fabs(dc) <= planeEpsilon, capTriangle, triangleNormal);
-        addCutPreviewEdge(edges, c, a, hasPlane && std::fabs(dc) <= planeEpsilon && std::fabs(da) <= planeEpsilon, capTriangle, triangleNormal);
-    }
+std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> collect_preview_edges(
+    const CutPreviewOverlayProjection::PreviewTriangleMesh &mesh,
+    std::optional<QVec3> plane_point, QVec3 plane_normal) {
+  std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> edges;
+  if (mesh.empty()) {
     return edges;
+  }
+
+  const bool has_plane =
+      plane_point.has_value() && length(plane_normal) > 0.000001f;
+  const QVec3 normalized_plane_normal =
+      has_plane ? normalize(plane_normal) : QVec3{};
+  const float plane_scale = std::max(1.0f, preview_mesh_bounds_magnitude(mesh));
+  const float plane_epsilon =
+      std::max(kCutPreviewPlaneQuantization * 8.0f, plane_scale * 0.00002f);
+
+  for (std::size_t index = 0; index + 2U < mesh.indices.size(); index += 3U) {
+    const std::uint32_t ia = mesh.indices[index];
+    const std::uint32_t ib = mesh.indices[index + 1U];
+    const std::uint32_t ic = mesh.indices[index + 2U];
+    if (ia >= mesh.vertices.size() || ib >= mesh.vertices.size() ||
+        ic >= mesh.vertices.size()) {
+      continue;
+    }
+
+    const QVec3 a = mesh.vertices[ia];
+    const QVec3 b = mesh.vertices[ib];
+    const QVec3 c = mesh.vertices[ic];
+    QVec3 triangle_normal = cross(b - a, c - a);
+    if (length(triangle_normal) <= 0.000001f) {
+      continue;
+    }
+    triangle_normal = normalize(triangle_normal);
+
+    float da = 1.0f;
+    float db = 1.0f;
+    float dc = 1.0f;
+    bool cap_triangle = false;
+    if (has_plane) {
+      da = signed_distance_to_plane(a, *plane_point, normalized_plane_normal);
+      db = signed_distance_to_plane(b, *plane_point, normalized_plane_normal);
+      dc = signed_distance_to_plane(c, *plane_point, normalized_plane_normal);
+      cap_triangle = std::fabs(da) <= plane_epsilon &&
+                     std::fabs(db) <= plane_epsilon &&
+                     std::fabs(dc) <= plane_epsilon;
+    }
+
+    add_cut_preview_edge(edges, a, b,
+                         has_plane && std::fabs(da) <= plane_epsilon &&
+                             std::fabs(db) <= plane_epsilon,
+                         cap_triangle, triangle_normal);
+    add_cut_preview_edge(edges, b, c,
+                         has_plane && std::fabs(db) <= plane_epsilon &&
+                             std::fabs(dc) <= plane_epsilon,
+                         cap_triangle, triangle_normal);
+    add_cut_preview_edge(edges, c, a,
+                         has_plane && std::fabs(dc) <= plane_epsilon &&
+                             std::fabs(da) <= plane_epsilon,
+                         cap_triangle, triangle_normal);
+  }
+  return edges;
 }
 
-void appendPreviewLine(
-        ViewportOverlayFrame& frame,
-        ViewportOverlayLayer layer,
-        QVec3 start,
-        QVec3 end,
-        std::uint32_t color,
-        float widthPixels,
-        ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::ToolPreviewLine) {
-    if (length(start - end) <= 0.000001f) {
-        return;
-    }
-    frame.lines.push_back({
-            .layer = layer,
-            .start = start,
-            .end = end,
-            .color = color,
-            .widthPixels = widthPixels,
-            .styleRole = styleRole,
-            .source = ViewportOverlaySource::Tool,
-    });
+void append_preview_line(ViewportOverlayFrame &frame,
+                         ViewportOverlayLayer layer, QVec3 start, QVec3 end,
+                         std::uint32_t color, float width_pixels,
+                         ViewportOverlayStyleRole style_role =
+                             ViewportOverlayStyleRole::ToolPreviewLine) {
+  if (length(start - end) <= 0.000001f) {
+    return;
+  }
+  frame.lines.push_back({
+      .layer = layer,
+      .start = start,
+      .end = end,
+      .color = color,
+      .width_pixels = width_pixels,
+      .style_role = style_role,
+      .source = ViewportOverlaySource::Tool,
+  });
 }
 
 } // namespace
 
-CutPreviewOverlayProjection::PreviewTriangleMesh CutPreviewOverlayProjection::meshFromDocuments(
-        const std::vector<quader_poly::Document>& documents) {
-    PreviewTriangleMesh mesh;
-    for (const quader_poly::Document& document : documents) {
-        const quader_poly::CompiledMesh compiled = quader_poly::compile_document(document);
-        const std::uint32_t vertexOffset = static_cast<std::uint32_t>(mesh.vertices.size());
-        mesh.vertices.reserve(mesh.vertices.size() + compiled.vertices.size());
-        mesh.indices.reserve(mesh.indices.size() + compiled.indices.size());
-        for (const quader_poly::CompiledVertex& vertex : compiled.vertices) {
-            mesh.vertices.push_back(vertex.position);
-        }
-        for (const std::uint32_t index : compiled.indices) {
-            if (index < compiled.vertices.size()) {
-                mesh.indices.push_back(vertexOffset + index);
-            }
-        }
+CutPreviewOverlayProjection::PreviewTriangleMesh
+CutPreviewOverlayProjection::mesh_from_documents(
+    const std::vector<quader_poly::Document> &documents) {
+  PreviewTriangleMesh mesh;
+  for (const quader_poly::Document &document : documents) {
+    const quader_poly::CompiledMesh compiled =
+        quader_poly::compile_document(document);
+    const std::uint32_t vertex_offset =
+        static_cast<std::uint32_t>(mesh.vertices.size());
+    mesh.vertices.reserve(mesh.vertices.size() + compiled.vertices.size());
+    mesh.indices.reserve(mesh.indices.size() + compiled.indices.size());
+    for (const quader_poly::CompiledVertex &vertex : compiled.vertices) {
+      mesh.vertices.push_back(vertex.position);
     }
-    return mesh;
+    for (const std::uint32_t index : compiled.indices) {
+      if (index < compiled.vertices.size()) {
+        mesh.indices.push_back(vertex_offset + index);
+      }
+    }
+  }
+  return mesh;
 }
 
-void CutPreviewOverlayProjection::appendMeshFill(
-        ViewportOverlayFrame& frame,
-        const PreviewTriangleMesh& mesh,
-        std::uint32_t color,
-        ViewportOverlayStyleRole styleRole) {
-    if (mesh.empty()) {
-        return;
-    }
+void CutPreviewOverlayProjection::append_mesh_fill(
+    ViewportOverlayFrame &frame, const PreviewTriangleMesh &mesh,
+    std::uint32_t color, ViewportOverlayStyleRole style_role) {
+  if (mesh.empty()) {
+    return;
+  }
 
-    for (std::size_t index = 0; index + 2U < mesh.indices.size(); index += 3U) {
-        const std::uint32_t ia = mesh.indices[index];
-        const std::uint32_t ib = mesh.indices[index + 1U];
-        const std::uint32_t ic = mesh.indices[index + 2U];
-        if (ia >= mesh.vertices.size() || ib >= mesh.vertices.size() || ic >= mesh.vertices.size()) {
-            continue;
-        }
-        frame.triangles.push_back({
-                .layer = ViewportOverlayLayer::ToolPreviewFill,
-                .a = mesh.vertices[ia],
-                .b = mesh.vertices[ib],
-                .c = mesh.vertices[ic],
-                .color = color,
-                .styleRole = styleRole,
-                .source = ViewportOverlaySource::Tool,
-        });
+  for (std::size_t index = 0; index + 2U < mesh.indices.size(); index += 3U) {
+    const std::uint32_t ia = mesh.indices[index];
+    const std::uint32_t ib = mesh.indices[index + 1U];
+    const std::uint32_t ic = mesh.indices[index + 2U];
+    if (ia >= mesh.vertices.size() || ib >= mesh.vertices.size() ||
+        ic >= mesh.vertices.size()) {
+      continue;
     }
+    frame.triangles.push_back({
+        .layer = ViewportOverlayLayer::ToolPreviewFill,
+        .a = mesh.vertices[ia],
+        .b = mesh.vertices[ib],
+        .c = mesh.vertices[ic],
+        .color = color,
+        .style_role = style_role,
+        .source = ViewportOverlaySource::Tool,
+    });
+  }
 }
 
-void CutPreviewOverlayProjection::appendResultLines(
-        ViewportOverlayFrame& frame,
-        const PreviewTriangleMesh& mesh,
-        QVec3 planePoint,
-        QVec3 planeNormal,
-        std::uint32_t outlineColor) {
-    const std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> edges =
-            collectPreviewEdges(mesh, planePoint, planeNormal);
-    for (const auto& [key, edge] : edges) {
-        (void)key;
-        if (edge.outline()) {
-            appendPreviewLine(frame,
-                    ViewportOverlayLayer::ToolPreviewLine,
-                    edge.a,
-                    edge.b,
-                    outlineColor,
-                    1.15f,
-                    outlineColor == kOverlayCutPreviewKeepBothOutlineColor
-                            ? ViewportOverlayStyleRole::CutPreviewKeepBothOutline
-                            : ViewportOverlayStyleRole::CutPreviewDiscardOutline);
-        }
-        if (edge.seam()) {
-            appendPreviewLine(frame,
-                    ViewportOverlayLayer::ToolPreviewSeam,
-                    edge.a,
-                    edge.b,
-                    kOverlayCutPreviewSeamColor,
-                    2.25f,
-                    ViewportOverlayStyleRole::CutPreviewSeam);
-        }
+void CutPreviewOverlayProjection::append_result_lines(
+    ViewportOverlayFrame &frame, const PreviewTriangleMesh &mesh,
+    QVec3 plane_point, QVec3 plane_normal, std::uint32_t outline_color) {
+  const std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> edges =
+      collect_preview_edges(mesh, plane_point, plane_normal);
+  for (const auto &[key, edge] : edges) {
+    (void)key;
+    if (edge.outline()) {
+      append_preview_line(
+          frame, ViewportOverlayLayer::ToolPreviewLine, edge.a, edge.b,
+          outline_color, 1.15f,
+          outline_color == kOverlayCutPreviewKeepBothOutlineColor
+              ? ViewportOverlayStyleRole::CutPreviewKeepBothOutline
+              : ViewportOverlayStyleRole::CutPreviewDiscardOutline);
     }
+    if (edge.seam()) {
+      append_preview_line(frame, ViewportOverlayLayer::ToolPreviewSeam, edge.a,
+                          edge.b, kOverlayCutPreviewSeamColor, 2.25f,
+                          ViewportOverlayStyleRole::CutPreviewSeam);
+    }
+  }
 }
 
 } // namespace quader

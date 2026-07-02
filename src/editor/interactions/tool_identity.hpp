@@ -14,42 +14,42 @@ namespace quader_editor_core {
  * Enumerates TransformAxis values used by the modeling layer.
  */
 enum class TransformAxis {
-	none,
-	x,
-	y,
-	z,
-	xy,
-	xz,
-	yz,
-	all,
+  None,
+  X,
+  Y,
+  Z,
+  Xy,
+  Xz,
+  Yz,
+  All,
 };
 
 /**
  * Enumerates ViewportInteractionTool values used by the modeling layer.
  */
 enum class ViewportInteractionTool {
-	select,
-	move,
-	extend,
-	extrude,
-	rotate,
-	scale,
-	box,
-	insert_edge_loop,
-	knife,
-	cut,
-	mirror,
-	poly,
-	unknown,
+  Select,
+  Move,
+  Extend,
+  Extrude,
+  Rotate,
+  Scale,
+  Box,
+  InsertEdgeLoop,
+  Knife,
+  Cut,
+  Mirror,
+  Poly,
+  Unknown,
 };
 
 /**
  * Enumerates ViewAxis values used by the modeling layer.
  */
 enum class ViewAxis {
-	x,
-	y,
-	z,
+  X,
+  Y,
+  Z,
 };
 
 TransformAxis axis_from_id(std::string_view id);

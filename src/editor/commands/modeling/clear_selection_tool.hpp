@@ -16,20 +16,21 @@ namespace quader {
 class ClearSelectionTool final : public CustomInstantCommandTool {
 public:
     [[nodiscard]] CommandToolDescriptor descriptor() const override {
-        return {
-                .id = "clear_selection",
-                .operationId = "clear_selection",
-                .label = "Clear Selection",
-                .kind = CommandToolKind::Instant,
-                .previewKind = ModelingActionPreviewKind::None,
-                .rebuildsMeshOnSuccess = false,
-                .publicCommandId = "edit.clear_selection",
-                .registersPublicCommand = false,
-        };
+      return {
+          .id = "clear_selection",
+          .operation_id = "clear_selection",
+          .label = "Clear Selection",
+          .kind = CommandToolKind::Instant,
+          .preview_kind = ModelingActionPreviewKind::None,
+          .rebuilds_mesh_on_success = false,
+          .public_command_id = "edit.clear_selection",
+          .registers_public_command = false,
+      };
     }
 
 private:
-    ModelingCommandResult executeCustomCommand(ModelingCommandExecutionContext& context) const override;
+  ModelingCommandResult execute_custom_command(
+      ModelingCommandExecutionContext &context) const override;
 };
 
 } // namespace quader

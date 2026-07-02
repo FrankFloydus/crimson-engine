@@ -66,8 +66,10 @@ OperationResult apply_uv_to_selection(
         return { false, "Select a face, edge, vertex, or object first." };
     }
 
-    const float safe_shift_world_amount = shift_world_amount > epsilon ? shift_world_amount : 1.0F;
-    const float shift_uv_amount = safe_shift_world_amount * generated_uv_tiles_per_world_unit;
+    const float safe_shift_world_amount =
+        shift_world_amount > kEpsilon ? shift_world_amount : 1.0F;
+    const float shift_uv_amount =
+        safe_shift_world_amount * kGeneratedUvTilesPerWorldUnit;
     bool changed = false;
     for (const ElementId face_id : face_ids) {
         Face* face = find_face(document, face_id);

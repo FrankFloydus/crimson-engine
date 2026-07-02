@@ -107,13 +107,14 @@ TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopPreviewClearsWhenS
 	EXPECT_TRUE(state.edge == quader_poly::make_edge(edge.a, edge.b));
 	EXPECT_TRUE(state.preview_lines.empty());
 	EXPECT_TRUE(hover.object_id == 3);
-	EXPECT_TRUE(hover.kind == quader_editor_core::SelectionHoverKind::edge);
+        EXPECT_TRUE(hover.kind == quader_editor_core::SelectionHoverKind::Edge);
 }
 
 TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopResetCanPreserveActiveOwnershipThroughRuntimeHelper) {
 	quader_editor_core::EditorRuntimeState runtime;
-	runtime.active_tool = quader_editor_core::ViewportInteractionTool::insert_edge_loop;
-	runtime.insert_edge_loop.active = true;
+        runtime.active_tool =
+            quader_editor_core::ViewportInteractionTool::InsertEdgeLoop;
+        runtime.insert_edge_loop.active = true;
 	runtime.insert_edge_loop.dragging = true;
 	runtime.insert_edge_loop.object_id = 3;
 	runtime.insert_edge_loop.preview_lines.push_back({});
@@ -136,21 +137,26 @@ TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopRuntimeHelpersPubl
 	runtime.state().knife.active = true;
 
 	quader_editor_core::EditorRuntimeToolActivationRequest request;
-	request.requested_tool = quader_editor_core::ViewportInteractionTool::insert_edge_loop;
-	request.selection_mode = quader_editor_core::SelectionMode::object;
-	const quader_editor_core::EditorRuntimeToolActivationResult result = runtime.activate_tool(request);
+        request.requested_tool =
+            quader_editor_core::ViewportInteractionTool::InsertEdgeLoop;
+        request.selection_mode = quader_editor_core::SelectionMode::Object;
+        const quader_editor_core::EditorRuntimeToolActivationResult result = runtime.activate_tool(request);
 
 	EXPECT_TRUE(result.applied);
-	EXPECT_TRUE(result.plan.selection_mode == quader_editor_core::SelectionMode::edge);
-	EXPECT_TRUE(result.plan.selection_mode_changed);
-	EXPECT_TRUE(runtime.state().active_tool == quader_editor_core::ViewportInteractionTool::insert_edge_loop);
-	EXPECT_TRUE(runtime.state().insert_edge_loop.active);
+        EXPECT_TRUE(result.plan.selection_mode ==
+                    quader_editor_core::SelectionMode::Edge);
+        EXPECT_TRUE(result.plan.selection_mode_changed);
+        EXPECT_TRUE(
+            runtime.state().active_tool ==
+            quader_editor_core::ViewportInteractionTool::InsertEdgeLoop);
+        EXPECT_TRUE(runtime.state().insert_edge_loop.active);
 	EXPECT_FALSE(runtime.state().knife.active);
 	EXPECT_TRUE(runtime.state().hover.candidate_object_id == 42);
 	EXPECT_FALSE(quader_editor_core::editor_runtime_status(runtime.state()).box_active);
-	EXPECT_TRUE(runtime.state().box_grid_size == quader_editor_core::default_editor_runtime_box_grid_size);
+        EXPECT_TRUE(runtime.state().box_grid_size ==
+                    quader_editor_core::kDefaultEditorRuntimeBoxGridSize);
 
-	quader_editor_core::InsertEdgeLoopToolState edge_loop;
+        quader_editor_core::InsertEdgeLoopToolState edge_loop;
 	edge_loop.active = true;
 	edge_loop.dragging = true;
 	edge_loop.object_id = 13;

@@ -30,27 +30,26 @@ public:
     MaterialBindingService(MaterialBindingService&&) = delete;
     MaterialBindingService& operator=(MaterialBindingService&&) = delete;
 
-    void initialize(
-            filament::Material& shadedMeshMaterial,
-            filament::Material& renderedMeshMaterial,
-            TextureBindingService& textureBinding);
+    void initialize(filament::Material &shaded_mesh_material,
+                    filament::Material &rendered_mesh_material,
+                    TextureBindingService &texture_binding);
     void shutdown();
 
     bool initialized() const {
-        return shadedMeshMaterial_ != nullptr && renderedMeshMaterial_ != nullptr && textureBinding_ != nullptr;
+      return shaded_mesh_material_ != nullptr &&
+             rendered_mesh_material_ != nullptr && texture_binding_ != nullptr;
     }
 
-    std::uint64_t materialRevision(const AssetRegistry& assets, const MaterialComponent* material) const;
-    filament::MaterialInstance* createMeshMaterialInstance(
-            const AssetRegistry& assets,
-            const MaterialDocument* material,
-            bool doubleSided,
-            bool editorUnlit = false) const;
+    std::uint64_t material_revision(const AssetRegistry &assets,
+                                    const MaterialComponent *material) const;
+    filament::MaterialInstance *create_mesh_material_instance(
+        const AssetRegistry &assets, const MaterialDocument *material,
+        bool double_sided, bool editor_unlit = false) const;
 
-private:
-    filament::Material* shadedMeshMaterial_ = nullptr;
-    filament::Material* renderedMeshMaterial_ = nullptr;
-    TextureBindingService* textureBinding_ = nullptr;
+  private:
+    filament::Material *shaded_mesh_material_ = nullptr;
+    filament::Material *rendered_mesh_material_ = nullptr;
+    TextureBindingService *texture_binding_ = nullptr;
 };
 
 } // namespace quader

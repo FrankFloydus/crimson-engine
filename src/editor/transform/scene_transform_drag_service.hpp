@@ -27,10 +27,10 @@ class AssetRegistry;
  * Stores a captured scene transform target for a viewport transform drag.
  */
 struct SceneTransformDragTarget {
-    EntityId entity = InvalidEntityId;
-    TransformComponent transform;
-    QVec3 localPivot = {};
-    QMat4 worldTransform;
+  EntityId entity = kInvalidEntityId;
+  TransformComponent transform;
+  QVec3 local_pivot = {};
+  QMat4 world_transform;
 };
 
 /**
@@ -46,55 +46,47 @@ public:
     SceneTransformDragService(SceneTransformDragService&&) noexcept;
     SceneTransformDragService& operator=(SceneTransformDragService&&) noexcept;
 
-    [[nodiscard]] bool begin(
-            SceneDocument& document,
-            QVec3 worldPivot,
-            bool startPreview,
-            std::string label = "Transform Selection");
-    [[nodiscard]] bool previewActive() const;
+    [[nodiscard]] bool begin(SceneDocument &document, QVec3 world_pivot,
+                             bool start_preview,
+                             std::string label = "Transform Selection");
+    [[nodiscard]] bool preview_active() const;
     [[nodiscard]] const std::vector<SceneTransformDragTarget>& targets() const;
 
-    DocumentCommandResult previewTransform(EntityId entity, TransformComponent transform);
-    DocumentCommandResult previewWorldTransformDelta(SceneDocument& document, const QMat4& worldTransformDelta);
+    DocumentCommandResult preview_transform(EntityId entity,
+                                            TransformComponent transform);
+    DocumentCommandResult
+    preview_world_transform_delta(SceneDocument &document,
+                                  const QMat4 &world_transform_delta);
     DocumentCommandResult accept();
     DocumentCommandResult commit(EditorHistoryService& history);
     QuaderApiVoidResult commit(QuaderEditorApi& editor);
     DocumentCommandResult cancel();
     void reset();
 
-    QuaderApiVoidResult moveSelectedToPrimaryPosition(
-            QuaderEditorApi& editor,
-            SceneDocument& document,
-            EntityId primary,
-            QVec3 nextPrimaryPosition,
-            std::string label = "Transform Selection");
-    QuaderApiVoidResult rotateSelectedToPrimaryEulerAroundSelectionPivot(
-            QuaderEditorApi& editor,
-            SceneDocument& document,
-            const AssetRegistry& assets,
-            EntityId primary,
-            QVec3 nextPrimaryEulerRadians,
-            std::string label = "Transform Selection");
-    QuaderApiVoidResult scaleSelectedToPrimaryScaleAroundSelectionPivot(
-            QuaderEditorApi& editor,
-            SceneDocument& document,
-            const AssetRegistry& assets,
-            EntityId primary,
-            QVec3 nextPrimaryScale,
-            std::string label = "Transform Selection");
-    DocumentCommandResult moveSelectedByWorldDelta(
-            DocumentCommandService& documentCommands,
-            SceneDocument& document,
-            QVec3 worldDelta,
-            std::string label = "Move Selection");
-    DocumentCommandResult transformSelectedByWorldDelta(
-            DocumentCommandService& documentCommands,
-            SceneDocument& document,
-            const QMat4& worldTransformDelta,
-            std::string label = "Transform Selection");
+    QuaderApiVoidResult move_selected_to_primary_position(
+        QuaderEditorApi &editor, SceneDocument &document, EntityId primary,
+        QVec3 next_primary_position, std::string label = "Transform Selection");
+    QuaderApiVoidResult rotate_selected_to_primary_euler_around_selection_pivot(
+        QuaderEditorApi &editor, SceneDocument &document,
+        const AssetRegistry &assets, EntityId primary,
+        QVec3 next_primary_euler_radians,
+        std::string label = "Transform Selection");
+    QuaderApiVoidResult scale_selected_to_primary_scale_around_selection_pivot(
+        QuaderEditorApi &editor, SceneDocument &document,
+        const AssetRegistry &assets, EntityId primary, QVec3 next_primary_scale,
+        std::string label = "Transform Selection");
+    DocumentCommandResult
+    move_selected_by_world_delta(DocumentCommandService &document_commands,
+                                 SceneDocument &document, QVec3 world_delta,
+                                 std::string label = "Move Selection");
+    DocumentCommandResult transform_selected_by_world_delta(
+        DocumentCommandService &document_commands, SceneDocument &document,
+        const QMat4 &world_transform_delta,
+        std::string label = "Transform Selection");
 
-private:
-    [[nodiscard]] bool captureTargets(SceneDocument& document, QVec3 worldPivot);
+  private:
+    [[nodiscard]] bool capture_targets(SceneDocument &document,
+                                       QVec3 world_pivot);
 
     std::optional<SceneTransformPreviewTransaction> preview_;
     std::vector<SceneTransformDragTarget> targets_;

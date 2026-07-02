@@ -15,23 +15,23 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBou
 	source_face->material_slot = 7;
 	ensure_face_uvs(fixture.document);
 	const ElementId bottom_right = fixture.bottom_right;
-	const KnifePointTarget previous {
-		KnifePointTargetKind::existing_edge,
-		invalid_element_id,
-		make_edge(fixture.bottom_left, fixture.bottom_right),
-		0.25F,
-		fixture.face,
-		{},
-	};
-	const KnifePointTarget current {
-		KnifePointTargetKind::existing_edge,
-		invalid_element_id,
-		make_edge(fixture.top_right, fixture.top_left),
-		0.75F,
-		fixture.face,
-		{},
-	};
-	const KnifeSegmentPreview preview = build_knife_segment_preview(fixture.document, previous, current);
+        const KnifePointTarget previous{
+            KnifePointTargetKind::ExistingEdge,
+            kInvalidElementId,
+            make_edge(fixture.bottom_left, fixture.bottom_right),
+            0.25F,
+            fixture.face,
+            {},
+        };
+        const KnifePointTarget current{
+            KnifePointTargetKind::ExistingEdge,
+            kInvalidElementId,
+            make_edge(fixture.top_right, fixture.top_left),
+            0.75F,
+            fixture.face,
+            {},
+        };
+        const KnifeSegmentPreview preview = build_knife_segment_preview(fixture.document, previous, current);
 	EXPECT_TRUE(preview.valid);
 	EXPECT_TRUE(preview.overlay.lines.size() == 1U);
 	EXPECT_TRUE(qdr_test::vec_nearly_equal(preview.overlay.lines.front().start, { -0.5F, -1.0F, 0.0F }));
@@ -44,11 +44,11 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBou
 	EXPECT_TRUE(result.changed);
 	EXPECT_TRUE(fixture.document.vertices.size() == vertex_count_before + 2U);
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
-	EXPECT_TRUE(selection.mode == SelectionMode::vertex);
-	EXPECT_TRUE(selection.vertices.size() == 2U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
+        EXPECT_TRUE(selection.vertices.size() == 2U);
 	EXPECT_TRUE(selection.has_active);
-	EXPECT_TRUE(selection.active_kind == ElementKind::vertex);
-	EXPECT_TRUE(selection.active_vertex == selection.vertices.back());
+        EXPECT_TRUE(selection.active_kind == ElementKind::Vertex);
+        EXPECT_TRUE(selection.active_vertex == selection.vertices.back());
 	EXPECT_TRUE(qdr_test::document_has_edge(fixture.document, make_edge(selection.vertices[0], selection.vertices[1])));
 	EXPECT_TRUE(qdr_test::edge_positions_match_unordered(fixture.document, make_edge(selection.vertices[0], selection.vertices[1]), { -0.5F, -1.0F, 0.0F }, { -0.5F, 1.0F, 0.0F }));
 	for (const Face& face : fixture.document.faces) {
@@ -57,23 +57,23 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBou
 	}
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 
-	const KnifePointTarget inserted_previous {
-		KnifePointTargetKind::inserted_vertex,
-		selection.active_vertex,
-		{},
-		0.5F,
-		invalid_element_id,
-		{},
-	};
-	const KnifePointTarget existing_vertex_current {
-		KnifePointTargetKind::existing_vertex,
-		bottom_right,
-		{},
-		0.5F,
-		invalid_element_id,
-		{},
-	};
-	const OperationResult continued_result = knife_segment(fixture.document, selection, inserted_previous, existing_vertex_current);
+        const KnifePointTarget inserted_previous{
+            KnifePointTargetKind::InsertedVertex,
+            selection.active_vertex,
+            {},
+            0.5F,
+            kInvalidElementId,
+            {},
+        };
+        const KnifePointTarget existing_vertex_current{
+            KnifePointTargetKind::ExistingVertex,
+            bottom_right,
+            {},
+            0.5F,
+            kInvalidElementId,
+            {},
+        };
+        const OperationResult continued_result = knife_segment(fixture.document, selection, inserted_previous, existing_vertex_current);
 	EXPECT_TRUE(continued_result.changed);
 	EXPECT_TRUE(fixture.document.faces.size() == 3U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
@@ -84,9 +84,19 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentRejectsTwoTargetsOnTheSa
 	const std::size_t vertices_before = fixture.document.vertices.size();
 	const std::size_t faces_before = fixture.document.faces.size();
 	const Edge edge = make_edge(fixture.bottom_left, fixture.bottom_right);
-	const KnifePointTarget previous { KnifePointTargetKind::existing_edge, invalid_element_id, edge, 0.25F, fixture.face, {} };
-	const KnifePointTarget current { KnifePointTargetKind::existing_edge, invalid_element_id, edge, 0.75F, fixture.face, {} };
-	Selection selection;
+        const KnifePointTarget previous{KnifePointTargetKind::ExistingEdge,
+                                        kInvalidElementId,
+                                        edge,
+                                        0.25F,
+                                        fixture.face,
+                                        {}};
+        const KnifePointTarget current{KnifePointTargetKind::ExistingEdge,
+                                       kInvalidElementId,
+                                       edge,
+                                       0.75F,
+                                       fixture.face,
+                                       {}};
+        Selection selection;
 
 	const OperationResult result = knife_segment(fixture.document, selection, previous, current);
 

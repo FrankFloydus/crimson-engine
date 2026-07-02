@@ -19,8 +19,8 @@ using QPlane3 = quader_geometry::QPlane3<float>;
  * Represents a Hull Vertex value used by the polygon document and mesh editing core.
  */
 struct HullVertex {
-    ElementId id = invalid_element_id;
-    quader::QVec3 position;
+  ElementId id = kInvalidElementId;
+  quader::QVec3 position;
 };
 
 /**

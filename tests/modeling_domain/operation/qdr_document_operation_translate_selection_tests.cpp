@@ -55,9 +55,9 @@ TEST(QdrDocumentOperationTranslateSelectionTests, TranslateSelectionMovesOnlyVer
 	{
 		qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 		Selection selection;
-		selection.mode = SelectionMode::vertex;
+                selection.mode = SelectionMode::Vertex;
 
-		const OperationResult result = translate_selection(fixture.document, selection, { 1.0F, 0.0F, 0.0F });
+                const OperationResult result = translate_selection(fixture.document, selection, { 1.0F, 0.0F, 0.0F });
 
 		EXPECT_FALSE(result.changed);
 		EXPECT_TRUE(result.message == "No polygon elements are selected.");

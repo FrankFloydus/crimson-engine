@@ -19,14 +19,16 @@ public:
 
 protected:
     const char* title() const override { return "Tool Settings"; }
-    const char* titleKey() const override { return "ui.panel.tool_settings"; }
-    const char* titleStableId() const override { return "floating.tool_settings"; }
-    ImVec2 defaultSize() const override { return {340.0f, 220.0f}; }
-    void beforeBegin(UIContext& context, bool& open) override;
-    void drawContent(UIContext& context, bool& open) override;
+    const char *title_key() const override { return "ui.panel.tool_settings"; }
+    const char *title_stable_id() const override {
+      return "floating.tool_settings";
+    }
+    ImVec2 default_size() const override { return {340.0f, 220.0f}; }
+    void before_begin(UIContext &context, bool &open) override;
+    void draw_content(UIContext &context, bool &open) override;
 
-private:
-    bool shouldOpenForActiveTarget_ = false;
+  private:
+    bool should_open_for_active_target_ = false;
 };
 
 } // namespace quader

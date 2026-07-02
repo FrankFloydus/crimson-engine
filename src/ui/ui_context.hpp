@@ -31,47 +31,47 @@ struct UIStyleTokens;
  */
 struct UIContext {
     QuaderEditorApi& editor;
-    SceneRenderBridge& renderBridge;
+    SceneRenderBridge &render_bridge;
     SceneDocument& document;
     AssetRegistry& assets;
     ModelingSessionService& modeling;
     EditorSelectionService& selection;
-    AssetId defaultMaterial = InvalidAssetId;
-    bool& quitRequested;
+    AssetId default_material = kInvalidAssetId;
+    bool &quit_requested;
     const UIStyleTokens& style;
     const UIIconSet& icons;
     LocalizationService& localization;
     UISettings& settings;
-    ViewportSettings& viewportSettings;
-    FrameTiming frameTiming = {};
-    RenderFramePerformanceStats renderPerformance = {};
-    QVec2 viewportRelativeMouseDelta = {};
-    bool viewportRenderResizeSuspended = false;
-    bool* viewportCursorCaptureRequested = nullptr;
-    QVec2* viewportCursorCapturePoint = nullptr;
-    UIPanelId focusedPanel = UIPanelId::Viewport;
-    UIPanelId previousFocusedPanel = UIPanelId::Viewport;
-    UIPanelId* focusedPanelStorage = nullptr;
-    bool* panelFocusChanged = nullptr;
-    bool* commandShortcutConsumed = nullptr;
-    bool* settingsChanged = nullptr;
+    ViewportSettings &viewport_settings;
+    FrameTiming frame_timing = {};
+    RenderFramePerformanceStats render_performance = {};
+    QVec2 viewport_relative_mouse_delta = {};
+    bool viewport_render_resize_suspended = false;
+    bool *viewport_cursor_capture_requested = nullptr;
+    QVec2 *viewport_cursor_capture_point = nullptr;
+    UIPanelId focused_panel = UIPanelId::Viewport;
+    UIPanelId previous_focused_panel = UIPanelId::Viewport;
+    UIPanelId *focused_panel_storage = nullptr;
+    bool *panel_focus_changed = nullptr;
+    bool *command_shortcut_consumed = nullptr;
+    bool *settings_changed = nullptr;
 
-    void requestPanelFocus(UIPanelId panel) const {
-        if (focusedPanelStorage == nullptr) {
-            return;
+    void request_panel_focus(UIPanelId panel) const {
+      if (focused_panel_storage == nullptr) {
+        return;
+      }
+      if (*focused_panel_storage != panel) {
+        *focused_panel_storage = panel;
+        if (panel_focus_changed != nullptr) {
+          *panel_focus_changed = true;
         }
-        if (*focusedPanelStorage != panel) {
-            *focusedPanelStorage = panel;
-            if (panelFocusChanged != nullptr) {
-                *panelFocusChanged = true;
-            }
-        }
+      }
     }
 
-    void markCommandShortcutConsumed() const {
-        if (commandShortcutConsumed != nullptr) {
-            *commandShortcutConsumed = true;
-        }
+    void mark_command_shortcut_consumed() const {
+      if (command_shortcut_consumed != nullptr) {
+        *command_shortcut_consumed = true;
+      }
     }
 };
 

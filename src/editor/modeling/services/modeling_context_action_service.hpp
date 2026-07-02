@@ -30,24 +30,22 @@ struct ModelingContextActionResolution {
  */
 class ModelingContextActionService {
 public:
-    [[nodiscard]] ModelingActionQuery effectiveActionQuery(ModelingActionQuery query, bool modalToolOwnsViewport) const;
-    [[nodiscard]] ModelingActionSet actionSet(
-            const ModelingSelectionSummary& summary,
-            ModelingActionQuery query,
-            bool modalToolOwnsViewport) const;
-    [[nodiscard]] std::vector<ModelingActionItem> actions(
-            const ModelingSelectionSummary& summary,
-            ModelingActionQuery query,
-            bool modalToolOwnsViewport) const;
-    [[nodiscard]] std::optional<ModelingActionItem> action(
-            const ModelingSelectionSummary& summary,
-            std::string_view actionId,
-            ModelingActionQuery query,
-            bool modalToolOwnsViewport) const;
-    [[nodiscard]] ModelingContextActionResolution resolveExecutableAction(
-            const ModelingSelectionSummary& summary,
-            std::string_view actionId,
-            bool modalToolOwnsViewport) const;
+  [[nodiscard]] ModelingActionQuery
+  effective_action_query(ModelingActionQuery query,
+                         bool modal_tool_owns_viewport) const;
+  [[nodiscard]] ModelingActionSet
+  action_set(const ModelingSelectionSummary &summary, ModelingActionQuery query,
+             bool modal_tool_owns_viewport) const;
+  [[nodiscard]] std::vector<ModelingActionItem>
+  actions(const ModelingSelectionSummary &summary, ModelingActionQuery query,
+          bool modal_tool_owns_viewport) const;
+  [[nodiscard]] std::optional<ModelingActionItem>
+  action(const ModelingSelectionSummary &summary, std::string_view action_id,
+         ModelingActionQuery query, bool modal_tool_owns_viewport) const;
+  [[nodiscard]] ModelingContextActionResolution
+  resolve_executable_action(const ModelingSelectionSummary &summary,
+                            std::string_view action_id,
+                            bool modal_tool_owns_viewport) const;
 };
 
 } // namespace quader

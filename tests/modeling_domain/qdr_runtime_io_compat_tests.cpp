@@ -39,7 +39,7 @@ void require_no_runtime_session_fields(std::string_view text)
 	require_test(text.find("\"redo\"") == std::string_view::npos, "compat writer should not serialize live runtime redo state");
 	require_test(text.find("\"undoStack\"") == std::string_view::npos, "compat writer should not serialize live runtime undo stacks");
 	require_test(text.find("\"redoStack\"") == std::string_view::npos, "compat writer should not serialize live runtime redo stacks");
-	require_test(text.find("\"activeTool\"") == std::string_view::npos, "compat writer should not serialize live runtime active tools");
+	require_test(text.find("\"active_tool\"") == std::string_view::npos, "compat writer should not serialize live runtime active tools");
 	require_test(text.find("\"active_tool\"") == std::string_view::npos, "compat writer should not serialize live runtime active tools");
 	require_test(text.find("\"preview\"") == std::string_view::npos, "compat writer should not serialize live runtime preview state");
 	require_test(text.find("\"previewTransaction\"") == std::string_view::npos, "compat writer should not serialize live runtime preview transactions");
@@ -101,7 +101,7 @@ std::string legacy_session_text_with_runtime_fields(const quader_editor_core::Se
 		"    \"history\": { \"undo\": [ { \"dirty\": true } ], \"redo\": [ { \"dirty\": true } ] },\n"
 		"    \"undoStack\": [ { \"dirty\": true } ],\n"
 		"    \"redoStack\": [ { \"dirty\": true } ],\n"
-		"    \"activeTool\": \"knife\",\n"
+		"    \"active_tool\": \"knife\",\n"
 		"    \"previewTransaction\": { \"active\": true, \"changed\": true, \"kind\": \"transform\" },\n"
 		"    \"preview\": { \"active\": true },\n"
 		"    \"transientState\": { \"hoverObjectId\": 99 },\n"
@@ -111,11 +111,11 @@ std::string legacy_session_text_with_runtime_fields(const quader_editor_core::Se
 quader_poly::Selection first_face_selection(const quader_poly::Document& document)
 {
 	quader_poly::Selection selection;
-	selection.mode = quader_poly::SelectionMode::face;
-	selection.faces.push_back(document.faces.front().id);
+        selection.mode = quader_poly::SelectionMode::Face;
+        selection.faces.push_back(document.faces.front().id);
 	selection.has_active = true;
-	selection.active_kind = quader_poly::ElementKind::face;
-	selection.active_face = document.faces.front().id;
+        selection.active_kind = quader_poly::ElementKind::Face;
+        selection.active_face = document.faces.front().id;
 	return selection;
 }
 
@@ -128,8 +128,8 @@ void session_compatibility_api_roundtrips_through_stable_dto()
 
 	quader_editor_core::SessionState state = session.state();
 	state.active_object_id = state.objects.front().id;
-	state.selection_mode = quader_editor_core::SelectionMode::face;
-	state.next_object_id = 12;
+        state.selection_mode = quader_editor_core::SelectionMode::Face;
+        state.next_object_id = 12;
 	state.content_revision = 42;
 	state.selection_revision = 17;
 	state.dirty = true;
@@ -137,36 +137,40 @@ void session_compatibility_api_roundtrips_through_stable_dto()
 	state.objects.front().selected = true;
 	quader_poly::ensure_face_uvs(state.objects.front().document);
 	state.objects.front().selection = first_face_selection(state.objects.front().document);
-	state.lights.push_back({
-		2,
-		"Fill",
-		true,
-		quader_editor_core::LightType::point,
-		true,
-		{ 2.0F, 3.0F, 4.0F },
-		{ 0.0F, -1.0F, 0.0F },
-		0xFFCCFFFFU,
-		2.5F,
-		quader_editor_core::LightShadowMode::hard,
-		0.5F,
-		0.02F,
-		0.3F,
-		0.1F,
-		15.0F,
-		30.0F,
-		10.0F,
-	});
-	state.next_light_id = 3;
+        state.lights.push_back({
+            2,
+            "Fill",
+            true,
+            quader_editor_core::LightType::Point,
+            true,
+            {2.0F, 3.0F, 4.0F},
+            {0.0F, -1.0F, 0.0F},
+            0xFFCCFFFFU,
+            2.5F,
+            quader_editor_core::LightShadowMode::Hard,
+            0.5F,
+            0.02F,
+            0.3F,
+            0.1F,
+            15.0F,
+            30.0F,
+            10.0F,
+        });
+        state.next_light_id = 3;
 	state.active_light_id = 2;
 
 	const quader_io::QdrDocument dto = quader_io::document_from_session_state(state);
-	require_test(dto.selection_mode == quader_io::QdrSelectionMode::face, "compat adapter should convert editor selection mode to DTO mode");
-	require_test(dto.objects.size() == state.objects.size(), "compat adapter should preserve objects");
+        require_test(
+            dto.selection_mode == quader_io::QdrSelectionMode::Face,
+            "compat adapter should convert editor selection mode to DTO mode");
+        require_test(dto.objects.size() == state.objects.size(), "compat adapter should preserve objects");
 	require_test(dto.objects.front().material_id == 5, "compat adapter should preserve material metadata");
-	require_test(dto.lights.size() == 1 && dto.lights.front().type == quader_io::QdrLightType::point,
-		"compat adapter should preserve light entities");
+        require_test(dto.lights.size() == 1 &&
+                         dto.lights.front().type ==
+                             quader_io::QdrLightType::Point,
+                     "compat adapter should preserve light entities");
 
-	const std::string text = quader_io::serialize_session_state(state);
+        const std::string text = quader_io::serialize_session_state(state);
 	require_test(text.find("\"document\": {") != std::string::npos, "compat writer should use the stable DTO document payload");
 	require_test(text.find("\"session\": {") == std::string::npos, "compat writer should not emit the legacy session payload key");
 	require_no_runtime_session_fields(text);
@@ -175,8 +179,10 @@ void session_compatibility_api_roundtrips_through_stable_dto()
 	require_test(!read_result.state.dirty, "loaded compatibility session state should be clean");
 	require_test(read_result.state.next_object_id == 12, "compat reader should preserve next object id");
 	require_test(read_result.state.active_object_id == state.active_object_id, "compat reader should preserve active object id");
-	require_test(read_result.state.selection_mode == quader_editor_core::SelectionMode::face, "compat reader should preserve selection mode");
-	require_test(read_result.state.content_revision == 42 && read_result.state.selection_revision == 17, "compat reader should preserve revisions");
+        require_test(read_result.state.selection_mode ==
+                         quader_editor_core::SelectionMode::Face,
+                     "compat reader should preserve selection mode");
+        require_test(read_result.state.content_revision == 42 && read_result.state.selection_revision == 17, "compat reader should preserve revisions");
 	require_test(read_result.state.objects.size() == 2, "compat reader should preserve object count");
 	require_test(read_result.state.objects.front().material_id == 5, "compat reader should preserve object metadata");
 	require_test(read_result.state.objects.front().selected, "compat reader should preserve selected object flags");
@@ -185,8 +191,9 @@ void session_compatibility_api_roundtrips_through_stable_dto()
 	require_test(read_result.state.next_light_id == 3, "compat reader should preserve next light id");
 	require_test(read_result.state.active_light_id == 2, "compat reader should preserve active light id");
 	require_test(read_result.state.lights.front().color_abgr == 0xFFCCFFFFU, "compat reader should preserve light color");
-	require_test(read_result.state.lights.front().shadow_mode == quader_editor_core::LightShadowMode::hard,
-		"compat reader should preserve light shadow mode");
+        require_test(read_result.state.lights.front().shadow_mode ==
+                         quader_editor_core::LightShadowMode::Hard,
+                     "compat reader should preserve light shadow mode");
 }
 
 void session_compatibility_reader_accepts_legacy_session_payload_but_rewrites_stable_document_payload()
@@ -196,9 +203,9 @@ void session_compatibility_reader_accepts_legacy_session_payload_but_rewrites_st
 	quader_editor_core::SessionState state = session.state();
 	state.next_object_id = 4;
 	state.active_object_id = state.objects.front().id;
-	state.selection_mode = quader_editor_core::SelectionMode::object;
+        state.selection_mode = quader_editor_core::SelectionMode::Object;
 
-	const std::string legacy_text = replace_once(quader_io::serialize_session_state(state), "\"document\"", "\"session\"");
+        const std::string legacy_text = replace_once(quader_io::serialize_session_state(state), "\"document\"", "\"session\"");
 	const quader_io::ReadResult result = quader_io::deserialize_session_state(legacy_text);
 	require_test(result.ok, result.message.empty() ? "compat reader should accept legacy session payloads" : result.message);
 	require_test(result.state.active_object_id == state.active_object_id, "compat reader should preserve active object id from legacy payloads");
@@ -219,8 +226,8 @@ void session_compatibility_reader_drops_runtime_fields_from_legacy_payloads()
 	quader_editor_core::SessionState state = session.state();
 	state.next_object_id = 9;
 	state.active_object_id = state.objects.front().id;
-	state.selection_mode = quader_editor_core::SelectionMode::face;
-	state.content_revision = 33;
+        state.selection_mode = quader_editor_core::SelectionMode::Face;
+        state.content_revision = 33;
 	state.selection_revision = 7;
 	state.dirty = true;
 
@@ -230,8 +237,11 @@ void session_compatibility_reader_drops_runtime_fields_from_legacy_payloads()
 	require_test(!result.state.dirty, "legacy runtime dirty fields should not make loaded session state dirty");
 	require_test(result.state.next_object_id == 9, "compat reader should preserve durable next object id from legacy payloads");
 	require_test(result.state.active_object_id == state.active_object_id, "compat reader should preserve durable active object id from legacy payloads");
-	require_test(result.state.selection_mode == quader_editor_core::SelectionMode::face, "compat reader should preserve durable selection mode from legacy payloads");
-	require_test(result.state.content_revision == 33 && result.state.selection_revision == 7,
+        require_test(result.state.selection_mode ==
+                         quader_editor_core::SelectionMode::Face,
+                     "compat reader should preserve durable selection mode "
+                     "from legacy payloads");
+        require_test(result.state.content_revision == 33 && result.state.selection_revision == 7,
 		"compat reader should preserve durable revisions from legacy payloads");
 
 	quader_editor_core::EditorSession loaded_session(result.state);
@@ -240,10 +250,13 @@ void session_compatibility_reader_drops_runtime_fields_from_legacy_payloads()
 	require_test(!history_status.can_undo && !history_status.can_redo && history_status.undo_count == 0 && history_status.redo_count == 0,
 		"legacy history fields should not hydrate live undo or redo stacks");
 	const quader_editor_core::PreviewTransactionStatus preview_status = loaded_session.preview_transaction_status();
-	require_test(!preview_status.active && !preview_status.changed && preview_status.kind == quader_editor_core::PreviewTransactionKind::none,
-		"legacy preview fields should not hydrate live preview transactions");
+        require_test(!preview_status.active && !preview_status.changed &&
+                         preview_status.kind ==
+                             quader_editor_core::PreviewTransactionKind::None,
+                     "legacy preview fields should not hydrate live preview "
+                     "transactions");
 
-	const std::string rewritten = quader_io::serialize_session_state(result.state);
+        const std::string rewritten = quader_io::serialize_session_state(result.state);
 	require_test(rewritten.find("\"document\": {") != std::string::npos, "compat writer should rewrite legacy runtime payloads through the stable document key");
 	require_test(rewritten.find("\"session\": {") == std::string::npos, "compat writer should not re-emit legacy runtime payloads");
 	require_no_runtime_session_fields(rewritten);

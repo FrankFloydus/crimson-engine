@@ -30,12 +30,12 @@ TEST(QdrModelingRuntimeOperationCopyTests, CopyOperationReturnsSelectedObjectCop
 	{
 		quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 		const quader_poly::ElementId vertex_id = session.objects().front().document.vertices.front().id;
-		session.set_component_selection(
-			session.objects().front().id,
-			qdr_test::vertex_selection({ vertex_id }, vertex_id),
-			quader_editor_core::SelectionMode::vertex);
+                session.set_component_selection(
+                    session.objects().front().id,
+                    qdr_test::vertex_selection({vertex_id}, vertex_id),
+                    quader_editor_core::SelectionMode::Vertex);
 
-		const std::vector<quader_editor_core::PolygonObject> copied = session.selected_object_copies();
+                const std::vector<quader_editor_core::PolygonObject> copied = session.selected_object_copies();
 
 		EXPECT_TRUE(copied.empty());
 	}

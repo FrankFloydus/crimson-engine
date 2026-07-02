@@ -69,9 +69,9 @@ struct RectangleEdgeKeyHash {
 
 bool rectangle_preserves_existing(SelectionEditOperation operation)
 {
-	return operation == SelectionEditOperation::add ||
-		operation == SelectionEditOperation::remove ||
-		operation == SelectionEditOperation::toggle;
+  return operation == SelectionEditOperation::Add ||
+         operation == SelectionEditOperation::Remove ||
+         operation == SelectionEditOperation::Toggle;
 }
 
 bool rectangle_contains_id(const std::vector<int>& ids, int id)
@@ -145,32 +145,38 @@ void rectangle_insert_vertex(std::unordered_map<int, std::unordered_set<int>>& v
 RectangleSelectionResult rectangle_select_objects(const RectangleSelectionRequest& request)
 {
 	RectangleSelectionResult result;
-	result.selection.mode = SelectionMode::object;
-	result.selection.selected_object_ids = rectangle_preserves_existing(request.operation) ? request.current_selection.selected_object_ids : std::vector<int>();
+        result.selection.mode = SelectionMode::Object;
+        result.selection.selected_object_ids = rectangle_preserves_existing(request.operation) ? request.current_selection.selected_object_ids : std::vector<int>();
 	result.selection.active_object_id = rectangle_preserves_existing(request.operation) ? request.current_selection.active_object_id : -1;
 
 	for (const int object_id : request.hits.object_ids) {
 		if (object_id < 0) {
 			continue;
 		}
-		if (request.operation == SelectionEditOperation::remove) {
-			if (rectangle_remove_id(result.selection.selected_object_ids, object_id) && result.selection.active_object_id == object_id) {
-				result.selection.active_object_id = -1;
-			}
-		} else if (request.operation == SelectionEditOperation::toggle) {
-			if (rectangle_remove_id(result.selection.selected_object_ids, object_id)) {
-				if (result.selection.active_object_id == object_id) {
-					result.selection.active_object_id = -1;
-				}
-			} else {
-				rectangle_append_unique_id(result.selection.selected_object_ids, object_id);
-				result.selection.active_object_id = object_id;
-			}
-		} else {
-			rectangle_append_unique_id(result.selection.selected_object_ids, object_id);
-			result.selection.active_object_id = object_id;
-		}
-	}
+                if (request.operation == SelectionEditOperation::Remove) {
+                  if (rectangle_remove_id(result.selection.selected_object_ids,
+                                          object_id) &&
+                      result.selection.active_object_id == object_id) {
+                    result.selection.active_object_id = -1;
+                  }
+                } else if (request.operation ==
+                           SelectionEditOperation::Toggle) {
+                  if (rectangle_remove_id(result.selection.selected_object_ids,
+                                          object_id)) {
+                    if (result.selection.active_object_id == object_id) {
+                      result.selection.active_object_id = -1;
+                    }
+                  } else {
+                    rectangle_append_unique_id(
+                        result.selection.selected_object_ids, object_id);
+                    result.selection.active_object_id = object_id;
+                  }
+                } else {
+                  rectangle_append_unique_id(
+                      result.selection.selected_object_ids, object_id);
+                  result.selection.active_object_id = object_id;
+                }
+        }
 	if (!result.selection.selected_object_ids.empty() && !rectangle_contains_id(result.selection.selected_object_ids, result.selection.active_object_id)) {
 		result.selection.active_object_id = result.selection.selected_object_ids.back();
 	}
@@ -183,8 +189,8 @@ RectangleSelectionResult rectangle_select_objects(const RectangleSelectionReques
 RectangleSelectionResult rectangle_select_faces(const RectangleSelectionRequest& request)
 {
 	RectangleSelectionResult result;
-	result.selection.mode = SelectionMode::face;
-	std::unordered_set<RectangleFaceKey, RectangleFaceKeyHash> selected_faces;
+        result.selection.mode = SelectionMode::Face;
+        std::unordered_set<RectangleFaceKey, RectangleFaceKeyHash> selected_faces;
 	if (rectangle_preserves_existing(request.operation)) {
 		selected_faces.reserve(request.current_selection.selected_faces.size() + request.hits.faces.size());
 		for (const RectangleSelectionFace face : request.current_selection.selected_faces) {
@@ -196,18 +202,19 @@ RectangleSelectionResult rectangle_select_faces(const RectangleSelectionRequest&
 			continue;
 		}
 		const RectangleFaceKey key = rectangle_face_key(face);
-		if (request.operation == SelectionEditOperation::remove) {
-			selected_faces.erase(key);
-		} else if (request.operation == SelectionEditOperation::toggle) {
-			if (selected_faces.find(key) != selected_faces.end()) {
-				selected_faces.erase(key);
-			} else {
-				selected_faces.insert(key);
-			}
-		} else {
-			selected_faces.insert(key);
-		}
-	}
+                if (request.operation == SelectionEditOperation::Remove) {
+                  selected_faces.erase(key);
+                } else if (request.operation ==
+                           SelectionEditOperation::Toggle) {
+                  if (selected_faces.find(key) != selected_faces.end()) {
+                    selected_faces.erase(key);
+                  } else {
+                    selected_faces.insert(key);
+                  }
+                } else {
+                  selected_faces.insert(key);
+                }
+        }
 	result.selection.selected_faces.reserve(selected_faces.size());
 	for (const RectangleSelectionFace face : request.universe.faces) {
 		if (rectangle_face_is_valid(face) && selected_faces.find(rectangle_face_key(face)) != selected_faces.end()) {
@@ -225,8 +232,8 @@ RectangleSelectionResult rectangle_select_faces(const RectangleSelectionRequest&
 RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest& request)
 {
 	RectangleSelectionResult result;
-	result.selection.mode = SelectionMode::edge;
-	std::unordered_map<int, std::unordered_set<RectangleEdgeKey, RectangleEdgeKeyHash>> selected_edges_by_object;
+        result.selection.mode = SelectionMode::Edge;
+        std::unordered_map<int, std::unordered_set<RectangleEdgeKey, RectangleEdgeKeyHash>> selected_edges_by_object;
 	if (rectangle_preserves_existing(request.operation)) {
 		selected_edges_by_object.reserve(request.current_selection.selected_edges.size() + request.current_selection.selected_edge_full_object_ids.size());
 		for (const RectangleSelectionEdge edge : request.current_selection.selected_edges) {
@@ -249,18 +256,19 @@ RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest&
 		}
 		std::unordered_set<RectangleEdgeKey, RectangleEdgeKeyHash>& edge_keys = selected_edges_by_object[edge.object_id];
 		const RectangleEdgeKey key = rectangle_edge_key(edge);
-		if (request.operation == SelectionEditOperation::remove) {
-			edge_keys.erase(key);
-		} else if (request.operation == SelectionEditOperation::toggle) {
-			if (edge_keys.find(key) != edge_keys.end()) {
-				edge_keys.erase(key);
-			} else {
-				edge_keys.insert(key);
-			}
-		} else {
-			edge_keys.insert(key);
-		}
-	}
+                if (request.operation == SelectionEditOperation::Remove) {
+                  edge_keys.erase(key);
+                } else if (request.operation ==
+                           SelectionEditOperation::Toggle) {
+                  if (edge_keys.find(key) != edge_keys.end()) {
+                    edge_keys.erase(key);
+                  } else {
+                    edge_keys.insert(key);
+                  }
+                } else {
+                  edge_keys.insert(key);
+                }
+        }
 
 	std::unordered_map<int, int> edge_count_by_object;
 	edge_count_by_object.reserve(request.universe.object_ids.size());
@@ -303,8 +311,8 @@ RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest&
 RectangleSelectionResult rectangle_select_vertices(const RectangleSelectionRequest& request)
 {
 	RectangleSelectionResult result;
-	result.selection.mode = SelectionMode::vertex;
-	std::unordered_map<int, std::unordered_set<int>> selected_vertices_by_object;
+        result.selection.mode = SelectionMode::Vertex;
+        std::unordered_map<int, std::unordered_set<int>> selected_vertices_by_object;
 	if (rectangle_preserves_existing(request.operation)) {
 		selected_vertices_by_object.reserve(request.current_selection.selected_vertices.size() + request.current_selection.selected_vertex_full_object_ids.size());
 		for (const RectangleSelectionVertex vertex : request.current_selection.selected_vertices) {
@@ -326,18 +334,20 @@ RectangleSelectionResult rectangle_select_vertices(const RectangleSelectionReque
 			continue;
 		}
 		std::unordered_set<int>& vertex_indices = selected_vertices_by_object[vertex.object_id];
-		if (request.operation == SelectionEditOperation::remove) {
-			vertex_indices.erase(vertex.vertex_index);
-		} else if (request.operation == SelectionEditOperation::toggle) {
-			if (vertex_indices.find(vertex.vertex_index) != vertex_indices.end()) {
-				vertex_indices.erase(vertex.vertex_index);
-			} else {
-				vertex_indices.insert(vertex.vertex_index);
-			}
-		} else {
-			vertex_indices.insert(vertex.vertex_index);
-		}
-	}
+                if (request.operation == SelectionEditOperation::Remove) {
+                  vertex_indices.erase(vertex.vertex_index);
+                } else if (request.operation ==
+                           SelectionEditOperation::Toggle) {
+                  if (vertex_indices.find(vertex.vertex_index) !=
+                      vertex_indices.end()) {
+                    vertex_indices.erase(vertex.vertex_index);
+                  } else {
+                    vertex_indices.insert(vertex.vertex_index);
+                  }
+                } else {
+                  vertex_indices.insert(vertex.vertex_index);
+                }
+        }
 
 	std::unordered_map<int, int> vertex_count_by_object;
 	vertex_count_by_object.reserve(request.universe.object_ids.size());
@@ -1002,17 +1012,20 @@ void activate_remaining_face_or_clear(RectangleSelectionState& selection)
 
 void activate_remaining_element_or_target(RectangleSelectionState& selection)
 {
-	if (selection.mode == SelectionMode::edge && !selection.selected_edges.empty()) {
-		const RectangleSelectionEdge edge = selection.selected_edges.back();
-		activate_edge_group(selection, { edge.object_id, { edge.a_index, edge.b_index } });
-		return;
-	}
-	if (selection.mode == SelectionMode::vertex && !selection.selected_vertices.empty()) {
-		const RectangleSelectionVertex vertex = selection.selected_vertices.back();
-		activate_vertex_group(selection, { vertex.object_id, { vertex.vertex_index } });
-		return;
-	}
-	if (!selection.selected_object_ids.empty()) {
+  if (selection.mode == SelectionMode::Edge &&
+      !selection.selected_edges.empty()) {
+    const RectangleSelectionEdge edge = selection.selected_edges.back();
+    activate_edge_group(selection,
+                        {edge.object_id, {edge.a_index, edge.b_index}});
+    return;
+  }
+  if (selection.mode == SelectionMode::Vertex &&
+      !selection.selected_vertices.empty()) {
+    const RectangleSelectionVertex vertex = selection.selected_vertices.back();
+    activate_vertex_group(selection, {vertex.object_id, {vertex.vertex_index}});
+    return;
+  }
+        if (!selection.selected_object_ids.empty()) {
 		activate_object_target(selection, selection.selected_object_ids.back());
 		return;
 	}
@@ -1021,16 +1034,22 @@ void activate_remaining_element_or_target(RectangleSelectionState& selection)
 
 bool selection_has_element_handles_for_mode(const RectangleSelectionState& selection)
 {
-	if (selection.mode == SelectionMode::face) {
-		return !selection.selected_faces.empty() || (selection.active_object_id >= 0 && selection.active_face_index >= 0);
-	}
-	if (selection.mode == SelectionMode::edge) {
-		return !selection.selected_edges.empty() || !selection.active_edge_vertex_indices.empty() || !selection.selected_edge_full_object_ids.empty();
-	}
-	if (selection.mode == SelectionMode::vertex) {
-		return !selection.selected_vertices.empty() || !selection.active_vertex_indices.empty() || !selection.selected_vertex_full_object_ids.empty();
-	}
-	return false;
+  if (selection.mode == SelectionMode::Face) {
+    return !selection.selected_faces.empty() ||
+           (selection.active_object_id >= 0 &&
+            selection.active_face_index >= 0);
+  }
+  if (selection.mode == SelectionMode::Edge) {
+    return !selection.selected_edges.empty() ||
+           !selection.active_edge_vertex_indices.empty() ||
+           !selection.selected_edge_full_object_ids.empty();
+  }
+  if (selection.mode == SelectionMode::Vertex) {
+    return !selection.selected_vertices.empty() ||
+           !selection.active_vertex_indices.empty() ||
+           !selection.selected_vertex_full_object_ids.empty();
+  }
+        return false;
 }
 
 std::vector<int> canonical_object_targets_for_mode_switch(const RectangleSelectionState& selection, int previous_active_object_id)
@@ -1147,11 +1166,9 @@ bool remove_element_object_target(RectangleSelectionState& selection, int object
 
 bool selection_handle_is_empty(const SelectionHandleTarget& handle)
 {
-	return handle.kind == ActiveSelectionKind::none &&
-		handle.object_id < 0 &&
-		handle.face_index < 0 &&
-		handle.vertex_indices.empty() &&
-		handle.element_groups.empty();
+  return handle.kind == ActiveSelectionKind::None && handle.object_id < 0 &&
+         handle.face_index < 0 && handle.vertex_indices.empty() &&
+         handle.element_groups.empty();
 }
 
 bool selection_hit_is_empty(const SelectionHitTarget& hit)
@@ -1164,16 +1181,16 @@ bool selection_hit_is_empty(const SelectionHitTarget& hit)
 RectangleSelectionResult apply_rectangle_selection(const RectangleSelectionRequest& request)
 {
 	switch (request.current_selection.mode) {
-		case SelectionMode::object:
-			return rectangle_select_objects(request);
-		case SelectionMode::face:
-			return rectangle_select_faces(request);
-		case SelectionMode::edge:
-			return rectangle_select_edges(request);
-		case SelectionMode::vertex:
-			return rectangle_select_vertices(request);
-		default:
-			break;
+        case SelectionMode::Object:
+          return rectangle_select_objects(request);
+        case SelectionMode::Face:
+          return rectangle_select_faces(request);
+        case SelectionMode::Edge:
+          return rectangle_select_edges(request);
+        case SelectionMode::Vertex:
+          return rectangle_select_vertices(request);
+        default:
+          break;
 	}
 	RectangleSelectionResult result;
 	result.selection.mode = request.current_selection.mode;
@@ -1187,109 +1204,147 @@ RectangleSelectionResult apply_selection_set_command(const SelectionSetCommandRe
 {
 	RectangleSelectionResult result;
 	result.selection.mode = request.current_selection.mode;
-	const bool invert = request.command == SelectionSetCommand::invert;
-	switch (request.current_selection.mode) {
-		case SelectionMode::object: {
-			std::unordered_set<int> selected_ids;
-			selected_ids.reserve(request.current_selection.selected_object_ids.size());
-			for (const int object_id : request.current_selection.selected_object_ids) {
-				if (object_id >= 0) {
-					selected_ids.insert(object_id);
-				}
-			}
-			const bool all_selected = rectangle_ids_cover_universe(request.current_selection.selected_object_ids, request.universe.object_ids);
-			if (!invert && all_selected) {
-				return result;
-			}
-			for (const int object_id : request.universe.object_ids) {
-				if (object_id < 0) {
-					continue;
-				}
-				const bool currently_selected = selected_ids.find(object_id) != selected_ids.end();
-				if (!invert || !currently_selected) {
-					result.selection.selected_object_ids.push_back(object_id);
-				}
-			}
-			if (!result.selection.selected_object_ids.empty()) {
-				result.selection.active_object_id = result.selection.selected_object_ids.front();
-			}
-			return result;
-		}
-		case SelectionMode::face: {
-			const std::unordered_set<RectangleFaceKey, RectangleFaceKeyHash> selected_faces = rectangle_face_set_from_selection(request.current_selection);
-			const bool all_selected = rectangle_faces_cover_universe(request.current_selection, request.universe);
-			if (!invert && all_selected) {
-				return result;
-			}
-			for (const RectangleSelectionFace face : request.universe.faces) {
-				if (!rectangle_face_is_valid(face)) {
-					continue;
-				}
-				const bool currently_selected = selected_faces.find(rectangle_face_key(face)) != selected_faces.end();
-				if (!invert || !currently_selected) {
-					result.selection.selected_faces.push_back(face);
-				}
-			}
-			if (!result.selection.selected_faces.empty()) {
-				const RectangleSelectionFace active = result.selection.selected_faces.back();
-				result.selection.active_object_id = active.object_id;
-				result.selection.active_face_index = active.face_index;
-			}
-			return result;
-		}
-		case SelectionMode::edge: {
-			if (!invert) {
-				if (rectangle_edges_cover_universe(request.current_selection, request.universe)) {
-					return result;
-				}
-				result.selection.selected_edge_full_object_ids = request.universe.object_ids;
-				if (!result.selection.selected_edge_full_object_ids.empty()) {
-					result.selection.active_object_id = result.selection.selected_edge_full_object_ids.front();
-				}
-				return result;
-			}
-			const auto selected_edges = rectangle_edge_set_from_selection(request.current_selection, request.universe);
-			std::unordered_map<int, std::unordered_set<RectangleEdgeKey, RectangleEdgeKeyHash>> inverted_edges_by_object;
-			inverted_edges_by_object.reserve(request.universe.object_ids.size());
-			for (const RectangleSelectionEdge edge : request.universe.edges) {
-				if (!rectangle_edge_is_valid(edge)) {
-					continue;
-				}
-				const auto found_edges = selected_edges.find(edge.object_id);
-				const bool currently_selected = found_edges != selected_edges.end() && found_edges->second.find(rectangle_edge_key(edge)) != found_edges->second.end();
-				if (!currently_selected) {
-					inverted_edges_by_object[edge.object_id].insert(rectangle_edge_key(edge));
-				}
-			}
-			return rectangle_result_from_edge_set(SelectionMode::edge, request.universe, inverted_edges_by_object, true);
-		}
-		case SelectionMode::vertex: {
-			if (!invert) {
-				if (rectangle_vertices_cover_universe(request.current_selection, request.universe)) {
-					return result;
-				}
-				result.selection.selected_vertex_full_object_ids = request.universe.object_ids;
-				if (!result.selection.selected_vertex_full_object_ids.empty()) {
-					result.selection.active_object_id = result.selection.selected_vertex_full_object_ids.front();
-				}
-				return result;
-			}
-			const auto selected_vertices = rectangle_vertex_set_from_selection(request.current_selection, request.universe);
-			std::unordered_map<int, std::unordered_set<int>> inverted_vertices_by_object;
-			inverted_vertices_by_object.reserve(request.universe.object_ids.size());
-			for (const RectangleSelectionVertex vertex : request.universe.vertices) {
-				if (!rectangle_vertex_is_valid(vertex)) {
-					continue;
-				}
-				const auto found_vertices = selected_vertices.find(vertex.object_id);
-				const bool currently_selected = found_vertices != selected_vertices.end() && found_vertices->second.find(vertex.vertex_index) != found_vertices->second.end();
-				if (!currently_selected) {
-					inverted_vertices_by_object[vertex.object_id].insert(vertex.vertex_index);
-				}
-			}
-			return rectangle_result_from_vertex_set(SelectionMode::vertex, request.universe, inverted_vertices_by_object, true);
-		}
-		default:
+        const bool invert = request.command == SelectionSetCommand::Invert;
+        switch (request.current_selection.mode) {
+        case SelectionMode::Object: {
+          std::unordered_set<int> selected_ids;
+          selected_ids.reserve(
+              request.current_selection.selected_object_ids.size());
+          for (const int object_id :
+               request.current_selection.selected_object_ids) {
+            if (object_id >= 0) {
+              selected_ids.insert(object_id);
+            }
+          }
+          const bool all_selected = rectangle_ids_cover_universe(
+              request.current_selection.selected_object_ids,
+              request.universe.object_ids);
+          if (!invert && all_selected) {
+            return result;
+          }
+          for (const int object_id : request.universe.object_ids) {
+            if (object_id < 0) {
+              continue;
+            }
+            const bool currently_selected =
+                selected_ids.find(object_id) != selected_ids.end();
+            if (!invert || !currently_selected) {
+              result.selection.selected_object_ids.push_back(object_id);
+            }
+          }
+          if (!result.selection.selected_object_ids.empty()) {
+            result.selection.active_object_id =
+                result.selection.selected_object_ids.front();
+          }
+          return result;
+        }
+        case SelectionMode::Face: {
+          const std::unordered_set<RectangleFaceKey, RectangleFaceKeyHash>
+              selected_faces =
+                  rectangle_face_set_from_selection(request.current_selection);
+          const bool all_selected = rectangle_faces_cover_universe(
+              request.current_selection, request.universe);
+          if (!invert && all_selected) {
+            return result;
+          }
+          for (const RectangleSelectionFace face : request.universe.faces) {
+            if (!rectangle_face_is_valid(face)) {
+              continue;
+            }
+            const bool currently_selected =
+                selected_faces.find(rectangle_face_key(face)) !=
+                selected_faces.end();
+            if (!invert || !currently_selected) {
+              result.selection.selected_faces.push_back(face);
+            }
+          }
+          if (!result.selection.selected_faces.empty()) {
+            const RectangleSelectionFace active =
+                result.selection.selected_faces.back();
+            result.selection.active_object_id = active.object_id;
+            result.selection.active_face_index = active.face_index;
+          }
+          return result;
+        }
+        case SelectionMode::Edge: {
+          if (!invert) {
+            if (rectangle_edges_cover_universe(request.current_selection,
+                                               request.universe)) {
+              return result;
+            }
+            result.selection.selected_edge_full_object_ids =
+                request.universe.object_ids;
+            if (!result.selection.selected_edge_full_object_ids.empty()) {
+              result.selection.active_object_id =
+                  result.selection.selected_edge_full_object_ids.front();
+            }
+            return result;
+          }
+          const auto selected_edges = rectangle_edge_set_from_selection(
+              request.current_selection, request.universe);
+          std::unordered_map<
+              int, std::unordered_set<RectangleEdgeKey, RectangleEdgeKeyHash>>
+              inverted_edges_by_object;
+          inverted_edges_by_object.reserve(request.universe.object_ids.size());
+          for (const RectangleSelectionEdge edge : request.universe.edges) {
+            if (!rectangle_edge_is_valid(edge)) {
+              continue;
+            }
+            const auto found_edges = selected_edges.find(edge.object_id);
+            const bool currently_selected =
+                found_edges != selected_edges.end() &&
+                found_edges->second.find(rectangle_edge_key(edge)) !=
+                    found_edges->second.end();
+            if (!currently_selected) {
+              inverted_edges_by_object[edge.object_id].insert(
+                  rectangle_edge_key(edge));
+            }
+          }
+          return rectangle_result_from_edge_set(SelectionMode::Edge,
+                                                request.universe,
+                                                inverted_edges_by_object, true);
+        }
+        case SelectionMode::Vertex: {
+          if (!invert) {
+            if (rectangle_vertices_cover_universe(request.current_selection,
+                                                  request.universe)) {
+              return result;
+            }
+            result.selection.selected_vertex_full_object_ids =
+                request.universe.object_ids;
+            if (!result.selection.selected_vertex_full_object_ids.empty()) {
+              result.selection.active_object_id =
+                  result.selection.selected_vertex_full_object_ids.front();
+            }
+            return result;
+          }
+          const auto selected_vertices = rectangle_vertex_set_from_selection(
+              request.current_selection, request.universe);
+          std::unordered_map<int, std::unordered_set<int>>
+              inverted_vertices_by_object;
+          inverted_vertices_by_object.reserve(
+              request.universe.object_ids.size());
+          for (const RectangleSelectionVertex vertex :
+               request.universe.vertices) {
+            if (!rectangle_vertex_is_valid(vertex)) {
+              continue;
+            }
+            const auto found_vertices =
+                selected_vertices.find(vertex.object_id);
+            const bool currently_selected =
+                found_vertices != selected_vertices.end() &&
+                found_vertices->second.find(vertex.vertex_index) !=
+                    found_vertices->second.end();
+            if (!currently_selected) {
+              inverted_vertices_by_object[vertex.object_id].insert(
+                  vertex.vertex_index);
+            }
+          }
+          return rectangle_result_from_vertex_set(
+              SelectionMode::Vertex, request.universe,
+              inverted_vertices_by_object, true);
+        }
+                default:
 			break;
 	}
 	return result;
@@ -1298,9 +1353,9 @@ RectangleSelectionResult apply_selection_set_command(const SelectionSetCommandRe
 RectangleSelectionResult convert_selection_to_face_mode(const FaceModeConversionRequest& request)
 {
 	RectangleSelectionResult result;
-	result.selection.mode = SelectionMode::face;
+        result.selection.mode = SelectionMode::Face;
 
-	std::unordered_set<RectangleFaceKey, RectangleFaceKeyHash> selected_face_keys;
+        std::unordered_set<RectangleFaceKey, RectangleFaceKeyHash> selected_face_keys;
 	selected_face_keys.reserve(request.universe.faces.size());
 	result.selection.selected_faces.reserve(request.universe.faces.size());
 
@@ -1354,121 +1409,155 @@ FullElementPromotionResult promote_full_element_selection_to_object(const FullEl
 	std::unordered_set<int> full_object_ids;
 	bool lossless = true;
 
-	if (request.current_selection.mode == SelectionMode::face) {
-		const std::unordered_set<RectangleFaceKey, RectangleFaceKeyHash> selected_faces = rectangle_face_set_from_selection(request.current_selection);
-		if (selected_faces.empty()) {
-			return result;
-		}
-		const std::unordered_map<int, int> face_count_by_object = promotion_face_count_by_object(request.universe);
-		std::unordered_map<int, int> selected_face_count_by_object;
-		selected_face_count_by_object.reserve(face_count_by_object.size());
-		int matched_face_key_count = 0;
-		for (const RectangleSelectionFace& face : request.universe.faces) {
-			if (rectangle_face_is_valid(face) && selected_faces.find(rectangle_face_key(face)) != selected_faces.end()) {
-				selected_face_count_by_object[face.object_id]++;
-				matched_face_key_count++;
-			}
-		}
-		lossless = matched_face_key_count == static_cast<int>(selected_faces.size());
-		if (lossless) {
-			for (const auto& entry : selected_face_count_by_object) {
-				const auto found_count = face_count_by_object.find(entry.first);
-				if (found_count == face_count_by_object.end() || found_count->second <= 0 || entry.second != found_count->second) {
-					lossless = false;
-					break;
-				}
-				full_object_ids.insert(entry.first);
-			}
-		}
-	} else if (request.current_selection.mode == SelectionMode::edge) {
-		const std::unordered_map<int, int> edge_count_by_object = promotion_edge_count_by_object(request.universe);
-		const std::unordered_set<int> selected_full_object_ids = promotion_id_set_from_vector(request.current_selection.selected_edge_full_object_ids);
-		const auto selected_edges_by_object = rectangle_edge_set_from_selection(request.current_selection, request.universe);
-		if (selected_full_object_ids.empty() && selected_edges_by_object.empty()) {
-			return result;
-		}
-		for (const int object_id : selected_full_object_ids) {
-			const auto found_count = edge_count_by_object.find(object_id);
-			if (found_count == edge_count_by_object.end() || found_count->second <= 0) {
-				lossless = false;
-				break;
-			}
-			full_object_ids.insert(object_id);
-		}
-		if (lossless) {
-			for (const auto& entry : selected_edges_by_object) {
-				const auto found_count = edge_count_by_object.find(entry.first);
-				if (found_count == edge_count_by_object.end() || found_count->second <= 0) {
-					lossless = false;
-					break;
-				}
-				int matched_edge_key_count = 0;
-				for (const RectangleSelectionEdge& edge : request.universe.edges) {
-					if (edge.object_id == entry.first && entry.second.find(rectangle_edge_key(edge)) != entry.second.end()) {
-						matched_edge_key_count++;
-					}
-				}
-				if (matched_edge_key_count != static_cast<int>(entry.second.size())) {
-					lossless = false;
-					break;
-				}
-				if (selected_full_object_ids.find(entry.first) != selected_full_object_ids.end()) {
-					continue;
-				}
-				if (matched_edge_key_count != found_count->second) {
-					lossless = false;
-					break;
-				}
-				full_object_ids.insert(entry.first);
-			}
-		}
-	} else if (request.current_selection.mode == SelectionMode::vertex) {
-		const std::unordered_map<int, int> vertex_count_by_object = promotion_vertex_count_by_object(request.universe);
-		const std::unordered_set<int> selected_full_object_ids = promotion_id_set_from_vector(request.current_selection.selected_vertex_full_object_ids);
-		const auto selected_vertices_by_object = rectangle_vertex_set_from_selection(request.current_selection, request.universe);
-		if (selected_full_object_ids.empty() && selected_vertices_by_object.empty()) {
-			return result;
-		}
-		for (const int object_id : selected_full_object_ids) {
-			const auto found_count = vertex_count_by_object.find(object_id);
-			if (found_count == vertex_count_by_object.end() || found_count->second <= 0) {
-				lossless = false;
-				break;
-			}
-			full_object_ids.insert(object_id);
-		}
-		if (lossless) {
-			for (const auto& entry : selected_vertices_by_object) {
-				const auto found_count = vertex_count_by_object.find(entry.first);
-				if (found_count == vertex_count_by_object.end() || found_count->second <= 0) {
-					lossless = false;
-					break;
-				}
-				int matched_vertex_count = 0;
-				for (const RectangleSelectionVertex& vertex : request.universe.vertices) {
-					if (vertex.object_id == entry.first && entry.second.find(vertex.vertex_index) != entry.second.end()) {
-						matched_vertex_count++;
-					}
-				}
-				if (matched_vertex_count != static_cast<int>(entry.second.size())) {
-					lossless = false;
-					break;
-				}
-				if (selected_full_object_ids.find(entry.first) != selected_full_object_ids.end()) {
-					continue;
-				}
-				if (matched_vertex_count != found_count->second) {
-					lossless = false;
-					break;
-				}
-				full_object_ids.insert(entry.first);
-			}
-		}
-	} else {
-		return result;
-	}
+        if (request.current_selection.mode == SelectionMode::Face) {
+          const std::unordered_set<RectangleFaceKey, RectangleFaceKeyHash>
+              selected_faces =
+                  rectangle_face_set_from_selection(request.current_selection);
+          if (selected_faces.empty()) {
+            return result;
+          }
+          const std::unordered_map<int, int> face_count_by_object =
+              promotion_face_count_by_object(request.universe);
+          std::unordered_map<int, int> selected_face_count_by_object;
+          selected_face_count_by_object.reserve(face_count_by_object.size());
+          int matched_face_key_count = 0;
+          for (const RectangleSelectionFace &face : request.universe.faces) {
+            if (rectangle_face_is_valid(face) &&
+                selected_faces.find(rectangle_face_key(face)) !=
+                    selected_faces.end()) {
+              selected_face_count_by_object[face.object_id]++;
+              matched_face_key_count++;
+            }
+          }
+          lossless =
+              matched_face_key_count == static_cast<int>(selected_faces.size());
+          if (lossless) {
+            for (const auto &entry : selected_face_count_by_object) {
+              const auto found_count = face_count_by_object.find(entry.first);
+              if (found_count == face_count_by_object.end() ||
+                  found_count->second <= 0 ||
+                  entry.second != found_count->second) {
+                lossless = false;
+                break;
+              }
+              full_object_ids.insert(entry.first);
+            }
+          }
+        } else if (request.current_selection.mode == SelectionMode::Edge) {
+          const std::unordered_map<int, int> edge_count_by_object =
+              promotion_edge_count_by_object(request.universe);
+          const std::unordered_set<int> selected_full_object_ids =
+              promotion_id_set_from_vector(
+                  request.current_selection.selected_edge_full_object_ids);
+          const auto selected_edges_by_object =
+              rectangle_edge_set_from_selection(request.current_selection,
+                                                request.universe);
+          if (selected_full_object_ids.empty() &&
+              selected_edges_by_object.empty()) {
+            return result;
+          }
+          for (const int object_id : selected_full_object_ids) {
+            const auto found_count = edge_count_by_object.find(object_id);
+            if (found_count == edge_count_by_object.end() ||
+                found_count->second <= 0) {
+              lossless = false;
+              break;
+            }
+            full_object_ids.insert(object_id);
+          }
+          if (lossless) {
+            for (const auto &entry : selected_edges_by_object) {
+              const auto found_count = edge_count_by_object.find(entry.first);
+              if (found_count == edge_count_by_object.end() ||
+                  found_count->second <= 0) {
+                lossless = false;
+                break;
+              }
+              int matched_edge_key_count = 0;
+              for (const RectangleSelectionEdge &edge :
+                   request.universe.edges) {
+                if (edge.object_id == entry.first &&
+                    entry.second.find(rectangle_edge_key(edge)) !=
+                        entry.second.end()) {
+                  matched_edge_key_count++;
+                }
+              }
+              if (matched_edge_key_count !=
+                  static_cast<int>(entry.second.size())) {
+                lossless = false;
+                break;
+              }
+              if (selected_full_object_ids.find(entry.first) !=
+                  selected_full_object_ids.end()) {
+                continue;
+              }
+              if (matched_edge_key_count != found_count->second) {
+                lossless = false;
+                break;
+              }
+              full_object_ids.insert(entry.first);
+            }
+          }
+        } else if (request.current_selection.mode == SelectionMode::Vertex) {
+          const std::unordered_map<int, int> vertex_count_by_object =
+              promotion_vertex_count_by_object(request.universe);
+          const std::unordered_set<int> selected_full_object_ids =
+              promotion_id_set_from_vector(
+                  request.current_selection.selected_vertex_full_object_ids);
+          const auto selected_vertices_by_object =
+              rectangle_vertex_set_from_selection(request.current_selection,
+                                                  request.universe);
+          if (selected_full_object_ids.empty() &&
+              selected_vertices_by_object.empty()) {
+            return result;
+          }
+          for (const int object_id : selected_full_object_ids) {
+            const auto found_count = vertex_count_by_object.find(object_id);
+            if (found_count == vertex_count_by_object.end() ||
+                found_count->second <= 0) {
+              lossless = false;
+              break;
+            }
+            full_object_ids.insert(object_id);
+          }
+          if (lossless) {
+            for (const auto &entry : selected_vertices_by_object) {
+              const auto found_count = vertex_count_by_object.find(entry.first);
+              if (found_count == vertex_count_by_object.end() ||
+                  found_count->second <= 0) {
+                lossless = false;
+                break;
+              }
+              int matched_vertex_count = 0;
+              for (const RectangleSelectionVertex &vertex :
+                   request.universe.vertices) {
+                if (vertex.object_id == entry.first &&
+                    entry.second.find(vertex.vertex_index) !=
+                        entry.second.end()) {
+                  matched_vertex_count++;
+                }
+              }
+              if (matched_vertex_count !=
+                  static_cast<int>(entry.second.size())) {
+                lossless = false;
+                break;
+              }
+              if (selected_full_object_ids.find(entry.first) !=
+                  selected_full_object_ids.end()) {
+                continue;
+              }
+              if (matched_vertex_count != found_count->second) {
+                lossless = false;
+                break;
+              }
+              full_object_ids.insert(entry.first);
+            }
+          }
+        } else {
+          return result;
+        }
 
-	if (!lossless || full_object_ids.empty()) {
+        if (!lossless || full_object_ids.empty()) {
 		return result;
 	}
 
@@ -1481,8 +1570,8 @@ FullElementPromotionResult promote_full_element_selection_to_object(const FullEl
 		promoted_object_ids.insert(object_id);
 	}
 
-	result.selection.mode = SelectionMode::object;
-	for (const int object_id : request.universe.object_ids) {
+        result.selection.mode = SelectionMode::Object;
+        for (const int object_id : request.universe.object_ids) {
 		if (promoted_object_ids.find(object_id) != promoted_object_ids.end()) {
 			result.selection.selected_object_ids.push_back(object_id);
 		}
@@ -1510,8 +1599,8 @@ RectangleSelectionResult select_object_ids(const SelectionObjectIdsRequest& requ
 		return result;
 	}
 	if (request.force_object_mode) {
-		result.selection.mode = SelectionMode::object;
-	}
+          result.selection.mode = SelectionMode::Object;
+        }
 	result.selection.selected_object_ids = request.object_ids;
 	result.selection.active_object_id = request.object_ids.front();
 	result.selection.active_face_index = -1;
@@ -1541,8 +1630,8 @@ RectangleSelectionResult select_face(const SelectionFaceRequest& request)
 	}
 	result.selection = cleared_selection_state(request.current_selection);
 	if (request.force_face_mode) {
-		result.selection.mode = SelectionMode::face;
-	}
+          result.selection.mode = SelectionMode::Face;
+        }
 	result.selection.active_object_id = request.face.object_id;
 	result.selection.active_face_index = request.face.face_index;
 	result.selection.selected_faces.push_back(request.face);
@@ -1552,55 +1641,61 @@ RectangleSelectionResult select_face(const SelectionFaceRequest& request)
 RectangleSelectionResult select_object_wide_elements(const SelectionObjectWideElementsRequest& request)
 {
 	RectangleSelectionResult result;
-	if (request.object_id < 0 ||
-			(request.mode != SelectionMode::face && request.mode != SelectionMode::edge && request.mode != SelectionMode::vertex)) {
-		result.selection = request.current_selection;
-		return result;
-	}
+        if (request.object_id < 0 || (request.mode != SelectionMode::Face &&
+                                      request.mode != SelectionMode::Edge &&
+                                      request.mode != SelectionMode::Vertex)) {
+          result.selection = request.current_selection;
+          return result;
+        }
 
-	result.selection = request.additive ? request.current_selection : cleared_selection_state(request.current_selection);
+        result.selection = request.additive ? request.current_selection : cleared_selection_state(request.current_selection);
 	result.selection.mode = request.mode;
 	result.selection.active_face_index = -1;
 	result.selection.active_edge_vertex_indices.clear();
 	result.selection.active_vertex_indices.clear();
 
-	if (request.mode == SelectionMode::face) {
-		result.selection.selected_object_ids.clear();
-		result.selection.selected_edges.clear();
-		result.selection.selected_edge_full_object_ids.clear();
-		result.selection.selected_vertices.clear();
-		result.selection.selected_vertex_full_object_ids.clear();
-		remove_faces_for_object(result.selection.selected_faces, request.object_id);
-		for (const RectangleSelectionFace& face : request.object_faces) {
-			if (rectangle_face_is_valid(face) && face.object_id == request.object_id) {
-				result.selection.selected_faces.push_back(face);
-			}
-		}
-		if (!result.selection.selected_faces.empty()) {
-			const RectangleSelectionFace active = result.selection.selected_faces.back();
-			result.selection.active_object_id = active.object_id;
-			result.selection.active_face_index = active.face_index;
-		} else {
-			result.selection.active_object_id = -1;
-		}
-		return result;
-	}
+        if (request.mode == SelectionMode::Face) {
+          result.selection.selected_object_ids.clear();
+          result.selection.selected_edges.clear();
+          result.selection.selected_edge_full_object_ids.clear();
+          result.selection.selected_vertices.clear();
+          result.selection.selected_vertex_full_object_ids.clear();
+          remove_faces_for_object(result.selection.selected_faces,
+                                  request.object_id);
+          for (const RectangleSelectionFace &face : request.object_faces) {
+            if (rectangle_face_is_valid(face) &&
+                face.object_id == request.object_id) {
+              result.selection.selected_faces.push_back(face);
+            }
+          }
+          if (!result.selection.selected_faces.empty()) {
+            const RectangleSelectionFace active =
+                result.selection.selected_faces.back();
+            result.selection.active_object_id = active.object_id;
+            result.selection.active_face_index = active.face_index;
+          } else {
+            result.selection.active_object_id = -1;
+          }
+          return result;
+        }
 
-	result.selection.selected_faces.clear();
+        result.selection.selected_faces.clear();
 	result.selection.active_face_index = -1;
 	rectangle_append_unique_id(result.selection.selected_object_ids, request.object_id);
 
-	if (request.mode == SelectionMode::edge) {
-		result.selection.selected_vertices.clear();
-		result.selection.selected_vertex_full_object_ids.clear();
-		result.selection.active_vertex_indices.clear();
-		remove_edges_for_object(result.selection, request.object_id);
-		rectangle_append_unique_id(result.selection.selected_edge_full_object_ids, request.object_id);
-		result.selection.active_object_id = request.object_id;
-		return result;
-	}
+        if (request.mode == SelectionMode::Edge) {
+          result.selection.selected_vertices.clear();
+          result.selection.selected_vertex_full_object_ids.clear();
+          result.selection.active_vertex_indices.clear();
+          remove_edges_for_object(result.selection, request.object_id);
+          rectangle_append_unique_id(
+              result.selection.selected_edge_full_object_ids,
+              request.object_id);
+          result.selection.active_object_id = request.object_id;
+          return result;
+        }
 
-	result.selection.selected_edges.clear();
+        result.selection.selected_edges.clear();
 	result.selection.selected_edge_full_object_ids.clear();
 	result.selection.active_edge_vertex_indices.clear();
 	remove_vertices_for_object(result.selection, request.object_id);
@@ -1613,73 +1708,79 @@ SelectionActiveTarget active_target_from_selection(const RectangleSelectionState
 {
 	SelectionActiveTarget active;
 	active.selection_mode = selection.mode;
-	if (selection.mode == SelectionMode::face) {
-		if (selection.active_object_id >= 0 && selection.active_face_index >= 0) {
-			active.has_active = true;
-			active.kind = ActiveSelectionKind::face;
-			active.object_id = selection.active_object_id;
-			active.face_index = selection.active_face_index;
-			return active;
-		}
-		if (!selection.selected_faces.empty()) {
-			const RectangleSelectionFace face = selection.selected_faces.back();
-			active.has_active = true;
-			active.kind = ActiveSelectionKind::face;
-			active.object_id = face.object_id;
-			active.face_index = face.face_index;
-			active.vertex_indices = face.vertex_indices;
-			return active;
-		}
-		return active;
-	}
-	if (selection.mode == SelectionMode::edge) {
-		if (selection.active_object_id >= 0 && selection.active_edge_vertex_indices.size() >= 2) {
-			active.has_active = true;
-			active.kind = ActiveSelectionKind::edge;
-			active.object_id = selection.active_object_id;
-			active.vertex_indices = selection_indices_prefix(selection.active_edge_vertex_indices, 2);
-			return active;
-		}
-		if (!selection.selected_edges.empty()) {
-			const RectangleSelectionEdge edge = selection.selected_edges.back();
-			active.has_active = true;
-			active.kind = ActiveSelectionKind::edge;
-			active.object_id = edge.object_id;
-			active.vertex_indices = { edge.a_index, edge.b_index };
-			return active;
-		}
-		return active;
-	}
-	if (selection.mode == SelectionMode::vertex) {
-		if (selection.active_object_id >= 0 && !selection.active_vertex_indices.empty()) {
-			active.has_active = true;
-			active.kind = ActiveSelectionKind::vertex;
-			active.object_id = selection.active_object_id;
-			active.vertex_indices = selection_indices_prefix(selection.active_vertex_indices, 1);
-			return active;
-		}
-		if (!selection.selected_vertices.empty()) {
-			const RectangleSelectionVertex vertex = selection.selected_vertices.back();
-			active.has_active = true;
-			active.kind = ActiveSelectionKind::vertex;
-			active.object_id = vertex.object_id;
-			active.vertex_indices = { vertex.vertex_index };
-			return active;
-		}
-		return active;
-	}
+        if (selection.mode == SelectionMode::Face) {
+          if (selection.active_object_id >= 0 &&
+              selection.active_face_index >= 0) {
+            active.has_active = true;
+            active.kind = ActiveSelectionKind::Face;
+            active.object_id = selection.active_object_id;
+            active.face_index = selection.active_face_index;
+            return active;
+          }
+          if (!selection.selected_faces.empty()) {
+            const RectangleSelectionFace face = selection.selected_faces.back();
+            active.has_active = true;
+            active.kind = ActiveSelectionKind::Face;
+            active.object_id = face.object_id;
+            active.face_index = face.face_index;
+            active.vertex_indices = face.vertex_indices;
+            return active;
+          }
+          return active;
+        }
+        if (selection.mode == SelectionMode::Edge) {
+          if (selection.active_object_id >= 0 &&
+              selection.active_edge_vertex_indices.size() >= 2) {
+            active.has_active = true;
+            active.kind = ActiveSelectionKind::Edge;
+            active.object_id = selection.active_object_id;
+            active.vertex_indices = selection_indices_prefix(
+                selection.active_edge_vertex_indices, 2);
+            return active;
+          }
+          if (!selection.selected_edges.empty()) {
+            const RectangleSelectionEdge edge = selection.selected_edges.back();
+            active.has_active = true;
+            active.kind = ActiveSelectionKind::Edge;
+            active.object_id = edge.object_id;
+            active.vertex_indices = {edge.a_index, edge.b_index};
+            return active;
+          }
+          return active;
+        }
+        if (selection.mode == SelectionMode::Vertex) {
+          if (selection.active_object_id >= 0 &&
+              !selection.active_vertex_indices.empty()) {
+            active.has_active = true;
+            active.kind = ActiveSelectionKind::Vertex;
+            active.object_id = selection.active_object_id;
+            active.vertex_indices =
+                selection_indices_prefix(selection.active_vertex_indices, 1);
+            return active;
+          }
+          if (!selection.selected_vertices.empty()) {
+            const RectangleSelectionVertex vertex =
+                selection.selected_vertices.back();
+            active.has_active = true;
+            active.kind = ActiveSelectionKind::Vertex;
+            active.object_id = vertex.object_id;
+            active.vertex_indices = {vertex.vertex_index};
+            return active;
+          }
+          return active;
+        }
 
-	if (selection.active_object_id >= 0 &&
+        if (selection.active_object_id >= 0 &&
 			(selection.selected_object_ids.empty() || rectangle_contains_id(selection.selected_object_ids, selection.active_object_id))) {
 		active.has_active = true;
-		active.kind = ActiveSelectionKind::object;
-		active.object_id = selection.active_object_id;
+                active.kind = ActiveSelectionKind::Object;
+                active.object_id = selection.active_object_id;
 		return active;
 	}
 	if (!selection.selected_object_ids.empty()) {
 		active.has_active = true;
-		active.kind = ActiveSelectionKind::object;
-		active.object_id = selection.selected_object_ids.back();
+                active.kind = ActiveSelectionKind::Object;
+                active.object_id = selection.selected_object_ids.back();
 	}
 	return active;
 }
@@ -1688,16 +1789,20 @@ RectangleSelectionResult clear_empty_element_click_selection(const RectangleSele
 {
 	RectangleSelectionResult result;
 	result.selection = selection;
-	if (selection.mode == SelectionMode::face || selection.mode == SelectionMode::edge || selection.mode == SelectionMode::vertex) {
-		if (selection_has_element_handles_for_mode(result.selection)) {
-			clear_element_selection_data(result.selection);
-			if (selection.mode == SelectionMode::edge || selection.mode == SelectionMode::vertex || result.selection.active_object_id < 0) {
-				activate_remaining_element_or_target(result.selection);
-			}
-			return result;
-		}
-	}
-	result.selection = cleared_selection_state(selection);
+        if (selection.mode == SelectionMode::Face ||
+            selection.mode == SelectionMode::Edge ||
+            selection.mode == SelectionMode::Vertex) {
+          if (selection_has_element_handles_for_mode(result.selection)) {
+            clear_element_selection_data(result.selection);
+            if (selection.mode == SelectionMode::Edge ||
+                selection.mode == SelectionMode::Vertex ||
+                result.selection.active_object_id < 0) {
+              activate_remaining_element_or_target(result.selection);
+            }
+            return result;
+          }
+        }
+        result.selection = cleared_selection_state(selection);
 	return result;
 }
 
@@ -1706,31 +1811,40 @@ RectangleSelectionResult select_handle(const SelectionHandleRequest& request)
 	RectangleSelectionResult result;
 	result.selection = request.current_selection;
 	const SelectionHandleTarget& handle = request.handle;
-	if (handle.object_id < 0 ||
-			(handle.kind != ActiveSelectionKind::vertex && handle.kind != ActiveSelectionKind::edge && handle.kind != ActiveSelectionKind::face)) {
-		return result;
-	}
+        if (handle.object_id < 0 ||
+            (handle.kind != ActiveSelectionKind::Vertex &&
+             handle.kind != ActiveSelectionKind::Edge &&
+             handle.kind != ActiveSelectionKind::Face)) {
+          return result;
+        }
 
-	if (handle.kind == ActiveSelectionKind::face) {
-		if (handle.face_index < 0) {
-			return result;
-		}
-		if (!request.additive) {
-			result.selection = cleared_selection_state(request.current_selection);
-		} else {
-			result.selection.selected_object_ids.clear();
-		}
-		result.selection.mode = SelectionMode::face;
-		activate_face_target(result.selection, { handle.object_id, handle.face_index, handle.vertex_indices });
-		const bool face_added = toggle_face(result.selection, { handle.object_id, handle.face_index, handle.vertex_indices }, request.additive);
-		if (request.additive && !face_added) {
-			activate_remaining_face_or_clear(result.selection);
-		}
-		return result;
-	}
+        if (handle.kind == ActiveSelectionKind::Face) {
+          if (handle.face_index < 0) {
+            return result;
+          }
+          if (!request.additive) {
+            result.selection =
+                cleared_selection_state(request.current_selection);
+          } else {
+            result.selection.selected_object_ids.clear();
+          }
+          result.selection.mode = SelectionMode::Face;
+          activate_face_target(
+              result.selection,
+              {handle.object_id, handle.face_index, handle.vertex_indices});
+          const bool face_added = toggle_face(
+              result.selection,
+              {handle.object_id, handle.face_index, handle.vertex_indices},
+              request.additive);
+          if (request.additive && !face_added) {
+            activate_remaining_face_or_clear(result.selection);
+          }
+          return result;
+        }
 
-	const int required_count = handle.kind == ActiveSelectionKind::edge ? 2 : 1;
-	if (static_cast<int>(handle.vertex_indices.size()) < required_count) {
+        const int required_count =
+            handle.kind == ActiveSelectionKind::Edge ? 2 : 1;
+        if (static_cast<int>(handle.vertex_indices.size()) < required_count) {
 		return result;
 	}
 	const std::vector<SelectionElementGroup> groups = normalized_handle_groups(handle, required_count);
@@ -1753,29 +1867,33 @@ RectangleSelectionResult select_handle(const SelectionHandleRequest& request)
 		result.selection.selected_faces.clear();
 	}
 
-	if (handle.kind == ActiveSelectionKind::vertex) {
-		result.selection.selected_edges.clear();
-		activate_vertex_group(result.selection, groups.front());
-		const bool remove_group = request.additive && all_vertex_groups_selected(result.selection, groups);
-		if (remove_group) {
-			remove_vertex_groups(result.selection, groups);
-			activate_remaining_element_or_target(result.selection);
-		} else {
-			add_missing_vertex_groups(result.selection, groups);
-		}
-	} else {
-		result.selection.selected_vertices.clear();
-		activate_edge_group(result.selection, groups.front());
-		const bool remove_group = request.additive && all_edge_groups_selected(result.selection, groups);
-		if (remove_group) {
-			remove_edge_groups(result.selection, groups);
-			activate_remaining_element_or_target(result.selection);
-		} else {
-			add_missing_edge_groups(result.selection, groups);
-		}
-	}
+        if (handle.kind == ActiveSelectionKind::Vertex) {
+          result.selection.selected_edges.clear();
+          activate_vertex_group(result.selection, groups.front());
+          const bool remove_group =
+              request.additive &&
+              all_vertex_groups_selected(result.selection, groups);
+          if (remove_group) {
+            remove_vertex_groups(result.selection, groups);
+            activate_remaining_element_or_target(result.selection);
+          } else {
+            add_missing_vertex_groups(result.selection, groups);
+          }
+        } else {
+          result.selection.selected_vertices.clear();
+          activate_edge_group(result.selection, groups.front());
+          const bool remove_group =
+              request.additive &&
+              all_edge_groups_selected(result.selection, groups);
+          if (remove_group) {
+            remove_edge_groups(result.selection, groups);
+            activate_remaining_element_or_target(result.selection);
+          } else {
+            add_missing_edge_groups(result.selection, groups);
+          }
+        }
 
-	if (request.additive && !selection_has_any(result.selection)) {
+        if (request.additive && !selection_has_any(result.selection)) {
 		result.selection = cleared_selection_state(request.current_selection);
 	}
 	return result;
@@ -1794,54 +1912,64 @@ RectangleSelectionResult select_hit(const SelectionHitRequest& request)
 		result.selection = cleared_selection_state(request.current_selection);
 	}
 
-	if (result.selection.mode == SelectionMode::object) {
-		const bool object_added = toggle_or_add_object(result.selection, hit.object_id, request.additive);
-		if (object_added) {
-			activate_object_target(result.selection, hit.object_id);
-		} else if (result.selection.selected_object_ids.empty()) {
-			result.selection = cleared_selection_state(request.current_selection);
-		} else {
-			activate_object_target(result.selection, result.selection.selected_object_ids.back());
-		}
-		return result;
-	}
+        if (result.selection.mode == SelectionMode::Object) {
+          const bool object_added = toggle_or_add_object(
+              result.selection, hit.object_id, request.additive);
+          if (object_added) {
+            activate_object_target(result.selection, hit.object_id);
+          } else if (result.selection.selected_object_ids.empty()) {
+            result.selection =
+                cleared_selection_state(request.current_selection);
+          } else {
+            activate_object_target(result.selection,
+                                   result.selection.selected_object_ids.back());
+          }
+          return result;
+        }
 
-	if (result.selection.mode == SelectionMode::face) {
-		if (request.additive) {
-			result.selection.selected_object_ids.clear();
-		}
-		activate_face_target(result.selection, { hit.object_id, hit.face_index, {} });
-		const bool face_added = toggle_face(result.selection, { hit.object_id, hit.face_index, {} }, request.additive);
-		if (request.additive && !face_added) {
-			activate_remaining_face_or_clear(result.selection);
-		}
-		return result;
-	}
+        if (result.selection.mode == SelectionMode::Face) {
+          if (request.additive) {
+            result.selection.selected_object_ids.clear();
+          }
+          activate_face_target(result.selection,
+                               {hit.object_id, hit.face_index, {}});
+          const bool face_added =
+              toggle_face(result.selection, {hit.object_id, hit.face_index, {}},
+                          request.additive);
+          if (request.additive && !face_added) {
+            activate_remaining_face_or_clear(result.selection);
+          }
+          return result;
+        }
 
-	if (result.selection.mode == SelectionMode::edge || result.selection.mode == SelectionMode::vertex) {
-		result.selection.selected_faces.clear();
-		result.selection.active_edge_vertex_indices.clear();
-		result.selection.active_vertex_indices.clear();
-		if (!request.additive) {
-			clear_element_selection_data(result.selection);
-			activate_object_target(result.selection, hit.object_id);
-			result.selection.selected_object_ids = { hit.object_id };
-			return result;
-		}
-		if (rectangle_contains_id(result.selection.selected_object_ids, hit.object_id)) {
-			remove_element_object_target(result.selection, hit.object_id);
-		} else {
-			rectangle_append_unique_id(result.selection.selected_object_ids, hit.object_id);
-			activate_object_target(result.selection, hit.object_id);
-			return result;
-		}
-		prune_transient_element_selection_to_targets(result.selection);
-		activate_remaining_element_or_target(result.selection);
-		if (!selection_has_any(result.selection)) {
-			result.selection = cleared_selection_state(request.current_selection);
-		}
-	}
-	return result;
+        if (result.selection.mode == SelectionMode::Edge ||
+            result.selection.mode == SelectionMode::Vertex) {
+          result.selection.selected_faces.clear();
+          result.selection.active_edge_vertex_indices.clear();
+          result.selection.active_vertex_indices.clear();
+          if (!request.additive) {
+            clear_element_selection_data(result.selection);
+            activate_object_target(result.selection, hit.object_id);
+            result.selection.selected_object_ids = {hit.object_id};
+            return result;
+          }
+          if (rectangle_contains_id(result.selection.selected_object_ids,
+                                    hit.object_id)) {
+            remove_element_object_target(result.selection, hit.object_id);
+          } else {
+            rectangle_append_unique_id(result.selection.selected_object_ids,
+                                       hit.object_id);
+            activate_object_target(result.selection, hit.object_id);
+            return result;
+          }
+          prune_transient_element_selection_to_targets(result.selection);
+          activate_remaining_element_or_target(result.selection);
+          if (!selection_has_any(result.selection)) {
+            result.selection =
+                cleared_selection_state(request.current_selection);
+          }
+        }
+        return result;
 }
 
 RectangleSelectionResult switch_selection_mode(const SelectionModeSwitchRequest& request)
@@ -1856,29 +1984,34 @@ RectangleSelectionResult switch_selection_mode(const SelectionModeSwitchRequest&
 	const std::vector<int> canonical_targets = canonical_object_targets_for_mode_switch(request.current_selection, previous_active_object_id);
 	result.selection.mode = request.mode;
 
-	if (request.mode == SelectionMode::edge || request.mode == SelectionMode::vertex) {
-		clear_element_selection_data(result.selection);
-		result.selection.selected_object_ids = canonical_targets;
-		if (!canonical_targets.empty()) {
-			const int active_id = rectangle_contains_id(canonical_targets, previous_active_object_id) ? previous_active_object_id : canonical_targets.back();
-			activate_object_target(result.selection, active_id);
-		} else {
-			clear_active_element_state(result.selection);
-		}
-		return result;
-	}
+        if (request.mode == SelectionMode::Edge ||
+            request.mode == SelectionMode::Vertex) {
+          clear_element_selection_data(result.selection);
+          result.selection.selected_object_ids = canonical_targets;
+          if (!canonical_targets.empty()) {
+            const int active_id =
+                rectangle_contains_id(canonical_targets,
+                                      previous_active_object_id)
+                    ? previous_active_object_id
+                    : canonical_targets.back();
+            activate_object_target(result.selection, active_id);
+          } else {
+            clear_active_element_state(result.selection);
+          }
+          return result;
+        }
 
-	if (request.mode == SelectionMode::object) {
-		result.selection = cleared_selection_state(request.current_selection);
-		result.selection.mode = SelectionMode::object;
-		result.selection.selected_object_ids = canonical_targets;
-		if (!canonical_targets.empty()) {
-			activate_object_target(result.selection, canonical_targets.back());
-		}
-		return result;
-	}
+        if (request.mode == SelectionMode::Object) {
+          result.selection = cleared_selection_state(request.current_selection);
+          result.selection.mode = SelectionMode::Object;
+          result.selection.selected_object_ids = canonical_targets;
+          if (!canonical_targets.empty()) {
+            activate_object_target(result.selection, canonical_targets.back());
+          }
+          return result;
+        }
 
-	clear_element_selection_data(result.selection);
+        clear_element_selection_data(result.selection);
 	result.selection.selected_object_ids = canonical_targets;
 	if (!canonical_targets.empty()) {
 		const int active_id = rectangle_contains_id(canonical_targets, previous_active_object_id) ? previous_active_object_id : canonical_targets.back();
@@ -1903,37 +2036,42 @@ std::vector<int> selected_or_active_object_ids(const RectangleSelectionState& se
 int selection_count(const RectangleSelectionState& selection)
 {
 	switch (selection.mode) {
-		case SelectionMode::object:
-			return static_cast<int>(selection.selected_object_ids.size());
-		case SelectionMode::face:
-			if (!selection.selected_faces.empty()) {
-				return static_cast<int>(selection.selected_faces.size());
-			}
-			return selection.active_object_id >= 0 && selection.active_face_index >= 0 ? 1 : 0;
-		case SelectionMode::edge:
-			if (!selection.selected_edge_full_object_ids.empty()) {
-				return static_cast<int>(selection.selected_edge_full_object_ids.size());
-			}
-			if (!selection.selected_edges.empty()) {
-				return static_cast<int>(selection.selected_edges.size());
-			}
-			if (!selection.active_edge_vertex_indices.empty()) {
-				return 1;
-			}
-			return static_cast<int>(selection.selected_object_ids.size());
-		case SelectionMode::vertex:
-			if (!selection.selected_vertex_full_object_ids.empty()) {
-				return static_cast<int>(selection.selected_vertex_full_object_ids.size());
-			}
-			if (!selection.selected_vertices.empty()) {
-				return static_cast<int>(selection.selected_vertices.size());
-			}
-			if (!selection.active_vertex_indices.empty()) {
-				return 1;
-			}
-			return static_cast<int>(selection.selected_object_ids.size());
-		default:
-			break;
+        case SelectionMode::Object:
+          return static_cast<int>(selection.selected_object_ids.size());
+        case SelectionMode::Face:
+          if (!selection.selected_faces.empty()) {
+            return static_cast<int>(selection.selected_faces.size());
+          }
+          return selection.active_object_id >= 0 &&
+                         selection.active_face_index >= 0
+                     ? 1
+                     : 0;
+        case SelectionMode::Edge:
+          if (!selection.selected_edge_full_object_ids.empty()) {
+            return static_cast<int>(
+                selection.selected_edge_full_object_ids.size());
+          }
+          if (!selection.selected_edges.empty()) {
+            return static_cast<int>(selection.selected_edges.size());
+          }
+          if (!selection.active_edge_vertex_indices.empty()) {
+            return 1;
+          }
+          return static_cast<int>(selection.selected_object_ids.size());
+        case SelectionMode::Vertex:
+          if (!selection.selected_vertex_full_object_ids.empty()) {
+            return static_cast<int>(
+                selection.selected_vertex_full_object_ids.size());
+          }
+          if (!selection.selected_vertices.empty()) {
+            return static_cast<int>(selection.selected_vertices.size());
+          }
+          if (!selection.active_vertex_indices.empty()) {
+            return 1;
+          }
+          return static_cast<int>(selection.selected_object_ids.size());
+        default:
+          break;
 	}
 	return 0;
 }
@@ -2026,40 +2164,43 @@ RectangleSelectionState gpu_feedback_selection(const SelectionFeedbackRequest& r
 {
 	RectangleSelectionState selection = request.current_selection;
 	std::vector<int> feedback_ids;
-	if (selection.mode != SelectionMode::face) {
-		for (const int object_id : selection.selected_object_ids) {
-			rectangle_append_unique_id(feedback_ids, object_id);
-		}
-	}
+        if (selection.mode != SelectionMode::Face) {
+          for (const int object_id : selection.selected_object_ids) {
+            rectangle_append_unique_id(feedback_ids, object_id);
+          }
+        }
 
-	if (selection.mode == SelectionMode::edge || selection.mode == SelectionMode::vertex) {
-		for (const int object_id : selection.selected_edge_full_object_ids) {
-			rectangle_append_unique_id(feedback_ids, object_id);
-		}
-		for (const int object_id : request.compact_edge_object_ids) {
-			rectangle_append_unique_id(feedback_ids, object_id);
-		}
-		for (const int object_id : selection.selected_vertex_full_object_ids) {
-			rectangle_append_unique_id(feedback_ids, object_id);
-		}
-		rectangle_append_unique_id(feedback_ids, selection.active_object_id);
-		for (const RectangleSelectionEdge edge : selection.selected_edges) {
-			rectangle_append_unique_id(feedback_ids, edge.object_id);
-		}
-		for (const RectangleSelectionVertex vertex : selection.selected_vertices) {
-			rectangle_append_unique_id(feedback_ids, vertex.object_id);
-		}
-		selection.selected_faces.clear();
-		selection.selected_edges.clear();
-		selection.selected_vertices.clear();
-		selection.active_vertex_indices.clear();
-		selection.active_edge_vertex_indices.clear();
-		selection.selected_edge_full_object_ids.clear();
-		selection.selected_vertex_full_object_ids.clear();
-		selection.mode = SelectionMode::object;
-	}
+        if (selection.mode == SelectionMode::Edge ||
+            selection.mode == SelectionMode::Vertex) {
+          for (const int object_id : selection.selected_edge_full_object_ids) {
+            rectangle_append_unique_id(feedback_ids, object_id);
+          }
+          for (const int object_id : request.compact_edge_object_ids) {
+            rectangle_append_unique_id(feedback_ids, object_id);
+          }
+          for (const int object_id :
+               selection.selected_vertex_full_object_ids) {
+            rectangle_append_unique_id(feedback_ids, object_id);
+          }
+          rectangle_append_unique_id(feedback_ids, selection.active_object_id);
+          for (const RectangleSelectionEdge edge : selection.selected_edges) {
+            rectangle_append_unique_id(feedback_ids, edge.object_id);
+          }
+          for (const RectangleSelectionVertex vertex :
+               selection.selected_vertices) {
+            rectangle_append_unique_id(feedback_ids, vertex.object_id);
+          }
+          selection.selected_faces.clear();
+          selection.selected_edges.clear();
+          selection.selected_vertices.clear();
+          selection.active_vertex_indices.clear();
+          selection.active_edge_vertex_indices.clear();
+          selection.selected_edge_full_object_ids.clear();
+          selection.selected_vertex_full_object_ids.clear();
+          selection.mode = SelectionMode::Object;
+        }
 
-	selection.selected_object_ids = feedback_ids;
+        selection.selected_object_ids = feedback_ids;
 	return selection;
 }
 
@@ -2092,20 +2233,22 @@ RectangleSelectionState preview_element_handle_mesh_selection(const SelectionFee
 	for (const int object_id : request.preview_changed_object_ids) {
 		rectangle_append_unique_id(target_ids, object_id);
 	}
-	selection.selected_object_ids = selection.mode == SelectionMode::face ? std::vector<int>() : target_ids;
-	selection.active_object_id = -1;
+        selection.selected_object_ids = selection.mode == SelectionMode::Face
+                                            ? std::vector<int>()
+                                            : target_ids;
+        selection.active_object_id = -1;
 	selection.active_face_index = -1;
-	if (selection.mode != SelectionMode::vertex) {
-		selection.active_vertex_indices.clear();
-		selection.selected_vertex_full_object_ids.clear();
-		selection.selected_vertices.clear();
-	}
-	if (selection.mode != SelectionMode::edge) {
-		selection.active_edge_vertex_indices.clear();
-		selection.selected_edge_full_object_ids.clear();
-		selection.selected_edges.clear();
-	}
-	return selection;
+        if (selection.mode != SelectionMode::Vertex) {
+          selection.active_vertex_indices.clear();
+          selection.selected_vertex_full_object_ids.clear();
+          selection.selected_vertices.clear();
+        }
+        if (selection.mode != SelectionMode::Edge) {
+          selection.active_edge_vertex_indices.clear();
+          selection.selected_edge_full_object_ids.clear();
+          selection.selected_edges.clear();
+        }
+        return selection;
 }
 
 RectangleSelectionState without_cpu_element_handle_overlay_selection(const RectangleSelectionState& selection)
@@ -2125,8 +2268,8 @@ RectangleSelectionState without_cpu_element_handle_overlay_selection(const Recta
 RectangleSelectionState empty_feedback_selection(const RectangleSelectionState& selection)
 {
 	RectangleSelectionState projection = selection;
-	projection.mode = SelectionMode::object;
-	projection.active_object_id = -1;
+        projection.mode = SelectionMode::Object;
+        projection.active_object_id = -1;
 	projection.active_face_index = -1;
 	projection.selected_object_ids.clear();
 	projection.selected_faces.clear();
@@ -2141,30 +2284,33 @@ RectangleSelectionState empty_feedback_selection(const RectangleSelectionState& 
 
 RectangleSelectionState face_feedback_selection(const RectangleSelectionState& selection)
 {
-	if (selection.mode == SelectionMode::edge || selection.mode == SelectionMode::vertex) {
-		return empty_feedback_selection(selection);
-	}
-	return gpu_feedback_selection(selection);
+  if (selection.mode == SelectionMode::Edge ||
+      selection.mode == SelectionMode::Vertex) {
+    return empty_feedback_selection(selection);
+  }
+        return gpu_feedback_selection(selection);
 }
 
 RectangleSelectionState visual_face_feedback_selection(const SelectionFeedbackRequest& request)
 {
-	if (request.current_selection.mode == SelectionMode::edge || request.current_selection.mode == SelectionMode::vertex) {
-		return empty_feedback_selection(request.current_selection);
-	}
-	return gpu_feedback_selection(request);
+  if (request.current_selection.mode == SelectionMode::Edge ||
+      request.current_selection.mode == SelectionMode::Vertex) {
+    return empty_feedback_selection(request.current_selection);
+  }
+        return gpu_feedback_selection(request);
 }
 
 bool selection_face_feedback_should_xray(const RectangleSelectionState& selection, const std::vector<SelectionObjectFaceCount>& object_face_counts)
 {
-	if (selection.mode == SelectionMode::object) {
-		return !selection.selected_object_ids.empty();
-	}
-	if (selection.mode != SelectionMode::face || selection.selected_faces.empty()) {
-		return false;
-	}
+  if (selection.mode == SelectionMode::Object) {
+    return !selection.selected_object_ids.empty();
+  }
+  if (selection.mode != SelectionMode::Face ||
+      selection.selected_faces.empty()) {
+    return false;
+  }
 
-	std::unordered_map<int, int> total_faces_by_object;
+        std::unordered_map<int, int> total_faces_by_object;
 	total_faces_by_object.reserve(object_face_counts.size());
 	for (const SelectionObjectFaceCount count : object_face_counts) {
 		if (count.object_id >= 0 && count.face_count > 0) {
@@ -2305,14 +2451,15 @@ SelectionCenterPlan plan_selection_center(const SelectionCenterPlanRequest& requ
 	SelectionCenterPlan plan;
 	plan.normalized_selection = request.current_selection;
 	plan.has_element_entries = selection_has_center_element_entries(plan.normalized_selection);
-	if ((plan.normalized_selection.mode == SelectionMode::edge || plan.normalized_selection.mode == SelectionMode::vertex) &&
-			!plan.normalized_selection.selected_object_ids.empty() &&
-			plan.has_element_entries) {
-		plan.ignored_selected_objects_for_element_entries = true;
-		plan.normalized_selection.selected_object_ids.clear();
-	}
+        if ((plan.normalized_selection.mode == SelectionMode::Edge ||
+             plan.normalized_selection.mode == SelectionMode::Vertex) &&
+            !plan.normalized_selection.selected_object_ids.empty() &&
+            plan.has_element_entries) {
+          plan.ignored_selected_objects_for_element_entries = true;
+          plan.normalized_selection.selected_object_ids.clear();
+        }
 
-	const RectangleSelectionState& selection = plan.normalized_selection;
+        const RectangleSelectionState& selection = plan.normalized_selection;
 	const bool object_only_selection = !selection.selected_object_ids.empty() &&
 		selection.selected_faces.empty() &&
 		selection.selected_edges.empty() &&
@@ -2320,9 +2467,9 @@ SelectionCenterPlan plan_selection_center(const SelectionCenterPlanRequest& requ
 		selection.selected_edge_full_object_ids.empty() &&
 		selection.selected_vertex_full_object_ids.empty();
 	if (object_only_selection) {
-		plan.strategy = SelectionCenterStrategy::selected_objects;
-		plan.object_ids = selection.selected_object_ids;
-		return plan;
+          plan.strategy = SelectionCenterStrategy::SelectedObjects;
+          plan.object_ids = selection.selected_object_ids;
+          return plan;
 	}
 
 	if (selection.selected_object_ids.empty() && selection.selected_faces.empty()) {
@@ -2331,9 +2478,9 @@ SelectionCenterPlan plan_selection_center(const SelectionCenterPlanRequest& requ
 		const int references_per_object = use_vertex_full_objects ? request.vertex_references_per_full_object : request.edge_references_per_full_object;
 		plan.dense_reference_count = static_cast<int>(full_object_ids.size()) * references_per_object;
 		if (!full_object_ids.empty() && plan.dense_reference_count > request.dense_center_reference_limit) {
-			plan.strategy = SelectionCenterStrategy::dense_full_objects;
-			plan.object_ids = full_object_ids;
-			return plan;
+                  plan.strategy = SelectionCenterStrategy::DenseFullObjects;
+                  plan.object_ids = full_object_ids;
+                  return plan;
 		}
 	}
 
@@ -2343,12 +2490,12 @@ SelectionCenterPlan plan_selection_center(const SelectionCenterPlanRequest& requ
 					!selection.selected_vertices.empty() ||
 					!selection.selected_edge_full_object_ids.empty() ||
 					!selection.selected_vertex_full_object_ids.empty())) {
-		plan.strategy = SelectionCenterStrategy::sparse_elements;
-		return plan;
+          plan.strategy = SelectionCenterStrategy::SparseElements;
+          return plan;
 	}
 
-	plan.strategy = SelectionCenterStrategy::fallback_points;
-	return plan;
+        plan.strategy = SelectionCenterStrategy::FallbackPoints;
+        return plan;
 }
 
 SelectionOverlayLookup build_selection_overlay_lookup(const RectangleSelectionState& selection)
@@ -2364,10 +2511,10 @@ SelectionOverlayLookup build_selection_overlay_lookup(const SelectionOverlayLook
 	SelectionOverlayLookup lookup;
 
 	for (const int object_id : selection.selected_object_ids) {
-		if (selection.mode == SelectionMode::object) {
-			rectangle_append_unique_id(lookup.selected_object_ids, object_id);
-		}
-		rectangle_append_unique_id(lookup.target_object_ids, object_id);
+          if (selection.mode == SelectionMode::Object) {
+            rectangle_append_unique_id(lookup.selected_object_ids, object_id);
+          }
+                rectangle_append_unique_id(lookup.target_object_ids, object_id);
 	}
 	for (const int object_id : request.extra_target_object_ids) {
 		rectangle_append_unique_id(lookup.target_object_ids, object_id);
@@ -2377,52 +2524,68 @@ SelectionOverlayLookup build_selection_overlay_lookup(const SelectionOverlayLook
 		rectangle_append_unique_id(lookup.target_object_ids, face.object_id);
 	}
 
-	if (selection.mode == SelectionMode::edge) {
-		for (const RectangleSelectionEdge edge : selection.selected_edges) {
-			overlay_append_unique_edge(lookup.selected_edges, { edge.object_id, edge.a_index, edge.b_index });
-			rectangle_append_unique_id(lookup.target_object_ids, edge.object_id);
-		}
-		if (selection.active_object_id >= 0 && selection.active_edge_vertex_indices.size() >= 2) {
-			overlay_append_unique_edge(lookup.selected_edges, { selection.active_object_id, selection.active_edge_vertex_indices[0], selection.active_edge_vertex_indices[1] });
-			rectangle_append_unique_id(lookup.target_object_ids, selection.active_object_id);
-		}
-		for (const int object_id : selection.selected_edge_full_object_ids) {
-			rectangle_append_unique_id(lookup.selected_object_ids, object_id);
-			rectangle_append_unique_id(lookup.target_object_ids, object_id);
-		}
-	}
+        if (selection.mode == SelectionMode::Edge) {
+          for (const RectangleSelectionEdge edge : selection.selected_edges) {
+            overlay_append_unique_edge(
+                lookup.selected_edges,
+                {edge.object_id, edge.a_index, edge.b_index});
+            rectangle_append_unique_id(lookup.target_object_ids,
+                                       edge.object_id);
+          }
+          if (selection.active_object_id >= 0 &&
+              selection.active_edge_vertex_indices.size() >= 2) {
+            overlay_append_unique_edge(
+                lookup.selected_edges,
+                {selection.active_object_id,
+                 selection.active_edge_vertex_indices[0],
+                 selection.active_edge_vertex_indices[1]});
+            rectangle_append_unique_id(lookup.target_object_ids,
+                                       selection.active_object_id);
+          }
+          for (const int object_id : selection.selected_edge_full_object_ids) {
+            rectangle_append_unique_id(lookup.selected_object_ids, object_id);
+            rectangle_append_unique_id(lookup.target_object_ids, object_id);
+          }
+        }
 
-	if (selection.mode == SelectionMode::vertex) {
-		for (const RectangleSelectionVertex vertex : selection.selected_vertices) {
-			overlay_append_unique_vertex(lookup.selected_vertices, vertex);
-			rectangle_append_unique_id(lookup.target_object_ids, vertex.object_id);
-		}
-		if (selection.active_object_id >= 0) {
-			for (const int vertex_index : selection.active_vertex_indices) {
-				overlay_append_unique_vertex(lookup.selected_vertices, { selection.active_object_id, vertex_index });
-				rectangle_append_unique_id(lookup.target_object_ids, selection.active_object_id);
-			}
-		}
-		for (const int object_id : selection.selected_vertex_full_object_ids) {
-			rectangle_append_unique_id(lookup.selected_object_ids, object_id);
-			rectangle_append_unique_id(lookup.target_object_ids, object_id);
-		}
-	}
+        if (selection.mode == SelectionMode::Vertex) {
+          for (const RectangleSelectionVertex vertex :
+               selection.selected_vertices) {
+            overlay_append_unique_vertex(lookup.selected_vertices, vertex);
+            rectangle_append_unique_id(lookup.target_object_ids,
+                                       vertex.object_id);
+          }
+          if (selection.active_object_id >= 0) {
+            for (const int vertex_index : selection.active_vertex_indices) {
+              overlay_append_unique_vertex(
+                  lookup.selected_vertices,
+                  {selection.active_object_id, vertex_index});
+              rectangle_append_unique_id(lookup.target_object_ids,
+                                         selection.active_object_id);
+            }
+          }
+          for (const int object_id :
+               selection.selected_vertex_full_object_ids) {
+            rectangle_append_unique_id(lookup.selected_object_ids, object_id);
+            rectangle_append_unique_id(lookup.target_object_ids, object_id);
+          }
+        }
 
-	if (!lookup.target_object_ids.empty()) {
+        if (!lookup.target_object_ids.empty()) {
 		return lookup;
 	}
-	if (selection.mode == SelectionMode::edge || selection.mode == SelectionMode::vertex) {
-		return lookup;
-	}
-	if (selection.active_object_id >= 0) {
+        if (selection.mode == SelectionMode::Edge ||
+            selection.mode == SelectionMode::Vertex) {
+          return lookup;
+        }
+        if (selection.active_object_id >= 0) {
 		rectangle_append_unique_id(lookup.target_object_ids, selection.active_object_id);
 		return lookup;
 	}
-	if (selection.mode == SelectionMode::face) {
-		return lookup;
-	}
-	rectangle_append_unique_id(lookup.target_object_ids, request.hovered_object_id);
+        if (selection.mode == SelectionMode::Face) {
+          return lookup;
+        }
+        rectangle_append_unique_id(lookup.target_object_ids, request.hovered_object_id);
 	return lookup;
 }
 
@@ -2487,8 +2650,9 @@ SelectionOverlayPolicy selection_overlay_policy(const SelectionOverlayPolicyRequ
 {
 	const RectangleSelectionState& selection = request.current_selection;
 	SelectionOverlayPolicy policy;
-	policy.element_mode = selection.mode == SelectionMode::edge || selection.mode == SelectionMode::vertex;
-	policy.suppress_selected_object_feedback = request.suppress_selected_object_overlay || request.suppress_selected_object_detail;
+        policy.element_mode = selection.mode == SelectionMode::Edge ||
+                              selection.mode == SelectionMode::Vertex;
+        policy.suppress_selected_object_feedback = request.suppress_selected_object_overlay || request.suppress_selected_object_detail;
 
 	policy.selected_vertex_reference_count = add_limited_selection_reference_count(
 			policy.selected_vertex_reference_count,
@@ -2518,70 +2682,99 @@ SelectionOverlayPolicy selection_overlay_policy(const SelectionOverlayPolicyRequ
 			static_cast<int>(selection.selected_edge_full_object_ids.size()) * request.edge_references_per_full_object,
 			request.selected_edge_limit);
 
-	const int element_limit = selection.mode == SelectionMode::vertex ? request.selected_vertex_limit : request.selected_edge_limit;
-	const int references_per_object = selection.mode == SelectionMode::edge ? request.edge_references_per_full_object : request.vertex_references_per_full_object;
-	if (policy.element_mode) {
+        const int element_limit = selection.mode == SelectionMode::Vertex
+                                      ? request.selected_vertex_limit
+                                      : request.selected_edge_limit;
+        const int references_per_object =
+            selection.mode == SelectionMode::Edge
+                ? request.edge_references_per_full_object
+                : request.vertex_references_per_full_object;
+        if (policy.element_mode) {
 		policy.element_target_reference_count = add_limited_selection_reference_count(
 				policy.element_target_reference_count,
 				static_cast<int>(selection.selected_object_ids.size()) * references_per_object,
 				element_limit);
-		if (selection.mode == SelectionMode::vertex) {
-			policy.element_target_reference_count = add_limited_selection_reference_count(
-					policy.element_target_reference_count,
-					static_cast<int>(selection.selected_vertex_full_object_ids.size()) * request.vertex_references_per_full_object,
-					element_limit);
-		} else {
-			policy.element_target_reference_count = add_limited_selection_reference_count(
-					policy.element_target_reference_count,
-					static_cast<int>(selection.selected_edge_full_object_ids.size()) * request.edge_references_per_full_object,
-					element_limit);
-		}
-		if (policy.element_target_reference_count == 0 && selection.active_object_id >= 0) {
+                if (selection.mode == SelectionMode::Vertex) {
+                  policy.element_target_reference_count =
+                      add_limited_selection_reference_count(
+                          policy.element_target_reference_count,
+                          static_cast<int>(
+                              selection.selected_vertex_full_object_ids
+                                  .size()) *
+                              request.vertex_references_per_full_object,
+                          element_limit);
+                } else {
+                  policy.element_target_reference_count =
+                      add_limited_selection_reference_count(
+                          policy.element_target_reference_count,
+                          static_cast<int>(
+                              selection.selected_edge_full_object_ids.size()) *
+                              request.edge_references_per_full_object,
+                          element_limit);
+                }
+                if (policy.element_target_reference_count == 0 && selection.active_object_id >= 0) {
 			policy.element_target_reference_count = add_limited_selection_reference_count(
 					policy.element_target_reference_count,
 					references_per_object,
 					element_limit);
 		}
 	}
-	policy.dense_selected_vertex_overlay = selection.mode == SelectionMode::vertex &&
-		(policy.selected_vertex_reference_count > request.selected_vertex_limit ||
-				policy.element_target_reference_count > request.selected_vertex_limit);
-	policy.dense_selected_edge_overlay = selection.mode == SelectionMode::edge &&
-		(policy.selected_edge_reference_count > request.selected_edge_limit ||
-				policy.element_target_reference_count > request.selected_edge_limit);
-	policy.dense_element_minimal_overlay = policy.dense_selected_vertex_overlay || policy.dense_selected_edge_overlay;
-	policy.should_build_lookup = !policy.dense_element_minimal_overlay &&
-		!(policy.suppress_selected_object_feedback && selection.mode == SelectionMode::object);
-	return policy;
+        policy.dense_selected_vertex_overlay =
+            selection.mode == SelectionMode::Vertex &&
+            (policy.selected_vertex_reference_count >
+                 request.selected_vertex_limit ||
+             policy.element_target_reference_count >
+                 request.selected_vertex_limit);
+        policy.dense_selected_edge_overlay =
+            selection.mode == SelectionMode::Edge &&
+            (policy.selected_edge_reference_count >
+                 request.selected_edge_limit ||
+             policy.element_target_reference_count >
+                 request.selected_edge_limit);
+        policy.dense_element_minimal_overlay = policy.dense_selected_vertex_overlay || policy.dense_selected_edge_overlay;
+        policy.should_build_lookup =
+            !policy.dense_element_minimal_overlay &&
+            !(policy.suppress_selected_object_feedback &&
+              selection.mode == SelectionMode::Object);
+        return policy;
 }
 
 SelectionSourceWireSuppression source_wire_suppression_for_selection(const RectangleSelectionState& selection)
 {
 	SelectionSourceWireSuppression suppression;
-	if (selection.mode == SelectionMode::object) {
-		for (const int object_id : selection.selected_object_ids) {
-			rectangle_append_unique_id(suppression.hidden_object_ids, object_id);
-		}
-		return suppression;
-	}
-	if (selection.mode == SelectionMode::face) {
-		for (const RectangleSelectionFace face : selection.selected_faces) {
-			overlay_append_unique_face(suppression.hidden_faces, face);
-		}
-		return suppression;
-	}
-	if (selection.mode == SelectionMode::edge) {
-		for (const int object_id : selection.selected_edge_full_object_ids) {
-			rectangle_append_unique_id(suppression.hidden_object_ids, object_id);
-		}
-		for (const RectangleSelectionEdge edge : selection.selected_edges) {
-			overlay_append_unique_edge(suppression.hidden_edges, { edge.object_id, edge.a_index, edge.b_index });
-		}
-		if (selection.active_object_id >= 0 && selection.active_edge_vertex_indices.size() >= 2) {
-			overlay_append_unique_edge(suppression.hidden_edges, { selection.active_object_id, selection.active_edge_vertex_indices[0], selection.active_edge_vertex_indices[1] });
-		}
-	}
-	return suppression;
+        if (selection.mode == SelectionMode::Object) {
+          for (const int object_id : selection.selected_object_ids) {
+            rectangle_append_unique_id(suppression.hidden_object_ids,
+                                       object_id);
+          }
+          return suppression;
+        }
+        if (selection.mode == SelectionMode::Face) {
+          for (const RectangleSelectionFace face : selection.selected_faces) {
+            overlay_append_unique_face(suppression.hidden_faces, face);
+          }
+          return suppression;
+        }
+        if (selection.mode == SelectionMode::Edge) {
+          for (const int object_id : selection.selected_edge_full_object_ids) {
+            rectangle_append_unique_id(suppression.hidden_object_ids,
+                                       object_id);
+          }
+          for (const RectangleSelectionEdge edge : selection.selected_edges) {
+            overlay_append_unique_edge(
+                suppression.hidden_edges,
+                {edge.object_id, edge.a_index, edge.b_index});
+          }
+          if (selection.active_object_id >= 0 &&
+              selection.active_edge_vertex_indices.size() >= 2) {
+            overlay_append_unique_edge(
+                suppression.hidden_edges,
+                {selection.active_object_id,
+                 selection.active_edge_vertex_indices[0],
+                 selection.active_edge_vertex_indices[1]});
+          }
+        }
+        return suppression;
 }
 
 } // namespace quader_editor_core

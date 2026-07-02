@@ -57,94 +57,90 @@ class UISystem {
 public:
     ~UISystem();
 
-    void initialize(
-            SDL_Window* window,
-            RenderSystem& renderSystem,
-            const std::filesystem::path& executableDir,
-            bool customChrome);
+    void initialize(SDL_Window *window, RenderSystem &render_system,
+                    const std::filesystem::path &executable_dir,
+                    bool custom_chrome);
     void shutdown();
 
-    bool processEvent(const SDL_Event& event);
-    void beginFrame(const FrameTiming& frameTiming, std::uint32_t framebufferWidth, std::uint32_t framebufferHeight);
-    void endFrameWithoutRender();
-    void draw(QuaderEditorApi& editor,
-            SceneRenderBridge& renderBridge,
-            SceneDocument& document,
-            AssetRegistry& assets,
-            ModelingSessionService& modeling,
-            EditorSelectionService& selection,
-            AssetId defaultMaterial,
-            bool& quitRequested);
-    void prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight);
-    void prepareViewports(
-            QuaderEditorApi& editor,
-            SceneRenderBridge& renderBridge,
-            const SceneDocument& document,
-            const AssetRegistry& assets);
-    void renderViewports(RenderSystem& renderSystem);
-    void render(RenderSystem& renderSystem);
-    void setRenderPerformanceStats(RenderFramePerformanceStats stats);
-    void setViewportRenderResizeSuspended(bool suspended);
-    [[nodiscard]] bool needsContinuousRendering() const;
-    std::optional<WindowChromeAction> takeWindowChromeAction();
-    const ViewportToolState& viewportToolState() const { return viewportPanel_->toolState(); }
+    bool process_event(const SDL_Event &event);
+    void begin_frame(const FrameTiming &frame_timing,
+                     std::uint32_t framebuffer_width,
+                     std::uint32_t framebuffer_height);
+    void end_frame_without_render();
+    void draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
+              SceneDocument &document, AssetRegistry &assets,
+              ModelingSessionService &modeling,
+              EditorSelectionService &selection, AssetId default_material,
+              bool &quit_requested);
+    void prepare_render_data(std::uint32_t framebuffer_width,
+                             std::uint32_t framebuffer_height);
+    void prepare_viewports(QuaderEditorApi &editor,
+                           SceneRenderBridge &render_bridge,
+                           const SceneDocument &document,
+                           const AssetRegistry &assets);
+    void render_viewports(RenderSystem &render_system);
+    void render(RenderSystem &render_system);
+    void set_render_performance_stats(RenderFramePerformanceStats stats);
+    void set_viewport_render_resize_suspended(bool suspended);
+    [[nodiscard]] bool needs_continuous_rendering() const;
+    std::optional<WindowChromeAction> take_window_chrome_action();
+    const ViewportToolState &viewport_tool_state() const {
+      return viewport_panel_->tool_state();
+    }
 
 private:
-    void registerPanels(RenderSystem& renderSystem);
-    MainMenuBarResult drawWindowChrome(
-            QuaderEditorApi& editor,
-            bool& quitRequested,
-            SceneDocument& document,
-            ModelingSessionService& modeling);
-    void drawDockspace(
-            QuaderEditorApi& editor,
-            bool& quitRequested,
-            SceneDocument& document,
-            ModelingSessionService& modeling,
-            float sidebarMinimumWidth);
-    void buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize);
-    void closeMenuPopupForPassThroughClick();
-    void enforceSidebarDockMinimums(float sidebarMinimumWidth);
-    void setViewportCursorCaptured(bool captured);
-    void warpCapturedCursor(QVec2 point);
-    void loadIcons(filament::Engine& engine, TextureRegistry& textures, const std::filesystem::path& executableDir);
-    void destroyIcons();
-    void saveSettings();
-    void saveViewportSettings();
+  void register_panels(RenderSystem &render_system);
+  MainMenuBarResult draw_window_chrome(QuaderEditorApi &editor,
+                                       bool &quit_requested,
+                                       SceneDocument &document,
+                                       ModelingSessionService &modeling);
+  void draw_dockspace(QuaderEditorApi &editor, bool &quit_requested,
+                      SceneDocument &document, ModelingSessionService &modeling,
+                      float sidebar_minimum_width);
+  void build_default_dock_layout(ImGuiID dockspace_id, ImVec2 dockspace_size);
+  void close_menu_popup_for_pass_through_click();
+  void enforce_sidebar_dock_minimums(float sidebar_minimum_width);
+  void set_viewport_cursor_captured(bool captured);
+  void warp_captured_cursor(QVec2 point);
+  void load_icons(filament::Engine &engine, TextureRegistry &textures,
+                  const std::filesystem::path &executable_dir);
+  void destroy_icons();
+  void save_settings();
+  void save_viewport_settings();
 
-    SDL_Window* window_ = nullptr;
-    ImGuiFilamentRenderer renderer_;
-    UIStyleTokens style_;
-    UIPanelManager panels_;
-    MainMenuBar mainMenuBar_;
-    ViewportSettingsPanel viewportSettingsPanel_;
-    ToolSettingsPanel toolSettingsPanel_;
-    ViewportPanel* viewportPanel_ = nullptr;
-    UIIconSet icons_;
-    LocalizationService localization_;
-    std::vector<filament::Texture*> iconTextures_;
-    std::vector<ImTextureID> iconTextureIds_;
-    filament::Engine* iconEngine_ = nullptr;
-    TextureRegistry* iconTextureRegistry_ = nullptr;
-    UISettings settings_;
-    UISettingsPaths settingsPaths_;
-    ViewportSettings viewportSettings_;
-    std::string imguiIniPath_;
-    bool settingsPanelOpen_ = false;
-    bool toolSettingsPanelOpen_ = false;
-    bool initialized_ = false;
-    bool customChrome_ = false;
-    bool dockLayoutBuilt_ = false;
-    bool hasSavedDockLayout_ = false;
-    bool mainMenuPopupOpen_ = false;
-    bool relativeMouseCaptured_ = false;
-    bool relativeMouseCaptureWarningIssued_ = false;
-    QVec2 relativeMouseDelta_ = {};
-    FrameTiming currentFrameTiming_ = {};
-    RenderFramePerformanceStats renderPerformanceStats_;
-    UIPanelId focusedPanel_ = UIPanelId::Viewport;
-    std::optional<WindowChromeAction> pendingChromeAction_;
-    bool viewportRenderResizeSuspended_ = false;
+  SDL_Window *window_ = nullptr;
+  ImGuiFilamentRenderer renderer_;
+  UIStyleTokens style_;
+  UIPanelManager panels_;
+  MainMenuBar main_menu_bar_;
+  ViewportSettingsPanel viewport_settings_panel_;
+  ToolSettingsPanel tool_settings_panel_;
+  ViewportPanel *viewport_panel_ = nullptr;
+  UIIconSet icons_;
+  LocalizationService localization_;
+  std::vector<filament::Texture *> icon_textures_;
+  std::vector<ImTextureID> icon_texture_ids_;
+  filament::Engine *icon_engine_ = nullptr;
+  TextureRegistry *icon_texture_registry_ = nullptr;
+  UISettings settings_;
+  UISettingsPaths settings_paths_;
+  ViewportSettings viewport_settings_;
+  std::string imgui_ini_path_;
+  bool settings_panel_open_ = false;
+  bool tool_settings_panel_open_ = false;
+  bool initialized_ = false;
+  bool custom_chrome_ = false;
+  bool dock_layout_built_ = false;
+  bool has_saved_dock_layout_ = false;
+  bool main_menu_popup_open_ = false;
+  bool relative_mouse_captured_ = false;
+  bool relative_mouse_capture_warning_issued_ = false;
+  QVec2 relative_mouse_delta_ = {};
+  FrameTiming current_frame_timing_ = {};
+  RenderFramePerformanceStats render_performance_stats_;
+  UIPanelId focused_panel_ = UIPanelId::Viewport;
+  std::optional<WindowChromeAction> pending_chrome_action_;
+  bool viewport_render_resize_suspended_ = false;
 };
 
 } // namespace quader

@@ -45,9 +45,9 @@ public:
 
 OperationResult DissolveEdgesOperation::apply(Document& document, Selection& selection) const
 {
-    if (selection.mode != SelectionMode::edge || selection.edges.empty()) {
-        return { false, "Select one or more edges to dissolve." };
-    }
+  if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
+    return {false, "Select one or more edges to dissolve."};
+  }
 
     Document candidate = document;
     std::vector<ElementId> merged_face_ids;
@@ -56,8 +56,9 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
 
     for (Edge edge : selection.edges) {
         edge = make_edge(edge.a, edge.b);
-        if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b || contains_edge(processed_edges, edge)) {
-            continue;
+        if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+            edge.a == edge.b || contains_edge(processed_edges, edge)) {
+          continue;
         }
 
         std::vector<std::size_t> adjacent_faces;
@@ -128,7 +129,7 @@ OperationResult DissolveEdgesOperation::apply(Document& document, Selection& sel
 
     document = std::move(candidate);
     selection.clear();
-    selection.mode = SelectionMode::face;
+    selection.mode = SelectionMode::Face;
     selection.faces = std::move(merged_face_ids);
     activate_last_selection(selection);
     return { true, {} };

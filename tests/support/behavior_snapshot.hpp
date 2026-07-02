@@ -32,36 +32,36 @@ struct BehaviorBounds {
  * Stores the Entity Snapshot data contract used by the behavior test DSL.
  */
 struct EntitySnapshot {
-    EntityId id = InvalidEntityId;
-    std::string alias;
-    std::string name;
-    TransformComponent transform;
-    bool selected = false;
-    AssetId mesh = InvalidAssetId;
-    ModelingObjectId modelingObjectId = InvalidModelingObjectId;
+  EntityId id = kInvalidEntityId;
+  std::string alias;
+  std::string name;
+  TransformComponent transform;
+  bool selected = false;
+  AssetId mesh = kInvalidAssetId;
+  ModelingObjectId modeling_object_id = kInvalidModelingObjectId;
 };
 
 /**
  * Stores the Mesh Snapshot data contract used by the behavior test DSL.
  */
 struct MeshSnapshot {
-    AssetId mesh = InvalidAssetId;
-    std::size_t vertexCount = 0;
-    std::size_t indexCount = 0;
-    BehaviorBounds bounds;
-    std::vector<QVec3> positions;
+  AssetId mesh = kInvalidAssetId;
+  std::size_t vertex_count = 0;
+  std::size_t index_count = 0;
+  BehaviorBounds bounds;
+  std::vector<QVec3> positions;
 };
 
 /**
  * Represents a Viewport Overlay Stats value used by the behavior test DSL.
  */
 struct ViewportOverlayStats {
-    std::size_t triangleCount = 0;
-    std::size_t lineCount = 0;
-    std::size_t pointCount = 0;
-    std::unordered_map<ViewportOverlayLayer, std::size_t> linesByLayer;
-    std::unordered_map<ViewportOverlayLayer, std::size_t> pointsByLayer;
-    std::unordered_map<ViewportOverlayLayer, std::size_t> trianglesByLayer;
+  std::size_t triangle_count = 0;
+  std::size_t line_count = 0;
+  std::size_t point_count = 0;
+  std::unordered_map<ViewportOverlayLayer, std::size_t> lines_by_layer;
+  std::unordered_map<ViewportOverlayLayer, std::size_t> points_by_layer;
+  std::unordered_map<ViewportOverlayLayer, std::size_t> triangles_by_layer;
 };
 
 /**
@@ -70,11 +70,11 @@ struct ViewportOverlayStats {
 struct BehaviorSnapshot {
     std::string label;
     ModelingSelectionSummary selection;
-    ModelingToolStatus toolStatus;
+    ModelingToolStatus tool_status;
     std::vector<EntitySnapshot> entities;
     std::vector<MeshSnapshot> meshes;
     ViewportOverlayStats overlay;
-    std::optional<BehaviorBounds> selectedBounds;
+    std::optional<BehaviorBounds> selected_bounds;
 };
 
 } // namespace quader::test

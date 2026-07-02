@@ -16,81 +16,84 @@
 namespace quader {
 
 OverlayLineMesh OverlayLineMeshBuilder::build(
-        const std::vector<const ViewportOverlayLine*>& lines,
-        const ViewportOverlayCamera& camera,
-        float widthPixels,
-        float depthBias) {
-    OverlayLineMesh mesh;
-    mesh.vertices.reserve(lines.size() * 4u);
-    mesh.indices.reserve(lines.size() * 6u);
-    const OverlayCameraProjector projector(camera);
-    for (const ViewportOverlayLine* line : lines) {
-        (void)appendLineQuad(mesh, *line, projector, widthPixels, depthBias);
-    }
-    return mesh;
+    const std::vector<const ViewportOverlayLine *> &lines,
+    const ViewportOverlayCamera &camera, float width_pixels, float depth_bias) {
+  OverlayLineMesh mesh;
+  mesh.vertices.reserve(lines.size() * 4u);
+  mesh.indices.reserve(lines.size() * 6u);
+  const OverlayCameraProjector projector(camera);
+  for (const ViewportOverlayLine *line : lines) {
+    (void)append_line_quad(mesh, *line, projector, width_pixels, depth_bias);
+  }
+  return mesh;
 }
 
-bool OverlayLineMeshBuilder::appendLineQuad(
-        OverlayLineMesh& mesh,
-        const ViewportOverlayLine& line,
-        const OverlayCameraProjector& projector,
-        float widthPixels,
-        float depthBias) {
-    const std::optional<OverlayClippedLine> clipped =
-            projector.clipLineToNearPlane(line.start, line.end);
-    if (!clipped.has_value()) {
-        return false;
-    }
+bool OverlayLineMeshBuilder::append_line_quad(
+    OverlayLineMesh &mesh, const ViewportOverlayLine &line,
+    const OverlayCameraProjector &projector, float width_pixels,
+    float depth_bias) {
+  const std::optional<OverlayClippedLine> clipped =
+      projector.clip_line_to_near_plane(line.start, line.end);
+  if (!clipped.has_value()) {
+    return false;
+  }
 
-    OverlayProjectedPoint projectedA = projector.project(clipped->start);
-    OverlayProjectedPoint projectedB = projector.project(clipped->end);
-    if (!projectedA.valid || !projectedB.valid) {
-        return false;
-    }
-    projector.applyDeviceDepthBias(projectedA, depthBias);
-    projector.applyDeviceDepthBias(projectedB, depthBias);
+  OverlayProjectedPoint projected_a = projector.project(clipped->start);
+  OverlayProjectedPoint projected_b = projector.project(clipped->end);
+  if (!projected_a.valid || !projected_b.valid) {
+    return false;
+  }
+  projector.apply_device_depth_bias(projected_a, depth_bias);
+  projector.apply_device_depth_bias(projected_b, depth_bias);
 
-    QVec2 pixelDirection = projectedB.pixel - projectedA.pixel;
-    const float pixelLength = std::sqrt(pixelDirection.x * pixelDirection.x + pixelDirection.y * pixelDirection.y);
-    if (pixelLength > 0.000001f) {
-        pixelDirection = {pixelDirection.x / pixelLength, pixelDirection.y / pixelLength};
-    } else {
-        pixelDirection = {1.0f, 0.0f};
-    }
-    const QVec2 pixelNormal{-pixelDirection.y, pixelDirection.x};
-    const float sideDistance = (std::max(widthPixels, 1.0f) + kOverlayLineFeatherPixels) * 0.5f;
-    const QVec2 startCapOffset = pixelDirection * -sideDistance;
-    const QVec2 endCapOffset = pixelDirection * sideDistance;
-    const std::uint32_t linearColor = rgba8SrgbToLinear(line.color);
-    const std::uint32_t offset = static_cast<std::uint32_t>(mesh.vertices.size());
+  QVec2 pixel_direction = projected_b.pixel - projected_a.pixel;
+  const float pixel_length = std::sqrt(pixel_direction.x * pixel_direction.x +
+                                       pixel_direction.y * pixel_direction.y);
+  if (pixel_length > 0.000001f) {
+    pixel_direction = {pixel_direction.x / pixel_length,
+                       pixel_direction.y / pixel_length};
+  } else {
+    pixel_direction = {1.0f, 0.0f};
+  }
+  const QVec2 pixel_normal{-pixel_direction.y, pixel_direction.x};
+  const float side_distance =
+      (std::max(width_pixels, 1.0f) + kOverlayLineFeatherPixels) * 0.5f;
+  const QVec2 start_cap_offset = pixel_direction * -side_distance;
+  const QVec2 end_cap_offset = pixel_direction * side_distance;
+  const std::uint32_t linear_color = rgba8_srgb_to_linear(line.color);
+  const std::uint32_t offset = static_cast<std::uint32_t>(mesh.vertices.size());
 
-    mesh.vertices.push_back({
-            projector.withPixelOffset(projectedA.device, startCapOffset + pixelNormal * -sideDistance),
-            {-sideDistance, 0.0f, 0.0f, 0.0f},
-            linearColor,
-    });
-    mesh.vertices.push_back({
-            projector.withPixelOffset(projectedB.device, endCapOffset + pixelNormal * -sideDistance),
-            {-sideDistance, 0.0f, 0.0f, 0.0f},
-            linearColor,
-    });
-    mesh.vertices.push_back({
-            projector.withPixelOffset(projectedB.device, endCapOffset + pixelNormal * sideDistance),
-            {sideDistance, 0.0f, 0.0f, 0.0f},
-            linearColor,
-    });
-    mesh.vertices.push_back({
-            projector.withPixelOffset(projectedA.device, startCapOffset + pixelNormal * sideDistance),
-            {sideDistance, 0.0f, 0.0f, 0.0f},
-            linearColor,
-    });
-    mesh.indices.push_back(offset);
-    mesh.indices.push_back(offset + 1u);
-    mesh.indices.push_back(offset + 2u);
-    mesh.indices.push_back(offset);
-    mesh.indices.push_back(offset + 2u);
-    mesh.indices.push_back(offset + 3u);
-    return true;
+  mesh.vertices.push_back({
+      projector.with_pixel_offset(
+          projected_a.device, start_cap_offset + pixel_normal * -side_distance),
+      {-side_distance, 0.0f, 0.0f, 0.0f},
+      linear_color,
+  });
+  mesh.vertices.push_back({
+      projector.with_pixel_offset(
+          projected_b.device, end_cap_offset + pixel_normal * -side_distance),
+      {-side_distance, 0.0f, 0.0f, 0.0f},
+      linear_color,
+  });
+  mesh.vertices.push_back({
+      projector.with_pixel_offset(
+          projected_b.device, end_cap_offset + pixel_normal * side_distance),
+      {side_distance, 0.0f, 0.0f, 0.0f},
+      linear_color,
+  });
+  mesh.vertices.push_back({
+      projector.with_pixel_offset(
+          projected_a.device, start_cap_offset + pixel_normal * side_distance),
+      {side_distance, 0.0f, 0.0f, 0.0f},
+      linear_color,
+  });
+  mesh.indices.push_back(offset);
+  mesh.indices.push_back(offset + 1u);
+  mesh.indices.push_back(offset + 2u);
+  mesh.indices.push_back(offset);
+  mesh.indices.push_back(offset + 2u);
+  mesh.indices.push_back(offset + 3u);
+  return true;
 }
 
 } // namespace quader

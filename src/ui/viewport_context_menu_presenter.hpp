@@ -18,12 +18,11 @@ class ViewportInputRouter;
  */
 class ViewportContextMenuPresenter {
 public:
-    void drawOperationsPopup(
-            QuaderEditorApi& editor,
-            ModelingSessionService& modeling,
-            ViewportInputRouter& inputRouter,
-            LocalizationService& localization,
-            bool modalToolOwnsViewport) const;
+  void draw_operations_popup(QuaderEditorApi &editor,
+                             ModelingSessionService &modeling,
+                             ViewportInputRouter &input_router,
+                             LocalizationService &localization,
+                             bool modal_tool_owns_viewport) const;
 };
 
 } // namespace quader

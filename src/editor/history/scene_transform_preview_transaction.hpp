@@ -39,20 +39,21 @@ public:
         entities.erase(std::unique(entities.begin(), entities.end()), entities.end());
         edits_.reserve(entities.size());
         for (const EntityId entity : entities) {
-            if (entity == InvalidEntityId || !scene_.exists(entity) || scene_.isEffectivelyLocked(entity)) {
-                continue;
-            }
+          if (entity == kInvalidEntityId || !scene_.exists(entity) ||
+              scene_.is_effectively_locked(entity)) {
+            continue;
+          }
             const TransformComponent* transform = scene_.transform(entity);
             if (transform == nullptr) {
                 continue;
             }
-            const std::size_t editIndex = edits_.size();
+            const std::size_t edit_index = edits_.size();
             edits_.push_back(DocumentTransformEdit{
                     .entity = entity,
                     .before = *transform,
                     .after = *transform,
             });
-            editIndexByEntity_.emplace(entity, editIndex);
+            edit_index_by_entity_.emplace(entity, edit_index);
         }
         active_ = true;
     }
@@ -66,13 +67,13 @@ public:
     SceneTransformPreviewTransaction(const SceneTransformPreviewTransaction&) = delete;
     SceneTransformPreviewTransaction& operator=(const SceneTransformPreviewTransaction&) = delete;
 
-    SceneTransformPreviewTransaction(SceneTransformPreviewTransaction&& other) noexcept
-        : scene_(other.scene_)
-        , label_(std::move(other.label_))
-        , edits_(std::move(other.edits_))
-        , editIndexByEntity_(std::move(other.editIndexByEntity_))
-        , active_(other.active_) {
-        other.active_ = false;
+    SceneTransformPreviewTransaction(
+        SceneTransformPreviewTransaction &&other) noexcept
+        : scene_(other.scene_), label_(std::move(other.label_)),
+          edits_(std::move(other.edits_)),
+          edit_index_by_entity_(std::move(other.edit_index_by_entity_)),
+          active_(other.active_) {
+      other.active_ = false;
     }
 
     SceneTransformPreviewTransaction& operator=(SceneTransformPreviewTransaction&&) = delete;
@@ -81,52 +82,64 @@ public:
     [[nodiscard]] bool empty() const { return edits_.empty(); }
     [[nodiscard]] const std::vector<DocumentTransformEdit>& edits() const { return edits_; }
 
-    DocumentCommandResult previewTransform(EntityId entity, TransformComponent transform) {
-        if (!active_) {
-            return documentCommandInvalidRequestResult("Transform preview is not active");
-        }
-        DocumentTransformEdit* edit = editFor(entity);
-        if (edit == nullptr || !scene_.exists(entity) || scene_.isEffectivelyLocked(entity)) {
-            return documentCommandMissingEntityResult();
-        }
+    DocumentCommandResult preview_transform(EntityId entity,
+                                            TransformComponent transform) {
+      if (!active_) {
+        return document_command_invalid_request_result(
+            "Transform preview is not active");
+      }
+      DocumentTransformEdit *edit = edit_for(entity);
+      if (edit == nullptr || !scene_.exists(entity) ||
+          scene_.is_effectively_locked(entity)) {
+        return document_command_missing_entity_result();
+      }
 
-        const bool changed = !documentCommandSameTransform(edit->after, transform);
-        edit->after = transform;
-        const SceneTransformAssignment assignment{
-                .entity = entity,
-                .transform = transform,
-        };
-        scene_.setTransforms(std::span<const SceneTransformAssignment>(&assignment, 1u));
-        return changed ? documentCommandChangedResult() : documentCommandUnchangedResult();
+      const bool changed =
+          !document_command_same_transform(edit->after, transform);
+      edit->after = transform;
+      const SceneTransformAssignment assignment{
+          .entity = entity,
+          .transform = transform,
+      };
+      scene_.set_transforms(
+          std::span<const SceneTransformAssignment>(&assignment, 1u));
+      return changed ? document_command_changed_result()
+                     : document_command_unchanged_result();
     }
 
-    DocumentCommandResult previewTransforms(std::vector<DocumentTransformEdit> edits) {
-        if (!active_) {
-            return documentCommandInvalidRequestResult("Transform preview is not active");
-        }
+    DocumentCommandResult
+    preview_transforms(std::vector<DocumentTransformEdit> edits) {
+      if (!active_) {
+        return document_command_invalid_request_result(
+            "Transform preview is not active");
+      }
 
-        bool changed = false;
-        std::vector<SceneTransformAssignment> assignments;
-        assignments.reserve(edits.size());
-        for (const DocumentTransformEdit& edit : edits) {
-            DocumentTransformEdit* storedEdit = editFor(edit.entity);
-            if (storedEdit == nullptr || !scene_.exists(edit.entity) || scene_.isEffectivelyLocked(edit.entity)) {
-                return documentCommandMissingEntityResult();
-            }
-            changed = changed || !documentCommandSameTransform(storedEdit->after, edit.after);
-            storedEdit->after = edit.after;
-            assignments.push_back(SceneTransformAssignment{
-                    .entity = edit.entity,
-                    .transform = edit.after,
-            });
+      bool changed = false;
+      std::vector<SceneTransformAssignment> assignments;
+      assignments.reserve(edits.size());
+      for (const DocumentTransformEdit &edit : edits) {
+        DocumentTransformEdit *stored_edit = edit_for(edit.entity);
+        if (stored_edit == nullptr || !scene_.exists(edit.entity) ||
+            scene_.is_effectively_locked(edit.entity)) {
+          return document_command_missing_entity_result();
         }
-        scene_.setTransforms(assignments);
-        return changed ? documentCommandChangedResult() : documentCommandUnchangedResult();
+        changed = changed || !document_command_same_transform(
+                                 stored_edit->after, edit.after);
+        stored_edit->after = edit.after;
+        assignments.push_back(SceneTransformAssignment{
+            .entity = edit.entity,
+            .transform = edit.after,
+        });
+      }
+      scene_.set_transforms(assignments);
+      return changed ? document_command_changed_result()
+                     : document_command_unchanged_result();
     }
 
     DocumentCommandResult cancel() {
         if (!active_) {
-            return documentCommandInvalidRequestResult("Transform preview is not active");
+          return document_command_invalid_request_result(
+              "Transform preview is not active");
         }
 
         bool changed = false;
@@ -135,79 +148,83 @@ public:
                 continue;
             }
             const TransformComponent* current = scene_.transform(edit.entity);
-            changed = changed || current == nullptr || !documentCommandSameTransform(*current, edit.before);
-            scene_.setTransform(edit.entity, edit.before);
+            changed = changed || current == nullptr ||
+                      !document_command_same_transform(*current, edit.before);
+            scene_.set_transform(edit.entity, edit.before);
         }
         active_ = false;
-        return changed ? documentCommandChangedResult() : documentCommandUnchangedResult();
+        return changed ? document_command_changed_result()
+                       : document_command_unchanged_result();
     }
 
     DocumentCommandResult accept() {
         if (!active_) {
-            return documentCommandInvalidRequestResult("Transform preview is not active");
+          return document_command_invalid_request_result(
+              "Transform preview is not active");
         }
 
         bool changed = false;
         for (const DocumentTransformEdit& edit : edits_) {
-            if (!scene_.exists(edit.entity) || scene_.isEffectivelyLocked(edit.entity)) {
-                continue;
-            }
-            scene_.setTransform(edit.entity, edit.after);
-            changed = changed || !documentCommandSameTransform(edit.before, edit.after);
+          if (!scene_.exists(edit.entity) ||
+              scene_.is_effectively_locked(edit.entity)) {
+            continue;
+          }
+          scene_.set_transform(edit.entity, edit.after);
+          changed = changed ||
+                    !document_command_same_transform(edit.before, edit.after);
         }
         active_ = false;
-        return changed ? documentCommandChangedResult() : documentCommandUnchangedResult();
+        return changed ? document_command_changed_result()
+                       : document_command_unchanged_result();
     }
 
     DocumentCommandResult commit(EditorHistoryService& history) {
         if (!active_) {
-            return documentCommandInvalidRequestResult("Transform preview is not active");
+          return document_command_invalid_request_result(
+              "Transform preview is not active");
         }
 
-        std::vector<DocumentTransformEdit> changedEdits;
-        changedEdits.reserve(edits_.size());
+        std::vector<DocumentTransformEdit> changed_edits;
+        changed_edits.reserve(edits_.size());
         for (const DocumentTransformEdit& edit : edits_) {
-            if (!scene_.exists(edit.entity) || scene_.isEffectivelyLocked(edit.entity)) {
-                continue;
-            }
-            scene_.setTransform(edit.entity, edit.before);
-            if (!documentCommandSameTransform(edit.before, edit.after)) {
-                changedEdits.push_back(edit);
-            }
+          if (!scene_.exists(edit.entity) ||
+              scene_.is_effectively_locked(edit.entity)) {
+            continue;
+          }
+          scene_.set_transform(edit.entity, edit.before);
+          if (!document_command_same_transform(edit.before, edit.after)) {
+            changed_edits.push_back(edit);
+          }
         }
         active_ = false;
 
-        if (changedEdits.empty()) {
-            return documentCommandUnchangedResult();
+        if (changed_edits.empty()) {
+          return document_command_unchanged_result();
         }
 
         std::vector<std::unique_ptr<IUndoableCommand>> commands;
-        commands.reserve(changedEdits.size());
-        for (const DocumentTransformEdit& edit : changedEdits) {
-            commands.push_back(std::make_unique<ApplyEntityTransformCommand>(
-                    scene_,
-                    edit.entity,
-                    edit.before,
-                    edit.after,
-                    label_));
+        commands.reserve(changed_edits.size());
+        for (const DocumentTransformEdit &edit : changed_edits) {
+          commands.push_back(std::make_unique<ApplyEntityTransformCommand>(
+              scene_, edit.entity, edit.before, edit.after, label_));
         }
 
         return history.execute(std::make_unique<BatchDocumentCommand>(label_, std::move(commands)));
     }
 
 private:
-    DocumentTransformEdit* editFor(EntityId entity) {
-        const auto it = editIndexByEntity_.find(entity);
-        if (it == editIndexByEntity_.end() || it->second >= edits_.size()) {
-            return nullptr;
-        }
-        return &edits_[it->second];
+  DocumentTransformEdit *edit_for(EntityId entity) {
+    const auto it = edit_index_by_entity_.find(entity);
+    if (it == edit_index_by_entity_.end() || it->second >= edits_.size()) {
+      return nullptr;
     }
+    return &edits_[it->second];
+  }
 
     SceneDocument& scene_;
     std::string label_;
     std::vector<DocumentTransformEdit> edits_;
-    std::unordered_map<EntityId, std::size_t> editIndexByEntity_;
+    std::unordered_map<EntityId, std::size_t> edit_index_by_entity_;
     bool active_ = false;
 };
 

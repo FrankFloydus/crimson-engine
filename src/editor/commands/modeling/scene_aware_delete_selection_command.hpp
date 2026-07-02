@@ -22,25 +22,29 @@ class SceneDocument;
  * Stores runtime callbacks required by the scene-aware delete command owner.
  */
 struct SceneAwareDeleteRuntime {
-    std::function<ModelingSessionMemento()> captureModelingMemento;
-    std::function<ModelingCommandResult(const ModelingSessionMemento&)> restoreModelingMemento;
-    std::function<ModelingSelectionMode()> appSelectionMode;
-    std::function<void(ModelingSelectionMode)> setAppSelectionMode;
-    std::function<ModelingCommandResult(const std::vector<int>&)> deleteModelingObjects;
-    std::function<std::optional<EntityId>(int)> entityForModelingObject;
-    std::function<void(bool)> syncObjectSelectionFromScene;
-    std::function<void()> clearRuntimeObjectSelectionForGroupMode;
-    std::function<void()> invalidateSelectionOverlayCaches;
+  std::function<ModelingSessionMemento()> capture_modeling_memento;
+  std::function<ModelingCommandResult(const ModelingSessionMemento &)>
+      restore_modeling_memento;
+  std::function<ModelingSelectionMode()> app_selection_mode;
+  std::function<void(ModelingSelectionMode)> set_app_selection_mode;
+  std::function<ModelingCommandResult(const std::vector<int> &)>
+      delete_modeling_objects;
+  std::function<std::optional<EntityId>(int)> entity_for_modeling_object;
+  std::function<void(bool)> sync_object_selection_from_scene;
+  std::function<void()> clear_runtime_object_selection_for_group_mode;
+  std::function<void()> invalidate_selection_overlay_caches;
 };
 
-[[nodiscard]] bool sceneAwareDeleteHasSelectedRoot(const SceneDocument& scene);
-[[nodiscard]] bool sceneAwareDeleteUsesDocumentRoute(ModelingSelectionMode mode);
-[[nodiscard]] bool sceneAwareDeleteHandlesSelection(
-        ModelingSelectionSummary summary,
-        bool hasSelectedRoot);
+[[nodiscard]] bool
+scene_aware_delete_has_selected_root(const SceneDocument &scene);
+[[nodiscard]] bool
+scene_aware_delete_uses_document_route(ModelingSelectionMode mode);
+[[nodiscard]] bool
+scene_aware_delete_handles_selection(ModelingSelectionSummary summary,
+                                     bool has_selected_root);
 
-std::unique_ptr<IUndoableCommand> createSceneAwareDeleteSelectionCommand(
-        SceneDocument& scene,
-        SceneAwareDeleteRuntime runtime);
+std::unique_ptr<IUndoableCommand>
+create_scene_aware_delete_selection_command(SceneDocument &scene,
+                                            SceneAwareDeleteRuntime runtime);
 
 } // namespace quader

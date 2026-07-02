@@ -15,8 +15,8 @@ namespace quader {
  */
 class MirrorTool final : public DrawnPlaneTool {
 public:
-    MirrorTool()
-        : DrawnPlaneTool(viewportToolDescriptor(ViewportToolId::Mirror)) {}
+  MirrorTool()
+      : DrawnPlaneTool(viewport_tool_descriptor(ViewportToolId::Mirror)) {}
 };
 
 } // namespace quader

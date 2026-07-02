@@ -40,8 +40,8 @@ MergeByDistanceOperationSettings merge_by_distance_settings_from_variant(const E
 
 const MergeByDistanceOperation& concrete_merge_by_distance_operation()
 {
-	static const MergeByDistanceOperation operation;
-	return operation;
+  static const MergeByDistanceOperation kOperation;
+  return kOperation;
 }
 
 } // namespace
@@ -53,7 +53,7 @@ const EditorOperation& merge_by_distance_operation()
 
 EditorOperationId MergeByDistanceOperation::operation_id() const
 {
-	return EditorOperationId::merge_by_distance;
+  return EditorOperationId::MergeByDistance;
 }
 
 std::string_view MergeByDistanceOperation::id() const

@@ -19,23 +19,23 @@ namespace {
 LightType sanitize_light_type(LightType type)
 {
 	switch (type) {
-	case LightType::directional:
-	case LightType::point:
-	case LightType::spot:
-		return type;
+        case LightType::Directional:
+        case LightType::Point:
+        case LightType::Spot:
+          return type;
 	}
-	return LightType::point;
+        return LightType::Point;
 }
 
 LightShadowMode sanitize_light_shadow_mode(LightShadowMode mode)
 {
 	switch (mode) {
-	case LightShadowMode::none:
-	case LightShadowMode::hard:
-	case LightShadowMode::soft:
-		return mode;
+        case LightShadowMode::None:
+        case LightShadowMode::Hard:
+        case LightShadowMode::Soft:
+          return mode;
 	}
-	return LightShadowMode::soft;
+        return LightShadowMode::Soft;
 }
 
 float finite_or(float value, float fallback)
@@ -60,7 +60,7 @@ bool vec3_equal(quader::QVec3 left, quader::QVec3 right)
 
 bool vec3_tiny(quader::QVec3 value)
 {
-	return quader::length_squared(value) <= transform_point_epsilon;
+  return quader::length_squared(value) <= kTransformPointEpsilon;
 }
 
 quader::QVec3 normalized_or(quader::QVec3 value, quader::QVec3 fallback)
@@ -77,12 +77,15 @@ bool basis_is_orthonormal(const quader_poly::Transform3& transform)
 	const float x_length = quader::length(transform.x_axis);
 	const float y_length = quader::length(transform.y_axis);
 	const float z_length = quader::length(transform.z_axis);
-	return std::abs(x_length - 1.0F) <= transform_basis_epsilon &&
-		std::abs(y_length - 1.0F) <= transform_basis_epsilon &&
-		std::abs(z_length - 1.0F) <= transform_basis_epsilon &&
-		std::abs(quader::dot(transform.x_axis, transform.y_axis)) <= transform_basis_epsilon &&
-		std::abs(quader::dot(transform.x_axis, transform.z_axis)) <= transform_basis_epsilon &&
-		std::abs(quader::dot(transform.y_axis, transform.z_axis)) <= transform_basis_epsilon;
+        return std::abs(x_length - 1.0F) <= kTransformBasisEpsilon &&
+               std::abs(y_length - 1.0F) <= kTransformBasisEpsilon &&
+               std::abs(z_length - 1.0F) <= kTransformBasisEpsilon &&
+               std::abs(quader::dot(transform.x_axis, transform.y_axis)) <=
+                   kTransformBasisEpsilon &&
+               std::abs(quader::dot(transform.x_axis, transform.z_axis)) <=
+                   kTransformBasisEpsilon &&
+               std::abs(quader::dot(transform.y_axis, transform.z_axis)) <=
+                   kTransformBasisEpsilon;
 }
 
 quader::QVec3 basis_xform(const quader_poly::Transform3& transform, quader::QVec3 point)
@@ -120,12 +123,12 @@ void include_point(Bounds3& bounds, quader::QVec3 point)
 std::string default_light_name(LightType type, int id)
 {
 	switch (type) {
-	case LightType::directional:
-		return "Directional Light " + std::to_string(id);
-	case LightType::point:
-		return "Point Light " + std::to_string(id);
-	case LightType::spot:
-		return "Spot Light " + std::to_string(id);
+        case LightType::Directional:
+          return "Directional Light " + std::to_string(id);
+        case LightType::Point:
+          return "Point Light " + std::to_string(id);
+        case LightType::Spot:
+          return "Spot Light " + std::to_string(id);
 	}
 	return "Light " + std::to_string(id);
 }
@@ -148,30 +151,32 @@ const LightEntity* light_by_id(const std::vector<LightEntity>& lights, int light
 
 bool clear_mesh_selection(std::vector<PolygonObject>& objects, int& active_object_id)
 {
-	const bool changed = has_selection(objects, SelectionMode::object, active_object_id) || active_object_id != -1;
-	clear_selection(objects, active_object_id);
-	return changed;
+  const bool changed =
+      has_selection(objects, SelectionMode::Object, active_object_id) ||
+      active_object_id != -1;
+  clear_selection(objects, active_object_id);
+  return changed;
 }
 
 float light_float_value(const LightEntity& light, LightFloatProperty property)
 {
 	switch (property) {
-	case LightFloatProperty::intensity:
-		return light.intensity;
-	case LightFloatProperty::range:
-		return light.range;
-	case LightFloatProperty::spot_angle:
-		return light.spot_angle;
-	case LightFloatProperty::inner_spot_angle:
-		return light.inner_spot_angle;
-	case LightFloatProperty::shadow_strength:
-		return light.shadow_strength;
-	case LightFloatProperty::shadow_bias:
-		return light.shadow_bias;
-	case LightFloatProperty::shadow_normal_bias:
-		return light.shadow_normal_bias;
-	case LightFloatProperty::shadow_near_plane:
-		return light.shadow_near_plane;
+        case LightFloatProperty::Intensity:
+          return light.intensity;
+        case LightFloatProperty::Range:
+          return light.range;
+        case LightFloatProperty::SpotAngle:
+          return light.spot_angle;
+        case LightFloatProperty::InnerSpotAngle:
+          return light.inner_spot_angle;
+        case LightFloatProperty::ShadowStrength:
+          return light.shadow_strength;
+        case LightFloatProperty::ShadowBias:
+          return light.shadow_bias;
+        case LightFloatProperty::ShadowNormalBias:
+          return light.shadow_normal_bias;
+        case LightFloatProperty::ShadowNearPlane:
+          return light.shadow_near_plane;
 	}
 	return 0.0F;
 }
@@ -179,22 +184,22 @@ float light_float_value(const LightEntity& light, LightFloatProperty property)
 float sanitize_light_float_value(const LightEntity& light, LightFloatProperty property, float value)
 {
 	switch (property) {
-	case LightFloatProperty::intensity:
-		return clamp_min(value, 0.0F);
-	case LightFloatProperty::range:
-		return clamp_min(value, 0.0F);
-	case LightFloatProperty::spot_angle:
-		return clamp_range(value, 1.0F, 179.0F);
-	case LightFloatProperty::inner_spot_angle:
-		return clamp_range(value, 0.0F, light.spot_angle);
-	case LightFloatProperty::shadow_strength:
-		return clamp_range(value, 0.0F, 1.0F);
-	case LightFloatProperty::shadow_bias:
-		return clamp_min(value, 0.0F);
-	case LightFloatProperty::shadow_normal_bias:
-		return clamp_min(value, 0.0F);
-	case LightFloatProperty::shadow_near_plane:
-		return clamp_min(value, 0.0F);
+        case LightFloatProperty::Intensity:
+          return clamp_min(value, 0.0F);
+        case LightFloatProperty::Range:
+          return clamp_min(value, 0.0F);
+        case LightFloatProperty::SpotAngle:
+          return clamp_range(value, 1.0F, 179.0F);
+        case LightFloatProperty::InnerSpotAngle:
+          return clamp_range(value, 0.0F, light.spot_angle);
+        case LightFloatProperty::ShadowStrength:
+          return clamp_range(value, 0.0F, 1.0F);
+        case LightFloatProperty::ShadowBias:
+          return clamp_min(value, 0.0F);
+        case LightFloatProperty::ShadowNormalBias:
+          return clamp_min(value, 0.0F);
+        case LightFloatProperty::ShadowNearPlane:
+          return clamp_min(value, 0.0F);
 	}
 	return value;
 }
@@ -202,31 +207,32 @@ float sanitize_light_float_value(const LightEntity& light, LightFloatProperty pr
 void set_light_float_value(LightEntity& light, LightFloatProperty property, float value)
 {
 	switch (property) {
-	case LightFloatProperty::intensity:
-		light.intensity = value;
-		break;
-	case LightFloatProperty::range:
-		light.range = value;
-		break;
-	case LightFloatProperty::spot_angle:
-		light.spot_angle = value;
-		light.inner_spot_angle = std::min(light.inner_spot_angle, light.spot_angle);
-		break;
-	case LightFloatProperty::inner_spot_angle:
-		light.inner_spot_angle = value;
-		break;
-	case LightFloatProperty::shadow_strength:
-		light.shadow_strength = value;
-		break;
-	case LightFloatProperty::shadow_bias:
-		light.shadow_bias = value;
-		break;
-	case LightFloatProperty::shadow_normal_bias:
-		light.shadow_normal_bias = value;
-		break;
-	case LightFloatProperty::shadow_near_plane:
-		light.shadow_near_plane = value;
-		break;
+        case LightFloatProperty::Intensity:
+          light.intensity = value;
+          break;
+        case LightFloatProperty::Range:
+          light.range = value;
+          break;
+        case LightFloatProperty::SpotAngle:
+          light.spot_angle = value;
+          light.inner_spot_angle =
+              std::min(light.inner_spot_angle, light.spot_angle);
+          break;
+        case LightFloatProperty::InnerSpotAngle:
+          light.inner_spot_angle = value;
+          break;
+        case LightFloatProperty::ShadowStrength:
+          light.shadow_strength = value;
+          break;
+        case LightFloatProperty::ShadowBias:
+          light.shadow_bias = value;
+          break;
+        case LightFloatProperty::ShadowNormalBias:
+          light.shadow_normal_bias = value;
+          break;
+        case LightFloatProperty::ShadowNearPlane:
+          light.shadow_near_plane = value;
+          break;
 	}
 }
 
@@ -372,8 +378,8 @@ CommandResult EditorSession::create_light(LightType type, quader::QVec3 position
 
 	const bool selection_changed = clear_mesh_selection(state_.objects, state_.active_object_id) ||
 		clear_light_selection_state(state_.lights, state_.active_light_id);
-	state_.selection_mode = SelectionMode::object;
-	state_.lights.push_back(std::move(light));
+        state_.selection_mode = SelectionMode::Object;
+        state_.lights.push_back(std::move(light));
 	state_.active_light_id = light_id;
 	note_content_result(ok_result(true));
 	if (selection_changed || state_.active_light_id == light_id) {
@@ -390,8 +396,8 @@ CommandResult EditorSession::select_light(int light_id)
 
 	const bool mesh_changed = clear_mesh_selection(state_.objects, state_.active_object_id);
 	bool light_changed = state_.active_light_id != light_id;
-	state_.selection_mode = SelectionMode::object;
-	for (LightEntity& light : state_.lights) {
+        state_.selection_mode = SelectionMode::Object;
+        for (LightEntity& light : state_.lights) {
 		const bool selected = light.id == light_id;
 		light_changed = light_changed || light.selected != selected;
 		light.selected = selected;

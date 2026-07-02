@@ -22,8 +22,8 @@ class ScaleTool final : public EditorTool {
 public:
 	[[nodiscard]] ViewportInteractionTool tool_id() const override
 	{
-		return ViewportInteractionTool::scale;
-	}
+          return ViewportInteractionTool::Scale;
+        }
 
 	[[nodiscard]] std::string_view id() const override
 	{
@@ -72,8 +72,9 @@ public:
 			return { false, "Scale tool is not active.", {}, {}, {}, {} };
 		}
 		const double axis_pixels = vec2_dot(vec2_sub(screen_position, state.start_mouse), state.screen_axis);
-		double factor = std::max(min_scale_factor, 1.0 + axis_pixels / scale_pixels_per_factor);
-		factor = snapped_scale_factor(state.axis, factor, state.bounds, state.pivot, grid_enabled, grid_size);
+                double factor = std::max(
+                    kMinScaleFactor, 1.0 + axis_pixels / kScalePixelsPerFactor);
+                factor = snapped_scale_factor(state.axis, factor, state.bounds, state.pivot, grid_enabled, grid_size);
 		return preview_scale_from_scale(state, axis_scale(state.axis, factor));
 	}
 
@@ -95,8 +96,8 @@ public:
 
 const ScaleTool& scale_tool_impl()
 {
-	static const ScaleTool tool;
-	return tool;
+  static const ScaleTool kTool;
+  return kTool;
 }
 
 } // namespace

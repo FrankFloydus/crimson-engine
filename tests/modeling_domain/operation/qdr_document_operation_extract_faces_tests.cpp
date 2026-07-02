@@ -17,8 +17,8 @@ TEST(QdrDocumentOperationExtractFacesTests, ExtractFacesRemovesSourceFacesAndRet
 	EXPECT_TRUE(result.changed);
 	EXPECT_TRUE(document.faces.size() == 5U);
 	EXPECT_TRUE(result.extracted_document.faces.size() == 1U);
-	EXPECT_TRUE(result.extracted_selection.mode == SelectionMode::face);
-	EXPECT_TRUE(result.extracted_selection.faces.size() == 1U);
+        EXPECT_TRUE(result.extracted_selection.mode == SelectionMode::Face);
+        EXPECT_TRUE(result.extracted_selection.faces.size() == 1U);
 	EXPECT_TRUE(result.extracted_selection.active_face == result.extracted_selection.faces.front());
 	EXPECT_TRUE(find_face(result.extracted_document, result.extracted_selection.active_face) != nullptr);
 	EXPECT_TRUE(face_perimeter_info(result.extracted_document, result.extracted_selection.active_face).has_only_open_edges());

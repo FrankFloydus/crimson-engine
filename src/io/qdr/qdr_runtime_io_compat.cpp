@@ -12,83 +12,83 @@ namespace {
 QdrSelectionMode qdr_selection_mode_from_editor(quader_editor_core::SelectionMode mode)
 {
 	switch (mode) {
-	case quader_editor_core::SelectionMode::vertex:
-		return QdrSelectionMode::vertex;
-	case quader_editor_core::SelectionMode::edge:
-		return QdrSelectionMode::edge;
-	case quader_editor_core::SelectionMode::face:
-		return QdrSelectionMode::face;
-	case quader_editor_core::SelectionMode::object:
-		return QdrSelectionMode::object;
-	}
-	return QdrSelectionMode::object;
+        case quader_editor_core::SelectionMode::Vertex:
+          return QdrSelectionMode::Vertex;
+        case quader_editor_core::SelectionMode::Edge:
+          return QdrSelectionMode::Edge;
+        case quader_editor_core::SelectionMode::Face:
+          return QdrSelectionMode::Face;
+        case quader_editor_core::SelectionMode::Object:
+          return QdrSelectionMode::Object;
+        }
+        return QdrSelectionMode::Object;
 }
 
 quader_editor_core::SelectionMode editor_selection_mode_from_qdr(QdrSelectionMode mode)
 {
 	switch (mode) {
-	case QdrSelectionMode::vertex:
-		return quader_editor_core::SelectionMode::vertex;
-	case QdrSelectionMode::edge:
-		return quader_editor_core::SelectionMode::edge;
-	case QdrSelectionMode::face:
-		return quader_editor_core::SelectionMode::face;
-	case QdrSelectionMode::object:
-		return quader_editor_core::SelectionMode::object;
-	}
-	return quader_editor_core::SelectionMode::object;
+        case QdrSelectionMode::Vertex:
+          return quader_editor_core::SelectionMode::Vertex;
+        case QdrSelectionMode::Edge:
+          return quader_editor_core::SelectionMode::Edge;
+        case QdrSelectionMode::Face:
+          return quader_editor_core::SelectionMode::Face;
+        case QdrSelectionMode::Object:
+          return quader_editor_core::SelectionMode::Object;
+        }
+        return quader_editor_core::SelectionMode::Object;
 }
 
 QdrLightType qdr_light_type_from_editor(quader_editor_core::LightType type)
 {
 	switch (type) {
-	case quader_editor_core::LightType::directional:
-		return QdrLightType::directional;
-	case quader_editor_core::LightType::point:
-		return QdrLightType::point;
-	case quader_editor_core::LightType::spot:
-		return QdrLightType::spot;
-	}
-	return QdrLightType::point;
+        case quader_editor_core::LightType::Directional:
+          return QdrLightType::Directional;
+        case quader_editor_core::LightType::Point:
+          return QdrLightType::Point;
+        case quader_editor_core::LightType::Spot:
+          return QdrLightType::Spot;
+        }
+        return QdrLightType::Point;
 }
 
 quader_editor_core::LightType editor_light_type_from_qdr(QdrLightType type)
 {
 	switch (type) {
-	case QdrLightType::directional:
-		return quader_editor_core::LightType::directional;
-	case QdrLightType::point:
-		return quader_editor_core::LightType::point;
-	case QdrLightType::spot:
-		return quader_editor_core::LightType::spot;
-	}
-	return quader_editor_core::LightType::point;
+        case QdrLightType::Directional:
+          return quader_editor_core::LightType::Directional;
+        case QdrLightType::Point:
+          return quader_editor_core::LightType::Point;
+        case QdrLightType::Spot:
+          return quader_editor_core::LightType::Spot;
+        }
+        return quader_editor_core::LightType::Point;
 }
 
 QdrLightShadowMode qdr_light_shadow_mode_from_editor(quader_editor_core::LightShadowMode mode)
 {
 	switch (mode) {
-	case quader_editor_core::LightShadowMode::none:
-		return QdrLightShadowMode::none;
-	case quader_editor_core::LightShadowMode::hard:
-		return QdrLightShadowMode::hard;
-	case quader_editor_core::LightShadowMode::soft:
-		return QdrLightShadowMode::soft;
-	}
-	return QdrLightShadowMode::soft;
+        case quader_editor_core::LightShadowMode::None:
+          return QdrLightShadowMode::None;
+        case quader_editor_core::LightShadowMode::Hard:
+          return QdrLightShadowMode::Hard;
+        case quader_editor_core::LightShadowMode::Soft:
+          return QdrLightShadowMode::Soft;
+        }
+        return QdrLightShadowMode::Soft;
 }
 
 quader_editor_core::LightShadowMode editor_light_shadow_mode_from_qdr(QdrLightShadowMode mode)
 {
 	switch (mode) {
-	case QdrLightShadowMode::none:
-		return quader_editor_core::LightShadowMode::none;
-	case QdrLightShadowMode::hard:
-		return quader_editor_core::LightShadowMode::hard;
-	case QdrLightShadowMode::soft:
-		return quader_editor_core::LightShadowMode::soft;
-	}
-	return quader_editor_core::LightShadowMode::soft;
+        case QdrLightShadowMode::None:
+          return quader_editor_core::LightShadowMode::None;
+        case QdrLightShadowMode::Hard:
+          return quader_editor_core::LightShadowMode::Hard;
+        case QdrLightShadowMode::Soft:
+          return quader_editor_core::LightShadowMode::Soft;
+        }
+        return quader_editor_core::LightShadowMode::Soft;
 }
 
 } // namespace

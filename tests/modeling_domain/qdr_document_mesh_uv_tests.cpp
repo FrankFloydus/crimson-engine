@@ -32,7 +32,7 @@ Document make_uv_quad_document(std::uint32_t material_slot = 7)
     const ElementId top_left = add_vertex(document, { -1.0F, 1.0F, 0.0F });
     const std::array<ElementId, 4> face_vertices { bottom_left, bottom_right, top_right, top_left };
     const ElementId face_id = add_face(document, face_vertices, material_slot);
-    require_test(face_id != invalid_element_id, "quad face should be created");
+    require_test(face_id != kInvalidElementId, "quad face should be created");
     return document;
 }
 
@@ -47,7 +47,7 @@ void compile_document_preserves_loop_uvs_material_slots_and_normals()
         { 0.125F, 0.75F },
     };
 
-    const CompiledMesh mesh = compile_document(document, SurfaceShading::flat);
+    const CompiledMesh mesh = compile_document(document, SurfaceShading::Flat);
     require_test(mesh.vertices.size() == 4U, "quad compile should emit one vertex per loop");
     require_test(mesh.indices.size() == 6U, "quad compile should triangulate to two triangles");
     require_test(mesh.primitives.size() == 1U, "quad compile should emit one primitive");
@@ -83,14 +83,15 @@ void align_face_operation_keeps_compile_output_renderable()
 {
     Document document = make_uv_quad_document(3);
     Selection selection;
-    selection.mode = SelectionMode::face;
+    selection.mode = SelectionMode::Face;
     selection.faces = { document.faces.front().id };
 
     const OperationResult result = apply_uv_operation(document, selection, "align_face", 64.0F);
     require_test(result.changed, "align_face should assign local loop UVs to the selected face");
     require_test(document.faces.front().uvs.size() == document.faces.front().vertices.size(), "align_face should leave explicit loop UVs");
 
-    const CompiledMesh mesh = compile_document(document, SurfaceShading::smooth);
+    const CompiledMesh mesh =
+        compile_document(document, SurfaceShading::Smooth);
     require_test(mesh.indices.size() == 6U, "aligned face should still compile to triangles");
     require_test(mesh.primitives.size() == 1U && mesh.primitives.front().material_slot == 3U, "aligned face compile should keep material metadata");
 }

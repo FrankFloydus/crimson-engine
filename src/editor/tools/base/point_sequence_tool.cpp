@@ -12,104 +12,109 @@
 namespace quader {
 namespace {
 
-void handleResult(ViewportToolContext& context, std::string_view label, const ModelingCommandResult& command) {
-    if (context.handleToolCommandResult) {
-        context.handleToolCommandResult(label, command);
-    }
+void handle_result(ViewportToolContext &context, std::string_view label,
+                   const ModelingCommandResult &command) {
+  if (context.handle_tool_command_result) {
+    context.handle_tool_command_result(label, command);
+  }
 }
 
-void finishPointSequenceTool(ViewportToolContext& context) {
-    if (context.setSelectionMode) {
-        context.setSelectionMode(appSelectionModeToViewport(context.modeling.selectionSummary().mode));
-    }
+void finish_point_sequence_tool(ViewportToolContext &context) {
+  if (context.set_selection_mode) {
+    context.set_selection_mode(app_selection_mode_to_viewport(
+        context.modeling.selection_summary().mode));
+  }
 }
 
 } // namespace
 
-ViewportToolResult PointSequenceTool::handleEvent(
+ViewportToolResult PointSequenceTool::handle_event(
         ViewportToolContext& context,
         const ViewportToolEvent& event) const {
-    if (event.kind != ViewportToolEventKind::Frame ||
-            event.tool != viewportTool() ||
-            context.modalState == nullptr) {
-        return ModalViewportTool::handleEvent(context, event);
-    }
+  if (event.kind != ViewportToolEventKind::Frame ||
+      event.tool != viewport_tool() || context.modal_state == nullptr) {
+    return ModalViewportTool::handle_event(context, event);
+  }
 
-    ViewportPointToolContext* pointContext = context.point;
-    const ViewportPointerToolEvent& pointer = event.pointer;
-    switch (modelingTool()) {
-    case ModelingViewportTool::Knife:
-        if (pointContext == nullptr || !pointContext->makeEventAt) {
-            break;
-        }
-        if (pointer.canInteract &&
-                !pointer.suppressHoverWork &&
-                (!context.claimHover || context.claimHover(ModelingBoxDragState::Idle))) {
-            handleResult(context,
-                    "Knife hover",
-                    context.modeling.updateKnifeHover(pointContext->makeEventAt(pointer.mouseLocal, false)));
-        }
-        if (pointer.canInteract && pointer.leftClicked) {
-            handleResult(context,
-                    "Knife point",
-                    context.modeling.acceptKnifePoint(pointContext->makeEventAt(pointer.mouseLocal, false)));
-        }
-        if (pointer.finalizePressed) {
-            const ModelingCommandResult command = context.modeling.commitKnifeTool();
-            handleResult(context, "Knife commit", command);
-            if (command.ok) {
-                finishPointSequenceTool(context);
-            }
-            return {
-                    .handled = true,
-                    .activeToolChanged = command.ok,
-                    .syncActiveToolFromModeling = command.ok,
-            };
-        }
-        return {
-                .handled = true,
-        };
-    case ModelingViewportTool::Poly:
-        if (pointer.canInteract &&
-                !pointer.suppressHoverWork &&
-                pointContext != nullptr &&
-                pointContext->makeEventAt &&
-                (!context.claimHover || context.claimHover(ModelingBoxDragState::Idle))) {
-            handleResult(context,
-                    "Poly hover",
-                    context.modeling.updatePolyHover(pointContext->makeEventAt(pointer.mouseLocal, false)));
-        }
-        if (pointer.canInteract && pointer.leftClicked) {
-            handleResult(context, "Poly point", context.modeling.acceptPolyPoint());
-        }
-        if (pointer.finalizePressed) {
-            const ModelingCommandResult command = context.modeling.commitPolyTool();
-            handleResult(context, "Poly commit", command);
-            if (command.ok) {
-                finishPointSequenceTool(context);
-            }
-            return {
-                    .handled = true,
-                    .activeToolChanged = command.ok,
-                    .syncActiveToolFromModeling = command.ok,
-            };
-        }
-        return {
-                .handled = true,
-        };
-    case ModelingViewportTool::Select:
-    case ModelingViewportTool::Move:
-    case ModelingViewportTool::Extend:
-    case ModelingViewportTool::Extrude:
-    case ModelingViewportTool::Rotate:
-    case ModelingViewportTool::Scale:
-    case ModelingViewportTool::Box:
-    case ModelingViewportTool::InsertEdgeLoop:
-    case ModelingViewportTool::Cut:
-    case ModelingViewportTool::Mirror:
-        break;
+  ViewportPointToolContext *point_context = context.point;
+  const ViewportPointerToolEvent &pointer = event.pointer;
+  switch (modeling_tool()) {
+  case ModelingViewportTool::Knife:
+    if (point_context == nullptr || !point_context->make_event_at) {
+      break;
     }
-    return ModalViewportTool::handleEvent(context, event);
+    if (pointer.can_interact && !pointer.suppress_hover_work &&
+        (!context.claim_hover ||
+         context.claim_hover(ModelingBoxDragState::Idle))) {
+      handle_result(
+          context, "Knife hover",
+          context.modeling.update_knife_hover(
+              point_context->make_event_at(pointer.mouse_local, false)));
+    }
+    if (pointer.can_interact && pointer.left_clicked) {
+      handle_result(
+          context, "Knife point",
+          context.modeling.accept_knife_point(
+              point_context->make_event_at(pointer.mouse_local, false)));
+    }
+    if (pointer.finalize_pressed) {
+      const ModelingCommandResult command =
+          context.modeling.commit_knife_tool();
+      handle_result(context, "Knife commit", command);
+      if (command.ok) {
+        finish_point_sequence_tool(context);
+      }
+      return {
+          .handled = true,
+          .active_tool_changed = command.ok,
+          .sync_active_tool_from_modeling = command.ok,
+      };
+    }
+    return {
+        .handled = true,
+    };
+  case ModelingViewportTool::Poly:
+    if (pointer.can_interact && !pointer.suppress_hover_work &&
+        point_context != nullptr && point_context->make_event_at &&
+        (!context.claim_hover ||
+         context.claim_hover(ModelingBoxDragState::Idle))) {
+      handle_result(
+          context, "Poly hover",
+          context.modeling.update_poly_hover(
+              point_context->make_event_at(pointer.mouse_local, false)));
+    }
+    if (pointer.can_interact && pointer.left_clicked) {
+      handle_result(context, "Poly point",
+                    context.modeling.accept_poly_point());
+    }
+    if (pointer.finalize_pressed) {
+      const ModelingCommandResult command = context.modeling.commit_poly_tool();
+      handle_result(context, "Poly commit", command);
+      if (command.ok) {
+        finish_point_sequence_tool(context);
+      }
+      return {
+          .handled = true,
+          .active_tool_changed = command.ok,
+          .sync_active_tool_from_modeling = command.ok,
+      };
+    }
+    return {
+        .handled = true,
+    };
+  case ModelingViewportTool::Select:
+  case ModelingViewportTool::Move:
+  case ModelingViewportTool::Extend:
+  case ModelingViewportTool::Extrude:
+  case ModelingViewportTool::Rotate:
+  case ModelingViewportTool::Scale:
+  case ModelingViewportTool::Box:
+  case ModelingViewportTool::InsertEdgeLoop:
+  case ModelingViewportTool::Cut:
+  case ModelingViewportTool::Mirror:
+    break;
+  }
+  return ModalViewportTool::handle_event(context, event);
 }
 
 } // namespace quader

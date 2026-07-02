@@ -15,8 +15,9 @@ namespace quader {
  */
 class ScaleTool final : public TransformViewportTool {
 public:
-    ScaleTool()
-        : TransformViewportTool(viewportToolDescriptor(ViewportToolId::Scale)) {}
+  ScaleTool()
+      : TransformViewportTool(viewport_tool_descriptor(ViewportToolId::Scale)) {
+  }
 };
 
 } // namespace quader

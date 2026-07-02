@@ -56,234 +56,257 @@ constexpr float kChromeMenuSpacing = 10.0f;
 constexpr float kCompressedSidebarMinWidth = 220.0f;
 constexpr float kReservedViewportDockWidth = 300.0f;
 
-ImVec4 uiColor(int red, int green, int blue, float alpha = 1.0f) {
-    return {
-            static_cast<float>(red) / 255.0f,
-            static_cast<float>(green) / 255.0f,
-            static_cast<float>(blue) / 255.0f,
-            alpha,
-    };
+ImVec4 ui_color(int red, int green, int blue, float alpha = 1.0f) {
+  return {
+      static_cast<float>(red) / 255.0f,
+      static_cast<float>(green) / 255.0f,
+      static_cast<float>(blue) / 255.0f,
+      alpha,
+  };
 }
 
-ImU32 uiPackedColor(int red, int green, int blue, int alpha = 255) {
-    return IM_COL32(red, green, blue, alpha);
+ImU32 ui_packed_color(int red, int green, int blue, int alpha = 255) {
+  return IM_COL32(red, green, blue, alpha);
 }
 
-void clampDockLeafNodeWidth(ImGuiDockNode* node, float minimumWidth) {
-    if (node == nullptr || node->ParentNode == nullptr || node->ParentNode->SplitAxis != ImGuiAxis_X) {
-        return;
-    }
+void clamp_dock_leaf_node_width(ImGuiDockNode *node, float minimum_width) {
+  if (node == nullptr || node->ParentNode == nullptr ||
+      node->ParentNode->SplitAxis != ImGuiAxis_X) {
+    return;
+  }
 
-    ImGuiDockNode* parent = node->ParentNode;
-    ImGuiDockNode* sibling = parent->ChildNodes[0] == node ? parent->ChildNodes[1] : parent->ChildNodes[0];
-    if (sibling == nullptr || parent->Size.x <= minimumWidth + 1.0f || node->Size.x >= minimumWidth) {
-        return;
-    }
+  ImGuiDockNode *parent = node->ParentNode;
+  ImGuiDockNode *sibling = parent->ChildNodes[0] == node
+                               ? parent->ChildNodes[1]
+                               : parent->ChildNodes[0];
+  if (sibling == nullptr || parent->Size.x <= minimum_width + 1.0f ||
+      node->Size.x >= minimum_width) {
+    return;
+  }
 
-    const bool nodeIsLeftChild = parent->ChildNodes[0] == node;
-    const float clampedWidth = std::min(minimumWidth, parent->Size.x - 1.0f);
-    const float siblingWidth = std::max(1.0f, parent->Size.x - clampedWidth);
+  const bool node_is_left_child = parent->ChildNodes[0] == node;
+  const float clamped_width = std::min(minimum_width, parent->Size.x - 1.0f);
+  const float sibling_width = std::max(1.0f, parent->Size.x - clamped_width);
 
-    node->Size.x = clampedWidth;
-    node->SizeRef.x = clampedWidth;
-    sibling->Size.x = siblingWidth;
-    sibling->SizeRef.x = siblingWidth;
+  node->Size.x = clamped_width;
+  node->SizeRef.x = clamped_width;
+  sibling->Size.x = sibling_width;
+  sibling->SizeRef.x = sibling_width;
 
-    if (nodeIsLeftChild) {
-        node->Pos.x = parent->Pos.x;
-        sibling->Pos.x = parent->Pos.x + clampedWidth;
-    } else {
-        sibling->Pos.x = parent->Pos.x;
-        node->Pos.x = parent->Pos.x + siblingWidth;
-    }
+  if (node_is_left_child) {
+    node->Pos.x = parent->Pos.x;
+    sibling->Pos.x = parent->Pos.x + clamped_width;
+  } else {
+    sibling->Pos.x = parent->Pos.x;
+    node->Pos.x = parent->Pos.x + sibling_width;
+  }
 
-    node->WantLockSizeOnce = true;
-    sibling->WantLockSizeOnce = true;
+  node->WantLockSizeOnce = true;
+  sibling->WantLockSizeOnce = true;
 }
 
-void clampDockedWindowWidth(const char* windowName, float minimumWidth) {
-    ImGuiWindow* window = ImGui::FindWindowByName(windowName);
-    if (window == nullptr || window->DockNode == nullptr) {
-        return;
-    }
-    clampDockLeafNodeWidth(window->DockNode, minimumWidth);
+void clamp_docked_window_width(const char *window_name, float minimum_width) {
+  ImGuiWindow *window = ImGui::FindWindowByName(window_name);
+  if (window == nullptr || window->DockNode == nullptr) {
+    return;
+  }
+  clamp_dock_leaf_node_width(window->DockNode, minimum_width);
 }
 
-int visibleSidebarCount(const UIPanelManager& panels) {
-    int count = 0;
-    if (panels.isVisible(UIPanelId::Outliner)) {
-        ++count;
-    }
-    if (panels.isVisible(UIPanelId::Inspector)) {
-        ++count;
-    }
-    return count;
+int visible_sidebar_count(const UIPanelManager &panels) {
+  int count = 0;
+  if (panels.is_visible(UIPanelId::Outliner)) {
+    ++count;
+  }
+  if (panels.is_visible(UIPanelId::Inspector)) {
+    ++count;
+  }
+  return count;
 }
 
-float effectiveSidebarMinimumWidth(float dockspaceWidth, const UIPanelManager& panels, float preferredMinimumWidth) {
-    const int sidebarCount = visibleSidebarCount(panels);
-    if (sidebarCount <= 0) {
-        return preferredMinimumWidth;
-    }
+float effective_sidebar_minimum_width(float dockspace_width,
+                                      const UIPanelManager &panels,
+                                      float preferred_minimum_width) {
+  const int sidebar_count = visible_sidebar_count(panels);
+  if (sidebar_count <= 0) {
+    return preferred_minimum_width;
+  }
 
-    const float availableForSidebars = std::max(1.0f, dockspaceWidth - kReservedViewportDockWidth);
-    const float widthPerSidebar = availableForSidebars / static_cast<float>(sidebarCount);
-    return std::min(preferredMinimumWidth, std::max(kCompressedSidebarMinWidth, widthPerSidebar));
+  const float available_for_sidebars =
+      std::max(1.0f, dockspace_width - kReservedViewportDockWidth);
+  const float width_per_sidebar =
+      available_for_sidebars / static_cast<float>(sidebar_count);
+  return std::min(preferred_minimum_width,
+                  std::max(kCompressedSidebarMinWidth, width_per_sidebar));
 }
 
-std::optional<UIPanelId> panelIdFromName(std::string_view name) {
-    for (const UIPanelId id : {UIPanelId::Viewport, UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Console}) {
-        if (name == uiPanelStableId(id) || name == uiPanelKey(id)) {
-            return id;
-        }
+std::optional<UIPanelId> panel_id_from_name(std::string_view name) {
+  for (const UIPanelId id : {UIPanelId::Viewport, UIPanelId::Outliner,
+                             UIPanelId::Inspector, UIPanelId::Console}) {
+    if (name == ui_panel_stable_id(id) || name == ui_panel_key(id)) {
+      return id;
     }
-    return std::nullopt;
+  }
+  return std::nullopt;
 }
 
-bool chromeIconButton(const char* stableId, WindowChromeAction action, const ImVec2& size) {
-    ImGui::PushID(stableId);
-    const bool clicked = ImGui::InvisibleButton("##button", size);
-    const bool hovered = ImGui::IsItemHovered();
-    const bool active = ImGui::IsItemActive();
-    const ImVec2 min = ImGui::GetItemRectMin();
-    const ImVec2 max = ImGui::GetItemRectMax();
-    const ImVec2 center{
-            std::floor((min.x + max.x) * 0.5f) + 0.5f,
-            std::floor((min.y + max.y) * 0.5f) + 0.5f};
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
+bool chrome_icon_button(const char *stable_id, WindowChromeAction action,
+                        const ImVec2 &size) {
+  ImGui::PushID(stable_id);
+  const bool clicked = ImGui::InvisibleButton("##button", size);
+  const bool hovered = ImGui::IsItemHovered();
+  const bool active = ImGui::IsItemActive();
+  const ImVec2 min = ImGui::GetItemRectMin();
+  const ImVec2 max = ImGui::GetItemRectMax();
+  const ImVec2 center{std::floor((min.x + max.x) * 0.5f) + 0.5f,
+                      std::floor((min.y + max.y) * 0.5f) + 0.5f};
+  ImDrawList *draw_list = ImGui::GetWindowDrawList();
 
-    if (hovered || active) {
-        ImU32 background = uiPackedColor(46, 46, 46);
-        if (active) {
-            background = uiPackedColor(60, 60, 60);
-        }
-        if (action == WindowChromeAction::Close) {
-            background = active ? uiPackedColor(155, 32, 32) : uiPackedColor(206, 59, 59);
-        }
-        drawList->AddRectFilled(min, max, background);
+  if (hovered || active) {
+    ImU32 background = ui_packed_color(46, 46, 46);
+    if (active) {
+      background = ui_packed_color(60, 60, 60);
     }
-
-    const ImU32 iconColor = hovered || active ? uiPackedColor(247, 247, 247) : uiPackedColor(188, 188, 188);
-    const float thickness = 1.25f;
-    const float half = 4.5f;
-    if (action == WindowChromeAction::Minimize) {
-        drawList->AddLine({center.x - half, center.y + 0.5f}, {center.x + half, center.y + 0.5f}, iconColor, thickness);
-    } else if (action == WindowChromeAction::ToggleMaximizeRestore) {
-        drawList->AddRect({center.x - half, center.y - half}, {center.x + half, center.y + half}, iconColor, 0.0f, 0, thickness);
-    } else {
-        drawList->AddLine({center.x - half, center.y - half}, {center.x + half, center.y + half}, iconColor, thickness);
-        drawList->AddLine({center.x + half, center.y - half}, {center.x - half, center.y + half}, iconColor, thickness);
+    if (action == WindowChromeAction::Close) {
+      background =
+          active ? ui_packed_color(155, 32, 32) : ui_packed_color(206, 59, 59);
     }
+    draw_list->AddRectFilled(min, max, background);
+  }
 
-    ImGui::PopID();
-    return clicked;
+  const ImU32 icon_color = hovered || active ? ui_packed_color(247, 247, 247)
+                                             : ui_packed_color(188, 188, 188);
+  const float thickness = 1.25f;
+  const float half = 4.5f;
+  if (action == WindowChromeAction::Minimize) {
+    draw_list->AddLine({center.x - half, center.y + 0.5f},
+                       {center.x + half, center.y + 0.5f}, icon_color,
+                       thickness);
+  } else if (action == WindowChromeAction::ToggleMaximizeRestore) {
+    draw_list->AddRect({center.x - half, center.y - half},
+                       {center.x + half, center.y + half}, icon_color, 0.0f, 0,
+                       thickness);
+  } else {
+    draw_list->AddLine({center.x - half, center.y - half},
+                       {center.x + half, center.y + half}, icon_color,
+                       thickness);
+    draw_list->AddLine({center.x + half, center.y - half},
+                       {center.x - half, center.y + half}, icon_color,
+                       thickness);
+  }
+
+  ImGui::PopID();
+  return clicked;
 }
 
-QuaderApiVoidResult runtimeStatus(bool changed, std::string message = {}) {
-    return {
-            .ok = true,
-            .changed = changed,
-            .message = std::move(message),
-            .mutationKind = changed ? QuaderMutationKind::Runtime : QuaderMutationKind::None,
-    };
+QuaderApiVoidResult runtime_status(bool changed, std::string message = {}) {
+  return {
+      .ok = true,
+      .changed = changed,
+      .message = std::move(message),
+      .mutation_kind =
+          changed ? QuaderMutationKind::Runtime : QuaderMutationKind::None,
+  };
 }
 
-QuaderApiVoidResult runtimeFailure(std::string message) {
-    return {
-            .ok = false,
-            .changed = false,
-            .message = std::move(message),
-            .mutationKind = QuaderMutationKind::None,
-    };
+QuaderApiVoidResult runtime_failure(std::string message) {
+  return {
+      .ok = false,
+      .changed = false,
+      .message = std::move(message),
+      .mutation_kind = QuaderMutationKind::None,
+  };
 }
 
-bool dispatchFocusedPanelCommandShortcut(
-        QuaderEditorApi& editor,
-        const ViewportToolState& viewportToolState,
-        UIPanelId focusedPanel,
-        bool commandShortcutConsumed) {
-    if (commandShortcutConsumed || focusedPanel == UIPanelId::Viewport) {
-        return false;
-    }
-
-    const ImGuiKeyboardInputChords keyboard = collectImGuiKeyboardInputChords();
-    if (keyboard.textInputActive) {
-        editor.commands().resetPendingKeybindingChord();
-        return false;
-    }
-
-    for (const QuaderInputChord& chord : keyboard.pressed) {
-        const QuaderViewportKeybindingDispatch dispatch =
-                editor.commands().dispatchViewportInputBinding(chord, viewportToolState, false, false);
-        if (dispatch.kind == QuaderViewportKeybindingDispatch::Kind::PendingChord) {
-            return true;
-        }
-        if (dispatch.kind != QuaderViewportKeybindingDispatch::Kind::Command) {
-            continue;
-        }
-
-        const QuaderApiVoidResult result = editor.commands().execute(dispatch.commandId);
-        if (!result.ok) {
-            LOG_ERROR(
-                    "Global command shortcut '{}' failed: {}",
-                    dispatch.commandId,
-                    result.message.empty() ? "Command failed." : result.message);
-        }
-        return true;
-    }
-
+bool dispatch_focused_panel_command_shortcut(
+    QuaderEditorApi &editor, const ViewportToolState &viewport_tool_state,
+    UIPanelId focused_panel, bool command_shortcut_consumed) {
+  if (command_shortcut_consumed || focused_panel == UIPanelId::Viewport) {
     return false;
+  }
+
+  const ImGuiKeyboardInputChords keyboard =
+      collect_im_gui_keyboard_input_chords();
+  if (keyboard.text_input_active) {
+    editor.commands().reset_pending_keybinding_chord();
+    return false;
+  }
+
+  for (const QuaderInputChord &chord : keyboard.pressed) {
+    const QuaderViewportKeybindingDispatch dispatch =
+        editor.commands().dispatch_viewport_input_binding(
+            chord, viewport_tool_state, false, false);
+    if (dispatch.kind == QuaderViewportKeybindingDispatch::Kind::PendingChord) {
+      return true;
+    }
+    if (dispatch.kind != QuaderViewportKeybindingDispatch::Kind::Command) {
+      continue;
+    }
+
+    const QuaderApiVoidResult result =
+        editor.commands().execute(dispatch.command_id);
+    if (!result.ok) {
+      LOG_ERROR("Global command shortcut '{}' failed: {}", dispatch.command_id,
+                result.message.empty() ? "Command failed." : result.message);
+    }
+    return true;
+  }
+
+  return false;
 }
 
-void drawStaticBottomBar(const ImGuiViewport& viewport, const LocalizationService& localization) {
-    ImGui::SetNextWindowPos({viewport.Pos.x, viewport.Pos.y + std::max(0.0f, viewport.Size.y - kStaticBottomBarHeight)});
-    ImGui::SetNextWindowSize({std::max(1.0f, viewport.Size.x), kStaticBottomBarHeight});
-    ImGui::SetNextWindowViewport(viewport.ID);
+void draw_static_bottom_bar(const ImGuiViewport &viewport,
+                            const LocalizationService &localization) {
+  ImGui::SetNextWindowPos(
+      {viewport.Pos.x,
+       viewport.Pos.y +
+           std::max(0.0f, viewport.Size.y - kStaticBottomBarHeight)});
+  ImGui::SetNextWindowSize(
+      {std::max(1.0f, viewport.Size.x), kStaticBottomBarHeight});
+  ImGui::SetNextWindowViewport(viewport.ID);
 
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking |
-            ImGuiWindowFlags_NoTitleBar |
-            ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_NoScrollWithMouse |
-            ImGuiWindowFlags_NoSavedSettings |
-            ImGuiWindowFlags_NoInputs |
-            ImGuiWindowFlags_NoBringToFrontOnFocus |
-            ImGuiWindowFlags_NoNavFocus;
+  const ImGuiWindowFlags flags =
+      ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
+      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+      ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
+      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoBringToFrontOnFocus |
+      ImGuiWindowFlags_NoNavFocus;
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, uiColor(18, 19, 22));
-    ImGui::Begin("Quader Static Bottom Bar", nullptr, flags);
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar(3);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ui_color(18, 19, 22));
+  ImGui::Begin("Quader Static Bottom Bar", nullptr, flags);
+  ImGui::PopStyleColor();
+  ImGui::PopStyleVar(3);
 
-    const ImVec2 min = ImGui::GetWindowPos();
-    const ImVec2 max{min.x + ImGui::GetWindowWidth(), min.y + kStaticBottomBarHeight};
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
+  const ImVec2 min = ImGui::GetWindowPos();
+  const ImVec2 max{min.x + ImGui::GetWindowWidth(),
+                   min.y + kStaticBottomBarHeight};
+  ImDrawList *draw_list = ImGui::GetWindowDrawList();
 
-    drawList->AddRectFilled(min, max, uiPackedColor(18, 19, 22));
-    drawList->AddLine(min, {max.x, min.y}, uiPackedColor(72, 74, 82));
-    drawList->AddRectFilled(
-            {min.x, max.y - kStaticBottomBarAccentHeight},
-            max,
-            uiPackedColor(118, 92, 168));
+  draw_list->AddRectFilled(min, max, ui_packed_color(18, 19, 22));
+  draw_list->AddLine(min, {max.x, min.y}, ui_packed_color(72, 74, 82));
+  draw_list->AddRectFilled({min.x, max.y - kStaticBottomBarAccentHeight}, max,
+                           ui_packed_color(118, 92, 168));
 
-    const float bottomBarTextHeight = kStaticBottomBarHeight - kStaticBottomBarAccentHeight;
-    const float textY = min.y + std::floor((bottomBarTextHeight - ImGui::GetTextLineHeight()) * 0.5f);
-    const std::string ready = localization.text("ui.shell.status.ready", "Ready");
-    drawList->AddText({min.x + 12.0f, textY}, uiPackedColor(216, 216, 216), ready.c_str());
+  const float bottom_bar_text_height =
+      kStaticBottomBarHeight - kStaticBottomBarAccentHeight;
+  const float text_y =
+      min.y +
+      std::floor((bottom_bar_text_height - ImGui::GetTextLineHeight()) * 0.5f);
+  const std::string ready = localization.text("ui.shell.status.ready", "Ready");
+  draw_list->AddText({min.x + 12.0f, text_y}, ui_packed_color(216, 216, 216),
+                     ready.c_str());
 
-    const char* rightLabel = kQuaderAppVersionDisplay;
-    const ImVec2 rightLabelSize = ImGui::CalcTextSize(rightLabel);
-    drawList->AddText(
-            {std::max(min.x + 72.0f, max.x - rightLabelSize.x - 12.0f), textY},
-            uiPackedColor(150, 154, 163),
-            rightLabel);
+  const char *right_label = kQuaderAppVersionDisplay;
+  const ImVec2 right_label_size = ImGui::CalcTextSize(right_label);
+  draw_list->AddText(
+      {std::max(min.x + 72.0f, max.x - right_label_size.x - 12.0f), text_y},
+      ui_packed_color(150, 154, 163), right_label);
 
-    ImGui::End();
+  ImGui::End();
 }
 
 } // namespace
@@ -292,50 +315,55 @@ UISystem::~UISystem() {
     shutdown();
 }
 
-void UISystem::initialize(
-        SDL_Window* window,
-        RenderSystem& renderSystem,
-        const std::filesystem::path& executableDir,
-        bool customChrome) {
-    window_ = window;
-    customChrome_ = customChrome;
-    settingsPaths_ = UISettings::resolvePaths(executableDir);
-    std::error_code error;
-    std::filesystem::create_directories(settingsPaths_.directory, error);
-    settings_ = UISettings::load(settingsPaths_.settingsFile);
-    localization_.load(executableDir / "locales", settings_.locale());
-    if (settings_.locale() != localization_.currentLocale()) {
-        settings_.setLocale(localization_.currentLocale());
-    }
-    viewportSettings_ = ViewportSettings::load(settingsPaths_.viewportSettingsFile);
-    imguiIniPath_ = settingsPaths_.imguiIniFile.string();
-    const bool iniExists = std::filesystem::exists(settingsPaths_.imguiIniFile, error);
-    const std::uintmax_t iniSize = iniExists ? std::filesystem::file_size(settingsPaths_.imguiIniFile, error) : 0u;
-    hasSavedDockLayout_ = iniExists && !error && iniSize > 0u;
+void UISystem::initialize(SDL_Window *window, RenderSystem &render_system,
+                          const std::filesystem::path &executable_dir,
+                          bool custom_chrome) {
+  window_ = window;
+  custom_chrome_ = custom_chrome;
+  settings_paths_ = UISettings::resolve_paths(executable_dir);
+  std::error_code error;
+  std::filesystem::create_directories(settings_paths_.directory, error);
+  settings_ = UISettings::load(settings_paths_.settings_file);
+  localization_.load(executable_dir / "locales", settings_.locale());
+  if (settings_.locale() != localization_.current_locale()) {
+    settings_.set_locale(localization_.current_locale());
+  }
+  viewport_settings_ =
+      ViewportSettings::load(settings_paths_.viewport_settings_file);
+  imgui_ini_path_ = settings_paths_.imgui_ini_file.string();
+  const bool ini_exists =
+      std::filesystem::exists(settings_paths_.imgui_ini_file, error);
+  const std::uintmax_t ini_size =
+      ini_exists
+          ? std::filesystem::file_size(settings_paths_.imgui_ini_file, error)
+          : 0u;
+  has_saved_dock_layout_ = ini_exists && !error && ini_size > 0u;
 
-    registerPanels(renderSystem);
-    panels_.applySettings(settings_);
-    if (viewportPanel_ != nullptr) {
-        viewportPanel_->setNavigationGizmoVisible(settings_.navigationGizmoVisible());
-    }
+  register_panels(render_system);
+  panels_.apply_settings(settings_);
+  if (viewport_panel_ != nullptr) {
+    viewport_panel_->set_navigation_gizmo_visible(
+        settings_.navigation_gizmo_visible());
+  }
 
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    io.IniFilename = imguiIniPath_.c_str();
+  IMGUI_CHECKVERSION();
+  ImGui::CreateContext();
+  ImGuiIO &io = ImGui::GetIO();
+  io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  io.IniFilename = imgui_ini_path_.c_str();
 
-    loadUIDefaultFont(executableDir, style_);
-    applyUIStyle(style_);
+  load_ui_default_font(executable_dir, style_);
+  apply_ui_style(style_);
 
-    LOG_INFO("Initializing ImGui SDL3 backend");
-    ImGui_ImplSDL3_InitForOther(window_);
-    LOG_INFO("Initializing ImGui Filament renderer");
-    renderer_.initialize(renderSystem.engine(), renderSystem.imguiMaterial(), renderSystem.textures());
-    loadIcons(renderSystem.engine(), renderSystem.textures(), executableDir);
-    initialized_ = true;
-    LOG_INFO("ImGui docking UI initialized");
+  LOG_INFO("Initializing ImGui SDL3 backend");
+  ImGui_ImplSDL3_InitForOther(window_);
+  LOG_INFO("Initializing ImGui Filament renderer");
+  renderer_.initialize(render_system.engine(), render_system.imgui_material(),
+                       render_system.textures());
+  load_icons(render_system.engine(), render_system.textures(), executable_dir);
+  initialized_ = true;
+  LOG_INFO("ImGui docking UI initialized");
 }
 
 void UISystem::shutdown() {
@@ -343,565 +371,605 @@ void UISystem::shutdown() {
         return;
     }
 
-    setViewportCursorCaptured(false);
-    saveSettings();
-    saveViewportSettings();
-    if (!imguiIniPath_.empty()) {
-        ImGui::SaveIniSettingsToDisk(imguiIniPath_.c_str());
+    set_viewport_cursor_captured(false);
+    save_settings();
+    save_viewport_settings();
+    if (!imgui_ini_path_.empty()) {
+      ImGui::SaveIniSettingsToDisk(imgui_ini_path_.c_str());
     }
 
-    if (viewportPanel_ != nullptr) {
-        viewportPanel_->shutdown();
+    if (viewport_panel_ != nullptr) {
+      viewport_panel_->shutdown();
     }
     renderer_.shutdown();
-    destroyIcons();
+    destroy_icons();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
     initialized_ = false;
     window_ = nullptr;
-    customChrome_ = false;
-    pendingChromeAction_.reset();
-    viewportPanel_ = nullptr;
+    custom_chrome_ = false;
+    pending_chrome_action_.reset();
+    viewport_panel_ = nullptr;
 }
 
-bool UISystem::processEvent(const SDL_Event& event) {
-    return ImGui_ImplSDL3_ProcessEvent(&event);
+bool UISystem::process_event(const SDL_Event &event) {
+  return ImGui_ImplSDL3_ProcessEvent(&event);
 }
 
-void UISystem::beginFrame(
-        const FrameTiming& frameTiming,
-        std::uint32_t framebufferWidth,
-        std::uint32_t framebufferHeight) {
-    QDR_PROFILE_FUNCTION();
-    currentFrameTiming_ = frameTiming;
-    renderer_.releaseFrameResources();
-    relativeMouseDelta_ = {};
-    if (relativeMouseCaptured_) {
-        float deltaX = 0.0f;
-        float deltaY = 0.0f;
-        (void)SDL_GetRelativeMouseState(&deltaX, &deltaY);
-        relativeMouseDelta_ = {deltaX, deltaY};
+void UISystem::begin_frame(const FrameTiming &frame_timing,
+                           std::uint32_t framebuffer_width,
+                           std::uint32_t framebuffer_height) {
+  QDR_PROFILE_FUNCTION();
+  current_frame_timing_ = frame_timing;
+  renderer_.release_frame_resources();
+  relative_mouse_delta_ = {};
+  if (relative_mouse_captured_) {
+    float delta_x = 0.0f;
+    float delta_y = 0.0f;
+    (void)SDL_GetRelativeMouseState(&delta_x, &delta_y);
+    relative_mouse_delta_ = {delta_x, delta_y};
+  }
+  ImGui_ImplSDL3_NewFrame();
+  ImGuiIO &io = ImGui::GetIO();
+  io.DisplaySize = {
+      static_cast<float>(std::max(1u, framebuffer_width)),
+      static_cast<float>(std::max(1u, framebuffer_height)),
+  };
+  io.DisplayFramebufferScale = {1.0f, 1.0f};
+  ImGui::GetIO().DeltaTime =
+      static_cast<float>(std::max(current_frame_timing_.delta_seconds, 0.0));
+  ImGui::NewFrame();
+}
+
+void UISystem::end_frame_without_render() {
+  if (ImGui::GetCurrentContext() != nullptr) {
+    ImGui::EndFrame();
+  }
+}
+
+void UISystem::draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
+                    SceneDocument &document, AssetRegistry &assets,
+                    ModelingSessionService &modeling,
+                    EditorSelectionService &selection, AssetId default_material,
+                    bool &quit_requested) {
+  QDR_PROFILE_FUNCTION();
+  editor.ui().set_runtime_hooks(QuaderUIRuntimeHooks{
+      .is_panel_visible =
+          [this](std::string_view panel) {
+            const std::optional<UIPanelId> id = panel_id_from_name(panel);
+            return id.has_value() && panels_.is_visible(*id);
+          },
+      .set_panel_visible =
+          [this](std::string_view panel, bool visible) {
+            const std::optional<UIPanelId> id = panel_id_from_name(panel);
+            if (!id.has_value()) {
+              return runtime_failure(localization_.text(
+                  "ui.runtime.unknown_panel", "Unknown UI panel."));
+            }
+            const bool before = panels_.is_visible(*id);
+            panels_.set_visible(*id, visible);
+            if (before != visible) {
+              save_settings();
+            }
+            return runtime_status(before != visible);
+          },
+      .focus_panel =
+          [this](std::string_view panel) {
+            const std::optional<UIPanelId> id = panel_id_from_name(panel);
+            if (!id.has_value()) {
+              return runtime_failure(localization_.text(
+                  "ui.runtime.unknown_panel", "Unknown UI panel."));
+            }
+            focused_panel_ = *id;
+            return runtime_status(true);
+          },
+  });
+  editor.preferences().set_runtime_hooks(QuaderPreferencesRuntimeHooks{
+      .locale = [this]() { return settings_.locale(); },
+      .set_locale =
+          [this](std::string locale) {
+            if (!localization_.select_locale(locale)) {
+              return runtime_failure(localization_.text(
+                  "ui.runtime.unknown_locale", "Unknown locale."));
+            }
+            const bool changed =
+                settings_.locale() != localization_.current_locale();
+            settings_.set_locale(localization_.current_locale());
+            if (changed) {
+              save_settings();
+            }
+            return runtime_status(changed);
+          },
+      .save =
+          [this]() {
+            save_settings();
+            save_viewport_settings();
+            return runtime_status(
+                false, localization_.text("ui.runtime.preferences_saved",
+                                          "Preferences saved."));
+          },
+      .navigation_gizmo_visible =
+          [this]() {
+            return viewport_panel_ != nullptr &&
+                   viewport_panel_->navigation_gizmo_visible();
+          },
+      .set_navigation_gizmo_visible =
+          [this](bool visible) {
+            if (viewport_panel_ == nullptr) {
+              return runtime_failure(
+                  localization_.text("ui.runtime.viewport_panel_unavailable",
+                                     "Viewport panel is not available."));
+            }
+            const bool before = viewport_panel_->navigation_gizmo_visible();
+            viewport_panel_->set_navigation_gizmo_visible(visible);
+            settings_.set_navigation_gizmo_visible(visible);
+            save_settings();
+            return runtime_status(before != visible);
+          },
+  });
+  {
+    QDR_PROFILE_SCOPE("UI menus and chrome");
+    close_menu_popup_for_pass_through_click();
+  }
+  const MainMenuBarResult chrome_menu_result = [&]() {
+    QDR_PROFILE_SCOPE("UI draw window chrome");
+    return draw_window_chrome(editor, quit_requested, document, modeling);
+  }();
+  main_menu_popup_open_ = chrome_menu_result.popup_open;
+  if (chrome_menu_result.settings_changed) {
+    save_settings();
+  }
+  if (chrome_menu_result.viewport_settings_changed) {
+    save_viewport_settings();
+  }
+  {
+    QDR_PROFILE_SCOPE("UI draw dockspace");
+    const float sidebar_minimum_width = effective_sidebar_minimum_width(
+        ImGui::GetMainViewport()->Size.x, panels_, style_.sidebar_min_width);
+    draw_dockspace(editor, quit_requested, document, modeling,
+                   sidebar_minimum_width);
+  }
+
+  bool viewport_cursor_capture_requested = false;
+  QVec2 viewport_cursor_capture_point = {};
+  const UIPanelId previous_focused_panel = focused_panel_;
+  bool panel_focus_changed = false;
+  bool command_shortcut_consumed = false;
+  bool settings_changed = false;
+  UIStyleTokens frame_style = style_;
+  frame_style.sidebar_min_width = effective_sidebar_minimum_width(
+      ImGui::GetMainViewport()->Size.x, panels_, style_.sidebar_min_width);
+  UIContext context{
+      .editor = editor,
+      .render_bridge = render_bridge,
+      .document = document,
+      .assets = assets,
+      .modeling = modeling,
+      .selection = selection,
+      .default_material = default_material,
+      .quit_requested = quit_requested,
+      .style = frame_style,
+      .icons = icons_,
+      .localization = localization_,
+      .settings = settings_,
+      .viewport_settings = viewport_settings_,
+      .frame_timing = current_frame_timing_,
+      .render_performance = render_performance_stats_,
+      .viewport_relative_mouse_delta = relative_mouse_delta_,
+      .viewport_render_resize_suspended = viewport_render_resize_suspended_,
+      .viewport_cursor_capture_requested = &viewport_cursor_capture_requested,
+      .viewport_cursor_capture_point = &viewport_cursor_capture_point,
+      .focused_panel = focused_panel_,
+      .previous_focused_panel = previous_focused_panel,
+      .focused_panel_storage = &focused_panel_,
+      .panel_focus_changed = &panel_focus_changed,
+      .command_shortcut_consumed = &command_shortcut_consumed,
+      .settings_changed = &settings_changed,
+  };
+  {
+    QDR_PROFILE_SCOPE("UI draw panels");
+    panels_.draw(context);
+  }
+  if (viewport_settings_panel_.draw(context, settings_panel_open_)) {
+    save_viewport_settings();
+  }
+  if (settings_changed) {
+    save_settings();
+  }
+  tool_settings_panel_.draw(context, tool_settings_panel_open_);
+  if (viewport_panel_ != nullptr) {
+    (void)dispatch_focused_panel_command_shortcut(
+        editor, viewport_panel_->tool_state(), focused_panel_,
+        command_shortcut_consumed);
+  }
+  draw_static_bottom_bar(*ImGui::GetMainViewport(), localization_);
+  {
+    QDR_PROFILE_SCOPE("UI sync tool preview meshes");
+    const ModelingToolStatus tool_status = modeling.tool_status();
+    const bool has_tool_preview_meshes =
+        tool_status.active_tool == ModelingViewportTool::Box ||
+        (tool_status.mirror_active && tool_status.mirror_can_preview &&
+         tool_status.mirror_preview_valid);
+    std::vector<ModelingToolPreviewMesh> modeling_preview_meshes =
+        has_tool_preview_meshes ? modeling.tool_preview_meshes()
+                                : std::vector<ModelingToolPreviewMesh>{};
+    std::vector<SceneRenderBridge::PreviewMesh> render_preview_meshes;
+    render_preview_meshes.reserve(modeling_preview_meshes.size());
+    for (ModelingToolPreviewMesh &preview_mesh : modeling_preview_meshes) {
+      const AssetId material = preview_mesh.material != kInvalidAssetId
+                                   ? preview_mesh.material
+                                   : default_material;
+      render_preview_meshes.push_back(SceneRenderBridge::PreviewMesh{
+          .source_entity = preview_mesh.source_entity,
+          .material = material,
+          .mesh = std::move(preview_mesh.mesh),
+          .transform = {},
+      });
     }
-    ImGui_ImplSDL3_NewFrame();
-    ImGuiIO& io = ImGui::GetIO();
-    io.DisplaySize = {
-            static_cast<float>(std::max(1u, framebufferWidth)),
-            static_cast<float>(std::max(1u, framebufferHeight)),
-    };
-    io.DisplayFramebufferScale = {1.0f, 1.0f};
-    ImGui::GetIO().DeltaTime = static_cast<float>(std::max(currentFrameTiming_.deltaSeconds, 0.0));
-    ImGui::NewFrame();
+    render_bridge.set_tool_preview_meshes(std::move(render_preview_meshes),
+                                          assets);
+  }
+  enforce_sidebar_dock_minimums(frame_style.sidebar_min_width);
+  set_viewport_cursor_captured(viewport_cursor_capture_requested);
+  if (viewport_cursor_capture_requested) {
+    warp_captured_cursor(viewport_cursor_capture_point);
+  }
 }
 
-void UISystem::endFrameWithoutRender() {
-    if (ImGui::GetCurrentContext() != nullptr) {
-        ImGui::EndFrame();
-    }
+void UISystem::prepare_render_data(std::uint32_t framebuffer_width,
+                                   std::uint32_t framebuffer_height) {
+  QDR_PROFILE_FUNCTION();
+  ImGui::Render();
+  renderer_.prepare(ImGui::GetDrawData(), framebuffer_width,
+                    framebuffer_height);
 }
 
-void UISystem::draw(QuaderEditorApi& editor,
-        SceneRenderBridge& renderBridge,
-        SceneDocument& document,
-        AssetRegistry& assets,
-        ModelingSessionService& modeling,
-        EditorSelectionService& selection,
-        AssetId defaultMaterial,
-        bool& quitRequested) {
-    QDR_PROFILE_FUNCTION();
-    editor.ui().setRuntimeHooks(QuaderUIRuntimeHooks{
-            .isPanelVisible = [this](std::string_view panel) {
-                const std::optional<UIPanelId> id = panelIdFromName(panel);
-                return id.has_value() && panels_.isVisible(*id);
-            },
-            .setPanelVisible = [this](std::string_view panel, bool visible) {
-                const std::optional<UIPanelId> id = panelIdFromName(panel);
-                if (!id.has_value()) {
-                    return runtimeFailure(localization_.text("ui.runtime.unknown_panel", "Unknown UI panel."));
-                }
-                const bool before = panels_.isVisible(*id);
-                panels_.setVisible(*id, visible);
-                if (before != visible) {
-                    saveSettings();
-                }
-                return runtimeStatus(before != visible);
-            },
-            .focusPanel = [this](std::string_view panel) {
-                const std::optional<UIPanelId> id = panelIdFromName(panel);
-                if (!id.has_value()) {
-                    return runtimeFailure(localization_.text("ui.runtime.unknown_panel", "Unknown UI panel."));
-                }
-                focusedPanel_ = *id;
-                return runtimeStatus(true);
-            },
+void UISystem::prepare_viewports(QuaderEditorApi &editor,
+                                 SceneRenderBridge &render_bridge,
+                                 const SceneDocument &document,
+                                 const AssetRegistry &assets) {
+  QDR_PROFILE_FUNCTION();
+  if (viewport_panel_ != nullptr) {
+    viewport_panel_->prepare_viewports(
+        QuaderViewportApiRuntimeAccess::workspace(editor.viewports()),
+        render_bridge, document, assets);
+  }
+}
+
+void UISystem::render_viewports(RenderSystem &render_system) {
+  QDR_PROFILE_FUNCTION();
+  if (viewport_panel_ != nullptr) {
+    viewport_panel_->render_viewports(render_system.renderer());
+  }
+}
+
+void UISystem::render(RenderSystem &render_system) {
+  QDR_PROFILE_FUNCTION();
+  renderer_.render(render_system.renderer());
+}
+
+void UISystem::set_render_performance_stats(RenderFramePerformanceStats stats) {
+  render_performance_stats_ = stats;
+}
+
+void UISystem::set_viewport_render_resize_suspended(bool suspended) {
+  viewport_render_resize_suspended_ = suspended;
+}
+
+bool UISystem::needs_continuous_rendering() const {
+  return relative_mouse_captured_ ||
+         (viewport_panel_ != nullptr &&
+          viewport_panel_->needs_continuous_rendering());
+}
+
+std::optional<WindowChromeAction> UISystem::take_window_chrome_action() {
+  std::optional<WindowChromeAction> action = pending_chrome_action_;
+  pending_chrome_action_.reset();
+  return action;
+}
+
+void UISystem::register_panels(RenderSystem &render_system) {
+  panels_.add(std::make_unique<OutlinerPanel>());
+
+  auto viewport = std::make_unique<ViewportPanel>();
+  viewport->initialize(render_system);
+  viewport_panel_ = viewport.get();
+  panels_.add(std::move(viewport));
+
+  panels_.add(std::make_unique<InspectorPanel>());
+  panels_.add(std::make_unique<ConsolePanel>());
+}
+
+MainMenuBarResult
+UISystem::draw_window_chrome(QuaderEditorApi &editor, bool &quit_requested,
+                             SceneDocument &document,
+                             ModelingSessionService &modeling) {
+  MainMenuBarResult menu_result;
+  if (!custom_chrome_) {
+    return menu_result;
+  }
+
+  const ImGuiViewport *viewport = ImGui::GetMainViewport();
+  ImGui::SetNextWindowPos(viewport->Pos);
+  ImGui::SetNextWindowSize({viewport->Size.x, kWindowChromeHeight});
+  ImGui::SetNextWindowViewport(viewport->ID);
+
+  const ImGuiWindowFlags flags =
+      ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_MenuBar |
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+      ImGuiWindowFlags_NoSavedSettings |
+      ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                      {6.0f, std::max(0.0f, std::floor((kWindowChromeHeight -
+                                                        ImGui::GetFontSize()) *
+                                                       0.5f) -
+                                                1.0f)});
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {2.0f, 0.0f});
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ui_color(25, 25, 25));
+  ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ui_color(25, 25, 25));
+  ImGui::Begin("Quader Window Chrome", nullptr, flags);
+
+  ImDrawList *draw_list = ImGui::GetWindowDrawList();
+  const ImVec2 min = ImGui::GetWindowPos();
+  const ImVec2 max{min.x + ImGui::GetWindowWidth(),
+                   min.y + kWindowChromeHeight};
+  draw_list->AddLine({min.x, max.y - 1.0f}, {max.x, max.y - 1.0f},
+                     ui_packed_color(46, 46, 46));
+  const bool draw_logo = icons_.logo != ImTextureID_Invalid;
+  const float logo_y =
+      std::floor((kWindowChromeHeight - kChromeLogoSize) * 0.5f);
+  const ImVec2 logo_min{min.x + kChromeLogoLeft, min.y + logo_y};
+  const ImVec2 logo_max{logo_min.x + kChromeLogoSize,
+                        logo_min.y + kChromeLogoSize};
+
+  const float controls_left =
+      std::max(0.0f, ImGui::GetWindowWidth() - kWindowChromeControlsWidth);
+  if (ImGui::BeginMenuBar()) {
+    ImGui::SetCursorPos({kChromeMenuLeft, 0.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {kChromeMenuSpacing, 0.0f});
+    menu_result = main_menu_bar_.draw_menus({
+        .quit_requested = quit_requested,
+        .editor = editor,
+        .document = document,
+        .modeling = modeling,
+        .viewport_panel = viewport_panel_,
+        .viewport_settings = viewport_settings_,
+        .panels = panels_,
+        .localization = localization_,
+        .viewport_settings_panel_open = settings_panel_open_,
     });
-    editor.preferences().setRuntimeHooks(QuaderPreferencesRuntimeHooks{
-            .locale = [this]() {
-                return settings_.locale();
-            },
-            .setLocale = [this](std::string locale) {
-                if (!localization_.selectLocale(locale)) {
-                    return runtimeFailure(localization_.text("ui.runtime.unknown_locale", "Unknown locale."));
-                }
-                const bool changed = settings_.locale() != localization_.currentLocale();
-                settings_.setLocale(localization_.currentLocale());
-                if (changed) {
-                    saveSettings();
-                }
-                return runtimeStatus(changed);
-            },
-            .save = [this]() {
-                saveSettings();
-                saveViewportSettings();
-                return runtimeStatus(false, localization_.text("ui.runtime.preferences_saved", "Preferences saved."));
-            },
-            .navigationGizmoVisible = [this]() {
-                return viewportPanel_ != nullptr && viewportPanel_->navigationGizmoVisible();
-            },
-            .setNavigationGizmoVisible = [this](bool visible) {
-                if (viewportPanel_ == nullptr) {
-                    return runtimeFailure(localization_.text(
-                            "ui.runtime.viewport_panel_unavailable",
-                            "Viewport panel is not available."));
-                }
-                const bool before = viewportPanel_->navigationGizmoVisible();
-                viewportPanel_->setNavigationGizmoVisible(visible);
-                settings_.setNavigationGizmoVisible(visible);
-                saveSettings();
-                return runtimeStatus(before != visible);
-            },
-    });
-    {
-        QDR_PROFILE_SCOPE("UI menus and chrome");
-        closeMenuPopupForPassThroughClick();
-    }
-    const MainMenuBarResult chromeMenuResult = [&]() {
-        QDR_PROFILE_SCOPE("UI draw window chrome");
-        return drawWindowChrome(editor, quitRequested, document, modeling);
-    }();
-    mainMenuPopupOpen_ = chromeMenuResult.popupOpen;
-    if (chromeMenuResult.settingsChanged) {
-        saveSettings();
-    }
-    if (chromeMenuResult.viewportSettingsChanged) {
-        saveViewportSettings();
-    }
-    {
-        QDR_PROFILE_SCOPE("UI draw dockspace");
-        const float sidebarMinimumWidth = effectiveSidebarMinimumWidth(
-                ImGui::GetMainViewport()->Size.x,
-                panels_,
-                style_.sidebarMinWidth);
-        drawDockspace(editor, quitRequested, document, modeling, sidebarMinimumWidth);
-    }
-
-    bool viewportCursorCaptureRequested = false;
-    QVec2 viewportCursorCapturePoint = {};
-    const UIPanelId previousFocusedPanel = focusedPanel_;
-    bool panelFocusChanged = false;
-    bool commandShortcutConsumed = false;
-    bool settingsChanged = false;
-    UIStyleTokens frameStyle = style_;
-    frameStyle.sidebarMinWidth = effectiveSidebarMinimumWidth(
-            ImGui::GetMainViewport()->Size.x,
-            panels_,
-            style_.sidebarMinWidth);
-    UIContext context{
-            .editor = editor,
-            .renderBridge = renderBridge,
-            .document = document,
-            .assets = assets,
-            .modeling = modeling,
-            .selection = selection,
-            .defaultMaterial = defaultMaterial,
-            .quitRequested = quitRequested,
-            .style = frameStyle,
-            .icons = icons_,
-            .localization = localization_,
-            .settings = settings_,
-            .viewportSettings = viewportSettings_,
-            .frameTiming = currentFrameTiming_,
-            .renderPerformance = renderPerformanceStats_,
-            .viewportRelativeMouseDelta = relativeMouseDelta_,
-            .viewportRenderResizeSuspended = viewportRenderResizeSuspended_,
-            .viewportCursorCaptureRequested = &viewportCursorCaptureRequested,
-            .viewportCursorCapturePoint = &viewportCursorCapturePoint,
-            .focusedPanel = focusedPanel_,
-            .previousFocusedPanel = previousFocusedPanel,
-            .focusedPanelStorage = &focusedPanel_,
-            .panelFocusChanged = &panelFocusChanged,
-            .commandShortcutConsumed = &commandShortcutConsumed,
-            .settingsChanged = &settingsChanged,
-    };
-    {
-        QDR_PROFILE_SCOPE("UI draw panels");
-        panels_.draw(context);
-    }
-    if (viewportSettingsPanel_.draw(context, settingsPanelOpen_)) {
-        saveViewportSettings();
-    }
-    if (settingsChanged) {
-        saveSettings();
-    }
-    toolSettingsPanel_.draw(context, toolSettingsPanelOpen_);
-    if (viewportPanel_ != nullptr) {
-        (void)dispatchFocusedPanelCommandShortcut(
-                editor,
-                viewportPanel_->toolState(),
-                focusedPanel_,
-                commandShortcutConsumed);
-    }
-    drawStaticBottomBar(*ImGui::GetMainViewport(), localization_);
-    {
-        QDR_PROFILE_SCOPE("UI sync tool preview meshes");
-        const ModelingToolStatus toolStatus = modeling.toolStatus();
-        const bool hasToolPreviewMeshes =
-                toolStatus.activeTool == ModelingViewportTool::Box ||
-                (toolStatus.mirrorActive && toolStatus.mirrorCanPreview && toolStatus.mirrorPreviewValid);
-        std::vector<ModelingToolPreviewMesh> modelingPreviewMeshes =
-                hasToolPreviewMeshes ? modeling.toolPreviewMeshes() : std::vector<ModelingToolPreviewMesh>{};
-        std::vector<SceneRenderBridge::PreviewMesh> renderPreviewMeshes;
-        renderPreviewMeshes.reserve(modelingPreviewMeshes.size());
-        for (ModelingToolPreviewMesh& previewMesh : modelingPreviewMeshes) {
-            const AssetId material = previewMesh.material != InvalidAssetId ? previewMesh.material : defaultMaterial;
-            renderPreviewMeshes.push_back(SceneRenderBridge::PreviewMesh{
-                    .sourceEntity = previewMesh.sourceEntity,
-                    .material = material,
-                    .mesh = std::move(previewMesh.mesh),
-                    .transform = {},
-            });
-        }
-        renderBridge.setToolPreviewMeshes(std::move(renderPreviewMeshes), assets);
-    }
-    enforceSidebarDockMinimums(frameStyle.sidebarMinWidth);
-    setViewportCursorCaptured(viewportCursorCaptureRequested);
-    if (viewportCursorCaptureRequested) {
-        warpCapturedCursor(viewportCursorCapturePoint);
-    }
-}
-
-void UISystem::prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight) {
-    QDR_PROFILE_FUNCTION();
-    ImGui::Render();
-    renderer_.prepare(ImGui::GetDrawData(), framebufferWidth, framebufferHeight);
-}
-
-void UISystem::prepareViewports(
-        QuaderEditorApi& editor,
-        SceneRenderBridge& renderBridge,
-        const SceneDocument& document,
-        const AssetRegistry& assets) {
-    QDR_PROFILE_FUNCTION();
-    if (viewportPanel_ != nullptr) {
-        viewportPanel_->prepareViewports(
-                QuaderViewportApiRuntimeAccess::workspace(editor.viewports()),
-                renderBridge,
-                document,
-                assets);
-    }
-}
-
-void UISystem::renderViewports(RenderSystem& renderSystem) {
-    QDR_PROFILE_FUNCTION();
-    if (viewportPanel_ != nullptr) {
-        viewportPanel_->renderViewports(renderSystem.renderer());
-    }
-}
-
-void UISystem::render(RenderSystem& renderSystem) {
-    QDR_PROFILE_FUNCTION();
-    renderer_.render(renderSystem.renderer());
-}
-
-void UISystem::setRenderPerformanceStats(RenderFramePerformanceStats stats) {
-    renderPerformanceStats_ = stats;
-}
-
-void UISystem::setViewportRenderResizeSuspended(bool suspended) {
-    viewportRenderResizeSuspended_ = suspended;
-}
-
-bool UISystem::needsContinuousRendering() const {
-    return relativeMouseCaptured_ ||
-            (viewportPanel_ != nullptr && viewportPanel_->needsContinuousRendering());
-}
-
-std::optional<WindowChromeAction> UISystem::takeWindowChromeAction() {
-    std::optional<WindowChromeAction> action = pendingChromeAction_;
-    pendingChromeAction_.reset();
-    return action;
-}
-
-void UISystem::registerPanels(RenderSystem& renderSystem) {
-    panels_.add(std::make_unique<OutlinerPanel>());
-
-    auto viewport = std::make_unique<ViewportPanel>();
-    viewport->initialize(renderSystem);
-    viewportPanel_ = viewport.get();
-    panels_.add(std::move(viewport));
-
-    panels_.add(std::make_unique<InspectorPanel>());
-    panels_.add(std::make_unique<ConsolePanel>());
-}
-
-MainMenuBarResult UISystem::drawWindowChrome(
-        QuaderEditorApi& editor,
-        bool& quitRequested,
-        SceneDocument& document,
-        ModelingSessionService& modeling) {
-    MainMenuBarResult menuResult;
-    if (!customChrome_) {
-        return menuResult;
-    }
-
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->Pos);
-    ImGui::SetNextWindowSize({viewport->Size.x, kWindowChromeHeight});
-    ImGui::SetNextWindowViewport(viewport->ID);
-
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking |
-            ImGuiWindowFlags_MenuBar |
-            ImGuiWindowFlags_NoTitleBar |
-            ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_NoScrollWithMouse |
-            ImGuiWindowFlags_NoSavedSettings |
-            ImGuiWindowFlags_NoBringToFrontOnFocus |
-            ImGuiWindowFlags_NoNavFocus;
-
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(
-            ImGuiStyleVar_FramePadding,
-            {6.0f, std::max(0.0f, std::floor((kWindowChromeHeight - ImGui::GetFontSize()) * 0.5f) - 1.0f)});
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {2.0f, 0.0f});
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, uiColor(25, 25, 25));
-    ImGui::PushStyleColor(ImGuiCol_MenuBarBg, uiColor(25, 25, 25));
-    ImGui::Begin("Quader Window Chrome", nullptr, flags);
-
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    const ImVec2 min = ImGui::GetWindowPos();
-    const ImVec2 max{min.x + ImGui::GetWindowWidth(), min.y + kWindowChromeHeight};
-    drawList->AddLine({min.x, max.y - 1.0f}, {max.x, max.y - 1.0f}, uiPackedColor(46, 46, 46));
-    const bool drawLogo = icons_.logo != ImTextureID_Invalid;
-    const float logoY = std::floor((kWindowChromeHeight - kChromeLogoSize) * 0.5f);
-    const ImVec2 logoMin{min.x + kChromeLogoLeft, min.y + logoY};
-    const ImVec2 logoMax{logoMin.x + kChromeLogoSize, logoMin.y + kChromeLogoSize};
-
-    const float controlsLeft = std::max(0.0f, ImGui::GetWindowWidth() - kWindowChromeControlsWidth);
-    if (ImGui::BeginMenuBar()) {
-        ImGui::SetCursorPos({kChromeMenuLeft, 0.0f});
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {kChromeMenuSpacing, 0.0f});
-        menuResult = mainMenuBar_.drawMenus({
-                .quitRequested = quitRequested,
-                .editor = editor,
-                .document = document,
-                .modeling = modeling,
-                .viewportPanel = viewportPanel_,
-                .viewportSettings = viewportSettings_,
-                .panels = panels_,
-                .localization = localization_,
-                .viewportSettingsPanelOpen = settingsPanelOpen_,
-        });
-        ImGui::PopStyleVar();
-
-        ImGui::SetCursorPos({controlsLeft, 0.0f});
-        if (chromeIconButton("minimize", WindowChromeAction::Minimize, {kWindowChromeButtonWidth, kWindowChromeHeight})) {
-            pendingChromeAction_ = WindowChromeAction::Minimize;
-        }
-        ImGui::SameLine(0.0f, 0.0f);
-        if (chromeIconButton("restore", WindowChromeAction::ToggleMaximizeRestore, {kWindowChromeButtonWidth, kWindowChromeHeight})) {
-            pendingChromeAction_ = WindowChromeAction::ToggleMaximizeRestore;
-        }
-        ImGui::SameLine(0.0f, 0.0f);
-        if (chromeIconButton("close", WindowChromeAction::Close, {kWindowChromeButtonWidth, kWindowChromeHeight})) {
-            pendingChromeAction_ = WindowChromeAction::Close;
-        }
-        ImGui::EndMenuBar();
-    }
-
-    ImGui::PopStyleColor(2);
-    ImGui::PopStyleVar(5);
-    ImGui::End();
-    if (drawLogo) {
-        ImGui::GetForegroundDrawList()->AddImage(icons_.logo, logoMin, logoMax);
-    }
-    return menuResult;
-}
-
-void UISystem::drawDockspace(
-        QuaderEditorApi& editor,
-        bool& quitRequested,
-        SceneDocument& document,
-        ModelingSessionService& modeling,
-        float sidebarMinimumWidth) {
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float chromeHeight = customChrome_ ? kWindowChromeHeight : 0.0f;
-    ImGui::SetNextWindowPos({viewport->Pos.x, viewport->Pos.y + chromeHeight});
-    ImGui::SetNextWindowSize({viewport->Size.x, std::max(1.0f, viewport->Size.y - chromeHeight - kStaticBottomBarHeight)});
-    ImGui::SetNextWindowViewport(viewport->ID);
-
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking |
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-    if (!customChrome_) {
-        flags |= ImGuiWindowFlags_MenuBar;
-    }
-
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::Begin("Main Dockspace", nullptr, flags);
-    ImGui::PopStyleVar(3);
-
-    if (!customChrome_) {
-        const MainMenuBarResult menuResult = mainMenuBar_.draw({
-                .quitRequested = quitRequested,
-                .editor = editor,
-                .document = document,
-                .modeling = modeling,
-                .viewportPanel = viewportPanel_,
-                .viewportSettings = viewportSettings_,
-                .panels = panels_,
-                .localization = localization_,
-                .viewportSettingsPanelOpen = settingsPanelOpen_,
-        });
-        if (menuResult.settingsChanged) {
-            saveSettings();
-        }
-        if (menuResult.viewportSettingsChanged) {
-            saveViewportSettings();
-        }
-    }
-
-    const ImGuiID dockspaceId = ImGui::GetID("QuaderDockspace");
-    const ImVec2 dockspaceSize = ImGui::GetContentRegionAvail();
-    if (!hasSavedDockLayout_ && !dockLayoutBuilt_ && dockspaceSize.x > 1.0f && dockspaceSize.y > 1.0f) {
-        buildDefaultDockLayout(dockspaceId, dockspaceSize);
-        dockLayoutBuilt_ = true;
-    }
-
-    enforceSidebarDockMinimums(sidebarMinimumWidth);
-    const ImVec2 savedWindowMinSize = ImGui::GetStyle().WindowMinSize;
-    ImGui::PushStyleVar(
-            ImGuiStyleVar_WindowMinSize,
-            ImVec2(std::max(savedWindowMinSize.x, sidebarMinimumWidth), savedWindowMinSize.y));
-    ImGui::DockSpace(dockspaceId, dockspaceSize, ImGuiDockNodeFlags_AutoHideTabBar);
     ImGui::PopStyleVar();
-    enforceSidebarDockMinimums(sidebarMinimumWidth);
 
-    ImGui::End();
+    ImGui::SetCursorPos({controls_left, 0.0f});
+    if (chrome_icon_button("minimize", WindowChromeAction::Minimize,
+                           {kWindowChromeButtonWidth, kWindowChromeHeight})) {
+      pending_chrome_action_ = WindowChromeAction::Minimize;
+    }
+    ImGui::SameLine(0.0f, 0.0f);
+    if (chrome_icon_button("restore", WindowChromeAction::ToggleMaximizeRestore,
+                           {kWindowChromeButtonWidth, kWindowChromeHeight})) {
+      pending_chrome_action_ = WindowChromeAction::ToggleMaximizeRestore;
+    }
+    ImGui::SameLine(0.0f, 0.0f);
+    if (chrome_icon_button("close", WindowChromeAction::Close,
+                           {kWindowChromeButtonWidth, kWindowChromeHeight})) {
+      pending_chrome_action_ = WindowChromeAction::Close;
+    }
+    ImGui::EndMenuBar();
+  }
+
+  ImGui::PopStyleColor(2);
+  ImGui::PopStyleVar(5);
+  ImGui::End();
+  if (draw_logo) {
+    ImGui::GetForegroundDrawList()->AddImage(icons_.logo, logo_min, logo_max);
+  }
+  return menu_result;
 }
 
-void UISystem::buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize) {
-    ImGui::DockBuilderRemoveNode(dockspaceId);
-    ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace | ImGuiDockNodeFlags_AutoHideTabBar);
-    ImGui::DockBuilderSetNodeSize(dockspaceId, dockspaceSize);
+void UISystem::draw_dockspace(QuaderEditorApi &editor, bool &quit_requested,
+                              SceneDocument &document,
+                              ModelingSessionService &modeling,
+                              float sidebar_minimum_width) {
+  const ImGuiViewport *viewport = ImGui::GetMainViewport();
+  const float chrome_height = custom_chrome_ ? kWindowChromeHeight : 0.0f;
+  ImGui::SetNextWindowPos({viewport->Pos.x, viewport->Pos.y + chrome_height});
+  ImGui::SetNextWindowSize(
+      {viewport->Size.x, std::max(1.0f, viewport->Size.y - chrome_height -
+                                            kStaticBottomBarHeight)});
+  ImGui::SetNextWindowViewport(viewport->ID);
 
-    ImGuiID mainId = dockspaceId;
-    ImGuiID consoleId = 0;
-    if (panels_.isVisible(UIPanelId::Console)) {
-        consoleId = ImGui::DockBuilderSplitNode(mainId, ImGuiDir_Down, 0.24f, nullptr, &mainId);
-    }
-    const float sidebarMinimumRatio = style_.sidebarMinWidth / std::max(dockspaceSize.x, 1.0f);
-    const float outlinerRatio = std::clamp(std::max(0.18f, sidebarMinimumRatio), 0.18f, 0.35f);
-    const float inspectorRatio = std::clamp(std::max(0.24f, sidebarMinimumRatio), 0.24f, 0.35f);
-    const ImGuiID outlinerId = ImGui::DockBuilderSplitNode(mainId, ImGuiDir_Left, outlinerRatio, nullptr, &mainId);
-    const ImGuiID inspectorId = ImGui::DockBuilderSplitNode(mainId, ImGuiDir_Right, inspectorRatio, nullptr, &mainId);
+  ImGuiWindowFlags flags =
+      ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
+      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+      ImGuiWindowFlags_NoScrollWithMouse |
+      ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+  if (!custom_chrome_) {
+    flags |= ImGuiWindowFlags_MenuBar;
+  }
 
-    ImGui::DockBuilderDockWindow(uiPanelKey(UIPanelId::Outliner), outlinerId);
-    ImGui::DockBuilderDockWindow(uiPanelKey(UIPanelId::Viewport), mainId);
-    ImGui::DockBuilderDockWindow(uiPanelKey(UIPanelId::Inspector), inspectorId);
-    if (consoleId != 0) {
-        ImGui::DockBuilderDockWindow(uiPanelKey(UIPanelId::Console), consoleId);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  ImGui::Begin("Main Dockspace", nullptr, flags);
+  ImGui::PopStyleVar(3);
+
+  if (!custom_chrome_) {
+    const MainMenuBarResult menu_result = main_menu_bar_.draw({
+        .quit_requested = quit_requested,
+        .editor = editor,
+        .document = document,
+        .modeling = modeling,
+        .viewport_panel = viewport_panel_,
+        .viewport_settings = viewport_settings_,
+        .panels = panels_,
+        .localization = localization_,
+        .viewport_settings_panel_open = settings_panel_open_,
+    });
+    if (menu_result.settings_changed) {
+      save_settings();
     }
-    ImGui::DockBuilderFinish(dockspaceId);
+    if (menu_result.viewport_settings_changed) {
+      save_viewport_settings();
+    }
+  }
+
+  const ImGuiID dockspace_id = ImGui::GetID("QuaderDockspace");
+  const ImVec2 dockspace_size = ImGui::GetContentRegionAvail();
+  if (!has_saved_dock_layout_ && !dock_layout_built_ &&
+      dockspace_size.x > 1.0f && dockspace_size.y > 1.0f) {
+    build_default_dock_layout(dockspace_id, dockspace_size);
+    dock_layout_built_ = true;
+  }
+
+  enforce_sidebar_dock_minimums(sidebar_minimum_width);
+  const ImVec2 saved_window_min_size = ImGui::GetStyle().WindowMinSize;
+  ImGui::PushStyleVar(
+      ImGuiStyleVar_WindowMinSize,
+      ImVec2(std::max(saved_window_min_size.x, sidebar_minimum_width),
+             saved_window_min_size.y));
+  ImGui::DockSpace(dockspace_id, dockspace_size,
+                   ImGuiDockNodeFlags_AutoHideTabBar);
+  ImGui::PopStyleVar();
+  enforce_sidebar_dock_minimums(sidebar_minimum_width);
+
+  ImGui::End();
 }
 
-void UISystem::closeMenuPopupForPassThroughClick() {
-    if (!mainMenuPopupOpen_) {
-        return;
-    }
+void UISystem::build_default_dock_layout(ImGuiID dockspace_id,
+                                         ImVec2 dockspace_size) {
+  ImGui::DockBuilderRemoveNode(dockspace_id);
+  ImGui::DockBuilderAddNode(dockspace_id,
+                            ImGuiDockNodeFlags_DockSpace |
+                                ImGuiDockNodeFlags_AutoHideTabBar);
+  ImGui::DockBuilderSetNodeSize(dockspace_id, dockspace_size);
 
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const ImVec2 mouse = ImGui::GetMousePos();
-    const float menuClickExclusionHeight = customChrome_ ? kWindowChromeHeight : ImGui::GetFrameHeight();
-    if (mouse.y <= viewport->Pos.y + menuClickExclusionHeight) {
-        return;
-    }
+  ImGuiID main_id = dockspace_id;
+  ImGuiID console_id = 0;
+  if (panels_.is_visible(UIPanelId::Console)) {
+    console_id = ImGui::DockBuilderSplitNode(main_id, ImGuiDir_Down, 0.24f,
+                                             nullptr, &main_id);
+  }
+  const float sidebar_minimum_ratio =
+      style_.sidebar_min_width / std::max(dockspace_size.x, 1.0f);
+  const float outliner_ratio =
+      std::clamp(std::max(0.18f, sidebar_minimum_ratio), 0.18f, 0.35f);
+  const float inspector_ratio =
+      std::clamp(std::max(0.24f, sidebar_minimum_ratio), 0.24f, 0.35f);
+  const ImGuiID outliner_id = ImGui::DockBuilderSplitNode(
+      main_id, ImGuiDir_Left, outliner_ratio, nullptr, &main_id);
+  const ImGuiID inspector_id = ImGui::DockBuilderSplitNode(
+      main_id, ImGuiDir_Right, inspector_ratio, nullptr, &main_id);
 
-    const ImVec2 passThroughMin{viewport->Pos.x, viewport->Pos.y + menuClickExclusionHeight};
-    const ImVec2 passThroughMax{viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y};
-    if (imguiClosePopupForPassThroughClick(passThroughMin, passThroughMax)) {
-        mainMenuPopupOpen_ = false;
-    }
+  ImGui::DockBuilderDockWindow(ui_panel_key(UIPanelId::Outliner), outliner_id);
+  ImGui::DockBuilderDockWindow(ui_panel_key(UIPanelId::Viewport), main_id);
+  ImGui::DockBuilderDockWindow(ui_panel_key(UIPanelId::Inspector),
+                               inspector_id);
+  if (console_id != 0) {
+    ImGui::DockBuilderDockWindow(ui_panel_key(UIPanelId::Console), console_id);
+  }
+  ImGui::DockBuilderFinish(dockspace_id);
 }
 
-void UISystem::enforceSidebarDockMinimums(float sidebarMinimumWidth) {
-    clampDockedWindowWidth(uiPanelKey(UIPanelId::Outliner), sidebarMinimumWidth);
-    clampDockedWindowWidth(uiPanelKey(UIPanelId::Inspector), sidebarMinimumWidth);
+void UISystem::close_menu_popup_for_pass_through_click() {
+  if (!main_menu_popup_open_) {
+    return;
+  }
+
+  const ImGuiViewport *viewport = ImGui::GetMainViewport();
+  const ImVec2 mouse = ImGui::GetMousePos();
+  const float menu_click_exclusion_height =
+      custom_chrome_ ? kWindowChromeHeight : ImGui::GetFrameHeight();
+  if (mouse.y <= viewport->Pos.y + menu_click_exclusion_height) {
+    return;
+  }
+
+  const ImVec2 pass_through_min{viewport->Pos.x,
+                                viewport->Pos.y + menu_click_exclusion_height};
+  const ImVec2 pass_through_max{viewport->Pos.x + viewport->Size.x,
+                                viewport->Pos.y + viewport->Size.y};
+  if (imgui_close_popup_for_pass_through_click(pass_through_min,
+                                               pass_through_max)) {
+    main_menu_popup_open_ = false;
+  }
 }
 
-void UISystem::setViewportCursorCaptured(bool captured) {
-    if (window_ == nullptr || relativeMouseCaptured_ == captured) {
-        return;
-    }
-
-    if (!SDL_SetWindowRelativeMouseMode(window_, captured)) {
-        if (!relativeMouseCaptureWarningIssued_) {
-            LOG_WARN("Unable to {} viewport relative mouse mode: {}",
-                    captured ? "enable" : "disable",
-                    SDL_GetError());
-            relativeMouseCaptureWarningIssued_ = true;
-        }
-        return;
-    }
-
-    relativeMouseCaptured_ = captured;
-    relativeMouseCaptureWarningIssued_ = false;
-    if (captured) {
-        float discardX = 0.0f;
-        float discardY = 0.0f;
-        (void)SDL_GetRelativeMouseState(&discardX, &discardY);
-        relativeMouseDelta_ = {};
-    }
+void UISystem::enforce_sidebar_dock_minimums(float sidebar_minimum_width) {
+  clamp_docked_window_width(ui_panel_key(UIPanelId::Outliner),
+                            sidebar_minimum_width);
+  clamp_docked_window_width(ui_panel_key(UIPanelId::Inspector),
+                            sidebar_minimum_width);
 }
 
-void UISystem::warpCapturedCursor(QVec2 point) {
-    if (window_ == nullptr || !relativeMouseCaptured_) {
-        return;
+void UISystem::set_viewport_cursor_captured(bool captured) {
+  if (window_ == nullptr || relative_mouse_captured_ == captured) {
+    return;
+  }
+
+  if (!SDL_SetWindowRelativeMouseMode(window_, captured)) {
+    if (!relative_mouse_capture_warning_issued_) {
+      LOG_WARN("Unable to {} viewport relative mouse mode: {}",
+               captured ? "enable" : "disable", SDL_GetError());
+      relative_mouse_capture_warning_issued_ = true;
     }
-    SDL_WarpMouseInWindow(window_, point.x, point.y);
-    float discardX = 0.0f;
-    float discardY = 0.0f;
-    (void)SDL_GetRelativeMouseState(&discardX, &discardY);
-    relativeMouseDelta_ = {};
+    return;
+  }
+
+  relative_mouse_captured_ = captured;
+  relative_mouse_capture_warning_issued_ = false;
+  if (captured) {
+    float discard_x = 0.0f;
+    float discard_y = 0.0f;
+    (void)SDL_GetRelativeMouseState(&discard_x, &discard_y);
+    relative_mouse_delta_ = {};
+  }
 }
 
-void UISystem::loadIcons(filament::Engine& engine, TextureRegistry& textures, const std::filesystem::path& executableDir) {
-    iconEngine_ = &engine;
-    iconTextureRegistry_ = &textures;
+void UISystem::warp_captured_cursor(QVec2 point) {
+  if (window_ == nullptr || !relative_mouse_captured_) {
+    return;
+  }
+  SDL_WarpMouseInWindow(window_, point.x, point.y);
+  float discard_x = 0.0f;
+  float discard_y = 0.0f;
+  (void)SDL_GetRelativeMouseState(&discard_x, &discard_y);
+  relative_mouse_delta_ = {};
+}
 
-    auto loadPath = [&](const std::filesystem::path& iconPath) {
+void UISystem::load_icons(filament::Engine &engine, TextureRegistry &textures,
+                          const std::filesystem::path &executable_dir) {
+  icon_engine_ = &engine;
+  icon_texture_registry_ = &textures;
+
+  auto load_path =
+      [&](const std::filesystem::path &icon_path) {
         std::vector<unsigned char> pixels;
         unsigned width = 0;
         unsigned height = 0;
-        const unsigned error = lodepng::decode(pixels, width, height, iconPath.string());
+        const unsigned error =
+            lodepng::decode(pixels, width, height, icon_path.string());
         if (error != 0u || pixels.empty() || width == 0u || height == 0u) {
-            LOG_WARN("Unable to load UI icon {}: {}", iconPath.string(), lodepng_error_text(error));
-            return ImTextureID_Invalid;
+          LOG_WARN("Unable to load UI icon {}: {}", icon_path.string(),
+                   lodepng_error_text(error));
+          return ImTextureID_Invalid;
         }
 
-        const std::size_t rowByteCount = static_cast<std::size_t>(width) * 4u;
+        const std::size_t row_byte_count = static_cast<std::size_t>(width) * 4u;
         std::vector<unsigned char> flipped(pixels.size());
         for (unsigned y = 0; y < height; ++y) {
-            const std::size_t sourceOffset = static_cast<std::size_t>(y) * rowByteCount;
-            const std::size_t targetOffset = static_cast<std::size_t>(height - 1u - y) * rowByteCount;
-            std::memcpy(flipped.data() + targetOffset, pixels.data() + sourceOffset, rowByteCount);
+          const std::size_t source_offset =
+              static_cast<std::size_t>(y) * row_byte_count;
+          const std::size_t target_offset =
+              static_cast<std::size_t>(height - 1u - y) * row_byte_count;
+          std::memcpy(flipped.data() + target_offset,
+                      pixels.data() + source_offset, row_byte_count);
         }
 
         filament::Texture* texture = filament::Texture::Builder()
@@ -911,77 +979,83 @@ void UISystem::loadIcons(filament::Engine& engine, TextureRegistry& textures, co
                 .format(filament::Texture::InternalFormat::RGBA8)
                 .usage(filament::Texture::Usage::UPLOADABLE | filament::Texture::Usage::SAMPLEABLE)
                 .build(engine);
-        texture->setImage(engine, 0, FilamentBufferDescriptorFactory::rgbaPixels(flipped.data(), flipped.size()));
-        const ImTextureID id = textures.registerTexture(texture);
-        iconTextures_.push_back(texture);
-        iconTextureIds_.push_back(id);
+        texture->setImage(engine, 0,
+                          FilamentBufferDescriptorFactory::rgba_pixels(
+                              flipped.data(), flipped.size()));
+        const ImTextureID id = textures.register_texture(texture);
+        icon_textures_.push_back(texture);
+        icon_texture_ids_.push_back(id);
         return id;
-    };
-    auto load = [&](const char* filename) {
-        return loadPath(executableDir / "icons" / filename);
-    };
-    auto loadFirstAvailable = [&](std::initializer_list<std::filesystem::path> paths) {
+      };
+  auto load = [&](const char *filename) {
+    return load_path(executable_dir / "icons" / filename);
+  };
+  auto load_first_available =
+      [&](std::initializer_list<std::filesystem::path> paths) {
         for (const std::filesystem::path& path : paths) {
-            if (!std::filesystem::exists(path)) {
-                continue;
-            }
-            const ImTextureID texture = loadPath(path);
-            if (texture != ImTextureID_Invalid) {
-                return texture;
-            }
+          if (!std::filesystem::exists(path)) {
+            continue;
+          }
+          const ImTextureID texture = load_path(path);
+          if (texture != ImTextureID_Invalid) {
+            return texture;
+          }
         }
         return ImTextureID_Invalid;
-    };
+      };
 
-    icons_.logo = loadFirstAvailable({
-            executableDir / "icons" / "quader-logo@2x.png",
-            executableDir / "icons" / "logo.png",
-    });
-    icons_.mesh = load("mesh_icon.png");
-    icons_.empty = load("empty_icon.png");
-    icons_.lock = load("lock_icon.png");
-    icons_.unlock = load("unlock_icon.png");
-    icons_.hide = load("hide_icon.png");
-    icons_.show = load("show_icon.png");
+  icons_.logo = load_first_available({
+      executable_dir / "icons" / "quader-logo@2x.png",
+      executable_dir / "icons" / "logo.png",
+  });
+  icons_.mesh = load("mesh_icon.png");
+  icons_.empty = load("empty_icon.png");
+  icons_.lock = load("lock_icon.png");
+  icons_.unlock = load("unlock_icon.png");
+  icons_.hide = load("hide_icon.png");
+  icons_.show = load("show_icon.png");
 }
 
-void UISystem::destroyIcons() {
-    if (iconTextureRegistry_ != nullptr) {
-        for (const ImTextureID id : iconTextureIds_) {
-            if (id != ImTextureID_Invalid) {
-                iconTextureRegistry_->unregisterTexture(id);
-            }
-        }
+void UISystem::destroy_icons() {
+  if (icon_texture_registry_ != nullptr) {
+    for (const ImTextureID id : icon_texture_ids_) {
+      if (id != ImTextureID_Invalid) {
+        icon_texture_registry_->unregister_texture(id);
+      }
     }
-    iconTextureIds_.clear();
+  }
+  icon_texture_ids_.clear();
 
-    if (iconEngine_ != nullptr) {
-        for (filament::Texture* texture : iconTextures_) {
-            if (texture != nullptr) {
-                iconEngine_->destroy(texture);
-            }
-        }
+  if (icon_engine_ != nullptr) {
+    for (filament::Texture *texture : icon_textures_) {
+      if (texture != nullptr) {
+        icon_engine_->destroy(texture);
+      }
     }
-    iconTextures_.clear();
-    icons_ = UIIconSet{};
-    iconEngine_ = nullptr;
-    iconTextureRegistry_ = nullptr;
+  }
+  icon_textures_.clear();
+  icons_ = UIIconSet{};
+  icon_engine_ = nullptr;
+  icon_texture_registry_ = nullptr;
 }
 
-void UISystem::saveSettings() {
-    panels_.writeSettings(settings_);
-    if (viewportPanel_ != nullptr) {
-        settings_.setNavigationGizmoVisible(viewportPanel_->navigationGizmoVisible());
-    }
-    if (!settings_.save(settingsPaths_.settingsFile)) {
-        LOG_WARN("Unable to save UI settings to {}", settingsPaths_.settingsFile.string());
-    }
+void UISystem::save_settings() {
+  panels_.write_settings(settings_);
+  if (viewport_panel_ != nullptr) {
+    settings_.set_navigation_gizmo_visible(
+        viewport_panel_->navigation_gizmo_visible());
+  }
+  if (!settings_.save(settings_paths_.settings_file)) {
+    LOG_WARN("Unable to save UI settings to {}",
+             settings_paths_.settings_file.string());
+  }
 }
 
-void UISystem::saveViewportSettings() {
-    if (!viewportSettings_.save(settingsPaths_.viewportSettingsFile)) {
-        LOG_WARN("Unable to save viewport settings to {}", settingsPaths_.viewportSettingsFile.string());
-    }
+void UISystem::save_viewport_settings() {
+  if (!viewport_settings_.save(settings_paths_.viewport_settings_file)) {
+    LOG_WARN("Unable to save viewport settings to {}",
+             settings_paths_.viewport_settings_file.string());
+  }
 }
 
 } // namespace quader

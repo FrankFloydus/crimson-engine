@@ -37,8 +37,8 @@ DuplicateMeshesOperationSettings duplicate_meshes_settings_from_variant(const Ed
 
 const DuplicateMeshesOperation& concrete_duplicate_meshes_operation()
 {
-	static const DuplicateMeshesOperation operation;
-	return operation;
+  static const DuplicateMeshesOperation kOperation;
+  return kOperation;
 }
 
 } // namespace
@@ -50,7 +50,7 @@ const EditorOperation& duplicate_meshes_operation()
 
 EditorOperationId DuplicateMeshesOperation::operation_id() const
 {
-	return EditorOperationId::duplicate_meshes;
+  return EditorOperationId::DuplicateMeshes;
 }
 
 std::string_view DuplicateMeshesOperation::id() const

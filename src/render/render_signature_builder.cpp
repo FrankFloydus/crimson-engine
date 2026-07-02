@@ -29,44 +29,48 @@ constexpr std::array<ViewportOverlayLayer, 7u> kDepthStampVisibilityLayers{{
         ViewportOverlayLayer::HoverVertex,
 }};
 
-std::size_t overlayLayerIndex(ViewportOverlayLayer layer) {
-    return static_cast<std::size_t>(layer);
+std::size_t overlay_layer_index(ViewportOverlayLayer layer) {
+  return static_cast<std::size_t>(layer);
 }
 
-void addFrameTriangleSignature(RenderSignatureBuilder& signature, const ViewportOverlayTriangle& triangle) {
-    signature.addValue(static_cast<std::uint32_t>(triangle.layer))
-            .addValue(triangle.color)
-            .addVec3(triangle.a)
-            .addVec3(triangle.b)
-            .addVec3(triangle.c);
+void add_frame_triangle_signature(RenderSignatureBuilder &signature,
+                                  const ViewportOverlayTriangle &triangle) {
+  signature.add_value(static_cast<std::uint32_t>(triangle.layer))
+      .add_value(triangle.color)
+      .add_vec3(triangle.a)
+      .add_vec3(triangle.b)
+      .add_vec3(triangle.c);
 }
 
-void addLayerTriangleSignature(RenderSignatureBuilder& signature, const ViewportOverlayTriangle& triangle) {
-    signature.addValue(static_cast<std::uint32_t>(triangle.layer))
-            .addValue(triangle.color)
-            .addValue(triangle.element.objectId)
-            .addVec3(triangle.a)
-            .addVec3(triangle.b)
-            .addVec3(triangle.c);
+void add_layer_triangle_signature(RenderSignatureBuilder &signature,
+                                  const ViewportOverlayTriangle &triangle) {
+  signature.add_value(static_cast<std::uint32_t>(triangle.layer))
+      .add_value(triangle.color)
+      .add_value(triangle.element.object_id)
+      .add_vec3(triangle.a)
+      .add_vec3(triangle.b)
+      .add_vec3(triangle.c);
 }
 
-void addLineSignature(RenderSignatureBuilder& signature, const ViewportOverlayLine& line) {
-    signature.addValue(static_cast<std::uint32_t>(line.layer))
-            .addValue(line.color)
-            .addFloat(line.widthPixels)
-            .addVec3(line.start)
-            .addVec3(line.end);
+void add_line_signature(RenderSignatureBuilder &signature,
+                        const ViewportOverlayLine &line) {
+  signature.add_value(static_cast<std::uint32_t>(line.layer))
+      .add_value(line.color)
+      .add_float(line.width_pixels)
+      .add_vec3(line.start)
+      .add_vec3(line.end);
 }
 
-void addPointSignature(RenderSignatureBuilder& signature, const ViewportOverlayPoint& point) {
-    signature.addValue(static_cast<std::uint32_t>(point.layer))
-            .addValue(point.color)
-            .addFloat(point.sizePixels)
-            .addBool(point.outlineGrowthPixels.has_value());
-    if (point.outlineGrowthPixels.has_value()) {
-        signature.addFloat(*point.outlineGrowthPixels);
-    }
-    signature.addVec3(point.position);
+void add_point_signature(RenderSignatureBuilder &signature,
+                         const ViewportOverlayPoint &point) {
+  signature.add_value(static_cast<std::uint32_t>(point.layer))
+      .add_value(point.color)
+      .add_float(point.size_pixels)
+      .add_bool(point.outline_growth_pixels.has_value());
+  if (point.outline_growth_pixels.has_value()) {
+    signature.add_float(*point.outline_growth_pixels);
+  }
+  signature.add_vec3(point.position);
 }
 
 } // namespace
@@ -77,199 +81,221 @@ RenderSignatureBuilder::RenderSignatureBuilder()
 RenderSignatureBuilder::RenderSignatureBuilder(std::uint64_t seed)
     : hash_(seed) {}
 
-RenderSignatureBuilder& RenderSignatureBuilder::addValue(std::uint64_t value) {
-    hash_ ^= value;
-    hash_ *= kFnvPrime;
-    return *this;
+RenderSignatureBuilder &RenderSignatureBuilder::add_value(std::uint64_t value) {
+  hash_ ^= value;
+  hash_ *= kFnvPrime;
+  return *this;
 }
 
-RenderSignatureBuilder& RenderSignatureBuilder::addSize(std::size_t value) {
-    return addValue(static_cast<std::uint64_t>(value));
+RenderSignatureBuilder &RenderSignatureBuilder::add_size(std::size_t value) {
+  return add_value(static_cast<std::uint64_t>(value));
 }
 
-RenderSignatureBuilder& RenderSignatureBuilder::addBool(bool value) {
-    return addValue(value ? 1u : 0u);
+RenderSignatureBuilder &RenderSignatureBuilder::add_bool(bool value) {
+  return add_value(value ? 1u : 0u);
 }
 
-RenderSignatureBuilder& RenderSignatureBuilder::addFloat(float value) {
-    return addValue(std::bit_cast<std::uint32_t>(value));
+RenderSignatureBuilder &RenderSignatureBuilder::add_float(float value) {
+  return add_value(std::bit_cast<std::uint32_t>(value));
 }
 
-RenderSignatureBuilder& RenderSignatureBuilder::addString(std::string_view value) {
-    return addValue(std::hash<std::string>{}(std::string(value)));
+RenderSignatureBuilder &
+RenderSignatureBuilder::add_string(std::string_view value) {
+  return add_value(std::hash<std::string>{}(std::string(value)));
 }
 
-RenderSignatureBuilder& RenderSignatureBuilder::addVec2(QVec2 value) {
-    addFloat(value.x);
-    return addFloat(value.y);
+RenderSignatureBuilder &RenderSignatureBuilder::add_vec2(QVec2 value) {
+  add_float(value.x);
+  return add_float(value.y);
 }
 
-RenderSignatureBuilder& RenderSignatureBuilder::addVec3(QVec3 value) {
-    addFloat(value.x);
-    addFloat(value.y);
-    return addFloat(value.z);
+RenderSignatureBuilder &RenderSignatureBuilder::add_vec3(QVec3 value) {
+  add_float(value.x);
+  add_float(value.y);
+  return add_float(value.z);
 }
 
-RenderSignatureBuilder& RenderSignatureBuilder::addMat4(const QMat4& value) {
-    for (const float entry : value.values) {
-        addFloat(entry);
-    }
-    return *this;
+RenderSignatureBuilder &RenderSignatureBuilder::add_mat4(const QMat4 &value) {
+  for (const float entry : value.values) {
+    add_float(entry);
+  }
+  return *this;
 }
 
 namespace {
 
-void addMaterialDocumentSignature(RenderSignatureBuilder& signature, const AssetRegistry& assets, AssetId materialId) {
-    const MaterialDocument* material = assets.material(materialId);
-    signature.addValue(materialId);
-    if (!material) {
-        signature.addValue(0);
-        return;
-    }
+void add_material_document_signature(RenderSignatureBuilder &signature,
+                                     const AssetRegistry &assets,
+                                     AssetId material_id) {
+  const MaterialDocument *material = assets.material(material_id);
+  signature.add_value(material_id);
+  if (!material) {
+    signature.add_value(0);
+    return;
+  }
 
-    signature.addValue(material->revision.value);
-    for (const MaterialTextureSlotDescriptor& descriptor : materialTextureSlotDescriptors()) {
-        const std::optional<AssetId> textureId = materialTextureSlotAsset(*material, descriptor.id);
-        if (!textureId.has_value()) {
-            continue;
-        }
-        signature.addString(descriptor.id)
-                .addValue(*textureId)
-                .addValue(assets.textureRevision(*textureId).value);
+  signature.add_value(material->revision.value);
+  for (const MaterialTextureSlotDescriptor &descriptor :
+       material_texture_slot_descriptors()) {
+    const std::optional<AssetId> texture_id =
+        material_texture_slot_asset(*material, descriptor.id);
+    if (!texture_id.has_value()) {
+      continue;
     }
+    signature.add_string(descriptor.id)
+        .add_value(*texture_id)
+        .add_value(assets.texture_revision(*texture_id).value);
+  }
 }
 
 } // namespace
 
-std::uint64_t RenderSignatureBuilder::materialSignature(
-        const AssetRegistry& assets,
-        const MaterialComponent* material) {
-    if (!material) {
-        return 0;
-    }
+std::uint64_t
+RenderSignatureBuilder::material_signature(const AssetRegistry &assets,
+                                           const MaterialComponent *material) {
+  if (!material) {
+    return 0;
+  }
 
-    RenderSignatureBuilder signature;
-    addMaterialDocumentSignature(signature, assets, material->material);
-    signature.addSize(material->materialSlots.size());
-    std::vector<std::uint32_t> slots;
-    slots.reserve(material->materialSlots.size());
-    for (const auto& [slot, materialId] : material->materialSlots) {
-        (void)materialId;
-        slots.push_back(slot);
-    }
-    std::sort(slots.begin(), slots.end());
-    for (const std::uint32_t slot : slots) {
-        signature.addValue(slot);
-        addMaterialDocumentSignature(signature, assets, material->materialSlots.at(slot));
-    }
-    return signature.value();
+  RenderSignatureBuilder signature;
+  add_material_document_signature(signature, assets, material->material);
+  signature.add_size(material->material_slots.size());
+  std::vector<std::uint32_t> slots;
+  slots.reserve(material->material_slots.size());
+  for (const auto &[slot, materialId] : material->material_slots) {
+    (void)materialId;
+    slots.push_back(slot);
+  }
+  std::sort(slots.begin(), slots.end());
+  for (const std::uint32_t slot : slots) {
+    signature.add_value(slot);
+    add_material_document_signature(signature, assets,
+                                    material->material_slots.at(slot));
+  }
+  return signature.value();
 }
 
-std::uint64_t RenderSignatureBuilder::meshAssetSignature(std::uint64_t seed, const MeshAsset& mesh) {
-    RenderSignatureBuilder signature(seed);
-    signature.addSize(mesh.vertices.size());
-    for (const MeshVertex& vertex : mesh.vertices) {
-        signature.addVec3(vertex.position)
-                .addVec3(vertex.normal)
-                .addVec2(vertex.uv)
-                .addValue(vertex.rgba);
-    }
-    signature.addSize(mesh.indices.size());
-    for (const std::uint32_t index : mesh.indices) {
-        signature.addValue(index);
-    }
-    const std::vector<MeshPrimitiveSpan> primitiveSpans = normalizedMeshPrimitiveSpans(mesh);
-    signature.addSize(primitiveSpans.size());
-    for (const MeshPrimitiveSpan& primitive : primitiveSpans) {
-        signature.addValue(primitive.indexOffset)
-                .addValue(primitive.indexCount)
-                .addValue(primitive.materialSlot);
-    }
-    return signature.value();
+std::uint64_t
+RenderSignatureBuilder::mesh_asset_signature(std::uint64_t seed,
+                                             const MeshAsset &mesh) {
+  RenderSignatureBuilder signature(seed);
+  signature.add_size(mesh.vertices.size());
+  for (const MeshVertex &vertex : mesh.vertices) {
+    signature.add_vec3(vertex.position)
+        .add_vec3(vertex.normal)
+        .add_vec2(vertex.uv)
+        .add_value(vertex.rgba);
+  }
+  signature.add_size(mesh.indices.size());
+  for (const std::uint32_t index : mesh.indices) {
+    signature.add_value(index);
+  }
+  const std::vector<MeshPrimitiveSpan> primitive_spans =
+      normalized_mesh_primitive_spans(mesh);
+  signature.add_size(primitive_spans.size());
+  for (const MeshPrimitiveSpan &primitive : primitive_spans) {
+    signature.add_value(primitive.index_offset)
+        .add_value(primitive.index_count)
+        .add_value(primitive.material_slot);
+  }
+  return signature.value();
 }
 
-std::uint64_t RenderSignatureBuilder::lightSignature(const LightComponent& light) {
-    RenderSignatureBuilder signature;
-    signature.addValue(static_cast<std::uint32_t>(light.type))
-            .addVec3(light.color)
-            .addFloat(light.intensity)
-            .addFloat(light.range)
-            .addBool(light.castsShadows);
-    return signature.value();
+std::uint64_t
+RenderSignatureBuilder::light_signature(const LightComponent &light) {
+  RenderSignatureBuilder signature;
+  signature.add_value(static_cast<std::uint32_t>(light.type))
+      .add_vec3(light.color)
+      .add_float(light.intensity)
+      .add_float(light.range)
+      .add_bool(light.casts_shadows);
+  return signature.value();
 }
 
-std::uint64_t RenderSignatureBuilder::lightTransformSignature(const QMat4& worldTransform) {
-    RenderSignatureBuilder signature;
-    signature.addMat4(worldTransform);
-    return signature.value();
+std::uint64_t RenderSignatureBuilder::light_transform_signature(
+    const QMat4 &world_transform) {
+  RenderSignatureBuilder signature;
+  signature.add_mat4(world_transform);
+  return signature.value();
 }
 
-std::uint64_t RenderSignatureBuilder::overlayFrameSignature(const ViewportOverlayFrame& frame) {
-    return overlayFrameSignatures(frame).frameSignature;
+std::uint64_t RenderSignatureBuilder::overlay_frame_signature(
+    const ViewportOverlayFrame &frame) {
+  return overlay_frame_signatures(frame).frame_signature;
 }
 
-OverlayFrameSignatures RenderSignatureBuilder::overlayFrameSignatures(const ViewportOverlayFrame& frame) {
-    OverlayFrameSignatures result;
-    RenderSignatureBuilder frameSignature;
-    std::array<RenderSignatureBuilder, kViewportOverlayLayerCount> layerSignatures;
-    for (std::size_t layerIndex = 0; layerIndex < layerSignatures.size(); ++layerIndex) {
-        layerSignatures[layerIndex].addValue(static_cast<std::uint32_t>(layerIndex));
-    }
+OverlayFrameSignatures RenderSignatureBuilder::overlay_frame_signatures(
+    const ViewportOverlayFrame &frame) {
+  OverlayFrameSignatures result;
+  RenderSignatureBuilder frame_signature;
+  std::array<RenderSignatureBuilder, kViewportOverlayLayerCount>
+      layer_signatures;
+  for (std::size_t layer_index = 0; layer_index < layer_signatures.size();
+       ++layer_index) {
+    layer_signatures[layer_index].add_value(
+        static_cast<std::uint32_t>(layer_index));
+  }
 
-    frameSignature.addSize(frame.triangles.size());
-    for (const ViewportOverlayTriangle& triangle : frame.triangles) {
-        addFrameTriangleSignature(frameSignature, triangle);
-        const std::size_t layerIndex = overlayLayerIndex(triangle.layer);
-        ++result.triangleCounts[layerIndex];
-        addLayerTriangleSignature(layerSignatures[layerIndex], triangle);
-        if (triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp) {
-            result.hasSourceWireDepthStamp = true;
-            for (const ViewportOverlayLayer visibleLayer : kDepthStampVisibilityLayers) {
-                addLayerTriangleSignature(layerSignatures[overlayLayerIndex(visibleLayer)], triangle);
-            }
-        }
+  frame_signature.add_size(frame.triangles.size());
+  for (const ViewportOverlayTriangle &triangle : frame.triangles) {
+    add_frame_triangle_signature(frame_signature, triangle);
+    const std::size_t layer_index = overlay_layer_index(triangle.layer);
+    ++result.triangle_counts[layer_index];
+    add_layer_triangle_signature(layer_signatures[layer_index], triangle);
+    if (triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp) {
+      result.has_source_wire_depth_stamp = true;
+      for (const ViewportOverlayLayer visible_layer :
+           kDepthStampVisibilityLayers) {
+        add_layer_triangle_signature(
+            layer_signatures[overlay_layer_index(visible_layer)], triangle);
+      }
     }
+  }
 
-    frameSignature.addSize(frame.lines.size());
-    for (const ViewportOverlayLine& line : frame.lines) {
-        addLineSignature(frameSignature, line);
-        ++result.lineCounts[overlayLayerIndex(line.layer)];
-        addLineSignature(layerSignatures[overlayLayerIndex(line.layer)], line);
-    }
+  frame_signature.add_size(frame.lines.size());
+  for (const ViewportOverlayLine &line : frame.lines) {
+    add_line_signature(frame_signature, line);
+    ++result.line_counts[overlay_layer_index(line.layer)];
+    add_line_signature(layer_signatures[overlay_layer_index(line.layer)], line);
+  }
 
-    frameSignature.addSize(frame.points.size());
-    for (const ViewportOverlayPoint& point : frame.points) {
-        addPointSignature(frameSignature, point);
-        ++result.pointCounts[overlayLayerIndex(point.layer)];
-        addPointSignature(layerSignatures[overlayLayerIndex(point.layer)], point);
-    }
+  frame_signature.add_size(frame.points.size());
+  for (const ViewportOverlayPoint &point : frame.points) {
+    add_point_signature(frame_signature, point);
+    ++result.point_counts[overlay_layer_index(point.layer)];
+    add_point_signature(layer_signatures[overlay_layer_index(point.layer)],
+                        point);
+  }
 
-    result.frameSignature = frameSignature.value();
-    for (std::size_t layerIndex = 0; layerIndex < layerSignatures.size(); ++layerIndex) {
-        result.layerSignatures[layerIndex] = layerSignatures[layerIndex].value();
-    }
-    return result;
+  result.frame_signature = frame_signature.value();
+  for (std::size_t layer_index = 0; layer_index < layer_signatures.size();
+       ++layer_index) {
+    result.layer_signatures[layer_index] =
+        layer_signatures[layer_index].value();
+  }
+  return result;
 }
 
-std::uint64_t RenderSignatureBuilder::overlayCameraSignature(const ViewportOverlayCamera& camera) {
-    RenderSignatureBuilder signature;
-    signature.addValue(static_cast<std::uint32_t>(camera.projection))
-            .addVec3(camera.eye)
-            .addVec3(camera.forward)
-            .addVec3(camera.right)
-            .addVec3(camera.up)
-            .addVec2(camera.viewportSize)
-            .addFloat(camera.orthographicSize)
-            .addFloat(camera.fovDegrees)
-            .addFloat(camera.nearPlane)
-            .addFloat(camera.farPlane);
-    return signature.value();
+std::uint64_t RenderSignatureBuilder::overlay_camera_signature(
+    const ViewportOverlayCamera &camera) {
+  RenderSignatureBuilder signature;
+  signature.add_value(static_cast<std::uint32_t>(camera.projection))
+      .add_vec3(camera.eye)
+      .add_vec3(camera.forward)
+      .add_vec3(camera.right)
+      .add_vec3(camera.up)
+      .add_vec2(camera.viewport_size)
+      .add_float(camera.orthographic_size)
+      .add_float(camera.fov_degrees)
+      .add_float(camera.near_plane)
+      .add_float(camera.far_plane);
+  return signature.value();
 }
 
-std::uint64_t RenderSignatureBuilder::overlayLayerSignature(
-        const ViewportOverlayFrame& frame,
-        ViewportOverlayLayer layer) {
-    return overlayFrameSignatures(frame).layerSignatures[overlayLayerIndex(layer)];
+std::uint64_t RenderSignatureBuilder::overlay_layer_signature(
+    const ViewportOverlayFrame &frame, ViewportOverlayLayer layer) {
+  return overlay_frame_signatures(frame)
+      .layer_signatures[overlay_layer_index(layer)];
 }
 
 } // namespace quader

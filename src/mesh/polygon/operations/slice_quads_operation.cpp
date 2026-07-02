@@ -64,26 +64,26 @@ const Face* find_original_face(const std::vector<Face>& faces, ElementId face_id
  * Stores a projected vertex in a stable face-local Slice Quad grid.
  */
 struct SliceGridVertex {
-    ElementId id = invalid_element_id;
-    quader::QVec3 position;
-    float u = 0.0F;
-    float v = 0.0F;
+  ElementId id = kInvalidElementId;
+  quader::QVec3 position;
+  float u = 0.0F;
+  float v = 0.0F;
 };
 
 /**
  * Stores the stable planar frame used to generate Slice Quad grid cuts.
  */
 struct SliceFaceFrame {
-    ElementId face_id = invalid_element_id;
-    quader::QVec3 center;
-    quader::QVec3 normal;
-    quader::QVec3 u_axis;
-    quader::QVec3 v_axis;
-    std::vector<SliceGridVertex> vertices;
-    float min_u = 0.0F;
-    float max_u = 0.0F;
-    float min_v = 0.0F;
-    float max_v = 0.0F;
+  ElementId face_id = kInvalidElementId;
+  quader::QVec3 center;
+  quader::QVec3 normal;
+  quader::QVec3 u_axis;
+  quader::QVec3 v_axis;
+  std::vector<SliceGridVertex> vertices;
+  float min_u = 0.0F;
+  float max_u = 0.0F;
+  float min_v = 0.0F;
+  float max_v = 0.0F;
 };
 
 /**
@@ -114,8 +114,8 @@ std::optional<SliceFaceFrame> stable_slice_face_frame(const Document& document, 
     center = center / static_cast<float>(source_vertices.size());
 
     const quader::QVec3 normal = normalize_or_zero(face_normal(document, face));
-    if (length_squared(normal) <= epsilon) {
-        return std::nullopt;
+    if (length_squared(normal) <= kEpsilon) {
+      return std::nullopt;
     }
 
     const std::array<quader::QVec3, 3> world_axes {
@@ -138,8 +138,8 @@ std::optional<SliceFaceFrame> stable_slice_face_frame(const Document& document, 
             u_axis_index = index;
         }
     }
-    if (best_u_length <= epsilon) {
-        return std::nullopt;
+    if (best_u_length <= kEpsilon) {
+      return std::nullopt;
     }
 
     quader::QVec3 u_axis = normalize_or_zero(projected_axes[u_axis_index]);
@@ -156,12 +156,13 @@ std::optional<SliceFaceFrame> stable_slice_face_frame(const Document& document, 
         }
     }
     quader::QVec3 v_axis = normalize_or_zero(cross(normal, u_axis));
-    if (length_squared(v_axis) <= epsilon) {
-        return std::nullopt;
+    if (length_squared(v_axis) <= kEpsilon) {
+      return std::nullopt;
     }
     const quader::QVec3 preferred_v_axis = normalize_or_zero(projected_axes[v_world_axis_index]);
-    if (length_squared(preferred_v_axis) > epsilon && dot(v_axis, preferred_v_axis) < 0.0F) {
-        v_axis = v_axis * -1.0F;
+    if (length_squared(preferred_v_axis) > kEpsilon &&
+        dot(v_axis, preferred_v_axis) < 0.0F) {
+      v_axis = v_axis * -1.0F;
     }
 
     SliceFaceFrame frame;
@@ -191,8 +192,9 @@ std::optional<SliceFaceFrame> stable_slice_face_frame(const Document& document, 
             frame.max_v = std::max(frame.max_v, v);
         }
     }
-    if (frame.max_u - frame.min_u <= epsilon || frame.max_v - frame.min_v <= epsilon) {
-        return std::nullopt;
+    if (frame.max_u - frame.min_u <= kEpsilon ||
+        frame.max_v - frame.min_v <= kEpsilon) {
+      return std::nullopt;
     }
     return frame;
 }
@@ -304,18 +306,18 @@ void add_grid_segment_targets(
     std::vector<KnifePointTarget>& targets,
     std::vector<KnifeStrokeSegment>& segments)
 {
-    if (length_squared(second.position - first.position) <= epsilon) {
-        return;
-    }
+  if (length_squared(second.position - first.position) <= kEpsilon) {
+    return;
+  }
     const std::uint32_t first_index = static_cast<std::uint32_t>(targets.size());
     targets.push_back({
-        .kind = KnifePointTargetKind::face_point,
+        .kind = KnifePointTargetKind::FacePoint,
         .face_id = frame.face_id,
         .position = first.position,
     });
     const std::uint32_t second_index = static_cast<std::uint32_t>(targets.size());
     targets.push_back({
-        .kind = KnifePointTargetKind::face_point,
+        .kind = KnifePointTargetKind::FacePoint,
         .face_id = frame.face_id,
         .position = second.position,
     });
@@ -426,9 +428,9 @@ std::vector<ElementId> generated_face_selection(const Document& document, std::s
 
 OperationResult slice_selected_quads_impl(Document& document, Selection& selection, int x_slices, int y_slices)
 {
-    if (selection.mode != SelectionMode::face || selection.faces.empty()) {
-        return { false, "Select faces before slicing." };
-    }
+  if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
+    return {false, "Select faces before slicing."};
+  }
 
     x_slices = normalize_quad_slice_count(x_slices);
     y_slices = normalize_quad_slice_count(y_slices);
@@ -439,9 +441,9 @@ OperationResult slice_selected_quads_impl(Document& document, Selection& selecti
     const std::vector<Face> original_faces = document.faces;
     std::set<ElementId> selected_face_ids;
     for (ElementId face_id : selection.faces) {
-        if (face_id != invalid_element_id) {
-            selected_face_ids.insert(face_id);
-        }
+      if (face_id != kInvalidElementId) {
+        selected_face_ids.insert(face_id);
+      }
     }
 
     std::vector<SliceFaceFrame> source_frames;
@@ -481,7 +483,7 @@ OperationResult slice_selected_quads_impl(Document& document, Selection& selecti
 
     document = std::move(candidate.document);
     selection.clear();
-    selection.mode = SelectionMode::face;
+    selection.mode = SelectionMode::Face;
     selection.faces = std::move(generated_face_ids);
     activate_last_selection(selection);
     return { true, {} };

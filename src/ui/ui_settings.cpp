@@ -1,4 +1,4 @@
-﻿////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
 // This file is part of Quader and is protected proprietary source code.
 // No permission is granted to use, copy, modify, distribute, or sublicense this
@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/ui_settings.hpp"
 
-#include "core/q_str.hpp"
+#include "core/qstr.hpp"
 #include "core/user_config_paths.hpp"
 
 #include <fstream>
@@ -18,13 +18,13 @@
 namespace quader {
 namespace {
 
-bool parseBool(std::string value, bool fallback) {
-    const std::optional<bool> parsed = QStr::parseBoolToken(value);
-    return parsed.value_or(fallback);
+bool parse_bool(std::string value, bool fallback) {
+  const std::optional<bool> parsed = QStr::parse_bool_token(value);
+  return parsed.value_or(fallback);
 }
 
-bool panelSettingsKeyMatches(UIPanelId id, std::string_view key) {
-    return key == uiPanelStableId(id) || key == uiPanelKey(id);
+bool panel_settings_key_matches(UIPanelId id, std::string_view key) {
+  return key == ui_panel_stable_id(id) || key == ui_panel_key(id);
 }
 
 } // namespace
@@ -42,41 +42,46 @@ UISettings UISettings::load(const std::filesystem::path& path) {
 
     std::string line;
     while (std::getline(file, line)) {
-        line = QStr::trimAsciiWhitespace(line);
-        if (line.empty() || line.front() == '#' || line.front() == '[') {
-            continue;
-        }
+      line = QStr::trim_ascii_whitespace(line);
+      if (line.empty() || line.front() == '#' || line.front() == '[') {
+        continue;
+      }
 
-        const std::optional<QStrSplitOnce> split = QStr::splitOnce(line, '=');
-        if (!split) {
-            continue;
-        }
+      const std::optional<QStrSplitOnce> split = QStr::split_once(line, '=');
+      if (!split) {
+        continue;
+      }
 
-        const std::string key = QStr::trimAsciiWhitespace(split->before);
-        const std::string value = QStr::trimAsciiWhitespace(split->after);
-        if (panelSettingsKeyMatches(UIPanelId::Outliner, key)) {
-            settings.outlinerVisible_ = parseBool(value, settings.outlinerVisible_);
-        } else if (panelSettingsKeyMatches(UIPanelId::Inspector, key)) {
-            settings.inspectorVisible_ = parseBool(value, settings.inspectorVisible_);
-        } else if (panelSettingsKeyMatches(UIPanelId::Console, key)) {
-            settings.consoleVisible_ = parseBool(value, settings.consoleVisible_);
-        } else if (key == "NavigationGizmo") {
-            settings.navigationGizmoVisible_ = parseBool(value, settings.navigationGizmoVisible_);
-        } else if (key == "Locale") {
-            settings.setLocale(value);
-        }
+      const std::string key = QStr::trim_ascii_whitespace(split->before);
+      const std::string value = QStr::trim_ascii_whitespace(split->after);
+      if (panel_settings_key_matches(UIPanelId::Outliner, key)) {
+        settings.outliner_visible_ =
+            parse_bool(value, settings.outliner_visible_);
+      } else if (panel_settings_key_matches(UIPanelId::Inspector, key)) {
+        settings.inspector_visible_ =
+            parse_bool(value, settings.inspector_visible_);
+      } else if (panel_settings_key_matches(UIPanelId::Console, key)) {
+        settings.console_visible_ =
+            parse_bool(value, settings.console_visible_);
+      } else if (key == "NavigationGizmo") {
+        settings.navigation_gizmo_visible_ =
+            parse_bool(value, settings.navigation_gizmo_visible_);
+      } else if (key == "Locale") {
+        settings.set_locale(value);
+      }
     }
 
     return settings;
 }
 
-UISettingsPaths UISettings::resolvePaths(const std::filesystem::path& executableDir) {
-    UISettingsPaths paths;
-    paths.directory = quaderUserConfigDirectory(executableDir);
-    paths.imguiIniFile = paths.directory / "quader_ui.ini";
-    paths.settingsFile = paths.directory / "ui_settings.ini";
-    paths.viewportSettingsFile = paths.directory / "viewport_settings.ini";
-    return paths;
+UISettingsPaths
+UISettings::resolve_paths(const std::filesystem::path &executable_dir) {
+  UISettingsPaths paths;
+  paths.directory = quader_user_config_directory(executable_dir);
+  paths.imgui_ini_file = paths.directory / "quader_ui.ini";
+  paths.settings_file = paths.directory / "ui_settings.ini";
+  paths.viewport_settings_file = paths.directory / "viewport_settings.ini";
+  return paths;
 }
 
 bool UISettings::save(const std::filesystem::path& path) const {
@@ -89,51 +94,55 @@ bool UISettings::save(const std::filesystem::path& path) const {
     }
 
     file << "[Panels]\n";
-    file << uiPanelStableId(UIPanelId::Outliner) << '=' << (outlinerVisible_ ? "true" : "false") << '\n';
-    file << uiPanelStableId(UIPanelId::Inspector) << '=' << (inspectorVisible_ ? "true" : "false") << '\n';
-    file << uiPanelStableId(UIPanelId::Console) << '=' << (consoleVisible_ ? "true" : "false") << '\n';
+    file << ui_panel_stable_id(UIPanelId::Outliner) << '='
+         << (outliner_visible_ ? "true" : "false") << '\n';
+    file << ui_panel_stable_id(UIPanelId::Inspector) << '='
+         << (inspector_visible_ ? "true" : "false") << '\n';
+    file << ui_panel_stable_id(UIPanelId::Console) << '='
+         << (console_visible_ ? "true" : "false") << '\n';
     file << "\n[Show]\n";
-    file << "NavigationGizmo=" << (navigationGizmoVisible_ ? "true" : "false") << '\n';
+    file << "NavigationGizmo=" << (navigation_gizmo_visible_ ? "true" : "false")
+         << '\n';
     file << "\n[Localization]\n";
     file << "Locale=" << locale_ << '\n';
     return true;
 }
 
-bool UISettings::isPanelVisible(UIPanelId id) const {
-    switch (id) {
-    case UIPanelId::Viewport:
-        return true;
-    case UIPanelId::Outliner:
-        return outlinerVisible_;
-    case UIPanelId::Inspector:
-        return inspectorVisible_;
-    case UIPanelId::Console:
-        return consoleVisible_;
-    }
+bool UISettings::is_panel_visible(UIPanelId id) const {
+  switch (id) {
+  case UIPanelId::Viewport:
     return true;
+  case UIPanelId::Outliner:
+    return outliner_visible_;
+  case UIPanelId::Inspector:
+    return inspector_visible_;
+  case UIPanelId::Console:
+    return console_visible_;
+  }
+  return true;
 }
 
-void UISettings::setPanelVisible(UIPanelId id, bool visible) {
-    switch (id) {
-    case UIPanelId::Viewport:
-        break;
-    case UIPanelId::Outliner:
-        outlinerVisible_ = visible;
-        break;
-    case UIPanelId::Inspector:
-        inspectorVisible_ = visible;
-        break;
-    case UIPanelId::Console:
-        consoleVisible_ = visible;
-        break;
-    }
+void UISettings::set_panel_visible(UIPanelId id, bool visible) {
+  switch (id) {
+  case UIPanelId::Viewport:
+    break;
+  case UIPanelId::Outliner:
+    outliner_visible_ = visible;
+    break;
+  case UIPanelId::Inspector:
+    inspector_visible_ = visible;
+    break;
+  case UIPanelId::Console:
+    console_visible_ = visible;
+    break;
+  }
 }
 
-void UISettings::setLocale(std::string locale) {
-    locale = QStr::trimAsciiWhitespace(locale);
-    if (!locale.empty()) {
-        locale_ = std::move(locale);
-    }
+void UISettings::set_locale(std::string locale) {
+  locale = QStr::trim_ascii_whitespace(locale);
+  if (!locale.empty()) {
+    locale_ = std::move(locale);
+  }
 }
 
 } // namespace quader

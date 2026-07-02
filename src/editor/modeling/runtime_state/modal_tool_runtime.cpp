@@ -10,9 +10,9 @@
 
 namespace quader {
 
-bool ModalToolRuntime::ownsViewport(ModelingViewportTool tool) {
-    const ToolDescriptor* descriptor = findViewportToolDescriptor(tool);
-    return descriptor != nullptr && descriptor->ownsViewport;
+bool ModalToolRuntime::owns_viewport(ModelingViewportTool tool) {
+  const ToolDescriptor *descriptor = find_viewport_tool_descriptor(tool);
+  return descriptor != nullptr && descriptor->owns_viewport;
 }
 
 } // namespace quader

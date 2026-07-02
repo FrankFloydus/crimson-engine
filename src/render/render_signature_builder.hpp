@@ -24,12 +24,12 @@ namespace quader {
  * Stores one-pass overlay frame and layer signatures for render proxy invalidation.
  */
 struct OverlayFrameSignatures {
-    std::uint64_t frameSignature = 0;
-    std::array<std::uint64_t, kViewportOverlayLayerCount> layerSignatures{};
-    std::array<std::size_t, kViewportOverlayLayerCount> triangleCounts{};
-    std::array<std::size_t, kViewportOverlayLayerCount> lineCounts{};
-    std::array<std::size_t, kViewportOverlayLayerCount> pointCounts{};
-    bool hasSourceWireDepthStamp = false;
+  std::uint64_t frame_signature = 0;
+  std::array<std::uint64_t, kViewportOverlayLayerCount> layer_signatures{};
+  std::array<std::size_t, kViewportOverlayLayerCount> triangle_counts{};
+  std::array<std::size_t, kViewportOverlayLayerCount> line_counts{};
+  std::array<std::size_t, kViewportOverlayLayerCount> point_counts{};
+  bool has_source_wire_depth_stamp = false;
 };
 
 /**
@@ -40,35 +40,39 @@ public:
     RenderSignatureBuilder();
     explicit RenderSignatureBuilder(std::uint64_t seed);
 
-    RenderSignatureBuilder& addValue(std::uint64_t value);
-    RenderSignatureBuilder& addSize(std::size_t value);
-    RenderSignatureBuilder& addBool(bool value);
-    RenderSignatureBuilder& addFloat(float value);
-    RenderSignatureBuilder& addString(std::string_view value);
-    RenderSignatureBuilder& addVec2(QVec2 value);
-    RenderSignatureBuilder& addVec3(QVec3 value);
-    RenderSignatureBuilder& addMat4(const QMat4& value);
+    RenderSignatureBuilder &add_value(std::uint64_t value);
+    RenderSignatureBuilder &add_size(std::size_t value);
+    RenderSignatureBuilder &add_bool(bool value);
+    RenderSignatureBuilder &add_float(float value);
+    RenderSignatureBuilder &add_string(std::string_view value);
+    RenderSignatureBuilder &add_vec2(QVec2 value);
+    RenderSignatureBuilder &add_vec3(QVec3 value);
+    RenderSignatureBuilder &add_mat4(const QMat4 &value);
 
     [[nodiscard]] std::uint64_t value() const {
         return hash_;
     }
 
-    [[nodiscard]] static std::uint64_t materialSignature(
-            const AssetRegistry& assets,
-            const MaterialComponent* material);
-    [[nodiscard]] static std::uint64_t meshAssetSignature(
-            std::uint64_t seed,
-            const MeshAsset& mesh);
-    [[nodiscard]] static std::uint64_t lightSignature(const LightComponent& light);
-    [[nodiscard]] static std::uint64_t lightTransformSignature(const QMat4& worldTransform);
-    [[nodiscard]] static std::uint64_t overlayFrameSignature(const ViewportOverlayFrame& frame);
-    [[nodiscard]] static OverlayFrameSignatures overlayFrameSignatures(const ViewportOverlayFrame& frame);
-    [[nodiscard]] static std::uint64_t overlayCameraSignature(const ViewportOverlayCamera& camera);
-    [[nodiscard]] static std::uint64_t overlayLayerSignature(
-            const ViewportOverlayFrame& frame,
-            ViewportOverlayLayer layer);
+    [[nodiscard]] static std::uint64_t
+    material_signature(const AssetRegistry &assets,
+                       const MaterialComponent *material);
+    [[nodiscard]] static std::uint64_t
+    mesh_asset_signature(std::uint64_t seed, const MeshAsset &mesh);
+    [[nodiscard]] static std::uint64_t
+    light_signature(const LightComponent &light);
+    [[nodiscard]] static std::uint64_t
+    light_transform_signature(const QMat4 &world_transform);
+    [[nodiscard]] static std::uint64_t
+    overlay_frame_signature(const ViewportOverlayFrame &frame);
+    [[nodiscard]] static OverlayFrameSignatures
+    overlay_frame_signatures(const ViewportOverlayFrame &frame);
+    [[nodiscard]] static std::uint64_t
+    overlay_camera_signature(const ViewportOverlayCamera &camera);
+    [[nodiscard]] static std::uint64_t
+    overlay_layer_signature(const ViewportOverlayFrame &frame,
+                            ViewportOverlayLayer layer);
 
-private:
+  private:
     std::uint64_t hash_ = 0;
 };
 

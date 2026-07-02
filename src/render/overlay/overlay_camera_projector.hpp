@@ -49,21 +49,24 @@ public:
 
     const ViewportOverlayCamera& camera() const;
 
-    static ViewportOverlayCamera sanitizedCamera(ViewportOverlayCamera camera);
+    static ViewportOverlayCamera sanitized_camera(ViewportOverlayCamera camera);
 
-    OverlayViewPoint viewPointFor(QVec3 world) const;
+    OverlayViewPoint view_point_for(QVec3 world) const;
 
-    float nearPlaneDistance(const OverlayViewPoint& point) const;
+    float near_plane_distance(const OverlayViewPoint &point) const;
 
-    std::optional<OverlayClippedLine> clipLineToNearPlane(QVec3 start, QVec3 end) const;
+    std::optional<OverlayClippedLine> clip_line_to_near_plane(QVec3 start,
+                                                              QVec3 end) const;
 
     OverlayProjectedPoint project(OverlayViewPoint point) const;
 
-    void applyDeviceDepthBias(OverlayProjectedPoint& projected, float depthBiasUnits) const;
+    void apply_device_depth_bias(OverlayProjectedPoint &projected,
+                                 float depth_bias_units) const;
 
-    OverlayFloat4 withPixelOffset(OverlayFloat4 device, QVec2 pixelOffset) const;
+    OverlayFloat4 with_pixel_offset(OverlayFloat4 device,
+                                    QVec2 pixel_offset) const;
 
-private:
+  private:
     static constexpr float kPi = 3.14159265358979323846f;
 
     ViewportOverlayCamera camera_;

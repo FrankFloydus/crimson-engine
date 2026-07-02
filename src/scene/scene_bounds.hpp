@@ -22,13 +22,21 @@ struct SceneBounds {
     QVec3 max;
 };
 
-std::optional<SceneBounds> localMeshBounds(const MeshAsset& mesh);
-void includePoint(SceneBounds& bounds, QVec3 point);
-QVec3 boundsCenter(const SceneBounds& bounds);
-std::optional<SceneBounds> entityWorldBounds(const SceneDocument& document, const AssetRegistry& assets, EntityId entity);
-std::optional<SceneBounds> entityHierarchyWorldBounds(const SceneDocument& document, const AssetRegistry& assets, EntityId entity);
-std::optional<SceneBounds> documentWorldBounds(const SceneDocument& document, const AssetRegistry& assets);
-std::optional<SceneBounds> selectedWorldBounds(const SceneDocument& document, const AssetRegistry& assets);
-std::optional<SceneBounds> selectedTransformWorldBounds(const SceneDocument& document, const AssetRegistry& assets);
+std::optional<SceneBounds> local_mesh_bounds(const MeshAsset &mesh);
+void include_point(SceneBounds &bounds, QVec3 point);
+QVec3 bounds_center(const SceneBounds &bounds);
+std::optional<SceneBounds> entity_world_bounds(const SceneDocument &document,
+                                               const AssetRegistry &assets,
+                                               EntityId entity);
+std::optional<SceneBounds>
+entity_hierarchy_world_bounds(const SceneDocument &document,
+                              const AssetRegistry &assets, EntityId entity);
+std::optional<SceneBounds> document_world_bounds(const SceneDocument &document,
+                                                 const AssetRegistry &assets);
+std::optional<SceneBounds> selected_world_bounds(const SceneDocument &document,
+                                                 const AssetRegistry &assets);
+std::optional<SceneBounds>
+selected_transform_world_bounds(const SceneDocument &document,
+                                const AssetRegistry &assets);
 
 } // namespace quader

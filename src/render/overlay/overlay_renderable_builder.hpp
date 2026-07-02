@@ -48,15 +48,15 @@ enum class OverlayTransparencyMode {
  * Stores the Overlay Render State data contract used by the render extraction and Filament resource layer.
  */
 struct OverlayRenderState {
-    bool depthWrite = false;
-    bool colorWrite = true;
-    bool depthCulling = false;
-    OverlayDepthFunc depthFunc = OverlayDepthFunc::Always;
-    OverlayCullingMode cullingMode = OverlayCullingMode::None;
-    OverlayTransparencyMode transparencyMode = OverlayTransparencyMode::Default;
-    float polygonOffsetScale = 0.0f;
-    float polygonOffsetConstant = 0.0f;
-    std::uint16_t blendOrder = 0;
+  bool depth_write = false;
+  bool color_write = true;
+  bool depth_culling = false;
+  OverlayDepthFunc depth_func = OverlayDepthFunc::Always;
+  OverlayCullingMode culling_mode = OverlayCullingMode::None;
+  OverlayTransparencyMode transparency_mode = OverlayTransparencyMode::Default;
+  float polygon_offset_scale = 0.0f;
+  float polygon_offset_constant = 0.0f;
+  std::uint16_t blend_order = 0;
 };
 
 /**
@@ -73,8 +73,8 @@ struct OverlayFaceFillBatch {
 struct OverlayLineBatch {
     OverlayLineMesh mesh;
     OverlayRenderState state;
-    float widthPixels = 1.0f;
-    float depthBias = 0.0f;
+    float width_pixels = 1.0f;
+    float depth_bias = 0.0f;
 };
 
 /**
@@ -83,18 +83,18 @@ struct OverlayLineBatch {
 struct OverlayPointBatch {
     OverlayPointMesh mesh;
     OverlayRenderState state;
-    float sizePixels = 1.0f;
-    float innerRadius = 0.0f;
-    float depthBias = 0.0f;
+    float size_pixels = 1.0f;
+    float inner_radius = 0.0f;
+    float depth_bias = 0.0f;
 };
 
 /**
  * Represents an Overlay Layer Build Plan value used by the render extraction and Filament resource layer.
  */
 struct OverlayLayerBuildPlan {
-    std::vector<OverlayFaceFillBatch> faceFillBatches;
-    std::vector<OverlayLineBatch> lineBatches;
-    std::vector<OverlayPointBatch> pointBatches;
+  std::vector<OverlayFaceFillBatch> face_fill_batches;
+  std::vector<OverlayLineBatch> line_batches;
+  std::vector<OverlayPointBatch> point_batches;
 };
 
 /**
@@ -102,63 +102,65 @@ struct OverlayLayerBuildPlan {
  */
 class OverlayRenderableBuilder {
 public:
-    static std::uint64_t frameSignature(const ViewportOverlayFrame& frame);
-    static OverlayFrameSignatures frameSignatures(const ViewportOverlayFrame& frame);
-    static std::uint64_t cameraSignature(const ViewportOverlayCamera& camera);
-    static std::uint64_t layerSignature(const ViewportOverlayFrame& frame, ViewportOverlayLayer layer);
-    static std::uint64_t layerSignature(const OverlayFrameSignatures& signatures, ViewportOverlayLayer layer);
-    static std::uint64_t layerBuildSignature(
-            const ViewportOverlayFrame& frame,
-            const ViewportOverlayCamera& camera,
-            ViewportOverlayLayer layer);
-    static std::uint64_t layerBuildSignature(
-            const OverlayFrameSignatures& signatures,
-            const ViewportOverlayCamera& camera,
-            ViewportOverlayLayer layer);
-    static bool layerBuildDependsOnCamera(ViewportOverlayLayer layer);
-    static bool layerHasRenderablePrimitives(const OverlayFrameSignatures& signatures, ViewportOverlayLayer layer);
+  static std::uint64_t frame_signature(const ViewportOverlayFrame &frame);
+  static OverlayFrameSignatures
+  frame_signatures(const ViewportOverlayFrame &frame);
+  static std::uint64_t camera_signature(const ViewportOverlayCamera &camera);
+  static std::uint64_t layer_signature(const ViewportOverlayFrame &frame,
+                                       ViewportOverlayLayer layer);
+  static std::uint64_t layer_signature(const OverlayFrameSignatures &signatures,
+                                       ViewportOverlayLayer layer);
+  static std::uint64_t
+  layer_build_signature(const ViewportOverlayFrame &frame,
+                        const ViewportOverlayCamera &camera,
+                        ViewportOverlayLayer layer);
+  static std::uint64_t
+  layer_build_signature(const OverlayFrameSignatures &signatures,
+                        const ViewportOverlayCamera &camera,
+                        ViewportOverlayLayer layer);
+  static bool layer_build_depends_on_camera(ViewportOverlayLayer layer);
+  static bool
+  layer_has_renderable_primitives(const OverlayFrameSignatures &signatures,
+                                  ViewportOverlayLayer layer);
 
-    static OverlayRenderState makeState(
-            ViewportOverlayLayer layer,
-            ViewportOverlayGeometryKind kind,
-            std::uint16_t blendOrder,
-            bool depthStamp = false,
-            bool faceColorPass = false);
+  static OverlayRenderState make_state(ViewportOverlayLayer layer,
+                                       ViewportOverlayGeometryKind kind,
+                                       std::uint16_t blend_order,
+                                       bool depth_stamp = false,
+                                       bool face_color_pass = false);
 
-    static OverlayLayerBuildPlan buildLayer(
-            const ViewportOverlayFrame& frame,
-            const ViewportOverlayCamera& camera,
-            ViewportOverlayLayer layer,
-            const OverlayFrameSignatures* signatures = nullptr);
+  static OverlayLayerBuildPlan
+  build_layer(const ViewportOverlayFrame &frame,
+              const ViewportOverlayCamera &camera, ViewportOverlayLayer layer,
+              const OverlayFrameSignatures *signatures = nullptr);
 
 private:
     /**
      * Stores the Line Batch Key data contract used by the render extraction and Filament resource layer.
      */
     struct LineBatchKey {
-        float widthPixels = 0.0f;
+      float width_pixels = 0.0f;
     };
 
-    static std::vector<const ViewportOverlayLine*> linesForLayer(
-            const ViewportOverlayFrame& frame,
-            ViewportOverlayLayer layer,
-            const ViewportOverlayCamera& camera,
-            const OverlayDepthStampVisibilityFilter* visibility);
-    static std::vector<const ViewportOverlayPoint*> pointsForLayer(
-            const ViewportOverlayFrame& frame,
-            ViewportOverlayLayer layer,
-            const ViewportOverlayCamera& camera,
-            const OverlayDepthStampVisibilityFilter* visibility);
-    static std::vector<LineBatchKey> lineBatchKeys(
-            const std::vector<const ViewportOverlayLine*>& lines,
-            ViewportOverlayLayer layer);
-    static void appendPointPass(
-            OverlayLayerBuildPlan& plan,
-            const std::vector<const ViewportOverlayPoint*>& points,
-            const ViewportOverlayCamera& camera,
-            ViewportOverlayLayer layer,
-            std::uint16_t& blendOrder,
-            bool outline);
+    static std::vector<const ViewportOverlayLine *>
+    lines_for_layer(const ViewportOverlayFrame &frame,
+                    ViewportOverlayLayer layer,
+                    const ViewportOverlayCamera &camera,
+                    const OverlayDepthStampVisibilityFilter *visibility);
+    static std::vector<const ViewportOverlayPoint *>
+    points_for_layer(const ViewportOverlayFrame &frame,
+                     ViewportOverlayLayer layer,
+                     const ViewportOverlayCamera &camera,
+                     const OverlayDepthStampVisibilityFilter *visibility);
+    static std::vector<LineBatchKey>
+    line_batch_keys(const std::vector<const ViewportOverlayLine *> &lines,
+                    ViewportOverlayLayer layer);
+    static void
+    append_point_pass(OverlayLayerBuildPlan &plan,
+                      const std::vector<const ViewportOverlayPoint *> &points,
+                      const ViewportOverlayCamera &camera,
+                      ViewportOverlayLayer layer, std::uint16_t &blend_order,
+                      bool outline);
 };
 
 } // namespace quader

@@ -62,8 +62,9 @@ std::vector<OpenBridgeEdgeInfo> bridge_edge_infos(
     const std::map<std::pair<ElementId, ElementId>, int>& incidence_counts)
 {
     edge = make_edge(edge.a, edge.b);
-    if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b) {
-        return {};
+    if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+        edge.a == edge.b) {
+      return {};
     }
     const auto count = incidence_counts.find({ edge.a, edge.b });
     if (count == incidence_counts.end() || count->second < 1) {
@@ -83,18 +84,18 @@ std::vector<OpenBridgeEdgeInfo> bridge_edge_infos(
 float bridge_edge_info_gap_score(const Document& document, const OpenBridgeEdgeInfo& info, quader::QVec3 toward_other_edge)
 {
     const quader::QVec3 toward = normalize_or_zero(toward_other_edge);
-    if (length_squared(toward) <= epsilon) {
-        return 0.0F;
+    if (length_squared(toward) <= kEpsilon) {
+      return 0.0F;
     }
 
     float score = -std::numeric_limits<float>::infinity();
     const quader::QVec3 normal = normalize_or_zero(info.face_normal);
-    if (length_squared(normal) > epsilon) {
-        score = std::max(score, dot(normal, toward));
+    if (length_squared(normal) > kEpsilon) {
+      score = std::max(score, dot(normal, toward));
     }
     const quader::QVec3 edge_outward = bridge_edge_outward_direction(document, info);
-    if (length_squared(edge_outward) > epsilon) {
-        score = std::max(score, dot(edge_outward, toward));
+    if (length_squared(edge_outward) > kEpsilon) {
+      score = std::max(score, dot(edge_outward, toward));
     }
     return std::isfinite(score) ? score : 0.0F;
 }
@@ -154,11 +155,12 @@ std::optional<BridgePairInfo> bridge_edge_info_pair(
                 bridge_edge_info_gap_score(document, first_info, first_to_second) +
                 bridge_edge_info_gap_score(document, second_info, second_to_first);
             if (!best_pair.has_value() ||
-                    rail_score < best_rail_score - epsilon ||
-                    (std::abs(rail_score - best_rail_score) <= epsilon && gap_score > best_gap_score + epsilon)) {
-                best_pair = BridgePairInfo { first_info, second_info };
-                best_rail_score = rail_score;
-                best_gap_score = gap_score;
+                rail_score < best_rail_score - kEpsilon ||
+                (std::abs(rail_score - best_rail_score) <= kEpsilon &&
+                 gap_score > best_gap_score + kEpsilon)) {
+              best_pair = BridgePairInfo{first_info, second_info};
+              best_rail_score = rail_score;
+              best_gap_score = gap_score;
             }
         }
     }
@@ -194,12 +196,14 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
     for (const std::pair<Edge, Edge>& edge_pair : edge_pairs) {
         const Edge first = make_edge(edge_pair.first.a, edge_pair.first.b);
         const Edge second = make_edge(edge_pair.second.a, edge_pair.second.b);
-        if (first.a == invalid_element_id || first.b == invalid_element_id || first.a == first.b ||
-                second.a == invalid_element_id || second.b == invalid_element_id || second.a == second.b ||
-                find_vertex(document, first.a) == nullptr || find_vertex(document, first.b) == nullptr ||
-                find_vertex(document, second.a) == nullptr || find_vertex(document, second.b) == nullptr ||
-                first == second) {
-            return { false, "Bridge needs valid selected edge pairs." };
+        if (first.a == kInvalidElementId || first.b == kInvalidElementId ||
+            first.a == first.b || second.a == kInvalidElementId ||
+            second.b == kInvalidElementId || second.a == second.b ||
+            find_vertex(document, first.a) == nullptr ||
+            find_vertex(document, first.b) == nullptr ||
+            find_vertex(document, second.a) == nullptr ||
+            find_vertex(document, second.b) == nullptr || first == second) {
+          return {false, "Bridge needs valid selected edge pairs."};
         }
         if (!used_edges.insert({ first.a, first.b }).second || !used_edges.insert({ second.a, second.b }).second) {
             return { false, "Bridge cannot reuse the same edge in multiple pairs." };
@@ -259,7 +263,7 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
         const Vertex* start = find_vertex(document, start_id);
         const Vertex* end = find_vertex(document, end_id);
         if (start == nullptr || end == nullptr) {
-            return invalid_element_id;
+          return kInvalidElementId;
         }
         const ElementId vertex_id = add_vertex(candidate, curved_bridge_position(start->position, end->position, first_outward, second_outward, step_index, step_count));
         rail_step_vertices.emplace(key, vertex_id);
@@ -313,8 +317,11 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
             for (int step_index = 1; step_index <= step_count; ++step_index) {
                 const ElementId current_a = rail_a_shared ? first_a : interpolated_vertex(first_a, second_for_a, first_outward, second_outward, step_index);
                 const ElementId current_b = rail_b_shared ? first_b : interpolated_vertex(first_b, second_for_b, first_outward, second_outward, step_index);
-                if (current_a == invalid_element_id || current_b == invalid_element_id) {
-                    return { false, "Bridge could not create intermediate step vertices." };
+                if (current_a == kInvalidElementId ||
+                    current_b == kInvalidElementId) {
+                  return {
+                      false,
+                      "Bridge could not create intermediate step vertices."};
                 }
 
                 if (rail_a_shared) {
@@ -343,7 +350,7 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
 
     document = std::move(candidate);
     selection.clear();
-    selection.mode = SelectionMode::face;
+    selection.mode = SelectionMode::Face;
     selection.faces = std::move(bridged_face_ids);
     activate_face_selection(selection, selection.faces.back());
     return { true, {} };

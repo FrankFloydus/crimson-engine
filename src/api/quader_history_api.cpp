@@ -14,8 +14,8 @@
 namespace quader {
 namespace {
 
-ProjectSession& projectSession(QuaderApiSession session) {
-    return QuaderApiSessionInternalAccess::projectSession(session);
+ProjectSession &project_session(QuaderApiSession session) {
+  return QuaderApiSessionInternalAccess::project_session(session);
 }
 
 } // namespace
@@ -32,27 +32,25 @@ QuaderApiVoidResult QuaderHistoryApi::redo() {
     return mutations_.redo();
 }
 
-QuaderApiVoidResult QuaderHistoryApi::repeatLastAction() {
-    return mutations_.repeatLastAction();
+QuaderApiVoidResult QuaderHistoryApi::repeat_last_action() {
+  return mutations_.repeat_last_action();
 }
 
-bool QuaderHistoryApi::canUndo() const {
-    return mutations_.canUndo();
-}
+bool QuaderHistoryApi::can_undo() const { return mutations_.can_undo(); }
 
-bool QuaderHistoryApi::canRedo() const {
-    return mutations_.canRedo();
-}
+bool QuaderHistoryApi::can_redo() const { return mutations_.can_redo(); }
 
 QuaderHistorySnapshot QuaderHistoryApi::snapshot() const {
     QuaderHistorySnapshot result;
-    result.canUndo = canUndo();
-    result.canRedo = canRedo();
-    if (const std::string* label = projectSession(session_).history().undoLabel()) {
-        result.undoLabel = *label;
+    result.can_undo = can_undo();
+    result.can_redo = can_redo();
+    if (const std::string *label =
+            project_session(session_).history().undo_label()) {
+      result.undo_label = *label;
     }
-    if (const std::string* label = projectSession(session_).history().redoLabel()) {
-        result.redoLabel = *label;
+    if (const std::string *label =
+            project_session(session_).history().redo_label()) {
+      result.redo_label = *label;
     }
     return result;
 }

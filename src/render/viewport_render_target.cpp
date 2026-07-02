@@ -18,10 +18,11 @@ namespace {
 
 constexpr std::uint32_t kViewportRenderTargetCapacityStep = 128u;
 
-std::uint32_t viewportRenderTargetCapacityForSize(std::uint32_t size) {
-    size = std::max(1u, size);
-    return ((size + kViewportRenderTargetCapacityStep - 1u) / kViewportRenderTargetCapacityStep) *
-            kViewportRenderTargetCapacityStep;
+std::uint32_t viewport_render_target_capacity_for_size(std::uint32_t size) {
+  size = std::max(1u, size);
+  return ((size + kViewportRenderTargetCapacityStep - 1u) /
+          kViewportRenderTargetCapacityStep) *
+         kViewportRenderTargetCapacityStep;
 }
 
 /**
@@ -29,23 +30,23 @@ std::uint32_t viewportRenderTargetCapacityForSize(std::uint32_t size) {
  */
 struct RenderTargetCreationGuard {
     filament::Engine& engine;
-    filament::Texture* colorTexture = nullptr;
-    filament::Texture* depthTexture = nullptr;
-    filament::RenderTarget* renderTarget = nullptr;
+    filament::Texture *color_texture = nullptr;
+    filament::Texture *depth_texture = nullptr;
+    filament::RenderTarget *render_target = nullptr;
     bool released = false;
 
     ~RenderTargetCreationGuard() {
         if (released) {
             return;
         }
-        if (renderTarget) {
-            engine.destroy(renderTarget);
+        if (render_target) {
+          engine.destroy(render_target);
         }
-        if (colorTexture) {
-            engine.destroy(colorTexture);
+        if (color_texture) {
+          engine.destroy(color_texture);
         }
-        if (depthTexture) {
-            engine.destroy(depthTexture);
+        if (depth_texture) {
+          engine.destroy(depth_texture);
         }
     }
 
@@ -60,9 +61,10 @@ ViewportRenderTarget::~ViewportRenderTarget() {
     shutdown();
 }
 
-void ViewportRenderTarget::initialize(filament::Engine& engine, TextureRegistry& textureRegistry) {
-    engine_ = &engine;
-    textureRegistry_ = &textureRegistry;
+void ViewportRenderTarget::initialize(filament::Engine &engine,
+                                      TextureRegistry &texture_registry) {
+  engine_ = &engine;
+  texture_registry_ = &texture_registry;
 }
 
 void ViewportRenderTarget::shutdown() {
@@ -72,117 +74,119 @@ void ViewportRenderTarget::shutdown() {
 
     destroy();
     engine_ = nullptr;
-    textureRegistry_ = nullptr;
+    texture_registry_ = nullptr;
 }
 
-void ViewportRenderTarget::resize(
-        std::uint32_t width,
-        std::uint32_t height,
-        filament::View* view,
-        TextureSampleColorSpace sampleColorSpace) {
-    if (!engine_ || !textureRegistry_ || !view) {
-        return;
-    }
+void ViewportRenderTarget::resize(std::uint32_t width, std::uint32_t height,
+                                  filament::View *view,
+                                  TextureSampleColorSpace sample_color_space) {
+  if (!engine_ || !texture_registry_ || !view) {
+    return;
+  }
 
-    viewportWidth_ = std::max(1u, width);
-    viewportHeight_ = std::max(1u, height);
-    const std::uint32_t capacityWidth = viewportRenderTargetCapacityForSize(viewportWidth_);
-    const std::uint32_t capacityHeight = viewportRenderTargetCapacityForSize(viewportHeight_);
-    if (renderTarget_ && capacityWidth == width_ && capacityHeight == height_) {
-        if (sampleColorSpace_ != sampleColorSpace) {
-            sampleColorSpace_ = sampleColorSpace;
-            textureRegistry_->updateTexture(textureHandle_, colorTexture_, sampleColorSpace_);
-        }
-        view->setRenderTarget(renderTarget_);
-        view->setViewport({0, 0, viewportWidth_, viewportHeight_});
-        return;
+  viewport_width_ = std::max(1u, width);
+  viewport_height_ = std::max(1u, height);
+  const std::uint32_t capacity_width =
+      viewport_render_target_capacity_for_size(viewport_width_);
+  const std::uint32_t capacity_height =
+      viewport_render_target_capacity_for_size(viewport_height_);
+  if (render_target_ && capacity_width == width_ &&
+      capacity_height == height_) {
+    if (sample_color_space_ != sample_color_space) {
+      sample_color_space_ = sample_color_space;
+      texture_registry_->update_texture(texture_handle_, color_texture_,
+                                        sample_color_space_);
     }
+    view->setRenderTarget(render_target_);
+    view->setViewport({0, 0, viewport_width_, viewport_height_});
+    return;
+  }
 
-    destroyRenderResources();
-    width_ = capacityWidth;
-    height_ = capacityHeight;
-    sampleColorSpace_ = sampleColorSpace;
+  destroy_render_resources();
+  width_ = capacity_width;
+  height_ = capacity_height;
+  sample_color_space_ = sample_color_space;
 
-    using Texture = filament::Texture;
-    LOG_INFO("Allocating viewport render target {}x{} for viewport {}x{}",
-            width_,
-            height_,
-            viewportWidth_,
-            viewportHeight_);
-    RenderTargetCreationGuard creationGuard{*engine_};
-    creationGuard.colorTexture = Texture::Builder()
-            .width(width_)
-            .height(height_)
-            .levels(1)
-            .usage(Texture::Usage::COLOR_ATTACHMENT | Texture::Usage::SAMPLEABLE)
-            .format(Texture::InternalFormat::RGBA8)
-            .build(*engine_);
-    if (creationGuard.colorTexture == nullptr) {
-        return;
-    }
+  using Texture = filament::Texture;
+  LOG_INFO("Allocating viewport render target {}x{} for viewport {}x{}", width_,
+           height_, viewport_width_, viewport_height_);
+  RenderTargetCreationGuard creation_guard{*engine_};
+  creation_guard.color_texture =
+      Texture::Builder()
+          .width(width_)
+          .height(height_)
+          .levels(1)
+          .usage(Texture::Usage::COLOR_ATTACHMENT | Texture::Usage::SAMPLEABLE)
+          .format(Texture::InternalFormat::RGBA8)
+          .build(*engine_);
+  if (creation_guard.color_texture == nullptr) {
+    return;
+  }
 
-    creationGuard.depthTexture = Texture::Builder()
-            .width(width_)
-            .height(height_)
-            .levels(1)
-            .usage(Texture::Usage::DEPTH_ATTACHMENT)
-            .format(Texture::InternalFormat::DEPTH24)
-            .build(*engine_);
-    if (creationGuard.depthTexture == nullptr) {
-        return;
-    }
+  creation_guard.depth_texture = Texture::Builder()
+                                     .width(width_)
+                                     .height(height_)
+                                     .levels(1)
+                                     .usage(Texture::Usage::DEPTH_ATTACHMENT)
+                                     .format(Texture::InternalFormat::DEPTH24)
+                                     .build(*engine_);
+  if (creation_guard.depth_texture == nullptr) {
+    return;
+  }
 
-    creationGuard.renderTarget = filament::RenderTarget::Builder()
-            .texture(filament::RenderTarget::AttachmentPoint::COLOR, creationGuard.colorTexture)
-            .texture(filament::RenderTarget::AttachmentPoint::DEPTH, creationGuard.depthTexture)
-            .build(*engine_);
-    if (creationGuard.renderTarget == nullptr) {
-        return;
-    }
+  creation_guard.render_target =
+      filament::RenderTarget::Builder()
+          .texture(filament::RenderTarget::AttachmentPoint::COLOR,
+                   creation_guard.color_texture)
+          .texture(filament::RenderTarget::AttachmentPoint::DEPTH,
+                   creation_guard.depth_texture)
+          .build(*engine_);
+  if (creation_guard.render_target == nullptr) {
+    return;
+  }
 
-    if (textureHandle_ == InvalidRenderTextureHandle) {
-        textureHandle_ = textureRegistry_->registerTexture(creationGuard.colorTexture, sampleColorSpace_);
-    } else {
-        textureRegistry_->updateTexture(textureHandle_, creationGuard.colorTexture, sampleColorSpace_);
-    }
-    colorTexture_ = creationGuard.colorTexture;
-    depthTexture_ = creationGuard.depthTexture;
-    renderTarget_ = creationGuard.renderTarget;
-    view->setRenderTarget(renderTarget_);
-    view->setViewport({0, 0, viewportWidth_, viewportHeight_});
-    LOG_INFO("Viewport render target ready {}x{} for viewport {}x{} as texture handle {}",
-            width_,
-            height_,
-            viewportWidth_,
-            viewportHeight_,
-            textureHandle_);
-    creationGuard.release();
+  if (texture_handle_ == kInvalidRenderTextureHandle) {
+    texture_handle_ = texture_registry_->register_texture(
+        creation_guard.color_texture, sample_color_space_);
+  } else {
+    texture_registry_->update_texture(
+        texture_handle_, creation_guard.color_texture, sample_color_space_);
+  }
+  color_texture_ = creation_guard.color_texture;
+  depth_texture_ = creation_guard.depth_texture;
+  render_target_ = creation_guard.render_target;
+  view->setRenderTarget(render_target_);
+  view->setViewport({0, 0, viewport_width_, viewport_height_});
+  LOG_INFO("Viewport render target ready {}x{} for viewport {}x{} as texture "
+           "handle {}",
+           width_, height_, viewport_width_, viewport_height_, texture_handle_);
+  creation_guard.release();
 }
 
 void ViewportRenderTarget::destroy() {
-    if (textureRegistry_ && textureHandle_ != InvalidRenderTextureHandle) {
-        textureRegistry_->unregisterTexture(textureHandle_);
-        textureHandle_ = InvalidRenderTextureHandle;
-    }
-    destroyRenderResources();
+  if (texture_registry_ && texture_handle_ != kInvalidRenderTextureHandle) {
+    texture_registry_->unregister_texture(texture_handle_);
+    texture_handle_ = kInvalidRenderTextureHandle;
+  }
+  destroy_render_resources();
 }
 
-void ViewportRenderTarget::destroyRenderResources() {
-    if (!engine_) {
-        return;
-    }
-    if (renderTarget_) {
-        engine_->destroy(renderTarget_);
-        renderTarget_ = nullptr;
-    }
-    if (colorTexture_) {
-        engine_->destroy(colorTexture_);
-        colorTexture_ = nullptr;
-    }
-    if (depthTexture_) {
-        engine_->destroy(depthTexture_);
-        depthTexture_ = nullptr;
-    }
+void ViewportRenderTarget::destroy_render_resources() {
+  if (!engine_) {
+    return;
+  }
+  if (render_target_) {
+    engine_->destroy(render_target_);
+    render_target_ = nullptr;
+  }
+  if (color_texture_) {
+    engine_->destroy(color_texture_);
+    color_texture_ = nullptr;
+  }
+  if (depth_texture_) {
+    engine_->destroy(depth_texture_);
+    depth_texture_ = nullptr;
+  }
 }
 
 } // namespace quader

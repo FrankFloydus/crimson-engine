@@ -18,9 +18,9 @@ namespace quader_editor_core {
  * Enumerates BoxDragState values used by the modeling layer.
  */
 enum class BoxDragState {
-	idle,
-	footprint,
-	height,
+  Idle,
+  Footprint,
+  Height,
 };
 
 /**
@@ -38,19 +38,19 @@ struct BoxConstructionPlane {
  * Stores the Box Tool State data contract used by the modal modeling interaction layer.
  */
 struct BoxToolState {
-	BoxDragState drag_state = BoxDragState::idle;
-	BoxConstructionPlane plane;
-	quader::QVec3 raw_start_point;
-	quader::QVec3 raw_end_point;
-	quader::QVec3 start_point;
-	quader::QVec3 end_point;
-	double height_distance = 0.0;
-	quader::QVec2 height_mouse_start;
-	double height_start_distance = 0.0;
-	double height_axis_start = std::numeric_limits<double>::infinity();
-	int preview_brush_id = -1;
-	bool preview_valid = false;
-	std::vector<quader::QVec3> hover_cell_points;
+  BoxDragState drag_state = BoxDragState::Idle;
+  BoxConstructionPlane plane;
+  quader::QVec3 raw_start_point;
+  quader::QVec3 raw_end_point;
+  quader::QVec3 start_point;
+  quader::QVec3 end_point;
+  double height_distance = 0.0;
+  quader::QVec2 height_mouse_start;
+  double height_start_distance = 0.0;
+  double height_axis_start = std::numeric_limits<double>::infinity();
+  int preview_brush_id = -1;
+  bool preview_valid = false;
+  std::vector<quader::QVec3> hover_cell_points;
 };
 
 /**
@@ -91,8 +91,8 @@ struct BoxFootprintDescriptor {
 struct BoxPreviewDescriptor {
 	bool ok = false;
 	std::string message;
-	BoxDragState drag_state = BoxDragState::idle;
-	BoxFootprintDescriptor footprint;
+        BoxDragState drag_state = BoxDragState::Idle;
+        BoxFootprintDescriptor footprint;
 	quader::QVec3 normal { 0.0F, 1.0F, 0.0F };
 	double signed_height = 1.0;
 	double distance = 1.0;

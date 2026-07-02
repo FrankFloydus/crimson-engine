@@ -36,74 +36,94 @@ TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogLinksPanelAct
 		EXPECT_FALSE(action.id.empty());
 		EXPECT_FALSE(action.label.empty());
 
-		if (action.kind == qhc::HostActionKind::operation) {
-			EXPECT_FALSE(action.operation_id.empty());
-			EXPECT_TRUE(action.tool_id.empty());
-			EXPECT_TRUE(qhc::find_operation_descriptor(action.operation_id) != nullptr);
-		} else {
-			EXPECT_TRUE(action.operation_id.empty());
-			EXPECT_FALSE(action.tool_id.empty());
-			EXPECT_TRUE(qhc::find_tool_descriptor(action.tool_id) != nullptr);
-		}
-	}
+                if (action.kind == qhc::HostActionKind::Operation) {
+                  EXPECT_FALSE(action.operation_id.empty());
+                  EXPECT_TRUE(action.tool_id.empty());
+                  EXPECT_TRUE(qhc::find_operation_descriptor(
+                                  action.operation_id) != nullptr);
+                } else {
+                  EXPECT_TRUE(action.operation_id.empty());
+                  EXPECT_FALSE(action.tool_id.empty());
+                  EXPECT_TRUE(qhc::find_tool_descriptor(action.tool_id) !=
+                              nullptr);
+                }
+        }
 }
 
 TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogPreservesOperationPanelVisibilityAndPreviewKinds) {
-	EXPECT_TRUE(require_action("bevel_edges").preview_kind == qhc::HostPreviewKind::edge_bevel);
-	EXPECT_TRUE(require_action("interpolated_bridge_edges").preview_kind == qhc::HostPreviewKind::bridge);
-	EXPECT_TRUE(require_action("interpolated_bridge_faces").preview_kind == qhc::HostPreviewKind::bridge);
-	EXPECT_TRUE(require_action("merge_by_distance").preview_kind == qhc::HostPreviewKind::merge_by_distance);
-	EXPECT_TRUE(require_action("slice_quad").preview_kind == qhc::HostPreviewKind::slice_quad);
-	EXPECT_TRUE(require_action("create_outer_hull").preview_kind == qhc::HostPreviewKind::thicken);
-	EXPECT_TRUE(require_action("thicken_faces").preview_kind == qhc::HostPreviewKind::thicken);
-	EXPECT_TRUE(require_action("bridge_edges").preview_kind == qhc::HostPreviewKind::none);
+  EXPECT_TRUE(require_action("bevel_edges").preview_kind ==
+              qhc::HostPreviewKind::EdgeBevel);
+  EXPECT_TRUE(require_action("interpolated_bridge_edges").preview_kind ==
+              qhc::HostPreviewKind::Bridge);
+  EXPECT_TRUE(require_action("interpolated_bridge_faces").preview_kind ==
+              qhc::HostPreviewKind::Bridge);
+  EXPECT_TRUE(require_action("merge_by_distance").preview_kind ==
+              qhc::HostPreviewKind::MergeByDistance);
+  EXPECT_TRUE(require_action("slice_quad").preview_kind ==
+              qhc::HostPreviewKind::SliceQuad);
+  EXPECT_TRUE(require_action("create_outer_hull").preview_kind ==
+              qhc::HostPreviewKind::Thicken);
+  EXPECT_TRUE(require_action("thicken_faces").preview_kind ==
+              qhc::HostPreviewKind::Thicken);
+  EXPECT_TRUE(require_action("bridge_edges").preview_kind ==
+              qhc::HostPreviewKind::None);
 
-	EXPECT_FALSE(require_action("insert_edge_loop_tool").show_in_operations_panel);
-	EXPECT_FALSE(require_action("knife_tool").show_in_operations_panel);
-	EXPECT_FALSE(require_action("cut_tool").show_in_operations_panel);
-	EXPECT_FALSE(require_action("mirror_tool").show_in_operations_panel);
-	EXPECT_FALSE(require_action("poly_tool").show_in_operations_panel);
-	EXPECT_FALSE(require_action("apply_active_material").show_in_operations_panel);
-	EXPECT_TRUE(require_action("bevel_edges").show_in_operations_panel);
+  EXPECT_FALSE(
+      require_action("insert_edge_loop_tool").show_in_operations_panel);
+  EXPECT_FALSE(require_action("knife_tool").show_in_operations_panel);
+  EXPECT_FALSE(require_action("cut_tool").show_in_operations_panel);
+  EXPECT_FALSE(require_action("mirror_tool").show_in_operations_panel);
+  EXPECT_FALSE(require_action("poly_tool").show_in_operations_panel);
+  EXPECT_FALSE(
+      require_action("apply_active_material").show_in_operations_panel);
+  EXPECT_TRUE(require_action("bevel_edges").show_in_operations_panel);
 }
 
 TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogDescribesSelectionRequirements) {
 	const qhc::HostActionDescriptor& combine_mesh = require_action("combine_mesh");
-	EXPECT_TRUE(combine_mesh.availability.selection_mode == qhc::HostSelectionMode::object);
-	EXPECT_TRUE(combine_mesh.availability.minimum_selected_objects == 2U);
+        EXPECT_TRUE(combine_mesh.availability.selection_mode ==
+                    qhc::HostSelectionMode::Object);
+        EXPECT_TRUE(combine_mesh.availability.minimum_selected_objects == 2U);
 
 	const qhc::HostActionDescriptor& create_outer_hull = require_action("create_outer_hull");
-	EXPECT_TRUE(create_outer_hull.availability.selection_mode == qhc::HostSelectionMode::object);
-	EXPECT_TRUE(create_outer_hull.availability.minimum_selected_objects == 1U);
+        EXPECT_TRUE(create_outer_hull.availability.selection_mode ==
+                    qhc::HostSelectionMode::Object);
+        EXPECT_TRUE(create_outer_hull.availability.minimum_selected_objects == 1U);
 
 	const qhc::HostActionDescriptor& snap_vertices = require_action("snap_vertices_to_active");
-	EXPECT_TRUE(snap_vertices.availability.selection_mode == qhc::HostSelectionMode::vertex);
-	EXPECT_TRUE(snap_vertices.availability.minimum_selected_vertices == 2U);
-	EXPECT_TRUE(snap_vertices.availability.required_active_kind == qhc::HostActiveSelectionKind::vertex);
+        EXPECT_TRUE(snap_vertices.availability.selection_mode ==
+                    qhc::HostSelectionMode::Vertex);
+        EXPECT_TRUE(snap_vertices.availability.minimum_selected_vertices == 2U);
+        EXPECT_TRUE(snap_vertices.availability.required_active_kind ==
+                    qhc::HostActiveSelectionKind::Vertex);
 
-	const qhc::HostActionDescriptor& fill_hole = require_action("fill_hole");
-	EXPECT_TRUE(fill_hole.availability.selection_mode == qhc::HostSelectionMode::edge);
-	EXPECT_TRUE(fill_hole.availability.minimum_selected_edges == 3U);
+        const qhc::HostActionDescriptor& fill_hole = require_action("fill_hole");
+        EXPECT_TRUE(fill_hole.availability.selection_mode ==
+                    qhc::HostSelectionMode::Edge);
+        EXPECT_TRUE(fill_hole.availability.minimum_selected_edges == 3U);
 	EXPECT_TRUE(fill_hole.availability.requires_single_object);
 
 	const qhc::HostActionDescriptor& bridge_faces = require_action("bridge_faces");
-	EXPECT_TRUE(bridge_faces.availability.selection_mode == qhc::HostSelectionMode::face);
-	EXPECT_TRUE(bridge_faces.availability.minimum_selected_faces == 2U);
+        EXPECT_TRUE(bridge_faces.availability.selection_mode ==
+                    qhc::HostSelectionMode::Face);
+        EXPECT_TRUE(bridge_faces.availability.minimum_selected_faces == 2U);
 
 	const qhc::HostActionDescriptor& slice_quad = require_action("slice_quad");
 	EXPECT_TRUE(slice_quad.availability.minimum_selected_faces == 1U);
 	EXPECT_FALSE(slice_quad.availability.requires_single_object);
 
 	const qhc::HostActionDescriptor& apply_material = require_action("apply_active_material");
-	EXPECT_TRUE(apply_material.availability.selection_mode == qhc::HostSelectionMode::face);
-	EXPECT_TRUE(apply_material.availability.minimum_selected_faces == 1U);
+        EXPECT_TRUE(apply_material.availability.selection_mode ==
+                    qhc::HostSelectionMode::Face);
+        EXPECT_TRUE(apply_material.availability.minimum_selected_faces == 1U);
 	EXPECT_FALSE(apply_material.show_in_operations_panel);
 
 	const qhc::HostActionDescriptor& mirror_tool = require_action("mirror_tool");
-	EXPECT_TRUE(mirror_tool.kind == qhc::HostActionKind::tool);
-	EXPECT_TRUE(same_text(mirror_tool.tool_id, "mirror"));
-	EXPECT_TRUE(mirror_tool.availability.selection_mode == qhc::HostSelectionMode::object);
-	EXPECT_TRUE(mirror_tool.availability.minimum_selected_objects == 1U);
+        EXPECT_TRUE(mirror_tool.kind == qhc::HostActionKind::Tool);
+        EXPECT_TRUE(same_text(mirror_tool.tool_id, "mirror"));
+        EXPECT_TRUE(mirror_tool.availability.selection_mode ==
+                    qhc::HostSelectionMode::Object);
+        EXPECT_TRUE(mirror_tool.availability.minimum_selected_objects == 1U);
 
 	const qhc::HostActionDescriptor& invert_mesh = require_action("invert_mesh");
 	EXPECT_TRUE(same_text(invert_mesh.label, "Flip Mesh Normals"));
@@ -118,10 +138,13 @@ TEST(QdrEditorMetadataActionCatalogTests, HostContractActionIdsDisambiguateShare
 	EXPECT_TRUE(same_text(radial_vertices.label, "Radial Align"));
 	EXPECT_TRUE(same_text(radial_edges.label, "Radial Align"));
 	EXPECT_TRUE(same_text(radial_faces.label, "Radial Align"));
-	EXPECT_TRUE(radial_vertices.availability.selection_mode == qhc::HostSelectionMode::vertex);
-	EXPECT_TRUE(radial_edges.availability.selection_mode == qhc::HostSelectionMode::edge);
-	EXPECT_TRUE(radial_faces.availability.selection_mode == qhc::HostSelectionMode::face);
-	EXPECT_TRUE(same_text(radial_vertices.operation_id, "radial_align"));
+        EXPECT_TRUE(radial_vertices.availability.selection_mode ==
+                    qhc::HostSelectionMode::Vertex);
+        EXPECT_TRUE(radial_edges.availability.selection_mode ==
+                    qhc::HostSelectionMode::Edge);
+        EXPECT_TRUE(radial_faces.availability.selection_mode ==
+                    qhc::HostSelectionMode::Face);
+        EXPECT_TRUE(same_text(radial_vertices.operation_id, "radial_align"));
 	EXPECT_TRUE(same_text(radial_edges.operation_id, "radial_align"));
 	EXPECT_TRUE(same_text(radial_faces.operation_id, "radial_align"));
 

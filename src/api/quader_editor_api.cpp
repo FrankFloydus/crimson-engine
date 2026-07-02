@@ -163,8 +163,8 @@ const QuaderRenderApi& QuaderEditorApi::render() const {
     return impl_->render;
 }
 
-QuaderViewportHandle QuaderEditorApi::mainViewport() {
-    return QuaderViewportHandle(impl_->viewports, ViewportPaneId::Perspective);
+QuaderViewportHandle QuaderEditorApi::main_viewport() {
+  return QuaderViewportHandle(impl_->viewports, ViewportPaneId::Perspective);
 }
 
 QuaderViewportHandle QuaderEditorApi::viewport(ViewportPaneId pane) {
@@ -192,12 +192,12 @@ QuaderRevisionStamp QuaderEditorApi::revisions() const {
  */
 class QuaderStandaloneEditor::Impl final {
 public:
-    Impl()
-        : session()
-        , editor(QuaderApiSessionInternalAccess::fromProjectSession(session)) {}
+  Impl()
+      : session(),
+        editor(QuaderApiSessionInternalAccess::from_project_session(session)) {}
 
-    ProjectSession session;
-    QuaderEditorApi editor;
+  ProjectSession session;
+  QuaderEditorApi editor;
 };
 
 QuaderStandaloneEditor::QuaderStandaloneEditor()
@@ -216,8 +216,8 @@ const QuaderEditorApi& QuaderStandaloneEditor::editor() const {
     return impl_->editor;
 }
 
-QuaderStandaloneEditor createStandaloneEditor() {
-    return QuaderStandaloneEditor();
+QuaderStandaloneEditor create_standalone_editor() {
+  return QuaderStandaloneEditor();
 }
 
 } // namespace quader

@@ -31,13 +31,14 @@ namespace quader_poly::document_internal {
  * Represents an Open Mesh Topology Traits value used by the polygon document and mesh editing core.
  */
 struct OpenMeshTopologyTraits : public OpenMesh::DefaultTraits {
-    VertexAttributes(OpenMesh::Attributes::Status);
-    HalfedgeAttributes(OpenMesh::Attributes::Status);
-    EdgeAttributes(OpenMesh::Attributes::Status);
-    FaceAttributes(OpenMesh::Attributes::Status);
+  VertexAttributes(OpenMesh::Attributes::Status);
+  HalfedgeAttributes(OpenMesh::Attributes::Status);
+  EdgeAttributes(OpenMesh::Attributes::Status);
+  FaceAttributes(OpenMesh::Attributes::Status);
 };
 
-using OpenMeshTopologyMesh = OpenMesh::PolyMesh_ArrayKernelT<OpenMeshTopologyTraits>;
+using OpenMeshTopologyMesh =
+    OpenMesh::PolyMesh_ArrayKernelT<OpenMeshTopologyTraits>;
 using OpenMeshVertexIdProperty = OpenMesh::VPropHandleT<ElementId>;
 using OpenMeshFaceIdProperty = OpenMesh::FPropHandleT<ElementId>;
 using OpenMeshFaceIndexProperty = OpenMesh::FPropHandleT<std::size_t>;
@@ -76,10 +77,11 @@ bool build_openmesh_topology_document(const Document& document, OpenMeshTopology
     topology.mesh.add_property(topology.face_materials, "qdr:face_material");
 
     for (const Vertex& vertex : document.vertices) {
-        if (vertex.id == invalid_element_id || topology.vertices_by_id.contains(vertex.id)) {
-            message = "Current document has duplicate or invalid vertices.";
-            return false;
-        }
+      if (vertex.id == kInvalidElementId ||
+          topology.vertices_by_id.contains(vertex.id)) {
+        message = "Current document has duplicate or invalid vertices.";
+        return false;
+      }
         const OpenMeshTopologyMesh::VertexHandle handle = topology.mesh.add_vertex(openmesh_point_from_vec3(vertex.position));
         topology.mesh.property(topology.vertex_ids, handle) = vertex.id;
         topology.vertices_by_id.emplace(vertex.id, handle);
@@ -87,9 +89,10 @@ bool build_openmesh_topology_document(const Document& document, OpenMeshTopology
 
     for (std::size_t face_index = 0; face_index < document.faces.size(); ++face_index) {
         const Face& face = document.faces[face_index];
-        if (face.id == invalid_element_id || face.vertices.size() < 3 || has_repeated_vertex(face.vertices)) {
-            message = "Current document has invalid polygon faces.";
-            return false;
+        if (face.id == kInvalidElementId || face.vertices.size() < 3 ||
+            has_repeated_vertex(face.vertices)) {
+          message = "Current document has invalid polygon faces.";
+          return false;
         }
 
         std::vector<OpenMeshTopologyMesh::VertexHandle> handles;
@@ -139,14 +142,14 @@ Document document_from_openmesh_topology(OpenMeshTopologyDocument& topology, Ele
     for (const OpenMeshTopologyMesh::FaceHandle face_handle : topology.mesh.faces()) {
         Face face;
         face.id = topology.mesh.property(topology.face_ids, face_handle);
-        if (face.id == invalid_element_id) {
-            face.id = next_valid_face_id(document);
+        if (face.id == kInvalidElementId) {
+          face.id = next_valid_face_id(document);
         }
         face.material_slot = topology.mesh.property(topology.face_materials, face_handle);
         for (const OpenMeshTopologyMesh::VertexHandle vertex_handle : topology.mesh.fv_range(face_handle)) {
             const ElementId vertex_id = topology.mesh.property(topology.vertex_ids, vertex_handle);
-            if (vertex_id != invalid_element_id) {
-                face.vertices.push_back(vertex_id);
+            if (vertex_id != kInvalidElementId) {
+              face.vertices.push_back(vertex_id);
             }
         }
         face.uvs.clear();
@@ -169,7 +172,7 @@ std::size_t face_index_for_handle(const OpenMeshTopologyDocument& topology, Open
 ElementId vertex_id_for_handle(const OpenMeshTopologyDocument& topology, OpenMeshTopologyMesh::VertexHandle vertex_handle)
 {
     if (!vertex_handle.is_valid()) {
-        return invalid_element_id;
+      return kInvalidElementId;
     }
     return topology.mesh.property(topology.vertex_ids, vertex_handle);
 }
@@ -177,7 +180,7 @@ ElementId vertex_id_for_handle(const OpenMeshTopologyDocument& topology, OpenMes
 Edge edge_for_halfedge(const OpenMeshTopologyDocument& topology, OpenMeshTopologyMesh::HalfedgeHandle halfedge_handle)
 {
     if (!halfedge_handle.is_valid()) {
-        return { invalid_element_id, invalid_element_id };
+      return {kInvalidElementId, kInvalidElementId};
     }
     const ElementId from_id = vertex_id_for_handle(topology, topology.mesh.from_vertex_handle(halfedge_handle));
     const ElementId to_id = vertex_id_for_handle(topology, topology.mesh.to_vertex_handle(halfedge_handle));
@@ -188,7 +191,7 @@ Edge edge_for_edge_handle(const OpenMeshTopologyDocument& topology, OpenMeshTopo
 {
     const OpenMeshTopologyMesh::HalfedgeHandle halfedge_handle = topology.mesh.halfedge_handle(edge_handle, 0);
     if (!halfedge_handle.is_valid()) {
-        return { invalid_element_id, invalid_element_id };
+      return {kInvalidElementId, kInvalidElementId};
     }
     return edge_for_halfedge(topology, halfedge_handle);
 }
@@ -227,8 +230,9 @@ bool build_topology_query(const Document& document, DocumentTopologyQuery& query
 
     for (const OpenMeshTopologyMesh::EdgeHandle edge_handle : topology.mesh.edges()) {
         const Edge edge = edge_for_edge_handle(topology, edge_handle);
-        if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b) {
-            continue;
+        if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+            edge.a == edge.b) {
+          continue;
         }
 
         const std::pair<ElementId, ElementId> key { edge.a, edge.b };
@@ -269,15 +273,15 @@ bool build_topology_query(const Document& document, DocumentTopologyQuery& query
 
     for (const OpenMeshTopologyMesh::VertexHandle vertex_handle : topology.mesh.vertices()) {
         const ElementId vertex_id = vertex_id_for_handle(topology, vertex_handle);
-        if (vertex_id == invalid_element_id) {
-            continue;
+        if (vertex_id == kInvalidElementId) {
+          continue;
         }
 
         std::vector<ElementId> adjacent_vertices;
         for (const OpenMeshTopologyMesh::VertexHandle adjacent_handle : topology.mesh.vv_range(vertex_handle)) {
             const ElementId adjacent_id = vertex_id_for_handle(topology, adjacent_handle);
-            if (adjacent_id != invalid_element_id && adjacent_id != vertex_id) {
-                adjacent_vertices.push_back(adjacent_id);
+            if (adjacent_id != kInvalidElementId && adjacent_id != vertex_id) {
+              adjacent_vertices.push_back(adjacent_id);
             }
         }
         sort_unique(adjacent_vertices);
@@ -322,7 +326,7 @@ OperationResult merge_selected_vertices_to_active_with_topology_backend(
     prune_unused_vertices(document);
 
     selection.clear();
-    selection.mode = SelectionMode::vertex;
+    selection.mode = SelectionMode::Vertex;
     selection.vertices.push_back(active_vertex_id);
     activate_vertex_selection(selection, active_vertex_id);
 

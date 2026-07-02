@@ -26,41 +26,55 @@ public:
     ViewportInputRouter();
     ~ViewportInputRouter();
 
-    ViewportInputResult handleFrame(const ViewportInputFrame& input, ViewportCameraController& camera);
+    ViewportInputResult handle_frame(const ViewportInputFrame &input,
+                                     ViewportCameraController &camera);
     void reset();
-    void setActiveTool(ViewportToolId tool);
-    void setSelectionMode(ViewportSelectionMode mode);
-    void syncGridPresetSnapshot(int preset);
-    bool activeToolOwnsViewport() const;
-    bool activeToolBlocksViewportFocusShortcuts() const;
-    bool activeToolAllowsSelectionFallback() const;
-    bool hasActiveModalPreview() const;
-    const ModelingBoxPreview& boxPreview() const;
-    void clearModalToolState();
-    void clearModalDragState();
-    ViewportToolResult handleActiveToolEvent(
-            ViewportToolContext& context,
-            const ViewportToolEvent& event);
+    void set_active_tool(ViewportToolId tool);
+    void set_selection_mode(ViewportSelectionMode mode);
+    void sync_grid_preset_snapshot(int preset);
+    bool active_tool_owns_viewport() const;
+    bool active_tool_blocks_viewport_focus_shortcuts() const;
+    bool active_tool_allows_selection_fallback() const;
+    bool has_active_modal_preview() const;
+    const ModelingBoxPreview &box_preview() const;
+    void clear_modal_tool_state();
+    void clear_modal_drag_state();
+    ViewportToolResult handle_active_tool_event(ViewportToolContext &context,
+                                                const ViewportToolEvent &event);
 
     const ViewportToolState& state() const { return state_; }
-    bool navigating() const { return navigationMode_ != ViewportDragMode::None; }
-    bool flyNavigating() const { return navigationMode_ == ViewportDragMode::Fly; }
-    bool orbitNavigating() const { return navigationMode_ == ViewportDragMode::Orbit || navigationMode_ == ViewportDragMode::OrbitSnap; }
-    bool panNavigating() const { return navigationMode_ == ViewportDragMode::Pan; }
-    bool flyCursorCaptureActive() const { return flyCursorCaptureActive_; }
-    bool flyHudActive() const { return flyHudActive_; }
-    const class ViewportTool* activeTool() const;
+    bool navigating() const {
+      return navigation_mode_ != ViewportDragMode::None;
+    }
+    bool fly_navigating() const {
+      return navigation_mode_ == ViewportDragMode::Fly;
+    }
+    bool orbit_navigating() const {
+      return navigation_mode_ == ViewportDragMode::Orbit ||
+             navigation_mode_ == ViewportDragMode::OrbitSnap;
+    }
+    bool pan_navigating() const {
+      return navigation_mode_ == ViewportDragMode::Pan;
+    }
+    bool fly_cursor_capture_active() const {
+      return fly_cursor_capture_active_;
+    }
+    bool fly_hud_active() const { return fly_hud_active_; }
+    const class ViewportTool *active_tool() const;
 
-private:
-    bool handleShortcut(const ViewportShortcut& shortcut, ViewportCameraController& camera, ViewportInputResult& result);
+  private:
+    bool handle_shortcut(const ViewportShortcut &shortcut,
+                         ViewportCameraController &camera,
+                         ViewportInputResult &result);
 
     ViewportToolState state_;
-    ViewportDragMode navigationMode_ = ViewportDragMode::None;
-    ViewportInputActionKind activeNavigationAction_ = ViewportInputActionKind::None;
-    bool orbitSnapActionUsesAltModifier_ = false;
-    bool flyCursorCaptureActive_ = false;
-    bool flyHudActive_ = false;
-    std::unique_ptr<class ViewportToolRuntime> toolRuntime_;
+    ViewportDragMode navigation_mode_ = ViewportDragMode::None;
+    ViewportInputActionKind active_navigation_action_ =
+        ViewportInputActionKind::None;
+    bool orbit_snap_action_uses_alt_modifier_ = false;
+    bool fly_cursor_capture_active_ = false;
+    bool fly_hud_active_ = false;
+    std::unique_ptr<class ViewportToolRuntime> tool_runtime_;
 };
 
 } // namespace quader

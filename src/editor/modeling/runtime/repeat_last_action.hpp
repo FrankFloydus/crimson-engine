@@ -17,42 +17,43 @@ namespace quader_editor_core {
  * Enumerates RepeatableActionKind values used by the modeling layer.
  */
 enum class RepeatableActionKind {
-	none,
-	operation,
-	transform,
+  None,
+  Operation,
+  Transform,
 };
 
 /**
  * Enumerates RepeatTransformDirectionMode values used by the modeling layer.
  */
 enum class RepeatTransformDirectionMode {
-	world_delta,
-	selection_forward,
+  WorldDelta,
+  SelectionForward,
 };
 
 /**
  * Represents a Repeat Transform Action value used by the modeling runtime domain.
  */
 struct RepeatTransformAction {
-	ViewportInteractionTool tool = ViewportInteractionTool::unknown;
-	TransformDragOperation operation = TransformDragOperation::transform;
-	TransformAxis axis = TransformAxis::none;
-	bool duplicate_selected = false;
-	quader::QVec3 move_delta;
-	double rotate_angle_degrees = 0.0;
-	quader::QVec3 scale { 1.0F, 1.0F, 1.0F };
-	RepeatTransformDirectionMode direction_mode = RepeatTransformDirectionMode::world_delta;
-	float signed_forward_distance = 0.0F;
+  ViewportInteractionTool tool = ViewportInteractionTool::Unknown;
+  TransformDragOperation operation = TransformDragOperation::Transform;
+  TransformAxis axis = TransformAxis::None;
+  bool duplicate_selected = false;
+  quader::QVec3 move_delta;
+  double rotate_angle_degrees = 0.0;
+  quader::QVec3 scale{1.0F, 1.0F, 1.0F};
+  RepeatTransformDirectionMode direction_mode =
+      RepeatTransformDirectionMode::WorldDelta;
+  float signed_forward_distance = 0.0F;
 };
 
 /**
  * Stores the Repeat Last Action State data contract used by the modeling runtime domain.
  */
 struct RepeatLastActionState {
-	RepeatableActionKind last_action_kind = RepeatableActionKind::none;
-	std::optional<EditorOperationCommand> last_operation;
-	std::optional<EditorOperationCommand> pending_preview_operation;
-	std::optional<RepeatTransformAction> last_transform;
+  RepeatableActionKind last_action_kind = RepeatableActionKind::None;
+  std::optional<EditorOperationCommand> last_operation;
+  std::optional<EditorOperationCommand> pending_preview_operation;
+  std::optional<RepeatTransformAction> last_transform;
 };
 
 [[nodiscard]] bool operation_is_repeatable(EditorOperationId operation_id);

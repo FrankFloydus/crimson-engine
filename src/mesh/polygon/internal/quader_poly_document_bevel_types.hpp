@@ -19,11 +19,11 @@ namespace quader_poly::document_internal {
  * Represents an Edge Bevel Side value used by the polygon document and mesh editing core.
  */
 struct EdgeBevelSide {
-    ElementId face_id = invalid_element_id;
-    std::uint32_t material_slot = 0;
-    quader::QVec3 normal;
-    std::map<ElementId, ElementId> endpoint_vertices;
-    std::map<ElementId, quader::QVec3> endpoint_positions;
+  ElementId face_id = kInvalidElementId;
+  std::uint32_t material_slot = 0;
+  quader::QVec3 normal;
+  std::map<ElementId, ElementId> endpoint_vertices;
+  std::map<ElementId, quader::QVec3> endpoint_positions;
 };
 
 /**
@@ -46,17 +46,17 @@ struct EdgeBevelCornerArc {
     bool has_profile_middle = false;
     bool use_global_profile = true;
     float profile = 0.5F;
-    BevelProfileType profile_type = BevelProfileType::offset;
+    BevelProfileType profile_type = BevelProfileType::Offset;
 };
 
 /**
  * Represents an Edge Bevel Face Vertex Offset value used by the polygon document and mesh editing core.
  */
 struct EdgeBevelFaceVertexOffset {
-    ElementId source_vertex_id = invalid_element_id;
-    ElementId offset_vertex_id = invalid_element_id;
-    ElementId source_face_id = invalid_element_id;
-    quader::QVec3 position;
+  ElementId source_vertex_id = kInvalidElementId;
+  ElementId offset_vertex_id = kInvalidElementId;
+  ElementId source_face_id = kInvalidElementId;
+  quader::QVec3 position;
 };
 
 /**
@@ -117,7 +117,7 @@ struct EdgeBevelVMeshProfile {
     quader::QVec3 projection_direction;
     bool use_global_profile = true;
     float profile = 0.5F;
-    BevelProfileType profile_type = BevelProfileType::offset;
+    BevelProfileType profile_type = BevelProfileType::Offset;
     bool has_projection = false;
 };
 
@@ -126,7 +126,7 @@ struct EdgeBevelVMeshProfile {
  */
 struct EdgeBevelVMeshSlot {
     quader::QVec3 position;
-    ElementId vertex_id = invalid_element_id;
+    ElementId vertex_id = kInvalidElementId;
 };
 
 /**

@@ -29,16 +29,16 @@ struct RenderConfig {
     RenderSettings settings;
 };
 
-inline const char* toString(RendererBackend backend) {
-    switch (backend) {
-    case RendererBackend::Vulkan:
-        return "Vulkan";
-    case RendererBackend::OpenGL:
-        return "OpenGL";
-    case RendererBackend::Metal:
-        return "Metal";
-    }
-    return "Unknown";
+inline const char *to_string(RendererBackend backend) {
+  switch (backend) {
+  case RendererBackend::Vulkan:
+    return "Vulkan";
+  case RendererBackend::OpenGL:
+    return "OpenGL";
+  case RendererBackend::Metal:
+    return "Metal";
+  }
+  return "Unknown";
 }
 
 } // namespace quader

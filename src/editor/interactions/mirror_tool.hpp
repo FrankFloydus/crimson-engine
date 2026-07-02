@@ -22,8 +22,8 @@ struct EditorRuntimeState;
  * Enumerates ViewportFlipOrientation values used by the modeling layer.
  */
 enum class ViewportFlipOrientation {
-	horizontal = 0,
-	vertical = 1,
+  Horizontal = 0,
+  Vertical = 1,
 };
 
 /**

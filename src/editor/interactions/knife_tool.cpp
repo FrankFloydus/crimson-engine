@@ -47,8 +47,8 @@ public:
 
 const KnifeToolImpl& knife_tool_impl()
 {
-	static const KnifeToolImpl tool;
-	return tool;
+  static const KnifeToolImpl kTool;
+  return kTool;
 }
 
 } // namespace
@@ -60,7 +60,7 @@ const EditorTool& knife_tool()
 
 ViewportInteractionTool KnifeToolImpl::tool_id() const
 {
-	return ViewportInteractionTool::knife;
+  return ViewportInteractionTool::Knife;
 }
 
 std::string_view KnifeToolImpl::id() const
@@ -138,50 +138,52 @@ void rebuild_knife_overlay(KnifeToolState& state)
 		return;
 	}
 	for (std::size_t index = 0; index < state.point_positions.size(); ++index) {
-		state.preview_points.push_back({
-			SelectionOverlayLayer::selected_vertex,
-			state.point_positions[index],
-			0xff16d9ffU,
-			index == state.previous_point_index && state.has_active_stroke ? 10.0F : 8.0F,
-		});
-	}
+          state.preview_points.push_back({
+              SelectionOverlayLayer::SelectedVertex,
+              state.point_positions[index],
+              0xff16d9ffU,
+              index == state.previous_point_index && state.has_active_stroke
+                  ? 10.0F
+                  : 8.0F,
+          });
+        }
 	for (const quader_poly::KnifeStrokeSegment& segment : state.segments) {
 		if (segment.first_point >= state.point_positions.size() || segment.second_point >= state.point_positions.size()) {
 			continue;
 		}
-		state.preview_lines.push_back({
-			SelectionOverlayLayer::hover_edge,
-			state.point_positions[segment.first_point],
-			state.point_positions[segment.second_point],
-			0xff16d9ffU,
-			3.0F,
-		});
-	}
+                state.preview_lines.push_back({
+                    SelectionOverlayLayer::HoverEdge,
+                    state.point_positions[segment.first_point],
+                    state.point_positions[segment.second_point],
+                    0xff16d9ffU,
+                    3.0F,
+                });
+        }
 	for (const quader::QVec3& point : state.intersection_preview_points) {
-		state.preview_points.push_back({
-			SelectionOverlayLayer::selected_vertex,
-			point,
-			0xff56ff8fU,
-			6.0F,
-		});
-	}
+          state.preview_points.push_back({
+              SelectionOverlayLayer::SelectedVertex,
+              point,
+              0xff56ff8fU,
+              6.0F,
+          });
+        }
 	if (state.has_current) {
-		state.preview_points.push_back({
-			SelectionOverlayLayer::hover_vertex,
-			state.current_point,
-			state.current_target_valid ? 0xff56ff8fU : 0xff4f7dffU,
-			8.0F,
-		});
-	}
+          state.preview_points.push_back({
+              SelectionOverlayLayer::HoverVertex,
+              state.current_point,
+              state.current_target_valid ? 0xff56ff8fU : 0xff4f7dffU,
+              8.0F,
+          });
+        }
 	if (state.has_active_stroke && state.has_current && state.previous_point_index < state.point_positions.size()) {
-		state.preview_lines.push_back({
-			SelectionOverlayLayer::hover_edge,
-			state.point_positions[state.previous_point_index],
-			state.current_point,
-			state.current_target_valid ? 0xff16d9ffU : 0xff4f7dffU,
-			3.0F,
-		});
-	}
+          state.preview_lines.push_back({
+              SelectionOverlayLayer::HoverEdge,
+              state.point_positions[state.previous_point_index],
+              state.current_point,
+              state.current_target_valid ? 0xff16d9ffU : 0xff4f7dffU,
+              3.0F,
+          });
+        }
 }
 
 bool knife_object_allowed(const KnifeToolState& state, int object_id)
@@ -210,11 +212,11 @@ bool knife_object_allowed(const KnifeToolState& state, int object_id);
 quader::QVec3 project_point_to_plane(quader::QVec3 point, quader::QVec3 origin, quader::QVec3 normal)
 {
 	const float normal_length_squared = quader::length_squared(normal);
-	if (normal_length_squared <= transform_point_epsilon) {
-		return point;
-	}
+        if (normal_length_squared <= kTransformPointEpsilon) {
+          return point;
+        }
 
-	const float signed_distance = quader::dot(point - origin, normal) / normal_length_squared;
+        const float signed_distance = quader::dot(point - origin, normal) / normal_length_squared;
 	return point - (normal * signed_distance);
 }
 
@@ -234,10 +236,10 @@ std::optional<quader::QVec3> project_point_to_face_plane(
 	}
 
 	const quader::QVec3 normal = quader_poly::face_normal(document, *face);
-	if (quader::length_squared(normal) <= transform_point_epsilon) {
-		return std::nullopt;
-	}
-	return project_point_to_plane(point, origin->position, normal);
+        if (quader::length_squared(normal) <= kTransformPointEpsilon) {
+          return std::nullopt;
+        }
+        return project_point_to_plane(point, origin->position, normal);
 }
 
 /**
@@ -247,8 +249,8 @@ struct KnifeResolvedPoint {
 	bool has_point = false;
 	bool target_valid = false;
 	int object_id = -1;
-	quader_poly::ElementId face_id = quader_poly::invalid_element_id;
-	quader::QVec3 point;
+        quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
+        quader::QVec3 point;
 	quader::QVec3 normal { 0.0F, 1.0F, 0.0F };
 	quader_poly::KnifePointTarget target;
 };
@@ -260,13 +262,14 @@ bool fill_knife_vertex_target(
 		KnifeResolvedPoint& out_point)
 {
 	quader_poly::PickOptions options;
-	options.mode = quader_poly::SelectionMode::vertex;
-	const std::optional<PickHitRecord> hit = session.pick_nearest({ ray, options });
-	if (!hit.has_value() || hit->kind != quader_poly::ElementKind::vertex || !knife_object_allowed(state, hit->object_id)) {
-		return false;
-	}
+        options.mode = quader_poly::SelectionMode::Vertex;
+        const std::optional<PickHitRecord> hit = session.pick_nearest({ ray, options });
+        if (!hit.has_value() || hit->kind != quader_poly::ElementKind::Vertex ||
+            !knife_object_allowed(state, hit->object_id)) {
+          return false;
+        }
 
-	const PolygonObject *object = object_by_id(session.objects(), hit->object_id);
+        const PolygonObject *object = object_by_id(session.objects(), hit->object_id);
 	const quader_poly::Vertex *vertex = object != nullptr ? quader_poly::find_vertex(object->document, hit->vertex_id) : nullptr;
 	if (vertex == nullptr) {
 		return false;
@@ -277,9 +280,11 @@ bool fill_knife_vertex_target(
 	out_point.object_id = hit->object_id;
 	out_point.face_id = hit->face_id;
 	out_point.point = vertex->position;
-	out_point.normal = vec3_normalize_or(hit->local_normal, { 0.0F, 1.0F, 0.0F }, transform_point_epsilon);
-	out_point.target.kind = quader_poly::KnifePointTargetKind::existing_vertex;
-	out_point.target.vertex_id = vertex->id;
+        out_point.normal = vec3_normalize_or(
+            hit->local_normal, {0.0F, 1.0F, 0.0F}, kTransformPointEpsilon);
+        out_point.target.kind =
+            quader_poly::KnifePointTargetKind::ExistingVertex;
+        out_point.target.vertex_id = vertex->id;
 	out_point.target.face_id = hit->face_id;
 	out_point.target.position = vertex->position;
 	return true;
@@ -294,13 +299,14 @@ bool fill_knife_edge_target(
 		KnifeResolvedPoint& out_point)
 {
 	quader_poly::PickOptions options;
-	options.mode = quader_poly::SelectionMode::edge;
-	const std::optional<PickHitRecord> hit = session.pick_nearest({ ray, options });
-	if (!hit.has_value() || hit->kind != quader_poly::ElementKind::edge || !knife_object_allowed(state, hit->object_id)) {
-		return false;
-	}
+        options.mode = quader_poly::SelectionMode::Edge;
+        const std::optional<PickHitRecord> hit = session.pick_nearest({ ray, options });
+        if (!hit.has_value() || hit->kind != quader_poly::ElementKind::Edge ||
+            !knife_object_allowed(state, hit->object_id)) {
+          return false;
+        }
 
-	const PolygonObject *object = object_by_id(session.objects(), hit->object_id);
+        const PolygonObject *object = object_by_id(session.objects(), hit->object_id);
 	if (object == nullptr) {
 		return false;
 	}
@@ -323,9 +329,10 @@ bool fill_knife_edge_target(
 	out_point.object_id = hit->object_id;
 	out_point.face_id = hit->face_id;
 	out_point.point = *point;
-	out_point.normal = vec3_normalize_or(hit->local_normal, { 0.0F, 1.0F, 0.0F }, transform_point_epsilon);
-	out_point.target.kind = quader_poly::KnifePointTargetKind::existing_edge;
-	out_point.target.edge = quader_poly::make_edge(hit->edge.a, hit->edge.b);
+        out_point.normal = vec3_normalize_or(
+            hit->local_normal, {0.0F, 1.0F, 0.0F}, kTransformPointEpsilon);
+        out_point.target.kind = quader_poly::KnifePointTargetKind::ExistingEdge;
+        out_point.target.edge = quader_poly::make_edge(hit->edge.a, hit->edge.b);
 	out_point.target.edge_factor = std::clamp(*factor, 0.01F, 0.99F);
 	out_point.target.face_id = hit->face_id;
 	out_point.target.position = *point;
@@ -342,13 +349,14 @@ bool fill_knife_face_point(
 		KnifeResolvedPoint& out_point)
 {
 	quader_poly::PickOptions options;
-	options.mode = quader_poly::SelectionMode::face;
-	const std::optional<PickHitRecord> hit = session.pick_nearest({ ray, options });
-	if (!hit.has_value() || hit->kind != quader_poly::ElementKind::face || !knife_object_allowed(state, hit->object_id)) {
-		return false;
-	}
+        options.mode = quader_poly::SelectionMode::Face;
+        const std::optional<PickHitRecord> hit = session.pick_nearest({ ray, options });
+        if (!hit.has_value() || hit->kind != quader_poly::ElementKind::Face ||
+            !knife_object_allowed(state, hit->object_id)) {
+          return false;
+        }
 
-	const PickHitRecord surface_hit = *hit;
+        const PickHitRecord surface_hit = *hit;
 	const PolygonObject *object = object_by_id(session.objects(), surface_hit.object_id);
 	quader::QVec3 point = surface_hit.local_position;
 	if (state.has_active_stroke && constrain_axis && state.previous_point_index < state.point_positions.size()) {
@@ -374,9 +382,11 @@ bool fill_knife_face_point(
 	out_point.object_id = surface_hit.object_id;
 	out_point.face_id = surface_hit.face_id;
 	out_point.point = point;
-	out_point.normal = vec3_normalize_or(surface_hit.local_normal, { 0.0F, 1.0F, 0.0F }, transform_point_epsilon);
-	out_point.target.kind = quader_poly::KnifePointTargetKind::face_point;
-	out_point.target.face_id = surface_hit.face_id;
+        out_point.normal =
+            vec3_normalize_or(surface_hit.local_normal, {0.0F, 1.0F, 0.0F},
+                              kTransformPointEpsilon);
+        out_point.target.kind = quader_poly::KnifePointTargetKind::FacePoint;
+        out_point.target.face_id = surface_hit.face_id;
 	out_point.target.position = point;
 	return true;
 }
@@ -448,13 +458,14 @@ std::optional<quader_poly::Edge> shared_face_edge(const quader_poly::Face& first
 bool knife_target_is_on_edge(const quader_poly::KnifePointTarget& target, quader_poly::Edge edge)
 {
 	edge = quader_poly::make_edge(edge.a, edge.b);
-	if ((target.kind == quader_poly::KnifePointTargetKind::existing_vertex ||
-			target.kind == quader_poly::KnifePointTargetKind::inserted_vertex) &&
-		(target.vertex_id == edge.a || target.vertex_id == edge.b)) {
-		return true;
-	}
-	return target.kind == quader_poly::KnifePointTargetKind::existing_edge &&
-		quader_poly::make_edge(target.edge.a, target.edge.b) == edge;
+        if ((target.kind == quader_poly::KnifePointTargetKind::ExistingVertex ||
+             target.kind ==
+                 quader_poly::KnifePointTargetKind::InsertedVertex) &&
+            (target.vertex_id == edge.a || target.vertex_id == edge.b)) {
+          return true;
+        }
+        return target.kind == quader_poly::KnifePointTargetKind::ExistingEdge &&
+               quader_poly::make_edge(target.edge.a, target.edge.b) == edge;
 }
 
 float edge_factor_nearest_segment(
@@ -471,10 +482,10 @@ float edge_factor_nearest_segment(
 	}
 
 	quader_geometry::QSegmentSegmentFactorOptions<float> options;
-	options.length_squared_epsilon = transform_point_epsilon;
-	options.closest_epsilon = transform_point_epsilon;
-	options.parameter_epsilon = transform_point_epsilon;
-	options.min_factor = 0.01F;
+        options.length_squared_epsilon = kTransformPointEpsilon;
+        options.closest_epsilon = kTransformPointEpsilon;
+        options.parameter_epsilon = kTransformPointEpsilon;
+        options.min_factor = 0.01F;
 	options.max_factor = 0.99F;
 
 	const quader_geometry::QSegmentFactorClosestPoint3<float> closest =
@@ -500,34 +511,37 @@ std::optional<float> edge_factor_from_camera_cut_plane(
 	}
 
 	const quader::QVec3 camera_origin = camera.transform.origin;
-	const quader::QVec3 camera_forward = vec3_normalize_or(
-			camera.transform.z_axis * -1.0F,
-			{ 0.0F, 0.0F, -1.0F },
-			transform_point_epsilon);
-	const quader::QVec3 segment_delta = segment_end - segment_start;
+        const quader::QVec3 camera_forward =
+            vec3_normalize_or(camera.transform.z_axis * -1.0F,
+                              {0.0F, 0.0F, -1.0F}, kTransformPointEpsilon);
+        const quader::QVec3 segment_delta = segment_end - segment_start;
 	quader::QVec3 cut_plane_normal;
-	if (camera.projection == CameraProjection::orthographic) {
-		cut_plane_normal = quader::cross(segment_delta, camera_forward);
-	} else {
-		cut_plane_normal = quader::cross(segment_start - camera_origin, segment_end - camera_origin);
-	}
-	if (quader::length_squared(cut_plane_normal) <= transform_point_epsilon) {
-		return std::nullopt;
-	}
+        if (camera.projection == CameraProjection::Orthographic) {
+          cut_plane_normal = quader::cross(segment_delta, camera_forward);
+        } else {
+          cut_plane_normal = quader::cross(segment_start - camera_origin,
+                                           segment_end - camera_origin);
+        }
+        if (quader::length_squared(cut_plane_normal) <=
+            kTransformPointEpsilon) {
+          return std::nullopt;
+        }
 
-	const quader_geometry::QPlane3<float> cut_plane = quader_geometry::plane_from_point_normal(
-		tool_geometry_vec3(segment_start),
-		tool_geometry_vec3(cut_plane_normal),
-		transform_point_epsilon);
-	const quader_geometry::QSegmentPlaneHit<float> hit = quader_geometry::intersect_segment_plane(
-		quader_geometry::QSegment3<float> { tool_geometry_vec3(edge_start->position), tool_geometry_vec3(edge_end->position) },
-		cut_plane,
-		transform_point_epsilon);
-	if (hit.type != quader_geometry::QPlaneIntersectionType::point) {
-		return std::nullopt;
-	}
+        const quader_geometry::QPlane3<float> cut_plane =
+            quader_geometry::plane_from_point_normal(
+                tool_geometry_vec3(segment_start),
+                tool_geometry_vec3(cut_plane_normal), kTransformPointEpsilon);
+        const quader_geometry::QSegmentPlaneHit<float> hit =
+            quader_geometry::intersect_segment_plane(
+                quader_geometry::QSegment3<float>{
+                    tool_geometry_vec3(edge_start->position),
+                    tool_geometry_vec3(edge_end->position)},
+                cut_plane, kTransformPointEpsilon);
+        if (hit.type != quader_geometry::QPlaneIntersectionType::Point) {
+          return std::nullopt;
+        }
 
-	const float factor = hit.segment_factor;
+        const float factor = hit.segment_factor;
 	if (!std::isfinite(factor) || factor <= 0.01F || factor >= 0.99F) {
 		return std::nullopt;
 	}
@@ -540,8 +554,8 @@ std::optional<float> edge_factor_from_camera_cut_plane(
 struct KnifeScreenEdgeHit {
 	quader_poly::Edge edge;
 	float edge_factor = 0.5F;
-	quader_poly::ElementId face_id = quader_poly::invalid_element_id;
-	double segment_factor = 0.0;
+        quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
+        double segment_factor = 0.0;
 	quader::QVec3 position;
 };
 
@@ -557,21 +571,22 @@ std::optional<std::pair<double, double>> screen_segment_intersection_factors(
 			tool_geometry_vec2(line_end),
 			tool_geometry_vec2(edge_start),
 			tool_geometry_vec2(edge_end));
-	if (!intersection.hit || intersection.kind != quader_geometry::QSegmentIntersectionKind2::point) {
-		return std::nullopt;
-	}
+        if (!intersection.hit ||
+            intersection.kind !=
+                quader_geometry::QSegmentIntersectionKind2::Point) {
+          return std::nullopt;
+        }
 
-	const double line_factor = intersection.first_factors[0];
+        const double line_factor = intersection.first_factors[0];
 	const double edge_factor = intersection.second_factors[0];
-	constexpr double endpoint_tolerance = 0.0001;
-	if (line_factor <= endpoint_tolerance ||
-		line_factor >= 1.0 - endpoint_tolerance ||
-		edge_factor <= 0.01 ||
-		edge_factor >= 0.99) {
-		return std::nullopt;
-	}
+        constexpr double kEndpointTolerance = 0.0001;
+        if (line_factor <= kEndpointTolerance ||
+            line_factor >= 1.0 - kEndpointTolerance || edge_factor <= 0.01 ||
+            edge_factor >= 0.99) {
+          return std::nullopt;
+        }
 
-	return std::pair { line_factor, edge_factor };
+        return std::pair { line_factor, edge_factor };
 }
 
 std::optional<quader_poly::ElementId> knife_screen_edge_hit_face(
@@ -582,8 +597,8 @@ std::optional<quader_poly::ElementId> knife_screen_edge_hit_face(
 		quader::QVec2 screen_hit)
 {
 	quader_poly::PickOptions options;
-	options.mode = quader_poly::SelectionMode::face;
-	const std::optional<PickHitRecord> surface_hit =
+        options.mode = quader_poly::SelectionMode::Face;
+        const std::optional<PickHitRecord> surface_hit =
 		session.pick_nearest({ ray_from_viewport_screen_point(camera, screen_hit), options });
 	if (!surface_hit.has_value() || surface_hit->object_id != object_id) {
 		return std::nullopt;
@@ -625,14 +640,14 @@ std::vector<KnifeScreenEdgeHit> collect_knife_screen_edge_hits(
 	const quader_poly::KnifePointTarget& current_target = state.current_target;
 	for (quader_poly::Edge edge : quader_poly::document_edges(object->document)) {
 		edge = quader_poly::make_edge(edge.a, edge.b);
-		if (edge.a == quader_poly::invalid_element_id ||
-			edge.b == quader_poly::invalid_element_id ||
-			knife_target_is_on_edge(previous_target, edge) ||
-			knife_target_is_on_edge(current_target, edge)) {
-			continue;
-		}
+                if (edge.a == quader_poly::kInvalidElementId ||
+                    edge.b == quader_poly::kInvalidElementId ||
+                    knife_target_is_on_edge(previous_target, edge) ||
+                    knife_target_is_on_edge(current_target, edge)) {
+                  continue;
+                }
 
-		const quader_poly::Vertex *first = quader_poly::find_vertex(object->document, edge.a);
+                const quader_poly::Vertex *first = quader_poly::find_vertex(object->document, edge.a);
 		const quader_poly::Vertex *second = quader_poly::find_vertex(object->document, edge.b);
 		if (first == nullptr || second == nullptr ||
 			viewport_point_is_behind_camera(camera, first->position) ||
@@ -675,13 +690,17 @@ std::vector<KnifeScreenEdgeHit> collect_knife_screen_edge_hits(
 
 		const float edge_factor = *cut_plane_edge_factor;
 		const std::optional<quader::QVec3> position = edge_position_from_factor(object->document, edge, edge_factor);
-		if (!position.has_value() ||
-			quader::length_squared(*position - state.point_positions[state.previous_point_index]) <= transform_point_epsilon ||
-			quader::length_squared(*position - state.current_point) <= transform_point_epsilon) {
-			continue;
-		}
+                if (!position.has_value() ||
+                    quader::length_squared(
+                        *position -
+                        state.point_positions[state.previous_point_index]) <=
+                        kTransformPointEpsilon ||
+                    quader::length_squared(*position - state.current_point) <=
+                        kTransformPointEpsilon) {
+                  continue;
+                }
 
-		const auto duplicate = std::find_if(hits.begin(), hits.end(), [edge, edge_factor](const KnifeScreenEdgeHit& hit) {
+                const auto duplicate = std::find_if(hits.begin(), hits.end(), [edge, edge_factor](const KnifeScreenEdgeHit& hit) {
 			return hit.edge == edge || (std::abs(hit.edge_factor - edge_factor) <= 0.0001F && hit.edge == edge);
 		});
 		if (duplicate != hits.end()) {
@@ -713,14 +732,17 @@ bool append_knife_screen_edge_hits(EditorSession& session, KnifeToolState& state
 {
 	bool appended = false;
 	for (const KnifeScreenEdgeHit& hit : collect_knife_screen_edge_hits(session, state, camera)) {
-		if (state.previous_point_index < state.point_positions.size() &&
-			quader::length_squared(hit.position - state.point_positions[state.previous_point_index]) <= transform_point_epsilon) {
-			continue;
-		}
+          if (state.previous_point_index < state.point_positions.size() &&
+              quader::length_squared(
+                  hit.position -
+                  state.point_positions[state.previous_point_index]) <=
+                  kTransformPointEpsilon) {
+            continue;
+          }
 
-		quader_poly::KnifePointTarget target;
-		target.kind = quader_poly::KnifePointTargetKind::existing_edge;
-		target.edge = hit.edge;
+                quader_poly::KnifePointTarget target;
+                target.kind = quader_poly::KnifePointTargetKind::ExistingEdge;
+                target.edge = hit.edge;
 		target.edge_factor = hit.edge_factor;
 		target.face_id = hit.face_id;
 		target.position = hit.position;
@@ -754,13 +776,13 @@ std::optional<std::uint32_t> append_knife_boundary_crossing_point(EditorSession&
 
 	const quader_poly::KnifePointTarget& previous_target = state.points[state.previous_point_index];
 	const quader_poly::KnifePointTarget& current_target = state.current_target;
-	if (previous_target.face_id == quader_poly::invalid_element_id ||
-		current_target.face_id == quader_poly::invalid_element_id ||
-		previous_target.face_id == current_target.face_id) {
-		return std::nullopt;
-	}
+        if (previous_target.face_id == quader_poly::kInvalidElementId ||
+            current_target.face_id == quader_poly::kInvalidElementId ||
+            previous_target.face_id == current_target.face_id) {
+          return std::nullopt;
+        }
 
-	const quader_poly::Face *previous_face = quader_poly::find_face(object->document, previous_target.face_id);
+        const quader_poly::Face *previous_face = quader_poly::find_face(object->document, previous_target.face_id);
 	const quader_poly::Face *current_face = quader_poly::find_face(object->document, current_target.face_id);
 	if (previous_face == nullptr || current_face == nullptr) {
 		return std::nullopt;
@@ -779,18 +801,22 @@ std::optional<std::uint32_t> append_knife_boundary_crossing_point(EditorSession&
 		state.point_positions[state.previous_point_index],
 		state.current_point);
 	const std::optional<quader::QVec3> crossing_position = edge_position_from_factor(object->document, *crossing_edge, factor);
-	if (!crossing_position.has_value() ||
-		quader::length_squared(*crossing_position - state.point_positions[state.previous_point_index]) <= transform_point_epsilon ||
-		quader::length_squared(*crossing_position - state.current_point) <= transform_point_epsilon) {
-		return std::nullopt;
-	}
+        if (!crossing_position.has_value() ||
+            quader::length_squared(
+                *crossing_position -
+                state.point_positions[state.previous_point_index]) <=
+                kTransformPointEpsilon ||
+            quader::length_squared(*crossing_position - state.current_point) <=
+                kTransformPointEpsilon) {
+          return std::nullopt;
+        }
 
-	quader_poly::KnifePointTarget crossing_target;
-	crossing_target.kind = quader_poly::KnifePointTargetKind::existing_edge;
-	crossing_target.edge = quader_poly::make_edge(crossing_edge->a, crossing_edge->b);
+        quader_poly::KnifePointTarget crossing_target;
+        crossing_target.kind = quader_poly::KnifePointTargetKind::ExistingEdge;
+        crossing_target.edge = quader_poly::make_edge(crossing_edge->a, crossing_edge->b);
 	crossing_target.edge_factor = factor;
-	crossing_target.face_id = quader_poly::invalid_element_id;
-	crossing_target.position = *crossing_position;
+        crossing_target.face_id = quader_poly::kInvalidElementId;
+        crossing_target.position = *crossing_position;
 
 	const std::uint32_t crossing_index = append_knife_point(state, crossing_target, *crossing_position);
 	if (crossing_index != state.previous_point_index) {
@@ -821,8 +847,8 @@ bool update_knife_preview_from_pick(
 		state.has_current = false;
 		state.current_target_valid = false;
 		state.intersection_preview_points.clear();
-		state.status = KnifeToolStatus::hover_miss;
-		hover = {};
+                state.status = KnifeToolStatus::HoverMiss;
+                hover = {};
 		rebuild_knife_overlay(state);
 		return false;
 	}
@@ -830,8 +856,8 @@ bool update_knife_preview_from_pick(
 		state.has_current = false;
 		state.current_target_valid = false;
 		state.intersection_preview_points.clear();
-		state.status = KnifeToolStatus::invalid_target;
-		hover = {};
+                state.status = KnifeToolStatus::InvalidTarget;
+                hover = {};
 		rebuild_knife_overlay(state);
 		return false;
 	}
@@ -843,24 +869,29 @@ bool update_knife_preview_from_pick(
 	state.current_point = point.point;
 	state.current_target = point.target;
 	state.face_normal = point.normal;
-	state.status = target_valid ? KnifeToolStatus::preview : KnifeToolStatus::invalid_target;
-	hover = {};
-	hover.vertex_id = quader_poly::invalid_element_id;
-	hover.edge = {};
-	if (point.target_valid && point.target.kind == quader_poly::KnifePointTargetKind::existing_vertex) {
-		hover.object_id = point.object_id;
-		hover.kind = SelectionHoverKind::vertex;
-		hover.vertex_id = point.target.vertex_id;
-		hover.face_id = point.face_id;
-		hover.candidate_object_id = point.object_id;
-	} else if (point.target_valid && point.target.kind == quader_poly::KnifePointTargetKind::existing_edge) {
-		hover.object_id = point.object_id;
-		hover.kind = SelectionHoverKind::edge;
-		hover.edge = point.target.edge;
-		hover.face_id = point.face_id;
-		hover.candidate_object_id = point.object_id;
-	}
-	hover.selected_modifier_pressed = false;
+        state.status = target_valid ? KnifeToolStatus::Preview
+                                    : KnifeToolStatus::InvalidTarget;
+        hover = {};
+        hover.vertex_id = quader_poly::kInvalidElementId;
+        hover.edge = {};
+        if (point.target_valid &&
+            point.target.kind ==
+                quader_poly::KnifePointTargetKind::ExistingVertex) {
+          hover.object_id = point.object_id;
+          hover.kind = SelectionHoverKind::Vertex;
+          hover.vertex_id = point.target.vertex_id;
+          hover.face_id = point.face_id;
+          hover.candidate_object_id = point.object_id;
+        } else if (point.target_valid &&
+                   point.target.kind ==
+                       quader_poly::KnifePointTargetKind::ExistingEdge) {
+          hover.object_id = point.object_id;
+          hover.kind = SelectionHoverKind::Edge;
+          hover.edge = point.target.edge;
+          hover.face_id = point.face_id;
+          hover.candidate_object_id = point.object_id;
+        }
+        hover.selected_modifier_pressed = false;
 	refresh_knife_intersection_preview(session, state, camera);
 	return target_valid;
 }
@@ -870,15 +901,16 @@ void refresh_knife_intersection_preview(EditorSession& session, KnifeToolState& 
 	state.intersection_preview_points.clear();
 	if (state.has_active_stroke && state.has_current && state.current_target_valid) {
 		for (const KnifeScreenEdgeHit& hit : collect_knife_screen_edge_hits(session, state, camera)) {
-			const auto duplicate = std::find_if(
-				state.intersection_preview_points.begin(),
-				state.intersection_preview_points.end(),
-				[&hit](const quader::QVec3& point) {
-					return quader::length_squared(point - hit.position) <= transform_point_epsilon;
-				});
-			if (duplicate == state.intersection_preview_points.end()) {
-				state.intersection_preview_points.push_back(hit.position);
-			}
+                  const auto duplicate = std::find_if(
+                      state.intersection_preview_points.begin(),
+                      state.intersection_preview_points.end(),
+                      [&hit](const quader::QVec3 &point) {
+                        return quader::length_squared(point - hit.position) <=
+                               kTransformPointEpsilon;
+                      });
+                  if (duplicate == state.intersection_preview_points.end()) {
+                    state.intersection_preview_points.push_back(hit.position);
+                  }
 		}
 	}
 	rebuild_knife_overlay(state);
@@ -895,8 +927,8 @@ bool accept_knife_current_point(EditorSession& session, KnifeToolState& state, c
 		state.active_stroke_start = point_index;
 		state.previous_point_index = point_index;
 		state.has_active_stroke = true;
-		state.status = KnifeToolStatus::previous_set;
-		state.has_current = false;
+                state.status = KnifeToolStatus::PreviousSet;
+                state.has_current = false;
 		state.current_target_valid = false;
 		state.intersection_preview_points.clear();
 		rebuild_knife_overlay(state);
@@ -914,8 +946,8 @@ bool accept_knife_current_point(EditorSession& session, KnifeToolState& state, c
 			});
 		}
 		state.has_active_stroke = false;
-		state.status = KnifeToolStatus::previous_set;
-	} else {
+                state.status = KnifeToolStatus::PreviousSet;
+        } else {
 		if (!append_knife_screen_edge_hits(session, state, camera)) {
 			(void)append_knife_boundary_crossing_point(session, state);
 		}
@@ -927,8 +959,8 @@ bool accept_knife_current_point(EditorSession& session, KnifeToolState& state, c
 			});
 		}
 		state.previous_point_index = point_index;
-		state.status = KnifeToolStatus::previous_set;
-	}
+                state.status = KnifeToolStatus::PreviousSet;
+        }
 
 	state.has_current = false;
 	state.current_target_valid = false;
@@ -964,8 +996,8 @@ CommandResult knife_segment(
 	object.selected = true;
 	object.selection = std::move(selection);
 	active_object_id = object.id;
-	mode = SelectionMode::vertex;
-	return ok_result(true);
+        mode = SelectionMode::Vertex;
+        return ok_result(true);
 }
 
 CommandResult knife_stroke(
@@ -995,8 +1027,8 @@ CommandResult knife_stroke(
 	object.selected = true;
 	object.selection = std::move(selection);
 	active_object_id = object.id;
-	mode = SelectionMode::vertex;
-	return ok_result(true);
+        mode = SelectionMode::Vertex;
+        return ok_result(true);
 }
 
 KnifeSegmentPreview build_knife_segment_preview(
@@ -1022,14 +1054,14 @@ KnifeSegmentPreview build_knife_segment_preview(
 	preview.message = document_preview.message;
 	preview.lines.reserve(document_preview.overlay.lines.size());
 	for (const quader_poly::OverlayLine& line : document_preview.overlay.lines) {
-		preview.lines.push_back({
-			SelectionOverlayLayer::hover_edge,
-			line.start,
-			line.end,
-			line.color,
-			line.width_pixels,
-		});
-	}
+          preview.lines.push_back({
+              SelectionOverlayLayer::HoverEdge,
+              line.start,
+              line.end,
+              line.color,
+              line.width_pixels,
+          });
+        }
 	return preview;
 }
 
@@ -1116,9 +1148,9 @@ CommandResult KnifeToolImpl::commit(EditorSession& session, KnifeToolState& stat
 		return ok_result(false);
 	}
 	if (state.target_object_id <= 0) {
-		state.status = KnifeToolStatus::invalid_target;
-		rebuild_knife_overlay(state);
-		return error_result("Knife needs a locked target mesh.");
+          state.status = KnifeToolStatus::InvalidTarget;
+          rebuild_knife_overlay(state);
+          return error_result("Knife needs a locked target mesh.");
 	}
 
 	const CommandResult result = session.apply_history_command([&state](EditorSession& editor_session) {
@@ -1128,9 +1160,10 @@ CommandResult KnifeToolImpl::commit(EditorSession& session, KnifeToolState& stat
 			state.segments);
 	});
 	if (!result.ok || !result.changed) {
-		state.status = KnifeToolStatus::invalid_target;
-		rebuild_knife_overlay(state);
-		return result.ok ? error_result("Could not apply the knife stroke.") : result;
+          state.status = KnifeToolStatus::InvalidTarget;
+          rebuild_knife_overlay(state);
+          return result.ok ? error_result("Could not apply the knife stroke.")
+                           : result;
 	}
 
 	reset_knife_tool(state);

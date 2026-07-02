@@ -24,8 +24,9 @@ struct TypedAssetRevision {
 };
 
 template <typename Tag>
-constexpr TypedAssetRevision<Tag> nextRevision(TypedAssetRevision<Tag> revision) {
-    return TypedAssetRevision<Tag>{revision.value == 0 ? 1 : revision.value + 1};
+constexpr TypedAssetRevision<Tag>
+next_revision(TypedAssetRevision<Tag> revision) {
+  return TypedAssetRevision<Tag>{revision.value == 0 ? 1 : revision.value + 1};
 }
 
 /**

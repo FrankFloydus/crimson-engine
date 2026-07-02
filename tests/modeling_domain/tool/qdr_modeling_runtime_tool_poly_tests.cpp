@@ -11,9 +11,9 @@
 
 TEST(QdrModelingRuntimeToolPolyTests, ViewportGridPointPlacementCanSnapOrPreserveRawPositions) {
 	quader_editor_core::ViewportCameraState camera;
-	camera.projection = quader_editor_core::CameraProjection::perspective;
+        camera.projection = quader_editor_core::CameraProjection::Perspective;
 
-	const quader_editor_core::CutGridPointResult snapped =
+        const quader_editor_core::CutGridPointResult snapped =
 		quader_editor_core::viewport_grid_point_from_ray(
 			camera,
 			{ { 0.49F, 2.0F, 1.51F }, { 0.0F, -1.0F, 0.0F } },

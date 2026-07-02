@@ -27,311 +27,322 @@ namespace {
  */
 struct SceneSelectionSnapshot {
     std::vector<EntityId> selected;
-    EntityId active = InvalidEntityId;
+    EntityId active = kInvalidEntityId;
 };
 
-SceneSelectionSnapshot captureSceneSelection(const ProjectSession& session) {
-    return {
-            .selected = session.scene().selectedEntities(),
-            .active = session.scene().primarySelection(),
-    };
+SceneSelectionSnapshot capture_scene_selection(const ProjectSession &session) {
+  return {
+      .selected = session.scene().selected_entities(),
+      .active = session.scene().primary_selection(),
+  };
 }
 
-bool sceneSelectionChanged(const SceneSelectionSnapshot& before, const ProjectSession& session) {
-    return before.selected != session.scene().selectedEntities() ||
-            before.active != session.scene().primarySelection();
+bool scene_selection_changed(const SceneSelectionSnapshot &before,
+                             const ProjectSession &session) {
+  return before.selected != session.scene().selected_entities() ||
+         before.active != session.scene().primary_selection();
 }
 
-bool sceneSelectionContainsNonModelingEntity(const ProjectSession& session) {
-    for (const EntityId entity : session.scene().selectedEntities()) {
-        if (session.scene().modelingObject(entity) == nullptr) {
-            return true;
-        }
+bool scene_selection_contains_non_modeling_entity(
+    const ProjectSession &session) {
+  for (const EntityId entity : session.scene().selected_entities()) {
+    if (session.scene().modeling_object(entity) == nullptr) {
+      return true;
     }
-    return false;
+  }
+  return false;
 }
 
-void projectObjectSelectionAfterHistorySelectionChange(
-        ProjectSession& session,
-        const SceneSelectionSnapshot& before,
-        const CommandResult& result) {
-    if (!result.ok || !result.changed || !sceneSelectionChanged(before, session)) {
-        return;
-    }
+void project_object_selection_after_history_selection_change(
+    ProjectSession &session, const SceneSelectionSnapshot &before,
+    const CommandResult &result) {
+  if (!result.ok || !result.changed ||
+      !scene_selection_changed(before, session)) {
+    return;
+  }
 
-    if (sceneSelectionContainsNonModelingEntity(session)) {
-        session.modeling().projectObjectSelectionFromScene(true);
-        return;
-    }
+  if (scene_selection_contains_non_modeling_entity(session)) {
+    session.modeling().project_object_selection_from_scene(true);
+    return;
+  }
 
-    const ModelingSelectionSummary summary = session.modeling().selectionSummary();
-    if (!summary.hasSelection || selectionModeUsesSceneDocument(summary.mode)) {
-        session.modeling().projectObjectSelectionFromScene();
-    }
+  const ModelingSelectionSummary summary =
+      session.modeling().selection_summary();
+  if (!summary.has_selection ||
+      selection_mode_uses_scene_document(summary.mode)) {
+    session.modeling().project_object_selection_from_scene();
+  }
 }
 
 } // namespace
 
 QuaderApiMutationRunner::QuaderApiMutationRunner(
-        ProjectSession& session,
-        EditorHistoryService& history,
-        EditorCommandService& editorCommands,
-        ModelingCommandExecutionService& modelingCommands)
-    : session_(session)
-    , history_(history)
-    , editorCommands_(editorCommands)
-    , modelingCommands_(modelingCommands) {}
+    ProjectSession &session, EditorHistoryService &history,
+    EditorCommandService &editor_commands,
+    ModelingCommandExecutionService &modeling_commands)
+    : session_(session), history_(history), editor_commands_(editor_commands),
+      modeling_commands_(modeling_commands) {}
 
-QuaderRevisionStamp QuaderApiMutationRunner::currentRevisions() const {
-    return quaderApiCurrentRevisions(session_);
+QuaderRevisionStamp QuaderApiMutationRunner::current_revisions() const {
+  return quader_api_current_revisions(session_);
 }
 
-EditorTransaction QuaderApiMutationRunner::beginTransaction(std::string label) {
-    return history_.beginTransaction(std::move(label));
+EditorTransaction
+QuaderApiMutationRunner::begin_transaction(std::string label) {
+  return history_.begin_transaction(std::move(label));
 }
 
-ModelingSessionMemento QuaderApiMutationRunner::captureModelingMemento() const {
-    return session_.modeling().captureHistoryMemento();
+ModelingSessionMemento
+QuaderApiMutationRunner::capture_modeling_memento() const {
+  return session_.modeling().capture_history_memento();
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::restoreModelingMemento(
-        const ModelingSessionMemento& memento,
-        std::string_view label) {
-    return statusFrom(session_.modeling().restoreHistoryMemento(memento), QuaderMutationKind::Modeling, label);
+QuaderApiVoidResult QuaderApiMutationRunner::restore_modeling_memento(
+    const ModelingSessionMemento &memento, std::string_view label) {
+  return status_from(session_.modeling().restore_history_memento(memento),
+                     QuaderMutationKind::Modeling, label);
 }
 
-QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createEntity(const QuaderCreateEntityArgs& args) {
-    DocumentCreateEntityResult command = session_.documentCommands().createEntity(
-            args.name,
-            toSceneEntityKind(args.kind),
-            args.parent,
-            toSceneTransform(args.transform));
-    const EntityId createdEntity = command.entity;
+QuaderApiResult<QuaderEntityRef>
+QuaderApiMutationRunner::create_entity(const QuaderCreateEntityArgs &args) {
+  DocumentCreateEntityResult command =
+      session_.document_commands().create_entity(
+          args.name, to_scene_entity_kind(args.kind), args.parent,
+          to_scene_transform(args.transform));
+  const EntityId created_entity = command.entity;
 
-    const QuaderApiVoidResult status = runDocumentResult(std::move(command), "Create Entity");
-    QuaderApiResult<QuaderEntityRef> result = quaderApiResultFromStatus<QuaderEntityRef>(status);
-    if (result.ok && result.changed) {
-        result.value = QuaderEntityRef{
-                .id = createdEntity,
-                .uuid = session_.scene().uuid(createdEntity),
-                .editorObjectId = session_.scene().editorObjectId(createdEntity),
-        };
-    }
-    return result;
+  const QuaderApiVoidResult status =
+      run_document_result(std::move(command), "Create Entity");
+  QuaderApiResult<QuaderEntityRef> result =
+      quader_api_result_from_status<QuaderEntityRef>(status);
+  if (result.ok && result.changed) {
+    result.value = QuaderEntityRef{
+        .id = created_entity,
+        .uuid = session_.scene().uuid(created_entity),
+        .editor_object_id = session_.scene().editor_object_id(created_entity),
+    };
+  }
+  return result;
 }
 
-QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createPointLight(const QuaderCreatePointLightArgs& args) {
-    DocumentCreateEntityResult command = session_.documentCommands().createPointLight(
-            args.name,
-            toSceneLightComponent(args.light),
-            args.parent,
-            toSceneTransform(args.transform),
-            args.selectCreated);
-    const EntityId createdEntity = command.entity;
-    if (command.ok && command.changed && args.selectCreated) {
-        session_.modeling().projectObjectSelectionFromScene(true);
-    }
+QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::create_point_light(
+    const QuaderCreatePointLightArgs &args) {
+  DocumentCreateEntityResult command =
+      session_.document_commands().create_point_light(
+          args.name, to_scene_light_component(args.light), args.parent,
+          to_scene_transform(args.transform), args.select_created);
+  const EntityId created_entity = command.entity;
+  if (command.ok && command.changed && args.select_created) {
+    session_.modeling().project_object_selection_from_scene(true);
+  }
 
-    const QuaderApiVoidResult status = runDocumentResult(std::move(command), "Create Point Light");
-    QuaderApiResult<QuaderEntityRef> result = quaderApiResultFromStatus<QuaderEntityRef>(status);
-    if (result.ok && result.changed) {
-        result.value = QuaderEntityRef{
-                .id = createdEntity,
-                .uuid = session_.scene().uuid(createdEntity),
-                .editorObjectId = session_.scene().editorObjectId(createdEntity),
-        };
-    }
-    return result;
+  const QuaderApiVoidResult status =
+      run_document_result(std::move(command), "Create Point Light");
+  QuaderApiResult<QuaderEntityRef> result =
+      quader_api_result_from_status<QuaderEntityRef>(status);
+  if (result.ok && result.changed) {
+    result.value = QuaderEntityRef{
+        .id = created_entity,
+        .uuid = session_.scene().uuid(created_entity),
+        .editor_object_id = session_.scene().editor_object_id(created_entity),
+    };
+  }
+  return result;
 }
 
-QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createDirectionalLight(
-        const QuaderCreateDirectionalLightArgs& args) {
-    DocumentCreateEntityResult command = session_.documentCommands().createDirectionalLight(
-            args.name,
-            toSceneLightComponent(args.light),
-            args.parent,
-            toSceneTransform(args.transform),
-            args.selectCreated);
-    const EntityId createdEntity = command.entity;
-    if (command.ok && command.changed && args.selectCreated) {
-        session_.modeling().projectObjectSelectionFromScene(true);
-    }
+QuaderApiResult<QuaderEntityRef>
+QuaderApiMutationRunner::create_directional_light(
+    const QuaderCreateDirectionalLightArgs &args) {
+  DocumentCreateEntityResult command =
+      session_.document_commands().create_directional_light(
+          args.name, to_scene_light_component(args.light), args.parent,
+          to_scene_transform(args.transform), args.select_created);
+  const EntityId created_entity = command.entity;
+  if (command.ok && command.changed && args.select_created) {
+    session_.modeling().project_object_selection_from_scene(true);
+  }
 
-    const QuaderApiVoidResult status = runDocumentResult(std::move(command), "Create Directional Light");
-    QuaderApiResult<QuaderEntityRef> result = quaderApiResultFromStatus<QuaderEntityRef>(status);
-    if (result.ok && result.changed) {
-        result.value = QuaderEntityRef{
-                .id = createdEntity,
-                .uuid = session_.scene().uuid(createdEntity),
-                .editorObjectId = session_.scene().editorObjectId(createdEntity),
-        };
-    }
-    return result;
+  const QuaderApiVoidResult status =
+      run_document_result(std::move(command), "Create Directional Light");
+  QuaderApiResult<QuaderEntityRef> result =
+      quader_api_result_from_status<QuaderEntityRef>(status);
+  if (result.ok && result.changed) {
+    result.value = QuaderEntityRef{
+        .id = created_entity,
+        .uuid = session_.scene().uuid(created_entity),
+        .editor_object_id = session_.scene().editor_object_id(created_entity),
+    };
+  }
+  return result;
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::runDocumentCommand(CommandResult result, std::string_view label) {
-    QDR_PROFILE_FUNCTION();
-    return statusFrom(std::move(result), QuaderMutationKind::Document, label);
+QuaderApiVoidResult
+QuaderApiMutationRunner::run_document_command(CommandResult result,
+                                              std::string_view label) {
+  QDR_PROFILE_FUNCTION();
+  return status_from(std::move(result), QuaderMutationKind::Document, label);
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::runDocumentCommand(
-        std::unique_ptr<IUndoableCommand> command,
-        std::string_view label) {
-    QDR_PROFILE_FUNCTION();
-    return statusFrom(editorCommands_.execute(std::move(command)), QuaderMutationKind::Document, label);
+QuaderApiVoidResult QuaderApiMutationRunner::run_document_command(
+    std::unique_ptr<IUndoableCommand> command, std::string_view label) {
+  QDR_PROFILE_FUNCTION();
+  return status_from(editor_commands_.execute(std::move(command)),
+                     QuaderMutationKind::Document, label);
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::runDocumentResult(DocumentCommandResult result, std::string_view label) {
-    QDR_PROFILE_FUNCTION();
-    return statusFrom(std::move(result), QuaderMutationKind::Document, label);
+QuaderApiVoidResult
+QuaderApiMutationRunner::run_document_result(DocumentCommandResult result,
+                                             std::string_view label) {
+  QDR_PROFILE_FUNCTION();
+  return status_from(std::move(result), QuaderMutationKind::Document, label);
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::runModelingResult(
-        ModelingCommandResult result,
-        std::string_view label) {
-    QDR_PROFILE_FUNCTION();
-    return statusFrom(std::move(result), QuaderMutationKind::Modeling, label);
+QuaderApiVoidResult
+QuaderApiMutationRunner::run_modeling_result(ModelingCommandResult result,
+                                             std::string_view label) {
+  QDR_PROFILE_FUNCTION();
+  return status_from(std::move(result), QuaderMutationKind::Modeling, label);
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::runModelingCommand(
-        std::unique_ptr<ModelingMementoCommand> command,
-        std::string_view label) {
-    QDR_PROFILE_FUNCTION();
-    return statusFrom(editorCommands_.executeModeling(std::move(command)), QuaderMutationKind::Modeling, label);
+QuaderApiVoidResult QuaderApiMutationRunner::run_modeling_command(
+    std::unique_ptr<ModelingMementoCommand> command, std::string_view label) {
+  QDR_PROFILE_FUNCTION();
+  return status_from(editor_commands_.execute_modeling(std::move(command)),
+                     QuaderMutationKind::Modeling, label);
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::runModelingUndoableCommand(
-        std::unique_ptr<IUndoableCommand> command,
-        std::string_view label) {
-    QDR_PROFILE_FUNCTION();
-    return statusFrom(editorCommands_.execute(std::move(command)), QuaderMutationKind::Modeling, label);
+QuaderApiVoidResult QuaderApiMutationRunner::run_modeling_undoable_command(
+    std::unique_ptr<IUndoableCommand> command, std::string_view label) {
+  QDR_PROFILE_FUNCTION();
+  return status_from(editor_commands_.execute(std::move(command)),
+                     QuaderMutationKind::Modeling, label);
 }
 
-bool QuaderApiMutationRunner::canRunTrackedModelingTool(std::string_view toolId) const {
-    return modelingCommands_.availability(
-            session_.modeling(),
-            toolId,
-            &session_.selection()).enabled;
+bool QuaderApiMutationRunner::can_run_tracked_modeling_tool(
+    std::string_view tool_id) const {
+  return modeling_commands_
+      .availability(session_.modeling(), tool_id, &session_.selection())
+      .enabled;
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::runTrackedModelingTool(std::string_view toolId) {
-    QDR_PROFILE_FUNCTION();
-    return statusFrom(
-            modelingCommands_.execute(history_, session_.modeling(), session_.selection(), toolId),
-            QuaderMutationKind::Modeling,
-            toolId);
+QuaderApiVoidResult
+QuaderApiMutationRunner::run_tracked_modeling_tool(std::string_view tool_id) {
+  QDR_PROFILE_FUNCTION();
+  return status_from(modeling_commands_.execute(history_, session_.modeling(),
+                                                session_.selection(), tool_id),
+                     QuaderMutationKind::Modeling, tool_id);
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::beginTrackedModelingPreview(std::string_view actionId) {
-    return statusFrom(
-            modelingCommands_.beginPreview(history_, session_.modeling(), session_.selection(), actionId),
-            QuaderMutationKind::Modeling,
-            actionId);
+QuaderApiVoidResult QuaderApiMutationRunner::begin_tracked_modeling_preview(
+    std::string_view action_id) {
+  return status_from(
+      modeling_commands_.begin_preview(history_, session_.modeling(),
+                                       session_.selection(), action_id),
+      QuaderMutationKind::Modeling, action_id);
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::commitModelingPreview(std::string label) {
-    return statusFrom(
-            modelingCommands_.commitPreview(history_, session_.modeling(), std::move(label)),
-            QuaderMutationKind::Modeling,
-            "Commit Operation Preview");
+QuaderApiVoidResult
+QuaderApiMutationRunner::commit_modeling_preview(std::string label) {
+  return status_from(modeling_commands_.commit_preview(
+                         history_, session_.modeling(), std::move(label)),
+                     QuaderMutationKind::Modeling, "Commit Operation Preview");
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::cancelModelingPreview() {
-    return statusFrom(
-            modelingCommands_.cancelPreview(session_.modeling()),
-            QuaderMutationKind::Runtime,
-            "Cancel Operation Preview");
+QuaderApiVoidResult QuaderApiMutationRunner::cancel_modeling_preview() {
+  return status_from(modeling_commands_.cancel_preview(session_.modeling()),
+                     QuaderMutationKind::Runtime, "Cancel Operation Preview");
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::runAssetResult(bool changed, std::string_view label) {
-    return quaderApiVoidStatus(session_, true, changed, {}, QuaderMutationKind::Asset, label);
+QuaderApiVoidResult
+QuaderApiMutationRunner::run_asset_result(bool changed,
+                                          std::string_view label) {
+  return quader_api_void_status(session_, true, changed, {},
+                                QuaderMutationKind::Asset, label);
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::runAssetFailure(std::string message) {
-    return quaderApiFailureStatus(session_, std::move(message));
+QuaderApiVoidResult
+QuaderApiMutationRunner::run_asset_failure(std::string message) {
+  return quader_api_failure_status(session_, std::move(message));
 }
 
-bool QuaderApiMutationRunner::canUndo() const {
-    if (session_.modeling().canCancelActivePreviewForUndo()) {
-        return true;
-    }
-    return history_.canUndo();
+bool QuaderApiMutationRunner::can_undo() const {
+  if (session_.modeling().can_cancel_active_preview_for_undo()) {
+    return true;
+  }
+  return history_.can_undo();
 }
 
-bool QuaderApiMutationRunner::canRedo() const {
-    if (session_.modeling().canCancelActivePreviewForUndo()) {
-        return false;
-    }
-    return history_.canRedo();
+bool QuaderApiMutationRunner::can_redo() const {
+  if (session_.modeling().can_cancel_active_preview_for_undo()) {
+    return false;
+  }
+  return history_.can_redo();
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::undo() {
-    if (session_.modeling().canCancelActivePreviewForUndo()) {
-        const ModelingCommandResult cancel = cancelActiveToolOrPreviewForUndo();
-        if (!cancel.ok || cancel.changed || !history_.canUndo()) {
-            return statusFrom(cancel, QuaderMutationKind::Runtime, "Undo");
-        }
+  if (session_.modeling().can_cancel_active_preview_for_undo()) {
+    const ModelingCommandResult cancel =
+        cancel_active_tool_or_preview_for_undo();
+    if (!cancel.ok || cancel.changed || !history_.can_undo()) {
+      return status_from(cancel, QuaderMutationKind::Runtime, "Undo");
     }
-    const SceneSelectionSnapshot before = captureSceneSelection(session_);
-    CommandResult result = editorCommands_.undo();
-    projectObjectSelectionAfterHistorySelectionChange(session_, before, result);
-    return statusFrom(std::move(result), QuaderMutationKind::Document, "Undo");
+  }
+  const SceneSelectionSnapshot before = capture_scene_selection(session_);
+  CommandResult result = editor_commands_.undo();
+  project_object_selection_after_history_selection_change(session_, before,
+                                                          result);
+  return status_from(std::move(result), QuaderMutationKind::Document, "Undo");
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::redo() {
-    if (!canRedo()) {
-        return statusFrom(commandInvalidResult("Redo is not available"), QuaderMutationKind::Document, "Redo");
-    }
-    const SceneSelectionSnapshot before = captureSceneSelection(session_);
-    CommandResult result = editorCommands_.redo();
-    projectObjectSelectionAfterHistorySelectionChange(session_, before, result);
-    return statusFrom(std::move(result), QuaderMutationKind::Document, "Redo");
+  if (!can_redo()) {
+    return status_from(command_invalid_result("Redo is not available"),
+                       QuaderMutationKind::Document, "Redo");
+  }
+  const SceneSelectionSnapshot before = capture_scene_selection(session_);
+  CommandResult result = editor_commands_.redo();
+  project_object_selection_after_history_selection_change(session_, before,
+                                                          result);
+  return status_from(std::move(result), QuaderMutationKind::Document, "Redo");
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::repeatLastAction() {
-    return statusFrom(
-            editorCommands_.executeModeling(std::make_unique<RepeatLastActionHistoryCommand>(session_.modeling())),
-            QuaderMutationKind::Modeling,
-            "Repeat Last Action");
+QuaderApiVoidResult QuaderApiMutationRunner::repeat_last_action() {
+  return status_from(editor_commands_.execute_modeling(
+                         std::make_unique<RepeatLastActionHistoryCommand>(
+                             session_.modeling())),
+                     QuaderMutationKind::Modeling, "Repeat Last Action");
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::statusFrom(
-        CommandResult result,
-        QuaderMutationKind kind,
-        std::string_view fallbackMessage) const {
-    return quaderApiVoidStatus(
-            session_,
-            result.ok,
-            result.changed,
-            std::move(result.message),
-            kind,
-            fallbackMessage);
+QuaderApiVoidResult
+QuaderApiMutationRunner::status_from(CommandResult result,
+                                     QuaderMutationKind kind,
+                                     std::string_view fallback_message) const {
+  return quader_api_void_status(session_, result.ok, result.changed,
+                                std::move(result.message), kind,
+                                fallback_message);
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::statusFrom(
-        ModelingCommandResult result,
-        QuaderMutationKind kind,
-        std::string_view fallbackMessage) const {
-    return quaderApiVoidStatus(
-            session_,
-            result.ok,
-            result.changed,
-            std::move(result.message),
-            kind,
-            fallbackMessage);
+QuaderApiVoidResult
+QuaderApiMutationRunner::status_from(ModelingCommandResult result,
+                                     QuaderMutationKind kind,
+                                     std::string_view fallback_message) const {
+  return quader_api_void_status(session_, result.ok, result.changed,
+                                std::move(result.message), kind,
+                                fallback_message);
 }
 
-ModelingCommandResult QuaderApiMutationRunner::cancelActiveToolOrPreviewForUndo() {
-    if (session_.modeling().toolSettingsTarget().operationPreviewActive) {
-        return modelingCommands_.cancelPreview(session_.modeling());
-    }
+ModelingCommandResult
+QuaderApiMutationRunner::cancel_active_tool_or_preview_for_undo() {
+  if (session_.modeling().tool_settings_target().operation_preview_active) {
+    return modeling_commands_.cancel_preview(session_.modeling());
+  }
 
-    ModelingCommandResult cancel = session_.modeling().cancelTransformDrag();
-    if (!cancel.ok || cancel.changed) {
-        return cancel;
-    }
+  ModelingCommandResult cancel = session_.modeling().cancel_transform_drag();
+  if (!cancel.ok || cancel.changed) {
+    return cancel;
+  }
 
-    return {.ok = true, .changed = false};
+  return {.ok = true, .changed = false};
 }
 
 } // namespace quader

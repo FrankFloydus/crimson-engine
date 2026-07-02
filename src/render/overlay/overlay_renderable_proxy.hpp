@@ -34,23 +34,23 @@ struct OverlayRenderableProxy {
     OverlayRenderableProxy() = default;
     OverlayRenderableProxy(const OverlayRenderableProxy&) = delete;
     OverlayRenderableProxy& operator=(const OverlayRenderableProxy&) = delete;
-    OverlayRenderableProxy(OverlayRenderableProxy&& other) noexcept
-        : entityId(std::exchange(other.entityId, 0u))
-        , vertexBuffer(std::exchange(other.vertexBuffer, nullptr))
-        , indexBuffer(std::exchange(other.indexBuffer, nullptr))
-        , materialInstance(std::exchange(other.materialInstance, nullptr))
-        , kind(std::exchange(other.kind, OverlayRenderableProxyKind::Unknown))
-        , vertexCount(std::exchange(other.vertexCount, 0u))
-        , indexCount(std::exchange(other.indexCount, 0u)) {}
+    OverlayRenderableProxy(OverlayRenderableProxy &&other) noexcept
+        : entity_id(std::exchange(other.entity_id, 0u)),
+          vertex_buffer(std::exchange(other.vertex_buffer, nullptr)),
+          index_buffer(std::exchange(other.index_buffer, nullptr)),
+          material_instance(std::exchange(other.material_instance, nullptr)),
+          kind(std::exchange(other.kind, OverlayRenderableProxyKind::Unknown)),
+          vertex_count(std::exchange(other.vertex_count, 0u)),
+          index_count(std::exchange(other.index_count, 0u)) {}
     OverlayRenderableProxy& operator=(OverlayRenderableProxy&&) noexcept = delete;
 
-    std::uint32_t entityId = 0;
-    filament::VertexBuffer* vertexBuffer = nullptr;
-    filament::IndexBuffer* indexBuffer = nullptr;
-    filament::MaterialInstance* materialInstance = nullptr;
+    std::uint32_t entity_id = 0;
+    filament::VertexBuffer *vertex_buffer = nullptr;
+    filament::IndexBuffer *index_buffer = nullptr;
+    filament::MaterialInstance *material_instance = nullptr;
     OverlayRenderableProxyKind kind = OverlayRenderableProxyKind::Unknown;
-    std::uint32_t vertexCount = 0;
-    std::uint32_t indexCount = 0;
+    std::uint32_t vertex_count = 0;
+    std::uint32_t index_count = 0;
 };
 
 } // namespace quader

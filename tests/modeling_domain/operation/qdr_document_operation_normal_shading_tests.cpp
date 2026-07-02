@@ -15,14 +15,14 @@ namespace {
  */
 struct BentCornerFixture {
     Document document;
-    ElementId left_bottom = invalid_element_id;
-    ElementId shared_bottom = invalid_element_id;
-    ElementId shared_top = invalid_element_id;
-    ElementId left_top = invalid_element_id;
-    ElementId back_bottom = invalid_element_id;
-    ElementId back_top = invalid_element_id;
-    ElementId floor_face = invalid_element_id;
-    ElementId wall_face = invalid_element_id;
+    ElementId left_bottom = kInvalidElementId;
+    ElementId shared_bottom = kInvalidElementId;
+    ElementId shared_top = kInvalidElementId;
+    ElementId left_top = kInvalidElementId;
+    ElementId back_bottom = kInvalidElementId;
+    ElementId back_top = kInvalidElementId;
+    ElementId floor_face = kInvalidElementId;
+    ElementId wall_face = kInvalidElementId;
     Edge shared_edge;
 };
 
@@ -51,8 +51,8 @@ BentCornerFixture make_bent_corner_document()
     fixture.floor_face = add_face(fixture.document, floor);
     fixture.wall_face = add_face(fixture.document, wall);
     fixture.shared_edge = make_edge(fixture.shared_bottom, fixture.shared_top);
-    EXPECT_TRUE(fixture.floor_face != invalid_element_id);
-    EXPECT_TRUE(fixture.wall_face != invalid_element_id);
+    EXPECT_TRUE(fixture.floor_face != kInvalidElementId);
+    EXPECT_TRUE(fixture.wall_face != kInvalidElementId);
     return fixture;
 }
 
@@ -79,8 +79,10 @@ TEST(QdrDocumentOperationNormalShadingTests, ShadeSmoothAndFlatControlCompiledFa
     const OperationResult smooth = shade_selected_faces_smooth(fixture.document, selection);
 
     EXPECT_TRUE(smooth.changed);
-    EXPECT_TRUE(fixture.document.faces[0].normal_shading == SurfaceShading::smooth);
-    EXPECT_TRUE(fixture.document.faces[1].normal_shading == SurfaceShading::smooth);
+    EXPECT_TRUE(fixture.document.faces[0].normal_shading ==
+                SurfaceShading::Smooth);
+    EXPECT_TRUE(fixture.document.faces[1].normal_shading ==
+                SurfaceShading::Smooth);
     const CompiledMesh smooth_mesh = compile_document(fixture.document);
     EXPECT_TRUE(smooth_mesh.vertices.size() == 8U);
     EXPECT_TRUE(qdr_test::vec_nearly_equal(smooth_mesh.vertices[1].normal, smooth_mesh.vertices[4].normal));
@@ -89,8 +91,10 @@ TEST(QdrDocumentOperationNormalShadingTests, ShadeSmoothAndFlatControlCompiledFa
     const OperationResult flat = shade_selected_faces_flat(fixture.document, selection);
 
     EXPECT_TRUE(flat.changed);
-    EXPECT_TRUE(fixture.document.faces[0].normal_shading == SurfaceShading::flat);
-    EXPECT_TRUE(fixture.document.faces[1].normal_shading == SurfaceShading::flat);
+    EXPECT_TRUE(fixture.document.faces[0].normal_shading ==
+                SurfaceShading::Flat);
+    EXPECT_TRUE(fixture.document.faces[1].normal_shading ==
+                SurfaceShading::Flat);
     const CompiledMesh flat_after = compile_document(fixture.document);
     EXPECT_TRUE(flat_after.vertices.size() == 8U);
     EXPECT_TRUE(qdr_test::vec_nearly_equal(flat_after.vertices[1].normal, flat_before.vertices[1].normal));
@@ -137,8 +141,10 @@ TEST(QdrDocumentOperationNormalShadingTests, SoftNormalEdgeOperationSoftensAdjac
 
     EXPECT_TRUE(soft.changed);
     EXPECT_TRUE(fixture.document.hard_normal_edges.empty());
-    EXPECT_TRUE(fixture.document.faces[0].normal_shading == SurfaceShading::smooth);
-    EXPECT_TRUE(fixture.document.faces[1].normal_shading == SurfaceShading::smooth);
+    EXPECT_TRUE(fixture.document.faces[0].normal_shading ==
+                SurfaceShading::Smooth);
+    EXPECT_TRUE(fixture.document.faces[1].normal_shading ==
+                SurfaceShading::Smooth);
     const CompiledMesh soft_mesh = compile_document(fixture.document);
     EXPECT_TRUE(soft_mesh.vertices.size() == 8U);
     EXPECT_TRUE(qdr_test::vec_nearly_equal(soft_mesh.vertices[1].normal, soft_mesh.vertices[4].normal));

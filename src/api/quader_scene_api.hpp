@@ -23,34 +23,34 @@ class QuaderSceneApi;
  * Represents a scene transform edit used by the public Quader API surface.
  */
 struct QuaderSceneTransformEdit {
-    EntityId entity = InvalidEntityId;
-    QuaderTransform before;
-    QuaderTransform after;
+  EntityId entity = kInvalidEntityId;
+  QuaderTransform before;
+  QuaderTransform after;
 };
 
 /**
  * Represents a scene visibility edit used by the public Quader API surface.
  */
 struct QuaderSceneVisibilityEdit {
-    EntityId entity = InvalidEntityId;
-    bool before = true;
-    bool after = true;
+  EntityId entity = kInvalidEntityId;
+  bool before = true;
+  bool after = true;
 };
 
 /**
  * Describes optional history behavior for live scene edits.
  */
 struct QuaderSceneEditOptions {
-    std::string mergeKey;
+  std::string merge_key;
 };
 
 /**
  * Represents a scene lock edit used by the public Quader API surface.
  */
 struct QuaderSceneLockEdit {
-    EntityId entity = InvalidEntityId;
-    bool before = false;
-    bool after = false;
+  EntityId entity = kInvalidEntityId;
+  bool before = false;
+  bool after = false;
 };
 
 /**
@@ -65,10 +65,11 @@ public:
     QuaderSceneBatch& operator=(QuaderSceneBatch&& other) noexcept;
 
     QuaderSceneBatch& rename(EntityId entity, std::string name);
-    QuaderSceneBatch& reparent(EntityId entity, EntityId parent, bool preserveWorldTransform = true);
-    QuaderSceneBatch& setTransform(EntityId entity, QuaderTransform transform);
-    QuaderSceneBatch& setVisible(EntityId entity, bool visible);
-    QuaderSceneBatch& setLocked(EntityId entity, bool locked);
+    QuaderSceneBatch &reparent(EntityId entity, EntityId parent,
+                               bool preserve_world_transform = true);
+    QuaderSceneBatch &set_transform(EntityId entity, QuaderTransform transform);
+    QuaderSceneBatch &set_visible(EntityId entity, bool visible);
+    QuaderSceneBatch &set_locked(EntityId entity, bool locked);
     QuaderApiVoidResult commit();
 
 private:
@@ -90,9 +91,9 @@ private:
      */
     struct Operation {
         OperationKind kind = OperationKind::Rename;
-        EntityId entity = InvalidEntityId;
-        EntityId parent = InvalidEntityId;
-        bool preserveWorldTransform = true;
+        EntityId entity = kInvalidEntityId;
+        EntityId parent = kInvalidEntityId;
+        bool preserve_world_transform = true;
         bool flag = false;
         QuaderTransform transform;
         std::string name;
@@ -111,42 +112,53 @@ class QuaderSceneApi final {
 public:
     QuaderSceneApi(QuaderApiSession session, QuaderApiMutationRunner& mutations);
 
-    QuaderApiResult<QuaderEntityRef> createEntity(const QuaderCreateEntityArgs& args);
-    QuaderApiResult<QuaderEntityRef> createPointLight(const QuaderCreatePointLightArgs& args = QuaderCreatePointLightArgs{});
-    QuaderApiResult<QuaderEntityRef> createDirectionalLight(
-            const QuaderCreateDirectionalLightArgs& args = QuaderCreateDirectionalLightArgs{});
+    QuaderApiResult<QuaderEntityRef>
+    create_entity(const QuaderCreateEntityArgs &args);
+    QuaderApiResult<QuaderEntityRef> create_point_light(
+        const QuaderCreatePointLightArgs &args = QuaderCreatePointLightArgs{});
+    QuaderApiResult<QuaderEntityRef>
+    create_directional_light(const QuaderCreateDirectionalLightArgs &args =
+                                 QuaderCreateDirectionalLightArgs{});
     QuaderApiVoidResult destroy(EntityId entity);
     QuaderApiVoidResult rename(EntityId entity, std::string name);
-    QuaderApiVoidResult reparent(EntityId entity, EntityId parent, bool preserveWorldTransform = true);
-    QuaderApiVoidResult setTransform(EntityId entity, QuaderTransform transform);
-    QuaderApiVoidResult setTransforms(std::span<const QuaderSceneTransformEdit> edits);
-    QuaderApiVoidResult setVisible(EntityId entity, bool visible);
-    QuaderApiVoidResult setVisibility(std::span<const QuaderSceneVisibilityEdit> edits);
-    QuaderApiVoidResult setLocked(EntityId entity, bool locked);
-    QuaderApiVoidResult setLocks(std::span<const QuaderSceneLockEdit> edits);
-    QuaderApiVoidResult setMeshComponent(EntityId entity, QuaderMeshComponent mesh);
-    QuaderApiVoidResult setLightComponent(
-            EntityId entity,
-            QuaderLightComponent light,
-            QuaderSceneEditOptions options = {});
-    QuaderApiVoidResult setSceneSettings(
-            EntityId entity,
-            QuaderSceneSettings settings,
-            QuaderSceneEditOptions options = {});
-    QuaderApiVoidResult select(std::span<const EntityId> entities, EntityId active = InvalidEntityId);
-    QuaderApiVoidResult select(std::initializer_list<EntityId> entities, EntityId active = InvalidEntityId);
+    QuaderApiVoidResult reparent(EntityId entity, EntityId parent,
+                                 bool preserve_world_transform = true);
+    QuaderApiVoidResult set_transform(EntityId entity,
+                                      QuaderTransform transform);
+    QuaderApiVoidResult
+    set_transforms(std::span<const QuaderSceneTransformEdit> edits);
+    QuaderApiVoidResult set_visible(EntityId entity, bool visible);
+    QuaderApiVoidResult
+    set_visibility(std::span<const QuaderSceneVisibilityEdit> edits);
+    QuaderApiVoidResult set_locked(EntityId entity, bool locked);
+    QuaderApiVoidResult set_locks(std::span<const QuaderSceneLockEdit> edits);
+    QuaderApiVoidResult set_mesh_component(EntityId entity,
+                                           QuaderMeshComponent mesh);
+    QuaderApiVoidResult
+    set_light_component(EntityId entity, QuaderLightComponent light,
+                        QuaderSceneEditOptions options = {});
+    QuaderApiVoidResult set_scene_settings(EntityId entity,
+                                           QuaderSceneSettings settings,
+                                           QuaderSceneEditOptions options = {});
+    QuaderApiVoidResult select(std::span<const EntityId> entities,
+                               EntityId active = kInvalidEntityId);
+    QuaderApiVoidResult select(std::initializer_list<EntityId> entities,
+                               EntityId active = kInvalidEntityId);
     QuaderApiVoidResult select(EntityId entity);
 
     QuaderApiResult<QuaderEntityRef> duplicate(EntityId entity);
-    QuaderApiResult<QuaderDuplicateHierarchyResult> duplicateSelectedHierarchy();
-    QuaderApiResult<QuaderEntityRef> groupSelection(std::string groupName = {}, QuaderTransform transform = {});
-    QuaderApiVoidResult ungroupSelection();
+    QuaderApiResult<QuaderDuplicateHierarchyResult>
+    duplicate_selected_hierarchy();
+    QuaderApiResult<QuaderEntityRef>
+    group_selection(std::string group_name = {},
+                    QuaderTransform transform = {});
+    QuaderApiVoidResult ungroup_selection();
     [[nodiscard]] QuaderSceneBatch batch(std::string label = "Scene Batch");
 
 private:
     friend class QuaderSceneBatch;
 
-    QuaderApiVoidResult commitBatch(const QuaderSceneBatch& batch);
+    QuaderApiVoidResult commit_batch(const QuaderSceneBatch &batch);
 
     QuaderApiSession session_;
     QuaderApiMutationRunner& mutations_;

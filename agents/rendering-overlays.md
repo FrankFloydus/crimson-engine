@@ -33,7 +33,7 @@ inverted-mesh visualization rules, and regression test map.
   centralized there.
 - Do not scatter overlay color constants through unrelated files.
 - Runtime selection overlays flow through `ModelingOverlayService`, `SelectionOverlayProjection`,
-  `QuaderRenderApiRuntimeAccess::syncSelectionOverlay`, and then `SceneRenderBridge`.
+  `QuaderRenderApiRuntimeAccess::sync_selection_overlay`, and then `SceneRenderBridge`.
 - `SceneRenderBridge` submits overlay frames through `OverlayRenderableCache` and
   `OverlayProxyFactory`; extraction and build policy belong in `src/render/overlay/**`, especially
   `ViewportSceneOverlayBuilder`, `OverlayRenderableBuilder`, and `ViewportOverlayStyleResolver`.

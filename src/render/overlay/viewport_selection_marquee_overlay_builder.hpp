@@ -17,10 +17,9 @@ struct ViewportSelectionMarquee;
  */
 class ViewportSelectionMarqueeOverlayBuilder {
 public:
-    static void append(
-            ViewportOverlayFrame& overlayFrame,
-            const ViewportOverlayCamera& camera,
-            const ViewportSelectionMarquee& marquee);
+  static void append(ViewportOverlayFrame &overlay_frame,
+                     const ViewportOverlayCamera &camera,
+                     const ViewportSelectionMarquee &marquee);
 };
 
 } // namespace quader

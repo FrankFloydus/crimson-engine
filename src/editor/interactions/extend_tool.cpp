@@ -23,8 +23,8 @@ class ExtendTool final : public EditorTool {
 public:
 	[[nodiscard]] ViewportInteractionTool tool_id() const override
 	{
-		return ViewportInteractionTool::extend;
-	}
+          return ViewportInteractionTool::Extend;
+        }
 
 	[[nodiscard]] std::string_view id() const override
 	{
@@ -154,14 +154,15 @@ public:
 private:
 	[[nodiscard]] static double raw_drag_distance(double pixels, double grid_size)
 	{
-		return (pixels / move_pixels_per_grid_step) * safe_grid_size(grid_size, tool_epsilon);
-	}
+          return (pixels / kMovePixelsPerGridStep) *
+                 safe_grid_size(grid_size, kToolEpsilon);
+        }
 };
 
 const ExtendTool& extend_tool_impl()
 {
-	static const ExtendTool tool;
-	return tool;
+  static const ExtendTool kTool;
+  return kTool;
 }
 
 } // namespace

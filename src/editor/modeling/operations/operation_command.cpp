@@ -59,70 +59,80 @@ EditorOperationCommandResult finish_preview_command(
 std::optional<EditorOperationCommandSchema> command_schema_for_operation(EditorOperationId operation_id)
 {
 	switch (operation_id) {
-	case EditorOperationId::bridge:
-		return EditorOperationCommandSchema{
-			operation_id,
-			EditorOperationSettingsKind::bridge,
-			PreviewTransactionKind::bridge,
-		};
-	case EditorOperationId::edge_bevel:
-		return EditorOperationCommandSchema{
-			operation_id,
-			EditorOperationSettingsKind::edge_bevel,
-			PreviewTransactionKind::edge_bevel,
-		};
-	case EditorOperationId::thicken:
-		return EditorOperationCommandSchema{
-			operation_id,
-			EditorOperationSettingsKind::thicken,
-			PreviewTransactionKind::thicken,
-		};
-	case EditorOperationId::slice_quad:
-		return EditorOperationCommandSchema{
-			operation_id,
-			EditorOperationSettingsKind::slice_quad,
-			PreviewTransactionKind::slice_quad,
-		};
-	case EditorOperationId::merge_by_distance:
-		return EditorOperationCommandSchema{
-			operation_id,
-			EditorOperationSettingsKind::merge_by_distance,
-			PreviewTransactionKind::merge_by_distance,
-		};
-	case EditorOperationId::bevel_vertices:
-		return EditorOperationCommandSchema{ operation_id, EditorOperationSettingsKind::bevel_vertices, std::nullopt };
-	case EditorOperationId::duplicate_meshes:
-		return EditorOperationCommandSchema{ operation_id, EditorOperationSettingsKind::duplicate_meshes, std::nullopt };
-	case EditorOperationId::recalculate_face_normals:
-		return EditorOperationCommandSchema{ operation_id, EditorOperationSettingsKind::recalculate_face_normals, std::nullopt };
-	case EditorOperationId::assign_material:
-		return EditorOperationCommandSchema{ operation_id, EditorOperationSettingsKind::assign_material, std::nullopt };
-	case EditorOperationId::connect_vertices:
-	case EditorOperationId::dissolve_vertices:
-	case EditorOperationId::connect_edges:
-	case EditorOperationId::split_edges:
-	case EditorOperationId::dissolve_edges:
-	case EditorOperationId::merge_edges:
-	case EditorOperationId::collapse_edges:
-	case EditorOperationId::fill_hole:
-	case EditorOperationId::combine_faces:
-	case EditorOperationId::collapse_faces:
-	case EditorOperationId::radial_align:
-	case EditorOperationId::flip_face_normals:
-	case EditorOperationId::shade_faces_smooth:
-	case EditorOperationId::shade_faces_flat:
-	case EditorOperationId::harden_edge_normals:
-	case EditorOperationId::soften_edge_normals:
-	case EditorOperationId::combine_meshes:
-	case EditorOperationId::extract_faces:
-	case EditorOperationId::detach_faces:
-	case EditorOperationId::snap_vertices_to_active:
-	case EditorOperationId::snap_edges_to_active:
-	case EditorOperationId::merge_vertices_to_active:
-	case EditorOperationId::merge_vertices_to_center:
-	case EditorOperationId::delete_selection:
-		return EditorOperationCommandSchema{ operation_id, EditorOperationSettingsKind::selection, std::nullopt };
-	}
+        case EditorOperationId::Bridge:
+          return EditorOperationCommandSchema{
+              operation_id,
+              EditorOperationSettingsKind::Bridge,
+              PreviewTransactionKind::Bridge,
+          };
+        case EditorOperationId::EdgeBevel:
+          return EditorOperationCommandSchema{
+              operation_id,
+              EditorOperationSettingsKind::EdgeBevel,
+              PreviewTransactionKind::EdgeBevel,
+          };
+        case EditorOperationId::Thicken:
+          return EditorOperationCommandSchema{
+              operation_id,
+              EditorOperationSettingsKind::Thicken,
+              PreviewTransactionKind::Thicken,
+          };
+        case EditorOperationId::SliceQuad:
+          return EditorOperationCommandSchema{
+              operation_id,
+              EditorOperationSettingsKind::SliceQuad,
+              PreviewTransactionKind::SliceQuad,
+          };
+        case EditorOperationId::MergeByDistance:
+          return EditorOperationCommandSchema{
+              operation_id,
+              EditorOperationSettingsKind::MergeByDistance,
+              PreviewTransactionKind::MergeByDistance,
+          };
+        case EditorOperationId::BevelVertices:
+          return EditorOperationCommandSchema{
+              operation_id, EditorOperationSettingsKind::BevelVertices,
+              std::nullopt};
+        case EditorOperationId::DuplicateMeshes:
+          return EditorOperationCommandSchema{
+              operation_id, EditorOperationSettingsKind::DuplicateMeshes,
+              std::nullopt};
+        case EditorOperationId::RecalculateFaceNormals:
+          return EditorOperationCommandSchema{
+              operation_id, EditorOperationSettingsKind::RecalculateFaceNormals,
+              std::nullopt};
+        case EditorOperationId::AssignMaterial:
+          return EditorOperationCommandSchema{
+              operation_id, EditorOperationSettingsKind::AssignMaterial,
+              std::nullopt};
+        case EditorOperationId::ConnectVertices:
+        case EditorOperationId::DissolveVertices:
+        case EditorOperationId::ConnectEdges:
+        case EditorOperationId::SplitEdges:
+        case EditorOperationId::DissolveEdges:
+        case EditorOperationId::MergeEdges:
+        case EditorOperationId::CollapseEdges:
+        case EditorOperationId::FillHole:
+        case EditorOperationId::CombineFaces:
+        case EditorOperationId::CollapseFaces:
+        case EditorOperationId::RadialAlign:
+        case EditorOperationId::FlipFaceNormals:
+        case EditorOperationId::ShadeFacesSmooth:
+        case EditorOperationId::ShadeFacesFlat:
+        case EditorOperationId::HardenEdgeNormals:
+        case EditorOperationId::SoftenEdgeNormals:
+        case EditorOperationId::CombineMeshes:
+        case EditorOperationId::ExtractFaces:
+        case EditorOperationId::DetachFaces:
+        case EditorOperationId::SnapVerticesToActive:
+        case EditorOperationId::SnapEdgesToActive:
+        case EditorOperationId::MergeVerticesToActive:
+        case EditorOperationId::MergeVerticesToCenter:
+        case EditorOperationId::DeleteSelection:
+          return EditorOperationCommandSchema{
+              operation_id, EditorOperationSettingsKind::Selection,
+              std::nullopt};
+        }
 	return std::nullopt;
 }
 
@@ -134,26 +144,31 @@ bool command_settings_match_operation(EditorOperationId operation_id, const Edit
 	}
 
 	switch (schema->settings_kind) {
-	case EditorOperationSettingsKind::selection:
-		return std::holds_alternative<SelectionOperationSettings>(settings);
-	case EditorOperationSettingsKind::bridge:
-		return std::holds_alternative<BridgeOperationSettings>(settings);
-	case EditorOperationSettingsKind::edge_bevel:
-		return std::holds_alternative<EdgeBevelOperationSettings>(settings);
-	case EditorOperationSettingsKind::thicken:
-		return std::holds_alternative<ThickenOperationSettings>(settings);
-	case EditorOperationSettingsKind::slice_quad:
-		return std::holds_alternative<SliceQuadOperationSettings>(settings);
-	case EditorOperationSettingsKind::merge_by_distance:
-		return std::holds_alternative<MergeByDistanceOperationSettings>(settings);
-	case EditorOperationSettingsKind::bevel_vertices:
-		return std::holds_alternative<BevelVerticesOperationSettings>(settings);
-	case EditorOperationSettingsKind::duplicate_meshes:
-		return std::holds_alternative<DuplicateMeshesOperationSettings>(settings);
-	case EditorOperationSettingsKind::recalculate_face_normals:
-		return std::holds_alternative<RecalculateFaceNormalsOperationSettings>(settings);
-	case EditorOperationSettingsKind::assign_material:
-		return std::holds_alternative<AssignMaterialOperationSettings>(settings);
+        case EditorOperationSettingsKind::Selection:
+          return std::holds_alternative<SelectionOperationSettings>(settings);
+        case EditorOperationSettingsKind::Bridge:
+          return std::holds_alternative<BridgeOperationSettings>(settings);
+        case EditorOperationSettingsKind::EdgeBevel:
+          return std::holds_alternative<EdgeBevelOperationSettings>(settings);
+        case EditorOperationSettingsKind::Thicken:
+          return std::holds_alternative<ThickenOperationSettings>(settings);
+        case EditorOperationSettingsKind::SliceQuad:
+          return std::holds_alternative<SliceQuadOperationSettings>(settings);
+        case EditorOperationSettingsKind::MergeByDistance:
+          return std::holds_alternative<MergeByDistanceOperationSettings>(
+              settings);
+        case EditorOperationSettingsKind::BevelVertices:
+          return std::holds_alternative<BevelVerticesOperationSettings>(
+              settings);
+        case EditorOperationSettingsKind::DuplicateMeshes:
+          return std::holds_alternative<DuplicateMeshesOperationSettings>(
+              settings);
+        case EditorOperationSettingsKind::RecalculateFaceNormals:
+          return std::holds_alternative<
+              RecalculateFaceNormalsOperationSettings>(settings);
+        case EditorOperationSettingsKind::AssignMaterial:
+          return std::holds_alternative<AssignMaterialOperationSettings>(
+              settings);
 	}
 	return false;
 }
@@ -186,33 +201,39 @@ EditorOperationCommandResult execute_command(
 	}
 
 	switch (command.phase) {
-	case EditorOperationCommandPhase::execute:
-		if (!command_settings_match_operation(command.operation_id, command.settings)) {
-			return command_result(settings_mismatch_result());
-		}
-		return command_result(session.apply_history_command([operation, &command](EditorSession& editor_session) {
-			return operation->execute(editor_session, command.settings);
-		}));
-	case EditorOperationCommandPhase::begin_preview:
-		if (!operation->supports_preview()) {
-			return command_result(preview_not_supported_result());
-		}
-		if (!command_settings_match_operation(command.operation_id, command.settings)) {
-			return command_result(settings_mismatch_result());
-		}
-		return command_result(operation->begin_preview(session, command.settings));
-	case EditorOperationCommandPhase::update_preview:
-		if (!operation->supports_preview()) {
-			return command_result(preview_not_supported_result());
-		}
-		if (!command_settings_match_operation(command.operation_id, command.settings)) {
-			return command_result(settings_mismatch_result());
-		}
-		return command_result(operation->update_preview(session, command.settings));
-	case EditorOperationCommandPhase::commit_preview:
-		return finish_preview_command(session, command.operation_id, true);
-	case EditorOperationCommandPhase::cancel_preview:
-		return finish_preview_command(session, command.operation_id, false);
+        case EditorOperationCommandPhase::Execute:
+          if (!command_settings_match_operation(command.operation_id,
+                                                command.settings)) {
+            return command_result(settings_mismatch_result());
+          }
+          return command_result(session.apply_history_command(
+              [operation, &command](EditorSession &editor_session) {
+                return operation->execute(editor_session, command.settings);
+              }));
+        case EditorOperationCommandPhase::BeginPreview:
+          if (!operation->supports_preview()) {
+            return command_result(preview_not_supported_result());
+          }
+          if (!command_settings_match_operation(command.operation_id,
+                                                command.settings)) {
+            return command_result(settings_mismatch_result());
+          }
+          return command_result(
+              operation->begin_preview(session, command.settings));
+        case EditorOperationCommandPhase::UpdatePreview:
+          if (!operation->supports_preview()) {
+            return command_result(preview_not_supported_result());
+          }
+          if (!command_settings_match_operation(command.operation_id,
+                                                command.settings)) {
+            return command_result(settings_mismatch_result());
+          }
+          return command_result(
+              operation->update_preview(session, command.settings));
+        case EditorOperationCommandPhase::CommitPreview:
+          return finish_preview_command(session, command.operation_id, true);
+        case EditorOperationCommandPhase::CancelPreview:
+          return finish_preview_command(session, command.operation_id, false);
 	}
 
 	return command_result({ false, false, "Unknown operation command phase." });

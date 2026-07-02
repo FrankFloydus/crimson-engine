@@ -17,8 +17,10 @@ namespace quader {
  */
 class QuaderPolygonDocumentInternalAccess final {
 public:
-    [[nodiscard]] static QuaderPolygonDocument fromBackend(quader_poly::Document document);
-    [[nodiscard]] static quader_poly::Document toBackend(const QuaderPolygonDocument& document);
+  [[nodiscard]] static QuaderPolygonDocument
+  from_backend(quader_poly::Document document);
+  [[nodiscard]] static quader_poly::Document
+  to_backend(const QuaderPolygonDocument &document);
 };
 
 } // namespace quader

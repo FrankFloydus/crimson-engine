@@ -37,10 +37,10 @@ enum class TextureUsage {
  */
 struct TextureAsset final : AssetDocumentBase<TextureAssetRevision> {
     TextureUsage usage = TextureUsage::Unknown;
-    TextureColorSpace colorSpace = TextureColorSpace::Srgb;
+    TextureColorSpace color_space = TextureColorSpace::Srgb;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
-    std::filesystem::path sourcePath;
+    std::filesystem::path source_path;
     bool generated = false;
 };
 

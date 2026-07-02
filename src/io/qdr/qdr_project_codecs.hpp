@@ -16,41 +16,60 @@
 
 namespace quader {
 
-[[nodiscard]] std::string_view qdrEntityKindName(EntityKind kind);
-[[nodiscard]] EntityKind qdrEntityKindFromName(std::string_view value);
+[[nodiscard]] std::string_view qdr_entity_kind_name(EntityKind kind);
+[[nodiscard]] EntityKind qdr_entity_kind_from_name(std::string_view value);
 
-[[nodiscard]] std::string_view qdrLightTypeName(LightType type);
-[[nodiscard]] LightType qdrLightTypeFromName(std::string_view value);
+[[nodiscard]] std::string_view qdr_light_type_name(LightType type);
+[[nodiscard]] LightType qdr_light_type_from_name(std::string_view value);
 
-[[nodiscard]] std::string_view qdrSceneToneMappingName(SceneToneMapping toneMapping);
-[[nodiscard]] SceneToneMapping qdrSceneToneMappingFromName(std::string_view value);
+[[nodiscard]] std::string_view
+qdr_scene_tone_mapping_name(SceneToneMapping tone_mapping);
+[[nodiscard]] SceneToneMapping
+qdr_scene_tone_mapping_from_name(std::string_view value);
 
-[[nodiscard]] std::string_view qdrMeshCollisionTypeName(MeshCollisionType type);
-[[nodiscard]] MeshCollisionType qdrMeshCollisionTypeFromName(std::string_view value);
+[[nodiscard]] std::string_view
+qdr_mesh_collision_type_name(MeshCollisionType type);
+[[nodiscard]] MeshCollisionType
+qdr_mesh_collision_type_from_name(std::string_view value);
 
-[[nodiscard]] std::string_view qdrMeshPhysicsBodyTypeName(MeshPhysicsBodyType type);
-[[nodiscard]] MeshPhysicsBodyType qdrMeshPhysicsBodyTypeFromName(std::string_view value);
+[[nodiscard]] std::string_view
+qdr_mesh_physics_body_type_name(MeshPhysicsBodyType type);
+[[nodiscard]] MeshPhysicsBodyType
+qdr_mesh_physics_body_type_from_name(std::string_view value);
 
-[[nodiscard]] std::string_view qdrTextureUsageName(TextureUsage usage);
-[[nodiscard]] TextureUsage qdrTextureUsageFromName(std::string_view value);
+[[nodiscard]] std::string_view qdr_texture_usage_name(TextureUsage usage);
+[[nodiscard]] TextureUsage qdr_texture_usage_from_name(std::string_view value);
 
-[[nodiscard]] std::string_view qdrTextureColorSpaceName(TextureColorSpace colorSpace);
-[[nodiscard]] TextureColorSpace qdrTextureColorSpaceFromName(std::string_view value);
+[[nodiscard]] std::string_view
+qdr_texture_color_space_name(TextureColorSpace color_space);
+[[nodiscard]] TextureColorSpace
+qdr_texture_color_space_from_name(std::string_view value);
 
-[[nodiscard]] nlohmann::ordered_json qdrVec2ToJson(QVec2 value);
-[[nodiscard]] nlohmann::ordered_json qdrVec3ToJson(QVec3 value);
-[[nodiscard]] QVec2 qdrVec2FromJson(const nlohmann::ordered_json& value);
-[[nodiscard]] QVec3 qdrVec3FromJson(const nlohmann::ordered_json& value, QVec3 fallback = {});
+[[nodiscard]] nlohmann::ordered_json qdr_vec2_to_json(QVec2 value);
+[[nodiscard]] nlohmann::ordered_json qdr_vec3_to_json(QVec3 value);
+[[nodiscard]] QVec2 qdr_vec2_from_json(const nlohmann::ordered_json &value);
+[[nodiscard]] QVec3 qdr_vec3_from_json(const nlohmann::ordered_json &value,
+                                       QVec3 fallback = {});
 
-[[nodiscard]] nlohmann::ordered_json qdrTransformComponentToJson(const TransformComponent& transform);
-[[nodiscard]] TransformComponent qdrTransformComponentFromJson(const nlohmann::ordered_json& value);
-[[nodiscard]] nlohmann::ordered_json qdrMeshComponentToJson(const MeshComponent& mesh);
-[[nodiscard]] MeshComponent qdrMeshComponentFromJson(const nlohmann::ordered_json& value);
-[[nodiscard]] nlohmann::ordered_json qdrMaterialComponentToJson(const MaterialComponent& material);
-[[nodiscard]] MaterialComponent qdrMaterialComponentFromJson(const nlohmann::ordered_json& value);
-[[nodiscard]] nlohmann::ordered_json qdrLightComponentToJson(const LightComponent& light);
-[[nodiscard]] LightComponent qdrLightComponentFromJson(const nlohmann::ordered_json& value);
-[[nodiscard]] nlohmann::ordered_json qdrSceneSettingsComponentToJson(const SceneSettingsComponent& settings);
-[[nodiscard]] SceneSettingsComponent qdrSceneSettingsComponentFromJson(const nlohmann::ordered_json& value);
+[[nodiscard]] nlohmann::ordered_json
+qdr_transform_component_to_json(const TransformComponent &transform);
+[[nodiscard]] TransformComponent
+qdr_transform_component_from_json(const nlohmann::ordered_json &value);
+[[nodiscard]] nlohmann::ordered_json
+qdr_mesh_component_to_json(const MeshComponent &mesh);
+[[nodiscard]] MeshComponent
+qdr_mesh_component_from_json(const nlohmann::ordered_json &value);
+[[nodiscard]] nlohmann::ordered_json
+qdr_material_component_to_json(const MaterialComponent &material);
+[[nodiscard]] MaterialComponent
+qdr_material_component_from_json(const nlohmann::ordered_json &value);
+[[nodiscard]] nlohmann::ordered_json
+qdr_light_component_to_json(const LightComponent &light);
+[[nodiscard]] LightComponent
+qdr_light_component_from_json(const nlohmann::ordered_json &value);
+[[nodiscard]] nlohmann::ordered_json
+qdr_scene_settings_component_to_json(const SceneSettingsComponent &settings);
+[[nodiscard]] SceneSettingsComponent
+qdr_scene_settings_component_from_json(const nlohmann::ordered_json &value);
 
 } // namespace quader

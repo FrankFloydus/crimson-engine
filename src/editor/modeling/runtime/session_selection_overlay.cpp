@@ -21,8 +21,8 @@
 namespace quader_editor_core {
 namespace {
 
-constexpr double diagnostic_edge_epsilon = 0.00001;
-constexpr double diagnostic_edge_factor_epsilon = 0.00001;
+constexpr double kDiagnosticEdgeEpsilon = 0.00001;
+constexpr double kDiagnosticEdgeFactorEpsilon = 0.00001;
 
 /**
  * Represents a Diagnostic Edge Ref value used by the modeling runtime domain.
@@ -49,23 +49,24 @@ quader_geometry::QAabb3<double> diagnostic_edge_bounds(
 		quader_geometry::QVec3d start,
 		quader_geometry::QVec3d end)
 {
-	return {
-		{
-			std::min(start.x, end.x) - diagnostic_edge_epsilon,
-			std::min(start.y, end.y) - diagnostic_edge_epsilon,
-			std::min(start.z, end.z) - diagnostic_edge_epsilon,
-		},
-		{
-			std::max(start.x, end.x) + diagnostic_edge_epsilon,
-			std::max(start.y, end.y) + diagnostic_edge_epsilon,
-			std::max(start.z, end.z) + diagnostic_edge_epsilon,
-		},
-	};
+  return {
+      {
+          std::min(start.x, end.x) - kDiagnosticEdgeEpsilon,
+          std::min(start.y, end.y) - kDiagnosticEdgeEpsilon,
+          std::min(start.z, end.z) - kDiagnosticEdgeEpsilon,
+      },
+      {
+          std::max(start.x, end.x) + kDiagnosticEdgeEpsilon,
+          std::max(start.y, end.y) + kDiagnosticEdgeEpsilon,
+          std::max(start.z, end.z) + kDiagnosticEdgeEpsilon,
+      },
+  };
 }
 
 bool diagnostic_factor_is_interior(double factor)
 {
-	return factor > diagnostic_edge_factor_epsilon && factor < 1.0 - diagnostic_edge_factor_epsilon;
+  return factor > kDiagnosticEdgeFactorEpsilon &&
+         factor < 1.0 - kDiagnosticEdgeFactorEpsilon;
 }
 
 bool diagnostic_edges_overlap_colinearly(const DiagnosticEdgeRef& first, const DiagnosticEdgeRef& second)
@@ -74,8 +75,9 @@ bool diagnostic_edges_overlap_colinearly(const DiagnosticEdgeRef& first, const D
 	const quader_geometry::QVec3d second_direction = second.segment.b - second.segment.a;
 	const double first_length_squared = quader_geometry::length_squared(first_direction);
 	const double second_length_squared = quader_geometry::length_squared(second_direction);
-	const double epsilon_squared = diagnostic_edge_epsilon * diagnostic_edge_epsilon;
-	if (first_length_squared <= epsilon_squared || second_length_squared <= epsilon_squared) {
+        const double epsilon_squared =
+            kDiagnosticEdgeEpsilon * kDiagnosticEdgeEpsilon;
+        if (first_length_squared <= epsilon_squared || second_length_squared <= epsilon_squared) {
 		return false;
 	}
 
@@ -96,16 +98,18 @@ bool diagnostic_edges_overlap_colinearly(const DiagnosticEdgeRef& first, const D
 		quader_geometry::dot(second.segment.b - first.segment.a, first_direction) / first_length_squared;
 	const double overlap_start = std::max(0.0, std::min(second_start_on_first, second_end_on_first));
 	const double overlap_end = std::min(1.0, std::max(second_start_on_first, second_end_on_first));
-	return (overlap_end - overlap_start) * std::sqrt(first_length_squared) > diagnostic_edge_epsilon;
+        return (overlap_end - overlap_start) * std::sqrt(first_length_squared) >
+               kDiagnosticEdgeEpsilon;
 }
 
 bool diagnostic_edges_point_intersect(const DiagnosticEdgeRef& first, const DiagnosticEdgeRef& second)
 {
-	const quader_geometry::QSegmentSegmentClosestPoints<double> closest =
-		quader_geometry::closest_points_segment_segment(first.segment, second.segment, diagnostic_edge_epsilon);
-	if (!closest.valid || !closest.intersects) {
-		return false;
-	}
+  const quader_geometry::QSegmentSegmentClosestPoints<double> closest =
+      quader_geometry::closest_points_segment_segment(
+          first.segment, second.segment, kDiagnosticEdgeEpsilon);
+  if (!closest.valid || !closest.intersects) {
+    return false;
+  }
 
 	return diagnostic_factor_is_interior(closest.first_factor) ||
 		diagnostic_factor_is_interior(closest.second_factor);
@@ -123,15 +127,15 @@ bool diagnostic_edges_conflict(const DiagnosticEdgeRef& first, const DiagnosticE
 quader_poly::Selection overlay_all_face_selection(const quader_poly::Document& document)
 {
 	quader_poly::Selection selection;
-	selection.mode = quader_poly::SelectionMode::face;
-	selection.faces.reserve(document.faces.size());
+        selection.mode = quader_poly::SelectionMode::Face;
+        selection.faces.reserve(document.faces.size());
 	for (const quader_poly::Face& face : document.faces) {
 		selection.faces.push_back(face.id);
 	}
 	if (!selection.faces.empty()) {
 		selection.has_active = true;
-		selection.active_kind = quader_poly::ElementKind::face;
-		selection.active_face = selection.faces.back();
+                selection.active_kind = quader_poly::ElementKind::Face;
+                selection.active_face = selection.faces.back();
 	}
 	return selection;
 }
@@ -211,16 +215,16 @@ void append_source_wire_depth_stamp(
 	}
 	const quader_poly::OverlayData overlay = quader_poly::build_overlay(object.document, selection);
 	for (const quader_poly::OverlayTriangle& triangle : overlay.triangles) {
-		frame.triangles.push_back({
-			SelectionOverlayLayer::source_wire_depth_stamp,
-			triangle.a,
-			triangle.b,
-			triangle.c,
-			style.source_wire_color_abgr,
-			object.id,
-			triangle.face_id,
-		});
-	}
+          frame.triangles.push_back({
+              SelectionOverlayLayer::SourceWireDepthStamp,
+              triangle.a,
+              triangle.b,
+              triangle.c,
+              style.source_wire_color_abgr,
+              object.id,
+              triangle.face_id,
+          });
+        }
 }
 
 void append_hover_source_wire(
@@ -238,17 +242,17 @@ void append_hover_source_wire(
 		if (a == nullptr || b == nullptr) {
 			continue;
 		}
-		frame.lines.push_back({
-			SelectionOverlayLayer::source_wire,
-			a->position,
-			b->position,
-			style.source_wire_color_abgr,
-			style.edge_line_width_pixels,
-			object.id,
-			quader_poly::invalid_element_id,
-			edge,
-		});
-	}
+                frame.lines.push_back({
+                    SelectionOverlayLayer::SourceWire,
+                    a->position,
+                    b->position,
+                    style.source_wire_color_abgr,
+                    style.edge_line_width_pixels,
+                    object.id,
+                    quader_poly::kInvalidElementId,
+                    edge,
+                });
+        }
 }
 
 void append_hover_face_overlay(
@@ -260,22 +264,22 @@ void append_hover_face_overlay(
 		const SelectionOverlayStyle& style)
 {
 	quader_poly::Selection hover_selection;
-	hover_selection.mode = quader_poly::SelectionMode::face;
-	hover_selection.faces.push_back(face_id);
+        hover_selection.mode = quader_poly::SelectionMode::Face;
+        hover_selection.faces.push_back(face_id);
 	const quader_poly::OverlayData overlay = quader_poly::build_overlay(document, hover_selection);
 	const std::uint32_t triangle_color =
 		selected_hover_target ? style.hover_selected_face_color_abgr : style.hover_face_color_abgr;
 	for (const quader_poly::OverlayTriangle& triangle : overlay.triangles) {
-		frame.triangles.push_back({
-			SelectionOverlayLayer::hover_face,
-			triangle.a,
-			triangle.b,
-			triangle.c,
-			triangle_color,
-			object_id,
-			face_id,
-		});
-	}
+          frame.triangles.push_back({
+              SelectionOverlayLayer::HoverFace,
+              triangle.a,
+              triangle.b,
+              triangle.c,
+              triangle_color,
+              object_id,
+              face_id,
+          });
+        }
 
 	const quader_poly::Face* face = quader_poly::find_face(document, face_id);
 	if (face == nullptr || face->vertices.size() < 2) {
@@ -289,17 +293,19 @@ void append_hover_face_overlay(
 		if (a == nullptr || b == nullptr) {
 			continue;
 		}
-		frame.lines.push_back({
-			SelectionOverlayLayer::hover_face_edge,
-			a->position,
-			b->position,
-			line_color,
-			style.edge_line_width_pixels,
-			object_id,
-			face_id,
-			quader_poly::make_edge(face->vertices[index], face->vertices[(index + 1U) % face->vertices.size()]),
-		});
-	}
+                frame.lines.push_back({
+                    SelectionOverlayLayer::HoverFaceEdge,
+                    a->position,
+                    b->position,
+                    line_color,
+                    style.edge_line_width_pixels,
+                    object_id,
+                    face_id,
+                    quader_poly::make_edge(
+                        face->vertices[index],
+                        face->vertices[(index + 1U) % face->vertices.size()]),
+                });
+        }
 }
 
 void append_hover_edge_overlay(
@@ -315,16 +321,17 @@ void append_hover_edge_overlay(
 	if (a == nullptr || b == nullptr) {
 		return;
 	}
-	frame.lines.push_back({
-		SelectionOverlayLayer::hover_edge,
-		a->position,
-		b->position,
-		selected_hover_target ? style.hover_selected_line_color_abgr : style.hover_edge_color_abgr,
-		style.single_edge_line_width_pixels,
-		object_id,
-		quader_poly::invalid_element_id,
-		edge,
-	});
+        frame.lines.push_back({
+            SelectionOverlayLayer::HoverEdge,
+            a->position,
+            b->position,
+            selected_hover_target ? style.hover_selected_line_color_abgr
+                                  : style.hover_edge_color_abgr,
+            style.single_edge_line_width_pixels,
+            object_id,
+            quader_poly::kInvalidElementId,
+            edge,
+        });
 }
 
 void append_hover_vertex_overlay(
@@ -339,14 +346,16 @@ void append_hover_vertex_overlay(
 	if (vertex == nullptr) {
 		return;
 	}
-	frame.points.push_back({
-		SelectionOverlayLayer::hover_vertex,
-		vertex->position,
-		selected_hover_target ? style.hover_selected_line_color_abgr : style.hover_vertex_color_abgr,
-		style.vertex_point_size_pixels + style.selected_hover_point_growth_pixels,
-		object_id,
-		vertex_id,
-	});
+        frame.points.push_back({
+            SelectionOverlayLayer::HoverVertex,
+            vertex->position,
+            selected_hover_target ? style.hover_selected_line_color_abgr
+                                  : style.hover_vertex_color_abgr,
+            style.vertex_point_size_pixels +
+                style.selected_hover_point_growth_pixels,
+            object_id,
+            vertex_id,
+        });
 }
 
 } // namespace
@@ -362,34 +371,33 @@ SelectionOverlayFrame build_selection_overlay_frame(
 	const bool selected_hover_target = selection_hover_target_matches_selection(objects, mode, hover);
 	frame.hover_target_selected = hover.selected_modifier_pressed && selected_hover_target;
 
-	auto append_line = [&](SelectionOverlayLayer layer,
-						   const quader::QVec3& a,
-						   const quader::QVec3& b,
-						   std::uint32_t color,
-						   float width,
-						   int object_id = -1,
-						   quader_poly::ElementId face_id = quader_poly::invalid_element_id,
-						   quader_poly::Edge edge = {}) {
-		frame.lines.push_back({ layer, a, b, color, width, object_id, face_id, edge });
-	};
+        auto append_line =
+            [&](SelectionOverlayLayer layer, const quader::QVec3 &a,
+                const quader::QVec3 &b, std::uint32_t color, float width,
+                int object_id = -1,
+                quader_poly::ElementId face_id = quader_poly::kInvalidElementId,
+                quader_poly::Edge edge = {}) {
+              frame.lines.push_back(
+                  {layer, a, b, color, width, object_id, face_id, edge});
+            };
 
-	auto append_point = [&](SelectionOverlayLayer layer,
-							const quader::QVec3& position,
-							std::uint32_t color,
-							float size,
-							int object_id = -1,
-							quader_poly::ElementId vertex_id = quader_poly::invalid_element_id) {
-		frame.points.push_back({ layer, position, color, size, object_id, vertex_id });
-	};
+        auto append_point =
+            [&](SelectionOverlayLayer layer, const quader::QVec3 &position,
+                std::uint32_t color, float size, int object_id = -1,
+                quader_poly::ElementId vertex_id =
+                    quader_poly::kInvalidElementId) {
+              frame.points.push_back(
+                  {layer, position, color, size, object_id, vertex_id});
+            };
 
-	auto append_open_edge_overlay = [&](int object_id, const quader_poly::Document& document, const std::vector<quader_poly::Edge>& selected_edges) {
+        auto append_open_edge_overlay = [&](int object_id, const quader_poly::Document& document, const std::vector<quader_poly::Edge>& selected_edges) {
 		if (selected_edges.empty()) {
 			return;
 		}
-		constexpr float edge_epsilon = 0.00001F;
-		constexpr float open_edge_tick_spacing = 0.035F;
-		constexpr int open_edge_tick_limit = 256;
-		std::unordered_map<std::uint64_t, int> incidence_counts;
+                constexpr float kEdgeEpsilon = 0.00001F;
+                constexpr float kOpenEdgeTickSpacing = 0.035F;
+                constexpr int kOpenEdgeTickLimit = 256;
+                std::unordered_map<std::uint64_t, int> incidence_counts;
 		std::unordered_map<std::uint64_t, OpenEdgeOverlayRef> open_edge_refs;
 		incidence_counts.reserve(document.faces.size() * 4U);
 		open_edge_refs.reserve(document.faces.size() * 4U);
@@ -436,50 +444,47 @@ SelectionOverlayFrame build_selection_overlay_frame(
 			if (a == nullptr || b == nullptr) {
 				continue;
 			}
-			append_line(
-					SelectionOverlayLayer::open_edge,
-					a->position,
-					b->position,
-					style.open_edge_color_abgr,
-					style.open_edge_line_width_pixels,
-					object_id,
-					quader_poly::invalid_element_id,
-					edge_ref.edge);
+                        append_line(
+                            SelectionOverlayLayer::OpenEdge, a->position,
+                            b->position, style.open_edge_color_abgr,
+                            style.open_edge_line_width_pixels, object_id,
+                            quader_poly::kInvalidElementId, edge_ref.edge);
 
-			const quader::QVec3 edge_vector = b->position - a->position;
+                        const quader::QVec3 edge_vector = b->position - a->position;
 			const float edge_length = quader::length(edge_vector);
-			if (edge_length <= edge_epsilon) {
-				continue;
-			}
-			const quader::QVec3 tangent = edge_vector / edge_length;
+                        if (edge_length <= kEdgeEpsilon) {
+                          continue;
+                        }
+                        const quader::QVec3 tangent = edge_vector / edge_length;
 			const quader::QVec3 midpoint = (a->position + b->position) * 0.5F;
 			quader::QVec3 tick_direction = edge_ref.face_centroid - midpoint;
 			tick_direction = tick_direction - tangent * quader::dot(tick_direction, tangent);
-			if (quader::length_squared(tick_direction) <= edge_epsilon * edge_epsilon) {
-				tick_direction = quader::cross(edge_ref.face_normal, tangent);
-			}
-			if (quader::length_squared(tick_direction) <= edge_epsilon * edge_epsilon) {
-				continue;
-			}
-			tick_direction = quader::normalize_or_zero(tick_direction);
-			const int tick_count = std::clamp(
-					static_cast<int>(std::floor(edge_length / open_edge_tick_spacing)),
-					1,
-					open_edge_tick_limit);
-			const float tick_length = std::clamp(edge_length * 0.018F, 0.012F, 0.04F);
+                        if (quader::length_squared(tick_direction) <=
+                            kEdgeEpsilon * kEdgeEpsilon) {
+                          tick_direction =
+                              quader::cross(edge_ref.face_normal, tangent);
+                        }
+                        if (quader::length_squared(tick_direction) <=
+                            kEdgeEpsilon * kEdgeEpsilon) {
+                          continue;
+                        }
+                        tick_direction = quader::normalize_or_zero(tick_direction);
+                        const int tick_count =
+                            std::clamp(static_cast<int>(std::floor(
+                                           edge_length / kOpenEdgeTickSpacing)),
+                                       1, kOpenEdgeTickLimit);
+                        const float tick_length = std::clamp(edge_length * 0.018F, 0.012F, 0.04F);
 			for (int tick_index = 0; tick_index < tick_count; ++tick_index) {
 				const float t = (static_cast<float>(tick_index) + 0.5F) / static_cast<float>(tick_count);
 				const quader::QVec3 tick_start = a->position + edge_vector * t;
-				append_line(
-						SelectionOverlayLayer::open_edge,
-						tick_start,
-						tick_start + tick_direction * tick_length,
-						style.open_edge_color_abgr,
-						style.open_edge_line_width_pixels,
-						object_id,
-						quader_poly::invalid_element_id,
-						edge_ref.edge);
-			}
+                                append_line(
+                                    SelectionOverlayLayer::OpenEdge, tick_start,
+                                    tick_start + tick_direction * tick_length,
+                                    style.open_edge_color_abgr,
+                                    style.open_edge_line_width_pixels,
+                                    object_id, quader_poly::kInvalidElementId,
+                                    edge_ref.edge);
+                        }
 		}
 	};
 
@@ -506,18 +511,20 @@ SelectionOverlayFrame build_selection_overlay_frame(
 			}
 			const quader_poly::OverlayData overlay = quader_poly::build_overlay(document, triangle_selection);
 			for (const quader_poly::OverlayTriangle& triangle : overlay.triangles) {
-				triangles->push_back({
-					triangle_layer,
-					triangle.a,
-					triangle.b,
-					triangle.c,
-					triangle_layer == SelectionOverlayLayer::hover_face ?
-						(frame.hover_target_selected ? style.hover_selected_face_color_abgr : style.hover_face_color_abgr) :
-						style.selection_face_color_abgr,
-					object_id,
-					triangle.face_id,
-				});
-			}
+                          triangles->push_back({
+                              triangle_layer,
+                              triangle.a,
+                              triangle.b,
+                              triangle.c,
+                              triangle_layer == SelectionOverlayLayer::HoverFace
+                                  ? (frame.hover_target_selected
+                                         ? style.hover_selected_face_color_abgr
+                                         : style.hover_face_color_abgr)
+                                  : style.selection_face_color_abgr,
+                              object_id,
+                              triangle.face_id,
+                          });
+                        }
 		}
 
 		if (lines == nullptr) {
@@ -545,147 +552,212 @@ SelectionOverlayFrame build_selection_overlay_frame(
 				if (a == nullptr || b == nullptr) {
 					continue;
 				}
-				lines->push_back({
-					line_layer,
-					a->position,
-					b->position,
-					line_layer == SelectionOverlayLayer::hover_face_edge ?
-						(frame.hover_target_selected ? style.hover_selected_line_color_abgr : style.hover_face_edge_color_abgr) :
-						style.selected_edge_color_abgr,
-					style.edge_line_width_pixels,
-					object_id,
-					face_id,
-					quader_poly::make_edge(a_id, b_id),
-				});
-			}
+                                lines->push_back({
+                                    line_layer,
+                                    a->position,
+                                    b->position,
+                                    line_layer ==
+                                            SelectionOverlayLayer::HoverFaceEdge
+                                        ? (frame.hover_target_selected
+                                               ? style
+                                                     .hover_selected_line_color_abgr
+                                               : style
+                                                     .hover_face_edge_color_abgr)
+                                        : style.selected_edge_color_abgr,
+                                    style.edge_line_width_pixels,
+                                    object_id,
+                                    face_id,
+                                    quader_poly::make_edge(a_id, b_id),
+                                });
+                        }
 		}
 	};
 
 	auto object_draws_source_wire = [&](const PolygonObject& object) {
 		const bool selected_object = object.selected;
-		const bool component_hovered_object = mode != SelectionMode::object &&
-			object.id > 0 &&
-			object.id == hover.candidate_object_id;
-		return selected_object || component_hovered_object;
+                const bool component_hovered_object =
+                    mode != SelectionMode::Object && object.id > 0 &&
+                    object.id == hover.candidate_object_id;
+                return selected_object || component_hovered_object;
 	};
 
 	for (const PolygonObject& object : objects) {
 		if (!object_draws_source_wire(object)) {
 			continue;
 		}
-		if (mode != SelectionMode::object) {
-			append_source_wire_depth_stamp(frame, object, style);
-		}
-		for (const quader_poly::Edge edge : quader_poly::document_edges(object.document)) {
+                if (mode != SelectionMode::Object) {
+                  append_source_wire_depth_stamp(frame, object, style);
+                }
+                for (const quader_poly::Edge edge : quader_poly::document_edges(object.document)) {
 			const quader_poly::Vertex* a = quader_poly::find_vertex(object.document, edge.a);
 			const quader_poly::Vertex* b = quader_poly::find_vertex(object.document, edge.b);
 			if (a != nullptr && b != nullptr) {
-				if (mode == SelectionMode::object && object.selected) {
-					append_line(
-						SelectionOverlayLayer::selected_edge,
-						a->position,
-						b->position,
-						style.selected_edge_color_abgr,
-						style.edge_line_width_pixels,
-						object.id,
-						quader_poly::invalid_element_id,
-						edge);
-				} else {
-					append_line(
-						SelectionOverlayLayer::source_wire,
-						a->position,
-						b->position,
-						style.source_wire_color_abgr,
-						style.edge_line_width_pixels,
-						object.id,
-						quader_poly::invalid_element_id,
-						edge);
-				}
-			}
+                          if (mode == SelectionMode::Object &&
+                              object.selected) {
+                            append_line(SelectionOverlayLayer::SelectedEdge,
+                                        a->position, b->position,
+                                        style.selected_edge_color_abgr,
+                                        style.edge_line_width_pixels, object.id,
+                                        quader_poly::kInvalidElementId, edge);
+                          } else {
+                            append_line(SelectionOverlayLayer::SourceWire,
+                                        a->position, b->position,
+                                        style.source_wire_color_abgr,
+                                        style.edge_line_width_pixels, object.id,
+                                        quader_poly::kInvalidElementId, edge);
+                          }
+                        }
 		}
 	}
 
 	for (const PolygonObject& object : objects) {
-		const bool vertex_candidate_object = !object.selected &&
-			mode == SelectionMode::vertex &&
-			object.id > 0 &&
-			object.id == hover.candidate_object_id;
-		if (object.selected || vertex_candidate_object) {
-			if (mode == SelectionMode::object) {
-				quader_poly::Selection selection = overlay_all_face_selection(object.document);
-				append_face_selection(object.id, object.document, selection, SelectionOverlayLayer::selected_xray_face, SelectionOverlayLayer::selected_face_edge, &frame.triangles, nullptr);
-				append_face_selection(object.id, object.document, selection, SelectionOverlayLayer::selected_face_mask, SelectionOverlayLayer::selected_face_edge, &frame.triangles, nullptr);
-			} else if (mode == SelectionMode::face) {
-				std::unordered_set<std::uint64_t> hidden_hover_line_edges;
-				std::unordered_set<quader_poly::ElementId> hidden_hover_mask_faces;
-				if (frame.hover_target_selected &&
-						object.id == hover.object_id &&
-						hover.kind == SelectionHoverKind::face &&
-						quader_poly::selection_contains_face(object.selection, hover.face_id)) {
-					hidden_hover_mask_faces.insert(hover.face_id);
-					overlay_append_face_edges_to_set(object.document, hover.face_id, hidden_hover_line_edges);
-				}
-				const std::unordered_set<std::uint64_t>* hidden_line_edges = hidden_hover_line_edges.empty() ? nullptr : &hidden_hover_line_edges;
-				const std::unordered_set<quader_poly::ElementId>* hidden_triangle_faces = hidden_hover_mask_faces.empty() ? nullptr : &hidden_hover_mask_faces;
-				append_face_selection(object.id, object.document, object.selection, SelectionOverlayLayer::selected_visible_face, SelectionOverlayLayer::selected_face_edge, &frame.triangles, &frame.lines, hidden_line_edges, hidden_triangle_faces);
-				append_face_selection(object.id, object.document, object.selection, SelectionOverlayLayer::selected_face_mask, SelectionOverlayLayer::selected_face_edge, &frame.triangles, nullptr, nullptr, hidden_triangle_faces);
-				append_face_selection(object.id, object.document, object.selection, SelectionOverlayLayer::selected_visible_face, SelectionOverlayLayer::selected_edge, nullptr, &frame.lines, hidden_line_edges);
-			} else if (mode == SelectionMode::edge) {
-				append_open_edge_overlay(object.id, object.document, object.selection.edges);
-				for (const quader_poly::Edge edge : object.selection.edges) {
-					if (frame.hover_target_selected &&
-							object.id == hover.object_id &&
-							hover.kind == SelectionHoverKind::edge &&
-							quader_poly::selection_contains(object.selection, hover.edge) &&
-							edge == hover.edge) {
-						continue;
-					}
-					const quader_poly::Vertex* a = quader_poly::find_vertex(object.document, edge.a);
-					const quader_poly::Vertex* b = quader_poly::find_vertex(object.document, edge.b);
-					if (a != nullptr && b != nullptr) {
-						append_line(SelectionOverlayLayer::selected_edge, a->position, b->position, style.selected_edge_color_abgr, style.single_edge_line_width_pixels, object.id, quader_poly::invalid_element_id, edge);
-					}
-				}
-			} else if (mode == SelectionMode::vertex) {
-				const bool suppress_hover_vertex = frame.hover_target_selected &&
-					object.id == hover.object_id &&
-					hover.kind == SelectionHoverKind::vertex &&
-					quader_poly::selection_contains(object.selection, hover.vertex_id);
-				for (const quader_poly::Vertex& vertex : object.document.vertices) {
-					if (!object.selected) {
-						append_point(SelectionOverlayLayer::unselected_vertex, vertex.position, style.handle_color_abgr, style.vertex_point_size_pixels, object.id, vertex.id);
-					} else if (quader_poly::selection_contains(object.selection, vertex.id)) {
-						if (!suppress_hover_vertex || vertex.id != hover.vertex_id) {
-							append_point(SelectionOverlayLayer::selected_vertex, vertex.position, style.selected_handle_color_abgr, style.vertex_point_size_pixels + style.selected_hover_point_growth_pixels, object.id, vertex.id);
-						}
-					} else {
-						append_point(SelectionOverlayLayer::unselected_vertex, vertex.position, style.handle_color_abgr, style.vertex_point_size_pixels, object.id, vertex.id);
-					}
-				}
-			}
-		}
+          const bool vertex_candidate_object =
+              !object.selected && mode == SelectionMode::Vertex &&
+              object.id > 0 && object.id == hover.candidate_object_id;
+          if (object.selected || vertex_candidate_object) {
+            if (mode == SelectionMode::Object) {
+              quader_poly::Selection selection =
+                  overlay_all_face_selection(object.document);
+              append_face_selection(object.id, object.document, selection,
+                                    SelectionOverlayLayer::SelectedXrayFace,
+                                    SelectionOverlayLayer::SelectedFaceEdge,
+                                    &frame.triangles, nullptr);
+              append_face_selection(object.id, object.document, selection,
+                                    SelectionOverlayLayer::SelectedFaceMask,
+                                    SelectionOverlayLayer::SelectedFaceEdge,
+                                    &frame.triangles, nullptr);
+            } else if (mode == SelectionMode::Face) {
+              std::unordered_set<std::uint64_t> hidden_hover_line_edges;
+              std::unordered_set<quader_poly::ElementId>
+                  hidden_hover_mask_faces;
+              if (frame.hover_target_selected && object.id == hover.object_id &&
+                  hover.kind == SelectionHoverKind::Face &&
+                  quader_poly::selection_contains_face(object.selection,
+                                                       hover.face_id)) {
+                hidden_hover_mask_faces.insert(hover.face_id);
+                overlay_append_face_edges_to_set(object.document, hover.face_id,
+                                                 hidden_hover_line_edges);
+              }
+              const std::unordered_set<std::uint64_t> *hidden_line_edges =
+                  hidden_hover_line_edges.empty() ? nullptr
+                                                  : &hidden_hover_line_edges;
+              const std::unordered_set<quader_poly::ElementId>
+                  *hidden_triangle_faces = hidden_hover_mask_faces.empty()
+                                               ? nullptr
+                                               : &hidden_hover_mask_faces;
+              append_face_selection(
+                  object.id, object.document, object.selection,
+                  SelectionOverlayLayer::SelectedVisibleFace,
+                  SelectionOverlayLayer::SelectedFaceEdge, &frame.triangles,
+                  &frame.lines, hidden_line_edges, hidden_triangle_faces);
+              append_face_selection(
+                  object.id, object.document, object.selection,
+                  SelectionOverlayLayer::SelectedFaceMask,
+                  SelectionOverlayLayer::SelectedFaceEdge, &frame.triangles,
+                  nullptr, nullptr, hidden_triangle_faces);
+              append_face_selection(object.id, object.document,
+                                    object.selection,
+                                    SelectionOverlayLayer::SelectedVisibleFace,
+                                    SelectionOverlayLayer::SelectedEdge,
+                                    nullptr, &frame.lines, hidden_line_edges);
+            } else if (mode == SelectionMode::Edge) {
+              append_open_edge_overlay(object.id, object.document,
+                                       object.selection.edges);
+              for (const quader_poly::Edge edge : object.selection.edges) {
+                if (frame.hover_target_selected &&
+                    object.id == hover.object_id &&
+                    hover.kind == SelectionHoverKind::Edge &&
+                    quader_poly::selection_contains(object.selection,
+                                                    hover.edge) &&
+                    edge == hover.edge) {
+                  continue;
+                }
+                const quader_poly::Vertex *a =
+                    quader_poly::find_vertex(object.document, edge.a);
+                const quader_poly::Vertex *b =
+                    quader_poly::find_vertex(object.document, edge.b);
+                if (a != nullptr && b != nullptr) {
+                  append_line(SelectionOverlayLayer::SelectedEdge, a->position,
+                              b->position, style.selected_edge_color_abgr,
+                              style.single_edge_line_width_pixels, object.id,
+                              quader_poly::kInvalidElementId, edge);
+                }
+              }
+            } else if (mode == SelectionMode::Vertex) {
+              const bool suppress_hover_vertex =
+                  frame.hover_target_selected && object.id == hover.object_id &&
+                  hover.kind == SelectionHoverKind::Vertex &&
+                  quader_poly::selection_contains(object.selection,
+                                                  hover.vertex_id);
+              for (const quader_poly::Vertex &vertex :
+                   object.document.vertices) {
+                if (!object.selected) {
+                  append_point(SelectionOverlayLayer::UnselectedVertex,
+                               vertex.position, style.handle_color_abgr,
+                               style.vertex_point_size_pixels, object.id,
+                               vertex.id);
+                } else if (quader_poly::selection_contains(object.selection,
+                                                           vertex.id)) {
+                  if (!suppress_hover_vertex || vertex.id != hover.vertex_id) {
+                    append_point(SelectionOverlayLayer::SelectedVertex,
+                                 vertex.position,
+                                 style.selected_handle_color_abgr,
+                                 style.vertex_point_size_pixels +
+                                     style.selected_hover_point_growth_pixels,
+                                 object.id, vertex.id);
+                  }
+                } else {
+                  append_point(SelectionOverlayLayer::UnselectedVertex,
+                               vertex.position, style.handle_color_abgr,
+                               style.vertex_point_size_pixels, object.id,
+                               vertex.id);
+                }
+              }
+            }
+                }
 
-		if (object.id != hover.object_id || hover.kind == SelectionHoverKind::none) {
-			continue;
-		}
-		if (hover.kind == SelectionHoverKind::face) {
-			quader_poly::Selection hover_selection;
-			hover_selection.mode = quader_poly::SelectionMode::face;
-			hover_selection.faces.push_back(hover.face_id);
-			append_face_selection(object.id, object.document, hover_selection, SelectionOverlayLayer::hover_face, SelectionOverlayLayer::hover_face_edge, &frame.triangles, &frame.lines);
-		} else if (hover.kind == SelectionHoverKind::edge) {
-			const quader_poly::Vertex* a = quader_poly::find_vertex(object.document, hover.edge.a);
-			const quader_poly::Vertex* b = quader_poly::find_vertex(object.document, hover.edge.b);
-			if (a != nullptr && b != nullptr) {
-				append_line(SelectionOverlayLayer::hover_edge, a->position, b->position, frame.hover_target_selected ? style.hover_selected_line_color_abgr : style.hover_edge_color_abgr, style.single_edge_line_width_pixels, object.id, quader_poly::invalid_element_id, hover.edge);
-			}
-		} else if (hover.kind == SelectionHoverKind::vertex) {
-			const quader_poly::Vertex* vertex = quader_poly::find_vertex(object.document, hover.vertex_id);
-			if (vertex != nullptr) {
-				append_point(SelectionOverlayLayer::hover_vertex, vertex->position, frame.hover_target_selected ? style.hover_selected_line_color_abgr : style.hover_vertex_color_abgr, style.vertex_point_size_pixels + style.selected_hover_point_growth_pixels, object.id, hover.vertex_id);
-			}
-		}
-	}
+                if (object.id != hover.object_id ||
+                    hover.kind == SelectionHoverKind::None) {
+                  continue;
+                }
+                if (hover.kind == SelectionHoverKind::Face) {
+                  quader_poly::Selection hover_selection;
+                  hover_selection.mode = quader_poly::SelectionMode::Face;
+                  hover_selection.faces.push_back(hover.face_id);
+                  append_face_selection(object.id, object.document,
+                                        hover_selection,
+                                        SelectionOverlayLayer::HoverFace,
+                                        SelectionOverlayLayer::HoverFaceEdge,
+                                        &frame.triangles, &frame.lines);
+                } else if (hover.kind == SelectionHoverKind::Edge) {
+                  const quader_poly::Vertex *a =
+                      quader_poly::find_vertex(object.document, hover.edge.a);
+                  const quader_poly::Vertex *b =
+                      quader_poly::find_vertex(object.document, hover.edge.b);
+                  if (a != nullptr && b != nullptr) {
+                    append_line(SelectionOverlayLayer::HoverEdge, a->position,
+                                b->position,
+                                frame.hover_target_selected
+                                    ? style.hover_selected_line_color_abgr
+                                    : style.hover_edge_color_abgr,
+                                style.single_edge_line_width_pixels, object.id,
+                                quader_poly::kInvalidElementId, hover.edge);
+                  }
+                } else if (hover.kind == SelectionHoverKind::Vertex) {
+                  const quader_poly::Vertex *vertex = quader_poly::find_vertex(
+                      object.document, hover.vertex_id);
+                  if (vertex != nullptr) {
+                    append_point(SelectionOverlayLayer::HoverVertex,
+                                 vertex->position,
+                                 frame.hover_target_selected
+                                     ? style.hover_selected_line_color_abgr
+                                     : style.hover_vertex_color_abgr,
+                                 style.vertex_point_size_pixels +
+                                     style.selected_hover_point_growth_pixels,
+                                 object.id, hover.vertex_id);
+                  }
+                }
+        }
 
 	return frame;
 }
@@ -711,38 +783,45 @@ SelectionOverlayFrame build_selection_hover_overlay_frame(
 	frame.hover_target_selected = hover.selected_modifier_pressed && selected_hover_target;
 
 	for (const PolygonObject& object : objects) {
-		const bool component_candidate =
-			mode != SelectionMode::object &&
-			hover.candidate_object_id > 0 &&
-			object.id == hover.candidate_object_id;
-		if (!object.selected && component_candidate) {
-			append_hover_source_wire(frame, object, style, component_candidate);
-			if (mode == SelectionMode::vertex) {
-				for (const quader_poly::Vertex& vertex : object.document.vertices) {
-					frame.points.push_back({
-						SelectionOverlayLayer::unselected_vertex,
-						vertex.position,
-						style.handle_color_abgr,
-						style.vertex_point_size_pixels,
-						object.id,
-						vertex.id,
-					});
-				}
-			}
-		}
+          const bool component_candidate =
+              mode != SelectionMode::Object && hover.candidate_object_id > 0 &&
+              object.id == hover.candidate_object_id;
+          if (!object.selected && component_candidate) {
+            append_hover_source_wire(frame, object, style, component_candidate);
+            if (mode == SelectionMode::Vertex) {
+              for (const quader_poly::Vertex &vertex :
+                   object.document.vertices) {
+                frame.points.push_back({
+                    SelectionOverlayLayer::UnselectedVertex,
+                    vertex.position,
+                    style.handle_color_abgr,
+                    style.vertex_point_size_pixels,
+                    object.id,
+                    vertex.id,
+                });
+              }
+            }
+                }
 
-		if (object.id != hover.object_id || hover.kind == SelectionHoverKind::none) {
-			continue;
-		}
+                if (object.id != hover.object_id ||
+                    hover.kind == SelectionHoverKind::None) {
+                  continue;
+                }
 
-		if (hover.kind == SelectionHoverKind::face) {
-			append_hover_face_overlay(frame, object.id, object.document, hover.face_id, frame.hover_target_selected, style);
-		} else if (hover.kind == SelectionHoverKind::edge) {
-			append_hover_edge_overlay(frame, object.id, object.document, hover.edge, frame.hover_target_selected, style);
-		} else if (hover.kind == SelectionHoverKind::vertex) {
-			append_hover_vertex_overlay(frame, object.id, object.document, hover.vertex_id, frame.hover_target_selected, style);
-		}
-	}
+                if (hover.kind == SelectionHoverKind::Face) {
+                  append_hover_face_overlay(frame, object.id, object.document,
+                                            hover.face_id,
+                                            frame.hover_target_selected, style);
+                } else if (hover.kind == SelectionHoverKind::Edge) {
+                  append_hover_edge_overlay(frame, object.id, object.document,
+                                            hover.edge,
+                                            frame.hover_target_selected, style);
+                } else if (hover.kind == SelectionHoverKind::Vertex) {
+                  append_hover_vertex_overlay(
+                      frame, object.id, object.document, hover.vertex_id,
+                      frame.hover_target_selected, style);
+                }
+        }
 
 	return frame;
 }
@@ -771,10 +850,11 @@ SelectionOverlayFrame build_diagnostic_edge_overlay_frame(
 			}
 			const quader_geometry::QVec3d start = to_diagnostic_vec3(start_vertex->position);
 			const quader_geometry::QVec3d end = to_diagnostic_vec3(end_vertex->position);
-			if (quader_geometry::length_squared(end - start) <= diagnostic_edge_epsilon * diagnostic_edge_epsilon) {
-				continue;
-			}
-			edges.push_back({
+                        if (quader_geometry::length_squared(end - start) <=
+                            kDiagnosticEdgeEpsilon * kDiagnosticEdgeEpsilon) {
+                          continue;
+                        }
+                        edges.push_back({
 				object.id,
 				edge,
 				start_vertex->position,
@@ -803,17 +883,17 @@ SelectionOverlayFrame build_diagnostic_edge_overlay_frame(
 			continue;
 		}
 		const DiagnosticEdgeRef& edge = edges[index];
-		frame.lines.push_back({
-			SelectionOverlayLayer::diagnostic_edge,
-			edge.start,
-			edge.end,
-			style.diagnostic_edge_color_abgr,
-			style.diagnostic_edge_line_width_pixels,
-			edge.object_id,
-			quader_poly::invalid_element_id,
-			edge.edge,
-		});
-	}
+                frame.lines.push_back({
+                    SelectionOverlayLayer::DiagnosticEdge,
+                    edge.start,
+                    edge.end,
+                    style.diagnostic_edge_color_abgr,
+                    style.diagnostic_edge_line_width_pixels,
+                    edge.object_id,
+                    quader_poly::kInvalidElementId,
+                    edge.edge,
+                });
+        }
 	return frame;
 }
 

@@ -42,14 +42,17 @@ public:
     SceneWireframeOverlayCache& operator=(SceneWireframeOverlayCache&&) = delete;
     ~SceneWireframeOverlayCache();
 
-    void initialize(filament::Engine& engine, filament::Scene& scene, filament::Material& lineMaterial);
+    void initialize(filament::Engine &engine, filament::Scene &scene,
+                    filament::Material &line_material);
     void shutdown();
 
     bool initialized() const {
-        return engine_ != nullptr && scene_ != nullptr && lineMaterial_ != nullptr;
+      return engine_ != nullptr && scene_ != nullptr &&
+             line_material_ != nullptr;
     }
 
-    void sync(const SceneDocument& document, const AssetRegistry& assets, std::uint8_t layerMask);
+    void sync(const SceneDocument &document, const AssetRegistry &assets,
+              std::uint8_t layer_mask);
 
     /**
      * Owns one persistent wireframe line renderable and its GPU buffers.
@@ -62,11 +65,11 @@ public:
         Proxy& operator=(Proxy&& other) noexcept;
 
         utils::Entity entity;
-        filament::VertexBuffer* vertexBuffer = nullptr;
-        filament::IndexBuffer* indexBuffer = nullptr;
-        filament::MaterialInstance* materialInstance = nullptr;
-        std::uint32_t vertexCount = 0;
-        std::uint32_t indexCount = 0;
+        filament::VertexBuffer *vertex_buffer = nullptr;
+        filament::IndexBuffer *index_buffer = nullptr;
+        filament::MaterialInstance *material_instance = nullptr;
+        std::uint32_t vertex_count = 0;
+        std::uint32_t index_count = 0;
     };
 
     /**
@@ -79,11 +82,11 @@ public:
         Entry(Entry&&) noexcept = default;
         Entry& operator=(Entry&&) noexcept = delete;
 
-        utils::Entity transformRoot;
-        AssetId meshId = InvalidAssetId;
-        std::uint64_t meshRevision = 0;
+        utils::Entity transform_root;
+        AssetId mesh_id = kInvalidAssetId;
+        std::uint64_t mesh_revision = 0;
         bool selected = false;
-        Proxy lineProxy;
+        Proxy line_proxy;
     };
 
 private:
@@ -91,41 +94,41 @@ private:
      * Captures the visible scene mesh inputs that require wireframe geometry rebuilds.
      */
     struct WireframeEntityState {
-        EntityId entity = InvalidEntityId;
-        AssetId meshId = InvalidAssetId;
-        std::uint64_t meshRevision = 0;
-        bool selected = false;
+      EntityId entity = kInvalidEntityId;
+      AssetId mesh_id = kInvalidAssetId;
+      std::uint64_t mesh_revision = 0;
+      bool selected = false;
 
-        bool operator==(const WireframeEntityState&) const = default;
+      bool operator==(const WireframeEntityState &) const = default;
     };
 
-    std::vector<WireframeEntityState> wireframeEntityStates(
-            const SceneDocument& document,
-            const AssetRegistry& assets) const;
-    Entry createEntry(
-            EntityId entityId,
-            AssetId meshId,
-            bool selected,
-            const SceneDocument& document,
-            const AssetRegistry& assets);
-    void destroyEntry(Entry& entry);
-    void destroyProxy(Proxy& proxy, bool removeFromScene);
-    void destroyTransformRoot(Entry& entry);
-    void setProxyLayerMask(const Proxy& proxy, std::uint8_t layerMask) const;
-    void setLayerMask(std::uint8_t layerMask);
-    void updateEntryTransform(const Entry& entry, const SceneDocument& document, EntityId entityId) const;
-    void updateEntryTransforms(const SceneDocument& document);
-    void removeExcept(const std::unordered_set<EntityId>& liveEntities);
+    std::vector<WireframeEntityState>
+    wireframe_entity_states(const SceneDocument &document,
+                            const AssetRegistry &assets) const;
+    Entry create_entry(EntityId entity_id, AssetId mesh_id, bool selected,
+                       const SceneDocument &document,
+                       const AssetRegistry &assets);
+    void destroy_entry(Entry &entry);
+    void destroy_proxy(Proxy &proxy, bool remove_from_scene);
+    void destroy_transform_root(Entry &entry);
+    void set_proxy_layer_mask(const Proxy &proxy,
+                              std::uint8_t layer_mask) const;
+    void set_layer_mask(std::uint8_t layer_mask);
+    void update_entry_transform(const Entry &entry,
+                                const SceneDocument &document,
+                                EntityId entity_id) const;
+    void update_entry_transforms(const SceneDocument &document);
+    void remove_except(const std::unordered_set<EntityId> &live_entities);
 
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
-    filament::Material* lineMaterial_ = nullptr;
+    filament::Material *line_material_ = nullptr;
     std::unordered_map<EntityId, Entry> entries_;
-    std::vector<WireframeEntityState> syncedStates_;
-    std::uint64_t syncedSceneRevision_ = 0;
-    std::uint64_t syncedAssetRevision_ = 0;
-    std::uint8_t layerMask_ = 0u;
-    bool hasSynced_ = false;
+    std::vector<WireframeEntityState> synced_states_;
+    std::uint64_t synced_scene_revision_ = 0;
+    std::uint64_t synced_asset_revision_ = 0;
+    std::uint8_t layer_mask_ = 0u;
+    bool has_synced_ = false;
 };
 
 } // namespace quader

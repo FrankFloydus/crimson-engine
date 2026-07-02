@@ -33,30 +33,31 @@ public:
     SceneRenderSyncService& operator=(SceneRenderSyncService&&) = delete;
     ~SceneRenderSyncService();
 
-    void initialize(filament::Engine& engine,
-            filament::Scene& scene,
-            MeshRenderableCache& meshCache,
-            MaterialBindingService& materialBinding);
+    void initialize(filament::Engine &engine, filament::Scene &scene,
+                    MeshRenderableCache &mesh_cache,
+                    MaterialBindingService &material_binding);
     void shutdown();
 
     bool initialized() const {
-        return engine_ != nullptr && scene_ != nullptr && meshCache_ != nullptr && materialBinding_ != nullptr;
+      return engine_ != nullptr && scene_ != nullptr &&
+             mesh_cache_ != nullptr && material_binding_ != nullptr;
     }
 
     bool sync(const SceneDocument& document, const AssetRegistry& assets);
-    bool renderAssetRevisionsChanged(const SceneDocument& document, const AssetRegistry& assets) const;
+    bool render_asset_revisions_changed(const SceneDocument &document,
+                                        const AssetRegistry &assets) const;
 
-private:
+  private:
     void rebuild(const SceneDocument& document, const AssetRegistry& assets);
 
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
-    MeshRenderableCache* meshCache_ = nullptr;
-    MaterialBindingService* materialBinding_ = nullptr;
-    std::uint64_t syncedRevision_ = 0;
-    std::uint64_t syncedAssetRevision_ = 0;
-    bool hasSynced_ = false;
-    LightRenderableCache lightCache_;
+    MeshRenderableCache *mesh_cache_ = nullptr;
+    MaterialBindingService *material_binding_ = nullptr;
+    std::uint64_t synced_revision_ = 0;
+    std::uint64_t synced_asset_revision_ = 0;
+    bool has_synced_ = false;
+    LightRenderableCache light_cache_;
 };
 
 } // namespace quader

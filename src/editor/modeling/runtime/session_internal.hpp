@@ -16,9 +16,9 @@
 
 namespace quader_editor_core {
 
-inline constexpr float transform_basis_epsilon = 0.00001F;
-inline constexpr float transform_point_epsilon = 0.00000001F;
-inline constexpr float create_box_epsilon = 0.000001F;
+inline constexpr float kTransformBasisEpsilon = 0.00001F;
+inline constexpr float kTransformPointEpsilon = 0.00000001F;
+inline constexpr float kCreateBoxEpsilon = 0.000001F;
 
 CommandResult ok_result(bool changed);
 CommandResult error_result(std::string message);

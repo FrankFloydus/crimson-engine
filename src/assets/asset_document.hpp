@@ -18,9 +18,9 @@ template <typename Revision>
  * Represents an Asset Document Base value used by the asset document and registry layer.
  */
 struct AssetDocumentBase {
-    AssetId id = InvalidAssetId;
-    Revision revision;
-    std::string name;
+  AssetId id = kInvalidAssetId;
+  Revision revision;
+  std::string name;
 };
 
 } // namespace quader

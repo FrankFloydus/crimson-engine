@@ -56,55 +56,65 @@ public:
         };
     }
 
-    static ViewportOverlayCamera overlayCamera(const ViewportCameraController& camera, QVec2 viewportSize) {
-        const ViewportCameraBasis cameraBasis = basis(camera);
-        const ViewportCameraState& state = camera.state();
-        return {
-                .eye = cameraBasis.eye,
-                .forward = cameraBasis.forward,
-                .right = cameraBasis.right,
-                .up = cameraBasis.up,
-                .viewportSize = {std::max(viewportSize.x, 1.0f), std::max(viewportSize.y, 1.0f)},
-                .projection = state.projection == ViewportProjection::Orthographic
-                        ? ViewportOverlayProjection::Orthographic
-                        : ViewportOverlayProjection::Perspective,
-                .orthographicSize = state.orthographicSize,
-                .fovDegrees = state.fovDegrees,
-                .nearPlane = state.nearPlane,
-                .farPlane = state.farPlane,
-        };
+    static ViewportOverlayCamera
+    overlay_camera(const ViewportCameraController &camera,
+                   QVec2 viewport_size) {
+      const ViewportCameraBasis camera_basis = basis(camera);
+      const ViewportCameraState &state = camera.state();
+      return {
+          .eye = camera_basis.eye,
+          .forward = camera_basis.forward,
+          .right = camera_basis.right,
+          .up = camera_basis.up,
+          .viewport_size = {std::max(viewport_size.x, 1.0f),
+                            std::max(viewport_size.y, 1.0f)},
+          .projection = state.projection == ViewportProjection::Orthographic
+                            ? ViewportOverlayProjection::Orthographic
+                            : ViewportOverlayProjection::Perspective,
+          .orthographic_size = state.orthographic_size,
+          .fov_degrees = state.fov_degrees,
+          .near_plane = state.near_plane,
+          .far_plane = state.far_plane,
+      };
     }
 
-    static ModelingViewportCamera modelingCamera(const ViewportCameraController& camera, QVec2 viewportSize) {
-        const ViewportCameraBasis cameraBasis = basis(camera);
-        const ViewportCameraState& state = camera.state();
-        return {
-                .orthographic = state.projection == ViewportProjection::Orthographic,
-                .origin = cameraBasis.eye,
-                .xAxis = cameraBasis.right,
-                .yAxis = cameraBasis.up,
-                .zAxis = cameraBasis.forward * -1.0f,
-                .viewportSize = viewportSize,
-                .orthographicSize = state.orthographicSize,
-                .fovDegrees = state.fovDegrees,
-        };
+    static ModelingViewportCamera
+    modeling_camera(const ViewportCameraController &camera,
+                    QVec2 viewport_size) {
+      const ViewportCameraBasis camera_basis = basis(camera);
+      const ViewportCameraState &state = camera.state();
+      return {
+          .orthographic = state.projection == ViewportProjection::Orthographic,
+          .origin = camera_basis.eye,
+          .x_axis = camera_basis.right,
+          .y_axis = camera_basis.up,
+          .z_axis = camera_basis.forward * -1.0f,
+          .viewport_size = viewport_size,
+          .orthographic_size = state.orthographic_size,
+          .fov_degrees = state.fov_degrees,
+      };
     }
 
-    static quader_editor_core::ViewportCameraState runtimeCamera(const ViewportCameraController& camera, QVec2 viewportSize) {
-        const ViewportCameraBasis cameraBasis = basis(camera);
-        const ViewportCameraState& state = camera.state();
-        quader_editor_core::ViewportCameraState runtimeCamera;
-        runtimeCamera.projection = state.projection == ViewportProjection::Orthographic
-                ? quader_editor_core::CameraProjection::orthographic
-                : quader_editor_core::CameraProjection::perspective;
-        runtimeCamera.transform.origin = cameraBasis.eye;
-        runtimeCamera.transform.x_axis = cameraBasis.right;
-        runtimeCamera.transform.y_axis = cameraBasis.up;
-        runtimeCamera.transform.z_axis = cameraBasis.forward * -1.0f;
-        runtimeCamera.viewport_size = {std::max(viewportSize.x, 1.0f), std::max(viewportSize.y, 1.0f)};
-        runtimeCamera.orthographic_size = std::max(state.orthographicSize, 0.0001f);
-        runtimeCamera.fov_degrees = state.fovDegrees;
-        return runtimeCamera;
+    static quader_editor_core::ViewportCameraState
+    runtime_camera(const ViewportCameraController &camera,
+                   QVec2 viewport_size) {
+      const ViewportCameraBasis camera_basis = basis(camera);
+      const ViewportCameraState &state = camera.state();
+      quader_editor_core::ViewportCameraState runtime_camera;
+      runtime_camera.projection =
+          state.projection == ViewportProjection::Orthographic
+              ? quader_editor_core::CameraProjection::Orthographic
+              : quader_editor_core::CameraProjection::Perspective;
+      runtime_camera.transform.origin = camera_basis.eye;
+      runtime_camera.transform.x_axis = camera_basis.right;
+      runtime_camera.transform.y_axis = camera_basis.up;
+      runtime_camera.transform.z_axis = camera_basis.forward * -1.0f;
+      runtime_camera.viewport_size = {std::max(viewport_size.x, 1.0f),
+                                      std::max(viewport_size.y, 1.0f)};
+      runtime_camera.orthographic_size =
+          std::max(state.orthographic_size, 0.0001f);
+      runtime_camera.fov_degrees = state.fov_degrees;
+      return runtime_camera;
     }
 };
 

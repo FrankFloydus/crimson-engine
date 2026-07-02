@@ -13,52 +13,55 @@
 namespace quader {
 namespace {
 
-QVec3 fromRuntime(quader::QVec3 value) {
-    return {value.x, value.y, value.z};
-}
+QVec3 from_runtime(quader::QVec3 value) { return {value.x, value.y, value.z}; }
 
-MeshAsset meshAssetFromCompiledMesh(const quader_poly::CompiledMesh& compiled) {
-    MeshAsset mesh;
-    mesh.name = "Mesh";
-    mesh.vertices.reserve(compiled.vertices.size());
-    mesh.indices = compiled.indices;
-    mesh.primitives.reserve(compiled.primitives.size());
-    mesh.hasStableCpuTopology = true;
+MeshAsset
+mesh_asset_from_compiled_mesh(const quader_poly::CompiledMesh &compiled) {
+  MeshAsset mesh;
+  mesh.name = "Mesh";
+  mesh.vertices.reserve(compiled.vertices.size());
+  mesh.indices = compiled.indices;
+  mesh.primitives.reserve(compiled.primitives.size());
+  mesh.has_stable_cpu_topology = true;
 
-    for (const quader_poly::CompiledVertex& vertex : compiled.vertices) {
-        mesh.vertices.push_back(MeshVertex{
-                .position = fromRuntime(vertex.position),
-                .normal = fromRuntime(vertex.normal),
-                .uv = {vertex.uv0.x, vertex.uv0.y},
-                .rgba = vertex.color,
-        });
-    }
-    for (const quader_poly::CompiledPrimitive& primitive : compiled.primitives) {
-        mesh.primitives.push_back(MeshPrimitiveSpan{
-                .indexOffset = primitive.index_offset,
-                .indexCount = primitive.index_count,
-                .materialSlot = primitive.material_slot,
-        });
-    }
+  for (const quader_poly::CompiledVertex &vertex : compiled.vertices) {
+    mesh.vertices.push_back(MeshVertex{
+        .position = from_runtime(vertex.position),
+        .normal = from_runtime(vertex.normal),
+        .uv = {vertex.uv0.x, vertex.uv0.y},
+        .rgba = vertex.color,
+    });
+  }
+  for (const quader_poly::CompiledPrimitive &primitive : compiled.primitives) {
+    mesh.primitives.push_back(MeshPrimitiveSpan{
+        .index_offset = primitive.index_offset,
+        .index_count = primitive.index_count,
+        .material_slot = primitive.material_slot,
+    });
+  }
 
-    return mesh;
+  return mesh;
 }
 
 } // namespace
 
-MeshAsset MeshProjectionService::meshAssetFromCompiledMesh(const quader_poly::CompiledMesh& compiled) {
-    return quader::meshAssetFromCompiledMesh(compiled);
+MeshAsset MeshProjectionService::mesh_asset_from_compiled_mesh(
+    const quader_poly::CompiledMesh &compiled) {
+  return quader::mesh_asset_from_compiled_mesh(compiled);
 }
 
-MeshAsset MeshProjectionService::compilePolygonDocumentMesh(const quader_poly::Document& document) {
-    return meshAssetFromCompiledMesh(quader_poly::compile_document(document));
+MeshAsset MeshProjectionService::compile_polygon_document_mesh(
+    const quader_poly::Document &document) {
+  return mesh_asset_from_compiled_mesh(quader_poly::compile_document(document));
 }
 
-MeshAsset MeshProjectionService::compileObjectMesh(const quader_editor_core::PolygonObject& object) {
-    MeshAsset mesh = compilePolygonDocumentMesh(object.document);
-    mesh.hasAuthoredPolygonDocument = true;
-    mesh.authoredPolygonDocument = std::make_shared<quader_poly::Document>(object.document);
-    return mesh;
+MeshAsset MeshProjectionService::compile_object_mesh(
+    const quader_editor_core::PolygonObject &object) {
+  MeshAsset mesh = compile_polygon_document_mesh(object.document);
+  mesh.has_authored_polygon_document = true;
+  mesh.authored_polygon_document =
+      std::make_shared<quader_poly::Document>(object.document);
+  return mesh;
 }
 
 } // namespace quader

@@ -20,14 +20,15 @@ TEST(AppFrameClockTests, ProducesClampedFrameTimingAndMonotonicFrameIndex) {
     clock.reset(start);
 
     const FrameTiming first = clock.tick(start + std::chrono::milliseconds(16));
-    EXPECT_EQ(first.frameIndex, 0u);
-    EXPECT_NEAR(first.rawDeltaSeconds, 0.016, 0.000001);
-    EXPECT_NEAR(first.deltaSeconds, 0.016, 0.000001);
-    EXPECT_NEAR(first.elapsedSeconds, 0.016, 0.000001);
+    EXPECT_EQ(first.frame_index, 0u);
+    EXPECT_NEAR(first.raw_delta_seconds, 0.016, 0.000001);
+    EXPECT_NEAR(first.delta_seconds, 0.016, 0.000001);
+    EXPECT_NEAR(first.elapsed_seconds, 0.016, 0.000001);
 
     const FrameTiming clamped = clock.tick(start + std::chrono::seconds(2));
-    EXPECT_EQ(clamped.frameIndex, 1u);
-    EXPECT_NEAR(clamped.rawDeltaSeconds, 1.984, 0.000001);
-    EXPECT_NEAR(clamped.deltaSeconds, AppFrameClock::kMaxDeltaSeconds, 0.000001);
-    EXPECT_NEAR(clamped.elapsedSeconds, 2.0, 0.000001);
+    EXPECT_EQ(clamped.frame_index, 1u);
+    EXPECT_NEAR(clamped.raw_delta_seconds, 1.984, 0.000001);
+    EXPECT_NEAR(clamped.delta_seconds, AppFrameClock::kMaxDeltaSeconds,
+                0.000001);
+    EXPECT_NEAR(clamped.elapsed_seconds, 2.0, 0.000001);
 }

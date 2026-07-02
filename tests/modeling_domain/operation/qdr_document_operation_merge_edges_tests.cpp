@@ -26,10 +26,10 @@ Document make_parallel_quad_edge_document(Edge& active_edge, Edge& source_edge)
 
 	const std::array first_face { bottom_left, bottom_right, top_right, top_left };
 	const std::array second_face { source_right, source_left, source_top_left, source_top_right };
-	EXPECT_TRUE(add_face(document, first_face) != invalid_element_id);
-	EXPECT_TRUE(add_face(document, second_face) != invalid_element_id);
+        EXPECT_TRUE(add_face(document, first_face) != kInvalidElementId);
+        EXPECT_TRUE(add_face(document, second_face) != kInvalidElementId);
 
-	active_edge = make_edge(bottom_left, bottom_right);
+        active_edge = make_edge(bottom_left, bottom_right);
 	source_edge = make_edge(source_right, source_left);
 	return document;
 }
@@ -52,8 +52,8 @@ TEST(QdrDocumentOperationMergeEdgesTests, MergeEdgesWeldsSourceEndpointsIntoTheC
 	EXPECT_TRUE(document.faces.size() == 2U);
 	EXPECT_TRUE(qdr_test::document_has_edge(document, active_edge));
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
-	EXPECT_TRUE(selection.mode == SelectionMode::edge);
-	EXPECT_TRUE(selection.edges.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Edge);
+        EXPECT_TRUE(selection.edges.size() == 1U);
 	EXPECT_TRUE(selection.edges.front() == active_edge);
 	EXPECT_TRUE(selection.has_active);
 	EXPECT_TRUE(selection.active_edge == active_edge);

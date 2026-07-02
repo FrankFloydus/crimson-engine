@@ -21,8 +21,8 @@ TEST(QdrDocumentOperationConnectEdgesTests, ConnectEdgesCutsBetweenOppositeQuadE
 	EXPECT_TRUE(result.changed);
 	EXPECT_TRUE(fixture.document.vertices.size() == vertex_count_before + 2U);
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
-	EXPECT_TRUE(selection.mode == SelectionMode::edge);
-	EXPECT_TRUE(selection.edges.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Edge);
+        EXPECT_TRUE(selection.edges.size() == 1U);
 	EXPECT_TRUE(qdr_test::edge_positions_match_unordered(fixture.document, selection.edges.front(), { 0.0F, -1.0F, 0.0F }, { 0.0F, 1.0F, 0.0F }));
 	EXPECT_TRUE(qdr_test::edge_incidence_count(fixture.document, selection.edges.front()) == 2);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
@@ -42,8 +42,8 @@ TEST(QdrDocumentOperationConnectEdgesTests, ConnectEdgesSplitsSharedCubeEdgesWit
 	EXPECT_TRUE(result.changed);
 	EXPECT_TRUE(document.vertices.size() == vertex_count_before + 2U);
 	EXPECT_TRUE(document.faces.size() == 7U);
-	EXPECT_TRUE(selection.mode == SelectionMode::edge);
-	EXPECT_TRUE(selection.edges.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Edge);
+        EXPECT_TRUE(selection.edges.size() == 1U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 	EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
 }
@@ -56,13 +56,14 @@ TEST(QdrDocumentOperationConnectEdgesTests, ConnectEdgesCutsAnUnorderedWallStrip
 		vertices[static_cast<std::size_t>(x + 6)] = add_vertex(document, { static_cast<float>(x), 1.0F, 0.0F });
 	}
 	for (int x = 0; x < 5; ++x) {
-		EXPECT_TRUE(add_face(document, std::array<ElementId, 4> {
-			vertices[static_cast<std::size_t>(x)],
-			vertices[static_cast<std::size_t>(x + 1)],
-			vertices[static_cast<std::size_t>(x + 7)],
-			vertices[static_cast<std::size_t>(x + 6)],
-		}) != invalid_element_id);
-	}
+          EXPECT_TRUE(
+              add_face(document, std::array<ElementId, 4>{
+                                     vertices[static_cast<std::size_t>(x)],
+                                     vertices[static_cast<std::size_t>(x + 1)],
+                                     vertices[static_cast<std::size_t>(x + 7)],
+                                     vertices[static_cast<std::size_t>(x + 6)],
+                                 }) != kInvalidElementId);
+        }
 	Selection selection = qdr_test::edge_selection({
 		make_edge(vertices[3], vertices[9]),
 		make_edge(vertices[1], vertices[7]),
@@ -75,7 +76,7 @@ TEST(QdrDocumentOperationConnectEdgesTests, ConnectEdgesCutsAnUnorderedWallStrip
 	EXPECT_TRUE(result.changed);
 	EXPECT_TRUE(document.vertices.size() == 16U);
 	EXPECT_TRUE(document.faces.size() == 8U);
-	EXPECT_TRUE(selection.mode == SelectionMode::edge);
-	EXPECT_TRUE(selection.edges.size() == 3U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Edge);
+        EXPECT_TRUE(selection.edges.size() == 3U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }

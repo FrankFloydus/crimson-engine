@@ -21,19 +21,21 @@ public:
     QuaderPreferencesApi();
     explicit QuaderPreferencesApi(QuaderCommandsApi& commands);
 
-    void attachCommands(QuaderCommandsApi& commands);
-    void setRuntimeHooks(QuaderPreferencesRuntimeHooks hooks);
+    void attach_commands(QuaderCommandsApi &commands);
+    void set_runtime_hooks(QuaderPreferencesRuntimeHooks hooks);
 
     [[nodiscard]] std::string locale() const;
-    QuaderApiVoidResult setLocale(std::string locale);
-    QuaderApiVoidResult setShortcut(std::string_view commandId, std::string shortcut);
-    QuaderApiVoidResult setShortcut(QuaderCommandId commandId, std::string shortcut);
-    QuaderApiVoidResult removeShortcut(std::string_view commandId);
-    QuaderApiVoidResult removeShortcut(QuaderCommandId commandId);
-    QuaderApiVoidResult resetShortcut(std::string_view commandId);
-    QuaderApiVoidResult resetShortcut(QuaderCommandId commandId);
-    QuaderApiVoidResult setNavigationGizmoVisible(bool visible);
-    [[nodiscard]] bool navigationGizmoVisible() const;
+    QuaderApiVoidResult set_locale(std::string locale);
+    QuaderApiVoidResult set_shortcut(std::string_view command_id,
+                                     std::string shortcut);
+    QuaderApiVoidResult set_shortcut(QuaderCommandId command_id,
+                                     std::string shortcut);
+    QuaderApiVoidResult remove_shortcut(std::string_view command_id);
+    QuaderApiVoidResult remove_shortcut(QuaderCommandId command_id);
+    QuaderApiVoidResult reset_shortcut(std::string_view command_id);
+    QuaderApiVoidResult reset_shortcut(QuaderCommandId command_id);
+    QuaderApiVoidResult set_navigation_gizmo_visible(bool visible);
+    [[nodiscard]] bool navigation_gizmo_visible() const;
     QuaderApiVoidResult save();
 
 private:

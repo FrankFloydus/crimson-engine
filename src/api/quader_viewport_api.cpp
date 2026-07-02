@@ -39,77 +39,92 @@ QuaderViewportApi::~QuaderViewportApi() = default;
 QuaderViewportApi::QuaderViewportApi(QuaderViewportApi&&) noexcept = default;
 QuaderViewportApi& QuaderViewportApi::operator=(QuaderViewportApi&&) noexcept = default;
 
-void QuaderViewportApi::setRuntimeHooks(QuaderViewportRuntimeHooks hooks) {
-    impl_->hooks = std::move(hooks);
+void QuaderViewportApi::set_runtime_hooks(QuaderViewportRuntimeHooks hooks) {
+  impl_->hooks = std::move(hooks);
 }
 
 ViewportLayoutId QuaderViewportApi::layout() const {
     return impl_->workspace.layout();
 }
 
-QuaderApiVoidResult QuaderViewportApi::setLayout(ViewportLayoutId layout) {
-    if (!impl_->workspace.supportsLayout(layout)) {
-        return unavailable("The active viewport workspace policy does not support the requested layout.");
-    }
-    return runtimeStatus(impl_->workspace.setLayout(layout));
+QuaderApiVoidResult QuaderViewportApi::set_layout(ViewportLayoutId layout) {
+  if (!impl_->workspace.supports_layout(layout)) {
+    return unavailable("The active viewport workspace policy does not support "
+                       "the requested layout.");
+  }
+  return runtime_status(impl_->workspace.set_layout(layout));
 }
 
-std::size_t QuaderViewportApi::activePaneCount() const {
-    return impl_->workspace.activePanePlacements().size();
+std::size_t QuaderViewportApi::active_pane_count() const {
+  return impl_->workspace.active_pane_placements().size();
 }
 
-ViewportPaneId QuaderViewportApi::focusedPane() const {
-    return impl_->workspace.focusedPane();
+ViewportPaneId QuaderViewportApi::focused_pane() const {
+  return impl_->workspace.focused_pane();
 }
 
-int QuaderViewportApi::gridPreset() const {
-    return impl_->workspace.gridPreset();
+int QuaderViewportApi::grid_preset() const {
+  return impl_->workspace.grid_preset();
 }
 
-QuaderApiVoidResult QuaderViewportApi::setGridPreset(int preset) {
-    return runtimeStatus(impl_->workspace.setGridPreset(preset));
+QuaderApiVoidResult QuaderViewportApi::set_grid_preset(int preset) {
+  return runtime_status(impl_->workspace.set_grid_preset(preset));
 }
 
-QuaderShadingMode QuaderViewportApi::shadingMode(ViewportPaneId pane) const {
-    return quaderApiFromViewportShadingMode(impl_->workspace.shadingMode(pane));
+QuaderShadingMode QuaderViewportApi::shading_mode(ViewportPaneId pane) const {
+  return quader_api_from_viewport_shading_mode(
+      impl_->workspace.shading_mode(pane));
 }
 
-QuaderApiVoidResult QuaderViewportApi::setShadingMode(ViewportPaneId pane, QuaderShadingMode mode) {
-    if (mode == QuaderShadingMode::XRay) {
-        return unavailable("XRay shading mode is not supported by the native viewport.");
-    }
-    return runtimeStatus(impl_->workspace.setShadingMode(pane, quaderApiToViewportShadingMode(mode)));
+QuaderApiVoidResult
+QuaderViewportApi::set_shading_mode(ViewportPaneId pane,
+                                    QuaderShadingMode mode) {
+  if (mode == QuaderShadingMode::XRay) {
+    return unavailable(
+        "XRay shading mode is not supported by the native viewport.");
+  }
+  return runtime_status(impl_->workspace.set_shading_mode(
+      pane, quader_api_to_viewport_shading_mode(mode)));
 }
 
 ViewportView QuaderViewportApi::view(ViewportPaneId pane) const {
     return impl_->workspace.view(pane);
 }
 
-QuaderApiVoidResult QuaderViewportApi::setView(ViewportPaneId pane, ViewportView view) {
-    return runtimeStatus(impl_->workspace.setView(pane, view));
+QuaderApiVoidResult QuaderViewportApi::set_view(ViewportPaneId pane,
+                                                ViewportView view) {
+  return runtime_status(impl_->workspace.set_view(pane, view));
 }
 
-QuaderApiVoidResult QuaderViewportApi::frameSelection(ViewportPaneId pane) {
-    return impl_->hooks.frameSelection ? impl_->hooks.frameSelection(pane) : unavailable("Viewport camera runtime is not attached.");
+QuaderApiVoidResult QuaderViewportApi::frame_selection(ViewportPaneId pane) {
+  return impl_->hooks.frame_selection
+             ? impl_->hooks.frame_selection(pane)
+             : unavailable("Viewport camera runtime is not attached.");
 }
 
-QuaderApiVoidResult QuaderViewportApi::focusOrigin(ViewportPaneId pane) {
-    if (impl_->hooks.focusOrigin) {
-        return impl_->hooks.focusOrigin(pane);
-    }
-    return runtimeStatus(impl_->workspace.focusOrigin(pane));
+QuaderApiVoidResult QuaderViewportApi::focus_origin(ViewportPaneId pane) {
+  if (impl_->hooks.focus_origin) {
+    return impl_->hooks.focus_origin(pane);
+  }
+  return runtime_status(impl_->workspace.focus_origin(pane));
 }
 
-bool QuaderViewportApi::canSpawnWindow() const {
-    return static_cast<bool>(impl_->hooks.spawnWindow);
+bool QuaderViewportApi::can_spawn_window() const {
+  return static_cast<bool>(impl_->hooks.spawn_window);
 }
 
-QuaderApiVoidResult QuaderViewportApi::spawnWindow() {
-    return impl_->hooks.spawnWindow ? impl_->hooks.spawnWindow() : unavailable("Viewport window runtime is not attached.");
+QuaderApiVoidResult QuaderViewportApi::spawn_window() {
+  return impl_->hooks.spawn_window
+             ? impl_->hooks.spawn_window()
+             : unavailable("Viewport window runtime is not attached.");
 }
 
-QuaderApiVoidResult QuaderViewportApi::captureScreenshot(const std::filesystem::path& path, ViewportPaneId pane) {
-    return impl_->hooks.captureScreenshot ? impl_->hooks.captureScreenshot(pane, path) : unavailable("Viewport screenshot runtime is not attached.");
+QuaderApiVoidResult
+QuaderViewportApi::capture_screenshot(const std::filesystem::path &path,
+                                      ViewportPaneId pane) {
+  return impl_->hooks.capture_screenshot
+             ? impl_->hooks.capture_screenshot(pane, path)
+             : unavailable("Viewport screenshot runtime is not attached.");
 }
 
 QuaderViewportHandle QuaderViewportApi::main() {
@@ -121,49 +136,53 @@ QuaderViewportHandle QuaderViewportApi::pane(ViewportPaneId pane) {
 }
 
 QuaderApiVoidResult QuaderViewportApi::unavailable(std::string message) const {
-    return {
-            .ok = false,
-            .changed = false,
-            .message = std::move(message),
-            .mutationKind = QuaderMutationKind::None,
-    };
+  return {
+      .ok = false,
+      .changed = false,
+      .message = std::move(message),
+      .mutation_kind = QuaderMutationKind::None,
+  };
 }
 
-QuaderApiVoidResult QuaderViewportApi::runtimeStatus(bool changed, std::string message) const {
-    return {
-            .ok = true,
-            .changed = changed,
-            .message = std::move(message),
-            .mutationKind = changed ? QuaderMutationKind::Runtime : QuaderMutationKind::None,
-    };
+QuaderApiVoidResult
+QuaderViewportApi::runtime_status(bool changed, std::string message) const {
+  return {
+      .ok = true,
+      .changed = changed,
+      .message = std::move(message),
+      .mutation_kind =
+          changed ? QuaderMutationKind::Runtime : QuaderMutationKind::None,
+  };
 }
 
 QuaderCameraHandle::QuaderCameraHandle(QuaderViewportApi& viewports, ViewportPaneId pane)
     : viewports_(viewports)
     , pane_(pane) {}
 
-QuaderApiVoidResult QuaderCameraHandle::frameSelection() {
-    return viewports_.frameSelection(pane_);
+QuaderApiVoidResult QuaderCameraHandle::frame_selection() {
+  return viewports_.frame_selection(pane_);
 }
 
-QuaderApiVoidResult QuaderCameraHandle::focusOrigin() {
-    return viewports_.focusOrigin(pane_);
+QuaderApiVoidResult QuaderCameraHandle::focus_origin() {
+  return viewports_.focus_origin(pane_);
 }
 
 QuaderViewportHandle::QuaderViewportHandle(QuaderViewportApi& viewports, ViewportPaneId pane)
     : viewports_(viewports)
     , pane_(pane) {}
 
-QuaderApiVoidResult QuaderViewportHandle::setShadingMode(QuaderShadingMode mode) {
-    return viewports_.setShadingMode(pane_, mode);
+QuaderApiVoidResult
+QuaderViewportHandle::set_shading_mode(QuaderShadingMode mode) {
+  return viewports_.set_shading_mode(pane_, mode);
 }
 
-QuaderApiVoidResult QuaderViewportHandle::setView(ViewportView view) {
-    return viewports_.setView(pane_, view);
+QuaderApiVoidResult QuaderViewportHandle::set_view(ViewportView view) {
+  return viewports_.set_view(pane_, view);
 }
 
-QuaderApiVoidResult QuaderViewportHandle::captureScreenshot(const std::filesystem::path& path) {
-    return viewports_.captureScreenshot(path, pane_);
+QuaderApiVoidResult
+QuaderViewportHandle::capture_screenshot(const std::filesystem::path &path) {
+  return viewports_.capture_screenshot(path, pane_);
 }
 
 QuaderCameraHandle QuaderViewportHandle::camera() {

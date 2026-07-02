@@ -40,9 +40,9 @@ OperationResult ExtractFacesOperation::apply(Document& document, Selection& sele
 
 ExtractFacesResult extract_selected_faces_impl(Document& document, Selection& selection)
 {
-    if (selection.mode != SelectionMode::face || selection.faces.empty()) {
-        return { false, {}, {}, "Select one or more faces to extract." };
-    }
+  if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
+    return {false, {}, {}, "Select one or more faces to extract."};
+  }
 
     const ElementId active_face_id = active_face_or_invalid(selection);
     const std::vector<Face> selected_faces = selected_face_copies(document, selection);
@@ -52,7 +52,7 @@ ExtractFacesResult extract_selected_faces_impl(Document& document, Selection& se
 
     Document extracted_document;
     Selection extracted_selection;
-    extracted_selection.mode = SelectionMode::face;
+    extracted_selection.mode = SelectionMode::Face;
     std::map<ElementId, ElementId> vertex_map;
     std::map<ElementId, ElementId> face_map;
     for (const Face& face : selected_faces) {
@@ -81,7 +81,7 @@ ExtractFacesResult extract_selected_faces_impl(Document& document, Selection& se
 
     document = std::move(candidate);
     selection.clear();
-    selection.mode = SelectionMode::face;
+    selection.mode = SelectionMode::Face;
 
     const auto active_face = face_map.find(active_face_id);
     if (active_face != face_map.end()) {

@@ -41,10 +41,10 @@ void Selection::clear()
     edges.clear();
     faces.clear();
     has_active = false;
-    active_kind = ElementKind::vertex;
-    active_vertex = invalid_element_id;
+    active_kind = ElementKind::Vertex;
+    active_vertex = kInvalidElementId;
     active_edge = {};
-    active_face = invalid_element_id;
+    active_face = kInvalidElementId;
 }
 
 bool FacePerimeterInfo::empty() const
@@ -95,15 +95,13 @@ std::optional<float> edge_factor_from_position(const Document& document, Edge ed
     }
 
     const quader_geometry::QSegment3<float> segment { geometry_vec3(a->position), geometry_vec3(b->position) };
-    if (quader_geometry::length_squared(segment.b - segment.a) <= epsilon) {
-        return std::nullopt;
+    if (quader_geometry::length_squared(segment.b - segment.a) <= kEpsilon) {
+      return std::nullopt;
     }
 
     const quader_geometry::QClosestSegmentPoint3<float> closest =
         quader_geometry::closest_point_on_segment<float>(
-            geometry_vec3(position),
-            segment,
-            epsilon);
+            geometry_vec3(position), segment, kEpsilon);
 
     return closest.segment_factor;
 }
@@ -121,15 +119,15 @@ std::optional<float> edge_factor_from_ray(const Document& document, Edge edge, c
         local_ray.origin,
         normalize_or_zero(local_ray.direction),
     };
-    if (length_squared(ray.direction) <= epsilon) {
-        return std::nullopt;
+    if (length_squared(ray.direction) <= kEpsilon) {
+      return std::nullopt;
     }
 
     const quader_geometry::QSegmentRayClosestPoints<float> closest =
         quader_geometry::closest_points_segment_ray<float>(
-            { geometry_vec3(a->position), geometry_vec3(b->position) },
-            { geometry_vec3(ray.origin), geometry_vec3(ray.direction) },
-            epsilon);
+            {geometry_vec3(a->position), geometry_vec3(b->position)},
+            {geometry_vec3(ray.origin), geometry_vec3(ray.direction)},
+            kEpsilon);
     if (!closest.valid) {
         return std::nullopt;
     }

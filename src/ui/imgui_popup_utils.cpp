@@ -13,85 +13,92 @@
 namespace quader {
 namespace {
 
-bool screenPointInside(ImVec2 point, ImVec2 min, ImVec2 max) {
-    return point.x >= min.x && point.x <= max.x && point.y >= min.y && point.y <= max.y;
+bool screen_point_inside(ImVec2 point, ImVec2 min, ImVec2 max) {
+  return point.x >= min.x && point.x <= max.x && point.y >= min.y &&
+         point.y <= max.y;
 }
 
-bool anyMouseButtonClicked() {
-    return ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-            ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
-            ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
+bool any_mouse_button_clicked() {
+  return ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+         ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+         ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
 }
 
-bool openComboPopupExists(const ImGuiContext& context) {
-    for (const ImGuiPopupData& popup : context.OpenPopupStack) {
-        if (popup.Window == nullptr || popup.Window->Name == nullptr) {
-            continue;
-        }
-        if (std::string_view(popup.Window->Name).starts_with("##Combo_")) {
-            return true;
-        }
+bool open_combo_popup_exists(const ImGuiContext &context) {
+  for (const ImGuiPopupData &popup : context.OpenPopupStack) {
+    if (popup.Window == nullptr || popup.Window->Name == nullptr) {
+      continue;
     }
-    return false;
+    if (std::string_view(popup.Window->Name).starts_with("##Combo_")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace
 
-bool imguiOpenPopupContainsScreenPoint(ImVec2 screenPoint) {
-    ImGuiContext* context = ImGui::GetCurrentContext();
-    if (context == nullptr) {
-        return false;
-    }
-
-    for (const ImGuiPopupData& popup : context->OpenPopupStack) {
-        if (popup.Window != nullptr && popup.Window->WasActive && popup.Window->Rect().Contains(screenPoint)) {
-            return true;
-        }
-    }
+bool imgui_open_popup_contains_screen_point(ImVec2 screen_point) {
+  ImGuiContext *context = ImGui::GetCurrentContext();
+  if (context == nullptr) {
     return false;
+  }
+
+  for (const ImGuiPopupData &popup : context->OpenPopupStack) {
+    if (popup.Window != nullptr && popup.Window->WasActive &&
+        popup.Window->Rect().Contains(screen_point)) {
+      return true;
+    }
+  }
+  return false;
 }
 
-bool imguiClosePopupForPassThroughClick(ImVec2 passThroughMin, ImVec2 passThroughMax) {
-    if (!anyMouseButtonClicked()) {
-        return false;
-    }
+bool imgui_close_popup_for_pass_through_click(ImVec2 pass_through_min,
+                                              ImVec2 pass_through_max) {
+  if (!any_mouse_button_clicked()) {
+    return false;
+  }
 
-    ImGuiContext* context = ImGui::GetCurrentContext();
-    if (context == nullptr || context->OpenPopupStack.empty()) {
-        return false;
-    }
+  ImGuiContext *context = ImGui::GetCurrentContext();
+  if (context == nullptr || context->OpenPopupStack.empty()) {
+    return false;
+  }
 
-    const ImVec2 mouse = ImGui::GetMousePos();
-    if (!screenPointInside(mouse, passThroughMin, passThroughMax) || imguiOpenPopupContainsScreenPoint(mouse)) {
-        return false;
-    }
+  const ImVec2 mouse = ImGui::GetMousePos();
+  if (!screen_point_inside(mouse, pass_through_min, pass_through_max) ||
+      imgui_open_popup_contains_screen_point(mouse)) {
+    return false;
+  }
 
-    ImGui::ClosePopupsExceptModals();
-    return true;
+  ImGui::ClosePopupsExceptModals();
+  return true;
 }
 
-bool imguiCloseComboPopupForClickInside(ImVec2 targetMin, ImVec2 targetMax, ImVec2 exclusionMin, ImVec2 exclusionMax) {
-    if (!anyMouseButtonClicked()) {
-        return false;
-    }
+bool imgui_close_combo_popup_for_click_inside(ImVec2 target_min,
+                                              ImVec2 target_max,
+                                              ImVec2 exclusion_min,
+                                              ImVec2 exclusion_max) {
+  if (!any_mouse_button_clicked()) {
+    return false;
+  }
 
-    ImGuiContext* context = ImGui::GetCurrentContext();
-    if (context == nullptr || context->OpenPopupStack.empty()) {
-        return false;
-    }
-    if (!openComboPopupExists(*context)) {
-        return false;
-    }
+  ImGuiContext *context = ImGui::GetCurrentContext();
+  if (context == nullptr || context->OpenPopupStack.empty()) {
+    return false;
+  }
+  if (!open_combo_popup_exists(*context)) {
+    return false;
+  }
 
-    const ImVec2 mouse = ImGui::GetMousePos();
-    if (!screenPointInside(mouse, targetMin, targetMax) ||
-            screenPointInside(mouse, exclusionMin, exclusionMax) ||
-            imguiOpenPopupContainsScreenPoint(mouse)) {
-        return false;
-    }
+  const ImVec2 mouse = ImGui::GetMousePos();
+  if (!screen_point_inside(mouse, target_min, target_max) ||
+      screen_point_inside(mouse, exclusion_min, exclusion_max) ||
+      imgui_open_popup_contains_screen_point(mouse)) {
+    return false;
+  }
 
-    ImGui::ClosePopupsExceptModals();
-    return true;
+  ImGui::ClosePopupsExceptModals();
+  return true;
 }
 
 } // namespace quader

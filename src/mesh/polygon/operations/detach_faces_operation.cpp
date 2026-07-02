@@ -33,9 +33,9 @@ public:
 
 OperationResult detach_selected_faces_impl(Document& document, Selection& selection)
 {
-    if (selection.mode != SelectionMode::face || selection.faces.empty()) {
-        return { false, "Select one or more faces to detach." };
-    }
+  if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
+    return {false, "Select one or more faces to detach."};
+  }
 
     const ElementId active_face_id = active_face_or_invalid(selection);
     const std::vector<Face> selected_faces = selected_face_copies(document, selection);
@@ -73,8 +73,9 @@ OperationResult detach_selected_faces_impl(Document& document, Selection& select
             }
 
             const ElementId duplicate_id = copied_vertex_id(document, candidate, duplicate_vertices, vertex_id);
-            if (duplicate_id == invalid_element_id) {
-                return { false, "Detach could not duplicate a selected face vertex." };
+            if (duplicate_id == kInvalidElementId) {
+              return {false,
+                      "Detach could not duplicate a selected face vertex."};
             }
             vertex_id = duplicate_id;
             face_changed = true;
@@ -96,7 +97,7 @@ OperationResult detach_selected_faces_impl(Document& document, Selection& select
 
     document = std::move(candidate);
     selection.clear();
-    selection.mode = SelectionMode::face;
+    selection.mode = SelectionMode::Face;
     selection.faces = std::move(detached_face_ids);
     activate_face_or_last_selection(selection, active_face_id);
     return { true, {} };

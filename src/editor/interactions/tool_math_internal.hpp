@@ -62,23 +62,25 @@ static inline double vec2_distance_squared(quader::QVec2 left, quader::QVec2 rig
 
 static inline bool vec2_is_tiny(quader::QVec2 value)
 {
-	return quader_geometry::length_squared(tool_geometry_vec2(value)) <= screen_epsilon;
+  return quader_geometry::length_squared(tool_geometry_vec2(value)) <=
+         kScreenEpsilon;
 }
 
 static inline quader::QVec2 vec2_normalize_or(quader::QVec2 value, quader::QVec2 fallback)
 {
 	const quader_geometry::QVec2d geometry_value = tool_geometry_vec2(value);
 	const double length_squared = quader_geometry::length_squared(geometry_value);
-	if (length_squared <= screen_epsilon) {
-		return fallback;
-	}
-	const double length = std::sqrt(length_squared);
+        if (length_squared <= kScreenEpsilon) {
+          return fallback;
+        }
+        const double length = std::sqrt(length_squared);
 	return tool_poly_vec2(geometry_value / length);
 }
 
-static inline bool vec3_is_tiny(quader::QVec3 value, double epsilon = tool_epsilon)
-{
-	return quader_geometry::length_squared(tool_geometry_vec3(value)) <= static_cast<float>(epsilon * epsilon);
+static inline bool vec3_is_tiny(quader::QVec3 value,
+                                double epsilon = kToolEpsilon) {
+  return quader_geometry::length_squared(tool_geometry_vec3(value)) <=
+         static_cast<float>(epsilon * epsilon);
 }
 
 static inline quader::QVec3 vec3_scale(quader::QVec3 value, double scalar)
@@ -101,15 +103,15 @@ static inline quader::QVec3 normalized_axis(quader::QVec3 value)
 	return tool_poly_vec3(quader_geometry::normalize_or_zero(tool_geometry_vec3(value), 0.000001F));
 }
 
-static inline quader::QVec3 vec3_normalize_or(
-		quader::QVec3 value,
-		quader::QVec3 fallback,
-		double epsilon = tool_epsilon)
-{
-	const quader_geometry::QVec3f geometry_value = tool_geometry_vec3(value);
-	return quader_geometry::length_squared(geometry_value) <= static_cast<float>(epsilon * epsilon) ?
-		fallback :
-		tool_poly_vec3(quader_geometry::normalize_or_zero(geometry_value));
+static inline quader::QVec3 vec3_normalize_or(quader::QVec3 value,
+                                              quader::QVec3 fallback,
+                                              double epsilon = kToolEpsilon) {
+  const quader_geometry::QVec3f geometry_value = tool_geometry_vec3(value);
+  return quader_geometry::length_squared(geometry_value) <=
+                 static_cast<float>(epsilon * epsilon)
+             ? fallback
+             : tool_poly_vec3(
+                   quader_geometry::normalize_or_zero(geometry_value));
 }
 
 static inline double safe_grid_size(double grid_size, double minimum)

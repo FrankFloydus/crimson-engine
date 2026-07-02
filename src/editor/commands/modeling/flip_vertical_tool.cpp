@@ -10,8 +10,8 @@
 
 namespace quader {
 
-ModelingCommandResult FlipVerticalTool::executeRuntimeCommand(ModelingCommandExecutionContext& context) const {
-    return context.modeling.flipSelection(ModelingFlipOrientation::Vertical);
+ModelingCommandResult FlipVerticalTool::execute_runtime_command(ModelingCommandExecutionContext& context) const {
+  return context.modeling.flip_selection(ModelingFlipOrientation::Vertical);
 }
 
 } // namespace quader

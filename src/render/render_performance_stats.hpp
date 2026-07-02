@@ -12,10 +12,10 @@ namespace quader {
  * Stores completed-frame timing data exposed by the renderer to editor UI surfaces.
  */
 struct RenderFramePerformanceStats {
-    bool cpuFrameMsAvailable = false;
-    double cpuFrameMs = 0.0;
-    bool gpuFrameMsAvailable = false;
-    double gpuFrameMs = 0.0;
+  bool cpu_frame_ms_available = false;
+  double cpu_frame_ms = 0.0;
+  bool gpu_frame_ms_available = false;
+  double gpu_frame_ms = 0.0;
 };
 
 } // namespace quader

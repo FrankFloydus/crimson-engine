@@ -26,187 +26,192 @@ public:
         : SceneCommand(scene, "Duplicate Hierarchy") {}
 
     DuplicateSelectedHierarchyCommand(
-            SceneDocument& scene,
-            std::vector<DocumentEntitySnapshot> sourceSnapshots,
-            std::unordered_map<EntityId, EntityId> existingClonesBySource)
-        : SceneCommand(scene, "Duplicate Hierarchy")
-        , capturedSources_(true)
-        , sourceSnapshots_(std::move(sourceSnapshots))
-        , existingClonesBySource_(std::move(existingClonesBySource)) {}
+        SceneDocument &scene,
+        std::vector<DocumentEntitySnapshot> source_snapshots,
+        std::unordered_map<EntityId, EntityId> existing_clones_by_source)
+        : SceneCommand(scene, "Duplicate Hierarchy"), captured_sources_(true),
+          source_snapshots_(std::move(source_snapshots)),
+          existing_clones_by_source_(std::move(existing_clones_by_source)) {}
 
-    [[nodiscard]] const std::vector<EntityId>& duplicateRoots() const {
-        return duplicateRoots_;
+    [[nodiscard]] const std::vector<EntityId> &duplicate_roots() const {
+      return duplicate_roots_;
     }
 
     DocumentCommandResult undo() override {
         QDR_PROFILE_FUNCTION();
-        if (duplicateRoots_.empty()) {
-            return documentCommandMissingEntityResult();
+        if (duplicate_roots_.empty()) {
+          return document_command_missing_entity_result();
         }
 
-        for (auto it = duplicateRoots_.rbegin(); it != duplicateRoots_.rend(); ++it) {
-            if (scene().exists(*it) && !scene().destroyEntity(*it)) {
-                return documentCommandMissingEntityResult();
-            }
+        for (auto it = duplicate_roots_.rbegin(); it != duplicate_roots_.rend();
+             ++it) {
+          if (scene().exists(*it) && !scene().destroy_entity(*it)) {
+            return document_command_missing_entity_result();
+          }
         }
-        duplicateRoots_.clear();
-        documentCommandApplySelection(scene(), beforeSelection_);
-        return documentCommandChangedResult();
+        duplicate_roots_.clear();
+        document_command_apply_selection(scene(), before_selection_);
+        return document_command_changed_result();
     }
 
     DocumentCommandResult redo() override {
         QDR_PROFILE_FUNCTION();
-        duplicateRoots_.clear();
-        if (!capturedSources_) {
-            DocumentCommandResult captured = captureSources();
-            if (!captured.ok || !captured.changed) {
-                return captured;
-            }
+        duplicate_roots_.clear();
+        if (!captured_sources_) {
+          DocumentCommandResult captured = capture_sources();
+          if (!captured.ok || !captured.changed) {
+            return captured;
+          }
         }
-        if (sourceSnapshots_.empty()) {
-            return documentCommandUnchangedResult();
+        if (source_snapshots_.empty()) {
+          return document_command_unchanged_result();
         }
 
-        beforeSelection_ = documentCommandCaptureSelection(scene());
-        DocumentCommandResult restored = duplicateSnapshots_.empty()
-                ? duplicateFromSources()
-                : restoreDuplicates();
+        before_selection_ = document_command_capture_selection(scene());
+        DocumentCommandResult restored = duplicate_snapshots_.empty()
+                                             ? duplicate_from_sources()
+                                             : restore_duplicates();
         if (!restored.ok) {
-            destroyDuplicateRoots();
-            documentCommandApplySelection(scene(), beforeSelection_);
-            return restored;
+          destroy_duplicate_roots();
+          document_command_apply_selection(scene(), before_selection_);
+          return restored;
         }
 
-        documentCommandSelectOnly(scene(), duplicateRoots_);
-        return documentCommandChangedResult();
+        document_command_select_only(scene(), duplicate_roots_);
+        return document_command_changed_result();
     }
 
 private:
-    DocumentCommandResult captureSources() {
-        QDR_PROFILE_FUNCTION();
-        capturedSources_ = true;
-        const std::vector<EntityId> roots = documentCommandSelectedRootEntities(scene());
-        if (roots.empty()) {
-            return documentCommandUnchangedResult();
-        }
-
-        sourceSnapshots_.clear();
-        sourceSnapshots_.reserve(roots.size());
-        for (const EntityId root : roots) {
-            std::optional<DocumentEntitySnapshot> snapshot =
-                    documentCommandCaptureEntitySnapshot(scene(), root);
-            if (!snapshot.has_value()) {
-                sourceSnapshots_.clear();
-                return documentCommandMissingEntityResult();
-            }
-            sourceSnapshots_.push_back(std::move(*snapshot));
-        }
-        return documentCommandChangedResult();
+  DocumentCommandResult capture_sources() {
+    QDR_PROFILE_FUNCTION();
+    captured_sources_ = true;
+    const std::vector<EntityId> roots =
+        document_command_selected_root_entities(scene());
+    if (roots.empty()) {
+      return document_command_unchanged_result();
     }
 
-    DocumentCommandResult duplicateFromSources() {
-        QDR_PROFILE_FUNCTION();
-        duplicateSnapshots_.clear();
-        duplicateSnapshots_.reserve(sourceSnapshots_.size());
-        SceneEntityNameAllocator nameAllocator(scene());
-        for (const DocumentEntitySnapshot& snapshot : sourceSnapshots_) {
-            QDR_PROFILE_SCOPE("Duplicate snapshot tree");
-            const EntityId parent = snapshot.originalParent != InvalidEntityId && scene().exists(snapshot.originalParent)
-                    ? snapshot.originalParent
-                    : InvalidEntityId;
-            const EntityId duplicate = documentCommandDuplicateEntitySnapshotTree(
-                    scene(),
-                    snapshot,
-                    parent,
-                    false,
-                    existingClonesBySource_.empty() ? nullptr : &existingClonesBySource_,
-                    &nameAllocator);
-            if (duplicate == InvalidEntityId) {
-                return documentCommandInvalidRequestResult("Selected hierarchy could not be duplicated");
-            }
-            duplicateRoots_.push_back(duplicate);
-        }
+    source_snapshots_.clear();
+    source_snapshots_.reserve(roots.size());
+    for (const EntityId root : roots) {
+      std::optional<DocumentEntitySnapshot> snapshot =
+          document_command_capture_entity_snapshot(scene(), root);
+      if (!snapshot.has_value()) {
+        source_snapshots_.clear();
+        return document_command_missing_entity_result();
+      }
+      source_snapshots_.push_back(std::move(*snapshot));
+    }
+    return document_command_changed_result();
+  }
 
-        for (const EntityId duplicate : duplicateRoots_) {
-            QDR_PROFILE_SCOPE("Capture duplicate snapshot");
-            std::optional<DocumentEntitySnapshot> snapshot =
-                    documentCommandCaptureEntitySnapshot(scene(), duplicate);
-            if (!snapshot.has_value()) {
-                return documentCommandInvalidRequestResult("Duplicated hierarchy snapshot could not be captured");
-            }
-            duplicateSnapshots_.push_back(std::move(*snapshot));
-        }
-        return documentCommandChangedResult();
+  DocumentCommandResult duplicate_from_sources() {
+    QDR_PROFILE_FUNCTION();
+    duplicate_snapshots_.clear();
+    duplicate_snapshots_.reserve(source_snapshots_.size());
+    SceneEntityNameAllocator name_allocator(scene());
+    for (const DocumentEntitySnapshot &snapshot : source_snapshots_) {
+      QDR_PROFILE_SCOPE("Duplicate snapshot tree");
+      const EntityId parent = snapshot.original_parent != kInvalidEntityId &&
+                                      scene().exists(snapshot.original_parent)
+                                  ? snapshot.original_parent
+                                  : kInvalidEntityId;
+      const EntityId duplicate =
+          document_command_duplicate_entity_snapshot_tree(
+              scene(), snapshot, parent, false,
+              existing_clones_by_source_.empty() ? nullptr
+                                                 : &existing_clones_by_source_,
+              &name_allocator);
+      if (duplicate == kInvalidEntityId) {
+        return document_command_invalid_request_result(
+            "Selected hierarchy could not be duplicated");
+      }
+      duplicate_roots_.push_back(duplicate);
     }
 
-    DocumentCommandResult restoreDuplicates() {
-        QDR_PROFILE_FUNCTION();
-        std::unordered_map<EntityId, EntityId> remappedEntities;
-        for (const DocumentEntitySnapshot& snapshot : duplicateSnapshots_) {
-            QDR_PROFILE_SCOPE("Restore duplicate snapshot tree");
-            const EntityId parent = snapshot.originalParent != InvalidEntityId && scene().exists(snapshot.originalParent)
-                    ? snapshot.originalParent
-                    : InvalidEntityId;
-            const EntityId restored = restoreOrReuseDuplicateSnapshotTree(snapshot, parent, remappedEntities);
-            if (restored == InvalidEntityId) {
-                return documentCommandInvalidRequestResult("Duplicated hierarchy could not be restored");
-            }
-            duplicateRoots_.push_back(restored);
+    for (const EntityId duplicate : duplicate_roots_) {
+      QDR_PROFILE_SCOPE("Capture duplicate snapshot");
+      std::optional<DocumentEntitySnapshot> snapshot =
+          document_command_capture_entity_snapshot(scene(), duplicate);
+      if (!snapshot.has_value()) {
+        return document_command_invalid_request_result(
+            "Duplicated hierarchy snapshot could not be captured");
+      }
+      duplicate_snapshots_.push_back(std::move(*snapshot));
+    }
+    return document_command_changed_result();
+  }
+
+  DocumentCommandResult restore_duplicates() {
+    QDR_PROFILE_FUNCTION();
+    std::unordered_map<EntityId, EntityId> remapped_entities;
+    for (const DocumentEntitySnapshot &snapshot : duplicate_snapshots_) {
+      QDR_PROFILE_SCOPE("Restore duplicate snapshot tree");
+      const EntityId parent = snapshot.original_parent != kInvalidEntityId &&
+                                      scene().exists(snapshot.original_parent)
+                                  ? snapshot.original_parent
+                                  : kInvalidEntityId;
+      const EntityId restored = restore_or_reuse_duplicate_snapshot_tree(
+          snapshot, parent, remapped_entities);
+      if (restored == kInvalidEntityId) {
+        return document_command_invalid_request_result(
+            "Duplicated hierarchy could not be restored");
+      }
+      duplicate_roots_.push_back(restored);
+    }
+    return document_command_changed_result();
+  }
+
+  EntityId restore_or_reuse_duplicate_snapshot_tree(
+      const DocumentEntitySnapshot &snapshot, EntityId parent,
+      std::unordered_map<EntityId, EntityId> &remapped_entities) {
+    EntityId restored = kInvalidEntityId;
+    if (scene().exists(snapshot.original_id)) {
+      restored = snapshot.original_id;
+      if (parent != kInvalidEntityId && scene().exists(parent) &&
+          scene().parent(restored) != parent) {
+        if (!scene().set_parent(restored, parent, false)) {
+          return kInvalidEntityId;
         }
-        return documentCommandChangedResult();
+      }
+      document_command_apply_entity_snapshot_common_state(
+          scene(), restored, snapshot, snapshot.name);
+      document_command_apply_entity_snapshot_components(scene(), restored,
+                                                        snapshot, true);
+    } else {
+      restored = document_command_create_entity_from_snapshot(
+          scene(), snapshot, parent, snapshot.name, true, true);
+      if (restored == kInvalidEntityId) {
+        return kInvalidEntityId;
+      }
     }
 
-    EntityId restoreOrReuseDuplicateSnapshotTree(
-            const DocumentEntitySnapshot& snapshot,
-            EntityId parent,
-            std::unordered_map<EntityId, EntityId>& remappedEntities) {
-        EntityId restored = InvalidEntityId;
-        if (scene().exists(snapshot.originalId)) {
-            restored = snapshot.originalId;
-            if (parent != InvalidEntityId && scene().exists(parent) && scene().parent(restored) != parent) {
-                if (!scene().setParent(restored, parent, false)) {
-                    return InvalidEntityId;
-                }
-            }
-            documentCommandApplyEntitySnapshotCommonState(scene(), restored, snapshot, snapshot.name);
-            documentCommandApplyEntitySnapshotComponents(scene(), restored, snapshot, true);
-        } else {
-            restored = documentCommandCreateEntityFromSnapshot(
-                    scene(),
-                    snapshot,
-                    parent,
-                    snapshot.name,
-                    true,
-                    true);
-            if (restored == InvalidEntityId) {
-                return InvalidEntityId;
-            }
-        }
-
-        remappedEntities[snapshot.originalId] = restored;
-        for (const DocumentEntitySnapshot& child : snapshot.children) {
-            if (restoreOrReuseDuplicateSnapshotTree(child, restored, remappedEntities) == InvalidEntityId) {
-                return InvalidEntityId;
-            }
-        }
-        return restored;
+    remapped_entities[snapshot.original_id] = restored;
+    for (const DocumentEntitySnapshot &child : snapshot.children) {
+      if (restore_or_reuse_duplicate_snapshot_tree(
+              child, restored, remapped_entities) == kInvalidEntityId) {
+        return kInvalidEntityId;
+      }
     }
+    return restored;
+  }
 
-    void destroyDuplicateRoots() {
-        for (auto it = duplicateRoots_.rbegin(); it != duplicateRoots_.rend(); ++it) {
-            if (scene().exists(*it)) {
-                (void)scene().destroyEntity(*it);
-            }
-        }
-        duplicateRoots_.clear();
+  void destroy_duplicate_roots() {
+    for (auto it = duplicate_roots_.rbegin(); it != duplicate_roots_.rend();
+         ++it) {
+      if (scene().exists(*it)) {
+        (void)scene().destroy_entity(*it);
+      }
     }
+    duplicate_roots_.clear();
+  }
 
-    bool capturedSources_ = false;
-    std::vector<DocumentEntitySnapshot> sourceSnapshots_;
-    std::unordered_map<EntityId, EntityId> existingClonesBySource_;
-    std::vector<DocumentEntitySnapshot> duplicateSnapshots_;
-    std::vector<EntityId> duplicateRoots_;
-    DocumentSelectionState beforeSelection_;
+  bool captured_sources_ = false;
+  std::vector<DocumentEntitySnapshot> source_snapshots_;
+  std::unordered_map<EntityId, EntityId> existing_clones_by_source_;
+  std::vector<DocumentEntitySnapshot> duplicate_snapshots_;
+  std::vector<EntityId> duplicate_roots_;
+  DocumentSelectionState before_selection_;
 };
 
 } // namespace quader

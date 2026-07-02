@@ -38,197 +38,198 @@ struct ViewportInteractionHarness {
     quader::ViewportSettings settings;
     quader::ViewportInteractionController controller;
     quader::ViewportInputFrame input;
-    quader::ViewportInputResult inputResult;
+    quader::ViewportInputResult input_result;
 
     ViewportInteractionHarness()
-        : editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session)) {
-        camera.setViewportSize(800.0f, 600.0f);
-        camera.focusOrigin(8.0f);
-        camera.setViewDirection({0.0f, 0.0f, -1.0f});
+        : editor(quader::QuaderApiSessionInternalAccess::from_project_session(
+              session)) {
+      camera.set_viewport_size(800.0f, 600.0f);
+      camera.focus_origin(8.0f);
+      camera.set_view_direction({0.0f, 0.0f, -1.0f});
 
-        input.viewportHovered = true;
-        input.viewportFocused = true;
-        input.viewportSize = {800.0f, 600.0f};
-        input.mouseScreen = {400.0f, 300.0f};
-        input.mouseLocal = {400.0f, 300.0f};
+      input.viewport_hovered = true;
+      input.viewport_focused = true;
+      input.viewport_size = {800.0f, 600.0f};
+      input.mouse_screen = {400.0f, 300.0f};
+      input.mouse_local = {400.0f, 300.0f};
     }
 
-    [[nodiscard]] quader::ViewportInteractionFrame frame(
-            bool leftPressed = false,
-            bool leftDown = false,
-            bool leftReleased = false,
-            quader::QVec2 leftClickLocal = {}) {
-        return {
-                .inputRouter = router,
-                .camera = camera,
-                .settings = settings,
-                .input = input,
-                .inputResult = inputResult,
-                .leftClickLocal = leftClickLocal,
-                .leftClickCount = 1,
-                .leftPressed = leftPressed,
-                .leftDown = leftDown,
-                .leftReleased = leftReleased,
-        };
+    [[nodiscard]] quader::ViewportInteractionFrame
+    frame(bool left_pressed = false, bool left_down = false,
+          bool left_released = false, quader::QVec2 left_click_local = {}) {
+      return {
+          .input_router = router,
+          .camera = camera,
+          .settings = settings,
+          .input = input,
+          .input_result = input_result,
+          .left_click_local = left_click_local,
+          .left_click_count = 1,
+          .left_pressed = left_pressed,
+          .left_down = left_down,
+          .left_released = left_released,
+      };
     }
 };
 
-quader::QuaderModelingObjectRef createUnitBox(ViewportInteractionHarness& harness) {
-    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> box =
-            harness.editor.modeling().createBox(
-                    quader::QuaderBounds{
-                            .min = {-1.0f, -1.0f, -1.0f},
-                            .max = {1.0f, 1.0f, 1.0f},
-                    },
-                    "Viewport Interaction Box");
-    EXPECT_TRUE(box.ok) << box.message;
-    return box.value();
+quader::QuaderModelingObjectRef
+create_unit_box(ViewportInteractionHarness &harness) {
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> box =
+      harness.editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = {-1.0f, -1.0f, -1.0f},
+              .max = {1.0f, 1.0f, 1.0f},
+          },
+          "Viewport Interaction Box");
+  EXPECT_TRUE(box.ok) << box.message;
+  return box.value();
 }
 
-quader::QuaderModelingObjectRef createBoxAt(ViewportInteractionHarness& harness, quader::QVec3 center) {
-    const quader::QVec3 half{1.0f, 1.0f, 1.0f};
-    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> box =
-            harness.editor.modeling().createBox(
-                    quader::QuaderBounds{
-                            .min = center - half,
-                            .max = center + half,
-                    },
-                    "Viewport Interaction Box");
-    EXPECT_TRUE(box.ok) << box.message;
-    return box.value();
+quader::QuaderModelingObjectRef
+create_box_at(ViewportInteractionHarness &harness, quader::QVec3 center) {
+  const quader::QVec3 half{1.0f, 1.0f, 1.0f};
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> box =
+      harness.editor.modeling().create_box(
+          quader::QuaderBounds{
+              .min = center - half,
+              .max = center + half,
+          },
+          "Viewport Interaction Box");
+  EXPECT_TRUE(box.ok) << box.message;
+  return box.value();
 }
 
-const quader_editor_core::TransformGizmoAxisPrimitive* findAxis(
-        const quader_editor_core::TransformGizmoFrame& frame,
-        quader_editor_core::TransformAxis axis) {
-    const auto found = std::find_if(frame.axes.begin(), frame.axes.end(), [axis](const auto& primitive) {
-        return primitive.axis == axis;
-    });
-    return found == frame.axes.end() ? nullptr : &*found;
+const quader_editor_core::TransformGizmoAxisPrimitive *
+find_axis(const quader_editor_core::TransformGizmoFrame &frame,
+          quader_editor_core::TransformAxis axis) {
+  const auto found = std::find_if(
+      frame.axes.begin(), frame.axes.end(),
+      [axis](const auto &primitive) { return primitive.axis == axis; });
+  return found == frame.axes.end() ? nullptr : &*found;
 }
 
-const quader_editor_core::TransformGizmoRingSegmentPrimitive* findRing(
-        const quader_editor_core::TransformGizmoFrame& frame,
-        quader_editor_core::TransformAxis axis) {
-    const auto found = std::find_if(frame.ring_segments.begin(), frame.ring_segments.end(), [axis](const auto& primitive) {
-        return primitive.axis == axis && primitive.front_facing;
-    });
-    return found == frame.ring_segments.end() ? nullptr : &*found;
+const quader_editor_core::TransformGizmoRingSegmentPrimitive *
+find_ring(const quader_editor_core::TransformGizmoFrame &frame,
+          quader_editor_core::TransformAxis axis) {
+  const auto found =
+      std::find_if(frame.ring_segments.begin(), frame.ring_segments.end(),
+                   [axis](const auto &primitive) {
+                     return primitive.axis == axis && primitive.front_facing;
+                   });
+  return found == frame.ring_segments.end() ? nullptr : &*found;
 }
 
-quader::QVec2 rotatedPoint(quader::QVec2 pivot, quader::QVec2 point, float radians) {
-    const float c = std::cos(radians);
-    const float s = std::sin(radians);
-    const quader::QVec2 delta = point - pivot;
-    return {
-            pivot.x + delta.x * c - delta.y * s,
-            pivot.y + delta.x * s + delta.y * c,
-    };
+quader::QVec2 rotated_point(quader::QVec2 pivot, quader::QVec2 point,
+                            float radians) {
+  const float c = std::cos(radians);
+  const float s = std::sin(radians);
+  const quader::QVec2 delta = point - pivot;
+  return {
+      pivot.x + delta.x * c - delta.y * s,
+      pivot.y + delta.x * s + delta.y * c,
+  };
 }
 
-void expectTransformNear(
-        const quader::TransformComponent& actual,
-        const quader::TransformComponent& expected) {
-    EXPECT_NEAR(actual.position.x, expected.position.x, 0.001f);
-    EXPECT_NEAR(actual.position.y, expected.position.y, 0.001f);
-    EXPECT_NEAR(actual.position.z, expected.position.z, 0.001f);
-    EXPECT_NEAR(actual.rotationEuler.x, expected.rotationEuler.x, 0.001f);
-    EXPECT_NEAR(actual.rotationEuler.y, expected.rotationEuler.y, 0.001f);
-    EXPECT_NEAR(actual.rotationEuler.z, expected.rotationEuler.z, 0.001f);
-    EXPECT_NEAR(actual.scale.x, expected.scale.x, 0.001f);
-    EXPECT_NEAR(actual.scale.y, expected.scale.y, 0.001f);
-    EXPECT_NEAR(actual.scale.z, expected.scale.z, 0.001f);
+void expect_transform_near(const quader::TransformComponent &actual,
+                           const quader::TransformComponent &expected) {
+  EXPECT_NEAR(actual.position.x, expected.position.x, 0.001f);
+  EXPECT_NEAR(actual.position.y, expected.position.y, 0.001f);
+  EXPECT_NEAR(actual.position.z, expected.position.z, 0.001f);
+  EXPECT_NEAR(actual.rotation_euler.x, expected.rotation_euler.x, 0.001f);
+  EXPECT_NEAR(actual.rotation_euler.y, expected.rotation_euler.y, 0.001f);
+  EXPECT_NEAR(actual.rotation_euler.z, expected.rotation_euler.z, 0.001f);
+  EXPECT_NEAR(actual.scale.x, expected.scale.x, 0.001f);
+  EXPECT_NEAR(actual.scale.y, expected.scale.y, 0.001f);
+  EXPECT_NEAR(actual.scale.z, expected.scale.z, 0.001f);
 }
 
-quader_editor_core::TransformGizmoFrameInput testGizmoInput(
-        quader_editor_core::ViewportInteractionTool tool,
-        const ViewportInteractionHarness& harness) {
-    quader_editor_core::TransformGizmoFrameInput input;
-    input.tool = tool;
-    input.has_selection = true;
-    input.has_pivot = true;
-    input.pivot = {};
-    input.camera = quader::ViewportCameraAdapter::runtimeCamera(harness.camera, harness.input.viewportSize);
-    input.gizmo_size_pixels = quader::kOverlayTransformGizmoSizePixels;
-    input.pick_radius_pixels = quader::kOverlayTransformGizmoPickRadiusPixels;
-    input.ring_segments = 32;
-    return input;
+quader_editor_core::TransformGizmoFrameInput
+test_gizmo_input(quader_editor_core::ViewportInteractionTool tool,
+                 const ViewportInteractionHarness &harness) {
+  quader_editor_core::TransformGizmoFrameInput input;
+  input.tool = tool;
+  input.has_selection = true;
+  input.has_pivot = true;
+  input.pivot = {};
+  input.camera = quader::ViewportCameraAdapter::runtime_camera(
+      harness.camera, harness.input.viewport_size);
+  input.gizmo_size_pixels = quader::kOverlayTransformGizmoSizePixels;
+  input.pick_radius_pixels = quader::kOverlayTransformGizmoPickRadiusPixels;
+  input.ring_segments = 32;
+  return input;
 }
 
-quader::ViewportOverlayFrame buildGizmoOverlay(
-        const quader_editor_core::TransformGizmoFrame& frame,
-        const ViewportInteractionHarness& harness) {
-    quader::ViewportOverlayFrame overlay;
-    quader::ViewportTransformGizmoOverlayBuilder::append(
-            overlay,
-            frame,
-            quader::ViewportCameraAdapter::overlayCamera(harness.camera, harness.input.viewportSize));
-    return overlay;
+quader::ViewportOverlayFrame
+build_gizmo_overlay(const quader_editor_core::TransformGizmoFrame &frame,
+                    const ViewportInteractionHarness &harness) {
+  quader::ViewportOverlayFrame overlay;
+  quader::ViewportTransformGizmoOverlayBuilder::append(
+      overlay, frame,
+      quader::ViewportCameraAdapter::overlay_camera(
+          harness.camera, harness.input.viewport_size));
+  return overlay;
 }
 
-quader::QVec2 axisScreenPoint(
-        const quader_editor_core::TransformGizmoAxisPrimitive& axis,
-        float factor) {
-    return axis.screen_start + (axis.screen_tip - axis.screen_start) * factor;
+quader::QVec2
+axis_screen_point(const quader_editor_core::TransformGizmoAxisPrimitive &axis,
+                  float factor) {
+  return axis.screen_start + (axis.screen_tip - axis.screen_start) * factor;
 }
 
-void selectSingleComponent(
-        ViewportInteractionHarness& harness,
-        quader::QuaderModelingObjectRef object,
-        quader::QuaderSelectionMode mode) {
-    ASSERT_TRUE(harness.editor.selection().selectObject(object).ok);
-    ASSERT_TRUE(harness.editor.selection().setMode(mode).ok());
-    switch (mode) {
-    case quader::QuaderSelectionMode::Vertex:
-        ASSERT_TRUE(harness.editor.selection().selectVertex(object, 1).ok());
-        break;
-    case quader::QuaderSelectionMode::Edge:
-        ASSERT_TRUE(harness.editor.selection().selectEdge(object, 1, 2).ok());
-        break;
-    case quader::QuaderSelectionMode::Face:
-        ASSERT_TRUE(harness.editor.selection().selectFace(object, 1).ok());
-        break;
-    default:
-        FAIL() << "Unsupported component mode";
-        break;
-    }
+void select_single_component(ViewportInteractionHarness &harness,
+                             quader::QuaderModelingObjectRef object,
+                             quader::QuaderSelectionMode mode) {
+  ASSERT_TRUE(harness.editor.selection().select_object(object).ok);
+  ASSERT_TRUE(harness.editor.selection().set_mode(mode).ok());
+  switch (mode) {
+  case quader::QuaderSelectionMode::Vertex:
+    ASSERT_TRUE(harness.editor.selection().select_vertex(object, 1).ok());
+    break;
+  case quader::QuaderSelectionMode::Edge:
+    ASSERT_TRUE(harness.editor.selection().select_edge(object, 1, 2).ok());
+    break;
+  case quader::QuaderSelectionMode::Face:
+    ASSERT_TRUE(harness.editor.selection().select_face(object, 1).ok());
+    break;
+  default:
+    FAIL() << "Unsupported component mode";
+    break;
+  }
 }
 
-void pressUpdateReleaseGizmo(
-        ViewportInteractionHarness& harness,
-        quader::QVec2 start,
-        quader::QVec2 update) {
-    harness.input.mouseLocal = start;
-    harness.input.mouseScreen = start;
-    const quader::ViewportBeforeToolInteractionResult press =
-            harness.controller.handleBeforeActiveTool(
-                    harness.editor,
-                    harness.frame(true, true, false, start));
-    ASSERT_TRUE(press.gizmoConsumed);
+void press_update_release_gizmo(ViewportInteractionHarness &harness,
+                                quader::QVec2 start, quader::QVec2 update) {
+  harness.input.mouse_local = start;
+  harness.input.mouse_screen = start;
+  const quader::ViewportBeforeToolInteractionResult press =
+      harness.controller.handle_before_active_tool(
+          harness.editor, harness.frame(true, true, false, start));
+  ASSERT_TRUE(press.gizmo_consumed);
 
-    harness.input.mouseLocal = update;
-    harness.input.mouseScreen = update;
-    const quader::ViewportBeforeToolInteractionResult drag =
-            harness.controller.handleBeforeActiveTool(
-                    harness.editor,
-                    harness.frame(false, true, false, start));
-    EXPECT_TRUE(drag.gizmoConsumed);
+  harness.input.mouse_local = update;
+  harness.input.mouse_screen = update;
+  const quader::ViewportBeforeToolInteractionResult drag =
+      harness.controller.handle_before_active_tool(
+          harness.editor, harness.frame(false, true, false, start));
+  EXPECT_TRUE(drag.gizmo_consumed);
 
-    const quader::ViewportBeforeToolInteractionResult release =
-            harness.controller.handleBeforeActiveTool(
-                    harness.editor,
-                    harness.frame(false, false, true, start));
-    EXPECT_TRUE(release.gizmoConsumed);
+  const quader::ViewportBeforeToolInteractionResult release =
+      harness.controller.handle_before_active_tool(
+          harness.editor, harness.frame(false, false, true, start));
+  EXPECT_TRUE(release.gizmo_consumed);
 }
 
-std::vector<quader::EntityId> selectedEntities(const ViewportInteractionHarness& harness) {
-    return harness.session.scene().selectedEntities();
+std::vector<quader::EntityId>
+selected_entities(const ViewportInteractionHarness &harness) {
+  return harness.session.scene().selected_entities();
 }
 
-bool hasSnapTargetVertexPoint(const quader::QuaderOverlayFrame& frame) {
-    return std::any_of(frame.points.begin(), frame.points.end(), [](const quader::QuaderOverlayPoint& point) {
-        return point.layer == quader::QuaderOverlayLayer::SnapTargetVertex;
-    });
+bool has_snap_target_vertex_point(const quader::QuaderOverlayFrame &frame) {
+  return std::any_of(frame.points.begin(), frame.points.end(),
+                     [](const quader::QuaderOverlayPoint &point) {
+                       return point.layer ==
+                              quader::QuaderOverlayLayer::SnapTargetVertex;
+                     });
 }
 
 } // namespace
@@ -236,517 +237,590 @@ bool hasSnapTargetVertexPoint(const quader::QuaderOverlayFrame& frame) {
 TEST(ViewportTransformGizmoOverlayBuilderTests, EmitsGodotStyleTransformGizmoVisuals) {
     ViewportInteractionHarness harness;
 
-    const quader_editor_core::TransformGizmoFrame moveFrame =
-            quader_editor_core::build_transform_gizmo_frame(
-                    testGizmoInput(quader_editor_core::ViewportInteractionTool::move, harness));
-    ASSERT_TRUE(moveFrame.info.ok);
-    const quader::ViewportOverlayFrame moveOverlay = buildGizmoOverlay(moveFrame, harness);
+    const quader_editor_core::TransformGizmoFrame move_frame =
+        quader_editor_core::build_transform_gizmo_frame(test_gizmo_input(
+            quader_editor_core::ViewportInteractionTool::Move, harness));
+    ASSERT_TRUE(move_frame.info.ok);
+    const quader::ViewportOverlayFrame move_overlay =
+        build_gizmo_overlay(move_frame, harness);
 
-    EXPECT_EQ(std::count_if(moveOverlay.lines.begin(), moveOverlay.lines.end(), [](const quader::ViewportOverlayLine& line) {
-        return line.layer == quader::ViewportOverlayLayer::ToolHandle &&
-                line.color == quader::kOverlayToolAxisXColor &&
-                line.widthPixels == quader::kOverlayTransformGizmoAxisLineWidthPixels;
-    }), 1);
-    EXPECT_EQ(std::count_if(moveOverlay.triangles.begin(), moveOverlay.triangles.end(), [](const quader::ViewportOverlayTriangle& triangle) {
-        return triangle.layer == quader::ViewportOverlayLayer::ToolPlane &&
-                triangle.color == quader::kOverlayToolPlaneXYColor;
-    }), 2);
-    EXPECT_TRUE(std::none_of(moveOverlay.triangles.begin(), moveOverlay.triangles.end(), [](const quader::ViewportOverlayTriangle& triangle) {
-        return triangle.color == quader::kOverlayToolCenterColor;
-    }));
-    EXPECT_TRUE(std::none_of(moveOverlay.lines.begin(), moveOverlay.lines.end(), [](const quader::ViewportOverlayLine& line) {
-        return line.color == quader::kOverlayToolLineShadowColor;
-    }));
+    EXPECT_EQ(
+        std::count_if(
+            move_overlay.lines.begin(), move_overlay.lines.end(),
+            [](const quader::ViewportOverlayLine &line) {
+              return line.layer == quader::ViewportOverlayLayer::ToolHandle &&
+                     line.color == quader::kOverlayToolAxisXColor &&
+                     line.width_pixels ==
+                         quader::kOverlayTransformGizmoAxisLineWidthPixels;
+            }),
+        1);
+    EXPECT_EQ(std::count_if(
+                  move_overlay.triangles.begin(), move_overlay.triangles.end(),
+                  [](const quader::ViewportOverlayTriangle &triangle) {
+                    return triangle.layer ==
+                               quader::ViewportOverlayLayer::ToolPlane &&
+                           triangle.color == quader::kOverlayToolPlaneXYColor;
+                  }),
+              2);
+    EXPECT_TRUE(std::none_of(
+        move_overlay.triangles.begin(), move_overlay.triangles.end(),
+        [](const quader::ViewportOverlayTriangle &triangle) {
+          return triangle.color == quader::kOverlayToolCenterColor;
+        }));
+    EXPECT_TRUE(
+        std::none_of(move_overlay.lines.begin(), move_overlay.lines.end(),
+                     [](const quader::ViewportOverlayLine &line) {
+                       return line.color == quader::kOverlayToolLineShadowColor;
+                     }));
 
-    const quader_editor_core::TransformGizmoFrame scaleFrame =
-            quader_editor_core::build_transform_gizmo_frame(
-                    testGizmoInput(quader_editor_core::ViewportInteractionTool::scale, harness));
-    ASSERT_TRUE(scaleFrame.info.ok);
-    const quader::ViewportOverlayFrame scaleOverlay = buildGizmoOverlay(scaleFrame, harness);
-    EXPECT_EQ(std::count_if(scaleOverlay.triangles.begin(), scaleOverlay.triangles.end(), [](const quader::ViewportOverlayTriangle& triangle) {
-        return triangle.layer == quader::ViewportOverlayLayer::ToolHandle &&
-                triangle.color == quader::kOverlayToolAxisXColor;
-    }), 12);
+    const quader_editor_core::TransformGizmoFrame scale_frame =
+        quader_editor_core::build_transform_gizmo_frame(test_gizmo_input(
+            quader_editor_core::ViewportInteractionTool::Scale, harness));
+    ASSERT_TRUE(scale_frame.info.ok);
+    const quader::ViewportOverlayFrame scale_overlay =
+        build_gizmo_overlay(scale_frame, harness);
+    EXPECT_EQ(
+        std::count_if(scale_overlay.triangles.begin(),
+                      scale_overlay.triangles.end(),
+                      [](const quader::ViewportOverlayTriangle &triangle) {
+                        return triangle.layer ==
+                                   quader::ViewportOverlayLayer::ToolHandle &&
+                               triangle.color == quader::kOverlayToolAxisXColor;
+                      }),
+        12);
 
-    const quader_editor_core::TransformGizmoFrame rotateFrame =
-            quader_editor_core::build_transform_gizmo_frame(
-                    testGizmoInput(quader_editor_core::ViewportInteractionTool::rotate, harness));
-    ASSERT_TRUE(rotateFrame.info.ok);
-    const quader::ViewportOverlayFrame rotateOverlay = buildGizmoOverlay(rotateFrame, harness);
-    const auto axisRingLines = std::count_if(rotateOverlay.lines.begin(), rotateOverlay.lines.end(), [](const quader::ViewportOverlayLine& line) {
-        return line.layer == quader::ViewportOverlayLayer::ToolHandle &&
-                line.widthPixels == 3.0f;
-    });
-    const auto frontFacingRingSegments = std::count_if(rotateFrame.ring_segments.begin(), rotateFrame.ring_segments.end(), [](const auto& segment) {
-        return segment.front_facing;
-    });
-    EXPECT_EQ(axisRingLines, frontFacingRingSegments);
-    EXPECT_TRUE(std::any_of(rotateFrame.ring_segments.begin(), rotateFrame.ring_segments.end(), [](const auto& segment) {
-        return !segment.front_facing;
-    }));
-    EXPECT_TRUE(std::none_of(rotateOverlay.lines.begin(), rotateOverlay.lines.end(), [](const quader::ViewportOverlayLine& line) {
-        return line.layer == quader::ViewportOverlayLayer::ToolHandle &&
-                ((line.color >> 24u) & 0xffu) < 100u;
-    }));
+    const quader_editor_core::TransformGizmoFrame rotate_frame =
+        quader_editor_core::build_transform_gizmo_frame(test_gizmo_input(
+            quader_editor_core::ViewportInteractionTool::Rotate, harness));
+    ASSERT_TRUE(rotate_frame.info.ok);
+    const quader::ViewportOverlayFrame rotate_overlay =
+        build_gizmo_overlay(rotate_frame, harness);
+    const auto axis_ring_lines = std::count_if(
+        rotate_overlay.lines.begin(), rotate_overlay.lines.end(),
+        [](const quader::ViewportOverlayLine &line) {
+          return line.layer == quader::ViewportOverlayLayer::ToolHandle &&
+                 line.width_pixels == 3.0f;
+        });
+    const auto front_facing_ring_segments = std::count_if(
+        rotate_frame.ring_segments.begin(), rotate_frame.ring_segments.end(),
+        [](const auto &segment) { return segment.front_facing; });
+    EXPECT_EQ(axis_ring_lines, front_facing_ring_segments);
+    EXPECT_TRUE(std::any_of(
+        rotate_frame.ring_segments.begin(), rotate_frame.ring_segments.end(),
+        [](const auto &segment) { return !segment.front_facing; }));
+    EXPECT_TRUE(std::none_of(
+        rotate_overlay.lines.begin(), rotate_overlay.lines.end(),
+        [](const quader::ViewportOverlayLine &line) {
+          return line.layer == quader::ViewportOverlayLayer::ToolHandle &&
+                 ((line.color >> 24u) & 0xffu) < 100u;
+        }));
 
-    quader_editor_core::TransformGizmoFrame rotateIndicatorFrame = rotateFrame;
-    rotateIndicatorFrame.info.rotate_indicator = {
-            .active = true,
-            .axis = quader_editor_core::TransformAxis::z,
-            .world_axis = {0.0f, 0.0f, 1.0f},
-            .start_direction = {1.0f, 0.0f, 0.0f},
-            .has_mouse_position = true,
-            .mouse_position = {0.0f, 2.0f, 0.0f},
-            .angle_degrees = 67.5,
+    quader_editor_core::TransformGizmoFrame rotate_indicator_frame =
+        rotate_frame;
+    rotate_indicator_frame.info.rotate_indicator = {
+        .active = true,
+        .axis = quader_editor_core::TransformAxis::Z,
+        .world_axis = {0.0f, 0.0f, 1.0f},
+        .start_direction = {1.0f, 0.0f, 0.0f},
+        .has_mouse_position = true,
+        .mouse_position = {0.0f, 2.0f, 0.0f},
+        .angle_degrees = 67.5,
     };
-    const quader::ViewportOverlayFrame rotateIndicatorOverlay = buildGizmoOverlay(rotateIndicatorFrame, harness);
-    EXPECT_GT(std::count_if(rotateIndicatorOverlay.triangles.begin(), rotateIndicatorOverlay.triangles.end(), [](const quader::ViewportOverlayTriangle& triangle) {
-        return triangle.layer == quader::ViewportOverlayLayer::ToolPreviewFill &&
-                triangle.color == quader::kOverlayTransformGizmoRotatePieFillColor;
-    }), 0);
-    EXPECT_EQ(std::count_if(rotateIndicatorOverlay.lines.begin(), rotateIndicatorOverlay.lines.end(), [](const quader::ViewportOverlayLine& line) {
-        return line.layer == quader::ViewportOverlayLayer::ToolPreviewLine &&
-                line.color == quader::kOverlayTransformGizmoRotatePieLineColor;
-    }), 2);
-    EXPECT_EQ(std::count_if(rotateIndicatorOverlay.lines.begin(), rotateIndicatorOverlay.lines.end(), [](const quader::ViewportOverlayLine& line) {
-        return line.layer == quader::ViewportOverlayLayer::ToolPreviewLine &&
-                line.color == quader::kOverlayTransformGizmoRotatePieLineColor &&
-                std::abs(line.widthPixels - 1.55f) <= 0.001f &&
-                length(line.end - quader::QVec3{0.0f, 2.0f, 0.0f}) <= 0.001f;
-    }), 1);
+    const quader::ViewportOverlayFrame rotate_indicator_overlay =
+        build_gizmo_overlay(rotate_indicator_frame, harness);
+    EXPECT_GT(std::count_if(
+                  rotate_indicator_overlay.triangles.begin(),
+                  rotate_indicator_overlay.triangles.end(),
+                  [](const quader::ViewportOverlayTriangle &triangle) {
+                    return triangle.layer ==
+                               quader::ViewportOverlayLayer::ToolPreviewFill &&
+                           triangle.color ==
+                               quader::kOverlayTransformGizmoRotatePieFillColor;
+                  }),
+              0);
+    EXPECT_EQ(std::count_if(
+                  rotate_indicator_overlay.lines.begin(),
+                  rotate_indicator_overlay.lines.end(),
+                  [](const quader::ViewportOverlayLine &line) {
+                    return line.layer ==
+                               quader::ViewportOverlayLayer::ToolPreviewLine &&
+                           line.color ==
+                               quader::kOverlayTransformGizmoRotatePieLineColor;
+                  }),
+              2);
+    EXPECT_EQ(
+        std::count_if(
+            rotate_indicator_overlay.lines.begin(),
+            rotate_indicator_overlay.lines.end(),
+            [](const quader::ViewportOverlayLine &line) {
+              return line.layer ==
+                         quader::ViewportOverlayLayer::ToolPreviewLine &&
+                     line.color ==
+                         quader::kOverlayTransformGizmoRotatePieLineColor &&
+                     std::abs(line.width_pixels - 1.55f) <= 0.001f &&
+                     length(line.end - quader::QVec3{0.0f, 2.0f, 0.0f}) <=
+                         0.001f;
+            }),
+        1);
 }
 
 TEST(ViewportInteractionControllerTests, RotateGizmoDragEmitsPieAngleIndicator) {
     ViewportInteractionHarness harness;
-    const quader::QuaderModelingObjectRef box = createUnitBox(harness);
-    ASSERT_TRUE(harness.editor.selection().selectObject(box).ok);
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok);
     ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Rotate).ok);
-    harness.router.setActiveTool(quader::ViewportToolId::Rotate);
+    harness.router.set_active_tool(quader::ViewportToolId::Rotate);
 
     const quader::ViewportBeforeToolInteractionResult warmup =
-            harness.controller.handleBeforeActiveTool(harness.editor, harness.frame());
-    ASSERT_FALSE(warmup.gizmoConsumed);
-    const quader_editor_core::TransformGizmoFrame* frame = harness.controller.transformGizmoFrame();
+        harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+    ASSERT_FALSE(warmup.gizmo_consumed);
+    const quader_editor_core::TransformGizmoFrame *frame =
+        harness.controller.transform_gizmo_frame();
     ASSERT_NE(frame, nullptr);
-    const quader_editor_core::TransformGizmoRingSegmentPrimitive* ring =
-            findRing(*frame, quader_editor_core::TransformAxis::z);
+    const quader_editor_core::TransformGizmoRingSegmentPrimitive *ring =
+        find_ring(*frame, quader_editor_core::TransformAxis::Z);
     ASSERT_NE(ring, nullptr);
 
     const quader::QVec2 start = ring->screen_start;
-    const quader::QVec2 update = rotatedPoint(frame->info.screen_pivot, start, 0.6f);
-    harness.input.mouseLocal = start;
-    harness.input.mouseScreen = start;
+    const quader::QVec2 update =
+        rotated_point(frame->info.screen_pivot, start, 0.6f);
+    harness.input.mouse_local = start;
+    harness.input.mouse_screen = start;
     const quader::ViewportBeforeToolInteractionResult press =
-            harness.controller.handleBeforeActiveTool(
-                    harness.editor,
-                    harness.frame(true, true, false, start));
-    ASSERT_TRUE(press.gizmoConsumed);
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(true, true, false, start));
+    ASSERT_TRUE(press.gizmo_consumed);
 
-    harness.input.mouseLocal = update;
-    harness.input.mouseScreen = update;
+    harness.input.mouse_local = update;
+    harness.input.mouse_screen = update;
     const quader::ViewportBeforeToolInteractionResult drag =
-            harness.controller.handleBeforeActiveTool(
-                    harness.editor,
-                    harness.frame(false, true, false, start));
-    ASSERT_TRUE(drag.gizmoConsumed);
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(false, true, false, start));
+    ASSERT_TRUE(drag.gizmo_consumed);
 
-    frame = harness.controller.transformGizmoFrame();
+    frame = harness.controller.transform_gizmo_frame();
     ASSERT_NE(frame, nullptr);
     EXPECT_TRUE(frame->info.rotate_indicator.active);
-    EXPECT_NE(frame->info.rotate_indicator.axis, quader_editor_core::TransformAxis::none);
-    EXPECT_NE(frame->info.rotate_indicator.axis, quader_editor_core::TransformAxis::all);
+    EXPECT_NE(frame->info.rotate_indicator.axis,
+              quader_editor_core::TransformAxis::None);
+    EXPECT_NE(frame->info.rotate_indicator.axis,
+              quader_editor_core::TransformAxis::All);
     EXPECT_NEAR(length(frame->info.rotate_indicator.world_axis), 1.0f, 0.001f);
     ASSERT_TRUE(frame->info.rotate_indicator.has_mouse_position);
-    const quader::ViewportScreenPoint projectedMouse =
-            harness.camera.projectWorldPoint(frame->info.rotate_indicator.mouse_position);
-    ASSERT_TRUE(projectedMouse.visible);
-    EXPECT_NEAR(projectedMouse.position.x, update.x, 1.0f);
-    EXPECT_NEAR(projectedMouse.position.y, update.y, 1.0f);
+    const quader::ViewportScreenPoint projected_mouse =
+        harness.camera.project_world_point(
+            frame->info.rotate_indicator.mouse_position);
+    ASSERT_TRUE(projected_mouse.visible);
+    EXPECT_NEAR(projected_mouse.position.x, update.x, 1.0f);
+    EXPECT_NEAR(projected_mouse.position.y, update.y, 1.0f);
     EXPECT_GT(std::abs(frame->info.rotate_indicator.angle_degrees), 1.0);
 
-    const quader::ViewportOverlayFrame overlay = buildGizmoOverlay(*frame, harness);
+    const quader::ViewportOverlayFrame overlay =
+        build_gizmo_overlay(*frame, harness);
     EXPECT_GT(std::count_if(overlay.triangles.begin(), overlay.triangles.end(), [](const quader::ViewportOverlayTriangle& triangle) {
         return triangle.layer == quader::ViewportOverlayLayer::ToolPreviewFill &&
                 triangle.color == quader::kOverlayTransformGizmoRotatePieFillColor;
     }), 0);
 
     const quader::ViewportBeforeToolInteractionResult release =
-            harness.controller.handleBeforeActiveTool(
-                    harness.editor,
-                    harness.frame(false, false, true, start));
-    EXPECT_TRUE(release.gizmoConsumed);
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(false, false, true, start));
+    EXPECT_TRUE(release.gizmo_consumed);
 }
 
 TEST(ViewportInteractionControllerTests, ClickFrameSelectsComponentThroughViewportFallback) {
     ViewportInteractionHarness harness;
-    (void)createUnitBox(harness);
+    (void)create_unit_box(harness);
 
-    ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Face).ok);
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Face)
+                    .ok);
     ASSERT_TRUE(harness.editor.selection().clear().ok);
-    harness.router.setSelectionMode(quader::ViewportSelectionMode::Face);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
 
-    const quader::ViewportBeforeToolInteractionResult beforeTool =
-            harness.controller.handleBeforeActiveTool(harness.editor, harness.frame(true, true, false, {400.0f, 300.0f}));
-    EXPECT_FALSE(beforeTool.gizmoConsumed);
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(true, true, false, {400.0f, 300.0f}),
-            quader::ViewportToolResult{},
-            beforeTool);
-    EXPECT_EQ(harness.editor.selection().summary().selectedFaceCount, 0u);
+    const quader::ViewportBeforeToolInteractionResult before_tool =
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(true, true, false, {400.0f, 300.0f}));
+    EXPECT_FALSE(before_tool.gizmo_consumed);
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(true, true, false, {400.0f, 300.0f}),
+        quader::ViewportToolResult{}, before_tool);
+    EXPECT_EQ(harness.editor.selection().summary().selected_face_count, 0u);
 
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(false, false, true, {400.0f, 300.0f}),
-            quader::ViewportToolResult{},
-            quader::ViewportBeforeToolInteractionResult{});
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(false, false, true, {400.0f, 300.0f}),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
 
     const quader::QuaderSelectionSummary selection = harness.editor.selection().summary();
     EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Face);
-    EXPECT_EQ(selection.selectedFaceCount, 1u);
-    EXPECT_EQ(selection.activeKind, quader::QuaderActiveSelectionKind::Face);
-    EXPECT_EQ(harness.router.state().selectionMode, quader::ViewportSelectionMode::Face);
-    EXPECT_EQ(harness.editor.selection().hoverSummary().target.kind, quader::QuaderActiveSelectionKind::None);
+    EXPECT_EQ(selection.selected_face_count, 1u);
+    EXPECT_EQ(selection.active_kind, quader::QuaderActiveSelectionKind::Face);
+    EXPECT_EQ(harness.router.state().selection_mode,
+              quader::ViewportSelectionMode::Face);
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::None);
 
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(),
-            quader::ViewportToolResult{},
-            quader::ViewportBeforeToolInteractionResult{});
-    EXPECT_EQ(harness.editor.selection().hoverSummary().target.kind, quader::QuaderActiveSelectionKind::None);
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(), quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::None);
 }
 
 TEST(ViewportInteractionControllerTests, VertexSnapDoesNotStealPendingMoveGizmoVertexClick) {
     ViewportInteractionHarness harness;
-    harness.camera.setViewDirection({-0.45f, -0.35f, -0.82f});
-    (void)harness.settings.setBoolValue(quader::ViewportBoolSettingId::VertexSnap, true);
-    ASSERT_TRUE(harness.settings.boolValue(quader::ViewportBoolSettingId::VertexSnap));
+    harness.camera.set_view_direction({-0.45f, -0.35f, -0.82f});
+    (void)harness.settings.set_bool_value(
+        quader::ViewportBoolSettingId::VertexSnap, true);
+    ASSERT_TRUE(
+        harness.settings.bool_value(quader::ViewportBoolSettingId::VertexSnap));
 
-    const quader::QuaderModelingObjectRef box = createUnitBox(harness);
-    selectSingleComponent(harness, box, quader::QuaderSelectionMode::Vertex);
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+    select_single_component(harness, box, quader::QuaderSelectionMode::Vertex);
     ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok);
-    harness.router.setActiveTool(quader::ViewportToolId::Move);
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
 
     const quader::ViewportBeforeToolInteractionResult warmup =
-            harness.controller.handleBeforeActiveTool(harness.editor, harness.frame());
-    ASSERT_FALSE(warmup.gizmoConsumed);
-    const quader_editor_core::TransformGizmoFrame* frame = harness.controller.transformGizmoFrame();
+        harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+    ASSERT_FALSE(warmup.gizmo_consumed);
+    const quader_editor_core::TransformGizmoFrame *frame =
+        harness.controller.transform_gizmo_frame();
     ASSERT_NE(frame, nullptr);
     const quader::QVec2 click = frame->info.screen_pivot;
 
-    harness.input.mouseLocal = click;
-    harness.input.mouseScreen = click;
+    harness.input.mouse_local = click;
+    harness.input.mouse_screen = click;
     const quader::ViewportBeforeToolInteractionResult press =
-            harness.controller.handleBeforeActiveTool(
-                    harness.editor,
-                    harness.frame(true, true, false, click));
-    ASSERT_TRUE(press.gizmoConsumed);
-    EXPECT_FALSE(press.selectionClickRequested);
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(true, true, false, click));
+    ASSERT_TRUE(press.gizmo_consumed);
+    EXPECT_FALSE(press.selection_click_requested);
     EXPECT_FALSE(harness.controller.dragging());
-    EXPECT_FALSE(hasSnapTargetVertexPoint(harness.editor.query().selectionOverlay()));
+    EXPECT_FALSE(has_snap_target_vertex_point(
+        harness.editor.query().selection_overlay()));
 
-    const quader::ViewportInteractionFrame releaseFrame =
-            harness.frame(false, false, true, click);
+    const quader::ViewportInteractionFrame release_frame =
+        harness.frame(false, false, true, click);
     const quader::ViewportBeforeToolInteractionResult release =
-            harness.controller.handleBeforeActiveTool(harness.editor, releaseFrame);
-    EXPECT_FALSE(release.gizmoConsumed);
-    ASSERT_TRUE(release.selectionClickRequested);
-    EXPECT_EQ(release.selectionClickLocal.x, click.x);
-    EXPECT_EQ(release.selectionClickLocal.y, click.y);
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            releaseFrame,
-            quader::ViewportToolResult{},
-            release);
+        harness.controller.handle_before_active_tool(harness.editor,
+                                                     release_frame);
+    EXPECT_FALSE(release.gizmo_consumed);
+    ASSERT_TRUE(release.selection_click_requested);
+    EXPECT_EQ(release.selection_click_local.x, click.x);
+    EXPECT_EQ(release.selection_click_local.y, click.y);
+    harness.controller.handle_after_active_tool(
+        harness.editor, release_frame, quader::ViewportToolResult{}, release);
 
     const quader::QuaderSelectionSummary selection = harness.editor.selection().summary();
     EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Vertex);
-    EXPECT_EQ(selection.selectedVertexCount, 1u);
-    EXPECT_EQ(selection.activeKind, quader::QuaderActiveSelectionKind::Vertex);
+    EXPECT_EQ(selection.selected_vertex_count, 1u);
+    EXPECT_EQ(selection.active_kind, quader::QuaderActiveSelectionKind::Vertex);
     EXPECT_FALSE(harness.controller.dragging());
-    EXPECT_FALSE(hasSnapTargetVertexPoint(harness.editor.query().selectionOverlay()));
+    EXPECT_FALSE(has_snap_target_vertex_point(
+        harness.editor.query().selection_overlay()));
 }
 
 TEST(ViewportInteractionControllerTests, ShiftClickRebuildsSliceQuadPreviewThroughViewportFallback) {
     ViewportInteractionHarness harness;
-    const quader::QuaderModelingObjectRef box = createUnitBox(harness);
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
 
-    ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Face).ok());
-    ASSERT_TRUE(harness.editor.selection().selectFace(box, 1).ok());
-    harness.router.setSelectionMode(quader::ViewportSelectionMode::Face);
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Face)
+                    .ok());
+    ASSERT_TRUE(harness.editor.selection().select_face(box, 1).ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
 
     const quader::QuaderApiVoidResult preview =
-            harness.editor.commands().execute(harness.editor.commands().commandIdForModelingAction("slice_quad"));
-    ASSERT_TRUE(preview.ok()) << preview.errorMessage();
-    const std::optional<quader::QuaderMeshSnapshot> oneFacePreview = harness.editor.query().mesh(box.mesh);
-    ASSERT_TRUE(oneFacePreview.has_value());
+        harness.editor.commands().execute(
+            harness.editor.commands().command_id_for_modeling_action(
+                "slice_quad"));
+    ASSERT_TRUE(preview.ok()) << preview.error_message();
+    const std::optional<quader::QuaderMeshSnapshot> one_face_preview =
+        harness.editor.query().mesh(box.mesh);
+    ASSERT_TRUE(one_face_preview.has_value());
 
-    harness.camera.setViewDirection({-1.0f, 0.0f, 0.0f});
-    const quader::ViewportScreenPoint sideFace = harness.camera.projectWorldPoint({1.0f, 0.0f, 0.0f});
-    ASSERT_TRUE(sideFace.visible);
+    harness.camera.set_view_direction({-1.0f, 0.0f, 0.0f});
+    const quader::ViewportScreenPoint side_face =
+        harness.camera.project_world_point({1.0f, 0.0f, 0.0f});
+    ASSERT_TRUE(side_face.visible);
     harness.input.modifiers.shift = true;
-    harness.input.operationPreviewActive = true;
-    harness.input.mouseLocal = sideFace.position;
-    harness.input.mouseScreen = sideFace.position;
+    harness.input.operation_preview_active = true;
+    harness.input.mouse_local = side_face.position;
+    harness.input.mouse_screen = side_face.position;
 
-    const quader::ViewportBeforeToolInteractionResult beforeTool =
-            harness.controller.handleBeforeActiveTool(harness.editor, harness.frame(true, true, false, sideFace.position));
-    EXPECT_FALSE(beforeTool.gizmoConsumed);
-    harness.controller.handleAfterActiveTool(
+    const quader::ViewportBeforeToolInteractionResult before_tool =
+        harness.controller.handle_before_active_tool(
             harness.editor,
-            harness.frame(true, true, false, sideFace.position),
-            quader::ViewportToolResult{},
-            beforeTool);
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(false, false, true, sideFace.position),
-            quader::ViewportToolResult{},
-            quader::ViewportBeforeToolInteractionResult{});
+            harness.frame(true, true, false, side_face.position));
+    EXPECT_FALSE(before_tool.gizmo_consumed);
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(true, true, false, side_face.position),
+        quader::ViewportToolResult{}, before_tool);
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(false, false, true, side_face.position),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
 
     const quader::QuaderSelectionSummary summary = harness.editor.selection().summary();
     EXPECT_EQ(summary.mode, quader::QuaderSelectionMode::Face);
-    EXPECT_GT(summary.selectedFaceCount, 1u);
-    const std::optional<quader::QuaderMeshSnapshot> twoFacePreview = harness.editor.query().mesh(box.mesh);
-    ASSERT_TRUE(twoFacePreview.has_value());
-    EXPECT_GT(twoFacePreview->vertexCount, oneFacePreview->vertexCount);
-    EXPECT_GT(twoFacePreview->primitiveCount, oneFacePreview->primitiveCount);
+    EXPECT_GT(summary.selected_face_count, 1u);
+    const std::optional<quader::QuaderMeshSnapshot> two_face_preview =
+        harness.editor.query().mesh(box.mesh);
+    ASSERT_TRUE(two_face_preview.has_value());
+    EXPECT_GT(two_face_preview->vertex_count, one_face_preview->vertex_count);
+    EXPECT_GT(two_face_preview->primitive_count,
+              one_face_preview->primitive_count);
 }
 
 TEST(ViewportInteractionControllerTests, DragFrameBoxSelectsThroughViewportFallback) {
     ViewportInteractionHarness harness;
-    (void)createUnitBox(harness);
+    (void)create_unit_box(harness);
 
-    ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Object).ok);
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok);
     ASSERT_TRUE(harness.editor.selection().clear().ok);
-    harness.router.setSelectionMode(quader::ViewportSelectionMode::Object);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
 
     const quader::QVec2 start{300.0f, 200.0f};
     const quader::QVec2 end{500.0f, 400.0f};
-    harness.input.mouseLocal = start;
-    harness.input.mouseScreen = start;
-    const quader::ViewportBeforeToolInteractionResult beforeTool =
-            harness.controller.handleBeforeActiveTool(harness.editor, harness.frame(true, true, false, start));
-    EXPECT_FALSE(beforeTool.gizmoConsumed);
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(true, true, false, start),
-            quader::ViewportToolResult{},
-            beforeTool);
+    harness.input.mouse_local = start;
+    harness.input.mouse_screen = start;
+    const quader::ViewportBeforeToolInteractionResult before_tool =
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(true, true, false, start));
+    EXPECT_FALSE(before_tool.gizmo_consumed);
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(true, true, false, start),
+        quader::ViewportToolResult{}, before_tool);
 
-    harness.input.mouseLocal = end;
-    harness.input.mouseScreen = end;
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(false, true, false, start),
-            quader::ViewportToolResult{},
-            quader::ViewportBeforeToolInteractionResult{});
-    const quader::ViewportSelectionMarquee marquee = harness.controller.selectionMarquee();
+    harness.input.mouse_local = end;
+    harness.input.mouse_screen = end;
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(false, true, false, start),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
+    const quader::ViewportSelectionMarquee marquee =
+        harness.controller.selection_marquee();
     ASSERT_TRUE(marquee.active);
     EXPECT_EQ(marquee.rule, quader::ModelingBoxSelectionRule::Contain);
-    EXPECT_EQ(harness.editor.selection().summary().selectedObjectCount, 1u);
+    EXPECT_EQ(harness.editor.selection().summary().selected_object_count, 1u);
 
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(false, false, true, start),
-            quader::ViewportToolResult{},
-            quader::ViewportBeforeToolInteractionResult{});
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(false, false, true, start),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
 
     const quader::QuaderSelectionSummary selection = harness.editor.selection().summary();
     EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Object);
-    EXPECT_EQ(selection.selectedObjectCount, 1u);
-    EXPECT_EQ(harness.router.state().selectionMode, quader::ViewportSelectionMode::Object);
-    EXPECT_TRUE(harness.controller.selectionMarquee().active);
+    EXPECT_EQ(selection.selected_object_count, 1u);
+    EXPECT_EQ(harness.router.state().selection_mode,
+              quader::ViewportSelectionMode::Object);
+    EXPECT_TRUE(harness.controller.selection_marquee().active);
 
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(),
-            quader::ViewportToolResult{},
-            quader::ViewportBeforeToolInteractionResult{});
-    EXPECT_FALSE(harness.controller.selectionMarquee().active);
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(), quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
+    EXPECT_FALSE(harness.controller.selection_marquee().active);
 }
 
 TEST(ViewportInteractionControllerTests, ShiftBoxDragAddsSelectionBeforeRelease) {
     ViewportInteractionHarness harness;
-    const quader::QuaderModelingObjectRef left = createBoxAt(harness, {-3.0f, 0.0f, 0.0f});
-    const quader::QuaderModelingObjectRef right = createBoxAt(harness, {3.0f, 0.0f, 0.0f});
+    const quader::QuaderModelingObjectRef left =
+        create_box_at(harness, {-3.0f, 0.0f, 0.0f});
+    const quader::QuaderModelingObjectRef right =
+        create_box_at(harness, {3.0f, 0.0f, 0.0f});
 
-    ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Object).ok);
-    ASSERT_TRUE(harness.editor.selection().selectObject(left).ok);
-    harness.router.setSelectionMode(quader::ViewportSelectionMode::Object);
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok);
+    ASSERT_TRUE(harness.editor.selection().select_object(left).ok);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
 
-    const quader::ViewportScreenPoint projectedRight = harness.camera.projectWorldPoint({3.0f, 0.0f, 0.0f});
-    ASSERT_TRUE(projectedRight.visible);
-    const quader::QVec2 start = projectedRight.position - quader::QVec2{120.0f, 120.0f};
-    const quader::QVec2 end = projectedRight.position + quader::QVec2{120.0f, 120.0f};
+    const quader::ViewportScreenPoint projected_right =
+        harness.camera.project_world_point({3.0f, 0.0f, 0.0f});
+    ASSERT_TRUE(projected_right.visible);
+    const quader::QVec2 start =
+        projected_right.position - quader::QVec2{120.0f, 120.0f};
+    const quader::QVec2 end =
+        projected_right.position + quader::QVec2{120.0f, 120.0f};
 
     harness.input.modifiers.shift = true;
-    harness.input.mouseLocal = start;
-    harness.input.mouseScreen = start;
-    const quader::ViewportBeforeToolInteractionResult beforeTool =
-            harness.controller.handleBeforeActiveTool(harness.editor, harness.frame(true, true, false, start));
-    EXPECT_FALSE(beforeTool.gizmoConsumed);
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(true, true, false, start),
-            quader::ViewportToolResult{},
-            beforeTool);
+    harness.input.mouse_local = start;
+    harness.input.mouse_screen = start;
+    const quader::ViewportBeforeToolInteractionResult before_tool =
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(true, true, false, start));
+    EXPECT_FALSE(before_tool.gizmo_consumed);
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(true, true, false, start),
+        quader::ViewportToolResult{}, before_tool);
 
-    harness.input.mouseLocal = end;
-    harness.input.mouseScreen = end;
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(false, true, false, start),
-            quader::ViewportToolResult{},
-            quader::ViewportBeforeToolInteractionResult{});
+    harness.input.mouse_local = end;
+    harness.input.mouse_screen = end;
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(false, true, false, start),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
 
-    EXPECT_EQ(harness.editor.selection().summary().selectedObjectCount, 2u);
-    const std::vector<quader::EntityId> selected = selectedEntities(harness);
+    EXPECT_EQ(harness.editor.selection().summary().selected_object_count, 2u);
+    const std::vector<quader::EntityId> selected = selected_entities(harness);
     EXPECT_NE(std::find(selected.begin(), selected.end(), left.entity), selected.end());
     EXPECT_NE(std::find(selected.begin(), selected.end(), right.entity), selected.end());
 }
 
 TEST(ViewportInteractionControllerTests, PrimaryBoxDragRemovesSelectionBeforeRelease) {
     ViewportInteractionHarness harness;
-    const quader::QuaderModelingObjectRef left = createBoxAt(harness, {-3.0f, 0.0f, 0.0f});
-    const quader::QuaderModelingObjectRef right = createBoxAt(harness, {3.0f, 0.0f, 0.0f});
+    const quader::QuaderModelingObjectRef left =
+        create_box_at(harness, {-3.0f, 0.0f, 0.0f});
+    const quader::QuaderModelingObjectRef right =
+        create_box_at(harness, {3.0f, 0.0f, 0.0f});
 
-    ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Object).ok);
-    ASSERT_TRUE(harness.editor.selection().selectObjects({left, right}).ok);
-    harness.router.setSelectionMode(quader::ViewportSelectionMode::Object);
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok);
+    ASSERT_TRUE(harness.editor.selection().select_objects({left, right}).ok);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
 
-    const quader::ViewportScreenPoint projectedRight = harness.camera.projectWorldPoint({3.0f, 0.0f, 0.0f});
-    ASSERT_TRUE(projectedRight.visible);
-    const quader::QVec2 start = projectedRight.position - quader::QVec2{120.0f, 120.0f};
-    const quader::QVec2 end = projectedRight.position + quader::QVec2{120.0f, 120.0f};
+    const quader::ViewportScreenPoint projected_right =
+        harness.camera.project_world_point({3.0f, 0.0f, 0.0f});
+    ASSERT_TRUE(projected_right.visible);
+    const quader::QVec2 start =
+        projected_right.position - quader::QVec2{120.0f, 120.0f};
+    const quader::QVec2 end =
+        projected_right.position + quader::QVec2{120.0f, 120.0f};
 
     harness.input.modifiers.primary = true;
-    harness.input.mouseLocal = start;
-    harness.input.mouseScreen = start;
-    const quader::ViewportBeforeToolInteractionResult beforeTool =
-            harness.controller.handleBeforeActiveTool(harness.editor, harness.frame(true, true, false, start));
-    EXPECT_FALSE(beforeTool.gizmoConsumed);
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(true, true, false, start),
-            quader::ViewportToolResult{},
-            beforeTool);
+    harness.input.mouse_local = start;
+    harness.input.mouse_screen = start;
+    const quader::ViewportBeforeToolInteractionResult before_tool =
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(true, true, false, start));
+    EXPECT_FALSE(before_tool.gizmo_consumed);
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(true, true, false, start),
+        quader::ViewportToolResult{}, before_tool);
 
-    harness.input.mouseLocal = end;
-    harness.input.mouseScreen = end;
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(false, true, false, start),
-            quader::ViewportToolResult{},
-            quader::ViewportBeforeToolInteractionResult{});
+    harness.input.mouse_local = end;
+    harness.input.mouse_screen = end;
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(false, true, false, start),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
 
-    EXPECT_EQ(harness.editor.selection().summary().selectedObjectCount, 1u);
-    const std::vector<quader::EntityId> selected = selectedEntities(harness);
+    EXPECT_EQ(harness.editor.selection().summary().selected_object_count, 1u);
+    const std::vector<quader::EntityId> selected = selected_entities(harness);
     EXPECT_NE(std::find(selected.begin(), selected.end(), left.entity), selected.end());
     EXPECT_EQ(std::find(selected.begin(), selected.end(), right.entity), selected.end());
 }
 
 TEST(ViewportInteractionControllerTests, FastDragFrameRetainsCommittedBoxMarqueeForRender) {
     ViewportInteractionHarness harness;
-    (void)createUnitBox(harness);
+    (void)create_unit_box(harness);
 
-    ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Object).ok);
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok);
     ASSERT_TRUE(harness.editor.selection().clear().ok);
-    harness.router.setSelectionMode(quader::ViewportSelectionMode::Object);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
 
     const quader::QVec2 start{500.0f, 400.0f};
     const quader::QVec2 end{300.0f, 200.0f};
-    harness.input.mouseLocal = end;
-    harness.input.mouseScreen = end;
+    harness.input.mouse_local = end;
+    harness.input.mouse_screen = end;
 
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(true, false, true, start),
-            quader::ViewportToolResult{},
-            quader::ViewportBeforeToolInteractionResult{});
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(true, false, true, start),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
 
-    const quader::ViewportSelectionMarquee marquee = harness.controller.selectionMarquee();
+    const quader::ViewportSelectionMarquee marquee =
+        harness.controller.selection_marquee();
     ASSERT_TRUE(marquee.active);
     EXPECT_EQ(marquee.start.x, start.x);
     EXPECT_EQ(marquee.start.y, start.y);
     EXPECT_EQ(marquee.end.x, end.x);
     EXPECT_EQ(marquee.end.y, end.y);
     EXPECT_EQ(marquee.rule, quader::ModelingBoxSelectionRule::Crossing);
-    EXPECT_EQ(harness.editor.selection().summary().selectedObjectCount, 1u);
+    EXPECT_EQ(harness.editor.selection().summary().selected_object_count, 1u);
 
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(),
-            quader::ViewportToolResult{},
-            quader::ViewportBeforeToolInteractionResult{});
-    EXPECT_FALSE(harness.controller.selectionMarquee().active);
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(), quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
+    EXPECT_FALSE(harness.controller.selection_marquee().active);
 }
 
 TEST(ViewportInteractionControllerTests, FastDragStartsFromAcceptedPressWhenCurrentMouseIsOutsideViewport) {
     ViewportInteractionHarness harness;
-    (void)createUnitBox(harness);
+    (void)create_unit_box(harness);
 
-    ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Object).ok);
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok);
     ASSERT_TRUE(harness.editor.selection().clear().ok);
-    harness.router.setSelectionMode(quader::ViewportSelectionMode::Object);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
 
     const quader::QVec2 start{500.0f, 400.0f};
     const quader::QVec2 end{-20.0f, -20.0f};
-    harness.input.viewportHovered = false;
-    harness.input.mouseLocal = end;
-    harness.input.mouseScreen = end;
+    harness.input.viewport_hovered = false;
+    harness.input.mouse_local = end;
+    harness.input.mouse_screen = end;
 
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(true, false, true, start),
-            quader::ViewportToolResult{},
-            quader::ViewportBeforeToolInteractionResult{});
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(true, false, true, start),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
 
-    const quader::ViewportSelectionMarquee marquee = harness.controller.selectionMarquee();
+    const quader::ViewportSelectionMarquee marquee =
+        harness.controller.selection_marquee();
     ASSERT_TRUE(marquee.active);
     EXPECT_EQ(marquee.start.x, start.x);
     EXPECT_EQ(marquee.start.y, start.y);
     EXPECT_EQ(marquee.end.x, end.x);
     EXPECT_EQ(marquee.end.y, end.y);
     EXPECT_EQ(marquee.rule, quader::ModelingBoxSelectionRule::Crossing);
-    EXPECT_EQ(harness.editor.selection().summary().selectedObjectCount, 1u);
+    EXPECT_EQ(harness.editor.selection().summary().selected_object_count, 1u);
 }
 
 TEST(ViewportInteractionControllerTests, HoverSurvivesNavigationSuppressionAndClearsWhenPointerLeaves) {
     ViewportInteractionHarness harness;
-    const quader::QuaderModelingObjectRef box = createUnitBox(harness);
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
 
-    ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Face).ok);
-    harness.router.setSelectionMode(quader::ViewportSelectionMode::Face);
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Face)
+                    .ok);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
     const quader::QuaderApiResult<quader::QuaderHoverSummary> hover =
-            harness.editor.selection().hoverFace(box, 0);
+        harness.editor.selection().hover_face(box, 0);
     ASSERT_TRUE(hover.ok) << hover.message;
-    ASSERT_EQ(harness.editor.selection().hoverSummary().target.kind, quader::QuaderActiveSelectionKind::Face);
+    ASSERT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::Face);
 
-    harness.inputResult.navigationActive = true;
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(),
-            quader::ViewportToolResult{},
-            quader::ViewportBeforeToolInteractionResult{});
-    EXPECT_EQ(harness.editor.selection().hoverSummary().target.kind, quader::QuaderActiveSelectionKind::Face);
+    harness.input_result.navigation_active = true;
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(), quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::Face);
 
-    harness.inputResult.navigationActive = false;
-    harness.inputResult.cameraChanged = true;
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(),
-            quader::ViewportToolResult{},
-            quader::ViewportBeforeToolInteractionResult{});
-    EXPECT_EQ(harness.editor.selection().hoverSummary().target.kind, quader::QuaderActiveSelectionKind::Face);
+    harness.input_result.navigation_active = false;
+    harness.input_result.camera_changed = true;
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(), quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::Face);
 
-    harness.inputResult.cameraChanged = false;
-    harness.input.viewportHovered = false;
-    harness.controller.handleAfterActiveTool(
-            harness.editor,
-            harness.frame(),
-            quader::ViewportToolResult{},
-            quader::ViewportBeforeToolInteractionResult{});
-    EXPECT_EQ(harness.editor.selection().hoverSummary().target.kind, quader::QuaderActiveSelectionKind::None);
+    harness.input_result.camera_changed = false;
+    harness.input.viewport_hovered = false;
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(), quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+              quader::QuaderActiveSelectionKind::None);
 }
 
 TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObjectThroughViewportFrames) {
@@ -756,72 +830,80 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObj
         const char* label = "";
     };
 
-    for (const ToolCase toolCase : {
-                 ToolCase{quader::ViewportToolId::Move, "move"},
-                 ToolCase{quader::ViewportToolId::Rotate, "rotate"},
-                 ToolCase{quader::ViewportToolId::Scale, "scale"},
+    for (const ToolCase tool_case : {
+             ToolCase{quader::ViewportToolId::Move, "move"},
+             ToolCase{quader::ViewportToolId::Rotate, "rotate"},
+             ToolCase{quader::ViewportToolId::Scale, "scale"},
          }) {
-        SCOPED_TRACE(toolCase.label);
-        ViewportInteractionHarness harness;
-        const quader::QuaderModelingObjectRef box = createUnitBox(harness);
-        ASSERT_TRUE(harness.editor.selection().selectObject(box).ok);
-        ASSERT_TRUE(harness.editor.tools().activate(toolCase.tool).ok);
-        harness.router.setActiveTool(toolCase.tool);
+      SCOPED_TRACE(tool_case.label);
+      ViewportInteractionHarness harness;
+      const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+      ASSERT_TRUE(harness.editor.selection().select_object(box).ok);
+      ASSERT_TRUE(harness.editor.tools().activate(tool_case.tool).ok);
+      harness.router.set_active_tool(tool_case.tool);
 
-        const quader::ViewportBeforeToolInteractionResult warmup =
-                harness.controller.handleBeforeActiveTool(harness.editor, harness.frame());
-        EXPECT_FALSE(warmup.gizmoConsumed);
-        const quader_editor_core::TransformGizmoFrame* frame = harness.controller.transformGizmoFrame();
-        ASSERT_NE(frame, nullptr);
+      const quader::ViewportBeforeToolInteractionResult warmup =
+          harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+      EXPECT_FALSE(warmup.gizmo_consumed);
+      const quader_editor_core::TransformGizmoFrame *frame =
+          harness.controller.transform_gizmo_frame();
+      ASSERT_NE(frame, nullptr);
 
-        quader::ViewportOverlayFrame overlay;
-        quader::ViewportTransformGizmoOverlayBuilder::append(
-                overlay,
-                *frame,
-                quader::ViewportCameraAdapter::overlayCamera(harness.camera, harness.input.viewportSize));
-        EXPECT_FALSE(overlay.lines.empty());
+      quader::ViewportOverlayFrame overlay;
+      quader::ViewportTransformGizmoOverlayBuilder::append(
+          overlay, *frame,
+          quader::ViewportCameraAdapter::overlay_camera(
+              harness.camera, harness.input.viewport_size));
+      EXPECT_FALSE(overlay.lines.empty());
 
-        quader::QVec2 start{};
-        quader::QVec2 update{};
-        if (toolCase.tool == quader::ViewportToolId::Rotate) {
-            const quader_editor_core::TransformGizmoRingSegmentPrimitive* ring =
-                    findRing(*frame, quader_editor_core::TransformAxis::z);
-            ASSERT_NE(ring, nullptr);
-            start = ring->screen_start;
-            update = rotatedPoint(frame->info.screen_pivot, start, 0.6f);
-        } else if (toolCase.tool == quader::ViewportToolId::Scale) {
-            start = frame->info.screen_pivot;
-            update = start + quader::QVec2{120.0f, 0.0f};
-        } else {
-            const quader_editor_core::TransformGizmoAxisPrimitive* axis =
-                    findAxis(*frame, quader_editor_core::TransformAxis::x);
-            ASSERT_NE(axis, nullptr);
-            start = axis->screen_tip;
-            update = start + quader::QVec2{120.0f, 0.0f};
-        }
+      quader::QVec2 start{};
+      quader::QVec2 update{};
+      if (tool_case.tool == quader::ViewportToolId::Rotate) {
+        const quader_editor_core::TransformGizmoRingSegmentPrimitive *ring =
+            find_ring(*frame, quader_editor_core::TransformAxis::Z);
+        ASSERT_NE(ring, nullptr);
+        start = ring->screen_start;
+        update = rotated_point(frame->info.screen_pivot, start, 0.6f);
+      } else if (tool_case.tool == quader::ViewportToolId::Scale) {
+        start = frame->info.screen_pivot;
+        update = start + quader::QVec2{120.0f, 0.0f};
+      } else {
+        const quader_editor_core::TransformGizmoAxisPrimitive *axis =
+            find_axis(*frame, quader_editor_core::TransformAxis::X);
+        ASSERT_NE(axis, nullptr);
+        start = axis->screen_tip;
+        update = start + quader::QVec2{120.0f, 0.0f};
+      }
 
-        const quader::TransformComponent beforeTransform =
-                *harness.session.scene().transform(box.entity);
-        pressUpdateReleaseGizmo(harness, start, update);
-        const quader::TransformComponent afterTransform =
-                *harness.session.scene().transform(box.entity);
+      const quader::TransformComponent before_transform =
+          *harness.session.scene().transform(box.entity);
+      press_update_release_gizmo(harness, start, update);
+      const quader::TransformComponent after_transform =
+          *harness.session.scene().transform(box.entity);
 
-        if (toolCase.tool == quader::ViewportToolId::Move) {
-            EXPECT_GT(length(afterTransform.position - beforeTransform.position), 0.001f);
-        } else if (toolCase.tool == quader::ViewportToolId::Rotate) {
-            EXPECT_GT(length(afterTransform.rotationEuler - beforeTransform.rotationEuler), 0.001f);
-        } else {
-            EXPECT_GT(length(afterTransform.scale - beforeTransform.scale), 0.001f);
-        }
-        EXPECT_EQ(harness.editor.selection().summary().selectedObjectCount, 1u);
+      if (tool_case.tool == quader::ViewportToolId::Move) {
+        EXPECT_GT(length(after_transform.position - before_transform.position),
+                  0.001f);
+      } else if (tool_case.tool == quader::ViewportToolId::Rotate) {
+        EXPECT_GT(length(after_transform.rotation_euler -
+                         before_transform.rotation_euler),
+                  0.001f);
+      } else {
+        EXPECT_GT(length(after_transform.scale - before_transform.scale),
+                  0.001f);
+      }
+      EXPECT_EQ(harness.editor.selection().summary().selected_object_count, 1u);
 
-        ASSERT_TRUE(harness.editor.history().canUndo());
-        const quader::QuaderApiVoidResult undo =
-                harness.editor.commands().execute(quader::QuaderCommand::HistoryUndo);
-        ASSERT_TRUE(undo.ok()) << undo.errorMessage();
-        EXPECT_TRUE(undo.changed());
-        ASSERT_NE(harness.session.scene().transform(box.entity), nullptr);
-        expectTransformNear(*harness.session.scene().transform(box.entity), beforeTransform);
+      ASSERT_TRUE(harness.editor.history().can_undo());
+      const quader::QuaderApiVoidResult undo =
+          harness.editor.commands().execute(
+              quader::quader_command::kHistoryUndo);
+      ASSERT_TRUE(undo.ok()) << undo.error_message();
+      EXPECT_TRUE(undo.changed());
+      ASSERT_NE(harness.session.scene().transform(box.entity), nullptr);
+      expect_transform_near(*harness.session.scene().transform(box.entity),
+                            before_transform);
     }
 }
 
@@ -837,97 +919,103 @@ TEST(ViewportInteractionControllerTests, MoveGizmoComponentAxisDragKeepsPickedAx
      * Stores the transform axis exercised by a gizmo drag case.
      */
     struct AxisCase {
-        quader_editor_core::TransformAxis axis = quader_editor_core::TransformAxis::x;
-        const char* label = "";
+      quader_editor_core::TransformAxis axis =
+          quader_editor_core::TransformAxis::X;
+      const char *label = "";
     };
 
-    for (const ComponentModeCase modeCase : {
-                 ComponentModeCase{quader::QuaderSelectionMode::Vertex, "vertex"},
-                 ComponentModeCase{quader::QuaderSelectionMode::Edge, "edge"},
-                 ComponentModeCase{quader::QuaderSelectionMode::Face, "face"},
+    for (const ComponentModeCase mode_case : {
+             ComponentModeCase{quader::QuaderSelectionMode::Vertex, "vertex"},
+             ComponentModeCase{quader::QuaderSelectionMode::Edge, "edge"},
+             ComponentModeCase{quader::QuaderSelectionMode::Face, "face"},
          }) {
-        for (const AxisCase axisCase : {
-                     AxisCase{quader_editor_core::TransformAxis::x, "x"},
-                     AxisCase{quader_editor_core::TransformAxis::z, "z"},
-             }) {
-            SCOPED_TRACE(modeCase.label);
-            SCOPED_TRACE(axisCase.label);
-            ViewportInteractionHarness harness;
-            harness.camera.setViewDirection({-0.45f, -0.35f, -0.82f});
-            ASSERT_TRUE(harness.settings.setBoolValue(quader::ViewportBoolSettingId::GridSnap, false));
-            ASSERT_TRUE(harness.settings.setBoolValue(quader::ViewportBoolSettingId::VertexSnap, false));
+      for (const AxisCase axis_case : {
+               AxisCase{quader_editor_core::TransformAxis::X, "x"},
+               AxisCase{quader_editor_core::TransformAxis::Z, "z"},
+           }) {
+        SCOPED_TRACE(mode_case.label);
+        SCOPED_TRACE(axis_case.label);
+        ViewportInteractionHarness harness;
+        harness.camera.set_view_direction({-0.45f, -0.35f, -0.82f});
+        ASSERT_TRUE(harness.settings.set_bool_value(
+            quader::ViewportBoolSettingId::GridSnap, false));
+        ASSERT_TRUE(harness.settings.set_bool_value(
+            quader::ViewportBoolSettingId::VertexSnap, false));
 
-            const quader::QuaderModelingObjectRef box = createUnitBox(harness);
-            selectSingleComponent(harness, box, modeCase.mode);
-            ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok);
-            harness.router.setActiveTool(quader::ViewportToolId::Move);
+        const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+        select_single_component(harness, box, mode_case.mode);
+        ASSERT_TRUE(
+            harness.editor.tools().activate(quader::ViewportToolId::Move).ok);
+        harness.router.set_active_tool(quader::ViewportToolId::Move);
 
-            const std::optional<quader::QVec3> beforeCenter = harness.editor.query().selectionCenter();
-            ASSERT_TRUE(beforeCenter.has_value());
+        const std::optional<quader::QVec3> before_center =
+            harness.editor.query().selection_center();
+        ASSERT_TRUE(before_center.has_value());
 
-            const quader::ViewportBeforeToolInteractionResult warmup =
-                    harness.controller.handleBeforeActiveTool(harness.editor, harness.frame());
-            ASSERT_FALSE(warmup.gizmoConsumed);
-            const quader_editor_core::TransformGizmoFrame* frame = harness.controller.transformGizmoFrame();
-            ASSERT_NE(frame, nullptr);
-            const quader_editor_core::TransformGizmoAxisPrimitive* axis =
-                    findAxis(*frame, axisCase.axis);
-            ASSERT_NE(axis, nullptr);
+        const quader::ViewportBeforeToolInteractionResult warmup =
+            harness.controller.handle_before_active_tool(harness.editor,
+                                                         harness.frame());
+        ASSERT_FALSE(warmup.gizmo_consumed);
+        const quader_editor_core::TransformGizmoFrame *frame =
+            harness.controller.transform_gizmo_frame();
+        ASSERT_NE(frame, nullptr);
+        const quader_editor_core::TransformGizmoAxisPrimitive *axis =
+            find_axis(*frame, axis_case.axis);
+        ASSERT_NE(axis, nullptr);
 
-            const quader::QVec2 axisDelta = axis->screen_tip - axis->screen_start;
-            const float axisLength = std::sqrt(axisDelta.x * axisDelta.x + axisDelta.y * axisDelta.y);
-            ASSERT_GT(axisLength, 1.0f);
-            const quader::QVec2 axisDirection = axisDelta * (1.0f / axisLength);
-            const quader::QVec2 start = axisScreenPoint(*axis, 0.25f);
-            const quader::QVec2 update = start + axisDirection * 120.0f;
+        const quader::QVec2 axis_delta = axis->screen_tip - axis->screen_start;
+        const float axis_length = std::sqrt(axis_delta.x * axis_delta.x +
+                                            axis_delta.y * axis_delta.y);
+        ASSERT_GT(axis_length, 1.0f);
+        const quader::QVec2 axis_direction = axis_delta * (1.0f / axis_length);
+        const quader::QVec2 start = axis_screen_point(*axis, 0.25f);
+        const quader::QVec2 update = start + axis_direction * 120.0f;
 
-            harness.input.mouseLocal = start;
-            harness.input.mouseScreen = start;
-            const quader::ViewportBeforeToolInteractionResult press =
-                    harness.controller.handleBeforeActiveTool(
-                            harness.editor,
-                            harness.frame(true, true, false, start));
-            ASSERT_TRUE(press.gizmoConsumed);
+        harness.input.mouse_local = start;
+        harness.input.mouse_screen = start;
+        const quader::ViewportBeforeToolInteractionResult press =
+            harness.controller.handle_before_active_tool(
+                harness.editor, harness.frame(true, true, false, start));
+        ASSERT_TRUE(press.gizmo_consumed);
 
-            harness.input.mouseLocal = update;
-            harness.input.mouseScreen = update;
-            const quader::ViewportBeforeToolInteractionResult drag =
-                    harness.controller.handleBeforeActiveTool(
-                            harness.editor,
-                            harness.frame(false, true, false, start));
-            ASSERT_TRUE(drag.gizmoConsumed);
+        harness.input.mouse_local = update;
+        harness.input.mouse_screen = update;
+        const quader::ViewportBeforeToolInteractionResult drag =
+            harness.controller.handle_before_active_tool(
+                harness.editor, harness.frame(false, true, false, start));
+        ASSERT_TRUE(drag.gizmo_consumed);
 
-            const quader::ViewportBeforeToolInteractionResult refresh =
-                    harness.controller.handleBeforeActiveTool(
-                            harness.editor,
-                            harness.frame(false, true, false, start));
-            ASSERT_TRUE(refresh.gizmoConsumed);
-            frame = harness.controller.transformGizmoFrame();
-            ASSERT_NE(frame, nullptr);
-            axis = findAxis(*frame, axisCase.axis);
-            ASSERT_NE(axis, nullptr);
-            const quader::QVec2 refreshedGrabPoint = axisScreenPoint(*axis, 0.25f);
-            EXPECT_NEAR(refreshedGrabPoint.x, update.x, 12.0f);
-            EXPECT_NEAR(refreshedGrabPoint.y, update.y, 12.0f);
+        const quader::ViewportBeforeToolInteractionResult refresh =
+            harness.controller.handle_before_active_tool(
+                harness.editor, harness.frame(false, true, false, start));
+        ASSERT_TRUE(refresh.gizmo_consumed);
+        frame = harness.controller.transform_gizmo_frame();
+        ASSERT_NE(frame, nullptr);
+        axis = find_axis(*frame, axis_case.axis);
+        ASSERT_NE(axis, nullptr);
+        const quader::QVec2 refreshed_grab_point =
+            axis_screen_point(*axis, 0.25f);
+        EXPECT_NEAR(refreshed_grab_point.x, update.x, 12.0f);
+        EXPECT_NEAR(refreshed_grab_point.y, update.y, 12.0f);
 
-            const quader::ViewportBeforeToolInteractionResult release =
-                    harness.controller.handleBeforeActiveTool(
-                            harness.editor,
-                            harness.frame(false, false, true, start));
-            ASSERT_TRUE(release.gizmoConsumed);
+        const quader::ViewportBeforeToolInteractionResult release =
+            harness.controller.handle_before_active_tool(
+                harness.editor, harness.frame(false, false, true, start));
+        ASSERT_TRUE(release.gizmo_consumed);
 
-            const std::optional<quader::QVec3> afterCenter = harness.editor.query().selectionCenter();
-            ASSERT_TRUE(afterCenter.has_value());
-            const quader::QVec3 delta = *afterCenter - *beforeCenter;
-            EXPECT_NEAR(delta.y, 0.0f, 0.01f);
-            if (axisCase.axis == quader_editor_core::TransformAxis::x) {
-                EXPECT_GT(std::abs(delta.x), 0.01f);
-                EXPECT_NEAR(delta.z, 0.0f, 0.01f);
-            } else {
-                EXPECT_NEAR(delta.x, 0.0f, 0.01f);
-                EXPECT_GT(std::abs(delta.z), 0.01f);
-            }
+        const std::optional<quader::QVec3> after_center =
+            harness.editor.query().selection_center();
+        ASSERT_TRUE(after_center.has_value());
+        const quader::QVec3 delta = *after_center - *before_center;
+        EXPECT_NEAR(delta.y, 0.0f, 0.01f);
+        if (axis_case.axis == quader_editor_core::TransformAxis::X) {
+          EXPECT_GT(std::abs(delta.x), 0.01f);
+          EXPECT_NEAR(delta.z, 0.0f, 0.01f);
+        } else {
+          EXPECT_NEAR(delta.x, 0.0f, 0.01f);
+          EXPECT_GT(std::abs(delta.z), 0.01f);
         }
+      }
     }
 }
 
@@ -940,71 +1028,81 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedPoi
         const char* label = "";
     };
 
-    for (const ToolCase toolCase : {
-                 ToolCase{quader::ViewportToolId::Move, "move"},
-                 ToolCase{quader::ViewportToolId::Rotate, "rotate"},
-                 ToolCase{quader::ViewportToolId::Scale, "scale"},
+    for (const ToolCase tool_case : {
+             ToolCase{quader::ViewportToolId::Move, "move"},
+             ToolCase{quader::ViewportToolId::Rotate, "rotate"},
+             ToolCase{quader::ViewportToolId::Scale, "scale"},
          }) {
-        SCOPED_TRACE(toolCase.label);
-        ViewportInteractionHarness harness;
-        quader::QuaderCreatePointLightArgs args;
-        args.name = "Viewport Point Light";
-        args.selectCreated = true;
-        const quader::QuaderApiResult<quader::QuaderEntityRef> light =
-                harness.editor.scene().createPointLight(args);
-        ASSERT_TRUE(light.ok()) << light.errorMessage();
-        ASSERT_NE(harness.session.scene().light(light.value().id), nullptr);
+      SCOPED_TRACE(tool_case.label);
+      ViewportInteractionHarness harness;
+      quader::QuaderCreatePointLightArgs args;
+      args.name = "Viewport Point Light";
+      args.select_created = true;
+      const quader::QuaderApiResult<quader::QuaderEntityRef> light =
+          harness.editor.scene().create_point_light(args);
+      ASSERT_TRUE(light.ok()) << light.error_message();
+      ASSERT_NE(harness.session.scene().light(light.value().id), nullptr);
 
-        ASSERT_TRUE(harness.editor.tools().activate(toolCase.tool).ok);
-        harness.router.setActiveTool(toolCase.tool);
+      ASSERT_TRUE(harness.editor.tools().activate(tool_case.tool).ok);
+      harness.router.set_active_tool(tool_case.tool);
 
-        const quader::ViewportBeforeToolInteractionResult warmup =
-                harness.controller.handleBeforeActiveTool(harness.editor, harness.frame());
-        EXPECT_FALSE(warmup.gizmoConsumed);
-        const quader_editor_core::TransformGizmoFrame* frame = harness.controller.transformGizmoFrame();
-        ASSERT_NE(frame, nullptr);
+      const quader::ViewportBeforeToolInteractionResult warmup =
+          harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+      EXPECT_FALSE(warmup.gizmo_consumed);
+      const quader_editor_core::TransformGizmoFrame *frame =
+          harness.controller.transform_gizmo_frame();
+      ASSERT_NE(frame, nullptr);
 
-        quader::QVec2 start{};
-        quader::QVec2 update{};
-        if (toolCase.tool == quader::ViewportToolId::Rotate) {
-            const quader_editor_core::TransformGizmoRingSegmentPrimitive* ring =
-                    findRing(*frame, quader_editor_core::TransformAxis::z);
-            ASSERT_NE(ring, nullptr);
-            start = ring->screen_start;
-            update = rotatedPoint(frame->info.screen_pivot, start, 0.6f);
-        } else if (toolCase.tool == quader::ViewportToolId::Scale) {
-            start = frame->info.screen_pivot;
-            update = start + quader::QVec2{120.0f, 0.0f};
-        } else {
-            const quader_editor_core::TransformGizmoAxisPrimitive* axis =
-                    findAxis(*frame, quader_editor_core::TransformAxis::x);
-            ASSERT_NE(axis, nullptr);
-            start = axis->screen_tip;
-            update = start + quader::QVec2{120.0f, 0.0f};
-        }
+      quader::QVec2 start{};
+      quader::QVec2 update{};
+      if (tool_case.tool == quader::ViewportToolId::Rotate) {
+        const quader_editor_core::TransformGizmoRingSegmentPrimitive *ring =
+            find_ring(*frame, quader_editor_core::TransformAxis::Z);
+        ASSERT_NE(ring, nullptr);
+        start = ring->screen_start;
+        update = rotated_point(frame->info.screen_pivot, start, 0.6f);
+      } else if (tool_case.tool == quader::ViewportToolId::Scale) {
+        start = frame->info.screen_pivot;
+        update = start + quader::QVec2{120.0f, 0.0f};
+      } else {
+        const quader_editor_core::TransformGizmoAxisPrimitive *axis =
+            find_axis(*frame, quader_editor_core::TransformAxis::X);
+        ASSERT_NE(axis, nullptr);
+        start = axis->screen_tip;
+        update = start + quader::QVec2{120.0f, 0.0f};
+      }
 
-        const quader::TransformComponent beforeTransform =
-                *harness.session.scene().transform(light.value().id);
-        pressUpdateReleaseGizmo(harness, start, update);
-        const quader::TransformComponent afterTransform =
-                *harness.session.scene().transform(light.value().id);
+      const quader::TransformComponent before_transform =
+          *harness.session.scene().transform(light.value().id);
+      press_update_release_gizmo(harness, start, update);
+      const quader::TransformComponent after_transform =
+          *harness.session.scene().transform(light.value().id);
 
-        if (toolCase.tool == quader::ViewportToolId::Move) {
-            EXPECT_GT(length(afterTransform.position - beforeTransform.position), 0.001f);
-        } else if (toolCase.tool == quader::ViewportToolId::Rotate) {
-            EXPECT_GT(length(afterTransform.rotationEuler - beforeTransform.rotationEuler), 0.001f);
-        } else {
-            EXPECT_GT(length(afterTransform.scale - beforeTransform.scale), 0.001f);
-        }
-        EXPECT_EQ(harness.editor.selection().summary().activeKind, quader::QuaderActiveSelectionKind::Light);
+      if (tool_case.tool == quader::ViewportToolId::Move) {
+        EXPECT_GT(length(after_transform.position - before_transform.position),
+                  0.001f);
+      } else if (tool_case.tool == quader::ViewportToolId::Rotate) {
+        EXPECT_GT(length(after_transform.rotation_euler -
+                         before_transform.rotation_euler),
+                  0.001f);
+      } else {
+        EXPECT_GT(length(after_transform.scale - before_transform.scale),
+                  0.001f);
+      }
+      EXPECT_EQ(harness.editor.selection().summary().active_kind,
+                quader::QuaderActiveSelectionKind::Light);
 
-        ASSERT_TRUE(harness.editor.history().canUndo());
-        const quader::QuaderApiVoidResult undo =
-                harness.editor.commands().execute(quader::QuaderCommand::HistoryUndo);
-        ASSERT_TRUE(undo.ok()) << undo.errorMessage();
-        EXPECT_TRUE(undo.changed());
-        ASSERT_NE(harness.session.scene().transform(light.value().id), nullptr);
-        expectTransformNear(*harness.session.scene().transform(light.value().id), beforeTransform);
+      ASSERT_TRUE(harness.editor.history().can_undo());
+      const quader::QuaderApiVoidResult undo =
+          harness.editor.commands().execute(
+              quader::quader_command::kHistoryUndo);
+      ASSERT_TRUE(undo.ok()) << undo.error_message();
+      EXPECT_TRUE(undo.changed());
+      ASSERT_NE(harness.session.scene().transform(light.value().id), nullptr);
+      expect_transform_near(
+          *harness.session.scene().transform(light.value().id),
+          before_transform);
     }
 }
 
@@ -1014,15 +1112,15 @@ TEST(ViewportBoxOverlayBuilderTests, EmitsDashedFootprintOutlineWithoutFill) {
     camera.forward = {0.0f, -1.0f, 0.0f};
     camera.right = {1.0f, 0.0f, 0.0f};
     camera.up = {0.0f, 0.0f, 1.0f};
-    camera.viewportSize = {800.0f, 600.0f};
+    camera.viewport_size = {800.0f, 600.0f};
     camera.projection = quader::ViewportOverlayProjection::Orthographic;
-    camera.orthographicSize = 8.0f;
+    camera.orthographic_size = 8.0f;
 
     quader::ModelingBoxPreview footprint;
     footprint.ok = true;
     footprint.valid = true;
-    footprint.dragState = quader::ModelingBoxDragState::Idle;
-    footprint.footprintCount = 4u;
+    footprint.drag_state = quader::ModelingBoxDragState::Idle;
+    footprint.footprint_count = 4u;
     footprint.footprint = {{
             {-1.0f, 0.0f, -1.0f},
             {1.0f, 0.0f, -1.0f},
@@ -1030,20 +1128,22 @@ TEST(ViewportBoxOverlayBuilderTests, EmitsDashedFootprintOutlineWithoutFill) {
             {-1.0f, 0.0f, 1.0f},
     }};
 
-    quader::ViewportOverlayFrame footprintOverlay;
-    quader::ViewportBoxOverlayBuilder::append(footprintOverlay, camera, footprint);
-    ASSERT_GT(footprintOverlay.lines.size(), 4u);
-    EXPECT_TRUE(footprintOverlay.triangles.empty());
-    for (const quader::ViewportOverlayLine& line : footprintOverlay.lines) {
-        EXPECT_EQ(line.layer, quader::ViewportOverlayLayer::ToolPreviewLine);
-        EXPECT_EQ(line.color, quader::kOverlayToolBoxPreviewLineColor);
-        EXPECT_FLOAT_EQ(line.widthPixels, 2.0f);
-        EXPECT_EQ(line.styleRole, quader::ViewportOverlayStyleRole::ExplicitColor);
+    quader::ViewportOverlayFrame footprint_overlay;
+    quader::ViewportBoxOverlayBuilder::append(footprint_overlay, camera,
+                                              footprint);
+    ASSERT_GT(footprint_overlay.lines.size(), 4u);
+    EXPECT_TRUE(footprint_overlay.triangles.empty());
+    for (const quader::ViewportOverlayLine &line : footprint_overlay.lines) {
+      EXPECT_EQ(line.layer, quader::ViewportOverlayLayer::ToolPreviewLine);
+      EXPECT_EQ(line.color, quader::kOverlayToolBoxPreviewLineColor);
+      EXPECT_FLOAT_EQ(line.width_pixels, 2.0f);
+      EXPECT_EQ(line.style_role,
+                quader::ViewportOverlayStyleRole::ExplicitColor);
     }
 
     quader::ModelingBoxPreview box = footprint;
-    box.dragState = quader::ModelingBoxDragState::Height;
-    box.cornerCount = 8u;
+    box.drag_state = quader::ModelingBoxDragState::Height;
+    box.corner_count = 8u;
     box.corners = {{
             {-1.0f, 0.0f, -1.0f},
             {1.0f, 0.0f, -1.0f},
@@ -1055,10 +1155,10 @@ TEST(ViewportBoxOverlayBuilderTests, EmitsDashedFootprintOutlineWithoutFill) {
             {-1.0f, 2.0f, 1.0f},
     }};
 
-    quader::ViewportOverlayFrame boxOverlay;
-    quader::ViewportBoxOverlayBuilder::append(boxOverlay, camera, box);
-    EXPECT_EQ(boxOverlay.lines.size(), footprintOverlay.lines.size());
-    EXPECT_TRUE(boxOverlay.triangles.empty());
+    quader::ViewportOverlayFrame box_overlay;
+    quader::ViewportBoxOverlayBuilder::append(box_overlay, camera, box);
+    EXPECT_EQ(box_overlay.lines.size(), footprint_overlay.lines.size());
+    EXPECT_TRUE(box_overlay.triangles.empty());
 }
 
 TEST(ViewportSelectionMarqueeOverlayBuilderTests, EmitsFillAndRuleSpecificEdges) {
@@ -1067,15 +1167,16 @@ TEST(ViewportSelectionMarqueeOverlayBuilderTests, EmitsFillAndRuleSpecificEdges)
     camera.forward = {0.0f, 0.0f, -1.0f};
     camera.right = {1.0f, 0.0f, 0.0f};
     camera.up = {0.0f, 1.0f, 0.0f};
-    camera.viewportSize = {800.0f, 600.0f};
+    camera.viewport_size = {800.0f, 600.0f};
     camera.projection = quader::ViewportOverlayProjection::Orthographic;
-    camera.orthographicSize = 12.0f;
+    camera.orthographic_size = 12.0f;
 
-    quader::ViewportOverlayFrame inactiveOverlay;
+    quader::ViewportOverlayFrame inactive_overlay;
     quader::ViewportSelectionMarquee inactive;
-    quader::ViewportSelectionMarqueeOverlayBuilder::append(inactiveOverlay, camera, inactive);
-    EXPECT_TRUE(inactiveOverlay.lines.empty());
-    EXPECT_TRUE(inactiveOverlay.triangles.empty());
+    quader::ViewportSelectionMarqueeOverlayBuilder::append(inactive_overlay,
+                                                           camera, inactive);
+    EXPECT_TRUE(inactive_overlay.lines.empty());
+    EXPECT_TRUE(inactive_overlay.triangles.empty());
 
     quader::ViewportSelectionMarquee contain;
     contain.active = true;
@@ -1083,28 +1184,33 @@ TEST(ViewportSelectionMarqueeOverlayBuilderTests, EmitsFillAndRuleSpecificEdges)
     contain.end = {180.0f, 160.0f};
     contain.rule = quader::ModelingBoxSelectionRule::Contain;
 
-    quader::ViewportOverlayFrame containOverlay;
-    quader::ViewportSelectionMarqueeOverlayBuilder::append(containOverlay, camera, contain);
-    ASSERT_EQ(containOverlay.triangles.size(), 2u);
-    ASSERT_EQ(containOverlay.lines.size(), 4u);
-    for (const quader::ViewportOverlayTriangle& triangle : containOverlay.triangles) {
-        EXPECT_EQ(triangle.layer, quader::ViewportOverlayLayer::ToolPreviewFill);
-        EXPECT_EQ(triangle.color, quader::kOverlaySelectionMarqueeFillColor);
-        EXPECT_EQ(triangle.styleRole, quader::ViewportOverlayStyleRole::ExplicitColor);
-        EXPECT_EQ(triangle.source, quader::ViewportOverlaySource::Tool);
+    quader::ViewportOverlayFrame contain_overlay;
+    quader::ViewportSelectionMarqueeOverlayBuilder::append(contain_overlay,
+                                                           camera, contain);
+    ASSERT_EQ(contain_overlay.triangles.size(), 2u);
+    ASSERT_EQ(contain_overlay.lines.size(), 4u);
+    for (const quader::ViewportOverlayTriangle &triangle :
+         contain_overlay.triangles) {
+      EXPECT_EQ(triangle.layer, quader::ViewportOverlayLayer::ToolPreviewFill);
+      EXPECT_EQ(triangle.color, quader::kOverlaySelectionMarqueeFillColor);
+      EXPECT_EQ(triangle.style_role,
+                quader::ViewportOverlayStyleRole::ExplicitColor);
+      EXPECT_EQ(triangle.source, quader::ViewportOverlaySource::Tool);
     }
-    for (const quader::ViewportOverlayLine& line : containOverlay.lines) {
-        EXPECT_EQ(line.layer, quader::ViewportOverlayLayer::ToolPreviewLine);
-        EXPECT_EQ(line.color, quader::kOverlaySelectionMarqueeLineColor);
-        EXPECT_FLOAT_EQ(line.widthPixels, 1.5f);
-        EXPECT_EQ(line.styleRole, quader::ViewportOverlayStyleRole::ExplicitColor);
-        EXPECT_EQ(line.source, quader::ViewportOverlaySource::Tool);
+    for (const quader::ViewportOverlayLine &line : contain_overlay.lines) {
+      EXPECT_EQ(line.layer, quader::ViewportOverlayLayer::ToolPreviewLine);
+      EXPECT_EQ(line.color, quader::kOverlaySelectionMarqueeLineColor);
+      EXPECT_FLOAT_EQ(line.width_pixels, 1.5f);
+      EXPECT_EQ(line.style_role,
+                quader::ViewportOverlayStyleRole::ExplicitColor);
+      EXPECT_EQ(line.source, quader::ViewportOverlaySource::Tool);
     }
 
     quader::ViewportSelectionMarquee crossing = contain;
     crossing.rule = quader::ModelingBoxSelectionRule::Crossing;
-    quader::ViewportOverlayFrame crossingOverlay;
-    quader::ViewportSelectionMarqueeOverlayBuilder::append(crossingOverlay, camera, crossing);
-    EXPECT_EQ(crossingOverlay.triangles.size(), 2u);
-    EXPECT_GT(crossingOverlay.lines.size(), containOverlay.lines.size());
+    quader::ViewportOverlayFrame crossing_overlay;
+    quader::ViewportSelectionMarqueeOverlayBuilder::append(crossing_overlay,
+                                                           camera, crossing);
+    EXPECT_EQ(crossing_overlay.triangles.size(), 2u);
+    EXPECT_GT(crossing_overlay.lines.size(), contain_overlay.lines.size());
 }

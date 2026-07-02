@@ -45,9 +45,9 @@ public:
 
 OperationResult SplitEdgesOperation::apply(Document& document, Selection& selection) const
 {
-    if (selection.mode != SelectionMode::edge || selection.edges.empty()) {
-        return { false, "Select one or more edges to split." };
-    }
+  if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
+    return {false, "Select one or more edges to split."};
+  }
 
     const std::vector<Edge> selected_edges = selected_valid_edges(document, selection);
     if (selected_edges.empty()) {
@@ -78,8 +78,10 @@ OperationResult SplitEdgesOperation::apply(Document& document, Selection& select
         for (const Edge& edge : found_edges->second) {
             const ElementId duplicate_a = duplicate_vertex_for_face(candidate, duplicate_vertices, face.id, edge.a);
             const ElementId duplicate_b = duplicate_vertex_for_face(candidate, duplicate_vertices, face.id, edge.b);
-            if (duplicate_a == invalid_element_id || duplicate_b == invalid_element_id) {
-                return { false, "Edge Split could not duplicate selected edge vertices." };
+            if (duplicate_a == kInvalidElementId ||
+                duplicate_b == kInvalidElementId) {
+              return {false,
+                      "Edge Split could not duplicate selected edge vertices."};
             }
 
             replacements[edge.a] = duplicate_a;
@@ -116,7 +118,7 @@ OperationResult SplitEdgesOperation::apply(Document& document, Selection& select
 
     document = std::move(candidate);
     selection.clear();
-    selection.mode = SelectionMode::edge;
+    selection.mode = SelectionMode::Edge;
     selection.edges = std::move(split_open_edges);
     activate_last_selection(selection);
     return { true, {} };

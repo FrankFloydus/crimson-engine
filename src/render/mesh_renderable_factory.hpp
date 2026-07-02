@@ -33,37 +33,36 @@ public:
     MeshRenderableFactory(MeshRenderableFactory&&) = delete;
     MeshRenderableFactory& operator=(MeshRenderableFactory&&) = delete;
 
-    void initialize(filament::Engine& engine, filament::Scene& scene, MaterialBindingService& materialBinding);
+    void initialize(filament::Engine &engine, filament::Scene &scene,
+                    MaterialBindingService &material_binding);
     void shutdown();
 
     bool initialized() const {
-        return engine_ != nullptr && scene_ != nullptr && materialBinding_ != nullptr;
+      return engine_ != nullptr && scene_ != nullptr &&
+             material_binding_ != nullptr;
     }
 
-    MeshRenderableProxy create(EntityId entityId,
-            AssetId meshId,
-            const MeshAsset& mesh,
-            const MaterialComponent* material,
-            const AssetRegistry& assets,
-            const QMat4& worldTransform,
-            bool castShadows,
-            bool doubleSided,
-            std::uint64_t materialRevision,
-            std::uint8_t layerMask = kViewportRenderedSceneLayerMask,
-            bool editorUnlit = false,
-            bool depthOnly = false,
-            std::uint8_t channel = kViewportDefaultRenderableChannel);
-    void updateTransform(const MeshRenderableProxy& proxy, const QMat4& worldTransform);
-    void removeFromScene(const MeshRenderableProxy& proxy);
+    MeshRenderableProxy
+    create(EntityId entity_id, AssetId mesh_id, const MeshAsset &mesh,
+           const MaterialComponent *material, const AssetRegistry &assets,
+           const QMat4 &world_transform, bool cast_shadows, bool double_sided,
+           std::uint64_t material_revision,
+           std::uint8_t layer_mask = kViewportRenderedSceneLayerMask,
+           bool editor_unlit = false, bool depth_only = false,
+           std::uint8_t channel = kViewportDefaultRenderableChannel);
+    void update_transform(const MeshRenderableProxy &proxy,
+                          const QMat4 &world_transform);
+    void remove_from_scene(const MeshRenderableProxy &proxy);
     void destroy(MeshRenderableProxy& proxy);
-    void destroyDetached(MeshRenderableProxy& proxy);
+    void destroy_detached(MeshRenderableProxy &proxy);
 
-    static std::uint64_t meshAssetSignature(std::uint64_t hash, const MeshAsset& mesh);
+    static std::uint64_t mesh_asset_signature(std::uint64_t hash,
+                                              const MeshAsset &mesh);
 
-private:
+  private:
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
-    MaterialBindingService* materialBinding_ = nullptr;
+    MaterialBindingService *material_binding_ = nullptr;
 };
 
 } // namespace quader

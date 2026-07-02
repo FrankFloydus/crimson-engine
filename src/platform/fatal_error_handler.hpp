@@ -28,12 +28,15 @@ enum class FatalErrorCode {
  */
 struct FatalErrorInfo {
     const char* code;
-    const char* quickMessage;
+    const char *quick_message;
 };
 
-FatalErrorInfo fatalErrorInfo(FatalErrorCode code);
-void installFatalErrorHandler(std::filesystem::path logPath);
-[[noreturn]] void reportFatalErrorAndExit(FatalErrorCode code, const char* detail = nullptr, int exitCode = 1);
-[[noreturn]] void reportFatalErrorAndExit(const char* reason, int exitCode = 1);
+FatalErrorInfo fatal_error_info(FatalErrorCode code);
+void install_fatal_error_handler(std::filesystem::path log_path);
+[[noreturn]] void report_fatal_error_and_exit(FatalErrorCode code,
+                                              const char *detail = nullptr,
+                                              int exit_code = 1);
+[[noreturn]] void report_fatal_error_and_exit(const char *reason,
+                                              int exit_code = 1);
 
 } // namespace quader

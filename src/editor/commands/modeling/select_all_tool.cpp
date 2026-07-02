@@ -12,12 +12,12 @@
 
 namespace quader {
 
-ModelingCommandResult SelectAllTool::executeCustomCommand(ModelingCommandExecutionContext& context) const {
+ModelingCommandResult SelectAllTool::execute_custom_command(ModelingCommandExecutionContext& context) const {
     QDR_PROFILE_FUNCTION();
     if (context.selection != nullptr) {
-        return context.selection->selectAll();
+      return context.selection->select_all();
     }
-    return context.modeling.selectAll();
+    return context.modeling.select_all();
 }
 
 } // namespace quader

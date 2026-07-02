@@ -103,11 +103,11 @@ enum class ViewportOverlaySource {
  * Represents a Viewport Overlay Element Ref value used by the render extraction and Filament resource layer.
  */
 struct ViewportOverlayElementRef {
-    int objectId = -1;
-    int vertexId = -1;
-    int edgeA = -1;
-    int edgeB = -1;
-    int faceId = -1;
+  int object_id = -1;
+  int vertex_id = -1;
+  int edge_a = -1;
+  int edge_b = -1;
+  int face_id = -1;
 };
 
 constexpr std::uint32_t rgba8(std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a = 255u) {
@@ -125,8 +125,9 @@ struct ViewportOverlayLine {
     QVec3 start;
     QVec3 end;
     std::uint32_t color = rgba8(255, 255, 255);
-    float widthPixels = 1.0f;
-    ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::LayerDefault;
+    float width_pixels = 1.0f;
+    ViewportOverlayStyleRole style_role =
+        ViewportOverlayStyleRole::LayerDefault;
     ViewportOverlaySource source = ViewportOverlaySource::Unknown;
     ViewportOverlayElementRef element;
 };
@@ -140,7 +141,8 @@ struct ViewportOverlayTriangle {
     QVec3 b;
     QVec3 c;
     std::uint32_t color = rgba8(255, 255, 255, 64);
-    ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::LayerDefault;
+    ViewportOverlayStyleRole style_role =
+        ViewportOverlayStyleRole::LayerDefault;
     ViewportOverlaySource source = ViewportOverlaySource::Unknown;
     ViewportOverlayElementRef element;
 };
@@ -152,11 +154,12 @@ struct ViewportOverlayPoint {
     ViewportOverlayLayer layer = ViewportOverlayLayer::UnselectedVertex;
     QVec3 position;
     std::uint32_t color = rgba8(255, 255, 255);
-    float sizePixels = 8.0f;
-    ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::LayerDefault;
+    float size_pixels = 8.0f;
+    ViewportOverlayStyleRole style_role =
+        ViewportOverlayStyleRole::LayerDefault;
     ViewportOverlaySource source = ViewportOverlaySource::Unknown;
     ViewportOverlayElementRef element;
-    std::optional<float> outlineGrowthPixels;
+    std::optional<float> outline_growth_pixels;
 };
 
 /**
@@ -175,12 +178,12 @@ struct ViewportOverlayCamera {
     QVec3 forward = {0.0f, 0.0f, -1.0f};
     QVec3 right = {1.0f, 0.0f, 0.0f};
     QVec3 up = {0.0f, 1.0f, 0.0f};
-    QVec2 viewportSize = {1.0f, 1.0f};
+    QVec2 viewport_size = {1.0f, 1.0f};
     ViewportOverlayProjection projection = ViewportOverlayProjection::Perspective;
-    float orthographicSize = 24.0f;
-    float fovDegrees = 60.0f;
-    float nearPlane = 0.05f;
-    float farPlane = 1000.0f;
+    float orthographic_size = 24.0f;
+    float fov_degrees = 60.0f;
+    float near_plane = 0.05f;
+    float far_plane = 1000.0f;
 };
 
 /**
@@ -190,7 +193,7 @@ struct ViewportOverlayFrame {
     std::vector<ViewportOverlayLine> lines;
     std::vector<ViewportOverlayTriangle> triangles;
     std::vector<ViewportOverlayPoint> points;
-    bool hoverTargetSelected = false;
+    bool hover_target_selected = false;
 };
 
 } // namespace quader

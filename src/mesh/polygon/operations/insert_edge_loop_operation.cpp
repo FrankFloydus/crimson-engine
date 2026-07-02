@@ -57,8 +57,8 @@ InsertEdgeLoopOperation::InsertEdgeLoopOperation(float factor)
 OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& selection) const
 {
     QDR_PROFILE_SCOPE("qdr_document.InsertEdgeLoopOperation.apply");
-    if (selection.mode != SelectionMode::edge || selection.edges.empty()) {
-        return { false, "Select an edge to insert an edge loop." };
+    if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
+      return {false, "Select an edge to insert an edge loop."};
     }
 
     float factor = factor_;
@@ -98,8 +98,9 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
         const Edge opposite_edge = oriented_loop_opposite_edge(*face, i0, entry_edge);
         const ElementId entry_vertex = split_vertex_for_edge(candidate, split_vertices, entry_edge, factor);
         const ElementId opposite_vertex = split_vertex_for_edge(candidate, split_vertices, opposite_edge, factor);
-        if (entry_vertex == invalid_element_id || opposite_vertex == invalid_element_id) {
-            continue;
+        if (entry_vertex == kInvalidElementId ||
+            opposite_vertex == kInvalidElementId) {
+          continue;
         }
 
         Face first_split_face;
@@ -143,7 +144,7 @@ OperationResult InsertEdgeLoopOperation::apply(Document& document, Selection& se
 
     document = std::move(candidate);
     selection.clear();
-    selection.mode = SelectionMode::edge;
+    selection.mode = SelectionMode::Edge;
     selection.edges = std::move(inserted_edges);
     activate_last_selection(selection);
     return { true, {} };

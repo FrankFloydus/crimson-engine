@@ -86,11 +86,9 @@ void append_unique_face(std::vector<RectangleSelectionFace>& faces, RectangleSel
 
 bool handle_is_empty(const SelectionHandleTarget& handle)
 {
-	return handle.kind == ActiveSelectionKind::none &&
-		handle.object_id < 0 &&
-		handle.face_index < 0 &&
-		handle.vertex_indices.empty() &&
-		handle.element_groups.empty();
+  return handle.kind == ActiveSelectionKind::None && handle.object_id < 0 &&
+         handle.face_index < 0 && handle.vertex_indices.empty() &&
+         handle.element_groups.empty();
 }
 
 bool hit_is_empty(const SelectionHitTarget& hit)
@@ -121,8 +119,8 @@ class SelectTool final : public EditorTool {
 public:
 	[[nodiscard]] ViewportInteractionTool tool_id() const override
 	{
-		return ViewportInteractionTool::select;
-	}
+          return ViewportInteractionTool::Select;
+        }
 
 	[[nodiscard]] std::string_view id() const override
 	{
@@ -141,17 +139,17 @@ public:
 
 	[[nodiscard]] SelectionEditOperation edit_operation_from_id(int operation) const
 	{
-		if (operation == static_cast<int>(SelectionEditOperation::add)) {
-			return SelectionEditOperation::add;
-		}
-		if (operation == static_cast<int>(SelectionEditOperation::remove)) {
-			return SelectionEditOperation::remove;
-		}
-		if (operation == static_cast<int>(SelectionEditOperation::toggle)) {
-			return SelectionEditOperation::toggle;
-		}
-		return SelectionEditOperation::replace;
-	}
+          if (operation == static_cast<int>(SelectionEditOperation::Add)) {
+            return SelectionEditOperation::Add;
+          }
+          if (operation == static_cast<int>(SelectionEditOperation::Remove)) {
+            return SelectionEditOperation::Remove;
+          }
+          if (operation == static_cast<int>(SelectionEditOperation::Toggle)) {
+            return SelectionEditOperation::Toggle;
+          }
+          return SelectionEditOperation::Replace;
+        }
 
 	[[nodiscard]] int edit_operation_id(SelectionEditOperation operation) const
 	{
@@ -161,20 +159,20 @@ public:
 	[[nodiscard]] SelectionEditOperation edit_operation_from_modifiers(bool ctrl_pressed, bool shift_pressed) const
 	{
 		if (ctrl_pressed) {
-			return SelectionEditOperation::remove;
-		}
+                  return SelectionEditOperation::Remove;
+                }
 		if (shift_pressed) {
-			return SelectionEditOperation::add;
-		}
-		return SelectionEditOperation::replace;
-	}
+                  return SelectionEditOperation::Add;
+                }
+                return SelectionEditOperation::Replace;
+        }
 
 	[[nodiscard]] bool edit_operation_preserves_existing(SelectionEditOperation operation) const
 	{
-		return operation == SelectionEditOperation::add ||
-			operation == SelectionEditOperation::remove ||
-			operation == SelectionEditOperation::toggle;
-	}
+          return operation == SelectionEditOperation::Add ||
+                 operation == SelectionEditOperation::Remove ||
+                 operation == SelectionEditOperation::Toggle;
+        }
 
 	void begin_box(SelectionBoxState& state, quader::QVec2 position, SelectionEditOperation operation) const
 	{
@@ -279,28 +277,42 @@ public:
 
 	[[nodiscard]] bool point_on_segment(quader::QVec2 point, quader::QVec2 a, quader::QVec2 b) const
 	{
-		constexpr double epsilon = 0.0001;
-		if (std::abs(orientation(a, b, point)) > epsilon) {
-			return false;
-		}
-		return static_cast<double>(point.x) >= std::min(static_cast<double>(a.x), static_cast<double>(b.x)) - epsilon &&
-			static_cast<double>(point.x) <= std::max(static_cast<double>(a.x), static_cast<double>(b.x)) + epsilon &&
-			static_cast<double>(point.y) >= std::min(static_cast<double>(a.y), static_cast<double>(b.y)) - epsilon &&
-			static_cast<double>(point.y) <= std::max(static_cast<double>(a.y), static_cast<double>(b.y)) + epsilon;
-	}
+          constexpr double kEpsilon = 0.0001;
+          if (std::abs(orientation(a, b, point)) > kEpsilon) {
+            return false;
+          }
+          return static_cast<double>(point.x) >=
+                     std::min(static_cast<double>(a.x),
+                              static_cast<double>(b.x)) -
+                         kEpsilon &&
+                 static_cast<double>(point.x) <=
+                     std::max(static_cast<double>(a.x),
+                              static_cast<double>(b.x)) +
+                         kEpsilon &&
+                 static_cast<double>(point.y) >=
+                     std::min(static_cast<double>(a.y),
+                              static_cast<double>(b.y)) -
+                         kEpsilon &&
+                 static_cast<double>(point.y) <=
+                     std::max(static_cast<double>(a.y),
+                              static_cast<double>(b.y)) +
+                         kEpsilon;
+        }
 
 	[[nodiscard]] bool segments_intersect(quader::QVec2 a0, quader::QVec2 a1, quader::QVec2 b0, quader::QVec2 b1) const
 	{
-		constexpr double epsilon = 0.0001;
-		const double o1 = orientation(a0, a1, b0);
-		const double o2 = orientation(a0, a1, b1);
-		const double o3 = orientation(b0, b1, a0);
-		const double o4 = orientation(b0, b1, a1);
-		if (((o1 > epsilon && o2 < -epsilon) || (o1 < -epsilon && o2 > epsilon)) &&
-				((o3 > epsilon && o4 < -epsilon) || (o3 < -epsilon && o4 > epsilon))) {
-			return true;
-		}
-		return point_on_segment(b0, a0, a1) ||
+          constexpr double kEpsilon = 0.0001;
+          const double o1 = orientation(a0, a1, b0);
+          const double o2 = orientation(a0, a1, b1);
+          const double o3 = orientation(b0, b1, a0);
+          const double o4 = orientation(b0, b1, a1);
+          if (((o1 > kEpsilon && o2 < -kEpsilon) ||
+               (o1 < -kEpsilon && o2 > kEpsilon)) &&
+              ((o3 > kEpsilon && o4 < -kEpsilon) ||
+               (o3 < -kEpsilon && o4 > kEpsilon))) {
+            return true;
+          }
+                return point_on_segment(b0, a0, a1) ||
 			point_on_segment(b1, a0, a1) ||
 			point_on_segment(a0, b0, b1) ||
 			point_on_segment(a1, b0, b1);
@@ -359,10 +371,12 @@ public:
 
 	[[nodiscard]] bool same_screen_point(quader::QVec2 a, quader::QVec2 b) const
 	{
-		constexpr double epsilon = 0.0001;
-		return std::abs(static_cast<double>(a.x) - static_cast<double>(b.x)) <= epsilon &&
-			std::abs(static_cast<double>(a.y) - static_cast<double>(b.y)) <= epsilon;
-	}
+          constexpr double kEpsilon = 0.0001;
+          return std::abs(static_cast<double>(a.x) -
+                          static_cast<double>(b.x)) <= kEpsilon &&
+                 std::abs(static_cast<double>(a.y) -
+                          static_cast<double>(b.y)) <= kEpsilon;
+        }
 
 	[[nodiscard]] std::vector<quader::QVec2> convex_hull(std::vector<quader::QVec2> points) const
 	{
@@ -381,25 +395,27 @@ public:
 			return points;
 		}
 
-		constexpr double epsilon = 0.0001;
-		std::vector<quader::QVec2> lower;
+                constexpr double kEpsilon = 0.0001;
+                std::vector<quader::QVec2> lower;
 		lower.reserve(points.size());
 		for (const quader::QVec2 point : points) {
-			while (lower.size() >= 2U &&
-					orientation(lower[lower.size() - 2U], lower.back(), point) <= epsilon) {
-				lower.pop_back();
-			}
-			lower.push_back(point);
+                  while (lower.size() >= 2U &&
+                         orientation(lower[lower.size() - 2U], lower.back(),
+                                     point) <= kEpsilon) {
+                    lower.pop_back();
+                  }
+                        lower.push_back(point);
 		}
 
 		std::vector<quader::QVec2> upper;
 		upper.reserve(points.size());
 		for (auto it = points.rbegin(); it != points.rend(); ++it) {
-			while (upper.size() >= 2U &&
-					orientation(upper[upper.size() - 2U], upper.back(), *it) <= epsilon) {
-				upper.pop_back();
-			}
-			upper.push_back(*it);
+                  while (upper.size() >= 2U &&
+                         orientation(upper[upper.size() - 2U], upper.back(),
+                                     *it) <= kEpsilon) {
+                    upper.pop_back();
+                  }
+                        upper.push_back(*it);
 		}
 
 		lower.pop_back();
@@ -450,17 +466,19 @@ public:
 
 	[[nodiscard]] bool projected_object_matches(const RectangleProjectedObject& object, const RectangleProjectedHitsRequest& request) const
 	{
-		if (request.match == RectangleSelectionMatch::contain) {
-			if (!object.screen_points.empty()) {
-				return all_points_inside_rect(request.rect, object.screen_points);
-			}
-			if (object.has_screen_bounds) {
-				return bounds_inside_rect(request.rect, object.screen_min, object.screen_max);
-			}
-			return object.has_screen_center && rect_contains(request.rect, object.screen_center);
-		}
+          if (request.match == RectangleSelectionMatch::Contain) {
+            if (!object.screen_points.empty()) {
+              return all_points_inside_rect(request.rect, object.screen_points);
+            }
+            if (object.has_screen_bounds) {
+              return bounds_inside_rect(request.rect, object.screen_min,
+                                        object.screen_max);
+            }
+            return object.has_screen_center &&
+                   rect_contains(request.rect, object.screen_center);
+          }
 
-		for (const quader::QVec2 point : object.screen_points) {
+                for (const quader::QVec2 point : object.screen_points) {
 			if (rect_contains(request.rect, point)) {
 				return true;
 			}
@@ -489,13 +507,14 @@ public:
 
 	[[nodiscard]] bool projected_face_matches(const RectangleProjectedFace& face, const RectangleProjectedHitsRequest& request) const
 	{
-		if (request.match == RectangleSelectionMatch::contain) {
-			if (!face.screen_vertices.empty()) {
-				return all_points_inside_rect(request.rect, face.screen_vertices);
-			}
-			return face.has_screen_position && rect_contains(request.rect, face.screen_position);
-		}
-		if (face.has_screen_position && rect_contains(request.rect, face.screen_position)) {
+          if (request.match == RectangleSelectionMatch::Contain) {
+            if (!face.screen_vertices.empty()) {
+              return all_points_inside_rect(request.rect, face.screen_vertices);
+            }
+            return face.has_screen_position &&
+                   rect_contains(request.rect, face.screen_position);
+          }
+                if (face.has_screen_position && rect_contains(request.rect, face.screen_position)) {
 			return true;
 		}
 		for (const quader::QVec2 point : face.screen_vertices) {
@@ -522,13 +541,15 @@ public:
 	[[nodiscard]] bool projected_edge_matches(const RectangleProjectedEdge& edge, const RectangleProjectedHitsRequest& request) const
 	{
 		const bool has_segment = edge.has_screen_start && edge.has_screen_end;
-		if (request.match == RectangleSelectionMatch::contain) {
-			if (has_segment) {
-				return rect_contains(request.rect, edge.screen_start) && rect_contains(request.rect, edge.screen_end);
-			}
-			return edge.has_screen_position && rect_contains(request.rect, edge.screen_position);
-		}
-		if (has_segment) {
+                if (request.match == RectangleSelectionMatch::Contain) {
+                  if (has_segment) {
+                    return rect_contains(request.rect, edge.screen_start) &&
+                           rect_contains(request.rect, edge.screen_end);
+                  }
+                  return edge.has_screen_position &&
+                         rect_contains(request.rect, edge.screen_position);
+                }
+                if (has_segment) {
 			return segment_intersects_rect(request.rect, edge.screen_start, edge.screen_end);
 		}
 		return edge.has_screen_position && rect_contains(request.rect, edge.screen_position);
@@ -537,41 +558,51 @@ public:
 	[[nodiscard]] RectangleSelectionHits rectangle_hits_from_projected_candidates(const RectangleProjectedHitsRequest& request) const
 	{
 		RectangleSelectionHits hits;
-		if (request.mode == SelectionMode::object) {
-			for (const RectangleProjectedObject& object : request.objects) {
-				if (object.object_id < 0) {
-					continue;
-				}
-				if (projected_object_matches(object, request)) {
-					hits.object_ids.push_back(object.object_id);
-				}
-			}
-			return hits;
-		}
-		if (request.mode == SelectionMode::face) {
-			for (const RectangleProjectedFace& face : request.faces) {
-				if (face.object_id >= 0 && face.face_index >= 0 && projected_face_matches(face, request)) {
-					hits.faces.push_back({ face.object_id, face.face_index, face.vertex_indices });
-				}
-			}
-			return hits;
-		}
-		if (request.mode == SelectionMode::edge) {
-			for (const RectangleProjectedEdge& edge : request.edges) {
-				if (edge.object_id >= 0 && edge.a_index >= 0 && edge.b_index >= 0 && projected_edge_matches(edge, request)) {
-					hits.edges.push_back({ edge.object_id, edge.a_index, edge.b_index });
-				}
-			}
-			return hits;
-		}
-		if (request.mode == SelectionMode::vertex) {
-			for (const RectangleProjectedVertex& vertex : request.vertices) {
-				if (vertex.object_id >= 0 && vertex.vertex_index >= 0 && vertex.has_screen_position && rect_contains(request.rect, vertex.screen_position)) {
-					hits.vertices.push_back({ vertex.object_id, vertex.vertex_index });
-				}
-			}
-		}
-		return hits;
+                if (request.mode == SelectionMode::Object) {
+                  for (const RectangleProjectedObject &object :
+                       request.objects) {
+                    if (object.object_id < 0) {
+                      continue;
+                    }
+                    if (projected_object_matches(object, request)) {
+                      hits.object_ids.push_back(object.object_id);
+                    }
+                  }
+                  return hits;
+                }
+                if (request.mode == SelectionMode::Face) {
+                  for (const RectangleProjectedFace &face : request.faces) {
+                    if (face.object_id >= 0 && face.face_index >= 0 &&
+                        projected_face_matches(face, request)) {
+                      hits.faces.push_back({face.object_id, face.face_index,
+                                            face.vertex_indices});
+                    }
+                  }
+                  return hits;
+                }
+                if (request.mode == SelectionMode::Edge) {
+                  for (const RectangleProjectedEdge &edge : request.edges) {
+                    if (edge.object_id >= 0 && edge.a_index >= 0 &&
+                        edge.b_index >= 0 &&
+                        projected_edge_matches(edge, request)) {
+                      hits.edges.push_back(
+                          {edge.object_id, edge.a_index, edge.b_index});
+                    }
+                  }
+                  return hits;
+                }
+                if (request.mode == SelectionMode::Vertex) {
+                  for (const RectangleProjectedVertex &vertex :
+                       request.vertices) {
+                    if (vertex.object_id >= 0 && vertex.vertex_index >= 0 &&
+                        vertex.has_screen_position &&
+                        rect_contains(request.rect, vertex.screen_position)) {
+                      hits.vertices.push_back(
+                          {vertex.object_id, vertex.vertex_index});
+                    }
+                  }
+                }
+                return hits;
 	}
 
 	[[nodiscard]] SelectionBoxPrimitives build_box_primitives(const SelectionBoxState& state, bool camera_matches) const
@@ -673,31 +704,33 @@ public:
 
 	[[nodiscard]] bool mode_uses_element_handles(SelectionMode mode) const
 	{
-		return mode == SelectionMode::face || mode == SelectionMode::edge || mode == SelectionMode::vertex;
-	}
+          return mode == SelectionMode::Face || mode == SelectionMode::Edge ||
+                 mode == SelectionMode::Vertex;
+        }
 
 	[[nodiscard]] ViewportToolIntent default_viewport_tool_for_selection_mode(SelectionMode mode) const
 	{
-		return mode == SelectionMode::face ? ViewportToolIntent::extend : ViewportToolIntent::move;
-	}
+          return mode == SelectionMode::Face ? ViewportToolIntent::Extend
+                                             : ViewportToolIntent::Move;
+        }
 
 	[[nodiscard]] bool selection_has_move_tool_target(const RectangleSelectionState& selection) const
 	{
 		switch (selection.mode) {
-			case SelectionMode::object:
-				return !selection.selected_object_ids.empty();
-			case SelectionMode::face:
-				return !selection.selected_faces.empty();
-			case SelectionMode::edge:
-				return !selection.selected_edges.empty() ||
-					!selection.active_edge_vertex_indices.empty() ||
-					!selection.selected_edge_full_object_ids.empty();
-			case SelectionMode::vertex:
-				return !selection.selected_vertices.empty() ||
-					!selection.active_vertex_indices.empty() ||
-					!selection.selected_vertex_full_object_ids.empty();
-			default:
-				break;
+                case SelectionMode::Object:
+                  return !selection.selected_object_ids.empty();
+                case SelectionMode::Face:
+                  return !selection.selected_faces.empty();
+                case SelectionMode::Edge:
+                  return !selection.selected_edges.empty() ||
+                         !selection.active_edge_vertex_indices.empty() ||
+                         !selection.selected_edge_full_object_ids.empty();
+                case SelectionMode::Vertex:
+                  return !selection.selected_vertices.empty() ||
+                         !selection.active_vertex_indices.empty() ||
+                         !selection.selected_vertex_full_object_ids.empty();
+                default:
+                  break;
 		}
 		return false;
 	}
@@ -705,50 +738,76 @@ public:
 	[[nodiscard]] SelectionHoverFeedback hover_feedback_for_selection(const SelectionHoverFeedbackRequest& request) const
 	{
 		SelectionHoverFeedback feedback;
-		feedback.highlight_selection.mode = SelectionMode::face;
-		if (request.current_selection.mode == SelectionMode::face) {
-			append_unique_face(feedback.highlight_selection.selected_faces, { request.hovered_hit.object_id, request.hovered_hit.face_index });
-			if (request.hovered_handle.kind == ActiveSelectionKind::face) {
-				append_unique_face(feedback.highlight_selection.selected_faces, { request.hovered_handle.object_id, request.hovered_handle.face_index });
-			}
-		}
+                feedback.highlight_selection.mode = SelectionMode::Face;
+                if (request.current_selection.mode == SelectionMode::Face) {
+                  append_unique_face(
+                      feedback.highlight_selection.selected_faces,
+                      {request.hovered_hit.object_id,
+                       request.hovered_hit.face_index});
+                  if (request.hovered_handle.kind ==
+                      ActiveSelectionKind::Face) {
+                    append_unique_face(
+                        feedback.highlight_selection.selected_faces,
+                        {request.hovered_handle.object_id,
+                         request.hovered_handle.face_index});
+                  }
+                }
 
-		if (!request.selected_modifier_pressed ||
-				request.current_selection.mode == SelectionMode::object) {
-			return feedback;
-		}
+                if (!request.selected_modifier_pressed ||
+                    request.current_selection.mode == SelectionMode::Object) {
+                  return feedback;
+                }
 
-		if (!handle_is_empty(request.hovered_handle)) {
+                if (!handle_is_empty(request.hovered_handle)) {
 			switch (request.hovered_handle.kind) {
-				case ActiveSelectionKind::face:
-					feedback.hover_target_selected = selection_has_face(request.current_selection, { request.hovered_handle.object_id, request.hovered_handle.face_index });
-					return feedback;
-				case ActiveSelectionKind::edge:
-					if (request.hovered_handle.vertex_indices.size() >= 2) {
-						feedback.hover_target_selected = selection_has_edge(request.current_selection, { request.hovered_handle.object_id, request.hovered_handle.vertex_indices[0], request.hovered_handle.vertex_indices[1] });
-					}
-					return feedback;
-				case ActiveSelectionKind::vertex:
-					if (!request.hovered_handle.vertex_indices.empty()) {
-						feedback.hover_target_selected = selection_has_vertex(request.current_selection, { request.hovered_handle.object_id, request.hovered_handle.vertex_indices[0] });
-					}
-					return feedback;
-				case ActiveSelectionKind::object:
-					feedback.hover_target_selected = selection_has_object(request.current_selection, request.hovered_handle.object_id);
-					return feedback;
-				case ActiveSelectionKind::none:
-				default:
-					break;
+                        case ActiveSelectionKind::Face:
+                          feedback.hover_target_selected = selection_has_face(
+                              request.current_selection,
+                              {request.hovered_handle.object_id,
+                               request.hovered_handle.face_index});
+                          return feedback;
+                        case ActiveSelectionKind::Edge:
+                          if (request.hovered_handle.vertex_indices.size() >=
+                              2) {
+                            feedback.hover_target_selected = selection_has_edge(
+                                request.current_selection,
+                                {request.hovered_handle.object_id,
+                                 request.hovered_handle.vertex_indices[0],
+                                 request.hovered_handle.vertex_indices[1]});
+                          }
+                          return feedback;
+                        case ActiveSelectionKind::Vertex:
+                          if (!request.hovered_handle.vertex_indices.empty()) {
+                            feedback.hover_target_selected =
+                                selection_has_vertex(
+                                    request.current_selection,
+                                    {request.hovered_handle.object_id,
+                                     request.hovered_handle.vertex_indices[0]});
+                          }
+                          return feedback;
+                        case ActiveSelectionKind::Object:
+                          feedback.hover_target_selected = selection_has_object(
+                              request.current_selection,
+                              request.hovered_handle.object_id);
+                          return feedback;
+                        case ActiveSelectionKind::None:
+                        default:
+                          break;
 			}
 		}
 
 		if (!hit_is_empty(request.hovered_hit)) {
-			if (request.current_selection.mode == SelectionMode::face) {
-				feedback.hover_target_selected = selection_has_face(request.current_selection, { request.hovered_hit.object_id, request.hovered_hit.face_index });
-			} else {
-				feedback.hover_target_selected = selection_has_object(request.current_selection, request.hovered_hit.object_id);
-			}
-		}
+                  if (request.current_selection.mode == SelectionMode::Face) {
+                    feedback.hover_target_selected =
+                        selection_has_face(request.current_selection,
+                                           {request.hovered_hit.object_id,
+                                            request.hovered_hit.face_index});
+                  } else {
+                    feedback.hover_target_selected =
+                        selection_has_object(request.current_selection,
+                                             request.hovered_hit.object_id);
+                  }
+                }
 		return feedback;
 	}
 
@@ -853,8 +912,8 @@ public:
 		}
 
 		RectangleSelectionState whole_object_selection;
-		whole_object_selection.mode = SelectionMode::object;
-		whole_object_selection.selected_object_ids = ids;
+                whole_object_selection.mode = SelectionMode::Object;
+                whole_object_selection.selected_object_ids = ids;
 		whole_object_selection.active_object_id = selection.active_object_id >= 0 ? selection.active_object_id : ids.front();
 		return whole_object_selection;
 	}
@@ -896,8 +955,8 @@ public:
 
 const SelectTool& select_tool_impl()
 {
-	static const SelectTool tool;
-	return tool;
+  static const SelectTool kTool;
+  return kTool;
 }
 
 } // namespace

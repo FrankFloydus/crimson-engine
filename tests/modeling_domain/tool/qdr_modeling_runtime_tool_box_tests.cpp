@@ -24,9 +24,10 @@ TEST(QdrModelingRuntimeToolBoxTests, BoxFootprintSnapsDirectionalPairsAndPreserv
 			true,
 			1.0);
 	EXPECT_TRUE(begin.ok);
-	EXPECT_TRUE(begin.state.drag_state == quader_editor_core::BoxDragState::footprint);
+        EXPECT_TRUE(begin.state.drag_state ==
+                    quader_editor_core::BoxDragState::Footprint);
 
-	const quader_editor_core::BoxPreviewDescriptor descriptor =
+        const quader_editor_core::BoxPreviewDescriptor descriptor =
 		quader_editor_core::box_preview_descriptor(begin.state, true, 1.0);
 	EXPECT_TRUE(descriptor.ok);
 	EXPECT_TRUE(descriptor.footprint.footprint.size() == 4);
@@ -44,7 +45,9 @@ TEST(QdrModelingRuntimeToolBoxTests, BoxRuntimeResetHelperRestoresDefaultGridSiz
 
 	quader_editor_core::reset_editor_runtime_box_state(runtime);
 	EXPECT_FALSE(quader_editor_core::editor_runtime_status(runtime).box_active);
-	EXPECT_NEAR(runtime.box_grid_size, quader_editor_core::default_editor_runtime_box_grid_size, 0.0001);
+        EXPECT_NEAR(runtime.box_grid_size,
+                    quader_editor_core::kDefaultEditorRuntimeBoxGridSize,
+                    0.0001);
 }
 
 TEST(QdrModelingRuntimeToolBoxTests, BoxHeightPreviewSnapsToGridAndFlipsNormalForNegativeHeight) {
@@ -60,8 +63,9 @@ TEST(QdrModelingRuntimeToolBoxTests, BoxHeightPreviewSnapsToGridAndFlipsNormalFo
 	const quader_editor_core::BoxToolStateResult updated =
 		quader_editor_core::update_box_height_preview(state, -3.0, true, { 100.0F, 120.0F }, true, 1.0);
 	EXPECT_TRUE(updated.ok);
-	EXPECT_TRUE(updated.state.drag_state == quader_editor_core::BoxDragState::height);
-	EXPECT_NEAR(updated.state.height_distance, -2.0, 0.0001);
+        EXPECT_TRUE(updated.state.drag_state ==
+                    quader_editor_core::BoxDragState::Height);
+        EXPECT_NEAR(updated.state.height_distance, -2.0, 0.0001);
 
 	const quader_editor_core::BoxPreviewDescriptor descriptor =
 		quader_editor_core::box_preview_descriptor(updated.state, true, 1.0);
@@ -133,8 +137,8 @@ TEST(QdrModelingRuntimeToolBoxTests, BoxHeightScreenFallbackUsesVerticalMotionWh
 
 TEST(QdrModelingRuntimeToolBoxTests, BoxPreviewStateAndResetClearTransientBrushIdentity) {
 	quader_editor_core::BoxToolState state;
-	state.drag_state = quader_editor_core::BoxDragState::height;
-	quader_editor_core::set_box_preview_state(state, 42, true);
+        state.drag_state = quader_editor_core::BoxDragState::Height;
+        quader_editor_core::set_box_preview_state(state, 42, true);
 	EXPECT_TRUE(state.preview_brush_id == 42);
 	EXPECT_TRUE(state.preview_valid);
 
@@ -143,8 +147,8 @@ TEST(QdrModelingRuntimeToolBoxTests, BoxPreviewStateAndResetClearTransientBrushI
 	EXPECT_FALSE(state.preview_valid);
 
 	quader_editor_core::reset_box(state);
-	EXPECT_TRUE(state.drag_state == quader_editor_core::BoxDragState::idle);
-	EXPECT_TRUE(state.preview_brush_id == -1);
+        EXPECT_TRUE(state.drag_state == quader_editor_core::BoxDragState::Idle);
+        EXPECT_TRUE(state.preview_brush_id == -1);
 	EXPECT_FALSE(state.preview_valid);
 	EXPECT_TRUE(state.hover_cell_points.empty());
 }
@@ -198,8 +202,8 @@ TEST(QdrModelingRuntimeToolBoxTests, BoxConstructionPlaneCanBeSeededFromAMeshSur
 	EXPECT_TRUE(session.create_box_from_bounds({ -1.0F, -2.0F, -1.0F }, { 1.0F, -1.0F, 1.0F }).changed);
 
 	quader_poly::PickOptions options;
-	options.mode = quader_poly::SelectionMode::face;
-	const quader_poly::Ray ray { { 0.0F, 4.0F, 0.0F }, { 0.0F, -1.0F, 0.0F } };
+        options.mode = quader_poly::SelectionMode::Face;
+        const quader_poly::Ray ray { { 0.0F, 4.0F, 0.0F }, { 0.0F, -1.0F, 0.0F } };
 	const std::optional<quader_editor_core::PickHitRecord> hit =
 		session.pick_nearest({ ray, options });
 	EXPECT_TRUE(hit.has_value());
@@ -223,8 +227,8 @@ TEST(QdrModelingRuntimeToolBoxTests, BoxPreviewCornersCommitAWallPlanarOrientedV
 			{ 2.0F, -2.0F, 3.0F },
 			false,
 			1.0).ok);
-	state.drag_state = quader_editor_core::BoxDragState::height;
-	state.height_distance = 2.0;
+        state.drag_state = quader_editor_core::BoxDragState::Height;
+        state.height_distance = 2.0;
 
 	const quader_editor_core::BoxPreviewDescriptor preview =
 		quader_editor_core::box_preview_descriptor(state, false, 1.0);

@@ -25,11 +25,11 @@ struct UIContinuousEditResult {
     bool changed = false;
     bool activated = false;
     bool deactivated = false;
-    bool deactivatedAfterEdit = false;
-    std::string mergeKey;
+    bool deactivated_after_edit = false;
+    std::string merge_key;
 
-    [[nodiscard]] bool shouldApply() const {
-        return changed || deactivatedAfterEdit;
+    [[nodiscard]] bool should_apply() const {
+      return changed || deactivated_after_edit;
     }
 };
 
@@ -42,79 +42,77 @@ public:
         active_.reset();
     }
 
-    void resetIfEntityScopeChanged(EntityId primary, std::span<const EntityId> selection) {
-        if (!active_) {
-            return;
-        }
-        if (active_->primary != primary || !sameSelection(active_->selection, selection)) {
-            active_.reset();
-        }
+    void reset_if_entity_scope_changed(EntityId primary,
+                                       std::span<const EntityId> selection) {
+      if (!active_) {
+        return;
+      }
+      if (active_->primary != primary ||
+          !same_selection(active_->selection, selection)) {
+        active_.reset();
+      }
     }
 
-    [[nodiscard]] std::string ensureMergeKey(
-            std::string stableId,
-            EntityId primary,
-            std::span<const EntityId> selection) {
-        if (!active_ || active_->stableId != stableId || active_->primary != primary ||
-                !sameSelection(active_->selection, selection)) {
-            std::string stableKey = std::move(stableId);
-            std::string mergeKey = makeMergeKey(stableKey, primary, selection, nextGesture_++);
-            active_ = State{
-                    .stableId = std::move(stableKey),
-                    .primary = primary,
-                    .selection = std::vector<EntityId>(selection.begin(), selection.end()),
-                    .values = {},
-                    .mergeKey = std::move(mergeKey),
-            };
-        }
-        if (active_->mergeKey.empty()) {
-            active_->mergeKey = makeMergeKey(active_->stableId, primary, selection, nextGesture_++);
-        }
-        return active_->mergeKey;
+    [[nodiscard]] std::string
+    ensure_merge_key(std::string stable_id, EntityId primary,
+                     std::span<const EntityId> selection) {
+      if (!active_ || active_->stable_id != stable_id ||
+          active_->primary != primary ||
+          !same_selection(active_->selection, selection)) {
+        std::string stable_key = std::move(stable_id);
+        std::string merge_key =
+            make_merge_key(stable_key, primary, selection, next_gesture_++);
+        active_ = State{
+            .stable_id = std::move(stable_key),
+            .primary = primary,
+            .selection =
+                std::vector<EntityId>(selection.begin(), selection.end()),
+            .values = {},
+            .merge_key = std::move(merge_key),
+        };
+      }
+      if (active_->merge_key.empty()) {
+        active_->merge_key = make_merge_key(active_->stable_id, primary,
+                                            selection, next_gesture_++);
+      }
+      return active_->merge_key;
     }
 
-    [[nodiscard]] bool matches(
-            std::string_view stableId,
-            EntityId primary,
-            std::span<const EntityId> selection,
-            std::size_t valueCount) const {
-        return active_ &&
-                active_->stableId == stableId &&
-                active_->primary == primary &&
-                active_->values.size() == valueCount &&
-                sameSelection(active_->selection, selection);
+    [[nodiscard]] bool matches(std::string_view stable_id, EntityId primary,
+                               std::span<const EntityId> selection,
+                               std::size_t value_count) const {
+      return active_ && active_->stable_id == stable_id &&
+             active_->primary == primary &&
+             active_->values.size() == value_count &&
+             same_selection(active_->selection, selection);
     }
 
-    void applyActiveValues(
-            std::string_view stableId,
-            EntityId primary,
-            std::span<const EntityId> selection,
-            std::span<float> values) const {
-        if (!matches(stableId, primary, selection, values.size())) {
-            return;
-        }
-        std::copy(active_->values.begin(), active_->values.end(), values.begin());
+    void apply_active_values(std::string_view stable_id, EntityId primary,
+                             std::span<const EntityId> selection,
+                             std::span<float> values) const {
+      if (!matches(stable_id, primary, selection, values.size())) {
+        return;
+      }
+      std::copy(active_->values.begin(), active_->values.end(), values.begin());
     }
 
-    void stage(
-            std::string stableId,
-            EntityId primary,
-            std::span<const EntityId> selection,
-            std::span<const float> values) {
-        const std::string mergeKey = ensureMergeKey(std::move(stableId), primary, selection);
-        active_->values = std::vector<float>(values.begin(), values.end());
-        active_->mergeKey = mergeKey;
+    void stage(std::string stable_id, EntityId primary,
+               std::span<const EntityId> selection,
+               std::span<const float> values) {
+      const std::string merge_key =
+          ensure_merge_key(std::move(stable_id), primary, selection);
+      active_->values = std::vector<float>(values.begin(), values.end());
+      active_->merge_key = merge_key;
     }
 
-    [[nodiscard]] std::vector<float> finalValues(
-            std::string_view stableId,
-            EntityId primary,
-            std::span<const EntityId> selection,
-            std::span<const float> fallbackValues) const {
-        if (!matches(stableId, primary, selection, fallbackValues.size())) {
-            return {fallbackValues.begin(), fallbackValues.end()};
-        }
-        return active_->values;
+    [[nodiscard]] std::vector<float>
+    final_values(std::string_view stable_id, EntityId primary,
+                 std::span<const EntityId> selection,
+                 std::span<const float> fallback_values) const {
+      if (!matches(stable_id, primary, selection, fallback_values.size())) {
+        return {fallback_values.begin(), fallback_values.end()};
+      }
+      return active_->values;
     }
 
 private:
@@ -122,39 +120,40 @@ private:
      * Stores one active continuous edit gesture and its final values.
      */
     struct State {
-        std::string stableId;
-        EntityId primary = InvalidEntityId;
-        std::vector<EntityId> selection;
-        std::vector<float> values;
-        std::string mergeKey;
+      std::string stable_id;
+      EntityId primary = kInvalidEntityId;
+      std::vector<EntityId> selection;
+      std::vector<float> values;
+      std::string merge_key;
     };
 
-    static std::string makeMergeKey(
-            std::string_view stableId,
-            EntityId primary,
-            std::span<const EntityId> selection,
-            std::uint64_t gesture) {
-        std::string key = "ui.continuous:";
-        key += stableId;
-        key += ":";
-        key += std::to_string(primary);
-        key += ":";
-        for (const EntityId entity : selection) {
-            key += std::to_string(entity);
-            key += ",";
-        }
-        key += ":";
-        key += std::to_string(gesture);
-        return key;
+    static std::string make_merge_key(std::string_view stable_id,
+                                      EntityId primary,
+                                      std::span<const EntityId> selection,
+                                      std::uint64_t gesture) {
+      std::string key = "ui.continuous:";
+      key += stable_id;
+      key += ":";
+      key += std::to_string(primary);
+      key += ":";
+      for (const EntityId entity : selection) {
+        key += std::to_string(entity);
+        key += ",";
+      }
+      key += ":";
+      key += std::to_string(gesture);
+      return key;
     }
 
-    static bool sameSelection(const std::vector<EntityId>& stored, std::span<const EntityId> current) {
-        return stored.size() == current.size() &&
-                std::equal(stored.begin(), stored.end(), current.begin(), current.end());
+    static bool same_selection(const std::vector<EntityId> &stored,
+                               std::span<const EntityId> current) {
+      return stored.size() == current.size() &&
+             std::equal(stored.begin(), stored.end(), current.begin(),
+                        current.end());
     }
 
     std::optional<State> active_;
-    std::uint64_t nextGesture_ = 1;
+    std::uint64_t next_gesture_ = 1;
 };
 
 } // namespace quader

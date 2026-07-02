@@ -21,10 +21,10 @@ namespace quader {
  * Represents an Overlay Renderable Cache Stats value used by the render extraction and Filament resource layer.
  */
 struct OverlayRenderableCacheStats {
-    std::uint64_t frameSignature = 0;
-    std::uint64_t cameraSignature = 0;
-    std::uint8_t layerMask = 0;
-    std::size_t proxyCount = 0;
+  std::uint64_t frame_signature = 0;
+  std::uint64_t camera_signature = 0;
+  std::uint8_t layer_mask = 0;
+  std::size_t proxy_count = 0;
 };
 
 /**
@@ -48,17 +48,17 @@ public:
         return factory_ != nullptr;
     }
 
-    bool setOverlayFrame(ViewportOverlayFrame frame, ViewportOverlayCamera camera);
-    bool setOverlayFrame(std::size_t viewportIndex,
-            std::uint8_t layerMask,
-            ViewportOverlayFrame frame,
-            ViewportOverlayCamera camera);
-    void clearSlot(std::size_t viewportIndex);
+    bool set_overlay_frame(ViewportOverlayFrame frame,
+                           ViewportOverlayCamera camera);
+    bool set_overlay_frame(std::size_t viewport_index, std::uint8_t layer_mask,
+                           ViewportOverlayFrame frame,
+                           ViewportOverlayCamera camera);
+    void clear_slot(std::size_t viewport_index);
 
-    OverlayRenderableCacheStats stats(std::size_t viewportIndex) const;
-    std::size_t activeProxyCount(std::size_t viewportIndex) const;
+    OverlayRenderableCacheStats stats(std::size_t viewport_index) const;
+    std::size_t active_proxy_count(std::size_t viewport_index) const;
 
-private:
+  private:
     /**
      * Represents an Overlay Proxy Group value used by the render extraction and Filament resource layer.
      */
@@ -73,16 +73,17 @@ private:
     struct OverlaySlot {
         ViewportOverlayFrame frame;
         OverlayFrameSignatures signatures;
-        std::uint64_t frameSignature = 0;
+        std::uint64_t frame_signature = 0;
         ViewportOverlayCamera camera;
-        std::uint64_t cameraSignature = 0;
-        std::uint8_t layerMask = 0;
-        std::array<OverlayProxyGroup, kViewportOverlayLayerCount> proxyGroups;
+        std::uint64_t camera_signature = 0;
+        std::uint8_t layer_mask = 0;
+        std::array<OverlayProxyGroup, kViewportOverlayLayerCount> proxy_groups;
     };
 
-    void rebuildSlot(OverlaySlot& slot, bool rebuildCameraIndependentLayers);
-    void destroySlot(OverlaySlot& slot);
-    void destroyGroup(OverlayProxyGroup& group);
+    void rebuild_slot(OverlaySlot &slot,
+                      bool rebuild_camera_independent_layers);
+    void destroy_slot(OverlaySlot &slot);
+    void destroy_group(OverlayProxyGroup &group);
 
     OverlayProxyFactory* factory_ = nullptr;
     std::array<OverlaySlot, kMaxViewportOverlaySlots> slots_;

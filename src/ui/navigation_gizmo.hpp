@@ -19,31 +19,31 @@ namespace quader {
 class NavigationGizmo final {
 public:
     [[nodiscard]] bool visible() const { return visible_; }
-    void setVisible(bool visible);
+    void set_visible(bool visible);
 
-    [[nodiscard]] bool inputLocked() const { return dragging_ && dragPaneActive_; }
-    [[nodiscard]] ViewportPaneId lockedPaneId() const { return dragPaneId_; }
+    [[nodiscard]] bool input_locked() const {
+      return dragging_ && drag_pane_active_;
+    }
+    [[nodiscard]] ViewportPaneId locked_pane_id() const {
+      return drag_pane_id_;
+    }
 
-    bool draw(ViewportCameraController& camera,
-            ViewportPaneId paneId,
-            ImVec2 itemMin,
-            ImVec2 itemSize,
-            QVec2 capturedMouseDelta,
-            bool* viewportCursorCaptureRequested,
-            QVec2* viewportCursorCapturePoint,
-            bool interactive = true);
+    bool draw(ViewportCameraController &camera, ViewportPaneId pane_id,
+              ImVec2 item_min, ImVec2 item_size, QVec2 captured_mouse_delta,
+              bool *viewport_cursor_capture_requested,
+              QVec2 *viewport_cursor_capture_point, bool interactive = true);
 
-private:
+  private:
     bool visible_ = true;
     bool dragging_ = false;
-    bool dragPaneActive_ = false;
-    ViewportPaneId dragPaneId_ = ViewportPaneId::Perspective;
-    bool dragStarted_ = false;
-    bool pressedFace_ = false;
-    ViewportViewAxis pressedAxis_ = ViewportViewAxis::Z;
-    int pressedSign_ = 1;
-    QVec2 accumulatedDrag_ = {};
-    QVec2 cursorCaptureScreen_ = {};
+    bool drag_pane_active_ = false;
+    ViewportPaneId drag_pane_id_ = ViewportPaneId::Perspective;
+    bool drag_started_ = false;
+    bool pressed_face_ = false;
+    ViewportViewAxis pressed_axis_ = ViewportViewAxis::Z;
+    int pressed_sign_ = 1;
+    QVec2 accumulated_drag_ = {};
+    QVec2 cursor_capture_screen_ = {};
 };
 
 } // namespace quader

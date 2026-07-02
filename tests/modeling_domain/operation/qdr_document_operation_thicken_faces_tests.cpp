@@ -18,8 +18,8 @@ TEST(QdrDocumentOperationThickenFacesTests, ThickenFacesTurnsOneOpenFaceIntoAClo
 
 	EXPECT_TRUE(result.changed);
 	EXPECT_TRUE(fixture.document.faces.size() == 6U);
-	EXPECT_TRUE(selection.mode == SelectionMode::face);
-	EXPECT_TRUE(selection.faces.size() == 6U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Face);
+        EXPECT_TRUE(selection.faces.size() == 6U);
 	EXPECT_TRUE(selection.has_active);
 	EXPECT_TRUE(selection.active_face == fixture.face);
 	EXPECT_TRUE(qdr_test::every_edge_is_closed(fixture.document));
@@ -37,11 +37,11 @@ TEST(QdrDocumentOperationThickenFacesTests, NegativeThickenGrowsFromTheFixedSour
 	const OperationResult result = thicken_selected_faces(fixture.document, selection, -0.5F, false);
 
 	EXPECT_TRUE(result.changed);
-	EXPECT_TRUE(selection.mode == SelectionMode::face);
-	EXPECT_TRUE(selection.faces.size() == 6U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Face);
+        EXPECT_TRUE(selection.faces.size() == 6U);
 	EXPECT_TRUE(selection.has_active);
-	EXPECT_TRUE(selection.active_kind == ElementKind::face);
-	EXPECT_TRUE(selection.active_face == original_face_id);
+        EXPECT_TRUE(selection.active_kind == ElementKind::Face);
+        EXPECT_TRUE(selection.active_face == original_face_id);
 	const Face* source_cap = find_face(fixture.document, original_face_id);
 	const auto offset_cap = std::find_if(fixture.document.faces.begin(), fixture.document.faces.end(), [&fixture](const Face& face) {
 		return qdr_test::face_centroid(fixture.document, face).z > 0.49F;

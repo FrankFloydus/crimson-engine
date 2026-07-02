@@ -29,40 +29,41 @@ public:
     ViewportRenderTarget& operator=(ViewportRenderTarget&&) = delete;
     ~ViewportRenderTarget();
 
-    void initialize(filament::Engine& engine, TextureRegistry& textureRegistry);
+    void initialize(filament::Engine &engine,
+                    TextureRegistry &texture_registry);
     void shutdown();
 
     bool initialized() const {
-        return engine_ != nullptr && textureRegistry_ != nullptr;
+      return engine_ != nullptr && texture_registry_ != nullptr;
     }
 
-    void resize(std::uint32_t width,
-            std::uint32_t height,
-            filament::View* view,
-            TextureSampleColorSpace sampleColorSpace = TextureSampleColorSpace::LinearSrgb);
+    void resize(std::uint32_t width, std::uint32_t height, filament::View *view,
+                TextureSampleColorSpace sample_color_space =
+                    TextureSampleColorSpace::LinearSrgb);
     void destroy();
 
-    filament::RenderTarget* renderTarget() const { return renderTarget_; }
-    RenderTextureHandle textureHandle() const { return textureHandle_; }
+    filament::RenderTarget *render_target() const { return render_target_; }
+    RenderTextureHandle texture_handle() const { return texture_handle_; }
     std::uint32_t width() const { return width_; }
     std::uint32_t height() const { return height_; }
-    std::uint32_t viewportWidth() const { return viewportWidth_; }
-    std::uint32_t viewportHeight() const { return viewportHeight_; }
+    std::uint32_t viewport_width() const { return viewport_width_; }
+    std::uint32_t viewport_height() const { return viewport_height_; }
 
-private:
-    void destroyRenderResources();
+  private:
+    void destroy_render_resources();
 
     filament::Engine* engine_ = nullptr;
-    TextureRegistry* textureRegistry_ = nullptr;
-    filament::Texture* colorTexture_ = nullptr;
-    filament::Texture* depthTexture_ = nullptr;
-    filament::RenderTarget* renderTarget_ = nullptr;
-    RenderTextureHandle textureHandle_ = InvalidRenderTextureHandle;
-    TextureSampleColorSpace sampleColorSpace_ = TextureSampleColorSpace::LinearSrgb;
+    TextureRegistry *texture_registry_ = nullptr;
+    filament::Texture *color_texture_ = nullptr;
+    filament::Texture *depth_texture_ = nullptr;
+    filament::RenderTarget *render_target_ = nullptr;
+    RenderTextureHandle texture_handle_ = kInvalidRenderTextureHandle;
+    TextureSampleColorSpace sample_color_space_ =
+        TextureSampleColorSpace::LinearSrgb;
     std::uint32_t width_ = 1;
     std::uint32_t height_ = 1;
-    std::uint32_t viewportWidth_ = 1;
-    std::uint32_t viewportHeight_ = 1;
+    std::uint32_t viewport_width_ = 1;
+    std::uint32_t viewport_height_ = 1;
 };
 
 } // namespace quader

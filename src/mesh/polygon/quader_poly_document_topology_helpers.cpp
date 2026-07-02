@@ -40,8 +40,9 @@ std::map<std::pair<ElementId, ElementId>, int> edge_incidence_counts_from_faces(
         }
         for (std::size_t index = 0; index < face.vertices.size(); ++index) {
             Edge edge = make_edge(face.vertices[index], face.vertices[(index + 1U) % face.vertices.size()]);
-            if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b) {
-                continue;
+            if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+                edge.a == edge.b) {
+              continue;
             }
             ++counts[{ edge.a, edge.b }];
         }
@@ -59,8 +60,9 @@ std::map<std::pair<ElementId, ElementId>, std::vector<std::size_t>> face_indices
         }
         for (std::size_t vertex_index = 0; vertex_index < face.vertices.size(); ++vertex_index) {
             const Edge edge = make_edge(face.vertices[vertex_index], face.vertices[(vertex_index + 1U) % face.vertices.size()]);
-            if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b) {
-                continue;
+            if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+                edge.a == edge.b) {
+              continue;
             }
             indices_by_edge[{ edge.a, edge.b }].push_back(face_index);
         }
@@ -94,11 +96,11 @@ quader_geometry::QAxis geometry_axis_from_dropped_axis(int dropped_axis)
 {
     switch (dropped_axis) {
     case 0:
-        return quader_geometry::QAxis::x;
+      return quader_geometry::QAxis::X;
     case 1:
-        return quader_geometry::QAxis::y;
+      return quader_geometry::QAxis::Y;
     default:
-        return quader_geometry::QAxis::z;
+      return quader_geometry::QAxis::Z;
     }
 }
 
@@ -131,15 +133,15 @@ bool contains_edge(std::span<const Edge> edges, Edge edge)
 SelectionMode selection_mode_for_kind(ElementKind kind)
 {
     switch (kind) {
-    case ElementKind::vertex:
-        return SelectionMode::vertex;
-    case ElementKind::edge:
-        return SelectionMode::edge;
-    case ElementKind::face:
-        return SelectionMode::face;
+    case ElementKind::Vertex:
+      return SelectionMode::Vertex;
+    case ElementKind::Edge:
+      return SelectionMode::Edge;
+    case ElementKind::Face:
+      return SelectionMode::Face;
     }
 
-    return SelectionMode::vertex;
+    return SelectionMode::Vertex;
 }
 
 bool remove_id(std::vector<ElementId>& ids, ElementId id)
@@ -151,9 +153,9 @@ bool remove_id(std::vector<ElementId>& ids, ElementId id)
 
 void toggle_id(std::vector<ElementId>& ids, ElementId id)
 {
-    if (id == invalid_element_id) {
-        return;
-    }
+  if (id == kInvalidElementId) {
+    return;
+  }
 
     if (!remove_id(ids, id)) {
         ids.push_back(id);
@@ -163,8 +165,9 @@ void toggle_id(std::vector<ElementId>& ids, ElementId id)
 void toggle_edge(std::vector<Edge>& edges, Edge edge)
 {
     edge = make_edge(edge.a, edge.b);
-    if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b) {
-        return;
+    if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+        edge.a == edge.b) {
+      return;
     }
 
     const auto existing = std::ranges::find(edges, edge);
@@ -188,17 +191,18 @@ bool remove_edge(std::vector<Edge>& edges, Edge edge)
 
 void add_unique_id(std::vector<ElementId>& ids, ElementId id)
 {
-    if (id == invalid_element_id || contains_id(ids, id)) {
-        return;
-    }
+  if (id == kInvalidElementId || contains_id(ids, id)) {
+    return;
+  }
     ids.push_back(id);
 }
 
 void add_unique_edge(std::vector<Edge>& edges, Edge edge)
 {
     edge = make_edge(edge.a, edge.b);
-    if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b || contains_edge(edges, edge)) {
-        return;
+    if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+        edge.a == edge.b || contains_edge(edges, edge)) {
+      return;
     }
     edges.push_back(edge);
 }
@@ -206,48 +210,49 @@ void add_unique_edge(std::vector<Edge>& edges, Edge edge)
 void clear_active_selection(Selection& selection)
 {
     selection.has_active = false;
-    selection.active_kind = ElementKind::vertex;
-    selection.active_vertex = invalid_element_id;
+    selection.active_kind = ElementKind::Vertex;
+    selection.active_vertex = kInvalidElementId;
     selection.active_edge = {};
-    selection.active_face = invalid_element_id;
+    selection.active_face = kInvalidElementId;
 }
 
 void activate_vertex_selection(Selection& selection, ElementId vertex_id)
 {
-    if (vertex_id == invalid_element_id) {
-        clear_active_selection(selection);
-        return;
-    }
+  if (vertex_id == kInvalidElementId) {
+    clear_active_selection(selection);
+    return;
+  }
     selection.has_active = true;
-    selection.active_kind = ElementKind::vertex;
+    selection.active_kind = ElementKind::Vertex;
     selection.active_vertex = vertex_id;
     selection.active_edge = {};
-    selection.active_face = invalid_element_id;
+    selection.active_face = kInvalidElementId;
 }
 
 void activate_edge_selection(Selection& selection, Edge edge)
 {
     edge = make_edge(edge.a, edge.b);
-    if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b) {
-        clear_active_selection(selection);
-        return;
+    if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+        edge.a == edge.b) {
+      clear_active_selection(selection);
+      return;
     }
     selection.has_active = true;
-    selection.active_kind = ElementKind::edge;
-    selection.active_vertex = invalid_element_id;
+    selection.active_kind = ElementKind::Edge;
+    selection.active_vertex = kInvalidElementId;
     selection.active_edge = edge;
-    selection.active_face = invalid_element_id;
+    selection.active_face = kInvalidElementId;
 }
 
 void activate_face_selection(Selection& selection, ElementId face_id)
 {
-    if (face_id == invalid_element_id) {
-        clear_active_selection(selection);
-        return;
-    }
+  if (face_id == kInvalidElementId) {
+    clear_active_selection(selection);
+    return;
+  }
     selection.has_active = true;
-    selection.active_kind = ElementKind::face;
-    selection.active_vertex = invalid_element_id;
+    selection.active_kind = ElementKind::Face;
+    selection.active_vertex = kInvalidElementId;
     selection.active_edge = {};
     selection.active_face = face_id;
 }
@@ -255,15 +260,15 @@ void activate_face_selection(Selection& selection, ElementId face_id)
 void activate_pick_selection(Selection& selection, const PickResult& pick)
 {
     switch (pick.kind) {
-    case ElementKind::vertex:
-        activate_vertex_selection(selection, pick.vertex_id);
-        break;
-    case ElementKind::edge:
-        activate_edge_selection(selection, pick.edge);
-        break;
-    case ElementKind::face:
-        activate_face_selection(selection, pick.face_id);
-        break;
+    case ElementKind::Vertex:
+      activate_vertex_selection(selection, pick.vertex_id);
+      break;
+    case ElementKind::Edge:
+      activate_edge_selection(selection, pick.edge);
+      break;
+    case ElementKind::Face:
+      activate_face_selection(selection, pick.face_id);
+      break;
     }
 }
 
@@ -271,38 +276,40 @@ void activate_last_selection(Selection& selection)
 {
     clear_active_selection(selection);
     switch (selection.mode) {
-    case SelectionMode::vertex:
-        if (!selection.vertices.empty()) {
-            activate_vertex_selection(selection, selection.vertices.back());
-        }
-        break;
-    case SelectionMode::edge:
-        if (!selection.edges.empty()) {
-            activate_edge_selection(selection, selection.edges.back());
-        }
-        break;
-    case SelectionMode::face:
-        if (!selection.faces.empty()) {
-            activate_face_selection(selection, selection.faces.back());
-        }
-        break;
+    case SelectionMode::Vertex:
+      if (!selection.vertices.empty()) {
+        activate_vertex_selection(selection, selection.vertices.back());
+      }
+      break;
+    case SelectionMode::Edge:
+      if (!selection.edges.empty()) {
+        activate_edge_selection(selection, selection.edges.back());
+      }
+      break;
+    case SelectionMode::Face:
+      if (!selection.faces.empty()) {
+        activate_face_selection(selection, selection.faces.back());
+      }
+      break;
     }
 }
 
 ElementId active_face_or_invalid(const Selection& selection)
 {
-    if (selection.has_active && selection.active_kind == ElementKind::face && contains_id(selection.faces, selection.active_face)) {
-        return selection.active_face;
-    }
-    return invalid_element_id;
+  if (selection.has_active && selection.active_kind == ElementKind::Face &&
+      contains_id(selection.faces, selection.active_face)) {
+    return selection.active_face;
+  }
+  return kInvalidElementId;
 }
 
 void activate_face_or_last_selection(Selection& selection, ElementId preferred_face_id)
 {
-    if (preferred_face_id != invalid_element_id && contains_id(selection.faces, preferred_face_id)) {
-        activate_face_selection(selection, preferred_face_id);
-        return;
-    }
+  if (preferred_face_id != kInvalidElementId &&
+      contains_id(selection.faces, preferred_face_id)) {
+    activate_face_selection(selection, preferred_face_id);
+    return;
+  }
     activate_last_selection(selection);
 }
 
@@ -445,12 +452,10 @@ FacePerimeterInfo perimeter_info_for_edges(const Document& document, std::span<c
 
     for (Edge edge : perimeter_edges) {
         edge = make_edge(edge.a, edge.b);
-        if (edge.a == invalid_element_id ||
-            edge.b == invalid_element_id ||
-            edge.a == edge.b ||
-            find_vertex(document, edge.a) == nullptr ||
+        if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+            edge.a == edge.b || find_vertex(document, edge.a) == nullptr ||
             find_vertex(document, edge.b) == nullptr) {
-            continue;
+          continue;
         }
 
         const auto count = counts.find({ edge.a, edge.b });
@@ -486,9 +491,11 @@ bool document_has_unreferenced_vertices(const Document& document)
         referenced_vertices.insert(face.vertices.begin(), face.vertices.end());
     }
 
-    return std::ranges::any_of(document.vertices, [&referenced_vertices](const Vertex& vertex) {
-        return vertex.id == invalid_element_id || !referenced_vertices.contains(vertex.id);
-    });
+    return std::ranges::any_of(
+        document.vertices, [&referenced_vertices](const Vertex &vertex) {
+          return vertex.id == kInvalidElementId ||
+                 !referenced_vertices.contains(vertex.id);
+        });
 }
 
 std::vector<ElementId> compact_face_vertices_for_merge(const Face& face, const std::set<ElementId>& merge_vertex_ids, ElementId active_vertex_id)
@@ -523,8 +530,9 @@ void restore_source_face_orientation(const Document& source, Document& candidate
 
         const quader::QVec3 source_normal = face_normal(source, *source_face);
         const quader::QVec3 candidate_normal = face_normal(candidate, face);
-        if (length_squared(source_normal) <= epsilon || length_squared(candidate_normal) <= epsilon) {
-            continue;
+        if (length_squared(source_normal) <= kEpsilon ||
+            length_squared(candidate_normal) <= kEpsilon) {
+          continue;
         }
         if (dot(source_normal, candidate_normal) >= 0.0F) {
             continue;

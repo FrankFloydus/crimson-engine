@@ -14,76 +14,78 @@
 namespace quader {
 
 OverlayCameraProjector::OverlayCameraProjector(ViewportOverlayCamera camera)
-    : camera_(sanitizedCamera(camera)) {}
+    : camera_(sanitized_camera(camera)) {}
 
 const ViewportOverlayCamera& OverlayCameraProjector::camera() const {
     return camera_;
 }
 
-ViewportOverlayCamera OverlayCameraProjector::sanitizedCamera(ViewportOverlayCamera camera) {
-    camera.forward = normalize(camera.forward);
-    if (length(camera.forward) <= 0.000001f) {
-        camera.forward = {0.0f, 0.0f, -1.0f};
-    }
-    camera.right = normalize(camera.right);
-    if (length(camera.right) <= 0.000001f || std::abs(dot(camera.right, camera.forward)) > 0.999f) {
-        const QVec3 reference = std::abs(camera.forward.y) < 0.999f
-                ? QVec3{0.0f, 1.0f, 0.0f}
-                : QVec3{1.0f, 0.0f, 0.0f};
-        camera.right = normalize(cross(camera.forward, reference));
-    }
-    camera.up = normalize(cross(camera.right, camera.forward));
-    if (length(camera.up) <= 0.000001f) {
-        camera.up = {0.0f, 1.0f, 0.0f};
-    }
-    camera.viewportSize.x = std::max(camera.viewportSize.x, 1.0f);
-    camera.viewportSize.y = std::max(camera.viewportSize.y, 1.0f);
-    camera.orthographicSize = std::max(camera.orthographicSize, 0.0001f);
-    camera.fovDegrees = std::clamp(camera.fovDegrees, 1.0f, 170.0f);
-    camera.nearPlane = std::max(camera.nearPlane, 0.0001f);
-    camera.farPlane = std::max(camera.farPlane, camera.nearPlane + 0.001f);
-    return camera;
+ViewportOverlayCamera
+OverlayCameraProjector::sanitized_camera(ViewportOverlayCamera camera) {
+  camera.forward = normalize(camera.forward);
+  if (length(camera.forward) <= 0.000001f) {
+    camera.forward = {0.0f, 0.0f, -1.0f};
+  }
+  camera.right = normalize(camera.right);
+  if (length(camera.right) <= 0.000001f ||
+      std::abs(dot(camera.right, camera.forward)) > 0.999f) {
+    const QVec3 reference = std::abs(camera.forward.y) < 0.999f
+                                ? QVec3{0.0f, 1.0f, 0.0f}
+                                : QVec3{1.0f, 0.0f, 0.0f};
+    camera.right = normalize(cross(camera.forward, reference));
+  }
+  camera.up = normalize(cross(camera.right, camera.forward));
+  if (length(camera.up) <= 0.000001f) {
+    camera.up = {0.0f, 1.0f, 0.0f};
+  }
+  camera.viewport_size.x = std::max(camera.viewport_size.x, 1.0f);
+  camera.viewport_size.y = std::max(camera.viewport_size.y, 1.0f);
+  camera.orthographic_size = std::max(camera.orthographic_size, 0.0001f);
+  camera.fov_degrees = std::clamp(camera.fov_degrees, 1.0f, 170.0f);
+  camera.near_plane = std::max(camera.near_plane, 0.0001f);
+  camera.far_plane = std::max(camera.far_plane, camera.near_plane + 0.001f);
+  return camera;
 }
 
-OverlayViewPoint OverlayCameraProjector::viewPointFor(QVec3 world) const {
-    const QVec3 relative = world - camera_.eye;
-    const float depth = dot(relative, camera_.forward);
-    return {
-            .x = dot(relative, camera_.right),
-            .y = dot(relative, camera_.up),
-            .z = -depth,
+OverlayViewPoint OverlayCameraProjector::view_point_for(QVec3 world) const {
+  const QVec3 relative = world - camera_.eye;
+  const float depth = dot(relative, camera_.forward);
+  return {
+      .x = dot(relative, camera_.right),
+      .y = dot(relative, camera_.up),
+      .z = -depth,
+  };
+}
+
+float OverlayCameraProjector::near_plane_distance(
+    const OverlayViewPoint &point) const {
+  return -point.z - camera_.near_plane;
+}
+
+std::optional<OverlayClippedLine>
+OverlayCameraProjector::clip_line_to_near_plane(QVec3 start, QVec3 end) const {
+  OverlayViewPoint a = view_point_for(start);
+  OverlayViewPoint b = view_point_for(end);
+
+  const float a_near = near_plane_distance(a);
+  const float b_near = near_plane_distance(b);
+  if (a_near < 0.0f && b_near < 0.0f) {
+    return std::nullopt;
+  }
+  if (a_near < 0.0f || b_near < 0.0f) {
+    const float t = std::clamp(a_near / (a_near - b_near), 0.0f, 1.0f);
+    const OverlayViewPoint clipped{
+        .x = a.x + (b.x - a.x) * t,
+        .y = a.y + (b.y - a.y) * t,
+        .z = a.z + (b.z - a.z) * t,
     };
-}
-
-float OverlayCameraProjector::nearPlaneDistance(const OverlayViewPoint& point) const {
-    return -point.z - camera_.nearPlane;
-}
-
-std::optional<OverlayClippedLine> OverlayCameraProjector::clipLineToNearPlane(
-        QVec3 start,
-        QVec3 end) const {
-    OverlayViewPoint a = viewPointFor(start);
-    OverlayViewPoint b = viewPointFor(end);
-
-    const float aNear = nearPlaneDistance(a);
-    const float bNear = nearPlaneDistance(b);
-    if (aNear < 0.0f && bNear < 0.0f) {
-        return std::nullopt;
+    if (a_near < 0.0f) {
+      a = clipped;
+    } else {
+      b = clipped;
     }
-    if (aNear < 0.0f || bNear < 0.0f) {
-        const float t = std::clamp(aNear / (aNear - bNear), 0.0f, 1.0f);
-        const OverlayViewPoint clipped{
-                .x = a.x + (b.x - a.x) * t,
-                .y = a.y + (b.y - a.y) * t,
-                .z = a.z + (b.z - a.z) * t,
-        };
-        if (aNear < 0.0f) {
-            a = clipped;
-        } else {
-            b = clipped;
-        }
-    }
-    return OverlayClippedLine{.start = a, .end = b};
+  }
+  return OverlayClippedLine{.start = a, .end = b};
 }
 
 OverlayProjectedPoint OverlayCameraProjector::project(OverlayViewPoint point) const {
@@ -94,48 +96,54 @@ OverlayProjectedPoint OverlayCameraProjector::project(OverlayViewPoint point) co
         if (depth <= 0.000001f) {
             return projected;
         }
-        const float aspect = camera_.viewportSize.x / camera_.viewportSize.y;
-        const float tanHalfFov = std::tan((camera_.fovDegrees * kPi / 180.0f) * 0.5f);
+        const float aspect = camera_.viewport_size.x / camera_.viewport_size.y;
+        const float tan_half_fov =
+            std::tan((camera_.fov_degrees * kPi / 180.0f) * 0.5f);
         projected.device = {
-                point.x / (depth * tanHalfFov * aspect),
-                point.y / (depth * tanHalfFov),
-                1.0f - (2.0f * camera_.nearPlane / depth),
-                1.0f,
+            point.x / (depth * tan_half_fov * aspect),
+            point.y / (depth * tan_half_fov),
+            1.0f - (2.0f * camera_.near_plane / depth),
+            1.0f,
         };
     } else {
-        const float aspect = camera_.viewportSize.x / camera_.viewportSize.y;
-        const float halfHeight = camera_.orthographicSize * 0.5f;
-        const float halfWidth = halfHeight * aspect;
-        projected.device = {
-                point.x / halfWidth,
-                point.y / halfHeight,
-                (-2.0f / (camera_.farPlane - camera_.nearPlane)) * point.z -
-                        ((camera_.farPlane + camera_.nearPlane) / (camera_.farPlane - camera_.nearPlane)),
-                1.0f,
-        };
+      const float aspect = camera_.viewport_size.x / camera_.viewport_size.y;
+      const float half_height = camera_.orthographic_size * 0.5f;
+      const float half_width = half_height * aspect;
+      projected.device = {
+          point.x / half_width,
+          point.y / half_height,
+          (-2.0f / (camera_.far_plane - camera_.near_plane)) * point.z -
+              ((camera_.far_plane + camera_.near_plane) /
+               (camera_.far_plane - camera_.near_plane)),
+          1.0f,
+      };
     }
 
     const QVec2 ndc{projected.device.x, projected.device.y};
     projected.pixel = {
-            (ndc.x * 0.5f + 0.5f) * camera_.viewportSize.x,
-            (ndc.y * 0.5f + 0.5f) * camera_.viewportSize.y,
+        (ndc.x * 0.5f + 0.5f) * camera_.viewport_size.x,
+        (ndc.y * 0.5f + 0.5f) * camera_.viewport_size.y,
     };
     projected.valid = true;
     return projected;
 }
 
-void OverlayCameraProjector::applyDeviceDepthBias(OverlayProjectedPoint& projected, float depthBiasUnits) const {
-    if (!projected.valid || depthBiasUnits <= 0.0f) {
-        return;
-    }
-    const float deviceOffset = depthBiasUnits * camera_.nearPlane * kOverlayDeviceDepthBiasPerNearPlane;
-    projected.device.z += deviceOffset;
+void OverlayCameraProjector::apply_device_depth_bias(
+    OverlayProjectedPoint &projected, float depth_bias_units) const {
+  if (!projected.valid || depth_bias_units <= 0.0f) {
+    return;
+  }
+  const float device_offset = depth_bias_units * camera_.near_plane *
+                              kOverlayDeviceDepthBiasPerNearPlane;
+  projected.device.z += device_offset;
 }
 
-OverlayFloat4 OverlayCameraProjector::withPixelOffset(OverlayFloat4 device, QVec2 pixelOffset) const {
-    device.x += pixelOffset.x * 2.0f / camera_.viewportSize.x;
-    device.y += pixelOffset.y * 2.0f / camera_.viewportSize.y;
-    return device;
+OverlayFloat4
+OverlayCameraProjector::with_pixel_offset(OverlayFloat4 device,
+                                          QVec2 pixel_offset) const {
+  device.x += pixel_offset.x * 2.0f / camera_.viewport_size.x;
+  device.y += pixel_offset.y * 2.0f / camera_.viewport_size.y;
+  return device;
 }
 
 } // namespace quader

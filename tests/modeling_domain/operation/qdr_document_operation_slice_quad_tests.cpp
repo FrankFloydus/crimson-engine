@@ -35,7 +35,7 @@ ElementId find_face_with_normal(const Document& document, quader::QVec3 directio
 	const auto face = std::ranges::find_if(document.faces, [&document, direction](const Face& candidate) {
 		return dot(face_normal(document, candidate), direction) > 0.5F;
 	});
-	return face == document.faces.end() ? invalid_element_id : face->id;
+        return face == document.faces.end() ? kInvalidElementId : face->id;
 }
 
 } // namespace
@@ -58,11 +58,11 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadSubdividesASelectedQuadIntoAnX
 	EXPECT_TRUE(fixture.document.vertices.size() == 9U);
 	EXPECT_TRUE(fixture.document.faces.size() == 4U);
 	EXPECT_TRUE(count_vertices_at(fixture.document, { 0.0F, 0.0F, 0.0F }) == 1U);
-	EXPECT_TRUE(selection.mode == SelectionMode::face);
-	EXPECT_TRUE(selection.faces.size() == 4U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Face);
+        EXPECT_TRUE(selection.faces.size() == 4U);
 	EXPECT_TRUE(selection.has_active);
-	EXPECT_TRUE(selection.active_kind == ElementKind::face);
-	EXPECT_TRUE(selection.active_face == selection.faces.back());
+        EXPECT_TRUE(selection.active_kind == ElementKind::Face);
+        EXPECT_TRUE(selection.active_face == selection.faces.back());
 	for (const Face& sliced_face : fixture.document.faces) {
 		EXPECT_TRUE(sliced_face.vertices.size() == 4U);
 		EXPECT_TRUE(sliced_face.material_slot == 11U);
@@ -155,9 +155,9 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadUsesStableAxesForCoplanarQuads
 		right_bottom_right,
 		right_bottom_left,
 	});
-	EXPECT_TRUE(left_face != invalid_element_id);
-	EXPECT_TRUE(right_face != invalid_element_id);
-	EXPECT_TRUE(dot(face_normal(document, *find_face(document, left_face)), { 0.0F, 1.0F, 0.0F }) > 0.5F);
+        EXPECT_TRUE(left_face != kInvalidElementId);
+        EXPECT_TRUE(right_face != kInvalidElementId);
+        EXPECT_TRUE(dot(face_normal(document, *find_face(document, left_face)), { 0.0F, 1.0F, 0.0F }) > 0.5F);
 	EXPECT_TRUE(dot(face_normal(document, *find_face(document, right_face)), { 0.0F, 1.0F, 0.0F }) > 0.5F);
 	Selection selection = qdr_test::face_selection({ left_face, right_face }, right_face);
 
@@ -187,8 +187,8 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadKeepsGeneratedRightSideWallCel
 		top_front,
 		top_back,
 	});
-	EXPECT_TRUE(right_face != invalid_element_id);
-	const quader::QVec3 source_normal = face_normal(document, *find_face(document, right_face));
+        EXPECT_TRUE(right_face != kInvalidElementId);
+        const quader::QVec3 source_normal = face_normal(document, *find_face(document, right_face));
 	EXPECT_TRUE(dot(source_normal, { -1.0F, 0.0F, 0.0F }) > 0.5F);
 	Selection selection = qdr_test::face_selection({ right_face }, right_face);
 
@@ -207,8 +207,8 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadKeepsGeneratedRightSideWallCel
 TEST(QdrDocumentOperationSliceQuadTests, SliceQuadPropagatesSelectedCubeFaceBoundarySplitsIntoNeighboringFaces) {
 	Document document = make_cube({});
 	const ElementId top_face = find_face_with_normal(document, { 0.0F, 1.0F, 0.0F });
-	EXPECT_TRUE(top_face != invalid_element_id);
-	Selection selection = qdr_test::face_selection({ top_face }, top_face);
+        EXPECT_TRUE(top_face != kInvalidElementId);
+        Selection selection = qdr_test::face_selection({ top_face }, top_face);
 
 	const OperationResult result = slice_selected_quads(document, selection, 3, 3);
 
@@ -221,23 +221,25 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadPropagatesSelectedCubeFaceBoun
 }
 
 TEST(QdrDocumentOperationSliceQuadTests, SliceQuadSlicesSelectedTriangleFaces) {
-	ElementId triangle_face = invalid_element_id;
-	Document document = make_triangle_document(triangle_face);
-	Selection selection = qdr_test::face_selection({ triangle_face }, triangle_face);
+  ElementId triangle_face = kInvalidElementId;
+  Document document = make_triangle_document(triangle_face);
+  Selection selection =
+      qdr_test::face_selection({triangle_face}, triangle_face);
 
-	const OperationResult result = slice_selected_quads(document, selection, 1, 1);
+  const OperationResult result =
+      slice_selected_quads(document, selection, 1, 1);
 
-	EXPECT_TRUE(result.changed);
-	EXPECT_GT(document.faces.size(), 1U);
-	EXPECT_GT(document.vertices.size(), 3U);
-	EXPECT_TRUE(selection.mode == SelectionMode::face);
-	EXPECT_GT(selection.faces.size(), 1U);
-	EXPECT_TRUE(selection.has_active);
-	for (const Face& face : document.faces) {
-		EXPECT_TRUE(face.material_slot == 3U);
-		EXPECT_TRUE(face.uvs.empty());
-		EXPECT_FALSE(qdr_test::face_has_repeated_vertices(face));
-	}
+  EXPECT_TRUE(result.changed);
+  EXPECT_GT(document.faces.size(), 1U);
+  EXPECT_GT(document.vertices.size(), 3U);
+  EXPECT_TRUE(selection.mode == SelectionMode::Face);
+  EXPECT_GT(selection.faces.size(), 1U);
+  EXPECT_TRUE(selection.has_active);
+  for (const Face &face : document.faces) {
+    EXPECT_TRUE(face.material_slot == 3U);
+    EXPECT_TRUE(face.uvs.empty());
+    EXPECT_FALSE(qdr_test::face_has_repeated_vertices(face));
+  }
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }
 
@@ -252,17 +254,17 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadSupportsMixedQuadAndTriangleFa
 	const ElementId tb = add_vertex(document, { 5.0F, -1.0F, 0.0F });
 	const ElementId tc = add_vertex(document, { 4.0F, 1.0F, 0.0F });
 	const ElementId triangle_face = add_face(document, std::array<ElementId, 3> { ta, tb, tc }, 7U);
-	ASSERT_TRUE(quad_face != invalid_element_id);
-	ASSERT_TRUE(triangle_face != invalid_element_id);
-	Selection selection = qdr_test::face_selection({ quad_face, triangle_face }, triangle_face);
+        ASSERT_TRUE(quad_face != kInvalidElementId);
+        ASSERT_TRUE(triangle_face != kInvalidElementId);
+        Selection selection = qdr_test::face_selection({ quad_face, triangle_face }, triangle_face);
 
 	const OperationResult result = slice_selected_quads(document, selection, 1, 1);
 
 	EXPECT_TRUE(result.changed);
 	EXPECT_GT(document.faces.size(), 5U);
 	EXPECT_GT(document.vertices.size(), 7U);
-	EXPECT_TRUE(selection.mode == SelectionMode::face);
-	EXPECT_GT(selection.faces.size(), 5U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Face);
+        EXPECT_GT(selection.faces.size(), 5U);
 	EXPECT_TRUE(std::ranges::any_of(document.faces, [](const Face& face) {
 		return face.material_slot == 5U;
 	}));

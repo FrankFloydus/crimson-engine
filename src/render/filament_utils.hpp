@@ -14,10 +14,8 @@
 
 namespace quader {
 
-inline filament::math::float3 toFilament(QVec3 v) {
-    return {v.x, v.y, v.z};
-}
+inline filament::math::float3 to_filament(QVec3 v) { return {v.x, v.y, v.z}; }
 
-filament::Box computeBounds(const MeshAsset& mesh);
+filament::Box compute_bounds(const MeshAsset &mesh);
 
 } // namespace quader

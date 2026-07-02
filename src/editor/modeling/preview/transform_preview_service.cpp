@@ -8,22 +8,28 @@
 
 namespace quader {
 
-bool TransformPreviewService::isTransform(ModelingTransformOperation operation) {
-    return operation == ModelingTransformOperation::Transform;
+bool TransformPreviewService::is_transform(
+    ModelingTransformOperation operation) {
+  return operation == ModelingTransformOperation::Transform;
 }
 
-bool TransformPreviewService::hasTransformPreview(const quader_editor_core::EditorSession& session) {
-    const quader_editor_core::PreviewTransactionStatus status = session.preview_transaction_status();
-    return status.active && status.kind == quader_editor_core::PreviewTransactionKind::transform;
+bool TransformPreviewService::has_transform_preview(
+    const quader_editor_core::EditorSession &session) {
+  const quader_editor_core::PreviewTransactionStatus status =
+      session.preview_transaction_status();
+  return status.active &&
+         status.kind == quader_editor_core::PreviewTransactionKind::Transform;
 }
 
-ModelingCommandResult TransformPreviewService::finishResult(
-        const quader_editor_core::PreviewTransactionFinishResult& finish,
-        bool cancel) {
-    return {
-            .ok = !finish.before.active || finish.before.kind == quader_editor_core::PreviewTransactionKind::transform,
-            .changed = cancel ? finish.restored : finish.before.changed,
-    };
+ModelingCommandResult TransformPreviewService::finish_result(
+    const quader_editor_core::PreviewTransactionFinishResult &finish,
+    bool cancel) {
+  return {
+      .ok = !finish.before.active ||
+            finish.before.kind ==
+                quader_editor_core::PreviewTransactionKind::Transform,
+      .changed = cancel ? finish.restored : finish.before.changed,
+  };
 }
 
 } // namespace quader

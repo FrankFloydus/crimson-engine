@@ -20,21 +20,21 @@ namespace quader {
 class UIPanelManager {
 public:
     void add(std::unique_ptr<UIPanel> panel);
-    void applySettings(const UISettings& settings);
-    void writeSettings(UISettings& settings) const;
+    void apply_settings(const UISettings &settings);
+    void write_settings(UISettings &settings) const;
 
-    bool isVisible(UIPanelId id) const;
-    void setVisible(UIPanelId id, bool visible);
+    bool is_visible(UIPanelId id) const;
+    void set_visible(UIPanelId id, bool visible);
     UIPanel* panel(UIPanelId id);
 
     void draw(UIContext& context);
     const std::vector<std::unique_ptr<UIPanel>>& panels() const { return panels_; }
 
 private:
-    bool defaultVisibility(UIPanelId id) const;
+  bool default_visibility(UIPanelId id) const;
 
-    std::vector<std::unique_ptr<UIPanel>> panels_;
-    std::vector<bool> visibility_;
+  std::vector<std::unique_ptr<UIPanel>> panels_;
+  std::vector<bool> visibility_;
 };
 
 } // namespace quader

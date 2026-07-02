@@ -165,8 +165,8 @@ bool every_shared_edge_has_opposite_winding(const Document& document)
      * Represents an Edge Use value used by the automated test suite.
      */
     struct EdgeUse {
-        ElementId from = invalid_element_id;
-        ElementId to = invalid_element_id;
+      ElementId from = kInvalidElementId;
+      ElementId to = kInvalidElementId;
     };
 
     std::map<std::pair<ElementId, ElementId>, std::vector<EdgeUse>> uses_by_edge;
@@ -236,10 +236,10 @@ bool all_faces_point_relative_to_center(const Document& document)
 Selection edge_selection_for_edge(Edge edge)
 {
     Selection selection;
-    selection.mode = SelectionMode::edge;
+    selection.mode = SelectionMode::Edge;
     selection.edges = { edge };
     selection.has_active = true;
-    selection.active_kind = ElementKind::edge;
+    selection.active_kind = ElementKind::Edge;
     selection.active_edge = edge;
     return selection;
 }
@@ -252,7 +252,7 @@ Selection top_face_loop_selection(const Document& document)
     EXPECT_TRUE(top_face != document.faces.end());
 
     Selection selection;
-    selection.mode = SelectionMode::edge;
+    selection.mode = SelectionMode::Edge;
     for (std::size_t index = 0; index < top_face->vertices.size(); ++index) {
         selection.edges.push_back(make_edge(top_face->vertices[index], top_face->vertices[(index + 1U) % top_face->vertices.size()]));
     }
@@ -268,7 +268,7 @@ Selection all_document_edge_selection(const Document& document)
 {
     std::set<std::pair<ElementId, ElementId>> seen_edges;
     Selection selection;
-    selection.mode = SelectionMode::edge;
+    selection.mode = SelectionMode::Edge;
     for (const Face& face : document.faces) {
         for (std::size_t index = 0; index < face.vertices.size(); ++index) {
             const Edge edge = make_edge(face.vertices[index], face.vertices[(index + 1U) % face.vertices.size()]);
@@ -279,7 +279,7 @@ Selection all_document_edge_selection(const Document& document)
     }
     if (!selection.edges.empty()) {
         selection.has_active = true;
-        selection.active_kind = ElementKind::edge;
+        selection.active_kind = ElementKind::Edge;
         selection.active_edge = selection.edges.front();
     }
     return selection;
@@ -374,20 +374,25 @@ struct SideExtrusionFixture {
 SideExtrusionFixture make_side_extrusion_fixture()
 {
     SideExtrusionFixture fixture;
-    constexpr float half = 1.0F;
-    constexpr float inset = 0.35F;
-    constexpr float tip_x = 2.0F;
-    const std::array<float, 4> coords { -half, -inset, inset, half };
+    constexpr float kHalf = 1.0F;
+    constexpr float kInset = 0.35F;
+    constexpr float kTipX = 2.0F;
+    const std::array<float, 4> coords{-kHalf, -kInset, kInset, kHalf};
 
-    const ElementId back_00 = add_vertex(fixture.document, { -half, -half, -half });
-    const ElementId back_10 = add_vertex(fixture.document, { -half, half, -half });
-    const ElementId back_11 = add_vertex(fixture.document, { -half, half, half });
-    const ElementId back_01 = add_vertex(fixture.document, { -half, -half, half });
+    const ElementId back_00 =
+        add_vertex(fixture.document, {-kHalf, -kHalf, -kHalf});
+    const ElementId back_10 =
+        add_vertex(fixture.document, {-kHalf, kHalf, -kHalf});
+    const ElementId back_11 =
+        add_vertex(fixture.document, {-kHalf, kHalf, kHalf});
+    const ElementId back_01 =
+        add_vertex(fixture.document, {-kHalf, -kHalf, kHalf});
 
     std::array<std::array<ElementId, 4>, 4> front {};
     for (std::size_t y = 0; y < coords.size(); ++y) {
         for (std::size_t z = 0; z < coords.size(); ++z) {
-            front[y][z] = add_vertex(fixture.document, { half, coords[y], coords[z] });
+          front[y][z] =
+              add_vertex(fixture.document, {kHalf, coords[y], coords[z]});
         }
     }
 
@@ -395,10 +400,14 @@ SideExtrusionFixture make_side_extrusion_fixture()
     const ElementId root_10 = front[2][1];
     const ElementId root_11 = front[2][2];
     const ElementId root_01 = front[1][2];
-    const ElementId tip_00 = add_vertex(fixture.document, { tip_x, -inset, -inset });
-    const ElementId tip_10 = add_vertex(fixture.document, { tip_x, inset, -inset });
-    const ElementId tip_11 = add_vertex(fixture.document, { tip_x, inset, inset });
-    const ElementId tip_01 = add_vertex(fixture.document, { tip_x, -inset, inset });
+    const ElementId tip_00 =
+        add_vertex(fixture.document, {kTipX, -kInset, -kInset});
+    const ElementId tip_10 =
+        add_vertex(fixture.document, {kTipX, kInset, -kInset});
+    const ElementId tip_11 =
+        add_vertex(fixture.document, {kTipX, kInset, kInset});
+    const ElementId tip_01 =
+        add_vertex(fixture.document, {kTipX, -kInset, kInset});
 
     fixture.root_corners = {
         root_00,
@@ -462,10 +471,10 @@ SideExtrusionFixture make_side_extrusion_fixture()
 Selection side_extrusion_edge_selection(const SideExtrusionFixture& fixture)
 {
     Selection selection;
-    selection.mode = SelectionMode::edge;
+    selection.mode = SelectionMode::Edge;
     selection.edges = fixture.selected_edges;
     selection.has_active = true;
-    selection.active_kind = ElementKind::edge;
+    selection.active_kind = ElementKind::Edge;
     selection.active_edge = fixture.selected_edges.front();
     return selection;
 }
@@ -571,30 +580,37 @@ void require_generated_faces_point_away_from_source_corners(
     const std::map<ElementId, quader::QVec3>& source_corner_positions,
     float radius)
 {
-    EXPECT_TRUE(selection.mode == SelectionMode::face);
-    EXPECT_FALSE(selection.faces.empty());
+  EXPECT_TRUE(selection.mode == SelectionMode::Face);
+  EXPECT_FALSE(selection.faces.empty());
 
-    for (const auto& [source_vertex_id, source_position] : source_corner_positions) {
-        int checked_face_count = 0;
-        for (const ElementId face_id : selection.faces) {
-            const Face* face = find_face(document, face_id);
-            EXPECT_TRUE(face != nullptr);
-            const quader::QVec3 center = face_centroid(document, *face);
-            const quader::QVec3 from_source = center - source_position;
-            if (length_squared(from_source) > radius * radius ||
-                length_squared(from_source) <= 0.00000001F) {
-                continue;
-            }
+  for (const auto &[source_vertex_id, source_position] :
+       source_corner_positions) {
+    int checked_face_count = 0;
+    for (const ElementId face_id : selection.faces) {
+      const Face *face = find_face(document, face_id);
+      EXPECT_TRUE(face != nullptr);
+      const quader::QVec3 center = face_centroid(document, *face);
+      const quader::QVec3 from_source = center - source_position;
+      if (length_squared(from_source) > radius * radius ||
+          length_squared(from_source) <= 0.00000001F) {
+        continue;
+      }
 
-            SCOPED_TRACE(::testing::Message() << "generated bevel face should point away from old corner vertex " << source_vertex_id << " face=" << face_id);
-            const quader::QVec3 normal = face_normal(document, *face);
-            const quader::QVec3 direction_from_source = from_source / length(from_source);
-            EXPECT_TRUE(dot(normal, direction_from_source) > -0.5F);
-            ++checked_face_count;
-        }
-        SCOPED_TRACE(::testing::Message() << "expected generated bevel faces near old corner vertex " << source_vertex_id);
-        EXPECT_TRUE(checked_face_count > 0);
+      SCOPED_TRACE(
+          ::testing::Message()
+          << "generated bevel face should point away from old corner vertex "
+          << source_vertex_id << " face=" << face_id);
+      const quader::QVec3 normal = face_normal(document, *face);
+      const quader::QVec3 direction_from_source =
+          from_source / length(from_source);
+      EXPECT_TRUE(dot(normal, direction_from_source) > -0.5F);
+      ++checked_face_count;
     }
+    SCOPED_TRACE(::testing::Message()
+                 << "expected generated bevel faces near old corner vertex "
+                 << source_vertex_id);
+    EXPECT_TRUE(checked_face_count > 0);
+  }
 }
 
 void require_no_generated_triangles_near_source_corners(
@@ -603,28 +619,34 @@ void require_no_generated_triangles_near_source_corners(
     const std::map<ElementId, quader::QVec3>& source_corner_positions,
     float radius)
 {
-    EXPECT_TRUE(selection.mode == SelectionMode::face);
-    EXPECT_FALSE(selection.faces.empty());
+  EXPECT_TRUE(selection.mode == SelectionMode::Face);
+  EXPECT_FALSE(selection.faces.empty());
 
-    for (const auto& [source_vertex_id, source_position] : source_corner_positions) {
-        int checked_face_count = 0;
-        for (const ElementId face_id : selection.faces) {
-            const Face* face = find_face(document, face_id);
-            EXPECT_TRUE(face != nullptr);
-            const quader::QVec3 center = face_centroid(document, *face);
-            const quader::QVec3 from_source = center - source_position;
-            if (length_squared(from_source) > radius * radius ||
-                length_squared(from_source) <= 0.00000001F) {
-                continue;
-            }
+  for (const auto &[source_vertex_id, source_position] :
+       source_corner_positions) {
+    int checked_face_count = 0;
+    for (const ElementId face_id : selection.faces) {
+      const Face *face = find_face(document, face_id);
+      EXPECT_TRUE(face != nullptr);
+      const quader::QVec3 center = face_centroid(document, *face);
+      const quader::QVec3 from_source = center - source_position;
+      if (length_squared(from_source) > radius * radius ||
+          length_squared(from_source) <= 0.00000001F) {
+        continue;
+      }
 
-            SCOPED_TRACE(::testing::Message() << "outer miter patch should not collapse to a sharp triangle fan at old corner vertex " << source_vertex_id << " face=" << face_id);
-            EXPECT_TRUE(face->vertices.size() != 3U);
-            ++checked_face_count;
-        }
-        SCOPED_TRACE(::testing::Message() << "expected generated bevel faces near old corner vertex " << source_vertex_id);
-        EXPECT_TRUE(checked_face_count > 0);
+      SCOPED_TRACE(::testing::Message()
+                   << "outer miter patch should not collapse to a sharp "
+                      "triangle fan at old corner vertex "
+                   << source_vertex_id << " face=" << face_id);
+      EXPECT_TRUE(face->vertices.size() != 3U);
+      ++checked_face_count;
     }
+    SCOPED_TRACE(::testing::Message()
+                 << "expected generated bevel faces near old corner vertex "
+                 << source_vertex_id);
+    EXPECT_TRUE(checked_face_count > 0);
+  }
 }
 
 void require_outer_patch_support_vertices(
@@ -655,15 +677,15 @@ void require_no_generated_position_poles_near_source_corners(
     float radius,
     float minimum_separation)
 {
-    EXPECT_TRUE(selection.mode == SelectionMode::face);
-    EXPECT_FALSE(selection.faces.empty());
+  EXPECT_TRUE(selection.mode == SelectionMode::Face);
+  EXPECT_FALSE(selection.faces.empty());
 
-    std::set<ElementId> selected_vertices;
-    for (const ElementId face_id : selection.faces) {
-        const Face* face = find_face(document, face_id);
-        EXPECT_TRUE(face != nullptr);
-        selected_vertices.insert(face->vertices.begin(), face->vertices.end());
-    }
+  std::set<ElementId> selected_vertices;
+  for (const ElementId face_id : selection.faces) {
+    const Face *face = find_face(document, face_id);
+    EXPECT_TRUE(face != nullptr);
+    selected_vertices.insert(face->vertices.begin(), face->vertices.end());
+  }
 
     for (const auto& [source_vertex_id, source_position] : source_corner_positions) {
         std::vector<std::pair<ElementId, quader::QVec3>> nearby;
@@ -691,26 +713,30 @@ void require_single_generated_center_ngon_near_source_corners(
     float radius,
     std::size_t side_count)
 {
-    EXPECT_TRUE(selection.mode == SelectionMode::face);
-    EXPECT_FALSE(selection.faces.empty());
+  EXPECT_TRUE(selection.mode == SelectionMode::Face);
+  EXPECT_FALSE(selection.faces.empty());
 
-    for (const auto& [source_vertex_id, source_position] : source_corner_positions) {
-        int matching_center_faces = 0;
-        for (const ElementId face_id : selection.faces) {
-            const Face* face = find_face(document, face_id);
-            EXPECT_TRUE(face != nullptr);
-            if (face->vertices.size() != side_count) {
-                continue;
-            }
-            const quader::QVec3 center = face_centroid(document, *face);
-            if (length(center - source_position) <= radius) {
-                ++matching_center_faces;
-            }
-        }
-
-        SCOPED_TRACE(::testing::Message() << "odd-segment ADJ/PATCH vmesh should emit one unsplit center ngon near old corner vertex " << source_vertex_id);
-        EXPECT_TRUE(matching_center_faces == 1);
+  for (const auto &[source_vertex_id, source_position] :
+       source_corner_positions) {
+    int matching_center_faces = 0;
+    for (const ElementId face_id : selection.faces) {
+      const Face *face = find_face(document, face_id);
+      EXPECT_TRUE(face != nullptr);
+      if (face->vertices.size() != side_count) {
+        continue;
+      }
+      const quader::QVec3 center = face_centroid(document, *face);
+      if (length(center - source_position) <= radius) {
+        ++matching_center_faces;
+      }
     }
+
+    SCOPED_TRACE(::testing::Message()
+                 << "odd-segment ADJ/PATCH vmesh should emit one unsplit "
+                    "center ngon near old corner vertex "
+                 << source_vertex_id);
+    EXPECT_TRUE(matching_center_faces == 1);
+  }
 }
 
 void require_patch_miter_center_rows_continue_source_side_lines(
@@ -719,40 +745,46 @@ void require_patch_miter_center_rows_continue_source_side_lines(
     const std::map<ElementId, quader::QVec3>& source_corner_positions,
     float radius)
 {
-    EXPECT_TRUE(selection.mode == SelectionMode::face);
-    EXPECT_FALSE(selection.faces.empty());
+  EXPECT_TRUE(selection.mode == SelectionMode::Face);
+  EXPECT_FALSE(selection.faces.empty());
 
-    for (const auto& [source_vertex_id, source_position] : source_corner_positions) {
-        int matching_center_faces = 0;
-        for (const ElementId face_id : selection.faces) {
-            const Face* face = find_face(document, face_id);
-            EXPECT_TRUE(face != nullptr);
-            if (face->vertices.size() != 5U) {
-                continue;
-            }
-            const quader::QVec3 center = face_centroid(document, *face);
-            if (length(center - source_position) > radius) {
-                continue;
-            }
+  for (const auto &[source_vertex_id, source_position] :
+       source_corner_positions) {
+    int matching_center_faces = 0;
+    for (const ElementId face_id : selection.faces) {
+      const Face *face = find_face(document, face_id);
+      EXPECT_TRUE(face != nullptr);
+      if (face->vertices.size() != 5U) {
+        continue;
+      }
+      const quader::QVec3 center = face_centroid(document, *face);
+      if (length(center - source_position) > radius) {
+        continue;
+      }
 
-            int continuation_vertices = 0;
-            for (const ElementId vertex_id : face->vertices) {
-                const Vertex* vertex = find_vertex(document, vertex_id);
-                EXPECT_TRUE(vertex != nullptr);
-                if (nearly_equal(vertex->position.y, source_position.y) ||
-                    nearly_equal(vertex->position.z, source_position.z)) {
-                    ++continuation_vertices;
-                }
-            }
-
-            SCOPED_TRACE(::testing::Message() << "PATCH miter center row should continue adjacent side-face rows near old corner vertex " << source_vertex_id);
-            EXPECT_TRUE(continuation_vertices >= 2);
-            ++matching_center_faces;
+      int continuation_vertices = 0;
+      for (const ElementId vertex_id : face->vertices) {
+        const Vertex *vertex = find_vertex(document, vertex_id);
+        EXPECT_TRUE(vertex != nullptr);
+        if (nearly_equal(vertex->position.y, source_position.y) ||
+            nearly_equal(vertex->position.z, source_position.z)) {
+          ++continuation_vertices;
         }
+      }
 
-        SCOPED_TRACE(::testing::Message() << "expected one odd-segment PATCH miter center face near old corner vertex " << source_vertex_id);
-        EXPECT_TRUE(matching_center_faces == 1);
+      SCOPED_TRACE(::testing::Message()
+                   << "PATCH miter center row should continue adjacent "
+                      "side-face rows near old corner vertex "
+                   << source_vertex_id);
+      EXPECT_TRUE(continuation_vertices >= 2);
+      ++matching_center_faces;
     }
+
+    SCOPED_TRACE(::testing::Message() << "expected one odd-segment PATCH miter "
+                                         "center face near old corner vertex "
+                                      << source_vertex_id);
+    EXPECT_TRUE(matching_center_faces == 1);
+  }
 }
 
 } // namespace
@@ -769,7 +801,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, TopEdgeLoopBevelSharesSegmentedCornerC
     EdgeBevelSettings settings;
     settings.width = 0.9F;
     settings.profile = 0.5F;
-    settings.profile_type = BevelProfileType::offset;
+    settings.profile_type = BevelProfileType::Offset;
     settings.segments = 10;
 
     const OperationResult result = bevel_selected_edges(document, selection, settings);
@@ -780,7 +812,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, TopEdgeLoopBevelSharesSegmentedCornerC
     EXPECT_TRUE(std::all_of(document.faces.begin(), document.faces.end(), [](const Face& face) {
         return face.vertices.size() == 4U;
     }));
-    EXPECT_TRUE(selection.mode == SelectionMode::face);
+    EXPECT_TRUE(selection.mode == SelectionMode::Face);
     EXPECT_TRUE(selection.faces.size() == 40U);
     EXPECT_TRUE(std::all_of(selection.faces.begin(), selection.faces.end(), [&document](ElementId face_id) {
         const Face* face = find_face(document, face_id);
@@ -813,13 +845,13 @@ TEST(QdrDocumentOperationBevelEdgesTests, TopEdgeLoopSquareProfileKeepsClosedOut
     EdgeBevelSettings settings;
     settings.width = 0.9F;
     settings.profile = 1.0F;
-    settings.profile_type = BevelProfileType::offset;
+    settings.profile_type = BevelProfileType::Offset;
     settings.segments = 3;
 
     const OperationResult result = bevel_selected_edges(document, selection, settings);
 
     EXPECT_TRUE(result.changed);
-    EXPECT_TRUE(selection.mode == SelectionMode::face);
+    EXPECT_TRUE(selection.mode == SelectionMode::Face);
     EXPECT_FALSE(selection.faces.empty());
     EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), face_has_repeated_vertices));
     EXPECT_TRUE(std::all_of(selection.faces.begin(), selection.faces.end(), [&document](ElementId face_id) {
@@ -836,20 +868,22 @@ TEST(QdrDocumentOperationBevelEdgesTests, TopEdgeLoopSquareProfileKeepsClosedOut
 
 TEST(QdrDocumentOperationBevelEdgesTests, TopPerimeterBevelKeepsUnselectedSpokeEdgesSingle) {
     Document document;
-    constexpr float top_y = 1.0F;
-    constexpr float bottom_y = -1.0F;
-    constexpr float radius = 1.0F;
-    const ElementId center = add_vertex(document, { 0.0F, top_y, 0.0F });
+    constexpr float kTopY = 1.0F;
+    constexpr float kBottomY = -1.0F;
+    constexpr float kRadius = 1.0F;
+    const ElementId center = add_vertex(document, {0.0F, kTopY, 0.0F});
 
     std::array<ElementId, 8> top {};
     std::array<ElementId, 8> bottom {};
     std::array<quader::QVec3, 8> spoke_directions {};
     for (std::size_t index = 0; index < top.size(); ++index) {
         const float angle = (static_cast<float>(index) / static_cast<float>(top.size())) * 6.28318530717958647692F;
-        const quader::QVec3 position { std::cos(angle) * radius, top_y, std::sin(angle) * radius };
+        const quader::QVec3 position{std::cos(angle) * kRadius, kTopY,
+                                     std::sin(angle) * kRadius};
         spoke_directions[index] = { position.x, 0.0F, position.z };
         top[index] = add_vertex(document, position);
-        bottom[index] = add_vertex(document, { position.x, bottom_y, position.z });
+        bottom[index] =
+            add_vertex(document, {position.x, kBottomY, position.z});
     }
 
     for (std::size_t index = 0; index < top.size(); ++index) {
@@ -867,25 +901,25 @@ TEST(QdrDocumentOperationBevelEdgesTests, TopPerimeterBevelKeepsUnselectedSpokeE
     add_oriented_face(document, std::move(bottom_loop), { 0.0F, -1.0F, 0.0F });
 
     Selection selection;
-    selection.mode = SelectionMode::edge;
+    selection.mode = SelectionMode::Edge;
     for (std::size_t index = 0; index < top.size(); ++index) {
         selection.edges.push_back(make_edge(top[index], top[(index + 1U) % top.size()]));
     }
     selection.has_active = true;
-    selection.active_kind = ElementKind::edge;
+    selection.active_kind = ElementKind::Edge;
     selection.active_edge = selection.edges.front();
 
     EdgeBevelSettings settings;
     settings.width = 0.2F;
     settings.profile = 0.5F;
-    settings.profile_type = BevelProfileType::offset;
+    settings.profile_type = BevelProfileType::Offset;
     settings.segments = 3;
 
     const OperationResult result = bevel_selected_edges(document, selection, settings);
 
     SCOPED_TRACE(::testing::Message() << result.message);
     EXPECT_TRUE(result.changed);
-    EXPECT_TRUE(selection.mode == SelectionMode::face);
+    EXPECT_TRUE(selection.mode == SelectionMode::Face);
     EXPECT_FALSE(selection.faces.empty());
     EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), face_has_repeated_vertices));
     EXPECT_TRUE(every_face_compiles_to_triangles(document));
@@ -896,13 +930,18 @@ TEST(QdrDocumentOperationBevelEdgesTests, TopPerimeterBevelKeepsUnselectedSpokeE
     const std::vector<ElementId> center_neighbors = neighbor_vertices_for(document, center);
     EXPECT_TRUE(center_neighbors.size() == top.size());
     for (std::size_t index = 0; index < top.size(); ++index) {
-        const std::vector<ElementId> spoke_neighbors =
-            vertices_near_spoke_direction(document, center_neighbors, { 0.0F, top_y, 0.0F }, spoke_directions[index], 0.05F, radius);
-        for (const ElementId neighbor_id : center_neighbors) {
-            const Vertex* neighbor = find_vertex(document, neighbor_id);
-            EXPECT_TRUE(neighbor != nullptr);
-            SCOPED_TRACE(::testing::Message() << "center neighbor " << neighbor_id << " = (" << neighbor->position.x << ", " << neighbor->position.y << ", " << neighbor->position.z << ")");
-        }
+      const std::vector<ElementId> spoke_neighbors =
+          vertices_near_spoke_direction(
+              document, center_neighbors, {0.0F, kTopY, 0.0F},
+              spoke_directions[index], 0.05F, kRadius);
+      for (const ElementId neighbor_id : center_neighbors) {
+        const Vertex *neighbor = find_vertex(document, neighbor_id);
+        EXPECT_TRUE(neighbor != nullptr);
+        SCOPED_TRACE(::testing::Message()
+                     << "center neighbor " << neighbor_id << " = ("
+                     << neighbor->position.x << ", " << neighbor->position.y
+                     << ", " << neighbor->position.z << ")");
+      }
         SCOPED_TRACE(::testing::Message() << "unselected spoke at source top vertex " << top[index] << " should remain one rebuilt edge");
         EXPECT_TRUE(spoke_neighbors.size() == 1U);
         EXPECT_TRUE(edge_use_count(document, make_edge(center, spoke_neighbors.front())) == 2);
@@ -915,7 +954,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, TwoConnectedEdgeBevelsCloseTheSharedCo
     const ElementId shared_corner = source_face.vertices[1];
 
     Selection selection;
-    selection.mode = SelectionMode::edge;
+    selection.mode = SelectionMode::Edge;
     selection.edges = {
         make_edge(source_face.vertices[0], shared_corner),
         make_edge(shared_corner, source_face.vertices[2]),
@@ -924,13 +963,13 @@ TEST(QdrDocumentOperationBevelEdgesTests, TwoConnectedEdgeBevelsCloseTheSharedCo
     EdgeBevelSettings settings;
     settings.width = 0.9F;
     settings.profile = 0.5F;
-    settings.profile_type = BevelProfileType::offset;
+    settings.profile_type = BevelProfileType::Offset;
     settings.segments = 9;
 
     const OperationResult result = bevel_selected_edges(document, selection, settings);
 
     EXPECT_TRUE(result.changed);
-    EXPECT_TRUE(selection.mode == SelectionMode::face);
+    EXPECT_TRUE(selection.mode == SelectionMode::Face);
     EXPECT_TRUE(selection.faces.size() == 18U);
     EXPECT_TRUE(find_vertex(document, shared_corner) == nullptr);
     EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), face_has_repeated_vertices));
@@ -949,7 +988,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, SingleEdgeBevelPreservesExactProfileEn
         EdgeBevelSettings settings;
         settings.width = 0.2F;
         settings.profile = profile;
-        settings.profile_type = BevelProfileType::offset;
+        settings.profile_type = BevelProfileType::Offset;
         settings.segments = 3;
 
         const OperationResult result = bevel_selected_edges(document, selection, settings);
@@ -985,7 +1024,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, SingleEdgeBevelWidthReachesAvailableFa
     EdgeBevelSettings settings;
     settings.width = 60.0F;
     settings.profile = 0.5F;
-    settings.profile_type = BevelProfileType::offset;
+    settings.profile_type = BevelProfileType::Offset;
     settings.segments = 5;
 
     const OperationResult result = bevel_selected_edges(document, selection, settings);
@@ -1026,14 +1065,14 @@ TEST(QdrDocumentOperationBevelEdgesTests, SingleHalfEdgeBevelClosesSplitCubeEdge
     EdgeBevelSettings settings;
     settings.width = 0.12F;
     settings.profile = 0.5F;
-    settings.profile_type = BevelProfileType::offset;
+    settings.profile_type = BevelProfileType::Offset;
     settings.segments = 3;
 
     const OperationResult result = bevel_selected_edges(document, selection, settings);
 
     SCOPED_TRACE(::testing::Message() << result.message);
     EXPECT_TRUE(result.changed);
-    EXPECT_TRUE(selection.mode == SelectionMode::face);
+    EXPECT_TRUE(selection.mode == SelectionMode::Face);
     EXPECT_FALSE(selection.faces.empty());
     EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), face_has_repeated_vertices));
     EXPECT_TRUE(every_face_compiles_to_triangles(document));
@@ -1073,14 +1112,14 @@ TEST(QdrDocumentOperationBevelEdgesTests, SingleSplitCornerHalfEdgeBevelMatchesB
     EdgeBevelSettings settings;
     settings.width = 0.12F;
     settings.profile = 0.5F;
-    settings.profile_type = BevelProfileType::offset;
+    settings.profile_type = BevelProfileType::Offset;
     settings.segments = 3;
 
     const OperationResult result = bevel_selected_edges(document, selection, settings);
 
     SCOPED_TRACE(::testing::Message() << result.message);
     EXPECT_TRUE(result.changed);
-    EXPECT_TRUE(selection.mode == SelectionMode::face);
+    EXPECT_TRUE(selection.mode == SelectionMode::Face);
     EXPECT_FALSE(selection.faces.empty());
     EXPECT_TRUE(document.vertices.size() == 20U);
     EXPECT_TRUE(document.faces.size() == 16U);
@@ -1109,7 +1148,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, EdgeBevelClampsSegmentCountAtTheDocume
         EdgeBevelSettings settings;
         settings.width = 0.2F;
         settings.profile = 0.5F;
-        settings.profile_type = BevelProfileType::offset;
+        settings.profile_type = BevelProfileType::Offset;
         settings.segments = segments;
 
         const OperationResult result = bevel_selected_edges(document, selection, settings);
@@ -1164,14 +1203,14 @@ TEST(QdrDocumentOperationBevelEdgesTests, ConvexValenceThreeCubeCornersKeepValid
         EdgeBevelSettings settings;
         settings.width = 0.2F;
         settings.profile = expected.profile;
-        settings.profile_type = BevelProfileType::offset;
+        settings.profile_type = BevelProfileType::Offset;
         settings.segments = expected.segments;
 
         const OperationResult result = bevel_selected_edges(document, selection, settings);
 
         SCOPED_TRACE(::testing::Message() << result.message);
         EXPECT_TRUE(result.changed);
-        EXPECT_TRUE(selection.mode == SelectionMode::face);
+        EXPECT_TRUE(selection.mode == SelectionMode::Face);
         EXPECT_FALSE(selection.faces.empty());
         EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), face_has_repeated_vertices));
         EXPECT_TRUE(every_face_compiles_to_triangles(document));
@@ -1241,14 +1280,14 @@ TEST(QdrDocumentOperationBevelEdgesTests, SideExtrusionBevelClosesAndOrientsAllE
         EdgeBevelSettings settings;
         settings.width = 0.12F;
         settings.profile = expected.profile;
-        settings.profile_type = BevelProfileType::offset;
+        settings.profile_type = BevelProfileType::Offset;
         settings.segments = expected.segments;
 
         const OperationResult result = bevel_selected_edges(document, selection, settings);
 
         SCOPED_TRACE(::testing::Message() << result.message);
         EXPECT_TRUE(result.changed);
-        EXPECT_TRUE(selection.mode == SelectionMode::face);
+        EXPECT_TRUE(selection.mode == SelectionMode::Face);
         EXPECT_TRUE(selection.faces.size() >= expected.min_selected_faces);
         EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), face_has_repeated_vertices));
         EXPECT_TRUE(every_face_compiles_to_triangles(document));
@@ -1294,26 +1333,26 @@ TEST(QdrDocumentOperationBevelEdgesTests, ParallelTopOpeningEdgeBevelsCloseDoorw
     Document document = fixture.document;
 
     Selection selection;
-    selection.mode = SelectionMode::edge;
+    selection.mode = SelectionMode::Edge;
     selection.edges = {
         make_edge(fixture.root_corners[1], fixture.extrusion_corners[5]),
         make_edge(fixture.root_corners[2], fixture.extrusion_corners[6]),
     };
     selection.has_active = true;
-    selection.active_kind = ElementKind::edge;
+    selection.active_kind = ElementKind::Edge;
     selection.active_edge = selection.edges.front();
 
     EdgeBevelSettings settings;
     settings.width = 0.12F;
     settings.profile = 0.5F;
-    settings.profile_type = BevelProfileType::offset;
+    settings.profile_type = BevelProfileType::Offset;
     settings.segments = 3;
 
     const OperationResult result = bevel_selected_edges(document, selection, settings);
 
     SCOPED_TRACE(::testing::Message() << result.message);
     EXPECT_TRUE(result.changed);
-    EXPECT_TRUE(selection.mode == SelectionMode::face);
+    EXPECT_TRUE(selection.mode == SelectionMode::Face);
     EXPECT_FALSE(selection.faces.empty());
     EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), face_has_repeated_vertices));
     EXPECT_TRUE(every_face_compiles_to_triangles(document));

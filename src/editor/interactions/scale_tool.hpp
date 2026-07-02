@@ -20,8 +20,8 @@ namespace quader_editor_core {
  */
 struct ScaleToolState {
 	bool active = false;
-	TransformAxis axis = TransformAxis::none;
-	std::vector<int> object_ids;
+        TransformAxis axis = TransformAxis::None;
+        std::vector<int> object_ids;
 	quader::QVec3 pivot;
 	quader::QVec2 screen_pivot;
 	quader::QVec2 start_mouse;
@@ -34,15 +34,15 @@ struct ScaleToolState {
  * Represents a Scale Begin Input value used by the modal modeling interaction layer.
  */
 struct ScaleBeginInput {
-	TransformAxis axis = TransformAxis::none;
-	std::vector<int> object_ids;
-	quader::QVec3 pivot;
-	quader::QVec2 screen_position;
-	bool has_screen_pivot = false;
-	quader::QVec2 screen_pivot;
-	bool has_screen_tip = false;
-	quader::QVec2 screen_tip;
-	ToolBounds3 bounds;
+  TransformAxis axis = TransformAxis::None;
+  std::vector<int> object_ids;
+  quader::QVec3 pivot;
+  quader::QVec2 screen_position;
+  bool has_screen_pivot = false;
+  quader::QVec2 screen_pivot;
+  bool has_screen_tip = false;
+  quader::QVec2 screen_tip;
+  ToolBounds3 bounds;
 };
 
 /**

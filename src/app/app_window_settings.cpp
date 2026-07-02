@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "app/app_window_settings.hpp"
 
-#include "core/q_str.hpp"
+#include "core/qstr.hpp"
 #include "core/user_config_paths.hpp"
 
 #include <algorithm>
@@ -19,24 +19,24 @@
 namespace quader {
 namespace {
 
-std::optional<int> parseIntToken(std::string_view value) {
-    const std::string trimmed = QStr::trimAsciiWhitespace(value);
-    if (trimmed.empty()) {
-        return std::nullopt;
-    }
+std::optional<int> parse_int_token(std::string_view value) {
+  const std::string trimmed = QStr::trim_ascii_whitespace(value);
+  if (trimmed.empty()) {
+    return std::nullopt;
+  }
 
-    int parsed = 0;
-    const char* begin = trimmed.data();
-    const char* end = begin + trimmed.size();
-    const std::from_chars_result result = std::from_chars(begin, end, parsed);
-    if (result.ec != std::errc{} || result.ptr != end) {
-        return std::nullopt;
-    }
-    return parsed;
+  int parsed = 0;
+  const char *begin = trimmed.data();
+  const char *end = begin + trimmed.size();
+  const std::from_chars_result result = std::from_chars(begin, end, parsed);
+  if (result.ec != std::errc{} || result.ptr != end) {
+    return std::nullopt;
+  }
+  return parsed;
 }
 
-std::optional<bool> parseBoolToken(std::string_view value) {
-    return QStr::parseBoolToken(value);
+std::optional<bool> parse_bool_token(std::string_view value) {
+  return QStr::parse_bool_token(value);
 }
 
 } // namespace
@@ -52,56 +52,58 @@ AppWindowSettings AppWindowSettings::load(const std::filesystem::path& path) {
         return settings;
     }
 
-    std::optional<int> normalX;
-    std::optional<int> normalY;
-    std::optional<int> normalWidth;
-    std::optional<int> normalHeight;
+    std::optional<int> normal_x;
+    std::optional<int> normal_y;
+    std::optional<int> normal_width;
+    std::optional<int> normal_height;
     bool maximized = false;
 
     std::string line;
     while (std::getline(file, line)) {
-        line = QStr::trimAsciiWhitespace(line);
-        if (line.empty() || line.front() == '#' || line.front() == '[') {
-            continue;
-        }
+      line = QStr::trim_ascii_whitespace(line);
+      if (line.empty() || line.front() == '#' || line.front() == '[') {
+        continue;
+      }
 
-        const std::optional<QStrSplitOnce> split = QStr::splitOnce(line, '=');
-        if (!split) {
-            continue;
-        }
+      const std::optional<QStrSplitOnce> split = QStr::split_once(line, '=');
+      if (!split) {
+        continue;
+      }
 
-        const std::string key = QStr::trimAsciiWhitespace(split->before);
-        const std::string value = QStr::trimAsciiWhitespace(split->after);
-        if (key == "NormalX") {
-            normalX = parseIntToken(value);
-        } else if (key == "NormalY") {
-            normalY = parseIntToken(value);
-        } else if (key == "NormalWidth") {
-            normalWidth = parseIntToken(value);
-        } else if (key == "NormalHeight") {
-            normalHeight = parseIntToken(value);
-        } else if (key == "Maximized") {
-            maximized = parseBoolToken(value).value_or(maximized);
-        }
+      const std::string key = QStr::trim_ascii_whitespace(split->before);
+      const std::string value = QStr::trim_ascii_whitespace(split->after);
+      if (key == "NormalX") {
+        normal_x = parse_int_token(value);
+      } else if (key == "NormalY") {
+        normal_y = parse_int_token(value);
+      } else if (key == "NormalWidth") {
+        normal_width = parse_int_token(value);
+      } else if (key == "NormalHeight") {
+        normal_height = parse_int_token(value);
+      } else if (key == "Maximized") {
+        maximized = parse_bool_token(value).value_or(maximized);
+      }
     }
 
-    if (normalX && normalY && normalWidth && normalHeight) {
-        settings.setPlacement({
-                .normalFrame = {
-                        .x = *normalX,
-                        .y = *normalY,
-                        .width = *normalWidth,
-                        .height = *normalHeight,
-                },
-                .maximized = maximized,
-        });
+    if (normal_x && normal_y && normal_width && normal_height) {
+      settings.set_placement({
+          .normal_frame =
+              {
+                  .x = *normal_x,
+                  .y = *normal_y,
+                  .width = *normal_width,
+                  .height = *normal_height,
+              },
+          .maximized = maximized,
+      });
     }
 
     return settings;
 }
 
-std::filesystem::path AppWindowSettings::resolvePath(const std::filesystem::path& executableDir) {
-    return quaderUserConfigDirectory(executableDir) / "window_settings.ini";
+std::filesystem::path
+AppWindowSettings::resolve_path(const std::filesystem::path &executable_dir) {
+  return quader_user_config_directory(executable_dir) / "window_settings.ini";
 }
 
 bool AppWindowSettings::save(const std::filesystem::path& path) const {
@@ -115,19 +117,22 @@ bool AppWindowSettings::save(const std::filesystem::path& path) const {
 
     file << "[Window]\n";
     if (placement_) {
-        file << "NormalX=" << placement_->normalFrame.x << '\n';
-        file << "NormalY=" << placement_->normalFrame.y << '\n';
-        file << "NormalWidth=" << placement_->normalFrame.width << '\n';
-        file << "NormalHeight=" << placement_->normalFrame.height << '\n';
-        file << "Maximized=" << (placement_->maximized ? "true" : "false") << '\n';
+      file << "NormalX=" << placement_->normal_frame.x << '\n';
+      file << "NormalY=" << placement_->normal_frame.y << '\n';
+      file << "NormalWidth=" << placement_->normal_frame.width << '\n';
+      file << "NormalHeight=" << placement_->normal_frame.height << '\n';
+      file << "Maximized=" << (placement_->maximized ? "true" : "false")
+           << '\n';
     }
     return true;
 }
 
-void AppWindowSettings::setPlacement(PlatformWindowPlacement placement) {
-    placement.normalFrame.width = std::max(kPlatformWindowMinimumWidth, placement.normalFrame.width);
-    placement.normalFrame.height = std::max(kPlatformWindowMinimumHeight, placement.normalFrame.height);
-    placement_ = placement;
+void AppWindowSettings::set_placement(PlatformWindowPlacement placement) {
+  placement.normal_frame.width =
+      std::max(kPlatformWindowMinimumWidth, placement.normal_frame.width);
+  placement.normal_frame.height =
+      std::max(kPlatformWindowMinimumHeight, placement.normal_frame.height);
+  placement_ = placement;
 }
 
 } // namespace quader

@@ -30,7 +30,7 @@ enum class InspectorTransformEditKind {
  */
 struct InspectorTransformEditState {
     InspectorTransformEditKind kind = InspectorTransformEditKind::Position;
-    EntityId primary = InvalidEntityId;
+    EntityId primary = kInvalidEntityId;
     std::vector<EntityId> selection;
     std::array<float, 3> values{};
 };
@@ -43,13 +43,13 @@ public:
     UIPanelId id() const override { return UIPanelId::Inspector; }
 
 private:
-    float minimumWidth(const UIContext& context) const override;
-    ImVec2 panelWindowPadding(const UIContext& context) const override;
-    ImGuiWindowFlags windowFlags(const UIContext& context) const override;
-    void drawContent(UIContext& context) override;
+  float minimum_width(const UIContext &context) const override;
+  ImVec2 panel_window_padding(const UIContext &context) const override;
+  ImGuiWindowFlags window_flags(const UIContext &context) const override;
+  void draw_content(UIContext &context) override;
 
-    std::optional<InspectorTransformEditState> activeTransformEdit_;
-    UIContinuousEditTracker activeContinuousEdit_;
+  std::optional<InspectorTransformEditState> active_transform_edit_;
+  UIContinuousEditTracker active_continuous_edit_;
 };
 
 } // namespace quader

@@ -37,8 +37,9 @@ public:
 
     void initialize(filament::Engine& engine, filament::Material& material, TextureRegistry& textures);
     void shutdown();
-    void releaseFrameResources();
-    void prepare(ImDrawData* drawData, std::uint32_t framebufferWidth, std::uint32_t framebufferHeight);
+    void release_frame_resources();
+    void prepare(ImDrawData *draw_data, std::uint32_t framebuffer_width,
+                 std::uint32_t framebuffer_height);
     void render(filament::Renderer& renderer);
 
 private:
@@ -47,39 +48,38 @@ private:
      */
     struct DrawResource {
         utils::Entity entity;
-        filament::VertexBuffer* vertexBuffer = nullptr;
-        filament::IndexBuffer* indexBuffer = nullptr;
-        std::vector<filament::MaterialInstance*> materialInstances;
-        std::uint32_t vertexCapacity = 0;
-        std::uint32_t indexCapacity = 0;
-        std::size_t primitiveCapacity = 0;
+        filament::VertexBuffer *vertex_buffer = nullptr;
+        filament::IndexBuffer *index_buffer = nullptr;
+        std::vector<filament::MaterialInstance *> material_instances;
+        std::uint32_t vertex_capacity = 0;
+        std::uint32_t index_capacity = 0;
+        std::size_t primitive_capacity = 0;
     };
 
-    void createFontTexture();
-    DrawResource& ensureDrawResource(
-            std::size_t slot,
-            std::uint32_t vertexCount,
-            std::uint32_t indexCount,
-            std::size_t primitiveCount,
-            std::uint32_t framebufferWidth,
-            std::uint32_t framebufferHeight);
-    void destroyDrawResource(DrawResource& resource);
-    void destroyAllFrameResources();
-    void hideUnusedFrameResources(std::size_t firstUnusedSlot);
+    void create_font_texture();
+    DrawResource &ensure_draw_resource(std::size_t slot,
+                                       std::uint32_t vertex_count,
+                                       std::uint32_t index_count,
+                                       std::size_t primitive_count,
+                                       std::uint32_t framebuffer_width,
+                                       std::uint32_t framebuffer_height);
+    void destroy_draw_resource(DrawResource &resource);
+    void destroy_all_frame_resources();
+    void hide_unused_frame_resources(std::size_t first_unused_slot);
 
     filament::Engine* engine_ = nullptr;
     filament::Material* material_ = nullptr;
     TextureRegistry* textures_ = nullptr;
-    filament::Scene* clearScene_ = nullptr;
-    filament::View* clearView_ = nullptr;
-    filament::Skybox* clearSkybox_ = nullptr;
+    filament::Scene *clear_scene_ = nullptr;
+    filament::View *clear_view_ = nullptr;
+    filament::Skybox *clear_skybox_ = nullptr;
     filament::Scene* scene_ = nullptr;
     filament::View* view_ = nullptr;
     filament::Camera* camera_ = nullptr;
-    utils::Entity cameraEntity_;
-    filament::Texture* fontTexture_ = nullptr;
-    ImTextureID fontTextureId_ = ImTextureID_Invalid;
-    std::vector<DrawResource> frameResources_;
+    utils::Entity camera_entity_;
+    filament::Texture *font_texture_ = nullptr;
+    ImTextureID font_texture_id_ = ImTextureID_Invalid;
+    std::vector<DrawResource> frame_resources_;
 };
 
 } // namespace quader

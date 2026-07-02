@@ -25,22 +25,23 @@ class QuaderUIApi final {
 public:
     QuaderUIApi();
 
-    void setRuntimeHooks(QuaderUIRuntimeHooks hooks);
+    void set_runtime_hooks(QuaderUIRuntimeHooks hooks);
 
-    QuaderApiVoidResult showPanel(std::string_view panel);
-    QuaderApiVoidResult hidePanel(std::string_view panel);
-    QuaderApiVoidResult focusPanel(std::string_view panel);
-    [[nodiscard]] bool panelVisible(std::string_view panel) const;
+    QuaderApiVoidResult show_panel(std::string_view panel);
+    QuaderApiVoidResult hide_panel(std::string_view panel);
+    QuaderApiVoidResult focus_panel(std::string_view panel);
+    [[nodiscard]] bool panel_visible(std::string_view panel) const;
     QuaderApiVoidResult notify(QuaderNotification notification);
     [[nodiscard]] QuaderConsoleApi& console();
     [[nodiscard]] const QuaderConsoleApi& console() const;
 
 private:
-    [[nodiscard]] QuaderApiVoidResult setPanelVisible(std::string_view panel, bool visible);
-    [[nodiscard]] QuaderApiVoidResult unavailable(std::string message) const;
+  [[nodiscard]] QuaderApiVoidResult set_panel_visible(std::string_view panel,
+                                                      bool visible);
+  [[nodiscard]] QuaderApiVoidResult unavailable(std::string message) const;
 
-    QuaderUIRuntimeHooks hooks_;
-    QuaderConsoleApi console_;
+  QuaderUIRuntimeHooks hooks_;
+  QuaderConsoleApi console_;
 };
 
 } // namespace quader

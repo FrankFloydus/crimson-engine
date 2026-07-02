@@ -18,8 +18,8 @@ TEST(QdrDocumentOperationInsetElementsTests, InsetSelectedEdgeElementsTransforms
 	const OperationResult result = inset_selected_elements(fixture.document, selection, transform, {});
 
 	EXPECT_TRUE(result.changed);
-	EXPECT_TRUE(selection.mode == SelectionMode::edge);
-	EXPECT_TRUE(selection.edges.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Edge);
+        EXPECT_TRUE(selection.edges.size() == 1U);
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }

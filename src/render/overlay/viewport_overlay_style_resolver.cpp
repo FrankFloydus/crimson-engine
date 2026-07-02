@@ -12,8 +12,10 @@
 namespace quader {
 namespace {
 
-bool selectionContextMatches(ViewportOverlaySelectionContext overrideMode, ViewportOverlaySelectionContext activeMode) {
-    return overrideMode == ViewportOverlaySelectionContext::Any || overrideMode == activeMode;
+bool selection_context_matches(ViewportOverlaySelectionContext override_mode,
+                               ViewportOverlaySelectionContext active_mode) {
+  return override_mode == ViewportOverlaySelectionContext::Any ||
+         override_mode == active_mode;
 }
 
 } // namespace
@@ -35,275 +37,292 @@ void ViewportOverlayStyleResolver::apply(
         const ViewportSettings& settings,
         const ViewportOverlayStyleContext& context) {
     for (ViewportOverlayTriangle& triangle : frame.triangles) {
-        const ViewportOverlayStyleRole role = roleFor(triangle);
-        triangle.color = colorFor(role, triangle.color, settings);
-        if (const ViewportOverlayStyleOverride* override = overrideFor(role, context); override != nullptr) {
-            if (override->color.has_value()) {
-                triangle.color = *override->color;
-            }
+      const ViewportOverlayStyleRole role = role_for(triangle);
+      triangle.color = color_for(role, triangle.color, settings);
+      if (const ViewportOverlayStyleOverride *override =
+              override_for(role, context);
+          override != nullptr) {
+        if (override->color.has_value()) {
+          triangle.color = *override->color;
         }
+      }
     }
 
     for (ViewportOverlayLine& line : frame.lines) {
-        const ViewportOverlayStyleRole role = roleFor(line);
-        line.color = colorFor(role, line.color, settings);
-        line.widthPixels = lineWidthFor(role, line.layer, line.widthPixels, settings);
-        if (const ViewportOverlayStyleOverride* override = overrideFor(role, context); override != nullptr) {
-            if (override->color.has_value()) {
-                line.color = *override->color;
-            }
-            if (override->lineWidthPixels.has_value()) {
-                line.widthPixels = *override->lineWidthPixels;
-            }
+      const ViewportOverlayStyleRole role = role_for(line);
+      line.color = color_for(role, line.color, settings);
+      line.width_pixels =
+          line_width_for(role, line.layer, line.width_pixels, settings);
+      if (const ViewportOverlayStyleOverride *override =
+              override_for(role, context);
+          override != nullptr) {
+        if (override->color.has_value()) {
+          line.color = *override->color;
         }
+        if (override->line_width_pixels.has_value()) {
+          line.width_pixels = *override->line_width_pixels;
+        }
+      }
     }
 
     for (ViewportOverlayPoint& point : frame.points) {
-        const ViewportOverlayStyleRole role = roleFor(point);
-        point.color = colorFor(role, point.color, settings);
-        point.sizePixels = pointSizeFor(role, point.sizePixels, settings);
-        point.outlineGrowthPixels = pointOutlineGrowthFor(role, point.outlineGrowthPixels, settings);
-        if (const ViewportOverlayStyleOverride* override = overrideFor(role, context); override != nullptr) {
-            if (override->color.has_value()) {
-                point.color = *override->color;
-            }
-            if (override->pointSizePixels.has_value()) {
-                point.sizePixels = *override->pointSizePixels;
-            }
-            if (override->outlineGrowthPixels.has_value()) {
-                point.outlineGrowthPixels = *override->outlineGrowthPixels;
-            }
+      const ViewportOverlayStyleRole role = role_for(point);
+      point.color = color_for(role, point.color, settings);
+      point.size_pixels = point_size_for(role, point.size_pixels, settings);
+      point.outline_growth_pixels =
+          point_outline_growth_for(role, point.outline_growth_pixels, settings);
+      if (const ViewportOverlayStyleOverride *override =
+              override_for(role, context);
+          override != nullptr) {
+        if (override->color.has_value()) {
+          point.color = *override->color;
         }
-    }
-}
-
-ViewportOverlayStyleRole ViewportOverlayStyleResolver::roleFor(const ViewportOverlayTriangle& triangle) {
-    if (triangle.styleRole != ViewportOverlayStyleRole::LayerDefault) {
-        return triangle.styleRole;
-    }
-    switch (triangle.layer) {
-    case ViewportOverlayLayer::SelectedVisibleFace:
-    case ViewportOverlayLayer::SelectedXrayFace:
-    case ViewportOverlayLayer::SelectedFaceMask:
-        return ViewportOverlayStyleRole::SelectionFace;
-    case ViewportOverlayLayer::HoverFace:
-        return ViewportOverlayStyleRole::HoverFace;
-    case ViewportOverlayLayer::ToolPlane:
-        return ViewportOverlayStyleRole::ToolPlaneFill;
-    case ViewportOverlayLayer::ToolPreviewFill:
-        return ViewportOverlayStyleRole::ToolPreviewFill;
-    default:
-        return ViewportOverlayStyleRole::ExplicitColor;
-    }
-}
-
-ViewportOverlayStyleRole ViewportOverlayStyleResolver::roleFor(const ViewportOverlayLine& line) {
-    if (line.styleRole != ViewportOverlayStyleRole::LayerDefault) {
-        return line.styleRole;
-    }
-    switch (line.layer) {
-    case ViewportOverlayLayer::SourceWire:
-        return ViewportOverlayStyleRole::SourceWire;
-    case ViewportOverlayLayer::SelectedFaceEdge:
-    case ViewportOverlayLayer::SelectedEdge:
-        return ViewportOverlayStyleRole::SelectionWire;
-    case ViewportOverlayLayer::HoverFaceEdge:
-    case ViewportOverlayLayer::HoverEdge:
-        return ViewportOverlayStyleRole::HoverWire;
-    case ViewportOverlayLayer::OpenEdge:
-        return ViewportOverlayStyleRole::OpenEdge;
-    case ViewportOverlayLayer::DiagnosticEdge:
-        return ViewportOverlayStyleRole::DiagnosticEdge;
-    case ViewportOverlayLayer::GroupBounds:
-        return ViewportOverlayStyleRole::GroupBounds;
-    case ViewportOverlayLayer::WireframeBase:
-    case ViewportOverlayLayer::WireframeXray:
-        return ViewportOverlayStyleRole::WireframeBase;
-    case ViewportOverlayLayer::ToolPlaneLine:
-        return ViewportOverlayStyleRole::ToolPlaneLine;
-    case ViewportOverlayLayer::ToolPreviewLine:
-        return ViewportOverlayStyleRole::ToolPreviewLine;
-    case ViewportOverlayLayer::ToolPreviewSeam:
-        return ViewportOverlayStyleRole::ToolPreviewSeam;
-    case ViewportOverlayLayer::ToolHandle:
-        return ViewportOverlayStyleRole::ToolHandle;
-    default:
-        return ViewportOverlayStyleRole::ExplicitColor;
-    }
-}
-
-ViewportOverlayStyleRole ViewportOverlayStyleResolver::roleFor(const ViewportOverlayPoint& point) {
-    if (point.styleRole != ViewportOverlayStyleRole::LayerDefault) {
-        return point.styleRole;
-    }
-    switch (point.layer) {
-    case ViewportOverlayLayer::UnselectedVertex:
-        return ViewportOverlayStyleRole::Vertex;
-    case ViewportOverlayLayer::SelectedVertex:
-        return ViewportOverlayStyleRole::SelectedVertex;
-    case ViewportOverlayLayer::HoverVertex:
-        return ViewportOverlayStyleRole::HoverVertex;
-    case ViewportOverlayLayer::SnapTargetVertex:
-        return ViewportOverlayStyleRole::SnapTargetVertex;
-    case ViewportOverlayLayer::ToolHandle:
-        return ViewportOverlayStyleRole::ToolHandle;
-    default:
-        return ViewportOverlayStyleRole::ExplicitColor;
-    }
-}
-
-const ViewportOverlayStyleOverride* ViewportOverlayStyleResolver::overrideFor(
-        ViewportOverlayStyleRole role,
-        const ViewportOverlayStyleContext& context) {
-    const ViewportOverlayStyleOverride* fallback = nullptr;
-    for (auto it = context.overrides.rbegin(); it != context.overrides.rend(); ++it) {
-        if (it->role != role || !selectionContextMatches(it->selectionMode, context.selectionMode)) {
-            continue;
+        if (override->point_size_pixels.has_value()) {
+          point.size_pixels = *override->point_size_pixels;
         }
-        if (it->selectionMode == context.selectionMode) {
-            return &*it;
+        if (override->outline_growth_pixels.has_value()) {
+          point.outline_growth_pixels = *override->outline_growth_pixels;
         }
-        if (fallback == nullptr) {
-            fallback = &*it;
-        }
-    }
-    return fallback;
-}
-
-std::uint32_t ViewportOverlayStyleResolver::colorFor(
-        ViewportOverlayStyleRole role,
-        std::uint32_t authoredColor,
-        const ViewportSettings& settings) {
-    switch (role) {
-    case ViewportOverlayStyleRole::SelectionFace:
-        return settingColor(settings, ViewportColorSettingId::SelectionFace);
-    case ViewportOverlayStyleRole::SelectionWire:
-    case ViewportOverlayStyleRole::SelectedSourceWire:
-        return settingColor(settings, ViewportColorSettingId::SelectionWire);
-    case ViewportOverlayStyleRole::SourceWire:
-        return settingColor(settings, ViewportColorSettingId::SourceWire);
-    case ViewportOverlayStyleRole::OpenEdge:
-        return settingColor(settings, ViewportColorSettingId::OpenEdge);
-    case ViewportOverlayStyleRole::DiagnosticEdge:
-        return settingColor(settings, ViewportColorSettingId::DiagnosticEdge);
-    case ViewportOverlayStyleRole::HoverFace:
-        return settingColor(settings, ViewportColorSettingId::HoverFace);
-    case ViewportOverlayStyleRole::HoverWire:
-        return settingColor(settings, ViewportColorSettingId::HoverWire);
-    case ViewportOverlayStyleRole::RemoveSelectionFace:
-        return settingColor(settings, ViewportColorSettingId::RemoveSelectionFace);
-    case ViewportOverlayStyleRole::RemoveSelectionWire:
-        return settingColor(settings, ViewportColorSettingId::RemoveSelectionWire);
-    case ViewportOverlayStyleRole::Vertex:
-        return settingColor(settings, ViewportColorSettingId::Vertex);
-    case ViewportOverlayStyleRole::SelectedVertex:
-        return settingColor(settings, ViewportColorSettingId::SelectedVertex);
-    case ViewportOverlayStyleRole::HoverVertex:
-        return settingColor(settings, ViewportColorSettingId::HoverVertex);
-    case ViewportOverlayStyleRole::RemoveSelectionVertex:
-        return settingColor(settings, ViewportColorSettingId::RemoveSelectionVertex);
-    case ViewportOverlayStyleRole::GroupBounds:
-        return kOverlayGroupBoundsColor;
-    case ViewportOverlayStyleRole::ToolPlaneFill:
-        return kOverlayToolPlaneColor;
-    case ViewportOverlayStyleRole::ToolPlaneLine:
-        return kOverlayToolPlaneLineColor;
-    case ViewportOverlayStyleRole::ToolHandle:
-        return kOverlayToolHandleColor;
-    case ViewportOverlayStyleRole::CutPreviewKeepFill:
-        return kOverlayCutPreviewKeepFillColor;
-    case ViewportOverlayStyleRole::CutPreviewKeepBothDiscardFill:
-        return kOverlayCutPreviewKeepBothDiscardFillColor;
-    case ViewportOverlayStyleRole::CutPreviewDiscardFill:
-        return kOverlayCutPreviewDiscardFillColor;
-    case ViewportOverlayStyleRole::CutPreviewKeepBothOutline:
-        return kOverlayCutPreviewKeepBothOutlineColor;
-    case ViewportOverlayStyleRole::CutPreviewDiscardOutline:
-        return kOverlayCutPreviewDiscardOutlineColor;
-    case ViewportOverlayStyleRole::CutPreviewSeam:
-        return kOverlayCutPreviewSeamColor;
-    case ViewportOverlayStyleRole::LayerDefault:
-    case ViewportOverlayStyleRole::ExplicitColor:
-    case ViewportOverlayStyleRole::SnapTargetVertex:
-    case ViewportOverlayStyleRole::WireframeBase:
-    case ViewportOverlayStyleRole::ToolPreviewFill:
-    case ViewportOverlayStyleRole::ToolPreviewLine:
-    case ViewportOverlayStyleRole::ToolPreviewSeam:
-        return authoredColor;
-    }
-    return authoredColor;
-}
-
-float ViewportOverlayStyleResolver::lineWidthFor(
-        ViewportOverlayStyleRole role,
-        ViewportOverlayLayer layer,
-        float authoredWidthPixels,
-        const ViewportSettings& settings) {
-    switch (role) {
-    case ViewportOverlayStyleRole::SourceWire:
-        return settings.floatValue(ViewportFloatSettingId::SourceWireLineSize);
-    case ViewportOverlayStyleRole::SelectedSourceWire:
-        return settings.floatValue(ViewportFloatSettingId::SelectionFaceWireLineSize);
-    case ViewportOverlayStyleRole::SelectionWire:
-        return layer == ViewportOverlayLayer::SelectedFaceEdge
-                ? settings.floatValue(ViewportFloatSettingId::SelectionFaceWireLineSize)
-                : settings.floatValue(ViewportFloatSettingId::SelectionEdgeLineSize);
-    case ViewportOverlayStyleRole::HoverWire:
-    case ViewportOverlayStyleRole::RemoveSelectionWire:
-        return settings.floatValue(ViewportFloatSettingId::HoverWireLineSize);
-    case ViewportOverlayStyleRole::OpenEdge:
-        return settings.floatValue(ViewportFloatSettingId::OpenEdgeLineSize);
-    case ViewportOverlayStyleRole::DiagnosticEdge:
-        return settings.floatValue(ViewportFloatSettingId::DiagnosticEdgeLineSize);
-    default:
-        return authoredWidthPixels;
+      }
     }
 }
 
-float ViewportOverlayStyleResolver::pointSizeFor(
-        ViewportOverlayStyleRole role,
-        float authoredSizePixels,
-        const ViewportSettings& settings) {
-    const float vertexSize = settings.floatValue(ViewportFloatSettingId::VertexSize);
-    switch (role) {
-    case ViewportOverlayStyleRole::Vertex:
-        return vertexSize;
-    case ViewportOverlayStyleRole::SelectedVertex:
-        return vertexSize + settings.floatValue(ViewportFloatSettingId::SelectedVertexGrowth);
-    case ViewportOverlayStyleRole::HoverVertex:
-    case ViewportOverlayStyleRole::RemoveSelectionVertex:
-        return vertexSize + settings.floatValue(ViewportFloatSettingId::HoverVertexGrowth);
-    default:
-        return authoredSizePixels;
+ViewportOverlayStyleRole ViewportOverlayStyleResolver::role_for(
+    const ViewportOverlayTriangle &triangle) {
+  if (triangle.style_role != ViewportOverlayStyleRole::LayerDefault) {
+    return triangle.style_role;
+  }
+  switch (triangle.layer) {
+  case ViewportOverlayLayer::SelectedVisibleFace:
+  case ViewportOverlayLayer::SelectedXrayFace:
+  case ViewportOverlayLayer::SelectedFaceMask:
+    return ViewportOverlayStyleRole::SelectionFace;
+  case ViewportOverlayLayer::HoverFace:
+    return ViewportOverlayStyleRole::HoverFace;
+  case ViewportOverlayLayer::ToolPlane:
+    return ViewportOverlayStyleRole::ToolPlaneFill;
+  case ViewportOverlayLayer::ToolPreviewFill:
+    return ViewportOverlayStyleRole::ToolPreviewFill;
+  default:
+    return ViewportOverlayStyleRole::ExplicitColor;
+  }
+}
+
+ViewportOverlayStyleRole
+ViewportOverlayStyleResolver::role_for(const ViewportOverlayLine &line) {
+  if (line.style_role != ViewportOverlayStyleRole::LayerDefault) {
+    return line.style_role;
+  }
+  switch (line.layer) {
+  case ViewportOverlayLayer::SourceWire:
+    return ViewportOverlayStyleRole::SourceWire;
+  case ViewportOverlayLayer::SelectedFaceEdge:
+  case ViewportOverlayLayer::SelectedEdge:
+    return ViewportOverlayStyleRole::SelectionWire;
+  case ViewportOverlayLayer::HoverFaceEdge:
+  case ViewportOverlayLayer::HoverEdge:
+    return ViewportOverlayStyleRole::HoverWire;
+  case ViewportOverlayLayer::OpenEdge:
+    return ViewportOverlayStyleRole::OpenEdge;
+  case ViewportOverlayLayer::DiagnosticEdge:
+    return ViewportOverlayStyleRole::DiagnosticEdge;
+  case ViewportOverlayLayer::GroupBounds:
+    return ViewportOverlayStyleRole::GroupBounds;
+  case ViewportOverlayLayer::WireframeBase:
+  case ViewportOverlayLayer::WireframeXray:
+    return ViewportOverlayStyleRole::WireframeBase;
+  case ViewportOverlayLayer::ToolPlaneLine:
+    return ViewportOverlayStyleRole::ToolPlaneLine;
+  case ViewportOverlayLayer::ToolPreviewLine:
+    return ViewportOverlayStyleRole::ToolPreviewLine;
+  case ViewportOverlayLayer::ToolPreviewSeam:
+    return ViewportOverlayStyleRole::ToolPreviewSeam;
+  case ViewportOverlayLayer::ToolHandle:
+    return ViewportOverlayStyleRole::ToolHandle;
+  default:
+    return ViewportOverlayStyleRole::ExplicitColor;
+  }
+}
+
+ViewportOverlayStyleRole
+ViewportOverlayStyleResolver::role_for(const ViewportOverlayPoint &point) {
+  if (point.style_role != ViewportOverlayStyleRole::LayerDefault) {
+    return point.style_role;
+  }
+  switch (point.layer) {
+  case ViewportOverlayLayer::UnselectedVertex:
+    return ViewportOverlayStyleRole::Vertex;
+  case ViewportOverlayLayer::SelectedVertex:
+    return ViewportOverlayStyleRole::SelectedVertex;
+  case ViewportOverlayLayer::HoverVertex:
+    return ViewportOverlayStyleRole::HoverVertex;
+  case ViewportOverlayLayer::SnapTargetVertex:
+    return ViewportOverlayStyleRole::SnapTargetVertex;
+  case ViewportOverlayLayer::ToolHandle:
+    return ViewportOverlayStyleRole::ToolHandle;
+  default:
+    return ViewportOverlayStyleRole::ExplicitColor;
+  }
+}
+
+const ViewportOverlayStyleOverride *ViewportOverlayStyleResolver::override_for(
+    ViewportOverlayStyleRole role, const ViewportOverlayStyleContext &context) {
+  const ViewportOverlayStyleOverride *fallback = nullptr;
+  for (auto it = context.overrides.rbegin(); it != context.overrides.rend();
+       ++it) {
+    if (it->role != role || !selection_context_matches(
+                                it->selection_mode, context.selection_mode)) {
+      continue;
     }
-}
-
-std::optional<float> ViewportOverlayStyleResolver::pointOutlineGrowthFor(
-        ViewportOverlayStyleRole role,
-        std::optional<float> authoredOutlineGrowthPixels,
-        const ViewportSettings& settings) {
-    switch (role) {
-    case ViewportOverlayStyleRole::SelectedVertex:
-    case ViewportOverlayStyleRole::HoverVertex:
-    case ViewportOverlayStyleRole::RemoveSelectionVertex:
-    case ViewportOverlayStyleRole::SnapTargetVertex:
-        return settings.floatValue(ViewportFloatSettingId::VertexOutlineSize);
-    default:
-        return authoredOutlineGrowthPixels;
+    if (it->selection_mode == context.selection_mode) {
+      return &*it;
     }
+    if (fallback == nullptr) {
+      fallback = &*it;
+    }
+  }
+  return fallback;
 }
 
-std::uint32_t ViewportOverlayStyleResolver::settingColorRgba(ViewportSettingColor color) {
-    return static_cast<std::uint32_t>(normalizedToByte(color.r)) |
-            (static_cast<std::uint32_t>(normalizedToByte(color.g)) << 8u) |
-            (static_cast<std::uint32_t>(normalizedToByte(color.b)) << 16u) |
-            (static_cast<std::uint32_t>(normalizedToByte(color.a)) << 24u);
+std::uint32_t
+ViewportOverlayStyleResolver::color_for(ViewportOverlayStyleRole role,
+                                        std::uint32_t authored_color,
+                                        const ViewportSettings &settings) {
+  switch (role) {
+  case ViewportOverlayStyleRole::SelectionFace:
+    return setting_color(settings, ViewportColorSettingId::SelectionFace);
+  case ViewportOverlayStyleRole::SelectionWire:
+  case ViewportOverlayStyleRole::SelectedSourceWire:
+    return setting_color(settings, ViewportColorSettingId::SelectionWire);
+  case ViewportOverlayStyleRole::SourceWire:
+    return setting_color(settings, ViewportColorSettingId::SourceWire);
+  case ViewportOverlayStyleRole::OpenEdge:
+    return setting_color(settings, ViewportColorSettingId::OpenEdge);
+  case ViewportOverlayStyleRole::DiagnosticEdge:
+    return setting_color(settings, ViewportColorSettingId::DiagnosticEdge);
+  case ViewportOverlayStyleRole::HoverFace:
+    return setting_color(settings, ViewportColorSettingId::HoverFace);
+  case ViewportOverlayStyleRole::HoverWire:
+    return setting_color(settings, ViewportColorSettingId::HoverWire);
+  case ViewportOverlayStyleRole::RemoveSelectionFace:
+    return setting_color(settings, ViewportColorSettingId::RemoveSelectionFace);
+  case ViewportOverlayStyleRole::RemoveSelectionWire:
+    return setting_color(settings, ViewportColorSettingId::RemoveSelectionWire);
+  case ViewportOverlayStyleRole::Vertex:
+    return setting_color(settings, ViewportColorSettingId::Vertex);
+  case ViewportOverlayStyleRole::SelectedVertex:
+    return setting_color(settings, ViewportColorSettingId::SelectedVertex);
+  case ViewportOverlayStyleRole::HoverVertex:
+    return setting_color(settings, ViewportColorSettingId::HoverVertex);
+  case ViewportOverlayStyleRole::RemoveSelectionVertex:
+    return setting_color(settings,
+                         ViewportColorSettingId::RemoveSelectionVertex);
+  case ViewportOverlayStyleRole::GroupBounds:
+    return kOverlayGroupBoundsColor;
+  case ViewportOverlayStyleRole::ToolPlaneFill:
+    return kOverlayToolPlaneColor;
+  case ViewportOverlayStyleRole::ToolPlaneLine:
+    return kOverlayToolPlaneLineColor;
+  case ViewportOverlayStyleRole::ToolHandle:
+    return kOverlayToolHandleColor;
+  case ViewportOverlayStyleRole::CutPreviewKeepFill:
+    return kOverlayCutPreviewKeepFillColor;
+  case ViewportOverlayStyleRole::CutPreviewKeepBothDiscardFill:
+    return kOverlayCutPreviewKeepBothDiscardFillColor;
+  case ViewportOverlayStyleRole::CutPreviewDiscardFill:
+    return kOverlayCutPreviewDiscardFillColor;
+  case ViewportOverlayStyleRole::CutPreviewKeepBothOutline:
+    return kOverlayCutPreviewKeepBothOutlineColor;
+  case ViewportOverlayStyleRole::CutPreviewDiscardOutline:
+    return kOverlayCutPreviewDiscardOutlineColor;
+  case ViewportOverlayStyleRole::CutPreviewSeam:
+    return kOverlayCutPreviewSeamColor;
+  case ViewportOverlayStyleRole::LayerDefault:
+  case ViewportOverlayStyleRole::ExplicitColor:
+  case ViewportOverlayStyleRole::SnapTargetVertex:
+  case ViewportOverlayStyleRole::WireframeBase:
+  case ViewportOverlayStyleRole::ToolPreviewFill:
+  case ViewportOverlayStyleRole::ToolPreviewLine:
+  case ViewportOverlayStyleRole::ToolPreviewSeam:
+    return authored_color;
+  }
+  return authored_color;
 }
 
-std::uint32_t ViewportOverlayStyleResolver::settingColor(
-        const ViewportSettings& settings,
-        ViewportColorSettingId id) {
-    return settingColorRgba(settings.color(id));
+float ViewportOverlayStyleResolver::line_width_for(
+    ViewportOverlayStyleRole role, ViewportOverlayLayer layer,
+    float authored_width_pixels, const ViewportSettings &settings) {
+  switch (role) {
+  case ViewportOverlayStyleRole::SourceWire:
+    return settings.float_value(ViewportFloatSettingId::SourceWireLineSize);
+  case ViewportOverlayStyleRole::SelectedSourceWire:
+    return settings.float_value(
+        ViewportFloatSettingId::SelectionFaceWireLineSize);
+  case ViewportOverlayStyleRole::SelectionWire:
+    return layer == ViewportOverlayLayer::SelectedFaceEdge
+               ? settings.float_value(
+                     ViewportFloatSettingId::SelectionFaceWireLineSize)
+               : settings.float_value(
+                     ViewportFloatSettingId::SelectionEdgeLineSize);
+  case ViewportOverlayStyleRole::HoverWire:
+  case ViewportOverlayStyleRole::RemoveSelectionWire:
+    return settings.float_value(ViewportFloatSettingId::HoverWireLineSize);
+  case ViewportOverlayStyleRole::OpenEdge:
+    return settings.float_value(ViewportFloatSettingId::OpenEdgeLineSize);
+  case ViewportOverlayStyleRole::DiagnosticEdge:
+    return settings.float_value(ViewportFloatSettingId::DiagnosticEdgeLineSize);
+  default:
+    return authored_width_pixels;
+  }
+}
+
+float ViewportOverlayStyleResolver::point_size_for(
+    ViewportOverlayStyleRole role, float authored_size_pixels,
+    const ViewportSettings &settings) {
+  const float vertex_size =
+      settings.float_value(ViewportFloatSettingId::VertexSize);
+  switch (role) {
+  case ViewportOverlayStyleRole::Vertex:
+    return vertex_size;
+  case ViewportOverlayStyleRole::SelectedVertex:
+    return vertex_size +
+           settings.float_value(ViewportFloatSettingId::SelectedVertexGrowth);
+  case ViewportOverlayStyleRole::HoverVertex:
+  case ViewportOverlayStyleRole::RemoveSelectionVertex:
+    return vertex_size +
+           settings.float_value(ViewportFloatSettingId::HoverVertexGrowth);
+  default:
+    return authored_size_pixels;
+  }
+}
+
+std::optional<float> ViewportOverlayStyleResolver::point_outline_growth_for(
+    ViewportOverlayStyleRole role,
+    std::optional<float> authored_outline_growth_pixels,
+    const ViewportSettings &settings) {
+  switch (role) {
+  case ViewportOverlayStyleRole::SelectedVertex:
+  case ViewportOverlayStyleRole::HoverVertex:
+  case ViewportOverlayStyleRole::RemoveSelectionVertex:
+  case ViewportOverlayStyleRole::SnapTargetVertex:
+    return settings.float_value(ViewportFloatSettingId::VertexOutlineSize);
+  default:
+    return authored_outline_growth_pixels;
+  }
+}
+
+std::uint32_t
+ViewportOverlayStyleResolver::setting_color_rgba(ViewportSettingColor color) {
+  return static_cast<std::uint32_t>(normalized_to_byte(color.r)) |
+         (static_cast<std::uint32_t>(normalized_to_byte(color.g)) << 8u) |
+         (static_cast<std::uint32_t>(normalized_to_byte(color.b)) << 16u) |
+         (static_cast<std::uint32_t>(normalized_to_byte(color.a)) << 24u);
+}
+
+std::uint32_t
+ViewportOverlayStyleResolver::setting_color(const ViewportSettings &settings,
+                                            ViewportColorSettingId id) {
+  return setting_color_rgba(settings.color(id));
 }
 
 } // namespace quader

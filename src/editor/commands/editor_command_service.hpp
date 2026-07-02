@@ -20,19 +20,18 @@ namespace quader {
  */
 class EditorCommandService final {
 public:
-    EditorCommandService(
-            EditorHistoryService& history,
-            DocumentCommandService& documentCommands)
-        : history_(history)
-        , documentCommands_(documentCommands) {}
+  EditorCommandService(EditorHistoryService &history,
+                       DocumentCommandService &document_commands)
+      : history_(history), document_commands_(document_commands) {}
 
-    CommandResult execute(std::unique_ptr<IUndoableCommand> command) {
-        return history_.execute(std::move(command));
-    }
+  CommandResult execute(std::unique_ptr<IUndoableCommand> command) {
+    return history_.execute(std::move(command));
+  }
 
-    CommandResult executeModeling(std::unique_ptr<ModelingMementoCommand> command) {
-        return history_.execute(std::move(command));
-    }
+  CommandResult
+  execute_modeling(std::unique_ptr<ModelingMementoCommand> command) {
+    return history_.execute(std::move(command));
+  }
 
     CommandResult undo() {
         return history_.undo();
@@ -42,21 +41,19 @@ public:
         return history_.redo();
     }
 
-    [[nodiscard]] bool canUndo() const {
-        return history_.canUndo();
-    }
+    [[nodiscard]] bool can_undo() const { return history_.can_undo(); }
 
-    [[nodiscard]] bool canRedo() const {
-        return history_.canRedo();
-    }
+    [[nodiscard]] bool can_redo() const { return history_.can_redo(); }
 
     [[nodiscard]] EditorHistoryService& history() { return history_; }
     [[nodiscard]] const EditorHistoryService& history() const { return history_; }
-    [[nodiscard]] DocumentCommandService& documentCommands() { return documentCommands_; }
+    [[nodiscard]] DocumentCommandService &document_commands() {
+      return document_commands_;
+    }
 
 private:
     EditorHistoryService& history_;
-    DocumentCommandService& documentCommands_;
+    DocumentCommandService &document_commands_;
 };
 
 } // namespace quader

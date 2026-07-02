@@ -15,8 +15,7 @@ namespace quader {
  */
 class BoxTool final : public TwoStageBoxTool {
 public:
-    BoxTool()
-        : TwoStageBoxTool(viewportToolDescriptor(ViewportToolId::Box)) {}
+  BoxTool() : TwoStageBoxTool(viewport_tool_descriptor(ViewportToolId::Box)) {}
 };
 
 } // namespace quader

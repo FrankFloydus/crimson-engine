@@ -32,9 +32,9 @@ FacePerimeterInfo face_perimeter_info(const Document& document, ElementId face_i
 
 FacePerimeterInfo selected_faces_perimeter_info(const Document& document, const Selection& selection)
 {
-    if (selection.mode != SelectionMode::face || selection.faces.empty()) {
-        return {};
-    }
+  if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
+    return {};
+  }
 
     const std::vector<Face> selected_faces = selected_face_copies(document, selection);
     std::map<std::pair<ElementId, ElementId>, int> selected_edge_counts;

@@ -28,61 +28,61 @@ class DocumentCommandService {
 public:
     DocumentCommandService(SceneDocument& scene, EditorHistoryService& history, const AssetRegistry* assets = nullptr);
 
-    DocumentCreateEntityResult createEntity(
-            std::string name,
-            EntityKind kind = EntityKind::Generic,
-            EntityId parent = InvalidEntityId,
-            TransformComponent transform = TransformComponent{});
-    DocumentCommandResult destroyEntity(EntityId entity);
-    DocumentCommandResult reparentEntity(
-            EntityId entity,
-            EntityId parent,
-            bool preserveWorldTransform = true);
-    DocumentGroupSelectionResult groupSelection(
-            std::string groupName = {},
-            TransformComponent groupTransform = TransformComponent{});
-    DocumentCommandResult ungroupSelection();
-    DocumentDuplicateEntityResult duplicateEntity(EntityId entity);
-    DocumentDuplicateHierarchyResult duplicateSelectedHierarchy();
-    DocumentDuplicateHierarchyResult duplicateHierarchyWithExistingClones(
-            std::vector<EntityId> roots,
-            std::unordered_map<EntityId, EntityId> existingClonesBySource);
-    DocumentCreateEntityResult createPointLight(
-            std::string name,
-            LightComponent light,
-            EntityId parent = InvalidEntityId,
-            TransformComponent transform = TransformComponent{},
-            bool selectCreated = false);
-    DocumentCreateEntityResult createDirectionalLight(
-            std::string name,
-            LightComponent light,
-            EntityId parent = InvalidEntityId,
-            TransformComponent transform = TransformComponent{},
-            bool selectCreated = false);
-    DocumentCommandResult selectEntities(std::vector<EntityId> entities, EntityId active = InvalidEntityId);
-    DocumentCommandResult applyEntityTransform(EntityId entity, TransformComponent transform);
-    DocumentCommandResult renameEntity(EntityId entity, std::string name);
-    DocumentCommandResult setVisible(EntityId entity, bool visible);
-    DocumentCommandResult setVisibility(std::vector<DocumentVisibilityEdit> edits);
-    DocumentCommandResult setLocked(EntityId entity, bool locked);
-    DocumentCommandResult setLocks(std::vector<DocumentLockEdit> edits);
-    DocumentCommandResult setMaterial(EntityId entity, AssetId material);
-    DocumentCommandResult setMeshComponent(EntityId entity, MeshComponent mesh);
-    DocumentCommandResult setLightComponent(
-            EntityId entity,
-            LightComponent light,
-            UndoRedoExecuteOptions options = {});
-    DocumentCommandResult setSceneSettings(
-            EntityId entity,
-            SceneSettingsComponent settings,
-            UndoRedoExecuteOptions options = {});
-    DocumentCommandResult setTransform(EntityId entity, TransformComponent transform);
-    DocumentCommandResult setTransforms(
-            std::vector<DocumentTransformEdit> edits,
-            std::string label = "Set Transform");
-    DocumentCommandResult applySceneBatch(std::string label, std::vector<DocumentSceneBatchOperation> operations);
+    DocumentCreateEntityResult
+    create_entity(std::string name, EntityKind kind = EntityKind::Generic,
+                  EntityId parent = kInvalidEntityId,
+                  TransformComponent transform = TransformComponent{});
+    DocumentCommandResult destroy_entity(EntityId entity);
+    DocumentCommandResult reparent_entity(EntityId entity, EntityId parent,
+                                          bool preserve_world_transform = true);
+    DocumentGroupSelectionResult
+    group_selection(std::string group_name = {},
+                    TransformComponent group_transform = TransformComponent{});
+    DocumentCommandResult ungroup_selection();
+    DocumentDuplicateEntityResult duplicate_entity(EntityId entity);
+    DocumentDuplicateHierarchyResult duplicate_selected_hierarchy();
+    DocumentDuplicateHierarchyResult duplicate_hierarchy_with_existing_clones(
+        std::vector<EntityId> roots,
+        std::unordered_map<EntityId, EntityId> existing_clones_by_source);
+    DocumentCreateEntityResult
+    create_point_light(std::string name, LightComponent light,
+                       EntityId parent = kInvalidEntityId,
+                       TransformComponent transform = TransformComponent{},
+                       bool select_created = false);
+    DocumentCreateEntityResult create_directional_light(
+        std::string name, LightComponent light,
+        EntityId parent = kInvalidEntityId,
+        TransformComponent transform = TransformComponent{},
+        bool select_created = false);
+    DocumentCommandResult select_entities(std::vector<EntityId> entities,
+                                          EntityId active = kInvalidEntityId);
+    DocumentCommandResult apply_entity_transform(EntityId entity,
+                                                 TransformComponent transform);
+    DocumentCommandResult rename_entity(EntityId entity, std::string name);
+    DocumentCommandResult set_visible(EntityId entity, bool visible);
+    DocumentCommandResult
+    set_visibility(std::vector<DocumentVisibilityEdit> edits);
+    DocumentCommandResult set_locked(EntityId entity, bool locked);
+    DocumentCommandResult set_locks(std::vector<DocumentLockEdit> edits);
+    DocumentCommandResult set_material(EntityId entity, AssetId material);
+    DocumentCommandResult set_mesh_component(EntityId entity,
+                                             MeshComponent mesh);
+    DocumentCommandResult
+    set_light_component(EntityId entity, LightComponent light,
+                        UndoRedoExecuteOptions options = {});
+    DocumentCommandResult
+    set_scene_settings(EntityId entity, SceneSettingsComponent settings,
+                       UndoRedoExecuteOptions options = {});
+    DocumentCommandResult set_transform(EntityId entity,
+                                        TransformComponent transform);
+    DocumentCommandResult
+    set_transforms(std::vector<DocumentTransformEdit> edits,
+                   std::string label = "Set Transform");
+    DocumentCommandResult
+    apply_scene_batch(std::string label,
+                      std::vector<DocumentSceneBatchOperation> operations);
 
-private:
+  private:
     SceneDocument& scene_;
     EditorHistoryService& history_;
     const AssetRegistry* assets_ = nullptr;

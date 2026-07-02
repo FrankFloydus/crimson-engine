@@ -193,9 +193,9 @@ struct ViewportShortcut {
     ViewportShortcutKind kind = ViewportShortcutKind::None;
     ViewportShortcutContext context = ViewportShortcutContext::Viewport;
     ViewportToolId tool = ViewportToolId::Select;
-    ViewportSelectionMode selectionMode = ViewportSelectionMode::Object;
-    ViewportMirrorAxis mirrorAxis = ViewportMirrorAxis::X;
-    int gridPreset = 0;
+    ViewportSelectionMode selection_mode = ViewportSelectionMode::Object;
+    ViewportMirrorAxis mirror_axis = ViewportMirrorAxis::X;
+    int grid_preset = 0;
     ViewportView view = ViewportView::Perspective;
 };
 
@@ -203,9 +203,9 @@ struct ViewportShortcut {
  * Stores public viewport tool state needed for keybinding dispatch.
  */
 struct ViewportToolState {
-    ViewportToolId activeTool = ViewportToolId::Select;
-    ViewportSelectionMode selectionMode = ViewportSelectionMode::Object;
-    int gridPreset = 6;
+  ViewportToolId active_tool = ViewportToolId::Select;
+  ViewportSelectionMode selection_mode = ViewportSelectionMode::Object;
+  int grid_preset = 6;
 };
 
 } // namespace quader

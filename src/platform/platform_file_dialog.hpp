@@ -15,14 +15,14 @@ namespace quader {
  * Stores native file dialog options used by the platform integration layer.
  */
 struct PlatformFileDialogOptions {
-    void* ownerWindowHandle = nullptr;
-    std::filesystem::path initialDirectory;
-    std::filesystem::path initialFileName;
+  void *owner_window_handle = nullptr;
+  std::filesystem::path initial_directory;
+  std::filesystem::path initial_file_name;
 };
 
-[[nodiscard]] std::optional<std::filesystem::path> platformOpenProjectFileDialog(
-        const PlatformFileDialogOptions& options);
-[[nodiscard]] std::optional<std::filesystem::path> platformSaveProjectFileDialog(
-        const PlatformFileDialogOptions& options);
+[[nodiscard]] std::optional<std::filesystem::path>
+platform_open_project_file_dialog(const PlatformFileDialogOptions &options);
+[[nodiscard]] std::optional<std::filesystem::path>
+platform_save_project_file_dialog(const PlatformFileDialogOptions &options);
 
 } // namespace quader

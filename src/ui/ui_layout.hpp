@@ -13,26 +13,26 @@
 
 namespace quader {
 
-inline float uiFillWidthAtLeast(float minimumWidth) {
-    return std::max(ImGui::GetContentRegionAvail().x, minimumWidth);
+inline float ui_fill_width_at_least(float minimum_width) {
+  return std::max(ImGui::GetContentRegionAvail().x, minimum_width);
 }
 
-inline void setNextItemFillWidthAtLeast(float minimumWidth) {
-    ImGui::SetNextItemWidth(uiFillWidthAtLeast(minimumWidth));
+inline void set_next_item_fill_width_at_least(float minimum_width) {
+  ImGui::SetNextItemWidth(ui_fill_width_at_least(minimum_width));
 }
 
-inline void setNextWindowMinWidth(float minimumWidth) {
-    ImGui::SetNextWindowSizeConstraints(
-            {minimumWidth, 0.0f},
-            {std::numeric_limits<float>::max(), std::numeric_limits<float>::max()});
+inline void set_next_window_min_width(float minimum_width) {
+  ImGui::SetNextWindowSizeConstraints(
+      {minimum_width, 0.0f},
+      {std::numeric_limits<float>::max(), std::numeric_limits<float>::max()});
 }
 
-inline bool panelFocusInputActive() {
-    const ImGuiIO& io = ImGui::GetIO();
-    return ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-            ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
-            ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
-            io.MouseWheel != 0.0f;
+inline bool panel_focus_input_active() {
+  const ImGuiIO &io = ImGui::GetIO();
+  return ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+         ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+         ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
+         io.MouseWheel != 0.0f;
 }
 
 } // namespace quader

@@ -16,20 +16,21 @@ namespace quader {
 class RepeatLastActionTool final : public CustomInstantCommandTool {
 public:
     [[nodiscard]] CommandToolDescriptor descriptor() const override {
-        return {
-                .id = "repeat_last_action",
-                .operationId = "repeat_last_action",
-                .label = "Repeat Last Action",
-                .kind = CommandToolKind::Instant,
-                .previewKind = ModelingActionPreviewKind::None,
-                .rebuildsMeshOnSuccess = true,
-                .publicCommandId = "edit.repeat_last_action",
-                .registersPublicCommand = false,
-        };
+      return {
+          .id = "repeat_last_action",
+          .operation_id = "repeat_last_action",
+          .label = "Repeat Last Action",
+          .kind = CommandToolKind::Instant,
+          .preview_kind = ModelingActionPreviewKind::None,
+          .rebuilds_mesh_on_success = true,
+          .public_command_id = "edit.repeat_last_action",
+          .registers_public_command = false,
+      };
     }
 
 private:
-    ModelingCommandResult executeCustomCommand(ModelingCommandExecutionContext& context) const override;
+  ModelingCommandResult execute_custom_command(
+      ModelingCommandExecutionContext &context) const override;
 };
 
 } // namespace quader

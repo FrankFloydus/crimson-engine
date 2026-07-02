@@ -22,9 +22,9 @@ namespace quader_geometry {
  * Enumerates QAxis values used by the geometry layer.
  */
 enum class QAxis {
-	x,
-	y,
-	z,
+  X,
+  Y,
+  Z,
 };
 
 template<typename T>
@@ -283,27 +283,27 @@ using QRect2d = QRect2<double>;
  * Enumerates QPlaneSide values used by the geometry layer.
  */
 enum class QPlaneSide {
-	negative,
-	on,
-	positive,
+  Negative,
+  On,
+  Positive,
 };
 
 /**
  * Enumerates QPlaneIntersectionType values used by the geometry layer.
  */
 enum class QPlaneIntersectionType {
-	none,
-	point,
-	coplanar,
+  None,
+  Point,
+  Coplanar,
 };
 
 /**
  * Enumerates QSegmentIntersectionKind2 values used by the geometry layer.
  */
 enum class QSegmentIntersectionKind2 {
-	none,
-	point,
-	overlap,
+  None,
+  Point,
+  Overlap,
 };
 
 template<typename T>
@@ -345,9 +345,9 @@ template<typename T>
  * Represents a Line Plane Hit value used by the geometry predicate and projection layer.
  */
 struct QLinePlaneHit {
-	QPlaneIntersectionType type = QPlaneIntersectionType::none;
-	T parameter = T(0);
-	QBasicVec3<T> point;
+  QPlaneIntersectionType type = QPlaneIntersectionType::None;
+  T parameter = T(0);
+  QBasicVec3<T> point;
 };
 
 template<typename T>
@@ -355,9 +355,9 @@ template<typename T>
  * Represents a Segment Plane Hit value used by the geometry predicate and projection layer.
  */
 struct QSegmentPlaneHit {
-	QPlaneIntersectionType type = QPlaneIntersectionType::none;
-	T segment_factor = T(0);
-	QBasicVec3<T> point;
+  QPlaneIntersectionType type = QPlaneIntersectionType::None;
+  T segment_factor = T(0);
+  QBasicVec3<T> point;
 };
 
 template<typename T>
@@ -386,8 +386,8 @@ template<typename T>
  */
 struct QClassifiedSegmentIntersection2 {
 	bool hit = false;
-	QSegmentIntersectionKind2 kind = QSegmentIntersectionKind2::none;
-	std::uint8_t point_count = 0;
+        QSegmentIntersectionKind2 kind = QSegmentIntersectionKind2::None;
+        std::uint8_t point_count = 0;
 	std::array<T, 2> first_factors {};
 	std::array<T, 2> second_factors {};
 	std::array<QBasicVec2<T>, 2> points {};
@@ -764,12 +764,12 @@ template<typename T>
 	const T ay = std::abs(size.y);
 	const T az = std::abs(size.z);
 	if (ax >= ay && ax >= az) {
-		return QAxis::x;
-	}
+          return QAxis::X;
+        }
 	if (ay >= az) {
-		return QAxis::y;
-	}
-	return QAxis::z;
+          return QAxis::Y;
+        }
+        return QAxis::Z;
 }
 
 template<typename T>
@@ -949,12 +949,12 @@ template<typename T>
 {
 	const T distance = signed_distance_to_plane(point, plane);
 	if (distance > epsilon) {
-		return QPlaneSide::positive;
-	}
+          return QPlaneSide::Positive;
+        }
 	if (distance < -epsilon) {
-		return QPlaneSide::negative;
-	}
-	return QPlaneSide::on;
+          return QPlaneSide::Negative;
+        }
+        return QPlaneSide::On;
 }
 
 template<typename T>
@@ -1046,24 +1046,24 @@ template<typename T>
 	const T ay = std::abs(normal.y);
 	const T az = std::abs(normal.z);
 	if (ax >= ay && ax >= az) {
-		return QAxis::x;
-	}
+          return QAxis::X;
+        }
 	if (ay >= az) {
-		return QAxis::y;
-	}
-	return QAxis::z;
+          return QAxis::Y;
+        }
+        return QAxis::Z;
 }
 
 template<typename T>
 [[nodiscard]] QBasicVec2<T> project_dominant_axis(QBasicVec3<T> point, QAxis dropped_axis)
 {
-	if (dropped_axis == QAxis::x) {
-		return { point.y, point.z };
-	}
-	if (dropped_axis == QAxis::y) {
-		return { point.x, point.z };
-	}
-	return { point.x, point.y };
+  if (dropped_axis == QAxis::X) {
+    return {point.y, point.z};
+  }
+  if (dropped_axis == QAxis::Y) {
+    return {point.x, point.z};
+  }
+        return { point.x, point.y };
 }
 
 template<typename T>
@@ -1076,19 +1076,26 @@ template<typename T>
 [[nodiscard]] QDominantAxisUnprojectResult<T> unproject_dominant_axis_point_to_plane(
 	QBasicVec2<T> point, const QPlane3<T>& plane, QAxis dropped_axis, T epsilon = T(0.000001))
 {
-	if (dropped_axis == QAxis::x) {
-		if (std::abs(plane.normal.x) <= epsilon) {
-			return {};
-		}
-		return { true, { (plane.d - plane.normal.y * point.x - plane.normal.z * point.y) / plane.normal.x, point.x, point.y } };
-	}
-	if (dropped_axis == QAxis::y) {
-		if (std::abs(plane.normal.y) <= epsilon) {
-			return {};
-		}
-		return { true, { point.x, (plane.d - plane.normal.x * point.x - plane.normal.z * point.y) / plane.normal.y, point.y } };
-	}
-	if (std::abs(plane.normal.z) <= epsilon) {
+  if (dropped_axis == QAxis::X) {
+    if (std::abs(plane.normal.x) <= epsilon) {
+      return {};
+    }
+    return {true,
+            {(plane.d - plane.normal.y * point.x - plane.normal.z * point.y) /
+                 plane.normal.x,
+             point.x, point.y}};
+  }
+  if (dropped_axis == QAxis::Y) {
+    if (std::abs(plane.normal.y) <= epsilon) {
+      return {};
+    }
+    return {true,
+            {point.x,
+             (plane.d - plane.normal.x * point.x - plane.normal.z * point.y) /
+                 plane.normal.y,
+             point.y}};
+  }
+        if (std::abs(plane.normal.z) <= epsilon) {
 		return {};
 	}
 	return { true, { point.x, point.y, (plane.d - plane.normal.x * point.x - plane.normal.y * point.y) / plane.normal.z } };
@@ -1195,8 +1202,8 @@ template<typename T>
 {
 	QClassifiedSegmentIntersection2<T> result;
 	result.hit = true;
-	result.kind = QSegmentIntersectionKind2::point;
-	result.point_count = 1;
+        result.kind = QSegmentIntersectionKind2::Point;
+        result.point_count = 1;
 	result.first_factors[0] = clamped_unit_factor(first_factor);
 	result.first_factors[1] = result.first_factors[0];
 	result.second_factors[0] = clamped_unit_factor(second_factor);
@@ -1278,8 +1285,8 @@ template<typename T>
 
 	QClassifiedSegmentIntersection2<T> result;
 	result.hit = true;
-	result.kind = QSegmentIntersectionKind2::overlap;
-	result.point_count = 2;
+        result.kind = QSegmentIntersectionKind2::Overlap;
+        result.point_count = 2;
 	result.first_factors[0] = clamped_unit_factor(overlap_start);
 	result.first_factors[1] = clamped_unit_factor(overlap_end);
 	result.points[0] = a + first_direction * result.first_factors[0];
@@ -1472,15 +1479,18 @@ template<typename T>
 	const T denominator = dot(normalized_plane.normal, line.direction);
 	const T origin_distance = signed_distance_to_plane(line.origin, normalized_plane);
 	if (std::abs(denominator) <= epsilon) {
-		return {
-			std::abs(origin_distance) <= epsilon ? QPlaneIntersectionType::coplanar : QPlaneIntersectionType::none,
-			T(0),
-			line.origin,
-		};
-	}
+          return {
+              std::abs(origin_distance) <= epsilon
+                  ? QPlaneIntersectionType::Coplanar
+                  : QPlaneIntersectionType::None,
+              T(0),
+              line.origin,
+          };
+        }
 
 	const T parameter = -origin_distance / denominator;
-	return { QPlaneIntersectionType::point, parameter, line.origin + line.direction * parameter };
+        return {QPlaneIntersectionType::Point, parameter,
+                line.origin + line.direction * parameter};
 }
 
 template<typename T>
@@ -1497,24 +1507,28 @@ template<typename T>
 	const bool second_on_plane = std::abs(second_distance) <= epsilon;
 	const QBasicVec3<T> segment_direction = segment.b - segment.a;
 	if (length_squared(segment_direction) <= epsilon * epsilon) {
-		return first_on_plane ? QSegmentPlaneHit<T> { QPlaneIntersectionType::point, T(0), segment.a } : QSegmentPlaneHit<T> {};
-	}
+          return first_on_plane
+                     ? QSegmentPlaneHit<T>{QPlaneIntersectionType::Point, T(0),
+                                           segment.a}
+                     : QSegmentPlaneHit<T>{};
+        }
 	if (first_on_plane && second_on_plane) {
-		return { QPlaneIntersectionType::coplanar, T(0), segment.a };
-	}
+          return {QPlaneIntersectionType::Coplanar, T(0), segment.a};
+        }
 	if (first_on_plane) {
-		return { QPlaneIntersectionType::point, T(0), segment.a };
-	}
+          return {QPlaneIntersectionType::Point, T(0), segment.a};
+        }
 	if (second_on_plane) {
-		return { QPlaneIntersectionType::point, T(1), segment.b };
-	}
+          return {QPlaneIntersectionType::Point, T(1), segment.b};
+        }
 	if ((first_distance > T(0) && second_distance > T(0)) ||
 			(first_distance < T(0) && second_distance < T(0))) {
 		return {};
 	}
 
 	const T segment_factor = first_distance / (first_distance - second_distance);
-	return { QPlaneIntersectionType::point, segment_factor, segment.a + segment_direction * segment_factor };
+        return {QPlaneIntersectionType::Point, segment_factor,
+                segment.a + segment_direction * segment_factor};
 }
 
 template<typename T>

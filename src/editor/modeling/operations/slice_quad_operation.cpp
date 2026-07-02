@@ -40,8 +40,8 @@ SliceQuadOperationSettings slice_quad_settings_from_variant(const EditorOperatio
 
 const SliceQuadOperation& concrete_slice_quad_operation()
 {
-	static const SliceQuadOperation operation;
-	return operation;
+  static const SliceQuadOperation kOperation;
+  return kOperation;
 }
 
 } // namespace
@@ -53,7 +53,7 @@ const EditorOperation& slice_quad_operation()
 
 EditorOperationId SliceQuadOperation::operation_id() const
 {
-	return EditorOperationId::slice_quad;
+  return EditorOperationId::SliceQuad;
 }
 
 std::string_view SliceQuadOperation::id() const

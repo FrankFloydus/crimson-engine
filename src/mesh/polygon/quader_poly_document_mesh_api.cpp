@@ -63,16 +63,15 @@ std::map<ElementId, quader::QVec3> build_smooth_normals(const Document& document
  * Stores the Corner Key data contract used by the polygon document and mesh editing core.
  */
 struct CornerKey {
-    ElementId face_id = invalid_element_id;
-    ElementId vertex_id = invalid_element_id;
+  ElementId face_id = kInvalidElementId;
+  ElementId vertex_id = kInvalidElementId;
 
-    friend bool operator<(const CornerKey& left, const CornerKey& right)
-    {
-        if (left.face_id != right.face_id) {
-            return left.face_id < right.face_id;
-        }
-        return left.vertex_id < right.vertex_id;
+  friend bool operator<(const CornerKey &left, const CornerKey &right) {
+    if (left.face_id != right.face_id) {
+      return left.face_id < right.face_id;
     }
+    return left.vertex_id < right.vertex_id;
+  }
 };
 
 /**
@@ -132,12 +131,12 @@ private:
 bool face_uses_smooth_normals(const Face& face, SurfaceShading shading)
 {
     switch (shading) {
-    case SurfaceShading::flat:
-        return false;
-    case SurfaceShading::smooth:
-        return true;
-    case SurfaceShading::authored:
-        return face.normal_shading == SurfaceShading::smooth;
+    case SurfaceShading::Flat:
+      return false;
+    case SurfaceShading::Smooth:
+      return true;
+    case SurfaceShading::Authored:
+      return face.normal_shading == SurfaceShading::Smooth;
     }
     return false;
 }
@@ -195,7 +194,9 @@ std::map<CornerKey, quader::QVec3> build_authored_smooth_corner_normals(const Do
         for (ElementId vertex_id : face->vertices) {
             const CornerKey key { face_id, vertex_id };
             const quader::QVec3 normal = normalize_or_zero(normal_sums_by_root[corners.find(key)]);
-            normals[key] = length_squared(normal) > epsilon ? normal : face_normals[face_id];
+            normals[key] = length_squared(normal) > kEpsilon
+                               ? normal
+                               : face_normals[face_id];
         }
     }
     return normals;
@@ -223,8 +224,8 @@ quader::QVec3 face_normal(const Document& document, const Face& face)
     }
 
     normal = normalize_or_zero(normal);
-    if (length_squared(normal) > epsilon) {
-        return normal;
+    if (length_squared(normal) > kEpsilon) {
+      return normal;
     }
 
     const Vertex* a = find_vertex(document, face.vertices[0]);
@@ -235,19 +236,22 @@ quader::QVec3 face_normal(const Document& document, const Face& face)
     }
 
     normal = poly_vec3(quader_geometry::triangle_unit_normal(geometry_triangle(a->position, b->position, c->position)));
-    return length_squared(normal) > epsilon ? normal : quader::QVec3 { 0.0F, 1.0F, 0.0F };
+    return length_squared(normal) > kEpsilon ? normal
+                                             : quader::QVec3{0.0F, 1.0F, 0.0F};
 }
 
 CompiledMesh compile_document(const Document& document, SurfaceShading shading)
 {
     QDR_PROFILE_SCOPE("qdr_document.compile_document");
     CompiledMesh mesh;
-    const std::map<ElementId, quader::QVec3> smooth_normals = shading == SurfaceShading::smooth ?
-        build_smooth_normals(document) :
-        std::map<ElementId, quader::QVec3> {};
-    const std::map<CornerKey, quader::QVec3> authored_smooth_corner_normals = shading == SurfaceShading::authored ?
-        build_authored_smooth_corner_normals(document, shading) :
-        std::map<CornerKey, quader::QVec3> {};
+    const std::map<ElementId, quader::QVec3> smooth_normals =
+        shading == SurfaceShading::Smooth
+            ? build_smooth_normals(document)
+            : std::map<ElementId, quader::QVec3>{};
+    const std::map<CornerKey, quader::QVec3> authored_smooth_corner_normals =
+        shading == SurfaceShading::Authored
+            ? build_authored_smooth_corner_normals(document, shading)
+            : std::map<CornerKey, quader::QVec3>{};
 
     for (const Face& face : document.faces) {
         QDR_PROFILE_SCOPE("qdr_document.compile_document.face");
@@ -272,16 +276,19 @@ CompiledMesh compile_document(const Document& document, SurfaceShading shading)
 
             compiled_face_vertices.push_back(static_cast<std::uint32_t>(mesh.vertices.size()));
             quader::QVec3 vertex_normal = normal;
-            if (shading == SurfaceShading::smooth) {
-                const auto smooth_normal = smooth_normals.find(vertex_id);
-                if (smooth_normal != smooth_normals.end() && length_squared(smooth_normal->second) > epsilon) {
-                    vertex_normal = smooth_normal->second;
-                }
+            if (shading == SurfaceShading::Smooth) {
+              const auto smooth_normal = smooth_normals.find(vertex_id);
+              if (smooth_normal != smooth_normals.end() &&
+                  length_squared(smooth_normal->second) > kEpsilon) {
+                vertex_normal = smooth_normal->second;
+              }
             } else if (face_uses_smooth_normals(face, shading)) {
-                const auto smooth_normal = authored_smooth_corner_normals.find({ face.id, vertex_id });
-                if (smooth_normal != authored_smooth_corner_normals.end() && length_squared(smooth_normal->second) > epsilon) {
-                    vertex_normal = smooth_normal->second;
-                }
+              const auto smooth_normal =
+                  authored_smooth_corner_normals.find({face.id, vertex_id});
+              if (smooth_normal != authored_smooth_corner_normals.end() &&
+                  length_squared(smooth_normal->second) > kEpsilon) {
+                vertex_normal = smooth_normal->second;
+              }
             }
 
             mesh.vertices.push_back({

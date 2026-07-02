@@ -25,26 +25,25 @@ public:
      * Represents a Sync Plan value used by the modeling application service layer.
      */
     struct SyncPlan {
-        bool syncMeshes = false;
-        bool forceMeshSync = false;
-        bool syncSelection = false;
-        bool invalidateOverlay = false;
+      bool sync_meshes = false;
+      bool force_mesh_sync = false;
+      bool sync_selection = false;
+      bool invalidate_overlay = false;
     };
 
-    [[nodiscard]] static ModelingCommandResult runtimeUnavailable();
+    [[nodiscard]] static ModelingCommandResult runtime_unavailable();
 
-    [[nodiscard]] static ModelingCommandResult fromRuntime(const quader_editor_core::CommandResult& result);
-    [[nodiscard]] static SyncPlan runtimeSyncPlan(
-            bool mayChangeContent,
-            std::uint64_t contentBefore,
-            std::uint64_t contentAfter,
-            const quader_editor_core::CommandResult& result);
-    [[nodiscard]] static SyncPlan operationSyncPlan(
-            quader_editor_core::EditorOperationCommandPhase phase,
-            const quader_editor_core::PreviewTransactionStatus& previewBefore,
-            const quader_editor_core::EditorOperationCommandResult& result,
-            std::uint64_t contentBefore,
-            std::uint64_t contentAfter);
+    [[nodiscard]] static ModelingCommandResult
+    from_runtime(const quader_editor_core::CommandResult &result);
+    [[nodiscard]] static SyncPlan
+    runtime_sync_plan(bool may_change_content, std::uint64_t content_before,
+                      std::uint64_t content_after,
+                      const quader_editor_core::CommandResult &result);
+    [[nodiscard]] static SyncPlan operation_sync_plan(
+        quader_editor_core::EditorOperationCommandPhase phase,
+        const quader_editor_core::PreviewTransactionStatus &preview_before,
+        const quader_editor_core::EditorOperationCommandResult &result,
+        std::uint64_t content_before, std::uint64_t content_after);
 };
 
 } // namespace quader

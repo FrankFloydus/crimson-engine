@@ -20,26 +20,26 @@ struct CommandResult {
     std::string message;
 };
 
-inline CommandResult commandChangedResult() {
-    return {
-            .ok = true,
-            .changed = true,
-    };
+inline CommandResult command_changed_result() {
+  return {
+      .ok = true,
+      .changed = true,
+  };
 }
 
-inline CommandResult commandUnchangedResult() {
-    return {
-            .ok = true,
-            .changed = false,
-    };
+inline CommandResult command_unchanged_result() {
+  return {
+      .ok = true,
+      .changed = false,
+  };
 }
 
-inline CommandResult commandInvalidResult(std::string message) {
-    return {
-            .ok = false,
-            .changed = false,
-            .message = std::move(message),
-    };
+inline CommandResult command_invalid_result(std::string message) {
+  return {
+      .ok = false,
+      .changed = false,
+      .message = std::move(message),
+  };
 }
 
 using UndoRedoResult = CommandResult;

@@ -68,13 +68,13 @@ void check_float_preference(
 		double maximum,
 		std::string_view group_id)
 {
-	EXPECT_TRUE(preference.value_kind == qhc::HostPreferenceValueKind::floating);
-	EXPECT_TRUE(close_to(preference.default_number, default_value));
-	EXPECT_TRUE(close_to(preference.minimum_number, minimum));
-	EXPECT_TRUE(close_to(preference.maximum_number, maximum));
-	EXPECT_TRUE(close_to(preference.number_step, 0.0));
-	EXPECT_TRUE(same_text(preference.group_id, group_id));
-	EXPECT_TRUE(preference.hard_limits);
+  EXPECT_TRUE(preference.value_kind == qhc::HostPreferenceValueKind::Floating);
+  EXPECT_TRUE(close_to(preference.default_number, default_value));
+  EXPECT_TRUE(close_to(preference.minimum_number, minimum));
+  EXPECT_TRUE(close_to(preference.maximum_number, maximum));
+  EXPECT_TRUE(close_to(preference.number_step, 0.0));
+  EXPECT_TRUE(same_text(preference.group_id, group_id));
+  EXPECT_TRUE(preference.hard_limits);
 }
 
 } // namespace
@@ -84,21 +84,25 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceCatalogExpos
 	EXPECT_TRUE(preferences.size() == 45U);
 
 	const qhc::HostPreferenceDescriptor& background = require_preference("viewport.scene.background_color");
-	EXPECT_TRUE(background.scope == qhc::HostPreferenceScope::viewport_style);
-	EXPECT_TRUE(background.value_kind == qhc::HostPreferenceValueKind::color_rgba);
-	EXPECT_TRUE(same_text(background.label, "Background"));
+        EXPECT_TRUE(background.scope ==
+                    qhc::HostPreferenceScope::ViewportStyle);
+        EXPECT_TRUE(background.value_kind ==
+                    qhc::HostPreferenceValueKind::ColorRgba);
+        EXPECT_TRUE(same_text(background.label, "Background"));
 	EXPECT_TRUE(same_text(background.group_id, "viewport.scene"));
 	check_color(background.default_color, 13.0 / 255.0, 13.0 / 255.0, 13.0 / 255.0, 1.0);
 
 	const qhc::HostPreferenceDescriptor& selection_wire = require_preference("viewport.selection.wire_color");
-	EXPECT_TRUE(selection_wire.value_kind == qhc::HostPreferenceValueKind::color_rgba);
-	EXPECT_TRUE(same_text(selection_wire.related_overlay_layer_id, "selected_face_edge"));
+        EXPECT_TRUE(selection_wire.value_kind ==
+                    qhc::HostPreferenceValueKind::ColorRgba);
+        EXPECT_TRUE(same_text(selection_wire.related_overlay_layer_id, "selected_face_edge"));
 	check_color(selection_wire.default_color, 1.0, 211.0 / 255.0, 31.0 / 255.0, 1.0);
 
 	const qhc::HostPreferenceDescriptor& diagnostic_edge =
 		require_preference("viewport.overlay.diagnostic_edge_color");
-	EXPECT_TRUE(diagnostic_edge.value_kind == qhc::HostPreferenceValueKind::color_rgba);
-	EXPECT_TRUE(same_text(diagnostic_edge.related_overlay_layer_id, "diagnostic_edge"));
+        EXPECT_TRUE(diagnostic_edge.value_kind ==
+                    qhc::HostPreferenceValueKind::ColorRgba);
+        EXPECT_TRUE(same_text(diagnostic_edge.related_overlay_layer_id, "diagnostic_edge"));
 	check_color(diagnostic_edge.default_color, 1.0, 0.0, 0.0, 1.0);
 
 	check_float_preference(require_preference("viewport.grid.minor_line_size"), 0.32, 0.25, 8.0, "viewport.grid");
@@ -110,19 +114,21 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceCatalogExpos
 
 	const qhc::HostPreferenceDescriptor& pick_vertex = require_preference("viewport.picking.vertex_radius");
 	check_float_preference(pick_vertex, 0.3, 0.001, 2.0, "viewport.picking");
-	EXPECT_TRUE(pick_vertex.scope == qhc::HostPreferenceScope::viewport_picking);
+        EXPECT_TRUE(pick_vertex.scope ==
+                    qhc::HostPreferenceScope::ViewportPicking);
 
-	const qhc::HostPreferenceDescriptor& gizmo_size = require_preference("viewport.gizmo.size");
+        const qhc::HostPreferenceDescriptor& gizmo_size = require_preference("viewport.gizmo.size");
 	check_float_preference(gizmo_size, 1.0, 0.5, 2.0, "viewport.gizmo");
-	EXPECT_TRUE(gizmo_size.scope == qhc::HostPreferenceScope::viewport_interaction);
+        EXPECT_TRUE(gizmo_size.scope ==
+                    qhc::HostPreferenceScope::ViewportInteraction);
 }
 
 TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractOperationPreferencesLinkBackToEditorCoreOperationOptionSchemas) {
 	const qec::EdgeBevelOperationSchema edge_bevel = qec::edge_bevel_operation_schema();
 	const qhc::HostPreferenceDescriptor& width = require_preference("operation.edge_bevel.width");
-	EXPECT_TRUE(width.scope == qhc::HostPreferenceScope::operation);
-	EXPECT_TRUE(width.value_kind == qhc::HostPreferenceValueKind::floating);
-	EXPECT_TRUE(same_text(width.related_operation_id, edge_bevel.operation_id));
+        EXPECT_TRUE(width.scope == qhc::HostPreferenceScope::Operation);
+        EXPECT_TRUE(width.value_kind == qhc::HostPreferenceValueKind::Floating);
+        EXPECT_TRUE(same_text(width.related_operation_id, edge_bevel.operation_id));
 	EXPECT_TRUE(same_text(width.related_option_id, edge_bevel.width.id));
 	EXPECT_TRUE(same_text(width.label, edge_bevel.width.label));
 	EXPECT_TRUE(close_to(width.default_number, edge_bevel.width.default_value));
@@ -132,16 +138,17 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractOperationPreferencesLi
 
 	const qec::ThickenOperationSchema thicken = qec::thicken_operation_schema();
 	const qhc::HostPreferenceDescriptor& from_center = require_preference("operation.thicken.from_center");
-	EXPECT_TRUE(from_center.value_kind == qhc::HostPreferenceValueKind::boolean);
-	EXPECT_TRUE(same_text(from_center.related_operation_id, thicken.operation_id));
+        EXPECT_TRUE(from_center.value_kind ==
+                    qhc::HostPreferenceValueKind::Boolean);
+        EXPECT_TRUE(same_text(from_center.related_operation_id, thicken.operation_id));
 	EXPECT_TRUE(same_text(from_center.related_option_id, thicken.from_center.id));
 	EXPECT_TRUE(from_center.default_bool == thicken.from_center.default_value);
 	EXPECT_TRUE(from_center.visible == thicken.from_center.visible);
 
 	const qec::BridgeOperationSchema bridge = qec::bridge_operation_schema();
 	const qhc::HostPreferenceDescriptor& steps = require_preference("operation.bridge.steps");
-	EXPECT_TRUE(steps.value_kind == qhc::HostPreferenceValueKind::integer);
-	EXPECT_TRUE(same_text(steps.related_operation_id, bridge.operation_id));
+        EXPECT_TRUE(steps.value_kind == qhc::HostPreferenceValueKind::Integer);
+        EXPECT_TRUE(same_text(steps.related_operation_id, bridge.operation_id));
 	EXPECT_TRUE(same_text(steps.related_option_id, bridge.steps.id));
 	EXPECT_TRUE(steps.default_integer == bridge.steps.default_value);
 	EXPECT_TRUE(steps.minimum_integer == bridge.steps.minimum);
@@ -149,22 +156,27 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractOperationPreferencesLi
 	EXPECT_TRUE(steps.integer_step == bridge.steps.step);
 
 	const qhc::HostPreferenceDescriptor& cut_mode = require_preference("operation.cut.keep_mode");
-	EXPECT_TRUE(cut_mode.value_kind == qhc::HostPreferenceValueKind::choice);
-	EXPECT_TRUE(same_text(cut_mode.group_id, "operation.cut"));
-	EXPECT_TRUE(cut_mode.default_integer == qec::cut_mode_id(qec::CutMode::keep_both));
-	EXPECT_TRUE(cut_mode.choices.size() == 3U);
+        EXPECT_TRUE(cut_mode.value_kind ==
+                    qhc::HostPreferenceValueKind::Choice);
+        EXPECT_TRUE(same_text(cut_mode.group_id, "operation.cut"));
+        EXPECT_TRUE(cut_mode.default_integer ==
+                    qec::cut_mode_id(qec::CutMode::KeepBoth));
+        EXPECT_TRUE(cut_mode.choices.size() == 3U);
 	EXPECT_TRUE(same_text(cut_mode.choices[0].id, "keep_back"));
 	EXPECT_TRUE(same_text(cut_mode.choices[0].label, "Discard Left"));
-	EXPECT_TRUE(cut_mode.choices[0].value == qec::cut_mode_id(qec::CutMode::keep_back));
-	EXPECT_FALSE(cut_mode.choices[0].default_choice);
+        EXPECT_TRUE(cut_mode.choices[0].value ==
+                    qec::cut_mode_id(qec::CutMode::KeepBack));
+        EXPECT_FALSE(cut_mode.choices[0].default_choice);
 	EXPECT_TRUE(same_text(cut_mode.choices[1].id, "keep_front"));
 	EXPECT_TRUE(same_text(cut_mode.choices[1].label, "Discard Right"));
-	EXPECT_TRUE(cut_mode.choices[1].value == qec::cut_mode_id(qec::CutMode::keep_front));
-	EXPECT_FALSE(cut_mode.choices[1].default_choice);
+        EXPECT_TRUE(cut_mode.choices[1].value ==
+                    qec::cut_mode_id(qec::CutMode::KeepFront));
+        EXPECT_FALSE(cut_mode.choices[1].default_choice);
 	EXPECT_TRUE(same_text(cut_mode.choices[2].id, "keep_both"));
 	EXPECT_TRUE(same_text(cut_mode.choices[2].label, "Keep Both"));
-	EXPECT_TRUE(cut_mode.choices[2].value == qec::cut_mode_id(qec::CutMode::keep_both));
-	EXPECT_TRUE(cut_mode.choices[2].default_choice);
+        EXPECT_TRUE(cut_mode.choices[2].value ==
+                    qec::cut_mode_id(qec::CutMode::KeepBoth));
+        EXPECT_TRUE(cut_mode.choices[2].default_choice);
 }
 
 TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceGroupsCanDriveCustomEngineSettingsPanes) {
@@ -172,27 +184,27 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceGroupsCanDri
 	EXPECT_TRUE(groups.size() == 13U);
 
 	const qhc::HostPreferenceGroupDescriptor& cut = require_group("operation.cut");
-	EXPECT_TRUE(cut.scope == qhc::HostPreferenceScope::operation);
-	EXPECT_TRUE(cut.preference_ids.size() == 1U);
+        EXPECT_TRUE(cut.scope == qhc::HostPreferenceScope::Operation);
+        EXPECT_TRUE(cut.preference_ids.size() == 1U);
 	EXPECT_TRUE(group_contains(cut, "operation.cut.keep_mode"));
 
 	const qhc::HostPreferenceGroupDescriptor& grid = require_group("viewport.grid");
 	EXPECT_TRUE(same_text(grid.label, "Grid"));
-	EXPECT_TRUE(grid.scope == qhc::HostPreferenceScope::viewport_style);
-	EXPECT_TRUE(grid.preference_ids.size() == 8U);
+        EXPECT_TRUE(grid.scope == qhc::HostPreferenceScope::ViewportStyle);
+        EXPECT_TRUE(grid.preference_ids.size() == 8U);
 	EXPECT_TRUE(group_contains(grid, "viewport.grid.minor_color"));
 	EXPECT_TRUE(group_contains(grid, "viewport.grid.axis_line_size"));
 
 	const qhc::HostPreferenceGroupDescriptor& overlay = require_group("viewport.overlay");
 	EXPECT_TRUE(same_text(overlay.label, "Overlay"));
-	EXPECT_TRUE(overlay.scope == qhc::HostPreferenceScope::viewport_style);
-	EXPECT_TRUE(overlay.preference_ids.size() == 11U);
+        EXPECT_TRUE(overlay.scope == qhc::HostPreferenceScope::ViewportStyle);
+        EXPECT_TRUE(overlay.preference_ids.size() == 11U);
 	EXPECT_TRUE(group_contains(overlay, "viewport.overlay.diagnostic_edge_color"));
 	EXPECT_TRUE(group_contains(overlay, "viewport.overlay.diagnostic_edge_line_size"));
 
 	const qhc::HostPreferenceGroupDescriptor& picking = require_group("viewport.picking");
-	EXPECT_TRUE(picking.scope == qhc::HostPreferenceScope::viewport_picking);
-	EXPECT_TRUE(picking.preference_ids.size() == 2U);
+        EXPECT_TRUE(picking.scope == qhc::HostPreferenceScope::ViewportPicking);
+        EXPECT_TRUE(picking.preference_ids.size() == 2U);
 	EXPECT_TRUE(group_contains(picking, "viewport.picking.vertex_radius"));
 	EXPECT_TRUE(group_contains(picking, "viewport.picking.edge_radius"));
 
@@ -214,7 +226,7 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, OperationPreferenceGroupsCoverSche
 
 		const qhc::HostPreferenceGroupDescriptor& group = require_group(schema.preference_group_id);
 		EXPECT_TRUE(same_text(group.label, schema.operation_label));
-		EXPECT_TRUE(group.scope == qhc::HostPreferenceScope::operation);
-		EXPECT_TRUE(group_contains(group, schema.preference_id));
+                EXPECT_TRUE(group.scope == qhc::HostPreferenceScope::Operation);
+                EXPECT_TRUE(group_contains(group, schema.preference_id));
 	}
 }

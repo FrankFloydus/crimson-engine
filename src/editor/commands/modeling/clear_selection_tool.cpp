@@ -11,11 +11,11 @@
 
 namespace quader {
 
-ModelingCommandResult ClearSelectionTool::executeCustomCommand(ModelingCommandExecutionContext& context) const {
+ModelingCommandResult ClearSelectionTool::execute_custom_command(ModelingCommandExecutionContext& context) const {
     if (context.selection != nullptr) {
         return context.selection->clear();
     }
-    return context.modeling.clearSelection();
+    return context.modeling.clear_selection();
 }
 
 } // namespace quader

@@ -16,20 +16,22 @@ namespace quader {
 class RuntimeCommandTool : public InstantCommandTool {
 public:
     [[nodiscard]] ModelingCommandAvailability availability(const ModelingCommandExecutionContext& context) const override {
-        return runtimeAvailability(context);
+      return runtime_availability(context);
     }
 
     ModelingCommandResult execute(ModelingCommandExecutionContext& context) const final {
-        return executeRuntimeCommand(context);
+      return execute_runtime_command(context);
     }
 
 protected:
-    [[nodiscard]] virtual ModelingCommandAvailability runtimeAvailability(const ModelingCommandExecutionContext& context) const {
-        (void)context;
-        return ModelingCommandAvailability::available();
-    }
+  [[nodiscard]] virtual ModelingCommandAvailability
+  runtime_availability(const ModelingCommandExecutionContext &context) const {
+    (void)context;
+    return ModelingCommandAvailability::available();
+  }
 
-    virtual ModelingCommandResult executeRuntimeCommand(ModelingCommandExecutionContext& context) const = 0;
+  virtual ModelingCommandResult
+  execute_runtime_command(ModelingCommandExecutionContext &context) const = 0;
 };
 
 } // namespace quader

@@ -17,7 +17,7 @@ namespace quader {
  */
 class MaterialCompilerService {
 public:
-    static std::vector<std::byte> loadPackage(const std::filesystem::path& path);
+  static std::vector<std::byte> load_package(const std::filesystem::path &path);
 };
 
 } // namespace quader

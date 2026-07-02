@@ -30,8 +30,8 @@ const qhc::HostViewportViewDescriptor& require_view(std::string_view id)
 		}
 	}
 	ADD_FAILURE() << "Missing host viewport view descriptor";
-	static const qhc::HostViewportViewDescriptor missing_descriptor {};
-	return missing_descriptor;
+        static const qhc::HostViewportViewDescriptor kMissingDescriptor{};
+        return kMissingDescriptor;
 }
 
 const qhc::HostGridPresetDescriptor& require_grid(std::string_view shortcut)
@@ -42,8 +42,8 @@ const qhc::HostGridPresetDescriptor& require_grid(std::string_view shortcut)
 		}
 	}
 	ADD_FAILURE() << "Missing host grid preset descriptor";
-	static const qhc::HostGridPresetDescriptor missing_descriptor {};
-	return missing_descriptor;
+        static const qhc::HostGridPresetDescriptor kMissingDescriptor{};
+        return kMissingDescriptor;
 }
 
 } // namespace
@@ -51,17 +51,23 @@ const qhc::HostGridPresetDescriptor& require_grid(std::string_view shortcut)
 TEST(QdrEditorMetadataViewportCatalogTests, HostContractViewportDefaultsExposeCurrentHostGlueConstants) {
 	const qhc::HostViewportDefaultsDescriptor defaults = qhc::viewport_defaults();
 
-	EXPECT_TRUE(defaults.map_units_per_world_unit == qec::default_map_units_per_world_unit);
-	EXPECT_TRUE(defaults.default_grid_map_units == 32.0);
+        EXPECT_TRUE(defaults.map_units_per_world_unit ==
+                    qec::kDefaultMapUnitsPerWorldUnit);
+        EXPECT_TRUE(defaults.default_grid_map_units == 32.0);
 	EXPECT_TRUE(defaults.default_orthographic_size == 24.0);
 	EXPECT_TRUE(defaults.focus_origin_distance == 64.0);
 	EXPECT_TRUE(defaults.default_fov_degrees == 60.0);
-	EXPECT_TRUE(defaults.orbit_radians_per_pixel == qec::navigation_orbit_radians_per_pixel);
-	EXPECT_TRUE(defaults.fly_look_radians_per_pixel == qec::navigation_fly_look_radians_per_pixel);
-	EXPECT_TRUE(defaults.fly_base_speed == qec::navigation_fly_base_speed);
-	EXPECT_TRUE(defaults.fly_fast_multiplier == qec::navigation_fly_fast_multiplier);
-	EXPECT_TRUE(defaults.fly_slow_multiplier == qec::navigation_fly_slow_multiplier);
-	EXPECT_TRUE(defaults.selection_box_drag_threshold_pixels == qec::selection_box_default_drag_threshold);
+        EXPECT_TRUE(defaults.orbit_radians_per_pixel ==
+                    qec::kNavigationOrbitRadiansPerPixel);
+        EXPECT_TRUE(defaults.fly_look_radians_per_pixel ==
+                    qec::kNavigationFlyLookRadiansPerPixel);
+        EXPECT_TRUE(defaults.fly_base_speed == qec::kNavigationFlyBaseSpeed);
+        EXPECT_TRUE(defaults.fly_fast_multiplier ==
+                    qec::kNavigationFlyFastMultiplier);
+        EXPECT_TRUE(defaults.fly_slow_multiplier ==
+                    qec::kNavigationFlySlowMultiplier);
+        EXPECT_TRUE(defaults.selection_box_drag_threshold_pixels ==
+                    qec::kSelectionBoxDefaultDragThreshold);
 }
 
 TEST(QdrEditorMetadataViewportCatalogTests, HostContractGridPresetCatalogIsExplicitAndMapUnitBased) {
@@ -75,7 +81,8 @@ TEST(QdrEditorMetadataViewportCatalogTests, HostContractGridPresetCatalogIsExpli
 	EXPECT_TRUE(require_grid("F10").map_units == 512.0);
 	EXPECT_TRUE(require_grid("F6").default_preset);
 	EXPECT_FALSE(require_grid("F5").default_preset);
-	EXPECT_TRUE(require_grid("F6").world_units == 32.0 / qec::default_map_units_per_world_unit);
+        EXPECT_TRUE(require_grid("F6").world_units ==
+                    32.0 / qec::kDefaultMapUnitsPerWorldUnit);
 }
 
 TEST(QdrEditorMetadataViewportCatalogTests, HostContractViewportViewCatalogDescribesCanonicalInitialCameras) {
@@ -94,9 +101,11 @@ TEST(QdrEditorMetadataViewportCatalogTests, HostContractViewportViewCatalogDescr
 	EXPECT_TRUE(top.position.y == qhc::viewport_defaults().focus_origin_distance);
 	EXPECT_TRUE(top.up.z == -1.0);
 
-	const qhc::HostViewportViewDescriptor& side = require_view(quader::viewportViewStableId(quader::ViewportView::Side));
-	EXPECT_TRUE(same_text(side.label, quader::viewportViewLabel(quader::ViewportView::Side)));
-	EXPECT_TRUE(side.orthographic);
+        const qhc::HostViewportViewDescriptor &side = require_view(
+            quader::viewport_view_stable_id(quader::ViewportView::Side));
+        EXPECT_TRUE(same_text(side.label, quader::viewport_view_label(
+                                              quader::ViewportView::Side)));
+        EXPECT_TRUE(side.orthographic);
 	EXPECT_TRUE(side.position.x == qhc::viewport_defaults().focus_origin_distance);
 	EXPECT_TRUE(side.up.y == 1.0);
 }

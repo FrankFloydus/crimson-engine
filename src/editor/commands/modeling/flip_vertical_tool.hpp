@@ -16,18 +16,19 @@ namespace quader {
 class FlipVerticalTool final : public RuntimeCommandTool {
 public:
     [[nodiscard]] CommandToolDescriptor descriptor() const override {
-        return {
-                .id = "flip_vertical",
-                .operationId = "flip_vertical",
-                .label = "Flip Vertical",
-                .kind = CommandToolKind::Instant,
-                .previewKind = ModelingActionPreviewKind::None,
-                .rebuildsMeshOnSuccess = true,
-        };
+      return {
+          .id = "flip_vertical",
+          .operation_id = "flip_vertical",
+          .label = "Flip Vertical",
+          .kind = CommandToolKind::Instant,
+          .preview_kind = ModelingActionPreviewKind::None,
+          .rebuilds_mesh_on_success = true,
+      };
     }
 
 private:
-    ModelingCommandResult executeRuntimeCommand(ModelingCommandExecutionContext& context) const override;
+  ModelingCommandResult execute_runtime_command(
+      ModelingCommandExecutionContext &context) const override;
 };
 
 } // namespace quader

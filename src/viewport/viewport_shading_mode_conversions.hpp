@@ -11,29 +11,31 @@
 
 namespace quader {
 
-inline ViewportShadingMode quaderApiToViewportShadingMode(QuaderShadingMode mode) {
-    switch (mode) {
-    case QuaderShadingMode::Wireframe:
-        return ViewportShadingMode::Wireframe;
-    case QuaderShadingMode::Material:
-        return ViewportShadingMode::Rendered;
-    case QuaderShadingMode::Solid:
-    case QuaderShadingMode::XRay:
-        return ViewportShadingMode::Shaded;
-    }
+inline ViewportShadingMode
+quader_api_to_viewport_shading_mode(QuaderShadingMode mode) {
+  switch (mode) {
+  case QuaderShadingMode::Wireframe:
+    return ViewportShadingMode::Wireframe;
+  case QuaderShadingMode::Material:
+    return ViewportShadingMode::Rendered;
+  case QuaderShadingMode::Solid:
+  case QuaderShadingMode::XRay:
     return ViewportShadingMode::Shaded;
+  }
+  return ViewportShadingMode::Shaded;
 }
 
-inline QuaderShadingMode quaderApiFromViewportShadingMode(ViewportShadingMode mode) {
-    switch (mode) {
-    case ViewportShadingMode::Wireframe:
-        return QuaderShadingMode::Wireframe;
-    case ViewportShadingMode::Rendered:
-        return QuaderShadingMode::Material;
-    case ViewportShadingMode::Shaded:
-        return QuaderShadingMode::Solid;
-    }
+inline QuaderShadingMode
+quader_api_from_viewport_shading_mode(ViewportShadingMode mode) {
+  switch (mode) {
+  case ViewportShadingMode::Wireframe:
+    return QuaderShadingMode::Wireframe;
+  case ViewportShadingMode::Rendered:
+    return QuaderShadingMode::Material;
+  case ViewportShadingMode::Shaded:
     return QuaderShadingMode::Solid;
+  }
+  return QuaderShadingMode::Solid;
 }
 
 } // namespace quader

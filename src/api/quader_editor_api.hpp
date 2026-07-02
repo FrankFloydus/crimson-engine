@@ -66,7 +66,7 @@ public:
     [[nodiscard]] QuaderRenderApi& render();
     [[nodiscard]] const QuaderRenderApi& render() const;
 
-    [[nodiscard]] QuaderViewportHandle mainViewport();
+    [[nodiscard]] QuaderViewportHandle main_viewport();
     [[nodiscard]] QuaderViewportHandle viewport(ViewportPaneId pane);
     [[nodiscard]] QuaderObjectHandle object(QuaderModelingObjectRef ref);
     [[nodiscard]] QuaderScript script(std::string label = {});
@@ -99,6 +99,6 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-[[nodiscard]] QuaderStandaloneEditor createStandaloneEditor();
+[[nodiscard]] QuaderStandaloneEditor create_standalone_editor();
 
 } // namespace quader

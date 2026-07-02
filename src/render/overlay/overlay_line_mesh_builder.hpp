@@ -21,18 +21,15 @@ namespace quader {
  */
 class OverlayLineMeshBuilder {
 public:
-    static OverlayLineMesh build(
-            const std::vector<const ViewportOverlayLine*>& lines,
-            const ViewportOverlayCamera& camera,
-            float widthPixels,
-            float depthBias);
+  static OverlayLineMesh
+  build(const std::vector<const ViewportOverlayLine *> &lines,
+        const ViewportOverlayCamera &camera, float width_pixels,
+        float depth_bias);
 
-    static bool appendLineQuad(
-            OverlayLineMesh& mesh,
-            const ViewportOverlayLine& line,
-            const OverlayCameraProjector& projector,
-            float widthPixels,
-            float depthBias);
+  static bool append_line_quad(OverlayLineMesh &mesh,
+                               const ViewportOverlayLine &line,
+                               const OverlayCameraProjector &projector,
+                               float width_pixels, float depth_bias);
 };
 
 } // namespace quader

@@ -20,13 +20,13 @@ public:
 
     [[nodiscard]] ModelingInteractionSettings settings() const;
     [[nodiscard]] ModelingInteractionSettings normalize(const ModelingInteractionSettings& settings) const;
-    [[nodiscard]] bool setNormalized(ModelingInteractionSettings settings);
+    [[nodiscard]] bool set_normalized(ModelingInteractionSettings settings);
 
-    void resetForPreviewAction(ModelingActionPreviewKind previewKind);
-    void setCutMode(ModelingCutMode mode);
-    void cycleCutModeWithoutRuntime();
+    void reset_for_preview_action(ModelingActionPreviewKind preview_kind);
+    void set_cut_mode(ModelingCutMode mode);
+    void cycle_cut_mode_without_runtime();
 
-private:
+  private:
     ModelingInteractionSettings settings_;
 };
 

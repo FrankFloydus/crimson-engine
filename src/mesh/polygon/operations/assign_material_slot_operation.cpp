@@ -38,11 +38,12 @@ OperationResult assign_material_slot_to_selection(
 		std::uint32_t material_slot)
 {
 	QDR_PROFILE_SCOPE("qdr_document.assign_selected_face_material_slot");
-	if (selection.mode != SelectionMode::face || selection.faces.empty()) {
-		return { false, "Select one or more faces before assigning a material slot." };
-	}
+        if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
+          return {false,
+                  "Select one or more faces before assigning a material slot."};
+        }
 
-	bool found = false;
+        bool found = false;
 	bool changed = false;
 	for (ElementId face_id : selection.faces) {
 		Face* face = find_face(document, face_id);

@@ -44,7 +44,7 @@ ElementId copied_vertex_with_offset(Document& document, std::map<ElementId, Elem
 
     const Vertex* source = find_vertex(document, source_id);
     if (source == nullptr) {
-        return invalid_element_id;
+      return kInvalidElementId;
     }
 
     const ElementId copied_id = add_vertex(document, source->position + offset);
@@ -66,7 +66,7 @@ ElementId copied_vertex_with_transform(
 
     const Vertex* source = find_vertex(document, source_id);
     if (source == nullptr) {
-        return invalid_element_id;
+      return kInvalidElementId;
     }
 
     const ElementId copied_id = add_vertex(document, transform_point_around_pivot(transform, pivot, source->position));
@@ -78,10 +78,10 @@ ElementId copied_vertex_with_transform(
  * Represents an Edge Extrude Face Source value used by the polygon document and mesh editing core.
  */
 struct EdgeExtrudeFaceSource {
-    ElementId face_id = invalid_element_id;
-    std::pair<ElementId, ElementId> oriented_edge;
-    quader::QVec3 source_normal;
-    std::uint32_t material_slot = 0;
+  ElementId face_id = kInvalidElementId;
+  std::pair<ElementId, ElementId> oriented_edge;
+  quader::QVec3 source_normal;
+  std::uint32_t material_slot = 0;
 };
 
 /**
@@ -140,8 +140,8 @@ std::pair<const EdgeExtrudeFaceSource*, const EdgeExtrudeFaceSource*> closed_edg
     }
 
     const quader::QVec3 delta = normalize_or_zero(copied_edge_delta(document, edge, copied_vertices));
-    if (length_squared(delta) <= epsilon) {
-        return { &source.faces[0], &source.faces[1] };
+    if (length_squared(delta) <= kEpsilon) {
+      return {&source.faces[0], &source.faces[1]};
     }
 
     const float first_score = std::abs(dot(normalize_or_zero(source.faces[0].source_normal), delta));
@@ -160,8 +160,10 @@ bool append_renderable_face(Document& document, std::span<const ElementId> verti
 
     Face face;
     face.vertices.assign(vertices.begin(), vertices.end());
-    if (face_loop_area_score(document, face.vertices) <= face_area_score_epsilon || triangulate_face_local_indices(document, face).empty()) {
-        return false;
+    if (face_loop_area_score(document, face.vertices) <=
+            kFaceAreaScoreEpsilon ||
+        triangulate_face_local_indices(document, face).empty()) {
+      return false;
     }
 
     [[maybe_unused]] const ElementId face_id = add_face(document, vertices, material_slot);
@@ -196,8 +198,9 @@ bool append_closed_edge_ledge_extrusion_with_copied_vertices(
 
     const ElementId copied_a = copy_vertex(copied_vertices, edge.a);
     const ElementId copied_b = copy_vertex(copied_vertices, edge.b);
-    if (copied_a == invalid_element_id || copied_b == invalid_element_id || copied_a == copied_b) {
-        return false;
+    if (copied_a == kInvalidElementId || copied_b == kInvalidElementId ||
+        copied_a == copied_b) {
+      return false;
     }
 
     const auto [ledge_source, cap_source] = closed_edge_source_pair_for_delta(document, edge_source, edge, copied_vertices);
@@ -227,8 +230,10 @@ bool append_closed_edge_ledge_extrusion_with_copied_vertices(
     const std::size_t to_neighbor_index = (cap_to_index + 1U) % cap_face_snapshot.vertices.size();
     const ElementId from_neighbor = cap_face_snapshot.vertices[from_neighbor_index];
     const ElementId to_neighbor = cap_face_snapshot.vertices[to_neighbor_index];
-    if (from_neighbor == invalid_element_id || to_neighbor == invalid_element_id || from_neighbor == cap_to || to_neighbor == cap_from) {
-        return false;
+    if (from_neighbor == kInvalidElementId ||
+        to_neighbor == kInvalidElementId || from_neighbor == cap_to ||
+        to_neighbor == cap_from) {
+      return false;
     }
 
     const quader::QVec3 cap_from_position = vertex_position_or_zero(document, cap_from);
@@ -240,10 +245,13 @@ bool append_closed_edge_ledge_extrusion_with_copied_vertices(
     const float from_strip_length = length(from_neighbor_position - cap_from_position);
     const float to_strip_length = length(to_neighbor_position - cap_to_position);
     const float drag_length = length(copied_edge_delta(document, edge, copied_vertices));
-    const float requested_depth = ledge_size > epsilon ? ledge_size : drag_length;
+    const float requested_depth =
+        ledge_size > kEpsilon ? ledge_size : drag_length;
     const float strip_depth = std::min(requested_depth, std::min(from_strip_length, to_strip_length) * 0.5F);
-    if (strip_depth <= epsilon || length_squared(from_strip_direction) <= epsilon || length_squared(to_strip_direction) <= epsilon) {
-        return false;
+    if (strip_depth <= kEpsilon ||
+        length_squared(from_strip_direction) <= kEpsilon ||
+        length_squared(to_strip_direction) <= kEpsilon) {
+      return false;
     }
 
     const ElementId from_inner = add_vertex(document, cap_from_position + (from_strip_direction * strip_depth));
@@ -252,10 +260,12 @@ bool append_closed_edge_ledge_extrusion_with_copied_vertices(
     const ElementId copied_cap_to = copy_vertex(copied_vertices, cap_to);
     const ElementId root_cap_from = add_vertex(document, cap_from_position);
     const ElementId root_cap_to = add_vertex(document, cap_to_position);
-    if (from_inner == invalid_element_id || to_inner == invalid_element_id ||
-        copied_cap_from == invalid_element_id || copied_cap_to == invalid_element_id ||
-        root_cap_from == invalid_element_id || root_cap_to == invalid_element_id) {
-        return false;
+    if (from_inner == kInvalidElementId || to_inner == kInvalidElementId ||
+        copied_cap_from == kInvalidElementId ||
+        copied_cap_to == kInvalidElementId ||
+        root_cap_from == kInvalidElementId ||
+        root_cap_to == kInvalidElementId) {
+      return false;
     }
 
     const std::array ledge {
@@ -296,9 +306,9 @@ OperationResult extrude_selected_faces_with_copied_vertices(
     std::string_view missing_message,
     std::string_view unchanged_message)
 {
-    if (selection.mode != SelectionMode::face || selection.faces.empty()) {
-        return { false, std::string(empty_message) };
-    }
+  if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
+    return {false, std::string(empty_message)};
+  }
 
     const ElementId active_face_id = active_face_or_invalid(selection);
     const std::vector<Face> faces = selected_face_copies(document, selection);
@@ -329,9 +339,9 @@ OperationResult extrude_selected_faces_with_copied_vertices(
         bool valid_face = true;
         for (const ElementId vertex_id : original_face.vertices) {
             const ElementId copied_id = copy_vertex(copied_vertices, vertex_id);
-            if (copied_id == invalid_element_id) {
-                valid_face = false;
-                break;
+            if (copied_id == kInvalidElementId) {
+              valid_face = false;
+              break;
             }
             cap_vertices.push_back(copied_id);
         }
@@ -382,7 +392,7 @@ OperationResult extrude_selected_faces_with_copied_vertices(
 
     prune_invalid_faces(document);
     selection.clear();
-    selection.mode = SelectionMode::face;
+    selection.mode = SelectionMode::Face;
     selection.faces = std::move(selected_faces);
     activate_face_or_last_selection(selection, active_face_id);
     return { true, {} };
@@ -398,9 +408,9 @@ OperationResult extrude_selected_edges_with_copied_vertices(
     std::string_view missing_message,
     std::string_view unchanged_message)
 {
-    if (selection.mode != SelectionMode::edge || selection.edges.empty()) {
-        return { false, std::string(empty_message) };
-    }
+  if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
+    return {false, std::string(empty_message)};
+  }
 
     const std::vector<Edge> edges = selected_valid_edges(document, selection);
     if (edges.empty()) {
@@ -452,8 +462,9 @@ OperationResult extrude_selected_edges_with_copied_vertices(
         const ElementId to_id = source.oriented_edge.second;
         const ElementId copied_from = copy_vertex(copied_vertices, from_id);
         const ElementId copied_to = copy_vertex(copied_vertices, to_id);
-        if (copied_from == invalid_element_id || copied_to == invalid_element_id || copied_from == copied_to) {
-            continue;
+        if (copied_from == kInvalidElementId ||
+            copied_to == kInvalidElementId || copied_from == copied_to) {
+          continue;
         }
 
         std::array side {
@@ -474,7 +485,7 @@ OperationResult extrude_selected_edges_with_copied_vertices(
 
     prune_invalid_faces(document);
     selection.clear();
-    selection.mode = SelectionMode::edge;
+    selection.mode = SelectionMode::Edge;
     selection.edges = std::move(selected_edges);
     activate_last_selection(selection);
     return { true, {} };
@@ -487,33 +498,33 @@ namespace document_internal {
 OperationResult extrude_selected_elements_impl(Document& document, Selection& selection, quader::QVec3 offset, float closed_edge_ledge_size)
 {
     QDR_PROFILE_SCOPE("qdr_document.extrude_selected_elements_impl");
-    if (length(offset) <= epsilon) {
-        return { false, "Extrude distance must be non-zero." };
+    if (length(offset) <= kEpsilon) {
+      return {false, "Extrude distance must be non-zero."};
     }
 
-    if (selection.mode == SelectionMode::face) {
-        return extrude_selected_faces_with_copied_vertices(
-            document,
-            selection,
-            [&document, offset](std::map<ElementId, ElementId>& copied_vertices, ElementId source_id) {
-                return copied_vertex_with_offset(document, copied_vertices, source_id, offset);
-            },
-            "Select one or more faces to extrude.",
-            "No selected faces were found.",
-            "No selected faces were extruded.");
+    if (selection.mode == SelectionMode::Face) {
+      return extrude_selected_faces_with_copied_vertices(
+          document, selection,
+          [&document, offset](std::map<ElementId, ElementId> &copied_vertices,
+                              ElementId source_id) {
+            return copied_vertex_with_offset(document, copied_vertices,
+                                             source_id, offset);
+          },
+          "Select one or more faces to extrude.",
+          "No selected faces were found.", "No selected faces were extruded.");
     }
 
-    if (selection.mode == SelectionMode::edge) {
-        return extrude_selected_edges_with_copied_vertices(
-            document,
-            selection,
-            [&document, offset](std::map<ElementId, ElementId>& copied_vertices, ElementId source_id) {
-                return copied_vertex_with_offset(document, copied_vertices, source_id, offset);
-            },
-            closed_edge_ledge_size,
-            "Select one or more edges to extrude.",
-            "Select one or more valid edges to extrude.",
-            "No selected edges were extruded.");
+    if (selection.mode == SelectionMode::Edge) {
+      return extrude_selected_edges_with_copied_vertices(
+          document, selection,
+          [&document, offset](std::map<ElementId, ElementId> &copied_vertices,
+                              ElementId source_id) {
+            return copied_vertex_with_offset(document, copied_vertices,
+                                             source_id, offset);
+          },
+          closed_edge_ledge_size, "Select one or more edges to extrude.",
+          "Select one or more valid edges to extrude.",
+          "No selected edges were extruded.");
     }
 
     return { false, "Extrude needs a face or edge selection." };
@@ -522,29 +533,31 @@ OperationResult extrude_selected_elements_impl(Document& document, Selection& se
 OperationResult inset_selected_elements_impl(Document& document, Selection& selection, const Transform3& transform, quader::QVec3 pivot)
 {
     QDR_PROFILE_SCOPE("qdr_document.inset_selected_elements_impl");
-    if (selection.mode == SelectionMode::face) {
-        return extrude_selected_faces_with_copied_vertices(
-            document,
-            selection,
-            [&document, &transform, pivot](std::map<ElementId, ElementId>& copied_vertices, ElementId source_id) {
-                return copied_vertex_with_transform(document, copied_vertices, source_id, transform, pivot);
-            },
-            "Select one or more faces to inset.",
-            "No selected faces were found.",
-            "No selected faces were inset.");
+    if (selection.mode == SelectionMode::Face) {
+      return extrude_selected_faces_with_copied_vertices(
+          document, selection,
+          [&document, &transform,
+           pivot](std::map<ElementId, ElementId> &copied_vertices,
+                  ElementId source_id) {
+            return copied_vertex_with_transform(document, copied_vertices,
+                                                source_id, transform, pivot);
+          },
+          "Select one or more faces to inset.", "No selected faces were found.",
+          "No selected faces were inset.");
     }
 
-    if (selection.mode == SelectionMode::edge) {
-        return extrude_selected_edges_with_copied_vertices(
-            document,
-            selection,
-            [&document, &transform, pivot](std::map<ElementId, ElementId>& copied_vertices, ElementId source_id) {
-                return copied_vertex_with_transform(document, copied_vertices, source_id, transform, pivot);
-            },
-            0.0F,
-            "Select one or more edges to inset.",
-            "Select one or more valid edges to inset.",
-            "No selected edges were inset.");
+    if (selection.mode == SelectionMode::Edge) {
+      return extrude_selected_edges_with_copied_vertices(
+          document, selection,
+          [&document, &transform,
+           pivot](std::map<ElementId, ElementId> &copied_vertices,
+                  ElementId source_id) {
+            return copied_vertex_with_transform(document, copied_vertices,
+                                                source_id, transform, pivot);
+          },
+          0.0F, "Select one or more edges to inset.",
+          "Select one or more valid edges to inset.",
+          "No selected edges were inset.");
     }
 
     return { false, "Inset needs a face or edge selection." };

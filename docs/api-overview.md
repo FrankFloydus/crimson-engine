@@ -8,15 +8,15 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Quader Public Editor API
 
-Quader editor automation should start from `createStandaloneEditor()` in small standalone programs,
+Quader editor automation should start from `create_standalone_editor()` in small standalone programs,
 from `QuaderEditorApi` in the native app runtime, or from `QuaderApi` for document/modeling-only
 behavior tests and examples.
 
 ```cpp
-quader::QuaderStandaloneEditor standalone = quader::createStandaloneEditor();
+quader::QuaderStandaloneEditor standalone = quader::create_standalone_editor();
 quader::QuaderEditorApi& editor = standalone.editor();
 
-auto created = editor.modeling().createBox({
+auto created = editor.modeling().create_box({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "API Box",
 });
@@ -25,7 +25,7 @@ if (created.ok()) {
     auto object = editor.object(created.value());
     object.rename("Renamed API Box");
     object.select();
-    editor.commands().execute(quader::QuaderCommand::HistoryUndo);
+    editor.commands().execute(quader::quader_command::kHistoryUndo);
 }
 ```
 
@@ -43,14 +43,14 @@ Common ergonomic patterns:
 
 ```cpp
 editor.scene().select(entity);
-editor.selection().selectObject(object.entity);
-editor.commands().execute(quader::QuaderCommand::DuplicateSelection);
-editor.mainViewport().setShadingMode(quader::QuaderShadingMode::Wireframe);
+editor.selection().select_object(object.entity);
+editor.commands().execute(quader::quader_command::kDuplicateSelection);
+editor.main_viewport().set_shading_mode(quader::QuaderShadingMode::Wireframe);
 
 editor.scene().batch("Arrange blockout")
         .rename(entity, "North Wall")
-        .setTransform(entity, moved)
-        .setVisible(helper, false)
+        .set_transform(entity, moved)
+        .set_visible(helper, false)
         .commit();
 ```
 

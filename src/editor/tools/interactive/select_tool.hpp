@@ -15,8 +15,9 @@ namespace quader {
  */
 class SelectTool final : public InteractiveViewportTool {
 public:
-    SelectTool()
-        : InteractiveViewportTool(viewportToolDescriptor(ViewportToolId::Select)) {}
+  SelectTool()
+      : InteractiveViewportTool(
+            viewport_tool_descriptor(ViewportToolId::Select)) {}
 };
 
 } // namespace quader

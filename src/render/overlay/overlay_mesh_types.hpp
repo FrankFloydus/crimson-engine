@@ -52,7 +52,7 @@ struct OverlayFaceFillVertex {
  */
 struct OverlayLineVertex {
     OverlayFloat4 position;
-    OverlayFloat4 lineDistancePixels;
+    OverlayFloat4 line_distance_pixels;
     std::uint32_t color = 0;
 };
 

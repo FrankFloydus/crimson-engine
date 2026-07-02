@@ -16,7 +16,7 @@ struct QVec2 {
     float y = 0.0f;
 
     constexpr QVec2() = default;
-    constexpr QVec2(float xValue, float yValue) : x(xValue), y(yValue) {}
+    constexpr QVec2(float x_value, float y_value) : x(x_value), y(y_value) {}
 };
 
 inline QVec2 operator+(QVec2 a, QVec2 b) {

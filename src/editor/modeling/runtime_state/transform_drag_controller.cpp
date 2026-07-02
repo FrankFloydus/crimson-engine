@@ -8,38 +8,38 @@
 
 namespace quader {
 
-TransformDragPreviewRouting TransformDragController::previewRouting(
-        bool duplicateSelected,
-        bool objectSelectionMode,
-        bool transformOperation) {
-    const bool duplicateSceneTransformPreview =
-            duplicateSelected &&
-            objectSelectionMode &&
-            transformOperation;
-    TransformDragPreviewRouting routing;
-    routing.previewDriven = !duplicateSceneTransformPreview && (duplicateSelected || !objectSelectionMode);
-    routing.needsRuntimePreviewTransaction = routing.previewDriven || duplicateSelected;
-    routing.sceneTransformPreviewEligible =
-            (duplicateSceneTransformPreview || !routing.previewDriven) && transformOperation;
-    return routing;
+TransformDragPreviewRouting
+TransformDragController::preview_routing(bool duplicate_selected,
+                                         bool object_selection_mode,
+                                         bool transform_operation) {
+  const bool duplicate_scene_transform_preview =
+      duplicate_selected && object_selection_mode && transform_operation;
+  TransformDragPreviewRouting routing;
+  routing.preview_driven = !duplicate_scene_transform_preview &&
+                           (duplicate_selected || !object_selection_mode);
+  routing.needs_runtime_preview_transaction =
+      routing.preview_driven || duplicate_selected;
+  routing.scene_transform_preview_eligible =
+      (duplicate_scene_transform_preview || !routing.preview_driven) &&
+      transform_operation;
+  return routing;
 }
 
-void TransformDragController::setPreviewDriven(bool previewDriven, bool duplicateSelected) {
-    previewDriven_ = previewDriven;
-    duplicateSelected_ = duplicateSelected;
+void TransformDragController::set_preview_driven(bool preview_driven,
+                                                 bool duplicate_selected) {
+  preview_driven_ = preview_driven;
+  duplicate_selected_ = duplicate_selected;
 }
 
 void TransformDragController::clear() {
-    previewDriven_ = false;
-    duplicateSelected_ = false;
+  preview_driven_ = false;
+  duplicate_selected_ = false;
 }
 
-bool TransformDragController::previewDriven() const {
-    return previewDriven_;
-}
+bool TransformDragController::preview_driven() const { return preview_driven_; }
 
-bool TransformDragController::duplicateSelected() const {
-    return duplicateSelected_;
+bool TransformDragController::duplicate_selected() const {
+  return duplicate_selected_;
 }
 
 } // namespace quader

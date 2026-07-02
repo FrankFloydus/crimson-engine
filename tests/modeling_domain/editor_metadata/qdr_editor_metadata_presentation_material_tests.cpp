@@ -58,8 +58,9 @@ const qhc::HostOverlayRenderPolicyDescriptor& require_render_policy(std::string_
 		}
 	}
 	ADD_FAILURE() << "Missing host overlay render policy descriptor";
-	static const qhc::HostOverlayRenderPolicyDescriptor missing_descriptor {};
-	return missing_descriptor;
+        static const qhc::HostOverlayRenderPolicyDescriptor
+            kMissingDescriptor{};
+        return kMissingDescriptor;
 }
 
 const qhc::HostMaterialScalarDescriptor& require_scalar(
@@ -72,8 +73,8 @@ const qhc::HostMaterialScalarDescriptor& require_scalar(
 		}
 	}
 	ADD_FAILURE() << "Missing host material scalar descriptor";
-	static const qhc::HostMaterialScalarDescriptor missing_descriptor {};
-	return missing_descriptor;
+        static const qhc::HostMaterialScalarDescriptor kMissingDescriptor{};
+        return kMissingDescriptor;
 }
 
 void check_color(const qhc::HostColorDescriptor& color, double r, double g, double b, double a)
@@ -114,19 +115,21 @@ TEST(QdrEditorMetadataPresentationMaterialTests, HostContractDescribesViewportOv
 	EXPECT_TRUE(span_contains(presentation.transient_hover_suppressed_layer_ids, "selected_vertex"));
 
 	const qhc::HostOverlayRenderPolicyDescriptor& fill = require_render_policy("depth_tested_fill");
-	EXPECT_TRUE(fill.geometry_kind == qhc::HostOverlayGeometryKind::triangles);
-	EXPECT_TRUE(close_to(fill.depth_bias, 0.035));
+        EXPECT_TRUE(fill.geometry_kind ==
+                    qhc::HostOverlayGeometryKind::Triangles);
+        EXPECT_TRUE(close_to(fill.depth_bias, 0.035));
 	EXPECT_FALSE(fill.draws_on_top);
 
 	const qhc::HostOverlayRenderPolicyDescriptor& line = require_render_policy("depth_tested_line");
-	EXPECT_TRUE(line.geometry_kind == qhc::HostOverlayGeometryKind::lines);
-	EXPECT_TRUE(close_to(line.depth_bias, 0.02));
+        EXPECT_TRUE(line.geometry_kind == qhc::HostOverlayGeometryKind::Lines);
+        EXPECT_TRUE(close_to(line.depth_bias, 0.02));
 	EXPECT_TRUE(close_to(line.feather_pixels, 1.0));
 	EXPECT_FALSE(line.draws_on_top);
 
 	const qhc::HostOverlayRenderPolicyDescriptor& on_top_point = require_render_policy("draw_on_top_point");
-	EXPECT_TRUE(on_top_point.geometry_kind == qhc::HostOverlayGeometryKind::points);
-	EXPECT_TRUE(close_to(on_top_point.depth_bias, 0.0));
+        EXPECT_TRUE(on_top_point.geometry_kind ==
+                    qhc::HostOverlayGeometryKind::Points);
+        EXPECT_TRUE(close_to(on_top_point.depth_bias, 0.0));
 	EXPECT_TRUE(on_top_point.draws_on_top);
 }
 
@@ -137,31 +140,33 @@ TEST(QdrEditorMetadataPresentationMaterialTests, HostContractDefaultMaterialReci
 	const qhc::HostMaterialTextureAssetDescriptor *albedo =
 		qhc::find_material_texture_asset_descriptor("default_albedo");
 	EXPECT_TRUE(albedo != nullptr);
-	EXPECT_TRUE(albedo->role == qhc::HostMaterialTextureRole::base_color);
-	EXPECT_TRUE(same_text(albedo->package_relative_path, "materials/default/default_albedo.png"));
+        EXPECT_TRUE(albedo->role == qhc::HostMaterialTextureRole::BaseColor);
+        EXPECT_TRUE(same_text(albedo->package_relative_path, "materials/default/default_albedo.png"));
 
 	const qhc::HostMaterialTextureAssetDescriptor *roughness =
 		qhc::find_material_texture_asset_descriptor("default_roughness");
 	EXPECT_TRUE(roughness != nullptr);
-	EXPECT_TRUE(roughness->role == qhc::HostMaterialTextureRole::roughness);
-	EXPECT_TRUE(same_text(roughness->package_relative_path, "materials/default/default_roughness.png"));
+        EXPECT_TRUE(roughness->role == qhc::HostMaterialTextureRole::Roughness);
+        EXPECT_TRUE(same_text(roughness->package_relative_path, "materials/default/default_roughness.png"));
 
 	const qhc::HostMaterialGeneratedTextureDescriptor *metallic_smoothness =
 		qhc::find_material_generated_texture_descriptor("default_metallic_smoothness");
 	EXPECT_TRUE(metallic_smoothness != nullptr);
-	EXPECT_TRUE(metallic_smoothness->role == qhc::HostMaterialTextureRole::metallic_smoothness);
-	EXPECT_TRUE(same_text(metallic_smoothness->source_texture_asset_id, "default_roughness"));
+        EXPECT_TRUE(metallic_smoothness->role ==
+                    qhc::HostMaterialTextureRole::MetallicSmoothness);
+        EXPECT_TRUE(same_text(metallic_smoothness->source_texture_asset_id, "default_roughness"));
 	EXPECT_TRUE(metallic_smoothness->invert_source_grayscale);
-	EXPECT_TRUE(metallic_smoothness->target_channel == qhc::HostMaterialTextureChannel::alpha);
-	EXPECT_TRUE(close_to(metallic_smoothness->constant_red, 0.0));
+        EXPECT_TRUE(metallic_smoothness->target_channel ==
+                    qhc::HostMaterialTextureChannel::Alpha);
+        EXPECT_TRUE(close_to(metallic_smoothness->constant_red, 0.0));
 	EXPECT_TRUE(close_to(metallic_smoothness->constant_green, 0.0));
 	EXPECT_TRUE(close_to(metallic_smoothness->constant_blue, 0.0));
 
 	const qhc::HostMaterialGeneratedTextureDescriptor *packed_mask =
 		qhc::find_material_generated_texture_descriptor("default_packed_mask");
 	EXPECT_TRUE(packed_mask != nullptr);
-	EXPECT_TRUE(packed_mask->role == qhc::HostMaterialTextureRole::mask);
-	EXPECT_TRUE(packed_mask->invert_source_grayscale);
+        EXPECT_TRUE(packed_mask->role == qhc::HostMaterialTextureRole::Mask);
+        EXPECT_TRUE(packed_mask->invert_source_grayscale);
 	EXPECT_TRUE(close_to(packed_mask->constant_green, 1.0));
 
 	const qhc::HostMaterialRecipeDescriptor *recipe = qhc::find_material_recipe_descriptor("default_material");
@@ -179,13 +184,39 @@ TEST(QdrEditorMetadataPresentationMaterialTests, HostContractDefaultMaterialReci
 	EXPECT_TRUE(close_to(recipe->texture_offset.x, 0.0));
 	EXPECT_TRUE(close_to(recipe->texture_offset.y, 1.0));
 
-	EXPECT_TRUE(close_to(require_scalar(*recipe, qhc::HostMaterialScalarKind::metallic).value, 0.0));
-	EXPECT_TRUE(close_to(require_scalar(*recipe, qhc::HostMaterialScalarKind::smoothness).value, 1.0));
-	EXPECT_TRUE(close_to(require_scalar(*recipe, qhc::HostMaterialScalarKind::smoothness_texture_channel).value, 0.0));
-	EXPECT_TRUE(close_to(require_scalar(*recipe, qhc::HostMaterialScalarKind::smoothness_remap_min).value, 0.0));
-	EXPECT_TRUE(close_to(require_scalar(*recipe, qhc::HostMaterialScalarKind::smoothness_remap_max).value, 1.0));
-	EXPECT_TRUE(close_to(require_scalar(*recipe, qhc::HostMaterialScalarKind::ambient_occlusion_remap_min).value, 1.0));
-	EXPECT_TRUE(close_to(require_scalar(*recipe, qhc::HostMaterialScalarKind::ambient_occlusion_remap_max).value, 1.0));
+        EXPECT_TRUE(close_to(
+            require_scalar(*recipe, qhc::HostMaterialScalarKind::Metallic)
+                .value,
+            0.0));
+        EXPECT_TRUE(close_to(
+            require_scalar(*recipe, qhc::HostMaterialScalarKind::Smoothness)
+                .value,
+            1.0));
+        EXPECT_TRUE(close_to(
+            require_scalar(
+                *recipe, qhc::HostMaterialScalarKind::SmoothnessTextureChannel)
+                .value,
+            0.0));
+        EXPECT_TRUE(close_to(
+            require_scalar(*recipe,
+                           qhc::HostMaterialScalarKind::SmoothnessRemapMin)
+                .value,
+            0.0));
+        EXPECT_TRUE(close_to(
+            require_scalar(*recipe,
+                           qhc::HostMaterialScalarKind::SmoothnessRemapMax)
+                .value,
+            1.0));
+        EXPECT_TRUE(close_to(
+            require_scalar(
+                *recipe, qhc::HostMaterialScalarKind::AmbientOcclusionRemapMin)
+                .value,
+            1.0));
+        EXPECT_TRUE(close_to(
+            require_scalar(
+                *recipe, qhc::HostMaterialScalarKind::AmbientOcclusionRemapMax)
+                .value,
+            1.0));
 }
 
 TEST(QdrEditorMetadataPresentationMaterialTests, HostContractMaterialMetadataAvoidsEngineSpecificShaderAndPropertyNames) {

@@ -32,17 +32,17 @@ struct ModelingCommandExecutionContext {
  */
 struct ModelingCommandAvailability {
     bool enabled = true;
-    std::string disabledReason;
+    std::string disabled_reason;
 
     [[nodiscard]] static ModelingCommandAvailability available() {
         return {};
     }
 
     [[nodiscard]] static ModelingCommandAvailability unavailable(std::string reason) {
-        return {
-                .enabled = false,
-                .disabledReason = std::move(reason),
-        };
+      return {
+          .enabled = false,
+          .disabled_reason = std::move(reason),
+      };
     }
 };
 
@@ -64,8 +64,8 @@ struct ModelingCommandHistoryPolicy {
         return {};
     }
 
-    [[nodiscard]] static ModelingCommandHistoryPolicy modelingUndoRedo() {
-        return {.mode = ModelingCommandHistoryMode::ModelingUndoRedo};
+    [[nodiscard]] static ModelingCommandHistoryPolicy modeling_undo_redo() {
+      return {.mode = ModelingCommandHistoryMode::ModelingUndoRedo};
     }
 };
 
@@ -84,24 +84,37 @@ public:
 
     [[nodiscard]] virtual CommandToolDescriptor descriptor() const = 0;
     [[nodiscard]] virtual ModelingCommandAvailability availability(const ModelingCommandExecutionContext& context) const = 0;
-    [[nodiscard]] virtual ModelingCommandHistoryPolicy historyPolicy() const = 0;
+    [[nodiscard]] virtual ModelingCommandHistoryPolicy
+    history_policy() const = 0;
     virtual ModelingCommandResult execute(ModelingCommandExecutionContext& context) const = 0;
 
     [[nodiscard]] std::string_view id() const { return descriptor().id; }
-    [[nodiscard]] std::string_view operationId() const { return descriptor().operationId; }
+    [[nodiscard]] std::string_view operation_id() const {
+      return descriptor().operation_id;
+    }
     [[nodiscard]] std::string_view label() const { return descriptor().label; }
     [[nodiscard]] CommandToolKind kind() const { return descriptor().kind; }
-    [[nodiscard]] ModelingActionPreviewKind previewKind() const { return descriptor().previewKind; }
-    [[nodiscard]] bool rebuildsMeshOnSuccess() const { return descriptor().rebuildsMeshOnSuccess; }
-    [[nodiscard]] std::string_view publicCommandId() const { return descriptor().publicCommandId; }
-    [[nodiscard]] bool registersPublicCommand() const { return descriptor().registersPublicCommand; }
-    [[nodiscard]] std::string_view hostShortcutTargetId() const { return descriptor().hostShortcutTargetId; }
-    [[nodiscard]] std::string publicCommandTargetId() const {
-        const std::string_view fixedId = publicCommandId();
-        if (!fixedId.empty()) {
-            return std::string(fixedId);
-        }
-        return quaderModelingCommandTargetId(id());
+    [[nodiscard]] ModelingActionPreviewKind preview_kind() const {
+      return descriptor().preview_kind;
+    }
+    [[nodiscard]] bool rebuilds_mesh_on_success() const {
+      return descriptor().rebuilds_mesh_on_success;
+    }
+    [[nodiscard]] std::string_view public_command_id() const {
+      return descriptor().public_command_id;
+    }
+    [[nodiscard]] bool registers_public_command() const {
+      return descriptor().registers_public_command;
+    }
+    [[nodiscard]] std::string_view host_shortcut_target_id() const {
+      return descriptor().host_shortcut_target_id;
+    }
+    [[nodiscard]] std::string public_command_target_id() const {
+      const std::string_view fixed_id = public_command_id();
+      if (!fixed_id.empty()) {
+        return std::string(fixed_id);
+      }
+      return quader_modeling_command_target_id(id());
     }
 
     [[nodiscard]] bool enabled(ModelingSessionService& modeling) const {
@@ -109,9 +122,10 @@ public:
         return availability(context).enabled;
     }
 
-    [[nodiscard]] std::string disabledReason(ModelingSessionService& modeling) const {
-        const ModelingCommandExecutionContext context{.modeling = modeling};
-        return availability(context).disabledReason;
+    [[nodiscard]] std::string
+    disabled_reason(ModelingSessionService &modeling) const {
+      const ModelingCommandExecutionContext context{.modeling = modeling};
+      return availability(context).disabled_reason;
     }
 
     ModelingCommandResult execute(ModelingSessionService& modeling) const {

@@ -18,9 +18,9 @@ namespace quader {
  */
 struct UISettingsPaths {
     std::filesystem::path directory;
-    std::filesystem::path imguiIniFile;
-    std::filesystem::path settingsFile;
-    std::filesystem::path viewportSettingsFile;
+    std::filesystem::path imgui_ini_file;
+    std::filesystem::path settings_file;
+    std::filesystem::path viewport_settings_file;
 };
 
 /**
@@ -30,23 +30,26 @@ class UISettings {
 public:
     static UISettings defaults();
     static UISettings load(const std::filesystem::path& path);
-    static UISettingsPaths resolvePaths(const std::filesystem::path& executableDir);
+    static UISettingsPaths
+    resolve_paths(const std::filesystem::path &executable_dir);
 
     bool save(const std::filesystem::path& path) const;
 
-    bool isPanelVisible(UIPanelId id) const;
-    void setPanelVisible(UIPanelId id, bool visible);
-    bool navigationGizmoVisible() const { return navigationGizmoVisible_; }
-    void setNavigationGizmoVisible(bool visible) { navigationGizmoVisible_ = visible; }
+    bool is_panel_visible(UIPanelId id) const;
+    void set_panel_visible(UIPanelId id, bool visible);
+    bool navigation_gizmo_visible() const { return navigation_gizmo_visible_; }
+    void set_navigation_gizmo_visible(bool visible) {
+      navigation_gizmo_visible_ = visible;
+    }
     const std::string& locale() const { return locale_; }
-    void setLocale(std::string locale);
+    void set_locale(std::string locale);
 
-private:
+  private:
     std::string locale_ = "en-US";
-    bool outlinerVisible_ = uiPanelDefaultVisible(UIPanelId::Outliner);
-    bool inspectorVisible_ = uiPanelDefaultVisible(UIPanelId::Inspector);
-    bool consoleVisible_ = uiPanelDefaultVisible(UIPanelId::Console);
-    bool navigationGizmoVisible_ = true;
+    bool outliner_visible_ = ui_panel_default_visible(UIPanelId::Outliner);
+    bool inspector_visible_ = ui_panel_default_visible(UIPanelId::Inspector);
+    bool console_visible_ = ui_panel_default_visible(UIPanelId::Console);
+    bool navigation_gizmo_visible_ = true;
 };
 
 } // namespace quader

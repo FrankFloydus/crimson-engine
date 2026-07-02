@@ -89,22 +89,22 @@ public:
 		surface.valid = true;
 		surface.origin = {};
 		switch (axis) {
-			case TransformAxis::x:
-				surface.normal = { 1.0F, 0.0F, 0.0F };
-				break;
-			case TransformAxis::y:
-				surface.normal = { 0.0F, 1.0F, 0.0F };
-				break;
-			case TransformAxis::z:
-				surface.normal = { 0.0F, 0.0F, 1.0F };
-				break;
-			case TransformAxis::none:
-			case TransformAxis::xy:
-			case TransformAxis::xz:
-			case TransformAxis::yz:
-			case TransformAxis::all:
-			default:
-				return { false, {}, {}, "Mirror axis must be X, Y, or Z." };
+                case TransformAxis::X:
+                  surface.normal = {1.0F, 0.0F, 0.0F};
+                  break;
+                case TransformAxis::Y:
+                  surface.normal = {0.0F, 1.0F, 0.0F};
+                  break;
+                case TransformAxis::Z:
+                  surface.normal = {0.0F, 0.0F, 1.0F};
+                  break;
+                case TransformAxis::None:
+                case TransformAxis::Xy:
+                case TransformAxis::Xz:
+                case TransformAxis::Yz:
+                case TransformAxis::All:
+                default:
+                  return {false, {}, {}, "Mirror axis must be X, Y, or Z."};
 		}
 		return surface;
 	}
@@ -112,19 +112,19 @@ public:
 	[[nodiscard]] std::vector<quader::QVec3> world_axis_plane_points(TransformAxis axis) const
 	{
 		switch (axis) {
-			case TransformAxis::x:
-				return { {}, { 0.0F, 1.0F, 0.0F }, { 0.0F, 0.0F, 1.0F } };
-			case TransformAxis::y:
-				return { {}, { 1.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F } };
-			case TransformAxis::z:
-				return { {}, { 1.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F } };
-			case TransformAxis::none:
-			case TransformAxis::xy:
-			case TransformAxis::xz:
-			case TransformAxis::yz:
-			case TransformAxis::all:
-			default:
-				return {};
+                case TransformAxis::X:
+                  return {{}, {0.0F, 1.0F, 0.0F}, {0.0F, 0.0F, 1.0F}};
+                case TransformAxis::Y:
+                  return {{}, {1.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 1.0F}};
+                case TransformAxis::Z:
+                  return {{}, {1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}};
+                case TransformAxis::None:
+                case TransformAxis::Xy:
+                case TransformAxis::Xz:
+                case TransformAxis::Yz:
+                case TransformAxis::All:
+                default:
+                  return {};
 		}
 	}
 
@@ -135,15 +135,15 @@ public:
 		DrawnPlaneSurface surface;
 		surface.valid = true;
 		surface.origin = pivot;
-		if (orientation == ViewportFlipOrientation::horizontal) {
-			surface.normal = { 1.0F, 0.0F, 0.0F };
-			return surface;
-		}
-		if (orientation == ViewportFlipOrientation::vertical) {
-			surface.normal = { 0.0F, 1.0F, 0.0F };
-			return surface;
-		}
-		return { false, {}, {}, "Flip orientation must be horizontal or vertical." };
+                if (orientation == ViewportFlipOrientation::Horizontal) {
+                  surface.normal = {1.0F, 0.0F, 0.0F};
+                  return surface;
+                }
+                if (orientation == ViewportFlipOrientation::Vertical) {
+                  surface.normal = {0.0F, 1.0F, 0.0F};
+                  return surface;
+                }
+                return { false, {}, {}, "Flip orientation must be horizontal or vertical." };
 	}
 
 	[[nodiscard]] CommandResult mirror_objects(
@@ -193,8 +193,8 @@ public:
 
 		objects = std::move(candidate);
 		next_object_id = candidate_next_object_id;
-		mode = SelectionMode::object;
-		active_object_id = mirrored_ids.back();
+                mode = SelectionMode::Object;
+                active_object_id = mirrored_ids.back();
 		normalize_active_object_id(objects, active_object_id);
 		return ok_result(true);
 	}
@@ -206,10 +206,11 @@ public:
 			int& active_object_id,
 			SelectionMode& mode) const
 	{
-		if (mode != SelectionMode::object) {
-			return error_result("Flip works only in object/mesh selection mode.");
-		}
-		if (object_ids.empty()) {
+          if (mode != SelectionMode::Object) {
+            return error_result(
+                "Flip works only in object/mesh selection mode.");
+          }
+                if (object_ids.empty()) {
 			return error_result("Select one or more mesh objects to flip.");
 		}
 		const DrawnPlaneSurface orientation_check = mesh_flip_surface(orientation, {});
@@ -237,8 +238,8 @@ public:
 		}
 
 		objects = std::move(candidate);
-		mode = SelectionMode::object;
-		if (!id_span_contains(object_ids, active_object_id)) {
+                mode = SelectionMode::Object;
+                if (!id_span_contains(object_ids, active_object_id)) {
 			active_object_id = object_ids.back();
 		}
 		normalize_active_object_id(objects, active_object_id);
@@ -248,8 +249,8 @@ public:
 
 const MirrorOperationService& mirror_operation_service()
 {
-	static const MirrorOperationService service;
-	return service;
+  static const MirrorOperationService kService;
+  return kService;
 }
 
 /**
@@ -259,8 +260,8 @@ class MirrorTool final : public EditorTool {
 public:
 	[[nodiscard]] ViewportInteractionTool tool_id() const override
 	{
-		return ViewportInteractionTool::mirror;
-	}
+          return ViewportInteractionTool::Mirror;
+        }
 
 	[[nodiscard]] std::string_view id() const override
 	{
@@ -279,8 +280,10 @@ public:
 
 	[[nodiscard]] std::vector<int> target_object_ids_for_selection(const RectangleSelectionState& selection) const
 	{
-		return selection.mode == SelectionMode::object ? selection.selected_object_ids : std::vector<int> {};
-	}
+          return selection.mode == SelectionMode::Object
+                     ? selection.selected_object_ids
+                     : std::vector<int>{};
+        }
 
 	[[nodiscard]] MirrorToolResult set_targets_from_selection(MirrorToolState& state, const RectangleSelectionState& selection) const
 	{
@@ -649,8 +652,8 @@ public:
 
 const MirrorTool& mirror_tool_instance()
 {
-	static const MirrorTool tool;
-	return tool;
+  static const MirrorTool kTool;
+  return kTool;
 }
 
 } // namespace

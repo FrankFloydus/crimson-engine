@@ -19,157 +19,173 @@
 namespace quader {
 namespace {
 
-std::string_view sectionStableId(ViewportSettingsSectionId section) {
-    switch (section) {
-    case ViewportSettingsSectionId::Grid:
-        return "grid";
-    case ViewportSettingsSectionId::Selection:
-        return "selection";
-    case ViewportSettingsSectionId::Overlay:
-        return "overlay";
-    case ViewportSettingsSectionId::Vertices:
-        return "vertices";
-    case ViewportSettingsSectionId::Picking:
-        return "picking";
-    case ViewportSettingsSectionId::Gizmo:
-        return "gizmo";
-    case ViewportSettingsSectionId::Count:
-        break;
-    }
-    return "unknown";
+std::string_view section_stable_id(ViewportSettingsSectionId section) {
+  switch (section) {
+  case ViewportSettingsSectionId::Grid:
+    return "grid";
+  case ViewportSettingsSectionId::Selection:
+    return "selection";
+  case ViewportSettingsSectionId::Overlay:
+    return "overlay";
+  case ViewportSettingsSectionId::Vertices:
+    return "vertices";
+  case ViewportSettingsSectionId::Picking:
+    return "picking";
+  case ViewportSettingsSectionId::Gizmo:
+    return "gizmo";
+  case ViewportSettingsSectionId::Count:
+    break;
+  }
+  return "unknown";
 }
 
-std::string sectionLabel(const LocalizationService& localization, const ViewportSettingsSectionDescriptor& section) {
-    std::string key = "viewport.settings.section.";
-    key.append(sectionStableId(section.id));
-    key.append(".label");
-    std::string stableId = "viewport.settings.section.";
-    stableId.append(sectionStableId(section.id));
-    return localization.imguiLabel(key, stableId, section.label);
+std::string section_label(const LocalizationService &localization,
+                          const ViewportSettingsSectionDescriptor &section) {
+  std::string key = "viewport.settings.section.";
+  key.append(section_stable_id(section.id));
+  key.append(".label");
+  std::string stable_id = "viewport.settings.section.";
+  stable_id.append(section_stable_id(section.id));
+  return localization.imgui_label(key, stable_id, section.label);
 }
 
-std::string settingLabel(const LocalizationService& localization, std::string_view key, std::string_view fallback) {
-    std::string localizationKey = "viewport.settings.";
-    localizationKey.append(key);
-    localizationKey.append(".label");
-    std::string stableId = "viewport.settings.";
-    stableId.append(key);
-    return localization.imguiLabel(localizationKey, stableId, fallback);
+std::string setting_label(const LocalizationService &localization,
+                          std::string_view key, std::string_view fallback) {
+  std::string localization_key = "viewport.settings.";
+  localization_key.append(key);
+  localization_key.append(".label");
+  std::string stable_id = "viewport.settings.";
+  stable_id.append(key);
+  return localization.imgui_label(localization_key, stable_id, fallback);
 }
 
-void drawLocaleSettings(UIContext& context) {
-    LocalizationService& localization = context.localization;
-    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen;
-    const std::string header = localization.imguiLabel("ui.settings.interface", "ui.settings.interface", "Interface");
-    if (!quaderCollapsingHeader(header.c_str(), flags)) {
-        return;
-    }
+void draw_locale_settings(UIContext &context) {
+  LocalizationService &localization = context.localization;
+  ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen;
+  const std::string header = localization.imgui_label(
+      "ui.settings.interface", "ui.settings.interface", "Interface");
+  if (!quader_collapsing_header(header.c_str(), flags)) {
+    return;
+  }
 
-    const std::string selectedLocale = context.settings.locale();
-    std::string preview = localization.localeDisplayName(selectedLocale);
-    if (preview.empty()) {
-        preview = selectedLocale;
-    }
+  const std::string selected_locale = context.settings.locale();
+  std::string preview = localization.locale_display_name(selected_locale);
+  if (preview.empty()) {
+    preview = selected_locale;
+  }
 
-    const std::string comboLabel = localization.imguiLabel("ui.settings.locale", "ui.settings.locale", "Language");
-    ImGui::SetNextItemWidth(220.0f);
-    if (quaderBeginCombo(comboLabel.c_str(), preview.c_str())) {
-        for (const LocaleInfo& locale : localization.availableLocales()) {
-            const bool selected = locale.id == selectedLocale;
-            const std::string itemLabel = localization.imguiLabel(
-                    "locale." + locale.id + ".name",
-                    "locale." + locale.id,
-                    locale.displayName);
-            if (ImGui::Selectable(itemLabel.c_str(), selected)) {
-                if (context.localization.selectLocale(locale.id)) {
-                    context.settings.setLocale(context.localization.currentLocale());
-                }
-                if (context.settingsChanged != nullptr && context.settings.locale() != selectedLocale) {
-                    *context.settingsChanged = true;
-                }
-            }
-            if (selected) {
-                ImGui::SetItemDefaultFocus();
-            }
+  const std::string combo_label = localization.imgui_label(
+      "ui.settings.locale", "ui.settings.locale", "Language");
+  ImGui::SetNextItemWidth(220.0f);
+  if (quader_begin_combo(combo_label.c_str(), preview.c_str())) {
+    for (const LocaleInfo &locale : localization.available_locales()) {
+      const bool selected = locale.id == selected_locale;
+      const std::string item_label =
+          localization.imgui_label("locale." + locale.id + ".name",
+                                   "locale." + locale.id, locale.display_name);
+      if (ImGui::Selectable(item_label.c_str(), selected)) {
+        if (context.localization.select_locale(locale.id)) {
+          context.settings.set_locale(context.localization.current_locale());
         }
-        ImGui::EndCombo();
+        if (context.settings_changed != nullptr &&
+            context.settings.locale() != selected_locale) {
+          *context.settings_changed = true;
+        }
+      }
+      if (selected) {
+        ImGui::SetItemDefaultFocus();
+      }
     }
+    ImGui::EndCombo();
+  }
 }
 
 } // namespace
 
 bool ViewportSettingsPanel::draw(UIContext& context, bool& open) {
-    changedThisFrame_ = false;
-    drawFloating(context, open);
-    return changedThisFrame_;
+  changed_this_frame_ = false;
+  draw_floating(context, open);
+  return changed_this_frame_;
 }
 
-void ViewportSettingsPanel::drawContent(UIContext& context, bool& open) {
+void ViewportSettingsPanel::draw_content(UIContext& context, bool& open) {
     (void)open;
 
-    drawLocaleSettings(context);
+    draw_locale_settings(context);
 
-    const std::string resetLabel = context.localization.imguiLabel(
-            "ui.settings.viewport.reset_to_defaults",
-            "ui.settings.viewport.reset_to_defaults",
-            "Reset to Defaults");
-    if (ImGui::Button(resetLabel.c_str())) {
-        context.viewportSettings.resetToDefaults();
-        changedThisFrame_ = true;
+    const std::string reset_label = context.localization.imgui_label(
+        "ui.settings.viewport.reset_to_defaults",
+        "ui.settings.viewport.reset_to_defaults", "Reset to Defaults");
+    if (ImGui::Button(reset_label.c_str())) {
+      context.viewport_settings.reset_to_defaults();
+      changed_this_frame_ = true;
     }
 
-    for (const ViewportSettingsSectionDescriptor& section : viewportSettingsSections()) {
-        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_None;
-        if (section.defaultExpanded) {
-            flags |= ImGuiTreeNodeFlags_DefaultOpen;
-        }
-        const std::string header = sectionLabel(context.localization, section);
-        if (!quaderCollapsingHeader(header.c_str(), flags)) {
-            continue;
-        }
+    for (const ViewportSettingsSectionDescriptor &section :
+         viewport_settings_sections()) {
+      ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_None;
+      if (section.default_expanded) {
+        flags |= ImGuiTreeNodeFlags_DefaultOpen;
+      }
+      const std::string header = section_label(context.localization, section);
+      if (!quader_collapsing_header(header.c_str(), flags)) {
+        continue;
+      }
 
-        for (const ViewportColorSettingDescriptor& descriptor : viewportColorSettings()) {
-            if (descriptor.section != section.id) {
-                continue;
-            }
-            ViewportSettingColor color = context.viewportSettings.color(descriptor.id);
-            float values[4] = {color.r, color.g, color.b, color.a};
-            ImGui::SetNextItemWidth(180.0f);
-            const std::string label = settingLabel(context.localization, descriptor.key, descriptor.label);
-            if (ImGui::ColorEdit4(label.c_str(),
-                        values,
-                        ImGuiColorEditFlags_NoInputs |
-                                ImGuiColorEditFlags_AlphaBar |
-                                ImGuiColorEditFlags_AlphaPreviewHalf)) {
-                changedThisFrame_ = context.viewportSettings.setColor(
-                                            descriptor.id,
-                                            ViewportSettingColor{values[0], values[1], values[2], values[3]}) ||
-                        changedThisFrame_;
-            }
+      for (const ViewportColorSettingDescriptor &descriptor :
+           viewport_color_settings()) {
+        if (descriptor.section != section.id) {
+          continue;
         }
+        ViewportSettingColor color =
+            context.viewport_settings.color(descriptor.id);
+        float values[4] = {color.r, color.g, color.b, color.a};
+        ImGui::SetNextItemWidth(180.0f);
+        const std::string label = setting_label(
+            context.localization, descriptor.key, descriptor.label);
+        if (ImGui::ColorEdit4(label.c_str(), values,
+                              ImGuiColorEditFlags_NoInputs |
+                                  ImGuiColorEditFlags_AlphaBar |
+                                  ImGuiColorEditFlags_AlphaPreviewHalf)) {
+          changed_this_frame_ =
+              context.viewport_settings.set_color(
+                  descriptor.id, ViewportSettingColor{values[0], values[1],
+                                                      values[2], values[3]}) ||
+              changed_this_frame_;
+        }
+      }
 
-        for (const ViewportFloatSettingDescriptor& descriptor : viewportFloatSettings()) {
-            if (descriptor.section != section.id) {
-                continue;
-            }
-            float value = context.viewportSettings.floatValue(descriptor.id);
-            ImGui::SetNextItemWidth(220.0f);
-            const std::string label = settingLabel(context.localization, descriptor.key, descriptor.label);
-            if (ImGui::SliderFloat(label.c_str(), &value, descriptor.minimum, descriptor.maximum, "%.3f")) {
-                changedThisFrame_ = context.viewportSettings.setFloatValue(descriptor.id, value) || changedThisFrame_;
-            }
+      for (const ViewportFloatSettingDescriptor &descriptor :
+           viewport_float_settings()) {
+        if (descriptor.section != section.id) {
+          continue;
         }
+        float value = context.viewport_settings.float_value(descriptor.id);
+        ImGui::SetNextItemWidth(220.0f);
+        const std::string label = setting_label(
+            context.localization, descriptor.key, descriptor.label);
+        if (ImGui::SliderFloat(label.c_str(), &value, descriptor.minimum,
+                               descriptor.maximum, "%.3f")) {
+          changed_this_frame_ =
+              context.viewport_settings.set_float_value(descriptor.id, value) ||
+              changed_this_frame_;
+        }
+      }
 
-        for (const ViewportBoolSettingDescriptor& descriptor : viewportBoolSettings()) {
-            if (descriptor.section != section.id) {
-                continue;
-            }
-            bool value = context.viewportSettings.boolValue(descriptor.id);
-            const std::string label = settingLabel(context.localization, descriptor.key, descriptor.label);
-            if (ImGui::Checkbox(label.c_str(), &value)) {
-                changedThisFrame_ = context.viewportSettings.setBoolValue(descriptor.id, value) || changedThisFrame_;
-            }
+      for (const ViewportBoolSettingDescriptor &descriptor :
+           viewport_bool_settings()) {
+        if (descriptor.section != section.id) {
+          continue;
         }
+        bool value = context.viewport_settings.bool_value(descriptor.id);
+        const std::string label = setting_label(
+            context.localization, descriptor.key, descriptor.label);
+        if (ImGui::Checkbox(label.c_str(), &value)) {
+          changed_this_frame_ =
+              context.viewport_settings.set_bool_value(descriptor.id, value) ||
+              changed_this_frame_;
+        }
+      }
     }
 }
 

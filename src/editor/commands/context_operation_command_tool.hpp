@@ -16,19 +16,22 @@ namespace quader {
 class ContextOperationCommandTool : public ContextActionTool {
 public:
     [[nodiscard]] ModelingCommandAvailability availability(const ModelingCommandExecutionContext& context) const final {
-        const std::optional<ModelingActionItem> live = actionItem(context);
-        if (!live.has_value()) {
-            return ModelingCommandAvailability::unavailable("Command is not available in the current mode.");
-        }
+      const std::optional<ModelingActionItem> live = action_item(context);
+      if (!live.has_value()) {
+        return ModelingCommandAvailability::unavailable(
+            "Command is not available in the current mode.");
+      }
         if (live->visibility == ModelingActionVisibility::Enabled) {
             return ModelingCommandAvailability::available();
         }
         return ModelingCommandAvailability::unavailable(
-                live->disabledReason.empty() ? "Command is disabled for the current selection." : live->disabledReason);
+            live->disabled_reason.empty()
+                ? "Command is disabled for the current selection."
+                : live->disabled_reason);
     }
 
     ModelingCommandResult execute(ModelingCommandExecutionContext& context) const final {
-        return context.modeling.executeContextAction(actionId());
+      return context.modeling.execute_context_action(action_id());
     }
 };
 

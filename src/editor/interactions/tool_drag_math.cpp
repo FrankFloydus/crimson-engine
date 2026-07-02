@@ -34,34 +34,35 @@ quader_geometry::QRay3<double> to_geometry_ray(quader_poly::Ray ray)
 
 quader_geometry::QPlane3<double> to_geometry_plane(quader::QVec3 origin, quader::QVec3 normal)
 {
-	return quader_geometry::plane_from_point_normal(to_geometry_vec3(origin), to_geometry_vec3(normal), tool_epsilon);
+  return quader_geometry::plane_from_point_normal(
+      to_geometry_vec3(origin), to_geometry_vec3(normal), kToolEpsilon);
 }
 
 std::optional<double> geometry_axis_drag_distance(
-		quader::QVec3 axis_value,
-		quader::QVec3 anchor,
-		const quader_poly::Ray& ray,
-		double parallel_epsilon,
-		double vector_epsilon = tool_epsilon)
-{
-	if (vec3_is_tiny(axis_value, vector_epsilon) || vec3_is_tiny(ray.direction, vector_epsilon)) {
-		return std::nullopt;
-	}
-	const quader_geometry::QVec3d axis =
-			quader_geometry::normalize_or_zero(to_geometry_vec3(axis_value), vector_epsilon);
-	const quader_geometry::QVec3d ray_direction =
-			quader_geometry::normalize_or_zero(to_geometry_vec3(ray.direction), vector_epsilon);
-	const double b = quader_geometry::dot(axis, ray_direction);
-	const double denominator = 1.0 - b * b;
-	if (std::abs(denominator) <= parallel_epsilon) {
-		return std::nullopt;
-	}
-	const quader_geometry::QLineLineClosestPoints<double> closest =
-		quader_geometry::closest_points_line_line(
-			quader_geometry::QLine3<double> { to_geometry_vec3(anchor), axis },
-			quader_geometry::QLine3<double> { to_geometry_vec3(ray.origin), ray_direction },
-			vector_epsilon);
-	return closest.valid ? std::optional<double> { closest.first_parameter } : std::nullopt;
+    quader::QVec3 axis_value, quader::QVec3 anchor, const quader_poly::Ray &ray,
+    double parallel_epsilon, double vector_epsilon = kToolEpsilon) {
+  if (vec3_is_tiny(axis_value, vector_epsilon) ||
+      vec3_is_tiny(ray.direction, vector_epsilon)) {
+    return std::nullopt;
+  }
+  const quader_geometry::QVec3d axis = quader_geometry::normalize_or_zero(
+      to_geometry_vec3(axis_value), vector_epsilon);
+  const quader_geometry::QVec3d ray_direction =
+      quader_geometry::normalize_or_zero(to_geometry_vec3(ray.direction),
+                                         vector_epsilon);
+  const double b = quader_geometry::dot(axis, ray_direction);
+  const double denominator = 1.0 - b * b;
+  if (std::abs(denominator) <= parallel_epsilon) {
+    return std::nullopt;
+  }
+  const quader_geometry::QLineLineClosestPoints<double> closest =
+      quader_geometry::closest_points_line_line(
+          quader_geometry::QLine3<double>{to_geometry_vec3(anchor), axis},
+          quader_geometry::QLine3<double>{to_geometry_vec3(ray.origin),
+                                          ray_direction},
+          vector_epsilon);
+  return closest.valid ? std::optional<double>{closest.first_parameter}
+                       : std::nullopt;
 }
 
 bool ray_plane_intersection(quader_poly::Ray ray, quader::QVec3 plane_point, quader::QVec3 plane_normal, quader::QVec3& out_point)
@@ -69,9 +70,10 @@ bool ray_plane_intersection(quader_poly::Ray ray, quader::QVec3 plane_point, qua
 	const quader::QVec3 normal = vec3_is_tiny(plane_normal) ? quader::QVec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(plane_normal);
 	const quader::QVec3 direction = vec3_is_tiny(ray.direction) ? quader::QVec3 { 0.0F, 0.0F, 1.0F } : normalized_axis(ray.direction);
 	const quader_geometry::QPlane3<double> plane = to_geometry_plane(plane_point, normal);
-	const quader_geometry::QRayPlaneHit<double> hit =
-		quader_geometry::intersect_ray_plane(to_geometry_ray({ ray.origin, direction }), plane, tool_epsilon);
-	if (!hit.hit) {
+        const quader_geometry::QRayPlaneHit<double> hit =
+            quader_geometry::intersect_ray_plane(
+                to_geometry_ray({ray.origin, direction}), plane, kToolEpsilon);
+        if (!hit.hit) {
 		return false;
 	}
 	out_point = to_poly_vec3(hit.point);
@@ -86,10 +88,10 @@ double drag_world_units_per_pixel(const CameraDragState& camera, quader::QVec3 a
 		return 1.0;
 	}
 	const double viewport_height = std::max(1.0, static_cast<double>(camera.viewport_size.y));
-	if (camera.projection == CameraProjection::orthographic) {
-		return std::max(0.0001, camera.orthographic_size / viewport_height);
-	}
-	const quader::QVec3 to_anchor = anchor - camera.origin;
+        if (camera.projection == CameraProjection::Orthographic) {
+          return std::max(0.0001, camera.orthographic_size / viewport_height);
+        }
+        const quader::QVec3 to_anchor = anchor - camera.origin;
 	const double distance = std::max(0.1, std::abs(vec3_dot(to_anchor, camera.forward)));
 	const double clamped_fov = std::clamp(camera.fov_degrees, 1.0, 179.0);
 	const double fov_radians = clamped_fov * std::acos(-1.0) / 180.0;
@@ -121,11 +123,11 @@ DragPointResult horizontal_drag_point(const quader_poly::Ray& ray, quader::QVec3
 
 DragDistanceResult vertical_drag_value(const quader_poly::Ray& ray, quader::QVec3 anchor)
 {
-	const std::optional<double> distance =
-			geometry_axis_drag_distance({ 0.0F, 1.0F, 0.0F }, anchor, ray, tool_epsilon);
-	if (!distance.has_value()) {
-		return {};
-	}
+  const std::optional<double> distance = geometry_axis_drag_distance(
+      {0.0F, 1.0F, 0.0F}, anchor, ray, kToolEpsilon);
+  if (!distance.has_value()) {
+    return {};
+  }
 	return { true, anchor.y + *distance };
 }
 
@@ -148,23 +150,23 @@ quader::QVec3 screen_fallback_move_delta(const CameraDragState& camera, quader::
 			vec3_scale(right, static_cast<double>(screen_delta.x) * units_per_pixel) -
 			vec3_scale(up, static_cast<double>(screen_delta.y) * units_per_pixel);
 	if (vertical) {
-		if (std::abs(world_delta.y) > tool_epsilon) {
-			return { 0.0F, world_delta.y, 0.0F };
-		}
-		return { 0.0F, static_cast<float>(-screen_delta.y * units_per_pixel), 0.0F };
+          if (std::abs(world_delta.y) > kToolEpsilon) {
+            return {0.0F, world_delta.y, 0.0F};
+          }
+                return { 0.0F, static_cast<float>(-screen_delta.y * units_per_pixel), 0.0F };
 	}
 	return { world_delta.x, 0.0F, world_delta.z };
 }
 
 quader::QVec3 snapped_move_delta(quader::QVec3 delta, bool vertical, double grid_world_size)
 {
-	const double grid_size = safe_grid_size(grid_world_size, tool_epsilon);
-	const auto snap_component = [grid_size](double value) {
-		return static_cast<float>(std::round(value / grid_size) * grid_size);
-	};
-	if (vertical) {
-		return { 0.0F, snap_component(delta.y), 0.0F };
-	}
+  const double grid_size = safe_grid_size(grid_world_size, kToolEpsilon);
+  const auto snap_component = [grid_size](double value) {
+    return static_cast<float>(std::round(value / grid_size) * grid_size);
+  };
+  if (vertical) {
+    return {0.0F, snap_component(delta.y), 0.0F};
+  }
 	return { snap_component(delta.x), 0.0F, snap_component(delta.z) };
 }
 
@@ -200,11 +202,11 @@ DragDistanceResult projected_axis_drag_distance(const ProjectedAxisDragInput& in
 		return {};
 	}
 	const double projected_pixels = vec2_dot(vec2_sub(input.screen_tip, input.screen_anchor), screen_axis);
-	if (std::abs(projected_pixels) <= tool_epsilon) {
-		return {};
-	}
+        if (std::abs(projected_pixels) <= kToolEpsilon) {
+          return {};
+        }
 
-	const double pixels = vec2_dot(vec2_sub(input.screen_position, input.press_position), screen_axis);
+        const double pixels = vec2_dot(vec2_sub(input.screen_position, input.press_position), screen_axis);
 	const double distance = pixels * input.reference_distance / projected_pixels;
 	if (!std::isfinite(distance)) {
 		return {};

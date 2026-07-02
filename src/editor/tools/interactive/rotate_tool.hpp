@@ -15,8 +15,9 @@ namespace quader {
  */
 class RotateTool final : public TransformViewportTool {
 public:
-    RotateTool()
-        : TransformViewportTool(viewportToolDescriptor(ViewportToolId::Rotate)) {}
+  RotateTool()
+      : TransformViewportTool(
+            viewport_tool_descriptor(ViewportToolId::Rotate)) {}
 };
 
 } // namespace quader

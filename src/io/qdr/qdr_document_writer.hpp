@@ -26,10 +26,11 @@ struct QdrProjectWriteResult {
  */
 class QdrDocumentWriter final {
 public:
-    [[nodiscard]] static std::string serializeProjectDocument(const ProjectDocument& document);
-    [[nodiscard]] static QdrProjectWriteResult writeProjectDocumentAtomic(
-            const std::filesystem::path& path,
-            const ProjectDocument& document);
+  [[nodiscard]] static std::string
+  serialize_project_document(const ProjectDocument &document);
+  [[nodiscard]] static QdrProjectWriteResult
+  write_project_document_atomic(const std::filesystem::path &path,
+                                const ProjectDocument &document);
 };
 
 } // namespace quader

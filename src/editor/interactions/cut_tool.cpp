@@ -67,8 +67,8 @@ class CutTool final : public EditorTool {
 public:
 	[[nodiscard]] ViewportInteractionTool tool_id() const override
 	{
-		return ViewportInteractionTool::cut;
-	}
+          return ViewportInteractionTool::Cut;
+        }
 
 	[[nodiscard]] std::string_view id() const override
 	{
@@ -103,14 +103,14 @@ public:
 	[[nodiscard]] quader_poly::PlaneCutMode plane_cut_mode(CutMode mode) const
 	{
 		switch (mode) {
-			case CutMode::keep_back:
-				return quader_poly::PlaneCutMode::keep_back;
-			case CutMode::keep_front:
-				return quader_poly::PlaneCutMode::keep_front;
-			case CutMode::keep_both:
-			default:
-				return quader_poly::PlaneCutMode::keep_both;
-		}
+                case CutMode::KeepBack:
+                  return quader_poly::PlaneCutMode::KeepBack;
+                case CutMode::KeepFront:
+                  return quader_poly::PlaneCutMode::KeepFront;
+                case CutMode::KeepBoth:
+                default:
+                  return quader_poly::PlaneCutMode::KeepBoth;
+                }
 	}
 
 	[[nodiscard]] quader_poly::PlaneCutRequest plane_cut_request(const CutToolState& state) const
@@ -443,13 +443,17 @@ public:
 				continue;
 			}
 
-			const bool keep_front = state.mode != CutMode::keep_back;
-			if (side == CutPreviewMeshSide::keep) {
-				documents.push_back(keep_front ? std::move(result.front_document) : std::move(result.back_document));
-			} else {
-				documents.push_back(keep_front ? std::move(result.back_document) : std::move(result.front_document));
-			}
-		}
+                        const bool keep_front = state.mode != CutMode::KeepBack;
+                        if (side == CutPreviewMeshSide::Keep) {
+                          documents.push_back(
+                              keep_front ? std::move(result.front_document)
+                                         : std::move(result.back_document));
+                        } else {
+                          documents.push_back(
+                              keep_front ? std::move(result.back_document)
+                                         : std::move(result.front_document));
+                        }
+                }
 		return documents;
 	}
 
@@ -538,8 +542,8 @@ public:
 
 const CutTool& cut_tool_instance()
 {
-	static const CutTool tool;
-	return tool;
+  static const CutTool kTool;
+  return kTool;
 }
 
 } // namespace

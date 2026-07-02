@@ -40,21 +40,21 @@ struct QuaderViewportKeybindingDispatch {
 
     Kind kind = Kind::NoMatch;
     ViewportShortcut shortcut = {};
-    std::string commandId;
+    std::string command_id;
 };
 
 /**
  * Stores transient viewport state exposed to keybinding when-expressions.
  */
 struct QuaderViewportKeybindingContext {
-    bool viewportHovered = false;
-    bool navigationActive = false;
-    bool flyNavigationActive = false;
-    bool orbitNavigationActive = false;
-    bool panNavigationActive = false;
-    bool modalToolActive = false;
-    bool activeToolOwnsViewport = false;
-    bool operationPreviewActive = false;
+  bool viewport_hovered = false;
+  bool navigation_active = false;
+  bool fly_navigation_active = false;
+  bool orbit_navigation_active = false;
+  bool pan_navigation_active = false;
+  bool modal_tool_active = false;
+  bool active_tool_owns_viewport = false;
+  bool operation_preview_active = false;
 };
 
 /**
@@ -68,63 +68,57 @@ public:
     QuaderCommandsApi(const QuaderCommandsApi&) = delete;
     QuaderCommandsApi& operator=(const QuaderCommandsApi&) = delete;
 
-    QuaderApiVoidResult execute(std::string_view commandId);
-    QuaderApiVoidResult execute(QuaderCommandId commandId);
+    QuaderApiVoidResult execute(std::string_view command_id);
+    QuaderApiVoidResult execute(QuaderCommandId command_id);
     [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
-    [[nodiscard]] std::string commandIdForModelingAction(std::string_view actionId) const;
-    [[nodiscard]] std::string commandIdForToolActivation(std::string_view toolId) const;
-    [[nodiscard]] std::string shortcutFor(std::string_view commandId) const;
-    [[nodiscard]] std::string shortcutFor(QuaderCommandId commandId) const;
+    [[nodiscard]] std::string
+    command_id_for_modeling_action(std::string_view action_id) const;
+    [[nodiscard]] std::string
+    command_id_for_tool_activation(std::string_view tool_id) const;
+    [[nodiscard]] std::string shortcut_for(std::string_view command_id) const;
+    [[nodiscard]] std::string shortcut_for(QuaderCommandId command_id) const;
     [[nodiscard]] std::vector<QuaderKeybindingRule> keybindings() const;
-    [[nodiscard]] std::vector<QuaderKeybindingConflict> conflictsForShortcut(
-            std::string_view shortcut,
-            std::string_view when = {}) const;
-    [[nodiscard]] bool resolveViewportShortcut(
-            ViewportKey key,
-            ViewportModifiers modifiers,
-            const ViewportToolState& state,
-            bool viewportFocused,
-            bool textInputActive,
-            ViewportShortcut& shortcut,
-            QuaderViewportKeybindingContext inputContext = {});
-    [[nodiscard]] bool resolveViewportShortcut(
-            const QuaderInputChord& chord,
-            const ViewportToolState& state,
-            bool viewportFocused,
-            bool textInputActive,
-            ViewportShortcut& shortcut,
-            QuaderViewportKeybindingContext inputContext = {});
-    [[nodiscard]] bool resolveViewportInputAction(
-            const QuaderInputChord& chord,
-            const ViewportToolState& state,
-            bool viewportFocused,
-            bool textInputActive,
-            ViewportInputActionKind& action,
-            QuaderViewportKeybindingContext inputContext = {});
-    [[nodiscard]] QuaderViewportKeybindingDispatch dispatchViewportKeybinding(
-            ViewportKey key,
-            ViewportModifiers modifiers,
-            const ViewportToolState& state,
-            bool viewportFocused,
-            bool textInputActive,
-            QuaderViewportKeybindingContext inputContext = {});
-    [[nodiscard]] QuaderViewportKeybindingDispatch dispatchViewportInputBinding(
-            const QuaderInputChord& chord,
-            const ViewportToolState& state,
-            bool viewportFocused,
-            bool textInputActive,
-            QuaderViewportKeybindingContext inputContext = {});
-    void resetPendingKeybindingChord();
-    [[nodiscard]] bool hasPendingKeybindingChord() const;
-    QuaderApiVoidResult setShortcut(std::string_view commandId, std::string shortcut);
-    QuaderApiVoidResult setShortcut(QuaderCommandId commandId, std::string shortcut);
-    QuaderApiVoidResult removeShortcut(std::string_view commandId);
-    QuaderApiVoidResult removeShortcut(QuaderCommandId commandId);
-    QuaderApiVoidResult resetShortcut(std::string_view commandId);
-    QuaderApiVoidResult resetShortcut(QuaderCommandId commandId);
-    QuaderApiVoidResult setKeybindingStoragePath(std::filesystem::path path);
+    [[nodiscard]] std::vector<QuaderKeybindingConflict>
+    conflicts_for_shortcut(std::string_view shortcut,
+                           std::string_view when = {}) const;
+    [[nodiscard]] bool resolve_viewport_shortcut(
+        ViewportKey key, ViewportModifiers modifiers,
+        const ViewportToolState &state, bool viewport_focused,
+        bool text_input_active, ViewportShortcut &shortcut,
+        QuaderViewportKeybindingContext input_context = {});
+    [[nodiscard]] bool resolve_viewport_shortcut(
+        const QuaderInputChord &chord, const ViewportToolState &state,
+        bool viewport_focused, bool text_input_active,
+        ViewportShortcut &shortcut,
+        QuaderViewportKeybindingContext input_context = {});
+    [[nodiscard]] bool resolve_viewport_input_action(
+        const QuaderInputChord &chord, const ViewportToolState &state,
+        bool viewport_focused, bool text_input_active,
+        ViewportInputActionKind &action,
+        QuaderViewportKeybindingContext input_context = {});
+    [[nodiscard]] QuaderViewportKeybindingDispatch dispatch_viewport_keybinding(
+        ViewportKey key, ViewportModifiers modifiers,
+        const ViewportToolState &state, bool viewport_focused,
+        bool text_input_active,
+        QuaderViewportKeybindingContext input_context = {});
+    [[nodiscard]] QuaderViewportKeybindingDispatch
+    dispatch_viewport_input_binding(
+        const QuaderInputChord &chord, const ViewportToolState &state,
+        bool viewport_focused, bool text_input_active,
+        QuaderViewportKeybindingContext input_context = {});
+    void reset_pending_keybinding_chord();
+    [[nodiscard]] bool has_pending_keybinding_chord() const;
+    QuaderApiVoidResult set_shortcut(std::string_view command_id,
+                                     std::string shortcut);
+    QuaderApiVoidResult set_shortcut(QuaderCommandId command_id,
+                                     std::string shortcut);
+    QuaderApiVoidResult remove_shortcut(std::string_view command_id);
+    QuaderApiVoidResult remove_shortcut(QuaderCommandId command_id);
+    QuaderApiVoidResult reset_shortcut(std::string_view command_id);
+    QuaderApiVoidResult reset_shortcut(QuaderCommandId command_id);
+    QuaderApiVoidResult set_keybinding_storage_path(std::filesystem::path path);
 
-private:
+  private:
     class Impl;
     std::unique_ptr<Impl> impl_;
 };

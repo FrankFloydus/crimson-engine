@@ -15,8 +15,9 @@ namespace quader {
  */
 class ExtrudeTool final : public TransformViewportTool {
 public:
-    ExtrudeTool()
-        : TransformViewportTool(viewportToolDescriptor(ViewportToolId::Extrude)) {}
+  ExtrudeTool()
+      : TransformViewportTool(
+            viewport_tool_descriptor(ViewportToolId::Extrude)) {}
 };
 
 } // namespace quader

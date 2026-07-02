@@ -15,15 +15,15 @@ namespace {
 quader_poly::Selection all_face_selection(const quader_poly::Document& document)
 {
 	quader_poly::Selection selection;
-	selection.mode = quader_poly::SelectionMode::face;
-	selection.faces.reserve(document.faces.size());
+        selection.mode = quader_poly::SelectionMode::Face;
+        selection.faces.reserve(document.faces.size());
 	for (const quader_poly::Face& face : document.faces) {
 		selection.faces.push_back(face.id);
 	}
 	if (!selection.faces.empty()) {
 		selection.has_active = true;
-		selection.active_kind = quader_poly::ElementKind::face;
-		selection.active_face = selection.faces.back();
+                selection.active_kind = quader_poly::ElementKind::Face;
+                selection.active_face = selection.faces.back();
 	}
 	return selection;
 }
@@ -48,9 +48,12 @@ CommandResult flip_selected_face_normals(std::vector<PolygonObject>& objects, Se
 		if (!object.selected) {
 			continue;
 		}
-		quader_poly::Selection selection = mode == SelectionMode::object ? all_face_selection(object.document) : object.selection;
-		selection.mode = quader_poly::SelectionMode::face;
-		const quader_poly::OperationResult result = quader_poly::flip_selected_face_normals(object.document, selection);
+                quader_poly::Selection selection =
+                    mode == SelectionMode::Object
+                        ? all_face_selection(object.document)
+                        : object.selection;
+                selection.mode = quader_poly::SelectionMode::Face;
+                const quader_poly::OperationResult result = quader_poly::flip_selected_face_normals(object.document, selection);
 		if (!result.changed) {
 			if (!result.message.empty()) {
 				last_message = result.message;
@@ -64,23 +67,24 @@ CommandResult flip_selected_face_normals(std::vector<PolygonObject>& objects, Se
 
 CommandResult recalculate_selected_face_normals(std::vector<PolygonObject>& objects, SelectionMode mode, bool outside)
 {
-	if (mode != SelectionMode::face && mode != SelectionMode::object) {
-		return error_result("Recalculate normals works in face or object mode.");
-	}
+  if (mode != SelectionMode::Face && mode != SelectionMode::Object) {
+    return error_result("Recalculate normals works in face or object mode.");
+  }
 
-	bool changed = false;
+        bool changed = false;
 	std::string last_message = outside ? "Select faces or meshes before recalculating outside." : "Select faces or meshes before recalculating inside.";
 	for (PolygonObject& object : objects) {
 		if (!object.selected) {
 			continue;
 		}
-		if (mode == SelectionMode::face && object.selection.faces.empty()) {
-			continue;
-		}
+                if (mode == SelectionMode::Face &&
+                    object.selection.faces.empty()) {
+                  continue;
+                }
 
-		quader_poly::Selection selection = all_face_selection(object.document);
-		selection.mode = quader_poly::SelectionMode::face;
-		const quader_poly::OperationResult result = quader_poly::recalculate_selected_face_normals(object.document, selection, outside);
+                quader_poly::Selection selection = all_face_selection(object.document);
+                selection.mode = quader_poly::SelectionMode::Face;
+                const quader_poly::OperationResult result = quader_poly::recalculate_selected_face_normals(object.document, selection, outside);
 		if (!result.changed) {
 			if (!result.message.empty()) {
 				last_message = result.message;
@@ -94,23 +98,27 @@ CommandResult recalculate_selected_face_normals(std::vector<PolygonObject>& obje
 
 CommandResult shade_selected_faces_smooth(std::vector<PolygonObject>& objects, SelectionMode mode)
 {
-	if (mode != SelectionMode::face && mode != SelectionMode::object) {
-		return error_result("Shade Smooth works in face or object mode.");
-	}
+  if (mode != SelectionMode::Face && mode != SelectionMode::Object) {
+    return error_result("Shade Smooth works in face or object mode.");
+  }
 
-	bool changed = false;
+        bool changed = false;
 	std::string last_message = "Select faces or meshes before shading smooth.";
 	for (PolygonObject& object : objects) {
 		if (!object.selected) {
 			continue;
 		}
-		if (mode == SelectionMode::face && object.selection.faces.empty()) {
-			continue;
-		}
+                if (mode == SelectionMode::Face &&
+                    object.selection.faces.empty()) {
+                  continue;
+                }
 
-		quader_poly::Selection selection = mode == SelectionMode::object ? all_face_selection(object.document) : object.selection;
-		selection.mode = quader_poly::SelectionMode::face;
-		const quader_poly::OperationResult result = quader_poly::shade_selected_faces_smooth(object.document, selection);
+                quader_poly::Selection selection =
+                    mode == SelectionMode::Object
+                        ? all_face_selection(object.document)
+                        : object.selection;
+                selection.mode = quader_poly::SelectionMode::Face;
+                const quader_poly::OperationResult result = quader_poly::shade_selected_faces_smooth(object.document, selection);
 		if (!result.changed) {
 			if (!result.message.empty()) {
 				last_message = result.message;
@@ -124,23 +132,27 @@ CommandResult shade_selected_faces_smooth(std::vector<PolygonObject>& objects, S
 
 CommandResult shade_selected_faces_flat(std::vector<PolygonObject>& objects, SelectionMode mode)
 {
-	if (mode != SelectionMode::face && mode != SelectionMode::object) {
-		return error_result("Shade Flat works in face or object mode.");
-	}
+  if (mode != SelectionMode::Face && mode != SelectionMode::Object) {
+    return error_result("Shade Flat works in face or object mode.");
+  }
 
-	bool changed = false;
+        bool changed = false;
 	std::string last_message = "Select faces or meshes before shading flat.";
 	for (PolygonObject& object : objects) {
 		if (!object.selected) {
 			continue;
 		}
-		if (mode == SelectionMode::face && object.selection.faces.empty()) {
-			continue;
-		}
+                if (mode == SelectionMode::Face &&
+                    object.selection.faces.empty()) {
+                  continue;
+                }
 
-		quader_poly::Selection selection = mode == SelectionMode::object ? all_face_selection(object.document) : object.selection;
-		selection.mode = quader_poly::SelectionMode::face;
-		const quader_poly::OperationResult result = quader_poly::shade_selected_faces_flat(object.document, selection);
+                quader_poly::Selection selection =
+                    mode == SelectionMode::Object
+                        ? all_face_selection(object.document)
+                        : object.selection;
+                selection.mode = quader_poly::SelectionMode::Face;
+                const quader_poly::OperationResult result = quader_poly::shade_selected_faces_flat(object.document, selection);
 		if (!result.changed) {
 			if (!result.message.empty()) {
 				last_message = result.message;
@@ -154,11 +166,11 @@ CommandResult shade_selected_faces_flat(std::vector<PolygonObject>& objects, Sel
 
 CommandResult harden_selected_edge_normals(std::vector<PolygonObject>& objects, SelectionMode mode)
 {
-	if (mode != SelectionMode::edge) {
-		return error_result("Hard Normal works in edge mode.");
-	}
+  if (mode != SelectionMode::Edge) {
+    return error_result("Hard Normal works in edge mode.");
+  }
 
-	bool changed = false;
+        bool changed = false;
 	std::string last_message = "Select edges before setting hard normals.";
 	for (PolygonObject& object : objects) {
 		if (!object.selected || object.selection.edges.empty()) {
@@ -166,8 +178,8 @@ CommandResult harden_selected_edge_normals(std::vector<PolygonObject>& objects, 
 		}
 
 		quader_poly::Selection selection = object.selection;
-		selection.mode = quader_poly::SelectionMode::edge;
-		const quader_poly::OperationResult result = quader_poly::harden_selected_edge_normals(object.document, selection);
+                selection.mode = quader_poly::SelectionMode::Edge;
+                const quader_poly::OperationResult result = quader_poly::harden_selected_edge_normals(object.document, selection);
 		if (!result.changed) {
 			if (!result.message.empty()) {
 				last_message = result.message;
@@ -181,11 +193,11 @@ CommandResult harden_selected_edge_normals(std::vector<PolygonObject>& objects, 
 
 CommandResult soften_selected_edge_normals(std::vector<PolygonObject>& objects, SelectionMode mode)
 {
-	if (mode != SelectionMode::edge) {
-		return error_result("Soft Normal works in edge mode.");
-	}
+  if (mode != SelectionMode::Edge) {
+    return error_result("Soft Normal works in edge mode.");
+  }
 
-	bool changed = false;
+        bool changed = false;
 	std::string last_message = "Select edges before setting soft normals.";
 	for (PolygonObject& object : objects) {
 		if (!object.selected || object.selection.edges.empty()) {
@@ -193,8 +205,8 @@ CommandResult soften_selected_edge_normals(std::vector<PolygonObject>& objects, 
 		}
 
 		quader_poly::Selection selection = object.selection;
-		selection.mode = quader_poly::SelectionMode::edge;
-		const quader_poly::OperationResult result = quader_poly::soften_selected_edge_normals(object.document, selection);
+                selection.mode = quader_poly::SelectionMode::Edge;
+                const quader_poly::OperationResult result = quader_poly::soften_selected_edge_normals(object.document, selection);
 		if (!result.changed) {
 			if (!result.message.empty()) {
 				last_message = result.message;
@@ -214,8 +226,11 @@ CommandResult apply_uv_operation(std::vector<PolygonObject>& objects, SelectionM
 		if (!object.selected) {
 			continue;
 		}
-		quader_poly::Selection selection = mode == SelectionMode::object ? all_face_selection(object.document) : object.selection;
-		const quader_poly::OperationResult result = quader_poly::apply_uv_operation(object.document, selection, operation, shift_world_amount);
+                quader_poly::Selection selection =
+                    mode == SelectionMode::Object
+                        ? all_face_selection(object.document)
+                        : object.selection;
+                const quader_poly::OperationResult result = quader_poly::apply_uv_operation(object.document, selection, operation, shift_world_amount);
 		if (!result.changed) {
 			if (!result.message.empty()) {
 				last_message = result.message;
@@ -229,20 +244,23 @@ CommandResult apply_uv_operation(std::vector<PolygonObject>& objects, SelectionM
 
 CommandResult assign_material_to_selection(std::vector<PolygonObject>& objects, SelectionMode mode, std::uint32_t material_slot)
 {
-	if (mode != SelectionMode::face && mode != SelectionMode::object) {
-		return error_result("Apply Material works in face or object mode.");
-	}
+  if (mode != SelectionMode::Face && mode != SelectionMode::Object) {
+    return error_result("Apply Material works in face or object mode.");
+  }
 
-	bool saw_target = false;
+        bool saw_target = false;
 	bool changed = false;
 	for (PolygonObject& object : objects) {
 		if (!object.selected) {
 			continue;
 		}
 
-		quader_poly::Selection selection = mode == SelectionMode::object ? all_face_selection(object.document) : object.selection;
-		selection.mode = quader_poly::SelectionMode::face;
-		if (selection_has_valid_face(object.document, selection)) {
+                quader_poly::Selection selection =
+                    mode == SelectionMode::Object
+                        ? all_face_selection(object.document)
+                        : object.selection;
+                selection.mode = quader_poly::SelectionMode::Face;
+                if (selection_has_valid_face(object.document, selection)) {
 			saw_target = true;
 			const quader_poly::OperationResult result =
 				quader_poly::assign_selected_face_material_slot(object.document, selection, material_slot);
@@ -253,8 +271,11 @@ CommandResult assign_material_to_selection(std::vector<PolygonObject>& objects, 
 	}
 
 	if (!saw_target) {
-		return error_result(mode == SelectionMode::object ? "Select one or more meshes before applying material." : "Select one or more faces before applying material.");
-	}
+          return error_result(
+              mode == SelectionMode::Object
+                  ? "Select one or more meshes before applying material."
+                  : "Select one or more faces before applying material.");
+        }
 	return ok_result(changed);
 }
 

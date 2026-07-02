@@ -56,40 +56,45 @@
 namespace quader {
 namespace {
 
-ViewportOverlaySelectionContext overlaySelectionContext(ModelingSelectionMode mode) {
-    switch (mode) {
-    case ModelingSelectionMode::Vertex:
-        return ViewportOverlaySelectionContext::Vertex;
-    case ModelingSelectionMode::Edge:
-        return ViewportOverlaySelectionContext::Edge;
-    case ModelingSelectionMode::Face:
-        return ViewportOverlaySelectionContext::Face;
-    case ModelingSelectionMode::Group:
-        return ViewportOverlaySelectionContext::Group;
-    case ModelingSelectionMode::Object:
-        return ViewportOverlaySelectionContext::Object;
-    }
-    return ViewportOverlaySelectionContext::Any;
+ViewportOverlaySelectionContext
+overlay_selection_context(ModelingSelectionMode mode) {
+  switch (mode) {
+  case ModelingSelectionMode::Vertex:
+    return ViewportOverlaySelectionContext::Vertex;
+  case ModelingSelectionMode::Edge:
+    return ViewportOverlaySelectionContext::Edge;
+  case ModelingSelectionMode::Face:
+    return ViewportOverlaySelectionContext::Face;
+  case ModelingSelectionMode::Group:
+    return ViewportOverlaySelectionContext::Group;
+  case ModelingSelectionMode::Object:
+    return ViewportOverlaySelectionContext::Object;
+  }
+  return ViewportOverlaySelectionContext::Any;
 }
 
-bool shouldDeferPaneRenderResize(const UIContext& uiContext, const ViewportRenderer& renderer) {
-    return uiContext.viewportRenderResizeSuspended &&
-            renderer.textureHandle() != InvalidRenderTextureHandle &&
-            renderer.overlayTextureHandle() != InvalidRenderTextureHandle;
+bool should_defer_pane_render_resize(const UIContext &ui_context,
+                                     const ViewportRenderer &renderer) {
+  return ui_context.viewport_render_resize_suspended &&
+         renderer.texture_handle() != kInvalidRenderTextureHandle &&
+         renderer.overlay_texture_handle() != kInvalidRenderTextureHandle;
 }
 
-float gridSizeForPreset(int preset) {
-    return viewportGridWorldSizeForPreset(preset);
+float grid_size_for_preset(int preset) {
+  return viewport_grid_world_size_for_preset(preset);
 }
 
-std::string viewportViewLocalizationKey(ViewportView view) {
-    std::string key = "viewport.view.";
-    key.append(viewportViewStableId(view));
-    return key;
+std::string viewport_view_localization_key(ViewportView view) {
+  std::string key = "viewport.view.";
+  key.append(viewport_view_stable_id(view));
+  return key;
 }
 
-std::string localizedViewportViewLabel(const LocalizationService& localization, ViewportView view) {
-    return localization.text(viewportViewLocalizationKey(view), std::string(viewportViewLabel(view)));
+std::string
+localized_viewport_view_label(const LocalizationService &localization,
+                              ViewportView view) {
+  return localization.text(viewport_view_localization_key(view),
+                           std::string(viewport_view_label(view)));
 }
 
 constexpr std::array<ViewportView, 7> kViewportChromeViews{{
@@ -102,38 +107,41 @@ constexpr std::array<ViewportView, 7> kViewportChromeViews{{
         ViewportView::Left,
 }};
 
-std::string_view viewportShadingModeStableId(ViewportShadingMode mode) {
-    switch (mode) {
-    case ViewportShadingMode::Wireframe:
-        return "wireframe";
-    case ViewportShadingMode::Shaded:
-        return "shaded";
-    case ViewportShadingMode::Rendered:
-        return "rendered";
-    }
+std::string_view viewport_shading_mode_stable_id(ViewportShadingMode mode) {
+  switch (mode) {
+  case ViewportShadingMode::Wireframe:
+    return "wireframe";
+  case ViewportShadingMode::Shaded:
     return "shaded";
+  case ViewportShadingMode::Rendered:
+    return "rendered";
+  }
+  return "shaded";
 }
 
-std::string_view viewportShadingModeLabel(ViewportShadingMode mode) {
-    switch (mode) {
-    case ViewportShadingMode::Wireframe:
-        return "Wireframe";
-    case ViewportShadingMode::Shaded:
-        return "Shaded";
-    case ViewportShadingMode::Rendered:
-        return "Rendered";
-    }
+std::string_view viewport_shading_mode_label(ViewportShadingMode mode) {
+  switch (mode) {
+  case ViewportShadingMode::Wireframe:
+    return "Wireframe";
+  case ViewportShadingMode::Shaded:
     return "Shaded";
+  case ViewportShadingMode::Rendered:
+    return "Rendered";
+  }
+  return "Shaded";
 }
 
-std::string viewportShadingModeLocalizationKey(ViewportShadingMode mode) {
-    std::string key = "viewport.shading.";
-    key.append(viewportShadingModeStableId(mode));
-    return key;
+std::string viewport_shading_mode_localization_key(ViewportShadingMode mode) {
+  std::string key = "viewport.shading.";
+  key.append(viewport_shading_mode_stable_id(mode));
+  return key;
 }
 
-std::string localizedViewportShadingModeLabel(const LocalizationService& localization, ViewportShadingMode mode) {
-    return localization.text(viewportShadingModeLocalizationKey(mode), std::string(viewportShadingModeLabel(mode)));
+std::string
+localized_viewport_shading_mode_label(const LocalizationService &localization,
+                                      ViewportShadingMode mode) {
+  return localization.text(viewport_shading_mode_localization_key(mode),
+                           std::string(viewport_shading_mode_label(mode)));
 }
 
 constexpr std::array<ViewportShadingMode, 3> kViewportChromeShadingModes{{
@@ -142,26 +150,32 @@ constexpr std::array<ViewportShadingMode, 3> kViewportChromeShadingModes{{
         ViewportShadingMode::Rendered,
 }};
 
-float viewportChromeComboWidthForText(const std::string& label) {
-    const ImGuiStyle& style = ImGui::GetStyle();
-    const ImVec2 labelSize = ImGui::CalcTextSize(label.data(), label.data() + label.size());
-    return std::ceil(labelSize.x + ImGui::GetFrameHeight() + style.FramePadding.x * 2.0f + 10.0f);
+float viewport_chrome_combo_width_for_text(const std::string &label) {
+  const ImGuiStyle &style = ImGui::GetStyle();
+  const ImVec2 label_size =
+      ImGui::CalcTextSize(label.data(), label.data() + label.size());
+  return std::ceil(label_size.x + ImGui::GetFrameHeight() +
+                   style.FramePadding.x * 2.0f + 10.0f);
 }
 
-float viewportViewComboWidth(const LocalizationService& localization) {
-    float width = 0.0f;
-    for (const ViewportView view : kViewportChromeViews) {
-        width = std::max(width, viewportChromeComboWidthForText(localizedViewportViewLabel(localization, view)));
-    }
-    return width;
+float viewport_view_combo_width(const LocalizationService &localization) {
+  float width = 0.0f;
+  for (const ViewportView view : kViewportChromeViews) {
+    width =
+        std::max(width, viewport_chrome_combo_width_for_text(
+                            localized_viewport_view_label(localization, view)));
+  }
+  return width;
 }
 
-float viewportShadingComboWidth(const LocalizationService& localization) {
-    float width = 0.0f;
-    for (const ViewportShadingMode mode : kViewportChromeShadingModes) {
-        width = std::max(width, viewportChromeComboWidthForText(localizedViewportShadingModeLabel(localization, mode)));
-    }
-    return width;
+float viewport_shading_combo_width(const LocalizationService &localization) {
+  float width = 0.0f;
+  for (const ViewportShadingMode mode : kViewportChromeShadingModes) {
+    width = std::max(
+        width, viewport_chrome_combo_width_for_text(
+                   localized_viewport_shading_mode_label(localization, mode)));
+  }
+  return width;
 }
 
 /**
@@ -170,1243 +184,1321 @@ float viewportShadingComboWidth(const LocalizationService& localization) {
 struct ViewportInfoSceneStats {
     std::uint64_t objects = 0;
     std::uint64_t primitives = 0;
-    std::uint64_t drawCalls = 0;
+    std::uint64_t draw_calls = 0;
 };
 
-ViewportInfoSceneStats collectViewportInfoSceneStats(const SceneDocument& document, const AssetRegistry& assets) {
-    ViewportInfoSceneStats stats;
-    for (const EntityId entityId : document.entities()) {
-        if (!document.isEffectivelyVisible(entityId)) {
-            continue;
-        }
-
-        const MeshComponent* meshComponent = document.mesh(entityId);
-        if (meshComponent == nullptr) {
-            continue;
-        }
-
-        const MeshAsset* mesh = assets.mesh(meshComponent->mesh);
-        if (mesh == nullptr || mesh->vertices.empty() || mesh->indices.empty()) {
-            continue;
-        }
-
-        const std::vector<MeshPrimitiveSpan> spans = coalescedMeshPrimitiveSpans(*mesh);
-        if (spans.empty()) {
-            continue;
-        }
-
-        ++stats.objects;
-        stats.drawCalls += spans.size();
-        for (const MeshPrimitiveSpan& span : spans) {
-            stats.primitives += span.indexCount / 3u;
-        }
+ViewportInfoSceneStats
+collect_viewport_info_scene_stats(const SceneDocument &document,
+                                  const AssetRegistry &assets) {
+  ViewportInfoSceneStats stats;
+  for (const EntityId entity_id : document.entities()) {
+    if (!document.is_effectively_visible(entity_id)) {
+      continue;
     }
-    return stats;
+
+    const MeshComponent *mesh_component = document.mesh(entity_id);
+    if (mesh_component == nullptr) {
+      continue;
+    }
+
+    const MeshAsset *mesh = assets.mesh(mesh_component->mesh);
+    if (mesh == nullptr || mesh->vertices.empty() || mesh->indices.empty()) {
+      continue;
+    }
+
+    const std::vector<MeshPrimitiveSpan> spans =
+        coalesced_mesh_primitive_spans(*mesh);
+    if (spans.empty()) {
+      continue;
+    }
+
+    ++stats.objects;
+    stats.draw_calls += spans.size();
+    for (const MeshPrimitiveSpan &span : spans) {
+      stats.primitives += span.index_count / 3u;
+    }
+  }
+  return stats;
 }
 
-std::string formatViewportInfoNumber(std::uint64_t value) {
-    return std::to_string(value);
+std::string format_viewport_info_number(std::uint64_t value) {
+  return std::to_string(value);
 }
 
-std::string formatViewportInfoMilliseconds(double value) {
-    if (!(value >= 0.0) || !std::isfinite(value)) {
-        return "--";
-    }
-    char buffer[32] = {};
-    std::snprintf(buffer, sizeof(buffer), "%.2f ms", value);
-    return buffer;
+std::string format_viewport_info_milliseconds(double value) {
+  if (!(value >= 0.0) || !std::isfinite(value)) {
+    return "--";
+  }
+  char buffer[32] = {};
+  std::snprintf(buffer, sizeof(buffer), "%.2f ms", value);
+  return buffer;
 }
 
-std::string formatViewportInfoFramesPerSecond(double value) {
-    if (!(value >= 0.0) || !std::isfinite(value)) {
-        return "--";
-    }
-    char buffer[32] = {};
-    std::snprintf(buffer, sizeof(buffer), "%.1f", value);
-    return buffer;
+std::string format_viewport_info_frames_per_second(double value) {
+  if (!(value >= 0.0) || !std::isfinite(value)) {
+    return "--";
+  }
+  char buffer[32] = {};
+  std::snprintf(buffer, sizeof(buffer), "%.1f", value);
+  return buffer;
 }
 
-std::string viewportInfoLine(std::string_view label, const std::string& value) {
-    std::string line{label};
-    line.append(": ");
-    line.append(value);
-    return line;
+std::string viewport_info_line(std::string_view label,
+                               const std::string &value) {
+  std::string line{label};
+  line.append(": ");
+  line.append(value);
+  return line;
 }
 
-void drawViewportInfoText(ImDrawList& drawList, ImVec2 itemMin, ImVec2 itemSize, std::span<const std::string> lines) {
-    if (lines.empty() || itemSize.x <= 32.0f || itemSize.y <= 32.0f) {
-        return;
-    }
+void draw_viewport_info_text(ImDrawList &draw_list, ImVec2 item_min,
+                             ImVec2 item_size,
+                             std::span<const std::string> lines) {
+  if (lines.empty() || item_size.x <= 32.0f || item_size.y <= 32.0f) {
+    return;
+  }
 
-    const float padding = 10.0f;
-    const float lineAdvance = ImGui::GetTextLineHeightWithSpacing();
-    float width = 0.0f;
-    for (const std::string& line : lines) {
-        width = std::max(width, ImGui::CalcTextSize(line.c_str(), nullptr, false).x);
-    }
-    const float height = ImGui::GetTextLineHeight() + lineAdvance * static_cast<float>(lines.size() - 1u);
-    const float x = std::max(itemMin.x + padding, itemMin.x + itemSize.x - width - padding);
-    const float y = std::max(itemMin.y + padding, itemMin.y + itemSize.y - height - padding);
-    const ImU32 shadow = IM_COL32(0, 0, 0, 180);
-    const ImU32 foreground = IM_COL32(235, 238, 244, 230);
+  const float padding = 10.0f;
+  const float line_advance = ImGui::GetTextLineHeightWithSpacing();
+  float width = 0.0f;
+  for (const std::string &line : lines) {
+    width =
+        std::max(width, ImGui::CalcTextSize(line.c_str(), nullptr, false).x);
+  }
+  const float height = ImGui::GetTextLineHeight() +
+                       line_advance * static_cast<float>(lines.size() - 1u);
+  const float x = std::max(item_min.x + padding,
+                           item_min.x + item_size.x - width - padding);
+  const float y = std::max(item_min.y + padding,
+                           item_min.y + item_size.y - height - padding);
+  const ImU32 shadow = IM_COL32(0, 0, 0, 180);
+  const ImU32 foreground = IM_COL32(235, 238, 244, 230);
 
-    for (std::size_t index = 0; index < lines.size(); ++index) {
-        const std::string& line = lines[index];
-        const ImVec2 position{x, y + lineAdvance * static_cast<float>(index)};
-        drawList.AddText({position.x + 1.0f, position.y + 1.0f}, shadow, line.c_str());
-        drawList.AddText(position, foreground, line.c_str());
-    }
+  for (std::size_t index = 0; index < lines.size(); ++index) {
+    const std::string &line = lines[index];
+    const ImVec2 position{x, y + line_advance * static_cast<float>(index)};
+    draw_list.AddText({position.x + 1.0f, position.y + 1.0f}, shadow,
+                      line.c_str());
+    draw_list.AddText(position, foreground, line.c_str());
+  }
 }
 
-std::optional<int> hitDrawnPlaneCapturedPoint(
-        const std::array<QVec3, 3>& points,
-        int capturedPointCount,
-        QVec2 mouseLocal,
-        const ViewportCameraController& camera,
-        ImVec2 itemMin,
-        ImVec2 itemSize) {
-    constexpr float kPointHitRadiusPixels = 10.0f;
-    const ImVec2 mouse{itemMin.x + mouseLocal.x, itemMin.y + mouseLocal.y};
-    const int count = std::min(capturedPointCount, 2);
-    for (int index = count - 1; index >= 0; --index) {
-        const std::optional<ImVec2> screen =
-                projectWorldToViewport(points[static_cast<std::size_t>(index)], camera, itemMin, itemSize);
-        if (!screen) {
-            continue;
-        }
-        if (viewportDistanceSquared(mouse, *screen) <= kPointHitRadiusPixels * kPointHitRadiusPixels) {
-            return index;
-        }
+std::optional<int>
+hit_drawn_plane_captured_point(const std::array<QVec3, 3> &points,
+                               int captured_point_count, QVec2 mouse_local,
+                               const ViewportCameraController &camera,
+                               ImVec2 item_min, ImVec2 item_size) {
+  constexpr float kPointHitRadiusPixels = 10.0f;
+  const ImVec2 mouse{item_min.x + mouse_local.x, item_min.y + mouse_local.y};
+  const int count = std::min(captured_point_count, 2);
+  for (int index = count - 1; index >= 0; --index) {
+    const std::optional<ImVec2> screen = project_world_to_viewport(
+        points[static_cast<std::size_t>(index)], camera, item_min, item_size);
+    if (!screen) {
+      continue;
     }
-    return std::nullopt;
+    if (viewport_distance_squared(mouse, *screen) <=
+        kPointHitRadiusPixels * kPointHitRadiusPixels) {
+      return index;
+    }
+  }
+  return std::nullopt;
 }
 
-bool hitDrawnPlaneLine(
-        const std::array<QVec3, 3>& points,
-        int capturedPointCount,
-        bool hasLine,
-        QVec2 mouseLocal,
-        const ViewportCameraController& camera,
-        ImVec2 itemMin,
-        ImVec2 itemSize) {
-    constexpr float kLineHitRadiusPixels = 10.0f;
-    if (!hasLine || capturedPointCount < 2) {
-        return false;
-    }
-
-    const std::optional<ImVec2> start = projectWorldToViewport(points[0], camera, itemMin, itemSize);
-    const std::optional<ImVec2> end = projectWorldToViewport(points[1], camera, itemMin, itemSize);
-    if (!start || !end) {
-        return false;
-    }
-
-    const ImVec2 mouse{itemMin.x + mouseLocal.x, itemMin.y + mouseLocal.y};
-    return viewportDistanceToSegmentSquared(mouse, *start, *end) <= kLineHitRadiusPixels * kLineHitRadiusPixels;
-}
-
-ModelingBoxToolEvent modelingBoxEvent(
-        const ViewportCameraController& camera,
-        const ViewportInputFrame& input,
-        float gridSize,
-        bool snapEnabled) {
-    const ViewportRay ray = camera.rayFromViewportPoint(input.mouseLocal);
-    return {
-            .screenPosition = input.mouseLocal,
-            .ray = {
-                    .origin = ray.origin,
-                    .direction = ray.direction,
-            },
-            .gridSize = gridSize,
-            .hasCamera = true,
-            .camera = ViewportCameraAdapter::modelingCamera(camera, input.viewportSize),
-            .snapEnabled = snapEnabled,
-    };
-}
-
-void focusDocument(SceneDocument& document, const AssetRegistry& assets, ViewportCameraController& camera) {
-    std::optional<SceneBounds> bounds = selectedWorldBounds(document, assets);
-    if (!bounds) {
-        bounds = documentWorldBounds(document, assets);
-    }
-    if (bounds) {
-        camera.focusBounds(bounds->min, bounds->max);
-    } else {
-        camera.focusOrigin();
-    }
-}
-
-void logCommandFailure(std::string_view source, const QuaderApiVoidResult& result) {
-    if (result.ok) {
-        return;
-    }
-    LOG_ERROR("{} failed: {}", source, result.message.empty() ? "Command failed." : result.message);
-}
-
-void markNavigationPressed(ViewportNavigationInput& navigation, ViewportInputActionKind action) {
-    switch (action) {
-    case ViewportInputActionKind::Orbit:
-        navigation.orbitPressed = true;
-        navigation.orbitDown = true;
-        break;
-    case ViewportInputActionKind::OrbitSnap:
-        navigation.orbitSnapPressed = true;
-        navigation.orbitSnapDown = true;
-        break;
-    case ViewportInputActionKind::Pan:
-        navigation.panPressed = true;
-        navigation.panDown = true;
-        break;
-    case ViewportInputActionKind::Fly:
-        navigation.flyPressed = true;
-        navigation.flyDown = true;
-        break;
-    case ViewportInputActionKind::ResetFlySpeed:
-        navigation.resetFlySpeedPressed = true;
-        break;
-    case ViewportInputActionKind::CancelNavigation:
-        navigation.cancelNavigationPressed = true;
-        break;
-    case ViewportInputActionKind::FlyForward:
-        navigation.flyForwardDown = true;
-        break;
-    case ViewportInputActionKind::FlyBackward:
-        navigation.flyBackwardDown = true;
-        break;
-    case ViewportInputActionKind::FlyRight:
-        navigation.flyRightDown = true;
-        break;
-    case ViewportInputActionKind::FlyLeft:
-        navigation.flyLeftDown = true;
-        break;
-    default:
-        break;
-    }
-}
-
-void markResolvedInputActionPressed(ViewportInputFrame& input, ViewportInputActionKind action) {
-    switch (action) {
-    case ViewportInputActionKind::ModalToolFinalize:
-        input.modalToolFinalizePressed = true;
-        break;
-    case ViewportInputActionKind::ModalToolModeCycle:
-        input.modalToolModeCyclePressed = true;
-        break;
-    default:
-        markNavigationPressed(input.navigationBindings, action);
-        break;
-    }
-}
-
-void markNavigationDown(ViewportNavigationInput& navigation, ViewportInputActionKind action) {
-    switch (action) {
-    case ViewportInputActionKind::Orbit:
-        navigation.orbitDown = true;
-        break;
-    case ViewportInputActionKind::OrbitSnap:
-        navigation.orbitSnapDown = true;
-        break;
-    case ViewportInputActionKind::Pan:
-        navigation.panDown = true;
-        break;
-    case ViewportInputActionKind::Fly:
-        navigation.flyDown = true;
-        break;
-    case ViewportInputActionKind::Zoom:
-        navigation.zoomWheel = true;
-        break;
-    case ViewportInputActionKind::ZoomToCursor:
-        navigation.zoomToCursorWheel = true;
-        break;
-    case ViewportInputActionKind::FlyForward:
-        navigation.flyForwardDown = true;
-        break;
-    case ViewportInputActionKind::FlyBackward:
-        navigation.flyBackwardDown = true;
-        break;
-    case ViewportInputActionKind::FlyRight:
-        navigation.flyRightDown = true;
-        break;
-    case ViewportInputActionKind::FlyLeft:
-        navigation.flyLeftDown = true;
-        break;
-    default:
-        break;
-    }
-}
-
-void markNavigationReleased(ViewportNavigationInput& navigation, ViewportInputActionKind action) {
-    switch (action) {
-    case ViewportInputActionKind::Orbit:
-        navigation.orbitReleased = true;
-        break;
-    case ViewportInputActionKind::OrbitSnap:
-        navigation.orbitSnapReleased = true;
-        break;
-    case ViewportInputActionKind::Pan:
-        navigation.panReleased = true;
-        break;
-    case ViewportInputActionKind::Fly:
-        navigation.flyReleased = true;
-        break;
-    default:
-        break;
-    }
-}
-
-void syncFlyDirectionFromNavigationBindings(ViewportInputFrame& input) {
-    input.flyLocalDirection = {};
-    if (input.navigationBindings.flyForwardDown) {
-        input.flyLocalDirection.z += 1.0f;
-    }
-    if (input.navigationBindings.flyBackwardDown) {
-        input.flyLocalDirection.z -= 1.0f;
-    }
-    if (input.navigationBindings.flyRightDown) {
-        input.flyLocalDirection.x += 1.0f;
-    }
-    if (input.navigationBindings.flyLeftDown) {
-        input.flyLocalDirection.x -= 1.0f;
-    }
-}
-
-QuaderViewportKeybindingContext keybindingContextFromInput(const ViewportInputFrame& input) {
-    return {
-            .viewportHovered = input.viewportHovered,
-            .navigationActive = input.navigationActive,
-            .flyNavigationActive = input.flyNavigationActive,
-            .orbitNavigationActive = input.orbitNavigationActive,
-            .panNavigationActive = input.panNavigationActive,
-            .modalToolActive = input.modalToolActive,
-            .activeToolOwnsViewport = input.activeToolOwnsViewport,
-            .operationPreviewActive = input.operationPreviewActive,
-    };
-}
-
-bool resolveViewportInputActionForChord(
-        QuaderEditorApi& editor,
-        const ViewportToolState& state,
-        const ViewportInputFrame& input,
-        const QuaderInputChord& chord,
-        ViewportInputActionKind& action) {
-    return editor.commands().resolveViewportInputAction(
-            chord,
-            state,
-            input.viewportFocused,
-            input.textInputActive,
-            action,
-            keybindingContextFromInput(input));
-}
-
-bool applyViewportKeybindingDispatch(
-        QuaderEditorApi& editor,
-        const QuaderViewportKeybindingDispatch& dispatch,
-        ViewportInputFrame& input,
-        bool* commandShortcutConsumed) {
-    switch (dispatch.kind) {
-    case QuaderViewportKeybindingDispatch::Kind::PendingChord:
-        input.resolvedShortcuts.push_back(ViewportShortcut{});
-        return true;
-    case QuaderViewportKeybindingDispatch::Kind::ViewportShortcut:
-        input.resolvedShortcuts.push_back(dispatch.shortcut);
-        return true;
-    case QuaderViewportKeybindingDispatch::Kind::Command:
-        logCommandFailure("Keybinding command", editor.commands().execute(dispatch.commandId));
-        if (commandShortcutConsumed != nullptr) {
-            *commandShortcutConsumed = true;
-        }
-        input.resolvedShortcuts.push_back(ViewportShortcut{});
-        return true;
-    case QuaderViewportKeybindingDispatch::Kind::NoMatch:
-        return false;
-    }
+bool hit_drawn_plane_line(const std::array<QVec3, 3> &points,
+                          int captured_point_count, bool has_line,
+                          QVec2 mouse_local,
+                          const ViewportCameraController &camera,
+                          ImVec2 item_min, ImVec2 item_size) {
+  constexpr float kLineHitRadiusPixels = 10.0f;
+  if (!has_line || captured_point_count < 2) {
     return false;
+  }
+
+  const std::optional<ImVec2> start =
+      project_world_to_viewport(points[0], camera, item_min, item_size);
+  const std::optional<ImVec2> end =
+      project_world_to_viewport(points[1], camera, item_min, item_size);
+  if (!start || !end) {
+    return false;
+  }
+
+  const ImVec2 mouse{item_min.x + mouse_local.x, item_min.y + mouse_local.y};
+  return viewport_distance_to_segment_squared(mouse, *start, *end) <=
+         kLineHitRadiusPixels * kLineHitRadiusPixels;
 }
 
-void resolveKeybindingsForFrame(
-        QuaderEditorApi& editor,
-        const ViewportToolState& state,
-        ViewportInputFrame& input,
-        bool* commandShortcutConsumed) {
-    input.resolvedShortcuts.clear();
-    input.navigationBindings = {};
-    if (!input.viewportFocused || input.textInputActive) {
-        editor.commands().resetPendingKeybindingChord();
-        return;
-    }
-
-    for (const QuaderInputChord& chord : input.activeInputChords) {
-        ViewportInputActionKind action = ViewportInputActionKind::None;
-        if (resolveViewportInputActionForChord(editor, state, input, chord, action)) {
-            markNavigationDown(input.navigationBindings, action);
-        }
-    }
-    for (const QuaderInputChord& chord : input.releasedInputChords) {
-        ViewportInputActionKind action = ViewportInputActionKind::None;
-        if (resolveViewportInputActionForChord(editor, state, input, chord, action)) {
-            markNavigationReleased(input.navigationBindings, action);
-        }
-    }
-    for (const QuaderInputChord& chord : input.wheelInputChords) {
-        ViewportInputActionKind action = ViewportInputActionKind::None;
-        if (resolveViewportInputActionForChord(editor, state, input, chord, action)) {
-            markNavigationDown(input.navigationBindings, action);
-        }
-    }
-
-    for (const QuaderInputChord& chord : input.pressedInputChords) {
-        ViewportInputActionKind action = ViewportInputActionKind::None;
-        if (resolveViewportInputActionForChord(editor, state, input, chord, action)) {
-            markResolvedInputActionPressed(input, action);
-            continue;
-        }
-
-        const QuaderViewportKeybindingDispatch dispatch = editor.commands().dispatchViewportInputBinding(
-                chord,
-                state,
-                input.viewportFocused,
-                input.textInputActive,
-                keybindingContextFromInput(input));
-        if (applyViewportKeybindingDispatch(editor, dispatch, input, commandShortcutConsumed)) {
-            return;
-        }
-    }
-
-    syncFlyDirectionFromNavigationBindings(input);
+ModelingBoxToolEvent modeling_box_event(const ViewportCameraController &camera,
+                                        const ViewportInputFrame &input,
+                                        float grid_size, bool snap_enabled) {
+  const ViewportRay ray = camera.ray_from_viewport_point(input.mouse_local);
+  return {
+      .screen_position = input.mouse_local,
+      .ray =
+          {
+              .origin = ray.origin,
+              .direction = ray.direction,
+          },
+      .grid_size = grid_size,
+      .has_camera = true,
+      .camera =
+          ViewportCameraAdapter::modeling_camera(camera, input.viewport_size),
+      .snap_enabled = snap_enabled,
+  };
 }
 
-QuaderApiVoidResult executeDeletePopupCommand(
-        QuaderEditorApi& editor,
-        ViewportInputRouter& inputRouter,
-        QuaderCommandId commandId) {
-    const QuaderApiVoidResult result = editor.commands().execute(commandId);
-    if (!result.ok) {
-        LOG_ERROR(
-                "Delete popup command '{}' failed: {}",
-                commandId.string(),
-                result.message.empty() ? "Operation failed." : result.message);
-    }
-    inputRouter.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(editor.selection().summary().mode)));
-    return result;
+void focus_document(SceneDocument &document, const AssetRegistry &assets,
+                    ViewportCameraController &camera) {
+  std::optional<SceneBounds> bounds = selected_world_bounds(document, assets);
+  if (!bounds) {
+    bounds = document_world_bounds(document, assets);
+  }
+  if (bounds) {
+    camera.focus_bounds(bounds->min, bounds->max);
+  } else {
+    camera.focus_origin();
+  }
 }
 
-bool drawViewportDeletePopup(
-        bool& objectPopupOpen,
-        bool& objectPopupPositionPending,
-        ImVec2& objectPopupPosition,
-        QuaderEditorApi& editor,
-        ViewportInputRouter& inputRouter,
-        LocalizationService& localization) {
-    bool changed = false;
+void log_command_failure(std::string_view source,
+                         const QuaderApiVoidResult &result) {
+  if (result.ok) {
+    return;
+  }
+  LOG_ERROR("{} failed: {}", source,
+            result.message.empty() ? "Command failed." : result.message);
+}
 
-    if (objectPopupOpen) {
-        if (objectPopupPositionPending) {
-            ImGui::SetNextWindowPos(objectPopupPosition, ImGuiCond_Always, ImVec2(0.5f, 0.0f));
-            objectPopupPositionPending = false;
-        }
-        const std::string windowTitle =
-                localization.text("ui.viewport.delete_popup.window_title", "Delete") + "##ViewportDeleteObjectsWindow";
-        bool open = objectPopupOpen;
-        const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize |
-                ImGuiWindowFlags_NoCollapse |
-                ImGuiWindowFlags_NoDocking |
-                ImGuiWindowFlags_NoSavedSettings;
-        if (ImGui::Begin(windowTitle.c_str(), &open, flags)) {
-            const std::string title = localization.text("ui.viewport.delete_popup.title", "Delete Selected Objects");
-            ImGui::TextUnformatted(title.c_str());
-            const std::string deleteLabel = localization.text("ui.viewport.delete_popup.delete", "Delete");
-            if (ImGui::Button(deleteLabel.c_str())) {
-                const QuaderApiVoidResult result =
-                        executeDeletePopupCommand(editor, inputRouter, QuaderCommand::DeleteSelection);
-                changed = result.changed;
-                open = false;
-            }
-            ImGui::SameLine();
-            const std::string cancelLabel = localization.text("ui.viewport.delete_popup.cancel", "Cancel");
-            if (ImGui::Button(cancelLabel.c_str())) {
-                open = false;
-            }
-        }
-        ImGui::End();
-        objectPopupOpen = open;
+void mark_navigation_pressed(ViewportNavigationInput &navigation,
+                             ViewportInputActionKind action) {
+  switch (action) {
+  case ViewportInputActionKind::Orbit:
+    navigation.orbit_pressed = true;
+    navigation.orbit_down = true;
+    break;
+  case ViewportInputActionKind::OrbitSnap:
+    navigation.orbit_snap_pressed = true;
+    navigation.orbit_snap_down = true;
+    break;
+  case ViewportInputActionKind::Pan:
+    navigation.pan_pressed = true;
+    navigation.pan_down = true;
+    break;
+  case ViewportInputActionKind::Fly:
+    navigation.fly_pressed = true;
+    navigation.fly_down = true;
+    break;
+  case ViewportInputActionKind::ResetFlySpeed:
+    navigation.reset_fly_speed_pressed = true;
+    break;
+  case ViewportInputActionKind::CancelNavigation:
+    navigation.cancel_navigation_pressed = true;
+    break;
+  case ViewportInputActionKind::FlyForward:
+    navigation.fly_forward_down = true;
+    break;
+  case ViewportInputActionKind::FlyBackward:
+    navigation.fly_backward_down = true;
+    break;
+  case ViewportInputActionKind::FlyRight:
+    navigation.fly_right_down = true;
+    break;
+  case ViewportInputActionKind::FlyLeft:
+    navigation.fly_left_down = true;
+    break;
+  default:
+    break;
+  }
+}
+
+void mark_resolved_input_action_pressed(ViewportInputFrame &input,
+                                        ViewportInputActionKind action) {
+  switch (action) {
+  case ViewportInputActionKind::ModalToolFinalize:
+    input.modal_tool_finalize_pressed = true;
+    break;
+  case ViewportInputActionKind::ModalToolModeCycle:
+    input.modal_tool_mode_cycle_pressed = true;
+    break;
+  default:
+    mark_navigation_pressed(input.navigation_bindings, action);
+    break;
+  }
+}
+
+void mark_navigation_down(ViewportNavigationInput &navigation,
+                          ViewportInputActionKind action) {
+  switch (action) {
+  case ViewportInputActionKind::Orbit:
+    navigation.orbit_down = true;
+    break;
+  case ViewportInputActionKind::OrbitSnap:
+    navigation.orbit_snap_down = true;
+    break;
+  case ViewportInputActionKind::Pan:
+    navigation.pan_down = true;
+    break;
+  case ViewportInputActionKind::Fly:
+    navigation.fly_down = true;
+    break;
+  case ViewportInputActionKind::Zoom:
+    navigation.zoom_wheel = true;
+    break;
+  case ViewportInputActionKind::ZoomToCursor:
+    navigation.zoom_to_cursor_wheel = true;
+    break;
+  case ViewportInputActionKind::FlyForward:
+    navigation.fly_forward_down = true;
+    break;
+  case ViewportInputActionKind::FlyBackward:
+    navigation.fly_backward_down = true;
+    break;
+  case ViewportInputActionKind::FlyRight:
+    navigation.fly_right_down = true;
+    break;
+  case ViewportInputActionKind::FlyLeft:
+    navigation.fly_left_down = true;
+    break;
+  default:
+    break;
+  }
+}
+
+void mark_navigation_released(ViewportNavigationInput &navigation,
+                              ViewportInputActionKind action) {
+  switch (action) {
+  case ViewportInputActionKind::Orbit:
+    navigation.orbit_released = true;
+    break;
+  case ViewportInputActionKind::OrbitSnap:
+    navigation.orbit_snap_released = true;
+    break;
+  case ViewportInputActionKind::Pan:
+    navigation.pan_released = true;
+    break;
+  case ViewportInputActionKind::Fly:
+    navigation.fly_released = true;
+    break;
+  default:
+    break;
+  }
+}
+
+void sync_fly_direction_from_navigation_bindings(ViewportInputFrame &input) {
+  input.fly_local_direction = {};
+  if (input.navigation_bindings.fly_forward_down) {
+    input.fly_local_direction.z += 1.0f;
+  }
+  if (input.navigation_bindings.fly_backward_down) {
+    input.fly_local_direction.z -= 1.0f;
+  }
+  if (input.navigation_bindings.fly_right_down) {
+    input.fly_local_direction.x += 1.0f;
+  }
+  if (input.navigation_bindings.fly_left_down) {
+    input.fly_local_direction.x -= 1.0f;
+  }
+}
+
+QuaderViewportKeybindingContext
+keybinding_context_from_input(const ViewportInputFrame &input) {
+  return {
+      .viewport_hovered = input.viewport_hovered,
+      .navigation_active = input.navigation_active,
+      .fly_navigation_active = input.fly_navigation_active,
+      .orbit_navigation_active = input.orbit_navigation_active,
+      .pan_navigation_active = input.pan_navigation_active,
+      .modal_tool_active = input.modal_tool_active,
+      .active_tool_owns_viewport = input.active_tool_owns_viewport,
+      .operation_preview_active = input.operation_preview_active,
+  };
+}
+
+bool resolve_viewport_input_action_for_chord(QuaderEditorApi &editor,
+                                             const ViewportToolState &state,
+                                             const ViewportInputFrame &input,
+                                             const QuaderInputChord &chord,
+                                             ViewportInputActionKind &action) {
+  return editor.commands().resolve_viewport_input_action(
+      chord, state, input.viewport_focused, input.text_input_active, action,
+      keybinding_context_from_input(input));
+}
+
+bool apply_viewport_keybinding_dispatch(
+    QuaderEditorApi &editor, const QuaderViewportKeybindingDispatch &dispatch,
+    ViewportInputFrame &input, bool *command_shortcut_consumed) {
+  switch (dispatch.kind) {
+  case QuaderViewportKeybindingDispatch::Kind::PendingChord:
+    input.resolved_shortcuts.push_back(ViewportShortcut{});
+    return true;
+  case QuaderViewportKeybindingDispatch::Kind::ViewportShortcut:
+    input.resolved_shortcuts.push_back(dispatch.shortcut);
+    return true;
+  case QuaderViewportKeybindingDispatch::Kind::Command:
+    log_command_failure("Keybinding command",
+                        editor.commands().execute(dispatch.command_id));
+    if (command_shortcut_consumed != nullptr) {
+      *command_shortcut_consumed = true;
+    }
+    input.resolved_shortcuts.push_back(ViewportShortcut{});
+    return true;
+  case QuaderViewportKeybindingDispatch::Kind::NoMatch:
+    return false;
+  }
+  return false;
+}
+
+void resolve_keybindings_for_frame(QuaderEditorApi &editor,
+                                   const ViewportToolState &state,
+                                   ViewportInputFrame &input,
+                                   bool *command_shortcut_consumed) {
+  input.resolved_shortcuts.clear();
+  input.navigation_bindings = {};
+  if (!input.viewport_focused || input.text_input_active) {
+    editor.commands().reset_pending_keybinding_chord();
+    return;
+  }
+
+  for (const QuaderInputChord &chord : input.active_input_chords) {
+    ViewportInputActionKind action = ViewportInputActionKind::None;
+    if (resolve_viewport_input_action_for_chord(editor, state, input, chord,
+                                                action)) {
+      mark_navigation_down(input.navigation_bindings, action);
+    }
+  }
+  for (const QuaderInputChord &chord : input.released_input_chords) {
+    ViewportInputActionKind action = ViewportInputActionKind::None;
+    if (resolve_viewport_input_action_for_chord(editor, state, input, chord,
+                                                action)) {
+      mark_navigation_released(input.navigation_bindings, action);
+    }
+  }
+  for (const QuaderInputChord &chord : input.wheel_input_chords) {
+    ViewportInputActionKind action = ViewportInputActionKind::None;
+    if (resolve_viewport_input_action_for_chord(editor, state, input, chord,
+                                                action)) {
+      mark_navigation_down(input.navigation_bindings, action);
+    }
+  }
+
+  for (const QuaderInputChord &chord : input.pressed_input_chords) {
+    ViewportInputActionKind action = ViewportInputActionKind::None;
+    if (resolve_viewport_input_action_for_chord(editor, state, input, chord,
+                                                action)) {
+      mark_resolved_input_action_pressed(input, action);
+      continue;
     }
 
-    if (ImGui::BeginPopup("ViewportDeleteElementsPopup")) {
-        const ModelingSelectionSummary summary = toModelingSelectionSummary(editor.selection().summary());
-        /**
-         * Represents a Popup Action value used by the ImGui editor presentation layer.
-         */
-        struct PopupAction {
-            const char* labelKey;
-            const char* fallback;
-            QuaderCommandId commandId;
-            bool enabled;
-        };
-        const PopupAction actions[] = {
-                {"ui.viewport.delete_vertices", "Delete Vertices", QuaderCommand::DeleteSelection,
-                        summary.mode == ModelingSelectionMode::Vertex && summary.selectedVertexCount > 0u},
-                {"ui.viewport.delete_face", "Delete Face", QuaderCommand::DeleteSelection,
-                        summary.mode == ModelingSelectionMode::Face && summary.selectedFaceCount > 0u},
-                {"ui.viewport.delete_edges", "Delete Edges", QuaderCommand::DeleteSelection,
-                        summary.mode == ModelingSelectionMode::Edge && summary.selectedEdgeCount > 0u},
-                {"ui.viewport.dissolve_edges", "Dissolve Edges", QuaderCommand::ModelingDissolveEdges,
-                        summary.mode == ModelingSelectionMode::Edge && summary.selectedEdgeCount > 0u},
-                {"ui.viewport.dissolve_vertex", "Dissolve Vertex", QuaderCommand::ModelingDissolveVertices,
-                        summary.mode == ModelingSelectionMode::Vertex && summary.selectedVertexCount > 0u},
-        };
-        for (const PopupAction& action : actions) {
-            const std::string label = localization.text(action.labelKey, action.fallback);
-            if (ImGui::MenuItem(label.c_str(), nullptr, false, action.enabled)) {
-                const QuaderApiVoidResult result = executeDeletePopupCommand(editor, inputRouter, action.commandId);
-                changed = changed || result.changed;
-                ImGui::CloseCurrentPopup();
-            }
-        }
-        ImGui::EndPopup();
+    const QuaderViewportKeybindingDispatch dispatch =
+        editor.commands().dispatch_viewport_input_binding(
+            chord, state, input.viewport_focused, input.text_input_active,
+            keybinding_context_from_input(input));
+    if (apply_viewport_keybinding_dispatch(editor, dispatch, input,
+                                           command_shortcut_consumed)) {
+      return;
     }
+  }
 
-    return changed;
+  sync_fly_direction_from_navigation_bindings(input);
+}
+
+QuaderApiVoidResult
+execute_delete_popup_command(QuaderEditorApi &editor,
+                             ViewportInputRouter &input_router,
+                             QuaderCommandId command_id) {
+  const QuaderApiVoidResult result = editor.commands().execute(command_id);
+  if (!result.ok) {
+    LOG_ERROR("Delete popup command '{}' failed: {}", command_id.string(),
+              result.message.empty() ? "Operation failed." : result.message);
+  }
+  input_router.set_selection_mode(app_selection_mode_to_viewport(
+      to_modeling_selection_mode(editor.selection().summary().mode)));
+  return result;
+}
+
+bool draw_viewport_delete_popup(bool &object_popup_open,
+                                bool &object_popup_position_pending,
+                                ImVec2 &object_popup_position,
+                                QuaderEditorApi &editor,
+                                ViewportInputRouter &input_router,
+                                LocalizationService &localization) {
+  bool changed = false;
+
+  if (object_popup_open) {
+    if (object_popup_position_pending) {
+      ImGui::SetNextWindowPos(object_popup_position, ImGuiCond_Always,
+                              ImVec2(0.5f, 0.0f));
+      object_popup_position_pending = false;
+    }
+    const std::string window_title =
+        localization.text("ui.viewport.delete_popup.window_title", "Delete") +
+        "##ViewportDeleteObjectsWindow";
+    bool open = object_popup_open;
+    const ImGuiWindowFlags flags =
+        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings;
+    if (ImGui::Begin(window_title.c_str(), &open, flags)) {
+      const std::string title = localization.text(
+          "ui.viewport.delete_popup.title", "Delete Selected Objects");
+      ImGui::TextUnformatted(title.c_str());
+      const std::string delete_label =
+          localization.text("ui.viewport.delete_popup.delete", "Delete");
+      if (ImGui::Button(delete_label.c_str())) {
+        const QuaderApiVoidResult result = execute_delete_popup_command(
+            editor, input_router, quader_command::kDeleteSelection);
+        changed = result.changed;
+        open = false;
+      }
+      ImGui::SameLine();
+      const std::string cancel_label =
+          localization.text("ui.viewport.delete_popup.cancel", "Cancel");
+      if (ImGui::Button(cancel_label.c_str())) {
+        open = false;
+      }
+    }
+    ImGui::End();
+    object_popup_open = open;
+  }
+
+  if (ImGui::BeginPopup("ViewportDeleteElementsPopup")) {
+    const ModelingSelectionSummary summary =
+        to_modeling_selection_summary(editor.selection().summary());
+    /**
+     * Represents a Popup Action value used by the ImGui editor presentation
+     * layer.
+     */
+    struct PopupAction {
+      const char *label_key;
+      const char *fallback;
+      QuaderCommandId command_id;
+      bool enabled;
+    };
+    const PopupAction actions[] = {
+        {"ui.viewport.delete_vertices", "Delete Vertices",
+         quader_command::kDeleteSelection,
+         summary.mode == ModelingSelectionMode::Vertex &&
+             summary.selected_vertex_count > 0u},
+        {"ui.viewport.delete_face", "Delete Face",
+         quader_command::kDeleteSelection,
+         summary.mode == ModelingSelectionMode::Face &&
+             summary.selected_face_count > 0u},
+        {"ui.viewport.delete_edges", "Delete Edges",
+         quader_command::kDeleteSelection,
+         summary.mode == ModelingSelectionMode::Edge &&
+             summary.selected_edge_count > 0u},
+        {"ui.viewport.dissolve_edges", "Dissolve Edges",
+         quader_command::kModelingDissolveEdges,
+         summary.mode == ModelingSelectionMode::Edge &&
+             summary.selected_edge_count > 0u},
+        {"ui.viewport.dissolve_vertex", "Dissolve Vertex",
+         quader_command::kModelingDissolveVertices,
+         summary.mode == ModelingSelectionMode::Vertex &&
+             summary.selected_vertex_count > 0u},
+    };
+    for (const PopupAction &action : actions) {
+      const std::string label =
+          localization.text(action.label_key, action.fallback);
+      if (ImGui::MenuItem(label.c_str(), nullptr, false, action.enabled)) {
+        const QuaderApiVoidResult result = execute_delete_popup_command(
+            editor, input_router, action.command_id);
+        changed = changed || result.changed;
+        ImGui::CloseCurrentPopup();
+      }
+    }
+    ImGui::EndPopup();
+  }
+
+  return changed;
 }
 
 } // namespace
 
 ViewportPanel::ViewportPanel() {
-    panes_[viewportPaneIndex(ViewportPaneId::Perspective)].id = ViewportPaneId::Perspective;
-    panes_[viewportPaneIndex(ViewportPaneId::Top)].id = ViewportPaneId::Top;
-    panes_[viewportPaneIndex(ViewportPaneId::Front)].id = ViewportPaneId::Front;
-    panes_[viewportPaneIndex(ViewportPaneId::Side)].id = ViewportPaneId::Side;
+  panes_[viewport_pane_index(ViewportPaneId::Perspective)].id =
+      ViewportPaneId::Perspective;
+  panes_[viewport_pane_index(ViewportPaneId::Top)].id = ViewportPaneId::Top;
+  panes_[viewport_pane_index(ViewportPaneId::Front)].id = ViewportPaneId::Front;
+  panes_[viewport_pane_index(ViewportPaneId::Side)].id = ViewportPaneId::Side;
 }
 
 ViewportPanel::~ViewportPanel() {
     shutdown();
 }
 
-void ViewportPanel::initialize(RenderSystem& renderSystem) {
-    shutdownComplete_ = false;
-    for (Pane& paneState : panes_) {
-        if (paneState.initialized) {
-            continue;
-        }
-        paneState.renderer.initialize(renderSystem.engine(),
-                renderSystem.scene(),
-                renderSystem.textures(),
-                renderSystem.groundGridMaterial(),
-                viewportGridLayerMask(viewportPaneIndex(paneState.id)));
-        paneState.initialized = true;
+void ViewportPanel::initialize(RenderSystem &render_system) {
+  shutdown_complete_ = false;
+  for (Pane &pane_state : panes_) {
+    if (pane_state.initialized) {
+      continue;
     }
+    pane_state.renderer.initialize(
+        render_system.engine(), render_system.scene(), render_system.textures(),
+        render_system.ground_grid_material(),
+        viewport_grid_layer_mask(viewport_pane_index(pane_state.id)));
+    pane_state.initialized = true;
+  }
 }
 
 void ViewportPanel::shutdown() {
-    if (shutdownComplete_) {
-        return;
-    }
+  if (shutdown_complete_) {
+    return;
+  }
 
-    shutdownComplete_ = true;
-    viewportInfoCachedDocument_ = nullptr;
-    viewportInfoCachedAssets_ = nullptr;
-    viewportInfoSceneStatsValid_ = false;
-    for (Pane& paneState : panes_) {
-        paneState.renderer.shutdown();
-        paneState.initialized = false;
-    }
+  shutdown_complete_ = true;
+  viewport_info_cached_document_ = nullptr;
+  viewport_info_cached_assets_ = nullptr;
+  viewport_info_scene_stats_valid_ = false;
+  for (Pane &pane_state : panes_) {
+    pane_state.renderer.shutdown();
+    pane_state.initialized = false;
+  }
     if (workspace_ != nullptr) {
-        workspace_->clearPaneVisibility();
-        workspace_ = nullptr;
+      workspace_->clear_pane_visibility();
+      workspace_ = nullptr;
     }
-    activeRenderPanes_.clear();
+    active_render_panes_.clear();
 }
 
-void ViewportPanel::prepareViewports(
-        ViewportWorkspaceService& workspace,
-        SceneRenderBridge& renderBridge,
-        const SceneDocument& document,
-        const AssetRegistry& assets) {
-    QDR_PROFILE_FUNCTION();
-    workspace_ = &workspace;
-    const float gridWorldSize = viewportGridWorldSizeForPreset(workspace.gridPreset());
-    const ViewportSettings& settings = activeViewportSettings();
-    const bool gridVisible = settings.boolValue(ViewportBoolSettingId::ShowGrid);
-    const bool gizmosVisible = settings.boolValue(ViewportBoolSettingId::ShowGizmos);
-    const bool overlaysVisible = settings.boolValue(ViewportBoolSettingId::ShowOverlays);
-    const ModelingSelectionMode cachedOverlayMode = selectionOverlayCache_.valid()
-            ? selectionOverlayCache_.key().selectionMode
-            : viewportSelectionModeToApp(inputRouter_.state().selectionMode);
-    renderBridge.syncSelectedObjectOverlay(
-            document,
-            assets,
-            overlaysVisible && cachedOverlayMode == ModelingSelectionMode::Object);
-    std::uint8_t wireframeLayerMask = 0u;
-    for (ViewportPaneId paneId : activeRenderPanes_) {
-        const ViewportWorkspacePaneState& paneWorkspace = workspace.pane(paneId);
-        if (pane(paneId).initialized &&
-                paneWorkspace.visibleThisFrame &&
-                paneWorkspace.shading == ViewportShadingMode::Wireframe) {
-            wireframeLayerMask = static_cast<std::uint8_t>(
-                    wireframeLayerMask | viewportGridLayerMask(viewportPaneIndex(paneId)));
-        }
+void ViewportPanel::prepare_viewports(ViewportWorkspaceService &workspace,
+                                      SceneRenderBridge &render_bridge,
+                                      const SceneDocument &document,
+                                      const AssetRegistry &assets) {
+  QDR_PROFILE_FUNCTION();
+  workspace_ = &workspace;
+  const float grid_world_size =
+      viewport_grid_world_size_for_preset(workspace.grid_preset());
+  const ViewportSettings &settings = active_viewport_settings();
+  const bool grid_visible =
+      settings.bool_value(ViewportBoolSettingId::ShowGrid);
+  const bool gizmos_visible =
+      settings.bool_value(ViewportBoolSettingId::ShowGizmos);
+  const bool overlays_visible =
+      settings.bool_value(ViewportBoolSettingId::ShowOverlays);
+  const ModelingSelectionMode cached_overlay_mode =
+      selection_overlay_cache_.valid()
+          ? selection_overlay_cache_.key().selection_mode
+          : viewport_selection_mode_to_app(
+                input_router_.state().selection_mode);
+  render_bridge.sync_selected_object_overlay(
+      document, assets,
+      overlays_visible && cached_overlay_mode == ModelingSelectionMode::Object);
+  std::uint8_t wireframe_layer_mask = 0u;
+  for (ViewportPaneId pane_id : active_render_panes_) {
+    const ViewportWorkspacePaneState &pane_workspace = workspace.pane(pane_id);
+    if (pane(pane_id).initialized && pane_workspace.visible_this_frame &&
+        pane_workspace.shading == ViewportShadingMode::Wireframe) {
+      wireframe_layer_mask = static_cast<std::uint8_t>(
+          wireframe_layer_mask |
+          viewport_grid_layer_mask(viewport_pane_index(pane_id)));
     }
-    renderBridge.syncSceneWireframeOverlay(document, assets, wireframeLayerMask);
-    for (ViewportPaneId paneId : activeRenderPanes_) {
-        QDR_PROFILE_SCOPE("Viewport prepare pane");
-        Pane& paneState = pane(paneId);
-        ViewportWorkspacePaneState& paneWorkspace = workspace.pane(paneId);
-        if (!paneState.initialized || !paneWorkspace.visibleThisFrame) {
-            continue;
-        }
-        if (const EntityId root = document.sceneRoot(); root != InvalidEntityId) {
-            if (const SceneSettingsComponent* settings = document.sceneSettings(root)) {
-                paneState.renderer.applySceneSettings(
-                        *settings,
-                        paneWorkspace.shading == ViewportShadingMode::Rendered);
-            }
-        }
-        paneState.renderer.updateCamera(paneWorkspace.camera);
-        paneState.renderer.updateGroundGrid(paneWorkspace.camera, gridWorldSize, settings, gridVisible);
-        paneState.renderer.setSceneLayerMask(paneWorkspace.shading == ViewportShadingMode::Rendered
-                        ? kViewportRenderedSceneLayerMask
-                        : kViewportShadedSceneLayerMask);
-        paneState.renderer.setShadowingEnabled(paneWorkspace.shading == ViewportShadingMode::Rendered);
-        paneState.renderer.setSceneVisible(paneWorkspace.shading != ViewportShadingMode::Wireframe);
-        paneState.renderer.setOverlayVisible(overlaysVisible ||
-                gizmosVisible ||
-                paneWorkspace.shading == ViewportShadingMode::Wireframe);
-        ViewportOverlayFrame overlayFrame = overlaysVisible && selectionOverlayCache_.valid()
-                ? selectionOverlayCache_.frame()
-                : ViewportOverlayFrame{};
-        if (paneWorkspace.shading == ViewportShadingMode::Wireframe) {
-            QDR_PROFILE_SCOPE("Viewport strip wireframe selection fills");
-            overlayFrame = ViewportSceneOverlayBuilder::stripWireframeSelectionFills(
-                    std::move(overlayFrame),
-                    cachedOverlayMode);
-        }
-        if (paneId == interactionPaneId_) {
-            const ViewportOverlayCamera overlayCamera =
-                    ViewportCameraAdapter::overlayCamera(paneWorkspace.camera, paneWorkspace.renderSize);
-            if (const quader_editor_core::TransformGizmoFrame* gizmoFrame =
-                        interactionController_.transformGizmoFrame()) {
-                if (gizmosVisible) {
-                    ViewportTransformGizmoOverlayBuilder::append(overlayFrame, *gizmoFrame, overlayCamera);
-                }
-            }
-            if (overlaysVisible) {
-                ViewportSelectionMarqueeOverlayBuilder::append(
-                        overlayFrame,
-                        overlayCamera,
-                        interactionController_.selectionMarquee());
-            }
-        }
-        ViewportOverlayStyleResolver::apply(
-                overlayFrame,
-                settings,
-                ViewportOverlayStyleContext{.selectionMode = overlaySelectionContext(cachedOverlayMode)});
-        {
-            QDR_PROFILE_SCOPE("Viewport submit overlay frame");
-            renderBridge.setOverlayFrame(
-                    viewportPaneIndex(paneId),
-                    viewportGridLayerMask(viewportPaneIndex(paneId)),
-                    std::move(overlayFrame),
-                    ViewportCameraAdapter::overlayCamera(paneWorkspace.camera, paneWorkspace.renderSize));
-        }
+  }
+  render_bridge.sync_scene_wireframe_overlay(document, assets,
+                                             wireframe_layer_mask);
+  for (ViewportPaneId pane_id : active_render_panes_) {
+    QDR_PROFILE_SCOPE("Viewport prepare pane");
+    Pane &pane_state = pane(pane_id);
+    ViewportWorkspacePaneState &pane_workspace = workspace.pane(pane_id);
+    if (!pane_state.initialized || !pane_workspace.visible_this_frame) {
+      continue;
     }
+    if (const EntityId root = document.scene_root(); root != kInvalidEntityId) {
+      if (const SceneSettingsComponent *settings =
+              document.scene_settings(root)) {
+        pane_state.renderer.apply_scene_settings(
+            *settings, pane_workspace.shading == ViewportShadingMode::Rendered);
+      }
+    }
+    pane_state.renderer.update_camera(pane_workspace.camera);
+    pane_state.renderer.update_ground_grid(
+        pane_workspace.camera, grid_world_size, settings, grid_visible);
+    pane_state.renderer.set_scene_layer_mask(
+        pane_workspace.shading == ViewportShadingMode::Rendered
+            ? kViewportRenderedSceneLayerMask
+            : kViewportShadedSceneLayerMask);
+    pane_state.renderer.set_shadowing_enabled(pane_workspace.shading ==
+                                              ViewportShadingMode::Rendered);
+    pane_state.renderer.set_scene_visible(pane_workspace.shading !=
+                                          ViewportShadingMode::Wireframe);
+    pane_state.renderer.set_overlay_visible(
+        overlays_visible || gizmos_visible ||
+        pane_workspace.shading == ViewportShadingMode::Wireframe);
+    ViewportOverlayFrame overlay_frame =
+        overlays_visible && selection_overlay_cache_.valid()
+            ? selection_overlay_cache_.frame()
+            : ViewportOverlayFrame{};
+    if (pane_workspace.shading == ViewportShadingMode::Wireframe) {
+      QDR_PROFILE_SCOPE("Viewport strip wireframe selection fills");
+      overlay_frame =
+          ViewportSceneOverlayBuilder::strip_wireframe_selection_fills(
+              std::move(overlay_frame), cached_overlay_mode);
+    }
+    if (pane_id == interaction_pane_id_) {
+      const ViewportOverlayCamera overlay_camera =
+          ViewportCameraAdapter::overlay_camera(pane_workspace.camera,
+                                                pane_workspace.render_size);
+      if (const quader_editor_core::TransformGizmoFrame *gizmo_frame =
+              interaction_controller_.transform_gizmo_frame()) {
+        if (gizmos_visible) {
+          ViewportTransformGizmoOverlayBuilder::append(
+              overlay_frame, *gizmo_frame, overlay_camera);
+        }
+      }
+      if (overlays_visible) {
+        ViewportSelectionMarqueeOverlayBuilder::append(
+            overlay_frame, overlay_camera,
+            interaction_controller_.selection_marquee());
+      }
+    }
+    ViewportOverlayStyleResolver::apply(
+        overlay_frame, settings,
+        ViewportOverlayStyleContext{
+            .selection_mode = overlay_selection_context(cached_overlay_mode)});
+    {
+      QDR_PROFILE_SCOPE("Viewport submit overlay frame");
+      render_bridge.set_overlay_frame(
+          viewport_pane_index(pane_id),
+          viewport_grid_layer_mask(viewport_pane_index(pane_id)),
+          std::move(overlay_frame),
+          ViewportCameraAdapter::overlay_camera(pane_workspace.camera,
+                                                pane_workspace.render_size));
+    }
+  }
 }
 
-void ViewportPanel::renderViewports(filament::Renderer& renderer) {
-    QDR_PROFILE_FUNCTION();
-    for (ViewportPaneId paneId : activeRenderPanes_) {
-        QDR_PROFILE_SCOPE("Viewport render pane");
-        Pane& paneState = pane(paneId);
-        if (!paneState.initialized || workspace_ == nullptr || !workspace_->paneVisible(paneId)) {
-            continue;
+void ViewportPanel::render_viewports(filament::Renderer &renderer) {
+  QDR_PROFILE_FUNCTION();
+  for (ViewportPaneId pane_id : active_render_panes_) {
+    QDR_PROFILE_SCOPE("Viewport render pane");
+    Pane &pane_state = pane(pane_id);
+    if (!pane_state.initialized || workspace_ == nullptr ||
+        !workspace_->pane_visible(pane_id)) {
+      continue;
+    }
+    pane_state.renderer.render(renderer);
+  }
+}
+
+bool ViewportPanel::activate_tool_from_menu(ViewportToolId tool,
+                                            QuaderEditorApi &editor,
+                                            ModelingSessionService &modeling) {
+  LOG_INFO("Tools menu requested viewport tool {}", viewport_tool_id(tool));
+  const ViewportTool *tool_definition = find_viewport_tool(tool);
+  const QuaderApiVoidResult command =
+      tool_definition != nullptr ? editor.tools().activate(tool)
+                                 : QuaderApiVoidResult{
+                                       .ok = false,
+                                       .changed = false,
+                                       .message = "Unknown viewport tool.",
+                                   };
+  if (!command.ok) {
+    LOG_ERROR("Viewport tool activation failed: {}",
+              command.message.empty() ? "Command failed." : command.message);
+    return false;
+  }
+  const ViewportToolId active_tool =
+      viewport_tool_for_modeling(modeling.tool_status().active_tool);
+  LOG_INFO("Viewport tool activated from menu: requested {}, active {}",
+           viewport_tool_id(tool), viewport_tool_id(active_tool));
+  input_router_.set_active_tool(active_tool);
+  input_router_.set_selection_mode(app_selection_mode_to_viewport(
+      to_modeling_selection_mode(editor.selection().summary().mode)));
+  input_router_.clear_modal_tool_state();
+  interaction_controller_.reset(&editor);
+  hover_controller_.invalidate();
+  selection_overlay_cache_.mark_dirty();
+  return true;
+}
+
+ViewportPanel::Pane &ViewportPanel::pane(ViewportPaneId pane_id) {
+  return panes_[viewport_pane_index(pane_id)];
+}
+
+const ViewportPanel::Pane &ViewportPanel::pane(ViewportPaneId pane_id) const {
+  return panes_[viewport_pane_index(pane_id)];
+}
+
+void ViewportPanel::sync_active_tool_from_editor(
+    QuaderEditorApi &editor, ModelingSessionService &modeling) {
+  const ViewportToolId active_tool =
+      viewport_tool_for_modeling(modeling.tool_status().active_tool);
+  if (input_router_.state().active_tool == active_tool) {
+    return;
+  }
+
+  LOG_INFO("Viewport tool synchronized from editor: {}",
+           viewport_tool_id(active_tool));
+  input_router_.set_active_tool(active_tool);
+  input_router_.clear_modal_tool_state();
+  interaction_controller_.reset(&editor);
+  hover_controller_.invalidate();
+  selection_overlay_cache_.mark_dirty();
+}
+
+bool ViewportPanel::draw_pane_chrome(Pane &pane_state, ImVec2 item_min,
+                                     ImVec2 item_size,
+                                     const LocalizationService &localization) {
+  ViewportWorkspaceService &viewport_workspace = workspace();
+  ViewportWorkspacePaneState &pane_workspace =
+      viewport_workspace.pane(pane_state.id);
+  ImDrawList *draw_list = ImGui::GetWindowDrawList();
+  const ImVec2 item_max{item_min.x + item_size.x, item_min.y + item_size.y};
+  const ImU32 divider_color = IM_COL32(19, 19, 20, 255);
+  const ImU32 focused_color = IM_COL32(46, 46, 48, 242);
+  draw_list->AddRect(item_min, item_max,
+                     pane_state.id == viewport_workspace.focused_pane()
+                         ? focused_color
+                         : divider_color,
+                     0.0f, 0, 1.0f);
+
+  constexpr float kComboHeight = 28.0f;
+  constexpr float kComboGap = 6.0f;
+  ImGui::PushID(static_cast<int>(viewport_pane_index(pane_state.id)));
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 4.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(16, 18, 21, 210));
+
+  const float view_desired_width = viewport_view_combo_width(localization);
+  const float shading_desired_width =
+      viewport_shading_combo_width(localization);
+  const float available_width = std::max(0.0f, item_size.x - 16.0f);
+  const bool compact =
+      available_width < view_desired_width + shading_desired_width + kComboGap;
+  const float shading_width =
+      compact ? std::min(shading_desired_width, available_width)
+              : shading_desired_width;
+  const float view_width =
+      compact ? std::max(0.0f, available_width - shading_width - kComboGap)
+              : view_desired_width;
+  const float combo_gap = view_width >= 44.0f ? kComboGap : 0.0f;
+  const ImVec2 combo_pos{
+      item_max.x - 8.0f - view_width - combo_gap - shading_width,
+      item_min.y + 7.0f,
+  };
+  const ImRect chrome_rect(
+      combo_pos, ImVec2(item_max.x - 8.0f, combo_pos.y + kComboHeight));
+  bool consumes_input = chrome_rect.Contains(ImGui::GetMousePos());
+  (void)imgui_close_combo_popup_for_click_inside(
+      item_min, item_max, chrome_rect.Min, chrome_rect.Max);
+
+  ImGui::SetCursorScreenPos(combo_pos);
+  if (view_width >= 44.0f) {
+    ImGui::SetNextItemWidth(view_width);
+    const ViewportView current_view = viewport_workspace.view(pane_state.id);
+    const std::string preview =
+        localized_viewport_view_label(localization, current_view);
+    if (quader_begin_combo("##ViewportView", preview.c_str(),
+                           ImGuiComboFlags_HeightSmall)) {
+      consumes_input = true;
+      for (const ViewportView view : kViewportChromeViews) {
+        const bool selected = current_view == view;
+        const std::string label =
+            localized_viewport_view_label(localization, view);
+        if (ImGui::Selectable(label.c_str(), selected)) {
+          set_pane_view(pane_state, view);
         }
-        paneState.renderer.render(renderer);
-    }
-}
-
-bool ViewportPanel::activateToolFromMenu(
-        ViewportToolId tool,
-        QuaderEditorApi& editor,
-        ModelingSessionService& modeling) {
-    LOG_INFO("Tools menu requested viewport tool {}", viewportToolId(tool));
-    const ViewportTool* toolDefinition = findViewportTool(tool);
-    const QuaderApiVoidResult command = toolDefinition != nullptr ?
-            editor.tools().activate(tool) :
-            QuaderApiVoidResult{
-                    .ok = false,
-                    .changed = false,
-                    .message = "Unknown viewport tool.",
-            };
-    if (!command.ok) {
-        LOG_ERROR("Viewport tool activation failed: {}", command.message.empty() ? "Command failed." : command.message);
-        return false;
-    }
-    const ViewportToolId activeTool = viewportToolForModeling(modeling.toolStatus().activeTool);
-    LOG_INFO("Viewport tool activated from menu: requested {}, active {}", viewportToolId(tool), viewportToolId(activeTool));
-    inputRouter_.setActiveTool(activeTool);
-    inputRouter_.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(editor.selection().summary().mode)));
-    inputRouter_.clearModalToolState();
-    interactionController_.reset(&editor);
-    hoverController_.invalidate();
-    selectionOverlayCache_.markDirty();
-    return true;
-}
-
-ViewportPanel::Pane& ViewportPanel::pane(ViewportPaneId paneId) {
-    return panes_[viewportPaneIndex(paneId)];
-}
-
-const ViewportPanel::Pane& ViewportPanel::pane(ViewportPaneId paneId) const {
-    return panes_[viewportPaneIndex(paneId)];
-}
-
-void ViewportPanel::syncActiveToolFromEditor(QuaderEditorApi& editor, ModelingSessionService& modeling) {
-    const ViewportToolId activeTool = viewportToolForModeling(modeling.toolStatus().activeTool);
-    if (inputRouter_.state().activeTool == activeTool) {
-        return;
-    }
-
-    LOG_INFO("Viewport tool synchronized from editor: {}", viewportToolId(activeTool));
-    inputRouter_.setActiveTool(activeTool);
-    inputRouter_.clearModalToolState();
-    interactionController_.reset(&editor);
-    hoverController_.invalidate();
-    selectionOverlayCache_.markDirty();
-}
-
-bool ViewportPanel::drawPaneChrome(
-        Pane& paneState,
-        ImVec2 itemMin,
-        ImVec2 itemSize,
-        const LocalizationService& localization) {
-    ViewportWorkspaceService& viewportWorkspace = workspace();
-    ViewportWorkspacePaneState& paneWorkspace = viewportWorkspace.pane(paneState.id);
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    const ImVec2 itemMax{itemMin.x + itemSize.x, itemMin.y + itemSize.y};
-    const ImU32 dividerColor = IM_COL32(19, 19, 20, 255);
-    const ImU32 focusedColor = IM_COL32(46, 46, 48, 242);
-    drawList->AddRect(itemMin,
-            itemMax,
-            paneState.id == viewportWorkspace.focusedPane() ? focusedColor : dividerColor,
-            0.0f,
-            0,
-            1.0f);
-
-    constexpr float kComboHeight = 28.0f;
-    constexpr float kComboGap = 6.0f;
-    ImGui::PushID(static_cast<int>(viewportPaneIndex(paneState.id)));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 4.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(16, 18, 21, 210));
-
-    const float viewDesiredWidth = viewportViewComboWidth(localization);
-    const float shadingDesiredWidth = viewportShadingComboWidth(localization);
-    const float availableWidth = std::max(0.0f, itemSize.x - 16.0f);
-    const bool compact = availableWidth < viewDesiredWidth + shadingDesiredWidth + kComboGap;
-    const float shadingWidth = compact ? std::min(shadingDesiredWidth, availableWidth) : shadingDesiredWidth;
-    const float viewWidth = compact
-            ? std::max(0.0f, availableWidth - shadingWidth - kComboGap)
-            : viewDesiredWidth;
-    const float comboGap = viewWidth >= 44.0f ? kComboGap : 0.0f;
-    const ImVec2 comboPos{
-            itemMax.x - 8.0f - viewWidth - comboGap - shadingWidth,
-            itemMin.y + 7.0f,
-    };
-    const ImRect chromeRect(comboPos, ImVec2(itemMax.x - 8.0f, comboPos.y + kComboHeight));
-    bool consumesInput = chromeRect.Contains(ImGui::GetMousePos());
-    (void)imguiCloseComboPopupForClickInside(itemMin, itemMax, chromeRect.Min, chromeRect.Max);
-
-    ImGui::SetCursorScreenPos(comboPos);
-    if (viewWidth >= 44.0f) {
-        ImGui::SetNextItemWidth(viewWidth);
-        const ViewportView currentView = viewportWorkspace.view(paneState.id);
-        const std::string preview = localizedViewportViewLabel(localization, currentView);
-        if (quaderBeginCombo("##ViewportView", preview.c_str(), ImGuiComboFlags_HeightSmall)) {
-            consumesInput = true;
-            for (const ViewportView view : kViewportChromeViews) {
-                const bool selected = currentView == view;
-                const std::string label = localizedViewportViewLabel(localization, view);
-                if (ImGui::Selectable(label.c_str(), selected)) {
-                    setPaneView(paneState, view);
-                }
-                if (selected) {
-                    ImGui::SetItemDefaultFocus();
-                }
-            }
-            ImGui::EndCombo();
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
         }
-        ImGui::SameLine(0.0f, comboGap);
+      }
+      ImGui::EndCombo();
     }
-    ImGui::SetNextItemWidth(shadingWidth);
-    const std::string shadingPreview = localizedViewportShadingModeLabel(localization, paneWorkspace.shading);
-    if (quaderBeginCombo("##ViewportShading", shadingPreview.c_str(), ImGuiComboFlags_HeightSmall)) {
-        consumesInput = true;
-        for (const ViewportShadingMode mode : kViewportChromeShadingModes) {
-            const bool selected = paneWorkspace.shading == mode;
-            const std::string label = localizedViewportShadingModeLabel(localization, mode);
-            if (ImGui::Selectable(label.c_str(), selected)) {
-                if (viewportWorkspace.setShadingMode(paneState.id, mode)) {
-                    selectionOverlayCache_.markDirty();
-                }
-            }
-            if (selected) {
-                ImGui::SetItemDefaultFocus();
-            }
+    ImGui::SameLine(0.0f, combo_gap);
+  }
+  ImGui::SetNextItemWidth(shading_width);
+  const std::string shading_preview = localized_viewport_shading_mode_label(
+      localization, pane_workspace.shading);
+  if (quader_begin_combo("##ViewportShading", shading_preview.c_str(),
+                         ImGuiComboFlags_HeightSmall)) {
+    consumes_input = true;
+    for (const ViewportShadingMode mode : kViewportChromeShadingModes) {
+      const bool selected = pane_workspace.shading == mode;
+      const std::string label =
+          localized_viewport_shading_mode_label(localization, mode);
+      if (ImGui::Selectable(label.c_str(), selected)) {
+        if (viewport_workspace.set_shading_mode(pane_state.id, mode)) {
+          selection_overlay_cache_.mark_dirty();
         }
-        ImGui::EndCombo();
+      }
+      if (selected) {
+        ImGui::SetItemDefaultFocus();
+      }
     }
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar(2);
-    ImGui::PopID();
-    return consumesInput;
+    ImGui::EndCombo();
+  }
+  ImGui::PopStyleColor();
+  ImGui::PopStyleVar(2);
+  ImGui::PopID();
+  return consumes_input;
 }
 
-void ViewportPanel::setPaneView(Pane& paneState, ViewportView view) {
-    if (!workspace().setView(paneState.id, view)) {
-        return;
-    }
-    hoverController_.invalidate();
-    selectionOverlayCache_.markDirty();
+void ViewportPanel::set_pane_view(Pane &pane_state, ViewportView view) {
+  if (!workspace().set_view(pane_state.id, view)) {
+    return;
+  }
+  hover_controller_.invalidate();
+  selection_overlay_cache_.mark_dirty();
 }
 
-bool ViewportPanel::handleSplitInput(ImVec2 viewportMin, ImVec2 viewportSize, const std::vector<ViewportSplitHandle>& handles) {
-    constexpr float hitThickness = 7.0f;
-    bool consumed = false;
-    auto handleRect = [&](const ViewportSplitHandle& handle, float thickness) {
-        const float half = thickness * 0.5f;
-        if (handle.axis == ViewportSplitHandleAxis::Vertical) {
-            const float x = viewportMin.x + viewportSize.x * handle.position;
-            const float y = viewportMin.y + viewportSize.y * handle.start;
-            const float height = viewportSize.y * std::max(0.0f, handle.end - handle.start);
-            return ImRect{{x - half, y}, {x + half, y + height}};
-        }
-        const float y = viewportMin.y + viewportSize.y * handle.position;
-        const float x = viewportMin.x + viewportSize.x * handle.start;
-        const float width = viewportSize.x * std::max(0.0f, handle.end - handle.start);
-        return ImRect{{x, y - half}, {x + width, y + half}};
-    };
-
-    for (const ViewportSplitHandle& handle : handles) {
-        const ImRect hit = handleRect(handle, hitThickness);
-        if (hit.Contains(ImGui::GetMousePos())) {
-            ImGui::SetMouseCursor(handle.axis == ViewportSplitHandleAxis::Vertical
-                            ? ImGuiMouseCursor_ResizeEW
-                            : ImGuiMouseCursor_ResizeNS);
-        }
+bool ViewportPanel::handle_split_input(
+    ImVec2 viewport_min, ImVec2 viewport_size,
+    const std::vector<ViewportSplitHandle> &handles) {
+  constexpr float kHitThickness = 7.0f;
+  bool consumed = false;
+  auto handle_rect = [&](const ViewportSplitHandle &handle, float thickness) {
+    const float half = thickness * 0.5f;
+    if (handle.axis == ViewportSplitHandleAxis::Vertical) {
+      const float x = viewport_min.x + viewport_size.x * handle.position;
+      const float y = viewport_min.y + viewport_size.y * handle.start;
+      const float height =
+          viewport_size.y * std::max(0.0f, handle.end - handle.start);
+      return ImRect{{x - half, y}, {x + half, y + height}};
     }
+    const float y = viewport_min.y + viewport_size.y * handle.position;
+    const float x = viewport_min.x + viewport_size.x * handle.start;
+    const float width =
+        viewport_size.x * std::max(0.0f, handle.end - handle.start);
+    return ImRect{{x, y - half}, {x + width, y + half}};
+  };
 
-    if (!splitHandleDragging_ && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        for (auto it = handles.rbegin(); it != handles.rend(); ++it) {
-            if (handleRect(*it, hitThickness).Contains(ImGui::GetMousePos())) {
-                activeSplitHandle_ = *it;
-                splitHandleDragging_ = true;
-                consumed = true;
-                break;
-            }
-        }
+  for (const ViewportSplitHandle &handle : handles) {
+    const ImRect hit = handle_rect(handle, kHitThickness);
+    if (hit.Contains(ImGui::GetMousePos())) {
+      ImGui::SetMouseCursor(handle.axis == ViewportSplitHandleAxis::Vertical
+                                ? ImGuiMouseCursor_ResizeEW
+                                : ImGuiMouseCursor_ResizeNS);
     }
+  }
 
-    if (splitHandleDragging_ && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-        const ImVec2 mouse = ImGui::GetMousePos();
-        const float normalizedPosition = activeSplitHandle_.axis == ViewportSplitHandleAxis::Vertical
-                ? std::clamp((mouse.x - viewportMin.x) / std::max(viewportSize.x, 1.0f), 0.0f, 1.0f)
-                : std::clamp((mouse.y - viewportMin.y) / std::max(viewportSize.y, 1.0f), 0.0f, 1.0f);
-        workspace().setSplitHandlePosition(activeSplitHandle_.id, normalizedPosition);
+  if (!split_handle_dragging_ && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    for (auto it = handles.rbegin(); it != handles.rend(); ++it) {
+      if (handle_rect(*it, kHitThickness).Contains(ImGui::GetMousePos())) {
+        active_split_handle_ = *it;
+        split_handle_dragging_ = true;
         consumed = true;
+        break;
+      }
     }
-    if (splitHandleDragging_ && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-        splitHandleDragging_ = false;
-        consumed = true;
-    }
+  }
 
-    if (ImGui::GetCurrentWindow()->DrawList != nullptr) {
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        for (const ViewportSplitHandle& handle : handles) {
-            const ImRect line = handleRect(handle, 1.0f);
-            drawList->AddRectFilled(line.Min, line.Max, IM_COL32(31, 31, 33, 255));
-        }
+  if (split_handle_dragging_ && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    const ImVec2 mouse = ImGui::GetMousePos();
+    const float normalized_position =
+        active_split_handle_.axis == ViewportSplitHandleAxis::Vertical
+            ? std::clamp((mouse.x - viewport_min.x) /
+                             std::max(viewport_size.x, 1.0f),
+                         0.0f, 1.0f)
+            : std::clamp((mouse.y - viewport_min.y) /
+                             std::max(viewport_size.y, 1.0f),
+                         0.0f, 1.0f);
+    workspace().set_split_handle_position(active_split_handle_.id,
+                                          normalized_position);
+    consumed = true;
+  }
+  if (split_handle_dragging_ && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+    split_handle_dragging_ = false;
+    consumed = true;
+  }
+
+  if (ImGui::GetCurrentWindow()->DrawList != nullptr) {
+    ImDrawList *draw_list = ImGui::GetWindowDrawList();
+    for (const ViewportSplitHandle &handle : handles) {
+      const ImRect line = handle_rect(handle, 1.0f);
+      draw_list->AddRectFilled(line.Min, line.Max, IM_COL32(31, 31, 33, 255));
     }
-    return consumed || splitHandleDragging_;
+  }
+  return consumed || split_handle_dragging_;
 }
 
-const ViewportSettings& ViewportPanel::activeViewportSettings() const {
-    return viewportSettings_ != nullptr ? *viewportSettings_ : fallbackViewportSettings_;
+const ViewportSettings &ViewportPanel::active_viewport_settings() const {
+  return viewport_settings_ != nullptr ? *viewport_settings_
+                                       : fallback_viewport_settings_;
 }
 
 void ViewportPanel::draw(UIContext& context) {
-    viewportSettings_ = &context.viewportSettings;
-    draw(context.renderBridge,
-            context.document,
-            context.assets,
-            context.modeling,
-            context.defaultMaterial,
-            context.viewportRelativeMouseDelta,
-            context.viewportCursorCaptureRequested,
-            context.viewportCursorCapturePoint,
-            context);
+  viewport_settings_ = &context.viewport_settings;
+  draw(context.render_bridge, context.document, context.assets,
+       context.modeling, context.default_material,
+       context.viewport_relative_mouse_delta,
+       context.viewport_cursor_capture_requested,
+       context.viewport_cursor_capture_point, context);
 }
 
-void ViewportPanel::draw(SceneRenderBridge& renderBridge,
-        SceneDocument& document,
-        AssetRegistry& assets,
-        ModelingSessionService& modeling,
-        AssetId defaultMaterial,
-        QVec2 capturedMouseDelta,
-        bool* viewportCursorCaptureRequested,
-        QVec2* viewportCursorCapturePoint,
-        const UIContext& uiContext) {
-    QDR_PROFILE_FUNCTION();
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    const std::string windowTitle =
-            uiContext.localization.imguiLabel("ui.panel.viewport", uiPanelKey(UIPanelId::Viewport), "Viewport");
-    const bool visible = ImGui::Begin(
-            windowTitle.c_str(),
-            nullptr,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    ImGui::PopStyleVar(2);
-    ViewportWorkspaceService& viewportWorkspace =
-            QuaderViewportApiRuntimeAccess::workspace(uiContext.editor.viewports());
-    workspace_ = &viewportWorkspace;
-    inputRouter_.syncGridPresetSnapshot(viewportWorkspace.gridPreset());
-    syncActiveToolFromEditor(uiContext.editor, modeling);
-    if (!visible) {
-        for (Pane& paneState : panes_) {
-            renderBridge.setOverlayFrame(
-                    viewportPaneIndex(paneState.id),
-                    viewportGridLayerMask(viewportPaneIndex(paneState.id)),
-                    {},
-                    ViewportCameraAdapter::overlayCamera(viewportWorkspace.camera(paneState.id), {1.0f, 1.0f}));
-        }
-        renderBridge.syncSelectedObjectOverlay(document, assets, false);
-        renderBridge.syncSceneWireframeOverlay(document, assets, 0u);
-        lastFlyNavigationActive_ = false;
-        viewportWorkspace.clearPaneVisibility();
-        activeRenderPanes_.clear();
-        ImGui::End();
-        return;
+void ViewportPanel::draw(SceneRenderBridge &render_bridge,
+                         SceneDocument &document, AssetRegistry &assets,
+                         ModelingSessionService &modeling,
+                         AssetId default_material, QVec2 captured_mouse_delta,
+                         bool *viewport_cursor_capture_requested,
+                         QVec2 *viewport_cursor_capture_point,
+                         const UIContext &ui_context) {
+  QDR_PROFILE_FUNCTION();
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  const std::string window_title = ui_context.localization.imgui_label(
+      "ui.panel.viewport", ui_panel_key(UIPanelId::Viewport), "Viewport");
+  const bool visible = ImGui::Begin(window_title.c_str(), nullptr,
+                                    ImGuiWindowFlags_NoScrollbar |
+                                        ImGuiWindowFlags_NoScrollWithMouse);
+  ImGui::PopStyleVar(2);
+  ViewportWorkspaceService &viewport_workspace =
+      QuaderViewportApiRuntimeAccess::workspace(ui_context.editor.viewports());
+  workspace_ = &viewport_workspace;
+  input_router_.sync_grid_preset_snapshot(viewport_workspace.grid_preset());
+  sync_active_tool_from_editor(ui_context.editor, modeling);
+  if (!visible) {
+    for (Pane &pane_state : panes_) {
+      render_bridge.set_overlay_frame(
+          viewport_pane_index(pane_state.id),
+          viewport_grid_layer_mask(viewport_pane_index(pane_state.id)), {},
+          ViewportCameraAdapter::overlay_camera(
+              viewport_workspace.camera(pane_state.id), {1.0f, 1.0f}));
     }
-
-    ImVec2 available = ImGui::GetContentRegionAvail();
-    available.x = std::max(available.x, 1.0f);
-    available.y = std::max(available.y, 1.0f);
-    const ImVec2 canvasMin = ImGui::GetCursorScreenPos();
-    ImGui::Dummy(available);
-
-    viewportWorkspace.clearPaneVisibility();
-    activeRenderPanes_.clear();
-
-    /**
-     * Represents a Draw Pane value used by the ImGui editor presentation layer.
-     */
-    struct DrawPane {
-        Pane* pane = nullptr;
-        ImVec2 itemMin = {};
-        ImVec2 itemSize = {};
-        bool hovered = false;
-        bool focusHovered = false;
-        bool chromeConsumesInput = false;
-    };
-    std::vector<DrawPane> drawPanes;
-    const std::vector<ViewportPanePlacement> placements = viewportWorkspace.activePanePlacements();
-    drawPanes.reserve(placements.size());
-    for (const ViewportPanePlacement& placement : placements) {
-        QDR_PROFILE_SCOPE("Viewport draw pane image");
-        Pane& paneState = pane(placement.paneId);
-        const ImVec2 itemMin = ViewportPaneController::paneRectMin(canvasMin, available, placement.normalizedRect);
-        const ImVec2 itemSize = ViewportPaneController::paneRectSize(available, placement.normalizedRect);
-        const QVec2 renderSize = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
-        const std::uint32_t renderWidth = static_cast<std::uint32_t>(renderSize.x);
-        const std::uint32_t renderHeight = static_cast<std::uint32_t>(renderSize.y);
-        viewportWorkspace.setPaneRenderSize(placement.paneId, renderSize);
-        viewportWorkspace.setPaneVisible(placement.paneId, true);
-        if (!shouldDeferPaneRenderResize(uiContext, paneState.renderer)) {
-            paneState.renderer.resize(renderWidth, renderHeight);
-        }
-        activeRenderPanes_.push_back(placement.paneId);
-
-        const ImVec2 textureUvMin{0.0f, paneState.renderer.textureMaxV()};
-        const ImVec2 textureUvMax{paneState.renderer.textureMaxU(), 0.0f};
-        ImGui::SetCursorScreenPos(itemMin);
-        ImGui::PushID(static_cast<int>(viewportPaneIndex(placement.paneId)));
-        ImGui::SetNextItemAllowOverlap();
-        ImGui::Image(static_cast<ImTextureID>(paneState.renderer.textureHandle()), itemSize, textureUvMin, textureUvMax);
-        ImGui::GetWindowDrawList()->AddImage(
-                static_cast<ImTextureID>(paneState.renderer.overlayTextureHandle()),
-                itemMin,
-                {itemMin.x + itemSize.x, itemMin.y + itemSize.y},
-                textureUvMin,
-                textureUvMax);
-        DrawPane drawPane{
-                .pane = &paneState,
-                .itemMin = ImGui::GetItemRectMin(),
-                .itemSize = {ImGui::GetItemRectSize().x, ImGui::GetItemRectSize().y},
-                .hovered = ImGui::IsItemHovered(),
-                .focusHovered = ImGui::IsItemHovered(),
-        };
-        drawPanes.push_back(drawPane);
-        ImGui::PopID();
-    }
-
-    const std::vector<ViewportSplitHandle> splitHandles = viewportWorkspace.activeSplitHandles();
-    const bool splitConsumed = handleSplitInput(canvasMin, available, splitHandles);
-    DrawPane* inputPane = nullptr;
-    const bool transformDragLocksInput = interactionController_.dragging();
-    const bool navigationGizmoDragLocksInput = navigationGizmo_.inputLocked();
-    for (DrawPane& drawPane : drawPanes) {
-        drawPane.chromeConsumesInput =
-                drawPaneChrome(*drawPane.pane, drawPane.itemMin, drawPane.itemSize, uiContext.localization);
-    }
-    for (DrawPane& drawPane : drawPanes) {
-        if (!transformDragLocksInput && !navigationGizmoDragLocksInput) {
-            if (drawPane.focusHovered && !drawPane.chromeConsumesInput && !splitConsumed) {
-                viewportWorkspace.focusPane(drawPane.pane->id);
-            } else if (drawPane.focusHovered && !drawPane.chromeConsumesInput && focusController_.inputActive()) {
-                viewportWorkspace.focusPane(drawPane.pane->id);
-            }
-        }
-        if (transformDragLocksInput && drawPane.pane->id == interactionPaneId_) {
-            inputPane = &drawPane;
-        } else if (navigationGizmoDragLocksInput && drawPane.pane->id == navigationGizmo_.lockedPaneId()) {
-            inputPane = &drawPane;
-        } else if (!transformDragLocksInput &&
-                !navigationGizmoDragLocksInput &&
-                drawPane.hovered &&
-                !drawPane.chromeConsumesInput &&
-                !splitConsumed) {
-            inputPane = &drawPane;
-        }
-    }
-    if (inputPane == nullptr) {
-        for (DrawPane& drawPane : drawPanes) {
-            if (drawPane.pane->id == viewportWorkspace.focusedPane()) {
-                inputPane = &drawPane;
-                break;
-            }
-        }
-    }
-    if (inputPane != nullptr) {
-        QDR_PROFILE_SCOPE("Viewport draw input pane contents");
-        const bool inputOwnsActiveGizmoDrag =
-                transformDragLocksInput && inputPane->pane->id == interactionPaneId_;
-        const bool inputOwnsActiveNavigationGizmoDrag =
-                navigationGizmoDragLocksInput && inputPane->pane->id == navigationGizmo_.lockedPaneId();
-        drawPaneContents(*inputPane->pane,
-                document,
-                assets,
-                modeling,
-                defaultMaterial,
-                capturedMouseDelta,
-                viewportCursorCaptureRequested,
-                viewportCursorCapturePoint,
-                uiContext,
-                inputPane->itemMin,
-                inputPane->itemSize,
-                (inputPane->hovered && !inputPane->chromeConsumesInput && !splitConsumed) ||
-                        inputOwnsActiveGizmoDrag ||
-                        inputOwnsActiveNavigationGizmoDrag,
-                (inputPane->focusHovered && !inputPane->chromeConsumesInput && !splitConsumed) ||
-                        inputOwnsActiveGizmoDrag ||
-                        inputOwnsActiveNavigationGizmoDrag);
-    }
-    for (DrawPane& drawPane : drawPanes) {
-        if (&drawPane == inputPane) {
-            continue;
-        }
-        drawPaneDecorations(
-                *drawPane.pane,
-                document,
-                assets,
-                modeling,
-                uiContext.selection,
-                uiContext.editor,
-                drawPane.itemMin,
-                drawPane.itemSize);
-    }
-    if (activeViewportSettings().boolValue(ViewportBoolSettingId::ShowInfo)) {
-        for (const DrawPane& drawPane : drawPanes) {
-            if (drawPane.pane->id != viewportWorkspace.focusedPane()) {
-                continue;
-            }
-            drawViewportInfoOverlay(document, assets, uiContext, drawPane.itemMin, drawPane.itemSize);
-            break;
-        }
-    }
-    refreshCachedSelectionOverlayFrame(document, assets, modeling);
-    ImGui::SetCursorScreenPos({canvasMin.x, canvasMin.y + available.y});
+    render_bridge.sync_selected_object_overlay(document, assets, false);
+    render_bridge.sync_scene_wireframe_overlay(document, assets, 0u);
+    last_fly_navigation_active_ = false;
+    viewport_workspace.clear_pane_visibility();
+    active_render_panes_.clear();
     ImGui::End();
-}
+    return;
+  }
 
-void ViewportPanel::drawPaneDecorations(
-        Pane& paneState,
-        SceneDocument& document,
-        const AssetRegistry& assets,
-        ModelingSessionService& modeling,
-        EditorSelectionService& selection,
-        QuaderEditorApi& editor,
-        ImVec2 itemMin,
-        ImVec2 itemSize) {
-    ViewportCameraController& camera = workspace().camera(paneState.id);
-    navigationGizmo_.draw(camera, paneState.id, itemMin, itemSize, {}, nullptr, nullptr, false);
-    (void)document;
-    (void)assets;
-    (void)modeling;
-    (void)selection;
-    (void)editor;
-}
+  ImVec2 available = ImGui::GetContentRegionAvail();
+  available.x = std::max(available.x, 1.0f);
+  available.y = std::max(available.y, 1.0f);
+  const ImVec2 canvas_min = ImGui::GetCursorScreenPos();
+  ImGui::Dummy(available);
 
-void ViewportPanel::drawViewportInfoOverlay(
-        const SceneDocument& document,
-        const AssetRegistry& assets,
-        const UIContext& uiContext,
-        ImVec2 itemMin,
-        ImVec2 itemSize) {
-    const std::uint64_t sceneRevision = document.revision();
-    const std::uint64_t assetRevision = assets.revision();
-    const bool cacheHit = viewportInfoSceneStatsValid_ &&
-            viewportInfoCachedDocument_ == &document &&
-            viewportInfoCachedAssets_ == &assets &&
-            viewportInfoCachedSceneRevision_ == sceneRevision &&
-            viewportInfoCachedAssetRevision_ == assetRevision;
-    ViewportInfoSceneStats sceneStats;
-    if (cacheHit) {
-        sceneStats.objects = viewportInfoCachedObjects_;
-        sceneStats.primitives = viewportInfoCachedPrimitives_;
-        sceneStats.drawCalls = viewportInfoCachedDrawCalls_;
-    } else {
-        QDR_PROFILE_SCOPE("Viewport info collect scene stats");
-        sceneStats = collectViewportInfoSceneStats(document, assets);
-        viewportInfoCachedDocument_ = &document;
-        viewportInfoCachedAssets_ = &assets;
-        viewportInfoCachedSceneRevision_ = sceneRevision;
-        viewportInfoCachedAssetRevision_ = assetRevision;
-        viewportInfoCachedObjects_ = sceneStats.objects;
-        viewportInfoCachedPrimitives_ = sceneStats.primitives;
-        viewportInfoCachedDrawCalls_ = sceneStats.drawCalls;
-        viewportInfoSceneStatsValid_ = true;
+  viewport_workspace.clear_pane_visibility();
+  active_render_panes_.clear();
+
+  /**
+   * Represents a Draw Pane value used by the ImGui editor presentation layer.
+   */
+  struct DrawPane {
+    Pane *pane = nullptr;
+    ImVec2 item_min = {};
+    ImVec2 item_size = {};
+    bool hovered = false;
+    bool focus_hovered = false;
+    bool chrome_consumes_input = false;
+  };
+  std::vector<DrawPane> draw_panes;
+  const std::vector<ViewportPanePlacement> placements =
+      viewport_workspace.active_pane_placements();
+  draw_panes.reserve(placements.size());
+  for (const ViewportPanePlacement &placement : placements) {
+    QDR_PROFILE_SCOPE("Viewport draw pane image");
+    Pane &pane_state = pane(placement.pane_id);
+    const ImVec2 item_min = ViewportPaneController::pane_rect_min(
+        canvas_min, available, placement.normalized_rect);
+    const ImVec2 item_size = ViewportPaneController::pane_rect_size(
+        available, placement.normalized_rect);
+    const QVec2 render_size = {std::max(item_size.x, 1.0f),
+                               std::max(item_size.y, 1.0f)};
+    const std::uint32_t render_width =
+        static_cast<std::uint32_t>(render_size.x);
+    const std::uint32_t render_height =
+        static_cast<std::uint32_t>(render_size.y);
+    viewport_workspace.set_pane_render_size(placement.pane_id, render_size);
+    viewport_workspace.set_pane_visible(placement.pane_id, true);
+    if (!should_defer_pane_render_resize(ui_context, pane_state.renderer)) {
+      pane_state.renderer.resize(render_width, render_height);
     }
-    const RenderFramePerformanceStats& renderStats = uiContext.renderPerformance;
+    active_render_panes_.push_back(placement.pane_id);
 
-    const bool fpsAvailable = uiContext.frameTiming.rawDeltaSeconds > 0.0001;
-    const double fps = fpsAvailable ? 1.0 / uiContext.frameTiming.rawDeltaSeconds : 0.0;
+    const ImVec2 texture_uv_min{0.0f, pane_state.renderer.texture_max_v()};
+    const ImVec2 texture_uv_max{pane_state.renderer.texture_max_u(), 0.0f};
+    ImGui::SetCursorScreenPos(item_min);
+    ImGui::PushID(static_cast<int>(viewport_pane_index(placement.pane_id)));
+    ImGui::SetNextItemAllowOverlap();
+    ImGui::Image(static_cast<ImTextureID>(pane_state.renderer.texture_handle()),
+                 item_size, texture_uv_min, texture_uv_max);
+    ImGui::GetWindowDrawList()->AddImage(
+        static_cast<ImTextureID>(pane_state.renderer.overlay_texture_handle()),
+        item_min, {item_min.x + item_size.x, item_min.y + item_size.y},
+        texture_uv_min, texture_uv_max);
+    DrawPane draw_pane{
+        .pane = &pane_state,
+        .item_min = ImGui::GetItemRectMin(),
+        .item_size = {ImGui::GetItemRectSize().x, ImGui::GetItemRectSize().y},
+        .hovered = ImGui::IsItemHovered(),
+        .focus_hovered = ImGui::IsItemHovered(),
+    };
+    draw_panes.push_back(draw_pane);
+    ImGui::PopID();
+  }
 
-    const std::string unavailable = uiContext.localization.text("ui.viewport.info.unavailable", "--");
-    const std::string cpuValue = renderStats.cpuFrameMsAvailable
-            ? formatViewportInfoMilliseconds(renderStats.cpuFrameMs)
-            : unavailable;
-    const std::string gpuValue = renderStats.gpuFrameMsAvailable
-            ? formatViewportInfoMilliseconds(renderStats.gpuFrameMs)
-            : unavailable;
-    const std::string fpsValue = fpsAvailable ? formatViewportInfoFramesPerSecond(fps) : unavailable;
-
-    const std::array<std::string, 6> lines{{
-            viewportInfoLine(uiContext.localization.text("ui.viewport.info.fps", "FPS"), fpsValue),
-            viewportInfoLine(uiContext.localization.text("ui.viewport.info.cpu", "CPU"), cpuValue),
-            viewportInfoLine(uiContext.localization.text("ui.viewport.info.gpu", "GPU"), gpuValue),
-            viewportInfoLine(
-                    uiContext.localization.text("ui.viewport.info.objects", "Objects"),
-                    formatViewportInfoNumber(sceneStats.objects)),
-            viewportInfoLine(
-                    uiContext.localization.text("ui.viewport.info.primitives", "Primitives"),
-                    formatViewportInfoNumber(sceneStats.primitives)),
-            viewportInfoLine(
-                    uiContext.localization.text("ui.viewport.info.draw_calls", "Draw Calls"),
-                    formatViewportInfoNumber(sceneStats.drawCalls)),
-    }};
-    drawViewportInfoText(
-            *ImGui::GetWindowDrawList(),
-            itemMin,
-            itemSize,
-            std::span<const std::string>(lines.data(), lines.size()));
+  const std::vector<ViewportSplitHandle> split_handles =
+      viewport_workspace.active_split_handles();
+  const bool split_consumed =
+      handle_split_input(canvas_min, available, split_handles);
+  DrawPane *input_pane = nullptr;
+  const bool transform_drag_locks_input = interaction_controller_.dragging();
+  const bool navigation_gizmo_drag_locks_input =
+      navigation_gizmo_.input_locked();
+  for (DrawPane &draw_pane : draw_panes) {
+    draw_pane.chrome_consumes_input =
+        draw_pane_chrome(*draw_pane.pane, draw_pane.item_min,
+                         draw_pane.item_size, ui_context.localization);
+  }
+  for (DrawPane &draw_pane : draw_panes) {
+    if (!transform_drag_locks_input && !navigation_gizmo_drag_locks_input) {
+      if (draw_pane.focus_hovered && !draw_pane.chrome_consumes_input &&
+          !split_consumed) {
+        viewport_workspace.focus_pane(draw_pane.pane->id);
+      } else if (draw_pane.focus_hovered && !draw_pane.chrome_consumes_input &&
+                 focus_controller_.input_active()) {
+        viewport_workspace.focus_pane(draw_pane.pane->id);
+      }
+    }
+    if (transform_drag_locks_input &&
+        draw_pane.pane->id == interaction_pane_id_) {
+      input_pane = &draw_pane;
+    } else if (navigation_gizmo_drag_locks_input &&
+               draw_pane.pane->id == navigation_gizmo_.locked_pane_id()) {
+      input_pane = &draw_pane;
+    } else if (!transform_drag_locks_input &&
+               !navigation_gizmo_drag_locks_input && draw_pane.hovered &&
+               !draw_pane.chrome_consumes_input && !split_consumed) {
+      input_pane = &draw_pane;
+    }
+  }
+  if (input_pane == nullptr) {
+    for (DrawPane &draw_pane : draw_panes) {
+      if (draw_pane.pane->id == viewport_workspace.focused_pane()) {
+        input_pane = &draw_pane;
+        break;
+      }
+    }
+  }
+  if (input_pane != nullptr) {
+    QDR_PROFILE_SCOPE("Viewport draw input pane contents");
+    const bool input_owns_active_gizmo_drag =
+        transform_drag_locks_input &&
+        input_pane->pane->id == interaction_pane_id_;
+    const bool input_owns_active_navigation_gizmo_drag =
+        navigation_gizmo_drag_locks_input &&
+        input_pane->pane->id == navigation_gizmo_.locked_pane_id();
+    draw_pane_contents(
+        *input_pane->pane, document, assets, modeling, default_material,
+        captured_mouse_delta, viewport_cursor_capture_requested,
+        viewport_cursor_capture_point, ui_context, input_pane->item_min,
+        input_pane->item_size,
+        (input_pane->hovered && !input_pane->chrome_consumes_input &&
+         !split_consumed) ||
+            input_owns_active_gizmo_drag ||
+            input_owns_active_navigation_gizmo_drag,
+        (input_pane->focus_hovered && !input_pane->chrome_consumes_input &&
+         !split_consumed) ||
+            input_owns_active_gizmo_drag ||
+            input_owns_active_navigation_gizmo_drag);
+  }
+  for (DrawPane &draw_pane : draw_panes) {
+    if (&draw_pane == input_pane) {
+      continue;
+    }
+    draw_pane_decorations(*draw_pane.pane, document, assets, modeling,
+                          ui_context.selection, ui_context.editor,
+                          draw_pane.item_min, draw_pane.item_size);
+  }
+  if (active_viewport_settings().bool_value(ViewportBoolSettingId::ShowInfo)) {
+    for (const DrawPane &draw_pane : draw_panes) {
+      if (draw_pane.pane->id != viewport_workspace.focused_pane()) {
+        continue;
+      }
+      draw_viewport_info_overlay(document, assets, ui_context,
+                                 draw_pane.item_min, draw_pane.item_size);
+      break;
+    }
+  }
+  refresh_cached_selection_overlay_frame(document, assets, modeling);
+  ImGui::SetCursorScreenPos({canvas_min.x, canvas_min.y + available.y});
+  ImGui::End();
 }
 
-void ViewportPanel::refreshCachedSelectionOverlayFrame(
-        const SceneDocument& document,
-        const AssetRegistry& assets,
-        ModelingSessionService& modeling) {
-    const ModelingSelectionSummary overlaySummary = [&]() {
-        QDR_PROFILE_SCOPE("Viewport selection overlay summary");
-        return modeling.selectionSummary();
-    }();
-    const ModelingSelectionOverlayOptions overlayOptions{
-            .suppressPersistentObjectSelection = overlaySummary.mode == ModelingSelectionMode::Object,
-    };
-    const std::uint64_t overlaySignature = [&]() {
-        QDR_PROFILE_SCOPE("Viewport selection overlay signature");
-        return modeling.selectionOverlaySignature(overlayOptions);
-    }();
-    const ViewportPaneOverlayCacheKey key{
-            .contentRevision = overlaySummary.contentRevision,
-            .selectionRevision = overlaySummary.selectionRevision,
-            .sceneRevision = document.revision(),
-            .assetRevision = assets.revision(),
-            .overlaySignature = overlaySignature,
-            .selectionMode = overlaySummary.mode,
-    };
-    const ViewportPaneOverlayCacheRefreshReason refreshReason = [&]() {
-        QDR_PROFILE_SCOPE("Viewport selection overlay cache check");
-        return selectionOverlayCache_.refreshReason(key);
-    }();
-    if (refreshReason == ViewportPaneOverlayCacheRefreshReason::None) {
-        return;
-    }
+void ViewportPanel::draw_pane_decorations(
+    Pane &pane_state, SceneDocument &document, const AssetRegistry &assets,
+    ModelingSessionService &modeling, EditorSelectionService &selection,
+    QuaderEditorApi &editor, ImVec2 item_min, ImVec2 item_size) {
+  ViewportCameraController &camera = workspace().camera(pane_state.id);
+  navigation_gizmo_.draw(camera, pane_state.id, item_min, item_size, {},
+                         nullptr, nullptr, false);
+  (void)document;
+  (void)assets;
+  (void)modeling;
+  (void)selection;
+  (void)editor;
+}
 
-    auto rebuildCache = [&]() {
-        ViewportOverlayFrame sourceFrame = [&]() {
-            QDR_PROFILE_SCOPE("Viewport selection overlay source frame");
-            return modeling.selectionOverlayFrame(overlayOptions);
+void ViewportPanel::draw_viewport_info_overlay(const SceneDocument &document,
+                                               const AssetRegistry &assets,
+                                               const UIContext &ui_context,
+                                               ImVec2 item_min,
+                                               ImVec2 item_size) {
+  const std::uint64_t scene_revision = document.revision();
+  const std::uint64_t asset_revision = assets.revision();
+  const bool cache_hit =
+      viewport_info_scene_stats_valid_ &&
+      viewport_info_cached_document_ == &document &&
+      viewport_info_cached_assets_ == &assets &&
+      viewport_info_cached_scene_revision_ == scene_revision &&
+      viewport_info_cached_asset_revision_ == asset_revision;
+  ViewportInfoSceneStats scene_stats;
+  if (cache_hit) {
+    scene_stats.objects = viewport_info_cached_objects_;
+    scene_stats.primitives = viewport_info_cached_primitives_;
+    scene_stats.draw_calls = viewport_info_cached_draw_calls_;
+  } else {
+    QDR_PROFILE_SCOPE("Viewport info collect scene stats");
+    scene_stats = collect_viewport_info_scene_stats(document, assets);
+    viewport_info_cached_document_ = &document;
+    viewport_info_cached_assets_ = &assets;
+    viewport_info_cached_scene_revision_ = scene_revision;
+    viewport_info_cached_asset_revision_ = asset_revision;
+    viewport_info_cached_objects_ = scene_stats.objects;
+    viewport_info_cached_primitives_ = scene_stats.primitives;
+    viewport_info_cached_draw_calls_ = scene_stats.draw_calls;
+    viewport_info_scene_stats_valid_ = true;
+  }
+  const RenderFramePerformanceStats &render_stats =
+      ui_context.render_performance;
+
+  const bool fps_available = ui_context.frame_timing.raw_delta_seconds > 0.0001;
+  const double fps =
+      fps_available ? 1.0 / ui_context.frame_timing.raw_delta_seconds : 0.0;
+
+  const std::string unavailable =
+      ui_context.localization.text("ui.viewport.info.unavailable", "--");
+  const std::string cpu_value =
+      render_stats.cpu_frame_ms_available
+          ? format_viewport_info_milliseconds(render_stats.cpu_frame_ms)
+          : unavailable;
+  const std::string gpu_value =
+      render_stats.gpu_frame_ms_available
+          ? format_viewport_info_milliseconds(render_stats.gpu_frame_ms)
+          : unavailable;
+  const std::string fps_value =
+      fps_available ? format_viewport_info_frames_per_second(fps) : unavailable;
+
+  const std::array<std::string, 6> lines{{
+      viewport_info_line(
+          ui_context.localization.text("ui.viewport.info.fps", "FPS"),
+          fps_value),
+      viewport_info_line(
+          ui_context.localization.text("ui.viewport.info.cpu", "CPU"),
+          cpu_value),
+      viewport_info_line(
+          ui_context.localization.text("ui.viewport.info.gpu", "GPU"),
+          gpu_value),
+      viewport_info_line(
+          ui_context.localization.text("ui.viewport.info.objects", "Objects"),
+          format_viewport_info_number(scene_stats.objects)),
+      viewport_info_line(ui_context.localization.text(
+                             "ui.viewport.info.primitives", "Primitives"),
+                         format_viewport_info_number(scene_stats.primitives)),
+      viewport_info_line(ui_context.localization.text(
+                             "ui.viewport.info.draw_calls", "Draw Calls"),
+                         format_viewport_info_number(scene_stats.draw_calls)),
+  }};
+  draw_viewport_info_text(
+      *ImGui::GetWindowDrawList(), item_min, item_size,
+      std::span<const std::string>(lines.data(), lines.size()));
+}
+
+void ViewportPanel::refresh_cached_selection_overlay_frame(
+    const SceneDocument &document, const AssetRegistry &assets,
+    ModelingSessionService &modeling) {
+  const ModelingSelectionSummary overlay_summary = [&]() {
+    QDR_PROFILE_SCOPE("Viewport selection overlay summary");
+    return modeling.selection_summary();
+  }();
+  const ModelingSelectionOverlayOptions overlay_options{
+      .suppress_persistent_object_selection =
+          overlay_summary.mode == ModelingSelectionMode::Object,
+  };
+  const std::uint64_t overlay_signature = [&]() {
+    QDR_PROFILE_SCOPE("Viewport selection overlay signature");
+    return modeling.selection_overlay_signature(overlay_options);
+  }();
+  const ViewportPaneOverlayCacheKey key{
+      .content_revision = overlay_summary.content_revision,
+      .selection_revision = overlay_summary.selection_revision,
+      .scene_revision = document.revision(),
+      .asset_revision = assets.revision(),
+      .overlay_signature = overlay_signature,
+      .selection_mode = overlay_summary.mode,
+  };
+  const ViewportPaneOverlayCacheRefreshReason refresh_reason = [&]() {
+    QDR_PROFILE_SCOPE("Viewport selection overlay cache check");
+    return selection_overlay_cache_.refresh_reason(key);
+  }();
+  if (refresh_reason == ViewportPaneOverlayCacheRefreshReason::None) {
+    return;
+  }
+
+  auto rebuild_cache =
+      [&]() {
+        ViewportOverlayFrame source_frame = [&]() {
+          QDR_PROFILE_SCOPE("Viewport selection overlay source frame");
+          return modeling.selection_overlay_frame(overlay_options);
         }();
         ViewportOverlayFrame frame = [&]() {
             QDR_PROFILE_SCOPE("Viewport selection overlay project frame");
-            return ViewportSceneOverlayBuilder::buildSelectionFrame(
-                    std::move(sourceFrame),
-                    document,
-                    assets);
+            return ViewportSceneOverlayBuilder::build_selection_frame(
+                std::move(source_frame), document, assets);
         }();
-        selectionOverlayCache_.update(std::move(frame), key);
-    };
+        selection_overlay_cache_.update(std::move(frame), key);
+      };
 
-    switch (refreshReason) {
-    case ViewportPaneOverlayCacheRefreshReason::Dirty: {
-        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh dirty");
-        rebuildCache();
-        break;
-    }
-    case ViewportPaneOverlayCacheRefreshReason::Invalid: {
-        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh invalid");
-        rebuildCache();
-        break;
-    }
-    case ViewportPaneOverlayCacheRefreshReason::ContentRevision: {
-        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh content revision");
-        rebuildCache();
-        break;
-    }
-    case ViewportPaneOverlayCacheRefreshReason::SelectionRevision: {
-        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh selection revision");
-        rebuildCache();
-        break;
-    }
-    case ViewportPaneOverlayCacheRefreshReason::SceneRevision: {
-        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh scene revision");
-        rebuildCache();
-        break;
-    }
-    case ViewportPaneOverlayCacheRefreshReason::AssetRevision: {
-        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh asset revision");
-        rebuildCache();
-        break;
-    }
-    case ViewportPaneOverlayCacheRefreshReason::OverlaySignature: {
-        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh overlay signature");
-        rebuildCache();
-        break;
-    }
-    case ViewportPaneOverlayCacheRefreshReason::SelectionMode: {
-        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh selection mode");
-        rebuildCache();
-        break;
-    }
-    case ViewportPaneOverlayCacheRefreshReason::None:
-        break;
-    }
+  switch (refresh_reason) {
+  case ViewportPaneOverlayCacheRefreshReason::Dirty: {
+    QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh dirty");
+    rebuild_cache();
+    break;
+  }
+  case ViewportPaneOverlayCacheRefreshReason::Invalid: {
+    QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh invalid");
+    rebuild_cache();
+    break;
+  }
+  case ViewportPaneOverlayCacheRefreshReason::ContentRevision: {
+    QDR_PROFILE_SCOPE(
+        "Viewport selection overlay cache refresh content revision");
+    rebuild_cache();
+    break;
+  }
+  case ViewportPaneOverlayCacheRefreshReason::SelectionRevision: {
+    QDR_PROFILE_SCOPE(
+        "Viewport selection overlay cache refresh selection revision");
+    rebuild_cache();
+    break;
+  }
+  case ViewportPaneOverlayCacheRefreshReason::SceneRevision: {
+    QDR_PROFILE_SCOPE(
+        "Viewport selection overlay cache refresh scene revision");
+    rebuild_cache();
+    break;
+  }
+  case ViewportPaneOverlayCacheRefreshReason::AssetRevision: {
+    QDR_PROFILE_SCOPE(
+        "Viewport selection overlay cache refresh asset revision");
+    rebuild_cache();
+    break;
+  }
+  case ViewportPaneOverlayCacheRefreshReason::OverlaySignature: {
+    QDR_PROFILE_SCOPE(
+        "Viewport selection overlay cache refresh overlay signature");
+    rebuild_cache();
+    break;
+  }
+  case ViewportPaneOverlayCacheRefreshReason::SelectionMode: {
+    QDR_PROFILE_SCOPE(
+        "Viewport selection overlay cache refresh selection mode");
+    rebuild_cache();
+    break;
+  }
+  case ViewportPaneOverlayCacheRefreshReason::None:
+    break;
+  }
 }
 
 ViewportWorkspaceService& ViewportPanel::workspace() {
@@ -1423,553 +1515,583 @@ const ViewportWorkspaceService& ViewportPanel::workspace() const {
     return *workspace_;
 }
 
-void ViewportPanel::drawPaneContents(Pane& paneState,
-        SceneDocument& document,
-        AssetRegistry& assets,
-        ModelingSessionService& modeling,
-        AssetId defaultMaterial,
-        QVec2 capturedMouseDelta,
-        bool* viewportCursorCaptureRequested,
-        QVec2* viewportCursorCapturePoint,
-        const UIContext& uiContext,
-        ImVec2 itemMin,
-        ImVec2 itemSize,
-        bool hovered,
-        bool focusHovered) {
-    QDR_PROFILE_FUNCTION();
-    ViewportWorkspaceService& viewportWorkspace = workspace();
-    ViewportCameraController& camera = viewportWorkspace.camera(paneState.id);
-    const ImVec2 itemMax{itemMin.x + itemSize.x, itemMin.y + itemSize.y};
-    const ViewportFocusState focusState = focusController_.resolve(focusHovered, uiContext, UIPanelId::Viewport);
-    auto modalToolOwnsViewport = [&]() {
-        return inputRouter_.activeToolOwnsViewport() ||
-                inputRouter_.hasActiveModalPreview() ||
-                modeling.modalToolOwnsViewport();
-    };
+void ViewportPanel::draw_pane_contents(
+    Pane &pane_state, SceneDocument &document, AssetRegistry &assets,
+    ModelingSessionService &modeling, AssetId default_material,
+    QVec2 captured_mouse_delta, bool *viewport_cursor_capture_requested,
+    QVec2 *viewport_cursor_capture_point, const UIContext &ui_context,
+    ImVec2 item_min, ImVec2 item_size, bool hovered, bool focus_hovered) {
+  QDR_PROFILE_FUNCTION();
+  ViewportWorkspaceService &viewport_workspace = workspace();
+  ViewportCameraController &camera = viewport_workspace.camera(pane_state.id);
+  const ImVec2 item_max{item_min.x + item_size.x, item_min.y + item_size.y};
+  const ViewportFocusState focus_state =
+      focus_controller_.resolve(focus_hovered, ui_context, UIPanelId::Viewport);
+  auto modal_tool_owns_viewport = [&]() {
+    return input_router_.active_tool_owns_viewport() ||
+           input_router_.has_active_modal_preview() ||
+           modeling.modal_tool_owns_viewport();
+  };
 
-    const bool useCapturedMouseDelta = inputRouter_.flyCursorCaptureActive();
-    ViewportInputFrame input;
-    {
-        QDR_PROFILE_SCOPE("Viewport build input frame");
-        input = inputFrameBuilder_.build({
-                .hovered = hovered,
-                .focused = focusState.focused,
-                .itemMin = itemMin,
-                .itemSize = itemSize,
-                .routeActiveNavigationInput = inputRouter_.navigating(),
-                .useCapturedMouseDelta = useCapturedMouseDelta,
-                .capturedMouseDelta = capturedMouseDelta,
-                .deltaSeconds = static_cast<float>(std::max(uiContext.frameTiming.deltaSeconds, 0.0)),
+  const bool use_captured_mouse_delta =
+      input_router_.fly_cursor_capture_active();
+  ViewportInputFrame input;
+  {
+    QDR_PROFILE_SCOPE("Viewport build input frame");
+    input = input_frame_builder_.build({
+        .hovered = hovered,
+        .focused = focus_state.focused,
+        .item_min = item_min,
+        .item_size = item_size,
+        .route_active_navigation_input = input_router_.navigating(),
+        .use_captured_mouse_delta = use_captured_mouse_delta,
+        .captured_mouse_delta = captured_mouse_delta,
+        .delta_seconds = static_cast<float>(
+            std::max(ui_context.frame_timing.delta_seconds, 0.0)),
+    });
+  }
+  const ModelingToolSettingsTarget tool_settings_target =
+      modeling.tool_settings_target();
+  input.navigation_active = input_router_.navigating();
+  input.fly_navigation_active = input_router_.fly_navigating();
+  input.orbit_navigation_active = input_router_.orbit_navigating();
+  input.pan_navigation_active = input_router_.pan_navigating();
+  input.modal_tool_active = input_router_.has_active_modal_preview() ||
+                            modeling.modal_tool_owns_viewport();
+  input.active_tool_owns_viewport = input_router_.active_tool_owns_viewport();
+  input.operation_preview_active =
+      tool_settings_target.operation_preview_active;
+  input.grid_preset = viewport_workspace.grid_preset();
+  {
+    QDR_PROFILE_SCOPE("Viewport resolve keybindings");
+    resolve_keybindings_for_frame(ui_context.editor, input_router_.state(),
+                                  input, ui_context.command_shortcut_consumed);
+  }
+  const ViewportInputResult result = [&]() {
+    QDR_PROFILE_SCOPE("Viewport route input frame");
+    return input_router_.handle_frame(input, camera);
+  }();
+  const ViewportShortcutControllerResult operation_preview_shortcut =
+      shortcut_controller_.handle_operation_preview_shortcut(
+          result, tool_settings_target, ui_context.editor);
+  const bool operation_preview_shortcut_consumed =
+      operation_preview_shortcut.consumed;
+  if (operation_preview_shortcut.invalidate_hover) {
+    hover_controller_.invalidate();
+  }
+  if (operation_preview_shortcut.mark_overlay_dirty) {
+    selection_overlay_cache_.mark_dirty();
+  }
+  if (result.maximized_toggle_requested &&
+      !operation_preview_shortcut_consumed) {
+    if (hovered) {
+      viewport_workspace.focus_pane(pane_state.id);
+    }
+    viewport_workspace.toggle_focused_pane_maximized();
+  }
+  if (result.grid_preset_changed) {
+    viewport_workspace.set_grid_preset(result.requested_grid_preset);
+    input_router_.sync_grid_preset_snapshot(viewport_workspace.grid_preset());
+  }
+  if (result.view_changed) {
+    (void)viewport_workspace.set_view(pane_state.id, result.requested_view);
+  }
+  if (input.right_pressed && hovered && !input.modifiers.primary &&
+      !input.modifiers.shift && !input.modifiers.alt) {
+    fly_cursor_capture_screen_ = input.mouse_screen;
+  }
+  last_fly_navigation_active_ = result.fly_cursor_capture_active;
+  if (result.fly_cursor_capture_active) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+    if (viewport_cursor_capture_requested != nullptr) {
+      *viewport_cursor_capture_requested = true;
+    }
+    if (viewport_cursor_capture_point != nullptr) {
+      const ImGuiViewport *main_viewport = ImGui::GetMainViewport();
+      *viewport_cursor_capture_point = {
+          fly_cursor_capture_screen_.x - main_viewport->Pos.x,
+          fly_cursor_capture_screen_.y - main_viewport->Pos.y,
+      };
+    }
+  }
+  const bool modal_tool_owns_viewport_for_menu = modal_tool_owns_viewport();
+  if (!modal_tool_owns_viewport_for_menu && input.right_pressed && hovered &&
+      !input.modifiers.primary && !input.modifiers.shift &&
+      !input.modifiers.alt) {
+    context_menu_right_press_active_ = true;
+    context_menu_right_press_screen_ = input.mouse_screen;
+    context_menu_right_drag_delta_ = {};
+  }
+  if (context_menu_right_press_active_ && input.right_down &&
+      !input.right_pressed) {
+    context_menu_right_drag_delta_ =
+        context_menu_right_drag_delta_ + input.mouse_delta;
+  }
+  bool pending_context_menu_click = false;
+  QVec2 pending_context_menu_local_mouse = {};
+  ViewportContextMenuOpenRequest pending_context_menu_request;
+  if (input.right_released && context_menu_right_press_active_) {
+    const bool release_inside_viewport = input.mouse_screen.x >= item_min.x &&
+                                         input.mouse_screen.x <= item_max.x &&
+                                         input.mouse_screen.y >= item_min.y &&
+                                         input.mouse_screen.y <= item_max.y;
+    pending_context_menu_request = {
+        .modal_tool_owns_viewport = modal_tool_owns_viewport(),
+        .right_press_tracked = context_menu_right_press_active_,
+        .right_released = input.right_released,
+        .release_inside_viewport = release_inside_viewport,
+        .press_screen = context_menu_right_press_screen_,
+        .release_screen = input.mouse_screen,
+        .accumulated_drag_delta = context_menu_right_drag_delta_,
+    };
+    if (is_viewport_context_menu_click_gesture(pending_context_menu_request)) {
+      pending_context_menu_click = true;
+      pending_context_menu_local_mouse = input.mouse_local;
+    }
+    context_menu_right_press_active_ = false;
+    context_menu_right_drag_delta_ = {};
+  }
+  if (!input.right_down && !input.right_released) {
+    context_menu_right_press_active_ = false;
+    context_menu_right_drag_delta_ = {};
+  }
+  if (result.focus_document_requested) {
+    focus_document(document, assets, camera);
+  }
+  const bool selection_mode_shortcut_handled =
+      result.shortcut_handled &&
+      result.shortcut.kind == ViewportShortcutKind::SetSelectionMode;
+  if (selection_mode_shortcut_handled) {
+    const QuaderApiVoidResult command =
+        ui_context.editor.selection().set_mode(to_api_selection_mode(
+            viewport_selection_mode_to_app(result.shortcut.selection_mode)));
+    if (!command.ok) {
+      LOG_ERROR("Selection mode change failed: {}", command.message);
+    }
+    input_router_.set_selection_mode(
+        app_selection_mode_to_viewport(to_modeling_selection_mode(
+            ui_context.editor.selection().summary().mode)));
+    input_router_.clear_modal_drag_state();
+    interaction_controller_.reset(&ui_context.editor);
+    hover_controller_.invalidate();
+    selection_overlay_cache_.mark_dirty();
+  }
+  if (result.tool_changed) {
+    LOG_INFO("Viewport tool changed to {}",
+             viewport_tool_id(input_router_.state().active_tool));
+    input_router_.clear_modal_drag_state();
+    interaction_controller_.reset(&ui_context.editor);
+    hover_controller_.invalidate();
+    selection_overlay_cache_.mark_dirty();
+    const ViewportTool *active_tool = input_router_.active_tool();
+    const QuaderApiVoidResult command =
+        active_tool != nullptr ? ui_context.editor.tools().activate(
+                                     input_router_.state().active_tool)
+                               : QuaderApiVoidResult{
+                                     .ok = false,
+                                     .changed = false,
+                                     .message = "No active viewport tool.",
+                                 };
+    if (!command.ok) {
+      LOG_ERROR("Viewport tool activation failed: {}", command.message);
+      input_router_.set_active_tool(ViewportToolId::Select);
+      (void)ui_context.editor.tools().activate(ViewportToolId::Select);
+    } else {
+      input_router_.set_selection_mode(
+          app_selection_mode_to_viewport(to_modeling_selection_mode(
+              ui_context.editor.selection().summary().mode)));
+    }
+    input_router_.clear_modal_tool_state();
+  }
+
+  if (!operation_preview_shortcut_consumed) {
+    const ViewportShortcutControllerResult shortcut =
+        shortcut_controller_.handle_modeling_shortcut(result,
+                                                      ui_context.editor);
+    if (shortcut.command_executed) {
+      input_router_.set_selection_mode(
+          app_selection_mode_to_viewport(to_modeling_selection_mode(
+              ui_context.editor.selection().summary().mode)));
+    }
+    if (shortcut.invalidate_hover) {
+      hover_controller_.invalidate();
+    }
+    if (shortcut.mark_overlay_dirty) {
+      selection_overlay_cache_.mark_dirty();
+    }
+  }
+  if (!operation_preview_shortcut_consumed && result.shortcut_handled &&
+      result.shortcut.kind == ViewportShortcutKind::DeletePopup) {
+    const ModelingSelectionSummary delete_summary =
+        to_modeling_selection_summary(ui_context.editor.selection().summary());
+    if (delete_summary.mode == ModelingSelectionMode::Object ||
+        delete_summary.mode == ModelingSelectionMode::Group ||
+        scene_aware_delete_has_selected_root(document)) {
+      delete_objects_popup_open_ = true;
+      delete_objects_popup_position_pending_ = true;
+      delete_objects_popup_position_ = ImVec2(item_min.x + item_size.x * 0.5f,
+                                              item_min.y + item_size.y * 0.25f);
+    } else {
+      ImGui::OpenPopup("ViewportDeleteElementsPopup");
+    }
+  }
+
+  auto cancel_active_modal_tool = [&](bool exit_tool) {
+    ViewportToolContext tool_context{
+        .state = const_cast<ViewportToolState &>(input_router_.state()),
+        .camera = camera,
+        .modeling = modeling,
+    };
+    tool_context.set_active_tool = [&](ViewportToolId tool) {
+      input_router_.set_active_tool(tool);
+    };
+    tool_context.invalidate_hover = [&]() { hover_controller_.invalidate(); };
+    tool_context.mark_overlay_dirty = [&]() {
+      selection_overlay_cache_.mark_dirty();
+    };
+    (void)input_router_.handle_active_tool_event(
+        tool_context, ViewportToolEvent{
+                          .kind = ViewportToolEventKind::Cancel,
+                          .tool = input_router_.state().active_tool,
+                          .exit_active_modal_tool = exit_tool,
+                      });
+    interaction_controller_.reset(&ui_context.editor);
+    hover_controller_.invalidate();
+    selection_overlay_cache_.mark_dirty();
+  };
+
+  bool cancel_consumed = false;
+  if (!operation_preview_shortcut_consumed && result.cancel_requested) {
+    if (interaction_controller_.dragging()) {
+      (void)interaction_controller_.cancel_active_drag(ui_context.editor);
+      selection_overlay_cache_.mark_dirty();
+      cancel_consumed = true;
+    }
+
+    if (modal_tool_owns_viewport()) {
+      cancel_active_modal_tool(true);
+      cancel_consumed = true;
+    }
+  }
+
+  const bool suppress_hover_work =
+      result.navigation_active || result.camera_changed;
+  const bool navigation_gizmo_consumed = [&]() {
+    QDR_PROFILE_SCOPE("Viewport draw navigation gizmo");
+    return navigation_gizmo_.draw(
+        camera, pane_state.id, item_min, item_size, captured_mouse_delta,
+        viewport_cursor_capture_requested, viewport_cursor_capture_point);
+  }();
+  if (suppress_hover_work || navigation_gizmo_consumed ||
+      result.grid_preset_changed) {
+    hover_controller_.invalidate();
+  }
+  const ImGuiIO &io = ImGui::GetIO();
+  const bool left_clicked =
+      hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+  const bool left_down = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+  const bool left_released = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+  const ImVec2 left_click_screen = io.MouseClickedPos[ImGuiMouseButton_Left];
+  const QVec2 left_click_local = left_clicked
+                                     ? QVec2{left_click_screen.x - item_min.x,
+                                             left_click_screen.y - item_min.y}
+                                     : input.mouse_local;
+  const int left_click_count =
+      std::max(1, ImGui::GetMouseClickedCount(ImGuiMouseButton_Left));
+  const ViewportInteractionFrame interaction_frame{
+      .input_router = input_router_,
+      .camera = camera,
+      .settings = active_viewport_settings(),
+      .input = input,
+      .input_result = result,
+      .left_click_local = left_click_local,
+      .left_click_count = left_click_count,
+      .left_pressed = left_clicked,
+      .left_down = left_down,
+      .left_released = left_released,
+  };
+  const ViewportBeforeToolInteractionResult before_tool = [&]() {
+    QDR_PROFILE_SCOPE("Viewport before tool interaction");
+    return cancel_consumed ? ViewportBeforeToolInteractionResult{}
+                           : interaction_controller_.handle_before_active_tool(
+                                 ui_context.editor, interaction_frame);
+  }();
+  if (interaction_controller_.dragging() || before_tool.gizmo_consumed) {
+    interaction_pane_id_ = pane_state.id;
+  }
+  const bool gizmo_consumed = cancel_consumed || navigation_gizmo_consumed ||
+                              before_tool.gizmo_consumed;
+  const ModelingToolStatus release_tool_status = modeling.tool_status();
+  const bool insert_edge_loop_drag_release =
+      release_tool_status.insert_edge_loop_dragging && left_released;
+  const bool drawn_plane_drag_release = (release_tool_status.cut_dragging ||
+                                         release_tool_status.mirror_dragging) &&
+                                        left_released;
+
+  const bool mouse_clicked_outside_viewport =
+      modal_tool_owns_viewport() && !io.WantCaptureMouse &&
+      !insert_edge_loop_drag_release && !drawn_plane_drag_release && !hovered &&
+      !result.navigation_active &&
+      ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow) &&
+      (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+       ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+       ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
+       ImGui::IsMouseReleased(ImGuiMouseButton_Left) ||
+       ImGui::IsMouseReleased(ImGuiMouseButton_Right) ||
+       ImGui::IsMouseReleased(ImGuiMouseButton_Middle));
+  if (mouse_clicked_outside_viewport) {
+    cancel_active_modal_tool(true);
+    cancel_consumed = true;
+  }
+
+  const ModelingSelectionSummary hover_selection_summary =
+      to_modeling_selection_summary(ui_context.editor.selection().summary());
+  auto make_viewport_hover_work_key = [&](bool consumed_by_gizmo) {
+    const ViewportSettings &settings = active_viewport_settings();
+    return hover_controller_.make_key(
+        camera,
+        ViewportHoverWorkRequest{
+            .pane_id = pane_state.id,
+            .active_tool = input_router_.state().active_tool,
+            .selection_mode = input_router_.state().selection_mode,
+            .box_drag_state = input_router_.box_preview().drag_state,
+            .grid_preset = input_router_.state().grid_preset,
+            .mouse_local = input.mouse_local,
+            .viewport_size = input.viewport_size,
+            .modifiers = input.modifiers,
+            .gizmo_consumed = consumed_by_gizmo,
+            .vertex_radius =
+                settings.float_value(ViewportFloatSettingId::PickVertexRadius),
+            .edge_radius =
+                settings.float_value(ViewportFloatSettingId::PickEdgeRadius),
+            .scene_revision = document.revision(),
+            .asset_revision = assets.revision(),
+            .content_revision = hover_selection_summary.content_revision,
+            .selection_revision = hover_selection_summary.selection_revision,
         });
-    }
-    const ModelingToolSettingsTarget toolSettingsTarget = modeling.toolSettingsTarget();
-    input.navigationActive = inputRouter_.navigating();
-    input.flyNavigationActive = inputRouter_.flyNavigating();
-    input.orbitNavigationActive = inputRouter_.orbitNavigating();
-    input.panNavigationActive = inputRouter_.panNavigating();
-    input.modalToolActive = inputRouter_.hasActiveModalPreview() || modeling.modalToolOwnsViewport();
-    input.activeToolOwnsViewport = inputRouter_.activeToolOwnsViewport();
-    input.operationPreviewActive = toolSettingsTarget.operationPreviewActive;
-    input.gridPreset = viewportWorkspace.gridPreset();
-    {
-        QDR_PROFILE_SCOPE("Viewport resolve keybindings");
-        resolveKeybindingsForFrame(
-                uiContext.editor,
-                inputRouter_.state(),
-                input,
-                uiContext.commandShortcutConsumed);
-    }
-    const ViewportInputResult result = [&]() {
-        QDR_PROFILE_SCOPE("Viewport route input frame");
-        return inputRouter_.handleFrame(input, camera);
-    }();
-    const ViewportShortcutControllerResult operationPreviewShortcut =
-            shortcutController_.handleOperationPreviewShortcut(result, toolSettingsTarget, uiContext.editor);
-    const bool operationPreviewShortcutConsumed = operationPreviewShortcut.consumed;
-    if (operationPreviewShortcut.invalidateHover) {
-        hoverController_.invalidate();
-    }
-    if (operationPreviewShortcut.markOverlayDirty) {
-        selectionOverlayCache_.markDirty();
-    }
-    if (result.maximizedToggleRequested && !operationPreviewShortcutConsumed) {
-        if (hovered) {
-            viewportWorkspace.focusPane(paneState.id);
-        }
-        viewportWorkspace.toggleFocusedPaneMaximized();
-    }
-    if (result.gridPresetChanged) {
-        viewportWorkspace.setGridPreset(result.requestedGridPreset);
-        inputRouter_.syncGridPresetSnapshot(viewportWorkspace.gridPreset());
-    }
-    if (result.viewChanged) {
-        (void)viewportWorkspace.setView(paneState.id, result.requestedView);
-    }
-    if (input.rightPressed && hovered && !input.modifiers.primary && !input.modifiers.shift && !input.modifiers.alt) {
-        flyCursorCaptureScreen_ = input.mouseScreen;
-    }
-    lastFlyNavigationActive_ = result.flyCursorCaptureActive;
-    if (result.flyCursorCaptureActive) {
-        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
-        if (viewportCursorCaptureRequested != nullptr) {
-            *viewportCursorCaptureRequested = true;
-        }
-        if (viewportCursorCapturePoint != nullptr) {
-            const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-            *viewportCursorCapturePoint = {
-                    flyCursorCaptureScreen_.x - mainViewport->Pos.x,
-                    flyCursorCaptureScreen_.y - mainViewport->Pos.y,
-            };
-        }
-    }
-    const bool modalToolOwnsViewportForMenu = modalToolOwnsViewport();
-    if (!modalToolOwnsViewportForMenu &&
-            input.rightPressed &&
-            hovered &&
-            !input.modifiers.primary &&
-            !input.modifiers.shift &&
-            !input.modifiers.alt) {
-        contextMenuRightPressActive_ = true;
-        contextMenuRightPressScreen_ = input.mouseScreen;
-        contextMenuRightDragDelta_ = {};
-    }
-    if (contextMenuRightPressActive_ && input.rightDown && !input.rightPressed) {
-        contextMenuRightDragDelta_ = contextMenuRightDragDelta_ + input.mouseDelta;
-    }
-    bool pendingContextMenuClick = false;
-    QVec2 pendingContextMenuLocalMouse = {};
-    ViewportContextMenuOpenRequest pendingContextMenuRequest;
-    if (input.rightReleased && contextMenuRightPressActive_) {
-        const bool releaseInsideViewport =
-                input.mouseScreen.x >= itemMin.x &&
-                input.mouseScreen.x <= itemMax.x &&
-                input.mouseScreen.y >= itemMin.y &&
-                input.mouseScreen.y <= itemMax.y;
-        pendingContextMenuRequest = {
-                .modalToolOwnsViewport = modalToolOwnsViewport(),
-                .rightPressTracked = contextMenuRightPressActive_,
-                .rightReleased = input.rightReleased,
-                .releaseInsideViewport = releaseInsideViewport,
-                .pressScreen = contextMenuRightPressScreen_,
-                .releaseScreen = input.mouseScreen,
-                .accumulatedDragDelta = contextMenuRightDragDelta_,
-        };
-        if (isViewportContextMenuClickGesture(pendingContextMenuRequest)) {
-            pendingContextMenuClick = true;
-            pendingContextMenuLocalMouse = input.mouseLocal;
-        }
-        contextMenuRightPressActive_ = false;
-        contextMenuRightDragDelta_ = {};
-    }
-    if (!input.rightDown && !input.rightReleased) {
-        contextMenuRightPressActive_ = false;
-        contextMenuRightDragDelta_ = {};
-    }
-    if (result.focusDocumentRequested) {
-        focusDocument(document, assets, camera);
-    }
-    const bool selectionModeShortcutHandled =
-            result.shortcutHandled &&
-            result.shortcut.kind == ViewportShortcutKind::SetSelectionMode;
-    if (selectionModeShortcutHandled) {
-        const QuaderApiVoidResult command =
-                uiContext.editor.selection().setMode(toApiSelectionMode(viewportSelectionModeToApp(result.shortcut.selectionMode)));
-        if (!command.ok) {
-            LOG_ERROR("Selection mode change failed: {}", command.message);
-        }
-        inputRouter_.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(uiContext.editor.selection().summary().mode)));
-        inputRouter_.clearModalDragState();
-        interactionController_.reset(&uiContext.editor);
-        hoverController_.invalidate();
-        selectionOverlayCache_.markDirty();
-    }
-    if (result.toolChanged) {
-        LOG_INFO("Viewport tool changed to {}", viewportToolId(inputRouter_.state().activeTool));
-        inputRouter_.clearModalDragState();
-        interactionController_.reset(&uiContext.editor);
-        hoverController_.invalidate();
-        selectionOverlayCache_.markDirty();
-        const ViewportTool* activeTool = inputRouter_.activeTool();
-        const QuaderApiVoidResult command = activeTool != nullptr ?
-                uiContext.editor.tools().activate(inputRouter_.state().activeTool) :
-                QuaderApiVoidResult{
-                        .ok = false,
-                        .changed = false,
-                        .message = "No active viewport tool.",
-                };
-        if (!command.ok) {
-            LOG_ERROR("Viewport tool activation failed: {}", command.message);
-            inputRouter_.setActiveTool(ViewportToolId::Select);
-            (void)uiContext.editor.tools().activate(ViewportToolId::Select);
-        } else {
-            inputRouter_.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(uiContext.editor.selection().summary().mode)));
-        }
-        inputRouter_.clearModalToolState();
-    }
-
-    if (!operationPreviewShortcutConsumed) {
-        const ViewportShortcutControllerResult shortcut =
-                shortcutController_.handleModelingShortcut(result, uiContext.editor);
-        if (shortcut.commandExecuted) {
-            inputRouter_.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(uiContext.editor.selection().summary().mode)));
-        }
-        if (shortcut.invalidateHover) {
-            hoverController_.invalidate();
-        }
-        if (shortcut.markOverlayDirty) {
-            selectionOverlayCache_.markDirty();
-        }
-    }
-    if (!operationPreviewShortcutConsumed &&
-            result.shortcutHandled &&
-            result.shortcut.kind == ViewportShortcutKind::DeletePopup) {
-        const ModelingSelectionSummary deleteSummary = toModelingSelectionSummary(uiContext.editor.selection().summary());
-        if (deleteSummary.mode == ModelingSelectionMode::Object ||
-                deleteSummary.mode == ModelingSelectionMode::Group ||
-                sceneAwareDeleteHasSelectedRoot(document)) {
-            deleteObjectsPopupOpen_ = true;
-            deleteObjectsPopupPositionPending_ = true;
-            deleteObjectsPopupPosition_ = ImVec2(itemMin.x + itemSize.x * 0.5f, itemMin.y + itemSize.y * 0.25f);
-        } else {
-            ImGui::OpenPopup("ViewportDeleteElementsPopup");
-        }
-    }
-
-    auto cancelActiveModalTool = [&](bool exitTool) {
-        ViewportToolContext toolContext{
-                .state = const_cast<ViewportToolState&>(inputRouter_.state()),
-                .camera = camera,
-                .modeling = modeling,
-        };
-        toolContext.setActiveTool = [&](ViewportToolId tool) {
-            inputRouter_.setActiveTool(tool);
-        };
-        toolContext.invalidateHover = [&]() {
-            hoverController_.invalidate();
-        };
-        toolContext.markOverlayDirty = [&]() {
-            selectionOverlayCache_.markDirty();
-        };
-        (void)inputRouter_.handleActiveToolEvent(toolContext, ViewportToolEvent{
-                .kind = ViewportToolEventKind::Cancel,
-                .tool = inputRouter_.state().activeTool,
-                .exitActiveModalTool = exitTool,
-        });
-        interactionController_.reset(&uiContext.editor);
-        hoverController_.invalidate();
-        selectionOverlayCache_.markDirty();
+  };
+  auto make_modeling_tool_event_at = [&](QVec2 mouse_local,
+                                         bool dragging = false) {
+    const ViewportSettings &settings = active_viewport_settings();
+    const ViewportRay world_ray = camera.ray_from_viewport_point(mouse_local);
+    return ModelingToolRayEvent{
+        .screen_position = mouse_local,
+        .ray =
+            {
+                .origin = world_ray.origin,
+                .direction = world_ray.direction,
+            },
+        .camera = ViewportCameraAdapter::modeling_camera(
+            camera, {item_size.x, item_size.y}),
+        .grid_size = std::max(static_cast<double>(grid_size_for_preset(
+                                  input_router_.state().grid_preset)),
+                              0.0001),
+        .vertex_radius =
+            settings.float_value(ViewportFloatSettingId::PickVertexRadius),
+        .edge_radius =
+            settings.float_value(ViewportFloatSettingId::PickEdgeRadius),
+        .snap_enabled =
+            viewport_grid_snap_active(settings, input.modifiers.primary),
+        .constrain_axis = input.modifiers.shift,
+        .dragging = dragging,
     };
-
-    bool cancelConsumed = false;
-    if (!operationPreviewShortcutConsumed && result.cancelRequested) {
-        if (interactionController_.dragging()) {
-            (void)interactionController_.cancelActiveDrag(uiContext.editor);
-            selectionOverlayCache_.markDirty();
-            cancelConsumed = true;
-        }
-
-        if (modalToolOwnsViewport()) {
-            cancelActiveModalTool(true);
-            cancelConsumed = true;
-        }
+  };
+  auto claim_tool_hover = [&](ModelingBoxDragState) {
+    const ViewportHoverWorkKey hover_work_key =
+        make_viewport_hover_work_key(gizmo_consumed);
+    return hover_controller_.claim(hover_work_key);
+  };
+  auto handle_tool_command_result = [&](std::string_view label,
+                                        const ModelingCommandResult &command) {
+    if (!command.ok) {
+      LOG_ERROR("{} failed: {}", label,
+                command.message.empty() ? "Command failed." : command.message);
     }
-
-    const bool suppressHoverWork = result.navigationActive || result.cameraChanged;
-    const bool navigationGizmoConsumed = [&]() {
-        QDR_PROFILE_SCOPE("Viewport draw navigation gizmo");
-        return navigationGizmo_.draw(
-                camera,
-                paneState.id,
-                itemMin,
-                itemSize,
-                capturedMouseDelta,
-                viewportCursorCaptureRequested,
-                viewportCursorCapturePoint);
-    }();
-    if (suppressHoverWork || navigationGizmoConsumed || result.gridPresetChanged) {
-        hoverController_.invalidate();
+    if (command.changed) {
+      hover_controller_.invalidate();
+      selection_overlay_cache_.mark_dirty();
     }
-    const ImGuiIO& io = ImGui::GetIO();
-    const bool leftClicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-    const bool leftDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
-    const bool leftReleased = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
-    const ImVec2 leftClickScreen = io.MouseClickedPos[ImGuiMouseButton_Left];
-    const QVec2 leftClickLocal = leftClicked ?
-            QVec2{leftClickScreen.x - itemMin.x, leftClickScreen.y - itemMin.y} :
-            input.mouseLocal;
-    const int leftClickCount = std::max(1, ImGui::GetMouseClickedCount(ImGuiMouseButton_Left));
-    const ViewportInteractionFrame interactionFrame{
-            .inputRouter = inputRouter_,
-            .camera = camera,
-            .settings = activeViewportSettings(),
-            .input = input,
-            .inputResult = result,
-            .leftClickLocal = leftClickLocal,
-            .leftClickCount = leftClickCount,
-            .leftPressed = leftClicked,
-            .leftDown = leftDown,
-            .leftReleased = leftReleased,
-    };
-    const ViewportBeforeToolInteractionResult beforeTool = [&]() {
-        QDR_PROFILE_SCOPE("Viewport before tool interaction");
-        return cancelConsumed ? ViewportBeforeToolInteractionResult{} :
-                interactionController_.handleBeforeActiveTool(uiContext.editor, interactionFrame);
-    }();
-    if (interactionController_.dragging() || beforeTool.gizmoConsumed) {
-        interactionPaneId_ = paneState.id;
-    }
-    const bool gizmoConsumed = cancelConsumed || navigationGizmoConsumed || beforeTool.gizmoConsumed;
-    const ModelingToolStatus releaseToolStatus = modeling.toolStatus();
-    const bool insertEdgeLoopDragRelease =
-            releaseToolStatus.insertEdgeLoopDragging &&
-            leftReleased;
-    const bool drawnPlaneDragRelease =
-            (releaseToolStatus.cutDragging ||
-                    releaseToolStatus.mirrorDragging) &&
-            leftReleased;
+  };
+  const bool finalize_pressed = input.modal_tool_finalize_pressed;
+  const bool mode_cycle_pressed = input.modal_tool_mode_cycle_pressed;
 
-    const bool mouseClickedOutsideViewport =
-            modalToolOwnsViewport() &&
-            !io.WantCaptureMouse &&
-            !insertEdgeLoopDragRelease &&
-            !drawnPlaneDragRelease &&
-            !hovered &&
-            !result.navigationActive &&
-            ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow) &&
-            (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                    ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
-                    ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
-                    ImGui::IsMouseReleased(ImGuiMouseButton_Left) ||
-                    ImGui::IsMouseReleased(ImGuiMouseButton_Right) ||
-                    ImGui::IsMouseReleased(ImGuiMouseButton_Middle));
-    if (mouseClickedOutsideViewport) {
-        cancelActiveModalTool(true);
-        cancelConsumed = true;
-    }
-
-    const ModelingSelectionSummary hoverSelectionSummary = toModelingSelectionSummary(uiContext.editor.selection().summary());
-    auto makeViewportHoverWorkKey = [&](bool consumedByGizmo) {
-        const ViewportSettings& settings = activeViewportSettings();
-        return hoverController_.makeKey(camera, ViewportHoverWorkRequest{
-                .paneId = paneState.id,
-                .activeTool = inputRouter_.state().activeTool,
-                .selectionMode = inputRouter_.state().selectionMode,
-                .boxDragState = inputRouter_.boxPreview().dragState,
-                .gridPreset = inputRouter_.state().gridPreset,
-                .mouseLocal = input.mouseLocal,
-                .viewportSize = input.viewportSize,
-                .modifiers = input.modifiers,
-                .gizmoConsumed = consumedByGizmo,
-                .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
-                .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
-                .sceneRevision = document.revision(),
-                .assetRevision = assets.revision(),
-                .contentRevision = hoverSelectionSummary.contentRevision,
-                .selectionRevision = hoverSelectionSummary.selectionRevision,
-        });
-    };
-    auto makeModelingToolEventAt = [&](QVec2 mouseLocal, bool dragging = false) {
-        const ViewportSettings& settings = activeViewportSettings();
-        const ViewportRay worldRay = camera.rayFromViewportPoint(mouseLocal);
-        return ModelingToolRayEvent{
-                .screenPosition = mouseLocal,
-                .ray = {
-                        .origin = worldRay.origin,
-                        .direction = worldRay.direction,
-                },
-                .camera = ViewportCameraAdapter::modelingCamera(camera, {itemSize.x, itemSize.y}),
-                .gridSize = std::max(static_cast<double>(gridSizeForPreset(inputRouter_.state().gridPreset)), 0.0001),
-                .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
-                .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
-                .snapEnabled = viewportGridSnapActive(settings, input.modifiers.primary),
-                .constrainAxis = input.modifiers.shift,
-                .dragging = dragging,
-        };
-    };
-    auto claimToolHover = [&](ModelingBoxDragState) {
-        const ViewportHoverWorkKey hoverWorkKey = makeViewportHoverWorkKey(gizmoConsumed);
-        return hoverController_.claim(hoverWorkKey);
-    };
-    auto handleToolCommandResult = [&](std::string_view label, const ModelingCommandResult& command) {
-        if (!command.ok) {
-            LOG_ERROR("{} failed: {}", label, command.message.empty() ? "Command failed." : command.message);
-        }
-        if (command.changed) {
-            hoverController_.invalidate();
-            selectionOverlayCache_.markDirty();
-        }
-    };
-    const bool finalizePressed = input.modalToolFinalizePressed;
-    const bool modeCyclePressed = input.modalToolModeCyclePressed;
-
-    ViewportBoxToolContext boxToolContext{
-            .defaultMaterial = defaultMaterial,
-    };
-    boxToolContext.makeEvent = [&]() {
-        const float gridSize = gridSizeForPreset(inputRouter_.state().gridPreset);
-        return modelingBoxEvent(
-                camera,
-                input,
-                gridSize,
-                viewportGridSnapActive(activeViewportSettings(), input.modifiers.primary));
-    };
-    boxToolContext.commitPreview = [&](std::string name, AssetId material) {
+  ViewportBoxToolContext box_tool_context{
+      .default_material = default_material,
+  };
+  box_tool_context.make_event = [&]() {
+    const float grid_size =
+        grid_size_for_preset(input_router_.state().grid_preset);
+    return modeling_box_event(
+        camera, input, grid_size,
+        viewport_grid_snap_active(active_viewport_settings(),
+                                  input.modifiers.primary));
+  };
+  box_tool_context.commit_preview =
+      [&](std::string name, AssetId material) {
         const QuaderApiResult<QuaderModelingObjectRef> result =
-                uiContext.editor.modeling().commitBoxPreview(std::move(name), material);
+            ui_context.editor.modeling().commit_box_preview(std::move(name),
+                                                            material);
         ModelingCreateBoxResult committed{
                 .ok = result.ok,
                 .changed = result.changed,
                 .message = result.message,
         };
         if (result.ok && result.changed) {
-            committed.object = {
-                    .modelingObjectId = result.value.modelingObjectId,
-                    .entity = result.value.entity,
-                    .mesh = result.value.mesh,
-            };
+          committed.object = {
+              .modeling_object_id = result.value.modeling_object_id,
+              .entity = result.value.entity,
+              .mesh = result.value.mesh,
+          };
         }
         return committed;
-    };
-    boxToolContext.nextMeshName = [&]() {
-        return SceneEntityNaming::nextNameForKind(document, SceneEntityKind::Mesh);
-    };
+      };
+  box_tool_context.next_mesh_name = [&]() {
+    return SceneEntityNaming::next_name_for_kind(document,
+                                                 SceneEntityKind::Mesh);
+  };
 
-    ViewportPointToolContext pointToolContext;
-    pointToolContext.makeEventAt = makeModelingToolEventAt;
-    pointToolContext.hitDrawnPlaneCapturedPoint = [&](const std::array<QVec3, 3>& points, int capturedPointCount) {
-        return hitDrawnPlaneCapturedPoint(points, capturedPointCount, leftClickLocal, camera, itemMin, itemSize);
-    };
-    pointToolContext.hitDrawnPlaneLine = [&](const std::array<QVec3, 3>& points, int capturedPointCount, bool hasLine) {
-        return hitDrawnPlaneLine(points, capturedPointCount, hasLine, leftClickLocal, camera, itemMin, itemSize);
-    };
+  ViewportPointToolContext point_tool_context;
+  point_tool_context.make_event_at = make_modeling_tool_event_at;
+  point_tool_context.hit_drawn_plane_captured_point =
+      [&](const std::array<QVec3, 3> &points, int captured_point_count) {
+        return hit_drawn_plane_captured_point(points, captured_point_count,
+                                              left_click_local, camera,
+                                              item_min, item_size);
+      };
+  point_tool_context.hit_drawn_plane_line =
+      [&](const std::array<QVec3, 3> &points, int captured_point_count,
+          bool has_line) {
+        return hit_drawn_plane_line(points, captured_point_count, has_line,
+                                    left_click_local, camera, item_min,
+                                    item_size);
+      };
 
-    ViewportToolContext toolContext{
-            .state = const_cast<ViewportToolState&>(inputRouter_.state()),
-            .camera = camera,
-            .modeling = modeling,
-            .document = &document,
-            .settings = &activeViewportSettings(),
-            .box = &boxToolContext,
-            .point = &pointToolContext,
-    };
-    toolContext.claimHover = claimToolHover;
-    toolContext.invalidateHover = [&]() {
-        hoverController_.invalidate();
-    };
-    toolContext.markOverlayDirty = [&]() {
-        selectionOverlayCache_.markDirty();
-    };
-    toolContext.setActiveTool = [&](ViewportToolId tool) {
-        inputRouter_.setActiveTool(tool);
-    };
-    toolContext.setSelectionMode = [&](ViewportSelectionMode mode) {
-        inputRouter_.setSelectionMode(mode);
-    };
-    toolContext.setAppSelectionMode = [&](ModelingSelectionMode mode) {
-        const QuaderApiVoidResult command = uiContext.editor.selection().setMode(toApiSelectionMode(mode));
-        if (!command.ok) {
-            LOG_ERROR("Selection mode change failed: {}", command.message.empty() ? "Command failed." : command.message);
-        }
-        inputRouter_.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(uiContext.editor.selection().summary().mode)));
-    };
-    toolContext.handleToolCommandResult = handleToolCommandResult;
-
-    const bool canInteractWithActiveTool = hovered && !gizmoConsumed && !result.navigationActive;
-    const ViewportToolResult activeToolFrameResult = [&]() {
-        QDR_PROFILE_SCOPE("Viewport active tool frame");
-        return inputRouter_.handleActiveToolEvent(toolContext, ViewportToolEvent{
-                .kind = ViewportToolEventKind::Frame,
-                .tool = inputRouter_.state().activeTool,
-                .pointer = {
-                        .hovered = hovered,
-                        .leftClicked = leftClicked,
-                        .leftDown = leftDown,
-                        .leftReleased = leftReleased,
-                        .canInteract = canInteractWithActiveTool,
-                        .finalizePressed = finalizePressed,
-                        .modeCyclePressed = modeCyclePressed,
-                        .suppressHoverWork = suppressHoverWork,
-                        .gizmoConsumed = gizmoConsumed,
-                        .navigationActive = result.navigationActive,
-                        .textInputActive = input.textInputActive,
-                        .mouseLocal = input.mouseLocal,
-                        .leftClickLocal = leftClickLocal,
-                        .viewportSize = input.viewportSize,
-                        .modifiers = input.modifiers,
-                },
-        });
-    }();
-    const ModelingBoxPreview& boxPreview = inputRouter_.boxPreview();
-    if (boxPreview.dragState != ModelingBoxDragState::Height) {
-        modalToolOverlayRenderer_.drawBoxPreview(ImGui::GetWindowDrawList(), boxPreview, camera, itemMin, itemSize);
+  ViewportToolContext tool_context{
+      .state = const_cast<ViewportToolState &>(input_router_.state()),
+      .camera = camera,
+      .modeling = modeling,
+      .document = &document,
+      .settings = &active_viewport_settings(),
+      .box = &box_tool_context,
+      .point = &point_tool_context,
+  };
+  tool_context.claim_hover = claim_tool_hover;
+  tool_context.invalidate_hover = [&]() { hover_controller_.invalidate(); };
+  tool_context.mark_overlay_dirty = [&]() {
+    selection_overlay_cache_.mark_dirty();
+  };
+  tool_context.set_active_tool = [&](ViewportToolId tool) {
+    input_router_.set_active_tool(tool);
+  };
+  tool_context.set_selection_mode = [&](ViewportSelectionMode mode) {
+    input_router_.set_selection_mode(mode);
+  };
+  tool_context.set_app_selection_mode = [&](ModelingSelectionMode mode) {
+    const QuaderApiVoidResult command =
+        ui_context.editor.selection().set_mode(to_api_selection_mode(mode));
+    if (!command.ok) {
+      LOG_ERROR("Selection mode change failed: {}",
+                command.message.empty() ? "Command failed." : command.message);
     }
+    input_router_.set_selection_mode(
+        app_selection_mode_to_viewport(to_modeling_selection_mode(
+            ui_context.editor.selection().summary().mode)));
+  };
+  tool_context.handle_tool_command_result = handle_tool_command_result;
 
-    {
-        QDR_PROFILE_SCOPE("Viewport after tool interaction");
-        interactionController_.handleAfterActiveTool(
-                uiContext.editor,
-                interactionFrame,
-                activeToolFrameResult,
-                beforeTool);
-    }
+  const bool can_interact_with_active_tool =
+      hovered && !gizmo_consumed && !result.navigation_active;
+  const ViewportToolResult active_tool_frame_result = [&]() {
+    QDR_PROFILE_SCOPE("Viewport active tool frame");
+    return input_router_.handle_active_tool_event(
+        tool_context, ViewportToolEvent{
+                          .kind = ViewportToolEventKind::Frame,
+                          .tool = input_router_.state().active_tool,
+                          .pointer =
+                              {
+                                  .hovered = hovered,
+                                  .left_clicked = left_clicked,
+                                  .left_down = left_down,
+                                  .left_released = left_released,
+                                  .can_interact = can_interact_with_active_tool,
+                                  .finalize_pressed = finalize_pressed,
+                                  .mode_cycle_pressed = mode_cycle_pressed,
+                                  .suppress_hover_work = suppress_hover_work,
+                                  .gizmo_consumed = gizmo_consumed,
+                                  .navigation_active = result.navigation_active,
+                                  .text_input_active = input.text_input_active,
+                                  .mouse_local = input.mouse_local,
+                                  .left_click_local = left_click_local,
+                                  .viewport_size = input.viewport_size,
+                                  .modifiers = input.modifiers,
+                              },
+                      });
+  }();
+  const ModelingBoxPreview &box_preview = input_router_.box_preview();
+  if (box_preview.drag_state != ModelingBoxDragState::Height) {
+    modal_tool_overlay_renderer_.draw_box_preview(
+        ImGui::GetWindowDrawList(), box_preview, camera, item_min, item_size);
+  }
 
-    const bool selectionFallbackActive = inputRouter_.activeToolAllowsSelectionFallback();
-    if (!activeToolFrameResult.handled &&
-            selectionFallbackActive &&
-            pendingContextMenuClick &&
-            !gizmoConsumed) {
-        ViewportInputFrame contextInput = input;
-        contextInput.mouseLocal = pendingContextMenuLocalMouse;
-        const ViewportInteractionFrame contextFrame{
-                .inputRouter = inputRouter_,
-                .camera = camera,
-                .settings = activeViewportSettings(),
-                .input = contextInput,
-                .inputResult = result,
-        };
-        const QuaderSelectionSummary summary =
-                interactionController_.pickContextMenuTarget(uiContext.editor, contextFrame);
-        const ModelingActionQuery query{
-                .surface = ModelingActionSurface::ViewportContextMenu,
-                .modalToolOwnsViewport = modalToolOwnsViewport(),
-                .includeDisabled = true,
-                .includeHidden = false,
-        };
-        const std::vector<ModelingActionItem> actions =
-                summary.hasSelection ? modeling.contextActions(query) : std::vector<ModelingActionItem>{};
-        pendingContextMenuRequest.targetHit = summary.hasSelection;
-        pendingContextMenuRequest.hasActions = !actions.empty();
-        if (shouldOpenViewportContextMenu(pendingContextMenuRequest)) {
-            ImGui::OpenPopup("ViewportOperationsContext");
-        }
-        hoverController_.invalidate();
-        selectionOverlayCache_.markDirty();
-    }
+  {
+    QDR_PROFILE_SCOPE("Viewport after tool interaction");
+    interaction_controller_.handle_after_active_tool(
+        ui_context.editor, interaction_frame, active_tool_frame_result,
+        before_tool);
+  }
 
-    {
-        QDR_PROFILE_SCOPE("Viewport refresh selection overlay");
-        refreshCachedSelectionOverlayFrame(document, assets, modeling);
+  const bool selection_fallback_active =
+      input_router_.active_tool_allows_selection_fallback();
+  if (!active_tool_frame_result.handled && selection_fallback_active &&
+      pending_context_menu_click && !gizmo_consumed) {
+    ViewportInputFrame context_input = input;
+    context_input.mouse_local = pending_context_menu_local_mouse;
+    const ViewportInteractionFrame context_frame{
+        .input_router = input_router_,
+        .camera = camera,
+        .settings = active_viewport_settings(),
+        .input = context_input,
+        .input_result = result,
+    };
+    const QuaderSelectionSummary summary =
+        interaction_controller_.pick_context_menu_target(ui_context.editor,
+                                                         context_frame);
+    const ModelingActionQuery query{
+        .surface = ModelingActionSurface::ViewportContextMenu,
+        .modal_tool_owns_viewport = modal_tool_owns_viewport(),
+        .include_disabled = true,
+        .include_hidden = false,
+    };
+    const std::vector<ModelingActionItem> actions =
+        summary.has_selection ? modeling.context_actions(query)
+                              : std::vector<ModelingActionItem>{};
+    pending_context_menu_request.target_hit = summary.has_selection;
+    pending_context_menu_request.has_actions = !actions.empty();
+    if (should_open_viewport_context_menu(pending_context_menu_request)) {
+      ImGui::OpenPopup("ViewportOperationsContext");
     }
-    modalToolOverlayRenderer_.drawFlyNavigationOverlay(
-            ImGui::GetWindowDrawList(),
-            itemMin,
-            itemSize,
-            result.flyHudActive,
-            result.flyHudActive && !camera.flySpeedIsDefault(),
-            result.flyHudActive,
-            camera.flySpeed(),
-            uiContext.localization);
-    contextMenuPresenter_.drawOperationsPopup(uiContext.editor, modeling, inputRouter_, uiContext.localization, modalToolOwnsViewport());
-    if (drawViewportDeletePopup(
-                deleteObjectsPopupOpen_,
-                deleteObjectsPopupPositionPending_,
-                deleteObjectsPopupPosition_,
-                uiContext.editor,
-                inputRouter_,
-                uiContext.localization)) {
-        hoverController_.invalidate();
-        selectionOverlayCache_.markDirty();
-    }
+    hover_controller_.invalidate();
+    selection_overlay_cache_.mark_dirty();
+  }
+
+  {
+    QDR_PROFILE_SCOPE("Viewport refresh selection overlay");
+    refresh_cached_selection_overlay_frame(document, assets, modeling);
+  }
+  modal_tool_overlay_renderer_.draw_fly_navigation_overlay(
+      ImGui::GetWindowDrawList(), item_min, item_size, result.fly_hud_active,
+      result.fly_hud_active && !camera.fly_speed_is_default(),
+      result.fly_hud_active, camera.fly_speed(), ui_context.localization);
+  context_menu_presenter_.draw_operations_popup(
+      ui_context.editor, modeling, input_router_, ui_context.localization,
+      modal_tool_owns_viewport());
+  if (draw_viewport_delete_popup(
+          delete_objects_popup_open_, delete_objects_popup_position_pending_,
+          delete_objects_popup_position_, ui_context.editor, input_router_,
+          ui_context.localization)) {
+    hover_controller_.invalidate();
+    selection_overlay_cache_.mark_dirty();
+  }
 }
 
 } // namespace quader

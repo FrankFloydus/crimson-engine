@@ -17,9 +17,9 @@ class PointSequenceTool : public ModalViewportTool {
 public:
     explicit PointSequenceTool(ToolDescriptor descriptor) : ModalViewportTool(descriptor) {}
 
-    [[nodiscard]] ViewportToolResult handleEvent(
-            ViewportToolContext& context,
-            const ViewportToolEvent& event) const override;
+    [[nodiscard]] ViewportToolResult
+    handle_event(ViewportToolContext &context,
+                 const ViewportToolEvent &event) const override;
 };
 
 } // namespace quader

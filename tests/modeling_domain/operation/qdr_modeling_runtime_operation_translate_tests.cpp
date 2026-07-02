@@ -34,12 +34,12 @@ TEST(QdrModelingRuntimeOperationTranslateTests, TranslateOperationMovesSelectedO
 		const quader_poly::ElementId selected_id = session.objects().front().document.vertices.front().id;
 		const quader::QVec3 selected_before = session.objects().front().document.vertices.front().position;
 		const quader::QVec3 unselected_before = session.objects().front().document.vertices[1].position;
-		session.set_component_selection(
-			session.objects().front().id,
-			qdr_test::vertex_selection({ selected_id }, selected_id),
-			quader_editor_core::SelectionMode::vertex);
+                session.set_component_selection(
+                    session.objects().front().id,
+                    qdr_test::vertex_selection({selected_id}, selected_id),
+                    quader_editor_core::SelectionMode::Vertex);
 
-		const quader_editor_core::CommandResult result = session.translate_selected({ 0.0F, 3.0F, 0.0F });
+                const quader_editor_core::CommandResult result = session.translate_selected({ 0.0F, 3.0F, 0.0F });
 
 		EXPECT_TRUE(result.ok);
 		EXPECT_TRUE(result.changed);

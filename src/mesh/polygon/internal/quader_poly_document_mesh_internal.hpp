@@ -39,7 +39,7 @@ struct FaceUvBasis {
 struct FaceUvProjectionAssignment {
     std::uint32_t material_slot = 0;
     FaceUvBasis basis;
-    ElementId source_face_id = invalid_element_id;
+    ElementId source_face_id = kInvalidElementId;
     bool inherited_loop_basis = false;
 };
 
@@ -47,8 +47,8 @@ struct FaceUvProjectionAssignment {
  * Represents a Merge Face UV Assignment value used by the polygon document and mesh editing core.
  */
 struct MergeFaceUvAssignment {
-    ElementId face_id = invalid_element_id;
-    FaceUvProjectionAssignment assignment;
+  ElementId face_id = kInvalidElementId;
+  FaceUvProjectionAssignment assignment;
 };
 
 [[nodiscard]] int dropped_axis_for_normal(const quader::QVec3& normal);

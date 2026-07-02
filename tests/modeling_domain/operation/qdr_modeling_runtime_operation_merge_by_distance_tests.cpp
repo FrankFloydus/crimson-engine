@@ -36,9 +36,13 @@ quader_poly::Document make_distance_merge_document(float offset)
 	const quader_poly::ElementId d = add_vertex(document, { 0.0F, 1.0F + offset, 0.0F });
 	const quader_poly::ElementId e = add_vertex(document, { -1.0F, 1.0F, 0.0F });
 	const quader_poly::ElementId f = add_vertex(document, { -1.0F, 0.0F, 0.0F });
-	EXPECT_TRUE(add_face(document, std::array<quader_poly::ElementId, 3> { a, b, c }) != quader_poly::invalid_element_id);
-	EXPECT_TRUE(add_face(document, std::array<quader_poly::ElementId, 3> { d, e, f }) != quader_poly::invalid_element_id);
-	return document;
+        EXPECT_TRUE(add_face(document,
+                             std::array<quader_poly::ElementId, 3>{a, b, c}) !=
+                    quader_poly::kInvalidElementId);
+        EXPECT_TRUE(add_face(document,
+                             std::array<quader_poly::ElementId, 3>{d, e, f}) !=
+                    quader_poly::kInvalidElementId);
+        return document;
 }
 
 quader_poly::Edge edge_between_positions(
@@ -92,8 +96,8 @@ quader_poly::Selection near_vertex_selection(const quader_poly::Document& docume
 TEST(QdrModelingRuntimeOperationMergeByDistanceTests, MergeByDistanceOperationSchemaOwnsToleranceDefaultsAndLimits) {
 	const MergeByDistanceOperationSchema schema = merge_by_distance_operation_schema();
 
-	EXPECT_TRUE(schema.id == EditorOperationId::merge_by_distance);
-	EXPECT_TRUE(std::string(schema.operation_id) == "merge_by_distance");
+        EXPECT_TRUE(schema.id == EditorOperationId::MergeByDistance);
+        EXPECT_TRUE(std::string(schema.operation_id) == "merge_by_distance");
 	EXPECT_TRUE(std::string(schema.label) == "Merge by Distance");
 	EXPECT_TRUE(std::string(schema.tolerance.id) == "tolerance");
 	EXPECT_NEAR(schema.tolerance.default_value, 0.125, 0.0001);
@@ -111,23 +115,28 @@ TEST(QdrModelingRuntimeOperationMergeByDistanceTests, MergeByDistancePreviewRebu
 	{
 		quader_poly::Document document = make_distance_merge_document(0.2F);
 		EditorSession session({ qdr_test::make_object(1, document) });
-		session.set_component_selection(1, near_vertex_selection(session.objects().front().document), SelectionMode::vertex);
-		const std::size_t vertex_count_before = session.objects().front().document.vertices.size();
+                session.set_component_selection(
+                    1,
+                    near_vertex_selection(session.objects().front().document),
+                    SelectionMode::Vertex);
+                const std::size_t vertex_count_before = session.objects().front().document.vertices.size();
 
 		const CommandResult begin = session.begin_merge_by_distance_preview(0.05);
 		EXPECT_TRUE(begin.ok);
 		EXPECT_FALSE(begin.changed);
 		EXPECT_TRUE(session.preview_transaction_status().active);
-		EXPECT_TRUE(session.preview_transaction_status().kind == PreviewTransactionKind::merge_by_distance);
-		EXPECT_TRUE(session.objects().front().document.vertices.size() == vertex_count_before);
+                EXPECT_TRUE(session.preview_transaction_status().kind ==
+                            PreviewTransactionKind::MergeByDistance);
+                EXPECT_TRUE(session.objects().front().document.vertices.size() == vertex_count_before);
 
 		EXPECT_TRUE(session.update_merge_by_distance_preview(0.25).changed);
 		EXPECT_TRUE(session.objects().front().document.vertices.size() == vertex_count_before - 1U);
 
-		const PreviewTransactionFinishResult cancel =
-			session.cancel_preview_transaction(PreviewTransactionKind::merge_by_distance);
+                const PreviewTransactionFinishResult cancel =
+                    session.cancel_preview_transaction(
+                        PreviewTransactionKind::MergeByDistance);
 
-		EXPECT_TRUE(cancel.restored);
+                EXPECT_TRUE(cancel.restored);
 		EXPECT_TRUE(session.objects().front().document.vertices.size() == vertex_count_before);
 		EXPECT_FALSE(session.history_status().can_undo);
 	}
@@ -141,15 +150,19 @@ TEST(QdrModelingRuntimeOperationMergeByDistanceTests, MergeByDistancePreviewRebu
 	{
 		quader_poly::Document document = make_distance_merge_document(0.1F);
 		EditorSession session({ qdr_test::make_object(1, document) });
-		session.set_component_selection(1, near_vertex_selection(session.objects().front().document), SelectionMode::vertex);
-		const std::size_t vertex_count_before = session.objects().front().document.vertices.size();
+                session.set_component_selection(
+                    1,
+                    near_vertex_selection(session.objects().front().document),
+                    SelectionMode::Vertex);
+                const std::size_t vertex_count_before = session.objects().front().document.vertices.size();
 
 		EXPECT_TRUE(session.begin_merge_by_distance_preview({ 0.125 }).changed);
 		EXPECT_TRUE(session.objects().front().document.vertices.size() == vertex_count_before - 1U);
-		const PreviewTransactionFinishResult commit =
-			session.commit_preview_transaction(PreviewTransactionKind::merge_by_distance);
+                const PreviewTransactionFinishResult commit =
+                    session.commit_preview_transaction(
+                        PreviewTransactionKind::MergeByDistance);
 
-		EXPECT_TRUE(commit.before.changed);
+                EXPECT_TRUE(commit.before.changed);
 		EXPECT_TRUE(session.history_status().undo_count == 1U);
 		EXPECT_TRUE(session.undo().applied);
 		EXPECT_TRUE(session.objects().front().document.vertices.size() == vertex_count_before);
@@ -164,10 +177,10 @@ TEST(QdrModelingRuntimeOperationMergeByDistanceTests, MergeByDistanceProcessesSe
 	for (quader_editor_core::PolygonObject& object : session.objects()) {
 		object.selected = true;
 		object.selection = near_vertex_selection(object.document);
-		object.selection.mode = quader_poly::SelectionMode::vertex;
-	}
-	session.state().selection_mode = SelectionMode::vertex;
-	session.state().active_object_id = 1;
+                object.selection.mode = quader_poly::SelectionMode::Vertex;
+        }
+        session.state().selection_mode = SelectionMode::Vertex;
+        session.state().active_object_id = 1;
 	const std::size_t first_before = session.objects()[0].document.vertices.size();
 	const std::size_t second_before = session.objects()[1].document.vertices.size();
 
@@ -194,24 +207,25 @@ TEST(QdrModelingRuntimeOperationMergeByDistanceTests, MergeByDistanceKeepsACombi
 		{ { 1.0F, -1.0F, 0.0F }, { 1.0F, 1.0F, 0.0F } });
 	EXPECT_TRUE(seam_vertices.size() == 4U);
 	quader_poly::Selection selection;
-	selection.mode = quader_poly::SelectionMode::vertex;
-	selection.vertices = seam_vertices;
-	session.set_component_selection(1, selection, SelectionMode::vertex);
+        selection.mode = quader_poly::SelectionMode::Vertex;
+        selection.vertices = seam_vertices;
+        session.set_component_selection(1, selection, SelectionMode::Vertex);
 
-	EXPECT_TRUE(session.begin_merge_by_distance_preview(0.001).changed);
-	const PreviewTransactionFinishResult merge_commit =
-		session.commit_preview_transaction(PreviewTransactionKind::merge_by_distance);
-	EXPECT_TRUE(merge_commit.before.active);
+        EXPECT_TRUE(session.begin_merge_by_distance_preview(0.001).changed);
+        const PreviewTransactionFinishResult merge_commit =
+            session.commit_preview_transaction(
+                PreviewTransactionKind::MergeByDistance);
+        EXPECT_TRUE(merge_commit.before.active);
 	EXPECT_TRUE(session.objects().front().document.vertices.size() == 6U);
 
 	const quader_poly::Edge seed = edge_between_positions(
 		session.objects().front().document,
 		{ -1.0F, -1.0F, 0.0F },
 		{ 1.0F, -1.0F, 0.0F });
-	EXPECT_TRUE(seed.a != quader_poly::invalid_element_id);
-	EXPECT_TRUE(seed.b != quader_poly::invalid_element_id);
+        EXPECT_TRUE(seed.a != quader_poly::kInvalidElementId);
+        EXPECT_TRUE(seed.b != quader_poly::kInvalidElementId);
 
-	const CommandResult edge_loop = session.insert_edge_loop(1, seed, 0.5F);
+        const CommandResult edge_loop = session.insert_edge_loop(1, seed, 0.5F);
 	EXPECT_TRUE(edge_loop.ok);
 	EXPECT_TRUE(edge_loop.changed);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(session.objects().front().document));

@@ -34,8 +34,8 @@ TEST(QdrModelingRuntimeOperationCombineMeshTests, CombineMeshMergesSelectedMeshO
 	EXPECT_TRUE(session.objects().front().id == 1);
 	EXPECT_TRUE(session.objects().front().selected);
 	EXPECT_TRUE(session.active_object_id() == 1);
-	EXPECT_TRUE(session.selection_mode() == SelectionMode::object);
-	EXPECT_TRUE(session.objects().front().document.vertices.size() == first.vertices.size() + second.vertices.size());
+        EXPECT_TRUE(session.selection_mode() == SelectionMode::Object);
+        EXPECT_TRUE(session.objects().front().document.vertices.size() == first.vertices.size() + second.vertices.size());
 	EXPECT_TRUE(session.objects().front().document.faces.size() == first.faces.size() + second.faces.size());
 	EXPECT_TRUE(std::ranges::any_of(session.objects().front().document.faces, [](const quader_poly::Face& face) {
 		return face.material_slot == 7U;
@@ -71,8 +71,9 @@ TEST(QdrModelingRuntimeOperationCombineMeshTests, CombineMeshRejectsNonObjectMod
 	EXPECT_FALSE(session.combine_selected_meshes().ok);
 
 	quader_poly::Selection vertex_selection = qdr_test::vertex_selection({ session.objects().front().document.vertices.front().id });
-	session.set_component_selection(1, vertex_selection, SelectionMode::vertex);
-	const CommandResult result = session.combine_selected_meshes();
+        session.set_component_selection(1, vertex_selection,
+                                        SelectionMode::Vertex);
+        const CommandResult result = session.combine_selected_meshes();
 
 	EXPECT_FALSE(result.ok);
 }

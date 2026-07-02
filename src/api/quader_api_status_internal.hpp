@@ -16,63 +16,56 @@
 
 namespace quader {
 
-inline QuaderMutationKind quaderApiChangedMutationKind(
-        bool ok,
-        bool changed,
-        QuaderMutationKind changedKind) {
-    return ok && changed ? changedKind : QuaderMutationKind::None;
+inline QuaderMutationKind
+quader_api_changed_mutation_kind(bool ok, bool changed,
+                                 QuaderMutationKind changed_kind) {
+  return ok && changed ? changed_kind : QuaderMutationKind::None;
 }
 
-inline QuaderRevisionStamp quaderApiCurrentRevisions(const ProjectSession& session) {
-    const ModelingSelectionSummary modeling = session.modeling().selectionSummary();
-    return {
-            .projectRevision = session.document().revision(),
-            .sceneRevision = session.scene().revision(),
-            .assetRevision = session.assets().revision(),
-            .modelingContentRevision = modeling.contentRevision,
-            .modelingSelectionRevision = modeling.selectionRevision,
-    };
+inline QuaderRevisionStamp
+quader_api_current_revisions(const ProjectSession &session) {
+  const ModelingSelectionSummary modeling =
+      session.modeling().selection_summary();
+  return {
+      .project_revision = session.document().revision(),
+      .scene_revision = session.scene().revision(),
+      .asset_revision = session.assets().revision(),
+      .modeling_content_revision = modeling.content_revision,
+      .modeling_selection_revision = modeling.selection_revision,
+  };
 }
 
-inline QuaderApiVoidResult quaderApiVoidStatus(
-        const ProjectSession& session,
-        bool ok,
-        bool changed,
-        std::string message,
-        QuaderMutationKind changedKind,
-        std::string_view fallbackMessage = {}) {
-    return {
-            .ok = ok,
-            .changed = changed,
-            .message = message.empty() ? std::string(fallbackMessage) : std::move(message),
-            .mutationKind = quaderApiChangedMutationKind(ok, changed, changedKind),
-            .revisions = quaderApiCurrentRevisions(session),
-    };
+inline QuaderApiVoidResult
+quader_api_void_status(const ProjectSession &session, bool ok, bool changed,
+                       std::string message, QuaderMutationKind changed_kind,
+                       std::string_view fallback_message = {}) {
+  return {
+      .ok = ok,
+      .changed = changed,
+      .message =
+          message.empty() ? std::string(fallback_message) : std::move(message),
+      .mutation_kind =
+          quader_api_changed_mutation_kind(ok, changed, changed_kind),
+      .revisions = quader_api_current_revisions(session),
+  };
 }
 
-inline QuaderApiVoidResult quaderApiFailureStatus(
-        const ProjectSession& session,
-        std::string message) {
-    return quaderApiVoidStatus(
-            session,
-            false,
-            false,
-            std::move(message),
-            QuaderMutationKind::None);
+inline QuaderApiVoidResult
+quader_api_failure_status(const ProjectSession &session, std::string message) {
+  return quader_api_void_status(session, false, false, std::move(message),
+                                QuaderMutationKind::None);
 }
 
-inline QuaderMutationKind quaderApiPreviewMutationKind(
-        bool ok,
-        bool changed,
-        bool active,
-        QuaderMutationKind changedKind) {
-    if (!ok) {
-        return QuaderMutationKind::None;
-    }
-    if (changed) {
-        return changedKind;
-    }
-    return active ? QuaderMutationKind::Runtime : QuaderMutationKind::None;
+inline QuaderMutationKind
+quader_api_preview_mutation_kind(bool ok, bool changed, bool active,
+                                 QuaderMutationKind changed_kind) {
+  if (!ok) {
+    return QuaderMutationKind::None;
+  }
+  if (changed) {
+    return changed_kind;
+  }
+  return active ? QuaderMutationKind::Runtime : QuaderMutationKind::None;
 }
 
 } // namespace quader

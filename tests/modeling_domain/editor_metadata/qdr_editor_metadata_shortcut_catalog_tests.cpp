@@ -63,25 +63,25 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractSelectionModeCatalogExpo
 
 	const qhc::HostSelectionModeDescriptor *vertex = qhc::find_selection_mode_descriptor("vertex");
 	EXPECT_TRUE(vertex != nullptr);
-	EXPECT_TRUE(vertex->mode == qhc::HostSelectionMode::vertex);
-	EXPECT_TRUE(same_text(vertex->label, "Vertex"));
+        EXPECT_TRUE(vertex->mode == qhc::HostSelectionMode::Vertex);
+        EXPECT_TRUE(same_text(vertex->label, "Vertex"));
 
 	const qhc::HostSelectionModeDescriptor *edge = qhc::find_selection_mode_descriptor("edge");
 	EXPECT_TRUE(edge != nullptr);
-	EXPECT_TRUE(edge->mode == qhc::HostSelectionMode::edge);
+        EXPECT_TRUE(edge->mode == qhc::HostSelectionMode::Edge);
 
-	const qhc::HostSelectionModeDescriptor *face = qhc::find_selection_mode_descriptor("face");
+        const qhc::HostSelectionModeDescriptor *face = qhc::find_selection_mode_descriptor("face");
 	EXPECT_TRUE(face != nullptr);
-	EXPECT_TRUE(face->mode == qhc::HostSelectionMode::face);
+        EXPECT_TRUE(face->mode == qhc::HostSelectionMode::Face);
 
-	const qhc::HostSelectionModeDescriptor *object = qhc::find_selection_mode_descriptor("object");
+        const qhc::HostSelectionModeDescriptor *object = qhc::find_selection_mode_descriptor("object");
 	EXPECT_TRUE(object != nullptr);
-	EXPECT_TRUE(object->mode == qhc::HostSelectionMode::object);
+        EXPECT_TRUE(object->mode == qhc::HostSelectionMode::Object);
 
-	const qhc::HostSelectionModeDescriptor *group = qhc::find_selection_mode_descriptor("group");
+        const qhc::HostSelectionModeDescriptor *group = qhc::find_selection_mode_descriptor("group");
 	EXPECT_TRUE(group != nullptr);
-	EXPECT_TRUE(group->mode == qhc::HostSelectionMode::group);
-	EXPECT_TRUE(same_text(group->label, "Group"));
+        EXPECT_TRUE(group->mode == qhc::HostSelectionMode::Group);
+        EXPECT_TRUE(same_text(group->label, "Group"));
 }
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutTargetsResolveToDescriptorOnlyCatalogs) {
@@ -93,38 +93,49 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutTargetsResolveTo
 		EXPECT_FALSE(shortcut.key.empty());
 		EXPECT_FALSE(shortcut.target_id.empty());
 		EXPECT_FALSE(shortcut.alt);
-		EXPECT_TRUE(shortcut.registration_policy == qhc::HostShortcutRegistrationPolicy::quader_local);
+                EXPECT_TRUE(shortcut.registration_policy ==
+                            qhc::HostShortcutRegistrationPolicy::QuaderLocal);
 
-		switch (shortcut.target_kind) {
-			case qhc::HostShortcutTargetKind::action:
-				EXPECT_TRUE(qhc::find_action_descriptor(shortcut.target_id) != nullptr);
-				break;
-			case qhc::HostShortcutTargetKind::tool:
-				EXPECT_TRUE(qhc::find_tool_descriptor(shortcut.target_id) != nullptr);
-				break;
-			case qhc::HostShortcutTargetKind::selection_mode:
-				EXPECT_TRUE(qhc::find_selection_mode_descriptor(shortcut.target_id) != nullptr);
-				break;
-			case qhc::HostShortcutTargetKind::editor_action:
-				EXPECT_TRUE(has_interaction_kind(shortcut.target_id, qhc::HostInteractionKind::editor_action));
-				break;
-			case qhc::HostShortcutTargetKind::viewport_action:
-				EXPECT_TRUE(has_interaction_kind(shortcut.target_id, qhc::HostInteractionKind::viewport_action));
-				break;
+                switch (shortcut.target_kind) {
+                case qhc::HostShortcutTargetKind::Action:
+                  EXPECT_TRUE(qhc::find_action_descriptor(shortcut.target_id) !=
+                              nullptr);
+                  break;
+                case qhc::HostShortcutTargetKind::Tool:
+                  EXPECT_TRUE(qhc::find_tool_descriptor(shortcut.target_id) !=
+                              nullptr);
+                  break;
+                case qhc::HostShortcutTargetKind::SelectionMode:
+                  EXPECT_TRUE(qhc::find_selection_mode_descriptor(
+                                  shortcut.target_id) != nullptr);
+                  break;
+                case qhc::HostShortcutTargetKind::EditorAction:
+                  EXPECT_TRUE(has_interaction_kind(
+                      shortcut.target_id,
+                      qhc::HostInteractionKind::EditorAction));
+                  break;
+                case qhc::HostShortcutTargetKind::ViewportAction:
+                  EXPECT_TRUE(has_interaction_kind(
+                      shortcut.target_id,
+                      qhc::HostInteractionKind::ViewportAction));
+                  break;
 		}
 	}
 }
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogIncludesActiveMaterialAssignment) {
 	const qhc::HostShortcutDescriptor& apply_active_material = require_shortcut("apply_active_material");
-	EXPECT_TRUE(apply_active_material.context == qhc::HostShortcutContext::viewport);
-	EXPECT_TRUE(same_text(apply_active_material.key, "T"));
+        EXPECT_TRUE(apply_active_material.context ==
+                    qhc::HostShortcutContext::Viewport);
+        EXPECT_TRUE(same_text(apply_active_material.key, "T"));
 	EXPECT_FALSE(apply_active_material.primary_modifier);
 	EXPECT_TRUE(apply_active_material.shift);
-	EXPECT_TRUE(apply_active_material.target_kind == qhc::HostShortcutTargetKind::action);
-	EXPECT_TRUE(same_text(apply_active_material.target_id, "apply_active_material"));
-	EXPECT_TRUE(apply_active_material.registration_policy == qhc::HostShortcutRegistrationPolicy::quader_local);
-	EXPECT_TRUE(qhc::find_action_descriptor("apply_active_material") != nullptr);
+        EXPECT_TRUE(apply_active_material.target_kind ==
+                    qhc::HostShortcutTargetKind::Action);
+        EXPECT_TRUE(same_text(apply_active_material.target_id, "apply_active_material"));
+        EXPECT_TRUE(apply_active_material.registration_policy ==
+                    qhc::HostShortcutRegistrationPolicy::QuaderLocal);
+        EXPECT_TRUE(qhc::find_action_descriptor("apply_active_material") != nullptr);
 }
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogHasNoDuplicateDefaultStrokes) {
@@ -137,12 +148,13 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogHasNoDupl
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogPreservesEditorAndViewportKeyMeanings) {
 	const qhc::HostShortcutDescriptor& undo = require_shortcut("undo");
-	EXPECT_TRUE(undo.context == qhc::HostShortcutContext::global);
-	EXPECT_TRUE(same_text(undo.key, "Z"));
+        EXPECT_TRUE(undo.context == qhc::HostShortcutContext::Global);
+        EXPECT_TRUE(same_text(undo.key, "Z"));
 	EXPECT_TRUE(undo.primary_modifier);
 	EXPECT_FALSE(undo.shift);
-	EXPECT_TRUE(undo.target_kind == qhc::HostShortcutTargetKind::editor_action);
-	EXPECT_TRUE(same_text(undo.target_id, "undo"));
+        EXPECT_TRUE(undo.target_kind ==
+                    qhc::HostShortcutTargetKind::EditorAction);
+        EXPECT_TRUE(same_text(undo.target_id, "undo"));
 
 	const qhc::HostShortcutDescriptor& redo_shift_z = require_shortcut("redo_shift_z");
 	EXPECT_TRUE(same_text(redo_shift_z.key, "Z"));
@@ -151,30 +163,34 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogPreserves
 	EXPECT_TRUE(same_text(redo_shift_z.target_id, "redo"));
 
 	const qhc::HostShortcutDescriptor& new_document = require_shortcut("new_document");
-	EXPECT_TRUE(new_document.context == qhc::HostShortcutContext::global);
-	EXPECT_TRUE(same_text(new_document.key, "N"));
+        EXPECT_TRUE(new_document.context == qhc::HostShortcutContext::Global);
+        EXPECT_TRUE(same_text(new_document.key, "N"));
 	EXPECT_TRUE(new_document.primary_modifier);
-	EXPECT_TRUE(new_document.registration_policy == qhc::HostShortcutRegistrationPolicy::quader_local);
+        EXPECT_TRUE(new_document.registration_policy ==
+                    qhc::HostShortcutRegistrationPolicy::QuaderLocal);
 
-	const qhc::HostShortcutDescriptor& open_document = require_shortcut("open_document");
+        const qhc::HostShortcutDescriptor& open_document = require_shortcut("open_document");
 	EXPECT_TRUE(same_text(open_document.key, "O"));
 	EXPECT_TRUE(open_document.primary_modifier);
-	EXPECT_TRUE(open_document.registration_policy == qhc::HostShortcutRegistrationPolicy::quader_local);
+        EXPECT_TRUE(open_document.registration_policy ==
+                    qhc::HostShortcutRegistrationPolicy::QuaderLocal);
 
-	const qhc::HostShortcutDescriptor& save_document = require_shortcut("save_document");
+        const qhc::HostShortcutDescriptor& save_document = require_shortcut("save_document");
 	EXPECT_TRUE(same_text(save_document.key, "S"));
 	EXPECT_TRUE(save_document.primary_modifier);
 	EXPECT_FALSE(save_document.shift);
-	EXPECT_TRUE(save_document.registration_policy == qhc::HostShortcutRegistrationPolicy::quader_local);
+        EXPECT_TRUE(save_document.registration_policy ==
+                    qhc::HostShortcutRegistrationPolicy::QuaderLocal);
 
-	const qhc::HostShortcutDescriptor& save_as_document = require_shortcut("save_as_document");
+        const qhc::HostShortcutDescriptor& save_as_document = require_shortcut("save_as_document");
 	EXPECT_TRUE(same_text(save_as_document.key, "S"));
 	EXPECT_TRUE(save_as_document.primary_modifier);
 	EXPECT_TRUE(save_as_document.shift);
 	EXPECT_TRUE(same_text(save_as_document.target_id, "save_as_document"));
-	EXPECT_TRUE(save_as_document.registration_policy == qhc::HostShortcutRegistrationPolicy::quader_local);
+        EXPECT_TRUE(save_as_document.registration_policy ==
+                    qhc::HostShortcutRegistrationPolicy::QuaderLocal);
 
-	const qhc::HostShortcutDescriptor& delete_key = require_shortcut("delete");
+        const qhc::HostShortcutDescriptor& delete_key = require_shortcut("delete");
 	EXPECT_TRUE(same_text(delete_key.key, "Delete"));
 	EXPECT_FALSE(delete_key.primary_modifier);
 	EXPECT_TRUE(same_text(delete_key.target_id, "delete"));
@@ -185,11 +201,11 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogPreserves
 	EXPECT_TRUE(same_text(delete_backspace.target_id, "delete"));
 
 	const qhc::HostShortcutDescriptor& merge = require_shortcut("merge_vertices");
-	EXPECT_TRUE(merge.context == qhc::HostShortcutContext::viewport);
-	EXPECT_TRUE(same_text(merge.key, "M"));
+        EXPECT_TRUE(merge.context == qhc::HostShortcutContext::Viewport);
+        EXPECT_TRUE(same_text(merge.key, "M"));
 	EXPECT_FALSE(merge.shift);
-	EXPECT_TRUE(merge.target_kind == qhc::HostShortcutTargetKind::action);
-	EXPECT_TRUE(same_text(merge.target_id, "merge_vertices"));
+        EXPECT_TRUE(merge.target_kind == qhc::HostShortcutTargetKind::Action);
+        EXPECT_TRUE(same_text(merge.target_id, "merge_vertices"));
 	EXPECT_FALSE(merge.alternate);
 
 	const qhc::HostShortcutDescriptor& merge_center = require_shortcut("merge_vertices_at_center");
@@ -199,52 +215,58 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogPreserves
 	EXPECT_TRUE(merge_center.alternate);
 
 	const qhc::HostShortcutDescriptor& flip_mesh_normals = require_shortcut("flip_mesh_normals");
-	EXPECT_TRUE(flip_mesh_normals.context == qhc::HostShortcutContext::viewport);
-	EXPECT_TRUE(same_text(flip_mesh_normals.key, "F"));
+        EXPECT_TRUE(flip_mesh_normals.context ==
+                    qhc::HostShortcutContext::Viewport);
+        EXPECT_TRUE(same_text(flip_mesh_normals.key, "F"));
 	EXPECT_FALSE(flip_mesh_normals.primary_modifier);
 	EXPECT_FALSE(flip_mesh_normals.shift);
-	EXPECT_TRUE(flip_mesh_normals.target_kind == qhc::HostShortcutTargetKind::action);
-	EXPECT_TRUE(same_text(flip_mesh_normals.target_id, "invert_mesh"));
+        EXPECT_TRUE(flip_mesh_normals.target_kind ==
+                    qhc::HostShortcutTargetKind::Action);
+        EXPECT_TRUE(same_text(flip_mesh_normals.target_id, "invert_mesh"));
 }
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogKeepsOverloadedRShortcutsUnambiguous) {
 	const qhc::HostShortcutDescriptor& repeat = require_shortcut("repeat_last_action");
-	EXPECT_TRUE(repeat.context == qhc::HostShortcutContext::global);
-	EXPECT_TRUE(same_text(repeat.key, "R"));
+        EXPECT_TRUE(repeat.context == qhc::HostShortcutContext::Global);
+        EXPECT_TRUE(same_text(repeat.key, "R"));
 	EXPECT_TRUE(repeat.primary_modifier);
 	EXPECT_FALSE(repeat.shift);
-	EXPECT_TRUE(repeat.target_kind == qhc::HostShortcutTargetKind::editor_action);
-	EXPECT_TRUE(same_text(repeat.target_id, "repeat_last_action"));
+        EXPECT_TRUE(repeat.target_kind ==
+                    qhc::HostShortcutTargetKind::EditorAction);
+        EXPECT_TRUE(same_text(repeat.target_id, "repeat_last_action"));
 
 	const qhc::HostShortcutDescriptor& rotate = require_shortcut("rotate_tool");
-	EXPECT_TRUE(rotate.context == qhc::HostShortcutContext::viewport);
-	EXPECT_TRUE(same_text(rotate.key, "R"));
+        EXPECT_TRUE(rotate.context == qhc::HostShortcutContext::Viewport);
+        EXPECT_TRUE(same_text(rotate.key, "R"));
 	EXPECT_FALSE(rotate.primary_modifier);
 	EXPECT_FALSE(rotate.shift);
-	EXPECT_TRUE(rotate.target_kind == qhc::HostShortcutTargetKind::tool);
-	EXPECT_TRUE(same_text(rotate.target_id, "rotate"));
+        EXPECT_TRUE(rotate.target_kind == qhc::HostShortcutTargetKind::Tool);
+        EXPECT_TRUE(same_text(rotate.target_id, "rotate"));
 
 	const qhc::HostShortcutDescriptor& insert_edge_loop = require_shortcut("insert_edge_loop_tool");
-	EXPECT_TRUE(insert_edge_loop.context == qhc::HostShortcutContext::viewport);
-	EXPECT_TRUE(same_text(insert_edge_loop.key, "R"));
+        EXPECT_TRUE(insert_edge_loop.context ==
+                    qhc::HostShortcutContext::Viewport);
+        EXPECT_TRUE(same_text(insert_edge_loop.key, "R"));
 	EXPECT_FALSE(insert_edge_loop.primary_modifier);
 	EXPECT_TRUE(insert_edge_loop.shift);
-	EXPECT_TRUE(insert_edge_loop.target_kind == qhc::HostShortcutTargetKind::action);
-	EXPECT_TRUE(same_text(insert_edge_loop.target_id, "insert_edge_loop_tool"));
+        EXPECT_TRUE(insert_edge_loop.target_kind ==
+                    qhc::HostShortcutTargetKind::Action);
+        EXPECT_TRUE(same_text(insert_edge_loop.target_id, "insert_edge_loop_tool"));
 
 	const qhc::HostShortcutDescriptor& cut = require_shortcut("cut_tool");
-	EXPECT_TRUE(cut.context == qhc::HostShortcutContext::viewport);
-	EXPECT_TRUE(same_text(cut.key, "C"));
+        EXPECT_TRUE(cut.context == qhc::HostShortcutContext::Viewport);
+        EXPECT_TRUE(same_text(cut.key, "C"));
 	EXPECT_FALSE(cut.primary_modifier);
 	EXPECT_TRUE(cut.shift);
-	EXPECT_TRUE(cut.target_kind == qhc::HostShortcutTargetKind::action);
-	EXPECT_TRUE(same_text(cut.target_id, "cut_tool"));
+        EXPECT_TRUE(cut.target_kind == qhc::HostShortcutTargetKind::Action);
+        EXPECT_TRUE(same_text(cut.target_id, "cut_tool"));
 
 	const qhc::HostShortcutDescriptor& mirror_x = require_shortcut("mirror_axis_x");
 	EXPECT_TRUE(same_text(mirror_x.key, "X"));
 	EXPECT_TRUE(mirror_x.shift);
-	EXPECT_TRUE(mirror_x.target_kind == qhc::HostShortcutTargetKind::viewport_action);
-	EXPECT_TRUE(same_text(mirror_x.target_id, "mirror_axis_x"));
+        EXPECT_TRUE(mirror_x.target_kind ==
+                    qhc::HostShortcutTargetKind::ViewportAction);
+        EXPECT_TRUE(same_text(mirror_x.target_id, "mirror_axis_x"));
 
 	EXPECT_TRUE(same_text(require_shortcut("mirror_axis_y").key, "Y"));
 	EXPECT_TRUE(same_text(require_shortcut("mirror_axis_z").key, "Z"));

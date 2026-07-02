@@ -18,12 +18,11 @@ namespace quader {
  */
 class DrawnPlaneOverlayProjection final {
 public:
-    [[nodiscard]] static QVec3 supportPoint(std::span<const QVec3> visiblePoints, QVec3 faceNormal);
-    static void append(
-            ViewportOverlayFrame& frame,
-            std::span<const QVec3> visiblePoints,
-            QVec3 supportPoint,
-            bool hasLine);
+  [[nodiscard]] static QVec3
+  support_point(std::span<const QVec3> visible_points, QVec3 face_normal);
+  static void append(ViewportOverlayFrame &frame,
+                     std::span<const QVec3> visible_points, QVec3 support_point,
+                     bool has_line);
 };
 
 } // namespace quader

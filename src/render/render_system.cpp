@@ -22,53 +22,56 @@
 namespace quader {
 namespace {
 
-filament::backend::Backend toFilamentBackend(RendererBackend backend) {
-    switch (backend) {
-    case RendererBackend::Vulkan:
-        return filament::backend::Backend::VULKAN;
-    case RendererBackend::OpenGL:
-        return filament::backend::Backend::OPENGL;
-    case RendererBackend::Metal:
-        return filament::backend::Backend::METAL;
-    }
+filament::backend::Backend to_filament_backend(RendererBackend backend) {
+  switch (backend) {
+  case RendererBackend::Vulkan:
     return filament::backend::Backend::VULKAN;
+  case RendererBackend::OpenGL:
+    return filament::backend::Backend::OPENGL;
+  case RendererBackend::Metal:
+    return filament::backend::Backend::METAL;
+  }
+  return filament::backend::Backend::VULKAN;
 }
 
-std::uint64_t swapChainFlagsFor(filament::Engine& engine, SwapChainPresentationColorSpace colorSpace) {
-    switch (colorSpace) {
-    case SwapChainPresentationColorSpace::Native:
-        return 0u;
-    case SwapChainPresentationColorSpace::Srgb:
-        if (!filament::SwapChain::isSRGBSwapChainSupported(engine)) {
-            LOG_WARN("sRGB swapchain presentation was requested but is not supported by this Filament backend");
-        }
-        return filament::SwapChain::CONFIG_SRGB_COLORSPACE;
-    }
+std::uint64_t
+swap_chain_flags_for(filament::Engine &engine,
+                     SwapChainPresentationColorSpace color_space) {
+  switch (color_space) {
+  case SwapChainPresentationColorSpace::Native:
     return 0u;
+  case SwapChainPresentationColorSpace::Srgb:
+    if (!filament::SwapChain::isSRGBSwapChainSupported(engine)) {
+      LOG_WARN("sRGB swapchain presentation was requested but is not supported "
+               "by this Filament backend");
+    }
+    return filament::SwapChain::CONFIG_SRGB_COLORSPACE;
+  }
+  return 0u;
 }
 
-bool isFrameInfoDurationAvailable(filament::Renderer::FrameInfo::duration_ns duration) {
-    return duration > 0 &&
-            duration != filament::Renderer::FrameInfo::INVALID &&
-            duration != filament::Renderer::FrameInfo::PENDING;
+bool is_frame_info_duration_available(
+    filament::Renderer::FrameInfo::duration_ns duration) {
+  return duration > 0 && duration != filament::Renderer::FrameInfo::INVALID &&
+         duration != filament::Renderer::FrameInfo::PENDING;
 }
 
-double frameInfoDurationMs(filament::Renderer::FrameInfo::duration_ns duration) {
-    constexpr double kNanosecondsPerMillisecond = 1000000.0;
-    return static_cast<double>(duration) / kNanosecondsPerMillisecond;
+double
+frame_info_duration_ms(filament::Renderer::FrameInfo::duration_ns duration) {
+  constexpr double kNanosecondsPerMillisecond = 1000000.0;
+  return static_cast<double>(duration) / kNanosecondsPerMillisecond;
 }
 
 } // namespace
 
 RenderAdditionalSwapChain::RenderAdditionalSwapChain(
-        RenderSystem& owner,
-        filament::SwapChain* swapChain)
-    : owner_(&owner)
-    , swapChain_(swapChain) {}
+    RenderSystem &owner, filament::SwapChain *swap_chain)
+    : owner_(&owner), swap_chain_(swap_chain) {}
 
-RenderAdditionalSwapChain::RenderAdditionalSwapChain(RenderAdditionalSwapChain&& other) noexcept
-    : owner_(std::exchange(other.owner_, nullptr))
-    , swapChain_(std::exchange(other.swapChain_, nullptr)) {}
+RenderAdditionalSwapChain::RenderAdditionalSwapChain(
+    RenderAdditionalSwapChain &&other) noexcept
+    : owner_(std::exchange(other.owner_, nullptr)),
+      swap_chain_(std::exchange(other.swap_chain_, nullptr)) {}
 
 RenderAdditionalSwapChain& RenderAdditionalSwapChain::operator=(RenderAdditionalSwapChain&& other) noexcept {
     if (this == &other) {
@@ -76,7 +79,7 @@ RenderAdditionalSwapChain& RenderAdditionalSwapChain::operator=(RenderAdditional
     }
     reset();
     owner_ = std::exchange(other.owner_, nullptr);
-    swapChain_ = std::exchange(other.swapChain_, nullptr);
+    swap_chain_ = std::exchange(other.swap_chain_, nullptr);
     return *this;
 }
 
@@ -85,60 +88,64 @@ RenderAdditionalSwapChain::~RenderAdditionalSwapChain() {
 }
 
 void RenderAdditionalSwapChain::reset() {
-    if (owner_ != nullptr && swapChain_ != nullptr) {
-        owner_->destroyAdditionalSwapChain(swapChain_);
-    }
+  if (owner_ != nullptr && swap_chain_ != nullptr) {
+    owner_->destroy_additional_swap_chain(swap_chain_);
+  }
     owner_ = nullptr;
-    swapChain_ = nullptr;
+    swap_chain_ = nullptr;
 }
 
 RenderSystem::~RenderSystem() {
     shutdown();
 }
 
-bool RenderSystem::initialize(void* nativeWindow, const std::filesystem::path& executableDir, RenderConfig config) {
+bool RenderSystem::initialize(void *native_window,
+                              const std::filesystem::path &executable_dir,
+                              RenderConfig config) {
+  shutdown();
+  LOG_INFO("Initializing Filament renderer with {} backend",
+           to_string(config.backend));
+  const auto fail = [&](std::string_view message) {
+    LOG_ERROR("{}", message);
     shutdown();
-    LOG_INFO("Initializing Filament renderer with {} backend", toString(config.backend));
-    const auto fail = [&](std::string_view message) {
-        LOG_ERROR("{}", message);
-        shutdown();
-        return false;
-    };
+    return false;
+  };
 
-    engine_ = filament::Engine::create(toFilamentBackend(config.backend));
-    if (!engine_) {
-        return fail("Unable to create Filament engine");
-    }
-    LOG_INFO("Filament engine created");
+  engine_ = filament::Engine::create(to_filament_backend(config.backend));
+  if (!engine_) {
+    return fail("Unable to create Filament engine");
+  }
+  LOG_INFO("Filament engine created");
 
-    swapChain_ = engine_->createSwapChain(nativeWindow);
-    if (!swapChain_) {
-        return fail("Unable to create Filament swapchain");
-    }
-    LOG_INFO("Filament swapchain created for native window {}", nativeWindow);
-    renderer_ = engine_->createRenderer();
-    if (!renderer_) {
-        return fail("Unable to create Filament renderer");
-    }
-    LOG_INFO("Filament renderer created");
-    scene_ = engine_->createScene();
-    if (!scene_) {
-        return fail("Unable to create Filament scene");
-    }
-    LOG_INFO("Filament scene created");
-    const EnvironmentDocument& environment = config.settings.environment;
-    filament::Renderer::ClearOptions clear;
-    clear.clear = true;
-    clear.discard = false;
-    clear.clearColor = {environment.clearColor.x, environment.clearColor.y, environment.clearColor.z, environment.clearAlpha};
-    renderer_->setClearOptions(clear);
+  swap_chain_ = engine_->createSwapChain(native_window);
+  if (!swap_chain_) {
+    return fail("Unable to create Filament swapchain");
+  }
+  LOG_INFO("Filament swapchain created for native window {}", native_window);
+  renderer_ = engine_->createRenderer();
+  if (!renderer_) {
+    return fail("Unable to create Filament renderer");
+  }
+  LOG_INFO("Filament renderer created");
+  scene_ = engine_->createScene();
+  if (!scene_) {
+    return fail("Unable to create Filament scene");
+  }
+  LOG_INFO("Filament scene created");
+  const EnvironmentDocument &environment = config.settings.environment;
+  filament::Renderer::ClearOptions clear;
+  clear.clear = true;
+  clear.discard = false;
+  clear.clearColor = {environment.clear_color.x, environment.clear_color.y,
+                      environment.clear_color.z, environment.clear_alpha};
+  renderer_->setClearOptions(clear);
 
-    if (!materialLibrary_.initialize(*engine_, executableDir)) {
-        return fail("Unable to initialize Filament material library");
-    }
-    environmentLibrary_.initialize(*engine_, *scene_, executableDir);
+  if (!material_library_.initialize(*engine_, executable_dir)) {
+    return fail("Unable to initialize Filament material library");
+  }
+  environment_library_.initialize(*engine_, *scene_, executable_dir);
 
-    return true;
+  return true;
 }
 
 void RenderSystem::shutdown() {
@@ -146,9 +153,9 @@ void RenderSystem::shutdown() {
         return;
     }
 
-    textureRegistry_.clear();
-    environmentLibrary_.shutdown();
-    materialLibrary_.shutdown();
+    texture_registry_.clear();
+    environment_library_.shutdown();
+    material_library_.shutdown();
     if (scene_) {
         engine_->destroy(scene_);
         scene_ = nullptr;
@@ -157,103 +164,114 @@ void RenderSystem::shutdown() {
         engine_->destroy(renderer_);
         renderer_ = nullptr;
     }
-    if (swapChain_) {
-        engine_->destroy(swapChain_);
-        swapChain_ = nullptr;
+    if (swap_chain_) {
+      engine_->destroy(swap_chain_);
+      swap_chain_ = nullptr;
     }
 
-    framePerformanceStats_ = {};
-    frameCpuActive_ = false;
+    frame_performance_stats_ = {};
+    frame_cpu_active_ = false;
     filament::Engine::destroy(&engine_);
 }
 
-bool RenderSystem::beginFrame() {
-    QDR_PROFILE_FUNCTION();
-    return beginFrameWithSwapChain(swapChain_);
+bool RenderSystem::begin_frame() {
+  QDR_PROFILE_FUNCTION();
+  return begin_frame_with_swap_chain(swap_chain_);
 }
 
-bool RenderSystem::beginFrame(filament::SwapChain* swapChain) {
-    QDR_PROFILE_FUNCTION();
-    return beginFrameWithSwapChain(swapChain);
+bool RenderSystem::begin_frame(filament::SwapChain *swap_chain) {
+  QDR_PROFILE_FUNCTION();
+  return begin_frame_with_swap_chain(swap_chain);
 }
 
-void RenderSystem::endFrame() {
-    QDR_PROFILE_FUNCTION();
-    if (renderer_) {
-        renderer_->endFrame();
-        updateFramePerformanceStatsAfterEndFrame();
-    }
+void RenderSystem::end_frame() {
+  QDR_PROFILE_FUNCTION();
+  if (renderer_) {
+    renderer_->endFrame();
+    update_frame_performance_stats_after_end_frame();
+  }
 }
 
-bool RenderSystem::beginFrameWithSwapChain(filament::SwapChain* swapChain) {
-    QDR_PROFILE_FUNCTION();
-    if (renderer_ == nullptr || swapChain == nullptr) {
-        frameCpuActive_ = false;
-        return false;
-    }
-    if (!renderer_->beginFrame(swapChain)) {
-        frameCpuActive_ = false;
-        return false;
-    }
+bool RenderSystem::begin_frame_with_swap_chain(
+    filament::SwapChain *swap_chain) {
+  QDR_PROFILE_FUNCTION();
+  if (renderer_ == nullptr || swap_chain == nullptr) {
+    frame_cpu_active_ = false;
+    return false;
+  }
+  if (!renderer_->beginFrame(swap_chain)) {
+    frame_cpu_active_ = false;
+    return false;
+  }
 
-    frameCpuBegin_ = std::chrono::steady_clock::now();
-    frameCpuActive_ = true;
-    return true;
+  frame_cpu_begin_ = std::chrono::steady_clock::now();
+  frame_cpu_active_ = true;
+  return true;
 }
 
-void RenderSystem::updateFramePerformanceStatsAfterEndFrame() {
-    if (frameCpuActive_) {
-        const std::chrono::steady_clock::time_point frameCpuEnd = std::chrono::steady_clock::now();
-        framePerformanceStats_.cpuFrameMs =
-                std::chrono::duration<double, std::milli>(frameCpuEnd - frameCpuBegin_).count();
-        framePerformanceStats_.cpuFrameMsAvailable = true;
-        frameCpuActive_ = false;
-    }
+void RenderSystem::update_frame_performance_stats_after_end_frame() {
+  if (frame_cpu_active_) {
+    const std::chrono::steady_clock::time_point frame_cpu_end =
+        std::chrono::steady_clock::now();
+    frame_performance_stats_.cpu_frame_ms =
+        std::chrono::duration<double, std::milli>(frame_cpu_end -
+                                                  frame_cpu_begin_)
+            .count();
+    frame_performance_stats_.cpu_frame_ms_available = true;
+    frame_cpu_active_ = false;
+  }
 
-    framePerformanceStats_.gpuFrameMsAvailable = false;
-    const std::size_t historySize = std::min<std::size_t>(renderer_->getMaxFrameHistorySize(), 8u);
-    const auto history = renderer_->getFrameInfoHistory(historySize);
-    for (std::size_t index = history.size(); index > 0u; --index) {
-        const filament::Renderer::FrameInfo& info = history[index - 1u];
-        if (isFrameInfoDurationAvailable(info.denoisedGpuFrameDuration)) {
-            framePerformanceStats_.gpuFrameMs = frameInfoDurationMs(info.denoisedGpuFrameDuration);
-            framePerformanceStats_.gpuFrameMsAvailable = true;
-            return;
-        }
-        if (isFrameInfoDurationAvailable(info.gpuFrameDuration)) {
-            framePerformanceStats_.gpuFrameMs = frameInfoDurationMs(info.gpuFrameDuration);
-            framePerformanceStats_.gpuFrameMsAvailable = true;
-            return;
-        }
+  frame_performance_stats_.gpu_frame_ms_available = false;
+  const std::size_t history_size =
+      std::min<std::size_t>(renderer_->getMaxFrameHistorySize(), 8u);
+  const auto history = renderer_->getFrameInfoHistory(history_size);
+  for (std::size_t index = history.size(); index > 0u; --index) {
+    const filament::Renderer::FrameInfo &info = history[index - 1u];
+    if (is_frame_info_duration_available(info.denoisedGpuFrameDuration)) {
+      frame_performance_stats_.gpu_frame_ms =
+          frame_info_duration_ms(info.denoisedGpuFrameDuration);
+      frame_performance_stats_.gpu_frame_ms_available = true;
+      return;
     }
+    if (is_frame_info_duration_available(info.gpuFrameDuration)) {
+      frame_performance_stats_.gpu_frame_ms =
+          frame_info_duration_ms(info.gpuFrameDuration);
+      frame_performance_stats_.gpu_frame_ms_available = true;
+      return;
+    }
+  }
 }
 
-RenderAdditionalSwapChain RenderSystem::createAdditionalSwapChain(
-        void* nativeWindow,
-        SwapChainPresentationColorSpace colorSpace) {
-    if (!engine_ || nativeWindow == nullptr) {
-        return {};
-    }
+RenderAdditionalSwapChain RenderSystem::create_additional_swap_chain(
+    void *native_window, SwapChainPresentationColorSpace color_space) {
+  if (!engine_ || native_window == nullptr) {
+    return {};
+  }
 
-    const std::uint64_t flags = swapChainFlagsFor(*engine_, colorSpace);
-    filament::SwapChain* swapChain = engine_->createSwapChain(nativeWindow, flags);
-    LOG_INFO("Filament additional swapchain created for native window {} with flags {}", nativeWindow, flags);
-    return RenderAdditionalSwapChain(*this, swapChain);
+  const std::uint64_t flags = swap_chain_flags_for(*engine_, color_space);
+  filament::SwapChain *swap_chain =
+      engine_->createSwapChain(native_window, flags);
+  LOG_INFO("Filament additional swapchain created for native window {} with "
+           "flags {}",
+           native_window, flags);
+  return RenderAdditionalSwapChain(*this, swap_chain);
 }
 
-void RenderSystem::destroyAdditionalSwapChain(filament::SwapChain* swapChain) {
-    if (!engine_ || !swapChain) {
-        return;
-    }
+void RenderSystem::destroy_additional_swap_chain(
+    filament::SwapChain *swap_chain) {
+  if (!engine_ || !swap_chain) {
+    return;
+  }
 
-    engine_->destroy(swapChain);
+  engine_->destroy(swap_chain);
 }
 
-void RenderSystem::applySceneSettings(const SceneSettingsComponent& settings) {
-    if (!engine_ || !scene_) {
-        return;
-    }
-    environmentLibrary_.apply(settings.environment);
+void RenderSystem::apply_scene_settings(
+    const SceneSettingsComponent &settings) {
+  if (!engine_ || !scene_) {
+    return;
+  }
+  environment_library_.apply(settings.environment);
 }
 
 } // namespace quader

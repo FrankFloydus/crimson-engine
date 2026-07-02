@@ -18,59 +18,61 @@ bool SceneRenderMeshEntry::renderable() const {
     return mesh != nullptr && !mesh->vertices.empty() && !mesh->indices.empty();
 }
 
-bool SceneRenderMeshEntry::castShadows() const {
-    return meshComponent != nullptr && meshComponent->castShadows;
+bool SceneRenderMeshEntry::cast_shadows() const {
+  return mesh_component != nullptr && mesh_component->cast_shadows;
 }
 
-bool SceneRenderMeshEntry::doubleSided() const {
-    return meshComponent != nullptr && meshComponent->doubleSided;
+bool SceneRenderMeshEntry::double_sided() const {
+  return mesh_component != nullptr && mesh_component->double_sided;
 }
 
-SceneRenderExtractionPlan buildSceneRenderExtractionPlan(
-        const SceneDocument& document,
-        const AssetRegistry& assets,
-        const MaterialBindingService& materialBinding) {
-    QDR_PROFILE_FUNCTION();
-    SceneRenderExtractionPlan plan;
+SceneRenderExtractionPlan build_scene_render_extraction_plan(
+    const SceneDocument &document, const AssetRegistry &assets,
+    const MaterialBindingService &material_binding) {
+  QDR_PROFILE_FUNCTION();
+  SceneRenderExtractionPlan plan;
 
-    for (const EntityId entityId : document.entities()) {
-        QDR_PROFILE_SCOPE("Scene render extract entity");
-        if (!document.isEffectivelyVisible(entityId)) {
-            continue;
-        }
-
-        const QMat4 worldTransform = document.worldTransformMatrix(entityId);
-
-        if (const MeshComponent* meshComponent = document.mesh(entityId)) {
-            const MaterialComponent* materialComponent = document.material(entityId);
-            const AssetId materialId = materialComponent ? materialComponent->material : InvalidAssetId;
-            SceneRenderMeshEntry entry{
-                    .entityId = entityId,
-                    .meshId = meshComponent->mesh,
-                    .mesh = assets.mesh(meshComponent->mesh),
-                    .meshComponent = meshComponent,
-                    .materialComponent = materialComponent,
-                    .materialId = materialId,
-                    .materialRevision = materialBinding.materialRevision(assets, materialComponent),
-                    .worldTransform = worldTransform,
-            };
-            if (entry.renderable()) {
-                plan.liveMeshEntities.insert(entityId);
-            }
-            plan.meshes.push_back(entry);
-        }
-
-        if (const LightComponent* light = document.light(entityId)) {
-            plan.liveLightEntities.insert(entityId);
-            plan.lights.push_back(SceneRenderLightEntry{
-                    .entityId = entityId,
-                    .light = light,
-                    .worldTransform = worldTransform,
-            });
-        }
+  for (const EntityId entity_id : document.entities()) {
+    QDR_PROFILE_SCOPE("Scene render extract entity");
+    if (!document.is_effectively_visible(entity_id)) {
+      continue;
     }
 
-    return plan;
+    const QMat4 world_transform = document.world_transform_matrix(entity_id);
+
+    if (const MeshComponent *mesh_component = document.mesh(entity_id)) {
+      const MaterialComponent *material_component =
+          document.material(entity_id);
+      const AssetId material_id =
+          material_component ? material_component->material : kInvalidAssetId;
+      SceneRenderMeshEntry entry{
+          .entity_id = entity_id,
+          .mesh_id = mesh_component->mesh,
+          .mesh = assets.mesh(mesh_component->mesh),
+          .mesh_component = mesh_component,
+          .material_component = material_component,
+          .material_id = material_id,
+          .material_revision =
+              material_binding.material_revision(assets, material_component),
+          .world_transform = world_transform,
+      };
+      if (entry.renderable()) {
+        plan.live_mesh_entities.insert(entity_id);
+      }
+      plan.meshes.push_back(entry);
+    }
+
+    if (const LightComponent *light = document.light(entity_id)) {
+      plan.live_light_entities.insert(entity_id);
+      plan.lights.push_back(SceneRenderLightEntry{
+          .entity_id = entity_id,
+          .light = light,
+          .world_transform = world_transform,
+      });
+    }
+  }
+
+  return plan;
 }
 
 } // namespace quader

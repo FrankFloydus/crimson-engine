@@ -23,8 +23,8 @@ class InsertEdgeLoopTool final : public EditorTool {
 public:
 	[[nodiscard]] ViewportInteractionTool tool_id() const override
 	{
-		return ViewportInteractionTool::insert_edge_loop;
-	}
+          return ViewportInteractionTool::InsertEdgeLoop;
+        }
 
 	[[nodiscard]] std::string_view id() const override
 	{
@@ -58,14 +58,14 @@ InsertEdgeLoopPreview build_preview(const std::vector<PolygonObject>& objects, i
 	const quader_poly::OverlayData overlay = quader_poly::build_edge_loop_preview(objects[object_index].document, preview.edge, preview.factor);
 	preview.lines.reserve(overlay.lines.size());
 	for (const quader_poly::OverlayLine& line : overlay.lines) {
-		preview.lines.push_back({
-			SelectionOverlayLayer::hover_edge,
-			line.start,
-			line.end,
-			line.color,
-			line.width_pixels,
-		});
-	}
+          preview.lines.push_back({
+              SelectionOverlayLayer::HoverEdge,
+              line.start,
+              line.end,
+              line.color,
+              line.width_pixels,
+          });
+        }
 	preview.valid = !preview.lines.empty();
 	if (!preview.valid) {
 		preview.message = "Edge loop insertion needs at least one quad face.";
@@ -75,10 +75,10 @@ InsertEdgeLoopPreview build_preview(const std::vector<PolygonObject>& objects, i
 
 bool has_seed(const InsertEdgeLoopToolState& state)
 {
-	return state.object_id > 0 &&
-		state.edge.a != quader_poly::invalid_element_id &&
-		state.edge.b != quader_poly::invalid_element_id &&
-		state.edge.a != state.edge.b;
+  return state.object_id > 0 &&
+         state.edge.a != quader_poly::kInvalidElementId &&
+         state.edge.b != quader_poly::kInvalidElementId &&
+         state.edge.a != state.edge.b;
 }
 
 void reset(InsertEdgeLoopToolState& state)
@@ -102,11 +102,11 @@ void clear_preview(
 	state.preview_lines.clear();
 
 	hover.object_id = object_id;
-	hover.kind = SelectionHoverKind::edge;
-	hover.edge = state.edge;
-	hover.vertex_id = quader_poly::invalid_element_id;
-	hover.face_id = quader_poly::invalid_element_id;
-	hover.selected_modifier_pressed = false;
+        hover.kind = SelectionHoverKind::Edge;
+        hover.edge = state.edge;
+        hover.vertex_id = quader_poly::kInvalidElementId;
+        hover.face_id = quader_poly::kInvalidElementId;
+        hover.selected_modifier_pressed = false;
 	hover.candidate_object_id = object_id;
 }
 
@@ -128,11 +128,11 @@ bool set_preview(
 	state.preview_lines = preview.valid ? preview.lines : std::vector<SelectionOverlayLine> {};
 
 	hover.object_id = object_id;
-	hover.kind = SelectionHoverKind::edge;
-	hover.edge = state.edge;
-	hover.vertex_id = quader_poly::invalid_element_id;
-	hover.face_id = quader_poly::invalid_element_id;
-	hover.selected_modifier_pressed = false;
+        hover.kind = SelectionHoverKind::Edge;
+        hover.edge = state.edge;
+        hover.vertex_id = quader_poly::kInvalidElementId;
+        hover.face_id = quader_poly::kInvalidElementId;
+        hover.selected_modifier_pressed = false;
 	hover.candidate_object_id = object_id;
 	return preview.valid;
 }
@@ -173,8 +173,8 @@ bool update_locked_seed(
 
 const EditorTool& insert_edge_loop_tool()
 {
-	static const InsertEdgeLoopTool tool;
-	return tool;
+  static const InsertEdgeLoopTool kTool;
+  return kTool;
 }
 
 InsertEdgeLoopPreview build_insert_edge_loop_preview(const std::vector<PolygonObject>& objects, int object_id, quader_poly::Edge edge, float factor)
@@ -250,17 +250,19 @@ bool EditorSession::set_insert_edge_loop_preview_from_pick(
 		bool snap_enabled,
 		bool dragging) const
 {
-	pick_options.mode = quader_poly::SelectionMode::edge;
-	const std::optional<PickHitRecord> hit = pick_nearest({ ray, pick_options });
-	if (!hit.has_value() || hit->kind != quader_poly::ElementKind::edge) {
-		if (update_insert_edge_loop_locked_seed(state, state_.objects, hover, ray, grid_size, snap_enabled, dragging)) {
-			return true;
-		}
-		state.active = true;
-		return false;
-	}
+  pick_options.mode = quader_poly::SelectionMode::Edge;
+  const std::optional<PickHitRecord> hit = pick_nearest({ray, pick_options});
+  if (!hit.has_value() || hit->kind != quader_poly::ElementKind::Edge) {
+    if (update_insert_edge_loop_locked_seed(state, state_.objects, hover, ray,
+                                            grid_size, snap_enabled,
+                                            dragging)) {
+      return true;
+    }
+    state.active = true;
+    return false;
+  }
 
-	const int object_index = object_index_by_id(state_.objects, hit->object_id);
+        const int object_index = object_index_by_id(state_.objects, hit->object_id);
 	const std::optional<float> raw_factor = object_index < 0 ?
 		std::optional<float> {} :
 		quader_poly::edge_factor_from_position(state_.objects[object_index].document, hit->edge, hit->local_position);

@@ -17,9 +17,9 @@ namespace quader_editor_core {
  * Enumerates ExtrudePreviewMode values used by the modeling layer.
  */
 enum class ExtrudePreviewMode {
-	zero,
-	positive,
-	negative,
+  Zero,
+  Positive,
+  Negative,
 };
 
 /**
@@ -80,8 +80,8 @@ struct ExtrudePreviewOperation {
 	int active_cut_count = 0;
 	int max_cut_count = 0;
 	int requested_cut_count = 0;
-	ExtrudePreviewMode preview_mode = ExtrudePreviewMode::zero;
-	bool select_source = true;
+        ExtrudePreviewMode preview_mode = ExtrudePreviewMode::Zero;
+        bool select_source = true;
 	bool clear_preview_meshes = true;
 };
 

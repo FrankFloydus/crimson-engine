@@ -15,41 +15,42 @@
 
 namespace quader {
 
-inline float viewportDistanceSquared(ImVec2 a, ImVec2 b) {
-    const float dx = a.x - b.x;
-    const float dy = a.y - b.y;
-    return dx * dx + dy * dy;
+inline float viewport_distance_squared(ImVec2 a, ImVec2 b) {
+  const float dx = a.x - b.x;
+  const float dy = a.y - b.y;
+  return dx * dx + dy * dy;
 }
 
-inline float viewportDistanceToSegmentSquared(ImVec2 point, ImVec2 a, ImVec2 b) {
-    const ImVec2 ab{b.x - a.x, b.y - a.y};
-    const ImVec2 ap{point.x - a.x, point.y - a.y};
-    const float lengthSquared = ab.x * ab.x + ab.y * ab.y;
-    if (lengthSquared <= 0.0001f) {
-        return viewportDistanceSquared(point, a);
-    }
+inline float viewport_distance_to_segment_squared(ImVec2 point, ImVec2 a,
+                                                  ImVec2 b) {
+  const ImVec2 ab{b.x - a.x, b.y - a.y};
+  const ImVec2 ap{point.x - a.x, point.y - a.y};
+  const float length_squared = ab.x * ab.x + ab.y * ab.y;
+  if (length_squared <= 0.0001f) {
+    return viewport_distance_squared(point, a);
+  }
 
-    const float t = std::clamp((ap.x * ab.x + ap.y * ab.y) / lengthSquared, 0.0f, 1.0f);
-    const ImVec2 closest{a.x + ab.x * t, a.y + ab.y * t};
-    return viewportDistanceSquared(point, closest);
+  const float t =
+      std::clamp((ap.x * ab.x + ap.y * ab.y) / length_squared, 0.0f, 1.0f);
+  const ImVec2 closest{a.x + ab.x * t, a.y + ab.y * t};
+  return viewport_distance_squared(point, closest);
 }
 
-inline std::optional<ImVec2> projectWorldToViewport(
-        QVec3 world,
-        const ViewportCameraController& camera,
-        ImVec2 itemMin,
-        ImVec2 itemSize) {
-    (void)itemSize;
+inline std::optional<ImVec2>
+project_world_to_viewport(QVec3 world, const ViewportCameraController &camera,
+                          ImVec2 item_min, ImVec2 item_size) {
+  (void)item_size;
 
-    const ViewportScreenPoint projected = camera.projectWorldPoint(world);
-    if (projected.depth <= camera.state().nearPlane || projected.depth >= camera.state().farPlane) {
-        return std::nullopt;
-    }
+  const ViewportScreenPoint projected = camera.project_world_point(world);
+  if (projected.depth <= camera.state().near_plane ||
+      projected.depth >= camera.state().far_plane) {
+    return std::nullopt;
+  }
 
-    return ImVec2{
-            itemMin.x + projected.position.x,
-            itemMin.y + projected.position.y,
-    };
+  return ImVec2{
+      item_min.x + projected.position.x,
+      item_min.y + projected.position.y,
+  };
 }
 
 } // namespace quader

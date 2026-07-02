@@ -12,32 +12,32 @@ namespace {
 
 std::vector<KnifePointTarget> quad_knife_points(const qdr_test::QuadFixture& fixture)
 {
-	return {
-		{
-			KnifePointTargetKind::existing_edge,
-			invalid_element_id,
-			make_edge(fixture.bottom_left, fixture.bottom_right),
-			0.5F,
-			fixture.face,
-			{},
-		},
-		{
-			KnifePointTargetKind::face_point,
-			invalid_element_id,
-			{},
-			0.5F,
-			fixture.face,
-			{ 0.0F, 0.0F, 0.0F },
-		},
-		{
-			KnifePointTargetKind::existing_edge,
-			invalid_element_id,
-			make_edge(fixture.top_right, fixture.top_left),
-			0.5F,
-			fixture.face,
-			{},
-		},
-	};
+  return {
+      {
+          KnifePointTargetKind::ExistingEdge,
+          kInvalidElementId,
+          make_edge(fixture.bottom_left, fixture.bottom_right),
+          0.5F,
+          fixture.face,
+          {},
+      },
+      {
+          KnifePointTargetKind::FacePoint,
+          kInvalidElementId,
+          {},
+          0.5F,
+          fixture.face,
+          {0.0F, 0.0F, 0.0F},
+      },
+      {
+          KnifePointTargetKind::ExistingEdge,
+          kInvalidElementId,
+          make_edge(fixture.top_right, fixture.top_left),
+          0.5F,
+          fixture.face,
+          {},
+      },
+  };
 }
 
 } // namespace
@@ -107,7 +107,8 @@ TEST(QdrModelingRuntimeOperationCommitKnifeToolTests, CommitKnifeToolRejectsInco
 
 		EXPECT_FALSE(result.ok);
 		EXPECT_FALSE(result.changed);
-		EXPECT_TRUE(state.status == quader_editor_core::KnifeToolStatus::invalid_target);
-		EXPECT_TRUE(quader_editor_core::knife_tool_preview(state).active);
+                EXPECT_TRUE(state.status ==
+                            quader_editor_core::KnifeToolStatus::InvalidTarget);
+                EXPECT_TRUE(quader_editor_core::knife_tool_preview(state).active);
 	}
 }

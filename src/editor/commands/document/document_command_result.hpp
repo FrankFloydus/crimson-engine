@@ -21,66 +21,67 @@ using DocumentCommandResult = CommandResult;
  * Stores Create Entity Command payload data for document command callers.
  */
 struct DocumentCreateEntityResult : DocumentCommandResult {
-    EntityId entity = InvalidEntityId;
+  EntityId entity = kInvalidEntityId;
 };
 
 /**
  * Stores Group Selection Command payload data for document command callers.
  */
 struct DocumentGroupSelectionResult : DocumentCommandResult {
-    EntityId groupEntity = InvalidEntityId;
+  EntityId group_entity = kInvalidEntityId;
 };
 
 /**
  * Stores Duplicate Entity Command payload data for document command callers.
  */
 struct DocumentDuplicateEntityResult : DocumentCommandResult {
-    EntityId duplicateEntity = InvalidEntityId;
+  EntityId duplicate_entity = kInvalidEntityId;
 };
 
 /**
  * Stores Duplicate Selected Hierarchy Command payload data for document command callers.
  */
 struct DocumentDuplicateHierarchyResult : DocumentCommandResult {
-    std::vector<EntityId> duplicateRoots;
+  std::vector<EntityId> duplicate_roots;
 };
 
-inline DocumentCommandResult documentCommandChangedResult() {
-    return {
-            .ok = true,
-            .changed = true,
-    };
+inline DocumentCommandResult document_command_changed_result() {
+  return {
+      .ok = true,
+      .changed = true,
+  };
 }
 
-inline DocumentCommandResult documentCommandUnchangedResult() {
-    return {
-            .ok = true,
-            .changed = false,
-    };
+inline DocumentCommandResult document_command_unchanged_result() {
+  return {
+      .ok = true,
+      .changed = false,
+  };
 }
 
-inline DocumentCommandResult documentCommandMissingEntityResult() {
-    return {
-            .ok = false,
-            .changed = false,
-            .message = "Entity does not exist",
-    };
+inline DocumentCommandResult document_command_missing_entity_result() {
+  return {
+      .ok = false,
+      .changed = false,
+      .message = "Entity does not exist",
+  };
 }
 
-inline DocumentCommandResult documentCommandMissingCommandResult() {
-    return {
-            .ok = false,
-            .changed = false,
-            .message = "Document command is missing",
-    };
+inline DocumentCommandResult document_command_missing_command_result() {
+  return {
+      .ok = false,
+      .changed = false,
+      .message = "Document command is missing",
+  };
 }
 
-inline DocumentCommandResult documentCommandInvalidRequestResult(std::string message) {
-    return {
-            .ok = false,
-            .changed = false,
-            .message = std::move(message),
-    };
+inline DocumentCommandResult
+document_command_invalid_request_result(std::string message) {
+  return {
+      .ok = false,
+      .changed = false,
+      .message = std::move(message),
+  };
 }
 
 } // namespace quader

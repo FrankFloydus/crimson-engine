@@ -22,24 +22,32 @@ class QuaderAssetApi final {
 public:
     QuaderAssetApi(QuaderApiSession session, QuaderApiMutationRunner& mutations);
 
-    QuaderApiResult<QuaderAssetRef> addMaterial(QuaderMaterialAsset material);
-    QuaderApiResult<QuaderAssetRef> addMaterial(const QuaderMaterialArgs& args);
-    QuaderApiResult<QuaderAssetRef> addTexture(QuaderTextureAsset texture);
-    QuaderApiResult<QuaderAssetRef> addStandaloneMesh(QuaderMeshAsset mesh);
+    QuaderApiResult<QuaderAssetRef> add_material(QuaderMaterialAsset material);
+    QuaderApiResult<QuaderAssetRef>
+    add_material(const QuaderMaterialArgs &args);
+    QuaderApiResult<QuaderAssetRef> add_texture(QuaderTextureAsset texture);
+    QuaderApiResult<QuaderAssetRef> add_standalone_mesh(QuaderMeshAsset mesh);
 
-    QuaderApiVoidResult replaceStandaloneMesh(AssetId mesh, QuaderMeshAsset replacement);
-    QuaderApiVoidResult replaceMaterial(AssetId material, QuaderMaterialAsset replacement);
-    QuaderApiVoidResult replaceTexture(AssetId texture, QuaderTextureAsset replacement);
+    QuaderApiVoidResult replace_standalone_mesh(AssetId mesh,
+                                                QuaderMeshAsset replacement);
+    QuaderApiVoidResult replace_material(AssetId material,
+                                         QuaderMaterialAsset replacement);
+    QuaderApiVoidResult replace_texture(AssetId texture,
+                                        QuaderTextureAsset replacement);
 
-    QuaderApiVoidResult setMaterialBaseColor(AssetId material, QVec3 color);
-    QuaderApiVoidResult setMaterialRoughness(AssetId material, float roughness);
-    QuaderApiVoidResult setMaterialMetallic(AssetId material, float metallic);
-    QuaderApiVoidResult setMaterialTexture(AssetId material, std::string slot, AssetId texture);
+    QuaderApiVoidResult set_material_base_color(AssetId material, QVec3 color);
+    QuaderApiVoidResult set_material_roughness(AssetId material,
+                                               float roughness);
+    QuaderApiVoidResult set_material_metallic(AssetId material, float metallic);
+    QuaderApiVoidResult set_material_texture(AssetId material, std::string slot,
+                                             AssetId texture);
 
-    QuaderApiVoidResult assignMaterialToEntity(EntityId entity, AssetId material);
-    QuaderApiVoidResult assignMaterialToObject(QuaderModelingObjectRef object, AssetId material);
+    QuaderApiVoidResult assign_material_to_entity(EntityId entity,
+                                                  AssetId material);
+    QuaderApiVoidResult
+    assign_material_to_object(QuaderModelingObjectRef object, AssetId material);
 
-private:
+  private:
     QuaderApiSession session_;
     QuaderApiMutationRunner& mutations_;
 };

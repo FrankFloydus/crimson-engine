@@ -35,7 +35,8 @@ quader_geometry::QLine3<double> to_geometry_line(quader_poly::Ray ray)
 
 quader_geometry::QPlane3<double> to_geometry_plane(quader::QVec3 origin, quader::QVec3 normal)
 {
-	return quader_geometry::plane_from_point_normal(to_geometry_vec3(origin), to_geometry_vec3(normal), tool_epsilon);
+  return quader_geometry::plane_from_point_normal(
+      to_geometry_vec3(origin), to_geometry_vec3(normal), kToolEpsilon);
 }
 
 quader::QVec3 project_poly_point_to_plane(quader::QVec3 point, const quader_geometry::QPlane3<double>& plane)
@@ -56,18 +57,19 @@ bool project_viewport_point(const ViewportCameraState& camera, quader::QVec3 poi
 	const double aspect = width / height;
 	const quader::QVec3 local = point - origin;
 	const double view_distance = vec3_dot(local, forward);
-	if (camera.projection == CameraProjection::orthographic) {
-		const double half_height = std::max(0.0001, camera.orthographic_size * 0.5);
-		const double ndc_x = vec3_dot(local, right) / (half_height * aspect);
-		const double ndc_y = vec3_dot(local, up) / half_height;
-		out_screen = {
-			static_cast<float>((ndc_x + 1.0) * 0.5 * width),
-			static_cast<float>((1.0 - ndc_y) * 0.5 * height),
-		};
-		return std::isfinite(out_screen.x) && std::isfinite(out_screen.y);
-	}
+        if (camera.projection == CameraProjection::Orthographic) {
+          const double half_height =
+              std::max(0.0001, camera.orthographic_size * 0.5);
+          const double ndc_x = vec3_dot(local, right) / (half_height * aspect);
+          const double ndc_y = vec3_dot(local, up) / half_height;
+          out_screen = {
+              static_cast<float>((ndc_x + 1.0) * 0.5 * width),
+              static_cast<float>((1.0 - ndc_y) * 0.5 * height),
+          };
+          return std::isfinite(out_screen.x) && std::isfinite(out_screen.y);
+        }
 
-	if (view_distance <= 0.0001) {
+        if (view_distance <= 0.0001) {
 		return false;
 	}
 	const double fov = std::clamp(camera.fov_degrees, 1.0, 179.0) * std::acos(-1.0) / 180.0;
@@ -83,10 +85,10 @@ bool project_viewport_point(const ViewportCameraState& camera, quader::QVec3 poi
 
 bool viewport_point_is_behind_camera(const ViewportCameraState& camera, quader::QVec3 point)
 {
-	if (camera.projection == CameraProjection::orthographic) {
-		return false;
-	}
-	const quader::QVec3 forward = vec3_is_tiny(camera.transform.z_axis) ? quader::QVec3 { 0.0F, 0.0F, -1.0F } : normalized_axis(vec3_scale(camera.transform.z_axis, -1.0));
+  if (camera.projection == CameraProjection::Orthographic) {
+    return false;
+  }
+        const quader::QVec3 forward = vec3_is_tiny(camera.transform.z_axis) ? quader::QVec3 { 0.0F, 0.0F, -1.0F } : normalized_axis(vec3_scale(camera.transform.z_axis, -1.0));
 	return vec3_dot(point - camera.transform.origin, forward) <= 0.0001F;
 }
 
@@ -101,17 +103,17 @@ quader_poly::Ray ray_from_viewport_screen_point(const ViewportCameraState& camer
 	const double aspect = width / height;
 	const double ndc_x = (static_cast<double>(screen.x) / width) * 2.0 - 1.0;
 	const double ndc_y = 1.0 - (static_cast<double>(screen.y) / height) * 2.0;
-	if (camera.projection == CameraProjection::orthographic) {
-		const double half_height = std::max(0.0001, camera.orthographic_size * 0.5);
-		return {
-			origin +
-				vec3_scale(right, ndc_x * half_height * aspect) +
-				vec3_scale(up, ndc_y * half_height),
-			forward,
-		};
-	}
+        if (camera.projection == CameraProjection::Orthographic) {
+          const double half_height =
+              std::max(0.0001, camera.orthographic_size * 0.5);
+          return {
+              origin + vec3_scale(right, ndc_x * half_height * aspect) +
+                  vec3_scale(up, ndc_y * half_height),
+              forward,
+          };
+        }
 
-	const double fov = std::clamp(camera.fov_degrees, 1.0, 179.0) * std::acos(-1.0) / 180.0;
+        const double fov = std::clamp(camera.fov_degrees, 1.0, 179.0) * std::acos(-1.0) / 180.0;
 	const double tangent = std::tan(fov * 0.5);
 	quader::QVec3 direction =
 		forward +
@@ -123,11 +125,11 @@ quader_poly::Ray ray_from_viewport_screen_point(const ViewportCameraState& camer
 
 quader::QVec3 cut_grid_plane_normal_for_camera(const ViewportCameraState& camera)
 {
-	if (camera.projection != CameraProjection::orthographic) {
-		return { 0.0F, 1.0F, 0.0F };
-	}
+  if (camera.projection != CameraProjection::Orthographic) {
+    return {0.0F, 1.0F, 0.0F};
+  }
 
-	const quader::QVec3 forward = vec3_is_tiny(camera.transform.z_axis) ?
+        const quader::QVec3 forward = vec3_is_tiny(camera.transform.z_axis) ?
 		quader::QVec3 { 0.0F, 0.0F, -1.0F } :
 		normalized_axis(vec3_scale(camera.transform.z_axis, -1.0));
 	const float abs_x = std::abs(forward.x);
@@ -150,18 +152,18 @@ CutGridPointResult viewport_grid_point_from_ray(const ViewportCameraState& camer
 	}
 
 	const quader_geometry::QPlane3<double> plane = to_geometry_plane({}, plane_normal);
-	const quader_geometry::QLinePlaneHit<double> hit = quader_geometry::intersect_line_plane(
-		to_geometry_line(ray),
-		plane,
-		tool_epsilon);
-	quader::QVec3 point;
-	if (hit.type == quader_geometry::QPlaneIntersectionType::point) {
-		point = to_poly_vec3(quader_geometry::project_point_to_plane(hit.point, plane));
-	} else {
-		point = project_poly_point_to_plane(ray.origin, plane);
-	}
+        const quader_geometry::QLinePlaneHit<double> hit =
+            quader_geometry::intersect_line_plane(to_geometry_line(ray), plane,
+                                                  kToolEpsilon);
+        quader::QVec3 point;
+        if (hit.type == quader_geometry::QPlaneIntersectionType::Point) {
+          point = to_poly_vec3(
+              quader_geometry::project_point_to_plane(hit.point, plane));
+        } else {
+          point = project_poly_point_to_plane(ray.origin, plane);
+        }
 
-	return { true, {}, snap_knife_point_to_grid(point, grid_size, snap_enabled), plane_normal };
+        return { true, {}, snap_knife_point_to_grid(point, grid_size, snap_enabled), plane_normal };
 }
 
 CutGridPointResult cut_grid_point_from_ray(const ViewportCameraState& camera, quader_poly::Ray ray, double grid_size)

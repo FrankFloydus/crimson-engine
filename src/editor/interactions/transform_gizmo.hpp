@@ -18,33 +18,33 @@ namespace quader_editor_core {
  * Represents a Transform Gizmo QAxis Basis value used by the modal modeling interaction layer.
  */
 struct TransformGizmoAxisBasis {
-	TransformAxis axis = TransformAxis::none;
-	quader::QVec3 local_direction;
-	quader::QVec3 world_direction;
-	quader::QVec3 ring_world_a;
-	quader::QVec3 ring_world_b;
+  TransformAxis axis = TransformAxis::None;
+  quader::QVec3 local_direction;
+  quader::QVec3 world_direction;
+  quader::QVec3 ring_world_a;
+  quader::QVec3 ring_world_b;
 };
 
 /**
  * Represents a Transform Gizmo Pick Candidate value used by the modal modeling interaction layer.
  */
 struct TransformGizmoPickCandidate {
-	TransformAxis axis = TransformAxis::none;
-	quader::QVec3 local_direction;
-	quader::QVec3 world_direction;
-	quader::QVec2 screen_tip;
-	bool visible = false;
+  TransformAxis axis = TransformAxis::None;
+  quader::QVec3 local_direction;
+  quader::QVec3 world_direction;
+  quader::QVec2 screen_tip;
+  bool visible = false;
 };
 
 /**
  * Represents a Transform Gizmo Ring Pick Candidate value used by the modal modeling interaction layer.
  */
 struct TransformGizmoRingPickCandidate {
-	TransformAxis axis = TransformAxis::none;
-	quader::QVec3 local_direction;
-	quader::QVec3 world_direction;
-	quader::QVec2 a;
-	quader::QVec2 b;
+  TransformAxis axis = TransformAxis::None;
+  quader::QVec3 local_direction;
+  quader::QVec3 world_direction;
+  quader::QVec2 a;
+  quader::QVec2 b;
 };
 
 /**
@@ -52,8 +52,8 @@ struct TransformGizmoRingPickCandidate {
  */
 struct TransformGizmoPickHit {
 	bool hit = false;
-	TransformAxis axis = TransformAxis::none;
-	quader::QVec3 local_direction;
+        TransformAxis axis = TransformAxis::None;
+        quader::QVec3 local_direction;
 	quader::QVec3 world_direction;
 	quader::QVec2 screen_tip;
 	double distance = 0.0;
@@ -63,40 +63,40 @@ struct TransformGizmoPickHit {
  * Represents a Transform Gizmo QAxis Primitive value used by the modal modeling interaction layer.
  */
 struct TransformGizmoAxisPrimitive {
-	TransformAxis axis = TransformAxis::none;
-	quader::QVec3 world_start;
-	quader::QVec3 world_tip;
-	quader::QVec2 screen_start;
-	quader::QVec2 screen_tip;
-	float alpha = 1.0F;
+  TransformAxis axis = TransformAxis::None;
+  quader::QVec3 world_start;
+  quader::QVec3 world_tip;
+  quader::QVec2 screen_start;
+  quader::QVec2 screen_tip;
+  float alpha = 1.0F;
 };
 
 /**
  * Represents a Transform Gizmo Plane Primitive value used by the modal modeling interaction layer.
  */
 struct TransformGizmoPlanePrimitive {
-	TransformAxis axis = TransformAxis::none;
-	quader::QVec3 world0;
-	quader::QVec3 world1;
-	quader::QVec3 world2;
-	quader::QVec3 world3;
-	quader::QVec2 screen0;
-	quader::QVec2 screen1;
-	quader::QVec2 screen2;
-	quader::QVec2 screen3;
+  TransformAxis axis = TransformAxis::None;
+  quader::QVec3 world0;
+  quader::QVec3 world1;
+  quader::QVec3 world2;
+  quader::QVec3 world3;
+  quader::QVec2 screen0;
+  quader::QVec2 screen1;
+  quader::QVec2 screen2;
+  quader::QVec2 screen3;
 };
 
 /**
  * Represents a Transform Gizmo Ring Segment Primitive value used by the modal modeling interaction layer.
  */
 struct TransformGizmoRingSegmentPrimitive {
-	TransformAxis axis = TransformAxis::none;
-	quader::QVec3 world_start;
-	quader::QVec3 world_end;
-	quader::QVec2 screen_start;
-	quader::QVec2 screen_end;
-	float alpha = 1.0F;
-	bool front_facing = true;
+  TransformAxis axis = TransformAxis::None;
+  quader::QVec3 world_start;
+  quader::QVec3 world_end;
+  quader::QVec2 screen_start;
+  quader::QVec2 screen_end;
+  float alpha = 1.0F;
+  bool front_facing = true;
 };
 
 /**
@@ -114,8 +114,8 @@ struct TransformGizmoTrackballSegmentPrimitive {
  */
 struct TransformGizmoRotateIndicator {
 	bool active = false;
-	TransformAxis axis = TransformAxis::none;
-	quader::QVec3 world_axis;
+        TransformAxis axis = TransformAxis::None;
+        quader::QVec3 world_axis;
 	quader::QVec3 start_direction;
 	bool has_mouse_position = false;
 	quader::QVec3 mouse_position;
@@ -127,10 +127,10 @@ struct TransformGizmoRotateIndicator {
  */
 struct TransformGizmoFrameInfo {
 	bool ok = false;
-	ViewportInteractionTool tool = ViewportInteractionTool::select;
-	TransformAxis hover_axis = TransformAxis::none;
-	TransformAxis active_axis = TransformAxis::none;
-	quader::QVec3 pivot;
+        ViewportInteractionTool tool = ViewportInteractionTool::Select;
+        TransformAxis hover_axis = TransformAxis::None;
+        TransformAxis active_axis = TransformAxis::None;
+        quader::QVec3 pivot;
 	quader::QVec2 screen_pivot;
 	double gizmo_scale = 1.0;
 	TransformGizmoRotateIndicator rotate_indicator;
@@ -151,18 +151,18 @@ struct TransformGizmoFrame {
  * Represents a Transform Gizmo Frame Input value used by the modal modeling interaction layer.
  */
 struct TransformGizmoFrameInput {
-	ViewportInteractionTool tool = ViewportInteractionTool::select;
-	TransformAxis hover_axis = TransformAxis::none;
-	TransformAxis active_axis = TransformAxis::none;
-	bool has_selection = false;
-	bool has_pivot = false;
-	quader::QVec3 pivot;
-	ViewportCameraState camera;
-	double grid_size = 1.0;
-	double gizmo_size_pixels = 68.0;
-	double pick_radius_pixels = 12.0;
-	double gizmo_scale = 1.0;
-	int ring_segments = 64;
+  ViewportInteractionTool tool = ViewportInteractionTool::Select;
+  TransformAxis hover_axis = TransformAxis::None;
+  TransformAxis active_axis = TransformAxis::None;
+  bool has_selection = false;
+  bool has_pivot = false;
+  quader::QVec3 pivot;
+  ViewportCameraState camera;
+  double grid_size = 1.0;
+  double gizmo_size_pixels = 68.0;
+  double pick_radius_pixels = 12.0;
+  double gizmo_scale = 1.0;
+  int ring_segments = 64;
 };
 
 TransformGizmoAxisBasis transform_gizmo_axis_basis(TransformAxis axis, const quader_poly::Transform3& global_transform = {});

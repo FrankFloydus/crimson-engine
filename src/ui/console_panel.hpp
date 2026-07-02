@@ -19,10 +19,10 @@ public:
     UIPanelId id() const override { return UIPanelId::Console; }
 
 private:
-    void drawContent(UIContext& context) override;
+  void draw_content(UIContext &context) override;
 
-    ConsoleFilter filter_;
-    bool autoScroll_ = true;
+  ConsoleFilter filter_;
+  bool auto_scroll_ = true;
 };
 
 } // namespace quader

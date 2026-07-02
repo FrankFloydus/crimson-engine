@@ -43,30 +43,31 @@ struct UIVertex {
  * Represents an UI Primitive value used by the render extraction and Filament resource layer.
  */
 struct UIPrimitive {
-    std::uint32_t indexOffset = 0;
-    std::uint32_t indexCount = 0;
-    filament::Texture* texture = nullptr;
-    TextureSampleColorSpace sampleColorSpace = TextureSampleColorSpace::DisplaySrgb;
-    std::uint32_t scissorLeft = 0;
-    std::uint32_t scissorBottom = 0;
-    std::uint32_t scissorWidth = 0;
-    std::uint32_t scissorHeight = 0;
+  std::uint32_t index_offset = 0;
+  std::uint32_t index_count = 0;
+  filament::Texture *texture = nullptr;
+  TextureSampleColorSpace sample_color_space =
+      TextureSampleColorSpace::DisplaySrgb;
+  std::uint32_t scissor_left = 0;
+  std::uint32_t scissor_bottom = 0;
+  std::uint32_t scissor_width = 0;
+  std::uint32_t scissor_height = 0;
 };
 
-std::uint32_t growCapacity(std::uint32_t required) {
-    std::uint32_t capacity = 1u;
-    while (capacity < required) {
-        capacity *= 2u;
-    }
-    return capacity;
+std::uint32_t grow_capacity(std::uint32_t required) {
+  std::uint32_t capacity = 1u;
+  while (capacity < required) {
+    capacity *= 2u;
+  }
+  return capacity;
 }
 
-std::size_t growCapacity(std::size_t required) {
-    std::size_t capacity = 1u;
-    while (capacity < required) {
-        capacity *= 2u;
-    }
-    return capacity;
+std::size_t grow_capacity(std::size_t required) {
+  std::size_t capacity = 1u;
+  while (capacity < required) {
+    capacity *= 2u;
+  }
+  return capacity;
 }
 
 } // namespace
@@ -80,20 +81,20 @@ void ImGuiFilamentRenderer::initialize(filament::Engine& engine, filament::Mater
     material_ = &material;
     textures_ = &textures;
 
-    cameraEntity_ = utils::EntityManager::get().create();
-    camera_ = engine_->createCamera(cameraEntity_);
+    camera_entity_ = utils::EntityManager::get().create();
+    camera_ = engine_->createCamera(camera_entity_);
 
-    clearScene_ = engine_->createScene();
-    clearSkybox_ = filament::Skybox::Builder()
-            .color({0.035f, 0.038f, 0.045f, 1.0f})
-            .build(*engine_);
-    clearScene_->setSkybox(clearSkybox_);
-    clearView_ = engine_->createView();
-    clearView_->setName("ImGui Clear");
-    clearView_->setScene(clearScene_);
-    clearView_->setCamera(camera_);
-    clearView_->setPostProcessingEnabled(false);
-    clearView_->setBlendMode(filament::View::BlendMode::OPAQUE);
+    clear_scene_ = engine_->createScene();
+    clear_skybox_ = filament::Skybox::Builder()
+                        .color({0.035f, 0.038f, 0.045f, 1.0f})
+                        .build(*engine_);
+    clear_scene_->setSkybox(clear_skybox_);
+    clear_view_ = engine_->createView();
+    clear_view_->setName("ImGui Clear");
+    clear_view_->setScene(clear_scene_);
+    clear_view_->setCamera(camera_);
+    clear_view_->setPostProcessingEnabled(false);
+    clear_view_->setBlendMode(filament::View::BlendMode::OPAQUE);
 
     LOG_INFO("Creating ImGui Filament scene/view");
     scene_ = engine_->createScene();
@@ -105,7 +106,7 @@ void ImGuiFilamentRenderer::initialize(filament::Engine& engine, filament::Mater
     view_->setCamera(camera_);
 
     LOG_INFO("Creating ImGui font texture");
-    createFontTexture();
+    create_font_texture();
 }
 
 void ImGuiFilamentRenderer::shutdown() {
@@ -113,15 +114,15 @@ void ImGuiFilamentRenderer::shutdown() {
         return;
     }
 
-    destroyAllFrameResources();
+    destroy_all_frame_resources();
 
-    if (fontTextureId_ != ImTextureID_Invalid) {
-        textures_->unregisterTexture(fontTextureId_);
-        fontTextureId_ = ImTextureID_Invalid;
+    if (font_texture_id_ != ImTextureID_Invalid) {
+      textures_->unregister_texture(font_texture_id_);
+      font_texture_id_ = ImTextureID_Invalid;
     }
-    if (fontTexture_) {
-        engine_->destroy(fontTexture_);
-        fontTexture_ = nullptr;
+    if (font_texture_) {
+      engine_->destroy(font_texture_);
+      font_texture_ = nullptr;
     }
     if (view_) {
         view_->setCamera(nullptr);
@@ -129,34 +130,34 @@ void ImGuiFilamentRenderer::shutdown() {
         engine_->destroy(view_);
         view_ = nullptr;
     }
-    if (clearView_) {
-        clearView_->setCamera(nullptr);
-        clearView_->setScene(nullptr);
-        engine_->destroy(clearView_);
-        clearView_ = nullptr;
+    if (clear_view_) {
+      clear_view_->setCamera(nullptr);
+      clear_view_->setScene(nullptr);
+      engine_->destroy(clear_view_);
+      clear_view_ = nullptr;
     }
     if (scene_) {
         engine_->destroy(scene_);
         scene_ = nullptr;
     }
-    if (clearScene_) {
-        clearScene_->setSkybox(nullptr);
+    if (clear_scene_) {
+      clear_scene_->setSkybox(nullptr);
     }
-    if (clearSkybox_) {
-        engine_->destroy(clearSkybox_);
-        clearSkybox_ = nullptr;
+    if (clear_skybox_) {
+      engine_->destroy(clear_skybox_);
+      clear_skybox_ = nullptr;
     }
-    if (clearScene_) {
-        engine_->destroy(clearScene_);
-        clearScene_ = nullptr;
+    if (clear_scene_) {
+      engine_->destroy(clear_scene_);
+      clear_scene_ = nullptr;
     }
     if (camera_) {
-        engine_->destroyCameraComponent(cameraEntity_);
-        camera_ = nullptr;
+      engine_->destroyCameraComponent(camera_entity_);
+      camera_ = nullptr;
     }
-    if (cameraEntity_) {
-        utils::EntityManager::get().destroy(cameraEntity_);
-        cameraEntity_.clear();
+    if (camera_entity_) {
+      utils::EntityManager::get().destroy(camera_entity_);
+      camera_entity_.clear();
     }
 
     engine_ = nullptr;
@@ -164,198 +165,213 @@ void ImGuiFilamentRenderer::shutdown() {
     textures_ = nullptr;
 }
 
-void ImGuiFilamentRenderer::prepare(ImDrawData* drawData, std::uint32_t framebufferWidth, std::uint32_t framebufferHeight) {
-    QDR_PROFILE_FUNCTION();
-    if (!engine_ || !drawData || drawData->CmdListsCount == 0 || framebufferWidth == 0 || framebufferHeight == 0) {
-        hideUnusedFrameResources(0u);
-        return;
+void ImGuiFilamentRenderer::prepare(ImDrawData *draw_data,
+                                    std::uint32_t framebuffer_width,
+                                    std::uint32_t framebuffer_height) {
+  QDR_PROFILE_FUNCTION();
+  if (!engine_ || !draw_data || draw_data->CmdListsCount == 0 ||
+      framebuffer_width == 0 || framebuffer_height == 0) {
+    hide_unused_frame_resources(0u);
+    return;
+  }
+
+  clear_view_->setViewport({0, 0, framebuffer_width, framebuffer_height});
+  view_->setViewport({0, 0, framebuffer_width, framebuffer_height});
+  camera_->setProjection(filament::Camera::Projection::ORTHO, 0.0,
+                         static_cast<double>(framebuffer_width),
+                         static_cast<double>(framebuffer_height), 0.0, 0.001,
+                         10.0);
+  camera_->lookAt({0.0, 0.0, 1.0}, {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0});
+
+  const ImVec2 clip_offset = draw_data->DisplayPos;
+  const ImVec2 clip_scale = draw_data->FramebufferScale;
+  const int framebuffer_width_int = static_cast<int>(std::min<std::uint32_t>(
+      framebuffer_width,
+      static_cast<std::uint32_t>(std::numeric_limits<int>::max())));
+  const int framebuffer_height_int = static_cast<int>(std::min<std::uint32_t>(
+      framebuffer_height,
+      static_cast<std::uint32_t>(std::numeric_limits<int>::max())));
+  const filament::TextureSampler sampler(
+      filament::TextureSampler::MinFilter::LINEAR,
+      filament::TextureSampler::MagFilter::LINEAR,
+      filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
+
+  std::uint16_t draw_order = 0;
+  std::size_t active_resource_count = 0;
+
+  for (int list_index = 0; list_index < draw_data->CmdListsCount;
+       ++list_index) {
+    const ImDrawList *command_list = draw_data->CmdLists[list_index];
+    if (command_list->VtxBuffer.Size == 0 ||
+        command_list->IdxBuffer.Size == 0) {
+      continue;
     }
 
-    clearView_->setViewport({0, 0, framebufferWidth, framebufferHeight});
-    view_->setViewport({0, 0, framebufferWidth, framebufferHeight});
-    camera_->setProjection(filament::Camera::Projection::ORTHO,
-            0.0, static_cast<double>(framebufferWidth),
-            static_cast<double>(framebufferHeight), 0.0,
-            0.001, 10.0);
-    camera_->lookAt({0.0, 0.0, 1.0}, {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0});
-
-    const ImVec2 clipOffset = drawData->DisplayPos;
-    const ImVec2 clipScale = drawData->FramebufferScale;
-    const int framebufferWidthInt = static_cast<int>(
-            std::min<std::uint32_t>(framebufferWidth, static_cast<std::uint32_t>(std::numeric_limits<int>::max())));
-    const int framebufferHeightInt = static_cast<int>(
-            std::min<std::uint32_t>(framebufferHeight, static_cast<std::uint32_t>(std::numeric_limits<int>::max())));
-    const filament::TextureSampler sampler(
-            filament::TextureSampler::MinFilter::LINEAR,
-            filament::TextureSampler::MagFilter::LINEAR,
-            filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
-
-    std::uint16_t drawOrder = 0;
-    std::size_t activeResourceCount = 0;
-
-    for (int listIndex = 0; listIndex < drawData->CmdListsCount; ++listIndex) {
-        const ImDrawList* commandList = drawData->CmdLists[listIndex];
-        if (commandList->VtxBuffer.Size == 0 || commandList->IdxBuffer.Size == 0) {
-            continue;
-        }
-
-        std::vector<UIVertex> vertices;
-        vertices.reserve(commandList->VtxBuffer.Size);
-        for (const ImDrawVert& vertex : commandList->VtxBuffer) {
-            vertices.push_back({
-                    {vertex.pos.x, vertex.pos.y, 0.0f},
-                    {vertex.uv.x, vertex.uv.y},
-                    vertex.col,
-            });
-        }
-
-        std::vector<std::uint32_t> indices;
-        std::vector<UIPrimitive> primitives;
-        indices.reserve(commandList->IdxBuffer.Size);
-        primitives.reserve(commandList->CmdBuffer.Size);
-
-        for (const ImDrawCmd& command : commandList->CmdBuffer) {
-            if (command.UserCallback) {
-                command.UserCallback(commandList, &command);
-                continue;
-            }
-            if (command.ElemCount == 0 ||
-                    command.IdxOffset + command.ElemCount > static_cast<unsigned int>(commandList->IdxBuffer.Size) ||
-                    command.VtxOffset >= static_cast<unsigned int>(commandList->VtxBuffer.Size)) {
-                LOG_WARN("Skipping invalid ImGui draw command: elem={} idxOffset={} vtxOffset={} idxCount={} vtxCount={}",
-                        command.ElemCount, command.IdxOffset, command.VtxOffset,
-                        commandList->IdxBuffer.Size, commandList->VtxBuffer.Size);
-                continue;
-            }
-
-            ImVec2 clipMin{
-                    (command.ClipRect.x - clipOffset.x) * clipScale.x,
-                    (command.ClipRect.y - clipOffset.y) * clipScale.y,
-            };
-            ImVec2 clipMax{
-                    (command.ClipRect.z - clipOffset.x) * clipScale.x,
-                    (command.ClipRect.w - clipOffset.y) * clipScale.y,
-            };
-            const int scissorLeft = std::clamp(
-                    static_cast<int>(std::floor(clipMin.x)),
-                    0,
-                    framebufferWidthInt);
-            const int scissorTop = std::clamp(
-                    static_cast<int>(std::floor(clipMin.y)),
-                    0,
-                    framebufferHeightInt);
-            const int scissorRight = std::clamp(
-                    static_cast<int>(std::ceil(clipMax.x)),
-                    0,
-                    framebufferWidthInt);
-            const int scissorBottom = std::clamp(
-                    static_cast<int>(std::ceil(clipMax.y)),
-                    0,
-                    framebufferHeightInt);
-            const int scissorWidth = scissorRight - scissorLeft;
-            const int scissorHeight = scissorBottom - scissorTop;
-            if (scissorWidth <= 0 || scissorHeight <= 0) {
-                continue;
-            }
-
-            filament::Texture* texture = textures_->texture(command.GetTexID());
-            if (!texture) {
-                LOG_WARN("Skipping ImGui draw command with unregistered texture id {}",
-                        static_cast<std::uint64_t>(command.GetTexID()));
-                continue;
-            }
-
-            const std::uint32_t primitiveOffset = static_cast<std::uint32_t>(indices.size());
-            bool validIndices = true;
-            for (unsigned int n = 0; n < command.ElemCount; ++n) {
-                const auto sourceIndex = static_cast<std::uint32_t>(commandList->IdxBuffer[command.IdxOffset + n]);
-                const std::uint32_t rebasedIndex = static_cast<std::uint32_t>(command.VtxOffset) + sourceIndex;
-                if (rebasedIndex >= static_cast<std::uint32_t>(vertices.size())) {
-                    validIndices = false;
-                    break;
-                }
-                indices.push_back(rebasedIndex);
-            }
-            if (!validIndices) {
-                indices.resize(primitiveOffset);
-                LOG_WARN("Skipping ImGui draw command with out-of-range rebased indices");
-                continue;
-            }
-
-            primitives.push_back({
-                    .indexOffset = primitiveOffset,
-                    .indexCount = command.ElemCount,
-                    .texture = texture,
-                    .sampleColorSpace = textures_->sampleColorSpace(command.GetTexID()),
-                    .scissorLeft = static_cast<std::uint32_t>(scissorLeft),
-                    .scissorBottom = static_cast<std::uint32_t>(framebufferHeightInt - scissorBottom),
-                    .scissorWidth = static_cast<std::uint32_t>(scissorWidth),
-                    .scissorHeight = static_cast<std::uint32_t>(scissorHeight),
-            });
-        }
-
-        if (primitives.empty() || indices.empty()) {
-            continue;
-        }
-
-        DrawResource& resource = ensureDrawResource(
-                activeResourceCount++,
-                static_cast<std::uint32_t>(vertices.size()),
-                static_cast<std::uint32_t>(indices.size()),
-                primitives.size(),
-                framebufferWidth,
-                framebufferHeight);
-        resource.vertexBuffer->setBufferAt(*engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
-        resource.indexBuffer->setBuffer(*engine_, FilamentBufferDescriptorFactory::vector(indices));
-
-        auto& renderableManager = engine_->getRenderableManager();
-        filament::RenderableManager::Instance instance = renderableManager.getInstance(resource.entity);
-        renderableManager.setAxisAlignedBoundingBox(
-                instance,
-                {{static_cast<float>(framebufferWidth) * 0.5f, static_cast<float>(framebufferHeight) * 0.5f, 0.0f},
-                        {static_cast<float>(framebufferWidth) * 0.5f, static_cast<float>(framebufferHeight) * 0.5f, 1.0f}});
-        renderableManager.setLayerMask(instance, 0xffu, 0xffu);
-        for (std::size_t primitiveIndex = 0; primitiveIndex < primitives.size(); ++primitiveIndex) {
-            const UIPrimitive& primitive = primitives[primitiveIndex];
-            filament::MaterialInstance* materialInstance = resource.materialInstances[primitiveIndex];
-            materialInstance->setParameter("albedo", primitive.texture, sampler);
-            const float encodeToSrgb = primitive.sampleColorSpace == TextureSampleColorSpace::LinearSrgb ? 1.0f : 0.0f;
-            materialInstance->setParameter("encodeToSrgb", encodeToSrgb);
-            const float premultipliedAlpha =
-                    primitive.sampleColorSpace == TextureSampleColorSpace::DisplaySrgbPremultipliedAlpha
-                    ? 1.0f
-                    : 0.0f;
-            materialInstance->setParameter("premultipliedAlpha", premultipliedAlpha);
-            materialInstance->setScissor(primitive.scissorLeft, primitive.scissorBottom,
-                    primitive.scissorWidth, primitive.scissorHeight);
-            renderableManager.setMaterialInstanceAt(instance, primitiveIndex, materialInstance);
-            renderableManager.setGeometryAt(
-                    instance,
-                    primitiveIndex,
-                    filament::RenderableManager::PrimitiveType::TRIANGLES,
-                    resource.vertexBuffer,
-                    resource.indexBuffer,
-                    primitive.indexOffset,
-                    primitive.indexCount);
-            renderableManager.setBlendOrderAt(instance, primitiveIndex, drawOrder++);
-            renderableManager.setGlobalBlendOrderEnabledAt(instance, primitiveIndex, true);
-        }
-        for (std::size_t primitiveIndex = primitives.size(); primitiveIndex < resource.primitiveCapacity; ++primitiveIndex) {
-            if (filament::MaterialInstance* materialInstance = resource.materialInstances[primitiveIndex]) {
-                materialInstance->unsetScissor();
-            }
-            renderableManager.setGeometryAt(
-                    instance,
-                    primitiveIndex,
-                    filament::RenderableManager::PrimitiveType::TRIANGLES,
-                    resource.vertexBuffer,
-                    resource.indexBuffer,
-                    0u,
-                    0u);
-        }
+    std::vector<UIVertex> vertices;
+    vertices.reserve(command_list->VtxBuffer.Size);
+    for (const ImDrawVert &vertex : command_list->VtxBuffer) {
+      vertices.push_back({
+          {vertex.pos.x, vertex.pos.y, 0.0f},
+          {vertex.uv.x, vertex.uv.y},
+          vertex.col,
+      });
     }
 
-    hideUnusedFrameResources(activeResourceCount);
+    std::vector<std::uint32_t> indices;
+    std::vector<UIPrimitive> primitives;
+    indices.reserve(command_list->IdxBuffer.Size);
+    primitives.reserve(command_list->CmdBuffer.Size);
+
+    for (const ImDrawCmd &command : command_list->CmdBuffer) {
+      if (command.UserCallback) {
+        command.UserCallback(command_list, &command);
+        continue;
+      }
+      if (command.ElemCount == 0 ||
+          command.IdxOffset + command.ElemCount >
+              static_cast<unsigned int>(command_list->IdxBuffer.Size) ||
+          command.VtxOffset >=
+              static_cast<unsigned int>(command_list->VtxBuffer.Size)) {
+        LOG_WARN("Skipping invalid ImGui draw command: elem={} idxOffset={} "
+                 "vtxOffset={} idxCount={} vtxCount={}",
+                 command.ElemCount, command.IdxOffset, command.VtxOffset,
+                 command_list->IdxBuffer.Size, command_list->VtxBuffer.Size);
+        continue;
+      }
+
+      ImVec2 clip_min{
+          (command.ClipRect.x - clip_offset.x) * clip_scale.x,
+          (command.ClipRect.y - clip_offset.y) * clip_scale.y,
+      };
+      ImVec2 clip_max{
+          (command.ClipRect.z - clip_offset.x) * clip_scale.x,
+          (command.ClipRect.w - clip_offset.y) * clip_scale.y,
+      };
+      const int scissor_left = std::clamp(
+          static_cast<int>(std::floor(clip_min.x)), 0, framebuffer_width_int);
+      const int scissor_top = std::clamp(
+          static_cast<int>(std::floor(clip_min.y)), 0, framebuffer_height_int);
+      const int scissor_right = std::clamp(
+          static_cast<int>(std::ceil(clip_max.x)), 0, framebuffer_width_int);
+      const int scissor_bottom = std::clamp(
+          static_cast<int>(std::ceil(clip_max.y)), 0, framebuffer_height_int);
+      const int scissor_width = scissor_right - scissor_left;
+      const int scissor_height = scissor_bottom - scissor_top;
+      if (scissor_width <= 0 || scissor_height <= 0) {
+        continue;
+      }
+
+      filament::Texture *texture = textures_->texture(command.GetTexID());
+      if (!texture) {
+        LOG_WARN("Skipping ImGui draw command with unregistered texture id {}",
+                 static_cast<std::uint64_t>(command.GetTexID()));
+        continue;
+      }
+
+      const std::uint32_t primitive_offset =
+          static_cast<std::uint32_t>(indices.size());
+      bool valid_indices = true;
+      for (unsigned int n = 0; n < command.ElemCount; ++n) {
+        const auto source_index = static_cast<std::uint32_t>(
+            command_list->IdxBuffer[command.IdxOffset + n]);
+        const std::uint32_t rebased_index =
+            static_cast<std::uint32_t>(command.VtxOffset) + source_index;
+        if (rebased_index >= static_cast<std::uint32_t>(vertices.size())) {
+          valid_indices = false;
+          break;
+        }
+        indices.push_back(rebased_index);
+      }
+      if (!valid_indices) {
+        indices.resize(primitive_offset);
+        LOG_WARN(
+            "Skipping ImGui draw command with out-of-range rebased indices");
+        continue;
+      }
+
+      primitives.push_back({
+          .index_offset = primitive_offset,
+          .index_count = command.ElemCount,
+          .texture = texture,
+          .sample_color_space =
+              textures_->sample_color_space(command.GetTexID()),
+          .scissor_left = static_cast<std::uint32_t>(scissor_left),
+          .scissor_bottom = static_cast<std::uint32_t>(framebuffer_height_int -
+                                                       scissor_bottom),
+          .scissor_width = static_cast<std::uint32_t>(scissor_width),
+          .scissor_height = static_cast<std::uint32_t>(scissor_height),
+      });
+    }
+
+    if (primitives.empty() || indices.empty()) {
+      continue;
+    }
+
+    DrawResource &resource = ensure_draw_resource(
+        active_resource_count++, static_cast<std::uint32_t>(vertices.size()),
+        static_cast<std::uint32_t>(indices.size()), primitives.size(),
+        framebuffer_width, framebuffer_height);
+    resource.vertex_buffer->setBufferAt(
+        *engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
+    resource.index_buffer->setBuffer(
+        *engine_, FilamentBufferDescriptorFactory::vector(indices));
+
+    auto &renderable_manager = engine_->getRenderableManager();
+    filament::RenderableManager::Instance instance =
+        renderable_manager.getInstance(resource.entity);
+    renderable_manager.setAxisAlignedBoundingBox(
+        instance, {{static_cast<float>(framebuffer_width) * 0.5f,
+                    static_cast<float>(framebuffer_height) * 0.5f, 0.0f},
+                   {static_cast<float>(framebuffer_width) * 0.5f,
+                    static_cast<float>(framebuffer_height) * 0.5f, 1.0f}});
+    renderable_manager.setLayerMask(instance, 0xffu, 0xffu);
+    for (std::size_t primitive_index = 0; primitive_index < primitives.size();
+         ++primitive_index) {
+      const UIPrimitive &primitive = primitives[primitive_index];
+      filament::MaterialInstance *material_instance =
+          resource.material_instances[primitive_index];
+      material_instance->setParameter("albedo", primitive.texture, sampler);
+      const float encode_to_srgb =
+          primitive.sample_color_space == TextureSampleColorSpace::LinearSrgb
+              ? 1.0f
+              : 0.0f;
+      material_instance->setParameter("encodeToSrgb", encode_to_srgb);
+      const float premultiplied_alpha =
+          primitive.sample_color_space ==
+                  TextureSampleColorSpace::DisplaySrgbPremultipliedAlpha
+              ? 1.0f
+              : 0.0f;
+      material_instance->setParameter("premultipliedAlpha",
+                                      premultiplied_alpha);
+      material_instance->setScissor(
+          primitive.scissor_left, primitive.scissor_bottom,
+          primitive.scissor_width, primitive.scissor_height);
+      renderable_manager.setMaterialInstanceAt(instance, primitive_index,
+                                               material_instance);
+      renderable_manager.setGeometryAt(
+          instance, primitive_index,
+          filament::RenderableManager::PrimitiveType::TRIANGLES,
+          resource.vertex_buffer, resource.index_buffer, primitive.index_offset,
+          primitive.index_count);
+      renderable_manager.setBlendOrderAt(instance, primitive_index,
+                                         draw_order++);
+      renderable_manager.setGlobalBlendOrderEnabledAt(instance, primitive_index,
+                                                      true);
+    }
+    for (std::size_t primitive_index = primitives.size();
+         primitive_index < resource.primitive_capacity; ++primitive_index) {
+      if (filament::MaterialInstance *material_instance =
+              resource.material_instances[primitive_index]) {
+        material_instance->unsetScissor();
+      }
+      renderable_manager.setGeometryAt(
+          instance, primitive_index,
+          filament::RenderableManager::PrimitiveType::TRIANGLES,
+          resource.vertex_buffer, resource.index_buffer, 0u, 0u);
+    }
+  }
+
+  hide_unused_frame_resources(active_resource_count);
 }
 
 void ImGuiFilamentRenderer::render(filament::Renderer& renderer) {
@@ -363,188 +379,215 @@ void ImGuiFilamentRenderer::render(filament::Renderer& renderer) {
     if (!view_) {
         return;
     }
-    filament::Renderer::ClearOptions clearOptions;
-    clearOptions.clear = true;
-    clearOptions.discard = false;
-    clearOptions.clearColor = {0.0f, 0.0f, 0.0f, 1.0f};
-    renderer.setClearOptions(clearOptions);
-    if (clearView_) {
-        renderer.render(clearView_);
+    filament::Renderer::ClearOptions clear_options;
+    clear_options.clear = true;
+    clear_options.discard = false;
+    clear_options.clearColor = {0.0f, 0.0f, 0.0f, 1.0f};
+    renderer.setClearOptions(clear_options);
+    if (clear_view_) {
+      renderer.render(clear_view_);
     }
     renderer.render(view_);
 }
 
-void ImGuiFilamentRenderer::createFontTexture() {
-    ImGuiIO& io = ImGui::GetIO();
-    unsigned char* sourcePixels = nullptr;
-    int width = 0;
-    int height = 0;
-    io.Fonts->GetTexDataAsRGBA32(&sourcePixels, &width, &height);
+void ImGuiFilamentRenderer::create_font_texture() {
+  ImGuiIO &io = ImGui::GetIO();
+  unsigned char *source_pixels = nullptr;
+  int width = 0;
+  int height = 0;
+  io.Fonts->GetTexDataAsRGBA32(&source_pixels, &width, &height);
 
-    const std::size_t rowByteCount = static_cast<std::size_t>(width) * 4u;
-    const std::size_t byteCount = rowByteCount * static_cast<std::size_t>(height);
-    std::vector<unsigned char> pixels(byteCount);
-    for (int y = 0; y < height; ++y) {
-        const auto sourceOffset = static_cast<std::size_t>(y) * rowByteCount;
-        const auto targetOffset = static_cast<std::size_t>(height - 1 - y) * rowByteCount;
-        std::memcpy(pixels.data() + targetOffset, sourcePixels + sourceOffset, rowByteCount);
+  const std::size_t row_byte_count = static_cast<std::size_t>(width) * 4u;
+  const std::size_t byte_count =
+      row_byte_count * static_cast<std::size_t>(height);
+  std::vector<unsigned char> pixels(byte_count);
+  for (int y = 0; y < height; ++y) {
+    const auto source_offset = static_cast<std::size_t>(y) * row_byte_count;
+    const auto target_offset =
+        static_cast<std::size_t>(height - 1 - y) * row_byte_count;
+    std::memcpy(pixels.data() + target_offset, source_pixels + source_offset,
+                row_byte_count);
+  }
+  const ImVec2 white_uv = io.Fonts->TexUvWhitePixel;
+  const int white_x = std::clamp(
+      static_cast<int>(white_uv.x * static_cast<float>(width)), 0, width - 1);
+  const int white_y =
+      height - 1 -
+      std::clamp(static_cast<int>(white_uv.y * static_cast<float>(height)), 0,
+                 height - 1);
+  for (int y = std::max(0, white_y - 1); y <= std::min(height - 1, white_y + 1);
+       ++y) {
+    for (int x = std::max(0, white_x - 1);
+         x <= std::min(width - 1, white_x + 1); ++x) {
+      const std::size_t offset =
+          (static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+           static_cast<std::size_t>(x)) *
+          4u;
+      pixels[offset + 0u] = 255u;
+      pixels[offset + 1u] = 255u;
+      pixels[offset + 2u] = 255u;
+      pixels[offset + 3u] = 255u;
     }
-    const ImVec2 whiteUv = io.Fonts->TexUvWhitePixel;
-    const int whiteX = std::clamp(static_cast<int>(whiteUv.x * static_cast<float>(width)), 0, width - 1);
-    const int whiteY = height - 1 - std::clamp(static_cast<int>(whiteUv.y * static_cast<float>(height)), 0, height - 1);
-    for (int y = std::max(0, whiteY - 1); y <= std::min(height - 1, whiteY + 1); ++y) {
-        for (int x = std::max(0, whiteX - 1); x <= std::min(width - 1, whiteX + 1); ++x) {
-            const std::size_t offset = (static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x)) * 4u;
-            pixels[offset + 0u] = 255u;
-            pixels[offset + 1u] = 255u;
-            pixels[offset + 2u] = 255u;
-            pixels[offset + 3u] = 255u;
-        }
-    }
+  }
 
-    fontTexture_ = filament::Texture::Builder()
-            .width(static_cast<std::uint32_t>(width))
-            .height(static_cast<std::uint32_t>(height))
-            .levels(1)
-            .format(filament::Texture::InternalFormat::RGBA8)
-            .usage(filament::Texture::Usage::UPLOADABLE | filament::Texture::Usage::SAMPLEABLE)
-            .build(*engine_);
+  font_texture_ = filament::Texture::Builder()
+                      .width(static_cast<std::uint32_t>(width))
+                      .height(static_cast<std::uint32_t>(height))
+                      .levels(1)
+                      .format(filament::Texture::InternalFormat::RGBA8)
+                      .usage(filament::Texture::Usage::UPLOADABLE |
+                             filament::Texture::Usage::SAMPLEABLE)
+                      .build(*engine_);
 
-    fontTexture_->setImage(*engine_, 0, FilamentBufferDescriptorFactory::rgbaPixels(pixels.data(), pixels.size()));
-    fontTextureId_ = textures_->registerTexture(fontTexture_);
-    io.Fonts->SetTexID(fontTextureId_);
-    LOG_INFO("ImGui font atlas uploaded as Filament texture {}x{}", width, height);
+  font_texture_->setImage(*engine_, 0,
+                          FilamentBufferDescriptorFactory::rgba_pixels(
+                              pixels.data(), pixels.size()));
+  font_texture_id_ = textures_->register_texture(font_texture_);
+  io.Fonts->SetTexID(font_texture_id_);
+  LOG_INFO("ImGui font atlas uploaded as Filament texture {}x{}", width,
+           height);
 }
 
-void ImGuiFilamentRenderer::releaseFrameResources() {
-    QDR_PROFILE_FUNCTION();
+void ImGuiFilamentRenderer::release_frame_resources() {
+  QDR_PROFILE_FUNCTION();
 }
 
-ImGuiFilamentRenderer::DrawResource& ImGuiFilamentRenderer::ensureDrawResource(
-        std::size_t slot,
-        std::uint32_t vertexCount,
-        std::uint32_t indexCount,
-        std::size_t primitiveCount,
-        std::uint32_t framebufferWidth,
-        std::uint32_t framebufferHeight) {
-    QDR_PROFILE_FUNCTION();
-    if (slot >= frameResources_.size()) {
-        frameResources_.resize(slot + 1u);
-    }
+ImGuiFilamentRenderer::DrawResource &
+ImGuiFilamentRenderer::ensure_draw_resource(std::size_t slot,
+                                            std::uint32_t vertex_count,
+                                            std::uint32_t index_count,
+                                            std::size_t primitive_count,
+                                            std::uint32_t framebuffer_width,
+                                            std::uint32_t framebuffer_height) {
+  QDR_PROFILE_FUNCTION();
+  if (slot >= frame_resources_.size()) {
+    frame_resources_.resize(slot + 1u);
+  }
 
-    DrawResource& resource = frameResources_[slot];
-    const bool needsRebuild =
-            !resource.entity ||
-            resource.vertexBuffer == nullptr ||
-            resource.indexBuffer == nullptr ||
-            resource.vertexCapacity < vertexCount ||
-            resource.indexCapacity < indexCount ||
-            resource.primitiveCapacity < primitiveCount;
-    if (!needsRebuild) {
-        return resource;
-    }
-
-    if (resource.entity || resource.vertexBuffer != nullptr || resource.indexBuffer != nullptr) {
-        QDR_PROFILE_SCOPE("ImGui rebuild undersized frame resource");
-        destroyDrawResource(resource);
-    }
-
-    resource.vertexCapacity = growCapacity(vertexCount);
-    resource.indexCapacity = growCapacity(indexCount);
-    resource.primitiveCapacity = growCapacity(primitiveCount);
-    resource.entity = utils::EntityManager::get().create();
-    resource.vertexBuffer = filament::VertexBuffer::Builder()
-            .vertexCount(resource.vertexCapacity)
-            .bufferCount(1)
-            .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT3, offsetof(UIVertex, position), sizeof(UIVertex))
-            .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2, offsetof(UIVertex, uv), sizeof(UIVertex))
-            .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(UIVertex, color), sizeof(UIVertex))
-            .normalized(filament::VertexAttribute::COLOR)
-            .build(*engine_);
-    resource.indexBuffer = filament::IndexBuffer::Builder()
-            .indexCount(resource.indexCapacity)
-            .bufferType(filament::IndexBuffer::IndexType::UINT)
-            .build(*engine_);
-
-    resource.materialInstances.reserve(resource.primitiveCapacity);
-    filament::RenderableManager::Builder builder(resource.primitiveCapacity);
-    builder.boundingBox({{static_cast<float>(framebufferWidth) * 0.5f, static_cast<float>(framebufferHeight) * 0.5f, 0.0f},
-                        {static_cast<float>(framebufferWidth) * 0.5f, static_cast<float>(framebufferHeight) * 0.5f, 1.0f}})
-            .culling(false)
-            .castShadows(false)
-            .receiveShadows(false)
-            .priority(0);
-    for (std::size_t primitiveIndex = 0; primitiveIndex < resource.primitiveCapacity; ++primitiveIndex) {
-        filament::MaterialInstance* materialInstance = material_->createInstance();
-        resource.materialInstances.push_back(materialInstance);
-        builder.geometry(
-                        primitiveIndex,
-                        filament::RenderableManager::PrimitiveType::TRIANGLES,
-                        resource.vertexBuffer,
-                        resource.indexBuffer,
-                        0u,
-                        0u)
-                .material(primitiveIndex, materialInstance)
-                .blendOrder(primitiveIndex, 0u)
-                .globalBlendOrderEnabled(primitiveIndex, true);
-    }
-    builder.build(*engine_, resource.entity);
-    scene_->addEntity(resource.entity);
+  DrawResource &resource = frame_resources_[slot];
+  const bool needs_rebuild = !resource.entity ||
+                             resource.vertex_buffer == nullptr ||
+                             resource.index_buffer == nullptr ||
+                             resource.vertex_capacity < vertex_count ||
+                             resource.index_capacity < index_count ||
+                             resource.primitive_capacity < primitive_count;
+  if (!needs_rebuild) {
     return resource;
+  }
+
+  if (resource.entity || resource.vertex_buffer != nullptr ||
+      resource.index_buffer != nullptr) {
+    QDR_PROFILE_SCOPE("ImGui rebuild undersized frame resource");
+    destroy_draw_resource(resource);
+  }
+
+  resource.vertex_capacity = grow_capacity(vertex_count);
+  resource.index_capacity = grow_capacity(index_count);
+  resource.primitive_capacity = grow_capacity(primitive_count);
+  resource.entity = utils::EntityManager::get().create();
+  resource.vertex_buffer =
+      filament::VertexBuffer::Builder()
+          .vertexCount(resource.vertex_capacity)
+          .bufferCount(1)
+          .attribute(filament::VertexAttribute::POSITION, 0,
+                     AttributeType::FLOAT3, offsetof(UIVertex, position),
+                     sizeof(UIVertex))
+          .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2,
+                     offsetof(UIVertex, uv), sizeof(UIVertex))
+          .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4,
+                     offsetof(UIVertex, color), sizeof(UIVertex))
+          .normalized(filament::VertexAttribute::COLOR)
+          .build(*engine_);
+  resource.index_buffer =
+      filament::IndexBuffer::Builder()
+          .indexCount(resource.index_capacity)
+          .bufferType(filament::IndexBuffer::IndexType::UINT)
+          .build(*engine_);
+
+  resource.material_instances.reserve(resource.primitive_capacity);
+  filament::RenderableManager::Builder builder(resource.primitive_capacity);
+  builder
+      .boundingBox({{static_cast<float>(framebuffer_width) * 0.5f,
+                     static_cast<float>(framebuffer_height) * 0.5f, 0.0f},
+                    {static_cast<float>(framebuffer_width) * 0.5f,
+                     static_cast<float>(framebuffer_height) * 0.5f, 1.0f}})
+      .culling(false)
+      .castShadows(false)
+      .receiveShadows(false)
+      .priority(0);
+  for (std::size_t primitive_index = 0;
+       primitive_index < resource.primitive_capacity; ++primitive_index) {
+    filament::MaterialInstance *material_instance = material_->createInstance();
+    resource.material_instances.push_back(material_instance);
+    builder
+        .geometry(primitive_index,
+                  filament::RenderableManager::PrimitiveType::TRIANGLES,
+                  resource.vertex_buffer, resource.index_buffer, 0u, 0u)
+        .material(primitive_index, material_instance)
+        .blendOrder(primitive_index, 0u)
+        .globalBlendOrderEnabled(primitive_index, true);
+  }
+  builder.build(*engine_, resource.entity);
+  scene_->addEntity(resource.entity);
+  return resource;
 }
 
-void ImGuiFilamentRenderer::destroyDrawResource(DrawResource& resource) {
-    if (resource.entity) {
-        scene_->remove(resource.entity);
-        engine_->getRenderableManager().destroy(resource.entity);
+void ImGuiFilamentRenderer::destroy_draw_resource(DrawResource &resource) {
+  if (resource.entity) {
+    scene_->remove(resource.entity);
+    engine_->getRenderableManager().destroy(resource.entity);
+  }
+  for (filament::MaterialInstance *material_instance :
+       resource.material_instances) {
+    if (material_instance) {
+      engine_->destroy(material_instance);
     }
-    for (filament::MaterialInstance* materialInstance : resource.materialInstances) {
-        if (materialInstance) {
-            engine_->destroy(materialInstance);
-        }
-    }
-    resource.materialInstances.clear();
-    if (resource.vertexBuffer) {
-        engine_->destroy(resource.vertexBuffer);
-        resource.vertexBuffer = nullptr;
-    }
-    if (resource.indexBuffer) {
-        engine_->destroy(resource.indexBuffer);
-        resource.indexBuffer = nullptr;
-    }
-    if (resource.entity) {
-        utils::EntityManager::get().destroy(resource.entity);
-        resource.entity.clear();
-    }
-    resource.vertexCapacity = 0;
-    resource.indexCapacity = 0;
-    resource.primitiveCapacity = 0;
+  }
+  resource.material_instances.clear();
+  if (resource.vertex_buffer) {
+    engine_->destroy(resource.vertex_buffer);
+    resource.vertex_buffer = nullptr;
+  }
+  if (resource.index_buffer) {
+    engine_->destroy(resource.index_buffer);
+    resource.index_buffer = nullptr;
+  }
+  if (resource.entity) {
+    utils::EntityManager::get().destroy(resource.entity);
+    resource.entity.clear();
+  }
+  resource.vertex_capacity = 0;
+  resource.index_capacity = 0;
+  resource.primitive_capacity = 0;
 }
 
-void ImGuiFilamentRenderer::destroyAllFrameResources() {
-    QDR_PROFILE_FUNCTION();
-    for (DrawResource& resource : frameResources_) {
-        destroyDrawResource(resource);
-    }
-    frameResources_.clear();
+void ImGuiFilamentRenderer::destroy_all_frame_resources() {
+  QDR_PROFILE_FUNCTION();
+  for (DrawResource &resource : frame_resources_) {
+    destroy_draw_resource(resource);
+  }
+  frame_resources_.clear();
 }
 
-void ImGuiFilamentRenderer::hideUnusedFrameResources(std::size_t firstUnusedSlot) {
-    if (!engine_) {
-        return;
-    }
+void ImGuiFilamentRenderer::hide_unused_frame_resources(
+    std::size_t first_unused_slot) {
+  if (!engine_) {
+    return;
+  }
 
-    auto& renderableManager = engine_->getRenderableManager();
-    for (std::size_t slot = firstUnusedSlot; slot < frameResources_.size(); ++slot) {
-        DrawResource& resource = frameResources_[slot];
-        if (!resource.entity) {
-            continue;
-        }
-        filament::RenderableManager::Instance instance = renderableManager.getInstance(resource.entity);
-        if (instance) {
-            renderableManager.setLayerMask(instance, 0xffu, 0x00u);
-        }
+  auto &renderable_manager = engine_->getRenderableManager();
+  for (std::size_t slot = first_unused_slot; slot < frame_resources_.size();
+       ++slot) {
+    DrawResource &resource = frame_resources_[slot];
+    if (!resource.entity) {
+      continue;
     }
+    filament::RenderableManager::Instance instance =
+        renderable_manager.getInstance(resource.entity);
+    if (instance) {
+      renderable_manager.setLayerMask(instance, 0xffu, 0x00u);
+    }
+  }
 }
 
 } // namespace quader

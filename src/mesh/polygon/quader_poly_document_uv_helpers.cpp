@@ -54,12 +54,14 @@ std::optional<quader::QVec3> uv_basis_origin_for_anchor(const quader::QVec3& pos
     const float uv_dot = dot(u_axis, v_axis);
     const float vv = dot(v_axis, v_axis);
     const float determinant = (uu * vv) - (uv_dot * uv_dot);
-    if (std::abs(determinant) <= epsilon) {
-        return std::nullopt;
+    if (std::abs(determinant) <= kEpsilon) {
+      return std::nullopt;
     }
 
-    const float target_u = dot(position, u_axis) - (uv.x / generated_uv_tiles_per_world_unit);
-    const float target_v = dot(position, v_axis) - (uv.y / generated_uv_tiles_per_world_unit);
+    const float target_u =
+        dot(position, u_axis) - (uv.x / kGeneratedUvTilesPerWorldUnit);
+    const float target_v =
+        dot(position, v_axis) - (uv.y / kGeneratedUvTilesPerWorldUnit);
     const float alpha = ((target_u * vv) - (target_v * uv_dot)) / determinant;
     const float beta = ((target_v * uu) - (target_u * uv_dot)) / determinant;
     return (u_axis * alpha) + (v_axis * beta);
@@ -92,8 +94,8 @@ bool uv_basis_varies_on_face(const Document& document, const Face& face, const F
             const float determinant =
                 (projected[first].x * projected[second].y) -
                 (projected[first].y * projected[second].x);
-            if (std::abs(determinant) > epsilon) {
-                return true;
+            if (std::abs(determinant) > kEpsilon) {
+              return true;
             }
         }
     }
@@ -136,8 +138,8 @@ std::optional<FaceUvBasis> face_uv_basis_from_loop_uvs(const Document& document,
                 const float first_second = dot(first_edge, second_edge);
                 const float second_second = dot(second_edge, second_edge);
                 const float determinant = (first_first * second_second) - (first_second * first_second);
-                if (std::abs(determinant) <= epsilon) {
-                    continue;
+                if (std::abs(determinant) <= kEpsilon) {
+                  continue;
                 }
 
                 const auto solve_axis = [&](float first_delta, float second_delta) {
@@ -150,15 +152,16 @@ std::optional<FaceUvBasis> face_uv_basis_from_loop_uvs(const Document& document,
                 const quader::QVec2 first_uv = face.uvs[first_index];
                 const quader::QVec2 second_uv = face.uvs[second_index];
                 FaceUvBasis basis;
-                basis.u_axis = solve_axis(
-                    (first_uv.x - anchor_uv.x) / generated_uv_tiles_per_world_unit,
-                    (second_uv.x - anchor_uv.x) / generated_uv_tiles_per_world_unit);
-                basis.v_axis = solve_axis(
-                    (first_uv.y - anchor_uv.y) / generated_uv_tiles_per_world_unit,
-                    (second_uv.y - anchor_uv.y) / generated_uv_tiles_per_world_unit);
-                basis.valid =
-                    length_squared(basis.u_axis) > epsilon &&
-                    length_squared(basis.v_axis) > epsilon;
+                basis.u_axis = solve_axis((first_uv.x - anchor_uv.x) /
+                                              kGeneratedUvTilesPerWorldUnit,
+                                          (second_uv.x - anchor_uv.x) /
+                                              kGeneratedUvTilesPerWorldUnit);
+                basis.v_axis = solve_axis((first_uv.y - anchor_uv.y) /
+                                              kGeneratedUvTilesPerWorldUnit,
+                                          (second_uv.y - anchor_uv.y) /
+                                              kGeneratedUvTilesPerWorldUnit);
+                basis.valid = length_squared(basis.u_axis) > kEpsilon &&
+                              length_squared(basis.v_axis) > kEpsilon;
                 if (!basis.valid || !uv_basis_varies_on_face(document, face, basis)) {
                     continue;
                 }
@@ -202,8 +205,8 @@ std::optional<FaceUvProjectionAssignment> face_uv_projection_assignment_from_sou
         ElementId survivor_vertex_id)
 {
     const quader::QVec3 target_normal = face_normal(document, face);
-    if (length_squared(target_normal) <= epsilon) {
-        return std::nullopt;
+    if (length_squared(target_normal) <= kEpsilon) {
+      return std::nullopt;
     }
 
     const auto target_contains = [&face](ElementId vertex_id) {
@@ -489,8 +492,8 @@ void stitch_uv_axis_to_reference_seam(Face& target_face, const Face& reference_f
     const float reference_start = stitch_u_axis ? reference_a->x : reference_a->y;
     const float reference_end = stitch_u_axis ? reference_b->x : reference_b->y;
     const float target_delta = target_end - target_start;
-    if (std::abs(target_delta) <= epsilon) {
-        return;
+    if (std::abs(target_delta) <= kEpsilon) {
+      return;
     }
 
     const float scale = (reference_end - reference_start) / target_delta;
@@ -502,25 +505,33 @@ void stitch_uv_axis_to_reference_seam(Face& target_face, const Face& reference_f
 
 void stitch_merge_split_uv_pair(const Face& reference_face, Face& target_face, Edge shared_edge)
 {
-    constexpr float seam_stretch_ratio = 1.25F;
-    constexpr float seam_endpoint_epsilon = 0.01F;
+  constexpr float kSeamStretchRatio = 1.25F;
+  constexpr float kSeamEndpointEpsilon = 0.01F;
 
-    const auto should_stitch_axis = [&](float reference_start, float reference_end, float target_start, float target_end) {
-        const float reference_delta_axis = reference_end - reference_start;
-        const float target_delta_axis = target_end - target_start;
-        return std::abs(target_delta_axis) > epsilon &&
-            std::abs(reference_delta_axis) > std::abs(target_delta_axis) * seam_stretch_ratio &&
-            (std::abs(reference_start - target_start) > seam_endpoint_epsilon ||
-             std::abs(reference_end - target_end) > seam_endpoint_epsilon);
-    };
+  const auto should_stitch_axis = [&](float reference_start,
+                                      float reference_end, float target_start,
+                                      float target_end) {
+    const float reference_delta_axis = reference_end - reference_start;
+    const float target_delta_axis = target_end - target_start;
+    return std::abs(target_delta_axis) > kEpsilon &&
+           std::abs(reference_delta_axis) >
+               std::abs(target_delta_axis) * kSeamStretchRatio &&
+           (std::abs(reference_start - target_start) > kSeamEndpointEpsilon ||
+            std::abs(reference_end - target_end) > kSeamEndpointEpsilon);
+  };
 
-    const std::optional<quader::QVec2> reference_a = face_uv_for_vertex_id(reference_face, shared_edge.a);
-    const std::optional<quader::QVec2> reference_b = face_uv_for_vertex_id(reference_face, shared_edge.b);
-    const std::optional<quader::QVec2> target_a = face_uv_for_vertex_id(target_face, shared_edge.a);
-    const std::optional<quader::QVec2> target_b = face_uv_for_vertex_id(target_face, shared_edge.b);
-    if (!reference_a.has_value() || !reference_b.has_value() || !target_a.has_value() || !target_b.has_value()) {
-        return;
-    }
+  const std::optional<quader::QVec2> reference_a =
+      face_uv_for_vertex_id(reference_face, shared_edge.a);
+  const std::optional<quader::QVec2> reference_b =
+      face_uv_for_vertex_id(reference_face, shared_edge.b);
+  const std::optional<quader::QVec2> target_a =
+      face_uv_for_vertex_id(target_face, shared_edge.a);
+  const std::optional<quader::QVec2> target_b =
+      face_uv_for_vertex_id(target_face, shared_edge.b);
+  if (!reference_a.has_value() || !reference_b.has_value() ||
+      !target_a.has_value() || !target_b.has_value()) {
+    return;
+  }
 
     if (should_stitch_axis(reference_a->x, reference_b->x, target_a->x, target_b->x)) {
         stitch_uv_axis_to_reference_seam(target_face, reference_face, shared_edge, true);
@@ -599,9 +610,10 @@ bool face_uvs_equal(std::span<const quader::QVec2> left, std::span<const quader:
         return false;
     }
     for (std::size_t index = 0; index < left.size(); ++index) {
-        if (std::abs(left[index].x - right[index].x) > epsilon || std::abs(left[index].y - right[index].y) > epsilon) {
-            return false;
-        }
+      if (std::abs(left[index].x - right[index].x) > kEpsilon ||
+          std::abs(left[index].y - right[index].y) > kEpsilon) {
+        return false;
+      }
     }
     return true;
 }
@@ -636,23 +648,23 @@ std::vector<ElementId> uv_target_face_ids(const Document& document, const Select
 {
     std::vector<ElementId> ids;
     switch (selection.mode) {
-    case SelectionMode::face:
-        ids = selection.faces;
-        break;
-    case SelectionMode::edge:
-        for (const Face& face : document.faces) {
-            if (face_uses_any_edge(face, selection.edges)) {
-                ids.push_back(face.id);
-            }
+    case SelectionMode::Face:
+      ids = selection.faces;
+      break;
+    case SelectionMode::Edge:
+      for (const Face &face : document.faces) {
+        if (face_uses_any_edge(face, selection.edges)) {
+          ids.push_back(face.id);
         }
-        break;
-    case SelectionMode::vertex:
-        for (const Face& face : document.faces) {
-            if (face_uses_any_vertex(face, selection.vertices)) {
-                ids.push_back(face.id);
-            }
+      }
+      break;
+    case SelectionMode::Vertex:
+      for (const Face &face : document.faces) {
+        if (face_uses_any_vertex(face, selection.vertices)) {
+          ids.push_back(face.id);
         }
-        break;
+      }
+      break;
     }
     ids = unique_face_ids(std::move(ids));
     std::erase_if(ids, [&document](ElementId id) {
@@ -669,8 +681,8 @@ bool fit_face_uvs(Face& face, bool fit_u, bool fit_v)
     }
     const float width = bounds.max.x - bounds.min.x;
     const float height = bounds.max.y - bounds.min.y;
-    if ((fit_u && width <= epsilon) || (fit_v && height <= epsilon)) {
-        return false;
+    if ((fit_u && width <= kEpsilon) || (fit_v && height <= kEpsilon)) {
+      return false;
     }
     for (quader::QVec2& uv : face.uvs) {
         if (fit_u) {
@@ -685,9 +697,10 @@ bool fit_face_uvs(Face& face, bool fit_u, bool fit_v)
 
 bool shift_face_uvs(Face& face, float delta_u, float delta_v)
 {
-    if (!face_has_loop_uvs(face) || (std::abs(delta_u) <= epsilon && std::abs(delta_v) <= epsilon)) {
-        return false;
-    }
+  if (!face_has_loop_uvs(face) ||
+      (std::abs(delta_u) <= kEpsilon && std::abs(delta_v) <= kEpsilon)) {
+    return false;
+  }
     for (quader::QVec2& uv : face.uvs) {
         uv.x += delta_u;
         uv.y += delta_v;

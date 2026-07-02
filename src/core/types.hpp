@@ -13,7 +13,7 @@ namespace quader {
 using EntityId = std::uint64_t;
 using AssetId = std::uint64_t;
 
-inline constexpr EntityId InvalidEntityId = 0;
-inline constexpr AssetId InvalidAssetId = 0;
+inline constexpr EntityId kInvalidEntityId = 0;
+inline constexpr AssetId kInvalidAssetId = 0;
 
 } // namespace quader

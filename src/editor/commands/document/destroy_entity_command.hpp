@@ -27,42 +27,47 @@ public:
 
     DocumentCommandResult undo() override {
         if (!snapshot_.has_value()) {
-            return documentCommandMissingEntityResult();
+          return document_command_missing_entity_result();
         }
 
-        std::unordered_map<EntityId, EntityId> remappedEntities;
-        const EntityId parent = snapshot_->originalParent != InvalidEntityId && scene().exists(snapshot_->originalParent)
-                ? snapshot_->originalParent
-                : InvalidEntityId;
-        entity_ = documentCommandRestoreEntitySnapshotTree(scene(), *snapshot_, parent, remappedEntities);
-        if (entity_ == InvalidEntityId || !scene().exists(entity_)) {
-            return documentCommandMissingEntityResult();
+        std::unordered_map<EntityId, EntityId> remapped_entities;
+        const EntityId parent =
+            snapshot_->original_parent != kInvalidEntityId &&
+                    scene().exists(snapshot_->original_parent)
+                ? snapshot_->original_parent
+                : kInvalidEntityId;
+        entity_ = document_command_restore_entity_snapshot_tree(
+            scene(), *snapshot_, parent, remapped_entities);
+        if (entity_ == kInvalidEntityId || !scene().exists(entity_)) {
+          return document_command_missing_entity_result();
         }
-        documentCommandApplySelection(scene(), documentCommandRemapSelection(beforeSelection_, remappedEntities));
-        return documentCommandChangedResult();
+        document_command_apply_selection(
+            scene(), document_command_remap_selection(before_selection_,
+                                                      remapped_entities));
+        return document_command_changed_result();
     }
 
     DocumentCommandResult redo() override {
-        if (entity_ == InvalidEntityId || !scene().exists(entity_)) {
-            return documentCommandMissingEntityResult();
-        }
+      if (entity_ == kInvalidEntityId || !scene().exists(entity_)) {
+        return document_command_missing_entity_result();
+      }
 
-        beforeSelection_ = documentCommandCaptureSelection(scene());
-        snapshot_ = documentCommandCaptureEntitySnapshot(scene(), entity_);
-        if (!snapshot_.has_value()) {
-            return documentCommandMissingEntityResult();
-        }
-        if (!scene().destroyEntity(entity_)) {
-            return documentCommandMissingEntityResult();
-        }
-        entity_ = InvalidEntityId;
-        return documentCommandChangedResult();
+      before_selection_ = document_command_capture_selection(scene());
+      snapshot_ = document_command_capture_entity_snapshot(scene(), entity_);
+      if (!snapshot_.has_value()) {
+        return document_command_missing_entity_result();
+      }
+      if (!scene().destroy_entity(entity_)) {
+        return document_command_missing_entity_result();
+      }
+      entity_ = kInvalidEntityId;
+      return document_command_changed_result();
     }
 
 private:
-    EntityId entity_ = InvalidEntityId;
-    std::optional<DocumentEntitySnapshot> snapshot_;
-    DocumentSelectionState beforeSelection_;
+  EntityId entity_ = kInvalidEntityId;
+  std::optional<DocumentEntitySnapshot> snapshot_;
+  DocumentSelectionState before_selection_;
 };
 
 } // namespace quader

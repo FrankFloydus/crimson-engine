@@ -21,42 +21,42 @@ namespace quader_editor_core {
  * Enumerates ViewportNavigationMode values used by the modeling layer.
  */
 enum class ViewportNavigationMode {
-	none,
-	orbit,
-	pan,
-	fly,
+  None,
+  Orbit,
+  Pan,
+  Fly,
 };
 
 /**
  * Enumerates ViewAxisStepDirection values used by the modeling layer.
  */
 enum class ViewAxisStepDirection {
-	left,
-	right,
-	up,
-	down,
+  Left,
+  Right,
+  Up,
+  Down,
 };
 
 /**
  * Enumerates ViewCubeHitKind values used by the modeling layer.
  */
 enum class ViewCubeHitKind {
-	none,
-	body,
-	face,
+  None,
+  Body,
+  Face,
 };
 
 /**
  * Stores the Viewport Navigation State data contract used by the modal modeling interaction layer.
  */
 struct ViewportNavigationState {
-	ViewportNavigationMode mode = ViewportNavigationMode::none;
-	quader::QVec3 pivot;
-	bool has_pivot = false;
-	quader_poly::Transform3 orbit_snap_source_transform;
-	bool has_orbit_snap_source = false;
-	std::uint64_t fly_camera_id = 0;
-	std::string fly_pane_id;
+  ViewportNavigationMode mode = ViewportNavigationMode::None;
+  quader::QVec3 pivot;
+  bool has_pivot = false;
+  quader_poly::Transform3 orbit_snap_source_transform;
+  bool has_orbit_snap_source = false;
+  std::uint64_t fly_camera_id = 0;
+  std::string fly_pane_id;
 };
 
 /**
@@ -80,8 +80,8 @@ struct ViewportOrbitInput {
 	quader_poly::Transform3 camera_transform;
 	quader::QVec3 pivot;
 	quader::QVec2 screen_delta;
-	double sensitivity = navigation_orbit_radians_per_pixel;
-	bool snap_to_orthogonal = false;
+        double sensitivity = kNavigationOrbitRadiansPerPixel;
+        bool snap_to_orthogonal = false;
 };
 
 /**
@@ -122,7 +122,7 @@ struct ViewportFlyLookInput {
 	quader_poly::Transform3 camera_transform;
 	quader::QVec3 pivot;
 	quader::QVec2 screen_delta;
-	double sensitivity = navigation_fly_look_radians_per_pixel;
+        double sensitivity = kNavigationFlyLookRadiansPerPixel;
 };
 
 /**
@@ -149,33 +149,33 @@ struct ViewportFrameBoundsInput {
  * Represents a View Cube Face Primitive value used by the modal modeling interaction layer.
  */
 struct ViewCubeFacePrimitive {
-	ViewAxis axis = ViewAxis::x;
-	int sign = 1;
-	double depth = 0.0;
-	quader::QVec2 screen_position;
-	std::vector<quader::QVec2> polygon;
+  ViewAxis axis = ViewAxis::X;
+  int sign = 1;
+  double depth = 0.0;
+  quader::QVec2 screen_position;
+  std::vector<quader::QVec2> polygon;
 };
 
 /**
  * Represents a View Cube QAxis Marker Primitive value used by the modal modeling interaction layer.
  */
 struct ViewCubeAxisMarkerPrimitive {
-	ViewAxis axis = ViewAxis::x;
-	int sign = 1;
-	double depth = 0.0;
-	quader::QVec2 screen_position;
+  ViewAxis axis = ViewAxis::X;
+  int sign = 1;
+  double depth = 0.0;
+  quader::QVec2 screen_position;
 };
 
 /**
  * Represents a View Cube Edge Primitive value used by the modal modeling interaction layer.
  */
 struct ViewCubeEdgePrimitive {
-	ViewAxis axis = ViewAxis::x;
-	double depth = 0.0;
-	quader::QVec3 local_start;
-	quader::QVec3 local_end;
-	quader::QVec2 screen_start;
-	quader::QVec2 screen_end;
+  ViewAxis axis = ViewAxis::X;
+  double depth = 0.0;
+  quader::QVec3 local_start;
+  quader::QVec3 local_end;
+  quader::QVec2 screen_start;
+  quader::QVec2 screen_end;
 };
 
 /**
@@ -216,9 +216,9 @@ struct ViewCubePickInput {
 struct ViewCubeHit {
 	bool ok = true;
 	bool hit = false;
-	ViewCubeHitKind kind = ViewCubeHitKind::none;
-	ViewAxis axis = ViewAxis::x;
-	int sign = 1;
+        ViewCubeHitKind kind = ViewCubeHitKind::None;
+        ViewAxis axis = ViewAxis::X;
+        int sign = 1;
 	double depth = 0.0;
 	quader::QVec2 screen_position;
 };

@@ -26,7 +26,7 @@ float clamp_primitive_dimension(float value)
     if (!std::isfinite(value)) {
         return 1.0F;
     }
-    return std::clamp(value, min_primitive_dimension, max_primitive_dimension);
+    return std::clamp(value, kMinPrimitiveDimension, kMaxPrimitiveDimension);
 }
 
 int clamp_primitive_count(int value, int min_value, int max_value)
@@ -47,8 +47,8 @@ quader::QVec3 spherical_position(float radius, float theta, float phi)
 quader::QVec3 normalize_to_radius(quader::QVec3 value, float radius)
 {
     const quader::QVec3 normal = normalize_or_zero(value);
-    if (length_squared(normal) <= epsilon) {
-        return { 0.0F, radius, 0.0F };
+    if (length_squared(normal) <= kEpsilon) {
+      return {0.0F, radius, 0.0F};
     }
     return normal * radius;
 }
@@ -277,11 +277,12 @@ Document make_cylinder(const CylinderPrimitiveSpec& spec)
     top_ring.reserve(static_cast<std::size_t>(sides));
 
     for (int side = 0; side < sides; ++side) {
-        const float theta = 2.0F * pi * static_cast<float>(side) / static_cast<float>(sides);
-        const float x = radius * std::cos(theta);
-        const float z = radius * std::sin(theta);
-        bottom_ring.push_back(add_vertex(document, { x, -half_height, z }));
-        top_ring.push_back(add_vertex(document, { x, half_height, z }));
+      const float theta =
+          2.0F * kPi * static_cast<float>(side) / static_cast<float>(sides);
+      const float x = radius * std::cos(theta);
+      const float z = radius * std::sin(theta);
+      bottom_ring.push_back(add_vertex(document, {x, -half_height, z}));
+      top_ring.push_back(add_vertex(document, {x, half_height, z}));
     }
 
     for (int side = 0; side < sides; ++side) {
@@ -317,8 +318,11 @@ Document make_cone(const ConePrimitiveSpec& spec)
     std::vector<ElementId> base_ring;
     base_ring.reserve(static_cast<std::size_t>(sides));
     for (int side = 0; side < sides; ++side) {
-        const float theta = 2.0F * pi * static_cast<float>(side) / static_cast<float>(sides);
-        base_ring.push_back(add_vertex(document, { radius * std::cos(theta), -half_height, radius * std::sin(theta) }));
+      const float theta =
+          2.0F * kPi * static_cast<float>(side) / static_cast<float>(sides);
+      base_ring.push_back(
+          add_vertex(document, {radius * std::cos(theta), -half_height,
+                                radius * std::sin(theta)}));
     }
 
     const ElementId apex = add_vertex(document, { 0.0F, half_height, 0.0F });
@@ -368,10 +372,13 @@ Document make_uv_sphere(const UvSpherePrimitiveSpec& spec)
     for (int ring = 1; ring < rings; ++ring) {
         std::vector<ElementId>& ring_vertices = latitude_rings[static_cast<std::size_t>(ring - 1)];
         ring_vertices.reserve(static_cast<std::size_t>(segments));
-        const float phi = pi * static_cast<float>(ring) / static_cast<float>(rings);
+        const float phi =
+            kPi * static_cast<float>(ring) / static_cast<float>(rings);
         for (int segment = 0; segment < segments; ++segment) {
-            const float theta = 2.0F * pi * static_cast<float>(segment) / static_cast<float>(segments);
-            ring_vertices.push_back(add_vertex(document, spherical_position(radius, theta, phi)));
+          const float theta = 2.0F * kPi * static_cast<float>(segment) /
+                              static_cast<float>(segments);
+          ring_vertices.push_back(
+              add_vertex(document, spherical_position(radius, theta, phi)));
         }
     }
     const ElementId bottom = add_vertex(document, { 0.0F, -radius, 0.0F });
@@ -420,21 +427,13 @@ Document make_ico_sphere(const IcoSpherePrimitiveSpec& spec)
 {
     const float radius = clamp_primitive_dimension(spec.radius);
     const int subdivisions = clamp_primitive_count(spec.subdivisions, 0, 5);
-    constexpr float t = 1.6180339887498948482F;
+    constexpr float kT = 1.6180339887498948482F;
 
-    std::vector<quader::QVec3> positions {
-        { -1.0F, t, 0.0F },
-        { 1.0F, t, 0.0F },
-        { -1.0F, -t, 0.0F },
-        { 1.0F, -t, 0.0F },
-        { 0.0F, -1.0F, t },
-        { 0.0F, 1.0F, t },
-        { 0.0F, -1.0F, -t },
-        { 0.0F, 1.0F, -t },
-        { t, 0.0F, -1.0F },
-        { t, 0.0F, 1.0F },
-        { -t, 0.0F, -1.0F },
-        { -t, 0.0F, 1.0F },
+    std::vector<quader::QVec3> positions{
+        {-1.0F, kT, 0.0F},  {1.0F, kT, 0.0F},   {-1.0F, -kT, 0.0F},
+        {1.0F, -kT, 0.0F},  {0.0F, -1.0F, kT},  {0.0F, 1.0F, kT},
+        {0.0F, -1.0F, -kT}, {0.0F, 1.0F, -kT},  {kT, 0.0F, -1.0F},
+        {kT, 0.0F, 1.0F},   {-kT, 0.0F, -1.0F}, {-kT, 0.0F, 1.0F},
     };
     for (quader::QVec3& position : positions) {
         position = normalize_to_radius(position, 1.0F);
@@ -528,18 +527,21 @@ Document make_torus(const TorusPrimitiveSpec& spec)
     };
 
     for (int major = 0; major < major_segments; ++major) {
-        const float theta = 2.0F * pi * static_cast<float>(major) / static_cast<float>(major_segments);
-        const float cos_theta = std::cos(theta);
-        const float sin_theta = std::sin(theta);
-        for (int minor = 0; minor < minor_segments; ++minor) {
-            const float phi = 2.0F * pi * static_cast<float>(minor) / static_cast<float>(minor_segments);
-            const float tube_radius = major_radius + (minor_radius * std::cos(phi));
-            vertices[vertex_index(major, minor)] = add_vertex(document, {
-                tube_radius * cos_theta,
-                minor_radius * std::sin(phi),
-                tube_radius * sin_theta,
-            });
-        }
+      const float theta = 2.0F * kPi * static_cast<float>(major) /
+                          static_cast<float>(major_segments);
+      const float cos_theta = std::cos(theta);
+      const float sin_theta = std::sin(theta);
+      for (int minor = 0; minor < minor_segments; ++minor) {
+        const float phi = 2.0F * kPi * static_cast<float>(minor) /
+                          static_cast<float>(minor_segments);
+        const float tube_radius = major_radius + (minor_radius * std::cos(phi));
+        vertices[vertex_index(major, minor)] =
+            add_vertex(document, {
+                                     tube_radius * cos_theta,
+                                     minor_radius * std::sin(phi),
+                                     tube_radius * sin_theta,
+                                 });
+      }
     }
 
     for (int major = 0; major < major_segments; ++major) {

@@ -18,24 +18,24 @@ namespace quader {
  * Stores a keybinding rule exposed by the public command API.
  */
 struct QuaderKeybindingRule {
-    std::string targetId;
-    std::vector<QuaderInputChord> sequence;
-    std::string shortcut;
-    std::string when;
-    std::string source = "default";
-    int weight = 0;
-    bool removal = false;
-    std::size_t order = 0u;
+  std::string target_id;
+  std::vector<QuaderInputChord> sequence;
+  std::string shortcut;
+  std::string when;
+  std::string source = "default";
+  int weight = 0;
+  bool removal = false;
+  std::size_t order = 0u;
 };
 
 /**
  * Stores keybinding conflict information for rebinding UI and tests.
  */
 struct QuaderKeybindingConflict {
-    std::string targetId;
-    std::string shortcut;
-    std::string when;
-    std::string source;
+  std::string target_id;
+  std::string shortcut;
+  std::string when;
+  std::string source;
 };
 
 } // namespace quader

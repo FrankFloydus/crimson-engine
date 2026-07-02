@@ -22,8 +22,8 @@ TEST(QdrDocumentOperationDetachFacesTests, DetachFacesDuplicatesSharedBoundaryVe
 	EXPECT_TRUE(result.changed);
 	EXPECT_TRUE(document.vertices.size() == vertex_count_before + 2U);
 	EXPECT_TRUE(document.faces.size() == 2U);
-	EXPECT_TRUE(selection.mode == SelectionMode::face);
-	EXPECT_TRUE(selection.faces.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Face);
+        EXPECT_TRUE(selection.faces.size() == 1U);
 	EXPECT_TRUE(selection.active_face == detached_face_id);
 	EXPECT_TRUE(face_perimeter_info(document, detached_face_id).has_only_open_edges());
 	EXPECT_TRUE(qdr_test::open_edge_count(document) == 8U);

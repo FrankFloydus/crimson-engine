@@ -18,14 +18,15 @@ namespace quader {
  */
 class ViewportPaneController {
 public:
-    void resetCamera(ViewportPaneId paneId, ViewportCameraController& camera) const;
-    void resetCamera(ViewportView view, ViewportCameraController& camera) const;
+  void reset_camera(ViewportPaneId pane_id,
+                    ViewportCameraController &camera) const;
+  void reset_camera(ViewportView view, ViewportCameraController &camera) const;
 
-    [[nodiscard]] static ImVec2 paneRectMin(
-            ImVec2 viewportMin,
-            ImVec2 viewportSize,
-            ViewportNormalizedRect normalizedRect);
-    [[nodiscard]] static ImVec2 paneRectSize(ImVec2 viewportSize, ViewportNormalizedRect normalizedRect);
+  [[nodiscard]] static ImVec2
+  pane_rect_min(ImVec2 viewport_min, ImVec2 viewport_size,
+                ViewportNormalizedRect normalized_rect);
+  [[nodiscard]] static ImVec2
+  pane_rect_size(ImVec2 viewport_size, ViewportNormalizedRect normalized_rect);
 };
 
 } // namespace quader

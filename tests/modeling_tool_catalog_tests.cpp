@@ -37,40 +37,48 @@
 namespace quader {
 namespace {
 
-using test::guardrail::readSourceFile;
-using test::guardrail::sourceRoot;
+using test::guardrail::read_source_file;
+using test::guardrail::source_root;
 
-bool instantOperationCatalogOwnsActionId(std::string_view actionId) {
-    for (const ModelingInstantOperationCatalogEntry& entry : modelingInstantOperationCatalog()) {
-        if (entry.id == actionId) {
-            return true;
-        }
+bool instant_operation_catalog_owns_action_id(std::string_view action_id) {
+  for (const ModelingInstantOperationCatalogEntry &entry :
+       modeling_instant_operation_catalog()) {
+    if (entry.id == action_id) {
+      return true;
     }
-    return false;
+  }
+  return false;
 }
 
-bool commandToolOwnsHostActionId(std::string_view actionId) {
-    return actionId == std::string_view("delete_selection") || instantOperationCatalogOwnsActionId(actionId);
+bool command_tool_owns_host_action_id(std::string_view action_id) {
+  return action_id == std::string_view("delete_selection") ||
+         instant_operation_catalog_owns_action_id(action_id);
 }
 
 TEST(ModelingToolCatalogTests, ContainsEveryInstantOperationCommandTool) {
-    const std::span<const InstantCommandTool* const> tools = modelingInstantOperationCommandTools();
-    ASSERT_EQ(tools.size(), modelingInstantOperationCatalog().size());
+  const std::span<const InstantCommandTool *const> tools =
+      modeling_instant_operation_command_tools();
+  ASSERT_EQ(tools.size(), modeling_instant_operation_catalog().size());
 
-    for (const ModelingInstantOperationCatalogEntry& operation : modelingInstantOperationCatalog()) {
-        const InstantCommandTool* tool = findModelingInstantCommandTool(operation.operation);
-        ASSERT_NE(tool, nullptr) << operation.id;
-        EXPECT_TRUE(tool->hasInstantOperation());
-        EXPECT_EQ(tool->operation(), operation.operation);
-        EXPECT_EQ(tool->kind(), CommandToolKind::Instant);
-        EXPECT_EQ(tool->previewKind(), ModelingActionPreviewKind::None);
-        EXPECT_EQ(tool->historyPolicy().mode, ModelingCommandHistoryMode::ModelingUndoRedo);
-        EXPECT_EQ(tool->id(), operation.id);
-        const quader_host_contract::HostActionDescriptor* action =
-                quader_host_contract::find_action_descriptor(operation.id);
-        EXPECT_EQ(tool->label(), action == nullptr ? operation.commandLabel : action->label);
-        EXPECT_EQ(tool->operationId(), action == nullptr ? operation.operationId : action->operation_id);
-    }
+  for (const ModelingInstantOperationCatalogEntry &operation :
+       modeling_instant_operation_catalog()) {
+    const InstantCommandTool *tool =
+        find_modeling_instant_command_tool(operation.operation);
+    ASSERT_NE(tool, nullptr) << operation.id;
+    EXPECT_TRUE(tool->has_instant_operation());
+    EXPECT_EQ(tool->operation(), operation.operation);
+    EXPECT_EQ(tool->kind(), CommandToolKind::Instant);
+    EXPECT_EQ(tool->preview_kind(), ModelingActionPreviewKind::None);
+    EXPECT_EQ(tool->history_policy().mode,
+              ModelingCommandHistoryMode::ModelingUndoRedo);
+    EXPECT_EQ(tool->id(), operation.id);
+    const quader_host_contract::HostActionDescriptor *action =
+        quader_host_contract::find_action_descriptor(operation.id);
+    EXPECT_EQ(tool->label(),
+              action == nullptr ? operation.command_label : action->label);
+    EXPECT_EQ(tool->operation_id(), action == nullptr ? operation.operation_id
+                                                      : action->operation_id);
+  }
 }
 
 TEST(ModelingToolCatalogTests, CommandFamiliesExposeTheApprovedHierarchy) {
@@ -93,153 +101,191 @@ TEST(ModelingToolCatalogTests, CommandFamiliesExposeTheApprovedHierarchy) {
 
 TEST(ModelingToolCatalogTests, RegisteredToolsExposeConsistentDescriptorsAndPolicies) {
     std::unordered_set<std::string> ids;
-    const std::span<const CommandTool* const> tools = modelingCommandTools();
-    ASSERT_EQ(
-            tools.size(),
-            modelingInstantCommandTools().size() + modelingContextActionTools().size() + modelingPreviewCommandTools().size());
+    const std::span<const CommandTool *const> tools = modeling_command_tools();
+    ASSERT_EQ(tools.size(), modeling_instant_command_tools().size() +
+                                modeling_context_action_tools().size() +
+                                modeling_preview_command_tools().size());
 
     for (const CommandTool* tool : tools) {
         ASSERT_NE(tool, nullptr);
         const CommandToolDescriptor descriptor = tool->descriptor();
         EXPECT_FALSE(descriptor.id.empty());
-        EXPECT_FALSE(descriptor.operationId.empty());
+        EXPECT_FALSE(descriptor.operation_id.empty());
         EXPECT_FALSE(descriptor.label.empty());
         EXPECT_EQ(tool->id(), descriptor.id);
-        EXPECT_EQ(tool->operationId(), descriptor.operationId);
+        EXPECT_EQ(tool->operation_id(), descriptor.operation_id);
         EXPECT_EQ(tool->label(), descriptor.label);
         EXPECT_EQ(tool->kind(), descriptor.kind);
-        EXPECT_EQ(tool->previewKind(), descriptor.previewKind);
-        EXPECT_EQ(tool->rebuildsMeshOnSuccess(), descriptor.rebuildsMeshOnSuccess);
+        EXPECT_EQ(tool->preview_kind(), descriptor.preview_kind);
+        EXPECT_EQ(tool->rebuilds_mesh_on_success(),
+                  descriptor.rebuilds_mesh_on_success);
         EXPECT_TRUE(ids.emplace(std::string(tool->id())).second) << tool->id();
 
-        const ModelingCommandHistoryPolicy history = tool->historyPolicy();
-        if (tool->kind() == CommandToolKind::Preview || !tool->rebuildsMeshOnSuccess()) {
-            EXPECT_EQ(history.mode, ModelingCommandHistoryMode::None) << tool->id();
+        const ModelingCommandHistoryPolicy history = tool->history_policy();
+        if (tool->kind() == CommandToolKind::Preview ||
+            !tool->rebuilds_mesh_on_success()) {
+          EXPECT_EQ(history.mode, ModelingCommandHistoryMode::None)
+              << tool->id();
         } else {
-            EXPECT_EQ(history.mode, ModelingCommandHistoryMode::ModelingUndoRedo) << tool->id();
+          EXPECT_EQ(history.mode, ModelingCommandHistoryMode::ModelingUndoRedo)
+              << tool->id();
         }
     }
 }
 
 TEST(ModelingToolCatalogTests, PublicCommandBridgeMetadataLivesOnCommandDescriptors) {
-    const CommandTool* deleteSelection = findModelingCommandTool("delete_selection");
-    ASSERT_NE(deleteSelection, nullptr);
-    EXPECT_EQ(deleteSelection->publicCommandId(), QuaderCommand::DeleteSelection.string());
-    EXPECT_FALSE(deleteSelection->registersPublicCommand());
+  const CommandTool *delete_selection =
+      find_modeling_command_tool("delete_selection");
+  ASSERT_NE(delete_selection, nullptr);
+  EXPECT_EQ(delete_selection->public_command_id(),
+            quader_command::kDeleteSelection.string());
+  EXPECT_FALSE(delete_selection->registers_public_command());
 
-    const CommandTool* duplicate = findModelingCommandTool("duplicate_meshes");
-    ASSERT_NE(duplicate, nullptr);
-    EXPECT_TRUE(duplicate->publicCommandId().empty());
-    EXPECT_TRUE(duplicate->registersPublicCommand());
+  const CommandTool *duplicate = find_modeling_command_tool("duplicate_meshes");
+  ASSERT_NE(duplicate, nullptr);
+  EXPECT_TRUE(duplicate->public_command_id().empty());
+  EXPECT_TRUE(duplicate->registers_public_command());
 
-    const CommandTool* applyActiveMaterial = findModelingCommandTool("apply_active_material");
-    ASSERT_NE(applyActiveMaterial, nullptr);
-    EXPECT_EQ(applyActiveMaterial->publicCommandId(), QuaderCommand::ApplyMaterial.string());
-    EXPECT_FALSE(applyActiveMaterial->registersPublicCommand());
+  const CommandTool *apply_active_material =
+      find_modeling_command_tool("apply_active_material");
+  ASSERT_NE(apply_active_material, nullptr);
+  EXPECT_EQ(apply_active_material->public_command_id(),
+            quader_command::kApplyMaterial.string());
+  EXPECT_FALSE(apply_active_material->registers_public_command());
 
-    const CommandTool* combineMeshes = findModelingCommandTool("combine_meshes");
-    ASSERT_NE(combineMeshes, nullptr);
-    EXPECT_TRUE(combineMeshes->publicCommandId().empty());
-    EXPECT_TRUE(combineMeshes->registersPublicCommand());
+  const CommandTool *combine_meshes =
+      find_modeling_command_tool("combine_meshes");
+  ASSERT_NE(combine_meshes, nullptr);
+  EXPECT_TRUE(combine_meshes->public_command_id().empty());
+  EXPECT_TRUE(combine_meshes->registers_public_command());
 }
 
 TEST(ModelingToolCatalogTests, HostOperationActionIdsResolveToCommandTools) {
-    std::size_t expectedContextActions = 0;
-    std::size_t expectedPreviewActions = 0;
-    for (const quader_host_contract::HostActionDescriptor& action : quader_host_contract::action_catalog()) {
-        if (action.kind != quader_host_contract::HostActionKind::operation) {
-            continue;
-        }
-        if (action.preview_kind == quader_host_contract::HostPreviewKind::none &&
-                !commandToolOwnsHostActionId(action.id)) {
-            ++expectedContextActions;
-        }
-        if (action.preview_kind != quader_host_contract::HostPreviewKind::none) {
-            ++expectedPreviewActions;
-        }
-
-        const CommandTool* tool = findModelingCommandTool(action.id);
-        ASSERT_NE(tool, nullptr) << action.id;
-        EXPECT_EQ(tool->operationId(), action.operation_id) << action.id;
-        EXPECT_EQ(tool->label(), action.label) << action.id;
-        EXPECT_EQ(tool->previewKind(), ModelingActionCatalog::previewKindFromHost(action.preview_kind)) << action.id;
-        if (action.preview_kind == quader_host_contract::HostPreviewKind::none) {
-            EXPECT_NE(tool->kind(), CommandToolKind::Preview) << action.id;
-        } else {
-            EXPECT_EQ(tool->kind(), CommandToolKind::Preview) << action.id;
-        }
+  std::size_t expected_context_actions = 0;
+  std::size_t expected_preview_actions = 0;
+  for (const quader_host_contract::HostActionDescriptor &action :
+       quader_host_contract::action_catalog()) {
+    if (action.kind != quader_host_contract::HostActionKind::Operation) {
+      continue;
+    }
+    if (action.preview_kind == quader_host_contract::HostPreviewKind::None &&
+        !command_tool_owns_host_action_id(action.id)) {
+      ++expected_context_actions;
+    }
+    if (action.preview_kind != quader_host_contract::HostPreviewKind::None) {
+      ++expected_preview_actions;
     }
 
-    EXPECT_EQ(modelingContextActionTools().size(), expectedContextActions);
-    EXPECT_EQ(modelingPreviewCommandTools().size(), expectedPreviewActions);
-    EXPECT_NE(findModelingContextActionTool("apply_active_material"), nullptr);
+    const CommandTool *tool = find_modeling_command_tool(action.id);
+    ASSERT_NE(tool, nullptr) << action.id;
+    EXPECT_EQ(tool->operation_id(), action.operation_id) << action.id;
+    EXPECT_EQ(tool->label(), action.label) << action.id;
+    EXPECT_EQ(
+        tool->preview_kind(),
+        ModelingActionCatalog::preview_kind_from_host(action.preview_kind))
+        << action.id;
+    if (action.preview_kind == quader_host_contract::HostPreviewKind::None) {
+      EXPECT_NE(tool->kind(), CommandToolKind::Preview) << action.id;
+    } else {
+      EXPECT_EQ(tool->kind(), CommandToolKind::Preview) << action.id;
+    }
+    }
+
+    EXPECT_EQ(modeling_context_action_tools().size(), expected_context_actions);
+    EXPECT_EQ(modeling_preview_command_tools().size(),
+              expected_preview_actions);
+    EXPECT_NE(find_modeling_context_action_tool("apply_active_material"),
+              nullptr);
 }
 
 TEST(ModelingToolCatalogTests, PreviewCommandsUseHostActionIds) {
-    const PreviewCommandTool* edgeBevel = findModelingPreviewCommandTool("bevel_edges");
-    ASSERT_NE(edgeBevel, nullptr);
-    EXPECT_EQ(edgeBevel->operationId(), std::string_view("edge_bevel"));
-    EXPECT_EQ(edgeBevel->previewKind(), ModelingActionPreviewKind::EdgeBevel);
+  const PreviewCommandTool *edge_bevel =
+      find_modeling_preview_command_tool("bevel_edges");
+  ASSERT_NE(edge_bevel, nullptr);
+  EXPECT_EQ(edge_bevel->operation_id(), std::string_view("edge_bevel"));
+  EXPECT_EQ(edge_bevel->preview_kind(), ModelingActionPreviewKind::EdgeBevel);
 
-    const PreviewCommandTool* edgeBridge = findModelingPreviewCommandTool("interpolated_bridge_edges");
-    ASSERT_NE(edgeBridge, nullptr);
-    EXPECT_EQ(edgeBridge->operationId(), std::string_view("bridge"));
-    EXPECT_EQ(edgeBridge->previewKind(), ModelingActionPreviewKind::Bridge);
+  const PreviewCommandTool *edge_bridge =
+      find_modeling_preview_command_tool("interpolated_bridge_edges");
+  ASSERT_NE(edge_bridge, nullptr);
+  EXPECT_EQ(edge_bridge->operation_id(), std::string_view("bridge"));
+  EXPECT_EQ(edge_bridge->preview_kind(), ModelingActionPreviewKind::Bridge);
 
-    const PreviewCommandTool* faceBridge = findModelingPreviewCommandTool("interpolated_bridge_faces");
-    ASSERT_NE(faceBridge, nullptr);
-    EXPECT_EQ(faceBridge->operationId(), std::string_view("bridge"));
-    EXPECT_EQ(faceBridge->previewKind(), ModelingActionPreviewKind::Bridge);
+  const PreviewCommandTool *face_bridge =
+      find_modeling_preview_command_tool("interpolated_bridge_faces");
+  ASSERT_NE(face_bridge, nullptr);
+  EXPECT_EQ(face_bridge->operation_id(), std::string_view("bridge"));
+  EXPECT_EQ(face_bridge->preview_kind(), ModelingActionPreviewKind::Bridge);
 
-    const PreviewCommandTool* thicken = findModelingPreviewCommandTool("thicken_faces");
-    ASSERT_NE(thicken, nullptr);
-    EXPECT_EQ(thicken->operationId(), std::string_view("thicken"));
-    EXPECT_EQ(thicken->previewKind(), ModelingActionPreviewKind::Thicken);
+  const PreviewCommandTool *thicken =
+      find_modeling_preview_command_tool("thicken_faces");
+  ASSERT_NE(thicken, nullptr);
+  EXPECT_EQ(thicken->operation_id(), std::string_view("thicken"));
+  EXPECT_EQ(thicken->preview_kind(), ModelingActionPreviewKind::Thicken);
 
-    const PreviewCommandTool* outerHull = findModelingPreviewCommandTool("create_outer_hull");
-    ASSERT_NE(outerHull, nullptr);
-    EXPECT_EQ(outerHull->operationId(), std::string_view("thicken"));
-    EXPECT_EQ(outerHull->previewKind(), ModelingActionPreviewKind::Thicken);
+  const PreviewCommandTool *outer_hull =
+      find_modeling_preview_command_tool("create_outer_hull");
+  ASSERT_NE(outer_hull, nullptr);
+  EXPECT_EQ(outer_hull->operation_id(), std::string_view("thicken"));
+  EXPECT_EQ(outer_hull->preview_kind(), ModelingActionPreviewKind::Thicken);
 
-    const PreviewCommandTool* sliceQuad = findModelingPreviewCommandTool("slice_quad");
-    ASSERT_NE(sliceQuad, nullptr);
-    EXPECT_EQ(sliceQuad->operationId(), std::string_view("slice_quad"));
-    EXPECT_EQ(sliceQuad->previewKind(), ModelingActionPreviewKind::SliceQuad);
+  const PreviewCommandTool *slice_quad =
+      find_modeling_preview_command_tool("slice_quad");
+  ASSERT_NE(slice_quad, nullptr);
+  EXPECT_EQ(slice_quad->operation_id(), std::string_view("slice_quad"));
+  EXPECT_EQ(slice_quad->preview_kind(), ModelingActionPreviewKind::SliceQuad);
 
-    const PreviewCommandTool* mergeByDistance = findModelingPreviewCommandTool("merge_by_distance");
-    ASSERT_NE(mergeByDistance, nullptr);
-    EXPECT_EQ(mergeByDistance->operationId(), std::string_view("merge_by_distance"));
-    EXPECT_EQ(mergeByDistance->previewKind(), ModelingActionPreviewKind::MergeByDistance);
+  const PreviewCommandTool *merge_by_distance =
+      find_modeling_preview_command_tool("merge_by_distance");
+  ASSERT_NE(merge_by_distance, nullptr);
+  EXPECT_EQ(merge_by_distance->operation_id(),
+            std::string_view("merge_by_distance"));
+  EXPECT_EQ(merge_by_distance->preview_kind(),
+            ModelingActionPreviewKind::MergeByDistance);
 }
 
 TEST(ModelingToolCatalogTests, DispatcherUsesCatalogAndHistoryPolicy) {
     ModelingCommandDispatcher dispatcher;
 
-    EXPECT_EQ(dispatcher.find("duplicate_meshes"), findModelingCommandTool("duplicate_meshes"));
+    EXPECT_EQ(dispatcher.find("duplicate_meshes"),
+              find_modeling_command_tool("duplicate_meshes"));
     EXPECT_EQ(dispatcher.find("missing_command"), nullptr);
-    EXPECT_EQ(dispatcher.historyPolicy("duplicate_meshes").mode, ModelingCommandHistoryMode::ModelingUndoRedo);
-    EXPECT_EQ(dispatcher.historyPolicy("select_all").mode, ModelingCommandHistoryMode::None);
-    EXPECT_EQ(dispatcher.historyPolicy("bevel_edges").mode, ModelingCommandHistoryMode::None);
-    EXPECT_EQ(dispatcher.historyPolicy("missing_command").mode, ModelingCommandHistoryMode::None);
+    EXPECT_EQ(dispatcher.history_policy("duplicate_meshes").mode,
+              ModelingCommandHistoryMode::ModelingUndoRedo);
+    EXPECT_EQ(dispatcher.history_policy("select_all").mode,
+              ModelingCommandHistoryMode::None);
+    EXPECT_EQ(dispatcher.history_policy("bevel_edges").mode,
+              ModelingCommandHistoryMode::None);
+    EXPECT_EQ(dispatcher.history_policy("missing_command").mode,
+              ModelingCommandHistoryMode::None);
 }
 
 TEST(ModelingToolCatalogTests, HostActionCommandToolsAreDerivedFromActionCatalog) {
-    const std::filesystem::path root = sourceRoot();
-    const std::string source = readSourceFile(root / "src" / "editor" / "commands" / "modeling_command_tool_catalog.cpp");
-    const std::string hostPreviewSwitchCase =
-            std::string("case quader_host_contract::") + "HostPreviewKind::";
+  const std::filesystem::path root = source_root();
+  const std::string source =
+      read_source_file(root / "src" / "editor" / "commands" /
+                       "modeling_command_tool_catalog.cpp");
+  const std::string host_preview_switch_case =
+      std::string("case quader_host_contract::") + "HostPreviewKind::";
 
-    EXPECT_NE(source.find("quader_host_contract::action_catalog()"), std::string::npos);
-    EXPECT_NE(source.find("instantOperationCatalogOwnsActionId("), std::string::npos);
-    EXPECT_NE(source.find("ModelingActionCatalog::previewKindFromHost("), std::string::npos);
-    EXPECT_EQ(source.find("contextDescriptorFromHostAction(\""), std::string::npos);
-    EXPECT_EQ(source.find("previewDescriptorFromHostAction("), std::string::npos);
-    EXPECT_EQ(source.find(hostPreviewSwitchCase), std::string::npos);
-    EXPECT_EQ(source.find("static const std::array<const ContextActionTool*"), std::string::npos);
-    EXPECT_EQ(source.find("static const std::array<const PreviewCommandTool*"), std::string::npos);
+  EXPECT_NE(source.find("quader_host_contract::action_catalog()"),
+            std::string::npos);
+  EXPECT_NE(source.find("instant_operation_catalog_owns_action_id("),
+            std::string::npos);
+  EXPECT_NE(source.find("ModelingActionCatalog::preview_kind_from_host("),
+            std::string::npos);
+  EXPECT_EQ(source.find("context_descriptor_from_host_action(\""),
+            std::string::npos);
+  EXPECT_EQ(source.find("previewDescriptorFromHostAction("), std::string::npos);
+  EXPECT_EQ(source.find(host_preview_switch_case), std::string::npos);
+  EXPECT_EQ(source.find("static const std::array<const ContextActionTool*"),
+            std::string::npos);
+  EXPECT_EQ(source.find("static const std::array<const PreviewCommandTool*"),
+            std::string::npos);
 
-    const std::string testSource = readSourceFile(root / "tests" / "modeling_tool_catalog_tests.cpp");
-    EXPECT_EQ(testSource.find(hostPreviewSwitchCase), std::string::npos);
+  const std::string test_source =
+      read_source_file(root / "tests" / "modeling_tool_catalog_tests.cpp");
+  EXPECT_EQ(test_source.find(host_preview_switch_case), std::string::npos);
 }
 
 } // namespace

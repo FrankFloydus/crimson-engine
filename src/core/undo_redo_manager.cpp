@@ -12,20 +12,20 @@ namespace quader {
 
 namespace {
 
-UndoRedoResult noUndoResult() {
-    return {
-            .ok = false,
-            .changed = false,
-            .message = "No command to undo",
-    };
+UndoRedoResult no_undo_result() {
+  return {
+      .ok = false,
+      .changed = false,
+      .message = "No command to undo",
+  };
 }
 
-UndoRedoResult noRedoResult() {
-    return {
-            .ok = false,
-            .changed = false,
-            .message = "No command to redo",
-    };
+UndoRedoResult no_redo_result() {
+  return {
+      .ok = false,
+      .changed = false,
+      .message = "No command to redo",
+  };
 }
 
 } // namespace
@@ -48,90 +48,90 @@ UndoRedoResult UndoRedoManager::execute(std::unique_ptr<IUndoableCommand> comman
         return result;
     }
 
-    if (!options.mergeKey.empty() &&
-            !undoStack_.empty() &&
-            undoStack_.back().mergeKey == options.mergeKey &&
-            undoStack_.back().command->mergeWith(*command, options.mergeKey)) {
-        redoStack_.clear();
-        return result;
+    if (!options.merge_key.empty() && !undo_stack_.empty() &&
+        undo_stack_.back().merge_key == options.merge_key &&
+        undo_stack_.back().command->merge_with(*command, options.merge_key)) {
+      redo_stack_.clear();
+      return result;
     }
 
-    undoStack_.push_back(StackEntry{
-            .command = std::move(command),
-            .mergeKey = std::move(options.mergeKey),
+    undo_stack_.push_back(StackEntry{
+        .command = std::move(command),
+        .merge_key = std::move(options.merge_key),
     });
-    redoStack_.clear();
+    redo_stack_.clear();
     return result;
 }
 
-UndoRedoResult UndoRedoManager::recordExecuted(std::unique_ptr<IUndoableCommand> command) {
-    if (!command) {
-        return {
-                .ok = false,
-                .changed = false,
-                .message = "Command is missing",
-        };
-    }
+UndoRedoResult
+UndoRedoManager::record_executed(std::unique_ptr<IUndoableCommand> command) {
+  if (!command) {
+    return {
+        .ok = false,
+        .changed = false,
+        .message = "Command is missing",
+    };
+  }
 
-    undoStack_.push_back(StackEntry{
-            .command = std::move(command),
-            .mergeKey = {},
-    });
-    redoStack_.clear();
-    return commandChangedResult();
+  undo_stack_.push_back(StackEntry{
+      .command = std::move(command),
+      .merge_key = {},
+  });
+  redo_stack_.clear();
+  return command_changed_result();
 }
 
 UndoRedoResult UndoRedoManager::undo() {
-    if (undoStack_.empty()) {
-        return noUndoResult();
-    }
+  if (undo_stack_.empty()) {
+    return no_undo_result();
+  }
 
-    StackEntry entry = std::move(undoStack_.back());
-    undoStack_.pop_back();
-    UndoRedoResult result = entry.command->undo();
-    if (!result.ok) {
-        undoStack_.push_back(std::move(entry));
-        return result;
-    }
-
-    redoStack_.push_back(std::move(entry));
+  StackEntry entry = std::move(undo_stack_.back());
+  undo_stack_.pop_back();
+  UndoRedoResult result = entry.command->undo();
+  if (!result.ok) {
+    undo_stack_.push_back(std::move(entry));
     return result;
+  }
+
+  redo_stack_.push_back(std::move(entry));
+  return result;
 }
 
 UndoRedoResult UndoRedoManager::redo() {
-    if (redoStack_.empty()) {
-        return noRedoResult();
-    }
+  if (redo_stack_.empty()) {
+    return no_redo_result();
+  }
 
-    StackEntry entry = std::move(redoStack_.back());
-    redoStack_.pop_back();
-    UndoRedoResult result = entry.command->redo();
-    if (!result.ok) {
-        redoStack_.push_back(std::move(entry));
-        return result;
-    }
-
-    undoStack_.push_back(std::move(entry));
+  StackEntry entry = std::move(redo_stack_.back());
+  redo_stack_.pop_back();
+  UndoRedoResult result = entry.command->redo();
+  if (!result.ok) {
+    redo_stack_.push_back(std::move(entry));
     return result;
+  }
+
+  undo_stack_.push_back(std::move(entry));
+  return result;
 }
 
-const std::string* UndoRedoManager::undoLabel() const {
-    if (undoStack_.empty()) {
-        return nullptr;
-    }
-    return &undoStack_.back().command->label();
+const std::string *UndoRedoManager::undo_label() const {
+  if (undo_stack_.empty()) {
+    return nullptr;
+  }
+  return &undo_stack_.back().command->label();
 }
 
-const std::string* UndoRedoManager::redoLabel() const {
-    if (redoStack_.empty()) {
-        return nullptr;
-    }
-    return &redoStack_.back().command->label();
+const std::string *UndoRedoManager::redo_label() const {
+  if (redo_stack_.empty()) {
+    return nullptr;
+  }
+  return &redo_stack_.back().command->label();
 }
 
 void UndoRedoManager::clear() {
-    undoStack_.clear();
-    redoStack_.clear();
+  undo_stack_.clear();
+  redo_stack_.clear();
 }
 
 } // namespace quader

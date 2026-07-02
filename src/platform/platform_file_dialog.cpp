@@ -29,47 +29,47 @@ constexpr wchar_t kProjectFileFilter[] = L"Quader Projects (*.qdr)\0*.qdr\0All F
 constexpr wchar_t kProjectDefaultExtension[] = L"qdr";
 constexpr std::size_t kPathBufferCharacters = 32768U;
 
-std::vector<wchar_t> pathBuffer(const std::filesystem::path& initialPath) {
-    std::vector<wchar_t> buffer(kPathBufferCharacters, L'\0');
-    const std::wstring text = initialPath.wstring();
-    if (!text.empty()) {
-        const std::size_t count = std::min(text.size(), buffer.size() - 1U);
-        std::copy_n(text.begin(), count, buffer.begin());
-    }
-    return buffer;
+std::vector<wchar_t> path_buffer(const std::filesystem::path &initial_path) {
+  std::vector<wchar_t> buffer(kPathBufferCharacters, L'\0');
+  const std::wstring text = initial_path.wstring();
+  if (!text.empty()) {
+    const std::size_t count = std::min(text.size(), buffer.size() - 1U);
+    std::copy_n(text.begin(), count, buffer.begin());
+  }
+  return buffer;
 }
 
-OPENFILENAMEW baseOpenFileName(
-        const PlatformFileDialogOptions& options,
-        std::vector<wchar_t>& buffer,
-        const std::wstring& initialDirectory) {
-    OPENFILENAMEW dialog{};
-    dialog.lStructSize = sizeof(dialog);
-    dialog.hwndOwner = static_cast<HWND>(options.ownerWindowHandle);
-    dialog.lpstrFilter = kProjectFileFilter;
-    dialog.lpstrFile = buffer.data();
-    dialog.nMaxFile = static_cast<DWORD>(buffer.size());
-    dialog.lpstrDefExt = kProjectDefaultExtension;
-    dialog.Flags = OFN_EXPLORER | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST;
-    if (!initialDirectory.empty()) {
-        dialog.lpstrInitialDir = initialDirectory.c_str();
-    }
-    return dialog;
+OPENFILENAMEW base_open_file_name(const PlatformFileDialogOptions &options,
+                                  std::vector<wchar_t> &buffer,
+                                  const std::wstring &initial_directory) {
+  OPENFILENAMEW dialog{};
+  dialog.lStructSize = sizeof(dialog);
+  dialog.hwndOwner = static_cast<HWND>(options.owner_window_handle);
+  dialog.lpstrFilter = kProjectFileFilter;
+  dialog.lpstrFile = buffer.data();
+  dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+  dialog.lpstrDefExt = kProjectDefaultExtension;
+  dialog.Flags = OFN_EXPLORER | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST;
+  if (!initial_directory.empty()) {
+    dialog.lpstrInitialDir = initial_directory.c_str();
+  }
+  return dialog;
 }
 #endif
 
 } // namespace
 
-std::optional<std::filesystem::path> platformOpenProjectFileDialog(
-        const PlatformFileDialogOptions& options) {
+std::optional<std::filesystem::path>
+platform_open_project_file_dialog(const PlatformFileDialogOptions &options) {
 #if defined(_WIN32)
-    std::vector<wchar_t> buffer = pathBuffer(options.initialFileName);
-    const std::wstring initialDirectory = options.initialDirectory.wstring();
-    OPENFILENAMEW dialog = baseOpenFileName(options, buffer, initialDirectory);
-    dialog.Flags |= OFN_FILEMUSTEXIST;
-    if (GetOpenFileNameW(&dialog) == FALSE) {
-        return std::nullopt;
-    }
+  std::vector<wchar_t> buffer = path_buffer(options.initial_file_name);
+  const std::wstring initial_directory = options.initial_directory.wstring();
+  OPENFILENAMEW dialog =
+      base_open_file_name(options, buffer, initial_directory);
+  dialog.Flags |= OFN_FILEMUSTEXIST;
+  if (GetOpenFileNameW(&dialog) == FALSE) {
+    return std::nullopt;
+  }
     return std::filesystem::path(buffer.data());
 #else
     (void)options;
@@ -77,16 +77,17 @@ std::optional<std::filesystem::path> platformOpenProjectFileDialog(
 #endif
 }
 
-std::optional<std::filesystem::path> platformSaveProjectFileDialog(
-        const PlatformFileDialogOptions& options) {
+std::optional<std::filesystem::path>
+platform_save_project_file_dialog(const PlatformFileDialogOptions &options) {
 #if defined(_WIN32)
-    std::vector<wchar_t> buffer = pathBuffer(options.initialFileName);
-    const std::wstring initialDirectory = options.initialDirectory.wstring();
-    OPENFILENAMEW dialog = baseOpenFileName(options, buffer, initialDirectory);
-    dialog.Flags |= OFN_OVERWRITEPROMPT;
-    if (GetSaveFileNameW(&dialog) == FALSE) {
-        return std::nullopt;
-    }
+  std::vector<wchar_t> buffer = path_buffer(options.initial_file_name);
+  const std::wstring initial_directory = options.initial_directory.wstring();
+  OPENFILENAMEW dialog =
+      base_open_file_name(options, buffer, initial_directory);
+  dialog.Flags |= OFN_OVERWRITEPROMPT;
+  if (GetSaveFileNameW(&dialog) == FALSE) {
+    return std::nullopt;
+  }
     return std::filesystem::path(buffer.data());
 #else
     (void)options;

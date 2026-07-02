@@ -24,11 +24,12 @@ public:
     [[nodiscard]] ModelingMirrorAxis axis() const;
 
 private:
-    ModelingCommandResult executeRuntimeCommand(ModelingCommandExecutionContext& context) const override;
+  ModelingCommandResult execute_runtime_command(
+      ModelingCommandExecutionContext &context) const override;
 
-    ModelingMirrorAxis axis_ = ModelingMirrorAxis::X;
-    std::string id_;
-    std::string label_;
+  ModelingMirrorAxis axis_ = ModelingMirrorAxis::X;
+  std::string id_;
+  std::string label_;
 };
 
 } // namespace quader

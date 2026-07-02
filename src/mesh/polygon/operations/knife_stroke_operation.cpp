@@ -66,7 +66,7 @@ OperationResult KnifeStrokeOperation::apply(Document& document, Selection& selec
 
     document = std::move(candidate.document);
     selection.clear();
-    selection.mode = SelectionMode::vertex;
+    selection.mode = SelectionMode::Vertex;
     for (const ElementId vertex_id : candidate.selected_vertices) {
         if (find_vertex(document, vertex_id) != nullptr) {
             add_unique_id(selection.vertices, vertex_id);

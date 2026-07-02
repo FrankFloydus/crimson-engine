@@ -10,42 +10,41 @@
 
 namespace quader {
 
-bool ViewportPaneOverlayCache::needsRefresh(const ViewportPaneOverlayCacheKey& key) const {
-    return refreshReason(key) != ViewportPaneOverlayCacheRefreshReason::None;
+bool ViewportPaneOverlayCache::needs_refresh(
+    const ViewportPaneOverlayCacheKey &key) const {
+  return refresh_reason(key) != ViewportPaneOverlayCacheRefreshReason::None;
 }
 
-ViewportPaneOverlayCacheRefreshReason ViewportPaneOverlayCache::refreshReason(
-        const ViewportPaneOverlayCacheKey& key) const {
-    if (dirty_) {
-        return ViewportPaneOverlayCacheRefreshReason::Dirty;
-    }
-    if (!valid_) {
-        return ViewportPaneOverlayCacheRefreshReason::Invalid;
-    }
-    if (key_.contentRevision != key.contentRevision) {
-        return ViewportPaneOverlayCacheRefreshReason::ContentRevision;
-    }
-    if (key_.selectionRevision != key.selectionRevision) {
-        return ViewportPaneOverlayCacheRefreshReason::SelectionRevision;
-    }
-    if (key_.sceneRevision != key.sceneRevision) {
-        return ViewportPaneOverlayCacheRefreshReason::SceneRevision;
-    }
-    if (key_.assetRevision != key.assetRevision) {
-        return ViewportPaneOverlayCacheRefreshReason::AssetRevision;
-    }
-    if (key_.overlaySignature != key.overlaySignature) {
-        return ViewportPaneOverlayCacheRefreshReason::OverlaySignature;
-    }
-    if (key_.selectionMode != key.selectionMode) {
-        return ViewportPaneOverlayCacheRefreshReason::SelectionMode;
-    }
-    return ViewportPaneOverlayCacheRefreshReason::None;
+ViewportPaneOverlayCacheRefreshReason ViewportPaneOverlayCache::refresh_reason(
+    const ViewportPaneOverlayCacheKey &key) const {
+  if (dirty_) {
+    return ViewportPaneOverlayCacheRefreshReason::Dirty;
+  }
+  if (!valid_) {
+    return ViewportPaneOverlayCacheRefreshReason::Invalid;
+  }
+  if (key_.content_revision != key.content_revision) {
+    return ViewportPaneOverlayCacheRefreshReason::ContentRevision;
+  }
+  if (key_.selection_revision != key.selection_revision) {
+    return ViewportPaneOverlayCacheRefreshReason::SelectionRevision;
+  }
+  if (key_.scene_revision != key.scene_revision) {
+    return ViewportPaneOverlayCacheRefreshReason::SceneRevision;
+  }
+  if (key_.asset_revision != key.asset_revision) {
+    return ViewportPaneOverlayCacheRefreshReason::AssetRevision;
+  }
+  if (key_.overlay_signature != key.overlay_signature) {
+    return ViewportPaneOverlayCacheRefreshReason::OverlaySignature;
+  }
+  if (key_.selection_mode != key.selection_mode) {
+    return ViewportPaneOverlayCacheRefreshReason::SelectionMode;
+  }
+  return ViewportPaneOverlayCacheRefreshReason::None;
 }
 
-void ViewportPaneOverlayCache::markDirty() {
-    dirty_ = true;
-}
+void ViewportPaneOverlayCache::mark_dirty() { dirty_ = true; }
 
 void ViewportPaneOverlayCache::update(ViewportOverlayFrame frame, const ViewportPaneOverlayCacheKey& key) {
     frame_ = std::move(frame);

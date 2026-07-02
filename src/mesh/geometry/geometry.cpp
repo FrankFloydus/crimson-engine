@@ -28,16 +28,16 @@ namespace quader_geometry::detail {
  * Enumerates QMathBackend values used by the geometry layer.
  */
 enum class QMathBackend {
-	local,
-	gte,
+  Local,
+  Gte,
 };
 
 [[nodiscard]] constexpr QMathBackend active_math_backend()
 {
-	return QMathBackend::gte;
+  return QMathBackend::Gte;
 }
 
-static_assert(active_math_backend() == QMathBackend::gte);
+static_assert(active_math_backend() == QMathBackend::Gte);
 
 [[nodiscard]] gte::Vector2<double> to_gte(QVec2d value)
 {
@@ -175,8 +175,8 @@ QClassifiedSegmentIntersection2<double> intersect_segments_2d(
 
 	QClassifiedSegmentIntersection2<double> classified;
 	classified.hit = true;
-	classified.kind = QSegmentIntersectionKind2::overlap;
-	classified.point_count = 2;
+        classified.kind = QSegmentIntersectionKind2::Overlap;
+        classified.point_count = 2;
 	classified.first_factors[0] = std::clamp(result.segment0Parameter[0], 0.0, 1.0);
 	classified.first_factors[1] = std::clamp(result.segment0Parameter[1], 0.0, 1.0);
 	classified.second_factors[0] = std::clamp(result.segment1Parameter[0], 0.0, 1.0);

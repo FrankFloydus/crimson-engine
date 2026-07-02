@@ -19,15 +19,19 @@
 
 TEST(QdrModelingRuntimeToolKnifeTests, KnifeToolExposesStableRegistryContractAndResetOwnership) {
 	const quader_editor_core::EditorTool& tool = quader_editor_core::knife_tool();
-	EXPECT_TRUE(tool.tool_id() == quader_editor_core::ViewportInteractionTool::knife);
-	EXPECT_TRUE(std::string(tool.id()) == "knife");
+        EXPECT_TRUE(tool.tool_id() ==
+                    quader_editor_core::ViewportInteractionTool::Knife);
+        EXPECT_TRUE(std::string(tool.id()) == "knife");
 	EXPECT_TRUE(std::string(tool.label()) == "Knife");
-	EXPECT_TRUE(quader_editor_core::editor_tool_for_kind(quader_editor_core::ViewportInteractionTool::knife) == &tool);
-	EXPECT_TRUE(quader_editor_core::editor_tool_for_id("knife") == &tool);
+        EXPECT_TRUE(quader_editor_core::editor_tool_for_kind(
+                        quader_editor_core::ViewportInteractionTool::Knife) ==
+                    &tool);
+        EXPECT_TRUE(quader_editor_core::editor_tool_for_id("knife") == &tool);
 
 	quader_editor_core::EditorRuntimeState runtime;
-	runtime.active_tool = quader_editor_core::ViewportInteractionTool::knife;
-	runtime.knife.active = true;
+        runtime.active_tool =
+            quader_editor_core::ViewportInteractionTool::Knife;
+        runtime.knife.active = true;
 	runtime.knife.has_current = true;
 	runtime.knife.preview_points.push_back({});
 
@@ -48,11 +52,11 @@ TEST(QdrModelingRuntimeToolKnifeTests, KnifePreviewReportsStrokeOverlayState) {
 	state.current_target_valid = true;
 	state.target_object_id = 7;
 	state.previous_point_index = 1;
-	state.points = {
-		{ quader_poly::KnifePointTargetKind::face_point },
-		{ quader_poly::KnifePointTargetKind::face_point },
-	};
-	state.point_positions = {
+        state.points = {
+            {quader_poly::KnifePointTargetKind::FacePoint},
+            {quader_poly::KnifePointTargetKind::FacePoint},
+        };
+        state.point_positions = {
 		{ 0.0F, 1.0F, 0.0F },
 		{ 1.0F, 1.0F, 0.0F },
 	};
@@ -109,9 +113,9 @@ TEST(QdrModelingRuntimeToolKnifeTests, KnifeSnappingAndAcceptFlowStayInEditorCor
 	quader_editor_core::KnifeToolState state;
 	quader_editor_core::SelectionHoverState hover;
 	quader_editor_core::ViewportCameraState camera;
-	camera.projection = quader_editor_core::CameraProjection::perspective;
+        camera.projection = quader_editor_core::CameraProjection::Perspective;
 
-	EXPECT_TRUE(quader_editor_core::update_knife_preview_from_pick(
+        EXPECT_TRUE(quader_editor_core::update_knife_preview_from_pick(
 		session,
 		state,
 		hover,
@@ -124,16 +128,18 @@ TEST(QdrModelingRuntimeToolKnifeTests, KnifeSnappingAndAcceptFlowStayInEditorCor
 	EXPECT_TRUE(state.has_current);
 	EXPECT_TRUE(state.current_target_valid);
 	EXPECT_TRUE(state.target_object_id == 7);
-	EXPECT_TRUE(state.status == quader_editor_core::KnifeToolStatus::preview);
-	EXPECT_NEAR(state.current_point.y, 1.0F, 0.0001);
+        EXPECT_TRUE(state.status ==
+                    quader_editor_core::KnifeToolStatus::Preview);
+        EXPECT_NEAR(state.current_point.y, 1.0F, 0.0001);
 
 	EXPECT_TRUE(quader_editor_core::accept_knife_current_point(session, state, camera, 0.5));
 	EXPECT_TRUE(state.has_active_stroke);
 	EXPECT_TRUE(state.points.size() == 1U);
 	EXPECT_FALSE(state.has_current);
-	EXPECT_TRUE(state.status == quader_editor_core::KnifeToolStatus::previous_set);
+        EXPECT_TRUE(state.status ==
+                    quader_editor_core::KnifeToolStatus::PreviousSet);
 
-	EXPECT_TRUE(quader_editor_core::update_knife_preview_from_pick(
+        EXPECT_TRUE(quader_editor_core::update_knife_preview_from_pick(
 		session,
 		state,
 		hover,
@@ -164,9 +170,9 @@ TEST(QdrModelingRuntimeToolKnifeTests, KnifeSnappedFacePointsStayProjectedOntoTi
 			top_right,
 			bottom_right,
 		});
-	EXPECT_TRUE(face_id != quader_poly::invalid_element_id);
+        EXPECT_TRUE(face_id != quader_poly::kInvalidElementId);
 
-	quader_editor_core::PolygonObject object;
+        quader_editor_core::PolygonObject object;
 	object.id = 7;
 	object.document = document;
 	quader_editor_core::EditorSession session({ object });
@@ -174,8 +180,8 @@ TEST(QdrModelingRuntimeToolKnifeTests, KnifeSnappedFacePointsStayProjectedOntoTi
 	quader_editor_core::KnifeToolState state;
 	quader_editor_core::SelectionHoverState hover;
 	quader_editor_core::ViewportCameraState camera;
-	camera.projection = quader_editor_core::CameraProjection::perspective;
-	camera.transform.origin = { 0.25F, 5.0F, -1.25F };
+        camera.projection = quader_editor_core::CameraProjection::Perspective;
+        camera.transform.origin = { 0.25F, 5.0F, -1.25F };
 	camera.transform.x_axis = { 1.0F, 0.0F, 0.0F };
 	camera.transform.y_axis = { 0.0F, 0.0F, 1.0F };
 	camera.transform.z_axis = { 0.0F, 1.0F, 0.0F };
@@ -196,8 +202,9 @@ TEST(QdrModelingRuntimeToolKnifeTests, KnifeSnappedFacePointsStayProjectedOntoTi
 		false));
 
 	EXPECT_TRUE(state.has_current);
-	EXPECT_TRUE(state.current_target.kind == quader_poly::KnifePointTargetKind::face_point);
-	EXPECT_TRUE(state.current_target.face_id == face_id);
+        EXPECT_TRUE(state.current_target.kind ==
+                    quader_poly::KnifePointTargetKind::FacePoint);
+        EXPECT_TRUE(state.current_target.face_id == face_id);
 
 	const quader_poly::Face *face = quader_poly::find_face(document, face_id);
 	EXPECT_TRUE(face != nullptr);

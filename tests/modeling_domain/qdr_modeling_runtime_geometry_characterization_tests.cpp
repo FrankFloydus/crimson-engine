@@ -36,8 +36,8 @@ bool vec3_nearly_equal(quader::QVec3 left, quader::QVec3 right, double epsilon =
 quader_editor_core::ViewportCameraState front_camera()
 {
 	quader_editor_core::ViewportCameraState camera;
-	camera.projection = quader_editor_core::CameraProjection::perspective;
-	camera.transform.origin = { 0.0F, 0.0F, 5.0F };
+        camera.projection = quader_editor_core::CameraProjection::Perspective;
+        camera.transform.origin = { 0.0F, 0.0F, 5.0F };
 	camera.transform.x_axis = { 1.0F, 0.0F, 0.0F };
 	camera.transform.y_axis = { 0.0F, 1.0F, 0.0F };
 	camera.transform.z_axis = { 0.0F, 0.0F, 1.0F };
@@ -64,8 +64,8 @@ void viewport_projection_and_ray_construction_are_stable()
 		"perspective center ray should follow camera forward");
 
 	quader_editor_core::ViewportCameraState ortho = camera;
-	ortho.projection = quader_editor_core::CameraProjection::orthographic;
-	ortho.orthographic_size = 6.0;
+        ortho.projection = quader_editor_core::CameraProjection::Orthographic;
+        ortho.orthographic_size = 6.0;
 	const quader_poly::Ray top_right_ray = quader_editor_core::ray_from_viewport_screen_point(ortho, { 800.0F, 0.0F });
 	require_test(vec3_nearly_equal(top_right_ray.origin, { 4.0F, 3.0F, 5.0F }),
 		"orthographic rays should offset the origin by viewport position");
@@ -84,31 +84,61 @@ void screen_segment_distance_and_gizmo_pick_ordering_are_stable()
 		"screen segment distance should clamp beyond the segment endpoint");
 
 	std::vector<quader_editor_core::TransformGizmoPickCandidate> candidates;
-	candidates.push_back({ quader_editor_core::TransformAxis::x, { 1.0F, 0.0F, 0.0F }, { 1.0F, 0.0F, 0.0F }, { 100.0F, 0.0F }, true });
-	candidates.push_back({ quader_editor_core::TransformAxis::y, { 0.0F, 1.0F, 0.0F }, { 0.0F, 1.0F, 0.0F }, { 0.0F, 100.0F }, true });
-	candidates.push_back({ quader_editor_core::TransformAxis::z, { 0.0F, 0.0F, 1.0F }, { 0.0F, 0.0F, 1.0F }, { 98.0F, 0.0F }, false });
+        candidates.push_back({quader_editor_core::TransformAxis::X,
+                              {1.0F, 0.0F, 0.0F},
+                              {1.0F, 0.0F, 0.0F},
+                              {100.0F, 0.0F},
+                              true});
+        candidates.push_back({quader_editor_core::TransformAxis::Y,
+                              {0.0F, 1.0F, 0.0F},
+                              {0.0F, 1.0F, 0.0F},
+                              {0.0F, 100.0F},
+                              true});
+        candidates.push_back({quader_editor_core::TransformAxis::Z,
+                              {0.0F, 0.0F, 1.0F},
+                              {0.0F, 0.0F, 1.0F},
+                              {98.0F, 0.0F},
+                              false});
 
-	quader_editor_core::TransformGizmoPickHit hit =
+        quader_editor_core::TransformGizmoPickHit hit =
 		quader_editor_core::pick_move_gizmo_axis({ 98.0F, 1.0F }, {}, candidates, 8.0);
-	require_test(hit.hit && hit.axis == quader_editor_core::TransformAxis::x && nearly_equal(hit.distance, std::sqrt(5.0)),
-		"move gizmo picking should prefer visible axis tips before segment hits");
+        require_test(hit.hit &&
+                         hit.axis == quader_editor_core::TransformAxis::X &&
+                         nearly_equal(hit.distance, std::sqrt(5.0)),
+                     "move gizmo picking should prefer visible axis tips "
+                     "before segment hits");
 
-	hit = quader_editor_core::pick_move_gizmo_axis({ 50.0F, 2.0F }, {}, candidates, 8.0);
-	require_test(hit.hit && hit.axis == quader_editor_core::TransformAxis::x && nearly_equal(hit.distance, 2.0),
-		"move gizmo picking should fall back to visible axis segments when no tip is hit");
+        hit = quader_editor_core::pick_move_gizmo_axis({ 50.0F, 2.0F }, {}, candidates, 8.0);
+        require_test(hit.hit &&
+                         hit.axis == quader_editor_core::TransformAxis::X &&
+                         nearly_equal(hit.distance, 2.0),
+                     "move gizmo picking should fall back to visible axis "
+                     "segments when no tip is hit");
 
-	const quader_editor_core::TransformGizmoPickHit center_hit =
+        const quader_editor_core::TransformGizmoPickHit center_hit =
 		quader_editor_core::pick_scale_gizmo_axis({ 3.0F, 4.0F }, {}, candidates, 8.0, 48.0);
-	require_test(center_hit.hit && center_hit.axis == quader_editor_core::TransformAxis::all && nearly_equal(center_hit.distance, 5.0),
-		"scale gizmo picking should expose the center all-axis handle before axis handles");
+        require_test(center_hit.hit &&
+                         center_hit.axis ==
+                             quader_editor_core::TransformAxis::All &&
+                         nearly_equal(center_hit.distance, 5.0),
+                     "scale gizmo picking should expose the center all-axis "
+                     "handle before axis handles");
 
-	const std::vector<quader_editor_core::TransformGizmoRingPickCandidate> ring_candidates {
-		{ quader_editor_core::TransformAxis::z, { 0.0F, 0.0F, 1.0F }, { 0.0F, 0.0F, 1.0F }, { 0.0F, 10.0F }, { 10.0F, 10.0F } },
-	};
-	const quader_editor_core::TransformGizmoPickHit ring_hit =
+        const std::vector<quader_editor_core::TransformGizmoRingPickCandidate>
+            ring_candidates{
+                {quader_editor_core::TransformAxis::Z,
+                 {0.0F, 0.0F, 1.0F},
+                 {0.0F, 0.0F, 1.0F},
+                 {0.0F, 10.0F},
+                 {10.0F, 10.0F}},
+            };
+        const quader_editor_core::TransformGizmoPickHit ring_hit =
 		quader_editor_core::pick_rotate_gizmo_axis({ 4.0F, 12.0F }, ring_candidates, 4.0);
-	require_test(ring_hit.hit && ring_hit.axis == quader_editor_core::TransformAxis::z && nearly_equal(ring_hit.distance, 2.0),
-		"rotate gizmo picking should use ring segment distance");
+        require_test(ring_hit.hit &&
+                         ring_hit.axis ==
+                             quader_editor_core::TransformAxis::Z &&
+                         nearly_equal(ring_hit.distance, 2.0),
+                     "rotate gizmo picking should use ring segment distance");
 }
 
 void box_construction_ray_plane_behavior_is_stable()
@@ -165,8 +195,8 @@ void box_construction_ray_plane_behavior_is_stable()
 void box_preview_bounds_are_computed_in_editor_core()
 {
 	quader_editor_core::BoxToolState state;
-	state.drag_state = quader_editor_core::BoxDragState::height;
-	state.plane.normal = { 0.0F, 1.0F, 0.0F };
+        state.drag_state = quader_editor_core::BoxDragState::Height;
+        state.plane.normal = { 0.0F, 1.0F, 0.0F };
 	state.plane.axis_u = { 1.0F, 0.0F, 0.0F };
 	state.plane.axis_v = { 0.0F, 0.0F, 1.0F };
 	state.start_point = { 2.0F, 5.0F, -1.0F };
@@ -181,8 +211,8 @@ void box_preview_bounds_are_computed_in_editor_core()
 			vec3_nearly_equal(preview.bounds.max, { 2.0F, 5.0F, 4.0F }),
 		"box preview descriptor bounds should cover the footprint and signed height");
 
-	state.drag_state = quader_editor_core::BoxDragState::footprint;
-	const quader_editor_core::BoxPreviewDescriptor footprint_preview =
+        state.drag_state = quader_editor_core::BoxDragState::Footprint;
+        const quader_editor_core::BoxPreviewDescriptor footprint_preview =
 		quader_editor_core::box_preview_descriptor(state, true, 1.0);
 	require_test(footprint_preview.ok && !footprint_preview.bounds.empty &&
 			vec3_nearly_equal(footprint_preview.bounds.min, { -3.0F, 5.0F, -1.0F }) &&
@@ -193,8 +223,8 @@ void box_preview_bounds_are_computed_in_editor_core()
 void cut_collinear_rejection_and_status_are_stable()
 {
 	quader_editor_core::RectangleSelectionState selection;
-	selection.mode = quader_editor_core::SelectionMode::object;
-	selection.selected_object_ids = { 201, 202 };
+        selection.mode = quader_editor_core::SelectionMode::Object;
+        selection.selected_object_ids = { 201, 202 };
 
 	quader_editor_core::CutToolState state;
 	quader_editor_core::CutToolResult result = quader_editor_core::capture_first_cut_point(
@@ -209,9 +239,10 @@ void cut_collinear_rejection_and_status_are_stable()
 	require_test(result.ok && state.points.size() == 2 && state.dragging_point_index == 1 && !state.dragging_new_point,
 		"cut second point should store a line endpoint and switch to endpoint dragging");
 
-	const quader_editor_core::CutPreviewRequest two_point_preview =
-		quader_editor_core::cut_preview_request(state, quader_editor_core::CutMode::keep_front);
-	require_test(two_point_preview.ok && two_point_preview.can_preview && two_point_preview.points.size() == 3 &&
+        const quader_editor_core::CutPreviewRequest two_point_preview =
+            quader_editor_core::cut_preview_request(
+                state, quader_editor_core::CutMode::KeepFront);
+        require_test(two_point_preview.ok && two_point_preview.can_preview && two_point_preview.points.size() == 3 &&
 			vec3_nearly_equal(two_point_preview.points[2], { 0.0F, 1.0F, 0.0F }),
 		"two-point cut preview should synthesize a third plane point from the captured face normal");
 
@@ -219,11 +250,15 @@ void cut_collinear_rejection_and_status_are_stable()
 	counts.target_count = 2;
 	counts.split_count = 1;
 	counts.removed_count = 1;
-	require_test(quader_editor_core::set_cut_preview_result(state, quader_editor_core::CutMode::keep_front, true, counts).ok &&
-			state.preview_valid,
-		"cut preview result should store preview metadata");
-	const std::string status = quader_editor_core::cut_preview_status(state, quader_editor_core::CutMode::keep_front);
-	require_test(status.find("keep front") != std::string::npos && status.find("1/2 split") != std::string::npos &&
+        require_test(
+            quader_editor_core::set_cut_preview_result(
+                state, quader_editor_core::CutMode::KeepFront, true, counts)
+                    .ok &&
+                state.preview_valid,
+            "cut preview result should store preview metadata");
+        const std::string status = quader_editor_core::cut_preview_status(
+            state, quader_editor_core::CutMode::KeepFront);
+        require_test(status.find("keep front") != std::string::npos && status.find("1/2 split") != std::string::npos &&
 			status.find("1 removed") != std::string::npos,
 		"cut preview status should summarize mode, split count, target count, and removal count");
 }
@@ -245,22 +280,51 @@ void overlay_occluder_visibility_is_stable()
 		"overlay occluder should hide line segments behind an occluding mesh");
 	require_test(occluder.line_segment_is_visible({ -0.5F, 0.0F, 1.0F }, { 0.5F, 0.0F, 1.0F }, front_camera()),
 		"overlay occluder should keep line segments in front of the mesh visible");
-	require_test(!quader_editor_core::OverlayVisibilityOccluder::line_layer_uses_visibility(quader_editor_core::SelectionOverlayLayer::source_wire),
-		"source-wire overlay lines should be preserved as draw-on-top topology handles");
-	require_test(!quader_editor_core::OverlayVisibilityOccluder::line_layer_uses_visibility(quader_editor_core::SelectionOverlayLayer::selected_edge),
-		"selected edge overlay lines should stay visible through occluders");
-	require_test(!quader_editor_core::OverlayVisibilityOccluder::line_layer_uses_visibility(quader_editor_core::SelectionOverlayLayer::selected_face_edge),
-		"selected face outline overlay lines should stay visible through occluders");
-	require_test(!quader_editor_core::OverlayVisibilityOccluder::line_layer_uses_visibility(quader_editor_core::SelectionOverlayLayer::hover_face_edge),
-		"hover face outlines should stay visible through occluders");
-	require_test(!quader_editor_core::OverlayVisibilityOccluder::line_layer_uses_visibility(quader_editor_core::SelectionOverlayLayer::hover_edge),
-		"hover edge overlay lines should stay visible through occluders");
-	require_test(!quader_editor_core::OverlayVisibilityOccluder::line_layer_uses_visibility(quader_editor_core::SelectionOverlayLayer::open_edge),
-		"open edge overlay lines should stay visible through occluders");
-	require_test(!quader_editor_core::OverlayVisibilityOccluder::line_layer_uses_visibility(quader_editor_core::SelectionOverlayLayer::diagnostic_edge),
-		"diagnostic edge overlay lines should stay visible through occluders");
-	require_test(!quader_editor_core::OverlayVisibilityOccluder::line_layer_uses_visibility(quader_editor_core::SelectionOverlayLayer::hover_vertex),
-		"point-style overlay layers should not participate in line visibility filtering");
+        require_test(
+            !quader_editor_core::OverlayVisibilityOccluder::
+                line_layer_uses_visibility(
+                    quader_editor_core::SelectionOverlayLayer::SourceWire),
+            "source-wire overlay lines should be preserved as draw-on-top "
+            "topology handles");
+        require_test(
+            !quader_editor_core::OverlayVisibilityOccluder::
+                line_layer_uses_visibility(
+                    quader_editor_core::SelectionOverlayLayer::SelectedEdge),
+            "selected edge overlay lines should stay visible through "
+            "occluders");
+        require_test(!quader_editor_core::OverlayVisibilityOccluder::
+                         line_layer_uses_visibility(
+                             quader_editor_core::SelectionOverlayLayer::
+                                 SelectedFaceEdge),
+                     "selected face outline overlay lines should stay visible "
+                     "through occluders");
+        require_test(
+            !quader_editor_core::OverlayVisibilityOccluder::
+                line_layer_uses_visibility(
+                    quader_editor_core::SelectionOverlayLayer::HoverFaceEdge),
+            "hover face outlines should stay visible through occluders");
+        require_test(
+            !quader_editor_core::OverlayVisibilityOccluder::
+                line_layer_uses_visibility(
+                    quader_editor_core::SelectionOverlayLayer::HoverEdge),
+            "hover edge overlay lines should stay visible through occluders");
+        require_test(
+            !quader_editor_core::OverlayVisibilityOccluder::
+                line_layer_uses_visibility(
+                    quader_editor_core::SelectionOverlayLayer::OpenEdge),
+            "open edge overlay lines should stay visible through occluders");
+        require_test(
+            !quader_editor_core::OverlayVisibilityOccluder::
+                line_layer_uses_visibility(
+                    quader_editor_core::SelectionOverlayLayer::DiagnosticEdge),
+            "diagnostic edge overlay lines should stay visible through "
+            "occluders");
+        require_test(
+            !quader_editor_core::OverlayVisibilityOccluder::
+                line_layer_uses_visibility(
+                    quader_editor_core::SelectionOverlayLayer::HoverVertex),
+            "point-style overlay layers should not participate in line "
+            "visibility filtering");
 }
 
 void overlay_occluder_bounds_partitioning_is_stable()
@@ -309,51 +373,61 @@ void overlay_visibility_preserves_edit_wire_layers()
 	require_test(!occluder.empty(),
 		"overlay visibility occluder should build from editor-core objects through document mesh output");
 
-	const std::vector<quader_editor_core::SelectionOverlayLine> lines {
-		{
-			quader_editor_core::SelectionOverlayLayer::source_wire,
-			{ -0.5F, 0.0F, -2.0F },
-			{ 0.5F, 0.0F, -2.0F },
-			0xffffffffU,
-			1.0F,
-		},
-		{
-			quader_editor_core::SelectionOverlayLayer::selected_edge,
-			{ -0.5F, 0.0F, -2.0F },
-			{ 0.5F, 0.0F, -2.0F },
-			0xffffffffU,
-			1.0F,
-		},
-		{
-			quader_editor_core::SelectionOverlayLayer::selected_face_edge,
-			{ -0.5F, 0.0F, 2.0F },
-			{ 0.5F, 0.0F, 2.0F },
-			0xffffffffU,
-			1.0F,
-		},
-		{
-			quader_editor_core::SelectionOverlayLayer::hover_vertex,
-			{ -0.5F, 0.0F, -2.0F },
-			{ 0.5F, 0.0F, -2.0F },
-			0xffffffffU,
-			1.0F,
-		},
-	};
-	require_test(!quader_editor_core::selection_overlay_lines_use_visibility(lines),
+        const std::vector<quader_editor_core::SelectionOverlayLine> lines{
+            {
+                quader_editor_core::SelectionOverlayLayer::SourceWire,
+                {-0.5F, 0.0F, -2.0F},
+                {0.5F, 0.0F, -2.0F},
+                0xffffffffU,
+                1.0F,
+            },
+            {
+                quader_editor_core::SelectionOverlayLayer::SelectedEdge,
+                {-0.5F, 0.0F, -2.0F},
+                {0.5F, 0.0F, -2.0F},
+                0xffffffffU,
+                1.0F,
+            },
+            {
+                quader_editor_core::SelectionOverlayLayer::SelectedFaceEdge,
+                {-0.5F, 0.0F, 2.0F},
+                {0.5F, 0.0F, 2.0F},
+                0xffffffffU,
+                1.0F,
+            },
+            {
+                quader_editor_core::SelectionOverlayLayer::HoverVertex,
+                {-0.5F, 0.0F, -2.0F},
+                {0.5F, 0.0F, -2.0F},
+                0xffffffffU,
+                1.0F,
+            },
+        };
+        require_test(!quader_editor_core::selection_overlay_lines_use_visibility(lines),
 		"editor-core overlay visibility policy should not camera-cull edit wire layers");
 
 	const std::vector<quader_editor_core::SelectionOverlayLine> visible =
 		occluder.visible_lines(lines, front_camera());
 	require_test(visible.size() == 4,
 		"editor-core overlay visibility filtering should preserve current edit wire layers");
-	require_test(visible[0].layer == quader_editor_core::SelectionOverlayLayer::source_wire,
-		"source wire behind the occluder should be preserved as draw-on-top topology");
-	require_test(visible[1].layer == quader_editor_core::SelectionOverlayLayer::selected_edge,
-		"selected edges behind the occluder should be preserved as x-ray handles");
-	require_test(visible[2].layer == quader_editor_core::SelectionOverlayLayer::selected_face_edge,
-		"selected face outlines should be preserved by visibility filtering");
-	require_test(visible[3].layer == quader_editor_core::SelectionOverlayLayer::hover_vertex,
-		"non-line-visibility overlay layers should pass through editor-core filtering unchanged");
+        require_test(visible[0].layer ==
+                         quader_editor_core::SelectionOverlayLayer::SourceWire,
+                     "source wire behind the occluder should be preserved as "
+                     "draw-on-top topology");
+        require_test(
+            visible[1].layer ==
+                quader_editor_core::SelectionOverlayLayer::SelectedEdge,
+            "selected edges behind the occluder should be preserved as x-ray "
+            "handles");
+        require_test(
+            visible[2].layer ==
+                quader_editor_core::SelectionOverlayLayer::SelectedFaceEdge,
+            "selected face outlines should be preserved by visibility "
+            "filtering");
+        require_test(visible[3].layer ==
+                         quader_editor_core::SelectionOverlayLayer::HoverVertex,
+                     "non-line-visibility overlay layers should pass through "
+                     "editor-core filtering unchanged");
 }
 
 } // namespace

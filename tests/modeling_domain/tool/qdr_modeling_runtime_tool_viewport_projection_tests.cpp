@@ -15,8 +15,8 @@ namespace {
 quader_editor_core::ViewportCameraState front_camera()
 {
 	quader_editor_core::ViewportCameraState camera;
-	camera.projection = quader_editor_core::CameraProjection::perspective;
-	camera.transform.origin = { 0.0F, 0.0F, 5.0F };
+        camera.projection = quader_editor_core::CameraProjection::Perspective;
+        camera.transform.origin = { 0.0F, 0.0F, 5.0F };
 	camera.transform.x_axis = { 1.0F, 0.0F, 0.0F };
 	camera.transform.y_axis = { 0.0F, 1.0F, 0.0F };
 	camera.transform.z_axis = { 0.0F, 0.0F, 1.0F };
@@ -63,8 +63,8 @@ TEST(QdrModelingRuntimeToolViewportProjectionTests, PerspectiveViewportProjectio
 
 TEST(QdrModelingRuntimeToolViewportProjectionTests, OrthographicViewportProjectionPreservesOffCenterRayOriginRoundTrip) {
 	quader_editor_core::ViewportCameraState camera = front_camera();
-	camera.projection = quader_editor_core::CameraProjection::orthographic;
-	camera.transform.origin = { 10.0F, 2.0F, 30.0F };
+        camera.projection = quader_editor_core::CameraProjection::Orthographic;
+        camera.transform.origin = { 10.0F, 2.0F, 30.0F };
 	camera.viewport_size = { 800.0F, 400.0F };
 	camera.orthographic_size = 8.0;
 

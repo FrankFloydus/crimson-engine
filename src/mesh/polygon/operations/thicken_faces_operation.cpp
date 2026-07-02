@@ -50,11 +50,11 @@ ThickenFacesOperation::ThickenFacesOperation(float thickness, bool from_center)
 OperationResult thicken_selected_faces_impl(Document& document, Selection& selection, float thickness, bool from_center)
 {
     (void)from_center;
-    if (selection.mode != SelectionMode::face || selection.faces.empty()) {
-        return { false, "Select one or more open faces to thicken." };
+    if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
+      return {false, "Select one or more open faces to thicken."};
     }
-    if (!std::isfinite(thickness) || std::abs(thickness) <= epsilon) {
-        return { false, "Thicken Faces needs a non-zero finite thickness." };
+    if (!std::isfinite(thickness) || std::abs(thickness) <= kEpsilon) {
+      return {false, "Thicken Faces needs a non-zero finite thickness."};
     }
 
     const ElementId active_face_id = active_face_or_invalid(selection);
@@ -99,12 +99,12 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
         const auto source_position = source_positions.find(source_vertex_id);
         const auto normal_sum = normal_sums.find(source_vertex_id);
         if (source_position == source_positions.end() || normal_sum == normal_sums.end()) {
-            return invalid_element_id;
+          return kInvalidElementId;
         }
 
         const quader::QVec3 normal = normalize_or_zero(normal_sum->second);
-        if (length_squared(normal) <= epsilon) {
-            return invalid_element_id;
+        if (length_squared(normal) <= kEpsilon) {
+          return kInvalidElementId;
         }
         const quader::QVec3 offset = normal * -thickness;
         duplicate_vertices[source_vertex_id] = add_vertex(candidate, source_position->second + offset);
@@ -129,8 +129,8 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
         cap_face.vertices.reserve(source_face.vertices.size());
         for (const ElementId vertex_id : source_face.vertices) {
             const ElementId duplicate_id = duplicate_vertex(vertex_id);
-            if (duplicate_id == invalid_element_id) {
-                return { false, "Thicken Faces could not create offset vertices." };
+            if (duplicate_id == kInvalidElementId) {
+              return {false, "Thicken Faces could not create offset vertices."};
             }
             cap_face.vertices.push_back(duplicate_id);
         }
@@ -190,13 +190,13 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
 
     document = std::move(candidate);
     selection.clear();
-    selection.mode = SelectionMode::face;
+    selection.mode = SelectionMode::Face;
     selection.faces = std::move(cap_face_ids);
     selection.faces.insert(selection.faces.end(), side_face_ids.begin(), side_face_ids.end());
-    if (active_cap_face_id != invalid_element_id) {
-        activate_face_selection(selection, active_cap_face_id);
+    if (active_cap_face_id != kInvalidElementId) {
+      activate_face_selection(selection, active_cap_face_id);
     } else {
-        activate_last_selection(selection);
+      activate_last_selection(selection);
     }
     return { true, {} };
 }

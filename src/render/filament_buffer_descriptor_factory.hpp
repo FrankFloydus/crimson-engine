@@ -19,13 +19,16 @@ namespace quader {
  */
 class FilamentBufferDescriptorFactory {
 public:
-    static filament::backend::BufferDescriptor bytes(const void* data, std::size_t byteCount);
-    static filament::backend::PixelBufferDescriptor rgbaPixels(const unsigned char* pixels, std::size_t byteCount);
+  static filament::backend::BufferDescriptor bytes(const void *data,
+                                                   std::size_t byte_count);
+  static filament::backend::PixelBufferDescriptor
+  rgba_pixels(const unsigned char *pixels, std::size_t byte_count);
 
-    template <typename T>
-    static filament::backend::BufferDescriptor vector(const std::vector<T>& values) {
-        return bytes(values.data(), sizeof(T) * values.size());
-    }
+  template <typename T>
+  static filament::backend::BufferDescriptor
+  vector(const std::vector<T> &values) {
+    return bytes(values.data(), sizeof(T) * values.size());
+  }
 };
 
 } // namespace quader

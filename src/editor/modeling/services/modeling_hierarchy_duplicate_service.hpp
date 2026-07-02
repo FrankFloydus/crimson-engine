@@ -25,10 +25,11 @@ class SceneDocument;
  * Stores runtime callbacks required to duplicate modeling-backed group hierarchies.
  */
 struct ModelingHierarchyDuplicateRuntime {
-    std::function<void()> ensureSceneObjectsSynced;
-    std::function<ModelingCommandResult(ModelingSelectionMode)> setSelectionMode;
-    std::function<void()> projectObjectSelectionFromScene;
-    std::function<ModelingCommandResult()> duplicateSelectedMeshes;
+  std::function<void()> ensure_scene_objects_synced;
+  std::function<ModelingCommandResult(ModelingSelectionMode)>
+      set_selection_mode;
+  std::function<void()> project_object_selection_from_scene;
+  std::function<ModelingCommandResult()> duplicate_selected_meshes;
 };
 
 /**
@@ -36,19 +37,17 @@ struct ModelingHierarchyDuplicateRuntime {
  */
 class ModelingHierarchyDuplicateService final {
 public:
-    ModelingCommandResult duplicateSelectedHierarchyForGroupDrag(
-            quader_editor_core::EditorSession& session,
-            SceneDocument& scene,
-            ModelingObjectRuntimeMap& objectRegistry,
-            DocumentCommandService& documentCommands,
-            ModelingHierarchyDuplicateRuntime runtime) const;
-    ModelingCommandResult duplicateSelectedEntityHierarchy(
-            quader_editor_core::EditorSession& session,
-            SceneDocument& scene,
-            ModelingObjectRuntimeMap& objectRegistry,
-            DocumentCommandService& documentCommands,
-            ModelingHierarchyDuplicateRuntime runtime,
-            ModelingSelectionMode resultSelectionMode) const;
+  ModelingCommandResult duplicate_selected_hierarchy_for_group_drag(
+      quader_editor_core::EditorSession &session, SceneDocument &scene,
+      ModelingObjectRuntimeMap &object_registry,
+      DocumentCommandService &document_commands,
+      ModelingHierarchyDuplicateRuntime runtime) const;
+  ModelingCommandResult duplicate_selected_entity_hierarchy(
+      quader_editor_core::EditorSession &session, SceneDocument &scene,
+      ModelingObjectRuntimeMap &object_registry,
+      DocumentCommandService &document_commands,
+      ModelingHierarchyDuplicateRuntime runtime,
+      ModelingSelectionMode result_selection_mode) const;
 };
 
 } // namespace quader

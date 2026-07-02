@@ -18,64 +18,68 @@
 namespace quader {
 namespace {
 
-std::string localizedToolSettingsTitle(const LocalizationService& localization, const ModelingToolSettingsTarget& target) {
-    if (!target.actionId.empty()) {
-        std::string key = "modeling.action.";
-        key.append(target.actionId);
-        key.append(".label");
-        return localization.text(key, target.label);
+std::string
+localized_tool_settings_title(const LocalizationService &localization,
+                              const ModelingToolSettingsTarget &target) {
+  if (!target.action_id.empty()) {
+    std::string key = "modeling.action.";
+    key.append(target.action_id);
+    key.append(".label");
+    return localization.text(key, target.label);
+  }
+  if (!target.operation_id.empty()) {
+    std::string key = "modeling.operation.";
+    key.append(target.operation_id);
+    key.append(".label");
+    return localization.text(key, target.label);
+  }
+  if (!target.label.empty()) {
+    switch (target.kind) {
+    case ModelingToolSettingsTargetKind::Cut:
+      return localization.text("tool_settings.target.cut", target.label);
+    case ModelingToolSettingsTargetKind::Mirror:
+      return localization.text("tool_settings.target.mirror", target.label);
+    case ModelingToolSettingsTargetKind::Bridge:
+      return localization.text("tool_settings.target.bridge", target.label);
+    case ModelingToolSettingsTargetKind::EdgeBevel:
+      return localization.text("tool_settings.target.edge_bevel", target.label);
+    case ModelingToolSettingsTargetKind::Thicken:
+      return localization.text("tool_settings.target.thicken", target.label);
+    case ModelingToolSettingsTargetKind::SliceQuad:
+      return localization.text("tool_settings.target.slice_quad", target.label);
+    case ModelingToolSettingsTargetKind::MergeByDistance:
+      return localization.text("tool_settings.target.merge_by_distance",
+                               target.label);
+    case ModelingToolSettingsTargetKind::None:
+      break;
     }
-    if (!target.operationId.empty()) {
-        std::string key = "modeling.operation.";
-        key.append(target.operationId);
-        key.append(".label");
-        return localization.text(key, target.label);
-    }
-    if (!target.label.empty()) {
-        switch (target.kind) {
-        case ModelingToolSettingsTargetKind::Cut:
-            return localization.text("tool_settings.target.cut", target.label);
-        case ModelingToolSettingsTargetKind::Mirror:
-            return localization.text("tool_settings.target.mirror", target.label);
-        case ModelingToolSettingsTargetKind::Bridge:
-            return localization.text("tool_settings.target.bridge", target.label);
-        case ModelingToolSettingsTargetKind::EdgeBevel:
-            return localization.text("tool_settings.target.edge_bevel", target.label);
-        case ModelingToolSettingsTargetKind::Thicken:
-            return localization.text("tool_settings.target.thicken", target.label);
-        case ModelingToolSettingsTargetKind::SliceQuad:
-            return localization.text("tool_settings.target.slice_quad", target.label);
-        case ModelingToolSettingsTargetKind::MergeByDistance:
-            return localization.text("tool_settings.target.merge_by_distance", target.label);
-        case ModelingToolSettingsTargetKind::None:
-            break;
-        }
-        return target.label;
-    }
-    return localization.text("ui.panel.tool_settings", "Tool Settings");
+    return target.label;
+  }
+  return localization.text("ui.panel.tool_settings", "Tool Settings");
 }
 
 } // namespace
 
 void ToolSettingsPanel::draw(UIContext& context, bool& open) {
-    const ModelingToolSettingsTarget target = context.modeling.toolSettingsTarget();
-    if (!target.active) {
-        open = false;
-        shouldOpenForActiveTarget_ = false;
-        return;
-    }
-    shouldOpenForActiveTarget_ = !open;
-    if (!open) {
-        open = true;
-    }
-    drawFloating(context, open);
-    shouldOpenForActiveTarget_ = false;
+  const ModelingToolSettingsTarget target =
+      context.modeling.tool_settings_target();
+  if (!target.active) {
+    open = false;
+    should_open_for_active_target_ = false;
+    return;
+  }
+  should_open_for_active_target_ = !open;
+  if (!open) {
+    open = true;
+  }
+  draw_floating(context, open);
+  should_open_for_active_target_ = false;
 }
 
-void ToolSettingsPanel::beforeBegin(UIContext& context, bool& open) {
+void ToolSettingsPanel::before_begin(UIContext& context, bool& open) {
     (void)open;
-    if (!shouldOpenForActiveTarget_) {
-        return;
+    if (!should_open_for_active_target_) {
+      return;
     }
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -85,177 +89,210 @@ void ToolSettingsPanel::beforeBegin(UIContext& context, bool& open) {
             ImGuiCond_Always);
 }
 
-void ToolSettingsPanel::drawContent(UIContext& context, bool& open) {
-    ModelingToolSettingsTarget target = context.modeling.toolSettingsTarget();
-    ModelingInteractionSettings settings = context.modeling.interactionSettings();
-    bool changed = false;
+void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
+  ModelingToolSettingsTarget target = context.modeling.tool_settings_target();
+  ModelingInteractionSettings settings =
+      context.modeling.interaction_settings();
+  bool changed = false;
 
-    auto applySettingsUpdate = [&]() {
-        if (!changed) {
-            return;
-        }
-        const ModelingCommandResult result = context.modeling.setInteractionSettings(settings);
-        if (!result.ok) {
-            LOG_ERROR("Tool settings update failed: {}", result.message.empty() ? "Command failed." : result.message);
-        }
-        changed = false;
-        target = context.modeling.toolSettingsTarget();
-    };
-
-    const std::string title = localizedToolSettingsTitle(context.localization, target);
-    ImGui::TextUnformatted(title.c_str());
-    ImGui::Separator();
-
-    switch (target.kind) {
-    case ModelingToolSettingsTargetKind::Cut: {
-        const ModelingToolStatus status = context.modeling.toolStatus();
-        int cutMode = static_cast<int>(settings.cutMode);
-        const std::string keepMode = context.localization.text("tool_settings.cut.keep_mode", "Keep Mode");
-        ImGui::TextUnformatted(keepMode.c_str());
-        const std::string discardLeft = context.localization.imguiLabel(
-                "tool_settings.cut.discard_left",
-                "tool_settings.cut.discard_left",
-                "Discard Left");
-        if (ImGui::RadioButton(discardLeft.c_str(), cutMode == static_cast<int>(ModelingCutMode::DiscardLeft))) {
-            cutMode = static_cast<int>(ModelingCutMode::DiscardLeft);
-            settings.cutMode = ModelingCutMode::DiscardLeft;
-            changed = true;
-        }
-        const std::string discardRight = context.localization.imguiLabel(
-                "tool_settings.cut.discard_right",
-                "tool_settings.cut.discard_right",
-                "Discard Right");
-        if (ImGui::RadioButton(discardRight.c_str(), cutMode == static_cast<int>(ModelingCutMode::DiscardRight))) {
-            cutMode = static_cast<int>(ModelingCutMode::DiscardRight);
-            settings.cutMode = ModelingCutMode::DiscardRight;
-            changed = true;
-        }
-        const std::string keepBoth = context.localization.imguiLabel(
-                "tool_settings.cut.keep_both",
-                "tool_settings.cut.keep_both",
-                "Keep Both");
-        if (ImGui::RadioButton(keepBoth.c_str(), cutMode == static_cast<int>(ModelingCutMode::KeepBoth))) {
-            cutMode = static_cast<int>(ModelingCutMode::KeepBoth);
-            settings.cutMode = ModelingCutMode::KeepBoth;
-            changed = true;
-        }
-        if (settings.cutMode != static_cast<ModelingCutMode>(cutMode)) {
-            settings.cutMode = static_cast<ModelingCutMode>(cutMode);
-            changed = true;
-        }
-        if (status.cutActive) {
-            const std::string previewPoints = context.localization.text("tool_settings.cut.preview_points", "Preview points");
-            ImGui::Text("%s: %d", previewPoints.c_str(), status.cutPointCount);
-        }
-        break;
+  auto apply_settings_update = [&]() {
+    if (!changed) {
+      return;
     }
+    const ModelingCommandResult result =
+        context.modeling.set_interaction_settings(settings);
+    if (!result.ok) {
+      LOG_ERROR("Tool settings update failed: {}",
+                result.message.empty() ? "Command failed." : result.message);
+    }
+    changed = false;
+    target = context.modeling.tool_settings_target();
+  };
+
+  const std::string title =
+      localized_tool_settings_title(context.localization, target);
+  ImGui::TextUnformatted(title.c_str());
+  ImGui::Separator();
+
+  switch (target.kind) {
+  case ModelingToolSettingsTargetKind::Cut: {
+    const ModelingToolStatus status = context.modeling.tool_status();
+    int cut_mode = static_cast<int>(settings.cut_mode);
+    const std::string keep_mode =
+        context.localization.text("tool_settings.cut.keep_mode", "Keep Mode");
+    ImGui::TextUnformatted(keep_mode.c_str());
+    const std::string discard_left = context.localization.imgui_label(
+        "tool_settings.cut.discard_left", "tool_settings.cut.discard_left",
+        "Discard Left");
+    if (ImGui::RadioButton(
+            discard_left.c_str(),
+            cut_mode == static_cast<int>(ModelingCutMode::DiscardLeft))) {
+      cut_mode = static_cast<int>(ModelingCutMode::DiscardLeft);
+      settings.cut_mode = ModelingCutMode::DiscardLeft;
+      changed = true;
+    }
+    const std::string discard_right = context.localization.imgui_label(
+        "tool_settings.cut.discard_right", "tool_settings.cut.discard_right",
+        "Discard Right");
+    if (ImGui::RadioButton(
+            discard_right.c_str(),
+            cut_mode == static_cast<int>(ModelingCutMode::DiscardRight))) {
+      cut_mode = static_cast<int>(ModelingCutMode::DiscardRight);
+      settings.cut_mode = ModelingCutMode::DiscardRight;
+      changed = true;
+    }
+    const std::string keep_both = context.localization.imgui_label(
+        "tool_settings.cut.keep_both", "tool_settings.cut.keep_both",
+        "Keep Both");
+    if (ImGui::RadioButton(keep_both.c_str(),
+                           cut_mode ==
+                               static_cast<int>(ModelingCutMode::KeepBoth))) {
+      cut_mode = static_cast<int>(ModelingCutMode::KeepBoth);
+      settings.cut_mode = ModelingCutMode::KeepBoth;
+      changed = true;
+    }
+    if (settings.cut_mode != static_cast<ModelingCutMode>(cut_mode)) {
+      settings.cut_mode = static_cast<ModelingCutMode>(cut_mode);
+      changed = true;
+    }
+    if (status.cut_active) {
+      const std::string preview_points = context.localization.text(
+          "tool_settings.cut.preview_points", "Preview points");
+      ImGui::Text("%s: %d", preview_points.c_str(), status.cut_point_count);
+    }
+    break;
+  }
     case ModelingToolSettingsTargetKind::EdgeBevel: {
-        float width = static_cast<float>(settings.edgeBevelWidth);
-        float profile = static_cast<float>(settings.edgeBevelProfile);
-        int segments = settings.edgeBevelSegments;
+      float width = static_cast<float>(settings.edge_bevel_width);
+      float profile = static_cast<float>(settings.edge_bevel_profile);
+      int segments = settings.edge_bevel_segments;
+      ImGui::SetNextItemWidth(180.0f);
+      const std::string width_label = context.localization.imgui_label(
+          "operation.edge_bevel.width", "operation.edge_bevel.width", "Width");
+      if (ImGui::DragFloat(width_label.c_str(), &width, 0.05f, 0.0625f,
+                           16384.0f, "%.3f")) {
+        settings.edge_bevel_width = width;
+        changed = true;
+      }
         ImGui::SetNextItemWidth(180.0f);
-        const std::string widthLabel = context.localization.imguiLabel("operation.edge_bevel.width", "operation.edge_bevel.width", "Width");
-        if (ImGui::DragFloat(widthLabel.c_str(), &width, 0.05f, 0.0625f, 16384.0f, "%.3f")) {
-            settings.edgeBevelWidth = width;
-            changed = true;
+        const std::string segments_label = context.localization.imgui_label(
+            "operation.edge_bevel.segments", "operation.edge_bevel.segments",
+            "Segments");
+        if (ImGui::SliderInt(segments_label.c_str(), &segments, 1, 16)) {
+          settings.edge_bevel_segments = segments;
+          changed = true;
         }
         ImGui::SetNextItemWidth(180.0f);
-        const std::string segmentsLabel =
-                context.localization.imguiLabel("operation.edge_bevel.segments", "operation.edge_bevel.segments", "Segments");
-        if (ImGui::SliderInt(segmentsLabel.c_str(), &segments, 1, 16)) {
-            settings.edgeBevelSegments = segments;
-            changed = true;
-        }
-        ImGui::SetNextItemWidth(180.0f);
-        const std::string profileLabel =
-                context.localization.imguiLabel("operation.edge_bevel.profile", "operation.edge_bevel.profile", "Profile");
-        if (ImGui::SliderFloat(profileLabel.c_str(), &profile, 0.0f, 1.0f, "%.2f")) {
-            settings.edgeBevelProfile = profile;
-            changed = true;
+        const std::string profile_label = context.localization.imgui_label(
+            "operation.edge_bevel.profile", "operation.edge_bevel.profile",
+            "Profile");
+        if (ImGui::SliderFloat(profile_label.c_str(), &profile, 0.0f, 1.0f,
+                               "%.2f")) {
+          settings.edge_bevel_profile = profile;
+          changed = true;
         }
         break;
     }
     case ModelingToolSettingsTargetKind::Bridge: {
-        int steps = settings.bridgeSteps;
-        ImGui::SetNextItemWidth(180.0f);
-        const std::string stepsLabel = context.localization.imguiLabel("operation.bridge.steps", "operation.bridge.steps", "Steps");
-        if (ImGui::SliderInt(stepsLabel.c_str(), &steps, 1, 64)) {
-            settings.bridgeSteps = steps;
-            changed = true;
-        }
+      int steps = settings.bridge_steps;
+      ImGui::SetNextItemWidth(180.0f);
+      const std::string steps_label = context.localization.imgui_label(
+          "operation.bridge.steps", "operation.bridge.steps", "Steps");
+      if (ImGui::SliderInt(steps_label.c_str(), &steps, 1, 64)) {
+        settings.bridge_steps = steps;
+        changed = true;
+      }
         break;
     }
     case ModelingToolSettingsTargetKind::Thicken: {
-        float thickness = static_cast<float>(settings.thickenThickness);
-        ImGui::SetNextItemWidth(180.0f);
-        const std::string distanceLabel =
-                context.localization.imguiLabel("operation.thicken.distance", "operation.thicken.distance", "Distance");
-        if (ImGui::DragFloat(distanceLabel.c_str(), &thickness, 0.01f, -4.0f, 4.0f, "%.3f")) {
-            settings.thickenThickness = thickness;
-            changed = true;
-        }
+      float thickness = static_cast<float>(settings.thicken_thickness);
+      ImGui::SetNextItemWidth(180.0f);
+      const std::string distance_label = context.localization.imgui_label(
+          "operation.thicken.distance", "operation.thicken.distance",
+          "Distance");
+      if (ImGui::DragFloat(distance_label.c_str(), &thickness, 0.01f, -4.0f,
+                           4.0f, "%.3f")) {
+        settings.thicken_thickness = thickness;
+        changed = true;
+      }
         break;
     }
     case ModelingToolSettingsTargetKind::SliceQuad: {
-        int xSlices = settings.sliceQuadXSlices;
-        int ySlices = settings.sliceQuadYSlices;
+      int x_slices = settings.slice_quad_x_slices;
+      int y_slices = settings.slice_quad_y_slices;
+      ImGui::SetNextItemWidth(180.0f);
+      const std::string x_label = context.localization.imgui_label(
+          "operation.slice_quad.x_slices", "operation.slice_quad.x_slices",
+          "X");
+      if (ImGui::SliderInt(x_label.c_str(), &x_slices, 0, 64)) {
+        settings.slice_quad_x_slices = x_slices;
+        changed = true;
+      }
         ImGui::SetNextItemWidth(180.0f);
-        const std::string xLabel = context.localization.imguiLabel("operation.slice_quad.x_slices", "operation.slice_quad.x_slices", "X");
-        if (ImGui::SliderInt(xLabel.c_str(), &xSlices, 0, 64)) {
-            settings.sliceQuadXSlices = xSlices;
-            changed = true;
-        }
-        ImGui::SetNextItemWidth(180.0f);
-        const std::string yLabel = context.localization.imguiLabel("operation.slice_quad.y_slices", "operation.slice_quad.y_slices", "Y");
-        if (ImGui::SliderInt(yLabel.c_str(), &ySlices, 0, 64)) {
-            settings.sliceQuadYSlices = ySlices;
-            changed = true;
+        const std::string y_label = context.localization.imgui_label(
+            "operation.slice_quad.y_slices", "operation.slice_quad.y_slices",
+            "Y");
+        if (ImGui::SliderInt(y_label.c_str(), &y_slices, 0, 64)) {
+          settings.slice_quad_y_slices = y_slices;
+          changed = true;
         }
         break;
     }
     case ModelingToolSettingsTargetKind::MergeByDistance: {
-        float tolerance = static_cast<float>(settings.mergeByDistanceTolerance);
-        ImGui::SetNextItemWidth(180.0f);
-        const std::string toleranceLabel =
-                context.localization.imguiLabel("operation.merge_by_distance.tolerance", "operation.merge_by_distance.tolerance", "Tolerance");
-        if (ImGui::DragFloat(toleranceLabel.c_str(), &tolerance, 0.001f, 0.0f, 128.0f, "%.4f")) {
-            settings.mergeByDistanceTolerance = tolerance;
-            changed = true;
-        }
+      float tolerance =
+          static_cast<float>(settings.merge_by_distance_tolerance);
+      ImGui::SetNextItemWidth(180.0f);
+      const std::string tolerance_label = context.localization.imgui_label(
+          "operation.merge_by_distance.tolerance",
+          "operation.merge_by_distance.tolerance", "Tolerance");
+      if (ImGui::DragFloat(tolerance_label.c_str(), &tolerance, 0.001f, 0.0f,
+                           128.0f, "%.4f")) {
+        settings.merge_by_distance_tolerance = tolerance;
+        changed = true;
+      }
         break;
     }
     case ModelingToolSettingsTargetKind::None:
         break;
     }
 
-    applySettingsUpdate();
+    apply_settings_update();
     if (!target.active) {
         open = false;
     }
 
-    if (target.operationPreviewActive) {
-        ImGui::Separator();
-        const std::string applyLabel = context.localization.imguiLabel("ui.action.apply", "ui.action.apply", "Apply");
-        if (ImGui::Button(applyLabel.c_str())) {
-            const std::string historyLabel = context.localization.format(
-                    "history.apply_operation",
-                    "Apply {operation}",
-                    {{"operation", title}});
-            const QuaderApiVoidResult result = context.editor.modeling().commitPreview(historyLabel);
-            if (!result.ok) {
-                LOG_ERROR("Tool preview apply failed: {}", result.message.empty() ? "Command failed." : result.message);
-            }
-            open = result.ok ? false : context.modeling.toolSettingsTarget().active;
+    if (target.operation_preview_active) {
+      ImGui::Separator();
+      const std::string apply_label = context.localization.imgui_label(
+          "ui.action.apply", "ui.action.apply", "Apply");
+      if (ImGui::Button(apply_label.c_str())) {
+        const std::string history_label = context.localization.format(
+            "history.apply_operation", "Apply {operation}",
+            {{"operation", title}});
+        const QuaderApiVoidResult result =
+            context.editor.modeling().commit_preview(history_label);
+        if (!result.ok) {
+          LOG_ERROR("Tool preview apply failed: {}", result.message.empty()
+                                                         ? "Command failed."
+                                                         : result.message);
         }
-        ImGui::SameLine();
-        const std::string cancelLabel = context.localization.imguiLabel("ui.action.cancel", "ui.action.cancel", "Cancel");
-        if (ImGui::Button(cancelLabel.c_str())) {
-            const QuaderApiVoidResult result = context.editor.modeling().cancelPreview();
-            if (!result.ok) {
-                LOG_ERROR("Tool preview cancel failed: {}", result.message.empty() ? "Command failed." : result.message);
-            }
-            open = result.ok ? false : context.modeling.toolSettingsTarget().active;
+        open =
+            result.ok ? false : context.modeling.tool_settings_target().active;
+      }
+      ImGui::SameLine();
+      const std::string cancel_label = context.localization.imgui_label(
+          "ui.action.cancel", "ui.action.cancel", "Cancel");
+      if (ImGui::Button(cancel_label.c_str())) {
+        const QuaderApiVoidResult result =
+            context.editor.modeling().cancel_preview();
+        if (!result.ok) {
+          LOG_ERROR("Tool preview cancel failed: {}", result.message.empty()
+                                                          ? "Command failed."
+                                                          : result.message);
         }
+        open =
+            result.ok ? false : context.modeling.tool_settings_target().active;
+      }
     }
 }
 

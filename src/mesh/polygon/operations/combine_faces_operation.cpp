@@ -47,9 +47,9 @@ public:
 
 OperationResult combine_selected_faces_impl(Document& document, Selection& selection)
 {
-    if (selection.mode != SelectionMode::face || selection.faces.size() < 2) {
-        return { false, "Combine Faces needs at least two selected faces." };
-    }
+  if (selection.mode != SelectionMode::Face || selection.faces.size() < 2) {
+    return {false, "Combine Faces needs at least two selected faces."};
+  }
 
     const ElementId active_face_id = active_face_or_invalid(selection);
     const std::vector<Face> selected_faces = selected_face_copies(document, selection);
@@ -62,7 +62,7 @@ OperationResult combine_selected_faces_impl(Document& document, Selection& selec
     std::set<ElementId> vertices_to_prune;
     std::vector<Face> merged_faces;
     std::vector<ElementId> merged_face_ids;
-    ElementId preferred_active_face_id = invalid_element_id;
+    ElementId preferred_active_face_id = kInvalidElementId;
 
     for (const FaceIslandBoundary& island : islands) {
         if (island.face_ids.size() < 2U) {
@@ -128,7 +128,7 @@ OperationResult combine_selected_faces_impl(Document& document, Selection& selec
 
     document = std::move(candidate);
     selection.clear();
-    selection.mode = SelectionMode::face;
+    selection.mode = SelectionMode::Face;
     selection.faces = std::move(merged_face_ids);
     activate_face_or_last_selection(selection, preferred_active_face_id);
     return { true, {} };

@@ -10,11 +10,10 @@
 
 namespace quader {
 
-bool quaderBeginCombo(
-        const char* label,
-        const char* previewValue,
-        ImGuiComboFlags flags = ImGuiComboFlags_None,
-        bool closeOnRepeatedClick = true);
-bool quaderCollapsingHeader(const char* label, ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_None);
+bool quader_begin_combo(const char *label, const char *preview_value,
+                        ImGuiComboFlags flags = ImGuiComboFlags_None,
+                        bool close_on_repeated_click = true);
+bool quader_collapsing_header(
+    const char *label, ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_None);
 
 } // namespace quader

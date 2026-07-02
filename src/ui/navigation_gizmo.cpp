@@ -22,260 +22,264 @@
 namespace quader {
 namespace {
 
-
-std::uint8_t alphaByte(float alpha) {
-    return static_cast<std::uint8_t>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f);
+std::uint8_t alpha_byte(float alpha) {
+  return static_cast<std::uint8_t>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f);
 }
 
-ImU32 viewAxisImColor(quader_editor_core::ViewAxis axis, float alpha = 1.0f) {
-    const std::uint8_t a = alphaByte(alpha);
-    switch (axis) {
-    case quader_editor_core::ViewAxis::x:
-        return IM_COL32(235, 76, 82, a);
-    case quader_editor_core::ViewAxis::y:
-        return IM_COL32(90, 205, 118, a);
-    case quader_editor_core::ViewAxis::z:
-        return IM_COL32(78, 142, 255, a);
-    }
-    return IM_COL32(255, 255, 255, a);
+ImU32 view_axis_im_color(quader_editor_core::ViewAxis axis,
+                         float alpha = 1.0f) {
+  const std::uint8_t a = alpha_byte(alpha);
+  switch (axis) {
+  case quader_editor_core::ViewAxis::X:
+    return IM_COL32(235, 76, 82, a);
+  case quader_editor_core::ViewAxis::Y:
+    return IM_COL32(90, 205, 118, a);
+  case quader_editor_core::ViewAxis::Z:
+    return IM_COL32(78, 142, 255, a);
+  }
+  return IM_COL32(255, 255, 255, a);
 }
 
-ViewportViewAxis toViewportViewAxis(quader_editor_core::ViewAxis axis) {
-    switch (axis) {
-    case quader_editor_core::ViewAxis::x:
-        return ViewportViewAxis::X;
-    case quader_editor_core::ViewAxis::y:
-        return ViewportViewAxis::Y;
-    case quader_editor_core::ViewAxis::z:
-        return ViewportViewAxis::Z;
-    }
+ViewportViewAxis to_viewport_view_axis(quader_editor_core::ViewAxis axis) {
+  switch (axis) {
+  case quader_editor_core::ViewAxis::X:
+    return ViewportViewAxis::X;
+  case quader_editor_core::ViewAxis::Y:
+    return ViewportViewAxis::Y;
+  case quader_editor_core::ViewAxis::Z:
     return ViewportViewAxis::Z;
+  }
+  return ViewportViewAxis::Z;
 }
 
-quader::QVec3 toRuntime(QVec3 value) {
-    return {value.x, value.y, value.z};
+quader::QVec3 to_runtime(QVec3 value) { return {value.x, value.y, value.z}; }
+
+quader_editor_core::ViewportCameraState
+make_runtime_camera(const ViewportCameraController &camera, ImVec2 item_size) {
+  const ViewportCameraBasis camera_basis = ViewportCameraAdapter::basis(camera);
+
+  quader_editor_core::ViewportCameraState runtime_camera;
+  runtime_camera.projection =
+      camera.state().projection == ViewportProjection::Orthographic
+          ? quader_editor_core::CameraProjection::Orthographic
+          : quader_editor_core::CameraProjection::Perspective;
+  runtime_camera.transform.origin = to_runtime(camera_basis.eye);
+  runtime_camera.transform.x_axis = to_runtime(camera_basis.right);
+  runtime_camera.transform.y_axis = to_runtime(camera_basis.up);
+  runtime_camera.transform.z_axis = to_runtime(camera_basis.forward * -1.0f);
+  runtime_camera.viewport_size = {std::max(item_size.x, 1.0f),
+                                  std::max(item_size.y, 1.0f)};
+  runtime_camera.orthographic_size =
+      std::max(camera.state().orthographic_size, 0.0001f);
+  runtime_camera.fov_degrees = camera.state().fov_degrees;
+  return runtime_camera;
 }
-
-quader_editor_core::ViewportCameraState makeRuntimeCamera(const ViewportCameraController& camera, ImVec2 itemSize) {
-    const ViewportCameraBasis cameraBasis = ViewportCameraAdapter::basis(camera);
-
-    quader_editor_core::ViewportCameraState runtimeCamera;
-    runtimeCamera.projection = camera.state().projection == ViewportProjection::Orthographic
-            ? quader_editor_core::CameraProjection::orthographic
-            : quader_editor_core::CameraProjection::perspective;
-    runtimeCamera.transform.origin = toRuntime(cameraBasis.eye);
-    runtimeCamera.transform.x_axis = toRuntime(cameraBasis.right);
-    runtimeCamera.transform.y_axis = toRuntime(cameraBasis.up);
-    runtimeCamera.transform.z_axis = toRuntime(cameraBasis.forward * -1.0f);
-    runtimeCamera.viewport_size = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
-    runtimeCamera.orthographic_size = std::max(camera.state().orthographicSize, 0.0001f);
-    runtimeCamera.fov_degrees = camera.state().fovDegrees;
-    return runtimeCamera;
-}
-
 
 } // namespace
 
-void NavigationGizmo::setVisible(bool visible) {
-    visible_ = visible;
-    if (!visible_) {
-        dragging_ = false;
-        dragPaneActive_ = false;
-        dragStarted_ = false;
-        pressedFace_ = false;
-    }
+void NavigationGizmo::set_visible(bool visible) {
+  visible_ = visible;
+  if (!visible_) {
+    dragging_ = false;
+    drag_pane_active_ = false;
+    drag_started_ = false;
+    pressed_face_ = false;
+  }
 }
 
-bool NavigationGizmo::draw(ViewportCameraController& camera,
-        ViewportPaneId paneId,
-        ImVec2 itemMin,
-        ImVec2 itemSize,
-        QVec2 capturedMouseDelta,
-        bool* viewportCursorCaptureRequested,
-        QVec2* viewportCursorCapturePoint,
-        bool interactive) {
-    if (!visible_) {
-        return false;
-    }
+bool NavigationGizmo::draw(ViewportCameraController &camera,
+                           ViewportPaneId pane_id, ImVec2 item_min,
+                           ImVec2 item_size, QVec2 captured_mouse_delta,
+                           bool *viewport_cursor_capture_requested,
+                           QVec2 *viewport_cursor_capture_point,
+                           bool interactive) {
+  if (!visible_) {
+    return false;
+  }
 
-    quader_editor_core::ViewCubePrimitiveInput input;
-    input.camera_transform = makeRuntimeCamera(camera, itemSize).transform;
-    input.viewport_size = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
-    input.widget_size = 70.0;
-    input.margin = {46.0f, 46.0f};
+  quader_editor_core::ViewCubePrimitiveInput input;
+  input.camera_transform = make_runtime_camera(camera, item_size).transform;
+  input.viewport_size = {std::max(item_size.x, 1.0f),
+                         std::max(item_size.y, 1.0f)};
+  input.widget_size = 70.0;
+  input.margin = {46.0f, 46.0f};
 
-    const quader_editor_core::ViewCubePrimitives primitives = quader_editor_core::build_view_cube_primitives(input);
-    if (!primitives.ok) {
-        return false;
-    }
+  const quader_editor_core::ViewCubePrimitives primitives =
+      quader_editor_core::build_view_cube_primitives(input);
+  if (!primitives.ok) {
+    return false;
+  }
 
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    const ImGuiIO& io = ImGui::GetIO();
-    const ImVec2 mouse = io.MousePos;
-    const bool activeDrag = dragging_ && dragPaneActive_ && dragPaneId_ == paneId;
-    const bool mouseInsideViewport =
-            mouse.x >= itemMin.x && mouse.y >= itemMin.y &&
-            mouse.x <= itemMin.x + itemSize.x && mouse.y <= itemMin.y + itemSize.y;
+  ImDrawList *draw_list = ImGui::GetWindowDrawList();
+  const ImGuiIO &io = ImGui::GetIO();
+  const ImVec2 mouse = io.MousePos;
+  const bool active_drag =
+      dragging_ && drag_pane_active_ && drag_pane_id_ == pane_id;
+  const bool mouse_inside_viewport = mouse.x >= item_min.x &&
+                                     mouse.y >= item_min.y &&
+                                     mouse.x <= item_min.x + item_size.x &&
+                                     mouse.y <= item_min.y + item_size.y;
 
-    quader_editor_core::ViewCubeHit hoverHit;
-    if (interactive && mouseInsideViewport) {
-        quader_editor_core::ViewCubePickInput pickInput;
-        pickInput.primitives = input;
-        pickInput.screen_position = {mouse.x - itemMin.x, mouse.y - itemMin.y};
-        hoverHit = quader_editor_core::pick_view_cube(pickInput);
-    }
+  quader_editor_core::ViewCubeHit hover_hit;
+  if (interactive && mouse_inside_viewport) {
+    quader_editor_core::ViewCubePickInput pick_input;
+    pick_input.primitives = input;
+    pick_input.screen_position = {mouse.x - item_min.x, mouse.y - item_min.y};
+    hover_hit = quader_editor_core::pick_view_cube(pick_input);
+  }
 
-    auto toViewCubeScreenPoint = [&](quader::QVec2 point) {
-        return ImVec2{
-                std::floor(itemMin.x + point.x) + 0.5f,
-                std::floor(itemMin.y + point.y) + 0.5f,
-        };
+  auto to_view_cube_screen_point = [&](quader::QVec2 point) {
+    return ImVec2{
+        std::floor(item_min.x + point.x) + 0.5f,
+        std::floor(item_min.y + point.y) + 0.5f,
     };
+  };
 
-    const ImDrawListFlags previousDrawFlags = drawList->Flags;
-    drawList->Flags &= ~ImDrawListFlags_AntiAliasedFill;
-    for (const quader_editor_core::ViewCubeFacePrimitive& face : primitives.faces) {
-        std::vector<ImVec2> polygon;
-        polygon.reserve(face.polygon.size());
-        for (quader::QVec2 point : face.polygon) {
-            polygon.push_back(toViewCubeScreenPoint(point));
-        }
-        if (polygon.size() < 3u) {
-            continue;
-        }
-
-        const float depth = std::clamp(static_cast<float>(face.depth), 0.0f, 1.0f);
-        const std::uint8_t shade = static_cast<std::uint8_t>(178.0f + depth * 46.0f);
-        const bool hoverFace =
-                hoverHit.hit &&
-                hoverHit.kind == quader_editor_core::ViewCubeHitKind::face &&
-                hoverHit.axis == face.axis &&
-                hoverHit.sign == face.sign;
-        const bool pressedFace =
-                activeDrag &&
-                !dragStarted_ &&
-                pressedFace_ &&
-                pressedAxis_ == toViewportViewAxis(face.axis) &&
-                pressedSign_ == face.sign;
-        const bool highlighted = hoverFace || pressedFace;
-        const ImU32 fillColor = highlighted
-                ? IM_COL32(255, 221, 111, 255)
-                : IM_COL32(shade, shade, static_cast<std::uint8_t>(std::min<int>(shade + 6, 255)), 248);
-        drawList->AddConvexPolyFilled(
-                polygon.data(),
-                static_cast<int>(polygon.size()),
-                fillColor);
+  const ImDrawListFlags previous_draw_flags = draw_list->Flags;
+  draw_list->Flags &= ~ImDrawListFlags_AntiAliasedFill;
+  for (const quader_editor_core::ViewCubeFacePrimitive &face :
+       primitives.faces) {
+    std::vector<ImVec2> polygon;
+    polygon.reserve(face.polygon.size());
+    for (quader::QVec2 point : face.polygon) {
+      polygon.push_back(to_view_cube_screen_point(point));
     }
-    drawList->Flags = previousDrawFlags;
-
-    constexpr ImU32 neutralEdgeColor = IM_COL32(248, 250, 252, 205);
-    for (const quader_editor_core::ViewCubeEdgePrimitive& edge : primitives.edges) {
-        drawList->AddLine(
-                toViewCubeScreenPoint(edge.screen_start),
-                toViewCubeScreenPoint(edge.screen_end),
-                neutralEdgeColor,
-                1.5f);
+    if (polygon.size() < 3u) {
+      continue;
     }
 
-    for (const quader_editor_core::ViewCubeEdgePrimitive& edge : primitives.axis_edges) {
-        drawList->AddLine(
-                toViewCubeScreenPoint(edge.screen_start),
-                toViewCubeScreenPoint(edge.screen_end),
-                viewAxisImColor(edge.axis, 1.0f),
-                2.8f);
+    const float depth = std::clamp(static_cast<float>(face.depth), 0.0f, 1.0f);
+    const std::uint8_t shade =
+        static_cast<std::uint8_t>(178.0f + depth * 46.0f);
+    const bool hover_face =
+        hover_hit.hit &&
+        hover_hit.kind == quader_editor_core::ViewCubeHitKind::Face &&
+        hover_hit.axis == face.axis && hover_hit.sign == face.sign;
+    const bool pressed_face =
+        active_drag && !drag_started_ && pressed_face_ &&
+        pressed_axis_ == to_viewport_view_axis(face.axis) &&
+        pressed_sign_ == face.sign;
+    const bool highlighted = hover_face || pressed_face;
+    const ImU32 fill_color =
+        highlighted
+            ? IM_COL32(255, 221, 111, 255)
+            : IM_COL32(shade, shade,
+                       static_cast<std::uint8_t>(std::min<int>(shade + 6, 255)),
+                       248);
+    draw_list->AddConvexPolyFilled(
+        polygon.data(), static_cast<int>(polygon.size()), fill_color);
+  }
+  draw_list->Flags = previous_draw_flags;
+
+  constexpr ImU32 kNeutralEdgeColor = IM_COL32(248, 250, 252, 205);
+  for (const quader_editor_core::ViewCubeEdgePrimitive &edge :
+       primitives.edges) {
+    draw_list->AddLine(to_view_cube_screen_point(edge.screen_start),
+                       to_view_cube_screen_point(edge.screen_end),
+                       kNeutralEdgeColor, 1.5f);
+  }
+
+  for (const quader_editor_core::ViewCubeEdgePrimitive &edge :
+       primitives.axis_edges) {
+    draw_list->AddLine(to_view_cube_screen_point(edge.screen_start),
+                       to_view_cube_screen_point(edge.screen_end),
+                       view_axis_im_color(edge.axis, 1.0f), 2.8f);
+  }
+
+  for (const quader_editor_core::ViewCubeAxisMarkerPrimitive &marker :
+       primitives.axis_markers) {
+    const ImVec2 marker_center{
+        std::floor(item_min.x + marker.screen_position.x) + 0.5f,
+        std::floor(item_min.y + marker.screen_position.y) + 0.5f};
+    constexpr float kRadius = 8.0f;
+    const ImU32 marker_color = view_axis_im_color(marker.axis, 1.0f);
+    draw_list->AddCircleFilled(marker_center, kRadius, marker_color, 18);
+    draw_list->AddCircle(marker_center, kRadius, IM_COL32(16, 20, 24, 112), 18,
+                         1.2f);
+
+    const std::string_view label =
+        quader_editor_core::view_axis_label(marker.axis, marker.sign);
+    constexpr float kLabelSize = 11.5f;
+    ImFont *label_font = ImGui::GetFont();
+    const ImVec2 text_size = label_font->CalcTextSizeA(
+        kLabelSize, std::numeric_limits<float>::max(), 0.0f, label.data(),
+        label.data() + label.size());
+    draw_list->AddText(label_font, kLabelSize,
+                       {marker_center.x - text_size.x * 0.5f,
+                        marker_center.y - text_size.y * 0.5f - 0.5f},
+                       IM_COL32(17, 22, 28, 255), label.data(),
+                       label.data() + label.size());
+  }
+
+  auto request_capture = [&]() {
+    if (viewport_cursor_capture_requested != nullptr) {
+      *viewport_cursor_capture_requested = true;
     }
-
-    for (const quader_editor_core::ViewCubeAxisMarkerPrimitive& marker : primitives.axis_markers) {
-        const ImVec2 markerCenter{
-                std::floor(itemMin.x + marker.screen_position.x) + 0.5f,
-                std::floor(itemMin.y + marker.screen_position.y) + 0.5f};
-        constexpr float radius = 8.0f;
-        const ImU32 markerColor = viewAxisImColor(marker.axis, 1.0f);
-        drawList->AddCircleFilled(markerCenter, radius, markerColor, 18);
-        drawList->AddCircle(markerCenter, radius, IM_COL32(16, 20, 24, 112), 18, 1.2f);
-
-        const std::string_view label = quader_editor_core::view_axis_label(marker.axis, marker.sign);
-        constexpr float labelSize = 11.5f;
-        ImFont* labelFont = ImGui::GetFont();
-        const ImVec2 textSize = labelFont->CalcTextSizeA(
-                labelSize,
-                std::numeric_limits<float>::max(),
-                0.0f,
-                label.data(),
-                label.data() + label.size());
-        drawList->AddText(
-                labelFont,
-                labelSize,
-                {markerCenter.x - textSize.x * 0.5f, markerCenter.y - textSize.y * 0.5f - 0.5f},
-                IM_COL32(17, 22, 28, 255),
-                label.data(),
-                label.data() + label.size());
+    if (viewport_cursor_capture_point != nullptr) {
+      const ImGuiViewport *main_viewport = ImGui::GetMainViewport();
+      *viewport_cursor_capture_point = {
+          cursor_capture_screen_.x - main_viewport->Pos.x,
+          cursor_capture_screen_.y - main_viewport->Pos.y,
+      };
     }
+  };
 
-    auto requestCapture = [&]() {
-        if (viewportCursorCaptureRequested != nullptr) {
-            *viewportCursorCaptureRequested = true;
-        }
-        if (viewportCursorCapturePoint != nullptr) {
-            const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-            *viewportCursorCapturePoint = {
-                    cursorCaptureScreen_.x - mainViewport->Pos.x,
-                    cursorCaptureScreen_.y - mainViewport->Pos.y,
-            };
-        }
-    };
-
-    if (activeDrag) {
-        requestCapture();
-        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
-        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            const QVec2 fallbackDelta{io.MouseDelta.x, io.MouseDelta.y};
-            const float capturedDeltaLengthSquared =
-                    capturedMouseDelta.x * capturedMouseDelta.x + capturedMouseDelta.y * capturedMouseDelta.y;
-            const QVec2 delta = capturedDeltaLengthSquared > 0.000001f ? capturedMouseDelta : fallbackDelta;
-            accumulatedDrag_ = accumulatedDrag_ + delta;
-            const float accumulatedLengthSquared =
-                    accumulatedDrag_.x * accumulatedDrag_.x +
-                    accumulatedDrag_.y * accumulatedDrag_.y;
-            if (accumulatedLengthSquared > 9.0f) {
-                dragStarted_ = true;
-            }
-            if (dragStarted_ &&
-                    (delta.x * delta.x + delta.y * delta.y) > 0.000001f) {
-                camera.updateDragDelta(delta);
-            }
-            return true;
-        }
-
-        if (!dragStarted_ && pressedFace_) {
-            camera.viewAxis(pressedAxis_, pressedSign_, ViewportAxisLock::Unlocked);
-        }
-        camera.endDrag();
-        dragging_ = false;
-        dragPaneActive_ = false;
-        dragStarted_ = false;
-        pressedFace_ = false;
-        return true;
-    }
-
-    if (!interactive || !mouseInsideViewport || !ImGui::IsMouseClicked(ImGuiMouseButton_Left) || !hoverHit.hit) {
-        return false;
-    }
-
-    dragging_ = true;
-    dragPaneActive_ = true;
-    dragPaneId_ = paneId;
-    dragStarted_ = false;
-    pressedFace_ = hoverHit.kind == quader_editor_core::ViewCubeHitKind::face;
-    pressedAxis_ = toViewportViewAxis(hoverHit.axis);
-    pressedSign_ = hoverHit.sign;
-    accumulatedDrag_ = {};
-    cursorCaptureScreen_ = {mouse.x, mouse.y};
-    camera.unlockOrthographicView();
-    camera.beginDrag({mouse.x, mouse.y}, ViewportDragMode::Orbit);
-    requestCapture();
+  if (active_drag) {
+    request_capture();
     ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+      const QVec2 fallback_delta{io.MouseDelta.x, io.MouseDelta.y};
+      const float captured_delta_length_squared =
+          captured_mouse_delta.x * captured_mouse_delta.x +
+          captured_mouse_delta.y * captured_mouse_delta.y;
+      const QVec2 delta = captured_delta_length_squared > 0.000001f
+                              ? captured_mouse_delta
+                              : fallback_delta;
+      accumulated_drag_ = accumulated_drag_ + delta;
+      const float accumulated_length_squared =
+          accumulated_drag_.x * accumulated_drag_.x +
+          accumulated_drag_.y * accumulated_drag_.y;
+      if (accumulated_length_squared > 9.0f) {
+        drag_started_ = true;
+      }
+      if (drag_started_ &&
+          (delta.x * delta.x + delta.y * delta.y) > 0.000001f) {
+        camera.update_drag_delta(delta);
+      }
+      return true;
+    }
+
+    if (!drag_started_ && pressed_face_) {
+      camera.view_axis(pressed_axis_, pressed_sign_,
+                       ViewportAxisLock::Unlocked);
+    }
+    camera.end_drag();
+    dragging_ = false;
+    drag_pane_active_ = false;
+    drag_started_ = false;
+    pressed_face_ = false;
     return true;
+  }
+
+  if (!interactive || !mouse_inside_viewport ||
+      !ImGui::IsMouseClicked(ImGuiMouseButton_Left) || !hover_hit.hit) {
+    return false;
+  }
+
+  dragging_ = true;
+  drag_pane_active_ = true;
+  drag_pane_id_ = pane_id;
+  drag_started_ = false;
+  pressed_face_ = hover_hit.kind == quader_editor_core::ViewCubeHitKind::Face;
+  pressed_axis_ = to_viewport_view_axis(hover_hit.axis);
+  pressed_sign_ = hover_hit.sign;
+  accumulated_drag_ = {};
+  cursor_capture_screen_ = {mouse.x, mouse.y};
+  camera.unlock_orthographic_view();
+  camera.begin_drag({mouse.x, mouse.y}, ViewportDragMode::Orbit);
+  request_capture();
+  ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+  return true;
 }
 
 } // namespace quader

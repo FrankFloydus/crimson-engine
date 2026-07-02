@@ -26,10 +26,10 @@ struct CrossedGapFixture {
 	Document document;
 	Edge left_edge;
 	Edge right_edge;
-	ElementId left_front = invalid_element_id;
-	ElementId left_back = invalid_element_id;
-	ElementId right_front = invalid_element_id;
-	ElementId right_back = invalid_element_id;
+        ElementId left_front = kInvalidElementId;
+        ElementId left_back = kInvalidElementId;
+        ElementId right_front = kInvalidElementId;
+        ElementId right_back = kInvalidElementId;
 };
 
 AngledGapFixture make_angled_gap_fixture()
@@ -46,12 +46,24 @@ AngledGapFixture make_angled_gap_fixture()
 
 	// Add the non-gap side first so document-order adjacent-face picking would
 	// wind the new bridge downward across this angled gap.
-	EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 4> { left_front, left_back, left_back_top, left_front_top }) != invalid_element_id);
-	EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 4> { right_front, right_front_top, right_back_top, right_back }) != invalid_element_id);
-	EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 4> { left_front, left_front_top, left_back_top, left_back }) != invalid_element_id);
-	EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 4> { right_front, right_back, right_back_top, right_front_top }) != invalid_element_id);
+        EXPECT_TRUE(add_face(fixture.document,
+                             std::array<ElementId, 4>{
+                                 left_front, left_back, left_back_top,
+                                 left_front_top}) != kInvalidElementId);
+        EXPECT_TRUE(add_face(fixture.document,
+                             std::array<ElementId, 4>{
+                                 right_front, right_front_top, right_back_top,
+                                 right_back}) != kInvalidElementId);
+        EXPECT_TRUE(add_face(fixture.document,
+                             std::array<ElementId, 4>{
+                                 left_front, left_front_top, left_back_top,
+                                 left_back}) != kInvalidElementId);
+        EXPECT_TRUE(add_face(fixture.document,
+                             std::array<ElementId, 4>{
+                                 right_front, right_back, right_back_top,
+                                 right_front_top}) != kInvalidElementId);
 
-	fixture.left_edge = make_edge(left_front, left_back);
+        fixture.left_edge = make_edge(left_front, left_back);
 	fixture.right_edge = make_edge(right_front, right_back);
 	return fixture;
 }
@@ -70,28 +82,28 @@ CrossedGapFixture make_crossed_gap_fixture()
 	const ElementId right_front_bottom = add_vertex(fixture.document, { 4.0F, -1.0F, 0.0F });
 	const ElementId right_back_bottom = add_vertex(fixture.document, { 3.0F, -1.0F, 2.0F });
 
-	EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 4> {
-		fixture.left_back,
-		fixture.left_front,
-		left_front_top,
-		left_back_top,
-	}) != invalid_element_id);
-	// Add this tied-scoring adjacent face first. A one-edge-at-a-time bridge
+        EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 4>{
+                                                   fixture.left_back,
+                                                   fixture.left_front,
+                                                   left_front_top,
+                                                   left_back_top,
+                                               }) != kInvalidElementId);
+        // Add this tied-scoring adjacent face first. A one-edge-at-a-time bridge
 	// side pick would use it and cross the generated quad diagonally.
-	EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 4> {
-		fixture.right_back,
-		fixture.right_front,
-		right_front_bottom,
-		right_back_bottom,
-	}) != invalid_element_id);
-	EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 4> {
-		fixture.right_front,
-		fixture.right_back,
-		right_back_top,
-		right_front_top,
-	}) != invalid_element_id);
+        EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 4>{
+                                                   fixture.right_back,
+                                                   fixture.right_front,
+                                                   right_front_bottom,
+                                                   right_back_bottom,
+                                               }) != kInvalidElementId);
+        EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 4>{
+                                                   fixture.right_front,
+                                                   fixture.right_back,
+                                                   right_back_top,
+                                                   right_front_top,
+                                               }) != kInvalidElementId);
 
-	fixture.left_edge = make_edge(fixture.left_front, fixture.left_back);
+        fixture.left_edge = make_edge(fixture.left_front, fixture.left_back);
 	fixture.right_edge = make_edge(fixture.right_front, fixture.right_back);
 	return fixture;
 }
@@ -110,8 +122,8 @@ TEST(QdrDocumentOperationBridgeEdgesTests, BridgeEdgesCreatesASingleQuadBetweenT
 	const OperationResult result = bridge_selected_edges(document, selection);
 
 	EXPECT_TRUE(result.changed);
-	EXPECT_TRUE(selection.mode == SelectionMode::face);
-	EXPECT_TRUE(selection.faces.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Face);
+        EXPECT_TRUE(selection.faces.size() == 1U);
 	const Face* bridged_face = find_face(document, selection.faces.front());
 	EXPECT_TRUE(bridged_face != nullptr);
 	EXPECT_TRUE(bridged_face->vertices.size() == 4U);
@@ -129,8 +141,8 @@ TEST(QdrDocumentOperationBridgeEdgesTests, BridgeEdgesChoosesGapFacingAdjacentFa
 	const OperationResult result = bridge_selected_edges(fixture.document, selection);
 
 	EXPECT_TRUE(result.changed);
-	EXPECT_TRUE(selection.mode == SelectionMode::face);
-	EXPECT_TRUE(selection.faces.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Face);
+        EXPECT_TRUE(selection.faces.size() == 1U);
 	const Face* bridged_face = find_face(fixture.document, selection.faces.front());
 	EXPECT_TRUE(bridged_face != nullptr);
 	EXPECT_TRUE(dot(face_normal(fixture.document, *bridged_face), quader::QVec3 { 0.0F, 1.0F, 0.0F }) > 0.5F);
@@ -147,8 +159,8 @@ TEST(QdrDocumentOperationBridgeEdgesTests, BridgeEdgesPairsEndpointsWithoutCross
 	const OperationResult result = bridge_selected_edges(fixture.document, selection);
 
 	EXPECT_TRUE(result.changed);
-	EXPECT_TRUE(selection.mode == SelectionMode::face);
-	EXPECT_TRUE(selection.faces.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Face);
+        EXPECT_TRUE(selection.faces.size() == 1U);
 	const Face* bridged_face = find_face(fixture.document, selection.faces.front());
 	EXPECT_TRUE(bridged_face != nullptr);
 	EXPECT_TRUE(qdr_test::face_vertices_match_cyclic(*bridged_face, {
@@ -183,8 +195,8 @@ TEST(QdrDocumentOperationBridgeEdgesTests, BridgeEdgesSupportsSteppedSpansBetwee
 	const OperationResult result = bridge_selected_edges(document, selection, 3);
 
 	EXPECT_TRUE(result.changed);
-	EXPECT_TRUE(selection.mode == SelectionMode::face);
-	EXPECT_TRUE(selection.faces.size() == 3U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Face);
+        EXPECT_TRUE(selection.faces.size() == 3U);
 	EXPECT_TRUE(qdr_test::edge_incidence_count(document, make_edge(removed_face.vertices[0], removed_face.vertices[1])) == 2);
 	EXPECT_TRUE(qdr_test::edge_incidence_count(document, make_edge(removed_face.vertices[2], removed_face.vertices[3])) == 2);
 	EXPECT_TRUE(has_plane_z);

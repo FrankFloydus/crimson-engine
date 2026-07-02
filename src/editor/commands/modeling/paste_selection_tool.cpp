@@ -10,8 +10,8 @@
 
 namespace quader {
 
-ModelingCommandResult PasteSelectionTool::executeCustomCommand(ModelingCommandExecutionContext& context) const {
-    return context.modeling.pasteSelection();
+ModelingCommandResult PasteSelectionTool::execute_custom_command(ModelingCommandExecutionContext& context) const {
+  return context.modeling.paste_selection();
 }
 
 } // namespace quader

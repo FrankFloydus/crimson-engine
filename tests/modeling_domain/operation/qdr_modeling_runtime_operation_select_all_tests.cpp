@@ -32,15 +32,17 @@ TEST(QdrModelingRuntimeOperationSelectAllTests, SelectAllOperationSelectsEveryOb
 
 	{
 		quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
-		session.set_selection_mode(quader_editor_core::SelectionMode::face);
-		EXPECT_FALSE(session.has_selection());
+                session.set_selection_mode(
+                    quader_editor_core::SelectionMode::Face);
+                EXPECT_FALSE(session.has_selection());
 
 		const quader_editor_core::CommandResult result = session.select_all();
 
 		EXPECT_TRUE(result.ok);
 		EXPECT_TRUE(result.changed);
-		EXPECT_TRUE(session.selection_mode() == quader_editor_core::SelectionMode::face);
-		EXPECT_TRUE(session.objects().front().selected);
+                EXPECT_TRUE(session.selection_mode() ==
+                            quader_editor_core::SelectionMode::Face);
+                EXPECT_TRUE(session.objects().front().selected);
 		EXPECT_TRUE(session.objects().front().selection.faces.size() == session.objects().front().document.faces.size());
 		EXPECT_TRUE(session.active_object_id() == session.objects().front().id);
 	}

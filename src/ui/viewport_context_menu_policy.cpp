@@ -8,36 +8,38 @@
 
 namespace quader {
 
-bool isViewportContextMenuClickGesture(const ViewportContextMenuOpenRequest& request) {
-    if (request.modalToolOwnsViewport ||
-            !request.rightPressTracked ||
-            !request.rightReleased ||
-            !request.releaseInsideViewport) {
-        return false;
-    }
+bool is_viewport_context_menu_click_gesture(
+    const ViewportContextMenuOpenRequest &request) {
+  if (request.modal_tool_owns_viewport || !request.right_press_tracked ||
+      !request.right_released || !request.release_inside_viewport) {
+    return false;
+  }
 
-    const QVec2 delta = request.releaseScreen - request.pressScreen;
-    const float releaseDistanceSquared = delta.x * delta.x + delta.y * delta.y;
-    const float dragDistanceSquared =
-            request.accumulatedDragDelta.x * request.accumulatedDragDelta.x +
-            request.accumulatedDragDelta.y * request.accumulatedDragDelta.y;
-    return releaseDistanceSquared <= request.maxClickDistanceSquared &&
-            dragDistanceSquared <= request.maxClickDistanceSquared;
+  const QVec2 delta = request.release_screen - request.press_screen;
+  const float release_distance_squared = delta.x * delta.x + delta.y * delta.y;
+  const float drag_distance_squared =
+      request.accumulated_drag_delta.x * request.accumulated_drag_delta.x +
+      request.accumulated_drag_delta.y * request.accumulated_drag_delta.y;
+  return release_distance_squared <= request.max_click_distance_squared &&
+         drag_distance_squared <= request.max_click_distance_squared;
 }
 
-bool shouldOpenViewportContextMenu(const ViewportContextMenuOpenRequest& request) {
-    return isViewportContextMenuClickGesture(request) && request.targetHit && request.hasActions;
+bool should_open_viewport_context_menu(
+    const ViewportContextMenuOpenRequest &request) {
+  return is_viewport_context_menu_click_gesture(request) &&
+         request.target_hit && request.has_actions;
 }
 
-bool shouldPreserveViewportContextMenuHover(const ViewportContextMenuHoverRequest& request) {
-    if (!request.rightPressTracked || request.flyHudActive) {
-        return false;
-    }
+bool should_preserve_viewport_context_menu_hover(
+    const ViewportContextMenuHoverRequest &request) {
+  if (!request.right_press_tracked || request.fly_hud_active) {
+    return false;
+  }
 
-    const float dragDistanceSquared =
-            request.accumulatedDragDelta.x * request.accumulatedDragDelta.x +
-            request.accumulatedDragDelta.y * request.accumulatedDragDelta.y;
-    return dragDistanceSquared <= request.maxClickDistanceSquared;
+  const float drag_distance_squared =
+      request.accumulated_drag_delta.x * request.accumulated_drag_delta.x +
+      request.accumulated_drag_delta.y * request.accumulated_drag_delta.y;
+  return drag_distance_squared <= request.max_click_distance_squared;
 }
 
 } // namespace quader

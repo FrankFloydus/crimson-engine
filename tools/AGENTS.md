@@ -18,3 +18,9 @@ file except through prior written authorization from Francesco Di Blasi.
   overwrite actions.
 - If a tool encodes build, dependency, documentation, or test policy, keep it aligned with the
   matching `agents/` domain instruction file.
+
+## C++ Style Tool
+
+`tools/check_cpp_style.py` is the clang-tidy style gate. It validates project-owned C++ path naming,
+generates its disposable compile database in `.build/cmake-tidy`, and enforces the root
+`.clang-tidy` identifier-naming policy.

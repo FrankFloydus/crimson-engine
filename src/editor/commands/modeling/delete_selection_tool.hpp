@@ -16,22 +16,23 @@ namespace quader {
 class DeleteSelectionTool final : public CustomInstantCommandTool {
 public:
     [[nodiscard]] CommandToolDescriptor descriptor() const override {
-        return {
-                .id = "delete_selection",
-                .operationId = "delete_selection",
-                .label = "Delete",
-                .kind = CommandToolKind::Instant,
-                .previewKind = ModelingActionPreviewKind::None,
-                .rebuildsMeshOnSuccess = true,
-                .publicCommandId = "edit.delete",
-                .registersPublicCommand = false,
-        };
+      return {
+          .id = "delete_selection",
+          .operation_id = "delete_selection",
+          .label = "Delete",
+          .kind = CommandToolKind::Instant,
+          .preview_kind = ModelingActionPreviewKind::None,
+          .rebuilds_mesh_on_success = true,
+          .public_command_id = "edit.delete",
+          .registers_public_command = false,
+      };
     }
 
 private:
-    [[nodiscard]] ModelingCommandAvailability customAvailability(
-            const ModelingCommandExecutionContext& context) const override;
-    ModelingCommandResult executeCustomCommand(ModelingCommandExecutionContext& context) const override;
+  [[nodiscard]] ModelingCommandAvailability custom_availability(
+      const ModelingCommandExecutionContext &context) const override;
+  ModelingCommandResult execute_custom_command(
+      ModelingCommandExecutionContext &context) const override;
 };
 
 } // namespace quader

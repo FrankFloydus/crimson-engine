@@ -10,29 +10,38 @@
 
 namespace quader {
 
-void ViewportPaneController::resetCamera(ViewportPaneId paneId, ViewportCameraController& camera) const {
-    resetCamera(viewportViewForPane(paneId), camera);
+void ViewportPaneController::reset_camera(
+    ViewportPaneId pane_id, ViewportCameraController &camera) const {
+  reset_camera(viewport_view_for_pane(pane_id), camera);
 }
 
-void ViewportPaneController::resetCamera(ViewportView view, ViewportCameraController& camera) const {
-    resetViewportCameraForView(camera, view);
+void ViewportPaneController::reset_camera(
+    ViewportView view, ViewportCameraController &camera) const {
+  reset_viewport_camera_for_view(camera, view);
 }
 
-ImVec2 ViewportPaneController::paneRectMin(
-        ImVec2 viewportMin,
-        ImVec2 viewportSize,
-        ViewportNormalizedRect normalizedRect) {
-    const ViewportNormalizedRect absolute = viewportAbsolutePaneRect(
-            {.x = viewportMin.x, .y = viewportMin.y, .width = viewportSize.x, .height = viewportSize.y},
-            normalizedRect);
-    return {absolute.x, absolute.y};
+ImVec2
+ViewportPaneController::pane_rect_min(ImVec2 viewport_min, ImVec2 viewport_size,
+                                      ViewportNormalizedRect normalized_rect) {
+  const ViewportNormalizedRect absolute =
+      viewport_absolute_pane_rect({.x = viewport_min.x,
+                                   .y = viewport_min.y,
+                                   .width = viewport_size.x,
+                                   .height = viewport_size.y},
+                                  normalized_rect);
+  return {absolute.x, absolute.y};
 }
 
-ImVec2 ViewportPaneController::paneRectSize(ImVec2 viewportSize, ViewportNormalizedRect normalizedRect) {
-    const ViewportNormalizedRect absolute = viewportAbsolutePaneRect(
-            {.x = 0.0f, .y = 0.0f, .width = viewportSize.x, .height = viewportSize.y},
-            normalizedRect);
-    return {absolute.width, absolute.height};
+ImVec2
+ViewportPaneController::pane_rect_size(ImVec2 viewport_size,
+                                       ViewportNormalizedRect normalized_rect) {
+  const ViewportNormalizedRect absolute =
+      viewport_absolute_pane_rect({.x = 0.0f,
+                                   .y = 0.0f,
+                                   .width = viewport_size.x,
+                                   .height = viewport_size.y},
+                                  normalized_rect);
+  return {absolute.width, absolute.height};
 }
 
 } // namespace quader

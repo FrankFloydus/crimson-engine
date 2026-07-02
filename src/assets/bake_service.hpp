@@ -32,10 +32,10 @@ enum class BakeMapType {
  * Stores the Bake Job Descriptor data contract used by the asset document and registry layer.
  */
 struct BakeJobDescriptor {
-    AssetId mesh = InvalidAssetId;
-    std::vector<BakeMapType> maps;
-    std::uint32_t width = 1024;
-    std::uint32_t height = 1024;
+  AssetId mesh = kInvalidAssetId;
+  std::vector<BakeMapType> maps;
+  std::uint32_t width = 1024;
+  std::uint32_t height = 1024;
 };
 
 /**

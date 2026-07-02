@@ -15,10 +15,14 @@ namespace quader {
  */
 class ModelingClipboardService {
 public:
-    [[nodiscard]] static quader_editor_core::EditorRuntimeCommandId copyCommand();
-    [[nodiscard]] static quader_editor_core::EditorRuntimeCommandId pasteCommand();
-    [[nodiscard]] static quader_editor_core::EditorRuntimeCommand makeCopyCommand();
-    [[nodiscard]] static quader_editor_core::EditorRuntimeCommand makePasteCommand();
+  [[nodiscard]] static quader_editor_core::EditorRuntimeCommandId
+  copy_command();
+  [[nodiscard]] static quader_editor_core::EditorRuntimeCommandId
+  paste_command();
+  [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
+  make_copy_command();
+  [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
+  make_paste_command();
 };
 
 } // namespace quader

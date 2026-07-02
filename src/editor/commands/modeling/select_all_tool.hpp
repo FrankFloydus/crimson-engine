@@ -16,20 +16,21 @@ namespace quader {
 class SelectAllTool final : public CustomInstantCommandTool {
 public:
     [[nodiscard]] CommandToolDescriptor descriptor() const override {
-        return {
-                .id = "select_all",
-                .operationId = "select_all",
-                .label = "Select All",
-                .kind = CommandToolKind::Instant,
-                .previewKind = ModelingActionPreviewKind::None,
-                .rebuildsMeshOnSuccess = false,
-                .publicCommandId = "edit.select_all",
-                .registersPublicCommand = false,
-        };
+      return {
+          .id = "select_all",
+          .operation_id = "select_all",
+          .label = "Select All",
+          .kind = CommandToolKind::Instant,
+          .preview_kind = ModelingActionPreviewKind::None,
+          .rebuilds_mesh_on_success = false,
+          .public_command_id = "edit.select_all",
+          .registers_public_command = false,
+      };
     }
 
 private:
-    ModelingCommandResult executeCustomCommand(ModelingCommandExecutionContext& context) const override;
+  ModelingCommandResult execute_custom_command(
+      ModelingCommandExecutionContext &context) const override;
 };
 
 } // namespace quader

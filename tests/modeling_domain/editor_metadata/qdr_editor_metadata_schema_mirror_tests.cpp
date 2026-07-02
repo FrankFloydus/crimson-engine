@@ -26,9 +26,9 @@ const qhc::HostOperationDescriptor& require_operation(std::string_view id)
 	const qhc::HostOperationDescriptor *descriptor = qhc::find_operation_descriptor(id);
 	if (descriptor == nullptr) {
 		ADD_FAILURE() << "Missing host operation descriptor";
-		static const qhc::HostOperationDescriptor missing_descriptor {};
-		return missing_descriptor;
-	}
+                static const qhc::HostOperationDescriptor kMissingDescriptor{};
+                return kMissingDescriptor;
+        }
 	return *descriptor;
 }
 
@@ -40,16 +40,16 @@ const qhc::HostOptionDescriptor& require_option(const qhc::HostOperationDescript
 		}
 	}
 	ADD_FAILURE() << "Missing host option descriptor";
-	static const qhc::HostOptionDescriptor missing_descriptor {};
-	return missing_descriptor;
+        static const qhc::HostOptionDescriptor kMissingDescriptor{};
+        return kMissingDescriptor;
 }
 
 void check_int_option(const qhc::HostOptionDescriptor& option, const qec::IntOperationOptionSchema& schema)
 {
 	EXPECT_TRUE(same_text(option.id, schema.id));
 	EXPECT_TRUE(same_text(option.label, schema.label));
-	EXPECT_TRUE(option.value_kind == qhc::HostOptionValueKind::integer);
-	EXPECT_TRUE(option.default_integer == schema.default_value);
+        EXPECT_TRUE(option.value_kind == qhc::HostOptionValueKind::Integer);
+        EXPECT_TRUE(option.default_integer == schema.default_value);
 	EXPECT_TRUE(option.minimum_integer == schema.minimum);
 	EXPECT_TRUE(option.maximum_integer == schema.maximum);
 	EXPECT_TRUE(option.integer_step == schema.step);
@@ -60,8 +60,8 @@ void check_float_option(const qhc::HostOptionDescriptor& option, const qec::Floa
 {
 	EXPECT_TRUE(same_text(option.id, schema.id));
 	EXPECT_TRUE(same_text(option.label, schema.label));
-	EXPECT_TRUE(option.value_kind == qhc::HostOptionValueKind::floating);
-	EXPECT_TRUE(option.default_number == schema.default_value);
+        EXPECT_TRUE(option.value_kind == qhc::HostOptionValueKind::Floating);
+        EXPECT_TRUE(option.default_number == schema.default_value);
 	EXPECT_TRUE(option.minimum_number == schema.minimum);
 	EXPECT_TRUE(option.maximum_number == schema.maximum);
 	EXPECT_TRUE(option.number_step == schema.step);
@@ -72,8 +72,8 @@ void check_bool_option(const qhc::HostOptionDescriptor& option, const qec::BoolO
 {
 	EXPECT_TRUE(same_text(option.id, schema.id));
 	EXPECT_TRUE(same_text(option.label, schema.label));
-	EXPECT_TRUE(option.value_kind == qhc::HostOptionValueKind::boolean);
-	EXPECT_TRUE(option.default_bool == schema.default_value);
+        EXPECT_TRUE(option.value_kind == qhc::HostOptionValueKind::Boolean);
+        EXPECT_TRUE(option.default_bool == schema.default_value);
 	EXPECT_TRUE(option.visible == schema.visible);
 }
 
@@ -95,15 +95,15 @@ void check_option_descriptor(
 	EXPECT_TRUE(option.visible == schema.visible);
 	EXPECT_TRUE(option.hard_limits == schema.hard_limits);
 	switch (schema.value_kind) {
-	case qec::EditorOperationOptionValueKind::integer:
-		EXPECT_TRUE(option.value_kind == qhc::HostOptionValueKind::integer);
-		break;
-	case qec::EditorOperationOptionValueKind::floating:
-		EXPECT_TRUE(option.value_kind == qhc::HostOptionValueKind::floating);
-		break;
-	case qec::EditorOperationOptionValueKind::boolean:
-		EXPECT_TRUE(option.value_kind == qhc::HostOptionValueKind::boolean);
-		break;
+        case qec::EditorOperationOptionValueKind::Integer:
+          EXPECT_TRUE(option.value_kind == qhc::HostOptionValueKind::Integer);
+          break;
+        case qec::EditorOperationOptionValueKind::Floating:
+          EXPECT_TRUE(option.value_kind == qhc::HostOptionValueKind::Floating);
+          break;
+        case qec::EditorOperationOptionValueKind::Boolean:
+          EXPECT_TRUE(option.value_kind == qhc::HostOptionValueKind::Boolean);
+          break;
 	}
 }
 

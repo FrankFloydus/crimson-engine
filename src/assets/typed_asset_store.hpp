@@ -27,7 +27,7 @@ class TypedAssetStore {
 public:
     AssetId add(AssetId id, Document document) {
         if (documents_.contains(id)) {
-            return InvalidAssetId;
+          return kInvalidAssetId;
         }
         stamp(id, document);
         documents_[id] = std::move(document);
@@ -83,12 +83,12 @@ public:
 
 private:
     void stamp(AssetId id, Document& document) {
-        nextRevision_ = nextRevision(nextRevision_);
-        document.id = id;
-        document.revision = nextRevision_;
+      next_revision_ = next_revision(next_revision_);
+      document.id = id;
+      document.revision = next_revision_;
     }
 
-    Revision nextRevision_;
+    Revision next_revision_;
     std::unordered_map<AssetId, Document> documents_;
 };
 

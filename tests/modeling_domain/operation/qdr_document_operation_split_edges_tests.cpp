@@ -20,8 +20,8 @@ TEST(QdrDocumentOperationSplitEdgesTests, SplitEdgesSeparatesAdjacentFacesWithou
 	EXPECT_TRUE(result.changed);
 	EXPECT_TRUE(document.vertices.size() == vertex_count_before + 2U);
 	EXPECT_TRUE(document.faces.size() == face_count_before);
-	EXPECT_TRUE(selection.mode == SelectionMode::edge);
-	EXPECT_TRUE(selection.edges.size() == 2U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Edge);
+        EXPECT_TRUE(selection.edges.size() == 2U);
 	for (const Edge& edge : selection.edges) {
 		EXPECT_TRUE(qdr_test::edge_incidence_count(document, edge) == 1);
 	}

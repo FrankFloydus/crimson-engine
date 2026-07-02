@@ -9,9 +9,9 @@
 namespace quader {
 
 BakeValidationResult BakeService::validate(const BakeJobDescriptor& descriptor) {
-    if (descriptor.mesh == InvalidAssetId) {
-        return {false, "Bake job requires a mesh asset."};
-    }
+  if (descriptor.mesh == kInvalidAssetId) {
+    return {false, "Bake job requires a mesh asset."};
+  }
     if (descriptor.maps.empty()) {
         return {false, "Bake job requires at least one output map."};
     }

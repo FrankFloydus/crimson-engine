@@ -16,9 +16,10 @@ ToolPreviewRenderableCache::~ToolPreviewRenderableCache() {
     shutdown();
 }
 
-void ToolPreviewRenderableCache::initialize(MeshRenderableFactory& factory, MaterialBindingService& materialBinding) {
-    factory_ = &factory;
-    materialBinding_ = &materialBinding;
+void ToolPreviewRenderableCache::initialize(
+    MeshRenderableFactory &factory, MaterialBindingService &material_binding) {
+  factory_ = &factory;
+  material_binding_ = &material_binding;
 }
 
 void ToolPreviewRenderableCache::shutdown() {
@@ -28,76 +29,73 @@ void ToolPreviewRenderableCache::shutdown() {
 
     clear();
     factory_ = nullptr;
-    materialBinding_ = nullptr;
+    material_binding_ = nullptr;
 }
 
-bool ToolPreviewRenderableCache::setMeshes(const std::vector<ToolPreviewMesh>& meshes, const AssetRegistry& assets) {
-    if (!factory_ || !materialBinding_) {
-        return false;
-    }
+bool ToolPreviewRenderableCache::set_meshes(
+    const std::vector<ToolPreviewMesh> &meshes, const AssetRegistry &assets) {
+  if (!factory_ || !material_binding_) {
+    return false;
+  }
 
-    const std::uint64_t nextSignature = previewMeshesSignature(meshes, assets, *materialBinding_);
-    if (nextSignature == meshSignature_) {
-        return false;
-    }
+  const std::uint64_t next_signature =
+      preview_meshes_signature(meshes, assets, *material_binding_);
+  if (next_signature == mesh_signature_) {
+    return false;
+  }
 
-    clear();
-    meshSignature_ = nextSignature;
-    meshProxies_.reserve(meshes.size());
-    for (const ToolPreviewMesh& previewMesh : meshes) {
-        if (previewMesh.mesh.vertices.empty() || previewMesh.mesh.indices.empty()) {
-            continue;
-        }
-        const MaterialComponent material{.material = previewMesh.material};
-        meshProxies_.push_back(factory_->create(
-                previewMesh.sourceEntity,
-                InvalidAssetId,
-                previewMesh.mesh,
-                &material,
-                assets,
-                previewMesh.transform,
-                false,
-                true,
-                materialBinding_->materialRevision(assets, &material),
-                kViewportToolPreviewLayerMask,
-                true));
+  clear();
+  mesh_signature_ = next_signature;
+  mesh_proxies_.reserve(meshes.size());
+  for (const ToolPreviewMesh &preview_mesh : meshes) {
+    if (preview_mesh.mesh.vertices.empty() ||
+        preview_mesh.mesh.indices.empty()) {
+      continue;
     }
-    return true;
+    const MaterialComponent material{.material = preview_mesh.material};
+    mesh_proxies_.push_back(factory_->create(
+        preview_mesh.source_entity, kInvalidAssetId, preview_mesh.mesh,
+        &material, assets, preview_mesh.transform, false, true,
+        material_binding_->material_revision(assets, &material),
+        kViewportToolPreviewLayerMask, true));
+  }
+  return true;
 }
 
 void ToolPreviewRenderableCache::clear() {
     if (factory_) {
-        for (MeshRenderableProxy& proxy : meshProxies_) {
-            factory_->destroy(proxy);
-        }
+      for (MeshRenderableProxy &proxy : mesh_proxies_) {
+        factory_->destroy(proxy);
+      }
     }
-    meshProxies_.clear();
-    meshSignature_ = 0;
+    mesh_proxies_.clear();
+    mesh_signature_ = 0;
 }
 
-std::uint64_t ToolPreviewRenderableCache::previewMeshSignature(
-        const ToolPreviewMesh& previewMesh,
-        const AssetRegistry& assets,
-        const MaterialBindingService& materialBinding) {
-    const MaterialComponent material{.material = previewMesh.material};
-    RenderSignatureBuilder signature;
-    signature.addValue(previewMesh.sourceEntity)
-            .addValue(previewMesh.material)
-            .addValue(materialBinding.materialRevision(assets, &material))
-            .addMat4(previewMesh.transform);
-    return MeshRenderableFactory::meshAssetSignature(signature.value(), previewMesh.mesh);
+std::uint64_t ToolPreviewRenderableCache::preview_mesh_signature(
+    const ToolPreviewMesh &preview_mesh, const AssetRegistry &assets,
+    const MaterialBindingService &material_binding) {
+  const MaterialComponent material{.material = preview_mesh.material};
+  RenderSignatureBuilder signature;
+  signature.add_value(preview_mesh.source_entity)
+      .add_value(preview_mesh.material)
+      .add_value(material_binding.material_revision(assets, &material))
+      .add_mat4(preview_mesh.transform);
+  return MeshRenderableFactory::mesh_asset_signature(signature.value(),
+                                                     preview_mesh.mesh);
 }
 
-std::uint64_t ToolPreviewRenderableCache::previewMeshesSignature(
-        const std::vector<ToolPreviewMesh>& previewMeshes,
-        const AssetRegistry& assets,
-        const MaterialBindingService& materialBinding) {
-    RenderSignatureBuilder signature;
-    signature.addSize(previewMeshes.size());
-    for (const ToolPreviewMesh& previewMesh : previewMeshes) {
-        signature.addValue(previewMeshSignature(previewMesh, assets, materialBinding));
-    }
-    return signature.value();
+std::uint64_t ToolPreviewRenderableCache::preview_meshes_signature(
+    const std::vector<ToolPreviewMesh> &preview_meshes,
+    const AssetRegistry &assets,
+    const MaterialBindingService &material_binding) {
+  RenderSignatureBuilder signature;
+  signature.add_size(preview_meshes.size());
+  for (const ToolPreviewMesh &preview_mesh : preview_meshes) {
+    signature.add_value(
+        preview_mesh_signature(preview_mesh, assets, material_binding));
+  }
+  return signature.value();
 }
 
 } // namespace quader

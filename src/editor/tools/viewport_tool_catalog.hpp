@@ -14,18 +14,22 @@
 
 namespace quader {
 
-[[nodiscard]] std::span<const ViewportTool* const> viewportToolCatalog();
-[[nodiscard]] const ViewportTool* findViewportTool(ViewportToolId tool);
-[[nodiscard]] const ViewportTool* findViewportTool(std::string_view id);
-[[nodiscard]] bool viewportToolAvailable(ViewportToolId tool);
-[[nodiscard]] std::string_view viewportToolCatalogId(ViewportToolId tool);
-[[nodiscard]] std::string_view viewportToolLabel(ViewportToolId tool);
-[[nodiscard]] bool viewportToolOwnsViewport(ViewportToolId tool);
-[[nodiscard]] bool viewportToolBlocksFocusShortcuts(ViewportToolId tool);
-[[nodiscard]] bool viewportToolSupportsTransformGizmo(ViewportToolId tool);
-[[nodiscard]] ModelingTransformTool viewportToolTransformTool(ViewportToolId tool);
-[[nodiscard]] quader_editor_core::ViewportInteractionTool viewportToolInteractionTool(ViewportToolId tool);
-[[nodiscard]] ModelingViewportTool modelingViewportToolFor(ViewportToolId tool);
-[[nodiscard]] ViewportToolId viewportToolForModeling(ModelingViewportTool tool);
+[[nodiscard]] std::span<const ViewportTool *const> viewport_tool_catalog();
+[[nodiscard]] const ViewportTool *find_viewport_tool(ViewportToolId tool);
+[[nodiscard]] const ViewportTool *find_viewport_tool(std::string_view id);
+[[nodiscard]] bool viewport_tool_available(ViewportToolId tool);
+[[nodiscard]] std::string_view viewport_tool_catalog_id(ViewportToolId tool);
+[[nodiscard]] std::string_view viewport_tool_label(ViewportToolId tool);
+[[nodiscard]] bool viewport_tool_owns_viewport(ViewportToolId tool);
+[[nodiscard]] bool viewport_tool_blocks_focus_shortcuts(ViewportToolId tool);
+[[nodiscard]] bool viewport_tool_supports_transform_gizmo(ViewportToolId tool);
+[[nodiscard]] ModelingTransformTool
+viewport_tool_transform_tool(ViewportToolId tool);
+[[nodiscard]] quader_editor_core::ViewportInteractionTool
+viewport_tool_interaction_tool(ViewportToolId tool);
+[[nodiscard]] ModelingViewportTool
+modeling_viewport_tool_for(ViewportToolId tool);
+[[nodiscard]] ViewportToolId
+viewport_tool_for_modeling(ModelingViewportTool tool);
 
 } // namespace quader

@@ -35,10 +35,10 @@ void EditorSession::record_history(SessionState before)
 	}
 
 	undo_stack_.push_back({ std::move(before), after });
-	while (undo_stack_.size() > editor_history_default_max_depth) {
-		undo_stack_.erase(undo_stack_.begin());
-	}
-	redo_stack_.clear();
+        while (undo_stack_.size() > kEditorHistoryDefaultMaxDepth) {
+          undo_stack_.erase(undo_stack_.begin());
+        }
+        redo_stack_.clear();
 }
 
 HistoryRestoreResult EditorSession::undo()

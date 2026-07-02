@@ -16,28 +16,28 @@ namespace quader::test {
  */
 struct CameraSpec {
     QVec3 origin = {0.0f, 0.0f, 5.0f};
-    QVec2 viewportSize = {1280.0f, 720.0f};
-    double orthographicSize = 12.0;
+    QVec2 viewport_size = {1280.0f, 720.0f};
+    double orthographic_size = 12.0;
 };
 
 /**
  * Stores the Pick Options data contract used by the behavior test DSL.
  */
 struct PickOptions {
-    int clickCount = 1;
-    bool controlPressed = false;
-    bool shiftPressed = false;
-    bool commandPressed = false;
-    bool altPressed = false;
-    bool preserveSelectionOnMiss = false;
-    bool preserveSelectionOnSelectedHit = false;
+  int click_count = 1;
+  bool control_pressed = false;
+  bool shift_pressed = false;
+  bool command_pressed = false;
+  bool alt_pressed = false;
+  bool preserve_selection_on_miss = false;
+  bool preserve_selection_on_selected_hit = false;
 };
 
 /**
  * Stores the Hover Options data contract used by the behavior test DSL.
  */
 struct HoverOptions {
-    bool selectedModifierPressed = false;
+  bool selected_modifier_pressed = false;
 };
 
 /**
@@ -48,26 +48,35 @@ struct DragBeginOptions {
     ModelingTransformAxis axis = ModelingTransformAxis::X;
     ModelingTransformOperation operation = ModelingTransformOperation::Transform;
     QVec3 pivot = {};
-    bool useSelectionCenter = true;
-    QVec2 screenPosition = {0.0f, 0.0f};
-    QVec2 screenPivot = {0.0f, 0.0f};
-    QVec2 screenTip = {10.0f, 0.0f};
-    bool hasWorldDirection = true;
-    QVec3 worldDirection = {1.0f, 0.0f, 0.0f};
-    bool gridSnapEnabled = true;
-    bool duplicateSelected = false;
+    bool use_selection_center = true;
+    QVec2 screen_position = {0.0f, 0.0f};
+    QVec2 screen_pivot = {0.0f, 0.0f};
+    QVec2 screen_tip = {10.0f, 0.0f};
+    bool has_world_direction = true;
+    QVec3 world_direction = {1.0f, 0.0f, 0.0f};
+    bool grid_snap_enabled = true;
+    bool duplicate_selected = false;
 };
 
-[[nodiscard]] ModelingViewportCamera orthographicCamera(CameraSpec spec = {});
-[[nodiscard]] ModelingRay forwardRay(QVec3 origin = {0.0f, 0.0f, 5.0f});
-[[nodiscard]] ModelingPickSelectRequest pickAt(QVec3 origin, PickOptions options = {});
-[[nodiscard]] ModelingHoverRequest hoverAt(QVec3 origin, HoverOptions options = {});
-[[nodiscard]] ModelingToolRayEvent edgeLoopEvent(QVec3 origin = {1.0f, 0.0f, 5.0f});
-[[nodiscard]] ModelingToolRayEvent drawnPlaneEvent(float x, bool dragging = false);
-[[nodiscard]] ModelingTransformDragBeginRequest transformDragBegin(DragBeginOptions options = {});
-[[nodiscard]] ModelingTransformDragUpdateRequest transformDragUpdate(QVec2 screenPosition);
-[[nodiscard]] ModelingTransformDragUpdateRequest transformDragUpdate(float screenX);
-[[nodiscard]] ModelingTransformDragBeginRequest xMoveDragBegin(DragBeginOptions options = {});
-[[nodiscard]] ModelingTransformDragUpdateRequest xMoveDragUpdate(float screenX);
+[[nodiscard]] ModelingViewportCamera orthographic_camera(CameraSpec spec = {});
+[[nodiscard]] ModelingRay forward_ray(QVec3 origin = {0.0f, 0.0f, 5.0f});
+[[nodiscard]] ModelingPickSelectRequest pick_at(QVec3 origin,
+                                                PickOptions options = {});
+[[nodiscard]] ModelingHoverRequest hover_at(QVec3 origin,
+                                            HoverOptions options = {});
+[[nodiscard]] ModelingToolRayEvent edge_loop_event(QVec3 origin = {1.0f, 0.0f,
+                                                                   5.0f});
+[[nodiscard]] ModelingToolRayEvent drawn_plane_event(float x,
+                                                     bool dragging = false);
+[[nodiscard]] ModelingTransformDragBeginRequest
+transform_drag_begin(DragBeginOptions options = {});
+[[nodiscard]] ModelingTransformDragUpdateRequest
+transform_drag_update(QVec2 screen_position);
+[[nodiscard]] ModelingTransformDragUpdateRequest
+transform_drag_update(float screen_x);
+[[nodiscard]] ModelingTransformDragBeginRequest
+x_move_drag_begin(DragBeginOptions options = {});
+[[nodiscard]] ModelingTransformDragUpdateRequest
+x_move_drag_update(float screen_x);
 
 } // namespace quader::test

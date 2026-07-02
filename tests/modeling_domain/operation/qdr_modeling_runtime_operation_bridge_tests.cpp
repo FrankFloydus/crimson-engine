@@ -11,8 +11,8 @@
 TEST(QdrModelingRuntimeOperationBridgeTests, BridgeOperationSchemaOwnsDefaultsRangesAndNormalizer) {
 	const quader_editor_core::BridgeOperationSchema bridge = quader_editor_core::bridge_operation_schema();
 
-	EXPECT_TRUE(bridge.id == quader_editor_core::EditorOperationId::bridge);
-	EXPECT_TRUE(std::string(bridge.operation_id) == "bridge");
+        EXPECT_TRUE(bridge.id == quader_editor_core::EditorOperationId::Bridge);
+        EXPECT_TRUE(std::string(bridge.operation_id) == "bridge");
 	EXPECT_TRUE(std::string(bridge.label) == "Bridge");
 	EXPECT_TRUE(std::string(bridge.steps.id) == "steps");
 	EXPECT_TRUE(bridge.steps.default_value == 1);
@@ -28,17 +28,23 @@ TEST(QdrModelingRuntimeOperationBridgeTests, BridgeOperationPreviewsFromBaseTopo
 	{
 		quader_editor_core::PolygonObject object = qdr_test::make_object(1, qdr_test::make_parallel_quad_document());
 		quader_editor_core::EditorSession session({ object });
-		session.set_component_selection(1, qdr_test::all_face_selection(session.objects().front().document), quader_editor_core::SelectionMode::face);
-		const std::size_t face_count_before = session.objects().front().document.faces.size();
+                session.set_component_selection(
+                    1,
+                    qdr_test::all_face_selection(
+                        session.objects().front().document),
+                    quader_editor_core::SelectionMode::Face);
+                const std::size_t face_count_before = session.objects().front().document.faces.size();
 
 		EXPECT_TRUE(session.begin_bridge_preview(1).changed);
-		EXPECT_TRUE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::bridge);
-		EXPECT_TRUE(session.objects().front().document.faces.size() > face_count_before);
+                EXPECT_TRUE(session.preview_transaction_status().kind ==
+                            quader_editor_core::PreviewTransactionKind::Bridge);
+                EXPECT_TRUE(session.objects().front().document.faces.size() > face_count_before);
 		EXPECT_TRUE(session.update_bridge_preview(3).changed);
 		EXPECT_TRUE(session.objects().front().document.faces.size() > face_count_before);
-		const quader_editor_core::PreviewTransactionFinishResult cancel =
-			session.cancel_preview_transaction(quader_editor_core::PreviewTransactionKind::bridge);
-		EXPECT_TRUE(cancel.restored);
+                const quader_editor_core::PreviewTransactionFinishResult
+                    cancel = session.cancel_preview_transaction(
+                        quader_editor_core::PreviewTransactionKind::Bridge);
+                EXPECT_TRUE(cancel.restored);
 		EXPECT_TRUE(session.objects().front().document.faces.size() == face_count_before);
 		EXPECT_FALSE(session.history_status().can_undo);
 	}
@@ -54,9 +60,13 @@ TEST(QdrModelingRuntimeOperationBridgeTests, BridgeOperationPreviewsFromBaseTopo
 	{
 		quader_editor_core::PolygonObject object = qdr_test::make_object(1, qdr_test::make_parallel_quad_document());
 		quader_editor_core::EditorSession session({ object });
-		session.set_component_selection(1, qdr_test::all_face_selection(session.objects().front().document), quader_editor_core::SelectionMode::face);
+                session.set_component_selection(
+                    1,
+                    qdr_test::all_face_selection(
+                        session.objects().front().document),
+                    quader_editor_core::SelectionMode::Face);
 
-		quader_editor_core::BridgeOperationSettings settings;
+                quader_editor_core::BridgeOperationSettings settings;
 		settings.steps = 1000;
 		const quader_editor_core::CommandResult begin = session.begin_bridge_preview(settings);
 		settings.steps = -100;
@@ -67,8 +77,9 @@ TEST(QdrModelingRuntimeOperationBridgeTests, BridgeOperationPreviewsFromBaseTopo
 		EXPECT_TRUE(update.ok);
 		EXPECT_TRUE(update.changed);
 		EXPECT_TRUE(session.preview_transaction_status().active);
-		EXPECT_TRUE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::bridge);
-	}
+                EXPECT_TRUE(session.preview_transaction_status().kind ==
+                            quader_editor_core::PreviewTransactionKind::Bridge);
+        }
 
 	
 }
@@ -81,14 +92,20 @@ TEST(QdrModelingRuntimeOperationBridgeTests, BridgeOperationPreviewsFromBaseTopo
 	{
 		quader_editor_core::PolygonObject object = qdr_test::make_object(1, qdr_test::make_parallel_quad_document());
 		quader_editor_core::EditorSession session({ object });
-		session.set_component_selection(1, qdr_test::all_face_selection(session.objects().front().document), quader_editor_core::SelectionMode::face);
-		EXPECT_TRUE(session.begin_bridge_preview(1).changed);
+                session.set_component_selection(
+                    1,
+                    qdr_test::all_face_selection(
+                        session.objects().front().document),
+                    quader_editor_core::SelectionMode::Face);
+                EXPECT_TRUE(session.begin_bridge_preview(1).changed);
 
-		const quader_editor_core::PreviewTransactionFinishResult cancel =
-			session.cancel_preview_transaction(quader_editor_core::PreviewTransactionKind::thicken);
+                const quader_editor_core::PreviewTransactionFinishResult
+                    cancel = session.cancel_preview_transaction(
+                        quader_editor_core::PreviewTransactionKind::Thicken);
 
-		EXPECT_FALSE(cancel.restored);
+                EXPECT_FALSE(cancel.restored);
 		EXPECT_TRUE(session.preview_transaction_status().active);
-		EXPECT_TRUE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::bridge);
-	}
+                EXPECT_TRUE(session.preview_transaction_status().kind ==
+                            quader_editor_core::PreviewTransactionKind::Bridge);
+        }
 }

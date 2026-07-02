@@ -101,7 +101,7 @@ UI panels and controllers own presentation and routing only. If they express edi
 public API calls. If they perform per-frame hover, drawing, or input assembly, use the narrowest
 runtime owner.
 
-For command-shaped UI intent, prefer `editor.commands().execute(QuaderCommand::...)` in C++.
+For command-shaped UI intent, prefer `editor.commands().execute(quader::quader_command::...)` in C++.
 Use raw string command IDs only where the command palette, future scripting layer, serialized data,
 or dynamic catalog lookup requires strings.
 

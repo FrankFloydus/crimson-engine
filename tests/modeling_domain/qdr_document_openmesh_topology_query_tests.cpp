@@ -19,21 +19,21 @@
 
 namespace {
 
+using quader_poly::add_face;
+using quader_poly::add_vertex;
+using quader_poly::CubePrimitiveSpec;
 using quader_poly::Document;
+using quader_poly::document_edges;
 using quader_poly::Edge;
 using quader_poly::ElementId;
 using quader_poly::Face;
-using quader_poly::Vertex;
-using quader_poly::add_face;
-using quader_poly::add_vertex;
-using quader_poly::document_edges;
-using quader_poly::invalid_element_id;
+using quader_poly::kInvalidElementId;
 using quader_poly::make_cube;
 using quader_poly::make_edge;
-using quader_poly::CubePrimitiveSpec;
-using quader_poly::document_internal::DocumentTopologyQuery;
+using quader_poly::Vertex;
 using quader_poly::document_internal::build_openmesh_topology_query;
 using quader_poly::document_internal::build_topology_query;
+using quader_poly::document_internal::DocumentTopologyQuery;
 
 std::pair<ElementId, ElementId> edge_key(Edge edge)
 {
@@ -84,7 +84,9 @@ Document make_single_quad_document()
     const ElementId bottom_right = add_vertex(document, { 1.0F, -1.0F, 0.0F });
     const ElementId top_right = add_vertex(document, { 1.0F, 1.0F, 0.0F });
     const ElementId top_left = add_vertex(document, { -1.0F, 1.0F, 0.0F });
-    EXPECT_TRUE(add_face(document, std::array<ElementId, 4> { bottom_left, bottom_right, top_right, top_left }) != invalid_element_id);
+    EXPECT_TRUE(add_face(document, std::array<ElementId, 4>{
+                                       bottom_left, bottom_right, top_right,
+                                       top_left}) != kInvalidElementId);
     return document;
 }
 
@@ -97,9 +99,15 @@ Document make_three_faces_sharing_one_edge()
     const ElementId bottom = add_vertex(document, { 0.5F, -1.0F, 0.0F });
     const ElementId raised = add_vertex(document, { 0.5F, 0.0F, 1.0F });
 
-    EXPECT_TRUE(add_face(document, std::array<ElementId, 3> { shared_a, shared_b, top }) != invalid_element_id);
-    EXPECT_TRUE(add_face(document, std::array<ElementId, 3> { shared_b, shared_a, bottom }) != invalid_element_id);
-    EXPECT_TRUE(add_face(document, std::array<ElementId, 3> { shared_a, shared_b, raised }) != invalid_element_id);
+    EXPECT_TRUE(
+        add_face(document, std::array<ElementId, 3>{shared_a, shared_b, top}) !=
+        kInvalidElementId);
+    EXPECT_TRUE(add_face(document, std::array<ElementId, 3>{shared_b, shared_a,
+                                                            bottom}) !=
+                kInvalidElementId);
+    EXPECT_TRUE(add_face(document, std::array<ElementId, 3>{shared_a, shared_b,
+                                                            raised}) !=
+                kInvalidElementId);
     return document;
 }
 

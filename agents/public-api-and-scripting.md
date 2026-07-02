@@ -31,27 +31,28 @@ Add a capability to the public API when it is:
 Examples:
 
 ```cpp
-editor.modeling().createBox(...);
+editor.modeling().create_box(...);
 editor.object(object).rename("Wall").select();
-editor.selection().selectFace(object, face);
-editor.scene().batch("Arrange").setTransform(entity, moved).commit();
-editor.commands().execute(QuaderCommand::HistoryUndo);
-editor.mainViewport().setShadingMode(QuaderShadingMode::Wireframe);
+editor.selection().select_face(object, face);
+editor.scene().batch("Arrange").set_transform(entity, moved).commit();
+editor.commands().execute(quader::quader_command::kHistoryUndo);
+editor.main_viewport().set_shading_mode(QuaderShadingMode::Wireframe);
 ```
 
 Prefer these public API ergonomics for C++ callers:
 
-- `QuaderCommand::*` typed command IDs instead of raw string literals.
-- `QuaderObjectHandle` for fluent object actions such as `rename`, `select`, `setVisible`,
-  `setLocked`, `duplicate`, `destroy`, and material assignment.
+- `quader::quader_command::*` typed command IDs instead of raw string literals.
+- `QuaderObjectHandle` for fluent object actions such as `rename`, `select`, `set_visible`,
+  `set_locked`, `duplicate`, `destroy`, and material assignment.
 - `QuaderSceneBatch` for grouped scene edits that should commit as one undoable operation.
 - Convenience selection overloads before manually assembling `std::span` or component requests.
-- `QuaderApiResult` helpers such as `ok()`, `changed()`, `value()`, and `errorMessage()` in public
+- `QuaderApiResult` helpers such as `ok()`, `changed()`, `value()`, and `error_message()` in public
   examples. Legacy field access can remain in older internal code.
 - `QuaderCommandsApi` and `QuaderPreferencesApi` for keybinding reads, updates, removals, resets,
   conflicts, and future rebinding UI. Do not let UI code parse or persist shortcut JSON directly.
-- Command IDs should route through typed `QuaderCommand` values or canonical command IDs returned by
-  helpers such as `commandIdForModelingAction()` and `commandIdForToolActivation()`. Do not
+- Command IDs should route through typed `QuaderCommandId` values from `quader::quader_command` or
+  canonical command IDs returned by helpers such as `command_id_for_modeling_action()` and
+  `command_id_for_tool_activation()`. Do not
   reintroduce legacy command aliases such as `history.*`, `modeling.action.*`, or `modeling.*`.
 
 ## Keep Low-Level When
@@ -102,7 +103,7 @@ Scripts should:
 Target Lua style:
 
 ```lua
-quader.transaction("Create box", function()
+quader.transaction("create box", function()
     local box = quader.modeling:create_box({
         min = {-1, -1, -1},
         max = {1, 1, 1},

@@ -19,15 +19,16 @@ TEST(QdrModelingRuntimeOperationCommitCutToolTests, CommitCutToolAppliesPlaneCli
 	};
 	state.face_normal = { 0.0F, 0.0F, 1.0F };
 	state.target_object_ids = { 1 };
-	state.mode = quader_editor_core::CutMode::keep_both;
+        state.mode = quader_editor_core::CutMode::KeepBoth;
 
-	const quader_editor_core::CommandResult result = session.commit_cut_tool(state);
+        const quader_editor_core::CommandResult result = session.commit_cut_tool(state);
 
 	EXPECT_TRUE(result.ok);
 	EXPECT_TRUE(result.changed);
 	EXPECT_TRUE(session.objects().size() == 2U);
-	EXPECT_TRUE(session.selection_mode() == quader_editor_core::SelectionMode::face);
-	EXPECT_TRUE(session.history_status().can_undo);
+        EXPECT_TRUE(session.selection_mode() ==
+                    quader_editor_core::SelectionMode::Face);
+        EXPECT_TRUE(session.history_status().can_undo);
 	EXPECT_FALSE(quader_editor_core::cut_is_active(state));
 	EXPECT_TRUE(session.undo().applied);
 	EXPECT_TRUE(session.objects().size() == 1U);

@@ -19,23 +19,25 @@ namespace quader {
  */
 class ModelingHistoryBridge {
 public:
-    [[nodiscard]] static quader_editor_core::EditorRuntimeCommandId undoCommand();
-    [[nodiscard]] static quader_editor_core::EditorRuntimeCommandId redoCommand();
+  [[nodiscard]] static quader_editor_core::EditorRuntimeCommandId
+  undo_command();
+  [[nodiscard]] static quader_editor_core::EditorRuntimeCommandId
+  redo_command();
 
-    [[nodiscard]] quader_editor_core::RepeatLastActionState& repeatLastAction();
-    [[nodiscard]] const quader_editor_core::RepeatLastActionState& repeatLastAction() const;
-    [[nodiscard]] quader_editor_core::CommandResult executeRepeatLastAction(
-            quader_editor_core::EditorSession& session);
-    void recordOperation(
-            const quader_editor_core::EditorOperationCommand& command,
-            const quader_editor_core::CommandResult& result);
-    void recordTransform(
-            const quader_editor_core::EditorSession& session,
-            const quader_editor_core::TransformDragState& drag,
-            bool duplicateSelected);
+  [[nodiscard]] quader_editor_core::RepeatLastActionState &repeat_last_action();
+  [[nodiscard]] const quader_editor_core::RepeatLastActionState &
+  repeat_last_action() const;
+  [[nodiscard]] quader_editor_core::CommandResult
+  execute_repeat_last_action(quader_editor_core::EditorSession &session);
+  void
+  record_operation(const quader_editor_core::EditorOperationCommand &command,
+                   const quader_editor_core::CommandResult &result);
+  void record_transform(const quader_editor_core::EditorSession &session,
+                        const quader_editor_core::TransformDragState &drag,
+                        bool duplicate_selected);
 
 private:
-    quader_editor_core::RepeatLastActionState repeatLastAction_;
+  quader_editor_core::RepeatLastActionState repeat_last_action_;
 };
 
 } // namespace quader

@@ -21,16 +21,16 @@ namespace quader_poly::document_internal {
  * Represents an Edge Loop Face Split value used by the polygon document and mesh editing core.
  */
 struct EdgeLoopFaceSplit {
-    ElementId face_id = invalid_element_id;
-    Edge entry_edge;
+  ElementId face_id = kInvalidElementId;
+  Edge entry_edge;
 };
 
 /**
  * Represents a Resolved Knife Target value used by the polygon document and mesh editing core.
  */
 struct ResolvedKnifeTarget {
-    ElementId vertex_id = invalid_element_id;
-    quader::QVec3 position;
+  ElementId vertex_id = kInvalidElementId;
+  quader::QVec3 position;
 };
 
 /**
@@ -39,8 +39,8 @@ struct ResolvedKnifeTarget {
 struct KnifeSegmentCandidate {
     bool changed = false;
     Document document;
-    ElementId previous_vertex = invalid_element_id;
-    ElementId current_vertex = invalid_element_id;
+    ElementId previous_vertex = kInvalidElementId;
+    ElementId current_vertex = kInvalidElementId;
     quader::QVec3 previous_position;
     quader::QVec3 current_position;
     std::string message;
@@ -50,18 +50,18 @@ struct KnifeSegmentCandidate {
  * Represents a Knife Resolved Stroke Point value used by the polygon document and mesh editing core.
  */
 struct KnifeResolvedStrokePoint {
-    ElementId vertex_id = invalid_element_id;
-    ElementId face_id = invalid_element_id;
-    quader::QVec3 position;
+  ElementId vertex_id = kInvalidElementId;
+  ElementId face_id = kInvalidElementId;
+  quader::QVec3 position;
 };
 
 /**
  * Represents a Knife Boundary Target value used by the polygon document and mesh editing core.
  */
 struct KnifeBoundaryTarget {
-    ElementId vertex_id = invalid_element_id;
-    Edge edge;
-    float edge_factor = 0.5F;
+  ElementId vertex_id = kInvalidElementId;
+  Edge edge;
+  float edge_factor = 0.5F;
 };
 
 /**
@@ -70,15 +70,15 @@ struct KnifeBoundaryTarget {
 struct KnifeResolvedStrokeSegment {
     std::size_t first_point = 0;
     std::size_t second_point = 0;
-    ElementId face_id = invalid_element_id;
+    ElementId face_id = kInvalidElementId;
 };
 
 /**
  * Represents a Knife Face Graph value used by the polygon document and mesh editing core.
  */
 struct KnifeFaceGraph {
-    ElementId face_id = invalid_element_id;
-    std::vector<Edge> cut_edges;
+  ElementId face_id = kInvalidElementId;
+  std::vector<Edge> cut_edges;
 };
 
 /**
@@ -98,7 +98,7 @@ struct KnifeStrokeCandidate {
  */
 struct KnifeEdgeSplit {
     float factor = 0.5F;
-    ElementId vertex_id = invalid_element_id;
+    ElementId vertex_id = kInvalidElementId;
 };
 
 using KnifeEdgeSplitMap = std::map<std::pair<ElementId, ElementId>, std::vector<KnifeEdgeSplit>>;

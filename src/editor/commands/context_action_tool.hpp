@@ -19,37 +19,38 @@ namespace quader {
  */
 class ContextActionTool : public CommandTool {
 public:
-    [[nodiscard]] ModelingCommandHistoryPolicy historyPolicy() const override {
-        return rebuildsMeshOnSuccess() ? ModelingCommandHistoryPolicy::modelingUndoRedo() :
-                                         ModelingCommandHistoryPolicy::none();
-    }
+  [[nodiscard]] ModelingCommandHistoryPolicy history_policy() const override {
+    return rebuilds_mesh_on_success()
+               ? ModelingCommandHistoryPolicy::modeling_undo_redo()
+               : ModelingCommandHistoryPolicy::none();
+  }
 
-    [[nodiscard]] virtual std::string_view actionId() const = 0;
+  [[nodiscard]] virtual std::string_view action_id() const = 0;
 
-    [[nodiscard]] std::optional<ModelingActionItem> actionItem(
-            const ModelingCommandExecutionContext& context,
-            ModelingActionQuery query) const {
-        return context.modeling.contextAction(actionId(), query);
-    }
+  [[nodiscard]] std::optional<ModelingActionItem>
+  action_item(const ModelingCommandExecutionContext &context,
+              ModelingActionQuery query) const {
+    return context.modeling.context_action(action_id(), query);
+  }
 
-    [[nodiscard]] std::optional<ModelingActionItem> actionItem(
-            const ModelingCommandExecutionContext& context) const {
-        return actionItem(context, actionQuery());
-    }
+  [[nodiscard]] std::optional<ModelingActionItem>
+  action_item(const ModelingCommandExecutionContext &context) const {
+    return action_item(context, action_query());
+  }
 
 protected:
-    [[nodiscard]] virtual ModelingActionQuery actionQuery() const {
-        return defaultActionQuery();
-    }
+  [[nodiscard]] virtual ModelingActionQuery action_query() const {
+    return default_action_query();
+  }
 
-    [[nodiscard]] static ModelingActionQuery defaultActionQuery() {
-        return {
-                .surface = ModelingActionSurface::OperationsPanel,
-                .modalToolOwnsViewport = false,
-                .includeDisabled = true,
-                .includeHidden = false,
-        };
-    }
+  [[nodiscard]] static ModelingActionQuery default_action_query() {
+    return {
+        .surface = ModelingActionSurface::OperationsPanel,
+        .modal_tool_owns_viewport = false,
+        .include_disabled = true,
+        .include_hidden = false,
+    };
+  }
 };
 
 } // namespace quader

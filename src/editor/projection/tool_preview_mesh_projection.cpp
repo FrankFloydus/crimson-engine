@@ -16,78 +16,86 @@
 
 namespace quader {
 
-std::optional<MeshAsset> ToolPreviewMeshProjection::boxPreviewMeshFromDescriptor(
-        const quader_editor_core::BoxPreviewDescriptor& preview) {
-    if (!preview.ok ||
-            preview.drag_state != quader_editor_core::BoxDragState::height ||
-            preview.bounds.empty) {
-        return std::nullopt;
-    }
+std::optional<MeshAsset>
+ToolPreviewMeshProjection::box_preview_mesh_from_descriptor(
+    const quader_editor_core::BoxPreviewDescriptor &preview) {
+  if (!preview.ok ||
+      preview.drag_state != quader_editor_core::BoxDragState::Height ||
+      preview.bounds.empty) {
+    return std::nullopt;
+  }
 
-    const std::vector<QVec3> corners = quader_editor_core::box_preview_corners(preview);
-    if (corners.size() != 8U) {
-        return std::nullopt;
-    }
+  const std::vector<QVec3> corners =
+      quader_editor_core::box_preview_corners(preview);
+  if (corners.size() != 8U) {
+    return std::nullopt;
+  }
 
-    std::vector<quader_editor_core::PolygonObject> objects;
-    int activeObjectId = -1;
-    quader_editor_core::SelectionMode selectionMode = quader_editor_core::SelectionMode::object;
-    const quader_editor_core::CommandResult result =
-            quader_editor_core::create_box_from_corners(objects, 1, corners, activeObjectId, selectionMode);
-    if (!result.ok || objects.empty()) {
-        return std::nullopt;
-    }
+  std::vector<quader_editor_core::PolygonObject> objects;
+  int active_object_id = -1;
+  quader_editor_core::SelectionMode selection_mode =
+      quader_editor_core::SelectionMode::Object;
+  const quader_editor_core::CommandResult result =
+      quader_editor_core::create_box_from_corners(
+          objects, 1, corners, active_object_id, selection_mode);
+  if (!result.ok || objects.empty()) {
+    return std::nullopt;
+  }
 
-    MeshAsset mesh = MeshProjectionService::compilePolygonDocumentMesh(objects.front().document);
-    mesh.name = "Box Preview";
-    if (mesh.vertices.empty() || mesh.indices.empty()) {
-        return std::nullopt;
-    }
-    return mesh;
+  MeshAsset mesh = MeshProjectionService::compile_polygon_document_mesh(
+      objects.front().document);
+  mesh.name = "Box Preview";
+  if (mesh.vertices.empty() || mesh.indices.empty()) {
+    return std::nullopt;
+  }
+  return mesh;
 }
 
-std::vector<ModelingToolPreviewMesh> ToolPreviewMeshProjection::mirrorPreviewMeshes(
-        const quader_editor_core::EditorRuntime& runtime,
-        const SceneDocument& scene,
-        const ModelingObjectRuntimeMap& objectRegistry,
-        const std::vector<quader_editor_core::PolygonObject>& previewObjects) {
-    std::vector<ModelingToolPreviewMesh> previewMeshes;
-    const quader_editor_core::MirrorToolState& mirror = runtime.mirror_state();
-    if (!quader_editor_core::mirror_is_active(mirror) ||
-            !quader_editor_core::mirror_can_preview(mirror) ||
-            !mirror.preview_valid) {
-        return previewMeshes;
+std::vector<ModelingToolPreviewMesh>
+ToolPreviewMeshProjection::mirror_preview_meshes(
+    const quader_editor_core::EditorRuntime &runtime,
+    const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
+    const std::vector<quader_editor_core::PolygonObject> &preview_objects) {
+  std::vector<ModelingToolPreviewMesh> preview_meshes;
+  const quader_editor_core::MirrorToolState &mirror = runtime.mirror_state();
+  if (!quader_editor_core::mirror_is_active(mirror) ||
+      !quader_editor_core::mirror_can_preview(mirror) ||
+      !mirror.preview_valid) {
+    return preview_meshes;
+  }
+
+  const std::vector<quader_poly::Document> documents =
+      runtime.mirror_preview_documents(preview_objects);
+  preview_meshes.reserve(documents.size());
+  std::size_t document_index = 0;
+  for (const int object_id : mirror.target_object_ids) {
+    if (document_index >= documents.size()) {
+      break;
+    }
+    MeshAsset mesh = MeshProjectionService::compile_polygon_document_mesh(
+        documents[document_index++]);
+    if (mesh.vertices.empty() || mesh.indices.empty()) {
+      continue;
     }
 
-    const std::vector<quader_poly::Document> documents =
-            runtime.mirror_preview_documents(previewObjects);
-    previewMeshes.reserve(documents.size());
-    std::size_t documentIndex = 0;
-    for (const int objectId : mirror.target_object_ids) {
-        if (documentIndex >= documents.size()) {
-            break;
-        }
-        MeshAsset mesh = MeshProjectionService::compilePolygonDocumentMesh(documents[documentIndex++]);
-        if (mesh.vertices.empty() || mesh.indices.empty()) {
-            continue;
-        }
-
-        EntityId sourceEntity = InvalidEntityId;
-        AssetId material = InvalidAssetId;
-        if (const std::optional<EntityId> entity = objectRegistry.entityForModelingObject(objectId)) {
-            sourceEntity = *entity;
-            if (const MaterialComponent* materialComponent = scene.material(sourceEntity)) {
-                material = materialComponent->material;
-            }
-        }
-
-        previewMeshes.push_back(ModelingToolPreviewMesh{
-                .sourceEntity = sourceEntity,
-                .material = material,
-                .mesh = std::move(mesh),
-        });
+    EntityId source_entity = kInvalidEntityId;
+    AssetId material = kInvalidAssetId;
+    if (const std::optional<EntityId> entity =
+            object_registry.entity_for_modeling_object(object_id)) {
+      source_entity = *entity;
+      if (const MaterialComponent *material_component =
+              scene.material(source_entity)) {
+        material = material_component->material;
+      }
     }
-    return previewMeshes;
+
+    preview_meshes.push_back(ModelingToolPreviewMesh{
+        .source_entity = source_entity,
+        .material = material,
+        .mesh = std::move(mesh),
+    });
+  }
+  return preview_meshes;
 }
 
 } // namespace quader

@@ -14,370 +14,448 @@
 
 namespace {
 
-using quader::test::guardrail::readSourceFile;
-using quader::test::guardrail::sourceSlice;
+using quader::test::guardrail::read_source_file;
+using quader::test::guardrail::source_slice;
 
-void expectContains(std::string_view source, std::string_view needle) {
-    EXPECT_NE(source.find(needle), std::string_view::npos) << needle;
+void expect_contains(std::string_view source, std::string_view needle) {
+  EXPECT_NE(source.find(needle), std::string_view::npos) << needle;
 }
 
-void expectMissing(std::string_view source, std::string_view needle) {
-    EXPECT_EQ(source.find(needle), std::string_view::npos) << needle;
+void expect_missing(std::string_view source, std::string_view needle) {
+  EXPECT_EQ(source.find(needle), std::string_view::npos) << needle;
 }
 
-std::size_t countOccurrences(std::string_view source, std::string_view needle) {
-    std::size_t count = 0;
-    std::size_t offset = 0;
-    while ((offset = source.find(needle, offset)) != std::string_view::npos) {
-        ++count;
-        offset += needle.size();
-    }
-    return count;
+std::size_t count_occurrences(std::string_view source,
+                              std::string_view needle) {
+  std::size_t count = 0;
+  std::size_t offset = 0;
+  while ((offset = source.find(needle, offset)) != std::string_view::npos) {
+    ++count;
+    offset += needle.size();
+  }
+  return count;
 }
 
-void expectContinuousHelperLiveApplies(std::string_view source, std::string_view helper) {
-    const std::size_t helperCount = countOccurrences(source, helper);
-    EXPECT_GT(helperCount, 0u) << helper;
-    EXPECT_GE(countOccurrences(source, ".shouldApply()"), helperCount) << helper;
-    EXPECT_GE(countOccurrences(source, ".mergeKey"), helperCount) << helper;
+void expect_continuous_helper_live_applies(std::string_view source,
+                                           std::string_view helper) {
+  const std::size_t helper_count = count_occurrences(source, helper);
+  EXPECT_GT(helper_count, 0u) << helper;
+  EXPECT_GE(count_occurrences(source, ".should_apply()"), helper_count)
+      << helper;
+  EXPECT_GE(count_occurrences(source, ".merge_key"), helper_count) << helper;
 }
 
 } // namespace
 
 TEST(UiLayoutGuardrailTests, SidebarPanelsDoNotForceEmptyVerticalScrollbars) {
-    const std::string inspector = readSourceFile({"src", "ui", "inspector_panel.cpp"});
-    const std::string outliner = readSourceFile({"src", "ui", "outliner_panel.cpp"});
+  const std::string inspector =
+      read_source_file({"src", "ui", "inspector_panel.cpp"});
+  const std::string outliner =
+      read_source_file({"src", "ui", "outliner_panel.cpp"});
 
-    const std::string inspectorFlags = sourceSlice(
-            inspector,
-            "ImGuiWindowFlags InspectorPanel::windowFlags",
-            "void InspectorPanel::drawContent");
-    const std::string outlinerFlags = sourceSlice(
-            outliner,
-            "ImGuiWindowFlags OutlinerPanel::windowFlags",
-            "void OutlinerPanel::drawContent");
+  const std::string inspector_flags =
+      source_slice(inspector, "ImGuiWindowFlags InspectorPanel::window_flags",
+                   "void InspectorPanel::draw_content");
+  const std::string outliner_flags =
+      source_slice(outliner, "ImGuiWindowFlags OutlinerPanel::window_flags",
+                   "void OutlinerPanel::draw_content");
 
-    expectContains(inspectorFlags, "return context.style.panelWindowFlags;");
-    expectContains(outlinerFlags, "return context.style.panelWindowFlags;");
-    expectMissing(inspectorFlags, "ImGuiWindowFlags_AlwaysVerticalScrollbar");
-    expectMissing(outlinerFlags, "ImGuiWindowFlags_AlwaysVerticalScrollbar");
+  expect_contains(inspector_flags, "return context.style.panel_window_flags;");
+  expect_contains(outliner_flags, "return context.style.panel_window_flags;");
+  expect_missing(inspector_flags, "ImGuiWindowFlags_AlwaysVerticalScrollbar");
+  expect_missing(outliner_flags, "ImGuiWindowFlags_AlwaysVerticalScrollbar");
 }
 
 TEST(UiLayoutGuardrailTests, InspectorTransformAxisInputsStretchInsideSidebarWidth) {
-    const std::string inspector = readSourceFile({"src", "ui", "inspector_panel.cpp"});
-    const std::string axisDragFloat = sourceSlice(
-            inspector,
-            "AxisDragFloatResult axisDragFloat(const char* axis",
-            "AxisDragFloatResult axisDragFloat3");
-    const std::string axisDragFloat3 = sourceSlice(
-            inspector,
-            "AxisDragFloatResult axisDragFloat3",
-            "bool beginLabeledControlTable");
+  const std::string inspector =
+      read_source_file({"src", "ui", "inspector_panel.cpp"});
+  const std::string axis_drag_float = source_slice(
+      inspector, "AxisDragFloatResult axis_drag_float(const char *axis",
+      "axis_drag_float3(const char *stable_id");
+  const std::string axis_drag_float3 =
+      source_slice(inspector, "axis_drag_float3(const char *stable_id",
+                   "bool begin_labeled_control_table");
 
-    expectContains(axisDragFloat, "inputWidth < 0.0f ? inputWidth");
-    expectContains(axisDragFloat3, "ImGuiTableFlags_SizingStretchProp");
-    expectContains(axisDragFloat3, "ImGuiTableColumnFlags_WidthStretch");
-    expectContains(axisDragFloat3, "minAxisColumnWidth");
-    expectContains(axisDragFloat3, "kMinAxisInputWidth");
-    EXPECT_EQ(countOccurrences(axisDragFloat3, "-FLT_MIN"), 3u);
-    expectMissing(axisDragFloat3, "ImGuiTableFlags_SizingFixedFit");
+  expect_contains(axis_drag_float, "input_width < 0.0f");
+  expect_contains(axis_drag_float3, "ImGuiTableFlags_SizingStretchProp");
+  expect_contains(axis_drag_float3, "ImGuiTableColumnFlags_WidthStretch");
+  expect_contains(axis_drag_float3, "min_axis_column_width");
+  expect_contains(axis_drag_float3, "kMinAxisInputWidth");
+  EXPECT_EQ(count_occurrences(axis_drag_float3, "-FLT_MIN"), 3u);
+  expect_missing(axis_drag_float3, "ImGuiTableFlags_SizingFixedFit");
 }
 
 TEST(UiLayoutGuardrailTests, InspectorLightEditsRouteThroughPublicSceneApi) {
-    const std::string inspector = readSourceFile({"src", "ui", "inspector_panel.cpp"});
-    const std::string lightSection = sourceSlice(
-            inspector,
-            "if (const LightComponent* currentLight = document.light(primary))",
-            "if (selected.size() > 1u)");
+  const std::string inspector =
+      read_source_file({"src", "ui", "inspector_panel.cpp"});
+  const std::string light_section = source_slice(
+      inspector,
+      "if (const LightComponent *current_light = document.light(primary))",
+      "if (selected.size() > 1u)");
 
-    expectContains(lightSection, "context.editor.scene().setLightComponent");
-    expectContains(lightSection, "toApiLightComponent");
-    expectMissing(inspector, "document.setLight(");
+  expect_contains(light_section, "context.editor.scene().set_light_component");
+  expect_contains(light_section, "to_api_light_component");
+  expect_missing(inspector, "document.set_light(");
 }
 
 TEST(UiLayoutGuardrailTests, InspectorSceneSettingsEditThroughPublicSceneApi) {
-    const std::string inspector = readSourceFile({"src", "ui", "inspector_panel.cpp"});
-    const std::string sceneSettingsSection = sourceSlice(
-            inspector,
-            "void drawSceneSettingsInspector",
-            "struct BoolAggregate");
+  const std::string inspector =
+      read_source_file({"src", "ui", "inspector_panel.cpp"});
+  const std::string scene_settings_section = source_slice(
+      inspector, "void draw_scene_settings_inspector", "struct BoolAggregate");
 
-    expectContains(sceneSettingsSection, "context.editor.scene().setSceneSettings");
-    expectContains(sceneSettingsSection, "toApiSceneSettings");
-    expectContains(sceneSettingsSection, "environment_clear_color");
-    expectContains(sceneSettingsSection, "ui.inspector.clear_color");
-    expectContains(sceneSettingsSection, "post_process_tone_mapping");
-    expectContains(sceneSettingsSection, "post_process_dithering");
-    expectContains(sceneSettingsSection, "camera_near");
-    expectContains(sceneSettingsSection, "camera_far");
-    expectMissing(inspector, "document.setSceneSettings(");
+  expect_contains(scene_settings_section,
+                  "context.editor.scene().set_scene_settings");
+  expect_contains(scene_settings_section, "to_api_scene_settings");
+  expect_contains(scene_settings_section, "environment_clear_color");
+  expect_contains(scene_settings_section, "ui.inspector.clear_color");
+  expect_contains(scene_settings_section, "post_process_tone_mapping");
+  expect_contains(scene_settings_section, "post_process_dithering");
+  expect_contains(scene_settings_section, "camera_near");
+  expect_contains(scene_settings_section, "camera_far");
+  expect_missing(inspector, "document.set_scene_settings(");
 }
 
 TEST(UiLayoutGuardrailTests, InspectorSectionsStartCollapsed) {
-    const std::string inspector = readSourceFile({"src", "ui", "inspector_panel.cpp"});
+  const std::string inspector =
+      read_source_file({"src", "ui", "inspector_panel.cpp"});
 
-    expectContains(inspector, "quaderCollapsingHeader(");
-    expectMissing(inspector, "ImGuiTreeNodeFlags_DefaultOpen");
+  expect_contains(inspector, "quader_collapsing_header(");
+  expect_missing(inspector, "ImGuiTreeNodeFlags_DefaultOpen");
 }
 
 TEST(UiLayoutGuardrailTests, OutlinerNonLeafNodesStartExpanded) {
-    const std::string outliner = readSourceFile({"src", "ui", "outliner_panel.cpp"});
-    const std::string treeNodeSetup = sourceSlice(
-            outliner,
-            "ImGuiTreeNodeFlags treeFlags",
-            "const bool open = ImGui::TreeNodeEx");
+  const std::string outliner =
+      read_source_file({"src", "ui", "outliner_panel.cpp"});
+  const std::string tree_node_setup =
+      source_slice(outliner, "ImGuiTreeNodeFlags tree_flags",
+                   "const bool open = ImGui::TreeNodeEx");
 
-    expectContains(treeNodeSetup, "record.hasChildren");
-    expectContains(treeNodeSetup, "ImGuiTreeNodeFlags_DefaultOpen");
+  expect_contains(tree_node_setup, "record.has_children");
+  expect_contains(tree_node_setup, "ImGuiTreeNodeFlags_DefaultOpen");
 }
 
 TEST(UiLayoutGuardrailTests, OutlinerCachesTreeRecordsAndSkipsOffscreenCustomDrawing) {
-    const std::string outlinerHeader = readSourceFile({"src", "ui", "outliner_panel.hpp"});
-    const std::string outliner = readSourceFile({"src", "ui", "outliner_panel.cpp"});
+  const std::string outliner_header =
+      read_source_file({"src", "ui", "outliner_panel.hpp"});
+  const std::string outliner =
+      read_source_file({"src", "ui", "outliner_panel.cpp"});
 
-    expectContains(outlinerHeader, "std::unique_ptr<TreeCache> treeCache_");
-    expectContains(outliner, "cache.sceneRevision == document.revision()");
-    expectContains(outliner, "cache.records = document.entityRecordsTreeOrder()");
-    expectContains(outliner, "cache.childrenByEntity[record.parent].push_back(record.id)");
-    expectContains(outliner, "const bool rowVisible = ImGui::IsRectVisible(rowMin, rowMax)");
-    expectContains(outliner, "if (rowVisible)");
+  expect_contains(outliner_header, "std::unique_ptr<TreeCache> tree_cache_");
+  expect_contains(outliner, "cache.scene_revision == document.revision()");
+  expect_contains(outliner,
+                  "cache.records = document.entity_records_tree_order()");
+  expect_contains(outliner,
+                  "cache.children_by_entity[record.parent].push_back(record.id)");
+  expect_contains(
+      outliner, "const bool row_visible = ImGui::IsRectVisible(row_min, row_max)");
+  expect_contains(outliner, "if (row_visible)");
 }
 
 TEST(UiLayoutGuardrailTests, InspectorContinuousInputsLiveApplyWithMergeKeys) {
-    const std::string inspector = readSourceFile({"src", "ui", "inspector_panel.cpp"});
-    const std::string inspectorHeader = readSourceFile({"src", "ui", "inspector_panel.hpp"});
-    const std::string tracker = readSourceFile({"src", "ui", "ui_continuous_edit_tracker.hpp"});
-    const std::string continuousHelpers = sourceSlice(
-            inspector,
-            "void updateContinuousEditTracker",
-            "template <typename Enum>");
-    const std::string sceneSettingsSection = sourceSlice(
-            inspector,
-            "void drawSceneSettingsInspector",
-            "struct BoolAggregate");
-    const std::string lightSection = sourceSlice(
-            inspector,
-            "if (const LightComponent* currentLight = document.light(primary))",
-            "if (selected.size() > 1u)");
+  const std::string inspector =
+      read_source_file({"src", "ui", "inspector_panel.cpp"});
+  const std::string inspector_header =
+      read_source_file({"src", "ui", "inspector_panel.hpp"});
+  const std::string tracker =
+      read_source_file({"src", "ui", "ui_continuous_edit_tracker.hpp"});
+  const std::string continuous_helpers =
+      source_slice(inspector, "void update_continuous_edit_tracker",
+                   "template <typename Enum>");
+  const std::string scene_settings_section = source_slice(
+      inspector, "void draw_scene_settings_inspector", "struct BoolAggregate");
+  const std::string light_section = source_slice(
+      inspector,
+      "if (const LightComponent *current_light = document.light(primary))",
+      "if (selected.size() > 1u)");
 
-    expectContains(inspectorHeader, "UIContinuousEditTracker activeContinuousEdit_");
-    expectContains(tracker, "class UIContinuousEditTracker");
-    expectContains(tracker, "std::string mergeKey");
-    expectContains(tracker, "bool shouldApply() const");
-    expectContains(tracker, "ensureMergeKey");
-    expectContains(continuousHelpers, "ImGui::IsItemDeactivatedAfterEdit()");
-    expectContains(continuousHelpers, "activeEdit.stage");
-    expectContains(continuousHelpers, "result.mergeKey = activeEdit.ensureMergeKey");
-    expectMissing(continuousHelpers, "result.commit");
-    expectContains(sceneSettingsSection, "QuaderSceneEditOptions{.mergeKey = std::move(mergeKey)}");
-    expectContains(lightSection, "QuaderSceneEditOptions{.mergeKey = std::move(mergeKey)}");
+  expect_contains(inspector_header,
+                  "UIContinuousEditTracker active_continuous_edit_");
+  expect_contains(tracker, "class UIContinuousEditTracker");
+  expect_contains(tracker, "std::string merge_key");
+  expect_contains(tracker, "bool should_apply() const");
+  expect_contains(tracker, "ensure_merge_key");
+  expect_contains(continuous_helpers, "ImGui::IsItemDeactivatedAfterEdit()");
+  expect_contains(continuous_helpers, "active_edit.stage");
+  expect_contains(continuous_helpers, "active_edit.ensure_merge_key");
+  expect_missing(continuous_helpers, "result.commit");
+  expect_contains(scene_settings_section,
+                  "QuaderSceneEditOptions{.merge_key = std::move(merge_key)}");
+  expect_contains(light_section,
+                  "QuaderSceneEditOptions{.merge_key = std::move(merge_key)}");
 
-    expectContinuousHelperLiveApplies(sceneSettingsSection, "dragFloatWithLeftLabel(");
-    expectContinuousHelperLiveApplies(lightSection, "dragFloatWithLeftLabel(");
-    expectContinuousHelperLiveApplies(lightSection, "colorEdit3WithLeftLabel(");
+  expect_continuous_helper_live_applies(scene_settings_section,
+                                        "drag_float_with_left_label(");
+  expect_continuous_helper_live_applies(light_section,
+                                        "drag_float_with_left_label(");
+  expect_continuous_helper_live_applies(light_section,
+                                        "color_edit3_with_left_label(");
 }
 
 TEST(UiLayoutGuardrailTests, CustomChromeKeepsCurrentLogoAndTopMenuSpacing) {
-    const std::string uiSystem = readSourceFile({"src", "ui", "ui_system.cpp"});
-    const std::string chrome = sourceSlice(
-            uiSystem,
-            "MainMenuBarResult UISystem::drawWindowChrome",
-            "void UISystem::drawDockspace");
+  const std::string ui_system =
+      read_source_file({"src", "ui", "ui_system.cpp"});
+  const std::string chrome =
+      source_slice(ui_system, "UISystem::draw_window_chrome",
+                   "void UISystem::draw_dockspace");
 
-    expectContains(uiSystem, "constexpr float kChromeLogoSize = 18.0f;");
-    expectContains(uiSystem, "constexpr float kChromeLogoLeft = 16.0f;");
-    expectContains(uiSystem, "constexpr float kChromeMenuLeft = 48.0f;");
-    expectContains(uiSystem, "constexpr float kChromeMenuSpacing = 10.0f;");
-    expectContains(chrome, "ImGui::SetCursorPos({kChromeMenuLeft, 0.0f});");
-    expectContains(chrome, "ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {kChromeMenuSpacing, 0.0f});");
-    expectContains(chrome, "ImGui::GetForegroundDrawList()->AddImage(icons_.logo, logoMin, logoMax);");
+  expect_contains(ui_system, "constexpr float kChromeLogoSize = 18.0f;");
+  expect_contains(ui_system, "constexpr float kChromeLogoLeft = 16.0f;");
+  expect_contains(ui_system, "constexpr float kChromeMenuLeft = 48.0f;");
+  expect_contains(ui_system, "constexpr float kChromeMenuSpacing = 10.0f;");
+  expect_contains(chrome, "ImGui::SetCursorPos({kChromeMenuLeft, 0.0f});");
+  expect_contains(chrome, "ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, "
+                          "{kChromeMenuSpacing, 0.0f});");
+  expect_contains(chrome, "ImGui::GetForegroundDrawList()->AddImage(icons_."
+                          "logo, logo_min, logo_max);");
 }
 
 TEST(UiLayoutGuardrailTests, StaticBottomBarTextCentersAboveAccentStrip) {
-    const std::string uiSystem = readSourceFile({"src", "ui", "ui_system.cpp"});
-    const std::string bottomBar = sourceSlice(
-            uiSystem,
-            "void drawStaticBottomBar",
-            "UISystem::~UISystem");
+  const std::string ui_system =
+      read_source_file({"src", "ui", "ui_system.cpp"});
+  const std::string bottom_bar = source_slice(
+      ui_system, "void draw_static_bottom_bar", "UISystem::~UISystem");
 
-    expectContains(bottomBar, "kStaticBottomBarHeight - kStaticBottomBarAccentHeight");
-    expectContains(bottomBar, "ImGui::GetTextLineHeight()");
-    expectMissing(bottomBar, "kStaticBottomBarHeight - ImGui::GetFontSize()");
+  expect_contains(bottom_bar,
+                  "kStaticBottomBarHeight - kStaticBottomBarAccentHeight");
+  expect_contains(bottom_bar, "ImGui::GetTextLineHeight()");
+  expect_missing(bottom_bar, "kStaticBottomBarHeight - ImGui::GetFontSize()");
 }
 
 TEST(UiLayoutGuardrailTests, MainMenuDropdownsUsePopupPaddingAndVerticalSpacing) {
-    const std::string mainMenu = readSourceFile({"src", "ui", "main_menu_bar.cpp"});
-    const std::string mainMenuHeader = readSourceFile({"src", "ui", "main_menu_bar.hpp"});
-    const std::string uiSystem = readSourceFile({"src", "ui", "ui_system.cpp"});
-    const std::string uiSystemHeader = readSourceFile({"src", "ui", "ui_system.hpp"});
-    const std::string popupUtils = readSourceFile({"src", "ui", "imgui_popup_utils.cpp"});
+  const std::string main_menu =
+      read_source_file({"src", "ui", "main_menu_bar.cpp"});
+  const std::string main_menu_header =
+      read_source_file({"src", "ui", "main_menu_bar.hpp"});
+  const std::string ui_system =
+      read_source_file({"src", "ui", "ui_system.cpp"});
+  const std::string ui_system_header =
+      read_source_file({"src", "ui", "ui_system.hpp"});
+  const std::string popup_utils =
+      read_source_file({"src", "ui", "imgui_popup_utils.cpp"});
 
-    expectContains(mainMenu, "constexpr float kMenuPopupPaddingX = 12.0f;");
-    expectContains(mainMenu, "constexpr float kMenuPopupPaddingY = 8.0f;");
-    expectContains(mainMenu, "constexpr float kMenuPopupFramePaddingY = 5.0f;");
-    expectContains(mainMenu, "constexpr float kMenuPopupItemSpacingY = 4.0f;");
-    expectContains(mainMenu, "bool beginMenuWithPopupSpacing");
-    expectContains(mainMenu, "void endMenuWithPopupSpacing()");
-    expectContains(mainMenu, "ImGuiStyleVar_WindowPadding");
-    expectContains(mainMenu, "ImGuiStyleVar_FramePadding");
-    expectContains(mainMenu, "ImGuiStyleVar_ItemSpacing");
-    EXPECT_EQ(countOccurrences(mainMenu, "ImGui::BeginMenu("), 1u);
-    EXPECT_EQ(countOccurrences(mainMenu, "ImGui::EndMenu();"), 1u);
-    expectMissing(mainMenu, "ImGui::IsPopupOpen(menuId, ImGuiPopupFlags_None)");
-    expectMissing(mainMenu, "wasOpen && ImGui::IsItemClicked(ImGuiMouseButton_Left)");
-    expectMissing(mainMenu, "ImGui::CloseCurrentPopup();");
-    expectContains(mainMenu, "bool drawCommandMenuItem");
-    expectContains(mainMenu, "context.editor.commands().available()");
-    expectContains(mainMenu, "context.editor.commands().execute(commandId)");
-    expectContains(mainMenu, "command->shortcut");
-    expectContains(mainMenu, "ui.menu.file.open");
-    expectContains(mainMenu, "ui.menu.file.save");
-    expectContains(mainMenu, "ui.menu.file.save_as");
-    expectContains(mainMenu, "QuaderCommand::ProjectOpen");
-    expectContains(mainMenu, "QuaderCommand::ProjectSave");
-    expectContains(mainMenu, "QuaderCommand::ProjectSaveAs");
-    expectContains(mainMenu, "QuaderCommand::EditUndo");
-    expectContains(mainMenu, "QuaderCommand::EditRedo");
-    expectContains(mainMenu, "QuaderCommand::EditRepeatLastAction");
-    expectContains(mainMenu, "QuaderCommand::CopySelection");
-    expectContains(mainMenu, "QuaderCommand::PasteSelection");
-    expectContains(mainMenu, "QuaderCommand::DuplicateSelection");
-    expectContains(mainMenu, "QuaderCommand::ModelingFlipHorizontal");
-    expectContains(mainMenu, "QuaderCommand::ModelingFlipVertical");
-    expectContains(mainMenu, "QuaderCommand::EditSelectAll");
-    expectContains(mainMenu, "QuaderCommand::EditClearSelection");
-    expectContains(mainMenu, "QuaderCommand::EditInvertSelection");
-    expectContains(mainMenu, "QuaderCommand::DeleteSelection");
-    expectContains(mainMenu, "QuaderCommand::GroupSelection");
-    expectContains(mainMenu, "QuaderCommand::UngroupSelection");
-    expectContains(mainMenu, "ui.menu.view.focus_selection");
-    expectContains(mainMenu, "QuaderCommand::ViewportFrameSelection");
-    expectMissing(mainMenu, "ui.menu.help");
-    expectMissing(mainMenu, "ui.menu.view.focus_all");
-    expectMissing(mainMenu, "Focus All");
-    expectMissing(mainMenu, "Symmetrize");
-    expectMissing(mainMenu, "ViewportFocusOrigin");
-    expectContains(mainMenu, "bool drawViewportBoolSettingMenuItem");
-    expectContains(mainMenu, "ui.menu.edit.snap");
-    expectContains(mainMenu, "ui.menu.edit.snap.grid");
-    expectContains(mainMenu, "ui.menu.edit.snap.vertex");
-    expectContains(mainMenu, "ui.menu.view.grid");
-    expectContains(mainMenu, "ui.menu.view.gizmos");
-    expectContains(mainMenu, "ui.menu.view.overlays");
-    expectContains(mainMenu, "ui.menu.view.show_info");
-    expectContains(mainMenu, "ViewportBoolSettingId::ShowGrid");
-    expectContains(mainMenu, "ViewportBoolSettingId::ShowGizmos");
-    expectContains(mainMenu, "ViewportBoolSettingId::ShowOverlays");
-    expectContains(mainMenu, "ViewportBoolSettingId::ShowInfo");
-    expectContains(mainMenu, "ViewportBoolSettingId::GridSnap");
-    expectContains(mainMenu, "ViewportBoolSettingId::VertexSnap");
-    expectContains(mainMenuHeader, "ViewportSettings& viewportSettings;");
-    expectContains(mainMenuHeader, "bool viewportSettingsChanged = false;");
-    expectContains(uiSystem, "saveViewportSettings();");
-    expectContains(mainMenuHeader, "bool popupOpen = false;");
-    expectContains(mainMenuHeader, "CreateMenu createMenu_;");
-    expectContains(mainMenu, "result.popupOpen");
-    expectContains(mainMenu, "result.popupOpen = toolsMenu_.draw(context) || result.popupOpen;");
-    expectContains(mainMenu, "result.popupOpen = createMenu_.draw(context) || result.popupOpen;");
-    EXPECT_LT(
-            mainMenu.find("result.popupOpen = toolsMenu_.draw(context) || result.popupOpen;"),
-            mainMenu.find("result.popupOpen = createMenu_.draw(context) || result.popupOpen;"));
-    EXPECT_LT(
-            mainMenu.find("result.popupOpen = createMenu_.draw(context) || result.popupOpen;"),
-            mainMenu.find("result.popupOpen = viewMenu_.draw(context, result) || result.popupOpen;"));
-    expectContains(mainMenu, "ui.menu.create.point_light");
-    expectContains(mainMenu, "QuaderCommand::SceneCreatePointLight");
-    expectContains(mainMenu, "ui.menu.create.directional_light");
-    expectContains(mainMenu, "QuaderCommand::SceneCreateDirectionalLight");
-    expectContains(uiSystemHeader, "closeMenuPopupForPassThroughClick()");
-    expectContains(uiSystemHeader, "bool mainMenuPopupOpen_ = false;");
-    expectContains(uiSystem, "#include \"ui/imgui_popup_utils.hpp\"");
-    expectContains(uiSystem, "closeMenuPopupForPassThroughClick();");
-    expectContains(uiSystem, "const float menuClickExclusionHeight = customChrome_ ? kWindowChromeHeight : ImGui::GetFrameHeight();");
-    expectContains(uiSystem, "mouse.y <= viewport->Pos.y + menuClickExclusionHeight");
-    expectContains(uiSystem, "viewport->Pos.y + menuClickExclusionHeight");
-    expectContains(uiSystem, "imguiClosePopupForPassThroughClick(passThroughMin, passThroughMax)");
-    expectContains(popupUtils, "ImGui::ClosePopupsExceptModals();");
+  expect_contains(main_menu, "constexpr float kMenuPopupPaddingX = 12.0f;");
+  expect_contains(main_menu, "constexpr float kMenuPopupPaddingY = 8.0f;");
+  expect_contains(main_menu, "constexpr float kMenuPopupFramePaddingY = 5.0f;");
+  expect_contains(main_menu, "constexpr float kMenuPopupItemSpacingY = 4.0f;");
+  expect_contains(main_menu, "bool begin_menu_with_popup_spacing");
+  expect_contains(main_menu, "void end_menu_with_popup_spacing()");
+  expect_contains(main_menu, "ImGuiStyleVar_WindowPadding");
+  expect_contains(main_menu, "ImGuiStyleVar_FramePadding");
+  expect_contains(main_menu, "ImGuiStyleVar_ItemSpacing");
+  EXPECT_EQ(count_occurrences(main_menu, "ImGui::BeginMenu("), 1u);
+  EXPECT_EQ(count_occurrences(main_menu, "ImGui::EndMenu();"), 1u);
+  expect_missing(main_menu, "ImGui::IsPopupOpen(menuId, ImGuiPopupFlags_None)");
+  expect_missing(main_menu,
+                 "wasOpen && ImGui::IsItemClicked(ImGuiMouseButton_Left)");
+  expect_missing(main_menu, "ImGui::CloseCurrentPopup();");
+  expect_contains(main_menu, "bool draw_command_menu_item");
+  expect_contains(main_menu, "context.editor.commands().available()");
+  expect_contains(main_menu, "context.editor.commands().execute(command_id)");
+  expect_contains(main_menu, "command->shortcut");
+  expect_contains(main_menu, "ui.menu.file.open");
+  expect_contains(main_menu, "ui.menu.file.save");
+  expect_contains(main_menu, "ui.menu.file.save_as");
+  expect_contains(main_menu, "quader_command::kProjectOpen");
+  expect_contains(main_menu, "quader_command::kProjectSave");
+  expect_contains(main_menu, "quader_command::kProjectSaveAs");
+  expect_contains(main_menu, "quader_command::kEditUndo");
+  expect_contains(main_menu, "quader_command::kEditRedo");
+  expect_contains(main_menu, "quader_command::kEditRepeatLastAction");
+  expect_contains(main_menu, "quader_command::kCopySelection");
+  expect_contains(main_menu, "quader_command::kPasteSelection");
+  expect_contains(main_menu, "quader_command::kDuplicateSelection");
+  expect_contains(main_menu, "quader_command::kModelingFlipHorizontal");
+  expect_contains(main_menu, "quader_command::kModelingFlipVertical");
+  expect_contains(main_menu, "quader_command::kEditSelectAll");
+  expect_contains(main_menu, "quader_command::kEditClearSelection");
+  expect_contains(main_menu, "quader_command::kEditInvertSelection");
+  expect_contains(main_menu, "quader_command::kDeleteSelection");
+  expect_contains(main_menu, "quader_command::kGroupSelection");
+  expect_contains(main_menu, "quader_command::kUngroupSelection");
+  expect_contains(main_menu, "ui.menu.view.focus_selection");
+  expect_contains(main_menu, "quader_command::kViewportFrameSelection");
+  expect_missing(main_menu, "ui.menu.help");
+  expect_missing(main_menu, "ui.menu.view.focus_all");
+  expect_missing(main_menu, "Focus All");
+  expect_missing(main_menu, "Symmetrize");
+  expect_missing(main_menu, "kViewportFocusOrigin");
+  expect_contains(main_menu, "bool draw_viewport_bool_setting_menu_item");
+  expect_contains(main_menu, "ui.menu.edit.snap");
+  expect_contains(main_menu, "ui.menu.edit.snap.grid");
+  expect_contains(main_menu, "ui.menu.edit.snap.vertex");
+  expect_contains(main_menu, "ui.menu.view.grid");
+  expect_contains(main_menu, "ui.menu.view.gizmos");
+  expect_contains(main_menu, "ui.menu.view.overlays");
+  expect_contains(main_menu, "ui.menu.view.show_info");
+  expect_contains(main_menu, "ViewportBoolSettingId::ShowGrid");
+  expect_contains(main_menu, "ViewportBoolSettingId::ShowGizmos");
+  expect_contains(main_menu, "ViewportBoolSettingId::ShowOverlays");
+  expect_contains(main_menu, "ViewportBoolSettingId::ShowInfo");
+  expect_contains(main_menu, "ViewportBoolSettingId::GridSnap");
+  expect_contains(main_menu, "ViewportBoolSettingId::VertexSnap");
+  expect_contains(main_menu_header, "ViewportSettings &viewport_settings;");
+  expect_contains(main_menu_header, "bool viewport_settings_changed = false;");
+  expect_contains(ui_system, "save_viewport_settings();");
+  expect_contains(main_menu_header, "bool popup_open = false;");
+  expect_contains(main_menu_header, "CreateMenu create_menu_;");
+  expect_contains(main_menu, "result.popup_open");
+  expect_contains(
+      main_menu,
+      "result.popup_open = tools_menu_.draw(context) || result.popup_open;");
+  expect_contains(
+      main_menu,
+      "result.popup_open = create_menu_.draw(context) || result.popup_open;");
+  EXPECT_LT(
+      main_menu.find(
+          "result.popup_open = tools_menu_.draw(context) || result.popup_open;"),
+      main_menu.find(
+          "result.popup_open = create_menu_.draw(context) || result.popup_open;"));
+  EXPECT_LT(
+      main_menu.find(
+          "result.popup_open = create_menu_.draw(context) || result.popup_open;"),
+      main_menu.find("result.popup_open = view_menu_.draw(context, result) || "
+                     "result.popup_open;"));
+  expect_contains(main_menu, "ui.menu.create.point_light");
+  expect_contains(main_menu, "quader_command::kSceneCreatePointLight");
+  expect_contains(main_menu, "ui.menu.create.directional_light");
+  expect_contains(main_menu, "quader_command::kSceneCreateDirectionalLight");
+  expect_contains(ui_system_header, "close_menu_popup_for_pass_through_click()");
+  expect_contains(ui_system_header, "bool main_menu_popup_open_ = false;");
+  expect_contains(ui_system, "#include \"ui/imgui_popup_utils.hpp\"");
+  expect_contains(ui_system, "close_menu_popup_for_pass_through_click();");
+  expect_contains(ui_system, "const float menu_click_exclusion_height =");
+  expect_contains(ui_system,
+                  "custom_chrome_ ? kWindowChromeHeight : ImGui::GetFrameHeight();");
+  expect_contains(ui_system,
+                  "mouse.y <= viewport->Pos.y + menu_click_exclusion_height");
+  expect_contains(ui_system, "viewport->Pos.y + menu_click_exclusion_height");
+  expect_contains(
+      ui_system,
+      "imgui_close_popup_for_pass_through_click(pass_through_min");
+  expect_contains(popup_utils, "ImGui::ClosePopupsExceptModals();");
 }
 
 TEST(UiLayoutGuardrailTests, ViewportInputHoverRespectsActiveDockingAndPanelItems) {
-    const std::string viewportPanel = readSourceFile({"src", "ui", "viewport_panel.cpp"});
-    const std::string paneCollection = sourceSlice(
-            viewportPanel,
-            "DrawPane drawPane{",
-            "drawPanes.push_back(drawPane);");
+  const std::string viewport_panel =
+      read_source_file({"src", "ui", "viewport_panel.cpp"});
+  const std::string pane_collection = source_slice(
+      viewport_panel, "DrawPane draw_pane{", "draw_panes.push_back(draw_pane);");
 
-    expectContains(paneCollection, ".hovered = ImGui::IsItemHovered(),");
-    expectMissing(paneCollection, "ImGuiHoveredFlags_AllowWhenBlockedByActiveItem");
+  expect_contains(pane_collection, ".hovered = ImGui::IsItemHovered(),");
+  expect_missing(pane_collection,
+                 "ImGuiHoveredFlags_AllowWhenBlockedByActiveItem");
 }
 
 TEST(UiLayoutGuardrailTests, ViewportUsesRendererCapacityUvsDuringPanelSplitterDrag) {
-    const std::string viewportPanelHeader = readSourceFile({"src", "ui", "viewport_panel.hpp"});
-    const std::string viewportPanel = readSourceFile({"src", "ui", "viewport_panel.cpp"});
-    const std::string paneImage = sourceSlice(
-            viewportPanel,
-            "const QVec2 renderSize = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};",
-            "DrawPane drawPane{");
+  const std::string viewport_panel_header =
+      read_source_file({"src", "ui", "viewport_panel.hpp"});
+  const std::string viewport_panel =
+      read_source_file({"src", "ui", "viewport_panel.cpp"});
+  const std::string pane_image =
+      source_slice(viewport_panel, "const QVec2 render_size",
+                   "DrawPane draw_pane{");
 
-    expectContains(viewportPanel, "shouldDeferPaneRenderResize(const UIContext& uiContext, const ViewportRenderer& renderer)");
-    expectContains(viewportPanel, "uiContext.viewportRenderResizeSuspended");
-    expectContains(viewportPanel, "renderer.textureHandle() != InvalidRenderTextureHandle");
-    expectContains(viewportPanel, "renderer.overlayTextureHandle() != InvalidRenderTextureHandle");
-    expectContains(paneImage, "viewportWorkspace.setPaneRenderSize(placement.paneId, renderSize)");
-    expectContains(paneImage, "paneState.renderer.resize(renderWidth, renderHeight);");
-    expectContains(paneImage, "if (!shouldDeferPaneRenderResize(uiContext, paneState.renderer))");
-    expectContains(paneImage, "paneState.renderer.textureMaxV()");
-    expectContains(paneImage, "paneState.renderer.textureMaxU()");
-    expectContains(paneImage, "textureUvMin");
-    expectContains(paneImage, "textureUvMax");
-    expectMissing(paneImage, "activeRenderSize");
-    expectMissing(paneImage, "viewportPaneTextureUvRect(");
-    expectMissing(paneImage, "if (!uiContext.viewportRenderResizeSuspended)");
+  expect_contains(viewport_panel,
+                  "should_defer_pane_render_resize(const UIContext &ui_context,");
+  expect_contains(viewport_panel, "const ViewportRenderer &renderer)");
+  expect_contains(viewport_panel, "ui_context.viewport_render_resize_suspended");
+  expect_contains(viewport_panel,
+                  "renderer.texture_handle() != kInvalidRenderTextureHandle");
+  expect_contains(
+      viewport_panel,
+      "renderer.overlay_texture_handle() != kInvalidRenderTextureHandle");
+  expect_contains(
+      pane_image,
+      "viewport_workspace.set_pane_render_size(placement.pane_id, render_size)");
+  expect_contains(pane_image,
+                  "pane_state.renderer.resize(render_width, render_height);");
+  expect_contains(
+      pane_image,
+      "if (!should_defer_pane_render_resize(ui_context, pane_state.renderer))");
+  expect_contains(pane_image, "pane_state.renderer.texture_max_v()");
+  expect_contains(pane_image, "pane_state.renderer.texture_max_u()");
+  expect_contains(pane_image, "texture_uv_min");
+  expect_contains(pane_image, "texture_uv_max");
+  expect_missing(pane_image, "activeRenderSize");
+  expect_missing(pane_image, "viewportPaneTextureUvRect(");
+  expect_missing(pane_image, "if (!ui_context.viewport_render_resize_suspended)");
 }
 
 TEST(UiLayoutGuardrailTests, SidebarDockMinimumsCompressBeforeViewportCollapses) {
-    const std::string uiSystem = readSourceFile({"src", "ui", "ui_system.cpp"});
-    const std::string uiSystemHeader = readSourceFile({"src", "ui", "ui_system.hpp"});
-    const std::string outliner = readSourceFile({"src", "ui", "outliner_panel.cpp"});
-    const std::string inspector = readSourceFile({"src", "ui", "inspector_panel.cpp"});
+  const std::string ui_system =
+      read_source_file({"src", "ui", "ui_system.cpp"});
+  const std::string ui_system_header =
+      read_source_file({"src", "ui", "ui_system.hpp"});
+  const std::string outliner =
+      read_source_file({"src", "ui", "outliner_panel.cpp"});
+  const std::string inspector =
+      read_source_file({"src", "ui", "inspector_panel.cpp"});
 
-    expectContains(uiSystem, "kCompressedSidebarMinWidth = 220.0f");
-    expectContains(uiSystem, "kReservedViewportDockWidth = 300.0f");
-    expectContains(uiSystem, "visibleSidebarCount(const UIPanelManager& panels)");
-    expectContains(uiSystem, "effectiveSidebarMinimumWidth(float dockspaceWidth, const UIPanelManager& panels, float preferredMinimumWidth)");
-    expectContains(uiSystem, "dockspaceWidth - kReservedViewportDockWidth");
-    expectContains(uiSystem, "std::min(preferredMinimumWidth, std::max(kCompressedSidebarMinWidth, widthPerSidebar))");
-    expectContains(uiSystem, "frameStyle.sidebarMinWidth = effectiveSidebarMinimumWidth");
-    expectContains(uiSystem, "drawDockspace(editor, quitRequested, document, modeling, sidebarMinimumWidth)");
-    expectContains(uiSystem, "enforceSidebarDockMinimums(frameStyle.sidebarMinWidth)");
-    expectContains(uiSystemHeader, "drawDockspace(\n            QuaderEditorApi& editor,\n            bool& quitRequested,\n            SceneDocument& document,\n            ModelingSessionService& modeling,\n            float sidebarMinimumWidth)");
-    expectContains(uiSystemHeader, "enforceSidebarDockMinimums(float sidebarMinimumWidth)");
-    expectContains(outliner, "return context.style.sidebarMinWidth");
-    expectContains(inspector, "return context.style.sidebarMinWidth");
-    expectMissing(uiSystem, "clampDockedWindowWidth(uiPanelKey(UIPanelId::Outliner), style_.sidebarMinWidth)");
-    expectMissing(uiSystem, "ImVec2(std::max(savedWindowMinSize.x, style_.sidebarMinWidth)");
+  expect_contains(ui_system, "kCompressedSidebarMinWidth = 220.0f");
+  expect_contains(ui_system, "kReservedViewportDockWidth = 300.0f");
+  expect_contains(ui_system,
+                  "visible_sidebar_count(const UIPanelManager &panels)");
+  expect_contains(ui_system,
+                  "effective_sidebar_minimum_width(float dockspace_width,");
+  expect_contains(ui_system, "const UIPanelManager &panels,");
+  expect_contains(ui_system, "dockspace_width - kReservedViewportDockWidth");
+  expect_contains(ui_system,
+                  "std::min(preferred_minimum_width,");
+  expect_contains(ui_system,
+                  "std::max(kCompressedSidebarMinWidth, width_per_sidebar)");
+  expect_contains(ui_system,
+                  "frame_style.sidebar_min_width = effective_sidebar_minimum_width");
+  expect_contains(ui_system, "draw_dockspace(editor, quit_requested, document, "
+                             "modeling,");
+  expect_contains(ui_system,
+                  "enforce_sidebar_dock_minimums(frame_style.sidebar_min_width)");
+  expect_contains(ui_system_header,
+                  "draw_dockspace(QuaderEditorApi &editor, bool &quit_requested,");
+  expect_contains(ui_system_header,
+                  "SceneDocument &document, ModelingSessionService &modeling,");
+  expect_contains(ui_system_header,
+                  "enforce_sidebar_dock_minimums(float sidebar_minimum_width)");
+  expect_contains(outliner, "return context.style.sidebar_min_width");
+  expect_contains(inspector, "return context.style.sidebar_min_width");
+  expect_missing(ui_system, "clamp_docked_window_width(ui_panel_key(UIPanelId::"
+                            "Outliner), style_.sidebar_min_width)");
+  expect_missing(
+      ui_system,
+      "ImVec2(std::max(saved_window_min_size.x, style_.sidebar_min_width)");
 }
 
 TEST(UiLayoutGuardrailTests, ViewportChromeCombosSharePopupPassThroughClickHandling) {
-    const std::string viewportPanel = readSourceFile({"src", "ui", "viewport_panel.cpp"});
-    const std::string popupUtils = readSourceFile({"src", "ui", "imgui_popup_utils.cpp"});
-    const std::string chrome = sourceSlice(
-            viewportPanel,
-            "bool ViewportPanel::drawPaneChrome",
-            "void ViewportPanel::setPaneView");
+  const std::string viewport_panel =
+      read_source_file({"src", "ui", "viewport_panel.cpp"});
+  const std::string popup_utils =
+      read_source_file({"src", "ui", "imgui_popup_utils.cpp"});
+  const std::string chrome =
+      source_slice(viewport_panel, "bool ViewportPanel::draw_pane_chrome",
+                   "void ViewportPanel::set_pane_view");
 
-    expectContains(viewportPanel, "#include \"ui/imgui_popup_utils.hpp\"");
-    expectContains(viewportPanel, "#include \"ui/imgui_quader_widgets.hpp\"");
-    expectContains(popupUtils, "ImGuiMouseButton_Middle");
-    expectContains(popupUtils, "openComboPopupExists");
-    expectContains(popupUtils, "\"##Combo_\"");
-    expectContains(popupUtils, "!screenPointInside(mouse, targetMin, targetMax)");
-    expectContains(chrome, "(void)imguiCloseComboPopupForClickInside(itemMin, itemMax, chromeRect.Min, chromeRect.Max)");
-    expectMissing(chrome, "imguiClosePopupForPassThroughClick(chromeRect.Min, chromeRect.Max)");
-    expectMissing(chrome, "imguiClosePopupForClickOutside(chromeRect.Min, chromeRect.Max)");
-    expectMissing(chrome, "imguiCloseComboPopupForClickOutside(chromeRect.Min, chromeRect.Max)");
-    expectContains(chrome, "quaderBeginCombo(\"##ViewportView\", preview.c_str(), ImGuiComboFlags_HeightSmall)");
-    expectContains(chrome, "quaderBeginCombo(\"##ViewportShading\", shadingPreview.c_str(), ImGuiComboFlags_HeightSmall)");
-    expectMissing(chrome, "ImGuiComboFlags_HeightSmall, false");
-    expectMissing(chrome, "consumesInput = true;\n    }\n\n    ImGui::SetCursorScreenPos(comboPos)");
+  expect_contains(viewport_panel, "#include \"ui/imgui_popup_utils.hpp\"");
+  expect_contains(viewport_panel, "#include \"ui/imgui_quader_widgets.hpp\"");
+  expect_contains(popup_utils, "ImGuiMouseButton_Middle");
+  expect_contains(popup_utils, "open_combo_popup_exists");
+  expect_contains(popup_utils, "\"##Combo_\"");
+  expect_contains(popup_utils,
+                  "!screen_point_inside(mouse, target_min, target_max)");
+  expect_contains(chrome, "(void)imgui_close_combo_popup_for_click_inside(");
+  expect_contains(chrome, "item_min, item_max, chrome_rect.Min, chrome_rect.Max");
+  expect_missing(
+      chrome,
+      "imgui_close_popup_for_pass_through_click(chrome_rect.Min, chrome_rect.Max)");
+  expect_missing(
+      chrome, "imguiClosePopupForClickOutside(chrome_rect.Min, chrome_rect.Max)");
+  expect_missing(
+      chrome,
+      "imguiCloseComboPopupForClickOutside(chrome_rect.Min, chrome_rect.Max)");
+  expect_contains(chrome, "quader_begin_combo(\"##ViewportView\", preview.c_str(),");
+  expect_contains(chrome, "ImGuiComboFlags_HeightSmall)");
+  expect_contains(chrome,
+                  "quader_begin_combo(\"##ViewportShading\", shading_preview.c_str(),");
+  expect_missing(chrome, "ImGuiComboFlags_HeightSmall, false");
+  expect_missing(chrome, "consumes_input = true;\n    }\n\n    "
+                         "ImGui::SetCursorScreenPos(combo_pos)");
 }

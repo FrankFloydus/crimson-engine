@@ -49,8 +49,9 @@ public:
         return descriptor_;
     }
 
-    [[nodiscard]] ModelingInstantOperationId instantOperationId() const override {
-        return operation_;
+    [[nodiscard]] ModelingInstantOperationId
+    instant_operation_id() const override {
+      return operation_;
     }
 
 private:
@@ -71,8 +72,8 @@ public:
         return descriptor_;
     }
 
-    [[nodiscard]] std::string_view actionId() const override {
-        return descriptor_.id;
+    [[nodiscard]] std::string_view action_id() const override {
+      return descriptor_.id;
     }
 
 private:
@@ -92,264 +93,293 @@ public:
         return descriptor_;
     }
 
-    [[nodiscard]] std::string_view actionId() const override {
-        return descriptor_.id;
+    [[nodiscard]] std::string_view action_id() const override {
+      return descriptor_.id;
     }
 
 private:
     CommandToolDescriptor descriptor_;
 };
 
-[[nodiscard]] CommandToolDescriptor instantDescriptor(const ModelingInstantOperationCatalogEntry& entry) {
-    const quader_host_contract::HostActionDescriptor* action =
-            quader_host_contract::find_action_descriptor(entry.id);
-    return {
-            .id = entry.id,
-            .operationId = action == nullptr ? entry.operationId : action->operation_id,
-            .label = action == nullptr ? entry.commandLabel : action->label,
-            .kind = CommandToolKind::Instant,
-            .previewKind = ModelingActionPreviewKind::None,
-            .rebuildsMeshOnSuccess = entry.rebuildsMeshOnSuccess,
-            .publicCommandId = entry.publicCommandId,
-            .registersPublicCommand = entry.registersPublicCommand,
-    };
+[[nodiscard]] CommandToolDescriptor
+instant_descriptor(const ModelingInstantOperationCatalogEntry &entry) {
+  const quader_host_contract::HostActionDescriptor *action =
+      quader_host_contract::find_action_descriptor(entry.id);
+  return {
+      .id = entry.id,
+      .operation_id =
+          action == nullptr ? entry.operation_id : action->operation_id,
+      .label = action == nullptr ? entry.command_label : action->label,
+      .kind = CommandToolKind::Instant,
+      .preview_kind = ModelingActionPreviewKind::None,
+      .rebuilds_mesh_on_success = entry.rebuilds_mesh_on_success,
+      .public_command_id = entry.public_command_id,
+      .registers_public_command = entry.registers_public_command,
+  };
 }
 
-[[nodiscard]] CommandToolDescriptor contextDescriptor(
-        const quader_host_contract::HostActionDescriptor& action,
-        bool rebuildsMeshOnSuccess = true,
-        std::string_view publicCommandId = {},
-        bool registersPublicCommand = true) {
-    assert(action.kind == quader_host_contract::HostActionKind::operation);
-    return {
-            .id = action.id,
-            .operationId = action.operation_id,
-            .label = action.label,
-            .kind = CommandToolKind::ContextAction,
-            .previewKind = ModelingActionPreviewKind::None,
-            .rebuildsMeshOnSuccess = rebuildsMeshOnSuccess,
-            .publicCommandId = publicCommandId,
-            .registersPublicCommand = registersPublicCommand,
-    };
+[[nodiscard]] CommandToolDescriptor
+context_descriptor(const quader_host_contract::HostActionDescriptor &action,
+                   bool rebuilds_mesh_on_success = true,
+                   std::string_view public_command_id = {},
+                   bool registers_public_command = true) {
+  assert(action.kind == quader_host_contract::HostActionKind::Operation);
+  return {
+      .id = action.id,
+      .operation_id = action.operation_id,
+      .label = action.label,
+      .kind = CommandToolKind::ContextAction,
+      .preview_kind = ModelingActionPreviewKind::None,
+      .rebuilds_mesh_on_success = rebuilds_mesh_on_success,
+      .public_command_id = public_command_id,
+      .registers_public_command = registers_public_command,
+  };
 }
 
-[[nodiscard]] CommandToolDescriptor previewDescriptor(
-        const quader_host_contract::HostActionDescriptor& action,
-        bool rebuildsMeshOnSuccess = true) {
-    assert(action.kind == quader_host_contract::HostActionKind::operation);
-    return {
-            .id = action.id,
-            .operationId = action.operation_id,
-            .label = action.label,
-            .kind = CommandToolKind::Preview,
-            .previewKind = ModelingActionCatalog::previewKindFromHost(action.preview_kind),
-            .rebuildsMeshOnSuccess = rebuildsMeshOnSuccess,
-    };
+[[nodiscard]] CommandToolDescriptor
+preview_descriptor(const quader_host_contract::HostActionDescriptor &action,
+                   bool rebuilds_mesh_on_success = true) {
+  assert(action.kind == quader_host_contract::HostActionKind::Operation);
+  return {
+      .id = action.id,
+      .operation_id = action.operation_id,
+      .label = action.label,
+      .kind = CommandToolKind::Preview,
+      .preview_kind =
+          ModelingActionCatalog::preview_kind_from_host(action.preview_kind),
+      .rebuilds_mesh_on_success = rebuilds_mesh_on_success,
+  };
 }
 
-[[nodiscard]] bool instantOperationCatalogOwnsActionId(std::string_view actionId) {
-    const std::span<const ModelingInstantOperationCatalogEntry> entries = modelingInstantOperationCatalog();
-    return std::any_of(entries.begin(), entries.end(), [&](const ModelingInstantOperationCatalogEntry& entry) {
-        return entry.id == actionId;
-    });
+[[nodiscard]] bool
+instant_operation_catalog_owns_action_id(std::string_view action_id) {
+  const std::span<const ModelingInstantOperationCatalogEntry> entries =
+      modeling_instant_operation_catalog();
+  return std::any_of(entries.begin(), entries.end(),
+                     [&](const ModelingInstantOperationCatalogEntry &entry) {
+                       return entry.id == action_id;
+                     });
 }
 
-[[nodiscard]] bool commandToolOwnsHostActionId(std::string_view actionId) {
-    return actionId == std::string_view("delete_selection") || instantOperationCatalogOwnsActionId(actionId);
+[[nodiscard]] bool
+command_tool_owns_host_action_id(std::string_view action_id) {
+  return action_id == std::string_view("delete_selection") ||
+         instant_operation_catalog_owns_action_id(action_id);
 }
 
-[[nodiscard]] CommandToolDescriptor contextDescriptorFromHostAction(
-        const quader_host_contract::HostActionDescriptor& action) {
-    if (action.id == std::string_view("apply_active_material")) {
-        return contextDescriptor(
-                action,
-                true,
-                "edit.apply_material",
-                false);
-    }
-    return contextDescriptor(action);
+[[nodiscard]] CommandToolDescriptor context_descriptor_from_host_action(
+    const quader_host_contract::HostActionDescriptor &action) {
+  if (action.id == std::string_view("apply_active_material")) {
+    return context_descriptor(action, true, "edit.apply_material", false);
+  }
+  return context_descriptor(action);
 }
 
 } // namespace
 
-std::span<const InstantCommandTool* const> modelingInstantOperationCommandTools() {
-    static const std::vector<std::unique_ptr<CatalogInstantOperationTool>> ownedTools = [] {
+std::span<const InstantCommandTool *const>
+modeling_instant_operation_command_tools() {
+  static const std::vector<std::unique_ptr<CatalogInstantOperationTool>>
+      kOwnedTools = [] {
         std::vector<std::unique_ptr<CatalogInstantOperationTool>> result;
-        for (const ModelingInstantOperationCatalogEntry& entry : modelingInstantOperationCatalog()) {
-            result.push_back(std::make_unique<CatalogInstantOperationTool>(
-                    instantDescriptor(entry),
-                    entry.operation));
+        for (const ModelingInstantOperationCatalogEntry &entry :
+             modeling_instant_operation_catalog()) {
+          result.push_back(std::make_unique<CatalogInstantOperationTool>(
+              instant_descriptor(entry), entry.operation));
         }
         return result;
-    }();
+      }();
 
-    static const std::vector<const InstantCommandTool*> tools = [] {
-        std::vector<const InstantCommandTool*> result;
-        result.reserve(ownedTools.size());
-        for (const std::unique_ptr<CatalogInstantOperationTool>& tool : ownedTools) {
-            result.push_back(tool.get());
-        }
-        return result;
-    }();
-    return {tools.data(), tools.size()};
+  static const std::vector<const InstantCommandTool *> kTools = [] {
+    std::vector<const InstantCommandTool *> result;
+    result.reserve(kOwnedTools.size());
+    for (const std::unique_ptr<CatalogInstantOperationTool> &tool :
+         kOwnedTools) {
+      result.push_back(tool.get());
+    }
+    return result;
+  }();
+  return {kTools.data(), kTools.size()};
 }
 
-std::span<const InstantCommandTool* const> modelingServiceInstantCommandTools() {
-    static const SelectAllTool selectAll;
-    static const InvertSelectionTool invertSelection;
-    static const ClearSelectionTool clearSelection;
-    static const DeleteSelectionTool deleteSelection;
-    static const CopySelectionTool copySelection;
-    static const PasteSelectionTool pasteSelection;
-    static const RepeatLastActionTool repeatLastAction;
-    static const AssignMaterialTool assignMaterial;
-    static const MirrorSelectionTool mirrorX{ModelingMirrorAxis::X, "mirror_selection_x", "Mirror X"};
-    static const MirrorSelectionTool mirrorY{ModelingMirrorAxis::Y, "mirror_selection_y", "Mirror Y"};
-    static const MirrorSelectionTool mirrorZ{ModelingMirrorAxis::Z, "mirror_selection_z", "Mirror Z"};
-    static const FlipHorizontalTool flipHorizontal;
-    static const FlipVerticalTool flipVertical;
+std::span<const InstantCommandTool *const>
+modeling_service_instant_command_tools() {
+  static const SelectAllTool kSelectAll;
+  static const InvertSelectionTool kInvertSelection;
+  static const ClearSelectionTool kClearSelection;
+  static const DeleteSelectionTool kDeleteSelection;
+  static const CopySelectionTool kCopySelection;
+  static const PasteSelectionTool kPasteSelection;
+  static const RepeatLastActionTool kRepeatLastAction;
+  static const AssignMaterialTool kAssignMaterial;
+  static const MirrorSelectionTool kMirrorX{ModelingMirrorAxis::X,
+                                            "mirror_selection_x", "Mirror X"};
+  static const MirrorSelectionTool kMirrorY{ModelingMirrorAxis::Y,
+                                            "mirror_selection_y", "Mirror Y"};
+  static const MirrorSelectionTool kMirrorZ{ModelingMirrorAxis::Z,
+                                            "mirror_selection_z", "Mirror Z"};
+  static const FlipHorizontalTool kFlipHorizontal;
+  static const FlipVerticalTool kFlipVertical;
 
-    static const std::array<const InstantCommandTool*, 13> tools{{
-            &selectAll,
-            &invertSelection,
-            &clearSelection,
-            &deleteSelection,
-            &copySelection,
-            &pasteSelection,
-            &repeatLastAction,
-            &assignMaterial,
-            &mirrorX,
-            &mirrorY,
-            &mirrorZ,
-            &flipHorizontal,
-            &flipVertical,
-    }};
-    return {tools.data(), tools.size()};
+  static const std::array<const InstantCommandTool *, 13> kTools{{
+      &kSelectAll,
+      &kInvertSelection,
+      &kClearSelection,
+      &kDeleteSelection,
+      &kCopySelection,
+      &kPasteSelection,
+      &kRepeatLastAction,
+      &kAssignMaterial,
+      &kMirrorX,
+      &kMirrorY,
+      &kMirrorZ,
+      &kFlipHorizontal,
+      &kFlipVertical,
+  }};
+  return {kTools.data(), kTools.size()};
 }
 
-std::span<const InstantCommandTool* const> modelingInstantCommandTools() {
-    static const std::vector<const InstantCommandTool*> tools = [] {
-        std::vector<const InstantCommandTool*> result;
-        for (const InstantCommandTool* tool : modelingInstantOperationCommandTools()) {
-            result.push_back(tool);
-        }
-        for (const InstantCommandTool* tool : modelingServiceInstantCommandTools()) {
-            result.push_back(tool);
-        }
-        return result;
-    }();
-    return {tools.data(), tools.size()};
+std::span<const InstantCommandTool *const> modeling_instant_command_tools() {
+  static const std::vector<const InstantCommandTool *> kTools = [] {
+    std::vector<const InstantCommandTool *> result;
+    for (const InstantCommandTool *tool :
+         modeling_instant_operation_command_tools()) {
+      result.push_back(tool);
+    }
+    for (const InstantCommandTool *tool :
+         modeling_service_instant_command_tools()) {
+      result.push_back(tool);
+    }
+    return result;
+  }();
+  return {kTools.data(), kTools.size()};
 }
 
-std::span<const ContextActionTool* const> modelingContextActionTools() {
-    static const std::vector<std::unique_ptr<CatalogContextActionTool>> ownedTools = [] {
+std::span<const ContextActionTool *const> modeling_context_action_tools() {
+  static const std::vector<std::unique_ptr<CatalogContextActionTool>>
+      kOwnedTools = [] {
         std::vector<std::unique_ptr<CatalogContextActionTool>> result;
         for (const quader_host_contract::HostActionDescriptor& action : quader_host_contract::action_catalog()) {
-            if (action.kind != quader_host_contract::HostActionKind::operation ||
-                    action.preview_kind != quader_host_contract::HostPreviewKind::none ||
-                    commandToolOwnsHostActionId(action.id)) {
-                continue;
-            }
-            result.push_back(std::make_unique<CatalogContextActionTool>(
-                    contextDescriptorFromHostAction(action)));
+          if (action.kind != quader_host_contract::HostActionKind::Operation ||
+              action.preview_kind !=
+                  quader_host_contract::HostPreviewKind::None ||
+              command_tool_owns_host_action_id(action.id)) {
+            continue;
+          }
+          result.push_back(std::make_unique<CatalogContextActionTool>(
+              context_descriptor_from_host_action(action)));
         }
         return result;
-    }();
+      }();
 
-    static const std::vector<const ContextActionTool*> tools = [] {
-        std::vector<const ContextActionTool*> result;
-        result.reserve(ownedTools.size());
-        for (const std::unique_ptr<CatalogContextActionTool>& tool : ownedTools) {
-            result.push_back(tool.get());
-        }
-        return result;
-    }();
-    return {tools.data(), tools.size()};
+  static const std::vector<const ContextActionTool *> kTools = [] {
+    std::vector<const ContextActionTool *> result;
+    result.reserve(kOwnedTools.size());
+    for (const std::unique_ptr<CatalogContextActionTool> &tool : kOwnedTools) {
+      result.push_back(tool.get());
+    }
+    return result;
+  }();
+  return {kTools.data(), kTools.size()};
 }
 
-std::span<const PreviewCommandTool* const> modelingPreviewCommandTools() {
-    static const std::vector<std::unique_ptr<CatalogPreviewActionTool>> ownedTools = [] {
+std::span<const PreviewCommandTool *const> modeling_preview_command_tools() {
+  static const std::vector<std::unique_ptr<CatalogPreviewActionTool>>
+      kOwnedTools = [] {
         std::vector<std::unique_ptr<CatalogPreviewActionTool>> result;
         for (const quader_host_contract::HostActionDescriptor& action : quader_host_contract::action_catalog()) {
-            if (action.kind != quader_host_contract::HostActionKind::operation ||
-                    action.preview_kind == quader_host_contract::HostPreviewKind::none) {
-                continue;
-            }
-            result.push_back(std::make_unique<CatalogPreviewActionTool>(previewDescriptor(action)));
+          if (action.kind != quader_host_contract::HostActionKind::Operation ||
+              action.preview_kind ==
+                  quader_host_contract::HostPreviewKind::None) {
+            continue;
+          }
+          result.push_back(std::make_unique<CatalogPreviewActionTool>(
+              preview_descriptor(action)));
         }
         return result;
-    }();
+      }();
 
-    static const std::vector<const PreviewCommandTool*> tools = [] {
-        std::vector<const PreviewCommandTool*> result;
-        result.reserve(ownedTools.size());
-        for (const std::unique_ptr<CatalogPreviewActionTool>& tool : ownedTools) {
-            result.push_back(tool.get());
-        }
-        return result;
-    }();
-    return {tools.data(), tools.size()};
-}
-
-std::span<const CommandTool* const> modelingCommandTools() {
-    static const std::vector<const CommandTool*> tools = [] {
-        std::vector<const CommandTool*> result;
-        for (const InstantCommandTool* tool : modelingInstantCommandTools()) {
-            result.push_back(tool);
-        }
-        for (const ContextActionTool* tool : modelingContextActionTools()) {
-            result.push_back(tool);
-        }
-        for (const PreviewCommandTool* tool : modelingPreviewCommandTools()) {
-            result.push_back(tool);
-        }
-        return result;
-    }();
-    return {tools.data(), tools.size()};
-}
-
-const CommandTool* findModelingCommandTool(std::string_view id) {
-    const std::span<const CommandTool* const> tools = modelingCommandTools();
-    const auto found = std::find_if(tools.begin(), tools.end(), [&](const CommandTool* tool) {
-        return tool != nullptr && tool->id() == id;
-    });
-    return found == tools.end() ? nullptr : *found;
-}
-
-const InstantCommandTool* findModelingInstantCommandTool(ModelingInstantOperationId operation) {
-    const std::span<const InstantCommandTool* const> tools = modelingInstantOperationCommandTools();
-    const auto found = std::find_if(tools.begin(), tools.end(), [&](const InstantCommandTool* tool) {
-        return tool != nullptr && tool->hasInstantOperation() && tool->operation() == operation;
-    });
-    return found == tools.end() ? nullptr : *found;
-}
-
-const ContextActionTool* findModelingContextActionTool(std::string_view actionId) {
-    const std::span<const ContextActionTool* const> tools = modelingContextActionTools();
-    const auto found = std::find_if(tools.begin(), tools.end(), [&](const ContextActionTool* tool) {
-        return tool != nullptr && tool->actionId() == actionId;
-    });
-    return found == tools.end() ? nullptr : *found;
-}
-
-const PreviewCommandTool* findModelingPreviewCommandTool(std::string_view actionId) {
-    const std::span<const PreviewCommandTool* const> tools = modelingPreviewCommandTools();
-    const auto found = std::find_if(tools.begin(), tools.end(), [&](const PreviewCommandTool* tool) {
-        return tool != nullptr && tool->actionId() == actionId;
-    });
-    return found == tools.end() ? nullptr : *found;
-}
-
-std::string_view modelingMirrorSelectionToolId(ModelingMirrorAxis axis) {
-    switch (axis) {
-    case ModelingMirrorAxis::X:
-        return "mirror_selection_x";
-    case ModelingMirrorAxis::Y:
-        return "mirror_selection_y";
-    case ModelingMirrorAxis::Z:
-        return "mirror_selection_z";
+  static const std::vector<const PreviewCommandTool *> kTools = [] {
+    std::vector<const PreviewCommandTool *> result;
+    result.reserve(kOwnedTools.size());
+    for (const std::unique_ptr<CatalogPreviewActionTool> &tool : kOwnedTools) {
+      result.push_back(tool.get());
     }
+    return result;
+  }();
+  return {kTools.data(), kTools.size()};
+}
+
+std::span<const CommandTool *const> modeling_command_tools() {
+  static const std::vector<const CommandTool *> kTools = [] {
+    std::vector<const CommandTool *> result;
+    for (const InstantCommandTool *tool : modeling_instant_command_tools()) {
+      result.push_back(tool);
+    }
+    for (const ContextActionTool *tool : modeling_context_action_tools()) {
+      result.push_back(tool);
+    }
+    for (const PreviewCommandTool *tool : modeling_preview_command_tools()) {
+      result.push_back(tool);
+    }
+    return result;
+  }();
+  return {kTools.data(), kTools.size()};
+}
+
+const CommandTool *find_modeling_command_tool(std::string_view id) {
+  const std::span<const CommandTool *const> tools = modeling_command_tools();
+  const auto found =
+      std::find_if(tools.begin(), tools.end(), [&](const CommandTool *tool) {
+        return tool != nullptr && tool->id() == id;
+      });
+  return found == tools.end() ? nullptr : *found;
+}
+
+const InstantCommandTool *
+find_modeling_instant_command_tool(ModelingInstantOperationId operation) {
+  const std::span<const InstantCommandTool *const> tools =
+      modeling_instant_operation_command_tools();
+  const auto found = std::find_if(
+      tools.begin(), tools.end(), [&](const InstantCommandTool *tool) {
+        return tool != nullptr && tool->has_instant_operation() &&
+               tool->operation() == operation;
+      });
+  return found == tools.end() ? nullptr : *found;
+}
+
+const ContextActionTool *
+find_modeling_context_action_tool(std::string_view action_id) {
+  const std::span<const ContextActionTool *const> tools =
+      modeling_context_action_tools();
+  const auto found = std::find_if(
+      tools.begin(), tools.end(), [&](const ContextActionTool *tool) {
+        return tool != nullptr && tool->action_id() == action_id;
+      });
+  return found == tools.end() ? nullptr : *found;
+}
+
+const PreviewCommandTool *
+find_modeling_preview_command_tool(std::string_view action_id) {
+  const std::span<const PreviewCommandTool *const> tools =
+      modeling_preview_command_tools();
+  const auto found = std::find_if(
+      tools.begin(), tools.end(), [&](const PreviewCommandTool *tool) {
+        return tool != nullptr && tool->action_id() == action_id;
+      });
+  return found == tools.end() ? nullptr : *found;
+}
+
+std::string_view modeling_mirror_selection_tool_id(ModelingMirrorAxis axis) {
+  switch (axis) {
+  case ModelingMirrorAxis::X:
     return "mirror_selection_x";
+  case ModelingMirrorAxis::Y:
+    return "mirror_selection_y";
+  case ModelingMirrorAxis::Z:
+    return "mirror_selection_z";
+  }
+  return "mirror_selection_x";
 }
 
 } // namespace quader

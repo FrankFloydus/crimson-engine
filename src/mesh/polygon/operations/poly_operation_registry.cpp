@@ -36,8 +36,8 @@ bool PolyOperationRegistry::contains(std::string_view id) const
 
 const PolyOperationRegistry& poly_operation_registry()
 {
-    static const PolyOperationRegistry registry(poly_operation_descriptors());
-    return registry;
+  static const PolyOperationRegistry kRegistry(poly_operation_descriptors());
+  return kRegistry;
 }
 
 std::span<const PolyOperationMetadata> poly_operation_entries()

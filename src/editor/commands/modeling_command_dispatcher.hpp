@@ -19,21 +19,19 @@ class EditorSelectionService;
  */
 class ModelingCommandDispatcher {
 public:
-    [[nodiscard]] const CommandTool* find(std::string_view toolId) const;
-    [[nodiscard]] ModelingCommandHistoryPolicy historyPolicy(std::string_view toolId) const;
-    [[nodiscard]] ModelingCommandAvailability availability(
-            std::string_view toolId,
-            ModelingSessionService& modeling,
-            EditorSelectionService* selection = nullptr) const;
+  [[nodiscard]] const CommandTool *find(std::string_view tool_id) const;
+  [[nodiscard]] ModelingCommandHistoryPolicy
+  history_policy(std::string_view tool_id) const;
+  [[nodiscard]] ModelingCommandAvailability
+  availability(std::string_view tool_id, ModelingSessionService &modeling,
+               EditorSelectionService *selection = nullptr) const;
 
-    ModelingCommandResult execute(
-            std::string_view toolId,
-            ModelingSessionService& modeling,
-            EditorSelectionService* selection = nullptr) const;
-    ModelingCommandResult execute(
-            const CommandTool& tool,
-            ModelingSessionService& modeling,
-            EditorSelectionService* selection = nullptr) const;
+  ModelingCommandResult
+  execute(std::string_view tool_id, ModelingSessionService &modeling,
+          EditorSelectionService *selection = nullptr) const;
+  ModelingCommandResult
+  execute(const CommandTool &tool, ModelingSessionService &modeling,
+          EditorSelectionService *selection = nullptr) const;
 };
 
 } // namespace quader

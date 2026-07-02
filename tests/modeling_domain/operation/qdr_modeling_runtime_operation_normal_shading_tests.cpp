@@ -16,16 +16,17 @@ TEST(QdrModelingRuntimeOperationNormalShadingTests, ShadeSmoothAndFlatOperateOnS
 	EXPECT_TRUE(smooth.ok);
 	EXPECT_TRUE(smooth.changed);
 	for (const quader_poly::Face& face : session.objects().front().document.faces) {
-		EXPECT_TRUE(face.normal_shading == quader_poly::SurfaceShading::smooth);
-	}
+          EXPECT_TRUE(face.normal_shading ==
+                      quader_poly::SurfaceShading::Smooth);
+        }
 
 	const CommandResult flat = session.shade_selected_faces_flat();
 
 	EXPECT_TRUE(flat.ok);
 	EXPECT_TRUE(flat.changed);
 	for (const quader_poly::Face& face : session.objects().front().document.faces) {
-		EXPECT_TRUE(face.normal_shading == quader_poly::SurfaceShading::flat);
-	}
+          EXPECT_TRUE(face.normal_shading == quader_poly::SurfaceShading::Flat);
+        }
 }
 
 TEST(QdrModelingRuntimeOperationNormalShadingTests, HardAndSoftNormalOperationsOperateOnSelectedEdges) {
@@ -33,21 +34,20 @@ TEST(QdrModelingRuntimeOperationNormalShadingTests, HardAndSoftNormalOperationsO
 	quader_editor_core::PolygonObject& object = session.objects().front();
 	const quader_poly::Face first_face = object.document.faces.front();
 	const quader_poly::Edge edge = quader_poly::make_edge(first_face.vertices[0], first_face.vertices[1]);
-	session.set_component_selection(
-		object.id,
-		qdr_test::edge_selection({ edge }, edge),
-		SelectionMode::edge);
+        session.set_component_selection(object.id,
+                                        qdr_test::edge_selection({edge}, edge),
+                                        SelectionMode::Edge);
 
-	const CommandResult soft_default = session.soften_selected_edge_normals();
+        const CommandResult soft_default = session.soften_selected_edge_normals();
 
 	EXPECT_TRUE(soft_default.ok);
 	EXPECT_TRUE(soft_default.changed);
 	std::size_t smooth_face_count = 0;
 	for (const quader_poly::Face& face : session.objects().front().document.faces) {
-		if (face.normal_shading == quader_poly::SurfaceShading::smooth) {
-			++smooth_face_count;
-		}
-	}
+          if (face.normal_shading == quader_poly::SurfaceShading::Smooth) {
+            ++smooth_face_count;
+          }
+        }
 	EXPECT_TRUE(smooth_face_count > 0U);
 	EXPECT_TRUE(session.objects().front().document.hard_normal_edges.empty());
 

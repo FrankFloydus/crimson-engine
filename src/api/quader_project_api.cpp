@@ -21,20 +21,14 @@
 namespace quader {
 namespace {
 
-ProjectSession& projectSession(QuaderApiSession session) {
-    return QuaderApiSessionInternalAccess::projectSession(session);
+ProjectSession &project_session(QuaderApiSession session) {
+  return QuaderApiSessionInternalAccess::project_session(session);
 }
 
-QuaderApiVoidResult projectRuntimeStatus(
-        ProjectSession& session,
-        bool changed,
-        std::string message) {
-    return quaderApiVoidStatus(
-            session,
-            true,
-            changed,
-            std::move(message),
-            QuaderMutationKind::Runtime);
+QuaderApiVoidResult project_runtime_status(ProjectSession &session,
+                                           bool changed, std::string message) {
+  return quader_api_void_status(session, true, changed, std::move(message),
+                                QuaderMutationKind::Runtime);
 }
 
 } // namespace
@@ -42,83 +36,86 @@ QuaderApiVoidResult projectRuntimeStatus(
 QuaderProjectApi::QuaderProjectApi(QuaderApiSession session)
     : session_(session) {}
 
-QuaderApiVoidResult QuaderProjectApi::newProject() {
-    ProjectSession& session = projectSession(session_);
-    session.replaceDocument(ProjectDocument{});
-    path_.clear();
-    return projectRuntimeStatus(session, true, "New project created.");
+QuaderApiVoidResult QuaderProjectApi::new_project() {
+  ProjectSession &session = project_session(session_);
+  session.replace_document(ProjectDocument{});
+  path_.clear();
+  return project_runtime_status(session, true, "New project created.");
 }
 
 QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
     std::filesystem::path target = path;
     if (target.empty()) {
-        if (!runtimeHooks_.chooseOpenPath) {
-            return unsupported("Project open requires a path.");
-        }
-        const std::optional<std::filesystem::path> selected = chooseOpenPath();
-        if (!selected.has_value()) {
-            return projectRuntimeStatus(projectSession(session_), false, "Project open canceled.");
-        }
+      if (!runtime_hooks_.choose_open_path) {
+        return unsupported("Project open requires a path.");
+      }
+      const std::optional<std::filesystem::path> selected = choose_open_path();
+      if (!selected.has_value()) {
+        return project_runtime_status(project_session(session_), false,
+                                      "Project open canceled.");
+      }
         target = *selected;
     }
     if (target.empty()) {
         return unsupported("Project open requires a path.");
     }
 
-    QdrProjectReadResult read = QdrDocumentReader::readProjectDocument(target);
+    QdrProjectReadResult read =
+        QdrDocumentReader::read_project_document(target);
     if (!read.ok) {
-        return quaderApiFailureStatus(
-                projectSession(session_),
-                read.message.empty() ? "Project open failed." : std::move(read.message));
+      return quader_api_failure_status(project_session(session_),
+                                       read.message.empty()
+                                           ? "Project open failed."
+                                           : std::move(read.message));
     }
 
-    ProjectSession& session = projectSession(session_);
-    session.replaceDocument(std::move(read.document));
+    ProjectSession &session = project_session(session_);
+    session.replace_document(std::move(read.document));
     path_ = std::move(target);
-    return projectRuntimeStatus(
-            session,
-            true,
-            read.migratedLegacySession ? "Legacy QDR project opened." : "Project opened.");
+    return project_runtime_status(session, true,
+                                  read.migrated_legacy_session
+                                      ? "Legacy QDR project opened."
+                                      : "Project opened.");
 }
 
 QuaderApiVoidResult QuaderProjectApi::save() {
     QDR_PROFILE_FUNCTION();
     if (path_.empty()) {
-        return saveAs({});
+      return save_as({});
     }
-    return saveToPath(path_, false);
+    return save_to_path(path_, false);
 }
 
-QuaderApiVoidResult QuaderProjectApi::saveAs(const std::filesystem::path& path) {
-    QDR_PROFILE_FUNCTION();
-    std::filesystem::path target = path;
-    if (target.empty()) {
-        if (!runtimeHooks_.chooseSaveAsPath) {
-            return unsupported("Project save-as requires a path.");
-        }
-        const std::optional<std::filesystem::path> selected = chooseSaveAsPath();
-        if (!selected.has_value()) {
-            return projectRuntimeStatus(projectSession(session_), false, "Project save-as canceled.");
-        }
-        target = *selected;
+QuaderApiVoidResult
+QuaderProjectApi::save_as(const std::filesystem::path &path) {
+  QDR_PROFILE_FUNCTION();
+  std::filesystem::path target = path;
+  if (target.empty()) {
+    if (!runtime_hooks_.choose_save_as_path) {
+      return unsupported("Project save-as requires a path.");
     }
-    if (target.empty()) {
-        return unsupported("Project save-as requires a path.");
+    const std::optional<std::filesystem::path> selected = choose_save_as_path();
+    if (!selected.has_value()) {
+      return project_runtime_status(project_session(session_), false,
+                                    "Project save-as canceled.");
     }
+    target = *selected;
+  }
+  if (target.empty()) {
+    return unsupported("Project save-as requires a path.");
+  }
 
-    return saveToPath(target, true);
+  return save_to_path(target, true);
 }
 
-QuaderApiVoidResult QuaderProjectApi::close() {
-    return newProject();
-}
+QuaderApiVoidResult QuaderProjectApi::close() { return new_project(); }
 
-void QuaderProjectApi::setRuntimeHooks(QuaderProjectRuntimeHooks hooks) {
-    runtimeHooks_ = std::move(hooks);
+void QuaderProjectApi::set_runtime_hooks(QuaderProjectRuntimeHooks hooks) {
+  runtime_hooks_ = std::move(hooks);
 }
 
 bool QuaderProjectApi::dirty() const {
-    return projectSession(session_).dirty();
+  return project_session(session_).dirty();
 }
 
 const std::filesystem::path& QuaderProjectApi::path() const {
@@ -126,47 +123,56 @@ const std::filesystem::path& QuaderProjectApi::path() const {
 }
 
 QuaderProjectMetadata QuaderProjectApi::metadata() const {
-    ProjectSession& session = projectSession(session_);
-    return {
-            .id = session.document().id(),
-            .name = session.document().name(),
-    };
+  ProjectSession &session = project_session(session_);
+  return {
+      .id = session.document().id(),
+      .name = session.document().name(),
+  };
 }
 
 QuaderApiVoidResult QuaderProjectApi::unsupported(std::string message) const {
-    return quaderApiFailureStatus(projectSession(session_), std::move(message));
+  return quader_api_failure_status(project_session(session_),
+                                   std::move(message));
 }
 
-QuaderApiVoidResult QuaderProjectApi::saveToPath(const std::filesystem::path& path, bool updatePath) {
-    QDR_PROFILE_FUNCTION();
-    if (path.empty()) {
-        return unsupported("Project save requires a path.");
-    }
+QuaderApiVoidResult
+QuaderProjectApi::save_to_path(const std::filesystem::path &path,
+                               bool update_path) {
+  QDR_PROFILE_FUNCTION();
+  if (path.empty()) {
+    return unsupported("Project save requires a path.");
+  }
 
-    ProjectSession& session = projectSession(session_);
-    QdrProjectWriteResult write = [&]() {
-        QDR_PROFILE_SCOPE("Project write QDR document");
-        return QdrDocumentWriter::writeProjectDocumentAtomic(path, session.document());
-    }();
-    if (!write.ok) {
-        return quaderApiFailureStatus(
-                session,
-                write.message.empty() ? "Project save failed." : std::move(write.message));
-    }
+  ProjectSession &session = project_session(session_);
+  QdrProjectWriteResult write = [&]() {
+    QDR_PROFILE_SCOPE("Project write QDR document");
+    return QdrDocumentWriter::write_project_document_atomic(path,
+                                                            session.document());
+  }();
+  if (!write.ok) {
+    return quader_api_failure_status(session, write.message.empty()
+                                                  ? "Project save failed."
+                                                  : std::move(write.message));
+  }
 
-    if (updatePath) {
-        path_ = path;
-    }
-    session.markClean();
-    return projectRuntimeStatus(session, true, "Project saved.");
+  if (update_path) {
+    path_ = path;
+  }
+  session.mark_clean();
+  return project_runtime_status(session, true, "Project saved.");
 }
 
-std::optional<std::filesystem::path> QuaderProjectApi::chooseOpenPath() const {
-    return runtimeHooks_.chooseOpenPath ? runtimeHooks_.chooseOpenPath() : std::nullopt;
+std::optional<std::filesystem::path>
+QuaderProjectApi::choose_open_path() const {
+  return runtime_hooks_.choose_open_path ? runtime_hooks_.choose_open_path()
+                                         : std::nullopt;
 }
 
-std::optional<std::filesystem::path> QuaderProjectApi::chooseSaveAsPath() const {
-    return runtimeHooks_.chooseSaveAsPath ? runtimeHooks_.chooseSaveAsPath() : std::nullopt;
+std::optional<std::filesystem::path>
+QuaderProjectApi::choose_save_as_path() const {
+  return runtime_hooks_.choose_save_as_path
+             ? runtime_hooks_.choose_save_as_path()
+             : std::nullopt;
 }
 
 } // namespace quader

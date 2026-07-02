@@ -7,7 +7,7 @@
 #pragma once
 
 #include "core/types.hpp"
-#include "math/types/q_vec3.hpp"
+#include "math/types/qvec3.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -33,7 +33,8 @@ class SceneDocument;
 
 inline constexpr std::size_t kSelectedObjectFaceFillSelectionLimit = 64u;
 
-bool selectedObjectFaceFillsEnabledForSelectionCount(std::size_t selectedMeshCount);
+bool selected_object_face_fills_enabled_for_selection_count(
+    std::size_t selected_mesh_count);
 
 /**
  * Caches selected object overlay renderables outside the transient viewport overlay frame.
@@ -47,17 +48,14 @@ public:
     SelectedObjectOverlayCache& operator=(SelectedObjectOverlayCache&&) = delete;
     ~SelectedObjectOverlayCache();
 
-    void initialize(filament::Engine& engine,
-            filament::Scene& scene,
-            filament::Material& faceFillMaterial,
-            filament::Material& lineMaterial);
+    void initialize(filament::Engine &engine, filament::Scene &scene,
+                    filament::Material &face_fill_material,
+                    filament::Material &line_material);
     void shutdown();
 
     bool initialized() const {
-        return engine_ != nullptr &&
-                scene_ != nullptr &&
-                faceFillMaterial_ != nullptr &&
-                lineMaterial_ != nullptr;
+      return engine_ != nullptr && scene_ != nullptr &&
+             face_fill_material_ != nullptr && line_material_ != nullptr;
     }
 
     void sync(const SceneDocument& document, const AssetRegistry& assets, bool visible);
@@ -73,11 +71,11 @@ public:
         Proxy& operator=(Proxy&& other) noexcept;
 
         utils::Entity entity;
-        filament::VertexBuffer* vertexBuffer = nullptr;
-        filament::IndexBuffer* indexBuffer = nullptr;
-        filament::MaterialInstance* materialInstance = nullptr;
-        std::uint32_t vertexCount = 0;
-        std::uint32_t indexCount = 0;
+        filament::VertexBuffer *vertex_buffer = nullptr;
+        filament::IndexBuffer *index_buffer = nullptr;
+        filament::MaterialInstance *material_instance = nullptr;
+        std::uint32_t vertex_count = 0;
+        std::uint32_t index_count = 0;
     };
 
     /**
@@ -90,10 +88,10 @@ public:
         Entry(Entry&&) noexcept = default;
         Entry& operator=(Entry&&) noexcept = delete;
 
-        utils::Entity transformRoot;
-        AssetId meshId = InvalidAssetId;
-        std::uint64_t meshRevision = 0;
-        std::vector<Proxy> faceProxies;
+        utils::Entity transform_root;
+        AssetId mesh_id = kInvalidAssetId;
+        std::uint64_t mesh_revision = 0;
+        std::vector<Proxy> face_proxies;
     };
 
 private:
@@ -101,63 +99,73 @@ private:
      * Tracks the selected entity render inputs that require a selected-overlay geometry rebuild.
      */
     struct SelectedEntityState {
-        EntityId entity = InvalidEntityId;
-        AssetId meshId = InvalidAssetId;
-        std::uint64_t meshRevision = 0;
+      EntityId entity = kInvalidEntityId;
+      AssetId mesh_id = kInvalidAssetId;
+      std::uint64_t mesh_revision = 0;
 
-        bool operator==(const SelectedEntityState&) const = default;
+      bool operator==(const SelectedEntityState &) const = default;
     };
 
+    /**
+     * Stores one selected-object outline segment in world space.
+     */
     struct SelectedObjectLineSegment {
         QVec3 start;
         QVec3 end;
     };
 
+    /**
+     * Caches extracted outline segments for one mesh revision.
+     */
     struct LineEntry {
-        AssetId meshId = InvalidAssetId;
-        std::uint64_t meshRevision = 0;
-        std::vector<SelectedObjectLineSegment> segments;
+      AssetId mesh_id = kInvalidAssetId;
+      std::uint64_t mesh_revision = 0;
+      std::vector<SelectedObjectLineSegment> segments;
     };
 
-    std::vector<SelectedEntityState> selectedEntityStates(
-            const SceneDocument& document,
-            const AssetRegistry& assets) const;
-    LineEntry createLineEntry(AssetId meshId, const AssetRegistry& assets) const;
-    void syncLineEntries(
-            const std::vector<SelectedEntityState>& states,
-            const AssetRegistry& assets);
-    void updateLineProxy(
-            const std::vector<SelectedEntityState>& states,
-            const SceneDocument& document);
-    Entry createEntry(EntityId entityId, AssetId meshId, const SceneDocument& document, const AssetRegistry& assets);
-    void destroyEntry(Entry& entry);
-    void destroyProxy(Proxy& proxy, bool removeFromScene);
-    void destroyLineBatchRoot();
-    void destroyFaceEntries();
-    void destroyTransformRoot(Entry& entry);
-    void setProxyLayerMask(const Proxy& proxy, std::uint8_t layerMask) const;
-    void updateEntryTransform(const Entry& entry, const SceneDocument& document, EntityId entityId) const;
-    void updateEntryTransforms(const SceneDocument& document);
-    void setVisible(bool visible);
-    void removeExcept(const std::unordered_set<EntityId>& liveEntities);
+    std::vector<SelectedEntityState>
+    selected_entity_states(const SceneDocument &document,
+                           const AssetRegistry &assets) const;
+    LineEntry create_line_entry(AssetId mesh_id,
+                                const AssetRegistry &assets) const;
+    void sync_line_entries(const std::vector<SelectedEntityState> &states,
+                           const AssetRegistry &assets);
+    void update_line_proxy(const std::vector<SelectedEntityState> &states,
+                           const SceneDocument &document);
+    Entry create_entry(EntityId entity_id, AssetId mesh_id,
+                       const SceneDocument &document,
+                       const AssetRegistry &assets);
+    void destroy_entry(Entry &entry);
+    void destroy_proxy(Proxy &proxy, bool remove_from_scene);
+    void destroy_line_batch_root();
+    void destroy_face_entries();
+    void destroy_transform_root(Entry &entry);
+    void set_proxy_layer_mask(const Proxy &proxy,
+                              std::uint8_t layer_mask) const;
+    void update_entry_transform(const Entry &entry,
+                                const SceneDocument &document,
+                                EntityId entity_id) const;
+    void update_entry_transforms(const SceneDocument &document);
+    void set_visible(bool visible);
+    void remove_except(const std::unordered_set<EntityId> &live_entities);
 
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
-    filament::Material* faceFillMaterial_ = nullptr;
-    filament::Material* lineMaterial_ = nullptr;
-    utils::Entity lineBatchTransformRoot_;
-    Proxy lineProxy_;
+    filament::Material *face_fill_material_ = nullptr;
+    filament::Material *line_material_ = nullptr;
+    utils::Entity line_batch_transform_root_;
+    Proxy line_proxy_;
     std::unordered_map<EntityId, Entry> entries_;
-    std::unordered_map<EntityId, LineEntry> lineEntries_;
-    std::vector<SelectedEntityState> syncedStates_;
-    std::uint64_t syncedSceneRevision_ = 0;
-    std::uint64_t syncedAssetRevision_ = 0;
-    std::uint64_t syncedSelectionRevision_ = 0;
-    std::uint64_t syncedVisibilityRevision_ = 0;
-    std::uint64_t syncedTransformRevision_ = 0;
-    std::uint64_t syncedMeshBindingRevision_ = 0;
-    bool syncedFaceFillsEnabled_ = false;
-    bool hasSynced_ = false;
+    std::unordered_map<EntityId, LineEntry> line_entries_;
+    std::vector<SelectedEntityState> synced_states_;
+    std::uint64_t synced_scene_revision_ = 0;
+    std::uint64_t synced_asset_revision_ = 0;
+    std::uint64_t synced_selection_revision_ = 0;
+    std::uint64_t synced_visibility_revision_ = 0;
+    std::uint64_t synced_transform_revision_ = 0;
+    std::uint64_t synced_mesh_binding_revision_ = 0;
+    bool synced_face_fills_enabled_ = false;
+    bool has_synced_ = false;
     bool visible_ = true;
 };
 

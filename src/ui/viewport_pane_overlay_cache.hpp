@@ -17,12 +17,12 @@ namespace quader {
  * Stores the Viewport Pane Overlay Cache Key data contract used by the ImGui editor presentation layer.
  */
 struct ViewportPaneOverlayCacheKey {
-    std::uint64_t contentRevision = 0;
-    std::uint64_t selectionRevision = 0;
-    std::uint64_t sceneRevision = 0;
-    std::uint64_t assetRevision = 0;
-    std::uint64_t overlaySignature = 0;
-    ModelingSelectionMode selectionMode = ModelingSelectionMode::Object;
+  std::uint64_t content_revision = 0;
+  std::uint64_t selection_revision = 0;
+  std::uint64_t scene_revision = 0;
+  std::uint64_t asset_revision = 0;
+  std::uint64_t overlay_signature = 0;
+  ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
 };
 
 /**
@@ -48,11 +48,12 @@ public:
     [[nodiscard]] bool valid() const { return valid_; }
     [[nodiscard]] const ViewportOverlayFrame& frame() const { return frame_; }
     [[nodiscard]] const ViewportPaneOverlayCacheKey& key() const { return key_; }
-    [[nodiscard]] bool needsRefresh(const ViewportPaneOverlayCacheKey& key) const;
-    [[nodiscard]] ViewportPaneOverlayCacheRefreshReason refreshReason(
-            const ViewportPaneOverlayCacheKey& key) const;
+    [[nodiscard]] bool
+    needs_refresh(const ViewportPaneOverlayCacheKey &key) const;
+    [[nodiscard]] ViewportPaneOverlayCacheRefreshReason
+    refresh_reason(const ViewportPaneOverlayCacheKey &key) const;
 
-    void markDirty();
+    void mark_dirty();
     void update(ViewportOverlayFrame frame, const ViewportPaneOverlayCacheKey& key);
 
 private:

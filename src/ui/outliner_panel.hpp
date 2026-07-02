@@ -28,14 +28,14 @@ public:
 private:
     struct TreeCache;
 
-    float minimumWidth(const UIContext& context) const override;
-    ImVec2 panelWindowPadding(const UIContext& context) const override;
-    ImGuiWindowFlags windowFlags(const UIContext& context) const override;
-    void drawContent(UIContext& context) override;
-    const TreeCache& refreshTreeCache(const SceneDocument& document);
+    float minimum_width(const UIContext &context) const override;
+    ImVec2 panel_window_padding(const UIContext &context) const override;
+    ImGuiWindowFlags window_flags(const UIContext &context) const override;
+    void draw_content(UIContext &context) override;
+    const TreeCache &refresh_tree_cache(const SceneDocument &document);
 
-    EntityId outlinerAnchor_ = InvalidEntityId;
-    std::unique_ptr<TreeCache> treeCache_;
+    EntityId outliner_anchor_ = kInvalidEntityId;
+    std::unique_ptr<TreeCache> tree_cache_;
 };
 
 } // namespace quader

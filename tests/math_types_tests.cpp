@@ -16,66 +16,85 @@ using namespace quader;
 
 namespace {
 
-using quader::test::guardrail::readSourceFile;
+using quader::test::guardrail::read_source_file;
 
-void expectQVec3Near(QVec3 actual, QVec3 expected) {
-    EXPECT_NEAR(actual.x, expected.x, 0.001f);
-    EXPECT_NEAR(actual.y, expected.y, 0.001f);
-    EXPECT_NEAR(actual.z, expected.z, 0.001f);
+void expect_q_vec3_near(QVec3 actual, QVec3 expected) {
+  EXPECT_NEAR(actual.x, expected.x, 0.001f);
+  EXPECT_NEAR(actual.y, expected.y, 0.001f);
+  EXPECT_NEAR(actual.z, expected.z, 0.001f);
 }
 
 } // namespace
 
 TEST(MathTypesTests, ValueHeadersDoNotIncludeGlmBridge) {
-    EXPECT_EQ(readSourceFile("src/math/types.hpp").find("glm"), std::string::npos);
-    EXPECT_EQ(readSourceFile("src/math/types.hpp").find("glm"), std::string::npos);
-    EXPECT_EQ(readSourceFile("src/math/types/q_vec2.hpp").find("glm"), std::string::npos);
-    EXPECT_EQ(readSourceFile("src/math/types/q_vec3.hpp").find("glm"), std::string::npos);
-    EXPECT_EQ(readSourceFile("src/math/types/q_quat.hpp").find("glm"), std::string::npos);
-    EXPECT_EQ(readSourceFile("src/math/types/q_mat4.hpp").find("glm"), std::string::npos);
-    EXPECT_EQ(readSourceFile("src/math/types/q_transform.hpp").find("glm"), std::string::npos);
-    EXPECT_NE(readSourceFile("src/math/glm_bridge.hpp").find("glm"), std::string::npos);
+  EXPECT_EQ(read_source_file("src/math/types.hpp").find("glm"),
+            std::string::npos);
+  EXPECT_EQ(read_source_file("src/math/types.hpp").find("glm"),
+            std::string::npos);
+  EXPECT_EQ(read_source_file("src/math/types/qvec2.hpp").find("glm"),
+            std::string::npos);
+  EXPECT_EQ(read_source_file("src/math/types/qvec3.hpp").find("glm"),
+            std::string::npos);
+  EXPECT_EQ(read_source_file("src/math/types/qquat.hpp").find("glm"),
+            std::string::npos);
+  EXPECT_EQ(read_source_file("src/math/types/qmat4.hpp").find("glm"),
+            std::string::npos);
+  EXPECT_EQ(read_source_file("src/math/types/qtransform.hpp").find("glm"),
+            std::string::npos);
+  EXPECT_NE(read_source_file("src/math/glm_bridge.hpp").find("glm"),
+            std::string::npos);
 }
 
 TEST(MathTypesTests, QUmbrellaOnlyIncludesSplitVectorHeaders) {
-    const std::string vecUmbrella = readSourceFile("src/math/types.hpp");
+  const std::string vec_umbrella = read_source_file("src/math/types.hpp");
 
-    EXPECT_NE(vecUmbrella.find("#include \"math/types/q_vec2.hpp\""), std::string::npos);
-    EXPECT_NE(vecUmbrella.find("#include \"math/types/q_vec3.hpp\""), std::string::npos);
-    EXPECT_EQ(vecUmbrella.find("struct QVec2"), std::string::npos);
-    EXPECT_EQ(vecUmbrella.find("struct QVec3"), std::string::npos);
+  EXPECT_NE(vec_umbrella.find("#include \"math/types/qvec2.hpp\""),
+            std::string::npos);
+  EXPECT_NE(vec_umbrella.find("#include \"math/types/qvec3.hpp\""),
+            std::string::npos);
+  EXPECT_EQ(vec_umbrella.find("struct QVec2"), std::string::npos);
+  EXPECT_EQ(vec_umbrella.find("struct QVec3"), std::string::npos);
 }
 
 TEST(MathTypesTests, PolygonDocumentUsesSharedVectorTypes) {
-    const std::string polygonDocument = readSourceFile("src/mesh/polygon/document.hpp");
+  const std::string polygon_document =
+      read_source_file("src/mesh/polygon/document.hpp");
 
-    EXPECT_NE(polygonDocument.find("quader::QVec2"), std::string::npos);
-    EXPECT_NE(polygonDocument.find("quader::QVec3"), std::string::npos);
-    EXPECT_EQ(polygonDocument.find("struct QVec2"), std::string::npos);
-    EXPECT_EQ(polygonDocument.find("struct QVec3"), std::string::npos);
+  EXPECT_NE(polygon_document.find("quader::QVec2"), std::string::npos);
+  EXPECT_NE(polygon_document.find("quader::QVec3"), std::string::npos);
+  EXPECT_EQ(polygon_document.find("struct QVec2"), std::string::npos);
+  EXPECT_EQ(polygon_document.find("struct QVec3"), std::string::npos);
 }
 
 TEST(MathTypesTests, QuaternionFromEulerMatchesExpectedAxisRotations) {
-    constexpr float HalfPi = 1.57079632679489661923f;
+  constexpr float kHalfPi = 1.57079632679489661923f;
 
-    expectQVec3Near(transformVector(composeTransform(QTransform{.rotation = quatFromEulerRadians({HalfPi, 0.0f, 0.0f})}),
-                           {0.0f, 1.0f, 0.0f}),
-            {0.0f, 0.0f, 1.0f});
-    expectQVec3Near(transformVector(composeTransform(QTransform{.rotation = quatFromEulerRadians({0.0f, HalfPi, 0.0f})}),
-                           {0.0f, 0.0f, 1.0f}),
-            {1.0f, 0.0f, 0.0f});
-    expectQVec3Near(transformVector(composeTransform(QTransform{.rotation = quatFromEulerRadians({0.0f, 0.0f, HalfPi})}),
-                           {1.0f, 0.0f, 0.0f}),
-            {0.0f, 1.0f, 0.0f});
+  expect_q_vec3_near(transform_vector(compose_transform(QTransform{
+                                          .rotation = quat_from_euler_radians(
+                                              {kHalfPi, 0.0f, 0.0f})}),
+                                      {0.0f, 1.0f, 0.0f}),
+                     {0.0f, 0.0f, 1.0f});
+  expect_q_vec3_near(transform_vector(compose_transform(QTransform{
+                                          .rotation = quat_from_euler_radians(
+                                              {0.0f, kHalfPi, 0.0f})}),
+                                      {0.0f, 0.0f, 1.0f}),
+                     {1.0f, 0.0f, 0.0f});
+  expect_q_vec3_near(transform_vector(compose_transform(QTransform{
+                                          .rotation = quat_from_euler_radians(
+                                              {0.0f, 0.0f, kHalfPi})}),
+                                      {1.0f, 0.0f, 0.0f}),
+                     {0.0f, 1.0f, 0.0f});
 }
 
 TEST(MathTypesTests, GlmBridgePreservesColumnMajorMat4Storage) {
-    const QMat4 transform = composeTransform(QTransform{
-            .position = {3.0f, 4.0f, 5.0f},
-            .rotation = quatFromEulerRadians({0.0f, 0.0f, 0.0f}),
-            .scale = {2.0f, 3.0f, 4.0f},
-    });
+  const QMat4 transform = compose_transform(QTransform{
+      .position = {3.0f, 4.0f, 5.0f},
+      .rotation = quat_from_euler_radians({0.0f, 0.0f, 0.0f}),
+      .scale = {2.0f, 3.0f, 4.0f},
+  });
 
-    expectQVec3Near(transformPoint(transform, {1.0f, 1.0f, 1.0f}), {5.0f, 7.0f, 9.0f});
-    expectQVec3Near(transformPoint(inverse(transform), {5.0f, 7.0f, 9.0f}), {1.0f, 1.0f, 1.0f});
+  expect_q_vec3_near(transform_point(transform, {1.0f, 1.0f, 1.0f}),
+                     {5.0f, 7.0f, 9.0f});
+  expect_q_vec3_near(transform_point(inverse(transform), {5.0f, 7.0f, 9.0f}),
+                     {1.0f, 1.0f, 1.0f});
 }

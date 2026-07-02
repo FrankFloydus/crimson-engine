@@ -25,15 +25,15 @@ class SceneDocument;
  */
 class PickingCacheProjection final {
 public:
-    [[nodiscard]] static std::vector<quader_editor_core::PolygonObject> sceneTransformedObjectsForPicking(
-            const std::vector<quader_editor_core::PolygonObject>& objects,
-            const SceneDocument& scene,
-            const ModelingObjectRuntimeMap& objectMap);
-    [[nodiscard]] static quader_editor_core::PickObjectBounds buildObjectPickBounds(
-            const quader_editor_core::PolygonObject& object);
-    [[nodiscard]] static std::uint64_t objectFaceGeometrySignature(
-            const quader_editor_core::PolygonObject& object,
-            quader_poly::PickOptions pickOptions = {});
+  [[nodiscard]] static std::vector<quader_editor_core::PolygonObject>
+  scene_transformed_objects_for_picking(
+      const std::vector<quader_editor_core::PolygonObject> &objects,
+      const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map);
+  [[nodiscard]] static quader_editor_core::PickObjectBounds
+  build_object_pick_bounds(const quader_editor_core::PolygonObject &object);
+  [[nodiscard]] static std::uint64_t object_face_geometry_signature(
+      const quader_editor_core::PolygonObject &object,
+      quader_poly::PickOptions pick_options = {});
 };
 
 } // namespace quader

@@ -69,8 +69,8 @@ struct ViewportLayoutOption {
  * Represents a viewport pane placement.
  */
 struct ViewportPanePlacement {
-    ViewportPaneId paneId = ViewportPaneId::Perspective;
-    ViewportNormalizedRect normalizedRect;
+  ViewportPaneId pane_id = ViewportPaneId::Perspective;
+  ViewportNormalizedRect normalized_rect;
 };
 
 /**
@@ -109,25 +109,26 @@ struct ViewportSplitHandle {
  */
 class ViewportLayoutState {
 public:
-    static constexpr float MinSplit = 0.15f;
-    static constexpr float MaxSplit = 0.85f;
+  static constexpr float kMinSplit = 0.15f;
+  static constexpr float kMaxSplit = 0.85f;
 
-    float twoHorizontalSplit() const { return twoHorizontalSplit_; }
-    float twoVerticalSplit() const { return twoVerticalSplit_; }
-    float threePrimarySplit() const { return threePrimarySplit_; }
-    float threeSecondarySplit() const { return threeSecondarySplit_; }
-    float fourVerticalSplit() const { return fourVerticalSplit_; }
-    float fourHorizontalSplit() const { return fourHorizontalSplit_; }
+  float two_horizontal_split() const { return two_horizontal_split_; }
+  float two_vertical_split() const { return two_vertical_split_; }
+  float three_primary_split() const { return three_primary_split_; }
+  float three_secondary_split() const { return three_secondary_split_; }
+  float four_vertical_split() const { return four_vertical_split_; }
+  float four_horizontal_split() const { return four_horizontal_split_; }
 
-    void setHandlePosition(ViewportSplitHandleId handleId, float normalizedPosition);
+  void set_handle_position(ViewportSplitHandleId handle_id,
+                           float normalized_position);
 
 private:
-    float twoHorizontalSplit_ = 0.5f;
-    float twoVerticalSplit_ = 0.5f;
-    float threePrimarySplit_ = 0.5f;
-    float threeSecondarySplit_ = 0.5f;
-    float fourVerticalSplit_ = 0.5f;
-    float fourHorizontalSplit_ = 0.5f;
+  float two_horizontal_split_ = 0.5f;
+  float two_vertical_split_ = 0.5f;
+  float three_primary_split_ = 0.5f;
+  float three_secondary_split_ = 0.5f;
+  float four_vertical_split_ = 0.5f;
+  float four_horizontal_split_ = 0.5f;
 };
 
 } // namespace quader

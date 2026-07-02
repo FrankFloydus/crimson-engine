@@ -11,20 +11,22 @@
 
 namespace quader {
 
-ModelingCommandAvailability DeleteSelectionTool::customAvailability(
+ModelingCommandAvailability DeleteSelectionTool::custom_availability(
         const ModelingCommandExecutionContext& context) const {
-    const ModelingSelectionSummary summary = context.modeling.selectionSummary();
-    if (!summary.hasSelection) {
-        return ModelingCommandAvailability::unavailable("Command is disabled for the current selection.");
-    }
-    if (sceneAwareDeleteUsesDocumentRoute(summary.mode)) {
-        return ModelingCommandAvailability::unavailable("Delete selection uses the scene-aware command route.");
-    }
+  const ModelingSelectionSummary summary = context.modeling.selection_summary();
+  if (!summary.has_selection) {
+    return ModelingCommandAvailability::unavailable(
+        "Command is disabled for the current selection.");
+  }
+  if (scene_aware_delete_uses_document_route(summary.mode)) {
+    return ModelingCommandAvailability::unavailable(
+        "Delete selection uses the scene-aware command route.");
+  }
     return ModelingCommandAvailability::available();
 }
 
-ModelingCommandResult DeleteSelectionTool::executeCustomCommand(ModelingCommandExecutionContext& context) const {
-    return context.modeling.deleteComponentSelection();
+ModelingCommandResult DeleteSelectionTool::execute_custom_command(ModelingCommandExecutionContext& context) const {
+  return context.modeling.delete_component_selection();
 }
 
 } // namespace quader

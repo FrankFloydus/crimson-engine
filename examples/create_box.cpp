@@ -7,15 +7,16 @@
 #include "api/quader_editor_api.hpp"
 
 int main() {
-    quader::QuaderStandaloneEditor standalone = quader::createStandaloneEditor();
-    quader::QuaderEditorApi& editor = standalone.editor();
+    quader::QuaderStandaloneEditor standalone =
+        quader::create_standalone_editor();
+    quader::QuaderEditorApi &editor = standalone.editor();
 
     quader::QuaderCreateBoxArgs args;
     args.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}};
     args.name = "Example Box";
 
     const quader::QuaderApiResult<quader::QuaderModelingObjectRef> box =
-            editor.modeling().createBox(args);
+        editor.modeling().create_box(args);
     if (!box.ok()) {
         return 1;
     }
@@ -30,6 +31,7 @@ int main() {
         return 1;
     }
 
-    editor.mainViewport().setShadingMode(quader::QuaderShadingMode::Wireframe);
+    editor.main_viewport().set_shading_mode(
+        quader::QuaderShadingMode::Wireframe);
     return 0;
 }

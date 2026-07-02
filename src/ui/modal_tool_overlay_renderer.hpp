@@ -20,22 +20,15 @@ class LocalizationService;
  */
 class ModalToolOverlayRenderer {
 public:
-    void drawBoxPreview(
-            ImDrawList* drawList,
-            const ModelingBoxPreview& preview,
-            const ViewportCameraController& camera,
-            ImVec2 itemMin,
-            ImVec2 itemSize) const;
+  void draw_box_preview(ImDrawList *draw_list,
+                        const ModelingBoxPreview &preview,
+                        const ViewportCameraController &camera, ImVec2 item_min,
+                        ImVec2 item_size) const;
 
-    void drawFlyNavigationOverlay(
-            ImDrawList* drawList,
-            ImVec2 itemMin,
-            ImVec2 itemSize,
-            bool drawCrosshair,
-            bool drawSpeed,
-            bool drawResetHint,
-            float speed,
-            const LocalizationService& localization) const;
+  void draw_fly_navigation_overlay(
+      ImDrawList *draw_list, ImVec2 item_min, ImVec2 item_size,
+      bool draw_crosshair, bool draw_speed, bool draw_reset_hint, float speed,
+      const LocalizationService &localization) const;
 };
 
 } // namespace quader

@@ -34,7 +34,7 @@ public:
 
     CommandResult execute(std::unique_ptr<IUndoableCommand> command);
     CommandResult execute(std::unique_ptr<IUndoableCommand> command, UndoRedoExecuteOptions options);
-    CommandResult recordExecuted(std::unique_ptr<IUndoableCommand> command);
+    CommandResult record_executed(std::unique_ptr<IUndoableCommand> command);
     CommandResult commit();
     CommandResult cancel();
     CommandResult discard();
@@ -48,7 +48,7 @@ private:
      */
     struct TransactionCommand {
         std::unique_ptr<IUndoableCommand> command;
-        std::string mergeKey;
+        std::string merge_key;
     };
 
     EditorHistoryService* history_ = nullptr;
@@ -71,28 +71,28 @@ public:
 
     CommandResult execute(std::unique_ptr<IUndoableCommand> command);
     CommandResult execute(std::unique_ptr<IUndoableCommand> command, UndoRedoExecuteOptions options);
-    CommandResult recordExecuted(std::unique_ptr<IUndoableCommand> command);
+    CommandResult record_executed(std::unique_ptr<IUndoableCommand> command);
     CommandResult undo();
     CommandResult redo();
 
-    [[nodiscard]] bool canUndo() const;
-    [[nodiscard]] bool canRedo() const;
-    [[nodiscard]] const std::string* undoLabel() const;
-    [[nodiscard]] const std::string* redoLabel() const;
+    [[nodiscard]] bool can_undo() const;
+    [[nodiscard]] bool can_redo() const;
+    [[nodiscard]] const std::string *undo_label() const;
+    [[nodiscard]] const std::string *redo_label() const;
 
     void clear();
 
-    [[nodiscard]] EditorTransaction beginTransaction(std::string label);
+    [[nodiscard]] EditorTransaction begin_transaction(std::string label);
 
-private:
+  private:
     friend class EditorTransaction;
 
-    CommandResult commitTransaction(
-            std::string label,
-            std::vector<std::unique_ptr<IUndoableCommand>> commands);
+    CommandResult
+    commit_transaction(std::string label,
+                       std::vector<std::unique_ptr<IUndoableCommand>> commands);
 
-    std::unique_ptr<UndoRedoManager> undoRedo_;
-    EditorTransaction* activeTransaction_ = nullptr;
+    std::unique_ptr<UndoRedoManager> undo_redo_;
+    EditorTransaction *active_transaction_ = nullptr;
 };
 
 } // namespace quader

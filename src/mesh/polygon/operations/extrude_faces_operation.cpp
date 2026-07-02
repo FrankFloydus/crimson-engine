@@ -44,13 +44,13 @@ ExtrudeFacesOperation::ExtrudeFacesOperation(float distance)
 
 OperationResult extrude_selected_faces_impl(Document& document, Selection& selection, float distance)
 {
-    if (selection.mode != SelectionMode::face || selection.faces.empty()) {
-        return { false, "Select one or more faces to extrude." };
-    }
+  if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
+    return {false, "Select one or more faces to extrude."};
+  }
 
-    if (std::abs(distance) <= epsilon) {
-        return { false, "Extrude distance must be non-zero." };
-    }
+  if (std::abs(distance) <= kEpsilon) {
+    return {false, "Extrude distance must be non-zero."};
+  }
 
     const ElementId active_face_id = active_face_or_invalid(selection);
     const std::vector<Face> faces = selected_face_copies(document, selection);
@@ -106,7 +106,7 @@ OperationResult extrude_selected_faces_impl(Document& document, Selection& selec
 
     prune_invalid_faces(document);
     selection.clear();
-    selection.mode = SelectionMode::face;
+    selection.mode = SelectionMode::Face;
     selection.faces = std::move(selected_faces);
     activate_face_or_last_selection(selection, active_face_id);
     return { true, {} };

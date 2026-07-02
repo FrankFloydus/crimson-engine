@@ -25,27 +25,27 @@ class SceneDocument;
  * Describes one scene mesh extracted for render sync.
  */
 struct SceneRenderMeshEntry {
-    EntityId entityId = InvalidEntityId;
-    AssetId meshId = InvalidAssetId;
-    const MeshAsset* mesh = nullptr;
-    const MeshComponent* meshComponent = nullptr;
-    const MaterialComponent* materialComponent = nullptr;
-    AssetId materialId = InvalidAssetId;
-    std::uint64_t materialRevision = 0;
-    QMat4 worldTransform;
+  EntityId entity_id = kInvalidEntityId;
+  AssetId mesh_id = kInvalidAssetId;
+  const MeshAsset *mesh = nullptr;
+  const MeshComponent *mesh_component = nullptr;
+  const MaterialComponent *material_component = nullptr;
+  AssetId material_id = kInvalidAssetId;
+  std::uint64_t material_revision = 0;
+  QMat4 world_transform;
 
-    [[nodiscard]] bool renderable() const;
-    [[nodiscard]] bool castShadows() const;
-    [[nodiscard]] bool doubleSided() const;
+  [[nodiscard]] bool renderable() const;
+  [[nodiscard]] bool cast_shadows() const;
+  [[nodiscard]] bool double_sided() const;
 };
 
 /**
  * Describes one scene light extracted for render sync.
  */
 struct SceneRenderLightEntry {
-    EntityId entityId = InvalidEntityId;
-    const LightComponent* light = nullptr;
-    QMat4 worldTransform;
+  EntityId entity_id = kInvalidEntityId;
+  const LightComponent *light = nullptr;
+  QMat4 world_transform;
 };
 
 /**
@@ -54,13 +54,12 @@ struct SceneRenderLightEntry {
 struct SceneRenderExtractionPlan {
     std::vector<SceneRenderMeshEntry> meshes;
     std::vector<SceneRenderLightEntry> lights;
-    std::unordered_set<EntityId> liveMeshEntities;
-    std::unordered_set<EntityId> liveLightEntities;
+    std::unordered_set<EntityId> live_mesh_entities;
+    std::unordered_set<EntityId> live_light_entities;
 };
 
-[[nodiscard]] SceneRenderExtractionPlan buildSceneRenderExtractionPlan(
-        const SceneDocument& document,
-        const AssetRegistry& assets,
-        const MaterialBindingService& materialBinding);
+[[nodiscard]] SceneRenderExtractionPlan build_scene_render_extraction_plan(
+    const SceneDocument &document, const AssetRegistry &assets,
+    const MaterialBindingService &material_binding);
 
 } // namespace quader

@@ -15,8 +15,8 @@ namespace quader {
  */
 class PolyTool final : public PointSequenceTool {
 public:
-    PolyTool()
-        : PointSequenceTool(viewportToolDescriptor(ViewportToolId::Poly)) {}
+  PolyTool()
+      : PointSequenceTool(viewport_tool_descriptor(ViewportToolId::Poly)) {}
 };
 
 } // namespace quader

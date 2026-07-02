@@ -61,9 +61,9 @@ TEST(QdrDocumentOperationTransformSelectionTests, TransformSelectionAppliesTheSu
 	{
 		qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 		Selection selection;
-		selection.mode = SelectionMode::face;
+                selection.mode = SelectionMode::Face;
 
-		const OperationResult result = transform_selection(fixture.document, selection, {});
+                const OperationResult result = transform_selection(fixture.document, selection, {});
 
 		EXPECT_FALSE(result.changed);
 		EXPECT_TRUE(result.message == "No polygon elements are selected.");

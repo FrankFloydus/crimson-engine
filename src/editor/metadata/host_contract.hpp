@@ -16,9 +16,9 @@ namespace quader_host_contract {
  * Enumerates HostOptionValueKind values used by the editor layer.
  */
 enum class HostOptionValueKind {
-	integer,
-	floating,
-	boolean,
+  Integer,
+  Floating,
+  Boolean,
 };
 
 /**
@@ -27,8 +27,8 @@ enum class HostOptionValueKind {
 struct HostOptionDescriptor {
 	std::string_view id;
 	std::string_view label;
-	HostOptionValueKind value_kind = HostOptionValueKind::integer;
-	int default_integer = 0;
+        HostOptionValueKind value_kind = HostOptionValueKind::Integer;
+        int default_integer = 0;
 	int minimum_integer = 0;
 	int maximum_integer = 0;
 	int integer_step = 1;
@@ -55,56 +55,56 @@ struct HostOperationDescriptor {
  * Enumerates HostSelectionMode values used by the editor layer.
  */
 enum class HostSelectionMode {
-	vertex,
-	edge,
-	face,
-	object,
-	group,
+  Vertex,
+  Edge,
+  Face,
+  Object,
+  Group,
 };
 
 /**
  * Enumerates HostActiveSelectionKind values used by the editor layer.
  */
 enum class HostActiveSelectionKind {
-	none,
-	object,
-	vertex,
-	edge,
-	face,
+  None,
+  Object,
+  Vertex,
+  Edge,
+  Face,
 };
 
 /**
  * Enumerates HostActionKind values used by the editor layer.
  */
 enum class HostActionKind {
-	operation,
-	tool,
+  Operation,
+  Tool,
 };
 
 /**
  * Enumerates HostPreviewKind values used by the editor layer.
  */
 enum class HostPreviewKind {
-	none,
-	bridge,
-	edge_bevel,
-	thicken,
-	slice_quad,
-	merge_by_distance,
+  None,
+  Bridge,
+  EdgeBevel,
+  Thicken,
+  SliceQuad,
+  MergeByDistance,
 };
 
 /**
  * Stores the Host Action Availability Descriptor data contract used by the editor metadata catalog.
  */
 struct HostActionAvailabilityDescriptor {
-	HostSelectionMode selection_mode = HostSelectionMode::object;
-	std::uint32_t minimum_selected_vertices = 0;
-	std::uint32_t minimum_selected_edges = 0;
-	std::uint32_t exact_selected_edges = 0;
-	std::uint32_t minimum_selected_faces = 0;
-	std::uint32_t minimum_selected_objects = 0;
-	HostActiveSelectionKind required_active_kind = HostActiveSelectionKind::none;
-	bool requires_single_object = false;
+  HostSelectionMode selection_mode = HostSelectionMode::Object;
+  std::uint32_t minimum_selected_vertices = 0;
+  std::uint32_t minimum_selected_edges = 0;
+  std::uint32_t exact_selected_edges = 0;
+  std::uint32_t minimum_selected_faces = 0;
+  std::uint32_t minimum_selected_objects = 0;
+  HostActiveSelectionKind required_active_kind = HostActiveSelectionKind::None;
+  bool requires_single_object = false;
 };
 
 /**
@@ -113,11 +113,11 @@ struct HostActionAvailabilityDescriptor {
 struct HostActionDescriptor {
 	std::string_view id;
 	std::string_view label;
-	HostActionKind kind = HostActionKind::operation;
-	std::string_view operation_id;
+        HostActionKind kind = HostActionKind::Operation;
+        std::string_view operation_id;
 	std::string_view tool_id;
-	HostPreviewKind preview_kind = HostPreviewKind::none;
-	bool show_in_operations_panel = true;
+        HostPreviewKind preview_kind = HostPreviewKind::None;
+        bool show_in_operations_panel = true;
 	HostActionAvailabilityDescriptor availability;
 };
 
@@ -127,8 +127,8 @@ struct HostActionDescriptor {
 struct HostOperationPanelDescriptor {
 	std::string_view id;
 	std::string_view label;
-	HostSelectionMode selection_mode = HostSelectionMode::object;
-	std::span<const std::string_view> action_ids;
+        HostSelectionMode selection_mode = HostSelectionMode::Object;
+        std::span<const std::string_view> action_ids;
 	bool fallback_for_unknown_selection = false;
 };
 
@@ -136,9 +136,9 @@ struct HostOperationPanelDescriptor {
  * Enumerates HostUiSurfaceKind values used by the editor layer.
  */
 enum class HostUiSurfaceKind {
-	menu,
-	toolbar,
-	panel,
+  Menu,
+  Toolbar,
+  Panel,
 };
 
 /**
@@ -147,8 +147,8 @@ enum class HostUiSurfaceKind {
 struct HostUiSurfaceDescriptor {
 	std::string_view id;
 	std::string_view label;
-	HostUiSurfaceKind kind = HostUiSurfaceKind::toolbar;
-	bool floating = false;
+        HostUiSurfaceKind kind = HostUiSurfaceKind::Toolbar;
+        bool floating = false;
 	bool selection_contextual = false;
 };
 
@@ -164,26 +164,26 @@ struct HostUiGroupDescriptor {
  * Enumerates HostUiPlacementTargetKind values used by the editor layer.
  */
 enum class HostUiPlacementTargetKind {
-	action,
-	tool,
-	selection_mode,
-	editor_action,
-	viewport_action,
-	panel,
-	preference_group,
+  Action,
+  Tool,
+  SelectionMode,
+  EditorAction,
+  ViewportAction,
+  Panel,
+  PreferenceGroup,
 };
 
 /**
  * Enumerates HostUiVisibilityCondition values used by the editor layer.
  */
 enum class HostUiVisibilityCondition {
-	always,
-	bridge_preview_active,
-	edge_bevel_preview_active,
-	thicken_preview_active,
-	slice_quad_preview_active,
-	merge_by_distance_preview_active,
-	cut_tool_active,
+  Always,
+  BridgePreviewActive,
+  EdgeBevelPreviewActive,
+  ThickenPreviewActive,
+  SliceQuadPreviewActive,
+  MergeByDistancePreviewActive,
+  CutToolActive,
 };
 
 /**
@@ -194,21 +194,23 @@ struct HostUiPlacementDescriptor {
 	std::string_view surface_id;
 	std::string_view group_id;
 	std::string_view label;
-	HostUiPlacementTargetKind target_kind = HostUiPlacementTargetKind::action;
-	std::string_view target_id;
+        HostUiPlacementTargetKind target_kind =
+            HostUiPlacementTargetKind::Action;
+        std::string_view target_id;
 	std::uint32_t order = 0;
 	bool separator_before = false;
-	HostUiVisibilityCondition visibility = HostUiVisibilityCondition::always;
+        HostUiVisibilityCondition visibility =
+            HostUiVisibilityCondition::Always;
 };
 
 /**
  * Enumerates HostInteractionKind values used by the editor layer.
  */
 enum class HostInteractionKind {
-	editor_action,
-	viewport_action,
-	preview_action,
-	input_policy,
+  EditorAction,
+  ViewportAction,
+  PreviewAction,
+  InputPolicy,
 };
 
 /**
@@ -217,7 +219,7 @@ enum class HostInteractionKind {
 struct HostInteractionDescriptor {
 	std::string_view id;
 	std::string_view label;
-	HostInteractionKind kind = HostInteractionKind::editor_action;
+        HostInteractionKind kind = HostInteractionKind::EditorAction;
 };
 
 /**
@@ -253,36 +255,36 @@ struct HostToolDescriptor {
  * Stores the Host Selection Mode Descriptor data contract used by the editor metadata catalog.
  */
 struct HostSelectionModeDescriptor {
-	HostSelectionMode mode = HostSelectionMode::object;
-	std::string_view id;
-	std::string_view label;
+  HostSelectionMode mode = HostSelectionMode::Object;
+  std::string_view id;
+  std::string_view label;
 };
 
 /**
  * Enumerates HostShortcutContext values used by the editor layer.
  */
 enum class HostShortcutContext {
-	global,
-	viewport,
+  Global,
+  Viewport,
 };
 
 /**
  * Enumerates HostShortcutTargetKind values used by the editor layer.
  */
 enum class HostShortcutTargetKind {
-	action,
-	tool,
-	selection_mode,
-	editor_action,
-	viewport_action,
+  Action,
+  Tool,
+  SelectionMode,
+  EditorAction,
+  ViewportAction,
 };
 
 /**
  * Enumerates HostShortcutRegistrationPolicy values used by the editor layer.
  */
 enum class HostShortcutRegistrationPolicy {
-	quader_local,
-	host_global,
+  QuaderLocal,
+  HostGlobal,
 };
 
 /**
@@ -290,43 +292,45 @@ enum class HostShortcutRegistrationPolicy {
  */
 struct HostShortcutDescriptor {
 	std::string_view id;
-	HostShortcutContext context = HostShortcutContext::global;
-	std::string_view key;
+        HostShortcutContext context = HostShortcutContext::Global;
+        std::string_view key;
 	bool primary_modifier = false;
 	bool alt = false;
 	bool shift = false;
-	HostShortcutTargetKind target_kind = HostShortcutTargetKind::editor_action;
-	std::string_view target_id;
+        HostShortcutTargetKind target_kind =
+            HostShortcutTargetKind::EditorAction;
+        std::string_view target_id;
 	bool alternate = false;
-	HostShortcutRegistrationPolicy registration_policy = HostShortcutRegistrationPolicy::quader_local;
+        HostShortcutRegistrationPolicy registration_policy =
+            HostShortcutRegistrationPolicy::QuaderLocal;
 };
 
 /**
  * Enumerates HostPointerInputKind values used by the editor layer.
  */
 enum class HostPointerInputKind {
-	mouse_move,
-	primary_down,
-	primary_drag,
-	primary_up,
-	secondary_down,
-	secondary_drag,
-	secondary_up,
-	middle_down,
-	middle_drag,
-	middle_up,
-	scroll,
+  MouseMove,
+  PrimaryDown,
+  PrimaryDrag,
+  PrimaryUp,
+  SecondaryDown,
+  SecondaryDrag,
+  SecondaryUp,
+  MiddleDown,
+  MiddleDrag,
+  MiddleUp,
+  Scroll,
 };
 
 /**
  * Enumerates HostGestureTargetKind values used by the editor layer.
  */
 enum class HostGestureTargetKind {
-	tool,
-	tool_group,
-	viewport_action,
-	preview_action,
-	input_policy,
+  Tool,
+  ToolGroup,
+  ViewportAction,
+  PreviewAction,
+  InputPolicy,
 };
 
 /**
@@ -335,8 +339,8 @@ enum class HostGestureTargetKind {
 struct HostGestureDescriptor {
 	std::string_view id;
 	std::string_view label;
-	HostGestureTargetKind target_kind = HostGestureTargetKind::input_policy;
-	std::string_view target_id;
+        HostGestureTargetKind target_kind = HostGestureTargetKind::InputPolicy;
+        std::string_view target_id;
 	std::uint32_t priority = 0;
 	std::span<const std::string_view> tool_ids;
 	std::span<const HostPointerInputKind> pointer_inputs;
@@ -439,9 +443,9 @@ struct HostColorDescriptor {
  * Enumerates HostOverlayGeometryKind values used by the editor layer.
  */
 enum class HostOverlayGeometryKind {
-	triangles,
-	lines,
-	points,
+  Triangles,
+  Lines,
+  Points,
 };
 
 /**
@@ -449,8 +453,8 @@ enum class HostOverlayGeometryKind {
  */
 struct HostOverlayRenderPolicyDescriptor {
 	std::string_view id;
-	HostOverlayGeometryKind geometry_kind = HostOverlayGeometryKind::lines;
-	double depth_bias = 0.0;
+        HostOverlayGeometryKind geometry_kind = HostOverlayGeometryKind::Lines;
+        double depth_bias = 0.0;
 	double feather_pixels = 0.0;
 	bool draws_on_top = false;
 };
@@ -473,21 +477,21 @@ struct HostOverlayPresentationDescriptor {
  * Enumerates HostPreferenceValueKind values used by the editor layer.
  */
 enum class HostPreferenceValueKind {
-	integer,
-	floating,
-	boolean,
-	color_rgba,
-	choice,
+  Integer,
+  Floating,
+  Boolean,
+  ColorRgba,
+  Choice,
 };
 
 /**
  * Enumerates HostPreferenceScope values used by the editor layer.
  */
 enum class HostPreferenceScope {
-	operation,
-	viewport_style,
-	viewport_picking,
-	viewport_interaction,
+  Operation,
+  ViewportStyle,
+  ViewportPicking,
+  ViewportInteraction,
 };
 
 /**
@@ -506,9 +510,9 @@ struct HostPreferenceChoiceDescriptor {
 struct HostPreferenceDescriptor {
 	std::string_view id;
 	std::string_view label;
-	HostPreferenceScope scope = HostPreferenceScope::viewport_style;
-	HostPreferenceValueKind value_kind = HostPreferenceValueKind::floating;
-	double default_number = 0.0;
+        HostPreferenceScope scope = HostPreferenceScope::ViewportStyle;
+        HostPreferenceValueKind value_kind = HostPreferenceValueKind::Floating;
+        double default_number = 0.0;
 	double minimum_number = 0.0;
 	double maximum_number = 0.0;
 	double number_step = 0.0;
@@ -533,41 +537,41 @@ struct HostPreferenceDescriptor {
 struct HostPreferenceGroupDescriptor {
 	std::string_view id;
 	std::string_view label;
-	HostPreferenceScope scope = HostPreferenceScope::viewport_style;
-	std::span<const std::string_view> preference_ids;
+        HostPreferenceScope scope = HostPreferenceScope::ViewportStyle;
+        std::span<const std::string_view> preference_ids;
 };
 
 /**
  * Enumerates HostMaterialTextureRole values used by the editor layer.
  */
 enum class HostMaterialTextureRole {
-	base_color,
-	roughness,
-	metallic_smoothness,
-	mask,
+  BaseColor,
+  Roughness,
+  MetallicSmoothness,
+  Mask,
 };
 
 /**
  * Enumerates HostMaterialTextureChannel values used by the editor layer.
  */
 enum class HostMaterialTextureChannel {
-	red,
-	green,
-	blue,
-	alpha,
+  Red,
+  Green,
+  Blue,
+  Alpha,
 };
 
 /**
  * Enumerates HostMaterialScalarKind values used by the editor layer.
  */
 enum class HostMaterialScalarKind {
-	metallic,
-	smoothness,
-	smoothness_texture_channel,
-	smoothness_remap_min,
-	smoothness_remap_max,
-	ambient_occlusion_remap_min,
-	ambient_occlusion_remap_max,
+  Metallic,
+  Smoothness,
+  SmoothnessTextureChannel,
+  SmoothnessRemapMin,
+  SmoothnessRemapMax,
+  AmbientOcclusionRemapMin,
+  AmbientOcclusionRemapMax,
 };
 
 /**
@@ -584,8 +588,8 @@ struct HostVector2Descriptor {
 struct HostMaterialTextureAssetDescriptor {
 	std::string_view id;
 	std::string_view label;
-	HostMaterialTextureRole role = HostMaterialTextureRole::base_color;
-	std::string_view package_relative_path;
+        HostMaterialTextureRole role = HostMaterialTextureRole::BaseColor;
+        std::string_view package_relative_path;
 };
 
 /**
@@ -594,11 +598,13 @@ struct HostMaterialTextureAssetDescriptor {
 struct HostMaterialGeneratedTextureDescriptor {
 	std::string_view id;
 	std::string_view label;
-	HostMaterialTextureRole role = HostMaterialTextureRole::metallic_smoothness;
-	std::string_view source_texture_asset_id;
+        HostMaterialTextureRole role =
+            HostMaterialTextureRole::MetallicSmoothness;
+        std::string_view source_texture_asset_id;
 	bool invert_source_grayscale = false;
-	HostMaterialTextureChannel target_channel = HostMaterialTextureChannel::alpha;
-	double constant_red = 0.0;
+        HostMaterialTextureChannel target_channel =
+            HostMaterialTextureChannel::Alpha;
+        double constant_red = 0.0;
 	double constant_green = 0.0;
 	double constant_blue = 0.0;
 	double constant_alpha = 1.0;
@@ -608,8 +614,8 @@ struct HostMaterialGeneratedTextureDescriptor {
  * Stores the Host Material Scalar Descriptor data contract used by the editor metadata catalog.
  */
 struct HostMaterialScalarDescriptor {
-	HostMaterialScalarKind kind = HostMaterialScalarKind::metallic;
-	double value = 0.0;
+  HostMaterialScalarKind kind = HostMaterialScalarKind::Metallic;
+  double value = 0.0;
 };
 
 /**

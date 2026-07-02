@@ -23,10 +23,11 @@ public:
     [[nodiscard]] virtual const std::string& label() const = 0;
     virtual CommandResult undo() = 0;
     virtual CommandResult redo() = 0;
-    virtual bool mergeWith(const IUndoableCommand& newerCommand, std::string_view mergeKey) {
-        (void)newerCommand;
-        (void)mergeKey;
-        return false;
+    virtual bool merge_with(const IUndoableCommand &newer_command,
+                            std::string_view merge_key) {
+      (void)newer_command;
+      (void)merge_key;
+      return false;
     }
 };
 

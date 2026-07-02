@@ -15,8 +15,7 @@ namespace quader {
  */
 class CutTool final : public DrawnPlaneTool {
 public:
-    CutTool()
-        : DrawnPlaneTool(viewportToolDescriptor(ViewportToolId::Cut)) {}
+  CutTool() : DrawnPlaneTool(viewport_tool_descriptor(ViewportToolId::Cut)) {}
 };
 
 } // namespace quader

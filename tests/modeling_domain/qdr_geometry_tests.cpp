@@ -54,9 +54,11 @@ void ray_plane_and_projection_are_stable()
 	require_test(vec3_nearly_equal(hit.point, { 8.0, 2.0, 24.0 }), "ray-plane hit point should lie on the plane");
 	require_test(vec3_nearly_equal(quader_geometry::project_point_to_plane({ 3.0, 9.0, -2.0 }, plane), { 3.0, 2.0, -2.0 }),
 		"projecting a point to a plane should remove the normal offset");
-	require_test(quader_geometry::plane_side({ 3.0, 2.0, -2.0 }, plane) == quader_geometry::QPlaneSide::on,
-		"plane side helper should classify points within tolerance as on-plane");
-	require_test(quader_geometry::planes_nearly_equal(plane, { { 0.0, 2.0, 0.0 }, 4.0 }),
+        require_test(quader_geometry::plane_side({3.0, 2.0, -2.0}, plane) ==
+                         quader_geometry::QPlaneSide::On,
+                     "plane side helper should classify points within "
+                     "tolerance as on-plane");
+        require_test(quader_geometry::planes_nearly_equal(plane, { { 0.0, 2.0, 0.0 }, 4.0 }),
 		"plane equality helper should normalize plane coefficients before comparing");
 }
 
@@ -116,41 +118,59 @@ void line_and_segment_plane_queries_are_classified()
 	const quader_geometry::QLinePlaneHit<double> line_hit = quader_geometry::intersect_line_plane<double>(
 		{ { 5.0, 8.0, -3.0 }, { 0.0, -2.0, 0.0 } },
 		plane);
-	require_test(line_hit.type == quader_geometry::QPlaneIntersectionType::point, "line-plane query should report point intersections");
-	require_test(nearly_equal(line_hit.parameter, 3.0), "line-plane parameter should be measured along the line direction");
+        require_test(line_hit.type ==
+                         quader_geometry::QPlaneIntersectionType::Point,
+                     "line-plane query should report point intersections");
+        require_test(nearly_equal(line_hit.parameter, 3.0), "line-plane parameter should be measured along the line direction");
 	require_test(vec3_nearly_equal(line_hit.point, { 5.0, 2.0, -3.0 }), "line-plane query should reconstruct the hit point");
 
 	const quader_geometry::QLinePlaneHit<double> line_behind = quader_geometry::intersect_line_plane<double>(
 		{ { 5.0, 8.0, -3.0 }, { 0.0, 2.0, 0.0 } },
 		plane);
-	require_test(line_behind.type == quader_geometry::QPlaneIntersectionType::point && nearly_equal(line_behind.parameter, -3.0),
-		"line-plane query should keep negative parameters for true lines");
+        require_test(
+            line_behind.type ==
+                    quader_geometry::QPlaneIntersectionType::Point &&
+                nearly_equal(line_behind.parameter, -3.0),
+            "line-plane query should keep negative parameters for true lines");
 
-	const quader_geometry::QLinePlaneHit<double> coplanar_line = quader_geometry::intersect_line_plane<double>(
+        const quader_geometry::QLinePlaneHit<double> coplanar_line = quader_geometry::intersect_line_plane<double>(
 		{ { 0.0, 2.0, 0.0 }, { 1.0, 0.0, 0.0 } },
 		plane);
-	require_test(coplanar_line.type == quader_geometry::QPlaneIntersectionType::coplanar,
-		"line-plane query should distinguish coplanar lines from misses");
-	require_test(quader_geometry::intersect_line_plane<double>({ { 0.0, 5.0, 0.0 }, { 1.0, 0.0, 0.0 } }, plane).type ==
-			quader_geometry::QPlaneIntersectionType::none,
-		"line-plane query should reject parallel offset lines");
+        require_test(
+            coplanar_line.type ==
+                quader_geometry::QPlaneIntersectionType::Coplanar,
+            "line-plane query should distinguish coplanar lines from misses");
+        require_test(quader_geometry::intersect_line_plane<double>(
+                         {{0.0, 5.0, 0.0}, {1.0, 0.0, 0.0}}, plane)
+                             .type ==
+                         quader_geometry::QPlaneIntersectionType::None,
+                     "line-plane query should reject parallel offset lines");
 
-	const quader_geometry::QSegmentPlaneHit<double> segment_hit = quader_geometry::intersect_segment_plane<double>(
+        const quader_geometry::QSegmentPlaneHit<double> segment_hit = quader_geometry::intersect_segment_plane<double>(
 		{ { 0.0, 5.0, 0.0 }, { 0.0, -1.0, 0.0 } },
 		plane);
-	require_test(segment_hit.type == quader_geometry::QPlaneIntersectionType::point, "segment-plane query should report crossings");
-	require_test(nearly_equal(segment_hit.segment_factor, 0.5), "segment-plane query should report the crossing factor");
+        require_test(segment_hit.type ==
+                         quader_geometry::QPlaneIntersectionType::Point,
+                     "segment-plane query should report crossings");
+        require_test(nearly_equal(segment_hit.segment_factor, 0.5), "segment-plane query should report the crossing factor");
 	require_test(vec3_nearly_equal(segment_hit.point, { 0.0, 2.0, 0.0 }), "segment-plane query should reconstruct the crossing point");
 
-	require_test(quader_geometry::intersect_segment_plane<double>({ { 0.0, 2.0, 0.0 }, { 4.0, 2.0, 0.0 } }, plane).type ==
-			quader_geometry::QPlaneIntersectionType::coplanar,
-		"segment-plane query should distinguish coplanar segments");
-	require_test(quader_geometry::intersect_segment_plane<double>({ { 0.0, 4.0, 0.0 }, { 4.0, 4.0, 0.0 } }, plane).type ==
-			quader_geometry::QPlaneIntersectionType::none,
-		"segment-plane query should reject parallel offset segments");
-	require_test(quader_geometry::intersect_segment_plane<double>({ { 0.0, 2.0, 0.0 }, { 0.0, 2.0, 0.0 } }, plane).type ==
-			quader_geometry::QPlaneIntersectionType::point,
-		"segment-plane query should classify a degenerate on-plane segment as a point");
+        require_test(
+            quader_geometry::intersect_segment_plane<double>(
+                {{0.0, 2.0, 0.0}, {4.0, 2.0, 0.0}}, plane)
+                    .type == quader_geometry::QPlaneIntersectionType::Coplanar,
+            "segment-plane query should distinguish coplanar segments");
+        require_test(
+            quader_geometry::intersect_segment_plane<double>(
+                {{0.0, 4.0, 0.0}, {4.0, 4.0, 0.0}}, plane)
+                    .type == quader_geometry::QPlaneIntersectionType::None,
+            "segment-plane query should reject parallel offset segments");
+        require_test(quader_geometry::intersect_segment_plane<double>(
+                         {{0.0, 2.0, 0.0}, {0.0, 2.0, 0.0}}, plane)
+                             .type ==
+                         quader_geometry::QPlaneIntersectionType::Point,
+                     "segment-plane query should classify a degenerate "
+                     "on-plane segment as a point");
 }
 
 void ray_triangle_and_aabb_are_stable()
@@ -285,8 +305,10 @@ void aabb_spatial_helpers_are_stable()
 		quader_geometry::aabb_from_points<double>(std::span<const quader_geometry::QVec3d>(points));
 	require_test(vec3_nearly_equal(bounds.min, { -4.0, -1.0, -2.0 }), "AABB from points should preserve component minima");
 	require_test(vec3_nearly_equal(bounds.max, { 8.0, 9.0, 5.0 }), "AABB from points should preserve component maxima");
-	require_test(quader_geometry::aabb_longest_axis(bounds) == quader_geometry::QAxis::x, "AABB longest axis should choose the widest extent");
-	require_test(vec3_nearly_equal(quader_geometry::aabb_closest_point(bounds, { 20.0, 4.0, -4.0 }), { 8.0, 4.0, -2.0 }),
+        require_test(quader_geometry::aabb_longest_axis(bounds) ==
+                         quader_geometry::QAxis::X,
+                     "AABB longest axis should choose the widest extent");
+        require_test(vec3_nearly_equal(quader_geometry::aabb_closest_point(bounds, { 20.0, 4.0, -4.0 }), { 8.0, 4.0, -2.0 }),
 		"AABB closest point should clamp each component");
 	require_test(nearly_equal(quader_geometry::aabb_distance_squared_to_point(bounds, { 20.0, 4.0, -4.0 }), 148.0),
 		"AABB distance should measure squared distance to the clamped point");
@@ -505,8 +527,10 @@ void float_ray_plane_query_promotes_to_double()
 void projection_and_area_are_stable()
 {
 	const quader_geometry::QAxis axis = quader_geometry::dominant_axis(quader_geometry::QVec3d { 0.1, 0.2, 0.9 });
-	require_test(axis == quader_geometry::QAxis::z, "dominant axis should choose the largest normal component");
-	require_test(quader_geometry::project_dominant_axis(quader_geometry::QVec3d { 2.0, 3.0, 4.0 }, axis).x == 2.0,
+        require_test(
+            axis == quader_geometry::QAxis::Z,
+            "dominant axis should choose the largest normal component");
+        require_test(quader_geometry::project_dominant_axis(quader_geometry::QVec3d { 2.0, 3.0, 4.0 }, axis).x == 2.0,
 		"dominant-axis projection should drop the requested axis");
 
 	const std::vector<quader_geometry::QVec2d> square {
@@ -527,20 +551,25 @@ void dominant_axis_unprojection_is_stable()
 	const quader_geometry::QPlane3<double> plane { { 2.0, 3.0, 5.0 }, 31.0 };
 	const quader_geometry::QVec3d expected { 1.0, 3.0, 4.0 };
 
-	const quader_geometry::QDominantAxisUnprojectResult<double> dropped_x =
-		quader_geometry::unproject_dominant_axis_point_to_plane<double>({ expected.y, expected.z }, plane, quader_geometry::QAxis::x);
-	const quader_geometry::QDominantAxisUnprojectResult<double> dropped_y =
-		quader_geometry::unproject_dominant_axis_point_to_plane<double>({ expected.x, expected.z }, plane, quader_geometry::QAxis::y);
-	const quader_geometry::QDominantAxisUnprojectResult<double> dropped_z =
-		quader_geometry::unproject_dominant_axis_point_to_plane<double>({ expected.x, expected.y }, plane, quader_geometry::QAxis::z);
+        const quader_geometry::QDominantAxisUnprojectResult<double> dropped_x =
+            quader_geometry::unproject_dominant_axis_point_to_plane<double>(
+                {expected.y, expected.z}, plane, quader_geometry::QAxis::X);
+        const quader_geometry::QDominantAxisUnprojectResult<double> dropped_y =
+            quader_geometry::unproject_dominant_axis_point_to_plane<double>(
+                {expected.x, expected.z}, plane, quader_geometry::QAxis::Y);
+        const quader_geometry::QDominantAxisUnprojectResult<double> dropped_z =
+            quader_geometry::unproject_dominant_axis_point_to_plane<double>(
+                {expected.x, expected.y}, plane, quader_geometry::QAxis::Z);
 
-	require_test(dropped_x.valid && vec3_nearly_equal(dropped_x.point, expected), "unprojection should restore the dropped x coordinate");
+        require_test(dropped_x.valid && vec3_nearly_equal(dropped_x.point, expected), "unprojection should restore the dropped x coordinate");
 	require_test(dropped_y.valid && vec3_nearly_equal(dropped_y.point, expected), "unprojection should restore the dropped y coordinate");
 	require_test(dropped_z.valid && vec3_nearly_equal(dropped_z.point, expected), "unprojection should restore the dropped z coordinate");
-	require_test(!quader_geometry::unproject_dominant_axis_point_to_plane<double>({ 0.0, 0.0 }, { { 0.0, 1.0, 0.0 }, 0.0 },
-					 quader_geometry::QAxis::x)
-					 .valid,
-		"unprojection should reject a dropped axis with no plane coefficient");
+        require_test(
+            !quader_geometry::unproject_dominant_axis_point_to_plane<double>(
+                 {0.0, 0.0}, {{0.0, 1.0, 0.0}, 0.0}, quader_geometry::QAxis::X)
+                 .valid,
+            "unprojection should reject a dropped axis with no plane "
+            "coefficient");
 }
 
 void polygon_predicates_are_stable()
@@ -594,18 +623,25 @@ void classified_segment_intersections_are_stable()
 {
 	const quader_geometry::QClassifiedSegmentIntersection2<double> crossing = quader_geometry::intersect_segments_2d(
 		{ 0.0, 0.0 }, { 2.0, 2.0 }, { 0.0, 2.0 }, { 2.0, 0.0 });
-	require_test(crossing.hit && crossing.kind == quader_geometry::QSegmentIntersectionKind2::point,
-		"classified segment intersection should report ordinary crossings as points");
-	require_test(crossing.point_count == 1, "classified point intersections should report one point");
+        require_test(crossing.hit &&
+                         crossing.kind ==
+                             quader_geometry::QSegmentIntersectionKind2::Point,
+                     "classified segment intersection should report ordinary "
+                     "crossings as points");
+        require_test(crossing.point_count == 1, "classified point intersections should report one point");
 	require_test(nearly_equal(crossing.first_factors[0], 0.5) && nearly_equal(crossing.second_factors[0], 0.5),
 		"classified point intersections should preserve both factors");
 	require_test(vec2_nearly_equal(crossing.points[0], { 1.0, 1.0 }), "classified point intersections should preserve the crossing point");
 
 	const quader_geometry::QClassifiedSegmentIntersection2<double> overlap = quader_geometry::intersect_segments_2d(
 		{ 0.0, 0.0 }, { 4.0, 0.0 }, { 1.0, 0.0 }, { 3.0, 0.0 });
-	require_test(overlap.hit && overlap.kind == quader_geometry::QSegmentIntersectionKind2::overlap,
-		"classified segment intersection should distinguish overlaps from point hits");
-	require_test(overlap.point_count == 2, "classified overlaps should report two endpoints");
+        require_test(
+            overlap.hit &&
+                overlap.kind ==
+                    quader_geometry::QSegmentIntersectionKind2::Overlap,
+            "classified segment intersection should distinguish overlaps from "
+            "point hits");
+        require_test(overlap.point_count == 2, "classified overlaps should report two endpoints");
 	require_test(nearly_equal(overlap.first_factors[0], 0.25) && nearly_equal(overlap.first_factors[1], 0.75),
 		"classified overlaps should preserve first-segment factors");
 	require_test(nearly_equal(overlap.second_factors[0], 0.0) && nearly_equal(overlap.second_factors[1], 1.0),
@@ -615,22 +651,31 @@ void classified_segment_intersections_are_stable()
 
 	const quader_geometry::QClassifiedSegmentIntersection2<double> degenerate_endpoint = quader_geometry::intersect_segments_2d(
 		{ 2.0, 0.0 }, { 2.0, 0.0 }, { 0.0, 0.0 }, { 4.0, 0.0 });
-	require_test(degenerate_endpoint.hit && degenerate_endpoint.kind == quader_geometry::QSegmentIntersectionKind2::point,
-		"classified segment intersection should handle degenerate endpoint segments");
-	require_test(nearly_equal(degenerate_endpoint.first_factors[0], 0.0) && nearly_equal(degenerate_endpoint.second_factors[0], 0.5),
+        require_test(degenerate_endpoint.hit &&
+                         degenerate_endpoint.kind ==
+                             quader_geometry::QSegmentIntersectionKind2::Point,
+                     "classified segment intersection should handle degenerate "
+                     "endpoint segments");
+        require_test(nearly_equal(degenerate_endpoint.first_factors[0], 0.0) && nearly_equal(degenerate_endpoint.second_factors[0], 0.5),
 		"classified degenerate endpoint intersections should preserve factors");
 	require_test(vec2_nearly_equal(degenerate_endpoint.points[0], { 2.0, 0.0 }),
 		"classified degenerate endpoint intersections should preserve the shared point");
 
 	const quader_geometry::QClassifiedSegmentIntersection2<double> near_parallel_miss = quader_geometry::intersect_segments_2d(
 		{ 0.0, 0.0 }, { 10.0, 0.0000001 }, { 0.0, 1.0 }, { 10.0, 1.0000001 }, 0.000000001);
-	require_test(!near_parallel_miss.hit && near_parallel_miss.kind == quader_geometry::QSegmentIntersectionKind2::none,
-		"classified segment intersection should reject near-parallel separated segments");
+        require_test(!near_parallel_miss.hit &&
+                         near_parallel_miss.kind ==
+                             quader_geometry::QSegmentIntersectionKind2::None,
+                     "classified segment intersection should reject "
+                     "near-parallel separated segments");
 
-	const quader_geometry::QClassifiedSegmentIntersection2<float> float_crossing = quader_geometry::intersect_segments_2d<float>(
+        const quader_geometry::QClassifiedSegmentIntersection2<float> float_crossing = quader_geometry::intersect_segments_2d<float>(
 		{ 0.0F, 0.0F }, { 2.0F, 0.0F }, { 1.0F, -1.0F }, { 1.0F, 1.0F });
-	require_test(float_crossing.hit && float_crossing.kind == quader_geometry::QSegmentIntersectionKind2::point,
-		"float classified segment intersection should use the template fallback");
+        require_test(float_crossing.hit &&
+                         float_crossing.kind ==
+                             quader_geometry::QSegmentIntersectionKind2::Point,
+                     "float classified segment intersection should use the "
+                     "template fallback");
 }
 
 void line_line_closest_points_are_stable()

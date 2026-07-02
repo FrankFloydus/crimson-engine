@@ -23,21 +23,19 @@ class SceneDocument;
  */
 class SelectionOverlayProjection final {
 public:
-    [[nodiscard]] static ViewportOverlayFrame projectSelectionOverlayFrame(
-            const quader_editor_core::SelectionOverlayFrame& frame,
-            const ModelingObjectRuntimeMap& objectRegistry,
-            const SceneDocument& scene);
-    static void appendProjectedOverlayLines(
-            ViewportOverlayFrame& frame,
-            const std::vector<quader_editor_core::SelectionOverlayLine>& lines,
-            const ModelingObjectRuntimeMap& objectRegistry,
-            const SceneDocument& scene,
-            ViewportOverlayLayer layer,
-            ViewportOverlayStyleRole styleRole,
-            ViewportOverlaySource source);
-    static void appendWorldSpaceOverlayPoints(
-            ViewportOverlayFrame& frame,
-            const std::vector<quader_editor_core::SelectionOverlayPoint>& points);
+  [[nodiscard]] static ViewportOverlayFrame project_selection_overlay_frame(
+      const quader_editor_core::SelectionOverlayFrame &frame,
+      const ModelingObjectRuntimeMap &object_registry,
+      const SceneDocument &scene);
+  static void append_projected_overlay_lines(
+      ViewportOverlayFrame &frame,
+      const std::vector<quader_editor_core::SelectionOverlayLine> &lines,
+      const ModelingObjectRuntimeMap &object_registry,
+      const SceneDocument &scene, ViewportOverlayLayer layer,
+      ViewportOverlayStyleRole style_role, ViewportOverlaySource source);
+  static void append_world_space_overlay_points(
+      ViewportOverlayFrame &frame,
+      const std::vector<quader_editor_core::SelectionOverlayPoint> &points);
 };
 
 } // namespace quader

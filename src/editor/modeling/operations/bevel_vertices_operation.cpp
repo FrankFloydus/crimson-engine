@@ -36,8 +36,8 @@ BevelVerticesOperationSettings bevel_vertices_settings_from_variant(const Editor
 
 const BevelVerticesOperation& concrete_bevel_vertices_operation()
 {
-	static const BevelVerticesOperation operation;
-	return operation;
+  static const BevelVerticesOperation kOperation;
+  return kOperation;
 }
 
 } // namespace
@@ -49,7 +49,7 @@ const EditorOperation& bevel_vertices_operation()
 
 EditorOperationId BevelVerticesOperation::operation_id() const
 {
-	return EditorOperationId::bevel_vertices;
+  return EditorOperationId::BevelVertices;
 }
 
 std::string_view BevelVerticesOperation::id() const

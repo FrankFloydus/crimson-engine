@@ -33,17 +33,19 @@ struct EditorCommandRegistration {
  */
 class EditorCommandRegistry final {
 public:
-    void registerCommand(EditorCommandRegistration command);
+  void register_command(EditorCommandRegistration command);
 
-    [[nodiscard]] bool contains(std::string_view commandId) const;
-    [[nodiscard]] std::optional<QuaderApiVoidResult> execute(std::string_view commandId) const;
-    [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
-    [[nodiscard]] std::string shortcutFor(std::string_view commandId) const;
+  [[nodiscard]] bool contains(std::string_view command_id) const;
+  [[nodiscard]] std::optional<QuaderApiVoidResult>
+  execute(std::string_view command_id) const;
+  [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
+  [[nodiscard]] std::string shortcut_for(std::string_view command_id) const;
 
 private:
-    [[nodiscard]] const EditorCommandRegistration* find(std::string_view commandId) const;
+  [[nodiscard]] const EditorCommandRegistration *
+  find(std::string_view command_id) const;
 
-    std::vector<EditorCommandRegistration> commands_;
+  std::vector<EditorCommandRegistration> commands_;
 };
 
 } // namespace quader

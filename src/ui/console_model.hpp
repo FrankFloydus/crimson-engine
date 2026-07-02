@@ -19,8 +19,8 @@ namespace quader {
  * Represents a Console Filter value used by the ImGui editor presentation layer.
  */
 struct ConsoleFilter {
-    spdlog::level::level_enum minimumLevel = spdlog::level::trace;
-    std::string searchText;
+  spdlog::level::level_enum minimum_level = spdlog::level::trace;
+  std::string search_text;
 };
 
 /**

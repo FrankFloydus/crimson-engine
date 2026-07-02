@@ -50,11 +50,11 @@ enum class EditorSelectionEdit {
  */
 struct EditorSelectionTarget {
     EditorSelectionTargetKind kind = EditorSelectionTargetKind::None;
-    EntityId entity = InvalidEntityId;
-    int modelingObjectId = InvalidModelingObjectId;
+    EntityId entity = kInvalidEntityId;
+    int modeling_object_id = kInvalidModelingObjectId;
     int vertex = -1;
-    int edgeA = -1;
-    int edgeB = -1;
+    int edge_a = -1;
+    int edge_b = -1;
     int face = -1;
 };
 
@@ -65,8 +65,8 @@ struct EditorSelectionState {
     ModelingSelectionMode mode = ModelingSelectionMode::Object;
     ModelingSelectionSummary summary;
     EditorSelectionTarget target;
-    std::vector<EntityId> sceneSelection;
-    EntityId activeEntity = InvalidEntityId;
+    std::vector<EntityId> scene_selection;
+    EntityId active_entity = kInvalidEntityId;
 };
 
 /**
@@ -74,9 +74,9 @@ struct EditorSelectionState {
  */
 struct EditorSelectionBoxBaseline {
     ModelingSelectionMode mode = ModelingSelectionMode::Object;
-    std::vector<EntityId> sceneSelection;
-    EntityId activeEntity = InvalidEntityId;
-    std::optional<ModelingSelectionBoxBaseline> modelingSelection;
+    std::vector<EntityId> scene_selection;
+    EntityId active_entity = kInvalidEntityId;
+    std::optional<ModelingSelectionBoxBaseline> modeling_selection;
 };
 
 /**
@@ -84,58 +84,67 @@ struct EditorSelectionBoxBaseline {
  */
 class EditorSelectionService final {
 public:
-    EditorSelectionService(
-            SceneDocument& scene,
-            DocumentCommandService& documentCommands,
-            ModelingSessionService& modeling);
+  EditorSelectionService(SceneDocument &scene,
+                         DocumentCommandService &document_commands,
+                         ModelingSessionService &modeling);
 
-    [[nodiscard]] EditorSelectionState state() const;
-    [[nodiscard]] EditorSelectionTarget target() const;
-    [[nodiscard]] ModelingSelectionSummary summary() const;
-    [[nodiscard]] ModelingHoverSummary hoverSummary() const;
-    [[nodiscard]] ModelingSelectionMode mode() const;
+  [[nodiscard]] EditorSelectionState state() const;
+  [[nodiscard]] EditorSelectionTarget target() const;
+  [[nodiscard]] ModelingSelectionSummary summary() const;
+  [[nodiscard]] ModelingHoverSummary hover_summary() const;
+  [[nodiscard]] ModelingSelectionMode mode() const;
 
-    DocumentCommandResult setSceneSelection(std::span<const EntityId> entities, EntityId active = InvalidEntityId);
-    DocumentCommandResult editSceneSelection(EntityId entity, EditorSelectionEdit edit);
-    DocumentCommandResult editSceneSelection(std::span<const EntityId> entities, EditorSelectionEdit edit);
-    ModelingCommandResult setObjectSelection(std::span<const EntityId> entities, EntityId active = InvalidEntityId);
-    ModelingCommandResult setComponentSelection(const ModelingComponentSelectionRequest& request);
-    ModelingCommandResult setMode(ModelingSelectionMode mode);
-    ModelingCommandResult selectAll();
-    ModelingCommandResult invert();
-    ModelingCommandResult clear();
+  DocumentCommandResult set_scene_selection(std::span<const EntityId> entities,
+                                            EntityId active = kInvalidEntityId);
+  DocumentCommandResult edit_scene_selection(EntityId entity,
+                                             EditorSelectionEdit edit);
+  DocumentCommandResult edit_scene_selection(std::span<const EntityId> entities,
+                                             EditorSelectionEdit edit);
+  ModelingCommandResult
+  set_object_selection(std::span<const EntityId> entities,
+                       EntityId active = kInvalidEntityId);
+  ModelingCommandResult
+  set_component_selection(const ModelingComponentSelectionRequest &request);
+  ModelingCommandResult set_mode(ModelingSelectionMode mode);
+  ModelingCommandResult select_all();
+  ModelingCommandResult invert();
+  ModelingCommandResult clear();
 
-    [[nodiscard]] EditorSelectionBoxBaseline captureBoxSelectionBaseline() const;
-    [[nodiscard]] ModelingSelectionSummary pickSelect(const ModelingPickSelectRequest& request);
-    [[nodiscard]] ModelingSelectionSummary boxSelect(const ModelingBoxSelectRequest& request);
-    [[nodiscard]] ModelingSelectionSummary boxSelect(
-            const ModelingBoxSelectRequest& request,
-            const EditorSelectionBoxBaseline& baseline);
-    ModelingCommandResult updateHover(const ModelingHoverRequest& request);
-    ModelingCommandResult setHover(const ModelingDirectHoverRequest& request);
-    [[nodiscard]] ModelingHoverSummary previewHover(const ModelingHoverRequest& request) const;
-    ModelingCommandResult clearHover();
+  [[nodiscard]] EditorSelectionBoxBaseline
+  capture_box_selection_baseline() const;
+  [[nodiscard]] ModelingSelectionSummary
+  pick_select(const ModelingPickSelectRequest &request);
+  [[nodiscard]] ModelingSelectionSummary
+  box_select(const ModelingBoxSelectRequest &request);
+  [[nodiscard]] ModelingSelectionSummary
+  box_select(const ModelingBoxSelectRequest &request,
+             const EditorSelectionBoxBaseline &baseline);
+  ModelingCommandResult update_hover(const ModelingHoverRequest &request);
+  ModelingCommandResult set_hover(const ModelingDirectHoverRequest &request);
+  [[nodiscard]] ModelingHoverSummary
+  preview_hover(const ModelingHoverRequest &request) const;
+  ModelingCommandResult clear_hover();
 
 private:
-    [[nodiscard]] EditorSelectionTarget targetFromSummary(const ModelingSelectionSummary& summary) const;
-    [[nodiscard]] ModelingSelectionSummary boxSelect(
-            const ModelingBoxSelectRequest& request,
-            const EditorSelectionBoxBaseline* baseline);
-    [[nodiscard]] ModelingSelectionSummary scenePickSelection(
-            EntityId targetEntity,
-            ModelingSelectionMode mode,
-            const ModelingPickSelectRequest& request);
-    [[nodiscard]] ModelingSelectionSummary sceneBoxSelection(
-            std::span<const EntityId> targetEntities,
-            ModelingSelectionMode mode,
-            ModelingSelectionEdit edit,
-            const EditorSelectionBoxBaseline* baseline = nullptr);
-    [[nodiscard]] EntityId nearestGroupAncestor(EntityId entity) const;
-    [[nodiscard]] ModelingSelectionSummary sceneSummaryFor(ModelingSelectionMode mode) const;
+  [[nodiscard]] EditorSelectionTarget
+  target_from_summary(const ModelingSelectionSummary &summary) const;
+  [[nodiscard]] ModelingSelectionSummary
+  box_select(const ModelingBoxSelectRequest &request,
+             const EditorSelectionBoxBaseline *baseline);
+  [[nodiscard]] ModelingSelectionSummary
+  scene_pick_selection(EntityId target_entity, ModelingSelectionMode mode,
+                       const ModelingPickSelectRequest &request);
+  [[nodiscard]] ModelingSelectionSummary
+  scene_box_selection(std::span<const EntityId> target_entities,
+                      ModelingSelectionMode mode, ModelingSelectionEdit edit,
+                      const EditorSelectionBoxBaseline *baseline = nullptr);
+  [[nodiscard]] EntityId nearest_group_ancestor(EntityId entity) const;
+  [[nodiscard]] ModelingSelectionSummary
+  scene_summary_for(ModelingSelectionMode mode) const;
 
-    SceneDocument& scene_;
-    DocumentCommandService& documentCommands_;
-    ModelingSessionService& modeling_;
+  SceneDocument &scene_;
+  DocumentCommandService &document_commands_;
+  ModelingSessionService &modeling_;
 };
 
 } // namespace quader

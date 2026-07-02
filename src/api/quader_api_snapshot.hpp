@@ -19,63 +19,63 @@ namespace quader {
  * Stores the Quader Entity Snapshot data contract used by the public Quader API surface.
  */
 struct QuaderEntitySnapshot {
-    EntityId id = InvalidEntityId;
-    std::string uuid;
-    QuaderEditorObjectId editorObjectId = InvalidQuaderEditorObjectId;
-    std::string name;
-    QuaderEntityKind kind = QuaderEntityKind::Generic;
-    EntityId parent = InvalidEntityId;
-    QuaderTransform transform;
-    bool visible = true;
-    bool selectable = true;
-    bool locked = false;
-    bool selected = false;
-    bool active = false;
-    bool hasMesh = false;
-    bool hasMaterial = false;
-    bool hasLight = false;
-    bool isSceneRoot = false;
-    bool hasSceneSettings = false;
-    bool hasModelingObject = false;
-    AssetId mesh = InvalidAssetId;
-    AssetId material = InvalidAssetId;
-    QuaderLightComponent light;
-    QuaderSceneSettings sceneSettings;
-    QuaderModelingObjectId modelingObjectId = InvalidQuaderModelingObjectId;
+  EntityId id = kInvalidEntityId;
+  std::string uuid;
+  QuaderEditorObjectId editor_object_id = kInvalidQuaderEditorObjectId;
+  std::string name;
+  QuaderEntityKind kind = QuaderEntityKind::Generic;
+  EntityId parent = kInvalidEntityId;
+  QuaderTransform transform;
+  bool visible = true;
+  bool selectable = true;
+  bool locked = false;
+  bool selected = false;
+  bool active = false;
+  bool has_mesh = false;
+  bool has_material = false;
+  bool has_light = false;
+  bool is_scene_root = false;
+  bool has_scene_settings = false;
+  bool has_modeling_object = false;
+  AssetId mesh = kInvalidAssetId;
+  AssetId material = kInvalidAssetId;
+  QuaderLightComponent light;
+  QuaderSceneSettings scene_settings;
+  QuaderModelingObjectId modeling_object_id = kInvalidQuaderModelingObjectId;
 };
 
 /**
  * Stores the Quader Mesh Snapshot data contract used by the public Quader API surface.
  */
 struct QuaderMeshSnapshot {
-    AssetId mesh = InvalidAssetId;
-    std::uint64_t revision = 0;
-    std::size_t vertexCount = 0;
-    std::size_t indexCount = 0;
-    std::size_t primitiveCount = 0;
-    bool stableCpuTopology = false;
-    bool hasBounds = false;
-    QuaderBounds bounds;
+  AssetId mesh = kInvalidAssetId;
+  std::uint64_t revision = 0;
+  std::size_t vertex_count = 0;
+  std::size_t index_count = 0;
+  std::size_t primitive_count = 0;
+  bool stable_cpu_topology = false;
+  bool has_bounds = false;
+  QuaderBounds bounds;
 };
 
 /**
  * Stores the Quader Asset Snapshot data contract used by the public Quader API surface.
  */
 struct QuaderAssetSnapshot {
-    std::size_t meshCount = 0;
-    std::size_t materialCount = 0;
-    std::size_t textureCount = 0;
-    std::uint64_t revision = 0;
+  std::size_t mesh_count = 0;
+  std::size_t material_count = 0;
+  std::size_t texture_count = 0;
+  std::uint64_t revision = 0;
 };
 
 /**
  * Stores the Quader History Snapshot data contract used by the public Quader API surface.
  */
 struct QuaderHistorySnapshot {
-    bool canUndo = false;
-    bool canRedo = false;
-    std::string undoLabel;
-    std::string redoLabel;
+  bool can_undo = false;
+  bool can_redo = false;
+  std::string undo_label;
+  std::string redo_label;
 };
 
 /**
@@ -84,12 +84,12 @@ struct QuaderHistorySnapshot {
 struct QuaderApiSnapshot {
     QuaderRevisionStamp revisions;
     std::vector<QuaderEntitySnapshot> entities;
-    std::vector<QuaderModelingObjectRecord> modelingObjects;
+    std::vector<QuaderModelingObjectRecord> modeling_objects;
     QuaderSelectionSummary selection;
-    QuaderToolStatus toolStatus;
+    QuaderToolStatus tool_status;
     QuaderAssetSnapshot assets;
     QuaderHistorySnapshot history;
-    QuaderOverlayFrame selectionOverlay;
+    QuaderOverlayFrame selection_overlay;
 };
 
 } // namespace quader

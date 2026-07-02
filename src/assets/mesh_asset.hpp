@@ -35,9 +35,9 @@ struct MeshVertex {
  * Represents a Mesh Primitive Span value used by the asset document and registry layer.
  */
 struct MeshPrimitiveSpan {
-    std::uint32_t indexOffset = 0;
-    std::uint32_t indexCount = 0;
-    std::uint32_t materialSlot = 0;
+  std::uint32_t index_offset = 0;
+  std::uint32_t index_count = 0;
+  std::uint32_t material_slot = 0;
 };
 
 /**
@@ -47,53 +47,60 @@ struct MeshAsset final : AssetDocumentBase<MeshAssetRevision> {
     std::vector<MeshVertex> vertices;
     std::vector<std::uint32_t> indices;
     std::vector<MeshPrimitiveSpan> primitives;
-    bool hasStableCpuTopology = true;
-    bool hasAuthoredPolygonDocument = false;
-    std::shared_ptr<quader_poly::Document> authoredPolygonDocument;
+    bool has_stable_cpu_topology = true;
+    bool has_authored_polygon_document = false;
+    std::shared_ptr<quader_poly::Document> authored_polygon_document;
 };
 
-inline std::vector<MeshPrimitiveSpan> normalizedMeshPrimitiveSpans(const MeshAsset& mesh) {
-    std::vector<MeshPrimitiveSpan> spans;
-    spans.reserve(mesh.primitives.empty() ? 1u : mesh.primitives.size());
-    for (const MeshPrimitiveSpan& primitive : mesh.primitives) {
-        const std::uint64_t offset = primitive.indexOffset;
-        const std::uint64_t count = primitive.indexCount;
-        if (count == 0u || offset >= mesh.indices.size() || offset + count > mesh.indices.size()) {
-            continue;
-        }
-        spans.push_back(primitive);
+inline std::vector<MeshPrimitiveSpan>
+normalized_mesh_primitive_spans(const MeshAsset &mesh) {
+  std::vector<MeshPrimitiveSpan> spans;
+  spans.reserve(mesh.primitives.empty() ? 1u : mesh.primitives.size());
+  for (const MeshPrimitiveSpan &primitive : mesh.primitives) {
+    const std::uint64_t offset = primitive.index_offset;
+    const std::uint64_t count = primitive.index_count;
+    if (count == 0u || offset >= mesh.indices.size() ||
+        offset + count > mesh.indices.size()) {
+      continue;
     }
-    if (spans.empty() && !mesh.indices.empty()) {
-        spans.push_back(MeshPrimitiveSpan{
-                .indexOffset = 0,
-                .indexCount = static_cast<std::uint32_t>(mesh.indices.size()),
-                .materialSlot = 0,
-        });
-    }
-    return spans;
+    spans.push_back(primitive);
+  }
+  if (spans.empty() && !mesh.indices.empty()) {
+    spans.push_back(MeshPrimitiveSpan{
+        .index_offset = 0,
+        .index_count = static_cast<std::uint32_t>(mesh.indices.size()),
+        .material_slot = 0,
+    });
+  }
+  return spans;
 }
 
-inline std::vector<MeshPrimitiveSpan> coalescedMeshPrimitiveSpans(const MeshAsset& mesh) {
-    const std::vector<MeshPrimitiveSpan> normalized = normalizedMeshPrimitiveSpans(mesh);
-    std::vector<MeshPrimitiveSpan> spans;
-    spans.reserve(normalized.size());
-    for (const MeshPrimitiveSpan& primitive : normalized) {
-        if (!spans.empty()) {
-            MeshPrimitiveSpan& previous = spans.back();
-            const std::uint64_t previousEnd =
-                    static_cast<std::uint64_t>(previous.indexOffset) + static_cast<std::uint64_t>(previous.indexCount);
-            const std::uint64_t mergedCount =
-                    static_cast<std::uint64_t>(previous.indexCount) + static_cast<std::uint64_t>(primitive.indexCount);
-            if (previous.materialSlot == primitive.materialSlot &&
-                    previousEnd == primitive.indexOffset &&
-                    mergedCount <= static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max())) {
-                previous.indexCount = static_cast<std::uint32_t>(mergedCount);
-                continue;
-            }
-        }
-        spans.push_back(primitive);
+inline std::vector<MeshPrimitiveSpan>
+coalesced_mesh_primitive_spans(const MeshAsset &mesh) {
+  const std::vector<MeshPrimitiveSpan> normalized =
+      normalized_mesh_primitive_spans(mesh);
+  std::vector<MeshPrimitiveSpan> spans;
+  spans.reserve(normalized.size());
+  for (const MeshPrimitiveSpan &primitive : normalized) {
+    if (!spans.empty()) {
+      MeshPrimitiveSpan &previous = spans.back();
+      const std::uint64_t previous_end =
+          static_cast<std::uint64_t>(previous.index_offset) +
+          static_cast<std::uint64_t>(previous.index_count);
+      const std::uint64_t merged_count =
+          static_cast<std::uint64_t>(previous.index_count) +
+          static_cast<std::uint64_t>(primitive.index_count);
+      if (previous.material_slot == primitive.material_slot &&
+          previous_end == primitive.index_offset &&
+          merged_count <= static_cast<std::uint64_t>(
+                              std::numeric_limits<std::uint32_t>::max())) {
+        previous.index_count = static_cast<std::uint32_t>(merged_count);
+        continue;
+      }
     }
-    return spans;
+    spans.push_back(primitive);
+  }
+  return spans;
 }
 
 } // namespace quader

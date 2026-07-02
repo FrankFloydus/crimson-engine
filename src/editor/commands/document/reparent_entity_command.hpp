@@ -16,86 +16,81 @@ namespace quader {
  */
 class ReparentEntityCommand final : public SceneCommand {
 public:
-    ReparentEntityCommand(
-            SceneDocument& scene,
-            EntityId entity,
-            EntityId parent,
-            bool preserveWorldTransform = true)
-        : SceneCommand(scene, "Reparent Entity")
-        , entity_(entity)
-        , beforeParent_(scene.parent(entity))
-        , afterParent_(parent)
-        , preserveWorldTransform_(preserveWorldTransform) {
-        if (const TransformComponent* transform = scene.transform(entity)) {
-            beforeTransform_ = *transform;
-            afterTransform_ = *transform;
-        }
+  ReparentEntityCommand(SceneDocument &scene, EntityId entity, EntityId parent,
+                        bool preserve_world_transform = true)
+      : SceneCommand(scene, "Reparent Entity"), entity_(entity),
+        before_parent_(scene.parent(entity)), after_parent_(parent),
+        preserve_world_transform_(preserve_world_transform) {
+    if (const TransformComponent *transform = scene.transform(entity)) {
+      before_transform_ = *transform;
+      after_transform_ = *transform;
     }
+  }
 
-    ReparentEntityCommand(
-            SceneDocument& scene,
-            EntityId entity,
-            EntityId beforeParent,
-            EntityId afterParent,
-            TransformComponent beforeTransform,
-            TransformComponent afterTransform)
-        : SceneCommand(scene, "Reparent Entity")
-        , entity_(entity)
-        , beforeParent_(beforeParent)
-        , afterParent_(afterParent)
-        , beforeTransform_(beforeTransform)
-        , afterTransform_(afterTransform)
-        , capturedAfterTransform_(true) {}
+  ReparentEntityCommand(SceneDocument &scene, EntityId entity,
+                        EntityId before_parent, EntityId after_parent,
+                        TransformComponent before_transform,
+                        TransformComponent after_transform)
+      : SceneCommand(scene, "Reparent Entity"), entity_(entity),
+        before_parent_(before_parent), after_parent_(after_parent),
+        before_transform_(before_transform), after_transform_(after_transform),
+        captured_after_transform_(true) {}
 
-    DocumentCommandResult undo() override {
-        return apply(beforeParent_, beforeTransform_);
-    }
+  DocumentCommandResult undo() override {
+    return apply(before_parent_, before_transform_);
+  }
 
     DocumentCommandResult redo() override {
         if (!scene().exists(entity_)) {
-            return documentCommandMissingEntityResult();
+          return document_command_missing_entity_result();
         }
-        if (afterParent_ != InvalidEntityId && !scene().exists(afterParent_)) {
-            return documentCommandInvalidRequestResult("Parent entity does not exist");
+        if (after_parent_ != kInvalidEntityId &&
+            !scene().exists(after_parent_)) {
+          return document_command_invalid_request_result(
+              "Parent entity does not exist");
         }
-        if (beforeParent_ == afterParent_ && !capturedAfterTransform_) {
-            return documentCommandUnchangedResult();
+        if (before_parent_ == after_parent_ && !captured_after_transform_) {
+          return document_command_unchanged_result();
         }
-        if (capturedAfterTransform_) {
-            return apply(afterParent_, afterTransform_);
+        if (captured_after_transform_) {
+          return apply(after_parent_, after_transform_);
         }
-        if (!scene().setParent(entity_, afterParent_, preserveWorldTransform_)) {
-            return documentCommandInvalidRequestResult("Entity cannot be reparented");
+        if (!scene().set_parent(entity_, after_parent_,
+                                preserve_world_transform_)) {
+          return document_command_invalid_request_result(
+              "Entity cannot be reparented");
         }
         if (const TransformComponent* transform = scene().transform(entity_)) {
-            afterTransform_ = *transform;
-            capturedAfterTransform_ = true;
+          after_transform_ = *transform;
+          captured_after_transform_ = true;
         }
-        return documentCommandChangedResult();
+        return document_command_changed_result();
     }
 
 private:
     DocumentCommandResult apply(EntityId parent, const TransformComponent& transform) {
         if (!scene().exists(entity_)) {
-            return documentCommandMissingEntityResult();
+          return document_command_missing_entity_result();
         }
-        if (parent != InvalidEntityId && !scene().exists(parent)) {
-            return documentCommandInvalidRequestResult("Parent entity does not exist");
+        if (parent != kInvalidEntityId && !scene().exists(parent)) {
+          return document_command_invalid_request_result(
+              "Parent entity does not exist");
         }
-        if (!scene().setParent(entity_, parent, false)) {
-            return documentCommandInvalidRequestResult("Entity cannot be reparented");
+        if (!scene().set_parent(entity_, parent, false)) {
+          return document_command_invalid_request_result(
+              "Entity cannot be reparented");
         }
-        scene().setTransform(entity_, transform);
-        return documentCommandChangedResult();
+        scene().set_transform(entity_, transform);
+        return document_command_changed_result();
     }
 
-    EntityId entity_ = InvalidEntityId;
-    EntityId beforeParent_ = InvalidEntityId;
-    EntityId afterParent_ = InvalidEntityId;
-    TransformComponent beforeTransform_;
-    TransformComponent afterTransform_;
-    bool preserveWorldTransform_ = true;
-    bool capturedAfterTransform_ = false;
+    EntityId entity_ = kInvalidEntityId;
+    EntityId before_parent_ = kInvalidEntityId;
+    EntityId after_parent_ = kInvalidEntityId;
+    TransformComponent before_transform_;
+    TransformComponent after_transform_;
+    bool preserve_world_transform_ = true;
+    bool captured_after_transform_ = false;
 };
 
 } // namespace quader

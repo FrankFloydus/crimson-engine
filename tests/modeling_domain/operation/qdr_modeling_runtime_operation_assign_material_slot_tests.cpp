@@ -50,12 +50,12 @@ TEST(QdrModelingRuntimeOperationAssignMaterialSlotTests, EditorSessionAssignsMat
 	const qp::ElementId selected_face_id = object.document.faces[0].id;
 	const qp::ElementId untouched_face_id = object.document.faces[1].id;
 	set_all_face_slots(object.document, 6U);
-	session.set_component_selection(
-		object_id,
-		qdr_test::face_selection({ selected_face_id }, selected_face_id),
-		qec::SelectionMode::face);
+        session.set_component_selection(
+            object_id,
+            qdr_test::face_selection({selected_face_id}, selected_face_id),
+            qec::SelectionMode::Face);
 
-	const qec::CommandResult result = session.assign_material_to_selection(0U);
+        const qec::CommandResult result = session.assign_material_to_selection(0U);
 
 	EXPECT_TRUE(result.ok);
 	EXPECT_TRUE(result.changed);
@@ -101,12 +101,11 @@ TEST(QdrModelingRuntimeOperationAssignMaterialSlotTests, EditorSessionMaterialSl
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	const int object_id = session.objects().front().id;
 	const qp::ElementId face_id = session.objects().front().document.faces.front().id;
-	session.set_component_selection(
-		object_id,
-		qdr_test::face_selection({ face_id }, face_id),
-		qec::SelectionMode::face);
+        session.set_component_selection(
+            object_id, qdr_test::face_selection({face_id}, face_id),
+            qec::SelectionMode::Face);
 
-	const qec::CommandResult command =
+        const qec::CommandResult command =
 		session.apply_history_command([](qec::EditorSession& editor) {
 			return editor.assign_material_to_selection(12U);
 		});
@@ -137,9 +136,9 @@ TEST(QdrModelingRuntimeOperationAssignMaterialSlotTests, EditorOperationCommandA
 	settings.object_id = object_id;
 	settings.face_id = face_id;
 	qec::EditorOperationCommand command;
-	command.operation_id = qec::EditorOperationId::assign_material;
-	command.phase = qec::EditorOperationCommandPhase::execute;
-	command.settings = settings;
+        command.operation_id = qec::EditorOperationId::AssignMaterial;
+        command.phase = qec::EditorOperationCommandPhase::Execute;
+        command.settings = settings;
 
 	const qec::EditorOperationCommandResult result = qec::execute_command(session, command);
 

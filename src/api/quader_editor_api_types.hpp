@@ -50,8 +50,8 @@ struct QuaderProjectMetadata {
  * Represents Quader Project Runtime Hooks value used by the native shell.
  */
 struct QuaderProjectRuntimeHooks {
-    std::function<std::optional<std::filesystem::path>()> chooseOpenPath;
-    std::function<std::optional<std::filesystem::path>()> chooseSaveAsPath;
+  std::function<std::optional<std::filesystem::path>()> choose_open_path;
+  std::function<std::optional<std::filesystem::path>()> choose_save_as_path;
 };
 
 /**
@@ -76,10 +76,12 @@ struct QuaderNotification {
  * Represents a Quader Viewport Runtime Hooks value used by the public Quader API surface.
  */
 struct QuaderViewportRuntimeHooks {
-    std::function<QuaderApiVoidResult(ViewportPaneId)> frameSelection;
-    std::function<QuaderApiVoidResult(ViewportPaneId)> focusOrigin;
-    std::function<QuaderApiVoidResult()> spawnWindow;
-    std::function<QuaderApiVoidResult(ViewportPaneId, const std::filesystem::path&)> captureScreenshot;
+  std::function<QuaderApiVoidResult(ViewportPaneId)> frame_selection;
+  std::function<QuaderApiVoidResult(ViewportPaneId)> focus_origin;
+  std::function<QuaderApiVoidResult()> spawn_window;
+  std::function<QuaderApiVoidResult(ViewportPaneId,
+                                    const std::filesystem::path &)>
+      capture_screenshot;
 };
 
 /**
@@ -87,7 +89,7 @@ struct QuaderViewportRuntimeHooks {
  */
 struct QuaderToolsRuntimeHooks {
     std::function<QuaderApiVoidResult(std::string_view)> activate;
-    std::function<QuaderApiVoidResult()> cancelModalTool;
+    std::function<QuaderApiVoidResult()> cancel_modal_tool;
 };
 
 /**
@@ -95,20 +97,20 @@ struct QuaderToolsRuntimeHooks {
  */
 struct QuaderPreferencesRuntimeHooks {
     std::function<std::string()> locale;
-    std::function<QuaderApiVoidResult(std::string)> setLocale;
+    std::function<QuaderApiVoidResult(std::string)> set_locale;
     std::function<QuaderApiVoidResult()> save;
-    std::function<bool()> navigationGizmoVisible;
-    std::function<QuaderApiVoidResult(bool)> setNavigationGizmoVisible;
+    std::function<bool()> navigation_gizmo_visible;
+    std::function<QuaderApiVoidResult(bool)> set_navigation_gizmo_visible;
 };
 
 /**
  * Represents a Quader UI Runtime Hooks value used by the public Quader API surface.
  */
 struct QuaderUIRuntimeHooks {
-    std::function<bool(std::string_view)> isPanelVisible;
-    std::function<QuaderApiVoidResult(std::string_view, bool)> setPanelVisible;
-    std::function<QuaderApiVoidResult(std::string_view)> focusPanel;
-    std::function<QuaderApiVoidResult(QuaderNotification)> notify;
+  std::function<bool(std::string_view)> is_panel_visible;
+  std::function<QuaderApiVoidResult(std::string_view, bool)> set_panel_visible;
+  std::function<QuaderApiVoidResult(std::string_view)> focus_panel;
+  std::function<QuaderApiVoidResult(QuaderNotification)> notify;
 };
 
 } // namespace quader

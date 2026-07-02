@@ -8,116 +8,120 @@
 
 namespace quader::test {
 
-ModelingViewportCamera orthographicCamera(CameraSpec spec) {
-    return {
-            .orthographic = true,
-            .origin = spec.origin,
-            .xAxis = {1.0f, 0.0f, 0.0f},
-            .yAxis = {0.0f, 1.0f, 0.0f},
-            .zAxis = {0.0f, 0.0f, 1.0f},
-            .viewportSize = spec.viewportSize,
-            .orthographicSize = spec.orthographicSize,
-            .fovDegrees = 60.0,
-    };
+ModelingViewportCamera orthographic_camera(CameraSpec spec) {
+  return {
+      .orthographic = true,
+      .origin = spec.origin,
+      .x_axis = {1.0f, 0.0f, 0.0f},
+      .y_axis = {0.0f, 1.0f, 0.0f},
+      .z_axis = {0.0f, 0.0f, 1.0f},
+      .viewport_size = spec.viewport_size,
+      .orthographic_size = spec.orthographic_size,
+      .fov_degrees = 60.0,
+  };
 }
 
-ModelingRay forwardRay(QVec3 origin) {
-    return {
-            .origin = origin,
-            .direction = {0.0f, 0.0f, -1.0f},
-    };
+ModelingRay forward_ray(QVec3 origin) {
+  return {
+      .origin = origin,
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
 }
 
-ModelingPickSelectRequest pickAt(QVec3 origin, PickOptions options) {
-    return {
-            .ray = forwardRay(origin),
-            .clickCount = options.clickCount,
-            .controlPressed = options.controlPressed,
-            .shiftPressed = options.shiftPressed,
-            .commandPressed = options.commandPressed,
-            .altPressed = options.altPressed,
-            .preserveSelectionOnMiss = options.preserveSelectionOnMiss,
-            .preserveSelectionOnSelectedHit = options.preserveSelectionOnSelectedHit,
-    };
+ModelingPickSelectRequest pick_at(QVec3 origin, PickOptions options) {
+  return {
+      .ray = forward_ray(origin),
+      .click_count = options.click_count,
+      .control_pressed = options.control_pressed,
+      .shift_pressed = options.shift_pressed,
+      .command_pressed = options.command_pressed,
+      .alt_pressed = options.alt_pressed,
+      .preserve_selection_on_miss = options.preserve_selection_on_miss,
+      .preserve_selection_on_selected_hit =
+          options.preserve_selection_on_selected_hit,
+  };
 }
 
-ModelingHoverRequest hoverAt(QVec3 origin, HoverOptions options) {
-    return {
-            .ray = forwardRay(origin),
-            .selectedModifierPressed = options.selectedModifierPressed,
-    };
+ModelingHoverRequest hover_at(QVec3 origin, HoverOptions options) {
+  return {
+      .ray = forward_ray(origin),
+      .selected_modifier_pressed = options.selected_modifier_pressed,
+  };
 }
 
-ModelingToolRayEvent edgeLoopEvent(QVec3 origin) {
-    return {
-            .screenPosition = {},
-            .ray = forwardRay(origin),
-            .camera = orthographicCamera(),
-            .gridSize = 1.0,
-            .vertexRadius = 0.3,
-            .edgeRadius = 0.2,
-            .snapEnabled = false,
-    };
+ModelingToolRayEvent edge_loop_event(QVec3 origin) {
+  return {
+      .screen_position = {},
+      .ray = forward_ray(origin),
+      .camera = orthographic_camera(),
+      .grid_size = 1.0,
+      .vertex_radius = 0.3,
+      .edge_radius = 0.2,
+      .snap_enabled = false,
+  };
 }
 
-ModelingToolRayEvent drawnPlaneEvent(float x, bool dragging) {
-    ModelingViewportCamera camera = orthographicCamera();
-    camera.orthographic = false;
-    return {
-            .screenPosition = {},
-            .ray = {
-                    .origin = {x, 2.0f, 0.0f},
-                    .direction = {0.0f, -1.0f, 0.0f},
-            },
-            .camera = camera,
-            .gridSize = 0.5,
-            .snapEnabled = true,
-            .dragging = dragging,
-    };
+ModelingToolRayEvent drawn_plane_event(float x, bool dragging) {
+  ModelingViewportCamera camera = orthographic_camera();
+  camera.orthographic = false;
+  return {
+      .screen_position = {},
+      .ray =
+          {
+              .origin = {x, 2.0f, 0.0f},
+              .direction = {0.0f, -1.0f, 0.0f},
+          },
+      .camera = camera,
+      .grid_size = 0.5,
+      .snap_enabled = true,
+      .dragging = dragging,
+  };
 }
 
-ModelingTransformDragBeginRequest transformDragBegin(DragBeginOptions options) {
-    return {
-            .tool = options.tool,
-            .operation = options.operation,
-            .axis = options.axis,
-            .pivot = options.pivot,
-            .screenPosition = options.screenPosition,
-            .screenPivot = options.screenPivot,
-            .screenTip = options.screenTip,
-            .hasWorldDirection = options.hasWorldDirection,
-            .worldDirection = options.worldDirection,
-            .ray = forwardRay(),
-            .camera = orthographicCamera(),
-            .gridSize = 1.0,
-            .vertexSnapRadius = 0.3,
-            .gridSnapEnabled = options.gridSnapEnabled,
-            .duplicateSelected = options.duplicateSelected,
-    };
+ModelingTransformDragBeginRequest
+transform_drag_begin(DragBeginOptions options) {
+  return {
+      .tool = options.tool,
+      .operation = options.operation,
+      .axis = options.axis,
+      .pivot = options.pivot,
+      .screen_position = options.screen_position,
+      .screen_pivot = options.screen_pivot,
+      .screen_tip = options.screen_tip,
+      .has_world_direction = options.has_world_direction,
+      .world_direction = options.world_direction,
+      .ray = forward_ray(),
+      .camera = orthographic_camera(),
+      .grid_size = 1.0,
+      .vertex_snap_radius = 0.3,
+      .grid_snap_enabled = options.grid_snap_enabled,
+      .duplicate_selected = options.duplicate_selected,
+  };
 }
 
-ModelingTransformDragUpdateRequest transformDragUpdate(QVec2 screenPosition) {
-    return {
-            .screenPosition = screenPosition,
-            .ray = forwardRay(),
-            .camera = orthographicCamera(),
-            .gridSize = 1.0,
-            .vertexSnapRadius = 0.3,
-            .gridSnapEnabled = true,
-            .precision = false,
-    };
+ModelingTransformDragUpdateRequest
+transform_drag_update(QVec2 screen_position) {
+  return {
+      .screen_position = screen_position,
+      .ray = forward_ray(),
+      .camera = orthographic_camera(),
+      .grid_size = 1.0,
+      .vertex_snap_radius = 0.3,
+      .grid_snap_enabled = true,
+      .precision = false,
+  };
 }
 
-ModelingTransformDragUpdateRequest transformDragUpdate(float screenX) {
-    return transformDragUpdate(QVec2{screenX, 0.0f});
+ModelingTransformDragUpdateRequest transform_drag_update(float screen_x) {
+  return transform_drag_update(QVec2{screen_x, 0.0f});
 }
 
-ModelingTransformDragBeginRequest xMoveDragBegin(DragBeginOptions options) {
-    return transformDragBegin(options);
+ModelingTransformDragBeginRequest x_move_drag_begin(DragBeginOptions options) {
+  return transform_drag_begin(options);
 }
 
-ModelingTransformDragUpdateRequest xMoveDragUpdate(float screenX) {
-    return transformDragUpdate(screenX);
+ModelingTransformDragUpdateRequest x_move_drag_update(float screen_x) {
+  return transform_drag_update(screen_x);
 }
 
 } // namespace quader::test

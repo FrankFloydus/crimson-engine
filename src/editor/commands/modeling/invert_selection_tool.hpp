@@ -16,20 +16,21 @@ namespace quader {
 class InvertSelectionTool final : public CustomInstantCommandTool {
 public:
     [[nodiscard]] CommandToolDescriptor descriptor() const override {
-        return {
-                .id = "invert_selection",
-                .operationId = "invert_selection",
-                .label = "Invert Selection",
-                .kind = CommandToolKind::Instant,
-                .previewKind = ModelingActionPreviewKind::None,
-                .rebuildsMeshOnSuccess = false,
-                .publicCommandId = "edit.invert_selection",
-                .registersPublicCommand = false,
-        };
+      return {
+          .id = "invert_selection",
+          .operation_id = "invert_selection",
+          .label = "Invert Selection",
+          .kind = CommandToolKind::Instant,
+          .preview_kind = ModelingActionPreviewKind::None,
+          .rebuilds_mesh_on_success = false,
+          .public_command_id = "edit.invert_selection",
+          .registers_public_command = false,
+      };
     }
 
 private:
-    ModelingCommandResult executeCustomCommand(ModelingCommandExecutionContext& context) const override;
+  ModelingCommandResult execute_custom_command(
+      ModelingCommandExecutionContext &context) const override;
 };
 
 } // namespace quader

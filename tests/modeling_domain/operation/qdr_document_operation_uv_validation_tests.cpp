@@ -17,8 +17,8 @@ TEST(QdrDocumentOperationUvValidationTests, UVOperationsRejectUnknownCommandsAnd
 	EXPECT_TRUE(unknown_result.message == "Unknown UV operation.");
 
 	Selection empty_selection;
-	empty_selection.mode = SelectionMode::face;
-	const OperationResult empty_result = apply_uv_operation(fixture.document, empty_selection, "align_face", 64.0F);
+        empty_selection.mode = SelectionMode::Face;
+        const OperationResult empty_result = apply_uv_operation(fixture.document, empty_selection, "align_face", 64.0F);
 	EXPECT_FALSE(empty_result.changed);
 	EXPECT_TRUE(empty_result.message == "Select a face, edge, vertex, or object first.");
 }

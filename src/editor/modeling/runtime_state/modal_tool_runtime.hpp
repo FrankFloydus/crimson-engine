@@ -15,7 +15,7 @@ namespace quader {
  */
 class ModalToolRuntime {
 public:
-    [[nodiscard]] static bool ownsViewport(ModelingViewportTool tool);
+  [[nodiscard]] static bool owns_viewport(ModelingViewportTool tool);
 };
 
 } // namespace quader

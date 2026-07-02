@@ -21,21 +21,16 @@ namespace quader {
  */
 class OverlayPointMeshBuilder {
 public:
-    static OverlayPointMesh build(
-            const std::vector<const ViewportOverlayPoint*>& points,
-            const ViewportOverlayCamera& camera,
-            float sizePixels,
-            float depthBias,
-            std::uint32_t overrideColor,
-            bool useOverrideColor);
+  static OverlayPointMesh
+  build(const std::vector<const ViewportOverlayPoint *> &points,
+        const ViewportOverlayCamera &camera, float size_pixels,
+        float depth_bias, std::uint32_t override_color,
+        bool use_override_color);
 
-    static bool appendPointQuad(
-            OverlayPointMesh& mesh,
-            QVec3 position,
-            std::uint32_t color,
-            const OverlayCameraProjector& projector,
-            float sizePixels,
-            float depthBias);
+  static bool append_point_quad(OverlayPointMesh &mesh, QVec3 position,
+                                std::uint32_t color,
+                                const OverlayCameraProjector &projector,
+                                float size_pixels, float depth_bias);
 };
 
 } // namespace quader

@@ -16,13 +16,15 @@ namespace quader {
  */
 class QuaderApiSessionInternalAccess final {
 public:
-    [[nodiscard]] static QuaderApiSession fromProjectSession(ProjectSession& session) noexcept {
-        return QuaderApiSession(&session);
-    }
+  [[nodiscard]] static QuaderApiSession
+  from_project_session(ProjectSession &session) noexcept {
+    return QuaderApiSession(&session);
+  }
 
-    [[nodiscard]] static ProjectSession& projectSession(QuaderApiSession session) noexcept {
-        return *static_cast<ProjectSession*>(session.session_);
-    }
+  [[nodiscard]] static ProjectSession &
+  project_session(QuaderApiSession session) noexcept {
+    return *static_cast<ProjectSession *>(session.session_);
+  }
 };
 
 } // namespace quader

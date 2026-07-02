@@ -15,32 +15,33 @@ namespace quader {
 QuaderApiVoidResult QuaderConsoleApi::append(std::string message) {
     LOG_INFO("{}", message);
     return {
-            .ok = true,
-            .changed = false,
-            .mutationKind = QuaderMutationKind::Runtime,
+        .ok = true,
+        .changed = false,
+        .mutation_kind = QuaderMutationKind::Runtime,
     };
 }
 
 QuaderUIApi::QuaderUIApi() = default;
 
-void QuaderUIApi::setRuntimeHooks(QuaderUIRuntimeHooks hooks) {
-    hooks_ = std::move(hooks);
+void QuaderUIApi::set_runtime_hooks(QuaderUIRuntimeHooks hooks) {
+  hooks_ = std::move(hooks);
 }
 
-QuaderApiVoidResult QuaderUIApi::showPanel(std::string_view panel) {
-    return setPanelVisible(panel, true);
+QuaderApiVoidResult QuaderUIApi::show_panel(std::string_view panel) {
+  return set_panel_visible(panel, true);
 }
 
-QuaderApiVoidResult QuaderUIApi::hidePanel(std::string_view panel) {
-    return setPanelVisible(panel, false);
+QuaderApiVoidResult QuaderUIApi::hide_panel(std::string_view panel) {
+  return set_panel_visible(panel, false);
 }
 
-QuaderApiVoidResult QuaderUIApi::focusPanel(std::string_view panel) {
-    return hooks_.focusPanel ? hooks_.focusPanel(panel) : unavailable("UI runtime is not attached.");
+QuaderApiVoidResult QuaderUIApi::focus_panel(std::string_view panel) {
+  return hooks_.focus_panel ? hooks_.focus_panel(panel)
+                            : unavailable("UI runtime is not attached.");
 }
 
-bool QuaderUIApi::panelVisible(std::string_view panel) const {
-    return hooks_.isPanelVisible ? hooks_.isPanelVisible(panel) : false;
+bool QuaderUIApi::panel_visible(std::string_view panel) const {
+  return hooks_.is_panel_visible ? hooks_.is_panel_visible(panel) : false;
 }
 
 QuaderApiVoidResult QuaderUIApi::notify(QuaderNotification notification) {
@@ -59,9 +60,9 @@ QuaderApiVoidResult QuaderUIApi::notify(QuaderNotification notification) {
         break;
     }
     return {
-            .ok = true,
-            .changed = false,
-            .mutationKind = QuaderMutationKind::Runtime,
+        .ok = true,
+        .changed = false,
+        .mutation_kind = QuaderMutationKind::Runtime,
     };
 }
 
@@ -73,19 +74,19 @@ const QuaderConsoleApi& QuaderUIApi::console() const {
     return console_;
 }
 
-QuaderApiVoidResult QuaderUIApi::setPanelVisible(std::string_view panel, bool visible) {
-    return hooks_.setPanelVisible ?
-            hooks_.setPanelVisible(panel, visible) :
-            unavailable("UI runtime is not attached.");
+QuaderApiVoidResult QuaderUIApi::set_panel_visible(std::string_view panel,
+                                                   bool visible) {
+  return hooks_.set_panel_visible ? hooks_.set_panel_visible(panel, visible)
+                                  : unavailable("UI runtime is not attached.");
 }
 
 QuaderApiVoidResult QuaderUIApi::unavailable(std::string message) const {
-    return {
-            .ok = false,
-            .changed = false,
-            .message = std::move(message),
-            .mutationKind = QuaderMutationKind::None,
-    };
+  return {
+      .ok = false,
+      .changed = false,
+      .message = std::move(message),
+      .mutation_kind = QuaderMutationKind::None,
+  };
 }
 
 } // namespace quader

@@ -15,65 +15,72 @@
 namespace quader {
 namespace {
 
-std::optional<QuaderApiVoidResult> executeViewportShortcutCommand(
-        QuaderEditorApi& editor,
-        const ViewportShortcut& shortcut) {
-    const std::optional<std::string> commandTarget = viewportCommandTargetIdForRouterShortcut(shortcut);
-    if (!commandTarget) {
-        return std::nullopt;
-    }
-    return editor.commands().execute(*commandTarget);
+std::optional<QuaderApiVoidResult>
+execute_viewport_shortcut_command(QuaderEditorApi &editor,
+                                  const ViewportShortcut &shortcut) {
+  const std::optional<std::string> command_target =
+      viewport_command_target_id_for_router_shortcut(shortcut);
+  if (!command_target) {
+    return std::nullopt;
+  }
+  return editor.commands().execute(*command_target);
 }
 
 } // namespace
 
-ViewportShortcutControllerResult ViewportShortcutController::handleOperationPreviewShortcut(
-        const ViewportInputResult& inputResult,
-        const ModelingToolSettingsTarget& toolSettingsTarget,
-        QuaderEditorApi& editor) const {
-    if (!inputResult.shortcutHandled || !toolSettingsTarget.operationPreviewActive) {
-        return {};
-    }
+ViewportShortcutControllerResult
+ViewportShortcutController::handle_operation_preview_shortcut(
+    const ViewportInputResult &input_result,
+    const ModelingToolSettingsTarget &tool_settings_target,
+    QuaderEditorApi &editor) const {
+  if (!input_result.shortcut_handled ||
+      !tool_settings_target.operation_preview_active) {
+    return {};
+  }
 
-    const std::optional<std::string> commandTarget =
-            viewportOperationPreviewCommandTargetIdForRouterShortcut(inputResult.shortcut);
-    if (!commandTarget) {
-        return {};
-    }
+  const std::optional<std::string> command_target =
+      viewport_operation_preview_command_target_id_for_router_shortcut(
+          input_result.shortcut);
+  if (!command_target) {
+    return {};
+  }
 
-    const QuaderApiVoidResult command = editor.commands().execute(*commandTarget);
-    if (!command.ok) {
-        LOG_ERROR("Tool preview shortcut failed: {}", command.message.empty() ? "Command failed." : command.message);
-    }
-    return {
-            .consumed = true,
-            .commandExecuted = true,
-            .invalidateHover = true,
-            .markOverlayDirty = true,
-    };
+  const QuaderApiVoidResult command =
+      editor.commands().execute(*command_target);
+  if (!command.ok) {
+    LOG_ERROR("Tool preview shortcut failed: {}",
+              command.message.empty() ? "Command failed." : command.message);
+  }
+  return {
+      .consumed = true,
+      .command_executed = true,
+      .invalidate_hover = true,
+      .mark_overlay_dirty = true,
+  };
 }
 
-ViewportShortcutControllerResult ViewportShortcutController::handleModelingShortcut(
-        const ViewportInputResult& inputResult,
-        QuaderEditorApi& editor) const {
-    if (!inputResult.shortcutHandled) {
-        return {};
-    }
+ViewportShortcutControllerResult
+ViewportShortcutController::handle_modeling_shortcut(
+    const ViewportInputResult &input_result, QuaderEditorApi &editor) const {
+  if (!input_result.shortcut_handled) {
+    return {};
+  }
 
-    const std::optional<QuaderApiVoidResult> command =
-            executeViewportShortcutCommand(editor, inputResult.shortcut);
-    if (!command) {
-        return {};
-    }
+  const std::optional<QuaderApiVoidResult> command =
+      execute_viewport_shortcut_command(editor, input_result.shortcut);
+  if (!command) {
+    return {};
+  }
 
-    if (!command->ok) {
-        LOG_ERROR("Viewport shortcut failed: {}", command->message.empty() ? "Command failed." : command->message);
-    }
-    return {
-            .commandExecuted = true,
-            .invalidateHover = true,
-            .markOverlayDirty = true,
-    };
+  if (!command->ok) {
+    LOG_ERROR("Viewport shortcut failed: {}",
+              command->message.empty() ? "Command failed." : command->message);
+  }
+  return {
+      .command_executed = true,
+      .invalidate_hover = true,
+      .mark_overlay_dirty = true,
+  };
 }
 
 } // namespace quader

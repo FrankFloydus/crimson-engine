@@ -15,7 +15,9 @@
 
 namespace quader {
 
-[[nodiscard]] std::optional<QuaderKeyCode> quaderKeyCodeFromSdlKey(SDL_Keycode key);
-[[nodiscard]] std::optional<QuaderMouseButton> quaderMouseButtonFromSdlButton(std::uint8_t button);
+[[nodiscard]] std::optional<QuaderKeyCode>
+quader_key_code_from_sdl_key(SDL_Keycode key);
+[[nodiscard]] std::optional<QuaderMouseButton>
+quader_mouse_button_from_sdl_button(std::uint8_t button);
 
 } // namespace quader

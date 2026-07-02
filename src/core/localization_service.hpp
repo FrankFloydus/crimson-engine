@@ -21,7 +21,7 @@ namespace quader {
  */
 struct LocaleInfo {
     std::string id;
-    std::string displayName;
+    std::string display_name;
 };
 
 /**
@@ -31,40 +31,48 @@ class LocalizationService {
 public:
     using Catalog = std::unordered_map<std::string, std::string>;
 
-    static constexpr std::string_view DefaultLocale = "en-US";
+    static constexpr std::string_view kDefaultLocale = "en-US";
 
-    static std::unordered_map<std::string, std::string> parseLangText(std::string_view text);
+    static std::unordered_map<std::string, std::string>
+    parse_lang_text(std::string_view text);
 
-    bool load(const std::filesystem::path& localesDirectory,
-            std::string selectedLocale,
-            std::string fallbackLocale = std::string(DefaultLocale));
+    bool load(const std::filesystem::path &locales_directory,
+              std::string selected_locale,
+              std::string fallback_locale = std::string(kDefaultLocale));
 
-    [[nodiscard]] const std::string& currentLocale() const { return currentLocale_; }
-    [[nodiscard]] const std::string& fallbackLocale() const { return fallbackLocale_; }
-    [[nodiscard]] const std::vector<LocaleInfo>& availableLocales() const { return availableLocales_; }
+    [[nodiscard]] const std::string &current_locale() const {
+      return current_locale_;
+    }
+    [[nodiscard]] const std::string &fallback_locale() const {
+      return fallback_locale_;
+    }
+    [[nodiscard]] const std::vector<LocaleInfo> &available_locales() const {
+      return available_locales_;
+    }
 
-    [[nodiscard]] bool hasLocale(std::string_view locale) const;
-    bool selectLocale(std::string_view locale);
-    [[nodiscard]] std::string localeDisplayName(std::string_view locale) const;
+    [[nodiscard]] bool has_locale(std::string_view locale) const;
+    bool select_locale(std::string_view locale);
+    [[nodiscard]] std::string
+    locale_display_name(std::string_view locale) const;
     [[nodiscard]] std::string text(std::string_view key, std::string_view fallback) const;
-    [[nodiscard]] std::string imguiLabel(
-            std::string_view key,
-            std::string_view stableId,
-            std::string_view fallback) const;
+    [[nodiscard]] std::string imgui_label(std::string_view key,
+                                          std::string_view stable_id,
+                                          std::string_view fallback) const;
     [[nodiscard]] std::string format(std::string_view key,
             std::string_view fallback,
             std::initializer_list<std::pair<std::string_view, std::string_view>> replacements) const;
 
 private:
-    static Catalog loadCatalogFile(const std::filesystem::path& path);
-    static std::string displayNameFor(std::string_view locale, const Catalog& catalog);
+  static Catalog load_catalog_file(const std::filesystem::path &path);
+  static std::string display_name_for(std::string_view locale,
+                                      const Catalog &catalog);
 
-    std::string currentLocale_ = std::string(DefaultLocale);
-    std::string fallbackLocale_ = std::string(DefaultLocale);
-    std::unordered_map<std::string, Catalog> localeCatalogs_;
-    Catalog activeCatalog_;
-    Catalog fallbackCatalog_;
-    std::vector<LocaleInfo> availableLocales_;
+  std::string current_locale_ = std::string(kDefaultLocale);
+  std::string fallback_locale_ = std::string(kDefaultLocale);
+  std::unordered_map<std::string, Catalog> locale_catalogs_;
+  Catalog active_catalog_;
+  Catalog fallback_catalog_;
+  std::vector<LocaleInfo> available_locales_;
 };
 
 } // namespace quader

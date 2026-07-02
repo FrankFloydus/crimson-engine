@@ -14,32 +14,37 @@
 
 namespace quader::test::guardrail {
 
-[[nodiscard]] std::filesystem::path sourceRoot();
-[[nodiscard]] std::filesystem::path sourcePath(const std::filesystem::path& relativePath);
-[[nodiscard]] std::filesystem::path sourcePath(std::initializer_list<std::string_view> parts);
-[[nodiscard]] std::string readFile(const std::filesystem::path& path);
-[[nodiscard]] std::string readSourceFile(const std::filesystem::path& relativePath);
-[[nodiscard]] std::string readSourceFile(std::initializer_list<std::string_view> parts);
-[[nodiscard]] std::string normalizedRelative(const std::filesystem::path& path);
+[[nodiscard]] std::filesystem::path source_root();
+[[nodiscard]] std::filesystem::path
+source_path(const std::filesystem::path &relative_path);
+[[nodiscard]] std::filesystem::path
+source_path(std::initializer_list<std::string_view> parts);
+[[nodiscard]] std::string read_file(const std::filesystem::path &path);
+[[nodiscard]] std::string
+read_source_file(const std::filesystem::path &relative_path);
+[[nodiscard]] std::string
+read_source_file(std::initializer_list<std::string_view> parts);
+[[nodiscard]] std::string
+normalized_relative(const std::filesystem::path &path);
 
-[[nodiscard]] bool startsWith(std::string_view value, std::string_view prefix);
+[[nodiscard]] bool starts_with(std::string_view value, std::string_view prefix);
 [[nodiscard]] bool contains(std::string_view source, std::string_view needle);
-[[nodiscard]] bool containsAny(const std::string& source, const std::vector<std::string_view>& needles);
+[[nodiscard]] bool contains_any(const std::string &source,
+                                const std::vector<std::string_view> &needles);
 
-[[nodiscard]] std::vector<std::filesystem::path> filesWithExtension(
-        const std::filesystem::path& root,
-        std::string_view extension);
-[[nodiscard]] std::vector<std::filesystem::path> filesNamedUnder(
-        const std::filesystem::path& root,
-        std::string_view filename);
-[[nodiscard]] std::vector<std::filesystem::path> sourceFilesUnder(const std::filesystem::path& root);
-[[nodiscard]] std::vector<std::string> splitLines(const std::string& source);
-[[nodiscard]] std::vector<std::string> linesContaining(
-        const std::string& source,
-        const std::vector<std::string_view>& needles);
-[[nodiscard]] std::string sourceSlice(
-        std::string_view source,
-        std::string_view beginMarker,
-        std::string_view endMarker);
+[[nodiscard]] std::vector<std::filesystem::path>
+files_with_extension(const std::filesystem::path &root,
+                     std::string_view extension);
+[[nodiscard]] std::vector<std::filesystem::path>
+files_named_under(const std::filesystem::path &root, std::string_view filename);
+[[nodiscard]] std::vector<std::filesystem::path>
+source_files_under(const std::filesystem::path &root);
+[[nodiscard]] std::vector<std::string> split_lines(const std::string &source);
+[[nodiscard]] std::vector<std::string>
+lines_containing(const std::string &source,
+                 const std::vector<std::string_view> &needles);
+[[nodiscard]] std::string source_slice(std::string_view source,
+                                       std::string_view begin_marker,
+                                       std::string_view end_marker);
 
 } // namespace quader::test::guardrail

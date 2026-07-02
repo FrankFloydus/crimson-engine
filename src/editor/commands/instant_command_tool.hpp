@@ -17,18 +17,22 @@ namespace quader {
  */
 class InstantCommandTool : public CommandTool {
 public:
-    [[nodiscard]] ModelingCommandHistoryPolicy historyPolicy() const override {
-        return rebuildsMeshOnSuccess() ? ModelingCommandHistoryPolicy::modelingUndoRedo() :
-                                         ModelingCommandHistoryPolicy::none();
-    }
+  [[nodiscard]] ModelingCommandHistoryPolicy history_policy() const override {
+    return rebuilds_mesh_on_success()
+               ? ModelingCommandHistoryPolicy::modeling_undo_redo()
+               : ModelingCommandHistoryPolicy::none();
+  }
 
-    [[nodiscard]] virtual std::optional<ModelingInstantOperationId> instantOperation() const {
-        return std::nullopt;
-    }
+  [[nodiscard]] virtual std::optional<ModelingInstantOperationId>
+  instant_operation() const {
+    return std::nullopt;
+  }
 
-    [[nodiscard]] bool hasInstantOperation() const { return instantOperation().has_value(); }
+  [[nodiscard]] bool has_instant_operation() const {
+    return instant_operation().has_value();
+  }
     [[nodiscard]] ModelingInstantOperationId operation() const {
-        return instantOperation().value();
+      return instant_operation().value();
     }
 
     [[nodiscard]] ModelingCommandAvailability availability(const ModelingCommandExecutionContext& context) const override {

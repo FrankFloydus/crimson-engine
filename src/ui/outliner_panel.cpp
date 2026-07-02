@@ -38,165 +38,159 @@ enum class PendingOutlinerAction {
     UngroupSelection,
 };
 
-bool containsEntity(const std::vector<EntityId>& ids, EntityId id) {
-    return std::find(ids.begin(), ids.end(), id) != ids.end();
+bool contains_entity(const std::vector<EntityId> &ids, EntityId id) {
+  return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
 
-std::vector<EntityId> entityRangeSelection(
-        const std::vector<EntityRecord>& records,
-        EntityId anchor,
-        EntityId clicked) {
-    if (anchor == InvalidEntityId || anchor == clicked) {
-        return {clicked};
-    }
-
-    std::vector<EntityId> selection;
-    bool selecting = false;
-    for (const EntityRecord& record : records) {
-        const bool endpoint = record.id == anchor || record.id == clicked;
-        if (endpoint && !selecting) {
-            selecting = true;
-            selection.push_back(record.id);
-            continue;
-        }
-
-        if (selecting) {
-            selection.push_back(record.id);
-        }
-
-        if (endpoint) {
-            return selection;
-        }
-    }
-
+std::vector<EntityId>
+entity_range_selection(const std::vector<EntityRecord> &records,
+                       EntityId anchor, EntityId clicked) {
+  if (anchor == kInvalidEntityId || anchor == clicked) {
     return {clicked};
+  }
+
+  std::vector<EntityId> selection;
+  bool selecting = false;
+  for (const EntityRecord &record : records) {
+    const bool endpoint = record.id == anchor || record.id == clicked;
+    if (endpoint && !selecting) {
+      selecting = true;
+      selection.push_back(record.id);
+      continue;
+    }
+
+    if (selecting) {
+      selection.push_back(record.id);
+    }
+
+    if (endpoint) {
+      return selection;
+    }
+  }
+
+  return {clicked};
 }
 
-bool selectOnly(UIContext& context, const std::vector<EntityId>& entities, EntityId active = InvalidEntityId) {
-    QuaderApiVoidResult result = context.editor.selection().selectObjects(
-            std::span<const EntityId>(entities.data(), entities.size()),
-            active);
-    return result.ok && result.changed;
+bool select_only(UIContext &context, const std::vector<EntityId> &entities,
+                 EntityId active = kInvalidEntityId) {
+  QuaderApiVoidResult result = context.editor.selection().select_objects(
+      std::span<const EntityId>(entities.data(), entities.size()), active);
+  return result.ok && result.changed;
 }
 
-bool selectCurrentSceneSelection(UIContext& context) {
-    const std::vector<EntityId> selected = context.document.selectedEntities();
-    return selectOnly(context, selected, context.document.primarySelection());
+bool select_current_scene_selection(UIContext &context) {
+  const std::vector<EntityId> selected = context.document.selected_entities();
+  return select_only(context, selected, context.document.primary_selection());
 }
 
-void groupSelection(UIContext& context) {
-    SceneDocument& document = context.document;
-    const std::vector<EntityId> roots = documentCommandSelectedRootEntities(document);
-    if (roots.empty()) {
-        return;
-    }
+void group_selection(UIContext &context) {
+  SceneDocument &document = context.document;
+  const std::vector<EntityId> roots =
+      document_command_selected_root_entities(document);
+  if (roots.empty()) {
+    return;
+  }
 
-    const QuaderApiVoidResult result = context.editor.commands().execute(QuaderCommand::GroupSelection);
-    if (result.ok && result.changed) {
-        (void)selectCurrentSceneSelection(context);
-    }
+  const QuaderApiVoidResult result =
+      context.editor.commands().execute(quader_command::kGroupSelection);
+  if (result.ok && result.changed) {
+    (void)select_current_scene_selection(context);
+  }
 }
 
-void ungroupEntity(UIContext& context, EntityId group) {
-    SceneDocument& document = context.document;
-    if (!document.exists(group) || document.kind(group) != EntityKind::Empty || !document.hasChildren(group)) {
-        return;
-    }
+void ungroup_entity(UIContext &context, EntityId group) {
+  SceneDocument &document = context.document;
+  if (!document.exists(group) || document.kind(group) != EntityKind::Empty ||
+      !document.has_children(group)) {
+    return;
+  }
 
-    if (!containsEntity(document.selectedEntities(), group)) {
-        (void)selectOnly(context, {group}, group);
-    }
-    QuaderApiVoidResult result = context.editor.commands().execute(QuaderCommand::UngroupSelection);
-    if (result.ok && result.changed) {
-        (void)selectCurrentSceneSelection(context);
-    }
+  if (!contains_entity(document.selected_entities(), group)) {
+    (void)select_only(context, {group}, group);
+  }
+  QuaderApiVoidResult result =
+      context.editor.commands().execute(quader_command::kUngroupSelection);
+  if (result.ok && result.changed) {
+    (void)select_current_scene_selection(context);
+  }
 }
 
-void ungroupSelection(UIContext& context) {
-    QuaderApiVoidResult result = context.editor.commands().execute(QuaderCommand::UngroupSelection);
-    if (result.ok && result.changed) {
-        (void)selectCurrentSceneSelection(context);
-    }
+void ungroup_selection(UIContext &context) {
+  QuaderApiVoidResult result =
+      context.editor.commands().execute(quader_command::kUngroupSelection);
+  if (result.ok && result.changed) {
+    (void)select_current_scene_selection(context);
+  }
 }
 
-void deleteSelection(UIContext& context) {
-    SceneDocument& document = context.document;
-    const std::vector<EntityId> roots = documentCommandSelectedRootEntities(document);
-    if (roots.empty()) {
-        return;
-    }
+void delete_selection(UIContext &context) {
+  SceneDocument &document = context.document;
+  const std::vector<EntityId> roots =
+      document_command_selected_root_entities(document);
+  if (roots.empty()) {
+    return;
+  }
 
-    const QuaderSelectionMode previousMode = context.editor.selection().summary().mode;
-    if (previousMode != QuaderSelectionMode::Object && previousMode != QuaderSelectionMode::Group) {
-        (void)context.editor.selection().setMode(QuaderSelectionMode::Object);
-    }
-    (void)context.editor.commands().execute(QuaderCommand::DeleteSelection);
+  const QuaderSelectionMode previous_mode =
+      context.editor.selection().summary().mode;
+  if (previous_mode != QuaderSelectionMode::Object &&
+      previous_mode != QuaderSelectionMode::Group) {
+    (void)context.editor.selection().set_mode(QuaderSelectionMode::Object);
+  }
+  (void)context.editor.commands().execute(quader_command::kDeleteSelection);
 }
 
-void duplicateSelection(UIContext& context) {
-    (void)context.editor.commands().execute(QuaderCommand::DuplicateSelection);
+void duplicate_selection(UIContext &context) {
+  (void)context.editor.commands().execute(quader_command::kDuplicateSelection);
 }
 
-ImTextureID iconFor(const UIIconSet& icons, EntityKind kind) {
-    switch (kind) {
-    case EntityKind::Empty:
-        return icons.empty;
-    case EntityKind::Mesh:
-        return icons.mesh;
-    case EntityKind::Light:
-    case EntityKind::Generic:
-        return ImTextureID_Invalid;
-    }
+ImTextureID icon_for(const UIIconSet &icons, EntityKind kind) {
+  switch (kind) {
+  case EntityKind::Empty:
+    return icons.empty;
+  case EntityKind::Mesh:
+    return icons.mesh;
+  case EntityKind::Light:
+  case EntityKind::Generic:
     return ImTextureID_Invalid;
+  }
+  return ImTextureID_Invalid;
 }
 
-void drawOutlinerText(
-        ImDrawList* drawList,
-        ImVec2 position,
-        ImU32 color,
-        const std::string& text,
-        bool italic,
-        const ImVec4& clipRect) {
-    const int vertexStart = drawList->VtxBuffer.Size;
-    drawList->AddText(
-            ImGui::GetFont(),
-            ImGui::GetFontSize(),
-            position,
-            color,
-            text.c_str(),
-            text.c_str() + text.size(),
-            0.0f,
-            &clipRect);
-    if (!italic) {
-        return;
-    }
+void draw_outliner_text(ImDrawList *draw_list, ImVec2 position, ImU32 color,
+                        const std::string &text, bool italic,
+                        const ImVec4 &clip_rect) {
+  const int vertex_start = draw_list->VtxBuffer.Size;
+  draw_list->AddText(ImGui::GetFont(), ImGui::GetFontSize(), position, color,
+                     text.c_str(), text.c_str() + text.size(), 0.0f,
+                     &clip_rect);
+  if (!italic) {
+    return;
+  }
 
-    const float baseline = position.y + ImGui::GetTextLineHeight();
-    for (int index = vertexStart; index < drawList->VtxBuffer.Size; ++index) {
-        ImDrawVert& vertex = drawList->VtxBuffer[index];
-        vertex.pos.x += (baseline - vertex.pos.y) * 0.16f;
-    }
+  const float baseline = position.y + ImGui::GetTextLineHeight();
+  for (int index = vertex_start; index < draw_list->VtxBuffer.Size; ++index) {
+    ImDrawVert &vertex = draw_list->VtxBuffer[index];
+    vertex.pos.x += (baseline - vertex.pos.y) * 0.16f;
+  }
 }
 
-void drawHierarchyGuides(
-        ImDrawList* drawList,
-        ImVec2 rowMin,
-        ImVec2 rowMax,
-        float contentX,
-        int depth,
-        float indent,
-        ImU32 color) {
-    if (depth <= 0) {
-        return;
-    }
+void draw_hierarchy_guides(ImDrawList *draw_list, ImVec2 row_min,
+                           ImVec2 row_max, float content_x, int depth,
+                           float indent, ImU32 color) {
+  if (depth <= 0) {
+    return;
+  }
 
-    const float rowCenterY = (rowMin.y + rowMax.y) * 0.5f;
-    for (int level = 0; level < depth; ++level) {
-        const float lineX = rowMin.x - static_cast<float>(depth - level) * indent + indent * 0.5f;
-        drawList->AddLine({lineX, rowMin.y}, {lineX, rowMax.y}, color, 1.0f);
-    }
-    const float branchX = rowMin.x - indent * 0.5f;
-    drawList->AddLine({branchX, rowCenterY}, {contentX - 3.0f, rowCenterY}, color, 1.0f);
+  const float row_center_y = (row_min.y + row_max.y) * 0.5f;
+  for (int level = 0; level < depth; ++level) {
+    const float line_x =
+        row_min.x - static_cast<float>(depth - level) * indent + indent * 0.5f;
+    draw_list->AddLine({line_x, row_min.y}, {line_x, row_max.y}, color, 1.0f);
+  }
+  const float branch_x = row_min.x - indent * 0.5f;
+  draw_list->AddLine({branch_x, row_center_y}, {content_x - 3.0f, row_center_y},
+                     color, 1.0f);
 }
 
 } // namespace
@@ -206,39 +200,39 @@ void drawHierarchyGuides(
  */
 struct OutlinerPanel::TreeCache {
     bool valid = false;
-    std::uint64_t sceneRevision = 0;
+    std::uint64_t scene_revision = 0;
     std::vector<EntityRecord> records;
-    std::unordered_map<EntityId, std::size_t> recordIndexByEntity;
-    std::unordered_map<EntityId, std::vector<EntityId>> childrenByEntity;
+    std::unordered_map<EntityId, std::size_t> record_index_by_entity;
+    std::unordered_map<EntityId, std::vector<EntityId>> children_by_entity;
     std::vector<EntityId> roots;
     std::vector<EntityId> selected;
-    EntityId primarySelection = InvalidEntityId;
+    EntityId primary_selection = kInvalidEntityId;
 };
 
 OutlinerPanel::OutlinerPanel() = default;
 
 OutlinerPanel::~OutlinerPanel() = default;
 
-float OutlinerPanel::minimumWidth(const UIContext& context) const {
+float OutlinerPanel::minimum_width(const UIContext& context) const {
     // UIDockPanel applies setNextWindowMinWidth(context.style.sidebarMinWidth) before opening the window.
-    return context.style.sidebarMinWidth;
+    return context.style.sidebar_min_width;
 }
 
-ImVec2 OutlinerPanel::panelWindowPadding(const UIContext& context) const {
-    return {context.style.windowPadding.x, context.style.windowPadding.y};
+ImVec2 OutlinerPanel::panel_window_padding(const UIContext& context) const {
+  return {context.style.window_padding.x, context.style.window_padding.y};
 }
 
-ImGuiWindowFlags OutlinerPanel::windowFlags(const UIContext& context) const {
-    return context.style.panelWindowFlags;
+ImGuiWindowFlags OutlinerPanel::window_flags(const UIContext& context) const {
+  return context.style.panel_window_flags;
 }
 
-void OutlinerPanel::drawContent(UIContext& context) {
+void OutlinerPanel::draw_content(UIContext& context) {
     SceneDocument& document = context.document;
 
-    const TreeCache& tree = refreshTreeCache(document);
+    const TreeCache &tree = refresh_tree_cache(document);
     const ImGuiIO& io = ImGui::GetIO();
-    PendingOutlinerAction pendingAction = PendingOutlinerAction::None;
-    EntityId pendingTarget = InvalidEntityId;
+    PendingOutlinerAction pending_action = PendingOutlinerAction::None;
+    EntityId pending_target = kInvalidEntityId;
     constexpr float kOutlinerRowLeftPadding = 3.0f;
     constexpr float kOutlinerTreeIndent = 14.0f;
     constexpr float kOutlinerIconSize = 16.0f;
@@ -249,217 +243,241 @@ void OutlinerPanel::drawContent(UIContext& context) {
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{kOutlinerRowLeftPadding, style.FramePadding.y});
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{kOutlinerIconTextGap, style.ItemSpacing.y});
 
-    auto handleSelection = [&](const EntityRecord& record) {
-        EntityId activeSelection = record.id;
-        std::vector<EntityId> nextSelection;
-        if (io.KeyShift) {
-            nextSelection = entityRangeSelection(tree.records, outlinerAnchor_, record.id);
-        } else if (io.KeyCtrl || io.KeySuper) {
-            nextSelection = tree.selected;
-            if (containsEntity(nextSelection, record.id)) {
-                nextSelection.erase(std::remove(nextSelection.begin(), nextSelection.end(), record.id), nextSelection.end());
-                activeSelection = tree.primarySelection == record.id ? InvalidEntityId : tree.primarySelection;
-            } else {
-                nextSelection.push_back(record.id);
-            }
+    auto handle_selection = [&](const EntityRecord &record) {
+      EntityId active_selection = record.id;
+      std::vector<EntityId> next_selection;
+      if (io.KeyShift) {
+        next_selection =
+            entity_range_selection(tree.records, outliner_anchor_, record.id);
+      } else if (io.KeyCtrl || io.KeySuper) {
+        next_selection = tree.selected;
+        if (contains_entity(next_selection, record.id)) {
+          next_selection.erase(std::remove(next_selection.begin(),
+                                           next_selection.end(), record.id),
+                               next_selection.end());
+          active_selection = tree.primary_selection == record.id
+                                 ? kInvalidEntityId
+                                 : tree.primary_selection;
         } else {
-            nextSelection = {record.id};
+          next_selection.push_back(record.id);
         }
-        outlinerAnchor_ = record.id;
-        (void)selectOnly(context, nextSelection, activeSelection);
+      } else {
+        next_selection = {record.id};
+      }
+      outliner_anchor_ = record.id;
+      (void)select_only(context, next_selection, active_selection);
     };
 
-    std::function<void(EntityId)> drawNode = [&](EntityId entity) {
-        const auto recordIt = tree.recordIndexByEntity.find(entity);
-        if (recordIt == tree.recordIndexByEntity.end() || recordIt->second >= tree.records.size()) {
+    std::function<void(EntityId)> draw_node = [&](EntityId entity) {
+      const auto record_it = tree.record_index_by_entity.find(entity);
+      if (record_it == tree.record_index_by_entity.end() ||
+          record_it->second >= tree.records.size()) {
+        return;
+      }
+      const EntityRecord &record = tree.records[record_it->second];
+      ImGui::PushID(static_cast<int>(record.id));
+
+      const bool subdued =
+          !record.effectively_visible || record.effectively_locked;
+      if (subdued) {
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+      }
+
+      ImGuiTreeNodeFlags tree_flags = ImGuiTreeNodeFlags_OpenOnArrow |
+                                      ImGuiTreeNodeFlags_OpenOnDoubleClick |
+                                      ImGuiTreeNodeFlags_SpanAvailWidth;
+      if (record.selected) {
+        tree_flags |= ImGuiTreeNodeFlags_Selected;
+      }
+      if (!record.has_children) {
+        tree_flags |=
+            ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+      } else {
+        tree_flags |= ImGuiTreeNodeFlags_DefaultOpen;
+      }
+
+      const bool open = ImGui::TreeNodeEx("##TreeNode", tree_flags);
+      const ImVec2 row_min = ImGui::GetItemRectMin();
+      const ImVec2 row_max = ImGui::GetItemRectMax();
+      const bool row_visible = ImGui::IsRectVisible(row_min, row_max);
+      const bool row_left_clicked =
+          ImGui::IsItemClicked(ImGuiMouseButton_Left) &&
+          !ImGui::IsItemToggledOpen();
+      const bool row_right_clicked =
+          ImGui::IsItemClicked(ImGuiMouseButton_Right);
+      ImGui::OpenPopupOnItemClick("EntityContext",
+                                  ImGuiPopupFlags_MouseButtonRight);
+      if (row_left_clicked) {
+        handle_selection(record);
+      }
+
+      if (row_visible) {
+        const ImTextureID icon = icon_for(context.icons, record.kind);
+        const float row_height =
+            std::max(row_max.y - row_min.y, ImGui::GetTextLineHeight());
+        const float content_x = row_min.x + ImGui::GetTreeNodeToLabelSpacing();
+        float text_x = content_x;
+        ImDrawList *draw_list = ImGui::GetWindowDrawList();
+        const ImU32 guide_color = ImGui::GetColorU32(ImGuiCol_Border, 0.75f);
+        draw_hierarchy_guides(draw_list, row_min, row_max, content_x,
+                              record.depth, kOutlinerTreeIndent, guide_color);
+        if (icon != ImTextureID_Invalid) {
+          const ImVec2 icon_min{
+              content_x,
+              row_min.y +
+                  std::max((row_height - kOutlinerIconSize) * 0.5f, 0.0f)};
+          const ImVec2 icon_max{icon_min.x + kOutlinerIconSize,
+                                icon_min.y + kOutlinerIconSize};
+          draw_list->AddImage(icon, icon_min, icon_max);
+          text_x += kOutlinerIconSize + kOutlinerIconTextGap;
+        }
+        const ImVec2 text_pos{
+            text_x,
+            row_min.y +
+                std::max((row_height - ImGui::GetTextLineHeight()) * 0.5f,
+                         0.0f)};
+        float status_right = row_max.x - kOutlinerRowLeftPadding;
+        auto draw_status_icon = [&](ImTextureID status_icon) {
+          if (status_icon == ImTextureID_Invalid) {
             return;
+          }
+          const ImVec2 icon_max{
+              status_right,
+              row_min.y +
+                  std::max((row_height + kOutlinerStatusIconSize) * 0.5f,
+                           kOutlinerStatusIconSize)};
+          const ImVec2 icon_min{icon_max.x - kOutlinerStatusIconSize,
+                                icon_max.y - kOutlinerStatusIconSize};
+          draw_list->AddImage(status_icon, icon_min, icon_max);
+          status_right = icon_min.x - kOutlinerIconTextGap;
+        };
+        if (!record.effectively_visible) {
+          draw_status_icon(context.icons.hide);
         }
-        const EntityRecord& record = tree.records[recordIt->second];
-        ImGui::PushID(static_cast<int>(record.id));
+        if (record.effectively_locked) {
+          draw_status_icon(context.icons.lock);
+        }
+        const ImVec4 text_clip{
+            text_x, row_min.y,
+            std::max(text_x, status_right - kOutlinerIconTextGap), row_max.y};
+        draw_outliner_text(draw_list, text_pos,
+                           ImGui::GetColorU32(ImGuiCol_Text), record.name,
+                           subdued, text_clip);
+      }
 
-        const bool subdued = !record.effectivelyVisible || record.effectivelyLocked;
-        if (subdued) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+      if (row_right_clicked) {
+        if (!record.selected) {
+          (void)select_only(context, {record.id}, record.id);
         }
+      }
+      if (ImGui::BeginPopup("EntityContext")) {
+        const bool can_mutate_hierarchy = !record.is_scene_root;
+        const std::string delete_label = context.localization.imgui_label(
+            "ui.outliner.delete", "ui.outliner.delete", "Delete");
+        if (ImGui::MenuItem(delete_label.c_str(), nullptr, false,
+                            can_mutate_hierarchy)) {
+          pending_action = PendingOutlinerAction::Delete;
+          pending_target = record.id;
+        }
+        const std::string duplicate_label = context.localization.imgui_label(
+            "ui.outliner.duplicate", "ui.outliner.duplicate", "Duplicate");
+        if (ImGui::MenuItem(duplicate_label.c_str(), nullptr, false,
+                            can_mutate_hierarchy)) {
+          pending_action = PendingOutlinerAction::Duplicate;
+          pending_target = record.id;
+        }
+        const std::string group_label = context.localization.imgui_label(
+            "ui.outliner.group", "ui.outliner.group", "Group");
+        if (ImGui::MenuItem(group_label.c_str(), nullptr, false,
+                            can_mutate_hierarchy)) {
+          pending_action = PendingOutlinerAction::Group;
+          pending_target = record.id;
+        }
+        const bool can_ungroup = can_mutate_hierarchy &&
+                                 record.kind == EntityKind::Empty &&
+                                 record.has_children;
+        const std::string ungroup_label = context.localization.imgui_label(
+            "ui.outliner.ungroup", "ui.outliner.ungroup", "Ungroup");
+        if (ImGui::MenuItem(ungroup_label.c_str(), nullptr, false,
+                            can_ungroup)) {
+          pending_action = PendingOutlinerAction::Ungroup;
+          pending_target = record.id;
+        }
+        ImGui::EndPopup();
+      }
 
-        ImGuiTreeNodeFlags treeFlags =
-                ImGuiTreeNodeFlags_OpenOnArrow |
-                ImGuiTreeNodeFlags_OpenOnDoubleClick |
-                ImGuiTreeNodeFlags_SpanAvailWidth;
-        if (record.selected) {
-            treeFlags |= ImGuiTreeNodeFlags_Selected;
-        }
-        if (!record.hasChildren) {
-            treeFlags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
-        } else {
-            treeFlags |= ImGuiTreeNodeFlags_DefaultOpen;
-        }
+      if (subdued) {
+        ImGui::PopStyleColor();
+      }
 
-        const bool open = ImGui::TreeNodeEx("##TreeNode", treeFlags);
-        const ImVec2 rowMin = ImGui::GetItemRectMin();
-        const ImVec2 rowMax = ImGui::GetItemRectMax();
-        const bool rowVisible = ImGui::IsRectVisible(rowMin, rowMax);
-        const bool rowLeftClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen();
-        const bool rowRightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
-        ImGui::OpenPopupOnItemClick("EntityContext", ImGuiPopupFlags_MouseButtonRight);
-        if (rowLeftClicked) {
-            handleSelection(record);
+      if (open && record.has_children) {
+        if (const auto children_it = tree.children_by_entity.find(record.id);
+            children_it != tree.children_by_entity.end()) {
+          for (const EntityId child : children_it->second) {
+            draw_node(child);
+          }
         }
-
-        if (rowVisible) {
-            const ImTextureID icon = iconFor(context.icons, record.kind);
-            const float rowHeight = std::max(rowMax.y - rowMin.y, ImGui::GetTextLineHeight());
-            const float contentX = rowMin.x + ImGui::GetTreeNodeToLabelSpacing();
-            float textX = contentX;
-            ImDrawList* drawList = ImGui::GetWindowDrawList();
-            const ImU32 guideColor = ImGui::GetColorU32(ImGuiCol_Border, 0.75f);
-            drawHierarchyGuides(drawList, rowMin, rowMax, contentX, record.depth, kOutlinerTreeIndent, guideColor);
-            if (icon != ImTextureID_Invalid) {
-                const ImVec2 iconMin{
-                        contentX,
-                        rowMin.y + std::max((rowHeight - kOutlinerIconSize) * 0.5f, 0.0f)};
-                const ImVec2 iconMax{iconMin.x + kOutlinerIconSize, iconMin.y + kOutlinerIconSize};
-                drawList->AddImage(icon, iconMin, iconMax);
-                textX += kOutlinerIconSize + kOutlinerIconTextGap;
-            }
-            const ImVec2 textPos{
-                    textX,
-                    rowMin.y + std::max((rowHeight - ImGui::GetTextLineHeight()) * 0.5f, 0.0f)};
-            float statusRight = rowMax.x - kOutlinerRowLeftPadding;
-            auto drawStatusIcon = [&](ImTextureID statusIcon) {
-                if (statusIcon == ImTextureID_Invalid) {
-                    return;
-                }
-                const ImVec2 iconMax{
-                        statusRight,
-                        rowMin.y + std::max((rowHeight + kOutlinerStatusIconSize) * 0.5f, kOutlinerStatusIconSize)};
-                const ImVec2 iconMin{
-                        iconMax.x - kOutlinerStatusIconSize,
-                        iconMax.y - kOutlinerStatusIconSize};
-                drawList->AddImage(statusIcon, iconMin, iconMax);
-                statusRight = iconMin.x - kOutlinerIconTextGap;
-            };
-            if (!record.effectivelyVisible) {
-                drawStatusIcon(context.icons.hide);
-            }
-            if (record.effectivelyLocked) {
-                drawStatusIcon(context.icons.lock);
-            }
-            const ImVec4 textClip{
-                    textX,
-                    rowMin.y,
-                    std::max(textX, statusRight - kOutlinerIconTextGap),
-                    rowMax.y};
-            drawOutlinerText(
-                    drawList,
-                    textPos,
-                    ImGui::GetColorU32(ImGuiCol_Text),
-                    record.name,
-                    subdued,
-                    textClip);
-        }
-
-        if (rowRightClicked) {
-            if (!record.selected) {
-                (void)selectOnly(context, {record.id}, record.id);
-            }
-        }
-        if (ImGui::BeginPopup("EntityContext")) {
-            const bool canMutateHierarchy = !record.isSceneRoot;
-            const std::string deleteLabel = context.localization.imguiLabel("ui.outliner.delete", "ui.outliner.delete", "Delete");
-            if (ImGui::MenuItem(deleteLabel.c_str(), nullptr, false, canMutateHierarchy)) {
-                pendingAction = PendingOutlinerAction::Delete;
-                pendingTarget = record.id;
-            }
-            const std::string duplicateLabel = context.localization.imguiLabel("ui.outliner.duplicate", "ui.outliner.duplicate", "Duplicate");
-            if (ImGui::MenuItem(duplicateLabel.c_str(), nullptr, false, canMutateHierarchy)) {
-                pendingAction = PendingOutlinerAction::Duplicate;
-                pendingTarget = record.id;
-            }
-            const std::string groupLabel = context.localization.imguiLabel("ui.outliner.group", "ui.outliner.group", "Group");
-            if (ImGui::MenuItem(groupLabel.c_str(), nullptr, false, canMutateHierarchy)) {
-                pendingAction = PendingOutlinerAction::Group;
-                pendingTarget = record.id;
-            }
-            const bool canUngroup = canMutateHierarchy && record.kind == EntityKind::Empty && record.hasChildren;
-            const std::string ungroupLabel = context.localization.imguiLabel("ui.outliner.ungroup", "ui.outliner.ungroup", "Ungroup");
-            if (ImGui::MenuItem(ungroupLabel.c_str(), nullptr, false, canUngroup)) {
-                pendingAction = PendingOutlinerAction::Ungroup;
-                pendingTarget = record.id;
-            }
-            ImGui::EndPopup();
-        }
-
-        if (subdued) {
-            ImGui::PopStyleColor();
-        }
-
-        if (open && record.hasChildren) {
-            if (const auto childrenIt = tree.childrenByEntity.find(record.id);
-                    childrenIt != tree.childrenByEntity.end()) {
-                for (const EntityId child : childrenIt->second) {
-                    drawNode(child);
-                }
-            }
-            ImGui::TreePop();
-        }
-        ImGui::PopID();
+        ImGui::TreePop();
+      }
+      ImGui::PopID();
     };
 
     for (const EntityId root : tree.roots) {
-        drawNode(root);
+      draw_node(root);
     }
 
     ImGui::PopStyleVar(3);
 
-    switch (pendingAction) {
+    switch (pending_action) {
     case PendingOutlinerAction::Delete:
-        deleteSelection(context);
-        break;
+      delete_selection(context);
+      break;
     case PendingOutlinerAction::Duplicate:
-        duplicateSelection(context);
-        break;
+      duplicate_selection(context);
+      break;
     case PendingOutlinerAction::Group:
-        groupSelection(context);
-        break;
+      group_selection(context);
+      break;
     case PendingOutlinerAction::Ungroup:
-        ungroupEntity(context, pendingTarget);
-        break;
+      ungroup_entity(context, pending_target);
+      break;
     case PendingOutlinerAction::UngroupSelection:
-        ungroupSelection(context);
-        break;
+      ungroup_selection(context);
+      break;
     case PendingOutlinerAction::None:
         break;
     }
 }
 
-const OutlinerPanel::TreeCache& OutlinerPanel::refreshTreeCache(const SceneDocument& document) {
-    if (!treeCache_) {
-        treeCache_ = std::make_unique<TreeCache>();
-    }
-    TreeCache& cache = *treeCache_;
-    if (cache.valid && cache.sceneRevision == document.revision()) {
-        return cache;
-    }
-
-    cache.sceneRevision = document.revision();
-    cache.records = document.entityRecordsTreeOrder();
-    cache.recordIndexByEntity.clear();
-    cache.recordIndexByEntity.reserve(cache.records.size());
-    cache.childrenByEntity.clear();
-    cache.childrenByEntity.reserve(cache.records.size());
-    for (std::size_t index = 0; index < cache.records.size(); ++index) {
-        const EntityRecord& record = cache.records[index];
-        cache.recordIndexByEntity.emplace(record.id, index);
-        if (record.parent != InvalidEntityId) {
-            cache.childrenByEntity[record.parent].push_back(record.id);
-        }
-    }
-    cache.roots = document.rootEntities();
-    cache.selected = document.selectedEntities();
-    cache.primarySelection = document.primarySelection();
-    cache.valid = true;
+const OutlinerPanel::TreeCache &
+OutlinerPanel::refresh_tree_cache(const SceneDocument &document) {
+  if (!tree_cache_) {
+    tree_cache_ = std::make_unique<TreeCache>();
+  }
+  TreeCache &cache = *tree_cache_;
+  if (cache.valid && cache.scene_revision == document.revision()) {
     return cache;
+  }
+
+  cache.scene_revision = document.revision();
+  cache.records = document.entity_records_tree_order();
+  cache.record_index_by_entity.clear();
+  cache.record_index_by_entity.reserve(cache.records.size());
+  cache.children_by_entity.clear();
+  cache.children_by_entity.reserve(cache.records.size());
+  for (std::size_t index = 0; index < cache.records.size(); ++index) {
+    const EntityRecord &record = cache.records[index];
+    cache.record_index_by_entity.emplace(record.id, index);
+    if (record.parent != kInvalidEntityId) {
+      cache.children_by_entity[record.parent].push_back(record.id);
+    }
+  }
+  cache.roots = document.root_entities();
+  cache.selected = document.selected_entities();
+  cache.primary_selection = document.primary_selection();
+  cache.valid = true;
+  return cache;
 }
 
 } // namespace quader

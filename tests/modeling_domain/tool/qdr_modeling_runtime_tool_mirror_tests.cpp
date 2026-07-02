@@ -13,8 +13,8 @@
 
 TEST(QdrModelingRuntimeToolMirrorTests, MirrorToolCapturesObjectTargetsFromCurrentSelection) {
 	quader_editor_core::RectangleSelectionState selection;
-	selection.mode = quader_editor_core::SelectionMode::object;
-	selection.selected_object_ids = { 4, 8 };
+        selection.mode = quader_editor_core::SelectionMode::Object;
+        selection.selected_object_ids = { 4, 8 };
 	selection.active_object_id = 4;
 
 	quader_editor_core::MirrorToolState state;
@@ -33,8 +33,8 @@ TEST(QdrModelingRuntimeToolMirrorTests, MirrorToolCapturesObjectTargetsFromCurre
 
 TEST(QdrModelingRuntimeToolMirrorTests, MirrorTargetPolicyIsObjectModeOnly) {
 	quader_editor_core::RectangleSelectionState selection;
-	selection.mode = quader_editor_core::SelectionMode::face;
-	selection.active_object_id = 5;
+        selection.mode = quader_editor_core::SelectionMode::Face;
+        selection.active_object_id = 5;
 	selection.selected_faces = { { 5, 2 } };
 
 	quader_editor_core::MirrorToolState state;
@@ -48,13 +48,13 @@ TEST(QdrModelingRuntimeToolMirrorTests, MirrorTargetPolicyIsObjectModeOnly) {
 
 TEST(QdrModelingRuntimeToolMirrorTests, MirrorToolUsesTwoSnappedWorldGridPoints) {
 	quader_editor_core::RectangleSelectionState selection;
-	selection.mode = quader_editor_core::SelectionMode::object;
-	selection.selected_object_ids = { 5 };
+        selection.mode = quader_editor_core::SelectionMode::Object;
+        selection.selected_object_ids = { 5 };
 	selection.active_object_id = 5;
 
 	quader_editor_core::ViewportCameraState camera;
-	camera.projection = quader_editor_core::CameraProjection::perspective;
-	const quader_editor_core::CutGridPointResult grid_point =
+        camera.projection = quader_editor_core::CameraProjection::Perspective;
+        const quader_editor_core::CutGridPointResult grid_point =
 		quader_editor_core::cut_grid_point_from_ray(
 			camera,
 			{ { 0.49F, 2.0F, 1.51F }, { 0.0F, -1.0F, 0.0F } },
@@ -112,14 +112,14 @@ TEST(QdrModelingRuntimeToolMirrorTests, MirrorPreviewValidatesOnTheFirstDragAfte
 	const std::vector<quader_editor_core::PolygonObject> objects { object };
 
 	quader_editor_core::RectangleSelectionState selection;
-	selection.mode = quader_editor_core::SelectionMode::object;
-	selection.selected_object_ids = { 7 };
+        selection.mode = quader_editor_core::SelectionMode::Object;
+        selection.selected_object_ids = { 7 };
 	selection.active_object_id = 7;
 
 	quader_editor_core::ViewportCameraState camera;
-	camera.projection = quader_editor_core::CameraProjection::perspective;
+        camera.projection = quader_editor_core::CameraProjection::Perspective;
 
-	quader_editor_core::EditorRuntime runtime;
+        quader_editor_core::EditorRuntime runtime;
 	quader_editor_core::MirrorRayUpdateInput first_input;
 	first_input.camera = camera;
 	first_input.ray = { { 0.0F, 2.0F, 0.0F }, { 0.0F, -1.0F, 0.0F } };

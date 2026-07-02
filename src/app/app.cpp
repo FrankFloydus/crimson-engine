@@ -29,27 +29,32 @@ constexpr Sint32 kActiveFrameWaitMs = 1;
 constexpr Sint32 kIdleFrameWaitMs = 100;
 constexpr Sint32 kSuspendedWindowWaitMs = 250;
 
-std::filesystem::path defaultProjectSaveFileName(const QuaderProjectApi& project) {
-    std::string name = project.metadata().name.empty() ? "Untitled Project" : project.metadata().name;
-    name.append(".qdr");
-    return std::filesystem::path(std::move(name));
+std::filesystem::path
+default_project_save_file_name(const QuaderProjectApi &project) {
+  std::string name = project.metadata().name.empty() ? "Untitled Project"
+                                                     : project.metadata().name;
+  name.append(".qdr");
+  return std::filesystem::path(std::move(name));
 }
 
-PlatformFileDialogOptions projectFileDialogOptions(void* ownerWindowHandle, const QuaderProjectApi& project) {
-    PlatformFileDialogOptions options;
-    options.ownerWindowHandle = ownerWindowHandle;
-    const std::filesystem::path& currentPath = project.path();
-    if (!currentPath.empty()) {
-        options.initialDirectory = currentPath.parent_path();
-        options.initialFileName = currentPath.filename();
-    } else {
-        options.initialFileName = defaultProjectSaveFileName(project);
-    }
-    return options;
+PlatformFileDialogOptions
+project_file_dialog_options(void *owner_window_handle,
+                            const QuaderProjectApi &project) {
+  PlatformFileDialogOptions options;
+  options.owner_window_handle = owner_window_handle;
+  const std::filesystem::path &current_path = project.path();
+  if (!current_path.empty()) {
+    options.initial_directory = current_path.parent_path();
+    options.initial_file_name = current_path.filename();
+  } else {
+    options.initial_file_name = default_project_save_file_name(project);
+  }
+  return options;
 }
 
-bool chromeActionInvalidatesCurrentFrame(WindowChromeAction action) {
-    return action == WindowChromeAction::Minimize || action == WindowChromeAction::ToggleMaximizeRestore;
+bool chrome_action_invalidates_current_frame(WindowChromeAction action) {
+  return action == WindowChromeAction::Minimize ||
+         action == WindowChromeAction::ToggleMaximizeRestore;
 }
 
 } // namespace
@@ -59,352 +64,375 @@ App::~App() {
     shutdown();
 }
 
-bool App::initialize(const std::filesystem::path& executablePath, AppOptions options) {
-    shutdownComplete_ = false;
-    running_ = false;
-    const std::filesystem::path executableDir = executablePath.parent_path();
-    windowSettingsPath_ = AppWindowSettings::resolvePath(executableDir);
-    windowSettings_ = AppWindowSettings::load(windowSettingsPath_);
-    const std::optional<PlatformWindowPlacement> savedPlacement = windowSettings_.placement();
-    const PlatformWindowChromeFrame initialFrame = savedPlacement ?
-            savedPlacement->normalFrame :
-            PlatformWindowChromeFrame{0, 0, 1600, 960};
+bool App::initialize(const std::filesystem::path &executable_path,
+                     AppOptions options) {
+  shutdown_complete_ = false;
+  running_ = false;
+  const std::filesystem::path executable_dir = executable_path.parent_path();
+  window_settings_path_ = AppWindowSettings::resolve_path(executable_dir);
+  window_settings_ = AppWindowSettings::load(window_settings_path_);
+  const std::optional<PlatformWindowPlacement> saved_placement =
+      window_settings_.placement();
+  const PlatformWindowChromeFrame initial_frame =
+      saved_placement ? saved_placement->normal_frame
+                      : PlatformWindowChromeFrame{0, 0, 1600, 960};
 
-    if (!window_.create(
-                "Quader",
-                std::max(kPlatformWindowMinimumWidth, initialFrame.width),
-                std::max(kPlatformWindowMinimumHeight, initialFrame.height),
-                {.borderless = options.borderlessWindow})) {
-        return false;
+  if (!window_.create(
+          "Quader", std::max(kPlatformWindowMinimumWidth, initial_frame.width),
+          std::max(kPlatformWindowMinimumHeight, initial_frame.height),
+          {.borderless = options.borderless_window})) {
+    return false;
+  }
+  if (saved_placement) {
+    window_.apply_placement(*saved_placement);
+  }
+
+  if (!render_system_.initialize(
+          window_.native_window_handle(), executable_dir,
+          RenderConfig{.backend = options.render_backend})) {
+    LOG_ERROR("Renderer initialization failed");
+    shutdown();
+    return false;
+  }
+
+  LOG_INFO("Initializing scene render bridge");
+  render_bridge_.initialize(render_system_.engine(), render_system_.scene(),
+                            render_system_.quader_mesh_material(),
+                            render_system_.quader_mesh_lit_material(),
+                            render_system_.vertex_color_overlay_material(),
+                            render_system_.overlay_line_material(),
+                            render_system_.selected_object_line_material(),
+                            render_system_.overlay_point_material(),
+                            executable_dir);
+  LOG_INFO("Scene render bridge initialized");
+
+  LOG_INFO("Initializing UI system");
+  ui_.initialize(window_.sdl_window(), render_system_, executable_dir,
+                 options.borderless_window);
+  LOG_INFO("UI system initialized");
+
+  create_startup_scene();
+  editor_ = std::make_unique<QuaderEditorApi>(
+      QuaderApiSessionInternalAccess::from_project_session(project_session_));
+  editor_->project().set_runtime_hooks(QuaderProjectRuntimeHooks{
+      .choose_open_path =
+          [this]() {
+            return platform_open_project_file_dialog(
+                project_file_dialog_options(window_.native_window_handle(),
+                                            editor_->project()));
+          },
+      .choose_save_as_path =
+          [this]() {
+            return platform_save_project_file_dialog(
+                project_file_dialog_options(window_.native_window_handle(),
+                                            editor_->project()));
+          },
+  });
+  window_.set_live_resize_frame_callback([this]() {
+    if (!running_ || shutdown_complete_ || rendering_frame_) {
+      return false;
     }
-    if (savedPlacement) {
-        window_.applyPlacement(*savedPlacement);
+    const bool frame_submitted = render_frame(frame_clock_.tick());
+    if (frame_submitted) {
+      live_resize_frame_rendered_ = true;
     }
+    return frame_submitted;
+  });
 
-    if (!renderSystem_.initialize(window_.nativeWindowHandle(), executableDir, RenderConfig{.backend = options.renderBackend})) {
-        LOG_ERROR("Renderer initialization failed");
-        shutdown();
-        return false;
-    }
+  if (SDL_AddEventWatch(&App::live_resize_event_watch, this)) {
+    event_watch_installed_ = true;
+  } else {
+    LOG_WARN("SDL_AddEventWatch failed for live resize redraw: {}",
+             SDL_GetError());
+  }
 
-    LOG_INFO("Initializing scene render bridge");
-    renderBridge_.initialize(renderSystem_.engine(),
-            renderSystem_.scene(),
-            renderSystem_.quaderMeshMaterial(),
-            renderSystem_.quaderMeshLitMaterial(),
-            renderSystem_.vertexColorOverlayMaterial(),
-            renderSystem_.overlayLineMaterial(),
-            renderSystem_.selectedObjectLineMaterial(),
-            renderSystem_.overlayPointMaterial(),
-            executableDir);
-    LOG_INFO("Scene render bridge initialized");
-
-    LOG_INFO("Initializing UI system");
-    ui_.initialize(window_.sdlWindow(), renderSystem_, executableDir, options.borderlessWindow);
-    LOG_INFO("UI system initialized");
-
-    createStartupScene();
-    editor_ = std::make_unique<QuaderEditorApi>(
-            QuaderApiSessionInternalAccess::fromProjectSession(projectSession_));
-    editor_->project().setRuntimeHooks(QuaderProjectRuntimeHooks{
-            .chooseOpenPath = [this]() {
-                return platformOpenProjectFileDialog(
-                        projectFileDialogOptions(window_.nativeWindowHandle(), editor_->project()));
-            },
-            .chooseSaveAsPath = [this]() {
-                return platformSaveProjectFileDialog(
-                        projectFileDialogOptions(window_.nativeWindowHandle(), editor_->project()));
-            },
-    });
-    window_.setLiveResizeFrameCallback([this]() {
-        if (!running_ || shutdownComplete_ || renderingFrame_) {
-            return false;
-        }
-        const bool frameSubmitted = renderFrame(frameClock_.tick());
-        if (frameSubmitted) {
-            liveResizeFrameRendered_ = true;
-        }
-        return frameSubmitted;
-    });
-
-    if (SDL_AddEventWatch(&App::liveResizeEventWatch, this)) {
-        eventWatchInstalled_ = true;
-    } else {
-        LOG_WARN("SDL_AddEventWatch failed for live resize redraw: {}", SDL_GetError());
-    }
-
-    running_ = true;
-    return true;
+  running_ = true;
+  return true;
 }
 
 int App::run() {
     LOG_INFO("Entering main loop");
-    frameClock_.reset();
-    const SDL_WindowID mainWindowId = SDL_GetWindowID(window_.sdlWindow());
+    frame_clock_.reset();
+    const SDL_WindowID main_window_id = SDL_GetWindowID(window_.sdl_window());
 
     while (running_) {
-        const FrameTiming frameTiming = frameClock_.tick();
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            const bool chromeConsumed = window_.processChromeEvent(event);
-            if (!chromeConsumed) {
-                ui_.processEvent(event);
-                if (event.type == SDL_EVENT_MOUSE_MOTION) {
-                    (void)window_.processChromeEvent(event);
-                }
-            }
-            if (event.type == SDL_EVENT_QUIT ||
-                    (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && sdlEventTargetsWindow(event, mainWindowId))) {
-                running_ = false;
-            }
-            if ((event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
-                        event.type == SDL_EVENT_WINDOW_RESIZED ||
-                        event.type == SDL_EVENT_WINDOW_MAXIMIZED ||
-                        event.type == SDL_EVENT_WINDOW_RESTORED ||
-                        event.type == SDL_EVENT_WINDOW_SHOWN ||
-                        event.type == SDL_EVENT_WINDOW_EXPOSED) &&
-                    sdlEventTargetsWindow(event, mainWindowId)) {
-                window_.refreshPixelSize();
-            }
-            if ((event.type == SDL_EVENT_WINDOW_FOCUS_GAINED ||
-                        event.type == SDL_EVENT_WINDOW_FOCUS_LOST ||
-                        event.type == SDL_EVENT_WINDOW_MAXIMIZED ||
-                        event.type == SDL_EVENT_WINDOW_RESTORED ||
-                        event.type == SDL_EVENT_WINDOW_SHOWN ||
-                        event.type == SDL_EVENT_WINDOW_HIDDEN ||
-                        event.type == SDL_EVENT_WINDOW_MINIMIZED ||
-                        event.type == SDL_EVENT_WINDOW_OCCLUDED) &&
-                    sdlEventTargetsWindow(event, mainWindowId)) {
-                window_.refreshNativeChrome();
-            }
+      const FrameTiming frame_timing = frame_clock_.tick();
+      SDL_Event event;
+      while (SDL_PollEvent(&event)) {
+        const bool chrome_consumed = window_.process_chrome_event(event);
+        if (!chrome_consumed) {
+          ui_.process_event(event);
+          if (event.type == SDL_EVENT_MOUSE_MOTION) {
+            (void)window_.process_chrome_event(event);
+          }
+        }
+        if (event.type == SDL_EVENT_QUIT ||
+            (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
+             sdl_event_targets_window(event, main_window_id))) {
+          running_ = false;
+        }
+        if ((event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+             event.type == SDL_EVENT_WINDOW_RESIZED ||
+             event.type == SDL_EVENT_WINDOW_MAXIMIZED ||
+             event.type == SDL_EVENT_WINDOW_RESTORED ||
+             event.type == SDL_EVENT_WINDOW_SHOWN ||
+             event.type == SDL_EVENT_WINDOW_EXPOSED) &&
+            sdl_event_targets_window(event, main_window_id)) {
+          window_.refresh_pixel_size();
+        }
+        if ((event.type == SDL_EVENT_WINDOW_FOCUS_GAINED ||
+             event.type == SDL_EVENT_WINDOW_FOCUS_LOST ||
+             event.type == SDL_EVENT_WINDOW_MAXIMIZED ||
+             event.type == SDL_EVENT_WINDOW_RESTORED ||
+             event.type == SDL_EVENT_WINDOW_SHOWN ||
+             event.type == SDL_EVENT_WINDOW_HIDDEN ||
+             event.type == SDL_EVENT_WINDOW_MINIMIZED ||
+             event.type == SDL_EVENT_WINDOW_OCCLUDED) &&
+            sdl_event_targets_window(event, main_window_id)) {
+          window_.refresh_native_chrome();
+        }
         }
         if (!running_) {
             break;
         }
 
-        if (liveResizeFrameRendered_) {
-            liveResizeFrameRendered_ = false;
+        if (live_resize_frame_rendered_) {
+          live_resize_frame_rendered_ = false;
         } else {
-            if (window_.canRenderFrames()) {
-                renderFrame(frameTiming);
-            }
+          if (window_.can_render_frames()) {
+            render_frame(frame_timing);
+          }
         }
 
-        waitUntilNextFrame();
+        wait_until_next_frame();
     }
 
     return 0;
 }
 
 void App::shutdown() {
-    if (shutdownComplete_) {
-        return;
-    }
+  if (shutdown_complete_) {
+    return;
+  }
 
-    shutdownComplete_ = true;
+  shutdown_complete_ = true;
+  running_ = false;
+  if (event_watch_installed_) {
+    SDL_RemoveEventWatch(&App::live_resize_event_watch, this);
+    event_watch_installed_ = false;
+  }
+  window_.set_live_resize_frame_callback({});
+  save_window_settings();
+  ui_.shutdown();
+  editor_.reset();
+  render_bridge_.shutdown();
+  render_system_.shutdown();
+  window_.destroy();
+}
+
+void App::create_startup_scene() {
+  TextureAsset albedo;
+  albedo.name = std::string(kDefaultMaterialAlbedoTextureName);
+  albedo.usage = TextureUsage::BaseColor;
+  albedo.color_space = TextureColorSpace::Srgb;
+  albedo.source_path = std::string(kDefaultMaterialAlbedoTexturePackagePath);
+  const AssetId albedo_texture =
+      project_session_.assets().add_texture(std::move(albedo));
+
+  TextureAsset roughness;
+  roughness.name = std::string(kDefaultMaterialRoughnessTextureName);
+  roughness.usage = TextureUsage::Roughness;
+  roughness.color_space = TextureColorSpace::Linear;
+  roughness.source_path =
+      std::string(kDefaultMaterialRoughnessTexturePackagePath);
+  project_session_.assets().add_texture(std::move(roughness));
+
+  MaterialDocument default_material =
+      make_default_quader_material("Default Quader");
+  set_material_texture_slot(default_material, material_texture_slot::kBaseColor,
+                            albedo_texture);
+  default_material_ =
+      project_session_.assets().add_material(std::move(default_material));
+}
+
+void App::handle_window_chrome_action(WindowChromeAction action) {
+  switch (action) {
+  case WindowChromeAction::Minimize:
+    window_.minimize();
+    break;
+  case WindowChromeAction::ToggleMaximizeRestore:
+    window_.toggle_maximize_restore();
+    window_.refresh_native_chrome();
+    break;
+  case WindowChromeAction::Close:
     running_ = false;
-    if (eventWatchInstalled_) {
-        SDL_RemoveEventWatch(&App::liveResizeEventWatch, this);
-        eventWatchInstalled_ = false;
-    }
-    window_.setLiveResizeFrameCallback({});
-    saveWindowSettings();
-    ui_.shutdown();
-    editor_.reset();
-    renderBridge_.shutdown();
-    renderSystem_.shutdown();
-    window_.destroy();
+    break;
+  }
 }
 
-void App::createStartupScene() {
-    TextureAsset albedo;
-    albedo.name = std::string(kDefaultMaterialAlbedoTextureName);
-    albedo.usage = TextureUsage::BaseColor;
-    albedo.colorSpace = TextureColorSpace::Srgb;
-    albedo.sourcePath = std::string(kDefaultMaterialAlbedoTexturePackagePath);
-    const AssetId albedoTexture = projectSession_.assets().addTexture(std::move(albedo));
+void App::save_window_settings() {
+  if (window_settings_path_.empty()) {
+    return;
+  }
 
-    TextureAsset roughness;
-    roughness.name = std::string(kDefaultMaterialRoughnessTextureName);
-    roughness.usage = TextureUsage::Roughness;
-    roughness.colorSpace = TextureColorSpace::Linear;
-    roughness.sourcePath = std::string(kDefaultMaterialRoughnessTexturePackagePath);
-    projectSession_.assets().addTexture(std::move(roughness));
+  const std::optional<PlatformWindowPlacement> placement = window_.placement();
+  if (!placement) {
+    return;
+  }
 
-    MaterialDocument defaultMaterial = makeDefaultQuaderMaterial("Default Quader");
-    setMaterialTextureSlot(defaultMaterial, MaterialTextureSlot::BaseColor, albedoTexture);
-    defaultMaterial_ = projectSession_.assets().addMaterial(std::move(defaultMaterial));
+  window_settings_.set_placement(*placement);
+  if (!window_settings_.save(window_settings_path_)) {
+    LOG_WARN("Unable to save window settings to {}",
+             window_settings_path_.string());
+  }
 }
 
-void App::handleWindowChromeAction(WindowChromeAction action) {
-    switch (action) {
-    case WindowChromeAction::Minimize:
-        window_.minimize();
-        break;
-    case WindowChromeAction::ToggleMaximizeRestore:
-        window_.toggleMaximizeRestore();
-        window_.refreshNativeChrome();
-        break;
-    case WindowChromeAction::Close:
-        running_ = false;
-        break;
-    }
-}
-
-void App::saveWindowSettings() {
-    if (windowSettingsPath_.empty()) {
-        return;
-    }
-
-    const std::optional<PlatformWindowPlacement> placement = window_.placement();
-    if (!placement) {
-        return;
-    }
-
-    windowSettings_.setPlacement(*placement);
-    if (!windowSettings_.save(windowSettingsPath_)) {
-        LOG_WARN("Unable to save window settings to {}", windowSettingsPath_.string());
-    }
-}
-
-bool App::renderFrame(const FrameTiming& frameTiming) {
-    QDR_PROFILE_FUNCTION();
-    if (renderingFrame_ || !editor_) {
-        return false;
-    }
-    if (window_.nativeChromeMessageActive() && !window_.nativeLiveResizeFrameActive()) {
-        return false;
-    }
-
-    renderingFrame_ = true;
-
-    window_.refreshPixelSize();
-    const std::uint32_t framebufferWidth = window_.widthPixels();
-    const std::uint32_t framebufferHeight = window_.heightPixels();
-    if (!window_.canRenderFrames()) {
-        renderingFrame_ = false;
-        return false;
-    }
-    ui_.setViewportRenderResizeSuspended(window_.chromeResizeActive() || window_.nativeChromeInteractionActive());
-    ui_.setRenderPerformanceStats(renderSystem_.framePerformanceStats());
-    {
-        QDR_PROFILE_SCOPE("UI begin frame");
-        ui_.beginFrame(frameTiming, framebufferWidth, framebufferHeight);
-    }
-    bool quitRequested = false;
-    {
-        QDR_PROFILE_SCOPE("UI draw");
-        ui_.draw(*editor_,
-                renderBridge_,
-                projectSession_.scene(),
-                projectSession_.assets(),
-                projectSession_.modeling(),
-                projectSession_.selection(),
-                defaultMaterial_,
-                quitRequested);
-    }
-    if (const std::optional<WindowChromeAction> chromeAction = ui_.takeWindowChromeAction()) {
-        handleWindowChromeAction(*chromeAction);
-        if (running_ && chromeActionInvalidatesCurrentFrame(*chromeAction)) {
-            ui_.endFrameWithoutRender();
-            renderingFrame_ = false;
-            return false;
-        }
-    }
-    if (quitRequested) {
-        running_ = false;
-    }
-    if (!running_) {
-        ui_.endFrameWithoutRender();
-        renderingFrame_ = false;
-        return false;
-    }
-    if (!window_.canRenderFrames()) {
-        ui_.endFrameWithoutRender();
-        renderingFrame_ = false;
-        return false;
-    }
-    {
-        QDR_PROFILE_SCOPE("Render sync scene");
-        (void)QuaderRenderApiRuntimeAccess::syncScene(editor_->render(), renderBridge_);
-    }
-    if (const EntityId root = projectSession_.scene().sceneRoot(); root != InvalidEntityId) {
-        if (const SceneSettingsComponent* settings = projectSession_.scene().sceneSettings(root)) {
-            renderSystem_.applySceneSettings(*settings);
-        }
-    }
-
-    {
-        QDR_PROFILE_SCOPE("UI prepare viewports");
-        ui_.prepareViewports(*editor_, renderBridge_, projectSession_.scene(), projectSession_.assets());
-    }
-    {
-        QDR_PROFILE_SCOPE("UI prepare render data");
-        ui_.prepareRenderData(framebufferWidth, framebufferHeight);
-    }
-
-    {
-        QDR_PROFILE_SCOPE("Render frame submit");
-        if (renderSystem_.beginFrame()) {
-            {
-                QDR_PROFILE_SCOPE("Render viewport panes");
-                ui_.renderViewports(renderSystem_);
-            }
-            {
-                QDR_PROFILE_SCOPE("Render ImGui");
-                ui_.render(renderSystem_);
-            }
-            renderSystem_.endFrame();
-            window_.noteFramePresented(framebufferWidth, framebufferHeight);
-            renderingFrame_ = false;
-            QDR_PROFILE_FRAME_MARK();
-            return true;
-        }
-    }
-
-    renderingFrame_ = false;
-    QDR_PROFILE_FRAME_MARK();
+bool App::render_frame(const FrameTiming &frame_timing) {
+  QDR_PROFILE_FUNCTION();
+  if (rendering_frame_ || !editor_) {
     return false;
+  }
+  if (window_.native_chrome_message_active() &&
+      !window_.native_live_resize_frame_active()) {
+    return false;
+  }
+
+  rendering_frame_ = true;
+
+  window_.refresh_pixel_size();
+  const std::uint32_t framebuffer_width = window_.width_pixels();
+  const std::uint32_t framebuffer_height = window_.height_pixels();
+  if (!window_.can_render_frames()) {
+    rendering_frame_ = false;
+    return false;
+  }
+  ui_.set_viewport_render_resize_suspended(
+      window_.chrome_resize_active() ||
+      window_.native_chrome_interaction_active());
+  ui_.set_render_performance_stats(render_system_.frame_performance_stats());
+  {
+    QDR_PROFILE_SCOPE("UI begin frame");
+    ui_.begin_frame(frame_timing, framebuffer_width, framebuffer_height);
+  }
+  bool quit_requested = false;
+  {
+    QDR_PROFILE_SCOPE("UI draw");
+    ui_.draw(*editor_, render_bridge_, project_session_.scene(),
+             project_session_.assets(), project_session_.modeling(),
+             project_session_.selection(), default_material_, quit_requested);
+  }
+  if (const std::optional<WindowChromeAction> chrome_action =
+          ui_.take_window_chrome_action()) {
+    handle_window_chrome_action(*chrome_action);
+    if (running_ && chrome_action_invalidates_current_frame(*chrome_action)) {
+      ui_.end_frame_without_render();
+      rendering_frame_ = false;
+      return false;
+    }
+  }
+  if (quit_requested) {
+    running_ = false;
+  }
+  if (!running_) {
+    ui_.end_frame_without_render();
+    rendering_frame_ = false;
+    return false;
+  }
+  if (!window_.can_render_frames()) {
+    ui_.end_frame_without_render();
+    rendering_frame_ = false;
+    return false;
+  }
+  {
+    QDR_PROFILE_SCOPE("Render sync scene");
+    (void)QuaderRenderApiRuntimeAccess::sync_scene(editor_->render(),
+                                                   render_bridge_);
+  }
+  if (const EntityId root = project_session_.scene().scene_root();
+      root != kInvalidEntityId) {
+    if (const SceneSettingsComponent *settings =
+            project_session_.scene().scene_settings(root)) {
+      render_system_.apply_scene_settings(*settings);
+    }
+  }
+
+  {
+    QDR_PROFILE_SCOPE("UI prepare viewports");
+    ui_.prepare_viewports(*editor_, render_bridge_, project_session_.scene(),
+                          project_session_.assets());
+  }
+  {
+    QDR_PROFILE_SCOPE("UI prepare render data");
+    ui_.prepare_render_data(framebuffer_width, framebuffer_height);
+  }
+
+  {
+    QDR_PROFILE_SCOPE("Render frame submit");
+    if (render_system_.begin_frame()) {
+      {
+        QDR_PROFILE_SCOPE("Render viewport panes");
+        ui_.render_viewports(render_system_);
+      }
+      {
+        QDR_PROFILE_SCOPE("Render ImGui");
+        ui_.render(render_system_);
+      }
+      render_system_.end_frame();
+      window_.note_frame_presented(framebuffer_width, framebuffer_height);
+      rendering_frame_ = false;
+      QDR_PROFILE_FRAME_MARK();
+      return true;
+    }
+  }
+
+  rendering_frame_ = false;
+  QDR_PROFILE_FRAME_MARK();
+  return false;
 }
 
-void App::waitUntilNextFrame() {
-    const bool drawable = window_.canRenderFrames();
-    const Sint32 waitMs = !drawable ? kSuspendedWindowWaitMs :
-            (ui_.needsContinuousRendering() || window_.chromeResizeActive() || window_.nativeChromeInteractionActive()
-                            ? kActiveFrameWaitMs
-                            : kIdleFrameWaitMs);
-    (void)SDL_WaitEventTimeout(nullptr, waitMs);
+void App::wait_until_next_frame() {
+  const bool drawable = window_.can_render_frames();
+  const Sint32 wait_ms =
+      !drawable ? kSuspendedWindowWaitMs
+                : (ui_.needs_continuous_rendering() ||
+                           window_.chrome_resize_active() ||
+                           window_.native_chrome_interaction_active()
+                       ? kActiveFrameWaitMs
+                       : kIdleFrameWaitMs);
+  (void)SDL_WaitEventTimeout(nullptr, wait_ms);
 }
 
-bool App::shouldRenderLiveResizeEvent(const SDL_Event& event) const {
-    if (!running_ || shutdownComplete_ || renderingFrame_ || event.type != SDL_EVENT_WINDOW_EXPOSED ||
-            event.window.data1 != 1 || window_.sdlWindow() == nullptr || !window_.canRenderFrames()) {
-        return false;
-    }
-    if (window_.nativeChromeInteractionActive()) {
-        return false;
-    }
-    if (!window_.chromeResizeActive()) {
-        return false;
-    }
+bool App::should_render_live_resize_event(const SDL_Event &event) const {
+  if (!running_ || shutdown_complete_ || rendering_frame_ ||
+      event.type != SDL_EVENT_WINDOW_EXPOSED || event.window.data1 != 1 ||
+      window_.sdl_window() == nullptr || !window_.can_render_frames()) {
+    return false;
+  }
+  if (window_.native_chrome_interaction_active()) {
+    return false;
+  }
+  if (!window_.chrome_resize_active()) {
+    return false;
+  }
 
-    return sdlEventTargetsWindow(event, SDL_GetWindowID(window_.sdlWindow()));
+  return sdl_event_targets_window(event, SDL_GetWindowID(window_.sdl_window()));
 }
 
-bool App::liveResizeEventWatch(void* userdata, SDL_Event* event) {
-    if (userdata == nullptr || event == nullptr || event->type != SDL_EVENT_WINDOW_EXPOSED) {
-        return true;
-    }
-
-    App* app = static_cast<App*>(userdata);
-    if (!app->shouldRenderLiveResizeEvent(*event)) {
-        return true;
-    }
-
-    if (app->renderFrame(app->frameClock_.tick())) {
-        app->liveResizeFrameRendered_ = true;
-    }
+bool App::live_resize_event_watch(void *userdata, SDL_Event *event) {
+  if (userdata == nullptr || event == nullptr ||
+      event->type != SDL_EVENT_WINDOW_EXPOSED) {
     return true;
+  }
+
+  App *app = static_cast<App *>(userdata);
+  if (!app->should_render_live_resize_event(*event)) {
+    return true;
+  }
+
+  if (app->render_frame(app->frame_clock_.tick())) {
+    app->live_resize_frame_rendered_ = true;
+  }
+  return true;
 }
 
 } // namespace quader

@@ -10,8 +10,8 @@
 
 namespace quader {
 
-ModelingCommandResult RepeatLastActionTool::executeCustomCommand(ModelingCommandExecutionContext& context) const {
-    return context.modeling.repeatLastAction();
+ModelingCommandResult RepeatLastActionTool::execute_custom_command(ModelingCommandExecutionContext& context) const {
+  return context.modeling.repeat_last_action();
 }
 
 } // namespace quader

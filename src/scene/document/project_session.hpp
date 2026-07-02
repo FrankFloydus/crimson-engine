@@ -23,12 +23,13 @@ class ModelingSessionService;
  * Stores the persisted-content revision stamp used by the project session dirty-state boundary.
  */
 struct ProjectContentRevisionStamp {
-    std::uint64_t projectRevision = 0;
-    std::uint64_t sceneRevision = 0;
-    std::uint64_t assetRevision = 0;
-    std::uint64_t modelingContentRevision = 0;
+  std::uint64_t project_revision = 0;
+  std::uint64_t scene_revision = 0;
+  std::uint64_t asset_revision = 0;
+  std::uint64_t modeling_content_revision = 0;
 
-    [[nodiscard]] bool operator==(const ProjectContentRevisionStamp&) const = default;
+  [[nodiscard]] bool
+  operator==(const ProjectContentRevisionStamp &) const = default;
 };
 
 /**
@@ -66,25 +67,26 @@ public:
     EditorHistoryService& history() { return *history_; }
     const EditorHistoryService& history() const { return *history_; }
 
-    DocumentCommandService& documentCommands() { return *documentCommands_; }
+    DocumentCommandService &document_commands() { return *document_commands_; }
     ModelingSessionService& modeling() { return *modeling_; }
     const ModelingSessionService& modeling() const { return *modeling_; }
     EditorSelectionService& selection() { return *selection_; }
     const EditorSelectionService& selection() const { return *selection_; }
 
-    [[nodiscard]] ProjectContentRevisionStamp contentRevisionStamp() const;
+    [[nodiscard]] ProjectContentRevisionStamp content_revision_stamp() const;
     [[nodiscard]] bool dirty() const;
-    [[nodiscard]] ProjectAssetMutationResult replaceStandaloneMesh(AssetId mesh, MeshAsset replacement);
-    void replaceDocument(ProjectDocument document);
-    void markClean();
+    [[nodiscard]] ProjectAssetMutationResult
+    replace_standalone_mesh(AssetId mesh, MeshAsset replacement);
+    void replace_document(ProjectDocument document);
+    void mark_clean();
 
-private:
-    void rebuildServices();
+  private:
+    void rebuild_services();
 
     ProjectDocument document_;
-    ProjectContentRevisionStamp cleanStamp_;
+    ProjectContentRevisionStamp clean_stamp_;
     std::unique_ptr<EditorHistoryService> history_;
-    std::unique_ptr<DocumentCommandService> documentCommands_;
+    std::unique_ptr<DocumentCommandService> document_commands_;
     std::unique_ptr<ModelingSessionService> modeling_;
     std::unique_ptr<EditorSelectionService> selection_;
 };
@@ -94,9 +96,10 @@ private:
  */
 class ProjectSessionService final {
 public:
-    std::unique_ptr<ProjectSession> createSession() const;
-    std::unique_ptr<ProjectSession> createSession(ProjectDocumentRecord record) const;
-    std::unique_ptr<ProjectSession> openSession(ProjectDocument document) const;
+  std::unique_ptr<ProjectSession> create_session() const;
+  std::unique_ptr<ProjectSession>
+  create_session(ProjectDocumentRecord record) const;
+  std::unique_ptr<ProjectSession> open_session(ProjectDocument document) const;
 };
 
 } // namespace quader

@@ -18,34 +18,31 @@ namespace quader {
  */
 class ActivateViewportToolActionTool final : public ContextActionTool {
 public:
-    ActivateViewportToolActionTool(
-            ModelingViewportTool viewportTool,
-            std::string_view actionId,
-            std::string_view label,
-            std::string_view operationId)
-        : viewportTool_(viewportTool),
-          actionId_(actionId),
-          operationId_(operationId),
-          label_(label) {}
+  ActivateViewportToolActionTool(ModelingViewportTool viewport_tool,
+                                 std::string_view action_id,
+                                 std::string_view label,
+                                 std::string_view operation_id)
+      : viewport_tool_(viewport_tool), action_id_(action_id),
+        operation_id_(operation_id), label_(label) {}
 
-    [[nodiscard]] CommandToolDescriptor descriptor() const override {
-        return {
-                .id = actionId_,
-                .operationId = operationId_,
-                .label = label_,
-                .kind = CommandToolKind::ContextAction,
-                .previewKind = ModelingActionPreviewKind::None,
-                .rebuildsMeshOnSuccess = false,
-        };
-    }
+  [[nodiscard]] CommandToolDescriptor descriptor() const override {
+    return {
+        .id = action_id_,
+        .operation_id = operation_id_,
+        .label = label_,
+        .kind = CommandToolKind::ContextAction,
+        .preview_kind = ModelingActionPreviewKind::None,
+        .rebuilds_mesh_on_success = false,
+    };
+  }
 
-    [[nodiscard]] std::string_view actionId() const override {
-        return actionId_;
-    }
+  [[nodiscard]] std::string_view action_id() const override {
+    return action_id_;
+  }
 
-    [[nodiscard]] ModelingViewportTool viewportTool() const {
-        return viewportTool_;
-    }
+  [[nodiscard]] ModelingViewportTool viewport_tool() const {
+    return viewport_tool_;
+  }
 
     [[nodiscard]] ModelingCommandAvailability availability(const ModelingCommandExecutionContext& context) const override {
         (void)context;
@@ -53,14 +50,14 @@ public:
     }
 
     ModelingCommandResult execute(ModelingCommandExecutionContext& context) const override {
-        return context.modeling.activateViewportTool(viewportTool_);
+      return context.modeling.activate_viewport_tool(viewport_tool_);
     }
 
 private:
-    ModelingViewportTool viewportTool_ = ModelingViewportTool::Select;
-    std::string actionId_;
-    std::string operationId_;
-    std::string label_;
+  ModelingViewportTool viewport_tool_ = ModelingViewportTool::Select;
+  std::string action_id_;
+  std::string operation_id_;
+  std::string label_;
 };
 
 } // namespace quader

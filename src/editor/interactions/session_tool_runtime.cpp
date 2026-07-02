@@ -93,9 +93,8 @@ bool discard_editor_transient_state(
 
 bool editor_runtime_box_active(const BoxToolState& box)
 {
-	return box.drag_state != BoxDragState::idle ||
-		box.preview_valid ||
-		!box.hover_cell_points.empty();
+  return box.drag_state != BoxDragState::Idle || box.preview_valid ||
+         !box.hover_cell_points.empty();
 }
 
 EditorRuntimeStatus editor_runtime_status(const EditorRuntimeState& runtime)
@@ -103,38 +102,41 @@ EditorRuntimeStatus editor_runtime_status(const EditorRuntimeState& runtime)
 	const KnifeToolPreview knife = knife_tool_preview(runtime.knife);
 	const PolyToolPreview poly = poly_tool_preview(runtime.poly);
 	const MirrorPreviewMetadata mirror = mirror_preview_metadata(runtime.mirror);
-	return {
-		runtime.active_tool,
-		runtime.gizmo_hover_axis,
-		runtime.hover.object_id > 0 || runtime.hover.candidate_object_id > 0,
-		runtime.hover.candidate_object_id > 0,
-		editor_runtime_box_active(runtime.box),
-		runtime.box_grid_size,
-		runtime.box_grid_size == default_editor_runtime_box_grid_size,
-		runtime.insert_edge_loop.active,
-		runtime.insert_edge_loop.dragging,
-		!runtime.insert_edge_loop.preview_lines.empty(),
-		knife.active,
-		knife.has_active_stroke,
-		knife.has_current,
-		knife.can_commit,
-		cut_is_active(runtime.cut) || runtime.active_tool == ViewportInteractionTool::cut,
-		cut_can_preview(runtime.cut),
-		cut_preview_metadata(runtime.cut).preview_valid,
-		cut_preview_metadata(runtime.cut).point_count,
-		mirror_is_active(runtime.mirror) || runtime.active_tool == ViewportInteractionTool::mirror,
-		mirror.can_preview,
-		mirror.preview_valid,
-		mirror.point_count,
-		poly.active || runtime.active_tool == ViewportInteractionTool::poly,
-		poly.closed,
-		poly.has_current,
-		poly.finalizable,
-		static_cast<int>(poly.point_count),
-		runtime.transform_drag.active,
-		!runtime.clipboard_objects.empty(),
-		runtime.clipboard_objects.size(),
-	};
+        return {
+            runtime.active_tool,
+            runtime.gizmo_hover_axis,
+            runtime.hover.object_id > 0 ||
+                runtime.hover.candidate_object_id > 0,
+            runtime.hover.candidate_object_id > 0,
+            editor_runtime_box_active(runtime.box),
+            runtime.box_grid_size,
+            runtime.box_grid_size == kDefaultEditorRuntimeBoxGridSize,
+            runtime.insert_edge_loop.active,
+            runtime.insert_edge_loop.dragging,
+            !runtime.insert_edge_loop.preview_lines.empty(),
+            knife.active,
+            knife.has_active_stroke,
+            knife.has_current,
+            knife.can_commit,
+            cut_is_active(runtime.cut) ||
+                runtime.active_tool == ViewportInteractionTool::Cut,
+            cut_can_preview(runtime.cut),
+            cut_preview_metadata(runtime.cut).preview_valid,
+            cut_preview_metadata(runtime.cut).point_count,
+            mirror_is_active(runtime.mirror) ||
+                runtime.active_tool == ViewportInteractionTool::Mirror,
+            mirror.can_preview,
+            mirror.preview_valid,
+            mirror.point_count,
+            poly.active || runtime.active_tool == ViewportInteractionTool::Poly,
+            poly.closed,
+            poly.has_current,
+            poly.finalizable,
+            static_cast<int>(poly.point_count),
+            runtime.transform_drag.active,
+            !runtime.clipboard_objects.empty(),
+            runtime.clipboard_objects.size(),
+        };
 }
 
 ViewportToolActivationPlan plan_editor_runtime_tool_activation(
@@ -161,14 +163,15 @@ EditorRuntimeToolActivationRequest editor_runtime_tool_activation_request(
 {
 	const PreviewTransactionStatus preview_status = session.preview_transaction_status();
 	const std::size_t selected_object_count = session.selected_object_ids().size();
-	return {
-		requested_tool,
-		session.selection_mode(),
-		selected_object_count,
-		selected_object_count,
-		preview_status.active && preview_status.kind == PreviewTransactionKind::transform,
-		false,
-	};
+        return {
+            requested_tool,
+            session.selection_mode(),
+            selected_object_count,
+            selected_object_count,
+            preview_status.active &&
+                preview_status.kind == PreviewTransactionKind::Transform,
+            false,
+        };
 }
 
 void clear_editor_runtime_hover(EditorRuntimeState& runtime)
@@ -225,7 +228,7 @@ void set_editor_runtime_box_grid_size(EditorRuntimeState& runtime, double grid_s
 
 void reset_editor_runtime_box_grid_size(EditorRuntimeState& runtime)
 {
-	runtime.box_grid_size = default_editor_runtime_box_grid_size;
+  runtime.box_grid_size = kDefaultEditorRuntimeBoxGridSize;
 }
 
 void reset_editor_runtime_box_state(EditorRuntimeState& runtime)
@@ -241,7 +244,7 @@ void set_editor_runtime_box_state(EditorRuntimeState& runtime, BoxToolState box)
 
 void clear_editor_runtime_gizmo_hover(EditorRuntimeState& runtime)
 {
-	runtime.gizmo_hover_axis = TransformAxis::none;
+  runtime.gizmo_hover_axis = TransformAxis::None;
 }
 
 void set_editor_runtime_gizmo_hover_axis(EditorRuntimeState& runtime, TransformAxis axis)
@@ -251,7 +254,7 @@ void set_editor_runtime_gizmo_hover_axis(EditorRuntimeState& runtime, TransformA
 
 void set_editor_runtime_gizmo_hover_from_pick(EditorRuntimeState& runtime, const TransformGizmoPickHit& hit)
 {
-	runtime.gizmo_hover_axis = hit.hit ? hit.axis : TransformAxis::none;
+  runtime.gizmo_hover_axis = hit.hit ? hit.axis : TransformAxis::None;
 }
 
 void clear_editor_runtime_preview_presentation_state(EditorRuntimeState& runtime)
@@ -292,8 +295,8 @@ void reset_editor_runtime_document_state(EditorSession& session, EditorRuntimeSt
 		runtime.box_grid_size);
 	runtime.cut_hover = {};
 	runtime.mirror_hover = {};
-	runtime.active_tool = ViewportInteractionTool::select;
-	clear_editor_runtime_gizmo_hover(runtime);
+        runtime.active_tool = ViewportInteractionTool::Select;
+        clear_editor_runtime_gizmo_hover(runtime);
 }
 
 bool discard_editor_runtime_transient_state(
@@ -323,11 +326,11 @@ PreviewTransactionFinishResult cancel_editor_runtime_transform_preview_state(
 		EditorSession& session,
 		EditorRuntimeState& runtime)
 {
-	PreviewTransactionFinishResult result =
-		session.cancel_preview_transaction(PreviewTransactionKind::transform);
-	reset_transform_drag(runtime.transform_drag);
-	clear_editor_runtime_gizmo_hover(runtime);
-	return result;
+  PreviewTransactionFinishResult result =
+      session.cancel_preview_transaction(PreviewTransactionKind::Transform);
+  reset_transform_drag(runtime.transform_drag);
+  clear_editor_runtime_gizmo_hover(runtime);
+  return result;
 }
 
 void set_editor_runtime_transform_drag_state(EditorRuntimeState& runtime, TransformDragState state)
@@ -397,11 +400,11 @@ void reset_editor_runtime_insert_edge_loop_state(
 		EditorRuntimeState& runtime,
 		bool keep_active_when_current_tool_is_insert_edge_loop)
 {
-	const bool keep_active =
-		keep_active_when_current_tool_is_insert_edge_loop &&
-		runtime.active_tool == ViewportInteractionTool::insert_edge_loop;
-	reset_insert_edge_loop_tool(runtime.insert_edge_loop);
-	runtime.insert_edge_loop.active = keep_active;
+  const bool keep_active =
+      keep_active_when_current_tool_is_insert_edge_loop &&
+      runtime.active_tool == ViewportInteractionTool::InsertEdgeLoop;
+  reset_insert_edge_loop_tool(runtime.insert_edge_loop);
+  runtime.insert_edge_loop.active = keep_active;
 }
 
 void set_editor_runtime_insert_edge_loop_state(EditorRuntimeState& runtime, InsertEdgeLoopToolState state)
@@ -428,11 +431,11 @@ void reset_editor_runtime_knife_state(
 		EditorRuntimeState& runtime,
 		bool keep_active_when_current_tool_is_cut)
 {
-	const bool keep_active =
-		keep_active_when_current_tool_is_cut &&
-		runtime.active_tool == ViewportInteractionTool::knife;
-	reset_knife_tool(runtime.knife);
-	runtime.knife.active = keep_active;
+  const bool keep_active =
+      keep_active_when_current_tool_is_cut &&
+      runtime.active_tool == ViewportInteractionTool::Knife;
+  reset_knife_tool(runtime.knife);
+  runtime.knife.active = keep_active;
 }
 
 void set_editor_runtime_knife_active(EditorRuntimeState& runtime, bool active)
@@ -459,14 +462,13 @@ void reset_editor_runtime_cut_state(
 		EditorRuntimeState& runtime,
 		bool keep_active_when_current_tool_is_cut)
 {
-	const bool keep_active =
-		keep_active_when_current_tool_is_cut &&
-		runtime.active_tool == ViewportInteractionTool::cut;
-	reset_cut(runtime.cut);
-	runtime.cut_hover = {};
-	if (keep_active) {
-		runtime.cut.preview_valid = false;
-	}
+  const bool keep_active = keep_active_when_current_tool_is_cut &&
+                           runtime.active_tool == ViewportInteractionTool::Cut;
+  reset_cut(runtime.cut);
+  runtime.cut_hover = {};
+  if (keep_active) {
+    runtime.cut.preview_valid = false;
+  }
 }
 
 void set_editor_runtime_cut_state(EditorRuntimeState& runtime, CutToolState state)
@@ -498,14 +500,14 @@ void reset_editor_runtime_mirror_state(
 		EditorRuntimeState& runtime,
 		bool keep_active_when_current_tool_is_mirror)
 {
-	const bool keep_active =
-		keep_active_when_current_tool_is_mirror &&
-		runtime.active_tool == ViewportInteractionTool::mirror;
-	reset_mirror(runtime.mirror);
-	runtime.mirror_hover = {};
-	if (keep_active) {
-		runtime.mirror.preview_valid = false;
-	}
+  const bool keep_active =
+      keep_active_when_current_tool_is_mirror &&
+      runtime.active_tool == ViewportInteractionTool::Mirror;
+  reset_mirror(runtime.mirror);
+  runtime.mirror_hover = {};
+  if (keep_active) {
+    runtime.mirror.preview_valid = false;
+  }
 }
 
 void set_editor_runtime_mirror_state(EditorRuntimeState& runtime, MirrorToolState state)
@@ -532,11 +534,10 @@ void reset_editor_runtime_poly_state(
 		EditorRuntimeState& runtime,
 		bool keep_active_when_current_tool_is_poly)
 {
-	const bool keep_active =
-		keep_active_when_current_tool_is_poly &&
-		runtime.active_tool == ViewportInteractionTool::poly;
-	reset_poly(runtime.poly);
-	runtime.poly.active = keep_active;
+  const bool keep_active = keep_active_when_current_tool_is_poly &&
+                           runtime.active_tool == ViewportInteractionTool::Poly;
+  reset_poly(runtime.poly);
+  runtime.poly.active = keep_active;
 }
 
 void set_editor_runtime_poly_state(EditorRuntimeState& runtime, PolyToolState state)
@@ -622,10 +623,11 @@ void apply_editor_runtime_tool_activation_plan(
 	}
 	runtime.insert_edge_loop.active = plan.insert_edge_loop_tool_active;
 	runtime.knife.active = plan.knife_tool_active;
-	if (!plan.mirror_tool_active && plan.active_tool != ViewportInteractionTool::mirror) {
-		runtime.mirror_hover = {};
-	}
-	runtime.poly.active = plan.poly_tool_active;
+        if (!plan.mirror_tool_active &&
+            plan.active_tool != ViewportInteractionTool::Mirror) {
+          runtime.mirror_hover = {};
+        }
+        runtime.poly.active = plan.poly_tool_active;
 	if (plan.promote_hover_object_to_candidate) {
 		runtime.hover.candidate_object_id = runtime.hover.object_id;
 	}

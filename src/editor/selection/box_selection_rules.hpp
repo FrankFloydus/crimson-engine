@@ -13,14 +13,14 @@ namespace quader {
 /**
  * Resolves drag-direction box selection policy into an explicit hit matching rule.
  */
-inline ModelingBoxSelectionRule resolveBoxSelectionRule(
-        ModelingBoxSelectionRule rule,
-        QVec2 start,
-        QVec2 end) {
-    if (rule != ModelingBoxSelectionRule::DragDirection) {
-        return rule;
-    }
-    return end.x >= start.x ? ModelingBoxSelectionRule::Contain : ModelingBoxSelectionRule::Crossing;
+inline ModelingBoxSelectionRule
+resolve_box_selection_rule(ModelingBoxSelectionRule rule, QVec2 start,
+                           QVec2 end) {
+  if (rule != ModelingBoxSelectionRule::DragDirection) {
+    return rule;
+  }
+  return end.x >= start.x ? ModelingBoxSelectionRule::Contain
+                          : ModelingBoxSelectionRule::Crossing;
 }
 
 } // namespace quader

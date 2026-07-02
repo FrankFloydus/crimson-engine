@@ -11,43 +11,44 @@
 
 namespace quader {
 
-ViewportToolResult ModalViewportTool::handleEvent(
+ViewportToolResult ModalViewportTool::handle_event(
         ViewportToolContext& context,
         const ViewportToolEvent& event) const {
     if (event.kind == ViewportToolEventKind::Activation) {
-        return activateById(context, event.tool);
+      return activate_by_id(context, event.tool);
     }
     if (event.kind == ViewportToolEventKind::Cancel) {
-        return cancelActiveModalTool(context, event.exitActiveModalTool);
+      return cancel_active_modal_tool(context, event.exit_active_modal_tool);
     }
     return {};
 }
 
-ViewportToolResult ModalViewportTool::cancelActiveModalTool(
-        ViewportToolContext& context,
-        bool exitTool) const {
-    const ModelingCommandResult cancel = context.modeling.cancelActiveModalTool();
-    if (!cancel.ok) {
-        LOG_ERROR("Modal tool cancel failed: {}", cancel.message);
-    }
-    if (context.modalState != nullptr) {
-        context.modalState->insertEdgeLoopDragActive = false;
-        context.modalState->cutDragActive = false;
-        context.modalState->mirrorDragActive = false;
-    }
-    if (context.invalidateHover) {
-        context.invalidateHover();
-    }
-    if (context.markOverlayDirty) {
-        context.markOverlayDirty();
-    }
-    return {
-            .handled = true,
-            .consumed = true,
-            .modalStateChanged = true,
-            .activeToolChanged = exitTool,
-            .syncActiveToolFromModeling = exitTool,
-    };
+ViewportToolResult
+ModalViewportTool::cancel_active_modal_tool(ViewportToolContext &context,
+                                            bool exit_tool) const {
+  const ModelingCommandResult cancel =
+      context.modeling.cancel_active_modal_tool();
+  if (!cancel.ok) {
+    LOG_ERROR("Modal tool cancel failed: {}", cancel.message);
+  }
+  if (context.modal_state != nullptr) {
+    context.modal_state->insert_edge_loop_drag_active = false;
+    context.modal_state->cut_drag_active = false;
+    context.modal_state->mirror_drag_active = false;
+  }
+  if (context.invalidate_hover) {
+    context.invalidate_hover();
+  }
+  if (context.mark_overlay_dirty) {
+    context.mark_overlay_dirty();
+  }
+  return {
+      .handled = true,
+      .consumed = true,
+      .modal_state_changed = true,
+      .active_tool_changed = exit_tool,
+      .sync_active_tool_from_modeling = exit_tool,
+  };
 }
 
 } // namespace quader

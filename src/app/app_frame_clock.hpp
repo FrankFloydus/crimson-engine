@@ -29,7 +29,7 @@ public:
 private:
     Clock::time_point start_ = {};
     Clock::time_point last_ = {};
-    std::uint64_t frameIndex_ = 0;
+    std::uint64_t frame_index_ = 0;
     bool initialized_ = false;
 };
 

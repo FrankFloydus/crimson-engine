@@ -101,14 +101,14 @@ specialized subtree, read the nearest nested `AGENTS.md` before editing.
 ## Public API Rule
 
 Use the public API when code expresses user/editor intent, such as
-`editor.modeling().createBox(...)`, `editor.scene().batch(...)`,
-`editor.commands().execute(QuaderCommand::HistoryUndo)`, or
-`editor.mainViewport().setShadingMode(...)`.
+`editor.modeling().create_box(...)`, `editor.scene().batch(...)`,
+`editor.commands().execute(quader::quader_command::kHistoryUndo)`, or
+`editor.main_viewport().set_shading_mode(...)`.
 
-Prefer typed command IDs from `QuaderCommand` in C++ call sites. Stable string command IDs remain
+Prefer typed command IDs from `quader::quader_command` in C++ call sites. Stable string command IDs remain
 the script/command-palette representation. Prefer `QuaderObjectHandle` and `QuaderSceneBatch` for
 fluent object workflows and grouped scene edits. `QuaderApiResult`/`QuaderApiVoidResult` support
-callable helpers such as `ok()`, `changed()`, `value()`, and `errorMessage()`.
+callable helpers such as `ok()`, `changed()`, `value()`, and `error_message()`.
 
 Keep code low-level only when it owns invariants, hot-path mechanics, render resources, SDK
 semantics, storage, or platform state. If a UI/test/script needs a missing capability, add the

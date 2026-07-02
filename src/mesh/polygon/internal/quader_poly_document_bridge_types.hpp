@@ -55,20 +55,20 @@ struct OpenBridgeEdgeInfo {
  * Stores the Bridge Rail Step Key data contract used by the polygon document and mesh editing core.
  */
 struct BridgeRailStepKey {
-    ElementId first = invalid_element_id;
-    ElementId second = invalid_element_id;
-    int step = 0;
+  ElementId first = kInvalidElementId;
+  ElementId second = kInvalidElementId;
+  int step = 0;
 
-    friend bool operator<(const BridgeRailStepKey& left, const BridgeRailStepKey& right)
-    {
-        if (left.first != right.first) {
-            return left.first < right.first;
-        }
-        if (left.second != right.second) {
-            return left.second < right.second;
-        }
-        return left.step < right.step;
+  friend bool operator<(const BridgeRailStepKey &left,
+                        const BridgeRailStepKey &right) {
+    if (left.first != right.first) {
+      return left.first < right.first;
     }
+    if (left.second != right.second) {
+      return left.second < right.second;
+    }
+    return left.step < right.step;
+  }
 };
 
 /**

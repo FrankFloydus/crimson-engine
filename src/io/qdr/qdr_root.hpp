@@ -26,9 +26,9 @@ struct QdrRootHeader {
 [[nodiscard]] std::string qdr_string_from_view(std::string_view value);
 void require_qdr_root_object(const QdrJson& root);
 [[nodiscard]] QdrRootHeader read_qdr_root_header(const QdrJson& root);
-[[nodiscard]] const QdrJson& qdr_payload_from_root(
-        const QdrJson& root,
-        std::string_view documentPayloadKey,
-        std::string_view legacyPayloadKey);
+[[nodiscard]] const QdrJson &
+qdr_payload_from_root(const QdrJson &root,
+                      std::string_view document_payload_key,
+                      std::string_view legacy_payload_key);
 
 } // namespace quader_io

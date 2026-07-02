@@ -78,9 +78,10 @@ TEST(QdrModelingRuntimeOperationMirrorTests, MirrorOperationCreatesFreshSelected
 	const int copy_id = session.selected_object_ids().front();
 	EXPECT_TRUE(copy_id != source_id);
 	EXPECT_TRUE(session.active_object_id() == copy_id);
-	EXPECT_TRUE(session.selection_mode() == quader_editor_core::SelectionMode::object);
+        EXPECT_TRUE(session.selection_mode() ==
+                    quader_editor_core::SelectionMode::Object);
 
-	const quader_editor_core::PolygonObject* source = find_object(session, source_id);
+        const quader_editor_core::PolygonObject* source = find_object(session, source_id);
 	const quader_editor_core::PolygonObject* copy = find_object(session, copy_id);
 	EXPECT_TRUE(source != nullptr);
 	EXPECT_TRUE(copy != nullptr);
@@ -98,10 +99,11 @@ TEST(QdrModelingRuntimeOperationMirrorTests, AxisMirrorDuplicatesSelectedObjects
 	quader_editor_core::EditorSession session = selected_offset_cube_session();
 	const int source_id = session.objects().front().id;
 
-	const quader_editor_core::CommandResult mirror =
-		session.mirror_selected_objects_across_axis(quader_editor_core::TransformAxis::x);
+        const quader_editor_core::CommandResult mirror =
+            session.mirror_selected_objects_across_axis(
+                quader_editor_core::TransformAxis::X);
 
-	EXPECT_TRUE(mirror.ok);
+        EXPECT_TRUE(mirror.ok);
 	EXPECT_TRUE(mirror.changed);
 	EXPECT_TRUE(session.objects().size() == 2U);
 	EXPECT_TRUE(session.selected_object_ids().size() == 1U);
@@ -142,10 +144,11 @@ TEST(QdrModelingRuntimeOperationMirrorTests, MeshFlipMutatesSelectedObjectsInPla
 	const float first_center_x = object_center_x(*first_before_object);
 	const float second_center_x = object_center_x(*second_before_object);
 
-	const quader_editor_core::CommandResult flip =
-		session.flip_selected_objects_by_orientation(quader_editor_core::ViewportFlipOrientation::horizontal);
+        const quader_editor_core::CommandResult flip =
+            session.flip_selected_objects_by_orientation(
+                quader_editor_core::ViewportFlipOrientation::Horizontal);
 
-	EXPECT_TRUE(flip.ok);
+        EXPECT_TRUE(flip.ok);
 	EXPECT_TRUE(flip.changed);
 	EXPECT_TRUE(session.objects().size() == 2U);
 	const std::vector<int> selected_ids = session.selected_object_ids();
@@ -176,10 +179,11 @@ TEST(QdrModelingRuntimeOperationMirrorTests, VerticalMeshFlipUsesTheMeshCenterAn
 	const quader::QVec3 first_before = session.objects().front().document.vertices.front().position;
 	const float center_y = object_center_y(session.objects().front());
 
-	const quader_editor_core::CommandResult flip =
-		session.flip_selected_objects_by_orientation(quader_editor_core::ViewportFlipOrientation::vertical);
+        const quader_editor_core::CommandResult flip =
+            session.flip_selected_objects_by_orientation(
+                quader_editor_core::ViewportFlipOrientation::Vertical);
 
-	EXPECT_TRUE(flip.ok);
+        EXPECT_TRUE(flip.ok);
 	EXPECT_TRUE(flip.changed);
 	EXPECT_TRUE(session.objects().size() == 1U);
 	EXPECT_TRUE(session.selected_object_ids().size() == 1U);
@@ -198,15 +202,16 @@ TEST(QdrModelingRuntimeOperationMirrorTests, VerticalMeshFlipUsesTheMeshCenterAn
 TEST(QdrModelingRuntimeOperationMirrorTests, MeshFlipRejectsComponentModeSelection) {
 	quader_editor_core::EditorSession session = selected_offset_cube_session();
 	const quader_poly::ElementId vertex_id = session.objects().front().document.vertices.front().id;
-	session.set_component_selection(
-		session.objects().front().id,
-		qdr_test::vertex_selection({ vertex_id }, vertex_id),
-		quader_editor_core::SelectionMode::vertex);
+        session.set_component_selection(
+            session.objects().front().id,
+            qdr_test::vertex_selection({vertex_id}, vertex_id),
+            quader_editor_core::SelectionMode::Vertex);
 
-	const quader_editor_core::CommandResult flip =
-		session.flip_selected_objects_by_orientation(quader_editor_core::ViewportFlipOrientation::vertical);
+        const quader_editor_core::CommandResult flip =
+            session.flip_selected_objects_by_orientation(
+                quader_editor_core::ViewportFlipOrientation::Vertical);
 
-	EXPECT_FALSE(flip.ok);
+        EXPECT_FALSE(flip.ok);
 	EXPECT_FALSE(flip.changed);
 	EXPECT_TRUE(session.objects().size() == 1U);
 	EXPECT_TRUE(flip.message == "Flip works only in object/mesh selection mode.");
@@ -215,12 +220,12 @@ TEST(QdrModelingRuntimeOperationMirrorTests, MeshFlipRejectsComponentModeSelecti
 TEST(QdrModelingRuntimeOperationMirrorTests, MirrorOperationRejectsComponentModeSelectionWithoutObjectCopies) {
 	quader_editor_core::EditorSession session = selected_offset_cube_session();
 	const quader_poly::ElementId vertex_id = session.objects().front().document.vertices.front().id;
-	session.set_component_selection(
-		session.objects().front().id,
-		qdr_test::vertex_selection({ vertex_id }, vertex_id),
-		quader_editor_core::SelectionMode::vertex);
+        session.set_component_selection(
+            session.objects().front().id,
+            qdr_test::vertex_selection({vertex_id}, vertex_id),
+            quader_editor_core::SelectionMode::Vertex);
 
-	quader_editor_core::MirrorToolState state;
+        quader_editor_core::MirrorToolState state;
 	state.plane.points = {
 		{ 0.0F, -1.0F, 0.0F },
 		{ 0.0F, 1.0F, 0.0F },

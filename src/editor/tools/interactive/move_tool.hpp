@@ -15,8 +15,8 @@ namespace quader {
  */
 class MoveTool final : public TransformViewportTool {
 public:
-    MoveTool()
-        : TransformViewportTool(viewportToolDescriptor(ViewportToolId::Move)) {}
+  MoveTool()
+      : TransformViewportTool(viewport_tool_descriptor(ViewportToolId::Move)) {}
 };
 
 } // namespace quader

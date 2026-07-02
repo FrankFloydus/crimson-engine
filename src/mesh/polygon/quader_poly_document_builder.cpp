@@ -25,7 +25,7 @@ namespace {
 Selection all_vertex_selection(const Document& document)
 {
     Selection selection;
-    selection.mode = SelectionMode::vertex;
+    selection.mode = SelectionMode::Vertex;
     selection.vertices.reserve(document.vertices.size());
     for (const Vertex& vertex : document.vertices) {
         selection.vertices.push_back(vertex.id);
@@ -98,9 +98,11 @@ bool add_oriented_box_quad(
     const quader::QVec3 face_center = average_points(face_points);
     const quader::QVec3 outward = face_center - box_center;
     const quader::QVec3 area = oriented_quad_area_vector(corners, indices);
-    if (length_squared(area) <= document_internal::epsilon * document_internal::epsilon ||
-        length_squared(outward) <= document_internal::epsilon * document_internal::epsilon) {
-        return false;
+    if (length_squared(area) <=
+            document_internal::kEpsilon * document_internal::kEpsilon ||
+        length_squared(outward) <=
+            document_internal::kEpsilon * document_internal::kEpsilon) {
+      return false;
     }
     if (dot(area, outward) < 0.0F) {
         std::reverse(indices.begin(), indices.end());
@@ -112,7 +114,8 @@ bool add_oriented_box_quad(
         vertex_ids[static_cast<std::size_t>(indices[2])],
         vertex_ids[static_cast<std::size_t>(indices[3])],
     };
-    return add_face(document, face_vertices, material_slot) != invalid_element_id;
+    return add_face(document, face_vertices, material_slot) !=
+           kInvalidElementId;
 }
 
 std::optional<std::uint32_t> no_material_override()
@@ -182,8 +185,8 @@ bool resolve_vertex_refs(
             return false;
         }
         const ElementId vertex_id = vertex_ids[ref.index];
-        if (vertex_id == invalid_element_id) {
-            return false;
+        if (vertex_id == kInvalidElementId) {
+          return false;
         }
         resolved.push_back(vertex_id);
     }
@@ -202,8 +205,8 @@ bool resolve_vertex_indices(
             return false;
         }
         const ElementId vertex_id = vertex_ids[index];
-        if (vertex_id == invalid_element_id) {
-            return false;
+        if (vertex_id == kInvalidElementId) {
+          return false;
         }
         resolved.push_back(vertex_id);
     }
@@ -215,8 +218,8 @@ bool resolve_vertex_indices(
 DocumentBuilder::VertexRef DocumentBuilder::vertex(quader::QVec3 position)
 {
     const ElementId id = add_vertex(document_, position);
-    vertexIds_.push_back(id);
-    return { vertexIds_.size() - 1U };
+    vertex_ids_.push_back(id);
+    return {vertex_ids_.size() - 1U};
 }
 
 DocumentBuilder& DocumentBuilder::vertices(std::span<const quader::QVec3> positions)
@@ -227,116 +230,124 @@ DocumentBuilder& DocumentBuilder::vertices(std::span<const quader::QVec3> positi
     return *this;
 }
 
-DocumentBuilder& DocumentBuilder::face(std::span<const VertexRef> vertices, std::uint32_t materialSlot)
-{
-    std::vector<ElementId> resolved;
-    if (resolve_vertex_refs(vertices, vertexIds_, resolved)) {
-        static_cast<void>(add_face(document_, resolved, materialSlot));
-    }
+DocumentBuilder &DocumentBuilder::face(std::span<const VertexRef> vertices,
+                                       std::uint32_t material_slot) {
+  std::vector<ElementId> resolved;
+  if (resolve_vertex_refs(vertices, vertex_ids_, resolved)) {
+    static_cast<void>(add_face(document_, resolved, material_slot));
+  }
+  return *this;
+}
+
+DocumentBuilder &
+DocumentBuilder::face_by_index(std::span<const std::size_t> vertices,
+                               std::uint32_t material_slot) {
+  std::vector<ElementId> resolved;
+  if (resolve_vertex_indices(vertices, vertex_ids_, resolved)) {
+    static_cast<void>(add_face(document_, resolved, material_slot));
+  }
+  return *this;
+}
+
+DocumentBuilder &DocumentBuilder::quad(VertexRef a, VertexRef b, VertexRef c,
+                                       VertexRef d,
+                                       std::uint32_t material_slot) {
+  const std::array vertices{a, b, c, d};
+  return face(vertices, material_slot);
+}
+
+DocumentBuilder &DocumentBuilder::triangle(VertexRef a, VertexRef b,
+                                           VertexRef c,
+                                           std::uint32_t material_slot) {
+  const std::array vertices{a, b, c};
+  return face(vertices, material_slot);
+}
+
+DocumentBuilder &DocumentBuilder::cube(quader::QVec3 min_bounds,
+                                       quader::QVec3 max_bounds,
+                                       std::uint32_t material_slot) {
+  if (!finite_vec3(min_bounds) || !finite_vec3(max_bounds)) {
     return *this;
-}
-
-DocumentBuilder& DocumentBuilder::faceByIndex(std::span<const std::size_t> vertices, std::uint32_t materialSlot)
-{
-    std::vector<ElementId> resolved;
-    if (resolve_vertex_indices(vertices, vertexIds_, resolved)) {
-        static_cast<void>(add_face(document_, resolved, materialSlot));
-    }
+  }
+  const float min_x = std::min(min_bounds.x, max_bounds.x);
+  const float min_y = std::min(min_bounds.y, max_bounds.y);
+  const float min_z = std::min(min_bounds.z, max_bounds.z);
+  const float max_x = std::max(min_bounds.x, max_bounds.x);
+  const float max_y = std::max(min_bounds.y, max_bounds.y);
+  const float max_z = std::max(min_bounds.z, max_bounds.z);
+  const float width = max_x - min_x;
+  const float height = max_y - min_y;
+  const float depth = max_z - min_z;
+  if (width <= document_internal::kEpsilon ||
+      height <= document_internal::kEpsilon ||
+      depth <= document_internal::kEpsilon) {
     return *this;
+  }
+
+  CubePrimitiveSpec spec;
+  spec.width = width;
+  spec.height = height;
+  spec.depth = depth;
+
+  Document cube_document = make_cube(spec);
+  const quader::QVec3 center{
+      (min_x + max_x) * 0.5F,
+      (min_y + max_y) * 0.5F,
+      (min_z + max_z) * 0.5F,
+  };
+  static_cast<void>(translate_selection(
+      cube_document, all_vertex_selection(cube_document), center));
+  append_document(document_, vertex_ids_, cube_document, material_slot);
+  return *this;
 }
 
-DocumentBuilder& DocumentBuilder::quad(VertexRef a, VertexRef b, VertexRef c, VertexRef d, std::uint32_t materialSlot)
-{
-    const std::array vertices { a, b, c, d };
-    return face(vertices, materialSlot);
-}
-
-DocumentBuilder& DocumentBuilder::triangle(VertexRef a, VertexRef b, VertexRef c, std::uint32_t materialSlot)
-{
-    const std::array vertices { a, b, c };
-    return face(vertices, materialSlot);
-}
-
-DocumentBuilder& DocumentBuilder::cube(quader::QVec3 minBounds, quader::QVec3 maxBounds, std::uint32_t materialSlot)
-{
-    if (!finite_vec3(minBounds) || !finite_vec3(maxBounds)) {
-        return *this;
-    }
-    const float min_x = std::min(minBounds.x, maxBounds.x);
-    const float min_y = std::min(minBounds.y, maxBounds.y);
-    const float min_z = std::min(minBounds.z, maxBounds.z);
-    const float max_x = std::max(minBounds.x, maxBounds.x);
-    const float max_y = std::max(minBounds.y, maxBounds.y);
-    const float max_z = std::max(minBounds.z, maxBounds.z);
-    const float width = max_x - min_x;
-    const float height = max_y - min_y;
-    const float depth = max_z - min_z;
-    if (width <= document_internal::epsilon ||
-        height <= document_internal::epsilon ||
-        depth <= document_internal::epsilon) {
-        return *this;
-    }
-
-    CubePrimitiveSpec spec;
-    spec.width = width;
-    spec.height = height;
-    spec.depth = depth;
-
-    Document cube_document = make_cube(spec);
-    const quader::QVec3 center {
-        (min_x + max_x) * 0.5F,
-        (min_y + max_y) * 0.5F,
-        (min_z + max_z) * 0.5F,
-    };
-    static_cast<void>(translate_selection(cube_document, all_vertex_selection(cube_document), center));
-    append_document(document_, vertexIds_, cube_document, materialSlot);
+DocumentBuilder &
+DocumentBuilder::box_from_corners(std::span<const quader::QVec3> corners,
+                                  std::uint32_t material_slot) {
+  if (corners.size() != 8U) {
     return *this;
-}
-
-DocumentBuilder& DocumentBuilder::boxFromCorners(std::span<const quader::QVec3> corners, std::uint32_t materialSlot)
-{
-    if (corners.size() != 8U) {
+  }
+  for (const quader::QVec3 corner : corners) {
+    if (!finite_vec3(corner)) {
+      return *this;
+    }
+  }
+  for (std::size_t left = 0; left < corners.size(); ++left) {
+    for (std::size_t right = left + 1U; right < corners.size(); ++right) {
+      if (length_squared(corners[left] - corners[right]) <=
+          document_internal::kEpsilon * document_internal::kEpsilon) {
         return *this;
+      }
     }
-    for (const quader::QVec3 corner : corners) {
-        if (!finite_vec3(corner)) {
-            return *this;
-        }
-    }
-    for (std::size_t left = 0; left < corners.size(); ++left) {
-        for (std::size_t right = left + 1U; right < corners.size(); ++right) {
-            if (length_squared(corners[left] - corners[right]) <= document_internal::epsilon * document_internal::epsilon) {
-                return *this;
-            }
-        }
-    }
+  }
 
-    Document box_document;
-    std::array<ElementId, 8> vertex_ids {};
-    for (std::size_t index = 0; index < corners.size(); ++index) {
-        vertex_ids[index] = add_vertex(box_document, corners[index]);
-    }
+  Document box_document;
+  std::array<ElementId, 8> vertex_ids{};
+  for (std::size_t index = 0; index < corners.size(); ++index) {
+    vertex_ids[index] = add_vertex(box_document, corners[index]);
+  }
 
-    const quader::QVec3 center = average_points(corners);
-    const std::array<std::array<int, 4>, 6> faces {{
-        { 0, 1, 2, 3 },
-        { 4, 5, 6, 7 },
-        { 0, 4, 5, 1 },
-        { 1, 5, 6, 2 },
-        { 2, 6, 7, 3 },
-        { 3, 7, 4, 0 },
-    }};
-    for (const std::array<int, 4>& face : faces) {
-        if (!add_oriented_box_quad(box_document, vertex_ids, corners, face, center, materialSlot)) {
-            return *this;
-        }
+  const quader::QVec3 center = average_points(corners);
+  const std::array<std::array<int, 4>, 6> faces{{
+      {0, 1, 2, 3},
+      {4, 5, 6, 7},
+      {0, 4, 5, 1},
+      {1, 5, 6, 2},
+      {2, 6, 7, 3},
+      {3, 7, 4, 0},
+  }};
+  for (const std::array<int, 4> &face : faces) {
+    if (!add_oriented_box_quad(box_document, vertex_ids, corners, face, center,
+                               material_slot)) {
+      return *this;
     }
-    if (compile_document(box_document).indices.empty()) {
-        return *this;
-    }
-
-    append_document(document_, vertexIds_, box_document);
+  }
+  if (compile_document(box_document).indices.empty()) {
     return *this;
+  }
+
+  append_document(document_, vertex_ids_, box_document);
+  return *this;
 }
 
 DocumentBuilder& DocumentBuilder::translate(quader::QVec3 delta)
@@ -357,23 +368,24 @@ DocumentBuilder& DocumentBuilder::transform(const Transform3& transform, quader:
     return *this;
 }
 
-DocumentBuilder& DocumentBuilder::assignMaterialSlot(std::uint32_t materialSlot)
-{
-    std::vector<ElementId> face_ids;
-    face_ids.reserve(document_.faces.size());
-    for (const Face& face : document_.faces) {
-        face_ids.push_back(face.id);
-    }
-    for (const ElementId face_id : face_ids) {
-        static_cast<void>(assign_face_material_slot(document_, face_id, materialSlot));
-    }
-    return *this;
+DocumentBuilder &
+DocumentBuilder::assign_material_slot(std::uint32_t material_slot) {
+  std::vector<ElementId> face_ids;
+  face_ids.reserve(document_.faces.size());
+  for (const Face &face : document_.faces) {
+    face_ids.push_back(face.id);
+  }
+  for (const ElementId face_id : face_ids) {
+    static_cast<void>(
+        assign_face_material_slot(document_, face_id, material_slot));
+  }
+  return *this;
 }
 
 DocumentBuilder& DocumentBuilder::clear()
 {
     document_ = {};
-    vertexIds_.clear();
+    vertex_ids_.clear();
     return *this;
 }
 
@@ -391,7 +403,7 @@ Document DocumentBuilder::take()
 {
     Document document = std::move(document_);
     document_ = {};
-    vertexIds_.clear();
+    vertex_ids_.clear();
     return document;
 }
 

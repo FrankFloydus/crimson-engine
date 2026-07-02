@@ -50,8 +50,9 @@ using qdr_test::find_object;
 TEST(QdrModelingRuntimeOperationThickenTests, ThickenOperationSchemaKeepsSoftThicknessLimitsAndHiddenCenterToggle) {
 	const quader_editor_core::ThickenOperationSchema thicken = quader_editor_core::thicken_operation_schema();
 
-	EXPECT_TRUE(thicken.id == quader_editor_core::EditorOperationId::thicken);
-	EXPECT_TRUE(std::string(thicken.operation_id) == "thicken");
+        EXPECT_TRUE(thicken.id ==
+                    quader_editor_core::EditorOperationId::Thicken);
+        EXPECT_TRUE(std::string(thicken.operation_id) == "thicken");
 	EXPECT_TRUE(std::string(thicken.thickness.id) == "thickness");
 	EXPECT_TRUE(std::string(thicken.from_center.id) == "from_center");
 	EXPECT_NEAR(thicken.thickness.default_value, 0.25, 0.0001);
@@ -77,8 +78,9 @@ TEST(QdrModelingRuntimeOperationThickenTests, ThickenOperationSchemaKeepsSoftThi
 TEST(QdrModelingRuntimeOperationThickenTests, ThickenOperationPreviewsGeneratedTopologyTransactionallyObjectModeCreatesASeparateOuterHullWithoutMutatingTheSourceMesh) {
 	{
 		quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
-		EXPECT_TRUE(session.selection_mode() == quader_editor_core::SelectionMode::object);
-		EXPECT_TRUE(session.selected_object_ids().size() == 1U);
+                EXPECT_TRUE(session.selection_mode() ==
+                            quader_editor_core::SelectionMode::Object);
+                EXPECT_TRUE(session.selected_object_ids().size() == 1U);
 		const int source_id = session.selected_object_ids().front();
 		const int next_id_before = session.next_object_id();
 		const std::size_t object_count_before = session.objects().size();
@@ -91,9 +93,12 @@ TEST(QdrModelingRuntimeOperationThickenTests, ThickenOperationPreviewsGeneratedT
 
 		EXPECT_TRUE(session.begin_thicken_preview(0.25F, false).changed);
 
-		EXPECT_TRUE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::thicken);
-		EXPECT_TRUE(session.selection_mode() == quader_editor_core::SelectionMode::object);
-		EXPECT_TRUE(session.objects().size() == object_count_before + 1U);
+                EXPECT_TRUE(
+                    session.preview_transaction_status().kind ==
+                    quader_editor_core::PreviewTransactionKind::Thicken);
+                EXPECT_TRUE(session.selection_mode() ==
+                            quader_editor_core::SelectionMode::Object);
+                EXPECT_TRUE(session.objects().size() == object_count_before + 1U);
 		EXPECT_TRUE(session.selected_object_ids().size() == 1U);
 		const int hull_id = session.selected_object_ids().front();
 		EXPECT_TRUE(hull_id != source_id);
@@ -113,14 +118,16 @@ TEST(QdrModelingRuntimeOperationThickenTests, ThickenOperationPreviewsGeneratedT
 		EXPECT_NEAR(quader::length(displacement), 0.25F, 0.0001);
 		EXPECT_NEAR(quader::dot(displacement, source_normal), -0.25F, 0.0001);
 
-		const quader_editor_core::PreviewTransactionFinishResult commit =
-			session.commit_preview_transaction(quader_editor_core::PreviewTransactionKind::thicken);
-		EXPECT_TRUE(commit.before.changed);
+                const quader_editor_core::PreviewTransactionFinishResult
+                    commit = session.commit_preview_transaction(
+                        quader_editor_core::PreviewTransactionKind::Thicken);
+                EXPECT_TRUE(commit.before.changed);
 		EXPECT_TRUE(session.objects().size() == object_count_before + 1U);
 		EXPECT_TRUE(session.history_status().can_undo);
 		EXPECT_TRUE(session.undo().applied);
-		EXPECT_TRUE(session.selection_mode() == quader_editor_core::SelectionMode::object);
-		EXPECT_TRUE(session.objects().size() == object_count_before);
+                EXPECT_TRUE(session.selection_mode() ==
+                            quader_editor_core::SelectionMode::Object);
+                EXPECT_TRUE(session.objects().size() == object_count_before);
 		EXPECT_TRUE(session.selected_object_ids().size() == 1U);
 		EXPECT_TRUE(session.selected_object_ids().front() == source_id);
 	}
@@ -163,10 +170,11 @@ TEST(QdrModelingRuntimeOperationThickenTests, ThickenOperationPreviewsGeneratedT
 		EXPECT_NEAR(quader::length(displacement), 0.5F, 0.0001);
 		EXPECT_NEAR(quader::dot(displacement, source_normal), -0.5F, 0.0001);
 
-		const quader_editor_core::PreviewTransactionFinishResult cancel =
-			session.cancel_preview_transaction(quader_editor_core::PreviewTransactionKind::thicken);
+                const quader_editor_core::PreviewTransactionFinishResult
+                    cancel = session.cancel_preview_transaction(
+                        quader_editor_core::PreviewTransactionKind::Thicken);
 
-		EXPECT_TRUE(cancel.restored);
+                EXPECT_TRUE(cancel.restored);
 		EXPECT_TRUE(session.objects().size() == object_count_before);
 		EXPECT_TRUE(session.objects().front().document.faces.size() == face_count_before);
 		EXPECT_FALSE(session.history_status().can_undo);
@@ -189,15 +197,22 @@ TEST(QdrModelingRuntimeOperationThickenTests, ThickenOperationPreviewsGeneratedT
 	{
 		quader_editor_core::PolygonObject object = qdr_test::make_object(1, qdr_test::make_quad_document().document);
 		quader_editor_core::EditorSession session({ object });
-		session.set_component_selection(1, qdr_test::face_selection({ session.objects().front().document.faces.front().id }), quader_editor_core::SelectionMode::face);
-		const std::size_t face_count_before = session.objects().front().document.faces.size();
+                session.set_component_selection(
+                    1,
+                    qdr_test::face_selection(
+                        {session.objects().front().document.faces.front().id}),
+                    quader_editor_core::SelectionMode::Face);
+                const std::size_t face_count_before = session.objects().front().document.faces.size();
 
 		EXPECT_TRUE(session.begin_thicken_preview(0.25F, false).changed);
-		EXPECT_TRUE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::thicken);
-		EXPECT_TRUE(session.objects().front().document.faces.size() > face_count_before);
-		const quader_editor_core::PreviewTransactionFinishResult commit =
-			session.commit_preview_transaction(quader_editor_core::PreviewTransactionKind::thicken);
-		EXPECT_TRUE(commit.before.changed);
+                EXPECT_TRUE(
+                    session.preview_transaction_status().kind ==
+                    quader_editor_core::PreviewTransactionKind::Thicken);
+                EXPECT_TRUE(session.objects().front().document.faces.size() > face_count_before);
+                const quader_editor_core::PreviewTransactionFinishResult
+                    commit = session.commit_preview_transaction(
+                        quader_editor_core::PreviewTransactionKind::Thicken);
+                EXPECT_TRUE(commit.before.changed);
 		EXPECT_TRUE(session.history_status().can_undo);
 		EXPECT_TRUE(session.undo().applied);
 		EXPECT_TRUE(session.objects().front().document.faces.size() == face_count_before);
@@ -220,14 +235,19 @@ TEST(QdrModelingRuntimeOperationThickenTests, ThickenOperationPreviewsGeneratedT
 	{
 		quader_editor_core::PolygonObject object = qdr_test::make_object(1, qdr_test::make_quad_document().document);
 		quader_editor_core::EditorSession session({ object });
-		session.set_component_selection(1, qdr_test::face_selection({ session.objects().front().document.faces.front().id }), quader_editor_core::SelectionMode::face);
-		const std::size_t face_count_before = session.objects().front().document.faces.size();
+                session.set_component_selection(
+                    1,
+                    qdr_test::face_selection(
+                        {session.objects().front().document.faces.front().id}),
+                    quader_editor_core::SelectionMode::Face);
+                const std::size_t face_count_before = session.objects().front().document.faces.size();
 
 		const quader_editor_core::CommandResult begin = session.begin_thicken_preview(0.0F, false);
-		const quader_editor_core::PreviewTransactionFinishResult commit =
-			session.commit_preview_transaction(quader_editor_core::PreviewTransactionKind::thicken);
+                const quader_editor_core::PreviewTransactionFinishResult
+                    commit = session.commit_preview_transaction(
+                        quader_editor_core::PreviewTransactionKind::Thicken);
 
-		EXPECT_TRUE(begin.ok);
+                EXPECT_TRUE(begin.ok);
 		EXPECT_FALSE(begin.changed);
 		EXPECT_TRUE(commit.restored);
 		EXPECT_FALSE(session.history_status().can_undo);
@@ -251,9 +271,13 @@ TEST(QdrModelingRuntimeOperationThickenTests, ThickenOperationPreviewsGeneratedT
 	{
 		quader_editor_core::PolygonObject object = qdr_test::make_object(1, qdr_test::make_quad_document().document);
 		quader_editor_core::EditorSession session({ object });
-		session.set_component_selection(1, qdr_test::face_selection({ session.objects().front().document.faces.front().id }), quader_editor_core::SelectionMode::face);
+                session.set_component_selection(
+                    1,
+                    qdr_test::face_selection(
+                        {session.objects().front().document.faces.front().id}),
+                    quader_editor_core::SelectionMode::Face);
 
-		quader_editor_core::ThickenOperationSettings settings;
+                quader_editor_core::ThickenOperationSettings settings;
 		settings.thickness = -0.25;
 		settings.from_center = true;
 		const quader_editor_core::CommandResult begin = session.begin_thicken_preview(settings);
@@ -261,8 +285,10 @@ TEST(QdrModelingRuntimeOperationThickenTests, ThickenOperationPreviewsGeneratedT
 		EXPECT_TRUE(begin.ok);
 		EXPECT_TRUE(begin.changed);
 		EXPECT_TRUE(session.preview_transaction_status().active);
-		EXPECT_TRUE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::thicken);
-	}
+                EXPECT_TRUE(
+                    session.preview_transaction_status().kind ==
+                    quader_editor_core::PreviewTransactionKind::Thicken);
+        }
 
 	
 }
@@ -281,33 +307,39 @@ TEST(QdrModelingRuntimeOperationThickenTests, ThickenOperationPreviewsGeneratedT
 	{
 		quader_editor_core::PolygonObject object = qdr_test::make_object(1, qdr_test::make_quad_document().document);
 		quader_editor_core::EditorSession session({ object });
-		session.set_component_selection(
-			1,
-			qdr_test::face_selection({ session.objects().front().document.faces.front().id }, session.objects().front().document.faces.front().id),
-			quader_editor_core::SelectionMode::face);
-		const std::size_t face_count_before = session.objects().front().document.faces.size();
+                session.set_component_selection(
+                    1,
+                    qdr_test::face_selection(
+                        {session.objects().front().document.faces.front().id},
+                        session.objects().front().document.faces.front().id),
+                    quader_editor_core::SelectionMode::Face);
+                const std::size_t face_count_before = session.objects().front().document.faces.size();
 
 		const quader_editor_core::CommandResult begin = session.begin_thicken_preview(0.25F, true);
 
 		EXPECT_TRUE(begin.ok);
 		EXPECT_TRUE(begin.changed);
-		EXPECT_TRUE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::thicken);
-		EXPECT_TRUE(session.objects().front().document.faces.size() > face_count_before);
+                EXPECT_TRUE(
+                    session.preview_transaction_status().kind ==
+                    quader_editor_core::PreviewTransactionKind::Thicken);
+                EXPECT_TRUE(session.objects().front().document.faces.size() > face_count_before);
 		EXPECT_TRUE(session.update_thicken_preview(0.5F, true).changed);
 		EXPECT_TRUE(session.objects().front().document.faces.size() > face_count_before);
 
-		const quader_editor_core::PreviewTransactionFinishResult cancel =
-			session.cancel_preview_transaction(quader_editor_core::PreviewTransactionKind::thicken);
+                const quader_editor_core::PreviewTransactionFinishResult
+                    cancel = session.cancel_preview_transaction(
+                        quader_editor_core::PreviewTransactionKind::Thicken);
 
-		EXPECT_TRUE(cancel.restored);
+                EXPECT_TRUE(cancel.restored);
 		EXPECT_TRUE(session.objects().front().document.faces.size() == face_count_before);
 		EXPECT_FALSE(session.history_status().can_undo);
 
 		EXPECT_TRUE(session.begin_thicken_preview(0.25F, true).changed);
-		const quader_editor_core::PreviewTransactionFinishResult commit =
-			session.commit_preview_transaction(quader_editor_core::PreviewTransactionKind::thicken);
+                const quader_editor_core::PreviewTransactionFinishResult
+                    commit = session.commit_preview_transaction(
+                        quader_editor_core::PreviewTransactionKind::Thicken);
 
-		EXPECT_TRUE(commit.before.changed);
+                EXPECT_TRUE(commit.before.changed);
 		EXPECT_FALSE(commit.restored);
 		EXPECT_TRUE(session.objects().front().document.faces.size() > face_count_before);
 		EXPECT_TRUE(session.history_status().undo_count == 1U);

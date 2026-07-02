@@ -56,23 +56,23 @@ TEST(QdrEditorMetadataPanelCatalogTests, HostContractOperationPanelCatalogExpose
 
 	const qhc::HostOperationPanelDescriptor& object = require_panel("object_operations");
 	EXPECT_TRUE(same_text(object.label, "Object Operations"));
-	EXPECT_TRUE(object.selection_mode == qhc::HostSelectionMode::object);
-	EXPECT_TRUE(object.fallback_for_unknown_selection);
+        EXPECT_TRUE(object.selection_mode == qhc::HostSelectionMode::Object);
+        EXPECT_TRUE(object.fallback_for_unknown_selection);
 
 	const qhc::HostOperationPanelDescriptor& vertex = require_panel("vertex_operations");
 	EXPECT_TRUE(same_text(vertex.label, "Vertex Operations"));
-	EXPECT_TRUE(vertex.selection_mode == qhc::HostSelectionMode::vertex);
-	EXPECT_FALSE(vertex.fallback_for_unknown_selection);
+        EXPECT_TRUE(vertex.selection_mode == qhc::HostSelectionMode::Vertex);
+        EXPECT_FALSE(vertex.fallback_for_unknown_selection);
 
 	const qhc::HostOperationPanelDescriptor& edge = require_panel("edge_operations");
 	EXPECT_TRUE(same_text(edge.label, "Edge Operations"));
-	EXPECT_TRUE(edge.selection_mode == qhc::HostSelectionMode::edge);
-	EXPECT_FALSE(edge.fallback_for_unknown_selection);
+        EXPECT_TRUE(edge.selection_mode == qhc::HostSelectionMode::Edge);
+        EXPECT_FALSE(edge.fallback_for_unknown_selection);
 
 	const qhc::HostOperationPanelDescriptor& face = require_panel("face_operations");
 	EXPECT_TRUE(same_text(face.label, "Face Operations"));
-	EXPECT_TRUE(face.selection_mode == qhc::HostSelectionMode::face);
-	EXPECT_FALSE(face.fallback_for_unknown_selection);
+        EXPECT_TRUE(face.selection_mode == qhc::HostSelectionMode::Face);
+        EXPECT_FALSE(face.fallback_for_unknown_selection);
 }
 
 TEST(QdrEditorMetadataPanelCatalogTests, HostContractOperationPanelItemsResolveToVisibleActionsForTheSameSelectionMode) {

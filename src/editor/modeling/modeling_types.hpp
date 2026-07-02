@@ -152,8 +152,8 @@ struct ModelingCommandDescriptor {
     std::string id;
     std::string label;
     std::string shortcut;
-    bool viewportScoped = true;
-    bool rebuildsMeshOnSuccess = false;
+    bool viewport_scoped = true;
+    bool rebuilds_mesh_on_success = false;
 };
 
 /**
@@ -164,7 +164,7 @@ struct ModelingInstantOperationDescriptor {
     std::string id;
     std::string label;
     bool enabled = false;
-    bool rebuildsMeshOnSuccess = true;
+    bool rebuilds_mesh_on_success = true;
 };
 
 /**
@@ -221,49 +221,49 @@ struct ModelingRay {
 struct ModelingViewportCamera {
     bool orthographic = false;
     QVec3 origin = {};
-    QVec3 xAxis = {1.0f, 0.0f, 0.0f};
-    QVec3 yAxis = {0.0f, 1.0f, 0.0f};
-    QVec3 zAxis = {0.0f, 0.0f, 1.0f};
-    QVec2 viewportSize = {1.0f, 1.0f};
-    double orthographicSize = 24.0;
-    double fovDegrees = 60.0;
+    QVec3 x_axis = {1.0f, 0.0f, 0.0f};
+    QVec3 y_axis = {0.0f, 1.0f, 0.0f};
+    QVec3 z_axis = {0.0f, 0.0f, 1.0f};
+    QVec2 viewport_size = {1.0f, 1.0f};
+    double orthographic_size = 24.0;
+    double fov_degrees = 60.0;
 };
 
 /**
  * Represents a Modeling Transform3 value used by the modeling domain.
  */
 struct ModelingTransform3 {
-    QVec3 xAxis = {1.0f, 0.0f, 0.0f};
-    QVec3 yAxis = {0.0f, 1.0f, 0.0f};
-    QVec3 zAxis = {0.0f, 0.0f, 1.0f};
-    QVec3 origin = {};
+  QVec3 x_axis = {1.0f, 0.0f, 0.0f};
+  QVec3 y_axis = {0.0f, 1.0f, 0.0f};
+  QVec3 z_axis = {0.0f, 0.0f, 1.0f};
+  QVec3 origin = {};
 };
 
 /**
  * Stores the Modeling Box Tool Event data contract used by the modeling domain.
  */
 struct ModelingBoxToolEvent {
-    QVec2 screenPosition;
-    ModelingRay ray;
-    double gridSize = 1.0;
-    bool hasCamera = false;
-    ModelingViewportCamera camera;
-    bool snapEnabled = true;
+  QVec2 screen_position;
+  ModelingRay ray;
+  double grid_size = 1.0;
+  bool has_camera = false;
+  ModelingViewportCamera camera;
+  bool snap_enabled = true;
 };
 
 /**
  * Stores the Modeling Tool Ray Event data contract used by the modeling domain.
  */
 struct ModelingToolRayEvent {
-    QVec2 screenPosition;
-    ModelingRay ray;
-    ModelingViewportCamera camera;
-    double gridSize = 1.0;
-    double vertexRadius = 0.3;
-    double edgeRadius = 0.2;
-    bool snapEnabled = true;
-    bool constrainAxis = false;
-    bool dragging = false;
+  QVec2 screen_position;
+  ModelingRay ray;
+  ModelingViewportCamera camera;
+  double grid_size = 1.0;
+  double vertex_radius = 0.3;
+  double edge_radius = 0.2;
+  bool snap_enabled = true;
+  bool constrain_axis = false;
+  bool dragging = false;
 };
 
 /**
@@ -272,16 +272,16 @@ struct ModelingToolRayEvent {
 struct ModelingBoxPreview {
     bool ok = false;
     bool valid = false;
-    ModelingBoxDragState dragState = ModelingBoxDragState::Idle;
+    ModelingBoxDragState drag_state = ModelingBoxDragState::Idle;
     std::string message;
     std::array<QVec3, 4> footprint = {};
-    std::size_t footprintCount = 0;
+    std::size_t footprint_count = 0;
     std::array<QVec3, 8> corners = {};
-    std::size_t cornerCount = 0;
+    std::size_t corner_count = 0;
     QVec3 normal = {0.0f, 1.0f, 0.0f};
     double distance = 0.0;
     ModelingBounds bounds {};
-    bool boundsEmpty = true;
+    bool bounds_empty = true;
 };
 
 /**
@@ -301,7 +301,7 @@ struct ModelingCreateBoxRequest {
 struct ModelingCreateMeshRequest {
     quader_poly::Document document;
     std::string name = "Mesh";
-    std::uint32_t materialSlot = 0;
+    std::uint32_t material_slot = 0;
 };
 
 /**
@@ -327,28 +327,28 @@ enum class ModelingBoxSelectionRule {
  * Stores the Modeling Component Selection Request data contract used by the modeling domain.
  */
 struct ModelingComponentSelectionRequest {
-    int modelingObjectId = -1;
-    ModelingSelectionMode mode = ModelingSelectionMode::Vertex;
-    std::vector<int> vertices;
-    std::vector<std::pair<int, int>> edges;
-    std::vector<int> faces;
-    ModelingSelectionEdit edit = ModelingSelectionEdit::Replace;
-    ModelingActiveSelectionKind activeKind = ModelingActiveSelectionKind::None;
-    int activeVertex = -1;
-    std::pair<int, int> activeEdge = {-1, -1};
-    int activeFace = -1;
+  int modeling_object_id = -1;
+  ModelingSelectionMode mode = ModelingSelectionMode::Vertex;
+  std::vector<int> vertices;
+  std::vector<std::pair<int, int>> edges;
+  std::vector<int> faces;
+  ModelingSelectionEdit edit = ModelingSelectionEdit::Replace;
+  ModelingActiveSelectionKind active_kind = ModelingActiveSelectionKind::None;
+  int active_vertex = -1;
+  std::pair<int, int> active_edge = {-1, -1};
+  int active_face = -1;
 };
 
 /**
  * Stores the Modeling Direct Hover Request data contract used by the modeling domain.
  */
 struct ModelingDirectHoverRequest {
-    int modelingObjectId = -1;
-    ModelingActiveSelectionKind kind = ModelingActiveSelectionKind::None;
-    int vertexId = -1;
-    std::pair<int, int> edge = {-1, -1};
-    int faceId = -1;
-    bool selectedModifierPressed = false;
+  int modeling_object_id = -1;
+  ModelingActiveSelectionKind kind = ModelingActiveSelectionKind::None;
+  int vertex_id = -1;
+  std::pair<int, int> edge = {-1, -1};
+  int face_id = -1;
+  bool selected_modifier_pressed = false;
 };
 
 /**
@@ -356,16 +356,16 @@ struct ModelingDirectHoverRequest {
  */
 struct ModelingPickSelectRequest {
     ModelingRay ray;
-    int clickCount = 1;
-    bool controlPressed = false;
-    bool shiftPressed = false;
-    bool commandPressed = false;
-    bool altPressed = false;
-    bool preserveSelectionOnMiss = false;
-    bool preserveSelectionOnSelectedHit = false;
-    bool preserveExistingComponentSelectionOnHit = false;
-    double vertexRadius = 0.3;
-    double edgeRadius = 0.2;
+    int click_count = 1;
+    bool control_pressed = false;
+    bool shift_pressed = false;
+    bool command_pressed = false;
+    bool alt_pressed = false;
+    bool preserve_selection_on_miss = false;
+    bool preserve_selection_on_selected_hit = false;
+    bool preserve_existing_component_selection_on_hit = false;
+    double vertex_radius = 0.3;
+    double edge_radius = 0.2;
 };
 
 /**
@@ -384,9 +384,9 @@ struct ModelingBoxSelectRequest {
  */
 struct ModelingHoverRequest {
     ModelingRay ray;
-    bool selectedModifierPressed = false;
-    double vertexRadius = 0.3;
-    double edgeRadius = 0.2;
+    bool selected_modifier_pressed = false;
+    double vertex_radius = 0.3;
+    double edge_radius = 0.2;
 };
 
 /**
@@ -394,11 +394,11 @@ struct ModelingHoverRequest {
  */
 struct ModelingHoverTarget {
     ModelingActiveSelectionKind kind = ModelingActiveSelectionKind::None;
-    int objectId = -1;
-    int vertexId = -1;
-    int edgeA = -1;
-    int edgeB = -1;
-    int faceId = -1;
+    int object_id = -1;
+    int vertex_id = -1;
+    int edge_a = -1;
+    int edge_b = -1;
+    int face_id = -1;
 };
 
 /**
@@ -407,7 +407,7 @@ struct ModelingHoverTarget {
 struct ModelingHoverSummary {
     bool changed = false;
     ModelingHoverTarget target;
-    bool targetSelected = false;
+    bool target_selected = false;
 };
 
 /**
@@ -415,19 +415,19 @@ struct ModelingHoverSummary {
  */
 struct ModelingSelectionSummary {
     ModelingSelectionMode mode = ModelingSelectionMode::Object;
-    bool hasSelection = false;
-    ModelingActiveSelectionKind activeKind = ModelingActiveSelectionKind::None;
-    int activeObjectId = -1;
-    int activeVertexId = -1;
-    int activeEdgeA = -1;
-    int activeEdgeB = -1;
-    int activeFaceId = -1;
-    std::uint32_t selectedObjectCount = 0;
-    std::uint32_t selectedVertexCount = 0;
-    std::uint32_t selectedEdgeCount = 0;
-    std::uint32_t selectedFaceCount = 0;
-    std::uint64_t contentRevision = 0;
-    std::uint64_t selectionRevision = 0;
+    bool has_selection = false;
+    ModelingActiveSelectionKind active_kind = ModelingActiveSelectionKind::None;
+    int active_object_id = -1;
+    int active_vertex_id = -1;
+    int active_edge_a = -1;
+    int active_edge_b = -1;
+    int active_face_id = -1;
+    std::uint32_t selected_object_count = 0;
+    std::uint32_t selected_vertex_count = 0;
+    std::uint32_t selected_edge_count = 0;
+    std::uint32_t selected_face_count = 0;
+    std::uint64_t content_revision = 0;
+    std::uint64_t selection_revision = 0;
 };
 
 /**
@@ -435,17 +435,17 @@ struct ModelingSelectionSummary {
  * selection feedback.
  */
 struct ModelingSelectionOverlayOptions {
-    bool suppressPersistentObjectSelection = false;
+  bool suppress_persistent_object_selection = false;
 };
 
 /**
  * Stores the Modeling Object Record data contract used by the modeling domain.
  */
 struct ModelingObjectRecord {
-    int modelingObjectId = -1;
-    EntityId entity = InvalidEntityId;
-    AssetId mesh = InvalidAssetId;
-    std::string name;
+  int modeling_object_id = -1;
+  EntityId entity = kInvalidEntityId;
+  AssetId mesh = kInvalidAssetId;
+  std::string name;
 };
 
 /**
@@ -465,9 +465,9 @@ struct ModelingRepeatTransform {
     ModelingTransformTool tool = ModelingTransformTool::Move;
     ModelingTransformOperation operation = ModelingTransformOperation::Transform;
     ModelingTransformAxis axis = ModelingTransformAxis::None;
-    bool duplicateSelected = false;
-    QVec3 moveDelta = {};
-    double rotateAngleDegrees = 0.0;
+    bool duplicate_selected = false;
+    QVec3 move_delta = {};
+    double rotate_angle_degrees = 0.0;
     QVec3 scale = {1.0f, 1.0f, 1.0f};
 };
 
@@ -475,42 +475,42 @@ struct ModelingRepeatTransform {
  * Represents a Modeling Tool Status value used by the modeling domain.
  */
 struct ModelingToolStatus {
-    ModelingViewportTool activeTool = ModelingViewportTool::Select;
-    bool modalToolOwnsViewport = false;
-    bool insertEdgeLoopActive = false;
-    bool insertEdgeLoopDragging = false;
-    bool insertEdgeLoopHasPreview = false;
-    bool knifeActive = false;
-    bool knifeHasCurrent = false;
-    bool knifeCanCommit = false;
-    bool cutActive = false;
-    bool cutCanPreview = false;
-    bool cutPreviewValid = false;
-    bool cutDragging = false;
-    bool cutDraggingNewPoint = false;
-    bool cutDraggingLine = false;
-    int cutDraggingPointIndex = -1;
-    int cutPointCount = 0;
-    int cutCapturedPointCount = 0;
-    bool cutHasLine = false;
-    std::array<QVec3, 3> cutPoints = {};
-    ModelingCutMode cutMode = ModelingCutMode::KeepBoth;
-    bool mirrorActive = false;
-    bool mirrorCanPreview = false;
-    bool mirrorPreviewValid = false;
-    bool mirrorDragging = false;
-    bool mirrorDraggingNewPoint = false;
-    bool mirrorDraggingLine = false;
-    int mirrorDraggingPointIndex = -1;
-    int mirrorPointCount = 0;
-    int mirrorCapturedPointCount = 0;
-    bool mirrorHasLine = false;
-    std::array<QVec3, 3> mirrorPoints = {};
-    bool polyActive = false;
-    bool polyClosed = false;
-    bool polyHasCurrent = false;
-    bool polyCanCommit = false;
-    int polyPointCount = 0;
+  ModelingViewportTool active_tool = ModelingViewportTool::Select;
+  bool modal_tool_owns_viewport = false;
+  bool insert_edge_loop_active = false;
+  bool insert_edge_loop_dragging = false;
+  bool insert_edge_loop_has_preview = false;
+  bool knife_active = false;
+  bool knife_has_current = false;
+  bool knife_can_commit = false;
+  bool cut_active = false;
+  bool cut_can_preview = false;
+  bool cut_preview_valid = false;
+  bool cut_dragging = false;
+  bool cut_dragging_new_point = false;
+  bool cut_dragging_line = false;
+  int cut_dragging_point_index = -1;
+  int cut_point_count = 0;
+  int cut_captured_point_count = 0;
+  bool cut_has_line = false;
+  std::array<QVec3, 3> cut_points = {};
+  ModelingCutMode cut_mode = ModelingCutMode::KeepBoth;
+  bool mirror_active = false;
+  bool mirror_can_preview = false;
+  bool mirror_preview_valid = false;
+  bool mirror_dragging = false;
+  bool mirror_dragging_new_point = false;
+  bool mirror_dragging_line = false;
+  int mirror_dragging_point_index = -1;
+  int mirror_point_count = 0;
+  int mirror_captured_point_count = 0;
+  bool mirror_has_line = false;
+  std::array<QVec3, 3> mirror_points = {};
+  bool poly_active = false;
+  bool poly_closed = false;
+  bool poly_has_current = false;
+  bool poly_can_commit = false;
+  int poly_point_count = 0;
 };
 
 /**
@@ -533,35 +533,35 @@ enum class ModelingToolSettingsTargetKind {
 struct ModelingToolSettingsTarget {
     ModelingToolSettingsTargetKind kind = ModelingToolSettingsTargetKind::None;
     bool active = false;
-    bool operationPreviewActive = false;
+    bool operation_preview_active = false;
     std::string label;
-    std::string actionId;
-    std::string operationId;
+    std::string action_id;
+    std::string operation_id;
 };
 
 /**
  * Represents a Modeling Interaction Settings value used by the modeling domain.
  */
 struct ModelingInteractionSettings {
-    int bridgeSteps = 1;
-    double edgeBevelWidth = 1.0;
-    double edgeBevelProfile = 0.5;
-    int edgeBevelSegments = 1;
-    double thickenThickness = 0.25;
-    bool thickenFromCenter = false;
-    int sliceQuadXSlices = 1;
-    int sliceQuadYSlices = 1;
-    double mergeByDistanceTolerance = 0.125;
-    ModelingCutMode cutMode = ModelingCutMode::KeepBoth;
+  int bridge_steps = 1;
+  double edge_bevel_width = 1.0;
+  double edge_bevel_profile = 0.5;
+  int edge_bevel_segments = 1;
+  double thicken_thickness = 0.25;
+  bool thicken_from_center = false;
+  int slice_quad_x_slices = 1;
+  int slice_quad_y_slices = 1;
+  double merge_by_distance_tolerance = 0.125;
+  ModelingCutMode cut_mode = ModelingCutMode::KeepBoth;
 };
 
 /**
  * Represents a Modeling Tool Preview Mesh value used by the modeling domain.
  */
 struct ModelingToolPreviewMesh {
-    EntityId sourceEntity = InvalidEntityId;
-    AssetId material = InvalidAssetId;
-    MeshAsset mesh;
+  EntityId source_entity = kInvalidEntityId;
+  AssetId material = kInvalidAssetId;
+  MeshAsset mesh;
 };
 
 /**
@@ -572,31 +572,31 @@ struct ModelingTransformDragBeginRequest {
     ModelingTransformOperation operation = ModelingTransformOperation::Transform;
     ModelingTransformAxis axis = ModelingTransformAxis::None;
     QVec3 pivot = {};
-    QVec2 screenPosition = {};
-    QVec2 screenPivot = {};
-    QVec2 screenTip = {};
-    bool hasWorldDirection = false;
-    QVec3 worldDirection = {};
+    QVec2 screen_position = {};
+    QVec2 screen_pivot = {};
+    QVec2 screen_tip = {};
+    bool has_world_direction = false;
+    QVec3 world_direction = {};
     ModelingRay ray;
     ModelingViewportCamera camera;
-    double gridSize = 1.0;
-    double vertexSnapRadius = 0.3;
-    bool gridSnapEnabled = true;
+    double grid_size = 1.0;
+    double vertex_snap_radius = 0.3;
+    bool grid_snap_enabled = true;
     bool precision = false;
-    bool duplicateSelected = false;
+    bool duplicate_selected = false;
 };
 
 /**
  * Stores the Modeling Transform Drag Update Request data contract used by the modeling domain.
  */
 struct ModelingTransformDragUpdateRequest {
-    QVec2 screenPosition = {};
-    ModelingRay ray;
-    ModelingViewportCamera camera;
-    double gridSize = 1.0;
-    double vertexSnapRadius = 0.3;
-    bool gridSnapEnabled = true;
-    bool precision = false;
+  QVec2 screen_position = {};
+  ModelingRay ray;
+  ModelingViewportCamera camera;
+  double grid_size = 1.0;
+  double vertex_snap_radius = 0.3;
+  bool grid_snap_enabled = true;
+  bool precision = false;
 };
 
 /**
@@ -606,20 +606,20 @@ struct ModelingTransformDragPreview {
     bool ok = false;
     bool active = false;
     bool changed = false;
-    bool previewDriven = false;
+    bool preview_driven = false;
     std::string message;
     ModelingTransformTool tool = ModelingTransformTool::Move;
     ModelingTransformOperation operation = ModelingTransformOperation::Transform;
     ModelingTransformAxis axis = ModelingTransformAxis::None;
     QVec3 pivot = {};
-    QVec3 moveDelta = {};
-    double rotateAngleDegrees = 0.0;
+    QVec3 move_delta = {};
+    double rotate_angle_degrees = 0.0;
     QVec3 scale = {1.0f, 1.0f, 1.0f};
-    std::uint64_t contentRevision = 0;
-    std::uint64_t selectionRevision = 0;
-    bool sceneTransform = false;
-    bool hasScenePreviewTransform = false;
-    ModelingTransform3 scenePreviewTransform = {};
+    std::uint64_t content_revision = 0;
+    std::uint64_t selection_revision = 0;
+    bool scene_transform = false;
+    bool has_scene_preview_transform = false;
+    ModelingTransform3 scene_preview_transform = {};
 };
 
 /**

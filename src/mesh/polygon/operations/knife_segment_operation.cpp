@@ -66,7 +66,7 @@ OperationResult KnifeSegmentOperation::apply(Document& document, Selection& sele
 
     document = std::move(candidate.document);
     selection.clear();
-    selection.mode = SelectionMode::vertex;
+    selection.mode = SelectionMode::Vertex;
     add_unique_id(selection.vertices, candidate.previous_vertex);
     add_unique_id(selection.vertices, candidate.current_vertex);
     activate_last_selection(selection);

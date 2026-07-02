@@ -40,7 +40,7 @@ bool ray_intersects_triangle(
 {
     const quader_geometry::QRay3<float> geometry_pick_ray = geometry_ray(ray);
     const quader_geometry::QTriangle3<float> triangle { geometry_vec3(a), geometry_vec3(b), geometry_vec3(c) };
-    const float picking_epsilon = std::nextafter(epsilon, 0.0F);
+    const float picking_epsilon = std::nextafter(kEpsilon, 0.0F);
     const quader_geometry::QRayBoundedTriangleQueryOptions<float> options {
         0.0F,
         std::numeric_limits<float>::infinity(),
@@ -72,7 +72,8 @@ float point_ray_distance(const Ray& ray, const quader::QVec3& point, float& ray_
     }
 
     const quader_geometry::QClosestRayPoint<float> closest =
-        quader_geometry::closest_point_on_ray<float>(geometry_vec3(point), geometry_ray(ray), epsilon);
+        quader_geometry::closest_point_on_ray<float>(
+            geometry_vec3(point), geometry_ray(ray), kEpsilon);
     if (!closest.valid) {
         return length(point - ray.origin);
     }
@@ -84,16 +85,14 @@ float segment_ray_distance(const Ray& ray, const quader::QVec3& a, const quader:
 {
     const quader::QVec3 segment = b - a;
     const float segment_length_squared = length_squared(segment);
-    if (segment_length_squared <= epsilon) {
-        position = a;
-        return point_ray_distance(ray, a, ray_distance);
+    if (segment_length_squared <= kEpsilon) {
+      position = a;
+      return point_ray_distance(ray, a, ray_distance);
     }
 
     const quader_geometry::QSegmentRayClosestPoints<float> closest =
         quader_geometry::closest_points_segment_ray<float>(
-            { geometry_vec3(a), geometry_vec3(b) },
-            geometry_ray(ray),
-            epsilon);
+            {geometry_vec3(a), geometry_vec3(b)}, geometry_ray(ray), kEpsilon);
     if (!closest.valid) {
         ray_distance = 0.0F;
         position = a;

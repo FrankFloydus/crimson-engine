@@ -55,24 +55,24 @@ OperationResult delete_selection_impl(Document& document, const Selection& selec
     const std::size_t original_vertex_count = document.vertices.size();
 
     switch (selection.mode) {
-    case SelectionMode::vertex:
-        std::erase_if(document.faces, [&selection](const Face& face) {
-            return face_uses_any_vertex(face, selection.vertices);
-        });
-        std::erase_if(document.vertices, [&selection](const Vertex& vertex) {
-            return selection_contains(selection, vertex.id);
-        });
-        break;
-    case SelectionMode::edge:
-        std::erase_if(document.faces, [&selection](const Face& face) {
-            return face_uses_any_edge(face, selection.edges);
-        });
-        break;
-    case SelectionMode::face:
-        std::erase_if(document.faces, [&selection](const Face& face) {
-            return selection_contains_face(selection, face.id);
-        });
-        break;
+    case SelectionMode::Vertex:
+      std::erase_if(document.faces, [&selection](const Face &face) {
+        return face_uses_any_vertex(face, selection.vertices);
+      });
+      std::erase_if(document.vertices, [&selection](const Vertex &vertex) {
+        return selection_contains(selection, vertex.id);
+      });
+      break;
+    case SelectionMode::Edge:
+      std::erase_if(document.faces, [&selection](const Face &face) {
+        return face_uses_any_edge(face, selection.edges);
+      });
+      break;
+    case SelectionMode::Face:
+      std::erase_if(document.faces, [&selection](const Face &face) {
+        return selection_contains_face(selection, face.id);
+      });
+      break;
     }
 
     prune_invalid_faces(document);

@@ -40,8 +40,8 @@ EdgeBevelOperationSettings edge_bevel_settings_from_variant(const EditorOperatio
 
 const EdgeBevelOperation& concrete_edge_bevel_operation()
 {
-	static const EdgeBevelOperation operation;
-	return operation;
+  static const EdgeBevelOperation kOperation;
+  return kOperation;
 }
 
 } // namespace
@@ -53,7 +53,7 @@ const EditorOperation& edge_bevel_operation()
 
 EditorOperationId EdgeBevelOperation::operation_id() const
 {
-	return EditorOperationId::edge_bevel;
+  return EditorOperationId::EdgeBevel;
 }
 
 std::string_view EdgeBevelOperation::id() const

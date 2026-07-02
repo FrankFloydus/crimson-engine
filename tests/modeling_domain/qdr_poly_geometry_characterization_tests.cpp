@@ -106,7 +106,8 @@ Document make_single_quad_document()
     const ElementId top_right = add_vertex(document, { 1.0F, 1.0F, 0.0F });
     const ElementId top_left = add_vertex(document, { -1.0F, 1.0F, 0.0F });
     const std::array<ElementId, 4> face_vertices { bottom_left, bottom_right, top_right, top_left };
-    require_test(add_face(document, face_vertices) != invalid_element_id, "single quad should create a face");
+    require_test(add_face(document, face_vertices) != kInvalidElementId,
+                 "single quad should create a face");
     return document;
 }
 
@@ -115,9 +116,9 @@ Document make_single_quad_document()
  */
 struct OcclusionFixture {
     Document document;
-    ElementId front_face = invalid_element_id;
+    ElementId front_face = kInvalidElementId;
     Edge back_edge;
-    ElementId back_vertex = invalid_element_id;
+    ElementId back_vertex = kInvalidElementId;
 };
 
 OcclusionFixture make_occlusion_fixture()
@@ -133,19 +134,21 @@ OcclusionFixture make_occlusion_fixture()
         front_top_right,
         front_bottom_right,
     });
-    require_test(fixture.front_face != invalid_element_id, "front occluder face should be created");
+    require_test(fixture.front_face != kInvalidElementId,
+                 "front occluder face should be created");
 
     const ElementId back_bottom_left = add_vertex(fixture.document, { -0.5F, -0.5F, 1.0F });
     const ElementId back_top_left = add_vertex(fixture.document, { -0.5F, 0.5F, 1.0F });
     const ElementId back_top_right = add_vertex(fixture.document, { 0.5F, 0.5F, 1.0F });
     const ElementId back_bottom_right = add_vertex(fixture.document, { 0.5F, -0.5F, 1.0F });
-    require_test(add_face(fixture.document, std::array<ElementId, 4> {
-        back_bottom_left,
-        back_top_left,
-        back_top_right,
-        back_bottom_right,
-    }) != invalid_element_id,
-        "back component face should be created");
+    require_test(add_face(fixture.document,
+                          std::array<ElementId, 4>{
+                              back_bottom_left,
+                              back_top_left,
+                              back_top_right,
+                              back_bottom_right,
+                          }) != kInvalidElementId,
+                 "back component face should be created");
     fixture.back_edge = make_edge(back_bottom_right, back_top_right);
     fixture.back_vertex = back_top_right;
     return fixture;
@@ -159,25 +162,27 @@ Document make_parallel_vertical_edge_faces()
     const ElementId near_bottom_right = add_vertex(document, { 0.0F, 1.0F, 1.0F });
     const ElementId near_top_right = add_vertex(document, { 0.0F, 1.0F, 1.5F });
     const ElementId near_top_left = add_vertex(document, { 0.0F, -1.0F, 1.5F });
-    require_test(add_face(document, std::array<ElementId, 4> {
-        near_bottom_left,
-        near_bottom_right,
-        near_top_right,
-        near_top_left,
-    }) != invalid_element_id,
-        "near vertical face should be created");
+    require_test(add_face(document,
+                          std::array<ElementId, 4>{
+                              near_bottom_left,
+                              near_bottom_right,
+                              near_top_right,
+                              near_top_left,
+                          }) != kInvalidElementId,
+                 "near vertical face should be created");
 
     const ElementId far_bottom_left = add_vertex(document, { 0.0F, -1.0F, 2.0F });
     const ElementId far_bottom_right = add_vertex(document, { 0.0F, 1.0F, 2.0F });
     const ElementId far_top_right = add_vertex(document, { 0.0F, 1.0F, 2.5F });
     const ElementId far_top_left = add_vertex(document, { 0.0F, -1.0F, 2.5F });
-    require_test(add_face(document, std::array<ElementId, 4> {
-        far_bottom_left,
-        far_bottom_right,
-        far_top_right,
-        far_top_left,
-    }) != invalid_element_id,
-        "far vertical face should be created");
+    require_test(add_face(document,
+                          std::array<ElementId, 4>{
+                              far_bottom_left,
+                              far_bottom_right,
+                              far_top_right,
+                              far_top_left,
+                          }) != kInvalidElementId,
+                 "far vertical face should be created");
 
     return document;
 }
@@ -187,12 +192,12 @@ Document make_parallel_vertical_edge_faces()
  */
 struct BackfacePreferenceFixture {
     Document document;
-    ElementId near_backfacing_face = invalid_element_id;
-    ElementId far_frontfacing_face = invalid_element_id;
+    ElementId near_backfacing_face = kInvalidElementId;
+    ElementId far_frontfacing_face = kInvalidElementId;
     Edge near_backfacing_edge;
     Edge far_frontfacing_edge;
-    ElementId near_backfacing_vertex = invalid_element_id;
-    ElementId far_frontfacing_vertex = invalid_element_id;
+    ElementId near_backfacing_vertex = kInvalidElementId;
+    ElementId far_frontfacing_vertex = kInvalidElementId;
 };
 
 BackfacePreferenceFixture make_backface_preference_fixture()
@@ -209,7 +214,8 @@ BackfacePreferenceFixture make_backface_preference_fixture()
         near_top_right,
         near_top_left,
     });
-    require_test(fixture.near_backfacing_face != invalid_element_id, "near backfacing face should be created");
+    require_test(fixture.near_backfacing_face != kInvalidElementId,
+                 "near backfacing face should be created");
     fixture.near_backfacing_edge = make_edge(near_bottom_right, near_top_right);
     fixture.near_backfacing_vertex = near_top_right;
 
@@ -223,7 +229,8 @@ BackfacePreferenceFixture make_backface_preference_fixture()
         far_top_right,
         far_bottom_right,
     });
-    require_test(fixture.far_frontfacing_face != invalid_element_id, "far frontfacing face should be created");
+    require_test(fixture.far_frontfacing_face != kInvalidElementId,
+                 "far frontfacing face should be created");
     fixture.far_frontfacing_edge = make_edge(far_bottom_right, far_top_right);
     fixture.far_frontfacing_vertex = far_top_right;
     return fixture;
@@ -238,15 +245,16 @@ Document make_concave_ngon_document()
     const ElementId inner_corner = add_vertex(document, { 0.0F, 0.0F, 0.0F });
     const ElementId top_inner = add_vertex(document, { 0.0F, 1.0F, 0.0F });
     const ElementId top_left = add_vertex(document, { -1.0F, 1.0F, 0.0F });
-    require_test(add_face(document, std::array<ElementId, 6> {
-        bottom_left,
-        bottom_right,
-        inner_right,
-        inner_corner,
-        top_inner,
-        top_left,
-    }) != invalid_element_id,
-        "concave n-gon should be accepted as a face");
+    require_test(add_face(document,
+                          std::array<ElementId, 6>{
+                              bottom_left,
+                              bottom_right,
+                              inner_right,
+                              inner_corner,
+                              top_inner,
+                              top_left,
+                          }) != kInvalidElementId,
+                 "concave n-gon should be accepted as a face");
     return document;
 }
 
@@ -254,11 +262,12 @@ void characterizes_face_pick_on_quad()
 {
     const Document document = make_single_quad_document();
     PickOptions options;
-    options.mode = SelectionMode::face;
+    options.mode = SelectionMode::Face;
 
     const PickResult pick = pick_element(document, { { 0.25F, -0.25F, 2.0F }, { 0.0F, 0.0F, -1.0F } }, options);
     require_test(pick.hit, "face ray should hit the quad front side");
-    require_test(pick.kind == ElementKind::face, "quad face pick should return a face hit");
+    require_test(pick.kind == ElementKind::Face,
+                 "quad face pick should return a face hit");
     require_test(pick.face_id == document.faces.front().id, "quad face pick should return the quad face id");
     require_test(nearly_equal(pick.distance, 2.0F), "quad face pick distance should be measured along the ray");
 }
@@ -267,14 +276,15 @@ void characterizes_face_pick_with_near_parallel_bounds_axis()
 {
     const Document document = make_single_quad_document();
     PickOptions options;
-    options.mode = SelectionMode::face;
+    options.mode = SelectionMode::Face;
 
     const PickResult pick = pick_element(
         document,
         { { -1.0009F, 0.0F, 2000.0F }, { 0.0000005F, 0.0F, -1.0F } },
         options);
     require_test(pick.hit, "face picking should preserve old triangle hits when a bounded AABB axis is nearly parallel");
-    require_test(pick.kind == ElementKind::face, "near-parallel bounds-axis pick should return a face hit");
+    require_test(pick.kind == ElementKind::Face,
+                 "near-parallel bounds-axis pick should return a face hit");
     require_test(pick.face_id == document.faces.front().id, "near-parallel bounds-axis pick should preserve the hit face id");
 }
 
@@ -282,7 +292,7 @@ void characterizes_edge_pick_radius_and_tie_break()
 {
     const Document document = make_parallel_vertical_edge_faces();
     PickOptions options;
-    options.mode = SelectionMode::edge;
+    options.mode = SelectionMode::Edge;
     options.edge_radius = 0.04F;
 
     const Ray ray { { 0.05F, 0.0F, -2.0F }, { 0.0F, 0.0F, 1.0F } };
@@ -291,7 +301,8 @@ void characterizes_edge_pick_radius_and_tie_break()
 
     options.edge_radius = 0.06F;
     pick = pick_element(document, ray, options);
-    require_test(pick.hit && pick.kind == ElementKind::edge, "edge pick should hit when inside the configured radius");
+    require_test(pick.hit && pick.kind == ElementKind::Edge,
+                 "edge pick should hit when inside the configured radius");
     require_test(pick.edge == make_edge(1, 2), "equally close edge pick should choose the nearer ray-depth edge");
     require_test(nearly_equal(pick.distance, 3.0F), "edge pick distance should use the nearest edge depth along the ray");
 }
@@ -301,7 +312,7 @@ void characterizes_component_occlusion_by_front_face()
     const OcclusionFixture fixture = make_occlusion_fixture();
 
     PickOptions edge_options;
-    edge_options.mode = SelectionMode::edge;
+    edge_options.mode = SelectionMode::Edge;
     edge_options.edge_radius = 0.1F;
     const PickResult edge_pick = pick_element(
         fixture.document,
@@ -310,7 +321,7 @@ void characterizes_component_occlusion_by_front_face()
     require_test(!edge_pick.hit, "edge pick should be occluded by a closer front face it does not belong to");
 
     PickOptions vertex_options;
-    vertex_options.mode = SelectionMode::vertex;
+    vertex_options.mode = SelectionMode::Vertex;
     vertex_options.vertex_radius = 0.1F;
     const PickResult vertex_pick = pick_element(
         fixture.document,
@@ -323,7 +334,7 @@ void backface_enabled_face_picking_prefers_front_facing_authored_side()
 {
     const BackfacePreferenceFixture fixture = make_backface_preference_fixture();
     PickOptions options;
-    options.mode = SelectionMode::face;
+    options.mode = SelectionMode::Face;
     options.pick_backfaces = true;
     const Ray ray { { 0.0F, 0.0F, -2.0F }, { 0.0F, 0.0F, 1.0F } };
 
@@ -341,7 +352,7 @@ void backface_enabled_face_picking_can_prefer_nearest_surface()
 {
     const BackfacePreferenceFixture fixture = make_backface_preference_fixture();
     PickOptions options;
-    options.mode = SelectionMode::face;
+    options.mode = SelectionMode::Face;
     options.pick_backfaces = true;
     options.prefer_front_facing_faces = false;
     const Ray ray { { 0.0F, 0.0F, -2.0F }, { 0.0F, 0.0F, 1.0F } };
@@ -361,7 +372,7 @@ void backface_enabled_component_picking_prefers_front_facing_incident_side_on_ov
     const BackfacePreferenceFixture fixture = make_backface_preference_fixture();
 
     PickOptions edge_options;
-    edge_options.mode = SelectionMode::edge;
+    edge_options.mode = SelectionMode::Edge;
     edge_options.edge_radius = 0.1F;
     edge_options.pick_backfaces = true;
     const PickResult edge_pick = pick_element(
@@ -372,7 +383,7 @@ void backface_enabled_component_picking_prefers_front_facing_incident_side_on_ov
         "overlapping edge picking should prefer the edge incident to a front-facing authored face");
 
     PickOptions vertex_options;
-    vertex_options.mode = SelectionMode::vertex;
+    vertex_options.mode = SelectionMode::Vertex;
     vertex_options.vertex_radius = 0.1F;
     vertex_options.pick_backfaces = true;
     const PickResult vertex_pick = pick_element(
@@ -409,10 +420,10 @@ void characterizes_convex_hull_rebuild_and_normal_recalculation()
     Document cube = make_cube({});
     const Edge merge_edge = document_edges(cube).front();
     Selection merge_selection;
-    merge_selection.mode = SelectionMode::vertex;
+    merge_selection.mode = SelectionMode::Vertex;
     merge_selection.vertices = { merge_edge.a, merge_edge.b };
     merge_selection.has_active = true;
-    merge_selection.active_kind = ElementKind::vertex;
+    merge_selection.active_kind = ElementKind::Vertex;
     merge_selection.active_vertex = merge_edge.a;
 
     const Vertex* merge_a = find_vertex(cube, merge_edge.a);
@@ -441,7 +452,7 @@ void characterizes_convex_hull_rebuild_and_normal_recalculation()
         "normal recalculation test should start with an inward face");
 
     Selection face_selection;
-    face_selection.mode = SelectionMode::face;
+    face_selection.mode = SelectionMode::Face;
     face_selection.faces = { face_id };
     const OperationResult recalc_result = recalculate_selected_face_normals(cube, face_selection, true);
     require_test(recalc_result.changed, "normal recalculation should flip an inward selected hull face outward");
@@ -455,17 +466,17 @@ void characterizes_knife_rejects_segments_crossing_existing_cuts()
 {
     Document quad = make_single_quad_document();
     const Face source_face = quad.faces.front();
-    const KnifePointTarget bottom_cut {
-        KnifePointTargetKind::existing_edge,
-        invalid_element_id,
+    const KnifePointTarget bottom_cut{
+        KnifePointTargetKind::ExistingEdge,
+        kInvalidElementId,
         make_edge(source_face.vertices[0], source_face.vertices[1]),
         0.25F,
         source_face.id,
         {},
     };
-    const KnifePointTarget top_cut {
-        KnifePointTargetKind::existing_edge,
-        invalid_element_id,
+    const KnifePointTarget top_cut{
+        KnifePointTargetKind::ExistingEdge,
+        kInvalidElementId,
         make_edge(source_face.vertices[2], source_face.vertices[3]),
         0.75F,
         source_face.id,
@@ -481,17 +492,17 @@ void characterizes_knife_rejects_segments_crossing_existing_cuts()
 
     const std::size_t vertex_count_before_crossing_cut = quad.vertices.size();
     const std::size_t face_count_before_crossing_cut = quad.faces.size();
-    const KnifePointTarget left_crossing_cut {
-        KnifePointTargetKind::existing_edge,
-        invalid_element_id,
+    const KnifePointTarget left_crossing_cut{
+        KnifePointTargetKind::ExistingEdge,
+        kInvalidElementId,
         make_edge(source_face.vertices[3], source_face.vertices[0]),
         0.5F,
         source_face.id,
         {},
     };
-    const KnifePointTarget right_crossing_cut {
-        KnifePointTargetKind::existing_edge,
-        invalid_element_id,
+    const KnifePointTarget right_crossing_cut{
+        KnifePointTargetKind::ExistingEdge,
+        kInvalidElementId,
         make_edge(source_face.vertices[1], source_face.vertices[2]),
         0.5F,
         source_face.id,
@@ -513,13 +524,13 @@ void characterizes_adjacent_edge_bevel_miter_geometry()
     const std::size_t vertex_count_before = cube.vertices.size();
     const std::size_t face_count_before = cube.faces.size();
     Selection selection;
-    selection.mode = SelectionMode::edge;
+    selection.mode = SelectionMode::Edge;
     selection.edges = {
         make_edge(source_face.vertices[0], source_face.vertices[1]),
         make_edge(source_face.vertices[1], source_face.vertices[2]),
     };
     selection.has_active = true;
-    selection.active_kind = ElementKind::edge;
+    selection.active_kind = ElementKind::Edge;
     selection.active_edge = selection.edges.back();
 
     EdgeBevelSettings settings;
@@ -531,8 +542,10 @@ void characterizes_adjacent_edge_bevel_miter_geometry()
     require_test(bevel_result.changed, "adjacent edge bevel should create offset geometry");
     require_test(cube.vertices.size() > vertex_count_before, "adjacent edge bevel should add offset vertices");
     require_test(cube.faces.size() == face_count_before + 2U, "adjacent edge bevel should add strip faces while terminal profiles are absorbed by source faces");
-    require_test(selection.mode == SelectionMode::face && selection.faces.size() == 2U,
-        "adjacent edge bevel should select strip faces without adding a generated two-edge corner patch");
+    require_test(selection.mode == SelectionMode::Face &&
+                     selection.faces.size() == 2U,
+                 "adjacent edge bevel should select strip faces without adding "
+                 "a generated two-edge corner patch");
     require_test(std::none_of(cube.faces.begin(), cube.faces.end(), face_has_repeated_vertices),
         "adjacent edge bevel should not leave repeated face vertices at the miter");
     require_test(every_edge_is_closed(cube), "adjacent edge bevel should keep the cube hull closed");
@@ -559,7 +572,7 @@ TEST(QdrPolyGeometryCharacterizationTests, QdrPolyGeometryCharacterizationTests)
 TEST(QdrPolyGeometryCharacterizationTests, PolyOverlayEmitsSelectedFacePrimitivesForAQuad) {
     const Document document = make_single_quad_document();
     Selection selection;
-    selection.mode = SelectionMode::face;
+    selection.mode = SelectionMode::Face;
     selection.faces = { document.faces.front().id };
 
     const OverlayData overlay = build_overlay(document, selection);

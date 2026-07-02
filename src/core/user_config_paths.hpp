@@ -10,6 +10,7 @@
 
 namespace quader {
 
-[[nodiscard]] std::filesystem::path quaderUserConfigDirectory(const std::filesystem::path& executableDir);
+[[nodiscard]] std::filesystem::path
+quader_user_config_directory(const std::filesystem::path &executable_dir);
 
 } // namespace quader

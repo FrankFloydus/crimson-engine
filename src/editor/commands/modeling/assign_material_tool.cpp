@@ -10,8 +10,8 @@
 
 namespace quader {
 
-ModelingCommandResult AssignMaterialTool::executeCustomCommand(ModelingCommandExecutionContext& context) const {
-    return context.modeling.applyActiveMaterial();
+ModelingCommandResult AssignMaterialTool::execute_custom_command(ModelingCommandExecutionContext& context) const {
+  return context.modeling.apply_active_material();
 }
 
 } // namespace quader

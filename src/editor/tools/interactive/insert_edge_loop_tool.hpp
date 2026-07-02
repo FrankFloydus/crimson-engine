@@ -15,8 +15,9 @@ namespace quader {
  */
 class InsertEdgeLoopTool final : public DragCommitTool {
 public:
-    InsertEdgeLoopTool()
-        : DragCommitTool(viewportToolDescriptor(ViewportToolId::InsertEdgeLoop)) {}
+  InsertEdgeLoopTool()
+      : DragCommitTool(
+            viewport_tool_descriptor(ViewportToolId::InsertEdgeLoop)) {}
 };
 
 } // namespace quader

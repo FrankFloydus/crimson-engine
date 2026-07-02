@@ -53,13 +53,13 @@ public:
 private:
     [[nodiscard]] const PolyOperationMetadata& metadata() const
     {
-        return poly_operation_descriptor(
-                shading_ == SurfaceShading::smooth ?
-                        PolyOperationKey::ShadeSelectedFacesSmooth :
-                        PolyOperationKey::ShadeSelectedFacesFlat);
+      return poly_operation_descriptor(
+          shading_ == SurfaceShading::Smooth
+              ? PolyOperationKey::ShadeSelectedFacesSmooth
+              : PolyOperationKey::ShadeSelectedFacesFlat);
     }
 
-    SurfaceShading shading_ = SurfaceShading::flat;
+    SurfaceShading shading_ = SurfaceShading::Flat;
 };
 
 /**
@@ -94,8 +94,8 @@ private:
 OperationResult set_selected_face_shading(Document& document, const Selection& selection, SurfaceShading shading)
 {
     QDR_PROFILE_SCOPE("qdr_document.set_selected_face_shading");
-    if (selection.mode != SelectionMode::face || selection.faces.empty()) {
-        return { false, "Select one or more faces before changing shade mode." };
+    if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
+      return {false, "Select one or more faces before changing shade mode."};
     }
 
     bool changed = false;
@@ -112,12 +112,12 @@ OperationResult set_selected_face_shading(Document& document, const Selection& s
     }
 
     if (!changed) {
-        return {
-            false,
-            shading == SurfaceShading::smooth ?
-                "Selected faces are already shade smooth." :
-                "Selected faces are already shade flat.",
-        };
+      return {
+          false,
+          shading == SurfaceShading::Smooth
+              ? "Selected faces are already shade smooth."
+              : "Selected faces are already shade flat.",
+      };
     }
     return { true, {} };
 }
@@ -151,11 +151,12 @@ bool smooth_faces_touching_edge(Document& document, Edge edge)
 {
     bool changed = false;
     for (Face& face : document.faces) {
-        if (!face_contains_edge(face, edge) || face.normal_shading == SurfaceShading::smooth) {
-            continue;
-        }
-        face.normal_shading = SurfaceShading::smooth;
-        changed = true;
+      if (!face_contains_edge(face, edge) ||
+          face.normal_shading == SurfaceShading::Smooth) {
+        continue;
+      }
+      face.normal_shading = SurfaceShading::Smooth;
+      changed = true;
     }
     return changed;
 }
@@ -163,8 +164,9 @@ bool smooth_faces_touching_edge(Document& document, Edge edge)
 OperationResult set_selected_edge_normal_hardness(Document& document, const Selection& selection, bool hard)
 {
     QDR_PROFILE_SCOPE("qdr_document.set_selected_edge_normal_hardness");
-    if (selection.mode != SelectionMode::edge || selection.edges.empty()) {
-        return { false, "Select one or more edges before changing normal hardness." };
+    if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
+      return {false,
+              "Select one or more edges before changing normal hardness."};
     }
 
     const std::set<Edge, EdgeLess> valid_edges = document_edge_set(document);
@@ -218,13 +220,15 @@ OperationResult EdgeNormalHardnessOperation::apply(Document& document, Selection
 OperationResult shade_selected_faces_smooth(Document& document, const Selection& selection)
 {
     Selection selection_copy = selection;
-    return ShadeFacesOperation { SurfaceShading::smooth }.apply(document, selection_copy);
+    return ShadeFacesOperation{SurfaceShading::Smooth}.apply(document,
+                                                             selection_copy);
 }
 
 OperationResult shade_selected_faces_flat(Document& document, const Selection& selection)
 {
     Selection selection_copy = selection;
-    return ShadeFacesOperation { SurfaceShading::flat }.apply(document, selection_copy);
+    return ShadeFacesOperation{SurfaceShading::Flat}.apply(document,
+                                                           selection_copy);
 }
 
 OperationResult harden_selected_edge_normals(Document& document, const Selection& selection)

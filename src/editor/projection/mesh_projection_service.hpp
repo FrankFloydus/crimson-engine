@@ -17,9 +17,12 @@ namespace quader {
  */
 class MeshProjectionService final {
 public:
-    [[nodiscard]] static MeshAsset meshAssetFromCompiledMesh(const quader_poly::CompiledMesh& compiled);
-    [[nodiscard]] static MeshAsset compilePolygonDocumentMesh(const quader_poly::Document& document);
-    [[nodiscard]] static MeshAsset compileObjectMesh(const quader_editor_core::PolygonObject& object);
+  [[nodiscard]] static MeshAsset
+  mesh_asset_from_compiled_mesh(const quader_poly::CompiledMesh &compiled);
+  [[nodiscard]] static MeshAsset
+  compile_polygon_document_mesh(const quader_poly::Document &document);
+  [[nodiscard]] static MeshAsset
+  compile_object_mesh(const quader_editor_core::PolygonObject &object);
 };
 
 } // namespace quader

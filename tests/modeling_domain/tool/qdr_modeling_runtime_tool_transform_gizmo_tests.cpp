@@ -18,8 +18,8 @@ namespace {
 quader_editor_core::ViewportCameraState front_camera()
 {
 	quader_editor_core::ViewportCameraState camera;
-	camera.projection = quader_editor_core::CameraProjection::perspective;
-	camera.transform.origin = { 0.0F, 0.0F, 6.0F };
+        camera.projection = quader_editor_core::CameraProjection::Perspective;
+        camera.transform.origin = { 0.0F, 0.0F, 6.0F };
 	camera.transform.x_axis = { 1.0F, 0.0F, 0.0F };
 	camera.transform.y_axis = { 0.0F, 1.0F, 0.0F };
 	camera.transform.z_axis = { 0.0F, 0.0F, 1.0F };
@@ -49,22 +49,24 @@ TEST(QdrModelingRuntimeToolTransformGizmoTests, TransformGizmoHoverHelperPromote
 	quader_editor_core::EditorRuntimeState runtime;
 	quader_editor_core::TransformGizmoPickHit hit;
 	hit.hit = true;
-	hit.axis = quader_editor_core::TransformAxis::z;
+        hit.axis = quader_editor_core::TransformAxis::Z;
 
-	quader_editor_core::set_editor_runtime_gizmo_hover_from_pick(runtime, hit);
-	EXPECT_TRUE(runtime.gizmo_hover_axis == quader_editor_core::TransformAxis::z);
+        quader_editor_core::set_editor_runtime_gizmo_hover_from_pick(runtime, hit);
+        EXPECT_TRUE(runtime.gizmo_hover_axis ==
+                    quader_editor_core::TransformAxis::Z);
 
-	hit.hit = false;
+        hit.hit = false;
 	quader_editor_core::set_editor_runtime_gizmo_hover_from_pick(runtime, hit);
-	EXPECT_TRUE(runtime.gizmo_hover_axis == quader_editor_core::TransformAxis::none);
+        EXPECT_TRUE(runtime.gizmo_hover_axis ==
+                    quader_editor_core::TransformAxis::None);
 }
 
 } // namespace
 
 TEST(QdrModelingRuntimeToolTransformGizmoTests, TransformGizmoBuildsFramesOnlyForTransformTools) {
 	quader_editor_core::TransformGizmoFrameInput input;
-	input.tool = quader_editor_core::ViewportInteractionTool::move;
-	input.has_selection = true;
+        input.tool = quader_editor_core::ViewportInteractionTool::Move;
+        input.has_selection = true;
 	input.has_pivot = true;
 	input.pivot = {};
 	input.camera = front_camera();
@@ -79,18 +81,20 @@ TEST(QdrModelingRuntimeToolTransformGizmoTests, TransformGizmoBuildsFramesOnlyFo
 	EXPECT_TRUE(move_frame.ring_segments.empty());
 	EXPECT_TRUE(move_frame.trackball_segments.empty());
 
-	const quader_editor_core::TransformGizmoAxisPrimitive* move_x_axis =
-		find_axis(move_frame, quader_editor_core::TransformAxis::x);
-	ASSERT_TRUE(move_x_axis != nullptr);
+        const quader_editor_core::TransformGizmoAxisPrimitive *move_x_axis =
+            find_axis(move_frame, quader_editor_core::TransformAxis::X);
+        ASSERT_TRUE(move_x_axis != nullptr);
 	EXPECT_NEAR(
 		screen_distance(move_frame.info.screen_pivot, move_x_axis->screen_tip),
 		static_cast<float>(input.gizmo_size_pixels * 1.75),
 		1.5F);
 
-	const auto xy_plane = std::find_if(move_frame.planes.begin(), move_frame.planes.end(), [](const quader_editor_core::TransformGizmoPlanePrimitive& plane) {
-		return plane.axis == quader_editor_core::TransformAxis::xy;
-	});
-	EXPECT_TRUE(xy_plane != move_frame.planes.end());
+        const auto xy_plane = std::find_if(
+            move_frame.planes.begin(), move_frame.planes.end(),
+            [](const quader_editor_core::TransformGizmoPlanePrimitive &plane) {
+              return plane.axis == quader_editor_core::TransformAxis::Xy;
+            });
+        EXPECT_TRUE(xy_plane != move_frame.planes.end());
 	const quader::QVec2 xy_center {
 		(xy_plane->screen0.x + xy_plane->screen1.x + xy_plane->screen2.x + xy_plane->screen3.x) * 0.25F,
 		(xy_plane->screen0.y + xy_plane->screen1.y + xy_plane->screen2.y + xy_plane->screen3.y) * 0.25F,
@@ -104,20 +108,20 @@ TEST(QdrModelingRuntimeToolTransformGizmoTests, TransformGizmoBuildsFramesOnlyFo
 		static_cast<float>(input.gizmo_size_pixels * 0.2),
 		1.0F);
 
-	input.tool = quader_editor_core::ViewportInteractionTool::scale;
-	const quader_editor_core::TransformGizmoFrame scale_frame =
+        input.tool = quader_editor_core::ViewportInteractionTool::Scale;
+        const quader_editor_core::TransformGizmoFrame scale_frame =
 		quader_editor_core::build_transform_gizmo_frame(input);
 	EXPECT_TRUE(scale_frame.info.ok);
-	const quader_editor_core::TransformGizmoAxisPrimitive* scale_x_axis =
-		find_axis(scale_frame, quader_editor_core::TransformAxis::x);
-	ASSERT_TRUE(scale_x_axis != nullptr);
+        const quader_editor_core::TransformGizmoAxisPrimitive *scale_x_axis =
+            find_axis(scale_frame, quader_editor_core::TransformAxis::X);
+        ASSERT_TRUE(scale_x_axis != nullptr);
 	EXPECT_NEAR(
 		screen_distance(scale_frame.info.screen_pivot, scale_x_axis->screen_tip),
 		static_cast<float>(input.gizmo_size_pixels * 1.554),
 		1.5F);
 
-	input.tool = quader_editor_core::ViewportInteractionTool::rotate;
-	const quader_editor_core::TransformGizmoFrame rotate_frame =
+        input.tool = quader_editor_core::ViewportInteractionTool::Rotate;
+        const quader_editor_core::TransformGizmoFrame rotate_frame =
 		quader_editor_core::build_transform_gizmo_frame(input);
 	EXPECT_TRUE(rotate_frame.info.ok);
 	EXPECT_TRUE(rotate_frame.axes.empty());
@@ -144,8 +148,8 @@ TEST(QdrModelingRuntimeToolTransformGizmoTests, TransformGizmoBuildsFramesOnlyFo
 		return !segment.front_facing && segment.alpha < 1.0F;
 	}));
 
-	input.tool = quader_editor_core::ViewportInteractionTool::extrude;
-	const quader_editor_core::TransformGizmoFrame extrude_frame =
+        input.tool = quader_editor_core::ViewportInteractionTool::Extrude;
+        const quader_editor_core::TransformGizmoFrame extrude_frame =
 		quader_editor_core::build_transform_gizmo_frame(input);
 	EXPECT_FALSE(extrude_frame.info.ok);
 	EXPECT_TRUE(extrude_frame.axes.empty());

@@ -18,8 +18,9 @@ TEST(QdrDocumentOperationUvAlignFaceTests, UVAlignFaceBakesSelectedFaceLocalLoop
 	const Face* face = find_face(fixture.document, fixture.face);
 	EXPECT_TRUE(face != nullptr);
 	EXPECT_TRUE(face->uvs.size() == face->vertices.size());
-	const CompiledMesh mesh = compile_document(fixture.document, SurfaceShading::smooth);
-	EXPECT_TRUE(mesh.indices.size() == 6U);
+        const CompiledMesh mesh =
+            compile_document(fixture.document, SurfaceShading::Smooth);
+        EXPECT_TRUE(mesh.indices.size() == 6U);
 	EXPECT_TRUE(mesh.primitives.size() == 1U);
 	EXPECT_TRUE(mesh.primitives.front().material_slot == 3U);
 }

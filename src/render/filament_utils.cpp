@@ -11,34 +11,34 @@
 
 namespace quader {
 
-filament::Box computeBounds(const MeshAsset& mesh) {
-    if (mesh.vertices.empty()) {
-        return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
-    }
+filament::Box compute_bounds(const MeshAsset &mesh) {
+  if (mesh.vertices.empty()) {
+    return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
+  }
 
-    QVec3 minValue{
-        std::numeric_limits<float>::max(),
-        std::numeric_limits<float>::max(),
-        std::numeric_limits<float>::max(),
-    };
-    QVec3 maxValue{
-        std::numeric_limits<float>::lowest(),
-        std::numeric_limits<float>::lowest(),
-        std::numeric_limits<float>::lowest(),
-    };
+  QVec3 min_value{
+      std::numeric_limits<float>::max(),
+      std::numeric_limits<float>::max(),
+      std::numeric_limits<float>::max(),
+  };
+  QVec3 max_value{
+      std::numeric_limits<float>::lowest(),
+      std::numeric_limits<float>::lowest(),
+      std::numeric_limits<float>::lowest(),
+  };
 
-    for (const MeshVertex& vertex : mesh.vertices) {
-        minValue.x = std::min(minValue.x, vertex.position.x);
-        minValue.y = std::min(minValue.y, vertex.position.y);
-        minValue.z = std::min(minValue.z, vertex.position.z);
-        maxValue.x = std::max(maxValue.x, vertex.position.x);
-        maxValue.y = std::max(maxValue.y, vertex.position.y);
-        maxValue.z = std::max(maxValue.z, vertex.position.z);
-    }
+  for (const MeshVertex &vertex : mesh.vertices) {
+    min_value.x = std::min(min_value.x, vertex.position.x);
+    min_value.y = std::min(min_value.y, vertex.position.y);
+    min_value.z = std::min(min_value.z, vertex.position.z);
+    max_value.x = std::max(max_value.x, vertex.position.x);
+    max_value.y = std::max(max_value.y, vertex.position.y);
+    max_value.z = std::max(max_value.z, vertex.position.z);
+  }
 
-    filament::Box box;
-    box.set(toFilament(minValue), toFilament(maxValue));
-    return box;
+  filament::Box box;
+  box.set(to_filament(min_value), to_filament(max_value));
+  return box;
 }
 
 } // namespace quader

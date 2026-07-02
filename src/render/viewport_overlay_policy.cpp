@@ -10,252 +10,281 @@
 
 namespace quader {
 
-int viewportOverlayDrawOrder(ViewportOverlayLayer layer) {
-    for (int index = 0; index < static_cast<int>(kViewportOverlayDrawOrder.size()); ++index) {
-        if (kViewportOverlayDrawOrder[static_cast<std::size_t>(index)] == layer) {
-            return index;
-        }
+int viewport_overlay_draw_order(ViewportOverlayLayer layer) {
+  for (int index = 0;
+       index < static_cast<int>(kViewportOverlayDrawOrder.size()); ++index) {
+    if (kViewportOverlayDrawOrder[static_cast<std::size_t>(index)] == layer) {
+      return index;
     }
-    return static_cast<int>(kViewportOverlayDrawOrder.size());
+  }
+  return static_cast<int>(kViewportOverlayDrawOrder.size());
 }
 
-bool viewportOverlayLayerUsesDepthStampedFaceFill(ViewportOverlayLayer layer) {
-    return layer == ViewportOverlayLayer::SelectedVisibleFace ||
-            layer == ViewportOverlayLayer::SelectedXrayFace ||
-            layer == ViewportOverlayLayer::SelectedFaceMask ||
-            layer == ViewportOverlayLayer::HoverFace;
+bool viewport_overlay_layer_uses_depth_stamped_face_fill(
+    ViewportOverlayLayer layer) {
+  return layer == ViewportOverlayLayer::SelectedVisibleFace ||
+         layer == ViewportOverlayLayer::SelectedXrayFace ||
+         layer == ViewportOverlayLayer::SelectedFaceMask ||
+         layer == ViewportOverlayLayer::HoverFace;
 }
 
-bool viewportOverlayLayerUsesDepthOnlyFaceFill(ViewportOverlayLayer layer) {
-    (void)layer;
-    return false;
+bool viewport_overlay_layer_uses_depth_only_face_fill(
+    ViewportOverlayLayer layer) {
+  (void)layer;
+  return false;
 }
 
-bool viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer layer) {
-    return layer == ViewportOverlayLayer::SelectedVisibleFace ||
-            layer == ViewportOverlayLayer::SelectedXrayFace ||
-            layer == ViewportOverlayLayer::SelectedFaceMask ||
-            layer == ViewportOverlayLayer::HoverFace ||
-            layer == ViewportOverlayLayer::ToolPlane ||
-            layer == ViewportOverlayLayer::ToolHandle ||
-            layer == ViewportOverlayLayer::ToolPreviewFill;
+bool viewport_overlay_triangle_is_two_sided(ViewportOverlayLayer layer) {
+  return layer == ViewportOverlayLayer::SelectedVisibleFace ||
+         layer == ViewportOverlayLayer::SelectedXrayFace ||
+         layer == ViewportOverlayLayer::SelectedFaceMask ||
+         layer == ViewportOverlayLayer::HoverFace ||
+         layer == ViewportOverlayLayer::ToolPlane ||
+         layer == ViewportOverlayLayer::ToolHandle ||
+         layer == ViewportOverlayLayer::ToolPreviewFill;
 }
 
-bool viewportOverlayLineDrawsOnTop(ViewportOverlayLayer layer) {
-    return layer == ViewportOverlayLayer::SourceWire ||
-            layer == ViewportOverlayLayer::WireframeXray ||
-            layer == ViewportOverlayLayer::SelectedFaceEdge ||
-            layer == ViewportOverlayLayer::SelectedEdge ||
-            layer == ViewportOverlayLayer::HoverFaceEdge ||
-            layer == ViewportOverlayLayer::HoverEdge ||
-            layer == ViewportOverlayLayer::GroupBounds ||
-            layer == ViewportOverlayLayer::DiagnosticEdge ||
-            layer == ViewportOverlayLayer::ToolPlaneLine ||
-            layer == ViewportOverlayLayer::ToolPreviewLine ||
-            layer == ViewportOverlayLayer::ToolPreviewSeam ||
-            layer == ViewportOverlayLayer::ToolHandle;
+bool viewport_overlay_line_draws_on_top(ViewportOverlayLayer layer) {
+  return layer == ViewportOverlayLayer::SourceWire ||
+         layer == ViewportOverlayLayer::WireframeXray ||
+         layer == ViewportOverlayLayer::SelectedFaceEdge ||
+         layer == ViewportOverlayLayer::SelectedEdge ||
+         layer == ViewportOverlayLayer::HoverFaceEdge ||
+         layer == ViewportOverlayLayer::HoverEdge ||
+         layer == ViewportOverlayLayer::GroupBounds ||
+         layer == ViewportOverlayLayer::DiagnosticEdge ||
+         layer == ViewportOverlayLayer::ToolPlaneLine ||
+         layer == ViewportOverlayLayer::ToolPreviewLine ||
+         layer == ViewportOverlayLayer::ToolPreviewSeam ||
+         layer == ViewportOverlayLayer::ToolHandle;
 }
 
-bool viewportOverlayPointDrawsOnTop(ViewportOverlayLayer layer) {
-    return layer == ViewportOverlayLayer::SelectedVertex ||
-            layer == ViewportOverlayLayer::HoverVertex ||
-            layer == ViewportOverlayLayer::SnapTargetVertex ||
-            layer == ViewportOverlayLayer::ToolHandle;
+bool viewport_overlay_point_draws_on_top(ViewportOverlayLayer layer) {
+  return layer == ViewportOverlayLayer::SelectedVertex ||
+         layer == ViewportOverlayLayer::HoverVertex ||
+         layer == ViewportOverlayLayer::SnapTargetVertex ||
+         layer == ViewportOverlayLayer::ToolHandle;
 }
 
-ViewportOverlayDepthMode viewportOverlayDepthMode(ViewportOverlayLayer layer, ViewportOverlayGeometryKind kind) {
-    if (layer == ViewportOverlayLayer::ToolPlane ||
-            layer == ViewportOverlayLayer::ToolHandle ||
-            layer == ViewportOverlayLayer::ToolPreviewFill) {
-        return ViewportOverlayDepthMode::DrawOnTop;
-    }
-    if (kind == ViewportOverlayGeometryKind::Lines && viewportOverlayLineDrawsOnTop(layer)) {
-        return ViewportOverlayDepthMode::DrawOnTop;
-    }
-    if (kind == ViewportOverlayGeometryKind::Points && viewportOverlayPointDrawsOnTop(layer)) {
-        return ViewportOverlayDepthMode::DrawOnTop;
-    }
-    return ViewportOverlayDepthMode::DepthTested;
+ViewportOverlayDepthMode
+viewport_overlay_depth_mode(ViewportOverlayLayer layer,
+                            ViewportOverlayGeometryKind kind) {
+  if (layer == ViewportOverlayLayer::ToolPlane ||
+      layer == ViewportOverlayLayer::ToolHandle ||
+      layer == ViewportOverlayLayer::ToolPreviewFill) {
+    return ViewportOverlayDepthMode::DrawOnTop;
+  }
+  if (kind == ViewportOverlayGeometryKind::Lines &&
+      viewport_overlay_line_draws_on_top(layer)) {
+    return ViewportOverlayDepthMode::DrawOnTop;
+  }
+  if (kind == ViewportOverlayGeometryKind::Points &&
+      viewport_overlay_point_draws_on_top(layer)) {
+    return ViewportOverlayDepthMode::DrawOnTop;
+  }
+  return ViewportOverlayDepthMode::DepthTested;
 }
 
-bool viewportOverlayDepthTested(ViewportOverlayLayer layer, ViewportOverlayGeometryKind kind) {
-    return viewportOverlayDepthMode(layer, kind) == ViewportOverlayDepthMode::DepthTested;
+bool viewport_overlay_depth_tested(ViewportOverlayLayer layer,
+                                   ViewportOverlayGeometryKind kind) {
+  return viewport_overlay_depth_mode(layer, kind) ==
+         ViewportOverlayDepthMode::DepthTested;
 }
 
-float viewportOverlayDepthBias(ViewportOverlayLayer layer, ViewportOverlayGeometryKind kind) {
-    if (!viewportOverlayDepthTested(layer, kind)) {
-        return 0.0f;
-    }
-    switch (kind) {
-    case ViewportOverlayGeometryKind::Triangles:
-        return kOverlayFillDepthBias;
-    case ViewportOverlayGeometryKind::Lines:
-        return kOverlayLineDepthBias;
-    case ViewportOverlayGeometryKind::Points:
-        return kOverlayPointDepthBias;
-    }
+float viewport_overlay_depth_bias(ViewportOverlayLayer layer,
+                                  ViewportOverlayGeometryKind kind) {
+  if (!viewport_overlay_depth_tested(layer, kind)) {
     return 0.0f;
+  }
+  switch (kind) {
+  case ViewportOverlayGeometryKind::Triangles:
+    return kOverlayFillDepthBias;
+  case ViewportOverlayGeometryKind::Lines:
+    return kOverlayLineDepthBias;
+  case ViewportOverlayGeometryKind::Points:
+    return kOverlayPointDepthBias;
+  }
+  return 0.0f;
 }
 
-bool viewportOverlayLayerWritesTransientHoverSuppressionMask(ViewportOverlayLayer layer) {
-    return layer == ViewportOverlayLayer::HoverFace ||
-            layer == ViewportOverlayLayer::HoverFaceEdge ||
-            layer == ViewportOverlayLayer::HoverEdge ||
-            layer == ViewportOverlayLayer::HoverVertex;
+bool viewport_overlay_layer_writes_transient_hover_suppression_mask(
+    ViewportOverlayLayer layer) {
+  return layer == ViewportOverlayLayer::HoverFace ||
+         layer == ViewportOverlayLayer::HoverFaceEdge ||
+         layer == ViewportOverlayLayer::HoverEdge ||
+         layer == ViewportOverlayLayer::HoverVertex;
 }
 
-bool viewportOverlayLayerIsSuppressedByTransientHover(ViewportOverlayLayer layer) {
-    return layer == ViewportOverlayLayer::SelectedVisibleFace ||
-            layer == ViewportOverlayLayer::SelectedXrayFace ||
-            layer == ViewportOverlayLayer::SelectedFaceMask ||
-            layer == ViewportOverlayLayer::SelectedFaceEdge ||
-            layer == ViewportOverlayLayer::SelectedEdge ||
-            layer == ViewportOverlayLayer::SelectedVertex;
+bool viewport_overlay_layer_is_suppressed_by_transient_hover(
+    ViewportOverlayLayer layer) {
+  return layer == ViewportOverlayLayer::SelectedVisibleFace ||
+         layer == ViewportOverlayLayer::SelectedXrayFace ||
+         layer == ViewportOverlayLayer::SelectedFaceMask ||
+         layer == ViewportOverlayLayer::SelectedFaceEdge ||
+         layer == ViewportOverlayLayer::SelectedEdge ||
+         layer == ViewportOverlayLayer::SelectedVertex;
 }
 
-ViewportOverlayLayerPolicy viewportOverlayLayerPolicy(ViewportOverlayLayer layer) {
-    return {
-            .layer = layer,
-            .drawOrder = viewportOverlayDrawOrder(layer),
-            .depthStampedFaceFill = viewportOverlayLayerUsesDepthStampedFaceFill(layer),
-            .writesTransientHoverSuppressionMask = viewportOverlayLayerWritesTransientHoverSuppressionMask(layer),
-            .suppressedByTransientHover = viewportOverlayLayerIsSuppressedByTransientHover(layer),
-    };
+ViewportOverlayLayerPolicy
+viewport_overlay_layer_policy(ViewportOverlayLayer layer) {
+  return {
+      .layer = layer,
+      .draw_order = viewport_overlay_draw_order(layer),
+      .depth_stamped_face_fill =
+          viewport_overlay_layer_uses_depth_stamped_face_fill(layer),
+      .writes_transient_hover_suppression_mask =
+          viewport_overlay_layer_writes_transient_hover_suppression_mask(layer),
+      .suppressed_by_transient_hover =
+          viewport_overlay_layer_is_suppressed_by_transient_hover(layer),
+  };
 }
 
-float viewportOverlayLineWidthPixels(ViewportOverlayLayer layer, float nativeWidthPixels) {
-    if (nativeWidthPixels > 0.0f) {
-        return nativeWidthPixels;
-    }
-    switch (layer) {
-    case ViewportOverlayLayer::WireframeBase:
-        return kOverlayWireframeBaseLineWidthPixels;
-    case ViewportOverlayLayer::WireframeXray:
-        return kOverlayWireframeXrayLineWidthPixels;
-    case ViewportOverlayLayer::SourceWire:
-        return kOverlaySourceWireLineWidthPixels;
-    case ViewportOverlayLayer::SelectedFaceEdge:
-    case ViewportOverlayLayer::SelectedEdge:
-        return kOverlaySelectionWireLineWidthPixels;
-    case ViewportOverlayLayer::HoverFaceEdge:
-    case ViewportOverlayLayer::HoverEdge:
-        return kOverlayHoverWireLineWidthPixels;
-    case ViewportOverlayLayer::OpenEdge:
-        return kOverlayOpenEdgeLineWidthPixels;
-    case ViewportOverlayLayer::DiagnosticEdge:
-        return kOverlayDiagnosticEdgeLineWidthPixels;
-    case ViewportOverlayLayer::GroupBounds:
-        return kOverlayGroupBoundsLineWidthPixels;
-    case ViewportOverlayLayer::ToolPlaneLine:
-        return kOverlayToolPlaneLineWidthPixels;
-    case ViewportOverlayLayer::ToolPreviewLine:
-        return kOverlayToolPreviewLineWidthPixels;
-    case ViewportOverlayLayer::ToolPreviewSeam:
-        return kOverlayToolPreviewSeamLineWidthPixels;
-    case ViewportOverlayLayer::ToolHandle:
-        return kOverlayToolHandleLineWidthPixels;
-    default:
-        return kOverlayWireframeBaseLineWidthPixels;
-    }
+float viewport_overlay_line_width_pixels(ViewportOverlayLayer layer,
+                                         float native_width_pixels) {
+  if (native_width_pixels > 0.0f) {
+    return native_width_pixels;
+  }
+  switch (layer) {
+  case ViewportOverlayLayer::WireframeBase:
+    return kOverlayWireframeBaseLineWidthPixels;
+  case ViewportOverlayLayer::WireframeXray:
+    return kOverlayWireframeXrayLineWidthPixels;
+  case ViewportOverlayLayer::SourceWire:
+    return kOverlaySourceWireLineWidthPixels;
+  case ViewportOverlayLayer::SelectedFaceEdge:
+  case ViewportOverlayLayer::SelectedEdge:
+    return kOverlaySelectionWireLineWidthPixels;
+  case ViewportOverlayLayer::HoverFaceEdge:
+  case ViewportOverlayLayer::HoverEdge:
+    return kOverlayHoverWireLineWidthPixels;
+  case ViewportOverlayLayer::OpenEdge:
+    return kOverlayOpenEdgeLineWidthPixels;
+  case ViewportOverlayLayer::DiagnosticEdge:
+    return kOverlayDiagnosticEdgeLineWidthPixels;
+  case ViewportOverlayLayer::GroupBounds:
+    return kOverlayGroupBoundsLineWidthPixels;
+  case ViewportOverlayLayer::ToolPlaneLine:
+    return kOverlayToolPlaneLineWidthPixels;
+  case ViewportOverlayLayer::ToolPreviewLine:
+    return kOverlayToolPreviewLineWidthPixels;
+  case ViewportOverlayLayer::ToolPreviewSeam:
+    return kOverlayToolPreviewSeamLineWidthPixels;
+  case ViewportOverlayLayer::ToolHandle:
+    return kOverlayToolHandleLineWidthPixels;
+  default:
+    return kOverlayWireframeBaseLineWidthPixels;
+  }
 }
 
-float viewportOverlayPointSizePixels(ViewportOverlayLayer layer, float nativeSizePixels) {
-    if (nativeSizePixels >= 2.0f) {
-        return nativeSizePixels;
-    }
-    switch (layer) {
-    case ViewportOverlayLayer::UnselectedVertex:
-        return kOverlayVertexSizePixels;
-    case ViewportOverlayLayer::SelectedVertex:
-        return kOverlayVertexSizePixels + kOverlaySelectedVertexGrowthPixels;
-    case ViewportOverlayLayer::HoverVertex:
-        return kOverlayVertexSizePixels + kOverlayHoverVertexGrowthPixels;
-    default:
-        break;
-    }
-    return nativeSizePixels < 2.0f ? 2.0f : nativeSizePixels;
+float viewport_overlay_point_size_pixels(ViewportOverlayLayer layer,
+                                         float native_size_pixels) {
+  if (native_size_pixels >= 2.0f) {
+    return native_size_pixels;
+  }
+  switch (layer) {
+  case ViewportOverlayLayer::UnselectedVertex:
+    return kOverlayVertexSizePixels;
+  case ViewportOverlayLayer::SelectedVertex:
+    return kOverlayVertexSizePixels + kOverlaySelectedVertexGrowthPixels;
+  case ViewportOverlayLayer::HoverVertex:
+    return kOverlayVertexSizePixels + kOverlayHoverVertexGrowthPixels;
+  default:
+    break;
+  }
+  return native_size_pixels < 2.0f ? 2.0f : native_size_pixels;
 }
 
-float viewportOverlayPointOutlineGrowthPixels(ViewportOverlayLayer layer) {
-    return layer == ViewportOverlayLayer::SelectedVertex ||
-                    layer == ViewportOverlayLayer::HoverVertex ||
-                    layer == ViewportOverlayLayer::SnapTargetVertex
-            ? kOverlayVertexOutlineSizePixels
-            : 0.0f;
+float viewport_overlay_point_outline_growth_pixels(ViewportOverlayLayer layer) {
+  return layer == ViewportOverlayLayer::SelectedVertex ||
+                 layer == ViewportOverlayLayer::HoverVertex ||
+                 layer == ViewportOverlayLayer::SnapTargetVertex
+             ? kOverlayVertexOutlineSizePixels
+             : 0.0f;
 }
 
-bool viewportOverlayPointHasOutline(ViewportOverlayLayer layer) {
-    return viewportOverlayPointOutlineGrowthPixels(layer) > 0.0f;
+bool viewport_overlay_point_has_outline(ViewportOverlayLayer layer) {
+  return viewport_overlay_point_outline_growth_pixels(layer) > 0.0f;
 }
 
-bool viewportOverlayPointIsOutlineOnly(ViewportOverlayLayer layer) {
-    return layer == ViewportOverlayLayer::SnapTargetVertex;
+bool viewport_overlay_point_is_outline_only(ViewportOverlayLayer layer) {
+  return layer == ViewportOverlayLayer::SnapTargetVertex;
 }
 
-float viewportOverlayPointInnerRadius(ViewportOverlayLayer layer) {
-    return layer == ViewportOverlayLayer::SnapTargetVertex ? 0.62f : 0.0f;
+float viewport_overlay_point_inner_radius(ViewportOverlayLayer layer) {
+  return layer == ViewportOverlayLayer::SnapTargetVertex ? 0.62f : 0.0f;
 }
 
-bool viewportOverlayColorApproximately(std::uint32_t a, std::uint32_t b) {
-    return a == b;
+bool viewport_overlay_color_approximately(std::uint32_t a, std::uint32_t b) {
+  return a == b;
 }
 
-bool viewportOverlayIsNativeRemoveColor(std::uint32_t color) {
-    return viewportOverlayColorApproximately(color, kOverlayRemoveFaceColor) ||
-            viewportOverlayColorApproximately(color, kOverlayRemoveWireColor);
+bool viewport_overlay_is_native_remove_color(std::uint32_t color) {
+  return viewport_overlay_color_approximately(color, kOverlayRemoveFaceColor) ||
+         viewport_overlay_color_approximately(color, kOverlayRemoveWireColor);
 }
 
-bool viewportOverlayIsNativeSelectionWireColor(std::uint32_t color) {
-    return viewportOverlayColorApproximately(color, kOverlaySelectedVertexColor) ||
-            viewportOverlayColorApproximately(color, kOverlaySelectionWireColor);
+bool viewport_overlay_is_native_selection_wire_color(std::uint32_t color) {
+  return viewport_overlay_color_approximately(color,
+                                              kOverlaySelectedVertexColor) ||
+         viewport_overlay_color_approximately(color,
+                                              kOverlaySelectionWireColor);
 }
 
-std::uint32_t viewportOverlayColorFor(ViewportOverlayLayer layer, std::uint32_t originalRgba) {
-    switch (layer) {
-    case ViewportOverlayLayer::WireframeBase:
-    case ViewportOverlayLayer::WireframeXray:
-        return originalRgba;
-    case ViewportOverlayLayer::SelectedVisibleFace:
-    case ViewportOverlayLayer::SelectedXrayFace:
-    case ViewportOverlayLayer::SelectedFaceMask:
-        return kOverlaySelectionFaceColor;
-    case ViewportOverlayLayer::SelectedFaceEdge:
-    case ViewportOverlayLayer::SelectedEdge:
-        return kOverlaySelectionWireColor;
-    case ViewportOverlayLayer::SourceWire:
-    case ViewportOverlayLayer::SourceWireDepthStamp:
-        return viewportOverlayIsNativeSelectionWireColor(originalRgba) ? kOverlaySelectionWireColor : kOverlaySourceWireColor;
-    case ViewportOverlayLayer::OpenEdge:
-        return kOverlayOpenEdgeColor;
-    case ViewportOverlayLayer::DiagnosticEdge:
-        return kOverlayDiagnosticEdgeColor;
-    case ViewportOverlayLayer::GroupBounds:
-        return kOverlayGroupBoundsColor;
-    case ViewportOverlayLayer::HoverFace:
-        return viewportOverlayIsNativeRemoveColor(originalRgba) ? kOverlayRemoveFaceColor : kOverlayHoverFaceColor;
-    case ViewportOverlayLayer::HoverFaceEdge:
-    case ViewportOverlayLayer::HoverEdge:
-        return viewportOverlayIsNativeRemoveColor(originalRgba) ? kOverlayRemoveWireColor : kOverlayHoverWireColor;
-    case ViewportOverlayLayer::UnselectedVertex:
-        return kOverlayVertexColor;
-    case ViewportOverlayLayer::SelectedVertex:
-        return kOverlaySelectedVertexColor;
-    case ViewportOverlayLayer::HoverVertex:
-        return viewportOverlayIsNativeRemoveColor(originalRgba) ? kOverlayRemoveWireColor : kOverlayHoverVertexColor;
-    case ViewportOverlayLayer::SnapTargetVertex:
-        return originalRgba;
-    case ViewportOverlayLayer::ToolPlane:
-        return kOverlayToolPlaneColor;
-    case ViewportOverlayLayer::ToolPlaneLine:
-        return kOverlayToolPlaneLineColor;
-    case ViewportOverlayLayer::ToolPreviewFill:
-    case ViewportOverlayLayer::ToolPreviewLine:
-    case ViewportOverlayLayer::ToolPreviewSeam:
-        return originalRgba;
-    case ViewportOverlayLayer::ToolHandle:
-        return kOverlayToolHandleColor;
-    }
-    return originalRgba;
+std::uint32_t viewport_overlay_color_for(ViewportOverlayLayer layer,
+                                         std::uint32_t original_rgba) {
+  switch (layer) {
+  case ViewportOverlayLayer::WireframeBase:
+  case ViewportOverlayLayer::WireframeXray:
+    return original_rgba;
+  case ViewportOverlayLayer::SelectedVisibleFace:
+  case ViewportOverlayLayer::SelectedXrayFace:
+  case ViewportOverlayLayer::SelectedFaceMask:
+    return kOverlaySelectionFaceColor;
+  case ViewportOverlayLayer::SelectedFaceEdge:
+  case ViewportOverlayLayer::SelectedEdge:
+    return kOverlaySelectionWireColor;
+  case ViewportOverlayLayer::SourceWire:
+  case ViewportOverlayLayer::SourceWireDepthStamp:
+    return viewport_overlay_is_native_selection_wire_color(original_rgba)
+               ? kOverlaySelectionWireColor
+               : kOverlaySourceWireColor;
+  case ViewportOverlayLayer::OpenEdge:
+    return kOverlayOpenEdgeColor;
+  case ViewportOverlayLayer::DiagnosticEdge:
+    return kOverlayDiagnosticEdgeColor;
+  case ViewportOverlayLayer::GroupBounds:
+    return kOverlayGroupBoundsColor;
+  case ViewportOverlayLayer::HoverFace:
+    return viewport_overlay_is_native_remove_color(original_rgba)
+               ? kOverlayRemoveFaceColor
+               : kOverlayHoverFaceColor;
+  case ViewportOverlayLayer::HoverFaceEdge:
+  case ViewportOverlayLayer::HoverEdge:
+    return viewport_overlay_is_native_remove_color(original_rgba)
+               ? kOverlayRemoveWireColor
+               : kOverlayHoverWireColor;
+  case ViewportOverlayLayer::UnselectedVertex:
+    return kOverlayVertexColor;
+  case ViewportOverlayLayer::SelectedVertex:
+    return kOverlaySelectedVertexColor;
+  case ViewportOverlayLayer::HoverVertex:
+    return viewport_overlay_is_native_remove_color(original_rgba)
+               ? kOverlayRemoveWireColor
+               : kOverlayHoverVertexColor;
+  case ViewportOverlayLayer::SnapTargetVertex:
+    return original_rgba;
+  case ViewportOverlayLayer::ToolPlane:
+    return kOverlayToolPlaneColor;
+  case ViewportOverlayLayer::ToolPlaneLine:
+    return kOverlayToolPlaneLineColor;
+  case ViewportOverlayLayer::ToolPreviewFill:
+  case ViewportOverlayLayer::ToolPreviewLine:
+  case ViewportOverlayLayer::ToolPreviewSeam:
+    return original_rgba;
+  case ViewportOverlayLayer::ToolHandle:
+    return kOverlayToolHandleColor;
+  }
+  return original_rgba;
 }
 
 } // namespace quader

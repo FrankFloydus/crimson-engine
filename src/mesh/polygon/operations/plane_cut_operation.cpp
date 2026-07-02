@@ -52,8 +52,9 @@ namespace {
 
 using namespace document_internal;
 
-inline constexpr float plane_cut_epsilon = 0.0001F;
-inline constexpr float plane_cut_epsilon_squared = plane_cut_epsilon * plane_cut_epsilon;
+inline constexpr float kPlaneCutEpsilon = 0.0001F;
+inline constexpr float kPlaneCutEpsilonSquared =
+    kPlaneCutEpsilon * kPlaneCutEpsilon;
 
 using PlaneCutPlane = quader_geometry::QPlane3<float>;
 
@@ -61,29 +62,29 @@ using PlaneCutPlane = quader_geometry::QPlane3<float>;
  * Represents a Plane Cut Vertex value used by the polygon document and mesh editing core.
  */
 struct PlaneCutVertex {
-    ElementId id = invalid_element_id;
-    quader::QVec3 position;
-    bool has_uv = false;
-    quader::QVec2 uv;
+  ElementId id = kInvalidElementId;
+  quader::QVec3 position;
+  bool has_uv = false;
+  quader::QVec2 uv;
 };
 
 /**
  * Represents a Plane Cut Point value used by the polygon document and mesh editing core.
  */
 struct PlaneCutPoint {
-    ElementId id = invalid_element_id;
-    quader::QVec3 position;
-    bool has_uv = false;
-    quader::QVec2 uv;
-    bool on_plane = false;
+  ElementId id = kInvalidElementId;
+  quader::QVec3 position;
+  bool has_uv = false;
+  quader::QVec2 uv;
+  bool on_plane = false;
 };
 
 /**
  * Represents a Plane Cut Intersection value used by the polygon document and mesh editing core.
  */
 struct PlaneCutIntersection {
-    ElementId id = invalid_element_id;
-    quader::QVec3 position;
+  ElementId id = kInvalidElementId;
+  quader::QVec3 position;
 };
 
 /**
@@ -117,11 +118,10 @@ std::optional<PlaneCutPlane> plane_from_request(const PlaneCutRequest& request)
     const quader_geometry::QVec3f normal =
         quader_geometry::cross(geometry_vec3(first_delta), geometry_vec3(second_delta));
     const PlaneCutPlane plane = quader_geometry::plane_from_point_normal<float>(
-        geometry_vec3(request.first_point),
-        normal,
-        epsilon);
-    if (quader_geometry::length_squared(plane.normal) <= plane_cut_epsilon_squared) {
-        return std::nullopt;
+        geometry_vec3(request.first_point), normal, kEpsilon);
+    if (quader_geometry::length_squared(plane.normal) <=
+        kPlaneCutEpsilonSquared) {
+      return std::nullopt;
     }
     return plane;
 }
@@ -133,12 +133,12 @@ float signed_distance_to_cut_plane(const PlaneCutPlane& plane, quader::QVec3 poi
 
 int plane_side(float distance)
 {
-    if (distance > plane_cut_epsilon) {
-        return 1;
-    }
-    if (distance < -plane_cut_epsilon) {
-        return -1;
-    }
+  if (distance > kPlaneCutEpsilon) {
+    return 1;
+  }
+  if (distance < -kPlaneCutEpsilon) {
+    return -1;
+  }
     return 0;
 }
 
@@ -152,16 +152,16 @@ quader::QVec2 interpolate_uv(quader::QVec2 first, quader::QVec2 second, float fa
 
 float cut_edge_factor(const PlaneCutPlane& plane, quader::QVec3 first_position, quader::QVec3 second_position, float first_distance, float second_distance)
 {
-    const quader_geometry::QSegmentPlaneHit<float> hit = quader_geometry::intersect_segment_plane<float>(
-        { geometry_vec3(first_position), geometry_vec3(second_position) },
-        plane,
-        plane_cut_epsilon);
-    if (hit.type == quader_geometry::QPlaneIntersectionType::point) {
-        return std::clamp(hit.segment_factor, 0.0F, 1.0F);
-    }
-    if (hit.type == quader_geometry::QPlaneIntersectionType::coplanar) {
-        return 0.5F;
-    }
+  const quader_geometry::QSegmentPlaneHit<float> hit =
+      quader_geometry::intersect_segment_plane<float>(
+          {geometry_vec3(first_position), geometry_vec3(second_position)},
+          plane, kPlaneCutEpsilon);
+  if (hit.type == quader_geometry::QPlaneIntersectionType::Point) {
+    return std::clamp(hit.segment_factor, 0.0F, 1.0F);
+  }
+  if (hit.type == quader_geometry::QPlaneIntersectionType::Coplanar) {
+    return 0.5F;
+  }
 
     (void)first_distance;
     (void)second_distance;
@@ -170,9 +170,9 @@ float cut_edge_factor(const PlaneCutPlane& plane, quader::QVec3 first_position, 
 
 void ensure_builder_vertex(PlaneCutBuilder& builder, ElementId id, quader::QVec3 position)
 {
-    if (id == invalid_element_id || builder.emitted_vertices.contains(id)) {
-        return;
-    }
+  if (id == kInvalidElementId || builder.emitted_vertices.contains(id)) {
+    return;
+  }
     builder.document.vertices.push_back({ id, position });
     builder.document.next_vertex_id = std::max(builder.document.next_vertex_id, id + 1U);
     builder.emitted_vertices.insert(id);
@@ -261,9 +261,9 @@ std::vector<PlaneCutPoint> compact_output_points(std::vector<PlaneCutPoint> poin
     std::vector<PlaneCutPoint> compact;
     compact.reserve(points.size());
     for (const PlaneCutPoint& point : points) {
-        if (point.id == invalid_element_id) {
-            continue;
-        }
+      if (point.id == kInvalidElementId) {
+        continue;
+      }
         if (!compact.empty() && compact.back().id == point.id) {
             continue;
         }
@@ -331,13 +331,16 @@ std::vector<ElementId> plane_vertices_for_split_loop(
 {
     std::vector<ElementId> ids;
     for (const PlaneCutPoint& point : points) {
-        const bool on_plane =
-            point.on_plane ||
-            std::abs(signed_distance_to_cut_plane(plane, point.position)) <= plane_cut_epsilon ||
-            (positions.contains(point.id) && std::abs(signed_distance_to_cut_plane(plane, positions.at(point.id))) <= plane_cut_epsilon);
-        if (on_plane && !contains_id(ids, point.id)) {
-            ids.push_back(point.id);
-        }
+      const bool on_plane =
+          point.on_plane ||
+          std::abs(signed_distance_to_cut_plane(plane, point.position)) <=
+              kPlaneCutEpsilon ||
+          (positions.contains(point.id) &&
+           std::abs(signed_distance_to_cut_plane(
+               plane, positions.at(point.id))) <= kPlaneCutEpsilon);
+      if (on_plane && !contains_id(ids, point.id)) {
+        ids.push_back(point.id);
+      }
     }
     return ids;
 }
@@ -479,9 +482,10 @@ std::optional<std::vector<std::vector<ElementId>>> cap_loops_from_segments(std::
     std::set<std::pair<ElementId, ElementId>> remaining;
     for (Edge edge : segments) {
         edge = make_edge(edge.a, edge.b);
-        if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b) {
-            message = "Cut would create an invalid cap edge.";
-            return std::nullopt;
+        if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+            edge.a == edge.b) {
+          message = "Cut would create an invalid cap edge.";
+          return std::nullopt;
         }
         adjacency[edge.a].push_back(edge.b);
         adjacency[edge.b].push_back(edge.a);
@@ -584,11 +588,11 @@ bool append_cap_face(
 void publish_cap_selection(PlaneCutBuilder& builder)
 {
     builder.selection.clear();
-    builder.selection.mode = SelectionMode::face;
+    builder.selection.mode = SelectionMode::Face;
     builder.selection.faces = builder.cap_face_ids;
     if (!builder.selection.faces.empty()) {
         builder.selection.has_active = true;
-        builder.selection.active_kind = ElementKind::face;
+        builder.selection.active_kind = ElementKind::Face;
         builder.selection.active_face = builder.selection.faces.front();
     }
 }
@@ -684,7 +688,7 @@ PlaneCutResult plane_cut_impl(const Document& document, const PlaneCutRequest& r
     result.back_document = std::move(back.document);
     result.back_selection = std::move(back.selection);
     result.split_count = 1;
-    result.removed_count = request.mode == PlaneCutMode::keep_both ? 0 : 1;
+    result.removed_count = request.mode == PlaneCutMode::KeepBoth ? 0 : 1;
     return result;
 }
 
@@ -703,16 +707,18 @@ OperationResult PlaneCutOperation::apply(Document& document, Selection& selectio
     }
 
     switch (request_.mode) {
-    case PlaneCutMode::keep_front:
-        document = std::move(result.front_document);
-        selection = std::move(result.front_selection);
-        return { true, {} };
-    case PlaneCutMode::keep_back:
-        document = std::move(result.back_document);
-        selection = std::move(result.back_selection);
-        return { true, {} };
-    case PlaneCutMode::keep_both:
-        return { false, "Plane Cut keep_both produces two documents; use plane_cut() or choose keep_front/keep_back for single-document operations." };
+    case PlaneCutMode::KeepFront:
+      document = std::move(result.front_document);
+      selection = std::move(result.front_selection);
+      return {true, {}};
+    case PlaneCutMode::KeepBack:
+      document = std::move(result.back_document);
+      selection = std::move(result.back_selection);
+      return {true, {}};
+    case PlaneCutMode::KeepBoth:
+      return {false,
+              "Plane Cut keep_both produces two documents; use plane_cut() or "
+              "choose keep_front/keep_back for single-document operations."};
     }
 
     return { false, "Plane Cut received an unsupported mode." };

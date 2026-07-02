@@ -33,29 +33,30 @@ public:
     FilamentEnvironmentLibrary& operator=(FilamentEnvironmentLibrary&&) = delete;
     ~FilamentEnvironmentLibrary();
 
-    void initialize(filament::Engine& engine, filament::Scene& scene, std::filesystem::path resourceRoot);
+    void initialize(filament::Engine &engine, filament::Scene &scene,
+                    std::filesystem::path resource_root);
     void shutdown();
 
     bool initialized() const { return engine_ != nullptr && scene_ != nullptr; }
     void apply(const SceneEnvironmentSettings& settings);
 
 private:
-    bool loadEnvironment(std::string environmentId);
-    void attachEnvironment(const SceneEnvironmentSettings& settings);
-    void detachEnvironment();
-    void destroyEnvironment();
+  bool load_environment(std::string environment_id);
+  void attach_environment(const SceneEnvironmentSettings &settings);
+  void detach_environment();
+  void destroy_environment();
 
-    filament::Engine* engine_ = nullptr;
-    filament::Scene* scene_ = nullptr;
-    std::filesystem::path resourceRoot_;
-    std::string loadedEnvironmentId_;
-    std::uint64_t appliedSignature_ = 0;
-    filament::Texture* reflectionTexture_ = nullptr;
-    filament::Texture* skyboxTexture_ = nullptr;
-    filament::IndirectLight* indirectLight_ = nullptr;
-    filament::Skybox* skybox_ = nullptr;
-    filament::math::float3 sphericalHarmonics_[9]{};
-    bool hasSphericalHarmonics_ = false;
+  filament::Engine *engine_ = nullptr;
+  filament::Scene *scene_ = nullptr;
+  std::filesystem::path resource_root_;
+  std::string loaded_environment_id_;
+  std::uint64_t applied_signature_ = 0;
+  filament::Texture *reflection_texture_ = nullptr;
+  filament::Texture *skybox_texture_ = nullptr;
+  filament::IndirectLight *indirect_light_ = nullptr;
+  filament::Skybox *skybox_ = nullptr;
+  filament::math::float3 spherical_harmonics_[9]{};
+  bool has_spherical_harmonics_ = false;
 };
 
 } // namespace quader

@@ -27,58 +27,67 @@ class ModelingSessionMemento;
  */
 class QuaderApiMutationRunner final {
 public:
-    QuaderApiMutationRunner(
-            ProjectSession& session,
-            EditorHistoryService& history,
-            EditorCommandService& editorCommands,
-            ModelingCommandExecutionService& modelingCommands);
+  QuaderApiMutationRunner(ProjectSession &session,
+                          EditorHistoryService &history,
+                          EditorCommandService &editor_commands,
+                          ModelingCommandExecutionService &modeling_commands);
 
-    [[nodiscard]] QuaderRevisionStamp currentRevisions() const;
-    [[nodiscard]] EditorTransaction beginTransaction(std::string label);
-    [[nodiscard]] ModelingSessionMemento captureModelingMemento() const;
-    QuaderApiVoidResult restoreModelingMemento(const ModelingSessionMemento& memento, std::string_view label);
+  [[nodiscard]] QuaderRevisionStamp current_revisions() const;
+  [[nodiscard]] EditorTransaction begin_transaction(std::string label);
+  [[nodiscard]] ModelingSessionMemento capture_modeling_memento() const;
+  QuaderApiVoidResult
+  restore_modeling_memento(const ModelingSessionMemento &memento,
+                           std::string_view label);
 
-    QuaderApiResult<QuaderEntityRef> createEntity(const QuaderCreateEntityArgs& args);
-    QuaderApiResult<QuaderEntityRef> createPointLight(const QuaderCreatePointLightArgs& args);
-    QuaderApiResult<QuaderEntityRef> createDirectionalLight(const QuaderCreateDirectionalLightArgs& args);
-    QuaderApiVoidResult runDocumentCommand(CommandResult result, std::string_view label);
-    QuaderApiVoidResult runDocumentCommand(std::unique_ptr<IUndoableCommand> command, std::string_view label);
-    QuaderApiVoidResult runDocumentResult(DocumentCommandResult result, std::string_view label);
-    QuaderApiVoidResult runModelingResult(ModelingCommandResult result, std::string_view label);
-    QuaderApiVoidResult runModelingCommand(
-            std::unique_ptr<ModelingMementoCommand> command,
-            std::string_view label);
-    QuaderApiVoidResult runModelingUndoableCommand(
-            std::unique_ptr<IUndoableCommand> command,
-            std::string_view label);
-    [[nodiscard]] bool canRunTrackedModelingTool(std::string_view toolId) const;
-    QuaderApiVoidResult runTrackedModelingTool(std::string_view toolId);
-    QuaderApiVoidResult beginTrackedModelingPreview(std::string_view actionId);
-    QuaderApiVoidResult commitModelingPreview(std::string label);
-    QuaderApiVoidResult cancelModelingPreview();
-    QuaderApiVoidResult runAssetResult(bool changed, std::string_view label);
-    QuaderApiVoidResult runAssetFailure(std::string message);
-    [[nodiscard]] bool canUndo() const;
-    [[nodiscard]] bool canRedo() const;
-    QuaderApiVoidResult undo();
-    QuaderApiVoidResult redo();
-    QuaderApiVoidResult repeatLastAction();
+  QuaderApiResult<QuaderEntityRef>
+  create_entity(const QuaderCreateEntityArgs &args);
+  QuaderApiResult<QuaderEntityRef>
+  create_point_light(const QuaderCreatePointLightArgs &args);
+  QuaderApiResult<QuaderEntityRef>
+  create_directional_light(const QuaderCreateDirectionalLightArgs &args);
+  QuaderApiVoidResult run_document_command(CommandResult result,
+                                           std::string_view label);
+  QuaderApiVoidResult
+  run_document_command(std::unique_ptr<IUndoableCommand> command,
+                       std::string_view label);
+  QuaderApiVoidResult run_document_result(DocumentCommandResult result,
+                                          std::string_view label);
+  QuaderApiVoidResult run_modeling_result(ModelingCommandResult result,
+                                          std::string_view label);
+  QuaderApiVoidResult
+  run_modeling_command(std::unique_ptr<ModelingMementoCommand> command,
+                       std::string_view label);
+  QuaderApiVoidResult
+  run_modeling_undoable_command(std::unique_ptr<IUndoableCommand> command,
+                                std::string_view label);
+  [[nodiscard]] bool
+  can_run_tracked_modeling_tool(std::string_view tool_id) const;
+  QuaderApiVoidResult run_tracked_modeling_tool(std::string_view tool_id);
+  QuaderApiVoidResult
+  begin_tracked_modeling_preview(std::string_view action_id);
+  QuaderApiVoidResult commit_modeling_preview(std::string label);
+  QuaderApiVoidResult cancel_modeling_preview();
+  QuaderApiVoidResult run_asset_result(bool changed, std::string_view label);
+  QuaderApiVoidResult run_asset_failure(std::string message);
+  [[nodiscard]] bool can_undo() const;
+  [[nodiscard]] bool can_redo() const;
+  QuaderApiVoidResult undo();
+  QuaderApiVoidResult redo();
+  QuaderApiVoidResult repeat_last_action();
 
 private:
-    [[nodiscard]] QuaderApiVoidResult statusFrom(
-            CommandResult result,
-            QuaderMutationKind kind,
-            std::string_view fallbackMessage = {}) const;
-    [[nodiscard]] QuaderApiVoidResult statusFrom(
-            ModelingCommandResult result,
-            QuaderMutationKind kind,
-            std::string_view fallbackMessage = {}) const;
-    [[nodiscard]] ModelingCommandResult cancelActiveToolOrPreviewForUndo();
+  [[nodiscard]] QuaderApiVoidResult
+  status_from(CommandResult result, QuaderMutationKind kind,
+              std::string_view fallback_message = {}) const;
+  [[nodiscard]] QuaderApiVoidResult
+  status_from(ModelingCommandResult result, QuaderMutationKind kind,
+              std::string_view fallback_message = {}) const;
+  [[nodiscard]] ModelingCommandResult cancel_active_tool_or_preview_for_undo();
 
-    ProjectSession& session_;
-    EditorHistoryService& history_;
-    EditorCommandService& editorCommands_;
-    ModelingCommandExecutionService& modelingCommands_;
+  ProjectSession &session_;
+  EditorHistoryService &history_;
+  EditorCommandService &editor_commands_;
+  ModelingCommandExecutionService &modeling_commands_;
 };
 
 } // namespace quader

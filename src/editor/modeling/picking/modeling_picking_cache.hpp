@@ -17,24 +17,24 @@ namespace quader {
  * Represents a Modeling Pick Face Geometry Cache Entry value used by the modeling domain.
  */
 struct ModelingPickFaceGeometryCacheEntry {
-    int objectId = -1;
-    std::uint64_t geometrySignature = 0;
+  int object_id = -1;
+  std::uint64_t geometry_signature = 0;
 };
 
 /**
  * Represents a Modeling Picking Cache value used by the modeling domain.
  */
 struct ModelingPickingCache {
-    bool objectsValid = false;
-    bool boundsValid = false;
-    bool faceGeometryValid = false;
-    std::uint64_t contentRevision = 0;
-    std::uint64_t selectionRevision = 0;
-    std::uint64_t sceneRevision = 0;
-    std::vector<quader_editor_core::PolygonObject> objects;
-    std::vector<quader_editor_core::PickObjectBounds> bounds;
-    std::vector<quader_editor_core::PickObjectFaceGeometry> faceGeometry;
-    std::vector<ModelingPickFaceGeometryCacheEntry> faceGeometryEntries;
+  bool objects_valid = false;
+  bool bounds_valid = false;
+  bool face_geometry_valid = false;
+  std::uint64_t content_revision = 0;
+  std::uint64_t selection_revision = 0;
+  std::uint64_t scene_revision = 0;
+  std::vector<quader_editor_core::PolygonObject> objects;
+  std::vector<quader_editor_core::PickObjectBounds> bounds;
+  std::vector<quader_editor_core::PickObjectFaceGeometry> face_geometry;
+  std::vector<ModelingPickFaceGeometryCacheEntry> face_geometry_entries;
 };
 
 } // namespace quader

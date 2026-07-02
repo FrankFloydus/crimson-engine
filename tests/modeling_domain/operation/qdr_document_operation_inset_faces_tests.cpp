@@ -17,8 +17,8 @@ TEST(QdrDocumentOperationInsetFacesTests, InsetFacesCreatesAnInnerCapAndRimFaces
 	EXPECT_TRUE(result.changed);
 	EXPECT_TRUE(fixture.document.vertices.size() == 8U);
 	EXPECT_TRUE(fixture.document.faces.size() == 5U);
-	EXPECT_TRUE(selection.mode == SelectionMode::face);
-	EXPECT_TRUE(selection.faces.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Face);
+        EXPECT_TRUE(selection.faces.size() == 1U);
 	EXPECT_TRUE(selection.faces.front() == fixture.face);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }

@@ -21,8 +21,8 @@ TEST(QdrDocumentOperationMergeVerticesToActiveTests, MergeVerticesToActivePreser
 	EXPECT_TRUE(result.changed);
 	EXPECT_TRUE(find_vertex(fixture.document, fixture.bottom_left) != nullptr);
 	EXPECT_TRUE(find_vertex(fixture.document, fixture.bottom_right) == nullptr);
-	EXPECT_TRUE(selection.mode == SelectionMode::vertex);
-	EXPECT_TRUE(selection.vertices.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
+        EXPECT_TRUE(selection.vertices.size() == 1U);
 	EXPECT_TRUE(selection.vertices.front() == fixture.bottom_left);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }

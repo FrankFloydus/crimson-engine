@@ -28,8 +28,8 @@ class QuaderEditorApi;
  * Stores the App Options data contract used by the native application shell.
  */
 struct AppOptions {
-    bool borderlessWindow = true;
-    RendererBackend renderBackend = RendererBackend::Vulkan;
+  bool borderless_window = true;
+  RendererBackend render_backend = RendererBackend::Vulkan;
 };
 
 /**
@@ -40,34 +40,36 @@ public:
     App();
     ~App();
 
-    bool initialize(const std::filesystem::path& executablePath, AppOptions options = {});
+    bool initialize(const std::filesystem::path &executable_path,
+                    AppOptions options = {});
     int run();
     void shutdown();
 
 private:
-    void createStartupScene();
-    void handleWindowChromeAction(WindowChromeAction action);
-    void saveWindowSettings();
-    bool renderFrame(const FrameTiming& frameTiming);
-    void waitUntilNextFrame();
-    [[nodiscard]] bool shouldRenderLiveResizeEvent(const SDL_Event& event) const;
-    static bool SDLCALL liveResizeEventWatch(void* userdata, SDL_Event* event);
+  void create_startup_scene();
+  void handle_window_chrome_action(WindowChromeAction action);
+  void save_window_settings();
+  bool render_frame(const FrameTiming &frame_timing);
+  void wait_until_next_frame();
+  [[nodiscard]] bool
+  should_render_live_resize_event(const SDL_Event &event) const;
+  static bool SDLCALL live_resize_event_watch(void *userdata, SDL_Event *event);
 
-    AppFrameClock frameClock_;
-    PlatformWindow window_;
-    RenderSystem renderSystem_;
-    SceneRenderBridge renderBridge_;
-    UISystem ui_;
-    ProjectSession projectSession_;
-    std::unique_ptr<QuaderEditorApi> editor_;
-    std::filesystem::path windowSettingsPath_;
-    AppWindowSettings windowSettings_;
-    AssetId defaultMaterial_ = InvalidAssetId;
-    bool running_ = false;
-    bool shutdownComplete_ = false;
-    bool renderingFrame_ = false;
-    bool liveResizeFrameRendered_ = false;
-    bool eventWatchInstalled_ = false;
+  AppFrameClock frame_clock_;
+  PlatformWindow window_;
+  RenderSystem render_system_;
+  SceneRenderBridge render_bridge_;
+  UISystem ui_;
+  ProjectSession project_session_;
+  std::unique_ptr<QuaderEditorApi> editor_;
+  std::filesystem::path window_settings_path_;
+  AppWindowSettings window_settings_;
+  AssetId default_material_ = kInvalidAssetId;
+  bool running_ = false;
+  bool shutdown_complete_ = false;
+  bool rendering_frame_ = false;
+  bool live_resize_frame_rendered_ = false;
+  bool event_watch_installed_ = false;
 };
 
 } // namespace quader

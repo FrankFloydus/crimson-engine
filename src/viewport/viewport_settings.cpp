@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "viewport/viewport_settings.hpp"
 
-#include "core/q_str.hpp"
+#include "core/qstr.hpp"
 #include "render/viewport_overlay_policy.hpp"
 
 #include <algorithm>
@@ -120,108 +120,109 @@ const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBool
         {ViewportBoolSettingId::VertexSnap, ViewportSettingsSectionId::Picking, "Vertex Snap", key("VertexSnap"), true},
 }};
 
-std::string fullKey(std::string_view suffix) {
-    std::string value{kViewportSettingsPrefix};
-    value.append(suffix);
-    return value;
+std::string full_key(std::string_view suffix) {
+  std::string value{kViewportSettingsPrefix};
+  value.append(suffix);
+  return value;
 }
 
-bool parseBool(std::string value, bool fallback) {
-    const std::optional<bool> parsed = QStr::parseBoolToken(value);
-    return parsed.value_or(fallback);
+bool parse_bool(std::string value, bool fallback) {
+  const std::optional<bool> parsed = QStr::parse_bool_token(value);
+  return parsed.value_or(fallback);
 }
 
-float parseFloat(const std::string& value, float fallback, float minimum, float maximum) {
-    if (const std::optional<float> parsed = QStr::parseFiniteFloatToken(value)) {
-        return std::clamp(*parsed, minimum, maximum);
-    }
-    return fallback;
+float parse_float(const std::string &value, float fallback, float minimum,
+                  float maximum) {
+  if (const std::optional<float> parsed =
+          QStr::parse_finite_float_token(value)) {
+    return std::clamp(*parsed, minimum, maximum);
+  }
+  return fallback;
 }
 
-int hexNibble(char value) {
-    if (value >= '0' && value <= '9') {
-        return value - '0';
-    }
-    if (value >= 'a' && value <= 'f') {
-        return value - 'a' + 10;
-    }
-    if (value >= 'A' && value <= 'F') {
-        return value - 'A' + 10;
-    }
-    return -1;
+int hex_nibble(char value) {
+  if (value >= '0' && value <= '9') {
+    return value - '0';
+  }
+  if (value >= 'a' && value <= 'f') {
+    return value - 'a' + 10;
+  }
+  if (value >= 'A' && value <= 'F') {
+    return value - 'A' + 10;
+  }
+  return -1;
 }
 
-std::optional<std::uint8_t> parseHexByte(const std::string& value, std::size_t index) {
-    if (index + 1 >= value.size()) {
-        return std::nullopt;
-    }
-    const int high = hexNibble(value[index]);
-    const int low = hexNibble(value[index + 1]);
-    if (high < 0 || low < 0) {
-        return std::nullopt;
-    }
-    return static_cast<std::uint8_t>((high << 4) | low);
+std::optional<std::uint8_t> parse_hex_byte(const std::string &value,
+                                           std::size_t index) {
+  if (index + 1 >= value.size()) {
+    return std::nullopt;
+  }
+  const int high = hex_nibble(value[index]);
+  const int low = hex_nibble(value[index + 1]);
+  if (high < 0 || low < 0) {
+    return std::nullopt;
+  }
+  return static_cast<std::uint8_t>((high << 4) | low);
 }
 
-std::optional<ViewportSettingColor> parseColor(std::string value) {
-    value = QStr::trimAsciiWhitespace(value);
-    if (!value.empty() && value.front() == '#') {
-        value.erase(value.begin());
-    }
-    if (value.size() == 6u) {
-        value += "FF";
-    }
-    if (value.size() != 8u) {
-        return std::nullopt;
-    }
+std::optional<ViewportSettingColor> parse_color(std::string value) {
+  value = QStr::trim_ascii_whitespace(value);
+  if (!value.empty() && value.front() == '#') {
+    value.erase(value.begin());
+  }
+  if (value.size() == 6u) {
+    value += "FF";
+  }
+  if (value.size() != 8u) {
+    return std::nullopt;
+  }
 
-    const auto r = parseHexByte(value, 0);
-    const auto g = parseHexByte(value, 2);
-    const auto b = parseHexByte(value, 4);
-    const auto a = parseHexByte(value, 6);
-    if (!r || !g || !b || !a) {
-        return std::nullopt;
-    }
-    return rgba8((static_cast<std::uint32_t>(*r) << 24) |
-            (static_cast<std::uint32_t>(*g) << 16) |
-            (static_cast<std::uint32_t>(*b) << 8) |
-            static_cast<std::uint32_t>(*a));
+  const auto r = parse_hex_byte(value, 0);
+  const auto g = parse_hex_byte(value, 2);
+  const auto b = parse_hex_byte(value, 4);
+  const auto a = parse_hex_byte(value, 6);
+  if (!r || !g || !b || !a) {
+    return std::nullopt;
+  }
+  return rgba8((static_cast<std::uint32_t>(*r) << 24) |
+               (static_cast<std::uint32_t>(*g) << 16) |
+               (static_cast<std::uint32_t>(*b) << 8) |
+               static_cast<std::uint32_t>(*a));
 }
 
-float sanitizeColorChannel(float value, float fallback) {
-    return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : fallback;
+float sanitize_color_channel(float value, float fallback) {
+  return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : fallback;
 }
 
-ViewportSettingColor sanitizeColor(ViewportSettingColor value, ViewportSettingColor fallback) {
-    return {
-            sanitizeColorChannel(value.r, fallback.r),
-            sanitizeColorChannel(value.g, fallback.g),
-            sanitizeColorChannel(value.b, fallback.b),
-            sanitizeColorChannel(value.a, fallback.a),
-    };
+ViewportSettingColor sanitize_color(ViewportSettingColor value,
+                                    ViewportSettingColor fallback) {
+  return {
+      sanitize_color_channel(value.r, fallback.r),
+      sanitize_color_channel(value.g, fallback.g),
+      sanitize_color_channel(value.b, fallback.b),
+      sanitize_color_channel(value.a, fallback.a),
+  };
 }
 
-bool colorsApproximately(ViewportSettingColor a, ViewportSettingColor b) {
-    return std::fabs(a.r - b.r) <= 0.001f &&
-            std::fabs(a.g - b.g) <= 0.001f &&
-            std::fabs(a.b - b.b) <= 0.001f &&
-            std::fabs(a.a - b.a) <= 0.001f;
+bool colors_approximately(ViewportSettingColor a, ViewportSettingColor b) {
+  return std::fabs(a.r - b.r) <= 0.001f && std::fabs(a.g - b.g) <= 0.001f &&
+         std::fabs(a.b - b.b) <= 0.001f && std::fabs(a.a - b.a) <= 0.001f;
 }
 
-std::uint8_t colorByte(float value) {
-    return static_cast<std::uint8_t>(std::clamp(std::round(value * 255.0f), 0.0f, 255.0f));
+std::uint8_t color_byte(float value) {
+  return static_cast<std::uint8_t>(
+      std::clamp(std::round(value * 255.0f), 0.0f, 255.0f));
 }
 
-std::string colorToHex(ViewportSettingColor value) {
-    char buffer[9] = {};
-    std::snprintf(buffer,
-            sizeof(buffer),
-            "%02X%02X%02X%02X",
-            static_cast<unsigned>(colorByte(value.r)),
-            static_cast<unsigned>(colorByte(value.g)),
-            static_cast<unsigned>(colorByte(value.b)),
-            static_cast<unsigned>(colorByte(value.a)));
-    return buffer;
+std::string color_to_hex(ViewportSettingColor value) {
+  char buffer[9] = {};
+  std::snprintf(buffer, sizeof(buffer), "%02X%02X%02X%02X",
+                static_cast<unsigned>(color_byte(value.r)),
+                static_cast<unsigned>(color_byte(value.g)),
+                static_cast<unsigned>(color_byte(value.b)),
+                static_cast<unsigned>(color_byte(value.a)));
+  return buffer;
 }
 
 std::size_t index(ViewportColorSettingId id) {
@@ -236,49 +237,56 @@ std::size_t index(ViewportBoolSettingId id) {
     return static_cast<std::size_t>(id);
 }
 
-const ViewportFloatSettingDescriptor& floatDescriptor(ViewportFloatSettingId id) {
-    return kFloatSettings[index(id)];
+const ViewportFloatSettingDescriptor &
+float_descriptor(ViewportFloatSettingId id) {
+  return kFloatSettings[index(id)];
 }
 
-const ViewportColorSettingDescriptor& colorDescriptor(ViewportColorSettingId id) {
-    return kColorSettings[index(id)];
+const ViewportColorSettingDescriptor &
+color_descriptor(ViewportColorSettingId id) {
+  return kColorSettings[index(id)];
 }
 
-const ViewportBoolSettingDescriptor& boolDescriptor(ViewportBoolSettingId id) {
-    return kBoolSettings[index(id)];
+const ViewportBoolSettingDescriptor &bool_descriptor(ViewportBoolSettingId id) {
+  return kBoolSettings[index(id)];
 }
 
 } // namespace
 
-const std::array<ViewportSettingsSectionDescriptor, kViewportSettingsSectionCount>& viewportSettingsSections() {
-    return kSections;
+const std::array<ViewportSettingsSectionDescriptor,
+                 kViewportSettingsSectionCount> &
+viewport_settings_sections() {
+  return kSections;
 }
 
-const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount>& viewportColorSettings() {
-    return kColorSettings;
+const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> &
+viewport_color_settings() {
+  return kColorSettings;
 }
 
-const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount>& viewportFloatSettings() {
-    return kFloatSettings;
+const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> &
+viewport_float_settings() {
+  return kFloatSettings;
 }
 
-const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount>& viewportBoolSettings() {
-    return kBoolSettings;
+const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> &
+viewport_bool_settings() {
+  return kBoolSettings;
 }
 
-bool viewportGridSnapActive(const ViewportSettings& settings, bool temporaryTogglePressed) {
-    return settings.boolValue(ViewportBoolSettingId::GridSnap) != temporaryTogglePressed;
+bool viewport_grid_snap_active(const ViewportSettings &settings,
+                               bool temporary_toggle_pressed) {
+  return settings.bool_value(ViewportBoolSettingId::GridSnap) !=
+         temporary_toggle_pressed;
 }
 
-float viewportVertexSnapRadius(const ViewportSettings& settings) {
-    return settings.boolValue(ViewportBoolSettingId::VertexSnap)
-            ? settings.floatValue(ViewportFloatSettingId::PickVertexRadius)
-            : 0.0f;
+float viewport_vertex_snap_radius(const ViewportSettings &settings) {
+  return settings.bool_value(ViewportBoolSettingId::VertexSnap)
+             ? settings.float_value(ViewportFloatSettingId::PickVertexRadius)
+             : 0.0f;
 }
 
-ViewportSettings::ViewportSettings() {
-    resetToDefaults();
-}
+ViewportSettings::ViewportSettings() { reset_to_defaults(); }
 
 ViewportSettings ViewportSettings::defaults() {
     ViewportSettings settings;
@@ -294,35 +302,39 @@ ViewportSettings ViewportSettings::load(const std::filesystem::path& path) {
 
     std::string line;
     while (std::getline(file, line)) {
-        line = QStr::trimAsciiWhitespace(line);
-        if (line.empty() || line.front() == '#' || line.front() == '[') {
-            continue;
-        }
+      line = QStr::trim_ascii_whitespace(line);
+      if (line.empty() || line.front() == '#' || line.front() == '[') {
+        continue;
+      }
 
-        const std::optional<QStrSplitOnce> split = QStr::splitOnce(line, '=');
-        if (!split) {
-            continue;
-        }
+      const std::optional<QStrSplitOnce> split = QStr::split_once(line, '=');
+      if (!split) {
+        continue;
+      }
 
-        const std::string key = QStr::trimAsciiWhitespace(split->before);
-        const std::string value = QStr::trimAsciiWhitespace(split->after);
-        for (const ViewportColorSettingDescriptor& descriptor : kColorSettings) {
-            if (key == fullKey(descriptor.key)) {
-                if (const std::optional<ViewportSettingColor> parsed = parseColor(value)) {
-                    settings.colors_[index(descriptor.id)] = sanitizeColor(*parsed, descriptor.defaultValue);
-                }
-            }
+      const std::string key = QStr::trim_ascii_whitespace(split->before);
+      const std::string value = QStr::trim_ascii_whitespace(split->after);
+      for (const ViewportColorSettingDescriptor &descriptor : kColorSettings) {
+        if (key == full_key(descriptor.key)) {
+          if (const std::optional<ViewportSettingColor> parsed =
+                  parse_color(value)) {
+            settings.colors_[index(descriptor.id)] =
+                sanitize_color(*parsed, descriptor.default_value);
+          }
+        }
         }
         for (const ViewportFloatSettingDescriptor& descriptor : kFloatSettings) {
-            if (key == fullKey(descriptor.key)) {
-                settings.floats_[index(descriptor.id)] =
-                        parseFloat(value, descriptor.defaultValue, descriptor.minimum, descriptor.maximum);
-            }
+          if (key == full_key(descriptor.key)) {
+            settings.floats_[index(descriptor.id)] =
+                parse_float(value, descriptor.default_value, descriptor.minimum,
+                            descriptor.maximum);
+          }
         }
         for (const ViewportBoolSettingDescriptor& descriptor : kBoolSettings) {
-            if (key == fullKey(descriptor.key)) {
-                settings.bools_[index(descriptor.id)] = parseBool(value, descriptor.defaultValue);
-            }
+          if (key == full_key(descriptor.key)) {
+            settings.bools_[index(descriptor.id)] =
+                parse_bool(value, descriptor.default_value);
+          }
         }
     }
 
@@ -340,69 +352,77 @@ bool ViewportSettings::save(const std::filesystem::path& path) const {
 
     file << "[Viewport]\n";
     for (const ViewportColorSettingDescriptor& descriptor : kColorSettings) {
-        file << fullKey(descriptor.key) << '=' << colorToHex(color(descriptor.id)) << '\n';
+      file << full_key(descriptor.key) << '='
+           << color_to_hex(color(descriptor.id)) << '\n';
     }
     file << std::fixed << std::setprecision(6);
     for (const ViewportFloatSettingDescriptor& descriptor : kFloatSettings) {
-        file << fullKey(descriptor.key) << '=' << floatValue(descriptor.id) << '\n';
+      file << full_key(descriptor.key) << '=' << float_value(descriptor.id)
+           << '\n';
     }
     for (const ViewportBoolSettingDescriptor& descriptor : kBoolSettings) {
-        file << fullKey(descriptor.key) << '=' << (boolValue(descriptor.id) ? "true" : "false") << '\n';
+      file << full_key(descriptor.key) << '='
+           << (bool_value(descriptor.id) ? "true" : "false") << '\n';
     }
     return true;
 }
 
-void ViewportSettings::resetToDefaults() {
-    for (const ViewportColorSettingDescriptor& descriptor : kColorSettings) {
-        colors_[index(descriptor.id)] = descriptor.defaultValue;
-    }
-    for (const ViewportFloatSettingDescriptor& descriptor : kFloatSettings) {
-        floats_[index(descriptor.id)] = descriptor.defaultValue;
-    }
-    for (const ViewportBoolSettingDescriptor& descriptor : kBoolSettings) {
-        bools_[index(descriptor.id)] = descriptor.defaultValue;
-    }
+void ViewportSettings::reset_to_defaults() {
+  for (const ViewportColorSettingDescriptor &descriptor : kColorSettings) {
+    colors_[index(descriptor.id)] = descriptor.default_value;
+  }
+  for (const ViewportFloatSettingDescriptor &descriptor : kFloatSettings) {
+    floats_[index(descriptor.id)] = descriptor.default_value;
+  }
+  for (const ViewportBoolSettingDescriptor &descriptor : kBoolSettings) {
+    bools_[index(descriptor.id)] = descriptor.default_value;
+  }
 }
 
 ViewportSettingColor ViewportSettings::color(ViewportColorSettingId id) const {
     return colors_[index(id)];
 }
 
-bool ViewportSettings::setColor(ViewportColorSettingId id, ViewportSettingColor value) {
-    const ViewportColorSettingDescriptor& descriptor = colorDescriptor(id);
-    const ViewportSettingColor sanitized = sanitizeColor(value, descriptor.defaultValue);
-    if (colorsApproximately(colors_[index(id)], sanitized)) {
-        return false;
-    }
-    colors_[index(id)] = sanitized;
-    return true;
+bool ViewportSettings::set_color(ViewportColorSettingId id,
+                                 ViewportSettingColor value) {
+  const ViewportColorSettingDescriptor &descriptor = color_descriptor(id);
+  const ViewportSettingColor sanitized =
+      sanitize_color(value, descriptor.default_value);
+  if (colors_approximately(colors_[index(id)], sanitized)) {
+    return false;
+  }
+  colors_[index(id)] = sanitized;
+  return true;
 }
 
-float ViewportSettings::floatValue(ViewportFloatSettingId id) const {
-    return floats_[index(id)];
+float ViewportSettings::float_value(ViewportFloatSettingId id) const {
+  return floats_[index(id)];
 }
 
-bool ViewportSettings::setFloatValue(ViewportFloatSettingId id, float value) {
-    const ViewportFloatSettingDescriptor& descriptor = floatDescriptor(id);
-    const float clamped = std::isfinite(value) ? std::clamp(value, descriptor.minimum, descriptor.maximum) : descriptor.defaultValue;
-    if (std::fabs(floats_[index(id)] - clamped) <= 0.0001f) {
-        return false;
-    }
-    floats_[index(id)] = clamped;
-    return true;
+bool ViewportSettings::set_float_value(ViewportFloatSettingId id, float value) {
+  const ViewportFloatSettingDescriptor &descriptor = float_descriptor(id);
+  const float clamped =
+      std::isfinite(value)
+          ? std::clamp(value, descriptor.minimum, descriptor.maximum)
+          : descriptor.default_value;
+  if (std::fabs(floats_[index(id)] - clamped) <= 0.0001f) {
+    return false;
+  }
+  floats_[index(id)] = clamped;
+  return true;
 }
 
-bool ViewportSettings::boolValue(ViewportBoolSettingId id) const {
-    return bools_[index(id)];
+bool ViewportSettings::bool_value(ViewportBoolSettingId id) const {
+  return bools_[index(id)];
 }
 
-bool ViewportSettings::setBoolValue(ViewportBoolSettingId id, bool value) {
-    (void)boolDescriptor(id);
-    if (bools_[index(id)] == value) {
-        return false;
-    }
-    bools_[index(id)] = value;
-    return true;
+bool ViewportSettings::set_bool_value(ViewportBoolSettingId id, bool value) {
+  (void)bool_descriptor(id);
+  if (bools_[index(id)] == value) {
+    return false;
+  }
+  bools_[index(id)] = value;
+  return true;
 }
 
 } // namespace quader

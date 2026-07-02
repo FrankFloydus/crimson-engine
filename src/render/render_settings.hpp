@@ -22,16 +22,16 @@ enum class ViewportRenderMode {
  * Represents an Environment Document value used by the render extraction and Filament resource layer.
  */
 struct EnvironmentDocument {
-    QVec3 clearColor = {0.051f, 0.051f, 0.051f};
-    float clearAlpha = 1.0f;
+  QVec3 clear_color = {0.051f, 0.051f, 0.051f};
+  float clear_alpha = 1.0f;
 };
 
 /**
  * Represents a Render Settings value used by the render extraction and Filament resource layer.
  */
 struct RenderSettings {
-    ViewportRenderMode viewportMode = ViewportRenderMode::TexturedUnlit;
-    EnvironmentDocument environment;
+  ViewportRenderMode viewport_mode = ViewportRenderMode::TexturedUnlit;
+  EnvironmentDocument environment;
 };
 
 } // namespace quader

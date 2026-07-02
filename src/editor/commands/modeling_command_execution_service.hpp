@@ -22,40 +22,36 @@ class EditorSelectionService;
  */
 class ModelingCommandExecutionService final {
 public:
-    ModelingCommandResult execute(
-            EditorHistoryService& history,
-            ModelingSessionService& modeling,
-            EditorSelectionService& selection,
-            std::string_view toolId);
+  ModelingCommandResult execute(EditorHistoryService &history,
+                                ModelingSessionService &modeling,
+                                EditorSelectionService &selection,
+                                std::string_view tool_id);
 
-    ModelingCommandResult executeUntracked(
-            ModelingSessionService& modeling,
-            std::string_view toolId,
-            EditorSelectionService* selection = nullptr);
+  ModelingCommandResult
+  execute_untracked(ModelingSessionService &modeling, std::string_view tool_id,
+                    EditorSelectionService *selection = nullptr);
 
-    ModelingCommandResult beginPreview(
-            EditorHistoryService& history,
-            ModelingSessionService& modeling,
-            EditorSelectionService& selection,
-            std::string_view actionId);
+  ModelingCommandResult begin_preview(EditorHistoryService &history,
+                                      ModelingSessionService &modeling,
+                                      EditorSelectionService &selection,
+                                      std::string_view action_id);
 
-    ModelingCommandResult beginPreviewUntracked(
-            ModelingSessionService& modeling,
-            std::string_view actionId);
+  ModelingCommandResult
+  begin_preview_untracked(ModelingSessionService &modeling,
+                          std::string_view action_id);
 
-    ModelingCommandResult commitPreview(
-            EditorHistoryService& history,
-            ModelingSessionService& modeling,
-            std::string label);
+  ModelingCommandResult commit_preview(EditorHistoryService &history,
+                                       ModelingSessionService &modeling,
+                                       std::string label);
 
-    ModelingCommandResult cancelPreview(ModelingSessionService& modeling);
+  ModelingCommandResult cancel_preview(ModelingSessionService &modeling);
 
-    [[nodiscard]] ModelingCommandAvailability availability(
-            ModelingSessionService& modeling,
-            std::string_view toolId,
-            EditorSelectionService* selection = nullptr) const;
+  [[nodiscard]] ModelingCommandAvailability
+  availability(ModelingSessionService &modeling, std::string_view tool_id,
+               EditorSelectionService *selection = nullptr) const;
 
-    [[nodiscard]] ModelingCommandHistoryPolicy historyPolicy(std::string_view toolId) const;
+  [[nodiscard]] ModelingCommandHistoryPolicy
+  history_policy(std::string_view tool_id) const;
 
 private:
     ModelingCommandDispatcher dispatcher_;

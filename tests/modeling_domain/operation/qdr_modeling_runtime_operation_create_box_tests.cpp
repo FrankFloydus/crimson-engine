@@ -17,8 +17,9 @@ TEST(QdrModelingRuntimeOperationCreateBoxTests, CreateBoxOperationAddsOneSelecte
 		EXPECT_TRUE(result.changed);
 		EXPECT_TRUE(session.objects().size() == 1U);
 		EXPECT_TRUE(session.objects().front().selected);
-		EXPECT_TRUE(session.selection_mode() == quader_editor_core::SelectionMode::object);
-		EXPECT_TRUE(session.active_object_id() == session.objects().front().id);
+                EXPECT_TRUE(session.selection_mode() ==
+                            quader_editor_core::SelectionMode::Object);
+                EXPECT_TRUE(session.active_object_id() == session.objects().front().id);
 		EXPECT_TRUE(qdr_test::every_edge_is_closed(session.objects().front().document));
 		EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(session.objects().front().document));
 	}

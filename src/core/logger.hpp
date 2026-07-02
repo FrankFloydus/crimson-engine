@@ -23,7 +23,7 @@ namespace quader {
  */
 struct LogEntry {
     spdlog::level::level_enum level = spdlog::level::info;
-    std::string loggerName;
+    std::string logger_name;
     std::string message;
     std::string file;
     int line = 0;
@@ -34,8 +34,8 @@ struct LogEntry {
  */
 struct LoggerConfig {
     std::string name = "Quader";
-    std::string filePath = "quader.log";
-    std::size_t maxEntries = 2000;
+    std::string file_path = "quader.log";
+    std::size_t max_entries = 2000;
     spdlog::level::level_enum level = spdlog::level::trace;
 };
 
@@ -46,8 +46,8 @@ class Logger {
 public:
     static void initialize(LoggerConfig config = {});
     static void shutdown();
-    static void clearMemory();
-    static std::vector<LogEntry> entriesSnapshot();
+    static void clear_memory();
+    static std::vector<LogEntry> entries_snapshot();
     static std::shared_ptr<spdlog::logger> instance();
 
     template <typename... Args>
@@ -55,12 +55,12 @@ public:
             spdlog::level::level_enum level,
             spdlog::format_string_t<Args...> fmt,
             Args&&... args) {
-        ensureInitialized();
-        instance()->log(loc, level, fmt, std::forward<Args>(args)...);
+      ensure_initialized();
+      instance()->log(loc, level, fmt, std::forward<Args>(args)...);
     }
 
 private:
-    static void ensureInitialized();
+  static void ensure_initialized();
 };
 
 } // namespace quader

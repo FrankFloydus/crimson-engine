@@ -39,50 +39,52 @@ double base_scale_distance(TransformAxis axis, quader::QVec3 bounds_min, quader:
 		return std::max(std::abs(left), std::abs(right));
 	};
 	switch (axis) {
-		case TransformAxis::x:
-			return max_abs(bounds_max.x - pivot.x, bounds_min.x - pivot.x);
-		case TransformAxis::y:
-			return max_abs(bounds_max.y - pivot.y, bounds_min.y - pivot.y);
-		case TransformAxis::z:
-			return max_abs(bounds_max.z - pivot.z, bounds_min.z - pivot.z);
-		case TransformAxis::xy:
-			return std::max(
-					max_abs(bounds_max.x - pivot.x, bounds_min.x - pivot.x),
-					max_abs(bounds_max.y - pivot.y, bounds_min.y - pivot.y));
-		case TransformAxis::xz:
-			return std::max(
-					max_abs(bounds_max.x - pivot.x, bounds_min.x - pivot.x),
-					max_abs(bounds_max.z - pivot.z, bounds_min.z - pivot.z));
-		case TransformAxis::yz:
-			return std::max(
-					max_abs(bounds_max.y - pivot.y, bounds_min.y - pivot.y),
-					max_abs(bounds_max.z - pivot.z, bounds_min.z - pivot.z));
-		case TransformAxis::all:
-			return std::max(
-					std::max(
-							max_abs(bounds_max.x - pivot.x, bounds_min.x - pivot.x),
-							max_abs(bounds_max.y - pivot.y, bounds_min.y - pivot.y)),
-					max_abs(bounds_max.z - pivot.z, bounds_min.z - pivot.z));
-		case TransformAxis::none:
-		default:
-			return 0.0;
+        case TransformAxis::X:
+          return max_abs(bounds_max.x - pivot.x, bounds_min.x - pivot.x);
+        case TransformAxis::Y:
+          return max_abs(bounds_max.y - pivot.y, bounds_min.y - pivot.y);
+        case TransformAxis::Z:
+          return max_abs(bounds_max.z - pivot.z, bounds_min.z - pivot.z);
+        case TransformAxis::Xy:
+          return std::max(
+              max_abs(bounds_max.x - pivot.x, bounds_min.x - pivot.x),
+              max_abs(bounds_max.y - pivot.y, bounds_min.y - pivot.y));
+        case TransformAxis::Xz:
+          return std::max(
+              max_abs(bounds_max.x - pivot.x, bounds_min.x - pivot.x),
+              max_abs(bounds_max.z - pivot.z, bounds_min.z - pivot.z));
+        case TransformAxis::Yz:
+          return std::max(
+              max_abs(bounds_max.y - pivot.y, bounds_min.y - pivot.y),
+              max_abs(bounds_max.z - pivot.z, bounds_min.z - pivot.z));
+        case TransformAxis::All:
+          return std::max(
+              std::max(max_abs(bounds_max.x - pivot.x, bounds_min.x - pivot.x),
+                       max_abs(bounds_max.y - pivot.y, bounds_min.y - pivot.y)),
+              max_abs(bounds_max.z - pivot.z, bounds_min.z - pivot.z));
+        case TransformAxis::None:
+        default:
+          return 0.0;
 	}
 }
 
 bool axis_includes_component(TransformAxis axis, int component)
 {
-	if (axis == TransformAxis::all) {
-		return true;
-	}
-	if (component == 0) {
-		return axis == TransformAxis::x || axis == TransformAxis::xy || axis == TransformAxis::xz;
-	}
+  if (axis == TransformAxis::All) {
+    return true;
+  }
+        if (component == 0) {
+          return axis == TransformAxis::X || axis == TransformAxis::Xy ||
+                 axis == TransformAxis::Xz;
+        }
 	if (component == 1) {
-		return axis == TransformAxis::y || axis == TransformAxis::xy || axis == TransformAxis::yz;
-	}
+          return axis == TransformAxis::Y || axis == TransformAxis::Xy ||
+                 axis == TransformAxis::Yz;
+        }
 	if (component == 2) {
-		return axis == TransformAxis::z || axis == TransformAxis::xz || axis == TransformAxis::yz;
-	}
+          return axis == TransformAxis::Z || axis == TransformAxis::Xz ||
+                 axis == TransformAxis::Yz;
+        }
 	return false;
 }
 
@@ -102,21 +104,22 @@ double bounds_extent_component(quader::QVec3 bounds_min, quader::QVec3 bounds_ma
 
 double minimum_scale_factor_for_grid(TransformAxis axis, quader::QVec3 bounds_min, quader::QVec3 bounds_max, double grid_size, bool shrinking)
 {
-	double factor = min_scale_factor;
-	for (int component = 0; component < 3; ++component) {
-		if (!axis_includes_component(axis, component)) {
-			continue;
-		}
-		const double extent = bounds_extent_component(bounds_min, bounds_max, component);
-		if (extent <= screen_epsilon) {
-			continue;
-		}
-		double axis_factor = grid_size / extent;
-		if (shrinking && axis_factor > 1.0) {
-			axis_factor = 1.0;
-		}
-		factor = std::max(factor, axis_factor);
-	}
+  double factor = kMinScaleFactor;
+  for (int component = 0; component < 3; ++component) {
+    if (!axis_includes_component(axis, component)) {
+      continue;
+    }
+    const double extent =
+        bounds_extent_component(bounds_min, bounds_max, component);
+    if (extent <= kScreenEpsilon) {
+      continue;
+    }
+    double axis_factor = grid_size / extent;
+    if (shrinking && axis_factor > 1.0) {
+      axis_factor = 1.0;
+    }
+    factor = std::max(factor, axis_factor);
+  }
 	return factor;
 }
 
@@ -125,42 +128,42 @@ double minimum_scale_factor_for_grid(TransformAxis axis, quader::QVec3 bounds_mi
 quader::QVec3 axis_vector(TransformAxis axis)
 {
 	switch (axis) {
-		case TransformAxis::x:
-			return { 1.0F, 0.0F, 0.0F };
-		case TransformAxis::y:
-			return { 0.0F, 1.0F, 0.0F };
-		case TransformAxis::z:
-			return { 0.0F, 0.0F, 1.0F };
-		case TransformAxis::xy:
-			return { 1.0F, 1.0F, 0.0F };
-		case TransformAxis::xz:
-			return { 1.0F, 0.0F, 1.0F };
-		case TransformAxis::yz:
-			return { 0.0F, 1.0F, 1.0F };
-		case TransformAxis::all:
-			return { 1.0F, 1.0F, 1.0F };
-		case TransformAxis::none:
-		default:
-			return {};
+        case TransformAxis::X:
+          return {1.0F, 0.0F, 0.0F};
+        case TransformAxis::Y:
+          return {0.0F, 1.0F, 0.0F};
+        case TransformAxis::Z:
+          return {0.0F, 0.0F, 1.0F};
+        case TransformAxis::Xy:
+          return {1.0F, 1.0F, 0.0F};
+        case TransformAxis::Xz:
+          return {1.0F, 0.0F, 1.0F};
+        case TransformAxis::Yz:
+          return {0.0F, 1.0F, 1.0F};
+        case TransformAxis::All:
+          return {1.0F, 1.0F, 1.0F};
+        case TransformAxis::None:
+        default:
+          return {};
 	}
 }
 
 quader::QVec3 rotation_axis_vector(TransformAxis axis)
 {
 	switch (axis) {
-		case TransformAxis::x:
-			return { 1.0F, 0.0F, 0.0F };
-		case TransformAxis::y:
-			return { 0.0F, 1.0F, 0.0F };
-		case TransformAxis::z:
-			return { 0.0F, 0.0F, 1.0F };
-		case TransformAxis::none:
-		case TransformAxis::xy:
-		case TransformAxis::xz:
-		case TransformAxis::yz:
-		case TransformAxis::all:
-		default:
-			return {};
+        case TransformAxis::X:
+          return {1.0F, 0.0F, 0.0F};
+        case TransformAxis::Y:
+          return {0.0F, 1.0F, 0.0F};
+        case TransformAxis::Z:
+          return {0.0F, 0.0F, 1.0F};
+        case TransformAxis::None:
+        case TransformAxis::Xy:
+        case TransformAxis::Xz:
+        case TransformAxis::Yz:
+        case TransformAxis::All:
+        default:
+          return {};
 	}
 }
 
@@ -168,33 +171,34 @@ quader::QVec3 axis_scale(TransformAxis axis, double factor)
 {
 	quader::QVec3 scale { 1.0F, 1.0F, 1.0F };
 	switch (axis) {
-		case TransformAxis::x:
-			scale.x = static_cast<float>(factor);
-			break;
-		case TransformAxis::y:
-			scale.y = static_cast<float>(factor);
-			break;
-		case TransformAxis::z:
-			scale.z = static_cast<float>(factor);
-			break;
-		case TransformAxis::xy:
-			scale.x = static_cast<float>(factor);
-			scale.y = static_cast<float>(factor);
-			break;
-		case TransformAxis::xz:
-			scale.x = static_cast<float>(factor);
-			scale.z = static_cast<float>(factor);
-			break;
-		case TransformAxis::yz:
-			scale.y = static_cast<float>(factor);
-			scale.z = static_cast<float>(factor);
-			break;
-		case TransformAxis::all:
-			scale = { static_cast<float>(factor), static_cast<float>(factor), static_cast<float>(factor) };
-			break;
-		case TransformAxis::none:
-		default:
-			break;
+        case TransformAxis::X:
+          scale.x = static_cast<float>(factor);
+          break;
+        case TransformAxis::Y:
+          scale.y = static_cast<float>(factor);
+          break;
+        case TransformAxis::Z:
+          scale.z = static_cast<float>(factor);
+          break;
+        case TransformAxis::Xy:
+          scale.x = static_cast<float>(factor);
+          scale.y = static_cast<float>(factor);
+          break;
+        case TransformAxis::Xz:
+          scale.x = static_cast<float>(factor);
+          scale.z = static_cast<float>(factor);
+          break;
+        case TransformAxis::Yz:
+          scale.y = static_cast<float>(factor);
+          scale.z = static_cast<float>(factor);
+          break;
+        case TransformAxis::All:
+          scale = {static_cast<float>(factor), static_cast<float>(factor),
+                   static_cast<float>(factor)};
+          break;
+        case TransformAxis::None:
+        default:
+          break;
 	}
 	return scale;
 }
@@ -216,10 +220,10 @@ quader::QVec3 transform_point(const quader_poly::Transform3& transform, quader::
 quader::QVec3 inverse_transform_vector(const quader_poly::Transform3& transform, quader::QVec3 value)
 {
 	const double det = determinant(transform);
-	if (std::abs(det) <= tool_epsilon) {
-		return {};
-	}
-	return {
+        if (std::abs(det) <= kToolEpsilon) {
+          return {};
+        }
+        return {
 		static_cast<float>(vec3_dot(value, vec3_cross(transform.y_axis, transform.z_axis)) / det),
 		static_cast<float>(vec3_dot(value, vec3_cross(transform.z_axis, transform.x_axis)) / det),
 		static_cast<float>(vec3_dot(value, vec3_cross(transform.x_axis, transform.y_axis)) / det),
@@ -281,32 +285,34 @@ double snap_move_distance(double distance, bool precision, bool grid_enabled, do
 {
 	double snapped = precision ? distance * 0.25 : distance;
 	if (grid_enabled) {
-		const double grid = safe_grid_size(grid_size, tool_epsilon);
-		snapped = std::round(snapped / grid) * grid;
+          const double grid = safe_grid_size(grid_size, kToolEpsilon);
+          snapped = std::round(snapped / grid) * grid;
 	}
 	return snapped;
 }
 
 double snapped_scale_factor(TransformAxis axis, double factor, const ToolBounds3& bounds, quader::QVec3 pivot, bool grid_enabled, double grid_size)
 {
-	if (!bounds.has_bounds || !grid_enabled || grid_size <= screen_epsilon) {
-		return factor;
-	}
-	if (std::abs(factor - 1.0) <= tool_epsilon) {
-		return 1.0;
-	}
-	const double base_distance_value = base_scale_distance(axis, bounds.min, bounds.max, pivot);
-	if (base_distance_value <= screen_epsilon) {
-		return factor;
-	}
-	const double base_extent = base_distance_value * 2.0;
-	const double raw_extent = std::max(tool_epsilon, base_extent * factor);
-	const double grid = safe_grid_size(grid_size, tool_epsilon);
-	const bool shrinking = factor < 1.0;
+  if (!bounds.has_bounds || !grid_enabled || grid_size <= kScreenEpsilon) {
+    return factor;
+  }
+  if (std::abs(factor - 1.0) <= kToolEpsilon) {
+    return 1.0;
+  }
+        const double base_distance_value = base_scale_distance(axis, bounds.min, bounds.max, pivot);
+        if (base_distance_value <= kScreenEpsilon) {
+          return factor;
+        }
+        const double base_extent = base_distance_value * 2.0;
+        const double raw_extent = std::max(kToolEpsilon, base_extent * factor);
+        const double grid = safe_grid_size(grid_size, kToolEpsilon);
+        const bool shrinking = factor < 1.0;
 	const double snapped_units = shrinking ? std::floor(raw_extent / grid) : std::round(raw_extent / grid);
 	const double snapped_extent = snapped_units * grid;
-	const double snapped_factor = snapped_extent <= screen_epsilon ? min_scale_factor : snapped_extent / base_extent;
-	const double minimum_factor = minimum_scale_factor_for_grid(axis, bounds.min, bounds.max, grid, shrinking);
+        const double snapped_factor = snapped_extent <= kScreenEpsilon
+                                          ? kMinScaleFactor
+                                          : snapped_extent / base_extent;
+        const double minimum_factor = minimum_scale_factor_for_grid(axis, bounds.min, bounds.max, grid, shrinking);
 	return std::max(minimum_factor, snapped_factor);
 }
 

@@ -21,8 +21,8 @@ namespace {
 qec::EditorRuntimeCommand copy_command()
 {
 	qec::EditorRuntimeCommand command;
-	command.command_id = qec::EditorRuntimeCommandId::copy_selected_meshes;
-	command.settings = std::monostate {};
+        command.command_id = qec::EditorRuntimeCommandId::CopySelectedMeshes;
+        command.settings = std::monostate {};
 	return command;
 }
 
@@ -42,8 +42,8 @@ qec::EditorRuntimeCommand paste_command(std::optional<quader::QVec3> target)
 	}
 
 	qec::EditorRuntimeCommand command;
-	command.command_id = qec::EditorRuntimeCommandId::paste_copied_meshes;
-	command.settings = settings;
+        command.command_id = qec::EditorRuntimeCommandId::PasteCopiedMeshes;
+        command.settings = settings;
 	return command;
 }
 
@@ -53,8 +53,8 @@ qec::EditorRuntimeCommand set_selection_mode_command(int mode)
 	settings.selection_mode = mode;
 
 	qec::EditorRuntimeCommand command;
-	command.command_id = qec::EditorRuntimeCommandId::set_selection_mode;
-	command.settings = settings;
+        command.command_id = qec::EditorRuntimeCommandId::SetSelectionMode;
+        command.settings = settings;
 	return command;
 }
 
@@ -64,8 +64,8 @@ qec::EditorRuntimeCommand set_active_tool_command(qec::ViewportInteractionTool t
 	settings.tool = tool;
 
 	qec::EditorRuntimeCommand command;
-	command.command_id = qec::EditorRuntimeCommandId::set_active_tool;
-	command.settings = settings;
+        command.command_id = qec::EditorRuntimeCommandId::SetActiveTool;
+        command.settings = settings;
 	return command;
 }
 
@@ -89,8 +89,8 @@ qec::EditorRuntimeCommand pick_select_command(
 	settings.edge_radius = 0.10;
 
 	qec::EditorRuntimeCommand command;
-	command.command_id = qec::EditorRuntimeCommandId::pick_select;
-	command.settings = settings;
+        command.command_id = qec::EditorRuntimeCommandId::PickSelect;
+        command.settings = settings;
 	return command;
 }
 
@@ -131,8 +131,8 @@ qec::EditorRuntimeCommand set_cut_mode_command(int mode)
 	settings.mode = mode;
 
 	qec::EditorRuntimeCommand command;
-	command.command_id = qec::EditorRuntimeCommandId::set_cut_mode;
-	command.settings = settings;
+        command.command_id = qec::EditorRuntimeCommandId::SetCutMode;
+        command.settings = settings;
 	return command;
 }
 
@@ -144,8 +144,8 @@ quader_poly::Ray cut_ray(float x, float y = 2.0F)
 qec::ViewportCameraState cut_camera()
 {
 	qec::ViewportCameraState camera;
-	camera.projection = qec::CameraProjection::perspective;
-	return camera;
+        camera.projection = qec::CameraProjection::Perspective;
+        return camera;
 }
 
 qec::EditorRuntimeCommand cut_ray_command(
@@ -171,8 +171,8 @@ qec::EditorRuntimeCommand cut_point_drag_command(int point_index)
 	settings.point_index = point_index;
 
 	qec::EditorRuntimeCommand command;
-	command.command_id = qec::EditorRuntimeCommandId::begin_cut_point_drag;
-	command.settings = settings;
+        command.command_id = qec::EditorRuntimeCommandId::BeginCutPointDrag;
+        command.settings = settings;
 	return command;
 }
 
@@ -199,8 +199,8 @@ qec::EditorRuntimeCommand mirror_point_drag_command(int point_index)
 	settings.point_index = point_index;
 
 	qec::EditorRuntimeCommand command;
-	command.command_id = qec::EditorRuntimeCommandId::begin_mirror_point_drag;
-	command.settings = settings;
+        command.command_id = qec::EditorRuntimeCommandId::BeginMirrorPointDrag;
+        command.settings = settings;
 	return command;
 }
 
@@ -252,8 +252,8 @@ qec::EditorRuntimeCommand create_box_from_bounds_command(
 	settings.max_bounds = max_bounds;
 
 	qec::EditorRuntimeCommand command;
-	command.command_id = qec::EditorRuntimeCommandId::create_box_from_bounds;
-	command.settings = settings;
+        command.command_id = qec::EditorRuntimeCommandId::CreateBoxFromBounds;
+        command.settings = settings;
 	return command;
 }
 
@@ -263,8 +263,8 @@ qec::EditorRuntimeCommand mirror_axis_command(qec::TransformAxis axis)
 	settings.axis = axis;
 
 	qec::EditorRuntimeCommand command;
-	command.command_id = qec::EditorRuntimeCommandId::mirror_axis;
-	command.settings = settings;
+        command.command_id = qec::EditorRuntimeCommandId::MirrorAxis;
+        command.settings = settings;
 	return command;
 }
 
@@ -274,8 +274,8 @@ qec::EditorRuntimeCommand flip_view_command(qec::ViewportFlipOrientation orienta
 	settings.orientation = orientation;
 
 	qec::EditorRuntimeCommand command;
-	command.command_id = qec::EditorRuntimeCommandId::flip_view;
-	command.settings = settings;
+        command.command_id = qec::EditorRuntimeCommandId::FlipView;
+        command.settings = settings;
 	return command;
 }
 
@@ -320,25 +320,33 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeHandlesSelectionW
 	qec::EditorRuntime runtime;
 	const std::uint64_t content_revision_before = session.state().content_revision;
 
-	const qec::EditorRuntimeCommandResult clear_result =
-		qec::execute_runtime_command(session, runtime, no_settings_command(qec::EditorRuntimeCommandId::clear_selection));
-	EXPECT_TRUE(clear_result.command.ok);
+        const qec::EditorRuntimeCommandResult clear_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::ClearSelection));
+        EXPECT_TRUE(clear_result.command.ok);
 	EXPECT_TRUE(clear_result.command.changed);
 	EXPECT_FALSE(session.has_selection());
 	EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult select_result =
-		qec::execute_runtime_command(session, runtime, no_settings_command(qec::EditorRuntimeCommandId::select_all));
-	EXPECT_TRUE(select_result.command.ok);
+        const qec::EditorRuntimeCommandResult select_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::SelectAll));
+        EXPECT_TRUE(select_result.command.ok);
 	EXPECT_TRUE(select_result.command.changed);
 	EXPECT_TRUE(session.has_selection());
 	EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult invert_result =
-		qec::execute_runtime_command(session, runtime, no_settings_command(qec::EditorRuntimeCommandId::invert_selection));
-	EXPECT_TRUE(invert_result.command.ok);
+        const qec::EditorRuntimeCommandResult invert_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::InvertSelection));
+        EXPECT_TRUE(invert_result.command.ok);
 	EXPECT_TRUE(invert_result.command.changed);
 	EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
@@ -349,10 +357,13 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeHandlesDeleteSele
 	qec::EditorRuntime runtime;
 	const std::size_t object_count_before = session.objects().size();
 
-	const qec::EditorRuntimeCommandResult result =
-		qec::execute_runtime_command(session, runtime, no_settings_command(qec::EditorRuntimeCommandId::delete_selection));
+        const qec::EditorRuntimeCommandResult result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::DeleteSelection));
 
-	EXPECT_TRUE(result.command.ok);
+        EXPECT_TRUE(result.command.ok);
 	EXPECT_TRUE(result.command.changed);
 	EXPECT_TRUE(session.objects().size() < object_count_before);
 	EXPECT_TRUE(session.history_status().can_undo);
@@ -369,10 +380,13 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeReportsDeleteWith
 	const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
-	const qec::EditorRuntimeCommandResult result =
-		qec::execute_runtime_command(session, runtime, no_settings_command(qec::EditorRuntimeCommandId::delete_selection));
+        const qec::EditorRuntimeCommandResult result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::DeleteSelection));
 
-	EXPECT_TRUE(result.command.ok);
+        EXPECT_TRUE(result.command.ok);
 	EXPECT_FALSE(result.command.changed);
 	EXPECT_TRUE(result.command.message.empty());
 	EXPECT_TRUE(session.state().content_revision == content_revision_before);
@@ -449,16 +463,20 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeMarksTheCurrentDo
 	qec::EditorRuntime runtime;
 	EXPECT_TRUE(session.dirty());
 
-	const qec::EditorRuntimeCommandResult result =
-		qec::execute_runtime_command(session, runtime, no_settings_command(qec::EditorRuntimeCommandId::mark_clean));
+        const qec::EditorRuntimeCommandResult result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::MarkClean));
 
-	EXPECT_TRUE(result.command.ok);
+        EXPECT_TRUE(result.command.ok);
 	EXPECT_TRUE(result.command.changed);
 	EXPECT_FALSE(session.dirty());
 
-	const qec::EditorRuntimeCommandResult unchanged_result =
-		qec::execute_runtime_command(session, runtime, no_settings_command(qec::EditorRuntimeCommandId::mark_clean));
-	EXPECT_TRUE(unchanged_result.command.ok);
+        const qec::EditorRuntimeCommandResult unchanged_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::MarkClean));
+        EXPECT_TRUE(unchanged_result.command.ok);
 	EXPECT_FALSE(unchanged_result.command.changed);
 	EXPECT_FALSE(session.dirty());
 }
@@ -468,24 +486,31 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRestoresUndoAndRe
 	qec::EditorRuntime runtime;
 	const std::size_t object_count_before = session.objects().size();
 
-	const qec::EditorRuntimeCommandResult delete_result =
-		qec::execute_runtime_command(session, runtime, no_settings_command(qec::EditorRuntimeCommandId::delete_selection));
-	EXPECT_TRUE(delete_result.command.ok);
+        const qec::EditorRuntimeCommandResult delete_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::DeleteSelection));
+        EXPECT_TRUE(delete_result.command.ok);
 	EXPECT_TRUE(delete_result.command.changed);
 	EXPECT_TRUE(session.objects().empty());
 	EXPECT_TRUE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult undo_result =
-		qec::execute_runtime_command(session, runtime, no_settings_command(qec::EditorRuntimeCommandId::undo));
-	EXPECT_TRUE(undo_result.command.ok);
+        const qec::EditorRuntimeCommandResult undo_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::Undo));
+        EXPECT_TRUE(undo_result.command.ok);
 	EXPECT_TRUE(undo_result.command.changed);
 	EXPECT_TRUE(session.objects().size() == object_count_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 	EXPECT_TRUE(session.history_status().can_redo);
 
-	const qec::EditorRuntimeCommandResult redo_result =
-		qec::execute_runtime_command(session, runtime, no_settings_command(qec::EditorRuntimeCommandId::redo));
-	EXPECT_TRUE(redo_result.command.ok);
+        const qec::EditorRuntimeCommandResult redo_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::Redo));
+        EXPECT_TRUE(redo_result.command.ok);
 	EXPECT_TRUE(redo_result.command.changed);
 	EXPECT_TRUE(session.objects().empty());
 	EXPECT_TRUE(session.history_status().can_undo);
@@ -499,16 +524,20 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeReportsEmptyUndoA
 	const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
-	const qec::EditorRuntimeCommandResult undo_result =
-		qec::execute_runtime_command(session, runtime, no_settings_command(qec::EditorRuntimeCommandId::undo));
-	EXPECT_TRUE(undo_result.command.ok);
+        const qec::EditorRuntimeCommandResult undo_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::Undo));
+        EXPECT_TRUE(undo_result.command.ok);
 	EXPECT_FALSE(undo_result.command.changed);
 	EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_TRUE(session.state().selection_revision == selection_revision_before);
 
-	const qec::EditorRuntimeCommandResult redo_result =
-		qec::execute_runtime_command(session, runtime, no_settings_command(qec::EditorRuntimeCommandId::redo));
-	EXPECT_TRUE(redo_result.command.ok);
+        const qec::EditorRuntimeCommandResult redo_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::Redo));
+        EXPECT_TRUE(redo_result.command.ok);
 	EXPECT_FALSE(redo_result.command.changed);
 	EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_TRUE(session.state().selection_revision == selection_revision_before);
@@ -519,31 +548,35 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeClearsHoverWithou
 	qec::EditorRuntime runtime;
 	qec::SelectionHoverState hover;
 	hover.object_id = 1;
-	hover.kind = qec::SelectionHoverKind::object;
-	hover.candidate_object_id = 1;
+        hover.kind = qec::SelectionHoverKind::Object;
+        hover.candidate_object_id = 1;
 	runtime.set_hover(hover);
 	EXPECT_TRUE(runtime.status().hover_has_candidate_object);
 	session.clear_history();
 	const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
-	const qec::EditorRuntimeCommandResult result =
-		qec::execute_runtime_command(session, runtime, no_settings_command(qec::EditorRuntimeCommandId::clear_hover));
+        const qec::EditorRuntimeCommandResult result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::ClearHover));
 
-	EXPECT_TRUE(result.command.ok);
+        EXPECT_TRUE(result.command.ok);
 	EXPECT_TRUE(result.command.changed);
 	EXPECT_FALSE(runtime.status().hover_active);
 	EXPECT_FALSE(result.runtime.hover_active);
 	EXPECT_FALSE(runtime.status().hover_has_candidate_object);
 	EXPECT_FALSE(result.runtime.hover_has_candidate_object);
-	EXPECT_TRUE(runtime.hover().kind == qec::SelectionHoverKind::none);
-	EXPECT_TRUE(session.state().content_revision == content_revision_before);
+        EXPECT_TRUE(runtime.hover().kind == qec::SelectionHoverKind::None);
+        EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_TRUE(session.state().selection_revision == selection_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult unchanged_result =
-		qec::execute_runtime_command(session, runtime, no_settings_command(qec::EditorRuntimeCommandId::clear_hover));
-	EXPECT_TRUE(unchanged_result.command.ok);
+        const qec::EditorRuntimeCommandResult unchanged_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::ClearHover));
+        EXPECT_TRUE(unchanged_result.command.ok);
 	EXPECT_FALSE(unchanged_result.command.changed);
 	EXPECT_FALSE(unchanged_result.runtime.hover_active);
 }
@@ -555,23 +588,29 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeSetsSelectionMode
 	const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
-	const qec::EditorRuntimeCommandResult face_result =
-		qec::execute_runtime_command(session, runtime, set_selection_mode_command(static_cast<int>(qec::SelectionMode::face)));
+        const qec::EditorRuntimeCommandResult face_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                set_selection_mode_command(
+                    static_cast<int>(qec::SelectionMode::Face)));
 
-	EXPECT_TRUE(face_result.command.ok);
+        EXPECT_TRUE(face_result.command.ok);
 	EXPECT_TRUE(face_result.command.changed);
-	EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::face);
-	EXPECT_TRUE(face_result.command.changed == (session.state().selection_revision != selection_revision_before));
+        EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::Face);
+        EXPECT_TRUE(face_result.command.changed == (session.state().selection_revision != selection_revision_before));
 	EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 
 	const std::uint64_t face_selection_revision = session.state().selection_revision;
-	const qec::EditorRuntimeCommandResult same_result =
-		qec::execute_runtime_command(session, runtime, set_selection_mode_command(static_cast<int>(qec::SelectionMode::face)));
-	EXPECT_TRUE(same_result.command.ok);
+        const qec::EditorRuntimeCommandResult same_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                set_selection_mode_command(
+                    static_cast<int>(qec::SelectionMode::Face)));
+        EXPECT_TRUE(same_result.command.ok);
 	EXPECT_FALSE(same_result.command.changed);
-	EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::face);
-	EXPECT_TRUE(session.state().selection_revision == face_selection_revision);
+        EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::Face);
+        EXPECT_TRUE(session.state().selection_revision == face_selection_revision);
 	EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 
@@ -579,16 +618,16 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeSetsSelectionMode
 		qec::execute_runtime_command(session, runtime, set_selection_mode_command(9999));
 	EXPECT_TRUE(sanitized_result.command.ok);
 	EXPECT_TRUE(sanitized_result.command.changed);
-	EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::object);
-	EXPECT_TRUE(session.state().content_revision == content_revision_before);
+        EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::Object);
+        EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 
 	const qec::EditorRuntimeCommandResult low_sanitized_result =
 		qec::execute_runtime_command(session, runtime, set_selection_mode_command(-9999));
 	EXPECT_TRUE(low_sanitized_result.command.ok);
 	EXPECT_TRUE(low_sanitized_result.command.changed);
-	EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::vertex);
-	EXPECT_TRUE(session.state().content_revision == content_revision_before);
+        EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::Vertex);
+        EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 }
 
@@ -596,8 +635,8 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsSetSelecti
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	qec::EditorRuntime runtime;
 	qec::EditorRuntimeCommand command;
-	command.command_id = qec::EditorRuntimeCommandId::set_selection_mode;
-	command.settings = std::monostate {};
+        command.command_id = qec::EditorRuntimeCommandId::SetSelectionMode;
+        command.settings = std::monostate {};
 	const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
@@ -607,8 +646,8 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsSetSelecti
 	EXPECT_FALSE(result.command.ok);
 	EXPECT_FALSE(result.command.changed);
 	EXPECT_TRUE(result.command.message == "Runtime command settings do not match the command id.");
-	EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::object);
-	EXPECT_TRUE(session.state().content_revision == content_revision_before);
+        EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::Object);
+        EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_TRUE(session.state().selection_revision == selection_revision_before);
 }
 
@@ -619,46 +658,62 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeSetsActiveToolWit
 	const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
-	const qec::EditorRuntimeCommandResult move_result =
-		qec::execute_runtime_command(session, runtime, set_active_tool_command(qec::ViewportInteractionTool::move));
+        const qec::EditorRuntimeCommandResult move_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                set_active_tool_command(qec::ViewportInteractionTool::Move));
 
-	EXPECT_TRUE(move_result.command.ok);
+        EXPECT_TRUE(move_result.command.ok);
 	EXPECT_TRUE(move_result.command.changed);
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::move);
-	EXPECT_TRUE(move_result.runtime.active_tool == qec::ViewportInteractionTool::move);
-	EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::object);
-	EXPECT_TRUE(session.state().content_revision == content_revision_before);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Move);
+        EXPECT_TRUE(move_result.runtime.active_tool ==
+                    qec::ViewportInteractionTool::Move);
+        EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::Object);
+        EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_TRUE(session.state().selection_revision == selection_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult same_result =
-		qec::execute_runtime_command(session, runtime, set_active_tool_command(qec::ViewportInteractionTool::move));
-	EXPECT_TRUE(same_result.command.ok);
+        const qec::EditorRuntimeCommandResult same_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                set_active_tool_command(qec::ViewportInteractionTool::Move));
+        EXPECT_TRUE(same_result.command.ok);
 	EXPECT_FALSE(same_result.command.changed);
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::move);
-	EXPECT_TRUE(session.state().content_revision == content_revision_before);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Move);
+        EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_TRUE(session.state().selection_revision == selection_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult edge_loop_result =
-		qec::execute_runtime_command(session, runtime, set_active_tool_command(qec::ViewportInteractionTool::insert_edge_loop));
-	EXPECT_TRUE(edge_loop_result.command.ok);
+        const qec::EditorRuntimeCommandResult edge_loop_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                set_active_tool_command(
+                    qec::ViewportInteractionTool::InsertEdgeLoop));
+        EXPECT_TRUE(edge_loop_result.command.ok);
 	EXPECT_TRUE(edge_loop_result.command.changed);
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::insert_edge_loop);
-	EXPECT_TRUE(edge_loop_result.runtime.active_tool == qec::ViewportInteractionTool::insert_edge_loop);
-	EXPECT_TRUE(edge_loop_result.runtime.insert_edge_loop_active);
-	EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::edge);
-	EXPECT_TRUE(session.state().content_revision == content_revision_before);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::InsertEdgeLoop);
+        EXPECT_TRUE(edge_loop_result.runtime.active_tool ==
+                    qec::ViewportInteractionTool::InsertEdgeLoop);
+        EXPECT_TRUE(edge_loop_result.runtime.insert_edge_loop_active);
+        EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::Edge);
+        EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_TRUE(session.state().selection_revision != selection_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult sanitized_result =
-		qec::execute_runtime_command(session, runtime, set_active_tool_command(qec::ViewportInteractionTool::unknown));
-	EXPECT_TRUE(sanitized_result.command.ok);
+        const qec::EditorRuntimeCommandResult sanitized_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                set_active_tool_command(qec::ViewportInteractionTool::Unknown));
+        EXPECT_TRUE(sanitized_result.command.ok);
 	EXPECT_TRUE(sanitized_result.command.changed);
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::select);
-	EXPECT_TRUE(sanitized_result.runtime.active_tool == qec::ViewportInteractionTool::select);
-	EXPECT_TRUE(session.state().content_revision == content_revision_before);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Select);
+        EXPECT_TRUE(sanitized_result.runtime.active_tool ==
+                    qec::ViewportInteractionTool::Select);
+        EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 }
 
@@ -666,33 +721,39 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsSelectedOb
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	session.clear_selection();
 	qec::EditorRuntime runtime;
-	runtime.state().active_tool = qec::ViewportInteractionTool::move;
-	runtime.state().transform_drag.active = true;
-	runtime.state().transform_drag.axis = qec::TransformAxis::x;
-	runtime.state().gizmo_hover_axis = qec::TransformAxis::x;
-	const std::uint64_t content_revision_before = session.state().content_revision;
+        runtime.state().active_tool = qec::ViewportInteractionTool::Move;
+        runtime.state().transform_drag.active = true;
+        runtime.state().transform_drag.axis = qec::TransformAxis::X;
+        runtime.state().gizmo_hover_axis = qec::TransformAxis::X;
+        const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
-	const qec::EditorRuntimeCommandResult cut_result =
-		qec::execute_runtime_command(session, runtime, set_active_tool_command(qec::ViewportInteractionTool::cut));
-	EXPECT_FALSE(cut_result.command.ok);
+        const qec::EditorRuntimeCommandResult cut_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                set_active_tool_command(qec::ViewportInteractionTool::Cut));
+        EXPECT_FALSE(cut_result.command.ok);
 	EXPECT_FALSE(cut_result.command.changed);
 	EXPECT_TRUE(cut_result.command.message == "Select one or more mesh objects to cut.");
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::move);
-	EXPECT_TRUE(runtime.state().transform_drag.active);
-	EXPECT_TRUE(runtime.state().gizmo_hover_axis == qec::TransformAxis::x);
-	EXPECT_TRUE(session.state().content_revision == content_revision_before);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Move);
+        EXPECT_TRUE(runtime.state().transform_drag.active);
+        EXPECT_TRUE(runtime.state().gizmo_hover_axis == qec::TransformAxis::X);
+        EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_TRUE(session.state().selection_revision == selection_revision_before);
 
-	const qec::EditorRuntimeCommandResult mirror_result =
-		qec::execute_runtime_command(session, runtime, set_active_tool_command(qec::ViewportInteractionTool::mirror));
-	EXPECT_FALSE(mirror_result.command.ok);
+        const qec::EditorRuntimeCommandResult mirror_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                set_active_tool_command(qec::ViewportInteractionTool::Mirror));
+        EXPECT_FALSE(mirror_result.command.ok);
 	EXPECT_FALSE(mirror_result.command.changed);
 	EXPECT_TRUE(mirror_result.command.message == "Select one or more mesh objects to mirror.");
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::move);
-	EXPECT_TRUE(runtime.state().transform_drag.active);
-	EXPECT_TRUE(runtime.state().gizmo_hover_axis == qec::TransformAxis::x);
-	EXPECT_TRUE(session.state().content_revision == content_revision_before);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Move);
+        EXPECT_TRUE(runtime.state().transform_drag.active);
+        EXPECT_TRUE(runtime.state().gizmo_hover_axis == qec::TransformAxis::X);
+        EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_TRUE(session.state().selection_revision == selection_revision_before);
 }
 
@@ -700,8 +761,8 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsSetActiveT
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	qec::EditorRuntime runtime;
 	qec::EditorRuntimeCommand command;
-	command.command_id = qec::EditorRuntimeCommandId::set_active_tool;
-	command.settings = std::monostate {};
+        command.command_id = qec::EditorRuntimeCommandId::SetActiveTool;
+        command.settings = std::monostate {};
 	const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
@@ -711,9 +772,10 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsSetActiveT
 	EXPECT_FALSE(result.command.ok);
 	EXPECT_FALSE(result.command.changed);
 	EXPECT_TRUE(result.command.message == "Runtime command settings do not match the command id.");
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::select);
-	EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::object);
-	EXPECT_TRUE(session.state().content_revision == content_revision_before);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Select);
+        EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::Object);
+        EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_TRUE(session.state().selection_revision == selection_revision_before);
 }
 
@@ -723,68 +785,69 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeDrivesInsertEdgeL
 	session.clear_history();
 	const std::uint64_t content_revision_before = session.state().content_revision;
 
-	const qec::EditorRuntimeCommandResult hover_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			insert_edge_loop_pick_command(qec::EditorRuntimeCommandId::update_insert_edge_loop_hover));
-	EXPECT_TRUE(hover_result.command.ok);
+        const qec::EditorRuntimeCommandResult hover_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                insert_edge_loop_pick_command(
+                    qec::EditorRuntimeCommandId::UpdateInsertEdgeLoopHover));
+        EXPECT_TRUE(hover_result.command.ok);
 	EXPECT_TRUE(hover_result.command.changed);
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::insert_edge_loop);
-	EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::edge);
-	EXPECT_TRUE(runtime.insert_edge_loop_state().active);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::InsertEdgeLoop);
+        EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::Edge);
+        EXPECT_TRUE(runtime.insert_edge_loop_state().active);
 	EXPECT_FALSE(runtime.insert_edge_loop_state().dragging);
 	EXPECT_FALSE(runtime.insert_edge_loop_state().preview_lines.empty());
 	EXPECT_FALSE(session.history_status().can_undo);
 
 	const float hover_factor = runtime.insert_edge_loop_state().factor;
-	const qec::EditorRuntimeCommandResult begin_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			insert_edge_loop_pick_command(qec::EditorRuntimeCommandId::begin_insert_edge_loop_drag));
-	EXPECT_TRUE(begin_result.command.ok);
+        const qec::EditorRuntimeCommandResult begin_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                insert_edge_loop_pick_command(
+                    qec::EditorRuntimeCommandId::BeginInsertEdgeLoopDrag));
+        EXPECT_TRUE(begin_result.command.ok);
 	EXPECT_TRUE(begin_result.command.changed);
 	EXPECT_TRUE(runtime.insert_edge_loop_state().dragging);
 	EXPECT_FALSE(runtime.insert_edge_loop_state().preview_lines.empty());
 	EXPECT_NEAR(runtime.insert_edge_loop_state().factor, hover_factor, 0.0001);
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult release_hover_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			insert_edge_loop_pick_command(qec::EditorRuntimeCommandId::update_insert_edge_loop_hover));
-	EXPECT_TRUE(release_hover_result.command.ok);
+        const qec::EditorRuntimeCommandResult release_hover_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                insert_edge_loop_pick_command(
+                    qec::EditorRuntimeCommandId::UpdateInsertEdgeLoopHover));
+        EXPECT_TRUE(release_hover_result.command.ok);
 	EXPECT_TRUE(runtime.insert_edge_loop_state().dragging);
 	EXPECT_FALSE(runtime.insert_edge_loop_state().preview_lines.empty());
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult update_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			insert_edge_loop_pick_command(
-				qec::EditorRuntimeCommandId::update_insert_edge_loop_drag,
-				front_right_edge_ray(0.25F)));
-	EXPECT_TRUE(update_result.command.ok);
+        const qec::EditorRuntimeCommandResult update_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                insert_edge_loop_pick_command(
+                    qec::EditorRuntimeCommandId::UpdateInsertEdgeLoopDrag,
+                    front_right_edge_ray(0.25F)));
+        EXPECT_TRUE(update_result.command.ok);
 	EXPECT_TRUE(runtime.insert_edge_loop_state().dragging);
 	EXPECT_FALSE(runtime.insert_edge_loop_state().preview_lines.empty());
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult commit_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::commit_insert_edge_loop_drag));
-	EXPECT_TRUE(commit_result.command.ok);
+        const qec::EditorRuntimeCommandResult commit_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::CommitInsertEdgeLoopDrag));
+        EXPECT_TRUE(commit_result.command.ok);
 	EXPECT_TRUE(commit_result.command.changed);
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::select);
-	EXPECT_FALSE(runtime.insert_edge_loop_state().active);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Select);
+        EXPECT_FALSE(runtime.insert_edge_loop_state().active);
 	EXPECT_FALSE(runtime.insert_edge_loop_state().dragging);
 	EXPECT_TRUE(runtime.insert_edge_loop_state().preview_lines.empty());
-	EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::edge);
-	EXPECT_TRUE(session.state().content_revision != content_revision_before);
+        EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::Edge);
+        EXPECT_TRUE(session.state().content_revision != content_revision_before);
 	EXPECT_TRUE(session.history_status().can_undo);
 }
 
@@ -794,22 +857,22 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeCancelsInsertEdge
 	session.clear_history();
 	const std::uint64_t content_revision_before = session.state().content_revision;
 
-	const qec::EditorRuntimeCommandResult begin_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			insert_edge_loop_pick_command(qec::EditorRuntimeCommandId::begin_insert_edge_loop_drag));
-	EXPECT_TRUE(begin_result.command.ok);
+        const qec::EditorRuntimeCommandResult begin_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                insert_edge_loop_pick_command(
+                    qec::EditorRuntimeCommandId::BeginInsertEdgeLoopDrag));
+        EXPECT_TRUE(begin_result.command.ok);
 	EXPECT_TRUE(runtime.insert_edge_loop_state().active);
 	EXPECT_TRUE(runtime.insert_edge_loop_state().dragging);
 	EXPECT_FALSE(runtime.insert_edge_loop_state().preview_lines.empty());
 
-	const qec::EditorRuntimeCommandResult cancel_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::cancel_insert_edge_loop));
-	EXPECT_TRUE(cancel_result.command.ok);
+        const qec::EditorRuntimeCommandResult cancel_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::CancelInsertEdgeLoop));
+        EXPECT_TRUE(cancel_result.command.ok);
 	EXPECT_TRUE(cancel_result.command.changed);
 	EXPECT_TRUE(runtime.insert_edge_loop_state().active);
 	EXPECT_FALSE(runtime.insert_edge_loop_state().dragging);
@@ -824,12 +887,12 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeReportsInsertEdge
 	const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
-	const qec::EditorRuntimeCommandResult result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::commit_insert_edge_loop_drag));
-	EXPECT_FALSE(result.command.ok);
+        const qec::EditorRuntimeCommandResult result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::CommitInsertEdgeLoopDrag));
+        EXPECT_FALSE(result.command.ok);
 	EXPECT_FALSE(result.command.changed);
 	EXPECT_TRUE(result.command.message == "Select an edge to insert an edge loop.");
 	EXPECT_TRUE(session.state().content_revision == content_revision_before);
@@ -843,18 +906,19 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsInsertEdge
 	const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
-	const qec::EditorRuntimeCommandResult pick_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::update_insert_edge_loop_hover));
-	EXPECT_FALSE(pick_result.command.ok);
+        const qec::EditorRuntimeCommandResult pick_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::UpdateInsertEdgeLoopHover));
+        EXPECT_FALSE(pick_result.command.ok);
 	EXPECT_FALSE(pick_result.command.changed);
 	EXPECT_TRUE(pick_result.command.message == "Runtime command settings do not match the command id.");
 
 	qec::EditorRuntimeCommand cancel_command;
-	cancel_command.command_id = qec::EditorRuntimeCommandId::cancel_insert_edge_loop;
-	cancel_command.settings = qec::InsertEdgeLoopPickRuntimeCommandSettings {};
+        cancel_command.command_id =
+            qec::EditorRuntimeCommandId::CancelInsertEdgeLoop;
+        cancel_command.settings = qec::InsertEdgeLoopPickRuntimeCommandSettings {};
 	const qec::EditorRuntimeCommandResult cancel_result =
 		qec::execute_runtime_command(session, runtime, cancel_command);
 	EXPECT_FALSE(cancel_result.command.ok);
@@ -870,10 +934,11 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeMirrorsSelectedMe
 	const int source_id = session.objects().front().id;
 	const quader::QVec3 first_before = session.objects().front().document.vertices.front().position;
 
-	const qec::EditorRuntimeCommandResult result =
-		qec::execute_runtime_command(session, runtime, mirror_axis_command(qec::TransformAxis::x));
+        const qec::EditorRuntimeCommandResult result =
+            qec::execute_runtime_command(
+                session, runtime, mirror_axis_command(qec::TransformAxis::X));
 
-	EXPECT_TRUE(result.command.ok);
+        EXPECT_TRUE(result.command.ok);
 	EXPECT_TRUE(result.command.changed);
 	EXPECT_TRUE(session.objects().size() == 2U);
 	EXPECT_TRUE(session.selected_object_ids().size() == 1U);
@@ -899,10 +964,12 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeFlipsSelectedMesh
 	const int source_id = session.objects().front().id;
 	const quader::QVec3 first_before = session.objects().front().document.vertices.front().position;
 
-	const qec::EditorRuntimeCommandResult result =
-		qec::execute_runtime_command(session, runtime, flip_view_command(qec::ViewportFlipOrientation::horizontal));
+        const qec::EditorRuntimeCommandResult result =
+            qec::execute_runtime_command(
+                session, runtime,
+                flip_view_command(qec::ViewportFlipOrientation::Horizontal));
 
-	EXPECT_TRUE(result.command.ok);
+        EXPECT_TRUE(result.command.ok);
 	EXPECT_TRUE(result.command.changed);
 	EXPECT_TRUE(session.objects().size() == 1U);
 	EXPECT_TRUE(session.selected_object_ids().size() == 1U);
@@ -916,22 +983,25 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsMirrorAndF
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	qec::EditorRuntime runtime;
 	const quader_poly::ElementId vertex_id = session.objects().front().document.vertices.front().id;
-	session.set_component_selection(
-		session.objects().front().id,
-		qdr_test::vertex_selection({ vertex_id }, vertex_id),
-		qec::SelectionMode::vertex);
-	const std::uint64_t content_revision_before = session.state().content_revision;
+        session.set_component_selection(
+            session.objects().front().id,
+            qdr_test::vertex_selection({vertex_id}, vertex_id),
+            qec::SelectionMode::Vertex);
+        const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
-	const qec::EditorRuntimeCommandResult mirror_result =
-		qec::execute_runtime_command(session, runtime, mirror_axis_command(qec::TransformAxis::x));
-	EXPECT_FALSE(mirror_result.command.ok);
+        const qec::EditorRuntimeCommandResult mirror_result =
+            qec::execute_runtime_command(
+                session, runtime, mirror_axis_command(qec::TransformAxis::X));
+        EXPECT_FALSE(mirror_result.command.ok);
 	EXPECT_FALSE(mirror_result.command.changed);
 	EXPECT_TRUE(mirror_result.command.message == "Select one or more mesh objects to mirror.");
 
-	const qec::EditorRuntimeCommandResult flip_result =
-		qec::execute_runtime_command(session, runtime, flip_view_command(qec::ViewportFlipOrientation::vertical));
-	EXPECT_FALSE(flip_result.command.ok);
+        const qec::EditorRuntimeCommandResult flip_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                flip_view_command(qec::ViewportFlipOrientation::Vertical));
+        EXPECT_FALSE(flip_result.command.ok);
 	EXPECT_FALSE(flip_result.command.changed);
 	EXPECT_TRUE(flip_result.command.message == "Select one or more mesh objects to flip.");
 
@@ -945,8 +1015,9 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsMirrorAndF
 	qec::EditorRuntime runtime;
 
 	qec::EditorRuntimeCommand mirror_wrong_settings;
-	mirror_wrong_settings.command_id = qec::EditorRuntimeCommandId::mirror_axis;
-	mirror_wrong_settings.settings = std::monostate {};
+        mirror_wrong_settings.command_id =
+            qec::EditorRuntimeCommandId::MirrorAxis;
+        mirror_wrong_settings.settings = std::monostate {};
 	const qec::EditorRuntimeCommandResult mirror_result =
 		qec::execute_runtime_command(session, runtime, mirror_wrong_settings);
 	EXPECT_FALSE(mirror_result.command.ok);
@@ -954,8 +1025,8 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsMirrorAndF
 	EXPECT_TRUE(mirror_result.command.message == "Runtime command settings do not match the command id.");
 
 	qec::EditorRuntimeCommand flip_wrong_settings;
-	flip_wrong_settings.command_id = qec::EditorRuntimeCommandId::flip_view;
-	flip_wrong_settings.settings = qec::MirrorAxisRuntimeCommandSettings {};
+        flip_wrong_settings.command_id = qec::EditorRuntimeCommandId::FlipView;
+        flip_wrong_settings.settings = qec::MirrorAxisRuntimeCommandSettings {};
 	const qec::EditorRuntimeCommandResult flip_result =
 		qec::execute_runtime_command(session, runtime, flip_wrong_settings);
 	EXPECT_FALSE(flip_result.command.ok);
@@ -972,61 +1043,62 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeDrivesBoxFootprin
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 	EXPECT_TRUE(session.has_selection());
 
-	const qec::EditorRuntimeCommandResult hover_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			box_ray_command(qec::EditorRuntimeCommandId::update_box_hover));
-	EXPECT_TRUE(hover_result.command.ok);
+        const qec::EditorRuntimeCommandResult hover_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                box_ray_command(qec::EditorRuntimeCommandId::UpdateBoxHover));
+        EXPECT_TRUE(hover_result.command.ok);
 	EXPECT_TRUE(hover_result.command.changed);
 	EXPECT_TRUE(runtime.status().box_active);
 	EXPECT_TRUE(hover_result.runtime.box_active);
 
-	const qec::EditorRuntimeCommandResult begin_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			box_ray_command(qec::EditorRuntimeCommandId::begin_box_footprint));
-	EXPECT_TRUE(begin_result.command.ok);
+        const qec::EditorRuntimeCommandResult begin_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                box_ray_command(
+                    qec::EditorRuntimeCommandId::BeginBoxFootprint));
+        EXPECT_TRUE(begin_result.command.ok);
 	EXPECT_TRUE(begin_result.command.changed);
-	EXPECT_TRUE(runtime.box_state().drag_state == qec::BoxDragState::footprint);
-	EXPECT_FALSE(session.has_selection());
+        EXPECT_TRUE(runtime.box_state().drag_state ==
+                    qec::BoxDragState::Footprint);
+        EXPECT_FALSE(session.has_selection());
 	EXPECT_TRUE(session.state().selection_revision != selection_revision_before);
 	EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult update_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			box_ray_command(qec::EditorRuntimeCommandId::update_box_footprint, box_ground_ray(6.0F, 7.0F)));
-	EXPECT_TRUE(update_result.command.ok);
-	EXPECT_TRUE(runtime.box_state().drag_state == qec::BoxDragState::footprint);
-	EXPECT_FALSE(session.history_status().can_undo);
+        const qec::EditorRuntimeCommandResult update_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                box_ray_command(qec::EditorRuntimeCommandId::UpdateBoxFootprint,
+                                box_ground_ray(6.0F, 7.0F)));
+        EXPECT_TRUE(update_result.command.ok);
+        EXPECT_TRUE(runtime.box_state().drag_state ==
+                    qec::BoxDragState::Footprint);
+        EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult begin_height_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			box_height_command(qec::EditorRuntimeCommandId::begin_box_height));
-	EXPECT_TRUE(begin_height_result.command.ok);
+        const qec::EditorRuntimeCommandResult begin_height_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                box_height_command(
+                    qec::EditorRuntimeCommandId::BeginBoxHeight));
+        EXPECT_TRUE(begin_height_result.command.ok);
 	EXPECT_TRUE(begin_height_result.command.changed);
-	EXPECT_TRUE(runtime.box_state().drag_state == qec::BoxDragState::height);
-	const qec::BoxPreviewDescriptor preview = runtime.box_preview_descriptor(true);
+        EXPECT_TRUE(runtime.box_state().drag_state ==
+                    qec::BoxDragState::Height);
+        const qec::BoxPreviewDescriptor preview = runtime.box_preview_descriptor(true);
 	EXPECT_TRUE(preview.ok);
 	EXPECT_FALSE(preview.bounds.empty);
 	EXPECT_NEAR(preview.distance, 1.0F, 0.0001);
 
-	const qec::EditorRuntimeCommandResult commit_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::commit_box));
-	EXPECT_TRUE(commit_result.command.ok);
+        const qec::EditorRuntimeCommandResult commit_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::CommitBox));
+        EXPECT_TRUE(commit_result.command.ok);
 	EXPECT_TRUE(commit_result.command.changed);
 	EXPECT_FALSE(commit_result.runtime.box_active);
-	EXPECT_TRUE(runtime.box_state().drag_state == qec::BoxDragState::idle);
-	EXPECT_TRUE(session.objects().size() == object_count_before + 1U);
+        EXPECT_TRUE(runtime.box_state().drag_state == qec::BoxDragState::Idle);
+        EXPECT_TRUE(session.objects().size() == object_count_before + 1U);
 	EXPECT_TRUE(session.state().content_revision != content_revision_before);
 	EXPECT_TRUE(session.history_status().can_undo);
 }
@@ -1044,8 +1116,8 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeCreatesABoxFromBo
 	EXPECT_TRUE(result.command.changed);
 	EXPECT_TRUE(session.objects().size() == 1U);
 	EXPECT_TRUE(session.objects().front().selected);
-	EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::object);
-	EXPECT_TRUE(session.state().content_revision != content_revision_before);
+        EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::Object);
+        EXPECT_TRUE(session.state().content_revision != content_revision_before);
 	EXPECT_TRUE(session.state().selection_revision != selection_revision_before);
 	EXPECT_TRUE(session.history_status().can_undo);
 	EXPECT_FALSE(result.runtime.hover_active);
@@ -1079,20 +1151,19 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeCancelsBoxWithout
 	const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
-	const qec::EditorRuntimeCommandResult begin_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			box_ray_command(qec::EditorRuntimeCommandId::begin_box_footprint));
-	EXPECT_TRUE(begin_result.command.ok);
+        const qec::EditorRuntimeCommandResult begin_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                box_ray_command(
+                    qec::EditorRuntimeCommandId::BeginBoxFootprint));
+        EXPECT_TRUE(begin_result.command.ok);
 	EXPECT_TRUE(runtime.status().box_active);
 
-	const qec::EditorRuntimeCommandResult cancel_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::cancel_box));
-	EXPECT_TRUE(cancel_result.command.ok);
+        const qec::EditorRuntimeCommandResult cancel_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::CancelBox));
+        EXPECT_TRUE(cancel_result.command.ok);
 	EXPECT_TRUE(cancel_result.command.changed);
 	EXPECT_FALSE(cancel_result.runtime.box_active);
 	EXPECT_FALSE(runtime.status().box_active);
@@ -1105,12 +1176,11 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsBoxCommitB
 	qec::EditorSession session;
 	qec::EditorRuntime runtime;
 
-	const qec::EditorRuntimeCommandResult result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::commit_box));
-	EXPECT_FALSE(result.command.ok);
+        const qec::EditorRuntimeCommandResult result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::CommitBox));
+        EXPECT_FALSE(result.command.ok);
 	EXPECT_FALSE(result.command.changed);
 	EXPECT_TRUE(result.command.message == "Box height must be set before commit.");
 	EXPECT_FALSE(session.history_status().can_undo);
@@ -1120,18 +1190,19 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsBoxMismatc
 	qec::EditorSession session;
 	qec::EditorRuntime runtime;
 
-	const qec::EditorRuntimeCommandResult hover_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::update_box_hover));
-	EXPECT_FALSE(hover_result.command.ok);
+        const qec::EditorRuntimeCommandResult hover_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::UpdateBoxHover));
+        EXPECT_FALSE(hover_result.command.ok);
 	EXPECT_FALSE(hover_result.command.changed);
 	EXPECT_TRUE(hover_result.command.message == "Runtime command settings do not match the command id.");
 
 	qec::EditorRuntimeCommand begin_height_wrong_settings;
-	begin_height_wrong_settings.command_id = qec::EditorRuntimeCommandId::begin_box_height;
-	begin_height_wrong_settings.settings = qec::BoxRayRuntimeCommandSettings {};
+        begin_height_wrong_settings.command_id =
+            qec::EditorRuntimeCommandId::BeginBoxHeight;
+        begin_height_wrong_settings.settings = qec::BoxRayRuntimeCommandSettings {};
 	const qec::EditorRuntimeCommandResult begin_height_result =
 		qec::execute_runtime_command(session, runtime, begin_height_wrong_settings);
 	EXPECT_FALSE(begin_height_result.command.ok);
@@ -1139,17 +1210,19 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsBoxMismatc
 	EXPECT_TRUE(begin_height_result.command.message == "Runtime command settings do not match the command id.");
 
 	qec::EditorRuntimeCommand commit_wrong_settings;
-	commit_wrong_settings.command_id = qec::EditorRuntimeCommandId::commit_box;
-	commit_wrong_settings.settings = qec::BoxRayRuntimeCommandSettings {};
+        commit_wrong_settings.command_id =
+            qec::EditorRuntimeCommandId::CommitBox;
+        commit_wrong_settings.settings = qec::BoxRayRuntimeCommandSettings {};
 	const qec::EditorRuntimeCommandResult commit_result =
 		qec::execute_runtime_command(session, runtime, commit_wrong_settings);
 	EXPECT_FALSE(commit_result.command.ok);
 	EXPECT_FALSE(commit_result.command.changed);
 	EXPECT_TRUE(commit_result.command.message == "Runtime command settings do not match the command id.");
 
-	qec::EditorRuntimeCommand create_box_wrong_settings =
-		no_settings_command(qec::EditorRuntimeCommandId::create_box_from_bounds);
-	const qec::EditorRuntimeCommandResult create_box_result =
+        qec::EditorRuntimeCommand create_box_wrong_settings =
+            no_settings_command(
+                qec::EditorRuntimeCommandId::CreateBoxFromBounds);
+        const qec::EditorRuntimeCommandResult create_box_result =
 		qec::execute_runtime_command(session, runtime, create_box_wrong_settings);
 	EXPECT_FALSE(create_box_result.command.ok);
 	EXPECT_FALSE(create_box_result.command.changed);
@@ -1163,60 +1236,60 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeDrivesCutActivati
 	const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
-	const qec::EditorRuntimeCommandResult activate_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::activate_cut));
-	EXPECT_TRUE(activate_result.command.ok);
+        const qec::EditorRuntimeCommandResult activate_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::ActivateCut));
+        EXPECT_TRUE(activate_result.command.ok);
 	EXPECT_TRUE(activate_result.command.changed);
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::cut);
-	EXPECT_TRUE(activate_result.runtime.active_tool == qec::ViewportInteractionTool::cut);
-	EXPECT_TRUE(activate_result.runtime.cut_active);
-	EXPECT_TRUE(runtime.cut_state().mode == qec::CutMode::keep_both);
-	EXPECT_TRUE(runtime.cut_state().target_object_ids.size() == 1U);
+        EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::Cut);
+        EXPECT_TRUE(activate_result.runtime.active_tool ==
+                    qec::ViewportInteractionTool::Cut);
+        EXPECT_TRUE(activate_result.runtime.cut_active);
+        EXPECT_TRUE(runtime.cut_state().mode == qec::CutMode::KeepBoth);
+        EXPECT_TRUE(runtime.cut_state().target_object_ids.size() == 1U);
 	EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_TRUE(session.state().selection_revision == selection_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult update_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::update_cut_preview));
-	EXPECT_TRUE(update_result.command.ok);
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::cut);
-	EXPECT_TRUE(update_result.runtime.cut_active);
+        const qec::EditorRuntimeCommandResult update_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::UpdateCutPreview));
+        EXPECT_TRUE(update_result.command.ok);
+        EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::Cut);
+        EXPECT_TRUE(update_result.runtime.cut_active);
 	EXPECT_TRUE(runtime.cut_state().target_object_ids.size() == 1U);
 	EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult mode_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			set_cut_mode_command(static_cast<int>(qec::CutMode::keep_front)));
-	EXPECT_TRUE(mode_result.command.ok);
+        const qec::EditorRuntimeCommandResult mode_result =
+            qec::execute_runtime_command(session, runtime,
+                                         set_cut_mode_command(static_cast<int>(
+                                             qec::CutMode::KeepFront)));
+        EXPECT_TRUE(mode_result.command.ok);
 	EXPECT_TRUE(mode_result.command.changed);
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::cut);
-	EXPECT_TRUE(runtime.cut_state().mode == qec::CutMode::keep_front);
-	EXPECT_TRUE(runtime.cut_state().target_object_ids.size() == 1U);
+        EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::Cut);
+        EXPECT_TRUE(runtime.cut_state().mode == qec::CutMode::KeepFront);
+        EXPECT_TRUE(runtime.cut_state().target_object_ids.size() == 1U);
 	EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult cancel_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::cancel_cut));
-	EXPECT_TRUE(cancel_result.command.ok);
+        const qec::EditorRuntimeCommandResult cancel_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::CancelCut));
+        EXPECT_TRUE(cancel_result.command.ok);
 	EXPECT_TRUE(cancel_result.command.changed);
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::select);
-	EXPECT_TRUE(cancel_result.runtime.active_tool == qec::ViewportInteractionTool::select);
-	EXPECT_FALSE(cancel_result.runtime.cut_active);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Select);
+        EXPECT_TRUE(cancel_result.runtime.active_tool ==
+                    qec::ViewportInteractionTool::Select);
+        EXPECT_FALSE(cancel_result.runtime.cut_active);
 	EXPECT_TRUE(runtime.cut_state().target_object_ids.empty());
-	EXPECT_TRUE(runtime.cut_state().mode == qec::CutMode::keep_both);
-	EXPECT_TRUE(session.state().content_revision == content_revision_before);
+        EXPECT_TRUE(runtime.cut_state().mode == qec::CutMode::KeepBoth);
+        EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 }
 
@@ -1224,32 +1297,33 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsCutCommand
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	session.clear_selection();
 	qec::EditorRuntime runtime;
-	runtime.state().active_tool = qec::ViewportInteractionTool::knife;
-	runtime.state().knife.active = true;
+        runtime.state().active_tool = qec::ViewportInteractionTool::Knife;
+        runtime.state().knife.active = true;
 	const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
-	const qec::EditorRuntimeCommandResult activate_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::activate_cut));
-	EXPECT_FALSE(activate_result.command.ok);
+        const qec::EditorRuntimeCommandResult activate_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::ActivateCut));
+        EXPECT_FALSE(activate_result.command.ok);
 	EXPECT_FALSE(activate_result.command.changed);
 	EXPECT_TRUE(activate_result.command.message == "Select one or more mesh objects to cut.");
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::knife);
-	EXPECT_TRUE(runtime.state().knife.active);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Knife);
+        EXPECT_TRUE(runtime.state().knife.active);
 
-	const qec::EditorRuntimeCommandResult click_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			cut_ray_command(qec::EditorRuntimeCommandId::click_cut, cut_ray(0.0F)));
-	EXPECT_FALSE(click_result.command.ok);
+        const qec::EditorRuntimeCommandResult click_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                cut_ray_command(qec::EditorRuntimeCommandId::ClickCut,
+                                cut_ray(0.0F)));
+        EXPECT_FALSE(click_result.command.ok);
 	EXPECT_FALSE(click_result.command.changed);
 	EXPECT_TRUE(click_result.command.message == "Select one or more mesh objects to cut.");
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::knife);
-	EXPECT_TRUE(session.state().content_revision == content_revision_before);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Knife);
+        EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_TRUE(session.state().selection_revision == selection_revision_before);
 }
 
@@ -1259,25 +1333,25 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeDrivesCutInteract
 	session.clear_history();
 	const std::uint64_t content_revision_before = session.state().content_revision;
 
-	const qec::EditorRuntimeCommandResult first_click =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			cut_ray_command(qec::EditorRuntimeCommandId::click_cut, cut_ray(0.0F)));
-	EXPECT_TRUE(first_click.command.ok);
+        const qec::EditorRuntimeCommandResult first_click =
+            qec::execute_runtime_command(
+                session, runtime,
+                cut_ray_command(qec::EditorRuntimeCommandId::ClickCut,
+                                cut_ray(0.0F)));
+        EXPECT_TRUE(first_click.command.ok);
 	EXPECT_TRUE(first_click.command.changed);
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::cut);
-	EXPECT_TRUE(first_click.runtime.cut_active);
+        EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::Cut);
+        EXPECT_TRUE(first_click.runtime.cut_active);
 	EXPECT_TRUE(runtime.cut_state().points.size() == 1U);
 	EXPECT_TRUE(runtime.cut_state().dragging_new_point);
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult second_click =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			cut_ray_command(qec::EditorRuntimeCommandId::click_cut, cut_ray(1.0F)));
-	EXPECT_TRUE(second_click.command.ok);
+        const qec::EditorRuntimeCommandResult second_click =
+            qec::execute_runtime_command(
+                session, runtime,
+                cut_ray_command(qec::EditorRuntimeCommandId::ClickCut,
+                                cut_ray(1.0F)));
+        EXPECT_TRUE(second_click.command.ok);
 	EXPECT_TRUE(second_click.command.changed);
 	EXPECT_TRUE(runtime.cut_state().points.size() == 2U);
 	EXPECT_FALSE(runtime.cut_state().dragging_new_point);
@@ -1290,65 +1364,63 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeDrivesCutInteract
 	EXPECT_TRUE(begin_point_drag.command.changed);
 	EXPECT_TRUE(runtime.cut_state().dragging_point_index == 0);
 
-	const qec::EditorRuntimeCommandResult point_drag =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			cut_ray_command(qec::EditorRuntimeCommandId::update_cut_hover, cut_ray(-0.5F), true));
-	EXPECT_TRUE(point_drag.command.ok);
+        const qec::EditorRuntimeCommandResult point_drag =
+            qec::execute_runtime_command(
+                session, runtime,
+                cut_ray_command(qec::EditorRuntimeCommandId::UpdateCutHover,
+                                cut_ray(-0.5F), true));
+        EXPECT_TRUE(point_drag.command.ok);
 	EXPECT_TRUE(point_drag.command.changed);
 	EXPECT_TRUE(runtime.cut_state().points.size() == 2U);
 	EXPECT_NEAR(runtime.cut_state().points[0].x, -0.5F, 0.0001);
 	EXPECT_TRUE(runtime.cut_state().preview_valid);
 
-	const qec::EditorRuntimeCommandResult end_point_drag =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::end_cut_drag));
-	EXPECT_TRUE(end_point_drag.command.ok);
+        const qec::EditorRuntimeCommandResult end_point_drag =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::EndCutDrag));
+        EXPECT_TRUE(end_point_drag.command.ok);
 	EXPECT_TRUE(end_point_drag.command.changed);
 	EXPECT_TRUE(runtime.cut_state().dragging_point_index == -1);
 	EXPECT_FALSE(runtime.cut_state().dragging_line);
 
-	const qec::EditorRuntimeCommandResult begin_line_drag =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			cut_ray_command(qec::EditorRuntimeCommandId::begin_cut_line_drag, cut_ray(0.25F)));
-	EXPECT_TRUE(begin_line_drag.command.ok);
+        const qec::EditorRuntimeCommandResult begin_line_drag =
+            qec::execute_runtime_command(
+                session, runtime,
+                cut_ray_command(qec::EditorRuntimeCommandId::BeginCutLineDrag,
+                                cut_ray(0.25F)));
+        EXPECT_TRUE(begin_line_drag.command.ok);
 	EXPECT_TRUE(begin_line_drag.command.changed);
 	EXPECT_TRUE(runtime.cut_state().dragging_line);
 
-	const qec::EditorRuntimeCommandResult line_drag =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			cut_ray_command(qec::EditorRuntimeCommandId::update_cut_hover, cut_ray(0.5F), true));
-	EXPECT_TRUE(line_drag.command.ok);
+        const qec::EditorRuntimeCommandResult line_drag =
+            qec::execute_runtime_command(
+                session, runtime,
+                cut_ray_command(qec::EditorRuntimeCommandId::UpdateCutHover,
+                                cut_ray(0.5F), true));
+        EXPECT_TRUE(line_drag.command.ok);
 	EXPECT_TRUE(line_drag.command.changed);
 	EXPECT_TRUE(runtime.cut_state().points.size() == 2U);
 	EXPECT_TRUE(runtime.cut_state().dragging_line);
 	EXPECT_TRUE(runtime.cut_state().preview_valid);
 
-	const qec::EditorRuntimeCommandResult end_line_drag =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::end_cut_drag));
-	EXPECT_TRUE(end_line_drag.command.ok);
+        const qec::EditorRuntimeCommandResult end_line_drag =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::EndCutDrag));
+        EXPECT_TRUE(end_line_drag.command.ok);
 	EXPECT_TRUE(end_line_drag.command.changed);
 	EXPECT_FALSE(runtime.cut_state().dragging_line);
 
-	const qec::EditorRuntimeCommandResult finalize =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::finalize_cut));
-	EXPECT_TRUE(finalize.command.ok);
+        const qec::EditorRuntimeCommandResult finalize =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(qec::EditorRuntimeCommandId::FinalizeCut));
+        EXPECT_TRUE(finalize.command.ok);
 	EXPECT_TRUE(finalize.command.changed);
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::select);
-	EXPECT_FALSE(finalize.runtime.cut_active);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Select);
+        EXPECT_FALSE(finalize.runtime.cut_active);
 	EXPECT_TRUE(runtime.cut_state().points.empty());
 	EXPECT_TRUE(session.state().content_revision != content_revision_before);
 	EXPECT_TRUE(session.history_status().can_undo);
@@ -1361,8 +1433,9 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsCutMismatc
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
 	qec::EditorRuntimeCommand set_mode_missing_settings;
-	set_mode_missing_settings.command_id = qec::EditorRuntimeCommandId::set_cut_mode;
-	set_mode_missing_settings.settings = std::monostate {};
+        set_mode_missing_settings.command_id =
+            qec::EditorRuntimeCommandId::SetCutMode;
+        set_mode_missing_settings.settings = std::monostate {};
 	const qec::EditorRuntimeCommandResult set_mode_result =
 		qec::execute_runtime_command(session, runtime, set_mode_missing_settings);
 	EXPECT_FALSE(set_mode_result.command.ok);
@@ -1370,8 +1443,9 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsCutMismatc
 	EXPECT_TRUE(set_mode_result.command.message == "Runtime command settings do not match the command id.");
 
 	qec::EditorRuntimeCommand cancel_extra_settings;
-	cancel_extra_settings.command_id = qec::EditorRuntimeCommandId::cancel_cut;
-	cancel_extra_settings.settings = qec::SetCutModeRuntimeCommandSettings {};
+        cancel_extra_settings.command_id =
+            qec::EditorRuntimeCommandId::CancelCut;
+        cancel_extra_settings.settings = qec::SetCutModeRuntimeCommandSettings {};
 	const qec::EditorRuntimeCommandResult cancel_result =
 		qec::execute_runtime_command(session, runtime, cancel_extra_settings);
 	EXPECT_FALSE(cancel_result.command.ok);
@@ -1379,8 +1453,9 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsCutMismatc
 	EXPECT_TRUE(cancel_result.command.message == "Runtime command settings do not match the command id.");
 
 	qec::EditorRuntimeCommand hover_missing_settings;
-	hover_missing_settings.command_id = qec::EditorRuntimeCommandId::update_cut_hover;
-	hover_missing_settings.settings = std::monostate {};
+        hover_missing_settings.command_id =
+            qec::EditorRuntimeCommandId::UpdateCutHover;
+        hover_missing_settings.settings = std::monostate {};
 	const qec::EditorRuntimeCommandResult hover_result =
 		qec::execute_runtime_command(session, runtime, hover_missing_settings);
 	EXPECT_FALSE(hover_result.command.ok);
@@ -1388,8 +1463,8 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsCutMismatc
 	EXPECT_TRUE(hover_result.command.message == "Runtime command settings do not match the command id.");
 
 	qec::EditorRuntimeCommand click_wrong_settings;
-	click_wrong_settings.command_id = qec::EditorRuntimeCommandId::click_cut;
-	click_wrong_settings.settings = qec::CutPointDragRuntimeCommandSettings {};
+        click_wrong_settings.command_id = qec::EditorRuntimeCommandId::ClickCut;
+        click_wrong_settings.settings = qec::CutPointDragRuntimeCommandSettings {};
 	const qec::EditorRuntimeCommandResult click_result =
 		qec::execute_runtime_command(session, runtime, click_wrong_settings);
 	EXPECT_FALSE(click_result.command.ok);
@@ -1397,8 +1472,9 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsCutMismatc
 	EXPECT_TRUE(click_result.command.message == "Runtime command settings do not match the command id.");
 
 	qec::EditorRuntimeCommand point_drag_wrong_settings;
-	point_drag_wrong_settings.command_id = qec::EditorRuntimeCommandId::begin_cut_point_drag;
-	point_drag_wrong_settings.settings = qec::CutRayRuntimeCommandSettings {};
+        point_drag_wrong_settings.command_id =
+            qec::EditorRuntimeCommandId::BeginCutPointDrag;
+        point_drag_wrong_settings.settings = qec::CutRayRuntimeCommandSettings {};
 	const qec::EditorRuntimeCommandResult point_drag_result =
 		qec::execute_runtime_command(session, runtime, point_drag_wrong_settings);
 	EXPECT_FALSE(point_drag_result.command.ok);
@@ -1406,8 +1482,9 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsCutMismatc
 	EXPECT_TRUE(point_drag_result.command.message == "Runtime command settings do not match the command id.");
 
 	qec::EditorRuntimeCommand line_drag_wrong_settings;
-	line_drag_wrong_settings.command_id = qec::EditorRuntimeCommandId::begin_cut_line_drag;
-	line_drag_wrong_settings.settings = qec::CutPointDragRuntimeCommandSettings {};
+        line_drag_wrong_settings.command_id =
+            qec::EditorRuntimeCommandId::BeginCutLineDrag;
+        line_drag_wrong_settings.settings = qec::CutPointDragRuntimeCommandSettings {};
 	const qec::EditorRuntimeCommandResult line_drag_result =
 		qec::execute_runtime_command(session, runtime, line_drag_wrong_settings);
 	EXPECT_FALSE(line_drag_result.command.ok);
@@ -1415,8 +1492,9 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsCutMismatc
 	EXPECT_TRUE(line_drag_result.command.message == "Runtime command settings do not match the command id.");
 
 	qec::EditorRuntimeCommand end_drag_extra_settings;
-	end_drag_extra_settings.command_id = qec::EditorRuntimeCommandId::end_cut_drag;
-	end_drag_extra_settings.settings = qec::CutRayRuntimeCommandSettings {};
+        end_drag_extra_settings.command_id =
+            qec::EditorRuntimeCommandId::EndCutDrag;
+        end_drag_extra_settings.settings = qec::CutRayRuntimeCommandSettings {};
 	const qec::EditorRuntimeCommandResult end_drag_result =
 		qec::execute_runtime_command(session, runtime, end_drag_extra_settings);
 	EXPECT_FALSE(end_drag_result.command.ok);
@@ -1424,16 +1502,18 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsCutMismatc
 	EXPECT_TRUE(end_drag_result.command.message == "Runtime command settings do not match the command id.");
 
 	qec::EditorRuntimeCommand finalize_extra_settings;
-	finalize_extra_settings.command_id = qec::EditorRuntimeCommandId::finalize_cut;
-	finalize_extra_settings.settings = qec::CutRayRuntimeCommandSettings {};
+        finalize_extra_settings.command_id =
+            qec::EditorRuntimeCommandId::FinalizeCut;
+        finalize_extra_settings.settings = qec::CutRayRuntimeCommandSettings {};
 	const qec::EditorRuntimeCommandResult finalize_result =
 		qec::execute_runtime_command(session, runtime, finalize_extra_settings);
 	EXPECT_FALSE(finalize_result.command.ok);
 	EXPECT_FALSE(finalize_result.command.changed);
 	EXPECT_TRUE(finalize_result.command.message == "Runtime command settings do not match the command id.");
 
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::select);
-	EXPECT_TRUE(session.state().content_revision == content_revision_before);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Select);
+        EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_TRUE(session.state().selection_revision == selection_revision_before);
 }
 
@@ -1443,36 +1523,38 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeDrivesMirrorFirst
 	session.clear_history();
 	const std::uint64_t content_revision_before = session.state().content_revision;
 
-	const qec::EditorRuntimeCommandResult activate_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::activate_mirror));
-	EXPECT_TRUE(activate_result.command.ok);
+        const qec::EditorRuntimeCommandResult activate_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::ActivateMirror));
+        EXPECT_TRUE(activate_result.command.ok);
 	EXPECT_TRUE(activate_result.command.changed);
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::mirror);
-	EXPECT_TRUE(activate_result.runtime.mirror_active);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Mirror);
+        EXPECT_TRUE(activate_result.runtime.mirror_active);
 	EXPECT_TRUE(runtime.mirror_state().target_object_ids.size() == 1U);
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult first_click =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			mirror_ray_command(qec::EditorRuntimeCommandId::click_mirror, cut_ray(0.0F)));
-	EXPECT_TRUE(first_click.command.ok);
+        const qec::EditorRuntimeCommandResult first_click =
+            qec::execute_runtime_command(
+                session, runtime,
+                mirror_ray_command(qec::EditorRuntimeCommandId::ClickMirror,
+                                   cut_ray(0.0F)));
+        EXPECT_TRUE(first_click.command.ok);
 	EXPECT_TRUE(first_click.command.changed);
 	EXPECT_TRUE(runtime.mirror_state().plane.points.size() == 1U);
 	EXPECT_TRUE(runtime.mirror_state().plane.dragging_new_point);
 	EXPECT_FALSE(runtime.mirror_state().preview_valid);
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult first_drag_preview =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			mirror_ray_command(qec::EditorRuntimeCommandId::update_mirror_hover, cut_ray(1.0F), true));
-	EXPECT_TRUE(first_drag_preview.command.ok);
+        const qec::EditorRuntimeCommandResult first_drag_preview =
+            qec::execute_runtime_command(
+                session, runtime,
+                mirror_ray_command(
+                    qec::EditorRuntimeCommandId::UpdateMirrorHover,
+                    cut_ray(1.0F), true));
+        EXPECT_TRUE(first_drag_preview.command.ok);
 	EXPECT_TRUE(first_drag_preview.command.changed);
 	EXPECT_TRUE(runtime.mirror_state().plane.points.size() == 2U);
 	EXPECT_TRUE(runtime.mirror_state().plane.dragging_new_point);
@@ -1481,12 +1563,12 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeDrivesMirrorFirst
 	EXPECT_TRUE(first_drag_preview.runtime.mirror_preview_valid);
 	EXPECT_FALSE(session.history_status().can_undo);
 
-	const qec::EditorRuntimeCommandResult end_new_point_drag =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::end_mirror_drag));
-	EXPECT_TRUE(end_new_point_drag.command.ok);
+        const qec::EditorRuntimeCommandResult end_new_point_drag =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::EndMirrorDrag));
+        EXPECT_TRUE(end_new_point_drag.command.ok);
 	EXPECT_TRUE(end_new_point_drag.command.changed);
 	EXPECT_FALSE(runtime.mirror_state().plane.dragging_new_point);
 	EXPECT_TRUE(runtime.mirror_state().preview_valid);
@@ -1497,34 +1579,36 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeDrivesMirrorFirst
 	EXPECT_TRUE(begin_point_drag.command.changed);
 	EXPECT_TRUE(runtime.mirror_state().plane.dragging_point_index == 0);
 
-	const qec::EditorRuntimeCommandResult point_drag =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			mirror_ray_command(qec::EditorRuntimeCommandId::update_mirror_hover, cut_ray(-0.5F), true));
-	EXPECT_TRUE(point_drag.command.ok);
+        const qec::EditorRuntimeCommandResult point_drag =
+            qec::execute_runtime_command(
+                session, runtime,
+                mirror_ray_command(
+                    qec::EditorRuntimeCommandId::UpdateMirrorHover,
+                    cut_ray(-0.5F), true));
+        EXPECT_TRUE(point_drag.command.ok);
 	EXPECT_TRUE(point_drag.command.changed);
 	EXPECT_NEAR(runtime.mirror_state().plane.points[0].x, -0.5F, 0.0001);
 	EXPECT_TRUE(runtime.mirror_state().preview_valid);
 
-	const qec::EditorRuntimeCommandResult end_point_drag =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::end_mirror_drag));
-	EXPECT_TRUE(end_point_drag.command.ok);
+        const qec::EditorRuntimeCommandResult end_point_drag =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::EndMirrorDrag));
+        EXPECT_TRUE(end_point_drag.command.ok);
 	EXPECT_TRUE(end_point_drag.command.changed);
 	EXPECT_TRUE(runtime.mirror_state().plane.dragging_point_index == -1);
 
-	const qec::EditorRuntimeCommandResult finalize =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::finalize_mirror));
-	EXPECT_TRUE(finalize.command.ok);
+        const qec::EditorRuntimeCommandResult finalize =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::FinalizeMirror));
+        EXPECT_TRUE(finalize.command.ok);
 	EXPECT_TRUE(finalize.command.changed);
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::select);
-	EXPECT_FALSE(finalize.runtime.mirror_active);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Select);
+        EXPECT_FALSE(finalize.runtime.mirror_active);
 	EXPECT_TRUE(runtime.mirror_state().plane.points.empty());
 	EXPECT_TRUE(session.state().content_revision != content_revision_before);
 	EXPECT_TRUE(session.history_status().can_undo);
@@ -1534,32 +1618,34 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsMirrorComm
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	session.clear_selection();
 	qec::EditorRuntime runtime;
-	runtime.state().active_tool = qec::ViewportInteractionTool::poly;
-	runtime.state().poly.active = true;
+        runtime.state().active_tool = qec::ViewportInteractionTool::Poly;
+        runtime.state().poly.active = true;
 	const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
-	const qec::EditorRuntimeCommandResult activate_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			no_settings_command(qec::EditorRuntimeCommandId::activate_mirror));
-	EXPECT_FALSE(activate_result.command.ok);
+        const qec::EditorRuntimeCommandResult activate_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                no_settings_command(
+                    qec::EditorRuntimeCommandId::ActivateMirror));
+        EXPECT_FALSE(activate_result.command.ok);
 	EXPECT_FALSE(activate_result.command.changed);
 	EXPECT_TRUE(activate_result.command.message == "Select one or more mesh objects to mirror.");
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::poly);
-	EXPECT_TRUE(runtime.state().poly.active);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Poly);
+        EXPECT_TRUE(runtime.state().poly.active);
 
-	const qec::EditorRuntimeCommandResult click_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			mirror_ray_command(qec::EditorRuntimeCommandId::click_mirror, cut_ray(0.0F)));
-	EXPECT_FALSE(click_result.command.ok);
+        const qec::EditorRuntimeCommandResult click_result =
+            qec::execute_runtime_command(
+                session, runtime,
+                mirror_ray_command(qec::EditorRuntimeCommandId::ClickMirror,
+                                   cut_ray(0.0F)));
+        EXPECT_FALSE(click_result.command.ok);
 	EXPECT_FALSE(click_result.command.changed);
 	EXPECT_TRUE(click_result.command.message == "Select one or more mesh objects to mirror.");
-	EXPECT_TRUE(runtime.active_tool() == qec::ViewportInteractionTool::poly);
-	EXPECT_TRUE(session.state().content_revision == content_revision_before);
+        EXPECT_TRUE(runtime.active_tool() ==
+                    qec::ViewportInteractionTool::Poly);
+        EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_TRUE(session.state().selection_revision == selection_revision_before);
 }
 
@@ -1567,8 +1653,8 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadePickSelectApplies
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	qec::EditorRuntime runtime;
 	session.clear_selection();
-	session.set_selection_mode(qec::SelectionMode::face);
-	session.clear_history();
+        session.set_selection_mode(qec::SelectionMode::Face);
+        session.clear_history();
 	const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
@@ -1576,9 +1662,10 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadePickSelectApplies
 		qec::execute_runtime_command(session, runtime, pick_select_command());
 	EXPECT_TRUE(replace_result.command.ok);
 	EXPECT_TRUE(replace_result.command.changed);
-	EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::face);
-	EXPECT_TRUE(session.active_selection().kind == qec::ActiveSelectionKind::face);
-	EXPECT_TRUE(session.state().selection_revision != selection_revision_before);
+        EXPECT_TRUE(session.selection_mode() == qec::SelectionMode::Face);
+        EXPECT_TRUE(session.active_selection().kind ==
+                    qec::ActiveSelectionKind::Face);
+        EXPECT_TRUE(session.state().selection_revision != selection_revision_before);
 	EXPECT_TRUE(session.state().content_revision == content_revision_before);
 	EXPECT_FALSE(session.history_status().can_undo);
 
@@ -1605,8 +1692,8 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadePickSelectDragStr
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	qec::EditorRuntime runtime;
 	session.clear_selection();
-	session.set_selection_mode(qec::SelectionMode::face);
-	session.clear_history();
+        session.set_selection_mode(qec::SelectionMode::Face);
+        session.clear_history();
 	const std::uint64_t content_revision_before = session.state().content_revision;
 
 	const qec::EditorRuntimeCommandResult first_result =
@@ -1644,8 +1731,8 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadePaintSelectIgnore
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	qec::EditorRuntime runtime;
 	session.clear_selection();
-	session.set_selection_mode(qec::SelectionMode::vertex);
-	session.clear_history();
+        session.set_selection_mode(qec::SelectionMode::Vertex);
+        session.clear_history();
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
 	const qec::EditorRuntimeCommandResult face_interior_result =
@@ -1667,8 +1754,8 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeCtrlComponentClic
 	qec::EditorSession edge_session = qdr_test::selected_cube_session();
 	qec::EditorRuntime edge_runtime;
 	edge_session.clear_selection();
-	edge_session.set_selection_mode(qec::SelectionMode::edge);
-	EXPECT_TRUE(qec::execute_runtime_command(edge_session, edge_runtime, pick_select_command(front_right_edge_ray())).command.changed);
+        edge_session.set_selection_mode(qec::SelectionMode::Edge);
+        EXPECT_TRUE(qec::execute_runtime_command(edge_session, edge_runtime, pick_select_command(front_right_edge_ray())).command.changed);
 	EXPECT_TRUE(selected_edge_count(edge_session) == 1U);
 	const std::uint64_t edge_revision = edge_session.state().selection_revision;
 
@@ -1682,8 +1769,8 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeCtrlComponentClic
 	qec::EditorSession vertex_session = qdr_test::selected_cube_session();
 	qec::EditorRuntime vertex_runtime;
 	vertex_session.clear_selection();
-	vertex_session.set_selection_mode(qec::SelectionMode::vertex);
-	EXPECT_TRUE(qec::execute_runtime_command(vertex_session, vertex_runtime, pick_select_command(front_right_top_vertex_ray())).command.changed);
+        vertex_session.set_selection_mode(qec::SelectionMode::Vertex);
+        EXPECT_TRUE(qec::execute_runtime_command(vertex_session, vertex_runtime, pick_select_command(front_right_top_vertex_ray())).command.changed);
 	EXPECT_TRUE(selected_vertex_count(vertex_session) == 1U);
 	const std::uint64_t vertex_revision = vertex_session.state().selection_revision;
 
@@ -1699,43 +1786,45 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadePickSelectDoubleC
 	qec::EditorSession face_session = qdr_test::selected_cube_session();
 	qec::EditorRuntime face_runtime;
 	face_session.clear_selection();
-	face_session.set_selection_mode(qec::SelectionMode::face);
-	const qec::EditorRuntimeCommandResult face_result =
+        face_session.set_selection_mode(qec::SelectionMode::Face);
+        const qec::EditorRuntimeCommandResult face_result =
 		qec::execute_runtime_command(face_session, face_runtime, pick_select_command(front_center_ray(), 2));
 	EXPECT_TRUE(face_result.command.ok);
 	EXPECT_TRUE(face_result.command.changed);
-	EXPECT_TRUE(face_session.selection_mode() == qec::SelectionMode::face);
-	EXPECT_TRUE(face_session.active_selection().kind == qec::ActiveSelectionKind::face);
-	EXPECT_TRUE(face_result.command.changed == (face_session.state().selection_revision > 0U));
+        EXPECT_TRUE(face_session.selection_mode() == qec::SelectionMode::Face);
+        EXPECT_TRUE(face_session.active_selection().kind ==
+                    qec::ActiveSelectionKind::Face);
+        EXPECT_TRUE(face_result.command.changed == (face_session.state().selection_revision > 0U));
 	EXPECT_FALSE(face_session.history_status().can_undo);
 
 	qec::EditorSession edge_session = qdr_test::selected_cube_session();
 	qec::EditorRuntime edge_runtime;
 	edge_session.clear_selection();
-	edge_session.set_selection_mode(qec::SelectionMode::edge);
-	const qec::EditorRuntimeCommandResult edge_result =
+        edge_session.set_selection_mode(qec::SelectionMode::Edge);
+        const qec::EditorRuntimeCommandResult edge_result =
 		qec::execute_runtime_command(edge_session, edge_runtime, pick_select_command({ { 0.0F, 1.0F, 5.0F }, { 0.0F, 0.0F, -1.0F } }, 2));
 	EXPECT_TRUE(edge_result.command.ok);
-	EXPECT_TRUE(edge_session.selection_mode() == qec::SelectionMode::edge);
-	EXPECT_FALSE(edge_session.history_status().can_undo);
+        EXPECT_TRUE(edge_session.selection_mode() == qec::SelectionMode::Edge);
+        EXPECT_FALSE(edge_session.history_status().can_undo);
 
 	qec::EditorSession vertex_session = qdr_test::selected_cube_session();
 	qec::EditorRuntime vertex_runtime;
 	vertex_session.clear_selection();
-	vertex_session.set_selection_mode(qec::SelectionMode::vertex);
-	const qec::EditorRuntimeCommandResult vertex_result =
+        vertex_session.set_selection_mode(qec::SelectionMode::Vertex);
+        const qec::EditorRuntimeCommandResult vertex_result =
 		qec::execute_runtime_command(vertex_session, vertex_runtime, pick_select_command({ { 1.0F, 1.0F, 5.0F }, { 0.0F, 0.0F, -1.0F } }, 2));
 	EXPECT_TRUE(vertex_result.command.ok);
-	EXPECT_TRUE(vertex_session.selection_mode() == qec::SelectionMode::vertex);
-	EXPECT_FALSE(vertex_session.history_status().can_undo);
+        EXPECT_TRUE(vertex_session.selection_mode() ==
+                    qec::SelectionMode::Vertex);
+        EXPECT_FALSE(vertex_session.history_status().can_undo);
 }
 
 TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsPickSelectWithMismatchedSettings) {
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	qec::EditorRuntime runtime;
 	qec::EditorRuntimeCommand command;
-	command.command_id = qec::EditorRuntimeCommandId::pick_select;
-	command.settings = std::monostate {};
+        command.command_id = qec::EditorRuntimeCommandId::PickSelect;
+        command.settings = std::monostate {};
 	const std::uint64_t content_revision_before = session.state().content_revision;
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 

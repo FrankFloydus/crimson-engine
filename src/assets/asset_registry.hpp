@@ -46,47 +46,49 @@ struct AssetRegistryMutationResult {
  */
 class AssetRegistry {
 public:
-    AssetId addMesh(MeshAsset mesh);
-    AssetId addMesh(AssetId id, MeshAsset mesh);
-    AssetId addMaterial(MaterialDocument material);
-    AssetId addMaterial(AssetId id, MaterialDocument material);
-    AssetId addTexture(TextureAsset texture);
-    AssetId addTexture(AssetId id, TextureAsset texture);
-    bool replaceMesh(AssetId id, MeshAsset mesh);
-    bool replaceMaterial(AssetId id, MaterialDocument material);
-    bool replaceTexture(AssetId id, TextureAsset texture);
-    bool updateMesh(AssetId id, const std::function<void(MeshAsset&)>& update);
-    bool updateMaterial(AssetId id, const std::function<void(MaterialDocument&)>& update);
-    bool updateTexture(AssetId id, const std::function<void(TextureAsset&)>& update);
-    [[nodiscard]] AssetRegistryMutationResult setMaterialTexture(
-            AssetId material,
-            std::string_view slot,
-            AssetId texture);
-    [[nodiscard]] AssetRegistryValidationResult validateMaterial(const MaterialDocument& material) const;
+  AssetId add_mesh(MeshAsset mesh);
+  AssetId add_mesh(AssetId id, MeshAsset mesh);
+  AssetId add_material(MaterialDocument material);
+  AssetId add_material(AssetId id, MaterialDocument material);
+  AssetId add_texture(TextureAsset texture);
+  AssetId add_texture(AssetId id, TextureAsset texture);
+  bool replace_mesh(AssetId id, MeshAsset mesh);
+  bool replace_material(AssetId id, MaterialDocument material);
+  bool replace_texture(AssetId id, TextureAsset texture);
+  bool update_mesh(AssetId id, const std::function<void(MeshAsset &)> &update);
+  bool update_material(AssetId id,
+                       const std::function<void(MaterialDocument &)> &update);
+  bool update_texture(AssetId id,
+                      const std::function<void(TextureAsset &)> &update);
+  [[nodiscard]] AssetRegistryMutationResult
+  set_material_texture(AssetId material, std::string_view slot,
+                       AssetId texture);
+  [[nodiscard]] AssetRegistryValidationResult
+  validate_material(const MaterialDocument &material) const;
 
-    const MeshAsset* mesh(AssetId id) const;
-    const MaterialDocument* material(AssetId id) const;
-    const TextureAsset* texture(AssetId id) const;
-    MeshAssetRevision meshRevision(AssetId id) const;
-    MaterialAssetRevision materialRevision(AssetId id) const;
-    TextureAssetRevision textureRevision(AssetId id) const;
+  const MeshAsset *mesh(AssetId id) const;
+  const MaterialDocument *material(AssetId id) const;
+  const TextureAsset *texture(AssetId id) const;
+  MeshAssetRevision mesh_revision(AssetId id) const;
+  MaterialAssetRevision material_revision(AssetId id) const;
+  TextureAssetRevision texture_revision(AssetId id) const;
 
-    std::size_t meshCount() const { return meshes_.size(); }
-    std::size_t materialCount() const { return materials_.size(); }
-    std::size_t textureCount() const { return textures_.size(); }
-    std::vector<AssetId> meshIds() const { return meshes_.ids(); }
-    std::vector<AssetId> materialIds() const { return materials_.ids(); }
-    std::vector<AssetId> textureIds() const { return textures_.ids(); }
-    std::uint64_t revision() const { return revision_; }
+  std::size_t mesh_count() const { return meshes_.size(); }
+  std::size_t material_count() const { return materials_.size(); }
+  std::size_t texture_count() const { return textures_.size(); }
+  std::vector<AssetId> mesh_ids() const { return meshes_.ids(); }
+  std::vector<AssetId> material_ids() const { return materials_.ids(); }
+  std::vector<AssetId> texture_ids() const { return textures_.ids(); }
+  std::uint64_t revision() const { return revision_; }
 
 private:
-    void markDirty();
+  void mark_dirty();
 
-    AssetId nextId_ = 1;
-    std::uint64_t revision_ = 0;
-    MeshAssetStore meshes_;
-    MaterialAssetStore materials_;
-    TextureAssetStore textures_;
+  AssetId next_id_ = 1;
+  std::uint64_t revision_ = 0;
+  MeshAssetStore meshes_;
+  MaterialAssetStore materials_;
+  TextureAssetStore textures_;
 };
 
 } // namespace quader

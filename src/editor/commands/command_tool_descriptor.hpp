@@ -18,14 +18,14 @@ namespace quader {
  */
 struct CommandToolDescriptor {
     std::string_view id;
-    std::string_view operationId;
+    std::string_view operation_id;
     std::string_view label;
     CommandToolKind kind = CommandToolKind::Instant;
-    ModelingActionPreviewKind previewKind = ModelingActionPreviewKind::None;
-    bool rebuildsMeshOnSuccess = true;
-    std::string_view publicCommandId;
-    bool registersPublicCommand = true;
-    std::string_view hostShortcutTargetId;
+    ModelingActionPreviewKind preview_kind = ModelingActionPreviewKind::None;
+    bool rebuilds_mesh_on_success = true;
+    std::string_view public_command_id;
+    bool registers_public_command = true;
+    std::string_view host_shortcut_target_id;
 };
 
 } // namespace quader

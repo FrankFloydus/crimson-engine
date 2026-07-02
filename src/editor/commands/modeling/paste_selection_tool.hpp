@@ -16,21 +16,22 @@ namespace quader {
 class PasteSelectionTool final : public CustomInstantCommandTool {
 public:
     [[nodiscard]] CommandToolDescriptor descriptor() const override {
-        return {
-                .id = "paste_selection",
-                .operationId = "paste_selection",
-                .label = "Paste",
-                .kind = CommandToolKind::Instant,
-                .previewKind = ModelingActionPreviewKind::None,
-                .rebuildsMeshOnSuccess = true,
-                .publicCommandId = "edit.paste",
-                .registersPublicCommand = false,
-                .hostShortcutTargetId = "paste_meshes",
-        };
+      return {
+          .id = "paste_selection",
+          .operation_id = "paste_selection",
+          .label = "Paste",
+          .kind = CommandToolKind::Instant,
+          .preview_kind = ModelingActionPreviewKind::None,
+          .rebuilds_mesh_on_success = true,
+          .public_command_id = "edit.paste",
+          .registers_public_command = false,
+          .host_shortcut_target_id = "paste_meshes",
+      };
     }
 
 private:
-    ModelingCommandResult executeCustomCommand(ModelingCommandExecutionContext& context) const override;
+  ModelingCommandResult execute_custom_command(
+      ModelingCommandExecutionContext &context) const override;
 };
 
 } // namespace quader

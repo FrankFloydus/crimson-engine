@@ -23,10 +23,10 @@ class MaterialBindingService;
  * Represents a Tool Preview Mesh value used by the render extraction and Filament resource layer.
  */
 struct ToolPreviewMesh {
-    EntityId sourceEntity = InvalidEntityId;
-    AssetId material = InvalidAssetId;
-    MeshAsset mesh;
-    QMat4 transform;
+  EntityId source_entity = kInvalidEntityId;
+  AssetId material = kInvalidAssetId;
+  MeshAsset mesh;
+  QMat4 transform;
 };
 
 /**
@@ -41,38 +41,36 @@ public:
     ToolPreviewRenderableCache& operator=(ToolPreviewRenderableCache&&) = delete;
     ~ToolPreviewRenderableCache();
 
-    void initialize(MeshRenderableFactory& factory, MaterialBindingService& materialBinding);
+    void initialize(MeshRenderableFactory &factory,
+                    MaterialBindingService &material_binding);
     void shutdown();
 
     bool initialized() const {
-        return factory_ != nullptr && materialBinding_ != nullptr;
+      return factory_ != nullptr && material_binding_ != nullptr;
     }
 
-    bool setMeshes(const std::vector<ToolPreviewMesh>& meshes, const AssetRegistry& assets);
+    bool set_meshes(const std::vector<ToolPreviewMesh> &meshes,
+                    const AssetRegistry &assets);
     void clear();
 
-    std::uint64_t signature() const {
-        return meshSignature_;
-    }
+    std::uint64_t signature() const { return mesh_signature_; }
 
-    std::size_t proxyCount() const {
-        return meshProxies_.size();
-    }
+    std::size_t proxy_count() const { return mesh_proxies_.size(); }
 
-private:
-    static std::uint64_t previewMeshSignature(
-            const ToolPreviewMesh& previewMesh,
-            const AssetRegistry& assets,
-            const MaterialBindingService& materialBinding);
-    static std::uint64_t previewMeshesSignature(
-            const std::vector<ToolPreviewMesh>& previewMeshes,
-            const AssetRegistry& assets,
-            const MaterialBindingService& materialBinding);
+  private:
+    static std::uint64_t
+    preview_mesh_signature(const ToolPreviewMesh &preview_mesh,
+                           const AssetRegistry &assets,
+                           const MaterialBindingService &material_binding);
+    static std::uint64_t
+    preview_meshes_signature(const std::vector<ToolPreviewMesh> &preview_meshes,
+                             const AssetRegistry &assets,
+                             const MaterialBindingService &material_binding);
 
     MeshRenderableFactory* factory_ = nullptr;
-    MaterialBindingService* materialBinding_ = nullptr;
-    std::vector<MeshRenderableProxy> meshProxies_;
-    std::uint64_t meshSignature_ = 0;
+    MaterialBindingService *material_binding_ = nullptr;
+    std::vector<MeshRenderableProxy> mesh_proxies_;
+    std::uint64_t mesh_signature_ = 0;
 };
 
 } // namespace quader

@@ -38,19 +38,19 @@ enum class ViewportToolEventKind {
  */
 struct ViewportPointerToolEvent {
     bool hovered = false;
-    bool leftClicked = false;
-    bool leftDown = false;
-    bool leftReleased = false;
-    bool canInteract = false;
-    bool finalizePressed = false;
-    bool modeCyclePressed = false;
-    bool suppressHoverWork = false;
-    bool gizmoConsumed = false;
-    bool navigationActive = false;
-    bool textInputActive = false;
-    QVec2 mouseLocal = {};
-    QVec2 leftClickLocal = {};
-    QVec2 viewportSize = {};
+    bool left_clicked = false;
+    bool left_down = false;
+    bool left_released = false;
+    bool can_interact = false;
+    bool finalize_pressed = false;
+    bool mode_cycle_pressed = false;
+    bool suppress_hover_work = false;
+    bool gizmo_consumed = false;
+    bool navigation_active = false;
+    bool text_input_active = false;
+    QVec2 mouse_local = {};
+    QVec2 left_click_local = {};
+    QVec2 viewport_size = {};
     ViewportModifiers modifiers = {};
 };
 
@@ -61,8 +61,8 @@ struct ViewportToolEvent {
     ViewportToolEventKind kind = ViewportToolEventKind::Activation;
     ViewportToolId tool = ViewportToolId::Select;
     ViewportShortcut shortcut = {};
-    bool fromShortcut = false;
-    bool exitActiveModalTool = false;
+    bool from_shortcut = false;
+    bool exit_active_modal_tool = false;
     ViewportPointerToolEvent pointer = {};
 };
 
@@ -70,10 +70,10 @@ struct ViewportToolEvent {
  * Stores the Viewport Modal Tool State data contract used by editor-owned viewport tool interactions.
  */
 struct ViewportModalToolState {
-    ModelingBoxPreview boxPreview = {};
-    bool insertEdgeLoopDragActive = false;
-    bool cutDragActive = false;
-    bool mirrorDragActive = false;
+  ModelingBoxPreview box_preview = {};
+  bool insert_edge_loop_drag_active = false;
+  bool cut_drag_active = false;
+  bool mirror_drag_active = false;
 };
 
 /**
@@ -82,29 +82,31 @@ struct ViewportModalToolState {
 struct ViewportToolResult {
     bool handled = false;
     bool consumed = false;
-    bool modalStateChanged = false;
-    bool activeToolChanged = false;
-    bool syncActiveToolFromModeling = false;
-    bool selectionModeChanged = false;
+    bool modal_state_changed = false;
+    bool active_tool_changed = false;
+    bool sync_active_tool_from_modeling = false;
+    bool selection_mode_changed = false;
 };
 
 /**
  * Stores the Box Tool Context data contract used by box-shaped viewport tool interactions.
  */
 struct ViewportBoxToolContext {
-    AssetId defaultMaterial = InvalidAssetId;
-    std::function<ModelingBoxToolEvent()> makeEvent;
-    std::function<ModelingCreateBoxResult(std::string, AssetId)> commitPreview;
-    std::function<std::string()> nextMeshName;
+  AssetId default_material = kInvalidAssetId;
+  std::function<ModelingBoxToolEvent()> make_event;
+  std::function<ModelingCreateBoxResult(std::string, AssetId)> commit_preview;
+  std::function<std::string()> next_mesh_name;
 };
 
 /**
  * Stores the Point Tool Context data contract used by point/ray viewport tool interactions.
  */
 struct ViewportPointToolContext {
-    std::function<ModelingToolRayEvent(QVec2, bool)> makeEventAt;
-    std::function<std::optional<int>(const std::array<QVec3, 3>&, int)> hitDrawnPlaneCapturedPoint;
-    std::function<bool(const std::array<QVec3, 3>&, int, bool)> hitDrawnPlaneLine;
+  std::function<ModelingToolRayEvent(QVec2, bool)> make_event_at;
+  std::function<std::optional<int>(const std::array<QVec3, 3> &, int)>
+      hit_drawn_plane_captured_point;
+  std::function<bool(const std::array<QVec3, 3> &, int, bool)>
+      hit_drawn_plane_line;
 };
 
 /**
@@ -116,17 +118,18 @@ struct ViewportToolContext {
     ModelingSessionService& modeling;
     SceneDocument* document = nullptr;
     const ViewportSettings* settings = nullptr;
-    ViewportModalToolState* modalState = nullptr;
+    ViewportModalToolState *modal_state = nullptr;
     ViewportBoxToolContext* box = nullptr;
     ViewportPointToolContext* point = nullptr;
 
-    std::function<bool(ModelingBoxDragState)> claimHover;
-    std::function<void()> invalidateHover;
-    std::function<void()> markOverlayDirty;
-    std::function<void(ViewportToolId)> setActiveTool;
-    std::function<void(ViewportSelectionMode)> setSelectionMode;
-    std::function<void(ModelingSelectionMode)> setAppSelectionMode;
-    std::function<void(std::string_view, const ModelingCommandResult&)> handleToolCommandResult;
+    std::function<bool(ModelingBoxDragState)> claim_hover;
+    std::function<void()> invalidate_hover;
+    std::function<void()> mark_overlay_dirty;
+    std::function<void(ViewportToolId)> set_active_tool;
+    std::function<void(ViewportSelectionMode)> set_selection_mode;
+    std::function<void(ModelingSelectionMode)> set_app_selection_mode;
+    std::function<void(std::string_view, const ModelingCommandResult &)>
+        handle_tool_command_result;
 };
 
 /**
@@ -143,18 +146,18 @@ public:
     Tool& operator=(Tool&&) = delete;
 
     [[nodiscard]] const ToolDescriptor& descriptor() const;
-    [[nodiscard]] ViewportToolId viewportTool() const;
-    [[nodiscard]] ModelingViewportTool modelingTool() const;
+    [[nodiscard]] ViewportToolId viewport_tool() const;
+    [[nodiscard]] ModelingViewportTool modeling_tool() const;
     [[nodiscard]] std::string_view id() const;
     [[nodiscard]] std::string_view label() const;
     [[nodiscard]] std::string_view shortcut() const;
     [[nodiscard]] ToolKind kind() const;
-    [[nodiscard]] ToolMenuGroup menuGroup() const;
+    [[nodiscard]] ToolMenuGroup menu_group() const;
     [[nodiscard]] virtual bool available() const;
-    [[nodiscard]] virtual bool ownsViewport() const;
-    [[nodiscard]] virtual bool blocksViewportFocusShortcuts() const;
-    [[nodiscard]] virtual ModelingTransformTool transformTool() const;
-    [[nodiscard]] virtual bool supportsTransformGizmo() const;
+    [[nodiscard]] virtual bool owns_viewport() const;
+    [[nodiscard]] virtual bool blocks_viewport_focus_shortcuts() const;
+    [[nodiscard]] virtual ModelingTransformTool transform_tool() const;
+    [[nodiscard]] virtual bool supports_transform_gizmo() const;
 
     virtual ModelingCommandResult activate(ModelingSessionService& modeling) const;
 
@@ -167,32 +170,32 @@ private:
  */
 class ViewportTool : public Tool {
 public:
-    static constexpr ViewportToolId Select = ViewportToolId::Select;
-    static constexpr ViewportToolId Move = ViewportToolId::Move;
-    static constexpr ViewportToolId Extend = ViewportToolId::Extend;
-    static constexpr ViewportToolId Extrude = ViewportToolId::Extrude;
-    static constexpr ViewportToolId Rotate = ViewportToolId::Rotate;
-    static constexpr ViewportToolId Scale = ViewportToolId::Scale;
-    static constexpr ViewportToolId Box = ViewportToolId::Box;
-    static constexpr ViewportToolId InsertEdgeLoop = ViewportToolId::InsertEdgeLoop;
-    static constexpr ViewportToolId Knife = ViewportToolId::Knife;
-    static constexpr ViewportToolId Cut = ViewportToolId::Cut;
-    static constexpr ViewportToolId Poly = ViewportToolId::Poly;
-    static constexpr ViewportToolId Mirror = ViewportToolId::Mirror;
+  static constexpr ViewportToolId kSelect = ViewportToolId::Select;
+  static constexpr ViewportToolId kMove = ViewportToolId::Move;
+  static constexpr ViewportToolId kExtend = ViewportToolId::Extend;
+  static constexpr ViewportToolId kExtrude = ViewportToolId::Extrude;
+  static constexpr ViewportToolId kRotate = ViewportToolId::Rotate;
+  static constexpr ViewportToolId kScale = ViewportToolId::Scale;
+  static constexpr ViewportToolId kBox = ViewportToolId::Box;
+  static constexpr ViewportToolId kInsertEdgeLoop =
+      ViewportToolId::InsertEdgeLoop;
+  static constexpr ViewportToolId kKnife = ViewportToolId::Knife;
+  static constexpr ViewportToolId kCut = ViewportToolId::Cut;
+  static constexpr ViewportToolId kPoly = ViewportToolId::Poly;
+  static constexpr ViewportToolId kMirror = ViewportToolId::Mirror;
 
-    explicit ViewportTool(ToolDescriptor descriptor);
-    ViewportTool(ViewportToolId tool);
+  explicit ViewportTool(ToolDescriptor descriptor);
+  ViewportTool(ViewportToolId tool);
 
-    [[nodiscard]] operator ViewportToolId() const;
-    [[nodiscard]] virtual bool allowsSelectionFallback() const;
-    [[nodiscard]] virtual ViewportToolResult handleEvent(
-            ViewportToolContext& context,
-            const ViewportToolEvent& event) const;
+  [[nodiscard]] operator ViewportToolId() const;
+  [[nodiscard]] virtual bool allows_selection_fallback() const;
+  [[nodiscard]] virtual ViewportToolResult
+  handle_event(ViewportToolContext &context,
+               const ViewportToolEvent &event) const;
 
 protected:
-    [[nodiscard]] ViewportToolResult activateById(
-            ViewportToolContext& context,
-            ViewportToolId tool) const;
+  [[nodiscard]] ViewportToolResult activate_by_id(ViewportToolContext &context,
+                                                  ViewportToolId tool) const;
 };
 
 } // namespace quader

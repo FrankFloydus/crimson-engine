@@ -45,9 +45,9 @@ public:
 
 OperationResult ConnectVerticesOperation::apply(Document& document, Selection& selection) const
 {
-    if (selection.mode != SelectionMode::vertex) {
-        return { false, "Connect needs vertex selection mode." };
-    }
+  if (selection.mode != SelectionMode::Vertex) {
+    return {false, "Connect needs vertex selection mode."};
+  }
 
     const std::vector<ElementId> selected_vertices = selected_valid_vertices(document, selection);
     if (selected_vertices.size() < 2) {
@@ -144,7 +144,7 @@ OperationResult ConnectVerticesOperation::apply(Document& document, Selection& s
         document = std::move(candidate);
 
         selection.clear();
-        selection.mode = SelectionMode::edge;
+        selection.mode = SelectionMode::Edge;
         selection.edges = std::move(connected_edges);
         activate_last_selection(selection);
         return { true, {} };

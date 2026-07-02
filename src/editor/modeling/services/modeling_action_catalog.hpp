@@ -74,13 +74,14 @@ enum class ModelingActionSelectionRequirement {
 struct ModelingActionAvailabilityRule {
     ModelingActionSelectionRequirement requirement = ModelingActionSelectionRequirement::AnySelection;
     ModelingSelectionMode mode = ModelingSelectionMode::Object;
-    std::uint32_t minimumSelectedVertices = 0;
-    std::uint32_t minimumSelectedEdges = 0;
-    std::uint32_t exactSelectedEdges = 0;
-    std::uint32_t minimumSelectedFaces = 0;
-    std::uint32_t minimumSelectedObjects = 0;
-    ModelingActiveSelectionKind requiredActiveKind = ModelingActiveSelectionKind::None;
-    bool requiresSingleObject = false;
+    std::uint32_t minimum_selected_vertices = 0;
+    std::uint32_t minimum_selected_edges = 0;
+    std::uint32_t exact_selected_edges = 0;
+    std::uint32_t minimum_selected_faces = 0;
+    std::uint32_t minimum_selected_objects = 0;
+    ModelingActiveSelectionKind required_active_kind =
+        ModelingActiveSelectionKind::None;
+    bool requires_single_object = false;
 };
 
 /**
@@ -88,9 +89,9 @@ struct ModelingActionAvailabilityRule {
  */
 struct ModelingActionAvailabilityResult {
     ModelingActionVisibility visibility = ModelingActionVisibility::Hidden;
-    std::string disabledReason;
-    std::string disabledReasonKey;
-    std::uint32_t disabledReasonCount = 0;
+    std::string disabled_reason;
+    std::string disabled_reason_key;
+    std::uint32_t disabled_reason_count = 0;
 };
 
 /**
@@ -98,38 +99,38 @@ struct ModelingActionAvailabilityResult {
  */
 struct ModelingActionQuery {
     ModelingActionSurface surface = ModelingActionSurface::OperationsPanel;
-    bool modalToolOwnsViewport = false;
-    bool suppressWhenModalToolOwnsViewport = true;
-    bool includeDisabled = true;
-    bool includeHidden = false;
+    bool modal_tool_owns_viewport = false;
+    bool suppress_when_modal_tool_owns_viewport = true;
+    bool include_disabled = true;
+    bool include_hidden = false;
 };
 
 /**
  * Represents a Modeling Action Item value used by the modeling application service layer.
  */
 struct ModelingActionItem {
-    std::string actionId;
-    std::string operationId;
-    std::string toolId;
-    std::string label;
-    ModelingActionKind kind = ModelingActionKind::Operation;
-    ModelingActionPreviewKind previewKind = ModelingActionPreviewKind::None;
-    ModelingActionVisibility visibility = ModelingActionVisibility::Hidden;
-    std::string disabledReason;
-    std::string disabledReasonKey;
-    std::uint32_t disabledReasonCount = 0;
-    bool rebuildsMeshOnSuccess = true;
+  std::string action_id;
+  std::string operation_id;
+  std::string tool_id;
+  std::string label;
+  ModelingActionKind kind = ModelingActionKind::Operation;
+  ModelingActionPreviewKind preview_kind = ModelingActionPreviewKind::None;
+  ModelingActionVisibility visibility = ModelingActionVisibility::Hidden;
+  std::string disabled_reason;
+  std::string disabled_reason_key;
+  std::uint32_t disabled_reason_count = 0;
+  bool rebuilds_mesh_on_success = true;
 };
 
 /**
  * Represents a Modeling Action Panel value used by the modeling application service layer.
  */
 struct ModelingActionPanel {
-    std::string panelId;
-    std::string label;
-    std::string selectionModeId;
-    ModelingActionVisibility visibility = ModelingActionVisibility::Hidden;
-    std::vector<ModelingActionItem> actions;
+  std::string panel_id;
+  std::string label;
+  std::string selection_mode_id;
+  ModelingActionVisibility visibility = ModelingActionVisibility::Hidden;
+  std::vector<ModelingActionItem> actions;
 };
 
 /**
@@ -137,7 +138,7 @@ struct ModelingActionPanel {
  */
 struct ModelingActionSet {
     ModelingActionSurface surface = ModelingActionSurface::OperationsPanel;
-    std::string surfaceId;
+    std::string surface_id;
     std::vector<ModelingActionPanel> panels;
 };
 
@@ -146,27 +147,27 @@ struct ModelingActionSet {
  */
 class ModelingActionCatalog {
 public:
-    [[nodiscard]] static ModelingActionSet actionSetFor(
-            const ModelingSelectionSummary& summary,
-            const ModelingActionQuery& query);
-    [[nodiscard]] static std::vector<ModelingActionItem> actionsFor(
-            const ModelingSelectionSummary& summary,
-            const ModelingActionQuery& query);
-    [[nodiscard]] static std::optional<ModelingActionItem> actionFor(
-            const ModelingSelectionSummary& summary,
-            std::string_view actionId);
-    [[nodiscard]] static bool actionAvailable(
-            const ModelingSelectionSummary& summary,
-            std::string_view actionId);
-    [[nodiscard]] static ModelingActionAvailabilityResult evaluateAvailability(
-            const ModelingSelectionSummary& summary,
-            const ModelingActionAvailabilityRule& rule);
-    [[nodiscard]] static ModelingActionAvailabilityResult evaluateOperationAvailability(
-            const ModelingSelectionSummary& summary,
-            std::string_view operationId,
-            const ModelingActionAvailabilityRule& rule);
-    [[nodiscard]] static ModelingActionPreviewKind previewKindFromHost(
-            quader_host_contract::HostPreviewKind kind);
+  [[nodiscard]] static ModelingActionSet
+  action_set_for(const ModelingSelectionSummary &summary,
+                 const ModelingActionQuery &query);
+  [[nodiscard]] static std::vector<ModelingActionItem>
+  actions_for(const ModelingSelectionSummary &summary,
+              const ModelingActionQuery &query);
+  [[nodiscard]] static std::optional<ModelingActionItem>
+  action_for(const ModelingSelectionSummary &summary,
+             std::string_view action_id);
+  [[nodiscard]] static bool
+  action_available(const ModelingSelectionSummary &summary,
+                   std::string_view action_id);
+  [[nodiscard]] static ModelingActionAvailabilityResult
+  evaluate_availability(const ModelingSelectionSummary &summary,
+                        const ModelingActionAvailabilityRule &rule);
+  [[nodiscard]] static ModelingActionAvailabilityResult
+  evaluate_operation_availability(const ModelingSelectionSummary &summary,
+                                  std::string_view operation_id,
+                                  const ModelingActionAvailabilityRule &rule);
+  [[nodiscard]] static ModelingActionPreviewKind
+  preview_kind_from_host(quader_host_contract::HostPreviewKind kind);
 };
 
 } // namespace quader

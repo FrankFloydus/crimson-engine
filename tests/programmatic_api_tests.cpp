@@ -22,29 +22,32 @@ struct ProgrammaticApiHarness {
     quader::QuaderApi& api;
 
     ProgrammaticApiHarness()
-        : standalone(quader::createStandaloneEditor())
-        , api(standalone.editor().api()) {}
+        : standalone(quader::create_standalone_editor()),
+          api(standalone.editor().api()) {}
 };
 
-std::size_t userEntityCount(const std::vector<quader::QuaderEntitySnapshot>& entities) {
-    std::size_t count = 0;
-    for (const quader::QuaderEntitySnapshot& entity : entities) {
-        if (!entity.isSceneRoot) {
-            ++count;
-        }
+std::size_t
+user_entity_count(const std::vector<quader::QuaderEntitySnapshot> &entities) {
+  std::size_t count = 0;
+  for (const quader::QuaderEntitySnapshot &entity : entities) {
+    if (!entity.is_scene_root) {
+      ++count;
     }
-    return count;
+  }
+  return count;
 }
 
-std::size_t userEntityCount(const quader::QuaderApi& api) {
-    return userEntityCount(api.query().entities());
+std::size_t user_entity_count(const quader::QuaderApi &api) {
+  return user_entity_count(api.query().entities());
 }
 
-bool hasSceneRoot(const quader::QuaderApi& api) {
-    const std::vector<quader::QuaderEntitySnapshot> entities = api.query().entities();
-    return std::any_of(entities.begin(), entities.end(), [](const quader::QuaderEntitySnapshot& entity) {
-        return entity.isSceneRoot;
-    });
+bool has_scene_root(const quader::QuaderApi &api) {
+  const std::vector<quader::QuaderEntitySnapshot> entities =
+      api.query().entities();
+  return std::any_of(entities.begin(), entities.end(),
+                     [](const quader::QuaderEntitySnapshot &entity) {
+                       return entity.is_scene_root;
+                     });
 }
 
 } // namespace
@@ -57,34 +60,37 @@ TEST(ProgrammaticApiTests, QuaderApiCreatesBoxAndSynchronizesSnapshots) {
     args.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}};
     args.name = "API Box";
 
-    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> created = api.modeling().createBox(args);
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> created =
+        api.modeling().create_box(args);
 
     ASSERT_TRUE(created.ok) << created.message;
     EXPECT_TRUE(created.changed);
-    EXPECT_NE(created.value.entity, quader::InvalidEntityId);
-    EXPECT_NE(created.value.modelingObjectId, quader::InvalidQuaderModelingObjectId);
-    EXPECT_NE(created.value.mesh, quader::InvalidAssetId);
+    EXPECT_NE(created.value.entity, quader::kInvalidEntityId);
+    EXPECT_NE(created.value.modeling_object_id,
+              quader::kInvalidQuaderModelingObjectId);
+    EXPECT_NE(created.value.mesh, quader::kInvalidAssetId);
 
     const quader::QuaderSelectionSummary selection = api.selection().summary();
-    EXPECT_TRUE(hasSceneRoot(api));
-    EXPECT_EQ(userEntityCount(api), 1u);
+    EXPECT_TRUE(has_scene_root(api));
+    EXPECT_EQ(user_entity_count(api), 1u);
     EXPECT_EQ(api.modeling().objects().size(), 1u);
-    EXPECT_EQ(api.query().assets().meshCount, 1u);
-    EXPECT_TRUE(selection.hasSelection);
-    EXPECT_EQ(selection.selectedObjectCount, 1u);
-    EXPECT_EQ(selection.activeObjectId, created.value.modelingObjectId);
+    EXPECT_EQ(api.query().assets().mesh_count, 1u);
+    EXPECT_TRUE(selection.has_selection);
+    EXPECT_EQ(selection.selected_object_count, 1u);
+    EXPECT_EQ(selection.active_object_id, created.value.modeling_object_id);
 }
 
 TEST(ProgrammaticApiTests, InvalidToolIdReturnsFailedUnchangedStatus) {
     ProgrammaticApiHarness harness;
     quader::QuaderApi& api = harness.api;
 
-    const quader::QuaderApiStatus result = api.modeling().executeTool("__missing_tool__");
+    const quader::QuaderApiStatus result =
+        api.modeling().execute_tool("__missing_tool__");
 
     EXPECT_FALSE(result.ok);
     EXPECT_FALSE(result.changed);
     EXPECT_FALSE(result.message.empty());
-    EXPECT_EQ(result.mutationKind, quader::QuaderMutationKind::None);
+    EXPECT_EQ(result.mutation_kind, quader::QuaderMutationKind::None);
 }
 
 TEST(ProgrammaticApiTests, DocumentNoOpAndFailureReportNoChangedMutationKind) {
@@ -94,35 +100,39 @@ TEST(ProgrammaticApiTests, DocumentNoOpAndFailureReportNoChangedMutationKind) {
     quader::QuaderCreateEntityArgs args;
     args.name = "Document Entity";
 
-    const quader::QuaderApiResult<quader::QuaderEntityRef> created = api.scene().createEntity(args);
+    const quader::QuaderApiResult<quader::QuaderEntityRef> created =
+        api.scene().create_entity(args);
     ASSERT_TRUE(created.ok) << created.message;
     ASSERT_TRUE(created.changed);
-    EXPECT_EQ(created.mutationKind, quader::QuaderMutationKind::Document);
+    EXPECT_EQ(created.mutation_kind, quader::QuaderMutationKind::Document);
 
     const quader::QuaderApiVoidResult unchanged = api.scene().rename(created.value.id, args.name);
     EXPECT_TRUE(unchanged.ok) << unchanged.message;
     EXPECT_FALSE(unchanged.changed);
-    EXPECT_EQ(unchanged.mutationKind, quader::QuaderMutationKind::None);
+    EXPECT_EQ(unchanged.mutation_kind, quader::QuaderMutationKind::None);
 
-    const quader::QuaderApiVoidResult failed = api.scene().rename(quader::InvalidEntityId, "Missing");
+    const quader::QuaderApiVoidResult failed =
+        api.scene().rename(quader::kInvalidEntityId, "Missing");
     EXPECT_FALSE(failed.ok);
     EXPECT_FALSE(failed.changed);
-    EXPECT_EQ(failed.mutationKind, quader::QuaderMutationKind::None);
+    EXPECT_EQ(failed.mutation_kind, quader::QuaderMutationKind::None);
 }
 
 TEST(ProgrammaticApiTests, ModelingNoOpAndFailureReportNoChangedMutationKind) {
     ProgrammaticApiHarness harness;
     quader::QuaderApi& api = harness.api;
 
-    const quader::QuaderApiVoidResult unchanged = api.modeling().updatePreview({});
+    const quader::QuaderApiVoidResult unchanged =
+        api.modeling().update_preview({});
     EXPECT_TRUE(unchanged.ok) << unchanged.message;
     EXPECT_FALSE(unchanged.changed);
-    EXPECT_EQ(unchanged.mutationKind, quader::QuaderMutationKind::None);
+    EXPECT_EQ(unchanged.mutation_kind, quader::QuaderMutationKind::None);
 
-    const quader::QuaderApiVoidResult failed = api.modeling().executeTool("__missing_tool__");
+    const quader::QuaderApiVoidResult failed =
+        api.modeling().execute_tool("__missing_tool__");
     EXPECT_FALSE(failed.ok);
     EXPECT_FALSE(failed.changed);
-    EXPECT_EQ(failed.mutationKind, quader::QuaderMutationKind::None);
+    EXPECT_EQ(failed.mutation_kind, quader::QuaderMutationKind::None);
 }
 
 TEST(ProgrammaticApiTests, EmptyHistoryFailureReportsNoChangedMutationKind) {
@@ -133,7 +143,7 @@ TEST(ProgrammaticApiTests, EmptyHistoryFailureReportsNoChangedMutationKind) {
 
     EXPECT_FALSE(result.ok);
     EXPECT_FALSE(result.changed);
-    EXPECT_EQ(result.mutationKind, quader::QuaderMutationKind::None);
+    EXPECT_EQ(result.mutation_kind, quader::QuaderMutationKind::None);
 }
 
 TEST(ProgrammaticApiTests, ScriptRunsThroughPublicApiAndReturnsFinalSnapshot) {
@@ -144,32 +154,33 @@ TEST(ProgrammaticApiTests, ScriptRunsThroughPublicApiAndReturnsFinalSnapshot) {
     bounds.min = {-1.0f, -1.0f, -1.0f};
     bounds.max = {1.0f, 1.0f, 1.0f};
 
-    const quader::QuaderScriptResult result = api.script("scripted box")
-            .createBox("box", bounds, "Script Box")
+    const quader::QuaderScriptResult result =
+        api.script("scripted box")
+            .create_box("box", bounds, "Script Box")
             .select("box")
-            .moveSelection({2.0f, 0.0f, 0.0f})
-            .assignMaterialSlot(1)
-            .selectVertex("box", 1)
+            .move_selection({2.0f, 0.0f, 0.0f})
+            .assign_material_slot(1)
+            .select_vertex("box", 1)
             .run();
 
     ASSERT_TRUE(result.ok());
     ASSERT_EQ(result.steps.size(), 5u);
     ASSERT_TRUE(result.objects.contains("box"));
-    EXPECT_EQ(userEntityCount(result.finalSnapshot.entities), 1u);
-    EXPECT_TRUE(result.finalSnapshot.selection.hasSelection);
-    EXPECT_EQ(result.finalSnapshot.selection.selectedVertexCount, 1u);
-    ASSERT_TRUE(api.history().canUndo());
-    EXPECT_EQ(api.history().snapshot().undoLabel, "scripted box");
+    EXPECT_EQ(user_entity_count(result.final_snapshot.entities), 1u);
+    EXPECT_TRUE(result.final_snapshot.selection.has_selection);
+    EXPECT_EQ(result.final_snapshot.selection.selected_vertex_count, 1u);
+    ASSERT_TRUE(api.history().can_undo());
+    EXPECT_EQ(api.history().snapshot().undo_label, "scripted box");
 
     const quader::QuaderApiVoidResult undone = api.history().undo();
     ASSERT_TRUE(undone.ok) << undone.message;
-    EXPECT_EQ(userEntityCount(api), 0u);
-    EXPECT_TRUE(api.history().canRedo());
+    EXPECT_EQ(user_entity_count(api), 0u);
+    EXPECT_TRUE(api.history().can_redo());
 
     const quader::QuaderApiVoidResult redone = api.history().redo();
     ASSERT_TRUE(redone.ok) << redone.message;
-    EXPECT_EQ(userEntityCount(api), 1u);
-    EXPECT_EQ(api.selection().summary().selectedVertexCount, 1u);
+    EXPECT_EQ(user_entity_count(api), 1u);
+    EXPECT_EQ(api.selection().summary().selected_vertex_count, 1u);
 }
 
 TEST(ProgrammaticApiTests, ScriptRecordsDocumentOwnedSelectionTransformsInOneHistoryEntry) {
@@ -179,16 +190,18 @@ TEST(ProgrammaticApiTests, ScriptRecordsDocumentOwnedSelectionTransformsInOneHis
     quader::QuaderCreatePointLightArgs args;
     args.name = "Script Light";
     args.transform.position = {3.0f, 0.0f, 0.0f};
-    args.selectCreated = true;
-    const quader::QuaderApiResult<quader::QuaderEntityRef> light = api.scene().createPointLight(args);
+    args.select_created = true;
+    const quader::QuaderApiResult<quader::QuaderEntityRef> light =
+        api.scene().create_point_light(args);
     ASSERT_TRUE(light.ok) << light.message;
 
-    const quader::QuaderScriptResult result = api.script("script moves light")
-            .moveSelection({2.0f, 0.0f, 0.0f})
+    const quader::QuaderScriptResult result =
+        api.script("script moves light")
+            .move_selection({2.0f, 0.0f, 0.0f})
             .run();
-    ASSERT_TRUE(result.ok()) << result.errorMessage();
+    ASSERT_TRUE(result.ok()) << result.error_message();
     EXPECT_TRUE(result.changed());
-    EXPECT_EQ(api.history().snapshot().undoLabel, "script moves light");
+    EXPECT_EQ(api.history().snapshot().undo_label, "script moves light");
 
     std::optional<quader::QuaderEntitySnapshot> snapshot = api.query().entity(light.value.id);
     ASSERT_TRUE(snapshot.has_value());
@@ -199,7 +212,7 @@ TEST(ProgrammaticApiTests, ScriptRecordsDocumentOwnedSelectionTransformsInOneHis
     snapshot = api.query().entity(light.value.id);
     ASSERT_TRUE(snapshot.has_value());
     EXPECT_FLOAT_EQ(snapshot->transform.position.x, 3.0f);
-    EXPECT_EQ(api.history().snapshot().redoLabel, "script moves light");
+    EXPECT_EQ(api.history().snapshot().redo_label, "script moves light");
 
     const quader::QuaderApiVoidResult redone = api.history().redo();
     ASSERT_TRUE(redone.ok) << redone.message;
@@ -220,16 +233,17 @@ TEST(ProgrammaticApiTests, ScriptRejectsHistoryStepsInsideActiveTransaction) {
     ASSERT_EQ(result.steps.size(), 1u);
     EXPECT_FALSE(result.steps.front().status.ok);
     EXPECT_NE(result.steps.front().status.message.find("History operations are not supported"), std::string::npos);
-    EXPECT_FALSE(api.history().canUndo());
+    EXPECT_FALSE(api.history().can_undo());
 }
 
 TEST(ProgrammaticApiTests, ScriptStopsAtMissingAliasAndReportsStep) {
     ProgrammaticApiHarness harness;
     quader::QuaderApi& api = harness.api;
 
-    const quader::QuaderScriptResult result = api.script("bad script")
+    const quader::QuaderScriptResult result =
+        api.script("bad script")
             .select("missing")
-            .moveSelection({2.0f, 0.0f, 0.0f})
+            .move_selection({2.0f, 0.0f, 0.0f})
             .run();
 
     EXPECT_FALSE(result.ok());
@@ -238,41 +252,49 @@ TEST(ProgrammaticApiTests, ScriptStopsAtMissingAliasAndReportsStep) {
     EXPECT_FALSE(result.steps.front().status.ok);
     EXPECT_FALSE(result.steps.front().status.changed);
     EXPECT_NE(result.steps.front().status.message.find("missing"), std::string::npos);
-    EXPECT_EQ(userEntityCount(result.finalSnapshot.entities), 0u);
+    EXPECT_EQ(user_entity_count(result.final_snapshot.entities), 0u);
 }
 
 TEST(ProgrammaticApiTests, ScriptAggregatesChangedStatusAcrossLaterNoOp) {
     ProgrammaticApiHarness harness;
     quader::QuaderApi& api = harness.api;
 
-    const quader::QuaderScriptResult result = api.script("changed then noop")
-            .createBox("box", {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, "Script Box")
-            .setSelectionMode(quader::QuaderSelectionMode::Object)
+    const quader::QuaderScriptResult result =
+        api.script("changed then noop")
+            .create_box(
+                "box",
+                {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+                "Script Box")
+            .set_selection_mode(quader::QuaderSelectionMode::Object)
             .run();
 
-    ASSERT_TRUE(result.ok()) << result.errorMessage();
+    ASSERT_TRUE(result.ok()) << result.error_message();
     ASSERT_EQ(result.steps.size(), 2u);
     EXPECT_TRUE(result.changed());
-    EXPECT_NE(result.mutationKind, quader::QuaderMutationKind::None);
-    EXPECT_FALSE(result.finalSnapshot.entities.empty());
+    EXPECT_NE(result.mutation_kind, quader::QuaderMutationKind::None);
+    EXPECT_FALSE(result.final_snapshot.entities.empty());
 }
 
 TEST(ProgrammaticApiTests, ScriptRollsBackChangedStepsAcrossLaterFailure) {
     ProgrammaticApiHarness harness;
     quader::QuaderApi& api = harness.api;
 
-    const quader::QuaderScriptResult result = api.script("changed then missing alias")
-            .createBox("box", {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, "Script Box")
-            .setSelectionMode(quader::QuaderSelectionMode::Face)
+    const quader::QuaderScriptResult result =
+        api.script("changed then missing alias")
+            .create_box(
+                "box",
+                {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+                "Script Box")
+            .set_selection_mode(quader::QuaderSelectionMode::Face)
             .select("missing")
             .run();
 
     EXPECT_FALSE(result.ok());
     ASSERT_EQ(result.steps.size(), 3u);
     EXPECT_FALSE(result.changed());
-    EXPECT_EQ(result.mutationKind, quader::QuaderMutationKind::None);
-    EXPECT_NE(result.errorMessage().find("missing"), std::string::npos);
-    EXPECT_EQ(userEntityCount(result.finalSnapshot.entities), 0u);
+    EXPECT_EQ(result.mutation_kind, quader::QuaderMutationKind::None);
+    EXPECT_NE(result.error_message().find("missing"), std::string::npos);
+    EXPECT_EQ(user_entity_count(result.final_snapshot.entities), 0u);
     EXPECT_TRUE(result.objects.empty());
-    EXPECT_FALSE(api.history().canUndo());
+    EXPECT_FALSE(api.history().can_undo());
 }

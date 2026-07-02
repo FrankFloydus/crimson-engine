@@ -20,8 +20,8 @@ TEST(QdrDocumentOperationBridgeEdgePairsTests, BridgeEdgePairsCreatesFacesBetwee
 		const OperationResult result = bridge_edge_pairs(document, selection, { { first, second } }, 2);
 
 		EXPECT_TRUE(result.changed);
-		EXPECT_TRUE(selection.mode == SelectionMode::face);
-		EXPECT_TRUE(selection.faces.size() == 2U);
+                EXPECT_TRUE(selection.mode == SelectionMode::Face);
+                EXPECT_TRUE(selection.faces.size() == 2U);
 		EXPECT_TRUE(qdr_test::edge_incidence_count(document, first) == 2);
 		EXPECT_TRUE(qdr_test::edge_incidence_count(document, second) == 2);
 		EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
@@ -48,8 +48,8 @@ TEST(QdrDocumentOperationBridgeEdgePairsTests, BridgeEdgePairsCreatesFacesBetwee
 
 		EXPECT_TRUE(result.changed);
 		EXPECT_TRUE(document.faces.size() == face_count_before + 1U);
-		EXPECT_TRUE(selection.mode == SelectionMode::face);
-		EXPECT_TRUE(selection.faces.size() == 1U);
+                EXPECT_TRUE(selection.mode == SelectionMode::Face);
+                EXPECT_TRUE(selection.faces.size() == 1U);
 		EXPECT_TRUE(qdr_test::edge_incidence_count(document, first) == 3);
 		EXPECT_TRUE(qdr_test::edge_incidence_count(document, second) == 3);
 		EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));

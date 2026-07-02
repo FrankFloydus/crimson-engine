@@ -15,9 +15,10 @@ TEST(QdrModelingRuntimeOperationSnapEdgesToActiveTests, SnapEdgesToActiveAlignsS
 	const Edge active = make_edge(first_face.vertices[0], first_face.vertices[1]);
 	const Edge source = make_edge(first_face.vertices[2], first_face.vertices[3]);
 	quader_poly::Selection selection = qdr_test::edge_selection({ active, source }, active);
-	session.set_component_selection(object.id, selection, quader_editor_core::SelectionMode::edge);
+        session.set_component_selection(
+            object.id, selection, quader_editor_core::SelectionMode::Edge);
 
-	const quader_editor_core::CommandResult result = session.snap_selected_edges_to_active();
+        const quader_editor_core::CommandResult result = session.snap_selected_edges_to_active();
 
 	EXPECT_TRUE(result.ok);
 	EXPECT_TRUE(result.changed);

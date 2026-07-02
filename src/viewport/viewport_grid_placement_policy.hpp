@@ -42,10 +42,10 @@ enum class ViewportGridRotation {
  * Represents a Viewport Grid Axes value used by the viewport input, layout, and camera layer.
  */
 struct ViewportGridAxes {
-    QVec3 uAxis = {1.0f, 0.0f, 0.0f};
-    QVec3 vAxis = {0.0f, 0.0f, -1.0f};
-    ViewportColorSettingId uColor = ViewportColorSettingId::GridXAxis;
-    ViewportColorSettingId vColor = ViewportColorSettingId::GridZAxis;
+  QVec3 u_axis = {1.0f, 0.0f, 0.0f};
+  QVec3 v_axis = {0.0f, 0.0f, -1.0f};
+  ViewportColorSettingId u_color = ViewportColorSettingId::GridXAxis;
+  ViewportColorSettingId v_color = ViewportColorSettingId::GridZAxis;
 };
 
 /**
@@ -55,7 +55,8 @@ struct ViewportGridPlacement {
     ViewportGridPlane plane = ViewportGridPlane::XZ;
     QVec3 origin = {};
     ViewportGridRotation rotation = ViewportGridRotation::Identity;
-    QVec2 planeSize = {kViewportGridDefaultPlaneSize, kViewportGridDefaultPlaneSize};
+    QVec2 plane_size = {kViewportGridDefaultPlaneSize,
+                        kViewportGridDefaultPlaneSize};
     ViewportGridAxes axes = {};
 };
 
@@ -64,20 +65,20 @@ struct ViewportGridPlacement {
  */
 class ViewportGridPlacementPolicy {
 public:
-    static ViewportGridPlacement placement(
-            const ViewportCameraController& camera,
-            std::uint32_t viewportWidth,
-            std::uint32_t viewportHeight) {
-        const ViewportCameraPose pose = camera.pose();
-        const ViewportGridPlane resolvedPlane = plane(camera, pose);
-        return {
-                .plane = resolvedPlane,
-                .origin = origin(resolvedPlane, pose),
-                .rotation = rotation(resolvedPlane),
-                .planeSize = planeSize(resolvedPlane, camera, viewportWidth, viewportHeight),
-                .axes = axes(resolvedPlane),
-        };
-    }
+  static ViewportGridPlacement placement(const ViewportCameraController &camera,
+                                         std::uint32_t viewport_width,
+                                         std::uint32_t viewport_height) {
+    const ViewportCameraPose pose = camera.pose();
+    const ViewportGridPlane resolved_plane = plane(camera, pose);
+    return {
+        .plane = resolved_plane,
+        .origin = origin(resolved_plane, pose),
+        .rotation = rotation(resolved_plane),
+        .plane_size =
+            plane_size(resolved_plane, camera, viewport_width, viewport_height),
+        .axes = axes(resolved_plane),
+    };
+  }
 
     static ViewportGridPlane plane(const ViewportCameraController& camera, const ViewportCameraPose& pose) {
         if (camera.state().projection != ViewportProjection::Orthographic) {
@@ -89,53 +90,54 @@ public:
             forward = {0.0f, 0.0f, 1.0f};
         }
 
-        const float absX = std::fabs(forward.x);
-        const float absY = std::fabs(forward.y);
-        const float absZ = std::fabs(forward.z);
-        if (absX >= absY && absX >= absZ) {
-            return ViewportGridPlane::YZ;
+        const float abs_x = std::fabs(forward.x);
+        const float abs_y = std::fabs(forward.y);
+        const float abs_z = std::fabs(forward.z);
+        if (abs_x >= abs_y && abs_x >= abs_z) {
+          return ViewportGridPlane::YZ;
         }
-        if (absZ >= absX && absZ >= absY) {
-            return ViewportGridPlane::XY;
+        if (abs_z >= abs_x && abs_z >= abs_y) {
+          return ViewportGridPlane::XY;
         }
         return ViewportGridPlane::XZ;
     }
 
-    static QVec2 planeSize(
-            ViewportGridPlane plane,
-            const ViewportCameraController& camera,
-            std::uint32_t viewportWidth,
-            std::uint32_t viewportHeight) {
-        if (camera.state().projection != ViewportProjection::Orthographic) {
-            return {kViewportGridDefaultPlaneSize, kViewportGridDefaultPlaneSize};
-        }
+    static QVec2 plane_size(ViewportGridPlane plane,
+                            const ViewportCameraController &camera,
+                            std::uint32_t viewport_width,
+                            std::uint32_t viewport_height) {
+      if (camera.state().projection != ViewportProjection::Orthographic) {
+        return {kViewportGridDefaultPlaneSize, kViewportGridDefaultPlaneSize};
+      }
 
-        const float aspect =
-                std::max(0.0001f, static_cast<float>(std::max(1u, viewportWidth)) / static_cast<float>(std::max(1u, viewportHeight)));
-        const float planeHeight =
-                std::max(kViewportGridMinOrthographicSize, camera.state().orthographicSize) * kViewportGridOrthographicMargin;
-        if (plane == ViewportGridPlane::YZ) {
-            return {planeHeight, planeHeight * aspect};
-        }
-        return {planeHeight * aspect, planeHeight};
+      const float aspect = std::max(
+          0.0001f, static_cast<float>(std::max(1u, viewport_width)) /
+                       static_cast<float>(std::max(1u, viewport_height)));
+      const float plane_height = std::max(kViewportGridMinOrthographicSize,
+                                          camera.state().orthographic_size) *
+                                 kViewportGridOrthographicMargin;
+      if (plane == ViewportGridPlane::YZ) {
+        return {plane_height, plane_height * aspect};
+      }
+      return {plane_height * aspect, plane_height};
     }
 
     static ViewportGridAxes axes(ViewportGridPlane plane) {
         if (plane == ViewportGridPlane::YZ) {
-            return {
-                    .uAxis = {0.0f, 0.0f, -1.0f},
-                    .vAxis = {0.0f, 1.0f, 0.0f},
-                    .uColor = ViewportColorSettingId::GridZAxis,
-                    .vColor = ViewportColorSettingId::GridYAxis,
-            };
+          return {
+              .u_axis = {0.0f, 0.0f, -1.0f},
+              .v_axis = {0.0f, 1.0f, 0.0f},
+              .u_color = ViewportColorSettingId::GridZAxis,
+              .v_color = ViewportColorSettingId::GridYAxis,
+          };
         }
         if (plane == ViewportGridPlane::XY) {
-            return {
-                    .uAxis = {1.0f, 0.0f, 0.0f},
-                    .vAxis = {0.0f, 1.0f, 0.0f},
-                    .uColor = ViewportColorSettingId::GridXAxis,
-                    .vColor = ViewportColorSettingId::GridYAxis,
-            };
+          return {
+              .u_axis = {1.0f, 0.0f, 0.0f},
+              .v_axis = {0.0f, 1.0f, 0.0f},
+              .u_color = ViewportColorSettingId::GridXAxis,
+              .v_color = ViewportColorSettingId::GridYAxis,
+          };
         }
         return {};
     }

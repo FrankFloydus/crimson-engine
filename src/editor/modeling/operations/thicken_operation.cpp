@@ -40,8 +40,8 @@ ThickenOperationSettings thicken_settings_from_variant(const EditorOperationSett
 
 const ThickenOperation& concrete_thicken_operation()
 {
-	static const ThickenOperation operation;
-	return operation;
+  static const ThickenOperation kOperation;
+  return kOperation;
 }
 
 } // namespace
@@ -53,7 +53,7 @@ const EditorOperation& thicken_operation()
 
 EditorOperationId ThickenOperation::operation_id() const
 {
-	return EditorOperationId::thicken;
+  return EditorOperationId::Thicken;
 }
 
 std::string_view ThickenOperation::id() const

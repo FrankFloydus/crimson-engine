@@ -24,16 +24,17 @@ namespace {
  */
 class MemorySink final : public spdlog::sinks::base_sink<std::mutex> {
 public:
-    explicit MemorySink(std::size_t maxEntries) : maxEntries_(std::max<std::size_t>(1, maxEntries)) {}
+  explicit MemorySink(std::size_t max_entries)
+      : max_entries_(std::max<std::size_t>(1, max_entries)) {}
 
-    std::vector<LogEntry> snapshot() const {
-        std::lock_guard lock(entriesMutex_);
-        return {entries_.begin(), entries_.end()};
-    }
+  std::vector<LogEntry> snapshot() const {
+    std::lock_guard lock(entries_mutex_);
+    return {entries_.begin(), entries_.end()};
+  }
 
     void clear() {
-        std::lock_guard lock(entriesMutex_);
-        entries_.clear();
+      std::lock_guard lock(entries_mutex_);
+      entries_.clear();
     }
 
 protected:
@@ -43,99 +44,103 @@ protected:
 
         LogEntry entry;
         entry.level = msg.level;
-        entry.loggerName.assign(msg.logger_name.data(), msg.logger_name.size());
+        entry.logger_name.assign(msg.logger_name.data(),
+                                 msg.logger_name.size());
         entry.message = fmt::to_string(formatted);
         if (msg.source.filename != nullptr) {
             entry.file = msg.source.filename;
             entry.line = static_cast<int>(msg.source.line);
         }
 
-        std::lock_guard lock(entriesMutex_);
+        std::lock_guard lock(entries_mutex_);
         entries_.push_back(std::move(entry));
-        while (entries_.size() > maxEntries_) {
-            entries_.pop_front();
+        while (entries_.size() > max_entries_) {
+          entries_.pop_front();
         }
     }
 
     void flush_() override {}
 
 private:
-    std::size_t maxEntries_ = 0;
-    mutable std::mutex entriesMutex_;
-    std::deque<LogEntry> entries_;
+  std::size_t max_entries_ = 0;
+  mutable std::mutex entries_mutex_;
+  std::deque<LogEntry> entries_;
 };
 
-std::mutex gLoggerMutex;
-std::shared_ptr<spdlog::logger> gLogger;
-std::shared_ptr<MemorySink> gMemorySink;
+std::mutex g_logger_mutex;
+std::shared_ptr<spdlog::logger> g_logger;
+std::shared_ptr<MemorySink> g_memory_sink;
 
 } // namespace
 
 void Logger::initialize(LoggerConfig config) {
-    std::lock_guard lock(gLoggerMutex);
+  std::lock_guard lock(g_logger_mutex);
 
-    std::vector<spdlog::sink_ptr> sinks;
-    gMemorySink = std::make_shared<MemorySink>(config.maxEntries);
-    sinks.push_back(gMemorySink);
+  std::vector<spdlog::sink_ptr> sinks;
+  g_memory_sink = std::make_shared<MemorySink>(config.max_entries);
+  sinks.push_back(g_memory_sink);
 
-    try {
-        sinks.push_back(std::make_shared<spdlog::sinks::basic_file_sink_mt>(config.filePath, true));
-    } catch (const spdlog::spdlog_ex&) {
-        // File logging should never prevent the editor from booting.
-    }
+  try {
+    sinks.push_back(std::make_shared<spdlog::sinks::basic_file_sink_mt>(
+        config.file_path, true));
+  } catch (const spdlog::spdlog_ex &) {
+    // File logging should never prevent the editor from booting.
+  }
 
 #ifdef _WIN32
     sinks.push_back(std::make_shared<spdlog::sinks::msvc_sink_mt>());
 #endif
 
-    gLogger = std::make_shared<spdlog::logger>(config.name, sinks.begin(), sinks.end());
-    gLogger->set_level(config.level);
-    gLogger->set_pattern("[%H:%M:%S.%e] [%^%l%$] %v");
-    gLogger->flush_on(spdlog::level::info);
-    spdlog::set_default_logger(gLogger);
+    g_logger = std::make_shared<spdlog::logger>(config.name, sinks.begin(),
+                                                sinks.end());
+    g_logger->set_level(config.level);
+    g_logger->set_pattern("[%H:%M:%S.%e] [%^%l%$] %v");
+    g_logger->flush_on(spdlog::level::info);
+    spdlog::set_default_logger(g_logger);
 }
 
 void Logger::shutdown() {
-    std::lock_guard lock(gLoggerMutex);
-    if (gLogger) {
-        gLogger->flush();
-    }
+  std::lock_guard lock(g_logger_mutex);
+  if (g_logger) {
+    g_logger->flush();
+  }
     spdlog::drop_all();
-    gLogger.reset();
-    gMemorySink.reset();
+    g_logger.reset();
+    g_memory_sink.reset();
 }
 
-void Logger::clearMemory() {
-    ensureInitialized();
-    gMemorySink->clear();
+void Logger::clear_memory() {
+  ensure_initialized();
+  g_memory_sink->clear();
 }
 
-std::vector<LogEntry> Logger::entriesSnapshot() {
-    ensureInitialized();
-    return gMemorySink->snapshot();
+std::vector<LogEntry> Logger::entries_snapshot() {
+  ensure_initialized();
+  return g_memory_sink->snapshot();
 }
 
 std::shared_ptr<spdlog::logger> Logger::instance() {
-    ensureInitialized();
-    return gLogger;
+  ensure_initialized();
+  return g_logger;
 }
 
-void Logger::ensureInitialized() {
-    std::lock_guard lock(gLoggerMutex);
-    if (!gLogger) {
-        LoggerConfig config;
-        std::vector<spdlog::sink_ptr> sinks;
-        gMemorySink = std::make_shared<MemorySink>(config.maxEntries);
-        sinks.push_back(gMemorySink);
+void Logger::ensure_initialized() {
+  std::lock_guard lock(g_logger_mutex);
+  if (!g_logger) {
+    LoggerConfig config;
+    std::vector<spdlog::sink_ptr> sinks;
+    g_memory_sink = std::make_shared<MemorySink>(config.max_entries);
+    sinks.push_back(g_memory_sink);
 #ifdef _WIN32
         sinks.push_back(std::make_shared<spdlog::sinks::msvc_sink_mt>());
 #endif
-        gLogger = std::make_shared<spdlog::logger>(config.name, sinks.begin(), sinks.end());
-        gLogger->set_level(config.level);
-        gLogger->set_pattern("[%H:%M:%S.%e] [%^%l%$] %v");
-        gLogger->flush_on(spdlog::level::info);
-        spdlog::set_default_logger(gLogger);
-    }
+        g_logger = std::make_shared<spdlog::logger>(config.name, sinks.begin(),
+                                                    sinks.end());
+        g_logger->set_level(config.level);
+        g_logger->set_pattern("[%H:%M:%S.%e] [%^%l%$] %v");
+        g_logger->flush_on(spdlog::level::info);
+        spdlog::set_default_logger(g_logger);
+  }
 }
 
 } // namespace quader

@@ -19,7 +19,8 @@ struct QVec3 {
     float z = 0.0f;
 
     constexpr QVec3() = default;
-    constexpr QVec3(float xValue, float yValue, float zValue) : x(xValue), y(yValue), z(zValue) {}
+    constexpr QVec3(float x_value, float y_value, float z_value)
+        : x(x_value), y(y_value), z(z_value) {}
 };
 
 inline QVec3 operator+(QVec3 a, QVec3 b) {

@@ -23,36 +23,34 @@ class SceneDocument;
  */
 class CommitBoxPreviewCommand final : public IUndoableCommand {
 public:
-    CommitBoxPreviewCommand(
-            ModelingSessionService& modeling,
-            SceneDocument& scene,
-            std::string name,
-            AssetId defaultMaterial);
+  CommitBoxPreviewCommand(ModelingSessionService &modeling,
+                          SceneDocument &scene, std::string name,
+                          AssetId default_material);
 
-    [[nodiscard]] const std::string& label() const override;
-    CommandResult undo() override;
-    CommandResult redo() override;
+  [[nodiscard]] const std::string &label() const override;
+  CommandResult undo() override;
+  CommandResult redo() override;
 
-    [[nodiscard]] const ModelingCreateBoxResult& committed() const;
+  [[nodiscard]] const ModelingCreateBoxResult &committed() const;
 
 private:
-    CommandResult executeInitial();
-    CommandResult redoRecorded();
-    CommandResult undoMaterial();
-    CommandResult redoMaterial();
-    CommandResult rollbackInitial(CommandResult failure);
-    CommandResult cancelRestoredPreview();
+  CommandResult execute_initial();
+  CommandResult redo_recorded();
+  CommandResult undo_material();
+  CommandResult redo_material();
+  CommandResult rollback_initial(CommandResult failure);
+  CommandResult cancel_restored_preview();
 
-    ModelingSessionService& modeling_;
-    SceneDocument& scene_;
-    std::string name_;
-    AssetId defaultMaterial_ = InvalidAssetId;
-    std::string label_ = "Create Box";
-    ModelingSessionMemento before_;
-    ModelingSessionMemento after_;
-    ModelingCreateBoxResult committed_;
-    std::unique_ptr<IUndoableCommand> materialCommand_;
-    bool executed_ = false;
+  ModelingSessionService &modeling_;
+  SceneDocument &scene_;
+  std::string name_;
+  AssetId default_material_ = kInvalidAssetId;
+  std::string label_ = "Create Box";
+  ModelingSessionMemento before_;
+  ModelingSessionMemento after_;
+  ModelingCreateBoxResult committed_;
+  std::unique_ptr<IUndoableCommand> material_command_;
+  bool executed_ = false;
 };
 
 } // namespace quader

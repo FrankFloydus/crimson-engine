@@ -39,29 +39,30 @@ qec::EditorSession selected_quad_face_session()
 	const quader_poly::ElementId face = quader_poly::add_face(
 		document,
 		std::array<quader_poly::ElementId, 4> { bottom_left, bottom_right, top_right, top_left });
-	EXPECT_TRUE(face != quader_poly::invalid_element_id);
+        EXPECT_TRUE(face != quader_poly::kInvalidElementId);
 
-	qec::PolygonObject object;
+        qec::PolygonObject object;
 	object.id = 1;
 	object.selected = true;
 	object.document = std::move(document);
 	qec::EditorSession session({ object });
 	quader_poly::Selection selection;
-	selection.mode = quader_poly::SelectionMode::face;
-	selection.faces = { face };
+        selection.mode = quader_poly::SelectionMode::Face;
+        selection.faces = { face };
 	selection.has_active = true;
-	selection.active_kind = quader_poly::ElementKind::face;
-	selection.active_face = face;
-	session.set_component_selection(object.id, selection, qec::SelectionMode::face);
-	return session;
+        selection.active_kind = quader_poly::ElementKind::Face;
+        selection.active_face = face;
+        session.set_component_selection(object.id, selection,
+                                        qec::SelectionMode::Face);
+        return session;
 }
 
 qec::EditorOperationCommand selection_command(qec::EditorOperationId operation_id)
 {
 	qec::EditorOperationCommand command;
 	command.operation_id = operation_id;
-	command.phase = qec::EditorOperationCommandPhase::execute;
-	command.settings = qec::SelectionOperationSettings {};
+        command.phase = qec::EditorOperationCommandPhase::Execute;
+        command.settings = qec::SelectionOperationSettings {};
 	return command;
 }
 
@@ -70,9 +71,9 @@ qec::EditorOperationCommand duplicate_command(quader::QVec3 offset)
 	qec::DuplicateMeshesOperationSettings settings;
 	settings.explicit_offset = { offset, true };
 	qec::EditorOperationCommand command;
-	command.operation_id = qec::EditorOperationId::duplicate_meshes;
-	command.phase = qec::EditorOperationCommandPhase::execute;
-	command.settings = settings;
+        command.operation_id = qec::EditorOperationId::DuplicateMeshes;
+        command.phase = qec::EditorOperationCommandPhase::Execute;
+        command.settings = settings;
 	return command;
 }
 
@@ -82,9 +83,9 @@ qec::EditorOperationCommand thicken_command(double thickness, bool from_center =
 	settings.thickness = thickness;
 	settings.from_center = from_center;
 	qec::EditorOperationCommand command;
-	command.operation_id = qec::EditorOperationId::thicken;
-	command.phase = qec::EditorOperationCommandPhase::execute;
-	command.settings = settings;
+        command.operation_id = qec::EditorOperationId::Thicken;
+        command.phase = qec::EditorOperationCommandPhase::Execute;
+        command.settings = settings;
 	return command;
 }
 
@@ -94,45 +95,48 @@ void select_first_face(qec::EditorSession& session)
 	EXPECT_FALSE(object.document.faces.empty());
 	const quader_poly::ElementId selected_face = object.document.faces.front().id;
 	quader_poly::Selection selection;
-	selection.mode = quader_poly::SelectionMode::face;
-	selection.faces = { selected_face };
+        selection.mode = quader_poly::SelectionMode::Face;
+        selection.faces = { selected_face };
 	selection.has_active = true;
-	selection.active_kind = quader_poly::ElementKind::face;
-	selection.active_face = selected_face;
-	session.set_component_selection(object.id, selection, qec::SelectionMode::face);
+        selection.active_kind = quader_poly::ElementKind::Face;
+        selection.active_face = selected_face;
+        session.set_component_selection(object.id, selection,
+                                        qec::SelectionMode::Face);
 }
 
-qec::TransformDragState move_drag(quader::QVec3 delta, qec::TransformDragOperation operation = qec::TransformDragOperation::transform)
-{
-	qec::TransformDragState drag;
-	drag.active = true;
-	drag.tool = qec::ViewportInteractionTool::move;
-	drag.operation = operation;
-	drag.axis = qec::TransformAxis::x;
-	drag.move.preview_delta = delta;
-	return drag;
+qec::TransformDragState move_drag(quader::QVec3 delta,
+                                  qec::TransformDragOperation operation =
+                                      qec::TransformDragOperation::Transform) {
+  qec::TransformDragState drag;
+  drag.active = true;
+  drag.tool = qec::ViewportInteractionTool::Move;
+  drag.operation = operation;
+  drag.axis = qec::TransformAxis::X;
+  drag.move.preview_delta = delta;
+  return drag;
 }
 
 qec::TransformDragState rotate_drag(double angle_degrees)
 {
 	qec::TransformDragState drag;
 	drag.active = true;
-	drag.tool = qec::ViewportInteractionTool::rotate;
-	drag.operation = qec::TransformDragOperation::transform;
-	drag.axis = qec::TransformAxis::z;
-	drag.rotate.preview_angle_degrees = angle_degrees;
+        drag.tool = qec::ViewportInteractionTool::Rotate;
+        drag.operation = qec::TransformDragOperation::Transform;
+        drag.axis = qec::TransformAxis::Z;
+        drag.rotate.preview_angle_degrees = angle_degrees;
 	return drag;
 }
 
-qec::TransformDragState scale_drag(quader::QVec3 scale, qec::TransformDragOperation operation = qec::TransformDragOperation::transform)
-{
-	qec::TransformDragState drag;
-	drag.active = true;
-	drag.tool = qec::ViewportInteractionTool::scale;
-	drag.operation = operation;
-	drag.axis = qec::TransformAxis::all;
-	drag.scale.preview_scale = scale;
-	return drag;
+qec::TransformDragState scale_drag(quader::QVec3 scale,
+                                   qec::TransformDragOperation operation =
+                                       qec::TransformDragOperation::Transform) {
+  qec::TransformDragState drag;
+  drag.active = true;
+  drag.tool = qec::ViewportInteractionTool::Scale;
+  drag.operation = operation;
+  drag.axis = qec::TransformAxis::All;
+  drag.scale.preview_scale = scale;
+  return drag;
 }
 
 const qec::PolygonObject& only_object(const qec::EditorSession& session)
@@ -157,16 +161,18 @@ TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionReportsNoPriorPort
 TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionIgnoresNonRepeatableDeleteCommands) {
 	qec::EditorSession session = selected_box_session();
 	qec::RepeatLastActionState state;
-	const qec::EditorOperationCommand command = selection_command(qec::EditorOperationId::delete_selection);
-	const qec::EditorOperationCommandResult result = qec::execute_command(session, command);
+        const qec::EditorOperationCommand command =
+            selection_command(qec::EditorOperationId::DeleteSelection);
+        const qec::EditorOperationCommandResult result = qec::execute_command(session, command);
 	EXPECT_TRUE(result.command.ok);
 	EXPECT_TRUE(result.command.changed);
 
 	qec::record_repeatable_operation(state, command, result.command);
 	const qec::CommandResult repeat = qec::execute_repeat_last_action(session, state);
 
-	EXPECT_FALSE(qec::operation_is_repeatable(qec::EditorOperationId::delete_selection));
-	EXPECT_FALSE(repeat.ok);
+        EXPECT_FALSE(qec::operation_is_repeatable(
+            qec::EditorOperationId::DeleteSelection));
+        EXPECT_FALSE(repeat.ok);
 	EXPECT_FALSE(repeat.changed);
 	EXPECT_TRUE(repeat.message == "No repeatable action is available.");
 }
@@ -174,9 +180,10 @@ TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionIgnoresNonRepeatab
 TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionReplaysCapturedOperationCommands) {
 	qec::EditorSession session = selected_box_session();
 	qec::RepeatLastActionState state;
-	const qec::EditorOperationCommand command = selection_command(qec::EditorOperationId::flip_face_normals);
+        const qec::EditorOperationCommand command =
+            selection_command(qec::EditorOperationId::FlipFaceNormals);
 
-	const qec::EditorOperationCommandResult first = qec::execute_command(session, command);
+        const qec::EditorOperationCommandResult first = qec::execute_command(session, command);
 	EXPECT_TRUE(first.command.ok);
 	EXPECT_TRUE(first.command.changed);
 	qec::record_repeatable_operation(state, command, first.command);
@@ -201,8 +208,9 @@ TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionKeepsThePriorActio
 		EXPECT_TRUE(first.command.changed);
 		qec::record_repeatable_operation(state, previous, first.command);
 
-		qec::EditorOperationCommand failed = selection_command(qec::EditorOperationId::flip_face_normals);
-		failed.settings = qec::BridgeOperationSettings {};
+                qec::EditorOperationCommand failed =
+                    selection_command(qec::EditorOperationId::FlipFaceNormals);
+                failed.settings = qec::BridgeOperationSettings {};
 		const qec::EditorOperationCommandResult failed_result = qec::execute_command(session, failed);
 		EXPECT_FALSE(failed_result.command.ok);
 		qec::record_repeatable_operation(state, failed, failed_result.command);
@@ -229,8 +237,9 @@ TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionKeepsThePriorActio
 		EXPECT_TRUE(first.command.changed);
 		qec::record_repeatable_operation(state, previous, first.command);
 
-		const qec::EditorOperationCommand ignored = selection_command(qec::EditorOperationId::flip_face_normals);
-		qec::record_repeatable_operation(state, ignored, { true, false, {} });
+                const qec::EditorOperationCommand ignored =
+                    selection_command(qec::EditorOperationId::FlipFaceNormals);
+                qec::record_repeatable_operation(state, ignored, { true, false, {} });
 
 		const qec::CommandResult repeat = qec::execute_repeat_last_action(session, state);
 
@@ -247,21 +256,21 @@ TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionPromotesPreviewSet
 		qec::RepeatLastActionState state;
 
 		qec::EditorOperationCommand command = thicken_command(0.25);
-		command.phase = qec::EditorOperationCommandPhase::begin_preview;
-		const qec::EditorOperationCommandResult begin = qec::execute_command(session, command);
+                command.phase = qec::EditorOperationCommandPhase::BeginPreview;
+                const qec::EditorOperationCommandResult begin = qec::execute_command(session, command);
 		EXPECT_TRUE(begin.command.ok);
 		EXPECT_TRUE(begin.command.changed);
 		qec::record_repeatable_operation(state, command, begin.command);
 
 		command = thicken_command(0.5);
-		command.phase = qec::EditorOperationCommandPhase::update_preview;
-		const qec::EditorOperationCommandResult update = qec::execute_command(session, command);
+                command.phase = qec::EditorOperationCommandPhase::UpdatePreview;
+                const qec::EditorOperationCommandResult update = qec::execute_command(session, command);
 		EXPECT_TRUE(update.command.ok);
 		EXPECT_TRUE(update.command.changed);
 		qec::record_repeatable_operation(state, command, update.command);
 
-		command.phase = qec::EditorOperationCommandPhase::commit_preview;
-		const qec::EditorOperationCommandResult commit = qec::execute_command(session, command);
+                command.phase = qec::EditorOperationCommandPhase::CommitPreview;
+                const qec::EditorOperationCommandResult commit = qec::execute_command(session, command);
 		EXPECT_TRUE(commit.command.ok);
 		EXPECT_TRUE(commit.command.changed);
 		qec::record_repeatable_operation(state, command, commit.command);
@@ -269,12 +278,15 @@ TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionPromotesPreviewSet
 		const std::size_t committed_face_count = session.objects().front().document.faces.size();
 		EXPECT_TRUE(committed_face_count > original_face_count);
 
-		EXPECT_TRUE(state.last_action_kind == qec::RepeatableActionKind::operation);
-		EXPECT_TRUE(state.last_operation.has_value());
+                EXPECT_TRUE(state.last_action_kind ==
+                            qec::RepeatableActionKind::Operation);
+                EXPECT_TRUE(state.last_operation.has_value());
 		EXPECT_FALSE(state.pending_preview_operation.has_value());
-		EXPECT_TRUE(state.last_operation->operation_id == qec::EditorOperationId::thicken);
-		EXPECT_TRUE(state.last_operation->phase == qec::EditorOperationCommandPhase::execute);
-		const qec::ThickenOperationSettings stored =
+                EXPECT_TRUE(state.last_operation->operation_id ==
+                            qec::EditorOperationId::Thicken);
+                EXPECT_TRUE(state.last_operation->phase ==
+                            qec::EditorOperationCommandPhase::Execute);
+                const qec::ThickenOperationSettings stored =
 			std::get<qec::ThickenOperationSettings>(state.last_operation->settings);
 		EXPECT_NEAR(stored.thickness, 0.5, 0.0001);
 	}
@@ -290,13 +302,13 @@ TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionPromotesPreviewSet
 		qec::RepeatLastActionState state;
 
 		qec::EditorOperationCommand command = thicken_command(0.25);
-		command.phase = qec::EditorOperationCommandPhase::begin_preview;
-		const qec::EditorOperationCommandResult begin = qec::execute_command(session, command);
+                command.phase = qec::EditorOperationCommandPhase::BeginPreview;
+                const qec::EditorOperationCommandResult begin = qec::execute_command(session, command);
 		EXPECT_TRUE(begin.command.ok);
 		qec::record_repeatable_operation(state, command, begin.command);
 
-		command.phase = qec::EditorOperationCommandPhase::cancel_preview;
-		const qec::EditorOperationCommandResult cancel = qec::execute_command(session, command);
+                command.phase = qec::EditorOperationCommandPhase::CancelPreview;
+                const qec::EditorOperationCommandResult cancel = qec::execute_command(session, command);
 		EXPECT_TRUE(cancel.command.ok);
 		qec::record_repeatable_operation(state, command, cancel.command);
 
@@ -367,13 +379,13 @@ TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionRecordsFaceExtrude
 	select_first_face(session);
 	const std::size_t original_face_count = session.objects().front().document.faces.size();
 	qec::RepeatLastActionState state;
-	qec::record_repeatable_transform(
-		state,
-		session,
-		move_drag({ 0.0F, 0.0F, -1.5F }, qec::TransformDragOperation::extrude),
-		false);
+        qec::record_repeatable_transform(
+            state, session,
+            move_drag({0.0F, 0.0F, -1.5F},
+                      qec::TransformDragOperation::Extrude),
+            false);
 
-	const qec::CommandResult repeat = qec::execute_repeat_last_action(session, state);
+        const qec::CommandResult repeat = qec::execute_repeat_last_action(session, state);
 
 	EXPECT_TRUE(repeat.ok);
 	EXPECT_TRUE(repeat.changed);

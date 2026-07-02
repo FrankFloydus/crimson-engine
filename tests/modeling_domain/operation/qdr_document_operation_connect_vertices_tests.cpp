@@ -18,8 +18,8 @@ TEST(QdrDocumentOperationConnectVerticesTests, ConnectVerticesSplitsASharedQuadF
 
 	EXPECT_TRUE(result.changed);
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
-	EXPECT_TRUE(selection.mode == SelectionMode::edge);
-	EXPECT_TRUE(selection.edges.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Edge);
+        EXPECT_TRUE(selection.edges.size() == 1U);
 	EXPECT_TRUE(selection_contains(selection, make_edge(fixture.bottom_left, fixture.top_right)));
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
@@ -35,8 +35,8 @@ TEST(QdrDocumentOperationConnectVerticesTests, ConnectVerticesKeepsCubeCutsManif
 		EXPECT_TRUE(result.changed);
 		EXPECT_TRUE(document.faces.size() == 7U);
 		EXPECT_TRUE(qdr_test::document_has_edge(document, make_edge(face.vertices[0], face.vertices[2])));
-		EXPECT_TRUE(selection.mode == SelectionMode::edge);
-		EXPECT_TRUE(selection.edges.size() == 1U);
+                EXPECT_TRUE(selection.mode == SelectionMode::Edge);
+                EXPECT_TRUE(selection.edges.size() == 1U);
 		EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), qdr_test::face_has_repeated_vertices));
 		EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 		EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
@@ -62,8 +62,8 @@ TEST(QdrDocumentOperationConnectVerticesTests, ConnectVerticesKeepsCubeCutsManif
 		EXPECT_TRUE(result.changed);
 		EXPECT_TRUE(document.faces.size() == 7U);
 		EXPECT_TRUE(qdr_test::document_has_edge(document, make_edge(face.vertices[2], face.vertices[0])));
-		EXPECT_TRUE(selection.mode == SelectionMode::edge);
-		EXPECT_TRUE(selection.edges.size() == 3U);
+                EXPECT_TRUE(selection.mode == SelectionMode::Edge);
+                EXPECT_TRUE(selection.edges.size() == 3U);
 		EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 		EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
 	}

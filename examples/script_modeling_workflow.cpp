@@ -7,8 +7,9 @@
 #include "api/quader_editor_api.hpp"
 
 int main() {
-    quader::QuaderStandaloneEditor standalone = quader::createStandaloneEditor();
-    quader::QuaderEditorApi& editor = standalone.editor();
+    quader::QuaderStandaloneEditor standalone =
+        quader::create_standalone_editor();
+    quader::QuaderEditorApi &editor = standalone.editor();
 
     const quader::QuaderBounds bounds{
             .min = {-1.0f, -1.0f, -1.0f},
@@ -16,16 +17,16 @@ int main() {
     };
 
     const quader::QuaderScriptResult result = editor.script("example workflow")
-            .createBox("box", bounds, "Scripted Box")
+            .create_box("box", bounds, "Scripted Box")
             .select("box")
-            .moveSelection({2.0f, 0.0f, 0.0f})
+            .move_selection({2.0f, 0.0f, 0.0f})
             .run();
 
     if (!result.ok()) {
         return 1;
     }
 
-    editor.commands().execute(quader::QuaderCommand::HistoryUndo);
-    editor.commands().execute(quader::QuaderCommand::HistoryRedo);
+    editor.commands().execute(quader::quader_command::kHistoryUndo);
+    editor.commands().execute(quader::quader_command::kHistoryRedo);
     return 0;
 }

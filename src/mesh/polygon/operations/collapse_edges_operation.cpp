@@ -45,16 +45,17 @@ public:
 
 OperationResult CollapseEdgesOperation::apply(Document& document, Selection& selection) const
 {
-    if (selection.mode != SelectionMode::edge || selection.edges.empty()) {
-        return { false, "Select one or more edges to collapse." };
-    }
+  if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
+    return {false, "Select one or more edges to collapse."};
+  }
 
     Selection vertex_selection;
-    vertex_selection.mode = SelectionMode::vertex;
+    vertex_selection.mode = SelectionMode::Vertex;
     for (Edge edge : selection.edges) {
         edge = make_edge(edge.a, edge.b);
-        if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b) {
-            continue;
+        if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+            edge.a == edge.b) {
+          continue;
         }
         if (find_vertex(document, edge.a) != nullptr) {
             add_unique_id(vertex_selection.vertices, edge.a);
@@ -69,13 +70,14 @@ OperationResult CollapseEdgesOperation::apply(Document& document, Selection& sel
     }
 
     ElementId active_vertex_id = vertex_selection.vertices.front();
-    if (selection.has_active && selection.active_kind == ElementKind::edge) {
-        const Edge active_edge = make_edge(selection.active_edge.a, selection.active_edge.b);
-        if (contains_id(vertex_selection.vertices, active_edge.a)) {
-            active_vertex_id = active_edge.a;
-        } else if (contains_id(vertex_selection.vertices, active_edge.b)) {
-            active_vertex_id = active_edge.b;
-        }
+    if (selection.has_active && selection.active_kind == ElementKind::Edge) {
+      const Edge active_edge =
+          make_edge(selection.active_edge.a, selection.active_edge.b);
+      if (contains_id(vertex_selection.vertices, active_edge.a)) {
+        active_vertex_id = active_edge.a;
+      } else if (contains_id(vertex_selection.vertices, active_edge.b)) {
+        active_vertex_id = active_edge.b;
+      }
     }
     activate_vertex_selection(vertex_selection, active_vertex_id);
 

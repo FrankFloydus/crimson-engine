@@ -18,8 +18,8 @@ class AssignMaterialOperation final : public EditorOperation {
 public:
 	[[nodiscard]] EditorOperationId operation_id() const override
 	{
-		return EditorOperationId::assign_material;
-	}
+          return EditorOperationId::AssignMaterial;
+        }
 
 	[[nodiscard]] std::string_view id() const override
 	{
@@ -50,8 +50,8 @@ public:
 
 const EditorOperation& assign_material_operation()
 {
-	static const AssignMaterialOperation operation;
-	return operation;
+  static const AssignMaterialOperation kOperation;
+  return kOperation;
 }
 
 } // namespace quader_editor_core

@@ -15,8 +15,8 @@
 namespace quader_editor_core {
 namespace {
 
-inline constexpr double drawn_plane_point_epsilon_squared = 0.0001;
-inline constexpr double drawn_plane_epsilon_squared = 0.000001;
+inline constexpr double kDrawnPlanePointEpsilonSquared = 0.0001;
+inline constexpr double kDrawnPlaneEpsilonSquared = 0.000001;
 
 std::string message(std::string_view label, std::string_view suffix)
 {
@@ -76,10 +76,11 @@ DrawnPlaneToolResult DrawnPlaneToolLogic::capture_second(
 	if (state.points.size() != 1) {
 		return { false, false, message(label, " needs a first point.") };
 	}
-	if (vec3_distance_squared(state.points[0], position) <= drawn_plane_point_epsilon_squared) {
-		return { false, false, message(label, " line is too short.") };
-	}
-	state.points.push_back(position);
+        if (vec3_distance_squared(state.points[0], position) <=
+            kDrawnPlanePointEpsilonSquared) {
+          return {false, false, message(label, " line is too short.")};
+        }
+        state.points.push_back(position);
 	state.dragging_point_index = 1;
 	state.dragging_new_point = false;
 	state.dragging_line = false;
@@ -94,10 +95,11 @@ DrawnPlaneToolResult DrawnPlaneToolLogic::update_dragged_new_point(
 	if (state.points.size() != 1 && state.points.size() != 2) {
 		return { false, false, message(label, " needs a first point.") };
 	}
-	if (vec3_distance_squared(state.points[0], position) <= drawn_plane_point_epsilon_squared) {
-		return { false, false, message(label, " line is too short.") };
-	}
-	if (state.points.size() == 1) {
+        if (vec3_distance_squared(state.points[0], position) <=
+            kDrawnPlanePointEpsilonSquared) {
+          return {false, false, message(label, " line is too short.")};
+        }
+        if (state.points.size() == 1) {
 		state.points.push_back(position);
 	} else {
 		state.points[1] = position;
@@ -119,14 +121,17 @@ DrawnPlaneToolResult DrawnPlaneToolLogic::update_dragged_point(
 	}
 	std::vector<quader::QVec3> next_points = state.points;
 	next_points[static_cast<std::size_t>(state.dragging_point_index)] = position;
-	if (next_points.size() >= 2 && vec3_distance_squared(next_points[0], next_points[1]) <= drawn_plane_point_epsilon_squared) {
-		return { false, false, message(label, " line is too short.") };
-	}
-	state.points = std::move(next_points);
-	if (state.dragging_point_index == 0 && quader::length_squared(plane_normal) > drawn_plane_epsilon_squared) {
-		state.face_normal = normalized_axis(plane_normal);
-	}
-	return { true, true };
+        if (next_points.size() >= 2 &&
+            vec3_distance_squared(next_points[0], next_points[1]) <=
+                kDrawnPlanePointEpsilonSquared) {
+          return {false, false, message(label, " line is too short.")};
+        }
+        state.points = std::move(next_points);
+        if (state.dragging_point_index == 0 &&
+            quader::length_squared(plane_normal) > kDrawnPlaneEpsilonSquared) {
+          state.face_normal = normalized_axis(plane_normal);
+        }
+        return { true, true };
 }
 
 DrawnPlaneToolResult DrawnPlaneToolLogic::begin_point_drag(
@@ -172,11 +177,12 @@ DrawnPlaneToolResult DrawnPlaneToolLogic::update_dragged_line(
 
 	const quader::QVec3 delta = position - state.drag_line_anchor;
 	state.drag_line_anchor = position;
-	if (vec3_distance_squared(delta, quader::QVec3 {}) <= drawn_plane_epsilon_squared) {
-		return { true, false };
-	}
+        if (vec3_distance_squared(delta, quader::QVec3{}) <=
+            kDrawnPlaneEpsilonSquared) {
+          return {true, false};
+        }
 
-	for (quader::QVec3& point : state.points) {
+        for (quader::QVec3& point : state.points) {
 		point += delta;
 	}
 	return { true, true };
@@ -236,10 +242,11 @@ std::vector<quader::QVec3> DrawnPlaneToolLogic::plane_points(DrawnPlaneToolState
 bool DrawnPlaneToolLogic::point_repeats_existing(DrawnPlaneToolStateConstRef state, quader::QVec3 point) const
 {
 	for (const quader::QVec3 existing : state.points) {
-		if (vec3_distance_squared(existing, point) <= drawn_plane_point_epsilon_squared) {
-			return true;
-		}
-	}
+          if (vec3_distance_squared(existing, point) <=
+              kDrawnPlanePointEpsilonSquared) {
+            return true;
+          }
+        }
 	return false;
 }
 
@@ -252,10 +259,12 @@ bool DrawnPlaneToolLogic::point_repeats_other(
 		if (i == point_index) {
 			continue;
 		}
-		if (vec3_distance_squared(state.points[static_cast<std::size_t>(i)], point) <= drawn_plane_point_epsilon_squared) {
-			return true;
-		}
-	}
+                if (vec3_distance_squared(
+                        state.points[static_cast<std::size_t>(i)], point) <=
+                    kDrawnPlanePointEpsilonSquared) {
+                  return true;
+                }
+        }
 	return false;
 }
 
@@ -292,8 +301,8 @@ bool DrawnPlaneToolLogic::update_hover(
 
 const DrawnPlaneToolLogic& drawn_plane_tool_logic()
 {
-	static const DrawnPlaneToolLogic logic;
-	return logic;
+  static const DrawnPlaneToolLogic kLogic;
+  return kLogic;
 }
 
 DrawnPlaneSurface drawn_plane_surface_from_points(std::span<const quader::QVec3> points)

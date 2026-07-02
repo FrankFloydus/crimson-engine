@@ -24,22 +24,25 @@ public:
     QuaderQueryApi(QuaderApiSession session, QuaderApiMutationRunner& mutations);
 
     [[nodiscard]] std::vector<QuaderEntitySnapshot> entities() const;
-    [[nodiscard]] std::vector<QuaderEntitySnapshot> entityTree() const;
+    [[nodiscard]] std::vector<QuaderEntitySnapshot> entity_tree() const;
     [[nodiscard]] std::optional<QuaderEntitySnapshot> entity(EntityId id) const;
     [[nodiscard]] std::optional<QuaderMeshSnapshot> mesh(AssetId id) const;
     [[nodiscard]] std::optional<QuaderMaterialAsset> material(AssetId id) const;
     [[nodiscard]] std::optional<QuaderTextureAsset> texture(AssetId id) const;
-    [[nodiscard]] std::vector<QuaderModelingObjectRecord> modelingObjects() const;
-    [[nodiscard]] std::optional<QuaderModelingObjectRef> modelingObjectForEntity(EntityId entity) const;
-    [[nodiscard]] std::optional<QuaderModelingObjectRef> modelingObjectForId(
-            QuaderModelingObjectId modelingObjectId) const;
-    [[nodiscard]] std::optional<QuaderMeshAsset> compiledObjectMesh(QuaderModelingObjectRef object) const;
-    [[nodiscard]] std::optional<QVec3> selectionCenter() const;
+    [[nodiscard]] std::vector<QuaderModelingObjectRecord>
+    modeling_objects() const;
+    [[nodiscard]] std::optional<QuaderModelingObjectRef>
+    modeling_object_for_entity(EntityId entity) const;
+    [[nodiscard]] std::optional<QuaderModelingObjectRef>
+    modeling_object_for_id(QuaderModelingObjectId modeling_object_id) const;
+    [[nodiscard]] std::optional<QuaderMeshAsset>
+    compiled_object_mesh(QuaderModelingObjectRef object) const;
+    [[nodiscard]] std::optional<QVec3> selection_center() const;
     [[nodiscard]] QuaderSelectionSummary selection() const;
-    [[nodiscard]] QuaderToolStatus toolStatus() const;
+    [[nodiscard]] QuaderToolStatus tool_status() const;
     [[nodiscard]] QuaderAssetSnapshot assets() const;
     [[nodiscard]] QuaderHistorySnapshot history() const;
-    [[nodiscard]] QuaderOverlayFrame selectionOverlay() const;
+    [[nodiscard]] QuaderOverlayFrame selection_overlay() const;
     [[nodiscard]] QuaderRevisionStamp revisions() const;
     [[nodiscard]] QuaderApiSnapshot snapshot() const;
 

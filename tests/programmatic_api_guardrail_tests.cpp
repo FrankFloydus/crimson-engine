@@ -20,124 +20,133 @@
 
 namespace {
 
-using quader::test::guardrail::containsAny;
-using quader::test::guardrail::filesWithExtension;
-using quader::test::guardrail::linesContaining;
-using quader::test::guardrail::normalizedRelative;
-using quader::test::guardrail::readFile;
-using quader::test::guardrail::readSourceFile;
-using quader::test::guardrail::sourceSlice;
-using quader::test::guardrail::sourceFilesUnder;
-using quader::test::guardrail::sourceRoot;
-using quader::test::guardrail::splitLines;
-using quader::test::guardrail::startsWith;
+using quader::test::guardrail::contains_any;
+using quader::test::guardrail::files_with_extension;
+using quader::test::guardrail::lines_containing;
+using quader::test::guardrail::normalized_relative;
+using quader::test::guardrail::read_file;
+using quader::test::guardrail::read_source_file;
+using quader::test::guardrail::source_files_under;
+using quader::test::guardrail::source_root;
+using quader::test::guardrail::source_slice;
+using quader::test::guardrail::split_lines;
+using quader::test::guardrail::starts_with;
 
 /**
  * Separates public API-facing docs/examples from internal architecture and provenance docs.
  */
 struct PublicDocsExamplesManifest {
-    std::vector<std::filesystem::path> publicFiles;
-    std::vector<std::filesystem::path> internalFiles;
+  std::vector<std::filesystem::path> public_files;
+  std::vector<std::filesystem::path> internal_files;
 };
 
-std::vector<std::filesystem::path> docAndExampleFilesUnder(const std::filesystem::path& root) {
-    std::vector<std::filesystem::path> files;
-    for (const std::string_view extension : {
-                 std::string_view{".cpp"},
-                 std::string_view{".lua"},
-                 std::string_view{".md"},
-                 std::string_view{".txt"},
-         }) {
-        std::vector<std::filesystem::path> withExtension = filesWithExtension(root, extension);
-        files.insert(files.end(), withExtension.begin(), withExtension.end());
-    }
-    std::sort(files.begin(), files.end());
-    files.erase(std::unique(files.begin(), files.end()), files.end());
-    return files;
+std::vector<std::filesystem::path>
+doc_and_example_files_under(const std::filesystem::path &root) {
+  std::vector<std::filesystem::path> files;
+  for (const std::string_view extension : {
+           std::string_view{".cpp"},
+           std::string_view{".lua"},
+           std::string_view{".md"},
+           std::string_view{".txt"},
+       }) {
+    std::vector<std::filesystem::path> with_extension =
+        files_with_extension(root, extension);
+    files.insert(files.end(), with_extension.begin(), with_extension.end());
+  }
+  std::sort(files.begin(), files.end());
+  files.erase(std::unique(files.begin(), files.end()), files.end());
+  return files;
 }
 
-PublicDocsExamplesManifest publicDocsExamplesManifest() {
-    PublicDocsExamplesManifest manifest;
-    const std::string source = readSourceFile("docs/public-docs-examples.txt");
-    std::set<std::string> seen;
+PublicDocsExamplesManifest public_docs_examples_manifest() {
+  PublicDocsExamplesManifest manifest;
+  const std::string source = read_source_file("docs/public-docs-examples.txt");
+  std::set<std::string> seen;
 
-    for (const std::string& line : splitLines(source)) {
-        if (line.empty() || startsWith(line, "#") || startsWith(line, "//")) {
-            continue;
-        }
-
-        std::istringstream stream(line);
-        std::string visibility;
-        std::string relative;
-        stream >> visibility >> relative;
-        if (visibility.empty() || relative.empty()) {
-            continue;
-        }
-
-        EXPECT_TRUE(visibility == "public" || visibility == "internal") << line;
-        EXPECT_TRUE(seen.insert(relative).second) << "duplicate docs/examples classification: " << relative;
-
-        if (visibility == "public") {
-            manifest.publicFiles.push_back(sourceRoot() / relative);
-        } else if (visibility == "internal") {
-            manifest.internalFiles.push_back(sourceRoot() / relative);
-        }
+  for (const std::string &line : split_lines(source)) {
+    if (line.empty() || starts_with(line, "#") || starts_with(line, "//")) {
+      continue;
     }
 
-    return manifest;
-}
-
-std::vector<std::filesystem::path> publicDocAndExampleFiles() {
-    return publicDocsExamplesManifest().publicFiles;
-}
-
-bool isInternalApiHeader(const std::filesystem::path& path) {
-    const std::string relative = normalizedRelative(path);
-    return relative == "src/api/quader_api_mutation_runner.hpp" ||
-            relative == "src/api/quader_api_status_internal.hpp" ||
-            relative == "src/api/quader_api_session_internal_access.hpp" ||
-            relative == "src/api/quader_api_type_conversions.hpp" ||
-            relative == "src/api/quader_polygon_document_internal_access.hpp" ||
-            relative == "src/editor/viewport/quader_viewport_api_runtime_access.hpp";
-}
-
-std::vector<std::filesystem::path> publicApiHeaderFiles() {
-    std::vector<std::filesystem::path> headers;
-    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "src/api", ".hpp")) {
-        if (!isInternalApiHeader(file)) {
-            headers.push_back(file);
-        }
+    std::istringstream stream(line);
+    std::string visibility;
+    std::string relative;
+    stream >> visibility >> relative;
+    if (visibility.empty() || relative.empty()) {
+      continue;
     }
-    return headers;
-}
 
-bool allowedRawModelingMutation(std::string_view relative, std::string_view line) {
-    (void)relative;
-    (void)line;
-    return false;
-}
+    EXPECT_TRUE(visibility == "public" || visibility == "internal") << line;
+    EXPECT_TRUE(seen.insert(relative).second)
+        << "duplicate docs/examples classification: " << relative;
 
-bool isIdentifierCharacter(char value) {
-    return std::isalnum(static_cast<unsigned char>(value)) != 0 || value == '_';
-}
-
-bool containsIdentifierToken(std::string_view source, std::string_view token) {
-    std::size_t position = source.find(token);
-    while (position != std::string_view::npos) {
-        const bool leftBoundary = position == 0 || !isIdentifierCharacter(source[position - 1]);
-        const std::size_t end = position + token.size();
-        const bool rightBoundary = end >= source.size() || !isIdentifierCharacter(source[end]);
-        if (leftBoundary && rightBoundary) {
-            return true;
-        }
-        position = source.find(token, position + 1);
+    if (visibility == "public") {
+      manifest.public_files.push_back(source_root() / relative);
+    } else if (visibility == "internal") {
+      manifest.internal_files.push_back(source_root() / relative);
     }
-    return false;
+  }
+
+  return manifest;
 }
 
-bool endsWith(std::string_view value, std::string_view suffix) {
-    return value.size() >= suffix.size() &&
-            value.substr(value.size() - suffix.size()) == suffix;
+std::vector<std::filesystem::path> public_doc_and_example_files() {
+  return public_docs_examples_manifest().public_files;
+}
+
+bool is_internal_api_header(const std::filesystem::path &path) {
+  const std::string relative = normalized_relative(path);
+  return relative == "src/api/quader_api_mutation_runner.hpp" ||
+         relative == "src/api/quader_api_status_internal.hpp" ||
+         relative == "src/api/quader_api_session_internal_access.hpp" ||
+         relative == "src/api/quader_api_type_conversions.hpp" ||
+         relative == "src/api/quader_polygon_document_internal_access.hpp" ||
+         relative ==
+             "src/editor/viewport/quader_viewport_api_runtime_access.hpp";
+}
+
+std::vector<std::filesystem::path> public_api_header_files() {
+  std::vector<std::filesystem::path> headers;
+  for (const std::filesystem::path &file :
+       files_with_extension(source_root() / "src/api", ".hpp")) {
+    if (!is_internal_api_header(file)) {
+      headers.push_back(file);
+    }
+  }
+  return headers;
+}
+
+bool allowed_raw_modeling_mutation(std::string_view relative,
+                                   std::string_view line) {
+  (void)relative;
+  (void)line;
+  return false;
+}
+
+bool is_identifier_character(char value) {
+  return std::isalnum(static_cast<unsigned char>(value)) != 0 || value == '_';
+}
+
+bool contains_identifier_token(std::string_view source,
+                               std::string_view token) {
+  std::size_t position = source.find(token);
+  while (position != std::string_view::npos) {
+    const bool left_boundary =
+        position == 0 || !is_identifier_character(source[position - 1]);
+    const std::size_t end = position + token.size();
+    const bool right_boundary =
+        end >= source.size() || !is_identifier_character(source[end]);
+    if (left_boundary && right_boundary) {
+      return true;
+    }
+    position = source.find(token, position + 1);
+  }
+  return false;
+}
+
+bool ends_with(std::string_view value, std::string_view suffix) {
+  return value.size() >= suffix.size() &&
+         value.substr(value.size() - suffix.size()) == suffix;
 }
 
 std::string trim(std::string value) {
@@ -150,210 +159,242 @@ std::string trim(std::string value) {
     return value;
 }
 
-std::unordered_map<std::string, std::string> quaderCommandIdsByConstantName(const std::string& source) {
-    std::unordered_map<std::string, std::string> result;
-    constexpr std::string_view marker = "inline constexpr QuaderCommandId ";
-    for (const std::string& line : splitLines(source)) {
-        const std::size_t markerPosition = line.find(marker);
-        if (markerPosition == std::string::npos) {
-            continue;
-        }
-        const std::size_t nameBegin = markerPosition + marker.size();
-        const std::size_t nameEnd = line.find('{', nameBegin);
-        const std::size_t valueBegin = line.find("{\"", nameEnd);
-        const std::size_t valueEnd = line.find("\"}", valueBegin + 2u);
-        if (nameEnd == std::string::npos || valueBegin == std::string::npos || valueEnd == std::string::npos) {
-            continue;
-        }
-        result.emplace(
-                trim(line.substr(nameBegin, nameEnd - nameBegin)),
-                line.substr(valueBegin + 2u, valueEnd - valueBegin - 2u));
+std::unordered_map<std::string, std::string>
+quader_command_ids_by_constant_name(const std::string &source) {
+  std::unordered_map<std::string, std::string> result;
+  constexpr std::string_view kMarker = "inline constexpr QuaderCommandId ";
+  for (std::size_t marker_position = source.find(kMarker);
+       marker_position != std::string::npos;
+       marker_position = source.find(kMarker, marker_position + kMarker.size())) {
+    if (marker_position == std::string::npos) {
+      continue;
     }
-    return result;
-}
-
-bool isPublicBehaviorTestName(std::string_view filename) {
-    return endsWith(filename, "_api_tests.cpp") ||
-            endsWith(filename, "_public_api_tests.cpp") ||
-            (filename.find("_behavior") != std::string_view::npos && endsWith(filename, "_tests.cpp"));
-}
-
-bool isWhitelistedDomainApiTest(std::string_view relative) {
-    return relative == "tests/modeling_domain/qdr_document_model_api_tests.cpp";
-}
-
-std::vector<std::filesystem::path> publicBehaviorTestFiles() {
-    std::vector<std::filesystem::path> files;
-    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "tests", ".cpp")) {
-        const std::string relative = normalizedRelative(file);
-        if (isPublicBehaviorTestName(file.filename().generic_string()) && !isWhitelistedDomainApiTest(relative)) {
-            files.push_back(file);
-        }
+    const std::size_t name_begin = marker_position + kMarker.size();
+    const std::size_t name_end = source.find('{', name_begin);
+    if (name_end == std::string::npos) {
+      continue;
     }
-    return files;
-}
-
-std::vector<std::filesystem::path> publicCppExampleFiles() {
-    std::vector<std::filesystem::path> examples;
-    for (const std::filesystem::path& file : publicDocAndExampleFiles()) {
-        if (file.extension() == ".cpp" && normalizedRelative(file).find("examples/") == 0) {
-            examples.push_back(file);
-        }
+    const std::string name = trim(source.substr(name_begin, name_end - name_begin));
+    if (name.find('[') != std::string::npos) {
+      continue;
     }
-    return examples;
+    const std::size_t value_begin = source.find('"', name_end);
+    const std::size_t value_end = source.find('"', value_begin + 1u);
+    if (value_begin == std::string::npos || value_end == std::string::npos) {
+      continue;
+    }
+    result.emplace(name, source.substr(value_begin + 1u,
+                                       value_end - value_begin - 1u));
+  }
+  return result;
 }
 
-bool isDocumentationOnlyExample(const std::string& source) {
-    return source.find("QUADER_DOCUMENTATION_ONLY_EXAMPLE") != std::string::npos ||
-            source.find("documentation-only") != std::string::npos;
+bool is_public_behavior_test_name(std::string_view filename) {
+  return ends_with(filename, "_api_tests.cpp") ||
+         ends_with(filename, "_public_api_tests.cpp") ||
+         (filename.find("_behavior") != std::string_view::npos &&
+          ends_with(filename, "_tests.cpp"));
 }
 
-bool allowedPublicBehaviorHarnessUse(std::string_view relative, std::string_view line) {
-    (void)relative;
-    (void)line;
-    return false;
+bool is_whitelisted_domain_api_test(std::string_view relative) {
+  return relative == "tests/modeling_domain/qdr_document_model_api_tests.cpp";
+}
+
+std::vector<std::filesystem::path> public_behavior_test_files() {
+  std::vector<std::filesystem::path> files;
+  for (const std::filesystem::path &file :
+       files_with_extension(source_root() / "tests", ".cpp")) {
+    const std::string relative = normalized_relative(file);
+    if (is_public_behavior_test_name(file.filename().generic_string()) &&
+        !is_whitelisted_domain_api_test(relative)) {
+      files.push_back(file);
+    }
+  }
+  return files;
+}
+
+std::vector<std::filesystem::path> public_cpp_example_files() {
+  std::vector<std::filesystem::path> examples;
+  for (const std::filesystem::path &file : public_doc_and_example_files()) {
+    if (file.extension() == ".cpp" &&
+        normalized_relative(file).find("examples/") == 0) {
+      examples.push_back(file);
+    }
+  }
+  return examples;
+}
+
+bool is_documentation_only_example(const std::string &source) {
+  return source.find("QUADER_DOCUMENTATION_ONLY_EXAMPLE") !=
+             std::string::npos ||
+         source.find("documentation-only") != std::string::npos;
+}
+
+bool allowed_public_behavior_harness_use(std::string_view relative,
+                                         std::string_view line) {
+  (void)relative;
+  (void)line;
+  return false;
 }
 
 } // namespace
 
 TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersAvoidRuntimeAndSdkInternals) {
-    for (const std::filesystem::path& file : publicApiHeaderFiles()) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
+  for (const std::filesystem::path &file : public_api_header_files()) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
 
-        EXPECT_EQ(source.find("editor/modeling/runtime/session.hpp"), std::string::npos) << relative;
-        EXPECT_FALSE(containsAny(source, {
-                             "<filament/",
-                             "\"filament/",
-                             "<SDL",
-                             "\"SDL",
-                             "<entt/",
-                             "\"entt/",
-                     }))
-                << relative;
-    }
+    EXPECT_EQ(source.find("editor/modeling/runtime/session.hpp"),
+              std::string::npos)
+        << relative;
+    EXPECT_FALSE(contains_any(source,
+                              {
+                                  "<filament/",
+                                  "\"filament/",
+                                  "<SDL",
+                                  "\"SDL",
+                                  "<entt/",
+                                  "\"entt/",
+                              }))
+        << relative;
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, ObjectHandleQueriesRouteThroughPublicQueryApi) {
-    const std::string handle = readFile(sourceRoot() / "src/api/quader_object_handle.cpp");
+  const std::string handle =
+      read_file(source_root() / "src/api/quader_object_handle.cpp");
 
-    EXPECT_NE(handle.find("api_->query().modelingObjectForEntity(ref_.entity)"), std::string::npos);
-    EXPECT_NE(handle.find("api_->query().compiledObjectMesh(ref_)"), std::string::npos);
-    EXPECT_EQ(handle.find("QuaderApiSessionInternalAccess"), std::string::npos);
-    EXPECT_EQ(handle.find("ProjectSession"), std::string::npos);
-    EXPECT_EQ(handle.find("ModelingSessionService"), std::string::npos);
+  EXPECT_NE(handle.find("api_->query().modeling_object_for_entity(ref_.entity)"),
+            std::string::npos);
+  EXPECT_NE(handle.find("api_->query().compiled_object_mesh(ref_)"),
+            std::string::npos);
+  EXPECT_EQ(handle.find("QuaderApiSessionInternalAccess"), std::string::npos);
+  EXPECT_EQ(handle.find("ProjectSession"), std::string::npos);
+  EXPECT_EQ(handle.find("ModelingSessionService"), std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicTypedCommandCatalogStaysCanonicalAndUnique) {
-    const std::string commandHeader = readFile(sourceRoot() / "src/api/quader_command_ids.hpp");
-    const std::unordered_map<std::string, std::string> idsByConstant =
-            quaderCommandIdsByConstantName(commandHeader);
-    const std::string typedCatalog = sourceSlice(
-            commandHeader,
-            "inline constexpr QuaderCommandId TypedCommandIds[]",
-            "[[nodiscard]] inline constexpr std::span");
+  const std::string command_header =
+      read_file(source_root() / "src/api/quader_command_ids.hpp");
+  const std::unordered_map<std::string, std::string> ids_by_constant =
+      quader_command_ids_by_constant_name(command_header);
+  const std::string typed_catalog = source_slice(
+      command_header, "inline constexpr QuaderCommandId kTypedCommandIds[]",
+      "[[nodiscard]] inline constexpr std::span");
 
-    std::set<std::string> seen;
-    for (std::string line : splitLines(typedCatalog)) {
-        line = trim(std::move(line));
-        if (!line.empty() && line.back() == ',') {
-            line.pop_back();
-        }
-        const auto found = idsByConstant.find(line);
-        if (found == idsByConstant.end()) {
-            continue;
-        }
-        EXPECT_TRUE(seen.insert(found->second).second) << found->second << " from " << line;
+  std::set<std::string> seen;
+  for (std::string line : split_lines(typed_catalog)) {
+    line = trim(std::move(line));
+    if (!line.empty() && line.back() == ',') {
+      line.pop_back();
     }
-
-    ASSERT_TRUE(idsByConstant.contains("DuplicateSelection"));
-    ASSERT_TRUE(idsByConstant.contains("ModelingDuplicateMeshes"));
-    EXPECT_EQ(idsByConstant.at("DuplicateSelection"), "edit.duplicate");
-    EXPECT_EQ(idsByConstant.at("ModelingDuplicateMeshes"), "modeling.duplicate_meshes");
-    EXPECT_NE(idsByConstant.at("DuplicateSelection"), idsByConstant.at("ModelingDuplicateMeshes"));
-
-    for (std::string_view alias : {
-                 std::string_view{"HistoryUndo"},
-                 std::string_view{"HistoryRedo"},
-                 std::string_view{"HistoryRepeatLastAction"},
-                 std::string_view{"SelectionClear"},
-                 std::string_view{"SelectionSelectAll"},
-                 std::string_view{"SelectionInvert"},
-                 std::string_view{"ModelingDeleteSelection"},
-                 std::string_view{"ModelingApplyActiveMaterial"},
-         }) {
-        EXPECT_EQ(typedCatalog.find(alias), std::string::npos) << alias;
+    const auto found = ids_by_constant.find(line);
+    if (found == ids_by_constant.end()) {
+      continue;
     }
+    EXPECT_TRUE(seen.insert(found->second).second)
+        << found->second << " from " << line;
+  }
+
+  ASSERT_TRUE(ids_by_constant.contains("kDuplicateSelection"));
+  ASSERT_TRUE(ids_by_constant.contains("kModelingDuplicateMeshes"));
+  EXPECT_EQ(ids_by_constant.at("kDuplicateSelection"), "edit.duplicate");
+  EXPECT_EQ(ids_by_constant.at("kModelingDuplicateMeshes"),
+            "modeling.duplicate_meshes");
+  EXPECT_NE(ids_by_constant.at("kDuplicateSelection"),
+            ids_by_constant.at("kModelingDuplicateMeshes"));
+
+  for (std::string_view alias : {
+           std::string_view{"kHistoryUndo"},
+           std::string_view{"kHistoryRedo"},
+           std::string_view{"kHistoryRepeatLastAction"},
+           std::string_view{"kSelectionClear"},
+           std::string_view{"kSelectionSelectAll"},
+           std::string_view{"kSelectionInvert"},
+           std::string_view{"kModelingDeleteSelection"},
+           std::string_view{"kModelingApplyActiveMaterial"},
+       }) {
+    EXPECT_EQ(typed_catalog.find(alias), std::string::npos) << alias;
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersAvoidInternalOwnerContracts) {
-    for (const std::filesystem::path& file : publicApiHeaderFiles()) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
+  for (const std::filesystem::path &file : public_api_header_files()) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
 
-        EXPECT_FALSE(containsAny(source, {
-                             "\"assets/",
-                             "<assets/",
-                             "\"editor/",
-                             "<editor/",
-                             "\"mesh/",
-                             "<mesh/",
-                             "\"render/",
-                             "<render/",
-                             "\"scene/",
-                             "<scene/",
-                             "\"viewport/",
-                             "<viewport/",
-                             "quader_editor_core::",
-                             "quader_host_contract::",
-                             "quader_io::",
-                             "quader_poly::",
-                     }))
-                << relative;
+    EXPECT_FALSE(contains_any(source,
+                              {
+                                  "\"assets/",
+                                  "<assets/",
+                                  "\"editor/",
+                                  "<editor/",
+                                  "\"mesh/",
+                                  "<mesh/",
+                                  "\"render/",
+                                  "<render/",
+                                  "\"scene/",
+                                  "<scene/",
+                                  "\"viewport/",
+                                  "<viewport/",
+                                  "quader_editor_core::",
+                                  "quader_host_contract::",
+                                  "quader_io::",
+                                  "quader_poly::",
+                              }))
+        << relative;
 
-        for (std::string_view token : {
-                     "ProjectSession",
-                     "EditorHistoryService",
-                     "SceneDocument",
-                     "AssetRegistry",
-                     "ModelingSessionService",
-                     "MeshAsset",
-                     "TextureAsset",
-                     "MaterialDocument",
-                     "MeshAssetRevision",
-                     "TransformComponent",
-                     "ViewportOverlayFrame",
-                     "ModelingBounds",
-                     "ModelingSelectionSummary",
-                     "ModelingToolStatus",
-             }) {
-            EXPECT_FALSE(containsIdentifierToken(source, token)) << relative << " exposes " << token;
-        }
+    for (std::string_view token : {
+             "ProjectSession",
+             "EditorHistoryService",
+             "SceneDocument",
+             "AssetRegistry",
+             "ModelingSessionService",
+             "MeshAsset",
+             "TextureAsset",
+             "MaterialDocument",
+             "MeshAssetRevision",
+             "TransformComponent",
+             "ViewportOverlayFrame",
+             "ModelingBounds",
+             "ModelingSelectionSummary",
+             "ModelingToolStatus",
+         }) {
+      EXPECT_FALSE(contains_identifier_token(source, token))
+          << relative << " exposes " << token;
     }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicRenderApiDoesNotExposeRenderBridge) {
-    const std::string header = readFile(sourceRoot() / "src/api/quader_render_api.hpp");
+  const std::string header =
+      read_file(source_root() / "src/api/quader_render_api.hpp");
 
-    EXPECT_EQ(header.find("SceneRenderBridge"), std::string::npos);
-    EXPECT_EQ(header.find("syncScene("), std::string::npos);
-    EXPECT_EQ(header.find("syncToolPreviews("), std::string::npos);
-    EXPECT_EQ(header.find("syncSelectionOverlay("), std::string::npos);
-    EXPECT_NE(header.find("friend class QuaderRenderApiRuntimeAccess"), std::string::npos);
+  EXPECT_EQ(header.find("SceneRenderBridge"), std::string::npos);
+  EXPECT_EQ(header.find("sync_scene("), std::string::npos);
+  EXPECT_EQ(header.find("sync_tool_previews("), std::string::npos);
+  EXPECT_EQ(header.find("sync_selection_overlay("), std::string::npos);
+  EXPECT_NE(header.find("friend class QuaderRenderApiRuntimeAccess"),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, ApiLayerUsesSharedResultStatusConversion) {
-    for (const std::filesystem::path& file : sourceFilesUnder(sourceRoot() / "src/api")) {
-        const std::string relative = normalizedRelative(file);
-        if (relative == "src/api/quader_api_mutation_runner.cpp") {
-            continue;
-        }
-
-        const std::string source = readFile(file);
-        for (const std::string& line : linesContaining(source, {".ok = result.ok", ".changed = result.changed"})) {
-            ADD_FAILURE() << relative << ": use quaderApiStatusFromResult for QuaderApiResult status copies: " << line;
-        }
+  for (const std::filesystem::path &file :
+       source_files_under(source_root() / "src/api")) {
+    const std::string relative = normalized_relative(file);
+    if (relative == "src/api/quader_api_mutation_runner.cpp") {
+      continue;
     }
+
+    const std::string source = read_file(file);
+    for (const std::string &line : lines_containing(
+             source, {".ok = result.ok", ".changed = result.changed"})) {
+      ADD_FAILURE() << relative
+                    << ": use quader_api_status_from_result for QuaderApiResult "
+                       "status copies: "
+                    << line;
+    }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicApiValueContractHeadersAvoidInternalOwnerHeaders) {
@@ -361,701 +402,896 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiValueContractHeadersAvoidInternalOw
                  std::string_view{"src/api/quader_api_types.hpp"},
                  std::string_view{"src/api/quader_api_snapshot.hpp"},
          }) {
-        const std::string source = readFile(sourceRoot() / std::string(relative));
+      const std::string source =
+          read_file(source_root() / std::string(relative));
 
-        EXPECT_FALSE(containsAny(source, {
-                             "\"editor/",
-                             "\"scene/",
-                             "\"assets/",
-                             "\"render/",
-                             "\"viewport/",
-                             "\"mesh/",
-                             "<mesh/",
-                             "quader_poly::",
-                             "quader_editor_core::",
-                             "quader_io::",
-                             "quader_host_contract::",
-                             "TransformComponent",
-                             "ModelingBounds",
-                             "ModelingSelectionSummary",
-                             "ModelingToolStatus",
-                             "ViewportOverlayFrame",
-                             "MeshAssetRevision",
-                     }))
-                << relative;
+      EXPECT_FALSE(contains_any(source,
+                                {
+                                    "\"editor/",
+                                    "\"scene/",
+                                    "\"assets/",
+                                    "\"render/",
+                                    "\"viewport/",
+                                    "\"mesh/",
+                                    "<mesh/",
+                                    "quader_poly::",
+                                    "quader_editor_core::",
+                                    "quader_io::",
+                                    "quader_host_contract::",
+                                    "TransformComponent",
+                                    "ModelingBounds",
+                                    "ModelingSelectionSummary",
+                                    "ModelingToolStatus",
+                                    "ViewportOverlayFrame",
+                                    "MeshAssetRevision",
+                                }))
+          << relative;
     }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersDoNotExposeMutableInternalOwners) {
-    for (const std::filesystem::path& file : publicApiHeaderFiles()) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
+  for (const std::filesystem::path &file : public_api_header_files()) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
 
-        for (std::string_view forbidden : {
-                     "SceneDocument&",
-                     "AssetRegistry&",
-                     "ViewportWorkspaceService",
-                     "MeshAsset*",
-                     "MaterialDocument*",
-                     "TextureAsset*",
-                     "entt::registry&",
-                     "EditorSession&",
-                     "EditorCommandRegistry",
-                     "QuaderKeybindingService",
-                     "\"editor/commands/editor_command_registry.hpp\"",
-                     "\"editor/input/quader_keybinding_service.hpp\"",
-                     "\"editor/commands/document/",
-             }) {
-            EXPECT_EQ(source.find(forbidden), std::string::npos) << relative << " exposes " << forbidden;
-        }
+    for (std::string_view forbidden : {
+             "SceneDocument&",
+             "AssetRegistry&",
+             "ViewportWorkspaceService",
+             "MeshAsset*",
+             "MaterialDocument*",
+             "TextureAsset*",
+             "entt::registry&",
+             "EditorSession&",
+             "EditorCommandRegistry",
+             "QuaderKeybindingService",
+             "\"editor/commands/editor_command_registry.hpp\"",
+             "\"editor/input/quader_keybinding_service.hpp\"",
+             "\"editor/commands/document/",
+         }) {
+      EXPECT_EQ(source.find(forbidden), std::string::npos)
+          << relative << " exposes " << forbidden;
     }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicCommandApiUsesViewportInputValueContracts) {
-    for (const std::filesystem::path& file : publicApiHeaderFiles()) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
+  for (const std::filesystem::path &file : public_api_header_files()) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
 
-        EXPECT_EQ(source.find("\"viewport/viewport_input_router.hpp\""), std::string::npos)
-                << relative;
-        EXPECT_EQ(source.find("\"viewport/viewport_input_types.hpp\""), std::string::npos)
-                << relative;
-        EXPECT_EQ(source.find("\"editor/input/quader_input_binding.hpp\""), std::string::npos)
-                << relative;
-    }
+    EXPECT_EQ(source.find("\"viewport/viewport_input_router.hpp\""),
+              std::string::npos)
+        << relative;
+    EXPECT_EQ(source.find("\"viewport/viewport_input_types.hpp\""),
+              std::string::npos)
+        << relative;
+    EXPECT_EQ(source.find("\"editor/input/quader_input_binding.hpp\""),
+              std::string::npos)
+        << relative;
+  }
 
-    const std::string commandHeader = readFile(sourceRoot() / "src/api/quader_commands_api.hpp");
-    const std::string keybindingHeader = readFile(sourceRoot() / "src/api/quader_keybinding_types.hpp");
-    const std::string toolsHeader = readFile(sourceRoot() / "src/api/quader_tools_api.hpp");
-    EXPECT_NE(commandHeader.find("\"api/quader_viewport_input_types.hpp\""), std::string::npos);
-    EXPECT_NE(toolsHeader.find("\"api/quader_viewport_input_types.hpp\""), std::string::npos);
-    EXPECT_NE(keybindingHeader.find("\"api/quader_input_types.hpp\""), std::string::npos);
+  const std::string command_header =
+      read_file(source_root() / "src/api/quader_commands_api.hpp");
+  const std::string keybinding_header =
+      read_file(source_root() / "src/api/quader_keybinding_types.hpp");
+  const std::string tools_header =
+      read_file(source_root() / "src/api/quader_tools_api.hpp");
+  EXPECT_NE(command_header.find("\"api/quader_viewport_input_types.hpp\""),
+            std::string::npos);
+  EXPECT_NE(tools_header.find("\"api/quader_viewport_input_types.hpp\""),
+            std::string::npos);
+  EXPECT_NE(keybinding_header.find("\"api/quader_input_types.hpp\""),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, ModelingSessionServiceDoesNotExposeSelectionSyncAuthority) {
-    const std::string header = readFile(sourceRoot() / "src/editor/modeling/services/modeling_session_service.hpp");
-    EXPECT_EQ(header.find("syncObjectSelectionFromScene("), std::string::npos);
-    EXPECT_EQ(header.find("syncSceneSelectionFromModeling("), std::string::npos);
-    EXPECT_EQ(header.find("projectSceneSelectionFromModeling("), std::string::npos);
-    EXPECT_EQ(header.find("friend class EditorSelectionService;"), std::string::npos);
+  const std::string header =
+      read_file(source_root() /
+                "src/editor/modeling/services/modeling_session_service.hpp");
+  EXPECT_EQ(header.find("sync_object_selection_from_scene("), std::string::npos);
+  EXPECT_EQ(header.find("sync_scene_selection_from_modeling("), std::string::npos);
+  EXPECT_EQ(header.find("project_scene_selection_from_modeling("),
+            std::string::npos);
+  EXPECT_EQ(header.find("friend class EditorSelectionService;"),
+            std::string::npos);
 
-    const std::string source = readFile(sourceRoot() / "src/editor/modeling/services/modeling_session_service.cpp");
-    EXPECT_EQ(source.find("scene_.setSelected("), std::string::npos);
-    EXPECT_NE(source.find("SelectionProjectionService"), std::string::npos);
+  const std::string source =
+      read_file(source_root() /
+                "src/editor/modeling/services/modeling_session_service.cpp");
+  EXPECT_EQ(source.find("scene_.set_selected("), std::string::npos);
+  EXPECT_NE(source.find("SelectionProjectionService"), std::string::npos);
 
-    const std::string editorSelectionHeader =
-            readFile(sourceRoot() / "src" / "editor" / "selection" / "editor_selection_service.hpp");
-    EXPECT_EQ(editorSelectionHeader.find("syncObjectsFromScene("), std::string::npos);
-    EXPECT_EQ(editorSelectionHeader.find("syncSceneFromModeling("), std::string::npos);
+  const std::string editor_selection_header =
+      read_file(source_root() / "src" / "editor" / "selection" /
+                "editor_selection_service.hpp");
+  EXPECT_EQ(editor_selection_header.find("syncObjectsFromScene("),
+            std::string::npos);
+  EXPECT_EQ(editor_selection_header.find("syncSceneFromModeling("),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, ApiImplementationDoesNotBypassCommandExecutionBoundary) {
-    for (const std::filesystem::path& file : sourceFilesUnder(sourceRoot() / "src/api")) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
+  for (const std::filesystem::path &file :
+       source_files_under(source_root() / "src/api")) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
 
-        for (std::string_view forbidden : {
-                     "executeInstantOperation",
-                     "executeContextAction",
-                     "commitActiveOperationPreview",
-                     "cancelActiveOperationPreview",
-             }) {
-            EXPECT_EQ(source.find(forbidden), std::string::npos) << relative << " calls " << forbidden;
-        }
+    for (std::string_view forbidden : {
+             "execute_instant_operation",
+             "execute_context_action",
+             "commit_active_operation_preview",
+             "cancel_active_operation_preview",
+         }) {
+      EXPECT_EQ(source.find(forbidden), std::string::npos)
+          << relative << " calls " << forbidden;
     }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, ApiImplementationDoesNotIncludeConcreteDocumentCommands) {
-    const std::vector<std::string_view> concreteDocumentCommandHeaders = {
-            "\"editor/commands/document/apply_entity_transform_command.hpp\"",
-            "\"editor/commands/document/batch_document_command.hpp\"",
-            "\"editor/commands/document/create_entity_command.hpp\"",
-            "\"editor/commands/document/destroy_entity_command.hpp\"",
-            "\"editor/commands/document/duplicate_entity_command.hpp\"",
-            "\"editor/commands/document/duplicate_selected_hierarchy_command.hpp\"",
-            "\"editor/commands/document/group_selection_command.hpp\"",
-            "\"editor/commands/document/rename_entity_command.hpp\"",
-            "\"editor/commands/document/reparent_entity_command.hpp\"",
-            "\"editor/commands/document/select_entities_command.hpp\"",
-            "\"editor/commands/document/set_lock_command.hpp\"",
-            "\"editor/commands/document/set_material_command.hpp\"",
-            "\"editor/commands/document/set_mesh_component_command.hpp\"",
-            "\"editor/commands/document/set_visibility_command.hpp\"",
-            "\"editor/commands/document/ungroup_selection_command.hpp\"",
-    };
+  const std::vector<std::string_view> concrete_document_command_headers = {
+      "\"editor/commands/document/apply_entity_transform_command.hpp\"",
+      "\"editor/commands/document/batch_document_command.hpp\"",
+      "\"editor/commands/document/create_entity_command.hpp\"",
+      "\"editor/commands/document/destroy_entity_command.hpp\"",
+      "\"editor/commands/document/duplicate_entity_command.hpp\"",
+      "\"editor/commands/document/duplicate_selected_hierarchy_command.hpp\"",
+      "\"editor/commands/document/group_selection_command.hpp\"",
+      "\"editor/commands/document/rename_entity_command.hpp\"",
+      "\"editor/commands/document/reparent_entity_command.hpp\"",
+      "\"editor/commands/document/select_entities_command.hpp\"",
+      "\"editor/commands/document/set_lock_command.hpp\"",
+      "\"editor/commands/document/set_material_command.hpp\"",
+      "\"editor/commands/document/set_mesh_component_command.hpp\"",
+      "\"editor/commands/document/set_visibility_command.hpp\"",
+      "\"editor/commands/document/ungroup_selection_command.hpp\"",
+  };
 
-    for (const std::filesystem::path& file : sourceFilesUnder(sourceRoot() / "src/api")) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
-        for (std::string_view header : concreteDocumentCommandHeaders) {
-            EXPECT_EQ(source.find(header), std::string::npos) << relative << " includes " << header;
-        }
+  for (const std::filesystem::path &file :
+       source_files_under(source_root() / "src/api")) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
+    for (std::string_view header : concrete_document_command_headers) {
+      EXPECT_EQ(source.find(header), std::string::npos)
+          << relative << " includes " << header;
     }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicApiAndBehaviorDslDoNotExposeModelingActionCompatibilityRoute) {
-    for (const std::filesystem::path& root : {
-                 sourceRoot() / "src/api",
-                 sourceRoot() / "tests/support",
-         }) {
-        for (const std::filesystem::path& file : sourceFilesUnder(root)) {
-            const std::string source = readFile(file);
-            const std::string relative = normalizedRelative(file);
+  for (const std::filesystem::path &root : {
+           source_root() / "src/api",
+           source_root() / "tests/support",
+       }) {
+    for (const std::filesystem::path &file : source_files_under(root)) {
+      const std::string source = read_file(file);
+      const std::string relative = normalized_relative(file);
 
-            EXPECT_EQ(source.find(".modeling().executeAction("), std::string::npos) << relative;
-            EXPECT_EQ(source.find("QuaderModelingApi::executeAction"), std::string::npos) << relative;
-            EXPECT_EQ(source.find("QuaderScript& executeAction"), std::string::npos) << relative;
-            EXPECT_EQ(source.find("BehaviorWhen& executeAction"), std::string::npos) << relative;
-        }
+      EXPECT_EQ(source.find(".modeling().executeAction("), std::string::npos)
+          << relative;
+      EXPECT_EQ(source.find("QuaderModelingApi::execute_action"),
+                std::string::npos)
+          << relative;
+      EXPECT_EQ(source.find("QuaderScript& executeAction"), std::string::npos)
+          << relative;
+      EXPECT_EQ(source.find("BehaviorWhen& executeAction"), std::string::npos)
+          << relative;
     }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, CommandLayerDoesNotExposeGenericModelingActionExecutionRoute) {
-    for (const std::filesystem::path& file : {
-                 sourceRoot() / "src/api/quader_api_mutation_runner.hpp",
-                 sourceRoot() / "src/api/quader_api_mutation_runner.cpp",
-                 sourceRoot() / "src/editor/commands/modeling_command_execution_service.hpp",
-                 sourceRoot() / "src/editor/commands/modeling_command_execution_service.cpp",
-         }) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
+  for (const std::filesystem::path &file : {
+           source_root() / "src/api/quader_api_mutation_runner.hpp",
+           source_root() / "src/api/quader_api_mutation_runner.cpp",
+           source_root() /
+               "src/editor/commands/modeling_command_execution_service.hpp",
+           source_root() /
+               "src/editor/commands/modeling_command_execution_service.cpp",
+       }) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
 
-        EXPECT_EQ(source.find("runTrackedModelingAction"), std::string::npos) << relative;
-        EXPECT_EQ(source.find("executeAction("), std::string::npos) << relative;
-        EXPECT_EQ(source.find("executeActionUntracked("), std::string::npos) << relative;
-    }
+    EXPECT_EQ(source.find("runTrackedModelingAction"), std::string::npos)
+        << relative;
+    EXPECT_EQ(source.find("executeAction("), std::string::npos) << relative;
+    EXPECT_EQ(source.find("executeActionUntracked("), std::string::npos)
+        << relative;
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, SelectionCommandToolsPreferEditorSelectionService) {
-    const std::unordered_map<std::string, std::string_view> expectedRoutes{
-            {"src/editor/commands/modeling/clear_selection_tool.cpp", "context.selection->clear()"},
-            {"src/editor/commands/modeling/select_all_tool.cpp", "context.selection->selectAll()"},
-            {"src/editor/commands/modeling/invert_selection_tool.cpp", "context.selection->invert()"},
-    };
+  const std::unordered_map<std::string, std::string_view> expected_routes{
+      {"src/editor/commands/modeling/clear_selection_tool.cpp",
+       "context.selection->clear()"},
+      {"src/editor/commands/modeling/select_all_tool.cpp",
+       "context.selection->select_all()"},
+      {"src/editor/commands/modeling/invert_selection_tool.cpp",
+       "context.selection->invert()"},
+  };
 
-    for (const auto& [relative, expectedRoute] : expectedRoutes) {
-        const std::string source = readFile(sourceRoot() / relative);
-        EXPECT_NE(source.find("context.selection != nullptr"), std::string::npos) << relative;
-        EXPECT_NE(source.find(expectedRoute), std::string::npos) << relative;
-    }
+  for (const auto &[relative, expectedRoute] : expected_routes) {
+    const std::string source = read_file(source_root() / relative);
+    EXPECT_NE(source.find("context.selection != nullptr"), std::string::npos)
+        << relative;
+    EXPECT_NE(source.find(expectedRoute), std::string::npos) << relative;
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicSelectionApiDelegatesEntityEditPolicyToEditorSelectionService) {
-    const std::string apiHeader = readFile(sourceRoot() / "src/api/quader_selection_api.hpp");
-    const std::string apiSource = readFile(sourceRoot() / "src/api/quader_selection_api.cpp");
-    const std::string serviceSource = readFile(sourceRoot() / "src/editor/selection/editor_selection_service.cpp");
+  const std::string api_header =
+      read_file(source_root() / "src/api/quader_selection_api.hpp");
+  const std::string api_source =
+      read_file(source_root() / "src/api/quader_selection_api.cpp");
+  const std::string service_source = read_file(
+      source_root() / "src/editor/selection/editor_selection_service.cpp");
 
-    EXPECT_EQ(apiHeader.find("EditorSelectionEdit"), std::string::npos);
-    EXPECT_EQ(apiSource.find("editedEntitySelection"), std::string::npos);
-    EXPECT_EQ(apiSource.find("editedObjectSelection"), std::string::npos);
-    EXPECT_EQ(apiSource.find("session_.scene().selectedEntities()"), std::string::npos);
-    EXPECT_NE(apiSource.find("projectSession(session_).selection().editSceneSelection("), std::string::npos);
-    EXPECT_NE(serviceSource.find("EditorSelectionService::editSceneSelection("), std::string::npos);
-    EXPECT_NE(serviceSource.find("resolveSceneSelectionEdit("), std::string::npos);
+  EXPECT_EQ(api_header.find("EditorSelectionEdit"), std::string::npos);
+  EXPECT_EQ(api_source.find("editedEntitySelection"), std::string::npos);
+  EXPECT_EQ(api_source.find("editedObjectSelection"), std::string::npos);
+  EXPECT_EQ(api_source.find("session_.scene().selected_entities()"),
+            std::string::npos);
+  EXPECT_NE(api_source.find(
+                "project_session(session_).selection().edit_scene_selection("),
+            std::string::npos);
+  EXPECT_NE(service_source.find("EditorSelectionService::edit_scene_selection("),
+            std::string::npos);
+  EXPECT_NE(service_source.find("resolve_scene_selection_edit("),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, ObjectAndGroupSelectionCommandsUseSceneDocumentSelectionOwner) {
-    const std::string adapter = readFile(sourceRoot() / "src/editor/modeling/services/selection_mode_adapter.hpp");
-    const std::string serviceSource = readFile(sourceRoot() / "src/editor/selection/editor_selection_service.cpp");
-    const std::string deleteSource =
-            readFile(sourceRoot() / "src/editor/commands/modeling/scene_aware_delete_selection_command.cpp");
-    const std::string modelingApi = readFile(sourceRoot() / "src/api/quader_modeling_api.cpp");
-    const std::string mutationRunner = readFile(sourceRoot() / "src/api/quader_api_mutation_runner.cpp");
+  const std::string adapter =
+      read_file(source_root() /
+                "src/editor/modeling/services/selection_mode_adapter.hpp");
+  const std::string service_source = read_file(
+      source_root() / "src/editor/selection/editor_selection_service.cpp");
+  const std::string delete_source = read_file(
+      source_root() /
+      "src/editor/commands/modeling/scene_aware_delete_selection_command.cpp");
+  const std::string modeling_api =
+      read_file(source_root() / "src/api/quader_modeling_api.cpp");
+  const std::string mutation_runner =
+      read_file(source_root() / "src/api/quader_api_mutation_runner.cpp");
 
-    EXPECT_NE(adapter.find("selectionModeUsesSceneDocument(ModelingSelectionMode mode)"), std::string::npos);
-    EXPECT_NE(serviceSource.find("selectionModeUsesSceneDocument("), std::string::npos);
-    EXPECT_NE(deleteSource.find("selectionModeUsesSceneDocument("), std::string::npos);
-    EXPECT_NE(modelingApi.find("selectionModeUsesSceneDocument("), std::string::npos);
-    EXPECT_NE(mutationRunner.find("selectionModeUsesSceneDocument("), std::string::npos);
-    EXPECT_EQ(serviceSource.find("sceneDocumentOwnsSelectionMode"), std::string::npos);
-    EXPECT_EQ(deleteSource.find("sceneAwareDeleteUsesDocumentRoute(ModelingSelectionMode mode) {\n    return mode == ModelingSelectionMode::Object"),
+  EXPECT_NE(adapter.find(
+                "selection_mode_uses_scene_document(ModelingSelectionMode mode)"),
             std::string::npos);
-    EXPECT_NE(serviceSource.find("userSelectableSceneEntitiesForMode"), std::string::npos);
-    EXPECT_NE(serviceSource.find("scene.isSceneRoot(entity)"), std::string::npos);
-    EXPECT_NE(serviceSource.find("setSceneSelection(selected, active)"), std::string::npos);
-    EXPECT_NE(serviceSource.find("setSceneSelection(std::span<const EntityId>{}, InvalidEntityId)"), std::string::npos);
+  EXPECT_NE(service_source.find("selection_mode_uses_scene_document("),
+            std::string::npos);
+  EXPECT_NE(delete_source.find("selection_mode_uses_scene_document("),
+            std::string::npos);
+  EXPECT_NE(modeling_api.find("selection_mode_uses_scene_document("),
+            std::string::npos);
+  EXPECT_NE(mutation_runner.find("selection_mode_uses_scene_document("),
+            std::string::npos);
+  EXPECT_EQ(service_source.find("sceneDocumentOwnsSelectionMode"),
+            std::string::npos);
+  EXPECT_EQ(delete_source.find(
+                "scene_aware_delete_uses_document_route(ModelingSelectionMode mode) "
+                "{\n    return mode == ModelingSelectionMode::Object"),
+            std::string::npos);
+  EXPECT_NE(service_source.find("user_selectable_scene_entities_for_mode"),
+            std::string::npos);
+  EXPECT_NE(service_source.find("scene.is_scene_root(entity)"),
+            std::string::npos);
+  EXPECT_NE(service_source.find("set_scene_selection(selected, active)"),
+            std::string::npos);
+  EXPECT_NE(
+      service_source.find(
+          "set_scene_selection(std::span<const EntityId>{}, kInvalidEntityId)"),
+      std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, GroupSelectionPickingUsesModelingSelectionService) {
-    const std::string editorSelectionHeader =
-            readFile(sourceRoot() / "src/editor/selection/editor_selection_service.hpp");
-    const std::string editorSelectionSource =
-            readFile(sourceRoot() / "src/editor/selection/editor_selection_service.cpp");
-    const std::string modelingSessionHeader =
-            readFile(sourceRoot() / "src/editor/modeling/services/modeling_session_service.hpp");
-    const std::string modelingSessionSource =
-            readFile(sourceRoot() / "src/editor/modeling/services/modeling_session_service.cpp");
-    const std::string modelingSelectionHeader =
-            readFile(sourceRoot() / "src/editor/modeling/services/modeling_selection_service.hpp");
-    const std::string modelingSelectionSource =
-            readFile(sourceRoot() / "src/editor/modeling/services/modeling_session_services.cpp");
+  const std::string editor_selection_header = read_file(
+      source_root() / "src/editor/selection/editor_selection_service.hpp");
+  const std::string editor_selection_source = read_file(
+      source_root() / "src/editor/selection/editor_selection_service.cpp");
+  const std::string modeling_session_header =
+      read_file(source_root() /
+                "src/editor/modeling/services/modeling_session_service.hpp");
+  const std::string modeling_session_source =
+      read_file(source_root() /
+                "src/editor/modeling/services/modeling_session_service.cpp");
+  const std::string modeling_selection_header =
+      read_file(source_root() /
+                "src/editor/modeling/services/modeling_selection_service.hpp");
+  const std::string modeling_selection_source =
+      read_file(source_root() /
+                "src/editor/modeling/services/modeling_session_services.cpp");
 
-    EXPECT_NE(modelingSelectionHeader.find("pickObjectId("), std::string::npos);
-    EXPECT_NE(modelingSelectionHeader.find("boxPickObjectIds("), std::string::npos);
-    EXPECT_NE(modelingSelectionSource.find("rectangle_hits_from_projected_candidates"), std::string::npos);
-    EXPECT_NE(modelingSessionHeader.find("pickObjectEntity("), std::string::npos);
-    EXPECT_NE(modelingSessionHeader.find("boxPickObjectEntities("), std::string::npos);
-    EXPECT_NE(modelingSessionSource.find("selectionService_.pickObjectId("), std::string::npos);
-    EXPECT_NE(modelingSessionSource.find("selectionService_.boxPickObjectIds("), std::string::npos);
-    EXPECT_NE(editorSelectionSource.find("modeling_.pickObjectEntity(request)"), std::string::npos);
-    EXPECT_NE(editorSelectionSource.find("modeling_.boxPickObjectEntities(request)"), std::string::npos);
-    EXPECT_EQ(editorSelectionHeader.find("AssetRegistry"), std::string::npos);
-    EXPECT_EQ(editorSelectionHeader.find("pickMeshEntityByBounds"), std::string::npos);
-    EXPECT_EQ(editorSelectionHeader.find("boxPickMeshEntitiesByBounds"), std::string::npos);
-    EXPECT_EQ(editorSelectionSource.find("EditorSelectionService::pickMeshEntityByBounds"), std::string::npos);
-    EXPECT_EQ(editorSelectionSource.find("EditorSelectionService::boxPickMeshEntitiesByBounds"), std::string::npos);
+  EXPECT_NE(modeling_selection_header.find("pick_object_id("), std::string::npos);
+  EXPECT_NE(modeling_selection_header.find("box_pick_object_ids("),
+            std::string::npos);
+  EXPECT_NE(modeling_selection_source.find(
+                "rectangle_hits_from_projected_candidates"),
+            std::string::npos);
+  EXPECT_NE(modeling_session_header.find("pick_object_entity("),
+            std::string::npos);
+  EXPECT_NE(modeling_session_header.find("box_pick_object_entities("),
+            std::string::npos);
+  EXPECT_NE(modeling_session_source.find("selection_service_.pick_object_id("),
+            std::string::npos);
+  EXPECT_NE(modeling_session_source.find("selection_service_.box_pick_object_ids("),
+            std::string::npos);
+  EXPECT_NE(editor_selection_source.find("modeling_.pick_object_entity(request)"),
+            std::string::npos);
+  EXPECT_NE(
+      editor_selection_source.find("modeling_.box_pick_object_entities(request)"),
+      std::string::npos);
+  EXPECT_EQ(editor_selection_header.find("AssetRegistry"), std::string::npos);
+  EXPECT_EQ(editor_selection_header.find("pickMeshEntityByBounds"),
+            std::string::npos);
+  EXPECT_EQ(editor_selection_header.find("boxPickMeshEntitiesByBounds"),
+            std::string::npos);
+  EXPECT_EQ(editor_selection_source.find(
+                "EditorSelectionService::pick_mesh_entity_by_bounds"),
+            std::string::npos);
+  EXPECT_EQ(editor_selection_source.find(
+                "EditorSelectionService::box_pick_mesh_entities_by_bounds"),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, ApiDoesNotTreatHostContractDescriptorsAsCommands) {
-    for (const std::filesystem::path& file : sourceFilesUnder(sourceRoot() / "src/api")) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
+  for (const std::filesystem::path &file :
+       source_files_under(source_root() / "src/api")) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
 
-        EXPECT_FALSE(containsAny(source, {
-                             "host-contract",
-                             "host_contract",
-                             "quader_host_contract",
-                     }))
-                << relative;
-    }
+    EXPECT_FALSE(contains_any(source,
+                              {
+                                  "host-contract",
+                                  "host_contract",
+                                  "quader_host_contract",
+                              }))
+        << relative;
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, ProductionSourcesDoNotIncludeTestSupportDsl) {
-    for (const std::filesystem::path& file : sourceFilesUnder(sourceRoot() / "src")) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
+  for (const std::filesystem::path &file :
+       source_files_under(source_root() / "src")) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
 
-        EXPECT_FALSE(containsAny(source, {
-                             "\"tests/support/",
-                             "<tests/support/",
-                             "\"support/behavior_scenario.hpp\"",
-                             "\"support/behavior_expect.hpp\"",
-                             "\"support/behavior_snapshot.hpp\"",
-                             "\"support/modeling_test_events.hpp\"",
-                     }))
-                << relative;
-    }
+    EXPECT_FALSE(contains_any(source,
+                              {
+                                  "\"tests/support/",
+                                  "<tests/support/",
+                                  "\"support/behavior_scenario.hpp\"",
+                                  "\"support/behavior_expect.hpp\"",
+                                  "\"support/behavior_snapshot.hpp\"",
+                                  "\"support/modeling_test_events.hpp\"",
+                              }))
+        << relative;
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotAddSceneDocumentMutations) {
-    const std::vector<std::string_view> directSceneMutations = {
-            "document.createEntity(",
-            "document.createEmpty(",
-            "document.destroyEntity(",
-            "document.renameEntity(",
-            "document.setTransform(",
-            "document.setSelected(",
-            "document.clearSelection(",
-            "document.setParent(",
-            "document.setVisible(",
-            "document.setLocked(",
-            "document.setMesh(",
-            "document.setMaterial(",
-            "document.setModelingObject(",
-            "context.document.createEntity(",
-            "context.document.createEmpty(",
-            "context.document.destroyEntity(",
-            "context.document.renameEntity(",
-            "context.document.setTransform(",
-            "context.document.setSelected(",
-            "context.document.clearSelection(",
-            "context.document.setParent(",
-            "context.document.setVisible(",
-            "context.document.setLocked(",
-            "context.document.setMesh(",
-            "context.document.setMaterial(",
-            "context.document.setModelingObject(",
-    };
+  const std::vector<std::string_view> direct_scene_mutations = {
+      "document.create_entity(",
+      "document.create_empty(",
+      "document.destroy_entity(",
+      "document.rename_entity(",
+      "document.set_transform(",
+      "document.set_selected(",
+      "document.clear_selection(",
+      "document.set_parent(",
+      "document.set_visible(",
+      "document.set_locked(",
+      "document.set_mesh(",
+      "document.set_material(",
+      "document.set_modeling_object(",
+      "context.document.create_entity(",
+      "context.document.create_empty(",
+      "context.document.destroy_entity(",
+      "context.document.rename_entity(",
+      "context.document.set_transform(",
+      "context.document.set_selected(",
+      "context.document.clear_selection(",
+      "context.document.set_parent(",
+      "context.document.set_visible(",
+      "context.document.set_locked(",
+      "context.document.set_mesh(",
+      "context.document.set_material(",
+      "context.document.set_modeling_object(",
+  };
 
-    for (const std::filesystem::path& root : {
-                 sourceRoot() / "src/ui",
-                 sourceRoot() / "src/app",
-                 sourceRoot() / "src/viewport",
-                 sourceRoot() / "src/editor/tools",
-         }) {
-        for (const std::filesystem::path& file : filesWithExtension(root, ".cpp")) {
-            const std::string source = readFile(file);
-            const std::string relative = normalizedRelative(file);
-            for (const std::string& line : linesContaining(source, directSceneMutations)) {
-                ADD_FAILURE() << relative << ": " << line;
-            }
-        }
+  for (const std::filesystem::path &root : {
+           source_root() / "src/ui",
+           source_root() / "src/app",
+           source_root() / "src/viewport",
+           source_root() / "src/editor/tools",
+       }) {
+    for (const std::filesystem::path &file :
+         files_with_extension(root, ".cpp")) {
+      const std::string source = read_file(file);
+      const std::string relative = normalized_relative(file);
+      for (const std::string &line :
+           lines_containing(source, direct_scene_mutations)) {
+        ADD_FAILURE() << relative << ": " << line;
+      }
     }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotAddRawModelingMutations) {
-    const std::vector<std::string_view> rawModelingMutations = {
-            "modeling.executeInstantOperation(",
-            "modeling.executeContextAction(",
-            "modeling.commitActiveOperationPreview(",
-            "modeling.cancelActiveOperationPreview(",
-            "modeling.beginTransformPreview(",
-            "modeling.updateTransformTranslatePreview(",
-            "modeling.updateTransformMatrixPreview(",
-            "modeling.updateTransformExtrudePreview(",
-            "modeling.updateTransformInsetPreview(",
-            "modeling.commitTransformPreview(",
-            "modeling.cancelTransformPreview(",
-            "modeling.beginTransformDrag(",
-            "modeling.updateTransformDrag(",
-            "modeling.commitTransformDrag(",
-            "modeling.cancelTransformDrag(",
-            "modeling.createBoxFromBounds(",
-            "modeling.pickSelect(",
-            "modeling.setSelectionMode(",
-            "modeling.syncObjectSelectionFromScene(",
-            "modeling.syncSceneSelectionFromModeling(",
-            "modeling.selectAll(",
-            "modeling.clearSelection(",
-            "modeling.deleteComponentSelection(",
-            "modeling.applyActiveMaterial(",
-            "context.modeling.executeInstantOperation(",
-            "context.modeling.executeContextAction(",
-            "context.modeling.commitActiveOperationPreview(",
-            "context.modeling.cancelActiveOperationPreview(",
-            "context.modeling.beginTransformPreview(",
-            "context.modeling.updateTransformTranslatePreview(",
-            "context.modeling.updateTransformMatrixPreview(",
-            "context.modeling.updateTransformExtrudePreview(",
-            "context.modeling.updateTransformInsetPreview(",
-            "context.modeling.commitTransformPreview(",
-            "context.modeling.cancelTransformPreview(",
-            "context.modeling.beginTransformDrag(",
-            "context.modeling.updateTransformDrag(",
-            "context.modeling.commitTransformDrag(",
-            "context.modeling.cancelTransformDrag(",
-            "context.modeling.createBoxFromBounds(",
-            "context.modeling.pickSelect(",
-            "context.modeling.setSelectionMode(",
-            "context.modeling.syncObjectSelectionFromScene(",
-            "context.modeling.syncSceneSelectionFromModeling(",
-            "context.modeling.selectAll(",
-            "context.modeling.clearSelection(",
-            "context.modeling.deleteComponentSelection(",
-            "context.modeling.applyActiveMaterial(",
-    };
+  const std::vector<std::string_view> raw_modeling_mutations = {
+      "modeling.execute_instant_operation(",
+      "modeling.execute_context_action(",
+      "modeling.commit_active_operation_preview(",
+      "modeling.cancel_active_operation_preview(",
+      "modeling.begin_transform_preview(",
+      "modeling.update_transform_translate_preview(",
+      "modeling.update_transform_matrix_preview(",
+      "modeling.update_transform_extrude_preview(",
+      "modeling.update_transform_inset_preview(",
+      "modeling.commit_transform_preview(",
+      "modeling.cancel_transform_preview(",
+      "modeling.begin_transform_drag(",
+      "modeling.update_transform_drag(",
+      "modeling.commit_transform_drag(",
+      "modeling.cancel_transform_drag(",
+      "modeling.create_box_from_bounds(",
+      "modeling.pick_select(",
+      "modeling.set_selection_mode(",
+      "modeling.sync_object_selection_from_scene(",
+      "modeling.sync_scene_selection_from_modeling(",
+      "modeling.select_all(",
+      "modeling.clear_selection(",
+      "modeling.delete_component_selection(",
+      "modeling.apply_active_material(",
+      "context.modeling.execute_instant_operation(",
+      "context.modeling.execute_context_action(",
+      "context.modeling.commit_active_operation_preview(",
+      "context.modeling.cancel_active_operation_preview(",
+      "context.modeling.begin_transform_preview(",
+      "context.modeling.update_transform_translate_preview(",
+      "context.modeling.update_transform_matrix_preview(",
+      "context.modeling.update_transform_extrude_preview(",
+      "context.modeling.update_transform_inset_preview(",
+      "context.modeling.commit_transform_preview(",
+      "context.modeling.cancel_transform_preview(",
+      "context.modeling.begin_transform_drag(",
+      "context.modeling.update_transform_drag(",
+      "context.modeling.commit_transform_drag(",
+      "context.modeling.cancel_transform_drag(",
+      "context.modeling.create_box_from_bounds(",
+      "context.modeling.pick_select(",
+      "context.modeling.set_selection_mode(",
+      "context.modeling.sync_object_selection_from_scene(",
+      "context.modeling.sync_scene_selection_from_modeling(",
+      "context.modeling.select_all(",
+      "context.modeling.clear_selection(",
+      "context.modeling.delete_component_selection(",
+      "context.modeling.apply_active_material(",
+  };
 
-    for (const std::filesystem::path& root : {sourceRoot() / "src/ui", sourceRoot() / "src/app", sourceRoot() / "src/viewport"}) {
-        for (const std::filesystem::path& file : filesWithExtension(root, ".cpp")) {
-            const std::string source = readFile(file);
-            const std::string relative = normalizedRelative(file);
-            for (const std::string& line : linesContaining(source, rawModelingMutations)) {
-                EXPECT_TRUE(allowedRawModelingMutation(relative, line)) << relative << ": " << line;
-            }
-        }
+  for (const std::filesystem::path &root :
+       {source_root() / "src/ui", source_root() / "src/app",
+        source_root() / "src/viewport"}) {
+    for (const std::filesystem::path &file :
+         files_with_extension(root, ".cpp")) {
+      const std::string source = read_file(file);
+      const std::string relative = normalized_relative(file);
+      for (const std::string &line :
+           lines_containing(source, raw_modeling_mutations)) {
+        EXPECT_TRUE(allowed_raw_modeling_mutation(relative, line))
+            << relative << ": " << line;
+      }
     }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, ViewportRoutesDoNotExecuteFixedRawModelingCommandStrings) {
-    const std::vector<std::string_view> forbiddenRawCommandRoutes = {
-            "commands().execute(\"modeling.",
-            "std::string command = \"modeling.\"",
-            "command.append(toolId)",
-            "contextMenuCommandId(std::string_view",
-            "const std::string commandId = contextMenuCommandId(action.actionId)",
-    };
+  const std::vector<std::string_view> forbidden_raw_command_routes = {
+      "commands().execute(\"modeling.",
+      "std::string command = \"modeling.\"",
+      "command.append(tool_id)",
+      "contextMenuCommandId(std::string_view",
+      "const std::string command_id = contextMenuCommandId(action.action_id)",
+  };
 
-    for (std::string_view relative : {
-                 std::string_view{"src/ui/viewport_shortcut_controller.cpp"},
-                 std::string_view{"src/ui/ui_system.cpp"},
-         }) {
-        const std::string source = readFile(sourceRoot() / std::string(relative));
-        for (const std::string& line : linesContaining(source, forbiddenRawCommandRoutes)) {
-            EXPECT_TRUE(false) << relative << ": " << line;
-        }
+  for (std::string_view relative : {
+           std::string_view{"src/ui/viewport_shortcut_controller.cpp"},
+           std::string_view{"src/ui/ui_system.cpp"},
+       }) {
+    const std::string source = read_file(source_root() / std::string(relative));
+    for (const std::string &line :
+         lines_containing(source, forbidden_raw_command_routes)) {
+      EXPECT_TRUE(false) << relative << ": " << line;
+    }
     }
 }
 
 TEST(ProgrammaticApiGuardrailTests, ViewportShortcutControllerDoesNotRemapCommands) {
-    const std::string source = readFile(sourceRoot() / "src/ui/viewport_shortcut_controller.cpp");
-    const std::string header = readFile(sourceRoot() / "src/ui/viewport_shortcut_controller.hpp");
+  const std::string source =
+      read_file(source_root() / "src/ui/viewport_shortcut_controller.cpp");
+  const std::string header =
+      read_file(source_root() / "src/ui/viewport_shortcut_controller.hpp");
 
-    EXPECT_EQ(source.find("QuaderCommand::"), std::string::npos);
-    EXPECT_EQ(source.find("executeViewportModelingShortcut"), std::string::npos);
-    EXPECT_EQ(source.find("commandForMirrorAxis"), std::string::npos);
-    EXPECT_EQ(source.find("ModelingSessionService"), std::string::npos);
-    EXPECT_EQ(header.find("ModelingSessionService"), std::string::npos);
+  EXPECT_EQ(source.find("QuaderCommand::"), std::string::npos);
+  EXPECT_EQ(source.find("executeViewportModelingShortcut"), std::string::npos);
+  EXPECT_EQ(source.find("commandForMirrorAxis"), std::string::npos);
+  EXPECT_EQ(source.find("ModelingSessionService"), std::string::npos);
+  EXPECT_EQ(header.find("ModelingSessionService"), std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, ViewportShadingConversionUsesSharedApiHelper) {
-    const std::string viewportApi = readFile(sourceRoot() / "src/api/quader_viewport_api.cpp");
-    const std::string viewportPanel = readFile(sourceRoot() / "src/ui/viewport_panel.cpp");
-    const std::string conversionHelper = readFile(sourceRoot() / "src/viewport/viewport_shading_mode_conversions.hpp");
+  const std::string viewport_api =
+      read_file(source_root() / "src/api/quader_viewport_api.cpp");
+  const std::string viewport_panel =
+      read_file(source_root() / "src/ui/viewport_panel.cpp");
+  const std::string conversion_helper = read_file(
+      source_root() / "src/viewport/viewport_shading_mode_conversions.hpp");
 
-    EXPECT_NE(conversionHelper.find("quaderApiToViewportShadingMode"), std::string::npos);
-    EXPECT_NE(conversionHelper.find("quaderApiFromViewportShadingMode"), std::string::npos);
-    EXPECT_EQ(viewportApi.find("ViewportShadingMode toViewportShadingMode"), std::string::npos);
-    EXPECT_EQ(viewportApi.find("QuaderShadingMode toQuaderShadingMode"), std::string::npos);
-    EXPECT_EQ(viewportPanel.find("ViewportShadingMode toViewportShadingMode"), std::string::npos);
-    EXPECT_EQ(viewportPanel.find("QuaderShadingMode toQuaderShadingMode"), std::string::npos);
+  EXPECT_NE(conversion_helper.find("quader_api_to_viewport_shading_mode"),
+            std::string::npos);
+  EXPECT_NE(conversion_helper.find("quader_api_from_viewport_shading_mode"),
+            std::string::npos);
+  EXPECT_EQ(viewport_api.find("ViewportShadingMode toViewportShadingMode"),
+            std::string::npos);
+  EXPECT_EQ(viewport_api.find("QuaderShadingMode toQuaderShadingMode"),
+            std::string::npos);
+  EXPECT_EQ(viewport_panel.find("ViewportShadingMode toViewportShadingMode"),
+            std::string::npos);
+  EXPECT_EQ(viewport_panel.find("QuaderShadingMode toQuaderShadingMode"),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, UiPanelRoutingUsesStableIdsAndNoDeadShowMenu) {
-    const std::string mainMenuHeader = readFile(sourceRoot() / "src/ui/main_menu_bar.hpp");
-    const std::string mainMenuSource = readFile(sourceRoot() / "src/ui/main_menu_bar.cpp");
-    const std::string settingsSource = readFile(sourceRoot() / "src/ui/ui_settings.cpp");
-    const std::string uiPanelHeader = readFile(sourceRoot() / "src/ui/ui_panel.hpp");
+  const std::string main_menu_header =
+      read_file(source_root() / "src/ui/main_menu_bar.hpp");
+  const std::string main_menu_source =
+      read_file(source_root() / "src/ui/main_menu_bar.cpp");
+  const std::string settings_source =
+      read_file(source_root() / "src/ui/ui_settings.cpp");
+  const std::string ui_panel_header =
+      read_file(source_root() / "src/ui/ui_panel.hpp");
 
-    EXPECT_NE(uiPanelHeader.find("uiPanelStableId"), std::string::npos);
-    EXPECT_NE(uiPanelHeader.find("uiPanelDefaultVisible"), std::string::npos);
-    EXPECT_EQ(mainMenuHeader.find("ShowMenu"), std::string::npos);
-    EXPECT_EQ(mainMenuHeader.find("showMenu_"), std::string::npos);
-    EXPECT_EQ(mainMenuSource.find("void ShowMenu::draw"), std::string::npos);
-    EXPECT_EQ(mainMenuHeader.find("toolSettingsPanelOpen"), std::string::npos);
-    EXPECT_EQ(mainMenuHeader.find("UISettings& settings"), std::string::npos);
-    EXPECT_EQ(mainMenuSource.find("showPanel(uiPanelKey"), std::string::npos);
-    EXPECT_EQ(mainMenuSource.find("hidePanel(uiPanelKey"), std::string::npos);
-    EXPECT_EQ(settingsSource.find("file << uiPanelKey"), std::string::npos);
-    EXPECT_NE(settingsSource.find("uiPanelStableId(UIPanelId::Outliner)"), std::string::npos);
+  EXPECT_NE(ui_panel_header.find("ui_panel_stable_id"), std::string::npos);
+  EXPECT_NE(ui_panel_header.find("ui_panel_default_visible"), std::string::npos);
+  EXPECT_EQ(main_menu_header.find("ShowMenu"), std::string::npos);
+  EXPECT_EQ(main_menu_header.find("showMenu_"), std::string::npos);
+  EXPECT_EQ(main_menu_source.find("void ShowMenu::draw"), std::string::npos);
+  EXPECT_EQ(main_menu_header.find("toolSettingsPanelOpen"), std::string::npos);
+  EXPECT_EQ(main_menu_header.find("UISettings& settings"), std::string::npos);
+  EXPECT_EQ(main_menu_source.find("show_panel(ui_panel_key"), std::string::npos);
+  EXPECT_EQ(main_menu_source.find("hide_panel(ui_panel_key"), std::string::npos);
+  EXPECT_EQ(settings_source.find("file << ui_panel_key"), std::string::npos);
+  EXPECT_NE(settings_source.find("ui_panel_stable_id(UIPanelId::Outliner)"),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, ViewportPanelDoesNotExposeWorkspacePassThroughs) {
-    const std::string header = readFile(sourceRoot() / "src/ui/viewport_panel.hpp");
-    const std::string source = readFile(sourceRoot() / "src/ui/viewport_panel.cpp");
+  const std::string header =
+      read_file(source_root() / "src/ui/viewport_panel.hpp");
+  const std::string source =
+      read_file(source_root() / "src/ui/viewport_panel.cpp");
 
-    EXPECT_NE(header.find("syncActiveToolFromEditor("), std::string::npos);
-    EXPECT_NE(source.find("ViewportPanel::syncActiveToolFromEditor("), std::string::npos);
-    EXPECT_NE(source.find("viewportWorkspace.activePanePlacements()"), std::string::npos);
-    EXPECT_NE(source.find("viewportWorkspace.activeSplitHandles()"), std::string::npos);
-    EXPECT_NE(source.find("ViewportPaneController::paneRectMin("), std::string::npos);
-    EXPECT_NE(source.find("ViewportPaneController::paneRectSize("), std::string::npos);
-    EXPECT_EQ(header.find("setViewportLayout("), std::string::npos);
-    EXPECT_EQ(header.find("setGridPreset("), std::string::npos);
-    EXPECT_EQ(header.find("paneShadingMode("), std::string::npos);
-    EXPECT_EQ(header.find("setPaneShadingMode("), std::string::npos);
-    EXPECT_EQ(header.find("paneView("), std::string::npos);
-    EXPECT_EQ(header.find("activePanePlacements()"), std::string::npos);
-    EXPECT_EQ(header.find("activeSplitHandles()"), std::string::npos);
-    EXPECT_EQ(header.find("paneRectMin("), std::string::npos);
-    EXPECT_EQ(header.find("paneRectSize("), std::string::npos);
-    EXPECT_EQ(header.find("SceneDocument& document,\n            ModelingSessionService& modeling"), std::string::npos);
-    EXPECT_EQ(source.find("ViewportPanel::setViewportLayout("), std::string::npos);
-    EXPECT_EQ(source.find("ViewportPanel::setGridPreset("), std::string::npos);
-    EXPECT_EQ(source.find("ViewportPanel::activePanePlacements("), std::string::npos);
-    EXPECT_EQ(source.find("ViewportPanel::activeSplitHandles("), std::string::npos);
-    EXPECT_EQ(source.find("ViewportPanel::paneRectMin("), std::string::npos);
-    EXPECT_EQ(source.find("ViewportPanel::paneRectSize("), std::string::npos);
-    EXPECT_EQ(source.find("fromModelingViewportTool"), std::string::npos);
-    EXPECT_NE(source.find("editor.tools().activate(tool)"), std::string::npos);
-    EXPECT_NE(source.find("viewportToolForModeling(modeling.toolStatus().activeTool)"), std::string::npos);
+  EXPECT_NE(header.find("sync_active_tool_from_editor("), std::string::npos);
+  EXPECT_NE(source.find("ViewportPanel::sync_active_tool_from_editor("),
+            std::string::npos);
+  EXPECT_NE(source.find("viewport_workspace.active_pane_placements()"),
+            std::string::npos);
+  EXPECT_NE(source.find("viewport_workspace.active_split_handles()"),
+            std::string::npos);
+  EXPECT_NE(source.find("ViewportPaneController::pane_rect_min("),
+            std::string::npos);
+  EXPECT_NE(source.find("ViewportPaneController::pane_rect_size("),
+            std::string::npos);
+  EXPECT_EQ(header.find("setViewportLayout("), std::string::npos);
+  EXPECT_EQ(header.find("set_grid_preset("), std::string::npos);
+  EXPECT_EQ(header.find("paneShadingMode("), std::string::npos);
+  EXPECT_EQ(header.find("setPaneShadingMode("), std::string::npos);
+  EXPECT_EQ(header.find("paneView("), std::string::npos);
+  EXPECT_EQ(header.find("active_pane_placements()"), std::string::npos);
+  EXPECT_EQ(header.find("active_split_handles()"), std::string::npos);
+  EXPECT_EQ(header.find("pane_rect_min("), std::string::npos);
+  EXPECT_EQ(header.find("pane_rect_size("), std::string::npos);
+  EXPECT_EQ(header.find("SceneDocument& document,\n            "
+                        "ModelingSessionService& modeling"),
+            std::string::npos);
+  EXPECT_EQ(source.find("ViewportPanel::set_viewport_layout("),
+            std::string::npos);
+  EXPECT_EQ(source.find("ViewportPanel::set_grid_preset("), std::string::npos);
+  EXPECT_EQ(source.find("ViewportPanel::active_pane_placements("),
+            std::string::npos);
+  EXPECT_EQ(source.find("ViewportPanel::active_split_handles("),
+            std::string::npos);
+  EXPECT_EQ(source.find("ViewportPanel::pane_rect_min("), std::string::npos);
+  EXPECT_EQ(source.find("ViewportPanel::pane_rect_size("), std::string::npos);
+  EXPECT_EQ(source.find("fromModelingViewportTool"), std::string::npos);
+  EXPECT_NE(source.find("editor.tools().activate(tool)"), std::string::npos);
+  EXPECT_NE(
+      source.find("viewport_tool_for_modeling(modeling.tool_status().active_tool)"),
+      std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, OutlinerUsesDocumentCommandRootSelectionOwner) {
-    const std::string outliner = readFile(sourceRoot() / "src/ui/outliner_panel.cpp");
-    const std::string viewport = readFile(sourceRoot() / "src/ui/viewport_panel.cpp");
-    const std::string sceneAwareDeleteHeader =
-            readFile(sourceRoot() / "src/editor/commands/modeling/scene_aware_delete_selection_command.hpp");
-    const std::string modelingExecution =
-            readFile(sourceRoot() / "src/editor/commands/modeling_command_execution_service.cpp");
+  const std::string outliner =
+      read_file(source_root() / "src/ui/outliner_panel.cpp");
+  const std::string viewport =
+      read_file(source_root() / "src/ui/viewport_panel.cpp");
+  const std::string scene_aware_delete_header = read_file(
+      source_root() /
+      "src/editor/commands/modeling/scene_aware_delete_selection_command.hpp");
+  const std::string modeling_execution =
+      read_file(source_root() /
+                "src/editor/commands/modeling_command_execution_service.cpp");
 
-    EXPECT_NE(outliner.find("documentCommandSelectedRootEntities"), std::string::npos);
-    EXPECT_NE(outliner.find("QuaderCommand::DuplicateSelection"), std::string::npos);
-    EXPECT_NE(viewport.find("sceneAwareDeleteHasSelectedRoot"), std::string::npos);
-    EXPECT_NE(sceneAwareDeleteHeader.find("sceneAwareDeleteHandlesSelection"), std::string::npos);
-    EXPECT_EQ(outliner.find("std::vector<EntityId> selectedRootEntities("), std::string::npos);
-    EXPECT_EQ(outliner.find("std::unordered_set<EntityId> selectedSet"), std::string::npos);
-    EXPECT_EQ(outliner.find("editor.scene().duplicateSelectedHierarchy"), std::string::npos);
-    EXPECT_EQ(outliner.find("ImGuiKey_G"), std::string::npos);
-    EXPECT_EQ(viewport.find("documentCommandSelectedRootEntities"), std::string::npos);
-    EXPECT_EQ(viewport.find("hasSelectedSceneGroupRoot"), std::string::npos);
-    EXPECT_EQ(modelingExecution.find("shouldUseSceneAwareDelete"), std::string::npos);
-    EXPECT_NE(modelingExecution.find("sceneAwareDeleteHandlesSelection"), std::string::npos);
+  EXPECT_NE(outliner.find("document_command_selected_root_entities"),
+            std::string::npos);
+  EXPECT_NE(outliner.find("quader_command::kDuplicateSelection"),
+            std::string::npos);
+  EXPECT_NE(viewport.find("scene_aware_delete_has_selected_root"),
+            std::string::npos);
+  EXPECT_NE(scene_aware_delete_header.find("scene_aware_delete_handles_selection"),
+            std::string::npos);
+  EXPECT_EQ(outliner.find("std::vector<EntityId> selectedRootEntities("),
+            std::string::npos);
+  EXPECT_EQ(outliner.find("std::unordered_set<EntityId> selected_set"),
+            std::string::npos);
+  EXPECT_EQ(outliner.find("editor.scene().duplicate_selected_hierarchy"),
+            std::string::npos);
+  EXPECT_EQ(outliner.find("ImGuiKey_G"), std::string::npos);
+  EXPECT_EQ(viewport.find("document_command_selected_root_entities"),
+            std::string::npos);
+  EXPECT_EQ(viewport.find("hasSelectedSceneGroupRoot"), std::string::npos);
+  EXPECT_EQ(modeling_execution.find("shouldUseSceneAwareDelete"),
+            std::string::npos);
+  EXPECT_NE(modeling_execution.find("scene_aware_delete_handles_selection"),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotExposeRawHistoryOrDocumentCommandServices) {
-    const std::vector<std::string_view> forbiddenOwnerServices = {
-            "UndoRedoManager",
-            "DocumentCommandService",
-            "core/undo_redo_manager.hpp",
-            "editor/commands/document_command_service.hpp",
-            "undoRedo",
-            "documentCommands",
-    };
+  const std::vector<std::string_view> forbidden_owner_services = {
+      "UndoRedoManager",
+      "DocumentCommandService",
+      "core/undo_redo_manager.hpp",
+      "editor/commands/document_command_service.hpp",
+      "undo_redo",
+      "document_commands",
+  };
 
-    for (const std::filesystem::path& root : {sourceRoot() / "src/ui", sourceRoot() / "src/app", sourceRoot() / "src/viewport"}) {
-        for (const std::filesystem::path& file : sourceFilesUnder(root)) {
-            const std::string source = readFile(file);
-            const std::string relative = normalizedRelative(file);
-            for (const std::string& line : linesContaining(source, forbiddenOwnerServices)) {
-                EXPECT_TRUE(false) << relative << ": " << line;
-            }
-        }
+  for (const std::filesystem::path &root :
+       {source_root() / "src/ui", source_root() / "src/app",
+        source_root() / "src/viewport"}) {
+    for (const std::filesystem::path &file : source_files_under(root)) {
+      const std::string source = read_file(file);
+      const std::string relative = normalized_relative(file);
+      for (const std::string &line :
+           lines_containing(source, forbidden_owner_services)) {
+        EXPECT_TRUE(false) << relative << ": " << line;
+      }
     }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotUseModelingActionCompatibilityRoute) {
-    const std::vector<std::string_view> forbiddenActionRoutes = {
-            "editor.modeling().executeAction(",
-            "context.editor.modeling().executeAction(",
-            "uiContext.editor.modeling().executeAction(",
-            ".modeling().executeAction(",
-    };
+  const std::vector<std::string_view> forbidden_action_routes = {
+      "editor.modeling().executeAction(",
+      "context.editor.modeling().executeAction(",
+      "ui_context.editor.modeling().executeAction(",
+      ".modeling().executeAction(",
+  };
 
-    for (const std::filesystem::path& root : {sourceRoot() / "src/ui", sourceRoot() / "src/app", sourceRoot() / "src/viewport"}) {
-        for (const std::filesystem::path& file : sourceFilesUnder(root)) {
-            const std::string source = readFile(file);
-            const std::string relative = normalizedRelative(file);
-            for (const std::string& line : linesContaining(source, forbiddenActionRoutes)) {
-                EXPECT_TRUE(false) << relative << ": " << line;
-            }
-        }
+  for (const std::filesystem::path &root :
+       {source_root() / "src/ui", source_root() / "src/app",
+        source_root() / "src/viewport"}) {
+    for (const std::filesystem::path &file : source_files_under(root)) {
+      const std::string source = read_file(file);
+      const std::string relative = normalized_relative(file);
+      for (const std::string &line :
+           lines_containing(source, forbidden_action_routes)) {
+        EXPECT_TRUE(false) << relative << ": " << line;
+      }
     }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotUseSceneSelectionAsAuthority) {
-    const std::vector<std::string_view> forbiddenSceneSelectionRoutes = {
-            "editor.scene().select(",
-            "context.editor.scene().select(",
-            "uiContext.editor.scene().select(",
-            ".scene().select(",
-    };
+  const std::vector<std::string_view> forbidden_scene_selection_routes = {
+      "editor.scene().select(",
+      "context.editor.scene().select(",
+      "ui_context.editor.scene().select(",
+      ".scene().select(",
+  };
 
-    for (const std::filesystem::path& root : {sourceRoot() / "src/ui", sourceRoot() / "src/app", sourceRoot() / "src/viewport"}) {
-        for (const std::filesystem::path& file : sourceFilesUnder(root)) {
-            const std::string source = readFile(file);
-            const std::string relative = normalizedRelative(file);
-            for (const std::string& line : linesContaining(source, forbiddenSceneSelectionRoutes)) {
-                EXPECT_TRUE(false) << relative << ": " << line;
-            }
-        }
+  for (const std::filesystem::path &root :
+       {source_root() / "src/ui", source_root() / "src/app",
+        source_root() / "src/viewport"}) {
+    for (const std::filesystem::path &file : source_files_under(root)) {
+      const std::string source = read_file(file);
+      const std::string relative = normalized_relative(file);
+      for (const std::string &line :
+           lines_containing(source, forbidden_scene_selection_routes)) {
+        EXPECT_TRUE(false) << relative << ": " << line;
+      }
     }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicHistoryDoesNotFallbackToModelingHistory) {
-    const std::vector<std::string_view> forbiddenSplitHistoryRoutes = {
-            "ModelingHistoryCommand",
-            "modeling().canUndo(",
-            "modeling().canRedo(",
-            "modeling().undo(",
-            "modeling().redo(",
-            "modeling.canUndo(",
-            "modeling.canRedo(",
-            "modeling.undo(",
-            "modeling.redo(",
-            "canUndo() ||",
-            "canRedo() ||",
-            "|| modeling.canUndo",
-            "|| modeling.canRedo",
-    };
+  const std::vector<std::string_view> forbidden_split_history_routes = {
+      "ModelingHistoryCommand", "modeling().can_undo(", "modeling().can_redo(",
+      "modeling().undo(",       "modeling().redo(",    "modeling.can_undo(",
+      "modeling.can_redo(",      "modeling.undo(",      "modeling.redo(",
+      "can_undo() ||",           "can_redo() ||",        "|| modeling.can_undo",
+      "|| modeling.can_redo",
+  };
 
-    for (const std::filesystem::path& root : {sourceRoot() / "src/api", sourceRoot() / "src/editor"}) {
-        for (const std::filesystem::path& file : sourceFilesUnder(root)) {
-            const std::string source = readFile(file);
-            const std::string relative = normalizedRelative(file);
-            for (const std::string& line : linesContaining(source, forbiddenSplitHistoryRoutes)) {
-                EXPECT_TRUE(false) << relative << ": " << line;
-            }
-        }
+  for (const std::filesystem::path &root :
+       {source_root() / "src/api", source_root() / "src/editor"}) {
+    for (const std::filesystem::path &file : source_files_under(root)) {
+      const std::string source = read_file(file);
+      const std::string relative = normalized_relative(file);
+      for (const std::string &line :
+           lines_containing(source, forbidden_split_history_routes)) {
+        EXPECT_TRUE(false) << relative << ": " << line;
+      }
     }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicHistoryAvailabilityRoutesThroughMutationRunner) {
-    const std::string mutationHeader = readFile(sourceRoot() / "src/api/quader_api_mutation_runner.hpp");
-    const std::string mutationSource = readFile(sourceRoot() / "src/api/quader_api_mutation_runner.cpp");
-    const std::string historyApi = readFile(sourceRoot() / "src/api/quader_history_api.cpp");
-    const std::string queryApi = readFile(sourceRoot() / "src/api/quader_query_api.cpp");
-    const std::string historyService = readFile(sourceRoot() / "src/editor/history/editor_history_service.cpp");
+  const std::string mutation_header =
+      read_file(source_root() / "src/api/quader_api_mutation_runner.hpp");
+  const std::string mutation_source =
+      read_file(source_root() / "src/api/quader_api_mutation_runner.cpp");
+  const std::string history_api =
+      read_file(source_root() / "src/api/quader_history_api.cpp");
+  const std::string query_api =
+      read_file(source_root() / "src/api/quader_query_api.cpp");
+  const std::string history_service = read_file(
+      source_root() / "src/editor/history/editor_history_service.cpp");
 
-    EXPECT_NE(mutationHeader.find("bool canRedo() const"), std::string::npos);
-    EXPECT_NE(mutationSource.find("QuaderApiMutationRunner::canRedo()"), std::string::npos);
-    EXPECT_NE(mutationSource.find("canCancelActivePreviewForUndo()"), std::string::npos);
-    EXPECT_NE(mutationSource.find("if (!canRedo())"), std::string::npos);
-    EXPECT_NE(historyApi.find("return mutations_.canRedo();"), std::string::npos);
-    EXPECT_NE(queryApi.find("return QuaderHistoryApi(session_, mutations_).snapshot();"), std::string::npos);
-    EXPECT_NE(historyService.find("activeTransaction_ == nullptr && undoRedo_->canUndo()"), std::string::npos);
-    EXPECT_NE(historyService.find("activeTransaction_ == nullptr && undoRedo_->canRedo()"), std::string::npos);
+  EXPECT_NE(mutation_header.find("bool can_redo() const"), std::string::npos);
+  EXPECT_NE(mutation_source.find("QuaderApiMutationRunner::can_redo()"),
+            std::string::npos);
+  EXPECT_NE(mutation_source.find("can_cancel_active_preview_for_undo()"),
+            std::string::npos);
+  EXPECT_NE(mutation_source.find("if (!can_redo())"), std::string::npos);
+  EXPECT_NE(history_api.find("return mutations_.can_redo();"),
+            std::string::npos);
+  EXPECT_NE(query_api.find(
+                "return QuaderHistoryApi(session_, mutations_).snapshot();"),
+            std::string::npos);
+  EXPECT_NE(history_service.find(
+                "active_transaction_ == nullptr && undo_redo_->can_undo()"),
+            std::string::npos);
+  EXPECT_NE(history_service.find(
+                "active_transaction_ == nullptr && undo_redo_->can_redo()"),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, ScriptHistoryUsesEditorTransactionAsSourceOfTruth) {
-    const std::string script = readFile(sourceRoot() / "src/api/quader_script.cpp");
-    const std::string mutationHeader = readFile(sourceRoot() / "src/api/quader_api_mutation_runner.hpp");
-    const std::string mutationSource = readFile(sourceRoot() / "src/api/quader_api_mutation_runner.cpp");
+  const std::string script =
+      read_file(source_root() / "src/api/quader_script.cpp");
+  const std::string mutation_header =
+      read_file(source_root() / "src/api/quader_api_mutation_runner.hpp");
+  const std::string mutation_source =
+      read_file(source_root() / "src/api/quader_api_mutation_runner.cpp");
 
-    EXPECT_NE(script.find("transaction.commit()"), std::string::npos);
-    EXPECT_NE(script.find("History operations are not supported inside QuaderScript."), std::string::npos);
-    EXPECT_EQ(script.find("transaction.discard()"), std::string::npos);
-    EXPECT_EQ(script.find("recordModelingMementoTransaction"), std::string::npos);
-    EXPECT_EQ(mutationHeader.find("recordModelingMementoTransaction"), std::string::npos);
-    EXPECT_EQ(mutationSource.find("recordModelingMementoTransaction"), std::string::npos);
-    EXPECT_EQ(mutationSource.find("RecordedModelingMementoCommand"), std::string::npos);
+  EXPECT_NE(script.find("transaction.commit()"), std::string::npos);
+  EXPECT_NE(
+      script.find("History operations are not supported inside QuaderScript."),
+      std::string::npos);
+  EXPECT_EQ(script.find("transaction.discard()"), std::string::npos);
+  EXPECT_EQ(script.find("recordModelingMementoTransaction"), std::string::npos);
+  EXPECT_EQ(mutation_header.find("recordModelingMementoTransaction"),
+            std::string::npos);
+  EXPECT_EQ(mutation_source.find("recordModelingMementoTransaction"),
+            std::string::npos);
+  EXPECT_EQ(mutation_source.find("RecordedModelingMementoCommand"),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, DocumentBatchTransformPlanningUsesSimulatedLockState) {
-    const std::string service = readFile(sourceRoot() / "src/editor/commands/document_command_service.cpp");
-    const std::string batchSource = sourceSlice(
-            service,
-            "DocumentCommandResult DocumentCommandService::applySceneBatch",
-            "\n}\n\n} // namespace quader");
+  const std::string service = read_file(
+      source_root() / "src/editor/commands/document_command_service.cpp");
+  const std::string batch_source = source_slice(
+      service, "DocumentCommandResult DocumentCommandService::apply_scene_batch",
+      "\n}\n\n} // namespace quader");
 
-    EXPECT_NE(batchSource.find("simulatedEffectivelyLocked"), std::string::npos);
-    EXPECT_NE(batchSource.find("simulatedParent"), std::string::npos);
-    EXPECT_NE(batchSource.find("simulatedLocked"), std::string::npos);
-    EXPECT_EQ(batchSource.find("scene_.isEffectivelyLocked(operation.entity)"), std::string::npos);
+  EXPECT_NE(batch_source.find("simulated_effectively_locked"), std::string::npos);
+  EXPECT_NE(batch_source.find("simulated_parent"), std::string::npos);
+  EXPECT_NE(batch_source.find("simulated_locked"), std::string::npos);
+  EXPECT_EQ(batch_source.find("scene_.is_effectively_locked(operation.entity)"),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, RepeatedCodecAndCutHelpersStayWithTheirOwners) {
-    const std::string codecsHeader = readFile(sourceRoot() / "src/io/qdr/qdr_project_codecs.hpp");
-    const std::string codecsSource = readFile(sourceRoot() / "src/io/qdr/qdr_project_codecs.cpp");
-    const std::string qdrReader = readFile(sourceRoot() / "src/io/qdr/qdr_document_reader.cpp");
-    const std::string qdrWriter = readFile(sourceRoot() / "src/io/qdr/qdr_document_writer.cpp");
-    const std::string sessionOps = readFile(sourceRoot() / "src/editor/modeling/runtime/session_operations.cpp");
+  const std::string codecs_header =
+      read_file(source_root() / "src/io/qdr/qdr_project_codecs.hpp");
+  const std::string codecs_source =
+      read_file(source_root() / "src/io/qdr/qdr_project_codecs.cpp");
+  const std::string qdr_reader =
+      read_file(source_root() / "src/io/qdr/qdr_document_reader.cpp");
+  const std::string qdr_writer =
+      read_file(source_root() / "src/io/qdr/qdr_document_writer.cpp");
+  const std::string session_ops = read_file(
+      source_root() / "src/editor/modeling/runtime/session_operations.cpp");
 
-    EXPECT_NE(codecsHeader.find("qdrSceneToneMappingName"), std::string::npos);
-    EXPECT_NE(codecsHeader.find("qdrSceneToneMappingFromName"), std::string::npos);
-    EXPECT_NE(codecsHeader.find("qdrTransformComponentToJson"), std::string::npos);
-    EXPECT_NE(codecsHeader.find("qdrTransformComponentFromJson"), std::string::npos);
-    EXPECT_NE(codecsHeader.find("qdrMeshComponentToJson"), std::string::npos);
-    EXPECT_NE(codecsHeader.find("qdrMeshComponentFromJson"), std::string::npos);
-    EXPECT_NE(codecsHeader.find("qdrMaterialComponentToJson"), std::string::npos);
-    EXPECT_NE(codecsHeader.find("qdrMaterialComponentFromJson"), std::string::npos);
-    EXPECT_NE(codecsHeader.find("qdrLightComponentToJson"), std::string::npos);
-    EXPECT_NE(codecsHeader.find("qdrLightComponentFromJson"), std::string::npos);
-    EXPECT_NE(codecsHeader.find("qdrSceneSettingsComponentToJson"), std::string::npos);
-    EXPECT_NE(codecsHeader.find("qdrSceneSettingsComponentFromJson"), std::string::npos);
-    EXPECT_NE(codecsSource.find("qdrSceneToneMappingName"), std::string::npos);
-    EXPECT_NE(codecsSource.find("qdrSceneToneMappingFromName"), std::string::npos);
-    EXPECT_NE(codecsSource.find("qdrTransformComponentToJson"), std::string::npos);
-    EXPECT_NE(codecsSource.find("qdrSceneSettingsComponentFromJson"), std::string::npos);
-    EXPECT_EQ(qdrReader.find("SceneToneMapping sceneToneMappingFromName"), std::string::npos);
-    EXPECT_EQ(qdrWriter.find("sceneToneMappingName(SceneToneMapping"), std::string::npos);
-    EXPECT_EQ(qdrReader.find("transformComponentFromJson"), std::string::npos);
-    EXPECT_EQ(qdrReader.find("meshComponentFromJson"), std::string::npos);
-    EXPECT_EQ(qdrReader.find("materialComponentFromJson"), std::string::npos);
-    EXPECT_EQ(qdrReader.find("lightComponentFromJson"), std::string::npos);
-    EXPECT_EQ(qdrWriter.find("transformComponentToJson"), std::string::npos);
-    EXPECT_EQ(qdrWriter.find("meshComponentToJson"), std::string::npos);
-    EXPECT_EQ(qdrWriter.find("materialComponentToJson"), std::string::npos);
-    EXPECT_EQ(qdrWriter.find("lightComponentToJson"), std::string::npos);
-    EXPECT_EQ(sessionOps.find("to_plane_cut_mode("), std::string::npos);
-    EXPECT_EQ(sessionOps.find("plane_cut_request_from_state("), std::string::npos);
-    EXPECT_NE(sessionOps.find("plane_cut_request_from_cut_state(state)"), std::string::npos);
-    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/editor/modeling/runtime/cut_policy.hpp"));
+  EXPECT_NE(codecs_header.find("qdr_scene_tone_mapping_name"), std::string::npos);
+  EXPECT_NE(codecs_header.find("qdr_scene_tone_mapping_from_name"),
+            std::string::npos);
+  EXPECT_NE(codecs_header.find("qdr_transform_component_to_json"),
+            std::string::npos);
+  EXPECT_NE(codecs_header.find("qdr_transform_component_from_json"),
+            std::string::npos);
+  EXPECT_NE(codecs_header.find("qdr_mesh_component_to_json"), std::string::npos);
+  EXPECT_NE(codecs_header.find("qdr_mesh_component_from_json"), std::string::npos);
+  EXPECT_NE(codecs_header.find("qdr_material_component_to_json"),
+            std::string::npos);
+  EXPECT_NE(codecs_header.find("qdr_material_component_from_json"),
+            std::string::npos);
+  EXPECT_NE(codecs_header.find("qdr_light_component_to_json"), std::string::npos);
+  EXPECT_NE(codecs_header.find("qdr_light_component_from_json"), std::string::npos);
+  EXPECT_NE(codecs_header.find("qdr_scene_settings_component_to_json"),
+            std::string::npos);
+  EXPECT_NE(codecs_header.find("qdr_scene_settings_component_from_json"),
+            std::string::npos);
+  EXPECT_NE(codecs_source.find("qdr_scene_tone_mapping_name"), std::string::npos);
+  EXPECT_NE(codecs_source.find("qdr_scene_tone_mapping_from_name"),
+            std::string::npos);
+  EXPECT_NE(codecs_source.find("qdr_transform_component_to_json"),
+            std::string::npos);
+  EXPECT_NE(codecs_source.find("qdr_scene_settings_component_from_json"),
+            std::string::npos);
+  EXPECT_EQ(qdr_reader.find("SceneToneMapping sceneToneMappingFromName"),
+            std::string::npos);
+  EXPECT_EQ(qdr_writer.find("sceneToneMappingName(SceneToneMapping"),
+            std::string::npos);
+  EXPECT_EQ(qdr_reader.find("transformComponentFromJson"), std::string::npos);
+  EXPECT_EQ(qdr_reader.find("meshComponentFromJson"), std::string::npos);
+  EXPECT_EQ(qdr_reader.find("materialComponentFromJson"), std::string::npos);
+  EXPECT_EQ(qdr_reader.find("lightComponentFromJson"), std::string::npos);
+  EXPECT_EQ(qdr_writer.find("transformComponentToJson"), std::string::npos);
+  EXPECT_EQ(qdr_writer.find("meshComponentToJson"), std::string::npos);
+  EXPECT_EQ(qdr_writer.find("materialComponentToJson"), std::string::npos);
+  EXPECT_EQ(qdr_writer.find("lightComponentToJson"), std::string::npos);
+  EXPECT_EQ(session_ops.find("to_plane_cut_mode("), std::string::npos);
+  EXPECT_EQ(session_ops.find("plane_cut_request_from_state("),
+            std::string::npos);
+  EXPECT_NE(session_ops.find("plane_cut_request_from_cut_state(state)"),
+            std::string::npos);
+  EXPECT_FALSE(std::filesystem::exists(
+      source_root() / "src/editor/modeling/runtime/cut_policy.hpp"));
 }
 
 TEST(ProgrammaticApiGuardrailTests, EditorHistoryBoundaryHidesCoreUndoRedoManager) {
-    const std::vector<std::filesystem::path> editorHistoryClients = {
-            sourceRoot() / "src/api/quader_api.cpp",
-            sourceRoot() / "src/api/quader_scene_api.cpp",
-            sourceRoot() / "src/scene/document/project_session.hpp",
-            sourceRoot() / "src/scene/document/project_session.cpp",
-            sourceRoot() / "src/editor/commands/document_command_service.hpp",
-            sourceRoot() / "src/editor/commands/document_command_service.cpp",
-            sourceRoot() / "src/editor/history/scene_transform_preview_transaction.hpp",
-    };
-    for (const std::filesystem::path& file : editorHistoryClients) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
-        EXPECT_EQ(source.find("UndoRedoManager"), std::string::npos) << relative;
-        EXPECT_EQ(source.find("core/undo_redo_manager.hpp"), std::string::npos) << relative;
-        EXPECT_EQ(source.find("undoRedo()"), std::string::npos) << relative;
-    }
+  const std::vector<std::filesystem::path> editor_history_clients = {
+      source_root() / "src/api/quader_api.cpp",
+      source_root() / "src/api/quader_scene_api.cpp",
+      source_root() / "src/scene/document/project_session.hpp",
+      source_root() / "src/scene/document/project_session.cpp",
+      source_root() / "src/editor/commands/document_command_service.hpp",
+      source_root() / "src/editor/commands/document_command_service.cpp",
+      source_root() /
+          "src/editor/history/scene_transform_preview_transaction.hpp",
+  };
+  for (const std::filesystem::path &file : editor_history_clients) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
+    EXPECT_EQ(source.find("UndoRedoManager"), std::string::npos) << relative;
+    EXPECT_EQ(source.find("core/undo_redo_manager.hpp"), std::string::npos)
+        << relative;
+    EXPECT_EQ(source.find("undo_redo()"), std::string::npos) << relative;
+  }
 
-    const std::string historyHeader = readFile(sourceRoot() / "src/editor/history/editor_history_service.hpp");
-    EXPECT_EQ(historyHeader.find("core/undo_redo_manager.hpp"), std::string::npos);
-    EXPECT_EQ(historyHeader.find("undoRedo()"), std::string::npos);
+  const std::string history_header = read_file(
+      source_root() / "src/editor/history/editor_history_service.hpp");
+  EXPECT_EQ(history_header.find("core/undo_redo_manager.hpp"),
+            std::string::npos);
+  EXPECT_EQ(history_header.find("undo_redo()"), std::string::npos);
 
-    const std::string historySource = readFile(sourceRoot() / "src/editor/history/editor_history_service.cpp");
-    EXPECT_NE(historySource.find("core/undo_redo_manager.hpp"), std::string::npos);
+  const std::string history_source = read_file(
+      source_root() / "src/editor/history/editor_history_service.cpp");
+  EXPECT_NE(history_source.find("core/undo_redo_manager.hpp"),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicBehaviorTestsUseApiOrScenarioDsl) {
@@ -1080,261 +1316,340 @@ TEST(ProgrammaticApiGuardrailTests, PublicBehaviorTestsUseApiOrScenarioDsl) {
             "session().selection().",
             "session().modeling().",
             "scenario.session()",
-            "createBoxFromBounds(",
-            "executeInstantOperation",
-            "executeContextAction",
+            "create_box_from_bounds(",
+            "execute_instant_operation",
+            "execute_context_action",
     };
 
-    for (const std::filesystem::path& file : publicBehaviorTestFiles()) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
+    for (const std::filesystem::path &file : public_behavior_test_files()) {
+      const std::string source = read_file(file);
+      const std::string relative = normalized_relative(file);
 
-        for (const std::string& line : linesContaining(source, forbidden)) {
-            EXPECT_TRUE(allowedPublicBehaviorHarnessUse(relative, line)) << relative << ": " << line;
-        }
+      for (const std::string &line : lines_containing(source, forbidden)) {
+        EXPECT_TRUE(allowed_public_behavior_harness_use(relative, line))
+            << relative << ": " << line;
+      }
     }
 
-    const std::string behaviorScenario = readFile(sourceRoot() / "tests/support/behavior_scenario.hpp");
-    EXPECT_EQ(behaviorScenario.find("ProjectSession& session()"), std::string::npos);
-    EXPECT_EQ(behaviorScenario.find("const ProjectSession& session()"), std::string::npos);
-    EXPECT_NE(behaviorScenario.find("BehaviorWhen& dispatchViewportShortcut"), std::string::npos);
+    const std::string behavior_scenario =
+        read_file(source_root() / "tests/support/behavior_scenario.hpp");
+    EXPECT_EQ(behavior_scenario.find("ProjectSession& session()"),
+              std::string::npos);
+    EXPECT_EQ(behavior_scenario.find("const ProjectSession& session()"),
+              std::string::npos);
+    EXPECT_NE(behavior_scenario.find("BehaviorWhen &dispatch_viewport_shortcut"),
+              std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, ModelingOperationTestsUseSharedRuntimeHelpers) {
-    const std::vector<std::string_view> duplicatedHelpers = {
-            "find_object(const quader_editor_core::EditorSession&",
-            "require_object(const quader_editor_core::EditorSession&",
-            "selected_face_count(const",
-            "selected_vertex_count(const",
-            "selected_edge_count(const",
-    };
+  const std::vector<std::string_view> duplicated_helpers = {
+      "find_object(const quader_editor_core::EditorSession&",
+      "require_object(const quader_editor_core::EditorSession&",
+      "selected_face_count(const",
+      "selected_vertex_count(const",
+      "selected_edge_count(const",
+  };
 
-    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "tests/modeling_domain/operation", ".cpp")) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
-        for (const std::string& line : linesContaining(source, duplicatedHelpers)) {
-            ADD_FAILURE() << relative << ": move duplicated runtime test helper to editor_operation_test_helpers.hpp: " << line;
-        }
+  for (const std::filesystem::path &file : files_with_extension(
+           source_root() / "tests/modeling_domain/operation", ".cpp")) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
+    for (const std::string &line :
+         lines_containing(source, duplicated_helpers)) {
+      ADD_FAILURE() << relative
+                    << ": move duplicated runtime test helper to "
+                       "editor_operation_test_helpers.hpp: "
+                    << line;
     }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersExposeAppNamedTypes) {
-    const std::vector<std::string_view> absorbedNamespaces = {
-            "quader_poly::",
-            "quader_editor_core::",
-            "quader_io::",
-            "quader_host_contract::",
-    };
+  const std::vector<std::string_view> absorbed_namespaces = {
+      "quader_poly::",
+      "quader_editor_core::",
+      "quader_io::",
+      "quader_host_contract::",
+  };
 
-    for (const std::filesystem::path& file : publicApiHeaderFiles()) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
-        for (const std::string& line : linesContaining(source, absorbedNamespaces)) {
-            EXPECT_TRUE(false) << relative << ": " << line;
-        }
+  for (const std::filesystem::path &file : public_api_header_files()) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
+    for (const std::string &line :
+         lines_containing(source, absorbed_namespaces)) {
+      EXPECT_TRUE(false) << relative << ": " << line;
     }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicDocsExamplesManifestClassifiesEveryDocsAndExamplesFile) {
-    const PublicDocsExamplesManifest manifest = publicDocsExamplesManifest();
-    EXPECT_FALSE(manifest.publicFiles.empty());
+  const PublicDocsExamplesManifest manifest = public_docs_examples_manifest();
+  EXPECT_FALSE(manifest.public_files.empty());
 
-    std::set<std::string> classified;
-    for (const std::filesystem::path& file : manifest.publicFiles) {
-        const std::string relative = normalizedRelative(file);
-        EXPECT_TRUE(std::filesystem::exists(file)) << relative;
-        classified.insert(relative);
-    }
-    for (const std::filesystem::path& file : manifest.internalFiles) {
-        const std::string relative = normalizedRelative(file);
-        EXPECT_TRUE(std::filesystem::exists(file)) << relative;
-        classified.insert(relative);
-    }
+  std::set<std::string> classified;
+  for (const std::filesystem::path &file : manifest.public_files) {
+    const std::string relative = normalized_relative(file);
+    EXPECT_TRUE(std::filesystem::exists(file)) << relative;
+    classified.insert(relative);
+  }
+  for (const std::filesystem::path &file : manifest.internal_files) {
+    const std::string relative = normalized_relative(file);
+    EXPECT_TRUE(std::filesystem::exists(file)) << relative;
+    classified.insert(relative);
+  }
 
-    for (const std::filesystem::path& root : {sourceRoot() / "docs", sourceRoot() / "examples"}) {
-        for (const std::filesystem::path& file : docAndExampleFilesUnder(root)) {
-            const std::string relative = normalizedRelative(file);
-            EXPECT_NE(classified.find(relative), classified.end()) << "unclassified docs/examples file: " << relative;
-        }
+  for (const std::filesystem::path &root :
+       {source_root() / "docs", source_root() / "examples"}) {
+    for (const std::filesystem::path &file :
+         doc_and_example_files_under(root)) {
+      const std::string relative = normalized_relative(file);
+      EXPECT_NE(classified.find(relative), classified.end())
+          << "unclassified docs/examples file: " << relative;
     }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicDocsDoNotUseResultAsFluentObjectHandle) {
-    const std::string apiOverview = readFile(sourceRoot() / "docs/api-overview.md");
+  const std::string api_overview =
+      read_file(source_root() / "docs/api-overview.md");
 
-    EXPECT_EQ(apiOverview.find(".rename(\"Renamed API Box\")\n            .select()"), std::string::npos);
-    EXPECT_NE(apiOverview.find("auto object = editor.object(created.value());"), std::string::npos);
-    EXPECT_NE(apiOverview.find("object.rename(\"Renamed API Box\");"), std::string::npos);
-    EXPECT_NE(apiOverview.find("object.select();"), std::string::npos);
+  EXPECT_EQ(
+      api_overview.find(".rename(\"Renamed API Box\")\n            .select()"),
+      std::string::npos);
+  EXPECT_NE(api_overview.find("auto object = editor.object(created.value());"),
+            std::string::npos);
+  EXPECT_NE(api_overview.find("object.rename(\"Renamed API Box\");"),
+            std::string::npos);
+  EXPECT_NE(api_overview.find("object.select();"), std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicExamplesAndDocsDoNotStartFromInternalOwnerHeaders) {
-    for (const std::filesystem::path& file : publicDocAndExampleFiles()) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
+  for (const std::filesystem::path &file : public_doc_and_example_files()) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
 
-        EXPECT_FALSE(containsAny(source, {
-                             "editor/modeling/services/modeling_session_service.hpp",
-                             "scene/scene_document.hpp",
-                             "assets/asset_registry.hpp",
-                             "editor/commands/document_command_service.hpp",
-                             "render/scene_render_bridge.hpp",
-                             "ui/ui_system.hpp",
-                             "platform/platform_window.hpp",
-                             "scene/document/project_session.hpp",
-                             "ProjectSession",
-                     }))
-                << relative;
-    }
+    EXPECT_FALSE(contains_any(
+        source,
+        {
+            "editor/modeling/services/modeling_session_service.hpp",
+            "scene/scene_document.hpp",
+            "assets/asset_registry.hpp",
+            "editor/commands/document_command_service.hpp",
+            "render/scene_render_bridge.hpp",
+            "ui/ui_system.hpp",
+            "platform/platform_window.hpp",
+            "scene/document/project_session.hpp",
+            "ProjectSession",
+        }))
+        << relative;
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicCppExamplesAreCompiledOrMarkedDocumentationOnly) {
-    const std::string cmake = readFile(sourceRoot() / "CMakeLists.txt");
+  const std::string cmake = read_file(source_root() / "CMakeLists.txt");
 
-    for (const std::filesystem::path& file : publicCppExampleFiles()) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
-        EXPECT_TRUE(cmake.find(relative) != std::string::npos || isDocumentationOnlyExample(source))
-                << relative;
-    }
+  for (const std::filesystem::path &file : public_cpp_example_files()) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
+    EXPECT_TRUE(cmake.find(relative) != std::string::npos ||
+                is_documentation_only_example(source))
+        << relative;
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicCppExamplesUseCallableResultHelpers) {
-    const std::vector<std::string_view> rawResultFieldPatterns = {
-            ".ok)",
-            ".ok;",
-            ".ok &&",
-            ".ok ||",
-            ".changed)",
-            ".changed;",
-            ".changed &&",
-            ".changed ||",
-            ".value.",
-            ".message",
-    };
+  const std::vector<std::string_view> raw_result_field_patterns = {
+      ".ok)",      ".ok;",        ".ok &&",      ".ok ||",  ".changed)",
+      ".changed;", ".changed &&", ".changed ||", ".value.", ".message",
+  };
 
-    for (const std::filesystem::path& file : publicCppExampleFiles()) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
-        for (const std::string& line : linesContaining(source, rawResultFieldPatterns)) {
-            ADD_FAILURE() << relative << ": use callable result helpers in public examples: " << line;
-        }
+  for (const std::filesystem::path &file : public_cpp_example_files()) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
+    for (const std::string &line :
+         lines_containing(source, raw_result_field_patterns)) {
+      ADD_FAILURE() << relative
+                    << ": use callable result helpers in public examples: "
+                    << line;
     }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicExamplesStartFromEditorApiOrScriptSurface) {
-    const std::vector<std::string_view> publicEntrySurfaces = {
-            "QuaderEditorApi",
-            "QuaderApi",
-            "QuaderObjectHandle",
-            "QuaderScript",
-            "public `quader` scripting object",
-            "BehaviorScenario",
-    };
+  const std::vector<std::string_view> public_entry_surfaces = {
+      "QuaderEditorApi",
+      "QuaderApi",
+      "QuaderObjectHandle",
+      "QuaderScript",
+      "public `quader` scripting object",
+      "BehaviorScenario",
+  };
 
-    for (const std::filesystem::path& file : publicDocAndExampleFiles()) {
-        const std::string source = readFile(file);
-        const std::string relative = normalizedRelative(file);
-        EXPECT_TRUE(containsAny(source, publicEntrySurfaces)) << relative;
-    }
+  for (const std::filesystem::path &file : public_doc_and_example_files()) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
+    EXPECT_TRUE(contains_any(source, public_entry_surfaces)) << relative;
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicModelingCommandBridgeIsDescriptorDriven) {
-    const std::string commandsApi = readFile(sourceRoot() / "src/api/quader_commands_api.cpp");
-    const std::string commandDescriptor = readFile(sourceRoot() / "src/editor/commands/command_tool_descriptor.hpp");
-    const std::string commandCatalog = readFile(sourceRoot() / "src/editor/commands/modeling_command_tool_catalog.cpp");
+  const std::string commands_api =
+      read_file(source_root() / "src/api/quader_commands_api.cpp");
+  const std::string command_descriptor = read_file(
+      source_root() / "src/editor/commands/command_tool_descriptor.hpp");
+  const std::string command_catalog = read_file(
+      source_root() / "src/editor/commands/modeling_command_tool_catalog.cpp");
 
-    EXPECT_EQ(commandsApi.find("ModelingActionCommandBridgeDescriptor"), std::string::npos);
-    EXPECT_EQ(commandsApi.find("modelingActionCommandBridgeCatalog"), std::string::npos);
-    EXPECT_EQ(commandsApi.find("fixedCommandIdForModelingAction"), std::string::npos);
-    EXPECT_EQ(commandsApi.find("modeling.action."), std::string::npos);
-    EXPECT_EQ(commandsApi.find("publicCompatibilityAlias"), std::string::npos);
-    EXPECT_EQ(commandsApi.find("registerAlias"), std::string::npos);
-    EXPECT_EQ(commandsApi.find("canonicalCommandId"), std::string::npos);
-    EXPECT_EQ(commandsApi.find("executeModelingAction"), std::string::npos);
-    EXPECT_EQ(commandsApi.find("executeToolActivation"), std::string::npos);
-    EXPECT_NE(commandsApi.find("tool->publicCommandTargetId()"), std::string::npos);
-    EXPECT_NE(commandDescriptor.find("publicCommandId"), std::string::npos);
-    EXPECT_NE(commandDescriptor.find("registersPublicCommand"), std::string::npos);
-    EXPECT_EQ(commandDescriptor.find("publicCompatibilityAlias"), std::string::npos);
-    EXPECT_NE(commandCatalog.find(".publicCommandId = entry.publicCommandId"), std::string::npos);
+  EXPECT_EQ(commands_api.find("ModelingActionCommandBridgeDescriptor"),
+            std::string::npos);
+  EXPECT_EQ(commands_api.find("modelingActionCommandBridgeCatalog"),
+            std::string::npos);
+  EXPECT_EQ(commands_api.find("fixedCommandIdForModelingAction"),
+            std::string::npos);
+  EXPECT_EQ(commands_api.find("modeling.action."), std::string::npos);
+  EXPECT_EQ(commands_api.find("publicCompatibilityAlias"), std::string::npos);
+  EXPECT_EQ(commands_api.find("registerAlias"), std::string::npos);
+  EXPECT_EQ(commands_api.find("canonicalCommandId"), std::string::npos);
+  EXPECT_EQ(commands_api.find("executeModelingAction"), std::string::npos);
+  EXPECT_EQ(commands_api.find("executeToolActivation"), std::string::npos);
+  EXPECT_NE(commands_api.find("tool->public_command_target_id()"),
+            std::string::npos);
+  EXPECT_NE(command_descriptor.find("public_command_id"), std::string::npos);
+  EXPECT_NE(command_descriptor.find("registers_public_command"),
+            std::string::npos);
+  EXPECT_EQ(command_descriptor.find("publicCompatibilityAlias"),
+            std::string::npos);
+  EXPECT_NE(command_catalog.find(".public_command_id = entry.public_command_id"),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicCommandTargetsUseSharedPrefixOwner) {
-    const std::string commandsApi = readFile(sourceRoot() / "src/api/quader_commands_api.cpp");
-    const std::string commandTool = readFile(sourceRoot() / "src/editor/commands/command_tool.hpp");
-    const std::string commandRegistryHeader = readFile(sourceRoot() / "src/editor/commands/editor_command_registry.hpp");
-    const std::string commandRegistrySource = readFile(sourceRoot() / "src/editor/commands/editor_command_registry.cpp");
-    const std::string viewportAdapter = readFile(sourceRoot() / "src/viewport/host_viewport_contract_adapter.cpp");
-    const std::string commandTargets = readFile(sourceRoot() / "src/core/public_command_targets.hpp");
+  const std::string commands_api =
+      read_file(source_root() / "src/api/quader_commands_api.cpp");
+  const std::string command_tool =
+      read_file(source_root() / "src/editor/commands/command_tool.hpp");
+  const std::string command_registry_header = read_file(
+      source_root() / "src/editor/commands/editor_command_registry.hpp");
+  const std::string command_registry_source = read_file(
+      source_root() / "src/editor/commands/editor_command_registry.cpp");
+  const std::string viewport_adapter = read_file(
+      source_root() / "src/viewport/host_viewport_contract_adapter.cpp");
+  const std::string command_targets =
+      read_file(source_root() / "src/core/public_command_targets.hpp");
 
-    EXPECT_NE(commandTargets.find("kQuaderModelingCommandTargetPrefix"), std::string::npos);
-    EXPECT_NE(commandTargets.find("kQuaderToolActivationCommandTargetPrefix"), std::string::npos);
-    EXPECT_NE(commandsApi.find("quaderModelingCommandTargetId"), std::string::npos);
-    EXPECT_NE(commandsApi.find("quaderToolActivationCommandTargetId"), std::string::npos);
-    EXPECT_NE(commandTool.find("quaderModelingCommandTargetId"), std::string::npos);
-    EXPECT_NE(viewportAdapter.find("quaderToolIdFromActivationCommandTarget"), std::string::npos);
+  EXPECT_NE(command_targets.find("kQuaderModelingCommandTargetPrefix"),
+            std::string::npos);
+  EXPECT_NE(command_targets.find("kQuaderToolActivationCommandTargetPrefix"),
+            std::string::npos);
+  EXPECT_NE(commands_api.find("quader_modeling_command_target_id"),
+            std::string::npos);
+  EXPECT_NE(commands_api.find("quader_tool_activation_command_target_id"),
+            std::string::npos);
+  EXPECT_NE(command_tool.find("quader_modeling_command_target_id"),
+            std::string::npos);
+  EXPECT_NE(viewport_adapter.find("quader_tool_id_from_activation_command_target"),
+            std::string::npos);
 
-    EXPECT_EQ(commandsApi.find("canonicalTargetId"), std::string::npos);
-    EXPECT_EQ(commandRegistryHeader.find("registerPrefix"), std::string::npos);
-    EXPECT_EQ(commandRegistryHeader.find("PrefixRoute"), std::string::npos);
-    EXPECT_EQ(commandRegistrySource.find("registerPrefix"), std::string::npos);
-    EXPECT_EQ(commandRegistrySource.find("PrefixRoute"), std::string::npos);
-    EXPECT_EQ(commandsApi.find("registerPrefix(\"tools.activate."), std::string::npos);
-    EXPECT_EQ(commandTool.find("std::string commandId(\"modeling."), std::string::npos);
-    EXPECT_EQ(viewportAdapter.find("std::string commandId(\"tools.activate."), std::string::npos);
-    EXPECT_EQ(viewportAdapter.find("constexpr std::string_view toolPrefix = \"tools.activate."), std::string::npos);
+  EXPECT_EQ(commands_api.find("canonicalTargetId"), std::string::npos);
+  EXPECT_EQ(command_registry_header.find("registerPrefix"), std::string::npos);
+  EXPECT_EQ(command_registry_header.find("PrefixRoute"), std::string::npos);
+  EXPECT_EQ(command_registry_source.find("registerPrefix"), std::string::npos);
+  EXPECT_EQ(command_registry_source.find("PrefixRoute"), std::string::npos);
+  EXPECT_EQ(commands_api.find("registerPrefix(\"tools.activate."),
+            std::string::npos);
+  EXPECT_EQ(command_tool.find("std::string command_id(\"modeling."),
+            std::string::npos);
+  EXPECT_EQ(viewport_adapter.find("std::string command_id(\"tools.activate."),
+            std::string::npos);
+  EXPECT_EQ(viewport_adapter.find(
+                "constexpr std::string_view toolPrefix = \"tools.activate."),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, DuplicateShortcutTargetsSceneAwarePublicCommand) {
-    const std::string hostContract = readFile(sourceRoot() / "src/editor/metadata/host_contract.cpp");
-    const std::string viewportAdapter = readFile(sourceRoot() / "src/viewport/host_viewport_contract_adapter.cpp");
+  const std::string host_contract =
+      read_file(source_root() / "src/editor/metadata/host_contract.cpp");
+  const std::string viewport_adapter = read_file(
+      source_root() / "src/viewport/host_viewport_contract_adapter.cpp");
 
-    EXPECT_NE(hostContract.find("{ \"duplicate_selection\", \"Duplicate Selection\""), std::string::npos);
-    EXPECT_NE(hostContract.find("shortcut(\"duplicate_selection\""), std::string::npos);
-    EXPECT_NE(viewportAdapter.find("{\"duplicate_selection\", QuaderCommand::DuplicateSelection.string()"),
+  EXPECT_NE(host_contract.find("{\"duplicate_selection\", \"Duplicate Selection\""),
             std::string::npos);
-    EXPECT_EQ(hostContract.find("shortcut(\"duplicate_meshes\""), std::string::npos);
-    EXPECT_EQ(viewportAdapter.find("{\"duplicate_meshes\", {}"), std::string::npos);
+  EXPECT_NE(host_contract.find("shortcut(\"duplicate_selection\""),
+            std::string::npos);
+  EXPECT_NE(viewport_adapter.find("{\"duplicate_selection\", "
+                                  "quader_command::kDuplicateSelection.string()"),
+            std::string::npos);
+  EXPECT_EQ(host_contract.find("shortcut(\"duplicate_meshes\""),
+            std::string::npos);
+  EXPECT_EQ(viewport_adapter.find("{\"duplicate_meshes\", {}"),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, HostViewportContractAdapterKeepsImplementationOutOfHeader) {
-    const std::string rootCMake = readFile(sourceRoot() / "CMakeLists.txt");
-    const std::string adapterHeader = readFile(sourceRoot() / "src/viewport/host_viewport_contract_adapter.hpp");
-    const std::string adapterSource = readFile(sourceRoot() / "src/viewport/host_viewport_contract_adapter.cpp");
+  const std::string root_c_make = read_file(source_root() / "CMakeLists.txt");
+  const std::string adapter_header = read_file(
+      source_root() / "src/viewport/host_viewport_contract_adapter.hpp");
+  const std::string adapter_source = read_file(
+      source_root() / "src/viewport/host_viewport_contract_adapter.cpp");
 
-    EXPECT_NE(rootCMake.find("src/viewport/host_viewport_contract_adapter.cpp"), std::string::npos);
-    EXPECT_NE(adapterSource.find("std::span<const ViewportShortcutTargetDescriptor> viewportShortcutTargetCatalog()"),
+  EXPECT_NE(root_c_make.find("src/viewport/host_viewport_contract_adapter.cpp"),
             std::string::npos);
-    EXPECT_NE(adapterSource.find("#include \"api/quader_command_ids.hpp\""), std::string::npos);
-    EXPECT_NE(adapterSource.find("#include <editor/metadata/host_contract.hpp>"), std::string::npos);
-    EXPECT_NE(adapterHeader.find("std::span<const ViewportShortcutTargetDescriptor> viewportShortcutTargetCatalog();"),
+  EXPECT_NE(
+      adapter_source.find("std::span<const ViewportShortcutTargetDescriptor>\n"
+                          "viewport_shortcut_target_catalog()"),
+      std::string::npos);
+  EXPECT_NE(adapter_source.find("#include \"api/quader_command_ids.hpp\""),
             std::string::npos);
+  EXPECT_NE(adapter_source.find("#include <editor/metadata/host_contract.hpp>"),
+            std::string::npos);
+  EXPECT_NE(
+      adapter_header.find("std::span<const ViewportShortcutTargetDescriptor>\n"
+                          "viewport_shortcut_target_catalog();"),
+      std::string::npos);
 
-    EXPECT_EQ(adapterHeader.find("inline "), std::string::npos);
-    EXPECT_EQ(adapterHeader.find("#include \"api/quader_command_ids.hpp\""), std::string::npos);
-    EXPECT_EQ(adapterHeader.find("#include \"editor/commands/modeling_command_tool_catalog.hpp\""), std::string::npos);
-    EXPECT_EQ(adapterHeader.find("#include <editor/metadata/host_contract.hpp>"), std::string::npos);
-    EXPECT_EQ(adapterHeader.find("quader_host_contract::"), std::string::npos);
+  EXPECT_EQ(adapter_header.find("inline "), std::string::npos);
+  EXPECT_EQ(adapter_header.find("#include \"api/quader_command_ids.hpp\""),
+            std::string::npos);
+  EXPECT_EQ(
+      adapter_header.find(
+          "#include \"editor/commands/modeling_command_tool_catalog.hpp\""),
+      std::string::npos);
+  EXPECT_EQ(adapter_header.find("#include <editor/metadata/host_contract.hpp>"),
+            std::string::npos);
+  EXPECT_EQ(adapter_header.find("quader_host_contract::"), std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, ApiStatusStampsUseSharedInternalHelper) {
-    const std::string statusHelper = readFile(sourceRoot() / "src/api/quader_api_status_internal.hpp");
-    const std::string mutationRunner = readFile(sourceRoot() / "src/api/quader_api_mutation_runner.cpp");
-    const std::string toolsApi = readFile(sourceRoot() / "src/api/quader_tools_api.cpp");
-    const std::string queryApi = readFile(sourceRoot() / "src/api/quader_query_api.cpp");
-    const std::string modelingApi = readFile(sourceRoot() / "src/api/quader_modeling_api.cpp");
-    const std::string projectApi = readFile(sourceRoot() / "src/api/quader_project_api.cpp");
+  const std::string status_helper =
+      read_file(source_root() / "src/api/quader_api_status_internal.hpp");
+  const std::string mutation_runner =
+      read_file(source_root() / "src/api/quader_api_mutation_runner.cpp");
+  const std::string tools_api =
+      read_file(source_root() / "src/api/quader_tools_api.cpp");
+  const std::string query_api =
+      read_file(source_root() / "src/api/quader_query_api.cpp");
+  const std::string modeling_api =
+      read_file(source_root() / "src/api/quader_modeling_api.cpp");
+  const std::string project_api =
+      read_file(source_root() / "src/api/quader_project_api.cpp");
 
-    EXPECT_NE(statusHelper.find("quaderApiCurrentRevisions"), std::string::npos);
-    EXPECT_NE(mutationRunner.find("quaderApiVoidStatus"), std::string::npos);
-    EXPECT_NE(toolsApi.find("quaderApiVoidStatus"), std::string::npos);
-    EXPECT_NE(queryApi.find("quaderApiCurrentRevisions"), std::string::npos);
-    EXPECT_NE(modelingApi.find("quaderApiPreviewMutationKind"), std::string::npos);
-    EXPECT_NE(projectApi.find("quaderApiFailureStatus"), std::string::npos);
+  EXPECT_NE(status_helper.find("quader_api_current_revisions"), std::string::npos);
+  EXPECT_NE(mutation_runner.find("quader_api_void_status"), std::string::npos);
+  EXPECT_NE(tools_api.find("quader_api_void_status"), std::string::npos);
+  EXPECT_NE(query_api.find("quader_api_current_revisions"), std::string::npos);
+  EXPECT_NE(modeling_api.find("quader_api_preview_mutation_kind"),
+            std::string::npos);
+  EXPECT_NE(project_api.find("quader_api_failure_status"), std::string::npos);
 
-    EXPECT_EQ(toolsApi.find("QuaderToolsApi::currentRevisions"), std::string::npos);
-    EXPECT_EQ(toolsApi.find(".modelingContentRevision = summary.contentRevision"), std::string::npos);
-    EXPECT_EQ(queryApi.find(".modelingContentRevision = summary.contentRevision"), std::string::npos);
-    EXPECT_EQ(modelingApi.find(".modelingContentRevision = summary.contentRevision"), std::string::npos);
+  EXPECT_EQ(tools_api.find("QuaderToolsApi::current_revisions"),
+            std::string::npos);
+  EXPECT_EQ(
+      tools_api.find(".modeling_content_revision = summary.content_revision"),
+      std::string::npos);
+  EXPECT_EQ(
+      query_api.find(".modeling_content_revision = summary.content_revision"),
+      std::string::npos);
+  EXPECT_EQ(
+      modeling_api.find(".modeling_content_revision = summary.content_revision"),
+      std::string::npos);
 }

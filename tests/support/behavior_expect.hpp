@@ -23,12 +23,12 @@ public:
     explicit CommandExpect(const QuaderApiStatus& status) : status_(status) {}
 
     CommandExpect& ok();
-    CommandExpect& okChanged();
+    CommandExpect &ok_changed();
     CommandExpect& unchanged();
     CommandExpect& failed();
-    CommandExpect& messageContains(std::string_view text);
+    CommandExpect &message_contains(std::string_view text);
 
-private:
+  private:
     const QuaderApiStatus& status_;
 };
 
@@ -39,29 +39,36 @@ class SceneExpect final {
 public:
     explicit SceneExpect(const BehaviorScenario& scenario) : scenario_(scenario) {}
 
-    SceneExpect& entityCount(std::size_t count);
-    SceneExpect& hasAlias(std::string_view alias);
-    SceneExpect& missingAlias(std::string_view alias);
-    SceneExpect& namedExists(std::string_view name);
-    SceneExpect& namedMissing(std::string_view name);
-    SceneExpect& aliasName(std::string_view alias, std::string_view name);
-    SceneExpect& aliasKind(std::string_view alias, QuaderEntityKind kind);
-    SceneExpect& parent(std::string_view alias, std::string_view parentAlias);
-    SceneExpect& noParent(std::string_view alias);
-    SceneExpect& childCount(std::string_view alias, std::size_t count);
-    SceneExpect& selectedAliases(std::initializer_list<std::string_view> aliases);
-    SceneExpect& activeAlias(std::string_view alias);
-    SceneExpect& selectedAliasIs(std::string_view alias);
+    SceneExpect &entity_count(std::size_t count);
+    SceneExpect &has_alias(std::string_view alias);
+    SceneExpect &missing_alias(std::string_view alias);
+    SceneExpect &named_exists(std::string_view name);
+    SceneExpect &named_missing(std::string_view name);
+    SceneExpect &alias_name(std::string_view alias, std::string_view name);
+    SceneExpect &alias_kind(std::string_view alias, QuaderEntityKind kind);
+    SceneExpect &parent(std::string_view alias, std::string_view parent_alias);
+    SceneExpect &no_parent(std::string_view alias);
+    SceneExpect &child_count(std::string_view alias, std::size_t count);
+    SceneExpect &
+    selected_aliases(std::initializer_list<std::string_view> aliases);
+    SceneExpect &active_alias(std::string_view alias);
+    SceneExpect &selected_alias_is(std::string_view alias);
     SceneExpect& visible(std::string_view alias, bool expected);
     SceneExpect& locked(std::string_view alias, bool expected);
-    SceneExpect& hasMesh(std::string_view alias, AssetId mesh);
-    SceneExpect& hasMaterial(std::string_view alias, AssetId material);
-    SceneExpect& worldPositionNear(std::string_view alias, QVec3 expected, float epsilon = 0.001f);
-    SceneExpect& selectedBoundsCenterNear(QVec3 expected, float epsilon = 0.001f);
-    SceneExpect& entityTransformNear(std::string_view alias, TransformComponent expected, float epsilon = 0.001f);
-    SceneExpect& entityTransformNear(std::string_view alias, QuaderTransform expected, float epsilon = 0.001f);
+    SceneExpect &has_mesh(std::string_view alias, AssetId mesh);
+    SceneExpect &has_material(std::string_view alias, AssetId material);
+    SceneExpect &world_position_near(std::string_view alias, QVec3 expected,
+                                     float epsilon = 0.001f);
+    SceneExpect &selected_bounds_center_near(QVec3 expected,
+                                             float epsilon = 0.001f);
+    SceneExpect &entity_transform_near(std::string_view alias,
+                                       TransformComponent expected,
+                                       float epsilon = 0.001f);
+    SceneExpect &entity_transform_near(std::string_view alias,
+                                       QuaderTransform expected,
+                                       float epsilon = 0.001f);
 
-private:
+  private:
     const BehaviorScenario& scenario_;
 };
 
@@ -72,9 +79,9 @@ class AssetExpect final {
 public:
     explicit AssetExpect(const BehaviorScenario& scenario) : scenario_(scenario) {}
 
-    AssetExpect& textureCount(std::size_t count);
+    AssetExpect &texture_count(std::size_t count);
 
-private:
+  private:
     const BehaviorScenario& scenario_;
 };
 
@@ -87,18 +94,19 @@ public:
 
     SelectionExpect& mode(ModelingSelectionMode mode);
     SelectionExpect& mode(QuaderSelectionMode mode);
-    SelectionExpect& objectCount(std::uint32_t count);
-    SelectionExpect& vertexCount(std::uint32_t count);
-    SelectionExpect& edgeCount(std::uint32_t count);
-    SelectionExpect& faceCount(std::uint32_t count);
-    SelectionExpect& activeAlias(std::string_view alias);
-    SelectionExpect& activeVertex(int vertex);
-    SelectionExpect& activeEdge(int a, int b);
-    SelectionExpect& activeFace(int face);
-    SelectionExpect& revisionChangedFrom(const ModelingSelectionSummary& before);
-    SelectionExpect& revisionSameAs(const ModelingSelectionSummary& before);
+    SelectionExpect &object_count(std::uint32_t count);
+    SelectionExpect &vertex_count(std::uint32_t count);
+    SelectionExpect &edge_count(std::uint32_t count);
+    SelectionExpect &face_count(std::uint32_t count);
+    SelectionExpect &active_alias(std::string_view alias);
+    SelectionExpect &active_vertex(int vertex);
+    SelectionExpect &active_edge(int a, int b);
+    SelectionExpect &active_face(int face);
+    SelectionExpect &
+    revision_changed_from(const ModelingSelectionSummary &before);
+    SelectionExpect &revision_same_as(const ModelingSelectionSummary &before);
 
-private:
+  private:
     const BehaviorScenario& scenario_;
 };
 
@@ -109,15 +117,16 @@ class MeshExpect final {
 public:
     MeshExpect(const BehaviorScenario& scenario, std::string_view alias);
 
-    MeshExpect& vertexCount(std::size_t count);
-    MeshExpect& indexCount(std::size_t count);
-    MeshExpect& verticesGreaterThan(const MeshSnapshot& before);
-    MeshExpect& verticesDifferFrom(const MeshSnapshot& before, float epsilon = 0.001f);
-    MeshExpect& boundsMinNear(QVec3 expected, float epsilon = 0.001f);
-    MeshExpect& boundsMaxNear(QVec3 expected, float epsilon = 0.001f);
-    MeshExpect& boundsCenterNear(QVec3 expected, float epsilon = 0.001f);
+    MeshExpect &vertex_count(std::size_t count);
+    MeshExpect &index_count(std::size_t count);
+    MeshExpect &vertices_greater_than(const MeshSnapshot &before);
+    MeshExpect &vertices_differ_from(const MeshSnapshot &before,
+                                     float epsilon = 0.001f);
+    MeshExpect &bounds_min_near(QVec3 expected, float epsilon = 0.001f);
+    MeshExpect &bounds_max_near(QVec3 expected, float epsilon = 0.001f);
+    MeshExpect &bounds_center_near(QVec3 expected, float epsilon = 0.001f);
 
-private:
+  private:
     std::optional<MeshSnapshot> mesh_;
 };
 
@@ -128,18 +137,25 @@ class OverlayExpect final {
 public:
     explicit OverlayExpect(const BehaviorScenario& scenario) : scenario_(scenario) {}
 
-    OverlayExpect& hasLine(ViewportOverlayLayer layer);
-    OverlayExpect& lineCount(ViewportOverlayLayer layer, std::size_t count);
-    OverlayExpect& hasPoint(ViewportOverlayLayer layer);
-    OverlayExpect& pointCount(ViewportOverlayLayer layer, std::size_t count);
-    OverlayExpect& hasTriangle(ViewportOverlayLayer layer);
-    OverlayExpect& triangleCount(ViewportOverlayLayer layer, std::size_t count);
-    OverlayExpect& pointBoundsCenterNear(ViewportOverlayLayer layer, QVec3 expected, float epsilon = 0.001f);
-    OverlayExpect& lineBoundsWithin(ViewportOverlayLayer layer, QuaderBounds bounds, float epsilon = 0.001f);
-    OverlayExpect& triangleBoundsWithin(ViewportOverlayLayer layer, QuaderBounds bounds, float epsilon = 0.001f);
-    OverlayExpect& finiteCoordinates(float maxAbsCoordinate = 1000.0f);
+    OverlayExpect &has_line(ViewportOverlayLayer layer);
+    OverlayExpect &line_count(ViewportOverlayLayer layer, std::size_t count);
+    OverlayExpect &has_point(ViewportOverlayLayer layer);
+    OverlayExpect &point_count(ViewportOverlayLayer layer, std::size_t count);
+    OverlayExpect &has_triangle(ViewportOverlayLayer layer);
+    OverlayExpect &triangle_count(ViewportOverlayLayer layer,
+                                  std::size_t count);
+    OverlayExpect &point_bounds_center_near(ViewportOverlayLayer layer,
+                                            QVec3 expected,
+                                            float epsilon = 0.001f);
+    OverlayExpect &line_bounds_within(ViewportOverlayLayer layer,
+                                      QuaderBounds bounds,
+                                      float epsilon = 0.001f);
+    OverlayExpect &triangle_bounds_within(ViewportOverlayLayer layer,
+                                          QuaderBounds bounds,
+                                          float epsilon = 0.001f);
+    OverlayExpect &finite_coordinates(float max_abs_coordinate = 1000.0f);
 
-private:
+  private:
     const BehaviorScenario& scenario_;
 };
 
@@ -150,13 +166,13 @@ class ToolStatusExpect final {
 public:
     explicit ToolStatusExpect(const BehaviorScenario& scenario) : scenario_(scenario) {}
 
-    ToolStatusExpect& activeTool(ModelingViewportTool tool);
-    ToolStatusExpect& modalOwnsViewport(bool expected = true);
-    ToolStatusExpect& cutActive(bool expected = true);
-    ToolStatusExpect& mirrorActive(bool expected = true);
-    ToolStatusExpect& polyActive(bool expected = true);
+    ToolStatusExpect &active_tool(ModelingViewportTool tool);
+    ToolStatusExpect &modal_owns_viewport(bool expected = true);
+    ToolStatusExpect &cut_active(bool expected = true);
+    ToolStatusExpect &mirror_active(bool expected = true);
+    ToolStatusExpect &poly_active(bool expected = true);
 
-private:
+  private:
     const BehaviorScenario& scenario_;
 };
 
@@ -167,12 +183,12 @@ class UndoRedoExpect final {
 public:
     explicit UndoRedoExpect(const BehaviorScenario& scenario) : scenario_(scenario) {}
 
-    UndoRedoExpect& canUndo(bool expected = true);
-    UndoRedoExpect& canRedo(bool expected = true);
-    UndoRedoExpect& undoLabel(std::string_view expected);
-    UndoRedoExpect& redoLabel(std::string_view expected);
+    UndoRedoExpect &can_undo(bool expected = true);
+    UndoRedoExpect &can_redo(bool expected = true);
+    UndoRedoExpect &undo_label(std::string_view expected);
+    UndoRedoExpect &redo_label(std::string_view expected);
 
-private:
+  private:
     const BehaviorScenario& scenario_;
 };
 
@@ -183,11 +199,13 @@ class SnapshotExpect final {
 public:
     explicit SnapshotExpect(const BehaviorSnapshot& snapshot) : snapshot_(snapshot) {}
 
-    SnapshotExpect& selectedBoundsCenterNear(QVec3 expected, float epsilon = 0.001f);
-    SnapshotExpect& entityCount(std::size_t count);
-    SnapshotExpect& meshVertexCount(std::string_view alias, std::size_t count);
+    SnapshotExpect &selected_bounds_center_near(QVec3 expected,
+                                                float epsilon = 0.001f);
+    SnapshotExpect &entity_count(std::size_t count);
+    SnapshotExpect &mesh_vertex_count(std::string_view alias,
+                                      std::size_t count);
 
-private:
+  private:
     const BehaviorSnapshot& snapshot_;
 };
 

@@ -14,149 +14,164 @@
 namespace quader {
 namespace {
 
-std::array<QVec3, 8> boundsCorners(const SceneBounds& bounds) {
-    const QVec3& min = bounds.min;
-    const QVec3& max = bounds.max;
-    return {{
-            {min.x, min.y, min.z},
-            {max.x, min.y, min.z},
-            {max.x, max.y, min.z},
-            {min.x, max.y, min.z},
-            {min.x, min.y, max.z},
-            {max.x, min.y, max.z},
-            {max.x, max.y, max.z},
-            {min.x, max.y, max.z},
-    }};
+std::array<QVec3, 8> bounds_corners(const SceneBounds &bounds) {
+  const QVec3 &min = bounds.min;
+  const QVec3 &max = bounds.max;
+  return {{
+      {min.x, min.y, min.z},
+      {max.x, min.y, min.z},
+      {max.x, max.y, min.z},
+      {min.x, max.y, min.z},
+      {min.x, min.y, max.z},
+      {max.x, min.y, max.z},
+      {max.x, max.y, max.z},
+      {min.x, max.y, max.z},
+  }};
 }
 
-void includeBounds(std::optional<SceneBounds>& result, const SceneBounds& bounds) {
-    for (const QVec3 corner : boundsCorners(bounds)) {
-        if (!result) {
-            result = SceneBounds{.min = corner, .max = corner};
-        } else {
-            includePoint(*result, corner);
-        }
+void include_bounds(std::optional<SceneBounds> &result,
+                    const SceneBounds &bounds) {
+  for (const QVec3 corner : bounds_corners(bounds)) {
+    if (!result) {
+      result = SceneBounds{.min = corner, .max = corner};
+    } else {
+      include_point(*result, corner);
     }
+  }
 }
 
 } // namespace
 
-std::optional<SceneBounds> localMeshBounds(const MeshAsset& mesh) {
-    if (mesh.vertices.empty()) {
-        return std::nullopt;
-    }
+std::optional<SceneBounds> local_mesh_bounds(const MeshAsset &mesh) {
+  if (mesh.vertices.empty()) {
+    return std::nullopt;
+  }
 
-    SceneBounds bounds{
-            .min = mesh.vertices.front().position,
-            .max = mesh.vertices.front().position,
-    };
-    for (const MeshVertex& vertex : mesh.vertices) {
-        includePoint(bounds, vertex.position);
-    }
-    return bounds;
+  SceneBounds bounds{
+      .min = mesh.vertices.front().position,
+      .max = mesh.vertices.front().position,
+  };
+  for (const MeshVertex &vertex : mesh.vertices) {
+    include_point(bounds, vertex.position);
+  }
+  return bounds;
 }
 
-void includePoint(SceneBounds& bounds, QVec3 point) {
-    bounds.min.x = std::min(bounds.min.x, point.x);
-    bounds.min.y = std::min(bounds.min.y, point.y);
-    bounds.min.z = std::min(bounds.min.z, point.z);
-    bounds.max.x = std::max(bounds.max.x, point.x);
-    bounds.max.y = std::max(bounds.max.y, point.y);
-    bounds.max.z = std::max(bounds.max.z, point.z);
+void include_point(SceneBounds &bounds, QVec3 point) {
+  bounds.min.x = std::min(bounds.min.x, point.x);
+  bounds.min.y = std::min(bounds.min.y, point.y);
+  bounds.min.z = std::min(bounds.min.z, point.z);
+  bounds.max.x = std::max(bounds.max.x, point.x);
+  bounds.max.y = std::max(bounds.max.y, point.y);
+  bounds.max.z = std::max(bounds.max.z, point.z);
 }
 
-QVec3 boundsCenter(const SceneBounds& bounds) {
-    return (bounds.min + bounds.max) * 0.5f;
+QVec3 bounds_center(const SceneBounds &bounds) {
+  return (bounds.min + bounds.max) * 0.5f;
 }
 
-std::optional<SceneBounds> entityWorldBounds(const SceneDocument& document, const AssetRegistry& assets, EntityId entity) {
-    if (!document.isEffectivelyVisible(entity)) {
-        return std::nullopt;
-    }
+std::optional<SceneBounds> entity_world_bounds(const SceneDocument &document,
+                                               const AssetRegistry &assets,
+                                               EntityId entity) {
+  if (!document.is_effectively_visible(entity)) {
+    return std::nullopt;
+  }
 
-    const TransformComponent* transform = document.transform(entity);
-    if (!transform) {
-        return std::nullopt;
-    }
+  const TransformComponent *transform = document.transform(entity);
+  if (!transform) {
+    return std::nullopt;
+  }
 
-    const QMat4 worldFromLocal = document.worldTransformMatrix(entity);
-    const MeshComponent* meshComponent = document.mesh(entity);
-    if (meshComponent) {
-        if (const MeshAsset* mesh = assets.mesh(meshComponent->mesh)) {
-            if (const std::optional<SceneBounds> localBounds = localMeshBounds(*mesh)) {
-                std::optional<SceneBounds> result;
-                for (const QVec3 localCorner : boundsCorners(*localBounds)) {
-                    const QVec3 worldCorner = transformPoint(worldFromLocal, localCorner);
-                    if (!result) {
-                        result = SceneBounds{.min = worldCorner, .max = worldCorner};
-                    } else {
-                        includePoint(*result, worldCorner);
-                    }
-                }
-                return result;
-            }
+  const QMat4 world_from_local = document.world_transform_matrix(entity);
+  const MeshComponent *mesh_component = document.mesh(entity);
+  if (mesh_component) {
+    if (const MeshAsset *mesh = assets.mesh(mesh_component->mesh)) {
+      if (const std::optional<SceneBounds> local_bounds =
+              local_mesh_bounds(*mesh)) {
+        std::optional<SceneBounds> result;
+        for (const QVec3 local_corner : bounds_corners(*local_bounds)) {
+          const QVec3 world_corner =
+              transform_point(world_from_local, local_corner);
+          if (!result) {
+            result = SceneBounds{.min = world_corner, .max = world_corner};
+          } else {
+            include_point(*result, world_corner);
+          }
         }
+        return result;
+      }
     }
+  }
 
-    const QVec3 worldPosition = transformPoint(worldFromLocal, {});
-    return SceneBounds{.min = worldPosition, .max = worldPosition};
+  const QVec3 world_position = transform_point(world_from_local, {});
+  return SceneBounds{.min = world_position, .max = world_position};
 }
 
-std::optional<SceneBounds> entityHierarchyWorldBounds(const SceneDocument& document, const AssetRegistry& assets, EntityId entity) {
-    if (!document.exists(entity) || !document.isEffectivelyVisible(entity)) {
-        return std::nullopt;
-    }
+std::optional<SceneBounds>
+entity_hierarchy_world_bounds(const SceneDocument &document,
+                              const AssetRegistry &assets, EntityId entity) {
+  if (!document.exists(entity) || !document.is_effectively_visible(entity)) {
+    return std::nullopt;
+  }
 
-    std::optional<SceneBounds> result;
-    for (const EntityId descendant : document.descendants(entity, true)) {
-        if (descendant != entity && !document.isEffectivelyVisible(descendant)) {
-            continue;
-        }
-        if (const MeshComponent* mesh = document.mesh(descendant)) {
-            (void)mesh;
-            if (const std::optional<SceneBounds> bounds = entityWorldBounds(document, assets, descendant)) {
-                includeBounds(result, *bounds);
-            }
-        }
+  std::optional<SceneBounds> result;
+  for (const EntityId descendant : document.descendants(entity, true)) {
+    if (descendant != entity && !document.is_effectively_visible(descendant)) {
+      continue;
     }
+    if (const MeshComponent *mesh = document.mesh(descendant)) {
+      (void)mesh;
+      if (const std::optional<SceneBounds> bounds =
+              entity_world_bounds(document, assets, descendant)) {
+        include_bounds(result, *bounds);
+      }
+    }
+  }
 
-    if (!result) {
-        return entityWorldBounds(document, assets, entity);
-    }
-    return result;
+  if (!result) {
+    return entity_world_bounds(document, assets, entity);
+  }
+  return result;
 }
 
-std::optional<SceneBounds> documentWorldBounds(const SceneDocument& document, const AssetRegistry& assets) {
-    std::optional<SceneBounds> result;
-    for (const EntityId entity : document.entities()) {
-        if (const std::optional<SceneBounds> bounds = entityWorldBounds(document, assets, entity)) {
-            includeBounds(result, *bounds);
-        }
+std::optional<SceneBounds> document_world_bounds(const SceneDocument &document,
+                                                 const AssetRegistry &assets) {
+  std::optional<SceneBounds> result;
+  for (const EntityId entity : document.entities()) {
+    if (const std::optional<SceneBounds> bounds =
+            entity_world_bounds(document, assets, entity)) {
+      include_bounds(result, *bounds);
     }
-    return result;
+  }
+  return result;
 }
 
-std::optional<SceneBounds> selectedWorldBounds(const SceneDocument& document, const AssetRegistry& assets) {
-    std::optional<SceneBounds> result;
-    for (const EntityId entity : document.selectedEntities()) {
-        if (const std::optional<SceneBounds> bounds = entityWorldBounds(document, assets, entity)) {
-            includeBounds(result, *bounds);
-        }
+std::optional<SceneBounds> selected_world_bounds(const SceneDocument &document,
+                                                 const AssetRegistry &assets) {
+  std::optional<SceneBounds> result;
+  for (const EntityId entity : document.selected_entities()) {
+    if (const std::optional<SceneBounds> bounds =
+            entity_world_bounds(document, assets, entity)) {
+      include_bounds(result, *bounds);
     }
-    return result;
+  }
+  return result;
 }
 
-std::optional<SceneBounds> selectedTransformWorldBounds(const SceneDocument& document, const AssetRegistry& assets) {
-    std::optional<SceneBounds> result;
-    for (const EntityId entity : document.selectedEntities()) {
-        const std::optional<SceneBounds> bounds = document.hasChildren(entity)
-                ? entityHierarchyWorldBounds(document, assets, entity)
-                : entityWorldBounds(document, assets, entity);
-        if (bounds) {
-            includeBounds(result, *bounds);
-        }
+std::optional<SceneBounds>
+selected_transform_world_bounds(const SceneDocument &document,
+                                const AssetRegistry &assets) {
+  std::optional<SceneBounds> result;
+  for (const EntityId entity : document.selected_entities()) {
+    const std::optional<SceneBounds> bounds =
+        document.has_children(entity)
+            ? entity_hierarchy_world_bounds(document, assets, entity)
+            : entity_world_bounds(document, assets, entity);
+    if (bounds) {
+      include_bounds(result, *bounds);
     }
-    return result;
+  }
+  return result;
 }
 
 } // namespace quader

@@ -18,25 +18,23 @@ namespace quader {
  */
 class SelectEntitiesCommand final : public SceneCommand {
 public:
-    SelectEntitiesCommand(
-            SceneDocument& scene,
-            std::vector<EntityId> entities,
-            EntityId active = InvalidEntityId)
-        : SceneCommand(scene, "Select Entities")
-        , before_(documentCommandCaptureSelection(scene))
-        , after_(documentCommandSelectionFor(scene, entities, active)) {}
+  SelectEntitiesCommand(SceneDocument &scene, std::vector<EntityId> entities,
+                        EntityId active = kInvalidEntityId)
+      : SceneCommand(scene, "Select Entities"),
+        before_(document_command_capture_selection(scene)),
+        after_(document_command_selection_for(scene, entities, active)) {}
 
-    DocumentCommandResult undo() override {
-        documentCommandApplySelection(scene(), before_);
-        return documentCommandChangedResult();
-    }
+  DocumentCommandResult undo() override {
+    document_command_apply_selection(scene(), before_);
+    return document_command_changed_result();
+  }
 
     DocumentCommandResult redo() override {
-        if (documentCommandSameSelection(before_, after_)) {
-            return documentCommandUnchangedResult();
-        }
-        documentCommandApplySelection(scene(), after_);
-        return documentCommandChangedResult();
+      if (document_command_same_selection(before_, after_)) {
+        return document_command_unchanged_result();
+      }
+      document_command_apply_selection(scene(), after_);
+      return document_command_changed_result();
     }
 
 private:

@@ -10,8 +10,8 @@
 
 TEST(QdrModelingRuntimeToolRotateTests, RotateDragSnapsScreenAngleAndBuildsPivotedTransform) {
 	quader_editor_core::RotateBeginInput input;
-	input.axis = quader_editor_core::TransformAxis::z;
-	input.object_ids = { 1, 2 };
+        input.axis = quader_editor_core::TransformAxis::Z;
+        input.object_ids = { 1, 2 };
 	input.pivot = { 1.0F, 2.0F, 0.0F };
 	input.screen_position = { 120.0F, 100.0F };
 	input.has_screen_pivot = true;
@@ -32,8 +32,8 @@ TEST(QdrModelingRuntimeToolRotateTests, RotateDragSnapsScreenAngleAndBuildsPivot
 
 TEST(QdrModelingRuntimeToolRotateTests, RotateDragAccumulatesCircularMotionBeyondHalfTurns) {
 	quader_editor_core::RotateBeginInput input;
-	input.axis = quader_editor_core::TransformAxis::z;
-	input.screen_position = { 120.0F, 100.0F };
+        input.axis = quader_editor_core::TransformAxis::Z;
+        input.screen_position = { 120.0F, 100.0F };
 	input.has_screen_pivot = true;
 	input.screen_pivot = { 100.0F, 100.0F };
 
@@ -57,8 +57,8 @@ TEST(QdrModelingRuntimeToolRotateTests, RotateDragAccumulatesCircularMotionBeyon
 
 TEST(QdrModelingRuntimeToolRotateTests, RotateDragUsesLinearSensitivityWhenAxisIsEdgeOn) {
 	quader_editor_core::RotateBeginInput input;
-	input.axis = quader_editor_core::TransformAxis::x;
-	input.screen_position = { 100.0F, 100.0F };
+        input.axis = quader_editor_core::TransformAxis::X;
+        input.screen_position = { 100.0F, 100.0F };
 	input.has_screen_pivot = true;
 	input.screen_pivot = { 100.0F, 100.0F };
 	input.has_screen_tip = true;
@@ -95,28 +95,30 @@ TEST(QdrModelingRuntimeToolRotateTests, ModalRotatePlannerClearsTinyDuplicatePre
 	EXPECT_TRUE(begin.request_duplicate);
 	EXPECT_TRUE(begin.mark_selection_dirty);
 
-	const quader_editor_core::ModalTransformUpdatePlan update =
-		quader_editor_core::plan_modal_transform_drag_update({
-			true,
-			quader_editor_core::ModalTransformDragTool::rotate,
-			true,
-			0.0,
-			{ 1.0F, 1.0F, 1.0F },
-			quader_editor_core::tool_epsilon,
-		});
-	EXPECT_TRUE(update.handled);
+        const quader_editor_core::ModalTransformUpdatePlan update =
+            quader_editor_core::plan_modal_transform_drag_update({
+                true,
+                quader_editor_core::ModalTransformDragTool::Rotate,
+                true,
+                0.0,
+                {1.0F, 1.0F, 1.0F},
+                quader_editor_core::kToolEpsilon,
+            });
+        EXPECT_TRUE(update.handled);
 	EXPECT_TRUE(update.preview_ok);
 	EXPECT_FALSE(update.preview_valid);
-	EXPECT_TRUE(update.route == quader_editor_core::ModalTransformPreviewRoute::clear_preview);
+        EXPECT_TRUE(
+            update.route ==
+            quader_editor_core::ModalTransformPreviewRoute::ClearPreview);
 
-	const quader_editor_core::ModalTransformCommitPlan commit =
-		quader_editor_core::plan_modal_transform_drag_commit({
-			true,
-			quader_editor_core::ModalTransformDragTool::rotate,
-			false,
-			true,
-		});
-	EXPECT_TRUE(commit.handled);
+        const quader_editor_core::ModalTransformCommitPlan commit =
+            quader_editor_core::plan_modal_transform_drag_commit({
+                true,
+                quader_editor_core::ModalTransformDragTool::Rotate,
+                false,
+                true,
+            });
+        EXPECT_TRUE(commit.handled);
 	EXPECT_TRUE(commit.restore_base_snapshot);
 	EXPECT_TRUE(commit.restore_selection);
 	EXPECT_FALSE(commit.model_changed);

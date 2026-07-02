@@ -45,15 +45,14 @@ public:
 
 OperationResult SnapVerticesToActiveOperation::apply(Document& document, Selection& selection) const
 {
-    if (selection.mode != SelectionMode::vertex) {
-        return { false, "Snap to Vertex needs vertex selection mode." };
-    }
-    if (!selection.has_active ||
-        selection.active_kind != ElementKind::vertex ||
-        selection.active_vertex == invalid_element_id ||
-        !contains_id(selection.vertices, selection.active_vertex)) {
-        return { false, "Snap to Vertex needs an active selected vertex." };
-    }
+  if (selection.mode != SelectionMode::Vertex) {
+    return {false, "Snap to Vertex needs vertex selection mode."};
+  }
+  if (!selection.has_active || selection.active_kind != ElementKind::Vertex ||
+      selection.active_vertex == kInvalidElementId ||
+      !contains_id(selection.vertices, selection.active_vertex)) {
+    return {false, "Snap to Vertex needs an active selected vertex."};
+  }
 
     const Vertex* active_vertex = find_vertex(document, selection.active_vertex);
     if (active_vertex == nullptr) {
@@ -65,9 +64,11 @@ OperationResult SnapVerticesToActiveOperation::apply(Document& document, Selecti
     bool changed = false;
     std::set<ElementId> visited_vertex_ids;
     for (const ElementId vertex_id : selection.vertices) {
-        if (vertex_id == invalid_element_id || vertex_id == selection.active_vertex || !visited_vertex_ids.insert(vertex_id).second) {
-            continue;
-        }
+      if (vertex_id == kInvalidElementId ||
+          vertex_id == selection.active_vertex ||
+          !visited_vertex_ids.insert(vertex_id).second) {
+        continue;
+      }
 
         Vertex* vertex = find_vertex(document, vertex_id);
         if (vertex == nullptr) {
@@ -75,8 +76,8 @@ OperationResult SnapVerticesToActiveOperation::apply(Document& document, Selecti
         }
 
         has_other_vertex = true;
-        if (length_squared(vertex->position - target_position) <= epsilon) {
-            continue;
+        if (length_squared(vertex->position - target_position) <= kEpsilon) {
+          continue;
         }
 
         vertex->position = target_position;

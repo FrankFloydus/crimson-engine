@@ -22,11 +22,11 @@
 namespace quader {
 
 using QuaderElementId = std::int32_t;
-inline constexpr QuaderElementId InvalidQuaderElementId = -1;
+inline constexpr QuaderElementId kInvalidQuaderElementId = -1;
 using QuaderModelingObjectId = std::int32_t;
-inline constexpr QuaderModelingObjectId InvalidQuaderModelingObjectId = -1;
+inline constexpr QuaderModelingObjectId kInvalidQuaderModelingObjectId = -1;
 using QuaderEditorObjectId = std::uint64_t;
-inline constexpr QuaderEditorObjectId InvalidQuaderEditorObjectId = 0;
+inline constexpr QuaderEditorObjectId kInvalidQuaderEditorObjectId = 0;
 
 struct QuaderPolygonDocumentStorage;
 
@@ -75,7 +75,7 @@ enum class QuaderLightType {
  */
 struct QuaderTransform {
     QVec3 position = {};
-    QVec3 rotationEuler = {};
+    QVec3 rotation_euler = {};
     QVec3 scale = {1.0f, 1.0f, 1.0f};
 };
 
@@ -144,47 +144,47 @@ enum class QuaderMutationKind {
  * Represents a Quader Revision Stamp value used by the public Quader API surface.
  */
 struct QuaderRevisionStamp {
-    std::uint64_t projectRevision = 0;
-    std::uint64_t sceneRevision = 0;
-    std::uint64_t assetRevision = 0;
-    std::uint64_t modelingContentRevision = 0;
-    std::uint64_t modelingSelectionRevision = 0;
+  std::uint64_t project_revision = 0;
+  std::uint64_t scene_revision = 0;
+  std::uint64_t asset_revision = 0;
+  std::uint64_t modeling_content_revision = 0;
+  std::uint64_t modeling_selection_revision = 0;
 };
 
 /**
  * Represents a Quader Entity Ref value used by the public Quader API surface.
  */
 struct QuaderEntityRef {
-    EntityId id = InvalidEntityId;
-    std::string uuid;
-    QuaderEditorObjectId editorObjectId = InvalidQuaderEditorObjectId;
+  EntityId id = kInvalidEntityId;
+  std::string uuid;
+  QuaderEditorObjectId editor_object_id = kInvalidQuaderEditorObjectId;
 };
 
 /**
  * Represents the selected hierarchy duplicate result used by the public Quader API surface.
  */
 struct QuaderDuplicateHierarchyResult {
-    std::vector<QuaderEntityRef> rootEntities;
+  std::vector<QuaderEntityRef> root_entities;
 };
 
 /**
  * Represents a Quader Asset Ref value used by the public Quader API surface.
  */
 struct QuaderAssetRef {
-    AssetId id = InvalidAssetId;
-    QuaderAssetKind kind = QuaderAssetKind::Mesh;
+  AssetId id = kInvalidAssetId;
+  QuaderAssetKind kind = QuaderAssetKind::Mesh;
 };
 
 /**
  * Represents a Quader Modeling Object Ref value used by the public Quader API surface.
  */
 struct QuaderModelingObjectRef {
-    EntityId entity = InvalidEntityId;
-    std::string entityUuid;
-    QuaderEditorObjectId editorObjectId = InvalidQuaderEditorObjectId;
-    QuaderModelingObjectId modelingObjectId = InvalidQuaderModelingObjectId;
-    AssetId mesh = InvalidAssetId;
-    AssetId material = InvalidAssetId;
+  EntityId entity = kInvalidEntityId;
+  std::string entity_uuid;
+  QuaderEditorObjectId editor_object_id = kInvalidQuaderEditorObjectId;
+  QuaderModelingObjectId modeling_object_id = kInvalidQuaderModelingObjectId;
+  AssetId mesh = kInvalidAssetId;
+  AssetId material = kInvalidAssetId;
 };
 
 /**
@@ -193,10 +193,10 @@ struct QuaderModelingObjectRef {
 struct QuaderComponentRef {
     QuaderModelingObjectRef object;
     QuaderComponentKind kind = QuaderComponentKind::Object;
-    QuaderElementId vertex = InvalidQuaderElementId;
-    QuaderElementId edgeA = InvalidQuaderElementId;
-    QuaderElementId edgeB = InvalidQuaderElementId;
-    QuaderElementId face = InvalidQuaderElementId;
+    QuaderElementId vertex = kInvalidQuaderElementId;
+    QuaderElementId edge_a = kInvalidQuaderElementId;
+    QuaderElementId edge_b = kInvalidQuaderElementId;
+    QuaderElementId face = kInvalidQuaderElementId;
 };
 
 /**
@@ -281,10 +281,10 @@ enum class QuaderCutMode {
  * Stores the Quader Modeling Object Record data contract used by the public Quader API surface.
  */
 struct QuaderModelingObjectRecord {
-    QuaderModelingObjectId modelingObjectId = InvalidQuaderModelingObjectId;
-    EntityId entity = InvalidEntityId;
-    AssetId mesh = InvalidAssetId;
-    std::string name;
+  QuaderModelingObjectId modeling_object_id = kInvalidQuaderModelingObjectId;
+  EntityId entity = kInvalidEntityId;
+  AssetId mesh = kInvalidAssetId;
+  std::string name;
 };
 
 /**
@@ -292,77 +292,77 @@ struct QuaderModelingObjectRecord {
  */
 struct QuaderSelectionSummary {
     QuaderSelectionMode mode = QuaderSelectionMode::Object;
-    bool hasSelection = false;
-    QuaderActiveSelectionKind activeKind = QuaderActiveSelectionKind::None;
-    QuaderElementId activeObjectId = InvalidQuaderElementId;
-    QuaderElementId activeVertexId = InvalidQuaderElementId;
-    QuaderElementId activeEdgeA = InvalidQuaderElementId;
-    QuaderElementId activeEdgeB = InvalidQuaderElementId;
-    QuaderElementId activeFaceId = InvalidQuaderElementId;
-    std::uint32_t selectedObjectCount = 0;
-    std::uint32_t selectedVertexCount = 0;
-    std::uint32_t selectedEdgeCount = 0;
-    std::uint32_t selectedFaceCount = 0;
-    std::uint64_t contentRevision = 0;
-    std::uint64_t selectionRevision = 0;
+    bool has_selection = false;
+    QuaderActiveSelectionKind active_kind = QuaderActiveSelectionKind::None;
+    QuaderElementId active_object_id = kInvalidQuaderElementId;
+    QuaderElementId active_vertex_id = kInvalidQuaderElementId;
+    QuaderElementId active_edge_a = kInvalidQuaderElementId;
+    QuaderElementId active_edge_b = kInvalidQuaderElementId;
+    QuaderElementId active_face_id = kInvalidQuaderElementId;
+    std::uint32_t selected_object_count = 0;
+    std::uint32_t selected_vertex_count = 0;
+    std::uint32_t selected_edge_count = 0;
+    std::uint32_t selected_face_count = 0;
+    std::uint64_t content_revision = 0;
+    std::uint64_t selection_revision = 0;
 };
 
 /**
  * Represents a Quader Tool Status value used by the public Quader API surface.
  */
 struct QuaderToolStatus {
-    QuaderViewportTool activeTool = QuaderViewportTool::Select;
-    bool modalToolOwnsViewport = false;
-    bool insertEdgeLoopActive = false;
-    bool insertEdgeLoopDragging = false;
-    bool insertEdgeLoopHasPreview = false;
-    bool knifeActive = false;
-    bool knifeHasCurrent = false;
-    bool knifeCanCommit = false;
-    bool cutActive = false;
-    bool cutCanPreview = false;
-    bool cutPreviewValid = false;
-    bool cutDragging = false;
-    bool cutDraggingNewPoint = false;
-    bool cutDraggingLine = false;
-    int cutDraggingPointIndex = -1;
-    int cutPointCount = 0;
-    int cutCapturedPointCount = 0;
-    bool cutHasLine = false;
-    std::array<QVec3, 3> cutPoints = {};
-    QuaderCutMode cutMode = QuaderCutMode::KeepBoth;
-    bool mirrorActive = false;
-    bool mirrorCanPreview = false;
-    bool mirrorPreviewValid = false;
-    bool mirrorDragging = false;
-    bool mirrorDraggingNewPoint = false;
-    bool mirrorDraggingLine = false;
-    int mirrorDraggingPointIndex = -1;
-    int mirrorPointCount = 0;
-    int mirrorCapturedPointCount = 0;
-    bool mirrorHasLine = false;
-    std::array<QVec3, 3> mirrorPoints = {};
-    bool polyActive = false;
-    bool polyClosed = false;
-    bool polyHasCurrent = false;
-    bool polyCanCommit = false;
-    int polyPointCount = 0;
+  QuaderViewportTool active_tool = QuaderViewportTool::Select;
+  bool modal_tool_owns_viewport = false;
+  bool insert_edge_loop_active = false;
+  bool insert_edge_loop_dragging = false;
+  bool insert_edge_loop_has_preview = false;
+  bool knife_active = false;
+  bool knife_has_current = false;
+  bool knife_can_commit = false;
+  bool cut_active = false;
+  bool cut_can_preview = false;
+  bool cut_preview_valid = false;
+  bool cut_dragging = false;
+  bool cut_dragging_new_point = false;
+  bool cut_dragging_line = false;
+  int cut_dragging_point_index = -1;
+  int cut_point_count = 0;
+  int cut_captured_point_count = 0;
+  bool cut_has_line = false;
+  std::array<QVec3, 3> cut_points = {};
+  QuaderCutMode cut_mode = QuaderCutMode::KeepBoth;
+  bool mirror_active = false;
+  bool mirror_can_preview = false;
+  bool mirror_preview_valid = false;
+  bool mirror_dragging = false;
+  bool mirror_dragging_new_point = false;
+  bool mirror_dragging_line = false;
+  int mirror_dragging_point_index = -1;
+  int mirror_point_count = 0;
+  int mirror_captured_point_count = 0;
+  bool mirror_has_line = false;
+  std::array<QVec3, 3> mirror_points = {};
+  bool poly_active = false;
+  bool poly_closed = false;
+  bool poly_has_current = false;
+  bool poly_can_commit = false;
+  int poly_point_count = 0;
 };
 
 /**
  * Represents a Quader Interaction Settings value used by the public Quader API surface.
  */
 struct QuaderInteractionSettings {
-    int bridgeSteps = 1;
-    double edgeBevelWidth = 1.0;
-    double edgeBevelProfile = 0.5;
-    int edgeBevelSegments = 1;
-    double thickenThickness = 0.25;
-    bool thickenFromCenter = false;
-    int sliceQuadXSlices = 1;
-    int sliceQuadYSlices = 1;
-    double mergeByDistanceTolerance = 0.125;
-    QuaderCutMode cutMode = QuaderCutMode::KeepBoth;
+  int bridge_steps = 1;
+  double edge_bevel_width = 1.0;
+  double edge_bevel_profile = 0.5;
+  int edge_bevel_segments = 1;
+  double thicken_thickness = 0.25;
+  bool thicken_from_center = false;
+  int slice_quad_x_slices = 1;
+  int slice_quad_y_slices = 1;
+  double merge_by_distance_tolerance = 0.125;
+  QuaderCutMode cut_mode = QuaderCutMode::KeepBoth;
 };
 
 /**
@@ -379,22 +379,22 @@ struct QuaderRay {
 struct QuaderViewportCamera {
     bool orthographic = false;
     QVec3 origin = {};
-    QVec3 xAxis = {1.0f, 0.0f, 0.0f};
-    QVec3 yAxis = {0.0f, 1.0f, 0.0f};
-    QVec3 zAxis = {0.0f, 0.0f, 1.0f};
-    QVec2 viewportSize = {1.0f, 1.0f};
-    double orthographicSize = 24.0;
-    double fovDegrees = 60.0;
+    QVec3 x_axis = {1.0f, 0.0f, 0.0f};
+    QVec3 y_axis = {0.0f, 1.0f, 0.0f};
+    QVec3 z_axis = {0.0f, 0.0f, 1.0f};
+    QVec2 viewport_size = {1.0f, 1.0f};
+    double orthographic_size = 24.0;
+    double fov_degrees = 60.0;
 };
 
 /**
  * Represents a Quader 3x4 Transform value used by the public Quader API surface.
  */
 struct QuaderTransform3 {
-    QVec3 xAxis = {1.0f, 0.0f, 0.0f};
-    QVec3 yAxis = {0.0f, 1.0f, 0.0f};
-    QVec3 zAxis = {0.0f, 0.0f, 1.0f};
-    QVec3 origin = {};
+  QVec3 x_axis = {1.0f, 0.0f, 0.0f};
+  QVec3 y_axis = {0.0f, 1.0f, 0.0f};
+  QVec3 z_axis = {0.0f, 0.0f, 1.0f};
+  QVec3 origin = {};
 };
 
 /**
@@ -402,16 +402,16 @@ struct QuaderTransform3 {
  */
 struct QuaderPickSelectRequest {
     QuaderRay ray;
-    int clickCount = 1;
-    bool controlPressed = false;
-    bool shiftPressed = false;
-    bool commandPressed = false;
-    bool altPressed = false;
-    bool preserveSelectionOnMiss = false;
-    bool preserveSelectionOnSelectedHit = false;
-    bool preserveExistingComponentSelectionOnHit = false;
-    double vertexRadius = 0.3;
-    double edgeRadius = 0.2;
+    int click_count = 1;
+    bool control_pressed = false;
+    bool shift_pressed = false;
+    bool command_pressed = false;
+    bool alt_pressed = false;
+    bool preserve_selection_on_miss = false;
+    bool preserve_selection_on_selected_hit = false;
+    bool preserve_existing_component_selection_on_hit = false;
+    double vertex_radius = 0.3;
+    double edge_radius = 0.2;
 };
 
 /**
@@ -430,9 +430,9 @@ struct QuaderBoxSelectRequest {
  */
 struct QuaderHoverRequest {
     QuaderRay ray;
-    bool selectedModifierPressed = false;
-    double vertexRadius = 0.3;
-    double edgeRadius = 0.2;
+    bool selected_modifier_pressed = false;
+    double vertex_radius = 0.3;
+    double edge_radius = 0.2;
 };
 
 /**
@@ -440,11 +440,11 @@ struct QuaderHoverRequest {
  */
 struct QuaderHoverTarget {
     QuaderActiveSelectionKind kind = QuaderActiveSelectionKind::None;
-    int objectId = -1;
-    int vertexId = -1;
-    int edgeA = -1;
-    int edgeB = -1;
-    int faceId = -1;
+    int object_id = -1;
+    int vertex_id = -1;
+    int edge_a = -1;
+    int edge_b = -1;
+    int face_id = -1;
 };
 
 /**
@@ -453,7 +453,7 @@ struct QuaderHoverTarget {
 struct QuaderHoverSummary {
     bool changed = false;
     QuaderHoverTarget target;
-    bool targetSelected = false;
+    bool target_selected = false;
 };
 
 /**
@@ -464,31 +464,31 @@ struct QuaderTransformDragBeginRequest {
     QuaderTransformOperation operation = QuaderTransformOperation::Transform;
     QuaderTransformAxis axis = QuaderTransformAxis::None;
     QVec3 pivot = {};
-    QVec2 screenPosition = {};
-    QVec2 screenPivot = {};
-    QVec2 screenTip = {};
-    bool hasWorldDirection = false;
-    QVec3 worldDirection = {};
+    QVec2 screen_position = {};
+    QVec2 screen_pivot = {};
+    QVec2 screen_tip = {};
+    bool has_world_direction = false;
+    QVec3 world_direction = {};
     QuaderRay ray;
     QuaderViewportCamera camera;
-    double gridSize = 1.0;
-    double vertexSnapRadius = 0.3;
-    bool gridSnapEnabled = true;
+    double grid_size = 1.0;
+    double vertex_snap_radius = 0.3;
+    bool grid_snap_enabled = true;
     bool precision = false;
-    bool duplicateSelected = false;
+    bool duplicate_selected = false;
 };
 
 /**
  * Stores a Quader Transform Drag Update Request value used by the public Quader API surface.
  */
 struct QuaderTransformDragUpdateRequest {
-    QVec2 screenPosition = {};
-    QuaderRay ray;
-    QuaderViewportCamera camera;
-    double gridSize = 1.0;
-    double vertexSnapRadius = 0.3;
-    bool gridSnapEnabled = true;
-    bool precision = false;
+  QVec2 screen_position = {};
+  QuaderRay ray;
+  QuaderViewportCamera camera;
+  double grid_size = 1.0;
+  double vertex_snap_radius = 0.3;
+  bool grid_snap_enabled = true;
+  bool precision = false;
 };
 
 /**
@@ -498,20 +498,20 @@ struct QuaderTransformDragPreview {
     bool ok = false;
     bool active = false;
     bool changed = false;
-    bool previewDriven = false;
+    bool preview_driven = false;
     std::string message;
     QuaderTransformTool tool = QuaderTransformTool::Move;
     QuaderTransformOperation operation = QuaderTransformOperation::Transform;
     QuaderTransformAxis axis = QuaderTransformAxis::None;
     QVec3 pivot = {};
-    QVec3 moveDelta = {};
-    double rotateAngleDegrees = 0.0;
+    QVec3 move_delta = {};
+    double rotate_angle_degrees = 0.0;
     QVec3 scale = {1.0f, 1.0f, 1.0f};
-    std::uint64_t contentRevision = 0;
-    std::uint64_t selectionRevision = 0;
-    bool sceneTransform = false;
-    bool hasScenePreviewTransform = false;
-    QuaderTransform3 scenePreviewTransform = {};
+    std::uint64_t content_revision = 0;
+    std::uint64_t selection_revision = 0;
+    bool scene_transform = false;
+    bool has_scene_preview_transform = false;
+    QuaderTransform3 scene_preview_transform = {};
 };
 
 /**
@@ -556,38 +556,38 @@ enum class QuaderActionPreviewKind {
  */
 struct QuaderActionQuery {
     QuaderActionSurface surface = QuaderActionSurface::OperationsPanel;
-    bool modalToolOwnsViewport = false;
-    bool suppressWhenModalToolOwnsViewport = true;
-    bool includeDisabled = true;
-    bool includeHidden = false;
+    bool modal_tool_owns_viewport = false;
+    bool suppress_when_modal_tool_owns_viewport = true;
+    bool include_disabled = true;
+    bool include_hidden = false;
 };
 
 /**
  * Stores a Quader Action Item value used by the public Quader API surface.
  */
 struct QuaderActionItem {
-    std::string actionId;
-    std::string operationId;
-    std::string toolId;
-    std::string label;
-    QuaderActionKind kind = QuaderActionKind::Operation;
-    QuaderActionPreviewKind previewKind = QuaderActionPreviewKind::None;
-    QuaderActionVisibility visibility = QuaderActionVisibility::Hidden;
-    std::string disabledReason;
-    std::string disabledReasonKey;
-    std::uint32_t disabledReasonCount = 0;
-    bool rebuildsMeshOnSuccess = true;
+  std::string action_id;
+  std::string operation_id;
+  std::string tool_id;
+  std::string label;
+  QuaderActionKind kind = QuaderActionKind::Operation;
+  QuaderActionPreviewKind preview_kind = QuaderActionPreviewKind::None;
+  QuaderActionVisibility visibility = QuaderActionVisibility::Hidden;
+  std::string disabled_reason;
+  std::string disabled_reason_key;
+  std::uint32_t disabled_reason_count = 0;
+  bool rebuilds_mesh_on_success = true;
 };
 
 /**
  * Stores a Quader Action Panel value used by the public Quader API surface.
  */
 struct QuaderActionPanel {
-    std::string panelId;
-    std::string label;
-    std::string selectionModeId;
-    QuaderActionVisibility visibility = QuaderActionVisibility::Hidden;
-    std::vector<QuaderActionItem> actions;
+  std::string panel_id;
+  std::string label;
+  std::string selection_mode_id;
+  QuaderActionVisibility visibility = QuaderActionVisibility::Hidden;
+  std::vector<QuaderActionItem> actions;
 };
 
 /**
@@ -595,7 +595,7 @@ struct QuaderActionPanel {
  */
 struct QuaderActionSet {
     QuaderActionSurface surface = QuaderActionSurface::OperationsPanel;
-    std::string surfaceId;
+    std::string surface_id;
     std::vector<QuaderActionPanel> panels;
 };
 
@@ -606,7 +606,7 @@ struct QuaderInstantOperationDescriptor {
     std::string id;
     std::string label;
     bool enabled = false;
-    bool rebuildsMeshOnSuccess = true;
+    bool rebuilds_mesh_on_success = true;
 };
 
 /**
@@ -696,18 +696,18 @@ enum class QuaderOverlaySource {
  * Represents a Quader Overlay Element Ref value used by the public Quader API surface.
  */
 struct QuaderOverlayElementRef {
-    int objectId = -1;
-    int vertexId = -1;
-    int edgeA = -1;
-    int edgeB = -1;
-    int faceId = -1;
+  int object_id = -1;
+  int vertex_id = -1;
+  int edge_a = -1;
+  int edge_b = -1;
+  int face_id = -1;
 };
 
-constexpr std::uint32_t quaderRgba8(std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a = 255u) {
-    return static_cast<std::uint32_t>(r) |
-            (static_cast<std::uint32_t>(g) << 8u) |
-            (static_cast<std::uint32_t>(b) << 16u) |
-            (static_cast<std::uint32_t>(a) << 24u);
+constexpr std::uint32_t quader_rgba8(std::uint8_t r, std::uint8_t g,
+                                     std::uint8_t b, std::uint8_t a = 255u) {
+  return static_cast<std::uint32_t>(r) | (static_cast<std::uint32_t>(g) << 8u) |
+         (static_cast<std::uint32_t>(b) << 16u) |
+         (static_cast<std::uint32_t>(a) << 24u);
 }
 
 /**
@@ -717,9 +717,9 @@ struct QuaderOverlayLine {
     QuaderOverlayLayer layer = QuaderOverlayLayer::SourceWire;
     QVec3 start;
     QVec3 end;
-    std::uint32_t color = quaderRgba8(255, 255, 255);
-    float widthPixels = 1.0f;
-    QuaderOverlayStyleRole styleRole = QuaderOverlayStyleRole::LayerDefault;
+    std::uint32_t color = quader_rgba8(255, 255, 255);
+    float width_pixels = 1.0f;
+    QuaderOverlayStyleRole style_role = QuaderOverlayStyleRole::LayerDefault;
     QuaderOverlaySource source = QuaderOverlaySource::Unknown;
     QuaderOverlayElementRef element;
 };
@@ -732,8 +732,8 @@ struct QuaderOverlayTriangle {
     QVec3 a;
     QVec3 b;
     QVec3 c;
-    std::uint32_t color = quaderRgba8(255, 255, 255, 64);
-    QuaderOverlayStyleRole styleRole = QuaderOverlayStyleRole::LayerDefault;
+    std::uint32_t color = quader_rgba8(255, 255, 255, 64);
+    QuaderOverlayStyleRole style_role = QuaderOverlayStyleRole::LayerDefault;
     QuaderOverlaySource source = QuaderOverlaySource::Unknown;
     QuaderOverlayElementRef element;
 };
@@ -744,12 +744,12 @@ struct QuaderOverlayTriangle {
 struct QuaderOverlayPoint {
     QuaderOverlayLayer layer = QuaderOverlayLayer::UnselectedVertex;
     QVec3 position;
-    std::uint32_t color = quaderRgba8(255, 255, 255);
-    float sizePixels = 8.0f;
-    QuaderOverlayStyleRole styleRole = QuaderOverlayStyleRole::LayerDefault;
+    std::uint32_t color = quader_rgba8(255, 255, 255);
+    float size_pixels = 8.0f;
+    QuaderOverlayStyleRole style_role = QuaderOverlayStyleRole::LayerDefault;
     QuaderOverlaySource source = QuaderOverlaySource::Unknown;
     QuaderOverlayElementRef element;
-    std::optional<float> outlineGrowthPixels;
+    std::optional<float> outline_growth_pixels;
 };
 
 /**
@@ -759,7 +759,7 @@ struct QuaderOverlayFrame {
     std::vector<QuaderOverlayLine> lines;
     std::vector<QuaderOverlayTriangle> triangles;
     std::vector<QuaderOverlayPoint> points;
-    bool hoverTargetSelected = false;
+    bool hover_target_selected = false;
 };
 
 /**
@@ -768,7 +768,7 @@ struct QuaderOverlayFrame {
 struct QuaderCreateEntityArgs {
     std::string name;
     QuaderEntityKind kind = QuaderEntityKind::Generic;
-    EntityId parent = InvalidEntityId;
+    EntityId parent = kInvalidEntityId;
     QuaderTransform transform;
 };
 
@@ -780,38 +780,40 @@ struct QuaderLightComponent {
     QVec3 color = {1.0f, 1.0f, 1.0f};
     float intensity = 1.0f;
     float range = 10.0f;
-    bool castsShadows = false;
+    bool casts_shadows = false;
 };
 
 /**
  * Returns the default public point light component used by point-light creation.
  */
-[[nodiscard]] inline QuaderLightComponent defaultQuaderPointLightComponent() {
-    QuaderLightComponent light;
-    light.type = QuaderLightType::Point;
-    return light;
+[[nodiscard]] inline QuaderLightComponent
+default_quader_point_light_component() {
+  QuaderLightComponent light;
+  light.type = QuaderLightType::Point;
+  return light;
 }
 
 /**
  * Returns the default public directional light component used by directional-light creation.
  */
-[[nodiscard]] inline QuaderLightComponent defaultQuaderDirectionalLightComponent() {
-    QuaderLightComponent light;
-    light.type = QuaderLightType::Directional;
-    return light;
+[[nodiscard]] inline QuaderLightComponent
+default_quader_directional_light_component() {
+  QuaderLightComponent light;
+  light.type = QuaderLightType::Directional;
+  return light;
 }
 
 /**
  * Stores public scene environment settings.
  */
 struct QuaderSceneEnvironmentSettings {
-    std::string environmentId = std::string(kDefaultSceneEnvironmentId);
-    bool enabled = true;
-    bool showBackground = true;
-    QVec3 clearColor = {0.0509804f, 0.0509804f, 0.0509804f};
-    float intensity = 1.0f;
-    float backgroundIntensity = 1.0f;
-    float rotationY = 0.0f;
+  std::string environment_id = std::string(kDefaultSceneEnvironmentId);
+  bool enabled = true;
+  bool show_background = true;
+  QVec3 clear_color = {0.0509804f, 0.0509804f, 0.0509804f};
+  float intensity = 1.0f;
+  float background_intensity = 1.0f;
+  float rotation_y = 0.0f;
 };
 
 /**
@@ -819,10 +821,10 @@ struct QuaderSceneEnvironmentSettings {
  */
 struct QuaderSceneCameraSettings {
     float aperture = 16.0f;
-    float shutterSpeed = 1.0f / 125.0f;
+    float shutter_speed = 1.0f / 125.0f;
     float sensitivity = 100.0f;
-    float nearPlane = 0.05f;
-    float farPlane = 1000.0f;
+    float near_plane = 0.05f;
+    float far_plane = 1000.0f;
 };
 
 /**
@@ -841,14 +843,14 @@ enum class QuaderToneMapping {
  */
 struct QuaderScenePostProcessSettings {
     bool enabled = true;
-    bool antiAliasing = true;
-    bool ambientOcclusion = false;
-    float ambientOcclusionIntensity = 1.0f;
-    float ambientOcclusionRadius = 0.3f;
+    bool anti_aliasing = true;
+    bool ambient_occlusion = false;
+    float ambient_occlusion_intensity = 1.0f;
+    float ambient_occlusion_radius = 0.3f;
     bool bloom = false;
-    float bloomStrength = 0.1f;
+    float bloom_strength = 0.1f;
     bool dithering = true;
-    QuaderToneMapping toneMapping = QuaderToneMapping::Aces;
+    QuaderToneMapping tone_mapping = QuaderToneMapping::Aces;
 };
 
 /**
@@ -857,7 +859,7 @@ struct QuaderScenePostProcessSettings {
 struct QuaderSceneSettings {
     QuaderSceneEnvironmentSettings environment;
     QuaderSceneCameraSettings camera;
-    QuaderScenePostProcessSettings postProcess;
+    QuaderScenePostProcessSettings post_process;
 };
 
 /**
@@ -865,10 +867,10 @@ struct QuaderSceneSettings {
  */
 struct QuaderCreatePointLightArgs {
     std::string name = "Point Light";
-    EntityId parent = InvalidEntityId;
+    EntityId parent = kInvalidEntityId;
     QuaderTransform transform;
-    QuaderLightComponent light = defaultQuaderPointLightComponent();
-    bool selectCreated = false;
+    QuaderLightComponent light = default_quader_point_light_component();
+    bool select_created = false;
 };
 
 /**
@@ -876,10 +878,10 @@ struct QuaderCreatePointLightArgs {
  */
 struct QuaderCreateDirectionalLightArgs {
     std::string name = "Directional Light";
-    EntityId parent = InvalidEntityId;
+    EntityId parent = kInvalidEntityId;
     QuaderTransform transform;
-    QuaderLightComponent light = defaultQuaderDirectionalLightComponent();
-    bool selectCreated = false;
+    QuaderLightComponent light = default_quader_directional_light_component();
+    bool select_created = false;
 };
 
 /**
@@ -895,7 +897,7 @@ struct QuaderCreateBoxArgs {
  */
 struct QuaderCreateMeshArgs {
     std::string name = "Mesh";
-    std::uint32_t materialSlot = 0;
+    std::uint32_t material_slot = 0;
 };
 
 /**
@@ -923,7 +925,7 @@ struct QuaderPreviewSettings {
  */
 struct QuaderMaterialArgs {
     std::string name = "Material";
-    QVec3 baseColor = {1.0f, 1.0f, 1.0f};
+    QVec3 base_color = {1.0f, 1.0f, 1.0f};
     float roughness = 1.0f;
     float metallic = 0.0f;
 };
@@ -942,23 +944,23 @@ struct QuaderMeshVertex {
  * Represents a Quader Mesh Primitive Span value used by the public Quader API surface.
  */
 struct QuaderMeshPrimitiveSpan {
-    std::uint32_t indexOffset = 0;
-    std::uint32_t indexCount = 0;
-    std::uint32_t materialSlot = 0;
+  std::uint32_t index_offset = 0;
+  std::uint32_t index_count = 0;
+  std::uint32_t material_slot = 0;
 };
 
 /**
  * Represents a Quader Mesh Asset value used by the public Quader API surface.
  */
 struct QuaderMeshAsset {
-    AssetId id = InvalidAssetId;
-    std::uint64_t revision = 0;
-    std::string name;
-    std::vector<QuaderMeshVertex> vertices;
-    std::vector<std::uint32_t> indices;
-    std::vector<QuaderMeshPrimitiveSpan> primitives;
-    bool hasStableCpuTopology = true;
-    bool hasAuthoredPolygonDocument = false;
+  AssetId id = kInvalidAssetId;
+  std::uint64_t revision = 0;
+  std::string name;
+  std::vector<QuaderMeshVertex> vertices;
+  std::vector<std::uint32_t> indices;
+  std::vector<QuaderMeshPrimitiveSpan> primitives;
+  bool has_stable_cpu_topology = true;
+  bool has_authored_polygon_document = false;
 };
 
 /**
@@ -990,29 +992,29 @@ enum class QuaderTextureColorSpace {
  * Represents a Quader Texture Asset value used by the public Quader API surface.
  */
 struct QuaderTextureAsset {
-    AssetId id = InvalidAssetId;
-    std::uint64_t revision = 0;
-    std::string name;
-    QuaderTextureUsage usage = QuaderTextureUsage::Unknown;
-    QuaderTextureColorSpace colorSpace = QuaderTextureColorSpace::Srgb;
-    std::uint32_t width = 0;
-    std::uint32_t height = 0;
-    std::string sourcePath;
-    bool generated = false;
+  AssetId id = kInvalidAssetId;
+  std::uint64_t revision = 0;
+  std::string name;
+  QuaderTextureUsage usage = QuaderTextureUsage::Unknown;
+  QuaderTextureColorSpace color_space = QuaderTextureColorSpace::Srgb;
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::string source_path;
+  bool generated = false;
 };
 
 /**
  * Represents a Quader Material Asset value used by the public Quader API surface.
  */
 struct QuaderMaterialAsset {
-    AssetId id = InvalidAssetId;
-    std::uint64_t revision = 0;
-    std::string name;
-    QVec3 baseColor = {1.0f, 1.0f, 1.0f};
-    float roughness = 1.0f;
-    float metallic = 0.0f;
-    std::unordered_map<std::string, AssetId> textureSlots;
-    bool nodeGraphReserved = true;
+  AssetId id = kInvalidAssetId;
+  std::uint64_t revision = 0;
+  std::string name;
+  QVec3 base_color = {1.0f, 1.0f, 1.0f};
+  float roughness = 1.0f;
+  float metallic = 0.0f;
+  std::unordered_map<std::string, AssetId> texture_slots;
+  bool node_graph_reserved = true;
 };
 
 /**
@@ -1038,23 +1040,23 @@ enum class QuaderMeshPhysicsBodyType {
  * Represents a Quader Mesh Component value used by the public Quader API surface.
  */
 struct QuaderMeshComponent {
-    AssetId mesh = InvalidAssetId;
-    bool editorOnly = false;
-    bool castShadows = true;
-    bool doubleSided = false;
-    bool generateCollisions = true;
-    QuaderMeshCollisionType collisionType = QuaderMeshCollisionType::Box;
-    bool displayCollision = false;
-    QuaderMeshPhysicsBodyType bodyType = QuaderMeshPhysicsBodyType::StaticBody;
+  AssetId mesh = kInvalidAssetId;
+  bool editor_only = false;
+  bool cast_shadows = true;
+  bool double_sided = false;
+  bool generate_collisions = true;
+  QuaderMeshCollisionType collision_type = QuaderMeshCollisionType::Box;
+  bool display_collision = false;
+  QuaderMeshPhysicsBodyType body_type = QuaderMeshPhysicsBodyType::StaticBody;
 };
 
 /**
  * Represents a Quader Tool Preview Mesh value used by the public Quader API surface.
  */
 struct QuaderToolPreviewMesh {
-    EntityId sourceEntity = InvalidEntityId;
-    AssetId material = InvalidAssetId;
-    QuaderMeshAsset mesh;
+  EntityId source_entity = kInvalidEntityId;
+  AssetId material = kInvalidAssetId;
+  QuaderMeshAsset mesh;
 };
 
 } // namespace quader

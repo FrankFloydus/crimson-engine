@@ -16,33 +16,29 @@
 namespace quader {
 namespace {
 
-CommandResult commandResultFrom(ModelingCommandResult result) {
-    return {
-            .ok = result.ok,
-            .changed = result.changed,
-            .message = std::move(result.message),
-    };
+CommandResult command_result_from(ModelingCommandResult result) {
+  return {
+      .ok = result.ok,
+      .changed = result.changed,
+      .message = std::move(result.message),
+  };
 }
 
-CommandResult commandResultFrom(const ModelingCreateBoxResult& result) {
-    return {
-            .ok = result.ok,
-            .changed = result.changed,
-            .message = result.message,
-    };
+CommandResult command_result_from(const ModelingCreateBoxResult &result) {
+  return {
+      .ok = result.ok,
+      .changed = result.changed,
+      .message = result.message,
+  };
 }
 
 } // namespace
 
 CommitBoxPreviewCommand::CommitBoxPreviewCommand(
-        ModelingSessionService& modeling,
-        SceneDocument& scene,
-        std::string name,
-        AssetId defaultMaterial)
-    : modeling_(modeling)
-    , scene_(scene)
-    , name_(std::move(name))
-    , defaultMaterial_(defaultMaterial) {}
+    ModelingSessionService &modeling, SceneDocument &scene, std::string name,
+    AssetId default_material)
+    : modeling_(modeling), scene_(scene), name_(std::move(name)),
+      default_material_(default_material) {}
 
 const std::string& CommitBoxPreviewCommand::label() const {
     return label_;
@@ -54,121 +50,123 @@ const ModelingCreateBoxResult& CommitBoxPreviewCommand::committed() const {
 
 CommandResult CommitBoxPreviewCommand::redo() {
     if (!executed_) {
-        return executeInitial();
+      return execute_initial();
     }
-    return redoRecorded();
+    return redo_recorded();
 }
 
 CommandResult CommitBoxPreviewCommand::undo() {
     if (!executed_) {
-        return commandInvalidResult("Box preview commit has not been executed");
+      return command_invalid_result("Box preview commit has not been executed");
     }
 
-    const CommandResult material = undoMaterial();
+    const CommandResult material = undo_material();
     if (!material.ok) {
         return material;
     }
 
-    CommandResult restore = commandResultFrom(modeling_.restoreHistoryMemento(before_));
+    CommandResult restore =
+        command_result_from(modeling_.restore_history_memento(before_));
     if (!restore.ok) {
         return restore;
     }
 
-    CommandResult cancelPreview = cancelRestoredPreview();
-    if (!cancelPreview.ok) {
-        return cancelPreview;
+    CommandResult cancel_preview = cancel_restored_preview();
+    if (!cancel_preview.ok) {
+      return cancel_preview;
     }
 
     return {
-            .ok = true,
-            .changed = material.changed || restore.changed || cancelPreview.changed,
+        .ok = true,
+        .changed =
+            material.changed || restore.changed || cancel_preview.changed,
     };
 }
 
-CommandResult CommitBoxPreviewCommand::executeInitial() {
-    before_ = modeling_.captureHistoryMemento();
-    committed_ = modeling_.commitBox(name_);
-    CommandResult result = commandResultFrom(committed_);
-    if (!result.ok || !result.changed) {
-        return result;
+CommandResult CommitBoxPreviewCommand::execute_initial() {
+  before_ = modeling_.capture_history_memento();
+  committed_ = modeling_.commit_box(name_);
+  CommandResult result = command_result_from(committed_);
+  if (!result.ok || !result.changed) {
+    return result;
+  }
+
+  const std::array<EntityId, 1> selected{committed_.object.entity};
+  const CommandResult selection = command_result_from(
+      modeling_.set_object_selection(selected, committed_.object.entity));
+  if (!selection.ok) {
+    return rollback_initial(selection);
+  }
+
+  if (default_material_ != kInvalidAssetId) {
+    std::optional<MaterialComponent> before_material;
+    if (const MaterialComponent *material =
+            scene_.material(committed_.object.entity)) {
+      before_material = *material;
     }
-
-    const std::array<EntityId, 1> selected{committed_.object.entity};
-    const CommandResult selection = commandResultFrom(
-            modeling_.setObjectSelection(selected, committed_.object.entity));
-    if (!selection.ok) {
-        return rollbackInitial(selection);
-    }
-
-    if (defaultMaterial_ != InvalidAssetId) {
-        std::optional<MaterialComponent> beforeMaterial;
-        if (const MaterialComponent* material = scene_.material(committed_.object.entity)) {
-            beforeMaterial = *material;
-        }
-        materialCommand_ = std::make_unique<SetMaterialCommand>(
-                scene_,
-                committed_.object.entity,
-                beforeMaterial,
-                MaterialComponent{.material = defaultMaterial_});
-        const CommandResult material = materialCommand_->redo();
-        if (!material.ok) {
-            return rollbackInitial(material);
-        }
-        if (!material.changed) {
-            materialCommand_.reset();
-        }
-    }
-
-    after_ = modeling_.captureHistoryMemento();
-    executed_ = true;
-    return {
-            .ok = true,
-            .changed = true,
-    };
-}
-
-CommandResult CommitBoxPreviewCommand::redoRecorded() {
-    CommandResult restore = commandResultFrom(modeling_.restoreHistoryMemento(after_));
-    if (!restore.ok) {
-        return restore;
-    }
-
-    CommandResult material = redoMaterial();
+    material_command_ = std::make_unique<SetMaterialCommand>(
+        scene_, committed_.object.entity, before_material,
+        MaterialComponent{.material = default_material_});
+    const CommandResult material = material_command_->redo();
     if (!material.ok) {
-        (void)modeling_.restoreHistoryMemento(before_);
-        (void)cancelRestoredPreview();
-        return material;
+      return rollback_initial(material);
     }
-
-    return {
-            .ok = true,
-            .changed = restore.changed || material.changed,
-    };
-}
-
-CommandResult CommitBoxPreviewCommand::undoMaterial() {
-    if (!materialCommand_) {
-        return commandUnchangedResult();
+    if (!material.changed) {
+      material_command_.reset();
     }
-    return materialCommand_->undo();
+  }
+
+  after_ = modeling_.capture_history_memento();
+  executed_ = true;
+  return {
+      .ok = true,
+      .changed = true,
+  };
 }
 
-CommandResult CommitBoxPreviewCommand::redoMaterial() {
-    if (!materialCommand_) {
-        return commandUnchangedResult();
-    }
-    return materialCommand_->redo();
+CommandResult CommitBoxPreviewCommand::redo_recorded() {
+  CommandResult restore =
+      command_result_from(modeling_.restore_history_memento(after_));
+  if (!restore.ok) {
+    return restore;
+  }
+
+  CommandResult material = redo_material();
+  if (!material.ok) {
+    (void)modeling_.restore_history_memento(before_);
+    (void)cancel_restored_preview();
+    return material;
+  }
+
+  return {
+      .ok = true,
+      .changed = restore.changed || material.changed,
+  };
 }
 
-CommandResult CommitBoxPreviewCommand::rollbackInitial(CommandResult failure) {
-    (void)undoMaterial();
-    (void)modeling_.restoreHistoryMemento(before_);
-    (void)cancelRestoredPreview();
-    return failure;
+CommandResult CommitBoxPreviewCommand::undo_material() {
+  if (!material_command_) {
+    return command_unchanged_result();
+  }
+  return material_command_->undo();
 }
 
-CommandResult CommitBoxPreviewCommand::cancelRestoredPreview() {
-    return commandResultFrom(modeling_.cancelBox());
+CommandResult CommitBoxPreviewCommand::redo_material() {
+  if (!material_command_) {
+    return command_unchanged_result();
+  }
+  return material_command_->redo();
+}
+
+CommandResult CommitBoxPreviewCommand::rollback_initial(CommandResult failure) {
+  (void)undo_material();
+  (void)modeling_.restore_history_memento(before_);
+  (void)cancel_restored_preview();
+  return failure;
+}
+
+CommandResult CommitBoxPreviewCommand::cancel_restored_preview() {
+  return command_result_from(modeling_.cancel_box());
 }
 
 } // namespace quader

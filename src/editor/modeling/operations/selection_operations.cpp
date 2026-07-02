@@ -71,8 +71,8 @@ class RecalculateFaceNormalsOperation final : public EditorOperation {
 public:
 	[[nodiscard]] EditorOperationId operation_id() const override
 	{
-		return EditorOperationId::recalculate_face_normals;
-	}
+          return EditorOperationId::RecalculateFaceNormals;
+        }
 
 	[[nodiscard]] std::string_view id() const override
 	{
@@ -106,8 +106,8 @@ class DeleteSelectionOperation final : public EditorOperation {
 public:
 	[[nodiscard]] EditorOperationId operation_id() const override
 	{
-		return EditorOperationId::delete_selection;
-	}
+          return EditorOperationId::DeleteSelection;
+        }
 
 	[[nodiscard]] std::string_view id() const override
 	{
@@ -140,244 +140,201 @@ public:
 
 const EditorOperation& connect_vertices_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::connect_vertices,
-			"connect_vertices",
-			"Connect Vertices",
-			&EditorSession::connect_selected_vertices);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::ConnectVertices, "connect_vertices",
+      "Connect Vertices", &EditorSession::connect_selected_vertices);
+  return kOperation;
 }
 
 const EditorOperation& dissolve_vertices_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::dissolve_vertices,
-			"dissolve_vertices",
-			"Dissolve Vertices",
-			&EditorSession::dissolve_selected_vertices);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::DissolveVertices, "dissolve_vertices",
+      "Dissolve Vertices", &EditorSession::dissolve_selected_vertices);
+  return kOperation;
 }
 
 const EditorOperation& connect_edges_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::connect_edges,
-			"connect_edges",
-			"Connect Edges",
-			&EditorSession::connect_selected_edges);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::ConnectEdges, "connect_edges", "Connect Edges",
+      &EditorSession::connect_selected_edges);
+  return kOperation;
 }
 
 const EditorOperation& split_edges_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::split_edges,
-			"split_edges",
-			"Split Edges",
-			&EditorSession::split_selected_edges);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::SplitEdges, "split_edges", "Split Edges",
+      &EditorSession::split_selected_edges);
+  return kOperation;
 }
 
 const EditorOperation& dissolve_edges_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::dissolve_edges,
-			"dissolve_edges",
-			"Dissolve Edges",
-			&EditorSession::dissolve_selected_edges);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::DissolveEdges, "dissolve_edges", "Dissolve Edges",
+      &EditorSession::dissolve_selected_edges);
+  return kOperation;
 }
 
 const EditorOperation& merge_edges_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::merge_edges,
-			"merge_edges",
-			"Merge Edges",
-			&EditorSession::merge_selected_edges);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::MergeEdges, "merge_edges", "Merge Edges",
+      &EditorSession::merge_selected_edges);
+  return kOperation;
 }
 
 const EditorOperation& collapse_edges_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::collapse_edges,
-			"collapse_edges",
-			"Collapse Edges",
-			&EditorSession::collapse_selected_edges);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::CollapseEdges, "collapse_edges", "Collapse Edges",
+      &EditorSession::collapse_selected_edges);
+  return kOperation;
 }
 
 const EditorOperation& fill_hole_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::fill_hole,
-			"fill_hole",
-			"Fill Hole",
-			&EditorSession::fill_hole_from_selected_edges);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::FillHole, "fill_hole", "Fill Hole",
+      &EditorSession::fill_hole_from_selected_edges);
+  return kOperation;
 }
 
 const EditorOperation& combine_faces_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::combine_faces,
-			"combine_faces",
-			"Combine Faces",
-			&EditorSession::combine_selected_faces);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::CombineFaces, "combine_faces", "Combine Faces",
+      &EditorSession::combine_selected_faces);
+  return kOperation;
 }
 
 const EditorOperation& collapse_faces_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::collapse_faces,
-			"collapse_faces",
-			"Collapse Faces",
-			&EditorSession::collapse_selected_faces);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::CollapseFaces, "collapse_faces", "Collapse Faces",
+      &EditorSession::collapse_selected_faces);
+  return kOperation;
 }
 
 const EditorOperation& radial_align_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::radial_align,
-			"radial_align",
-			"Radial Align",
-			&EditorSession::radial_align_selected);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::RadialAlign, "radial_align", "Radial Align",
+      &EditorSession::radial_align_selected);
+  return kOperation;
 }
 
 const EditorOperation& flip_face_normals_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::flip_face_normals,
-			"flip_face_normals",
-			"Flip Face Normals",
-			&EditorSession::flip_selected_face_normals);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::FlipFaceNormals, "flip_face_normals",
+      "Flip Face Normals", &EditorSession::flip_selected_face_normals);
+  return kOperation;
 }
 
 const EditorOperation& shade_faces_smooth_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::shade_faces_smooth,
-			"shade_faces_smooth",
-			"Shade Faces Smooth",
-			&EditorSession::shade_selected_faces_smooth);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::ShadeFacesSmooth, "shade_faces_smooth",
+      "Shade Faces Smooth", &EditorSession::shade_selected_faces_smooth);
+  return kOperation;
 }
 
 const EditorOperation& shade_faces_flat_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::shade_faces_flat,
-			"shade_faces_flat",
-			"Shade Faces Flat",
-			&EditorSession::shade_selected_faces_flat);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::ShadeFacesFlat, "shade_faces_flat", "Shade Faces Flat",
+      &EditorSession::shade_selected_faces_flat);
+  return kOperation;
 }
 
 const EditorOperation& harden_edge_normals_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::harden_edge_normals,
-			"harden_edge_normals",
-			"Harden Edge Normals",
-			&EditorSession::harden_selected_edge_normals);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::HardenEdgeNormals, "harden_edge_normals",
+      "Harden Edge Normals", &EditorSession::harden_selected_edge_normals);
+  return kOperation;
 }
 
 const EditorOperation& soften_edge_normals_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::soften_edge_normals,
-			"soften_edge_normals",
-			"Soften Edge Normals",
-			&EditorSession::soften_selected_edge_normals);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::SoftenEdgeNormals, "soften_edge_normals",
+      "Soften Edge Normals", &EditorSession::soften_selected_edge_normals);
+  return kOperation;
 }
 
 const EditorOperation& combine_meshes_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::combine_meshes,
-			"combine_meshes",
-			"Combine Meshes",
-			&EditorSession::combine_selected_meshes);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::CombineMeshes, "combine_meshes", "Combine Meshes",
+      &EditorSession::combine_selected_meshes);
+  return kOperation;
 }
 
 const EditorOperation& extract_faces_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::extract_faces,
-			"extract_faces",
-			"Extract Faces",
-			&EditorSession::extract_selected_faces);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::ExtractFaces, "extract_faces", "Extract Faces",
+      &EditorSession::extract_selected_faces);
+  return kOperation;
 }
 
 const EditorOperation& detach_faces_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::detach_faces,
-			"detach_faces",
-			"Detach Faces",
-			&EditorSession::detach_selected_faces);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::DetachFaces, "detach_faces", "Detach Faces",
+      &EditorSession::detach_selected_faces);
+  return kOperation;
 }
 
 const EditorOperation& snap_vertices_to_active_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::snap_vertices_to_active,
-			"snap_vertices_to_active",
-			"Snap Vertices To Active",
-			&EditorSession::snap_selected_vertices_to_active);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::SnapVerticesToActive, "snap_vertices_to_active",
+      "Snap Vertices To Active",
+      &EditorSession::snap_selected_vertices_to_active);
+  return kOperation;
 }
 
 const EditorOperation& snap_edges_to_active_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::snap_edges_to_active,
-			"snap_edges_to_active",
-			"Snap Edges To Active",
-			&EditorSession::snap_selected_edges_to_active);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::SnapEdgesToActive, "snap_edges_to_active",
+      "Snap Edges To Active", &EditorSession::snap_selected_edges_to_active);
+  return kOperation;
 }
 
 const EditorOperation& merge_vertices_to_active_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::merge_vertices_to_active,
-			"merge_vertices_to_active",
-			"Merge Vertices To Active",
-			&EditorSession::merge_selected_vertices_to_active);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::MergeVerticesToActive, "merge_vertices_to_active",
+      "Merge Vertices To Active",
+      &EditorSession::merge_selected_vertices_to_active);
+  return kOperation;
 }
 
 const EditorOperation& merge_vertices_to_center_operation()
 {
-	static const SelectionOperation operation(
-			EditorOperationId::merge_vertices_to_center,
-			"merge_vertices_to_center",
-			"Merge Vertices To Center",
-			&EditorSession::merge_selected_vertices_to_center);
-	return operation;
+  static const SelectionOperation kOperation(
+      EditorOperationId::MergeVerticesToCenter, "merge_vertices_to_center",
+      "Merge Vertices To Center",
+      &EditorSession::merge_selected_vertices_to_center);
+  return kOperation;
 }
 
 const EditorOperation& recalculate_face_normals_operation()
 {
-	static const RecalculateFaceNormalsOperation operation;
-	return operation;
+  static const RecalculateFaceNormalsOperation kOperation;
+  return kOperation;
 }
 
 const EditorOperation& delete_selection_operation()
 {
-	static const DeleteSelectionOperation operation;
-	return operation;
+  static const DeleteSelectionOperation kOperation;
+  return kOperation;
 }
 
 } // namespace quader_editor_core

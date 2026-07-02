@@ -43,13 +43,13 @@ CircularBoundaryFixture make_circular_boundary_fixture()
 
 	for (std::size_t index = 0; index < directions.size(); ++index) {
 		const std::size_t next = (index + 1U) % directions.size();
-		EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 4> {
-			inner[index],
-			inner[next],
-			outer[next],
-			outer[index],
-		}) != invalid_element_id);
-		fixture.inner_edges[index] = make_edge(inner[index], inner[next]);
+                EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 4>{
+                                                           inner[index],
+                                                           inner[next],
+                                                           outer[next],
+                                                           outer[index],
+                                                       }) != kInvalidElementId);
+                fixture.inner_edges[index] = make_edge(inner[index], inner[next]);
 	}
 
 	for (const Face& face : fixture.document.faces) {
@@ -92,8 +92,8 @@ TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedEdgeElementsCreate
 	const OperationResult result = extrude_selected_elements(fixture.document, selection, { 0.0F, -0.5F, 0.0F });
 
 	EXPECT_TRUE(result.changed);
-	EXPECT_TRUE(selection.mode == SelectionMode::edge);
-	EXPECT_TRUE(selection.edges.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Edge);
+        EXPECT_TRUE(selection.edges.size() == 1U);
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
@@ -115,8 +115,8 @@ TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedCircularBoundaryEd
 		const OperationResult result = extrude_selected_elements(fixture.document, selection, offset);
 
 		EXPECT_TRUE(result.changed);
-		EXPECT_TRUE(selection.mode == SelectionMode::edge);
-		EXPECT_TRUE(selection.edges.size() == fixture.inner_edges.size());
+                EXPECT_TRUE(selection.mode == SelectionMode::Edge);
+                EXPECT_TRUE(selection.edges.size() == fixture.inner_edges.size());
 		EXPECT_TRUE(fixture.document.faces.size() == 16U);
 		EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 		EXPECT_TRUE(vertical_wall_normals_have_consistent_radial_direction(fixture.document));

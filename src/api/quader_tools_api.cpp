@@ -19,8 +19,8 @@
 namespace quader {
 namespace {
 
-ProjectSession& projectSession(QuaderApiSession session) {
-    return QuaderApiSessionInternalAccess::projectSession(session);
+ProjectSession &project_session(QuaderApiSession session) {
+  return QuaderApiSessionInternalAccess::project_session(session);
 }
 
 } // namespace
@@ -28,65 +28,64 @@ ProjectSession& projectSession(QuaderApiSession session) {
 QuaderToolsApi::QuaderToolsApi(QuaderApiSession session)
     : session_(session) {}
 
-void QuaderToolsApi::setRuntimeHooks(QuaderToolsRuntimeHooks hooks) {
-    hooks_ = std::move(hooks);
+void QuaderToolsApi::set_runtime_hooks(QuaderToolsRuntimeHooks hooks) {
+  hooks_ = std::move(hooks);
 }
 
-QuaderApiVoidResult QuaderToolsApi::activate(std::string_view toolId) {
-    if (hooks_.activate) {
-        return hooks_.activate(toolId);
-    }
+QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
+  if (hooks_.activate) {
+    return hooks_.activate(tool_id);
+  }
 
-    const ViewportTool* tool = findViewportTool(toolId);
-    if (tool == nullptr) {
-        return quaderApiFailureStatus(projectSession(session_), "Unknown viewport tool.");
-    }
-    ModelingCommandResult result = tool->activate(projectSession(session_).modeling());
-    return quaderApiVoidStatus(
-            projectSession(session_),
-            result.ok,
-            result.changed,
-            std::move(result.message),
-            QuaderMutationKind::Modeling,
-            toolId);
+  const ViewportTool *tool = find_viewport_tool(tool_id);
+  if (tool == nullptr) {
+    return quader_api_failure_status(project_session(session_),
+                                     "Unknown viewport tool.");
+  }
+  ModelingCommandResult result =
+      tool->activate(project_session(session_).modeling());
+  return quader_api_void_status(project_session(session_), result.ok,
+                                result.changed, std::move(result.message),
+                                QuaderMutationKind::Modeling, tool_id);
 }
 
 QuaderApiVoidResult QuaderToolsApi::activate(ViewportToolId tool) {
-    return activate(viewportToolCatalogId(tool));
+  return activate(viewport_tool_catalog_id(tool));
 }
 
-QuaderApiVoidResult QuaderToolsApi::setSetting(std::string_view toolId, std::string_view name, double value) {
-    ModelingInteractionSettings settings = projectSession(session_).modeling().interactionSettings();
+QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
+                                                std::string_view name,
+                                                double value) {
+  ModelingInteractionSettings settings =
+      project_session(session_).modeling().interaction_settings();
 
-    if (!applyModelingInteractionSetting(settings, toolId, name, value)) {
-        return quaderApiFailureStatus(projectSession(session_), "Unknown tool setting.");
-    }
-    ModelingCommandResult result = projectSession(session_).modeling().setInteractionSettings(settings);
-    return quaderApiVoidStatus(
-            projectSession(session_),
-            result.ok,
-            result.changed,
-            std::move(result.message),
-            QuaderMutationKind::Modeling,
-            "Set Tool Setting");
+  if (!apply_modeling_interaction_setting(settings, tool_id, name, value)) {
+    return quader_api_failure_status(project_session(session_),
+                                     "Unknown tool setting.");
+  }
+  ModelingCommandResult result =
+      project_session(session_).modeling().set_interaction_settings(settings);
+  return quader_api_void_status(project_session(session_), result.ok,
+                                result.changed, std::move(result.message),
+                                QuaderMutationKind::Modeling,
+                                "Set Tool Setting");
 }
 
-QuaderApiVoidResult QuaderToolsApi::cancelModalTool() {
-    if (hooks_.cancelModalTool) {
-        return hooks_.cancelModalTool();
-    }
-    ModelingCommandResult result = projectSession(session_).modeling().cancelActiveModalTool();
-    return quaderApiVoidStatus(
-            projectSession(session_),
-            result.ok,
-            result.changed,
-            std::move(result.message),
-            QuaderMutationKind::Modeling,
-            "Cancel Modal Tool");
+QuaderApiVoidResult QuaderToolsApi::cancel_modal_tool() {
+  if (hooks_.cancel_modal_tool) {
+    return hooks_.cancel_modal_tool();
+  }
+  ModelingCommandResult result =
+      project_session(session_).modeling().cancel_active_modal_tool();
+  return quader_api_void_status(project_session(session_), result.ok,
+                                result.changed, std::move(result.message),
+                                QuaderMutationKind::Modeling,
+                                "Cancel Modal Tool");
 }
 
-std::string QuaderToolsApi::activeTool() const {
-    return std::string(viewportToolCatalogId(viewportToolForModeling(projectSession(session_).modeling().toolStatus().activeTool)));
+std::string QuaderToolsApi::active_tool() const {
+  return std::string(viewport_tool_catalog_id(viewport_tool_for_modeling(
+      project_session(session_).modeling().tool_status().active_tool)));
 }
 
 } // namespace quader

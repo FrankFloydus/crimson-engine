@@ -23,54 +23,60 @@ constexpr float kFlyMaxDeltaSeconds = 0.25f;
 constexpr float kFlySpeedWheelStep = 1.0f;
 constexpr float kMinCameraDistance = 0.05f;
 
-float verticalFovRadians(float fovDegrees) {
-    return fovDegrees * std::numbers::pi_v<float> / 180.0f;
+float vertical_fov_radians(float fov_degrees) {
+  return fov_degrees * std::numbers::pi_v<float> / 180.0f;
 }
 
-float defaultFlySpeed() {
-    return static_cast<float>(viewportHostDefaults().flyBaseSpeed);
+float default_fly_speed() {
+  return static_cast<float>(viewport_host_defaults().fly_base_speed);
 }
 
-float perspectiveVisibleHeight(const ViewportCameraState& state) {
-    return std::max(0.0001f,
-            2.0f * std::max(kMinCameraDistance, state.distance) *
-                    std::tan(verticalFovRadians(state.fovDegrees) * 0.5f));
+float perspective_visible_height(const ViewportCameraState &state) {
+  return std::max(0.0001f,
+                  2.0f * std::max(kMinCameraDistance, state.distance) *
+                      std::tan(vertical_fov_radians(state.fov_degrees) * 0.5f));
 }
 
-float perspectiveDistanceForVisibleHeight(float visibleHeight, float fovDegrees) {
-    const float halfFovTangent = std::tan(verticalFovRadians(fovDegrees) * 0.5f);
-    if (halfFovTangent <= 0.000001f) {
-        return kMinCameraDistance;
-    }
-    return std::max(kMinCameraDistance, std::max(0.0001f, visibleHeight) / (2.0f * halfFovTangent));
+float perspective_distance_for_visible_height(float visible_height,
+                                              float fov_degrees) {
+  const float half_fov_tangent =
+      std::tan(vertical_fov_radians(fov_degrees) * 0.5f);
+  if (half_fov_tangent <= 0.000001f) {
+    return kMinCameraDistance;
+  }
+  return std::max(kMinCameraDistance, std::max(0.0001f, visible_height) /
+                                          (2.0f * half_fov_tangent));
 }
 
-float currentVisibleHeight(const ViewportCameraState& state) {
-    return state.projection == ViewportProjection::Orthographic
-            ? std::max(0.0001f, state.orthographicSize)
-            : perspectiveVisibleHeight(state);
+float current_visible_height(const ViewportCameraState &state) {
+  return state.projection == ViewportProjection::Orthographic
+             ? std::max(0.0001f, state.orthographic_size)
+             : perspective_visible_height(state);
 }
 
-void syncPerspectiveDistanceFromOrthographicZoom(ViewportCameraState& state) {
-    if (state.projection == ViewportProjection::Orthographic) {
-        state.distance = perspectiveDistanceForVisibleHeight(state.orthographicSize, state.fovDegrees);
-    }
+void sync_perspective_distance_from_orthographic_zoom(
+    ViewportCameraState &state) {
+  if (state.projection == ViewportProjection::Orthographic) {
+    state.distance = perspective_distance_for_visible_height(
+        state.orthographic_size, state.fov_degrees);
+  }
 }
 
-QVec3 forwardFromAngles(float yawRadians, float pitchRadians) {
-    const float cp = std::cos(pitchRadians);
-    return normalize({
-        std::sin(yawRadians) * cp,
-        std::sin(pitchRadians),
-        -std::cos(yawRadians) * cp,
-    });
+QVec3 forward_from_angles(float yaw_radians, float pitch_radians) {
+  const float cp = std::cos(pitch_radians);
+  return normalize({
+      std::sin(yaw_radians) * cp,
+      std::sin(pitch_radians),
+      -std::cos(yaw_radians) * cp,
+  });
 }
 
-QVec3 fallbackUpForForward(QVec3 forward) {
-    if (std::abs(forward.y) > 0.999f) {
-        return forward.y < 0.0f ? QVec3{0.0f, 0.0f, 1.0f} : QVec3{0.0f, 0.0f, -1.0f};
-    }
-    return {0.0f, 1.0f, 0.0f};
+QVec3 fallback_up_for_forward(QVec3 forward) {
+  if (std::abs(forward.y) > 0.999f) {
+    return forward.y < 0.0f ? QVec3{0.0f, 0.0f, 1.0f}
+                            : QVec3{0.0f, 0.0f, -1.0f};
+  }
+  return {0.0f, 1.0f, 0.0f};
 }
 
 /**
@@ -81,396 +87,417 @@ struct CameraBasis {
     QVec3 up;
 };
 
-CameraBasis makeCameraBasis(QVec3 forwardDirection, QVec3 upDirection, QVec3 fallbackForward = {0.0f, 0.0f, -1.0f}) {
-    QVec3 forward = normalize(forwardDirection);
-    if (length(forward) <= 0.000001f) {
-        forward = normalize(fallbackForward);
-    }
-    if (length(forward) <= 0.000001f) {
-        forward = {0.0f, 0.0f, -1.0f};
-    }
+CameraBasis make_camera_basis(QVec3 forward_direction, QVec3 up_direction,
+                              QVec3 fallback_forward = {0.0f, 0.0f, -1.0f}) {
+  QVec3 forward = normalize(forward_direction);
+  if (length(forward) <= 0.000001f) {
+    forward = normalize(fallback_forward);
+  }
+  if (length(forward) <= 0.000001f) {
+    forward = {0.0f, 0.0f, -1.0f};
+  }
 
-    QVec3 candidateUp = normalize(upDirection);
-    if (length(candidateUp) <= 0.000001f || std::abs(dot(candidateUp, forward)) > 0.999f) {
-        candidateUp = fallbackUpForForward(forward);
-    }
+  QVec3 candidate_up = normalize(up_direction);
+  if (length(candidate_up) <= 0.000001f ||
+      std::abs(dot(candidate_up, forward)) > 0.999f) {
+    candidate_up = fallback_up_for_forward(forward);
+  }
 
-    QVec3 right = normalize(cross(forward, candidateUp));
-    if (length(right) <= 0.000001f) {
-        right = {1.0f, 0.0f, 0.0f};
-    }
+  QVec3 right = normalize(cross(forward, candidate_up));
+  if (length(right) <= 0.000001f) {
+    right = {1.0f, 0.0f, 0.0f};
+  }
 
-    QVec3 up = normalize(cross(right, forward));
-    if (length(up) <= 0.000001f) {
-        up = fallbackUpForForward(forward);
-    }
+  QVec3 up = normalize(cross(right, forward));
+  if (length(up) <= 0.000001f) {
+    up = fallback_up_for_forward(forward);
+  }
 
-    return {.forward = forward, .up = up};
+  return {.forward = forward, .up = up};
 }
 
-void syncAnglesForForward(ViewportCameraState& state, QVec3 forward) {
-    state.pitchRadians = std::asin(clamp(forward.y, -1.0f, 1.0f));
-    state.yawRadians = std::atan2(forward.x, -forward.z);
+void sync_angles_for_forward(ViewportCameraState &state, QVec3 forward) {
+  state.pitch_radians = std::asin(clamp(forward.y, -1.0f, 1.0f));
+  state.yaw_radians = std::atan2(forward.x, -forward.z);
 }
 
+quader::QVec2 to_runtime(QVec2 value) { return {value.x, value.y}; }
 
-quader::QVec2 toRuntime(QVec2 value) {
-    return {value.x, value.y};
+quader::QVec3 to_runtime(QVec3 value) { return {value.x, value.y, value.z}; }
+
+QVec3 from_runtime(quader::QVec3 value) { return {value.x, value.y, value.z}; }
+
+quader_editor_core::ViewAxis to_runtime(ViewportViewAxis axis) {
+  switch (axis) {
+  case ViewportViewAxis::X:
+    return quader_editor_core::ViewAxis::X;
+  case ViewportViewAxis::Y:
+    return quader_editor_core::ViewAxis::Y;
+  case ViewportViewAxis::Z:
+    return quader_editor_core::ViewAxis::Z;
+  }
+  return quader_editor_core::ViewAxis::Z;
 }
 
-quader::QVec3 toRuntime(QVec3 value) {
-    return {value.x, value.y, value.z};
+quader_poly::Transform3 make_runtime_transform(const ViewportCameraPose &pose) {
+  QVec3 forward = normalize(pose.target - pose.eye);
+  if (length(forward) <= 0.000001f) {
+    forward = {0.0f, 0.0f, -1.0f};
+  }
+
+  QVec3 right = normalize(cross(forward, pose.up));
+  if (length(right) <= 0.000001f) {
+    right = {1.0f, 0.0f, 0.0f};
+  }
+
+  QVec3 up = normalize(cross(right, forward));
+  if (length(up) <= 0.000001f) {
+    up = {0.0f, 1.0f, 0.0f};
+  }
+
+  return {
+      .x_axis = to_runtime(right),
+      .y_axis = to_runtime(up),
+      .z_axis = to_runtime(forward * -1.0f),
+      .origin = to_runtime(pose.eye),
+  };
 }
 
-QVec3 fromRuntime(quader::QVec3 value) {
-    return {value.x, value.y, value.z};
+ViewportCameraPose
+pose_from_runtime_transform(const quader_poly::Transform3 &transform,
+                            float distance) {
+  const QVec3 origin = from_runtime(transform.origin);
+  QVec3 forward = normalize(from_runtime(transform.z_axis) * -1.0f);
+  if (length(forward) <= 0.000001f) {
+    forward = {0.0f, 0.0f, -1.0f};
+  }
+
+  QVec3 up = normalize(from_runtime(transform.y_axis));
+  if (length(up) <= 0.000001f) {
+    up = {0.0f, 1.0f, 0.0f};
+  }
+
+  return {
+      .eye = origin,
+      .target = origin + forward * std::max(kMinCameraDistance, distance),
+      .up = up,
+  };
 }
 
-quader_editor_core::ViewAxis toRuntime(ViewportViewAxis axis) {
-    switch (axis) {
-    case ViewportViewAxis::X:
-        return quader_editor_core::ViewAxis::x;
-    case ViewportViewAxis::Y:
-        return quader_editor_core::ViewAxis::y;
-    case ViewportViewAxis::Z:
-        return quader_editor_core::ViewAxis::z;
-    }
-    return quader_editor_core::ViewAxis::z;
+quader_editor_core::ViewportCameraState
+make_runtime_camera(const ViewportCameraPose &pose,
+                    const ViewportCameraState &state, float viewport_width,
+                    float viewport_height) {
+  quader_editor_core::ViewportCameraState camera;
+  camera.projection = state.projection == ViewportProjection::Orthographic
+                          ? quader_editor_core::CameraProjection::Orthographic
+                          : quader_editor_core::CameraProjection::Perspective;
+  camera.transform = make_runtime_transform(pose);
+  camera.viewport_size = {std::max(viewport_width, 1.0f),
+                          std::max(viewport_height, 1.0f)};
+  camera.orthographic_size = std::max(0.0001f, state.orthographic_size);
+  camera.fov_degrees = state.fov_degrees;
+  return camera;
 }
 
-quader_poly::Transform3 makeRuntimeTransform(const ViewportCameraPose& pose) {
-    QVec3 forward = normalize(pose.target - pose.eye);
-    if (length(forward) <= 0.000001f) {
-        forward = {0.0f, 0.0f, -1.0f};
-    }
-
-    QVec3 right = normalize(cross(forward, pose.up));
-    if (length(right) <= 0.000001f) {
-        right = {1.0f, 0.0f, 0.0f};
-    }
-
-    QVec3 up = normalize(cross(right, forward));
-    if (length(up) <= 0.000001f) {
-        up = {0.0f, 1.0f, 0.0f};
-    }
-
-    return {
-            .x_axis = toRuntime(right),
-            .y_axis = toRuntime(up),
-            .z_axis = toRuntime(forward * -1.0f),
-            .origin = toRuntime(pose.eye),
-    };
+float distance_along_forward_to_pivot(QVec3 origin, QVec3 forward,
+                                      QVec3 pivot) {
+  const float forward_distance = dot(pivot - origin, forward);
+  if (forward_distance > kMinCameraDistance) {
+    return forward_distance;
+  }
+  return std::max(kMinCameraDistance, length(pivot - origin));
 }
 
-ViewportCameraPose poseFromRuntimeTransform(const quader_poly::Transform3& transform, float distance) {
-    const QVec3 origin = fromRuntime(transform.origin);
-    QVec3 forward = normalize(fromRuntime(transform.z_axis) * -1.0f);
-    if (length(forward) <= 0.000001f) {
-        forward = {0.0f, 0.0f, -1.0f};
-    }
+void apply_runtime_transform(
+    ViewportCameraState &state, QVec3 &pivot, QVec3 &camera_forward,
+    QVec3 &camera_up,
+    const quader_editor_core::ViewportNavigationResult &result,
+    std::optional<float> preserved_view_distance = std::nullopt) {
+  if (!result.ok) {
+    return;
+  }
 
-    QVec3 up = normalize(fromRuntime(transform.y_axis));
-    if (length(up) <= 0.000001f) {
-        up = {0.0f, 1.0f, 0.0f};
-    }
+  const QVec3 origin = from_runtime(result.camera_transform.origin);
+  QVec3 forward =
+      normalize(from_runtime(result.camera_transform.z_axis) * -1.0f);
+  if (length(forward) <= 0.000001f) {
+    forward = forward_from_angles(state.yaw_radians, state.pitch_radians);
+  }
+  const CameraBasis basis = make_camera_basis(
+      forward, from_runtime(result.camera_transform.y_axis), camera_forward);
 
-    return {
-            .eye = origin,
-            .target = origin + forward * std::max(kMinCameraDistance, distance),
-            .up = up,
-    };
+  pivot = from_runtime(result.pivot);
+  const float view_distance =
+      std::max(kMinCameraDistance,
+               preserved_view_distance.value_or(distance_along_forward_to_pivot(
+                   origin, basis.forward, pivot)));
+  const float clamped_view_distance =
+      clamp(view_distance, kMinCameraDistance, 500.0f);
+
+  camera_forward = basis.forward;
+  camera_up = basis.up;
+  state.target = origin + camera_forward * clamped_view_distance;
+  state.distance = clamped_view_distance;
+  if (result.has_camera_size) {
+    state.orthographic_size =
+        static_cast<float>(std::max(0.0001, result.camera_size));
+  }
+  sync_angles_for_forward(state, camera_forward);
 }
 
-quader_editor_core::ViewportCameraState makeRuntimeCamera(
-        const ViewportCameraPose& pose,
-        const ViewportCameraState& state,
-        float viewportWidth,
-        float viewportHeight) {
-    quader_editor_core::ViewportCameraState camera;
-    camera.projection = state.projection == ViewportProjection::Orthographic
-            ? quader_editor_core::CameraProjection::orthographic
-            : quader_editor_core::CameraProjection::perspective;
-    camera.transform = makeRuntimeTransform(pose);
-    camera.viewport_size = {std::max(viewportWidth, 1.0f), std::max(viewportHeight, 1.0f)};
-    camera.orthographic_size = std::max(0.0001f, state.orthographicSize);
-    camera.fov_degrees = state.fovDegrees;
-    return camera;
-}
-
-float distanceAlongForwardToPivot(QVec3 origin, QVec3 forward, QVec3 pivot) {
-    const float forwardDistance = dot(pivot - origin, forward);
-    if (forwardDistance > kMinCameraDistance) {
-        return forwardDistance;
-    }
-    return std::max(kMinCameraDistance, length(pivot - origin));
-}
-
-void applyRuntimeTransform(ViewportCameraState& state,
-        QVec3& pivot,
-        QVec3& cameraForward,
-        QVec3& cameraUp,
-        const quader_editor_core::ViewportNavigationResult& result,
-        std::optional<float> preservedViewDistance = std::nullopt) {
-    if (!result.ok) {
-        return;
-    }
-
-    const QVec3 origin = fromRuntime(result.camera_transform.origin);
-    QVec3 forward = normalize(fromRuntime(result.camera_transform.z_axis) * -1.0f);
-    if (length(forward) <= 0.000001f) {
-        forward = forwardFromAngles(state.yawRadians, state.pitchRadians);
-    }
-    const CameraBasis basis = makeCameraBasis(forward, fromRuntime(result.camera_transform.y_axis), cameraForward);
-
-    pivot = fromRuntime(result.pivot);
-    const float viewDistance = std::max(kMinCameraDistance,
-            preservedViewDistance.value_or(distanceAlongForwardToPivot(origin, basis.forward, pivot)));
-    const float clampedViewDistance = clamp(viewDistance, kMinCameraDistance, 500.0f);
-
-    cameraForward = basis.forward;
-    cameraUp = basis.up;
-    state.target = origin + cameraForward * clampedViewDistance;
-    state.distance = clampedViewDistance;
-    if (result.has_camera_size) {
-        state.orthographicSize = static_cast<float>(std::max(0.0001, result.camera_size));
-    }
-    syncAnglesForForward(state, cameraForward);
-}
-
-
-QVec3 fallbackForwardForAxis(ViewportViewAxis axis, int sign) {
-    const float value = sign < 0 ? 1.0f : -1.0f;
-    switch (axis) {
-    case ViewportViewAxis::X:
-        return {value, 0.0f, 0.0f};
-    case ViewportViewAxis::Y:
-        return {0.0f, value, 0.0f};
-    case ViewportViewAxis::Z:
-        return {0.0f, 0.0f, value};
-    }
-    return {0.0f, 0.0f, -1.0f};
+QVec3 fallback_forward_for_axis(ViewportViewAxis axis, int sign) {
+  const float value = sign < 0 ? 1.0f : -1.0f;
+  switch (axis) {
+  case ViewportViewAxis::X:
+    return {value, 0.0f, 0.0f};
+  case ViewportViewAxis::Y:
+    return {0.0f, value, 0.0f};
+  case ViewportViewAxis::Z:
+    return {0.0f, 0.0f, value};
+  }
+  return {0.0f, 0.0f, -1.0f};
 }
 
 } // namespace
 
 ViewportCameraController::ViewportCameraController() {
-    const ViewportHostDefaults defaults = viewportHostDefaults();
-    state_.orthographicSize = static_cast<float>(defaults.defaultOrthographicSize);
-    state_.fovDegrees = static_cast<float>(defaults.defaultFovDegrees);
-    flySpeed_ = static_cast<float>(defaults.flyBaseSpeed);
-    syncBasisFromAngles();
+  const ViewportHostDefaults defaults = viewport_host_defaults();
+  state_.orthographic_size =
+      static_cast<float>(defaults.default_orthographic_size);
+  state_.fov_degrees = static_cast<float>(defaults.default_fov_degrees);
+  fly_speed_ = static_cast<float>(defaults.fly_base_speed);
+  sync_basis_from_angles();
 }
 
-void ViewportCameraController::setViewportSize(float width, float height) {
-    viewportWidth_ = std::max(1.0f, width);
-    viewportHeight_ = std::max(1.0f, height);
+void ViewportCameraController::set_viewport_size(float width, float height) {
+  viewport_width_ = std::max(1.0f, width);
+  viewport_height_ = std::max(1.0f, height);
 }
 
-void ViewportCameraController::beginDrag(QVec2 mouse, ViewportDragMode mode) {
-    dragMode_ = mode;
-    lastMouse_ = mouse;
-    clearOrbitSnapSource();
-    if (mode == ViewportDragMode::Fly) {
-        state_.projection = ViewportProjection::Perspective;
-        orthographicViewLocked_ = false;
+void ViewportCameraController::begin_drag(QVec2 mouse, ViewportDragMode mode) {
+  drag_mode_ = mode;
+  last_mouse_ = mouse;
+  clear_orbit_snap_source();
+  if (mode == ViewportDragMode::Fly) {
+    state_.projection = ViewportProjection::Perspective;
+    orthographic_view_locked_ = false;
+  }
+}
+
+void ViewportCameraController::update_drag(QVec2 mouse) {
+  update_drag(mouse, drag_mode_);
+}
+
+void ViewportCameraController::update_drag(QVec2 mouse, ViewportDragMode mode) {
+  const ViewportDragMode previous_mode = drag_mode_;
+  const bool entering_orbit_snap =
+      previous_mode != ViewportDragMode::OrbitSnap &&
+      mode == ViewportDragMode::OrbitSnap;
+  const QVec2 delta = entering_orbit_snap ? QVec2{}
+                                          : QVec2{mouse.x - last_mouse_.x,
+                                                  mouse.y - last_mouse_.y};
+  last_mouse_ = mouse;
+  if (previous_mode == ViewportDragMode::OrbitSnap &&
+      mode != ViewportDragMode::OrbitSnap) {
+    clear_orbit_snap_source();
+  }
+  drag_mode_ = mode;
+  update_drag_delta(delta);
+}
+
+void ViewportCameraController::update_drag_delta(QVec2 delta) {
+  if (drag_mode_ == ViewportDragMode::Orbit ||
+      drag_mode_ == ViewportDragMode::OrbitSnap) {
+    const ViewportHostDefaults defaults = viewport_host_defaults();
+    if (orthographic_view_locked_) {
+      state_.projection = ViewportProjection::Orthographic;
+      clear_orbit_snap_source();
+      return;
     }
-}
-
-void ViewportCameraController::updateDrag(QVec2 mouse) {
-    updateDrag(mouse, dragMode_);
-}
-
-void ViewportCameraController::updateDrag(QVec2 mouse, ViewportDragMode mode) {
-    const ViewportDragMode previousMode = dragMode_;
-    const bool enteringOrbitSnap =
-            previousMode != ViewportDragMode::OrbitSnap && mode == ViewportDragMode::OrbitSnap;
-    const QVec2 delta = enteringOrbitSnap ? QVec2{} : QVec2{mouse.x - lastMouse_.x, mouse.y - lastMouse_.y};
-    lastMouse_ = mouse;
-    if (previousMode == ViewportDragMode::OrbitSnap && mode != ViewportDragMode::OrbitSnap) {
-        clearOrbitSnapSource();
+    quader_editor_core::ViewportOrbitInput input;
+    const bool snap_to_orthographic = drag_mode_ == ViewportDragMode::OrbitSnap;
+    if (!snap_to_orthographic) {
+      clear_orbit_snap_source();
     }
-    dragMode_ = mode;
-    updateDragDelta(delta);
-}
-
-void ViewportCameraController::updateDragDelta(QVec2 delta) {
-    if (dragMode_ == ViewportDragMode::Orbit || dragMode_ == ViewportDragMode::OrbitSnap) {
-        const ViewportHostDefaults defaults = viewportHostDefaults();
-        if (orthographicViewLocked_) {
-            state_.projection = ViewportProjection::Orthographic;
-            clearOrbitSnapSource();
-            return;
-        }
-        quader_editor_core::ViewportOrbitInput input;
-        const bool snapToOrthographic = dragMode_ == ViewportDragMode::OrbitSnap;
-        if (!snapToOrthographic) {
-            clearOrbitSnapSource();
-        }
-        const float snappedOrthographicSize = currentVisibleHeight(state_);
-        syncPerspectiveDistanceFromOrthographicZoom(state_);
-        input.camera_transform = snapToOrthographic && hasOrbitSnapSource_
-                ? makeRuntimeTransform(orbitSnapSourcePose_)
-                : makeRuntimeTransform(pose());
-        input.pivot = toRuntime(pivot_);
-        input.screen_delta = toRuntime(delta);
-        input.sensitivity = defaults.orbitRadiansPerPixel;
-        input.snap_to_orthogonal = snapToOrthographic;
-        const quader_editor_core::ViewportNavigationResult orbitResult = quader_editor_core::viewport_orbit(input);
-        applyRuntimeTransform(state_, pivot_, cameraForward_, cameraUp_, orbitResult);
-        if (snapToOrthographic && orbitResult.ok) {
-            orbitSnapSourcePose_ = poseFromRuntimeTransform(orbitResult.unsnapped_camera_transform, state_.distance);
-            hasOrbitSnapSource_ = true;
-        } else {
-            clearOrbitSnapSource();
-        }
-        if (snapToOrthographic && orbitResult.orthogonal_snap) {
-            state_.projection = ViewportProjection::Orthographic;
-            state_.orthographicSize = snappedOrthographicSize;
-            orthographicViewLocked_ = false;
-        } else {
-            state_.projection = ViewportProjection::Perspective;
-            orthographicViewLocked_ = false;
-        }
-    } else if (dragMode_ == ViewportDragMode::Pan) {
-        quader_editor_core::ViewportPanInput input;
-        input.camera = makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_);
-        input.pivot = toRuntime(pivot_);
-        input.screen_delta = toRuntime(delta);
-        applyRuntimeTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_pan(input));
-    } else if (dragMode_ == ViewportDragMode::Fly) {
-        const ViewportHostDefaults defaults = viewportHostDefaults();
-        quader_editor_core::ViewportFlyLookInput input;
-        input.camera_transform = makeRuntimeTransform(pose());
-        input.pivot = toRuntime(pivot_);
-        input.screen_delta = toRuntime(delta);
-        input.sensitivity = defaults.flyLookRadiansPerPixel;
-        applyRuntimeTransform(state_,
-                pivot_,
-                cameraForward_,
-                cameraUp_,
-                quader_editor_core::viewport_fly_look(input),
-                state_.distance);
-        state_.projection = ViewportProjection::Perspective;
-        orthographicViewLocked_ = false;
-        clearOrbitSnapSource();
+    const float snapped_orthographic_size = current_visible_height(state_);
+    sync_perspective_distance_from_orthographic_zoom(state_);
+    input.camera_transform =
+        snap_to_orthographic && has_orbit_snap_source_
+            ? make_runtime_transform(orbit_snap_source_pose_)
+            : make_runtime_transform(pose());
+    input.pivot = to_runtime(pivot_);
+    input.screen_delta = to_runtime(delta);
+    input.sensitivity = defaults.orbit_radians_per_pixel;
+    input.snap_to_orthogonal = snap_to_orthographic;
+    const quader_editor_core::ViewportNavigationResult orbit_result =
+        quader_editor_core::viewport_orbit(input);
+    apply_runtime_transform(state_, pivot_, camera_forward_, camera_up_,
+                            orbit_result);
+    if (snap_to_orthographic && orbit_result.ok) {
+      orbit_snap_source_pose_ = pose_from_runtime_transform(
+          orbit_result.unsnapped_camera_transform, state_.distance);
+      has_orbit_snap_source_ = true;
+    } else {
+      clear_orbit_snap_source();
     }
-}
-
-void ViewportCameraController::endDrag() {
-    dragMode_ = ViewportDragMode::None;
-    clearOrbitSnapSource();
-}
-
-void ViewportCameraController::scroll(float wheelDelta) {
-    quader_editor_core::ViewportZoomInput input;
-    input.camera = makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_);
-    input.pivot = toRuntime(pivot_);
-    input.steps = wheelDelta;
-    applyRuntimeTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_zoom(input));
-}
-
-void ViewportCameraController::scrollToCursor(float wheelDelta, QVec2 localMouse) {
-    if (std::abs(wheelDelta) <= 0.000001f) {
-        return;
+    if (snap_to_orthographic && orbit_result.orthogonal_snap) {
+      state_.projection = ViewportProjection::Orthographic;
+      state_.orthographic_size = snapped_orthographic_size;
+      orthographic_view_locked_ = false;
+    } else {
+      state_.projection = ViewportProjection::Perspective;
+      orthographic_view_locked_ = false;
     }
-
-    const ViewportRay ray = rayFromViewportPoint(localMouse);
-    quader_editor_core::ViewportZoomToCursorInput input;
-    input.camera = makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_);
-    input.pivot = toRuntime(pivot_);
-    input.ray_origin = toRuntime(ray.origin);
-    input.ray_direction = toRuntime(ray.direction);
-    input.has_cursor_target = false;
-    input.steps = wheelDelta;
-    applyRuntimeTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_zoom_to_cursor(input));
+  } else if (drag_mode_ == ViewportDragMode::Pan) {
+    quader_editor_core::ViewportPanInput input;
+    input.camera =
+        make_runtime_camera(pose(), state_, viewport_width_, viewport_height_);
+    input.pivot = to_runtime(pivot_);
+    input.screen_delta = to_runtime(delta);
+    apply_runtime_transform(state_, pivot_, camera_forward_, camera_up_,
+                            quader_editor_core::viewport_pan(input));
+  } else if (drag_mode_ == ViewportDragMode::Fly) {
+    const ViewportHostDefaults defaults = viewport_host_defaults();
+    quader_editor_core::ViewportFlyLookInput input;
+    input.camera_transform = make_runtime_transform(pose());
+    input.pivot = to_runtime(pivot_);
+    input.screen_delta = to_runtime(delta);
+    input.sensitivity = defaults.fly_look_radians_per_pixel;
+    apply_runtime_transform(state_, pivot_, camera_forward_, camera_up_,
+                            quader_editor_core::viewport_fly_look(input),
+                            state_.distance);
+    state_.projection = ViewportProjection::Perspective;
+    orthographic_view_locked_ = false;
+    clear_orbit_snap_source();
+  }
 }
 
-void ViewportCameraController::focusOrigin(float distance) {
-    clearOrbitSnapSource();
-    pivot_ = {};
-    state_.target = {};
-    state_.distance = clamp(distance, kMinCameraDistance, 500.0f);
-    if (state_.projection == ViewportProjection::Orthographic) {
-        state_.orthographicSize = std::max(0.0001f, state_.distance);
-    }
+void ViewportCameraController::end_drag() {
+  drag_mode_ = ViewportDragMode::None;
+  clear_orbit_snap_source();
 }
 
-void ViewportCameraController::focusBounds(QVec3 minBounds, QVec3 maxBounds, float margin) {
-    clearOrbitSnapSource();
-    quader_editor_core::ViewportFrameBoundsInput input;
-    input.camera = makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_);
-    input.min_bounds = toRuntime(minBounds);
-    input.max_bounds = toRuntime(maxBounds);
-    input.margin = margin;
-    applyRuntimeTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_frame_bounds(input));
+void ViewportCameraController::scroll(float wheel_delta) {
+  quader_editor_core::ViewportZoomInput input;
+  input.camera =
+      make_runtime_camera(pose(), state_, viewport_width_, viewport_height_);
+  input.pivot = to_runtime(pivot_);
+  input.steps = wheel_delta;
+  apply_runtime_transform(state_, pivot_, camera_forward_, camera_up_,
+                          quader_editor_core::viewport_zoom(input));
 }
 
-void ViewportCameraController::viewAxis(ViewportViewAxis axis, int sign, ViewportAxisLock lock) {
-    clearOrbitSnapSource();
-    const quader_editor_core::ViewportCameraState camera =
-            makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_);
-    applyRuntimeTransform(state_, pivot_, cameraForward_, cameraUp_,
-            quader_editor_core::viewport_view_axis(camera, toRuntime(pivot_), toRuntime(axis), sign));
-    state_.projection = ViewportProjection::Orthographic;
-    orthographicViewLocked_ = lock == ViewportAxisLock::Locked;
+void ViewportCameraController::scroll_to_cursor(float wheel_delta,
+                                                QVec2 local_mouse) {
+  if (std::abs(wheel_delta) <= 0.000001f) {
+    return;
+  }
+
+  const ViewportRay ray = ray_from_viewport_point(local_mouse);
+  quader_editor_core::ViewportZoomToCursorInput input;
+  input.camera =
+      make_runtime_camera(pose(), state_, viewport_width_, viewport_height_);
+  input.pivot = to_runtime(pivot_);
+  input.ray_origin = to_runtime(ray.origin);
+  input.ray_direction = to_runtime(ray.direction);
+  input.has_cursor_target = false;
+  input.steps = wheel_delta;
+  apply_runtime_transform(state_, pivot_, camera_forward_, camera_up_,
+                          quader_editor_core::viewport_zoom_to_cursor(input));
 }
 
-void ViewportCameraController::unlockOrthographicView() {
-    clearOrbitSnapSource();
-    orthographicViewLocked_ = false;
-    if (state_.projection == ViewportProjection::Orthographic) {
-        state_.projection = ViewportProjection::Perspective;
-    }
+void ViewportCameraController::focus_origin(float distance) {
+  clear_orbit_snap_source();
+  pivot_ = {};
+  state_.target = {};
+  state_.distance = clamp(distance, kMinCameraDistance, 500.0f);
+  if (state_.projection == ViewportProjection::Orthographic) {
+    state_.orthographic_size = std::max(0.0001f, state_.distance);
+  }
 }
 
-void ViewportCameraController::setViewDirection(QVec3 forwardDirection) {
-    clearOrbitSnapSource();
-    const QVec3 direction = normalize(forwardDirection);
-    if (length(direction) <= 0.000001f) {
-        return;
-    }
-
-    setCameraBasis(direction, fallbackUpForForward(direction));
-    pivot_ = state_.target;
+void ViewportCameraController::focus_bounds(QVec3 min_bounds, QVec3 max_bounds,
+                                            float margin) {
+  clear_orbit_snap_source();
+  quader_editor_core::ViewportFrameBoundsInput input;
+  input.camera =
+      make_runtime_camera(pose(), state_, viewport_width_, viewport_height_);
+  input.min_bounds = to_runtime(min_bounds);
+  input.max_bounds = to_runtime(max_bounds);
+  input.margin = margin;
+  apply_runtime_transform(state_, pivot_, camera_forward_, camera_up_,
+                          quader_editor_core::viewport_frame_bounds(input));
 }
 
-void ViewportCameraController::flyMove(QVec3 localDirection, float deltaSeconds) {
-    if (length(localDirection) <= 0.000001f) {
-        return;
-    }
-
-    const float clampedDelta = clamp(deltaSeconds, 0.0f, kFlyMaxDeltaSeconds);
-    const float distance = flySpeed_ * clampedDelta;
-    if (distance <= 0.000001f) {
-        return;
-    }
-
-    quader_editor_core::ViewportFlyMoveInput input;
-    input.camera_transform = makeRuntimeTransform(pose());
-    input.pivot = toRuntime(pivot_);
-    input.local_direction = toRuntime(localDirection);
-    input.distance = distance;
-    applyRuntimeTransform(state_,
-            pivot_,
-            cameraForward_,
-            cameraUp_,
-            quader_editor_core::viewport_fly_move(input),
-            state_.distance);
+void ViewportCameraController::view_axis(ViewportViewAxis axis, int sign,
+                                         ViewportAxisLock lock) {
+  clear_orbit_snap_source();
+  const quader_editor_core::ViewportCameraState camera =
+      make_runtime_camera(pose(), state_, viewport_width_, viewport_height_);
+  apply_runtime_transform(
+      state_, pivot_, camera_forward_, camera_up_,
+      quader_editor_core::viewport_view_axis(camera, to_runtime(pivot_),
+                                             to_runtime(axis), sign));
+  state_.projection = ViewportProjection::Orthographic;
+  orthographic_view_locked_ = lock == ViewportAxisLock::Locked;
 }
 
-void ViewportCameraController::adjustFlySpeed(float wheelSteps) {
-    if (std::abs(wheelSteps) <= 0.000001f) {
-        return;
-    }
-    flySpeed_ = clamp(flySpeed_ + wheelSteps * kFlySpeedWheelStep, 1.0f, 1000.0f);
+void ViewportCameraController::unlock_orthographic_view() {
+  clear_orbit_snap_source();
+  orthographic_view_locked_ = false;
+  if (state_.projection == ViewportProjection::Orthographic) {
+    state_.projection = ViewportProjection::Perspective;
+  }
 }
 
-void ViewportCameraController::resetFlySpeed() {
-    flySpeed_ = defaultFlySpeed();
+void ViewportCameraController::set_view_direction(QVec3 forward_direction) {
+  clear_orbit_snap_source();
+  const QVec3 direction = normalize(forward_direction);
+  if (length(direction) <= 0.000001f) {
+    return;
+  }
+
+  set_camera_basis(direction, fallback_up_for_forward(direction));
+  pivot_ = state_.target;
 }
 
-bool ViewportCameraController::flySpeedIsDefault() const {
-    return std::abs(flySpeed_ - defaultFlySpeed()) <= 0.0001f;
+void ViewportCameraController::fly_move(QVec3 local_direction,
+                                        float delta_seconds) {
+  if (length(local_direction) <= 0.000001f) {
+    return;
+  }
+
+  const float clamped_delta = clamp(delta_seconds, 0.0f, kFlyMaxDeltaSeconds);
+  const float distance = fly_speed_ * clamped_delta;
+  if (distance <= 0.000001f) {
+    return;
+  }
+
+  quader_editor_core::ViewportFlyMoveInput input;
+  input.camera_transform = make_runtime_transform(pose());
+  input.pivot = to_runtime(pivot_);
+  input.local_direction = to_runtime(local_direction);
+  input.distance = distance;
+  apply_runtime_transform(state_, pivot_, camera_forward_, camera_up_,
+                          quader_editor_core::viewport_fly_move(input),
+                          state_.distance);
+}
+
+void ViewportCameraController::adjust_fly_speed(float wheel_steps) {
+  if (std::abs(wheel_steps) <= 0.000001f) {
+    return;
+  }
+  fly_speed_ =
+      clamp(fly_speed_ + wheel_steps * kFlySpeedWheelStep, 1.0f, 1000.0f);
+}
+
+void ViewportCameraController::reset_fly_speed() {
+  fly_speed_ = default_fly_speed();
+}
+
+bool ViewportCameraController::fly_speed_is_default() const {
+  return std::abs(fly_speed_ - default_fly_speed()) <= 0.0001f;
 }
 
 ViewportCameraPose ViewportCameraController::pose() const {
@@ -479,75 +506,83 @@ ViewportCameraPose ViewportCameraController::pose() const {
     return {eye, state_.target, up()};
 }
 
-ViewportRay ViewportCameraController::rayFromViewportPoint(QVec2 localMouse) const {
-    const quader_poly::Ray ray = quader_editor_core::ray_from_viewport_screen_point(
-            makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_),
-            toRuntime(localMouse));
-    return {
-            .origin = fromRuntime(ray.origin),
-            .direction = normalize(fromRuntime(ray.direction)),
-    };
+ViewportRay
+ViewportCameraController::ray_from_viewport_point(QVec2 local_mouse) const {
+  const quader_poly::Ray ray =
+      quader_editor_core::ray_from_viewport_screen_point(
+          make_runtime_camera(pose(), state_, viewport_width_,
+                              viewport_height_),
+          to_runtime(local_mouse));
+  return {
+      .origin = from_runtime(ray.origin),
+      .direction = normalize(from_runtime(ray.direction)),
+  };
 }
 
-ViewportScreenPoint ViewportCameraController::projectWorldPoint(QVec3 worldPoint) const {
-    const quader_editor_core::ViewportCameraState camera =
-            makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_);
-    quader::QVec2 screen{};
-    const bool projected = quader_editor_core::project_viewport_point(camera, toRuntime(worldPoint), screen);
-    const ViewportCameraPose cameraPose = pose();
-    const QVec3 fwd = normalize(cameraPose.target - cameraPose.eye);
-    const float depth = dot(worldPoint - cameraPose.eye, fwd);
-    return {
-            .position = {screen.x, screen.y},
-            .depth = depth,
-            .visible = projected && depth > state_.nearPlane && depth < state_.farPlane,
-    };
+ViewportScreenPoint
+ViewportCameraController::project_world_point(QVec3 world_point) const {
+  const quader_editor_core::ViewportCameraState camera =
+      make_runtime_camera(pose(), state_, viewport_width_, viewport_height_);
+  quader::QVec2 screen{};
+  const bool projected = quader_editor_core::project_viewport_point(
+      camera, to_runtime(world_point), screen);
+  const ViewportCameraPose camera_pose = pose();
+  const QVec3 fwd = normalize(camera_pose.target - camera_pose.eye);
+  const float depth = dot(world_point - camera_pose.eye, fwd);
+  return {
+      .position = {screen.x, screen.y},
+      .depth = depth,
+      .visible =
+          projected && depth > state_.near_plane && depth < state_.far_plane,
+  };
 }
 
-float ViewportCameraController::zoomedDistance(float wheelDelta) const {
-    const float zoomFactor = std::pow(kNavigationZoomStepFactor, wheelDelta);
-    return clamp(state_.distance / zoomFactor, kMinCameraDistance, 500.0f);
+float ViewportCameraController::zoomed_distance(float wheel_delta) const {
+  const float zoom_factor = std::pow(kNavigationZoomStepFactor, wheel_delta);
+  return clamp(state_.distance / zoom_factor, kMinCameraDistance, 500.0f);
 }
 
-QVec3 ViewportCameraController::forward() const {
-    return cameraForward_;
-}
+QVec3 ViewportCameraController::forward() const { return camera_forward_; }
 
 QVec3 ViewportCameraController::right() const {
-    QVec3 value = cross(cameraForward_, cameraUp_);
-    if (length(value) <= 0.000001f) {
-        value = {1.0f, 0.0f, 0.0f};
-    }
+  QVec3 value = cross(camera_forward_, camera_up_);
+  if (length(value) <= 0.000001f) {
+    value = {1.0f, 0.0f, 0.0f};
+  }
     return normalize(value);
 }
 
 QVec3 ViewportCameraController::up() const {
-    QVec3 value = normalize(cameraUp_);
-    if (length(value) <= 0.000001f) {
-        value = {0.0f, 1.0f, 0.0f};
-    }
+  QVec3 value = normalize(camera_up_);
+  if (length(value) <= 0.000001f) {
+    value = {0.0f, 1.0f, 0.0f};
+  }
     return value;
 }
 
-void ViewportCameraController::setCameraBasis(QVec3 forwardDirection, QVec3 upDirection) {
-    const CameraBasis basis = makeCameraBasis(forwardDirection, upDirection, cameraForward_);
-    cameraForward_ = basis.forward;
-    cameraUp_ = basis.up;
-    syncAnglesFromBasis();
+void ViewportCameraController::set_camera_basis(QVec3 forward_direction,
+                                                QVec3 up_direction) {
+  const CameraBasis basis =
+      make_camera_basis(forward_direction, up_direction, camera_forward_);
+  camera_forward_ = basis.forward;
+  camera_up_ = basis.up;
+  sync_angles_from_basis();
 }
 
-void ViewportCameraController::syncBasisFromAngles() {
-    setCameraBasis(forwardFromAngles(state_.yawRadians, state_.pitchRadians),
-            fallbackUpForForward(forwardFromAngles(state_.yawRadians, state_.pitchRadians)));
+void ViewportCameraController::sync_basis_from_angles() {
+  set_camera_basis(
+      forward_from_angles(state_.yaw_radians, state_.pitch_radians),
+      fallback_up_for_forward(
+          forward_from_angles(state_.yaw_radians, state_.pitch_radians)));
 }
 
-void ViewportCameraController::syncAnglesFromBasis() {
-    syncAnglesForForward(state_, cameraForward_);
+void ViewportCameraController::sync_angles_from_basis() {
+  sync_angles_for_forward(state_, camera_forward_);
 }
 
-void ViewportCameraController::clearOrbitSnapSource() {
-    orbitSnapSourcePose_ = {};
-    hasOrbitSnapSource_ = false;
+void ViewportCameraController::clear_orbit_snap_source() {
+  orbit_snap_source_pose_ = {};
+  has_orbit_snap_source_ = false;
 }
 
 } // namespace quader

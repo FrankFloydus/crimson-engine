@@ -25,31 +25,25 @@ class SceneModelingSyncService;
  */
 class ModelingMeshSyncService {
 public:
-    [[nodiscard]] static bool shouldForceRefresh(bool previewActive, bool previewFinished);
+  [[nodiscard]] static bool should_force_refresh(bool preview_active,
+                                                 bool preview_finished);
 
-    [[nodiscard]] std::optional<MeshAsset> compileObjectMesh(
-            const quader_editor_core::PolygonObject& object) const;
-    void applySceneIdentityToEntity(
-            SceneDocument& scene,
-            EntityId entity,
-            const ModelingObjectSceneIdentity& identity) const;
-    void applySceneIdentityToDuplicateEntity(
-            SceneDocument& scene,
-            EntityId entity,
-            const ModelingObjectSceneIdentity& identity) const;
-    void syncSceneObjectsFromModeling(
-            const quader_editor_core::EditorSession& session,
-            SceneDocument& scene,
-            AssetRegistry& assets,
-            SceneModelingSyncService& sceneSync,
-            bool force = false) const;
-    [[nodiscard]] ModelingCreateBoxResult createSceneObjectFromLatest(
-            const quader_editor_core::EditorSession& session,
-            SceneDocument& scene,
-            AssetRegistry& assets,
-            SceneModelingSyncService& sceneSync,
-            const std::string& name,
-            const std::string& message) const;
+  [[nodiscard]] std::optional<MeshAsset>
+  compile_object_mesh(const quader_editor_core::PolygonObject &object) const;
+  void apply_scene_identity_to_entity(
+      SceneDocument &scene, EntityId entity,
+      const ModelingObjectSceneIdentity &identity) const;
+  void apply_scene_identity_to_duplicate_entity(
+      SceneDocument &scene, EntityId entity,
+      const ModelingObjectSceneIdentity &identity) const;
+  void sync_scene_objects_from_modeling(
+      const quader_editor_core::EditorSession &session, SceneDocument &scene,
+      AssetRegistry &assets, SceneModelingSyncService &scene_sync,
+      bool force = false) const;
+  [[nodiscard]] ModelingCreateBoxResult create_scene_object_from_latest(
+      const quader_editor_core::EditorSession &session, SceneDocument &scene,
+      AssetRegistry &assets, SceneModelingSyncService &scene_sync,
+      const std::string &name, const std::string &message) const;
 };
 
 } // namespace quader

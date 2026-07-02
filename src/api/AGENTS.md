@@ -18,7 +18,7 @@ Read `../../agents/public-api-and-scripting.md` before changing this package.
   asset, UI, viewport, or platform invariants.
 - Public headers must avoid backend/internal owner headers such as UI backend, Filament, SDL, EnTT
   internals, and mutable service pointers.
-- Prefer `QuaderCommand::*`, `QuaderObjectHandle`, `QuaderSceneBatch`, and
+- Prefer `quader_command::*`, `QuaderObjectHandle`, `QuaderSceneBatch`, and
   `QuaderApiResult`/`QuaderApiVoidResult` helpers in public-facing surfaces and examples.
 - Command execution should use typed `QuaderCommand` values or canonical command IDs returned by
   `QuaderCommandsApi` helpers. Do not reintroduce legacy command aliases or registry

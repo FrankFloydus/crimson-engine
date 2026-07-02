@@ -23,13 +23,13 @@ bool nearly_equal(float left, float right, float epsilon = 0.0001F)
 void selection_clear_resets_active_state()
 {
 	quader_poly::Selection selection;
-	selection.mode = quader_poly::SelectionMode::edge;
-	selection.vertices = { 1, 2 };
+        selection.mode = quader_poly::SelectionMode::Edge;
+        selection.vertices = { 1, 2 };
 	selection.edges = { quader_poly::make_edge(4, 3) };
 	selection.faces = { 9 };
 	selection.has_active = true;
-	selection.active_kind = quader_poly::ElementKind::edge;
-	selection.active_vertex = 1;
+        selection.active_kind = quader_poly::ElementKind::Edge;
+        selection.active_vertex = 1;
 	selection.active_edge = quader_poly::make_edge(5, 6);
 	selection.active_face = 9;
 
@@ -38,10 +38,13 @@ void selection_clear_resets_active_state()
 
 	require_test(selection.empty(), "clear should remove all component selections");
 	require_test(!selection.has_active, "clear should remove active selection");
-	require_test(selection.active_kind == quader_poly::ElementKind::vertex, "clear should reset active kind to vertex");
-	require_test(selection.active_vertex == quader_poly::invalid_element_id, "clear should reset active vertex");
-	require_test(selection.active_edge == quader_poly::Edge {}, "clear should reset active edge");
-	require_test(selection.active_face == quader_poly::invalid_element_id, "clear should reset active face");
+        require_test(selection.active_kind == quader_poly::ElementKind::Vertex,
+                     "clear should reset active kind to vertex");
+        require_test(selection.active_vertex == quader_poly::kInvalidElementId,
+                     "clear should reset active vertex");
+        require_test(selection.active_edge == quader_poly::Edge {}, "clear should reset active edge");
+        require_test(selection.active_face == quader_poly::kInvalidElementId,
+                     "clear should reset active face");
 }
 
 void face_perimeter_predicates_remain_data_driven()

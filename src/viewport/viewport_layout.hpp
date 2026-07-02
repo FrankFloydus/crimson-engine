@@ -18,57 +18,65 @@ namespace quader {
 
 constexpr std::size_t kViewportPaneCount = 4u;
 
-std::size_t viewportPaneIndex(ViewportPaneId paneId);
-const std::array<ViewportLayoutOption, 8>& viewportLayoutOptions();
-std::string_view viewportLayoutStableId(ViewportLayoutId layoutId);
-std::string_view viewportLayoutLabel(ViewportLayoutId layoutId);
-std::string_view viewportPaneStableId(ViewportPaneId paneId);
-std::string_view viewportPaneLabel(ViewportPaneId paneId);
-ViewportView viewportViewForPane(ViewportPaneId paneId);
-inline std::string_view viewportViewStableId(ViewportView view) {
-    switch (view) {
-    case ViewportView::Perspective:
-        return "perspective";
-    case ViewportView::Top:
-        return "top";
-    case ViewportView::Bottom:
-        return "bottom";
-    case ViewportView::Front:
-        return "front";
-    case ViewportView::Back:
-        return "back";
-    case ViewportView::Side:
-        return "right";
-    case ViewportView::Left:
-        return "left";
-    }
+std::size_t viewport_pane_index(ViewportPaneId pane_id);
+const std::array<ViewportLayoutOption, 8> &viewport_layout_options();
+std::string_view viewport_layout_stable_id(ViewportLayoutId layout_id);
+std::string_view viewport_layout_label(ViewportLayoutId layout_id);
+std::string_view viewport_pane_stable_id(ViewportPaneId pane_id);
+std::string_view viewport_pane_label(ViewportPaneId pane_id);
+ViewportView viewport_view_for_pane(ViewportPaneId pane_id);
+inline std::string_view viewport_view_stable_id(ViewportView view) {
+  switch (view) {
+  case ViewportView::Perspective:
     return "perspective";
+  case ViewportView::Top:
+    return "top";
+  case ViewportView::Bottom:
+    return "bottom";
+  case ViewportView::Front:
+    return "front";
+  case ViewportView::Back:
+    return "back";
+  case ViewportView::Side:
+    return "right";
+  case ViewportView::Left:
+    return "left";
+  }
+  return "perspective";
 }
 
-std::optional<ViewportView> viewportViewFromStableId(std::string_view stableId);
-inline std::string_view viewportViewLabel(ViewportView view) {
-    switch (view) {
-    case ViewportView::Perspective:
-        return "Perspective";
-    case ViewportView::Top:
-        return "Top";
-    case ViewportView::Bottom:
-        return "Bottom";
-    case ViewportView::Front:
-        return "Front";
-    case ViewportView::Back:
-        return "Back";
-    case ViewportView::Side:
-        return "Right";
-    case ViewportView::Left:
-        return "Left";
-    }
+std::optional<ViewportView>
+viewport_view_from_stable_id(std::string_view stable_id);
+inline std::string_view viewport_view_label(ViewportView view) {
+  switch (view) {
+  case ViewportView::Perspective:
     return "Perspective";
+  case ViewportView::Top:
+    return "Top";
+  case ViewportView::Bottom:
+    return "Bottom";
+  case ViewportView::Front:
+    return "Front";
+  case ViewportView::Back:
+    return "Back";
+  case ViewportView::Side:
+    return "Right";
+  case ViewportView::Left:
+    return "Left";
+  }
+  return "Perspective";
 }
 
-std::vector<ViewportPanePlacement> viewportLayoutPlacements(ViewportLayoutId layoutId);
-std::vector<ViewportPanePlacement> viewportLayoutPlacements(ViewportLayoutId layoutId, const ViewportLayoutState& state);
-std::vector<ViewportSplitHandle> viewportLayoutSplitHandles(ViewportLayoutId layoutId, const ViewportLayoutState& state);
-ViewportNormalizedRect viewportAbsolutePaneRect(ViewportNormalizedRect viewportRect, ViewportNormalizedRect normalizedRect);
+std::vector<ViewportPanePlacement>
+viewport_layout_placements(ViewportLayoutId layout_id);
+std::vector<ViewportPanePlacement>
+viewport_layout_placements(ViewportLayoutId layout_id,
+                           const ViewportLayoutState &state);
+std::vector<ViewportSplitHandle>
+viewport_layout_split_handles(ViewportLayoutId layout_id,
+                              const ViewportLayoutState &state);
+ViewportNormalizedRect
+viewport_absolute_pane_rect(ViewportNormalizedRect viewport_rect,
+                            ViewportNormalizedRect normalized_rect);
 
 } // namespace quader

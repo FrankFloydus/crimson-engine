@@ -22,8 +22,9 @@ constexpr std::uint8_t kViewportSceneLayerMask = kViewportRenderedSceneLayerMask
 constexpr std::uint8_t kViewportOverlayDepthChannel = 0u;
 constexpr std::uint8_t kViewportDefaultRenderableChannel = 2u;
 
-inline std::uint8_t viewportGridLayerMask(std::size_t viewportIndex) {
-    return static_cast<std::uint8_t>(kViewportGridLayerBaseMask << viewportIndex);
+inline std::uint8_t viewport_grid_layer_mask(std::size_t viewport_index) {
+  return static_cast<std::uint8_t>(kViewportGridLayerBaseMask
+                                   << viewport_index);
 }
 
 } // namespace quader

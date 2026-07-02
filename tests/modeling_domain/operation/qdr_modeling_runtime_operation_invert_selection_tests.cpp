@@ -34,12 +34,13 @@ TEST(QdrModelingRuntimeOperationInvertSelectionTests, InvertSelectionOperationSw
 	{
 		quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 		const quader_poly::ElementId selected_vertex = session.objects().front().document.vertices.front().id;
-		session.set_component_selection(
-			session.objects().front().id,
-			qdr_test::vertex_selection({ selected_vertex }, selected_vertex),
-			quader_editor_core::SelectionMode::vertex);
+                session.set_component_selection(
+                    session.objects().front().id,
+                    qdr_test::vertex_selection({selected_vertex},
+                                               selected_vertex),
+                    quader_editor_core::SelectionMode::Vertex);
 
-		const quader_editor_core::CommandResult result = session.invert_selection();
+                const quader_editor_core::CommandResult result = session.invert_selection();
 
 		EXPECT_TRUE(result.ok);
 		EXPECT_TRUE(result.changed);

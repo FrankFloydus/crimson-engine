@@ -14,55 +14,63 @@
 namespace quader {
 
 OverlayPointMesh OverlayPointMeshBuilder::build(
-        const std::vector<const ViewportOverlayPoint*>& points,
-        const ViewportOverlayCamera& camera,
-        float sizePixels,
-        float depthBias,
-        std::uint32_t overrideColor,
-        bool useOverrideColor) {
-    OverlayPointMesh mesh;
-    mesh.vertices.reserve(points.size() * 4u);
-    mesh.indices.reserve(points.size() * 6u);
-    const OverlayCameraProjector projector(camera);
-    for (const ViewportOverlayPoint* point : points) {
-        const std::uint32_t color = useOverrideColor ? overrideColor : point->color;
-        (void)appendPointQuad(mesh, point->position, color, projector, sizePixels, depthBias);
-    }
-    return mesh;
+    const std::vector<const ViewportOverlayPoint *> &points,
+    const ViewportOverlayCamera &camera, float size_pixels, float depth_bias,
+    std::uint32_t override_color, bool use_override_color) {
+  OverlayPointMesh mesh;
+  mesh.vertices.reserve(points.size() * 4u);
+  mesh.indices.reserve(points.size() * 6u);
+  const OverlayCameraProjector projector(camera);
+  for (const ViewportOverlayPoint *point : points) {
+    const std::uint32_t color =
+        use_override_color ? override_color : point->color;
+    (void)append_point_quad(mesh, point->position, color, projector,
+                            size_pixels, depth_bias);
+  }
+  return mesh;
 }
 
-bool OverlayPointMeshBuilder::appendPointQuad(
-        OverlayPointMesh& mesh,
-        QVec3 position,
-        std::uint32_t color,
-        const OverlayCameraProjector& projector,
-        float sizePixels,
-        float depthBias) {
-    OverlayViewPoint center = projector.viewPointFor(position);
-    if (projector.nearPlaneDistance(center) < 0.0f) {
-        return false;
-    }
+bool OverlayPointMeshBuilder::append_point_quad(
+    OverlayPointMesh &mesh, QVec3 position, std::uint32_t color,
+    const OverlayCameraProjector &projector, float size_pixels,
+    float depth_bias) {
+  OverlayViewPoint center = projector.view_point_for(position);
+  if (projector.near_plane_distance(center) < 0.0f) {
+    return false;
+  }
 
-    OverlayProjectedPoint projected = projector.project(center);
-    if (!projected.valid) {
-        return false;
-    }
-    projector.applyDeviceDepthBias(projected, depthBias);
+  OverlayProjectedPoint projected = projector.project(center);
+  if (!projected.valid) {
+    return false;
+  }
+  projector.apply_device_depth_bias(projected, depth_bias);
 
-    const float halfSize = std::max(sizePixels, 1.0f) * 0.5f;
-    const std::uint32_t linearColor = rgba8SrgbToLinear(color);
-    const std::uint32_t offset = static_cast<std::uint32_t>(mesh.vertices.size());
-    mesh.vertices.push_back({projector.withPixelOffset(projected.device, {-halfSize, -halfSize}), {0.0f, 0.0f}, linearColor});
-    mesh.vertices.push_back({projector.withPixelOffset(projected.device, {halfSize, -halfSize}), {1.0f, 0.0f}, linearColor});
-    mesh.vertices.push_back({projector.withPixelOffset(projected.device, {halfSize, halfSize}), {1.0f, 1.0f}, linearColor});
-    mesh.vertices.push_back({projector.withPixelOffset(projected.device, {-halfSize, halfSize}), {0.0f, 1.0f}, linearColor});
-    mesh.indices.push_back(offset);
-    mesh.indices.push_back(offset + 1u);
-    mesh.indices.push_back(offset + 2u);
-    mesh.indices.push_back(offset);
-    mesh.indices.push_back(offset + 2u);
-    mesh.indices.push_back(offset + 3u);
-    return true;
+  const float half_size = std::max(size_pixels, 1.0f) * 0.5f;
+  const std::uint32_t linear_color = rgba8_srgb_to_linear(color);
+  const std::uint32_t offset = static_cast<std::uint32_t>(mesh.vertices.size());
+  mesh.vertices.push_back(
+      {projector.with_pixel_offset(projected.device, {-half_size, -half_size}),
+       {0.0f, 0.0f},
+       linear_color});
+  mesh.vertices.push_back(
+      {projector.with_pixel_offset(projected.device, {half_size, -half_size}),
+       {1.0f, 0.0f},
+       linear_color});
+  mesh.vertices.push_back(
+      {projector.with_pixel_offset(projected.device, {half_size, half_size}),
+       {1.0f, 1.0f},
+       linear_color});
+  mesh.vertices.push_back(
+      {projector.with_pixel_offset(projected.device, {-half_size, half_size}),
+       {0.0f, 1.0f},
+       linear_color});
+  mesh.indices.push_back(offset);
+  mesh.indices.push_back(offset + 1u);
+  mesh.indices.push_back(offset + 2u);
+  mesh.indices.push_back(offset);
+  mesh.indices.push_back(offset + 2u);
+  mesh.indices.push_back(offset + 3u);
+  return true;
 }
 
 } // namespace quader

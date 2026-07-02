@@ -42,15 +42,15 @@ HostOptionDescriptor host_option(const quader_editor_core::EditorOperationOption
 	option.visible = schema.visible;
 	option.hard_limits = schema.hard_limits;
 	switch (schema.value_kind) {
-	case quader_editor_core::EditorOperationOptionValueKind::integer:
-		option.value_kind = HostOptionValueKind::integer;
-		break;
-	case quader_editor_core::EditorOperationOptionValueKind::floating:
-		option.value_kind = HostOptionValueKind::floating;
-		break;
-	case quader_editor_core::EditorOperationOptionValueKind::boolean:
-		option.value_kind = HostOptionValueKind::boolean;
-		break;
+        case quader_editor_core::EditorOperationOptionValueKind::Integer:
+          option.value_kind = HostOptionValueKind::Integer;
+          break;
+        case quader_editor_core::EditorOperationOptionValueKind::Floating:
+          option.value_kind = HostOptionValueKind::Floating;
+          break;
+        case quader_editor_core::EditorOperationOptionValueKind::Boolean:
+          option.value_kind = HostOptionValueKind::Boolean;
+          break;
 	}
 	return option;
 }
@@ -85,13 +85,14 @@ std::vector<HostOperationOptions> build_operation_options()
 
 std::span<const HostOptionDescriptor> options_for_operation(std::string_view id)
 {
-	static const std::vector<HostOperationOptions> groups = build_operation_options();
-	for (const HostOperationOptions& group : groups) {
-		if (group.operation_id == id) {
-			return {group.options.data(), group.options.size()};
-		}
-	}
-	return {};
+  static const std::vector<HostOperationOptions> kGroups =
+      build_operation_options();
+  for (const HostOperationOptions &group : kGroups) {
+    if (group.operation_id == id) {
+      return {group.options.data(), group.options.size()};
+    }
+  }
+        return {};
 }
 
 std::vector<HostOperationDescriptor> build_operation_catalog()
@@ -133,24 +134,16 @@ HostActionAvailabilityDescriptor action_availability(
 	};
 }
 
-HostActionDescriptor operation_action(
-		std::string_view id,
-		std::string_view label,
-		std::string_view operation_id,
-		HostActionAvailabilityDescriptor availability,
-		HostPreviewKind preview_kind = HostPreviewKind::none,
-		bool show_in_operations_panel = true)
-{
-	return {
-		id,
-		label,
-		HostActionKind::operation,
-		operation_id,
-		{},
-		preview_kind,
-		show_in_operations_panel,
-		availability,
-	};
+HostActionDescriptor
+operation_action(std::string_view id, std::string_view label,
+                 std::string_view operation_id,
+                 HostActionAvailabilityDescriptor availability,
+                 HostPreviewKind preview_kind = HostPreviewKind::None,
+                 bool show_in_operations_panel = true) {
+  return {
+      id, label,        HostActionKind::Operation, operation_id,
+      {}, preview_kind, show_in_operations_panel,  availability,
+  };
 }
 
 HostActionDescriptor tool_action(
@@ -160,196 +153,293 @@ HostActionDescriptor tool_action(
 		HostActionAvailabilityDescriptor availability,
 		bool show_in_operations_panel = false)
 {
-	return {
-		id,
-		label,
-		HostActionKind::tool,
-		{},
-		tool_id,
-		HostPreviewKind::none,
-		show_in_operations_panel,
-		availability,
-	};
+  return {
+      id,
+      label,
+      HostActionKind::Tool,
+      {},
+      tool_id,
+      HostPreviewKind::None,
+      show_in_operations_panel,
+      availability,
+  };
 }
 
 std::span<const HostActionDescriptor> action_descriptors()
 {
-	static const std::array<HostActionDescriptor, 42> descriptors {{
-		operation_action("invert_mesh", "Flip Mesh Normals", "flip_face_normals",
-			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false, 0, 0, 1)),
-		operation_action("shade_smooth_mesh", "Shade Smooth", "shade_faces_smooth",
-			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false, 0, 0, 1)),
-		operation_action("shade_flat_mesh", "Shade Flat", "shade_faces_flat",
-			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false, 0, 0, 1)),
-		operation_action("combine_mesh", "Combine Mesh", "combine_meshes",
-			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false, 0, 0, 2)),
-		operation_action("create_outer_hull", "Create Outer Hull", "thicken",
-			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false, 0, 0, 1), HostPreviewKind::thicken),
-		operation_action("snap_vertices_to_active", "Snap to Vertex", "snap_vertices_to_active",
-			action_availability(HostSelectionMode::vertex, 2, 0, HostActiveSelectionKind::vertex, false)),
-		operation_action("merge_vertices", "Merge", "merge_vertices_to_active",
-			action_availability(HostSelectionMode::vertex, 2, 0, HostActiveSelectionKind::vertex, false)),
-		operation_action("merge_vertices_at_center", "Merge at Center", "merge_vertices_to_center",
-			action_availability(HostSelectionMode::vertex, 2, 0, HostActiveSelectionKind::vertex, false)),
-		operation_action("merge_by_distance", "Merge by Distance", "merge_by_distance",
-			action_availability(HostSelectionMode::vertex, 2, 0, HostActiveSelectionKind::none, false), HostPreviewKind::merge_by_distance),
-		operation_action("bevel_vertices", "Bevel Vertex", "bevel_vertices",
-			action_availability(HostSelectionMode::vertex, 1, 0, HostActiveSelectionKind::none, false)),
-		operation_action("connect_vertices", "Connect", "connect_vertices",
-			action_availability(HostSelectionMode::vertex, 2, 0, HostActiveSelectionKind::none, true)),
-		operation_action("dissolve_vertices", "Dissolve Vertex", "dissolve_vertices",
-			action_availability(HostSelectionMode::vertex, 1, 0, HostActiveSelectionKind::none, false)),
-		operation_action("radial_align_vertices", "Radial Align", "radial_align",
-			action_availability(HostSelectionMode::vertex, 3, 0, HostActiveSelectionKind::none, false)),
-		operation_action("snap_edges_to_active", "Snap to Edge", "snap_edges_to_active",
-			action_availability(HostSelectionMode::edge, 0, 2, HostActiveSelectionKind::edge, false)),
-		operation_action("connect_edges", "Connect Edges", "connect_edges",
-			action_availability(HostSelectionMode::edge, 0, 2, HostActiveSelectionKind::none, true)),
-		operation_action("split_edges", "Edge Split", "split_edges",
-			action_availability(HostSelectionMode::edge, 0, 1, HostActiveSelectionKind::none, false)),
-		operation_action("harden_edge_normals", "Hard Normal", "harden_edge_normals",
-			action_availability(HostSelectionMode::edge, 0, 1, HostActiveSelectionKind::none, false)),
-		operation_action("soften_edge_normals", "Soft Normal", "soften_edge_normals",
-			action_availability(HostSelectionMode::edge, 0, 1, HostActiveSelectionKind::none, false)),
-		tool_action("insert_edge_loop_tool", "Insert Edge Loop", "insert_edge_loop",
-			action_availability(HostSelectionMode::edge, 0, 0, HostActiveSelectionKind::none, false)),
-		tool_action("knife_tool", "Knife", "knife",
-			action_availability(HostSelectionMode::edge, 0, 0, HostActiveSelectionKind::none, false)),
-		tool_action("cut_tool", "Cut", "cut",
-			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false)),
-		tool_action("mirror_tool", "Mirror", "mirror",
-			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false, 0, 0, 1)),
-		tool_action("poly_tool", "Poly", "poly",
-			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false)),
-		operation_action("apply_active_material", "Apply Active Material", "assign_material",
-			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, false, 0, 1),
-			HostPreviewKind::none,
-			false),
-		operation_action("bevel_edges", "Bevel Edges", "edge_bevel",
-			action_availability(HostSelectionMode::edge, 0, 1, HostActiveSelectionKind::none, false), HostPreviewKind::edge_bevel),
-		operation_action("bridge_edges", "Bridge", "bridge",
-			action_availability(HostSelectionMode::edge, 0, 2, HostActiveSelectionKind::none, false)),
-		operation_action("interpolated_bridge_edges", "Interpolated Bridge", "bridge",
-			action_availability(HostSelectionMode::edge, 0, 2, HostActiveSelectionKind::none, false), HostPreviewKind::bridge),
-		operation_action("dissolve_edges", "Dissolve", "dissolve_edges",
-			action_availability(HostSelectionMode::edge, 0, 1, HostActiveSelectionKind::none, true)),
-		operation_action("merge_edges", "Merge Edges", "merge_edges",
-			action_availability(HostSelectionMode::edge, 0, 2, HostActiveSelectionKind::none, true)),
-		operation_action("collapse_edges", "Collapse", "collapse_edges",
-			action_availability(HostSelectionMode::edge, 0, 1, HostActiveSelectionKind::none, true)),
-		operation_action("fill_hole", "Fill Hole", "fill_hole",
-			action_availability(HostSelectionMode::edge, 0, 3, HostActiveSelectionKind::none, true)),
-		operation_action("radial_align_edges", "Radial Align", "radial_align",
-			action_availability(HostSelectionMode::edge, 0, 2, HostActiveSelectionKind::none, false)),
-		operation_action("bridge_faces", "Bridge Faces", "bridge",
-			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, false, 0, 2)),
-		operation_action("interpolated_bridge_faces", "Interpolated Bridge", "bridge",
-			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, false, 0, 2), HostPreviewKind::bridge),
-		operation_action("invert_faces", "Invert Face", "flip_face_normals",
-			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, false, 0, 1)),
-		operation_action("combine_faces", "Combine Faces", "combine_faces",
-			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, true, 0, 2)),
-		operation_action("collapse_faces", "Collapse Faces", "collapse_faces",
-			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, false, 0, 1)),
-		operation_action("radial_align_faces", "Radial Align", "radial_align",
-			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, false, 0, 1)),
-		operation_action("slice_quad", "Slice Quad", "slice_quad",
-			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, false, 0, 1), HostPreviewKind::slice_quad),
-		operation_action("thicken_faces", "Thicken Faces", "thicken",
-			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, false, 0, 1), HostPreviewKind::thicken),
-		operation_action("extract_faces", "Extract Faces", "extract_faces",
-			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, true, 0, 1)),
-		operation_action("detach_faces", "Detach Faces", "detach_faces",
-			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, false, 0, 1)),
-	}};
-	return descriptors;
+  static const std::array<HostActionDescriptor, 42> kDescriptors{{
+      operation_action("invert_mesh", "Flip Mesh Normals", "flip_face_normals",
+                       action_availability(HostSelectionMode::Object, 0, 0,
+                                           HostActiveSelectionKind::None, false,
+                                           0, 0, 1)),
+      operation_action(
+          "shade_smooth_mesh", "Shade Smooth", "shade_faces_smooth",
+          action_availability(HostSelectionMode::Object, 0, 0,
+                              HostActiveSelectionKind::None, false, 0, 0, 1)),
+      operation_action("shade_flat_mesh", "Shade Flat", "shade_faces_flat",
+                       action_availability(HostSelectionMode::Object, 0, 0,
+                                           HostActiveSelectionKind::None, false,
+                                           0, 0, 1)),
+      operation_action("combine_mesh", "Combine Mesh", "combine_meshes",
+                       action_availability(HostSelectionMode::Object, 0, 0,
+                                           HostActiveSelectionKind::None, false,
+                                           0, 0, 2)),
+      operation_action("create_outer_hull", "Create Outer Hull", "thicken",
+                       action_availability(HostSelectionMode::Object, 0, 0,
+                                           HostActiveSelectionKind::None, false,
+                                           0, 0, 1),
+                       HostPreviewKind::Thicken),
+      operation_action("snap_vertices_to_active", "Snap to Vertex",
+                       "snap_vertices_to_active",
+                       action_availability(HostSelectionMode::Vertex, 2, 0,
+                                           HostActiveSelectionKind::Vertex,
+                                           false)),
+      operation_action("merge_vertices", "Merge", "merge_vertices_to_active",
+                       action_availability(HostSelectionMode::Vertex, 2, 0,
+                                           HostActiveSelectionKind::Vertex,
+                                           false)),
+      operation_action("merge_vertices_at_center", "Merge at Center",
+                       "merge_vertices_to_center",
+                       action_availability(HostSelectionMode::Vertex, 2, 0,
+                                           HostActiveSelectionKind::Vertex,
+                                           false)),
+      operation_action(
+          "merge_by_distance", "Merge by Distance", "merge_by_distance",
+          action_availability(HostSelectionMode::Vertex, 2, 0,
+                              HostActiveSelectionKind::None, false),
+          HostPreviewKind::MergeByDistance),
+      operation_action("bevel_vertices", "Bevel Vertex", "bevel_vertices",
+                       action_availability(HostSelectionMode::Vertex, 1, 0,
+                                           HostActiveSelectionKind::None,
+                                           false)),
+      operation_action("connect_vertices", "Connect", "connect_vertices",
+                       action_availability(HostSelectionMode::Vertex, 2, 0,
+                                           HostActiveSelectionKind::None,
+                                           true)),
+      operation_action(
+          "dissolve_vertices", "Dissolve Vertex", "dissolve_vertices",
+          action_availability(HostSelectionMode::Vertex, 1, 0,
+                              HostActiveSelectionKind::None, false)),
+      operation_action("radial_align_vertices", "Radial Align", "radial_align",
+                       action_availability(HostSelectionMode::Vertex, 3, 0,
+                                           HostActiveSelectionKind::None,
+                                           false)),
+      operation_action(
+          "snap_edges_to_active", "Snap to Edge", "snap_edges_to_active",
+          action_availability(HostSelectionMode::Edge, 0, 2,
+                              HostActiveSelectionKind::Edge, false)),
+      operation_action("connect_edges", "Connect Edges", "connect_edges",
+                       action_availability(HostSelectionMode::Edge, 0, 2,
+                                           HostActiveSelectionKind::None,
+                                           true)),
+      operation_action("split_edges", "Edge Split", "split_edges",
+                       action_availability(HostSelectionMode::Edge, 0, 1,
+                                           HostActiveSelectionKind::None,
+                                           false)),
+      operation_action(
+          "harden_edge_normals", "Hard Normal", "harden_edge_normals",
+          action_availability(HostSelectionMode::Edge, 0, 1,
+                              HostActiveSelectionKind::None, false)),
+      operation_action(
+          "soften_edge_normals", "Soft Normal", "soften_edge_normals",
+          action_availability(HostSelectionMode::Edge, 0, 1,
+                              HostActiveSelectionKind::None, false)),
+      tool_action("insert_edge_loop_tool", "Insert Edge Loop",
+                  "insert_edge_loop",
+                  action_availability(HostSelectionMode::Edge, 0, 0,
+                                      HostActiveSelectionKind::None, false)),
+      tool_action("knife_tool", "Knife", "knife",
+                  action_availability(HostSelectionMode::Edge, 0, 0,
+                                      HostActiveSelectionKind::None, false)),
+      tool_action("cut_tool", "Cut", "cut",
+                  action_availability(HostSelectionMode::Object, 0, 0,
+                                      HostActiveSelectionKind::None, false)),
+      tool_action("mirror_tool", "Mirror", "mirror",
+                  action_availability(HostSelectionMode::Object, 0, 0,
+                                      HostActiveSelectionKind::None, false, 0,
+                                      0, 1)),
+      tool_action("poly_tool", "Poly", "poly",
+                  action_availability(HostSelectionMode::Object, 0, 0,
+                                      HostActiveSelectionKind::None, false)),
+      operation_action(
+          "apply_active_material", "Apply Active Material", "assign_material",
+          action_availability(HostSelectionMode::Face, 0, 0,
+                              HostActiveSelectionKind::None, false, 0, 1),
+          HostPreviewKind::None, false),
+      operation_action("bevel_edges", "Bevel Edges", "edge_bevel",
+                       action_availability(HostSelectionMode::Edge, 0, 1,
+                                           HostActiveSelectionKind::None,
+                                           false),
+                       HostPreviewKind::EdgeBevel),
+      operation_action("bridge_edges", "Bridge", "bridge",
+                       action_availability(HostSelectionMode::Edge, 0, 2,
+                                           HostActiveSelectionKind::None,
+                                           false)),
+      operation_action(
+          "interpolated_bridge_edges", "Interpolated Bridge", "bridge",
+          action_availability(HostSelectionMode::Edge, 0, 2,
+                              HostActiveSelectionKind::None, false),
+          HostPreviewKind::Bridge),
+      operation_action("dissolve_edges", "Dissolve", "dissolve_edges",
+                       action_availability(HostSelectionMode::Edge, 0, 1,
+                                           HostActiveSelectionKind::None,
+                                           true)),
+      operation_action("merge_edges", "Merge Edges", "merge_edges",
+                       action_availability(HostSelectionMode::Edge, 0, 2,
+                                           HostActiveSelectionKind::None,
+                                           true)),
+      operation_action("collapse_edges", "Collapse", "collapse_edges",
+                       action_availability(HostSelectionMode::Edge, 0, 1,
+                                           HostActiveSelectionKind::None,
+                                           true)),
+      operation_action("fill_hole", "Fill Hole", "fill_hole",
+                       action_availability(HostSelectionMode::Edge, 0, 3,
+                                           HostActiveSelectionKind::None,
+                                           true)),
+      operation_action("radial_align_edges", "Radial Align", "radial_align",
+                       action_availability(HostSelectionMode::Edge, 0, 2,
+                                           HostActiveSelectionKind::None,
+                                           false)),
+      operation_action("bridge_faces", "Bridge Faces", "bridge",
+                       action_availability(HostSelectionMode::Face, 0, 0,
+                                           HostActiveSelectionKind::None, false,
+                                           0, 2)),
+      operation_action(
+          "interpolated_bridge_faces", "Interpolated Bridge", "bridge",
+          action_availability(HostSelectionMode::Face, 0, 0,
+                              HostActiveSelectionKind::None, false, 0, 2),
+          HostPreviewKind::Bridge),
+      operation_action("invert_faces", "Invert Face", "flip_face_normals",
+                       action_availability(HostSelectionMode::Face, 0, 0,
+                                           HostActiveSelectionKind::None, false,
+                                           0, 1)),
+      operation_action("combine_faces", "Combine Faces", "combine_faces",
+                       action_availability(HostSelectionMode::Face, 0, 0,
+                                           HostActiveSelectionKind::None, true,
+                                           0, 2)),
+      operation_action("collapse_faces", "Collapse Faces", "collapse_faces",
+                       action_availability(HostSelectionMode::Face, 0, 0,
+                                           HostActiveSelectionKind::None, false,
+                                           0, 1)),
+      operation_action("radial_align_faces", "Radial Align", "radial_align",
+                       action_availability(HostSelectionMode::Face, 0, 0,
+                                           HostActiveSelectionKind::None, false,
+                                           0, 1)),
+      operation_action("slice_quad", "Slice Quad", "slice_quad",
+                       action_availability(HostSelectionMode::Face, 0, 0,
+                                           HostActiveSelectionKind::None, false,
+                                           0, 1),
+                       HostPreviewKind::SliceQuad),
+      operation_action("thicken_faces", "Thicken Faces", "thicken",
+                       action_availability(HostSelectionMode::Face, 0, 0,
+                                           HostActiveSelectionKind::None, false,
+                                           0, 1),
+                       HostPreviewKind::Thicken),
+      operation_action("extract_faces", "Extract Faces", "extract_faces",
+                       action_availability(HostSelectionMode::Face, 0, 0,
+                                           HostActiveSelectionKind::None, true,
+                                           0, 1)),
+      operation_action("detach_faces", "Detach Faces", "detach_faces",
+                       action_availability(HostSelectionMode::Face, 0, 0,
+                                           HostActiveSelectionKind::None, false,
+                                           0, 1)),
+  }};
+  return kDescriptors;
 }
 
 std::span<const HostOperationPanelDescriptor> operation_panel_descriptors()
 {
-	static constexpr std::array<std::string_view, 5> object_actions {{
-		"invert_mesh",
-		"shade_smooth_mesh",
-		"shade_flat_mesh",
-		"combine_mesh",
-		"create_outer_hull",
-	}};
-	static constexpr std::array<std::string_view, 8> vertex_actions {{
-		"snap_vertices_to_active",
-		"merge_vertices",
-		"merge_vertices_at_center",
-		"merge_by_distance",
-		"bevel_vertices",
-		"connect_vertices",
-		"dissolve_vertices",
-		"radial_align_vertices",
-	}};
-	static constexpr std::array<std::string_view, 13> edge_actions {{
-		"snap_edges_to_active",
-		"connect_edges",
-		"split_edges",
-		"harden_edge_normals",
-		"soften_edge_normals",
-		"bevel_edges",
-		"bridge_edges",
-		"interpolated_bridge_edges",
-		"dissolve_edges",
-		"merge_edges",
-		"collapse_edges",
-		"fill_hole",
-		"radial_align_edges",
-	}};
-	static constexpr std::array<std::string_view, 10> face_actions {{
-		"bridge_faces",
-		"interpolated_bridge_faces",
-		"invert_faces",
-		"combine_faces",
-		"collapse_faces",
-		"radial_align_faces",
-		"slice_quad",
-		"thicken_faces",
-		"extract_faces",
-		"detach_faces",
-	}};
-	static constexpr std::array<HostOperationPanelDescriptor, 4> descriptors {{
-		{ "object_operations", "Object Operations", HostSelectionMode::object, object_actions, true },
-		{ "vertex_operations", "Vertex Operations", HostSelectionMode::vertex, vertex_actions, false },
-		{ "edge_operations", "Edge Operations", HostSelectionMode::edge, edge_actions, false },
-		{ "face_operations", "Face Operations", HostSelectionMode::face, face_actions, false },
-	}};
-	return descriptors;
+  static constexpr std::array<std::string_view, 5> kObjectActions{{
+      "invert_mesh",
+      "shade_smooth_mesh",
+      "shade_flat_mesh",
+      "combine_mesh",
+      "create_outer_hull",
+  }};
+  static constexpr std::array<std::string_view, 8> kVertexActions{{
+      "snap_vertices_to_active",
+      "merge_vertices",
+      "merge_vertices_at_center",
+      "merge_by_distance",
+      "bevel_vertices",
+      "connect_vertices",
+      "dissolve_vertices",
+      "radial_align_vertices",
+  }};
+  static constexpr std::array<std::string_view, 13> kEdgeActions{{
+      "snap_edges_to_active",
+      "connect_edges",
+      "split_edges",
+      "harden_edge_normals",
+      "soften_edge_normals",
+      "bevel_edges",
+      "bridge_edges",
+      "interpolated_bridge_edges",
+      "dissolve_edges",
+      "merge_edges",
+      "collapse_edges",
+      "fill_hole",
+      "radial_align_edges",
+  }};
+  static constexpr std::array<std::string_view, 10> kFaceActions{{
+      "bridge_faces",
+      "interpolated_bridge_faces",
+      "invert_faces",
+      "combine_faces",
+      "collapse_faces",
+      "radial_align_faces",
+      "slice_quad",
+      "thicken_faces",
+      "extract_faces",
+      "detach_faces",
+  }};
+  static constexpr std::array<HostOperationPanelDescriptor, 4> kDescriptors{{
+      {"object_operations", "Object Operations", HostSelectionMode::Object,
+       kObjectActions, true},
+      {"vertex_operations", "Vertex Operations", HostSelectionMode::Vertex,
+       kVertexActions, false},
+      {"edge_operations", "Edge Operations", HostSelectionMode::Edge,
+       kEdgeActions, false},
+      {"face_operations", "Face Operations", HostSelectionMode::Face,
+       kFaceActions, false},
+  }};
+  return kDescriptors;
 }
 
 std::span<const HostUiSurfaceDescriptor> ui_surface_descriptors()
 {
-	static constexpr std::array<HostUiSurfaceDescriptor, 4> descriptors {{
-		{ "main_menu", "Main Menu", HostUiSurfaceKind::menu, false, false },
-		{ "operations_top_bar", "Operations Top Bar", HostUiSurfaceKind::toolbar, false, true },
-		{ "viewport_tool_toolbar", "Viewport Tool Toolbar", HostUiSurfaceKind::toolbar, true, false },
-		{ "tool_settings_panel", "Tool Settings Panel", HostUiSurfaceKind::panel, true, false },
-	}};
-	return descriptors;
+  static constexpr std::array<HostUiSurfaceDescriptor, 4> kDescriptors{{
+      {"main_menu", "Main Menu", HostUiSurfaceKind::Menu, false, false},
+      {"operations_top_bar", "Operations Top Bar", HostUiSurfaceKind::Toolbar,
+       false, true},
+      {"viewport_tool_toolbar", "Viewport Tool Toolbar",
+       HostUiSurfaceKind::Toolbar, true, false},
+      {"tool_settings_panel", "Tool Settings Panel", HostUiSurfaceKind::Panel,
+       true, false},
+  }};
+  return kDescriptors;
 }
 
 std::span<const HostUiGroupDescriptor> ui_group_descriptors()
 {
-	static constexpr std::array<HostUiGroupDescriptor, 8> descriptors {{
-		{ "editor", "Editor" },
-		{ "file", "File" },
-		{ "viewport_layout", "Viewport Layout" },
-		{ "panels", "Panels" },
-		{ "selection_operations", "Selection Operations" },
-		{ "transform_tools", "Transform Tools" },
-		{ "modal_modeling_tools", "Modal Modeling Tools" },
-		{ "operation_settings", "Operation Settings" },
-	}};
-	return descriptors;
+  static constexpr std::array<HostUiGroupDescriptor, 8> kDescriptors{{
+      {"editor", "Editor"},
+      {"file", "File"},
+      {"viewport_layout", "Viewport Layout"},
+      {"panels", "Panels"},
+      {"selection_operations", "Selection Operations"},
+      {"transform_tools", "Transform Tools"},
+      {"modal_modeling_tools", "Modal Modeling Tools"},
+      {"operation_settings", "Operation Settings"},
+  }};
+  return kDescriptors;
 }
 
 std::string_view label_for_viewport_tool(std::string_view tool_id)
 {
-	const quader::ToolDescriptor *tool = quader::findViewportToolDescriptor(tool_id);
-	return tool != nullptr ? tool->label : tool_id;
+  const quader::ToolDescriptor *tool =
+      quader::find_viewport_tool_descriptor(tool_id);
+  return tool != nullptr ? tool->label : tool_id;
 }
 
 HostUiPlacementDescriptor viewport_tool_placement(
@@ -358,138 +448,217 @@ HostUiPlacementDescriptor viewport_tool_placement(
 		std::string_view tool_id,
 		std::uint32_t order)
 {
-	return {
-		id,
-		"viewport_tool_toolbar",
-		group_id,
-		label_for_viewport_tool(tool_id),
-		HostUiPlacementTargetKind::tool,
-		tool_id,
-		order,
-		false,
-	};
+  return {
+      id,
+      "viewport_tool_toolbar",
+      group_id,
+      label_for_viewport_tool(tool_id),
+      HostUiPlacementTargetKind::Tool,
+      tool_id,
+      order,
+      false,
+  };
 }
 
 std::span<const HostUiPlacementDescriptor> ui_placement_descriptors()
 {
-	static const std::array<HostUiPlacementDescriptor, 31> descriptors {{
-		{ "menu_open_editor", "main_menu", "editor", "Open Editor", HostUiPlacementTargetKind::editor_action, "open_editor", 0, false },
-		{ "menu_new_document", "main_menu", "file", "New Document", HostUiPlacementTargetKind::editor_action, "new_document", 100, false },
-		{ "menu_open_document", "main_menu", "file", "Open...", HostUiPlacementTargetKind::editor_action, "open_document", 110, false },
-		{ "menu_save_document", "main_menu", "file", "Save", HostUiPlacementTargetKind::editor_action, "save_document", 120, false },
-		{ "menu_save_as_document", "main_menu", "file", "Save As...", HostUiPlacementTargetKind::editor_action, "save_as_document", 130, false },
-		{ "menu_layout_single_view", "main_menu", "viewport_layout", "Single View", HostUiPlacementTargetKind::viewport_action, "layout_single_view", 200, false },
-		{ "menu_layout_two_view_horizontal", "main_menu", "viewport_layout", "Two-View Horizontal", HostUiPlacementTargetKind::viewport_action, "layout_two_view_horizontal", 210, false },
-		{ "menu_layout_two_view_vertical", "main_menu", "viewport_layout", "Two-View Vertical", HostUiPlacementTargetKind::viewport_action, "layout_two_view_vertical", 220, false },
-		{ "menu_layout_three_view_primary_left", "main_menu", "viewport_layout", "Three-View Primary Left", HostUiPlacementTargetKind::viewport_action, "layout_three_view_primary_left", 230, false },
-		{ "menu_layout_three_view_primary_right", "main_menu", "viewport_layout", "Three-View Primary Right", HostUiPlacementTargetKind::viewport_action, "layout_three_view_primary_right", 240, false },
-		{ "menu_layout_three_view_primary_top", "main_menu", "viewport_layout", "Three-View Primary Top", HostUiPlacementTargetKind::viewport_action, "layout_three_view_primary_top", 250, false },
-		{ "menu_layout_three_view_primary_bottom", "main_menu", "viewport_layout", "Three-View Primary Bottom", HostUiPlacementTargetKind::viewport_action, "layout_three_view_primary_bottom", 260, false },
-		{ "menu_layout_four_view_quad", "main_menu", "viewport_layout", "Four-View Quad", HostUiPlacementTargetKind::viewport_action, "layout_four_view_quad", 270, false },
-		{ "menu_viewport_settings_panel", "main_menu", "panels", "Viewport Settings", HostUiPlacementTargetKind::panel, "viewport_settings", 300, false },
-		{ "operations_object_panel", "operations_top_bar", "selection_operations", "Object Operations", HostUiPlacementTargetKind::panel, "object_operations", 0, false },
-		{ "operations_vertex_panel", "operations_top_bar", "selection_operations", "Vertex Operations", HostUiPlacementTargetKind::panel, "vertex_operations", 10, false },
-		{ "operations_edge_panel", "operations_top_bar", "selection_operations", "Edge Operations", HostUiPlacementTargetKind::panel, "edge_operations", 20, false },
-		{ "operations_face_panel", "operations_top_bar", "selection_operations", "Face Operations", HostUiPlacementTargetKind::panel, "face_operations", 30, false },
-		viewport_tool_placement("toolbar_move_tool", "transform_tools", "move", 0),
-		viewport_tool_placement("toolbar_rotate_tool", "transform_tools", "rotate", 10),
-		viewport_tool_placement("toolbar_scale_tool", "transform_tools", "scale", 20),
-		viewport_tool_placement("toolbar_knife_tool", "modal_modeling_tools", "knife", 30),
-		viewport_tool_placement("toolbar_cut_tool", "modal_modeling_tools", "cut", 40),
-		viewport_tool_placement("toolbar_mirror_tool", "modal_modeling_tools", "mirror", 50),
-		viewport_tool_placement("toolbar_poly_tool", "modal_modeling_tools", "poly", 60),
-		{ "settings_interpolated_bridge", "tool_settings_panel", "operation_settings", "Interpolated Bridge", HostUiPlacementTargetKind::preference_group, "operation.bridge", 0, false, HostUiVisibilityCondition::bridge_preview_active },
-		{ "settings_edge_bevel", "tool_settings_panel", "operation_settings", "Bevel Edges", HostUiPlacementTargetKind::preference_group, "operation.edge_bevel", 10, false, HostUiVisibilityCondition::edge_bevel_preview_active },
-		{ "settings_thicken", "tool_settings_panel", "operation_settings", "Thicken", HostUiPlacementTargetKind::preference_group, "operation.thicken", 20, false, HostUiVisibilityCondition::thicken_preview_active },
-		{ "settings_slice_quad", "tool_settings_panel", "operation_settings", "Slice Quad", HostUiPlacementTargetKind::preference_group, "operation.slice_quad", 30, false, HostUiVisibilityCondition::slice_quad_preview_active },
-		{ "settings_merge_by_distance", "tool_settings_panel", "operation_settings", "Merge by Distance", HostUiPlacementTargetKind::preference_group, "operation.merge_by_distance", 40, false, HostUiVisibilityCondition::merge_by_distance_preview_active },
-		{ "settings_cut_keep_mode", "tool_settings_panel", "operation_settings", "Keep Mode", HostUiPlacementTargetKind::preference_group, "operation.cut", 50, false, HostUiVisibilityCondition::cut_tool_active },
-	}};
-	return descriptors;
+  static const std::array<HostUiPlacementDescriptor, 31> kDescriptors{{
+      {"menu_open_editor", "main_menu", "editor", "Open Editor",
+       HostUiPlacementTargetKind::EditorAction, "open_editor", 0, false},
+      {"menu_new_document", "main_menu", "file", "New Document",
+       HostUiPlacementTargetKind::EditorAction, "new_document", 100, false},
+      {"menu_open_document", "main_menu", "file", "Open...",
+       HostUiPlacementTargetKind::EditorAction, "open_document", 110, false},
+      {"menu_save_document", "main_menu", "file", "Save",
+       HostUiPlacementTargetKind::EditorAction, "save_document", 120, false},
+      {"menu_save_as_document", "main_menu", "file", "Save As...",
+       HostUiPlacementTargetKind::EditorAction, "save_as_document", 130, false},
+      {"menu_layout_single_view", "main_menu", "viewport_layout", "Single View",
+       HostUiPlacementTargetKind::ViewportAction, "layout_single_view", 200,
+       false},
+      {"menu_layout_two_view_horizontal", "main_menu", "viewport_layout",
+       "Two-View Horizontal", HostUiPlacementTargetKind::ViewportAction,
+       "layout_two_view_horizontal", 210, false},
+      {"menu_layout_two_view_vertical", "main_menu", "viewport_layout",
+       "Two-View Vertical", HostUiPlacementTargetKind::ViewportAction,
+       "layout_two_view_vertical", 220, false},
+      {"menu_layout_three_view_primary_left", "main_menu", "viewport_layout",
+       "Three-View Primary Left", HostUiPlacementTargetKind::ViewportAction,
+       "layout_three_view_primary_left", 230, false},
+      {"menu_layout_three_view_primary_right", "main_menu", "viewport_layout",
+       "Three-View Primary Right", HostUiPlacementTargetKind::ViewportAction,
+       "layout_three_view_primary_right", 240, false},
+      {"menu_layout_three_view_primary_top", "main_menu", "viewport_layout",
+       "Three-View Primary Top", HostUiPlacementTargetKind::ViewportAction,
+       "layout_three_view_primary_top", 250, false},
+      {"menu_layout_three_view_primary_bottom", "main_menu", "viewport_layout",
+       "Three-View Primary Bottom", HostUiPlacementTargetKind::ViewportAction,
+       "layout_three_view_primary_bottom", 260, false},
+      {"menu_layout_four_view_quad", "main_menu", "viewport_layout",
+       "Four-View Quad", HostUiPlacementTargetKind::ViewportAction,
+       "layout_four_view_quad", 270, false},
+      {"menu_viewport_settings_panel", "main_menu", "panels",
+       "Viewport Settings", HostUiPlacementTargetKind::Panel,
+       "viewport_settings", 300, false},
+      {"operations_object_panel", "operations_top_bar", "selection_operations",
+       "Object Operations", HostUiPlacementTargetKind::Panel,
+       "object_operations", 0, false},
+      {"operations_vertex_panel", "operations_top_bar", "selection_operations",
+       "Vertex Operations", HostUiPlacementTargetKind::Panel,
+       "vertex_operations", 10, false},
+      {"operations_edge_panel", "operations_top_bar", "selection_operations",
+       "Edge Operations", HostUiPlacementTargetKind::Panel, "edge_operations",
+       20, false},
+      {"operations_face_panel", "operations_top_bar", "selection_operations",
+       "Face Operations", HostUiPlacementTargetKind::Panel, "face_operations",
+       30, false},
+      viewport_tool_placement("toolbar_move_tool", "transform_tools", "move",
+                              0),
+      viewport_tool_placement("toolbar_rotate_tool", "transform_tools",
+                              "rotate", 10),
+      viewport_tool_placement("toolbar_scale_tool", "transform_tools", "scale",
+                              20),
+      viewport_tool_placement("toolbar_knife_tool", "modal_modeling_tools",
+                              "knife", 30),
+      viewport_tool_placement("toolbar_cut_tool", "modal_modeling_tools", "cut",
+                              40),
+      viewport_tool_placement("toolbar_mirror_tool", "modal_modeling_tools",
+                              "mirror", 50),
+      viewport_tool_placement("toolbar_poly_tool", "modal_modeling_tools",
+                              "poly", 60),
+      {"settings_interpolated_bridge", "tool_settings_panel",
+       "operation_settings", "Interpolated Bridge",
+       HostUiPlacementTargetKind::PreferenceGroup, "operation.bridge", 0, false,
+       HostUiVisibilityCondition::BridgePreviewActive},
+      {"settings_edge_bevel", "tool_settings_panel", "operation_settings",
+       "Bevel Edges", HostUiPlacementTargetKind::PreferenceGroup,
+       "operation.edge_bevel", 10, false,
+       HostUiVisibilityCondition::EdgeBevelPreviewActive},
+      {"settings_thicken", "tool_settings_panel", "operation_settings",
+       "Thicken", HostUiPlacementTargetKind::PreferenceGroup,
+       "operation.thicken", 20, false,
+       HostUiVisibilityCondition::ThickenPreviewActive},
+      {"settings_slice_quad", "tool_settings_panel", "operation_settings",
+       "Slice Quad", HostUiPlacementTargetKind::PreferenceGroup,
+       "operation.slice_quad", 30, false,
+       HostUiVisibilityCondition::SliceQuadPreviewActive},
+      {"settings_merge_by_distance", "tool_settings_panel",
+       "operation_settings", "Merge by Distance",
+       HostUiPlacementTargetKind::PreferenceGroup,
+       "operation.merge_by_distance", 40, false,
+       HostUiVisibilityCondition::MergeByDistancePreviewActive},
+      {"settings_cut_keep_mode", "tool_settings_panel", "operation_settings",
+       "Keep Mode", HostUiPlacementTargetKind::PreferenceGroup, "operation.cut",
+       50, false, HostUiVisibilityCondition::CutToolActive},
+  }};
+  return kDescriptors;
 }
 
 std::span<const HostInteractionDescriptor> interaction_descriptors()
 {
-	static constexpr std::array<HostInteractionDescriptor, 38> descriptors {{
-		{ "open_editor", "Open Editor", HostInteractionKind::editor_action },
-		{ "new_document", "New Document", HostInteractionKind::editor_action },
-		{ "open_document", "Open Document", HostInteractionKind::editor_action },
-		{ "save_document", "Save Document", HostInteractionKind::editor_action },
-		{ "save_as_document", "Save Document As", HostInteractionKind::editor_action },
-		{ "undo", "Undo", HostInteractionKind::editor_action },
-		{ "redo", "Redo", HostInteractionKind::editor_action },
-		{ "select_all", "Select All", HostInteractionKind::editor_action },
-		{ "copy_meshes", "Copy Meshes", HostInteractionKind::editor_action },
-		{ "duplicate_selection", "Duplicate Selection", HostInteractionKind::editor_action },
-		{ "apply_active_material", "Apply Active Material", HostInteractionKind::editor_action },
-		{ "invert_selection", "Invert Selection", HostInteractionKind::editor_action },
-		{ "repeat_last_action", "Repeat Last Action", HostInteractionKind::editor_action },
-		{ "paste_meshes", "Paste Meshes", HostInteractionKind::editor_action },
-		{ "delete", "Delete", HostInteractionKind::editor_action },
-		{ "layout_single_view", "Single View", HostInteractionKind::viewport_action },
-		{ "layout_two_view_horizontal", "Two-View Horizontal", HostInteractionKind::viewport_action },
-		{ "layout_two_view_vertical", "Two-View Vertical", HostInteractionKind::viewport_action },
-		{ "layout_three_view_primary_left", "Three-View Primary Left", HostInteractionKind::viewport_action },
-		{ "layout_three_view_primary_right", "Three-View Primary Right", HostInteractionKind::viewport_action },
-		{ "layout_three_view_primary_top", "Three-View Primary Top", HostInteractionKind::viewport_action },
-		{ "layout_three_view_primary_bottom", "Three-View Primary Bottom", HostInteractionKind::viewport_action },
-		{ "layout_four_view_quad", "Four-View Quad", HostInteractionKind::viewport_action },
-		{ "focus_all", "Focus All", HostInteractionKind::viewport_action },
-		{ "focus_origin", "Focus Origin", HostInteractionKind::viewport_action },
-		{ "mirror_axis_x", "Mirror Across X QAxis", HostInteractionKind::viewport_action },
-		{ "mirror_axis_y", "Mirror Across Y QAxis", HostInteractionKind::viewport_action },
-		{ "mirror_axis_z", "Mirror Across Z QAxis", HostInteractionKind::viewport_action },
-		{ "flip_horizontal", "Flip Horizontally", HostInteractionKind::viewport_action },
-		{ "flip_vertical", "Flip Vertically", HostInteractionKind::viewport_action },
-		{ "zoom", "Zoom", HostInteractionKind::viewport_action },
-		{ "fly_or_orthographic_pan", "Fly Or Orthographic Pan", HostInteractionKind::viewport_action },
-		{ "orbit_or_pan", "Orbit Or Pan", HostInteractionKind::viewport_action },
-		{ "toggle_focused_pane_maximized", "Toggle Focused Pane Maximized", HostInteractionKind::viewport_action },
-		{ "active_preview_pointer_block", "Active Preview Pointer Block", HostInteractionKind::preview_action },
-		{ "active_preview_commit_or_cancel", "Active Preview Commit Or Cancel", HostInteractionKind::preview_action },
-		{ "active_modal_tool_precedence", "Active Modal Tool Precedence", HostInteractionKind::input_policy },
-		{ "modifier_hover_refresh", "Modifier Hover Refresh", HostInteractionKind::input_policy },
-	}};
-	return descriptors;
+  static constexpr std::array<HostInteractionDescriptor, 38> kDescriptors{{
+      {"open_editor", "Open Editor", HostInteractionKind::EditorAction},
+      {"new_document", "New Document", HostInteractionKind::EditorAction},
+      {"open_document", "Open Document", HostInteractionKind::EditorAction},
+      {"save_document", "Save Document", HostInteractionKind::EditorAction},
+      {"save_as_document", "Save Document As",
+       HostInteractionKind::EditorAction},
+      {"undo", "Undo", HostInteractionKind::EditorAction},
+      {"redo", "Redo", HostInteractionKind::EditorAction},
+      {"select_all", "Select All", HostInteractionKind::EditorAction},
+      {"copy_meshes", "Copy Meshes", HostInteractionKind::EditorAction},
+      {"duplicate_selection", "Duplicate Selection",
+       HostInteractionKind::EditorAction},
+      {"apply_active_material", "Apply Active Material",
+       HostInteractionKind::EditorAction},
+      {"invert_selection", "Invert Selection",
+       HostInteractionKind::EditorAction},
+      {"repeat_last_action", "Repeat Last Action",
+       HostInteractionKind::EditorAction},
+      {"paste_meshes", "Paste Meshes", HostInteractionKind::EditorAction},
+      {"delete", "Delete", HostInteractionKind::EditorAction},
+      {"layout_single_view", "Single View",
+       HostInteractionKind::ViewportAction},
+      {"layout_two_view_horizontal", "Two-View Horizontal",
+       HostInteractionKind::ViewportAction},
+      {"layout_two_view_vertical", "Two-View Vertical",
+       HostInteractionKind::ViewportAction},
+      {"layout_three_view_primary_left", "Three-View Primary Left",
+       HostInteractionKind::ViewportAction},
+      {"layout_three_view_primary_right", "Three-View Primary Right",
+       HostInteractionKind::ViewportAction},
+      {"layout_three_view_primary_top", "Three-View Primary Top",
+       HostInteractionKind::ViewportAction},
+      {"layout_three_view_primary_bottom", "Three-View Primary Bottom",
+       HostInteractionKind::ViewportAction},
+      {"layout_four_view_quad", "Four-View Quad",
+       HostInteractionKind::ViewportAction},
+      {"focus_all", "Focus All", HostInteractionKind::ViewportAction},
+      {"focus_origin", "Focus Origin", HostInteractionKind::ViewportAction},
+      {"mirror_axis_x", "Mirror Across X QAxis",
+       HostInteractionKind::ViewportAction},
+      {"mirror_axis_y", "Mirror Across Y QAxis",
+       HostInteractionKind::ViewportAction},
+      {"mirror_axis_z", "Mirror Across Z QAxis",
+       HostInteractionKind::ViewportAction},
+      {"flip_horizontal", "Flip Horizontally",
+       HostInteractionKind::ViewportAction},
+      {"flip_vertical", "Flip Vertically", HostInteractionKind::ViewportAction},
+      {"zoom", "Zoom", HostInteractionKind::ViewportAction},
+      {"fly_or_orthographic_pan", "Fly Or Orthographic Pan",
+       HostInteractionKind::ViewportAction},
+      {"orbit_or_pan", "Orbit Or Pan", HostInteractionKind::ViewportAction},
+      {"toggle_focused_pane_maximized", "Toggle Focused Pane Maximized",
+       HostInteractionKind::ViewportAction},
+      {"active_preview_pointer_block", "Active Preview Pointer Block",
+       HostInteractionKind::PreviewAction},
+      {"active_preview_commit_or_cancel", "Active Preview Commit Or Cancel",
+       HostInteractionKind::PreviewAction},
+      {"active_modal_tool_precedence", "Active Modal Tool Precedence",
+       HostInteractionKind::InputPolicy},
+      {"modifier_hover_refresh", "Modifier Hover Refresh",
+       HostInteractionKind::InputPolicy},
+  }};
+  return kDescriptors;
 }
 
 std::span<const HostToolGroupDescriptor> tool_group_descriptors()
 {
-	static constexpr std::array<std::string_view, 3> transform_tools {{
-		"move",
-		"rotate",
-		"scale",
-	}};
-	static constexpr std::array<std::string_view, 6> modal_modeling_tools {{
-		"box",
-		"insert_edge_loop",
-		"knife",
-		"cut",
-		"mirror",
-		"poly",
-	}};
-	static constexpr std::array<HostToolGroupDescriptor, 2> descriptors {{
-		{ "transform_tools", "Transform Tools", transform_tools },
-		{ "modal_modeling_tools", "Modal Modeling Tools", modal_modeling_tools },
-	}};
-	return descriptors;
+  static constexpr std::array<std::string_view, 3> kTransformTools{{
+      "move",
+      "rotate",
+      "scale",
+  }};
+  static constexpr std::array<std::string_view, 6> kModalModelingTools{{
+      "box",
+      "insert_edge_loop",
+      "knife",
+      "cut",
+      "mirror",
+      "poly",
+  }};
+  static constexpr std::array<HostToolGroupDescriptor, 2> kDescriptors{{
+      {"transform_tools", "Transform Tools", kTransformTools},
+      {"modal_modeling_tools", "Modal Modeling Tools", kModalModelingTools},
+  }};
+  return kDescriptors;
 }
 
 std::span<const HostPanelDescriptor> panel_descriptors()
 {
-	static constexpr std::array<std::string_view, 7> viewport_settings_groups {{
-		"viewport.scene",
-		"viewport.grid",
-		"viewport.selection",
-		"viewport.overlay",
-		"viewport.vertices",
-		"viewport.picking",
-		"viewport.gizmo",
-	}};
-	static constexpr std::array<HostPanelDescriptor, 1> descriptors {{
-		{ "viewport_settings", "Viewport Settings", viewport_settings_groups },
-	}};
-	return descriptors;
+  static constexpr std::array<std::string_view, 7> kViewportSettingsGroups{{
+      "viewport.scene",
+      "viewport.grid",
+      "viewport.selection",
+      "viewport.overlay",
+      "viewport.vertices",
+      "viewport.picking",
+      "viewport.gizmo",
+  }};
+  static constexpr std::array<HostPanelDescriptor, 1> kDescriptors{{
+      {"viewport_settings", "Viewport Settings", kViewportSettingsGroups},
+  }};
+  return kDescriptors;
 }
 
 bool is_transform_tool(const quader::ToolDescriptor& tool)
@@ -505,8 +674,9 @@ bool is_modal_tool(const quader::ToolDescriptor& tool)
 std::vector<HostToolDescriptor> build_tool_catalog()
 {
 	std::vector<HostToolDescriptor> descriptors;
-	const std::span<const quader::ToolDescriptor> tools = quader::viewportToolDescriptors();
-	descriptors.reserve(tools.size());
+        const std::span<const quader::ToolDescriptor> tools =
+            quader::viewport_tool_descriptors();
+        descriptors.reserve(tools.size());
 	for (const quader::ToolDescriptor& tool : tools) {
 		descriptors.push_back({
 			tool.id,
@@ -519,126 +689,133 @@ std::vector<HostToolDescriptor> build_tool_catalog()
 	return descriptors;
 }
 
-HostShortcutDescriptor shortcut(
-		std::string_view id,
-		HostShortcutContext context,
-		std::string_view key,
-		bool primary_modifier,
-		bool alt,
-		bool shift,
-		HostShortcutTargetKind target_kind,
-		std::string_view target_id,
-		bool alternate = false,
-		HostShortcutRegistrationPolicy registration_policy = HostShortcutRegistrationPolicy::quader_local)
-{
-	return {
-		id,
-		context,
-		key,
-		primary_modifier,
-		alt,
-		shift,
-		target_kind,
-		target_id,
-		alternate,
-		registration_policy,
-	};
+HostShortcutDescriptor
+shortcut(std::string_view id, HostShortcutContext context, std::string_view key,
+         bool primary_modifier, bool alt, bool shift,
+         HostShortcutTargetKind target_kind, std::string_view target_id,
+         bool alternate = false,
+         HostShortcutRegistrationPolicy registration_policy =
+             HostShortcutRegistrationPolicy::QuaderLocal) {
+  return {
+      id,    context,     key,       primary_modifier, alt,
+      shift, target_kind, target_id, alternate,        registration_policy,
+  };
 }
 
 std::span<const HostShortcutDescriptor> shortcut_descriptors()
 {
-	static const std::array<HostShortcutDescriptor, 44> descriptors {{
-		shortcut("undo", HostShortcutContext::global, "Z", true, false, false,
-			HostShortcutTargetKind::editor_action, "undo"),
-		shortcut("redo_shift_z", HostShortcutContext::global, "Z", true, false, true,
-			HostShortcutTargetKind::editor_action, "redo"),
-		shortcut("redo_y", HostShortcutContext::global, "Y", true, false, false,
-			HostShortcutTargetKind::editor_action, "redo"),
-		shortcut("new_document", HostShortcutContext::global, "N", true, false, false,
-			HostShortcutTargetKind::editor_action, "new_document"),
-		shortcut("open_document", HostShortcutContext::global, "O", true, false, false,
-			HostShortcutTargetKind::editor_action, "open_document"),
-		shortcut("save_document", HostShortcutContext::global, "S", true, false, false,
-			HostShortcutTargetKind::editor_action, "save_document"),
-		shortcut("save_as_document", HostShortcutContext::global, "S", true, false, true,
-			HostShortcutTargetKind::editor_action, "save_as_document"),
-		shortcut("select_all", HostShortcutContext::global, "A", true, false, false,
-			HostShortcutTargetKind::editor_action, "select_all"),
-		shortcut("copy_meshes", HostShortcutContext::global, "C", true, false, false,
-			HostShortcutTargetKind::editor_action, "copy_meshes"),
-		shortcut("duplicate_selection", HostShortcutContext::global, "D", true, false, false,
-			HostShortcutTargetKind::editor_action, "duplicate_selection"),
-		shortcut("invert_selection", HostShortcutContext::global, "I", true, false, false,
-			HostShortcutTargetKind::editor_action, "invert_selection"),
-		shortcut("repeat_last_action", HostShortcutContext::global, "R", true, false, false,
-			HostShortcutTargetKind::editor_action, "repeat_last_action"),
-		shortcut("paste_meshes", HostShortcutContext::global, "V", true, false, false,
-			HostShortcutTargetKind::editor_action, "paste_meshes"),
-		shortcut("delete", HostShortcutContext::global, "Delete", false, false, false,
-			HostShortcutTargetKind::editor_action, "delete"),
-		shortcut("delete_backspace", HostShortcutContext::global, "Backspace", false, false, false,
-			HostShortcutTargetKind::editor_action, "delete"),
+  static const std::array<HostShortcutDescriptor, 44> kDescriptors{{
+      shortcut("undo", HostShortcutContext::Global, "Z", true, false, false,
+               HostShortcutTargetKind::EditorAction, "undo"),
+      shortcut("redo_shift_z", HostShortcutContext::Global, "Z", true, false,
+               true, HostShortcutTargetKind::EditorAction, "redo"),
+      shortcut("redo_y", HostShortcutContext::Global, "Y", true, false, false,
+               HostShortcutTargetKind::EditorAction, "redo"),
+      shortcut("new_document", HostShortcutContext::Global, "N", true, false,
+               false, HostShortcutTargetKind::EditorAction, "new_document"),
+      shortcut("open_document", HostShortcutContext::Global, "O", true, false,
+               false, HostShortcutTargetKind::EditorAction, "open_document"),
+      shortcut("save_document", HostShortcutContext::Global, "S", true, false,
+               false, HostShortcutTargetKind::EditorAction, "save_document"),
+      shortcut("save_as_document", HostShortcutContext::Global, "S", true,
+               false, true, HostShortcutTargetKind::EditorAction,
+               "save_as_document"),
+      shortcut("select_all", HostShortcutContext::Global, "A", true, false,
+               false, HostShortcutTargetKind::EditorAction, "select_all"),
+      shortcut("copy_meshes", HostShortcutContext::Global, "C", true, false,
+               false, HostShortcutTargetKind::EditorAction, "copy_meshes"),
+      shortcut("duplicate_selection", HostShortcutContext::Global, "D", true,
+               false, false, HostShortcutTargetKind::EditorAction,
+               "duplicate_selection"),
+      shortcut("invert_selection", HostShortcutContext::Global, "I", true,
+               false, false, HostShortcutTargetKind::EditorAction,
+               "invert_selection"),
+      shortcut("repeat_last_action", HostShortcutContext::Global, "R", true,
+               false, false, HostShortcutTargetKind::EditorAction,
+               "repeat_last_action"),
+      shortcut("paste_meshes", HostShortcutContext::Global, "V", true, false,
+               false, HostShortcutTargetKind::EditorAction, "paste_meshes"),
+      shortcut("delete", HostShortcutContext::Global, "Delete", false, false,
+               false, HostShortcutTargetKind::EditorAction, "delete"),
+      shortcut("delete_backspace", HostShortcutContext::Global, "Backspace",
+               false, false, false, HostShortcutTargetKind::EditorAction,
+               "delete"),
 
-		shortcut("merge_vertices", HostShortcutContext::viewport, "M", false, false, false,
-			HostShortcutTargetKind::action, "merge_vertices"),
-		shortcut("merge_vertices_at_center", HostShortcutContext::viewport, "M", false, false, true,
-			HostShortcutTargetKind::action, "merge_vertices_at_center", true),
-		shortcut("apply_active_material", HostShortcutContext::viewport, "T", false, false, true,
-			HostShortcutTargetKind::action, "apply_active_material"),
-		shortcut("focus_all_home", HostShortcutContext::viewport, "Home", false, false, false,
-			HostShortcutTargetKind::viewport_action, "focus_all"),
-		shortcut("focus_origin", HostShortcutContext::viewport, "Home", false, false, true,
-			HostShortcutTargetKind::viewport_action, "focus_origin"),
-		shortcut("insert_edge_loop_tool", HostShortcutContext::viewport, "R", false, false, true,
-			HostShortcutTargetKind::action, "insert_edge_loop_tool"),
-		shortcut("cut_tool", HostShortcutContext::viewport, "C", false, false, true,
-			HostShortcutTargetKind::action, "cut_tool"),
-		shortcut("mirror_axis_x", HostShortcutContext::viewport, "X", false, false, true,
-			HostShortcutTargetKind::viewport_action, "mirror_axis_x"),
-		shortcut("mirror_axis_y", HostShortcutContext::viewport, "Y", false, false, true,
-			HostShortcutTargetKind::viewport_action, "mirror_axis_y"),
-		shortcut("mirror_axis_z", HostShortcutContext::viewport, "Z", false, false, true,
-			HostShortcutTargetKind::viewport_action, "mirror_axis_z"),
-		shortcut("flip_horizontal", HostShortcutContext::viewport, "H", false, false, true,
-			HostShortcutTargetKind::viewport_action, "flip_horizontal"),
-		shortcut("flip_vertical", HostShortcutContext::viewport, "V", false, false, true,
-			HostShortcutTargetKind::viewport_action, "flip_vertical"),
-		shortcut("box_tool", HostShortcutContext::viewport, "B", false, false, false,
-			HostShortcutTargetKind::tool, "box"),
-		shortcut("select_tool", HostShortcutContext::viewport, "Q", false, false, false,
-			HostShortcutTargetKind::tool, "select"),
-		shortcut("knife_tool", HostShortcutContext::viewport, "C", false, false, false,
-			HostShortcutTargetKind::action, "knife_tool"),
-		shortcut("flip_mesh_normals", HostShortcutContext::viewport, "F", false, false, false,
-			HostShortcutTargetKind::action, "invert_mesh"),
-		shortcut("move_tool", HostShortcutContext::viewport, "W", false, false, false,
-			HostShortcutTargetKind::tool, "move"),
-		shortcut("rotate_tool", HostShortcutContext::viewport, "R", false, false, false,
-			HostShortcutTargetKind::tool, "rotate"),
-		shortcut("scale_tool", HostShortcutContext::viewport, "S", false, false, false,
-			HostShortcutTargetKind::tool, "scale"),
-		shortcut("vertex_selection", HostShortcutContext::viewport, "1", false, false, false,
-			HostShortcutTargetKind::selection_mode, "vertex"),
-		shortcut("vertex_selection_keypad", HostShortcutContext::viewport, "Keypad1", false, false, false,
-			HostShortcutTargetKind::selection_mode, "vertex"),
-		shortcut("edge_selection", HostShortcutContext::viewport, "2", false, false, false,
-			HostShortcutTargetKind::selection_mode, "edge"),
-		shortcut("edge_selection_keypad", HostShortcutContext::viewport, "Keypad2", false, false, false,
-			HostShortcutTargetKind::selection_mode, "edge"),
-		shortcut("face_selection", HostShortcutContext::viewport, "3", false, false, false,
-			HostShortcutTargetKind::selection_mode, "face"),
-		shortcut("face_selection_keypad", HostShortcutContext::viewport, "Keypad3", false, false, false,
-			HostShortcutTargetKind::selection_mode, "face"),
-		shortcut("object_selection", HostShortcutContext::viewport, "4", false, false, false,
-			HostShortcutTargetKind::selection_mode, "object"),
-		shortcut("object_selection_keypad", HostShortcutContext::viewport, "Keypad4", false, false, false,
-			HostShortcutTargetKind::selection_mode, "object"),
-		shortcut("group_selection", HostShortcutContext::viewport, "5", false, false, false,
-			HostShortcutTargetKind::selection_mode, "group"),
-		shortcut("group_selection_keypad", HostShortcutContext::viewport, "Keypad5", false, false, false,
-			HostShortcutTargetKind::selection_mode, "group"),
-	}};
-	return descriptors;
+      shortcut("merge_vertices", HostShortcutContext::Viewport, "M", false,
+               false, false, HostShortcutTargetKind::Action, "merge_vertices"),
+      shortcut("merge_vertices_at_center", HostShortcutContext::Viewport, "M",
+               false, false, true, HostShortcutTargetKind::Action,
+               "merge_vertices_at_center", true),
+      shortcut("apply_active_material", HostShortcutContext::Viewport, "T",
+               false, false, true, HostShortcutTargetKind::Action,
+               "apply_active_material"),
+      shortcut("focus_all_home", HostShortcutContext::Viewport, "Home", false,
+               false, false, HostShortcutTargetKind::ViewportAction,
+               "focus_all"),
+      shortcut("focus_origin", HostShortcutContext::Viewport, "Home", false,
+               false, true, HostShortcutTargetKind::ViewportAction,
+               "focus_origin"),
+      shortcut("insert_edge_loop_tool", HostShortcutContext::Viewport, "R",
+               false, false, true, HostShortcutTargetKind::Action,
+               "insert_edge_loop_tool"),
+      shortcut("cut_tool", HostShortcutContext::Viewport, "C", false, false,
+               true, HostShortcutTargetKind::Action, "cut_tool"),
+      shortcut("mirror_axis_x", HostShortcutContext::Viewport, "X", false,
+               false, true, HostShortcutTargetKind::ViewportAction,
+               "mirror_axis_x"),
+      shortcut("mirror_axis_y", HostShortcutContext::Viewport, "Y", false,
+               false, true, HostShortcutTargetKind::ViewportAction,
+               "mirror_axis_y"),
+      shortcut("mirror_axis_z", HostShortcutContext::Viewport, "Z", false,
+               false, true, HostShortcutTargetKind::ViewportAction,
+               "mirror_axis_z"),
+      shortcut("flip_horizontal", HostShortcutContext::Viewport, "H", false,
+               false, true, HostShortcutTargetKind::ViewportAction,
+               "flip_horizontal"),
+      shortcut("flip_vertical", HostShortcutContext::Viewport, "V", false,
+               false, true, HostShortcutTargetKind::ViewportAction,
+               "flip_vertical"),
+      shortcut("box_tool", HostShortcutContext::Viewport, "B", false, false,
+               false, HostShortcutTargetKind::Tool, "box"),
+      shortcut("select_tool", HostShortcutContext::Viewport, "Q", false, false,
+               false, HostShortcutTargetKind::Tool, "select"),
+      shortcut("knife_tool", HostShortcutContext::Viewport, "C", false, false,
+               false, HostShortcutTargetKind::Action, "knife_tool"),
+      shortcut("flip_mesh_normals", HostShortcutContext::Viewport, "F", false,
+               false, false, HostShortcutTargetKind::Action, "invert_mesh"),
+      shortcut("move_tool", HostShortcutContext::Viewport, "W", false, false,
+               false, HostShortcutTargetKind::Tool, "move"),
+      shortcut("rotate_tool", HostShortcutContext::Viewport, "R", false, false,
+               false, HostShortcutTargetKind::Tool, "rotate"),
+      shortcut("scale_tool", HostShortcutContext::Viewport, "S", false, false,
+               false, HostShortcutTargetKind::Tool, "scale"),
+      shortcut("vertex_selection", HostShortcutContext::Viewport, "1", false,
+               false, false, HostShortcutTargetKind::SelectionMode, "vertex"),
+      shortcut("vertex_selection_keypad", HostShortcutContext::Viewport,
+               "Keypad1", false, false, false,
+               HostShortcutTargetKind::SelectionMode, "vertex"),
+      shortcut("edge_selection", HostShortcutContext::Viewport, "2", false,
+               false, false, HostShortcutTargetKind::SelectionMode, "edge"),
+      shortcut("edge_selection_keypad", HostShortcutContext::Viewport,
+               "Keypad2", false, false, false,
+               HostShortcutTargetKind::SelectionMode, "edge"),
+      shortcut("face_selection", HostShortcutContext::Viewport, "3", false,
+               false, false, HostShortcutTargetKind::SelectionMode, "face"),
+      shortcut("face_selection_keypad", HostShortcutContext::Viewport,
+               "Keypad3", false, false, false,
+               HostShortcutTargetKind::SelectionMode, "face"),
+      shortcut("object_selection", HostShortcutContext::Viewport, "4", false,
+               false, false, HostShortcutTargetKind::SelectionMode, "object"),
+      shortcut("object_selection_keypad", HostShortcutContext::Viewport,
+               "Keypad4", false, false, false,
+               HostShortcutTargetKind::SelectionMode, "object"),
+      shortcut("group_selection", HostShortcutContext::Viewport, "5", false,
+               false, false, HostShortcutTargetKind::SelectionMode, "group"),
+      shortcut("group_selection_keypad", HostShortcutContext::Viewport,
+               "Keypad5", false, false, false,
+               HostShortcutTargetKind::SelectionMode, "group"),
+  }};
+  return kDescriptors;
 }
 
 HostGestureDescriptor gesture(
@@ -685,226 +862,244 @@ HostGestureDescriptor gesture(
 
 std::span<const HostGestureDescriptor> gesture_descriptors()
 {
-	static constexpr std::array<std::string_view, 6> modal_tools {{
-		"box",
-		"insert_edge_loop",
-		"knife",
-		"cut",
-		"mirror",
-		"poly",
-	}};
-	static constexpr std::array<std::string_view, 3> transform_tools {{
-		"move",
-		"rotate",
-		"scale",
-	}};
-	static constexpr std::array<std::string_view, 1> selection_tool {{
-		"select",
-	}};
-	static constexpr std::array<std::string_view, 1> box_tool {{
-		"box",
-	}};
-	static constexpr std::array<std::string_view, 1> insert_edge_loop_tool {{
-		"insert_edge_loop",
-	}};
-	static constexpr std::array<std::string_view, 1> knife_tool {{
-		"knife",
-	}};
-	static constexpr std::array<std::string_view, 1> cut_tool {{
-		"cut",
-	}};
-	static constexpr std::array<std::string_view, 1> poly_tool {{
-		"poly",
-	}};
+  static constexpr std::array<std::string_view, 6> kModalTools{{
+      "box",
+      "insert_edge_loop",
+      "knife",
+      "cut",
+      "mirror",
+      "poly",
+  }};
+  static constexpr std::array<std::string_view, 3> kTransformTools{{
+      "move",
+      "rotate",
+      "scale",
+  }};
+  static constexpr std::array<std::string_view, 1> kSelectionTool{{
+      "select",
+  }};
+  static constexpr std::array<std::string_view, 1> kBoxTool{{
+      "box",
+  }};
+  static constexpr std::array<std::string_view, 1> kInsertEdgeLoopTool{{
+      "insert_edge_loop",
+  }};
+  static constexpr std::array<std::string_view, 1> kNifeTool{{
+      "knife",
+  }};
+  static constexpr std::array<std::string_view, 1> kCutTool{{
+      "cut",
+  }};
+  static constexpr std::array<std::string_view, 1> kPolyTool{{
+      "poly",
+  }};
 
-	static constexpr std::array<HostPointerInputKind, 4> hover_primary_drag {{
-		HostPointerInputKind::mouse_move,
-		HostPointerInputKind::primary_down,
-		HostPointerInputKind::primary_drag,
-		HostPointerInputKind::primary_up,
-	}};
-	static constexpr std::array<HostPointerInputKind, 3> primary_drag {{
-		HostPointerInputKind::primary_down,
-		HostPointerInputKind::primary_drag,
-		HostPointerInputKind::primary_up,
-	}};
-	static constexpr std::array<HostPointerInputKind, 3> primary_preview_block {{
-		HostPointerInputKind::primary_down,
-		HostPointerInputKind::primary_drag,
-		HostPointerInputKind::primary_up,
-	}};
-	static constexpr std::array<HostPointerInputKind, 1> mouse_move {{
-		HostPointerInputKind::mouse_move,
-	}};
-	static constexpr std::array<HostPointerInputKind, 1> scroll {{
-		HostPointerInputKind::scroll,
-	}};
-	static constexpr std::array<HostPointerInputKind, 3> secondary_drag {{
-		HostPointerInputKind::secondary_down,
-		HostPointerInputKind::secondary_drag,
-		HostPointerInputKind::secondary_up,
-	}};
-	static constexpr std::array<HostPointerInputKind, 3> middle_drag {{
-		HostPointerInputKind::middle_down,
-		HostPointerInputKind::middle_drag,
-		HostPointerInputKind::middle_up,
-	}};
+  static constexpr std::array<HostPointerInputKind, 4> kHoverPrimaryDrag{{
+      HostPointerInputKind::MouseMove,
+      HostPointerInputKind::PrimaryDown,
+      HostPointerInputKind::PrimaryDrag,
+      HostPointerInputKind::PrimaryUp,
+  }};
+  static constexpr std::array<HostPointerInputKind, 3> kPrimaryDrag{{
+      HostPointerInputKind::PrimaryDown,
+      HostPointerInputKind::PrimaryDrag,
+      HostPointerInputKind::PrimaryUp,
+  }};
+  static constexpr std::array<HostPointerInputKind, 3> kPrimaryPreviewBlock{{
+      HostPointerInputKind::PrimaryDown,
+      HostPointerInputKind::PrimaryDrag,
+      HostPointerInputKind::PrimaryUp,
+  }};
+  static constexpr std::array<HostPointerInputKind, 1> kMouseMove{{
+      HostPointerInputKind::MouseMove,
+  }};
+  static constexpr std::array<HostPointerInputKind, 1> kScroll{{
+      HostPointerInputKind::Scroll,
+  }};
+  static constexpr std::array<HostPointerInputKind, 3> kSecondaryDrag{{
+      HostPointerInputKind::SecondaryDown,
+      HostPointerInputKind::SecondaryDrag,
+      HostPointerInputKind::SecondaryUp,
+  }};
+  static constexpr std::array<HostPointerInputKind, 3> kMiddleDrag{{
+      HostPointerInputKind::MiddleDown,
+      HostPointerInputKind::MiddleDrag,
+      HostPointerInputKind::MiddleUp,
+  }};
 
-	static constexpr std::array<std::string_view, 1> cancel_escape {{
-		"Escape",
-	}};
-	static constexpr std::array<std::string_view, 4> knife_keys {{
-		"Escape",
-		"Space",
-		"Return",
-		"KeypadEnter",
-	}};
-	static constexpr std::array<std::string_view, 2> finalize_keys {{
-		"Escape",
-		"Space",
-	}};
-	static constexpr std::array<std::string_view, 3> cut_keys {{
-		"Escape",
-		"Space",
-		"F",
-	}};
-	static constexpr std::array<std::string_view, 2> preview_keys {{
-		"Escape",
-		"Space",
-	}};
-	static constexpr std::array<std::string_view, 1> fly_keys {{
-		"Escape",
-	}};
-	static constexpr std::array<std::string_view, 1> layout_keys {{
-		"Space",
-	}};
+  static constexpr std::array<std::string_view, 1> kCancelEscape{{
+      "Escape",
+  }};
+  static constexpr std::array<std::string_view, 4> kNifeKeys{{
+      "Escape",
+      "Space",
+      "Return",
+      "KeypadEnter",
+  }};
+  static constexpr std::array<std::string_view, 2> kFinalizeKeys{{
+      "Escape",
+      "Space",
+  }};
+  static constexpr std::array<std::string_view, 3> kCutKeys{{
+      "Escape",
+      "Space",
+      "F",
+  }};
+  static constexpr std::array<std::string_view, 2> kPreviewKeys{{
+      "Escape",
+      "Space",
+  }};
+  static constexpr std::array<std::string_view, 1> kFlyKeys{{
+      "Escape",
+  }};
+  static constexpr std::array<std::string_view, 1> kLayoutKeys{{
+      "Space",
+  }};
 
-	static constexpr std::array<std::string_view, 2> snap_axis_modifiers {{
-		"primary_modifier:bypass_snap",
-		"shift:constrain_axis",
-	}};
-	static constexpr std::array<std::string_view, 4> knife_meanings {{
-		"primary_modifier:bypass_snap",
-		"shift:constrain_axis",
-		"Space:finalize",
-		"Return:finalize_and_start_new_operation",
-	}};
-	static constexpr std::array<std::string_view, 1> bypass_snap_modifier {{
-		"primary_modifier:bypass_snap",
-	}};
-	static constexpr std::array<std::string_view, 2> cut_meanings {{
-		"F:cycle_keep_mode",
-		"Space:finalize",
-	}};
-	static constexpr std::array<std::string_view, 3> poly_meanings {{
-		"primary_modifier:bypass_snap",
-		"shift:constrain_axis",
-		"Space:finalize",
-	}};
-	static constexpr std::array<std::string_view, 4> selection_modifiers {{
-		"primary_modifier:toggle_selection",
-		"shift:extend_selection",
-		"platform_modifier:multi_select",
-		"alt:alternate_pick",
-	}};
-	static constexpr std::array<std::string_view, 3> transform_modifiers {{
-		"shift:duplicate_object_selection",
-		"shift:extrude_or_inset_elements",
-		"primary_modifier:transform_snap_modifier",
-	}};
-	static constexpr std::array<std::string_view, 1> scroll_modifiers {{
-		"primary_modifier:zoom_to_cursor",
-	}};
-	static constexpr std::array<std::string_view, 2> middle_modifiers {{
-		"shift:pan",
-		"alt:orbit_snap_modifier",
-	}};
-	static const std::array<HostGestureDescriptor, 15> descriptors {{
-		gesture("active_modal_tool_precedence", "Active Modal Tool Precedence",
-			HostGestureTargetKind::input_policy, "active_modal_tool_precedence", 0,
-			modal_tools, {}, {}, {}, true, false, false, false, true, true, false, false, false),
-		gesture("box_tool_gesture", "Box Tool Gesture",
-			HostGestureTargetKind::tool, "box", 10,
-			box_tool, hover_primary_drag, cancel_escape, {}, true, false, false, false, true, true, false, false, true),
-		gesture("insert_edge_loop_gesture", "Insert Edge Loop Gesture",
-			HostGestureTargetKind::tool, "insert_edge_loop", 20,
-			insert_edge_loop_tool, hover_primary_drag, cancel_escape, bypass_snap_modifier, true, false, false, false, true, true, true, true, true),
-		gesture("knife_tool_gesture", "Knife Tool Gesture",
-			HostGestureTargetKind::tool, "knife", 30,
-			knife_tool, hover_primary_drag, knife_keys, knife_meanings, true, false, false, false, true, true, true, true, true),
-		gesture("cut_tool_gesture", "Cut Tool Gesture",
-			HostGestureTargetKind::tool, "cut", 40,
-			cut_tool, hover_primary_drag, cut_keys, cut_meanings, true, false, false, false, true, true, true, true, true),
-		gesture("poly_tool_gesture", "Poly Tool Gesture",
-			HostGestureTargetKind::tool, "poly", 50,
-			poly_tool, hover_primary_drag, finalize_keys, poly_meanings, true, false, false, false, true, true, true, true, true),
-		gesture("active_preview_pointer_block", "Active Preview Pointer Block",
-			HostGestureTargetKind::preview_action, "active_preview_pointer_block", 60,
-			{}, primary_preview_block, {}, {}, false, true, false, true, true, true, false, false, false),
-		gesture("transform_gizmo_drag", "Transform Gizmo Drag",
-			HostGestureTargetKind::tool_group, "transform_tools", 70,
-			transform_tools, primary_drag, cancel_escape, transform_modifiers, false, false, true, true, true, false, false, false, true),
-		gesture("selection_pick_and_paint", "Selection Pick And Paint",
-			HostGestureTargetKind::tool, "select", 80,
-			selection_tool, hover_primary_drag, {}, selection_modifiers, false, false, true, true, true, false, false, false, false),
-		gesture("modifier_hover_refresh", "Modifier Hover Refresh",
-			HostGestureTargetKind::input_policy, "modifier_hover_refresh", 90,
-			modal_tools, mouse_move, {}, snap_axis_modifiers, false, false, false, true, false, true, false, false, false),
-		gesture("viewport_scroll_zoom", "Viewport Scroll Zoom",
-			HostGestureTargetKind::viewport_action, "zoom", 100,
-			{}, scroll, {}, scroll_modifiers, false, false, false, false, true, false, false, false, false),
-		gesture("viewport_fly_or_orthographic_pan", "Viewport Fly Or Orthographic Pan",
-			HostGestureTargetKind::viewport_action, "fly_or_orthographic_pan", 110,
-			{}, secondary_drag, fly_keys, {}, false, false, false, false, true, false, false, false, false),
-		gesture("viewport_orbit_or_pan", "Viewport Orbit Or Pan",
-			HostGestureTargetKind::viewport_action, "orbit_or_pan", 120,
-			{}, middle_drag, {}, middle_modifiers, false, false, false, false, true, false, false, false, false),
-		gesture("active_preview_commit_or_cancel", "Active Preview Commit Or Cancel",
-			HostGestureTargetKind::preview_action, "active_preview_commit_or_cancel", 130,
-			{}, {}, preview_keys, {}, false, true, false, true, false, true, false, false, true),
-		gesture("focused_pane_maximize_toggle", "Focused Pane Maximize Toggle",
-			HostGestureTargetKind::viewport_action, "toggle_focused_pane_maximized", 140,
-			{}, {}, layout_keys, {}, false, false, false, true, false, false, false, false, false),
-	}};
-	return descriptors;
+  static constexpr std::array<std::string_view, 2> kSnapAxisModifiers{{
+      "primary_modifier:bypass_snap",
+      "shift:constrain_axis",
+  }};
+  static constexpr std::array<std::string_view, 4> kNifeMeanings{{
+      "primary_modifier:bypass_snap",
+      "shift:constrain_axis",
+      "Space:finalize",
+      "Return:finalize_and_start_new_operation",
+  }};
+  static constexpr std::array<std::string_view, 1> kBypassSnapModifier{{
+      "primary_modifier:bypass_snap",
+  }};
+  static constexpr std::array<std::string_view, 2> kCutMeanings{{
+      "F:cycle_keep_mode",
+      "Space:finalize",
+  }};
+  static constexpr std::array<std::string_view, 3> kPolyMeanings{{
+      "primary_modifier:bypass_snap",
+      "shift:constrain_axis",
+      "Space:finalize",
+  }};
+  static constexpr std::array<std::string_view, 4> kSelectionModifiers{{
+      "primary_modifier:toggle_selection",
+      "shift:extend_selection",
+      "platform_modifier:multi_select",
+      "alt:alternate_pick",
+  }};
+  static constexpr std::array<std::string_view, 3> kTransformModifiers{{
+      "shift:duplicate_object_selection",
+      "shift:extrude_or_inset_elements",
+      "primary_modifier:transform_snap_modifier",
+  }};
+  static constexpr std::array<std::string_view, 1> kScrollModifiers{{
+      "primary_modifier:zoom_to_cursor",
+  }};
+  static constexpr std::array<std::string_view, 2> kMiddleModifiers{{
+      "shift:pan",
+      "alt:orbit_snap_modifier",
+  }};
+  static const std::array<HostGestureDescriptor, 15> kDescriptors{{
+      gesture("active_modal_tool_precedence", "Active Modal Tool Precedence",
+              HostGestureTargetKind::InputPolicy,
+              "active_modal_tool_precedence", 0, kModalTools, {}, {}, {}, true,
+              false, false, false, true, true, false, false, false),
+      gesture("box_tool_gesture", "Box Tool Gesture",
+              HostGestureTargetKind::Tool, "box", 10, kBoxTool,
+              kHoverPrimaryDrag, kCancelEscape, {}, true, false, false, false,
+              true, true, false, false, true),
+      gesture("insert_edge_loop_gesture", "Insert Edge Loop Gesture",
+              HostGestureTargetKind::Tool, "insert_edge_loop", 20,
+              kInsertEdgeLoopTool, kHoverPrimaryDrag, kCancelEscape,
+              kBypassSnapModifier, true, false, false, false, true, true, true,
+              true, true),
+      gesture("knife_tool_gesture", "Knife Tool Gesture",
+              HostGestureTargetKind::Tool, "knife", 30, kNifeTool,
+              kHoverPrimaryDrag, kNifeKeys, kNifeMeanings, true, false, false,
+              false, true, true, true, true, true),
+      gesture("cut_tool_gesture", "Cut Tool Gesture",
+              HostGestureTargetKind::Tool, "cut", 40, kCutTool,
+              kHoverPrimaryDrag, kCutKeys, kCutMeanings, true, false, false,
+              false, true, true, true, true, true),
+      gesture("poly_tool_gesture", "Poly Tool Gesture",
+              HostGestureTargetKind::Tool, "poly", 50, kPolyTool,
+              kHoverPrimaryDrag, kFinalizeKeys, kPolyMeanings, true, false,
+              false, false, true, true, true, true, true),
+      gesture("active_preview_pointer_block", "Active Preview Pointer Block",
+              HostGestureTargetKind::PreviewAction,
+              "active_preview_pointer_block", 60, {}, kPrimaryPreviewBlock, {},
+              {}, false, true, false, true, true, true, false, false, false),
+      gesture("transform_gizmo_drag", "Transform Gizmo Drag",
+              HostGestureTargetKind::ToolGroup, "transform_tools", 70,
+              kTransformTools, kPrimaryDrag, kCancelEscape, kTransformModifiers,
+              false, false, true, true, true, false, false, false, true),
+      gesture("selection_pick_and_paint", "Selection Pick And Paint",
+              HostGestureTargetKind::Tool, "select", 80, kSelectionTool,
+              kHoverPrimaryDrag, {}, kSelectionModifiers, false, false, true,
+              true, true, false, false, false, false),
+      gesture("modifier_hover_refresh", "Modifier Hover Refresh",
+              HostGestureTargetKind::InputPolicy, "modifier_hover_refresh", 90,
+              kModalTools, kMouseMove, {}, kSnapAxisModifiers, false, false,
+              false, true, false, true, false, false, false),
+      gesture("viewport_scroll_zoom", "Viewport Scroll Zoom",
+              HostGestureTargetKind::ViewportAction, "zoom", 100, {}, kScroll,
+              {}, kScrollModifiers, false, false, false, false, true, false,
+              false, false, false),
+      gesture("viewport_fly_or_orthographic_pan",
+              "Viewport Fly Or Orthographic Pan",
+              HostGestureTargetKind::ViewportAction, "fly_or_orthographic_pan",
+              110, {}, kSecondaryDrag, kFlyKeys, {}, false, false, false, false,
+              true, false, false, false, false),
+      gesture("viewport_orbit_or_pan", "Viewport Orbit Or Pan",
+              HostGestureTargetKind::ViewportAction, "orbit_or_pan", 120, {},
+              kMiddleDrag, {}, kMiddleModifiers, false, false, false, false,
+              true, false, false, false, false),
+      gesture("active_preview_commit_or_cancel",
+              "Active Preview Commit Or Cancel",
+              HostGestureTargetKind::PreviewAction,
+              "active_preview_commit_or_cancel", 130, {}, {}, kPreviewKeys, {},
+              false, true, false, true, false, true, false, false, true),
+      gesture("focused_pane_maximize_toggle", "Focused Pane Maximize Toggle",
+              HostGestureTargetKind::ViewportAction,
+              "toggle_focused_pane_maximized", 140, {}, {}, kLayoutKeys, {},
+              false, false, false, true, false, false, false, false, false),
+  }};
+  return kDescriptors;
 }
 
 constexpr int checked_overlay_layer_index(quader_editor_core::SelectionOverlayLayer layer)
 {
 	using Layer = quader_editor_core::SelectionOverlayLayer;
 	switch (layer) {
-	case Layer::selected_visible_face:
-		return 0;
-	case Layer::selected_face_edge:
-		return 1;
-	case Layer::unselected_vertex:
-		return 2;
-	case Layer::selected_vertex:
-		return 3;
-	case Layer::hover_face:
-		return 4;
-	case Layer::hover_face_edge:
-		return 5;
-	case Layer::hover_edge:
-		return 6;
-	case Layer::hover_vertex:
-		return 7;
-	case Layer::selected_edge:
-		return 8;
-	case Layer::selected_xray_face:
-		return 9;
-	case Layer::selected_face_mask:
-		return 10;
-	case Layer::source_wire:
-		return 11;
-	case Layer::open_edge:
-		return 12;
-	case Layer::snap_target_vertex:
-		return 13;
-	case Layer::diagnostic_edge:
-		return 14;
-	case Layer::source_wire_depth_stamp:
-		return -1;
+        case Layer::SelectedVisibleFace:
+          return 0;
+        case Layer::SelectedFaceEdge:
+          return 1;
+        case Layer::UnselectedVertex:
+          return 2;
+        case Layer::SelectedVertex:
+          return 3;
+        case Layer::HoverFace:
+          return 4;
+        case Layer::HoverFaceEdge:
+          return 5;
+        case Layer::HoverEdge:
+          return 6;
+        case Layer::HoverVertex:
+          return 7;
+        case Layer::SelectedEdge:
+          return 8;
+        case Layer::SelectedXrayFace:
+          return 9;
+        case Layer::SelectedFaceMask:
+          return 10;
+        case Layer::SourceWire:
+          return 11;
+        case Layer::OpenEdge:
+          return 12;
+        case Layer::SnapTargetVertex:
+          return 13;
+        case Layer::DiagnosticEdge:
+          return 14;
+        case Layer::SourceWireDepthStamp:
+          return -1;
 	}
 	return -1;
 }
@@ -969,8 +1164,8 @@ HostPreferenceDescriptor int_preference(
 	descriptor.id = id;
 	descriptor.label = label;
 	descriptor.scope = scope;
-	descriptor.value_kind = HostPreferenceValueKind::integer;
-	descriptor.default_integer = default_value;
+        descriptor.value_kind = HostPreferenceValueKind::Integer;
+        descriptor.default_integer = default_value;
 	descriptor.minimum_integer = minimum;
 	descriptor.maximum_integer = maximum;
 	descriptor.integer_step = step;
@@ -999,8 +1194,8 @@ HostPreferenceDescriptor float_preference(
 	descriptor.id = id;
 	descriptor.label = label;
 	descriptor.scope = scope;
-	descriptor.value_kind = HostPreferenceValueKind::floating;
-	descriptor.default_number = default_value;
+        descriptor.value_kind = HostPreferenceValueKind::Floating;
+        descriptor.default_number = default_value;
 	descriptor.minimum_number = minimum;
 	descriptor.maximum_number = maximum;
 	descriptor.number_step = step;
@@ -1024,9 +1219,9 @@ HostPreferenceDescriptor bool_preference(
 	HostPreferenceDescriptor descriptor;
 	descriptor.id = id;
 	descriptor.label = label;
-	descriptor.scope = HostPreferenceScope::operation;
-	descriptor.value_kind = HostPreferenceValueKind::boolean;
-	descriptor.default_bool = default_value;
+        descriptor.scope = HostPreferenceScope::Operation;
+        descriptor.value_kind = HostPreferenceValueKind::Boolean;
+        descriptor.default_bool = default_value;
 	descriptor.group_id = group_id;
 	descriptor.related_operation_id = related_operation_id;
 	descriptor.related_option_id = related_option_id;
@@ -1045,9 +1240,9 @@ HostPreferenceDescriptor color_preference(
 	HostPreferenceDescriptor descriptor;
 	descriptor.id = id;
 	descriptor.label = label;
-	descriptor.scope = HostPreferenceScope::viewport_style;
-	descriptor.value_kind = HostPreferenceValueKind::color_rgba;
-	descriptor.default_color = default_value;
+        descriptor.scope = HostPreferenceScope::ViewportStyle;
+        descriptor.value_kind = HostPreferenceValueKind::ColorRgba;
+        descriptor.default_color = default_value;
 	descriptor.group_id = group_id;
 	descriptor.related_overlay_layer_id = related_overlay_layer_id;
 	return descriptor;
@@ -1062,9 +1257,9 @@ HostPreferenceDescriptor choice_preference(
 	HostPreferenceDescriptor descriptor;
 	descriptor.id = id;
 	descriptor.label = label;
-	descriptor.scope = HostPreferenceScope::operation;
-	descriptor.value_kind = HostPreferenceValueKind::choice;
-	descriptor.choices = choices;
+        descriptor.scope = HostPreferenceScope::Operation;
+        descriptor.value_kind = HostPreferenceValueKind::Choice;
+        descriptor.choices = choices;
 	for (const HostPreferenceChoiceDescriptor& choice : choices) {
 		if (choice.default_choice) {
 			descriptor.default_integer = choice.value;
@@ -1080,107 +1275,183 @@ HostPreferenceDescriptor operation_preference(
 		const quader_editor_core::EditorOperationOptionDescriptor& schema)
 {
 	switch (schema.value_kind) {
-	case quader_editor_core::EditorOperationOptionValueKind::integer:
-		return int_preference(
-			schema.preference_id,
-			schema.label,
-			HostPreferenceScope::operation,
-			schema.default_integer,
-			schema.minimum_integer,
-			schema.maximum_integer,
-			schema.integer_step,
-			schema.preference_group_id,
-			schema.operation_id,
-			schema.option_id,
-			schema.hard_limits);
-	case quader_editor_core::EditorOperationOptionValueKind::floating:
-		return float_preference(
-			schema.preference_id,
-			schema.label,
-			HostPreferenceScope::operation,
-			schema.default_number,
-			schema.minimum_number,
-			schema.maximum_number,
-			schema.number_step,
-			schema.preference_group_id,
-			schema.operation_id,
-			schema.option_id,
-			{},
-			schema.hard_limits);
-	case quader_editor_core::EditorOperationOptionValueKind::boolean:
-		return bool_preference(
-			schema.preference_id,
-			schema.label,
-			schema.default_bool,
-			schema.preference_group_id,
-			schema.operation_id,
-			schema.option_id,
-			schema.visible);
+        case quader_editor_core::EditorOperationOptionValueKind::Integer:
+          return int_preference(schema.preference_id, schema.label,
+                                HostPreferenceScope::Operation,
+                                schema.default_integer, schema.minimum_integer,
+                                schema.maximum_integer, schema.integer_step,
+                                schema.preference_group_id, schema.operation_id,
+                                schema.option_id, schema.hard_limits);
+        case quader_editor_core::EditorOperationOptionValueKind::Floating:
+          return float_preference(
+              schema.preference_id, schema.label,
+              HostPreferenceScope::Operation, schema.default_number,
+              schema.minimum_number, schema.maximum_number, schema.number_step,
+              schema.preference_group_id, schema.operation_id, schema.option_id,
+              {}, schema.hard_limits);
+        case quader_editor_core::EditorOperationOptionValueKind::Boolean:
+          return bool_preference(
+              schema.preference_id, schema.label, schema.default_bool,
+              schema.preference_group_id, schema.operation_id, schema.option_id,
+              schema.visible);
 	}
 	return {};
 }
 
 std::vector<HostPreferenceDescriptor> build_preference_descriptors()
 {
-	static const std::array<HostPreferenceChoiceDescriptor, 3> cut_mode_choices {{
-		{ "keep_back", "Discard Left",
-			quader_editor_core::cut_mode_id(quader_editor_core::CutMode::keep_back), false },
-		{ "keep_front", "Discard Right",
-			quader_editor_core::cut_mode_id(quader_editor_core::CutMode::keep_front), false },
-		{ "keep_both", "Keep Both",
-			quader_editor_core::cut_mode_id(quader_editor_core::CutMode::keep_both), true },
-	}};
+  static const std::array<HostPreferenceChoiceDescriptor, 3> kCutModeChoices{{
+      {"keep_back", "Discard Left",
+       quader_editor_core::cut_mode_id(quader_editor_core::CutMode::KeepBack),
+       false},
+      {"keep_front", "Discard Right",
+       quader_editor_core::cut_mode_id(quader_editor_core::CutMode::KeepFront),
+       false},
+      {"keep_both", "Keep Both",
+       quader_editor_core::cut_mode_id(quader_editor_core::CutMode::KeepBoth),
+       true},
+  }};
 
-	std::vector<HostPreferenceDescriptor> descriptors;
-	descriptors.reserve(45);
-	for (const quader_editor_core::EditorOperationOptionDescriptor& option :
-			quader_editor_core::operation_option_descriptor_catalog()) {
-		descriptors.push_back(operation_preference(option));
-	}
-	descriptors.push_back(choice_preference("operation.cut.keep_mode", "Keep Mode", cut_mode_choices, "operation.cut"));
+  std::vector<HostPreferenceDescriptor> descriptors;
+  descriptors.reserve(45);
+  for (const quader_editor_core::EditorOperationOptionDescriptor &option :
+       quader_editor_core::operation_option_descriptor_catalog()) {
+    descriptors.push_back(operation_preference(option));
+  }
+  descriptors.push_back(choice_preference("operation.cut.keep_mode",
+                                          "Keep Mode", kCutModeChoices,
+                                          "operation.cut"));
 
-	descriptors.push_back(color_preference("viewport.scene.background_color", "Background", color_rgba(13.0 / 255.0, 13.0 / 255.0, 13.0 / 255.0, 1.0), "viewport.scene"));
-	descriptors.push_back(color_preference("viewport.grid.minor_color", "Minor", color_rgba(0.8, 0.8, 0.8, 0.05), "viewport.grid"));
-	descriptors.push_back(color_preference("viewport.grid.major_color", "Major", color_rgba(0.298, 0.298, 0.298, 0.459), "viewport.grid"));
-	descriptors.push_back(color_preference("viewport.grid.x_axis_color", "X QAxis", color_rgba(1.0, 0.239, 0.0, 0.72), "viewport.grid"));
-	descriptors.push_back(color_preference("viewport.grid.y_axis_color", "Y QAxis", color_rgba(0.29, 0.58, 0.0, 0.0), "viewport.grid"));
-	descriptors.push_back(color_preference("viewport.grid.z_axis_color", "Z QAxis", color_rgba(0.059, 0.612, 1.0, 0.72), "viewport.grid"));
-	descriptors.push_back(color_preference("viewport.selection.face_color", "Face Fill", color_from_abgr(0x081facffU), "viewport.selection", "selected_visible_face"));
-	descriptors.push_back(color_preference("viewport.selection.wire_color", "Wire", color_from_abgr(0xff1fd3ffU), "viewport.selection", "selected_face_edge"));
-	descriptors.push_back(color_preference("viewport.overlay.source_wire_color", "Source Wire", color_from_abgr(0xebffe05cU), "viewport.overlay", "source_wire"));
-	descriptors.push_back(color_preference("viewport.overlay.open_edge_color", "Open Edge", color_from_abgr(0xff00ffffU), "viewport.overlay", "open_edge"));
-	descriptors.push_back(color_preference("viewport.overlay.diagnostic_edge_color", "Diagnostic Edge", color_from_abgr(0xff0000ffU), "viewport.overlay", "diagnostic_edge"));
-	descriptors.push_back(color_preference("viewport.overlay.hover_face_color", "Hover Face", color_from_abgr(0x161fff66U), "viewport.overlay", "hover_face"));
-	descriptors.push_back(color_preference("viewport.overlay.hover_wire_color", "Hover Wire", color_from_abgr(0xff00ff51U), "viewport.overlay", "hover_edge"));
-	descriptors.push_back(color_preference("viewport.overlay.remove_selection_face_color", "Remove Face", color_from_abgr(0x52ff6b1fU), "viewport.overlay", "hover_face"));
-	descriptors.push_back(color_preference("viewport.overlay.remove_selection_wire_color", "Remove Wire", color_from_abgr(0xffff6b1fU), "viewport.overlay", "hover_edge"));
-	descriptors.push_back(color_preference("viewport.vertices.vertex_color", "Vertex", color_from_abgr(0xffffe66bU), "viewport.vertices", "unselected_vertex"));
-	descriptors.push_back(color_preference("viewport.vertices.selected_vertex_color", "Selected Vertex", color_from_abgr(0xff1fadffU), "viewport.vertices", "selected_vertex"));
-	descriptors.push_back(color_preference("viewport.vertices.hover_vertex_color", "Hover Vertex", color_from_abgr(0xff38ff00U), "viewport.vertices", "hover_vertex"));
-	descriptors.push_back(color_preference("viewport.vertices.remove_selection_vertex_color", "Remove Vertex", color_from_abgr(0xffff6b1fU), "viewport.vertices", "hover_vertex"));
-	descriptors.push_back(float_preference("viewport.grid.minor_line_size", "Minor Line", HostPreferenceScope::viewport_style, 0.32, 0.25, 8.0, 0.0, "viewport.grid"));
-	descriptors.push_back(float_preference("viewport.grid.major_line_size", "Major Line", HostPreferenceScope::viewport_style, 0.36, 0.25, 8.0, 0.0, "viewport.grid"));
-	descriptors.push_back(float_preference("viewport.grid.axis_line_size", "QAxis Line", HostPreferenceScope::viewport_style, 0.65, 0.25, 8.0, 0.0, "viewport.grid"));
-	descriptors.push_back(float_preference("viewport.overlay.source_wire_line_size", "Source Wire Size", HostPreferenceScope::viewport_style, 1.5, 0.25, 8.0, 0.0, "viewport.overlay", {}, {}, "source_wire"));
-	descriptors.push_back(float_preference("viewport.selection.face_wire_line_size", "Face Wire Size", HostPreferenceScope::viewport_style, 2.5, 0.25, 8.0, 0.0, "viewport.selection", {}, {}, "selected_face_edge"));
-	descriptors.push_back(float_preference("viewport.selection.edge_line_size", "Edge Line Size", HostPreferenceScope::viewport_style, 2.5, 0.25, 8.0, 0.0, "viewport.selection", {}, {}, "selected_edge"));
-	descriptors.push_back(float_preference("viewport.overlay.hover_wire_line_size", "Hover Wire Size", HostPreferenceScope::viewport_style, 2.5, 0.25, 8.0, 0.0, "viewport.overlay", {}, {}, "hover_edge"));
-	descriptors.push_back(float_preference("viewport.overlay.open_edge_line_size", "Open Edge Size", HostPreferenceScope::viewport_style, 1.0, 0.25, 8.0, 0.0, "viewport.overlay", {}, {}, "open_edge"));
-	descriptors.push_back(float_preference("viewport.overlay.diagnostic_edge_line_size", "Diagnostic Edge Size", HostPreferenceScope::viewport_style, 4.0, 0.25, 8.0, 0.0, "viewport.overlay", {}, {}, "diagnostic_edge"));
-	descriptors.push_back(float_preference("viewport.vertices.vertex_size", "Vertex Size", HostPreferenceScope::viewport_style, 7.0, 2.0, 32.0, 0.0, "viewport.vertices", {}, {}, "unselected_vertex"));
-	descriptors.push_back(float_preference("viewport.vertices.selected_growth", "Selected Growth", HostPreferenceScope::viewport_style, 0.5, 0.0, 12.0, 0.0, "viewport.vertices", {}, {}, "selected_vertex"));
-	descriptors.push_back(float_preference("viewport.vertices.hover_growth", "Hover Growth", HostPreferenceScope::viewport_style, 0.5, 0.0, 12.0, 0.0, "viewport.vertices", {}, {}, "hover_vertex"));
-	descriptors.push_back(float_preference("viewport.vertices.outline_size", "Outline Size", HostPreferenceScope::viewport_style, 1.0, 0.0, 12.0, 0.0, "viewport.vertices"));
-	descriptors.push_back(float_preference("viewport.picking.vertex_radius", "Vertex Radius", HostPreferenceScope::viewport_picking, 0.3, 0.001, 2.0, 0.0, "viewport.picking"));
-	descriptors.push_back(float_preference("viewport.picking.edge_radius", "Edge Radius", HostPreferenceScope::viewport_picking, 0.2, 0.001, 2.0, 0.0, "viewport.picking"));
-	descriptors.push_back(float_preference("viewport.gizmo.size", "Size", HostPreferenceScope::viewport_interaction, 1.0, 0.5, 2.0, 0.0, "viewport.gizmo"));
-	return descriptors;
+  descriptors.push_back(color_preference(
+      "viewport.scene.background_color", "Background",
+      color_rgba(13.0 / 255.0, 13.0 / 255.0, 13.0 / 255.0, 1.0),
+      "viewport.scene"));
+  descriptors.push_back(color_preference("viewport.grid.minor_color", "Minor",
+                                         color_rgba(0.8, 0.8, 0.8, 0.05),
+                                         "viewport.grid"));
+  descriptors.push_back(color_preference("viewport.grid.major_color", "Major",
+                                         color_rgba(0.298, 0.298, 0.298, 0.459),
+                                         "viewport.grid"));
+  descriptors.push_back(
+      color_preference("viewport.grid.x_axis_color", "X QAxis",
+                       color_rgba(1.0, 0.239, 0.0, 0.72), "viewport.grid"));
+  descriptors.push_back(
+      color_preference("viewport.grid.y_axis_color", "Y QAxis",
+                       color_rgba(0.29, 0.58, 0.0, 0.0), "viewport.grid"));
+  descriptors.push_back(
+      color_preference("viewport.grid.z_axis_color", "Z QAxis",
+                       color_rgba(0.059, 0.612, 1.0, 0.72), "viewport.grid"));
+  descriptors.push_back(
+      color_preference("viewport.selection.face_color", "Face Fill",
+                       color_from_abgr(0x081facffU), "viewport.selection",
+                       "selected_visible_face"));
+  descriptors.push_back(color_preference(
+      "viewport.selection.wire_color", "Wire", color_from_abgr(0xff1fd3ffU),
+      "viewport.selection", "selected_face_edge"));
+  descriptors.push_back(color_preference(
+      "viewport.overlay.source_wire_color", "Source Wire",
+      color_from_abgr(0xebffe05cU), "viewport.overlay", "source_wire"));
+  descriptors.push_back(color_preference(
+      "viewport.overlay.open_edge_color", "Open Edge",
+      color_from_abgr(0xff00ffffU), "viewport.overlay", "open_edge"));
+  descriptors.push_back(color_preference(
+      "viewport.overlay.diagnostic_edge_color", "Diagnostic Edge",
+      color_from_abgr(0xff0000ffU), "viewport.overlay", "diagnostic_edge"));
+  descriptors.push_back(color_preference(
+      "viewport.overlay.hover_face_color", "Hover Face",
+      color_from_abgr(0x161fff66U), "viewport.overlay", "hover_face"));
+  descriptors.push_back(color_preference(
+      "viewport.overlay.hover_wire_color", "Hover Wire",
+      color_from_abgr(0xff00ff51U), "viewport.overlay", "hover_edge"));
+  descriptors.push_back(color_preference(
+      "viewport.overlay.remove_selection_face_color", "Remove Face",
+      color_from_abgr(0x52ff6b1fU), "viewport.overlay", "hover_face"));
+  descriptors.push_back(color_preference(
+      "viewport.overlay.remove_selection_wire_color", "Remove Wire",
+      color_from_abgr(0xffff6b1fU), "viewport.overlay", "hover_edge"));
+  descriptors.push_back(color_preference(
+      "viewport.vertices.vertex_color", "Vertex", color_from_abgr(0xffffe66bU),
+      "viewport.vertices", "unselected_vertex"));
+  descriptors.push_back(color_preference(
+      "viewport.vertices.selected_vertex_color", "Selected Vertex",
+      color_from_abgr(0xff1fadffU), "viewport.vertices", "selected_vertex"));
+  descriptors.push_back(color_preference(
+      "viewport.vertices.hover_vertex_color", "Hover Vertex",
+      color_from_abgr(0xff38ff00U), "viewport.vertices", "hover_vertex"));
+  descriptors.push_back(color_preference(
+      "viewport.vertices.remove_selection_vertex_color", "Remove Vertex",
+      color_from_abgr(0xffff6b1fU), "viewport.vertices", "hover_vertex"));
+  descriptors.push_back(
+      float_preference("viewport.grid.minor_line_size", "Minor Line",
+                       HostPreferenceScope::ViewportStyle, 0.32, 0.25, 8.0, 0.0,
+                       "viewport.grid"));
+  descriptors.push_back(
+      float_preference("viewport.grid.major_line_size", "Major Line",
+                       HostPreferenceScope::ViewportStyle, 0.36, 0.25, 8.0, 0.0,
+                       "viewport.grid"));
+  descriptors.push_back(
+      float_preference("viewport.grid.axis_line_size", "QAxis Line",
+                       HostPreferenceScope::ViewportStyle, 0.65, 0.25, 8.0, 0.0,
+                       "viewport.grid"));
+  descriptors.push_back(float_preference(
+      "viewport.overlay.source_wire_line_size", "Source Wire Size",
+      HostPreferenceScope::ViewportStyle, 1.5, 0.25, 8.0, 0.0,
+      "viewport.overlay", {}, {}, "source_wire"));
+  descriptors.push_back(float_preference(
+      "viewport.selection.face_wire_line_size", "Face Wire Size",
+      HostPreferenceScope::ViewportStyle, 2.5, 0.25, 8.0, 0.0,
+      "viewport.selection", {}, {}, "selected_face_edge"));
+  descriptors.push_back(
+      float_preference("viewport.selection.edge_line_size", "Edge Line Size",
+                       HostPreferenceScope::ViewportStyle, 2.5, 0.25, 8.0, 0.0,
+                       "viewport.selection", {}, {}, "selected_edge"));
+  descriptors.push_back(float_preference(
+      "viewport.overlay.hover_wire_line_size", "Hover Wire Size",
+      HostPreferenceScope::ViewportStyle, 2.5, 0.25, 8.0, 0.0,
+      "viewport.overlay", {}, {}, "hover_edge"));
+  descriptors.push_back(
+      float_preference("viewport.overlay.open_edge_line_size", "Open Edge Size",
+                       HostPreferenceScope::ViewportStyle, 1.0, 0.25, 8.0, 0.0,
+                       "viewport.overlay", {}, {}, "open_edge"));
+  descriptors.push_back(float_preference(
+      "viewport.overlay.diagnostic_edge_line_size", "Diagnostic Edge Size",
+      HostPreferenceScope::ViewportStyle, 4.0, 0.25, 8.0, 0.0,
+      "viewport.overlay", {}, {}, "diagnostic_edge"));
+  descriptors.push_back(
+      float_preference("viewport.vertices.vertex_size", "Vertex Size",
+                       HostPreferenceScope::ViewportStyle, 7.0, 2.0, 32.0, 0.0,
+                       "viewport.vertices", {}, {}, "unselected_vertex"));
+  descriptors.push_back(
+      float_preference("viewport.vertices.selected_growth", "Selected Growth",
+                       HostPreferenceScope::ViewportStyle, 0.5, 0.0, 12.0, 0.0,
+                       "viewport.vertices", {}, {}, "selected_vertex"));
+  descriptors.push_back(
+      float_preference("viewport.vertices.hover_growth", "Hover Growth",
+                       HostPreferenceScope::ViewportStyle, 0.5, 0.0, 12.0, 0.0,
+                       "viewport.vertices", {}, {}, "hover_vertex"));
+  descriptors.push_back(
+      float_preference("viewport.vertices.outline_size", "Outline Size",
+                       HostPreferenceScope::ViewportStyle, 1.0, 0.0, 12.0, 0.0,
+                       "viewport.vertices"));
+  descriptors.push_back(
+      float_preference("viewport.picking.vertex_radius", "Vertex Radius",
+                       HostPreferenceScope::ViewportPicking, 0.3, 0.001, 2.0,
+                       0.0, "viewport.picking"));
+  descriptors.push_back(
+      float_preference("viewport.picking.edge_radius", "Edge Radius",
+                       HostPreferenceScope::ViewportPicking, 0.2, 0.001, 2.0,
+                       0.0, "viewport.picking"));
+  descriptors.push_back(float_preference(
+      "viewport.gizmo.size", "Size", HostPreferenceScope::ViewportInteraction,
+      1.0, 0.5, 2.0, 0.0, "viewport.gizmo"));
+  return descriptors;
 }
 
 std::span<const HostPreferenceDescriptor> preference_descriptors()
 {
-	static const std::vector<HostPreferenceDescriptor> descriptors = build_preference_descriptors();
-	return {descriptors.data(), descriptors.size()};
+  static const std::vector<HostPreferenceDescriptor> kDescriptors =
+      build_preference_descriptors();
+  return {kDescriptors.data(), kDescriptors.size()};
 }
 
 /**
@@ -1236,240 +1507,289 @@ HostPreferenceGroupStorage build_preference_group_descriptors()
 		found->preference_ids.push_back(option.preference_id);
 	}
 	for (OperationPreferenceGroup& group : operation_groups) {
-		add_preference_group(
-			storage,
-			group.id,
-			group.label,
-			HostPreferenceScope::operation,
-			std::move(group.preference_ids));
-	}
-	add_preference_group(storage, "operation.cut", "Cut", HostPreferenceScope::operation, {"operation.cut.keep_mode"});
+          add_preference_group(storage, group.id, group.label,
+                               HostPreferenceScope::Operation,
+                               std::move(group.preference_ids));
+        }
+        add_preference_group(storage, "operation.cut", "Cut",
+                             HostPreferenceScope::Operation,
+                             {"operation.cut.keep_mode"});
 
-	static constexpr std::array<std::string_view, 1> viewport_scene_preferences {{
-		"viewport.scene.background_color",
-	}};
-	static constexpr std::array<std::string_view, 8> viewport_grid_preferences {{
-		"viewport.grid.minor_color",
-		"viewport.grid.major_color",
-		"viewport.grid.x_axis_color",
-		"viewport.grid.y_axis_color",
-		"viewport.grid.z_axis_color",
-		"viewport.grid.minor_line_size",
-		"viewport.grid.major_line_size",
-		"viewport.grid.axis_line_size",
-	}};
-	static constexpr std::array<std::string_view, 4> viewport_selection_preferences {{
-		"viewport.selection.face_color",
-		"viewport.selection.wire_color",
-		"viewport.selection.face_wire_line_size",
-		"viewport.selection.edge_line_size",
-	}};
-	static constexpr std::array<std::string_view, 11> viewport_overlay_preferences {{
-		"viewport.overlay.source_wire_color",
-		"viewport.overlay.open_edge_color",
-		"viewport.overlay.diagnostic_edge_color",
-		"viewport.overlay.hover_face_color",
-		"viewport.overlay.hover_wire_color",
-		"viewport.overlay.remove_selection_face_color",
-		"viewport.overlay.remove_selection_wire_color",
-		"viewport.overlay.source_wire_line_size",
-		"viewport.overlay.hover_wire_line_size",
-		"viewport.overlay.open_edge_line_size",
-		"viewport.overlay.diagnostic_edge_line_size",
-	}};
-	static constexpr std::array<std::string_view, 8> viewport_vertex_preferences {{
-		"viewport.vertices.vertex_color",
-		"viewport.vertices.selected_vertex_color",
-		"viewport.vertices.hover_vertex_color",
-		"viewport.vertices.remove_selection_vertex_color",
-		"viewport.vertices.vertex_size",
-		"viewport.vertices.selected_growth",
-		"viewport.vertices.hover_growth",
-		"viewport.vertices.outline_size",
-	}};
-	static constexpr std::array<std::string_view, 2> viewport_picking_preferences {{
-		"viewport.picking.vertex_radius",
-		"viewport.picking.edge_radius",
-	}};
-	static constexpr std::array<std::string_view, 1> viewport_gizmo_preferences {{
-		"viewport.gizmo.size",
-	}};
+        static constexpr std::array<std::string_view, 1>
+            kViewportScenePreferences{{
+                "viewport.scene.background_color",
+            }};
+        static constexpr std::array<std::string_view, 8>
+            kViewportGridPreferences{{
+                "viewport.grid.minor_color",
+                "viewport.grid.major_color",
+                "viewport.grid.x_axis_color",
+                "viewport.grid.y_axis_color",
+                "viewport.grid.z_axis_color",
+                "viewport.grid.minor_line_size",
+                "viewport.grid.major_line_size",
+                "viewport.grid.axis_line_size",
+            }};
+        static constexpr std::array<std::string_view, 4>
+            kViewportSelectionPreferences{{
+                "viewport.selection.face_color",
+                "viewport.selection.wire_color",
+                "viewport.selection.face_wire_line_size",
+                "viewport.selection.edge_line_size",
+            }};
+        static constexpr std::array<std::string_view, 11>
+            kViewportOverlayPreferences{{
+                "viewport.overlay.source_wire_color",
+                "viewport.overlay.open_edge_color",
+                "viewport.overlay.diagnostic_edge_color",
+                "viewport.overlay.hover_face_color",
+                "viewport.overlay.hover_wire_color",
+                "viewport.overlay.remove_selection_face_color",
+                "viewport.overlay.remove_selection_wire_color",
+                "viewport.overlay.source_wire_line_size",
+                "viewport.overlay.hover_wire_line_size",
+                "viewport.overlay.open_edge_line_size",
+                "viewport.overlay.diagnostic_edge_line_size",
+            }};
+        static constexpr std::array<std::string_view, 8>
+            kViewportVertexPreferences{{
+                "viewport.vertices.vertex_color",
+                "viewport.vertices.selected_vertex_color",
+                "viewport.vertices.hover_vertex_color",
+                "viewport.vertices.remove_selection_vertex_color",
+                "viewport.vertices.vertex_size",
+                "viewport.vertices.selected_growth",
+                "viewport.vertices.hover_growth",
+                "viewport.vertices.outline_size",
+            }};
+        static constexpr std::array<std::string_view, 2>
+            kViewportPickingPreferences{{
+                "viewport.picking.vertex_radius",
+                "viewport.picking.edge_radius",
+            }};
+        static constexpr std::array<std::string_view, 1>
+            kViewportGizmoPreferences{{
+                "viewport.gizmo.size",
+            }};
 
-	add_preference_group(storage, "viewport.scene", "Scene", HostPreferenceScope::viewport_style, std::vector<std::string_view>(viewport_scene_preferences.begin(), viewport_scene_preferences.end()));
-	add_preference_group(storage, "viewport.grid", "Grid", HostPreferenceScope::viewport_style, std::vector<std::string_view>(viewport_grid_preferences.begin(), viewport_grid_preferences.end()));
-	add_preference_group(storage, "viewport.selection", "Selection", HostPreferenceScope::viewport_style, std::vector<std::string_view>(viewport_selection_preferences.begin(), viewport_selection_preferences.end()));
-	add_preference_group(storage, "viewport.overlay", "Overlay", HostPreferenceScope::viewport_style, std::vector<std::string_view>(viewport_overlay_preferences.begin(), viewport_overlay_preferences.end()));
-	add_preference_group(storage, "viewport.vertices", "Vertices", HostPreferenceScope::viewport_style, std::vector<std::string_view>(viewport_vertex_preferences.begin(), viewport_vertex_preferences.end()));
-	add_preference_group(storage, "viewport.picking", "Picking", HostPreferenceScope::viewport_picking, std::vector<std::string_view>(viewport_picking_preferences.begin(), viewport_picking_preferences.end()));
-	add_preference_group(storage, "viewport.gizmo", "Gizmo", HostPreferenceScope::viewport_interaction, std::vector<std::string_view>(viewport_gizmo_preferences.begin(), viewport_gizmo_preferences.end()));
-	return storage;
+        add_preference_group(
+            storage, "viewport.scene", "Scene",
+            HostPreferenceScope::ViewportStyle,
+            std::vector<std::string_view>(kViewportScenePreferences.begin(),
+                                          kViewportScenePreferences.end()));
+        add_preference_group(
+            storage, "viewport.grid", "Grid",
+            HostPreferenceScope::ViewportStyle,
+            std::vector<std::string_view>(kViewportGridPreferences.begin(),
+                                          kViewportGridPreferences.end()));
+        add_preference_group(
+            storage, "viewport.selection", "Selection",
+            HostPreferenceScope::ViewportStyle,
+            std::vector<std::string_view>(kViewportSelectionPreferences.begin(),
+                                          kViewportSelectionPreferences.end()));
+        add_preference_group(
+            storage, "viewport.overlay", "Overlay",
+            HostPreferenceScope::ViewportStyle,
+            std::vector<std::string_view>(kViewportOverlayPreferences.begin(),
+                                          kViewportOverlayPreferences.end()));
+        add_preference_group(
+            storage, "viewport.vertices", "Vertices",
+            HostPreferenceScope::ViewportStyle,
+            std::vector<std::string_view>(kViewportVertexPreferences.begin(),
+                                          kViewportVertexPreferences.end()));
+        add_preference_group(
+            storage, "viewport.picking", "Picking",
+            HostPreferenceScope::ViewportPicking,
+            std::vector<std::string_view>(kViewportPickingPreferences.begin(),
+                                          kViewportPickingPreferences.end()));
+        add_preference_group(
+            storage, "viewport.gizmo", "Gizmo",
+            HostPreferenceScope::ViewportInteraction,
+            std::vector<std::string_view>(kViewportGizmoPreferences.begin(),
+                                          kViewportGizmoPreferences.end()));
+        return storage;
 }
 
 std::span<const HostPreferenceGroupDescriptor> preference_group_descriptors()
 {
-	static const HostPreferenceGroupStorage storage = build_preference_group_descriptors();
-	return {storage.descriptors.data(), storage.descriptors.size()};
+  static const HostPreferenceGroupStorage kStorage =
+      build_preference_group_descriptors();
+  return {kStorage.descriptors.data(), kStorage.descriptors.size()};
 }
 
 std::span<const std::string_view> overlay_draw_order_layer_ids()
 {
-	static constexpr std::array<std::string_view, 15> ids {{
-		"selected_visible_face",
-		"selected_face_mask",
-		"selected_xray_face",
-		"hover_face",
-		"source_wire",
-		"open_edge",
-		"diagnostic_edge",
-		"selected_face_edge",
-		"selected_edge",
-		"hover_face_edge",
-		"hover_edge",
-		"unselected_vertex",
-		"selected_vertex",
-		"hover_vertex",
-		"snap_target_vertex",
-	}};
-	return ids;
+  static constexpr std::array<std::string_view, 15> kIds{{
+      "selected_visible_face",
+      "selected_face_mask",
+      "selected_xray_face",
+      "hover_face",
+      "source_wire",
+      "open_edge",
+      "diagnostic_edge",
+      "selected_face_edge",
+      "selected_edge",
+      "hover_face_edge",
+      "hover_edge",
+      "unselected_vertex",
+      "selected_vertex",
+      "hover_vertex",
+      "snap_target_vertex",
+  }};
+  return kIds;
 }
 
 std::span<const std::string_view> blocking_preview_override_layer_ids()
 {
-	static constexpr std::array<std::string_view, 4> ids {{
-		"selected_face_edge",
-		"selected_edge",
-		"source_wire",
-		"open_edge",
-	}};
-	return ids;
+  static constexpr std::array<std::string_view, 4> kIds{{
+      "selected_face_edge",
+      "selected_edge",
+      "source_wire",
+      "open_edge",
+  }};
+  return kIds;
 }
 
 std::span<const std::string_view> transient_hover_mask_writer_layer_ids()
 {
-	static constexpr std::array<std::string_view, 4> ids {{
-		"hover_face",
-		"hover_face_edge",
-		"hover_edge",
-		"hover_vertex",
-	}};
-	return ids;
+  static constexpr std::array<std::string_view, 4> kIds{{
+      "hover_face",
+      "hover_face_edge",
+      "hover_edge",
+      "hover_vertex",
+  }};
+  return kIds;
 }
 
 std::span<const std::string_view> transient_hover_suppressed_layer_ids()
 {
-	static constexpr std::array<std::string_view, 6> ids {{
-		"selected_visible_face",
-		"selected_xray_face",
-		"selected_face_mask",
-		"selected_face_edge",
-		"selected_edge",
-		"selected_vertex",
-	}};
-	return ids;
+  static constexpr std::array<std::string_view, 6> kIds{{
+      "selected_visible_face",
+      "selected_xray_face",
+      "selected_face_mask",
+      "selected_face_edge",
+      "selected_edge",
+      "selected_vertex",
+  }};
+  return kIds;
 }
 
 std::span<const HostOverlayRenderPolicyDescriptor> overlay_render_policy_descriptors()
 {
-	static constexpr std::array<HostOverlayRenderPolicyDescriptor, 5> descriptors {{
-		{ "depth_tested_fill", HostOverlayGeometryKind::triangles, 0.035, 0.0, false },
-		{ "depth_tested_line", HostOverlayGeometryKind::lines, 0.02, 1.0, false },
-		{ "depth_tested_point", HostOverlayGeometryKind::points, 0.01, 0.0, false },
-		{ "draw_on_top_line", HostOverlayGeometryKind::lines, 0.0, 1.0, true },
-		{ "draw_on_top_point", HostOverlayGeometryKind::points, 0.0, 0.0, true },
-	}};
-	return descriptors;
+  static constexpr std::array<HostOverlayRenderPolicyDescriptor, 5>
+      kDescriptors{{
+          {"depth_tested_fill", HostOverlayGeometryKind::Triangles, 0.035, 0.0,
+           false},
+          {"depth_tested_line", HostOverlayGeometryKind::Lines, 0.02, 1.0,
+           false},
+          {"depth_tested_point", HostOverlayGeometryKind::Points, 0.01, 0.0,
+           false},
+          {"draw_on_top_line", HostOverlayGeometryKind::Lines, 0.0, 1.0, true},
+          {"draw_on_top_point", HostOverlayGeometryKind::Points, 0.0, 0.0,
+           true},
+      }};
+  return kDescriptors;
 }
 
 std::span<const HostMaterialTextureAssetDescriptor> material_texture_asset_descriptors()
 {
-	static constexpr std::array<HostMaterialTextureAssetDescriptor, 2> descriptors {{
-		{ quader::kDefaultMaterialAlbedoTextureId, quader::kDefaultMaterialAlbedoTextureName, HostMaterialTextureRole::base_color, quader::kDefaultMaterialAlbedoTexturePackagePath },
-		{ quader::kDefaultMaterialRoughnessTextureId, quader::kDefaultMaterialRoughnessTextureName, HostMaterialTextureRole::roughness, quader::kDefaultMaterialRoughnessTexturePackagePath },
-	}};
-	return descriptors;
+  static constexpr std::array<HostMaterialTextureAssetDescriptor, 2>
+      kDescriptors{{
+          {quader::kDefaultMaterialAlbedoTextureId,
+           quader::kDefaultMaterialAlbedoTextureName,
+           HostMaterialTextureRole::BaseColor,
+           quader::kDefaultMaterialAlbedoTexturePackagePath},
+          {quader::kDefaultMaterialRoughnessTextureId,
+           quader::kDefaultMaterialRoughnessTextureName,
+           HostMaterialTextureRole::Roughness,
+           quader::kDefaultMaterialRoughnessTexturePackagePath},
+      }};
+  return kDescriptors;
 }
 
 std::span<const HostMaterialGeneratedTextureDescriptor> material_generated_texture_descriptors()
 {
-	static constexpr std::array<HostMaterialGeneratedTextureDescriptor, 2> descriptors {{
-		{
-			"default_metallic_smoothness",
-			"Default Metallic Smoothness",
-			HostMaterialTextureRole::metallic_smoothness,
-			"default_roughness",
-			true,
-			HostMaterialTextureChannel::alpha,
-			0.0,
-			0.0,
-			0.0,
-			1.0,
-		},
-		{
-			"default_packed_mask",
-			"Default Packed Mask",
-			HostMaterialTextureRole::mask,
-			"default_roughness",
-			true,
-			HostMaterialTextureChannel::alpha,
-			0.0,
-			1.0,
-			0.0,
-			1.0,
-		},
-	}};
-	return descriptors;
+  static constexpr std::array<HostMaterialGeneratedTextureDescriptor, 2>
+      kDescriptors{{
+          {
+              "default_metallic_smoothness",
+              "Default Metallic Smoothness",
+              HostMaterialTextureRole::MetallicSmoothness,
+              "default_roughness",
+              true,
+              HostMaterialTextureChannel::Alpha,
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+          },
+          {
+              "default_packed_mask",
+              "Default Packed Mask",
+              HostMaterialTextureRole::Mask,
+              "default_roughness",
+              true,
+              HostMaterialTextureChannel::Alpha,
+              0.0,
+              1.0,
+              0.0,
+              1.0,
+          },
+      }};
+  return kDescriptors;
 }
 
 std::span<const HostMaterialScalarDescriptor> default_material_scalars()
 {
-	static constexpr std::array<HostMaterialScalarDescriptor, 7> descriptors {{
-		{ HostMaterialScalarKind::metallic, 0.0 },
-		{ HostMaterialScalarKind::smoothness, 1.0 },
-		{ HostMaterialScalarKind::smoothness_texture_channel, 0.0 },
-		{ HostMaterialScalarKind::smoothness_remap_min, 0.0 },
-		{ HostMaterialScalarKind::smoothness_remap_max, 1.0 },
-		{ HostMaterialScalarKind::ambient_occlusion_remap_min, 1.0 },
-		{ HostMaterialScalarKind::ambient_occlusion_remap_max, 1.0 },
-	}};
-	return descriptors;
+  static constexpr std::array<HostMaterialScalarDescriptor, 7> kDescriptors{{
+      {HostMaterialScalarKind::Metallic, 0.0},
+      {HostMaterialScalarKind::Smoothness, 1.0},
+      {HostMaterialScalarKind::SmoothnessTextureChannel, 0.0},
+      {HostMaterialScalarKind::SmoothnessRemapMin, 0.0},
+      {HostMaterialScalarKind::SmoothnessRemapMax, 1.0},
+      {HostMaterialScalarKind::AmbientOcclusionRemapMin, 1.0},
+      {HostMaterialScalarKind::AmbientOcclusionRemapMax, 1.0},
+  }};
+  return kDescriptors;
 }
 
 std::span<const HostMaterialRecipeDescriptor> material_recipe_descriptors()
 {
-	static constexpr std::array<std::string_view, 2> texture_assets {{
-		quader::kDefaultMaterialAlbedoTextureId,
-		quader::kDefaultMaterialRoughnessTextureId,
-	}};
-	static constexpr std::array<std::string_view, 2> generated_textures {{
-		"default_metallic_smoothness",
-		"default_packed_mask",
-	}};
-	static const std::array<HostMaterialRecipeDescriptor, 1> descriptors {{
-		{
-			"default_material",
-			"Quader Default Material",
-			color_rgba(1.0, 1.0, 1.0, 1.0),
-			texture_assets,
-			generated_textures,
-			default_material_scalars(),
-			{ 1.0, -1.0 },
-			{ 0.0, 1.0 },
-		},
-	}};
-	return descriptors;
+  static constexpr std::array<std::string_view, 2> kTextureAssets{{
+      quader::kDefaultMaterialAlbedoTextureId,
+      quader::kDefaultMaterialRoughnessTextureId,
+  }};
+  static constexpr std::array<std::string_view, 2> kGeneratedTextures{{
+      "default_metallic_smoothness",
+      "default_packed_mask",
+  }};
+  static const std::array<HostMaterialRecipeDescriptor, 1> kDescriptors{{
+      {
+          "default_material",
+          "Quader Default Material",
+          color_rgba(1.0, 1.0, 1.0, 1.0),
+          kTextureAssets,
+          kGeneratedTextures,
+          default_material_scalars(),
+          {1.0, -1.0},
+          {0.0, 1.0},
+      },
+  }};
+  return kDescriptors;
 }
 
-constexpr double host_default_orthographic_size = 24.0;
-constexpr double host_focus_origin_distance = 64.0;
-constexpr double host_default_fov_degrees = 60.0;
-constexpr double host_default_grid_map_units = 32.0;
+constexpr double kHostDefaultOrthographicSize = 24.0;
+constexpr double kHostFocusOriginDistance = 64.0;
+constexpr double kHostDefaultFovDegrees = 60.0;
+constexpr double kHostDefaultGridMapUnits = 32.0;
 
 } // namespace
 
 std::span<const HostOperationDescriptor> operation_catalog()
 {
-	static const std::vector<HostOperationDescriptor> descriptors = build_operation_catalog();
-	return descriptors;
+  static const std::vector<HostOperationDescriptor> kDescriptors =
+      build_operation_catalog();
+  return kDescriptors;
 }
 
 const HostOperationDescriptor *find_operation_descriptor(std::string_view operation_id)
@@ -1604,8 +1924,9 @@ const HostPanelDescriptor *find_panel_descriptor(std::string_view panel_id)
 
 std::span<const HostToolDescriptor> tool_catalog()
 {
-	static const std::vector<HostToolDescriptor> descriptors = build_tool_catalog();
-	return descriptors;
+  static const std::vector<HostToolDescriptor> kDescriptors =
+      build_tool_catalog();
+  return kDescriptors;
 }
 
 const HostToolDescriptor *find_tool_descriptor(std::string_view tool_id)
@@ -1620,14 +1941,14 @@ const HostToolDescriptor *find_tool_descriptor(std::string_view tool_id)
 
 std::span<const HostSelectionModeDescriptor> selection_mode_catalog()
 {
-	static const std::array<HostSelectionModeDescriptor, 5> descriptors {{
-		{ HostSelectionMode::vertex, "vertex", "Vertex" },
-		{ HostSelectionMode::edge, "edge", "Edge" },
-		{ HostSelectionMode::face, "face", "Face" },
-		{ HostSelectionMode::object, "object", "Object" },
-		{ HostSelectionMode::group, "group", "Group" },
-	}};
-	return descriptors;
+  static const std::array<HostSelectionModeDescriptor, 5> kDescriptors{{
+      {HostSelectionMode::Vertex, "vertex", "Vertex"},
+      {HostSelectionMode::Edge, "edge", "Edge"},
+      {HostSelectionMode::Face, "face", "Face"},
+      {HostSelectionMode::Object, "object", "Object"},
+      {HostSelectionMode::Group, "group", "Group"},
+  }};
+  return kDescriptors;
 }
 
 const HostSelectionModeDescriptor *find_selection_mode_descriptor(std::string_view selection_mode_id)
@@ -1662,88 +1983,152 @@ const HostGestureDescriptor *find_gesture_descriptor(std::string_view gesture_id
 
 std::span<const HostTransformAxisDescriptor> transform_axis_catalog()
 {
-	static const std::array<HostTransformAxisDescriptor, 7> descriptors {{
-		{ quader_editor_core::axis_id(quader_editor_core::TransformAxis::x), "X", false },
-		{ quader_editor_core::axis_id(quader_editor_core::TransformAxis::y), "Y", false },
-		{ quader_editor_core::axis_id(quader_editor_core::TransformAxis::z), "Z", false },
-		{ quader_editor_core::axis_id(quader_editor_core::TransformAxis::xy), "XY", true },
-		{ quader_editor_core::axis_id(quader_editor_core::TransformAxis::xz), "XZ", true },
-		{ quader_editor_core::axis_id(quader_editor_core::TransformAxis::yz), "YZ", true },
-		{ quader_editor_core::axis_id(quader_editor_core::TransformAxis::all), "All", false },
-	}};
-	return descriptors;
+  static const std::array<HostTransformAxisDescriptor, 7> kDescriptors{{
+      {quader_editor_core::axis_id(quader_editor_core::TransformAxis::X), "X",
+       false},
+      {quader_editor_core::axis_id(quader_editor_core::TransformAxis::Y), "Y",
+       false},
+      {quader_editor_core::axis_id(quader_editor_core::TransformAxis::Z), "Z",
+       false},
+      {quader_editor_core::axis_id(quader_editor_core::TransformAxis::Xy), "XY",
+       true},
+      {quader_editor_core::axis_id(quader_editor_core::TransformAxis::Xz), "XZ",
+       true},
+      {quader_editor_core::axis_id(quader_editor_core::TransformAxis::Yz), "YZ",
+       true},
+      {quader_editor_core::axis_id(quader_editor_core::TransformAxis::All),
+       "All", false},
+  }};
+  return kDescriptors;
 }
 
 std::span<const HostViewportViewDescriptor> viewport_view_catalog()
 {
-	static const std::array<HostViewportViewDescriptor, 7> descriptors {{
-		{ "perspective", "Perspective", false, { 6.0, 5.0, 8.0 }, {}, { 0.0, 1.0, 0.0 } },
-		{ "top", "Top", true, { 0.0, host_focus_origin_distance, 0.0 }, {}, { 0.0, 0.0, -1.0 } },
-		{ "bottom", "Bottom", true, { 0.0, -host_focus_origin_distance, 0.0 }, {}, { 0.0, 0.0, 1.0 } },
-		{ "front", "Front", true, { 0.0, 0.0, host_focus_origin_distance }, {}, { 0.0, 1.0, 0.0 } },
-		{ "back", "Back", true, { 0.0, 0.0, -host_focus_origin_distance }, {}, { 0.0, 1.0, 0.0 } },
-		{ quader::viewportViewStableId(quader::ViewportView::Side), quader::viewportViewLabel(quader::ViewportView::Side), true, { host_focus_origin_distance, 0.0, 0.0 }, {}, { 0.0, 1.0, 0.0 } },
-		{ "left", "Left", true, { -host_focus_origin_distance, 0.0, 0.0 }, {}, { 0.0, 1.0, 0.0 } },
-	}};
-	return descriptors;
+  static const std::array<HostViewportViewDescriptor, 7> kDescriptors{{
+      {"perspective",
+       "Perspective",
+       false,
+       {6.0, 5.0, 8.0},
+       {},
+       {0.0, 1.0, 0.0}},
+      {"top",
+       "Top",
+       true,
+       {0.0, kHostFocusOriginDistance, 0.0},
+       {},
+       {0.0, 0.0, -1.0}},
+      {"bottom",
+       "Bottom",
+       true,
+       {0.0, -kHostFocusOriginDistance, 0.0},
+       {},
+       {0.0, 0.0, 1.0}},
+      {"front",
+       "Front",
+       true,
+       {0.0, 0.0, kHostFocusOriginDistance},
+       {},
+       {0.0, 1.0, 0.0}},
+      {"back",
+       "Back",
+       true,
+       {0.0, 0.0, -kHostFocusOriginDistance},
+       {},
+       {0.0, 1.0, 0.0}},
+      {quader::viewport_view_stable_id(quader::ViewportView::Side),
+       quader::viewport_view_label(quader::ViewportView::Side),
+       true,
+       {kHostFocusOriginDistance, 0.0, 0.0},
+       {},
+       {0.0, 1.0, 0.0}},
+      {"left",
+       "Left",
+       true,
+       {-kHostFocusOriginDistance, 0.0, 0.0},
+       {},
+       {0.0, 1.0, 0.0}},
+  }};
+  return kDescriptors;
 }
 
 std::span<const HostGridPresetDescriptor> grid_preset_catalog()
 {
-	constexpr double unit = quader_editor_core::default_map_units_per_world_unit;
-	static const std::array<HostGridPresetDescriptor, 10> descriptors {{
-		{ "F1", 1.0, 1.0 / unit, false },
-		{ "F2", 2.0, 2.0 / unit, false },
-		{ "F3", 4.0, 4.0 / unit, false },
-		{ "F4", 8.0, 8.0 / unit, false },
-		{ "F5", 16.0, 16.0 / unit, false },
-		{ "F6", 32.0, 32.0 / unit, true },
-		{ "F7", 64.0, 64.0 / unit, false },
-		{ "F8", 128.0, 128.0 / unit, false },
-		{ "F9", 256.0, 256.0 / unit, false },
-		{ "F10", 512.0, 512.0 / unit, false },
-	}};
-	return descriptors;
+  constexpr double kUnit = quader_editor_core::kDefaultMapUnitsPerWorldUnit;
+  static const std::array<HostGridPresetDescriptor, 10> kDescriptors{{
+      {"F1", 1.0, 1.0 / kUnit, false},
+      {"F2", 2.0, 2.0 / kUnit, false},
+      {"F3", 4.0, 4.0 / kUnit, false},
+      {"F4", 8.0, 8.0 / kUnit, false},
+      {"F5", 16.0, 16.0 / kUnit, false},
+      {"F6", 32.0, 32.0 / kUnit, true},
+      {"F7", 64.0, 64.0 / kUnit, false},
+      {"F8", 128.0, 128.0 / kUnit, false},
+      {"F9", 256.0, 256.0 / kUnit, false},
+      {"F10", 512.0, 512.0 / kUnit, false},
+  }};
+  return kDescriptors;
 }
 
 HostViewportDefaultsDescriptor viewport_defaults()
 {
 	HostViewportDefaultsDescriptor descriptor;
-	descriptor.map_units_per_world_unit = quader_editor_core::default_map_units_per_world_unit;
-	descriptor.default_grid_map_units = host_default_grid_map_units;
-	descriptor.default_orthographic_size = host_default_orthographic_size;
-	descriptor.focus_origin_distance = host_focus_origin_distance;
-	descriptor.default_fov_degrees = host_default_fov_degrees;
-	descriptor.orbit_radians_per_pixel = quader_editor_core::navigation_orbit_radians_per_pixel;
-	descriptor.fly_look_radians_per_pixel = quader_editor_core::navigation_fly_look_radians_per_pixel;
-	descriptor.fly_base_speed = quader_editor_core::navigation_fly_base_speed;
-	descriptor.fly_fast_multiplier = quader_editor_core::navigation_fly_fast_multiplier;
-	descriptor.fly_slow_multiplier = quader_editor_core::navigation_fly_slow_multiplier;
-	descriptor.selection_box_drag_threshold_pixels = quader_editor_core::selection_box_default_drag_threshold;
-	return descriptor;
+        descriptor.map_units_per_world_unit =
+            quader_editor_core::kDefaultMapUnitsPerWorldUnit;
+        descriptor.default_grid_map_units = kHostDefaultGridMapUnits;
+        descriptor.default_orthographic_size = kHostDefaultOrthographicSize;
+        descriptor.focus_origin_distance = kHostFocusOriginDistance;
+        descriptor.default_fov_degrees = kHostDefaultFovDegrees;
+        descriptor.orbit_radians_per_pixel =
+            quader_editor_core::kNavigationOrbitRadiansPerPixel;
+        descriptor.fly_look_radians_per_pixel =
+            quader_editor_core::kNavigationFlyLookRadiansPerPixel;
+        descriptor.fly_base_speed = quader_editor_core::kNavigationFlyBaseSpeed;
+        descriptor.fly_fast_multiplier =
+            quader_editor_core::kNavigationFlyFastMultiplier;
+        descriptor.fly_slow_multiplier =
+            quader_editor_core::kNavigationFlySlowMultiplier;
+        descriptor.selection_box_drag_threshold_pixels =
+            quader_editor_core::kSelectionBoxDefaultDragThreshold;
+        return descriptor;
 }
 
 std::span<const HostOverlayLayerDescriptor> overlay_layer_catalog()
 {
 	using Layer = quader_editor_core::SelectionOverlayLayer;
-	static const std::array<HostOverlayLayerDescriptor, 15> descriptors {{
-		overlay_layer(Layer::selected_visible_face, "selected_visible_face", "Selected Visible Face", true, false, false),
-		overlay_layer(Layer::selected_face_edge, "selected_face_edge", "Selected Face Edge", false, true, false, true),
-		overlay_layer(Layer::unselected_vertex, "unselected_vertex", "Unselected Vertex", false, false, true),
-		overlay_layer(Layer::selected_vertex, "selected_vertex", "Selected Vertex", false, false, true, false, true),
-		overlay_layer(Layer::hover_face, "hover_face", "Hover Face", true, false, false),
-		overlay_layer(Layer::hover_face_edge, "hover_face_edge", "Hover Face Edge", false, true, false, true),
-		overlay_layer(Layer::hover_edge, "hover_edge", "Hover Edge", false, true, false, true),
-		overlay_layer(Layer::hover_vertex, "hover_vertex", "Hover Vertex", false, false, true, false, true),
-		overlay_layer(Layer::selected_edge, "selected_edge", "Selected Edge", false, true, false, true),
-		overlay_layer(Layer::selected_xray_face, "selected_xray_face", "Selected Xray Face", true, false, false),
-		overlay_layer(Layer::selected_face_mask, "selected_face_mask", "Selected Face Mask", true, false, false),
-		overlay_layer(Layer::source_wire, "source_wire", "Source Wire", false, true, false, true),
-		overlay_layer(Layer::open_edge, "open_edge", "Open Edge", false, true, false),
-		overlay_layer(Layer::snap_target_vertex, "snap_target_vertex", "Snap Target Vertex", false, false, true, false, true),
-		overlay_layer(Layer::diagnostic_edge, "diagnostic_edge", "Diagnostic Edge", false, true, false, true),
-	}};
-	return descriptors;
+        static const std::array<HostOverlayLayerDescriptor, 15> kDescriptors{{
+            overlay_layer(Layer::SelectedVisibleFace, "selected_visible_face",
+                          "Selected Visible Face", true, false, false),
+            overlay_layer(Layer::SelectedFaceEdge, "selected_face_edge",
+                          "Selected Face Edge", false, true, false, true),
+            overlay_layer(Layer::UnselectedVertex, "unselected_vertex",
+                          "Unselected Vertex", false, false, true),
+            overlay_layer(Layer::SelectedVertex, "selected_vertex",
+                          "Selected Vertex", false, false, true, false, true),
+            overlay_layer(Layer::HoverFace, "hover_face", "Hover Face", true,
+                          false, false),
+            overlay_layer(Layer::HoverFaceEdge, "hover_face_edge",
+                          "Hover Face Edge", false, true, false, true),
+            overlay_layer(Layer::HoverEdge, "hover_edge", "Hover Edge", false,
+                          true, false, true),
+            overlay_layer(Layer::HoverVertex, "hover_vertex", "Hover Vertex",
+                          false, false, true, false, true),
+            overlay_layer(Layer::SelectedEdge, "selected_edge", "Selected Edge",
+                          false, true, false, true),
+            overlay_layer(Layer::SelectedXrayFace, "selected_xray_face",
+                          "Selected Xray Face", true, false, false),
+            overlay_layer(Layer::SelectedFaceMask, "selected_face_mask",
+                          "Selected Face Mask", true, false, false),
+            overlay_layer(Layer::SourceWire, "source_wire", "Source Wire",
+                          false, true, false, true),
+            overlay_layer(Layer::OpenEdge, "open_edge", "Open Edge", false,
+                          true, false),
+            overlay_layer(Layer::SnapTargetVertex, "snap_target_vertex",
+                          "Snap Target Vertex", false, false, true, false,
+                          true),
+            overlay_layer(Layer::DiagnosticEdge, "diagnostic_edge",
+                          "Diagnostic Edge", false, true, false, true),
+        }};
+        return kDescriptors;
 }
 
 const HostOverlayLayerDescriptor *find_overlay_layer_descriptor(int stable_index)

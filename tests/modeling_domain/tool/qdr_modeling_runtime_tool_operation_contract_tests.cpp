@@ -29,8 +29,9 @@ TEST(QdrModelingRuntimeToolOperationContractTests, EditorToolRegistryExposesConc
 		EXPECT_TRUE(registry[index] == tools[index]);
 
 		const qec::EditorTool *tool = tools[index];
-		EXPECT_TRUE(tool->tool_id() != qec::ViewportInteractionTool::unknown);
-		EXPECT_FALSE(tool->id().empty());
+                EXPECT_TRUE(tool->tool_id() !=
+                            qec::ViewportInteractionTool::Unknown);
+                EXPECT_FALSE(tool->id().empty());
 		EXPECT_FALSE(tool->label().empty());
 		EXPECT_TRUE(tool_ids.insert(tool->tool_id()).second);
 		EXPECT_TRUE(stable_ids.insert(std::string(tool->id())).second);
@@ -38,8 +39,9 @@ TEST(QdrModelingRuntimeToolOperationContractTests, EditorToolRegistryExposesConc
 		EXPECT_TRUE(qec::editor_tool_for_id(tool->id()) == tool);
 	}
 
-	EXPECT_TRUE(qec::editor_tool_for_kind(qec::ViewportInteractionTool::unknown) == nullptr);
-	EXPECT_TRUE(qec::editor_tool_for_id("missing") == nullptr);
+        EXPECT_TRUE(qec::editor_tool_for_kind(
+                        qec::ViewportInteractionTool::Unknown) == nullptr);
+        EXPECT_TRUE(qec::editor_tool_for_id("missing") == nullptr);
 }
 
 TEST(QdrModelingRuntimeToolOperationContractTests, ToolCompatibilityAPIsExposeInsertEdgeLoopAndKnifeBehavior) {
@@ -86,11 +88,13 @@ TEST(QdrModelingRuntimeToolOperationContractTests, EditorOperationRegistryExpose
 		EXPECT_TRUE(qec::editor_operation_for_id(operation->id()) == operation);
 	}
 
-	const qec::EditorOperation *operation = qec::editor_operation_for_id(qec::EditorOperationId::bridge);
-	EXPECT_TRUE(operation != nullptr);
+        const qec::EditorOperation *operation =
+            qec::editor_operation_for_id(qec::EditorOperationId::Bridge);
+        EXPECT_TRUE(operation != nullptr);
 	EXPECT_TRUE(operation == &qec::bridge_operation());
-	EXPECT_TRUE(operation->operation_id() == qec::EditorOperationId::bridge);
-	EXPECT_TRUE(std::string(operation->id()) == std::string(qec::bridge_operation_schema().operation_id));
+        EXPECT_TRUE(operation->operation_id() ==
+                    qec::EditorOperationId::Bridge);
+        EXPECT_TRUE(std::string(operation->id()) == std::string(qec::bridge_operation_schema().operation_id));
 	EXPECT_TRUE(operation->supports_preview());
 	EXPECT_TRUE(qec::editor_operation_for_id(operation->id()) == operation);
 

@@ -16,21 +16,22 @@ namespace quader {
 class CopySelectionTool final : public CustomInstantCommandTool {
 public:
     [[nodiscard]] CommandToolDescriptor descriptor() const override {
-        return {
-                .id = "copy_selection",
-                .operationId = "copy_selection",
-                .label = "Copy",
-                .kind = CommandToolKind::Instant,
-                .previewKind = ModelingActionPreviewKind::None,
-                .rebuildsMeshOnSuccess = false,
-                .publicCommandId = "edit.copy",
-                .registersPublicCommand = false,
-                .hostShortcutTargetId = "copy_meshes",
-        };
+      return {
+          .id = "copy_selection",
+          .operation_id = "copy_selection",
+          .label = "Copy",
+          .kind = CommandToolKind::Instant,
+          .preview_kind = ModelingActionPreviewKind::None,
+          .rebuilds_mesh_on_success = false,
+          .public_command_id = "edit.copy",
+          .registers_public_command = false,
+          .host_shortcut_target_id = "copy_meshes",
+      };
     }
 
 private:
-    ModelingCommandResult executeCustomCommand(ModelingCommandExecutionContext& context) const override;
+  ModelingCommandResult execute_custom_command(
+      ModelingCommandExecutionContext &context) const override;
 };
 
 } // namespace quader

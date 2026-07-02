@@ -27,8 +27,8 @@ struct ScreenRect {
  * Enumerates rectangle selection hit matching rules used by projected candidates.
  */
 enum class RectangleSelectionMatch {
-	contain,
-	crossing,
+  Contain,
+  Crossing,
 };
 
 /**
@@ -95,13 +95,13 @@ struct RectangleProjectedVertex {
  * Stores the Rectangle Projected Hits Request data contract used by the modal modeling interaction layer.
  */
 struct RectangleProjectedHitsRequest {
-	SelectionMode mode = SelectionMode::object;
-	RectangleSelectionMatch match = RectangleSelectionMatch::crossing;
-	ScreenRect rect;
-	std::vector<RectangleProjectedObject> objects;
-	std::vector<RectangleProjectedFace> faces;
-	std::vector<RectangleProjectedEdge> edges;
-	std::vector<RectangleProjectedVertex> vertices;
+  SelectionMode mode = SelectionMode::Object;
+  RectangleSelectionMatch match = RectangleSelectionMatch::Crossing;
+  ScreenRect rect;
+  std::vector<RectangleProjectedObject> objects;
+  std::vector<RectangleProjectedFace> faces;
+  std::vector<RectangleProjectedEdge> edges;
+  std::vector<RectangleProjectedVertex> vertices;
 };
 
 /**
@@ -110,8 +110,8 @@ struct RectangleProjectedHitsRequest {
 struct SelectionBoxState {
 	bool active = false;
 	bool dragging = false;
-	SelectionEditOperation operation = SelectionEditOperation::replace;
-	quader::QVec2 start;
+        SelectionEditOperation operation = SelectionEditOperation::Replace;
+        quader::QVec2 start;
 	quader::QVec2 end;
 };
 
@@ -120,8 +120,8 @@ struct SelectionBoxState {
  */
 struct SelectionBoxCommit {
 	bool active = false;
-	SelectionEditOperation operation = SelectionEditOperation::replace;
-	bool dragged = false;
+        SelectionEditOperation operation = SelectionEditOperation::Replace;
+        bool dragged = false;
 	quader::QVec2 start;
 	quader::QVec2 end;
 };
@@ -136,8 +136,13 @@ struct SelectionBoxPrimitives {
 };
 
 void begin_selection_box(SelectionBoxState& state, quader::QVec2 position, SelectionEditOperation operation);
-void update_selection_box(SelectionBoxState& state, quader::QVec2 position, double drag_threshold = selection_box_default_drag_threshold);
-SelectionBoxCommit finish_selection_box(SelectionBoxState& state, quader::QVec2 position, SelectionEditOperation operation, double drag_threshold = selection_box_default_drag_threshold);
+void update_selection_box(
+    SelectionBoxState &state, quader::QVec2 position,
+    double drag_threshold = kSelectionBoxDefaultDragThreshold);
+SelectionBoxCommit
+finish_selection_box(SelectionBoxState &state, quader::QVec2 position,
+                     SelectionEditOperation operation,
+                     double drag_threshold = kSelectionBoxDefaultDragThreshold);
 void clear_selection_box(SelectionBoxState& state);
 ScreenRect normalized_screen_rect(quader::QVec2 a, quader::QVec2 b);
 bool screen_rect_contains(const ScreenRect& rect, quader::QVec2 point);

@@ -6,8 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "math/types/q_quat.hpp"
-#include "math/types/q_vec3.hpp"
+#include "math/types/qquat.hpp"
+#include "math/types/qvec3.hpp"
 
 namespace quader {
 

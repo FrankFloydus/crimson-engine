@@ -14,7 +14,7 @@ namespace quader {
  * Describes optional command coalescing for live editor gestures.
  */
 struct UndoRedoExecuteOptions {
-    std::string mergeKey;
+  std::string merge_key;
 };
 
 } // namespace quader

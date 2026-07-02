@@ -6,9 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "math/types/q_scalar.hpp"
-#include "math/types/q_vec2.hpp"
-#include "math/types/q_vec3.hpp"
-#include "math/types/q_quat.hpp"
-#include "math/types/q_mat4.hpp"
-#include "math/types/q_transform.hpp"
+#include "math/types/qscalar.hpp"
+#include "math/types/qvec2.hpp"
+#include "math/types/qvec3.hpp"
+#include "math/types/qquat.hpp"
+#include "math/types/qmat4.hpp"
+#include "math/types/qtransform.hpp"

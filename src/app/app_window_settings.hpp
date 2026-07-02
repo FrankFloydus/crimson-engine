@@ -20,14 +20,15 @@ class AppWindowSettings {
 public:
     static AppWindowSettings defaults();
     static AppWindowSettings load(const std::filesystem::path& path);
-    static std::filesystem::path resolvePath(const std::filesystem::path& executableDir);
+    static std::filesystem::path
+    resolve_path(const std::filesystem::path &executable_dir);
 
     bool save(const std::filesystem::path& path) const;
 
     [[nodiscard]] const std::optional<PlatformWindowPlacement>& placement() const { return placement_; }
-    void setPlacement(PlatformWindowPlacement placement);
+    void set_placement(PlatformWindowPlacement placement);
 
-private:
+  private:
     std::optional<PlatformWindowPlacement> placement_;
 };
 

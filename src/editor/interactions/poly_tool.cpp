@@ -19,8 +19,8 @@
 namespace quader_editor_core {
 namespace {
 
-inline constexpr double poly_point_epsilon_squared = 0.0001;
-inline constexpr double poly_plane_epsilon_squared = 0.000001;
+inline constexpr double kPolyPointEpsilonSquared = 0.0001;
+inline constexpr double kPolyPlaneEpsilonSquared = 0.000001;
 
 quader_geometry::QVec3d to_geometry_vec3(quader::QVec3 value)
 {
@@ -36,7 +36,8 @@ bool poly_points_are_collinear(quader::QVec3 a, quader::QVec3 b, quader::QVec3 c
 {
 	const quader_geometry::QVec3d area_vector =
 		quader_geometry::triangle_area_vector(to_geometry_triangle(a, b, c));
-	return quader_geometry::length_squared(area_vector) <= poly_plane_epsilon_squared * 0.25;
+        return quader_geometry::length_squared(area_vector) <=
+               kPolyPlaneEpsilonSquared * 0.25;
 }
 
 bool poly_points_have_area(const std::vector<quader::QVec3>& points)
@@ -63,8 +64,8 @@ class PolyTool final : public EditorTool {
 public:
 	[[nodiscard]] ViewportInteractionTool tool_id() const override
 	{
-		return ViewportInteractionTool::poly;
-	}
+          return ViewportInteractionTool::Poly;
+        }
 
 	[[nodiscard]] std::string_view id() const override
 	{
@@ -95,51 +96,52 @@ public:
 		}
 
 		for (const quader::QVec3& point : state.points) {
-			state.preview_points.push_back({
-				SelectionOverlayLayer::selected_vertex,
-				point,
-				0xffffbd45U,
-				8.0F,
-			});
-		}
+                  state.preview_points.push_back({
+                      SelectionOverlayLayer::SelectedVertex,
+                      point,
+                      0xffffbd45U,
+                      8.0F,
+                  });
+                }
 
 		for (std::size_t index = 1; index < state.points.size(); ++index) {
-			state.preview_lines.push_back({
-				SelectionOverlayLayer::hover_edge,
-				state.points[index - 1U],
-				state.points[index],
-				0xffffbd45U,
-				3.0F,
-			});
-		}
+                  state.preview_lines.push_back({
+                      SelectionOverlayLayer::HoverEdge,
+                      state.points[index - 1U],
+                      state.points[index],
+                      0xffffbd45U,
+                      3.0F,
+                  });
+                }
 
 		if (state.closed && state.points.size() >= 3U) {
-			state.preview_lines.push_back({
-				SelectionOverlayLayer::hover_edge,
-				state.points.back(),
-				state.points.front(),
-				0xffffbd45U,
-				3.0F,
-			});
-			return;
+                  state.preview_lines.push_back({
+                      SelectionOverlayLayer::HoverEdge,
+                      state.points.back(),
+                      state.points.front(),
+                      0xffffbd45U,
+                      3.0F,
+                  });
+                  return;
 		}
 
 		if (state.has_current) {
-			state.preview_points.push_back({
-				SelectionOverlayLayer::hover_vertex,
-				state.current_point,
-				current_closes_stroke(state) ? 0xff56ff8fU : 0xffffd77aU,
-				8.0F,
-			});
-			if (!state.points.empty()) {
-				state.preview_lines.push_back({
-					SelectionOverlayLayer::hover_edge,
-					state.points.back(),
-					state.current_point,
-					current_closes_stroke(state) ? 0xff56ff8fU : 0xffffbd45U,
-					3.0F,
-				});
-			}
+                  state.preview_points.push_back({
+                      SelectionOverlayLayer::HoverVertex,
+                      state.current_point,
+                      current_closes_stroke(state) ? 0xff56ff8fU : 0xffffd77aU,
+                      8.0F,
+                  });
+                  if (!state.points.empty()) {
+                    state.preview_lines.push_back({
+                        SelectionOverlayLayer::HoverEdge,
+                        state.points.back(),
+                        state.current_point,
+                        current_closes_stroke(state) ? 0xff56ff8fU
+                                                     : 0xffffbd45U,
+                        3.0F,
+                    });
+                  }
 		}
 	}
 
@@ -189,13 +191,13 @@ public:
 			next_position = constrain_knife_point_to_axis(state.points.back(), next_position, safe_normal, grid_size, snap_enabled);
 		}
 
-		const bool changed =
-			!state.active ||
-			!state.has_current ||
-			state.closed ||
-			vec3_distance_squared(state.current_point, next_position) > poly_point_epsilon_squared ||
-			vec3_distance_squared(state.face_normal, safe_normal) > poly_plane_epsilon_squared;
-		state.active = true;
+                const bool changed =
+                    !state.active || !state.has_current || state.closed ||
+                    vec3_distance_squared(state.current_point, next_position) >
+                        kPolyPointEpsilonSquared ||
+                    vec3_distance_squared(state.face_normal, safe_normal) >
+                        kPolyPlaneEpsilonSquared;
+                state.active = true;
 		state.closed = false;
 		state.has_current = true;
 		state.current_point = next_position;
@@ -232,25 +234,27 @@ private:
 	[[nodiscard]] bool point_repeats_existing(const PolyToolState& state, quader::QVec3 point) const
 	{
 		for (const quader::QVec3 existing : state.points) {
-			if (vec3_distance_squared(existing, point) <= poly_point_epsilon_squared) {
-				return true;
-			}
-		}
+                  if (vec3_distance_squared(existing, point) <=
+                      kPolyPointEpsilonSquared) {
+                    return true;
+                  }
+                }
 		return false;
 	}
 
 	[[nodiscard]] bool current_closes_stroke(const PolyToolState& state) const
 	{
-		return state.points.size() >= 3U &&
-			state.has_current &&
-			vec3_distance_squared(state.points.front(), state.current_point) <= poly_point_epsilon_squared;
-	}
+          return state.points.size() >= 3U && state.has_current &&
+                 vec3_distance_squared(state.points.front(),
+                                       state.current_point) <=
+                     kPolyPointEpsilonSquared;
+        }
 };
 
 const PolyTool& poly_tool_instance()
 {
-	static const PolyTool tool;
-	return tool;
+  static const PolyTool kTool;
+  return kTool;
 }
 
 } // namespace

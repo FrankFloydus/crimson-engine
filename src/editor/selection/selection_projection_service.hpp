@@ -34,7 +34,7 @@ namespace quader {
 struct RuntimeObjectSelectionProjectionResult {
     bool ok = true;
     bool changed = false;
-    bool hasModelingObjects = false;
+    bool has_modeling_objects = false;
 };
 
 /**
@@ -42,47 +42,42 @@ struct RuntimeObjectSelectionProjectionResult {
  */
 class SelectionProjectionService final {
 public:
-    [[nodiscard]] bool shouldProjectObjectSelectionFromScene(
-            const quader_editor_core::EditorSession& session,
-            bool forceObjectMode) const;
+  [[nodiscard]] bool should_project_object_selection_from_scene(
+      const quader_editor_core::EditorSession &session,
+      bool force_object_mode) const;
 
-    bool projectObjectSelectionFromScene(
-            quader_editor_core::EditorSession& session,
-            const SceneDocument& scene,
-            const ModelingObjectRuntimeMap& objectRegistry,
-            bool forceObjectMode = false) const;
+  bool project_object_selection_from_scene(
+      quader_editor_core::EditorSession &session, const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_registry,
+      bool force_object_mode = false) const;
 
-    RuntimeObjectSelectionProjectionResult projectObjectSelectionForSceneEntities(
-            quader_editor_core::EditorSession& session,
-            std::span<const EntityId> entities,
-            EntityId active,
-            const ModelingObjectRuntimeMap& objectRegistry) const;
+  RuntimeObjectSelectionProjectionResult
+  project_object_selection_for_scene_entities(
+      quader_editor_core::EditorSession &session,
+      std::span<const EntityId> entities, EntityId active,
+      const ModelingObjectRuntimeMap &object_registry) const;
 
-    bool promoteObjectSelectionForTool(
-            quader_editor_core::EditorSession& session,
-            const SceneDocument& scene,
-            const ModelingObjectRuntimeMap& objectRegistry) const;
+  bool promote_object_selection_for_tool(
+      quader_editor_core::EditorSession &session, const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_registry) const;
 
-    bool projectSceneSelectionFromModeling(
-            const quader_editor_core::EditorSession& session,
-            SceneDocument& scene,
-            const ModelingObjectRuntimeMap& objectRegistry) const;
+  bool project_scene_selection_from_modeling(
+      const quader_editor_core::EditorSession &session, SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_registry) const;
 
-    bool restoreSceneSelection(
-            SceneDocument& scene,
-            std::span<const EntityId> selected,
-            EntityId active = InvalidEntityId) const;
+  bool restore_scene_selection(SceneDocument &scene,
+                               std::span<const EntityId> selected,
+                               EntityId active = kInvalidEntityId) const;
 
-    bool addSceneSelection(
-            SceneDocument& scene,
-            std::span<const EntityId> selected,
-            EntityId active = InvalidEntityId) const;
+  bool add_scene_selection(SceneDocument &scene,
+                           std::span<const EntityId> selected,
+                           EntityId active = kInvalidEntityId) const;
 
-    [[nodiscard]] std::optional<QVec3> worldSelectionCenter(
-            const quader_editor_core::EditorSession& session,
-            const SceneDocument& scene,
-            const AssetRegistry& assets,
-            const ModelingObjectRuntimeMap& objectRegistry) const;
+  [[nodiscard]] std::optional<QVec3>
+  world_selection_center(const quader_editor_core::EditorSession &session,
+                         const SceneDocument &scene,
+                         const AssetRegistry &assets,
+                         const ModelingObjectRuntimeMap &object_registry) const;
 };
 
 } // namespace quader

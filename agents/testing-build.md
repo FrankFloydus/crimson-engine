@@ -50,6 +50,17 @@ cmake --build --preset vs2026-debug --target quader
 ctest --preset vs2026-debug
 ```
 
+Run the C++ style gate only before commit/push, or when the user explicitly asks for clang-tidy or
+a C++ style audit:
+
+```powershell
+python tools/check_cpp_style.py
+```
+
+The style checker validates project-owned C++ paths and runs `.clang-tidy` with
+`readability-identifier-naming` as an error. It generates a disposable compile database under
+`.build/cmake-tidy` and must not replace the required app build/test commands.
+
 Whenever a task changes any project file, final verification must include building the native app
 executable with `cmake --build --preset vs2026-debug --target quader`. Do this even when the
 behavior was already covered by `quader_tests`; otherwise the user may launch an older

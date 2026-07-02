@@ -14,7 +14,7 @@
 namespace quader {
 
 using RenderTextureHandle = std::uintptr_t;
-constexpr RenderTextureHandle InvalidRenderTextureHandle = 0u;
+constexpr RenderTextureHandle kInvalidRenderTextureHandle = 0u;
 
 /**
  * Enumerates TextureSampleColorSpace values used by the render layer.
@@ -36,13 +36,16 @@ public:
     TextureRegistry(TextureRegistry&&) = delete;
     TextureRegistry& operator=(TextureRegistry&&) = delete;
 
-    RenderTextureHandle registerTexture(filament::Texture* texture, TextureSampleColorSpace sampleColorSpace = TextureSampleColorSpace::DisplaySrgb);
-    void updateTexture(RenderTextureHandle id,
-            filament::Texture* texture,
-            TextureSampleColorSpace sampleColorSpace = TextureSampleColorSpace::DisplaySrgb);
+    RenderTextureHandle
+    register_texture(filament::Texture *texture,
+                     TextureSampleColorSpace sample_color_space =
+                         TextureSampleColorSpace::DisplaySrgb);
+    void update_texture(RenderTextureHandle id, filament::Texture *texture,
+                        TextureSampleColorSpace sample_color_space =
+                            TextureSampleColorSpace::DisplaySrgb);
     filament::Texture* texture(RenderTextureHandle id) const;
-    TextureSampleColorSpace sampleColorSpace(RenderTextureHandle id) const;
-    void unregisterTexture(RenderTextureHandle id);
+    TextureSampleColorSpace sample_color_space(RenderTextureHandle id) const;
+    void unregister_texture(RenderTextureHandle id);
     void clear();
 
 private:
@@ -51,10 +54,11 @@ private:
      */
     struct TextureRecord {
         filament::Texture* texture = nullptr;
-        TextureSampleColorSpace sampleColorSpace = TextureSampleColorSpace::DisplaySrgb;
+        TextureSampleColorSpace sample_color_space =
+            TextureSampleColorSpace::DisplaySrgb;
     };
 
-    RenderTextureHandle nextId_ = 1u;
+    RenderTextureHandle next_id_ = 1u;
     std::unordered_map<RenderTextureHandle, TextureRecord> textures_;
 };
 

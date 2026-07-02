@@ -23,15 +23,15 @@ class UndoRedoManager {
 public:
     UndoRedoResult execute(std::unique_ptr<IUndoableCommand> command);
     UndoRedoResult execute(std::unique_ptr<IUndoableCommand> command, UndoRedoExecuteOptions options);
-    UndoRedoResult recordExecuted(std::unique_ptr<IUndoableCommand> command);
+    UndoRedoResult record_executed(std::unique_ptr<IUndoableCommand> command);
 
     UndoRedoResult undo();
     UndoRedoResult redo();
 
-    [[nodiscard]] bool canUndo() const { return !undoStack_.empty(); }
-    [[nodiscard]] bool canRedo() const { return !redoStack_.empty(); }
-    [[nodiscard]] const std::string* undoLabel() const;
-    [[nodiscard]] const std::string* redoLabel() const;
+    [[nodiscard]] bool can_undo() const { return !undo_stack_.empty(); }
+    [[nodiscard]] bool can_redo() const { return !redo_stack_.empty(); }
+    [[nodiscard]] const std::string *undo_label() const;
+    [[nodiscard]] const std::string *redo_label() const;
 
     void clear();
 
@@ -41,11 +41,11 @@ private:
      */
     struct StackEntry {
         std::unique_ptr<IUndoableCommand> command;
-        std::string mergeKey;
+        std::string merge_key;
     };
 
-    std::vector<StackEntry> undoStack_;
-    std::vector<StackEntry> redoStack_;
+    std::vector<StackEntry> undo_stack_;
+    std::vector<StackEntry> redo_stack_;
 };
 
 } // namespace quader

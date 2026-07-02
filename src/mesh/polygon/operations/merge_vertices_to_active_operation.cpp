@@ -45,17 +45,16 @@ public:
 
 OperationResult MergeVerticesToActiveOperation::apply(Document& document, Selection& selection) const
 {
-    if (selection.mode != SelectionMode::vertex) {
-        return { false, "Merge needs vertex selection mode." };
-    }
+  if (selection.mode != SelectionMode::Vertex) {
+    return {false, "Merge needs vertex selection mode."};
+  }
     if (selection.vertices.size() < 2) {
         return { false, "Select at least two vertices to merge." };
     }
-    if (!selection.has_active ||
-        selection.active_kind != ElementKind::vertex ||
-        selection.active_vertex == invalid_element_id ||
+    if (!selection.has_active || selection.active_kind != ElementKind::Vertex ||
+        selection.active_vertex == kInvalidElementId ||
         !contains_id(selection.vertices, selection.active_vertex)) {
-        return { false, "Merge needs an active selected vertex." };
+      return {false, "Merge needs an active selected vertex."};
     }
 
     const ElementId active_vertex_id = selection.active_vertex;
@@ -65,9 +64,10 @@ OperationResult MergeVerticesToActiveOperation::apply(Document& document, Select
 
     std::set<ElementId> merge_vertex_ids;
     for (const ElementId vertex_id : selection.vertices) {
-        if (vertex_id == active_vertex_id || vertex_id == invalid_element_id || find_vertex(document, vertex_id) == nullptr) {
-            continue;
-        }
+      if (vertex_id == active_vertex_id || vertex_id == kInvalidElementId ||
+          find_vertex(document, vertex_id) == nullptr) {
+        continue;
+      }
         merge_vertex_ids.insert(vertex_id);
     }
     if (merge_vertex_ids.empty()) {

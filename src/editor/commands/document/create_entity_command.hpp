@@ -19,78 +19,79 @@ namespace quader {
  */
 class CreateEntityCommand final : public SceneCommand {
 public:
-    CreateEntityCommand(
-            SceneDocument& scene,
-            std::string name,
-            EntityKind kind = EntityKind::Generic,
-            EntityId parent = InvalidEntityId,
-            TransformComponent transform = TransformComponent{},
-            bool selectCreated = false)
-        : SceneCommand(scene, "Create Entity")
-        , name_(std::move(name))
-        , kind_(kind)
-        , parent_(parent)
-        , transform_(transform)
-        , selectCreated_(selectCreated) {}
+  CreateEntityCommand(SceneDocument &scene, std::string name,
+                      EntityKind kind = EntityKind::Generic,
+                      EntityId parent = kInvalidEntityId,
+                      TransformComponent transform = TransformComponent{},
+                      bool select_created = false)
+      : SceneCommand(scene, "Create Entity"), name_(std::move(name)),
+        kind_(kind), parent_(parent), transform_(transform),
+        select_created_(select_created) {}
 
-    [[nodiscard]] EntityId entity() const { return entity_; }
+  [[nodiscard]] EntityId entity() const { return entity_; }
 
-    DocumentCommandResult undo() override {
-        if (entity_ == InvalidEntityId || !scene().exists(entity_)) {
-            return documentCommandMissingEntityResult();
-        }
-        if (!scene().destroyEntity(entity_)) {
-            return documentCommandMissingEntityResult();
-        }
-        if (selectCreated_) {
-            documentCommandApplySelection(scene(), beforeSelection_);
-        }
-        return documentCommandChangedResult();
+  DocumentCommandResult undo() override {
+    if (entity_ == kInvalidEntityId || !scene().exists(entity_)) {
+      return document_command_missing_entity_result();
     }
+    if (!scene().destroy_entity(entity_)) {
+      return document_command_missing_entity_result();
+    }
+    if (select_created_) {
+      document_command_apply_selection(scene(), before_selection_);
+    }
+    return document_command_changed_result();
+  }
 
     DocumentCommandResult redo() override {
-        if (entity_ != InvalidEntityId && scene().exists(entity_)) {
-            return documentCommandUnchangedResult();
-        }
-        if (parent_ != InvalidEntityId && !scene().exists(parent_)) {
-            return documentCommandInvalidRequestResult("Parent entity does not exist");
-        }
+      if (entity_ != kInvalidEntityId && scene().exists(entity_)) {
+        return document_command_unchanged_result();
+      }
+      if (parent_ != kInvalidEntityId && !scene().exists(parent_)) {
+        return document_command_invalid_request_result(
+            "Parent entity does not exist");
+      }
 
-        beforeSelection_ = documentCommandCaptureSelection(scene());
-        entity_ = scene().createEntityWithId(entity_, name_, kind_, editorObjectId_);
-        if (entity_ == InvalidEntityId) {
-            return documentCommandInvalidRequestResult("Entity cannot be created");
-        }
-        if (!uuid_.empty() && !scene().setEntityUuid(entity_, uuid_)) {
-            scene().destroyEntity(entity_);
-            entity_ = InvalidEntityId;
-            return documentCommandInvalidRequestResult("Entity identity cannot be restored");
-        }
+      before_selection_ = document_command_capture_selection(scene());
+      entity_ = scene().create_entity_with_id(entity_, name_, kind_,
+                                              editor_object_id_);
+      if (entity_ == kInvalidEntityId) {
+        return document_command_invalid_request_result(
+            "Entity cannot be created");
+      }
+      if (!uuid_.empty() && !scene().set_entity_uuid(entity_, uuid_)) {
+        scene().destroy_entity(entity_);
+        entity_ = kInvalidEntityId;
+        return document_command_invalid_request_result(
+            "Entity identity cannot be restored");
+      }
         if (uuid_.empty()) {
             uuid_ = scene().uuid(entity_);
         }
-        editorObjectId_ = scene().editorObjectId(entity_);
-        if (parent_ != InvalidEntityId && !scene().setParent(entity_, parent_, false)) {
-            scene().destroyEntity(entity_);
-            return documentCommandInvalidRequestResult("Entity cannot be reparented");
+        editor_object_id_ = scene().editor_object_id(entity_);
+        if (parent_ != kInvalidEntityId &&
+            !scene().set_parent(entity_, parent_, false)) {
+          scene().destroy_entity(entity_);
+          return document_command_invalid_request_result(
+              "Entity cannot be reparented");
         }
-        scene().setTransform(entity_, transform_);
-        if (selectCreated_) {
-            documentCommandSelectOnly(scene(), {entity_});
+        scene().set_transform(entity_, transform_);
+        if (select_created_) {
+          document_command_select_only(scene(), {entity_});
         }
-        return documentCommandChangedResult();
+        return document_command_changed_result();
     }
 
 private:
     std::string name_;
     EntityKind kind_ = EntityKind::Generic;
-    EntityId parent_ = InvalidEntityId;
+    EntityId parent_ = kInvalidEntityId;
     TransformComponent transform_;
-    bool selectCreated_ = false;
-    EntityId entity_ = InvalidEntityId;
+    bool select_created_ = false;
+    EntityId entity_ = kInvalidEntityId;
     std::string uuid_;
-    EditorObjectId editorObjectId_ = InvalidEditorObjectId;
-    DocumentSelectionState beforeSelection_;
+    EditorObjectId editor_object_id_ = kInvalidEditorObjectId;
+    DocumentSelectionState before_selection_;
 };
 
 } // namespace quader

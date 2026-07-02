@@ -18,12 +18,12 @@ class QuaderProjectApi final {
 public:
     explicit QuaderProjectApi(QuaderApiSession session);
 
-    QuaderApiVoidResult newProject();
+    QuaderApiVoidResult new_project();
     QuaderApiVoidResult open(const std::filesystem::path& path);
     QuaderApiVoidResult save();
-    QuaderApiVoidResult saveAs(const std::filesystem::path& path);
+    QuaderApiVoidResult save_as(const std::filesystem::path &path);
     QuaderApiVoidResult close();
-    void setRuntimeHooks(QuaderProjectRuntimeHooks hooks);
+    void set_runtime_hooks(QuaderProjectRuntimeHooks hooks);
 
     [[nodiscard]] bool dirty() const;
     [[nodiscard]] const std::filesystem::path& path() const;
@@ -31,13 +31,15 @@ public:
 
 private:
     [[nodiscard]] QuaderApiVoidResult unsupported(std::string message) const;
-    [[nodiscard]] QuaderApiVoidResult saveToPath(const std::filesystem::path& path, bool updatePath);
-    [[nodiscard]] std::optional<std::filesystem::path> chooseOpenPath() const;
-    [[nodiscard]] std::optional<std::filesystem::path> chooseSaveAsPath() const;
+    [[nodiscard]] QuaderApiVoidResult
+    save_to_path(const std::filesystem::path &path, bool update_path);
+    [[nodiscard]] std::optional<std::filesystem::path> choose_open_path() const;
+    [[nodiscard]] std::optional<std::filesystem::path>
+    choose_save_as_path() const;
 
     QuaderApiSession session_;
     std::filesystem::path path_;
-    QuaderProjectRuntimeHooks runtimeHooks_;
+    QuaderProjectRuntimeHooks runtime_hooks_;
 };
 
 } // namespace quader

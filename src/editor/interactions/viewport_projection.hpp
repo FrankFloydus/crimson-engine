@@ -17,19 +17,19 @@ namespace quader_editor_core {
  * Enumerates CameraProjection values used by the modeling layer.
  */
 enum class CameraProjection {
-	perspective,
-	orthographic,
+  Perspective,
+  Orthographic,
 };
 
 /**
  * Stores the Viewport Camera State data contract used by the modal modeling interaction layer.
  */
 struct ViewportCameraState {
-	CameraProjection projection = CameraProjection::perspective;
-	quader_poly::Transform3 transform;
-	quader::QVec2 viewport_size { 1.0F, 1.0F };
-	double orthographic_size = 1.0;
-	double fov_degrees = navigation_default_fov_degrees;
+  CameraProjection projection = CameraProjection::Perspective;
+  quader_poly::Transform3 transform;
+  quader::QVec2 viewport_size{1.0F, 1.0F};
+  double orthographic_size = 1.0;
+  double fov_degrees = kNavigationDefaultFovDegrees;
 };
 
 /**

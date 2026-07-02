@@ -23,21 +23,23 @@ namespace quader {
 struct ModelingInstantOperationCatalogEntry {
     ModelingInstantOperationId operation = ModelingInstantOperationId::DuplicateMeshes;
     std::string_view id;
-    std::string_view operationId;
-    std::string_view commandLabel;
-    std::string_view liveLabel;
+    std::string_view operation_id;
+    std::string_view command_label;
+    std::string_view live_label;
     ModelingActionAvailabilityRule availability;
-    std::optional<quader_editor_core::EditorOperationId> runtimeOperation;
-    bool rebuildsMeshOnSuccess = true;
-    std::string_view publicCommandId;
-    bool registersPublicCommand = true;
+    std::optional<quader_editor_core::EditorOperationId> runtime_operation;
+    bool rebuilds_mesh_on_success = true;
+    std::string_view public_command_id;
+    bool registers_public_command = true;
 };
 
-[[nodiscard]] std::span<const ModelingInstantOperationCatalogEntry> modelingInstantOperationCatalog();
-[[nodiscard]] const ModelingInstantOperationCatalogEntry* findModelingInstantOperationCatalogEntry(
-        ModelingInstantOperationId operation);
-[[nodiscard]] bool modelingInstantOperationEnabled(
-        const ModelingInstantOperationCatalogEntry& entry,
-        const ModelingSelectionSummary& summary);
+[[nodiscard]] std::span<const ModelingInstantOperationCatalogEntry>
+modeling_instant_operation_catalog();
+[[nodiscard]] const ModelingInstantOperationCatalogEntry *
+find_modeling_instant_operation_catalog_entry(
+    ModelingInstantOperationId operation);
+[[nodiscard]] bool modeling_instant_operation_enabled(
+    const ModelingInstantOperationCatalogEntry &entry,
+    const ModelingSelectionSummary &summary);
 
 } // namespace quader

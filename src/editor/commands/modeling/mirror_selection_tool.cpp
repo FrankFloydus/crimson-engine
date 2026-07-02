@@ -16,23 +16,24 @@ MirrorSelectionTool::MirrorSelectionTool(ModelingMirrorAxis axis, std::string_vi
           label_(label) {}
 
 CommandToolDescriptor MirrorSelectionTool::descriptor() const {
-    return {
-            .id = id_,
-            .operationId = id_,
-            .label = label_,
-            .kind = CommandToolKind::Instant,
-            .previewKind = ModelingActionPreviewKind::None,
-            .rebuildsMeshOnSuccess = true,
-            .hostShortcutTargetId = axis_ == ModelingMirrorAxis::X ? "mirror_axis_x" :
-                    axis_ == ModelingMirrorAxis::Y ? "mirror_axis_y" :
-                    "mirror_axis_z",
-    };
+  return {
+      .id = id_,
+      .operation_id = id_,
+      .label = label_,
+      .kind = CommandToolKind::Instant,
+      .preview_kind = ModelingActionPreviewKind::None,
+      .rebuilds_mesh_on_success = true,
+      .host_shortcut_target_id =
+          axis_ == ModelingMirrorAxis::X   ? "mirror_axis_x"
+          : axis_ == ModelingMirrorAxis::Y ? "mirror_axis_y"
+                                           : "mirror_axis_z",
+  };
 }
 
 ModelingMirrorAxis MirrorSelectionTool::axis() const { return axis_; }
 
-ModelingCommandResult MirrorSelectionTool::executeRuntimeCommand(ModelingCommandExecutionContext& context) const {
-    return context.modeling.mirrorSelection(axis_);
+ModelingCommandResult MirrorSelectionTool::execute_runtime_command(ModelingCommandExecutionContext& context) const {
+  return context.modeling.mirror_selection(axis_);
 }
 
 } // namespace quader

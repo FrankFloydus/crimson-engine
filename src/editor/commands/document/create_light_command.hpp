@@ -19,81 +19,80 @@ namespace quader {
  */
 class CreateLightCommand final : public SceneCommand {
 public:
-    CreateLightCommand(
-            SceneDocument& scene,
-            std::string label,
-            std::string name,
-            LightComponent light,
-            EntityId parent = InvalidEntityId,
-            TransformComponent transform = TransformComponent{},
-            bool selectCreated = false)
-        : SceneCommand(scene, std::move(label))
-        , name_(std::move(name))
-        , light_(light)
-        , parent_(parent)
-        , transform_(transform)
-        , selectCreated_(selectCreated) {}
+  CreateLightCommand(SceneDocument &scene, std::string label, std::string name,
+                     LightComponent light, EntityId parent = kInvalidEntityId,
+                     TransformComponent transform = TransformComponent{},
+                     bool select_created = false)
+      : SceneCommand(scene, std::move(label)), name_(std::move(name)),
+        light_(light), parent_(parent), transform_(transform),
+        select_created_(select_created) {}
 
-    [[nodiscard]] EntityId entity() const { return entity_; }
+  [[nodiscard]] EntityId entity() const { return entity_; }
 
-    DocumentCommandResult undo() override {
-        if (entity_ == InvalidEntityId || !scene().exists(entity_)) {
-            return documentCommandMissingEntityResult();
-        }
-        if (!scene().destroyEntity(entity_)) {
-            return documentCommandMissingEntityResult();
-        }
-        if (selectCreated_) {
-            documentCommandApplySelection(scene(), beforeSelection_);
-        }
-        return documentCommandChangedResult();
+  DocumentCommandResult undo() override {
+    if (entity_ == kInvalidEntityId || !scene().exists(entity_)) {
+      return document_command_missing_entity_result();
     }
+    if (!scene().destroy_entity(entity_)) {
+      return document_command_missing_entity_result();
+    }
+    if (select_created_) {
+      document_command_apply_selection(scene(), before_selection_);
+    }
+    return document_command_changed_result();
+  }
 
     DocumentCommandResult redo() override {
-        if (entity_ != InvalidEntityId && scene().exists(entity_)) {
-            return documentCommandUnchangedResult();
-        }
-        if (parent_ != InvalidEntityId && !scene().exists(parent_)) {
-            return documentCommandInvalidRequestResult("Parent entity does not exist");
-        }
+      if (entity_ != kInvalidEntityId && scene().exists(entity_)) {
+        return document_command_unchanged_result();
+      }
+      if (parent_ != kInvalidEntityId && !scene().exists(parent_)) {
+        return document_command_invalid_request_result(
+            "Parent entity does not exist");
+      }
 
-        beforeSelection_ = documentCommandCaptureSelection(scene());
-        entity_ = scene().createEntityWithId(entity_, name_, EntityKind::Light, editorObjectId_);
-        if (entity_ == InvalidEntityId) {
-            return documentCommandInvalidRequestResult("Light entity cannot be created");
-        }
-        if (!uuid_.empty() && !scene().setEntityUuid(entity_, uuid_)) {
-            scene().destroyEntity(entity_);
-            entity_ = InvalidEntityId;
-            return documentCommandInvalidRequestResult("Light identity cannot be restored");
-        }
+      before_selection_ = document_command_capture_selection(scene());
+      entity_ = scene().create_entity_with_id(entity_, name_, EntityKind::Light,
+                                              editor_object_id_);
+      if (entity_ == kInvalidEntityId) {
+        return document_command_invalid_request_result(
+            "Light entity cannot be created");
+      }
+      if (!uuid_.empty() && !scene().set_entity_uuid(entity_, uuid_)) {
+        scene().destroy_entity(entity_);
+        entity_ = kInvalidEntityId;
+        return document_command_invalid_request_result(
+            "Light identity cannot be restored");
+      }
         if (uuid_.empty()) {
             uuid_ = scene().uuid(entity_);
         }
-        editorObjectId_ = scene().editorObjectId(entity_);
-        if (parent_ != InvalidEntityId && !scene().setParent(entity_, parent_, false)) {
-            scene().destroyEntity(entity_);
-            entity_ = InvalidEntityId;
-            return documentCommandInvalidRequestResult("Light cannot be reparented");
+        editor_object_id_ = scene().editor_object_id(entity_);
+        if (parent_ != kInvalidEntityId &&
+            !scene().set_parent(entity_, parent_, false)) {
+          scene().destroy_entity(entity_);
+          entity_ = kInvalidEntityId;
+          return document_command_invalid_request_result(
+              "Light cannot be reparented");
         }
-        scene().setTransform(entity_, transform_);
-        scene().setLight(entity_, light_);
-        if (selectCreated_) {
-            documentCommandSelectOnly(scene(), {entity_});
+        scene().set_transform(entity_, transform_);
+        scene().set_light(entity_, light_);
+        if (select_created_) {
+          document_command_select_only(scene(), {entity_});
         }
-        return documentCommandChangedResult();
+        return document_command_changed_result();
     }
 
 private:
     std::string name_;
     LightComponent light_;
-    EntityId parent_ = InvalidEntityId;
+    EntityId parent_ = kInvalidEntityId;
     TransformComponent transform_;
-    bool selectCreated_ = false;
-    EntityId entity_ = InvalidEntityId;
+    bool select_created_ = false;
+    EntityId entity_ = kInvalidEntityId;
     std::string uuid_;
-    EditorObjectId editorObjectId_ = InvalidEditorObjectId;
-    DocumentSelectionState beforeSelection_;
+    EditorObjectId editor_object_id_ = kInvalidEditorObjectId;
+    DocumentSelectionState before_selection_;
 };
 
 } // namespace quader

@@ -40,33 +40,35 @@ struct GroundGridVertex {
     filament::math::float3 position;
 };
 
-filament::Box groundGridBounds() {
-    filament::Box box;
-    const float half = kViewportGridDefaultPlaneSize * 0.5f;
-    box.set({-half, -0.01f, -half}, {half, 0.01f, half});
-    return box;
+filament::Box ground_grid_bounds() {
+  filament::Box box;
+  const float half = kViewportGridDefaultPlaneSize * 0.5f;
+  box.set({-half, -0.01f, -half}, {half, 0.01f, half});
+  return box;
 }
 
-filament::math::float4 settingColor(ViewportSettingColor color) {
-    return {
-            srgbToLinear(color.r),
-            srgbToLinear(color.g),
-            srgbToLinear(color.b),
-            color.a,
-    };
+filament::math::float4 setting_color(ViewportSettingColor color) {
+  return {
+      srgb_to_linear(color.r),
+      srgb_to_linear(color.g),
+      srgb_to_linear(color.b),
+      color.a,
+  };
 }
 
-filament::math::mat4f groundGridTransform(const ViewportGridPlacement& grid) {
-    const filament::math::float3 origin = quader::toFilament(grid.origin);
-    if (grid.rotation == ViewportGridRotation::NegativeHalfPiAroundZ) {
-        return filament::math::mat4f::translation(origin)
-                * filament::math::mat4f::rotation(-kHalfPi, filament::math::float3{0.0f, 0.0f, 1.0f});
-    }
-    if (grid.rotation == ViewportGridRotation::PositiveHalfPiAroundX) {
-        return filament::math::mat4f::translation(origin)
-                * filament::math::mat4f::rotation(kHalfPi, filament::math::float3{1.0f, 0.0f, 0.0f});
-    }
-    return filament::math::mat4f::translation(origin);
+filament::math::mat4f ground_grid_transform(const ViewportGridPlacement &grid) {
+  const filament::math::float3 origin = quader::to_filament(grid.origin);
+  if (grid.rotation == ViewportGridRotation::NegativeHalfPiAroundZ) {
+    return filament::math::mat4f::translation(origin) *
+           filament::math::mat4f::rotation(
+               -kHalfPi, filament::math::float3{0.0f, 0.0f, 1.0f});
+  }
+  if (grid.rotation == ViewportGridRotation::PositiveHalfPiAroundX) {
+    return filament::math::mat4f::translation(origin) *
+           filament::math::mat4f::rotation(
+               kHalfPi, filament::math::float3{1.0f, 0.0f, 0.0f});
+  }
+  return filament::math::mat4f::translation(origin);
 }
 
 /**
@@ -75,13 +77,13 @@ filament::math::mat4f groundGridTransform(const ViewportGridPlacement& grid) {
 struct GroundGridCreationGuard {
     filament::Engine& engine;
     filament::Scene& scene;
-    filament::VertexBuffer* vertexBuffer = nullptr;
-    filament::IndexBuffer* indexBuffer = nullptr;
-    filament::MaterialInstance* materialInstance = nullptr;
+    filament::VertexBuffer *vertex_buffer = nullptr;
+    filament::IndexBuffer *index_buffer = nullptr;
+    filament::MaterialInstance *material_instance = nullptr;
     utils::Entity entity;
-    bool sceneAdded = false;
-    bool renderableCreated = false;
-    bool transformCreated = false;
+    bool scene_added = false;
+    bool renderable_created = false;
+    bool transform_created = false;
     bool released = false;
 
     ~GroundGridCreationGuard() {
@@ -89,24 +91,24 @@ struct GroundGridCreationGuard {
             return;
         }
         if (entity) {
-            if (sceneAdded) {
-                scene.remove(entity);
-            }
-            if (renderableCreated) {
-                engine.getRenderableManager().destroy(entity);
-            }
-            if (transformCreated) {
-                engine.getTransformManager().destroy(entity);
-            }
+          if (scene_added) {
+            scene.remove(entity);
+          }
+          if (renderable_created) {
+            engine.getRenderableManager().destroy(entity);
+          }
+          if (transform_created) {
+            engine.getTransformManager().destroy(entity);
+          }
         }
-        if (materialInstance) {
-            engine.destroy(materialInstance);
+        if (material_instance) {
+          engine.destroy(material_instance);
         }
-        if (vertexBuffer) {
-            engine.destroy(vertexBuffer);
+        if (vertex_buffer) {
+          engine.destroy(vertex_buffer);
         }
-        if (indexBuffer) {
-            engine.destroy(indexBuffer);
+        if (index_buffer) {
+          engine.destroy(index_buffer);
         }
         if (entity) {
             utils::EntityManager::get().destroy(entity);
@@ -125,16 +127,17 @@ ViewportGridRenderer::~ViewportGridRenderer() {
     shutdown();
 }
 
-void ViewportGridRenderer::initialize(filament::Engine& engine,
-        filament::Scene& scene,
-        filament::Material& groundGridMaterial,
-        std::uint8_t gridLayerMask) {
-    shutdown();
-    engine_ = &engine;
-    scene_ = &scene;
-    groundGridMaterial_ = &groundGridMaterial;
-    gridLayerMask_ = gridLayerMask == 0u ? viewportGridLayerMask(0) : gridLayerMask;
-    createGroundGrid();
+void ViewportGridRenderer::initialize(filament::Engine &engine,
+                                      filament::Scene &scene,
+                                      filament::Material &ground_grid_material,
+                                      std::uint8_t grid_layer_mask) {
+  shutdown();
+  engine_ = &engine;
+  scene_ = &scene;
+  ground_grid_material_ = &ground_grid_material;
+  grid_layer_mask_ =
+      grid_layer_mask == 0u ? viewport_grid_layer_mask(0) : grid_layer_mask;
+  create_ground_grid();
 }
 
 void ViewportGridRenderer::shutdown() {
@@ -142,202 +145,232 @@ void ViewportGridRenderer::shutdown() {
         return;
     }
 
-    destroyGroundGrid();
+    destroy_ground_grid();
     engine_ = nullptr;
     scene_ = nullptr;
-    groundGridMaterial_ = nullptr;
+    ground_grid_material_ = nullptr;
 }
 
-void ViewportGridRenderer::update(const ViewportCameraController& controller,
-        std::uint32_t viewportWidth,
-        std::uint32_t viewportHeight,
-        float gridWorldSpacing,
-        const ViewportSettings& settings,
-        bool visible) {
-    if (!engine_ || !scene_ || !groundGridEntity_) {
-        return;
-    }
+void ViewportGridRenderer::update(const ViewportCameraController &controller,
+                                  std::uint32_t viewport_width,
+                                  std::uint32_t viewport_height,
+                                  float grid_world_spacing,
+                                  const ViewportSettings &settings,
+                                  bool visible) {
+  if (!engine_ || !scene_ || !ground_grid_entity_) {
+    return;
+  }
 
-    setGroundGridVisible(visible);
-    if (!visible) {
-        return;
-    }
+  set_ground_grid_visible(visible);
+  if (!visible) {
+    return;
+  }
 
-    const ViewportCameraPose pose = controller.pose();
-    const ViewportGridPlacement grid = ViewportGridPlacementPolicy::placement(
-            controller,
-            std::max(1u, viewportWidth),
-            std::max(1u, viewportHeight));
-    updateGroundGridMesh(grid.planeSize.x, grid.planeSize.y);
+  const ViewportCameraPose pose = controller.pose();
+  const ViewportGridPlacement grid = ViewportGridPlacementPolicy::placement(
+      controller, std::max(1u, viewport_width), std::max(1u, viewport_height));
+  update_ground_grid_mesh(grid.plane_size.x, grid.plane_size.y);
 
-    auto& transformManager = engine_->getTransformManager();
-    const filament::TransformManager::Instance transform = transformManager.getInstance(groundGridEntity_);
-    if (transform) {
-        transformManager.setTransform(transform, groundGridTransform(grid));
-    }
+  auto &transform_manager = engine_->getTransformManager();
+  const filament::TransformManager::Instance transform =
+      transform_manager.getInstance(ground_grid_entity_);
+  if (transform) {
+    transform_manager.setTransform(transform, ground_grid_transform(grid));
+  }
 
-    if (!groundGridMaterialInstance_) {
-        return;
-    }
+  if (!ground_grid_material_instance_) {
+    return;
+  }
 
-    groundGridMaterialInstance_->setDepthCulling(controller.state().projection != ViewportProjection::Orthographic);
-    const float spacing = std::max(gridWorldSpacing, 0.0001f);
-    const float parentSpacing = std::max(kParentGridWorldSize, spacing);
-    groundGridMaterialInstance_->setParameter("gridColor", settingColor(settings.color(ViewportColorSettingId::GridMinor)));
-    groundGridMaterialInstance_->setParameter("majorGridColor", settingColor(settings.color(ViewportColorSettingId::GridMajor)));
-    groundGridMaterialInstance_->setParameter("originUColor", settingColor(settings.color(grid.axes.uColor)));
-    groundGridMaterialInstance_->setParameter("originVColor", settingColor(settings.color(grid.axes.vColor)));
-    groundGridMaterialInstance_->setParameter("cameraPosition", filament::math::float3{pose.eye.x, pose.eye.y, pose.eye.z});
-    groundGridMaterialInstance_->setParameter("gridUAxis", quader::toFilament(grid.axes.uAxis));
-    groundGridMaterialInstance_->setParameter("gridVAxis", quader::toFilament(grid.axes.vAxis));
-    groundGridMaterialInstance_->setParameter("gridSize", spacing);
-    groundGridMaterialInstance_->setParameter("parentGridSize", parentSpacing);
-    groundGridMaterialInstance_->setParameter("lineThickness", settings.floatValue(ViewportFloatSettingId::GridMinorLineSize));
-    groundGridMaterialInstance_->setParameter("majorLineThickness", settings.floatValue(ViewportFloatSettingId::GridMajorLineSize));
-    groundGridMaterialInstance_->setParameter("axisLineThickness", settings.floatValue(ViewportFloatSettingId::GridAxisLineSize));
-    groundGridMaterialInstance_->setParameter("fadeStart", kGroundGridFadeStart);
-    groundGridMaterialInstance_->setParameter("fadeEnd", kGroundGridFadeEnd);
-    groundGridMaterialInstance_->setParameter("planeHalfSize", std::max(grid.planeSize.x, grid.planeSize.y) * 0.5f);
-    groundGridMaterialInstance_->setParameter("cameraSize", std::max(0.0001f, controller.state().orthographicSize));
-    groundGridMaterialInstance_->setParameter("viewportHeight", static_cast<float>(std::max(1u, viewportHeight)));
-    groundGridMaterialInstance_->setParameter("visibleGridSize", spacing);
-    groundGridMaterialInstance_->setParameter("minGridWorldSpacing", 0.001f);
+  ground_grid_material_instance_->setDepthCulling(
+      controller.state().projection != ViewportProjection::Orthographic);
+  const float spacing = std::max(grid_world_spacing, 0.0001f);
+  const float parent_spacing = std::max(kParentGridWorldSize, spacing);
+  ground_grid_material_instance_->setParameter(
+      "gridColor",
+      setting_color(settings.color(ViewportColorSettingId::GridMinor)));
+  ground_grid_material_instance_->setParameter(
+      "majorGridColor",
+      setting_color(settings.color(ViewportColorSettingId::GridMajor)));
+  ground_grid_material_instance_->setParameter(
+      "originUColor", setting_color(settings.color(grid.axes.u_color)));
+  ground_grid_material_instance_->setParameter(
+      "originVColor", setting_color(settings.color(grid.axes.v_color)));
+  ground_grid_material_instance_->setParameter(
+      "cameraPosition",
+      filament::math::float3{pose.eye.x, pose.eye.y, pose.eye.z});
+  ground_grid_material_instance_->setParameter(
+      "gridUAxis", quader::to_filament(grid.axes.u_axis));
+  ground_grid_material_instance_->setParameter(
+      "gridVAxis", quader::to_filament(grid.axes.v_axis));
+  ground_grid_material_instance_->setParameter("gridSize", spacing);
+  ground_grid_material_instance_->setParameter("parentGridSize",
+                                               parent_spacing);
+  ground_grid_material_instance_->setParameter(
+      "lineThickness",
+      settings.float_value(ViewportFloatSettingId::GridMinorLineSize));
+  ground_grid_material_instance_->setParameter(
+      "majorLineThickness",
+      settings.float_value(ViewportFloatSettingId::GridMajorLineSize));
+  ground_grid_material_instance_->setParameter(
+      "axisLineThickness",
+      settings.float_value(ViewportFloatSettingId::GridAxisLineSize));
+  ground_grid_material_instance_->setParameter("fadeStart",
+                                               kGroundGridFadeStart);
+  ground_grid_material_instance_->setParameter("fadeEnd", kGroundGridFadeEnd);
+  ground_grid_material_instance_->setParameter(
+      "planeHalfSize", std::max(grid.plane_size.x, grid.plane_size.y) * 0.5f);
+  ground_grid_material_instance_->setParameter(
+      "cameraSize", std::max(0.0001f, controller.state().orthographic_size));
+  ground_grid_material_instance_->setParameter(
+      "viewportHeight", static_cast<float>(std::max(1u, viewport_height)));
+  ground_grid_material_instance_->setParameter("visibleGridSize", spacing);
+  ground_grid_material_instance_->setParameter("minGridWorldSpacing", 0.001f);
 }
 
-void ViewportGridRenderer::createGroundGrid() {
-    if (!engine_ || !scene_ || !groundGridMaterial_) {
-        return;
-    }
+void ViewportGridRenderer::create_ground_grid() {
+  if (!engine_ || !scene_ || !ground_grid_material_) {
+    return;
+  }
 
-    const float half = kViewportGridDefaultPlaneSize * 0.5f;
-    const std::vector<GroundGridVertex> vertices = {
-            {{-half, 0.0f, -half}},
-            {{half, 0.0f, -half}},
-            {{half, 0.0f, half}},
-            {{-half, 0.0f, half}},
-    };
-    const std::vector<std::uint32_t> indices = {0, 2, 1, 0, 3, 2};
+  const float half = kViewportGridDefaultPlaneSize * 0.5f;
+  const std::vector<GroundGridVertex> vertices = {
+      {{-half, 0.0f, -half}},
+      {{half, 0.0f, -half}},
+      {{half, 0.0f, half}},
+      {{-half, 0.0f, half}},
+  };
+  const std::vector<std::uint32_t> indices = {0, 2, 1, 0, 3, 2};
 
-    GroundGridCreationGuard creationGuard{*engine_, *scene_};
-    creationGuard.vertexBuffer = filament::VertexBuffer::Builder()
-            .vertexCount(static_cast<std::uint32_t>(vertices.size()))
-            .bufferCount(1)
-            .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT3, offsetof(GroundGridVertex, position), sizeof(GroundGridVertex))
-            .build(*engine_);
-    if (creationGuard.vertexBuffer == nullptr) {
-        return;
-    }
-    creationGuard.vertexBuffer->setBufferAt(*engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
+  GroundGridCreationGuard creation_guard{*engine_, *scene_};
+  creation_guard.vertex_buffer =
+      filament::VertexBuffer::Builder()
+          .vertexCount(static_cast<std::uint32_t>(vertices.size()))
+          .bufferCount(1)
+          .attribute(
+              filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT3,
+              offsetof(GroundGridVertex, position), sizeof(GroundGridVertex))
+          .build(*engine_);
+  if (creation_guard.vertex_buffer == nullptr) {
+    return;
+  }
+  creation_guard.vertex_buffer->setBufferAt(
+      *engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
 
-    creationGuard.indexBuffer = filament::IndexBuffer::Builder()
-            .indexCount(static_cast<std::uint32_t>(indices.size()))
-            .bufferType(filament::IndexBuffer::IndexType::UINT)
-            .build(*engine_);
-    if (creationGuard.indexBuffer == nullptr) {
-        return;
-    }
-    creationGuard.indexBuffer->setBuffer(*engine_, FilamentBufferDescriptorFactory::vector(indices));
+  creation_guard.index_buffer =
+      filament::IndexBuffer::Builder()
+          .indexCount(static_cast<std::uint32_t>(indices.size()))
+          .bufferType(filament::IndexBuffer::IndexType::UINT)
+          .build(*engine_);
+  if (creation_guard.index_buffer == nullptr) {
+    return;
+  }
+  creation_guard.index_buffer->setBuffer(
+      *engine_, FilamentBufferDescriptorFactory::vector(indices));
 
-    creationGuard.materialInstance = groundGridMaterial_->createInstance();
-    if (creationGuard.materialInstance == nullptr) {
-        return;
-    }
-    creationGuard.entity = utils::EntityManager::get().create();
-    filament::RenderableManager::Builder(1)
-            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
-                    creationGuard.vertexBuffer, creationGuard.indexBuffer)
-            .material(0, creationGuard.materialInstance)
-            .layerMask(kViewportAllLayerMask, gridLayerMask_)
-            .boundingBox(groundGridBounds())
-            .castShadows(false)
-            .receiveShadows(false)
-            .build(*engine_, creationGuard.entity);
-    creationGuard.renderableCreated = true;
+  creation_guard.material_instance = ground_grid_material_->createInstance();
+  if (creation_guard.material_instance == nullptr) {
+    return;
+  }
+  creation_guard.entity = utils::EntityManager::get().create();
+  filament::RenderableManager::Builder(1)
+      .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                creation_guard.vertex_buffer, creation_guard.index_buffer)
+      .material(0, creation_guard.material_instance)
+      .layerMask(kViewportAllLayerMask, grid_layer_mask_)
+      .boundingBox(ground_grid_bounds())
+      .castShadows(false)
+      .receiveShadows(false)
+      .build(*engine_, creation_guard.entity);
+  creation_guard.renderable_created = true;
 
-    scene_->addEntity(creationGuard.entity);
-    creationGuard.sceneAdded = true;
-    engine_->getTransformManager().create(creationGuard.entity);
-    creationGuard.transformCreated = true;
-    groundGridVertexBuffer_ = creationGuard.vertexBuffer;
-    groundGridIndexBuffer_ = creationGuard.indexBuffer;
-    groundGridMaterialInstance_ = creationGuard.materialInstance;
-    groundGridEntity_ = creationGuard.entity;
-    groundGridMeshWidth_ = kViewportGridDefaultPlaneSize;
-    groundGridMeshHeight_ = kViewportGridDefaultPlaneSize;
-    visible_ = true;
-    creationGuard.release();
+  scene_->addEntity(creation_guard.entity);
+  creation_guard.scene_added = true;
+  engine_->getTransformManager().create(creation_guard.entity);
+  creation_guard.transform_created = true;
+  ground_grid_vertex_buffer_ = creation_guard.vertex_buffer;
+  ground_grid_index_buffer_ = creation_guard.index_buffer;
+  ground_grid_material_instance_ = creation_guard.material_instance;
+  ground_grid_entity_ = creation_guard.entity;
+  ground_grid_mesh_width_ = kViewportGridDefaultPlaneSize;
+  ground_grid_mesh_height_ = kViewportGridDefaultPlaneSize;
+  visible_ = true;
+  creation_guard.release();
 }
 
-void ViewportGridRenderer::setGroundGridVisible(bool visible) {
-    if (visible_ == visible) {
-        return;
-    }
-    visible_ = visible;
-    if (!engine_ || !groundGridEntity_) {
-        return;
-    }
+void ViewportGridRenderer::set_ground_grid_visible(bool visible) {
+  if (visible_ == visible) {
+    return;
+  }
+  visible_ = visible;
+  if (!engine_ || !ground_grid_entity_) {
+    return;
+  }
 
-    auto& renderables = engine_->getRenderableManager();
-    const filament::RenderableManager::Instance renderable = renderables.getInstance(groundGridEntity_);
-    if (renderable) {
-        renderables.setLayerMask(renderable, kViewportAllLayerMask, visible ? gridLayerMask_ : 0u);
-    }
+  auto &renderables = engine_->getRenderableManager();
+  const filament::RenderableManager::Instance renderable =
+      renderables.getInstance(ground_grid_entity_);
+  if (renderable) {
+    renderables.setLayerMask(renderable, kViewportAllLayerMask,
+                             visible ? grid_layer_mask_ : 0u);
+  }
 }
 
-void ViewportGridRenderer::updateGroundGridMesh(float width, float height) {
-    if (!engine_ || !groundGridVertexBuffer_) {
-        return;
-    }
+void ViewportGridRenderer::update_ground_grid_mesh(float width, float height) {
+  if (!engine_ || !ground_grid_vertex_buffer_) {
+    return;
+  }
 
-    width = std::max(0.0001f, width);
-    height = std::max(0.0001f, height);
-    if (std::fabs(groundGridMeshWidth_ - width) <= 0.0001f &&
-            std::fabs(groundGridMeshHeight_ - height) <= 0.0001f) {
-        return;
-    }
+  width = std::max(0.0001f, width);
+  height = std::max(0.0001f, height);
+  if (std::fabs(ground_grid_mesh_width_ - width) <= 0.0001f &&
+      std::fabs(ground_grid_mesh_height_ - height) <= 0.0001f) {
+    return;
+  }
 
-    const float halfX = width * 0.5f;
-    const float halfZ = height * 0.5f;
-    const std::vector<GroundGridVertex> vertices = {
-            {{-halfX, 0.0f, -halfZ}},
-            {{halfX, 0.0f, -halfZ}},
-            {{halfX, 0.0f, halfZ}},
-            {{-halfX, 0.0f, halfZ}},
-    };
-    groundGridVertexBuffer_->setBufferAt(*engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
-    groundGridMeshWidth_ = width;
-    groundGridMeshHeight_ = height;
+  const float half_x = width * 0.5f;
+  const float half_z = height * 0.5f;
+  const std::vector<GroundGridVertex> vertices = {
+      {{-half_x, 0.0f, -half_z}},
+      {{half_x, 0.0f, -half_z}},
+      {{half_x, 0.0f, half_z}},
+      {{-half_x, 0.0f, half_z}},
+  };
+  ground_grid_vertex_buffer_->setBufferAt(
+      *engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
+  ground_grid_mesh_width_ = width;
+  ground_grid_mesh_height_ = height;
 }
 
-void ViewportGridRenderer::destroyGroundGrid() {
-    if (!engine_) {
-        return;
+void ViewportGridRenderer::destroy_ground_grid() {
+  if (!engine_) {
+    return;
+  }
+  if (ground_grid_entity_) {
+    if (scene_) {
+      scene_->remove(ground_grid_entity_);
     }
-    if (groundGridEntity_) {
-        if (scene_) {
-            scene_->remove(groundGridEntity_);
-        }
-        engine_->getRenderableManager().destroy(groundGridEntity_);
-        engine_->getTransformManager().destroy(groundGridEntity_);
-    }
-    if (groundGridMaterialInstance_) {
-        engine_->destroy(groundGridMaterialInstance_);
-        groundGridMaterialInstance_ = nullptr;
-    }
-    if (groundGridVertexBuffer_) {
-        engine_->destroy(groundGridVertexBuffer_);
-        groundGridVertexBuffer_ = nullptr;
-    }
-    groundGridMeshWidth_ = 0.0f;
-    groundGridMeshHeight_ = 0.0f;
-    if (groundGridIndexBuffer_) {
-        engine_->destroy(groundGridIndexBuffer_);
-        groundGridIndexBuffer_ = nullptr;
-    }
-    if (groundGridEntity_) {
-        utils::EntityManager::get().destroy(groundGridEntity_);
-        groundGridEntity_.clear();
-    }
+    engine_->getRenderableManager().destroy(ground_grid_entity_);
+    engine_->getTransformManager().destroy(ground_grid_entity_);
+  }
+  if (ground_grid_material_instance_) {
+    engine_->destroy(ground_grid_material_instance_);
+    ground_grid_material_instance_ = nullptr;
+  }
+  if (ground_grid_vertex_buffer_) {
+    engine_->destroy(ground_grid_vertex_buffer_);
+    ground_grid_vertex_buffer_ = nullptr;
+  }
+  ground_grid_mesh_width_ = 0.0f;
+  ground_grid_mesh_height_ = 0.0f;
+  if (ground_grid_index_buffer_) {
+    engine_->destroy(ground_grid_index_buffer_);
+    ground_grid_index_buffer_ = nullptr;
+  }
+  if (ground_grid_entity_) {
+    utils::EntityManager::get().destroy(ground_grid_entity_);
+    ground_grid_entity_.clear();
+  }
 }
 
 } // namespace quader

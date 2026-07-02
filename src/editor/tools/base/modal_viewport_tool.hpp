@@ -17,14 +17,14 @@ class ModalViewportTool : public InteractiveViewportTool {
 public:
     explicit ModalViewportTool(ToolDescriptor descriptor) : InteractiveViewportTool(descriptor) {}
 
-    [[nodiscard]] ViewportToolResult handleEvent(
-            ViewportToolContext& context,
-            const ViewportToolEvent& event) const override;
+    [[nodiscard]] ViewportToolResult
+    handle_event(ViewportToolContext &context,
+                 const ViewportToolEvent &event) const override;
 
-protected:
-    [[nodiscard]] ViewportToolResult cancelActiveModalTool(
-            ViewportToolContext& context,
-            bool exitTool) const;
+  protected:
+    [[nodiscard]] ViewportToolResult
+    cancel_active_modal_tool(ViewportToolContext &context,
+                             bool exit_tool) const;
 };
 
 } // namespace quader

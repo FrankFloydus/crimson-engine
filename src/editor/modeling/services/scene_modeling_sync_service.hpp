@@ -22,29 +22,33 @@ class SceneDocument;
  */
 class SceneModelingSyncService {
 public:
-    explicit SceneModelingSyncService(ModelingObjectRuntimeMap& objectMap);
+  explicit SceneModelingSyncService(ModelingObjectRuntimeMap &object_map);
 
-    [[nodiscard]] ModelingObjectRuntimeMap& objectMap();
-    [[nodiscard]] const ModelingObjectRuntimeMap& objectMap() const;
-    [[nodiscard]] bool sceneObjectsSyncValid() const;
-    [[nodiscard]] std::uint64_t syncedModelingContentRevision() const;
+  [[nodiscard]] ModelingObjectRuntimeMap &object_map();
+  [[nodiscard]] const ModelingObjectRuntimeMap &object_map() const;
+  [[nodiscard]] bool scene_objects_sync_valid() const;
+  [[nodiscard]] std::uint64_t synced_modeling_content_revision() const;
 
-    void invalidateSceneObjects();
-    void markSceneObjectsSynced(std::uint64_t contentRevision);
-    void rememberProjectedMeshSignature(int modelingObjectId, std::uint64_t signature);
-    void forgetProjectedMeshSignature(int modelingObjectId);
-    [[nodiscard]] bool projectedMeshSignatureKnown(int modelingObjectId) const;
-    [[nodiscard]] bool projectedMeshSignatureMatches(int modelingObjectId, std::uint64_t signature) const;
+  void invalidate_scene_objects();
+  void mark_scene_objects_synced(std::uint64_t content_revision);
+  void remember_projected_mesh_signature(int modeling_object_id,
+                                         std::uint64_t signature);
+  void forget_projected_mesh_signature(int modeling_object_id);
+  [[nodiscard]] bool
+  projected_mesh_signature_known(int modeling_object_id) const;
+  [[nodiscard]] bool
+  projected_mesh_signature_matches(int modeling_object_id,
+                                   std::uint64_t signature) const;
 
-    [[nodiscard]] bool sceneObjectsSyncedForCurrentModelingContent(
-            const quader_editor_core::EditorSession& session,
-            const SceneDocument& scene) const;
+  [[nodiscard]] bool scene_objects_synced_for_current_modeling_content(
+      const quader_editor_core::EditorSession &session,
+      const SceneDocument &scene) const;
 
 private:
-    ModelingObjectRuntimeMap& objectMap_;
-    bool sceneObjectsSyncValid_ = false;
-    std::uint64_t syncedModelingContentRevision_ = 0;
-    std::unordered_map<int, std::uint64_t> projectedMeshSignaturesByObject_;
+  ModelingObjectRuntimeMap &object_map_;
+  bool scene_objects_sync_valid_ = false;
+  std::uint64_t synced_modeling_content_revision_ = 0;
+  std::unordered_map<int, std::uint64_t> projected_mesh_signatures_by_object_;
 };
 
 } // namespace quader

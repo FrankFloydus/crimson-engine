@@ -25,35 +25,40 @@ public:
     FilamentMaterialLibrary& operator=(FilamentMaterialLibrary&&) = delete;
     ~FilamentMaterialLibrary();
 
-    bool initialize(filament::Engine& engine, const std::filesystem::path& executableDir);
+    bool initialize(filament::Engine &engine,
+                    const std::filesystem::path &executable_dir);
     void shutdown();
 
     bool initialized() const {
         return engine_ != nullptr;
     }
 
-    filament::Material& quaderMesh() { return *quaderMeshMaterial_; }
-    filament::Material& quaderMeshLit() { return *quaderMeshLitMaterial_; }
-    filament::Material& vertexColorOverlay() { return *vertexColorOverlayMaterial_; }
-    filament::Material& overlayLine() { return *overlayLineMaterial_; }
-    filament::Material& selectedObjectLine() { return *selectedObjectLineMaterial_; }
-    filament::Material& overlayPoint() { return *overlayPointMaterial_; }
-    filament::Material& imgui() { return *imguiMaterial_; }
-    filament::Material& groundGrid() { return *groundGridMaterial_; }
+    filament::Material &quader_mesh() { return *quader_mesh_material_; }
+    filament::Material &quader_mesh_lit() { return *quader_mesh_lit_material_; }
+    filament::Material &vertex_color_overlay() {
+      return *vertex_color_overlay_material_;
+    }
+    filament::Material &overlay_line() { return *overlay_line_material_; }
+    filament::Material &selected_object_line() {
+      return *selected_object_line_material_;
+    }
+    filament::Material &overlay_point() { return *overlay_point_material_; }
+    filament::Material &imgui() { return *imgui_material_; }
+    filament::Material &ground_grid() { return *ground_grid_material_; }
 
-private:
+  private:
     filament::Material* load(const std::filesystem::path& path) const;
     void destroy(filament::Material*& material);
 
     filament::Engine* engine_ = nullptr;
-    filament::Material* quaderMeshMaterial_ = nullptr;
-    filament::Material* quaderMeshLitMaterial_ = nullptr;
-    filament::Material* vertexColorOverlayMaterial_ = nullptr;
-    filament::Material* overlayLineMaterial_ = nullptr;
-    filament::Material* selectedObjectLineMaterial_ = nullptr;
-    filament::Material* overlayPointMaterial_ = nullptr;
-    filament::Material* imguiMaterial_ = nullptr;
-    filament::Material* groundGridMaterial_ = nullptr;
+    filament::Material *quader_mesh_material_ = nullptr;
+    filament::Material *quader_mesh_lit_material_ = nullptr;
+    filament::Material *vertex_color_overlay_material_ = nullptr;
+    filament::Material *overlay_line_material_ = nullptr;
+    filament::Material *selected_object_line_material_ = nullptr;
+    filament::Material *overlay_point_material_ = nullptr;
+    filament::Material *imgui_material_ = nullptr;
+    filament::Material *ground_grid_material_ = nullptr;
 };
 
 } // namespace quader

@@ -17,27 +17,27 @@ namespace quader {
  * Represents a Document Transform Edit value used by the editor document command layer.
  */
 struct DocumentTransformEdit {
-    EntityId entity = InvalidEntityId;
-    TransformComponent before;
-    TransformComponent after;
+  EntityId entity = kInvalidEntityId;
+  TransformComponent before;
+  TransformComponent after;
 };
 
 /**
  * Represents a Document Visibility Edit value used by the editor document command layer.
  */
 struct DocumentVisibilityEdit {
-    EntityId entity = InvalidEntityId;
-    bool before = true;
-    bool after = true;
+  EntityId entity = kInvalidEntityId;
+  bool before = true;
+  bool after = true;
 };
 
 /**
  * Represents a Document Lock Edit value used by the editor document command layer.
  */
 struct DocumentLockEdit {
-    EntityId entity = InvalidEntityId;
-    bool before = false;
-    bool after = false;
+  EntityId entity = kInvalidEntityId;
+  bool before = false;
+  bool after = false;
 };
 
 /**
@@ -56,43 +56,46 @@ enum class DocumentSceneBatchOperationKind {
  */
 struct DocumentSceneBatchOperation {
     DocumentSceneBatchOperationKind kind = DocumentSceneBatchOperationKind::Rename;
-    EntityId entity = InvalidEntityId;
-    EntityId parent = InvalidEntityId;
-    bool preserveWorldTransform = true;
+    EntityId entity = kInvalidEntityId;
+    EntityId parent = kInvalidEntityId;
+    bool preserve_world_transform = true;
     bool flag = false;
     TransformComponent transform;
     std::string name;
 };
 
-inline bool documentCommandSameTransform(const TransformComponent& left, const TransformComponent& right) {
-    return left.position.x == right.position.x &&
-            left.position.y == right.position.y &&
-            left.position.z == right.position.z &&
-            left.rotationEuler.x == right.rotationEuler.x &&
-            left.rotationEuler.y == right.rotationEuler.y &&
-            left.rotationEuler.z == right.rotationEuler.z &&
-            left.scale.x == right.scale.x &&
-            left.scale.y == right.scale.y &&
-            left.scale.z == right.scale.z;
+inline bool document_command_same_transform(const TransformComponent &left,
+                                            const TransformComponent &right) {
+  return left.position.x == right.position.x &&
+         left.position.y == right.position.y &&
+         left.position.z == right.position.z &&
+         left.rotation_euler.x == right.rotation_euler.x &&
+         left.rotation_euler.y == right.rotation_euler.y &&
+         left.rotation_euler.z == right.rotation_euler.z &&
+         left.scale.x == right.scale.x && left.scale.y == right.scale.y &&
+         left.scale.z == right.scale.z;
 }
 
-inline bool documentCommandSameMeshComponent(const MeshComponent& left, const MeshComponent& right) {
-    return left.mesh == right.mesh &&
-            left.editorOnly == right.editorOnly &&
-            left.castShadows == right.castShadows &&
-            left.doubleSided == right.doubleSided &&
-            left.generateCollisions == right.generateCollisions &&
-            left.collisionType == right.collisionType &&
-            left.displayCollision == right.displayCollision &&
-            left.bodyType == right.bodyType;
+inline bool document_command_same_mesh_component(const MeshComponent &left,
+                                                 const MeshComponent &right) {
+  return left.mesh == right.mesh && left.editor_only == right.editor_only &&
+         left.cast_shadows == right.cast_shadows &&
+         left.double_sided == right.double_sided &&
+         left.generate_collisions == right.generate_collisions &&
+         left.collision_type == right.collision_type &&
+         left.display_collision == right.display_collision &&
+         left.body_type == right.body_type;
 }
 
-inline bool documentCommandSameLightComponent(const LightComponent& left, const LightComponent& right) {
-    return left == right;
+inline bool document_command_same_light_component(const LightComponent &left,
+                                                  const LightComponent &right) {
+  return left == right;
 }
 
-inline bool documentCommandSameSceneSettings(const SceneSettingsComponent& left, const SceneSettingsComponent& right) {
-    return left == right;
+inline bool
+document_command_same_scene_settings(const SceneSettingsComponent &left,
+                                     const SceneSettingsComponent &right) {
+  return left == right;
 }
 
 } // namespace quader

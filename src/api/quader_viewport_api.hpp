@@ -30,29 +30,32 @@ public:
     QuaderViewportApi(QuaderViewportApi&&) noexcept;
     QuaderViewportApi& operator=(QuaderViewportApi&&) noexcept;
 
-    void setRuntimeHooks(QuaderViewportRuntimeHooks hooks);
+    void set_runtime_hooks(QuaderViewportRuntimeHooks hooks);
 
     [[nodiscard]] ViewportLayoutId layout() const;
-    QuaderApiVoidResult setLayout(ViewportLayoutId layout);
-    [[nodiscard]] std::size_t activePaneCount() const;
-    [[nodiscard]] ViewportPaneId focusedPane() const;
+    QuaderApiVoidResult set_layout(ViewportLayoutId layout);
+    [[nodiscard]] std::size_t active_pane_count() const;
+    [[nodiscard]] ViewportPaneId focused_pane() const;
 
-    [[nodiscard]] int gridPreset() const;
-    QuaderApiVoidResult setGridPreset(int preset);
+    [[nodiscard]] int grid_preset() const;
+    QuaderApiVoidResult set_grid_preset(int preset);
 
-    [[nodiscard]] QuaderShadingMode shadingMode(ViewportPaneId pane) const;
-    QuaderApiVoidResult setShadingMode(ViewportPaneId pane, QuaderShadingMode mode);
+    [[nodiscard]] QuaderShadingMode shading_mode(ViewportPaneId pane) const;
+    QuaderApiVoidResult set_shading_mode(ViewportPaneId pane,
+                                         QuaderShadingMode mode);
 
     [[nodiscard]] ViewportView view(ViewportPaneId pane) const;
-    QuaderApiVoidResult setView(ViewportPaneId pane, ViewportView view);
+    QuaderApiVoidResult set_view(ViewportPaneId pane, ViewportView view);
 
-    QuaderApiVoidResult frameSelection(ViewportPaneId pane = ViewportPaneId::Perspective);
-    QuaderApiVoidResult focusOrigin(ViewportPaneId pane = ViewportPaneId::Perspective);
-    [[nodiscard]] bool canSpawnWindow() const;
-    QuaderApiVoidResult spawnWindow();
-    QuaderApiVoidResult captureScreenshot(
-            const std::filesystem::path& path,
-            ViewportPaneId pane = ViewportPaneId::Perspective);
+    QuaderApiVoidResult
+    frame_selection(ViewportPaneId pane = ViewportPaneId::Perspective);
+    QuaderApiVoidResult
+    focus_origin(ViewportPaneId pane = ViewportPaneId::Perspective);
+    [[nodiscard]] bool can_spawn_window() const;
+    QuaderApiVoidResult spawn_window();
+    QuaderApiVoidResult
+    capture_screenshot(const std::filesystem::path &path,
+                       ViewportPaneId pane = ViewportPaneId::Perspective);
     [[nodiscard]] QuaderViewportHandle main();
     [[nodiscard]] QuaderViewportHandle pane(ViewportPaneId pane);
 
@@ -62,7 +65,8 @@ private:
     class Impl;
 
     [[nodiscard]] QuaderApiVoidResult unavailable(std::string message) const;
-    [[nodiscard]] QuaderApiVoidResult runtimeStatus(bool changed, std::string message = {}) const;
+    [[nodiscard]] QuaderApiVoidResult
+    runtime_status(bool changed, std::string message = {}) const;
 
     std::unique_ptr<Impl> impl_;
 };
@@ -74,10 +78,10 @@ class QuaderCameraHandle final {
 public:
     QuaderCameraHandle(QuaderViewportApi& viewports, ViewportPaneId pane);
 
-    QuaderApiVoidResult frameSelection();
-    QuaderApiVoidResult focusOrigin();
+    QuaderApiVoidResult frame_selection();
+    QuaderApiVoidResult focus_origin();
 
-private:
+  private:
     QuaderViewportApi& viewports_;
     ViewportPaneId pane_;
 };
@@ -89,9 +93,9 @@ class QuaderViewportHandle final {
 public:
     QuaderViewportHandle(QuaderViewportApi& viewports, ViewportPaneId pane);
 
-    QuaderApiVoidResult setShadingMode(QuaderShadingMode mode);
-    QuaderApiVoidResult setView(ViewportView view);
-    QuaderApiVoidResult captureScreenshot(const std::filesystem::path& path);
+    QuaderApiVoidResult set_shading_mode(QuaderShadingMode mode);
+    QuaderApiVoidResult set_view(ViewportView view);
+    QuaderApiVoidResult capture_screenshot(const std::filesystem::path &path);
     [[nodiscard]] QuaderCameraHandle camera();
 
 private:

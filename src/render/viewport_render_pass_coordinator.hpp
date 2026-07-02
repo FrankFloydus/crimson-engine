@@ -24,35 +24,35 @@ namespace quader {
  */
 class ViewportRenderPassCoordinator {
 public:
-    void initialize(std::uint8_t gridLayerMask);
+  void initialize(std::uint8_t grid_layer_mask);
 
-    void setBackgroundColor(ViewportSettingColor color);
+  void set_background_color(ViewportSettingColor color);
 
-    bool setGridVisible(bool visible);
+  bool set_grid_visible(bool visible);
 
-    bool setOverlayVisible(bool visible);
+  bool set_overlay_visible(bool visible);
 
-    bool setSceneVisible(bool visible);
+  bool set_scene_visible(bool visible);
 
-    bool setSceneLayerMask(std::uint8_t layerMask);
+  bool set_scene_layer_mask(std::uint8_t layer_mask);
 
-    std::uint8_t sceneVisibleLayerMask() const;
-    std::uint8_t overlayVisibleLayerMask() const;
-    std::uint8_t visibleLayerMask() const;
+  std::uint8_t scene_visible_layer_mask() const;
+  std::uint8_t overlay_visible_layer_mask() const;
+  std::uint8_t visible_layer_mask() const;
 
-    void applyVisibleLayers(filament::View* sceneView, filament::View* overlayView) const;
-    void render(filament::Renderer& renderer,
-            filament::View* sceneView,
-            filament::View* overlayView,
-            bool overlayUsesSeparateTarget) const;
+  void apply_visible_layers(filament::View *scene_view,
+                            filament::View *overlay_view) const;
+  void render(filament::Renderer &renderer, filament::View *scene_view,
+              filament::View *overlay_view,
+              bool overlay_uses_separate_target) const;
 
 private:
-    bool groundGridVisible_ = true;
-    bool overlayVisible_ = false;
-    bool sceneVisible_ = true;
-    std::uint8_t sceneLayerMask_ = kViewportShadedSceneLayerMask;
-    ViewportSettingColor backgroundColor_ = {0.0f, 0.0f, 0.0f, 1.0f};
-    std::uint8_t gridLayerMask_ = 0x04u;
+  bool ground_grid_visible_ = true;
+  bool overlay_visible_ = false;
+  bool scene_visible_ = true;
+  std::uint8_t scene_layer_mask_ = kViewportShadedSceneLayerMask;
+  ViewportSettingColor background_color_ = {0.0f, 0.0f, 0.0f, 1.0f};
+  std::uint8_t grid_layer_mask_ = 0x04u;
 };
 
 } // namespace quader

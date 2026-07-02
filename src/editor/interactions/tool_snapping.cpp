@@ -106,11 +106,11 @@ quader::QVec3 constrain_knife_point_to_axis(
 		bool snap_enabled)
 {
 	const quader::QVec3 delta = point - previous;
-	if (quader::length_squared(delta) <= tool_epsilon) {
-		return previous;
-	}
+        if (quader::length_squared(delta) <= kToolEpsilon) {
+          return previous;
+        }
 
-	const std::array<quader::QVec3, 3> axes {
+        const std::array<quader::QVec3, 3> axes {
 		quader::QVec3 { 1.0F, 0.0F, 0.0F },
 		quader::QVec3 { 0.0F, 1.0F, 0.0F },
 		quader::QVec3 { 0.0F, 0.0F, 1.0F },

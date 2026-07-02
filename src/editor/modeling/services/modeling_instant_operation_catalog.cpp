@@ -12,293 +12,205 @@
 namespace quader {
 namespace {
 
-[[nodiscard]] ModelingInstantOperationCatalogEntry runtimeEntry(
-        ModelingInstantOperationId operation,
-        std::string_view id,
-        std::string_view commandLabel,
-        std::string_view liveLabel,
-        ModelingActionAvailabilityRule availability,
-        quader_editor_core::EditorOperationId runtimeOperation,
-        std::string_view publicCommandId = {},
-        bool registersPublicCommand = true) {
-    return {
-            .operation = operation,
-            .id = id,
-            .operationId = id,
-            .commandLabel = commandLabel,
-            .liveLabel = liveLabel,
-            .availability = availability,
-            .runtimeOperation = runtimeOperation,
-            .publicCommandId = publicCommandId,
-            .registersPublicCommand = registersPublicCommand,
-    };
+[[nodiscard]] ModelingInstantOperationCatalogEntry
+runtime_entry(ModelingInstantOperationId operation, std::string_view id,
+              std::string_view command_label, std::string_view live_label,
+              ModelingActionAvailabilityRule availability,
+              quader_editor_core::EditorOperationId runtime_operation,
+              std::string_view public_command_id = {},
+              bool registers_public_command = true) {
+  return {
+      .operation = operation,
+      .id = id,
+      .operation_id = id,
+      .command_label = command_label,
+      .live_label = live_label,
+      .availability = availability,
+      .runtime_operation = runtime_operation,
+      .public_command_id = public_command_id,
+      .registers_public_command = registers_public_command,
+  };
 }
 
-[[nodiscard]] ModelingActionAvailabilityRule modeSelection(
-        ModelingSelectionMode mode,
-        std::uint32_t minimumObjects = 0,
-        std::uint32_t minimumVertices = 0,
-        std::uint32_t minimumEdges = 0,
-        std::uint32_t minimumFaces = 0,
-        ModelingActiveSelectionKind requiredActive = ModelingActiveSelectionKind::None) {
-    return {
-            .requirement = ModelingActionSelectionRequirement::SelectionMode,
-            .mode = mode,
-            .minimumSelectedVertices = minimumVertices,
-            .minimumSelectedEdges = minimumEdges,
-            .minimumSelectedFaces = minimumFaces,
-            .minimumSelectedObjects = minimumObjects,
-            .requiredActiveKind = requiredActive,
-    };
+[[nodiscard]] ModelingActionAvailabilityRule
+mode_selection(ModelingSelectionMode mode, std::uint32_t minimum_objects = 0,
+               std::uint32_t minimum_vertices = 0,
+               std::uint32_t minimum_edges = 0, std::uint32_t minimum_faces = 0,
+               ModelingActiveSelectionKind required_active =
+                   ModelingActiveSelectionKind::None) {
+  return {
+      .requirement = ModelingActionSelectionRequirement::SelectionMode,
+      .mode = mode,
+      .minimum_selected_vertices = minimum_vertices,
+      .minimum_selected_edges = minimum_edges,
+      .minimum_selected_faces = minimum_faces,
+      .minimum_selected_objects = minimum_objects,
+      .required_active_kind = required_active,
+  };
 }
 
-[[nodiscard]] ModelingActionAvailabilityRule objectSelection(std::uint32_t minimumObjects = 1) {
-    return modeSelection(ModelingSelectionMode::Object, minimumObjects);
+[[nodiscard]] ModelingActionAvailabilityRule
+object_selection(std::uint32_t minimum_objects = 1) {
+  return mode_selection(ModelingSelectionMode::Object, minimum_objects);
 }
 
-[[nodiscard]] ModelingActionAvailabilityRule vertexSelection(
-        std::uint32_t minimumVertices = 1,
-        ModelingActiveSelectionKind requiredActive = ModelingActiveSelectionKind::None) {
-    return modeSelection(ModelingSelectionMode::Vertex, 0, minimumVertices, 0, 0, requiredActive);
+[[nodiscard]] ModelingActionAvailabilityRule
+vertex_selection(std::uint32_t minimum_vertices = 1,
+                 ModelingActiveSelectionKind required_active =
+                     ModelingActiveSelectionKind::None) {
+  return mode_selection(ModelingSelectionMode::Vertex, 0, minimum_vertices, 0,
+                        0, required_active);
 }
 
-[[nodiscard]] ModelingActionAvailabilityRule edgeSelection(
-        std::uint32_t minimumEdges = 1,
-        ModelingActiveSelectionKind requiredActive = ModelingActiveSelectionKind::None) {
-    return modeSelection(ModelingSelectionMode::Edge, 0, 0, minimumEdges, 0, requiredActive);
+[[nodiscard]] ModelingActionAvailabilityRule
+edge_selection(std::uint32_t minimum_edges = 1,
+               ModelingActiveSelectionKind required_active =
+                   ModelingActiveSelectionKind::None) {
+  return mode_selection(ModelingSelectionMode::Edge, 0, 0, minimum_edges, 0,
+                        required_active);
 }
 
-[[nodiscard]] ModelingActionAvailabilityRule faceSelection(std::uint32_t minimumFaces = 1) {
-    return modeSelection(ModelingSelectionMode::Face, 0, 0, 0, minimumFaces);
+[[nodiscard]] ModelingActionAvailabilityRule
+face_selection(std::uint32_t minimum_faces = 1) {
+  return mode_selection(ModelingSelectionMode::Face, 0, 0, 0, minimum_faces);
 }
 
-[[nodiscard]] ModelingActionAvailabilityRule edgeOrFaceSelection() {
-    return {.requirement = ModelingActionSelectionRequirement::EdgeOrFaceSelection};
+[[nodiscard]] ModelingActionAvailabilityRule edge_or_face_selection() {
+  return {.requirement =
+              ModelingActionSelectionRequirement::EdgeOrFaceSelection};
 }
 
-[[nodiscard]] ModelingActionAvailabilityRule nonObjectSelection() {
-    return {.requirement = ModelingActionSelectionRequirement::NonObjectSelection};
+[[nodiscard]] ModelingActionAvailabilityRule non_object_selection() {
+  return {.requirement =
+              ModelingActionSelectionRequirement::NonObjectSelection};
 }
 
-[[nodiscard]] ModelingActionAvailabilityRule objectOrFaceSelection() {
-    return {.requirement = ModelingActionSelectionRequirement::ObjectOrFaceSelection};
+[[nodiscard]] ModelingActionAvailabilityRule object_or_face_selection() {
+  return {.requirement =
+              ModelingActionSelectionRequirement::ObjectOrFaceSelection};
 }
 
 } // namespace
 
-std::span<const ModelingInstantOperationCatalogEntry> modelingInstantOperationCatalog() {
-    using RuntimeId = quader_editor_core::EditorOperationId;
+std::span<const ModelingInstantOperationCatalogEntry>
+modeling_instant_operation_catalog() {
+  using RuntimeId = quader_editor_core::EditorOperationId;
 
-    static const std::array entries{
-            runtimeEntry(
-                    ModelingInstantOperationId::DuplicateMeshes,
-                    "duplicate_meshes",
-                    "Duplicate Meshes",
-                    "Duplicate",
-                    objectSelection(),
-                    RuntimeId::duplicate_meshes),
-            runtimeEntry(
-                    ModelingInstantOperationId::CombineMeshes,
-                    "combine_meshes",
-                    "Combine Meshes",
-                    "Combine Meshes",
-                    objectSelection(2),
-                    RuntimeId::combine_meshes),
-            runtimeEntry(
-                    ModelingInstantOperationId::ExtractFaces,
-                    "extract_faces",
-                    "Extract Faces",
-                    "Extract Faces",
-                    faceSelection(),
-                    RuntimeId::extract_faces),
-            runtimeEntry(
-                    ModelingInstantOperationId::DetachFaces,
-                    "detach_faces",
-                    "Detach Faces",
-                    "Detach Faces",
-                    faceSelection(),
-                    RuntimeId::detach_faces),
-            runtimeEntry(
-                    ModelingInstantOperationId::Bridge,
-                    "bridge",
-                    "Bridge",
-                    "Bridge",
-                    edgeOrFaceSelection(),
-                    RuntimeId::bridge),
-            runtimeEntry(
-                    ModelingInstantOperationId::SnapVerticesToActive,
-                    "snap_vertices_to_active",
-                    "Snap Vertices to Active",
+  static const std::array kEntries{
+      runtime_entry(ModelingInstantOperationId::DuplicateMeshes,
+                    "duplicate_meshes", "Duplicate Meshes", "Duplicate",
+                    object_selection(), RuntimeId::DuplicateMeshes),
+      runtime_entry(ModelingInstantOperationId::CombineMeshes, "combine_meshes",
+                    "Combine Meshes", "Combine Meshes", object_selection(2),
+                    RuntimeId::CombineMeshes),
+      runtime_entry(ModelingInstantOperationId::ExtractFaces, "extract_faces",
+                    "Extract Faces", "Extract Faces", face_selection(),
+                    RuntimeId::ExtractFaces),
+      runtime_entry(ModelingInstantOperationId::DetachFaces, "detach_faces",
+                    "Detach Faces", "Detach Faces", face_selection(),
+                    RuntimeId::DetachFaces),
+      runtime_entry(ModelingInstantOperationId::Bridge, "bridge", "Bridge",
+                    "Bridge", edge_or_face_selection(), RuntimeId::Bridge),
+      runtime_entry(ModelingInstantOperationId::SnapVerticesToActive,
+                    "snap_vertices_to_active", "Snap Vertices to Active",
                     "Snap to Vertex",
-                    vertexSelection(2, ModelingActiveSelectionKind::Vertex),
-                    RuntimeId::snap_vertices_to_active),
-            runtimeEntry(
-                    ModelingInstantOperationId::ConnectVertices,
-                    "connect_vertices",
-                    "Connect Vertices",
-                    "Connect Vertices",
-                    vertexSelection(),
-                    RuntimeId::connect_vertices),
-            runtimeEntry(
-                    ModelingInstantOperationId::DissolveVertices,
-                    "dissolve_vertices",
-                    "Dissolve Vertices",
-                    "Dissolve Vertices",
-                    vertexSelection(),
-                    RuntimeId::dissolve_vertices),
-            runtimeEntry(
-                    ModelingInstantOperationId::BevelVertices,
-                    "bevel_vertices",
-                    "Bevel Vertex",
-                    "Bevel Vertex",
-                    vertexSelection(),
-                    RuntimeId::bevel_vertices),
-            runtimeEntry(
-                    ModelingInstantOperationId::MergeVerticesToActive,
-                    "merge_vertices_to_active",
-                    "Merge Vertices to Active",
-                    "Merge Vertices To Active",
-                    vertexSelection(2),
-                    RuntimeId::merge_vertices_to_active),
-            runtimeEntry(
-                    ModelingInstantOperationId::MergeVerticesToCenter,
-                    "merge_vertices_to_center",
-                    "Merge Vertices to Center",
-                    "Merge Vertices To Center",
-                    vertexSelection(2),
-                    RuntimeId::merge_vertices_to_center),
-            runtimeEntry(
-                    ModelingInstantOperationId::SnapEdgesToActive,
-                    "snap_edges_to_active",
-                    "Snap Edges to Active",
+                    vertex_selection(2, ModelingActiveSelectionKind::Vertex),
+                    RuntimeId::SnapVerticesToActive),
+      runtime_entry(ModelingInstantOperationId::ConnectVertices,
+                    "connect_vertices", "Connect Vertices", "Connect Vertices",
+                    vertex_selection(), RuntimeId::ConnectVertices),
+      runtime_entry(ModelingInstantOperationId::DissolveVertices,
+                    "dissolve_vertices", "Dissolve Vertices",
+                    "Dissolve Vertices", vertex_selection(),
+                    RuntimeId::DissolveVertices),
+      runtime_entry(ModelingInstantOperationId::BevelVertices, "bevel_vertices",
+                    "Bevel Vertex", "Bevel Vertex", vertex_selection(),
+                    RuntimeId::BevelVertices),
+      runtime_entry(ModelingInstantOperationId::MergeVerticesToActive,
+                    "merge_vertices_to_active", "Merge Vertices to Active",
+                    "Merge Vertices To Active", vertex_selection(2),
+                    RuntimeId::MergeVerticesToActive),
+      runtime_entry(ModelingInstantOperationId::MergeVerticesToCenter,
+                    "merge_vertices_to_center", "Merge Vertices to Center",
+                    "Merge Vertices To Center", vertex_selection(2),
+                    RuntimeId::MergeVerticesToCenter),
+      runtime_entry(ModelingInstantOperationId::SnapEdgesToActive,
+                    "snap_edges_to_active", "Snap Edges to Active",
                     "Snap to Edge",
-                    edgeSelection(2, ModelingActiveSelectionKind::Edge),
-                    RuntimeId::snap_edges_to_active),
-            runtimeEntry(
-                    ModelingInstantOperationId::ConnectEdges,
-                    "connect_edges",
-                    "Connect Edges",
-                    "Connect Edges",
-                    edgeSelection(),
-                    RuntimeId::connect_edges),
-            runtimeEntry(
-                    ModelingInstantOperationId::SplitEdges,
-                    "split_edges",
-                    "Split Edges",
-                    "Split Edges",
-                    edgeSelection(),
-                    RuntimeId::split_edges),
-            runtimeEntry(
-                    ModelingInstantOperationId::DissolveEdges,
-                    "dissolve_edges",
-                    "Dissolve Edges",
-                    "Dissolve Edges",
-                    edgeSelection(),
-                    RuntimeId::dissolve_edges),
-            runtimeEntry(
-                    ModelingInstantOperationId::MergeEdges,
-                    "merge_edges",
-                    "Merge Edges",
-                    "Merge Edges",
-                    edgeSelection(),
-                    RuntimeId::merge_edges),
-            runtimeEntry(
-                    ModelingInstantOperationId::CollapseEdges,
-                    "collapse_edges",
-                    "Collapse Edges",
-                    "Collapse Edges",
-                    edgeSelection(),
-                    RuntimeId::collapse_edges),
-            runtimeEntry(
-                    ModelingInstantOperationId::FillHole,
-                    "fill_hole",
-                    "Fill Hole",
-                    "Fill Hole",
-                    edgeSelection(),
-                    RuntimeId::fill_hole),
-            runtimeEntry(
-                    ModelingInstantOperationId::CombineFaces,
-                    "combine_faces",
-                    "Combine Faces",
-                    "Combine Faces",
-                    faceSelection(),
-                    RuntimeId::combine_faces),
-            runtimeEntry(
-                    ModelingInstantOperationId::CollapseFaces,
-                    "collapse_faces",
-                    "Collapse Faces",
-                    "Collapse Faces",
-                    faceSelection(),
-                    RuntimeId::collapse_faces),
-            runtimeEntry(
-                    ModelingInstantOperationId::RadialAlign,
-                    "radial_align",
-                    "Radial Align",
-                    "Radial Align",
-                    nonObjectSelection(),
-                    RuntimeId::radial_align),
-            runtimeEntry(
-                    ModelingInstantOperationId::FlipFaceNormals,
-                    "flip_face_normals",
-                    "Flip Face Normals",
-                    "Flip Face Normals",
-                    objectOrFaceSelection(),
-                    RuntimeId::flip_face_normals),
-            runtimeEntry(
-                    ModelingInstantOperationId::RecalculateFaceNormals,
-                    "recalculate_face_normals",
-                    "Recalculate Face Normals",
-                    "Recalculate Face Normals",
-                    objectOrFaceSelection(),
-                    RuntimeId::recalculate_face_normals),
-            runtimeEntry(
-                    ModelingInstantOperationId::ShadeFacesSmooth,
-                    "shade_faces_smooth",
-                    "Shade Smooth",
-                    "Shade Smooth",
-                    objectOrFaceSelection(),
-                    RuntimeId::shade_faces_smooth),
-            runtimeEntry(
-                    ModelingInstantOperationId::ShadeFacesFlat,
-                    "shade_faces_flat",
-                    "Shade Flat",
-                    "Shade Flat",
-                    objectOrFaceSelection(),
-                    RuntimeId::shade_faces_flat),
-            runtimeEntry(
-                    ModelingInstantOperationId::HardenEdgeNormals,
-                    "harden_edge_normals",
-                    "Harden Edge Normals",
-                    "Harden Edge Normals",
-                    edgeSelection(),
-                    RuntimeId::harden_edge_normals),
-            runtimeEntry(
-                    ModelingInstantOperationId::SoftenEdgeNormals,
-                    "soften_edge_normals",
-                    "Soften Edge Normals",
-                    "Soften Edge Normals",
-                    edgeSelection(),
-                    RuntimeId::soften_edge_normals),
-    };
-    return {entries.data(), entries.size()};
+                    edge_selection(2, ModelingActiveSelectionKind::Edge),
+                    RuntimeId::SnapEdgesToActive),
+      runtime_entry(ModelingInstantOperationId::ConnectEdges, "connect_edges",
+                    "Connect Edges", "Connect Edges", edge_selection(),
+                    RuntimeId::ConnectEdges),
+      runtime_entry(ModelingInstantOperationId::SplitEdges, "split_edges",
+                    "Split Edges", "Split Edges", edge_selection(),
+                    RuntimeId::SplitEdges),
+      runtime_entry(ModelingInstantOperationId::DissolveEdges, "dissolve_edges",
+                    "Dissolve Edges", "Dissolve Edges", edge_selection(),
+                    RuntimeId::DissolveEdges),
+      runtime_entry(ModelingInstantOperationId::MergeEdges, "merge_edges",
+                    "Merge Edges", "Merge Edges", edge_selection(),
+                    RuntimeId::MergeEdges),
+      runtime_entry(ModelingInstantOperationId::CollapseEdges, "collapse_edges",
+                    "Collapse Edges", "Collapse Edges", edge_selection(),
+                    RuntimeId::CollapseEdges),
+      runtime_entry(ModelingInstantOperationId::FillHole, "fill_hole",
+                    "Fill Hole", "Fill Hole", edge_selection(),
+                    RuntimeId::FillHole),
+      runtime_entry(ModelingInstantOperationId::CombineFaces, "combine_faces",
+                    "Combine Faces", "Combine Faces", face_selection(),
+                    RuntimeId::CombineFaces),
+      runtime_entry(ModelingInstantOperationId::CollapseFaces, "collapse_faces",
+                    "Collapse Faces", "Collapse Faces", face_selection(),
+                    RuntimeId::CollapseFaces),
+      runtime_entry(ModelingInstantOperationId::RadialAlign, "radial_align",
+                    "Radial Align", "Radial Align", non_object_selection(),
+                    RuntimeId::RadialAlign),
+      runtime_entry(ModelingInstantOperationId::FlipFaceNormals,
+                    "flip_face_normals", "Flip Face Normals",
+                    "Flip Face Normals", object_or_face_selection(),
+                    RuntimeId::FlipFaceNormals),
+      runtime_entry(ModelingInstantOperationId::RecalculateFaceNormals,
+                    "recalculate_face_normals", "Recalculate Face Normals",
+                    "Recalculate Face Normals", object_or_face_selection(),
+                    RuntimeId::RecalculateFaceNormals),
+      runtime_entry(ModelingInstantOperationId::ShadeFacesSmooth,
+                    "shade_faces_smooth", "Shade Smooth", "Shade Smooth",
+                    object_or_face_selection(), RuntimeId::ShadeFacesSmooth),
+      runtime_entry(ModelingInstantOperationId::ShadeFacesFlat,
+                    "shade_faces_flat", "Shade Flat", "Shade Flat",
+                    object_or_face_selection(), RuntimeId::ShadeFacesFlat),
+      runtime_entry(ModelingInstantOperationId::HardenEdgeNormals,
+                    "harden_edge_normals", "Harden Edge Normals",
+                    "Harden Edge Normals", edge_selection(),
+                    RuntimeId::HardenEdgeNormals),
+      runtime_entry(ModelingInstantOperationId::SoftenEdgeNormals,
+                    "soften_edge_normals", "Soften Edge Normals",
+                    "Soften Edge Normals", edge_selection(),
+                    RuntimeId::SoftenEdgeNormals),
+  };
+  return {kEntries.data(), kEntries.size()};
 }
 
-const ModelingInstantOperationCatalogEntry* findModelingInstantOperationCatalogEntry(
-        ModelingInstantOperationId operation) {
-    const std::span<const ModelingInstantOperationCatalogEntry> entries = modelingInstantOperationCatalog();
-    const auto found = std::find_if(entries.begin(), entries.end(), [&](const ModelingInstantOperationCatalogEntry& entry) {
-        return entry.operation == operation;
-    });
-    return found == entries.end() ? nullptr : &*found;
+const ModelingInstantOperationCatalogEntry *
+find_modeling_instant_operation_catalog_entry(
+    ModelingInstantOperationId operation) {
+  const std::span<const ModelingInstantOperationCatalogEntry> entries =
+      modeling_instant_operation_catalog();
+  const auto found =
+      std::find_if(entries.begin(), entries.end(),
+                   [&](const ModelingInstantOperationCatalogEntry &entry) {
+                     return entry.operation == operation;
+                   });
+  return found == entries.end() ? nullptr : &*found;
 }
 
-bool modelingInstantOperationEnabled(
-        const ModelingInstantOperationCatalogEntry& entry,
-        const ModelingSelectionSummary& summary) {
-    return ModelingActionCatalog::evaluateOperationAvailability(
-            summary,
-            entry.operationId,
-            entry.availability).visibility == ModelingActionVisibility::Enabled;
+bool modeling_instant_operation_enabled(
+    const ModelingInstantOperationCatalogEntry &entry,
+    const ModelingSelectionSummary &summary) {
+  return ModelingActionCatalog::evaluate_operation_availability(
+             summary, entry.operation_id, entry.availability)
+             .visibility == ModelingActionVisibility::Enabled;
 }
 
 } // namespace quader

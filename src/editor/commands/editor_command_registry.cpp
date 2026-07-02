@@ -13,42 +13,44 @@
 
 namespace quader {
 
-void EditorCommandRegistry::registerCommand(EditorCommandRegistration command) {
-    if (command.id.empty() || contains(command.id)) {
-        return;
-    }
-    commands_.push_back(std::move(command));
+void EditorCommandRegistry::register_command(
+    EditorCommandRegistration command) {
+  if (command.id.empty() || contains(command.id)) {
+    return;
+  }
+  commands_.push_back(std::move(command));
 }
 
-bool EditorCommandRegistry::contains(std::string_view commandId) const {
-    return find(commandId) != nullptr;
+bool EditorCommandRegistry::contains(std::string_view command_id) const {
+  return find(command_id) != nullptr;
 }
 
-std::optional<QuaderApiVoidResult> EditorCommandRegistry::execute(std::string_view commandId) const {
-    QDR_PROFILE_FUNCTION();
-    QDR_PROFILE_NAME(commandId.data(), commandId.size());
-    if (const EditorCommandRegistration* command = find(commandId)) {
-        if (command->enabled && !command->enabled()) {
-            return QuaderApiVoidResult{
-                    .ok = false,
-                    .changed = false,
-                    .message = "Command is disabled.",
-                    .mutationKind = QuaderMutationKind::None,
-            };
-        }
-        if (!command->execute) {
-            return QuaderApiVoidResult{
-                    .ok = false,
-                    .changed = false,
-                    .message = "Command has no handler.",
-                    .mutationKind = QuaderMutationKind::None,
-            };
-        }
-        QDR_PROFILE_SCOPE("Editor command handler");
-        return command->execute();
+std::optional<QuaderApiVoidResult>
+EditorCommandRegistry::execute(std::string_view command_id) const {
+  QDR_PROFILE_FUNCTION();
+  QDR_PROFILE_NAME(command_id.data(), command_id.size());
+  if (const EditorCommandRegistration *command = find(command_id)) {
+    if (command->enabled && !command->enabled()) {
+      return QuaderApiVoidResult{
+          .ok = false,
+          .changed = false,
+          .message = "Command is disabled.",
+          .mutation_kind = QuaderMutationKind::None,
+      };
     }
+    if (!command->execute) {
+      return QuaderApiVoidResult{
+          .ok = false,
+          .changed = false,
+          .message = "Command has no handler.",
+          .mutation_kind = QuaderMutationKind::None,
+      };
+    }
+    QDR_PROFILE_SCOPE("Editor command handler");
+    return command->execute();
+  }
 
-    return std::nullopt;
+  return std::nullopt;
 }
 
 std::vector<QuaderCommandDescriptor> EditorCommandRegistry::available() const {
@@ -73,18 +75,22 @@ std::vector<QuaderCommandDescriptor> EditorCommandRegistry::available() const {
     return result;
 }
 
-std::string EditorCommandRegistry::shortcutFor(std::string_view commandId) const {
-    if (const EditorCommandRegistration* command = find(commandId)) {
-        return command->shortcut;
-    }
-    return {};
+std::string
+EditorCommandRegistry::shortcut_for(std::string_view command_id) const {
+  if (const EditorCommandRegistration *command = find(command_id)) {
+    return command->shortcut;
+  }
+  return {};
 }
 
-const EditorCommandRegistration* EditorCommandRegistry::find(std::string_view commandId) const {
-    const auto found = std::find_if(commands_.begin(), commands_.end(), [&](const EditorCommandRegistration& command) {
-        return command.id == commandId;
-    });
-    return found == commands_.end() ? nullptr : &(*found);
+const EditorCommandRegistration *
+EditorCommandRegistry::find(std::string_view command_id) const {
+  const auto found =
+      std::find_if(commands_.begin(), commands_.end(),
+                   [&](const EditorCommandRegistration &command) {
+                     return command.id == command_id;
+                   });
+  return found == commands_.end() ? nullptr : &(*found);
 }
 
 } // namespace quader

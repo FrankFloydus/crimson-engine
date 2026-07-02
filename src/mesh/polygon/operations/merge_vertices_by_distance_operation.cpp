@@ -45,9 +45,9 @@ private:
  * Represents a Distance Merge Vertex value used by the polygon document and mesh editing core.
  */
 struct DistanceMergeVertex {
-    ElementId id = invalid_element_id;
-    quader::QVec3 position;
-    std::size_t input_index = 0;
+  ElementId id = kInvalidElementId;
+  quader::QVec3 position;
+  std::size_t input_index = 0;
 };
 
 /**
@@ -55,7 +55,7 @@ struct DistanceMergeVertex {
  */
 struct DistanceMergeCluster {
     std::vector<DistanceMergeVertex> vertices;
-    ElementId survivor_id = invalid_element_id;
+    ElementId survivor_id = kInvalidElementId;
     quader::QVec3 centroid;
 };
 
@@ -71,7 +71,7 @@ quader::QVec3 centroid_for_distance_cluster(std::span<const DistanceMergeVertex>
 ElementId survivor_for_distance_cluster(std::span<const DistanceMergeVertex> vertices, quader::QVec3 centroid)
 {
     if (vertices.empty()) {
-        return invalid_element_id;
+      return kInvalidElementId;
     }
     if (vertices.size() == 2U) {
         return vertices[0].id;
@@ -81,10 +81,11 @@ ElementId survivor_for_distance_cluster(std::span<const DistanceMergeVertex> ver
     float best_distance = length_squared(vertices[0].position - centroid);
     for (const DistanceMergeVertex& vertex : vertices) {
         const float distance = length_squared(vertex.position - centroid);
-        if (distance + epsilon < best_distance ||
-            (std::abs(distance - best_distance) <= epsilon && vertex.input_index < best->input_index)) {
-            best = &vertex;
-            best_distance = distance;
+        if (distance + kEpsilon < best_distance ||
+            (std::abs(distance - best_distance) <= kEpsilon &&
+             vertex.input_index < best->input_index)) {
+          best = &vertex;
+          best_distance = distance;
         }
     }
     return best->id;
@@ -108,7 +109,8 @@ std::vector<DistanceMergeCluster> distance_merge_clusters(
     std::vector<bool> assigned(vertices.size(), false);
     std::vector<DistanceMergeCluster> clusters;
     const float tolerance_squared = tolerance * tolerance;
-    const float boundary_epsilon = std::max(epsilon, tolerance_squared * 0.00001F);
+    const float boundary_epsilon =
+        std::max(kEpsilon, tolerance_squared * 0.00001F);
     for (std::size_t seed_index = 0; seed_index < vertices.size(); ++seed_index) {
         if (assigned[seed_index]) {
             continue;
@@ -140,8 +142,8 @@ std::vector<DistanceMergeCluster> distance_merge_clusters(
         merge_cluster.vertices = std::move(cluster);
         merge_cluster.centroid = centroid_for_distance_cluster(merge_cluster.vertices);
         merge_cluster.survivor_id = survivor_for_distance_cluster(merge_cluster.vertices, merge_cluster.centroid);
-        if (merge_cluster.survivor_id != invalid_element_id) {
-            clusters.push_back(std::move(merge_cluster));
+        if (merge_cluster.survivor_id != kInvalidElementId) {
+          clusters.push_back(std::move(merge_cluster));
         }
     }
     return clusters;
@@ -154,9 +156,9 @@ MergeVerticesByDistanceOperation::MergeVerticesByDistanceOperation(float toleran
 
 OperationResult MergeVerticesByDistanceOperation::apply(Document& document, Selection& selection) const
 {
-    if (selection.mode != SelectionMode::vertex) {
-        return { false, "Merge by Distance needs vertex selection mode." };
-    }
+  if (selection.mode != SelectionMode::Vertex) {
+    return {false, "Merge by Distance needs vertex selection mode."};
+  }
     if (!std::isfinite(tolerance_) || tolerance_ < 0.0F) {
         return { false, "Merge by Distance needs a finite non-negative tolerance." };
     }
@@ -210,16 +212,19 @@ OperationResult MergeVerticesByDistanceOperation::apply(Document& document, Sele
 
     document = std::move(candidate);
     selection.clear();
-    selection.mode = SelectionMode::vertex;
+    selection.mode = SelectionMode::Vertex;
     for (const ElementId vertex_id : selected_after_merge) {
         if (find_vertex(document, vertex_id) != nullptr) {
             add_unique_id(selection.vertices, vertex_id);
         }
     }
-    const ElementId active_id = !survivor_ids.empty() ? survivor_ids.front() :
-        (selection.vertices.empty() ? invalid_element_id : selection.vertices.front());
-    if (active_id != invalid_element_id) {
-        activate_vertex_selection(selection, active_id);
+    const ElementId active_id =
+        !survivor_ids.empty()
+            ? survivor_ids.front()
+            : (selection.vertices.empty() ? kInvalidElementId
+                                          : selection.vertices.front());
+    if (active_id != kInvalidElementId) {
+      activate_vertex_selection(selection, active_id);
     }
 
     return { true, {} };

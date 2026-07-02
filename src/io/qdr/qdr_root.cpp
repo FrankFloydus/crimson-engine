@@ -38,39 +38,38 @@ QdrRootHeader read_qdr_root_header(const QdrJson& root) {
         throw std::runtime_error("QDR document version header must be an integer.");
     }
 
-    int parsedVersion = 0;
+    int parsed_version = 0;
     if (version->is_number_unsigned()) {
         const auto value = version->get<unsigned long long>();
         if (value > static_cast<unsigned long long>(std::numeric_limits<int>::max())) {
             throw std::runtime_error("QDR document version header is outside the supported integer range.");
         }
-        parsedVersion = static_cast<int>(value);
+        parsed_version = static_cast<int>(value);
     } else {
         const auto value = version->get<long long>();
         if (value < static_cast<long long>(std::numeric_limits<int>::min()) ||
                 value > static_cast<long long>(std::numeric_limits<int>::max())) {
             throw std::runtime_error("QDR document version header is outside the supported integer range.");
         }
-        parsedVersion = static_cast<int>(value);
+        parsed_version = static_cast<int>(value);
     }
 
     return {
-            .format = format->get<std::string>(),
-            .version = parsedVersion,
+        .format = format->get<std::string>(),
+        .version = parsed_version,
     };
 }
 
-const QdrJson& qdr_payload_from_root(
-        const QdrJson& root,
-        std::string_view documentPayloadKey,
-        std::string_view legacyPayloadKey) {
-    if (root.contains(qdr_string_from_view(documentPayloadKey))) {
-        return root.at(qdr_string_from_view(documentPayloadKey));
-    }
-    if (root.contains(qdr_string_from_view(legacyPayloadKey))) {
-        return root.at(qdr_string_from_view(legacyPayloadKey));
-    }
-    throw std::runtime_error("QDR document is missing its document payload.");
+const QdrJson &qdr_payload_from_root(const QdrJson &root,
+                                     std::string_view document_payload_key,
+                                     std::string_view legacy_payload_key) {
+  if (root.contains(qdr_string_from_view(document_payload_key))) {
+    return root.at(qdr_string_from_view(document_payload_key));
+  }
+  if (root.contains(qdr_string_from_view(legacy_payload_key))) {
+    return root.at(qdr_string_from_view(legacy_payload_key));
+  }
+  throw std::runtime_error("QDR document is missing its document payload.");
 }
 
 } // namespace quader_io

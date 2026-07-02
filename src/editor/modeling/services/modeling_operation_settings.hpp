@@ -16,19 +16,19 @@
 
 namespace quader {
 
-[[nodiscard]] const char* fallbackToolSettingsLabel(ModelingToolSettingsTargetKind kind);
+[[nodiscard]] const char *
+fallback_tool_settings_label(ModelingToolSettingsTargetKind kind);
 
-[[nodiscard]] quader_editor_core::EditorOperationSettings settingsForOperation(
-        quader_editor_core::EditorOperationId operation,
-        const ModelingInteractionSettings& interactionSettings);
-[[nodiscard]] bool applyModelingInteractionSetting(
-        ModelingInteractionSettings& interactionSettings,
-        std::string_view toolId,
-        std::string_view name,
-        double value);
-[[nodiscard]] ModelingToolSettingsTargetKind toolSettingsTargetKindForPreview(
-        quader_editor_core::PreviewTransactionKind kind);
-[[nodiscard]] std::optional<quader_editor_core::EditorOperationId> operationForPreviewKind(
-        quader_editor_core::PreviewTransactionKind kind);
+[[nodiscard]] quader_editor_core::EditorOperationSettings
+settings_for_operation(quader_editor_core::EditorOperationId operation,
+                       const ModelingInteractionSettings &interaction_settings);
+[[nodiscard]] bool apply_modeling_interaction_setting(
+    ModelingInteractionSettings &interaction_settings, std::string_view tool_id,
+    std::string_view name, double value);
+[[nodiscard]] ModelingToolSettingsTargetKind
+tool_settings_target_kind_for_preview(
+    quader_editor_core::PreviewTransactionKind kind);
+[[nodiscard]] std::optional<quader_editor_core::EditorOperationId>
+operation_for_preview_kind(quader_editor_core::PreviewTransactionKind kind);
 
 } // namespace quader

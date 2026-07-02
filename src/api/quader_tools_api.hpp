@@ -19,16 +19,17 @@ class QuaderToolsApi final {
 public:
     explicit QuaderToolsApi(QuaderApiSession session);
 
-    void setRuntimeHooks(QuaderToolsRuntimeHooks hooks);
+    void set_runtime_hooks(QuaderToolsRuntimeHooks hooks);
 
-    QuaderApiVoidResult activate(std::string_view toolId);
+    QuaderApiVoidResult activate(std::string_view tool_id);
     QuaderApiVoidResult activate(ViewportToolId tool);
-    QuaderApiVoidResult setSetting(std::string_view toolId, std::string_view name, double value);
-    QuaderApiVoidResult cancelModalTool();
+    QuaderApiVoidResult set_setting(std::string_view tool_id,
+                                    std::string_view name, double value);
+    QuaderApiVoidResult cancel_modal_tool();
 
-    [[nodiscard]] std::string activeTool() const;
+    [[nodiscard]] std::string active_tool() const;
 
-private:
+  private:
     QuaderApiSession session_;
     QuaderToolsRuntimeHooks hooks_;
 };

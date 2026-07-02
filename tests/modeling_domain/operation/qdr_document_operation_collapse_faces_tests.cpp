@@ -17,8 +17,8 @@ TEST(QdrDocumentOperationCollapseFacesTests, CollapseFacesTurnsSelectedFaceAreaI
 
 	EXPECT_TRUE(result.changed);
 	EXPECT_TRUE(document.vertices.size() < vertex_count_before);
-	EXPECT_TRUE(selection.mode == SelectionMode::vertex);
-	EXPECT_TRUE(selection.vertices.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
+        EXPECT_TRUE(selection.vertices.size() == 1U);
 	EXPECT_TRUE(find_vertex(document, selection.vertices.front()) != nullptr);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }

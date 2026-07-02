@@ -23,42 +23,48 @@ namespace quader {
  */
 class UIDockPanel : public UIPanel {
 public:
-    const char* title() const override { return uiPanelKey(id()); }
+  const char *title() const override { return ui_panel_key(id()); }
 
-    void draw(UIContext& context) final {
-        const float minWidth = minimumWidth(context);
-        if (minWidth > 0.0f) {
-            setNextWindowMinWidth(minWidth);
-        }
-
-        const std::string windowTitle = context.localization.imguiLabel(uiPanelLocalizationKey(id()), uiPanelKey(id()), title());
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, panelWindowPadding(context));
-        if (!ImGui::Begin(windowTitle.c_str(), nullptr, windowFlags(context))) {
-            ImGui::PopStyleVar();
-            ImGui::End();
-            return;
-        }
-
-        if (routesPanelFocus() &&
-                ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) &&
-                panelFocusInputActive()) {
-            context.requestPanelFocus(id());
-        }
-
-        drawContent(context);
-        ImGui::PopStyleVar();
-        ImGui::End();
+  void draw(UIContext &context) final {
+    const float min_width = minimum_width(context);
+    if (min_width > 0.0f) {
+      set_next_window_min_width(min_width);
     }
+
+    const std::string window_title = context.localization.imgui_label(
+        ui_panel_localization_key(id()), ui_panel_key(id()), title());
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        panel_window_padding(context));
+    if (!ImGui::Begin(window_title.c_str(), nullptr, window_flags(context))) {
+      ImGui::PopStyleVar();
+      ImGui::End();
+      return;
+    }
+
+    if (routes_panel_focus() &&
+        ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) &&
+        panel_focus_input_active()) {
+      context.request_panel_focus(id());
+    }
+
+    draw_content(context);
+    ImGui::PopStyleVar();
+    ImGui::End();
+  }
 
 protected:
-    virtual void drawContent(UIContext& context) = 0;
-    virtual float minimumWidth(const UIContext& context) const {
-        (void)context;
-        return 0.0f;
-    }
-    virtual ImGuiWindowFlags windowFlags(const UIContext& context) const { return context.style.panelWindowFlags; }
-    virtual ImVec2 panelWindowPadding(const UIContext& context) const { return context.style.windowPadding; }
-    virtual bool routesPanelFocus() const { return true; }
+  virtual void draw_content(UIContext &context) = 0;
+  virtual float minimum_width(const UIContext &context) const {
+    (void)context;
+    return 0.0f;
+  }
+  virtual ImGuiWindowFlags window_flags(const UIContext &context) const {
+    return context.style.panel_window_flags;
+  }
+  virtual ImVec2 panel_window_padding(const UIContext &context) const {
+    return context.style.window_padding;
+  }
+  virtual bool routes_panel_focus() const { return true; }
 };
 
 } // namespace quader

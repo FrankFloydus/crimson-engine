@@ -57,8 +57,8 @@ const Vertex* require_vertex(const Document& document, ElementId id)
     const Vertex* vertex = find_vertex(document, id);
     if (vertex == nullptr) {
         ADD_FAILURE() << "Missing document vertex " << id;
-        static const Vertex missing_vertex {};
-        return &missing_vertex;
+        static const Vertex kMissingVertex{};
+        return &kMissingVertex;
     }
     return vertex;
 }
@@ -72,7 +72,8 @@ TEST(QdrDocumentBuilderTests, DocumentBuilderCreatesVerticesQuadsAndMaterialSlot
     const DocumentBuilder::VertexRef c = builder.vertex({ 1.0F, 1.0F, 0.0F });
     const DocumentBuilder::VertexRef d = builder.vertex({ 0.0F, 1.0F, 0.0F });
 
-    const Document document = builder.quad(a, b, c, d, 3).assignMaterialSlot(7).build();
+    const Document document =
+        builder.quad(a, b, c, d, 3).assign_material_slot(7).build();
 
     EXPECT_TRUE(document.vertices.size() == 4U);
     EXPECT_TRUE(document.faces.size() == 1U);
@@ -94,7 +95,8 @@ TEST(QdrDocumentBuilderTests, DocumentBuilderCreatesFacesFromVertexArraysAndIndi
     }};
     const std::array<std::size_t, 3> triangle_indices { 0U, 1U, 2U };
 
-    const Document document = builder.vertices(positions).faceByIndex(triangle_indices, 2).build();
+    const Document document =
+        builder.vertices(positions).face_by_index(triangle_indices, 2).build();
 
     EXPECT_TRUE(document.vertices.size() == 4U);
     EXPECT_TRUE(document.faces.size() == 1U);
@@ -144,7 +146,8 @@ TEST(QdrDocumentBuilderTests, DocumentBuilderCreatesOrientedBoxesFromCorners) {
         { 4.0F, -2.0F, 1.0F },
     }};
 
-    const Document document = DocumentBuilder {}.boxFromCorners(corners, 9).build();
+    const Document document =
+        DocumentBuilder{}.box_from_corners(corners, 9).build();
 
     EXPECT_TRUE(document.vertices.size() == 8U);
     EXPECT_TRUE(document.faces.size() == 6U);

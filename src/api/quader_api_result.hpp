@@ -41,12 +41,12 @@ struct QuaderApiStatus {
     QuaderApiFlag ok = false;
     QuaderApiFlag changed = false;
     std::string message;
-    QuaderMutationKind mutationKind = QuaderMutationKind::None;
+    QuaderMutationKind mutation_kind = QuaderMutationKind::None;
     QuaderRevisionStamp revisions;
 
     [[nodiscard]] bool succeeded() const { return ok; }
-    [[nodiscard]] bool didChange() const { return changed; }
-    [[nodiscard]] const std::string& errorMessage() const { return message; }
+    [[nodiscard]] bool did_change() const { return changed; }
+    [[nodiscard]] const std::string &error_message() const { return message; }
     [[nodiscard]] explicit operator bool() const { return ok; }
 };
 
@@ -86,37 +86,42 @@ struct QuaderApiResult : QuaderApiStatus {
 
 using QuaderApiVoidResult = QuaderApiStatus;
 
-inline void copyQuaderApiStatus(QuaderApiStatus& target, const QuaderApiStatus& source) {
-    target.ok = source.ok;
-    target.changed = source.changed;
-    target.message = source.message;
-    target.mutationKind = source.mutationKind;
-    target.revisions = source.revisions;
+inline void copy_quader_api_status(QuaderApiStatus &target,
+                                   const QuaderApiStatus &source) {
+  target.ok = source.ok;
+  target.changed = source.changed;
+  target.message = source.message;
+  target.mutation_kind = source.mutation_kind;
+  target.revisions = source.revisions;
 }
 
-inline QuaderApiStatus quaderApiStatusFromResult(const QuaderApiStatus& status) {
-    return status;
-}
-
-template <typename T>
-QuaderApiStatus quaderApiStatusFromResult(const QuaderApiResult<T>& result) {
-    QuaderApiStatus status;
-    copyQuaderApiStatus(status, result);
-    return status;
+inline QuaderApiStatus
+quader_api_status_from_result(const QuaderApiStatus &status) {
+  return status;
 }
 
 template <typename T>
-QuaderApiResult<T> quaderApiResultFromStatus(const QuaderApiStatus& status) {
-    QuaderApiResult<T> result;
-    copyQuaderApiStatus(result, status);
-    return result;
+QuaderApiStatus
+quader_api_status_from_result(const QuaderApiResult<T> &result) {
+  QuaderApiStatus status;
+  copy_quader_api_status(status, result);
+  return status;
 }
 
 template <typename T>
-QuaderApiResult<T> quaderApiResultFromStatus(const QuaderApiStatus& status, T value) {
-    QuaderApiResult<T> result = quaderApiResultFromStatus<T>(status);
-    result.value = std::move(value);
-    return result;
+QuaderApiResult<T>
+quader_api_result_from_status(const QuaderApiStatus &status) {
+  QuaderApiResult<T> result;
+  copy_quader_api_status(result, status);
+  return result;
+}
+
+template <typename T>
+QuaderApiResult<T> quader_api_result_from_status(const QuaderApiStatus &status,
+                                                 T value) {
+  QuaderApiResult<T> result = quader_api_result_from_status<T>(status);
+  result.value = std::move(value);
+  return result;
 }
 
 } // namespace quader

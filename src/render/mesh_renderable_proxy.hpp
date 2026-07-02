@@ -27,38 +27,38 @@ struct MeshRenderableProxy {
     MeshRenderableProxy(const MeshRenderableProxy&) = delete;
     MeshRenderableProxy& operator=(const MeshRenderableProxy&) = delete;
     MeshRenderableProxy(MeshRenderableProxy&& other) noexcept {
-        moveFrom(std::move(other));
+      move_from(std::move(other));
     }
     MeshRenderableProxy& operator=(MeshRenderableProxy&&) noexcept = delete;
 
     utils::Entity entity;
-    EntityId sourceEntity = InvalidEntityId;
-    AssetId mesh = InvalidAssetId;
-    AssetId material = InvalidAssetId;
-    std::uint64_t meshRevision = 0;
-    std::uint64_t materialRevision = 0;
-    bool castShadows = false;
-    bool doubleSided = false;
-    filament::VertexBuffer* vertexBuffer = nullptr;
-    filament::IndexBuffer* indexBuffer = nullptr;
-    std::vector<std::uint32_t> materialSlots;
-    std::vector<filament::MaterialInstance*> materialInstances;
+    EntityId source_entity = kInvalidEntityId;
+    AssetId mesh = kInvalidAssetId;
+    AssetId material = kInvalidAssetId;
+    std::uint64_t mesh_revision = 0;
+    std::uint64_t material_revision = 0;
+    bool cast_shadows = false;
+    bool double_sided = false;
+    filament::VertexBuffer *vertex_buffer = nullptr;
+    filament::IndexBuffer *index_buffer = nullptr;
+    std::vector<std::uint32_t> material_slots;
+    std::vector<filament::MaterialInstance *> material_instances;
 
-private:
-    void moveFrom(MeshRenderableProxy&& other) noexcept {
-        entity = other.entity;
-        other.entity.clear();
-        sourceEntity = std::exchange(other.sourceEntity, InvalidEntityId);
-        mesh = std::exchange(other.mesh, InvalidAssetId);
-        material = std::exchange(other.material, InvalidAssetId);
-        meshRevision = std::exchange(other.meshRevision, 0);
-        materialRevision = std::exchange(other.materialRevision, 0);
-        castShadows = std::exchange(other.castShadows, false);
-        doubleSided = std::exchange(other.doubleSided, false);
-        vertexBuffer = std::exchange(other.vertexBuffer, nullptr);
-        indexBuffer = std::exchange(other.indexBuffer, nullptr);
-        materialSlots = std::move(other.materialSlots);
-        materialInstances = std::move(other.materialInstances);
+  private:
+    void move_from(MeshRenderableProxy &&other) noexcept {
+      entity = other.entity;
+      other.entity.clear();
+      source_entity = std::exchange(other.source_entity, kInvalidEntityId);
+      mesh = std::exchange(other.mesh, kInvalidAssetId);
+      material = std::exchange(other.material, kInvalidAssetId);
+      mesh_revision = std::exchange(other.mesh_revision, 0);
+      material_revision = std::exchange(other.material_revision, 0);
+      cast_shadows = std::exchange(other.cast_shadows, false);
+      double_sided = std::exchange(other.double_sided, false);
+      vertex_buffer = std::exchange(other.vertex_buffer, nullptr);
+      index_buffer = std::exchange(other.index_buffer, nullptr);
+      material_slots = std::move(other.material_slots);
+      material_instances = std::move(other.material_instances);
     }
 };
 

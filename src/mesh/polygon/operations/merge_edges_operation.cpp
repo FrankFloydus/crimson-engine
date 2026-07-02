@@ -84,9 +84,9 @@ OperationResult merge_endpoint_group(Document& working, const std::set<ElementId
 
 OperationResult MergeEdgesOperation::apply(Document& document, Selection& selection) const
 {
-    if (selection.mode != SelectionMode::edge) {
-        return { false, "Merge Edges needs edge selection mode." };
-    }
+  if (selection.mode != SelectionMode::Edge) {
+    return {false, "Merge Edges needs edge selection mode."};
+  }
 
     std::vector<Edge> selected_edges;
     selected_edges.reserve(selection.edges.size());
@@ -101,11 +101,12 @@ OperationResult MergeEdgesOperation::apply(Document& document, Selection& select
     }
 
     Edge target_edge = selected_edges.front();
-    if (selection.has_active && selection.active_kind == ElementKind::edge) {
-        const Edge active_edge = make_edge(selection.active_edge.a, selection.active_edge.b);
-        if (contains_edge(selected_edges, active_edge)) {
-            target_edge = active_edge;
-        }
+    if (selection.has_active && selection.active_kind == ElementKind::Edge) {
+      const Edge active_edge =
+          make_edge(selection.active_edge.a, selection.active_edge.b);
+      if (contains_edge(selected_edges, active_edge)) {
+        target_edge = active_edge;
+      }
     }
 
     const Vertex* target_a = find_vertex(document, target_edge.a);
@@ -181,14 +182,14 @@ OperationResult MergeEdgesOperation::apply(Document& document, Selection& select
     selection.clear();
     const Edge survivor_edge = make_edge(target_edge.a, target_edge.b);
     if (edge_exists(document, survivor_edge)) {
-        selection.mode = SelectionMode::edge;
-        selection.edges.push_back(survivor_edge);
-        activate_edge_selection(selection, survivor_edge);
+      selection.mode = SelectionMode::Edge;
+      selection.edges.push_back(survivor_edge);
+      activate_edge_selection(selection, survivor_edge);
     } else {
-        selection.mode = SelectionMode::vertex;
-        if (find_vertex(document, survivor_edge.a) != nullptr) {
-            selection.vertices.push_back(survivor_edge.a);
-        }
+      selection.mode = SelectionMode::Vertex;
+      if (find_vertex(document, survivor_edge.a) != nullptr) {
+        selection.vertices.push_back(survivor_edge.a);
+      }
         if (find_vertex(document, survivor_edge.b) != nullptr) {
             selection.vertices.push_back(survivor_edge.b);
         }

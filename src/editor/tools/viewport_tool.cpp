@@ -16,9 +16,11 @@ Tool::~Tool() = default;
 
 const ToolDescriptor& Tool::descriptor() const { return descriptor_; }
 
-ViewportToolId Tool::viewportTool() const { return descriptor_.tool; }
+ViewportToolId Tool::viewport_tool() const { return descriptor_.tool; }
 
-ModelingViewportTool Tool::modelingTool() const { return descriptor_.modelingTool; }
+ModelingViewportTool Tool::modeling_tool() const {
+  return descriptor_.modeling_tool;
+}
 
 std::string_view Tool::id() const { return descriptor_.id; }
 
@@ -28,53 +30,59 @@ std::string_view Tool::shortcut() const { return descriptor_.shortcut; }
 
 ToolKind Tool::kind() const { return descriptor_.kind; }
 
-ToolMenuGroup Tool::menuGroup() const { return descriptor_.menuGroup; }
+ToolMenuGroup Tool::menu_group() const { return descriptor_.menu_group; }
 
 bool Tool::available() const { return true; }
 
-bool Tool::ownsViewport() const { return descriptor_.ownsViewport; }
+bool Tool::owns_viewport() const { return descriptor_.owns_viewport; }
 
-bool Tool::blocksViewportFocusShortcuts() const { return descriptor_.blocksViewportFocusShortcuts; }
+bool Tool::blocks_viewport_focus_shortcuts() const {
+  return descriptor_.blocks_viewport_focus_shortcuts;
+}
 
-ModelingTransformTool Tool::transformTool() const { return descriptor_.transformTool; }
+ModelingTransformTool Tool::transform_tool() const {
+  return descriptor_.transform_tool;
+}
 
-bool Tool::supportsTransformGizmo() const { return descriptor_.supportsTransformGizmo; }
+bool Tool::supports_transform_gizmo() const {
+  return descriptor_.supports_transform_gizmo;
+}
 
 ModelingCommandResult Tool::activate(ModelingSessionService& modeling) const {
-    return modeling.activateViewportTool(modelingTool());
+  return modeling.activate_viewport_tool(modeling_tool());
 }
 
 ViewportTool::ViewportTool(ToolDescriptor descriptor) : Tool(descriptor) {}
 
-ViewportTool::ViewportTool(ViewportToolId tool) : Tool(viewportToolDescriptor(tool)) {}
+ViewportTool::ViewportTool(ViewportToolId tool)
+    : Tool(viewport_tool_descriptor(tool)) {}
 
-ViewportTool::operator ViewportToolId() const { return viewportTool(); }
+ViewportTool::operator ViewportToolId() const { return viewport_tool(); }
 
-bool ViewportTool::allowsSelectionFallback() const {
-    return descriptor().allowsSelectionFallback;
+bool ViewportTool::allows_selection_fallback() const {
+  return descriptor().allows_selection_fallback;
 }
 
-ViewportToolResult ViewportTool::handleEvent(
-        ViewportToolContext& context,
-        const ViewportToolEvent& event) const {
-    if (event.kind == ViewportToolEventKind::Activation) {
-        return activateById(context, event.tool);
-    }
-    return {};
+ViewportToolResult
+ViewportTool::handle_event(ViewportToolContext &context,
+                           const ViewportToolEvent &event) const {
+  if (event.kind == ViewportToolEventKind::Activation) {
+    return activate_by_id(context, event.tool);
+  }
+  return {};
 }
 
-ViewportToolResult ViewportTool::activateById(
-        ViewportToolContext& context,
-        ViewportToolId tool) const {
-    if (context.setActiveTool) {
-        context.setActiveTool(tool);
-    } else {
-        context.state.activeTool = tool;
-    }
-    return {
-            .handled = true,
-            .activeToolChanged = true,
-    };
+ViewportToolResult ViewportTool::activate_by_id(ViewportToolContext &context,
+                                                ViewportToolId tool) const {
+  if (context.set_active_tool) {
+    context.set_active_tool(tool);
+  } else {
+    context.state.active_tool = tool;
+  }
+  return {
+      .handled = true,
+      .active_tool_changed = true,
+  };
 }
 
 } // namespace quader

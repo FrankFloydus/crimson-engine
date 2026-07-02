@@ -21,40 +21,31 @@ struct ToolRegistryRecord {
 
 std::span<const ToolRegistryRecord> tool_registry_records()
 {
-	static const std::array<ToolRegistryRecord, 12> records {{
-		{ "select", &select_tool() },
-		{ "move", &move_tool() },
-		{ "extend", &extend_tool() },
-		{ "extrude", &extrude_tool() },
-		{ "rotate", &rotate_tool() },
-		{ "scale", &scale_tool() },
-		{ "box", &box_tool() },
-		{ "insert_edge_loop", &insert_edge_loop_tool() },
-		{ "knife", &knife_tool() },
-		{ "cut", &cut_tool() },
-		{ "mirror", &mirror_tool() },
-		{ "poly", &poly_tool() },
-	}};
-	return records;
+  static const std::array<ToolRegistryRecord, 12> kRecords{{
+      {"select", &select_tool()},
+      {"move", &move_tool()},
+      {"extend", &extend_tool()},
+      {"extrude", &extrude_tool()},
+      {"rotate", &rotate_tool()},
+      {"scale", &scale_tool()},
+      {"box", &box_tool()},
+      {"insert_edge_loop", &insert_edge_loop_tool()},
+      {"knife", &knife_tool()},
+      {"cut", &cut_tool()},
+      {"mirror", &mirror_tool()},
+      {"poly", &poly_tool()},
+  }};
+  return kRecords;
 }
 
 std::span<const EditorTool* const> tool_entries()
 {
-	static const std::array<const EditorTool*, 12> tools {
-		&select_tool(),
-		&move_tool(),
-		&extend_tool(),
-		&extrude_tool(),
-		&rotate_tool(),
-		&scale_tool(),
-		&box_tool(),
-		&insert_edge_loop_tool(),
-		&knife_tool(),
-		&cut_tool(),
-		&mirror_tool(),
-		&poly_tool(),
-	};
-	return tools;
+  static const std::array<const EditorTool *, 12> kTools{
+      &select_tool(), &move_tool(),  &extend_tool(), &extrude_tool(),
+      &rotate_tool(), &scale_tool(), &box_tool(),    &insert_edge_loop_tool(),
+      &knife_tool(),  &cut_tool(),   &mirror_tool(), &poly_tool(),
+  };
+  return kTools;
 }
 
 } // namespace
@@ -86,8 +77,8 @@ const EditorTool *ToolRegistry::find(std::string_view id) const
 
 const ToolRegistry& tool_registry()
 {
-	static const ToolRegistry registry;
-	return registry;
+  static const ToolRegistry kRegistry;
+  return kRegistry;
 }
 
 std::span<const EditorTool* const> editor_tool_registry()

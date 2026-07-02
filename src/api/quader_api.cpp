@@ -18,31 +18,29 @@ namespace quader {
  */
 class QuaderApi::Impl final {
 public:
-    explicit Impl(QuaderApiSession apiSession)
-        : session(apiSession)
-        , projectSession(QuaderApiSessionInternalAccess::projectSession(apiSession))
-        , history(projectSession.history())
-        , editorCommands(history, projectSession.documentCommands())
-        , mutations(projectSession, history, editorCommands, modelingCommands)
-        , scene(apiSession, mutations)
-        , modeling(apiSession, mutations)
-        , selection(apiSession, mutations)
-        , assets(apiSession, mutations)
-        , historyApi(apiSession, mutations)
-        , query(apiSession, mutations) {}
+  explicit Impl(QuaderApiSession api_session)
+      : session(api_session),
+        project_session(
+            QuaderApiSessionInternalAccess::project_session(api_session)),
+        history(project_session.history()),
+        editor_commands(history, project_session.document_commands()),
+        mutations(project_session, history, editor_commands, modeling_commands),
+        scene(api_session, mutations), modeling(api_session, mutations),
+        selection(api_session, mutations), assets(api_session, mutations),
+        history_api(api_session, mutations), query(api_session, mutations) {}
 
-    QuaderApiSession session;
-    ProjectSession& projectSession;
-    EditorHistoryService& history;
-    EditorCommandService editorCommands;
-    ModelingCommandExecutionService modelingCommands;
-    QuaderApiMutationRunner mutations;
-    QuaderSceneApi scene;
-    QuaderModelingApi modeling;
-    QuaderSelectionApi selection;
-    QuaderAssetApi assets;
-    QuaderHistoryApi historyApi;
-    QuaderQueryApi query;
+  QuaderApiSession session;
+  ProjectSession &project_session;
+  EditorHistoryService &history;
+  EditorCommandService editor_commands;
+  ModelingCommandExecutionService modeling_commands;
+  QuaderApiMutationRunner mutations;
+  QuaderSceneApi scene;
+  QuaderModelingApi modeling;
+  QuaderSelectionApi selection;
+  QuaderAssetApi assets;
+  QuaderHistoryApi history_api;
+  QuaderQueryApi query;
 };
 
 QuaderApi::QuaderApi(QuaderApiSession session)
@@ -85,12 +83,10 @@ const QuaderAssetApi& QuaderApi::assets() const {
     return impl_->assets;
 }
 
-QuaderHistoryApi& QuaderApi::history() {
-    return impl_->historyApi;
-}
+QuaderHistoryApi &QuaderApi::history() { return impl_->history_api; }
 
 const QuaderHistoryApi& QuaderApi::history() const {
-    return impl_->historyApi;
+  return impl_->history_api;
 }
 
 QuaderQueryApi& QuaderApi::query() {

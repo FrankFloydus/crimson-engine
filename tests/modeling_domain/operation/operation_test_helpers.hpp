@@ -29,11 +29,11 @@ using namespace quader_poly;
  */
 struct QuadFixture {
 	Document document;
-	ElementId bottom_left = invalid_element_id;
-	ElementId bottom_right = invalid_element_id;
-	ElementId top_right = invalid_element_id;
-	ElementId top_left = invalid_element_id;
-	ElementId face = invalid_element_id;
+        ElementId bottom_left = kInvalidElementId;
+        ElementId bottom_right = kInvalidElementId;
+        ElementId top_right = kInvalidElementId;
+        ElementId top_left = kInvalidElementId;
+        ElementId face = kInvalidElementId;
 };
 
 inline bool vec_nearly_equal(quader::QVec3 left, quader::QVec3 right, float epsilon = 0.0001F)
@@ -63,62 +63,62 @@ inline QuadFixture make_quad_document(std::uint32_t material_slot = 0)
 		fixture.top_left,
 	};
 	fixture.face = add_face(fixture.document, vertices, material_slot);
-	if (fixture.face == invalid_element_id) {
-		ADD_FAILURE() << "Quad fixture face was not created";
-	}
-	return fixture;
+        if (fixture.face == kInvalidElementId) {
+          ADD_FAILURE() << "Quad fixture face was not created";
+        }
+        return fixture;
 }
 
-inline Selection vertex_selection(std::initializer_list<ElementId> vertices, ElementId active = invalid_element_id)
-{
-	Selection selection;
-	selection.mode = SelectionMode::vertex;
-	selection.vertices.assign(vertices.begin(), vertices.end());
-	if (active != invalid_element_id) {
-		selection.has_active = true;
-		selection.active_kind = ElementKind::vertex;
-		selection.active_vertex = active;
-	}
-	return selection;
+inline Selection vertex_selection(std::initializer_list<ElementId> vertices,
+                                  ElementId active = kInvalidElementId) {
+  Selection selection;
+  selection.mode = SelectionMode::Vertex;
+  selection.vertices.assign(vertices.begin(), vertices.end());
+  if (active != kInvalidElementId) {
+    selection.has_active = true;
+    selection.active_kind = ElementKind::Vertex;
+    selection.active_vertex = active;
+  }
+  return selection;
 }
 
 inline Selection edge_selection(std::initializer_list<Edge> edges, std::optional<Edge> active = std::nullopt)
 {
 	Selection selection;
-	selection.mode = SelectionMode::edge;
-	selection.edges.assign(edges.begin(), edges.end());
+        selection.mode = SelectionMode::Edge;
+        selection.edges.assign(edges.begin(), edges.end());
 	if (active.has_value()) {
 		selection.has_active = true;
-		selection.active_kind = ElementKind::edge;
-		selection.active_edge = *active;
+                selection.active_kind = ElementKind::Edge;
+                selection.active_edge = *active;
 	}
 	return selection;
 }
 
-inline Selection face_selection(std::initializer_list<ElementId> faces, ElementId active = invalid_element_id)
-{
-	Selection selection;
-	selection.mode = SelectionMode::face;
-	selection.faces.assign(faces.begin(), faces.end());
-	if (active != invalid_element_id) {
-		selection.has_active = true;
-		selection.active_kind = ElementKind::face;
-		selection.active_face = active;
-	}
-	return selection;
+inline Selection face_selection(std::initializer_list<ElementId> faces,
+                                ElementId active = kInvalidElementId) {
+  Selection selection;
+  selection.mode = SelectionMode::Face;
+  selection.faces.assign(faces.begin(), faces.end());
+  if (active != kInvalidElementId) {
+    selection.has_active = true;
+    selection.active_kind = ElementKind::Face;
+    selection.active_face = active;
+  }
+  return selection;
 }
 
 inline Selection all_face_selection(const Document& document)
 {
 	Selection selection;
-	selection.mode = SelectionMode::face;
-	for (const Face& face : document.faces) {
+        selection.mode = SelectionMode::Face;
+        for (const Face& face : document.faces) {
 		selection.faces.push_back(face.id);
 	}
 	if (!selection.faces.empty()) {
 		selection.has_active = true;
-		selection.active_kind = ElementKind::face;
-		selection.active_face = selection.faces.back();
+                selection.active_kind = ElementKind::Face;
+                selection.active_face = selection.faces.back();
 	}
 	return selection;
 }
@@ -278,9 +278,9 @@ inline bool shared_edges_have_opposite_winding(const Document& document)
 	 * Represents an Edge Use value used by the automated test suite.
 	 */
 	struct EdgeUse {
-		ElementId from = invalid_element_id;
-		ElementId to = invalid_element_id;
-	};
+          ElementId from = kInvalidElementId;
+          ElementId to = kInvalidElementId;
+        };
 
 	std::map<std::pair<ElementId, ElementId>, std::vector<EdgeUse>> uses_by_edge;
 	for (const Face& face : document.faces) {
@@ -334,13 +334,15 @@ inline Document make_parallel_quad_document(float separation = 2.0F)
 	const ElementId f = add_vertex(document, { 1.0F, -1.0F, separation });
 	const ElementId g = add_vertex(document, { 1.0F, 1.0F, separation });
 	const ElementId h = add_vertex(document, { -1.0F, 1.0F, separation });
-	if (add_face(document, std::array<ElementId, 4> { a, b, c, d }) == invalid_element_id) {
-		ADD_FAILURE() << "First parallel quad face was not created";
-	}
-	if (add_face(document, std::array<ElementId, 4> { h, g, f, e }) == invalid_element_id) {
-		ADD_FAILURE() << "Second parallel quad face was not created";
-	}
-	return document;
+        if (add_face(document, std::array<ElementId, 4>{a, b, c, d}) ==
+            kInvalidElementId) {
+          ADD_FAILURE() << "First parallel quad face was not created";
+        }
+        if (add_face(document, std::array<ElementId, 4>{h, g, f, e}) ==
+            kInvalidElementId) {
+          ADD_FAILURE() << "Second parallel quad face was not created";
+        }
+        return document;
 }
 
 } // namespace qdr_test

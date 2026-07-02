@@ -7,7 +7,7 @@
 #include "core/localization_service.hpp"
 
 #include "core/logger.hpp"
-#include "core/q_str.hpp"
+#include "core/qstr.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -17,17 +17,16 @@
 namespace quader {
 namespace {
 
-std::string stripBom(std::string value) {
-    constexpr unsigned char Bom0 = 0xef;
-    constexpr unsigned char Bom1 = 0xbb;
-    constexpr unsigned char Bom2 = 0xbf;
-    if (value.size() >= 3U &&
-            static_cast<unsigned char>(value[0]) == Bom0 &&
-            static_cast<unsigned char>(value[1]) == Bom1 &&
-            static_cast<unsigned char>(value[2]) == Bom2) {
-        value.erase(0, 3);
-    }
-    return value;
+std::string strip_bom(std::string value) {
+  constexpr unsigned char kBom0 = 0xef;
+  constexpr unsigned char kBom1 = 0xbb;
+  constexpr unsigned char kBom2 = 0xbf;
+  if (value.size() >= 3U && static_cast<unsigned char>(value[0]) == kBom0 &&
+      static_cast<unsigned char>(value[1]) == kBom1 &&
+      static_cast<unsigned char>(value[2]) == kBom2) {
+    value.erase(0, 3);
+  }
+  return value;
 }
 
 std::string unescape(std::string_view value) {
@@ -66,168 +65,177 @@ std::string unescape(std::string_view value) {
     return result;
 }
 
-std::string localeIdFromPath(const std::filesystem::path& path) {
-    return path.stem().string();
+std::string locale_id_from_path(const std::filesystem::path &path) {
+  return path.stem().string();
 }
 
-const std::string* findValue(const LocalizationService::Catalog& catalog, std::string_view key) {
-    const auto found = catalog.find(std::string(key));
-    return found != catalog.end() && !found->second.empty() ? &found->second : nullptr;
+const std::string *find_value(const LocalizationService::Catalog &catalog,
+                              std::string_view key) {
+  const auto found = catalog.find(std::string(key));
+  return found != catalog.end() && !found->second.empty() ? &found->second
+                                                          : nullptr;
 }
 
 } // namespace
 
-std::unordered_map<std::string, std::string> LocalizationService::parseLangText(std::string_view text) {
-    Catalog catalog;
-    std::istringstream stream(stripBom(std::string(text)));
-    std::string line;
-    while (std::getline(stream, line)) {
-        const std::string trimmed = QStr::trimAsciiWhitespace(line);
-        if (trimmed.empty() || trimmed.front() == '#' || trimmed.front() == ';') {
-            continue;
-        }
-
-        const std::optional<QStrSplitOnce> split = QStr::splitOnce(trimmed, '=');
-        if (!split) {
-            continue;
-        }
-
-        const std::string key = QStr::trimAsciiWhitespace(split->before);
-        if (key.empty()) {
-            continue;
-        }
-        const std::string value = unescape(QStr::trimAsciiWhitespace(split->after));
-        catalog[key] = value;
+std::unordered_map<std::string, std::string>
+LocalizationService::parse_lang_text(std::string_view text) {
+  Catalog catalog;
+  std::istringstream stream(strip_bom(std::string(text)));
+  std::string line;
+  while (std::getline(stream, line)) {
+    const std::string trimmed = QStr::trim_ascii_whitespace(line);
+    if (trimmed.empty() || trimmed.front() == '#' || trimmed.front() == ';') {
+      continue;
     }
-    return catalog;
+
+    const std::optional<QStrSplitOnce> split = QStr::split_once(trimmed, '=');
+    if (!split) {
+      continue;
+    }
+
+    const std::string key = QStr::trim_ascii_whitespace(split->before);
+    if (key.empty()) {
+      continue;
+    }
+    const std::string value =
+        unescape(QStr::trim_ascii_whitespace(split->after));
+    catalog[key] = value;
+  }
+  return catalog;
 }
 
-bool LocalizationService::load(
-        const std::filesystem::path& localesDirectory,
-        std::string selectedLocale,
-        std::string fallbackLocale) {
-    if (fallbackLocale.empty()) {
-        fallbackLocale = std::string(DefaultLocale);
-    }
-    if (selectedLocale.empty()) {
-        selectedLocale = fallbackLocale;
-    }
+bool LocalizationService::load(const std::filesystem::path &locales_directory,
+                               std::string selected_locale,
+                               std::string fallback_locale) {
+  if (fallback_locale.empty()) {
+    fallback_locale = std::string(kDefaultLocale);
+  }
+  if (selected_locale.empty()) {
+    selected_locale = fallback_locale;
+  }
 
-    fallbackLocale_ = std::move(fallbackLocale);
-    currentLocale_ = selectedLocale;
-    fallbackCatalog_.clear();
-    activeCatalog_.clear();
-    localeCatalogs_.clear();
-    availableLocales_.clear();
+  fallback_locale_ = std::move(fallback_locale);
+  current_locale_ = selected_locale;
+  fallback_catalog_.clear();
+  active_catalog_.clear();
+  locale_catalogs_.clear();
+  available_locales_.clear();
 
-    std::error_code error;
-    if (std::filesystem::exists(localesDirectory, error)) {
-        std::vector<std::filesystem::path> localeFiles;
-        for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(localesDirectory, error)) {
-            if (entry.is_regular_file(error) && entry.path().extension() == ".lang") {
-                localeFiles.push_back(entry.path());
-            }
-        }
-        std::sort(localeFiles.begin(), localeFiles.end());
-        for (const std::filesystem::path& localeFile : localeFiles) {
-            const std::string locale = localeIdFromPath(localeFile);
-            const Catalog catalog = loadCatalogFile(localeFile);
-            localeCatalogs_[locale] = catalog;
-            availableLocales_.push_back(LocaleInfo{
-                    .id = locale,
-                    .displayName = displayNameFor(locale, catalog),
+  std::error_code error;
+  if (std::filesystem::exists(locales_directory, error)) {
+    std::vector<std::filesystem::path> locale_files;
+    for (const std::filesystem::directory_entry &entry :
+         std::filesystem::directory_iterator(locales_directory, error)) {
+      if (entry.is_regular_file(error) && entry.path().extension() == ".lang") {
+        locale_files.push_back(entry.path());
+      }
+    }
+    std::sort(locale_files.begin(), locale_files.end());
+    for (const std::filesystem::path &locale_file : locale_files) {
+      const std::string locale = locale_id_from_path(locale_file);
+      const Catalog catalog = load_catalog_file(locale_file);
+      locale_catalogs_[locale] = catalog;
+      available_locales_.push_back(LocaleInfo{
+          .id = locale,
+          .display_name = display_name_for(locale, catalog),
+      });
+    }
+  }
+
+  if (const auto found = locale_catalogs_.find(fallback_locale_);
+      found != locale_catalogs_.end()) {
+    fallback_catalog_ = found->second;
+  } else {
+    fallback_catalog_ =
+        load_catalog_file(locales_directory / (fallback_locale_ + ".lang"));
+    if (!fallback_catalog_.empty()) {
+      locale_catalogs_[fallback_locale_] = fallback_catalog_;
+    }
+  }
+  if (fallback_catalog_.empty()) {
+    LOG_WARN("Localization fallback catalog {} is missing or empty",
+             (locales_directory / (fallback_locale_ + ".lang")).string());
+  }
+
+  if (!select_locale(selected_locale)) {
+    LOG_WARN("Localization catalog {} is missing or empty; falling back to {}",
+             selected_locale, fallback_locale_);
+    (void)select_locale(fallback_locale_);
+  }
+
+  if (available_locales_.empty()) {
+    available_locales_.push_back(LocaleInfo{
+        .id = fallback_locale_,
+        .display_name = display_name_for(fallback_locale_, fallback_catalog_),
+    });
+  }
+
+  std::sort(available_locales_.begin(), available_locales_.end(),
+            [](const LocaleInfo &left, const LocaleInfo &right) {
+              return left.id < right.id;
             });
-        }
-    }
+  available_locales_.erase(
+      std::unique(available_locales_.begin(), available_locales_.end(),
+                  [](const LocaleInfo &left, const LocaleInfo &right) {
+                    return left.id == right.id;
+                  }),
+      available_locales_.end());
 
-    if (const auto found = localeCatalogs_.find(fallbackLocale_); found != localeCatalogs_.end()) {
-        fallbackCatalog_ = found->second;
-    } else {
-        fallbackCatalog_ = loadCatalogFile(localesDirectory / (fallbackLocale_ + ".lang"));
-        if (!fallbackCatalog_.empty()) {
-            localeCatalogs_[fallbackLocale_] = fallbackCatalog_;
-        }
-    }
-    if (fallbackCatalog_.empty()) {
-        LOG_WARN("Localization fallback catalog {} is missing or empty", (localesDirectory / (fallbackLocale_ + ".lang")).string());
-    }
-
-    if (!selectLocale(selectedLocale)) {
-        LOG_WARN("Localization catalog {} is missing or empty; falling back to {}",
-                selectedLocale,
-                fallbackLocale_);
-        (void)selectLocale(fallbackLocale_);
-    }
-
-    if (availableLocales_.empty()) {
-        availableLocales_.push_back(LocaleInfo{
-                .id = fallbackLocale_,
-                .displayName = displayNameFor(fallbackLocale_, fallbackCatalog_),
-        });
-    }
-
-    std::sort(availableLocales_.begin(), availableLocales_.end(), [](const LocaleInfo& left, const LocaleInfo& right) {
-        return left.id < right.id;
-    });
-    availableLocales_.erase(
-            std::unique(availableLocales_.begin(), availableLocales_.end(), [](const LocaleInfo& left, const LocaleInfo& right) {
-                return left.id == right.id;
-            }),
-            availableLocales_.end());
-
-    return !fallbackCatalog_.empty();
+  return !fallback_catalog_.empty();
 }
 
-bool LocalizationService::hasLocale(std::string_view locale) const {
-    return std::any_of(availableLocales_.begin(), availableLocales_.end(), [locale](const LocaleInfo& info) {
-        return info.id == locale;
-    });
+bool LocalizationService::has_locale(std::string_view locale) const {
+  return std::any_of(
+      available_locales_.begin(), available_locales_.end(),
+      [locale](const LocaleInfo &info) { return info.id == locale; });
 }
 
-bool LocalizationService::selectLocale(std::string_view locale) {
-    const std::string localeId(locale);
-    const auto found = localeCatalogs_.find(localeId);
-    if (found == localeCatalogs_.end() || found->second.empty()) {
-        if (localeId == fallbackLocale_ && !fallbackCatalog_.empty()) {
-            activeCatalog_ = fallbackCatalog_;
-            currentLocale_ = fallbackLocale_;
-            return true;
-        }
-        return false;
+bool LocalizationService::select_locale(std::string_view locale) {
+  const std::string locale_id(locale);
+  const auto found = locale_catalogs_.find(locale_id);
+  if (found == locale_catalogs_.end() || found->second.empty()) {
+    if (locale_id == fallback_locale_ && !fallback_catalog_.empty()) {
+      active_catalog_ = fallback_catalog_;
+      current_locale_ = fallback_locale_;
+      return true;
     }
+    return false;
+  }
 
-    activeCatalog_ = found->second;
-    currentLocale_ = localeId;
-    return true;
+  active_catalog_ = found->second;
+  current_locale_ = locale_id;
+  return true;
 }
 
-std::string LocalizationService::localeDisplayName(std::string_view locale) const {
-    const auto found = std::find_if(availableLocales_.begin(), availableLocales_.end(), [locale](const LocaleInfo& info) {
-        return info.id == locale;
-    });
-    return found != availableLocales_.end() ? found->displayName : std::string(locale);
+std::string
+LocalizationService::locale_display_name(std::string_view locale) const {
+  const auto found = std::find_if(
+      available_locales_.begin(), available_locales_.end(),
+      [locale](const LocaleInfo &info) { return info.id == locale; });
+  return found != available_locales_.end() ? found->display_name
+                                           : std::string(locale);
 }
 
 std::string LocalizationService::text(std::string_view key, std::string_view fallback) const {
-    if (const std::string* value = findValue(activeCatalog_, key)) {
-        return *value;
-    }
-    if (const std::string* value = findValue(fallbackCatalog_, key)) {
-        return *value;
-    }
+  if (const std::string *value = find_value(active_catalog_, key)) {
+    return *value;
+  }
+  if (const std::string *value = find_value(fallback_catalog_, key)) {
+    return *value;
+  }
     return fallback.empty() ? std::string(key) : std::string(fallback);
 }
 
-std::string LocalizationService::imguiLabel(
-        std::string_view key,
-        std::string_view stableId,
-        std::string_view fallback) const {
-    std::string label = text(key, fallback);
-    if (!stableId.empty()) {
-        label.append("##");
-        label.append(stableId);
-    }
-    return label;
+std::string LocalizationService::imgui_label(std::string_view key,
+                                             std::string_view stable_id,
+                                             std::string_view fallback) const {
+  std::string label = text(key, fallback);
+  if (!stable_id.empty()) {
+    label.append("##");
+    label.append(stable_id);
+  }
+  return label;
 }
 
 std::string LocalizationService::format(
@@ -248,23 +256,26 @@ std::string LocalizationService::format(
     return value;
 }
 
-LocalizationService::Catalog LocalizationService::loadCatalogFile(const std::filesystem::path& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) {
-        return {};
-    }
-    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    return parseLangText(text);
+LocalizationService::Catalog
+LocalizationService::load_catalog_file(const std::filesystem::path &path) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file.is_open()) {
+    return {};
+  }
+  const std::string text((std::istreambuf_iterator<char>(file)),
+                         std::istreambuf_iterator<char>());
+  return parse_lang_text(text);
 }
 
-std::string LocalizationService::displayNameFor(std::string_view locale, const Catalog& catalog) {
-    if (const std::string* name = findValue(catalog, "locale.name")) {
-        return *name;
-    }
-    if (locale == DefaultLocale) {
-        return "English";
-    }
-    return std::string(locale);
+std::string LocalizationService::display_name_for(std::string_view locale,
+                                                  const Catalog &catalog) {
+  if (const std::string *name = find_value(catalog, "locale.name")) {
+    return *name;
+  }
+  if (locale == kDefaultLocale) {
+    return "English";
+  }
+  return std::string(locale);
 }
 
 } // namespace quader

@@ -31,18 +31,18 @@ Representative commands include:
 - preview/modal operations such as `bevel_edges`, `thicken_faces`, and `slice_quad`
 
 `delete_selection` is a split-route command. Component-mode deletion belongs to
-`DeleteSelectionTool` and `ModelingSessionService::deleteComponentSelection()`. Object, group, and
+`DeleteSelectionTool` and `ModelingSessionService::delete_component_selection()`. Object, group, and
 selected scene-group-root deletion must use the scene-aware document command route. Do not put
 delete selection back into `ModelingInstantOperationCatalog` or recreate a generic
-`ModelingSessionService::deleteSelection()` path.
+`ModelingSessionService::DeleteSelection()` path.
 
 ## Public Command Bridge
 
-- Descriptor metadata owns the public command bridge: `publicCommandId`, `registersPublicCommand`,
-  and `hostShortcutTargetId`.
+- Descriptor metadata owns the public command bridge: `public_command_id`, `registers_public_command`,
+  and `host_shortcut_target_id`.
 - Use shared edit commands such as `edit.delete` when the operation is also a global editor command.
-- Generated modeling action command IDs come from `QuaderCommandsApi::commandIdForModelingAction()`.
-  Viewport tool activation command IDs come from `commandIdForToolActivation()`.
+- Generated modeling action command IDs come from `QuaderCommandsApi::command_id_for_modeling_action()`.
+  Viewport tool activation command IDs come from `command_id_for_tool_activation()`.
 - Do not reintroduce legacy compatibility aliases such as `history.*`, `modeling.action.*`, or
   `modeling.*`, and do not add registry alias/canonicalization APIs unless a task explicitly asks
   for a migration layer.

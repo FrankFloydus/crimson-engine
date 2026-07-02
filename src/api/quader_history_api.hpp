@@ -23,10 +23,10 @@ public:
 
     QuaderApiVoidResult undo();
     QuaderApiVoidResult redo();
-    QuaderApiVoidResult repeatLastAction();
+    QuaderApiVoidResult repeat_last_action();
 
-    [[nodiscard]] bool canUndo() const;
-    [[nodiscard]] bool canRedo() const;
+    [[nodiscard]] bool can_undo() const;
+    [[nodiscard]] bool can_redo() const;
     [[nodiscard]] QuaderHistorySnapshot snapshot() const;
 
 private:

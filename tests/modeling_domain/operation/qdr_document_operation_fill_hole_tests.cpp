@@ -43,13 +43,13 @@ CircularBoundaryFixture make_circular_boundary_fixture()
 
 	for (std::size_t index = 0; index < directions.size(); ++index) {
 		const std::size_t next = (index + 1U) % directions.size();
-		EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 4> {
-			inner[index],
-			inner[next],
-			outer[next],
-			outer[index],
-		}) != invalid_element_id);
-		fixture.inner_edges[index] = make_edge(inner[index], inner[next]);
+                EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 4>{
+                                                           inner[index],
+                                                           inner[next],
+                                                           outer[next],
+                                                           outer[index],
+                                                       }) != kInvalidElementId);
+                fixture.inner_edges[index] = make_edge(inner[index], inner[next]);
 	}
 	return fixture;
 }
@@ -62,8 +62,8 @@ TEST(QdrDocumentOperationFillHoleTests, FillHoleCreatesOneFaceFromASelectedOpenE
 	const quader::QVec3 removed_face_normal = face_normal(document, removed_face);
 	document.faces.erase(document.faces.begin());
 	Selection selection;
-	selection.mode = SelectionMode::edge;
-	for (std::size_t index = 0; index < removed_face.vertices.size(); ++index) {
+        selection.mode = SelectionMode::Edge;
+        for (std::size_t index = 0; index < removed_face.vertices.size(); ++index) {
 		selection.edges.push_back(make_edge(removed_face.vertices[index], removed_face.vertices[(index + 1U) % removed_face.vertices.size()]));
 	}
 
@@ -71,8 +71,8 @@ TEST(QdrDocumentOperationFillHoleTests, FillHoleCreatesOneFaceFromASelectedOpenE
 
 	EXPECT_TRUE(result.changed);
 	EXPECT_TRUE(document.faces.size() == 6U);
-	EXPECT_TRUE(selection.mode == SelectionMode::face);
-	EXPECT_TRUE(selection.faces.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Face);
+        EXPECT_TRUE(selection.faces.size() == 1U);
 	const Face* fill_face = find_face(document, selection.faces.front());
 	EXPECT_TRUE(fill_face != nullptr);
 	EXPECT_TRUE(dot(face_normal(document, *fill_face), removed_face_normal) > 0.5F);
@@ -86,8 +86,8 @@ TEST(QdrDocumentOperationFillHoleTests, FillHoleRejectsASelectedNonBoundaryEdgeL
 	Face& source_face = document.faces.front();
 	source_face.material_slot = 5U;
 	Selection selection;
-	selection.mode = SelectionMode::edge;
-	for (std::size_t index = 0; index < source_face.vertices.size(); ++index) {
+        selection.mode = SelectionMode::Edge;
+        for (std::size_t index = 0; index < source_face.vertices.size(); ++index) {
 		selection.edges.push_back(make_edge(source_face.vertices[index], source_face.vertices[(index + 1U) % source_face.vertices.size()]));
 	}
 	const Edge first_edge = selection.edges.front();
@@ -121,8 +121,8 @@ TEST(QdrDocumentOperationFillHoleTests, FillHoleOrientsCapsFromAdjacentBoundaryW
 	const OperationResult result = fill_hole_from_selected_edges(fixture.document, selection);
 
 	EXPECT_TRUE(result.changed);
-	EXPECT_TRUE(selection.mode == SelectionMode::face);
-	EXPECT_TRUE(selection.faces.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Face);
+        EXPECT_TRUE(selection.faces.size() == 1U);
 	const Face* fill_face = find_face(fixture.document, selection.faces.front());
 	EXPECT_TRUE(fill_face != nullptr);
 	EXPECT_TRUE(dot(face_normal(fixture.document, *fill_face), quader::QVec3 { 0.0F, 1.0F, 0.0F }) > 0.5F);

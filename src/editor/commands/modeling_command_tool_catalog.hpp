@@ -15,17 +15,27 @@
 
 namespace quader {
 
-[[nodiscard]] std::span<const InstantCommandTool* const> modelingInstantOperationCommandTools();
-[[nodiscard]] std::span<const InstantCommandTool* const> modelingServiceInstantCommandTools();
-[[nodiscard]] std::span<const InstantCommandTool* const> modelingInstantCommandTools();
-[[nodiscard]] std::span<const ContextActionTool* const> modelingContextActionTools();
-[[nodiscard]] std::span<const PreviewCommandTool* const> modelingPreviewCommandTools();
-[[nodiscard]] std::span<const CommandTool* const> modelingCommandTools();
+[[nodiscard]] std::span<const InstantCommandTool *const>
+modeling_instant_operation_command_tools();
+[[nodiscard]] std::span<const InstantCommandTool *const>
+modeling_service_instant_command_tools();
+[[nodiscard]] std::span<const InstantCommandTool *const>
+modeling_instant_command_tools();
+[[nodiscard]] std::span<const ContextActionTool *const>
+modeling_context_action_tools();
+[[nodiscard]] std::span<const PreviewCommandTool *const>
+modeling_preview_command_tools();
+[[nodiscard]] std::span<const CommandTool *const> modeling_command_tools();
 
-[[nodiscard]] const CommandTool* findModelingCommandTool(std::string_view id);
-[[nodiscard]] const InstantCommandTool* findModelingInstantCommandTool(ModelingInstantOperationId operation);
-[[nodiscard]] const ContextActionTool* findModelingContextActionTool(std::string_view actionId);
-[[nodiscard]] const PreviewCommandTool* findModelingPreviewCommandTool(std::string_view actionId);
-[[nodiscard]] std::string_view modelingMirrorSelectionToolId(ModelingMirrorAxis axis);
+[[nodiscard]] const CommandTool *
+find_modeling_command_tool(std::string_view id);
+[[nodiscard]] const InstantCommandTool *
+find_modeling_instant_command_tool(ModelingInstantOperationId operation);
+[[nodiscard]] const ContextActionTool *
+find_modeling_context_action_tool(std::string_view action_id);
+[[nodiscard]] const PreviewCommandTool *
+find_modeling_preview_command_tool(std::string_view action_id);
+[[nodiscard]] std::string_view
+modeling_mirror_selection_tool_id(ModelingMirrorAxis axis);
 
 } // namespace quader

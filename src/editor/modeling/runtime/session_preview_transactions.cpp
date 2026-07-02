@@ -14,20 +14,22 @@ namespace quader_editor_core {
 
 PreviewTransactionStatus EditorSession::preview_transaction_status() const
 {
-	return {
-		preview_transaction_.active ? preview_transaction_.kind : PreviewTransactionKind::none,
-		preview_transaction_.active,
-		preview_transaction_.changed,
-	};
+  return {
+      preview_transaction_.active ? preview_transaction_.kind
+                                  : PreviewTransactionKind::None,
+      preview_transaction_.active,
+      preview_transaction_.changed,
+  };
 }
 
 std::optional<SessionState> EditorSession::preview_transaction_history_state(PreviewTransactionKind expected_kind) const
 {
-	if (!preview_transaction_.active ||
-			(expected_kind != PreviewTransactionKind::none && preview_transaction_.kind != expected_kind)) {
-		return std::nullopt;
-	}
-	return preview_transaction_.history_state;
+  if (!preview_transaction_.active ||
+      (expected_kind != PreviewTransactionKind::None &&
+       preview_transaction_.kind != expected_kind)) {
+    return std::nullopt;
+  }
+        return preview_transaction_.history_state;
 }
 
 void EditorSession::clear_preview_transaction()
@@ -86,20 +88,22 @@ bool EditorSession::discard_preview_transactions(bool restore_transform_preview)
 	QDR_PROFILE_SCOPE("qdr_editor_core.discard_preview_transactions");
 	bool restored_transform_preview = false;
 	if (restore_transform_preview) {
-		restored_transform_preview =
-			cancel_preview_transaction(PreviewTransactionKind::transform).before.active;
-	}
+          restored_transform_preview =
+              cancel_preview_transaction(PreviewTransactionKind::Transform)
+                  .before.active;
+        }
 	const bool restored_preview = cancel_preview_transaction().before.active;
 	return restored_transform_preview || restored_preview;
 }
 
 bool EditorSession::restore_preview_transaction_base_for_edit(PreviewTransactionKind expected_kind)
 {
-	if (!preview_transaction_.active ||
-			(expected_kind != PreviewTransactionKind::none && preview_transaction_.kind != expected_kind)) {
-		return false;
-	}
-	set_state(preview_transaction_.base_state);
+  if (!preview_transaction_.active ||
+      (expected_kind != PreviewTransactionKind::None &&
+       preview_transaction_.kind != expected_kind)) {
+    return false;
+  }
+        set_state(preview_transaction_.base_state);
 	preview_transaction_.changed = state_revisions_differ(
 		preview_transaction_.base_state,
 		preview_transaction_.history_state);
@@ -108,11 +112,12 @@ bool EditorSession::restore_preview_transaction_base_for_edit(PreviewTransaction
 
 bool EditorSession::capture_preview_transaction_base_after_edit(PreviewTransactionKind expected_kind)
 {
-	if (!preview_transaction_.active ||
-			(expected_kind != PreviewTransactionKind::none && preview_transaction_.kind != expected_kind)) {
-		return false;
-	}
-	preview_transaction_.base_state = state_;
+  if (!preview_transaction_.active ||
+      (expected_kind != PreviewTransactionKind::None &&
+       preview_transaction_.kind != expected_kind)) {
+    return false;
+  }
+        preview_transaction_.base_state = state_;
 	preview_transaction_.changed = state_revisions_differ(
 		preview_transaction_.base_state,
 		preview_transaction_.history_state);
@@ -122,8 +127,8 @@ bool EditorSession::capture_preview_transaction_base_after_edit(PreviewTransacti
 CommandResult EditorSession::begin_edge_bevel_preview(const quader_poly::EdgeBevelSettings& settings)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.begin_edge_bevel_preview");
-	begin_preview_transaction(PreviewTransactionKind::edge_bevel);
-	return finish_preview_begin(update_edge_bevel_preview_from_base(settings));
+        begin_preview_transaction(PreviewTransactionKind::EdgeBevel);
+        return finish_preview_begin(update_edge_bevel_preview_from_base(settings));
 }
 
 CommandResult EditorSession::begin_edge_bevel_preview(EdgeBevelOperationSettings settings)
@@ -134,10 +139,10 @@ CommandResult EditorSession::begin_edge_bevel_preview(EdgeBevelOperationSettings
 CommandResult EditorSession::update_edge_bevel_preview(const quader_poly::EdgeBevelSettings& settings)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_edge_bevel_preview");
-	if (!preview_transaction_active(PreviewTransactionKind::edge_bevel)) {
-		return error_result("No edge bevel preview is active.");
-	}
-	return update_edge_bevel_preview_from_base(settings);
+        if (!preview_transaction_active(PreviewTransactionKind::EdgeBevel)) {
+          return error_result("No edge bevel preview is active.");
+        }
+        return update_edge_bevel_preview_from_base(settings);
 }
 
 CommandResult EditorSession::update_edge_bevel_preview(EdgeBevelOperationSettings settings)
@@ -147,8 +152,9 @@ CommandResult EditorSession::update_edge_bevel_preview(EdgeBevelOperationSetting
 
 CommandResult EditorSession::begin_thicken_preview(float thickness, bool from_center)
 {
-	begin_preview_transaction(PreviewTransactionKind::thicken);
-	return finish_preview_begin(update_thicken_preview_from_base(thickness, from_center));
+  begin_preview_transaction(PreviewTransactionKind::Thicken);
+  return finish_preview_begin(
+      update_thicken_preview_from_base(thickness, from_center));
 }
 
 CommandResult EditorSession::begin_thicken_preview(ThickenOperationSettings settings)
@@ -159,10 +165,10 @@ CommandResult EditorSession::begin_thicken_preview(ThickenOperationSettings sett
 
 CommandResult EditorSession::update_thicken_preview(float thickness, bool from_center)
 {
-	if (!preview_transaction_active(PreviewTransactionKind::thicken)) {
-		return error_result("No thicken preview is active.");
-	}
-	return update_thicken_preview_from_base(thickness, from_center);
+  if (!preview_transaction_active(PreviewTransactionKind::Thicken)) {
+    return error_result("No thicken preview is active.");
+  }
+        return update_thicken_preview_from_base(thickness, from_center);
 }
 
 CommandResult EditorSession::update_thicken_preview(ThickenOperationSettings settings)
@@ -173,8 +179,9 @@ CommandResult EditorSession::update_thicken_preview(ThickenOperationSettings set
 
 CommandResult EditorSession::begin_slice_quad_preview(int x_slices, int y_slices)
 {
-	begin_preview_transaction(PreviewTransactionKind::slice_quad);
-	return finish_preview_begin(update_slice_quad_preview_from_base(x_slices, y_slices));
+  begin_preview_transaction(PreviewTransactionKind::SliceQuad);
+  return finish_preview_begin(
+      update_slice_quad_preview_from_base(x_slices, y_slices));
 }
 
 CommandResult EditorSession::begin_slice_quad_preview(SliceQuadOperationSettings settings)
@@ -185,10 +192,10 @@ CommandResult EditorSession::begin_slice_quad_preview(SliceQuadOperationSettings
 
 CommandResult EditorSession::update_slice_quad_preview(int x_slices, int y_slices)
 {
-	if (!preview_transaction_active(PreviewTransactionKind::slice_quad)) {
-		return error_result("No slice quad preview is active.");
-	}
-	return update_slice_quad_preview_from_base(x_slices, y_slices);
+  if (!preview_transaction_active(PreviewTransactionKind::SliceQuad)) {
+    return error_result("No slice quad preview is active.");
+  }
+        return update_slice_quad_preview_from_base(x_slices, y_slices);
 }
 
 CommandResult EditorSession::update_slice_quad_preview(SliceQuadOperationSettings settings)
@@ -200,8 +207,8 @@ CommandResult EditorSession::update_slice_quad_preview(SliceQuadOperationSetting
 CommandResult EditorSession::begin_merge_by_distance_preview(double tolerance)
 {
 	tolerance = normalize_merge_by_distance_operation_settings({ tolerance }).tolerance;
-	begin_preview_transaction(PreviewTransactionKind::merge_by_distance);
-	return finish_preview_begin(update_merge_by_distance_preview_from_base(tolerance));
+        begin_preview_transaction(PreviewTransactionKind::MergeByDistance);
+        return finish_preview_begin(update_merge_by_distance_preview_from_base(tolerance));
 }
 
 CommandResult EditorSession::begin_merge_by_distance_preview(MergeByDistanceOperationSettings settings)
@@ -212,10 +219,10 @@ CommandResult EditorSession::begin_merge_by_distance_preview(MergeByDistanceOper
 
 CommandResult EditorSession::update_merge_by_distance_preview(double tolerance)
 {
-	if (!preview_transaction_active(PreviewTransactionKind::merge_by_distance)) {
-		return error_result("No merge by distance preview is active.");
-	}
-	tolerance = normalize_merge_by_distance_operation_settings({ tolerance }).tolerance;
+  if (!preview_transaction_active(PreviewTransactionKind::MergeByDistance)) {
+    return error_result("No merge by distance preview is active.");
+  }
+        tolerance = normalize_merge_by_distance_operation_settings({ tolerance }).tolerance;
 	return update_merge_by_distance_preview_from_base(tolerance);
 }
 
@@ -228,42 +235,45 @@ CommandResult EditorSession::update_merge_by_distance_preview(MergeByDistanceOpe
 CommandResult EditorSession::begin_transform_preview(bool duplicate_selected)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.begin_transform_preview");
-	begin_preview_transaction(PreviewTransactionKind::transform);
+        begin_preview_transaction(PreviewTransactionKind::Transform);
 
-	if (duplicate_selected &&
-			state_.selection_mode == SelectionMode::object &&
-			!quader_editor_core::selected_object_ids(state_.objects).empty()) {
-		const CommandResult duplicate = duplicate_selected_objects(quader::QVec3 {});
-		if (!duplicate.ok) {
-			set_state(preview_transaction_.history_state);
-			clear_preview_transaction();
-			return duplicate;
-		}
-		if (!duplicate.changed) {
-			set_state(preview_transaction_.history_state);
-			clear_preview_transaction();
-			return ok_result(false);
-		}
-		preview_transaction_.base_state = state_;
-		preview_transaction_.changed = true;
-	}
+        if (duplicate_selected &&
+            state_.selection_mode == SelectionMode::Object &&
+            !quader_editor_core::selected_object_ids(state_.objects).empty()) {
+          const CommandResult duplicate =
+              duplicate_selected_objects(quader::QVec3{});
+          if (!duplicate.ok) {
+            set_state(preview_transaction_.history_state);
+            clear_preview_transaction();
+            return duplicate;
+          }
+          if (!duplicate.changed) {
+            set_state(preview_transaction_.history_state);
+            clear_preview_transaction();
+            return ok_result(false);
+          }
+          preview_transaction_.base_state = state_;
+          preview_transaction_.changed = true;
+        }
 
-	return ok_result(preview_transaction_.changed);
+        return ok_result(preview_transaction_.changed);
 }
 
 CommandResult EditorSession::update_transform_translate_preview(quader::QVec3 delta, bool texture_lock_enabled)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_transform_translate_preview");
-	if (!preview_transaction_active(PreviewTransactionKind::transform)) {
-		return error_result("No transform preview is active.");
-	}
-	set_state(preview_transaction_.base_state);
-	if (quader::length(delta) <= transform_point_epsilon) {
-		const bool base_changed = state_revisions_differ(preview_transaction_.base_state, preview_transaction_.history_state);
-		preview_transaction_.changed = base_changed;
-		return ok_result(base_changed);
-	}
-	return update_transform_preview_from_base(translate_selected(delta, texture_lock_enabled));
+        if (!preview_transaction_active(PreviewTransactionKind::Transform)) {
+          return error_result("No transform preview is active.");
+        }
+        set_state(preview_transaction_.base_state);
+        if (quader::length(delta) <= kTransformPointEpsilon) {
+          const bool base_changed =
+              state_revisions_differ(preview_transaction_.base_state,
+                                     preview_transaction_.history_state);
+          preview_transaction_.changed = base_changed;
+          return ok_result(base_changed);
+        }
+        return update_transform_preview_from_base(translate_selected(delta, texture_lock_enabled));
 }
 
 CommandResult EditorSession::update_transform_matrix_preview(
@@ -273,53 +283,59 @@ CommandResult EditorSession::update_transform_matrix_preview(
 		bool texture_lock_scale_enabled)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_transform_matrix_preview");
-	if (!preview_transaction_active(PreviewTransactionKind::transform)) {
-		return error_result("No transform preview is active.");
-	}
-	set_state(preview_transaction_.base_state);
+        if (!preview_transaction_active(PreviewTransactionKind::Transform)) {
+          return error_result("No transform preview is active.");
+        }
+        set_state(preview_transaction_.base_state);
 	return update_transform_preview_from_base(transform_selected(transform, pivot, texture_lock_enabled, texture_lock_scale_enabled));
 }
 
 CommandResult EditorSession::update_transform_extrude_preview(quader::QVec3 offset, float closed_edge_ledge_size)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_transform_extrude_preview");
-	if (!preview_transaction_active(PreviewTransactionKind::transform)) {
-		return error_result("No transform preview is active.");
-	}
-	set_state(preview_transaction_.base_state);
-	if (quader::length(offset) <= transform_point_epsilon) {
-		const bool base_changed = state_revisions_differ(preview_transaction_.base_state, preview_transaction_.history_state);
-		preview_transaction_.changed = base_changed;
-		return ok_result(base_changed);
-	}
-	return update_transform_preview_from_base(extrude_selected_elements(offset, closed_edge_ledge_size));
+        if (!preview_transaction_active(PreviewTransactionKind::Transform)) {
+          return error_result("No transform preview is active.");
+        }
+        set_state(preview_transaction_.base_state);
+        if (quader::length(offset) <= kTransformPointEpsilon) {
+          const bool base_changed =
+              state_revisions_differ(preview_transaction_.base_state,
+                                     preview_transaction_.history_state);
+          preview_transaction_.changed = base_changed;
+          return ok_result(base_changed);
+        }
+        return update_transform_preview_from_base(extrude_selected_elements(offset, closed_edge_ledge_size));
 }
 
 CommandResult EditorSession::update_transform_inset_preview(const quader_poly::Transform3& transform, quader::QVec3 pivot)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_transform_inset_preview");
-	if (!preview_transaction_active(PreviewTransactionKind::transform)) {
-		return error_result("No transform preview is active.");
-	}
-	set_state(preview_transaction_.base_state);
-	if (basis_is_identity(transform) && quader::length(transform.origin) <= transform_point_epsilon) {
-		const bool base_changed = state_revisions_differ(preview_transaction_.base_state, preview_transaction_.history_state);
-		preview_transaction_.changed = base_changed;
-		return ok_result(base_changed);
-	}
-	return update_transform_preview_from_base(inset_selected_elements(transform, pivot));
+        if (!preview_transaction_active(PreviewTransactionKind::Transform)) {
+          return error_result("No transform preview is active.");
+        }
+        set_state(preview_transaction_.base_state);
+        if (basis_is_identity(transform) &&
+            quader::length(transform.origin) <= kTransformPointEpsilon) {
+          const bool base_changed =
+              state_revisions_differ(preview_transaction_.base_state,
+                                     preview_transaction_.history_state);
+          preview_transaction_.changed = base_changed;
+          return ok_result(base_changed);
+        }
+        return update_transform_preview_from_base(inset_selected_elements(transform, pivot));
 }
 
 PreviewTransactionFinishResult EditorSession::commit_preview_transaction(PreviewTransactionKind expected_kind)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.commit_preview_transaction");
 	const PreviewTransactionStatus before = preview_transaction_status();
-	if (!preview_transaction_.active ||
-			(expected_kind != PreviewTransactionKind::none && preview_transaction_.kind != expected_kind)) {
-		return { before, false };
-	}
+        if (!preview_transaction_.active ||
+            (expected_kind != PreviewTransactionKind::None &&
+             preview_transaction_.kind != expected_kind)) {
+          return {before, false};
+        }
 
-	if (!preview_transaction_.changed) {
+        if (!preview_transaction_.changed) {
 		set_state(preview_transaction_.history_state);
 	} else {
 		record_history(preview_transaction_.history_state);
@@ -332,12 +348,13 @@ PreviewTransactionFinishResult EditorSession::cancel_preview_transaction(Preview
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.cancel_preview_transaction");
 	const PreviewTransactionStatus before = preview_transaction_status();
-	if (!preview_transaction_.active ||
-			(expected_kind != PreviewTransactionKind::none && preview_transaction_.kind != expected_kind)) {
-		return { before, false };
-	}
+        if (!preview_transaction_.active ||
+            (expected_kind != PreviewTransactionKind::None &&
+             preview_transaction_.kind != expected_kind)) {
+          return {before, false};
+        }
 
-	set_state(preview_transaction_.history_state);
+        set_state(preview_transaction_.history_state);
 	clear_preview_transaction();
 	return { before, true };
 }

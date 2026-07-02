@@ -17,10 +17,10 @@ inline constexpr double kFrameTimingMaxDeltaSeconds = 0.25;
  * Stores the Frame Timing data contract shared by runtime frame-driven systems.
  */
 struct FrameTiming {
-    double rawDeltaSeconds = kFrameTimingDefaultDeltaSeconds;
-    double deltaSeconds = kFrameTimingDefaultDeltaSeconds;
-    double elapsedSeconds = 0.0;
-    std::uint64_t frameIndex = 0;
+  double raw_delta_seconds = kFrameTimingDefaultDeltaSeconds;
+  double delta_seconds = kFrameTimingDefaultDeltaSeconds;
+  double elapsed_seconds = 0.0;
+  std::uint64_t frame_index = 0;
 };
 
 } // namespace quader

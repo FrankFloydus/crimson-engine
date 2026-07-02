@@ -17,12 +17,12 @@ namespace {
  */
 struct TwoTriangleFixture {
 	Document document;
-	ElementId a = invalid_element_id;
-	ElementId b = invalid_element_id;
-	ElementId c = invalid_element_id;
-	ElementId d = invalid_element_id;
-	ElementId e = invalid_element_id;
-	ElementId f = invalid_element_id;
+        ElementId a = kInvalidElementId;
+        ElementId b = kInvalidElementId;
+        ElementId c = kInvalidElementId;
+        ElementId d = kInvalidElementId;
+        ElementId e = kInvalidElementId;
+        ElementId f = kInvalidElementId;
 };
 
 TwoTriangleFixture make_two_triangle_fixture(float duplicate_offset = 0.1F)
@@ -34,9 +34,15 @@ TwoTriangleFixture make_two_triangle_fixture(float duplicate_offset = 0.1F)
 	fixture.d = add_vertex(fixture.document, { 0.0F, 1.0F + duplicate_offset, 0.0F });
 	fixture.e = add_vertex(fixture.document, { -1.0F, 1.0F, 0.0F });
 	fixture.f = add_vertex(fixture.document, { -1.0F, 0.0F, 0.0F });
-	EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 3> { fixture.a, fixture.b, fixture.c }) != invalid_element_id);
-	EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 3> { fixture.d, fixture.e, fixture.f }) != invalid_element_id);
-	return fixture;
+        EXPECT_TRUE(add_face(fixture.document,
+                             std::array<ElementId, 3>{fixture.a, fixture.b,
+                                                      fixture.c}) !=
+                    kInvalidElementId);
+        EXPECT_TRUE(add_face(fixture.document,
+                             std::array<ElementId, 3>{fixture.d, fixture.e,
+                                                      fixture.f}) !=
+                    kInvalidElementId);
+        return fixture;
 }
 
 Document make_touching_cube_pair_document(std::vector<ElementId>& first_interface, std::vector<ElementId>& second_interface)
@@ -92,8 +98,8 @@ TEST(QdrDocumentOperationMergeVerticesByDistanceTests, MergeVerticesByDistanceWe
 	EXPECT_TRUE(survivor != nullptr);
 	EXPECT_TRUE(find_vertex(fixture.document, fixture.d) == nullptr);
 	EXPECT_TRUE(qdr_test::vec_nearly_equal(survivor->position, { 0.0F, 1.05F, 0.0F }));
-	EXPECT_TRUE(selection.mode == SelectionMode::vertex);
-	EXPECT_TRUE(selection.vertices.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
+        EXPECT_TRUE(selection.vertices.size() == 1U);
 	EXPECT_TRUE(selection.vertices.front() == fixture.c);
 	EXPECT_TRUE(selection.has_active);
 	EXPECT_TRUE(selection.active_vertex == fixture.c);
@@ -125,10 +131,13 @@ TEST(QdrDocumentOperationMergeVerticesByDistanceTests, MergeVerticesByDistancePi
 	const ElementId b2 = add_vertex(document, { 0.5F, -1.0F, 0.0F });
 	const ElementId c1 = add_vertex(document, { 0.5F, 1.0F, 0.0F });
 	const ElementId c2 = add_vertex(document, { 1.5F, 1.0F, 0.0F });
-	EXPECT_TRUE(add_face(document, std::array<ElementId, 3> { a, a1, a2 }) != invalid_element_id);
-	EXPECT_TRUE(add_face(document, std::array<ElementId, 3> { b, b1, b2 }) != invalid_element_id);
-	EXPECT_TRUE(add_face(document, std::array<ElementId, 3> { c, c1, c2 }) != invalid_element_id);
-	Selection selection = qdr_test::vertex_selection({ a, b, c });
+        EXPECT_TRUE(add_face(document, std::array<ElementId, 3>{a, a1, a2}) !=
+                    kInvalidElementId);
+        EXPECT_TRUE(add_face(document, std::array<ElementId, 3>{b, b1, b2}) !=
+                    kInvalidElementId);
+        EXPECT_TRUE(add_face(document, std::array<ElementId, 3>{c, c1, c2}) !=
+                    kInvalidElementId);
+        Selection selection = qdr_test::vertex_selection({ a, b, c });
 
 	const OperationResult result = merge_selected_vertices_by_distance(document, selection, 1.1F);
 
@@ -153,8 +162,8 @@ TEST(QdrDocumentOperationMergeVerticesByDistanceTests, MergeVerticesByDistanceCo
 	const std::size_t vertex_count_before = document.vertices.size();
 
 	Selection selection;
-	selection.mode = SelectionMode::vertex;
-	selection.vertices.insert(selection.vertices.end(), first_interface.begin(), first_interface.end());
+        selection.mode = SelectionMode::Vertex;
+        selection.vertices.insert(selection.vertices.end(), first_interface.begin(), first_interface.end());
 	selection.vertices.insert(selection.vertices.end(), second_interface.begin(), second_interface.end());
 
 	const OperationResult result = merge_selected_vertices_by_distance(document, selection, 0.0F);
@@ -163,8 +172,8 @@ TEST(QdrDocumentOperationMergeVerticesByDistanceTests, MergeVerticesByDistanceCo
 	EXPECT_TRUE(document.vertices.size() == vertex_count_before - 4U);
 	EXPECT_TRUE(document.faces.size() == 11U);
 	EXPECT_TRUE(face_count_on_plane_x(document, 1.0F) == 1U);
-	EXPECT_TRUE(selection.mode == SelectionMode::vertex);
-	EXPECT_TRUE(selection.vertices.size() == 4U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
+        EXPECT_TRUE(selection.vertices.size() == 4U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }
 
@@ -182,10 +191,16 @@ TEST(QdrDocumentOperationMergeVerticesByDistanceTests, MergeVerticesByDistanceAl
 	const ElementId d2 = add_vertex(document, { 0.0F, 1.0F, 0.0F });
 	const ElementId c3 = add_vertex(document, { -1.0F, 0.0F, 1.0F });
 	const ElementId d3 = add_vertex(document, { -1.0F, 0.0F, 0.0F });
-	EXPECT_TRUE(add_face(document, std::array<ElementId, 4> { a1, b1, c1, d1 }) != invalid_element_id);
-	EXPECT_TRUE(add_face(document, std::array<ElementId, 4> { a2, b2, c2, d2 }) != invalid_element_id);
-	EXPECT_TRUE(add_face(document, std::array<ElementId, 4> { a3, b3, c3, d3 }) != invalid_element_id);
-	Selection selection = qdr_test::vertex_selection({ a1, b1, a2, b2, a3, b3 });
+        EXPECT_TRUE(
+            add_face(document, std::array<ElementId, 4>{a1, b1, c1, d1}) !=
+            kInvalidElementId);
+        EXPECT_TRUE(
+            add_face(document, std::array<ElementId, 4>{a2, b2, c2, d2}) !=
+            kInvalidElementId);
+        EXPECT_TRUE(
+            add_face(document, std::array<ElementId, 4>{a3, b3, c3, d3}) !=
+            kInvalidElementId);
+        Selection selection = qdr_test::vertex_selection({ a1, b1, a2, b2, a3, b3 });
 
 	const OperationResult result = merge_selected_vertices_by_distance(document, selection, 0.001F);
 

@@ -45,9 +45,9 @@ public:
 
 OperationResult ConnectEdgesOperation::apply(Document& document, Selection& selection) const
 {
-    if (selection.mode != SelectionMode::edge) {
-        return { false, "Connect Edges needs edge selection mode." };
-    }
+  if (selection.mode != SelectionMode::Edge) {
+    return {false, "Connect Edges needs edge selection mode."};
+  }
 
     const std::vector<Edge> selected_edges = selected_valid_edges(document, selection);
     if (selected_edges.size() < 2) {
@@ -82,8 +82,8 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
     for (const auto& entry : cut_edges_by_face_id) {
         for (const Edge& edge : entry.second) {
             const ElementId split_vertex = split_vertex_for_edge(candidate, split_vertices, edge, 0.5F);
-            if (split_vertex == invalid_element_id) {
-                return { false, "Connect Edges could not split a selected edge." };
+            if (split_vertex == kInvalidElementId) {
+              return {false, "Connect Edges could not split a selected edge."};
             }
         }
     }
@@ -199,7 +199,7 @@ OperationResult ConnectEdgesOperation::apply(Document& document, Selection& sele
 
     document = std::move(candidate);
     selection.clear();
-    selection.mode = SelectionMode::edge;
+    selection.mode = SelectionMode::Edge;
     selection.edges = std::move(connected_edges);
     activate_last_selection(selection);
     return { true, {} };

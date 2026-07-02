@@ -11,11 +11,11 @@
 
 namespace quader {
 
-ModelingCommandResult InvertSelectionTool::executeCustomCommand(ModelingCommandExecutionContext& context) const {
+ModelingCommandResult InvertSelectionTool::execute_custom_command(ModelingCommandExecutionContext& context) const {
     if (context.selection != nullptr) {
         return context.selection->invert();
     }
-    return context.modeling.invertSelection();
+    return context.modeling.invert_selection();
 }
 
 } // namespace quader

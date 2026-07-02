@@ -46,39 +46,43 @@ public:
     SceneRenderBridge& operator=(SceneRenderBridge&&) = delete;
     ~SceneRenderBridge();
 
-    void initialize(filament::Engine& engine,
-            filament::Scene& scene,
-            filament::Material& shadedMeshMaterial,
-            filament::Material& renderedMeshMaterial,
-            filament::Material& overlayMaterial,
-            filament::Material& overlayLineMaterial,
-            filament::Material& selectedObjectLineMaterial,
-            filament::Material& overlayPointMaterial,
-            std::filesystem::path resourceRoot);
+    void initialize(filament::Engine &engine, filament::Scene &scene,
+                    filament::Material &shaded_mesh_material,
+                    filament::Material &rendered_mesh_material,
+                    filament::Material &overlay_material,
+                    filament::Material &overlay_line_material,
+                    filament::Material &selected_object_line_material,
+                    filament::Material &overlay_point_material,
+                    std::filesystem::path resource_root);
     void shutdown();
     void sync(const SceneDocument& document, const AssetRegistry& assets);
-    void syncSelectedObjectOverlay(const SceneDocument& document, const AssetRegistry& assets, bool visible);
-    void syncSceneWireframeOverlay(const SceneDocument& document, const AssetRegistry& assets, std::uint8_t layerMask);
-    void setToolPreviewMeshes(std::vector<PreviewMesh> meshes, const AssetRegistry& assets);
-    void setOverlayFrame(ViewportOverlayFrame frame, ViewportOverlayCamera camera);
-    void setOverlayFrame(std::size_t viewportIndex,
-            std::uint8_t layerMask,
-            ViewportOverlayFrame frame,
-            ViewportOverlayCamera camera);
+    void sync_selected_object_overlay(const SceneDocument &document,
+                                      const AssetRegistry &assets,
+                                      bool visible);
+    void sync_scene_wireframe_overlay(const SceneDocument &document,
+                                      const AssetRegistry &assets,
+                                      std::uint8_t layer_mask);
+    void set_tool_preview_meshes(std::vector<PreviewMesh> meshes,
+                                 const AssetRegistry &assets);
+    void set_overlay_frame(ViewportOverlayFrame frame,
+                           ViewportOverlayCamera camera);
+    void set_overlay_frame(std::size_t viewport_index, std::uint8_t layer_mask,
+                           ViewportOverlayFrame frame,
+                           ViewportOverlayCamera camera);
 
-private:
+  private:
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
-    TextureBindingService textureBinding_;
-    MaterialBindingService materialBinding_;
-    MeshRenderableFactory meshFactory_;
-    MeshRenderableCache meshCache_;
-    ToolPreviewRenderableCache toolPreviewCache_;
-    OverlayProxyFactory overlayProxyFactory_;
-    OverlayRenderableCache overlayCache_;
-    SceneWireframeOverlayCache sceneWireframeOverlayCache_;
-    SelectedObjectOverlayCache selectedObjectOverlayCache_;
-    SceneRenderSyncService syncService_;
+    TextureBindingService texture_binding_;
+    MaterialBindingService material_binding_;
+    MeshRenderableFactory mesh_factory_;
+    MeshRenderableCache mesh_cache_;
+    ToolPreviewRenderableCache tool_preview_cache_;
+    OverlayProxyFactory overlay_proxy_factory_;
+    OverlayRenderableCache overlay_cache_;
+    SceneWireframeOverlayCache scene_wireframe_overlay_cache_;
+    SelectedObjectOverlayCache selected_object_overlay_cache_;
+    SceneRenderSyncService sync_service_;
 };
 
 } // namespace quader

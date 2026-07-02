@@ -100,21 +100,29 @@ TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogStaysDescri
 		}
 
 		switch (gesture.target_kind) {
-			case qhc::HostGestureTargetKind::tool:
-				EXPECT_TRUE(qhc::find_tool_descriptor(gesture.target_id) != nullptr);
-				break;
-			case qhc::HostGestureTargetKind::tool_group:
-				EXPECT_TRUE(qhc::find_tool_group_descriptor(gesture.target_id) != nullptr);
-				break;
-			case qhc::HostGestureTargetKind::viewport_action:
-				EXPECT_TRUE(has_interaction_kind(gesture.target_id, qhc::HostInteractionKind::viewport_action));
-				break;
-			case qhc::HostGestureTargetKind::preview_action:
-				EXPECT_TRUE(has_interaction_kind(gesture.target_id, qhc::HostInteractionKind::preview_action));
-				break;
-			case qhc::HostGestureTargetKind::input_policy:
-				EXPECT_TRUE(has_interaction_kind(gesture.target_id, qhc::HostInteractionKind::input_policy));
-				break;
+                case qhc::HostGestureTargetKind::Tool:
+                  EXPECT_TRUE(qhc::find_tool_descriptor(gesture.target_id) !=
+                              nullptr);
+                  break;
+                case qhc::HostGestureTargetKind::ToolGroup:
+                  EXPECT_TRUE(qhc::find_tool_group_descriptor(
+                                  gesture.target_id) != nullptr);
+                  break;
+                case qhc::HostGestureTargetKind::ViewportAction:
+                  EXPECT_TRUE(has_interaction_kind(
+                      gesture.target_id,
+                      qhc::HostInteractionKind::ViewportAction));
+                  break;
+                case qhc::HostGestureTargetKind::PreviewAction:
+                  EXPECT_TRUE(has_interaction_kind(
+                      gesture.target_id,
+                      qhc::HostInteractionKind::PreviewAction));
+                  break;
+                case qhc::HostGestureTargetKind::InputPolicy:
+                  EXPECT_TRUE(has_interaction_kind(
+                      gesture.target_id,
+                      qhc::HostInteractionKind::InputPolicy));
+                  break;
 		}
 	}
 }
@@ -152,11 +160,15 @@ TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogDescribesMo
 	EXPECT_FALSE(box.returns_to_select_on_cancel);
 	EXPECT_FALSE(box.returns_to_select_on_success);
 	EXPECT_TRUE(box.rebuilds_mesh_on_success);
-	EXPECT_TRUE(has_pointer_input(box, qhc::HostPointerInputKind::mouse_move));
-	EXPECT_TRUE(has_pointer_input(box, qhc::HostPointerInputKind::primary_down));
-	EXPECT_TRUE(has_pointer_input(box, qhc::HostPointerInputKind::primary_drag));
-	EXPECT_TRUE(has_pointer_input(box, qhc::HostPointerInputKind::primary_up));
-	EXPECT_TRUE(has_key_input(box, "Escape"));
+        EXPECT_TRUE(
+            has_pointer_input(box, qhc::HostPointerInputKind::MouseMove));
+        EXPECT_TRUE(
+            has_pointer_input(box, qhc::HostPointerInputKind::PrimaryDown));
+        EXPECT_TRUE(
+            has_pointer_input(box, qhc::HostPointerInputKind::PrimaryDrag));
+        EXPECT_TRUE(
+            has_pointer_input(box, qhc::HostPointerInputKind::PrimaryUp));
+        EXPECT_TRUE(has_key_input(box, "Escape"));
 
 	const qhc::HostGestureDescriptor& insert_edge_loop = require_gesture("insert_edge_loop_gesture");
 	EXPECT_TRUE(insert_edge_loop.returns_to_select_on_cancel);
@@ -192,11 +204,14 @@ TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogDescribesPr
 	EXPECT_TRUE(preview_block.suppressed_while_fly_navigation);
 	EXPECT_TRUE(preview_block.consumes_pointer_when_active);
 	EXPECT_TRUE(preview_block.suppresses_gizmo);
-	EXPECT_TRUE(has_pointer_input(preview_block, qhc::HostPointerInputKind::primary_down));
-	EXPECT_TRUE(has_pointer_input(preview_block, qhc::HostPointerInputKind::primary_drag));
-	EXPECT_TRUE(has_pointer_input(preview_block, qhc::HostPointerInputKind::primary_up));
+        EXPECT_TRUE(has_pointer_input(preview_block,
+                                      qhc::HostPointerInputKind::PrimaryDown));
+        EXPECT_TRUE(has_pointer_input(preview_block,
+                                      qhc::HostPointerInputKind::PrimaryDrag));
+        EXPECT_TRUE(has_pointer_input(preview_block,
+                                      qhc::HostPointerInputKind::PrimaryUp));
 
-	const qhc::HostGestureDescriptor& transform = require_gesture("transform_gizmo_drag");
+        const qhc::HostGestureDescriptor& transform = require_gesture("transform_gizmo_drag");
 	EXPECT_TRUE(transform.blocked_by_active_preview);
 	EXPECT_TRUE(transform.suppressed_while_fly_navigation);
 	EXPECT_FALSE(transform.suppresses_gizmo);
@@ -220,23 +235,30 @@ TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogDescribesPr
 
 TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogDescribesViewportNavigationInputs) {
 	const qhc::HostGestureDescriptor& zoom = require_gesture("viewport_scroll_zoom");
-	EXPECT_TRUE(zoom.target_kind == qhc::HostGestureTargetKind::viewport_action);
-	EXPECT_TRUE(same_text(zoom.target_id, "zoom"));
+        EXPECT_TRUE(zoom.target_kind ==
+                    qhc::HostGestureTargetKind::ViewportAction);
+        EXPECT_TRUE(same_text(zoom.target_id, "zoom"));
 	EXPECT_FALSE(zoom.suppresses_gizmo);
-	EXPECT_TRUE(has_pointer_input(zoom, qhc::HostPointerInputKind::scroll));
-	EXPECT_TRUE(has_modifier_meaning(zoom, "primary_modifier:zoom_to_cursor"));
+        EXPECT_TRUE(has_pointer_input(zoom, qhc::HostPointerInputKind::Scroll));
+        EXPECT_TRUE(has_modifier_meaning(zoom, "primary_modifier:zoom_to_cursor"));
 
 	const qhc::HostGestureDescriptor& fly = require_gesture("viewport_fly_or_orthographic_pan");
-	EXPECT_TRUE(has_pointer_input(fly, qhc::HostPointerInputKind::secondary_down));
-	EXPECT_TRUE(has_pointer_input(fly, qhc::HostPointerInputKind::secondary_drag));
-	EXPECT_TRUE(has_pointer_input(fly, qhc::HostPointerInputKind::secondary_up));
-	EXPECT_TRUE(has_key_input(fly, "Escape"));
+        EXPECT_TRUE(
+            has_pointer_input(fly, qhc::HostPointerInputKind::SecondaryDown));
+        EXPECT_TRUE(
+            has_pointer_input(fly, qhc::HostPointerInputKind::SecondaryDrag));
+        EXPECT_TRUE(
+            has_pointer_input(fly, qhc::HostPointerInputKind::SecondaryUp));
+        EXPECT_TRUE(has_key_input(fly, "Escape"));
 
 	const qhc::HostGestureDescriptor& orbit = require_gesture("viewport_orbit_or_pan");
-	EXPECT_TRUE(has_pointer_input(orbit, qhc::HostPointerInputKind::middle_down));
-	EXPECT_TRUE(has_pointer_input(orbit, qhc::HostPointerInputKind::middle_drag));
-	EXPECT_TRUE(has_pointer_input(orbit, qhc::HostPointerInputKind::middle_up));
-	EXPECT_TRUE(has_modifier_meaning(orbit, "shift:pan"));
+        EXPECT_TRUE(
+            has_pointer_input(orbit, qhc::HostPointerInputKind::MiddleDown));
+        EXPECT_TRUE(
+            has_pointer_input(orbit, qhc::HostPointerInputKind::MiddleDrag));
+        EXPECT_TRUE(
+            has_pointer_input(orbit, qhc::HostPointerInputKind::MiddleUp));
+        EXPECT_TRUE(has_modifier_meaning(orbit, "shift:pan"));
 	EXPECT_TRUE(has_modifier_meaning(orbit, "alt:orbit_snap_modifier"));
 }
 
@@ -250,8 +272,9 @@ TEST(QdrEditorMetadataGestureCatalogTests, HostContractGestureCatalogDescribesKe
 	EXPECT_TRUE(has_key_input(preview, "Space"));
 
 	const qhc::HostGestureDescriptor& layout = require_gesture("focused_pane_maximize_toggle");
-	EXPECT_TRUE(layout.target_kind == qhc::HostGestureTargetKind::viewport_action);
-	EXPECT_TRUE(same_text(layout.target_id, "toggle_focused_pane_maximized"));
+        EXPECT_TRUE(layout.target_kind ==
+                    qhc::HostGestureTargetKind::ViewportAction);
+        EXPECT_TRUE(same_text(layout.target_id, "toggle_focused_pane_maximized"));
 	EXPECT_TRUE(layout.suppressed_while_fly_navigation);
 	EXPECT_TRUE(has_key_input(layout, "Space"));
 }

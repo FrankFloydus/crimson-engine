@@ -23,13 +23,15 @@ class SceneDocument;
  */
 class ToolPreviewMeshProjection final {
 public:
-    [[nodiscard]] static std::optional<MeshAsset> boxPreviewMeshFromDescriptor(
-            const quader_editor_core::BoxPreviewDescriptor& preview);
-    [[nodiscard]] static std::vector<ModelingToolPreviewMesh> mirrorPreviewMeshes(
-            const quader_editor_core::EditorRuntime& runtime,
-            const SceneDocument& scene,
-            const ModelingObjectRuntimeMap& objectRegistry,
-            const std::vector<quader_editor_core::PolygonObject>& previewObjects);
+  [[nodiscard]] static std::optional<MeshAsset>
+  box_preview_mesh_from_descriptor(
+      const quader_editor_core::BoxPreviewDescriptor &preview);
+  [[nodiscard]] static std::vector<ModelingToolPreviewMesh>
+  mirror_preview_meshes(
+      const quader_editor_core::EditorRuntime &runtime,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_registry,
+      const std::vector<quader_editor_core::PolygonObject> &preview_objects);
 };
 
 } // namespace quader

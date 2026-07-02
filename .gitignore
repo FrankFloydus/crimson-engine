@@ -5,6 +5,7 @@
 # file except through prior written authorization from Francesco Di Blasi.
 ################################################################################
 build/
+.build/
 out/
 build/
 .vs/

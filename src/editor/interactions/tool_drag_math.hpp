@@ -16,8 +16,8 @@ namespace quader_editor_core {
  */
 struct CameraDragState {
 	bool valid = false;
-	CameraProjection projection = CameraProjection::perspective;
-	quader::QVec3 origin;
+        CameraProjection projection = CameraProjection::Perspective;
+        quader::QVec3 origin;
 	quader::QVec3 right { 1.0F, 0.0F, 0.0F };
 	quader::QVec3 up { 0.0F, 1.0F, 0.0F };
 	quader::QVec3 forward { 0.0F, 0.0F, -1.0F };
@@ -72,12 +72,11 @@ quader::QVec3 screen_fallback_move_delta(
 	quader::QVec3 anchor,
 	bool vertical);
 quader::QVec3 snapped_move_delta(quader::QVec3 delta, bool vertical, double grid_world_size);
-DragDistanceResult axis_distance_from_ray(
-	quader::QVec3 world_axis,
-	quader::QVec3 anchor,
-	const quader_poly::Ray& ray,
-	double parallel_epsilon = tool_epsilon,
-	double vector_epsilon = tool_epsilon);
+DragDistanceResult
+axis_distance_from_ray(quader::QVec3 world_axis, quader::QVec3 anchor,
+                       const quader_poly::Ray &ray,
+                       double parallel_epsilon = kToolEpsilon,
+                       double vector_epsilon = kToolEpsilon);
 DragDistanceResult projected_axis_drag_distance(const ProjectedAxisDragInput& input);
 
 } // namespace quader_editor_core

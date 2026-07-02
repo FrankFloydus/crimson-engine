@@ -21,449 +21,423 @@
 namespace quader {
 namespace {
 
-quader_editor_core::SelectionEditOperation selectionBoxOperation(QuaderSelectionEdit edit) {
-    switch (edit) {
-    case QuaderSelectionEdit::Add:
-        return quader_editor_core::SelectionEditOperation::add;
-    case QuaderSelectionEdit::Remove:
-        return quader_editor_core::SelectionEditOperation::remove;
-    case QuaderSelectionEdit::Toggle:
-        return quader_editor_core::SelectionEditOperation::toggle;
-    case QuaderSelectionEdit::Replace:
-        return quader_editor_core::SelectionEditOperation::replace;
-    }
-    return quader_editor_core::SelectionEditOperation::replace;
+quader_editor_core::SelectionEditOperation
+selection_box_operation(QuaderSelectionEdit edit) {
+  switch (edit) {
+  case QuaderSelectionEdit::Add:
+    return quader_editor_core::SelectionEditOperation::Add;
+  case QuaderSelectionEdit::Remove:
+    return quader_editor_core::SelectionEditOperation::Remove;
+  case QuaderSelectionEdit::Toggle:
+    return quader_editor_core::SelectionEditOperation::Toggle;
+  case QuaderSelectionEdit::Replace:
+    return quader_editor_core::SelectionEditOperation::Replace;
+  }
+  return quader_editor_core::SelectionEditOperation::Replace;
 }
 
-QuaderSelectionEdit selectionEditFromModifiers(ViewportModifiers modifiers) {
-    if (modifiers.primary) {
-        return QuaderSelectionEdit::Remove;
-    }
-    if (modifiers.shift) {
-        return QuaderSelectionEdit::Add;
-    }
-    return QuaderSelectionEdit::Replace;
+QuaderSelectionEdit selection_edit_from_modifiers(ViewportModifiers modifiers) {
+  if (modifiers.primary) {
+    return QuaderSelectionEdit::Remove;
+  }
+  if (modifiers.shift) {
+    return QuaderSelectionEdit::Add;
+  }
+  return QuaderSelectionEdit::Replace;
 }
 
-ViewportSelectionMarquee boxMarquee(QVec2 start, QVec2 end) {
-    return {
-            .active = true,
-            .start = start,
-            .end = end,
-            .rule = resolveBoxSelectionRule(ModelingBoxSelectionRule::DragDirection, start, end),
-    };
+ViewportSelectionMarquee box_marquee(QVec2 start, QVec2 end) {
+  return {
+      .active = true,
+      .start = start,
+      .end = end,
+      .rule = resolve_box_selection_rule(
+          ModelingBoxSelectionRule::DragDirection, start, end),
+  };
 }
 
-bool sameMarquee(const ViewportSelectionMarquee& left, const ViewportSelectionMarquee& right) {
-    return left.active == right.active &&
-            left.rule == right.rule &&
-            left.start.x == right.start.x &&
-            left.start.y == right.start.y &&
-            left.end.x == right.end.x &&
-            left.end.y == right.end.y;
+bool same_marquee(const ViewportSelectionMarquee &left,
+                  const ViewportSelectionMarquee &right) {
+  return left.active == right.active && left.rule == right.rule &&
+         left.start.x == right.start.x && left.start.y == right.start.y &&
+         left.end.x == right.end.x && left.end.y == right.end.y;
 }
 
-bool liveBoxSelectionAllowed(QuaderSelectionEdit edit, QuaderSelectionMode mode) {
-    (void)edit;
-    (void)mode;
-    return true;
+bool live_box_selection_allowed(QuaderSelectionEdit edit,
+                                QuaderSelectionMode mode) {
+  (void)edit;
+  (void)mode;
+  return true;
 }
 
-bool hoverTargetValid(const QuaderHoverTarget& target) {
-    return target.kind != QuaderActiveSelectionKind::None && target.objectId > 0;
+bool hover_target_valid(const QuaderHoverTarget &target) {
+  return target.kind != QuaderActiveSelectionKind::None && target.object_id > 0;
 }
 
-bool hoverTargetsMatch(const QuaderHoverTarget& left, const QuaderHoverTarget& right) {
-    if (left.kind != right.kind || left.objectId != right.objectId) {
-        return false;
-    }
-    switch (left.kind) {
-    case QuaderActiveSelectionKind::Object:
-        return true;
-    case QuaderActiveSelectionKind::Vertex:
-        return left.vertexId == right.vertexId;
-    case QuaderActiveSelectionKind::Edge:
-        return (left.edgeA == right.edgeA && left.edgeB == right.edgeB) ||
-                (left.edgeA == right.edgeB && left.edgeB == right.edgeA);
-    case QuaderActiveSelectionKind::Face:
-        return left.faceId == right.faceId;
-    case QuaderActiveSelectionKind::None:
-    case QuaderActiveSelectionKind::Light:
-        break;
-    }
+bool hover_targets_match(const QuaderHoverTarget &left,
+                         const QuaderHoverTarget &right) {
+  if (left.kind != right.kind || left.object_id != right.object_id) {
     return false;
+  }
+  switch (left.kind) {
+  case QuaderActiveSelectionKind::Object:
+    return true;
+  case QuaderActiveSelectionKind::Vertex:
+    return left.vertex_id == right.vertex_id;
+  case QuaderActiveSelectionKind::Edge:
+    return (left.edge_a == right.edge_a && left.edge_b == right.edge_b) ||
+           (left.edge_a == right.edge_b && left.edge_b == right.edge_a);
+  case QuaderActiveSelectionKind::Face:
+    return left.face_id == right.face_id;
+  case QuaderActiveSelectionKind::None:
+  case QuaderActiveSelectionKind::Light:
+    break;
+  }
+  return false;
 }
 
-QuaderPickSelectRequest makePickSelectRequest(
-        const ViewportCameraController& camera,
-        const ViewportSettings& settings,
-        QVec2 localMouse,
-        ViewportModifiers modifiers,
-        int clickCount,
-        bool preserveSelectionOnMiss,
-        bool preserveSelectionOnSelectedHit,
-        bool preserveExistingComponentSelectionOnHit = false) {
-    const ViewportRay worldRay = camera.rayFromViewportPoint(localMouse);
-    return {
-            .ray = {
-                    .origin = worldRay.origin,
-                    .direction = worldRay.direction,
-            },
-            .clickCount = clickCount,
-            .controlPressed = modifiers.primary,
-            .shiftPressed = modifiers.shift,
-            .commandPressed = modifiers.primary,
-            .altPressed = modifiers.alt,
-            .preserveSelectionOnMiss = preserveSelectionOnMiss,
-            .preserveSelectionOnSelectedHit = preserveSelectionOnSelectedHit,
-            .preserveExistingComponentSelectionOnHit = preserveExistingComponentSelectionOnHit,
-            .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
-            .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
-    };
+QuaderPickSelectRequest make_pick_select_request(
+    const ViewportCameraController &camera, const ViewportSettings &settings,
+    QVec2 local_mouse, ViewportModifiers modifiers, int click_count,
+    bool preserve_selection_on_miss, bool preserve_selection_on_selected_hit,
+    bool preserve_existing_component_selection_on_hit = false) {
+  const ViewportRay world_ray = camera.ray_from_viewport_point(local_mouse);
+  return {
+      .ray =
+          {
+              .origin = world_ray.origin,
+              .direction = world_ray.direction,
+          },
+      .click_count = click_count,
+      .control_pressed = modifiers.primary,
+      .shift_pressed = modifiers.shift,
+      .command_pressed = modifiers.primary,
+      .alt_pressed = modifiers.alt,
+      .preserve_selection_on_miss = preserve_selection_on_miss,
+      .preserve_selection_on_selected_hit = preserve_selection_on_selected_hit,
+      .preserve_existing_component_selection_on_hit =
+          preserve_existing_component_selection_on_hit,
+      .vertex_radius =
+          settings.float_value(ViewportFloatSettingId::PickVertexRadius),
+      .edge_radius =
+          settings.float_value(ViewportFloatSettingId::PickEdgeRadius),
+  };
 }
 
-QuaderHoverRequest makeHoverRequest(
-        const ViewportCameraController& camera,
-        const ViewportSettings& settings,
-        QVec2 localMouse,
-        ViewportModifiers modifiers) {
-    const ViewportRay worldRay = camera.rayFromViewportPoint(localMouse);
-    return {
-            .ray = {
-                    .origin = worldRay.origin,
-                    .direction = worldRay.direction,
-            },
-            .selectedModifierPressed = modifiers.primary,
-            .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
-            .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
-    };
+QuaderHoverRequest make_hover_request(const ViewportCameraController &camera,
+                                      const ViewportSettings &settings,
+                                      QVec2 local_mouse,
+                                      ViewportModifiers modifiers) {
+  const ViewportRay world_ray = camera.ray_from_viewport_point(local_mouse);
+  return {
+      .ray =
+          {
+              .origin = world_ray.origin,
+              .direction = world_ray.direction,
+          },
+      .selected_modifier_pressed = modifiers.primary,
+      .vertex_radius =
+          settings.float_value(ViewportFloatSettingId::PickVertexRadius),
+      .edge_radius =
+          settings.float_value(ViewportFloatSettingId::PickEdgeRadius),
+  };
 }
 
-QuaderBoxSelectRequest makeBoxSelectRequest(
-        const ViewportCameraController& camera,
-        QVec2 viewportSize,
-        QVec2 start,
-        QVec2 end,
-        QuaderSelectionEdit edit) {
-    return {
-            .camera = toApiViewportCamera(ViewportCameraAdapter::modelingCamera(camera, viewportSize)),
-            .start = start,
-            .end = end,
-            .edit = edit,
-            .rule = QuaderBoxSelectionRule::DragDirection,
-    };
+QuaderBoxSelectRequest
+make_box_select_request(const ViewportCameraController &camera,
+                        QVec2 viewport_size, QVec2 start, QVec2 end,
+                        QuaderSelectionEdit edit) {
+  return {
+      .camera = to_api_viewport_camera(
+          ViewportCameraAdapter::modeling_camera(camera, viewport_size)),
+      .start = start,
+      .end = end,
+      .edit = edit,
+      .rule = QuaderBoxSelectionRule::DragDirection,
+  };
 }
 
-QuaderSelectionSummary pickSelection(
-        QuaderEditorApi& editor,
-        ViewportInputRouter& inputRouter,
-        const ViewportInteractionFrame& frame,
-        QVec2 localMouse,
-        int clickCount,
-        bool preserveSelectionOnMiss = false,
-        bool preserveSelectionOnSelectedHit = false,
-        bool preserveExistingComponentSelectionOnHit = false) {
-    QDR_PROFILE_FUNCTION();
-    const QuaderApiResult<QuaderSelectionSummary> result =
-            editor.selection().pickSelect(makePickSelectRequest(
-                    frame.camera,
-                    frame.settings,
-                    localMouse,
-                    frame.input.modifiers,
-                    clickCount,
-                    preserveSelectionOnMiss,
-                    preserveSelectionOnSelectedHit,
-                    preserveExistingComponentSelectionOnHit));
-    if (!result.ok) {
-        LOG_ERROR("Viewport selection failed: {}", result.message.empty() ? "Selection failed." : result.message);
-    }
-    const QuaderSelectionSummary summary = result.ok ? result.value() : editor.selection().summary();
-    inputRouter.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(summary.mode)));
-    return summary;
+QuaderSelectionSummary
+pick_selection(QuaderEditorApi &editor, ViewportInputRouter &input_router,
+               const ViewportInteractionFrame &frame, QVec2 local_mouse,
+               int click_count, bool preserve_selection_on_miss = false,
+               bool preserve_selection_on_selected_hit = false,
+               bool preserve_existing_component_selection_on_hit = false) {
+  QDR_PROFILE_FUNCTION();
+  const QuaderApiResult<QuaderSelectionSummary> result =
+      editor.selection().pick_select(make_pick_select_request(
+          frame.camera, frame.settings, local_mouse, frame.input.modifiers,
+          click_count, preserve_selection_on_miss,
+          preserve_selection_on_selected_hit,
+          preserve_existing_component_selection_on_hit));
+  if (!result.ok) {
+    LOG_ERROR("Viewport selection failed: {}",
+              result.message.empty() ? "Selection failed." : result.message);
+  }
+  const QuaderSelectionSummary summary =
+      result.ok ? result.value() : editor.selection().summary();
+  input_router.set_selection_mode(
+      app_selection_mode_to_viewport(to_modeling_selection_mode(summary.mode)));
+  return summary;
 }
 
-QuaderSelectionSummary boxSelection(
-        QuaderEditorApi& editor,
-        ViewportInputRouter& inputRouter,
-        const ViewportInteractionFrame& frame,
-        QVec2 start,
-        QVec2 end,
-        QuaderSelectionEdit edit,
-        const QuaderSelectionBoxBaseline* baseline = nullptr) {
-    QDR_PROFILE_FUNCTION();
-    const QuaderBoxSelectRequest request = makeBoxSelectRequest(
-            frame.camera,
-            frame.input.viewportSize,
-            start,
-            end,
-            edit);
-    const QuaderApiResult<QuaderSelectionSummary> result = baseline != nullptr && baseline->valid()
-            ? editor.selection().boxSelect(request, *baseline)
-            : editor.selection().boxSelect(request);
-    if (!result.ok) {
-        LOG_ERROR("Viewport box selection failed: {}", result.message.empty() ? "Box selection failed." : result.message);
-    }
-    const QuaderSelectionSummary summary = result.ok ? result.value() : editor.selection().summary();
-    inputRouter.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(summary.mode)));
-    return summary;
+QuaderSelectionSummary
+box_selection(QuaderEditorApi &editor, ViewportInputRouter &input_router,
+              const ViewportInteractionFrame &frame, QVec2 start, QVec2 end,
+              QuaderSelectionEdit edit,
+              const QuaderSelectionBoxBaseline *baseline = nullptr) {
+  QDR_PROFILE_FUNCTION();
+  const QuaderBoxSelectRequest request = make_box_select_request(
+      frame.camera, frame.input.viewport_size, start, end, edit);
+  const QuaderApiResult<QuaderSelectionSummary> result =
+      baseline != nullptr && baseline->valid()
+          ? editor.selection().box_select(request, *baseline)
+          : editor.selection().box_select(request);
+  if (!result.ok) {
+    LOG_ERROR("Viewport box selection failed: {}", result.message.empty()
+                                                       ? "Box selection failed."
+                                                       : result.message);
+  }
+  const QuaderSelectionSummary summary =
+      result.ok ? result.value() : editor.selection().summary();
+  input_router.set_selection_mode(
+      app_selection_mode_to_viewport(to_modeling_selection_mode(summary.mode)));
+  return summary;
 }
 
 } // namespace
 
 void ViewportSelectionInteraction::reset() {
-    hoverClearIssued_ = false;
-    quader_editor_core::clear_selection_box(boxState_);
-    boxEdit_ = QuaderSelectionEdit::Replace;
-    boxHoveredBeforeSelection_.reset();
-    boxBaseline_.reset();
-    committedMarquee_.reset();
-    liveBoxSelection_.reset();
-    hoverSuppressedTarget_.reset();
-    paintSelectionActive_ = false;
+  hover_clear_issued_ = false;
+  quader_editor_core::clear_selection_box(box_state_);
+  box_edit_ = QuaderSelectionEdit::Replace;
+  box_hovered_before_selection_.reset();
+  box_baseline_.reset();
+  committed_marquee_.reset();
+  live_box_selection_.reset();
+  hover_suppressed_target_.reset();
+  paint_selection_active_ = false;
 }
 
 ViewportSelectionMarquee ViewportSelectionInteraction::marquee() const {
-    if (!boxState_.active || !boxState_.dragging) {
-        return committedMarquee_.value_or(ViewportSelectionMarquee{});
-    }
-    return boxMarquee(boxState_.start, boxState_.end);
+  if (!box_state_.active || !box_state_.dragging) {
+    return committed_marquee_.value_or(ViewportSelectionMarquee{});
+  }
+  return box_marquee(box_state_.start, box_state_.end);
 }
 
-void ViewportSelectionInteraction::handleFrame(
-        QuaderEditorApi& editor,
-        const ViewportInteractionFrame& frame,
-        const ViewportToolResult& toolResult,
-        const ViewportBeforeToolInteractionResult& beforeTool) {
-    QDR_PROFILE_FUNCTION();
-    committedMarquee_.reset();
-    const bool gizmoConsumed = beforeTool.gizmoConsumed;
-    const bool selectionFallbackActive = frame.inputRouter.activeToolAllowsSelectionFallback();
-    const bool suppressHoverWork =
-            frame.inputResult.navigationActive ||
-            frame.inputResult.cameraChanged ||
-            frame.input.textInputActive ||
-            frame.input.modalToolActive ||
-            frame.input.activeToolOwnsViewport ||
-            gizmoConsumed;
-    const bool canUseSelectionFallback =
-            selectionFallbackActive &&
-            !frame.input.textInputActive &&
-            !frame.inputResult.navigationActive &&
-            !frame.inputResult.cameraChanged &&
-            !gizmoConsumed &&
-            !toolResult.handled;
-    const bool canPick = canUseSelectionFallback && frame.input.viewportHovered;
+void ViewportSelectionInteraction::handle_frame(
+    QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+    const ViewportToolResult &tool_result,
+    const ViewportBeforeToolInteractionResult &before_tool) {
+  QDR_PROFILE_FUNCTION();
+  committed_marquee_.reset();
+  const bool gizmo_consumed = before_tool.gizmo_consumed;
+  const bool selection_fallback_active =
+      frame.input_router.active_tool_allows_selection_fallback();
+  const bool suppress_hover_work =
+      frame.input_result.navigation_active ||
+      frame.input_result.camera_changed || frame.input.text_input_active ||
+      frame.input.modal_tool_active || frame.input.active_tool_owns_viewport ||
+      gizmo_consumed;
+  const bool can_use_selection_fallback =
+      selection_fallback_active && !frame.input.text_input_active &&
+      !frame.input_result.navigation_active &&
+      !frame.input_result.camera_changed && !gizmo_consumed &&
+      !tool_result.handled;
+  const bool can_pick =
+      can_use_selection_fallback && frame.input.viewport_hovered;
 
-    auto clearHover = [&]() {
-        const QuaderApiVoidResult clearHoverResult = editor.selection().clearHover();
-        if (!clearHoverResult.ok) {
-            LOG_ERROR("Viewport hover clear failed: {}", clearHoverResult.message.empty() ? "Hover clear failed." : clearHoverResult.message);
-        }
-        hoverClearIssued_ = true;
-    };
+  auto clear_hover = [&]() {
+    const QuaderApiVoidResult clear_hover_result =
+        editor.selection().clear_hover();
+    if (!clear_hover_result.ok) {
+      LOG_ERROR("Viewport hover clear failed: {}",
+                clear_hover_result.message.empty()
+                    ? "Hover clear failed."
+                    : clear_hover_result.message);
+    }
+    hover_clear_issued_ = true;
+  };
 
-    auto suppressHoverAfterSelection = [&](QVec2 localMouse, QuaderHoverTarget hoveredBeforeSelection) {
-        if (hoverTargetValid(hoveredBeforeSelection)) {
-            hoverSuppressedTarget_ = hoveredBeforeSelection;
+  auto suppress_hover_after_selection =
+      [&](QVec2 local_mouse, QuaderHoverTarget hovered_before_selection) {
+        if (hover_target_valid(hovered_before_selection)) {
+          hover_suppressed_target_ = hovered_before_selection;
         } else {
-            const QuaderHoverSummary hover =
-                    editor.selection().previewHover(makeHoverRequest(
-                            frame.camera,
-                            frame.settings,
-                            localMouse,
-                            frame.input.modifiers));
-            if (hoverTargetValid(hover.target)) {
-                hoverSuppressedTarget_ = hover.target;
-            } else {
-                hoverSuppressedTarget_.reset();
-            }
+          const QuaderHoverSummary hover = editor.selection().preview_hover(
+              make_hover_request(frame.camera, frame.settings, local_mouse,
+                                 frame.input.modifiers));
+          if (hover_target_valid(hover.target)) {
+            hover_suppressed_target_ = hover.target;
+          } else {
+            hover_suppressed_target_.reset();
+          }
         }
-        clearHover();
-    };
+        clear_hover();
+      };
 
-    if (beforeTool.selectionClickRequested && canPick) {
-        QDR_PROFILE_SCOPE("Viewport selection deferred gizmo click");
-        const QuaderHoverTarget hoveredBeforeSelection = editor.selection().hoverSummary().target;
-        const QuaderSelectionSummary summary = pickSelection(
-                editor,
-                frame.inputRouter,
-                frame,
-                beforeTool.selectionClickLocal,
-                std::max(1, beforeTool.selectionClickCount));
-        paintSelectionActive_ = isComponentSelectionMode(toModelingSelectionMode(summary.mode));
-        suppressHoverAfterSelection(beforeTool.selectionClickLocal, hoveredBeforeSelection);
+  if (before_tool.selection_click_requested && can_pick) {
+    QDR_PROFILE_SCOPE("Viewport selection deferred gizmo click");
+    const QuaderHoverTarget hovered_before_selection =
+        editor.selection().hover_summary().target;
+    const QuaderSelectionSummary summary = pick_selection(
+        editor, frame.input_router, frame, before_tool.selection_click_local,
+        std::max(1, before_tool.selection_click_count));
+    paint_selection_active_ =
+        is_component_selection_mode(to_modeling_selection_mode(summary.mode));
+    suppress_hover_after_selection(before_tool.selection_click_local,
+                                   hovered_before_selection);
+  }
+
+  if (!box_state_.active && can_use_selection_fallback && frame.left_pressed) {
+    QDR_PROFILE_SCOPE("Viewport selection begin box");
+    box_edit_ = selection_edit_from_modifiers(frame.input.modifiers);
+    box_hovered_before_selection_ = editor.selection().hover_summary().target;
+    box_baseline_ = editor.selection().capture_box_selection_baseline();
+    live_box_selection_.reset();
+    quader_editor_core::begin_selection_box(box_state_, frame.left_click_local,
+                                            selection_box_operation(box_edit_));
+  }
+
+  if (box_state_.active && frame.left_down) {
+    QDR_PROFILE_SCOPE("Viewport selection update box");
+    quader_editor_core::update_selection_box(box_state_,
+                                             frame.input.mouse_local);
+    if (box_state_.dragging) {
+      const ViewportSelectionMarquee live_marquee =
+          box_marquee(box_state_.start, box_state_.end);
+      if (live_box_selection_allowed(box_edit_,
+                                     editor.selection().summary().mode) &&
+          (!live_box_selection_.has_value() ||
+           !same_marquee(*live_box_selection_, live_marquee))) {
+        (void)box_selection(editor, frame.input_router, frame,
+                            live_marquee.start, live_marquee.end, box_edit_,
+                            box_baseline_ ? &*box_baseline_ : nullptr);
+        live_box_selection_ = live_marquee;
+      }
+      clear_hover();
     }
+  }
 
-    if (!boxState_.active && canUseSelectionFallback && frame.leftPressed) {
-        QDR_PROFILE_SCOPE("Viewport selection begin box");
-        boxEdit_ = selectionEditFromModifiers(frame.input.modifiers);
-        boxHoveredBeforeSelection_ = editor.selection().hoverSummary().target;
-        boxBaseline_ = editor.selection().captureBoxSelectionBaseline();
-        liveBoxSelection_.reset();
-        quader_editor_core::begin_selection_box(
-                boxState_,
-                frame.leftClickLocal,
-                selectionBoxOperation(boxEdit_));
+  if (box_state_.active && (frame.left_released || !frame.left_down)) {
+    QDR_PROFILE_SCOPE("Viewport selection finish box");
+    const quader_editor_core::SelectionBoxCommit commit =
+        quader_editor_core::finish_selection_box(
+            box_state_, frame.input.mouse_local,
+            selection_box_operation(box_edit_));
+    const QuaderHoverTarget hovered_before_selection =
+        box_hovered_before_selection_.value_or(
+            editor.selection().hover_summary().target);
+    if (commit.dragged) {
+      committed_marquee_ = box_marquee(commit.start, commit.end);
+      if (!live_box_selection_.has_value() ||
+          !same_marquee(*live_box_selection_, *committed_marquee_)) {
+        (void)box_selection(editor, frame.input_router, frame, commit.start,
+                            commit.end, box_edit_,
+                            box_baseline_ ? &*box_baseline_ : nullptr);
+      }
+      suppress_hover_after_selection(commit.end, hovered_before_selection);
+    } else if (can_pick) {
+      const QuaderSelectionSummary summary = pick_selection(
+          editor, frame.input_router, frame, frame.left_click_local,
+          std::max(1, frame.left_click_count));
+      paint_selection_active_ =
+          is_component_selection_mode(to_modeling_selection_mode(summary.mode));
+      suppress_hover_after_selection(frame.left_click_local,
+                                     hovered_before_selection);
     }
+    box_edit_ = QuaderSelectionEdit::Replace;
+    box_hovered_before_selection_.reset();
+    box_baseline_.reset();
+    live_box_selection_.reset();
+  }
 
-    if (boxState_.active && frame.leftDown) {
-        QDR_PROFILE_SCOPE("Viewport selection update box");
-        quader_editor_core::update_selection_box(boxState_, frame.input.mouseLocal);
-        if (boxState_.dragging) {
-            const ViewportSelectionMarquee liveMarquee = boxMarquee(boxState_.start, boxState_.end);
-            if (liveBoxSelectionAllowed(boxEdit_, editor.selection().summary().mode) &&
-                    (!liveBoxSelection_.has_value() || !sameMarquee(*liveBoxSelection_, liveMarquee))) {
-                (void)boxSelection(
-                        editor,
-                        frame.inputRouter,
-                        frame,
-                        liveMarquee.start,
-                        liveMarquee.end,
-                        boxEdit_,
-                        boxBaseline_ ? &*boxBaseline_ : nullptr);
-                liveBoxSelection_ = liveMarquee;
-            }
-            clearHover();
-        }
+  if (frame.left_released || !frame.left_down) {
+    if (box_state_.active) {
+      quader_editor_core::clear_selection_box(box_state_);
     }
+    paint_selection_active_ = false;
+  }
 
-    if (boxState_.active && (frame.leftReleased || !frame.leftDown)) {
-        QDR_PROFILE_SCOPE("Viewport selection finish box");
-        const quader_editor_core::SelectionBoxCommit commit =
-                quader_editor_core::finish_selection_box(
-                        boxState_,
-                        frame.input.mouseLocal,
-                        selectionBoxOperation(boxEdit_));
-        const QuaderHoverTarget hoveredBeforeSelection =
-                boxHoveredBeforeSelection_.value_or(editor.selection().hoverSummary().target);
-        if (commit.dragged) {
-            committedMarquee_ = boxMarquee(commit.start, commit.end);
-            if (!liveBoxSelection_.has_value() || !sameMarquee(*liveBoxSelection_, *committedMarquee_)) {
-                (void)boxSelection(
-                        editor,
-                        frame.inputRouter,
-                        frame,
-                        commit.start,
-                        commit.end,
-                        boxEdit_,
-                        boxBaseline_ ? &*boxBaseline_ : nullptr);
-            }
-            suppressHoverAfterSelection(commit.end, hoveredBeforeSelection);
-        } else if (canPick) {
-            const QuaderSelectionSummary summary = pickSelection(
-                    editor,
-                    frame.inputRouter,
-                    frame,
-                    frame.leftClickLocal,
-                    std::max(1, frame.leftClickCount));
-            paintSelectionActive_ = isComponentSelectionMode(toModelingSelectionMode(summary.mode));
-            suppressHoverAfterSelection(frame.leftClickLocal, hoveredBeforeSelection);
-        }
-        boxEdit_ = QuaderSelectionEdit::Replace;
-        boxHoveredBeforeSelection_.reset();
-        boxBaseline_.reset();
-        liveBoxSelection_.reset();
+  if (!box_state_.active && can_pick && paint_selection_active_ &&
+      frame.left_down) {
+    QDR_PROFILE_SCOPE("Viewport paint selection");
+    const QuaderHoverTarget hovered_before_selection =
+        editor.selection().hover_summary().target;
+    const QuaderSelectionSummary summary = pick_selection(
+        editor, frame.input_router, frame, frame.input.mouse_local, 0);
+    paint_selection_active_ =
+        is_component_selection_mode(to_modeling_selection_mode(summary.mode));
+    suppress_hover_after_selection(frame.input.mouse_local,
+                                   hovered_before_selection);
+  }
+
+  const bool box_dragging = box_state_.active && box_state_.dragging;
+  const bool group_selection_mode =
+      frame.input_router.state().selection_mode == ViewportSelectionMode::Group;
+  if (group_selection_mode && !box_dragging && !frame.left_down) {
+    hover_suppressed_target_.reset();
+    if (!hover_clear_issued_) {
+      clear_hover();
     }
+    return;
+  }
 
-    if (frame.leftReleased || !frame.leftDown) {
-        if (boxState_.active) {
-            quader_editor_core::clear_selection_box(boxState_);
-        }
-        paintSelectionActive_ = false;
+  const bool can_hover = selection_fallback_active &&
+                         frame.input.viewport_hovered && !suppress_hover_work &&
+                         !box_dragging && !frame.left_down &&
+                         !tool_result.handled;
+
+  bool hover_suppressed_this_frame = false;
+  if (can_hover && hover_suppressed_target_.has_value()) {
+    const QuaderHoverSummary hover = editor.selection().preview_hover(
+        make_hover_request(frame.camera, frame.settings,
+                           frame.input.mouse_local, frame.input.modifiers));
+    if (hover_target_valid(hover.target) &&
+        hover_targets_match(*hover_suppressed_target_, hover.target)) {
+      if (!frame.input.modifiers.primary) {
+        clear_hover();
+        hover_suppressed_this_frame = true;
+      }
+    } else {
+      hover_suppressed_target_.reset();
     }
+  }
 
-    if (!boxState_.active && canPick && paintSelectionActive_ && frame.leftDown) {
-        QDR_PROFILE_SCOPE("Viewport paint selection");
-        const QuaderHoverTarget hoveredBeforeSelection = editor.selection().hoverSummary().target;
-        const QuaderSelectionSummary summary = pickSelection(
-                editor,
-                frame.inputRouter,
-                frame,
-                frame.input.mouseLocal,
-                0);
-        paintSelectionActive_ = isComponentSelectionMode(toModelingSelectionMode(summary.mode));
-        suppressHoverAfterSelection(frame.input.mouseLocal, hoveredBeforeSelection);
+  if (can_hover && !hover_suppressed_this_frame) {
+    QDR_PROFILE_SCOPE("Viewport hover selection");
+    const QuaderApiResult<QuaderHoverSummary> hover = editor.selection().hover(
+        make_hover_request(frame.camera, frame.settings,
+                           frame.input.mouse_local, frame.input.modifiers));
+    if (!hover.ok) {
+      LOG_ERROR("Viewport hover failed: {}",
+                hover.message.empty() ? "Hover failed." : hover.message);
     }
+    hover_clear_issued_ = false;
+    return;
+  }
 
-    const bool boxDragging = boxState_.active && boxState_.dragging;
-    const bool groupSelectionMode = frame.inputRouter.state().selectionMode == ViewportSelectionMode::Group;
-    if (groupSelectionMode && !boxDragging && !frame.leftDown) {
-        hoverSuppressedTarget_.reset();
-        if (!hoverClearIssued_) {
-            clearHover();
-        }
-        return;
-    }
-
-    const bool canHover =
-            selectionFallbackActive &&
-            frame.input.viewportHovered &&
-            !suppressHoverWork &&
-            !boxDragging &&
-            !frame.leftDown &&
-            !toolResult.handled;
-
-    bool hoverSuppressedThisFrame = false;
-    if (canHover && hoverSuppressedTarget_.has_value()) {
-        const QuaderHoverSummary hover =
-                editor.selection().previewHover(makeHoverRequest(
-                        frame.camera,
-                        frame.settings,
-                        frame.input.mouseLocal,
-                        frame.input.modifiers));
-        if (hoverTargetValid(hover.target) && hoverTargetsMatch(*hoverSuppressedTarget_, hover.target)) {
-            if (!frame.input.modifiers.primary) {
-                clearHover();
-                hoverSuppressedThisFrame = true;
-            }
-        } else {
-            hoverSuppressedTarget_.reset();
-        }
-    }
-
-    if (canHover && !hoverSuppressedThisFrame) {
-        QDR_PROFILE_SCOPE("Viewport hover selection");
-        const QuaderApiResult<QuaderHoverSummary> hover =
-                editor.selection().hover(makeHoverRequest(
-                        frame.camera,
-                        frame.settings,
-                        frame.input.mouseLocal,
-                        frame.input.modifiers));
-        if (!hover.ok) {
-            LOG_ERROR("Viewport hover failed: {}", hover.message.empty() ? "Hover failed." : hover.message);
-        }
-        hoverClearIssued_ = false;
-        return;
-    }
-
-    const bool shouldClearHover =
-            !frame.input.viewportHovered ||
-            !selectionFallbackActive ||
-            frame.input.textInputActive ||
-            frame.input.modalToolActive ||
-            frame.input.activeToolOwnsViewport;
-    if (!hoverClearIssued_ && shouldClearHover) {
-        hoverSuppressedTarget_.reset();
-        clearHover();
-    }
+  const bool should_clear_hover =
+      !frame.input.viewport_hovered || !selection_fallback_active ||
+      frame.input.text_input_active || frame.input.modal_tool_active ||
+      frame.input.active_tool_owns_viewport;
+  if (!hover_clear_issued_ && should_clear_hover) {
+    hover_suppressed_target_.reset();
+    clear_hover();
+  }
 }
 
-QuaderSelectionSummary ViewportSelectionInteraction::pickContextMenuTarget(
-        QuaderEditorApi& editor,
-        const ViewportInteractionFrame& frame) {
-    const QuaderSelectionSummary summary = pickSelection(
-            editor,
-            frame.inputRouter,
-            frame,
-            frame.input.mouseLocal,
-            1,
-            true,
-            true,
-            true);
-    paintSelectionActive_ = isComponentSelectionMode(toModelingSelectionMode(summary.mode));
-    hoverClearIssued_ = false;
-    hoverSuppressedTarget_.reset();
-    return summary;
+QuaderSelectionSummary ViewportSelectionInteraction::pick_context_menu_target(
+    QuaderEditorApi &editor, const ViewportInteractionFrame &frame) {
+  const QuaderSelectionSummary summary =
+      pick_selection(editor, frame.input_router, frame, frame.input.mouse_local,
+                     1, true, true, true);
+  paint_selection_active_ =
+      is_component_selection_mode(to_modeling_selection_mode(summary.mode));
+  hover_clear_issued_ = false;
+  hover_suppressed_target_.reset();
+  return summary;
 }
 
 } // namespace quader

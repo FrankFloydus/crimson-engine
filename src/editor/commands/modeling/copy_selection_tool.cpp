@@ -10,8 +10,8 @@
 
 namespace quader {
 
-ModelingCommandResult CopySelectionTool::executeCustomCommand(ModelingCommandExecutionContext& context) const {
-    return context.modeling.copySelection();
+ModelingCommandResult CopySelectionTool::execute_custom_command(ModelingCommandExecutionContext& context) const {
+  return context.modeling.copy_selection();
 }
 
 } // namespace quader

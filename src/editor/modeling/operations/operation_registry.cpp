@@ -24,55 +24,67 @@ EditorOperationRegistryEntry operation_entry(const EditorOperation& operation, s
 
 std::span<const EditorOperationRegistryEntry> operation_registry_entries()
 {
-	static const std::array<EditorOperationRegistryEntry, 33> entries {{
-		operation_entry(bridge_operation(), "BridgeOperation"),
-		operation_entry(edge_bevel_operation(), "EdgeBevelOperation"),
-		operation_entry(thicken_operation(), "ThickenOperation"),
-		operation_entry(slice_quad_operation(), "SliceQuadOperation"),
-		operation_entry(merge_by_distance_operation(), "MergeByDistanceOperation"),
-		operation_entry(bevel_vertices_operation(), "BevelVerticesOperation"),
-		operation_entry(duplicate_meshes_operation(), "DuplicateMeshesOperation"),
-		operation_entry(connect_vertices_operation(), "ConnectVerticesOperation"),
-		operation_entry(dissolve_vertices_operation(), "DissolveVerticesOperation"),
-		operation_entry(connect_edges_operation(), "ConnectEdgesOperation"),
-		operation_entry(split_edges_operation(), "SplitEdgesOperation"),
-		operation_entry(dissolve_edges_operation(), "DissolveEdgesOperation"),
-		operation_entry(merge_edges_operation(), "MergeEdgesOperation"),
-		operation_entry(collapse_edges_operation(), "CollapseEdgesOperation"),
-		operation_entry(fill_hole_operation(), "FillHoleOperation"),
-		operation_entry(combine_faces_operation(), "CombineFacesOperation"),
-		operation_entry(collapse_faces_operation(), "CollapseFacesOperation"),
-		operation_entry(radial_align_operation(), "RadialAlignOperation"),
-		operation_entry(flip_face_normals_operation(), "FlipFaceNormalsOperation"),
-		operation_entry(shade_faces_smooth_operation(), "ShadeFacesSmoothOperation"),
-		operation_entry(shade_faces_flat_operation(), "ShadeFacesFlatOperation"),
-		operation_entry(harden_edge_normals_operation(), "HardenEdgeNormalsOperation"),
-		operation_entry(soften_edge_normals_operation(), "SoftenEdgeNormalsOperation"),
-		operation_entry(combine_meshes_operation(), "CombineMeshesOperation"),
-		operation_entry(extract_faces_operation(), "ExtractFacesOperation"),
-		operation_entry(detach_faces_operation(), "DetachFacesOperation"),
-		operation_entry(snap_vertices_to_active_operation(), "SnapVerticesToActiveOperation"),
-		operation_entry(snap_edges_to_active_operation(), "SnapEdgesToActiveOperation"),
-		operation_entry(merge_vertices_to_active_operation(), "MergeVerticesToActiveOperation"),
-		operation_entry(merge_vertices_to_center_operation(), "MergeVerticesToCenterOperation"),
-		operation_entry(recalculate_face_normals_operation(), "RecalculateFaceNormalsOperation"),
-		operation_entry(assign_material_operation(), "AssignMaterialOperation"),
-		operation_entry(delete_selection_operation(), "DeleteSelectionOperation"),
-	}};
-	return entries;
+  static const std::array<EditorOperationRegistryEntry, 33> kEntries{{
+      operation_entry(bridge_operation(), "BridgeOperation"),
+      operation_entry(edge_bevel_operation(), "EdgeBevelOperation"),
+      operation_entry(thicken_operation(), "ThickenOperation"),
+      operation_entry(slice_quad_operation(), "SliceQuadOperation"),
+      operation_entry(merge_by_distance_operation(),
+                      "MergeByDistanceOperation"),
+      operation_entry(bevel_vertices_operation(), "BevelVerticesOperation"),
+      operation_entry(duplicate_meshes_operation(), "DuplicateMeshesOperation"),
+      operation_entry(connect_vertices_operation(), "ConnectVerticesOperation"),
+      operation_entry(dissolve_vertices_operation(),
+                      "DissolveVerticesOperation"),
+      operation_entry(connect_edges_operation(), "ConnectEdgesOperation"),
+      operation_entry(split_edges_operation(), "SplitEdgesOperation"),
+      operation_entry(dissolve_edges_operation(), "DissolveEdgesOperation"),
+      operation_entry(merge_edges_operation(), "MergeEdgesOperation"),
+      operation_entry(collapse_edges_operation(), "CollapseEdgesOperation"),
+      operation_entry(fill_hole_operation(), "FillHoleOperation"),
+      operation_entry(combine_faces_operation(), "CombineFacesOperation"),
+      operation_entry(collapse_faces_operation(), "CollapseFacesOperation"),
+      operation_entry(radial_align_operation(), "RadialAlignOperation"),
+      operation_entry(flip_face_normals_operation(),
+                      "FlipFaceNormalsOperation"),
+      operation_entry(shade_faces_smooth_operation(),
+                      "ShadeFacesSmoothOperation"),
+      operation_entry(shade_faces_flat_operation(), "ShadeFacesFlatOperation"),
+      operation_entry(harden_edge_normals_operation(),
+                      "HardenEdgeNormalsOperation"),
+      operation_entry(soften_edge_normals_operation(),
+                      "SoftenEdgeNormalsOperation"),
+      operation_entry(combine_meshes_operation(), "CombineMeshesOperation"),
+      operation_entry(extract_faces_operation(), "ExtractFacesOperation"),
+      operation_entry(detach_faces_operation(), "DetachFacesOperation"),
+      operation_entry(snap_vertices_to_active_operation(),
+                      "SnapVerticesToActiveOperation"),
+      operation_entry(snap_edges_to_active_operation(),
+                      "SnapEdgesToActiveOperation"),
+      operation_entry(merge_vertices_to_active_operation(),
+                      "MergeVerticesToActiveOperation"),
+      operation_entry(merge_vertices_to_center_operation(),
+                      "MergeVerticesToCenterOperation"),
+      operation_entry(recalculate_face_normals_operation(),
+                      "RecalculateFaceNormalsOperation"),
+      operation_entry(assign_material_operation(), "AssignMaterialOperation"),
+      operation_entry(delete_selection_operation(), "DeleteSelectionOperation"),
+  }};
+  return kEntries;
 }
 
 std::span<const EditorOperation* const> operation_entries()
 {
-	static const std::array<const EditorOperation*, 33> operations = [] {
-		std::array<const EditorOperation*, 33> result {};
-		const std::span<const EditorOperationRegistryEntry> entries = operation_registry_entries();
-		for (std::size_t index = 0; index < entries.size(); ++index) {
-			result[index] = entries[index].operation;
-		}
-		return result;
-	}();
-	return operations;
+  static const std::array<const EditorOperation *, 33> kOperations = [] {
+    std::array<const EditorOperation *, 33> result{};
+    const std::span<const EditorOperationRegistryEntry> entries =
+        operation_registry_entries();
+    for (std::size_t index = 0; index < entries.size(); ++index) {
+      result[index] = entries[index].operation;
+    }
+    return result;
+  }();
+  return kOperations;
 }
 
 } // namespace
@@ -109,8 +121,8 @@ const EditorOperation *OperationRegistry::find(std::string_view id) const
 
 const OperationRegistry& operation_registry()
 {
-	static const OperationRegistry registry;
-	return registry;
+  static const OperationRegistry kRegistry;
+  return kRegistry;
 }
 
 std::span<const EditorOperation* const> editor_operation_registry()

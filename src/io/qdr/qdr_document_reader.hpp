@@ -21,7 +21,7 @@ struct QdrProjectReadResult {
     bool ok = false;
     ProjectDocument document;
     std::string message;
-    bool migratedLegacySession = false;
+    bool migrated_legacy_session = false;
 };
 
 /**
@@ -29,8 +29,10 @@ struct QdrProjectReadResult {
  */
 class QdrDocumentReader final {
 public:
-    [[nodiscard]] static QdrProjectReadResult deserializeProjectDocument(std::string_view text);
-    [[nodiscard]] static QdrProjectReadResult readProjectDocument(const std::filesystem::path& path);
+  [[nodiscard]] static QdrProjectReadResult
+  deserialize_project_document(std::string_view text);
+  [[nodiscard]] static QdrProjectReadResult
+  read_project_document(const std::filesystem::path &path);
 };
 
 } // namespace quader

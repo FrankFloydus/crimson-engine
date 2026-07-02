@@ -46,10 +46,10 @@ bool is_known_panel(std::string_view id)
 		qhc::find_operation_panel_descriptor(id) != nullptr;
 }
 
-template <std::size_t N>
+template <std::size_t ExpectedSize>
 void check_toolbar_order(
 		std::string_view surface_id,
-		const std::array<std::string_view, N>& expected)
+		const std::array<std::string_view, ExpectedSize>& expected)
 {
 	std::size_t index = 0;
 	for (const qhc::HostUiPlacementDescriptor& placement : qhc::ui_placement_catalog()) {
@@ -58,8 +58,9 @@ void check_toolbar_order(
 		}
 		EXPECT_TRUE(index < expected.size());
 		EXPECT_TRUE(same_text(placement.target_id, expected[index]));
-		EXPECT_TRUE(placement.target_kind == qhc::HostUiPlacementTargetKind::tool);
-		++index;
+                EXPECT_TRUE(placement.target_kind ==
+                            qhc::HostUiPlacementTargetKind::Tool);
+                ++index;
 	}
 	EXPECT_TRUE(index == expected.size());
 }
@@ -72,26 +73,26 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractUISurfacesDescribeMenuAndToo
 
 	const qhc::HostUiSurfaceDescriptor& menu = require_surface("main_menu");
 	EXPECT_TRUE(same_text(menu.label, "Main Menu"));
-	EXPECT_TRUE(menu.kind == qhc::HostUiSurfaceKind::menu);
-	EXPECT_FALSE(menu.floating);
+        EXPECT_TRUE(menu.kind == qhc::HostUiSurfaceKind::Menu);
+        EXPECT_FALSE(menu.floating);
 	EXPECT_FALSE(menu.selection_contextual);
 
 	const qhc::HostUiSurfaceDescriptor& operations = require_surface("operations_top_bar");
 	EXPECT_TRUE(same_text(operations.label, "Operations Top Bar"));
-	EXPECT_TRUE(operations.kind == qhc::HostUiSurfaceKind::toolbar);
-	EXPECT_FALSE(operations.floating);
+        EXPECT_TRUE(operations.kind == qhc::HostUiSurfaceKind::Toolbar);
+        EXPECT_FALSE(operations.floating);
 	EXPECT_TRUE(operations.selection_contextual);
 
 	const qhc::HostUiSurfaceDescriptor& tools = require_surface("viewport_tool_toolbar");
 	EXPECT_TRUE(same_text(tools.label, "Viewport Tool Toolbar"));
-	EXPECT_TRUE(tools.kind == qhc::HostUiSurfaceKind::toolbar);
-	EXPECT_TRUE(tools.floating);
+        EXPECT_TRUE(tools.kind == qhc::HostUiSurfaceKind::Toolbar);
+        EXPECT_TRUE(tools.floating);
 	EXPECT_FALSE(tools.selection_contextual);
 
 	const qhc::HostUiSurfaceDescriptor& settings = require_surface("tool_settings_panel");
 	EXPECT_TRUE(same_text(settings.label, "Tool Settings Panel"));
-	EXPECT_TRUE(settings.kind == qhc::HostUiSurfaceKind::panel);
-	EXPECT_TRUE(settings.floating);
+        EXPECT_TRUE(settings.kind == qhc::HostUiSurfaceKind::Panel);
+        EXPECT_TRUE(settings.floating);
 	EXPECT_FALSE(settings.selection_contextual);
 }
 
@@ -104,14 +105,22 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractUIGroupsAndShellTargetsAreDi
 
 	const std::span<const qhc::HostInteractionDescriptor> interactions = qhc::interaction_catalog();
 	EXPECT_TRUE(interactions.size() == 38U);
-	EXPECT_TRUE(has_interaction_kind("open_editor", qhc::HostInteractionKind::editor_action));
-	EXPECT_TRUE(has_interaction_kind("apply_active_material", qhc::HostInteractionKind::editor_action));
-	EXPECT_TRUE(has_interaction_kind("save_as_document", qhc::HostInteractionKind::editor_action));
-	EXPECT_TRUE(has_interaction_kind("layout_four_view_quad", qhc::HostInteractionKind::viewport_action));
-	EXPECT_TRUE(has_interaction_kind("active_preview_commit_or_cancel", qhc::HostInteractionKind::preview_action));
-	EXPECT_TRUE(has_interaction_kind("active_modal_tool_precedence", qhc::HostInteractionKind::input_policy));
+        EXPECT_TRUE(has_interaction_kind(
+            "open_editor", qhc::HostInteractionKind::EditorAction));
+        EXPECT_TRUE(has_interaction_kind(
+            "apply_active_material", qhc::HostInteractionKind::EditorAction));
+        EXPECT_TRUE(has_interaction_kind(
+            "save_as_document", qhc::HostInteractionKind::EditorAction));
+        EXPECT_TRUE(has_interaction_kind(
+            "layout_four_view_quad", qhc::HostInteractionKind::ViewportAction));
+        EXPECT_TRUE(
+            has_interaction_kind("active_preview_commit_or_cancel",
+                                 qhc::HostInteractionKind::PreviewAction));
+        EXPECT_TRUE(
+            has_interaction_kind("active_modal_tool_precedence",
+                                 qhc::HostInteractionKind::InputPolicy));
 
-	const qhc::HostToolGroupDescriptor *transform_group = qhc::find_tool_group_descriptor("transform_tools");
+        const qhc::HostToolGroupDescriptor *transform_group = qhc::find_tool_group_descriptor("transform_tools");
 	EXPECT_TRUE(transform_group != nullptr);
 	EXPECT_TRUE(transform_group->tool_ids.size() == 3U);
 	EXPECT_TRUE(same_text(transform_group->tool_ids[0], "move"));
@@ -144,27 +153,35 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractUIPlacementsResolveToKnownDe
 		EXPECT_TRUE(qhc::find_ui_group_descriptor(placement.group_id) != nullptr);
 
 		switch (placement.target_kind) {
-			case qhc::HostUiPlacementTargetKind::action:
-				EXPECT_TRUE(qhc::find_action_descriptor(placement.target_id) != nullptr);
-				break;
-			case qhc::HostUiPlacementTargetKind::tool:
-				EXPECT_TRUE(qhc::find_tool_descriptor(placement.target_id) != nullptr);
-				break;
-			case qhc::HostUiPlacementTargetKind::selection_mode:
-				EXPECT_TRUE(qhc::find_selection_mode_descriptor(placement.target_id) != nullptr);
-				break;
-			case qhc::HostUiPlacementTargetKind::editor_action:
-				EXPECT_TRUE(has_interaction_kind(placement.target_id, qhc::HostInteractionKind::editor_action));
-				break;
-			case qhc::HostUiPlacementTargetKind::viewport_action:
-				EXPECT_TRUE(has_interaction_kind(placement.target_id, qhc::HostInteractionKind::viewport_action));
-				break;
-			case qhc::HostUiPlacementTargetKind::panel:
-				EXPECT_TRUE(is_known_panel(placement.target_id));
-				break;
-			case qhc::HostUiPlacementTargetKind::preference_group:
-				EXPECT_TRUE(qhc::find_preference_group_descriptor(placement.target_id) != nullptr);
-				break;
+                case qhc::HostUiPlacementTargetKind::Action:
+                  EXPECT_TRUE(qhc::find_action_descriptor(
+                                  placement.target_id) != nullptr);
+                  break;
+                case qhc::HostUiPlacementTargetKind::Tool:
+                  EXPECT_TRUE(qhc::find_tool_descriptor(placement.target_id) !=
+                              nullptr);
+                  break;
+                case qhc::HostUiPlacementTargetKind::SelectionMode:
+                  EXPECT_TRUE(qhc::find_selection_mode_descriptor(
+                                  placement.target_id) != nullptr);
+                  break;
+                case qhc::HostUiPlacementTargetKind::EditorAction:
+                  EXPECT_TRUE(has_interaction_kind(
+                      placement.target_id,
+                      qhc::HostInteractionKind::EditorAction));
+                  break;
+                case qhc::HostUiPlacementTargetKind::ViewportAction:
+                  EXPECT_TRUE(has_interaction_kind(
+                      placement.target_id,
+                      qhc::HostInteractionKind::ViewportAction));
+                  break;
+                case qhc::HostUiPlacementTargetKind::Panel:
+                  EXPECT_TRUE(is_known_panel(placement.target_id));
+                  break;
+                case qhc::HostUiPlacementTargetKind::PreferenceGroup:
+                  EXPECT_TRUE(qhc::find_preference_group_descriptor(
+                                  placement.target_id) != nullptr);
+                  break;
 		}
 	}
 }
@@ -173,8 +190,9 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractMainMenuPlacementPreservesEd
 	const qhc::HostUiPlacementDescriptor& open_editor = require_placement("menu_open_editor");
 	EXPECT_TRUE(same_text(open_editor.surface_id, "main_menu"));
 	EXPECT_TRUE(same_text(open_editor.group_id, "editor"));
-	EXPECT_TRUE(open_editor.target_kind == qhc::HostUiPlacementTargetKind::editor_action);
-	EXPECT_TRUE(same_text(open_editor.target_id, "open_editor"));
+        EXPECT_TRUE(open_editor.target_kind ==
+                    qhc::HostUiPlacementTargetKind::EditorAction);
+        EXPECT_TRUE(same_text(open_editor.target_id, "open_editor"));
 	EXPECT_TRUE(open_editor.order == 0U);
 	EXPECT_FALSE(open_editor.separator_before);
 
@@ -187,14 +205,16 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractMainMenuPlacementPreservesEd
 
 	const qhc::HostUiPlacementDescriptor& layout = require_placement("menu_layout_single_view");
 	EXPECT_TRUE(same_text(layout.group_id, "viewport_layout"));
-	EXPECT_TRUE(layout.target_kind == qhc::HostUiPlacementTargetKind::viewport_action);
-	EXPECT_FALSE(layout.separator_before);
+        EXPECT_TRUE(layout.target_kind ==
+                    qhc::HostUiPlacementTargetKind::ViewportAction);
+        EXPECT_FALSE(layout.separator_before);
 	EXPECT_TRUE(layout.order < require_placement("menu_layout_four_view_quad").order);
 
 	const qhc::HostUiPlacementDescriptor& settings = require_placement("menu_viewport_settings_panel");
 	EXPECT_TRUE(same_text(settings.group_id, "panels"));
-	EXPECT_TRUE(settings.target_kind == qhc::HostUiPlacementTargetKind::panel);
-	EXPECT_TRUE(same_text(settings.target_id, "viewport_settings"));
+        EXPECT_TRUE(settings.target_kind ==
+                    qhc::HostUiPlacementTargetKind::Panel);
+        EXPECT_TRUE(same_text(settings.target_id, "viewport_settings"));
 	EXPECT_FALSE(settings.separator_before);
 }
 
@@ -221,12 +241,14 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractOperationTopBarPlacesSelecti
 	const qhc::HostUiPlacementDescriptor& edge = require_placement("operations_edge_panel");
 	const qhc::HostUiPlacementDescriptor& face = require_placement("operations_face_panel");
 
-	EXPECT_TRUE(object.target_kind == qhc::HostUiPlacementTargetKind::panel);
-	EXPECT_TRUE(vertex.target_kind == qhc::HostUiPlacementTargetKind::panel);
-	EXPECT_TRUE(edge.target_kind == qhc::HostUiPlacementTargetKind::panel);
-	EXPECT_TRUE(face.target_kind == qhc::HostUiPlacementTargetKind::panel);
+        EXPECT_TRUE(object.target_kind ==
+                    qhc::HostUiPlacementTargetKind::Panel);
+        EXPECT_TRUE(vertex.target_kind ==
+                    qhc::HostUiPlacementTargetKind::Panel);
+        EXPECT_TRUE(edge.target_kind == qhc::HostUiPlacementTargetKind::Panel);
+        EXPECT_TRUE(face.target_kind == qhc::HostUiPlacementTargetKind::Panel);
 
-	EXPECT_TRUE(qhc::find_operation_panel_descriptor(object.target_id) != nullptr);
+        EXPECT_TRUE(qhc::find_operation_panel_descriptor(object.target_id) != nullptr);
 	EXPECT_TRUE(qhc::find_operation_panel_descriptor(vertex.target_id) != nullptr);
 	EXPECT_TRUE(qhc::find_operation_panel_descriptor(edge.target_id) != nullptr);
 	EXPECT_TRUE(qhc::find_operation_panel_descriptor(face.target_id) != nullptr);
@@ -247,20 +269,27 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractToolSettingsPanelPlacesPrevi
 	EXPECT_TRUE(same_text(bridge.surface_id, "tool_settings_panel"));
 	EXPECT_TRUE(same_text(bridge.target_id, "operation.bridge"));
 	EXPECT_TRUE(same_text(bridge.label, "Interpolated Bridge"));
-	EXPECT_TRUE(bridge.visibility == qhc::HostUiVisibilityCondition::bridge_preview_active);
+        EXPECT_TRUE(bridge.visibility ==
+                    qhc::HostUiVisibilityCondition::BridgePreviewActive);
 
-	EXPECT_TRUE(same_text(edge_bevel.target_id, "operation.edge_bevel"));
-	EXPECT_TRUE(edge_bevel.visibility == qhc::HostUiVisibilityCondition::edge_bevel_preview_active);
-	EXPECT_TRUE(same_text(thicken.target_id, "operation.thicken"));
-	EXPECT_TRUE(thicken.visibility == qhc::HostUiVisibilityCondition::thicken_preview_active);
-	EXPECT_TRUE(same_text(slice_quad.target_id, "operation.slice_quad"));
-	EXPECT_TRUE(slice_quad.visibility == qhc::HostUiVisibilityCondition::slice_quad_preview_active);
-	EXPECT_TRUE(same_text(merge_by_distance.target_id, "operation.merge_by_distance"));
-	EXPECT_TRUE(merge_by_distance.visibility == qhc::HostUiVisibilityCondition::merge_by_distance_preview_active);
-	EXPECT_TRUE(same_text(cut.target_id, "operation.cut"));
-	EXPECT_TRUE(cut.visibility == qhc::HostUiVisibilityCondition::cut_tool_active);
+        EXPECT_TRUE(same_text(edge_bevel.target_id, "operation.edge_bevel"));
+        EXPECT_TRUE(edge_bevel.visibility ==
+                    qhc::HostUiVisibilityCondition::EdgeBevelPreviewActive);
+        EXPECT_TRUE(same_text(thicken.target_id, "operation.thicken"));
+        EXPECT_TRUE(thicken.visibility ==
+                    qhc::HostUiVisibilityCondition::ThickenPreviewActive);
+        EXPECT_TRUE(same_text(slice_quad.target_id, "operation.slice_quad"));
+        EXPECT_TRUE(slice_quad.visibility ==
+                    qhc::HostUiVisibilityCondition::SliceQuadPreviewActive);
+        EXPECT_TRUE(same_text(merge_by_distance.target_id, "operation.merge_by_distance"));
+        EXPECT_TRUE(
+            merge_by_distance.visibility ==
+            qhc::HostUiVisibilityCondition::MergeByDistancePreviewActive);
+        EXPECT_TRUE(same_text(cut.target_id, "operation.cut"));
+        EXPECT_TRUE(cut.visibility ==
+                    qhc::HostUiVisibilityCondition::CutToolActive);
 
-	EXPECT_TRUE(bridge.order < edge_bevel.order);
+        EXPECT_TRUE(bridge.order < edge_bevel.order);
 	EXPECT_TRUE(edge_bevel.order < thicken.order);
 	EXPECT_TRUE(thicken.order < slice_quad.order);
 	EXPECT_TRUE(slice_quad.order < merge_by_distance.order);

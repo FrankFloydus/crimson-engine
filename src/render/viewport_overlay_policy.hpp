@@ -35,10 +35,10 @@ enum class ViewportOverlayDepthMode {
  */
 struct ViewportOverlayLayerPolicy {
     ViewportOverlayLayer layer = ViewportOverlayLayer::SourceWire;
-    int drawOrder = 0;
-    bool depthStampedFaceFill = false;
-    bool writesTransientHoverSuppressionMask = false;
-    bool suppressedByTransientHover = false;
+    int draw_order = 0;
+    bool depth_stamped_face_fill = false;
+    bool writes_transient_hover_suppression_mask = false;
+    bool suppressed_by_transient_hover = false;
 };
 
 inline constexpr std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> kViewportOverlayDrawOrder{{
@@ -147,27 +147,39 @@ inline constexpr float kOverlaySelectedVertexGrowthPixels = 0.5f;
 inline constexpr float kOverlayHoverVertexGrowthPixels = 0.5f;
 inline constexpr float kOverlayVertexOutlineSizePixels = 1.0f;
 
-int viewportOverlayDrawOrder(ViewportOverlayLayer layer);
-bool viewportOverlayLayerUsesDepthStampedFaceFill(ViewportOverlayLayer layer);
-bool viewportOverlayLayerUsesDepthOnlyFaceFill(ViewportOverlayLayer layer);
-bool viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer layer);
-bool viewportOverlayLineDrawsOnTop(ViewportOverlayLayer layer);
-bool viewportOverlayPointDrawsOnTop(ViewportOverlayLayer layer);
-ViewportOverlayDepthMode viewportOverlayDepthMode(ViewportOverlayLayer layer, ViewportOverlayGeometryKind kind);
-bool viewportOverlayDepthTested(ViewportOverlayLayer layer, ViewportOverlayGeometryKind kind);
-float viewportOverlayDepthBias(ViewportOverlayLayer layer, ViewportOverlayGeometryKind kind);
-bool viewportOverlayLayerWritesTransientHoverSuppressionMask(ViewportOverlayLayer layer);
-bool viewportOverlayLayerIsSuppressedByTransientHover(ViewportOverlayLayer layer);
-ViewportOverlayLayerPolicy viewportOverlayLayerPolicy(ViewportOverlayLayer layer);
-float viewportOverlayLineWidthPixels(ViewportOverlayLayer layer, float nativeWidthPixels = 1.0f);
-float viewportOverlayPointSizePixels(ViewportOverlayLayer layer, float nativeSizePixels = 8.0f);
-float viewportOverlayPointOutlineGrowthPixels(ViewportOverlayLayer layer);
-bool viewportOverlayPointHasOutline(ViewportOverlayLayer layer);
-bool viewportOverlayPointIsOutlineOnly(ViewportOverlayLayer layer);
-float viewportOverlayPointInnerRadius(ViewportOverlayLayer layer);
-bool viewportOverlayColorApproximately(std::uint32_t a, std::uint32_t b);
-bool viewportOverlayIsNativeRemoveColor(std::uint32_t color);
-bool viewportOverlayIsNativeSelectionWireColor(std::uint32_t color);
-std::uint32_t viewportOverlayColorFor(ViewportOverlayLayer layer, std::uint32_t originalRgba);
+int viewport_overlay_draw_order(ViewportOverlayLayer layer);
+bool viewport_overlay_layer_uses_depth_stamped_face_fill(
+    ViewportOverlayLayer layer);
+bool viewport_overlay_layer_uses_depth_only_face_fill(
+    ViewportOverlayLayer layer);
+bool viewport_overlay_triangle_is_two_sided(ViewportOverlayLayer layer);
+bool viewport_overlay_line_draws_on_top(ViewportOverlayLayer layer);
+bool viewport_overlay_point_draws_on_top(ViewportOverlayLayer layer);
+ViewportOverlayDepthMode
+viewport_overlay_depth_mode(ViewportOverlayLayer layer,
+                            ViewportOverlayGeometryKind kind);
+bool viewport_overlay_depth_tested(ViewportOverlayLayer layer,
+                                   ViewportOverlayGeometryKind kind);
+float viewport_overlay_depth_bias(ViewportOverlayLayer layer,
+                                  ViewportOverlayGeometryKind kind);
+bool viewport_overlay_layer_writes_transient_hover_suppression_mask(
+    ViewportOverlayLayer layer);
+bool viewport_overlay_layer_is_suppressed_by_transient_hover(
+    ViewportOverlayLayer layer);
+ViewportOverlayLayerPolicy
+viewport_overlay_layer_policy(ViewportOverlayLayer layer);
+float viewport_overlay_line_width_pixels(ViewportOverlayLayer layer,
+                                         float native_width_pixels = 1.0f);
+float viewport_overlay_point_size_pixels(ViewportOverlayLayer layer,
+                                         float native_size_pixels = 8.0f);
+float viewport_overlay_point_outline_growth_pixels(ViewportOverlayLayer layer);
+bool viewport_overlay_point_has_outline(ViewportOverlayLayer layer);
+bool viewport_overlay_point_is_outline_only(ViewportOverlayLayer layer);
+float viewport_overlay_point_inner_radius(ViewportOverlayLayer layer);
+bool viewport_overlay_color_approximately(std::uint32_t a, std::uint32_t b);
+bool viewport_overlay_is_native_remove_color(std::uint32_t color);
+bool viewport_overlay_is_native_selection_wire_color(std::uint32_t color);
+std::uint32_t viewport_overlay_color_for(ViewportOverlayLayer layer,
+                                         std::uint32_t original_rgba);
 
 } // namespace quader

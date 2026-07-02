@@ -16,20 +16,21 @@ namespace quader {
 class AssignMaterialTool final : public CustomInstantCommandTool {
 public:
     [[nodiscard]] CommandToolDescriptor descriptor() const override {
-        return {
-                .id = "assign_material",
-                .operationId = "assign_material",
-                .label = "Assign Material",
-                .kind = CommandToolKind::Instant,
-                .previewKind = ModelingActionPreviewKind::None,
-                .rebuildsMeshOnSuccess = true,
-                .publicCommandId = "edit.apply_material",
-                .registersPublicCommand = false,
-        };
+      return {
+          .id = "assign_material",
+          .operation_id = "assign_material",
+          .label = "Assign Material",
+          .kind = CommandToolKind::Instant,
+          .preview_kind = ModelingActionPreviewKind::None,
+          .rebuilds_mesh_on_success = true,
+          .public_command_id = "edit.apply_material",
+          .registers_public_command = false,
+      };
     }
 
 private:
-    ModelingCommandResult executeCustomCommand(ModelingCommandExecutionContext& context) const override;
+  ModelingCommandResult execute_custom_command(
+      ModelingCommandExecutionContext &context) const override;
 };
 
 } // namespace quader

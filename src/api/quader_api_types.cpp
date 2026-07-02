@@ -39,17 +39,19 @@ QuaderPolygonDocument::QuaderPolygonDocument(std::shared_ptr<QuaderPolygonDocume
     }
 }
 
-QuaderPolygonDocument QuaderPolygonDocumentInternalAccess::fromBackend(quader_poly::Document document) {
-    auto storage = std::make_shared<QuaderPolygonDocumentStorage>();
-    storage->document = std::move(document);
-    return QuaderPolygonDocument(std::move(storage));
+QuaderPolygonDocument QuaderPolygonDocumentInternalAccess::from_backend(
+    quader_poly::Document document) {
+  auto storage = std::make_shared<QuaderPolygonDocumentStorage>();
+  storage->document = std::move(document);
+  return QuaderPolygonDocument(std::move(storage));
 }
 
-quader_poly::Document QuaderPolygonDocumentInternalAccess::toBackend(const QuaderPolygonDocument& document) {
-    if (!document.storage_) {
-        return {};
-    }
-    return document.storage_->document;
+quader_poly::Document QuaderPolygonDocumentInternalAccess::to_backend(
+    const QuaderPolygonDocument &document) {
+  if (!document.storage_) {
+    return {};
+  }
+  return document.storage_->document;
 }
 
 } // namespace quader

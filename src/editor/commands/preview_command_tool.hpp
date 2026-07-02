@@ -19,46 +19,50 @@ namespace quader {
  */
 class PreviewCommandTool : public CommandTool {
 public:
-    [[nodiscard]] ModelingCommandHistoryPolicy historyPolicy() const override {
-        return ModelingCommandHistoryPolicy::none();
-    }
+  [[nodiscard]] ModelingCommandHistoryPolicy history_policy() const override {
+    return ModelingCommandHistoryPolicy::none();
+  }
 
-    [[nodiscard]] virtual std::string_view actionId() const = 0;
-    [[nodiscard]] virtual std::optional<ModelingActionItem> actionItem(
-            const ModelingCommandExecutionContext& context,
-            ModelingActionQuery query = defaultActionQuery()) const = 0;
-    virtual ModelingCommandResult beginPreview(ModelingCommandExecutionContext& context) const = 0;
+  [[nodiscard]] virtual std::string_view action_id() const = 0;
+  [[nodiscard]] virtual std::optional<ModelingActionItem>
+  action_item(const ModelingCommandExecutionContext &context,
+              ModelingActionQuery query = default_action_query()) const = 0;
+  virtual ModelingCommandResult
+  begin_preview(ModelingCommandExecutionContext &context) const = 0;
 
-    ModelingCommandResult execute(ModelingCommandExecutionContext& context) const final {
-        return beginPreview(context);
-    }
+  ModelingCommandResult
+  execute(ModelingCommandExecutionContext &context) const final {
+    return begin_preview(context);
+  }
 
-    ModelingCommandResult beginPreview(ModelingSessionService& modeling) const {
-        ModelingCommandExecutionContext context{.modeling = modeling};
-        return beginPreview(context);
-    }
+  ModelingCommandResult begin_preview(ModelingSessionService &modeling) const {
+    ModelingCommandExecutionContext context{.modeling = modeling};
+    return begin_preview(context);
+  }
 
-    ModelingCommandResult commitPreview(ModelingSessionService& modeling) const {
-        return modeling.commitActiveOperationPreview();
-    }
+  ModelingCommandResult commit_preview(ModelingSessionService &modeling) const {
+    return modeling.commit_active_operation_preview();
+  }
 
-    ModelingCommandResult cancelPreview(ModelingSessionService& modeling) const {
-        return modeling.cancelActiveOperationPreview();
-    }
+  ModelingCommandResult cancel_preview(ModelingSessionService &modeling) const {
+    return modeling.cancel_active_operation_preview();
+  }
 
-    ModelingCommandResult applySettings(ModelingSessionService& modeling, ModelingInteractionSettings settings) const {
-        return modeling.setInteractionSettings(settings);
-    }
+  ModelingCommandResult
+  apply_settings(ModelingSessionService &modeling,
+                 ModelingInteractionSettings settings) const {
+    return modeling.set_interaction_settings(settings);
+  }
 
 protected:
-    [[nodiscard]] static ModelingActionQuery defaultActionQuery() {
-        return {
-                .surface = ModelingActionSurface::OperationsPanel,
-                .modalToolOwnsViewport = false,
-                .includeDisabled = true,
-                .includeHidden = false,
-        };
-    }
+  [[nodiscard]] static ModelingActionQuery default_action_query() {
+    return {
+        .surface = ModelingActionSurface::OperationsPanel,
+        .modal_tool_owns_viewport = false,
+        .include_disabled = true,
+        .include_hidden = false,
+    };
+  }
 };
 
 } // namespace quader

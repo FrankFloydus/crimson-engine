@@ -20,24 +20,24 @@ class ViewportSettings;
  * Stores the Main Menu Bar Context data contract used by the ImGui editor presentation layer.
  */
 struct MainMenuBarContext {
-    bool& quitRequested;
-    QuaderEditorApi& editor;
-    SceneDocument& document;
-    ModelingSessionService& modeling;
-    ViewportPanel* viewportPanel = nullptr;
-    ViewportSettings& viewportSettings;
-    UIPanelManager& panels;
-    LocalizationService& localization;
-    bool& viewportSettingsPanelOpen;
+  bool &quit_requested;
+  QuaderEditorApi &editor;
+  SceneDocument &document;
+  ModelingSessionService &modeling;
+  ViewportPanel *viewport_panel = nullptr;
+  ViewportSettings &viewport_settings;
+  UIPanelManager &panels;
+  LocalizationService &localization;
+  bool &viewport_settings_panel_open;
 };
 
 /**
  * Stores the Main Menu Bar Result data contract used by the ImGui editor presentation layer.
  */
 struct MainMenuBarResult {
-    bool settingsChanged = false;
-    bool viewportSettingsChanged = false;
-    bool popupOpen = false;
+  bool settings_changed = false;
+  bool viewport_settings_changed = false;
+  bool popup_open = false;
 };
 
 /**
@@ -94,15 +94,15 @@ public:
 class MainMenuBar {
 public:
     MainMenuBarResult draw(MainMenuBarContext context) const;
-    MainMenuBarResult drawMenus(MainMenuBarContext context) const;
+    MainMenuBarResult draw_menus(MainMenuBarContext context) const;
 
-private:
-    FileMenu fileMenu_;
-    EditMenu editMenu_;
-    ToolsMenu toolsMenu_;
-    CreateMenu createMenu_;
-    ViewMenu viewMenu_;
-    LayoutMenu layoutMenu_;
+  private:
+    FileMenu file_menu_;
+    EditMenu edit_menu_;
+    ToolsMenu tools_menu_;
+    CreateMenu create_menu_;
+    ViewMenu view_menu_;
+    LayoutMenu layout_menu_;
 };
 
 } // namespace quader

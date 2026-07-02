@@ -35,26 +35,25 @@ struct ViewportSelectionMarquee {
 class ViewportSelectionInteraction {
 public:
     void reset();
-    void handleFrame(
-            QuaderEditorApi& editor,
-            const ViewportInteractionFrame& frame,
-            const ViewportToolResult& toolResult,
-            const ViewportBeforeToolInteractionResult& beforeTool);
-    [[nodiscard]] QuaderSelectionSummary pickContextMenuTarget(
-            QuaderEditorApi& editor,
-            const ViewportInteractionFrame& frame);
+    void handle_frame(QuaderEditorApi &editor,
+                      const ViewportInteractionFrame &frame,
+                      const ViewportToolResult &tool_result,
+                      const ViewportBeforeToolInteractionResult &before_tool);
+    [[nodiscard]] QuaderSelectionSummary
+    pick_context_menu_target(QuaderEditorApi &editor,
+                             const ViewportInteractionFrame &frame);
     [[nodiscard]] ViewportSelectionMarquee marquee() const;
 
 private:
-    bool hoverClearIssued_ = false;
-    quader_editor_core::SelectionBoxState boxState_;
-    QuaderSelectionEdit boxEdit_ = QuaderSelectionEdit::Replace;
-    std::optional<QuaderHoverTarget> boxHoveredBeforeSelection_;
-    std::optional<QuaderSelectionBoxBaseline> boxBaseline_;
-    std::optional<ViewportSelectionMarquee> committedMarquee_;
-    std::optional<ViewportSelectionMarquee> liveBoxSelection_;
-    std::optional<QuaderHoverTarget> hoverSuppressedTarget_;
-    bool paintSelectionActive_ = false;
+  bool hover_clear_issued_ = false;
+  quader_editor_core::SelectionBoxState box_state_;
+  QuaderSelectionEdit box_edit_ = QuaderSelectionEdit::Replace;
+  std::optional<QuaderHoverTarget> box_hovered_before_selection_;
+  std::optional<QuaderSelectionBoxBaseline> box_baseline_;
+  std::optional<ViewportSelectionMarquee> committed_marquee_;
+  std::optional<ViewportSelectionMarquee> live_box_selection_;
+  std::optional<QuaderHoverTarget> hover_suppressed_target_;
+  bool paint_selection_active_ = false;
 };
 
 } // namespace quader

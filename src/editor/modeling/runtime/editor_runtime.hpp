@@ -22,74 +22,74 @@
 
 namespace quader_editor_core {
 
-inline constexpr double default_editor_runtime_box_grid_size = 1.0;
+inline constexpr double kDefaultEditorRuntimeBoxGridSize = 1.0;
 
 /**
  * Stores the Editor Runtime State data contract used by the modeling runtime domain.
  */
 struct EditorRuntimeState {
-	ViewportInteractionTool active_tool = ViewportInteractionTool::select;
-	SelectionHoverState hover;
-	BoxToolState box;
-	double box_grid_size = default_editor_runtime_box_grid_size;
-	InsertEdgeLoopToolState insert_edge_loop;
-	KnifeToolState knife;
-	CutToolState cut;
-	CutHoverState cut_hover;
-	MirrorToolState mirror;
-	MirrorHoverState mirror_hover;
-	PolyToolState poly;
-	TransformDragState transform_drag;
-	std::vector<PolygonObject> clipboard_objects;
-	TransformAxis gizmo_hover_axis = TransformAxis::none;
+  ViewportInteractionTool active_tool = ViewportInteractionTool::Select;
+  SelectionHoverState hover;
+  BoxToolState box;
+  double box_grid_size = kDefaultEditorRuntimeBoxGridSize;
+  InsertEdgeLoopToolState insert_edge_loop;
+  KnifeToolState knife;
+  CutToolState cut;
+  CutHoverState cut_hover;
+  MirrorToolState mirror;
+  MirrorHoverState mirror_hover;
+  PolyToolState poly;
+  TransformDragState transform_drag;
+  std::vector<PolygonObject> clipboard_objects;
+  TransformAxis gizmo_hover_axis = TransformAxis::None;
 };
 
 /**
  * Represents an Editor Runtime Status value used by the modeling runtime domain.
  */
 struct EditorRuntimeStatus {
-	ViewportInteractionTool active_tool = ViewportInteractionTool::select;
-	TransformAxis gizmo_hover_axis = TransformAxis::none;
-	bool hover_active = false;
-	bool hover_has_candidate_object = false;
-	bool box_active = false;
-	double box_grid_size = default_editor_runtime_box_grid_size;
-	bool box_grid_at_default = true;
-	bool insert_edge_loop_active = false;
-	bool insert_edge_loop_dragging = false;
-	bool insert_edge_loop_has_preview = false;
-	bool knife_active = false;
-	bool knife_has_active_stroke = false;
-	bool knife_has_current = false;
-	bool knife_can_commit = false;
-	bool cut_active = false;
-	bool cut_can_preview = false;
-	bool cut_preview_valid = false;
-	int cut_point_count = 0;
-	bool mirror_active = false;
-	bool mirror_can_preview = false;
-	bool mirror_preview_valid = false;
-	int mirror_point_count = 0;
-	bool poly_active = false;
-	bool poly_closed = false;
-	bool poly_has_current = false;
-	bool poly_can_commit = false;
-	int poly_point_count = 0;
-	bool transform_drag_active = false;
-	bool clipboard_available = false;
-	std::size_t clipboard_object_count = 0;
+  ViewportInteractionTool active_tool = ViewportInteractionTool::Select;
+  TransformAxis gizmo_hover_axis = TransformAxis::None;
+  bool hover_active = false;
+  bool hover_has_candidate_object = false;
+  bool box_active = false;
+  double box_grid_size = kDefaultEditorRuntimeBoxGridSize;
+  bool box_grid_at_default = true;
+  bool insert_edge_loop_active = false;
+  bool insert_edge_loop_dragging = false;
+  bool insert_edge_loop_has_preview = false;
+  bool knife_active = false;
+  bool knife_has_active_stroke = false;
+  bool knife_has_current = false;
+  bool knife_can_commit = false;
+  bool cut_active = false;
+  bool cut_can_preview = false;
+  bool cut_preview_valid = false;
+  int cut_point_count = 0;
+  bool mirror_active = false;
+  bool mirror_can_preview = false;
+  bool mirror_preview_valid = false;
+  int mirror_point_count = 0;
+  bool poly_active = false;
+  bool poly_closed = false;
+  bool poly_has_current = false;
+  bool poly_can_commit = false;
+  int poly_point_count = 0;
+  bool transform_drag_active = false;
+  bool clipboard_available = false;
+  std::size_t clipboard_object_count = 0;
 };
 
 /**
  * Stores the Editor Runtime Tool Activation Request data contract used by the modeling runtime domain.
  */
 struct EditorRuntimeToolActivationRequest {
-	ViewportInteractionTool requested_tool = ViewportInteractionTool::select;
-	SelectionMode selection_mode = SelectionMode::object;
-	std::size_t selected_object_count = 0;
-	std::size_t selected_cut_target_object_count = 0;
-	bool transform_preview_active = false;
-	bool transform_preview_cleared = false;
+  ViewportInteractionTool requested_tool = ViewportInteractionTool::Select;
+  SelectionMode selection_mode = SelectionMode::Object;
+  std::size_t selected_object_count = 0;
+  std::size_t selected_cut_target_object_count = 0;
+  bool transform_preview_active = false;
+  bool transform_preview_cleared = false;
 };
 
 /**

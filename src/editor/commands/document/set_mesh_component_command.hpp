@@ -27,22 +27,22 @@ public:
     }
 
     DocumentCommandResult redo() override {
-        if (documentCommandSameMeshComponent(before_, after_)) {
-            return documentCommandUnchangedResult();
-        }
+      if (document_command_same_mesh_component(before_, after_)) {
+        return document_command_unchanged_result();
+      }
         return apply(after_);
     }
 
 private:
     DocumentCommandResult apply(MeshComponent mesh) {
         if (!scene().exists(entity_)) {
-            return documentCommandMissingEntityResult();
+          return document_command_missing_entity_result();
         }
-        scene().setMesh(entity_, mesh);
-        return documentCommandChangedResult();
+        scene().set_mesh(entity_, mesh);
+        return document_command_changed_result();
     }
 
-    EntityId entity_ = InvalidEntityId;
+    EntityId entity_ = kInvalidEntityId;
     MeshComponent before_;
     MeshComponent after_;
 };

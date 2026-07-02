@@ -27,36 +27,36 @@ public:
     [[nodiscard]] QuaderModelingObjectRef ref() const;
     [[nodiscard]] bool valid() const;
     [[nodiscard]] std::optional<QuaderEntitySnapshot> entity() const;
-    [[nodiscard]] std::optional<QuaderMeshAsset> compiledMesh() const;
+    [[nodiscard]] std::optional<QuaderMeshAsset> compiled_mesh() const;
 
     QuaderApiVoidResult select();
     QuaderApiVoidResult rename(std::string name);
     QuaderApiVoidResult destroy();
     QuaderApiResult<QuaderEntityRef> duplicate();
-    QuaderApiVoidResult setTransform(QuaderTransform transform);
-    QuaderApiVoidResult setVisible(bool visible);
-    QuaderApiVoidResult setLocked(bool locked);
+    QuaderApiVoidResult set_transform(QuaderTransform transform);
+    QuaderApiVoidResult set_visible(bool visible);
+    QuaderApiVoidResult set_locked(bool locked);
     QuaderApiVoidResult move(QVec3 delta);
-    QuaderApiVoidResult rotateEuler(QVec3 eulerRadians, QVec3 pivot = {});
+    QuaderApiVoidResult rotate_euler(QVec3 euler_radians, QVec3 pivot = {});
     QuaderApiVoidResult scale(QVec3 scale, QVec3 pivot = {});
 
-    QuaderApiVoidResult assignMaterial(AssetId material);
-    QuaderApiVoidResult assignMaterialSlot(std::uint32_t materialSlot);
-    QuaderApiVoidResult selectVertex(
-            QuaderElementId vertex,
-            QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
-    QuaderApiVoidResult selectEdge(
-            QuaderElementId a,
-            QuaderElementId b,
-            QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
-    QuaderApiVoidResult selectFace(
-            QuaderElementId face,
-            QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
-    QuaderApiResult<QuaderHoverSummary> hoverVertex(QuaderElementId vertex);
-    QuaderApiResult<QuaderHoverSummary> hoverEdge(QuaderElementId a, QuaderElementId b);
-    QuaderApiResult<QuaderHoverSummary> hoverFace(QuaderElementId face);
+    QuaderApiVoidResult assign_material(AssetId material);
+    QuaderApiVoidResult assign_material_slot(std::uint32_t material_slot);
+    QuaderApiVoidResult
+    select_vertex(QuaderElementId vertex,
+                  QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
+    QuaderApiVoidResult
+    select_edge(QuaderElementId a, QuaderElementId b,
+                QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
+    QuaderApiVoidResult
+    select_face(QuaderElementId face,
+                QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
+    QuaderApiResult<QuaderHoverSummary> hover_vertex(QuaderElementId vertex);
+    QuaderApiResult<QuaderHoverSummary> hover_edge(QuaderElementId a,
+                                                   QuaderElementId b);
+    QuaderApiResult<QuaderHoverSummary> hover_face(QuaderElementId face);
 
-private:
+  private:
     QuaderApi* api_ = nullptr;
     QuaderModelingObjectRef ref_;
 };

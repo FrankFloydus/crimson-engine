@@ -19,33 +19,39 @@ namespace quader {
  */
 class PreviewOperationCommandTool : public PreviewCommandTool {
 public:
-    [[nodiscard]] std::optional<ModelingActionItem> actionItem(
-            const ModelingCommandExecutionContext& context,
-            ModelingActionQuery query = defaultActionQuery()) const override {
-        const std::vector<ModelingActionItem> actions = context.modeling.contextActions(query);
-        const auto found = std::find_if(actions.begin(), actions.end(), [&](const ModelingActionItem& item) {
-            return item.actionId == actionId();
-        });
-        if (found == actions.end()) {
-            return std::nullopt;
-        }
-        return *found;
+  [[nodiscard]] std::optional<ModelingActionItem> action_item(
+      const ModelingCommandExecutionContext &context,
+      ModelingActionQuery query = default_action_query()) const override {
+    const std::vector<ModelingActionItem> actions =
+        context.modeling.context_actions(query);
+    const auto found = std::find_if(actions.begin(), actions.end(),
+                                    [&](const ModelingActionItem &item) {
+                                      return item.action_id == action_id();
+                                    });
+    if (found == actions.end()) {
+      return std::nullopt;
     }
+    return *found;
+  }
 
     [[nodiscard]] ModelingCommandAvailability availability(const ModelingCommandExecutionContext& context) const final {
-        const std::optional<ModelingActionItem> live = actionItem(context);
-        if (!live.has_value()) {
-            return ModelingCommandAvailability::unavailable("Command is not available in the current mode.");
-        }
+      const std::optional<ModelingActionItem> live = action_item(context);
+      if (!live.has_value()) {
+        return ModelingCommandAvailability::unavailable(
+            "Command is not available in the current mode.");
+      }
         if (live->visibility == ModelingActionVisibility::Enabled) {
             return ModelingCommandAvailability::available();
         }
         return ModelingCommandAvailability::unavailable(
-                live->disabledReason.empty() ? "Command is disabled for the current selection." : live->disabledReason);
+            live->disabled_reason.empty()
+                ? "Command is disabled for the current selection."
+                : live->disabled_reason);
     }
 
-    ModelingCommandResult beginPreview(ModelingCommandExecutionContext& context) const final {
-        return context.modeling.executeContextAction(actionId());
+    ModelingCommandResult
+    begin_preview(ModelingCommandExecutionContext &context) const final {
+      return context.modeling.execute_context_action(action_id());
     }
 };
 

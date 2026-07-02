@@ -20,85 +20,93 @@ namespace quader {
  */
 class GroupSelectionCommand final : public SceneCommand {
 public:
-    GroupSelectionCommand(
-            SceneDocument& scene,
-            std::string groupName = {},
-            TransformComponent groupTransform = TransformComponent{})
-        : SceneCommand(scene, "Group Selection")
-        , groupName_(std::move(groupName))
-        , groupTransform_(groupTransform) {}
+  GroupSelectionCommand(
+      SceneDocument &scene, std::string group_name = {},
+      TransformComponent group_transform = TransformComponent{})
+      : SceneCommand(scene, "Group Selection"),
+        group_name_(std::move(group_name)), group_transform_(group_transform) {}
 
-    [[nodiscard]] EntityId groupEntity() const { return group_; }
+  [[nodiscard]] EntityId group_entity() const { return group_; }
 
-    DocumentCommandResult undo() override {
-        if (group_ == InvalidEntityId || !scene().exists(group_)) {
-            return documentCommandMissingEntityResult();
-        }
-
-        for (const DocumentEntityPlacement& placement : rootPlacements_) {
-            DocumentCommandResult result = documentCommandApplyPlacement(scene(), placement);
-            if (!result.ok) {
-                return result;
-            }
-        }
-        if (!scene().destroyEntity(group_)) {
-            return documentCommandMissingEntityResult();
-        }
-        documentCommandApplySelection(scene(), beforeSelection_);
-        return documentCommandChangedResult();
+  DocumentCommandResult undo() override {
+    if (group_ == kInvalidEntityId || !scene().exists(group_)) {
+      return document_command_missing_entity_result();
     }
 
-    DocumentCommandResult redo() override {
-        if (!capturedRoots_) {
-            roots_ = documentCommandSelectedRootEntities(scene());
-            capturedRoots_ = true;
-        }
-        roots_ = documentCommandNormalizeExistingEntities(scene(), roots_);
-        if (roots_.empty()) {
-            return documentCommandUnchangedResult();
-        }
+    for (const DocumentEntityPlacement &placement : root_placements_) {
+      DocumentCommandResult result =
+          document_command_apply_placement(scene(), placement);
+      if (!result.ok) {
+        return result;
+      }
+    }
+    if (!scene().destroy_entity(group_)) {
+      return document_command_missing_entity_result();
+    }
+    document_command_apply_selection(scene(), before_selection_);
+    return document_command_changed_result();
+  }
 
-        beforeSelection_ = documentCommandCaptureSelection(scene());
-        rootPlacements_ = documentCommandCapturePlacements(scene(), roots_);
-        const EntityId commonParent = documentCommandCommonParent(scene(), roots_);
-        const std::string name = groupName_.empty() ? std::string("Group") : groupName_;
-        group_ = scene().createEntityWithId(group_, name, EntityKind::Empty, groupObjectId_);
-        if (group_ == InvalidEntityId) {
-            return documentCommandInvalidRequestResult("Group entity cannot be created");
-        }
-        if (!groupUuid_.empty() && !scene().setEntityUuid(group_, groupUuid_)) {
-            scene().destroyEntity(group_);
-            group_ = InvalidEntityId;
-            return documentCommandInvalidRequestResult("Group entity identity cannot be restored");
-        }
-        if (groupUuid_.empty()) {
-            groupUuid_ = scene().uuid(group_);
-        }
-        groupObjectId_ = scene().editorObjectId(group_);
-        scene().setTransform(group_, groupTransform_);
-        if (commonParent != InvalidEntityId && !scene().setParent(group_, commonParent, true)) {
-            scene().destroyEntity(group_);
-            return documentCommandInvalidRequestResult("Group entity cannot be reparented");
-        }
+    DocumentCommandResult redo() override {
+      if (!captured_roots_) {
+        roots_ = document_command_selected_root_entities(scene());
+        captured_roots_ = true;
+      }
+      roots_ = document_command_normalize_existing_entities(scene(), roots_);
+      if (roots_.empty()) {
+        return document_command_unchanged_result();
+      }
+
+      before_selection_ = document_command_capture_selection(scene());
+      root_placements_ = document_command_capture_placements(scene(), roots_);
+      const EntityId common_parent =
+          document_command_common_parent(scene(), roots_);
+      const std::string name =
+          group_name_.empty() ? std::string("Group") : group_name_;
+      group_ = scene().create_entity_with_id(group_, name, EntityKind::Empty,
+                                             group_object_id_);
+      if (group_ == kInvalidEntityId) {
+        return document_command_invalid_request_result(
+            "Group entity cannot be created");
+      }
+      if (!group_uuid_.empty() &&
+          !scene().set_entity_uuid(group_, group_uuid_)) {
+        scene().destroy_entity(group_);
+        group_ = kInvalidEntityId;
+        return document_command_invalid_request_result(
+            "Group entity identity cannot be restored");
+      }
+      if (group_uuid_.empty()) {
+        group_uuid_ = scene().uuid(group_);
+      }
+      group_object_id_ = scene().editor_object_id(group_);
+      scene().set_transform(group_, group_transform_);
+      if (common_parent != kInvalidEntityId &&
+          !scene().set_parent(group_, common_parent, true)) {
+        scene().destroy_entity(group_);
+        return document_command_invalid_request_result(
+            "Group entity cannot be reparented");
+      }
         for (const EntityId root : roots_) {
-            if (!scene().setParent(root, group_, true)) {
-                return documentCommandInvalidRequestResult("Selected entity cannot be grouped");
-            }
+          if (!scene().set_parent(root, group_, true)) {
+            return document_command_invalid_request_result(
+                "Selected entity cannot be grouped");
+          }
         }
-        documentCommandSelectOnly(scene(), {group_});
-        return documentCommandChangedResult();
+        document_command_select_only(scene(), {group_});
+        return document_command_changed_result();
     }
 
 private:
-    std::string groupName_;
-    TransformComponent groupTransform_;
-    bool capturedRoots_ = false;
-    std::vector<EntityId> roots_;
-    std::vector<DocumentEntityPlacement> rootPlacements_;
-    DocumentSelectionState beforeSelection_;
-    EntityId group_ = InvalidEntityId;
-    std::string groupUuid_;
-    EditorObjectId groupObjectId_ = InvalidEditorObjectId;
+  std::string group_name_;
+  TransformComponent group_transform_;
+  bool captured_roots_ = false;
+  std::vector<EntityId> roots_;
+  std::vector<DocumentEntityPlacement> root_placements_;
+  DocumentSelectionState before_selection_;
+  EntityId group_ = kInvalidEntityId;
+  std::string group_uuid_;
+  EditorObjectId group_object_id_ = kInvalidEditorObjectId;
 };
 
 } // namespace quader

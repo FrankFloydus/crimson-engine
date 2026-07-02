@@ -50,21 +50,28 @@ const qhc::HostPanelDescriptor *find_panel(std::string_view id)
 bool placement_target_resolves(const qhc::HostUiPlacementDescriptor& placement)
 {
 	switch (placement.target_kind) {
-		case qhc::HostUiPlacementTargetKind::action:
-			return qhc::find_action_descriptor(placement.target_id) != nullptr;
-		case qhc::HostUiPlacementTargetKind::tool:
-			return qhc::find_tool_descriptor(placement.target_id) != nullptr;
-		case qhc::HostUiPlacementTargetKind::selection_mode:
-			return qhc::find_selection_mode_descriptor(placement.target_id) != nullptr;
-		case qhc::HostUiPlacementTargetKind::editor_action:
-			return find_interaction(placement.target_id, qhc::HostInteractionKind::editor_action) != nullptr;
-		case qhc::HostUiPlacementTargetKind::viewport_action:
-			return find_interaction(placement.target_id, qhc::HostInteractionKind::viewport_action) != nullptr;
-		case qhc::HostUiPlacementTargetKind::panel:
-			return qhc::find_operation_panel_descriptor(placement.target_id) != nullptr ||
-				find_panel(placement.target_id) != nullptr;
-		case qhc::HostUiPlacementTargetKind::preference_group:
-			return qhc::find_preference_group_descriptor(placement.target_id) != nullptr;
+        case qhc::HostUiPlacementTargetKind::Action:
+          return qhc::find_action_descriptor(placement.target_id) != nullptr;
+        case qhc::HostUiPlacementTargetKind::Tool:
+          return qhc::find_tool_descriptor(placement.target_id) != nullptr;
+        case qhc::HostUiPlacementTargetKind::SelectionMode:
+          return qhc::find_selection_mode_descriptor(placement.target_id) !=
+                 nullptr;
+        case qhc::HostUiPlacementTargetKind::EditorAction:
+          return find_interaction(placement.target_id,
+                                  qhc::HostInteractionKind::EditorAction) !=
+                 nullptr;
+        case qhc::HostUiPlacementTargetKind::ViewportAction:
+          return find_interaction(placement.target_id,
+                                  qhc::HostInteractionKind::ViewportAction) !=
+                 nullptr;
+        case qhc::HostUiPlacementTargetKind::Panel:
+          return qhc::find_operation_panel_descriptor(placement.target_id) !=
+                     nullptr ||
+                 find_panel(placement.target_id) != nullptr;
+        case qhc::HostUiPlacementTargetKind::PreferenceGroup:
+          return qhc::find_preference_group_descriptor(placement.target_id) !=
+                 nullptr;
 	}
 	return false;
 }
@@ -172,41 +179,61 @@ TEST(QdrEditorMetadataConsumerSmokeTests, CustomEngineShellCanResolvePreferenceB
 TEST(QdrEditorMetadataConsumerSmokeTests, CustomEngineShellCanResolveShortcutsAndGesturesFromPublicTargets) {
 	for (const qhc::HostShortcutDescriptor& shortcut : qhc::shortcut_catalog()) {
 		switch (shortcut.target_kind) {
-			case qhc::HostShortcutTargetKind::action:
-				EXPECT_TRUE(qhc::find_action_descriptor(shortcut.target_id) != nullptr);
-				break;
-			case qhc::HostShortcutTargetKind::tool:
-				EXPECT_TRUE(qhc::find_tool_descriptor(shortcut.target_id) != nullptr);
-				break;
-			case qhc::HostShortcutTargetKind::selection_mode:
-				EXPECT_TRUE(qhc::find_selection_mode_descriptor(shortcut.target_id) != nullptr);
-				break;
-			case qhc::HostShortcutTargetKind::editor_action:
-				EXPECT_TRUE(find_interaction(shortcut.target_id, qhc::HostInteractionKind::editor_action) != nullptr);
-				break;
-			case qhc::HostShortcutTargetKind::viewport_action:
-				EXPECT_TRUE(find_interaction(shortcut.target_id, qhc::HostInteractionKind::viewport_action) != nullptr);
-				break;
+                case qhc::HostShortcutTargetKind::Action:
+                  EXPECT_TRUE(qhc::find_action_descriptor(shortcut.target_id) !=
+                              nullptr);
+                  break;
+                case qhc::HostShortcutTargetKind::Tool:
+                  EXPECT_TRUE(qhc::find_tool_descriptor(shortcut.target_id) !=
+                              nullptr);
+                  break;
+                case qhc::HostShortcutTargetKind::SelectionMode:
+                  EXPECT_TRUE(qhc::find_selection_mode_descriptor(
+                                  shortcut.target_id) != nullptr);
+                  break;
+                case qhc::HostShortcutTargetKind::EditorAction:
+                  EXPECT_TRUE(find_interaction(
+                                  shortcut.target_id,
+                                  qhc::HostInteractionKind::EditorAction) !=
+                              nullptr);
+                  break;
+                case qhc::HostShortcutTargetKind::ViewportAction:
+                  EXPECT_TRUE(find_interaction(
+                                  shortcut.target_id,
+                                  qhc::HostInteractionKind::ViewportAction) !=
+                              nullptr);
+                  break;
 		}
 	}
 
 	for (const qhc::HostGestureDescriptor& gesture : qhc::gesture_catalog()) {
 		switch (gesture.target_kind) {
-			case qhc::HostGestureTargetKind::tool:
-				EXPECT_TRUE(qhc::find_tool_descriptor(gesture.target_id) != nullptr);
-				break;
-			case qhc::HostGestureTargetKind::tool_group:
-				EXPECT_TRUE(qhc::find_tool_group_descriptor(gesture.target_id) != nullptr);
-				break;
-			case qhc::HostGestureTargetKind::viewport_action:
-				EXPECT_TRUE(find_interaction(gesture.target_id, qhc::HostInteractionKind::viewport_action) != nullptr);
-				break;
-			case qhc::HostGestureTargetKind::preview_action:
-				EXPECT_TRUE(find_interaction(gesture.target_id, qhc::HostInteractionKind::preview_action) != nullptr);
-				break;
-			case qhc::HostGestureTargetKind::input_policy:
-				EXPECT_TRUE(find_interaction(gesture.target_id, qhc::HostInteractionKind::input_policy) != nullptr);
-				break;
+                case qhc::HostGestureTargetKind::Tool:
+                  EXPECT_TRUE(qhc::find_tool_descriptor(gesture.target_id) !=
+                              nullptr);
+                  break;
+                case qhc::HostGestureTargetKind::ToolGroup:
+                  EXPECT_TRUE(qhc::find_tool_group_descriptor(
+                                  gesture.target_id) != nullptr);
+                  break;
+                case qhc::HostGestureTargetKind::ViewportAction:
+                  EXPECT_TRUE(find_interaction(
+                                  gesture.target_id,
+                                  qhc::HostInteractionKind::ViewportAction) !=
+                              nullptr);
+                  break;
+                case qhc::HostGestureTargetKind::PreviewAction:
+                  EXPECT_TRUE(find_interaction(
+                                  gesture.target_id,
+                                  qhc::HostInteractionKind::PreviewAction) !=
+                              nullptr);
+                  break;
+                case qhc::HostGestureTargetKind::InputPolicy:
+                  EXPECT_TRUE(
+                      find_interaction(gesture.target_id,
+                                       qhc::HostInteractionKind::InputPolicy) !=
+                      nullptr);
+                  break;
 		}
 	}
 }

@@ -49,68 +49,73 @@ class QuaderSelectionApi final {
 public:
     QuaderSelectionApi(QuaderApiSession session, QuaderApiMutationRunner& mutations);
 
-    QuaderApiVoidResult selectObjects(std::span<const EntityId> entities, EntityId active = InvalidEntityId);
-    QuaderApiVoidResult selectObjects(std::initializer_list<EntityId> entities, EntityId active = InvalidEntityId);
-    QuaderApiVoidResult selectObject(
-            EntityId entity,
-            QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
-    QuaderApiVoidResult selectObject(
-            QuaderModelingObjectRef object,
-            QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
-    QuaderApiVoidResult selectObjects(
-            std::initializer_list<QuaderModelingObjectRef> objects,
-            QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
-    QuaderApiVoidResult selectComponents(const QuaderComponentSelectionArgs& args);
-    QuaderApiVoidResult selectVertex(
-            QuaderModelingObjectRef object,
-            QuaderElementId vertex,
-            QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
-    QuaderApiVoidResult selectEdge(
-            QuaderModelingObjectRef object,
-            QuaderElementId a,
-            QuaderElementId b,
-            QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
-    QuaderApiVoidResult selectFace(
-            QuaderModelingObjectRef object,
-            QuaderElementId face,
-            QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
-    QuaderApiVoidResult selectVertices(
-            QuaderModelingObjectRef object,
-            std::initializer_list<QuaderElementId> vertices,
-            QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
-    QuaderApiVoidResult selectFaces(
-            QuaderModelingObjectRef object,
-            std::initializer_list<QuaderElementId> faces,
-            QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
+    QuaderApiVoidResult select_objects(std::span<const EntityId> entities,
+                                       EntityId active = kInvalidEntityId);
+    QuaderApiVoidResult select_objects(std::initializer_list<EntityId> entities,
+                                       EntityId active = kInvalidEntityId);
+    QuaderApiVoidResult
+    select_object(EntityId entity,
+                  QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
+    QuaderApiVoidResult
+    select_object(QuaderModelingObjectRef object,
+                  QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
+    QuaderApiVoidResult
+    select_objects(std::initializer_list<QuaderModelingObjectRef> objects,
+                   QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
+    QuaderApiVoidResult
+    select_components(const QuaderComponentSelectionArgs &args);
+    QuaderApiVoidResult
+    select_vertex(QuaderModelingObjectRef object, QuaderElementId vertex,
+                  QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
+    QuaderApiVoidResult
+    select_edge(QuaderModelingObjectRef object, QuaderElementId a,
+                QuaderElementId b,
+                QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
+    QuaderApiVoidResult
+    select_face(QuaderModelingObjectRef object, QuaderElementId face,
+                QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
+    QuaderApiVoidResult
+    select_vertices(QuaderModelingObjectRef object,
+                    std::initializer_list<QuaderElementId> vertices,
+                    QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
+    QuaderApiVoidResult
+    select_faces(QuaderModelingObjectRef object,
+                 std::initializer_list<QuaderElementId> faces,
+                 QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
     QuaderApiVoidResult clear();
-    QuaderApiVoidResult selectAll();
+    QuaderApiVoidResult select_all();
     QuaderApiVoidResult invert();
-    QuaderApiVoidResult setMode(QuaderSelectionMode mode);
+    QuaderApiVoidResult set_mode(QuaderSelectionMode mode);
 
-    QuaderApiResult<QuaderSelectionSummary> pickSelect(const QuaderPickSelectRequest& request);
-    [[nodiscard]] QuaderSelectionBoxBaseline captureBoxSelectionBaseline() const;
-    QuaderApiResult<QuaderSelectionSummary> boxSelect(const QuaderBoxSelectRequest& request);
-    QuaderApiResult<QuaderSelectionSummary> boxSelect(
-            const QuaderBoxSelectRequest& request,
-            const QuaderSelectionBoxBaseline& baseline);
+    QuaderApiResult<QuaderSelectionSummary>
+    pick_select(const QuaderPickSelectRequest &request);
+    [[nodiscard]] QuaderSelectionBoxBaseline
+    capture_box_selection_baseline() const;
+    QuaderApiResult<QuaderSelectionSummary>
+    box_select(const QuaderBoxSelectRequest &request);
+    QuaderApiResult<QuaderSelectionSummary>
+    box_select(const QuaderBoxSelectRequest &request,
+               const QuaderSelectionBoxBaseline &baseline);
     QuaderApiResult<QuaderHoverSummary> hover(const QuaderHoverRequest& request);
-    QuaderApiResult<QuaderHoverSummary> hoverVertex(QuaderModelingObjectRef object, QuaderElementId vertex);
-    QuaderApiResult<QuaderHoverSummary> hoverEdge(QuaderModelingObjectRef object, QuaderElementId a, QuaderElementId b);
-    QuaderApiResult<QuaderHoverSummary> hoverFace(QuaderModelingObjectRef object, QuaderElementId face);
-    QuaderApiVoidResult clearHover();
+    QuaderApiResult<QuaderHoverSummary>
+    hover_vertex(QuaderModelingObjectRef object, QuaderElementId vertex);
+    QuaderApiResult<QuaderHoverSummary>
+    hover_edge(QuaderModelingObjectRef object, QuaderElementId a,
+               QuaderElementId b);
+    QuaderApiResult<QuaderHoverSummary>
+    hover_face(QuaderModelingObjectRef object, QuaderElementId face);
+    QuaderApiVoidResult clear_hover();
 
     [[nodiscard]] QuaderSelectionSummary summary() const;
-    [[nodiscard]] QuaderHoverSummary hoverSummary() const;
-    [[nodiscard]] QuaderHoverSummary previewHover(const QuaderHoverRequest& request) const;
+    [[nodiscard]] QuaderHoverSummary hover_summary() const;
+    [[nodiscard]] QuaderHoverSummary
+    preview_hover(const QuaderHoverRequest &request) const;
 
-private:
-    [[nodiscard]] QuaderApiResult<QuaderHoverSummary> directHover(
-            QuaderModelingObjectRef object,
-            QuaderActiveSelectionKind kind,
-            QuaderElementId vertex,
-            QuaderElementId edgeA,
-            QuaderElementId edgeB,
-            QuaderElementId face);
+  private:
+    [[nodiscard]] QuaderApiResult<QuaderHoverSummary>
+    direct_hover(QuaderModelingObjectRef object, QuaderActiveSelectionKind kind,
+                 QuaderElementId vertex, QuaderElementId edge_a,
+                 QuaderElementId edge_b, QuaderElementId face);
 
     QuaderApiSession session_;
     QuaderApiMutationRunner& mutations_;

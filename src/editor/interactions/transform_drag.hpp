@@ -22,83 +22,83 @@ namespace quader_editor_core {
  * Enumerates ModalMoveDragTool values used by the modeling layer.
  */
 enum class ModalMoveDragTool {
-	move,
-	extend,
-	extrude,
+  Move,
+  Extend,
+  Extrude,
 };
 
 /**
  * Enumerates ModalMovePreviewRoute values used by the modeling layer.
  */
 enum class ModalMovePreviewRoute {
-	none,
-	clear_preview,
-	move_transform_preview,
-	move_patch_preview,
-	extend_patch_preview,
-	extrude_patch_preview,
+  None,
+  ClearPreview,
+  MoveTransformPreview,
+  MovePatchPreview,
+  ExtendPatchPreview,
+  ExtrudePatchPreview,
 };
 
 /**
  * Enumerates ModalMoveCommitRoute values used by the modeling layer.
  */
 enum class ModalMoveCommitRoute {
-	none,
-	move_patch,
-	extend_patch,
-	extrude_patch,
+  None,
+  MovePatch,
+  ExtendPatch,
+  ExtrudePatch,
 };
 
 /**
  * Enumerates ModalTransformDragTool values used by the modeling layer.
  */
 enum class ModalTransformDragTool {
-	rotate,
-	scale,
+  Rotate,
+  Scale,
 };
 
 /**
  * Enumerates ModalTransformPreviewRoute values used by the modeling layer.
  */
 enum class ModalTransformPreviewRoute {
-	none,
-	clear_preview,
-	transform_preview,
+  None,
+  ClearPreview,
+  TransformPreview,
 };
 
 /**
  * Enumerates ModalTransformCommitRoute values used by the modeling layer.
  */
 enum class ModalTransformCommitRoute {
-	none,
-	transform_patch,
+  None,
+  TransformPatch,
 };
 
 /**
  * Enumerates TransformDragOperation values used by the modeling layer.
  */
 enum class TransformDragOperation {
-	transform,
-	extrude,
-	inset,
+  Transform,
+  Extrude,
+  Inset,
 };
 
 /**
  * Enumerates TransformSnapLandmarkKind values used by the modeling layer.
  */
 enum class TransformSnapLandmarkKind {
-	none,
-	vertex,
+  None,
+  Vertex,
 };
 
 /**
  * Represents a Transform Snap Target value used by the modal modeling interaction layer.
  */
 struct TransformSnapTarget {
-	TransformSnapLandmarkKind kind = TransformSnapLandmarkKind::none;
-	int object_id = -1;
-	quader_poly::ElementId vertex_id = quader_poly::invalid_element_id;
-	quader::QVec3 position;
+  TransformSnapLandmarkKind kind = TransformSnapLandmarkKind::None;
+  int object_id = -1;
+  quader_poly::ElementId vertex_id = quader_poly::kInvalidElementId;
+  quader::QVec3 position;
 };
 
 /**
@@ -106,10 +106,10 @@ struct TransformSnapTarget {
  */
 struct TransformDragState {
 	bool active = false;
-	ViewportInteractionTool tool = ViewportInteractionTool::select;
-	TransformDragOperation operation = TransformDragOperation::transform;
-	TransformAxis axis = TransformAxis::none;
-	quader::QVec3 pivot;
+        ViewportInteractionTool tool = ViewportInteractionTool::Select;
+        TransformDragOperation operation = TransformDragOperation::Transform;
+        TransformAxis axis = TransformAxis::None;
+        quader::QVec3 pivot;
 	bool scene_transform_preview_eligible = false;
 	TransformSnapTarget snap_target;
 	MoveToolState move;
@@ -140,11 +140,11 @@ struct ModalMoveBeginPlan {
  */
 struct ModalMoveUpdateInput {
 	bool active = false;
-	ModalMoveDragTool tool = ModalMoveDragTool::move;
-	bool preview_uses_transform = false;
+        ModalMoveDragTool tool = ModalMoveDragTool::Move;
+        bool preview_uses_transform = false;
 	quader::QVec3 previous_delta;
 	quader::QVec3 delta;
-	double epsilon = tool_epsilon;
+        double epsilon = kToolEpsilon;
 };
 
 /**
@@ -154,7 +154,7 @@ struct ModalMoveUpdatePlan {
 	bool handled = false;
 	bool changed = false;
 	bool preview_active = false;
-	ModalMovePreviewRoute route = ModalMovePreviewRoute::none;
+        ModalMovePreviewRoute route = ModalMovePreviewRoute::None;
 };
 
 /**
@@ -162,10 +162,10 @@ struct ModalMoveUpdatePlan {
  */
 struct ModalMoveCommitInput {
 	bool active = false;
-	ModalMoveDragTool tool = ModalMoveDragTool::move;
-	bool duplicate_active = false;
+        ModalMoveDragTool tool = ModalMoveDragTool::Move;
+        bool duplicate_active = false;
 	quader::QVec3 delta;
-	double epsilon = tool_epsilon;
+        double epsilon = kToolEpsilon;
 };
 
 /**
@@ -177,8 +177,8 @@ struct ModalMoveCommitPlan {
 	bool restore_base_snapshot = false;
 	bool restore_selection = false;
 	bool clear_preview = true;
-	ModalMoveCommitRoute route = ModalMoveCommitRoute::none;
-	std::string undo_action;
+        ModalMoveCommitRoute route = ModalMoveCommitRoute::None;
+        std::string undo_action;
 };
 
 /**
@@ -204,11 +204,11 @@ struct ModalTransformBeginPlan {
  */
 struct ModalTransformUpdateInput {
 	bool active = false;
-	ModalTransformDragTool tool = ModalTransformDragTool::rotate;
-	bool preview_ok = false;
+        ModalTransformDragTool tool = ModalTransformDragTool::Rotate;
+        bool preview_ok = false;
 	double preview_angle_degrees = 0.0;
 	quader::QVec3 preview_scale { 1.0F, 1.0F, 1.0F };
-	double epsilon = tool_epsilon;
+        double epsilon = kToolEpsilon;
 };
 
 /**
@@ -218,7 +218,7 @@ struct ModalTransformUpdatePlan {
 	bool handled = false;
 	bool preview_ok = false;
 	bool preview_valid = false;
-	ModalTransformPreviewRoute route = ModalTransformPreviewRoute::none;
+        ModalTransformPreviewRoute route = ModalTransformPreviewRoute::None;
 };
 
 /**
@@ -226,8 +226,8 @@ struct ModalTransformUpdatePlan {
  */
 struct ModalTransformCommitInput {
 	bool active = false;
-	ModalTransformDragTool tool = ModalTransformDragTool::rotate;
-	bool preview_valid = false;
+        ModalTransformDragTool tool = ModalTransformDragTool::Rotate;
+        bool preview_valid = false;
 	bool duplicate_active = false;
 };
 
@@ -240,8 +240,8 @@ struct ModalTransformCommitPlan {
 	bool restore_base_snapshot = false;
 	bool restore_selection = false;
 	bool clear_preview = true;
-	ModalTransformCommitRoute route = ModalTransformCommitRoute::none;
-	std::string undo_action;
+        ModalTransformCommitRoute route = ModalTransformCommitRoute::None;
+        std::string undo_action;
 };
 
 /**
@@ -255,8 +255,8 @@ struct TransformDragPreviewInput {
 	bool grid_enabled = true;
 	bool precision = false;
 	double rotate_snap_degrees = 15.0;
-	double epsilon = tool_epsilon;
-	bool vertex_snap_enabled = false;
+        double epsilon = kToolEpsilon;
+        bool vertex_snap_enabled = false;
 	double vertex_snap_radius = 0.0;
 	std::span<const PickObjectBounds> snap_object_bounds;
 	std::span<const PickObjectFaceGeometry> snap_face_geometry;

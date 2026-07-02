@@ -12,8 +12,9 @@
 namespace quader {
 namespace {
 
-double secondsBetween(AppFrameClock::Clock::time_point first, AppFrameClock::Clock::time_point second) {
-    return std::chrono::duration<double>(second - first).count();
+double seconds_between(AppFrameClock::Clock::time_point first,
+                       AppFrameClock::Clock::time_point second) {
+  return std::chrono::duration<double>(second - first).count();
 }
 
 } // namespace
@@ -21,7 +22,7 @@ double secondsBetween(AppFrameClock::Clock::time_point first, AppFrameClock::Clo
 void AppFrameClock::reset(Clock::time_point now) {
     start_ = now;
     last_ = now;
-    frameIndex_ = 0;
+    frame_index_ = 0;
     initialized_ = true;
 }
 
@@ -30,20 +31,20 @@ FrameTiming AppFrameClock::tick(Clock::time_point now) {
         reset(now);
     }
 
-    double rawDeltaSeconds = std::max(0.0, secondsBetween(last_, now));
-    if (frameIndex_ == 0u && rawDeltaSeconds <= 0.0) {
-        rawDeltaSeconds = kDefaultFirstDeltaSeconds;
+    double raw_delta_seconds = std::max(0.0, seconds_between(last_, now));
+    if (frame_index_ == 0u && raw_delta_seconds <= 0.0) {
+      raw_delta_seconds = kDefaultFirstDeltaSeconds;
     }
 
     const FrameTiming timing{
-            .rawDeltaSeconds = rawDeltaSeconds,
-            .deltaSeconds = std::clamp(rawDeltaSeconds, 0.0, kMaxDeltaSeconds),
-            .elapsedSeconds = std::max(0.0, secondsBetween(start_, now)),
-            .frameIndex = frameIndex_,
+        .raw_delta_seconds = raw_delta_seconds,
+        .delta_seconds = std::clamp(raw_delta_seconds, 0.0, kMaxDeltaSeconds),
+        .elapsed_seconds = std::max(0.0, seconds_between(start_, now)),
+        .frame_index = frame_index_,
     };
 
     last_ = now;
-    ++frameIndex_;
+    ++frame_index_;
     return timing;
 }
 

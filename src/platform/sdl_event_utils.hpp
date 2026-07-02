@@ -12,7 +12,9 @@
 
 namespace quader {
 
-[[nodiscard]] std::optional<SDL_WindowID> sdlEventWindowId(const SDL_Event& event);
-[[nodiscard]] bool sdlEventTargetsWindow(const SDL_Event& event, SDL_WindowID windowId);
+[[nodiscard]] std::optional<SDL_WindowID>
+sdl_event_window_id(const SDL_Event &event);
+[[nodiscard]] bool sdl_event_targets_window(const SDL_Event &event,
+                                            SDL_WindowID window_id);
 
 } // namespace quader

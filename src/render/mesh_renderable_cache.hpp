@@ -41,43 +41,37 @@ public:
         return factory_ != nullptr && factory_->initialized();
     }
 
-    bool contains(EntityId entityId) const;
-    bool needsRebuild(EntityId entityId,
-            AssetId meshId,
-            const MeshAsset& mesh,
-            AssetId materialId,
-            bool castShadows,
-            bool doubleSided,
-            std::uint64_t materialRevision) const;
+    bool contains(EntityId entity_id) const;
+    bool needs_rebuild(EntityId entity_id, AssetId mesh_id,
+                       const MeshAsset &mesh, AssetId material_id,
+                       bool cast_shadows, bool double_sided,
+                       std::uint64_t material_revision) const;
 
-    void syncMesh(EntityId entityId,
-            AssetId meshId,
-            const MeshAsset& mesh,
-            AssetId materialId,
-            const MaterialComponent* material,
-            const AssetRegistry& assets,
-            const QMat4& worldTransform,
-            bool castShadows,
-            bool doubleSided,
-            std::uint64_t materialRevision);
-    void remove(EntityId entityId);
-    void removeExcept(const std::unordered_set<EntityId>& liveMeshEntities);
-    void drainRetiredDestroyQueue(std::size_t maxProxyCount);
+    void sync_mesh(EntityId entity_id, AssetId mesh_id, const MeshAsset &mesh,
+                   AssetId material_id, const MaterialComponent *material,
+                   const AssetRegistry &assets, const QMat4 &world_transform,
+                   bool cast_shadows, bool double_sided,
+                   std::uint64_t material_revision);
+    void remove(EntityId entity_id);
+    void remove_except(const std::unordered_set<EntityId> &live_mesh_entities);
+    void drain_retired_destroy_queue(std::size_t max_proxy_count);
 
-    std::size_t retiredProxyCount() const {
-        return retiredMeshProxies_.size();
+    std::size_t retired_proxy_count() const {
+      return retired_mesh_proxies_.size();
     }
 
-    static std::uint64_t meshAssetSignature(std::uint64_t hash, const MeshAsset& mesh);
+    static std::uint64_t mesh_asset_signature(std::uint64_t hash,
+                                              const MeshAsset &mesh);
 
-private:
-    void retireProxy(MeshRenderableProxy&& proxy);
+  private:
+    void retire_proxy(MeshRenderableProxy &&proxy);
 
     MeshRenderableFactory* factory_ = nullptr;
-    std::unordered_map<EntityId, MeshRenderableProxy> renderedMeshProxies_;
-    std::unordered_map<EntityId, MeshRenderableProxy> shadedMeshProxies_;
-    std::unordered_map<EntityId, MeshRenderableProxy> overlayDepthMeshProxies_;
-    std::vector<MeshRenderableProxy> retiredMeshProxies_;
+    std::unordered_map<EntityId, MeshRenderableProxy> rendered_mesh_proxies_;
+    std::unordered_map<EntityId, MeshRenderableProxy> shaded_mesh_proxies_;
+    std::unordered_map<EntityId, MeshRenderableProxy>
+        overlay_depth_mesh_proxies_;
+    std::vector<MeshRenderableProxy> retired_mesh_proxies_;
 };
 
 } // namespace quader

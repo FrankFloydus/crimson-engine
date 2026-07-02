@@ -22,12 +22,13 @@ Preferred starting points:
 Public examples should prefer the polished API surface:
 
 - callable result helpers: `result.ok()`, `result.changed()`, `result.value()`,
-  `result.errorMessage()`;
-- typed command IDs: `QuaderCommand::HistoryUndo`, `QuaderCommand::ModelingDuplicateMeshes`,
-  and other `QuaderCommand::*` constants;
+  `result.error_message()`;
+- typed command IDs: `quader::quader_command::kHistoryUndo`,
+  `quader::quader_command::kModelingDuplicateMeshes`, and other
+  `quader::quader_command::*` constants;
 - `QuaderObjectHandle` for object workflows;
 - `QuaderSceneBatch` for grouped scene edits;
-- `editor.viewports()` / `editor.mainViewport()` for viewport layout, camera, and pane intent.
+- `editor.viewports()` / `editor.main_viewport()` for viewport layout, camera, and pane intent.
 
 Avoid starting public examples with:
 

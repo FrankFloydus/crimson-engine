@@ -33,44 +33,56 @@ public:
     OverlayProxyFactory(OverlayProxyFactory&&) = delete;
     OverlayProxyFactory& operator=(OverlayProxyFactory&&) = delete;
 
-    void initialize(filament::Engine& engine,
-            filament::Scene& scene,
-            filament::Material& overlayMaterial,
-            filament::Material& overlayLineMaterial,
-            filament::Material& overlayPointMaterial);
+    void initialize(filament::Engine &engine, filament::Scene &scene,
+                    filament::Material &overlay_material,
+                    filament::Material &overlay_line_material,
+                    filament::Material &overlay_point_material);
     void shutdown();
 
     bool initialized() const {
-        return engine_ != nullptr &&
-                scene_ != nullptr &&
-                overlayMaterial_ != nullptr &&
-                overlayLineMaterial_ != nullptr &&
-                overlayPointMaterial_ != nullptr;
+      return engine_ != nullptr && scene_ != nullptr &&
+             overlay_material_ != nullptr &&
+             overlay_line_material_ != nullptr &&
+             overlay_point_material_ != nullptr;
     }
 
-    std::vector<OverlayRenderableProxy> createLayerProxies(const OverlayLayerBuildPlan& plan, std::uint8_t layerMask);
-    bool updateLayerProxies(
-            std::vector<OverlayRenderableProxy>& proxies,
-            const OverlayLayerBuildPlan& plan,
-            std::uint8_t layerMask);
+    std::vector<OverlayRenderableProxy>
+    create_layer_proxies(const OverlayLayerBuildPlan &plan,
+                         std::uint8_t layer_mask);
+    bool update_layer_proxies(std::vector<OverlayRenderableProxy> &proxies,
+                              const OverlayLayerBuildPlan &plan,
+                              std::uint8_t layer_mask);
     void destroy(OverlayRenderableProxy& proxy);
 
-    static std::size_t plannedProxyCount(const OverlayLayerBuildPlan& plan);
+    static std::size_t planned_proxy_count(const OverlayLayerBuildPlan &plan);
 
-private:
-    void createTriangleProxy(const OverlayFaceFillBatch& batch, std::uint8_t layerMask, std::vector<OverlayRenderableProxy>& proxies);
-    void createLineProxy(const OverlayLineBatch& batch, std::uint8_t layerMask, std::vector<OverlayRenderableProxy>& proxies);
-    void createPointProxy(const OverlayPointBatch& batch, std::uint8_t layerMask, std::vector<OverlayRenderableProxy>& proxies);
-    void updateTriangleProxy(OverlayRenderableProxy& proxy, const OverlayFaceFillBatch& batch, std::uint8_t layerMask);
-    void updateLineProxy(OverlayRenderableProxy& proxy, const OverlayLineBatch& batch, std::uint8_t layerMask);
-    void updatePointProxy(OverlayRenderableProxy& proxy, const OverlayPointBatch& batch, std::uint8_t layerMask);
-    void configureOverlayMaterial(filament::MaterialInstance& material, const OverlayRenderState& state) const;
+  private:
+    void create_triangle_proxy(const OverlayFaceFillBatch &batch,
+                               std::uint8_t layer_mask,
+                               std::vector<OverlayRenderableProxy> &proxies);
+    void create_line_proxy(const OverlayLineBatch &batch,
+                           std::uint8_t layer_mask,
+                           std::vector<OverlayRenderableProxy> &proxies);
+    void create_point_proxy(const OverlayPointBatch &batch,
+                            std::uint8_t layer_mask,
+                            std::vector<OverlayRenderableProxy> &proxies);
+    void update_triangle_proxy(OverlayRenderableProxy &proxy,
+                               const OverlayFaceFillBatch &batch,
+                               std::uint8_t layer_mask);
+    void update_line_proxy(OverlayRenderableProxy &proxy,
+                           const OverlayLineBatch &batch,
+                           std::uint8_t layer_mask);
+    void update_point_proxy(OverlayRenderableProxy &proxy,
+                            const OverlayPointBatch &batch,
+                            std::uint8_t layer_mask);
+    void configure_overlay_material(filament::MaterialInstance &material,
+                                    const OverlayRenderState &state) const;
 
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
-    filament::Material* overlayMaterial_ = nullptr;
-    filament::Material* overlayLineMaterial_ = nullptr;
-    filament::Material* overlayPointMaterial_ = nullptr;
+    filament::Material *overlay_material_ = nullptr;
+    filament::Material *overlay_line_material_ = nullptr;
+    filament::Material *overlay_point_material_ = nullptr;
 };
 
 } // namespace quader

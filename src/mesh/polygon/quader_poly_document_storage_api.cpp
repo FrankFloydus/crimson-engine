@@ -22,7 +22,7 @@ ElementId add_vertex(Document& document, quader::QVec3 position)
 ElementId add_face(Document& document, std::span<const ElementId> vertices, std::uint32_t material_slot)
 {
     if (vertices.size() < 3) {
-        return invalid_element_id;
+      return kInvalidElementId;
     }
 
     const ElementId id = document.next_face_id++;
@@ -76,8 +76,9 @@ std::vector<Edge> document_edges(const Document& document)
 
         for (std::size_t index = 0; index < face.vertices.size(); ++index) {
             const Edge edge = make_edge(face.vertices[index], face.vertices[(index + 1U) % face.vertices.size()]);
-            if (edge.a != edge.b && edge.a != invalid_element_id && edge.b != invalid_element_id) {
-                unique_edges.emplace(edge.a, edge.b);
+            if (edge.a != edge.b && edge.a != kInvalidElementId &&
+                edge.b != kInvalidElementId) {
+              unique_edges.emplace(edge.a, edge.b);
             }
         }
     }

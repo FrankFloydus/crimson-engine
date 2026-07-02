@@ -15,8 +15,8 @@ namespace quader {
  */
 class KnifeTool final : public PointSequenceTool {
 public:
-    KnifeTool()
-        : PointSequenceTool(viewportToolDescriptor(ViewportToolId::Knife)) {}
+  KnifeTool()
+      : PointSequenceTool(viewport_tool_descriptor(ViewportToolId::Knife)) {}
 };
 
 } // namespace quader

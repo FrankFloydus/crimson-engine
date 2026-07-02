@@ -44,9 +44,9 @@ InsetFacesOperation::InsetFacesOperation(float amount)
 
 OperationResult inset_selected_faces_impl(Document& document, Selection& selection, float amount)
 {
-    if (selection.mode != SelectionMode::face || selection.faces.empty()) {
-        return { false, "Select one or more faces to inset." };
-    }
+  if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
+    return {false, "Select one or more faces to inset."};
+  }
 
     amount = std::clamp(amount, 0.01F, 0.95F);
     const ElementId active_face_id = active_face_or_invalid(selection);
@@ -103,7 +103,7 @@ OperationResult inset_selected_faces_impl(Document& document, Selection& selecti
 
     prune_invalid_faces(document);
     selection.clear();
-    selection.mode = SelectionMode::face;
+    selection.mode = SelectionMode::Face;
     selection.faces = std::move(selected_faces);
     activate_face_or_last_selection(selection, active_face_id);
     return { true, {} };

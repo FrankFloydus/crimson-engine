@@ -17,60 +17,71 @@ QuaderPreferencesApi::QuaderPreferencesApi() = default;
 QuaderPreferencesApi::QuaderPreferencesApi(QuaderCommandsApi& commands)
     : commands_(&commands) {}
 
-void QuaderPreferencesApi::attachCommands(QuaderCommandsApi& commands) {
-    commands_ = &commands;
+void QuaderPreferencesApi::attach_commands(QuaderCommandsApi &commands) {
+  commands_ = &commands;
 }
 
-void QuaderPreferencesApi::setRuntimeHooks(QuaderPreferencesRuntimeHooks hooks) {
-    hooks_ = std::move(hooks);
+void QuaderPreferencesApi::set_runtime_hooks(
+    QuaderPreferencesRuntimeHooks hooks) {
+  hooks_ = std::move(hooks);
 }
 
 std::string QuaderPreferencesApi::locale() const {
     return hooks_.locale ? hooks_.locale() : std::string{};
 }
 
-QuaderApiVoidResult QuaderPreferencesApi::setLocale(std::string locale) {
-    return hooks_.setLocale ? hooks_.setLocale(std::move(locale)) : unavailable("Preferences runtime is not attached.");
+QuaderApiVoidResult QuaderPreferencesApi::set_locale(std::string locale) {
+  return hooks_.set_locale
+             ? hooks_.set_locale(std::move(locale))
+             : unavailable("Preferences runtime is not attached.");
 }
 
-QuaderApiVoidResult QuaderPreferencesApi::setShortcut(std::string_view commandId, std::string shortcut) {
-    return commands_ != nullptr ?
-            commands_->setShortcut(commandId, std::move(shortcut)) :
-            unavailable("Command runtime is not attached.");
+QuaderApiVoidResult
+QuaderPreferencesApi::set_shortcut(std::string_view command_id,
+                                   std::string shortcut) {
+  return commands_ != nullptr
+             ? commands_->set_shortcut(command_id, std::move(shortcut))
+             : unavailable("Command runtime is not attached.");
 }
 
-QuaderApiVoidResult QuaderPreferencesApi::setShortcut(QuaderCommandId commandId, std::string shortcut) {
-    return setShortcut(commandId.string(), std::move(shortcut));
+QuaderApiVoidResult
+QuaderPreferencesApi::set_shortcut(QuaderCommandId command_id,
+                                   std::string shortcut) {
+  return set_shortcut(command_id.string(), std::move(shortcut));
 }
 
-QuaderApiVoidResult QuaderPreferencesApi::removeShortcut(std::string_view commandId) {
-    return commands_ != nullptr ?
-            commands_->removeShortcut(commandId) :
-            unavailable("Command runtime is not attached.");
+QuaderApiVoidResult
+QuaderPreferencesApi::remove_shortcut(std::string_view command_id) {
+  return commands_ != nullptr ? commands_->remove_shortcut(command_id)
+                              : unavailable("Command runtime is not attached.");
 }
 
-QuaderApiVoidResult QuaderPreferencesApi::removeShortcut(QuaderCommandId commandId) {
-    return removeShortcut(commandId.string());
+QuaderApiVoidResult
+QuaderPreferencesApi::remove_shortcut(QuaderCommandId command_id) {
+  return remove_shortcut(command_id.string());
 }
 
-QuaderApiVoidResult QuaderPreferencesApi::resetShortcut(std::string_view commandId) {
-    return commands_ != nullptr ?
-            commands_->resetShortcut(commandId) :
-            unavailable("Command runtime is not attached.");
+QuaderApiVoidResult
+QuaderPreferencesApi::reset_shortcut(std::string_view command_id) {
+  return commands_ != nullptr ? commands_->reset_shortcut(command_id)
+                              : unavailable("Command runtime is not attached.");
 }
 
-QuaderApiVoidResult QuaderPreferencesApi::resetShortcut(QuaderCommandId commandId) {
-    return resetShortcut(commandId.string());
+QuaderApiVoidResult
+QuaderPreferencesApi::reset_shortcut(QuaderCommandId command_id) {
+  return reset_shortcut(command_id.string());
 }
 
-QuaderApiVoidResult QuaderPreferencesApi::setNavigationGizmoVisible(bool visible) {
-    return hooks_.setNavigationGizmoVisible ?
-            hooks_.setNavigationGizmoVisible(visible) :
-            unavailable("Preferences runtime is not attached.");
+QuaderApiVoidResult
+QuaderPreferencesApi::set_navigation_gizmo_visible(bool visible) {
+  return hooks_.set_navigation_gizmo_visible
+             ? hooks_.set_navigation_gizmo_visible(visible)
+             : unavailable("Preferences runtime is not attached.");
 }
 
-bool QuaderPreferencesApi::navigationGizmoVisible() const {
-    return hooks_.navigationGizmoVisible ? hooks_.navigationGizmoVisible() : false;
+bool QuaderPreferencesApi::navigation_gizmo_visible() const {
+  return hooks_.navigation_gizmo_visible ? hooks_.navigation_gizmo_visible()
+                                         : false;
 }
 
 QuaderApiVoidResult QuaderPreferencesApi::save() {
@@ -78,12 +89,12 @@ QuaderApiVoidResult QuaderPreferencesApi::save() {
 }
 
 QuaderApiVoidResult QuaderPreferencesApi::unavailable(std::string message) const {
-    return {
-            .ok = false,
-            .changed = false,
-            .message = std::move(message),
-            .mutationKind = QuaderMutationKind::None,
-    };
+  return {
+      .ok = false,
+      .changed = false,
+      .message = std::move(message),
+      .mutation_kind = QuaderMutationKind::None,
+  };
 }
 
 } // namespace quader

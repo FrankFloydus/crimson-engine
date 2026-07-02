@@ -39,9 +39,11 @@ std::vector<ElementId> selected_valid_vertices(const Document& document, const S
     std::vector<ElementId> selected_vertices;
     selected_vertices.reserve(selection.vertices.size());
     for (const ElementId vertex_id : selection.vertices) {
-        if (vertex_id == invalid_element_id || contains_id(selected_vertices, vertex_id) || find_vertex(document, vertex_id) == nullptr) {
-            continue;
-        }
+      if (vertex_id == kInvalidElementId ||
+          contains_id(selected_vertices, vertex_id) ||
+          find_vertex(document, vertex_id) == nullptr) {
+        continue;
+      }
         selected_vertices.push_back(vertex_id);
     }
     return selected_vertices;
@@ -53,13 +55,11 @@ std::vector<Edge> selected_valid_edges(const Document& document, const Selection
     selected_edges.reserve(selection.edges.size());
     for (Edge edge : selection.edges) {
         edge = make_edge(edge.a, edge.b);
-        if (edge.a == invalid_element_id ||
-            edge.b == invalid_element_id ||
-            edge.a == edge.b ||
-            contains_edge(selected_edges, edge) ||
+        if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+            edge.a == edge.b || contains_edge(selected_edges, edge) ||
             find_vertex(document, edge.a) == nullptr ||
             find_vertex(document, edge.b) == nullptr) {
-            continue;
+          continue;
         }
         selected_edges.push_back(edge);
     }
@@ -71,9 +71,9 @@ quader::QVec3 document_vertex_centroid(const Document& document)
     quader::QVec3 center;
     std::size_t count = 0;
     for (const Vertex& vertex : document.vertices) {
-        if (vertex.id == invalid_element_id) {
-            continue;
-        }
+      if (vertex.id == kInvalidElementId) {
+        continue;
+      }
         center += vertex.position;
         ++count;
     }
@@ -83,8 +83,9 @@ quader::QVec3 document_vertex_centroid(const Document& document)
 std::vector<std::size_t> adjacent_face_indices_for_edge(const Document& document, Edge edge)
 {
     edge = make_edge(edge.a, edge.b);
-    if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b) {
-        return {};
+    if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+        edge.a == edge.b) {
+      return {};
     }
     const std::map<std::pair<ElementId, ElementId>, std::vector<std::size_t>> indices_by_edge = face_indices_by_edge(document);
     const auto adjacent_faces = indices_by_edge.find({ edge.a, edge.b });
@@ -382,7 +383,7 @@ ElementId duplicate_vertex_for_face(
 
     const Vertex* source = find_vertex(document, vertex_id);
     if (source == nullptr) {
-        return invalid_element_id;
+      return kInvalidElementId;
     }
 
     const ElementId duplicate_id = add_vertex(document, source->position);
@@ -507,9 +508,9 @@ std::vector<ElementId> unique_valid_face_loop(std::vector<ElementId> vertices)
     std::vector<ElementId> compact;
     compact.reserve(vertices.size());
     for (const ElementId vertex_id : vertices) {
-        if (vertex_id == invalid_element_id) {
-            continue;
-        }
+      if (vertex_id == kInvalidElementId) {
+        continue;
+      }
         if (!compact.empty() && compact.back() == vertex_id) {
             continue;
         }
@@ -526,9 +527,10 @@ std::vector<ElementId> unique_valid_face_loop(std::vector<ElementId> vertices)
 
 std::optional<std::size_t> directed_face_edge_index(const Face& face, ElementId from_id, ElementId to_id)
 {
-    if (face.vertices.size() < 2 || from_id == invalid_element_id || to_id == invalid_element_id || from_id == to_id) {
-        return std::nullopt;
-    }
+  if (face.vertices.size() < 2 || from_id == kInvalidElementId ||
+      to_id == kInvalidElementId || from_id == to_id) {
+    return std::nullopt;
+  }
     for (std::size_t index = 0; index < face.vertices.size(); ++index) {
         if (face.vertices[index] == from_id && face.vertices[(index + 1U) % face.vertices.size()] == to_id) {
             return index;
@@ -555,8 +557,9 @@ std::optional<OpenBridgeEdgeInfo> open_bridge_edge_info(
     const std::map<std::pair<ElementId, ElementId>, int>& incidence_counts)
 {
     edge = make_edge(edge.a, edge.b);
-    if (edge.a == invalid_element_id || edge.b == invalid_element_id || edge.a == edge.b) {
-        return std::nullopt;
+    if (edge.a == kInvalidElementId || edge.b == kInvalidElementId ||
+        edge.a == edge.b) {
+      return std::nullopt;
     }
     const auto count = incidence_counts.find({ edge.a, edge.b });
     if (count == incidence_counts.end() || count->second < 1) {
@@ -580,8 +583,9 @@ quader::QVec3 bridge_edge_outward_direction(const Document& document, const Open
     }
 
     const quader::QVec3 edge_direction = normalize_or_zero(end->position - start->position);
-    if (length_squared(edge_direction) <= epsilon || length_squared(edge_info.face_normal) <= epsilon) {
-        return {};
+    if (length_squared(edge_direction) <= kEpsilon ||
+        length_squared(edge_info.face_normal) <= kEpsilon) {
+      return {};
     }
 
     return normalize_or_zero(cross(edge_direction, edge_info.face_normal));
@@ -600,8 +604,10 @@ quader::QVec3 curved_bridge_position(
     const float rail_length = length(end - start);
     const quader::QVec3 start_tangent_direction = normalize_or_zero(start_outward);
     const quader::QVec3 end_tangent_direction = normalize_or_zero(end_outward);
-    if (rail_length <= epsilon || length_squared(start_tangent_direction) <= epsilon || length_squared(end_tangent_direction) <= epsilon) {
-        return linear;
+    if (rail_length <= kEpsilon ||
+        length_squared(start_tangent_direction) <= kEpsilon ||
+        length_squared(end_tangent_direction) <= kEpsilon) {
+      return linear;
     }
 
     const quader::QVec3 start_tangent = start_tangent_direction * rail_length;
@@ -620,9 +626,11 @@ std::vector<ElementId> unique_bridge_vertices(Edge first_edge, Edge second_edge)
     std::vector<ElementId> vertices;
     vertices.reserve(4);
     auto append = [&vertices](ElementId vertex_id) {
-        if (vertex_id != invalid_element_id && std::find(vertices.begin(), vertices.end(), vertex_id) == vertices.end()) {
-            vertices.push_back(vertex_id);
-        }
+      if (vertex_id != kInvalidElementId &&
+          std::find(vertices.begin(), vertices.end(), vertex_id) ==
+              vertices.end()) {
+        vertices.push_back(vertex_id);
+      }
     };
     append(first_edge.a);
     append(first_edge.b);
@@ -687,12 +695,12 @@ std::optional<std::vector<ElementId>> bridge_face_loop_from_open_edges(
         if (!std::isfinite(rail_score)) {
             continue;
         }
-        if (!best_loop.has_value() ||
-                rail_score < best_rail_score - epsilon ||
-                (std::abs(rail_score - best_rail_score) <= epsilon && area > best_area)) {
-            best_loop = candidate_face.vertices;
-            best_rail_score = rail_score;
-            best_area = area;
+        if (!best_loop.has_value() || rail_score < best_rail_score - kEpsilon ||
+            (std::abs(rail_score - best_rail_score) <= kEpsilon &&
+             area > best_area)) {
+          best_loop = candidate_face.vertices;
+          best_rail_score = rail_score;
+          best_area = area;
         }
     } while (std::next_permutation(vertices.begin(), vertices.end()));
 
@@ -729,13 +737,13 @@ bool edge_bevel_edge_is_concave(const Document& document, Edge edge, std::span<c
     const quader::QVec3 edge_direction = normalize_or_zero(to->position - from->position);
     const quader::QVec3 first_normal = face_normal(document, first_face);
     const quader::QVec3 second_normal = face_normal(document, second_face);
-    if (length_squared(edge_direction) <= epsilon ||
-        length_squared(first_normal) <= epsilon ||
-        length_squared(second_normal) <= epsilon) {
-        return false;
+    if (length_squared(edge_direction) <= kEpsilon ||
+        length_squared(first_normal) <= kEpsilon ||
+        length_squared(second_normal) <= kEpsilon) {
+      return false;
     }
 
-    return dot(cross(first_normal, second_normal), edge_direction) < -epsilon;
+    return dot(cross(first_normal, second_normal), edge_direction) < -kEpsilon;
 }
 
 EdgeBevelSettings sanitized_edge_bevel_settings(EdgeBevelSettings settings)
@@ -747,16 +755,17 @@ EdgeBevelSettings sanitized_edge_bevel_settings(EdgeBevelSettings settings)
         settings.profile = 0.5F;
     }
 
-    settings.width = std::max(settings.width, min_primitive_dimension);
-    settings.profile = std::clamp(settings.profile, edge_bevel_min_profile, edge_bevel_max_profile);
+    settings.width = std::max(settings.width, kMinPrimitiveDimension);
+    settings.profile = std::clamp(settings.profile, kEdgeBevelMinProfile,
+                                  kEdgeBevelMaxProfile);
     settings.segments = std::clamp(settings.segments, 1, 16);
-    settings.profile_type = BevelProfileType::offset;
+    settings.profile_type = BevelProfileType::Offset;
     return settings;
 }
 
 float edge_bevel_shape_profile(float profile)
 {
-    return std::clamp(profile, edge_bevel_min_profile, edge_bevel_max_profile);
+  return std::clamp(profile, kEdgeBevelMinProfile, kEdgeBevelMaxProfile);
 }
 
 float safe_edge_bevel_width_for_face_edge(const Document& document, const Face& face, std::size_t edge_index, float requested_width)
@@ -779,17 +788,17 @@ float safe_edge_bevel_width_for_face_edge(const Document& document, const Face& 
     const quader::QVec3 normal = face_normal(document, face);
     const quader::QVec3 edge_direction = normalize_or_zero(next->position - current->position);
     const quader::QVec3 inward = normalize_or_zero(cross(normal, edge_direction));
-    if (length_squared(normal) <= epsilon ||
-        length_squared(edge_direction) <= epsilon ||
-        length_squared(inward) <= epsilon) {
-        return 0.0F;
+    if (length_squared(normal) <= kEpsilon ||
+        length_squared(edge_direction) <= kEpsilon ||
+        length_squared(inward) <= kEpsilon) {
+      return 0.0F;
     }
 
     float max_width = requested_width;
     const auto apply_support_limit = [&max_width, inward](quader::QVec3 support_delta) {
         const float inward_distance = dot(support_delta, inward);
-        if (inward_distance > epsilon) {
-            max_width = std::min(max_width, inward_distance * 0.999F);
+        if (inward_distance > kEpsilon) {
+          max_width = std::min(max_width, inward_distance * 0.999F);
         }
     };
     apply_support_limit(previous->position - current->position);
@@ -830,11 +839,10 @@ std::optional<EdgeBevelSide> edge_bevel_side_for_face(
     const quader::QVec3 edge_direction = normalize_or_zero(to->position - from->position);
     const quader::QVec3 inward = normalize_or_zero(cross(normal, edge_direction));
     const float safe_width = safe_edge_bevel_width_for_face_edge(source, face, *directed_index, width);
-    if (length_squared(normal) <= epsilon ||
-        length_squared(edge_direction) <= epsilon ||
-        length_squared(inward) <= epsilon ||
-        safe_width <= epsilon) {
-        return std::nullopt;
+    if (length_squared(normal) <= kEpsilon ||
+        length_squared(edge_direction) <= kEpsilon ||
+        length_squared(inward) <= kEpsilon || safe_width <= kEpsilon) {
+      return std::nullopt;
     }
 
     const quader::QVec3 from_position = from->position + (inward * safe_width);
@@ -854,7 +862,8 @@ std::optional<EdgeBevelSide> edge_bevel_side_for_face(
 ElementId edge_bevel_side_endpoint_vertex(const EdgeBevelSide& side, ElementId endpoint_id)
 {
     const auto found = side.endpoint_vertices.find(endpoint_id);
-    return found == side.endpoint_vertices.end() ? invalid_element_id : found->second;
+    return found == side.endpoint_vertices.end() ? kInvalidElementId
+                                                 : found->second;
 }
 
 quader::QVec3 edge_bevel_side_endpoint_position(const EdgeBevelSide& side, ElementId endpoint_id)
@@ -868,9 +877,9 @@ std::vector<ElementId> compact_edge_bevel_face_loop(std::vector<ElementId> verti
     std::vector<ElementId> compact;
     compact.reserve(vertices.size());
     for (const ElementId vertex_id : vertices) {
-        if (vertex_id == invalid_element_id) {
-            continue;
-        }
+      if (vertex_id == kInvalidElementId) {
+        continue;
+      }
         if (!compact.empty() && compact.back() == vertex_id) {
             continue;
         }
@@ -915,11 +924,10 @@ std::optional<EdgeBevelOffsetLine> edge_bevel_offset_line_for_face_edge(
     const quader::QVec3 edge_direction = normalize_or_zero(to->position - from->position);
     const quader::QVec3 inward = normalize_or_zero(cross(normal, edge_direction));
     const float safe_width = safe_edge_bevel_width_for_face_edge(document, face, edge_index, width);
-    if (length_squared(normal) <= epsilon ||
-        length_squared(edge_direction) <= epsilon ||
-        length_squared(inward) <= epsilon ||
-        safe_width <= epsilon) {
-        return std::nullopt;
+    if (length_squared(normal) <= kEpsilon ||
+        length_squared(edge_direction) <= kEpsilon ||
+        length_squared(inward) <= kEpsilon || safe_width <= kEpsilon) {
+      return std::nullopt;
     }
 
     return EdgeBevelOffsetLine { from->position + (inward * safe_width), edge_direction };
@@ -929,14 +937,17 @@ std::optional<quader::QVec3> edge_bevel_intersect_offset_lines(const EdgeBevelOf
 {
     const quader_geometry::QVec3f r = geometry_vec3(first.direction);
     const quader_geometry::QVec3f s = geometry_vec3(second.direction);
-    if (quader_geometry::length_squared(quader_geometry::cross(r, s)) <= epsilon ||
-        quader_geometry::length_squared(r) <= epsilon ||
-        quader_geometry::length_squared(s) <= epsilon) {
-        return std::nullopt;
+    if (quader_geometry::length_squared(quader_geometry::cross(r, s)) <=
+            kEpsilon ||
+        quader_geometry::length_squared(r) <= kEpsilon ||
+        quader_geometry::length_squared(s) <= kEpsilon) {
+      return std::nullopt;
     }
 
     const quader_geometry::QLineLineClosestPoints<float> closest =
-        quader_geometry::closest_points_line_line<float>({ geometry_vec3(first.point), r }, { geometry_vec3(second.point), s }, epsilon);
+        quader_geometry::closest_points_line_line<float>(
+            {geometry_vec3(first.point), r}, {geometry_vec3(second.point), s},
+            kEpsilon);
     return closest.valid ? std::optional<quader::QVec3>(poly_vec3(closest.midpoint)) : std::nullopt;
 }
 
@@ -1014,24 +1025,27 @@ ElementId edge_bevel_profile_vertex_for_source(
 float edge_bevel_superellipse_exponent(float profile)
 {
     const float shape_profile = edge_bevel_shape_profile(profile);
-    if (shape_profile >= edge_bevel_square_profile_threshold) {
-        return edge_bevel_square_exponent;
+    if (shape_profile >= kEdgeBevelSquareProfileThreshold) {
+      return kEdgeBevelSquareExponent;
     }
-    if (shape_profile <= edge_bevel_min_profile) {
-        return edge_bevel_square_in_exponent;
+    if (shape_profile <= kEdgeBevelMinProfile) {
+      return kEdgeBevelSquareInExponent;
     }
 
     const float exponent = -std::log(2.0F) / std::log(std::sqrt(shape_profile));
-    if (std::abs(exponent - edge_bevel_circle_exponent) <= edge_bevel_exponent_epsilon) {
-        return edge_bevel_circle_exponent;
+    if (std::abs(exponent - kEdgeBevelCircleExponent) <=
+        kEdgeBevelExponentEpsilon) {
+      return kEdgeBevelCircleExponent;
     }
-    if (std::abs(exponent - edge_bevel_line_exponent) <= edge_bevel_exponent_epsilon) {
-        return edge_bevel_line_exponent;
+    if (std::abs(exponent - kEdgeBevelLineExponent) <=
+        kEdgeBevelExponentEpsilon) {
+      return kEdgeBevelLineExponent;
     }
-    if (exponent < edge_bevel_exponent_epsilon) {
-        return edge_bevel_square_in_exponent;
+    if (exponent < kEdgeBevelExponentEpsilon) {
+      return kEdgeBevelSquareInExponent;
     }
-    return std::clamp(exponent, edge_bevel_exponent_epsilon, edge_bevel_square_exponent);
+    return std::clamp(exponent, kEdgeBevelExponentEpsilon,
+                      kEdgeBevelSquareExponent);
 }
 
 double edge_bevel_superellipse_y(double x, float exponent)
@@ -1070,7 +1084,7 @@ std::vector<EdgeBevelProfilePolylinePoint> edge_bevel_build_superellipse_profile
 
     for (int index = 0; index <= sample_count; ++index) {
         const double t = static_cast<double>(index) / static_cast<double>(sample_count);
-        const double x = 0.5 - (std::cos(t * static_cast<double>(pi)) * 0.5);
+        const double x = 0.5 - (std::cos(t * static_cast<double>(kPi)) * 0.5);
         const double y = edge_bevel_superellipse_y(x, exponent);
         double length = 0.0;
         if (!samples.empty()) {
@@ -1138,21 +1152,27 @@ std::pair<float, float> edge_bevel_profile_coordinates(int segment, int segments
     const float exponent = edge_bevel_superellipse_exponent(profile);
     float x = 0.0F;
     float y = 1.0F;
-    if (exponent == edge_bevel_square_exponent) {
-        std::tie(x, y) = edge_bevel_square_profile_coordinates(segment, segments, false);
-    } else if (exponent == edge_bevel_square_in_exponent) {
-        std::tie(x, y) = edge_bevel_square_profile_coordinates(segment, segments, true);
-    } else if (std::abs(exponent - edge_bevel_line_exponent) <= edge_bevel_exponent_epsilon) {
-        x = static_cast<float>(segment) / static_cast<float>(segments);
-        y = 1.0F - x;
-    } else if (std::abs(exponent - edge_bevel_circle_exponent) <= edge_bevel_exponent_epsilon) {
-        const float theta = static_cast<float>(segment) * pi * 0.5F / static_cast<float>(segments);
-        x = std::sin(theta);
-        y = std::cos(theta);
+    if (exponent == kEdgeBevelSquareExponent) {
+      std::tie(x, y) =
+          edge_bevel_square_profile_coordinates(segment, segments, false);
+    } else if (exponent == kEdgeBevelSquareInExponent) {
+      std::tie(x, y) =
+          edge_bevel_square_profile_coordinates(segment, segments, true);
+    } else if (std::abs(exponent - kEdgeBevelLineExponent) <=
+               kEdgeBevelExponentEpsilon) {
+      x = static_cast<float>(segment) / static_cast<float>(segments);
+      y = 1.0F - x;
+    } else if (std::abs(exponent - kEdgeBevelCircleExponent) <=
+               kEdgeBevelExponentEpsilon) {
+      const float theta = static_cast<float>(segment) * kPi * 0.5F /
+                          static_cast<float>(segments);
+      x = std::sin(theta);
+      y = std::cos(theta);
     } else {
-        const std::vector<EdgeBevelProfilePolylinePoint> samples =
-            edge_bevel_build_superellipse_profile_polyline(segments, exponent);
-        std::tie(x, y) = edge_bevel_sample_profile_polyline(samples, static_cast<float>(segment) / static_cast<float>(segments));
+      const std::vector<EdgeBevelProfilePolylinePoint> samples =
+          edge_bevel_build_superellipse_profile_polyline(segments, exponent);
+      std::tie(x, y) = edge_bevel_sample_profile_polyline(
+          samples, static_cast<float>(segment) / static_cast<float>(segments));
     }
 
     return { y, x };
@@ -1175,27 +1195,28 @@ quader::QVec3 edge_bevel_profile_middle_on_edge(quader::QVec3 edge_start, quader
     const float edge_length_squared = quader_geometry::length_squared(edge_delta);
     const float boundary_length_squared = quader_geometry::length_squared(boundary_delta);
 
-    if (edge_length_squared <= epsilon) {
-        return edge_start;
+    if (edge_length_squared <= kEpsilon) {
+      return edge_start;
     }
-    if (boundary_length_squared <= epsilon) {
-        const float edge_parameter =
-            quader_geometry::dot(geometry_vec3(first_boundary - edge_start), edge_delta) / edge_length_squared;
-        return edge_start + ((edge_end - edge_start) * edge_parameter);
+    if (boundary_length_squared <= kEpsilon) {
+      const float edge_parameter =
+          quader_geometry::dot(geometry_vec3(first_boundary - edge_start),
+                               edge_delta) /
+          edge_length_squared;
+      return edge_start + ((edge_end - edge_start) * edge_parameter);
     }
 
     const float edge_boundary_dot = quader_geometry::dot(edge_delta, boundary_delta);
     const float denominator = (edge_length_squared * boundary_length_squared) - (edge_boundary_dot * edge_boundary_dot);
 
-    if (denominator <= epsilon) {
-        return edge_start;
+    if (denominator <= kEpsilon) {
+      return edge_start;
     }
 
     const quader_geometry::QLineLineClosestPoints<float> closest =
         quader_geometry::closest_points_line_line<float>(
-            { geometry_vec3(edge_start), edge_delta },
-            { geometry_vec3(first_boundary), boundary_delta },
-            epsilon);
+            {geometry_vec3(edge_start), edge_delta},
+            {geometry_vec3(first_boundary), boundary_delta}, kEpsilon);
     return closest.valid ? poly_vec3(closest.first_point) : edge_start;
 }
 
@@ -1221,24 +1242,28 @@ quader::QVec3 edge_bevel_snap_to_superellipsoid(quader::QVec3 point, float expon
         std::max(0.0F, point.y),
         std::max(0.0F, point.z),
     };
-    if (exponent == edge_bevel_square_exponent) {
-        const float max_component = std::max(positive.x, std::max(positive.y, positive.z));
-        return max_component > epsilon ? positive / max_component : positive;
+    if (exponent == kEdgeBevelSquareExponent) {
+      const float max_component =
+          std::max(positive.x, std::max(positive.y, positive.z));
+      return max_component > kEpsilon ? positive / max_component : positive;
     }
-    if (exponent == edge_bevel_square_in_exponent) {
-        return positive;
+    if (exponent == kEdgeBevelSquareInExponent) {
+      return positive;
     }
-    if (std::abs(exponent - edge_bevel_circle_exponent) <= edge_bevel_exponent_epsilon) {
-        return normalize_or_zero(positive);
+    if (std::abs(exponent - kEdgeBevelCircleExponent) <=
+        kEdgeBevelExponentEpsilon) {
+      return normalize_or_zero(positive);
     }
 
     const float inverse_exponent = 1.0F / exponent;
-    if (positive.x <= epsilon) {
-        if (positive.y <= epsilon) {
-            return { 0.0F, 0.0F, std::pow(positive.z, inverse_exponent) };
-        }
-        const float y = std::pow(1.0F / (1.0F + std::pow(positive.z / positive.y, exponent)), inverse_exponent);
-        return { 0.0F, y, positive.z * y / positive.y };
+    if (positive.x <= kEpsilon) {
+      if (positive.y <= kEpsilon) {
+        return {0.0F, 0.0F, std::pow(positive.z, inverse_exponent)};
+      }
+      const float y =
+          std::pow(1.0F / (1.0F + std::pow(positive.z / positive.y, exponent)),
+                   inverse_exponent);
+      return {0.0F, y, positive.z * y / positive.y};
     }
 
     const float x = std::pow(
@@ -1287,21 +1312,21 @@ bool append_edge_bevel_face(
 
 EdgeBevelTriCornerKey edge_bevel_tri_corner_canonical_key(int side, int ring, int segment, int segments)
 {
-    constexpr int side_count = 3;
-    const int half_segments = segments / 2;
-    const bool odd = (segments % 2) == 1;
-    side = (side % side_count + side_count) % side_count;
+  constexpr int kSideCount = 3;
+  const int half_segments = segments / 2;
+  const bool odd = (segments % 2) == 1;
+  side = (side % kSideCount + kSideCount) % kSideCount;
 
-    if (!odd && ring == half_segments && segment == half_segments) {
-        return { 0, ring, segment };
-    }
+  if (!odd && ring == half_segments && segment == half_segments) {
+    return {0, ring, segment};
+  }
     if (ring <= half_segments - 1 + (odd ? 1 : 0) && segment <= half_segments) {
         return { side, ring, segment };
     }
     if (segment <= half_segments) {
-        return { (side + side_count - 1) % side_count, segment, segments - ring };
+      return {(side + kSideCount - 1) % kSideCount, segment, segments - ring};
     }
-    return { (side + 1) % side_count, segments - segment, ring };
+    return {(side + 1) % kSideCount, segments - segment, ring};
 }
 
 std::optional<std::vector<ElementId>> ordered_tri_corner_boundary_ring(
@@ -1412,10 +1437,11 @@ bool append_edge_bevel_tri_corner_patch_faces(
     std::map<EdgeBevelTriCornerKey, ElementId> generated_vertices;
 
     auto boundary_vertex = [&boundary_ring, segments](int side, int segment) {
-        constexpr int side_count = 3;
-        side = (side % side_count + side_count) % side_count;
-        segment = std::clamp(segment, 0, segments);
-        return (*boundary_ring)[static_cast<std::size_t>((side * segments + segment) % (segments * side_count))];
+      constexpr int kSideCount = 3;
+      side = (side % kSideCount + kSideCount) % kSideCount;
+      segment = std::clamp(segment, 0, segments);
+      return (*boundary_ring)[static_cast<std::size_t>(
+          (side * segments + segment) % (segments * kSideCount))];
     };
 
     auto vertex_at = [&](int side, int ring, int segment) -> ElementId {
@@ -1593,8 +1619,8 @@ quader::QVec3 edge_bevel_vmesh_profile_point(
     }
 
     const float denominator = dot(vprofile.plane_normal, vprofile.projection_direction);
-    if (std::abs(denominator) <= epsilon) {
-        return point;
+    if (std::abs(denominator) <= kEpsilon) {
+      return point;
     }
 
     const float t = dot(vprofile.plane_normal, vprofile.plane_co - point) / denominator;
@@ -1640,7 +1666,7 @@ float edge_bevel_sabin_gamma(int side_count)
         return 0.523423277F;
     }
 
-    const double cosine = std::cos(pi / static_cast<double>(side_count));
+    const double cosine = std::cos(kPi / static_cast<double>(side_count));
     const double cosine2 = cosine * cosine;
     const double cosine4 = cosine2 * cosine2;
     const double cosine6 = cosine4 * cosine2;
@@ -1655,27 +1681,19 @@ float edge_bevel_sabin_gamma(int side_count)
 float edge_bevel_profile_fullness(int segments, float profile)
 {
     const float exponent = edge_bevel_superellipse_exponent(profile);
-    if (std::abs(exponent - edge_bevel_line_exponent) <= edge_bevel_exponent_epsilon) {
-        return 0.0F;
+    if (std::abs(exponent - kEdgeBevelLineExponent) <=
+        kEdgeBevelExponentEpsilon) {
+      return 0.0F;
     }
 
-    static constexpr std::array<float, 11> circle_fullness {
-        0.0F,
-        0.559F,
-        0.642F,
-        0.551F,
-        0.646F,
-        0.624F,
-        0.646F,
-        0.619F,
-        0.647F,
-        0.639F,
-        0.647F,
+    static constexpr std::array<float, 11> kCircleFullness{
+        0.0F,   0.559F, 0.642F, 0.551F, 0.646F, 0.624F,
+        0.646F, 0.619F, 0.647F, 0.639F, 0.647F,
     };
-    if (std::abs(exponent - edge_bevel_circle_exponent) <= edge_bevel_exponent_epsilon &&
-        segments > 0 &&
-        segments <= static_cast<int>(circle_fullness.size())) {
-        return circle_fullness[static_cast<std::size_t>(segments - 1)];
+    if (std::abs(exponent - kEdgeBevelCircleExponent) <=
+            kEdgeBevelExponentEpsilon &&
+        segments > 0 && segments <= static_cast<int>(kCircleFullness.size())) {
+      return kCircleFullness[static_cast<std::size_t>(segments - 1)];
     }
     if ((segments % 2) == 0) {
         return (2.4506F * profile) - (0.00000300F * static_cast<float>(segments)) - 0.6266F;
@@ -1837,8 +1855,8 @@ EdgeBevelVMesh edge_bevel_vmesh_cubic_subdiv(
         }
     }
 
-    constexpr float ordinary_gamma = 0.25F;
-    constexpr float ordinary_beta = -ordinary_gamma;
+    constexpr float kOrdinaryGamma = 0.25F;
+    constexpr float kOrdinaryBeta = -kOrdinaryGamma;
     for (int side = 0; side < side_count; ++side) {
         for (int ring = 1; ring < input_half_segments; ++ring) {
             for (int segment = 1; segment <= input_half_segments; ++segment) {
@@ -1852,10 +1870,12 @@ EdgeBevelVMesh edge_bevel_vmesh_cubic_subdiv(
                     edge_bevel_vmesh_canonical_slot(vmesh_out, side, (ring * 2) + 1, (segment * 2) - 1).position,
                     edge_bevel_vmesh_canonical_slot(vmesh_out, side, (ring * 2) - 1, (segment * 2) + 1).position,
                     edge_bevel_vmesh_canonical_slot(vmesh_out, side, (ring * 2) + 1, (segment * 2) + 1).position);
-                edge_bevel_vmesh_slot(vmesh_out, side, ring * 2, segment * 2).position =
-                    edge_centroid +
-                    (face_centroid * ordinary_beta) +
-                    (edge_bevel_vmesh_slot(vmesh_in, side, ring, segment).position * ordinary_gamma);
+                edge_bevel_vmesh_slot(vmesh_out, side, ring * 2, segment * 2)
+                    .position =
+                    edge_centroid + (face_centroid * kOrdinaryBeta) +
+                    (edge_bevel_vmesh_slot(vmesh_in, side, ring, segment)
+                         .position *
+                     kOrdinaryGamma);
             }
         }
     }
@@ -1935,28 +1955,45 @@ EdgeBevelVMesh edge_bevel_vmesh_interpolate(
 
                 int source_ring = vmesh_in.segments - previous_source_segment;
                 float rest_ring = -rest_previous;
-                if (rest_ring > -epsilon) {
-                    rest_ring = 0.0F;
+                if (rest_ring > -kEpsilon) {
+                  rest_ring = 0.0F;
                 } else {
-                    --source_ring;
-                    rest_ring = 1.0F + rest_ring;
+                  --source_ring;
+                  rest_ring = 1.0F + rest_ring;
                 }
 
                 quader::QVec3 position;
-                if (rest_ring < epsilon && rest_segment < epsilon) {
-                    position = edge_bevel_vmesh_canonical_slot(vmesh_in, side, source_ring, source_segment).position;
+                if (rest_ring < kEpsilon && rest_segment < kEpsilon) {
+                  position = edge_bevel_vmesh_canonical_slot(
+                                 vmesh_in, side, source_ring, source_segment)
+                                 .position;
                 } else {
-                    const int ring_increment =
-                        (rest_ring < epsilon || source_ring == vmesh_in.segments) ? 0 : 1;
-                    const int segment_increment =
-                        (rest_segment < epsilon || source_segment == vmesh_in.segments) ? 0 : 1;
-                    position = edge_bevel_bilinear(
-                        edge_bevel_vmesh_canonical_slot(vmesh_in, side, source_ring, source_segment).position,
-                        edge_bevel_vmesh_canonical_slot(vmesh_in, side, source_ring, source_segment + segment_increment).position,
-                        edge_bevel_vmesh_canonical_slot(vmesh_in, side, source_ring + ring_increment, source_segment + segment_increment).position,
-                        edge_bevel_vmesh_canonical_slot(vmesh_in, side, source_ring + ring_increment, source_segment).position,
-                        rest_segment,
-                        rest_ring);
+                  const int ring_increment =
+                      (rest_ring < kEpsilon || source_ring == vmesh_in.segments)
+                          ? 0
+                          : 1;
+                  const int segment_increment =
+                      (rest_segment < kEpsilon ||
+                       source_segment == vmesh_in.segments)
+                          ? 0
+                          : 1;
+                  position = edge_bevel_bilinear(
+                      edge_bevel_vmesh_canonical_slot(
+                          vmesh_in, side, source_ring, source_segment)
+                          .position,
+                      edge_bevel_vmesh_canonical_slot(
+                          vmesh_in, side, source_ring,
+                          source_segment + segment_increment)
+                          .position,
+                      edge_bevel_vmesh_canonical_slot(
+                          vmesh_in, side, source_ring + ring_increment,
+                          source_segment + segment_increment)
+                          .position,
+                      edge_bevel_vmesh_canonical_slot(
+                          vmesh_in, side, source_ring + ring_increment,
+                          source_segment)
+                          .position,
+                      rest_segment, rest_ring);
                 }
                 edge_bevel_vmesh_slot(vmesh_out, side, ring, segment).position = position;
             }
@@ -2008,8 +2045,8 @@ EdgeBevelVMesh edge_bevel_make_tri_cube_corner_square_vmesh(int segments)
 EdgeBevelVMesh edge_bevel_make_tri_cube_corner_vmesh(int segments, float profile, BevelProfileType profile_type)
 {
     QDR_PROFILE_SCOPE("qdr_document.edge_bevel_make_tri_cube_corner_vmesh");
-    if (edge_bevel_superellipse_exponent(profile) == edge_bevel_square_exponent) {
-        return edge_bevel_make_tri_cube_corner_square_vmesh(segments);
+    if (edge_bevel_superellipse_exponent(profile) == kEdgeBevelSquareExponent) {
+      return edge_bevel_make_tri_cube_corner_square_vmesh(segments);
     }
 
     std::vector<EdgeBevelVMeshProfile> profiles = edge_bevel_tri_cube_corner_profiles();
@@ -2069,8 +2106,8 @@ bool append_edge_bevel_vmesh_faces(
     QDR_PROFILE_SCOPE("qdr_document.append_edge_bevel_vmesh_faces");
     auto vertex_at = [&](int side, int ring, int segment) -> ElementId {
         EdgeBevelVMeshSlot& slot = edge_bevel_vmesh_canonical_slot(vmesh, side, ring, segment);
-        if (slot.vertex_id == invalid_element_id) {
-            slot.vertex_id = add_vertex(document, slot.position);
+        if (slot.vertex_id == kInvalidElementId) {
+          slot.vertex_id = add_vertex(document, slot.position);
         }
         return slot.vertex_id;
     };
@@ -2081,8 +2118,9 @@ bool append_edge_bevel_vmesh_faces(
             Face probe;
             probe.vertices = vertices;
             const quader::QVec3 from_source = face_centroid(document, probe) - *orientation_source;
-            if (length_squared(from_source) > epsilon) {
-                face_expected_normal = orient_away_from_source ? from_source : from_source * -1.0F;
+            if (length_squared(from_source) > kEpsilon) {
+              face_expected_normal =
+                  orient_away_from_source ? from_source : from_source * -1.0F;
             }
         }
 
@@ -2224,18 +2262,22 @@ bool append_edge_bevel_tri_corner_arc_patch_faces(
     }
 
     const float exponent = edge_bevel_superellipse_exponent(profile);
-    if (segments == 2 && exponent == edge_bevel_square_in_exponent) {
-        const ElementId pole_id = ordered_arcs[0].vertices[1];
-        // Blender's square-in tri-corner path collapses the middle row into a shared pole
-        // and leaves the edge strips to close the corner, avoiding a crossed fallback patch.
-        if (std::ranges::all_of(ordered_arcs, [&document, pole_id](const EdgeBevelCornerArc& arc) {
+    if (segments == 2 && exponent == kEdgeBevelSquareInExponent) {
+      const ElementId pole_id = ordered_arcs[0].vertices[1];
+      // Blender's square-in tri-corner path collapses the middle row into a
+      // shared pole and leaves the edge strips to close the corner, avoiding a
+      // crossed fallback patch.
+      if (std::ranges::all_of(
+              ordered_arcs,
+              [&document, pole_id](const EdgeBevelCornerArc &arc) {
                 return arc.vertices.size() == 3U && edge_bevel_vertices_match(document, pole_id, arc.vertices[1]);
-            })) {
-            return true;
-        }
+              })) {
+        return true;
+      }
     }
 
-    EdgeBevelVMesh vmesh = edge_bevel_make_tri_cube_corner_vmesh(segments, profile, BevelProfileType::offset);
+    EdgeBevelVMesh vmesh = edge_bevel_make_tri_cube_corner_vmesh(
+        segments, profile, BevelProfileType::Offset);
     const int half_segments = segments / 2;
     for (int side = 0; side < vmesh.side_count; ++side) {
         for (int ring = 0; ring <= half_segments; ++ring) {
@@ -2247,7 +2289,7 @@ bool append_edge_bevel_tri_corner_arc_patch_faces(
                     corner2->position,
                     source_vertex->position,
                     slot.position);
-                slot.vertex_id = invalid_element_id;
+                slot.vertex_id = kInvalidElementId;
             }
         }
     }
@@ -2337,22 +2379,28 @@ bool append_edge_bevel_vmesh_corner_patch_faces(
         vmesh_profile.use_global_profile = arc.use_global_profile;
         vmesh_profile.profile = arc.profile;
         vmesh_profile.profile_type = arc.profile_type;
-        if (arc.edge.a != invalid_element_id && arc.edge.b != invalid_element_id) {
-            const Vertex* edge_a = find_vertex(document, arc.edge.a);
-            const Vertex* edge_b = find_vertex(document, arc.edge.b);
-            const quader::QVec3 first_delta = normalize_or_zero(vmesh_profile.source - vmesh_profile.start);
-            const quader::QVec3 second_delta = normalize_or_zero(vmesh_profile.source - vmesh_profile.end);
-            const quader::QVec3 plane_normal = normalize_or_zero(cross(first_delta, second_delta));
-            const quader::QVec3 projection_direction =
-                edge_a != nullptr && edge_b != nullptr ? normalize_or_zero(edge_a->position - edge_b->position) : quader::QVec3 {};
-            if (length_squared(plane_normal) > epsilon &&
-                length_squared(projection_direction) > epsilon &&
-                std::abs(dot(plane_normal, projection_direction)) > epsilon) {
-                vmesh_profile.plane_co = vmesh_profile.start;
-                vmesh_profile.plane_normal = plane_normal;
-                vmesh_profile.projection_direction = projection_direction;
-                vmesh_profile.has_projection = true;
-            }
+        if (arc.edge.a != kInvalidElementId &&
+            arc.edge.b != kInvalidElementId) {
+          const Vertex *edge_a = find_vertex(document, arc.edge.a);
+          const Vertex *edge_b = find_vertex(document, arc.edge.b);
+          const quader::QVec3 first_delta =
+              normalize_or_zero(vmesh_profile.source - vmesh_profile.start);
+          const quader::QVec3 second_delta =
+              normalize_or_zero(vmesh_profile.source - vmesh_profile.end);
+          const quader::QVec3 plane_normal =
+              normalize_or_zero(cross(first_delta, second_delta));
+          const quader::QVec3 projection_direction =
+              edge_a != nullptr && edge_b != nullptr
+                  ? normalize_or_zero(edge_a->position - edge_b->position)
+                  : quader::QVec3{};
+          if (length_squared(plane_normal) > kEpsilon &&
+              length_squared(projection_direction) > kEpsilon &&
+              std::abs(dot(plane_normal, projection_direction)) > kEpsilon) {
+            vmesh_profile.plane_co = vmesh_profile.start;
+            vmesh_profile.plane_normal = plane_normal;
+            vmesh_profile.projection_direction = projection_direction;
+            vmesh_profile.has_projection = true;
+          }
         }
         profiles.push_back(vmesh_profile);
         bound_center += start->position;
@@ -2369,7 +2417,9 @@ bool append_edge_bevel_vmesh_corner_patch_faces(
     const quader::QVec3 center_direction = source_vertex->position - bound_center;
     const float fullness = edge_bevel_profile_fullness(segments, profile);
     edge_bevel_vmesh_slot(vmesh, 0, 1, 1).position =
-        length_squared(center_direction) > epsilon ? bound_center + (center_direction * fullness) : bound_center;
+        length_squared(center_direction) > kEpsilon
+            ? bound_center + (center_direction * fullness)
+            : bound_center;
     edge_bevel_vmesh_copy_equivalent_slots(vmesh);
 
     do {
@@ -2540,9 +2590,9 @@ bool append_edge_bevel_corner_patch_faces(
 
 void add_unique_edge_bevel_patch_vertex(std::vector<std::pair<ElementId, quader::QVec3>>& points, ElementId vertex_id, quader::QVec3 position)
 {
-    if (vertex_id == invalid_element_id) {
-        return;
-    }
+  if (vertex_id == kInvalidElementId) {
+    return;
+  }
     const auto existing = std::ranges::find_if(points, [vertex_id, position](const std::pair<ElementId, quader::QVec3>& point) {
         return point.first == vertex_id || length_squared(point.second - position) <= 0.000001F;
     });
@@ -2582,14 +2632,16 @@ std::vector<ElementId> ordered_edge_bevel_patch_vertices(
     centroid = centroid / static_cast<float>(points.size());
 
     quader::QVec3 axis = normalize_or_zero(centroid - source_vertex->position);
-    if (length_squared(axis) <= epsilon) {
-        axis = { 0.0F, 1.0F, 0.0F };
+    if (length_squared(axis) <= kEpsilon) {
+      axis = {0.0F, 1.0F, 0.0F};
     }
 
     quader::QVec3 reference = normalize_or_zero(points.front().second - source_vertex->position);
     reference = normalize_or_zero(reference - (axis * dot(reference, axis)));
-    if (length_squared(reference) <= epsilon) {
-        reference = std::abs(axis.y) < 0.9F ? normalize_or_zero(cross(axis, { 0.0F, 1.0F, 0.0F })) : normalize_or_zero(cross(axis, { 1.0F, 0.0F, 0.0F }));
+    if (length_squared(reference) <= kEpsilon) {
+      reference = std::abs(axis.y) < 0.9F
+                      ? normalize_or_zero(cross(axis, {0.0F, 1.0F, 0.0F}))
+                      : normalize_or_zero(cross(axis, {1.0F, 0.0F, 0.0F}));
     }
     const quader::QVec3 bitangent = normalize_or_zero(cross(axis, reference));
 
@@ -2611,11 +2663,11 @@ std::vector<ElementId> ordered_edge_bevel_patch_vertices(
 
 bool edge_bevel_point_lies_on_face_plane(const Document& document, const Face& face, quader::QVec3 position)
 {
-    const quader_geometry::QVec3f normal =
-        quader_geometry::normalize_or_zero(geometry_vec3(face_normal(document, face)), epsilon);
-    if (quader_geometry::length_squared(normal) <= epsilon) {
-        return false;
-    }
+  const quader_geometry::QVec3f normal = quader_geometry::normalize_or_zero(
+      geometry_vec3(face_normal(document, face)), kEpsilon);
+  if (quader_geometry::length_squared(normal) <= kEpsilon) {
+    return false;
+  }
 
     for (const ElementId vertex_id : face.vertices) {
         const Vertex* vertex = find_vertex(document, vertex_id);
@@ -2623,9 +2675,11 @@ bool edge_bevel_point_lies_on_face_plane(const Document& document, const Face& f
             continue;
         }
         const quader_geometry::QPlane3<float> plane =
-            quader_geometry::plane_from_point_normal<float>(geometry_vec3(vertex->position), normal, epsilon);
-        return quader_geometry::plane_side<float>(geometry_vec3(position), plane, 0.001F) ==
-            quader_geometry::QPlaneSide::on;
+            quader_geometry::plane_from_point_normal<float>(
+                geometry_vec3(vertex->position), normal, kEpsilon);
+        return quader_geometry::plane_side<float>(geometry_vec3(position),
+                                                  plane, 0.001F) ==
+               quader_geometry::QPlaneSide::On;
     }
     return false;
 }
@@ -2647,20 +2701,23 @@ bool edge_bevel_point_lies_in_face_corner(
 
     const quader::QVec3 normal = normalize_or_zero(face_normal(document, face));
     const quader::QVec3 offset_direction = position - vertex->position;
-    if (length_squared(normal) <= epsilon || length_squared(offset_direction) <= epsilon) {
-        return false;
+    if (length_squared(normal) <= kEpsilon ||
+        length_squared(offset_direction) <= kEpsilon) {
+      return false;
     }
 
     const quader::QVec3 previous_direction = previous->position - vertex->position;
     const quader::QVec3 next_direction = next->position - vertex->position;
-    if (length_squared(previous_direction) <= epsilon || length_squared(next_direction) <= epsilon) {
-        return false;
+    if (length_squared(previous_direction) <= kEpsilon ||
+        length_squared(next_direction) <= kEpsilon) {
+      return false;
     }
 
-    constexpr float corner_epsilon = -0.001F;
+    constexpr float kCornerEpsilon = -0.001F;
     const float after_previous_edge = dot(cross(previous_direction * -1.0F, offset_direction), normal);
     const float before_next_edge = dot(cross(next_direction, offset_direction), normal);
-    return after_previous_edge >= corner_epsilon && before_next_edge >= corner_epsilon;
+    return after_previous_edge >= kCornerEpsilon &&
+           before_next_edge >= kCornerEpsilon;
 }
 
 std::vector<ElementId> edge_bevel_endpoint_profile_vertices(const EdgeBevelBuild& build, ElementId endpoint_id)
@@ -2736,9 +2793,9 @@ void append_edge_bevel_terminal_profile_vertices(
     }
 
     for (const ElementId profile_vertex_id : ordered) {
-        if (profile_vertex_id == invalid_element_id) {
-            continue;
-        }
+      if (profile_vertex_id == kInvalidElementId) {
+        continue;
+      }
         if (!rebuilt_loop.empty() && rebuilt_loop.back() == profile_vertex_id) {
             continue;
         }
@@ -2780,20 +2837,23 @@ void append_edge_bevel_unselected_vertex_offsets(
     std::vector<OrderedOffset> ordered_offsets;
 
     for (const EdgeBevelFaceVertexOffset& offset : offsets) {
-        if (offset.source_vertex_id != vertex_id ||
-            offset.offset_vertex_id == invalid_element_id ||
-            !edge_bevel_point_lies_on_face_plane(document, face, offset.position) ||
-            !edge_bevel_point_lies_in_face_corner(document, face, vertex_id, previous_id, next_id, offset.position)) {
-            continue;
-        }
+      if (offset.source_vertex_id != vertex_id ||
+          offset.offset_vertex_id == kInvalidElementId ||
+          !edge_bevel_point_lies_on_face_plane(document, face,
+                                               offset.position) ||
+          !edge_bevel_point_lies_in_face_corner(document, face, vertex_id,
+                                                previous_id, next_id,
+                                                offset.position)) {
+        continue;
+      }
         if (contains_id(rebuilt_loop, offset.offset_vertex_id)) {
             continue;
         }
 
         const quader::QVec3 offset_delta = offset.position - vertex->position;
         const quader::QVec3 offset_direction = normalize_or_zero(offset_delta);
-        if (length_squared(offset_direction) <= epsilon) {
-            continue;
+        if (length_squared(offset_direction) <= kEpsilon) {
+          continue;
         }
         float angle = std::atan2(
             dot(cross(previous_direction, offset_direction), normal),
@@ -2881,8 +2941,10 @@ bool loop_vertex_is_redundant(const Document& document, std::span<const ElementI
     const quader::QVec3 next_delta = next->position - current->position;
     const float previous_length_squared = length_squared(previous_delta);
     const float next_length_squared = length_squared(next_delta);
-    if (previous_length_squared <= epsilon || next_length_squared <= epsilon || dot(previous_delta, next_delta) <= 0.0F) {
-        return false;
+    if (previous_length_squared <= kEpsilon ||
+        next_length_squared <= kEpsilon ||
+        dot(previous_delta, next_delta) <= 0.0F) {
+      return false;
     }
 
     const float scale = std::max(previous_length_squared * next_length_squared, 1.0F);
@@ -2977,12 +3039,13 @@ bool remove_redundant_vertex_from_all_face_loops(Document& document, ElementId v
 
 void orient_face_toward_normal(const Document& document, Face& face, quader::QVec3 expected_normal)
 {
-    if (length_squared(expected_normal) <= epsilon) {
-        return;
-    }
+  if (length_squared(expected_normal) <= kEpsilon) {
+    return;
+  }
     const quader::QVec3 normal = face_normal(document, face);
-    if (length_squared(normal) <= epsilon || dot(normal, expected_normal) >= 0.0F) {
-        return;
+    if (length_squared(normal) <= kEpsilon ||
+        dot(normal, expected_normal) >= 0.0F) {
+      return;
     }
     std::ranges::reverse(face.vertices);
     if (face.uvs.size() == face.vertices.size()) {
@@ -3035,7 +3098,7 @@ ElementId copied_vertex_id(
 
     const Vertex* source_vertex = find_vertex(source, source_vertex_id);
     if (source_vertex == nullptr) {
-        return invalid_element_id;
+      return kInvalidElementId;
     }
 
     const ElementId target_vertex_id = add_vertex(target, source_vertex->position);
@@ -3055,8 +3118,8 @@ bool append_copied_face(
     mapped_vertices.reserve(source_face.vertices.size());
     for (const ElementId source_vertex_id : source_face.vertices) {
         const ElementId target_vertex_id = copied_vertex_id(source, target, vertex_map, source_vertex_id);
-        if (target_vertex_id == invalid_element_id) {
-            return false;
+        if (target_vertex_id == kInvalidElementId) {
+          return false;
         }
         mapped_vertices.push_back(target_vertex_id);
     }
@@ -3210,8 +3273,8 @@ float loop_alignment_score(
         const quader::QVec3 second_edge = second_next->position - second->position;
         const float first_edge_length = length(first_edge);
         const float second_edge_length = length(second_edge);
-        if (first_edge_length <= epsilon || second_edge_length <= epsilon) {
-            continue;
+        if (first_edge_length <= kEpsilon || second_edge_length <= kEpsilon) {
+          continue;
         }
         edge_length_sum += (first_edge_length + second_edge_length) * 0.5F;
         ++valid_edges;

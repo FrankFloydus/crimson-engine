@@ -46,60 +46,65 @@ public:
     ViewportRenderer& operator=(ViewportRenderer&&) = delete;
     ~ViewportRenderer();
 
-    void initialize(filament::Engine& engine,
-            filament::Scene& scene,
-            TextureRegistry& textureRegistry,
-            filament::Material& groundGridMaterial,
-            std::uint8_t gridLayerMask,
-            ViewportRenderSurface surface = ViewportRenderSurface::Texture);
+    void
+    initialize(filament::Engine &engine, filament::Scene &scene,
+               TextureRegistry &texture_registry,
+               filament::Material &ground_grid_material,
+               std::uint8_t grid_layer_mask,
+               ViewportRenderSurface surface = ViewportRenderSurface::Texture);
     void shutdown();
 
     void resize(std::uint32_t width, std::uint32_t height);
-    void updateCamera(const ViewportCameraController& controller);
-    void applySceneSettings(const SceneSettingsComponent& settings, bool renderedMode);
-    void updateGroundGrid(const ViewportCameraController& controller,
-            float gridWorldSpacing,
-            const ViewportSettings& settings,
-            bool visible = true);
-    void setOverlayVisible(bool visible);
-    void setSceneVisible(bool visible);
-    void setSceneLayerMask(std::uint8_t layerMask);
-    void setShadowingEnabled(bool enabled);
+    void update_camera(const ViewportCameraController &controller);
+    void apply_scene_settings(const SceneSettingsComponent &settings,
+                              bool rendered_mode);
+    void update_ground_grid(const ViewportCameraController &controller,
+                            float grid_world_spacing,
+                            const ViewportSettings &settings,
+                            bool visible = true);
+    void set_overlay_visible(bool visible);
+    void set_scene_visible(bool visible);
+    void set_scene_layer_mask(std::uint8_t layer_mask);
+    void set_shadowing_enabled(bool enabled);
     void render(filament::Renderer& renderer);
 
-    RenderTextureHandle textureHandle() const { return renderTarget_.textureHandle(); }
-    RenderTextureHandle overlayTextureHandle() const { return overlayRenderTarget_.textureHandle(); }
+    RenderTextureHandle texture_handle() const {
+      return render_target_.texture_handle();
+    }
+    RenderTextureHandle overlay_texture_handle() const {
+      return overlay_render_target_.texture_handle();
+    }
     std::uint32_t width() const { return width_; }
     std::uint32_t height() const { return height_; }
-    float textureMaxU() const;
-    float textureMaxV() const;
+    float texture_max_u() const;
+    float texture_max_v() const;
 
-private:
-    void updateVisibleLayers();
-    void applyToneMapping(SceneToneMapping toneMapping, bool enabled);
-    void destroyColorGrading();
+  private:
+    void update_visible_layers();
+    void apply_tone_mapping(SceneToneMapping tone_mapping, bool enabled);
+    void destroy_color_grading();
 
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
-    TextureRegistry* textureRegistry_ = nullptr;
+    TextureRegistry *texture_registry_ = nullptr;
     filament::View* view_ = nullptr;
-    filament::View* overlayView_ = nullptr;
+    filament::View *overlay_view_ = nullptr;
     filament::Camera* camera_ = nullptr;
-    filament::Camera* overlayCamera_ = nullptr;
-    filament::ColorGrading* colorGrading_ = nullptr;
-    utils::Entity cameraEntity_;
-    utils::Entity overlayCameraEntity_;
-    ViewportGridRenderer gridRenderer_;
-    ViewportRenderPassCoordinator renderPassCoordinator_;
-    ViewportRenderTarget renderTarget_;
-    ViewportRenderTarget overlayRenderTarget_;
+    filament::Camera *overlay_camera_ = nullptr;
+    filament::ColorGrading *color_grading_ = nullptr;
+    utils::Entity camera_entity_;
+    utils::Entity overlay_camera_entity_;
+    ViewportGridRenderer grid_renderer_;
+    ViewportRenderPassCoordinator render_pass_coordinator_;
+    ViewportRenderTarget render_target_;
+    ViewportRenderTarget overlay_render_target_;
     ViewportRenderSurface surface_ = ViewportRenderSurface::Texture;
     std::uint32_t width_ = 1u;
     std::uint32_t height_ = 1u;
-    float cameraNearPlane_ = 0.05f;
-    float cameraFarPlane_ = 1000.0f;
-    SceneToneMapping colorGradingToneMapping_ = SceneToneMapping::Aces;
-    bool hasColorGradingToneMapping_ = false;
+    float camera_near_plane_ = 0.05f;
+    float camera_far_plane_ = 1000.0f;
+    SceneToneMapping color_grading_tone_mapping_ = SceneToneMapping::Aces;
+    bool has_color_grading_tone_mapping_ = false;
 };
 
 } // namespace quader

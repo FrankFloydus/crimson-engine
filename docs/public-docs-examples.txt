@@ -18,6 +18,8 @@ internal docs/absorbed_modeling/LICENSE.md
 internal docs/absorbed_modeling/QUADER_NATIVE_SOURCE.txt
 internal docs/absorbed_modeling/README.md
 internal docs/light-export-calibration.md
+internal docs/architecture_migration_plan.md
+internal docs/ui_renderer_decoupling_plan.md
 internal docs/overlay-handling.md
 internal docs/public-docs-examples.txt
 internal examples/AGENTS.md

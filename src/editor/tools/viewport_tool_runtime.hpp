@@ -32,10 +32,13 @@ public:
 class ViewportToolHost {
 public:
     [[nodiscard]] bool available(const ViewportTool& tool) const;
-    [[nodiscard]] bool ownsViewport(const ViewportTool& tool) const;
-    [[nodiscard]] bool blocksViewportFocusShortcuts(const ViewportTool& tool) const;
-    [[nodiscard]] bool allowsSelectionFallback(const ViewportTool& tool) const;
-    ModelingCommandResult activateTool(const ViewportTool& tool, ModelingSessionService& modeling) const;
+    [[nodiscard]] bool owns_viewport(const ViewportTool &tool) const;
+    [[nodiscard]] bool
+    blocks_viewport_focus_shortcuts(const ViewportTool &tool) const;
+    [[nodiscard]] bool
+    allows_selection_fallback(const ViewportTool &tool) const;
+    ModelingCommandResult activate_tool(const ViewportTool &tool,
+                                        ModelingSessionService &modeling) const;
 };
 
 /**
@@ -43,7 +46,9 @@ public:
  */
 class ViewportToolEventBuilder {
 public:
-    [[nodiscard]] ViewportToolEvent activationEvent(ViewportToolId tool, const ViewportShortcut* shortcut = nullptr) const;
+  [[nodiscard]] ViewportToolEvent
+  activation_event(ViewportToolId tool,
+                   const ViewportShortcut *shortcut = nullptr) const;
 };
 
 /**
@@ -51,13 +56,10 @@ public:
  */
 class ViewportToolController {
 public:
-    bool activateTool(
-            const ViewportToolRegistry& registry,
-            const ViewportToolHost& host,
-            ViewportToolState& state,
-            ViewportToolId tool,
-            const ViewportTool*& activeTool,
-            ViewportInputResult* result = nullptr) const;
+  bool activate_tool(const ViewportToolRegistry &registry,
+                     const ViewportToolHost &host, ViewportToolState &state,
+                     ViewportToolId tool, const ViewportTool *&active_tool,
+                     ViewportInputResult *result = nullptr) const;
 };
 
 /**
@@ -66,8 +68,11 @@ public:
 class ViewportModalToolController {
 public:
     [[nodiscard]] bool handles(const ViewportTool& tool) const;
-    [[nodiscard]] bool ownsViewport(const ViewportToolHost& host, const ViewportTool& tool) const;
-    [[nodiscard]] bool blocksViewportFocusShortcuts(const ViewportToolHost& host, const ViewportTool& tool) const;
+    [[nodiscard]] bool owns_viewport(const ViewportToolHost &host,
+                                     const ViewportTool &tool) const;
+    [[nodiscard]] bool
+    blocks_viewport_focus_shortcuts(const ViewportToolHost &host,
+                                    const ViewportTool &tool) const;
 };
 
 /**
@@ -76,7 +81,8 @@ public:
 class ViewportTransformToolController {
 public:
     [[nodiscard]] bool handles(const ViewportTool& tool) const;
-    [[nodiscard]] ModelingTransformTool transformTool(const ViewportTool& tool) const;
+    [[nodiscard]] ModelingTransformTool
+    transform_tool(const ViewportTool &tool) const;
 };
 
 /**
@@ -86,40 +92,44 @@ class ViewportToolRuntime {
 public:
     ViewportToolRuntime();
 
-    [[nodiscard]] const ViewportTool* activeTool() const { return activeTool_; }
+    [[nodiscard]] const ViewportTool *active_tool() const {
+      return active_tool_;
+    }
     [[nodiscard]] const ViewportToolRegistry& registry() const { return registry_; }
-    [[nodiscard]] bool activeToolOwnsViewport() const;
-    [[nodiscard]] bool activeToolBlocksViewportFocusShortcuts() const;
-    [[nodiscard]] bool toolAvailable(ViewportToolId tool) const;
-    [[nodiscard]] bool toolAllowsSelectionFallback(ViewportToolId tool) const;
-    [[nodiscard]] ModelingTransformTool transformTool(ViewportToolId tool) const;
-    [[nodiscard]] bool hasActiveModalPreview() const;
-    [[nodiscard]] const ModelingBoxPreview& boxPreview() const;
+    [[nodiscard]] bool active_tool_owns_viewport() const;
+    [[nodiscard]] bool active_tool_blocks_viewport_focus_shortcuts() const;
+    [[nodiscard]] bool tool_available(ViewportToolId tool) const;
+    [[nodiscard]] bool
+    tool_allows_selection_fallback(ViewportToolId tool) const;
+    [[nodiscard]] ModelingTransformTool
+    transform_tool(ViewportToolId tool) const;
+    [[nodiscard]] bool has_active_modal_preview() const;
+    [[nodiscard]] const ModelingBoxPreview &box_preview() const;
 
-    bool setActiveTool(ViewportToolState& state, ViewportToolId tool, ViewportInputResult* result = nullptr);
-    void syncActiveTool(ViewportToolId tool);
-    void clearModalToolState();
-    void clearModalDragState();
-    bool handleShortcut(
-            const ViewportShortcut& shortcut,
-            ViewportToolState& state,
-            ViewportCameraController& camera,
-            ViewportInputResult& result);
-    ViewportToolResult handleActiveToolEvent(
-            ViewportToolState& state,
-            ViewportToolContext& context,
-            const ViewportToolEvent& event);
-    ModelingCommandResult activateActiveTool(ModelingSessionService& modeling) const;
+    bool set_active_tool(ViewportToolState &state, ViewportToolId tool,
+                         ViewportInputResult *result = nullptr);
+    void sync_active_tool(ViewportToolId tool);
+    void clear_modal_tool_state();
+    void clear_modal_drag_state();
+    bool handle_shortcut(const ViewportShortcut &shortcut,
+                         ViewportToolState &state,
+                         ViewportCameraController &camera,
+                         ViewportInputResult &result);
+    ViewportToolResult handle_active_tool_event(ViewportToolState &state,
+                                                ViewportToolContext &context,
+                                                const ViewportToolEvent &event);
+    ModelingCommandResult
+    activate_active_tool(ModelingSessionService &modeling) const;
 
-private:
+  private:
     ViewportToolRegistry registry_;
     ViewportToolHost host_;
-    ViewportToolEventBuilder eventBuilder_;
+    ViewportToolEventBuilder event_builder_;
     ViewportToolController controller_;
-    ViewportModalToolController modalController_;
-    ViewportTransformToolController transformController_;
-    ViewportModalToolState modalState_;
-    const ViewportTool* activeTool_ = nullptr;
+    ViewportModalToolController modal_controller_;
+    ViewportTransformToolController transform_controller_;
+    ViewportModalToolState modal_state_;
+    const ViewportTool *active_tool_ = nullptr;
 };
 
 } // namespace quader

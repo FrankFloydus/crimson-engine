@@ -39,14 +39,16 @@ TEST(QdrDocumentOperationRadialAlignSelectionTests, RadialAlignSelectionPreserve
 		const ElementId b = add_vertex(document, { 0.0F, 1.0F, 0.0F });
 		const ElementId c = add_vertex(document, { 3.0F, 0.0F, 0.0F });
 		const ElementId d = add_vertex(document, { 0.0F, -1.0F, 0.0F });
-		EXPECT_TRUE(add_face(document, std::array<ElementId, 4> { a, b, c, d }) != invalid_element_id);
-		Selection selection = qdr_test::edge_selection({ make_edge(a, b), make_edge(b, c), make_edge(c, d), make_edge(d, a) });
+                EXPECT_TRUE(
+                    add_face(document, std::array<ElementId, 4>{a, b, c, d}) !=
+                    kInvalidElementId);
+                Selection selection = qdr_test::edge_selection({ make_edge(a, b), make_edge(b, c), make_edge(c, d), make_edge(d, a) });
 
 		const OperationResult result = radial_align_selection(document, selection);
 
 		EXPECT_TRUE(result.changed);
-		EXPECT_TRUE(selection.mode == SelectionMode::edge);
-		EXPECT_TRUE(selection.edges.size() == 4U);
+                EXPECT_TRUE(selection.mode == SelectionMode::Edge);
+                EXPECT_TRUE(selection.edges.size() == 4U);
 		EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 	}
 
@@ -63,14 +65,14 @@ TEST(QdrDocumentOperationRadialAlignSelectionTests, RadialAlignSelectionPreserve
 		const ElementId c = add_vertex(document, { 3.0F, 0.0F, 0.0F });
 		const ElementId d = add_vertex(document, { 0.0F, -1.0F, 0.0F });
 		const ElementId face = add_face(document, std::array<ElementId, 4> { a, b, c, d });
-		EXPECT_TRUE(face != invalid_element_id);
-		Selection selection = qdr_test::face_selection({ face }, face);
+                EXPECT_TRUE(face != kInvalidElementId);
+                Selection selection = qdr_test::face_selection({ face }, face);
 
 		const OperationResult result = radial_align_selection(document, selection);
 
 		EXPECT_TRUE(result.changed);
-		EXPECT_TRUE(selection.mode == SelectionMode::face);
-		EXPECT_TRUE(selection.faces.size() == 1U);
+                EXPECT_TRUE(selection.mode == SelectionMode::Face);
+                EXPECT_TRUE(selection.faces.size() == 1U);
 		EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 	}
 }
@@ -86,11 +88,19 @@ TEST(QdrDocumentOperationRadialAlignSelectionTests, RadialAlignSelectionKeepsInt
 	const ElementId top_left = add_vertex(document, { -1.0F, 1.0F, 0.0F });
 	const ElementId top = add_vertex(document, { 0.0F, 1.0F, 0.0F });
 	const ElementId top_right = add_vertex(document, { 1.0F, 1.0F, 0.0F });
-	EXPECT_TRUE(add_face(document, std::array<ElementId, 4> { bottom_left, bottom, center, left }) != invalid_element_id);
-	EXPECT_TRUE(add_face(document, std::array<ElementId, 4> { bottom, bottom_right, right, center }) != invalid_element_id);
-	EXPECT_TRUE(add_face(document, std::array<ElementId, 4> { left, center, top, top_left }) != invalid_element_id);
-	EXPECT_TRUE(add_face(document, std::array<ElementId, 4> { center, right, top_right, top }) != invalid_element_id);
-	Selection selection = qdr_test::vertex_selection({
+        EXPECT_TRUE(add_face(document, std::array<ElementId, 4>{
+                                           bottom_left, bottom, center,
+                                           left}) != kInvalidElementId);
+        EXPECT_TRUE(add_face(document, std::array<ElementId, 4>{
+                                           bottom, bottom_right, right,
+                                           center}) != kInvalidElementId);
+        EXPECT_TRUE(add_face(document, std::array<ElementId, 4>{
+                                           left, center, top,
+                                           top_left}) != kInvalidElementId);
+        EXPECT_TRUE(add_face(document, std::array<ElementId, 4>{
+                                           center, right, top_right,
+                                           top}) != kInvalidElementId);
+        Selection selection = qdr_test::vertex_selection({
 		bottom_left,
 		bottom,
 		bottom_right,
@@ -137,8 +147,8 @@ TEST(QdrDocumentOperationRadialAlignSelectionTests, RadialAlignSelectionKeepsASq
 	}
 
 	Selection selection;
-	selection.mode = SelectionMode::face;
-	for (int y = 0; y < 3; ++y) {
+        selection.mode = SelectionMode::Face;
+        for (int y = 0; y < 3; ++y) {
 		for (int x = 0; x < 3; ++x) {
 			const ElementId face = add_face(document, std::array<ElementId, 4> {
 				vertices[y][x],
@@ -146,20 +156,20 @@ TEST(QdrDocumentOperationRadialAlignSelectionTests, RadialAlignSelectionKeepsASq
 				vertices[y + 1][x + 1],
 				vertices[y + 1][x],
 			});
-			EXPECT_TRUE(face != invalid_element_id);
-			selection.faces.push_back(face);
+                        EXPECT_TRUE(face != kInvalidElementId);
+                        selection.faces.push_back(face);
 		}
 	}
 	selection.has_active = true;
-	selection.active_kind = ElementKind::face;
-	selection.active_face = selection.faces.back();
+        selection.active_kind = ElementKind::Face;
+        selection.active_face = selection.faces.back();
 
 	const OperationResult result = radial_align_selection(document, selection);
 
 	EXPECT_TRUE(result.changed);
-	constexpr float expected_step_degrees = 30.0F;
-	constexpr float expected_phase_degrees = 15.0F;
-	for (int y = 0; y < 4; ++y) {
+        constexpr float kExpectedStepDegrees = 30.0F;
+        constexpr float kExpectedPhaseDegrees = 15.0F;
+        for (int y = 0; y < 4; ++y) {
 		for (int x = 0; x < 4; ++x) {
 			if (x > 0 && x < 3 && y > 0 && y < 3) {
 				continue;
@@ -167,9 +177,13 @@ TEST(QdrDocumentOperationRadialAlignSelectionTests, RadialAlignSelectionKeepsASq
 			const Vertex* vertex = find_vertex(document, vertices[y][x]);
 			EXPECT_TRUE(vertex != nullptr);
 			const float angle_degrees = std::atan2(vertex->position.y, vertex->position.x) * 180.0F / static_cast<float>(std::acos(-1.0));
-			const float nearest_step = expected_phase_degrees +
-				(std::round((angle_degrees - expected_phase_degrees) / expected_step_degrees) * expected_step_degrees);
-			EXPECT_NEAR(angle_degrees, nearest_step, 0.01F);
+                        const float nearest_step =
+                            kExpectedPhaseDegrees +
+                            (std::round(
+                                 (angle_degrees - kExpectedPhaseDegrees) /
+                                 kExpectedStepDegrees) *
+                             kExpectedStepDegrees);
+                        EXPECT_NEAR(angle_degrees, nearest_step, 0.01F);
 		}
 	}
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));

@@ -33,19 +33,17 @@ public:
         }
     };
 
-    [[nodiscard]] static PreviewTriangleMesh meshFromDocuments(
-            const std::vector<quader_poly::Document>& documents);
-    static void appendMeshFill(
-            ViewportOverlayFrame& frame,
-            const PreviewTriangleMesh& mesh,
-            std::uint32_t color,
-            ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::ToolPreviewFill);
-    static void appendResultLines(
-            ViewportOverlayFrame& frame,
-            const PreviewTriangleMesh& mesh,
-            QVec3 planePoint,
-            QVec3 planeNormal,
-            std::uint32_t outlineColor);
+    [[nodiscard]] static PreviewTriangleMesh
+    mesh_from_documents(const std::vector<quader_poly::Document> &documents);
+    static void append_mesh_fill(ViewportOverlayFrame &frame,
+                                 const PreviewTriangleMesh &mesh,
+                                 std::uint32_t color,
+                                 ViewportOverlayStyleRole style_role =
+                                     ViewportOverlayStyleRole::ToolPreviewFill);
+    static void append_result_lines(ViewportOverlayFrame &frame,
+                                    const PreviewTriangleMesh &mesh,
+                                    QVec3 plane_point, QVec3 plane_normal,
+                                    std::uint32_t outline_color);
 };
 
 } // namespace quader

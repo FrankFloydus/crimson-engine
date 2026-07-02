@@ -40,18 +40,21 @@ public:
         return engine_ != nullptr && scene_ != nullptr;
     }
 
-    bool contains(EntityId entityId) const;
-    bool needsRebuild(EntityId entityId, const LightComponent& light) const;
+    bool contains(EntityId entity_id) const;
+    bool needs_rebuild(EntityId entity_id, const LightComponent &light) const;
 
-    void syncLight(EntityId entityId, const LightComponent& light, const QMat4& worldTransform);
-    void remove(EntityId entityId);
-    void removeExcept(const std::unordered_set<EntityId>& liveLightEntities);
+    void sync_light(EntityId entity_id, const LightComponent &light,
+                    const QMat4 &world_transform);
+    void remove(EntityId entity_id);
+    void remove_except(const std::unordered_set<EntityId> &live_light_entities);
 
-    [[nodiscard]] static std::uint64_t lightSignature(const LightComponent& light);
-    [[nodiscard]] static std::uint64_t lightTransformSignature(const QMat4& worldTransform);
-    [[nodiscard]] static float filamentIntensity(const LightComponent& light);
+    [[nodiscard]] static std::uint64_t
+    light_signature(const LightComponent &light);
+    [[nodiscard]] static std::uint64_t
+    light_transform_signature(const QMat4 &world_transform);
+    [[nodiscard]] static float filament_intensity(const LightComponent &light);
 
-private:
+  private:
     /**
      * Represents a Light Proxy value used by the render extraction and Filament resource layer.
      */
@@ -59,33 +62,33 @@ private:
         LightProxy() = default;
         LightProxy(const LightProxy&) = delete;
         LightProxy& operator=(const LightProxy&) = delete;
-        LightProxy(LightProxy&& other) noexcept
-            : entity(other.entity)
-            , sourceEntity(std::exchange(other.sourceEntity, InvalidEntityId))
-            , rebuildSignature(std::exchange(other.rebuildSignature, 0))
-            , transformSignature(std::exchange(other.transformSignature, 0)) {
-            other.entity.clear();
+        LightProxy(LightProxy &&other) noexcept
+            : entity(other.entity), source_entity(std::exchange(
+                                        other.source_entity, kInvalidEntityId)),
+              rebuild_signature(std::exchange(other.rebuild_signature, 0)),
+              transform_signature(std::exchange(other.transform_signature, 0)) {
+          other.entity.clear();
         }
         LightProxy& operator=(LightProxy&&) noexcept = delete;
 
         utils::Entity entity;
-        EntityId sourceEntity = InvalidEntityId;
-        std::uint64_t rebuildSignature = 0;
-        std::uint64_t transformSignature = 0;
+        EntityId source_entity = kInvalidEntityId;
+        std::uint64_t rebuild_signature = 0;
+        std::uint64_t transform_signature = 0;
     };
 
-    [[nodiscard]] LightProxy createLightProxy(
-            EntityId entityId,
-            const LightComponent& light,
-            const QMat4& worldTransform,
-            std::uint64_t rebuildSignature,
-            std::uint64_t transformSignature);
-    void updateLightTransform(const LightProxy& proxy, const QMat4& worldTransform);
-    void destroyLightProxy(LightProxy& proxy);
+    [[nodiscard]] LightProxy
+    create_light_proxy(EntityId entity_id, const LightComponent &light,
+                       const QMat4 &world_transform,
+                       std::uint64_t rebuild_signature,
+                       std::uint64_t transform_signature);
+    void update_light_transform(const LightProxy &proxy,
+                                const QMat4 &world_transform);
+    void destroy_light_proxy(LightProxy &proxy);
 
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
-    std::unordered_map<EntityId, LightProxy> lightProxies_;
+    std::unordered_map<EntityId, LightProxy> light_proxies_;
 };
 
 } // namespace quader

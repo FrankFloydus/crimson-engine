@@ -27,17 +27,19 @@ public:
 
     DocumentCommandResult redo() override {
         if (before_ == after_) {
-            return documentCommandUnchangedResult();
+          return document_command_unchanged_result();
         }
         return apply(after_);
     }
 
 private:
     DocumentCommandResult apply(bool visible) {
-        return scene().setVisible(entity_, visible) ? documentCommandChangedResult() : documentCommandMissingEntityResult();
+      return scene().set_visible(entity_, visible)
+                 ? document_command_changed_result()
+                 : document_command_missing_entity_result();
     }
 
-    EntityId entity_ = InvalidEntityId;
+    EntityId entity_ = kInvalidEntityId;
     bool before_ = true;
     bool after_ = true;
 };

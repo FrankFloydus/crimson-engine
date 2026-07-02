@@ -33,7 +33,7 @@ public:
 
     DocumentCommandResult redo() override {
         if (before_.has_value() && *before_ == after_) {
-            return documentCommandUnchangedResult();
+          return document_command_unchanged_result();
         }
         return apply(after_);
     }
@@ -41,25 +41,25 @@ public:
 private:
     DocumentCommandResult apply(const std::optional<MaterialComponent>& material) {
         if (!scene().exists(entity_)) {
-            return documentCommandMissingEntityResult();
+          return document_command_missing_entity_result();
         }
         if (!material.has_value()) {
-            scene().clearMaterial(entity_);
-            return documentCommandChangedResult();
+          scene().clear_material(entity_);
+          return document_command_changed_result();
         }
-        scene().setMaterial(entity_, *material);
-        return documentCommandChangedResult();
+        scene().set_material(entity_, *material);
+        return document_command_changed_result();
     }
 
     DocumentCommandResult apply(MaterialComponent material) {
         if (!scene().exists(entity_)) {
-            return documentCommandMissingEntityResult();
+          return document_command_missing_entity_result();
         }
-        scene().setMaterial(entity_, material);
-        return documentCommandChangedResult();
+        scene().set_material(entity_, material);
+        return document_command_changed_result();
     }
 
-    EntityId entity_ = InvalidEntityId;
+    EntityId entity_ = kInvalidEntityId;
     std::optional<MaterialComponent> before_;
     MaterialComponent after_;
 };

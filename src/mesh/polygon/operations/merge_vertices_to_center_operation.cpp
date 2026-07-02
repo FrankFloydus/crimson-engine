@@ -45,17 +45,18 @@ public:
 
 OperationResult MergeVerticesToCenterOperation::apply(Document& document, Selection& selection) const
 {
-    if (selection.mode != SelectionMode::vertex) {
-        return { false, "Merge needs vertex selection mode." };
-    }
+  if (selection.mode != SelectionMode::Vertex) {
+    return {false, "Merge needs vertex selection mode."};
+  }
 
     std::vector<ElementId> selected_vertices;
     selected_vertices.reserve(selection.vertices.size());
     quader::QVec3 center;
     for (const ElementId vertex_id : selection.vertices) {
-        if (vertex_id == invalid_element_id || contains_id(selected_vertices, vertex_id)) {
-            continue;
-        }
+      if (vertex_id == kInvalidElementId ||
+          contains_id(selected_vertices, vertex_id)) {
+        continue;
+      }
 
         const Vertex* vertex = find_vertex(document, vertex_id);
         if (vertex == nullptr) {
@@ -72,14 +73,13 @@ OperationResult MergeVerticesToCenterOperation::apply(Document& document, Select
 
     center = center / static_cast<float>(selected_vertices.size());
 
-    ElementId survivor_vertex_id = invalid_element_id;
-    if (selection.has_active &&
-        selection.active_kind == ElementKind::vertex &&
+    ElementId survivor_vertex_id = kInvalidElementId;
+    if (selection.has_active && selection.active_kind == ElementKind::Vertex &&
         contains_id(selected_vertices, selection.active_vertex) &&
         find_vertex(document, selection.active_vertex) != nullptr) {
-        survivor_vertex_id = selection.active_vertex;
+      survivor_vertex_id = selection.active_vertex;
     } else {
-        survivor_vertex_id = selected_vertices.front();
+      survivor_vertex_id = selected_vertices.front();
     }
 
     std::set<ElementId> merge_vertex_ids;
@@ -106,7 +106,7 @@ OperationResult MergeVerticesToCenterOperation::apply(Document& document, Select
     prune_unused_vertices(document);
 
     selection.clear();
-    selection.mode = SelectionMode::vertex;
+    selection.mode = SelectionMode::Vertex;
     selection.vertices.push_back(survivor_vertex_id);
     activate_vertex_selection(selection, survivor_vertex_id);
 

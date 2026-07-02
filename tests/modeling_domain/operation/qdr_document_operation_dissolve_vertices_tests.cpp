@@ -14,8 +14,10 @@ TEST(QdrDocumentOperationDissolveVerticesTests, DissolveVerticesRemovesRedundant
 	const ElementId middle = add_vertex(document, { 0.0F, 0.0F, 0.0F });
 	const ElementId right = add_vertex(document, { 1.0F, 0.0F, 0.0F });
 	const ElementId top = add_vertex(document, { 0.0F, 1.0F, 0.0F });
-	EXPECT_TRUE(add_face(document, std::array<ElementId, 4> { left, middle, right, top }, 5) != invalid_element_id);
-	Selection selection = qdr_test::vertex_selection({ middle });
+        EXPECT_TRUE(add_face(document,
+                             std::array<ElementId, 4>{left, middle, right, top},
+                             5) != kInvalidElementId);
+        Selection selection = qdr_test::vertex_selection({ middle });
 
 	const OperationResult result = dissolve_selected_vertices(document, selection);
 

@@ -31,9 +31,9 @@ struct ObjectSelectionSnapshot {
  * Stores the Selection Snapshot data contract used by the modeling runtime domain.
  */
 struct SelectionSnapshot {
-	SelectionMode mode = SelectionMode::object;
-	int active_object_id = -1;
-	std::vector<ObjectSelectionSnapshot> objects;
+  SelectionMode mode = SelectionMode::Object;
+  int active_object_id = -1;
+  std::vector<ObjectSelectionSnapshot> objects;
 };
 
 SelectionSnapshot capture_selection_snapshot(
@@ -107,11 +107,12 @@ void EditorSession::clear_selection()
 
 void EditorSession::set_selected_object_ids(const std::vector<int>& object_ids, int active_id)
 {
-	state_.selection_mode = SelectionMode::object;
-	for (PolygonObject& object : state_.objects) {
-		object.selection = quader_poly::Selection();
-		object.selected = std::find(object_ids.begin(), object_ids.end(), object.id) != object_ids.end();
-	}
+  state_.selection_mode = SelectionMode::Object;
+  for (PolygonObject &object : state_.objects) {
+    object.selection = quader_poly::Selection();
+    object.selected = std::find(object_ids.begin(), object_ids.end(),
+                                object.id) != object_ids.end();
+  }
 	state_.active_object_id = active_id > 0 ? active_id : (object_ids.empty() ? -1 : object_ids.back());
 	normalize_active_object();
 	clear_light_selection_state(state_.lights, state_.active_light_id);
@@ -120,18 +121,19 @@ void EditorSession::set_selected_object_ids(const std::vector<int>& object_ids, 
 
 void EditorSession::set_component_selection(int object_id, quader_poly::Selection selection, SelectionMode mode)
 {
-	state_.selection_mode = mode == SelectionMode::object ? SelectionMode::vertex : mode;
-	for (PolygonObject& object : state_.objects) {
-		if (object.id != object_id) {
-			object.selected = false;
-			object.selection = quader_poly::Selection();
-			continue;
-		}
-		object.selection = std::move(selection);
-		object.selection.mode = component_selection_mode(state_.selection_mode);
-		object.selected = !object.selection.empty();
-		state_.active_object_id = object.selected ? object.id : -1;
-	}
+  state_.selection_mode =
+      mode == SelectionMode::Object ? SelectionMode::Vertex : mode;
+  for (PolygonObject &object : state_.objects) {
+    if (object.id != object_id) {
+      object.selected = false;
+      object.selection = quader_poly::Selection();
+      continue;
+    }
+    object.selection = std::move(selection);
+    object.selection.mode = component_selection_mode(state_.selection_mode);
+    object.selected = !object.selection.empty();
+    state_.active_object_id = object.selected ? object.id : -1;
+  }
 	normalize_active_object();
 	clear_light_selection_state(state_.lights, state_.active_light_id);
 	note_selection_changed();
@@ -298,17 +300,17 @@ CommandResult EditorSession::select_all()
 {
 	const CommandResult result = quader_editor_core::select_all(state_.objects, state_.selection_mode, state_.active_object_id);
 	bool changed = result.changed;
-	if (state_.selection_mode == SelectionMode::object) {
-		for (LightEntity& light : state_.lights) {
-			if (!light.selected) {
-				changed = true;
-			}
-			light.selected = true;
-			state_.active_light_id = light.id;
-		}
-		normalize_active_object();
-	}
-	if (changed) {
+        if (state_.selection_mode == SelectionMode::Object) {
+          for (LightEntity &light : state_.lights) {
+            if (!light.selected) {
+              changed = true;
+            }
+            light.selected = true;
+            state_.active_light_id = light.id;
+          }
+          normalize_active_object();
+        }
+        if (changed) {
 		note_selection_changed();
 	}
 	return result.ok ? ok_result(changed) : result;
@@ -318,14 +320,14 @@ CommandResult EditorSession::invert_selection()
 {
 	const CommandResult result = quader_editor_core::invert_selection(state_.objects, state_.selection_mode, state_.active_object_id);
 	bool changed = result.changed;
-	if (state_.selection_mode == SelectionMode::object) {
-		for (LightEntity& light : state_.lights) {
-			light.selected = !light.selected;
-			changed = true;
-		}
-		normalize_active_object();
-	}
-	if (changed) {
+        if (state_.selection_mode == SelectionMode::Object) {
+          for (LightEntity &light : state_.lights) {
+            light.selected = !light.selected;
+            changed = true;
+          }
+          normalize_active_object();
+        }
+        if (changed) {
 		note_selection_changed();
 	}
 	return result.ok ? ok_result(changed) : result;
@@ -491,9 +493,10 @@ CommandResult EditorSession::fill_hole_from_selected_edges()
 	const CommandResult result = quader_editor_core::fill_hole_from_selected_edges(state_.objects, state_.selection_mode, state_.active_object_id);
 	note_content_result(result);
 	if (result.changed) {
-		state_.selection_mode = SelectionMode::face;
-		align_component_selection_to_mode(state_.objects, state_.selection_mode, state_.active_object_id);
-		note_selection_changed();
+          state_.selection_mode = SelectionMode::Face;
+          align_component_selection_to_mode(
+              state_.objects, state_.selection_mode, state_.active_object_id);
+          note_selection_changed();
 	}
 	return result;
 }
@@ -647,8 +650,8 @@ CommandResult EditorSession::create_object_from_document(
 	object.selected = true;
 	object.document = std::move(document);
 	state_.active_object_id = object.id;
-	state_.selection_mode = SelectionMode::object;
-	state_.objects.push_back(std::move(object));
+        state_.selection_mode = SelectionMode::Object;
+        state_.objects.push_back(std::move(object));
 
 	const CommandResult result = ok_result(true);
 	note_content_result(result);
@@ -932,10 +935,10 @@ CommandResult EditorSession::mirror_selected_objects_across_axis(TransformAxis a
 
 CommandResult EditorSession::flip_selected_objects_by_orientation(ViewportFlipOrientation orientation)
 {
-	if (state_.selection_mode != SelectionMode::object) {
-		return error_result("Flip works only in object/mesh selection mode.");
-	}
-	const std::vector<int> object_ids = selected_object_ids();
+  if (state_.selection_mode != SelectionMode::Object) {
+    return error_result("Flip works only in object/mesh selection mode.");
+  }
+        const std::vector<int> object_ids = selected_object_ids();
 	if (object_ids.empty()) {
 		return error_result("Select one or more mesh objects to flip.");
 	}

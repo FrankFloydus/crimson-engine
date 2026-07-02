@@ -17,12 +17,13 @@ namespace quader {
  */
 class TransformPreviewService {
 public:
-    [[nodiscard]] static bool isTransform(ModelingTransformOperation operation);
+  [[nodiscard]] static bool is_transform(ModelingTransformOperation operation);
 
-    [[nodiscard]] static bool hasTransformPreview(const quader_editor_core::EditorSession& session);
-    [[nodiscard]] static ModelingCommandResult finishResult(
-            const quader_editor_core::PreviewTransactionFinishResult& finish,
-            bool cancel);
+  [[nodiscard]] static bool
+  has_transform_preview(const quader_editor_core::EditorSession &session);
+  [[nodiscard]] static ModelingCommandResult finish_result(
+      const quader_editor_core::PreviewTransactionFinishResult &finish,
+      bool cancel);
 };
 
 } // namespace quader

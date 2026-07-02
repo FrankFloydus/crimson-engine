@@ -25,33 +25,33 @@ namespace quader {
  * Stores the Entity Record data contract used by the scene graph document layer.
  */
 struct EntityRecord {
-    EntityId id = InvalidEntityId;
-    std::string uuid;
-    EditorObjectId editorObjectId = InvalidEditorObjectId;
-    std::string name;
-    EntityKind kind = EntityKind::Generic;
-    EntityId parent = InvalidEntityId;
-    int depth = 0;
-    bool visible = true;
-    bool effectivelyVisible = true;
-    bool locked = false;
-    bool effectivelyLocked = false;
-    bool selected = false;
-    bool active = false;
-    bool hasChildren = false;
-    bool hasMesh = false;
-    bool hasLight = false;
-    bool isSceneRoot = false;
-    bool hasSceneSettings = false;
-    bool hasModelingObject = false;
+  EntityId id = kInvalidEntityId;
+  std::string uuid;
+  EditorObjectId editor_object_id = kInvalidEditorObjectId;
+  std::string name;
+  EntityKind kind = EntityKind::Generic;
+  EntityId parent = kInvalidEntityId;
+  int depth = 0;
+  bool visible = true;
+  bool effectively_visible = true;
+  bool locked = false;
+  bool effectively_locked = false;
+  bool selected = false;
+  bool active = false;
+  bool has_children = false;
+  bool has_mesh = false;
+  bool has_light = false;
+  bool is_scene_root = false;
+  bool has_scene_settings = false;
+  bool has_modeling_object = false;
 };
 
 /**
  * Stores a scene transform assignment used by batched preview updates.
  */
 struct SceneTransformAssignment {
-    EntityId entity = InvalidEntityId;
-    TransformComponent transform;
+  EntityId entity = kInvalidEntityId;
+  TransformComponent transform;
 };
 
 /**
@@ -61,124 +61,130 @@ class SceneDocument {
 public:
     using EditorObjectIdAllocator = std::function<EditorObjectId(EditorObjectId requested)>;
 
-    void setEditorObjectIdAllocator(EditorObjectIdAllocator allocator);
+    void set_editor_object_id_allocator(EditorObjectIdAllocator allocator);
 
-    EntityId createEntity(
-            std::string name,
-            EntityKind kind = EntityKind::Generic,
-            EditorObjectId editorObjectId = InvalidEditorObjectId);
-    EntityId createEntityWithId(
-            EntityId id,
-            std::string name,
-            EntityKind kind = EntityKind::Generic,
-            EditorObjectId editorObjectId = InvalidEditorObjectId);
-    EntityId createEmpty(std::string name, EditorObjectId editorObjectId = InvalidEditorObjectId);
-    bool destroyEntity(EntityId id);
-    bool destroyEntities(std::span<const EntityId> ids);
+    EntityId
+    create_entity(std::string name, EntityKind kind = EntityKind::Generic,
+                  EditorObjectId editor_object_id = kInvalidEditorObjectId);
+    EntityId create_entity_with_id(
+        EntityId id, std::string name, EntityKind kind = EntityKind::Generic,
+        EditorObjectId editor_object_id = kInvalidEditorObjectId);
+    EntityId
+    create_empty(std::string name,
+                 EditorObjectId editor_object_id = kInvalidEditorObjectId);
+    bool destroy_entity(EntityId id);
+    bool destroy_entities(std::span<const EntityId> ids);
     bool exists(EntityId id) const;
 
-    bool renameEntity(EntityId id, std::string name);
-    bool setEntityUuid(EntityId id, std::string uuid);
-    bool setEditorObjectId(EntityId id, EditorObjectId editorObjectId);
-    bool setEntityKind(EntityId id, EntityKind kind);
-    bool setVisible(EntityId id, bool visible);
-    bool setSelectable(EntityId id, bool selectable);
-    bool setLocked(EntityId id, bool locked);
-    bool setSelected(EntityId id, bool selected);
-    bool setActiveSelection(EntityId id);
-    void clearSelection();
-    bool setParent(EntityId child, EntityId parent, bool preserveWorldTransform = true);
+    bool rename_entity(EntityId id, std::string name);
+    bool set_entity_uuid(EntityId id, std::string uuid);
+    bool set_editor_object_id(EntityId id, EditorObjectId editor_object_id);
+    bool set_entity_kind(EntityId id, EntityKind kind);
+    bool set_visible(EntityId id, bool visible);
+    bool set_selectable(EntityId id, bool selectable);
+    bool set_locked(EntityId id, bool locked);
+    bool set_selected(EntityId id, bool selected);
+    bool set_active_selection(EntityId id);
+    void clear_selection();
+    bool set_parent(EntityId child, EntityId parent,
+                    bool preserve_world_transform = true);
 
-    void setTransform(EntityId id, TransformComponent transform);
-    void setTransforms(std::span<const SceneTransformAssignment> transforms);
-    void setModelingObject(EntityId id, ModelingObjectComponent object);
-    void setMesh(EntityId id, MeshComponent mesh);
-    void setMaterial(EntityId id, MaterialComponent material);
-    bool clearMaterial(EntityId id);
-    void setLight(EntityId id, LightComponent light);
-    bool setSceneSettings(EntityId id, SceneSettingsComponent settings);
+    void set_transform(EntityId id, TransformComponent transform);
+    void set_transforms(std::span<const SceneTransformAssignment> transforms);
+    void set_modeling_object(EntityId id, ModelingObjectComponent object);
+    void set_mesh(EntityId id, MeshComponent mesh);
+    void set_material(EntityId id, MaterialComponent material);
+    bool clear_material(EntityId id);
+    void set_light(EntityId id, LightComponent light);
+    bool set_scene_settings(EntityId id, SceneSettingsComponent settings);
 
     const NameComponent* name(EntityId id) const;
-    const EntityUuidComponent* entityUuid(EntityId id) const;
-    const EditorObjectIdentityComponent* editorObjectIdentity(EntityId id) const;
+    const EntityUuidComponent *entity_uuid(EntityId id) const;
+    const EditorObjectIdentityComponent *
+    editor_object_identity(EntityId id) const;
     const TransformComponent* transform(EntityId id) const;
-    const EntityKindComponent* entityKind(EntityId id) const;
+    const EntityKindComponent *entity_kind(EntityId id) const;
     const HierarchyComponent* hierarchy(EntityId id) const;
     const VisibilityComponent* visibility(EntityId id) const;
     const LockComponent* lock(EntityId id) const;
     const SelectionComponent* selection(EntityId id) const;
-    const ModelingObjectComponent* modelingObject(EntityId id) const;
+    const ModelingObjectComponent *modeling_object(EntityId id) const;
     const MeshComponent* mesh(EntityId id) const;
     const MaterialComponent* material(EntityId id) const;
     const LightComponent* light(EntityId id) const;
-    const SceneSettingsComponent* sceneSettings(EntityId id) const;
+    const SceneSettingsComponent *scene_settings(EntityId id) const;
 
     std::vector<EntityId> entities() const;
-    EntityId sceneRoot() const;
-    bool isSceneRoot(EntityId id) const;
-    std::vector<EntityId> rootEntities() const;
+    EntityId scene_root() const;
+    bool is_scene_root(EntityId id) const;
+    std::vector<EntityId> root_entities() const;
     std::vector<EntityId> children(EntityId id) const;
-    std::vector<EntityId> descendants(EntityId id, bool includeSelf = true) const;
-    std::vector<EntityId> entityTreeOrder() const;
-    std::vector<EntityRecord> entityRecords() const;
-    std::vector<EntityRecord> entityRecordsTreeOrder() const;
-    std::vector<EntityId> selectedEntities() const;
-    EntityId primarySelection() const;
+    std::vector<EntityId> descendants(EntityId id,
+                                      bool include_self = true) const;
+    std::vector<EntityId> entity_tree_order() const;
+    std::vector<EntityRecord> entity_records() const;
+    std::vector<EntityRecord> entity_records_tree_order() const;
+    std::vector<EntityId> selected_entities() const;
+    EntityId primary_selection() const;
     EntityId parent(EntityId id) const;
     std::string uuid(EntityId id) const;
-    EntityId entityForUuid(std::string_view uuid) const;
-    EditorObjectId editorObjectId(EntityId id) const;
-    EntityId entityForEditorObjectId(EditorObjectId editorObjectId) const;
-    bool hasChildren(EntityId id) const;
-    bool isDescendantOf(EntityId entity, EntityId possibleAncestor) const;
+    EntityId entity_for_uuid(std::string_view uuid) const;
+    EditorObjectId editor_object_id(EntityId id) const;
+    EntityId entity_for_editor_object_id(EditorObjectId editor_object_id) const;
+    bool has_children(EntityId id) const;
+    bool is_descendant_of(EntityId entity, EntityId possible_ancestor) const;
     EntityKind kind(EntityId id) const;
-    bool isEffectivelyVisible(EntityId id) const;
-    bool isEffectivelyLocked(EntityId id) const;
-    QMat4 localTransformMatrix(EntityId id) const;
-    QMat4 worldTransformMatrix(EntityId id) const;
-    void advanceRevisionForReplacement(std::uint64_t previousRevision);
+    bool is_effectively_visible(EntityId id) const;
+    bool is_effectively_locked(EntityId id) const;
+    QMat4 local_transform_matrix(EntityId id) const;
+    QMat4 world_transform_matrix(EntityId id) const;
+    void advance_revision_for_replacement(std::uint64_t previous_revision);
 
-    entt::entity enttEntity(EntityId id) const;
-    EntityId entityId(entt::entity entity) const;
+    entt::entity entt_entity(EntityId id) const;
+    EntityId entity_id(entt::entity entity) const;
 
     std::uint64_t revision() const { return revision_; }
-    std::uint64_t selectionRevision() const { return selectionRevision_; }
-    std::uint64_t visibilityRevision() const { return visibilityRevision_; }
-    std::uint64_t transformRevision() const { return transformRevision_; }
-    std::uint64_t meshBindingRevision() const { return meshBindingRevision_; }
+    std::uint64_t selection_revision() const { return selection_revision_; }
+    std::uint64_t visibility_revision() const { return visibility_revision_; }
+    std::uint64_t transform_revision() const { return transform_revision_; }
+    std::uint64_t mesh_binding_revision() const {
+      return mesh_binding_revision_;
+    }
 
 private:
-    NameComponent* mutableName(EntityId id);
-    TransformComponent* mutableTransform(EntityId id);
-    EntityKindComponent* mutableEntityKind(EntityId id);
-    HierarchyComponent* mutableHierarchy(EntityId id);
-    VisibilityComponent* mutableVisibility(EntityId id);
-    LockComponent* mutableLock(EntityId id);
-    SelectionComponent* mutableSelection(EntityId id);
+  NameComponent *mutable_name(EntityId id);
+  TransformComponent *mutable_transform(EntityId id);
+  EntityKindComponent *mutable_entity_kind(EntityId id);
+  HierarchyComponent *mutable_hierarchy(EntityId id);
+  VisibilityComponent *mutable_visibility(EntityId id);
+  LockComponent *mutable_lock(EntityId id);
+  SelectionComponent *mutable_selection(EntityId id);
 
-    void markDirty();
-    EditorObjectId allocateEditorObjectId(EditorObjectId requested);
-    entt::entity requireEntity(EntityId id) const;
-    bool isSelected(EntityId id) const;
-    EntityId firstSelectedEntity() const;
-    EntityRecord makeEntityRecord(EntityId id, int depth, EntityId active) const;
-    void appendTreeOrder(EntityId id, std::vector<EntityId>& ids) const;
-    void appendEntityRecords(EntityId id, int depth, EntityId active, std::vector<EntityRecord>& records) const;
+  void mark_dirty();
+  EditorObjectId allocate_editor_object_id(EditorObjectId requested);
+  entt::entity require_entity(EntityId id) const;
+  bool is_selected(EntityId id) const;
+  EntityId first_selected_entity() const;
+  EntityRecord make_entity_record(EntityId id, int depth,
+                                  EntityId active) const;
+  void append_tree_order(EntityId id, std::vector<EntityId> &ids) const;
+  void append_entity_records(EntityId id, int depth, EntityId active,
+                             std::vector<EntityRecord> &records) const;
 
-    EntityId nextId_ = 1;
-    EditorObjectId nextEditorObjectId_ = 1;
-    EntityId activeSelection_ = InvalidEntityId;
-    std::uint64_t revision_ = 0;
-    std::uint64_t selectionRevision_ = 0;
-    std::uint64_t visibilityRevision_ = 0;
-    std::uint64_t transformRevision_ = 0;
-    std::uint64_t meshBindingRevision_ = 0;
-    EditorObjectIdAllocator editorObjectIdAllocator_;
-    entt::registry registry_;
-    std::unordered_map<EntityId, entt::entity> entities_;
-    std::unordered_map<std::uint32_t, EntityId> idsByEntity_;
-    std::unordered_map<std::string, EntityId> entityByUuid_;
-    std::unordered_map<EditorObjectId, EntityId> entityByEditorObjectId_;
+  EntityId next_id_ = 1;
+  EditorObjectId next_editor_object_id_ = 1;
+  EntityId active_selection_ = kInvalidEntityId;
+  std::uint64_t revision_ = 0;
+  std::uint64_t selection_revision_ = 0;
+  std::uint64_t visibility_revision_ = 0;
+  std::uint64_t transform_revision_ = 0;
+  std::uint64_t mesh_binding_revision_ = 0;
+  EditorObjectIdAllocator editor_object_id_allocator_;
+  entt::registry registry_;
+  std::unordered_map<EntityId, entt::entity> entities_;
+  std::unordered_map<std::uint32_t, EntityId> ids_by_entity_;
+  std::unordered_map<std::string, EntityId> entity_by_uuid_;
+  std::unordered_map<EditorObjectId, EntityId> entity_by_editor_object_id_;
 };
 
 } // namespace quader

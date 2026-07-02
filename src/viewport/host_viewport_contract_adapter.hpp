@@ -20,25 +20,25 @@ namespace quader {
  * Represents a Viewport Host Defaults value used by the viewport input, layout, and camera layer.
  */
 struct ViewportHostDefaults {
-    double mapUnitsPerWorldUnit = 32.0;
-    double defaultGridMapUnits = 32.0;
-    double defaultOrthographicSize = 24.0;
-    double focusOriginDistance = 64.0;
-    double defaultFovDegrees = 60.0;
-    double orbitRadiansPerPixel = 0.006;
-    double flyLookRadiansPerPixel = 0.004;
-    double flyBaseSpeed = 6.0;
-    double flyFastMultiplier = 4.0;
-    double flySlowMultiplier = 0.25;
-    double selectionBoxDragThresholdPixels = 4.0;
+  double map_units_per_world_unit = 32.0;
+  double default_grid_map_units = 32.0;
+  double default_orthographic_size = 24.0;
+  double focus_origin_distance = 64.0;
+  double default_fov_degrees = 60.0;
+  double orbit_radians_per_pixel = 0.006;
+  double fly_look_radians_per_pixel = 0.004;
+  double fly_base_speed = 6.0;
+  double fly_fast_multiplier = 4.0;
+  double fly_slow_multiplier = 0.25;
+  double selection_box_drag_threshold_pixels = 4.0;
 };
 
 /**
  * Represents one viewport shortcut binding projected from editor metadata into viewport terms.
  */
 struct ViewportShortcutBindingDescriptor {
-    std::string targetId;
-    std::string shortcut;
+  std::string target_id;
+  std::string shortcut;
 };
 
 /**
@@ -53,50 +53,66 @@ struct ViewportGridShortcutBindingDescriptor {
  * Represents one semantic viewport input action binding target.
  */
 struct ViewportInputActionBindingDescriptor {
-    std::string targetId;
-    std::string shortcut;
-    std::string_view when;
-    int weight = 20;
-    ViewportInputActionKind action = ViewportInputActionKind::None;
+  std::string target_id;
+  std::string shortcut;
+  std::string_view when;
+  int weight = 20;
+  ViewportInputActionKind action = ViewportInputActionKind::None;
 };
 
 /**
  * Represents one host shortcut target mapped to command and viewport execution terms.
  */
 struct ViewportShortcutTargetDescriptor {
-    std::string_view contractTargetId;
-    std::string_view commandTargetId;
-    ViewportShortcut shortcut;
+  std::string_view contract_target_id;
+  std::string_view command_target_id;
+  ViewportShortcut shortcut;
 };
 
-bool viewportHostContractAvailable();
-std::string viewportInputActionTargetId(std::string_view suffix);
-std::string viewportSelectionModeTargetId(std::string_view mode);
-std::string viewportGridPresetTargetId(int preset);
-std::span<const ViewportShortcutTargetDescriptor> viewportShortcutTargetCatalog();
-std::vector<ViewportInputActionBindingDescriptor> viewportInputActionBindingCatalog();
-bool viewportInputActionForTargetId(std::string_view targetId, ViewportInputActionKind& action);
-std::vector<ViewportShortcutBindingDescriptor> viewportShortcutBindingCatalog();
-std::vector<ViewportGridShortcutBindingDescriptor> viewportGridShortcutBindingCatalog();
-std::optional<std::string> viewportCommandTargetIdForContractTarget(std::string_view targetId);
-std::optional<ViewportView> viewportViewForCommandTargetId(std::string_view targetId);
-std::optional<std::string_view> viewportCommandTargetIdForView(ViewportView view);
-ViewportHostDefaults viewportHostDefaults();
-std::string_view viewportToolContractId(ViewportToolId tool);
-bool viewportToolHasHostContract(ViewportToolId tool);
-bool viewportToolHasNativeController(ViewportToolId tool);
-bool viewportToolAllowsSelectionFallback(ViewportToolId tool);
-int viewportDefaultGridPreset();
-int viewportClampGridPreset(int preset);
-float viewportGridWorldSizeFromContract(int preset);
-bool viewportToolFromContractId(std::string_view id, ViewportToolId& tool);
-bool viewportSelectionModeFromContractId(std::string_view id, ViewportSelectionMode& mode);
-bool viewportShortcutFromContractTarget(std::string_view targetId, ViewportShortcut& shortcut);
-bool viewportShortcutForCommandTargetId(std::string_view targetId, ViewportShortcut& shortcut);
-bool viewportTargetRequiresRouterDispatch(std::string_view targetId);
-bool viewportShortcutsMatch(const ViewportShortcut& lhs, const ViewportShortcut& rhs);
-std::optional<std::string> viewportCommandTargetIdForRouterShortcut(const ViewportShortcut& shortcut);
-std::optional<std::string> viewportOperationPreviewCommandTargetIdForRouterShortcut(const ViewportShortcut& shortcut);
-bool viewportRouterShortcutForTargetId(std::string_view targetId, ViewportShortcut& shortcut);
+bool viewport_host_contract_available();
+std::string viewport_input_action_target_id(std::string_view suffix);
+std::string viewport_selection_mode_target_id(std::string_view mode);
+std::string viewport_grid_preset_target_id(int preset);
+std::span<const ViewportShortcutTargetDescriptor>
+viewport_shortcut_target_catalog();
+std::vector<ViewportInputActionBindingDescriptor>
+viewport_input_action_binding_catalog();
+bool viewport_input_action_for_target_id(std::string_view target_id,
+                                         ViewportInputActionKind &action);
+std::vector<ViewportShortcutBindingDescriptor>
+viewport_shortcut_binding_catalog();
+std::vector<ViewportGridShortcutBindingDescriptor>
+viewport_grid_shortcut_binding_catalog();
+std::optional<std::string>
+viewport_command_target_id_for_contract_target(std::string_view target_id);
+std::optional<ViewportView>
+viewport_view_for_command_target_id(std::string_view target_id);
+std::optional<std::string_view>
+viewport_command_target_id_for_view(ViewportView view);
+ViewportHostDefaults viewport_host_defaults();
+std::string_view viewport_tool_contract_id(ViewportToolId tool);
+bool viewport_tool_has_host_contract(ViewportToolId tool);
+bool viewport_tool_has_native_controller(ViewportToolId tool);
+bool viewport_tool_allows_selection_fallback(ViewportToolId tool);
+int viewport_default_grid_preset();
+int viewport_clamp_grid_preset(int preset);
+float viewport_grid_world_size_from_contract(int preset);
+bool viewport_tool_from_contract_id(std::string_view id, ViewportToolId &tool);
+bool viewport_selection_mode_from_contract_id(std::string_view id,
+                                              ViewportSelectionMode &mode);
+bool viewport_shortcut_from_contract_target(std::string_view target_id,
+                                            ViewportShortcut &shortcut);
+bool viewport_shortcut_for_command_target_id(std::string_view target_id,
+                                             ViewportShortcut &shortcut);
+bool viewport_target_requires_router_dispatch(std::string_view target_id);
+bool viewport_shortcuts_match(const ViewportShortcut &lhs,
+                              const ViewportShortcut &rhs);
+std::optional<std::string> viewport_command_target_id_for_router_shortcut(
+    const ViewportShortcut &shortcut);
+std::optional<std::string>
+viewport_operation_preview_command_target_id_for_router_shortcut(
+    const ViewportShortcut &shortcut);
+bool viewport_router_shortcut_for_target_id(std::string_view target_id,
+                                            ViewportShortcut &shortcut);
 
 } // namespace quader

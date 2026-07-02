@@ -15,8 +15,9 @@ namespace quader {
  */
 class ExtendTool final : public TransformViewportTool {
 public:
-    ExtendTool()
-        : TransformViewportTool(viewportToolDescriptor(ViewportToolId::Extend)) {}
+  ExtendTool()
+      : TransformViewportTool(
+            viewport_tool_descriptor(ViewportToolId::Extend)) {}
 };
 
 } // namespace quader

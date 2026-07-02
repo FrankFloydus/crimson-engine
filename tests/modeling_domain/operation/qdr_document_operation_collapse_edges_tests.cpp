@@ -21,8 +21,8 @@ TEST(QdrDocumentOperationCollapseEdgesTests, CollapseEdgesReplacesAnEdgeWithOneC
 	const OperationResult result = collapse_selected_edges(document, selection);
 
 	EXPECT_TRUE(result.changed);
-	EXPECT_TRUE(selection.mode == SelectionMode::vertex);
-	EXPECT_TRUE(selection.vertices.size() == 1U);
+        EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
+        EXPECT_TRUE(selection.vertices.size() == 1U);
 	const Vertex* survivor = find_vertex(document, selection.vertices.front());
 	EXPECT_TRUE(survivor != nullptr);
 	EXPECT_TRUE(qdr_test::vec_nearly_equal(survivor->position, midpoint));

@@ -26,8 +26,8 @@ class RotateTool final : public EditorTool {
 public:
 	[[nodiscard]] ViewportInteractionTool tool_id() const override
 	{
-		return ViewportInteractionTool::rotate;
-	}
+          return ViewportInteractionTool::Rotate;
+        }
 
 	[[nodiscard]] std::string_view id() const override
 	{
@@ -77,9 +77,13 @@ public:
 				const quader::QVec3 view_to_camera = normalized_axis(to_camera);
 				state.drag_view_sign = vec3_dot(world_axis, view_to_camera) >= 0.0 ? 1.0 : -1.0;
 
-				static constexpr double edge_on_threshold = 0.08715574274765817; // cos(85 degrees).
-				state.edge_on_linear_drag = std::abs(vec3_dot(world_axis, view_to_camera)) < edge_on_threshold;
-				if (state.edge_on_linear_drag) {
+                                static constexpr double kEdgeOnThreshold =
+                                    0.08715574274765817; // cos(85 degrees).
+                                state.edge_on_linear_drag =
+                                    std::abs(
+                                        vec3_dot(world_axis, view_to_camera)) <
+                                    kEdgeOnThreshold;
+                                if (state.edge_on_linear_drag) {
 					const quader::QVec3 camera_plane_normal = vec3_scale(view_to_camera, -1.0);
 					const quader::QVec3 projection_axis = normalized_axis(vec3_cross(camera_plane_normal, world_axis));
 					const quader::QVec2 projected_screen_axis {
@@ -148,8 +152,8 @@ public:
 
 const RotateTool& rotate_tool_impl()
 {
-	static const RotateTool tool;
-	return tool;
+  static const RotateTool kTool;
+  return kTool;
 }
 
 } // namespace
@@ -182,17 +186,17 @@ void reset_rotate(RotateToolState& state)
 ModalTransformDragTool modal_transform_drag_tool_from_id(std::string_view tool_id)
 {
 	if (tool_id == "scale") {
-		return ModalTransformDragTool::scale;
-	}
-	return ModalTransformDragTool::rotate;
+          return ModalTransformDragTool::Scale;
+        }
+        return ModalTransformDragTool::Rotate;
 }
 
 std::string modal_transform_drag_tool_id(ModalTransformDragTool tool)
 {
-	if (tool == ModalTransformDragTool::scale) {
-		return "scale";
-	}
-	return "rotate";
+  if (tool == ModalTransformDragTool::Scale) {
+    return "scale";
+  }
+        return "rotate";
 }
 
 ModalTransformBeginPlan plan_modal_transform_drag_begin(const ModalTransformBeginInput& input)
@@ -215,17 +219,19 @@ ModalTransformUpdatePlan plan_modal_transform_drag_update(const ModalTransformUp
 	plan.handled = true;
 	plan.preview_ok = input.preview_ok;
 	if (!input.preview_ok) {
-		plan.route = ModalTransformPreviewRoute::clear_preview;
-		return plan;
+          plan.route = ModalTransformPreviewRoute::ClearPreview;
+          return plan;
 	}
 	const double epsilon = std::max(input.epsilon, 0.0);
-	if (input.tool == ModalTransformDragTool::scale) {
-		plan.preview_valid = scale_delta(input.preview_scale) > epsilon;
-	} else {
-		plan.preview_valid = std::abs(input.preview_angle_degrees) > epsilon;
-	}
-	plan.route = plan.preview_valid ? ModalTransformPreviewRoute::transform_preview : ModalTransformPreviewRoute::clear_preview;
-	return plan;
+        if (input.tool == ModalTransformDragTool::Scale) {
+          plan.preview_valid = scale_delta(input.preview_scale) > epsilon;
+        } else {
+          plan.preview_valid = std::abs(input.preview_angle_degrees) > epsilon;
+        }
+        plan.route = plan.preview_valid
+                         ? ModalTransformPreviewRoute::TransformPreview
+                         : ModalTransformPreviewRoute::ClearPreview;
+        return plan;
 }
 
 ModalTransformCommitPlan plan_modal_transform_drag_commit(const ModalTransformCommitInput& input)
@@ -241,9 +247,11 @@ ModalTransformCommitPlan plan_modal_transform_drag_commit(const ModalTransformCo
 		return plan;
 	}
 	plan.model_changed = true;
-	plan.route = ModalTransformCommitRoute::transform_patch;
-	plan.undo_action = input.tool == ModalTransformDragTool::scale ? "Quader Scale Brushes" : "Quader Rotate Brushes";
-	return plan;
+        plan.route = ModalTransformCommitRoute::TransformPatch;
+        plan.undo_action = input.tool == ModalTransformDragTool::Scale
+                               ? "Quader Scale Brushes"
+                               : "Quader Rotate Brushes";
+        return plan;
 }
 
 } // namespace quader_editor_core

@@ -45,9 +45,9 @@ public:
 
 OperationResult FillHoleFromEdgesOperation::apply(Document& document, Selection& selection) const
 {
-    if (selection.mode != SelectionMode::edge || selection.edges.size() < 3) {
-        return { false, "Fill Hole needs at least three selected edges." };
-    }
+  if (selection.mode != SelectionMode::Edge || selection.edges.size() < 3) {
+    return {false, "Fill Hole needs at least three selected edges."};
+  }
 
     const std::vector<Edge> selected_edges = selected_valid_edges(document, selection);
     if (selected_edges.size() < 3) {
@@ -82,7 +82,7 @@ OperationResult FillHoleFromEdgesOperation::apply(Document& document, Selection&
 
     document = std::move(candidate);
     selection.clear();
-    selection.mode = SelectionMode::face;
+    selection.mode = SelectionMode::Face;
     selection.faces.push_back(fill_face.id);
     activate_face_selection(selection, fill_face.id);
     return { true, {} };

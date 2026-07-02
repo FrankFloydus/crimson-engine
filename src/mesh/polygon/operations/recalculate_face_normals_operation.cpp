@@ -71,15 +71,16 @@ OperationResult recalculate_selected_face_normals_impl(Document& document, const
         if (!outside) {
             expected_normal = expected_normal * -1.0F;
         }
-        if (length_squared(expected_normal) <= epsilon) {
-            continue;
+        if (length_squared(expected_normal) <= kEpsilon) {
+          continue;
         }
 
         const quader::QVec3 before = face_normal(candidate, *face);
         orient_face_toward_normal(candidate, *face, expected_normal);
         const quader::QVec3 after = face_normal(candidate, *face);
-        if (length_squared(before) > epsilon && length_squared(after) > epsilon && dot(before, after) < 0.0F) {
-            changed = true;
+        if (length_squared(before) > kEpsilon &&
+            length_squared(after) > kEpsilon && dot(before, after) < 0.0F) {
+          changed = true;
         }
     }
 

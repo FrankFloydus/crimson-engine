@@ -55,22 +55,23 @@ BevelVerticesOperation::BevelVerticesOperation(float distance)
 
 OperationResult BevelVerticesOperation::apply(Document& document, Selection& selection) const
 {
-    if (selection.mode != SelectionMode::vertex) {
-        return { false, "Bevel needs vertex selection mode." };
-    }
+  if (selection.mode != SelectionMode::Vertex) {
+    return {false, "Bevel needs vertex selection mode."};
+  }
 
     std::set<ElementId> selected_vertices;
     for (const ElementId vertex_id : selection.vertices) {
-        if (vertex_id != invalid_element_id && find_vertex(document, vertex_id) != nullptr) {
-            selected_vertices.insert(vertex_id);
-        }
+      if (vertex_id != kInvalidElementId &&
+          find_vertex(document, vertex_id) != nullptr) {
+        selected_vertices.insert(vertex_id);
+      }
     }
     if (selected_vertices.empty()) {
         return { false, "Select one or more vertices to bevel." };
     }
 
     Document candidate = document;
-    const float bevel_distance = std::max(distance_, min_primitive_dimension);
+    const float bevel_distance = std::max(distance_, kMinPrimitiveDimension);
     const std::vector<Face> original_faces = candidate.faces;
     std::map<std::pair<ElementId, ElementId>, ElementId> split_vertices;
     std::map<ElementId, std::map<ElementId, ElementId>> split_by_vertex_neighbor;
@@ -100,9 +101,10 @@ OperationResult BevelVerticesOperation::apply(Document& document, Selection& sel
             const ElementId next_id = face.vertices[(index + 1U) % face.vertices.size()];
             const ElementId prev_split = split_vertex_near_endpoint(candidate, split_vertices, vertex_id, prev_id, bevel_distance);
             const ElementId next_split = split_vertex_near_endpoint(candidate, split_vertices, vertex_id, next_id, bevel_distance);
-            if (prev_split == invalid_element_id || next_split == invalid_element_id) {
-                rebuilt_loop.push_back(vertex_id);
-                continue;
+            if (prev_split == kInvalidElementId ||
+                next_split == kInvalidElementId) {
+              rebuilt_loop.push_back(vertex_id);
+              continue;
             }
 
             split_by_vertex_neighbor[vertex_id][prev_id] = prev_split;
@@ -148,14 +150,15 @@ OperationResult BevelVerticesOperation::apply(Document& document, Selection& sel
             }
             ElementId current = found_pairs->second.front().first;
             std::set<ElementId> visited_neighbors;
-            while (current != invalid_element_id && !visited_neighbors.contains(current)) {
-                visited_neighbors.insert(current);
-                neighbor_order.push_back(current);
-                const auto next = next_by_prev.find(current);
-                if (next == next_by_prev.end()) {
-                    break;
-                }
-                current = next->second;
+            while (current != kInvalidElementId &&
+                   !visited_neighbors.contains(current)) {
+              visited_neighbors.insert(current);
+              neighbor_order.push_back(current);
+              const auto next = next_by_prev.find(current);
+              if (next == next_by_prev.end()) {
+                break;
+              }
+              current = next->second;
             }
         }
         for (const auto& entry : found_splits->second) {
@@ -205,7 +208,7 @@ OperationResult BevelVerticesOperation::apply(Document& document, Selection& sel
     document = std::move(candidate);
 
     selection.clear();
-    selection.mode = SelectionMode::vertex;
+    selection.mode = SelectionMode::Vertex;
     selection.vertices = std::move(new_selected_vertices);
     activate_last_selection(selection);
     return { true, {} };

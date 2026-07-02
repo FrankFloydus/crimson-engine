@@ -36,23 +36,26 @@ enum class ToolMenuGroup {
  */
 struct ToolDescriptor {
     ViewportToolId tool = ViewportToolId::Select;
-    ModelingViewportTool modelingTool = ModelingViewportTool::Select;
+    ModelingViewportTool modeling_tool = ModelingViewportTool::Select;
     std::string_view id = "select";
     std::string_view label = "Select";
     std::string_view shortcut;
     ToolKind kind = ToolKind::Selection;
-    ToolMenuGroup menuGroup = ToolMenuGroup::Navigation;
-    ModelingTransformTool transformTool = ModelingTransformTool::Move;
-    bool ownsViewport = false;
-    bool blocksViewportFocusShortcuts = false;
-    bool allowsSelectionFallback = false;
-    bool supportsTransformGizmo = false;
+    ToolMenuGroup menu_group = ToolMenuGroup::Navigation;
+    ModelingTransformTool transform_tool = ModelingTransformTool::Move;
+    bool owns_viewport = false;
+    bool blocks_viewport_focus_shortcuts = false;
+    bool allows_selection_fallback = false;
+    bool supports_transform_gizmo = false;
 };
 
-[[nodiscard]] std::span<const ToolDescriptor> viewportToolDescriptors();
-[[nodiscard]] const ToolDescriptor* findViewportToolDescriptor(ViewportToolId tool);
-[[nodiscard]] const ToolDescriptor* findViewportToolDescriptor(ModelingViewportTool tool);
-[[nodiscard]] const ToolDescriptor* findViewportToolDescriptor(std::string_view id);
-[[nodiscard]] ToolDescriptor viewportToolDescriptor(ViewportToolId tool);
+[[nodiscard]] std::span<const ToolDescriptor> viewport_tool_descriptors();
+[[nodiscard]] const ToolDescriptor *
+find_viewport_tool_descriptor(ViewportToolId tool);
+[[nodiscard]] const ToolDescriptor *
+find_viewport_tool_descriptor(ModelingViewportTool tool);
+[[nodiscard]] const ToolDescriptor *
+find_viewport_tool_descriptor(std::string_view id);
+[[nodiscard]] ToolDescriptor viewport_tool_descriptor(ViewportToolId tool);
 
 } // namespace quader

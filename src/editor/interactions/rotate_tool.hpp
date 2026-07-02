@@ -19,8 +19,8 @@ namespace quader_editor_core {
  */
 struct RotateToolState {
 	bool active = false;
-	TransformAxis axis = TransformAxis::none;
-	std::vector<int> object_ids;
+        TransformAxis axis = TransformAxis::None;
+        std::vector<int> object_ids;
 	quader::QVec3 pivot;
 	quader::QVec2 screen_pivot;
 	quader::QVec2 start_screen;
@@ -38,20 +38,20 @@ struct RotateToolState {
  * Represents a Rotate Begin Input value used by the modal modeling interaction layer.
  */
 struct RotateBeginInput {
-	TransformAxis axis = TransformAxis::none;
-	std::vector<int> object_ids;
-	quader::QVec3 pivot;
-	quader::QVec2 screen_position;
-	bool has_screen_pivot = false;
-	quader::QVec2 screen_pivot;
-	bool has_screen_tip = false;
-	quader::QVec2 screen_tip;
-	bool has_world_direction = false;
-	quader::QVec3 world_direction;
-	bool has_world_pivot = false;
-	quader::QVec3 world_pivot;
-	bool has_camera = false;
-	quader_poly::Transform3 camera_transform;
+  TransformAxis axis = TransformAxis::None;
+  std::vector<int> object_ids;
+  quader::QVec3 pivot;
+  quader::QVec2 screen_position;
+  bool has_screen_pivot = false;
+  quader::QVec2 screen_pivot;
+  bool has_screen_tip = false;
+  quader::QVec2 screen_tip;
+  bool has_world_direction = false;
+  quader::QVec3 world_direction;
+  bool has_world_pivot = false;
+  quader::QVec3 world_pivot;
+  bool has_camera = false;
+  quader_poly::Transform3 camera_transform;
 };
 
 /**

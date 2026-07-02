@@ -24,15 +24,14 @@ SceneRenderSyncService::~SceneRenderSyncService() {
     shutdown();
 }
 
-void SceneRenderSyncService::initialize(filament::Engine& engine,
-        filament::Scene& scene,
-        MeshRenderableCache& meshCache,
-        MaterialBindingService& materialBinding) {
-    engine_ = &engine;
-    scene_ = &scene;
-    meshCache_ = &meshCache;
-    materialBinding_ = &materialBinding;
-    lightCache_.initialize(engine, scene);
+void SceneRenderSyncService::initialize(
+    filament::Engine &engine, filament::Scene &scene,
+    MeshRenderableCache &mesh_cache, MaterialBindingService &material_binding) {
+  engine_ = &engine;
+  scene_ = &scene;
+  mesh_cache_ = &mesh_cache;
+  material_binding_ = &material_binding;
+  light_cache_.initialize(engine, scene);
 }
 
 void SceneRenderSyncService::shutdown() {
@@ -40,14 +39,14 @@ void SceneRenderSyncService::shutdown() {
         return;
     }
 
-    lightCache_.shutdown();
-    syncedRevision_ = 0;
-    syncedAssetRevision_ = 0;
-    hasSynced_ = false;
+    light_cache_.shutdown();
+    synced_revision_ = 0;
+    synced_asset_revision_ = 0;
+    has_synced_ = false;
     engine_ = nullptr;
     scene_ = nullptr;
-    meshCache_ = nullptr;
-    materialBinding_ = nullptr;
+    mesh_cache_ = nullptr;
+    material_binding_ = nullptr;
 }
 
 bool SceneRenderSyncService::sync(const SceneDocument& document, const AssetRegistry& assets) {
@@ -57,96 +56,97 @@ bool SceneRenderSyncService::sync(const SceneDocument& document, const AssetRegi
     }
     {
         QDR_PROFILE_SCOPE("Scene render drain retired mesh proxies");
-        meshCache_->drainRetiredDestroyQueue(kRetiredMeshProxyDestroyBudgetPerSync);
+        mesh_cache_->drain_retired_destroy_queue(
+            kRetiredMeshProxyDestroyBudgetPerSync);
     }
 
-    const bool documentUnchanged = hasSynced_ && syncedRevision_ == document.revision();
-    const bool assetsUnchanged = hasSynced_ && syncedAssetRevision_ == assets.revision();
-    if (documentUnchanged && assetsUnchanged) {
-        return false;
+    const bool document_unchanged =
+        has_synced_ && synced_revision_ == document.revision();
+    const bool assets_unchanged =
+        has_synced_ && synced_asset_revision_ == assets.revision();
+    if (document_unchanged && assets_unchanged) {
+      return false;
     }
-    if (documentUnchanged && !renderAssetRevisionsChanged(document, assets)) {
-        syncedAssetRevision_ = assets.revision();
-        return false;
+    if (document_unchanged &&
+        !render_asset_revisions_changed(document, assets)) {
+      synced_asset_revision_ = assets.revision();
+      return false;
     }
 
     {
         QDR_PROFILE_SCOPE("Scene render rebuild");
         rebuild(document, assets);
     }
-    syncedRevision_ = document.revision();
-    syncedAssetRevision_ = assets.revision();
-    hasSynced_ = true;
+    synced_revision_ = document.revision();
+    synced_asset_revision_ = assets.revision();
+    has_synced_ = true;
     return true;
 }
 
-bool SceneRenderSyncService::renderAssetRevisionsChanged(const SceneDocument& document, const AssetRegistry& assets) const {
-    QDR_PROFILE_FUNCTION();
-    const SceneRenderExtractionPlan plan = [&]() {
-        QDR_PROFILE_SCOPE("Scene render revision extraction plan");
-        return buildSceneRenderExtractionPlan(document, assets, *materialBinding_);
-    }();
-    for (const SceneRenderMeshEntry& meshEntry : plan.meshes) {
-        if (!meshEntry.renderable()) {
-            if (meshCache_->contains(meshEntry.entityId)) {
-                return true;
-            }
-            continue;
-        }
-
-        if (meshCache_->needsRebuild(
-                    meshEntry.entityId,
-                    meshEntry.meshId,
-                    *meshEntry.mesh,
-                    meshEntry.materialId,
-                    meshEntry.castShadows(),
-                    meshEntry.doubleSided(),
-                    meshEntry.materialRevision)) {
-            return true;
-        }
+bool SceneRenderSyncService::render_asset_revisions_changed(
+    const SceneDocument &document, const AssetRegistry &assets) const {
+  QDR_PROFILE_FUNCTION();
+  const SceneRenderExtractionPlan plan = [&]() {
+    QDR_PROFILE_SCOPE("Scene render revision extraction plan");
+    return build_scene_render_extraction_plan(document, assets,
+                                              *material_binding_);
+  }();
+  for (const SceneRenderMeshEntry &mesh_entry : plan.meshes) {
+    if (!mesh_entry.renderable()) {
+      if (mesh_cache_->contains(mesh_entry.entity_id)) {
+        return true;
+      }
+      continue;
     }
-    return false;
+
+    if (mesh_cache_->needs_rebuild(
+            mesh_entry.entity_id, mesh_entry.mesh_id, *mesh_entry.mesh,
+            mesh_entry.material_id, mesh_entry.cast_shadows(),
+            mesh_entry.double_sided(), mesh_entry.material_revision)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void SceneRenderSyncService::rebuild(const SceneDocument& document, const AssetRegistry& assets) {
     QDR_PROFILE_FUNCTION();
     const SceneRenderExtractionPlan plan = [&]() {
         QDR_PROFILE_SCOPE("Scene render extraction plan");
-        return buildSceneRenderExtractionPlan(document, assets, *materialBinding_);
+        return build_scene_render_extraction_plan(document, assets,
+                                                  *material_binding_);
     }();
 
-    for (const SceneRenderMeshEntry& meshEntry : plan.meshes) {
-        QDR_PROFILE_SCOPE("Scene render sync mesh entry");
-        if (!meshEntry.renderable()) {
-            meshCache_->remove(meshEntry.entityId);
-            LOG_WARN("Skipping render entity {} because its mesh asset is missing or empty", meshEntry.entityId);
-            continue;
-        }
+    for (const SceneRenderMeshEntry &mesh_entry : plan.meshes) {
+      QDR_PROFILE_SCOPE("Scene render sync mesh entry");
+      if (!mesh_entry.renderable()) {
+        mesh_cache_->remove(mesh_entry.entity_id);
+        LOG_WARN("Skipping render entity {} because its mesh asset is missing "
+                 "or empty",
+                 mesh_entry.entity_id);
+        continue;
+      }
 
-        meshCache_->syncMesh(meshEntry.entityId,
-                meshEntry.meshId,
-                *meshEntry.mesh,
-                meshEntry.materialId,
-                meshEntry.materialComponent,
-                assets,
-                meshEntry.worldTransform,
-                meshEntry.castShadows(),
-                meshEntry.doubleSided(),
-                meshEntry.materialRevision);
+      mesh_cache_->sync_mesh(
+          mesh_entry.entity_id, mesh_entry.mesh_id, *mesh_entry.mesh,
+          mesh_entry.material_id, mesh_entry.material_component, assets,
+          mesh_entry.world_transform, mesh_entry.cast_shadows(),
+          mesh_entry.double_sided(), mesh_entry.material_revision);
     }
 
-    for (const SceneRenderLightEntry& lightEntry : plan.lights) {
-        QDR_PROFILE_SCOPE("Scene render sync light entry");
-        lightCache_.syncLight(lightEntry.entityId, *lightEntry.light, lightEntry.worldTransform);
+    for (const SceneRenderLightEntry &light_entry : plan.lights) {
+      QDR_PROFILE_SCOPE("Scene render sync light entry");
+      light_cache_.sync_light(light_entry.entity_id, *light_entry.light,
+                              light_entry.world_transform);
     }
 
     {
         QDR_PROFILE_SCOPE("Scene render remove stale meshes");
-        meshCache_->removeExcept(plan.liveMeshEntities);
+        mesh_cache_->remove_except(plan.live_mesh_entities);
     }
     {
         QDR_PROFILE_SCOPE("Scene render remove stale lights");
-        lightCache_.removeExcept(plan.liveLightEntities);
+        light_cache_.remove_except(plan.live_light_entities);
     }
 }
 

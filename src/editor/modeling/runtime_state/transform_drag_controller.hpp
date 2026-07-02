@@ -12,9 +12,9 @@ namespace quader {
  * Stores routing decisions for transform drag preview ownership.
  */
 struct TransformDragPreviewRouting {
-    bool previewDriven = false;
-    bool needsRuntimePreviewTransaction = false;
-    bool sceneTransformPreviewEligible = false;
+  bool preview_driven = false;
+  bool needs_runtime_preview_transaction = false;
+  bool scene_transform_preview_eligible = false;
 };
 
 /**
@@ -22,20 +22,19 @@ struct TransformDragPreviewRouting {
  */
 class TransformDragController {
 public:
-    [[nodiscard]] static TransformDragPreviewRouting previewRouting(
-            bool duplicateSelected,
-            bool objectSelectionMode,
-            bool transformOperation);
+  [[nodiscard]] static TransformDragPreviewRouting
+  preview_routing(bool duplicate_selected, bool object_selection_mode,
+                  bool transform_operation);
 
-    void setPreviewDriven(bool previewDriven, bool duplicateSelected);
-    void clear();
+  void set_preview_driven(bool preview_driven, bool duplicate_selected);
+  void clear();
 
-    [[nodiscard]] bool previewDriven() const;
-    [[nodiscard]] bool duplicateSelected() const;
+  [[nodiscard]] bool preview_driven() const;
+  [[nodiscard]] bool duplicate_selected() const;
 
 private:
-    bool previewDriven_ = false;
-    bool duplicateSelected_ = false;
+  bool preview_driven_ = false;
+  bool duplicate_selected_ = false;
 };
 
 } // namespace quader

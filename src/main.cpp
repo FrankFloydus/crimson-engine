@@ -19,10 +19,10 @@
 
 namespace {
 
-std::filesystem::path executablePath(int argc, char** argv) {
-    if (argc > 0 && argv && argv[0]) {
-        return std::filesystem::absolute(argv[0]);
-    }
+std::filesystem::path executable_path(int argc, char **argv) {
+  if (argc > 0 && argv && argv[0]) {
+    return std::filesystem::absolute(argv[0]);
+  }
 
 #if defined(_WIN32)
     wchar_t path[MAX_PATH] = {};
@@ -39,66 +39,74 @@ std::filesystem::path executablePath(int argc, char** argv) {
  * Stores the Command Line Options data contract used by the Quader native app.
  */
 struct CommandLineOptions {
-    bool borderlessWindow = true;
-    quader::RendererBackend renderBackend = quader::RendererBackend::Vulkan;
+  bool borderless_window = true;
+  quader::RendererBackend render_backend = quader::RendererBackend::Vulkan;
 };
 
-CommandLineOptions parseCommandLine(int argc, char** argv) {
-    CommandLineOptions options;
-    for (int index = 1; index < argc; ++index) {
-        const std::string_view argument = argv[index] != nullptr ? std::string_view(argv[index]) : std::string_view();
-        if (argument == "--borderless-window" || argument == "--window-borderless") {
-            options.borderlessWindow = true;
-        } else if (argument == "--native-window" || argument == "--no-borderless-window") {
-            options.borderlessWindow = false;
-        } else if (argument == "--vulkan" || argument == "--render-backend=vulkan") {
-            options.renderBackend = quader::RendererBackend::Vulkan;
-        } else if (argument == "--opengl" || argument == "--render-backend=opengl") {
-            options.renderBackend = quader::RendererBackend::OpenGL;
-        }
+CommandLineOptions parse_command_line(int argc, char **argv) {
+  CommandLineOptions options;
+  for (int index = 1; index < argc; ++index) {
+    const std::string_view argument = argv[index] != nullptr
+                                          ? std::string_view(argv[index])
+                                          : std::string_view();
+    if (argument == "--borderless-window" ||
+        argument == "--window-borderless") {
+      options.borderless_window = true;
+    } else if (argument == "--native-window" ||
+               argument == "--no-borderless-window") {
+      options.borderless_window = false;
+    } else if (argument == "--vulkan" ||
+               argument == "--render-backend=vulkan") {
+      options.render_backend = quader::RendererBackend::Vulkan;
+    } else if (argument == "--opengl" ||
+               argument == "--render-backend=opengl") {
+      options.render_backend = quader::RendererBackend::OpenGL;
     }
-    return options;
+  }
+  return options;
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    const std::filesystem::path exe = executablePath(argc, argv);
-    const CommandLineOptions commandLine = parseCommandLine(argc, argv);
-    const std::filesystem::path logPath = exe.parent_path() / "quader.log";
-    quader::Logger::initialize({.filePath = logPath.string()});
-    quader::installFatalErrorHandler(logPath);
-    LOG_INFO("Booting Quader from {}", exe.string());
-    if (commandLine.borderlessWindow) {
-        LOG_INFO("Borderless window mode enabled");
-    }
-    LOG_INFO("Render backend: {}", quader::toString(commandLine.renderBackend));
+  const std::filesystem::path exe = executable_path(argc, argv);
+  const CommandLineOptions command_line = parse_command_line(argc, argv);
+  const std::filesystem::path log_path = exe.parent_path() / "quader.log";
+  quader::Logger::initialize({.file_path = log_path.string()});
+  quader::install_fatal_error_handler(log_path);
+  LOG_INFO("Booting Quader from {}", exe.string());
+  if (command_line.borderless_window) {
+    LOG_INFO("Borderless window mode enabled");
+  }
+  LOG_INFO("Render backend: {}",
+           quader::to_string(command_line.render_backend));
 
-    try {
-        auto app = std::make_unique<quader::App>();
-        if (!app->initialize(exe,
-                    {.borderlessWindow = commandLine.borderlessWindow, .renderBackend = commandLine.renderBackend})) {
-            LOG_CRITICAL("Application initialization failed");
-            app->shutdown();
-            app.reset();
-            quader::Logger::shutdown();
-            return 1;
-        }
-
-        const int result = app->run();
-        app->shutdown();
-        LOG_INFO("Quader shutdown complete");
-        app.reset();
-        quader::Logger::shutdown();
-        return result;
-    } catch (const std::exception& error) {
-        LOG_CRITICAL("Unhandled exception in Quader main: {}", error.what());
-        quader::reportFatalErrorAndExit(quader::FatalErrorCode::UnhandledCppException, error.what(), 1);
-    } catch (...) {
-        LOG_CRITICAL("Unhandled non-standard exception in Quader main");
-        quader::reportFatalErrorAndExit(
-                quader::FatalErrorCode::UnhandledNonStandardException,
-                "Unhandled non-standard exception in Quader main.",
-                1);
+  try {
+    auto app = std::make_unique<quader::App>();
+    if (!app->initialize(exe,
+                         {.borderless_window = command_line.borderless_window,
+                          .render_backend = command_line.render_backend})) {
+      LOG_CRITICAL("Application initialization failed");
+      app->shutdown();
+      app.reset();
+      quader::Logger::shutdown();
+      return 1;
     }
+
+    const int result = app->run();
+    app->shutdown();
+    LOG_INFO("Quader shutdown complete");
+    app.reset();
+    quader::Logger::shutdown();
+    return result;
+  } catch (const std::exception &error) {
+    LOG_CRITICAL("Unhandled exception in Quader main: {}", error.what());
+    quader::report_fatal_error_and_exit(
+        quader::FatalErrorCode::UnhandledCppException, error.what(), 1);
+  } catch (...) {
+    LOG_CRITICAL("Unhandled non-standard exception in Quader main");
+    quader::report_fatal_error_and_exit(
+        quader::FatalErrorCode::UnhandledNonStandardException,
+        "Unhandled non-standard exception in Quader main.", 1);
+  }
 }

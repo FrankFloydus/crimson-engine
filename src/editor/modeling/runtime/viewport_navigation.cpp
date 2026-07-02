@@ -48,17 +48,18 @@ double vec2_dot(quader::QVec2 left, quader::QVec2 right)
 
 bool vec2_is_tiny(quader::QVec2 value)
 {
-	return quader_geometry::length_squared(geometry_vec2(value)) <= screen_epsilon;
+  return quader_geometry::length_squared(geometry_vec2(value)) <=
+         kScreenEpsilon;
 }
 
 quader::QVec2 vec2_normalize_or(quader::QVec2 value, quader::QVec2 fallback)
 {
 	const quader_geometry::QVec2d geometry_value = geometry_vec2(value);
 	const double length_squared = quader_geometry::length_squared(geometry_value);
-	if (length_squared <= screen_epsilon) {
-		return fallback;
-	}
-	const double length = std::sqrt(length_squared);
+        if (length_squared <= kScreenEpsilon) {
+          return fallback;
+        }
+        const double length = std::sqrt(length_squared);
 	return poly_vec2(geometry_value / length);
 }
 
@@ -89,7 +90,8 @@ quader::QVec3 geometry_scale(quader::QVec3 value, double scalar)
 
 quader::QVec3 geometry_normalized_axis(quader::QVec3 value)
 {
-	return poly_vec3(quader_geometry::normalize_or_zero(geometry_vec3(value), static_cast<float>(tool_epsilon)));
+  return poly_vec3(quader_geometry::normalize_or_zero(
+      geometry_vec3(value), static_cast<float>(kToolEpsilon)));
 }
 
 quader::QVec3 geometry_transform_vector(const quader_poly::Transform3& transform, quader::QVec3 value)
@@ -100,9 +102,8 @@ quader::QVec3 geometry_transform_vector(const quader_poly::Transform3& transform
 			geometry_vec3(transform.z_axis) * value.z);
 }
 
-bool geometry_is_tiny(quader::QVec3 value, double epsilon = tool_epsilon)
-{
-	return geometry_length_squared(value) <= epsilon * epsilon;
+bool geometry_is_tiny(quader::QVec3 value, double epsilon = kToolEpsilon) {
+  return geometry_length_squared(value) <= epsilon * epsilon;
 }
 
 quader::QVec3 rotate_vector_around_axis(quader::QVec3 value, quader::QVec3 axis, double angle_radians)
@@ -238,33 +239,34 @@ ViewportAxisSnapBasisResult closest_blender_axis_snap_camera_basis(quader::QVec3
 		aligned_basis = rotated_camera_basis(reference_basis, rotation_basis(alignment_axis, std::acos(alignment)));
 	}
 
-	static constexpr std::array<double, 8> rolls {
-		0.0,
-		0.7853981633974483,
-		1.5707963267948966,
-		2.3561944901923449,
-		3.1415926535897932,
-		3.9269908169872414,
-		4.7123889803846899,
-		5.4977871437821380,
-	};
+        static constexpr std::array<double, 8> kRolls{
+            0.0,
+            0.7853981633974483,
+            1.5707963267948966,
+            2.3561944901923449,
+            3.1415926535897932,
+            3.9269908169872414,
+            4.7123889803846899,
+            5.4977871437821380,
+        };
 
-	quader_poly::Transform3 best_basis = aligned_basis;
-	double best_dot = navigation_orthogonal_snap_dot;
-	int best_roll_index = -1;
-	for (int index = 0; index < static_cast<int>(rolls.size()); ++index) {
-		const quader_poly::Transform3 candidate = rotated_camera_basis(base, rotation_basis(back, rolls[index]));
-		const double candidate_dot = geometry_dot(
-				geometry_normalized_axis(candidate.x_axis),
-				geometry_normalized_axis(aligned_basis.x_axis));
-		if (candidate_dot >= best_dot) {
-			best_dot = candidate_dot;
-			best_basis = candidate;
-			best_roll_index = index;
-		}
-	}
+        quader_poly::Transform3 best_basis = aligned_basis;
+        double best_dot = kNavigationOrthogonalSnapDot;
+        int best_roll_index = -1;
+        for (int index = 0; index < static_cast<int>(kRolls.size()); ++index) {
+          const quader_poly::Transform3 candidate =
+              rotated_camera_basis(base, rotation_basis(back, kRolls[index]));
+          const double candidate_dot =
+              geometry_dot(geometry_normalized_axis(candidate.x_axis),
+                           geometry_normalized_axis(aligned_basis.x_axis));
+          if (candidate_dot >= best_dot) {
+            best_dot = candidate_dot;
+            best_basis = candidate;
+            best_roll_index = index;
+          }
+        }
 
-	return {
+        return {
 		orthonormalized_basis(best_basis),
 		axis_components == 1 && best_roll_index >= 0 && best_roll_index % 2 == 0,
 	};
@@ -285,26 +287,28 @@ ViewportNavigationResult navigation_result(const quader_poly::Transform3& transf
 
 double capped_orthographic_zoom_size(double current_size, double factor, double steps)
 {
-	const double safe_current_size = std::max(navigation_min_orthographic_size, current_size);
-	const double requested_size = safe_current_size / factor;
-	if (steps < 0.0) {
-		if (safe_current_size >= navigation_max_orthographic_zoom_out_size) {
-			return safe_current_size;
-		}
-		return std::clamp(requested_size, navigation_min_orthographic_size, navigation_max_orthographic_zoom_out_size);
-	}
-	return std::max(navigation_min_orthographic_size, requested_size);
+  const double safe_current_size =
+      std::max(kNavigationMinOrthographicSize, current_size);
+  const double requested_size = safe_current_size / factor;
+  if (steps < 0.0) {
+    if (safe_current_size >= kNavigationMaxOrthographicZoomOutSize) {
+      return safe_current_size;
+    }
+    return std::clamp(requested_size, kNavigationMinOrthographicSize,
+                      kNavigationMaxOrthographicZoomOutSize);
+  }
+  return std::max(kNavigationMinOrthographicSize, requested_size);
 }
 
 ViewportAxisSnapTransformResult axis_snap_transform(const quader_poly::Transform3& unsnapped_transform, quader::QVec3 pivot, quader_poly::Transform3& snapped_transform)
 {
 	const quader::QVec3 offset = unsnapped_transform.origin - pivot;
 	const double distance = geometry_length(offset);
-	if (distance <= navigation_min_camera_distance) {
-		return {};
-	}
+        if (distance <= kNavigationMinCameraDistance) {
+          return {};
+        }
 
-	const quader::QVec3 direction = geometry_is_tiny(unsnapped_transform.z_axis)
+        const quader::QVec3 direction = geometry_is_tiny(unsnapped_transform.z_axis)
 		? offset / static_cast<float>(distance)
 		: geometry_normalized_axis(unsnapped_transform.z_axis);
 	double best_dot = -1.0;
@@ -331,11 +335,11 @@ ViewportAxisSnapTransformResult axis_snap_transform(const quader_poly::Transform
 			}
 		}
 	}
-	if (best_dot < navigation_orthogonal_snap_dot) {
-		return {};
-	}
+        if (best_dot < kNavigationOrthogonalSnapDot) {
+          return {};
+        }
 
-	snapped_transform = unsnapped_transform;
+        snapped_transform = unsnapped_transform;
 	snapped_transform.origin = pivot + geometry_scale(best_axis, distance);
 	const ViewportAxisSnapBasisResult snapped_basis =
 		closest_blender_axis_snap_camera_basis(best_axis, best_axis_components, unsnapped_transform);
@@ -359,23 +363,24 @@ AxisTarget axis_target_from_vector(quader::QVec3 value)
 	const quader_geometry::QAxis axis = quader_geometry::dominant_axis(geometry_vec3(value));
 	int axis_index = 2;
 	double component = value.z;
-	if (axis == quader_geometry::QAxis::x) {
-		axis_index = 0;
-		component = value.x;
-	} else if (axis == quader_geometry::QAxis::y) {
-		axis_index = 1;
-		component = value.y;
-	}
-	return { axis_index, component < 0.0 ? -1 : 1 };
+        if (axis == quader_geometry::QAxis::X) {
+          axis_index = 0;
+          component = value.x;
+        } else if (axis == quader_geometry::QAxis::Y) {
+          axis_index = 1;
+          component = value.y;
+        }
+        return { axis_index, component < 0.0 ? -1 : 1 };
 }
 
 AxisTarget current_view_axis_target(const quader_poly::Transform3& camera_transform, quader::QVec3 pivot)
 {
 	const quader::QVec3 offset = camera_transform.origin - pivot;
-	if (geometry_length_squared(offset) > navigation_min_camera_distance * navigation_min_camera_distance) {
-		return axis_target_from_vector(offset);
-	}
-	return axis_target_from_vector(orthonormalized_basis(camera_transform).z_axis);
+        if (geometry_length_squared(offset) >
+            kNavigationMinCameraDistance * kNavigationMinCameraDistance) {
+          return axis_target_from_vector(offset);
+        }
+        return axis_target_from_vector(orthonormalized_basis(camera_transform).z_axis);
 }
 
 bool axis_target_equals(const AxisTarget& left, const AxisTarget& right)
@@ -395,58 +400,59 @@ int axis_target_ring_index(const AxisTarget& target, const std::array<AxisTarget
 
 AxisTarget stepped_axis_target(const AxisTarget& current, ViewAxisStepDirection direction)
 {
-	static constexpr std::array<AxisTarget, 4> horizontal_ring {
-		AxisTarget { 2, 1 },
-		AxisTarget { 0, 1 },
-		AxisTarget { 2, -1 },
-		AxisTarget { 0, -1 },
-	};
-	static constexpr std::array<AxisTarget, 4> vertical_ring {
-		AxisTarget { 2, 1 },
-		AxisTarget { 1, 1 },
-		AxisTarget { 2, -1 },
-		AxisTarget { 1, -1 },
-	};
+  static constexpr std::array<AxisTarget, 4> kHorizontalRing{
+      AxisTarget{2, 1},
+      AxisTarget{0, 1},
+      AxisTarget{2, -1},
+      AxisTarget{0, -1},
+  };
+  static constexpr std::array<AxisTarget, 4> kVerticalRing{
+      AxisTarget{2, 1},
+      AxisTarget{1, 1},
+      AxisTarget{2, -1},
+      AxisTarget{1, -1},
+  };
 
-	if (direction == ViewAxisStepDirection::left || direction == ViewAxisStepDirection::right) {
-		const int step = direction == ViewAxisStepDirection::right ? 1 : -1;
-		const int ring_index = axis_target_ring_index(current, horizontal_ring);
-		if (ring_index >= 0) {
-			return horizontal_ring[(ring_index + step + 4) % 4];
-		}
-		return { 0, step };
-	}
-	const int step = direction == ViewAxisStepDirection::up ? 1 : -1;
-	const int ring_index = axis_target_ring_index(current, vertical_ring);
-	if (ring_index >= 0) {
-		return vertical_ring[(ring_index + step + 4) % 4];
-	}
+  if (direction == ViewAxisStepDirection::Left ||
+      direction == ViewAxisStepDirection::Right) {
+    const int step = direction == ViewAxisStepDirection::Right ? 1 : -1;
+    const int ring_index = axis_target_ring_index(current, kHorizontalRing);
+    if (ring_index >= 0) {
+      return kHorizontalRing[(ring_index + step + 4) % 4];
+    }
+    return {0, step};
+  }
+  const int step = direction == ViewAxisStepDirection::Up ? 1 : -1;
+  const int ring_index = axis_target_ring_index(current, kVerticalRing);
+  if (ring_index >= 0) {
+    return kVerticalRing[(ring_index + step + 4) % 4];
+  }
 	return { 1, step };
 }
 
 ViewAxis view_axis_from_index(int index)
 {
 	if (index == 0) {
-		return ViewAxis::x;
-	}
+          return ViewAxis::X;
+        }
 	if (index == 1) {
-		return ViewAxis::y;
-	}
-	return ViewAxis::z;
+          return ViewAxis::Y;
+        }
+        return ViewAxis::Z;
 }
 
 TransformAxis transform_axis_from_index(int index)
 {
 	if (index == 0) {
-		return TransformAxis::x;
-	}
+          return TransformAxis::X;
+        }
 	if (index == 1) {
-		return TransformAxis::y;
-	}
+          return TransformAxis::Y;
+        }
 	if (index == 2) {
-		return TransformAxis::z;
-	}
-	return TransformAxis::none;
+          return TransformAxis::Z;
+        }
+        return TransformAxis::None;
 }
 
 
@@ -514,15 +520,39 @@ struct ViewCubeFaceDefinition {
 
 const std::array<ViewCubeFaceDefinition, 6>& view_cube_face_definitions()
 {
-	static const std::array<ViewCubeFaceDefinition, 6> definitions = { {
-		{ 0, 1, { 1.0F, 0.0F, 0.0F }, { quader::QVec3 { 1.0F, -1.0F, -1.0F }, quader::QVec3 { 1.0F, 1.0F, -1.0F }, quader::QVec3 { 1.0F, 1.0F, 1.0F }, quader::QVec3 { 1.0F, -1.0F, 1.0F } } },
-		{ 0, -1, { -1.0F, 0.0F, 0.0F }, { quader::QVec3 { -1.0F, -1.0F, 1.0F }, quader::QVec3 { -1.0F, 1.0F, 1.0F }, quader::QVec3 { -1.0F, 1.0F, -1.0F }, quader::QVec3 { -1.0F, -1.0F, -1.0F } } },
-		{ 1, 1, { 0.0F, 1.0F, 0.0F }, { quader::QVec3 { -1.0F, 1.0F, -1.0F }, quader::QVec3 { -1.0F, 1.0F, 1.0F }, quader::QVec3 { 1.0F, 1.0F, 1.0F }, quader::QVec3 { 1.0F, 1.0F, -1.0F } } },
-		{ 1, -1, { 0.0F, -1.0F, 0.0F }, { quader::QVec3 { -1.0F, -1.0F, 1.0F }, quader::QVec3 { -1.0F, -1.0F, -1.0F }, quader::QVec3 { 1.0F, -1.0F, -1.0F }, quader::QVec3 { 1.0F, -1.0F, 1.0F } } },
-		{ 2, 1, { 0.0F, 0.0F, 1.0F }, { quader::QVec3 { -1.0F, -1.0F, 1.0F }, quader::QVec3 { 1.0F, -1.0F, 1.0F }, quader::QVec3 { 1.0F, 1.0F, 1.0F }, quader::QVec3 { -1.0F, 1.0F, 1.0F } } },
-		{ 2, -1, { 0.0F, 0.0F, -1.0F }, { quader::QVec3 { 1.0F, -1.0F, -1.0F }, quader::QVec3 { -1.0F, -1.0F, -1.0F }, quader::QVec3 { -1.0F, 1.0F, -1.0F }, quader::QVec3 { 1.0F, 1.0F, -1.0F } } },
-	} };
-	return definitions;
+  static const std::array<ViewCubeFaceDefinition, 6> kDefinitions = {{
+      {0,
+       1,
+       {1.0F, 0.0F, 0.0F},
+       {quader::QVec3{1.0F, -1.0F, -1.0F}, quader::QVec3{1.0F, 1.0F, -1.0F},
+        quader::QVec3{1.0F, 1.0F, 1.0F}, quader::QVec3{1.0F, -1.0F, 1.0F}}},
+      {0,
+       -1,
+       {-1.0F, 0.0F, 0.0F},
+       {quader::QVec3{-1.0F, -1.0F, 1.0F}, quader::QVec3{-1.0F, 1.0F, 1.0F},
+        quader::QVec3{-1.0F, 1.0F, -1.0F}, quader::QVec3{-1.0F, -1.0F, -1.0F}}},
+      {1,
+       1,
+       {0.0F, 1.0F, 0.0F},
+       {quader::QVec3{-1.0F, 1.0F, -1.0F}, quader::QVec3{-1.0F, 1.0F, 1.0F},
+        quader::QVec3{1.0F, 1.0F, 1.0F}, quader::QVec3{1.0F, 1.0F, -1.0F}}},
+      {1,
+       -1,
+       {0.0F, -1.0F, 0.0F},
+       {quader::QVec3{-1.0F, -1.0F, 1.0F}, quader::QVec3{-1.0F, -1.0F, -1.0F},
+        quader::QVec3{1.0F, -1.0F, -1.0F}, quader::QVec3{1.0F, -1.0F, 1.0F}}},
+      {2,
+       1,
+       {0.0F, 0.0F, 1.0F},
+       {quader::QVec3{-1.0F, -1.0F, 1.0F}, quader::QVec3{1.0F, -1.0F, 1.0F},
+        quader::QVec3{1.0F, 1.0F, 1.0F}, quader::QVec3{-1.0F, 1.0F, 1.0F}}},
+      {2,
+       -1,
+       {0.0F, 0.0F, -1.0F},
+       {quader::QVec3{1.0F, -1.0F, -1.0F}, quader::QVec3{-1.0F, -1.0F, -1.0F},
+        quader::QVec3{-1.0F, 1.0F, -1.0F}, quader::QVec3{1.0F, 1.0F, -1.0F}}},
+  }};
+  return kDefinitions;
 }
 
 bool view_cube_same_corner(quader::QVec3 left, quader::QVec3 right)
@@ -539,12 +569,12 @@ bool view_cube_same_edge(quader::QVec3 left_start, quader::QVec3 left_end, quade
 ViewAxis view_cube_edge_axis(quader::QVec3 start, quader::QVec3 end)
 {
 	if (std::abs(start.x - end.x) > 0.5F) {
-		return ViewAxis::x;
-	}
+          return ViewAxis::X;
+        }
 	if (std::abs(start.y - end.y) > 0.5F) {
-		return ViewAxis::y;
-	}
-	return ViewAxis::z;
+          return ViewAxis::Y;
+        }
+        return ViewAxis::Z;
 }
 
 bool point_in_polygon(const std::vector<quader::QVec2>& polygon, quader::QVec2 point)
@@ -554,10 +584,10 @@ bool point_in_polygon(const std::vector<quader::QVec2>& polygon, quader::QVec2 p
 	for (quader::QVec2 vertex : polygon) {
 		geometry_polygon.push_back(geometry_vec2(vertex));
 	}
-	return quader_geometry::point_in_or_on_polygon_2d(
-		geometry_vec2(point),
-		std::span<const quader_geometry::QVec2d>(geometry_polygon),
-		tool_epsilon);
+        return quader_geometry::point_in_or_on_polygon_2d(
+            geometry_vec2(point),
+            std::span<const quader_geometry::QVec2d>(geometry_polygon),
+            kToolEpsilon);
 }
 
 std::vector<ViewCubeFacePrimitive> build_view_cube_faces_for_state(const quader_poly::Transform3& camera_transform, quader::QVec2 center, double scale)
@@ -567,10 +597,10 @@ std::vector<ViewCubeFacePrimitive> build_view_cube_faces_for_state(const quader_
 	std::vector<ViewCubeFacePrimitive> faces;
 	for (const ViewCubeFaceDefinition& definition : view_cube_face_definitions()) {
 		const double normal_depth = geometry_dot(camera_basis.z_axis, definition.normal);
-		if (normal_depth <= view_cube_face_visibility_epsilon) {
-			continue;
-		}
-		ViewCubeFacePrimitive face;
+                if (normal_depth <= kViewCubeFaceVisibilityEpsilon) {
+                  continue;
+                }
+                ViewCubeFacePrimitive face;
 		face.axis = view_axis_from_index(definition.axis_index);
 		face.sign = definition.sign;
 		face.depth = normal_depth;
@@ -599,11 +629,11 @@ std::vector<ViewCubeEdgePrimitive> build_view_cube_edges_for_state(const quader_
 	std::vector<ViewCubeEdgePrimitive> edges;
 	for (const ViewCubeFaceDefinition& definition : view_cube_face_definitions()) {
 		const double normal_depth = geometry_dot(camera_basis.z_axis, definition.normal);
-		if (normal_depth <= view_cube_face_visibility_epsilon) {
-			continue;
-		}
+                if (normal_depth <= kViewCubeFaceVisibilityEpsilon) {
+                  continue;
+                }
 
-		for (std::size_t index = 0; index < definition.vertices.size(); ++index) {
+                for (std::size_t index = 0; index < definition.vertices.size(); ++index) {
 			const quader::QVec3 start = definition.vertices[index];
 			const quader::QVec3 end = definition.vertices[(index + 1u) % definition.vertices.size()];
 			const bool already_emitted = std::any_of(
@@ -640,13 +670,13 @@ std::vector<ViewCubeEdgePrimitive> build_view_cube_axis_edges_for_state(const qu
 	const struct AxisEdgeDefinition {
 		ViewAxis axis;
 		quader::QVec3 end;
-	} axis_edges[3] = {
-		{ ViewAxis::x, { -1.0F, -1.0F, 1.0F } },
-		{ ViewAxis::y, { 1.0F, 1.0F, 1.0F } },
-		{ ViewAxis::z, { 1.0F, -1.0F, -1.0F } },
-	};
+        } axis_edges[3] = {
+            {ViewAxis::X, {-1.0F, -1.0F, 1.0F}},
+            {ViewAxis::Y, {1.0F, 1.0F, 1.0F}},
+            {ViewAxis::Z, {1.0F, -1.0F, -1.0F}},
+        };
 
-	std::vector<ViewCubeEdgePrimitive> edges;
+        std::vector<ViewCubeEdgePrimitive> edges;
 	edges.reserve(3u);
 	for (const AxisEdgeDefinition& definition : axis_edges) {
 		ViewCubeEdgePrimitive edge;
@@ -697,13 +727,13 @@ std::vector<ViewCubeAxisMarkerPrimitive> build_view_cube_markers_for_state(const
 quader::QVec3 view_axis_vector(ViewAxis axis, int sign)
 {
 	const float value = sign < 0 ? -1.0F : 1.0F;
-	if (axis == ViewAxis::x) {
-		return { value, 0.0F, 0.0F };
-	}
-	if (axis == ViewAxis::y) {
-		return { 0.0F, value, 0.0F };
-	}
-	return { 0.0F, 0.0F, value };
+        if (axis == ViewAxis::X) {
+          return {value, 0.0F, 0.0F};
+        }
+        if (axis == ViewAxis::Y) {
+          return {0.0F, value, 0.0F};
+        }
+        return { 0.0F, 0.0F, value };
 }
 
 quader::QVec3 viewport_camera_forward(const quader_poly::Transform3& camera_transform)
@@ -726,10 +756,11 @@ double viewport_distance_to_pivot(const quader_poly::Transform3& camera_transfor
 {
 	const quader::QVec3 to_pivot = pivot - camera_transform.origin;
 	const double forward_distance = geometry_dot(to_pivot, viewport_camera_forward(camera_transform));
-	if (forward_distance > navigation_min_camera_distance) {
-		return forward_distance;
-	}
-	return std::max(navigation_min_camera_distance, geometry_length(to_pivot));
+        if (forward_distance > kNavigationMinCameraDistance) {
+          return forward_distance;
+        }
+        return std::max(kNavigationMinCameraDistance,
+                        geometry_length(to_pivot));
 }
 
 double viewport_aspect_for_size(quader::QVec2 viewport_size)
@@ -748,30 +779,34 @@ double viewport_vertical_fov_radians(double fov_degrees)
 double viewport_orthographic_size_for_perspective(const quader_poly::Transform3& camera_transform, quader::QVec3 pivot, double fov_degrees)
 {
 	const double distance = std::max(0.1, geometry_length(camera_transform.origin - pivot));
-	return std::max(navigation_min_orthographic_size, 2.0 * distance * std::tan(viewport_vertical_fov_radians(fov_degrees) * 0.5));
+        return std::max(
+            kNavigationMinOrthographicSize,
+            2.0 * distance *
+                std::tan(viewport_vertical_fov_radians(fov_degrees) * 0.5));
 }
 
 double viewport_orbit_sensitivity(double mouse_sensitivity)
 {
-	return navigation_orbit_radians_per_pixel * std::max(0.1, mouse_sensitivity);
+  return kNavigationOrbitRadiansPerPixel * std::max(0.1, mouse_sensitivity);
 }
 
 double viewport_fly_look_sensitivity(double mouse_sensitivity)
 {
-	return navigation_fly_look_radians_per_pixel * std::max(0.1, mouse_sensitivity);
+  return kNavigationFlyLookRadiansPerPixel * std::max(0.1, mouse_sensitivity);
 }
 
 double viewport_fly_move_distance(double delta_seconds, bool fast, bool slow)
 {
-	double speed = navigation_fly_base_speed;
-	if (fast) {
-		speed *= navigation_fly_fast_multiplier;
-	}
+  double speed = kNavigationFlyBaseSpeed;
+  if (fast) {
+    speed *= kNavigationFlyFastMultiplier;
+  }
 	if (slow) {
-		speed *= navigation_fly_slow_multiplier;
-	}
-	const double clamped_delta = std::clamp(delta_seconds, 0.0, navigation_fly_max_delta_seconds);
-	return speed * clamped_delta;
+          speed *= kNavigationFlySlowMultiplier;
+        }
+        const double clamped_delta =
+            std::clamp(delta_seconds, 0.0, kNavigationFlyMaxDeltaSeconds);
+        return speed * clamped_delta;
 }
 
 void reset_viewport_navigation(ViewportNavigationState& state)
@@ -781,27 +816,28 @@ void reset_viewport_navigation(ViewportNavigationState& state)
 
 void begin_viewport_navigation(ViewportNavigationState& state, bool pan)
 {
-	state.mode = pan ? ViewportNavigationMode::pan : ViewportNavigationMode::orbit;
-	state.fly_camera_id = 0;
-	state.fly_pane_id.clear();
-	clear_viewport_orbit_snap_source(state);
-	ensure_viewport_navigation_pivot(state);
+  state.mode =
+      pan ? ViewportNavigationMode::Pan : ViewportNavigationMode::Orbit;
+  state.fly_camera_id = 0;
+  state.fly_pane_id.clear();
+  clear_viewport_orbit_snap_source(state);
+  ensure_viewport_navigation_pivot(state);
 }
 
 void begin_viewport_fly_navigation(ViewportNavigationState& state, std::uint64_t camera_id, std::string_view pane_id)
 {
-	state.mode = ViewportNavigationMode::fly;
-	state.fly_camera_id = camera_id;
-	state.fly_pane_id = std::string(pane_id);
-	clear_viewport_orbit_snap_source(state);
+  state.mode = ViewportNavigationMode::Fly;
+  state.fly_camera_id = camera_id;
+  state.fly_pane_id = std::string(pane_id);
+  clear_viewport_orbit_snap_source(state);
 }
 
 void end_viewport_navigation(ViewportNavigationState& state)
 {
-	state.mode = ViewportNavigationMode::none;
-	state.fly_camera_id = 0;
-	state.fly_pane_id.clear();
-	clear_viewport_orbit_snap_source(state);
+  state.mode = ViewportNavigationMode::None;
+  state.fly_camera_id = 0;
+  state.fly_pane_id.clear();
+  clear_viewport_orbit_snap_source(state);
 }
 
 void ensure_viewport_navigation_pivot(ViewportNavigationState& state)
@@ -820,27 +856,28 @@ void clear_viewport_orbit_snap_source(ViewportNavigationState& state)
 
 bool viewport_navigation_is_pan(const ViewportNavigationState& state)
 {
-	return state.mode == ViewportNavigationMode::pan;
+  return state.mode == ViewportNavigationMode::Pan;
 }
 
 bool viewport_navigation_is_orbit(const ViewportNavigationState& state)
 {
-	return state.mode == ViewportNavigationMode::orbit;
+  return state.mode == ViewportNavigationMode::Orbit;
 }
 
 bool viewport_navigation_is_fly(const ViewportNavigationState& state)
 {
-	return state.mode == ViewportNavigationMode::fly;
+  return state.mode == ViewportNavigationMode::Fly;
 }
 
 bool viewport_navigation_is_fly_camera(const ViewportNavigationState& state, std::uint64_t camera_id)
 {
-	return state.mode == ViewportNavigationMode::fly && state.fly_camera_id != 0 && state.fly_camera_id == camera_id;
+  return state.mode == ViewportNavigationMode::Fly &&
+         state.fly_camera_id != 0 && state.fly_camera_id == camera_id;
 }
 
 bool viewport_navigation_is_active(const ViewportNavigationState& state, bool view_cube_dragging)
 {
-	return state.mode != ViewportNavigationMode::none || view_cube_dragging;
+  return state.mode != ViewportNavigationMode::None || view_cube_dragging;
 }
 
 ViewportNavigationResult viewport_orbit(const ViewportOrbitInput& input)
@@ -877,15 +914,21 @@ ViewportNavigationResult viewport_pan(const ViewportPanInput& input)
 	QDR_PROFILE_SCOPE("qdr_editor_core.viewport_pan");
 	const double viewport_height = std::max(1.0, static_cast<double>(input.camera.viewport_size.y));
 	double world_per_pixel = 0.01;
-	if (input.camera.projection == CameraProjection::orthographic) {
-		world_per_pixel = std::max(0.0001, input.camera.orthographic_size) / viewport_height;
-	} else {
-		const double distance = std::max(navigation_min_camera_distance, viewport_distance_to_pivot(input.camera.transform, input.pivot));
-		const double vertical_span = 2.0 * distance * std::tan(viewport_vertical_fov_radians(input.camera.fov_degrees) * 0.5);
-		world_per_pixel = std::max(0.0001, vertical_span) / viewport_height;
-	}
+        if (input.camera.projection == CameraProjection::Orthographic) {
+          world_per_pixel = std::max(0.0001, input.camera.orthographic_size) /
+                            viewport_height;
+        } else {
+          const double distance = std::max(
+              kNavigationMinCameraDistance,
+              viewport_distance_to_pivot(input.camera.transform, input.pivot));
+          const double vertical_span =
+              2.0 * distance *
+              std::tan(viewport_vertical_fov_radians(input.camera.fov_degrees) *
+                       0.5);
+          world_per_pixel = std::max(0.0001, vertical_span) / viewport_height;
+        }
 
-	const quader::QVec3 move =
+        const quader::QVec3 move =
 			geometry_scale(viewport_camera_right(input.camera.transform), -static_cast<double>(input.screen_delta.x) * world_per_pixel) +
 			geometry_scale(viewport_camera_up(input.camera.transform), static_cast<double>(input.screen_delta.y) * world_per_pixel);
 	quader_poly::Transform3 result_transform = input.camera.transform;
@@ -900,16 +943,21 @@ ViewportNavigationResult viewport_zoom(const ViewportZoomInput& input)
 		return navigation_result(input.camera.transform, input.pivot);
 	}
 
-	const double factor = std::pow(navigation_zoom_step_factor, input.steps);
-	if (input.camera.projection == CameraProjection::orthographic) {
-		const double new_size = capped_orthographic_zoom_size(input.camera.orthographic_size, factor, input.steps);
-		return navigation_result(input.camera.transform, input.pivot, new_size);
-	}
+        const double factor = std::pow(kNavigationZoomStepFactor, input.steps);
+        if (input.camera.projection == CameraProjection::Orthographic) {
+          const double new_size = capped_orthographic_zoom_size(
+              input.camera.orthographic_size, factor, input.steps);
+          return navigation_result(input.camera.transform, input.pivot,
+                                   new_size);
+        }
 
-	const quader::QVec3 forward = viewport_camera_forward(input.camera.transform);
-	const double distance = std::max(navigation_min_camera_distance, viewport_distance_to_pivot(input.camera.transform, input.pivot));
-	const double new_distance = std::max(navigation_min_camera_distance, distance / factor);
-	quader_poly::Transform3 result_transform = input.camera.transform;
+        const quader::QVec3 forward = viewport_camera_forward(input.camera.transform);
+        const double distance = std::max(
+            kNavigationMinCameraDistance,
+            viewport_distance_to_pivot(input.camera.transform, input.pivot));
+        const double new_distance =
+            std::max(kNavigationMinCameraDistance, distance / factor);
+        quader_poly::Transform3 result_transform = input.camera.transform;
 	result_transform.origin += geometry_scale(forward, distance - new_distance);
 	return navigation_result(result_transform, input.pivot);
 }
@@ -921,28 +969,39 @@ ViewportNavigationResult viewport_zoom_to_cursor(const ViewportZoomToCursorInput
 		return navigation_result(input.camera.transform, input.pivot);
 	}
 
-	const double factor = std::pow(navigation_zoom_step_factor, input.steps);
-	const quader::QVec3 ray_direction = geometry_is_tiny(input.ray_direction) ? viewport_camera_forward(input.camera.transform) : geometry_normalized_axis(input.ray_direction);
-	const double fallback_distance = std::max(navigation_min_camera_distance, viewport_distance_to_pivot(input.camera.transform, input.pivot));
-	quader::QVec3 cursor_target = input.has_cursor_target ? input.cursor_target : input.ray_origin + geometry_scale(ray_direction, fallback_distance);
+        const double factor = std::pow(kNavigationZoomStepFactor, input.steps);
+        const quader::QVec3 ray_direction = geometry_is_tiny(input.ray_direction) ? viewport_camera_forward(input.camera.transform) : geometry_normalized_axis(input.ray_direction);
+        const double fallback_distance = std::max(
+            kNavigationMinCameraDistance,
+            viewport_distance_to_pivot(input.camera.transform, input.pivot));
+        quader::QVec3 cursor_target = input.has_cursor_target ? input.cursor_target : input.ray_origin + geometry_scale(ray_direction, fallback_distance);
 
-	if (input.camera.projection == CameraProjection::orthographic) {
-		const double current_size = std::max(navigation_min_orthographic_size, input.camera.orthographic_size);
-		const double new_size = capped_orthographic_zoom_size(current_size, factor, input.steps);
-		quader::QVec3 cursor_offset = input.ray_origin - input.camera.transform.origin;
-		cursor_offset = cursor_offset - geometry_scale(ray_direction, geometry_dot(cursor_offset, ray_direction));
-		quader_poly::Transform3 result_transform = input.camera.transform;
-		result_transform.origin += geometry_scale(cursor_offset, 1.0 - (new_size / current_size));
-		return navigation_result(result_transform, cursor_target, new_size);
-	}
+        if (input.camera.projection == CameraProjection::Orthographic) {
+          const double current_size = std::max(kNavigationMinOrthographicSize,
+                                               input.camera.orthographic_size);
+          const double new_size =
+              capped_orthographic_zoom_size(current_size, factor, input.steps);
+          quader::QVec3 cursor_offset =
+              input.ray_origin - input.camera.transform.origin;
+          cursor_offset =
+              cursor_offset -
+              geometry_scale(ray_direction,
+                             geometry_dot(cursor_offset, ray_direction));
+          quader_poly::Transform3 result_transform = input.camera.transform;
+          result_transform.origin +=
+              geometry_scale(cursor_offset, 1.0 - (new_size / current_size));
+          return navigation_result(result_transform, cursor_target, new_size);
+        }
 
-	double target_distance = geometry_dot(cursor_target - input.ray_origin, ray_direction);
-	if (target_distance <= navigation_min_camera_distance) {
-		target_distance = fallback_distance;
-		cursor_target = input.ray_origin + geometry_scale(ray_direction, target_distance);
-	}
-	const double new_distance = std::max(navigation_min_camera_distance, target_distance / factor);
-	quader_poly::Transform3 result_transform = input.camera.transform;
+        double target_distance = geometry_dot(cursor_target - input.ray_origin, ray_direction);
+        if (target_distance <= kNavigationMinCameraDistance) {
+          target_distance = fallback_distance;
+          cursor_target =
+              input.ray_origin + geometry_scale(ray_direction, target_distance);
+        }
+        const double new_distance =
+            std::max(kNavigationMinCameraDistance, target_distance / factor);
+        quader_poly::Transform3 result_transform = input.camera.transform;
 	result_transform.origin += geometry_scale(ray_direction, target_distance - new_distance);
 	return navigation_result(result_transform, cursor_target);
 }
@@ -997,20 +1056,31 @@ ViewportNavigationResult viewport_frame_bounds(const ViewportFrameBoundsInput& i
 
 	const double margin = std::max(1.0, input.margin);
 	quader_poly::Transform3 result_transform = input.camera.transform;
-	if (input.camera.projection == CameraProjection::orthographic) {
-		const double aspect = viewport_aspect_for_size(input.camera.viewport_size);
-		const double needed_height = std::max(static_cast<double>(extents.y) * 2.0, (static_cast<double>(extents.x) * 2.0) / aspect);
-		const double size = std::clamp(std::max(needed_height, radius * 2.0) * margin, navigation_min_orthographic_size, navigation_max_orthographic_size);
-		result_transform.origin = center - geometry_scale(viewport_camera_forward(input.camera.transform), std::max(navigation_default_frame_distance, radius * 2.0));
-		return navigation_result(result_transform, center, size);
-	}
+        if (input.camera.projection == CameraProjection::Orthographic) {
+          const double aspect =
+              viewport_aspect_for_size(input.camera.viewport_size);
+          const double needed_height =
+              std::max(static_cast<double>(extents.y) * 2.0,
+                       (static_cast<double>(extents.x) * 2.0) / aspect);
+          const double size = std::clamp(
+              std::max(needed_height, radius * 2.0) * margin,
+              kNavigationMinOrthographicSize, kNavigationMaxOrthographicSize);
+          result_transform.origin =
+              center -
+              geometry_scale(
+                  viewport_camera_forward(input.camera.transform),
+                  std::max(kNavigationDefaultFrameDistance, radius * 2.0));
+          return navigation_result(result_transform, center, size);
+        }
 
-	const double aspect = viewport_aspect_for_size(input.camera.viewport_size);
+        const double aspect = viewport_aspect_for_size(input.camera.viewport_size);
 	const double vertical_fov = viewport_vertical_fov_radians(input.camera.fov_degrees);
 	const double horizontal_fov = 2.0 * std::atan(std::tan(vertical_fov * 0.5) * aspect);
 	const double fitting_fov = std::max(0.01, std::min(vertical_fov, horizontal_fov));
-	const double distance = std::max(navigation_min_camera_distance, (radius * margin) / std::sin(fitting_fov * 0.5));
-	result_transform.origin = center - geometry_scale(viewport_camera_forward(input.camera.transform), distance);
+        const double distance =
+            std::max(kNavigationMinCameraDistance,
+                     (radius * margin) / std::sin(fitting_fov * 0.5));
+        result_transform.origin = center - geometry_scale(viewport_camera_forward(input.camera.transform), distance);
 	return navigation_result(result_transform, center);
 }
 
@@ -1018,19 +1088,25 @@ ViewportNavigationResult viewport_view_axis(const ViewportCameraState& camera, q
 {
 	const quader::QVec3 offset_axis = view_axis_vector(axis, sign);
 	double distance = viewport_distance_to_pivot(camera.transform, pivot);
-	if (distance <= navigation_min_camera_distance) {
-		distance = navigation_default_frame_distance;
-	}
+        if (distance <= kNavigationMinCameraDistance) {
+          distance = kNavigationDefaultFrameDistance;
+        }
 
-	double camera_size = navigation_default_frame_distance;
-	if (camera.projection == CameraProjection::orthographic) {
-		camera_size = std::clamp(camera.orthographic_size, navigation_min_orthographic_size, navigation_max_orthographic_size);
-	} else {
-		const double visible_height = 2.0 * distance * std::tan(viewport_vertical_fov_radians(camera.fov_degrees) * 0.5);
-		camera_size = std::clamp(visible_height, navigation_min_orthographic_size, navigation_max_orthographic_size);
-	}
+        double camera_size = kNavigationDefaultFrameDistance;
+        if (camera.projection == CameraProjection::Orthographic) {
+          camera_size = std::clamp(camera.orthographic_size,
+                                   kNavigationMinOrthographicSize,
+                                   kNavigationMaxOrthographicSize);
+        } else {
+          const double visible_height =
+              2.0 * distance *
+              std::tan(viewport_vertical_fov_radians(camera.fov_degrees) * 0.5);
+          camera_size =
+              std::clamp(visible_height, kNavigationMinOrthographicSize,
+                         kNavigationMaxOrthographicSize);
+        }
 
-	quader_poly::Transform3 result_transform = camera.transform;
+        quader_poly::Transform3 result_transform = camera.transform;
 	result_transform.origin = pivot + geometry_scale(offset_axis, distance);
 	const quader_poly::Transform3 basis = orthogonal_camera_basis_for_offset_axis(offset_axis);
 	result_transform.x_axis = basis.x_axis;
@@ -1048,44 +1124,53 @@ ViewportNavigationResult viewport_step_view_axis(const ViewportCameraState& came
 
 ViewCubePrimitives build_view_cube_primitives(const ViewCubePrimitiveInput& input)
 {
-	const double widget_size = std::clamp(input.widget_size, view_cube_min_size, view_cube_max_size);
-	const quader::QVec2 center = view_cube_center(input.viewport_size, input.margin);
-	const double cube_scale = widget_size * view_cube_half_factor;
-	const double marker_radius = widget_size * view_cube_axis_factor;
+  const double widget_size =
+      std::clamp(input.widget_size, kViewCubeMinSize, kViewCubeMaxSize);
+  const quader::QVec2 center =
+      view_cube_center(input.viewport_size, input.margin);
+  const double cube_scale = widget_size * kViewCubeHalfFactor;
+  const double marker_radius = widget_size * kViewCubeAxisFactor;
 
-	ViewCubePrimitives primitives;
-	primitives.ok = true;
-	primitives.screen_position = center;
-	primitives.rect_position = {
-		static_cast<float>(static_cast<double>(center.x) - widget_size * 0.5),
-		static_cast<float>(static_cast<double>(center.y) - widget_size * 0.5),
-	};
-	primitives.rect_size = { static_cast<float>(widget_size), static_cast<float>(widget_size) };
-	primitives.faces = build_view_cube_faces_for_state(input.camera_transform, center, cube_scale);
-	primitives.edges = build_view_cube_edges_for_state(input.camera_transform, center, cube_scale);
-	primitives.axis_edges = build_view_cube_axis_edges_for_state(input.camera_transform, center, cube_scale);
-	primitives.axis_markers = build_view_cube_markers_for_state(input.camera_transform, center, marker_radius);
-	return primitives;
+  ViewCubePrimitives primitives;
+  primitives.ok = true;
+  primitives.screen_position = center;
+  primitives.rect_position = {
+      static_cast<float>(static_cast<double>(center.x) - widget_size * 0.5),
+      static_cast<float>(static_cast<double>(center.y) - widget_size * 0.5),
+  };
+  primitives.rect_size = {static_cast<float>(widget_size),
+                          static_cast<float>(widget_size)};
+  primitives.faces = build_view_cube_faces_for_state(input.camera_transform,
+                                                     center, cube_scale);
+  primitives.edges = build_view_cube_edges_for_state(input.camera_transform,
+                                                     center, cube_scale);
+  primitives.axis_edges = build_view_cube_axis_edges_for_state(
+      input.camera_transform, center, cube_scale);
+  primitives.axis_markers = build_view_cube_markers_for_state(
+      input.camera_transform, center, marker_radius);
+  return primitives;
 }
 
 ViewCubeHit pick_view_cube(const ViewCubePickInput& input)
 {
-	const double widget_size = std::clamp(input.primitives.widget_size, view_cube_min_size, view_cube_max_size);
-	const quader::QVec2 center = view_cube_center(input.primitives.viewport_size, input.primitives.margin);
-	const double radius = widget_size * 0.5;
-	const quader::QVec2 from_center = vec2_sub(input.screen_position, center);
+  const double widget_size = std::clamp(input.primitives.widget_size,
+                                        kViewCubeMinSize, kViewCubeMaxSize);
+  const quader::QVec2 center =
+      view_cube_center(input.primitives.viewport_size, input.primitives.margin);
+  const double radius = widget_size * 0.5;
+  const quader::QVec2 from_center = vec2_sub(input.screen_position, center);
 
-	ViewCubeHit hit;
-	hit.ok = true;
-	hit.hit = false;
-	if (vec2_dot(from_center, from_center) > radius * radius) {
-		return hit;
-	}
+  ViewCubeHit hit;
+  hit.ok = true;
+  hit.hit = false;
+  if (vec2_dot(from_center, from_center) > radius * radius) {
+    return hit;
+  }
 
 	int best_face_index = -1;
 	double best_depth = -1000000.0;
-	const double cube_scale = widget_size * view_cube_half_factor;
-	const std::vector<ViewCubeFacePrimitive> faces = build_view_cube_faces_for_state(input.primitives.camera_transform, center, cube_scale);
+        const double cube_scale = widget_size * kViewCubeHalfFactor;
+        const std::vector<ViewCubeFacePrimitive> faces = build_view_cube_faces_for_state(input.primitives.camera_transform, center, cube_scale);
 	for (int index = 0; index < static_cast<int>(faces.size()); ++index) {
 		if (!point_in_polygon(faces[index].polygon, input.screen_position)) {
 			continue;
@@ -1099,16 +1184,16 @@ ViewCubeHit pick_view_cube(const ViewCubePickInput& input)
 	hit.hit = true;
 	if (best_face_index >= 0) {
 		const ViewCubeFacePrimitive& face = faces[best_face_index];
-		hit.kind = ViewCubeHitKind::face;
-		hit.axis = face.axis;
+                hit.kind = ViewCubeHitKind::Face;
+                hit.axis = face.axis;
 		hit.sign = face.sign;
 		hit.depth = face.depth;
 		hit.screen_position = face.screen_position;
 		return hit;
 	}
 
-	hit.kind = ViewCubeHitKind::body;
-	hit.screen_position = center;
+        hit.kind = ViewCubeHitKind::Body;
+        hit.screen_position = center;
 	return hit;
 }
 

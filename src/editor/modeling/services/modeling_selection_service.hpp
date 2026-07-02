@@ -26,58 +26,63 @@ class SceneDocument;
  */
 class ModelingSelectionService {
 public:
-    [[nodiscard]] static bool hasComponentSelection(const ModelingSelectionSummary& summary);
+  [[nodiscard]] static bool
+  has_component_selection(const ModelingSelectionSummary &summary);
 
-    void invalidatePickingCache() const;
-    [[nodiscard]] const std::vector<quader_editor_core::PolygonObject>& cachedSceneTransformedObjectsForPicking(
-            const quader_editor_core::EditorSession& session,
-            const SceneDocument& scene,
-            const ModelingObjectRuntimeMap& objectMap) const;
-    [[nodiscard]] std::vector<quader_editor_core::PolygonObject> sceneTransformedObjectsForPicking(
-            const quader_editor_core::EditorSession& session,
-            const SceneDocument& scene,
-            const ModelingObjectRuntimeMap& objectMap) const;
-    [[nodiscard]] const std::vector<quader_editor_core::PickObjectBounds>& cachedPickObjectBounds(
-            const quader_editor_core::EditorSession& session,
-            const SceneDocument& scene,
-            const ModelingObjectRuntimeMap& objectMap) const;
-    [[nodiscard]] const std::vector<quader_editor_core::PickObjectFaceGeometry>& cachedPickFaceGeometry(
-            const quader_editor_core::EditorSession& session,
-            const SceneDocument& scene,
-            const ModelingObjectRuntimeMap& objectMap,
-            quader_poly::PickOptions pickOptions = {}) const;
-    bool applyPickSelection(
-            quader_editor_core::EditorSession& session,
-            const SceneDocument& scene,
-            const ModelingObjectRuntimeMap& objectMap,
-            const ModelingPickSelectRequest& request) const;
-    [[nodiscard]] std::optional<int> pickObjectId(
-            const quader_editor_core::EditorSession& session,
-            const SceneDocument& scene,
-            const ModelingObjectRuntimeMap& objectMap,
-            const ModelingPickSelectRequest& request) const;
-    [[nodiscard]] quader_editor_core::RectangleSelectionState rectangleSelectionState(
-            const quader_editor_core::EditorSession& session) const;
-    [[nodiscard]] quader_editor_core::RectangleSelectionUniverse rectangleSelectionUniverse(
-            const quader_editor_core::EditorSession& session) const;
-    [[nodiscard]] quader_editor_core::RectangleProjectedHitsRequest rectangleProjectedHitsRequest(
-            const std::vector<quader_editor_core::PolygonObject>& pickingObjects,
-            quader_editor_core::SelectionMode selectionMode,
-            const ModelingBoxSelectRequest& request) const;
-    [[nodiscard]] std::vector<int> boxPickObjectIds(
-            const quader_editor_core::EditorSession& session,
-            const SceneDocument& scene,
-            const ModelingObjectRuntimeMap& objectMap,
-            const ModelingBoxSelectRequest& request) const;
-    bool applyRectangleSelection(
-            quader_editor_core::EditorSession& session,
-            const quader_editor_core::RectangleSelectionState& selection) const;
-    [[nodiscard]] static bool selectionMatches(
-            const quader_poly::Selection& left,
-            const quader_poly::Selection& right);
+  void invalidate_picking_cache() const;
+  [[nodiscard]] const std::vector<quader_editor_core::PolygonObject> &
+  cached_scene_transformed_objects_for_picking(
+      const quader_editor_core::EditorSession &session,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_map) const;
+  [[nodiscard]] std::vector<quader_editor_core::PolygonObject>
+  scene_transformed_objects_for_picking(
+      const quader_editor_core::EditorSession &session,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_map) const;
+  [[nodiscard]] const std::vector<quader_editor_core::PickObjectBounds> &
+  cached_pick_object_bounds(const quader_editor_core::EditorSession &session,
+                            const SceneDocument &scene,
+                            const ModelingObjectRuntimeMap &object_map) const;
+  [[nodiscard]] const std::vector<quader_editor_core::PickObjectFaceGeometry> &
+  cached_pick_face_geometry(const quader_editor_core::EditorSession &session,
+                            const SceneDocument &scene,
+                            const ModelingObjectRuntimeMap &object_map,
+                            quader_poly::PickOptions pick_options = {}) const;
+  bool apply_pick_selection(quader_editor_core::EditorSession &session,
+                            const SceneDocument &scene,
+                            const ModelingObjectRuntimeMap &object_map,
+                            const ModelingPickSelectRequest &request) const;
+  [[nodiscard]] std::optional<int>
+  pick_object_id(const quader_editor_core::EditorSession &session,
+                 const SceneDocument &scene,
+                 const ModelingObjectRuntimeMap &object_map,
+                 const ModelingPickSelectRequest &request) const;
+  [[nodiscard]] quader_editor_core::RectangleSelectionState
+  rectangle_selection_state(
+      const quader_editor_core::EditorSession &session) const;
+  [[nodiscard]] quader_editor_core::RectangleSelectionUniverse
+  rectangle_selection_universe(
+      const quader_editor_core::EditorSession &session) const;
+  [[nodiscard]] quader_editor_core::RectangleProjectedHitsRequest
+  rectangle_projected_hits_request(
+      const std::vector<quader_editor_core::PolygonObject> &picking_objects,
+      quader_editor_core::SelectionMode selection_mode,
+      const ModelingBoxSelectRequest &request) const;
+  [[nodiscard]] std::vector<int>
+  box_pick_object_ids(const quader_editor_core::EditorSession &session,
+                      const SceneDocument &scene,
+                      const ModelingObjectRuntimeMap &object_map,
+                      const ModelingBoxSelectRequest &request) const;
+  bool apply_rectangle_selection(
+      quader_editor_core::EditorSession &session,
+      const quader_editor_core::RectangleSelectionState &selection) const;
+  [[nodiscard]] static bool
+  selection_matches(const quader_poly::Selection &left,
+                    const quader_poly::Selection &right);
 
 private:
-    mutable ModelingPickingCache pickingCache_;
+  mutable ModelingPickingCache picking_cache_;
 };
 
 } // namespace quader

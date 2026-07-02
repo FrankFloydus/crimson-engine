@@ -44,253 +44,302 @@ using namespace quader;
 
 namespace {
 
-using quader::test::guardrail::readSourceFile;
+using quader::test::guardrail::read_source_file;
 
-ViewportOverlayCamera testOverlayCamera() {
-    return {
-            .eye = {0.0f, 0.0f, 0.0f},
-            .forward = {0.0f, 0.0f, -1.0f},
-            .right = {1.0f, 0.0f, 0.0f},
-            .up = {0.0f, 1.0f, 0.0f},
-            .viewportSize = {200.0f, 100.0f},
-            .projection = ViewportOverlayProjection::Orthographic,
-            .orthographicSize = 2.0f,
-            .nearPlane = 0.1f,
-            .farPlane = 10.0f,
-    };
+ViewportOverlayCamera test_overlay_camera() {
+  return {
+      .eye = {0.0f, 0.0f, 0.0f},
+      .forward = {0.0f, 0.0f, -1.0f},
+      .right = {1.0f, 0.0f, 0.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+      .viewport_size = {200.0f, 100.0f},
+      .projection = ViewportOverlayProjection::Orthographic,
+      .orthographic_size = 2.0f,
+      .near_plane = 0.1f,
+      .far_plane = 10.0f,
+  };
 }
 
-ViewportOverlayCamera testPerspectiveOverlayCamera() {
-    return {
-            .eye = {0.0f, 0.0f, 0.0f},
-            .forward = {0.0f, 0.0f, -1.0f},
-            .right = {1.0f, 0.0f, 0.0f},
-            .up = {0.0f, 1.0f, 0.0f},
-            .viewportSize = {200.0f, 100.0f},
-            .projection = ViewportOverlayProjection::Perspective,
-            .fovDegrees = 60.0f,
-            .nearPlane = 0.1f,
-            .farPlane = 10.0f,
-    };
+ViewportOverlayCamera test_perspective_overlay_camera() {
+  return {
+      .eye = {0.0f, 0.0f, 0.0f},
+      .forward = {0.0f, 0.0f, -1.0f},
+      .right = {1.0f, 0.0f, 0.0f},
+      .up = {0.0f, 1.0f, 0.0f},
+      .viewport_size = {200.0f, 100.0f},
+      .projection = ViewportOverlayProjection::Perspective,
+      .fov_degrees = 60.0f,
+      .near_plane = 0.1f,
+      .far_plane = 10.0f,
+  };
 }
 
-MeshAsset makeOverlayTriangleMesh() {
-    MeshAsset mesh;
-    mesh.name = "Overlay Triangle";
-    mesh.vertices = {
-            MeshVertex{.position = {-0.5f, 0.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {0.0f, 0.0f}},
-            MeshVertex{.position = {0.5f, 0.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {1.0f, 0.0f}},
-            MeshVertex{.position = {0.0f, 0.0f, 1.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {0.5f, 1.0f}},
-    };
-    mesh.indices = {0u, 1u, 2u};
-    mesh.primitives = {MeshPrimitiveSpan{.indexOffset = 0u, .indexCount = 3u, .materialSlot = 0u}};
-    return mesh;
+MeshAsset make_overlay_triangle_mesh() {
+  MeshAsset mesh;
+  mesh.name = "Overlay Triangle";
+  mesh.vertices = {
+      MeshVertex{.position = {-0.5f, 0.0f, 0.0f},
+                 .normal = {0.0f, 1.0f, 0.0f},
+                 .uv = {0.0f, 0.0f}},
+      MeshVertex{.position = {0.5f, 0.0f, 0.0f},
+                 .normal = {0.0f, 1.0f, 0.0f},
+                 .uv = {1.0f, 0.0f}},
+      MeshVertex{.position = {0.0f, 0.0f, 1.0f},
+                 .normal = {0.0f, 1.0f, 0.0f},
+                 .uv = {0.5f, 1.0f}},
+  };
+  mesh.indices = {0u, 1u, 2u};
+  mesh.primitives = {MeshPrimitiveSpan{
+      .index_offset = 0u, .index_count = 3u, .material_slot = 0u}};
+  return mesh;
 }
 
-MeshAsset makeAuthoredQuadMesh() {
-    MeshAsset mesh;
-    mesh.name = "Authored Quad";
-    mesh.vertices = {
-            MeshVertex{.position = {-1.0f, 0.0f, -1.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {0.0f, 0.0f}},
-            MeshVertex{.position = {1.0f, 0.0f, -1.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {1.0f, 0.0f}},
-            MeshVertex{.position = {1.0f, 0.0f, 1.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {1.0f, 1.0f}},
-            MeshVertex{.position = {-1.0f, 0.0f, 1.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {0.0f, 1.0f}},
-    };
-    mesh.indices = {0u, 1u, 2u, 0u, 2u, 3u};
-    mesh.primitives = {MeshPrimitiveSpan{.indexOffset = 0u, .indexCount = 6u, .materialSlot = 0u}};
-    quader_poly::Document document;
-    document.vertices = {
-            {.id = 1u, .position = mesh.vertices[0].position},
-            {.id = 2u, .position = mesh.vertices[1].position},
-            {.id = 3u, .position = mesh.vertices[2].position},
-            {.id = 4u, .position = mesh.vertices[3].position},
-    };
-    document.faces.push_back({.id = 1u, .vertices = {1u, 2u, 3u, 4u}});
-    mesh.hasAuthoredPolygonDocument = true;
-    mesh.authoredPolygonDocument = std::make_shared<quader_poly::Document>(std::move(document));
-    return mesh;
+MeshAsset make_authored_quad_mesh() {
+  MeshAsset mesh;
+  mesh.name = "Authored Quad";
+  mesh.vertices = {
+      MeshVertex{.position = {-1.0f, 0.0f, -1.0f},
+                 .normal = {0.0f, 1.0f, 0.0f},
+                 .uv = {0.0f, 0.0f}},
+      MeshVertex{.position = {1.0f, 0.0f, -1.0f},
+                 .normal = {0.0f, 1.0f, 0.0f},
+                 .uv = {1.0f, 0.0f}},
+      MeshVertex{.position = {1.0f, 0.0f, 1.0f},
+                 .normal = {0.0f, 1.0f, 0.0f},
+                 .uv = {1.0f, 1.0f}},
+      MeshVertex{.position = {-1.0f, 0.0f, 1.0f},
+                 .normal = {0.0f, 1.0f, 0.0f},
+                 .uv = {0.0f, 1.0f}},
+  };
+  mesh.indices = {0u, 1u, 2u, 0u, 2u, 3u};
+  mesh.primitives = {MeshPrimitiveSpan{
+      .index_offset = 0u, .index_count = 6u, .material_slot = 0u}};
+  quader_poly::Document document;
+  document.vertices = {
+      {.id = 1u, .position = mesh.vertices[0].position},
+      {.id = 2u, .position = mesh.vertices[1].position},
+      {.id = 3u, .position = mesh.vertices[2].position},
+      {.id = 4u, .position = mesh.vertices[3].position},
+  };
+  document.faces.push_back({.id = 1u, .vertices = {1u, 2u, 3u, 4u}});
+  mesh.has_authored_polygon_document = true;
+  mesh.authored_polygon_document =
+      std::make_shared<quader_poly::Document>(std::move(document));
+  return mesh;
 }
 
-std::size_t lineCountFor(const ViewportOverlayFrame& frame, ViewportOverlayLayer layer) {
-    return static_cast<std::size_t>(std::count_if(frame.lines.begin(), frame.lines.end(), [layer](const ViewportOverlayLine& line) {
-        return line.layer == layer;
-    }));
+std::size_t line_count_for(const ViewportOverlayFrame &frame,
+                           ViewportOverlayLayer layer) {
+  return static_cast<std::size_t>(
+      std::count_if(frame.lines.begin(), frame.lines.end(),
+                    [layer](const ViewportOverlayLine &line) {
+                      return line.layer == layer;
+                    }));
 }
 
-std::size_t lineSourceCountFor(const ViewportOverlayFrame& frame, ViewportOverlaySource source) {
-    return static_cast<std::size_t>(std::count_if(frame.lines.begin(), frame.lines.end(), [source](const ViewportOverlayLine& line) {
-        return line.source == source;
-    }));
+std::size_t line_source_count_for(const ViewportOverlayFrame &frame,
+                                  ViewportOverlaySource source) {
+  return static_cast<std::size_t>(
+      std::count_if(frame.lines.begin(), frame.lines.end(),
+                    [source](const ViewportOverlayLine &line) {
+                      return line.source == source;
+                    }));
 }
 
-std::size_t triangleCountFor(const ViewportOverlayFrame& frame, ViewportOverlayLayer layer) {
-    return static_cast<std::size_t>(std::count_if(
-            frame.triangles.begin(),
-            frame.triangles.end(),
-            [layer](const ViewportOverlayTriangle& triangle) {
-                return triangle.layer == layer;
-            }));
+std::size_t triangle_count_for(const ViewportOverlayFrame &frame,
+                               ViewportOverlayLayer layer) {
+  return static_cast<std::size_t>(
+      std::count_if(frame.triangles.begin(), frame.triangles.end(),
+                    [layer](const ViewportOverlayTriangle &triangle) {
+                      return triangle.layer == layer;
+                    }));
 }
 
-std::size_t pointCountFor(const ViewportOverlayFrame& frame, ViewportOverlayLayer layer) {
-    return static_cast<std::size_t>(std::count_if(
-            frame.points.begin(),
-            frame.points.end(),
-            [layer](const ViewportOverlayPoint& point) {
-                return point.layer == layer;
-            }));
+std::size_t point_count_for(const ViewportOverlayFrame &frame,
+                            ViewportOverlayLayer layer) {
+  return static_cast<std::size_t>(
+      std::count_if(frame.points.begin(), frame.points.end(),
+                    [layer](const ViewportOverlayPoint &point) {
+                      return point.layer == layer;
+                    }));
 }
 
-void appendSourceWireDepthStampTriangle(
-        ViewportOverlayFrame& frame,
-        int objectId,
-        QVec3 a,
-        QVec3 b,
-        QVec3 c,
-        bool insideOut) {
-    frame.triangles.push_back({
-            .layer = ViewportOverlayLayer::SourceWireDepthStamp,
-            .a = a,
-            .b = insideOut ? c : b,
-            .c = insideOut ? b : c,
-            .color = rgba8(255, 224, 92, 235),
-            .element = {.objectId = objectId},
-    });
+void append_source_wire_depth_stamp_triangle(ViewportOverlayFrame &frame,
+                                             int object_id, QVec3 a, QVec3 b,
+                                             QVec3 c, bool inside_out) {
+  frame.triangles.push_back({
+      .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+      .a = a,
+      .b = inside_out ? c : b,
+      .c = inside_out ? b : c,
+      .color = rgba8(255, 224, 92, 235),
+      .element = {.object_id = object_id},
+  });
 }
 
-void appendSourceWireDepthStampQuad(
-        ViewportOverlayFrame& frame,
-        int objectId,
-        QVec3 a,
-        QVec3 b,
-        QVec3 c,
-        QVec3 d,
-        bool insideOut) {
-    appendSourceWireDepthStampTriangle(frame, objectId, a, b, c, insideOut);
-    appendSourceWireDepthStampTriangle(frame, objectId, a, c, d, insideOut);
+void append_source_wire_depth_stamp_quad(ViewportOverlayFrame &frame,
+                                         int object_id, QVec3 a, QVec3 b,
+                                         QVec3 c, QVec3 d, bool inside_out) {
+  append_source_wire_depth_stamp_triangle(frame, object_id, a, b, c,
+                                          inside_out);
+  append_source_wire_depth_stamp_triangle(frame, object_id, a, c, d,
+                                          inside_out);
 }
 
-void appendSourceWireDepthStampBox(ViewportOverlayFrame& frame, int objectId, bool insideOut) {
-    const QVec3 frontBottomLeft{-1.0f, -1.0f, -1.0f};
-    const QVec3 frontBottomRight{1.0f, -1.0f, -1.0f};
-    const QVec3 frontTopRight{1.0f, 1.0f, -1.0f};
-    const QVec3 frontTopLeft{-1.0f, 1.0f, -1.0f};
-    const QVec3 backBottomLeft{-1.0f, -1.0f, -3.0f};
-    const QVec3 backBottomRight{1.0f, -1.0f, -3.0f};
-    const QVec3 backTopRight{1.0f, 1.0f, -3.0f};
-    const QVec3 backTopLeft{-1.0f, 1.0f, -3.0f};
+void append_source_wire_depth_stamp_box(ViewportOverlayFrame &frame,
+                                        int object_id, bool inside_out) {
+  const QVec3 front_bottom_left{-1.0f, -1.0f, -1.0f};
+  const QVec3 front_bottom_right{1.0f, -1.0f, -1.0f};
+  const QVec3 front_top_right{1.0f, 1.0f, -1.0f};
+  const QVec3 front_top_left{-1.0f, 1.0f, -1.0f};
+  const QVec3 back_bottom_left{-1.0f, -1.0f, -3.0f};
+  const QVec3 back_bottom_right{1.0f, -1.0f, -3.0f};
+  const QVec3 back_top_right{1.0f, 1.0f, -3.0f};
+  const QVec3 back_top_left{-1.0f, 1.0f, -3.0f};
 
-    appendSourceWireDepthStampQuad(frame, objectId, frontBottomLeft, frontBottomRight, frontTopRight, frontTopLeft, insideOut);
-    appendSourceWireDepthStampQuad(frame, objectId, backBottomLeft, backTopLeft, backTopRight, backBottomRight, insideOut);
-    appendSourceWireDepthStampQuad(frame, objectId, frontBottomRight, backBottomRight, backTopRight, frontTopRight, insideOut);
-    appendSourceWireDepthStampQuad(frame, objectId, frontBottomLeft, frontTopLeft, backTopLeft, backBottomLeft, insideOut);
-    appendSourceWireDepthStampQuad(frame, objectId, frontTopLeft, frontTopRight, backTopRight, backTopLeft, insideOut);
-    appendSourceWireDepthStampQuad(frame, objectId, frontBottomLeft, backBottomLeft, backBottomRight, frontBottomRight, insideOut);
+  append_source_wire_depth_stamp_quad(frame, object_id, front_bottom_left,
+                                      front_bottom_right, front_top_right,
+                                      front_top_left, inside_out);
+  append_source_wire_depth_stamp_quad(frame, object_id, back_bottom_left,
+                                      back_top_left, back_top_right,
+                                      back_bottom_right, inside_out);
+  append_source_wire_depth_stamp_quad(frame, object_id, front_bottom_right,
+                                      back_bottom_right, back_top_right,
+                                      front_top_right, inside_out);
+  append_source_wire_depth_stamp_quad(frame, object_id, front_bottom_left,
+                                      front_top_left, back_top_left,
+                                      back_bottom_left, inside_out);
+  append_source_wire_depth_stamp_quad(frame, object_id, front_top_left,
+                                      front_top_right, back_top_right,
+                                      back_top_left, inside_out);
+  append_source_wire_depth_stamp_quad(frame, object_id, front_bottom_left,
+                                      back_bottom_left, back_bottom_right,
+                                      front_bottom_right, inside_out);
 }
 
 } // namespace
 
 TEST(RenderSignatureBuilderTests, CentralizesMaterialMeshAndOverlaySignatures) {
     AssetRegistry assets;
-    TextureAsset baseColor;
-    baseColor.name = "Base Color";
-    const AssetId baseColorTexture = assets.addTexture(baseColor);
+    TextureAsset base_color;
+    base_color.name = "Base Color";
+    const AssetId base_color_texture = assets.add_texture(base_color);
     TextureAsset roughness;
     roughness.name = "Roughness";
-    const AssetId roughnessTexture = assets.addTexture(roughness);
+    const AssetId roughness_texture = assets.add_texture(roughness);
 
     MaterialDocument material;
-    material.textureSlots.emplace(MaterialTextureSlot::Roughness, roughnessTexture);
-    material.textureSlots.emplace(MaterialTextureSlot::BaseColor, baseColorTexture);
-    const AssetId materialId = assets.addMaterial(std::move(material));
-    ASSERT_NE(materialId, InvalidAssetId);
+    material.texture_slots.emplace(material_texture_slot::kRoughness,
+                                   roughness_texture);
+    material.texture_slots.emplace(material_texture_slot::kBaseColor,
+                                   base_color_texture);
+    const AssetId material_id = assets.add_material(std::move(material));
+    ASSERT_NE(material_id, kInvalidAssetId);
 
-    MaterialBindingService materialBinding;
-    const MaterialComponent materialComponent{.material = materialId};
-    const MaterialComponent orderedSlotComponent{
-            .material = materialId,
-            .materialSlots = {{1u, materialId}, {2u, materialId}},
+    MaterialBindingService material_binding;
+    const MaterialComponent material_component{.material = material_id};
+    const MaterialComponent ordered_slot_component{
+        .material = material_id,
+        .material_slots = {{1u, material_id}, {2u, material_id}},
     };
-    const MaterialComponent reorderedSlotComponent{
-            .material = materialId,
-            .materialSlots = {{2u, materialId}, {1u, materialId}},
+    const MaterialComponent reordered_slot_component{
+        .material = material_id,
+        .material_slots = {{2u, material_id}, {1u, material_id}},
     };
-    EXPECT_EQ(materialBinding.materialRevision(assets, &materialComponent),
-            RenderSignatureBuilder::materialSignature(assets, &materialComponent));
-    EXPECT_EQ(RenderSignatureBuilder::materialSignature(assets, &orderedSlotComponent),
-            RenderSignatureBuilder::materialSignature(assets, &reorderedSlotComponent));
+    EXPECT_EQ(material_binding.material_revision(assets, &material_component),
+              RenderSignatureBuilder::material_signature(assets,
+                                                         &material_component));
+    EXPECT_EQ(RenderSignatureBuilder::material_signature(
+                  assets, &ordered_slot_component),
+              RenderSignatureBuilder::material_signature(
+                  assets, &reordered_slot_component));
 
-    MeshAsset mesh = makeOverlayTriangleMesh();
-    RenderSignatureBuilder meshSeed;
-    meshSeed.addValue(42u).addVec3({1.0f, 2.0f, 3.0f});
-    EXPECT_EQ(MeshRenderableFactory::meshAssetSignature(meshSeed.value(), mesh),
-            RenderSignatureBuilder::meshAssetSignature(meshSeed.value(), mesh));
+    MeshAsset mesh = make_overlay_triangle_mesh();
+    RenderSignatureBuilder mesh_seed;
+    mesh_seed.add_value(42u).add_vec3({1.0f, 2.0f, 3.0f});
+    EXPECT_EQ(
+        MeshRenderableFactory::mesh_asset_signature(mesh_seed.value(), mesh),
+        RenderSignatureBuilder::mesh_asset_signature(mesh_seed.value(), mesh));
 
     ViewportOverlayFrame frame;
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SourceWire,
-            .start = {-0.5f, 0.0f, -1.0f},
-            .end = {0.5f, 0.0f, -1.0f},
-            .color = rgba8(255, 128, 64, 255),
-            .widthPixels = 2.0f,
+        .layer = ViewportOverlayLayer::SourceWire,
+        .start = {-0.5f, 0.0f, -1.0f},
+        .end = {0.5f, 0.0f, -1.0f},
+        .color = rgba8(255, 128, 64, 255),
+        .width_pixels = 2.0f,
     });
-    EXPECT_EQ(OverlayRenderableBuilder::frameSignature(frame),
-            RenderSignatureBuilder::overlayFrameSignature(frame));
-    EXPECT_EQ(OverlayRenderableBuilder::cameraSignature(testOverlayCamera()),
-            RenderSignatureBuilder::overlayCameraSignature(testOverlayCamera()));
-    EXPECT_EQ(OverlayRenderableBuilder::layerSignature(frame, ViewportOverlayLayer::SourceWire),
-            RenderSignatureBuilder::overlayLayerSignature(frame, ViewportOverlayLayer::SourceWire));
+    EXPECT_EQ(OverlayRenderableBuilder::frame_signature(frame),
+              RenderSignatureBuilder::overlay_frame_signature(frame));
+    EXPECT_EQ(OverlayRenderableBuilder::camera_signature(test_overlay_camera()),
+              RenderSignatureBuilder::overlay_camera_signature(
+                  test_overlay_camera()));
+    EXPECT_EQ(OverlayRenderableBuilder::layer_signature(
+                  frame, ViewportOverlayLayer::SourceWire),
+              RenderSignatureBuilder::overlay_layer_signature(
+                  frame, ViewportOverlayLayer::SourceWire));
 }
 
 TEST(RenderSignatureBuilderTests, BuildsOverlayFrameLayerSignaturesInOnePass) {
     ViewportOverlayFrame frame;
     frame.triangles.push_back({
-            .layer = ViewportOverlayLayer::SelectedXrayFace,
-            .a = {-0.5f, -0.5f, -1.0f},
-            .b = {0.5f, -0.5f, -1.0f},
-            .c = {0.0f, 0.5f, -1.0f},
-            .color = rgba8(255, 211, 31, 96),
-            .element = {.objectId = 7},
+        .layer = ViewportOverlayLayer::SelectedXrayFace,
+        .a = {-0.5f, -0.5f, -1.0f},
+        .b = {0.5f, -0.5f, -1.0f},
+        .c = {0.0f, 0.5f, -1.0f},
+        .color = rgba8(255, 211, 31, 96),
+        .element = {.object_id = 7},
     });
     frame.triangles.push_back({
-            .layer = ViewportOverlayLayer::SourceWireDepthStamp,
-            .a = {-0.5f, -0.5f, -1.0f},
-            .b = {0.5f, -0.5f, -1.0f},
-            .c = {0.0f, 0.5f, -1.0f},
-            .color = rgba8(255, 224, 92, 235),
-            .element = {.objectId = 7},
+        .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+        .a = {-0.5f, -0.5f, -1.0f},
+        .b = {0.5f, -0.5f, -1.0f},
+        .c = {0.0f, 0.5f, -1.0f},
+        .color = rgba8(255, 224, 92, 235),
+        .element = {.object_id = 7},
     });
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SourceWire,
-            .start = {-0.5f, 0.0f, -1.0f},
-            .end = {0.5f, 0.0f, -1.0f},
-            .color = rgba8(255, 224, 92, 235),
-            .widthPixels = 2.0f,
-            .element = {.objectId = 7},
+        .layer = ViewportOverlayLayer::SourceWire,
+        .start = {-0.5f, 0.0f, -1.0f},
+        .end = {0.5f, 0.0f, -1.0f},
+        .color = rgba8(255, 224, 92, 235),
+        .width_pixels = 2.0f,
+        .element = {.object_id = 7},
     });
     frame.points.push_back({
-            .layer = ViewportOverlayLayer::SelectedVertex,
-            .position = {0.0f, 0.0f, -1.0f},
-            .color = rgba8(255, 211, 31, 255),
-            .sizePixels = 8.0f,
-            .element = {.objectId = 7, .vertexId = 1},
+        .layer = ViewportOverlayLayer::SelectedVertex,
+        .position = {0.0f, 0.0f, -1.0f},
+        .color = rgba8(255, 211, 31, 255),
+        .size_pixels = 8.0f,
+        .element = {.object_id = 7, .vertex_id = 1},
     });
 
-    const OverlayFrameSignatures signatures = OverlayRenderableBuilder::frameSignatures(frame);
+    const OverlayFrameSignatures signatures =
+        OverlayRenderableBuilder::frame_signatures(frame);
 
-    EXPECT_EQ(signatures.frameSignature, OverlayRenderableBuilder::frameSignature(frame));
-    EXPECT_EQ(
-            signatures.layerSignatures[static_cast<std::size_t>(ViewportOverlayLayer::SourceWire)],
-            OverlayRenderableBuilder::layerSignature(frame, ViewportOverlayLayer::SourceWire));
-    EXPECT_TRUE(signatures.hasSourceWireDepthStamp);
-    EXPECT_EQ(signatures.triangleCounts[static_cast<std::size_t>(ViewportOverlayLayer::SelectedXrayFace)], 1u);
-    EXPECT_EQ(signatures.triangleCounts[static_cast<std::size_t>(ViewportOverlayLayer::SourceWireDepthStamp)], 1u);
-    EXPECT_EQ(signatures.lineCounts[static_cast<std::size_t>(ViewportOverlayLayer::SourceWire)], 1u);
-    EXPECT_EQ(signatures.pointCounts[static_cast<std::size_t>(ViewportOverlayLayer::SelectedVertex)], 1u);
-    EXPECT_TRUE(OverlayRenderableBuilder::layerHasRenderablePrimitives(signatures, ViewportOverlayLayer::SourceWire));
-    EXPECT_FALSE(OverlayRenderableBuilder::layerHasRenderablePrimitives(
-            signatures,
-            ViewportOverlayLayer::SourceWireDepthStamp));
+    EXPECT_EQ(signatures.frame_signature,
+              OverlayRenderableBuilder::frame_signature(frame));
+    EXPECT_EQ(signatures.layer_signatures[static_cast<std::size_t>(
+                  ViewportOverlayLayer::SourceWire)],
+              OverlayRenderableBuilder::layer_signature(
+                  frame, ViewportOverlayLayer::SourceWire));
+    EXPECT_TRUE(signatures.has_source_wire_depth_stamp);
+    EXPECT_EQ(signatures.triangle_counts[static_cast<std::size_t>(
+                  ViewportOverlayLayer::SelectedXrayFace)],
+              1u);
+    EXPECT_EQ(signatures.triangle_counts[static_cast<std::size_t>(
+                  ViewportOverlayLayer::SourceWireDepthStamp)],
+              1u);
+    EXPECT_EQ(signatures.line_counts[static_cast<std::size_t>(
+                  ViewportOverlayLayer::SourceWire)],
+              1u);
+    EXPECT_EQ(signatures.point_counts[static_cast<std::size_t>(
+                  ViewportOverlayLayer::SelectedVertex)],
+              1u);
+    EXPECT_TRUE(OverlayRenderableBuilder::layer_has_renderable_primitives(
+        signatures, ViewportOverlayLayer::SourceWire));
+    EXPECT_FALSE(OverlayRenderableBuilder::layer_has_renderable_primitives(
+        signatures, ViewportOverlayLayer::SourceWireDepthStamp));
 }
 
 TEST(MeshAssetTests, CoalescesContiguousPrimitiveSpansByMaterialSlotForRenderSubmission) {
@@ -303,352 +352,429 @@ TEST(MeshAssetTests, CoalescesContiguousPrimitiveSpansByMaterialSlotForRenderSub
             12u, 13u, 14u,
     };
     mesh.primitives = {
-            MeshPrimitiveSpan{.indexOffset = 0u, .indexCount = 3u, .materialSlot = 0u},
-            MeshPrimitiveSpan{.indexOffset = 3u, .indexCount = 6u, .materialSlot = 0u},
-            MeshPrimitiveSpan{.indexOffset = 9u, .indexCount = 3u, .materialSlot = 2u},
-            MeshPrimitiveSpan{.indexOffset = 12u, .indexCount = 3u, .materialSlot = 0u},
+        MeshPrimitiveSpan{
+            .index_offset = 0u, .index_count = 3u, .material_slot = 0u},
+        MeshPrimitiveSpan{
+            .index_offset = 3u, .index_count = 6u, .material_slot = 0u},
+        MeshPrimitiveSpan{
+            .index_offset = 9u, .index_count = 3u, .material_slot = 2u},
+        MeshPrimitiveSpan{
+            .index_offset = 12u, .index_count = 3u, .material_slot = 0u},
     };
 
-    const std::vector<MeshPrimitiveSpan> spans = coalescedMeshPrimitiveSpans(mesh);
+    const std::vector<MeshPrimitiveSpan> spans =
+        coalesced_mesh_primitive_spans(mesh);
 
     ASSERT_EQ(spans.size(), 3u);
-    EXPECT_EQ(spans[0].indexOffset, 0u);
-    EXPECT_EQ(spans[0].indexCount, 9u);
-    EXPECT_EQ(spans[0].materialSlot, 0u);
-    EXPECT_EQ(spans[1].indexOffset, 9u);
-    EXPECT_EQ(spans[1].indexCount, 3u);
-    EXPECT_EQ(spans[1].materialSlot, 2u);
-    EXPECT_EQ(spans[2].indexOffset, 12u);
-    EXPECT_EQ(spans[2].indexCount, 3u);
-    EXPECT_EQ(spans[2].materialSlot, 0u);
+    EXPECT_EQ(spans[0].index_offset, 0u);
+    EXPECT_EQ(spans[0].index_count, 9u);
+    EXPECT_EQ(spans[0].material_slot, 0u);
+    EXPECT_EQ(spans[1].index_offset, 9u);
+    EXPECT_EQ(spans[1].index_count, 3u);
+    EXPECT_EQ(spans[1].material_slot, 2u);
+    EXPECT_EQ(spans[2].index_offset, 12u);
+    EXPECT_EQ(spans[2].index_count, 3u);
+    EXPECT_EQ(spans[2].material_slot, 0u);
 }
 
 TEST(RenderSignatureBuilderTests, KeepsRenderHashPolicyInSingleOwner) {
-    const std::array<std::string_view, 4u> cacheSources = {
-            "src/render/material_binding_service.cpp",
-            "src/render/mesh_renderable_factory.cpp",
-            "src/render/tool_preview_renderable_cache.cpp",
-            "src/render/overlay/overlay_renderable_builder.cpp",
-    };
-    for (const std::string_view source : cacheSources) {
-        const std::string text = readSourceFile({source});
-        EXPECT_EQ(text.find("kFnv"), std::string::npos);
-        EXPECT_EQ(text.find("hashCombine"), std::string::npos);
-        EXPECT_EQ(text.find("hashFloat"), std::string::npos);
-        EXPECT_EQ(text.find("hashVec3"), std::string::npos);
-        EXPECT_NE(text.find("RenderSignatureBuilder"), std::string::npos);
-    }
+  const std::array<std::string_view, 4u> cache_sources = {
+      "src/render/material_binding_service.cpp",
+      "src/render/mesh_renderable_factory.cpp",
+      "src/render/tool_preview_renderable_cache.cpp",
+      "src/render/overlay/overlay_renderable_builder.cpp",
+  };
+  for (const std::string_view source : cache_sources) {
+    const std::string text = read_source_file({source});
+    EXPECT_EQ(text.find("kFnv"), std::string::npos);
+    EXPECT_EQ(text.find("hash_combine"), std::string::npos);
+    EXPECT_EQ(text.find("hash_float"), std::string::npos);
+    EXPECT_EQ(text.find("hashVec3"), std::string::npos);
+    EXPECT_NE(text.find("RenderSignatureBuilder"), std::string::npos);
+  }
 }
 
 TEST(SceneRenderExtractionTests, BuildsSharedVisibleMeshAndLightPlan) {
     SceneDocument document;
     AssetRegistry assets;
-    MaterialBindingService materialBinding;
+    MaterialBindingService material_binding;
 
-    const AssetId mesh = assets.addMesh(makeOverlayTriangleMesh());
-    const AssetId material = assets.addMaterial(makeDefaultQuaderMaterial("Render Material"));
+    const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+    const AssetId material =
+        assets.add_material(make_default_quader_material("Render Material"));
 
-    const EntityId renderable = document.createEntity("Renderable", EntityKind::Mesh);
-    document.setMesh(renderable, MeshComponent{.mesh = mesh, .castShadows = false, .doubleSided = true});
-    document.setMaterial(renderable, MaterialComponent{.material = material});
+    const EntityId renderable =
+        document.create_entity("Renderable", EntityKind::Mesh);
+    document.set_mesh(renderable, MeshComponent{.mesh = mesh,
+                                                .cast_shadows = false,
+                                                .double_sided = true});
+    document.set_material(renderable, MaterialComponent{.material = material});
 
-    const EntityId missingMesh = document.createEntity("Missing Mesh", EntityKind::Mesh);
-    document.setMesh(missingMesh, MeshComponent{.mesh = mesh + 1000u});
+    const EntityId missing_mesh =
+        document.create_entity("Missing Mesh", EntityKind::Mesh);
+    document.set_mesh(missing_mesh, MeshComponent{.mesh = mesh + 1000u});
 
-    const EntityId hidden = document.createEntity("Hidden Mesh", EntityKind::Mesh);
-    document.setMesh(hidden, MeshComponent{.mesh = mesh});
-    document.setVisible(hidden, false);
+    const EntityId hidden =
+        document.create_entity("Hidden Mesh", EntityKind::Mesh);
+    document.set_mesh(hidden, MeshComponent{.mesh = mesh});
+    document.set_visible(hidden, false);
 
-    const EntityId light = document.createEntity("Light", EntityKind::Light);
-    document.setLight(light, LightComponent{});
+    const EntityId light = document.create_entity("Light", EntityKind::Light);
+    document.set_light(light, LightComponent{});
 
-    const SceneRenderExtractionPlan plan = buildSceneRenderExtractionPlan(document, assets, materialBinding);
+    const SceneRenderExtractionPlan plan =
+        build_scene_render_extraction_plan(document, assets, material_binding);
 
     ASSERT_EQ(plan.meshes.size(), 2u);
-    const auto renderableEntry = std::find_if(
-            plan.meshes.begin(),
-            plan.meshes.end(),
-            [renderable](const SceneRenderMeshEntry& entry) {
-                return entry.entityId == renderable;
-            });
-    ASSERT_NE(renderableEntry, plan.meshes.end());
-    EXPECT_TRUE(renderableEntry->renderable());
-    EXPECT_EQ(renderableEntry->meshId, mesh);
-    EXPECT_EQ(renderableEntry->materialId, material);
-    EXPECT_FALSE(renderableEntry->castShadows());
-    EXPECT_TRUE(renderableEntry->doubleSided());
-    EXPECT_EQ(renderableEntry->materialRevision,
-            materialBinding.materialRevision(assets, renderableEntry->materialComponent));
-    EXPECT_TRUE(plan.liveMeshEntities.contains(renderable));
+    const auto renderable_entry =
+        std::find_if(plan.meshes.begin(), plan.meshes.end(),
+                     [renderable](const SceneRenderMeshEntry &entry) {
+                       return entry.entity_id == renderable;
+                     });
+    ASSERT_NE(renderable_entry, plan.meshes.end());
+    EXPECT_TRUE(renderable_entry->renderable());
+    EXPECT_EQ(renderable_entry->mesh_id, mesh);
+    EXPECT_EQ(renderable_entry->material_id, material);
+    EXPECT_FALSE(renderable_entry->cast_shadows());
+    EXPECT_TRUE(renderable_entry->double_sided());
+    EXPECT_EQ(renderable_entry->material_revision,
+              material_binding.material_revision(
+                  assets, renderable_entry->material_component));
+    EXPECT_TRUE(plan.live_mesh_entities.contains(renderable));
 
-    const auto missingEntry = std::find_if(
-            plan.meshes.begin(),
-            plan.meshes.end(),
-            [missingMesh](const SceneRenderMeshEntry& entry) {
-                return entry.entityId == missingMesh;
-            });
-    ASSERT_NE(missingEntry, plan.meshes.end());
-    EXPECT_FALSE(missingEntry->renderable());
-    EXPECT_FALSE(plan.liveMeshEntities.contains(missingMesh));
-    EXPECT_FALSE(plan.liveMeshEntities.contains(hidden));
+    const auto missing_entry =
+        std::find_if(plan.meshes.begin(), plan.meshes.end(),
+                     [missing_mesh](const SceneRenderMeshEntry &entry) {
+                       return entry.entity_id == missing_mesh;
+                     });
+    ASSERT_NE(missing_entry, plan.meshes.end());
+    EXPECT_FALSE(missing_entry->renderable());
+    EXPECT_FALSE(plan.live_mesh_entities.contains(missing_mesh));
+    EXPECT_FALSE(plan.live_mesh_entities.contains(hidden));
 
     ASSERT_EQ(plan.lights.size(), 1u);
-    EXPECT_EQ(plan.lights.front().entityId, light);
-    EXPECT_TRUE(plan.liveLightEntities.contains(light));
+    EXPECT_EQ(plan.lights.front().entity_id, light);
+    EXPECT_TRUE(plan.live_light_entities.contains(light));
 }
 
 TEST(LightRenderableCacheTests, SeparatesRebuildAndTransformSignatures) {
     LightComponent light;
     QMat4 transform;
-    const std::uint64_t rebuildSignature = LightRenderableCache::lightSignature(light);
-    const std::uint64_t transformSignature = LightRenderableCache::lightTransformSignature(transform);
+    const std::uint64_t rebuild_signature =
+        LightRenderableCache::light_signature(light);
+    const std::uint64_t transform_signature =
+        LightRenderableCache::light_transform_signature(transform);
 
-    QMat4 movedTransform = transform;
-    movedTransform.values[12] = 5.0f;
-    EXPECT_EQ(LightRenderableCache::lightSignature(light), rebuildSignature);
-    EXPECT_NE(LightRenderableCache::lightTransformSignature(movedTransform), transformSignature);
+    QMat4 moved_transform = transform;
+    moved_transform.values[12] = 5.0f;
+    EXPECT_EQ(LightRenderableCache::light_signature(light), rebuild_signature);
+    EXPECT_NE(LightRenderableCache::light_transform_signature(moved_transform),
+              transform_signature);
 
-    LightComponent recoloredLight = light;
-    recoloredLight.color.x = 0.25f;
-    EXPECT_NE(LightRenderableCache::lightSignature(recoloredLight), rebuildSignature);
+    LightComponent recolored_light = light;
+    recolored_light.color.x = 0.25f;
+    EXPECT_NE(LightRenderableCache::light_signature(recolored_light),
+              rebuild_signature);
 
-    LightComponent rangedLight = light;
-    rangedLight.range = 25.0f;
-    EXPECT_NE(LightRenderableCache::lightSignature(rangedLight), rebuildSignature);
+    LightComponent ranged_light = light;
+    ranged_light.range = 25.0f;
+    EXPECT_NE(LightRenderableCache::light_signature(ranged_light),
+              rebuild_signature);
 }
 
 TEST(LightRenderableCacheTests, ConvertsEditorIntensityToViewportFilamentUnits) {
     LightComponent point;
     point.type = LightType::Point;
     point.intensity = 1.0f;
-    EXPECT_FLOAT_EQ(LightRenderableCache::filamentIntensity(point), 10000000.0f);
+    EXPECT_FLOAT_EQ(LightRenderableCache::filament_intensity(point),
+                    10000000.0f);
 
-    LightComponent brighterPoint = point;
-    brighterPoint.intensity = 2.5f;
-    EXPECT_FLOAT_EQ(LightRenderableCache::filamentIntensity(brighterPoint), 25000000.0f);
+    LightComponent brighter_point = point;
+    brighter_point.intensity = 2.5f;
+    EXPECT_FLOAT_EQ(LightRenderableCache::filament_intensity(brighter_point),
+                    25000000.0f);
 
     LightComponent spot = point;
     spot.type = LightType::Spot;
-    EXPECT_FLOAT_EQ(LightRenderableCache::filamentIntensity(spot), 10000000.0f);
+    EXPECT_FLOAT_EQ(LightRenderableCache::filament_intensity(spot),
+                    10000000.0f);
 
     LightComponent directional = point;
     directional.type = LightType::Directional;
-    EXPECT_FLOAT_EQ(LightRenderableCache::filamentIntensity(directional), 100000.0f);
+    EXPECT_FLOAT_EQ(LightRenderableCache::filament_intensity(directional),
+                    100000.0f);
 }
 
 TEST(LightRenderableCacheTests, OwnsIncrementalLightSyncPolicy) {
-    const std::string header = readSourceFile({"src", "render", "light_renderable_cache.hpp"});
-    const std::string source = readSourceFile({"src", "render", "light_renderable_cache.cpp"});
-    const std::string syncSource = readSourceFile({"src", "render", "scene_render_sync_service.cpp"});
+  const std::string header =
+      read_source_file({"src", "render", "light_renderable_cache.hpp"});
+  const std::string source =
+      read_source_file({"src", "render", "light_renderable_cache.cpp"});
+  const std::string sync_source =
+      read_source_file({"src", "render", "scene_render_sync_service.cpp"});
 
-    EXPECT_NE(header.find("rebuildSignature"), std::string::npos);
-    EXPECT_NE(header.find("transformSignature"), std::string::npos);
-    EXPECT_NE(header.find("filamentIntensity"), std::string::npos);
-    EXPECT_NE(source.find("kGodotPunctualLightLumensPerIntensity = 1000.0f"), std::string::npos);
-    EXPECT_NE(source.find("kViewportPunctualLightExposureCompensation = 10000.0f"), std::string::npos);
-    EXPECT_NE(source.find("needsRebuild(entityId, light)"), std::string::npos);
-    EXPECT_NE(source.find("updateLightTransform(existing->second, worldTransform)"), std::string::npos);
-    EXPECT_NE(source.find(".intensity(filamentIntensity(light))"), std::string::npos);
-    EXPECT_NE(source.find(".position(positionFromMatrix(worldTransform))"), std::string::npos);
-    EXPECT_NE(source.find(".falloff(lightFalloffRadius(light))"), std::string::npos);
-    EXPECT_NE(source.find("lightManager.setPosition(instance, positionFromMatrix(worldTransform))"), std::string::npos);
-    EXPECT_NE(syncSource.find("lightCache_.syncLight"), std::string::npos);
-    EXPECT_EQ(syncSource.find("lightSignature"), std::string::npos);
-    EXPECT_EQ(syncSource.find("updateLightTransform"), std::string::npos);
+  EXPECT_NE(header.find("rebuild_signature"), std::string::npos);
+  EXPECT_NE(header.find("transform_signature"), std::string::npos);
+  EXPECT_NE(header.find("filament_intensity"), std::string::npos);
+  EXPECT_NE(source.find("kGodotPunctualLightLumensPerIntensity = 1000.0f"),
+            std::string::npos);
+  EXPECT_NE(
+      source.find("kViewportPunctualLightExposureCompensation = 10000.0f"),
+      std::string::npos);
+  EXPECT_NE(source.find("needs_rebuild(entity_id, light)"), std::string::npos);
+  EXPECT_NE(
+      source.find("update_light_transform(existing->second, world_transform)"),
+      std::string::npos);
+  EXPECT_NE(source.find(".intensity(filament_intensity(light))"),
+            std::string::npos);
+  EXPECT_NE(source.find(".position(position_from_matrix(world_transform))"),
+            std::string::npos);
+  EXPECT_NE(source.find(".falloff(light_falloff_radius(light))"),
+            std::string::npos);
+  EXPECT_NE(source.find("light_manager.setPosition(instance, "
+                        "position_from_matrix(world_transform))"),
+            std::string::npos);
+  EXPECT_NE(sync_source.find("light_cache_.sync_light"), std::string::npos);
+  EXPECT_EQ(sync_source.find("light_signature"), std::string::npos);
+  EXPECT_EQ(sync_source.find("update_light_transform"), std::string::npos);
 }
 
 TEST(ViewportSceneOverlayBuilderTests, AddsHierarchySelectionWiresAndGroupBounds) {
     SceneDocument document;
     AssetRegistry assets;
-    const AssetId mesh = assets.addMesh(makeOverlayTriangleMesh());
-    const EntityId group = document.createEmpty("Selected Group");
-    const EntityId child = document.createEntity("Child Mesh", EntityKind::Mesh);
-    document.setMesh(child, MeshComponent{.mesh = mesh});
-    ASSERT_TRUE(document.setParent(child, group));
-    ASSERT_TRUE(document.setSelected(group, true));
+    const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+    const EntityId group = document.create_empty("Selected Group");
+    const EntityId child =
+        document.create_entity("Child Mesh", EntityKind::Mesh);
+    document.set_mesh(child, MeshComponent{.mesh = mesh});
+    ASSERT_TRUE(document.set_parent(child, group));
+    ASSERT_TRUE(document.set_selected(group, true));
 
-    ViewportOverlayFrame baseFrame;
-    baseFrame.lines.push_back({
-            .layer = ViewportOverlayLayer::SelectedEdge,
-            .start = {},
-            .end = {1.0f, 0.0f, 0.0f},
-            .source = ViewportOverlaySource::Selection,
+    ViewportOverlayFrame base_frame;
+    base_frame.lines.push_back({
+        .layer = ViewportOverlayLayer::SelectedEdge,
+        .start = {},
+        .end = {1.0f, 0.0f, 0.0f},
+        .source = ViewportOverlaySource::Selection,
     });
 
     const ViewportOverlayFrame frame =
-            ViewportSceneOverlayBuilder::buildSelectionFrame(std::move(baseFrame), document, assets);
+        ViewportSceneOverlayBuilder::build_selection_frame(
+            std::move(base_frame), document, assets);
 
-    EXPECT_EQ(lineCountFor(frame, ViewportOverlayLayer::SelectedEdge), 1u);
-    EXPECT_EQ(lineSourceCountFor(frame, ViewportOverlaySource::HierarchySelection), 3u);
-    EXPECT_EQ(lineCountFor(frame, ViewportOverlayLayer::GroupBounds), 12u);
-    EXPECT_TRUE(std::all_of(frame.lines.begin(), frame.lines.end(), [](const ViewportOverlayLine& line) {
-        return line.layer != ViewportOverlayLayer::GroupBounds ||
-                (line.color == kOverlayGroupBoundsColor &&
-                        line.styleRole == ViewportOverlayStyleRole::GroupBounds &&
-                        line.source == ViewportOverlaySource::GroupBounds);
-    }));
+    EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 1u);
+    EXPECT_EQ(
+        line_source_count_for(frame, ViewportOverlaySource::HierarchySelection),
+        3u);
+    EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::GroupBounds), 12u);
+    EXPECT_TRUE(std::all_of(
+        frame.lines.begin(), frame.lines.end(),
+        [](const ViewportOverlayLine &line) {
+          return line.layer != ViewportOverlayLayer::GroupBounds ||
+                 (line.color == kOverlayGroupBoundsColor &&
+                  line.style_role == ViewportOverlayStyleRole::GroupBounds &&
+                  line.source == ViewportOverlaySource::GroupBounds);
+        }));
 }
 
 TEST(ViewportSceneOverlayBuilderTests, AddsSelectedLightMarker) {
     SceneDocument document;
     AssetRegistry assets;
-    const EntityId light = document.createEntity("Point Light", EntityKind::Light);
-    document.setTransform(light, TransformComponent{.position = {2.0f, 3.0f, 4.0f}});
-    document.setLight(light, LightComponent{.type = LightType::Point});
-    ASSERT_TRUE(document.setSelected(light, true));
-    const EntityId unselectedLight = document.createEntity("Unselected Point Light", EntityKind::Light);
-    document.setLight(unselectedLight, LightComponent{.type = LightType::Point});
-    const EntityId hiddenLight = document.createEntity("Hidden Point Light", EntityKind::Light);
-    document.setLight(hiddenLight, LightComponent{.type = LightType::Point});
-    document.setVisible(hiddenLight, false);
-    ASSERT_TRUE(document.setSelected(hiddenLight, true));
-    const EntityId selectedDirectional = document.createEntity("Selected Directional Light", EntityKind::Light);
-    document.setLight(selectedDirectional, LightComponent{.type = LightType::Directional});
-    ASSERT_TRUE(document.setSelected(selectedDirectional, true));
+    const EntityId light =
+        document.create_entity("Point Light", EntityKind::Light);
+    document.set_transform(light,
+                           TransformComponent{.position = {2.0f, 3.0f, 4.0f}});
+    document.set_light(light, LightComponent{.type = LightType::Point});
+    ASSERT_TRUE(document.set_selected(light, true));
+    const EntityId unselected_light =
+        document.create_entity("Unselected Point Light", EntityKind::Light);
+    document.set_light(unselected_light,
+                       LightComponent{.type = LightType::Point});
+    const EntityId hidden_light =
+        document.create_entity("Hidden Point Light", EntityKind::Light);
+    document.set_light(hidden_light, LightComponent{.type = LightType::Point});
+    document.set_visible(hidden_light, false);
+    ASSERT_TRUE(document.set_selected(hidden_light, true));
+    const EntityId selected_directional =
+        document.create_entity("Selected Directional Light", EntityKind::Light);
+    document.set_light(selected_directional,
+                       LightComponent{.type = LightType::Directional});
+    ASSERT_TRUE(document.set_selected(selected_directional, true));
 
     const ViewportOverlayFrame frame =
-            ViewportSceneOverlayBuilder::buildSelectionFrame(ViewportOverlayFrame{}, document, assets);
+        ViewportSceneOverlayBuilder::build_selection_frame(
+            ViewportOverlayFrame{}, document, assets);
 
-    EXPECT_EQ(pointCountFor(frame, ViewportOverlayLayer::SelectedVertex), 2u);
+    EXPECT_EQ(point_count_for(frame, ViewportOverlayLayer::SelectedVertex), 2u);
     ASSERT_EQ(frame.points.size(), 2u);
-    const auto pointMarker = std::find_if(frame.points.begin(), frame.points.end(), [](const ViewportOverlayPoint& point) {
-        return point.position.x == 2.0f && point.position.y == 3.0f && point.position.z == 4.0f;
-    });
-    ASSERT_NE(pointMarker, frame.points.end());
-    EXPECT_EQ(pointMarker->source, ViewportOverlaySource::Selection);
-    EXPECT_EQ(pointMarker->styleRole, ViewportOverlayStyleRole::SelectedVertex);
-    EXPECT_EQ(lineCountFor(frame, ViewportOverlayLayer::SelectedEdge), 5u);
-    EXPECT_TRUE(std::all_of(frame.lines.begin(), frame.lines.end(), [](const ViewportOverlayLine& line) {
-        return line.source == ViewportOverlaySource::Selection &&
-                line.styleRole == ViewportOverlayStyleRole::SelectionWire;
-    }));
+    const auto point_marker =
+        std::find_if(frame.points.begin(), frame.points.end(),
+                     [](const ViewportOverlayPoint &point) {
+                       return point.position.x == 2.0f &&
+                              point.position.y == 3.0f &&
+                              point.position.z == 4.0f;
+                     });
+    ASSERT_NE(point_marker, frame.points.end());
+    EXPECT_EQ(point_marker->source, ViewportOverlaySource::Selection);
+    EXPECT_EQ(point_marker->style_role,
+              ViewportOverlayStyleRole::SelectedVertex);
+    EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 5u);
+    EXPECT_TRUE(std::all_of(
+        frame.lines.begin(), frame.lines.end(),
+        [](const ViewportOverlayLine &line) {
+          return line.source == ViewportOverlaySource::Selection &&
+                 line.style_role == ViewportOverlayStyleRole::SelectionWire;
+        }));
 }
 
 TEST(ViewportSceneOverlayBuilderTests, BuildsWireframeOverlayWithoutObjectFaceFills) {
     SceneDocument document;
     AssetRegistry assets;
-    const AssetId mesh = assets.addMesh(makeOverlayTriangleMesh());
-    const EntityId entity = document.createEntity("Wire Mesh", EntityKind::Mesh);
-    document.setMesh(entity, MeshComponent{.mesh = mesh});
+    const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+    const EntityId entity =
+        document.create_entity("Wire Mesh", EntityKind::Mesh);
+    document.set_mesh(entity, MeshComponent{.mesh = mesh});
 
-    ViewportOverlayFrame baseFrame;
-    baseFrame.triangles.push_back({
-            .layer = ViewportOverlayLayer::SelectedVisibleFace,
-            .a = {},
-            .b = {1.0f, 0.0f, 0.0f},
-            .c = {0.0f, 1.0f, 0.0f},
+    ViewportOverlayFrame base_frame;
+    base_frame.triangles.push_back({
+        .layer = ViewportOverlayLayer::SelectedVisibleFace,
+        .a = {},
+        .b = {1.0f, 0.0f, 0.0f},
+        .c = {0.0f, 1.0f, 0.0f},
     });
-    baseFrame.triangles.push_back({
-            .layer = ViewportOverlayLayer::HoverFace,
-            .a = {},
-            .b = {1.0f, 0.0f, 0.0f},
-            .c = {0.0f, 0.0f, 1.0f},
+    base_frame.triangles.push_back({
+        .layer = ViewportOverlayLayer::HoverFace,
+        .a = {},
+        .b = {1.0f, 0.0f, 0.0f},
+        .c = {0.0f, 0.0f, 1.0f},
     });
-    baseFrame.triangles.push_back({
-            .layer = ViewportOverlayLayer::ToolPreviewFill,
-            .a = {},
-            .b = {0.0f, 1.0f, 0.0f},
-            .c = {0.0f, 0.0f, 1.0f},
-            .source = ViewportOverlaySource::Tool,
+    base_frame.triangles.push_back({
+        .layer = ViewportOverlayLayer::ToolPreviewFill,
+        .a = {},
+        .b = {0.0f, 1.0f, 0.0f},
+        .c = {0.0f, 0.0f, 1.0f},
+        .source = ViewportOverlaySource::Tool,
     });
 
-    const ViewportOverlayFrame objectFrame =
-            ViewportSceneOverlayBuilder::buildWireframeFrame(baseFrame, ModelingSelectionMode::Object, document, assets);
+    const ViewportOverlayFrame object_frame =
+        ViewportSceneOverlayBuilder::build_wireframe_frame(
+            base_frame, ModelingSelectionMode::Object, document, assets);
 
-    EXPECT_EQ(triangleCountFor(objectFrame, ViewportOverlayLayer::SelectedVisibleFace), 0u);
-    EXPECT_EQ(triangleCountFor(objectFrame, ViewportOverlayLayer::HoverFace), 0u);
-    EXPECT_EQ(triangleCountFor(objectFrame, ViewportOverlayLayer::ToolPreviewFill), 1u);
-    EXPECT_EQ(lineCountFor(objectFrame, ViewportOverlayLayer::WireframeBase), 0u);
-    EXPECT_EQ(lineCountFor(objectFrame, ViewportOverlayLayer::WireframeXray), 3u);
-    EXPECT_TRUE(std::all_of(objectFrame.lines.begin(), objectFrame.lines.end(), [](const ViewportOverlayLine& line) {
-        return line.layer != ViewportOverlayLayer::WireframeXray ||
-                (line.color == kOverlayWireframeXrayColor &&
-                        line.styleRole == ViewportOverlayStyleRole::WireframeBase &&
-                        line.source == ViewportOverlaySource::SceneWireframe);
-    }));
+    EXPECT_EQ(triangle_count_for(object_frame,
+                                 ViewportOverlayLayer::SelectedVisibleFace),
+              0u);
+    EXPECT_EQ(triangle_count_for(object_frame, ViewportOverlayLayer::HoverFace),
+              0u);
+    EXPECT_EQ(
+        triangle_count_for(object_frame, ViewportOverlayLayer::ToolPreviewFill),
+        1u);
+    EXPECT_EQ(line_count_for(object_frame, ViewportOverlayLayer::WireframeBase),
+              0u);
+    EXPECT_EQ(line_count_for(object_frame, ViewportOverlayLayer::WireframeXray),
+              3u);
+    EXPECT_TRUE(std::all_of(
+        object_frame.lines.begin(), object_frame.lines.end(),
+        [](const ViewportOverlayLine &line) {
+          return line.layer != ViewportOverlayLayer::WireframeXray ||
+                 (line.color == kOverlayWireframeXrayColor &&
+                  line.style_role == ViewportOverlayStyleRole::WireframeBase &&
+                  line.source == ViewportOverlaySource::SceneWireframe);
+        }));
 
-    const ViewportOverlayFrame faceFrame =
-            ViewportSceneOverlayBuilder::buildWireframeFrame(baseFrame, ModelingSelectionMode::Face, document, assets);
+    const ViewportOverlayFrame face_frame =
+        ViewportSceneOverlayBuilder::build_wireframe_frame(
+            base_frame, ModelingSelectionMode::Face, document, assets);
 
-    EXPECT_EQ(triangleCountFor(faceFrame, ViewportOverlayLayer::SelectedVisibleFace), 1u);
-    EXPECT_EQ(triangleCountFor(faceFrame, ViewportOverlayLayer::HoverFace), 1u);
-    EXPECT_EQ(triangleCountFor(faceFrame, ViewportOverlayLayer::ToolPreviewFill), 1u);
-    EXPECT_EQ(lineCountFor(faceFrame, ViewportOverlayLayer::WireframeBase), 0u);
-    EXPECT_EQ(lineCountFor(faceFrame, ViewportOverlayLayer::WireframeXray), 3u);
+    EXPECT_EQ(triangle_count_for(face_frame,
+                                 ViewportOverlayLayer::SelectedVisibleFace),
+              1u);
+    EXPECT_EQ(triangle_count_for(face_frame, ViewportOverlayLayer::HoverFace),
+              1u);
+    EXPECT_EQ(
+        triangle_count_for(face_frame, ViewportOverlayLayer::ToolPreviewFill),
+        1u);
+    EXPECT_EQ(line_count_for(face_frame, ViewportOverlayLayer::WireframeBase),
+              0u);
+    EXPECT_EQ(line_count_for(face_frame, ViewportOverlayLayer::WireframeXray),
+              3u);
 }
 
 TEST(ViewportSceneOverlayBuilderTests, WireframeModeUsesAuthoredTopologyWithoutTriangleDiagonal) {
     AssetRegistry assets;
     SceneDocument document;
-    const AssetId mesh = assets.addMesh(makeAuthoredQuadMesh());
-    const EntityId entity = document.createEntity("Authored Quad", EntityKind::Mesh);
-    document.setMesh(entity, MeshComponent{.mesh = mesh});
+    const AssetId mesh = assets.add_mesh(make_authored_quad_mesh());
+    const EntityId entity =
+        document.create_entity("Authored Quad", EntityKind::Mesh);
+    document.set_mesh(entity, MeshComponent{.mesh = mesh});
 
     const ViewportOverlayFrame frame =
-            ViewportSceneOverlayBuilder::buildWireframeFrame({}, ModelingSelectionMode::Object, document, assets);
+        ViewportSceneOverlayBuilder::build_wireframe_frame(
+            {}, ModelingSelectionMode::Object, document, assets);
 
-    EXPECT_EQ(lineCountFor(frame, ViewportOverlayLayer::WireframeBase), 0u);
-    EXPECT_EQ(lineCountFor(frame, ViewportOverlayLayer::WireframeXray), 4u);
-    EXPECT_TRUE(std::all_of(frame.lines.begin(), frame.lines.end(), [](const ViewportOverlayLine& line) {
-        return line.layer != ViewportOverlayLayer::WireframeXray ||
-                (line.styleRole == ViewportOverlayStyleRole::WireframeBase &&
-                        line.source == ViewportOverlaySource::SceneWireframe);
-    }));
+    EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::WireframeBase), 0u);
+    EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::WireframeXray), 4u);
+    EXPECT_TRUE(std::all_of(
+        frame.lines.begin(), frame.lines.end(),
+        [](const ViewportOverlayLine &line) {
+          return line.layer != ViewportOverlayLayer::WireframeXray ||
+                 (line.style_role == ViewportOverlayStyleRole::WireframeBase &&
+                  line.source == ViewportOverlaySource::SceneWireframe);
+        }));
 }
 
 TEST(OverlayLineMeshBuilderTests, ClipsAndExpandsLinesToDeviceSpaceQuads) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::OpenEdge,
-            .start = {-0.5f, 0.0f, -0.05f},
-            .end = {0.5f, 0.0f, -1.0f},
-            .color = rgba8(255, 128, 64, 255),
-            .widthPixels = 2.0f,
+        .layer = ViewportOverlayLayer::OpenEdge,
+        .start = {-0.5f, 0.0f, -0.05f},
+        .end = {0.5f, 0.0f, -1.0f},
+        .color = rgba8(255, 128, 64, 255),
+        .width_pixels = 2.0f,
     });
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::OpenEdge,
-            .start = {-0.25f, 0.25f, -1.0f},
-            .end = {0.25f, 0.25f, -1.0f},
-            .color = rgba8(255, 128, 64, 255),
-            .widthPixels = 2.0f,
+        .layer = ViewportOverlayLayer::OpenEdge,
+        .start = {-0.25f, 0.25f, -1.0f},
+        .end = {0.25f, 0.25f, -1.0f},
+        .color = rgba8(255, 128, 64, 255),
+        .width_pixels = 2.0f,
     });
 
-    const OverlayLayerBuildPlan plan =
-            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::OpenEdge);
+    const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+        frame, test_overlay_camera(), ViewportOverlayLayer::OpenEdge);
 
-    ASSERT_EQ(plan.lineBatches.size(), 1u);
-    const OverlayLineBatch& batch = plan.lineBatches.front();
+    ASSERT_EQ(plan.line_batches.size(), 1u);
+    const OverlayLineBatch &batch = plan.line_batches.front();
     EXPECT_EQ(batch.mesh.vertices.size(), 8u);
     EXPECT_EQ(batch.mesh.indices.size(), 12u);
-    EXPECT_FLOAT_EQ(batch.widthPixels, 2.0f);
-    EXPECT_FLOAT_EQ(batch.depthBias, kOverlayLineDepthBias);
-    EXPECT_EQ(batch.state.depthFunc, OverlayDepthFunc::GreaterOrEqual);
-    EXPECT_TRUE(batch.state.depthCulling);
-    EXPECT_FALSE(batch.state.depthWrite);
+    EXPECT_FLOAT_EQ(batch.width_pixels, 2.0f);
+    EXPECT_FLOAT_EQ(batch.depth_bias, kOverlayLineDepthBias);
+    EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+    EXPECT_TRUE(batch.state.depth_culling);
+    EXPECT_FALSE(batch.state.depth_write);
     for (const OverlayLineVertex& vertex : batch.mesh.vertices) {
         EXPECT_FLOAT_EQ(vertex.position.w, 1.0f);
-        EXPECT_EQ(vertex.color, rgba8SrgbToLinear(rgba8(255, 128, 64, 255)));
+        EXPECT_EQ(vertex.color, rgba8_srgb_to_linear(rgba8(255, 128, 64, 255)));
     }
 }
 
 TEST(OverlayLineMeshBuilderTests, ExpandsDiagonalLinesPerpendicularToScreenDirection) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SourceWire,
-            .start = {-0.5f, -0.5f, -1.0f},
-            .end = {0.5f, 0.5f, -1.0f},
-            .color = rgba8(255, 128, 64, 255),
-            .widthPixels = 2.0f,
+        .layer = ViewportOverlayLayer::SourceWire,
+        .start = {-0.5f, -0.5f, -1.0f},
+        .end = {0.5f, 0.5f, -1.0f},
+        .color = rgba8(255, 128, 64, 255),
+        .width_pixels = 2.0f,
     });
 
-    const OverlayLayerBuildPlan plan =
-            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWire);
+    const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+        frame, test_overlay_camera(), ViewportOverlayLayer::SourceWire);
 
-    ASSERT_EQ(plan.lineBatches.size(), 1u);
-    const OverlayLineBatch& batch = plan.lineBatches.front();
-    EXPECT_FLOAT_EQ(batch.depthBias, 0.0f);
-    EXPECT_EQ(batch.state.depthFunc, OverlayDepthFunc::Always);
-    EXPECT_FALSE(batch.state.depthCulling);
+    ASSERT_EQ(plan.line_batches.size(), 1u);
+    const OverlayLineBatch &batch = plan.line_batches.front();
+    EXPECT_FLOAT_EQ(batch.depth_bias, 0.0f);
+    EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::Always);
+    EXPECT_FALSE(batch.state.depth_culling);
     const OverlayLineMesh& mesh = batch.mesh;
     ASSERT_EQ(mesh.vertices.size(), 4u);
     EXPECT_GT(std::fabs(mesh.vertices[0].position.x - mesh.vertices[3].position.x), 0.0001f);
@@ -658,293 +784,320 @@ TEST(OverlayLineMeshBuilderTests, ExpandsDiagonalLinesPerpendicularToScreenDirec
 TEST(OverlayLineMeshBuilderTests, BatchesSameWidthLinesWithDifferentColors) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SelectedEdge,
-            .start = {-0.5f, 0.0f, -1.0f},
-            .end = {0.0f, 0.0f, -1.0f},
-            .color = rgba8(255, 211, 31, 255),
-            .widthPixels = 2.0f,
+        .layer = ViewportOverlayLayer::SelectedEdge,
+        .start = {-0.5f, 0.0f, -1.0f},
+        .end = {0.0f, 0.0f, -1.0f},
+        .color = rgba8(255, 211, 31, 255),
+        .width_pixels = 2.0f,
     });
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SelectedEdge,
-            .start = {0.0f, 0.0f, -1.0f},
-            .end = {0.5f, 0.0f, -1.0f},
-            .color = rgba8(90, 170, 255, 255),
-            .widthPixels = 2.0f,
+        .layer = ViewportOverlayLayer::SelectedEdge,
+        .start = {0.0f, 0.0f, -1.0f},
+        .end = {0.5f, 0.0f, -1.0f},
+        .color = rgba8(90, 170, 255, 255),
+        .width_pixels = 2.0f,
     });
 
-    const OverlayLayerBuildPlan plan =
-            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SelectedEdge);
+    const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+        frame, test_overlay_camera(), ViewportOverlayLayer::SelectedEdge);
 
-    ASSERT_EQ(plan.lineBatches.size(), 1u);
-    const OverlayLineMesh& mesh = plan.lineBatches.front().mesh;
+    ASSERT_EQ(plan.line_batches.size(), 1u);
+    const OverlayLineMesh &mesh = plan.line_batches.front().mesh;
     ASSERT_EQ(mesh.vertices.size(), 8u);
-    EXPECT_EQ(mesh.vertices[0].color, rgba8SrgbToLinear(rgba8(255, 211, 31, 255)));
-    EXPECT_EQ(mesh.vertices[4].color, rgba8SrgbToLinear(rgba8(90, 170, 255, 255)));
+    EXPECT_EQ(mesh.vertices[0].color,
+              rgba8_srgb_to_linear(rgba8(255, 211, 31, 255)));
+    EXPECT_EQ(mesh.vertices[4].color,
+              rgba8_srgb_to_linear(rgba8(90, 170, 255, 255)));
 }
 
 TEST(OverlayLineMeshBuilderTests, SourceWireDepthStampsCullOutwardOccludedHandles) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SourceWire,
-            .start = {-0.5f, 0.0f, -1.0f},
-            .end = {0.5f, 0.0f, -1.0f},
-            .color = rgba8(255, 224, 92, 235),
-            .widthPixels = 2.0f,
-            .element = {.objectId = 1},
+        .layer = ViewportOverlayLayer::SourceWire,
+        .start = {-0.5f, 0.0f, -1.0f},
+        .end = {0.5f, 0.0f, -1.0f},
+        .color = rgba8(255, 224, 92, 235),
+        .width_pixels = 2.0f,
+        .element = {.object_id = 1},
     });
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SourceWire,
-            .start = {-0.5f, 0.0f, -2.0f},
-            .end = {0.5f, 0.0f, -2.0f},
-            .color = rgba8(255, 224, 92, 235),
-            .widthPixels = 2.0f,
-            .element = {.objectId = 1},
+        .layer = ViewportOverlayLayer::SourceWire,
+        .start = {-0.5f, 0.0f, -2.0f},
+        .end = {0.5f, 0.0f, -2.0f},
+        .color = rgba8(255, 224, 92, 235),
+        .width_pixels = 2.0f,
+        .element = {.object_id = 1},
     });
-    appendSourceWireDepthStampBox(frame, 1, false);
+    append_source_wire_depth_stamp_box(frame, 1, false);
 
-    const OverlayLayerBuildPlan plan =
-            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWire);
+    const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+        frame, test_overlay_camera(), ViewportOverlayLayer::SourceWire);
 
-    ASSERT_EQ(plan.lineBatches.size(), 1u);
-    const OverlayLineBatch& batch = plan.lineBatches.front();
+    ASSERT_EQ(plan.line_batches.size(), 1u);
+    const OverlayLineBatch &batch = plan.line_batches.front();
     EXPECT_EQ(batch.mesh.vertices.size(), 4u);
     EXPECT_EQ(batch.mesh.indices.size(), 6u);
-    EXPECT_FLOAT_EQ(batch.depthBias, 0.0f);
-    EXPECT_EQ(batch.state.depthFunc, OverlayDepthFunc::Always);
-    EXPECT_FALSE(batch.state.depthCulling);
-    EXPECT_FALSE(batch.state.depthWrite);
+    EXPECT_FLOAT_EQ(batch.depth_bias, 0.0f);
+    EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::Always);
+    EXPECT_FALSE(batch.state.depth_culling);
+    EXPECT_FALSE(batch.state.depth_write);
     for (const OverlayLineVertex& vertex : batch.mesh.vertices) {
-        EXPECT_EQ(vertex.color, rgba8SrgbToLinear(rgba8(255, 224, 92, 235)));
+      EXPECT_EQ(vertex.color, rgba8_srgb_to_linear(rgba8(255, 224, 92, 235)));
     }
 }
 
 TEST(OverlayLineMeshBuilderTests, SourceWireDepthStampsKeepInsideOutTopologyVisible) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SourceWire,
-            .start = {-0.5f, 0.0f, -2.0f},
-            .end = {0.5f, 0.0f, -2.0f},
-            .color = rgba8(255, 224, 92, 235),
-            .widthPixels = 2.0f,
-            .element = {.objectId = 1},
+        .layer = ViewportOverlayLayer::SourceWire,
+        .start = {-0.5f, 0.0f, -2.0f},
+        .end = {0.5f, 0.0f, -2.0f},
+        .color = rgba8(255, 224, 92, 235),
+        .width_pixels = 2.0f,
+        .element = {.object_id = 1},
     });
-    appendSourceWireDepthStampBox(frame, 1, true);
+    append_source_wire_depth_stamp_box(frame, 1, true);
 
-    const OverlayLayerBuildPlan plan =
-            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWire);
+    const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+        frame, test_overlay_camera(), ViewportOverlayLayer::SourceWire);
 
-    ASSERT_EQ(plan.lineBatches.size(), 1u);
-    const OverlayLineBatch& batch = plan.lineBatches.front();
+    ASSERT_EQ(plan.line_batches.size(), 1u);
+    const OverlayLineBatch &batch = plan.line_batches.front();
     EXPECT_EQ(batch.mesh.vertices.size(), 4u);
     EXPECT_EQ(batch.mesh.indices.size(), 6u);
-    EXPECT_FLOAT_EQ(batch.depthBias, 0.0f);
-    EXPECT_EQ(batch.state.depthFunc, OverlayDepthFunc::Always);
-    EXPECT_FALSE(batch.state.depthCulling);
+    EXPECT_FLOAT_EQ(batch.depth_bias, 0.0f);
+    EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::Always);
+    EXPECT_FALSE(batch.state.depth_culling);
 }
 
 TEST(OverlayLineMeshBuilderTests, SourceWireDrawsInvertedInternalEdges) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SourceWire,
-            .start = {-0.5f, 0.0f, -1.0f},
-            .end = {0.5f, 0.0f, -1.0f},
-            .color = rgba8(255, 224, 92, 235),
-            .widthPixels = 2.0f,
-            .element = {.objectId = 1},
+        .layer = ViewportOverlayLayer::SourceWire,
+        .start = {-0.5f, 0.0f, -1.0f},
+        .end = {0.5f, 0.0f, -1.0f},
+        .color = rgba8(255, 224, 92, 235),
+        .width_pixels = 2.0f,
+        .element = {.object_id = 1},
     });
     frame.triangles.push_back({
-            .layer = ViewportOverlayLayer::SourceWireDepthStamp,
-            .a = {-0.5f, 0.0f, -1.0f},
-            .b = {0.5f, 0.0f, -1.0f},
-            .c = {0.0f, 0.5f, -1.0f},
-            .color = rgba8(255, 224, 92, 235),
-            .element = {.objectId = 1},
+        .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+        .a = {-0.5f, 0.0f, -1.0f},
+        .b = {0.5f, 0.0f, -1.0f},
+        .c = {0.0f, 0.5f, -1.0f},
+        .color = rgba8(255, 224, 92, 235),
+        .element = {.object_id = 1},
     });
     frame.triangles.push_back({
-            .layer = ViewportOverlayLayer::SourceWireDepthStamp,
-            .a = {0.5f, 0.0f, -1.0f},
-            .b = {-0.5f, 0.0f, -1.0f},
-            .c = {0.0f, -0.5f, -1.0f},
-            .color = rgba8(255, 224, 92, 235),
-            .element = {.objectId = 1},
+        .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+        .a = {0.5f, 0.0f, -1.0f},
+        .b = {-0.5f, 0.0f, -1.0f},
+        .c = {0.0f, -0.5f, -1.0f},
+        .color = rgba8(255, 224, 92, 235),
+        .element = {.object_id = 1},
     });
 
-    const OverlayLayerBuildPlan plan =
-            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWire);
+    const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+        frame, test_overlay_camera(), ViewportOverlayLayer::SourceWire);
 
-    ASSERT_EQ(plan.lineBatches.size(), 1u);
-    const OverlayLineBatch& batch = plan.lineBatches.front();
+    ASSERT_EQ(plan.line_batches.size(), 1u);
+    const OverlayLineBatch &batch = plan.line_batches.front();
     EXPECT_EQ(batch.mesh.vertices.size(), 4u);
-    EXPECT_FLOAT_EQ(batch.depthBias, 0.0f);
-    EXPECT_EQ(batch.state.depthFunc, OverlayDepthFunc::Always);
-    EXPECT_FALSE(batch.state.depthCulling);
+    EXPECT_FLOAT_EQ(batch.depth_bias, 0.0f);
+    EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::Always);
+    EXPECT_FALSE(batch.state.depth_culling);
 }
 
 TEST(OverlayLineMeshBuilderTests, SourceWireDrawsBackFacingBoundaryEdges) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SourceWire,
-            .start = {-0.5f, -0.5f, -1.0f},
-            .end = {0.5f, -0.5f, -1.0f},
-            .color = rgba8(255, 224, 92, 235),
-            .widthPixels = 2.0f,
-            .element = {.objectId = 1},
+        .layer = ViewportOverlayLayer::SourceWire,
+        .start = {-0.5f, -0.5f, -1.0f},
+        .end = {0.5f, -0.5f, -1.0f},
+        .color = rgba8(255, 224, 92, 235),
+        .width_pixels = 2.0f,
+        .element = {.object_id = 1},
     });
     frame.triangles.push_back({
-            .layer = ViewportOverlayLayer::SourceWireDepthStamp,
-            .a = {-0.5f, -0.5f, -1.0f},
-            .b = {0.5f, -0.5f, -1.0f},
-            .c = {0.0f, -1.0f, -1.0f},
-            .color = rgba8(255, 224, 92, 235),
-            .element = {.objectId = 1},
+        .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+        .a = {-0.5f, -0.5f, -1.0f},
+        .b = {0.5f, -0.5f, -1.0f},
+        .c = {0.0f, -1.0f, -1.0f},
+        .color = rgba8(255, 224, 92, 235),
+        .element = {.object_id = 1},
     });
 
-    const OverlayLayerBuildPlan plan =
-            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWire);
+    const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+        frame, test_overlay_camera(), ViewportOverlayLayer::SourceWire);
 
-    ASSERT_EQ(plan.lineBatches.size(), 1u);
-    const OverlayLineBatch& batch = plan.lineBatches.front();
+    ASSERT_EQ(plan.line_batches.size(), 1u);
+    const OverlayLineBatch &batch = plan.line_batches.front();
     EXPECT_EQ(batch.mesh.vertices.size(), 4u);
-    EXPECT_FLOAT_EQ(batch.depthBias, 0.0f);
-    EXPECT_EQ(batch.state.depthFunc, OverlayDepthFunc::Always);
-    EXPECT_FALSE(batch.state.depthCulling);
+    EXPECT_FLOAT_EQ(batch.depth_bias, 0.0f);
+    EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::Always);
+    EXPECT_FALSE(batch.state.depth_culling);
 }
 
 TEST(OverlayLineMeshBuilderTests, SourceWireUsesOneOnTopBatchBesideDepthStamps) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SourceWire,
-            .start = {-0.5f, 0.0f, -1.0f},
-            .end = {0.5f, 0.0f, -1.0f},
-            .color = rgba8(255, 224, 92, 235),
-            .widthPixels = 2.0f,
-            .element = {.objectId = 1},
+        .layer = ViewportOverlayLayer::SourceWire,
+        .start = {-0.5f, 0.0f, -1.0f},
+        .end = {0.5f, 0.0f, -1.0f},
+        .color = rgba8(255, 224, 92, 235),
+        .width_pixels = 2.0f,
+        .element = {.object_id = 1},
     });
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SourceWire,
-            .start = {-0.5f, 0.5f, -1.0f},
-            .end = {0.5f, 0.5f, -1.0f},
-            .color = rgba8(255, 224, 92, 235),
-            .widthPixels = 2.0f,
-            .element = {.objectId = 2},
+        .layer = ViewportOverlayLayer::SourceWire,
+        .start = {-0.5f, 0.5f, -1.0f},
+        .end = {0.5f, 0.5f, -1.0f},
+        .color = rgba8(255, 224, 92, 235),
+        .width_pixels = 2.0f,
+        .element = {.object_id = 2},
     });
     frame.triangles.push_back({
-            .layer = ViewportOverlayLayer::SourceWireDepthStamp,
-            .a = {-0.5f, 0.0f, -1.0f},
-            .b = {0.5f, 0.0f, -1.0f},
-            .c = {0.0f, 0.25f, -1.0f},
-            .color = rgba8(255, 224, 92, 235),
-            .element = {.objectId = 1},
+        .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+        .a = {-0.5f, 0.0f, -1.0f},
+        .b = {0.5f, 0.0f, -1.0f},
+        .c = {0.0f, 0.25f, -1.0f},
+        .color = rgba8(255, 224, 92, 235),
+        .element = {.object_id = 1},
     });
 
-    const OverlayLayerBuildPlan plan =
-            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWire);
+    const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+        frame, test_overlay_camera(), ViewportOverlayLayer::SourceWire);
 
-    ASSERT_EQ(plan.lineBatches.size(), 1u);
-    EXPECT_EQ(plan.lineBatches[0].mesh.vertices.size(), 8u);
-    EXPECT_FLOAT_EQ(plan.lineBatches[0].depthBias, 0.0f);
-    EXPECT_EQ(plan.lineBatches[0].state.depthFunc, OverlayDepthFunc::Always);
-    EXPECT_FALSE(plan.lineBatches[0].state.depthCulling);
+    ASSERT_EQ(plan.line_batches.size(), 1u);
+    EXPECT_EQ(plan.line_batches[0].mesh.vertices.size(), 8u);
+    EXPECT_FLOAT_EQ(plan.line_batches[0].depth_bias, 0.0f);
+    EXPECT_EQ(plan.line_batches[0].state.depth_func, OverlayDepthFunc::Always);
+    EXPECT_FALSE(plan.line_batches[0].state.depth_culling);
 }
 
 TEST(OverlayLineMeshBuilderTests, ExtendsLineCapsInScreenSpace) {
-    const ViewportOverlayCamera camera = testOverlayCamera();
-    const QVec3 lineStart{-0.25f, 0.0f, -1.0f};
-    const QVec3 lineEnd{0.25f, 0.0f, -1.0f};
-    ViewportOverlayFrame frame;
-    frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SelectedEdge,
-            .start = lineStart,
-            .end = lineEnd,
-            .color = rgba8(255, 211, 31, 255),
-            .widthPixels = 2.0f,
-    });
+  const ViewportOverlayCamera camera = test_overlay_camera();
+  const QVec3 line_start{-0.25f, 0.0f, -1.0f};
+  const QVec3 line_end{0.25f, 0.0f, -1.0f};
+  ViewportOverlayFrame frame;
+  frame.lines.push_back({
+      .layer = ViewportOverlayLayer::SelectedEdge,
+      .start = line_start,
+      .end = line_end,
+      .color = rgba8(255, 211, 31, 255),
+      .width_pixels = 2.0f,
+  });
 
-    const OverlayLayerBuildPlan plan =
-            OverlayRenderableBuilder::buildLayer(frame, camera, ViewportOverlayLayer::SelectedEdge);
+  const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+      frame, camera, ViewportOverlayLayer::SelectedEdge);
 
-    ASSERT_EQ(plan.lineBatches.size(), 1u);
-    const OverlayLineMesh& mesh = plan.lineBatches.front().mesh;
-    ASSERT_EQ(mesh.vertices.size(), 4u);
+  ASSERT_EQ(plan.line_batches.size(), 1u);
+  const OverlayLineMesh &mesh = plan.line_batches.front().mesh;
+  ASSERT_EQ(mesh.vertices.size(), 4u);
 
-    const OverlayCameraProjector projector(camera);
-    const OverlayProjectedPoint projectedStart = projector.project(projector.viewPointFor(lineStart));
-    const OverlayProjectedPoint projectedEnd = projector.project(projector.viewPointFor(lineEnd));
-    ASSERT_TRUE(projectedStart.valid);
-    ASSERT_TRUE(projectedEnd.valid);
+  const OverlayCameraProjector projector(camera);
+  const OverlayProjectedPoint projected_start =
+      projector.project(projector.view_point_for(line_start));
+  const OverlayProjectedPoint projected_end =
+      projector.project(projector.view_point_for(line_end));
+  ASSERT_TRUE(projected_start.valid);
+  ASSERT_TRUE(projected_end.valid);
 
-    const float capPixels = (2.0f + kOverlayLineFeatherPixels) * 0.5f;
-    const float capDeviceX = capPixels * 2.0f / camera.viewportSize.x;
-    const float startCapCenterX = (mesh.vertices[0].position.x + mesh.vertices[3].position.x) * 0.5f;
-    const float endCapCenterX = (mesh.vertices[1].position.x + mesh.vertices[2].position.x) * 0.5f;
-    EXPECT_NEAR(startCapCenterX, projectedStart.device.x - capDeviceX, 0.00001f);
-    EXPECT_NEAR(endCapCenterX, projectedEnd.device.x + capDeviceX, 0.00001f);
+  const float cap_pixels = (2.0f + kOverlayLineFeatherPixels) * 0.5f;
+  const float cap_device_x = cap_pixels * 2.0f / camera.viewport_size.x;
+  const float start_cap_center_x =
+      (mesh.vertices[0].position.x + mesh.vertices[3].position.x) * 0.5f;
+  const float end_cap_center_x =
+      (mesh.vertices[1].position.x + mesh.vertices[2].position.x) * 0.5f;
+  EXPECT_NEAR(start_cap_center_x, projected_start.device.x - cap_device_x,
+              0.00001f);
+  EXPECT_NEAR(end_cap_center_x, projected_end.device.x + cap_device_x,
+              0.00001f);
 }
 
 TEST(OverlayLineMeshBuilderTests, PerspectiveDepthBiasDoesNotMoveLineOrPointScreenPosition) {
-    const ViewportOverlayCamera camera = testPerspectiveOverlayCamera();
-    const QVec3 lineStart{-0.5f, 0.2f, -1.0f};
-    const QVec3 lineEnd{0.5f, 0.2f, -1.0f};
-    const QVec3 pointPosition{0.35f, -0.25f, -1.0f};
+  const ViewportOverlayCamera camera = test_perspective_overlay_camera();
+  const QVec3 line_start{-0.5f, 0.2f, -1.0f};
+  const QVec3 line_end{0.5f, 0.2f, -1.0f};
+  const QVec3 point_position{0.35f, -0.25f, -1.0f};
 
-    ViewportOverlayFrame frame;
-    frame.lines.push_back({
-            .layer = ViewportOverlayLayer::OpenEdge,
-            .start = lineStart,
-            .end = lineEnd,
-            .color = rgba8(255, 128, 64, 255),
-            .widthPixels = 2.0f,
-    });
-    frame.points.push_back({
-            .layer = ViewportOverlayLayer::UnselectedVertex,
-            .position = pointPosition,
-            .color = rgba8(255, 211, 31, 255),
-            .sizePixels = 6.0f,
-    });
+  ViewportOverlayFrame frame;
+  frame.lines.push_back({
+      .layer = ViewportOverlayLayer::OpenEdge,
+      .start = line_start,
+      .end = line_end,
+      .color = rgba8(255, 128, 64, 255),
+      .width_pixels = 2.0f,
+  });
+  frame.points.push_back({
+      .layer = ViewportOverlayLayer::UnselectedVertex,
+      .position = point_position,
+      .color = rgba8(255, 211, 31, 255),
+      .size_pixels = 6.0f,
+  });
 
-    const OverlayLayerBuildPlan linePlan =
-            OverlayRenderableBuilder::buildLayer(frame, camera, ViewportOverlayLayer::OpenEdge);
-    const OverlayLayerBuildPlan pointPlan =
-            OverlayRenderableBuilder::buildLayer(frame, camera, ViewportOverlayLayer::UnselectedVertex);
+  const OverlayLayerBuildPlan line_plan = OverlayRenderableBuilder::build_layer(
+      frame, camera, ViewportOverlayLayer::OpenEdge);
+  const OverlayLayerBuildPlan point_plan =
+      OverlayRenderableBuilder::build_layer(
+          frame, camera, ViewportOverlayLayer::UnselectedVertex);
 
-    ASSERT_EQ(linePlan.lineBatches.size(), 1u);
-    ASSERT_EQ(pointPlan.pointBatches.size(), 1u);
-    const OverlayLineMesh& lineMesh = linePlan.lineBatches.front().mesh;
-    const OverlayPointMesh& pointMesh = pointPlan.pointBatches.front().mesh;
-    ASSERT_EQ(lineMesh.vertices.size(), 4u);
-    ASSERT_EQ(pointMesh.vertices.size(), 4u);
+  ASSERT_EQ(line_plan.line_batches.size(), 1u);
+  ASSERT_EQ(point_plan.point_batches.size(), 1u);
+  const OverlayLineMesh &line_mesh = line_plan.line_batches.front().mesh;
+  const OverlayPointMesh &point_mesh = point_plan.point_batches.front().mesh;
+  ASSERT_EQ(line_mesh.vertices.size(), 4u);
+  ASSERT_EQ(point_mesh.vertices.size(), 4u);
 
-    const OverlayCameraProjector projector(camera);
-    const OverlayProjectedPoint projectedLineStart = projector.project(projector.viewPointFor(lineStart));
-    const OverlayProjectedPoint projectedLineEnd = projector.project(projector.viewPointFor(lineEnd));
-    const OverlayProjectedPoint projectedPoint = projector.project(projector.viewPointFor(pointPosition));
-    ASSERT_TRUE(projectedLineStart.valid);
-    ASSERT_TRUE(projectedLineEnd.valid);
-    ASSERT_TRUE(projectedPoint.valid);
+  const OverlayCameraProjector projector(camera);
+  const OverlayProjectedPoint projected_line_start =
+      projector.project(projector.view_point_for(line_start));
+  const OverlayProjectedPoint projected_line_end =
+      projector.project(projector.view_point_for(line_end));
+  const OverlayProjectedPoint projected_point =
+      projector.project(projector.view_point_for(point_position));
+  ASSERT_TRUE(projected_line_start.valid);
+  ASSERT_TRUE(projected_line_end.valid);
+  ASSERT_TRUE(projected_point.valid);
 
-    const float expectedLineDepth =
-            projectedLineStart.device.z + camera.nearPlane * kOverlayDeviceDepthBiasPerNearPlane * kOverlayLineDepthBias;
-    const float lineCenterX = (lineMesh.vertices[0].position.x + lineMesh.vertices[1].position.x +
-                               lineMesh.vertices[2].position.x + lineMesh.vertices[3].position.x) *
-            0.25f;
-    const float lineCenterY = (lineMesh.vertices[0].position.y + lineMesh.vertices[1].position.y +
-                               lineMesh.vertices[2].position.y + lineMesh.vertices[3].position.y) *
-            0.25f;
-    EXPECT_NEAR(lineCenterX, (projectedLineStart.device.x + projectedLineEnd.device.x) * 0.5f, 0.00001f);
-    EXPECT_NEAR(lineCenterY, (projectedLineStart.device.y + projectedLineEnd.device.y) * 0.5f, 0.00001f);
-    EXPECT_NEAR(lineMesh.vertices[0].position.z, expectedLineDepth, 0.00001f);
+  const float expected_line_depth =
+      projected_line_start.device.z + camera.near_plane *
+                                          kOverlayDeviceDepthBiasPerNearPlane *
+                                          kOverlayLineDepthBias;
+  const float line_center_x =
+      (line_mesh.vertices[0].position.x + line_mesh.vertices[1].position.x +
+       line_mesh.vertices[2].position.x + line_mesh.vertices[3].position.x) *
+      0.25f;
+  const float line_center_y =
+      (line_mesh.vertices[0].position.y + line_mesh.vertices[1].position.y +
+       line_mesh.vertices[2].position.y + line_mesh.vertices[3].position.y) *
+      0.25f;
+  EXPECT_NEAR(line_center_x,
+              (projected_line_start.device.x + projected_line_end.device.x) *
+                  0.5f,
+              0.00001f);
+  EXPECT_NEAR(line_center_y,
+              (projected_line_start.device.y + projected_line_end.device.y) *
+                  0.5f,
+              0.00001f);
+  EXPECT_NEAR(line_mesh.vertices[0].position.z, expected_line_depth, 0.00001f);
 
-    const float expectedPointDepth =
-            projectedPoint.device.z + camera.nearPlane * kOverlayDeviceDepthBiasPerNearPlane * kOverlayPointDepthBias;
-    const float pointCenterX = (pointMesh.vertices[0].position.x + pointMesh.vertices[1].position.x +
-                                pointMesh.vertices[2].position.x + pointMesh.vertices[3].position.x) *
-            0.25f;
-    const float pointCenterY = (pointMesh.vertices[0].position.y + pointMesh.vertices[1].position.y +
-                                pointMesh.vertices[2].position.y + pointMesh.vertices[3].position.y) *
-            0.25f;
-    EXPECT_NEAR(pointCenterX, projectedPoint.device.x, 0.00001f);
-    EXPECT_NEAR(pointCenterY, projectedPoint.device.y, 0.00001f);
-    EXPECT_NEAR(pointMesh.vertices[0].position.z, expectedPointDepth, 0.00001f);
+  const float expected_point_depth =
+      projected_point.device.z + camera.near_plane *
+                                     kOverlayDeviceDepthBiasPerNearPlane *
+                                     kOverlayPointDepthBias;
+  const float point_center_x =
+      (point_mesh.vertices[0].position.x + point_mesh.vertices[1].position.x +
+       point_mesh.vertices[2].position.x + point_mesh.vertices[3].position.x) *
+      0.25f;
+  const float point_center_y =
+      (point_mesh.vertices[0].position.y + point_mesh.vertices[1].position.y +
+       point_mesh.vertices[2].position.y + point_mesh.vertices[3].position.y) *
+      0.25f;
+  EXPECT_NEAR(point_center_x, projected_point.device.x, 0.00001f);
+  EXPECT_NEAR(point_center_y, projected_point.device.y, 0.00001f);
+  EXPECT_NEAR(point_mesh.vertices[0].position.z, expected_point_depth,
+              0.00001f);
 }
 
 TEST(OverlayFaceFillBuilderTests, CreatesDepthStampedFaceFillPasses) {
@@ -957,19 +1110,23 @@ TEST(OverlayFaceFillBuilderTests, CreatesDepthStampedFaceFillPasses) {
             .color = rgba8(255, 172, 31, 8),
     });
 
-    const OverlayLayerBuildPlan plan =
-            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SelectedVisibleFace);
+    const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+        frame, test_overlay_camera(),
+        ViewportOverlayLayer::SelectedVisibleFace);
 
-    ASSERT_EQ(plan.faceFillBatches.size(), 2u);
-    EXPECT_EQ(plan.faceFillBatches[0].mesh.vertices.size(), 3u);
-    EXPECT_EQ(plan.faceFillBatches[0].mesh.indices.size(), 3u);
-    EXPECT_TRUE(plan.faceFillBatches[0].state.depthWrite);
-    EXPECT_FALSE(plan.faceFillBatches[0].state.colorWrite);
-    EXPECT_EQ(plan.faceFillBatches[0].state.depthFunc, OverlayDepthFunc::GreaterOrEqual);
-    EXPECT_FALSE(plan.faceFillBatches[1].state.depthWrite);
-    EXPECT_TRUE(plan.faceFillBatches[1].state.colorWrite);
-    EXPECT_EQ(plan.faceFillBatches[1].state.depthFunc, OverlayDepthFunc::Equal);
-    EXPECT_EQ(plan.faceFillBatches[1].mesh.vertices[0].color, rgba8SrgbToLinear(rgba8(255, 172, 31, 8)));
+    ASSERT_EQ(plan.face_fill_batches.size(), 2u);
+    EXPECT_EQ(plan.face_fill_batches[0].mesh.vertices.size(), 3u);
+    EXPECT_EQ(plan.face_fill_batches[0].mesh.indices.size(), 3u);
+    EXPECT_TRUE(plan.face_fill_batches[0].state.depth_write);
+    EXPECT_FALSE(plan.face_fill_batches[0].state.color_write);
+    EXPECT_EQ(plan.face_fill_batches[0].state.depth_func,
+              OverlayDepthFunc::GreaterOrEqual);
+    EXPECT_FALSE(plan.face_fill_batches[1].state.depth_write);
+    EXPECT_TRUE(plan.face_fill_batches[1].state.color_write);
+    EXPECT_EQ(plan.face_fill_batches[1].state.depth_func,
+              OverlayDepthFunc::Equal);
+    EXPECT_EQ(plan.face_fill_batches[1].mesh.vertices[0].color,
+              rgba8_srgb_to_linear(rgba8(255, 172, 31, 8)));
 }
 
 TEST(OverlayFaceFillBuilderTests, SelectedAndHoverFaceFillsRenderTwoSided) {
@@ -992,18 +1149,22 @@ TEST(OverlayFaceFillBuilderTests, SelectedAndHoverFaceFillsRenderTwoSided) {
         });
 
         const OverlayLayerBuildPlan plan =
-                OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), layer);
+            OverlayRenderableBuilder::build_layer(frame, test_overlay_camera(),
+                                                  layer);
 
-        ASSERT_EQ(plan.faceFillBatches.size(), 2u);
-        EXPECT_TRUE(plan.faceFillBatches[0].state.depthWrite);
-        EXPECT_FALSE(plan.faceFillBatches[0].state.colorWrite);
-        EXPECT_EQ(plan.faceFillBatches[0].state.depthFunc, OverlayDepthFunc::GreaterOrEqual);
-        EXPECT_FALSE(plan.faceFillBatches[1].state.depthWrite);
-        EXPECT_TRUE(plan.faceFillBatches[1].state.colorWrite);
-        EXPECT_EQ(plan.faceFillBatches[1].state.depthFunc, OverlayDepthFunc::Equal);
-        for (const OverlayFaceFillBatch& batch : plan.faceFillBatches) {
-            EXPECT_EQ(batch.state.cullingMode, OverlayCullingMode::None);
-            EXPECT_EQ(batch.state.transparencyMode, OverlayTransparencyMode::TwoPassesTwoSides);
+        ASSERT_EQ(plan.face_fill_batches.size(), 2u);
+        EXPECT_TRUE(plan.face_fill_batches[0].state.depth_write);
+        EXPECT_FALSE(plan.face_fill_batches[0].state.color_write);
+        EXPECT_EQ(plan.face_fill_batches[0].state.depth_func,
+                  OverlayDepthFunc::GreaterOrEqual);
+        EXPECT_FALSE(plan.face_fill_batches[1].state.depth_write);
+        EXPECT_TRUE(plan.face_fill_batches[1].state.color_write);
+        EXPECT_EQ(plan.face_fill_batches[1].state.depth_func,
+                  OverlayDepthFunc::Equal);
+        for (const OverlayFaceFillBatch &batch : plan.face_fill_batches) {
+          EXPECT_EQ(batch.state.culling_mode, OverlayCullingMode::None);
+          EXPECT_EQ(batch.state.transparency_mode,
+                    OverlayTransparencyMode::TwoPassesTwoSides);
         }
     }
 }
@@ -1018,55 +1179,60 @@ TEST(OverlayFaceFillBuilderTests, SourceWireDepthStampDoesNotRenderDepthPass) {
             .color = rgba8(255, 224, 92, 235),
     });
 
-    const OverlayLayerBuildPlan plan =
-            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWireDepthStamp);
+    const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+        frame, test_overlay_camera(),
+        ViewportOverlayLayer::SourceWireDepthStamp);
 
-    EXPECT_TRUE(plan.faceFillBatches.empty());
-    EXPECT_TRUE(plan.lineBatches.empty());
-    EXPECT_TRUE(plan.pointBatches.empty());
+    EXPECT_TRUE(plan.face_fill_batches.empty());
+    EXPECT_TRUE(plan.line_batches.empty());
+    EXPECT_TRUE(plan.point_batches.empty());
 }
 
 TEST(OverlayPointMeshBuilderTests, BuildsOutlineAndFillPointPasses) {
     ViewportOverlayFrame frame;
     frame.points.push_back({
-            .layer = ViewportOverlayLayer::SelectedVertex,
-            .position = {0.0f, 0.0f, -1.0f},
-            .color = rgba8(255, 211, 31, 255),
-            .sizePixels = 6.0f,
-            .outlineGrowthPixels = 3.0f,
+        .layer = ViewportOverlayLayer::SelectedVertex,
+        .position = {0.0f, 0.0f, -1.0f},
+        .color = rgba8(255, 211, 31, 255),
+        .size_pixels = 6.0f,
+        .outline_growth_pixels = 3.0f,
     });
 
-    const OverlayLayerBuildPlan plan =
-            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SelectedVertex);
+    const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+        frame, test_overlay_camera(), ViewportOverlayLayer::SelectedVertex);
 
-    ASSERT_EQ(plan.pointBatches.size(), 2u);
-    EXPECT_FLOAT_EQ(plan.pointBatches[0].sizePixels, 9.0f);
-    EXPECT_EQ(plan.pointBatches[0].mesh.vertices[0].color, rgba8SrgbToLinear(kOverlayVertexOutlineColor));
-    EXPECT_FLOAT_EQ(plan.pointBatches[1].sizePixels, 6.0f);
-    EXPECT_EQ(plan.pointBatches[1].mesh.vertices[0].color, rgba8SrgbToLinear(rgba8(255, 211, 31, 255)));
-    for (const OverlayPointBatch& batch : plan.pointBatches) {
-        EXPECT_EQ(batch.mesh.vertices.size(), 4u);
-        EXPECT_EQ(batch.mesh.indices.size(), 6u);
-        EXPECT_EQ(batch.state.depthFunc, OverlayDepthFunc::Always);
-        EXPECT_FALSE(batch.state.depthCulling);
+    ASSERT_EQ(plan.point_batches.size(), 2u);
+    EXPECT_FLOAT_EQ(plan.point_batches[0].size_pixels, 9.0f);
+    EXPECT_EQ(plan.point_batches[0].mesh.vertices[0].color,
+              rgba8_srgb_to_linear(kOverlayVertexOutlineColor));
+    EXPECT_FLOAT_EQ(plan.point_batches[1].size_pixels, 6.0f);
+    EXPECT_EQ(plan.point_batches[1].mesh.vertices[0].color,
+              rgba8_srgb_to_linear(rgba8(255, 211, 31, 255)));
+    for (const OverlayPointBatch &batch : plan.point_batches) {
+      EXPECT_EQ(batch.mesh.vertices.size(), 4u);
+      EXPECT_EQ(batch.mesh.indices.size(), 6u);
+      EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::Always);
+      EXPECT_FALSE(batch.state.depth_culling);
     }
 }
 
 TEST(OverlayRenderableBuilderTests, SanitizesCameraBeforeSigning) {
-    ViewportOverlayCamera camera = testOverlayCamera();
-    camera.viewportSize = {0.0f, -3.0f};
-    camera.forward = {};
-    camera.right = {};
-    camera.nearPlane = -1.0f;
-    camera.farPlane = -0.5f;
+  ViewportOverlayCamera camera = test_overlay_camera();
+  camera.viewport_size = {0.0f, -3.0f};
+  camera.forward = {};
+  camera.right = {};
+  camera.near_plane = -1.0f;
+  camera.far_plane = -0.5f;
 
-    const ViewportOverlayCamera sanitized = OverlayCameraProjector::sanitizedCamera(camera);
+  const ViewportOverlayCamera sanitized =
+      OverlayCameraProjector::sanitized_camera(camera);
 
-    EXPECT_GE(sanitized.viewportSize.x, 1.0f);
-    EXPECT_GE(sanitized.viewportSize.y, 1.0f);
-    EXPECT_GT(sanitized.nearPlane, 0.0f);
-    EXPECT_GT(sanitized.farPlane, sanitized.nearPlane);
-    EXPECT_NE(OverlayRenderableBuilder::cameraSignature(sanitized), OverlayRenderableBuilder::cameraSignature(testOverlayCamera()));
+  EXPECT_GE(sanitized.viewport_size.x, 1.0f);
+  EXPECT_GE(sanitized.viewport_size.y, 1.0f);
+  EXPECT_GT(sanitized.near_plane, 0.0f);
+  EXPECT_GT(sanitized.far_plane, sanitized.near_plane);
+  EXPECT_NE(OverlayRenderableBuilder::camera_signature(sanitized),
+            OverlayRenderableBuilder::camera_signature(test_overlay_camera()));
 }
 
 TEST(OverlayRenderableBuilderTests, LayerBuildSignatureOnlyUsesCameraForScreenSpaceLayers) {
@@ -1079,153 +1245,181 @@ TEST(OverlayRenderableBuilderTests, LayerBuildSignatureOnlyUsesCameraForScreenSp
             .color = kOverlaySelectionFaceColor,
     });
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SourceWire,
-            .start = {-0.5f, 0.0f, -1.0f},
-            .end = {0.5f, 0.0f, -1.0f},
-            .color = kOverlaySourceWireColor,
-            .widthPixels = 1.5f,
+        .layer = ViewportOverlayLayer::SourceWire,
+        .start = {-0.5f, 0.0f, -1.0f},
+        .end = {0.5f, 0.0f, -1.0f},
+        .color = kOverlaySourceWireColor,
+        .width_pixels = 1.5f,
     });
 
-    ViewportOverlayCamera camera = testOverlayCamera();
-    ViewportOverlayCamera movedCamera = camera;
-    movedCamera.eye.x += 3.0f;
-    movedCamera.forward = {0.25f, 0.0f, -1.0f};
+    ViewportOverlayCamera camera = test_overlay_camera();
+    ViewportOverlayCamera moved_camera = camera;
+    moved_camera.eye.x += 3.0f;
+    moved_camera.forward = {0.25f, 0.0f, -1.0f};
 
-    EXPECT_FALSE(OverlayRenderableBuilder::layerBuildDependsOnCamera(ViewportOverlayLayer::SelectedVisibleFace));
+    EXPECT_FALSE(OverlayRenderableBuilder::layer_build_depends_on_camera(
+        ViewportOverlayLayer::SelectedVisibleFace));
     EXPECT_EQ(
-            OverlayRenderableBuilder::layerBuildSignature(frame, camera, ViewportOverlayLayer::SelectedVisibleFace),
-            OverlayRenderableBuilder::layerBuildSignature(frame, movedCamera, ViewportOverlayLayer::SelectedVisibleFace));
+        OverlayRenderableBuilder::layer_build_signature(
+            frame, camera, ViewportOverlayLayer::SelectedVisibleFace),
+        OverlayRenderableBuilder::layer_build_signature(
+            frame, moved_camera, ViewportOverlayLayer::SelectedVisibleFace));
 
-    EXPECT_TRUE(OverlayRenderableBuilder::layerBuildDependsOnCamera(ViewportOverlayLayer::SourceWire));
-    EXPECT_NE(
-            OverlayRenderableBuilder::layerBuildSignature(frame, camera, ViewportOverlayLayer::SourceWire),
-            OverlayRenderableBuilder::layerBuildSignature(frame, movedCamera, ViewportOverlayLayer::SourceWire));
+    EXPECT_TRUE(OverlayRenderableBuilder::layer_build_depends_on_camera(
+        ViewportOverlayLayer::SourceWire));
+    EXPECT_NE(OverlayRenderableBuilder::layer_build_signature(
+                  frame, camera, ViewportOverlayLayer::SourceWire),
+              OverlayRenderableBuilder::layer_build_signature(
+                  frame, moved_camera, ViewportOverlayLayer::SourceWire));
 }
 
 TEST(OverlayProxyFactoryTests, CountsOnlyNonEmptyRenderableBatches) {
     OverlayLayerBuildPlan plan;
-    plan.faceFillBatches.push_back({});
-    plan.faceFillBatches.push_back({
-            .mesh = {
-                    .vertices = {
-                            {{0.0f, 0.0f, -1.0f}, {}, rgba8(255, 255, 255, 255)},
-                            {{1.0f, 0.0f, -1.0f}, {}, rgba8(255, 255, 255, 255)},
-                            {{0.0f, 1.0f, -1.0f}, {}, rgba8(255, 255, 255, 255)},
+    plan.face_fill_batches.push_back({});
+    plan.face_fill_batches.push_back({
+        .mesh =
+            {
+                .vertices =
+                    {
+                        {{0.0f, 0.0f, -1.0f}, {}, rgba8(255, 255, 255, 255)},
+                        {{1.0f, 0.0f, -1.0f}, {}, rgba8(255, 255, 255, 255)},
+                        {{0.0f, 1.0f, -1.0f}, {}, rgba8(255, 255, 255, 255)},
                     },
-                    .indices = {0u, 1u, 2u},
+                .indices = {0u, 1u, 2u},
             },
     });
-    plan.lineBatches.push_back({
-            .mesh = {
-                    .vertices = {
-                            {{0.0f, 0.0f, 0.0f, 1.0f}, {}, rgba8(255, 255, 255, 255)},
-                            {{1.0f, 0.0f, 0.0f, 1.0f}, {}, rgba8(255, 255, 255, 255)},
-                            {{1.0f, 1.0f, 0.0f, 1.0f}, {}, rgba8(255, 255, 255, 255)},
+    plan.line_batches.push_back({
+        .mesh =
+            {
+                .vertices =
+                    {
+                        {{0.0f, 0.0f, 0.0f, 1.0f},
+                         {},
+                         rgba8(255, 255, 255, 255)},
+                        {{1.0f, 0.0f, 0.0f, 1.0f},
+                         {},
+                         rgba8(255, 255, 255, 255)},
+                        {{1.0f, 1.0f, 0.0f, 1.0f},
+                         {},
+                         rgba8(255, 255, 255, 255)},
                     },
-                    .indices = {0u, 1u, 2u},
+                .indices = {0u, 1u, 2u},
             },
     });
-    plan.pointBatches.push_back({});
+    plan.point_batches.push_back({});
 
-    EXPECT_EQ(OverlayProxyFactory::plannedProxyCount(plan), 2u);
+    EXPECT_EQ(OverlayProxyFactory::planned_proxy_count(plan), 2u);
 }
 
 TEST(OverlayRenderableCacheTests, TracksSlotSignaturesWithoutOwningFilamentProxies) {
     OverlayRenderableCache cache;
     ViewportOverlayFrame frame;
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SourceWire,
-            .start = {-0.5f, 0.0f, -1.0f},
-            .end = {0.5f, 0.0f, -1.0f},
-            .color = rgba8(255, 128, 64, 255),
-            .widthPixels = 2.0f,
+        .layer = ViewportOverlayLayer::SourceWire,
+        .start = {-0.5f, 0.0f, -1.0f},
+        .end = {0.5f, 0.0f, -1.0f},
+        .color = rgba8(255, 128, 64, 255),
+        .width_pixels = 2.0f,
     });
 
-    const ViewportOverlayCamera camera = testOverlayCamera();
-    EXPECT_TRUE(cache.setOverlayFrame(1u, 0u, frame, camera));
+    const ViewportOverlayCamera camera = test_overlay_camera();
+    EXPECT_TRUE(cache.set_overlay_frame(1u, 0u, frame, camera));
 
     const OverlayRenderableCacheStats stats = cache.stats(1u);
-    EXPECT_EQ(stats.frameSignature, OverlayRenderableBuilder::frameSignature(frame));
-    EXPECT_EQ(stats.cameraSignature,
-            OverlayRenderableBuilder::cameraSignature(OverlayCameraProjector::sanitizedCamera(camera)));
-    EXPECT_EQ(stats.layerMask, kViewportOverlayLayerMask);
-    EXPECT_EQ(stats.proxyCount, 0u);
+    EXPECT_EQ(stats.frame_signature,
+              OverlayRenderableBuilder::frame_signature(frame));
+    EXPECT_EQ(stats.camera_signature,
+              OverlayRenderableBuilder::camera_signature(
+                  OverlayCameraProjector::sanitized_camera(camera)));
+    EXPECT_EQ(stats.layer_mask, kViewportOverlayLayerMask);
+    EXPECT_EQ(stats.proxy_count, 0u);
 
-    EXPECT_FALSE(cache.setOverlayFrame(1u, 0u, frame, camera));
+    EXPECT_FALSE(cache.set_overlay_frame(1u, 0u, frame, camera));
 
-    frame.lines.front().widthPixels = 4.0f;
-    EXPECT_TRUE(cache.setOverlayFrame(1u, 0u, frame, camera));
-    EXPECT_EQ(cache.stats(1u).frameSignature, OverlayRenderableBuilder::frameSignature(frame));
+    frame.lines.front().width_pixels = 4.0f;
+    EXPECT_TRUE(cache.set_overlay_frame(1u, 0u, frame, camera));
+    EXPECT_EQ(cache.stats(1u).frame_signature,
+              OverlayRenderableBuilder::frame_signature(frame));
 }
 
 TEST(SceneRenderBridgeExtractionTests, DelegatesOverlayAndPreviewProxyOwnership) {
-    const std::string header = readSourceFile({"src", "render", "scene_render_bridge.hpp"});
-    const std::string source = readSourceFile({"src", "render", "scene_render_bridge.cpp"});
+  const std::string header =
+      read_source_file({"src", "render", "scene_render_bridge.hpp"});
+  const std::string source =
+      read_source_file({"src", "render", "scene_render_bridge.cpp"});
 
-    EXPECT_NE(header.find("OverlayRenderableCache overlayCache_"), std::string::npos);
-    EXPECT_NE(header.find("ToolPreviewRenderableCache toolPreviewCache_"), std::string::npos);
-    EXPECT_NE(source.find("overlayCache_.setOverlayFrame"), std::string::npos);
-    EXPECT_NE(source.find("toolPreviewCache_.setMeshes"), std::string::npos);
+  EXPECT_NE(header.find("OverlayRenderableCache overlay_cache_"),
+            std::string::npos);
+  EXPECT_NE(header.find("ToolPreviewRenderableCache tool_preview_cache_"),
+            std::string::npos);
+  EXPECT_NE(source.find("overlay_cache_.set_overlay_frame"), std::string::npos);
+  EXPECT_NE(source.find("tool_preview_cache_.set_meshes"), std::string::npos);
 
-    EXPECT_EQ(header.find("struct OverlayProxy"), std::string::npos);
-    EXPECT_EQ(header.find("struct OverlaySlot"), std::string::npos);
-    EXPECT_EQ(header.find("struct OverlayProxyGroup"), std::string::npos);
-    EXPECT_EQ(header.find("overlaySlots_"), std::string::npos);
-    EXPECT_EQ(header.find("toolPreviewMeshProxies_"), std::string::npos);
-    EXPECT_EQ(source.find("rebuildOverlayProxies"), std::string::npos);
-    EXPECT_EQ(source.find("destroyOverlayProxy"), std::string::npos);
-    EXPECT_EQ(source.find("destroyToolPreviewMeshes"), std::string::npos);
+  EXPECT_EQ(header.find("struct OverlayProxy"), std::string::npos);
+  EXPECT_EQ(header.find("struct OverlaySlot"), std::string::npos);
+  EXPECT_EQ(header.find("struct OverlayProxyGroup"), std::string::npos);
+  EXPECT_EQ(header.find("overlaySlots_"), std::string::npos);
+  EXPECT_EQ(header.find("toolPreviewMeshProxies_"), std::string::npos);
+  EXPECT_EQ(source.find("rebuildOverlayProxies"), std::string::npos);
+  EXPECT_EQ(source.find("destroyOverlayProxy"), std::string::npos);
+  EXPECT_EQ(source.find("destroyToolPreviewMeshes"), std::string::npos);
 }
 
 TEST(ViewportRenderPassCoordinatorTests, SeparatesSceneAndOverlayLayerMasks) {
     ViewportRenderPassCoordinator coordinator;
-    const std::uint8_t gridLayerMask = viewportGridLayerMask(2);
-    coordinator.initialize(gridLayerMask);
+    const std::uint8_t grid_layer_mask = viewport_grid_layer_mask(2);
+    coordinator.initialize(grid_layer_mask);
 
-    EXPECT_EQ(coordinator.sceneVisibleLayerMask(),
-            static_cast<std::uint8_t>(kViewportShadedSceneLayerMask | kViewportToolPreviewLayerMask));
-    EXPECT_EQ(coordinator.overlayVisibleLayerMask(),
-            static_cast<std::uint8_t>(gridLayerMask | kViewportOverlayLayerMask));
-    EXPECT_EQ(coordinator.visibleLayerMask(),
-            static_cast<std::uint8_t>(
-                    kViewportShadedSceneLayerMask |
-                    kViewportToolPreviewLayerMask |
-                    gridLayerMask |
-                    kViewportOverlayLayerMask));
+    EXPECT_EQ(coordinator.scene_visible_layer_mask(),
+              static_cast<std::uint8_t>(kViewportShadedSceneLayerMask |
+                                        kViewportToolPreviewLayerMask));
+    EXPECT_EQ(
+        coordinator.overlay_visible_layer_mask(),
+        static_cast<std::uint8_t>(grid_layer_mask | kViewportOverlayLayerMask));
+    EXPECT_EQ(coordinator.visible_layer_mask(),
+              static_cast<std::uint8_t>(kViewportShadedSceneLayerMask |
+                                        kViewportToolPreviewLayerMask |
+                                        grid_layer_mask |
+                                        kViewportOverlayLayerMask));
 
-    EXPECT_TRUE(coordinator.setGridVisible(false));
-    EXPECT_EQ(coordinator.sceneVisibleLayerMask(),
-            static_cast<std::uint8_t>(kViewportShadedSceneLayerMask | kViewportToolPreviewLayerMask));
-    EXPECT_EQ(coordinator.overlayVisibleLayerMask(), 0u);
-    EXPECT_EQ(coordinator.visibleLayerMask(),
-            static_cast<std::uint8_t>(kViewportShadedSceneLayerMask | kViewportToolPreviewLayerMask));
+    EXPECT_TRUE(coordinator.set_grid_visible(false));
+    EXPECT_EQ(coordinator.scene_visible_layer_mask(),
+              static_cast<std::uint8_t>(kViewportShadedSceneLayerMask |
+                                        kViewportToolPreviewLayerMask));
+    EXPECT_EQ(coordinator.overlay_visible_layer_mask(), 0u);
+    EXPECT_EQ(coordinator.visible_layer_mask(),
+              static_cast<std::uint8_t>(kViewportShadedSceneLayerMask |
+                                        kViewportToolPreviewLayerMask));
 
-    EXPECT_TRUE(coordinator.setOverlayVisible(true));
-    EXPECT_EQ(coordinator.sceneVisibleLayerMask(),
-            static_cast<std::uint8_t>(kViewportShadedSceneLayerMask | kViewportToolPreviewLayerMask));
-    EXPECT_EQ(coordinator.overlayVisibleLayerMask(),
-            static_cast<std::uint8_t>(gridLayerMask | kViewportOverlayLayerMask));
-    EXPECT_EQ(coordinator.visibleLayerMask(),
-            static_cast<std::uint8_t>(
-                    kViewportShadedSceneLayerMask |
-                    kViewportToolPreviewLayerMask |
-                    gridLayerMask |
-                    kViewportOverlayLayerMask));
+    EXPECT_TRUE(coordinator.set_overlay_visible(true));
+    EXPECT_EQ(coordinator.scene_visible_layer_mask(),
+              static_cast<std::uint8_t>(kViewportShadedSceneLayerMask |
+                                        kViewportToolPreviewLayerMask));
+    EXPECT_EQ(
+        coordinator.overlay_visible_layer_mask(),
+        static_cast<std::uint8_t>(grid_layer_mask | kViewportOverlayLayerMask));
+    EXPECT_EQ(coordinator.visible_layer_mask(),
+              static_cast<std::uint8_t>(kViewportShadedSceneLayerMask |
+                                        kViewportToolPreviewLayerMask |
+                                        grid_layer_mask |
+                                        kViewportOverlayLayerMask));
 
-    EXPECT_TRUE(coordinator.setSceneLayerMask(kViewportRenderedSceneLayerMask));
-    EXPECT_EQ(coordinator.sceneVisibleLayerMask(),
-            static_cast<std::uint8_t>(kViewportRenderedSceneLayerMask | kViewportToolPreviewLayerMask));
-    EXPECT_EQ(coordinator.overlayVisibleLayerMask(),
-            static_cast<std::uint8_t>(gridLayerMask | kViewportOverlayLayerMask));
-    EXPECT_EQ(coordinator.visibleLayerMask(),
-            static_cast<std::uint8_t>(
-                    kViewportRenderedSceneLayerMask |
-                    kViewportToolPreviewLayerMask |
-                    gridLayerMask |
-                    kViewportOverlayLayerMask));
+    EXPECT_TRUE(
+        coordinator.set_scene_layer_mask(kViewportRenderedSceneLayerMask));
+    EXPECT_EQ(coordinator.scene_visible_layer_mask(),
+              static_cast<std::uint8_t>(kViewportRenderedSceneLayerMask |
+                                        kViewportToolPreviewLayerMask));
+    EXPECT_EQ(
+        coordinator.overlay_visible_layer_mask(),
+        static_cast<std::uint8_t>(grid_layer_mask | kViewportOverlayLayerMask));
+    EXPECT_EQ(coordinator.visible_layer_mask(),
+              static_cast<std::uint8_t>(kViewportRenderedSceneLayerMask |
+                                        kViewportToolPreviewLayerMask |
+                                        grid_layer_mask |
+                                        kViewportOverlayLayerMask));
 
-    EXPECT_TRUE(coordinator.setSceneVisible(false));
-    EXPECT_EQ(coordinator.sceneVisibleLayerMask(), 0u);
-    EXPECT_EQ(coordinator.overlayVisibleLayerMask(), gridLayerMask);
-    EXPECT_EQ(coordinator.visibleLayerMask(), gridLayerMask);
+    EXPECT_TRUE(coordinator.set_scene_visible(false));
+    EXPECT_EQ(coordinator.scene_visible_layer_mask(), 0u);
+    EXPECT_EQ(coordinator.overlay_visible_layer_mask(), grid_layer_mask);
+    EXPECT_EQ(coordinator.visible_layer_mask(), grid_layer_mask);
 }

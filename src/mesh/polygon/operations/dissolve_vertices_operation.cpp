@@ -45,9 +45,9 @@ public:
 
 OperationResult DissolveVerticesOperation::apply(Document& document, Selection& selection) const
 {
-    if (selection.mode != SelectionMode::vertex || selection.vertices.empty()) {
-        return { false, "Select one or more vertices to dissolve." };
-    }
+  if (selection.mode != SelectionMode::Vertex || selection.vertices.empty()) {
+    return {false, "Select one or more vertices to dissolve."};
+  }
 
     const std::vector<ElementId> selected_vertices = selected_valid_vertices(document, selection);
     if (selected_vertices.empty()) {
@@ -116,7 +116,7 @@ OperationResult DissolveVerticesOperation::apply(Document& document, Selection& 
 
     document = std::move(candidate);
     selection.clear();
-    selection.mode = SelectionMode::vertex;
+    selection.mode = SelectionMode::Vertex;
     for (const ElementId vertex_id : neighbor_vertices) {
         if (find_vertex(document, vertex_id) != nullptr) {
             add_unique_id(selection.vertices, vertex_id);

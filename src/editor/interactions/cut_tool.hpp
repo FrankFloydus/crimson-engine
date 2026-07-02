@@ -22,9 +22,9 @@ struct EditorRuntimeState;
  * Enumerates CutMode values used by the modeling layer.
  */
 enum class CutMode {
-	keep_back = 0,
-	keep_front = 1,
-	keep_both = 2,
+  KeepBack = 0,
+  KeepFront = 1,
+  KeepBoth = 2,
 };
 
 /**
@@ -44,8 +44,8 @@ struct CutToolState {
 	std::vector<int> target_object_ids;
 	int source_object_id = -1;
 	quader::QVec3 face_normal;
-	CutMode mode = CutMode::keep_both;
-	int dragging_point_index = -1;
+        CutMode mode = CutMode::KeepBoth;
+        int dragging_point_index = -1;
 	bool dragging_new_point = false;
 	bool dragging_line = false;
 	quader::QVec3 drag_line_anchor;
@@ -72,8 +72,8 @@ struct CutPreviewRequest {
 	std::string message;
 	std::vector<int> object_ids;
 	std::vector<quader::QVec3> points;
-	CutMode mode = CutMode::keep_both;
-	bool can_preview = false;
+        CutMode mode = CutMode::KeepBoth;
+        bool can_preview = false;
 	int point_count = 0;
 	int target_count = 0;
 	bool preview_valid = false;
@@ -85,8 +85,8 @@ struct CutPreviewRequest {
 struct CutPreviewMetadata {
 	bool preview_valid = false;
 	bool can_preview = false;
-	CutMode mode = CutMode::keep_both;
-	int point_count = 0;
+        CutMode mode = CutMode::KeepBoth;
+        int point_count = 0;
 	int target_count = 0;
 	int split_count = 0;
 	int removed_count = 0;
@@ -105,8 +105,8 @@ struct CutHoverState {
  * Enumerates CutPreviewMeshSide values used by the modeling layer.
  */
 enum class CutPreviewMeshSide {
-	keep,
-	discard,
+  Keep,
+  Discard,
 };
 
 /**

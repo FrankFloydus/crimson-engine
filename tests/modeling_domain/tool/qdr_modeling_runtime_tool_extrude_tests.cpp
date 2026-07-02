@@ -39,13 +39,15 @@ TEST(QdrModelingRuntimeToolExtrudeTests, ExtrudeDragReportsPreviewModeAndCutCoun
 	quader_editor_core::set_extrude_preview_valid(state, true);
 	const quader_editor_core::ExtrudePreviewOperation operation = quader_editor_core::extrude_preview_operation(state);
 	EXPECT_TRUE(operation.ok);
-	EXPECT_TRUE(operation.preview_mode == quader_editor_core::ExtrudePreviewMode::positive);
-	EXPECT_FALSE(operation.clear_preview_meshes);
+        EXPECT_TRUE(operation.preview_mode ==
+                    quader_editor_core::ExtrudePreviewMode::Positive);
+        EXPECT_FALSE(operation.clear_preview_meshes);
 
 	EXPECT_TRUE(quader_editor_core::preview_extrude_from_distance(state, -1.0, false, true, 1.0).ok);
 	const quader_editor_core::ExtrudePreviewOperation negative_operation = quader_editor_core::extrude_preview_operation(state);
-	EXPECT_TRUE(negative_operation.preview_mode == quader_editor_core::ExtrudePreviewMode::negative);
-	EXPECT_TRUE(negative_operation.clear_preview_meshes);
+        EXPECT_TRUE(negative_operation.preview_mode ==
+                    quader_editor_core::ExtrudePreviewMode::Negative);
+        EXPECT_TRUE(negative_operation.clear_preview_meshes);
 }
 
 TEST(QdrModelingRuntimeToolExtrudeTests, ExtrudeDragPixelsAndGridCutsClampToPreviewCapacity) {

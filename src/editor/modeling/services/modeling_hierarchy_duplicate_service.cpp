@@ -27,195 +27,218 @@
 namespace quader {
 namespace {
 
-std::vector<EntityId> sourceMeshEntitiesInTreeOrder(const SceneDocument& scene, const std::vector<EntityId>& roots) {
-    std::vector<EntityId> sourceMeshes;
-    for (const EntityId root : roots) {
-        for (const EntityId entity : scene.descendants(root, true)) {
-            if (scene.modelingObject(entity) != nullptr) {
-                sourceMeshes.push_back(entity);
-            }
-        }
+std::vector<EntityId>
+source_mesh_entities_in_tree_order(const SceneDocument &scene,
+                                   const std::vector<EntityId> &roots) {
+  std::vector<EntityId> source_meshes;
+  for (const EntityId root : roots) {
+    for (const EntityId entity : scene.descendants(root, true)) {
+      if (scene.modeling_object(entity) != nullptr) {
+        source_meshes.push_back(entity);
+      }
     }
-    return sourceMeshes;
+  }
+  return source_meshes;
 }
 
-std::vector<EntityId> sourceMeshEntitiesInRuntimeOrder(
-        const quader_editor_core::EditorSession& session,
-        const SceneDocument& scene,
-        const ModelingObjectRuntimeMap& objectRegistry,
-        const std::vector<EntityId>& treeOrder) {
-    if (treeOrder.empty()) {
-        return {};
-    }
+std::vector<EntityId> source_mesh_entities_in_runtime_order(
+    const quader_editor_core::EditorSession &session,
+    const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
+    const std::vector<EntityId> &tree_order) {
+  if (tree_order.empty()) {
+    return {};
+  }
 
-    const std::unordered_set<EntityId> sourceMeshSet(treeOrder.begin(), treeOrder.end());
-    std::vector<EntityId> sourceMeshes;
-    sourceMeshes.reserve(treeOrder.size());
-    for (const quader_editor_core::PolygonObject& object : session.objects()) {
-        const std::optional<EntityId> entity = objectRegistry.entityForModelingObject(object.id);
-        if (entity.has_value() && sourceMeshSet.contains(*entity)) {
-            sourceMeshes.push_back(*entity);
-        }
+  const std::unordered_set<EntityId> source_mesh_set(tree_order.begin(),
+                                                     tree_order.end());
+  std::vector<EntityId> source_meshes;
+  source_meshes.reserve(tree_order.size());
+  for (const quader_editor_core::PolygonObject &object : session.objects()) {
+    const std::optional<EntityId> entity =
+        object_registry.entity_for_modeling_object(object.id);
+    if (entity.has_value() && source_mesh_set.contains(*entity)) {
+      source_meshes.push_back(*entity);
     }
-    return sourceMeshes;
+  }
+  return source_meshes;
 }
 
-std::vector<EntityId> selectedDuplicateMeshEntities(
-        const quader_editor_core::EditorSession& session,
-        const ModelingObjectRuntimeMap& objectRegistry) {
-    const std::vector<int> selectedDuplicateObjectIds = session.selected_object_ids();
-    const std::unordered_set<int> duplicateObjectSet(
-            selectedDuplicateObjectIds.begin(),
-            selectedDuplicateObjectIds.end());
-    std::vector<EntityId> duplicateMeshes;
-    duplicateMeshes.reserve(selectedDuplicateObjectIds.size());
-    for (const quader_editor_core::PolygonObject& object : session.objects()) {
-        if (!duplicateObjectSet.contains(object.id)) {
-            continue;
-        }
-        const std::optional<EntityId> entity = objectRegistry.entityForModelingObject(object.id);
-        if (entity.has_value()) {
-            duplicateMeshes.push_back(*entity);
-        }
+std::vector<EntityId> selected_duplicate_mesh_entities(
+    const quader_editor_core::EditorSession &session,
+    const ModelingObjectRuntimeMap &object_registry) {
+  const std::vector<int> selected_duplicate_object_ids =
+      session.selected_object_ids();
+  const std::unordered_set<int> duplicate_object_set(
+      selected_duplicate_object_ids.begin(),
+      selected_duplicate_object_ids.end());
+  std::vector<EntityId> duplicate_meshes;
+  duplicate_meshes.reserve(selected_duplicate_object_ids.size());
+  for (const quader_editor_core::PolygonObject &object : session.objects()) {
+    if (!duplicate_object_set.contains(object.id)) {
+      continue;
     }
-    return duplicateMeshes;
+    const std::optional<EntityId> entity =
+        object_registry.entity_for_modeling_object(object.id);
+    if (entity.has_value()) {
+      duplicate_meshes.push_back(*entity);
+    }
+  }
+  return duplicate_meshes;
 }
 
-void restoreGroupSelection(
-        DocumentCommandService& documentCommands,
-        const ModelingHierarchyDuplicateRuntime& runtime,
-        const std::vector<EntityId>& roots,
-        ModelingSelectionMode resultSelectionMode) {
-    (void)documentCommands.selectEntities(roots, roots.empty() ? InvalidEntityId : roots.front());
-    if (runtime.setSelectionMode) {
-        (void)runtime.setSelectionMode(resultSelectionMode);
-    }
+void restore_group_selection(DocumentCommandService &document_commands,
+                             const ModelingHierarchyDuplicateRuntime &runtime,
+                             const std::vector<EntityId> &roots,
+                             ModelingSelectionMode result_selection_mode) {
+  (void)document_commands.select_entities(
+      roots, roots.empty() ? kInvalidEntityId : roots.front());
+  if (runtime.set_selection_mode) {
+    (void)runtime.set_selection_mode(result_selection_mode);
+  }
 }
 
-std::unordered_map<EntityId, EntityId> pairDuplicateMeshes(
-        const std::vector<EntityId>& sourceMeshes,
-        const std::vector<EntityId>& duplicateMeshes) {
-    std::unordered_map<EntityId, EntityId> cloneBySource;
-    for (std::size_t index = 0; index < sourceMeshes.size() && index < duplicateMeshes.size(); ++index) {
-        cloneBySource[sourceMeshes[index]] = duplicateMeshes[index];
-    }
-    return cloneBySource;
+std::unordered_map<EntityId, EntityId>
+pair_duplicate_meshes(const std::vector<EntityId> &source_meshes,
+                      const std::vector<EntityId> &duplicate_meshes) {
+  std::unordered_map<EntityId, EntityId> clone_by_source;
+  for (std::size_t index = 0;
+       index < source_meshes.size() && index < duplicate_meshes.size();
+       ++index) {
+    clone_by_source[source_meshes[index]] = duplicate_meshes[index];
+  }
+  return clone_by_source;
 }
 
 } // namespace
 
-ModelingCommandResult ModelingHierarchyDuplicateService::duplicateSelectedHierarchyForGroupDrag(
-        quader_editor_core::EditorSession& session,
-        SceneDocument& scene,
-        ModelingObjectRuntimeMap& objectRegistry,
-        DocumentCommandService& documentCommands,
-        ModelingHierarchyDuplicateRuntime runtime) const {
-    return duplicateSelectedEntityHierarchy(
-            session,
-            scene,
-            objectRegistry,
-            documentCommands,
-            std::move(runtime),
-            ModelingSelectionMode::Group);
+ModelingCommandResult
+ModelingHierarchyDuplicateService::duplicate_selected_hierarchy_for_group_drag(
+    quader_editor_core::EditorSession &session, SceneDocument &scene,
+    ModelingObjectRuntimeMap &object_registry,
+    DocumentCommandService &document_commands,
+    ModelingHierarchyDuplicateRuntime runtime) const {
+  return duplicate_selected_entity_hierarchy(
+      session, scene, object_registry, document_commands, std::move(runtime),
+      ModelingSelectionMode::Group);
 }
 
-ModelingCommandResult ModelingHierarchyDuplicateService::duplicateSelectedEntityHierarchy(
-        quader_editor_core::EditorSession& session,
-        SceneDocument& scene,
-        ModelingObjectRuntimeMap& objectRegistry,
-        DocumentCommandService& documentCommands,
-        ModelingHierarchyDuplicateRuntime runtime,
-        ModelingSelectionMode resultSelectionMode) const {
-    QDR_PROFILE_FUNCTION();
-    const std::vector<EntityId> roots = documentCommandSelectedRootEntities(scene);
-    if (roots.empty()) {
-        return {.ok = false, .changed = false, .message = "Select an entity to duplicate."};
-    }
+ModelingCommandResult
+ModelingHierarchyDuplicateService::duplicate_selected_entity_hierarchy(
+    quader_editor_core::EditorSession &session, SceneDocument &scene,
+    ModelingObjectRuntimeMap &object_registry,
+    DocumentCommandService &document_commands,
+    ModelingHierarchyDuplicateRuntime runtime,
+    ModelingSelectionMode result_selection_mode) const {
+  QDR_PROFILE_FUNCTION();
+  const std::vector<EntityId> roots =
+      document_command_selected_root_entities(scene);
+  if (roots.empty()) {
+    return {.ok = false,
+            .changed = false,
+            .message = "Select an entity to duplicate."};
+  }
 
-    std::vector<EntityId> sourceMeshes;
+  std::vector<EntityId> source_meshes;
+  {
+    QDR_PROFILE_SCOPE("Duplicate collect source meshes");
+    source_meshes = source_mesh_entities_in_tree_order(scene, roots);
+  }
+  if (!source_meshes.empty()) {
+    if (runtime.ensure_scene_objects_synced) {
+      QDR_PROFILE_SCOPE("Duplicate ensure scene objects synced");
+      runtime.ensure_scene_objects_synced();
+    }
     {
-        QDR_PROFILE_SCOPE("Duplicate collect source meshes");
-        sourceMeshes = sourceMeshEntitiesInTreeOrder(scene, roots);
+      QDR_PROFILE_SCOPE("Duplicate order source meshes by runtime");
+      source_meshes = source_mesh_entities_in_runtime_order(
+          session, scene, object_registry, source_meshes);
     }
-    if (!sourceMeshes.empty()) {
-        if (runtime.ensureSceneObjectsSynced) {
-            QDR_PROFILE_SCOPE("Duplicate ensure scene objects synced");
-            runtime.ensureSceneObjectsSynced();
-        }
-        {
-            QDR_PROFILE_SCOPE("Duplicate order source meshes by runtime");
-            sourceMeshes = sourceMeshEntitiesInRuntimeOrder(session, scene, objectRegistry, sourceMeshes);
-        }
-    }
+  }
 
-    std::vector<EntityId> duplicateMeshes;
-    if (!sourceMeshes.empty()) {
-        if (!runtime.setSelectionMode || !runtime.projectObjectSelectionFromScene || !runtime.duplicateSelectedMeshes) {
-            restoreGroupSelection(documentCommands, runtime, roots, resultSelectionMode);
-            return {.ok = false, .changed = false, .message = "Modeling hierarchy duplicate runtime is unavailable."};
-        }
-
-        const ModelingCommandResult objectMode = [&]() {
-            QDR_PROFILE_SCOPE("Duplicate switch to object mode");
-            return runtime.setSelectionMode(ModelingSelectionMode::Object);
-        }();
-        if (!objectMode.ok) {
-            restoreGroupSelection(documentCommands, runtime, roots, resultSelectionMode);
-            return objectMode;
-        }
-        {
-            QDR_PROFILE_SCOPE("Duplicate select source meshes");
-            (void)documentCommands.selectEntities(sourceMeshes, sourceMeshes.front());
-        }
-        {
-            QDR_PROFILE_SCOPE("Duplicate project object selection");
-            runtime.projectObjectSelectionFromScene();
-        }
-        const ModelingCommandResult duplicate = [&]() {
-            QDR_PROFILE_SCOPE("Duplicate runtime meshes");
-            return runtime.duplicateSelectedMeshes();
-        }();
-        if (!duplicate.ok) {
-            restoreGroupSelection(documentCommands, runtime, roots, resultSelectionMode);
-            return duplicate;
-        }
-
-        {
-            QDR_PROFILE_SCOPE("Duplicate collect runtime mesh clones");
-            duplicateMeshes = selectedDuplicateMeshEntities(session, objectRegistry);
-        }
-        if (duplicateMeshes.size() != sourceMeshes.size()) {
-            restoreGroupSelection(documentCommands, runtime, roots, resultSelectionMode);
-            return {
-                    .ok = false,
-                    .changed = duplicate.changed,
-                    .message = "Group duplicate did not create matching mesh clones.",
-            };
-        }
+  std::vector<EntityId> duplicate_meshes;
+  if (!source_meshes.empty()) {
+    if (!runtime.set_selection_mode ||
+        !runtime.project_object_selection_from_scene ||
+        !runtime.duplicate_selected_meshes) {
+      restore_group_selection(document_commands, runtime, roots,
+                              result_selection_mode);
+      return {.ok = false,
+              .changed = false,
+              .message =
+                  "Modeling hierarchy duplicate runtime is unavailable."};
     }
 
-    const std::unordered_map<EntityId, EntityId> cloneBySource = pairDuplicateMeshes(sourceMeshes, duplicateMeshes);
-    const DocumentDuplicateHierarchyResult duplicated = [&]() {
-        QDR_PROFILE_SCOPE("Duplicate document hierarchy");
-        return documentCommands.duplicateHierarchyWithExistingClones(roots, cloneBySource);
+    const ModelingCommandResult object_mode = [&]() {
+      QDR_PROFILE_SCOPE("Duplicate switch to object mode");
+      return runtime.set_selection_mode(ModelingSelectionMode::Object);
     }();
-    if (!duplicated.ok || duplicated.duplicateRoots.empty()) {
-        restoreGroupSelection(documentCommands, runtime, roots, resultSelectionMode);
-        return {
-                .ok = duplicated.ok,
-                .changed = duplicated.changed,
-                .message = duplicated.message.empty() ? "Group duplicate failed." : duplicated.message,
-        };
+    if (!object_mode.ok) {
+      restore_group_selection(document_commands, runtime, roots,
+                              result_selection_mode);
+      return object_mode;
+    }
+    {
+      QDR_PROFILE_SCOPE("Duplicate select source meshes");
+      (void)document_commands.select_entities(source_meshes,
+                                              source_meshes.front());
+    }
+    {
+      QDR_PROFILE_SCOPE("Duplicate project object selection");
+      runtime.project_object_selection_from_scene();
+    }
+    const ModelingCommandResult duplicate = [&]() {
+      QDR_PROFILE_SCOPE("Duplicate runtime meshes");
+      return runtime.duplicate_selected_meshes();
+    }();
+    if (!duplicate.ok) {
+      restore_group_selection(document_commands, runtime, roots,
+                              result_selection_mode);
+      return duplicate;
     }
 
     {
-        QDR_PROFILE_SCOPE("Duplicate select duplicate roots");
-        (void)documentCommands.selectEntities(duplicated.duplicateRoots, duplicated.duplicateRoots.front());
+      QDR_PROFILE_SCOPE("Duplicate collect runtime mesh clones");
+      duplicate_meshes =
+          selected_duplicate_mesh_entities(session, object_registry);
     }
-    if (runtime.setSelectionMode) {
-        (void)runtime.setSelectionMode(resultSelectionMode);
+    if (duplicate_meshes.size() != source_meshes.size()) {
+      restore_group_selection(document_commands, runtime, roots,
+                              result_selection_mode);
+      return {
+          .ok = false,
+          .changed = duplicate.changed,
+          .message = "Group duplicate did not create matching mesh clones.",
+      };
     }
-    return {.ok = true, .changed = true, .message = "Selection duplicated."};
+  }
+
+  const std::unordered_map<EntityId, EntityId> clone_by_source =
+      pair_duplicate_meshes(source_meshes, duplicate_meshes);
+  const DocumentDuplicateHierarchyResult duplicated = [&]() {
+    QDR_PROFILE_SCOPE("Duplicate document hierarchy");
+    return document_commands.duplicate_hierarchy_with_existing_clones(
+        roots, clone_by_source);
+  }();
+  if (!duplicated.ok || duplicated.duplicate_roots.empty()) {
+    restore_group_selection(document_commands, runtime, roots,
+                            result_selection_mode);
+    return {
+        .ok = duplicated.ok,
+        .changed = duplicated.changed,
+        .message = duplicated.message.empty() ? "Group duplicate failed."
+                                              : duplicated.message,
+    };
+  }
+
+  {
+    QDR_PROFILE_SCOPE("Duplicate select duplicate roots");
+    (void)document_commands.select_entities(duplicated.duplicate_roots,
+                                            duplicated.duplicate_roots.front());
+  }
+  if (runtime.set_selection_mode) {
+    (void)runtime.set_selection_mode(result_selection_mode);
+  }
+  return {.ok = true, .changed = true, .message = "Selection duplicated."};
 }
 
 } // namespace quader

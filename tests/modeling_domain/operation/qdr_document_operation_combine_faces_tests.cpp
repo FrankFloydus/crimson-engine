@@ -17,8 +17,8 @@ TEST(QdrDocumentOperationCombineFacesTests, CombineFacesRemovesASupportEdgeBetwe
 	EXPECT_TRUE(connect_selected_edges(fixture.document, split).changed);
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
 	Selection selection;
-	selection.mode = SelectionMode::face;
-	for (const Face& face : fixture.document.faces) {
+        selection.mode = SelectionMode::Face;
+        for (const Face& face : fixture.document.faces) {
 		selection.faces.push_back(face.id);
 	}
 

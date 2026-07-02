@@ -36,8 +36,8 @@ bool catalog_has_tool(std::string_view id)
 qec::ViewportCameraState front_camera()
 {
 	qec::ViewportCameraState camera;
-	camera.projection = qec::CameraProjection::perspective;
-	camera.transform.origin = { 0.0F, 0.0F, 6.0F };
+        camera.projection = qec::CameraProjection::Perspective;
+        camera.transform.origin = { 0.0F, 0.0F, 6.0F };
 	camera.transform.x_axis = { 1.0F, 0.0F, 0.0F };
 	camera.transform.y_axis = { 0.0F, 1.0F, 0.0F };
 	camera.transform.z_axis = { 0.0F, 0.0F, 1.0F };
@@ -86,9 +86,10 @@ TEST(QdrCustomEngineModelingRuntimeSmokeTests, CustomEngineConsumerCanRunAModeli
 	duplicate_settings.explicit_offset = { { 2.0F, 0.0F, 0.0F }, true };
 
 	qec::EditorOperationCommand duplicate_command;
-	duplicate_command.operation_id = qec::EditorOperationId::duplicate_meshes;
-	duplicate_command.phase = qec::EditorOperationCommandPhase::execute;
-	duplicate_command.settings = duplicate_settings;
+        duplicate_command.operation_id =
+            qec::EditorOperationId::DuplicateMeshes;
+        duplicate_command.phase = qec::EditorOperationCommandPhase::Execute;
+        duplicate_command.settings = duplicate_settings;
 
 	const qec::EditorOperationCommandResult duplicate = qec::execute_command(session, duplicate_command);
 	EXPECT_TRUE(duplicate.command.ok);
@@ -107,8 +108,8 @@ TEST(QdrCustomEngineModelingRuntimeSmokeTests, CustomEngineConsumerCanRunAModeli
 	EXPECT_TRUE(pivot.has_value());
 
 	qec::TransformGizmoFrameInput gizmo_input;
-	gizmo_input.tool = qec::ViewportInteractionTool::move;
-	gizmo_input.has_selection = session.has_selection();
+        gizmo_input.tool = qec::ViewportInteractionTool::Move;
+        gizmo_input.has_selection = session.has_selection();
 	gizmo_input.has_pivot = true;
 	gizmo_input.pivot = *pivot;
 	gizmo_input.camera = front_camera();

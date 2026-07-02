@@ -17,53 +17,53 @@ namespace quader_editor_core {
  * Enumerates EditorRuntimeCommandId values used by the modeling layer.
  */
 enum class EditorRuntimeCommandId {
-	copy_selected_meshes,
-	paste_copied_meshes,
-	clear_selection,
-	select_all,
-	invert_selection,
-	delete_selection,
-	mark_clean,
-	undo,
-	redo,
-	clear_hover,
-	set_selection_mode,
-	set_active_tool,
-	pick_select,
-	update_insert_edge_loop_hover,
-	begin_insert_edge_loop_drag,
-	update_insert_edge_loop_drag,
-	commit_insert_edge_loop_drag,
-	cancel_insert_edge_loop,
-	activate_cut,
-	update_cut_preview,
-	set_cut_mode,
-	cancel_cut,
-	update_cut_hover,
-	click_cut,
-	begin_cut_point_drag,
-	begin_cut_line_drag,
-	end_cut_drag,
-	finalize_cut,
-	activate_mirror,
-	update_mirror_preview,
-	cancel_mirror,
-	update_mirror_hover,
-	click_mirror,
-	begin_mirror_point_drag,
-	begin_mirror_line_drag,
-	end_mirror_drag,
-	finalize_mirror,
-	mirror_axis,
-	flip_view,
-	create_box_from_bounds,
-	update_box_hover,
-	begin_box_footprint,
-	update_box_footprint,
-	begin_box_height,
-	update_box_height,
-	commit_box,
-	cancel_box,
+  CopySelectedMeshes,
+  PasteCopiedMeshes,
+  ClearSelection,
+  SelectAll,
+  InvertSelection,
+  DeleteSelection,
+  MarkClean,
+  Undo,
+  Redo,
+  ClearHover,
+  SetSelectionMode,
+  SetActiveTool,
+  PickSelect,
+  UpdateInsertEdgeLoopHover,
+  BeginInsertEdgeLoopDrag,
+  UpdateInsertEdgeLoopDrag,
+  CommitInsertEdgeLoopDrag,
+  CancelInsertEdgeLoop,
+  ActivateCut,
+  UpdateCutPreview,
+  SetCutMode,
+  CancelCut,
+  UpdateCutHover,
+  ClickCut,
+  BeginCutPointDrag,
+  BeginCutLineDrag,
+  EndCutDrag,
+  FinalizeCut,
+  ActivateMirror,
+  UpdateMirrorPreview,
+  CancelMirror,
+  UpdateMirrorHover,
+  ClickMirror,
+  BeginMirrorPointDrag,
+  BeginMirrorLineDrag,
+  EndMirrorDrag,
+  FinalizeMirror,
+  MirrorAxis,
+  FlipView,
+  CreateBoxFromBounds,
+  UpdateBoxHover,
+  BeginBoxFootprint,
+  UpdateBoxFootprint,
+  BeginBoxHeight,
+  UpdateBoxHeight,
+  CommitBox,
+  CancelBox,
 };
 
 /**
@@ -84,7 +84,7 @@ struct SetSelectionModeRuntimeCommandSettings {
  * Represents a Set Active Tool Runtime Command Settings value used by the modeling runtime domain.
  */
 struct SetActiveToolRuntimeCommandSettings {
-	ViewportInteractionTool tool = ViewportInteractionTool::select;
+  ViewportInteractionTool tool = ViewportInteractionTool::Select;
 };
 
 /**
@@ -159,14 +159,14 @@ struct MirrorPointDragRuntimeCommandSettings {
  * Represents a Mirror QAxis Runtime Command Settings value used by the modeling runtime domain.
  */
 struct MirrorAxisRuntimeCommandSettings {
-	TransformAxis axis = TransformAxis::none;
+  TransformAxis axis = TransformAxis::None;
 };
 
 /**
  * Represents a View Flip Runtime Command Settings value used by the modeling runtime domain.
  */
 struct ViewFlipRuntimeCommandSettings {
-	ViewportFlipOrientation orientation = ViewportFlipOrientation::horizontal;
+  ViewportFlipOrientation orientation = ViewportFlipOrientation::Horizontal;
 };
 
 /**
@@ -220,8 +220,9 @@ using EditorRuntimeCommandSettings = std::variant<
  * Represents an Editor Runtime Command value used by the modeling runtime domain.
  */
 struct EditorRuntimeCommand {
-	EditorRuntimeCommandId command_id = EditorRuntimeCommandId::copy_selected_meshes;
-	EditorRuntimeCommandSettings settings = std::monostate {};
+  EditorRuntimeCommandId command_id =
+      EditorRuntimeCommandId::CopySelectedMeshes;
+  EditorRuntimeCommandSettings settings = std::monostate{};
 };
 
 /**

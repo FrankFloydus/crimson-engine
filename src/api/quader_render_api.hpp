@@ -33,13 +33,15 @@ class QuaderRenderApi final {
 public:
     QuaderRenderApi(QuaderApiSession session, QuaderQueryApi& query);
 
-    [[nodiscard]] QuaderOverlayFrame selectionOverlayFrame() const;
-    [[nodiscard]] std::vector<QuaderToolPreviewMesh> toolPreviewMeshes() const;
+    [[nodiscard]] QuaderOverlayFrame selection_overlay_frame() const;
+    [[nodiscard]] std::vector<QuaderToolPreviewMesh>
+    tool_preview_meshes() const;
 
-private:
+  private:
     friend class QuaderRenderApiRuntimeAccess;
 
-    [[nodiscard]] QuaderApiVoidResult runtimeStatus(std::string message = {}) const;
+    [[nodiscard]] QuaderApiVoidResult
+    runtime_status(std::string message = {}) const;
 
     QuaderApiSession session_;
     QuaderQueryApi& query_;

@@ -47,12 +47,12 @@ public:
 
 OperationResult collapse_selected_faces_impl(Document& document, Selection& selection)
 {
-    if (selection.mode != SelectionMode::face || selection.faces.empty()) {
-        return { false, "Collapse Faces needs one or more selected faces." };
-    }
+  if (selection.mode != SelectionMode::Face || selection.faces.empty()) {
+    return {false, "Collapse Faces needs one or more selected faces."};
+  }
 
     Selection vertex_selection;
-    vertex_selection.mode = SelectionMode::vertex;
+    vertex_selection.mode = SelectionMode::Vertex;
     for (const ElementId vertex_id : selected_vertex_ids(document, selection)) {
         add_unique_id(vertex_selection.vertices, vertex_id);
     }

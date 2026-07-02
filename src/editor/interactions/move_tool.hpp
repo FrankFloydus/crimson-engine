@@ -20,8 +20,8 @@ namespace quader_editor_core {
  */
 struct MoveToolState {
 	bool active = false;
-	TransformAxis axis = TransformAxis::none;
-	quader::QVec3 world_axis;
+        TransformAxis axis = TransformAxis::None;
+        quader::QVec3 world_axis;
 	quader::QVec3 local_axis;
 	quader::QVec3 center_local;
 	quader::QVec3 center_world;
@@ -38,21 +38,21 @@ struct MoveToolState {
  * Represents a Move Begin Input value used by the modal modeling interaction layer.
  */
 struct MoveBeginInput {
-	TransformAxis axis = TransformAxis::none;
-	bool has_world_direction = false;
-	quader::QVec3 world_direction;
-	quader_poly::Transform3 model_transform;
-	quader::QVec3 center_local;
-	bool has_world_center = false;
-	quader::QVec3 world_center;
-	bool has_screen_axis = false;
-	quader::QVec2 screen_pivot;
-	quader::QVec2 screen_tip;
-	quader::QVec2 screen_position;
-	bool has_start_ray = false;
-	quader_poly::Ray start_ray;
-	bool has_camera = false;
-	quader_poly::Transform3 camera_transform;
+  TransformAxis axis = TransformAxis::None;
+  bool has_world_direction = false;
+  quader::QVec3 world_direction;
+  quader_poly::Transform3 model_transform;
+  quader::QVec3 center_local;
+  bool has_world_center = false;
+  quader::QVec3 world_center;
+  bool has_screen_axis = false;
+  quader::QVec2 screen_pivot;
+  quader::QVec2 screen_tip;
+  quader::QVec2 screen_position;
+  bool has_start_ray = false;
+  quader_poly::Ray start_ray;
+  bool has_camera = false;
+  quader_poly::Transform3 camera_transform;
 };
 
 /**

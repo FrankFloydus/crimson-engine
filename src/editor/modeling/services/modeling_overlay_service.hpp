@@ -29,34 +29,30 @@ class SelectionOverlayCache {
 public:
     void invalidate() const;
 
-    [[nodiscard]] bool matches(
-            std::uint64_t contentRevision,
-            std::uint64_t selectionRevision,
-            std::uint64_t sceneRevision,
-            quader_editor_core::SelectionMode selectionMode,
-            std::uint64_t overlaySignature,
-            const quader_editor_core::SelectionHoverState& hover) const;
+    [[nodiscard]] bool
+    matches(std::uint64_t content_revision, std::uint64_t selection_revision,
+            std::uint64_t scene_revision,
+            quader_editor_core::SelectionMode selection_mode,
+            std::uint64_t overlay_signature,
+            const quader_editor_core::SelectionHoverState &hover) const;
     [[nodiscard]] const ViewportOverlayFrame& frame() const;
-    void store(
-            ViewportOverlayFrame frame,
-            std::uint64_t contentRevision,
-            std::uint64_t selectionRevision,
-            std::uint64_t sceneRevision,
-            quader_editor_core::SelectionMode selectionMode,
-            std::uint64_t overlaySignature,
-            const quader_editor_core::SelectionHoverState& hover) const;
-    [[nodiscard]] static bool hoverMatches(
-            const quader_editor_core::SelectionHoverState& left,
-            const quader_editor_core::SelectionHoverState& right);
+    void store(ViewportOverlayFrame frame, std::uint64_t content_revision,
+               std::uint64_t selection_revision, std::uint64_t scene_revision,
+               quader_editor_core::SelectionMode selection_mode,
+               std::uint64_t overlay_signature,
+               const quader_editor_core::SelectionHoverState &hover) const;
+    [[nodiscard]] static bool
+    hover_matches(const quader_editor_core::SelectionHoverState &left,
+                  const quader_editor_core::SelectionHoverState &right);
 
-private:
+  private:
     mutable bool valid_ = false;
-    mutable std::uint64_t contentRevision_ = 0;
-    mutable std::uint64_t selectionRevision_ = 0;
-    mutable std::uint64_t sceneRevision_ = 0;
-    mutable quader_editor_core::SelectionMode selectionMode_ =
-            quader_editor_core::SelectionMode::object;
-    mutable std::uint64_t overlaySignature_ = 0;
+    mutable std::uint64_t content_revision_ = 0;
+    mutable std::uint64_t selection_revision_ = 0;
+    mutable std::uint64_t scene_revision_ = 0;
+    mutable quader_editor_core::SelectionMode selection_mode_ =
+        quader_editor_core::SelectionMode::Object;
+    mutable std::uint64_t overlay_signature_ = 0;
     mutable quader_editor_core::SelectionHoverState hover_;
     mutable ViewportOverlayFrame frame_;
 };
@@ -66,60 +62,61 @@ private:
  */
 class ModelingOverlayService {
 public:
-    [[nodiscard]] static bool hasModalOverlay(const ModelingToolStatus& status);
-    void invalidate() const;
-    [[nodiscard]] std::uint64_t selectionOverlaySignature(
-            const quader_editor_core::EditorRuntime& runtime,
-            ModelingSelectionOverlayOptions options = {}) const;
+  [[nodiscard]] static bool has_modal_overlay(const ModelingToolStatus &status);
+  void invalidate() const;
+  [[nodiscard]] std::uint64_t selection_overlay_signature(
+      const quader_editor_core::EditorRuntime &runtime,
+      ModelingSelectionOverlayOptions options = {}) const;
 
-    [[nodiscard]] bool selectionFrameMatches(
-            std::uint64_t contentRevision,
-            std::uint64_t selectionRevision,
-            std::uint64_t sceneRevision,
-            quader_editor_core::SelectionMode selectionMode,
-            std::uint64_t overlaySignature,
-            const quader_editor_core::SelectionHoverState& hover) const;
-    [[nodiscard]] const ViewportOverlayFrame& selectionFrame() const;
-    void storeSelectionFrame(
-            ViewportOverlayFrame frame,
-            std::uint64_t contentRevision,
-            std::uint64_t selectionRevision,
-            std::uint64_t sceneRevision,
-            quader_editor_core::SelectionMode selectionMode,
-            std::uint64_t overlaySignature,
-            const quader_editor_core::SelectionHoverState& hover) const;
-    [[nodiscard]] const quader_editor_core::SelectionOverlayFrame& selectionOverlayBaseFrame(
-            const quader_editor_core::EditorSession& session,
-            ModelingSelectionOverlayOptions options = {}) const;
-    [[nodiscard]] quader_editor_core::SelectionOverlayFrame selectionOverlayCurrentFrame(
-            const quader_editor_core::EditorSession& session,
-            const quader_editor_core::EditorRuntime& runtime,
-            const quader_editor_core::SelectionHoverState& hover,
-            ModelingSelectionOverlayOptions options = {}) const;
-    [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame(
-            const quader_editor_core::EditorSession& session,
-            const quader_editor_core::EditorRuntime& runtime,
-            const SceneDocument& scene,
-            const ModelingObjectRuntimeMap& objectRegistry,
-            const std::vector<quader_editor_core::PolygonObject>& previewObjects,
-            ModelingSelectionOverlayOptions options = {}) const;
-    [[nodiscard]] std::vector<ModelingToolPreviewMesh> toolPreviewMeshes(
-            const quader_editor_core::EditorRuntime& runtime,
-            const SceneDocument& scene,
-            const ModelingObjectRuntimeMap& objectRegistry,
-            const std::vector<quader_editor_core::PolygonObject>& previewObjects) const;
+  [[nodiscard]] bool selection_frame_matches(
+      std::uint64_t content_revision, std::uint64_t selection_revision,
+      std::uint64_t scene_revision,
+      quader_editor_core::SelectionMode selection_mode,
+      std::uint64_t overlay_signature,
+      const quader_editor_core::SelectionHoverState &hover) const;
+  [[nodiscard]] const ViewportOverlayFrame &selection_frame() const;
+  void store_selection_frame(
+      ViewportOverlayFrame frame, std::uint64_t content_revision,
+      std::uint64_t selection_revision, std::uint64_t scene_revision,
+      quader_editor_core::SelectionMode selection_mode,
+      std::uint64_t overlay_signature,
+      const quader_editor_core::SelectionHoverState &hover) const;
+  [[nodiscard]] const quader_editor_core::SelectionOverlayFrame &
+  selection_overlay_base_frame(
+      const quader_editor_core::EditorSession &session,
+      ModelingSelectionOverlayOptions options = {}) const;
+  [[nodiscard]] quader_editor_core::SelectionOverlayFrame
+  selection_overlay_current_frame(
+      const quader_editor_core::EditorSession &session,
+      const quader_editor_core::EditorRuntime &runtime,
+      const quader_editor_core::SelectionHoverState &hover,
+      ModelingSelectionOverlayOptions options = {}) const;
+  [[nodiscard]] ViewportOverlayFrame selection_overlay_frame(
+      const quader_editor_core::EditorSession &session,
+      const quader_editor_core::EditorRuntime &runtime,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_registry,
+      const std::vector<quader_editor_core::PolygonObject> &preview_objects,
+      ModelingSelectionOverlayOptions options = {}) const;
+  [[nodiscard]] std::vector<ModelingToolPreviewMesh>
+  tool_preview_meshes(const quader_editor_core::EditorRuntime &runtime,
+                      const SceneDocument &scene,
+                      const ModelingObjectRuntimeMap &object_registry,
+                      const std::vector<quader_editor_core::PolygonObject>
+                          &preview_objects) const;
 
 private:
     /**
      * Represents an Overlay Base Object Cache Entry value used by the modeling application service layer.
      */
     struct OverlayBaseObjectCacheEntry {
-        int objectId = -1;
-        std::uint64_t geometrySignature = 0;
-        quader_editor_core::SelectionMode selectionMode = quader_editor_core::SelectionMode::object;
-        bool selected = false;
-        quader_poly::Selection selection;
-        quader_editor_core::SelectionOverlayFrame frame;
+      int object_id = -1;
+      std::uint64_t geometry_signature = 0;
+      quader_editor_core::SelectionMode selection_mode =
+          quader_editor_core::SelectionMode::Object;
+      bool selected = false;
+      quader_poly::Selection selection;
+      quader_editor_core::SelectionOverlayFrame frame;
     };
 
     /**
@@ -127,16 +124,17 @@ private:
      */
     struct OverlayBaseCache {
         bool valid = false;
-        std::uint64_t contentRevision = 0;
-        std::uint64_t selectionRevision = 0;
-        quader_editor_core::SelectionMode selectionMode = quader_editor_core::SelectionMode::object;
-        bool suppressPersistentObjectSelection = false;
+        std::uint64_t content_revision = 0;
+        std::uint64_t selection_revision = 0;
+        quader_editor_core::SelectionMode selection_mode =
+            quader_editor_core::SelectionMode::Object;
+        bool suppress_persistent_object_selection = false;
         quader_editor_core::SelectionOverlayFrame frame;
-        std::vector<OverlayBaseObjectCacheEntry> objectEntries;
+        std::vector<OverlayBaseObjectCacheEntry> object_entries;
     };
 
-    mutable SelectionOverlayCache selectionOverlayCache_;
-    mutable OverlayBaseCache overlayBaseCache_;
+    mutable SelectionOverlayCache selection_overlay_cache_;
+    mutable OverlayBaseCache overlay_base_cache_;
 };
 
 } // namespace quader

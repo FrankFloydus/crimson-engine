@@ -25,219 +25,269 @@ struct QuaderCommandId {
     [[nodiscard]] constexpr operator std::string_view() const { return id; }
 };
 
-namespace QuaderCommand {
+namespace quader_command {
 
-inline constexpr QuaderCommandId EditUndo{"edit.undo"};
-inline constexpr QuaderCommandId EditRedo{"edit.redo"};
-inline constexpr QuaderCommandId EditRepeatLastAction{"edit.repeat_last_action"};
-inline constexpr QuaderCommandId EditClearSelection{"edit.clear_selection"};
-inline constexpr QuaderCommandId EditSelectAll{"edit.select_all"};
-inline constexpr QuaderCommandId EditInvertSelection{"edit.invert_selection"};
-inline constexpr QuaderCommandId DeleteSelection{"edit.delete"};
-inline constexpr QuaderCommandId CopySelection{"edit.copy"};
-inline constexpr QuaderCommandId PasteSelection{"edit.paste"};
-inline constexpr QuaderCommandId DuplicateSelection{"edit.duplicate"};
-inline constexpr QuaderCommandId GroupSelection{"edit.group"};
-inline constexpr QuaderCommandId UngroupSelection{"edit.ungroup"};
-inline constexpr QuaderCommandId ApplyMaterial{"edit.apply_material"};
+inline constexpr QuaderCommandId kEditUndo{"edit.undo"};
+inline constexpr QuaderCommandId kEditRedo{"edit.redo"};
+inline constexpr QuaderCommandId kEditRepeatLastAction{
+    "edit.repeat_last_action"};
+inline constexpr QuaderCommandId kEditClearSelection{"edit.clear_selection"};
+inline constexpr QuaderCommandId kEditSelectAll{"edit.select_all"};
+inline constexpr QuaderCommandId kEditInvertSelection{"edit.invert_selection"};
+inline constexpr QuaderCommandId kDeleteSelection{"edit.delete"};
+inline constexpr QuaderCommandId kCopySelection{"edit.copy"};
+inline constexpr QuaderCommandId kPasteSelection{"edit.paste"};
+inline constexpr QuaderCommandId kDuplicateSelection{"edit.duplicate"};
+inline constexpr QuaderCommandId kGroupSelection{"edit.group"};
+inline constexpr QuaderCommandId kUngroupSelection{"edit.ungroup"};
+inline constexpr QuaderCommandId kApplyMaterial{"edit.apply_material"};
 
-inline constexpr QuaderCommandId ProjectNew{"project.new"};
-inline constexpr QuaderCommandId ProjectOpen{"project.open"};
-inline constexpr QuaderCommandId ProjectSave{"project.save"};
-inline constexpr QuaderCommandId ProjectSaveAs{"project.save_as"};
+inline constexpr QuaderCommandId kProjectNew{"project.new"};
+inline constexpr QuaderCommandId kProjectOpen{"project.open"};
+inline constexpr QuaderCommandId kProjectSave{"project.save"};
+inline constexpr QuaderCommandId kProjectSaveAs{"project.save_as"};
 
-inline constexpr QuaderCommandId SceneCreatePointLight{"scene.create_point_light"};
-inline constexpr QuaderCommandId SceneCreateDirectionalLight{"scene.create_directional_light"};
+inline constexpr QuaderCommandId kSceneCreatePointLight{
+    "scene.create_point_light"};
+inline constexpr QuaderCommandId kSceneCreateDirectionalLight{
+    "scene.create_directional_light"};
 
-inline constexpr QuaderCommandId HistoryUndo{"edit.undo"};
-inline constexpr QuaderCommandId HistoryRedo{"edit.redo"};
-inline constexpr QuaderCommandId HistoryRepeatLastAction{"edit.repeat_last_action"};
+inline constexpr QuaderCommandId kHistoryUndo{"edit.undo"};
+inline constexpr QuaderCommandId kHistoryRedo{"edit.redo"};
+inline constexpr QuaderCommandId kHistoryRepeatLastAction{
+    "edit.repeat_last_action"};
 
-inline constexpr QuaderCommandId SelectionClear{"edit.clear_selection"};
-inline constexpr QuaderCommandId SelectionSelectAll{"edit.select_all"};
-inline constexpr QuaderCommandId SelectionInvert{"edit.invert_selection"};
+inline constexpr QuaderCommandId kSelectionClear{"edit.clear_selection"};
+inline constexpr QuaderCommandId kSelectionSelectAll{"edit.select_all"};
+inline constexpr QuaderCommandId kSelectionInvert{"edit.invert_selection"};
 
-inline constexpr QuaderCommandId ViewportFrameSelection{"viewport.frame_selection"};
-inline constexpr QuaderCommandId ViewportFocusOrigin{"viewport.focus_origin"};
-inline constexpr QuaderCommandId ViewportSpawnWindow{"viewport.spawn_window"};
-inline constexpr QuaderCommandId ViewportViewPerspective{"viewport.view.perspective"};
-inline constexpr QuaderCommandId ViewportViewTop{"viewport.view.top"};
-inline constexpr QuaderCommandId ViewportViewBottom{"viewport.view.bottom"};
-inline constexpr QuaderCommandId ViewportViewLeft{"viewport.view.left"};
-inline constexpr QuaderCommandId ViewportViewRight{"viewport.view.right"};
-inline constexpr QuaderCommandId ViewportViewFront{"viewport.view.front"};
-inline constexpr QuaderCommandId ViewportViewBack{"viewport.view.back"};
+inline constexpr QuaderCommandId kViewportFrameSelection{
+    "viewport.frame_selection"};
+inline constexpr QuaderCommandId kViewportFocusOrigin{"viewport.focus_origin"};
+inline constexpr QuaderCommandId kViewportSpawnWindow{"viewport.spawn_window"};
+inline constexpr QuaderCommandId kViewportViewPerspective{
+    "viewport.view.perspective"};
+inline constexpr QuaderCommandId kViewportViewTop{"viewport.view.top"};
+inline constexpr QuaderCommandId kViewportViewBottom{"viewport.view.bottom"};
+inline constexpr QuaderCommandId kViewportViewLeft{"viewport.view.left"};
+inline constexpr QuaderCommandId kViewportViewRight{"viewport.view.right"};
+inline constexpr QuaderCommandId kViewportViewFront{"viewport.view.front"};
+inline constexpr QuaderCommandId kViewportViewBack{"viewport.view.back"};
 
-inline constexpr QuaderCommandId ModelingDeleteSelection{"edit.delete"};
-inline constexpr QuaderCommandId ModelingDuplicateMeshes{"modeling.duplicate_meshes"};
-inline constexpr QuaderCommandId ModelingBridge{"modeling.bridge"};
-inline constexpr QuaderCommandId ModelingExtractFaces{"modeling.extract_faces"};
-inline constexpr QuaderCommandId ModelingDetachFaces{"modeling.detach_faces"};
-inline constexpr QuaderCommandId ModelingSnapVerticesToActive{"modeling.snap_vertices_to_active"};
-inline constexpr QuaderCommandId ModelingConnectVertices{"modeling.connect_vertices"};
-inline constexpr QuaderCommandId ModelingDissolveEdges{"modeling.dissolve_edges"};
-inline constexpr QuaderCommandId ModelingDissolveVertices{"modeling.dissolve_vertices"};
-inline constexpr QuaderCommandId ModelingBevelVertices{"modeling.bevel_vertices"};
-inline constexpr QuaderCommandId ModelingCombineMeshes{"modeling.combine_meshes"};
-inline constexpr QuaderCommandId ModelingMergeVerticesToActive{"modeling.merge_vertices_to_active"};
-inline constexpr QuaderCommandId ModelingMergeVerticesToCenter{"modeling.merge_vertices_to_center"};
-inline constexpr QuaderCommandId ModelingSnapEdgesToActive{"modeling.snap_edges_to_active"};
-inline constexpr QuaderCommandId ModelingConnectEdges{"modeling.connect_edges"};
-inline constexpr QuaderCommandId ModelingSplitEdges{"modeling.split_edges"};
-inline constexpr QuaderCommandId ModelingMergeEdges{"modeling.merge_edges"};
-inline constexpr QuaderCommandId ModelingCollapseEdges{"modeling.collapse_edges"};
-inline constexpr QuaderCommandId ModelingFillHole{"modeling.fill_hole"};
-inline constexpr QuaderCommandId ModelingCombineFaces{"modeling.combine_faces"};
-inline constexpr QuaderCommandId ModelingCollapseFaces{"modeling.collapse_faces"};
-inline constexpr QuaderCommandId ModelingRadialAlign{"modeling.radial_align"};
-inline constexpr QuaderCommandId ModelingFlipFaceNormals{"modeling.flip_face_normals"};
-inline constexpr QuaderCommandId ModelingRecalculateFaceNormals{"modeling.recalculate_face_normals"};
-inline constexpr QuaderCommandId ModelingShadeFacesSmooth{"modeling.shade_faces_smooth"};
-inline constexpr QuaderCommandId ModelingShadeFacesFlat{"modeling.shade_faces_flat"};
-inline constexpr QuaderCommandId ModelingHardenEdgeNormals{"modeling.harden_edge_normals"};
-inline constexpr QuaderCommandId ModelingSoftenEdgeNormals{"modeling.soften_edge_normals"};
-inline constexpr QuaderCommandId ModelingMirrorSelectionX{"modeling.mirror_selection_x"};
-inline constexpr QuaderCommandId ModelingMirrorSelectionY{"modeling.mirror_selection_y"};
-inline constexpr QuaderCommandId ModelingMirrorSelectionZ{"modeling.mirror_selection_z"};
-inline constexpr QuaderCommandId ModelingInvertMesh{"modeling.invert_mesh"};
-inline constexpr QuaderCommandId ModelingShadeSmoothMesh{"modeling.shade_smooth_mesh"};
-inline constexpr QuaderCommandId ModelingShadeFlatMesh{"modeling.shade_flat_mesh"};
-inline constexpr QuaderCommandId ModelingCombineMesh{"modeling.combine_mesh"};
-inline constexpr QuaderCommandId ModelingMergeVertices{"modeling.merge_vertices"};
-inline constexpr QuaderCommandId ModelingMergeVerticesAtCenter{"modeling.merge_vertices_at_center"};
-inline constexpr QuaderCommandId ModelingRadialAlignVertices{"modeling.radial_align_vertices"};
-inline constexpr QuaderCommandId ModelingBridgeEdges{"modeling.bridge_edges"};
-inline constexpr QuaderCommandId ModelingRadialAlignEdges{"modeling.radial_align_edges"};
-inline constexpr QuaderCommandId ModelingInvertFaces{"modeling.invert_faces"};
-inline constexpr QuaderCommandId ModelingBridgeFaces{"modeling.bridge_faces"};
-inline constexpr QuaderCommandId ModelingRadialAlignFaces{"modeling.radial_align_faces"};
-inline constexpr QuaderCommandId ModelingBevelEdges{"modeling.bevel_edges"};
-inline constexpr QuaderCommandId ModelingInterpolatedBridgeEdges{"modeling.interpolated_bridge_edges"};
-inline constexpr QuaderCommandId ModelingInterpolatedBridgeFaces{"modeling.interpolated_bridge_faces"};
-inline constexpr QuaderCommandId ModelingThickenFaces{"modeling.thicken_faces"};
-inline constexpr QuaderCommandId ModelingCreateOuterHull{"modeling.create_outer_hull"};
-inline constexpr QuaderCommandId ModelingSliceQuad{"modeling.slice_quad"};
-inline constexpr QuaderCommandId ModelingMergeByDistance{"modeling.merge_by_distance"};
-inline constexpr QuaderCommandId ModelingFlipHorizontal{"modeling.flip_horizontal"};
-inline constexpr QuaderCommandId ModelingFlipVertical{"modeling.flip_vertical"};
-inline constexpr QuaderCommandId ModelingApplyActiveMaterial{"edit.apply_material"};
-inline constexpr QuaderCommandId ModelingApplyActivePreview{"modeling.apply_active_preview"};
-inline constexpr QuaderCommandId ModelingCancelActivePreview{"modeling.cancel_active_preview"};
+inline constexpr QuaderCommandId kModelingDeleteSelection{"edit.delete"};
+inline constexpr QuaderCommandId kModelingDuplicateMeshes{
+    "modeling.duplicate_meshes"};
+inline constexpr QuaderCommandId kModelingBridge{"modeling.bridge"};
+inline constexpr QuaderCommandId kModelingExtractFaces{
+    "modeling.extract_faces"};
+inline constexpr QuaderCommandId kModelingDetachFaces{"modeling.detach_faces"};
+inline constexpr QuaderCommandId kModelingSnapVerticesToActive{
+    "modeling.snap_vertices_to_active"};
+inline constexpr QuaderCommandId kModelingConnectVertices{
+    "modeling.connect_vertices"};
+inline constexpr QuaderCommandId kModelingDissolveEdges{
+    "modeling.dissolve_edges"};
+inline constexpr QuaderCommandId kModelingDissolveVertices{
+    "modeling.dissolve_vertices"};
+inline constexpr QuaderCommandId kModelingBevelVertices{
+    "modeling.bevel_vertices"};
+inline constexpr QuaderCommandId kModelingCombineMeshes{
+    "modeling.combine_meshes"};
+inline constexpr QuaderCommandId kModelingMergeVerticesToActive{
+    "modeling.merge_vertices_to_active"};
+inline constexpr QuaderCommandId kModelingMergeVerticesToCenter{
+    "modeling.merge_vertices_to_center"};
+inline constexpr QuaderCommandId kModelingSnapEdgesToActive{
+    "modeling.snap_edges_to_active"};
+inline constexpr QuaderCommandId kModelingConnectEdges{
+    "modeling.connect_edges"};
+inline constexpr QuaderCommandId kModelingSplitEdges{"modeling.split_edges"};
+inline constexpr QuaderCommandId kModelingMergeEdges{"modeling.merge_edges"};
+inline constexpr QuaderCommandId kModelingCollapseEdges{
+    "modeling.collapse_edges"};
+inline constexpr QuaderCommandId kModelingFillHole{"modeling.fill_hole"};
+inline constexpr QuaderCommandId kModelingCombineFaces{
+    "modeling.combine_faces"};
+inline constexpr QuaderCommandId kModelingCollapseFaces{
+    "modeling.collapse_faces"};
+inline constexpr QuaderCommandId kModelingRadialAlign{"modeling.radial_align"};
+inline constexpr QuaderCommandId kModelingFlipFaceNormals{
+    "modeling.flip_face_normals"};
+inline constexpr QuaderCommandId kModelingRecalculateFaceNormals{
+    "modeling.recalculate_face_normals"};
+inline constexpr QuaderCommandId kModelingShadeFacesSmooth{
+    "modeling.shade_faces_smooth"};
+inline constexpr QuaderCommandId kModelingShadeFacesFlat{
+    "modeling.shade_faces_flat"};
+inline constexpr QuaderCommandId kModelingHardenEdgeNormals{
+    "modeling.harden_edge_normals"};
+inline constexpr QuaderCommandId kModelingSoftenEdgeNormals{
+    "modeling.soften_edge_normals"};
+inline constexpr QuaderCommandId kModelingMirrorSelectionX{
+    "modeling.mirror_selection_x"};
+inline constexpr QuaderCommandId kModelingMirrorSelectionY{
+    "modeling.mirror_selection_y"};
+inline constexpr QuaderCommandId kModelingMirrorSelectionZ{
+    "modeling.mirror_selection_z"};
+inline constexpr QuaderCommandId kModelingInvertMesh{"modeling.invert_mesh"};
+inline constexpr QuaderCommandId kModelingShadeSmoothMesh{
+    "modeling.shade_smooth_mesh"};
+inline constexpr QuaderCommandId kModelingShadeFlatMesh{
+    "modeling.shade_flat_mesh"};
+inline constexpr QuaderCommandId kModelingCombineMesh{"modeling.combine_mesh"};
+inline constexpr QuaderCommandId kModelingMergeVertices{
+    "modeling.merge_vertices"};
+inline constexpr QuaderCommandId kModelingMergeVerticesAtCenter{
+    "modeling.merge_vertices_at_center"};
+inline constexpr QuaderCommandId kModelingRadialAlignVertices{
+    "modeling.radial_align_vertices"};
+inline constexpr QuaderCommandId kModelingBridgeEdges{"modeling.bridge_edges"};
+inline constexpr QuaderCommandId kModelingRadialAlignEdges{
+    "modeling.radial_align_edges"};
+inline constexpr QuaderCommandId kModelingInvertFaces{"modeling.invert_faces"};
+inline constexpr QuaderCommandId kModelingBridgeFaces{"modeling.bridge_faces"};
+inline constexpr QuaderCommandId kModelingRadialAlignFaces{
+    "modeling.radial_align_faces"};
+inline constexpr QuaderCommandId kModelingBevelEdges{"modeling.bevel_edges"};
+inline constexpr QuaderCommandId kModelingInterpolatedBridgeEdges{
+    "modeling.interpolated_bridge_edges"};
+inline constexpr QuaderCommandId kModelingInterpolatedBridgeFaces{
+    "modeling.interpolated_bridge_faces"};
+inline constexpr QuaderCommandId kModelingThickenFaces{
+    "modeling.thicken_faces"};
+inline constexpr QuaderCommandId kModelingCreateOuterHull{
+    "modeling.create_outer_hull"};
+inline constexpr QuaderCommandId kModelingSliceQuad{"modeling.slice_quad"};
+inline constexpr QuaderCommandId kModelingMergeByDistance{
+    "modeling.merge_by_distance"};
+inline constexpr QuaderCommandId kModelingFlipHorizontal{
+    "modeling.flip_horizontal"};
+inline constexpr QuaderCommandId kModelingFlipVertical{
+    "modeling.flip_vertical"};
+inline constexpr QuaderCommandId kModelingApplyActiveMaterial{
+    "edit.apply_material"};
+inline constexpr QuaderCommandId kModelingApplyActivePreview{
+    "modeling.apply_active_preview"};
+inline constexpr QuaderCommandId kModelingCancelActivePreview{
+    "modeling.cancel_active_preview"};
 
-inline constexpr QuaderCommandId ToolsActivateSelect{"tools.activate.select"};
-inline constexpr QuaderCommandId ToolsActivateMove{"tools.activate.move"};
-inline constexpr QuaderCommandId ToolsActivateExtend{"tools.activate.extend"};
-inline constexpr QuaderCommandId ToolsActivateRotate{"tools.activate.rotate"};
-inline constexpr QuaderCommandId ToolsActivateScale{"tools.activate.scale"};
-inline constexpr QuaderCommandId ToolsActivateBox{"tools.activate.box"};
-inline constexpr QuaderCommandId ToolsActivateExtrude{"tools.activate.extrude"};
-inline constexpr QuaderCommandId ToolsActivateInsertEdgeLoop{"tools.activate.insert_edge_loop"};
-inline constexpr QuaderCommandId ToolsActivateKnife{"tools.activate.knife"};
-inline constexpr QuaderCommandId ToolsActivateCut{"tools.activate.cut"};
-inline constexpr QuaderCommandId ToolsActivatePoly{"tools.activate.poly"};
-inline constexpr QuaderCommandId ToolsActivateMirror{"tools.activate.mirror"};
+inline constexpr QuaderCommandId kToolsActivateSelect{"tools.activate.select"};
+inline constexpr QuaderCommandId kToolsActivateMove{"tools.activate.move"};
+inline constexpr QuaderCommandId kToolsActivateExtend{"tools.activate.extend"};
+inline constexpr QuaderCommandId kToolsActivateRotate{"tools.activate.rotate"};
+inline constexpr QuaderCommandId kToolsActivateScale{"tools.activate.scale"};
+inline constexpr QuaderCommandId kToolsActivateBox{"tools.activate.box"};
+inline constexpr QuaderCommandId kToolsActivateExtrude{
+    "tools.activate.extrude"};
+inline constexpr QuaderCommandId kToolsActivateInsertEdgeLoop{
+    "tools.activate.insert_edge_loop"};
+inline constexpr QuaderCommandId kToolsActivateKnife{"tools.activate.knife"};
+inline constexpr QuaderCommandId kToolsActivateCut{"tools.activate.cut"};
+inline constexpr QuaderCommandId kToolsActivatePoly{"tools.activate.poly"};
+inline constexpr QuaderCommandId kToolsActivateMirror{"tools.activate.mirror"};
 
-inline constexpr QuaderCommandId TypedCommandIds[] = {
-        EditUndo,
-        EditRedo,
-        EditRepeatLastAction,
-        EditClearSelection,
-        EditSelectAll,
-        EditInvertSelection,
-        DeleteSelection,
-        CopySelection,
-        PasteSelection,
-        DuplicateSelection,
-        GroupSelection,
-        UngroupSelection,
-        ApplyMaterial,
-        ProjectNew,
-        ProjectOpen,
-        ProjectSave,
-        ProjectSaveAs,
-        SceneCreatePointLight,
-        SceneCreateDirectionalLight,
-        ViewportFrameSelection,
-        ViewportFocusOrigin,
-        ViewportSpawnWindow,
-        ViewportViewPerspective,
-        ViewportViewTop,
-        ViewportViewBottom,
-        ViewportViewLeft,
-        ViewportViewRight,
-        ViewportViewFront,
-        ViewportViewBack,
-        ModelingDuplicateMeshes,
-        ModelingBridge,
-        ModelingExtractFaces,
-        ModelingDetachFaces,
-        ModelingSnapVerticesToActive,
-        ModelingConnectVertices,
-        ModelingDissolveEdges,
-        ModelingDissolveVertices,
-        ModelingBevelVertices,
-        ModelingCombineMeshes,
-        ModelingMergeVerticesToActive,
-        ModelingMergeVerticesToCenter,
-        ModelingSnapEdgesToActive,
-        ModelingConnectEdges,
-        ModelingSplitEdges,
-        ModelingMergeEdges,
-        ModelingCollapseEdges,
-        ModelingFillHole,
-        ModelingCombineFaces,
-        ModelingCollapseFaces,
-        ModelingRadialAlign,
-        ModelingFlipFaceNormals,
-        ModelingRecalculateFaceNormals,
-        ModelingShadeFacesSmooth,
-        ModelingShadeFacesFlat,
-        ModelingHardenEdgeNormals,
-        ModelingSoftenEdgeNormals,
-        ModelingMirrorSelectionX,
-        ModelingMirrorSelectionY,
-        ModelingMirrorSelectionZ,
-        ModelingInvertMesh,
-        ModelingShadeSmoothMesh,
-        ModelingShadeFlatMesh,
-        ModelingCombineMesh,
-        ModelingMergeVertices,
-        ModelingMergeVerticesAtCenter,
-        ModelingRadialAlignVertices,
-        ModelingBridgeEdges,
-        ModelingRadialAlignEdges,
-        ModelingInvertFaces,
-        ModelingBridgeFaces,
-        ModelingRadialAlignFaces,
-        ModelingBevelEdges,
-        ModelingInterpolatedBridgeEdges,
-        ModelingInterpolatedBridgeFaces,
-        ModelingThickenFaces,
-        ModelingCreateOuterHull,
-        ModelingSliceQuad,
-        ModelingMergeByDistance,
-        ModelingFlipHorizontal,
-        ModelingFlipVertical,
-        ModelingApplyActivePreview,
-        ModelingCancelActivePreview,
-        ToolsActivateSelect,
-        ToolsActivateMove,
-        ToolsActivateExtend,
-        ToolsActivateRotate,
-        ToolsActivateScale,
-        ToolsActivateBox,
-        ToolsActivateExtrude,
-        ToolsActivateInsertEdgeLoop,
-        ToolsActivateKnife,
-        ToolsActivateCut,
-        ToolsActivatePoly,
-        ToolsActivateMirror,
+inline constexpr QuaderCommandId kTypedCommandIds[] = {
+    kEditUndo,
+    kEditRedo,
+    kEditRepeatLastAction,
+    kEditClearSelection,
+    kEditSelectAll,
+    kEditInvertSelection,
+    kDeleteSelection,
+    kCopySelection,
+    kPasteSelection,
+    kDuplicateSelection,
+    kGroupSelection,
+    kUngroupSelection,
+    kApplyMaterial,
+    kProjectNew,
+    kProjectOpen,
+    kProjectSave,
+    kProjectSaveAs,
+    kSceneCreatePointLight,
+    kSceneCreateDirectionalLight,
+    kViewportFrameSelection,
+    kViewportFocusOrigin,
+    kViewportSpawnWindow,
+    kViewportViewPerspective,
+    kViewportViewTop,
+    kViewportViewBottom,
+    kViewportViewLeft,
+    kViewportViewRight,
+    kViewportViewFront,
+    kViewportViewBack,
+    kModelingDuplicateMeshes,
+    kModelingBridge,
+    kModelingExtractFaces,
+    kModelingDetachFaces,
+    kModelingSnapVerticesToActive,
+    kModelingConnectVertices,
+    kModelingDissolveEdges,
+    kModelingDissolveVertices,
+    kModelingBevelVertices,
+    kModelingCombineMeshes,
+    kModelingMergeVerticesToActive,
+    kModelingMergeVerticesToCenter,
+    kModelingSnapEdgesToActive,
+    kModelingConnectEdges,
+    kModelingSplitEdges,
+    kModelingMergeEdges,
+    kModelingCollapseEdges,
+    kModelingFillHole,
+    kModelingCombineFaces,
+    kModelingCollapseFaces,
+    kModelingRadialAlign,
+    kModelingFlipFaceNormals,
+    kModelingRecalculateFaceNormals,
+    kModelingShadeFacesSmooth,
+    kModelingShadeFacesFlat,
+    kModelingHardenEdgeNormals,
+    kModelingSoftenEdgeNormals,
+    kModelingMirrorSelectionX,
+    kModelingMirrorSelectionY,
+    kModelingMirrorSelectionZ,
+    kModelingInvertMesh,
+    kModelingShadeSmoothMesh,
+    kModelingShadeFlatMesh,
+    kModelingCombineMesh,
+    kModelingMergeVertices,
+    kModelingMergeVerticesAtCenter,
+    kModelingRadialAlignVertices,
+    kModelingBridgeEdges,
+    kModelingRadialAlignEdges,
+    kModelingInvertFaces,
+    kModelingBridgeFaces,
+    kModelingRadialAlignFaces,
+    kModelingBevelEdges,
+    kModelingInterpolatedBridgeEdges,
+    kModelingInterpolatedBridgeFaces,
+    kModelingThickenFaces,
+    kModelingCreateOuterHull,
+    kModelingSliceQuad,
+    kModelingMergeByDistance,
+    kModelingFlipHorizontal,
+    kModelingFlipVertical,
+    kModelingApplyActivePreview,
+    kModelingCancelActivePreview,
+    kToolsActivateSelect,
+    kToolsActivateMove,
+    kToolsActivateExtend,
+    kToolsActivateRotate,
+    kToolsActivateScale,
+    kToolsActivateBox,
+    kToolsActivateExtrude,
+    kToolsActivateInsertEdgeLoop,
+    kToolsActivateKnife,
+    kToolsActivateCut,
+    kToolsActivatePoly,
+    kToolsActivateMirror,
 };
 
-[[nodiscard]] inline constexpr std::span<const QuaderCommandId> typedCommandIds() {
-    return std::span<const QuaderCommandId>{TypedCommandIds};
+[[nodiscard]] inline constexpr std::span<const QuaderCommandId>
+typed_command_ids() {
+  return std::span<const QuaderCommandId>{kTypedCommandIds};
 }
 
-} // namespace QuaderCommand
+} // namespace quader_command
 
 } // namespace quader

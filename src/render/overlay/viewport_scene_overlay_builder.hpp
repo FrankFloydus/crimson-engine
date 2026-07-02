@@ -19,21 +19,19 @@ class SceneDocument;
  */
 class ViewportSceneOverlayBuilder final {
 public:
-    [[nodiscard]] static ViewportOverlayFrame buildSelectionFrame(
-            ViewportOverlayFrame baseFrame,
-            const SceneDocument& document,
-            const AssetRegistry& assets);
-    [[nodiscard]] static ViewportOverlayFrame buildWireframeFrame(
-            ViewportOverlayFrame baseFrame,
-            ModelingSelectionMode selectionMode,
-            const SceneDocument& document,
-            const AssetRegistry& assets);
-    [[nodiscard]] static ViewportOverlayFrame stripPersistentObjectSelection(
-            ViewportOverlayFrame frame,
-            ModelingSelectionMode selectionMode);
-    [[nodiscard]] static ViewportOverlayFrame stripWireframeSelectionFills(
-            ViewportOverlayFrame frame,
-            ModelingSelectionMode selectionMode);
+  [[nodiscard]] static ViewportOverlayFrame
+  build_selection_frame(ViewportOverlayFrame base_frame,
+                        const SceneDocument &document,
+                        const AssetRegistry &assets);
+  [[nodiscard]] static ViewportOverlayFrame build_wireframe_frame(
+      ViewportOverlayFrame base_frame, ModelingSelectionMode selection_mode,
+      const SceneDocument &document, const AssetRegistry &assets);
+  [[nodiscard]] static ViewportOverlayFrame
+  strip_persistent_object_selection(ViewportOverlayFrame frame,
+                                    ModelingSelectionMode selection_mode);
+  [[nodiscard]] static ViewportOverlayFrame
+  strip_wireframe_selection_fills(ViewportOverlayFrame frame,
+                                  ModelingSelectionMode selection_mode);
 };
 
 } // namespace quader

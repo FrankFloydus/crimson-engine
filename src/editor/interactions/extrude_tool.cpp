@@ -49,10 +49,14 @@ int clamp_cut_count(int value, int maximum)
 
 int max_cut_count_for_distance(double distance, bool grid_enabled, double grid_size)
 {
-	if (std::abs(distance) <= min_extrude_distance || !grid_enabled || grid_size <= min_extrude_distance) {
-		return 0;
-	}
-	return std::max(0, static_cast<int>(std::floor((std::abs(distance) + min_extrude_distance) / grid_size)) - 1);
+  if (std::abs(distance) <= kMinExtrudeDistance || !grid_enabled ||
+      grid_size <= kMinExtrudeDistance) {
+    return 0;
+  }
+  return std::max(0,
+                  static_cast<int>(std::floor(
+                      (std::abs(distance) + kMinExtrudeDistance) / grid_size)) -
+                      1);
 }
 
 ExtrudeStateResult extrude_result(const ExtrudeToolState& state, ExtrudeToolStatus status)
@@ -67,8 +71,8 @@ class ExtrudeTool final : public EditorTool {
 public:
 	[[nodiscard]] ViewportInteractionTool tool_id() const override
 	{
-		return ViewportInteractionTool::extrude;
-	}
+          return ViewportInteractionTool::Extrude;
+        }
 
 	[[nodiscard]] std::string_view id() const override
 	{
@@ -92,8 +96,11 @@ public:
 		state.active = true;
 		state.source_object_id = input.source_object_id;
 		state.source_face_index = input.source_face_index;
-		state.face_normal = vec3_is_tiny(input.face_normal, min_extrude_distance) ? quader::QVec3() : normalized_axis(input.face_normal);
-		state.face_vertices = input.face_vertices;
+                state.face_normal =
+                    vec3_is_tiny(input.face_normal, kMinExtrudeDistance)
+                        ? quader::QVec3()
+                        : normalized_axis(input.face_normal);
+                state.face_vertices = input.face_vertices;
 		state.face_vertex_indices = input.face_vertex_indices;
 		state.face_center = input.face_center;
 		state.screen_axis = vec2_normalize_or(input.screen_axis, { 0.0F, 1.0F });
@@ -104,16 +111,19 @@ public:
 	{
 		double snapped = precision ? distance * 0.25 : distance;
 		if (grid_enabled) {
-			const double grid = safe_grid_size(grid_size, min_extrude_distance);
-			snapped = std::round(snapped / grid) * grid;
+                  const double grid =
+                      safe_grid_size(grid_size, kMinExtrudeDistance);
+                  snapped = std::round(snapped / grid) * grid;
 		}
 		return snapped;
 	}
 
 	[[nodiscard]] double extrude_distance_for_drag_pixels(double pixels, bool precision, bool grid_enabled, double grid_size) const
 	{
-		return snap_extrude_distance((pixels / extrude_pixels_per_grid_step) * grid_size, precision, grid_enabled, grid_size);
-	}
+          return snap_extrude_distance((pixels / kExtrudePixelsPerGridStep) *
+                                           grid_size,
+                                       precision, grid_enabled, grid_size);
+        }
 
 	[[nodiscard]] ExtrudeStateResult set_extrude_preview_distance(ExtrudeToolState& state, double distance, bool grid_enabled, double grid_size) const
 	{
@@ -123,8 +133,12 @@ public:
 		state.preview_distance = distance;
 		state.max_cut_count = max_cut_count_for_distance(state.preview_distance, grid_enabled, grid_size);
 		state.requested_cut_count = clamp_cut_count(state.requested_cut_count, state.max_cut_count);
-		state.active_cut_count = std::abs(state.preview_distance) > min_extrude_distance && grid_enabled ? state.requested_cut_count : 0;
-		return extrude_result(state, ok_status());
+                state.active_cut_count =
+                    std::abs(state.preview_distance) > kMinExtrudeDistance &&
+                            grid_enabled
+                        ? state.requested_cut_count
+                        : 0;
+                return extrude_result(state, ok_status());
 	}
 
 	[[nodiscard]] ExtrudeStateResult preview_extrude_from_distance(ExtrudeToolState& state, double distance, bool precision, bool grid_enabled, double grid_size) const
@@ -152,27 +166,30 @@ public:
 		const int previous = state.requested_cut_count;
 		state.max_cut_count = max_cut_count_for_distance(state.preview_distance, grid_enabled, grid_size);
 		state.requested_cut_count = clamp_cut_count(state.requested_cut_count + delta, state.max_cut_count);
-		state.active_cut_count = std::abs(state.preview_distance) > min_extrude_distance ? state.requested_cut_count : 0;
-		return extrude_result(state, ok_status(state.requested_cut_count != previous));
+                state.active_cut_count =
+                    std::abs(state.preview_distance) > kMinExtrudeDistance
+                        ? state.requested_cut_count
+                        : 0;
+                return extrude_result(state, ok_status(state.requested_cut_count != previous));
 	}
 
 	[[nodiscard]] double extrude_axis_distance_from_ray(const ExtrudeToolState& state, const quader_poly::Transform3& model_transform, const quader_poly::Ray& world_ray) const
 	{
-		if (!state.active || vec3_is_tiny(state.face_normal, min_extrude_distance) || vec3_is_tiny(world_ray.direction, min_extrude_distance)) {
-			return std::numeric_limits<double>::infinity();
-		}
-		const quader::QVec3 local_ray_origin = inverse_transform_point(model_transform, world_ray.origin);
+          if (!state.active ||
+              vec3_is_tiny(state.face_normal, kMinExtrudeDistance) ||
+              vec3_is_tiny(world_ray.direction, kMinExtrudeDistance)) {
+            return std::numeric_limits<double>::infinity();
+          }
+                const quader::QVec3 local_ray_origin = inverse_transform_point(model_transform, world_ray.origin);
 		quader::QVec3 local_ray_dir = inverse_transform_vector(model_transform, world_ray.direction);
-		if (vec3_is_tiny(local_ray_dir, min_extrude_distance)) {
-			return std::numeric_limits<double>::infinity();
-		}
-		const DragDistanceResult distance = axis_distance_from_ray(
-				state.face_normal,
-				state.face_center,
-				{ local_ray_origin, local_ray_dir },
-				screen_epsilon,
-				min_extrude_distance);
-		return distance.ok ? distance.distance : std::numeric_limits<double>::infinity();
+                if (vec3_is_tiny(local_ray_dir, kMinExtrudeDistance)) {
+                  return std::numeric_limits<double>::infinity();
+                }
+                const DragDistanceResult distance =
+                    axis_distance_from_ray(state.face_normal, state.face_center,
+                                           {local_ray_origin, local_ray_dir},
+                                           kScreenEpsilon, kMinExtrudeDistance);
+                return distance.ok ? distance.distance : std::numeric_limits<double>::infinity();
 	}
 
 	[[nodiscard]] quader::QVec3 extrude_face_center_for_vertices(const std::vector<quader::QVec3>& vertices) const
@@ -205,17 +222,17 @@ public:
 		descriptor.max_cut_count = state.max_cut_count;
 		descriptor.requested_cut_count = state.requested_cut_count;
 		descriptor.select_source = true;
-		if (std::abs(state.preview_distance) <= min_extrude_distance) {
-			descriptor.preview_mode = ExtrudePreviewMode::zero;
-			descriptor.clear_preview_meshes = true;
-		} else if (state.preview_distance > min_extrude_distance) {
-			descriptor.preview_mode = ExtrudePreviewMode::positive;
-			descriptor.clear_preview_meshes = false;
-		} else {
-			descriptor.preview_mode = ExtrudePreviewMode::negative;
-			descriptor.clear_preview_meshes = true;
-		}
-		return descriptor;
+                if (std::abs(state.preview_distance) <= kMinExtrudeDistance) {
+                  descriptor.preview_mode = ExtrudePreviewMode::Zero;
+                  descriptor.clear_preview_meshes = true;
+                } else if (state.preview_distance > kMinExtrudeDistance) {
+                  descriptor.preview_mode = ExtrudePreviewMode::Positive;
+                  descriptor.clear_preview_meshes = false;
+                } else {
+                  descriptor.preview_mode = ExtrudePreviewMode::Negative;
+                  descriptor.clear_preview_meshes = true;
+                }
+                return descriptor;
 	}
 
 	[[nodiscard]] ExtrudePreviewStatus extrude_preview_status(const ExtrudeToolState& state, bool grid_enabled) const
@@ -224,8 +241,9 @@ public:
 		descriptor.ok = state.active;
 		descriptor.status_action = state.preview_distance >= 0.0 ? "Extrude" : "Reduce";
 		descriptor.status_distance = std::abs(state.preview_distance);
-		descriptor.show_cut_status = std::abs(state.preview_distance) > min_extrude_distance;
-		descriptor.active_cut_count = state.active_cut_count;
+                descriptor.show_cut_status =
+                    std::abs(state.preview_distance) > kMinExtrudeDistance;
+                descriptor.active_cut_count = state.active_cut_count;
 		descriptor.max_cut_count = state.max_cut_count;
 		descriptor.grid_enabled = grid_enabled;
 		descriptor.preview_valid = state.preview_valid;
@@ -240,8 +258,8 @@ public:
 
 const ExtrudeTool& extrude_tool_impl()
 {
-	static const ExtrudeTool tool;
-	return tool;
+  static const ExtrudeTool kTool;
+  return kTool;
 }
 
 } // namespace

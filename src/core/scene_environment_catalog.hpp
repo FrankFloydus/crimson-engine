@@ -17,10 +17,10 @@ namespace quader {
  */
 struct SceneEnvironmentDescriptor {
     std::string_view id;
-    std::string_view labelKey;
-    std::string_view fallbackLabel;
+    std::string_view label_key;
+    std::string_view fallback_label;
     std::string_view directory;
-    std::string_view fileStem;
+    std::string_view file_stem;
 };
 
 inline constexpr std::string_view kDefaultSceneEnvironmentId = "lightroom_14b";
@@ -32,17 +32,19 @@ inline constexpr std::array<SceneEnvironmentDescriptor, 4> kSceneEnvironmentCata
         {"venetian_crossroads_2k", "ui.inspector.environment.venetian_crossroads_2k", "Venetian Crossroads 2K", "venetian_crossroads_2k", "venetian_crossroads_2k"},
 }};
 
-inline std::span<const SceneEnvironmentDescriptor> sceneEnvironmentCatalog() {
-    return kSceneEnvironmentCatalog;
+inline std::span<const SceneEnvironmentDescriptor> scene_environment_catalog() {
+  return kSceneEnvironmentCatalog;
 }
 
-inline const SceneEnvironmentDescriptor* sceneEnvironmentDescriptor(std::string_view id) {
-    for (const SceneEnvironmentDescriptor& descriptor : kSceneEnvironmentCatalog) {
-        if (descriptor.id == id) {
-            return &descriptor;
-        }
+inline const SceneEnvironmentDescriptor *
+scene_environment_descriptor(std::string_view id) {
+  for (const SceneEnvironmentDescriptor &descriptor :
+       kSceneEnvironmentCatalog) {
+    if (descriptor.id == id) {
+      return &descriptor;
     }
-    return nullptr;
+  }
+  return nullptr;
 }
 
 } // namespace quader

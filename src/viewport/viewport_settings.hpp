@@ -114,7 +114,7 @@ inline constexpr std::size_t kViewportBoolSettingCount =
 struct ViewportSettingsSectionDescriptor {
     ViewportSettingsSectionId id = ViewportSettingsSectionId::Grid;
     std::string_view label;
-    bool defaultExpanded = false;
+    bool default_expanded = false;
 };
 
 /**
@@ -125,7 +125,7 @@ struct ViewportColorSettingDescriptor {
     ViewportSettingsSectionId section = ViewportSettingsSectionId::Grid;
     std::string_view label;
     std::string_view key;
-    ViewportSettingColor defaultValue;
+    ViewportSettingColor default_value;
 };
 
 /**
@@ -138,7 +138,7 @@ struct ViewportFloatSettingDescriptor {
     std::string_view key;
     float minimum = 0.0f;
     float maximum = 1.0f;
-    float defaultValue = 0.0f;
+    float default_value = 0.0f;
 };
 
 /**
@@ -149,16 +149,22 @@ struct ViewportBoolSettingDescriptor {
     ViewportSettingsSectionId section = ViewportSettingsSectionId::Grid;
     std::string_view label;
     std::string_view key;
-    bool defaultValue = false;
+    bool default_value = false;
 };
 
-const std::array<ViewportSettingsSectionDescriptor, kViewportSettingsSectionCount>& viewportSettingsSections();
-const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount>& viewportColorSettings();
-const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount>& viewportFloatSettings();
-const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount>& viewportBoolSettings();
+const std::array<ViewportSettingsSectionDescriptor,
+                 kViewportSettingsSectionCount> &
+viewport_settings_sections();
+const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> &
+viewport_color_settings();
+const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> &
+viewport_float_settings();
+const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> &
+viewport_bool_settings();
 
-bool viewportGridSnapActive(const ViewportSettings& settings, bool temporaryTogglePressed);
-float viewportVertexSnapRadius(const ViewportSettings& settings);
+bool viewport_grid_snap_active(const ViewportSettings &settings,
+                               bool temporary_toggle_pressed);
+float viewport_vertex_snap_radius(const ViewportSettings &settings);
 
 /**
  * Owns Viewport Settings behavior within the viewport input, layout, and camera layer.
@@ -171,18 +177,18 @@ public:
     static ViewportSettings load(const std::filesystem::path& path);
 
     bool save(const std::filesystem::path& path) const;
-    void resetToDefaults();
+    void reset_to_defaults();
 
     ViewportSettingColor color(ViewportColorSettingId id) const;
-    bool setColor(ViewportColorSettingId id, ViewportSettingColor value);
+    bool set_color(ViewportColorSettingId id, ViewportSettingColor value);
 
-    float floatValue(ViewportFloatSettingId id) const;
-    bool setFloatValue(ViewportFloatSettingId id, float value);
+    float float_value(ViewportFloatSettingId id) const;
+    bool set_float_value(ViewportFloatSettingId id, float value);
 
-    bool boolValue(ViewportBoolSettingId id) const;
-    bool setBoolValue(ViewportBoolSettingId id, bool value);
+    bool bool_value(ViewportBoolSettingId id) const;
+    bool set_bool_value(ViewportBoolSettingId id, bool value);
 
-private:
+  private:
     std::array<ViewportSettingColor, kViewportColorSettingCount> colors_{};
     std::array<float, kViewportFloatSettingCount> floats_{};
     std::array<bool, kViewportBoolSettingCount> bools_{};

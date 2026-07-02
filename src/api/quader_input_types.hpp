@@ -164,7 +164,7 @@ struct QuaderInputChord {
     bool alt = false;
     QuaderInputDevice device = QuaderInputDevice::None;
     QuaderKeyCode key = QuaderKeyCode::None;
-    QuaderMouseButton mouseButton = QuaderMouseButton::None;
+    QuaderMouseButton mouse_button = QuaderMouseButton::None;
     QuaderInputGesture gesture = QuaderInputGesture::Press;
 
     [[nodiscard]] bool empty() const {
@@ -172,26 +172,23 @@ struct QuaderInputChord {
             return key == QuaderKeyCode::None;
         }
         if (device == QuaderInputDevice::Mouse) {
-            return gesture == QuaderInputGesture::Wheel ||
-                    gesture == QuaderInputGesture::WheelUp ||
-                    gesture == QuaderInputGesture::WheelDown ||
-                    gesture == QuaderInputGesture::WheelLeft ||
-                    gesture == QuaderInputGesture::WheelRight
-                    ? false
-                    : mouseButton == QuaderMouseButton::None;
+          return gesture == QuaderInputGesture::Wheel ||
+                         gesture == QuaderInputGesture::WheelUp ||
+                         gesture == QuaderInputGesture::WheelDown ||
+                         gesture == QuaderInputGesture::WheelLeft ||
+                         gesture == QuaderInputGesture::WheelRight
+                     ? false
+                     : mouse_button == QuaderMouseButton::None;
         }
         return true;
     }
 };
 
 inline bool operator==(const QuaderInputChord& left, const QuaderInputChord& right) {
-    return left.primary == right.primary &&
-            left.shift == right.shift &&
-            left.alt == right.alt &&
-            left.device == right.device &&
-            left.key == right.key &&
-            left.mouseButton == right.mouseButton &&
-            left.gesture == right.gesture;
+  return left.primary == right.primary && left.shift == right.shift &&
+         left.alt == right.alt && left.device == right.device &&
+         left.key == right.key && left.mouse_button == right.mouse_button &&
+         left.gesture == right.gesture;
 }
 
 } // namespace quader

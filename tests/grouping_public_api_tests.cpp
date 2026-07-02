@@ -23,726 +23,811 @@ using quader::test::BehaviorScenario;
 
 constexpr float kHalfPi = 1.57079632679f;
 
-QuaderBounds unitBoxBounds() {
-    return {.min = {-0.5f, -0.5f, -0.5f}, .max = {0.5f, 0.5f, 0.5f}};
+QuaderBounds unit_box_bounds() {
+  return {.min = {-0.5f, -0.5f, -0.5f}, .max = {0.5f, 0.5f, 0.5f}};
 }
 
-QuaderTransform transformAt(QVec3 position) {
-    QuaderTransform transform;
-    transform.position = position;
-    return transform;
+QuaderTransform transform_at(QVec3 position) {
+  QuaderTransform transform;
+  transform.position = position;
+  return transform;
 }
 
-void givenBoxAt(BehaviorScenario& scenario, std::string_view alias, std::string name, QVec3 position) {
-    scenario.given().box(alias, unitBoxBounds(), std::move(name));
-    scenario.given().transform(alias, transformAt(position));
+void given_box_at(BehaviorScenario &scenario, std::string_view alias,
+                  std::string name, QVec3 position) {
+  scenario.given().box(alias, unit_box_bounds(), std::move(name));
+  scenario.given().transform(alias, transform_at(position));
 }
 
-AssetId createTexturedMaterial(BehaviorScenario& scenario, std::string name, QVec3 color) {
-    QuaderTextureAsset baseColor;
-    baseColor.name = name + " Base";
-    baseColor.usage = QuaderTextureUsage::BaseColor;
-    baseColor.width = 4;
-    baseColor.height = 4;
-    baseColor.generated = true;
-    const QuaderApiResult<QuaderAssetRef> baseTexture = scenario.api().assets().addTexture(std::move(baseColor));
-    EXPECT_TRUE(baseTexture.ok()) << baseTexture.errorMessage();
+AssetId create_textured_material(BehaviorScenario &scenario, std::string name,
+                                 QVec3 color) {
+  QuaderTextureAsset base_color;
+  base_color.name = name + " Base";
+  base_color.usage = QuaderTextureUsage::BaseColor;
+  base_color.width = 4;
+  base_color.height = 4;
+  base_color.generated = true;
+  const QuaderApiResult<QuaderAssetRef> base_texture =
+      scenario.api().assets().add_texture(std::move(base_color));
+  EXPECT_TRUE(base_texture.ok()) << base_texture.error_message();
 
-    QuaderTextureAsset roughness;
-    roughness.name = name + " Roughness";
-    roughness.usage = QuaderTextureUsage::Roughness;
-    roughness.colorSpace = QuaderTextureColorSpace::Linear;
-    roughness.width = 4;
-    roughness.height = 4;
-    roughness.generated = true;
-    const QuaderApiResult<QuaderAssetRef> roughnessTexture = scenario.api().assets().addTexture(std::move(roughness));
-    EXPECT_TRUE(roughnessTexture.ok()) << roughnessTexture.errorMessage();
+  QuaderTextureAsset roughness;
+  roughness.name = name + " Roughness";
+  roughness.usage = QuaderTextureUsage::Roughness;
+  roughness.color_space = QuaderTextureColorSpace::Linear;
+  roughness.width = 4;
+  roughness.height = 4;
+  roughness.generated = true;
+  const QuaderApiResult<QuaderAssetRef> roughness_texture =
+      scenario.api().assets().add_texture(std::move(roughness));
+  EXPECT_TRUE(roughness_texture.ok()) << roughness_texture.error_message();
 
-    QuaderMaterialAsset material;
-    material.name = std::move(name);
-    material.baseColor = color;
-    material.textureSlots.emplace("baseColorTexture", baseTexture.value().id);
-    material.textureSlots.emplace("roughnessTexture", roughnessTexture.value().id);
-    const QuaderApiResult<QuaderAssetRef> created = scenario.api().assets().addMaterial(std::move(material));
-    EXPECT_TRUE(created.ok()) << created.errorMessage();
-    return created.value().id;
+  QuaderMaterialAsset material;
+  material.name = std::move(name);
+  material.base_color = color;
+  material.texture_slots.emplace("baseColorTexture", base_texture.value().id);
+  material.texture_slots.emplace("roughnessTexture",
+                                 roughness_texture.value().id);
+  const QuaderApiResult<QuaderAssetRef> created =
+      scenario.api().assets().add_material(std::move(material));
+  EXPECT_TRUE(created.ok()) << created.error_message();
+  return created.value().id;
 }
 
-AssetId createMaterial(BehaviorScenario& scenario, std::string name) {
-    const QuaderApiResult<QuaderAssetRef> material =
-            scenario.api().assets().addMaterial(QuaderMaterialArgs{.name = std::move(name)});
-    EXPECT_TRUE(material.ok()) << material.errorMessage();
-    return material.value().id;
+AssetId create_material(BehaviorScenario &scenario, std::string name) {
+  const QuaderApiResult<QuaderAssetRef> material =
+      scenario.api().assets().add_material(
+          QuaderMaterialArgs{.name = std::move(name)});
+  EXPECT_TRUE(material.ok()) << material.error_message();
+  return material.value().id;
 }
 
-void assignMaterial(BehaviorScenario& scenario, std::string_view alias, AssetId material) {
-    const QuaderApiVoidResult assigned = scenario.api().assets().assignMaterialToObject(scenario.object(alias), material);
-    ASSERT_TRUE(assigned.ok()) << assigned.errorMessage();
+void assign_material(BehaviorScenario &scenario, std::string_view alias,
+                     AssetId material) {
+  const QuaderApiVoidResult assigned =
+      scenario.api().assets().assign_material_to_object(scenario.object(alias),
+                                                        material);
+  ASSERT_TRUE(assigned.ok()) << assigned.error_message();
 }
 
-void selectGroupForCommandDelete(BehaviorScenario& scenario, std::string_view groupAlias) {
-    scenario.given().selected(groupAlias);
-    scenario.given().selectionMode(QuaderSelectionMode::Group);
+void select_group_for_command_delete(BehaviorScenario &scenario,
+                                     std::string_view group_alias) {
+  scenario.given().selected(group_alias);
+  scenario.given().selection_mode(QuaderSelectionMode::Group);
 }
 
-void rememberRestoredSubtree(BehaviorScenario& scenario, std::string_view groupAlias, std::string_view groupName) {
-    scenario.rememberEntityNamed(groupAlias, groupName);
+void remember_restored_subtree(BehaviorScenario &scenario,
+                               std::string_view group_alias,
+                               std::string_view group_name) {
+  scenario.remember_entity_named(group_alias, group_name);
 }
 
-std::optional<QuaderEntitySnapshot> entityById(const QuaderApi& api, EntityId entity) {
-    return api.query().entity(entity);
+std::optional<QuaderEntitySnapshot> entity_by_id(const QuaderApi &api,
+                                                 EntityId entity) {
+  return api.query().entity(entity);
 }
 
-std::vector<QuaderEntitySnapshot> childrenOf(const QuaderApi& api, EntityId parent) {
-    std::vector<QuaderEntitySnapshot> children;
-    for (const QuaderEntitySnapshot& snapshot : api.query().entities()) {
-        if (snapshot.parent == parent) {
-            children.push_back(snapshot);
-        }
+std::vector<QuaderEntitySnapshot> children_of(const QuaderApi &api,
+                                              EntityId parent) {
+  std::vector<QuaderEntitySnapshot> children;
+  for (const QuaderEntitySnapshot &snapshot : api.query().entities()) {
+    if (snapshot.parent == parent) {
+      children.push_back(snapshot);
     }
-    return children;
+  }
+  return children;
 }
 
-std::vector<EntityId> selectedEntities(const QuaderApi& api) {
-    std::vector<EntityId> selected;
-    for (const QuaderEntitySnapshot& snapshot : api.query().entities()) {
-        if (snapshot.selected) {
-            selected.push_back(snapshot.id);
-        }
+std::vector<EntityId> selected_entities(const QuaderApi &api) {
+  std::vector<EntityId> selected;
+  for (const QuaderEntitySnapshot &snapshot : api.query().entities()) {
+    if (snapshot.selected) {
+      selected.push_back(snapshot.id);
     }
-    return selected;
+  }
+  return selected;
 }
 
-EntityId selectedEntityExcluding(const QuaderApi& api, EntityId excluded) {
-    for (const EntityId entity : selectedEntities(api)) {
-        if (entity != excluded) {
-            return entity;
-        }
+EntityId selected_entity_excluding(const QuaderApi &api, EntityId excluded) {
+  for (const EntityId entity : selected_entities(api)) {
+    if (entity != excluded) {
+      return entity;
     }
-    return InvalidEntityId;
+  }
+  return kInvalidEntityId;
 }
 
 } // namespace
 
 TEST(GroupingPublicApiTests, BehaviorWorldPositionExpectationUsesSceneWorldTransform) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
+  BehaviorScenario scenario = BehaviorScenario::new_project();
 
-    QuaderTransform parentTransform;
-    parentTransform.position = {10.0f, -1.0f, 0.0f};
-    parentTransform.rotationEuler = {0.0f, 0.0f, kHalfPi};
-    parentTransform.scale = {2.0f, 3.0f, 1.0f};
+  QuaderTransform parent_transform;
+  parent_transform.position = {10.0f, -1.0f, 0.0f};
+  parent_transform.rotation_euler = {0.0f, 0.0f, kHalfPi};
+  parent_transform.scale = {2.0f, 3.0f, 1.0f};
 
-    QuaderTransform childTransform;
-    childTransform.position = {1.0f, 0.0f, 0.0f};
+  QuaderTransform child_transform;
+  child_transform.position = {1.0f, 0.0f, 0.0f};
 
-    scenario.given().entity("parent", "Rotated Parent", QuaderEntityKind::Empty, parentTransform);
-    scenario.given().entity("child", "World Child", QuaderEntityKind::Empty, childTransform, "parent");
+  scenario.given().entity("parent", "Rotated Parent", QuaderEntityKind::Empty,
+                          parent_transform);
+  scenario.given().entity("child", "World Child", QuaderEntityKind::Empty,
+                          child_transform, "parent");
 
-    scenario.then().scene().worldPositionNear("child", {10.0f, 1.0f, 0.0f});
+  scenario.then().scene().world_position_near("child", {10.0f, 1.0f, 0.0f});
 }
 
 TEST(GroupingPublicApiTests, GroupSelectionParentsSelectedRootsAndUndoRedoRestoresHierarchy) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "left", "Left", {-3.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "right", "Right", {4.0f, 0.0f, 0.0f});
-    scenario.given().selectedAliases({"left", "right"}, "right");
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "left", "Left", {-3.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "right", "Right", {4.0f, 0.0f, 0.0f});
+  scenario.given().selected_aliases({"left", "right"}, "right");
 
-    QuaderTransform groupTransform;
-    groupTransform.position = {10.0f, 0.0f, 0.0f};
-    scenario.when().groupSelection("group", "Pair", groupTransform);
+  QuaderTransform group_transform;
+  group_transform.position = {10.0f, 0.0f, 0.0f};
+  scenario.when().group_selection("group", "Pair", group_transform);
 
-    scenario.then().command().okChanged();
-    scenario.then().scene()
-            .hasAlias("group")
-            .aliasKind("group", QuaderEntityKind::Empty)
-            .parent("left", "group")
-            .parent("right", "group")
-            .selectedAliases({"group"})
-            .activeAlias("group")
-            .worldPositionNear("left", {-3.0f, 0.0f, 0.0f})
-            .worldPositionNear("right", {4.0f, 0.0f, 0.0f});
+  scenario.then().command().ok_changed();
+  scenario.then()
+      .scene()
+      .has_alias("group")
+      .alias_kind("group", QuaderEntityKind::Empty)
+      .parent("left", "group")
+      .parent("right", "group")
+      .selected_aliases({"group"})
+      .active_alias("group")
+      .world_position_near("left", {-3.0f, 0.0f, 0.0f})
+      .world_position_near("right", {4.0f, 0.0f, 0.0f});
 
-    scenario.when().undo();
-    scenario.then().scene()
-            .missingAlias("group")
-            .noParent("left")
-            .noParent("right")
-            .selectedAliases({"left", "right"});
+  scenario.when().undo();
+  scenario.then()
+      .scene()
+      .missing_alias("group")
+      .no_parent("left")
+      .no_parent("right")
+      .selected_aliases({"left", "right"});
 
-    scenario.when().redo();
-    scenario.rememberEntityNamed("group", "Pair");
-    scenario.then().scene()
-            .parent("left", "group")
-            .parent("right", "group")
-            .selectedAliases({"group"})
-            .activeAlias("group");
+  scenario.when().redo();
+  scenario.remember_entity_named("group", "Pair");
+  scenario.then()
+      .scene()
+      .parent("left", "group")
+      .parent("right", "group")
+      .selected_aliases({"group"})
+      .active_alias("group");
 }
 
 TEST(GroupingPublicApiTests, GroupSelectionUsesSelectedRootsOnlyWhenParentAndChildAreSelected) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "child", "Child", {1.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "sibling", "Sibling", {3.0f, 0.0f, 0.0f});
-    scenario.given().selectedAliases({"child", "sibling"}, "sibling");
-    scenario.when().groupSelection("existingGroup", "Existing Group");
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "child", "Child", {1.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "sibling", "Sibling", {3.0f, 0.0f, 0.0f});
+  scenario.given().selected_aliases({"child", "sibling"}, "sibling");
+  scenario.when().group_selection("existingGroup", "Existing Group");
 
-    scenario.given().selectedAliases({"existingGroup", "child"}, "existingGroup");
-    scenario.when().groupSelection("outer", "Outer Group");
+  scenario.given().selected_aliases({"existingGroup", "child"},
+                                    "existingGroup");
+  scenario.when().group_selection("outer", "Outer Group");
 
-    scenario.then().scene()
-            .parent("existingGroup", "outer")
-            .parent("child", "existingGroup")
-            .parent("sibling", "existingGroup")
-            .childCount("outer", 1u);
+  scenario.then()
+      .scene()
+      .parent("existingGroup", "outer")
+      .parent("child", "existingGroup")
+      .parent("sibling", "existingGroup")
+      .child_count("outer", 1u);
 }
 
 TEST(GroupingPublicApiTests, UngroupUndoRedoRestoresGroupSelectionAndChildPlacement) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "first", "First", {-2.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "second", "Second", {2.0f, 0.0f, 0.0f});
-    scenario.given().selectedAliases({"first", "second"}, "first");
-    QuaderTransform groupTransform;
-    groupTransform.position = {5.0f, 0.0f, 0.0f};
-    scenario.when().groupSelection("group", "Ungroup Me", groupTransform);
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "first", "First", {-2.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "second", "Second", {2.0f, 0.0f, 0.0f});
+  scenario.given().selected_aliases({"first", "second"}, "first");
+  QuaderTransform group_transform;
+  group_transform.position = {5.0f, 0.0f, 0.0f};
+  scenario.when().group_selection("group", "Ungroup Me", group_transform);
 
-    scenario.when().ungroupSelection();
-    scenario.then().command().okChanged();
-    scenario.then().scene()
-            .missingAlias("group")
-            .noParent("first")
-            .noParent("second")
-            .worldPositionNear("first", {-2.0f, 0.0f, 0.0f})
-            .worldPositionNear("second", {2.0f, 0.0f, 0.0f});
+  scenario.when().ungroup_selection();
+  scenario.then().command().ok_changed();
+  scenario.then()
+      .scene()
+      .missing_alias("group")
+      .no_parent("first")
+      .no_parent("second")
+      .world_position_near("first", {-2.0f, 0.0f, 0.0f})
+      .world_position_near("second", {2.0f, 0.0f, 0.0f});
 
-    scenario.when().undo();
-    rememberRestoredSubtree(scenario, "group", "Ungroup Me");
-    scenario.then().scene()
-            .activeAlias("group")
-            .aliasKind("group", QuaderEntityKind::Empty)
-            .parent("first", "group")
-            .parent("second", "group")
-            .worldPositionNear("first", {-2.0f, 0.0f, 0.0f})
-            .worldPositionNear("second", {2.0f, 0.0f, 0.0f});
+  scenario.when().undo();
+  remember_restored_subtree(scenario, "group", "Ungroup Me");
+  scenario.then()
+      .scene()
+      .active_alias("group")
+      .alias_kind("group", QuaderEntityKind::Empty)
+      .parent("first", "group")
+      .parent("second", "group")
+      .world_position_near("first", {-2.0f, 0.0f, 0.0f})
+      .world_position_near("second", {2.0f, 0.0f, 0.0f});
 
-    scenario.when().redo();
-    scenario.then().scene()
-            .namedMissing("Ungroup Me")
-            .noParent("first")
-            .noParent("second");
+  scenario.when().redo();
+  scenario.then()
+      .scene()
+      .named_missing("Ungroup Me")
+      .no_parent("first")
+      .no_parent("second");
 }
 
 TEST(GroupingPublicApiTests, SceneDestroyGroupUndoRedoRestoresMaterialsTexturesAndTransforms) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "red", "Red", {-4.0f, 1.0f, 0.0f});
-    givenBoxAt(scenario, "blue", "Blue", {6.0f, -2.0f, 0.0f});
-    const AssetId redMaterial = createTexturedMaterial(scenario, "Red Material", {1.0f, 0.0f, 0.0f});
-    const AssetId blueMaterial = createTexturedMaterial(scenario, "Blue Material", {0.0f, 0.0f, 1.0f});
-    assignMaterial(scenario, "red", redMaterial);
-    assignMaterial(scenario, "blue", blueMaterial);
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "red", "Red", {-4.0f, 1.0f, 0.0f});
+  given_box_at(scenario, "blue", "Blue", {6.0f, -2.0f, 0.0f});
+  const AssetId red_material =
+      create_textured_material(scenario, "Red Material", {1.0f, 0.0f, 0.0f});
+  const AssetId blue_material =
+      create_textured_material(scenario, "Blue Material", {0.0f, 0.0f, 1.0f});
+  assign_material(scenario, "red", red_material);
+  assign_material(scenario, "blue", blue_material);
 
-    scenario.given().selectedAliases({"red", "blue"}, "red");
-    QuaderTransform groupTransform;
-    groupTransform.position = {12.0f, 0.0f, 0.0f};
-    scenario.when().groupSelection("group", "Textured Group", groupTransform);
+  scenario.given().selected_aliases({"red", "blue"}, "red");
+  QuaderTransform group_transform;
+  group_transform.position = {12.0f, 0.0f, 0.0f};
+  scenario.when().group_selection("group", "Textured Group", group_transform);
 
-    scenario.when().destroy("group");
-    scenario.then().scene().missingAlias("group").missingAlias("red").missingAlias("blue");
+  scenario.when().destroy("group");
+  scenario.then()
+      .scene()
+      .missing_alias("group")
+      .missing_alias("red")
+      .missing_alias("blue");
 
-    scenario.when().undo();
-    scenario.rememberEntityNamed("group", "Textured Group");
-    scenario.rememberEntityNamed("red", "Red");
-    scenario.rememberEntityNamed("blue", "Blue");
-    scenario.then().scene()
-            .activeAlias("group")
-            .parent("red", "group")
-            .parent("blue", "group")
-            .worldPositionNear("red", {-4.0f, 1.0f, 0.0f})
-            .worldPositionNear("blue", {6.0f, -2.0f, 0.0f})
-            .hasMaterial("red", redMaterial)
-            .hasMaterial("blue", blueMaterial);
-    scenario.then().assets().textureCount(4u);
+  scenario.when().undo();
+  scenario.remember_entity_named("group", "Textured Group");
+  scenario.remember_entity_named("red", "Red");
+  scenario.remember_entity_named("blue", "Blue");
+  scenario.then()
+      .scene()
+      .active_alias("group")
+      .parent("red", "group")
+      .parent("blue", "group")
+      .world_position_near("red", {-4.0f, 1.0f, 0.0f})
+      .world_position_near("blue", {6.0f, -2.0f, 0.0f})
+      .has_material("red", red_material)
+      .has_material("blue", blue_material);
+  scenario.then().assets().texture_count(4u);
 
-    scenario.when().redo();
-    scenario.then().scene()
-            .namedMissing("Textured Group")
-            .namedMissing("Red")
-            .namedMissing("Blue");
+  scenario.when().redo();
+  scenario.then()
+      .scene()
+      .named_missing("Textured Group")
+      .named_missing("Red")
+      .named_missing("Blue");
 }
 
 TEST(GroupingPublicApiTests, SceneDestroyNestedGroupUndoRedoRestoresNestedHierarchy) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "left", "Nested Left", {-2.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "right", "Nested Right", {2.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "top", "Nested Top", {0.0f, 3.0f, 0.0f});
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "left", "Nested Left", {-2.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "right", "Nested Right", {2.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "top", "Nested Top", {0.0f, 3.0f, 0.0f});
 
-    scenario.given().selectedAliases({"left", "right"}, "left");
-    scenario.when().groupSelection("inner", "Inner Group");
-    scenario.given().selectedAliases({"inner", "top"}, "inner");
-    scenario.when().groupSelection("outer", "Outer Group");
+  scenario.given().selected_aliases({"left", "right"}, "left");
+  scenario.when().group_selection("inner", "Inner Group");
+  scenario.given().selected_aliases({"inner", "top"}, "inner");
+  scenario.when().group_selection("outer", "Outer Group");
 
-    scenario.when().destroy("outer");
-    scenario.when().undo();
-    scenario.rememberEntityNamed("outer", "Outer Group");
-    scenario.rememberEntityNamed("inner", "Inner Group");
-    scenario.rememberEntityNamed("top", "Nested Top");
-    scenario.rememberEntityNamed("left", "Nested Left");
-    scenario.rememberEntityNamed("right", "Nested Right");
-    scenario.then().scene()
-            .parent("inner", "outer")
-            .parent("top", "outer")
-            .parent("left", "inner")
-            .parent("right", "inner");
+  scenario.when().destroy("outer");
+  scenario.when().undo();
+  scenario.remember_entity_named("outer", "Outer Group");
+  scenario.remember_entity_named("inner", "Inner Group");
+  scenario.remember_entity_named("top", "Nested Top");
+  scenario.remember_entity_named("left", "Nested Left");
+  scenario.remember_entity_named("right", "Nested Right");
+  scenario.then()
+      .scene()
+      .parent("inner", "outer")
+      .parent("top", "outer")
+      .parent("left", "inner")
+      .parent("right", "inner");
 
-    scenario.when().redo();
-    scenario.then().scene()
-            .namedMissing("Outer Group")
-            .namedMissing("Inner Group")
-            .namedMissing("Nested Left")
-            .namedMissing("Nested Right")
-            .namedMissing("Nested Top");
+  scenario.when().redo();
+  scenario.then()
+      .scene()
+      .named_missing("Outer Group")
+      .named_missing("Inner Group")
+      .named_missing("Nested Left")
+      .named_missing("Nested Right")
+      .named_missing("Nested Top");
 }
 
 TEST(GroupingPublicApiTests, SceneDestroyGroupedChildUndoKeepsChildInsideParentGroup) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    scenario.given().entity("child", "Child Entity", QuaderEntityKind::Empty, transformAt({-1.0f, 0.0f, 0.0f}));
-    scenario.given().entity("sibling", "Sibling Entity", QuaderEntityKind::Empty, transformAt({1.0f, 0.0f, 0.0f}));
-    scenario.given().selectedAliases({"child", "sibling"}, "child");
-    scenario.when().groupSelection("group", "Parent Group");
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  scenario.given().entity("child", "Child Entity", QuaderEntityKind::Empty,
+                          transform_at({-1.0f, 0.0f, 0.0f}));
+  scenario.given().entity("sibling", "Sibling Entity", QuaderEntityKind::Empty,
+                          transform_at({1.0f, 0.0f, 0.0f}));
+  scenario.given().selected_aliases({"child", "sibling"}, "child");
+  scenario.when().group_selection("group", "Parent Group");
 
-    scenario.when().destroy("child");
-    scenario.then().scene().missingAlias("child");
+  scenario.when().destroy("child");
+  scenario.then().scene().missing_alias("child");
 
-    scenario.when().undo();
-    scenario.rememberEntityNamed("child", "Child Entity");
-    scenario.then().scene()
-            .parent("child", "group")
-            .worldPositionNear("child", {-1.0f, 0.0f, 0.0f});
+  scenario.when().undo();
+  scenario.remember_entity_named("child", "Child Entity");
+  scenario.then()
+      .scene()
+      .parent("child", "group")
+      .world_position_near("child", {-1.0f, 0.0f, 0.0f});
 }
 
 TEST(GroupingPublicApiTests, ModelingDeleteCommandDeletesSelectedGroupInsteadOfStaleModelingObject) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "groupedA", "Grouped A", {-1.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "groupedB", "Grouped B", {1.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "decoy", "Do Not Delete", {8.0f, 0.0f, 0.0f});
-    scenario.given().selected("decoy");
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "groupedA", "Grouped A", {-1.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "groupedB", "Grouped B", {1.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "decoy", "Do Not Delete", {8.0f, 0.0f, 0.0f});
+  scenario.given().selected("decoy");
 
-    scenario.given().selectedAliases({"groupedA", "groupedB"}, "groupedA");
-    scenario.when().groupSelection("group", "Delete Me");
-    selectGroupForCommandDelete(scenario, "group");
+  scenario.given().selected_aliases({"groupedA", "groupedB"}, "groupedA");
+  scenario.when().group_selection("group", "Delete Me");
+  select_group_for_command_delete(scenario, "group");
 
-    scenario.when().execute(QuaderCommand::ModelingDeleteSelection);
-    scenario.then().command().okChanged();
-    scenario.then().scene()
-            .namedMissing("Delete Me")
-            .namedMissing("Grouped A")
-            .namedMissing("Grouped B")
-            .namedExists("Do Not Delete");
+  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.then().command().ok_changed();
+  scenario.then()
+      .scene()
+      .named_missing("Delete Me")
+      .named_missing("Grouped A")
+      .named_missing("Grouped B")
+      .named_exists("Do Not Delete");
 }
 
 TEST(GroupingPublicApiTests, ViewportDeleteShortcutDeletesSelectedGroup) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "left", "Shortcut Left", {-1.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "right", "Shortcut Right", {1.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "decoy", "Shortcut Decoy", {9.0f, 0.0f, 0.0f});
-    scenario.given().selected("decoy");
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "left", "Shortcut Left", {-1.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "right", "Shortcut Right", {1.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "decoy", "Shortcut Decoy", {9.0f, 0.0f, 0.0f});
+  scenario.given().selected("decoy");
 
-    scenario.given().selectedAliases({"left", "right"}, "left");
-    scenario.when().groupSelection("group", "Shortcut Group");
-    selectGroupForCommandDelete(scenario, "group");
+  scenario.given().selected_aliases({"left", "right"}, "left");
+  scenario.when().group_selection("group", "Shortcut Group");
+  select_group_for_command_delete(scenario, "group");
 
-    scenario.when().dispatchViewportShortcut({
-            .kind = ViewportShortcutKind::DeleteSelection,
-            .context = ViewportShortcutContext::Global,
-    });
-    scenario.then().command().okChanged();
-    scenario.then().scene()
-            .namedMissing("Shortcut Group")
-            .namedMissing("Shortcut Left")
-            .namedMissing("Shortcut Right")
-            .namedExists("Shortcut Decoy");
+  scenario.when().dispatch_viewport_shortcut({
+      .kind = ViewportShortcutKind::DeleteSelection,
+      .context = ViewportShortcutContext::Global,
+  });
+  scenario.then().command().ok_changed();
+  scenario.then()
+      .scene()
+      .named_missing("Shortcut Group")
+      .named_missing("Shortcut Left")
+      .named_missing("Shortcut Right")
+      .named_exists("Shortcut Decoy");
 
-    scenario.when().execute(QuaderCommand::HistoryUndo);
-    scenario.rememberEntityNamed("group", "Shortcut Group");
-    scenario.rememberEntityNamed("left", "Shortcut Left");
-    scenario.rememberEntityNamed("right", "Shortcut Right");
-    scenario.then().scene()
-            .activeAlias("group")
-            .parent("left", "group")
-            .parent("right", "group");
+  scenario.when().execute(quader_command::kHistoryUndo);
+  scenario.remember_entity_named("group", "Shortcut Group");
+  scenario.remember_entity_named("left", "Shortcut Left");
+  scenario.remember_entity_named("right", "Shortcut Right");
+  scenario.then()
+      .scene()
+      .active_alias("group")
+      .parent("left", "group")
+      .parent("right", "group");
 
-    scenario.when().execute(QuaderCommand::HistoryRedo);
-    scenario.then().scene().namedMissing("Shortcut Group").namedExists("Shortcut Decoy");
+  scenario.when().execute(quader_command::kHistoryRedo);
+  scenario.then()
+      .scene()
+      .named_missing("Shortcut Group")
+      .named_exists("Shortcut Decoy");
 }
 
 TEST(GroupingPublicApiTests, ContextDeleteActionDeletesSelectedGroup) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "first", "Action First", {-2.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "second", "Action Second", {2.0f, 0.0f, 0.0f});
-    const AssetId material = createTexturedMaterial(scenario, "Action Material", {0.1f, 0.5f, 0.9f});
-    assignMaterial(scenario, "first", material);
-    assignMaterial(scenario, "second", material);
-    scenario.given().selectedAliases({"first", "second"}, "first");
-    scenario.when().groupSelection("group", "Action Group");
-    selectGroupForCommandDelete(scenario, "group");
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "first", "Action First", {-2.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "second", "Action Second", {2.0f, 0.0f, 0.0f});
+  const AssetId material =
+      create_textured_material(scenario, "Action Material", {0.1f, 0.5f, 0.9f});
+  assign_material(scenario, "first", material);
+  assign_material(scenario, "second", material);
+  scenario.given().selected_aliases({"first", "second"}, "first");
+  scenario.when().group_selection("group", "Action Group");
+  select_group_for_command_delete(scenario, "group");
 
-    scenario.when().execute(QuaderCommand::DeleteSelection);
-    scenario.then().command().okChanged();
-    scenario.then().scene()
-            .namedMissing("Action Group")
-            .namedMissing("Action First")
-            .namedMissing("Action Second");
+  scenario.when().execute(quader_command::kDeleteSelection);
+  scenario.then().command().ok_changed();
+  scenario.then()
+      .scene()
+      .named_missing("Action Group")
+      .named_missing("Action First")
+      .named_missing("Action Second");
 
-    scenario.when().execute(QuaderCommand::HistoryUndo);
-    scenario.rememberEntityNamed("group", "Action Group");
-    scenario.rememberEntityNamed("first", "Action First");
-    scenario.rememberEntityNamed("second", "Action Second");
-    scenario.then().scene()
-            .activeAlias("group")
-            .parent("first", "group")
-            .parent("second", "group")
-            .hasMaterial("first", material)
-            .hasMaterial("second", material);
+  scenario.when().execute(quader_command::kHistoryUndo);
+  scenario.remember_entity_named("group", "Action Group");
+  scenario.remember_entity_named("first", "Action First");
+  scenario.remember_entity_named("second", "Action Second");
+  scenario.then()
+      .scene()
+      .active_alias("group")
+      .parent("first", "group")
+      .parent("second", "group")
+      .has_material("first", material)
+      .has_material("second", material);
 }
 
 TEST(GroupingPublicApiTests, ObjectModeSceneSelectedGroupDeleteUsesSceneRoots) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "child", "Object Mode Child", {-1.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "sibling", "Object Mode Sibling", {1.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "decoy", "Object Mode Decoy", {8.0f, 0.0f, 0.0f});
-    scenario.given().selected("decoy");
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "child", "Object Mode Child", {-1.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "sibling", "Object Mode Sibling", {1.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "decoy", "Object Mode Decoy", {8.0f, 0.0f, 0.0f});
+  scenario.given().selected("decoy");
 
-    scenario.given().selectedAliases({"child", "sibling"}, "child");
-    scenario.when().groupSelection("group", "Object Mode Group");
-    scenario.given().selectionMode(QuaderSelectionMode::Object).selected("group");
-    scenario.then().selection().mode(QuaderSelectionMode::Object);
+  scenario.given().selected_aliases({"child", "sibling"}, "child");
+  scenario.when().group_selection("group", "Object Mode Group");
+  scenario.given()
+      .selection_mode(QuaderSelectionMode::Object)
+      .selected("group");
+  scenario.then().selection().mode(QuaderSelectionMode::Object);
 
-    scenario.when().execute(QuaderCommand::ModelingDeleteSelection);
-    scenario.then().command().okChanged();
-    scenario.then().scene()
-            .namedMissing("Object Mode Group")
-            .namedMissing("Object Mode Child")
-            .namedMissing("Object Mode Sibling")
-            .namedExists("Object Mode Decoy");
+  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.then().command().ok_changed();
+  scenario.then()
+      .scene()
+      .named_missing("Object Mode Group")
+      .named_missing("Object Mode Child")
+      .named_missing("Object Mode Sibling")
+      .named_exists("Object Mode Decoy");
 }
 
 TEST(GroupingPublicApiTests, ComponentModeSceneSelectedGroupForcesEntityModeAndDeleteUsesSceneRoots) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "child", "Component Mode Child", {-1.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "sibling", "Component Mode Sibling", {1.0f, 0.0f, 0.0f});
-    scenario.given().selectedAliases({"child", "sibling"}, "child");
-    scenario.when().groupSelection("group", "Component Mode Group");
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "child", "Component Mode Child", {-1.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "sibling", "Component Mode Sibling",
+               {1.0f, 0.0f, 0.0f});
+  scenario.given().selected_aliases({"child", "sibling"}, "child");
+  scenario.when().group_selection("group", "Component Mode Group");
 
-    scenario.given().selectionMode(QuaderSelectionMode::Face).selected("group");
-    scenario.then().selection().mode(QuaderSelectionMode::Object);
+  scenario.given().selection_mode(QuaderSelectionMode::Face).selected("group");
+  scenario.then().selection().mode(QuaderSelectionMode::Object);
 
-    scenario.when().execute(QuaderCommand::ModelingDeleteSelection);
-    scenario.then().command().okChanged();
-    scenario.then().scene()
-            .namedMissing("Component Mode Group")
-            .namedMissing("Component Mode Child")
-            .namedMissing("Component Mode Sibling");
+  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.then().command().ok_changed();
+  scenario.then()
+      .scene()
+      .named_missing("Component Mode Group")
+      .named_missing("Component Mode Child")
+      .named_missing("Component Mode Sibling");
 
-    scenario.when().execute(QuaderCommand::HistoryUndo);
-    scenario.rememberEntityNamed("group", "Component Mode Group");
-    scenario.rememberEntityNamed("child", "Component Mode Child");
-    scenario.rememberEntityNamed("sibling", "Component Mode Sibling");
-    scenario.then().scene().activeAlias("group").parent("child", "group").parent("sibling", "group");
+  scenario.when().execute(quader_command::kHistoryUndo);
+  scenario.remember_entity_named("group", "Component Mode Group");
+  scenario.remember_entity_named("child", "Component Mode Child");
+  scenario.remember_entity_named("sibling", "Component Mode Sibling");
+  scenario.then()
+      .scene()
+      .active_alias("group")
+      .parent("child", "group")
+      .parent("sibling", "group");
 }
 
 TEST(GroupingPublicApiTests, EmptySceneSelectionWithStaleModelingObjectDoesNotDeleteFallbackObject) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "decoy", "Stale Delete Decoy", {4.0f, 0.0f, 0.0f});
-    scenario.given().selected("decoy");
-    scenario.then().selection().mode(QuaderSelectionMode::Object);
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "decoy", "Stale Delete Decoy", {4.0f, 0.0f, 0.0f});
+  scenario.given().selected("decoy");
+  scenario.then().selection().mode(QuaderSelectionMode::Object);
 
-    scenario.when().clearSceneSelection();
-    scenario.then().scene().selectedAliases({});
+  scenario.when().clear_scene_selection();
+  scenario.then().scene().selected_aliases({});
 
-    scenario.when().execute(QuaderCommand::ModelingDeleteSelection);
-    scenario.then().command().failed();
-    scenario.then().scene().namedExists("Stale Delete Decoy");
+  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.then().command().failed();
+  scenario.then().scene().named_exists("Stale Delete Decoy");
 }
 
 TEST(GroupingPublicApiTests, ModelingDeleteCommandUndoRedoRestoresSelectedGroupSubtree) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "first", "Command First", {-3.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "second", "Command Second", {3.0f, 0.0f, 0.0f});
-    const AssetId material = createTexturedMaterial(scenario, "Command Material", {0.7f, 0.7f, 0.1f});
-    assignMaterial(scenario, "first", material);
-    assignMaterial(scenario, "second", material);
-    scenario.given().selectedAliases({"first", "second"}, "first");
-    scenario.when().groupSelection("group", "Command Group");
-    selectGroupForCommandDelete(scenario, "group");
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "first", "Command First", {-3.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "second", "Command Second", {3.0f, 0.0f, 0.0f});
+  const AssetId material = create_textured_material(
+      scenario, "Command Material", {0.7f, 0.7f, 0.1f});
+  assign_material(scenario, "first", material);
+  assign_material(scenario, "second", material);
+  scenario.given().selected_aliases({"first", "second"}, "first");
+  scenario.when().group_selection("group", "Command Group");
+  select_group_for_command_delete(scenario, "group");
 
-    scenario.when().execute(QuaderCommand::ModelingDeleteSelection);
-    scenario.then().scene().namedMissing("Command Group");
+  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.then().scene().named_missing("Command Group");
 
-    scenario.when().execute(QuaderCommand::HistoryUndo);
-    scenario.rememberEntityNamed("group", "Command Group");
-    scenario.rememberEntityNamed("first", "Command First");
-    scenario.rememberEntityNamed("second", "Command Second");
-    scenario.then().scene()
-            .activeAlias("group")
-            .parent("first", "group")
-            .parent("second", "group")
-            .worldPositionNear("first", {-3.0f, 0.0f, 0.0f})
-            .worldPositionNear("second", {3.0f, 0.0f, 0.0f})
-            .hasMaterial("first", material)
-            .hasMaterial("second", material);
+  scenario.when().execute(quader_command::kHistoryUndo);
+  scenario.remember_entity_named("group", "Command Group");
+  scenario.remember_entity_named("first", "Command First");
+  scenario.remember_entity_named("second", "Command Second");
+  scenario.then()
+      .scene()
+      .active_alias("group")
+      .parent("first", "group")
+      .parent("second", "group")
+      .world_position_near("first", {-3.0f, 0.0f, 0.0f})
+      .world_position_near("second", {3.0f, 0.0f, 0.0f})
+      .has_material("first", material)
+      .has_material("second", material);
 
-    scenario.when().execute(QuaderCommand::HistoryRedo);
-    scenario.then().scene()
-            .namedMissing("Command Group")
-            .namedMissing("Command First")
-            .namedMissing("Command Second");
+  scenario.when().execute(quader_command::kHistoryRedo);
+  scenario.then()
+      .scene()
+      .named_missing("Command Group")
+      .named_missing("Command First")
+      .named_missing("Command Second");
 }
 
 TEST(GroupingPublicApiTests, ModelingDeleteGroupedChildUndoKeepsChildGroupedAndTextured) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "target", "Delete Child", {-2.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "sibling", "Keep Sibling", {2.0f, 0.0f, 0.0f});
-    const AssetId material = createTexturedMaterial(scenario, "Delete Child Material", {0.9f, 0.2f, 0.2f});
-    assignMaterial(scenario, "target", material);
-    scenario.given().selectedAliases({"target", "sibling"}, "target");
-    scenario.when().groupSelection("group", "Child Delete Group");
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "target", "Delete Child", {-2.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "sibling", "Keep Sibling", {2.0f, 0.0f, 0.0f});
+  const AssetId material = create_textured_material(
+      scenario, "Delete Child Material", {0.9f, 0.2f, 0.2f});
+  assign_material(scenario, "target", material);
+  scenario.given().selected_aliases({"target", "sibling"}, "target");
+  scenario.when().group_selection("group", "Child Delete Group");
 
-    scenario.given().selectionMode(QuaderSelectionMode::Object).selected("target");
-    scenario.when().execute(QuaderCommand::ModelingDeleteSelection);
-    scenario.then().scene().namedMissing("Delete Child").namedExists("Child Delete Group");
+  scenario.given()
+      .selection_mode(QuaderSelectionMode::Object)
+      .selected("target");
+  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.then()
+      .scene()
+      .named_missing("Delete Child")
+      .named_exists("Child Delete Group");
 
-    scenario.when().execute(QuaderCommand::HistoryUndo);
-    scenario.rememberEntityNamed("target", "Delete Child");
-    scenario.then().scene()
-            .parent("target", "group")
-            .hasMaterial("target", material)
-            .worldPositionNear("target", {-2.0f, 0.0f, 0.0f});
+  scenario.when().execute(quader_command::kHistoryUndo);
+  scenario.remember_entity_named("target", "Delete Child");
+  scenario.then()
+      .scene()
+      .parent("target", "group")
+      .has_material("target", material)
+      .world_position_near("target", {-2.0f, 0.0f, 0.0f});
 }
 
 TEST(GroupingPublicApiTests, RestoredGroupCanBeDeletedAgainWithModelingCommand) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "first", "Again First", {-1.5f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "second", "Again Second", {1.5f, 0.0f, 0.0f});
-    scenario.given().selectedAliases({"first", "second"}, "second");
-    scenario.when().groupSelection("group", "Again Group");
-    selectGroupForCommandDelete(scenario, "group");
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "first", "Again First", {-1.5f, 0.0f, 0.0f});
+  given_box_at(scenario, "second", "Again Second", {1.5f, 0.0f, 0.0f});
+  scenario.given().selected_aliases({"first", "second"}, "second");
+  scenario.when().group_selection("group", "Again Group");
+  select_group_for_command_delete(scenario, "group");
 
-    scenario.when().execute(QuaderCommand::ModelingDeleteSelection);
-    scenario.when().execute(QuaderCommand::HistoryUndo);
-    scenario.rememberEntityNamed("group", "Again Group");
+  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.when().execute(quader_command::kHistoryUndo);
+  scenario.remember_entity_named("group", "Again Group");
 
-    selectGroupForCommandDelete(scenario, "group");
-    scenario.when().execute(QuaderCommand::ModelingDeleteSelection);
-    scenario.then().scene()
-            .namedMissing("Again Group")
-            .namedMissing("Again First")
-            .namedMissing("Again Second");
+  select_group_for_command_delete(scenario, "group");
+  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.then()
+      .scene()
+      .named_missing("Again Group")
+      .named_missing("Again First")
+      .named_missing("Again Second");
 }
 
 TEST(GroupingPublicApiTests, SceneAwareDeleteRedoClearedByDocumentEditDoesNotReplayRuntimeRedo) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "first", "Redo Guard First", {-1.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "second", "Redo Guard Second", {1.0f, 0.0f, 0.0f});
-    scenario.given().selectedAliases({"first", "second"}, "first");
-    scenario.when().groupSelection("group", "Redo Guard Group");
-    selectGroupForCommandDelete(scenario, "group");
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "first", "Redo Guard First", {-1.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "second", "Redo Guard Second", {1.0f, 0.0f, 0.0f});
+  scenario.given().selected_aliases({"first", "second"}, "first");
+  scenario.when().group_selection("group", "Redo Guard Group");
+  select_group_for_command_delete(scenario, "group");
 
-    scenario.when().execute(QuaderCommand::ModelingDeleteSelection);
-    scenario.when().execute(QuaderCommand::HistoryUndo);
-    scenario.rememberEntityNamed("group", "Redo Guard Group");
-    scenario.then().scene()
-            .namedExists("Redo Guard First")
-            .namedExists("Redo Guard Second");
-    scenario.then().history().canRedo();
+  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.when().execute(quader_command::kHistoryUndo);
+  scenario.remember_entity_named("group", "Redo Guard Group");
+  scenario.then()
+      .scene()
+      .named_exists("Redo Guard First")
+      .named_exists("Redo Guard Second");
+  scenario.then().history().can_redo();
 
-    scenario.when().rename("group", "Redo Guard Edited");
-    scenario.then().history().canRedo(false);
+  scenario.when().rename("group", "Redo Guard Edited");
+  scenario.then().history().can_redo(false);
 
-    scenario.when().execute(QuaderCommand::HistoryRedo);
-    scenario.then().command().failed();
-    scenario.then().scene()
-            .namedExists("Redo Guard Edited")
-            .namedExists("Redo Guard First")
-            .namedExists("Redo Guard Second");
+  scenario.when().execute(quader_command::kHistoryRedo);
+  scenario.then().command().failed();
+  scenario.then()
+      .scene()
+      .named_exists("Redo Guard Edited")
+      .named_exists("Redo Guard First")
+      .named_exists("Redo Guard Second");
 }
 
 TEST(GroupingPublicApiTests, GroupVisibilityLockAndTransformBatchUndoRedoSurvivesChildren) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "first", "Batch First", {-1.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "second", "Batch Second", {1.0f, 0.0f, 0.0f});
-    scenario.given().selectedAliases({"first", "second"}, "first");
-    scenario.when().groupSelection("group", "Batch Group");
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "first", "Batch First", {-1.0f, 0.0f, 0.0f});
+  given_box_at(scenario, "second", "Batch Second", {1.0f, 0.0f, 0.0f});
+  scenario.given().selected_aliases({"first", "second"}, "first");
+  scenario.when().group_selection("group", "Batch Group");
 
-    QuaderTransform moved;
-    moved.position = {2.0f, 3.0f, 0.0f};
-    scenario.when().setGroupFlags("group", moved, false, true);
-    scenario.then().command().okChanged();
-    scenario.then().scene()
-            .visible("group", false)
-            .locked("group", true)
-            .entityTransformNear("group", moved)
-            .parent("first", "group")
-            .parent("second", "group");
+  QuaderTransform moved;
+  moved.position = {2.0f, 3.0f, 0.0f};
+  scenario.when().set_group_flags("group", moved, false, true);
+  scenario.then().command().ok_changed();
+  scenario.then()
+      .scene()
+      .visible("group", false)
+      .locked("group", true)
+      .entity_transform_near("group", moved)
+      .parent("first", "group")
+      .parent("second", "group");
 
-    scenario.when().undo();
-    scenario.then().scene()
-            .visible("group", true)
-            .locked("group", false)
-            .entityTransformNear("group", QuaderTransform{})
-            .parent("first", "group")
-            .parent("second", "group");
+  scenario.when().undo();
+  scenario.then()
+      .scene()
+      .visible("group", true)
+      .locked("group", false)
+      .entity_transform_near("group", QuaderTransform{})
+      .parent("first", "group")
+      .parent("second", "group");
 
-    scenario.when().redo();
-    scenario.then().scene()
-            .visible("group", false)
-            .locked("group", true)
-            .entityTransformNear("group", moved);
+  scenario.when().redo();
+  scenario.then()
+      .scene()
+      .visible("group", false)
+      .locked("group", true)
+      .entity_transform_near("group", moved);
 }
 
 TEST(GroupingPublicApiTests, DuplicateSelectedHierarchyCopiesStateSelectsCloneAndUndoRedoAsOneOperation) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
+  BehaviorScenario scenario = BehaviorScenario::new_project();
 
-    QuaderTransform parentTransform;
-    scenario.given().entity("parent", "Duplicate Parent", QuaderEntityKind::Empty, parentTransform);
+  QuaderTransform parent_transform;
+  scenario.given().entity("parent", "Duplicate Parent", QuaderEntityKind::Empty,
+                          parent_transform);
 
-    QuaderTransform groupCreateTransform;
-    groupCreateTransform.position = {1.0f, 2.0f, 3.0f};
-    groupCreateTransform.rotationEuler = {0.1f, 0.2f, 0.3f};
-    scenario.given().entity("group", "Duplicate Source", QuaderEntityKind::Empty, groupCreateTransform, "parent");
+  QuaderTransform group_create_transform;
+  group_create_transform.position = {1.0f, 2.0f, 3.0f};
+  group_create_transform.rotation_euler = {0.1f, 0.2f, 0.3f};
+  scenario.given().entity("group", "Duplicate Source", QuaderEntityKind::Empty,
+                          group_create_transform, "parent");
 
-    givenBoxAt(scenario, "child", "Duplicate Child", {4.0f, 5.0f, 6.0f});
-    scenario.when().reparent("child", "group", false);
-    const AssetId childMesh = scenario.object("child").mesh;
+  given_box_at(scenario, "child", "Duplicate Child", {4.0f, 5.0f, 6.0f});
+  scenario.when().reparent("child", "group", false);
+  const AssetId child_mesh = scenario.object("child").mesh;
 
-    const AssetId material = createMaterial(scenario, "Duplicate Material");
-    assignMaterial(scenario, "child", material);
-    scenario.when().setVisible("group", false);
-    scenario.when().setVisible("child", false);
+  const AssetId material = create_material(scenario, "Duplicate Material");
+  assign_material(scenario, "child", material);
+  scenario.when().set_visible("group", false);
+  scenario.when().set_visible("child", false);
 
-    scenario.given().selectedAliases({"group", "child"}, "child");
-    scenario.when().duplicateSelectedHierarchy("group.copy");
-    scenario.then().command().okChanged();
-    scenario.rememberEntityNamed("child.copy", "Duplicate Child_1");
+  scenario.given().selected_aliases({"group", "child"}, "child");
+  scenario.when().duplicate_selected_hierarchy("group.copy");
+  scenario.then().command().ok_changed();
+  scenario.remember_entity_named("child.copy", "Duplicate Child_1");
 
-    QuaderTransform groupExpected;
-    groupExpected.position = groupCreateTransform.position;
-    groupExpected.rotationEuler = groupCreateTransform.rotationEuler;
-    QuaderTransform childExpected;
-    childExpected.position = {4.0f, 5.0f, 6.0f};
+  QuaderTransform group_expected;
+  group_expected.position = group_create_transform.position;
+  group_expected.rotation_euler = group_create_transform.rotation_euler;
+  QuaderTransform child_expected;
+  child_expected.position = {4.0f, 5.0f, 6.0f};
 
-    scenario.then().scene()
-            .aliasName("group.copy", "Duplicate Source_1")
-            .parent("group.copy", "parent")
-            .visible("group.copy", false)
-            .locked("group.copy", false)
-            .entityTransformNear("group.copy", groupExpected)
-            .childCount("group.copy", 1u)
-            .aliasName("child.copy", "Duplicate Child_1")
-            .parent("child.copy", "group.copy")
-            .visible("child.copy", false)
-            .locked("child.copy", false)
-            .hasMesh("child.copy", childMesh)
-            .hasMaterial("child.copy", material)
-            .entityTransformNear("child.copy", childExpected)
-            .selectedAliases({"group.copy"})
-            .activeAlias("group.copy");
-    scenario.then().history().undoLabel("Duplicate Hierarchy");
+  scenario.then()
+      .scene()
+      .alias_name("group.copy", "Duplicate Source_1")
+      .parent("group.copy", "parent")
+      .visible("group.copy", false)
+      .locked("group.copy", false)
+      .entity_transform_near("group.copy", group_expected)
+      .child_count("group.copy", 1u)
+      .alias_name("child.copy", "Duplicate Child_1")
+      .parent("child.copy", "group.copy")
+      .visible("child.copy", false)
+      .locked("child.copy", false)
+      .has_mesh("child.copy", child_mesh)
+      .has_material("child.copy", material)
+      .entity_transform_near("child.copy", child_expected)
+      .selected_aliases({"group.copy"})
+      .active_alias("group.copy");
+  scenario.then().history().undo_label("Duplicate Hierarchy");
 
-    scenario.when().undo();
-    scenario.then().scene()
-            .missingAlias("group.copy")
-            .missingAlias("child.copy")
-            .selectedAliases({"group", "child"})
-            .activeAlias("child");
-    scenario.then().history().redoLabel("Duplicate Hierarchy");
+  scenario.when().undo();
+  scenario.then()
+      .scene()
+      .missing_alias("group.copy")
+      .missing_alias("child.copy")
+      .selected_aliases({"group", "child"})
+      .active_alias("child");
+  scenario.then().history().redo_label("Duplicate Hierarchy");
 
-    scenario.when().redo();
-    scenario.rememberEntityNamed("group.copy", "Duplicate Source_1");
-    scenario.rememberEntityNamed("child.copy", "Duplicate Child_1");
-    scenario.then().scene()
-            .hasAlias("group.copy")
-            .childCount("group.copy", 1u)
-            .selectedAliases({"group.copy"});
+  scenario.when().redo();
+  scenario.remember_entity_named("group.copy", "Duplicate Source_1");
+  scenario.remember_entity_named("child.copy", "Duplicate Child_1");
+  scenario.then()
+      .scene()
+      .has_alias("group.copy")
+      .child_count("group.copy", 1u)
+      .selected_aliases({"group.copy"});
 }
 
 TEST(GroupingPublicApiTests, DuplicateMixedMeshAndLightHierarchyCopiesStateAndUndoRedoAsOneOperation) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "mesh", "Mixed Duplicate Mesh", {-2.0f, 0.0f, 0.0f});
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "mesh", "Mixed Duplicate Mesh", {-2.0f, 0.0f, 0.0f});
 
-    QuaderCreatePointLightArgs lightArgs;
-    lightArgs.name = "Mixed Duplicate Light";
-    lightArgs.transform.position = {3.0f, 1.0f, 0.0f};
-    const QuaderApiResult<QuaderEntityRef> light = scenario.api().scene().createPointLight(lightArgs);
-    ASSERT_TRUE(light.ok) << light.message;
-    scenario.remember("light", light.value);
+  QuaderCreatePointLightArgs light_args;
+  light_args.name = "Mixed Duplicate Light";
+  light_args.transform.position = {3.0f, 1.0f, 0.0f};
+  const QuaderApiResult<QuaderEntityRef> light =
+      scenario.api().scene().create_point_light(light_args);
+  ASSERT_TRUE(light.ok) << light.message;
+  scenario.remember("light", light.value);
 
-    scenario.given().selectedAliases({"mesh", "light"}, "light");
-    scenario.when().groupSelection("group", "Mixed Duplicate Group");
-    const EntityId sourceGroup = scenario.entity("group");
+  scenario.given().selected_aliases({"mesh", "light"}, "light");
+  scenario.when().group_selection("group", "Mixed Duplicate Group");
+  const EntityId source_group = scenario.entity("group");
 
-    scenario.when().execute(QuaderCommand::DuplicateSelection);
-    scenario.then().command().okChanged();
-    const EntityId duplicateGroup = selectedEntityExcluding(scenario.api(), sourceGroup);
-    ASSERT_NE(duplicateGroup, InvalidEntityId);
-    scenario.remember("group.copy", duplicateGroup);
+  scenario.when().execute(quader_command::kDuplicateSelection);
+  scenario.then().command().ok_changed();
+  const EntityId duplicate_group =
+      selected_entity_excluding(scenario.api(), source_group);
+  ASSERT_NE(duplicate_group, kInvalidEntityId);
+  scenario.remember("group.copy", duplicate_group);
 
-    const std::vector<QuaderEntitySnapshot> children = childrenOf(scenario.api(), duplicateGroup);
-    ASSERT_EQ(children.size(), 2u);
-    EXPECT_TRUE(std::any_of(children.begin(), children.end(), [](const QuaderEntitySnapshot& child) {
-        return child.hasMesh;
-    }));
-    EXPECT_TRUE(std::any_of(children.begin(), children.end(), [](const QuaderEntitySnapshot& child) {
-        return child.hasLight && child.light.type == QuaderLightType::Point;
-    }));
-    scenario.then().history().undoLabel("Duplicate Selection");
+  const std::vector<QuaderEntitySnapshot> children =
+      children_of(scenario.api(), duplicate_group);
+  ASSERT_EQ(children.size(), 2u);
+  EXPECT_TRUE(std::any_of(
+      children.begin(), children.end(),
+      [](const QuaderEntitySnapshot &child) { return child.has_mesh; }));
+  EXPECT_TRUE(std::any_of(
+      children.begin(), children.end(), [](const QuaderEntitySnapshot &child) {
+        return child.has_light && child.light.type == QuaderLightType::Point;
+      }));
+  scenario.then().history().undo_label("Duplicate Selection");
 
-    scenario.when().undo();
-    EXPECT_FALSE(entityById(scenario.api(), duplicateGroup).has_value());
-    scenario.then().history().redoLabel("Duplicate Selection");
+  scenario.when().undo();
+  EXPECT_FALSE(entity_by_id(scenario.api(), duplicate_group).has_value());
+  scenario.then().history().redo_label("Duplicate Selection");
 
-    scenario.when().redo();
-    const EntityId redoneDuplicateGroup = selectedEntityExcluding(scenario.api(), sourceGroup);
-    ASSERT_NE(redoneDuplicateGroup, InvalidEntityId);
-    EXPECT_EQ(childrenOf(scenario.api(), redoneDuplicateGroup).size(), 2u);
+  scenario.when().redo();
+  const EntityId redone_duplicate_group =
+      selected_entity_excluding(scenario.api(), source_group);
+  ASSERT_NE(redone_duplicate_group, kInvalidEntityId);
+  EXPECT_EQ(children_of(scenario.api(), redone_duplicate_group).size(), 2u);
 }
 
 TEST(GroupingPublicApiTests, DeleteMixedMeshAndLightHierarchyUndoRedoRestoresSceneComponents) {
-    BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "mesh", "Mixed Delete Mesh", {-1.0f, 0.0f, 0.0f});
+  BehaviorScenario scenario = BehaviorScenario::new_project();
+  given_box_at(scenario, "mesh", "Mixed Delete Mesh", {-1.0f, 0.0f, 0.0f});
 
-    QuaderCreatePointLightArgs lightArgs;
-    lightArgs.name = "Mixed Delete Light";
-    lightArgs.transform.position = {2.0f, 4.0f, 0.0f};
-    const QuaderApiResult<QuaderEntityRef> light = scenario.api().scene().createPointLight(lightArgs);
-    ASSERT_TRUE(light.ok) << light.message;
-    scenario.remember("light", light.value);
+  QuaderCreatePointLightArgs light_args;
+  light_args.name = "Mixed Delete Light";
+  light_args.transform.position = {2.0f, 4.0f, 0.0f};
+  const QuaderApiResult<QuaderEntityRef> light =
+      scenario.api().scene().create_point_light(light_args);
+  ASSERT_TRUE(light.ok) << light.message;
+  scenario.remember("light", light.value);
 
-    scenario.given().selectedAliases({"mesh", "light"}, "light");
-    scenario.when().groupSelection("group", "Mixed Delete Group");
-    const EntityId group = scenario.entity("group");
-    const EntityId mesh = scenario.entity("mesh");
-    const EntityId lightEntity = scenario.entity("light");
-    selectGroupForCommandDelete(scenario, "group");
+  scenario.given().selected_aliases({"mesh", "light"}, "light");
+  scenario.when().group_selection("group", "Mixed Delete Group");
+  const EntityId group = scenario.entity("group");
+  const EntityId mesh = scenario.entity("mesh");
+  const EntityId light_entity = scenario.entity("light");
+  select_group_for_command_delete(scenario, "group");
 
-    scenario.when().execute(QuaderCommand::DeleteSelection);
-    scenario.then().command().okChanged();
-    EXPECT_FALSE(entityById(scenario.api(), group).has_value());
-    EXPECT_FALSE(entityById(scenario.api(), mesh).has_value());
-    EXPECT_FALSE(entityById(scenario.api(), lightEntity).has_value());
-    scenario.then().history().undoLabel("Delete Selection");
+  scenario.when().execute(quader_command::kDeleteSelection);
+  scenario.then().command().ok_changed();
+  EXPECT_FALSE(entity_by_id(scenario.api(), group).has_value());
+  EXPECT_FALSE(entity_by_id(scenario.api(), mesh).has_value());
+  EXPECT_FALSE(entity_by_id(scenario.api(), light_entity).has_value());
+  scenario.then().history().undo_label("Delete Selection");
 
-    scenario.when().undo();
-    ASSERT_TRUE(entityById(scenario.api(), group).has_value());
-    const std::optional<QuaderEntitySnapshot> restoredMesh = entityById(scenario.api(), mesh);
-    const std::optional<QuaderEntitySnapshot> restoredLight = entityById(scenario.api(), lightEntity);
-    ASSERT_TRUE(restoredMesh.has_value());
-    ASSERT_TRUE(restoredLight.has_value());
-    EXPECT_TRUE(restoredMesh->hasMesh);
-    EXPECT_TRUE(restoredLight->hasLight);
-    EXPECT_EQ(restoredLight->light.type, QuaderLightType::Point);
-    EXPECT_EQ(restoredMesh->parent, group);
-    EXPECT_EQ(restoredLight->parent, group);
+  scenario.when().undo();
+  ASSERT_TRUE(entity_by_id(scenario.api(), group).has_value());
+  const std::optional<QuaderEntitySnapshot> restored_mesh =
+      entity_by_id(scenario.api(), mesh);
+  const std::optional<QuaderEntitySnapshot> restored_light =
+      entity_by_id(scenario.api(), light_entity);
+  ASSERT_TRUE(restored_mesh.has_value());
+  ASSERT_TRUE(restored_light.has_value());
+  EXPECT_TRUE(restored_mesh->has_mesh);
+  EXPECT_TRUE(restored_light->has_light);
+  EXPECT_EQ(restored_light->light.type, QuaderLightType::Point);
+  EXPECT_EQ(restored_mesh->parent, group);
+  EXPECT_EQ(restored_light->parent, group);
 
-    scenario.when().redo();
-    EXPECT_FALSE(entityById(scenario.api(), group).has_value());
-    EXPECT_FALSE(entityById(scenario.api(), mesh).has_value());
-    EXPECT_FALSE(entityById(scenario.api(), lightEntity).has_value());
+  scenario.when().redo();
+  EXPECT_FALSE(entity_by_id(scenario.api(), group).has_value());
+  EXPECT_FALSE(entity_by_id(scenario.api(), mesh).has_value());
+  EXPECT_FALSE(entity_by_id(scenario.api(), light_entity).has_value());
 }

@@ -24,25 +24,22 @@ namespace {
  */
 class DispatchedModelingToolHistoryCommand final : public ModelingMementoCommand {
 public:
-    DispatchedModelingToolHistoryCommand(
-            ModelingSessionService& modeling,
-            EditorSelectionService& selection,
-            const ModelingCommandDispatcher& dispatcher,
-            std::string toolId,
-            std::string label)
-        : ModelingMementoCommand(modeling, std::move(label))
-        , selection_(selection)
-        , dispatcher_(dispatcher)
-        , toolId_(std::move(toolId)) {}
+  DispatchedModelingToolHistoryCommand(
+      ModelingSessionService &modeling, EditorSelectionService &selection,
+      const ModelingCommandDispatcher &dispatcher, std::string tool_id,
+      std::string label)
+      : ModelingMementoCommand(modeling, std::move(label)),
+        selection_(selection), dispatcher_(dispatcher),
+        tool_id_(std::move(tool_id)) {}
 
 private:
-    ModelingCommandResult executeInitial() override {
-        return dispatcher_.execute(toolId_, modeling(), &selection_);
-    }
+  ModelingCommandResult execute_initial() override {
+    return dispatcher_.execute(tool_id_, modeling(), &selection_);
+  }
 
     EditorSelectionService& selection_;
     const ModelingCommandDispatcher& dispatcher_;
-    std::string toolId_;
+    std::string tool_id_;
 };
 
 /**
@@ -50,142 +47,145 @@ private:
  */
 class ModelingActionHistoryCommand final : public ModelingMementoCommand {
 public:
-    ModelingActionHistoryCommand(
-            ModelingSessionService& modeling,
-            std::string actionId,
-            std::string label)
-        : ModelingMementoCommand(modeling, std::move(label))
-        , actionId_(std::move(actionId)) {}
+  ModelingActionHistoryCommand(ModelingSessionService &modeling,
+                               std::string action_id, std::string label)
+      : ModelingMementoCommand(modeling, std::move(label)),
+        action_id_(std::move(action_id)) {}
 
 private:
-    ModelingCommandResult executeInitial() override {
-        return modeling().executeContextAction(actionId_);
-    }
+  ModelingCommandResult execute_initial() override {
+    return modeling().execute_context_action(action_id_);
+  }
 
-    std::string actionId_;
+  std::string action_id_;
 };
 
-ModelingCommandResult fromCommandResult(CommandResult result) {
-    return {
-            .ok = result.ok,
-            .changed = result.changed,
-            .message = std::move(result.message),
-    };
+ModelingCommandResult from_command_result(CommandResult result) {
+  return {
+      .ok = result.ok,
+      .changed = result.changed,
+      .message = std::move(result.message),
+  };
 }
 
-std::string commandLabel(const CommandTool* tool, std::string_view toolId) {
-    if (tool == nullptr || tool->label().empty()) {
-        return std::string(toolId);
-    }
-    return std::string(tool->label());
+std::string command_label(const CommandTool *tool, std::string_view tool_id) {
+  if (tool == nullptr || tool->label().empty()) {
+    return std::string(tool_id);
+  }
+  return std::string(tool->label());
 }
 
 } // namespace
 
 ModelingCommandResult ModelingCommandExecutionService::execute(
-        EditorHistoryService& history,
-        ModelingSessionService& modeling,
-        EditorSelectionService& selection,
-        std::string_view toolId) {
-    const CommandTool* tool = dispatcher_.find(toolId);
-    if (tool == nullptr) {
-        return {.ok = false, .message = "Command tool is not registered."};
-    }
+    EditorHistoryService &history, ModelingSessionService &modeling,
+    EditorSelectionService &selection, std::string_view tool_id) {
+  const CommandTool *tool = dispatcher_.find(tool_id);
+  if (tool == nullptr) {
+    return {.ok = false, .message = "Command tool is not registered."};
+  }
 
-    if (tool->id() == "delete_selection" &&
-            sceneAwareDeleteHandlesSelection(modeling.selectionSummary(), modeling.hasSelectedSceneAwareDeleteRoot())) {
-        return fromCommandResult(history.execute(modeling.createDeleteSelectionCommand()));
-    }
+  if (tool->id() == "delete_selection" &&
+      scene_aware_delete_handles_selection(
+          modeling.selection_summary(),
+          modeling.has_selected_scene_aware_delete_root())) {
+    return from_command_result(
+        history.execute(modeling.create_delete_selection_command()));
+  }
 
-    const ModelingCommandAvailability available = dispatcher_.availability(toolId, modeling, &selection);
-    if (!available.enabled) {
-        return {
-                .ok = false,
-                .message = available.disabledReason.empty() ? "Command is disabled." : available.disabledReason,
-        };
-    }
+  const ModelingCommandAvailability available =
+      dispatcher_.availability(tool_id, modeling, &selection);
+  if (!available.enabled) {
+    return {
+        .ok = false,
+        .message = available.disabled_reason.empty()
+                       ? "Command is disabled."
+                       : available.disabled_reason,
+    };
+  }
 
-    if (tool->historyPolicy().mode != ModelingCommandHistoryMode::ModelingUndoRedo) {
-        return dispatcher_.execute(*tool, modeling, &selection);
-    }
+  if (tool->history_policy().mode !=
+      ModelingCommandHistoryMode::ModelingUndoRedo) {
+    return dispatcher_.execute(*tool, modeling, &selection);
+  }
 
-    return fromCommandResult(history.execute(std::make_unique<DispatchedModelingToolHistoryCommand>(
-            modeling,
-            selection,
-            dispatcher_,
-            std::string(toolId),
-            commandLabel(tool, toolId))));
+  return from_command_result(
+      history.execute(std::make_unique<DispatchedModelingToolHistoryCommand>(
+          modeling, selection, dispatcher_, std::string(tool_id),
+          command_label(tool, tool_id))));
 }
 
-ModelingCommandResult ModelingCommandExecutionService::executeUntracked(
-        ModelingSessionService& modeling,
-        std::string_view toolId,
-        EditorSelectionService* selection) {
-    return dispatcher_.execute(toolId, modeling, selection);
+ModelingCommandResult ModelingCommandExecutionService::execute_untracked(
+    ModelingSessionService &modeling, std::string_view tool_id,
+    EditorSelectionService *selection) {
+  return dispatcher_.execute(tool_id, modeling, selection);
 }
 
-ModelingCommandResult ModelingCommandExecutionService::beginPreview(
-        EditorHistoryService& history,
-        ModelingSessionService& modeling,
-        EditorSelectionService& selection,
-        std::string_view actionId) {
-    if (actionId == std::string_view("delete_selection")) {
-        return execute(history, modeling, selection, actionId);
-    }
+ModelingCommandResult ModelingCommandExecutionService::begin_preview(
+    EditorHistoryService &history, ModelingSessionService &modeling,
+    EditorSelectionService &selection, std::string_view action_id) {
+  if (action_id == std::string_view("delete_selection")) {
+    return execute(history, modeling, selection, action_id);
+  }
 
-    const std::vector<ModelingActionItem> actions = modeling.contextActions(ModelingActionQuery{
-            .surface = ModelingActionSurface::ViewportContextMenu,
-            .includeDisabled = true,
-            .includeHidden = false,
-    });
-    const auto found = std::find_if(actions.begin(), actions.end(), [&](const ModelingActionItem& action) {
-        return action.actionId == actionId;
-    });
-    if (found == actions.end()) {
-        return {.ok = false, .message = "Action is not available in the current mode."};
-    }
-    if (found->previewKind != ModelingActionPreviewKind::None) {
-        return modeling.executeContextAction(actionId);
-    }
-    return fromCommandResult(history.execute(std::make_unique<ModelingActionHistoryCommand>(
-            modeling,
-            std::string(actionId),
-            found->label.empty() ? std::string(actionId) : found->label)));
+  const std::vector<ModelingActionItem> actions =
+      modeling.context_actions(ModelingActionQuery{
+          .surface = ModelingActionSurface::ViewportContextMenu,
+          .include_disabled = true,
+          .include_hidden = false,
+      });
+  const auto found = std::find_if(actions.begin(), actions.end(),
+                                  [&](const ModelingActionItem &action) {
+                                    return action.action_id == action_id;
+                                  });
+  if (found == actions.end()) {
+    return {.ok = false,
+            .message = "Action is not available in the current mode."};
+  }
+  if (found->preview_kind != ModelingActionPreviewKind::None) {
+    return modeling.execute_context_action(action_id);
+  }
+  return from_command_result(
+      history.execute(std::make_unique<ModelingActionHistoryCommand>(
+          modeling, std::string(action_id),
+          found->label.empty() ? std::string(action_id) : found->label)));
 }
 
-ModelingCommandResult ModelingCommandExecutionService::beginPreviewUntracked(
-        ModelingSessionService& modeling,
-        std::string_view actionId) {
-    return modeling.executeContextAction(actionId);
+ModelingCommandResult ModelingCommandExecutionService::begin_preview_untracked(
+    ModelingSessionService &modeling, std::string_view action_id) {
+  return modeling.execute_context_action(action_id);
 }
 
-ModelingCommandResult ModelingCommandExecutionService::commitPreview(
-        EditorHistoryService& history,
-        ModelingSessionService& modeling,
-        std::string label) {
-    if (label.empty()) {
-        label = "Commit Operation Preview";
-    }
-    return ModelingPreviewCommandService::commit(history, modeling, std::move(label));
+ModelingCommandResult ModelingCommandExecutionService::commit_preview(
+    EditorHistoryService &history, ModelingSessionService &modeling,
+    std::string label) {
+  if (label.empty()) {
+    label = "Commit Operation Preview";
+  }
+  return ModelingPreviewCommandService::commit(history, modeling,
+                                               std::move(label));
 }
 
-ModelingCommandResult ModelingCommandExecutionService::cancelPreview(ModelingSessionService& modeling) {
-    return ModelingPreviewCommandService::cancel(modeling);
+ModelingCommandResult ModelingCommandExecutionService::cancel_preview(
+    ModelingSessionService &modeling) {
+  return ModelingPreviewCommandService::cancel(modeling);
 }
 
 ModelingCommandAvailability ModelingCommandExecutionService::availability(
-        ModelingSessionService& modeling,
-        std::string_view toolId,
-        EditorSelectionService* selection) const {
-    if (toolId == std::string_view("delete_selection") &&
-            sceneAwareDeleteHandlesSelection(modeling.selectionSummary(), modeling.hasSelectedSceneAwareDeleteRoot())) {
-        return ModelingCommandAvailability::available();
-    }
-    return dispatcher_.availability(toolId, modeling, selection);
+    ModelingSessionService &modeling, std::string_view tool_id,
+    EditorSelectionService *selection) const {
+  if (tool_id == std::string_view("delete_selection") &&
+      scene_aware_delete_handles_selection(
+          modeling.selection_summary(),
+          modeling.has_selected_scene_aware_delete_root())) {
+    return ModelingCommandAvailability::available();
+  }
+  return dispatcher_.availability(tool_id, modeling, selection);
 }
 
-ModelingCommandHistoryPolicy ModelingCommandExecutionService::historyPolicy(std::string_view toolId) const {
-    return dispatcher_.historyPolicy(toolId);
+ModelingCommandHistoryPolicy ModelingCommandExecutionService::history_policy(
+    std::string_view tool_id) const {
+  return dispatcher_.history_policy(tool_id);
 }
 
 } // namespace quader

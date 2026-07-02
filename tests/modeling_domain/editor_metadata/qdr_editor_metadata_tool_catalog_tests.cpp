@@ -77,15 +77,19 @@ TEST(QdrEditorMetadataToolCatalogTests, HostContractTransformAxisCatalogMirrorsE
 	const std::span<const qhc::HostTransformAxisDescriptor> axes = qhc::transform_axis_catalog();
 	EXPECT_TRUE(axes.size() == 7U);
 
-	EXPECT_TRUE(same_text(axes[0].id, qec::axis_id(qec::TransformAxis::x)));
-	EXPECT_TRUE(same_text(axes[1].id, qec::axis_id(qec::TransformAxis::y)));
-	EXPECT_TRUE(same_text(axes[2].id, qec::axis_id(qec::TransformAxis::z)));
-	EXPECT_TRUE(same_text(axes[3].id, qec::axis_id(qec::TransformAxis::xy)));
-	EXPECT_TRUE(same_text(axes[4].id, qec::axis_id(qec::TransformAxis::xz)));
-	EXPECT_TRUE(same_text(axes[5].id, qec::axis_id(qec::TransformAxis::yz)));
-	EXPECT_TRUE(same_text(axes[6].id, qec::axis_id(qec::TransformAxis::all)));
+        EXPECT_TRUE(same_text(axes[0].id, qec::axis_id(qec::TransformAxis::X)));
+        EXPECT_TRUE(same_text(axes[1].id, qec::axis_id(qec::TransformAxis::Y)));
+        EXPECT_TRUE(same_text(axes[2].id, qec::axis_id(qec::TransformAxis::Z)));
+        EXPECT_TRUE(
+            same_text(axes[3].id, qec::axis_id(qec::TransformAxis::Xy)));
+        EXPECT_TRUE(
+            same_text(axes[4].id, qec::axis_id(qec::TransformAxis::Xz)));
+        EXPECT_TRUE(
+            same_text(axes[5].id, qec::axis_id(qec::TransformAxis::Yz)));
+        EXPECT_TRUE(
+            same_text(axes[6].id, qec::axis_id(qec::TransformAxis::All)));
 
-	EXPECT_FALSE(axes[0].planar);
+        EXPECT_FALSE(axes[0].planar);
 	EXPECT_TRUE(axes[3].planar);
 	EXPECT_TRUE(axes[4].planar);
 	EXPECT_TRUE(axes[5].planar);

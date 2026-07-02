@@ -18,302 +18,255 @@
 
 namespace {
 
-using quader::test::guardrail::readSourceFile;
-using quader::test::guardrail::filesWithExtension;
-using quader::test::guardrail::normalizedRelative;
-using quader::test::guardrail::sourceSlice;
-using quader::test::guardrail::sourcePath;
-using quader::test::guardrail::sourceRoot;
-using quader::test::guardrail::startsWith;
+using quader::test::guardrail::files_with_extension;
+using quader::test::guardrail::normalized_relative;
+using quader::test::guardrail::read_source_file;
+using quader::test::guardrail::source_path;
+using quader::test::guardrail::source_root;
+using quader::test::guardrail::source_slice;
+using quader::test::guardrail::starts_with;
 
-void expectContains(const std::string& source, const std::string& needle) {
-    EXPECT_NE(source.find(needle), std::string::npos) << needle;
+void expect_contains(const std::string &source, const std::string &needle) {
+  EXPECT_NE(source.find(needle), std::string::npos) << needle;
 }
 
-void expectMissing(const std::string& source, const std::string& needle) {
-    EXPECT_EQ(source.find(needle), std::string::npos) << needle;
+void expect_missing(const std::string &source, const std::string &needle) {
+  EXPECT_EQ(source.find(needle), std::string::npos) << needle;
 }
 
 std::string joined(std::string_view left, std::string_view right) {
     return std::string(left) + std::string(right);
 }
 
-std::vector<std::string> retiredModelingTestFrameworkNeedles() {
-    const std::string frameworkName = joined("Catch", "2");
-    const std::string frameworkLower = joined("cat", "ch2");
-    const std::string frameworkUpper = joined("CATCH", "2");
-    return {
-            frameworkName,
-            frameworkLower,
-            frameworkUpper,
-            joined("Catch", "::"),
-            joined("#include <cat", "ch2/"),
-            joined("TEST", "_CASE("),
-            joined("SEC", "TION("),
-            joined("REQUIRE", "("),
-            joined("CHECK", "("),
-            joined("QUADER_", frameworkUpper),
-            joined("QUADER_ALLOW_EXTERNAL_", frameworkUpper + "_FETCH"),
-            joined("QUADER_MODELING_TEST_SUPPORT_", frameworkUpper),
-            joined(frameworkLower, "-BSL"),
-            joined("thirdparty/", frameworkLower),
-            joined("_deps/", frameworkLower),
-    };
+std::vector<std::string> retired_modeling_test_framework_needles() {
+  const std::string framework_name = joined("Catch", "2");
+  const std::string framework_lower = joined("cat", "ch2");
+  const std::string framework_upper = joined("CATCH", "2");
+  return {
+      framework_name,
+      framework_lower,
+      framework_upper,
+      joined("Catch", "::"),
+      joined("#include <cat", "ch2/"),
+      joined("TEST", "_CASE("),
+      joined("SEC", "TION("),
+      joined("REQUIRE", "("),
+      joined("CHECK", "("),
+      joined("QUADER_", framework_upper),
+      joined("QUADER_ALLOW_EXTERNAL_", framework_upper + "_FETCH"),
+      joined("QUADER_MODELING_TEST_SUPPORT_", framework_upper),
+      joined(framework_lower, "-BSL"),
+      joined("thirdparty/", framework_lower),
+      joined("_deps/", framework_lower),
+  };
 }
 
-bool isCommentCapableProjectFile(const std::filesystem::path& relativePath) {
-    const std::string path = relativePath.generic_string();
-    if (startsWith(path, "thirdparty/") || startsWith(path, "vcpkg_installed/")) {
-        return false;
+bool is_comment_capable_project_file(
+    const std::filesystem::path &relative_path) {
+  const std::string path = relative_path.generic_string();
+  if (starts_with(path, "thirdparty/") ||
+      starts_with(path, "vcpkg_installed/")) {
+    return false;
+  }
+
+  const std::string name = relative_path.filename().string();
+  const std::string extension = relative_path.extension().string();
+  const std::vector<std::string> comment_capable_extensions = {
+      ".c",     ".cc",  ".cpp", ".cxx", ".h",    ".hh",  ".hpp",  ".hxx",
+      ".cmake", ".ps1", ".md",  ".txt", ".lang", ".yml", ".yaml",
+  };
+  const std::vector<std::string> comment_capable_names = {
+      ".clang-tidy",    ".clang-format", ".editorconfig",
+      ".gitattributes", ".gitignore",    "CMakeLists.txt",
+  };
+
+  return std::find(comment_capable_extensions.begin(),
+                   comment_capable_extensions.end(),
+                   extension) != comment_capable_extensions.end() ||
+         std::find(comment_capable_names.begin(), comment_capable_names.end(),
+                   name) != comment_capable_names.end();
+}
+
+std::vector<std::filesystem::path> project_owned_comment_capable_files() {
+  const std::filesystem::path root = source_root();
+  const std::vector<std::filesystem::path> roots = {
+      ".clang-tidy", ".gitignore",        "AGENTS.md", "CMakeLists.txt",
+      "agents",      "benchmarks",        "cmake",     "docs",
+      "examples",    "resources/locales", "src",       "tests",
+      "tools",
+  };
+
+  std::vector<std::filesystem::path> files;
+  for (const std::filesystem::path &relative_root : roots) {
+    const std::filesystem::path path = root / relative_root;
+    if (!std::filesystem::exists(path)) {
+      continue;
+    }
+    if (std::filesystem::is_regular_file(path)) {
+      if (is_comment_capable_project_file(relative_root)) {
+        files.push_back(relative_root);
+      }
+      continue;
     }
 
-    const std::string name = relativePath.filename().string();
-    const std::string extension = relativePath.extension().string();
-    const std::vector<std::string> commentCapableExtensions = {
-            ".c",
-            ".cc",
-            ".cpp",
-            ".cxx",
-            ".h",
-            ".hh",
-            ".hpp",
-            ".hxx",
-            ".cmake",
-            ".ps1",
-            ".md",
-            ".txt",
-            ".lang",
-            ".yml",
-            ".yaml",
-    };
-    const std::vector<std::string> commentCapableNames = {
-            ".clang-format",
-            ".editorconfig",
-            ".gitattributes",
-            ".gitignore",
-            "CMakeLists.txt",
-    };
+    for (const std::filesystem::directory_entry &entry :
+         std::filesystem::recursive_directory_iterator(path)) {
+      if (!entry.is_regular_file()) {
+        continue;
+      }
 
-    return std::find(commentCapableExtensions.begin(), commentCapableExtensions.end(), extension) !=
-                    commentCapableExtensions.end() ||
-            std::find(commentCapableNames.begin(), commentCapableNames.end(), name) != commentCapableNames.end();
+      const std::filesystem::path relative =
+          std::filesystem::relative(entry.path(), root);
+      if (is_comment_capable_project_file(relative)) {
+        files.push_back(relative);
+      }
+    }
+  }
+
+  std::sort(files.begin(), files.end());
+  return files;
 }
 
-std::vector<std::filesystem::path> projectOwnedCommentCapableFiles() {
-    const std::filesystem::path root = sourceRoot();
-    const std::vector<std::filesystem::path> roots = {
-            ".gitignore",
-            "AGENTS.md",
-            "CMakeLists.txt",
-            "agents",
-            "benchmarks",
-            "cmake",
-            "docs",
-            "examples",
-            "resources/locales",
-            "src",
-            "tests",
-            "tools",
-    };
+bool is_cpp_owned_source_extension(const std::string &extension) {
+  const std::vector<std::string> extensions = {
+      ".c",   ".cc",  ".cpp", ".cxx", ".h",   ".hh",
+      ".hpp", ".hxx", ".ixx", ".inl", ".ipp", ".tpp",
+  };
+  return std::find(extensions.begin(), extensions.end(), extension) !=
+         extensions.end();
+}
 
-    std::vector<std::filesystem::path> files;
-    for (const std::filesystem::path& relativeRoot : roots) {
-        const std::filesystem::path path = root / relativeRoot;
-        if (!std::filesystem::exists(path)) {
-            continue;
-        }
-        if (std::filesystem::is_regular_file(path)) {
-            if (isCommentCapableProjectFile(relativeRoot)) {
-                files.push_back(relativeRoot);
-            }
-            continue;
-        }
+std::vector<std::filesystem::path> project_owned_cpp_files() {
+  const std::filesystem::path root = source_root();
+  const std::vector<std::filesystem::path> roots = {
+      "benchmarks", "examples", "src", "tests", "tools",
+  };
 
-        for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator(path)) {
-            if (!entry.is_regular_file()) {
-                continue;
-            }
-
-            const std::filesystem::path relative = std::filesystem::relative(entry.path(), root);
-            if (isCommentCapableProjectFile(relative)) {
-                files.push_back(relative);
-            }
-        }
+  std::vector<std::filesystem::path> files;
+  for (const std::filesystem::path &relative_root : roots) {
+    const std::filesystem::path path = root / relative_root;
+    if (!std::filesystem::exists(path)) {
+      continue;
     }
 
-    std::sort(files.begin(), files.end());
-    return files;
+    for (const std::filesystem::directory_entry &entry :
+         std::filesystem::recursive_directory_iterator(path)) {
+      if (!entry.is_regular_file() ||
+          !is_cpp_owned_source_extension(entry.path().extension().string())) {
+        continue;
+      }
+
+      files.push_back(std::filesystem::relative(entry.path(), root));
+    }
+  }
+
+  std::sort(files.begin(), files.end());
+  return files;
 }
 
-bool isCppOwnedSourceExtension(const std::string& extension) {
-    const std::vector<std::string> extensions = {
-            ".c",
-            ".cc",
-            ".cpp",
-            ".cxx",
-            ".h",
-            ".hh",
-            ".hpp",
-            ".hxx",
-            ".ixx",
-            ".inl",
-            ".ipp",
-            ".tpp",
-    };
-    return std::find(extensions.begin(), extensions.end(), extension) != extensions.end();
+bool is_snake_case_file_stem(const std::filesystem::path &relative_path) {
+  static const std::regex kSnakeCase(R"(^[a-z0-9]+(_[a-z0-9]+)*$)");
+  return std::regex_match(relative_path.stem().string(), kSnakeCase);
 }
 
-std::vector<std::filesystem::path> projectOwnedCppFiles() {
-    const std::filesystem::path root = sourceRoot();
-    const std::vector<std::filesystem::path> roots = {
-            "benchmarks",
-            "examples",
-            "src",
-            "tests",
-            "tools",
-    };
+bool contains_stale_project_cpp_path(std::string source) {
+  std::replace(source.begin(), source.end(), '\\', '/');
+  static const std::regex kStalePath(
+      R"((?:src|tests|examples|benchmarks)/[A-Za-z0-9_./-]*[A-Z][A-Za-z0-9_./-]*\.(?:h|cpp)\b|(?:src|tests|examples|benchmarks)/[A-Za-z0-9_./-]*\.(?:h|hh|hxx|cc|cxx|ixx|inl)\b)");
+  return std::regex_search(source, kStalePath);
+}
 
-    std::vector<std::filesystem::path> files;
-    for (const std::filesystem::path& relativeRoot : roots) {
-        const std::filesystem::path path = root / relativeRoot;
-        if (!std::filesystem::exists(path)) {
-            continue;
-        }
+std::vector<std::filesystem::path> project_owned_recursive_files() {
+  const std::filesystem::path root = source_root();
+  const std::vector<std::filesystem::path> roots = {
+      ".clang-tidy", ".gitignore", "AGENTS.md", "CMakeLists.txt", "agents",
+      "benchmarks",  "cmake",      "docs",      "examples",       "memory.md",
+      "refactor.md", "resources",  "src",       "tests",          "tools",
+  };
 
-        for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator(path)) {
-            if (!entry.is_regular_file() || !isCppOwnedSourceExtension(entry.path().extension().string())) {
-                continue;
-            }
-
-            files.push_back(std::filesystem::relative(entry.path(), root));
-        }
+  std::vector<std::filesystem::path> files;
+  for (const std::filesystem::path &relative_root : roots) {
+    const std::filesystem::path path = root / relative_root;
+    if (!std::filesystem::exists(path)) {
+      continue;
+    }
+    if (std::filesystem::is_regular_file(path)) {
+      files.push_back(relative_root);
+      continue;
     }
 
-    std::sort(files.begin(), files.end());
-    return files;
+    for (const std::filesystem::directory_entry &entry :
+         std::filesystem::recursive_directory_iterator(path)) {
+      if (entry.is_regular_file()) {
+        files.push_back(std::filesystem::relative(entry.path(), root));
+      }
+    }
+  }
+
+  std::sort(files.begin(), files.end());
+  return files;
 }
 
-bool isSnakeCaseFileStem(const std::filesystem::path& relativePath) {
-    static const std::regex snakeCase(R"(^[a-z0-9]+(_[a-z0-9]+)*$)");
-    return std::regex_match(relativePath.stem().string(), snakeCase);
-}
+std::vector<std::filesystem::path> guardrail_source_files() {
+  const std::filesystem::path root = source_root();
+  const std::vector<std::filesystem::path> roots = {
+      "src",        "tests",          "cmake",
+      "tools",      "CMakeLists.txt", "CMakePresets.json",
+      "vcpkg.json",
+  };
+  const std::vector<std::string> extensions = {
+      ".c", ".cc", ".cpp", ".hpp", ".cmake", ".txt", ".json", ".ps1",
+  };
 
-bool containsStaleProjectCppPath(std::string source) {
-    std::replace(source.begin(), source.end(), '\\', '/');
-    static const std::regex stalePath(
-            R"((?:src|tests|examples|benchmarks)/[A-Za-z0-9_./-]*[A-Z][A-Za-z0-9_./-]*\.(?:h|cpp)\b|(?:src|tests|examples|benchmarks)/[A-Za-z0-9_./-]*\.(?:h|hh|hxx|cc|cxx|ixx|inl)\b)");
-    return std::regex_search(source, stalePath);
-}
-
-std::vector<std::filesystem::path> projectOwnedRecursiveFiles() {
-    const std::filesystem::path root = sourceRoot();
-    const std::vector<std::filesystem::path> roots = {
-            ".gitignore",
-            "AGENTS.md",
-            "CMakeLists.txt",
-            "agents",
-            "benchmarks",
-            "cmake",
-            "docs",
-            "examples",
-            "memory.md",
-            "refactor.md",
-            "resources",
-            "src",
-            "tests",
-            "tools",
-    };
-
-    std::vector<std::filesystem::path> files;
-    for (const std::filesystem::path& relativeRoot : roots) {
-        const std::filesystem::path path = root / relativeRoot;
-        if (!std::filesystem::exists(path)) {
-            continue;
-        }
-        if (std::filesystem::is_regular_file(path)) {
-            files.push_back(relativeRoot);
-            continue;
-        }
-
-        for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator(path)) {
-            if (entry.is_regular_file()) {
-                files.push_back(std::filesystem::relative(entry.path(), root));
-            }
-        }
+  std::vector<std::filesystem::path> files;
+  for (const std::filesystem::path &relative_root : roots) {
+    const std::filesystem::path path = root / relative_root;
+    if (!std::filesystem::exists(path)) {
+      continue;
+    }
+    if (std::filesystem::is_regular_file(path)) {
+      files.push_back(relative_root);
+      continue;
     }
 
-    std::sort(files.begin(), files.end());
-    return files;
-}
+    for (const std::filesystem::directory_entry &entry :
+         std::filesystem::recursive_directory_iterator(path)) {
+      if (!entry.is_regular_file()) {
+        continue;
+      }
 
-std::vector<std::filesystem::path> guardrailSourceFiles() {
-    const std::filesystem::path root = sourceRoot();
-    const std::vector<std::filesystem::path> roots = {
-            "src",
-            "tests",
-            "cmake",
-            "tools",
-            "CMakeLists.txt",
-            "CMakePresets.json",
-            "vcpkg.json",
-    };
-    const std::vector<std::string> extensions = {
-            ".c",
-            ".cc",
-            ".cpp",
-            ".hpp",
-            ".cmake",
-            ".txt",
-            ".json",
-            ".ps1",
-    };
+      const std::string extension = entry.path().extension().string();
+      if (std::find(extensions.begin(), extensions.end(), extension) ==
+          extensions.end()) {
+        continue;
+      }
 
-    std::vector<std::filesystem::path> files;
-    for (const std::filesystem::path& relativeRoot : roots) {
-        const std::filesystem::path path = root / relativeRoot;
-        if (!std::filesystem::exists(path)) {
-            continue;
-        }
-        if (std::filesystem::is_regular_file(path)) {
-            files.push_back(relativeRoot);
-            continue;
-        }
-
-        for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator(path)) {
-            if (!entry.is_regular_file()) {
-                continue;
-            }
-
-            const std::string extension = entry.path().extension().string();
-            if (std::find(extensions.begin(), extensions.end(), extension) == extensions.end()) {
-                continue;
-            }
-
-            files.push_back(std::filesystem::relative(entry.path(), root));
-        }
+      files.push_back(std::filesystem::relative(entry.path(), root));
     }
+  }
 
-    return files;
+  return files;
 }
 
-bool containsGitCommitLiteral(const std::string& source) {
-    static const std::regex commitLiteral(R"([0-9a-fA-F]{40})");
-    return std::regex_search(source, commitLiteral);
+bool contains_git_commit_literal(const std::string &source) {
+  static const std::regex kCommitLiteral(R"([0-9a-fA-F]{40})");
+  return std::regex_search(source, kCommitLiteral);
 }
 
-std::size_t countOccurrences(std::string_view source, std::string_view needle) {
-    std::size_t count = 0;
-    std::size_t offset = 0;
-    while ((offset = source.find(needle, offset)) != std::string_view::npos) {
-        ++count;
-        offset += needle.size();
-    }
-    return count;
+std::size_t count_occurrences(std::string_view source,
+                              std::string_view needle) {
+  std::size_t count = 0;
+  std::size_t offset = 0;
+  while ((offset = source.find(needle, offset)) != std::string_view::npos) {
+    ++count;
+    offset += needle.size();
+  }
+  return count;
 }
 
-bool endsWith(std::string_view value, std::string_view suffix) {
-    return value.size() >= suffix.size() &&
-            value.substr(value.size() - suffix.size()) == suffix;
+bool ends_with(std::string_view value, std::string_view suffix) {
+  return value.size() >= suffix.size() &&
+         value.substr(value.size() - suffix.size()) == suffix;
 }
 
 std::string trimmed(std::string value) {
@@ -333,543 +286,612 @@ std::string trimmed(std::string value) {
  * Describes manifest and license evidence required for a project dependency.
  */
 struct ThirdPartyLicenseExpectation {
-    std::string_view packageId;
-    std::string_view manifestNeedle;
-    std::string_view licensePath;
-    bool directVcpkgDependency;
+  std::string_view package_id;
+  std::string_view manifest_needle;
+  std::string_view license_path;
+  bool direct_vcpkg_dependency;
 };
 
-const std::vector<ThirdPartyLicenseExpectation>& thirdPartyLicenseExpectations() {
-    static const std::vector<ThirdPartyLicenseExpectation> expectations = {
-            {"", "OpenMesh", "licenses/openmesh-BSD-3-Clause.txt", false},
-            {"", "earcut.hpp", "licenses/earcut-hpp-ISC.txt", false},
-            {"", "nlohmann/json", "licenses/nlohmann-json-MIT.txt", false},
-            {"", "Geometric Tools Engine Mathematics", "licenses/geometrictools-BSL-1.0.txt", false},
-            {"entt", "EnTT", "licenses/entt-MIT.txt", true},
-            {"glm", "OpenGL Mathematics (GLM)", "licenses/glm-MIT.txt", true},
-            {"sdl3", "SDL3", "licenses/sdl3-Zlib-MIT-Apache-2.0.txt", true},
-            {"imgui", "Dear ImGui", "licenses/imgui-MIT.txt", true},
-            {"", "Phosphor Icons", "licenses/phosphor-icons-MIT.txt", false},
-            {"stduuid", "stduuid", "licenses/stduuid-MIT.txt", true},
-            {"gtest", "GoogleTest", "licenses/gtest-BSD-3-Clause.txt", true},
-            {"lodepng", "lodepng", "licenses/lodepng-Zlib.txt", true},
-            {"spdlog", "spdlog", "licenses/spdlog-MIT.txt", true},
-            {"", "{fmt}", "licenses/fmt-MIT.txt", false},
-            {"taskflow", "Taskflow", "licenses/taskflow-MIT.txt", true},
-            {"", "Tracy Profiler", "licenses/tracy-BSD-3-Clause.txt", false},
-    };
-    return expectations;
+const std::vector<ThirdPartyLicenseExpectation> &
+third_party_license_expectations() {
+  static const std::vector<ThirdPartyLicenseExpectation> kExpectations = {
+      {"", "OpenMesh", "licenses/openmesh-BSD-3-Clause.txt", false},
+      {"", "earcut.hpp", "licenses/earcut-hpp-ISC.txt", false},
+      {"", "nlohmann/json", "licenses/nlohmann-json-MIT.txt", false},
+      {"", "Geometric Tools Engine Mathematics",
+       "licenses/geometrictools-BSL-1.0.txt", false},
+      {"entt", "EnTT", "licenses/entt-MIT.txt", true},
+      {"glm", "OpenGL Mathematics (GLM)", "licenses/glm-MIT.txt", true},
+      {"sdl3", "SDL3", "licenses/sdl3-Zlib-MIT-Apache-2.0.txt", true},
+      {"imgui", "Dear ImGui", "licenses/imgui-MIT.txt", true},
+      {"", "Phosphor Icons", "licenses/phosphor-icons-MIT.txt", false},
+      {"stduuid", "stduuid", "licenses/stduuid-MIT.txt", true},
+      {"gtest", "GoogleTest", "licenses/gtest-BSD-3-Clause.txt", true},
+      {"lodepng", "lodepng", "licenses/lodepng-Zlib.txt", true},
+      {"spdlog", "spdlog", "licenses/spdlog-MIT.txt", true},
+      {"", "{fmt}", "licenses/fmt-MIT.txt", false},
+      {"taskflow", "Taskflow", "licenses/taskflow-MIT.txt", true},
+      {"", "Tracy Profiler", "licenses/tracy-BSD-3-Clause.txt", false},
+  };
+  return kExpectations;
 }
 
-void skipJsonWhitespace(const std::string& source, std::size_t& offset) {
-    while (offset < source.size() && std::isspace(static_cast<unsigned char>(source[offset])) != 0) {
-        ++offset;
-    }
-}
-
-std::string parseJsonString(const std::string& source, std::size_t& offset) {
-    std::string value;
-    EXPECT_LT(offset, source.size());
-    EXPECT_EQ(source[offset], '"');
+void skip_json_whitespace(const std::string &source, std::size_t &offset) {
+  while (offset < source.size() &&
+         std::isspace(static_cast<unsigned char>(source[offset])) != 0) {
     ++offset;
-    while (offset < source.size()) {
-        const char current = source[offset++];
-        if (current == '"') {
-            break;
-        }
-        if (current == '\\' && offset < source.size()) {
-            value.push_back(source[offset++]);
-            continue;
-        }
-        value.push_back(current);
-    }
-    return value;
+  }
 }
 
-std::vector<std::string> directVcpkgDependencies() {
-    const std::string manifest = readSourceFile("vcpkg.json");
-    const std::size_t dependenciesKey = manifest.find("\"dependencies\"");
-    EXPECT_NE(dependenciesKey, std::string::npos);
-    const std::size_t dependenciesStart = manifest.find('[', dependenciesKey);
-    EXPECT_NE(dependenciesStart, std::string::npos);
+std::string parse_json_string(const std::string &source, std::size_t &offset) {
+  std::string value;
+  EXPECT_LT(offset, source.size());
+  EXPECT_EQ(source[offset], '"');
+  ++offset;
+  while (offset < source.size()) {
+    const char current = source[offset++];
+    if (current == '"') {
+      break;
+    }
+    if (current == '\\' && offset < source.size()) {
+      value.push_back(source[offset++]);
+      continue;
+    }
+    value.push_back(current);
+  }
+  return value;
+}
 
-    std::vector<std::string> dependencies;
-    int arrayDepth = 1;
-    int objectDepth = 0;
-    std::size_t offset = dependenciesStart + 1;
-    while (offset < manifest.size() && arrayDepth > 0) {
-        const char current = manifest[offset];
-        if (current == '"') {
-            const int stringArrayDepth = arrayDepth;
-            const int stringObjectDepth = objectDepth;
-            std::string token = parseJsonString(manifest, offset);
-            if (stringArrayDepth == 1 && stringObjectDepth == 0) {
-                dependencies.push_back(std::move(token));
-                continue;
-            }
-            if (stringArrayDepth == 1 && stringObjectDepth == 1 && token == "name") {
-                skipJsonWhitespace(manifest, offset);
-                EXPECT_LT(offset, manifest.size());
-                EXPECT_EQ(manifest[offset], ':');
-                ++offset;
-                skipJsonWhitespace(manifest, offset);
-                if (offset < manifest.size() && manifest[offset] == '"') {
-                    dependencies.push_back(parseJsonString(manifest, offset));
-                }
-            }
-            continue;
-        }
-        if (current == '[') {
-            ++arrayDepth;
-        } else if (current == ']') {
-            --arrayDepth;
-        } else if (current == '{') {
-            ++objectDepth;
-        } else if (current == '}') {
-            --objectDepth;
-        }
+std::vector<std::string> direct_vcpkg_dependencies() {
+  const std::string manifest = read_source_file("vcpkg.json");
+  const std::size_t dependencies_key = manifest.find("\"dependencies\"");
+  EXPECT_NE(dependencies_key, std::string::npos);
+  const std::size_t dependencies_start = manifest.find('[', dependencies_key);
+  EXPECT_NE(dependencies_start, std::string::npos);
+
+  std::vector<std::string> dependencies;
+  int array_depth = 1;
+  int object_depth = 0;
+  std::size_t offset = dependencies_start + 1;
+  while (offset < manifest.size() && array_depth > 0) {
+    const char current = manifest[offset];
+    if (current == '"') {
+      const int string_array_depth = array_depth;
+      const int string_object_depth = object_depth;
+      std::string token = parse_json_string(manifest, offset);
+      if (string_array_depth == 1 && string_object_depth == 0) {
+        dependencies.push_back(std::move(token));
+        continue;
+      }
+      if (string_array_depth == 1 && string_object_depth == 1 &&
+          token == "name") {
+        skip_json_whitespace(manifest, offset);
+        EXPECT_LT(offset, manifest.size());
+        EXPECT_EQ(manifest[offset], ':');
         ++offset;
+        skip_json_whitespace(manifest, offset);
+        if (offset < manifest.size() && manifest[offset] == '"') {
+          dependencies.push_back(parse_json_string(manifest, offset));
+        }
+      }
+      continue;
     }
+    if (current == '[') {
+      ++array_depth;
+    } else if (current == ']') {
+      --array_depth;
+    } else if (current == '{') {
+      ++object_depth;
+    } else if (current == '}') {
+      --object_depth;
+    }
+    ++offset;
+  }
 
-    std::sort(dependencies.begin(), dependencies.end());
-    dependencies.erase(std::unique(dependencies.begin(), dependencies.end()), dependencies.end());
-    return dependencies;
+  std::sort(dependencies.begin(), dependencies.end());
+  dependencies.erase(std::unique(dependencies.begin(), dependencies.end()),
+                     dependencies.end());
+  return dependencies;
 }
 
-const ThirdPartyLicenseExpectation* expectationForDirectVcpkgDependency(std::string_view packageId) {
-    const std::vector<ThirdPartyLicenseExpectation>& expectations = thirdPartyLicenseExpectations();
-    const auto found = std::find_if(
-            expectations.begin(),
-            expectations.end(),
-            [&](const ThirdPartyLicenseExpectation& expectation) {
-                return expectation.directVcpkgDependency && expectation.packageId == packageId;
-            });
-    return found == expectations.end() ? nullptr : &(*found);
+const ThirdPartyLicenseExpectation *
+expectation_for_direct_vcpkg_dependency(std::string_view package_id) {
+  const std::vector<ThirdPartyLicenseExpectation> &expectations =
+      third_party_license_expectations();
+  const auto found =
+      std::find_if(expectations.begin(), expectations.end(),
+                   [&](const ThirdPartyLicenseExpectation &expectation) {
+                     return expectation.direct_vcpkg_dependency &&
+                            expectation.package_id == package_id;
+                   });
+  return found == expectations.end() ? nullptr : &(*found);
 }
 
 } // namespace
 
 TEST(BuildGuardrailTests, ProjectOwnedCommentCapableFilesCarryProprietaryBanner) {
-    for (const std::filesystem::path& relativePath : projectOwnedCommentCapableFiles()) {
-        const std::string source = readSourceFile(relativePath);
-        EXPECT_NE(source.find("Copyright (c) 2026 Francesco Di Blasi"), std::string::npos)
-                << relativePath.generic_string();
-        EXPECT_NE(source.find("protected proprietary source code"), std::string::npos)
-                << relativePath.generic_string();
-        EXPECT_NE(source.find("No permission is granted to use, copy, modify, distribute, or sublicense"), std::string::npos)
-                << relativePath.generic_string();
-    }
+  for (const std::filesystem::path &relative_path :
+       project_owned_comment_capable_files()) {
+    const std::string source = read_source_file(relative_path);
+    EXPECT_NE(source.find("Copyright (c) 2026 Francesco Di Blasi"),
+              std::string::npos)
+        << relative_path.generic_string();
+    EXPECT_NE(source.find("protected proprietary source code"),
+              std::string::npos)
+        << relative_path.generic_string();
+    EXPECT_NE(source.find("No permission is granted to use, copy, modify, "
+                          "distribute, or sublicense"),
+              std::string::npos)
+        << relative_path.generic_string();
+  }
 }
 
 TEST(BuildGuardrailTests, FormerSdkBoundaryIsAbsorbedIntoAppBuild) {
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
-    const std::string absorbedCMake = readSourceFile("cmake/QuaderModeling.cmake");
-    const std::string buildFiles = rootCMake + "\n" + absorbedCMake;
-    const std::string presets = readSourceFile("CMakePresets.json");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string absorbed_c_make =
+      read_source_file("cmake/QuaderModeling.cmake");
+  const std::string build_files = root_c_make + "\n" + absorbed_c_make;
+  const std::string presets = read_source_file("CMakePresets.json");
 
-    EXPECT_FALSE(std::filesystem::exists(sourcePath("sdk")));
+  EXPECT_FALSE(std::filesystem::exists(source_path("sdk")));
 
-    expectMissing(buildFiles, "QUADER_BUILD_SDK_TESTS");
-    expectMissing(buildFiles, "QUADER_ENABLE_MODELING_SDK");
-    expectMissing(buildFiles, "QUADER_MODELING_SDK_DIR");
-    expectMissing(buildFiles, "QUADER_HAS_MODELING_SDK");
-    expectMissing(buildFiles, "add_subdirectory(\"${QUADER_MODELING_SDK_DIR}\"");
-    expectMissing(buildFiles, "quader_sdk_tests");
-    expectMissing(buildFiles, "quader_io_qdr");
-    expectMissing(buildFiles, "quader_modeling_editor_core");
-    expectMissing(buildFiles, "quader_modeling_editor_contract");
-    expectMissing(buildFiles, "quader_add_host_contract_domain_test");
-    expectMissing(
-            buildFiles,
-            joined("quader_add_modeling_domain_cat", "ch2_test(qdr_custom_engine_modeling_session_smoke_tests"));
-    expectMissing(buildFiles, "quader_add_qdr_runtime_domain_test(qdr_io_session_tests");
-    expectMissing(buildFiles, "quader_add_modeling_runtime_domain_test(qdr_editor_core_");
-    expectMissing(buildFiles, "qdr_editor_core_*.cpp");
-    expectMissing(buildFiles, "qdr_host_contract_");
-    expectMissing(buildFiles, "tests/modeling_domain/host_contract");
-    expectMissing(buildFiles, "qdr_custom_engine_modeling_session_smoke_tests.cpp");
-    expectMissing(buildFiles, "qdr_io_session_tests.cpp");
+  expect_missing(build_files, "QUADER_BUILD_SDK_TESTS");
+  expect_missing(build_files, "QUADER_ENABLE_MODELING_SDK");
+  expect_missing(build_files, "QUADER_MODELING_SDK_DIR");
+  expect_missing(build_files, "QUADER_HAS_MODELING_SDK");
+  expect_missing(build_files,
+                 "add_subdirectory(\"${QUADER_MODELING_SDK_DIR}\"");
+  expect_missing(build_files, "quader_sdk_tests");
+  expect_missing(build_files, "quader_io_qdr");
+  expect_missing(build_files, "quader_modeling_editor_core");
+  expect_missing(build_files, "quader_modeling_editor_contract");
+  expect_missing(build_files, "quader_add_host_contract_domain_test");
+  expect_missing(
+      build_files,
+      joined("quader_add_modeling_domain_cat",
+             "ch2_test(qdr_custom_engine_modeling_session_smoke_tests"));
+  expect_missing(build_files,
+                 "quader_add_qdr_runtime_domain_test(qdr_io_session_tests");
+  expect_missing(build_files,
+                 "quader_add_modeling_runtime_domain_test(qdr_editor_core_");
+  expect_missing(build_files, "qdr_editor_core_*.cpp");
+  expect_missing(build_files, "qdr_host_contract_");
+  expect_missing(build_files, "tests/modeling_domain/host_contract");
+  expect_missing(build_files,
+                 "qdr_custom_engine_modeling_session_smoke_tests.cpp");
+  expect_missing(build_files, "qdr_io_session_tests.cpp");
 
-    expectMissing(presets, "vs2026-sdk-tests");
-    expectMissing(presets, "QUADER_BUILD_SDK_TESTS");
-    expectMissing(presets, "quader_sdk_tests");
-    expectContains(presets, "\"name\": \"ninja-msvc\"");
-    expectContains(presets, "\"generator\": \"Ninja Multi-Config\"");
-    expectContains(presets, "${sourceDir}/build/ninja-msvc");
+  expect_missing(presets, "vs2026-sdk-tests");
+  expect_missing(presets, "QUADER_BUILD_SDK_TESTS");
+  expect_missing(presets, "quader_sdk_tests");
+  expect_contains(presets, "\"name\": \"ninja-msvc\"");
+  expect_contains(presets, "\"generator\": \"Ninja Multi-Config\"");
+  expect_contains(presets, "${sourceDir}/build/ninja-msvc");
 
-    expectContains(buildFiles, "src/mesh/polygon");
-    expectContains(buildFiles, "src/mesh/geometry");
-    expectContains(buildFiles, "src/scene/document");
-    expectContains(buildFiles, "src/editor/modeling/runtime");
-    expectContains(buildFiles, "src/editor/modeling/operations");
-    expectContains(buildFiles, "src/editor/interactions");
-    expectContains(buildFiles, "src/editor/modeling/services");
-    expectContains(buildFiles, "src/editor/commands");
-    expectContains(buildFiles, "src/editor/history");
-    expectContains(buildFiles, "src/editor/metadata");
-    expectContains(buildFiles, "src/io/qdr");
-    expectContains(buildFiles, "resources/modeling_assets/materials/default");
-    expectContains(buildFiles, "quader_qdr_document_io");
-    expectContains(buildFiles, "quader_qdr_runtime_io");
-    expectContains(buildFiles, "qdr_custom_engine_modeling_runtime_smoke_tests");
-    expectContains(buildFiles, "qdr_runtime_io_compat_tests");
-    expectContains(buildFiles, "tests/modeling_domain/editor_metadata/qdr_editor_metadata_operation_catalog_tests.cpp");
-    expectContains(buildFiles, "qdr_editor_metadata_operation_catalog_tests");
-    expectMissing(buildFiles, "src/modeling");
-    expectMissing(buildFiles, "src/modeling/workspace");
-    expectMissing(buildFiles, "src/modeling/tool/");
-    expectMissing(buildFiles, "src/modeling/tools/");
-    expectMissing(buildFiles, "src/document");
-    expectMissing(buildFiles, "src/editor/actions");
-    expectMissing(buildFiles, "src/editor/mesh");
-    expectMissing(buildFiles, "src/geometry");
-    expectMissing(buildFiles, "resources/modeling/default_materials");
-    expectMissing(buildFiles, "src/editor/tools/host_contract");
-    expectContains(buildFiles, "QUADER_ALLOW_EXTERNAL_OPENMESH_FETCH");
-    for (const std::string& needle : retiredModelingTestFrameworkNeedles()) {
-        expectMissing(buildFiles, needle);
-    }
+  expect_contains(build_files, "src/mesh/polygon");
+  expect_contains(build_files, "src/mesh/geometry");
+  expect_contains(build_files, "src/scene/document");
+  expect_contains(build_files, "src/editor/modeling/runtime");
+  expect_contains(build_files, "src/editor/modeling/operations");
+  expect_contains(build_files, "src/editor/interactions");
+  expect_contains(build_files, "src/editor/modeling/services");
+  expect_contains(build_files, "src/editor/commands");
+  expect_contains(build_files, "src/editor/history");
+  expect_contains(build_files, "src/editor/metadata");
+  expect_contains(build_files, "src/io/qdr");
+  expect_contains(build_files, "resources/modeling_assets/materials/default");
+  expect_contains(build_files, "quader_qdr_document_io");
+  expect_contains(build_files, "quader_qdr_runtime_io");
+  expect_contains(build_files,
+                  "qdr_custom_engine_modeling_runtime_smoke_tests");
+  expect_contains(build_files, "qdr_runtime_io_compat_tests");
+  expect_contains(build_files,
+                  "tests/modeling_domain/editor_metadata/"
+                  "qdr_editor_metadata_operation_catalog_tests.cpp");
+  expect_contains(build_files, "qdr_editor_metadata_operation_catalog_tests");
+  expect_missing(build_files, "src/modeling");
+  expect_missing(build_files, "src/modeling/workspace");
+  expect_missing(build_files, "src/modeling/tool/");
+  expect_missing(build_files, "src/modeling/tools/");
+  expect_missing(build_files, "src/document");
+  expect_missing(build_files, "src/editor/actions");
+  expect_missing(build_files, "src/editor/mesh");
+  expect_missing(build_files, "src/geometry");
+  expect_missing(build_files, "resources/modeling/default_materials");
+  expect_missing(build_files, "src/editor/tools/host_contract");
+  expect_contains(build_files, "QUADER_ALLOW_EXTERNAL_OPENMESH_FETCH");
+  for (const std::string &needle : retired_modeling_test_framework_needles()) {
+    expect_missing(build_files, needle);
+  }
 
-    EXPECT_TRUE(std::filesystem::exists(sourcePath("src/editor/commands/document")));
+  EXPECT_TRUE(
+      std::filesystem::exists(source_path("src/editor/commands/document")));
 }
 
 TEST(BuildGuardrailTests, BuildOptionsAndDependencyPinsHaveSingleCMakeOwner) {
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
-    const std::string options = readSourceFile("cmake/QuaderBuildOptions.cmake");
-    const std::string modeling = readSourceFile("cmake/QuaderModeling.cmake");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string options =
+      read_source_file("cmake/QuaderBuildOptions.cmake");
+  const std::string modeling = read_source_file("cmake/QuaderModeling.cmake");
 
-    expectContains(rootCMake, "include(cmake/QuaderBuildOptions.cmake)");
-    for (const std::string& optionName : {
-                 "QUADER_BUILD_TESTS",
-                 "QUADER_USE_OPENMESH_TOPOLOGY",
-                 "QUADER_ALLOW_EXTERNAL_OPENMESH_FETCH",
-                 "QUADER_ENABLE_TRACY",
-                 "QUADER_TRACY_ON_DEMAND",
-                 "QUADER_BUILD_PERFORMANCE_BENCHMARKS",
-                 "QUADER_ENABLE_PCH",
-         }) {
-        expectContains(options, "option(" + optionName);
-        expectMissing(rootCMake, "option(" + optionName);
-        expectMissing(modeling, "option(" + optionName);
-    }
+  expect_contains(root_c_make, "include(cmake/QuaderBuildOptions.cmake)");
+  for (const std::string &option_name : {
+           "QUADER_BUILD_TESTS",
+           "QUADER_USE_OPENMESH_TOPOLOGY",
+           "QUADER_ALLOW_EXTERNAL_OPENMESH_FETCH",
+           "QUADER_ENABLE_TRACY",
+           "QUADER_TRACY_ON_DEMAND",
+           "QUADER_BUILD_PERFORMANCE_BENCHMARKS",
+           "QUADER_ENABLE_PCH",
+       }) {
+    expect_contains(options, "option(" + option_name);
+    expect_missing(root_c_make, "option(" + option_name);
+    expect_missing(modeling, "option(" + option_name);
+  }
 
-    const std::string pchHelper = sourceSlice(rootCMake, "function(quader_enable_common_pch target)", "endfunction()");
-    expectContains(pchHelper, "target_precompile_headers(${target}");
-    expectContains(pchHelper, "PRIVATE");
-    expectContains(pchHelper, "<string>");
-    expectContains(pchHelper, "<vector>");
-    expectContains(pchHelper, "<unordered_map>");
-    expectMissing(pchHelper, "PUBLIC");
-    expectMissing(pchHelper, "INTERFACE");
-    expectMissing(pchHelper, "src/");
-    expectMissing(pchHelper, "filament/");
-    expectMissing(pchHelper, "SDL3/");
-    expectMissing(pchHelper, "gtest/");
+  const std::string pch_helper =
+      source_slice(root_c_make, "function(quader_enable_common_pch target)",
+                   "endfunction()");
+  expect_contains(pch_helper, "target_precompile_headers(${target}");
+  expect_contains(pch_helper, "PRIVATE");
+  expect_contains(pch_helper, "<string>");
+  expect_contains(pch_helper, "<vector>");
+  expect_contains(pch_helper, "<unordered_map>");
+  expect_missing(pch_helper, "PUBLIC");
+  expect_missing(pch_helper, "INTERFACE");
+  expect_missing(pch_helper, "src/");
+  expect_missing(pch_helper, "filament/");
+  expect_missing(pch_helper, "SDL3/");
+  expect_missing(pch_helper, "gtest/");
 
-    expectContains(options, "set(_QUADER_OPENMESH_COMMIT");
-    expectContains(options, "set(_QUADER_GEOMETRIC_TOOLS_COMMIT");
-    expectContains(options, "set(QUADER_GEOMETRIC_TOOLS_VENDOR_DIR");
-    expectContains(options, "function(quader_resolve_dependency_source");
-    expectContains(options, "ENV{${env_var}}");
-    expectContains(options, "Desktop/_QUADER_DEV/_deps/${dev_dep_dir}");
-    expectMissing(rootCMake, "set(_QUADER_OPENMESH_COMMIT");
-    expectMissing(rootCMake, "set(_QUADER_GEOMETRIC_TOOLS_COMMIT");
-    expectMissing(modeling, "set(QUADER_OPENMESH_COMMIT");
-    expectMissing(modeling, "gte-8.2-");
-    expectContains(modeling, "QUADER_GEOMETRIC_TOOLS_VENDOR_DIR");
-    EXPECT_EQ(countOccurrences(rootCMake + "\n" + modeling, "Desktop/_QUADER_DEV/_deps/openmesh-"), 0U);
-    EXPECT_EQ(countOccurrences(rootCMake + "\n" + modeling, "thirdparty/openmesh/openmesh-"), 0U);
-    EXPECT_EQ(countOccurrences(options, "openmesh/openmesh-${_QUADER_OPENMESH_COMMIT}"), 1U);
-    const std::string buildPolicy = rootCMake + "\n" + options + "\n" + modeling;
-    for (const std::string& needle : retiredModelingTestFrameworkNeedles()) {
-        expectMissing(buildPolicy, needle);
-    }
+  expect_contains(options, "set(_QUADER_OPENMESH_COMMIT");
+  expect_contains(options, "set(_QUADER_GEOMETRIC_TOOLS_COMMIT");
+  expect_contains(options, "set(QUADER_GEOMETRIC_TOOLS_VENDOR_DIR");
+  expect_contains(options, "function(quader_resolve_dependency_source");
+  expect_contains(options, "ENV{${env_var}}");
+  expect_contains(options, "Desktop/_QUADER_DEV/_deps/${dev_dep_dir}");
+  expect_missing(root_c_make, "set(_QUADER_OPENMESH_COMMIT");
+  expect_missing(root_c_make, "set(_QUADER_GEOMETRIC_TOOLS_COMMIT");
+  expect_missing(modeling, "set(QUADER_OPENMESH_COMMIT");
+  expect_missing(modeling, "gte-8.2-");
+  expect_contains(modeling, "QUADER_GEOMETRIC_TOOLS_VENDOR_DIR");
+  EXPECT_EQ(count_occurrences(root_c_make + "\n" + modeling,
+                              "Desktop/_QUADER_DEV/_deps/openmesh-"),
+            0U);
+  EXPECT_EQ(count_occurrences(root_c_make + "\n" + modeling,
+                              "thirdparty/openmesh/openmesh-"),
+            0U);
+  EXPECT_EQ(count_occurrences(options,
+                              "openmesh/openmesh-${_QUADER_OPENMESH_COMMIT}"),
+            1U);
+  const std::string build_policy =
+      root_c_make + "\n" + options + "\n" + modeling;
+  for (const std::string &needle : retired_modeling_test_framework_needles()) {
+    expect_missing(build_policy, needle);
+  }
 }
 
 TEST(BuildGuardrailTests, RootQuaderTestsListsEveryRootTestSource) {
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
 
-    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "tests", ".cpp")) {
-        const std::string relative = normalizedRelative(file);
-        if (startsWith(relative, "tests/modeling_domain/")) {
-            continue;
-        }
-
-        EXPECT_NE(rootCMake.find(relative), std::string::npos) << relative;
+  for (const std::filesystem::path &file :
+       files_with_extension(source_root() / "tests", ".cpp")) {
+    const std::string relative = normalized_relative(file);
+    if (starts_with(relative, "tests/modeling_domain/")) {
+      continue;
     }
 
-    const std::string guardrailTarget = sourceSlice(
-            rootCMake,
-            "add_executable(quader_guardrail_tests",
-            "add_test(NAME quader_guardrail_tests COMMAND quader_guardrail_tests)");
-    const std::string appTarget =
-            sourceSlice(rootCMake, "add_executable(quader_tests", "add_test(NAME quader_tests COMMAND quader_tests)");
+    EXPECT_NE(root_c_make.find(relative), std::string::npos) << relative;
+  }
 
-    expectContains(rootCMake, "add_executable(quader_guardrail_tests");
-    expectContains(rootCMake, "target_link_libraries(quader_guardrail_tests PRIVATE GTest::gtest GTest::gtest_main)");
-    expectContains(guardrailTarget, "tests/agent_instruction_routing_tests.cpp");
-    expectContains(guardrailTarget, "tests/support/guardrail_file_scan.cpp");
-    expectMissing(guardrailTarget, "quader_runtime");
-    expectMissing(appTarget, "tests/agent_instruction_routing_tests.cpp");
+  const std::string guardrail_target = source_slice(
+      root_c_make, "add_executable(quader_guardrail_tests",
+      "add_test(NAME quader_guardrail_tests COMMAND quader_guardrail_tests)");
+  const std::string app_target =
+      source_slice(root_c_make, "add_executable(quader_tests",
+                   "add_test(NAME quader_tests COMMAND quader_tests)");
 
-    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "tests", ".cpp")) {
-        const std::string relative = normalizedRelative(file);
-        if (startsWith(relative, "tests/modeling_domain/") || !endsWith(relative, "_guardrail_tests.cpp")) {
-            continue;
-        }
+  expect_contains(root_c_make, "add_executable(quader_guardrail_tests");
+  expect_contains(root_c_make, "target_link_libraries(quader_guardrail_tests "
+                               "PRIVATE GTest::gtest GTest::gtest_main)");
+  expect_contains(guardrail_target,
+                  "tests/agent_instruction_routing_tests.cpp");
+  expect_contains(guardrail_target, "tests/support/guardrail_file_scan.cpp");
+  expect_missing(guardrail_target, "quader_runtime");
+  expect_missing(app_target, "tests/agent_instruction_routing_tests.cpp");
 
-        expectContains(guardrailTarget, relative);
-        expectMissing(appTarget, relative);
+  for (const std::filesystem::path &file :
+       files_with_extension(source_root() / "tests", ".cpp")) {
+    const std::string relative = normalized_relative(file);
+    if (starts_with(relative, "tests/modeling_domain/") ||
+        !ends_with(relative, "_guardrail_tests.cpp")) {
+      continue;
     }
+
+    expect_contains(guardrail_target, relative);
+    expect_missing(app_target, relative);
+  }
 }
 
 TEST(BuildGuardrailTests, ProjectOwnedCppFilesUseSnakeCaseCppAndHppNames) {
-    for (const std::filesystem::path& relativePath : projectOwnedCppFiles()) {
-        EXPECT_TRUE(isSnakeCaseFileStem(relativePath)) << relativePath.generic_string();
-        EXPECT_TRUE(relativePath.extension() == ".cpp" || relativePath.extension() == ".hpp")
-                << relativePath.generic_string();
-    }
+  for (const std::filesystem::path &relative_path : project_owned_cpp_files()) {
+    EXPECT_TRUE(is_snake_case_file_stem(relative_path))
+        << relative_path.generic_string();
+    EXPECT_TRUE(relative_path.extension() == ".cpp" ||
+                relative_path.extension() == ".hpp")
+        << relative_path.generic_string();
+  }
 }
 
 TEST(BuildGuardrailTests, ProjectOwnedFilesDoNotContainBrokenHeaderExtensionTypos) {
-    const std::string brokenHeaderExtension = joined(".hpp", "pp");
-    const std::string brokenSourceExtension = joined(".cpp", "pp");
-    const std::vector<std::string> brokenIdentifierNeedles = {
-            joined("hpp", "ard"),
-            joined("hpp", "as"),
-            joined("hpp", "istory"),
-            joined("cpp", "ard"),
-            joined("cpp", "as"),
-            joined("cpp", "istory"),
-    };
+  const std::string broken_header_extension = joined(".hpp", "pp");
+  const std::string broken_source_extension = joined(".cpp", "pp");
+  const std::vector<std::string> broken_identifier_needles = {
+      joined("hpp", "ard"), joined("hpp", "as"), joined("hpp", "istory"),
+      joined("cpp", "ard"), joined("cpp", "as"), joined("cpp", "istory"),
+  };
 
-    for (const std::filesystem::path& relativePath : projectOwnedCommentCapableFiles()) {
-        const std::string source = readSourceFile(relativePath);
-        EXPECT_EQ(source.find(brokenHeaderExtension), std::string::npos) << relativePath.generic_string();
-        EXPECT_EQ(source.find(brokenSourceExtension), std::string::npos) << relativePath.generic_string();
-        for (const std::string& needle : brokenIdentifierNeedles) {
-            EXPECT_EQ(source.find(needle), std::string::npos) << relativePath.generic_string();
-        }
+  for (const std::filesystem::path &relative_path :
+       project_owned_comment_capable_files()) {
+    const std::string source = read_source_file(relative_path);
+    EXPECT_EQ(source.find(broken_header_extension), std::string::npos)
+        << relative_path.generic_string();
+    EXPECT_EQ(source.find(broken_source_extension), std::string::npos)
+        << relative_path.generic_string();
+    for (const std::string &needle : broken_identifier_needles) {
+      EXPECT_EQ(source.find(needle), std::string::npos)
+          << relative_path.generic_string();
     }
+  }
 
-    for (const std::filesystem::path& relativePath :
-            {std::filesystem::path{"memory.md"}, std::filesystem::path{"refactor.md"}}) {
-        const std::string source = readSourceFile(relativePath);
-        EXPECT_EQ(source.find(brokenHeaderExtension), std::string::npos) << relativePath.generic_string();
-        EXPECT_EQ(source.find(brokenSourceExtension), std::string::npos) << relativePath.generic_string();
-        for (const std::string& needle : brokenIdentifierNeedles) {
-            EXPECT_EQ(source.find(needle), std::string::npos) << relativePath.generic_string();
-        }
+  for (const std::filesystem::path &relative_path :
+       {std::filesystem::path{"memory.md"},
+        std::filesystem::path{"refactor.md"}}) {
+    const std::string source = read_source_file(relative_path);
+    EXPECT_EQ(source.find(broken_header_extension), std::string::npos)
+        << relative_path.generic_string();
+    EXPECT_EQ(source.find(broken_source_extension), std::string::npos)
+        << relative_path.generic_string();
+    for (const std::string &needle : broken_identifier_needles) {
+      EXPECT_EQ(source.find(needle), std::string::npos)
+          << relative_path.generic_string();
     }
+  }
 }
 
 TEST(BuildGuardrailTests, TemporaryRenameFilesDoNotRemain) {
-    for (const std::filesystem::path& relativePath : projectOwnedRecursiveFiles()) {
-        EXPECT_EQ(relativePath.filename().string().find(".__quader_rename_"), std::string::npos)
-                << relativePath.generic_string();
-    }
+  for (const std::filesystem::path &relative_path :
+       project_owned_recursive_files()) {
+    EXPECT_EQ(relative_path.filename().string().find(".__quader_rename_"),
+              std::string::npos)
+        << relative_path.generic_string();
+  }
 }
 
 TEST(BuildGuardrailTests, ProjectOwnedTextDoesNotReferenceOldCppPathNames) {
-    std::vector<std::filesystem::path> files = projectOwnedCommentCapableFiles();
-    files.push_back("memory.md");
-    files.push_back("refactor.md");
+  std::vector<std::filesystem::path> files =
+      project_owned_comment_capable_files();
+  files.push_back("memory.md");
+  files.push_back("refactor.md");
 
-    for (const std::filesystem::path& relativePath : files) {
-        EXPECT_FALSE(containsStaleProjectCppPath(readSourceFile(relativePath))) << relativePath.generic_string();
-    }
+  for (const std::filesystem::path &relative_path : files) {
+    EXPECT_FALSE(
+        contains_stale_project_cpp_path(read_source_file(relative_path)))
+        << relative_path.generic_string();
+  }
 }
 
 TEST(BuildGuardrailTests, TestsUseOnlyGoogleTest) {
-    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "tests", ".cpp")) {
-        const std::string relative = normalizedRelative(file);
-        const std::string source = readSourceFile(relative);
-        for (const std::string& needle : retiredModelingTestFrameworkNeedles()) {
-            expectMissing(source, needle);
-        }
+  for (const std::filesystem::path &file :
+       files_with_extension(source_root() / "tests", ".cpp")) {
+    const std::string relative = normalized_relative(file);
+    const std::string source = read_source_file(relative);
+    for (const std::string &needle :
+         retired_modeling_test_framework_needles()) {
+      expect_missing(source, needle);
     }
-    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "tests", ".hpp")) {
-        const std::string relative = normalizedRelative(file);
-        const std::string source = readSourceFile(relative);
-        for (const std::string& needle : retiredModelingTestFrameworkNeedles()) {
-            expectMissing(source, needle);
-        }
+  }
+  for (const std::filesystem::path &file :
+       files_with_extension(source_root() / "tests", ".hpp")) {
+    const std::string relative = normalized_relative(file);
+    const std::string source = read_source_file(relative);
+    for (const std::string &needle :
+         retired_modeling_test_framework_needles()) {
+      expect_missing(source, needle);
     }
+  }
 }
 
 TEST(BuildGuardrailTests, ProjectOwnedFilesDoNotReferenceRetiredModelingTestFramework) {
-    std::vector<std::filesystem::path> files = projectOwnedCommentCapableFiles();
-    files.push_back("memory.md");
-    files.push_back("thirdparty/THIRD_PARTY_MANIFEST.md");
+  std::vector<std::filesystem::path> files =
+      project_owned_comment_capable_files();
+  files.push_back("memory.md");
+  files.push_back("thirdparty/THIRD_PARTY_MANIFEST.md");
 
-    for (const std::filesystem::path& relativePath : files) {
-        if (!std::filesystem::exists(sourcePath(relativePath))) {
-            continue;
-        }
-        const std::string source = readSourceFile(relativePath);
-        for (const std::string& needle : retiredModelingTestFrameworkNeedles()) {
-            EXPECT_EQ(source.find(needle), std::string::npos)
-                    << relativePath.generic_string() << " contains " << needle;
-        }
+  for (const std::filesystem::path &relative_path : files) {
+    if (!std::filesystem::exists(source_path(relative_path))) {
+      continue;
     }
+    const std::string source = read_source_file(relative_path);
+    for (const std::string &needle :
+         retired_modeling_test_framework_needles()) {
+      EXPECT_EQ(source.find(needle), std::string::npos)
+          << relative_path.generic_string() << " contains " << needle;
+    }
+  }
 }
 
 TEST(BuildGuardrailTests, CatalogGuardrailTestsDoNotMirrorProductionCatalogs) {
-    const std::string modelingCatalogTests = readSourceFile("tests/modeling_tool_catalog_tests.cpp");
-    const std::string viewportCatalogTests = readSourceFile("tests/viewport_tool_catalog_tests.cpp");
-    const std::string modelingDomainToolContracts =
-            readSourceFile("tests/modeling_domain/tool/qdr_modeling_runtime_tool_operation_contract_tests.cpp");
+  const std::string modeling_catalog_tests =
+      read_source_file("tests/modeling_tool_catalog_tests.cpp");
+  const std::string viewport_catalog_tests =
+      read_source_file("tests/viewport_tool_catalog_tests.cpp");
+  const std::string modeling_domain_tool_contracts = read_source_file(
+      "tests/modeling_domain/tool/"
+      "qdr_modeling_runtime_tool_operation_contract_tests.cpp");
 
-    expectMissing(modelingCatalogTests, "ExpectedAction");
-    expectMissing(modelingCatalogTests, "expectedActions");
-    expectMissing(modelingCatalogTests, "expectedOperations");
-    expectContains(modelingCatalogTests, "modelingInstantOperationCatalog()");
-    expectContains(modelingCatalogTests, "quader_host_contract::action_catalog()");
+  expect_missing(modeling_catalog_tests, "ExpectedAction");
+  expect_missing(modeling_catalog_tests, "expectedActions");
+  expect_missing(modeling_catalog_tests, "expectedOperations");
+  expect_contains(modeling_catalog_tests, "modeling_instant_operation_catalog()");
+  expect_contains(modeling_catalog_tests,
+                  "quader_host_contract::action_catalog()");
 
-    expectMissing(viewportCatalogTests, "ExpectedTool");
-    expectMissing(viewportCatalogTests, "constexpr std::array");
-    expectContains(viewportCatalogTests, "viewportToolDescriptors()");
+  expect_missing(viewport_catalog_tests, "ExpectedTool");
+  expect_missing(viewport_catalog_tests, "constexpr std::array");
+  expect_contains(viewport_catalog_tests, "viewport_tool_descriptors()");
 
-    expectMissing(modelingDomainToolContracts, "ExpectedTool");
-    expectMissing(modelingDomainToolContracts, "ExpectedOperation");
-    expectMissing(modelingDomainToolContracts, "constexpr std::array");
-    expectContains(modelingDomainToolContracts, "qec::tool_registry().tools()");
-    expectContains(modelingDomainToolContracts, "qec::operation_registry().entries()");
+  expect_missing(modeling_domain_tool_contracts, "ExpectedTool");
+  expect_missing(modeling_domain_tool_contracts, "ExpectedOperation");
+  expect_missing(modeling_domain_tool_contracts, "constexpr std::array");
+  expect_contains(modeling_domain_tool_contracts,
+                  "qec::tool_registry().tools()");
+  expect_contains(modeling_domain_tool_contracts,
+                  "qec::operation_registry().entries()");
 }
 
 TEST(BuildGuardrailTests, ModelingDomainTestsUseCategorizedExplicitSourceRegistration) {
-    const std::string modeling = readSourceFile("cmake/QuaderModeling.cmake");
+  const std::string modeling = read_source_file("cmake/QuaderModeling.cmake");
 
-    expectContains(modeling, "function(quader_add_modeling_domain_test_source category target)");
-    expectContains(modeling, "Unknown modeling-domain test category");
-    expectContains(modeling, "function(quader_add_modeling_domain_loop_target target)");
-    expectContains(modeling, "add_executable(${target} EXCLUDE_FROM_ALL ${ARGN})");
-    expectContains(modeling, "quader_modeling_domain_polygon_loop_tests");
-    expectContains(modeling, "quader_modeling_domain_runtime_loop_tests");
-    expectContains(modeling, "quader_modeling_domain_metadata_loop_tests");
-    expectContains(modeling, "add_test(NAME ${target} COMMAND ${target})");
-    expectMissing(modeling, "add_test(NAME quader_modeling_domain_polygon_loop_tests");
-    expectMissing(modeling, "add_test(NAME quader_modeling_domain_runtime_loop_tests");
-    expectMissing(modeling, "add_test(NAME quader_modeling_domain_metadata_loop_tests");
-    expectMissing(modeling, "function(quader_add_polygon_domain_test");
-    expectMissing(modeling, "function(quader_add_modeling_runtime_domain_test");
-    expectMissing(modeling, "function(quader_add_editor_metadata_domain_test");
-    expectMissing(modeling, "file(GLOB QUADER_POLYGON_OPERATION_TEST_SOURCES");
-    expectMissing(modeling, "file(GLOB QUADER_RUNTIME_OPERATION_TEST_SOURCES");
-    expectMissing(modeling, "file(GLOB QUADER_RUNTIME_TOOL_TEST_SOURCES");
+  expect_contains(
+      modeling,
+      "function(quader_add_modeling_domain_test_source category target)");
+  expect_contains(modeling, "Unknown modeling-domain test category");
+  expect_contains(modeling,
+                  "function(quader_add_modeling_domain_loop_target target)");
+  expect_contains(modeling,
+                  "add_executable(${target} EXCLUDE_FROM_ALL ${ARGN})");
+  expect_contains(modeling, "quader_modeling_domain_polygon_loop_tests");
+  expect_contains(modeling, "quader_modeling_domain_runtime_loop_tests");
+  expect_contains(modeling, "quader_modeling_domain_metadata_loop_tests");
+  expect_contains(modeling, "add_test(NAME ${target} COMMAND ${target})");
+  expect_missing(modeling,
+                 "add_test(NAME quader_modeling_domain_polygon_loop_tests");
+  expect_missing(modeling,
+                 "add_test(NAME quader_modeling_domain_runtime_loop_tests");
+  expect_missing(modeling,
+                 "add_test(NAME quader_modeling_domain_metadata_loop_tests");
+  expect_missing(modeling, "function(quader_add_polygon_domain_test");
+  expect_missing(modeling, "function(quader_add_modeling_runtime_domain_test");
+  expect_missing(modeling, "function(quader_add_editor_metadata_domain_test");
+  expect_missing(modeling, "file(GLOB QUADER_POLYGON_OPERATION_TEST_SOURCES");
+  expect_missing(modeling, "file(GLOB QUADER_RUNTIME_OPERATION_TEST_SOURCES");
+  expect_missing(modeling, "file(GLOB QUADER_RUNTIME_TOOL_TEST_SOURCES");
 
-    for (const std::filesystem::path& file :
-            filesWithExtension(sourceRoot() / "tests/modeling_domain", ".cpp")) {
-        const std::string relative = normalizedRelative(file);
-        EXPECT_NE(modeling.find(relative), std::string::npos) << relative;
-    }
+  for (const std::filesystem::path &file :
+       files_with_extension(source_root() / "tests/modeling_domain", ".cpp")) {
+    const std::string relative = normalized_relative(file);
+    EXPECT_NE(modeling.find(relative), std::string::npos) << relative;
+  }
 
-    const std::size_t openmeshTest =
-            modeling.find("tests/modeling_domain/qdr_document_openmesh_topology_query_tests.cpp");
-    ASSERT_NE(openmeshTest, std::string::npos);
-    const std::size_t openmeshCondition = modeling.rfind("if(QUADER_USE_OPENMESH_TOPOLOGY)", openmeshTest);
-    ASSERT_NE(openmeshCondition, std::string::npos);
-    const std::size_t openmeshEnd = modeling.find("endif()", openmeshCondition);
-    ASSERT_NE(openmeshEnd, std::string::npos);
-    EXPECT_LT(openmeshCondition, openmeshTest);
-    EXPECT_LT(openmeshTest, openmeshEnd);
+  const std::size_t openmesh_test = modeling.find(
+      "tests/modeling_domain/qdr_document_openmesh_topology_query_tests.cpp");
+  ASSERT_NE(openmesh_test, std::string::npos);
+  const std::size_t openmesh_condition =
+      modeling.rfind("if(QUADER_USE_OPENMESH_TOPOLOGY)", openmesh_test);
+  ASSERT_NE(openmesh_condition, std::string::npos);
+  const std::size_t openmesh_end = modeling.find("endif()", openmesh_condition);
+  ASSERT_NE(openmesh_end, std::string::npos);
+  EXPECT_LT(openmesh_condition, openmesh_test);
+  EXPECT_LT(openmesh_test, openmesh_end);
 }
 
 TEST(BuildGuardrailTests, AbsorbedModelingDocsNameRealModelingDomainTargets) {
-    const std::string docs = readSourceFile("docs/absorbed_modeling/README.md");
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
-    const std::string modeling = readSourceFile("cmake/QuaderModeling.cmake");
-    const std::string buildFiles = rootCMake + "\n" + modeling;
+  const std::string docs = read_source_file("docs/absorbed_modeling/README.md");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string modeling = read_source_file("cmake/QuaderModeling.cmake");
+  const std::string build_files = root_c_make + "\n" + modeling;
 
-    const std::vector<std::string> documentedTargets = {
-            "quader_geometry",
-            "quader_modeling_polygon",
-            "quader_modeling_runtime",
-            "quader_qdr_document_io",
-            "quader_qdr_runtime_io",
-            "quader_editor_metadata",
-            "quader_modeling_domain_tests",
-            "quader_modeling_domain_polygon_loop_tests",
-            "quader_modeling_domain_runtime_loop_tests",
-            "quader_modeling_domain_metadata_loop_tests",
-    };
-    for (const std::string& target : documentedTargets) {
-        expectContains(docs, "`" + target + "`");
-        expectContains(buildFiles, target);
-    }
+  const std::vector<std::string> documented_targets = {
+      "quader_geometry",
+      "quader_modeling_polygon",
+      "quader_modeling_runtime",
+      "quader_qdr_document_io",
+      "quader_qdr_runtime_io",
+      "quader_editor_metadata",
+      "quader_modeling_domain_tests",
+      "quader_modeling_domain_polygon_loop_tests",
+      "quader_modeling_domain_runtime_loop_tests",
+      "quader_modeling_domain_metadata_loop_tests",
+  };
+  for (const std::string &target : documented_targets) {
+    expect_contains(docs, "`" + target + "`");
+    expect_contains(build_files, target);
+  }
 
-    expectMissing(docs, "`qdr_modeling_domain_smoke`");
+  expect_missing(docs, "`qdr_modeling_domain_smoke`");
 }
 
 TEST(BuildGuardrailTests, DependencyCommitLiteralsStayInDependencyOwnerFiles) {
-    const std::vector<std::filesystem::path> allowedCommitOwnerFiles = {
-            "cmake/QuaderBuildOptions.cmake",
-            "docs/absorbed_modeling/QUADER_NATIVE_SOURCE.txt",
-            "thirdparty/THIRD_PARTY_MANIFEST.md",
-    };
+  const std::vector<std::filesystem::path> allowed_commit_owner_files = {
+      "cmake/QuaderBuildOptions.cmake",
+      "docs/absorbed_modeling/QUADER_NATIVE_SOURCE.txt",
+      "thirdparty/THIRD_PARTY_MANIFEST.md",
+  };
 
-    std::vector<std::filesystem::path> files = projectOwnedCommentCapableFiles();
-    files.push_back("thirdparty/THIRD_PARTY_MANIFEST.md");
-    for (const std::filesystem::path& relativePath : files) {
-        if (std::find(
-                    allowedCommitOwnerFiles.begin(),
-                    allowedCommitOwnerFiles.end(),
-                    relativePath) != allowedCommitOwnerFiles.end()) {
-            continue;
-        }
-        EXPECT_FALSE(containsGitCommitLiteral(readSourceFile(relativePath)))
-                << relativePath.generic_string();
+  std::vector<std::filesystem::path> files =
+      project_owned_comment_capable_files();
+  files.push_back("thirdparty/THIRD_PARTY_MANIFEST.md");
+  for (const std::filesystem::path &relative_path : files) {
+    if (std::find(allowed_commit_owner_files.begin(),
+                  allowed_commit_owner_files.end(),
+                  relative_path) != allowed_commit_owner_files.end()) {
+      continue;
     }
+    EXPECT_FALSE(contains_git_commit_literal(read_source_file(relative_path)))
+        << relative_path.generic_string();
+  }
 }
 
 TEST(BuildGuardrailTests, MigratedModelingDomainTestFilesUseNativeNames) {
-    const std::vector<std::string> forbiddenPathFragments = {
-            "tests/modeling_domain/host_contract/",
-            "qdr_editor_core_",
-            "qdr_host_contract_",
-            "qdr_custom_engine_modeling_session_smoke_tests",
-            "qdr_io_session_tests",
-            "src/modeling/",
-            "src/modeling/workspace/",
-            "src/modeling/tools/",
-            "src/document/",
-            "src/editor/actions/",
-            "src/editor/mesh/",
-            "src/geometry/",
-            "resources/modeling/default_materials/",
-            "src/viewport/tools/",
-    };
+  const std::vector<std::string> forbidden_path_fragments = {
+      "tests/modeling_domain/host_contract/",
+      "qdr_editor_core_",
+      "qdr_host_contract_",
+      "qdr_custom_engine_modeling_session_smoke_tests",
+      "qdr_io_session_tests",
+      "src/modeling/",
+      "src/modeling/workspace/",
+      "src/modeling/tools/",
+      "src/document/",
+      "src/editor/actions/",
+      "src/editor/mesh/",
+      "src/geometry/",
+      "resources/modeling/default_materials/",
+      "src/viewport/tools/",
+  };
 
-    for (const std::filesystem::path& relativePath : guardrailSourceFiles()) {
-        const std::string path = relativePath.generic_string();
-        for (const std::string& fragment : forbiddenPathFragments) {
-            EXPECT_EQ(path.find(fragment), std::string::npos)
-                    << path << " contains stale absorbed-SDK path fragment " << fragment;
-        }
+  for (const std::filesystem::path &relative_path : guardrail_source_files()) {
+    const std::string path = relative_path.generic_string();
+    for (const std::string &fragment : forbidden_path_fragments) {
+      EXPECT_EQ(path.find(fragment), std::string::npos)
+          << path << " contains stale absorbed-SDK path fragment " << fragment;
     }
+  }
 }
 
 TEST(BuildGuardrailTests, SourceBuildAndTestsDoNotUseOldSdkIncludeOrPackagePaths) {
-    const std::vector<std::string> oldIncludeRoots = {
-            "quader_editor_core",
-            "quader_poly",
-            "quader_io",
-            "quader_host_contract",
-    };
-    std::vector<std::string> forbidden;
-    for (const std::string& root : oldIncludeRoots) {
-        forbidden.push_back(std::string("#include <") + root + "/");
-        forbidden.push_back(std::string("#include \"") + root + "/");
-    }
+  const std::vector<std::string> old_include_roots = {
+      "quader_editor_core",
+      "quader_poly",
+      "quader_io",
+      "quader_host_contract",
+  };
+  std::vector<std::string> forbidden;
+  for (const std::string &root : old_include_roots) {
+    forbidden.push_back(std::string("#include <") + root + "/");
+    forbidden.push_back(std::string("#include \"") + root + "/");
+  }
     forbidden.push_back(std::string("sdk/") + "packages/");
     forbidden.push_back(std::string("sdk\\") + "packages\\");
 
-    for (const std::filesystem::path& relativePath : guardrailSourceFiles()) {
-        const std::string source = readSourceFile(relativePath);
-        for (const std::string& needle : forbidden) {
-            EXPECT_EQ(source.find(needle), std::string::npos)
-                    << relativePath.generic_string() << " contains " << needle;
-        }
+    for (const std::filesystem::path &relative_path :
+         guardrail_source_files()) {
+      const std::string source = read_source_file(relative_path);
+      for (const std::string &needle : forbidden) {
+        EXPECT_EQ(source.find(needle), std::string::npos)
+            << relative_path.generic_string() << " contains " << needle;
+      }
     }
 }
 
@@ -888,11 +910,11 @@ TEST(BuildGuardrailTests, AbsorbedModelingDocsDoNotDescribeAnSdkBuildBoundary) {
     };
 
     for (const std::filesystem::path& doc : docs) {
-        const std::string source = readSourceFile(doc);
-        for (const std::string& needle : forbidden) {
-            EXPECT_EQ(source.find(needle), std::string::npos)
-                    << doc.generic_string() << " contains " << needle;
-        }
+      const std::string source = read_source_file(doc);
+      for (const std::string &needle : forbidden) {
+        EXPECT_EQ(source.find(needle), std::string::npos)
+            << doc.generic_string() << " contains " << needle;
+      }
     }
 }
 
@@ -909,728 +931,930 @@ TEST(BuildGuardrailTests, PublicDocsDoNotExposeStaleSdkBoundaryLanguage) {
     };
 
     for (const std::filesystem::path& doc : docs) {
-        const std::string source = readSourceFile(doc);
-        for (const std::string& needle : forbidden) {
-            EXPECT_EQ(source.find(needle), std::string::npos)
-                    << doc.generic_string() << " contains " << needle;
-        }
+      const std::string source = read_source_file(doc);
+      for (const std::string &needle : forbidden) {
+        EXPECT_EQ(source.find(needle), std::string::npos)
+            << doc.generic_string() << " contains " << needle;
+      }
     }
 }
 
 TEST(BuildGuardrailTests, DefaultMaterialMetadataMatchesRuntimePackagePath) {
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
-    const std::string appSource = readSourceFile("src/app/app.cpp");
-    const std::string hostContract = readSourceFile("src/editor/metadata/host_contract.cpp");
-    const std::string defaultCatalog = readSourceFile("src/assets/default_material_catalog.hpp");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string app_source = read_source_file("src/app/app.cpp");
+  const std::string host_contract =
+      read_source_file("src/editor/metadata/host_contract.cpp");
+  const std::string default_catalog =
+      read_source_file("src/assets/default_material_catalog.hpp");
 
-    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/materials/default/default_albedo.png");
-    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/materials/default/default_roughness.png");
-    expectContains(defaultCatalog, "kDefaultMaterialAlbedoTexturePackagePath");
-    expectContains(defaultCatalog, "kDefaultMaterialRoughnessTexturePackagePath");
-    expectContains(appSource, "default_material_catalog.hpp");
-    expectContains(appSource, "kDefaultMaterialAlbedoTexturePackagePath");
-    expectContains(appSource, "kDefaultMaterialRoughnessTexturePackagePath");
-    expectContains(hostContract, "default_material_catalog.hpp");
-    expectContains(hostContract, "kDefaultMaterialAlbedoTexturePackagePath");
-    expectContains(hostContract, "kDefaultMaterialRoughnessTexturePackagePath");
-    expectMissing(hostContract, "assets/materials/default/");
-    expectMissing(appSource, "\"materials/default/default_albedo.png\"");
-    expectMissing(hostContract, "\"materials/default/default_albedo.png\"");
+  expect_contains(
+      root_c_make,
+      "$<TARGET_FILE_DIR:quader>/materials/default/default_albedo.png");
+  expect_contains(
+      root_c_make,
+      "$<TARGET_FILE_DIR:quader>/materials/default/default_roughness.png");
+  expect_contains(default_catalog, "kDefaultMaterialAlbedoTexturePackagePath");
+  expect_contains(default_catalog,
+                  "kDefaultMaterialRoughnessTexturePackagePath");
+  expect_contains(app_source, "default_material_catalog.hpp");
+  expect_contains(app_source, "kDefaultMaterialAlbedoTexturePackagePath");
+  expect_contains(app_source, "kDefaultMaterialRoughnessTexturePackagePath");
+  expect_contains(host_contract, "default_material_catalog.hpp");
+  expect_contains(host_contract, "kDefaultMaterialAlbedoTexturePackagePath");
+  expect_contains(host_contract, "kDefaultMaterialRoughnessTexturePackagePath");
+  expect_missing(host_contract, "assets/materials/default/");
+  expect_missing(app_source, "\"materials/default/default_albedo.png\"");
+  expect_missing(host_contract, "\"materials/default/default_albedo.png\"");
 }
 
 TEST(BuildGuardrailTests, LocalMachinePathsUseEnvironmentBackedDefaults) {
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
-    const std::string options = readSourceFile("cmake/QuaderBuildOptions.cmake");
-    const std::string presets = readSourceFile("CMakePresets.json");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string options =
+      read_source_file("cmake/QuaderBuildOptions.cmake");
+  const std::string presets = read_source_file("CMakePresets.json");
 
-    expectContains(rootCMake, "ENV{FILAMENT_SDK_ROOT}");
-    expectContains(rootCMake, "../_SOURCES/filament-v1.71.6-windows");
-    expectContains(options, "QUADER_OPENMESH_SOURCE_DIR");
-    expectContains(options, "ENV{${env_var}}");
-    expectContains(options, "ENV{USERPROFILE}");
-    for (const std::string& needle : retiredModelingTestFrameworkNeedles()) {
-        expectMissing(options, needle);
-    }
+  expect_contains(root_c_make, "ENV{FILAMENT_SDK_ROOT}");
+  expect_contains(root_c_make, "../_SOURCES/filament-v1.71.6-windows");
+  expect_contains(options, "QUADER_OPENMESH_SOURCE_DIR");
+  expect_contains(options, "ENV{${env_var}}");
+  expect_contains(options, "ENV{USERPROFILE}");
+  for (const std::string &needle : retired_modeling_test_framework_needles()) {
+    expect_missing(options, needle);
+  }
 
-    expectContains(presets, "$env{USERPROFILE}/vcpkg/scripts/buildsystems/vcpkg.cmake");
-    expectMissing(presets, "C:/Users/Drako/vcpkg");
-    expectMissing(presets, "CMAKE_C_COMPILER");
-    expectMissing(presets, "CMAKE_CXX_COMPILER");
-    expectMissing(presets, "Program Files/Microsoft Visual Studio");
-    expectMissing(presets, "Program Files\\\\Microsoft Visual Studio");
+  expect_contains(presets,
+                  "$env{USERPROFILE}/vcpkg/scripts/buildsystems/vcpkg.cmake");
+  expect_missing(presets, "C:/Users/Drako/vcpkg");
+  expect_missing(presets, "CMAKE_C_COMPILER");
+  expect_missing(presets, "CMAKE_CXX_COMPILER");
+  expect_missing(presets, "Program Files/Microsoft Visual Studio");
+  expect_missing(presets, "Program Files\\\\Microsoft Visual Studio");
 }
 
 TEST(BuildGuardrailTests, FilamentSdkIsValidatedAtConfigureTime) {
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
 
-    const std::size_t validation = rootCMake.find("quader_validate_filament_sdk(\"${FILAMENT_SDK_ROOT}\")");
-    const std::size_t target = rootCMake.find("add_library(filament_sdk INTERFACE)");
+  const std::size_t validation = root_c_make.find(
+      "quader_validate_filament_sdk(\"${FILAMENT_SDK_ROOT}\")");
+  const std::size_t target =
+      root_c_make.find("add_library(filament_sdk INTERFACE)");
 
-    ASSERT_NE(validation, std::string::npos);
-    ASSERT_NE(target, std::string::npos);
-    EXPECT_LT(validation, target);
+  ASSERT_NE(validation, std::string::npos);
+  ASSERT_NE(target, std::string::npos);
+  EXPECT_LT(validation, target);
 
-    expectContains(rootCMake, "include/filament/Engine.h");
-    expectContains(rootCMake, "bin/matc.exe");
-    expectContains(rootCMake, "lib/x86_64/${_quader_filament_runtime}/${_quader_filament_lib}.lib");
-    expectContains(rootCMake, "lib/x86_64/mdd/matdbg.lib");
+  expect_contains(root_c_make, "include/filament/Engine.h");
+  expect_contains(root_c_make, "bin/matc.exe");
+  expect_contains(
+      root_c_make,
+      "lib/x86_64/${_quader_filament_runtime}/${_quader_filament_lib}.lib");
+  expect_contains(root_c_make, "lib/x86_64/mdd/matdbg.lib");
 }
 
 TEST(BuildGuardrailTests, BootSmokeFailsOnLoggedErrorsAndRequiresLogCopy) {
-    const std::string smoke = readSourceFile("tools/boot_smoke.ps1");
+  const std::string smoke = read_source_file("tools/boot_smoke.ps1");
 
-    expectContains(smoke, "[switch]$AllowMissingLog");
-    expectContains(smoke, "Quader log was not found");
-    expectContains(smoke, "(?im)\\[(error|critical)\\]|fatal error|\\bfatal\\b");
-    expectContains(smoke, "Error, critical, or fatal log entry found");
+  expect_contains(smoke, "[switch]$AllowMissingLog");
+  expect_contains(smoke, "Quader log was not found");
+  expect_contains(smoke, "(?im)\\[(error|critical)\\]|fatal error|\\bfatal\\b");
+  expect_contains(smoke, "Error, critical, or fatal log entry found");
 }
 
 TEST(BuildGuardrailTests, AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogleTestRuns) {
-    const std::string tool = readSourceFile("tools/affected_check.ps1");
-    const std::string testingBuild = readSourceFile("agents/testing-build.md");
-    const std::string docsRoute = sourceSlice(tool, "if ($Path -match '^docs/')", "if ($Path -match '^tools/')");
+  const std::string tool = read_source_file("tools/affected_check.ps1");
+  const std::string testing_build = read_source_file("agents/testing-build.md");
+  const std::string docs_route = source_slice(
+      tool, "if ($Path -match '^docs/')", "if ($Path -match '^tools/')");
 
-    expectContains(tool, "Before full workflow");
-    expectContains(tool, "After affected workflow");
-    expectContains(tool, "Before -> after");
-    expectContains(tool, "MeasureFull");
-    expectContains(tool, "Resolve-CMakePresetBinaryDir");
-    expectContains(tool, "Get-CMakePresetProperty \"build\" $BuildPreset \"configurePreset\"");
-    expectContains(tool, "Get-CMakePresetProperty \"build\" $BuildPreset \"configuration\"");
-    expectMissing(tool, "build\\vs2026\\$Configuration");
-    expectContains(tool, "quader_guardrail_tests.exe");
-    expectContains(tool, "quader_tests.exe");
-    expectContains(tool, "quader_modeling_domain_tests.exe");
-    expectContains(tool, "quader_modeling_domain_polygon_loop_tests");
-    expectContains(tool, "quader_modeling_domain_runtime_loop_tests");
-    expectContains(tool, "quader_modeling_domain_metadata_loop_tests");
-    expectContains(tool, "--gtest_filter=");
-    expectContains(tool, "GuardrailTestsFilters");
-    expectContains(tool, "ModelingLoopFilters");
-    expectContains(tool, "Get-PolygonOperationFilterForSourcePath");
-    expectContains(tool, "Get-RuntimeOperationFilterForSourcePath");
-    expectContains(tool, "Get-CMakeTargetSourcePaths");
-    expectContains(tool, "Get-CMakeTargetSourcePaths \"quader_guardrail_tests\"");
-    expectContains(tool, "Target '$TargetName' was not found in CMakeLists.txt.");
-    expectMissing(tool, "\"tests/agent_instruction_routing_tests.cpp\"");
-    expectMissing(tool, "\"tests/build_guardrail_tests.cpp\"");
-    expectMissing(tool, "\"tests/oop_architecture_guardrail_tests.cpp\"");
-    expectMissing(tool, "\"tests/programmatic_api_guardrail_tests.cpp\"");
-    expectContains(tool, "fill_hole_from_edges");
-    expectContains(tool, "apply_uv");
-    expectContains(tool, "QdrDocumentOperationUv*");
-    expectContains(tool, "assign_material");
-    expectContains(tool, "assign_material_slot");
-    expectContains(tool, "selection_operations.cpp");
-    expectContains(tool, "QdrModelingRuntimeOperationCommandTests.*");
-    expectContains(tool, "QdrModelingRuntimeToolOperationContractTests.*");
-    expectContains(tool, "Add-PathPlan");
-    expectContains(tool, "Remove-RedundantBuildTargets");
-    expectContains(tool, "AGENTS\\.md");
-    expectContains(tool, "WindowGuardrailTests.*");
-    expectContains(tool, "AppStartupTests.*");
-    expectContains(tool, "FatalErrorHandlerTests.*");
-    expectContains(tool, "BootSmokeFailsOnLoggedErrorsAndRequiresLogCopy");
-    expectContains(tool, "src/render/");
-    expectContains(tool, "src/ui/");
-    expectContains(tool, "src/mesh/polygon/");
-    expectContains(tool, "src/editor/transform/");
-    expectContains(tool, "EditorApiTests.*Transform*");
-    expectContains(tool, "modeling/runtime");
-    expectContains(tool, "src/editor/metadata/");
-    expectContains(tool, "resources/locales/");
-    expectContains(tool, "resources/ibl/");
-    expectContains(tool, "CMakeLists");
-    expectContains(tool, "vcpkg\\.json");
-    expectContains(docsRoute, "ProgrammaticApiGuardrailTests.PublicExamplesStartFromEditorApiOrScriptSurface");
-    expectContains(docsRoute, "ProgrammaticApiGuardrailTests.PublicExamplesAndDocsDoNotStartFromInternalOwnerHeaders");
+  expect_contains(tool, "Before full workflow");
+  expect_contains(tool, "After affected workflow");
+  expect_contains(tool, "Before -> after");
+  expect_contains(tool, "MeasureFull");
+  expect_contains(tool, "Resolve-CMakePresetBinaryDir");
+  expect_contains(
+      tool,
+      "Get-CMakePresetProperty \"build\" $BuildPreset \"configurePreset\"");
+  expect_contains(
+      tool, "Get-CMakePresetProperty \"build\" $BuildPreset \"configuration\"");
+  expect_missing(tool, "build\\vs2026\\$Configuration");
+  expect_contains(tool, "quader_guardrail_tests.exe");
+  expect_contains(tool, "quader_tests.exe");
+  expect_contains(tool, "quader_modeling_domain_tests.exe");
+  expect_contains(tool, "quader_modeling_domain_polygon_loop_tests");
+  expect_contains(tool, "quader_modeling_domain_runtime_loop_tests");
+  expect_contains(tool, "quader_modeling_domain_metadata_loop_tests");
+  expect_contains(tool, "--gtest_filter=");
+  expect_contains(tool, "GuardrailTestsFilters");
+  expect_contains(tool, "ModelingLoopFilters");
+  expect_contains(tool, "Get-PolygonOperationFilterForSourcePath");
+  expect_contains(tool, "Get-RuntimeOperationFilterForSourcePath");
+  expect_contains(tool, "Get-CMakeTargetSourcePaths");
+  expect_contains(tool,
+                  "Get-CMakeTargetSourcePaths \"quader_guardrail_tests\"");
+  expect_contains(tool,
+                  "Target '$TargetName' was not found in CMakeLists.txt.");
+  expect_missing(tool, "\"tests/agent_instruction_routing_tests.cpp\"");
+  expect_missing(tool, "\"tests/build_guardrail_tests.cpp\"");
+  expect_missing(tool, "\"tests/oop_architecture_guardrail_tests.cpp\"");
+  expect_missing(tool, "\"tests/programmatic_api_guardrail_tests.cpp\"");
+  expect_contains(tool, "fill_hole_from_edges");
+  expect_contains(tool, "apply_uv");
+  expect_contains(tool, "QdrDocumentOperationUv*");
+  expect_contains(tool, "assign_material");
+  expect_contains(tool, "assign_material_slot");
+  expect_contains(tool, "selection_operations.cpp");
+  expect_contains(tool, "QdrModelingRuntimeOperationCommandTests.*");
+  expect_contains(tool, "QdrModelingRuntimeToolOperationContractTests.*");
+  expect_contains(tool, "Add-PathPlan");
+  expect_contains(tool, "Remove-RedundantBuildTargets");
+  expect_contains(tool, "AGENTS\\.md");
+  expect_contains(tool, "WindowGuardrailTests.*");
+  expect_contains(tool, "AppStartupTests.*");
+  expect_contains(tool, "FatalErrorHandlerTests.*");
+  expect_contains(tool, "BootSmokeFailsOnLoggedErrorsAndRequiresLogCopy");
+  expect_contains(tool, "src/render/");
+  expect_contains(tool, "src/ui/");
+  expect_contains(tool, "src/mesh/polygon/");
+  expect_contains(tool, "src/editor/transform/");
+  expect_contains(tool, "EditorApiTests.*Transform*");
+  expect_contains(tool, "modeling/runtime");
+  expect_contains(tool, "src/editor/metadata/");
+  expect_contains(tool, "resources/locales/");
+  expect_contains(tool, "resources/ibl/");
+  expect_contains(tool, "CMakeLists");
+  expect_contains(tool, "vcpkg\\.json");
+  expect_contains(docs_route,
+                  "ProgrammaticApiGuardrailTests."
+                  "PublicExamplesStartFromEditorApiOrScriptSurface");
+  expect_contains(docs_route,
+                  "ProgrammaticApiGuardrailTests."
+                  "PublicExamplesAndDocsDoNotStartFromInternalOwnerHeaders");
 
-    expectContains(testingBuild, "tools/affected_check.ps1");
-    expectContains(testingBuild, "quader_modeling_domain_polygon_loop_tests");
-    expectContains(testingBuild, "-MeasureFull");
-    expectContains(testingBuild, "-ChangedPath");
-    expectContains(testingBuild, "before -> after");
+  expect_contains(testing_build, "tools/affected_check.ps1");
+  expect_contains(testing_build, "quader_modeling_domain_polygon_loop_tests");
+  expect_contains(testing_build, "-MeasureFull");
+  expect_contains(testing_build, "-ChangedPath");
+  expect_contains(testing_build, "before -> after");
 }
 
 TEST(BuildGuardrailTests, TestingDocsExplainPlacementAndSelectionRules) {
-    const std::string testingBuild = readSourceFile("agents/testing-build.md");
-    const std::string testsGuide = readSourceFile("tests/AGENTS.md");
-    const std::string modelingGuide = readSourceFile("tests/modeling_domain/AGENTS.md");
+  const std::string testing_build = read_source_file("agents/testing-build.md");
+  const std::string tests_guide = read_source_file("tests/AGENTS.md");
+  const std::string modeling_guide =
+      read_source_file("tests/modeling_domain/AGENTS.md");
 
-    expectContains(testingBuild, "## Test Placement");
-    expectContains(testingBuild, "## Test Selection");
-    expectContains(testingBuild, "quader_guardrail_tests");
-    expectContains(testingBuild, "quader_tests");
-    expectContains(testingBuild, "quader_modeling_domain_tests");
-    expectContains(testingBuild, "tests/modeling_domain/operation/qdr_document_operation_<feature>_tests.cpp");
-    expectContains(testingBuild, "qdr_modeling_runtime_operation_<feature>_tests.cpp");
-    expectContains(testingBuild, "tools/affected_check.ps1 -PlanOnly -ChangedPath");
-    expectContains(testingBuild, "--gtest_filter=SuiteName.*");
-    expectContains(testingBuild, "-MeasureFull");
+  expect_contains(testing_build, "## Test Placement");
+  expect_contains(testing_build, "## Test Selection");
+  expect_contains(testing_build, "quader_guardrail_tests");
+  expect_contains(testing_build, "quader_tests");
+  expect_contains(testing_build, "quader_modeling_domain_tests");
+  expect_contains(testing_build, "tests/modeling_domain/operation/"
+                                 "qdr_document_operation_<feature>_tests.cpp");
+  expect_contains(testing_build,
+                  "qdr_modeling_runtime_operation_<feature>_tests.cpp");
+  expect_contains(testing_build,
+                  "tools/affected_check.ps1 -PlanOnly -ChangedPath");
+  expect_contains(testing_build, "--gtest_filter=SuiteName.*");
+  expect_contains(testing_build, "-MeasureFull");
 
-    expectContains(testsGuide, "## Placement Rules");
-    expectContains(testsGuide, "Root `tests/*_tests.cpp` files belong to `quader_tests`");
-    expectContains(testsGuide, "Root guardrail files belong to `quader_guardrail_tests`");
-    expectContains(testsGuide, "Modeling-domain behavior belongs under `tests/modeling_domain/`");
-    expectContains(testsGuide, "## Selection Rules");
+  expect_contains(tests_guide, "## Placement Rules");
+  expect_contains(tests_guide,
+                  "Root `tests/*_tests.cpp` files belong to `quader_tests`");
+  expect_contains(tests_guide,
+                  "Root guardrail files belong to `quader_guardrail_tests`");
+  expect_contains(
+      tests_guide,
+      "Modeling-domain behavior belongs under `tests/modeling_domain/`");
+  expect_contains(tests_guide, "## Selection Rules");
 
-    expectContains(modelingGuide, "## Placement Rules");
-    expectContains(modelingGuide, "qdr_document_operation_<feature>_tests.cpp");
-    expectContains(modelingGuide, "qdr_modeling_runtime_operation_<feature>_tests.cpp");
-    expectContains(modelingGuide, "qdr_modeling_runtime_tool_<feature>_tests.cpp");
-    expectContains(modelingGuide, "## Selection Rules");
-    expectContains(modelingGuide, "quader_modeling_domain_polygon_loop_tests");
-    expectContains(modelingGuide, "quader_modeling_domain_runtime_loop_tests");
-    expectContains(modelingGuide, "quader_modeling_domain_metadata_loop_tests");
+  expect_contains(modeling_guide, "## Placement Rules");
+  expect_contains(modeling_guide, "qdr_document_operation_<feature>_tests.cpp");
+  expect_contains(modeling_guide,
+                  "qdr_modeling_runtime_operation_<feature>_tests.cpp");
+  expect_contains(modeling_guide,
+                  "qdr_modeling_runtime_tool_<feature>_tests.cpp");
+  expect_contains(modeling_guide, "## Selection Rules");
+  expect_contains(modeling_guide, "quader_modeling_domain_polygon_loop_tests");
+  expect_contains(modeling_guide, "quader_modeling_domain_runtime_loop_tests");
+  expect_contains(modeling_guide, "quader_modeling_domain_metadata_loop_tests");
 }
 
 TEST(BuildGuardrailTests, LocalizationResourcesArePackagedWithRuntime) {
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
 
-    expectContains(rootCMake, "src/core/localization_service.cpp");
-    expectContains(rootCMake, "tests/localization_tests.cpp");
-    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/locales");
-    expectContains(rootCMake, "resources/locales");
-    expectContains(rootCMake, "copy_directory");
+  expect_contains(root_c_make, "src/core/localization_service.cpp");
+  expect_contains(root_c_make, "tests/localization_tests.cpp");
+  expect_contains(root_c_make, "$<TARGET_FILE_DIR:quader>/locales");
+  expect_contains(root_c_make, "resources/locales");
+  expect_contains(root_c_make, "copy_directory");
 
-    EXPECT_FALSE(readSourceFile("resources/locales/en-US.lang").empty());
-    EXPECT_FALSE(readSourceFile("resources/locales/it-IT.lang").empty());
+  EXPECT_FALSE(read_source_file("resources/locales/en-US.lang").empty());
+  EXPECT_FALSE(read_source_file("resources/locales/it-IT.lang").empty());
 }
 
 TEST(BuildGuardrailTests, ImGuiRuntimeResourcesArePackagedWithRuntime) {
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
-    const std::string iconHeader = readSourceFile("src/ui/ui_icon_set.hpp");
-    const std::string phosphorHeader = readSourceFile("src/ui/phosphor_icons.hpp");
-    const std::string quaderWidgets = readSourceFile("src/ui/imgui_quader_widgets.cpp");
-    const std::string styleSource = readSourceFile("src/ui/ui_style_tokens.cpp");
-    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string icon_header = read_source_file("src/ui/ui_icon_set.hpp");
+  const std::string phosphor_header =
+      read_source_file("src/ui/phosphor_icons.hpp");
+  const std::string quader_widgets =
+      read_source_file("src/ui/imgui_quader_widgets.cpp");
+  const std::string style_source =
+      read_source_file("src/ui/ui_style_tokens.cpp");
+  const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
 
-    expectContains(rootCMake, "src/ui/ui_system.cpp");
-    expectContains(rootCMake, "src/ui/viewport_panel.cpp");
-    expectContains(rootCMake, "quader_register_filament_material");
-    expectContains(rootCMake, "QUADER_FILAMENT_MATERIAL_COPY_COMMANDS");
-    expectContains(rootCMake, "resources/materials/quader_mesh.mat");
-    expectContains(rootCMake, "resources/materials/quader_mesh_lit.mat");
-    expectContains(rootCMake, "quader_register_filament_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh)");
-    expectContains(rootCMake, "quader_register_filament_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit)");
-    expectContains(rootCMake, "resources/materials/imgui.mat");
-    expectContains(rootCMake, "quader_register_filament_material(imgui_material resources/materials/imgui.mat imgui)");
-    expectContains(rootCMake, "resources/fonts/Inter.ttf");
-    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/fonts/Inter.ttf");
-    expectContains(rootCMake, "resources/fonts/Phosphor.ttf");
-    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/fonts/Phosphor.ttf");
-    expectContains(rootCMake, "resources/icons");
-    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/icons");
-    expectContains(rootCMake, "copy_if_different");
-    expectContains(rootCMake, "copy_directory");
-    expectContains(iconHeader, "lock");
-    expectContains(iconHeader, "unlock");
-    expectContains(iconHeader, "hide");
-    expectContains(iconHeader, "show");
-    expectContains(uiSystemSource, "lock_icon.png");
-    expectContains(uiSystemSource, "unlock_icon.png");
-    expectContains(uiSystemSource, "hide_icon.png");
-    expectContains(uiSystemSource, "show_icon.png");
-    expectContains(phosphorHeader, "kPhosphorCaretDown");
-    expectContains(phosphorHeader, "kPhosphorCaretRight");
-    expectContains(quaderWidgets, "drawComboCaret");
-    expectContains(quaderWidgets, "ClosePopupToLevel");
-    expectContains(quaderWidgets, "##QuaderComboWasOpen");
-    expectContains(quaderWidgets, "BeginComboPopup");
-    expectContains(quaderWidgets, "ImGuiComboFlags_HeightMask_");
-    expectContains(quaderWidgets, "kPhosphorCaretDown");
-    expectContains(quaderWidgets, "kPhosphorCaretRight");
-    expectContains(styleSource, "Phosphor.ttf");
-    expectContains(styleSource, "GlyphExcludeRanges = iconRanges");
-    expectContains(styleSource, "MergeMode = true");
+  expect_contains(root_c_make, "src/ui/ui_system.cpp");
+  expect_contains(root_c_make, "src/ui/viewport_panel.cpp");
+  expect_contains(root_c_make, "quader_register_filament_material");
+  expect_contains(root_c_make, "QUADER_FILAMENT_MATERIAL_COPY_COMMANDS");
+  expect_contains(root_c_make, "resources/materials/quader_mesh.mat");
+  expect_contains(root_c_make, "resources/materials/quader_mesh_lit.mat");
+  expect_contains(root_c_make,
+                  "quader_register_filament_material(quader_mesh_material "
+                  "resources/materials/quader_mesh.mat quader_mesh)");
+  expect_contains(root_c_make,
+                  "quader_register_filament_material(quader_mesh_lit_material "
+                  "resources/materials/quader_mesh_lit.mat quader_mesh_lit)");
+  expect_contains(root_c_make, "resources/materials/imgui.mat");
+  expect_contains(root_c_make, "quader_register_filament_material(imgui_"
+                               "material resources/materials/imgui.mat imgui)");
+  expect_contains(root_c_make, "resources/fonts/Inter.ttf");
+  expect_contains(root_c_make, "$<TARGET_FILE_DIR:quader>/fonts/Inter.ttf");
+  expect_contains(root_c_make, "resources/fonts/Phosphor.ttf");
+  expect_contains(root_c_make, "$<TARGET_FILE_DIR:quader>/fonts/Phosphor.ttf");
+  expect_contains(root_c_make, "resources/icons");
+  expect_contains(root_c_make, "$<TARGET_FILE_DIR:quader>/icons");
+  expect_contains(root_c_make, "copy_if_different");
+  expect_contains(root_c_make, "copy_directory");
+  expect_contains(icon_header, "lock");
+  expect_contains(icon_header, "unlock");
+  expect_contains(icon_header, "hide");
+  expect_contains(icon_header, "show");
+  expect_contains(ui_system_source, "lock_icon.png");
+  expect_contains(ui_system_source, "unlock_icon.png");
+  expect_contains(ui_system_source, "hide_icon.png");
+  expect_contains(ui_system_source, "show_icon.png");
+  expect_contains(phosphor_header, "kPhosphorCaretDown");
+  expect_contains(phosphor_header, "kPhosphorCaretRight");
+  expect_contains(quader_widgets, "draw_combo_caret");
+  expect_contains(quader_widgets, "ClosePopupToLevel");
+  expect_contains(quader_widgets, "##QuaderComboWasOpen");
+  expect_contains(quader_widgets, "BeginComboPopup");
+  expect_contains(quader_widgets, "ImGuiComboFlags_HeightMask_");
+  expect_contains(quader_widgets, "kPhosphorCaretDown");
+  expect_contains(quader_widgets, "kPhosphorCaretRight");
+  expect_contains(style_source, "Phosphor.ttf");
+  expect_contains(style_source, "GlyphExcludeRanges = kIconRanges");
+  expect_contains(style_source, "MergeMode = true");
 
-    EXPECT_FALSE(readSourceFile("resources/materials/imgui.mat").empty());
-    EXPECT_FALSE(readSourceFile("resources/materials/quader_mesh.mat").empty());
-    EXPECT_FALSE(readSourceFile("resources/materials/quader_mesh_lit.mat").empty());
-    EXPECT_FALSE(readSourceFile("resources/fonts/Inter.ttf").empty());
-    EXPECT_FALSE(readSourceFile("resources/fonts/Phosphor.ttf").empty());
-    EXPECT_TRUE(std::filesystem::exists(sourcePath("resources/icons/logo.png")));
-    EXPECT_TRUE(std::filesystem::exists(sourcePath("resources/icons/quader-logo@2x.png")));
-    EXPECT_GT(std::filesystem::file_size(sourcePath("resources/icons/logo.png")), 512u);
-    EXPECT_GT(std::filesystem::file_size(sourcePath("resources/icons/quader-logo@2x.png")), 512u);
+  EXPECT_FALSE(read_source_file("resources/materials/imgui.mat").empty());
+  EXPECT_FALSE(read_source_file("resources/materials/quader_mesh.mat").empty());
+  EXPECT_FALSE(
+      read_source_file("resources/materials/quader_mesh_lit.mat").empty());
+  EXPECT_FALSE(read_source_file("resources/fonts/Inter.ttf").empty());
+  EXPECT_FALSE(read_source_file("resources/fonts/Phosphor.ttf").empty());
+  EXPECT_TRUE(std::filesystem::exists(source_path("resources/icons/logo.png")));
+  EXPECT_TRUE(std::filesystem::exists(
+      source_path("resources/icons/quader-logo@2x.png")));
+  EXPECT_GT(std::filesystem::file_size(source_path("resources/icons/logo.png")),
+            512u);
+  EXPECT_GT(std::filesystem::file_size(
+                source_path("resources/icons/quader-logo@2x.png")),
+            512u);
 }
 
 TEST(BuildGuardrailTests, ImGuiShellViewportAndControlStylingStayVisible) {
-    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
-    const std::string mainMenuSource = readSourceFile("src/ui/main_menu_bar.cpp");
-    const std::string styleSource = readSourceFile("src/ui/ui_style_tokens.cpp");
-    const std::string viewportPanelSource = readSourceFile("src/ui/viewport_panel.cpp");
-    const std::string windowChromeSource =
-            sourceSlice(uiSystemSource, "MainMenuBarResult UISystem::drawWindowChrome", "void UISystem::drawDockspace");
-    const std::string staticBottomBarSource =
-            sourceSlice(uiSystemSource, "void drawStaticBottomBar", "void UISystem::draw");
-    const std::string chromeMenuItems =
-            sourceSlice(mainMenuSource, "MainMenuBarResult MainMenuBar::drawMenus", "} // namespace quader");
+  const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string main_menu_source =
+      read_source_file("src/ui/main_menu_bar.cpp");
+  const std::string style_source =
+      read_source_file("src/ui/ui_style_tokens.cpp");
+  const std::string viewport_panel_source =
+      read_source_file("src/ui/viewport_panel.cpp");
+  const std::string window_chrome_source = source_slice(
+      ui_system_source, "UISystem::draw_window_chrome",
+      "void UISystem::draw_dockspace");
+  const std::string static_bottom_bar_source = source_slice(
+      ui_system_source, "void draw_static_bottom_bar", "void UISystem::draw");
+  const std::string chrome_menu_items =
+      source_slice(main_menu_source, "MainMenuBarResult MainMenuBar::draw_menus",
+                   "} // namespace quader");
 
-    const std::size_t dockspacePadding =
-            uiSystemSource.find("ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f})");
-    const std::size_t dockspaceBegin = uiSystemSource.find("ImGui::Begin(\"Main Dockspace\"");
-    ASSERT_NE(dockspacePadding, std::string::npos);
-    ASSERT_NE(dockspaceBegin, std::string::npos);
-    EXPECT_LT(dockspacePadding, dockspaceBegin);
-    expectContains(uiSystemSource, "ImGui::PopStyleVar(3)");
-    expectContains(uiSystemSource, "kStaticBottomBarHeight = 28.0f");
-    expectContains(uiSystemSource, "drawStaticBottomBar");
-    expectContains(uiSystemSource, "viewport.Size.y - kStaticBottomBarHeight");
-    expectContains(uiSystemSource, "viewport->Size.y - chromeHeight - kStaticBottomBarHeight");
-    expectContains(uiSystemSource, "ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse");
-    expectContains(uiSystemSource, "ImGuiWindowFlags_NoInputs");
-    expectContains(uiSystemSource, "ImGui::Begin(\"Quader Static Bottom Bar\"");
-    expectContains(uiSystemSource, "quader_app_version.hpp");
-    expectContains(uiSystemSource, "kCompressedSidebarMinWidth = 220.0f");
-    expectContains(uiSystemSource, "kReservedViewportDockWidth = 300.0f");
-    expectContains(uiSystemSource, "effectiveSidebarMinimumWidth");
-    expectContains(uiSystemSource, "frameStyle.sidebarMinWidth = effectiveSidebarMinimumWidth");
-    expectContains(uiSystemSource, "drawDockspace(editor, quitRequested, document, modeling, sidebarMinimumWidth)");
-    expectContains(uiSystemSource, "enforceSidebarDockMinimums(frameStyle.sidebarMinWidth)");
-    expectContains(uiSystemSource, "clampDockedWindowWidth(uiPanelKey(UIPanelId::Outliner), sidebarMinimumWidth)");
-    expectContains(uiSystemSource, "clampDockedWindowWidth(uiPanelKey(UIPanelId::Inspector), sidebarMinimumWidth)");
-    expectMissing(uiSystemSource, "clampDockedWindowWidth(uiPanelKey(UIPanelId::Outliner), style_.sidebarMinWidth)");
-    expectContains(staticBottomBarSource, "const char* rightLabel = kQuaderAppVersionDisplay");
-    expectMissing(staticBottomBarSource, "rightLabel = \"Quader\"");
-    expectContains(uiSystemSource, "ImGui::DockSpace(dockspaceId, dockspaceSize");
-    expectContains(uiSystemSource, "uiPackedColor(118, 92, 168)");
-    expectContains(uiSystemSource, "kWindowChromeHeight = 35.0f");
-    expectContains(uiSystemSource, "kWindowChromeControlsWidth");
-    expectContains(windowChromeSource, "ImGuiWindowFlags_MenuBar");
-    expectContains(windowChromeSource, "mainMenuBar_.drawMenus");
-    expectContains(uiSystemSource, "quader-logo@2x.png");
-    expectContains(mainMenuSource, "MainMenuBarResult MainMenuBar::drawMenus");
-    expectMissing(mainMenuSource, "drawInlinePopupMenu");
-    expectMissing(mainMenuSource, "ImGui::Button(label.c_str())");
-    expectMissing(staticBottomBarSource, "ImGuiWindowFlags_MenuBar");
-    expectMissing(chromeMenuItems, "BeginMenuBar(");
-    expectMissing(chromeMenuItems, "drawInline");
-    expectMissing(uiSystemSource, "availableDockspaceSize.y - kStaticBottomBarHeight");
-    expectMissing(uiSystemSource, "ImGui::Dummy(barSize)");
+  const std::size_t dockspace_padding = ui_system_source.find(
+      "ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f})");
+  const std::size_t dockspace_begin =
+      ui_system_source.find("ImGui::Begin(\"Main Dockspace\"");
+  ASSERT_NE(dockspace_padding, std::string::npos);
+  ASSERT_NE(dockspace_begin, std::string::npos);
+  EXPECT_LT(dockspace_padding, dockspace_begin);
+  expect_contains(ui_system_source, "ImGui::PopStyleVar(3)");
+  expect_contains(ui_system_source, "kStaticBottomBarHeight = 28.0f");
+  expect_contains(ui_system_source, "draw_static_bottom_bar");
+  expect_contains(ui_system_source, "viewport.Size.y - kStaticBottomBarHeight");
+  expect_contains(ui_system_source, "viewport->Size.y - chrome_height");
+  expect_contains(ui_system_source, "kStaticBottomBarHeight");
+  expect_contains(
+      ui_system_source,
+      "ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse");
+  expect_contains(ui_system_source, "ImGuiWindowFlags_NoInputs");
+  expect_contains(ui_system_source,
+                  "ImGui::Begin(\"Quader Static Bottom Bar\"");
+  expect_contains(ui_system_source, "quader_app_version.hpp");
+  expect_contains(ui_system_source, "kCompressedSidebarMinWidth = 220.0f");
+  expect_contains(ui_system_source, "kReservedViewportDockWidth = 300.0f");
+  expect_contains(ui_system_source, "effective_sidebar_minimum_width");
+  expect_contains(ui_system_source,
+                  "frame_style.sidebar_min_width = effective_sidebar_minimum_width");
+  expect_contains(ui_system_source, "draw_dockspace(editor, quit_requested, "
+                                    "document, modeling,");
+  expect_contains(ui_system_source,
+                  "enforce_sidebar_dock_minimums(frame_style.sidebar_min_width)");
+  expect_contains(ui_system_source,
+                  "clamp_docked_window_width(ui_panel_key(UIPanelId::Outliner),");
+  expect_contains(ui_system_source,
+                  "clamp_docked_window_width(ui_panel_key(UIPanelId::Inspector),");
+  expect_contains(ui_system_source, "sidebar_minimum_width);");
+  expect_missing(ui_system_source,
+                 "clamp_docked_window_width(ui_panel_key(UIPanelId::Outliner), "
+                 "style_.sidebar_min_width)");
+  expect_contains(static_bottom_bar_source,
+                  "const char *right_label = kQuaderAppVersionDisplay");
+  expect_missing(static_bottom_bar_source, "right_label = \"Quader\"");
+  expect_contains(ui_system_source,
+                  "ImGui::DockSpace(dockspace_id, dockspace_size");
+  expect_contains(ui_system_source, "ui_packed_color(118, 92, 168)");
+  expect_contains(ui_system_source, "kWindowChromeHeight = 35.0f");
+  expect_contains(ui_system_source, "kWindowChromeControlsWidth");
+  expect_contains(window_chrome_source, "ImGuiWindowFlags_MenuBar");
+  expect_contains(window_chrome_source, "main_menu_bar_.draw_menus");
+  expect_contains(ui_system_source, "quader-logo@2x.png");
+  expect_contains(main_menu_source, "MainMenuBarResult MainMenuBar::draw_menus");
+  expect_missing(main_menu_source, "drawInlinePopupMenu");
+  expect_missing(main_menu_source, "ImGui::Button(label.c_str())");
+  expect_missing(static_bottom_bar_source, "ImGuiWindowFlags_MenuBar");
+  expect_missing(chrome_menu_items, "BeginMenuBar(");
+  expect_missing(chrome_menu_items, "drawInline");
+  expect_missing(ui_system_source,
+                 "availableDockspaceSize.y - kStaticBottomBarHeight");
+  expect_missing(ui_system_source, "ImGui::Dummy(barSize)");
 
-    expectContains(styleSource, "style.FrameBorderSize = 1.0f");
-    expectContains(styleSource, "colors[ImGuiCol_Border] = styleColor(72, 74, 82)");
-    expectContains(styleSource, "colors[ImGuiCol_FrameBg] = styleColor(23, 24, 27)");
-    expectContains(styleSource, "colors[ImGuiCol_FrameBgHovered] = styleColor(38, 40, 45)");
-    expectContains(styleSource, "colors[ImGuiCol_FrameBgActive] = styleColor(50, 54, 61)");
-    expectContains(styleSource, "colors[ImGuiCol_CheckMark] = styleColor(236, 241, 245)");
-    expectMissing(styleSource, "style.FrameBorderSize = 0.0f");
+  expect_contains(style_source, "style.FrameBorderSize = 1.0f");
+  expect_contains(style_source,
+                  "colors[ImGuiCol_Border] = style_color(72, 74, 82)");
+  expect_contains(style_source,
+                  "colors[ImGuiCol_FrameBg] = style_color(23, 24, 27)");
+  expect_contains(style_source,
+                  "colors[ImGuiCol_FrameBgHovered] = style_color(38, 40, 45)");
+  expect_contains(style_source,
+                  "colors[ImGuiCol_FrameBgActive] = style_color(50, 54, 61)");
+  expect_contains(style_source,
+                  "colors[ImGuiCol_CheckMark] = style_color(236, 241, 245)");
+  expect_missing(style_source, "style.FrameBorderSize = 0.0f");
 
-    expectContains(viewportPanelSource, "viewportChromeComboWidthForText");
-    expectContains(viewportPanelSource, "ImGui::CalcTextSize");
-    expectContains(viewportPanelSource, "kViewportChromeViews");
-    expectContains(viewportPanelSource, "kViewportChromeShadingModes");
-    expectMissing(viewportPanelSource, "constexpr float kViewComboWidth = 112.0f");
-    expectMissing(viewportPanelSource, "constexpr float kShadingComboWidth = 104.0f");
+  expect_contains(viewport_panel_source, "viewport_chrome_combo_width_for_text");
+  expect_contains(viewport_panel_source, "ImGui::CalcTextSize");
+  expect_contains(viewport_panel_source, "kViewportChromeViews");
+  expect_contains(viewport_panel_source, "kViewportChromeShadingModes");
+  expect_missing(viewport_panel_source,
+                 "constexpr float kViewComboWidth = 112.0f");
+  expect_missing(viewport_panel_source,
+                 "constexpr float kShadingComboWidth = 104.0f");
 }
 
 TEST(BuildGuardrailTests, ImGuiViewportApiKeepsMultiPaneLayoutWorkspace) {
-    const std::string viewportApiSource = readSourceFile("src/api/quader_viewport_api.cpp");
-    const std::string mainMenuSource = readSourceFile("src/ui/main_menu_bar.cpp");
-    const std::string viewportPanelSource = readSourceFile("src/ui/viewport_panel.cpp");
+  const std::string viewport_api_source =
+      read_source_file("src/api/quader_viewport_api.cpp");
+  const std::string main_menu_source =
+      read_source_file("src/ui/main_menu_bar.cpp");
+  const std::string viewport_panel_source =
+      read_source_file("src/ui/viewport_panel.cpp");
 
-    expectContains(viewportApiSource, "ViewportWorkspaceService workspace{ViewportWorkspaceLayoutPolicy::MultiPane}");
-    expectMissing(viewportApiSource, "ViewportWorkspaceService workspace{ViewportWorkspaceLayoutPolicy::SinglePaneOnly}");
-    expectContains(mainMenuSource, "context.editor.viewports().setLayout(option.id)");
-    expectContains(viewportPanelSource, "viewportWorkspace.activePanePlacements()");
-    expectContains(viewportPanelSource, "viewportWorkspace.activeSplitHandles()");
-    expectMissing(viewportPanelSource, "return workspace().activePanePlacements()");
-    expectMissing(viewportPanelSource, "return workspace().activeSplitHandles()");
+  expect_contains(viewport_api_source,
+                  "ViewportWorkspaceService "
+                  "workspace{ViewportWorkspaceLayoutPolicy::MultiPane}");
+  expect_missing(viewport_api_source,
+                 "ViewportWorkspaceService "
+                 "workspace{ViewportWorkspaceLayoutPolicy::SinglePaneOnly}");
+  expect_contains(main_menu_source,
+                  "context.editor.viewports().set_layout(option.id)");
+  expect_contains(viewport_panel_source,
+                  "viewport_workspace.active_pane_placements()");
+  expect_contains(viewport_panel_source,
+                  "viewport_workspace.active_split_handles()");
+  expect_missing(viewport_panel_source,
+                 "return workspace().active_pane_placements()");
+  expect_missing(viewport_panel_source,
+                 "return workspace().active_split_handles()");
 }
 
 TEST(BuildGuardrailTests, RuntimeUiUsesNativeImGuiStackOnly) {
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
-    const std::string manifest = readSourceFile("vcpkg.json");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string manifest = read_source_file("vcpkg.json");
 
-    expectContains(rootCMake, "find_package(imgui CONFIG REQUIRED)");
-    expectContains(rootCMake, "imgui::imgui");
-    expectContains(manifest, "\"imgui\"");
+  expect_contains(root_c_make, "find_package(imgui CONFIG REQUIRED)");
+  expect_contains(root_c_make, "imgui::imgui");
+  expect_contains(manifest, "\"imgui\"");
 
-    for (const std::filesystem::path& relativePath : guardrailSourceFiles()) {
-        const std::string path = relativePath.generic_string();
-        if (!startsWith(path, "src/")) {
-            continue;
-        }
-
-        const std::string source = readSourceFile(relativePath);
-        expectMissing(source, "src/ui/controllers");
-        expectMissing(source, "src/ui/components");
-        expectMissing(source, "src/ui/core");
+  for (const std::filesystem::path &relative_path : guardrail_source_files()) {
+    const std::string path = relative_path.generic_string();
+    if (!starts_with(path, "src/")) {
+      continue;
     }
+
+    const std::string source = read_source_file(relative_path);
+    expect_missing(source, "src/ui/controllers");
+    expect_missing(source, "src/ui/components");
+    expect_missing(source, "src/ui/core");
+  }
 }
 
 TEST(BuildGuardrailTests, AppVersionMetadataUsesRootVersionSource) {
-    const std::string version = trimmed(readSourceFile("VERSION"));
-    std::smatch versionMatch;
-    ASSERT_TRUE(std::regex_match(
-            version,
-            versionMatch,
-            std::regex(R"((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))")));
-    ASSERT_EQ(versionMatch.size(), 4U);
-    EXPECT_EQ(versionMatch[1].str(), "0");
-    EXPECT_EQ(versionMatch[2].str(), "0");
-    const int patch = std::stoi(versionMatch[3].str());
-    EXPECT_GE(patch, 1);
-    EXPECT_LE(patch, 9999);
+  const std::string version = trimmed(read_source_file("VERSION"));
+  std::smatch version_match;
+  ASSERT_TRUE(std::regex_match(
+      version, version_match,
+      std::regex(R"((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))")));
+  ASSERT_EQ(version_match.size(), 4U);
+  EXPECT_EQ(version_match[1].str(), "0");
+  EXPECT_EQ(version_match[2].str(), "0");
+  const int patch = std::stoi(version_match[3].str());
+  EXPECT_GE(patch, 1);
+  EXPECT_LE(patch, 9999);
 
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
-    const std::string manifest = readSourceFile("vcpkg.json");
-    const std::string versionTemplate = readSourceFile("src/core/quader_app_version.hpp.in");
-    const std::string agents = readSourceFile("AGENTS.md");
-    const std::string testingBuild = readSourceFile("agents/testing-build.md");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string manifest = read_source_file("vcpkg.json");
+  const std::string version_template =
+      read_source_file("src/core/quader_app_version.hpp.in");
+  const std::string agents = read_source_file("AGENTS.md");
+  const std::string testing_build = read_source_file("agents/testing-build.md");
 
-    expectContains(rootCMake, "set(QUADER_VERSION_FILE \"${CMAKE_CURRENT_SOURCE_DIR}/VERSION\")");
-    expectContains(rootCMake, "file(READ \"${QUADER_VERSION_FILE}\" QUADER_APP_VERSION)");
-    expectContains(rootCMake, "project(QuaderApp VERSION ${QUADER_APP_VERSION} LANGUAGES CXX)");
-    expectContains(rootCMake, "configure_file(");
-    expectContains(rootCMake, "src/core/quader_app_version.hpp.in");
-    expectContains(rootCMake, "quader_app_version.hpp");
-    expectContains(rootCMake, "\"${QUADER_GENERATED_DIR}\"");
-    expectContains(manifest, "\"version-string\": \"" + version + "\"");
+  expect_contains(
+      root_c_make,
+      "set(QUADER_VERSION_FILE \"${CMAKE_CURRENT_SOURCE_DIR}/VERSION\")");
+  expect_contains(root_c_make,
+                  "file(READ \"${QUADER_VERSION_FILE}\" QUADER_APP_VERSION)");
+  expect_contains(
+      root_c_make,
+      "project(QuaderApp VERSION ${QUADER_APP_VERSION} LANGUAGES CXX)");
+  expect_contains(root_c_make, "configure_file(");
+  expect_contains(root_c_make, "src/core/quader_app_version.hpp.in");
+  expect_contains(root_c_make, "quader_app_version.hpp");
+  expect_contains(root_c_make, "\"${QUADER_GENERATED_DIR}\"");
+  expect_contains(manifest, "\"version-string\": \"" + version + "\"");
 
-    expectContains(versionTemplate, "kQuaderAppVersionMajor = @QUADER_APP_VERSION_MAJOR@U");
-    expectContains(versionTemplate, "kQuaderAppVersionMinor = @QUADER_APP_VERSION_MINOR@U");
-    expectContains(versionTemplate, "kQuaderAppVersionPatch = @QUADER_APP_VERSION_PATCH@U");
-    expectContains(versionTemplate, "kQuaderAppVersion = \"@QUADER_APP_VERSION@\"");
-    expectContains(versionTemplate, "kQuaderAppVersionDisplay = \"v@QUADER_APP_VERSION@\"");
+  expect_contains(version_template,
+                  "kQuaderAppVersionMajor = @QUADER_APP_VERSION_MAJOR@U");
+  expect_contains(version_template,
+                  "kQuaderAppVersionMinor = @QUADER_APP_VERSION_MINOR@U");
+  expect_contains(version_template,
+                  "kQuaderAppVersionPatch = @QUADER_APP_VERSION_PATCH@U");
+  expect_contains(version_template,
+                  "kQuaderAppVersion = \"@QUADER_APP_VERSION@\"");
+  expect_contains(version_template,
+                  "kQuaderAppVersionDisplay = \"v@QUADER_APP_VERSION@\"");
 
-    expectContains(agents, "## Versioning Rule");
-    expectContains(agents, "follow the app version bump rule");
-    expectContains(testingBuild, "## App Versioning");
-    expectContains(testingBuild, "Root `VERSION` is the app version source of truth");
-    expectContains(testingBuild, "`vcpkg.json` `version-string` must mirror it");
-    expectContains(testingBuild, "major/minor fixed at `0.0`");
-    expectContains(testingBuild, "within `1..9999`");
-    expectContains(testingBuild, "before the final handoff `quader` build");
-    expectContains(testingBuild, "Do not");
-    expectContains(testingBuild, "planning, review, inspection-only, failed/no-change, or explanation-only");
+  expect_contains(agents, "## Versioning Rule");
+  expect_contains(agents, "follow the app version bump rule");
+  expect_contains(testing_build, "## App Versioning");
+  expect_contains(testing_build,
+                  "Root `VERSION` is the app version source of truth");
+  expect_contains(testing_build,
+                  "`vcpkg.json` `version-string` must mirror it");
+  expect_contains(testing_build, "major/minor fixed at `0.0`");
+  expect_contains(testing_build, "within `1..9999`");
+  expect_contains(testing_build, "before the final handoff `quader` build");
+  expect_contains(testing_build, "Do not");
+  expect_contains(testing_build, "planning, review, inspection-only, "
+                                 "failed/no-change, or explanation-only");
 }
 
 TEST(BuildGuardrailTests, EditorAggregateStaysInRuntimeTarget) {
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
 
-    const std::size_t apiTarget = rootCMake.find("add_library(quader_api STATIC");
-    const std::size_t runtimeTarget = rootCMake.find("add_library(quader_runtime STATIC");
-    const std::size_t editorApiSource = rootCMake.find("src/api/quader_editor_api.cpp");
-    const std::size_t renderApiSource = rootCMake.find("src/api/quader_render_api.cpp");
+  const std::size_t api_target =
+      root_c_make.find("add_library(quader_api STATIC");
+  const std::size_t runtime_target =
+      root_c_make.find("add_library(quader_runtime STATIC");
+  const std::size_t editor_api_source =
+      root_c_make.find("src/api/quader_editor_api.cpp");
+  const std::size_t render_api_source =
+      root_c_make.find("src/api/quader_render_api.cpp");
 
-    ASSERT_NE(apiTarget, std::string::npos);
-    ASSERT_NE(runtimeTarget, std::string::npos);
-    ASSERT_NE(editorApiSource, std::string::npos);
-    ASSERT_NE(renderApiSource, std::string::npos);
-    EXPECT_GT(editorApiSource, runtimeTarget);
-    EXPECT_LT(editorApiSource, renderApiSource);
-    EXPECT_GT(editorApiSource, apiTarget);
+  ASSERT_NE(api_target, std::string::npos);
+  ASSERT_NE(runtime_target, std::string::npos);
+  ASSERT_NE(editor_api_source, std::string::npos);
+  ASSERT_NE(render_api_source, std::string::npos);
+  EXPECT_GT(editor_api_source, runtime_target);
+  EXPECT_LT(editor_api_source, render_api_source);
+  EXPECT_GT(editor_api_source, api_target);
 }
 
 TEST(BuildGuardrailTests, ViewportWorkspaceServiceStaysCoreAndRuntimeFree) {
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
-    const std::string header = readSourceFile("src/viewport/viewport_workspace_service.hpp");
-    const std::string source = readSourceFile("src/viewport/viewport_workspace_service.cpp");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string header =
+      read_source_file("src/viewport/viewport_workspace_service.hpp");
+  const std::string source =
+      read_source_file("src/viewport/viewport_workspace_service.cpp");
 
-    const std::size_t coreTarget = rootCMake.find("add_library(quader_core STATIC");
-    const std::size_t apiTarget = rootCMake.find("add_library(quader_api STATIC");
-    const std::size_t workspaceSource = rootCMake.find("src/viewport/viewport_workspace_service.cpp");
+  const std::size_t core_target =
+      root_c_make.find("add_library(quader_core STATIC");
+  const std::size_t api_target =
+      root_c_make.find("add_library(quader_api STATIC");
+  const std::size_t workspace_source =
+      root_c_make.find("src/viewport/viewport_workspace_service.cpp");
 
-    ASSERT_NE(coreTarget, std::string::npos);
-    ASSERT_NE(apiTarget, std::string::npos);
-    ASSERT_NE(workspaceSource, std::string::npos);
-    EXPECT_GT(workspaceSource, coreTarget);
-    EXPECT_LT(workspaceSource, apiTarget);
+  ASSERT_NE(core_target, std::string::npos);
+  ASSERT_NE(api_target, std::string::npos);
+  ASSERT_NE(workspace_source, std::string::npos);
+  EXPECT_GT(workspace_source, core_target);
+  EXPECT_LT(workspace_source, api_target);
 
-    for (const std::string& forbidden : {
-                 "SDL",
-                 "filament",
-                 "SceneDocument",
-                 "AssetRegistry",
-                 "SceneRenderBridge",
-         }) {
-        EXPECT_EQ(header.find(forbidden), std::string::npos) << forbidden;
-        EXPECT_EQ(source.find(forbidden), std::string::npos) << forbidden;
-    }
+  for (const std::string &forbidden : {
+           "SDL",
+           "filament",
+           "SceneDocument",
+           "AssetRegistry",
+           "SceneRenderBridge",
+       }) {
+    EXPECT_EQ(header.find(forbidden), std::string::npos) << forbidden;
+    EXPECT_EQ(source.find(forbidden), std::string::npos) << forbidden;
+  }
 }
 
 TEST(DependencyLicenseGuardrailTests, LuaDependenciesRequireExplicitDecision) {
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
-    const std::string manifest = readSourceFile("vcpkg.json");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string manifest = read_source_file("vcpkg.json");
 
-    for (const std::string& needle : {"find_package(Lua", "find_package(sol2", "lua::", "Lua::", "sol2::"}) {
-        EXPECT_EQ(rootCMake.find(needle), std::string::npos) << needle;
-    }
+  for (const std::string &needle :
+       {"find_package(Lua", "find_package(sol2", "lua::", "Lua::", "sol2::"}) {
+    EXPECT_EQ(root_c_make.find(needle), std::string::npos) << needle;
+  }
     for (const std::string& needle : {"\"lua\"", "\"lua54\"", "\"luajit\"", "\"sol2\""}) {
         EXPECT_EQ(manifest.find(needle), std::string::npos) << needle;
     }
 }
 
 TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
-    const std::string mainSource = readSourceFile("src/main.cpp");
-    const std::string appHeader = readSourceFile("src/app/app.hpp");
-    const std::string appSource = readSourceFile("src/app/app.cpp");
-    const std::string platformHeader = readSourceFile("src/platform/platform_window.hpp");
-    const std::string platformSource = readSourceFile("src/platform/platform_window.cpp");
-    const std::string uiSystemHeader = readSourceFile("src/ui/ui_system.hpp");
-    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string main_source = read_source_file("src/main.cpp");
+  const std::string app_header = read_source_file("src/app/app.hpp");
+  const std::string app_source = read_source_file("src/app/app.cpp");
+  const std::string platform_header =
+      read_source_file("src/platform/platform_window.hpp");
+  const std::string platform_source =
+      read_source_file("src/platform/platform_window.cpp");
+  const std::string ui_system_header = read_source_file("src/ui/ui_system.hpp");
+  const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
 
-    expectContains(mainSource, "bool borderlessWindow = true");
-    expectContains(mainSource, "--borderless-window");
-    expectContains(mainSource, "--native-window");
-    expectContains(mainSource, "--no-borderless-window");
-    expectContains(mainSource, "--render-backend=vulkan");
-    expectContains(mainSource, "--render-backend=opengl");
-    expectContains(mainSource, "commandLine.renderBackend");
-    expectContains(mainSource, "commandLine.borderlessWindow");
-    expectContains(appHeader, "struct AppOptions");
-    expectContains(appHeader, "bool borderlessWindow = true");
-    expectContains(appHeader, "RendererBackend renderBackend = RendererBackend::Vulkan");
-    expectContains(appHeader, "handleWindowChromeAction(WindowChromeAction action)");
-    expectContains(appSource, ".borderless = options.borderlessWindow");
-    expectContains(appSource, ".backend = options.renderBackend");
-    expectContains(appSource, "window_.processChromeEvent(event)");
-    expectContains(appSource, "ui_.takeWindowChromeAction()");
-    expectContains(appSource, "window_.refreshNativeChrome()");
-    expectContains(appSource, "window_.minimize()");
-    expectContains(appSource, "window_.toggleMaximizeRestore()");
-    expectContains(appSource, "window_.canRenderFrames()");
-    expectContains(appSource, "renderFrame(frameClock_.tick())");
-    expectContains(appSource, "renderSystem_.beginFrame()");
-    expectContains(appSource, "if (window_.nativeChromeInteractionActive()) {\n        return false;");
-    expectContains(appSource, "if (!window_.chromeResizeActive())");
-    expectMissing(appSource, "!window_.chromeResizeActive() && !window_.nativeChromeInteractionActive()");
-    expectContains(appSource, "window_.nativeChromeInteractionActive()");
-    expectContains(appSource, "waitUntilNextFrame()");
-    expectContains(appSource, "SDL_WaitEventTimeout(nullptr, waitMs)");
-    expectContains(platformHeader, "struct PlatformWindowOptions");
-    expectContains(platformHeader, "kPlatformWindowMinimumWidth = 800");
-    expectContains(platformHeader, "kPlatformWindowMinimumHeight = 600");
-    expectContains(platformHeader, "refreshNativeChrome()");
-    expectContains(platformHeader, "platformWindowCanRenderFrames");
-    expectContains(platformHeader, "canRenderFrames() const");
-    expectContains(platformHeader, "noteFramePresented(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight)");
-    expectContains(platformHeader, "PlatformWindowChromeHitTest");
-    expectContains(platformHeader, "platformWindowChromeHitTestResult");
-    expectContains(platformHeader, "PlatformWindowChromeResizeDrag");
-    expectContains(platformHeader, "processChromeEvent");
-    expectContains(platformHeader, "releaseChromeResizeCursor");
-    expectContains(platformHeader, "nativeChromeMessageActive() const");
-    expectContains(platformHeader, "nativeLiveResizeFrameActive() const");
-    expectContains(platformHeader, "nativeChromeInteractionActive() const");
-    expectContains(platformHeader, "using LiveResizeFrameCallback = std::function<bool()>");
-    expectContains(platformHeader, "scheduleLiveResizeFrameCallback");
-    expectContains(platformHeader, "dispatchLiveResizeFrameCallback");
-    expectContains(platformHeader, "nativeChromeMessageDepth_");
-    expectContains(platformHeader, "nativeMoveSizeActive_");
-    expectContains(platformHeader, "nativeLiveResizeFrameActive_");
-    expectContains(platformHeader, "liveResizeFrameCallbackPending_");
-    expectContains(platformHeader, "liveResizeFramePendingWidthPixels_");
-    expectContains(platformHeader, "primeLiveResizeFrameCoalescing");
-    expectContains(platformHeader, "applyNativeCustomChromeStyles");
-    expectMissing(platformSource, "SDL_WINDOW_BORDERLESS");
-    expectContains(platformSource, "installNativeChromeCursorHook();");
-    expectContains(platformSource, "applyNativeCustomChromeStyles();");
-    expectContains(platformSource, "WS_CAPTION");
-    expectContains(platformSource, "WS_THICKFRAME");
-    expectContains(platformSource, "SWP_FRAMECHANGED");
-    expectContains(platformSource, "GetClientRect(static_cast<HWND>(nativeChromeWindowHandle_), &clientRect)");
-    expectContains(platformSource, "SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH");
-    expectContains(platformSource, "SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, \"1\")");
-    expectContains(platformSource, "SDL_SetWindowMinimumSize(window_, kPlatformWindowMinimumWidth, kPlatformWindowMinimumHeight)");
-    expectContains(platformSource, "SDL_WINDOW_INPUT_FOCUS");
-    expectContains(platformSource, "SDL_HITTEST_DRAGGABLE");
-    expectContains(platformSource, "SDL_HITTEST_RESIZE_TOPLEFT");
-    expectContains(platformSource, "SDL_CaptureMouse");
-    expectContains(platformSource, "SDL_GetGlobalMouseState");
-    expectContains(platformSource, "SDL_SetWindowPosition");
-    expectContains(platformSource, "SDL_SetWindowSize");
-    expectContains(platformSource, "SDL_MinimizeWindow");
-    expectContains(platformSource, "SDL_SyncWindow failed after minimize");
-    expectContains(platformSource, "SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN | SDL_WINDOW_OCCLUDED");
-    expectContains(platformSource, "SDL_MaximizeWindow");
-    expectContains(platformSource, "SDL_RestoreWindow");
-    expectContains(platformSource, "HTLEFT");
-    expectContains(platformSource, "HTTOPRIGHT");
-    expectContains(platformSource, "WM_SETCURSOR");
-    expectContains(platformSource, "chromeResizeCursorActive_");
-    expectContains(platformSource, "SetWindowLongPtrW");
-    expectContains(platformSource, "GWLP_WNDPROC");
-    expectContains(platformSource, "IDC_SIZEWE");
-    expectContains(platformSource, "case SDL_HITTEST_DRAGGABLE:\n        return HTCAPTION;");
-    expectContains(platformSource, "isNativeChromeSystemHit(SDL_HitTestResult hit)");
-    expectContains(platformSource, "nativeChromeWindowHandle_ != nullptr && isNativeChromeSystemHit(hit)");
-    expectContains(platformSource, "return nativeChromeHitTestCodeForHit(hit);");
-    expectContains(platformSource, "message == WM_ERASEBKGND");
-    expectContains(platformSource, "return 1;");
-    expectContains(platformSource, "message == WM_PAINT");
-    expectContains(platformSource, "liveResizeFramePaintScheduled_ = false");
-    expectContains(platformSource, "BeginPaint(hwnd, &paint)");
-    expectContains(platformSource, "EndPaint(hwnd, &paint)");
-    expectContains(platformSource, "NativeChromeMessageScope");
-    expectContains(platformSource, "nativeMoveSizeActive_ = true");
-    expectContains(platformSource, "message == WM_SIZE && nativeMoveSizeActive_ && wParam != SIZE_MINIMIZED");
-    expectContains(platformSource, "redrawNativeResizeFrame");
-    expectContains(platformSource, "const bool redrawNativeResizeFrame =\n            (message != WM_SIZE || wParam != SIZE_MINIMIZED)");
-    expectMissing(platformSource,
-            "const bool redrawNativeResizeFrame =\n            (message != WM_SIZE || wParam != SIZE_MINIMIZED) &&\n            (message == WM_SIZE ||\n                    message == WM_SIZING");
-    expectMissing(platformSource, "message == WM_WINDOWPOSCHANGED ||\n                    message == WM_DPICHANGED");
-    expectContains(platformSource, "primeLiveResizeFrameCoalescing();");
-    expectMissing(platformSource, "nativeMoveSizeActive_ &&\n            nativeResizeActive_ &&");
-    expectMissing(platformSource, "kNativeMoveSizeRedrawTimerId");
-    expectMissing(platformSource, "SetTimer(");
-    expectMissing(platformSource, "KillTimer(");
-    expectMissing(platformSource, "message == WM_TIMER");
-    expectContains(platformSource, "kLiveResizeFrameMessage = WM_APP");
-    expectContains(platformSource, "message == kLiveResizeFrameMessage");
-    expectContains(platformSource, "PostMessageW(hwnd, kLiveResizeFrameMessage");
-    expectContains(platformSource, "owner.nativeChromeMessageDepth_ == 0 && owner.liveResizeFrameCallbackPending_");
-    expectContains(platformSource, "owner.scheduleLiveResizeFrameCallback()");
-    expectContains(platformSource, "nativeChromeMessageDepth_ > 0");
-    expectContains(platformSource, "RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_NOERASE)");
-    expectMissing(platformSource, "RDW_UPDATENOW");
-    expectMissing(platformSource, "dispatchLiveResizeFrameCallback();\n            return;");
-    expectContains(platformSource, "nativeLiveResizeFrameActive_ = true");
-    expectContains(platformSource, "if (liveResizeFrameCallback_())");
-    expectContains(platformSource, "noteFramePresented(pendingWidth, pendingHeight)");
-    expectContains(platformSource, "liveResizeFramePendingWidthPixels_ = pendingWidth");
-    expectContains(platformSource, "liveResizeFramePendingHeightPixels_ = pendingHeight");
-    expectContains(platformSource, "nativeMoveSizeActive_ || nativeChromeMessageDepth_ > 0");
-    expectMissing(platformSource,
-            "void PlatformWindow::primeLiveResizeFrameCoalescing() {\n    refreshPixelSize();\n    liveResizeFrameSizeValid_ = true;");
-    expectContains(platformSource, "SetCursor(LoadCursor(nullptr, IDC_ARROW));");
-    expectContains(platformSource, "message == WM_SETCURSOR && hit == SDL_HITTEST_DRAGGABLE");
-    expectContains(platformSource, "clearNativeMoveSizeState");
-    expectMissing(platformSource, "(nativeResizeActive_ || IsZoomed(hwnd) != FALSE)");
-    expectContains(platformSource, "DWMWA_WINDOW_CORNER_PREFERENCE");
-    expectContains(platformSource, "DWMWA_BORDER_COLOR");
-    expectContains(platformSource, "DWMWA_COLOR_DEFAULT");
-    expectContains(platformSource, "RegGetValueW");
-    expectContains(platformSource, "ColorPrevalence");
-    expectContains(platformSource, "AccentColor");
-    expectMissing(platformSource, "SDL_SetWindowHitTest");
-    expectMissing(platformSource, "WM_NCLBUTTONDOWN");
-    expectContains(rootCMake, "Dwmapi");
-    expectContains(rootCMake, "Advapi32");
-    expectContains(uiSystemHeader, "enum class WindowChromeAction");
-    expectContains(uiSystemHeader, "takeWindowChromeAction()");
-    expectContains(uiSystemHeader, "needsContinuousRendering() const");
-    expectContains(uiSystemHeader, "std::optional<WindowChromeAction> pendingChromeAction_");
-    expectContains(uiSystemSource, "viewportPanel_->needsContinuousRendering()");
-    expectContains(uiSystemSource, "chromeIconButton(\"minimize\", WindowChromeAction::Minimize");
-    expectContains(uiSystemSource, "chromeIconButton(\"restore\", WindowChromeAction::ToggleMaximizeRestore");
-    expectContains(uiSystemSource, "chromeIconButton(\"close\", WindowChromeAction::Close");
-    expectContains(uiSystemSource, "pendingChromeAction_ = WindowChromeAction::Close");
+  expect_contains(main_source, "bool borderless_window = true");
+  expect_contains(main_source, "--borderless-window");
+  expect_contains(main_source, "--native-window");
+  expect_contains(main_source, "--no-borderless-window");
+  expect_contains(main_source, "--render-backend=vulkan");
+  expect_contains(main_source, "--render-backend=opengl");
+  expect_contains(main_source, "command_line.render_backend");
+  expect_contains(main_source, "command_line.borderless_window");
+  expect_contains(app_header, "struct AppOptions");
+  expect_contains(app_header, "bool borderless_window = true");
+  expect_contains(app_header,
+                  "RendererBackend render_backend = RendererBackend::Vulkan");
+  expect_contains(app_header,
+                  "handle_window_chrome_action(WindowChromeAction action)");
+  expect_contains(app_source, ".borderless = options.borderless_window");
+  expect_contains(app_source, ".backend = options.render_backend");
+  expect_contains(app_source, "window_.process_chrome_event(event)");
+  expect_contains(app_source, "ui_.take_window_chrome_action()");
+  expect_contains(app_source, "window_.refresh_native_chrome()");
+  expect_contains(app_source, "window_.minimize()");
+  expect_contains(app_source, "window_.toggle_maximize_restore()");
+  expect_contains(app_source, "window_.can_render_frames()");
+  expect_contains(app_source, "render_frame(frame_clock_.tick())");
+  expect_contains(app_source, "render_system_.begin_frame()");
+  expect_contains(app_source,
+                  "if (window_.native_chrome_interaction_active()) {");
+  expect_contains(app_source, "return false;");
+  expect_contains(app_source, "if (!window_.chrome_resize_active())");
+  expect_missing(app_source, "!window_.chrome_resize_active() && "
+                             "!window_.native_chrome_interaction_active()");
+  expect_contains(app_source, "window_.native_chrome_interaction_active()");
+  expect_contains(app_source, "wait_until_next_frame()");
+  expect_contains(app_source, "SDL_WaitEventTimeout(nullptr, wait_ms)");
+  expect_contains(platform_header, "struct PlatformWindowOptions");
+  expect_contains(platform_header, "kPlatformWindowMinimumWidth = 800");
+  expect_contains(platform_header, "kPlatformWindowMinimumHeight = 600");
+  expect_contains(platform_header, "refresh_native_chrome()");
+  expect_contains(platform_header, "platform_window_can_render_frames");
+  expect_contains(platform_header, "can_render_frames() const");
+  expect_contains(platform_header,
+                  "note_frame_presented(std::uint32_t framebuffer_width,");
+  expect_contains(platform_header, "PlatformWindowChromeHitTest");
+  expect_contains(platform_header, "platform_window_chrome_hit_test_result");
+  expect_contains(platform_header, "PlatformWindowChromeResizeDrag");
+  expect_contains(platform_header, "process_chrome_event");
+  expect_contains(platform_header, "release_chrome_resize_cursor");
+  expect_contains(platform_header, "native_chrome_message_active() const");
+  expect_contains(platform_header, "native_live_resize_frame_active() const");
+  expect_contains(platform_header, "native_chrome_interaction_active() const");
+  expect_contains(platform_header,
+                  "using LiveResizeFrameCallback = std::function<bool()>");
+  expect_contains(platform_header, "schedule_live_resize_frame_callback");
+  expect_contains(platform_header, "dispatch_live_resize_frame_callback");
+  expect_contains(platform_header, "native_chrome_message_depth_");
+  expect_contains(platform_header, "native_move_size_active_");
+  expect_contains(platform_header, "native_live_resize_frame_active_");
+  expect_contains(platform_header, "live_resize_frame_callback_pending_");
+  expect_contains(platform_header, "live_resize_frame_pending_width_pixels_");
+  expect_contains(platform_header, "prime_live_resize_frame_coalescing");
+  expect_contains(platform_header, "apply_native_custom_chrome_styles");
+  expect_missing(platform_source, "SDL_WINDOW_BORDERLESS");
+  expect_contains(platform_source, "install_native_chrome_cursor_hook();");
+  expect_contains(platform_source, "apply_native_custom_chrome_styles();");
+  expect_contains(platform_source, "WS_CAPTION");
+  expect_contains(platform_source, "WS_THICKFRAME");
+  expect_contains(platform_source, "SWP_FRAMECHANGED");
+  expect_contains(platform_source,
+                  "GetClientRect(static_cast<HWND>(native_chrome_window_handle_),");
+  expect_contains(platform_source, "SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH");
+  expect_contains(platform_source,
+                  "SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, \"1\")");
+  expect_contains(platform_source,
+                  "SDL_SetWindowMinimumSize(window_, "
+                  "kPlatformWindowMinimumWidth, kPlatformWindowMinimumHeight)");
+  expect_contains(platform_source, "SDL_WINDOW_INPUT_FOCUS");
+  expect_contains(platform_source, "SDL_HITTEST_DRAGGABLE");
+  expect_contains(platform_source, "SDL_HITTEST_RESIZE_TOPLEFT");
+  expect_contains(platform_source, "SDL_CaptureMouse");
+  expect_contains(platform_source, "SDL_GetGlobalMouseState");
+  expect_contains(platform_source, "SDL_SetWindowPosition");
+  expect_contains(platform_source, "SDL_SetWindowSize");
+  expect_contains(platform_source, "SDL_MinimizeWindow");
+  expect_contains(platform_source, "SDL_SyncWindow failed after minimize");
+  expect_contains(
+      platform_source,
+      "SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN | SDL_WINDOW_OCCLUDED");
+  expect_contains(platform_source, "SDL_MaximizeWindow");
+  expect_contains(platform_source, "SDL_RestoreWindow");
+  expect_contains(platform_source, "HTLEFT");
+  expect_contains(platform_source, "HTTOPRIGHT");
+  expect_contains(platform_source, "WM_SETCURSOR");
+  expect_contains(platform_source, "chrome_resize_cursor_active_");
+  expect_contains(platform_source, "SetWindowLongPtrW");
+  expect_contains(platform_source, "GWLP_WNDPROC");
+  expect_contains(platform_source, "IDC_SIZEWE");
+  expect_contains(platform_source, "case SDL_HITTEST_DRAGGABLE:");
+  expect_contains(platform_source, "return HTCAPTION;");
+  expect_contains(platform_source,
+                  "is_native_chrome_system_hit(SDL_HitTestResult hit)");
+  expect_contains(
+      platform_source,
+      "native_chrome_window_handle_ != nullptr");
+  expect_contains(platform_source, "is_native_chrome_system_hit(hit)");
+  expect_contains(platform_source,
+                  "return native_chrome_hit_test_code_for_hit(hit);");
+  expect_contains(platform_source, "message == WM_ERASEBKGND");
+  expect_contains(platform_source, "return 1;");
+  expect_contains(platform_source, "message == WM_PAINT");
+  expect_contains(platform_source, "live_resize_frame_paint_scheduled_ = false");
+  expect_contains(platform_source, "BeginPaint(hwnd, &paint)");
+  expect_contains(platform_source, "EndPaint(hwnd, &paint)");
+  expect_contains(platform_source, "NativeChromeMessageScope");
+  expect_contains(platform_source, "native_move_size_active_ = true");
+  expect_contains(platform_source,
+                  "message == WM_SIZE && native_move_size_active_");
+  expect_contains(platform_source, "redraw_native_resize_frame");
+  expect_contains(platform_source,
+                  "const bool redraw_native_resize_frame =");
+  expect_contains(platform_source,
+                  "(message != WM_SIZE || w_param != SIZE_MINIMIZED)");
+  expect_missing(
+      platform_source,
+      "const bool redraw_native_resize_frame =\n            (message != WM_SIZE "
+      "|| w_param != SIZE_MINIMIZED) &&\n            (message == WM_SIZE ||\n   "
+      "                 message == WM_SIZING");
+  expect_missing(platform_source, "message == WM_WINDOWPOSCHANGED ||\n         "
+                                  "           message == WM_DPICHANGED");
+  expect_contains(platform_source, "prime_live_resize_frame_coalescing();");
+  expect_missing(
+      platform_source,
+      "native_move_size_active_ &&\n            native_resize_active_ &&");
+  expect_missing(platform_source, "kNativeMoveSizeRedrawTimerId");
+  expect_missing(platform_source, "SetTimer(");
+  expect_missing(platform_source, "KillTimer(");
+  expect_missing(platform_source, "message == WM_TIMER");
+  expect_contains(platform_source, "kLiveResizeFrameMessage = WM_APP");
+  expect_contains(platform_source, "message == kLiveResizeFrameMessage");
+  expect_contains(platform_source,
+                  "PostMessageW(hwnd, kLiveResizeFrameMessage");
+  expect_contains(platform_source, "owner.native_chrome_message_depth_ == 0");
+  expect_contains(platform_source, "owner.live_resize_frame_callback_pending_");
+  expect_contains(platform_source, "owner.schedule_live_resize_frame_callback()");
+  expect_contains(platform_source, "native_chrome_message_depth_ > 0");
+  expect_contains(
+      platform_source,
+      "RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_NOERASE)");
+  expect_missing(platform_source, "RDW_UPDATENOW");
+  expect_missing(platform_source,
+                 "dispatch_live_resize_frame_callback();\n            return;");
+  expect_contains(platform_source, "native_live_resize_frame_active_ = true");
+  expect_contains(platform_source, "if (live_resize_frame_callback_())");
+  expect_contains(platform_source,
+                  "note_frame_presented(pending_width, pending_height)");
+  expect_contains(platform_source,
+                  "live_resize_frame_pending_width_pixels_ = pending_width");
+  expect_contains(platform_source,
+                  "live_resize_frame_pending_height_pixels_ = pending_height");
+  expect_contains(platform_source,
+                  "native_move_size_active_ || native_chrome_message_depth_ > 0");
+  expect_missing(platform_source,
+                 "void PlatformWindow::prime_live_resize_frame_coalescing() {\n    "
+                 "refresh_pixel_size();\n    live_resize_frame_size_valid_ = true;");
+  expect_contains(platform_source,
+                  "SetCursor(LoadCursor(nullptr, IDC_ARROW));");
+  expect_contains(platform_source,
+                  "message == WM_SETCURSOR && hit == SDL_HITTEST_DRAGGABLE");
+  expect_contains(platform_source, "clear_native_move_size_state");
+  expect_missing(platform_source,
+                 "(native_resize_active_ || IsZoomed(hwnd) != FALSE)");
+  expect_contains(platform_source, "DWMWA_WINDOW_CORNER_PREFERENCE");
+  expect_contains(platform_source, "DWMWA_BORDER_COLOR");
+  expect_contains(platform_source, "DWMWA_COLOR_DEFAULT");
+  expect_contains(platform_source, "RegGetValueW");
+  expect_contains(platform_source, "ColorPrevalence");
+  expect_contains(platform_source, "AccentColor");
+  expect_missing(platform_source, "SDL_SetWindowHitTest");
+  expect_missing(platform_source, "WM_NCLBUTTONDOWN");
+  expect_contains(root_c_make, "Dwmapi");
+  expect_contains(root_c_make, "Advapi32");
+  expect_contains(ui_system_header, "enum class WindowChromeAction");
+  expect_contains(ui_system_header, "take_window_chrome_action()");
+  expect_contains(ui_system_header, "needs_continuous_rendering() const");
+  expect_contains(ui_system_header,
+                  "std::optional<WindowChromeAction> pending_chrome_action_");
+  expect_contains(ui_system_source,
+                  "viewport_panel_->needs_continuous_rendering()");
+  expect_contains(
+      ui_system_source,
+      "chrome_icon_button(\"minimize\", WindowChromeAction::Minimize");
+  expect_contains(ui_system_source,
+                  "chrome_icon_button(\"restore\", "
+                  "WindowChromeAction::ToggleMaximizeRestore");
+  expect_contains(ui_system_source,
+                  "chrome_icon_button(\"close\", WindowChromeAction::Close");
+  expect_contains(ui_system_source,
+                  "pending_chrome_action_ = WindowChromeAction::Close");
 }
 
 TEST(WindowGuardrailTests, BorderlessMaximizeUsesMonitorWorkArea) {
-    const std::string platformSource = readSourceFile("src/platform/platform_window.cpp");
+  const std::string platform_source =
+      read_source_file("src/platform/platform_window.cpp");
 
-    expectContains(platformSource, "nativeMonitorWorkArea");
-    expectContains(platformSource, "applyBorderlessChromeMaximizedWorkArea");
-    expectContains(platformSource, "applyBorderlessChromeMaximizedClientArea");
-    expectContains(platformSource, "WM_GETMINMAXINFO");
-    expectContains(platformSource, "WM_NCCALCSIZE");
-    expectContains(platformSource, "NCCALCSIZE_PARAMS");
-    expectContains(platformSource, "ShowWindow(hwnd, SW_MAXIMIZE)");
-    expectContains(platformSource, "ShowWindow(hwnd, SW_RESTORE)");
-    expectContains(platformSource, "MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)");
-    expectContains(platformSource, "GetMonitorInfoW(monitor, &monitorInfo)");
-    expectContains(platformSource, "monitorInfo.rcWork");
-    expectContains(platformSource, "monitorInfo.rcMonitor");
-    expectContains(platformSource, "minMaxInfo.ptMaxPosition.x = workArea.left - monitorArea.left");
-    expectContains(platformSource, "minMaxInfo.ptMaxSize.y = workArea.bottom - workArea.top");
-    expectContains(platformSource, "minMaxInfo.ptMaxTrackSize.y = minMaxInfo.ptMaxSize.y");
-    expectContains(platformSource, "GetSystemMetricsForDpi(SM_CXSIZEFRAME");
-    expectContains(platformSource, "GetSystemMetricsForDpi(SM_CXPADDEDBORDER");
-    expectContains(platformSource, "params.rgrc[0] = area->work");
-    expectContains(platformSource, "message == WM_SIZE");
-    expectContains(platformSource, "message == WM_SIZING");
-    expectMissing(platformSource, "message == WM_SIZING ||\n                    message == WM_WINDOWPOSCHANGED");
-    expectMissing(platformSource, "message == WM_MOVING");
-    expectMissing(platformSource, "message == WM_WINDOWPOSCHANGED");
-    expectContains(platformSource, "message == WM_EXITSIZEMOVE");
-    expectContains(platformSource, "requestLiveResizeFrame();");
-    expectContains(platformSource, "requestLiveResizeFrame(true)");
-    expectMissing(platformSource, "constrainBorderlessChromeMaximizedFrame");
-    expectMissing(platformSource, "SDL_SyncWindow failed after borderless maximize work-area constraint");
-    expectMissing(platformSource, "message == WM_WINDOWPOSCHANGED && IsZoomed(hwnd) != FALSE");
-    expectContains(platformSource, "minMaxInfo.ptMinTrackSize.x = std::max<LONG>(minMaxInfo.ptMinTrackSize.x, kPlatformWindowMinimumWidth)");
+  expect_contains(platform_source, "native_monitor_work_area");
+  expect_contains(platform_source, "apply_borderless_chrome_maximized_work_area");
+  expect_contains(platform_source, "apply_borderless_chrome_maximized_client_area");
+  expect_contains(platform_source, "WM_GETMINMAXINFO");
+  expect_contains(platform_source, "WM_NCCALCSIZE");
+  expect_contains(platform_source, "NCCALCSIZE_PARAMS");
+  expect_contains(platform_source, "ShowWindow(hwnd, SW_MAXIMIZE)");
+  expect_contains(platform_source, "ShowWindow(hwnd, SW_RESTORE)");
+  expect_contains(platform_source,
+                  "MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)");
+  expect_contains(platform_source, "GetMonitorInfoW(monitor, &monitor_info)");
+  expect_contains(platform_source, "monitor_info.rcWork");
+  expect_contains(platform_source, "monitor_info.rcMonitor");
+  expect_contains(
+      platform_source,
+      "min_max_info.ptMaxPosition.x = work_area.left - monitor_area.left");
+  expect_contains(platform_source,
+                  "min_max_info.ptMaxSize.y = work_area.bottom - work_area.top");
+  expect_contains(platform_source,
+                  "min_max_info.ptMaxTrackSize.y = min_max_info.ptMaxSize.y");
+  expect_contains(platform_source, "GetSystemMetricsForDpi(SM_CXSIZEFRAME");
+  expect_contains(platform_source, "GetSystemMetricsForDpi(SM_CXPADDEDBORDER");
+  expect_contains(platform_source, "params.rgrc[0] = area->work");
+  expect_contains(platform_source, "message == WM_SIZE");
+  expect_contains(platform_source, "message == WM_SIZING");
+  expect_missing(platform_source, "message == WM_SIZING ||\n                   "
+                                  " message == WM_WINDOWPOSCHANGED");
+  expect_missing(platform_source, "message == WM_MOVING");
+  expect_missing(platform_source, "message == WM_WINDOWPOSCHANGED");
+  expect_contains(platform_source, "message == WM_EXITSIZEMOVE");
+  expect_contains(platform_source, "request_live_resize_frame();");
+  expect_contains(platform_source, "request_live_resize_frame(true)");
+  expect_missing(platform_source, "constrainBorderlessChromeMaximizedFrame");
+  expect_missing(
+      platform_source,
+      "SDL_SyncWindow failed after borderless maximize work-area constraint");
+  expect_missing(platform_source,
+                 "message == WM_WINDOWPOSCHANGED && IsZoomed(hwnd) != FALSE");
+  expect_contains(platform_source, "min_max_info.ptMinTrackSize.x = "
+                                   "std::max<LONG>(min_max_info.ptMinTrackSize.x,");
+  expect_contains(platform_source, "kPlatformWindowMinimumWidth)");
 }
 
 TEST(WindowGuardrailTests, WindowPlacementPersistenceAndResizeRecoveryStayOwned) {
-    const std::string rootCMake = readSourceFile("CMakeLists.txt");
-    const std::string appHeader = readSourceFile("src/app/app.hpp");
-    const std::string appSource = readSourceFile("src/app/app.cpp");
-    const std::string appSettingsHeader = readSourceFile("src/app/app_window_settings.hpp");
-    const std::string appSettingsSource = readSourceFile("src/app/app_window_settings.cpp");
-    const std::string platformHeader = readSourceFile("src/platform/platform_window.hpp");
-    const std::string platformSource = readSourceFile("src/platform/platform_window.cpp");
-    const std::string uiSettingsSource = readSourceFile("src/ui/ui_settings.cpp");
-    const std::string configPathSource = readSourceFile("src/core/user_config_paths.cpp");
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string app_header = read_source_file("src/app/app.hpp");
+  const std::string app_source = read_source_file("src/app/app.cpp");
+  const std::string app_settings_header =
+      read_source_file("src/app/app_window_settings.hpp");
+  const std::string app_settings_source =
+      read_source_file("src/app/app_window_settings.cpp");
+  const std::string platform_header =
+      read_source_file("src/platform/platform_window.hpp");
+  const std::string platform_source =
+      read_source_file("src/platform/platform_window.cpp");
+  const std::string ui_settings_source =
+      read_source_file("src/ui/ui_settings.cpp");
+  const std::string config_path_source =
+      read_source_file("src/core/user_config_paths.cpp");
 
-    expectContains(rootCMake, "src/core/user_config_paths.cpp");
-    expectContains(rootCMake, "src/app/app_window_settings.cpp");
-    expectContains(appHeader, "AppWindowSettings windowSettings_");
-    expectContains(appHeader, "saveWindowSettings()");
-    expectContains(appSource, "AppWindowSettings::resolvePath(executableDir)");
-    expectContains(appSource, "AppWindowSettings::load(windowSettingsPath_)");
-    expectContains(appSource, "const std::optional<PlatformWindowPlacement> savedPlacement");
-    expectContains(appSource, "const PlatformWindowChromeFrame initialFrame");
-    expectContains(appSource, "std::max(kPlatformWindowMinimumWidth, initialFrame.width)");
-    expectContains(appSource, "std::max(kPlatformWindowMinimumHeight, initialFrame.height)");
-    expectContains(appSource, "window_.applyPlacement(*savedPlacement)");
-    expectContains(appSource, "window_.placement()");
-    expectContains(appSource, "windowSettings_.save(windowSettingsPath_)");
-    expectContains(appSettingsHeader, "std::optional<PlatformWindowPlacement>");
-    expectContains(appSettingsSource, "\"window_settings.ini\"");
-    expectContains(appSettingsSource, "\"NormalX\"");
-    expectContains(appSettingsSource, "\"NormalWidth\"");
-    expectContains(appSettingsSource, "\"Maximized\"");
-    expectContains(appSettingsSource, "quaderUserConfigDirectory(executableDir)");
-    expectContains(uiSettingsSource, "quaderUserConfigDirectory(executableDir)");
-    expectContains(configPathSource, "LOCALAPPDATA");
-    expectContains(configPathSource, "XDG_CONFIG_HOME");
-    expectContains(platformHeader, "struct PlatformWindowPlacement");
-    expectContains(platformHeader, "platformWindowChromeResizeBorderForSystemMetrics");
-    expectContains(platformHeader, "platformWindowRecoverFrameToDisplayWorkArea");
-    expectContains(platformHeader, "std::optional<PlatformWindowPlacement> placement() const");
-    expectContains(platformHeader, "applyPlacement(const PlatformWindowPlacement& placement)");
-    expectContains(platformHeader, "liveResizeFrameSizeValid_");
-    expectContains(platformSource, "GetSystemMetricsForDpi(SM_CXSIZEFRAME");
-    expectContains(platformSource, "GetSystemMetricsForDpi(SM_CYSIZEFRAME");
-    expectContains(platformSource, "GetWindowPlacement(hwnd, &nativePlacement)");
-    expectContains(platformSource, "SetWindowPlacement(hwnd, &nativePlacement)");
-    expectContains(platformSource, "WPF_RESTORETOMAXIMIZED");
-    expectContains(platformSource, "SDL_GetDisplayUsableBounds");
-    expectContains(platformSource, "platformWindowRecoverFrameToDisplayWorkArea");
-    expectContains(platformSource, "WM_CANCELMODE");
-    expectContains(platformSource, "WM_CAPTURECHANGED");
-    expectContains(platformSource, "clearNativeMoveSizeState()");
-    expectContains(platformSource, "requestLiveResizeFrame(true)");
+  expect_contains(root_c_make, "src/core/user_config_paths.cpp");
+  expect_contains(root_c_make, "src/app/app_window_settings.cpp");
+  expect_contains(app_header, "AppWindowSettings window_settings_");
+  expect_contains(app_header, "save_window_settings()");
+  expect_contains(app_source, "AppWindowSettings::resolve_path(executable_dir)");
+  expect_contains(app_source, "AppWindowSettings::load(window_settings_path_)");
+  expect_contains(
+      app_source,
+      "const std::optional<PlatformWindowPlacement> saved_placement");
+  expect_contains(app_source, "const PlatformWindowChromeFrame initial_frame");
+  expect_contains(app_source,
+                  "std::max(kPlatformWindowMinimumWidth, initial_frame.width)");
+  expect_contains(
+      app_source,
+      "std::max(kPlatformWindowMinimumHeight, initial_frame.height)");
+  expect_contains(app_source, "window_.apply_placement(*saved_placement)");
+  expect_contains(app_source, "window_.placement()");
+  expect_contains(app_source, "window_settings_.save(window_settings_path_)");
+  expect_contains(app_settings_header,
+                  "std::optional<PlatformWindowPlacement>");
+  expect_contains(app_settings_source, "\"window_settings.ini\"");
+  expect_contains(app_settings_source, "\"NormalX\"");
+  expect_contains(app_settings_source, "\"NormalWidth\"");
+  expect_contains(app_settings_source, "\"Maximized\"");
+  expect_contains(app_settings_source,
+                  "quader_user_config_directory(executable_dir)");
+  expect_contains(ui_settings_source,
+                  "quader_user_config_directory(executable_dir)");
+  expect_contains(config_path_source, "LOCALAPPDATA");
+  expect_contains(config_path_source, "XDG_CONFIG_HOME");
+  expect_contains(platform_header, "struct PlatformWindowPlacement");
+  expect_contains(platform_header,
+                  "platform_window_chrome_resize_border_for_system_metrics");
+  expect_contains(platform_header,
+                  "platform_window_recover_frame_to_display_work_area");
+  expect_contains(platform_header,
+                  "std::optional<PlatformWindowPlacement> placement() const");
+  expect_contains(platform_header,
+                  "apply_placement(const PlatformWindowPlacement &placement)");
+  expect_contains(platform_header, "live_resize_frame_size_valid_");
+  expect_contains(platform_source, "GetSystemMetricsForDpi(SM_CXSIZEFRAME");
+  expect_contains(platform_source, "GetSystemMetricsForDpi(SM_CYSIZEFRAME");
+  expect_contains(platform_source,
+                  "GetWindowPlacement(hwnd, &native_placement)");
+  expect_contains(platform_source,
+                  "SetWindowPlacement(hwnd, &native_placement)");
+  expect_contains(platform_source, "WPF_RESTORETOMAXIMIZED");
+  expect_contains(platform_source, "SDL_GetDisplayUsableBounds");
+  expect_contains(platform_source,
+                  "platform_window_recover_frame_to_display_work_area");
+  expect_contains(platform_source, "WM_CANCELMODE");
+  expect_contains(platform_source, "WM_CAPTURECHANGED");
+  expect_contains(platform_source, "clear_native_move_size_state()");
+  expect_contains(platform_source, "request_live_resize_frame(true)");
 }
 
 TEST(DependencyLicenseGuardrailTests, AppThirdPartyManifestHasLicenseEvidence) {
-    const std::string manifest = readSourceFile("thirdparty/THIRD_PARTY_MANIFEST.md");
+  const std::string manifest =
+      read_source_file("thirdparty/THIRD_PARTY_MANIFEST.md");
 
-    for (const std::string& needle : retiredModelingTestFrameworkNeedles()) {
-        expectMissing(manifest, needle);
-    }
+  for (const std::string &needle : retired_modeling_test_framework_needles()) {
+    expect_missing(manifest, needle);
+  }
 
-    EXPECT_FALSE(std::filesystem::exists(sourcePath(joined("thirdparty/licenses/cat", "ch2-BSL-1.0.txt"))));
+  EXPECT_FALSE(std::filesystem::exists(
+      source_path(joined("thirdparty/licenses/cat", "ch2-BSL-1.0.txt"))));
 
-    for (const ThirdPartyLicenseExpectation& expectation : thirdPartyLicenseExpectations()) {
-        expectContains(manifest, std::string(expectation.manifestNeedle));
-        expectContains(manifest, std::string(expectation.licensePath));
-        EXPECT_FALSE(readSourceFile("thirdparty/" + std::string(expectation.licensePath)).empty())
-                << expectation.licensePath;
-    }
+  for (const ThirdPartyLicenseExpectation &expectation :
+       third_party_license_expectations()) {
+    expect_contains(manifest, std::string(expectation.manifest_needle));
+    expect_contains(manifest, std::string(expectation.license_path));
+    EXPECT_FALSE(
+        read_source_file("thirdparty/" + std::string(expectation.license_path))
+            .empty())
+        << expectation.license_path;
+  }
 
-    const std::vector<std::string> directDependencies = directVcpkgDependencies();
-    EXPECT_FALSE(directDependencies.empty());
-    for (const std::string& packageId : directDependencies) {
-        const ThirdPartyLicenseExpectation* expectation = expectationForDirectVcpkgDependency(packageId);
-        ASSERT_NE(expectation, nullptr) << "Add third-party manifest/license evidence for direct vcpkg dependency: "
-                                       << packageId;
-        expectContains(manifest, std::string(expectation->manifestNeedle));
-        expectContains(manifest, std::string(expectation->licensePath));
-    }
+  const std::vector<std::string> direct_dependencies =
+      direct_vcpkg_dependencies();
+  EXPECT_FALSE(direct_dependencies.empty());
+  for (const std::string &package_id : direct_dependencies) {
+    const ThirdPartyLicenseExpectation *expectation =
+        expectation_for_direct_vcpkg_dependency(package_id);
+    ASSERT_NE(expectation, nullptr) << "Add third-party manifest/license "
+                                       "evidence for direct vcpkg dependency: "
+                                    << package_id;
+    expect_contains(manifest, std::string(expectation->manifest_needle));
+    expect_contains(manifest, std::string(expectation->license_path));
+  }
 }

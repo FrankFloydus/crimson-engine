@@ -29,34 +29,37 @@ public:
     }
 
     DocumentCommandResult redo() override {
-        if (documentCommandSameLightComponent(before_, after_)) {
-            return documentCommandUnchangedResult();
-        }
+      if (document_command_same_light_component(before_, after_)) {
+        return document_command_unchanged_result();
+      }
         return apply(after_);
     }
 
-    bool mergeWith(const IUndoableCommand& newerCommand, std::string_view mergeKey) override {
-        if (mergeKey.empty()) {
-            return false;
-        }
-        const auto* newer = dynamic_cast<const SetLightComponentCommand*>(&newerCommand);
-        if (newer == nullptr || &newer->scene() != &scene() || newer->entity_ != entity_) {
-            return false;
-        }
-        after_ = newer->after_;
-        return true;
+    bool merge_with(const IUndoableCommand &newer_command,
+                    std::string_view merge_key) override {
+      if (merge_key.empty()) {
+        return false;
+      }
+      const auto *newer =
+          dynamic_cast<const SetLightComponentCommand *>(&newer_command);
+      if (newer == nullptr || &newer->scene() != &scene() ||
+          newer->entity_ != entity_) {
+        return false;
+      }
+      after_ = newer->after_;
+      return true;
     }
 
 private:
     DocumentCommandResult apply(LightComponent light) {
         if (!scene().exists(entity_)) {
-            return documentCommandMissingEntityResult();
+          return document_command_missing_entity_result();
         }
-        scene().setLight(entity_, light);
-        return documentCommandChangedResult();
+        scene().set_light(entity_, light);
+        return document_command_changed_result();
     }
 
-    EntityId entity_ = InvalidEntityId;
+    EntityId entity_ = kInvalidEntityId;
     LightComponent before_;
     LightComponent after_;
 };

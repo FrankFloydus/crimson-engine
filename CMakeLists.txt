@@ -173,7 +173,7 @@ add_library(quader_core STATIC
     src/assets/material_document.cpp
     src/core/localization_service.cpp
     src/core/logger.cpp
-    src/core/q_str.cpp
+    src/core/qstr.cpp
     src/core/undo_redo_manager.cpp
     src/core/user_config_paths.cpp
     src/editor/commands/document_command_service.cpp

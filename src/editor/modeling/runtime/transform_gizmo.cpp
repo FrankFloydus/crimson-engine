@@ -21,15 +21,15 @@ namespace quader_editor_core {
 
 namespace {
 
-constexpr double gizmo_circle_size = 1.1;
-constexpr double gizmo_plane_size = 0.2;
-constexpr double gizmo_plane_distance = 0.3;
-constexpr double gizmo_arrow_size = 0.35;
-constexpr double gizmo_arrow_offset = gizmo_circle_size + 0.3;
-constexpr double gizmo_arrow_tip = gizmo_arrow_offset + gizmo_arrow_size;
-constexpr double gizmo_scale_offset = gizmo_circle_size + 0.3;
-constexpr double gizmo_scale_tip = gizmo_scale_offset * 1.11;
-constexpr double gizmo_view_rotation_scale = 1.14;
+constexpr double kGizmoCircleSize = 1.1;
+constexpr double kGizmoPlaneSize = 0.2;
+constexpr double kGizmoPlaneDistance = 0.3;
+constexpr double kGizmoArrowSize = 0.35;
+constexpr double kGizmoArrowOffset = kGizmoCircleSize + 0.3;
+constexpr double kGizmoArrowTip = kGizmoArrowOffset + kGizmoArrowSize;
+constexpr double kGizmoScaleOffset = kGizmoCircleSize + 0.3;
+constexpr double kGizmoScaleTip = kGizmoScaleOffset * 1.11;
+constexpr double kGizmoViewRotationScale = 1.14;
 
 quader_geometry::QVec2d tool_geometry_vec2(quader::QVec2 value)
 {
@@ -51,9 +51,9 @@ double vec2_distance_squared(quader::QVec2 left, quader::QVec2 right)
 	return quader_geometry::length_squared(tool_geometry_vec2(left) - tool_geometry_vec2(right));
 }
 
-bool vec3_is_tiny(quader::QVec3 value, double epsilon = tool_epsilon)
-{
-	return quader_geometry::length_squared(tool_geometry_vec3(value)) <= static_cast<float>(epsilon * epsilon);
+bool vec3_is_tiny(quader::QVec3 value, double epsilon = kToolEpsilon) {
+  return quader_geometry::length_squared(tool_geometry_vec3(value)) <=
+         static_cast<float>(epsilon * epsilon);
 }
 
 quader::QVec3 vec3_scale(quader::QVec3 value, double scalar)
@@ -79,20 +79,20 @@ TransformGizmoAxisBasis transform_gizmo_axis_basis(TransformAxis axis, const qua
 	basis.axis = axis;
 	basis.local_direction = rotation_axis_vector(axis);
 	if (vec3_is_tiny(basis.local_direction)) {
-		basis.axis = TransformAxis::none;
-		return basis;
+          basis.axis = TransformAxis::None;
+          return basis;
 	}
-	if (axis == TransformAxis::x) {
-		basis.ring_world_a = { 0.0F, 1.0F, 0.0F };
-		basis.ring_world_b = { 0.0F, 0.0F, 1.0F };
-	} else if (axis == TransformAxis::y) {
-		basis.ring_world_a = { 1.0F, 0.0F, 0.0F };
-		basis.ring_world_b = { 0.0F, 0.0F, 1.0F };
-	} else {
-		basis.ring_world_a = { 1.0F, 0.0F, 0.0F };
-		basis.ring_world_b = { 0.0F, 1.0F, 0.0F };
-	}
-	basis.world_direction = normalized_axis(transform_vector(global_transform, basis.local_direction));
+        if (axis == TransformAxis::X) {
+          basis.ring_world_a = {0.0F, 1.0F, 0.0F};
+          basis.ring_world_b = {0.0F, 0.0F, 1.0F};
+        } else if (axis == TransformAxis::Y) {
+          basis.ring_world_a = {1.0F, 0.0F, 0.0F};
+          basis.ring_world_b = {0.0F, 0.0F, 1.0F};
+        } else {
+          basis.ring_world_a = {1.0F, 0.0F, 0.0F};
+          basis.ring_world_b = {0.0F, 1.0F, 0.0F};
+        }
+        basis.world_direction = normalized_axis(transform_vector(global_transform, basis.local_direction));
 	basis.ring_world_a = normalized_axis(transform_vector(global_transform, basis.ring_world_a));
 	basis.ring_world_b = normalized_axis(transform_vector(global_transform, basis.ring_world_b));
 	if (vec3_is_tiny(basis.world_direction)) {
@@ -130,19 +130,22 @@ double transform_gizmo_axis_projection_scale(quader::QVec3 camera_origin, quader
 
 bool transform_gizmo_axis_is_visible(quader::QVec3 camera_origin, quader::QVec3 world_center, quader::QVec3 world_axis)
 {
-	return transform_gizmo_axis_visibility_score(camera_origin, world_center, world_axis) >= transform_gizmo_axis_hide_score;
+  return transform_gizmo_axis_visibility_score(camera_origin, world_center,
+                                               world_axis) >=
+         kTransformGizmoAxisHideScore;
 }
 
 double transform_gizmo_axis_alpha(quader::QVec3 camera_origin, quader::QVec3 world_center, quader::QVec3 world_axis)
 {
 	const double score = transform_gizmo_axis_visibility_score(camera_origin, world_center, world_axis);
-	if (score <= transform_gizmo_axis_hide_score) {
-		return 0.0;
-	}
-	if (score >= transform_gizmo_axis_full_score) {
-		return 1.0;
-	}
-	return (score - transform_gizmo_axis_hide_score) / (transform_gizmo_axis_full_score - transform_gizmo_axis_hide_score);
+        if (score <= kTransformGizmoAxisHideScore) {
+          return 0.0;
+        }
+        if (score >= kTransformGizmoAxisFullScore) {
+          return 1.0;
+        }
+        return (score - kTransformGizmoAxisHideScore) /
+               (kTransformGizmoAxisFullScore - kTransformGizmoAxisHideScore);
 }
 
 quader::QVec3 transform_gizmo_ring_point(quader::QVec3 world_center, const TransformGizmoAxisBasis& axis, double radius, double angle)
@@ -169,9 +172,9 @@ double scaled_gizmo_pick_radius(double base_radius, double scale)
 
 bool transform_gizmo_tool_has_frame(ViewportInteractionTool tool)
 {
-	return tool == ViewportInteractionTool::move ||
-		tool == ViewportInteractionTool::rotate ||
-		tool == ViewportInteractionTool::scale;
+  return tool == ViewportInteractionTool::Move ||
+         tool == ViewportInteractionTool::Rotate ||
+         tool == ViewportInteractionTool::Scale;
 }
 
 double viewport_world_units_per_pixel_impl(const ViewportCameraState& camera, quader::QVec3 anchor)
@@ -261,27 +264,34 @@ double screen_sized_world_radius(const ViewportCameraState& camera, quader::QVec
 void add_gizmo_ring(TransformGizmoFrame& frame, const ViewportCameraState& camera, TransformAxis axis, quader::QVec3 center, double screen_size, int ring_segment_count)
 {
 	const TransformGizmoAxisBasis basis = transform_gizmo_axis_basis(axis);
-	if (basis.axis == TransformAxis::none) {
-		return;
-	}
-	const double radius = screen_sized_world_radius(camera, center, screen_size);
+        if (basis.axis == TransformAxis::None) {
+          return;
+        }
+        const double radius = screen_sized_world_radius(camera, center, screen_size);
 	if (radius <= 0.0001) {
 		return;
 	}
 	const int segment_count = std::max(3, ring_segment_count);
 	const quader::QVec3 view_direction = normalized_axis(camera.transform.origin - center);
 	for (int index = 0; index < segment_count; ++index) {
-		const double a0 = transform_gizmo_tau * static_cast<double>(index) / static_cast<double>(segment_count);
-		const double a1 = transform_gizmo_tau * static_cast<double>(index + 1) / static_cast<double>(segment_count);
-		const double mid_angle = (a0 + a1) * 0.5;
-		const quader::QVec3 p0 = transform_gizmo_ring_point(center, basis, radius, a0);
-		const quader::QVec3 p1 = transform_gizmo_ring_point(center, basis, radius, a1);
-		const quader::QVec3 pm = transform_gizmo_ring_point(center, basis, radius, mid_angle);
-		quader::QVec2 screen0;
-		quader::QVec2 screen1;
-		if (!project_viewport_point(camera, p0, screen0) || !project_viewport_point(camera, p1, screen1)) {
-			continue;
-		}
+          const double a0 = kTransformGizmoTau * static_cast<double>(index) /
+                            static_cast<double>(segment_count);
+          const double a1 = kTransformGizmoTau *
+                            static_cast<double>(index + 1) /
+                            static_cast<double>(segment_count);
+          const double mid_angle = (a0 + a1) * 0.5;
+          const quader::QVec3 p0 =
+              transform_gizmo_ring_point(center, basis, radius, a0);
+          const quader::QVec3 p1 =
+              transform_gizmo_ring_point(center, basis, radius, a1);
+          const quader::QVec3 pm =
+              transform_gizmo_ring_point(center, basis, radius, mid_angle);
+          quader::QVec2 screen0;
+          quader::QVec2 screen1;
+          if (!project_viewport_point(camera, p0, screen0) ||
+              !project_viewport_point(camera, p1, screen1)) {
+            continue;
+          }
 		TransformGizmoRingSegmentPrimitive segment;
 		segment.axis = axis;
 		segment.world_start = p0;
@@ -296,27 +306,38 @@ void add_gizmo_ring(TransformGizmoFrame& frame, const ViewportCameraState& camer
 
 void add_gizmo_trackball_ring(TransformGizmoFrame& frame, const ViewportCameraState& camera, quader::QVec3 center, double screen_size, int ring_segment_count)
 {
-	const double radius = screen_sized_world_radius(camera, center, screen_size * gizmo_view_rotation_scale);
-	quader::QVec3 right = normalized_axis(camera.transform.x_axis);
-	quader::QVec3 up = normalized_axis(camera.transform.y_axis);
-	if (vec3_is_tiny(right)) {
-		right = { 1.0F, 0.0F, 0.0F };
-	}
+  const double radius = screen_sized_world_radius(
+      camera, center, screen_size * kGizmoViewRotationScale);
+  quader::QVec3 right = normalized_axis(camera.transform.x_axis);
+  quader::QVec3 up = normalized_axis(camera.transform.y_axis);
+  if (vec3_is_tiny(right)) {
+    right = {1.0F, 0.0F, 0.0F};
+  }
 	up = normalized_axis(up - vec3_scale(right, vec3_dot(up, right)));
 	if (vec3_is_tiny(up)) {
 		up = { 0.0F, 1.0F, 0.0F };
 	}
 	const int segment_count = std::max(16, ring_segment_count);
 	for (int index = 0; index < segment_count; ++index) {
-		const double a0 = transform_gizmo_tau * static_cast<double>(index) / static_cast<double>(segment_count);
-		const double a1 = transform_gizmo_tau * static_cast<double>(index + 1) / static_cast<double>(segment_count);
-		const quader::QVec3 p0 = center + vec3_scale(right * static_cast<float>(std::cos(a0)) + up * static_cast<float>(std::sin(a0)), radius);
-		const quader::QVec3 p1 = center + vec3_scale(right * static_cast<float>(std::cos(a1)) + up * static_cast<float>(std::sin(a1)), radius);
-		quader::QVec2 screen0;
-		quader::QVec2 screen1;
-		if (!project_viewport_point(camera, p0, screen0) || !project_viewport_point(camera, p1, screen1)) {
-			continue;
-		}
+          const double a0 = kTransformGizmoTau * static_cast<double>(index) /
+                            static_cast<double>(segment_count);
+          const double a1 = kTransformGizmoTau *
+                            static_cast<double>(index + 1) /
+                            static_cast<double>(segment_count);
+          const quader::QVec3 p0 =
+              center + vec3_scale(right * static_cast<float>(std::cos(a0)) +
+                                      up * static_cast<float>(std::sin(a0)),
+                                  radius);
+          const quader::QVec3 p1 =
+              center + vec3_scale(right * static_cast<float>(std::cos(a1)) +
+                                      up * static_cast<float>(std::sin(a1)),
+                                  radius);
+          quader::QVec2 screen0;
+          quader::QVec2 screen1;
+          if (!project_viewport_point(camera, p0, screen0) ||
+              !project_viewport_point(camera, p1, screen1)) {
+            continue;
+          }
 		TransformGizmoTrackballSegmentPrimitive segment;
 		segment.world_start = p0;
 		segment.world_end = p1;
@@ -382,27 +403,45 @@ TransformGizmoFrame build_transform_gizmo_frame(const TransformGizmoFrameInput& 
 	frame.info.pivot = input.pivot;
 	frame.info.screen_pivot = screen_pivot;
 
-	if (input.tool == ViewportInteractionTool::rotate) {
-		const double ring_screen_size = unit_screen_size * gizmo_circle_size;
-		add_gizmo_trackball_ring(frame, input.camera, input.pivot, ring_screen_size, input.ring_segments);
-		add_gizmo_ring(frame, input.camera, TransformAxis::x, input.pivot, ring_screen_size, input.ring_segments);
-		add_gizmo_ring(frame, input.camera, TransformAxis::y, input.pivot, ring_screen_size, input.ring_segments);
-		add_gizmo_ring(frame, input.camera, TransformAxis::z, input.pivot, ring_screen_size, input.ring_segments);
-		return frame;
-	}
+        if (input.tool == ViewportInteractionTool::Rotate) {
+          const double ring_screen_size = unit_screen_size * kGizmoCircleSize;
+          add_gizmo_trackball_ring(frame, input.camera, input.pivot,
+                                   ring_screen_size, input.ring_segments);
+          add_gizmo_ring(frame, input.camera, TransformAxis::X, input.pivot,
+                         ring_screen_size, input.ring_segments);
+          add_gizmo_ring(frame, input.camera, TransformAxis::Y, input.pivot,
+                         ring_screen_size, input.ring_segments);
+          add_gizmo_ring(frame, input.camera, TransformAxis::Z, input.pivot,
+                         ring_screen_size, input.ring_segments);
+          return frame;
+        }
 
-	const double pixel_world = viewport_world_units_per_pixel(input.camera, input.pivot);
-	const double axis_length = pixel_world * unit_screen_size *
-		(input.tool == ViewportInteractionTool::scale ? gizmo_scale_tip : gizmo_arrow_tip);
-	const double plane_offset = pixel_world * unit_screen_size * (gizmo_plane_distance + gizmo_plane_size * 0.5);
-	const double plane_half_size = pixel_world * unit_screen_size * (gizmo_plane_size * 0.5);
-	add_gizmo_axis(frame, input.camera, TransformAxis::x, input.pivot, axis_length);
-	add_gizmo_axis(frame, input.camera, TransformAxis::y, input.pivot, axis_length);
-	add_gizmo_axis(frame, input.camera, TransformAxis::z, input.pivot, axis_length);
-	add_gizmo_plane(frame, input.camera, TransformAxis::xy, input.pivot, { 1.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F }, plane_offset, plane_half_size);
-	add_gizmo_plane(frame, input.camera, TransformAxis::xz, input.pivot, { 1.0F, 0.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, plane_offset, plane_half_size);
-	add_gizmo_plane(frame, input.camera, TransformAxis::yz, input.pivot, { 0.0F, 1.0F, 0.0F }, { 0.0F, 0.0F, 1.0F }, plane_offset, plane_half_size);
-	return frame;
+        const double pixel_world = viewport_world_units_per_pixel(input.camera, input.pivot);
+        const double axis_length =
+            pixel_world * unit_screen_size *
+            (input.tool == ViewportInteractionTool::Scale ? kGizmoScaleTip
+                                                          : kGizmoArrowTip);
+        const double plane_offset =
+            pixel_world * unit_screen_size *
+            (kGizmoPlaneDistance + kGizmoPlaneSize * 0.5);
+        const double plane_half_size =
+            pixel_world * unit_screen_size * (kGizmoPlaneSize * 0.5);
+        add_gizmo_axis(frame, input.camera, TransformAxis::X, input.pivot,
+                       axis_length);
+        add_gizmo_axis(frame, input.camera, TransformAxis::Y, input.pivot,
+                       axis_length);
+        add_gizmo_axis(frame, input.camera, TransformAxis::Z, input.pivot,
+                       axis_length);
+        add_gizmo_plane(frame, input.camera, TransformAxis::Xy, input.pivot,
+                        {1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F}, plane_offset,
+                        plane_half_size);
+        add_gizmo_plane(frame, input.camera, TransformAxis::Xz, input.pivot,
+                        {1.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 1.0F}, plane_offset,
+                        plane_half_size);
+        add_gizmo_plane(frame, input.camera, TransformAxis::Yz, input.pivot,
+                        {0.0F, 1.0F, 0.0F}, {0.0F, 0.0F, 1.0F}, plane_offset,
+                        plane_half_size);
+        return frame;
 }
 
 TransformGizmoPickHit pick_transform_gizmo(const TransformGizmoFrameInput& input, quader::QVec2 screen_position)
@@ -418,64 +457,69 @@ TransformGizmoPickHit pick_transform_gizmo(const TransformGizmoFrameInput& input
 	}
 	const double pick_radius = scaled_gizmo_pick_radius(input.pick_radius_pixels, frame.info.gizmo_scale);
 
-	if (input.tool == ViewportInteractionTool::move || input.tool == ViewportInteractionTool::scale) {
-		std::vector<TransformGizmoPickCandidate> candidates;
-		candidates.reserve(frame.axes.size());
-		for (const TransformGizmoAxisPrimitive& axis : frame.axes) {
-			TransformGizmoPickCandidate candidate;
-			candidate.axis = axis.axis;
-			candidate.local_direction = axis_vector(axis.axis);
-			candidate.world_direction = candidate.local_direction;
-			candidate.screen_tip = axis.screen_tip;
-			candidate.visible = true;
-			candidates.push_back(candidate);
-		}
-		const TransformGizmoPickHit axis_hit = input.tool == ViewportInteractionTool::scale
-			? pick_scale_gizmo_axis(
-					screen_position,
-					frame.info.screen_pivot,
-					candidates,
-					pick_radius,
-					std::max(1.0, input.gizmo_size_pixels) * clamped_gizmo_scale(frame.info.gizmo_scale))
-			: pick_move_gizmo_axis(screen_position, frame.info.screen_pivot, candidates, pick_radius);
-		if (axis_hit.hit) {
-			return axis_hit;
-		}
-		for (const TransformGizmoPlanePrimitive& plane : frame.planes) {
-			const std::array<quader::QVec2, 4> polygon {
-				plane.screen0,
-				plane.screen1,
-				plane.screen2,
-				plane.screen3,
-			};
-			if (!point_in_convex_gizmo_polygon(screen_position, polygon)) {
-				continue;
-			}
-			result.hit = true;
-			result.axis = plane.axis;
-			result.local_direction = axis_vector(plane.axis);
-			result.world_direction = result.local_direction;
-			result.screen_tip = plane_centroid(plane);
-			return result;
-		}
-		return result;
-	}
+        if (input.tool == ViewportInteractionTool::Move ||
+            input.tool == ViewportInteractionTool::Scale) {
+          std::vector<TransformGizmoPickCandidate> candidates;
+          candidates.reserve(frame.axes.size());
+          for (const TransformGizmoAxisPrimitive &axis : frame.axes) {
+            TransformGizmoPickCandidate candidate;
+            candidate.axis = axis.axis;
+            candidate.local_direction = axis_vector(axis.axis);
+            candidate.world_direction = candidate.local_direction;
+            candidate.screen_tip = axis.screen_tip;
+            candidate.visible = true;
+            candidates.push_back(candidate);
+          }
+          const TransformGizmoPickHit axis_hit =
+              input.tool == ViewportInteractionTool::Scale
+                  ? pick_scale_gizmo_axis(
+                        screen_position, frame.info.screen_pivot, candidates,
+                        pick_radius,
+                        std::max(1.0, input.gizmo_size_pixels) *
+                            clamped_gizmo_scale(frame.info.gizmo_scale))
+                  : pick_move_gizmo_axis(screen_position,
+                                         frame.info.screen_pivot, candidates,
+                                         pick_radius);
+          if (axis_hit.hit) {
+            return axis_hit;
+          }
+          for (const TransformGizmoPlanePrimitive &plane : frame.planes) {
+            const std::array<quader::QVec2, 4> polygon{
+                plane.screen0,
+                plane.screen1,
+                plane.screen2,
+                plane.screen3,
+            };
+            if (!point_in_convex_gizmo_polygon(screen_position, polygon)) {
+              continue;
+            }
+            result.hit = true;
+            result.axis = plane.axis;
+            result.local_direction = axis_vector(plane.axis);
+            result.world_direction = result.local_direction;
+            result.screen_tip = plane_centroid(plane);
+            return result;
+          }
+          return result;
+        }
 
-	if (input.tool == ViewportInteractionTool::rotate) {
-		std::vector<TransformGizmoRingPickCandidate> candidates;
-		candidates.reserve(frame.ring_segments.size());
-		for (const TransformGizmoRingSegmentPrimitive& segment : frame.ring_segments) {
-			TransformGizmoRingPickCandidate candidate;
-			candidate.axis = segment.axis;
-			candidate.local_direction = rotation_axis_vector(segment.axis);
-			candidate.world_direction = candidate.local_direction;
-			candidate.a = segment.screen_start;
-			candidate.b = segment.screen_end;
-			candidates.push_back(candidate);
-		}
-		return pick_rotate_gizmo_axis(screen_position, candidates, pick_radius);
-	}
-	return result;
+        if (input.tool == ViewportInteractionTool::Rotate) {
+          std::vector<TransformGizmoRingPickCandidate> candidates;
+          candidates.reserve(frame.ring_segments.size());
+          for (const TransformGizmoRingSegmentPrimitive &segment :
+               frame.ring_segments) {
+            TransformGizmoRingPickCandidate candidate;
+            candidate.axis = segment.axis;
+            candidate.local_direction = rotation_axis_vector(segment.axis);
+            candidate.world_direction = candidate.local_direction;
+            candidate.a = segment.screen_start;
+            candidate.b = segment.screen_end;
+            candidates.push_back(candidate);
+          }
+          return pick_rotate_gizmo_axis(screen_position, candidates,
+                                        pick_radius);
+        }
+        return result;
 }
 
 double distance_to_screen_segment_squared(quader::QVec2 point, quader::QVec2 a, quader::QVec2 b)
@@ -483,12 +527,15 @@ double distance_to_screen_segment_squared(quader::QVec2 point, quader::QVec2 a, 
 	const quader_geometry::QVec2d geometry_point = geometry_vec2(point);
 	const quader_geometry::QVec2d geometry_a = geometry_vec2(a);
 	const quader_geometry::QVec2d geometry_b = geometry_vec2(b);
-	const quader_geometry::QClosestSegmentPoint2<double> closest =
-			quader_geometry::closest_point_on_segment<double>(geometry_point, geometry_a, geometry_b, std::sqrt(screen_epsilon));
-	if (!closest.valid || quader_geometry::length_squared(geometry_b - geometry_a) <= screen_epsilon) {
-		return vec2_distance_squared(point, a);
-	}
-	return vec2_distance_squared(point, { static_cast<float>(closest.point.x), static_cast<float>(closest.point.y) });
+        const quader_geometry::QClosestSegmentPoint2<double> closest =
+            quader_geometry::closest_point_on_segment<double>(
+                geometry_point, geometry_a, geometry_b,
+                std::sqrt(kScreenEpsilon));
+        if (!closest.valid || quader_geometry::length_squared(
+                                  geometry_b - geometry_a) <= kScreenEpsilon) {
+          return vec2_distance_squared(point, a);
+        }
+        return vec2_distance_squared(point, { static_cast<float>(closest.point.x), static_cast<float>(closest.point.y) });
 }
 
 TransformGizmoPickHit pick_move_gizmo_axis(quader::QVec2 screen_position, quader::QVec2 screen_center, const std::vector<TransformGizmoPickCandidate>& candidates, double pick_radius)
@@ -539,8 +586,8 @@ TransformGizmoPickHit pick_scale_gizmo_axis(quader::QVec2 screen_position, quade
 	const double center_distance_squared = vec2_distance_squared(screen_position, screen_pivot);
 	if (center_distance_squared <= center_safe_radius * center_safe_radius) {
 		hit.hit = true;
-		hit.axis = TransformAxis::all;
-		hit.local_direction = { 1.0F, 1.0F, 1.0F };
+                hit.axis = TransformAxis::All;
+                hit.local_direction = { 1.0F, 1.0F, 1.0F };
 		hit.world_direction = { 1.0F, 1.0F, 1.0F };
 		hit.screen_tip = { static_cast<float>(static_cast<double>(screen_pivot.x) + std::max(24.0, screen_size)), screen_pivot.y };
 		hit.distance = std::sqrt(center_distance_squared);

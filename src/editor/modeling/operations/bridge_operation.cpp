@@ -42,8 +42,8 @@ BridgeOperationSettings bridge_settings_from_variant(const EditorOperationSettin
 
 const BridgeOperation& concrete_bridge_operation()
 {
-	static const BridgeOperation operation;
-	return operation;
+  static const BridgeOperation kOperation;
+  return kOperation;
 }
 
 } // namespace
@@ -55,7 +55,7 @@ const EditorOperation& bridge_operation()
 
 EditorOperationId BridgeOperation::operation_id() const
 {
-	return EditorOperationId::bridge;
+  return EditorOperationId::Bridge;
 }
 
 std::string_view BridgeOperation::id() const
@@ -91,9 +91,9 @@ CommandResult BridgeOperation::update_preview(EditorSession& session, const Edit
 CommandResult BridgeOperation::execute(EditorSession& session, BridgeOperationSettings settings) const
 {
 	settings = normalize_bridge_operation_settings(settings);
-	return session.selection_mode() == SelectionMode::face ?
-		execute_faces(session, settings) :
-		execute_edges(session, settings);
+        return session.selection_mode() == SelectionMode::Face
+                   ? execute_faces(session, settings)
+                   : execute_edges(session, settings);
 }
 
 CommandResult BridgeOperation::execute_edges(EditorSession& session, BridgeOperationSettings settings) const
@@ -118,8 +118,8 @@ CommandResult BridgeOperation::update_preview(EditorSession& session, BridgeOper
 
 CommandResult EditorSession::begin_bridge_preview(int steps)
 {
-	begin_preview_transaction(PreviewTransactionKind::bridge);
-	return finish_preview_begin(update_bridge_preview_from_base(steps));
+  begin_preview_transaction(PreviewTransactionKind::Bridge);
+  return finish_preview_begin(update_bridge_preview_from_base(steps));
 }
 
 CommandResult EditorSession::begin_bridge_preview(BridgeOperationSettings settings)
@@ -129,10 +129,10 @@ CommandResult EditorSession::begin_bridge_preview(BridgeOperationSettings settin
 
 CommandResult EditorSession::update_bridge_preview(int steps)
 {
-	if (!preview_transaction_active(PreviewTransactionKind::bridge)) {
-		return error_result("No bridge preview is active.");
-	}
-	return update_bridge_preview_from_base(steps);
+  if (!preview_transaction_active(PreviewTransactionKind::Bridge)) {
+    return error_result("No bridge preview is active.");
+  }
+        return update_bridge_preview_from_base(steps);
 }
 
 CommandResult EditorSession::update_bridge_preview(BridgeOperationSettings settings)
@@ -176,11 +176,10 @@ CommandResult EditorSession::update_bridge_preview_from_base(int steps)
 {
 	const SessionState base = preview_transaction_.base_state;
 	set_state(base);
-	const CommandResult result =
-		selection_mode() == SelectionMode::face ?
-			bridge_selected_faces(steps) :
-			bridge_selected_edges(steps);
-	return finish_preview_update_from_base(
+        const CommandResult result = selection_mode() == SelectionMode::Face
+                                         ? bridge_selected_faces(steps)
+                                         : bridge_selected_edges(steps);
+        return finish_preview_update_from_base(
 		base,
 		result,
 		CommandResult { false, false, result.message });

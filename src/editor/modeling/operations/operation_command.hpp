@@ -16,45 +16,46 @@ namespace quader_editor_core {
  * Enumerates EditorOperationCommandPhase values used by the modeling layer.
  */
 enum class EditorOperationCommandPhase {
-	execute,
-	begin_preview,
-	update_preview,
-	commit_preview,
-	cancel_preview,
+  Execute,
+  BeginPreview,
+  UpdatePreview,
+  CommitPreview,
+  CancelPreview,
 };
 
 /**
  * Enumerates EditorOperationSettingsKind values used by operation command validation.
  */
 enum class EditorOperationSettingsKind {
-	selection,
-	bridge,
-	edge_bevel,
-	thicken,
-	slice_quad,
-	merge_by_distance,
-	bevel_vertices,
-	duplicate_meshes,
-	recalculate_face_normals,
-	assign_material,
+  Selection,
+  Bridge,
+  EdgeBevel,
+  Thicken,
+  SliceQuad,
+  MergeByDistance,
+  BevelVertices,
+  DuplicateMeshes,
+  RecalculateFaceNormals,
+  AssignMaterial,
 };
 
 /**
  * Stores the command-schema metadata for an editor operation.
  */
 struct EditorOperationCommandSchema {
-	EditorOperationId operation_id = EditorOperationId::bridge;
-	EditorOperationSettingsKind settings_kind = EditorOperationSettingsKind::selection;
-	std::optional<PreviewTransactionKind> preview_transaction_kind;
+  EditorOperationId operation_id = EditorOperationId::Bridge;
+  EditorOperationSettingsKind settings_kind =
+      EditorOperationSettingsKind::Selection;
+  std::optional<PreviewTransactionKind> preview_transaction_kind;
 };
 
 /**
  * Represents an Editor Operation Command value used by the modeling runtime domain.
  */
 struct EditorOperationCommand {
-	EditorOperationId operation_id = EditorOperationId::bridge;
-	EditorOperationCommandPhase phase = EditorOperationCommandPhase::execute;
-	EditorOperationSettings settings = BridgeOperationSettings {};
+  EditorOperationId operation_id = EditorOperationId::Bridge;
+  EditorOperationCommandPhase phase = EditorOperationCommandPhase::Execute;
+  EditorOperationSettings settings = BridgeOperationSettings{};
 };
 
 /**

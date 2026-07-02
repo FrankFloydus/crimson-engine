@@ -35,7 +35,7 @@ struct QuaderScriptResult : QuaderApiStatus {
 
     std::vector<QuaderScriptStepResult> steps;
     std::unordered_map<std::string, QuaderModelingObjectRef> objects;
-    QuaderApiSnapshot finalSnapshot;
+    QuaderApiSnapshot final_snapshot;
 };
 
 /**
@@ -45,22 +45,25 @@ class QuaderScript final {
 public:
     QuaderScript(QuaderApi& api, std::string label = {});
 
-    QuaderScript& createBox(std::string alias, QuaderBounds bounds, std::string name = "Box");
+    QuaderScript &create_box(std::string alias, QuaderBounds bounds,
+                             std::string name = "Box");
 
-    QuaderScript& createMesh(std::string alias, QuaderPolygonDocument document, QuaderCreateMeshArgs args = {});
+    QuaderScript &create_mesh(std::string alias, QuaderPolygonDocument document,
+                              QuaderCreateMeshArgs args = {});
 
     QuaderScript& select(std::string alias);
-    QuaderScript& selectVertex(std::string alias, QuaderElementId vertex);
-    QuaderScript& selectEdge(std::string alias, QuaderElementId a, QuaderElementId b);
-    QuaderScript& selectFace(std::string alias, QuaderElementId face);
-    QuaderScript& clearSelection();
-    QuaderScript& setSelectionMode(QuaderSelectionMode mode);
+    QuaderScript &select_vertex(std::string alias, QuaderElementId vertex);
+    QuaderScript &select_edge(std::string alias, QuaderElementId a,
+                              QuaderElementId b);
+    QuaderScript &select_face(std::string alias, QuaderElementId face);
+    QuaderScript &clear_selection();
+    QuaderScript &set_selection_mode(QuaderSelectionMode mode);
 
-    QuaderScript& moveSelection(QVec3 delta);
-    QuaderScript& rotateSelection(QVec3 eulerRadians, QVec3 pivot = {});
-    QuaderScript& scaleSelection(QVec3 scale, QVec3 pivot = {});
-    QuaderScript& executeTool(std::string toolId);
-    QuaderScript& assignMaterialSlot(std::uint32_t materialSlot);
+    QuaderScript &move_selection(QVec3 delta);
+    QuaderScript &rotate_selection(QVec3 euler_radians, QVec3 pivot = {});
+    QuaderScript &scale_selection(QVec3 scale, QVec3 pivot = {});
+    QuaderScript &execute_tool(std::string tool_id);
+    QuaderScript &assign_material_slot(std::uint32_t material_slot);
     QuaderScript& undo();
     QuaderScript& redo();
 
@@ -77,8 +80,9 @@ private:
         StepFunction execute;
     };
 
-    QuaderScript& addStep(std::string label, StepFunction execute);
-    [[nodiscard]] QuaderApiStatus missingAliasStatus(std::string_view alias) const;
+    QuaderScript &add_step(std::string label, StepFunction execute);
+    [[nodiscard]] QuaderApiStatus
+    missing_alias_status(std::string_view alias) const;
 
     QuaderApi& api_;
     std::string label_;

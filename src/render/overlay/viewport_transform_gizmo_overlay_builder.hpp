@@ -21,10 +21,9 @@ struct ViewportOverlayCamera;
  */
 class ViewportTransformGizmoOverlayBuilder {
 public:
-    static void append(
-            ViewportOverlayFrame& overlayFrame,
-            const quader_editor_core::TransformGizmoFrame& gizmoFrame,
-            const ViewportOverlayCamera& camera);
+  static void append(ViewportOverlayFrame &overlay_frame,
+                     const quader_editor_core::TransformGizmoFrame &gizmo_frame,
+                     const ViewportOverlayCamera &camera);
 };
 
 } // namespace quader

@@ -36,12 +36,12 @@ TEST(QdrModelingRuntimeOperationDeleteTests, DeleteOperationRemovesSelectedEdito
 		quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 		const quader_poly::ElementId face_id = session.objects().front().document.faces.front().id;
 		const std::size_t face_count_before = session.objects().front().document.faces.size();
-		session.set_component_selection(
-			session.objects().front().id,
-			qdr_test::face_selection({ face_id }, face_id),
-			quader_editor_core::SelectionMode::face);
+                session.set_component_selection(
+                    session.objects().front().id,
+                    qdr_test::face_selection({face_id}, face_id),
+                    quader_editor_core::SelectionMode::Face);
 
-		const quader_editor_core::CommandResult result = session.delete_selected();
+                const quader_editor_core::CommandResult result = session.delete_selected();
 
 		EXPECT_TRUE(result.ok);
 		EXPECT_TRUE(result.changed);

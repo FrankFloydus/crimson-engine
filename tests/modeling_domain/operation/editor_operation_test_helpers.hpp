@@ -49,9 +49,9 @@ inline const quader_editor_core::PolygonObject& require_object(const quader_edit
 	const quader_editor_core::PolygonObject* object = find_object(session, object_id);
 	if (object == nullptr) {
 		ADD_FAILURE() << "Missing polygon object " << object_id;
-		static const quader_editor_core::PolygonObject missing_object {};
-		return missing_object;
-	}
+                static const quader_editor_core::PolygonObject kMissingObject{};
+                return kMissingObject;
+        }
 	return *object;
 }
 
