@@ -355,6 +355,7 @@ const std::vector<ThirdPartyLicenseExpectation>& thirdPartyLicenseExpectations()
             {"lodepng", "lodepng", "licenses/lodepng-Zlib.txt", true},
             {"spdlog", "spdlog", "licenses/spdlog-MIT.txt", true},
             {"", "{fmt}", "licenses/fmt-MIT.txt", false},
+            {"taskflow", "Taskflow", "licenses/taskflow-MIT.txt", true},
             {"", "Tracy Profiler", "licenses/tracy-BSD-3-Clause.txt", false},
     };
     return expectations;

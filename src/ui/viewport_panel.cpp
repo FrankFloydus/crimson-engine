@@ -727,6 +727,24 @@ void ViewportPanel::prepareViewports(
     const bool gridVisible = settings.boolValue(ViewportBoolSettingId::ShowGrid);
     const bool gizmosVisible = settings.boolValue(ViewportBoolSettingId::ShowGizmos);
     const bool overlaysVisible = settings.boolValue(ViewportBoolSettingId::ShowOverlays);
+    const ModelingSelectionMode cachedOverlayMode = selectionOverlayCache_.valid()
+            ? selectionOverlayCache_.key().selectionMode
+            : viewportSelectionModeToApp(inputRouter_.state().selectionMode);
+    renderBridge.syncSelectedObjectOverlay(
+            document,
+            assets,
+            overlaysVisible && cachedOverlayMode == ModelingSelectionMode::Object);
+    std::uint8_t wireframeLayerMask = 0u;
+    for (ViewportPaneId paneId : activeRenderPanes_) {
+        const ViewportWorkspacePaneState& paneWorkspace = workspace.pane(paneId);
+        if (pane(paneId).initialized &&
+                paneWorkspace.visibleThisFrame &&
+                paneWorkspace.shading == ViewportShadingMode::Wireframe) {
+            wireframeLayerMask = static_cast<std::uint8_t>(
+                    wireframeLayerMask | viewportGridLayerMask(viewportPaneIndex(paneId)));
+        }
+    }
+    renderBridge.syncSceneWireframeOverlay(document, assets, wireframeLayerMask);
     for (ViewportPaneId paneId : activeRenderPanes_) {
         QDR_PROFILE_SCOPE("Viewport prepare pane");
         Pane& paneState = pane(paneId);
@@ -754,16 +772,11 @@ void ViewportPanel::prepareViewports(
         ViewportOverlayFrame overlayFrame = overlaysVisible && selectionOverlayCache_.valid()
                 ? selectionOverlayCache_.frame()
                 : ViewportOverlayFrame{};
-        const ModelingSelectionMode overlayMode = selectionOverlayCache_.valid()
-                ? selectionOverlayCache_.key().selectionMode
-                : viewportSelectionModeToApp(inputRouter_.state().selectionMode);
         if (paneWorkspace.shading == ViewportShadingMode::Wireframe) {
-            QDR_PROFILE_SCOPE("Viewport build wireframe overlay");
-            overlayFrame = ViewportSceneOverlayBuilder::buildWireframeFrame(
+            QDR_PROFILE_SCOPE("Viewport strip wireframe selection fills");
+            overlayFrame = ViewportSceneOverlayBuilder::stripWireframeSelectionFills(
                     std::move(overlayFrame),
-                    overlayMode,
-                    document,
-                    assets);
+                    cachedOverlayMode);
         }
         if (paneId == interactionPaneId_) {
             const ViewportOverlayCamera overlayCamera =
@@ -784,7 +797,7 @@ void ViewportPanel::prepareViewports(
         ViewportOverlayStyleResolver::apply(
                 overlayFrame,
                 settings,
-                ViewportOverlayStyleContext{.selectionMode = overlaySelectionContext(overlayMode)});
+                ViewportOverlayStyleContext{.selectionMode = overlaySelectionContext(cachedOverlayMode)});
         {
             QDR_PROFILE_SCOPE("Viewport submit overlay frame");
             renderBridge.setOverlayFrame(
@@ -1062,6 +1075,8 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
                     {},
                     ViewportCameraAdapter::overlayCamera(viewportWorkspace.camera(paneState.id), {1.0f, 1.0f}));
         }
+        renderBridge.syncSelectedObjectOverlay(document, assets, false);
+        renderBridge.syncSceneWireframeOverlay(document, assets, 0u);
         lastFlyNavigationActive_ = false;
         viewportWorkspace.clearPaneVisibility();
         activeRenderPanes_.clear();
@@ -1310,9 +1325,12 @@ void ViewportPanel::refreshCachedSelectionOverlayFrame(
         QDR_PROFILE_SCOPE("Viewport selection overlay summary");
         return modeling.selectionSummary();
     }();
+    const ModelingSelectionOverlayOptions overlayOptions{
+            .suppressPersistentObjectSelection = overlaySummary.mode == ModelingSelectionMode::Object,
+    };
     const std::uint64_t overlaySignature = [&]() {
         QDR_PROFILE_SCOPE("Viewport selection overlay signature");
-        return modeling.selectionOverlaySignature();
+        return modeling.selectionOverlaySignature(overlayOptions);
     }();
     const ViewportPaneOverlayCacheKey key{
             .contentRevision = overlaySummary.contentRevision,
@@ -1333,7 +1351,7 @@ void ViewportPanel::refreshCachedSelectionOverlayFrame(
     auto rebuildCache = [&]() {
         ViewportOverlayFrame sourceFrame = [&]() {
             QDR_PROFILE_SCOPE("Viewport selection overlay source frame");
-            return modeling.selectionOverlayFrame();
+            return modeling.selectionOverlayFrame(overlayOptions);
         }();
         ViewportOverlayFrame frame = [&]() {
             QDR_PROFILE_SCOPE("Viewport selection overlay project frame");

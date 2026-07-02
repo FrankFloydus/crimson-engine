@@ -313,7 +313,8 @@ TEST(OopArchitectureGuardrailTests, UiShellLeavesSceneOverlayExtractionToRenderB
     EXPECT_NE(builder.find("appendSceneWireframeOverlay"), std::string::npos);
     EXPECT_NE(builder.find("stripWireframeObjectFaceFills"), std::string::npos);
     EXPECT_NE(viewportPanel.find("ViewportSceneOverlayBuilder::buildSelectionFrame("), std::string::npos);
-    EXPECT_NE(viewportPanel.find("ViewportSceneOverlayBuilder::buildWireframeFrame("), std::string::npos);
+    EXPECT_NE(viewportPanel.find("ViewportSceneOverlayBuilder::stripWireframeSelectionFills("), std::string::npos);
+    EXPECT_NE(viewportPanel.find("renderBridge.syncSceneWireframeOverlay("), std::string::npos);
 
     for (std::string_view forbidden : {
                  "appendMeshSelectionWire",
@@ -321,6 +322,7 @@ TEST(OopArchitectureGuardrailTests, UiShellLeavesSceneOverlayExtractionToRenderB
                  "appendGroupSelectionCages",
                  "appendSceneWireframeOverlay",
                  "stripWireframeObjectFaceFills",
+                 "buildWireframeFrame(",
                  "WireEdgeKey",
          }) {
         EXPECT_EQ(uiShell.find(forbidden), std::string::npos) << forbidden;

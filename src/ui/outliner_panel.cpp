@@ -201,6 +201,9 @@ void drawHierarchyGuides(
 
 } // namespace
 
+/**
+ * Stores the flattened scene tree projection used to draw and interact with the outliner rows.
+ */
 struct OutlinerPanel::TreeCache {
     bool valid = false;
     std::uint64_t sceneRevision = 0;

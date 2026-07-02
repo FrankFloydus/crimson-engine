@@ -95,6 +95,8 @@ EntityId SceneDocument::createEntity(std::string name, EntityKind kind, EditorOb
     idsByEntity_.emplace(entityKey(entity), id);
     entityByUuid_.emplace(uuid, id);
     entityByEditorObjectId_.emplace(objectId, id);
+    ++visibilityRevision_;
+    ++transformRevision_;
     markDirty();
     return id;
 }
@@ -131,6 +133,8 @@ EntityId SceneDocument::createEntityWithId(
     idsByEntity_.emplace(entityKey(entity), id);
     entityByUuid_.emplace(uuid, id);
     entityByEditorObjectId_.emplace(objectId, id);
+    ++transformRevision_;
+    ++visibilityRevision_;
     markDirty();
     return id;
 }
@@ -175,6 +179,10 @@ bool SceneDocument::destroyEntity(EntityId id) {
     if (activeDestroyed || !isSelected(activeSelection_)) {
         activeSelection_ = firstSelectedEntity();
     }
+    ++selectionRevision_;
+    ++visibilityRevision_;
+    ++transformRevision_;
+    ++meshBindingRevision_;
     markDirty();
     return true;
 }
@@ -229,6 +237,10 @@ bool SceneDocument::destroyEntities(std::span<const EntityId> ids) {
     if (activeDestroyed || !isSelected(activeSelection_)) {
         activeSelection_ = firstSelectedEntity();
     }
+    ++selectionRevision_;
+    ++visibilityRevision_;
+    ++transformRevision_;
+    ++meshBindingRevision_;
     markDirty();
     return true;
 }
@@ -324,7 +336,11 @@ bool SceneDocument::setEntityKind(EntityId id, EntityKind kind) {
 
 bool SceneDocument::setVisible(EntityId id, bool visible) {
     if (VisibilityComponent* component = mutableVisibility(id)) {
+        if (component->visible == visible) {
+            return true;
+        }
         component->visible = visible;
+        ++visibilityRevision_;
         markDirty();
         return true;
     }
@@ -360,6 +376,7 @@ bool SceneDocument::setSelected(EntityId id, bool selected) {
             activeSelection_ = firstSelectedEntity();
         }
         if (wasSelected != selected || previousActiveSelection != activeSelection_) {
+            ++selectionRevision_;
             markDirty();
         }
         return true;
@@ -373,6 +390,7 @@ bool SceneDocument::setActiveSelection(EntityId id) {
     }
     if (activeSelection_ != id) {
         activeSelection_ = id;
+        ++selectionRevision_;
         markDirty();
     }
     return true;
@@ -391,6 +409,7 @@ void SceneDocument::clearSelection() {
         changed = true;
     }
     if (changed) {
+        ++selectionRevision_;
         markDirty();
     }
 }
@@ -444,6 +463,8 @@ bool SceneDocument::setParent(EntityId child, EntityId newParent, bool preserveW
         }
     }
 
+    ++visibilityRevision_;
+    ++transformRevision_;
     markDirty();
     return true;
 }
@@ -458,6 +479,7 @@ void SceneDocument::setTransform(EntityId id, TransformComponent transform) {
         return;
     }
     registry_.emplace_or_replace<TransformComponent>(entity, transform);
+    ++transformRevision_;
     markDirty();
 }
 
@@ -476,6 +498,7 @@ void SceneDocument::setTransforms(std::span<const SceneTransformAssignment> tran
         changed = true;
     }
     if (changed) {
+        ++transformRevision_;
         markDirty();
     }
 }
@@ -496,6 +519,7 @@ void SceneDocument::setMesh(EntityId id, MeshComponent mesh) {
     }
     registry_.emplace_or_replace<MeshComponent>(entity, mesh);
     registry_.emplace_or_replace<EntityKindComponent>(entity, EntityKindComponent{.kind = EntityKind::Mesh});
+    ++meshBindingRevision_;
     markDirty();
 }
 
@@ -883,6 +907,10 @@ QMat4 SceneDocument::worldTransformMatrix(EntityId id) const {
 
 void SceneDocument::advanceRevisionForReplacement(std::uint64_t previousRevision) {
     revision_ = std::max(revision_ + 1u, previousRevision + 1u);
+    selectionRevision_ = std::max(selectionRevision_ + 1u, revision_);
+    visibilityRevision_ = std::max(visibilityRevision_ + 1u, revision_);
+    transformRevision_ = std::max(transformRevision_ + 1u, revision_);
+    meshBindingRevision_ = std::max(meshBindingRevision_ + 1u, revision_);
 }
 
 entt::entity SceneDocument::enttEntity(EntityId id) const {

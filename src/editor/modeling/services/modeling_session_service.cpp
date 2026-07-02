@@ -882,17 +882,18 @@ public:
                 selectionService_.rectangleSelectionState(session_)));
     }
 
-    [[nodiscard]] std::uint64_t selectionOverlaySignature() const {
-        return overlayService_.selectionOverlaySignature(runtime_);
+    [[nodiscard]] std::uint64_t selectionOverlaySignature(ModelingSelectionOverlayOptions options = {}) const {
+        return overlayService_.selectionOverlaySignature(runtime_, options);
     }
 
-    [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame() const {
+    [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame(ModelingSelectionOverlayOptions options = {}) const {
         return overlayService_.selectionOverlayFrame(
                 session_,
                 runtime_,
                 scene_,
                 objectRegistry_,
-                cachedSceneTransformedObjectsForPicking());
+                cachedSceneTransformedObjectsForPicking(),
+                options);
     }
 
     [[nodiscard]] std::vector<ModelingToolPreviewMesh> toolPreviewMeshes() const {
@@ -3301,12 +3302,12 @@ ModelingSelectionBoxBaseline ModelingSessionService::captureBoxSelectionBaseline
     return impl_->captureBoxSelectionBaseline();
 }
 
-std::uint64_t ModelingSessionService::selectionOverlaySignature() const {
-    return impl_->selectionOverlaySignature();
+std::uint64_t ModelingSessionService::selectionOverlaySignature(ModelingSelectionOverlayOptions options) const {
+    return impl_->selectionOverlaySignature(options);
 }
 
-ViewportOverlayFrame ModelingSessionService::selectionOverlayFrame() const {
-    return impl_->selectionOverlayFrame();
+ViewportOverlayFrame ModelingSessionService::selectionOverlayFrame(ModelingSelectionOverlayOptions options) const {
+    return impl_->selectionOverlayFrame(options);
 }
 
 std::vector<ModelingToolPreviewMesh> ModelingSessionService::toolPreviewMeshes() const {

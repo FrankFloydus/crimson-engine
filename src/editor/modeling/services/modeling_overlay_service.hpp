@@ -69,7 +69,8 @@ public:
     [[nodiscard]] static bool hasModalOverlay(const ModelingToolStatus& status);
     void invalidate() const;
     [[nodiscard]] std::uint64_t selectionOverlaySignature(
-            const quader_editor_core::EditorRuntime& runtime) const;
+            const quader_editor_core::EditorRuntime& runtime,
+            ModelingSelectionOverlayOptions options = {}) const;
 
     [[nodiscard]] bool selectionFrameMatches(
             std::uint64_t contentRevision,
@@ -88,17 +89,20 @@ public:
             std::uint64_t overlaySignature,
             const quader_editor_core::SelectionHoverState& hover) const;
     [[nodiscard]] const quader_editor_core::SelectionOverlayFrame& selectionOverlayBaseFrame(
-            const quader_editor_core::EditorSession& session) const;
+            const quader_editor_core::EditorSession& session,
+            ModelingSelectionOverlayOptions options = {}) const;
     [[nodiscard]] quader_editor_core::SelectionOverlayFrame selectionOverlayCurrentFrame(
             const quader_editor_core::EditorSession& session,
             const quader_editor_core::EditorRuntime& runtime,
-            const quader_editor_core::SelectionHoverState& hover) const;
+            const quader_editor_core::SelectionHoverState& hover,
+            ModelingSelectionOverlayOptions options = {}) const;
     [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame(
             const quader_editor_core::EditorSession& session,
             const quader_editor_core::EditorRuntime& runtime,
             const SceneDocument& scene,
             const ModelingObjectRuntimeMap& objectRegistry,
-            const std::vector<quader_editor_core::PolygonObject>& previewObjects) const;
+            const std::vector<quader_editor_core::PolygonObject>& previewObjects,
+            ModelingSelectionOverlayOptions options = {}) const;
     [[nodiscard]] std::vector<ModelingToolPreviewMesh> toolPreviewMeshes(
             const quader_editor_core::EditorRuntime& runtime,
             const SceneDocument& scene,
@@ -126,6 +130,7 @@ private:
         std::uint64_t contentRevision = 0;
         std::uint64_t selectionRevision = 0;
         quader_editor_core::SelectionMode selectionMode = quader_editor_core::SelectionMode::object;
+        bool suppressPersistentObjectSelection = false;
         quader_editor_core::SelectionOverlayFrame frame;
         std::vector<OverlayBaseObjectCacheEntry> objectEntries;
     };

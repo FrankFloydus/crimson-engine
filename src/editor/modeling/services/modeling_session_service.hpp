@@ -74,8 +74,8 @@ public:
     [[nodiscard]] std::optional<QVec3> selectionCenter() const;
     [[nodiscard]] ModelingSelectionMode selectionMode() const;
     [[nodiscard]] ModelingSelectionSummary selectionSummary() const;
-    [[nodiscard]] std::uint64_t selectionOverlaySignature() const;
-    [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame() const;
+    [[nodiscard]] std::uint64_t selectionOverlaySignature(ModelingSelectionOverlayOptions options = {}) const;
+    [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame(ModelingSelectionOverlayOptions options = {}) const;
     [[nodiscard]] std::vector<ModelingToolPreviewMesh> toolPreviewMeshes() const;
     [[nodiscard]] ModelingSessionMemento captureHistoryMemento() const;
     [[nodiscard]] ModelingSessionMemento captureActivePreviewHistoryMemento() const;

@@ -365,7 +365,7 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
         if (preview.ok &&
                 preview.value().active) {
             activeDragPivot_ = preview.value().pivot;
-            if (viewportToolInteractionTool(tool) == quader_editor_core::ViewportInteractionTool::move) {
+            if (viewportToolTransformTool(tool) == ModelingTransformTool::Move) {
                 activeDragPivot_ += preview.value().moveDelta;
             }
         }

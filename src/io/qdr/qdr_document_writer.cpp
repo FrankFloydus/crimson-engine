@@ -173,6 +173,9 @@ json projectPayloadToJson(const ProjectDocument& document) {
 
     json meshes = json::array();
     const std::vector<AssetId> meshIds = assets.meshIds();
+    /**
+     * Holds one mesh asset and its encoded JSON payload for parallel QDR serialization.
+     */
     struct MeshToWrite {
         AssetId id = InvalidAssetId;
         const MeshAsset* mesh = nullptr;

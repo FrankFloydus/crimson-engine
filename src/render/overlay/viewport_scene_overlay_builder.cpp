@@ -467,6 +467,23 @@ bool wireframeSuppressesTriangleLayer(ViewportOverlayLayer layer) {
             layer == ViewportOverlayLayer::HoverFace;
 }
 
+bool persistentObjectSelectionTriangle(const ViewportOverlayTriangle& triangle) {
+    if (triangle.source != ViewportOverlaySource::Selection || triangle.element.objectId < 0) {
+        return false;
+    }
+    return triangle.layer == ViewportOverlayLayer::SelectedVisibleFace ||
+            triangle.layer == ViewportOverlayLayer::SelectedXrayFace ||
+            triangle.layer == ViewportOverlayLayer::SelectedFaceMask;
+}
+
+bool persistentObjectSelectionLine(const ViewportOverlayLine& line) {
+    if (line.source != ViewportOverlaySource::Selection || line.element.objectId < 0) {
+        return false;
+    }
+    return line.layer == ViewportOverlayLayer::SelectedFaceEdge ||
+            line.layer == ViewportOverlayLayer::SelectedEdge;
+}
+
 void stripWireframeObjectFaceFills(ViewportOverlayFrame& frame, ModelingSelectionMode mode) {
     if (!wireframeUsesWireOnlyObjectSelection(mode)) {
         return;
@@ -490,6 +507,29 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::buildSelectionFrame(
     appendGroupSelectionCages(baseFrame, document, assets);
     appendSelectedLightMarkers(baseFrame, document);
     return baseFrame;
+}
+
+ViewportOverlayFrame ViewportSceneOverlayBuilder::stripPersistentObjectSelection(
+        ViewportOverlayFrame frame,
+        ModelingSelectionMode selectionMode) {
+    if (selectionMode != ModelingSelectionMode::Object) {
+        return frame;
+    }
+
+    frame.triangles.erase(
+            std::remove_if(frame.triangles.begin(), frame.triangles.end(), persistentObjectSelectionTriangle),
+            frame.triangles.end());
+    frame.lines.erase(
+            std::remove_if(frame.lines.begin(), frame.lines.end(), persistentObjectSelectionLine),
+            frame.lines.end());
+    return frame;
+}
+
+ViewportOverlayFrame ViewportSceneOverlayBuilder::stripWireframeSelectionFills(
+        ViewportOverlayFrame frame,
+        ModelingSelectionMode selectionMode) {
+    stripWireframeObjectFaceFills(frame, selectionMode);
+    return frame;
 }
 
 ViewportOverlayFrame ViewportSceneOverlayBuilder::buildWireframeFrame(

@@ -28,6 +28,12 @@ public:
             ModelingSelectionMode selectionMode,
             const SceneDocument& document,
             const AssetRegistry& assets);
+    [[nodiscard]] static ViewportOverlayFrame stripPersistentObjectSelection(
+            ViewportOverlayFrame frame,
+            ModelingSelectionMode selectionMode);
+    [[nodiscard]] static ViewportOverlayFrame stripWireframeSelectionFills(
+            ViewportOverlayFrame frame,
+            ModelingSelectionMode selectionMode);
 };
 
 } // namespace quader

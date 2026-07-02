@@ -94,6 +94,7 @@ bool App::initialize(const std::filesystem::path& executablePath, AppOptions opt
             renderSystem_.quaderMeshLitMaterial(),
             renderSystem_.vertexColorOverlayMaterial(),
             renderSystem_.overlayLineMaterial(),
+            renderSystem_.selectedObjectLineMaterial(),
             renderSystem_.overlayPointMaterial(),
             executableDir);
     LOG_INFO("Scene render bridge initialized");

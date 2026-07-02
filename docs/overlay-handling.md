@@ -59,7 +59,10 @@ Object mode:
 
 - Hovering a mesh does not draw a mesh wire. Hover may keep a candidate internally so clicking can
   select the mesh, but the source wire stays invisible until selection.
-- A selected mesh emits object-mode x-ray face fill and selected mesh-outline lines.
+- A selected mesh emits selected mesh topology lines. Small object selections also emit the
+  object-mode x-ray face fill; dense multi-selections suppress that face fill and keep the selected
+  wire as the stable selection signal so viewport navigation does not multiply face-fill renderables
+  by every selected mesh.
 - A selected mesh in object mode must not emit ordinary `SourceWire` lines or
   `SourceWireDepthStamp` metadata.
 
@@ -165,6 +168,12 @@ The policy owner is `src/render/viewport_overlay_policy.cpp`.
   `OverlayFrameSignatures`, rebuilding only camera-dependent layers, updating compatible line/point
   proxy buffers in place, and constructing source-wire depth-stamp visibility filters only when the
   frame actually contains `SourceWireDepthStamp` metadata.
+- Persistent selected-object rendering batches selected mesh wires into one renderable, caches local
+  wire topology per selected entity/mesh revision, and streams the transformed line vertex buffer in
+  place on transform-only scene revisions. It only keeps the translucent object face-fill proxies
+  below the dense-selection threshold. Wireframe viewport mode must color selected scene-wire entries
+  with the selected wire color instead of relying on the normal selected-object overlay layer,
+  because wireframe mode uses per-pane grid layer masks.
 
 ## Regression Tests
 

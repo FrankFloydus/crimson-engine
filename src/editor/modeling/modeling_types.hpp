@@ -431,6 +431,14 @@ struct ModelingSelectionSummary {
 };
 
 /**
+ * Stores selection overlay projection options for callers that have dedicated renderers for some
+ * selection feedback.
+ */
+struct ModelingSelectionOverlayOptions {
+    bool suppressPersistentObjectSelection = false;
+};
+
+/**
  * Stores the Modeling Object Record data contract used by the modeling domain.
  */
 struct ModelingObjectRecord {

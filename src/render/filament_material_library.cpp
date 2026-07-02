@@ -32,6 +32,8 @@ bool FilamentMaterialLibrary::initialize(filament::Engine& engine, const std::fi
         vertexColorOverlayMaterial_ = load(materialDir / std::string(kVertexColorOverlayMaterialFile));
         LOG_INFO("Loading overlay line material");
         overlayLineMaterial_ = load(materialDir / std::string(kOverlayLineMaterialFile));
+        LOG_INFO("Loading selected object line material");
+        selectedObjectLineMaterial_ = load(materialDir / std::string(kSelectedObjectLineMaterialFile));
         LOG_INFO("Loading overlay point material");
         overlayPointMaterial_ = load(materialDir / std::string(kOverlayPointMaterialFile));
         LOG_INFO("Loading ImGui material");
@@ -56,6 +58,7 @@ void FilamentMaterialLibrary::shutdown() {
     destroy(quaderMeshLitMaterial_);
     destroy(vertexColorOverlayMaterial_);
     destroy(overlayLineMaterial_);
+    destroy(selectedObjectLineMaterial_);
     destroy(overlayPointMaterial_);
     destroy(imguiMaterial_);
     destroy(groundGridMaterial_);

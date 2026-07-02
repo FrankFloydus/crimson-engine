@@ -142,6 +142,10 @@ public:
     EntityId entityId(entt::entity entity) const;
 
     std::uint64_t revision() const { return revision_; }
+    std::uint64_t selectionRevision() const { return selectionRevision_; }
+    std::uint64_t visibilityRevision() const { return visibilityRevision_; }
+    std::uint64_t transformRevision() const { return transformRevision_; }
+    std::uint64_t meshBindingRevision() const { return meshBindingRevision_; }
 
 private:
     NameComponent* mutableName(EntityId id);
@@ -165,6 +169,10 @@ private:
     EditorObjectId nextEditorObjectId_ = 1;
     EntityId activeSelection_ = InvalidEntityId;
     std::uint64_t revision_ = 0;
+    std::uint64_t selectionRevision_ = 0;
+    std::uint64_t visibilityRevision_ = 0;
+    std::uint64_t transformRevision_ = 0;
+    std::uint64_t meshBindingRevision_ = 0;
     EditorObjectIdAllocator editorObjectIdAllocator_;
     entt::registry registry_;
     std::unordered_map<EntityId, entt::entity> entities_;

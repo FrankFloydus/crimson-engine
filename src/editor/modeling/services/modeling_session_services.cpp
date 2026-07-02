@@ -825,8 +825,10 @@ void ModelingOverlayService::invalidate() const {
 }
 
 std::uint64_t ModelingOverlayService::selectionOverlaySignature(
-        const quader_editor_core::EditorRuntime& runtime) const {
+        const quader_editor_core::EditorRuntime& runtime,
+        ModelingSelectionOverlayOptions options) const {
     std::uint64_t hash = 1469598103934665603ULL;
+    mixOverlaySignatureHash(hash, options.suppressPersistentObjectSelection);
     mixOverlaySignatureHash(hash, static_cast<int>(runtime.active_tool()));
 
     const quader_editor_core::SelectionHoverState& hover = runtime.hover();
@@ -1008,14 +1010,16 @@ void ModelingOverlayService::storeSelectionFrame(
 }
 
 const quader_editor_core::SelectionOverlayFrame& ModelingOverlayService::selectionOverlayBaseFrame(
-        const quader_editor_core::EditorSession& session) const {
+        const quader_editor_core::EditorSession& session,
+        ModelingSelectionOverlayOptions options) const {
     const std::uint64_t contentRevision = session.state().content_revision;
     const std::uint64_t selectionRevision = session.state().selection_revision;
     const quader_editor_core::SelectionMode selectionMode = session.selection_mode();
     if (overlayBaseCache_.valid &&
             overlayBaseCache_.contentRevision == contentRevision &&
             overlayBaseCache_.selectionRevision == selectionRevision &&
-            overlayBaseCache_.selectionMode == selectionMode) {
+            overlayBaseCache_.selectionMode == selectionMode &&
+            overlayBaseCache_.suppressPersistentObjectSelection == options.suppressPersistentObjectSelection) {
         return overlayBaseCache_.frame;
     }
 
@@ -1030,10 +1034,16 @@ const quader_editor_core::SelectionOverlayFrame& ModelingOverlayService::selecti
     next.contentRevision = contentRevision;
     next.selectionRevision = selectionRevision;
     next.selectionMode = selectionMode;
+    next.suppressPersistentObjectSelection = options.suppressPersistentObjectSelection;
     next.objectEntries.reserve(session.objects().size());
 
     const quader_editor_core::SelectionHoverState emptyHover;
     for (const quader_editor_core::PolygonObject& object : session.objects()) {
+        if (options.suppressPersistentObjectSelection &&
+                selectionMode == quader_editor_core::SelectionMode::object &&
+                object.selected) {
+            continue;
+        }
         const std::uint64_t signature = PickingCacheProjection::objectFaceGeometrySignature(object);
         const auto reusable = previousEntryByObjectId.find(object.id);
 
@@ -1067,8 +1077,9 @@ const quader_editor_core::SelectionOverlayFrame& ModelingOverlayService::selecti
 quader_editor_core::SelectionOverlayFrame ModelingOverlayService::selectionOverlayCurrentFrame(
         const quader_editor_core::EditorSession& session,
         const quader_editor_core::EditorRuntime& runtime,
-        const quader_editor_core::SelectionHoverState& hover) const {
-    const quader_editor_core::SelectionOverlayFrame& base = selectionOverlayBaseFrame(session);
+        const quader_editor_core::SelectionHoverState& hover,
+        ModelingSelectionOverlayOptions options) const {
+    const quader_editor_core::SelectionOverlayFrame& base = selectionOverlayBaseFrame(session, options);
     quader_editor_core::SelectionOverlayFrame hoverFrame =
             quader_editor_core::build_selection_hover_overlay_frame(
                     session.objects(),
@@ -1108,13 +1119,14 @@ ViewportOverlayFrame ModelingOverlayService::selectionOverlayFrame(
         const quader_editor_core::EditorRuntime& runtime,
         const SceneDocument& scene,
         const ModelingObjectRuntimeMap& objectRegistry,
-        const std::vector<quader_editor_core::PolygonObject>& previewObjects) const {
+        const std::vector<quader_editor_core::PolygonObject>& previewObjects,
+        ModelingSelectionOverlayOptions options) const {
     const quader_editor_core::SelectionHoverState& hover = runtime.hover();
     const std::uint64_t contentRevision = session.state().content_revision;
     const std::uint64_t selectionRevision = session.state().selection_revision;
     const std::uint64_t sceneRevision = scene.revision();
     const quader_editor_core::SelectionMode selectionMode = session.selection_mode();
-    const std::uint64_t overlaySignature = selectionOverlaySignature(runtime);
+    const std::uint64_t overlaySignature = selectionOverlaySignature(runtime, options);
     if (selectionFrameMatches(
                 contentRevision,
                 selectionRevision,
@@ -1126,7 +1138,7 @@ ViewportOverlayFrame ModelingOverlayService::selectionOverlayFrame(
     }
 
     const quader_editor_core::SelectionOverlayFrame currentFrame =
-            selectionOverlayCurrentFrame(session, runtime, hover);
+            selectionOverlayCurrentFrame(session, runtime, hover, options);
     ViewportOverlayFrame frame = SelectionOverlayProjection::projectSelectionOverlayFrame(
             currentFrame,
             objectRegistry,

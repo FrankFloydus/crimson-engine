@@ -261,12 +261,18 @@ ViewportOverlayElementRef runtimeElementRef(
     };
 }
 
+/**
+ * Caches visibility and world-transform data needed while projecting one modeling object overlay.
+ */
 struct ProjectionObjectState {
     bool visible = true;
     bool hasWorldTransform = false;
     QMat4 worldTransform;
 };
 
+/**
+ * Memoizes scene lookup results for object ids while building a selection overlay frame.
+ */
 class ProjectionObjectStateCache {
 public:
     ProjectionObjectStateCache() {

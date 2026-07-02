@@ -45,6 +45,7 @@
 #include "render/mesh_renderable_cache.hpp"
 #include "render/mesh_renderable_factory.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
+#include "render/overlay/selected_object_overlay_cache.hpp"
 #include "render/mesh_renderable_proxy.hpp"
 #include "render/render_system.hpp"
 #include "render/scene_render_bridge.hpp"
@@ -1456,6 +1457,38 @@ TEST(ViewportOverlayPolicyTests, MatchesNativeColorsAndRuntimePointSizes) {
     EXPECT_FLOAT_EQ(viewportOverlayPointInnerRadius(ViewportOverlayLayer::SnapTargetVertex), 0.62f);
 }
 
+TEST(ViewportOverlayPolicyTests, DenseObjectSelectionKeepsWireAndSuppressesFaceFillProxies) {
+    EXPECT_FALSE(selectedObjectFaceFillsEnabledForSelectionCount(0u));
+    EXPECT_TRUE(selectedObjectFaceFillsEnabledForSelectionCount(1u));
+    EXPECT_TRUE(selectedObjectFaceFillsEnabledForSelectionCount(kSelectedObjectFaceFillSelectionLimit));
+    EXPECT_FALSE(selectedObjectFaceFillsEnabledForSelectionCount(kSelectedObjectFaceFillSelectionLimit + 1u));
+
+    const std::string cacheSource = readSourceFile("src/render/overlay/selected_object_overlay_cache.cpp");
+    EXPECT_NE(cacheSource.find("syncLineEntries(states, assets)"), std::string::npos);
+    EXPECT_NE(cacheSource.find("updateLineProxy(states, document)"), std::string::npos);
+    EXPECT_NE(cacheSource.find("syncedSelectionRevision_ == selectionRevision"), std::string::npos);
+    EXPECT_NE(cacheSource.find("lineProxy_.vertexBuffer->setBufferAt"), std::string::npos);
+    EXPECT_NE(cacheSource.find("destroyFaceEntries()"), std::string::npos);
+}
+
+TEST(ViewportOverlayPolicyTests, NativeViewportSkipsTransientObjectSelectionOverlayBeforeProjection) {
+    const std::string viewportPanelSource = readSourceFile("src/ui/viewport_panel.cpp");
+    const std::string overlayServiceSource = readSourceFile("src/editor/modeling/services/modeling_session_services.cpp");
+
+    EXPECT_NE(viewportPanelSource.find("suppressPersistentObjectSelection = overlaySummary.mode == ModelingSelectionMode::Object"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("modeling.selectionOverlaySignature(overlayOptions)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("modeling.selectionOverlayFrame(overlayOptions)"), std::string::npos);
+    EXPECT_EQ(viewportPanelSource.find("stripPersistentObjectSelection("), std::string::npos);
+    EXPECT_NE(overlayServiceSource.find("options.suppressPersistentObjectSelection &&\n                selectionMode == quader_editor_core::SelectionMode::object &&\n                object.selected"), std::string::npos);
+}
+
+TEST(ViewportOverlayPolicyTests, WireframeCacheUsesSelectionStyleForSelectedMeshes) {
+    const std::string cacheSource = readSourceFile("src/render/overlay/scene_wireframe_overlay_cache.cpp");
+    EXPECT_NE(cacheSource.find("selection != nullptr && selection->selected"), std::string::npos);
+    EXPECT_NE(cacheSource.find("ViewportOverlayLayer::SelectedEdge : ViewportOverlayLayer::WireframeXray"), std::string::npos);
+    EXPECT_NE(cacheSource.find("kOverlaySelectionWireColor : kOverlayWireframeXrayColor"), std::string::npos);
+}
+
 TEST(ViewportOverlayPolicyTests, RuntimeSelectionOverlayDefaultsAreSemanticRoleTokens) {
     const quader_editor_core::SelectionOverlayStyle style;
     EXPECT_TRUE(quader_editor_core::selection_overlay_style_token_is_semantic(style.source_wire_color_abgr));
@@ -2206,7 +2239,7 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
     EXPECT_NE(splitSource.find("selectionOverlayCache_.matches("), std::string::npos);
     EXPECT_NE(splitSource.find("contentRevision,\n                selectionRevision,\n                sceneRevision"), std::string::npos);
     EXPECT_NE(splitSource.find("selectionMode,\n                overlaySignature,\n                hover"), std::string::npos);
-    EXPECT_NE(source.find("return overlayService_.selectionOverlaySignature(runtime_);"), std::string::npos);
+    EXPECT_NE(source.find("return overlayService_.selectionOverlaySignature(runtime_, options);"), std::string::npos);
     EXPECT_EQ(source.find("selectionOverlayToolSignature()"), std::string::npos);
     EXPECT_NE(splitSource.find("ModelingOverlayService::selectionOverlaySignature("), std::string::npos);
     EXPECT_NE(splitSource.find("runtime.cut_state()"), std::string::npos);
@@ -2215,7 +2248,8 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
     EXPECT_NE(splitSource.find("SelectionOverlayProjection::projectSelectionOverlayFrame("), std::string::npos);
     EXPECT_EQ(source.find("SelectionOverlayProjection::projectSelectionOverlayFrame("), std::string::npos);
     EXPECT_NE(splitSource.find("selectionOverlayCache_.store("), std::string::npos);
-    EXPECT_NE(splitSource.find("selectionOverlayBaseFrame(session)"), std::string::npos);
+    EXPECT_NE(splitSource.find("selectionOverlayBaseFrame(session, options)"), std::string::npos);
+    EXPECT_NE(splitSource.find("suppressPersistentObjectSelection"), std::string::npos);
     EXPECT_NE(overlayHeader.find("overlayBaseCache_"), std::string::npos);
     EXPECT_NE(splitSource.find("build_selection_hover_overlay_frame"), std::string::npos);
     EXPECT_NE(splitSource.find("appendSelectedHoverFilteredBaseFrame"), std::string::npos);
@@ -2667,6 +2701,43 @@ TEST(SceneDocumentTests, ComponentAccessorsAreReadOnlyOutsideDocumentMutators) {
     EXPECT_GT(scene.revision(), afterCreate);
     ASSERT_NE(scene.transform(entity), nullptr);
     EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 5.0f);
+}
+
+TEST(SceneDocumentTests, TracksDomainRevisionsForOverlayCacheInvalidation) {
+    SceneDocument scene;
+    const EntityId entity = scene.createEntity("Box");
+
+    const std::uint64_t selectionBefore = scene.selectionRevision();
+    const std::uint64_t transformBefore = scene.transformRevision();
+    const std::uint64_t visibilityBefore = scene.visibilityRevision();
+    const std::uint64_t meshBefore = scene.meshBindingRevision();
+
+    ASSERT_TRUE(scene.setSelected(entity, true));
+    EXPECT_GT(scene.selectionRevision(), selectionBefore);
+    EXPECT_EQ(scene.transformRevision(), transformBefore);
+    EXPECT_EQ(scene.visibilityRevision(), visibilityBefore);
+    EXPECT_EQ(scene.meshBindingRevision(), meshBefore);
+
+    const std::uint64_t transformSelection = scene.selectionRevision();
+    TransformComponent moved;
+    moved.position.x = 3.0f;
+    scene.setTransform(entity, moved);
+    EXPECT_GT(scene.transformRevision(), transformBefore);
+    EXPECT_EQ(scene.selectionRevision(), transformSelection);
+
+    const std::uint64_t visibilityRevision = scene.visibilityRevision();
+    ASSERT_TRUE(scene.setVisible(entity, false));
+    EXPECT_GT(scene.visibilityRevision(), visibilityRevision);
+    const std::uint64_t unchangedVisibilityRevision = scene.visibilityRevision();
+    ASSERT_TRUE(scene.setVisible(entity, false));
+    EXPECT_EQ(scene.visibilityRevision(), unchangedVisibilityRevision);
+
+    scene.setMesh(entity, MeshComponent{.mesh = 7});
+    EXPECT_GT(scene.meshBindingRevision(), meshBefore);
+
+    const std::uint64_t clearSelectionBefore = scene.selectionRevision();
+    scene.clearSelection();
+    EXPECT_GT(scene.selectionRevision(), clearSelectionBefore);
 }
 
 TEST(SceneEntityNamingTests, MeshNamesStartAtBaseNameThenUseOneBasedSuffixes) {

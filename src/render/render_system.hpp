@@ -91,6 +91,7 @@ public:
     filament::Material& quaderMeshLitMaterial() { return materialLibrary_.quaderMeshLit(); }
     filament::Material& vertexColorOverlayMaterial() { return materialLibrary_.vertexColorOverlay(); }
     filament::Material& overlayLineMaterial() { return materialLibrary_.overlayLine(); }
+    filament::Material& selectedObjectLineMaterial() { return materialLibrary_.selectedObjectLine(); }
     filament::Material& overlayPointMaterial() { return materialLibrary_.overlayPoint(); }
     filament::Material& imguiMaterial() { return materialLibrary_.imgui(); }
     filament::Material& groundGridMaterial() { return materialLibrary_.groundGrid(); }

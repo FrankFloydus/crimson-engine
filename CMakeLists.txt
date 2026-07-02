@@ -352,6 +352,7 @@ quader_register_filament_material(quader_mesh_material resources/materials/quade
 quader_register_filament_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit)
 quader_register_filament_material(vertex_color_overlay_material resources/materials/vertex_color_overlay.mat vertex_color_overlay)
 quader_register_filament_material(quader_overlay_line_material resources/materials/quader_overlay_line.mat quader_overlay_line)
+quader_register_filament_material(quader_selected_object_line_material resources/materials/quader_selected_object_line.mat quader_selected_object_line)
 quader_register_filament_material(quader_overlay_point_material resources/materials/quader_overlay_point.mat quader_overlay_point)
 quader_register_filament_material(imgui_material resources/materials/imgui.mat imgui)
 quader_register_filament_material(ground_grid_material resources/materials/ground_grid.mat ground_grid)
@@ -388,6 +389,8 @@ add_library(quader_runtime STATIC
     src/render/overlay/overlay_proxy_factory.cpp
     src/render/overlay/overlay_renderable_builder.cpp
     src/render/overlay/overlay_renderable_cache.cpp
+    src/render/overlay/scene_wireframe_overlay_cache.cpp
+    src/render/overlay/selected_object_overlay_cache.cpp
     src/render/overlay/viewport_box_overlay_builder.cpp
     src/render/overlay/viewport_selection_marquee_overlay_builder.cpp
     src/render/overlay/viewport_transform_gizmo_overlay_builder.cpp

@@ -51,6 +51,39 @@ Verification:
 - `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=UiLayoutGuardrailTests.Outliner*:ProgrammaticApiGuardrailTests.OutlinerUsesDocumentCommandRootSelectionOwner`
 - `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=LocalStressTests.MyFirstProjectLargeWorkflow`
 
+## 2026-07-01 - Dense Object Selection Uses Batched Wires
+
+Task/context: `17.tracy` and manual testing showed viewport performance still collapsed when many
+objects were selected, especially in rendered mode, and wireframe mode could not visually distinguish
+selected meshes from unselected scene wire.
+
+Invariants:
+
+- Do not replace selected mesh topology with a bounding cage during navigation or transforms.
+- Persistent selected-object rendering must submit selected mesh wires as a batched renderable, not
+  one wire proxy per selected mesh.
+- Batched selected wires must cache local edge topology per selected entity/mesh revision. Transform
+  drags should stream the transformed line vertex buffer and update the renderable bounds in place,
+  not re-run authored polygon edge extraction or recreate the Filament proxy every drag tick.
+- Dense object selections suppress translucent selected face-fill proxies and keep the selected wire
+  as the stable selection signal; small selections may keep the face fill.
+- Wireframe viewport scene-wire entries must use the selected-edge layer/color/width for selected
+  meshes, because the normal selected-object overlay layer is not visible in wireframe mode.
+
+Affected owners/files:
+
+- `src/render/overlay/selected_object_overlay_cache.*`
+- `src/render/overlay/scene_wireframe_overlay_cache.*`
+- `src/render/viewport_overlay_policy.*`
+- `src/scene/scene_document.*`
+- `docs/overlay-handling.md`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportOverlayPolicyTests.*`
+- `cmake --build --preset vs2026-debug --target quader`
+
 ## 2026-06-30 - Tracy Profiling Boot Convention And Diagnostic Build
 
 Task/context: Tracy 0.13.1 was installed for local optimization captures. The user-provided profiler

@@ -22,6 +22,7 @@ void SceneRenderBridge::initialize(filament::Engine& engine,
         filament::Material& renderedMeshMaterial,
         filament::Material& overlayMaterial,
         filament::Material& overlayLineMaterial,
+        filament::Material& selectedObjectLineMaterial,
         filament::Material& overlayPointMaterial,
         std::filesystem::path resourceRoot) {
     shutdown();
@@ -34,6 +35,8 @@ void SceneRenderBridge::initialize(filament::Engine& engine,
     toolPreviewCache_.initialize(meshFactory_, materialBinding_);
     overlayProxyFactory_.initialize(engine, scene, overlayMaterial, overlayLineMaterial, overlayPointMaterial);
     overlayCache_.initialize(overlayProxyFactory_);
+    sceneWireframeOverlayCache_.initialize(engine, scene, selectedObjectLineMaterial);
+    selectedObjectOverlayCache_.initialize(engine, scene, overlayMaterial, selectedObjectLineMaterial);
     syncService_.initialize(engine, scene, meshCache_, materialBinding_);
 }
 
@@ -44,6 +47,8 @@ void SceneRenderBridge::shutdown() {
 
     toolPreviewCache_.shutdown();
     syncService_.shutdown();
+    selectedObjectOverlayCache_.shutdown();
+    sceneWireframeOverlayCache_.shutdown();
     meshCache_.shutdown();
     overlayCache_.shutdown();
     overlayProxyFactory_.shutdown();
@@ -61,6 +66,28 @@ void SceneRenderBridge::sync(const SceneDocument& document, const AssetRegistry&
         return;
     }
     (void)syncService_.sync(document, assets);
+}
+
+void SceneRenderBridge::syncSelectedObjectOverlay(
+        const SceneDocument& document,
+        const AssetRegistry& assets,
+        bool visible) {
+    QDR_PROFILE_FUNCTION();
+    if (!engine_ || !scene_ || !selectedObjectOverlayCache_.initialized()) {
+        return;
+    }
+    selectedObjectOverlayCache_.sync(document, assets, visible);
+}
+
+void SceneRenderBridge::syncSceneWireframeOverlay(
+        const SceneDocument& document,
+        const AssetRegistry& assets,
+        std::uint8_t layerMask) {
+    QDR_PROFILE_FUNCTION();
+    if (!engine_ || !scene_ || !sceneWireframeOverlayCache_.initialized()) {
+        return;
+    }
+    sceneWireframeOverlayCache_.sync(document, assets, layerMask);
 }
 
 void SceneRenderBridge::setToolPreviewMeshes(std::vector<PreviewMesh> meshes, const AssetRegistry& assets) {

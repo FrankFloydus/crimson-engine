@@ -36,6 +36,7 @@ public:
     filament::Material& quaderMeshLit() { return *quaderMeshLitMaterial_; }
     filament::Material& vertexColorOverlay() { return *vertexColorOverlayMaterial_; }
     filament::Material& overlayLine() { return *overlayLineMaterial_; }
+    filament::Material& selectedObjectLine() { return *selectedObjectLineMaterial_; }
     filament::Material& overlayPoint() { return *overlayPointMaterial_; }
     filament::Material& imgui() { return *imguiMaterial_; }
     filament::Material& groundGrid() { return *groundGridMaterial_; }
@@ -49,6 +50,7 @@ private:
     filament::Material* quaderMeshLitMaterial_ = nullptr;
     filament::Material* vertexColorOverlayMaterial_ = nullptr;
     filament::Material* overlayLineMaterial_ = nullptr;
+    filament::Material* selectedObjectLineMaterial_ = nullptr;
     filament::Material* overlayPointMaterial_ = nullptr;
     filament::Material* imguiMaterial_ = nullptr;
     filament::Material* groundGridMaterial_ = nullptr;

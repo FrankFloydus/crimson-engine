@@ -38,6 +38,9 @@ namespace {
 
 using json = nlohmann::ordered_json;
 
+/**
+ * Carries a decoded mesh and its target asset id before it is installed into the asset registry.
+ */
 struct DecodedMeshAsset {
     AssetId id = InvalidAssetId;
     MeshAsset mesh;

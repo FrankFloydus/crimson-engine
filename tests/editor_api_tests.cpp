@@ -345,6 +345,13 @@ std::string readTextFile(const std::filesystem::path& path) {
     return text;
 }
 
+bool containsJsonStringPair(std::string_view text, std::string_view key, std::string_view value) {
+    const std::string compact = "\"" + std::string(key) + "\":\"" + std::string(value) + "\"";
+    const std::string pretty = "\"" + std::string(key) + "\": \"" + std::string(value) + "\"";
+    return text.find(compact) != std::string_view::npos ||
+            text.find(pretty) != std::string_view::npos;
+}
+
 quader::QuaderMeshAsset triangleMesh(std::string name) {
     quader::QuaderMeshAsset mesh;
     mesh.name = std::move(name);
@@ -580,9 +587,9 @@ TEST(EditorApiTests, ProjectSaveAsSaveAndOpenUseQdrDocumentIo) {
     EXPECT_FALSE(editor.project().dirty());
     EXPECT_TRUE(std::filesystem::exists(path));
     const std::string savedText = readTextFile(path);
-    EXPECT_NE(savedText.find("\"kind\": \"quader.project-document\""), std::string::npos);
+    EXPECT_TRUE(containsJsonStringPair(savedText, "kind", "quader.project-document"));
     EXPECT_NE(savedText.find("\"sceneSettings\""), std::string::npos);
-    EXPECT_NE(savedText.find("\"environmentId\": \"pillars_2k\""), std::string::npos);
+    EXPECT_TRUE(containsJsonStringPair(savedText, "environmentId", "pillars_2k"));
     EXPECT_NE(savedText.find("\"postProcess\""), std::string::npos);
     EXPECT_NE(savedText.find("\"light\""), std::string::npos);
     EXPECT_NE(savedText.find("\"Persisted Key Light\""), std::string::npos);

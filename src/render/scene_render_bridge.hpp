@@ -17,6 +17,8 @@
 #include "render/viewport_overlay_frame.hpp"
 #include "render/overlay/overlay_proxy_factory.hpp"
 #include "render/overlay/overlay_renderable_cache.hpp"
+#include "render/overlay/scene_wireframe_overlay_cache.hpp"
+#include "render/overlay/selected_object_overlay_cache.hpp"
 #include "scene/scene_document.hpp"
 
 #include <filament/Engine.h>
@@ -50,10 +52,13 @@ public:
             filament::Material& renderedMeshMaterial,
             filament::Material& overlayMaterial,
             filament::Material& overlayLineMaterial,
+            filament::Material& selectedObjectLineMaterial,
             filament::Material& overlayPointMaterial,
             std::filesystem::path resourceRoot);
     void shutdown();
     void sync(const SceneDocument& document, const AssetRegistry& assets);
+    void syncSelectedObjectOverlay(const SceneDocument& document, const AssetRegistry& assets, bool visible);
+    void syncSceneWireframeOverlay(const SceneDocument& document, const AssetRegistry& assets, std::uint8_t layerMask);
     void setToolPreviewMeshes(std::vector<PreviewMesh> meshes, const AssetRegistry& assets);
     void setOverlayFrame(ViewportOverlayFrame frame, ViewportOverlayCamera camera);
     void setOverlayFrame(std::size_t viewportIndex,
@@ -71,6 +76,8 @@ private:
     ToolPreviewRenderableCache toolPreviewCache_;
     OverlayProxyFactory overlayProxyFactory_;
     OverlayRenderableCache overlayCache_;
+    SceneWireframeOverlayCache sceneWireframeOverlayCache_;
+    SelectedObjectOverlayCache selectedObjectOverlayCache_;
     SceneRenderSyncService syncService_;
 };
 
