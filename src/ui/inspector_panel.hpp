@@ -7,6 +7,7 @@
 #pragma once
 
 #include "core/types.hpp"
+#include "editor/transform/scene_transform_drag_service.hpp"
 #include "ui/ui_continuous_edit_tracker.hpp"
 #include "ui/ui_dock_panel.hpp"
 
@@ -47,8 +48,10 @@ private:
   ImVec2 panel_window_padding(const UIContext &context) const override;
   ImGuiWindowFlags window_flags(const UIContext &context) const override;
   void draw_content(UIContext &context) override;
+  void cancel_active_transform_edit();
 
   std::optional<InspectorTransformEditState> active_transform_edit_;
+  SceneTransformDragService active_transform_preview_;
   UIContinuousEditTracker active_continuous_edit_;
 };
 

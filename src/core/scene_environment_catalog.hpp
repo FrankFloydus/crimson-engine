@@ -24,6 +24,7 @@ struct SceneEnvironmentDescriptor {
 };
 
 inline constexpr std::string_view kDefaultSceneEnvironmentId = "lightroom_14b";
+inline constexpr float kDefaultSceneClearColorChannel = 2.0f / 255.0f;
 
 inline constexpr std::array<SceneEnvironmentDescriptor, 4> kSceneEnvironmentCatalog{{
         {"lightroom_14b", "ui.inspector.environment.lightroom_14b", "Lightroom 14b", "lightroom_14b", "lightroom_14b"},

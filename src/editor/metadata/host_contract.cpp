@@ -14,7 +14,9 @@
 #include <editor/interactions/cut_tool.hpp>
 #include <editor/interactions/tool_identity.hpp>
 #include <editor/modeling/runtime/tool_constants.hpp>
+#include <core/scene_environment_catalog.hpp>
 #include <viewport/viewport_layout.hpp>
+#include <viewport/viewport_settings_defaults.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1147,6 +1149,11 @@ constexpr HostColorDescriptor color_from_abgr(std::uint32_t color_abgr)
 	};
 }
 
+constexpr HostColorDescriptor
+color_from_viewport_setting(quader::ViewportSettingColor color) {
+  return color_rgba(color.r, color.g, color.b, color.a);
+}
+
 HostPreferenceDescriptor int_preference(
 		std::string_view id,
 		std::string_view label,
@@ -1324,13 +1331,17 @@ std::vector<HostPreferenceDescriptor> build_preference_descriptors()
 
   descriptors.push_back(color_preference(
       "viewport.scene.background_color", "Background",
-      color_rgba(13.0 / 255.0, 13.0 / 255.0, 13.0 / 255.0, 1.0),
+      color_rgba(quader::kDefaultSceneClearColorChannel,
+                 quader::kDefaultSceneClearColorChannel,
+                 quader::kDefaultSceneClearColorChannel, 1.0),
       "viewport.scene"));
   descriptors.push_back(color_preference("viewport.grid.minor_color", "Minor",
-                                         color_rgba(0.8, 0.8, 0.8, 0.05),
+                                         color_from_viewport_setting(
+                                             quader::kDefaultViewportGridMinorColor),
                                          "viewport.grid"));
   descriptors.push_back(color_preference("viewport.grid.major_color", "Major",
-                                         color_rgba(0.298, 0.298, 0.298, 0.459),
+                                         color_from_viewport_setting(
+                                             quader::kDefaultViewportGridMajorColor),
                                          "viewport.grid"));
   descriptors.push_back(
       color_preference("viewport.grid.x_axis_color", "X QAxis",
@@ -1383,15 +1394,21 @@ std::vector<HostPreferenceDescriptor> build_preference_descriptors()
       color_from_abgr(0xffff6b1fU), "viewport.vertices", "hover_vertex"));
   descriptors.push_back(
       float_preference("viewport.grid.minor_line_size", "Minor Line",
-                       HostPreferenceScope::ViewportStyle, 0.32, 0.25, 8.0, 0.0,
+                       HostPreferenceScope::ViewportStyle,
+                       quader::kDefaultViewportGridMinorLineSize, 0.25, 8.0,
+                       0.0,
                        "viewport.grid"));
   descriptors.push_back(
       float_preference("viewport.grid.major_line_size", "Major Line",
-                       HostPreferenceScope::ViewportStyle, 0.36, 0.25, 8.0, 0.0,
+                       HostPreferenceScope::ViewportStyle,
+                       quader::kDefaultViewportGridMajorLineSize, 0.25, 8.0,
+                       0.0,
                        "viewport.grid"));
   descriptors.push_back(
       float_preference("viewport.grid.axis_line_size", "QAxis Line",
-                       HostPreferenceScope::ViewportStyle, 0.65, 0.25, 8.0, 0.0,
+                       HostPreferenceScope::ViewportStyle,
+                       quader::kDefaultViewportGridAxisLineSize, 0.25, 8.0,
+                       0.0,
                        "viewport.grid"));
   descriptors.push_back(float_preference(
       "viewport.overlay.source_wire_line_size", "Source Wire Size",

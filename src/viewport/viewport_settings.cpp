@@ -8,6 +8,7 @@
 
 #include "core/qstr.hpp"
 #include "render/viewport_overlay_policy.hpp"
+#include "viewport/viewport_settings_defaults.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -72,8 +73,8 @@ const std::array<ViewportSettingsSectionDescriptor, kViewportSettingsSectionCoun
 }};
 
 const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kColorSettings{{
-        {ViewportColorSettingId::GridMinor, ViewportSettingsSectionId::Grid, "Minor", key("GridMinorColor"), color(0.8f, 0.8f, 0.8f, 0.05f)},
-        {ViewportColorSettingId::GridMajor, ViewportSettingsSectionId::Grid, "Major", key("GridMajorColor"), color(0.298f, 0.298f, 0.298f, 0.459f)},
+        {ViewportColorSettingId::GridMinor, ViewportSettingsSectionId::Grid, "Minor", key("GridMinorColor"), kDefaultViewportGridMinorColor},
+        {ViewportColorSettingId::GridMajor, ViewportSettingsSectionId::Grid, "Major", key("GridMajorColor"), kDefaultViewportGridMajorColor},
         {ViewportColorSettingId::GridXAxis, ViewportSettingsSectionId::Grid, "X QAxis", key("GridXAxisColor"), color(1.0f, 0.239f, 0.0f, 0.72f)},
         {ViewportColorSettingId::GridYAxis, ViewportSettingsSectionId::Grid, "Y QAxis", key("GridYAxisColor"), color(0.29f, 0.58f, 0.0f, 0.0f)},
         {ViewportColorSettingId::GridZAxis, ViewportSettingsSectionId::Grid, "Z QAxis", key("GridZAxisColor"), color(0.059f, 0.612f, 1.0f, 0.72f)},
@@ -93,9 +94,9 @@ const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kCo
 }};
 
 const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFloatSettings{{
-        {ViewportFloatSettingId::GridMinorLineSize, ViewportSettingsSectionId::Grid, "Minor Line", key("GridMinorLineSize"), kMinLineSize, kMaxLineSize, 0.32f},
-        {ViewportFloatSettingId::GridMajorLineSize, ViewportSettingsSectionId::Grid, "Major Line", key("GridMajorLineSize"), kMinLineSize, kMaxLineSize, 0.36f},
-        {ViewportFloatSettingId::GridAxisLineSize, ViewportSettingsSectionId::Grid, "QAxis Line", key("GridAxisLineSize"), kMinLineSize, kMaxLineSize, 0.65f},
+        {ViewportFloatSettingId::GridMinorLineSize, ViewportSettingsSectionId::Grid, "Minor Line", key("GridMinorLineSize"), kMinLineSize, kMaxLineSize, kDefaultViewportGridMinorLineSize},
+        {ViewportFloatSettingId::GridMajorLineSize, ViewportSettingsSectionId::Grid, "Major Line", key("GridMajorLineSize"), kMinLineSize, kMaxLineSize, kDefaultViewportGridMajorLineSize},
+        {ViewportFloatSettingId::GridAxisLineSize, ViewportSettingsSectionId::Grid, "QAxis Line", key("GridAxisLineSize"), kMinLineSize, kMaxLineSize, kDefaultViewportGridAxisLineSize},
         {ViewportFloatSettingId::SourceWireLineSize, ViewportSettingsSectionId::Overlay, "Source Wire Size", key("SourceWireLineSize"), kMinLineSize, kMaxLineSize, kOverlaySourceWireLineWidthPixels},
         {ViewportFloatSettingId::SelectionFaceWireLineSize, ViewportSettingsSectionId::Selection, "Face Wire Size", key("SelectionFaceWireLineSize"), kMinLineSize, kMaxLineSize, kOverlaySelectionWireLineWidthPixels},
         {ViewportFloatSettingId::SelectionEdgeLineSize, ViewportSettingsSectionId::Selection, "Edge Line Size", key("SelectionEdgeLineSize"), kMinLineSize, kMaxLineSize, kOverlaySelectionWireLineWidthPixels},

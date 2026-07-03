@@ -9,6 +9,50 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-03 - Property Table Numeric Sliders And Grid Defaults
+
+Task/context: inspector/property settings were using mixed ImGui numeric semantics: bounded
+properties used `DragFloat` while settings used `SliderFloat`/`SliderInt`, and ImGui sliders did not
+open exact text input on double-click in the vendored version. The property table and outliner
+hierarchy guide lines also drew full-height vertical segments for last children, producing broken
+T branches.
+
+Invariants:
+
+- Bounded non-transform numeric UI controls should route through `quader_slider_float` /
+  `quader_slider_int`; those wrappers preserve slider visuals and add double-click exact input via
+  ImGui's temp-input activation path. Transform axis rows stay as raw drag inputs, including bounded
+  scale, because transform editing needs drag semantics.
+- Do not duplicate viewport grid default numbers between runtime settings and host metadata. Shared
+  grid defaults live in `src/viewport/viewport_settings_defaults.hpp`; host metadata may project
+  those constants but must not depend on runtime `ViewportSettings` objects.
+- Property-table child guide lines draw the current row's L connector immediately, then the contained
+  widget state flushes the previous child row's extra vertical segment only when another child
+  follows. Outliner guide drawing must carry ancestor/last-sibling state through tree recursion.
+
+Affected owners/files:
+
+- `src/ui/imgui_quader_widgets.*`
+- `src/ui/inspector_panel.cpp`
+- `src/ui/tool_settings_panel.cpp`
+- `src/ui/viewport_settings_panel.cpp`
+- `src/ui/outliner_panel.cpp`
+- `src/viewport/viewport_settings_defaults.hpp`
+- `src/viewport/viewport_settings.cpp`
+- `src/editor/metadata/host_contract.cpp`
+- `tests/ui_layout_guardrail_tests.cpp`
+- `tests/core_tests.cpp`
+- `tests/modeling_domain/editor_metadata/qdr_editor_metadata_preference_catalog_tests.cpp`
+
+Verification:
+
+- `cmake --preset vs2026`
+- `cmake --build --preset vs2026-debug --target quader_tests quader_modeling_domain_tests quader_guardrail_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=ViewportSettingsTests.DefaultsMatchNativeViewportSettingsState:ViewportSettingsTests.SavesLoadsAndClampsViewportPreferenceKeys:GroundGridMaterialTests.UsesUserWorldAnchoring:DocumentCommandTests.SceneTransformDragServicePreviewsInspectorPrimaryTransformsBeforeCommit`
+- `build\vs2026\Debug\quader_modeling_domain_tests.exe --gtest_filter=QdrEditorMetadataPreferenceCatalogTests.HostContractPreferenceCatalogExposesViewportSettingDefaultsAsEngineNeutralDescriptors`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_filter=UiLayoutGuardrailTests.PropertyTableWidgetIsResizableStripedTwoColumnTable:UiLayoutGuardrailTests.NumericSlidersUseSharedDoubleClickInputWrapper:UiLayoutGuardrailTests.HierarchyGuideBranchesTerminateAtLastChild:BuildGuardrailTests.AppVersionMetadataUsesRootVersionSource`
+- `cmake --build --preset vs2026-debug --target quader`
+
 ## 2026-07-01 - Selected Overlay Navigation Must Stay Visible And Cheap
 
 Task/context: `14.tracy` showed selected-all navigation dropping to roughly 10 FPS with 395 objects.

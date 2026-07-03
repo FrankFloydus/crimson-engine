@@ -74,15 +74,104 @@ TEST(UiLayoutGuardrailTests, InspectorTransformAxisInputsStretchInsideSidebarWid
       "axis_drag_float3(const char *stable_id");
   const std::string axis_drag_float3 =
       source_slice(inspector, "axis_drag_float3(const char *stable_id",
-                   "bool begin_labeled_control_table");
+                   "bool input_text_with_left_label");
 
   expect_contains(axis_drag_float, "input_width < 0.0f");
+  expect_contains(axis_drag_float3, "quader_property_row(stable_id, label);");
   expect_contains(axis_drag_float3, "ImGuiTableFlags_SizingStretchProp");
   expect_contains(axis_drag_float3, "ImGuiTableColumnFlags_WidthStretch");
   expect_contains(axis_drag_float3, "min_axis_column_width");
   expect_contains(axis_drag_float3, "kMinAxisInputWidth");
   EXPECT_EQ(count_occurrences(axis_drag_float3, "-FLT_MIN"), 3u);
   expect_missing(axis_drag_float3, "ImGuiTableFlags_SizingFixedFit");
+}
+
+TEST(UiLayoutGuardrailTests, PropertyTableWidgetIsResizableStripedTwoColumnTable) {
+  const std::string header =
+      read_source_file({"src", "ui", "imgui_quader_widgets.hpp"});
+  const std::string widgets =
+      read_source_file({"src", "ui", "imgui_quader_widgets.cpp"});
+  const std::string inspector =
+      read_source_file({"src", "ui", "inspector_panel.cpp"});
+
+  expect_contains(header, "struct QuaderPropertyTableOptions");
+  expect_contains(header, "quader_begin_property_table");
+  expect_contains(header, "quader_property_section");
+  expect_contains(header, "quader_property_row");
+  expect_contains(widgets, "ImGuiTableFlags_Resizable");
+  expect_contains(widgets, "ImGuiTableFlags_RowBg");
+  expect_contains(widgets, "ImGuiCol_TableRowBg");
+  expect_contains(widgets, "ImGuiCol_TableRowBgAlt");
+  expect_contains(widgets, "draw_clipped_table_text");
+  expect_contains(widgets, "draw_tree_expander");
+  expect_contains(widgets, "property_table_guide_stack");
+  expect_contains(widgets, "flush_pending_property_child_guide(true)");
+  expect_contains(widgets, "flush_pending_property_child_guide(false)");
+  expect_contains(widgets, "TableSetupColumn(\"Label\"");
+  expect_contains(widgets, "TableSetupColumn(\"Value\"");
+  expect_contains(inspector, "quader_begin_property_table(\"inspector_properties\"");
+  expect_contains(inspector, "quader_property_section(\"general\"");
+  expect_contains(inspector, "quader_property_section(\"transform\"");
+  expect_contains(inspector, "quader_property_section(\"light\"");
+  expect_missing(inspector, "quader_begin_property_table(\"general\"");
+  expect_missing(inspector, "begin_labeled_control_table");
+}
+
+TEST(UiLayoutGuardrailTests, NumericSlidersUseSharedDoubleClickInputWrapper) {
+  const std::string header =
+      read_source_file({"src", "ui", "imgui_quader_widgets.hpp"});
+  const std::string widgets =
+      read_source_file({"src", "ui", "imgui_quader_widgets.cpp"});
+  const std::string viewport_settings =
+      read_source_file({"src", "ui", "viewport_settings_panel.cpp"});
+  const std::string tool_settings =
+      read_source_file({"src", "ui", "tool_settings_panel.cpp"});
+  const std::string inspector =
+      read_source_file({"src", "ui", "inspector_panel.cpp"});
+  const std::string continuous_float_helper =
+      source_slice(inspector, "UIContinuousEditResult drag_float_with_left_label",
+                   "UIContinuousEditResult color_edit3_with_left_label");
+  const std::string axis_float_helper = source_slice(
+      inspector, "AxisDragFloatResult axis_drag_float(const char *axis",
+      "axis_drag_float3(const char *stable_id");
+
+  expect_contains(widgets, "bool quader_slider_float");
+  expect_contains(widgets, "bool quader_slider_int");
+  expect_contains(widgets, "ImGui::IsMouseDoubleClicked");
+  expect_contains(widgets, "ImGuiActivateFlags_PreferInput");
+  expect_contains(header, "ImGuiSliderFlags_AlwaysClamp");
+  expect_contains(viewport_settings, "quader_slider_float(");
+  expect_missing(viewport_settings, "ImGui::SliderFloat(");
+  expect_contains(tool_settings, "quader_slider_float(");
+  expect_contains(tool_settings, "quader_slider_int(");
+  expect_missing(tool_settings, "ImGui::SliderFloat(");
+  expect_missing(tool_settings, "ImGui::SliderInt(");
+  expect_missing(tool_settings, "ImGui::DragFloat(");
+  expect_contains(continuous_float_helper, "min_value < max_value");
+  expect_contains(continuous_float_helper, "quader_slider_float");
+  expect_contains(continuous_float_helper, "ImGui::DragFloat");
+  expect_contains(axis_float_helper, "ImGui::DragFloat");
+  expect_missing(axis_float_helper, "quader_slider_float");
+  expect_missing(inspector, "0.5f, 0.0f, 360.0f");
+}
+
+TEST(UiLayoutGuardrailTests, HierarchyGuideBranchesTerminateAtLastChild) {
+  const std::string widgets =
+      read_source_file({"src", "ui", "imgui_quader_widgets.cpp"});
+  const std::string outliner =
+      read_source_file({"src", "ui", "outliner_panel.cpp"});
+
+  expect_contains(widgets, "bool has_next_sibling");
+  expect_contains(widgets,
+                  "has_next_sibling ? cell_min.y + row_height + 1.0f : center_y");
+  expect_contains(widgets,
+                  "draw_tree_child_guides(*ImGui::GetWindowDrawList()");
+  expect_contains(widgets, "queue_property_child_guide");
+  expect_contains(outliner, "const std::vector<bool> &ancestor_has_next");
+  expect_contains(outliner,
+                  "has_next_sibling ? row_max.y + 1.0f");
+  expect_contains(outliner, "child_ancestors.push_back(has_next_sibling)");
+  expect_contains(outliner, "index + 1u < children.size()");
 }
 
 TEST(UiLayoutGuardrailTests, InspectorLightEditsRouteThroughPublicSceneApi) {
@@ -120,7 +209,8 @@ TEST(UiLayoutGuardrailTests, InspectorSectionsStartCollapsed) {
   const std::string inspector =
       read_source_file({"src", "ui", "inspector_panel.cpp"});
 
-  expect_contains(inspector, "quader_collapsing_header(");
+  expect_contains(inspector, "quader_property_section(");
+  expect_missing(inspector, "quader_collapsing_header(");
   expect_missing(inspector, "ImGuiTreeNodeFlags_DefaultOpen");
 }
 

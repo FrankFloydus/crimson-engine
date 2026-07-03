@@ -164,8 +164,8 @@ void ViewportSettingsPanel::draw_content(UIContext& context, bool& open) {
         ImGui::SetNextItemWidth(220.0f);
         const std::string label = setting_label(
             context.localization, descriptor.key, descriptor.label);
-        if (ImGui::SliderFloat(label.c_str(), &value, descriptor.minimum,
-                               descriptor.maximum, "%.3f")) {
+        if (quader_slider_float(label.c_str(), &value, descriptor.minimum,
+                                descriptor.maximum, "%.3f")) {
           changed_this_frame_ =
               context.viewport_settings.set_float_value(descriptor.id, value) ||
               changed_this_frame_;

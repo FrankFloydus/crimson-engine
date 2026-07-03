@@ -620,16 +620,14 @@ TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPrevie
             std::string::npos);
   EXPECT_NE(modeling_source.find("scene_transform_drag_service_.commit(*history)"),
             std::string::npos);
-  EXPECT_NE(inspector_source.find("SceneTransformDragService transform_service"),
+  EXPECT_NE(inspector_source.find("active_transform_preview_"),
             std::string::npos);
-  EXPECT_NE(inspector_source.find("move_selected_to_primary_position("),
+  EXPECT_NE(inspector_source.find("preview_selected_to_primary_position("),
             std::string::npos);
-  EXPECT_NE(inspector_source.find(
-                "rotate_selected_to_primary_euler_around_selection_pivot("),
+  EXPECT_NE(inspector_source.find("preview_selected_to_primary_euler("),
             std::string::npos);
-  EXPECT_NE(
-      inspector_source.find("scale_selected_to_primary_scale_around_selection_pivot("),
-      std::string::npos);
+  EXPECT_NE(inspector_source.find("preview_selected_to_primary_scale("),
+            std::string::npos);
   EXPECT_EQ(inspector_source.find("QuaderSceneTransformEdit"),
             std::string::npos);
   EXPECT_EQ(inspector_source.find(".scene().set_transforms("),

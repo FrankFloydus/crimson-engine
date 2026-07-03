@@ -205,7 +205,9 @@ struct SceneEnvironmentSettings {
   std::string environment_id = std::string(kDefaultSceneEnvironmentId);
   bool enabled = true;
   bool show_background = true;
-  QVec3 clear_color = {0.0509804f, 0.0509804f, 0.0509804f};
+  QVec3 clear_color = {kDefaultSceneClearColorChannel,
+                       kDefaultSceneClearColorChannel,
+                       kDefaultSceneClearColorChannel};
   float intensity = 1.0f;
   float background_intensity = 1.0f;
   float rotation_y = 0.0f;

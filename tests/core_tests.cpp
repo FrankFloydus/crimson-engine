@@ -1193,8 +1193,23 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
                       overlay_policy_setting_color(kOverlaySelectionWireColor));
     expect_color_near(settings.color(ViewportColorSettingId::SourceWire),
                       overlay_policy_setting_color(kOverlaySourceWireColor));
+    expect_color_near(settings.color(ViewportColorSettingId::GridMinor),
+                      {199.0f / 255.0f, 199.0f / 255.0f, 199.0f / 255.0f,
+                       54.0f / 255.0f});
+    expect_color_near(settings.color(ViewportColorSettingId::GridMajor),
+                      {172.0f / 255.0f, 172.0f / 255.0f, 172.0f / 255.0f,
+                       1.0f});
+    const SceneSettingsComponent scene_settings_defaults;
+    expect_vec3_near(scene_settings_defaults.environment.clear_color,
+                     {2.0f / 255.0f, 2.0f / 255.0f, 2.0f / 255.0f});
     EXPECT_FLOAT_EQ(
-        settings.float_value(ViewportFloatSettingId::GridMinorLineSize), 0.32f);
+        settings.float_value(ViewportFloatSettingId::GridMinorLineSize),
+        0.325f);
+    EXPECT_FLOAT_EQ(
+        settings.float_value(ViewportFloatSettingId::GridMajorLineSize),
+        0.250f);
+    EXPECT_FLOAT_EQ(
+        settings.float_value(ViewportFloatSettingId::GridAxisLineSize), 1.0f);
     EXPECT_FLOAT_EQ(
         settings.float_value(ViewportFloatSettingId::SelectionEdgeLineSize),
         2.5f);
@@ -1314,6 +1329,8 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
     ViewportSettings settings = ViewportSettings::defaults();
     EXPECT_TRUE(settings.set_color(ViewportColorSettingId::GridMinor,
                                    {0.25f, 0.5f, 0.75f, 0.6f}));
+    EXPECT_TRUE(settings.set_color(ViewportColorSettingId::GridMajor,
+                                   {0.0f, 0.0f, 0.0f, 1.0f}));
     EXPECT_TRUE(
         settings.set_float_value(ViewportFloatSettingId::GizmoSize, 10.0f));
     EXPECT_TRUE(
@@ -1328,6 +1345,8 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
     const ViewportSettings loaded = ViewportSettings::load(path);
     expect_color_near(loaded.color(ViewportColorSettingId::GridMinor),
                       {0.25098f, 0.501961f, 0.74902f, 0.6f});
+    expect_color_near(loaded.color(ViewportColorSettingId::GridMajor),
+                      {0.0f, 0.0f, 0.0f, 1.0f});
     EXPECT_FLOAT_EQ(loaded.float_value(ViewportFloatSettingId::GizmoSize),
                     2.0f);
     EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::ShowGrid));
@@ -1341,6 +1360,8 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
       const std::string source{std::istreambuf_iterator<char>(source_file),
                                std::istreambuf_iterator<char>()};
       EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.GridMinorColor"),
+                std::string::npos);
+      EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.GridMajorColor=000000FF"),
                 std::string::npos);
       EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.GizmoSize"),
                 std::string::npos);
@@ -1376,6 +1397,15 @@ TEST(GroundGridMaterialTests, UsesUserWorldAnchoring) {
   EXPECT_NE(source.find("cameraSize"), std::string::npos);
   EXPECT_NE(source.find("visibleGridSize"), std::string::npos);
   EXPECT_NE(source.find("minGridWorldSpacing"), std::string::npos);
+  EXPECT_NE(source.find("majorCoverage = parentGridValue * "
+                        "materialParams.majorGridColor.a"),
+            std::string::npos);
+  EXPECT_NE(source.find("minorCoverage = gridValue * "
+                        "materialParams.gridColor.a * (1.0 - clamp("),
+            std::string::npos);
+  EXPECT_EQ(source.find("alpha = max(alpha, parentGridValue * "
+                        "materialParams.majorGridColor.a)"),
+            std::string::npos);
   EXPECT_NE(source.find("vec4(color * alpha, alpha)"), std::string::npos);
   EXPECT_EQ(source.find("getUV0()"), std::string::npos);
   EXPECT_EQ(source.find("planeCenter"), std::string::npos);
@@ -7436,6 +7466,74 @@ TEST(DocumentCommandTests, SceneTransformDragServiceFiltersTargetsAndRecordsScen
     ASSERT_TRUE(session.history().redo().ok);
     ASSERT_NE(scene.transform(parent), nullptr);
     EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 4.0f);
+}
+
+TEST(DocumentCommandTests,
+     SceneTransformDragServicePreviewsInspectorPrimaryTransformsBeforeCommit) {
+  constexpr float kHalfPi = 1.57079632679f;
+
+  ProjectSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_project_session(session));
+  SceneDocument &scene = session.scene();
+  AssetRegistry &assets = session.assets();
+
+  const EntityId entity = scene.create_entity("Entity");
+  ASSERT_TRUE(scene.set_selected(entity, true));
+  ASSERT_TRUE(scene.set_active_selection(entity));
+
+  SceneTransformDragService service;
+  ASSERT_TRUE(service.begin_move_selected_to_primary_position_preview(
+      scene, entity, "Set Transform"));
+  DocumentCommandResult preview =
+      service.preview_selected_to_primary_position(scene, entity,
+                                                   {2.0f, 0.0f, 0.0f});
+  ASSERT_TRUE(preview.ok) << preview.message;
+  EXPECT_TRUE(preview.changed);
+  ASSERT_NE(scene.transform(entity), nullptr);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 2.0f);
+
+  QuaderApiVoidResult commit = service.commit(editor);
+  ASSERT_TRUE(commit.ok) << commit.message;
+  EXPECT_TRUE(commit.changed);
+  ASSERT_NE(session.history().undo_label(), nullptr);
+  EXPECT_EQ(*session.history().undo_label(), "Set Transform");
+  ASSERT_TRUE(session.history().undo().ok);
+  ASSERT_NE(scene.transform(entity), nullptr);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+
+  ASSERT_TRUE(service.begin_rotate_selected_to_primary_euler_preview(
+      scene, assets, entity, "Set Transform"));
+  preview = service.preview_selected_to_primary_euler(
+      scene, entity, {0.0f, 0.0f, kHalfPi});
+  ASSERT_TRUE(preview.ok) << preview.message;
+  EXPECT_TRUE(preview.changed);
+  ASSERT_NE(scene.transform(entity), nullptr);
+  EXPECT_NEAR(scene.transform(entity)->rotation_euler.z, kHalfPi, 0.001f);
+  DocumentCommandResult cancel = service.cancel();
+  ASSERT_TRUE(cancel.ok) << cancel.message;
+  EXPECT_TRUE(cancel.changed);
+  ASSERT_NE(scene.transform(entity), nullptr);
+  EXPECT_NEAR(scene.transform(entity)->rotation_euler.z, 0.0f, 0.001f);
+
+  ASSERT_TRUE(service.begin_scale_selected_to_primary_scale_preview(
+      scene, assets, entity, "Set Transform"));
+  preview = service.preview_selected_to_primary_scale(
+      scene, entity, {2.0f, 3.0f, 4.0f});
+  ASSERT_TRUE(preview.ok) << preview.message;
+  EXPECT_TRUE(preview.changed);
+  ASSERT_NE(scene.transform(entity), nullptr);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->scale.x, 2.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->scale.y, 3.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->scale.z, 4.0f);
+  commit = service.commit(editor);
+  ASSERT_TRUE(commit.ok) << commit.message;
+  EXPECT_TRUE(commit.changed);
+  ASSERT_TRUE(session.history().undo().ok);
+  ASSERT_NE(scene.transform(entity), nullptr);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->scale.x, 1.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->scale.y, 1.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->scale.z, 1.0f);
 }
 
 TEST(DocumentCommandTests, SceneTransformDragServiceInspectorMoveUsesSharedTargetPolicy) {

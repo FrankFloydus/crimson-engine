@@ -177,18 +177,30 @@ void draw_outliner_text(ImDrawList *draw_list, ImVec2 position, ImU32 color,
 
 void draw_hierarchy_guides(ImDrawList *draw_list, ImVec2 row_min,
                            ImVec2 row_max, float content_x, int depth,
-                           float indent, ImU32 color) {
+                           float indent,
+                           const std::vector<bool> &ancestor_has_next,
+                           bool has_next_sibling, ImU32 color) {
   if (depth <= 0) {
     return;
   }
 
   const float row_center_y = (row_min.y + row_max.y) * 0.5f;
-  for (int level = 0; level < depth; ++level) {
+  for (std::size_t level = 0; level < ancestor_has_next.size(); ++level) {
+    if (!ancestor_has_next[level]) {
+      continue;
+    }
     const float line_x =
-        row_min.x - static_cast<float>(depth - level) * indent + indent * 0.5f;
-    draw_list->AddLine({line_x, row_min.y}, {line_x, row_max.y}, color, 1.0f);
+        row_min.x -
+        static_cast<float>(depth - static_cast<int>(level)) * indent +
+        indent * 0.5f;
+    draw_list->AddLine({line_x, row_min.y - 1.0f},
+                       {line_x, row_max.y + 1.0f}, color, 1.0f);
   }
   const float branch_x = row_min.x - indent * 0.5f;
+  const float branch_bottom = has_next_sibling ? row_max.y + 1.0f
+                                               : row_center_y;
+  draw_list->AddLine({branch_x, row_min.y - 1.0f},
+                     {branch_x, branch_bottom}, color, 1.0f);
   draw_list->AddLine({branch_x, row_center_y}, {content_x - 3.0f, row_center_y},
                      color, 1.0f);
 }
@@ -268,7 +280,9 @@ void OutlinerPanel::draw_content(UIContext& context) {
       (void)select_only(context, next_selection, active_selection);
     };
 
-    std::function<void(EntityId)> draw_node = [&](EntityId entity) {
+    std::function<void(EntityId, const std::vector<bool> &, bool)> draw_node =
+        [&](EntityId entity, const std::vector<bool> &ancestor_has_next,
+            bool has_next_sibling) {
       const auto record_it = tree.record_index_by_entity.find(entity);
       if (record_it == tree.record_index_by_entity.end() ||
           record_it->second >= tree.records.size()) {
@@ -321,7 +335,9 @@ void OutlinerPanel::draw_content(UIContext& context) {
         ImDrawList *draw_list = ImGui::GetWindowDrawList();
         const ImU32 guide_color = ImGui::GetColorU32(ImGuiCol_Border, 0.75f);
         draw_hierarchy_guides(draw_list, row_min, row_max, content_x,
-                              record.depth, kOutlinerTreeIndent, guide_color);
+                              record.depth, kOutlinerTreeIndent,
+                              ancestor_has_next, has_next_sibling,
+                              guide_color);
         if (icon != ImTextureID_Invalid) {
           const ImVec2 icon_min{
               content_x,
@@ -414,8 +430,14 @@ void OutlinerPanel::draw_content(UIContext& context) {
       if (open && record.has_children) {
         if (const auto children_it = tree.children_by_entity.find(record.id);
             children_it != tree.children_by_entity.end()) {
-          for (const EntityId child : children_it->second) {
-            draw_node(child);
+          std::vector<bool> child_ancestors = ancestor_has_next;
+          if (record.depth > 0) {
+            child_ancestors.push_back(has_next_sibling);
+          }
+          const std::vector<EntityId> &children = children_it->second;
+          for (std::size_t index = 0; index < children.size(); ++index) {
+            draw_node(children[index], child_ancestors,
+                      index + 1u < children.size());
           }
         }
         ImGui::TreePop();
@@ -423,8 +445,10 @@ void OutlinerPanel::draw_content(UIContext& context) {
       ImGui::PopID();
     };
 
-    for (const EntityId root : tree.roots) {
-      draw_node(root);
+    const std::vector<bool> root_ancestors;
+    for (std::size_t index = 0; index < tree.roots.size(); ++index) {
+      draw_node(tree.roots[index], root_ancestors,
+                index + 1u < tree.roots.size());
     }
 
     ImGui::PopStyleVar(3);

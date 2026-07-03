@@ -10,6 +10,7 @@
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "ui/imgui_quader_widgets.hpp"
 
 #include <imgui.h>
 
@@ -169,8 +170,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
       ImGui::SetNextItemWidth(180.0f);
       const std::string width_label = context.localization.imgui_label(
           "operation.edge_bevel.width", "operation.edge_bevel.width", "Width");
-      if (ImGui::DragFloat(width_label.c_str(), &width, 0.05f, 0.0625f,
-                           16384.0f, "%.3f")) {
+      if (quader_slider_float(width_label.c_str(), &width, 0.0625f, 16384.0f,
+                              "%.3f")) {
         settings.edge_bevel_width = width;
         changed = true;
       }
@@ -178,7 +179,7 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
         const std::string segments_label = context.localization.imgui_label(
             "operation.edge_bevel.segments", "operation.edge_bevel.segments",
             "Segments");
-        if (ImGui::SliderInt(segments_label.c_str(), &segments, 1, 16)) {
+        if (quader_slider_int(segments_label.c_str(), &segments, 1, 16)) {
           settings.edge_bevel_segments = segments;
           changed = true;
         }
@@ -186,8 +187,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
         const std::string profile_label = context.localization.imgui_label(
             "operation.edge_bevel.profile", "operation.edge_bevel.profile",
             "Profile");
-        if (ImGui::SliderFloat(profile_label.c_str(), &profile, 0.0f, 1.0f,
-                               "%.2f")) {
+        if (quader_slider_float(profile_label.c_str(), &profile, 0.0f, 1.0f,
+                                "%.2f")) {
           settings.edge_bevel_profile = profile;
           changed = true;
         }
@@ -198,7 +199,7 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
       ImGui::SetNextItemWidth(180.0f);
       const std::string steps_label = context.localization.imgui_label(
           "operation.bridge.steps", "operation.bridge.steps", "Steps");
-      if (ImGui::SliderInt(steps_label.c_str(), &steps, 1, 64)) {
+      if (quader_slider_int(steps_label.c_str(), &steps, 1, 64)) {
         settings.bridge_steps = steps;
         changed = true;
       }
@@ -210,8 +211,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
       const std::string distance_label = context.localization.imgui_label(
           "operation.thicken.distance", "operation.thicken.distance",
           "Distance");
-      if (ImGui::DragFloat(distance_label.c_str(), &thickness, 0.01f, -4.0f,
-                           4.0f, "%.3f")) {
+      if (quader_slider_float(distance_label.c_str(), &thickness, -4.0f, 4.0f,
+                              "%.3f")) {
         settings.thicken_thickness = thickness;
         changed = true;
       }
@@ -224,7 +225,7 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
       const std::string x_label = context.localization.imgui_label(
           "operation.slice_quad.x_slices", "operation.slice_quad.x_slices",
           "X");
-      if (ImGui::SliderInt(x_label.c_str(), &x_slices, 0, 64)) {
+      if (quader_slider_int(x_label.c_str(), &x_slices, 0, 64)) {
         settings.slice_quad_x_slices = x_slices;
         changed = true;
       }
@@ -232,7 +233,7 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
         const std::string y_label = context.localization.imgui_label(
             "operation.slice_quad.y_slices", "operation.slice_quad.y_slices",
             "Y");
-        if (ImGui::SliderInt(y_label.c_str(), &y_slices, 0, 64)) {
+        if (quader_slider_int(y_label.c_str(), &y_slices, 0, 64)) {
           settings.slice_quad_y_slices = y_slices;
           changed = true;
         }
@@ -245,8 +246,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
       const std::string tolerance_label = context.localization.imgui_label(
           "operation.merge_by_distance.tolerance",
           "operation.merge_by_distance.tolerance", "Tolerance");
-      if (ImGui::DragFloat(tolerance_label.c_str(), &tolerance, 0.001f, 0.0f,
-                           128.0f, "%.4f")) {
+      if (quader_slider_float(tolerance_label.c_str(), &tolerance, 0.0f,
+                              128.0f, "%.4f")) {
         settings.merge_by_distance_tolerance = tolerance;
         changed = true;
       }

@@ -225,6 +225,7 @@ bool SceneTransformDragService::begin(SceneDocument &document,
                                       std::string label) {
   reset();
   label_ = std::move(label);
+  world_pivot_ = world_pivot;
 
   if (!capture_targets(document, world_pivot)) {
     reset();
@@ -246,6 +247,43 @@ bool SceneTransformDragService::begin(SceneDocument &document,
   return true;
 }
 
+bool SceneTransformDragService::begin_move_selected_to_primary_position_preview(
+    SceneDocument &document, EntityId primary, std::string label) {
+  if (document.transform(primary) == nullptr) {
+    reset();
+    return false;
+  }
+  return begin(document, {}, true, std::move(label));
+}
+
+bool SceneTransformDragService::begin_rotate_selected_to_primary_euler_preview(
+    SceneDocument &document, const AssetRegistry &assets, EntityId primary,
+    std::string label) {
+  const TransformComponent *primary_transform = document.transform(primary);
+  if (primary_transform == nullptr) {
+    reset();
+    return false;
+  }
+  return begin(document,
+               selected_transform_pivot(document, assets, primary,
+                                        *primary_transform),
+               true, std::move(label));
+}
+
+bool SceneTransformDragService::begin_scale_selected_to_primary_scale_preview(
+    SceneDocument &document, const AssetRegistry &assets, EntityId primary,
+    std::string label) {
+  const TransformComponent *primary_transform = document.transform(primary);
+  if (primary_transform == nullptr) {
+    reset();
+    return false;
+  }
+  return begin(document,
+               selected_transform_pivot(document, assets, primary,
+                                        *primary_transform),
+               true, std::move(label));
+}
+
 bool SceneTransformDragService::preview_active() const {
   return preview_.has_value() && preview_->active();
 }
@@ -262,6 +300,83 @@ SceneTransformDragService::preview_transform(EntityId entity,
         "Transform preview is not active");
   }
   return preview_->preview_transform(entity, transform);
+}
+
+DocumentCommandResult
+SceneTransformDragService::preview_selected_to_primary_position(
+    SceneDocument &document, EntityId primary, QVec3 next_primary_position) {
+  if (!preview_) {
+    return document_command_invalid_request_result(
+        "Transform preview is not active");
+  }
+  const TransformComponent *primary_transform =
+      captured_primary_transform(document, primary);
+  if (primary_transform == nullptr) {
+    return document_command_missing_entity_result();
+  }
+
+  const QVec3 delta = next_primary_position - primary_transform->position;
+  std::vector<DocumentTransformEdit> edits = build_target_transform_edits(
+      document, targets_, [&](const SceneTransformDragTarget &target) {
+        TransformComponent next = target.transform;
+        next.position = next.position + delta;
+        return next;
+      });
+  return preview_->preview_transforms(std::move(edits));
+}
+
+DocumentCommandResult
+SceneTransformDragService::preview_selected_to_primary_euler(
+    SceneDocument &document, EntityId primary, QVec3 next_primary_euler_radians) {
+  if (!preview_) {
+    return document_command_invalid_request_result(
+        "Transform preview is not active");
+  }
+  const TransformComponent *primary_transform =
+      captured_primary_transform(document, primary);
+  if (primary_transform == nullptr) {
+    return document_command_missing_entity_result();
+  }
+
+  const QVec3 previous_euler =
+      positive_euler_radians(primary_transform->rotation_euler);
+  const QVec3 delta = next_primary_euler_radians - previous_euler;
+  std::vector<DocumentTransformEdit> edits = build_target_transform_edits(
+      document, targets_, [&](const SceneTransformDragTarget &target) {
+        TransformComponent next = target.transform;
+        next.rotation_euler = euler_radians_after_world_rotation_delta(
+            next.rotation_euler, delta);
+        pin_target_local_pivot_to_world_point(document, target, next,
+                                              world_pivot_);
+        return next;
+      });
+  return preview_->preview_transforms(std::move(edits));
+}
+
+DocumentCommandResult
+SceneTransformDragService::preview_selected_to_primary_scale(
+    SceneDocument &document, EntityId primary, QVec3 next_primary_scale) {
+  if (!preview_) {
+    return document_command_invalid_request_result(
+        "Transform preview is not active");
+  }
+  const TransformComponent *primary_transform =
+      captured_primary_transform(document, primary);
+  if (primary_transform == nullptr) {
+    return document_command_missing_entity_result();
+  }
+
+  const QVec3 ratio =
+      component_scale_ratio(next_primary_scale, primary_transform->scale);
+  std::vector<DocumentTransformEdit> edits = build_target_transform_edits(
+      document, targets_, [&](const SceneTransformDragTarget &target) {
+        TransformComponent next = target.transform;
+        next.scale = clamp_scale(multiply_components(next.scale, ratio));
+        pin_target_local_pivot_to_world_point(document, target, next,
+                                              world_pivot_);
+        return next;
+      });
+  return preview_->preview_transforms(std::move(edits));
 }
 
 DocumentCommandResult SceneTransformDragService::preview_world_transform_delta(
@@ -305,8 +420,7 @@ DocumentCommandResult SceneTransformDragService::accept() {
     }
 
     DocumentCommandResult result = preview_->accept();
-    preview_.reset();
-    targets_.clear();
+    reset();
     return result;
 }
 
@@ -318,8 +432,7 @@ DocumentCommandResult SceneTransformDragService::commit(EditorHistoryService& hi
     }
 
     DocumentCommandResult result = preview_->commit(history);
-    preview_.reset();
-    targets_.clear();
+    reset();
     return result;
 }
 
@@ -335,8 +448,7 @@ QuaderApiVoidResult SceneTransformDragService::commit(QuaderEditorApi& editor) {
 
     QuaderApiVoidResult result =
         commit_scene_transform_preview_through_api(editor, *preview_, label_);
-    preview_.reset();
-    targets_.clear();
+    reset();
     return result;
 }
 
@@ -348,8 +460,7 @@ DocumentCommandResult SceneTransformDragService::cancel() {
     }
 
     DocumentCommandResult result = preview_->cancel();
-    preview_.reset();
-    targets_.clear();
+    reset();
     return result;
 }
 
@@ -357,6 +468,7 @@ void SceneTransformDragService::reset() {
     preview_.reset();
     targets_.clear();
     label_ = "Transform Selection";
+    world_pivot_ = {};
 }
 
 bool SceneTransformDragService::capture_targets(SceneDocument &document,
@@ -381,6 +493,17 @@ bool SceneTransformDragService::capture_targets(SceneDocument &document,
     }
   }
   return !targets_.empty();
+}
+
+const TransformComponent *
+SceneTransformDragService::captured_primary_transform(
+    const SceneDocument &document, EntityId primary) const {
+  for (const SceneTransformDragTarget &target : targets_) {
+    if (target.entity == primary) {
+      return &target.transform;
+    }
+  }
+  return document.transform(primary);
 }
 
 QuaderApiVoidResult

@@ -90,7 +90,19 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceCatalogExpos
                     qhc::HostPreferenceValueKind::ColorRgba);
         EXPECT_TRUE(same_text(background.label, "Background"));
 	EXPECT_TRUE(same_text(background.group_id, "viewport.scene"));
-	check_color(background.default_color, 13.0 / 255.0, 13.0 / 255.0, 13.0 / 255.0, 1.0);
+	check_color(background.default_color, 2.0 / 255.0, 2.0 / 255.0, 2.0 / 255.0, 1.0);
+
+	const qhc::HostPreferenceDescriptor& grid_minor = require_preference("viewport.grid.minor_color");
+        EXPECT_TRUE(grid_minor.value_kind ==
+                    qhc::HostPreferenceValueKind::ColorRgba);
+        EXPECT_TRUE(same_text(grid_minor.group_id, "viewport.grid"));
+	check_color(grid_minor.default_color, 199.0 / 255.0, 199.0 / 255.0, 199.0 / 255.0, 54.0 / 255.0);
+
+	const qhc::HostPreferenceDescriptor& grid_major = require_preference("viewport.grid.major_color");
+        EXPECT_TRUE(grid_major.value_kind ==
+                    qhc::HostPreferenceValueKind::ColorRgba);
+        EXPECT_TRUE(same_text(grid_major.group_id, "viewport.grid"));
+	check_color(grid_major.default_color, 172.0 / 255.0, 172.0 / 255.0, 172.0 / 255.0, 1.0);
 
 	const qhc::HostPreferenceDescriptor& selection_wire = require_preference("viewport.selection.wire_color");
         EXPECT_TRUE(selection_wire.value_kind ==
@@ -105,7 +117,9 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceCatalogExpos
         EXPECT_TRUE(same_text(diagnostic_edge.related_overlay_layer_id, "diagnostic_edge"));
 	check_color(diagnostic_edge.default_color, 1.0, 0.0, 0.0, 1.0);
 
-	check_float_preference(require_preference("viewport.grid.minor_line_size"), 0.32, 0.25, 8.0, "viewport.grid");
+	check_float_preference(require_preference("viewport.grid.minor_line_size"), 0.325, 0.25, 8.0, "viewport.grid");
+	check_float_preference(require_preference("viewport.grid.major_line_size"), 0.250, 0.25, 8.0, "viewport.grid");
+	check_float_preference(require_preference("viewport.grid.axis_line_size"), 1.0, 0.25, 8.0, "viewport.grid");
 	const qhc::HostPreferenceDescriptor& diagnostic_edge_line =
 		require_preference("viewport.overlay.diagnostic_edge_line_size");
 	check_float_preference(diagnostic_edge_line, 4.0, 0.25, 8.0, "viewport.overlay");

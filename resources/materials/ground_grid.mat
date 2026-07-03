@@ -148,11 +148,13 @@ fragment {
         fade += (materialParams.cameraSize + materialParams.viewportHeight
                 + materialParams.visibleGridSize + materialParams.minGridWorldSpacing) * 0.0;
 
+        float majorCoverage = parentGridValue * materialParams.majorGridColor.a;
+        float minorCoverage = gridValue * materialParams.gridColor.a * (1.0 - clamp(majorCoverage, 0.0, 1.0));
+        float alpha = minorCoverage + majorCoverage;
         vec3 color = materialParams.gridColor.rgb;
-        float alpha = gridValue * materialParams.gridColor.a;
-        if (parentGridValue > 0.0 && materialParams.majorGridColor.a > 0.0) {
-            color = mix(color, materialParams.majorGridColor.rgb, parentGridValue);
-            alpha = max(alpha, parentGridValue * materialParams.majorGridColor.a);
+        if (alpha > 0.0) {
+            color = (materialParams.gridColor.rgb * minorCoverage
+                    + materialParams.majorGridColor.rgb * majorCoverage) / alpha;
         }
 
         float uAxis = axisLine(coords.y);

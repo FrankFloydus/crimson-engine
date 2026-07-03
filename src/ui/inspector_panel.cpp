@@ -36,8 +36,6 @@ namespace {
 
 constexpr float kRadToDeg = 57.29577951308232f;
 constexpr float kDegToRad = 0.017453292519943295f;
-constexpr float kInspectorMinimumValueColumnWidth = 72.0f;
-constexpr float kTransformLabelColumnWidth = 70.0f;
 constexpr float kAxisTextColumnWidth = 12.0f;
 constexpr float kMinAxisInputWidth = 58.0f;
 
@@ -124,6 +122,7 @@ const char *active_selection_kind_fallback(ModelingActiveSelectionKind kind) {
 struct AxisDragFloatResult {
     bool changed = false;
     bool activated = false;
+    bool deactivated = false;
     bool deactivated_after_edit = false;
 };
 
@@ -153,6 +152,7 @@ AxisDragFloatResult axis_drag_float(const char *axis, ImVec4 color,
     result.changed =
         ImGui::DragFloat("##value", value, speed, min_value, max_value, "%.3f");
     result.activated = ImGui::IsItemActivated();
+    result.deactivated = ImGui::IsItemDeactivated();
     result.deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
   }
   ImGui::PopID();
@@ -165,118 +165,72 @@ axis_drag_float3(const char *stable_id, const char *label, float values[3],
                  const UIStyleTokens &style, float speed,
                  float min_value = 0.0f, float max_value = 0.0f) {
   AxisDragFloatResult result;
-  ImGui::PushID(stable_id);
-  const float available_width = ImGui::GetContentRegionAvail().x;
   const ImGuiStyle &imgui_style = ImGui::GetStyle();
   const float min_axis_column_width =
       kAxisTextColumnWidth + imgui_style.ItemInnerSpacing.x +
       kMinAxisInputWidth + imgui_style.CellPadding.x * 2.0f;
-  const float label_column_width = std::clamp(
-      kTransformLabelColumnWidth, 0.0f,
-      std::max(0.0f, available_width - 3.0f * min_axis_column_width));
-  if (ImGui::BeginTable("##AxisDragFloat3", 4,
+
+  quader_property_row(stable_id, label);
+  if (ImGui::BeginTable("##AxisDragFloat3", 3,
                         ImGuiTableFlags_SizingStretchProp |
                             ImGuiTableFlags_NoSavedSettings |
                             ImGuiTableFlags_NoPadOuterX)) {
-    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed,
-                            label_column_width);
-    ImGui::TableSetupColumn("X", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-    ImGui::TableSetupColumn("Y", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-    ImGui::TableSetupColumn("Z", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn("X", ImGuiTableColumnFlags_WidthStretch,
+                            min_axis_column_width);
+    ImGui::TableSetupColumn("Y", ImGuiTableColumnFlags_WidthStretch,
+                            min_axis_column_width);
+    ImGui::TableSetupColumn("Z", ImGuiTableColumnFlags_WidthStretch,
+                            min_axis_column_width);
     ImGui::TableNextRow();
 
     ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
-
-    ImGui::TableSetColumnIndex(1);
     const AxisDragFloatResult x =
         axis_drag_float("X", style.axis_x, &values[0], mixed[0], mixed_label,
                         speed, min_value, max_value, -FLT_MIN);
     result.changed = result.changed || x.changed;
     result.activated = result.activated || x.activated;
+    result.deactivated = result.deactivated || x.deactivated;
     result.deactivated_after_edit =
         result.deactivated_after_edit || x.deactivated_after_edit;
-    ImGui::TableSetColumnIndex(2);
+    ImGui::TableSetColumnIndex(1);
     const AxisDragFloatResult y =
         axis_drag_float("Y", style.axis_y, &values[1], mixed[1], mixed_label,
                         speed, min_value, max_value, -FLT_MIN);
     result.changed = result.changed || y.changed;
     result.activated = result.activated || y.activated;
+    result.deactivated = result.deactivated || y.deactivated;
     result.deactivated_after_edit =
         result.deactivated_after_edit || y.deactivated_after_edit;
-    ImGui::TableSetColumnIndex(3);
+    ImGui::TableSetColumnIndex(2);
     const AxisDragFloatResult z =
         axis_drag_float("Z", style.axis_z, &values[2], mixed[2], mixed_label,
                         speed, min_value, max_value, -FLT_MIN);
     result.changed = result.changed || z.changed;
     result.activated = result.activated || z.activated;
+    result.deactivated = result.deactivated || z.deactivated;
     result.deactivated_after_edit =
         result.deactivated_after_edit || z.deactivated_after_edit;
 
     ImGui::EndTable();
   }
-  ImGui::PopID();
+  quader_end_property_row();
   return result;
-}
-
-bool begin_labeled_control_table(const char *stable_id) {
-  ImGui::PushID(stable_id);
-  return ImGui::BeginTable("##InspectorLabeledControl", 2,
-                           ImGuiTableFlags_SizingStretchProp |
-                               ImGuiTableFlags_NoSavedSettings |
-                               ImGuiTableFlags_NoPadOuterX);
-}
-
-void setup_labeled_control_columns() {
-  const float available_width = ImGui::GetContentRegionAvail().x;
-  const float value_width = std::clamp(
-      available_width * 0.36f, kInspectorMinimumValueColumnWidth,
-      std::max(kInspectorMinimumValueColumnWidth, available_width - 120.0f));
-  ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-  ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed,
-                          value_width);
-  ImGui::TableNextRow();
-}
-
-void end_labeled_control_table() {
-  ImGui::EndTable();
-  ImGui::PopID();
 }
 
 bool input_text_with_left_label(const char *stable_id, const char *label,
                                 char *buffer, std::size_t buffer_size,
                                 ImGuiInputTextFlags flags) {
-  bool changed = false;
-  if (begin_labeled_control_table(stable_id)) {
-    setup_labeled_control_columns();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
-    ImGui::TableSetColumnIndex(1);
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    changed = ImGui::InputText("##value", buffer, buffer_size, flags);
-    end_labeled_control_table();
-  } else {
-    ImGui::PopID();
-  }
+  quader_property_row(stable_id, label);
+  const bool changed = ImGui::InputText("##value", buffer, buffer_size, flags);
+  quader_end_property_row();
   return changed;
 }
 
 bool checkbox_with_left_label(const char *stable_id, const char *label,
                               bool *value) {
-  bool changed = false;
-  if (begin_labeled_control_table(stable_id)) {
-    setup_labeled_control_columns();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
-    ImGui::TableSetColumnIndex(1);
-    changed = ImGui::Checkbox("##value", value);
-    end_labeled_control_table();
-  } else {
-    ImGui::PopID();
-  }
+  quader_property_row(stable_id, label);
+  const bool changed = ImGui::Checkbox("##value", value);
+  quader_end_property_row();
   return changed;
 }
 
@@ -317,22 +271,16 @@ UIContinuousEditResult drag_float_with_left_label(
   *value = staged[0];
 
   UIContinuousEditResult result;
-  if (begin_labeled_control_table(stable_id)) {
-    setup_labeled_control_columns();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
-    ImGui::TableSetColumnIndex(1);
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    result.changed =
-        ImGui::DragFloat("##value", value, speed, min_value, max_value, format);
-    result.activated = ImGui::IsItemActivated();
-    result.deactivated = ImGui::IsItemDeactivated();
-    result.deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
-    end_labeled_control_table();
-  } else {
-    ImGui::PopID();
-  }
+  quader_property_row(stable_id, label);
+  result.changed =
+      min_value < max_value
+          ? quader_slider_float("##value", value, min_value, max_value, format)
+          : ImGui::DragFloat("##value", value, speed, min_value, max_value,
+                             format);
+  result.activated = ImGui::IsItemActivated();
+  result.deactivated = ImGui::IsItemDeactivated();
+  result.deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
+  quader_end_property_row();
 
   staged[0] = *value;
   update_continuous_edit_tracker(stable_id, active_edit, primary, selection,
@@ -355,23 +303,14 @@ UIContinuousEditResult color_edit3_with_left_label(
   values[2] = staged[2];
 
   UIContinuousEditResult result;
-  if (begin_labeled_control_table(stable_id)) {
-    setup_labeled_control_columns();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
-    ImGui::TableSetColumnIndex(1);
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    result.changed = ImGui::ColorEdit3("##value", values,
-                                       ImGuiColorEditFlags_Float |
-                                           ImGuiColorEditFlags_NoInputs);
-    result.activated = ImGui::IsItemActivated();
-    result.deactivated = ImGui::IsItemDeactivated();
-    result.deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
-    end_labeled_control_table();
-  } else {
-    ImGui::PopID();
-  }
+  quader_property_row(stable_id, label);
+  result.changed = ImGui::ColorEdit3("##value", values,
+                                     ImGuiColorEditFlags_Float |
+                                         ImGuiColorEditFlags_NoInputs);
+  result.activated = ImGui::IsItemActivated();
+  result.deactivated = ImGui::IsItemDeactivated();
+  result.deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
+  quader_end_property_row();
 
   staged = {values[0], values[1], values[2]};
   update_continuous_edit_tracker(stable_id, active_edit, primary, selection,
@@ -388,36 +327,27 @@ bool combo_with_left_label(
     const char *stable_id, const char *label, Enum *value,
     const std::vector<std::pair<Enum, std::string>> &options) {
   bool changed = false;
-  if (begin_labeled_control_table(stable_id)) {
-    setup_labeled_control_columns();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
-    ImGui::TableSetColumnIndex(1);
-    const auto selected =
-        std::find_if(options.begin(), options.end(), [&](const auto &option) {
-          return option.first == *value;
-        });
-    const char *preview =
-        selected == options.end() ? "" : selected->second.c_str();
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    if (quader_begin_combo("##value", preview)) {
-      for (const auto &[optionValue, optionLabel] : options) {
-        const bool is_selected = optionValue == *value;
-        if (ImGui::Selectable(optionLabel.c_str(), is_selected)) {
-          *value = optionValue;
-          changed = true;
-        }
-        if (is_selected) {
-          ImGui::SetItemDefaultFocus();
-        }
+  quader_property_row(stable_id, label);
+  const auto selected =
+      std::find_if(options.begin(), options.end(), [&](const auto &option) {
+        return option.first == *value;
+      });
+  const char *preview =
+      selected == options.end() ? "" : selected->second.c_str();
+  if (quader_begin_combo("##value", preview)) {
+    for (const auto &[optionValue, optionLabel] : options) {
+      const bool is_selected = optionValue == *value;
+      if (ImGui::Selectable(optionLabel.c_str(), is_selected)) {
+        *value = optionValue;
+        changed = true;
       }
-      ImGui::EndCombo();
+      if (is_selected) {
+        ImGui::SetItemDefaultFocus();
+      }
     }
-    end_labeled_control_table();
-  } else {
-    ImGui::PopID();
+    ImGui::EndCombo();
   }
+  quader_end_property_row();
   return changed;
 }
 
@@ -450,7 +380,7 @@ void draw_scene_settings_inspector(UIContext &context, EntityId entity,
 
   const std::string environment_label =
       localization.text("ui.inspector.environment", "Environment");
-  if (quader_collapsing_header(environment_label.c_str())) {
+  if (quader_property_section("environment", environment_label.c_str())) {
     const std::string preset_label =
         localization.text("ui.inspector.environment_preset", "Preset");
     std::string environment_id = settings.environment.environment_id;
@@ -543,7 +473,7 @@ void draw_scene_settings_inspector(UIContext &context, EntityId entity,
 
   const std::string camera_label =
       localization.text("ui.inspector.camera", "Camera");
-  if (quader_collapsing_header(camera_label.c_str())) {
+  if (quader_property_section("camera", camera_label.c_str())) {
     float aperture = settings.camera.aperture;
     const std::string aperture_label =
         localization.text("ui.inspector.aperture", "Aperture");
@@ -602,7 +532,7 @@ void draw_scene_settings_inspector(UIContext &context, EntityId entity,
 
   const std::string post_process_label =
       localization.text("ui.inspector.post_process", "Post Process");
-  if (quader_collapsing_header(post_process_label.c_str())) {
+  if (quader_property_section("post_process", post_process_label.c_str())) {
     bool enabled = settings.post_process.enabled;
     const std::string enabled_label =
         localization.text("ui.inspector.enabled", "Enabled");
@@ -814,6 +744,13 @@ ImGuiWindowFlags InspectorPanel::window_flags(const UIContext& context) const {
   return context.style.panel_window_flags;
 }
 
+void InspectorPanel::cancel_active_transform_edit() {
+  if (active_transform_preview_.preview_active()) {
+    (void)active_transform_preview_.cancel();
+  }
+  active_transform_edit_.reset();
+}
+
 void InspectorPanel::draw_content(UIContext& context) {
     // UIDockPanel routes hover input through context.requestPanelFocus(id()) before content draws.
     SceneDocument& document = context.document;
@@ -835,7 +772,7 @@ void InspectorPanel::draw_content(UIContext& context) {
     const std::string faces_prefix =
         localization.text("ui.inspector.faces", "Faces");
     if (selected.empty()) {
-      active_transform_edit_.reset();
+      cancel_active_transform_edit();
       active_continuous_edit_.reset();
       if (selection.has_selection) {
         const std::string mode =
@@ -867,7 +804,7 @@ void InspectorPanel::draw_content(UIContext& context) {
     if (active_transform_edit_ &&
         (active_transform_edit_->primary != primary ||
          active_transform_edit_->selection != selected)) {
-      active_transform_edit_.reset();
+      cancel_active_transform_edit();
     }
     active_continuous_edit_.reset_if_entity_scope_changed(
         primary, std::span<const EntityId>(selected.data(), selected.size()));
@@ -891,25 +828,6 @@ void InspectorPanel::draw_content(UIContext& context) {
       }
     }
 
-    if (selected.size() == 1u) {
-      std::array<char, 128> name_buffer;
-      copy_name_to_buffer(document.name(primary), name_buffer);
-      const std::string name_label =
-          localization.text("ui.inspector.name", "Name");
-      if (primary_is_scene_root) {
-        (void)input_text_with_left_label("name", name_label.c_str(),
-                                         name_buffer.data(), name_buffer.size(),
-                                         ImGuiInputTextFlags_ReadOnly);
-      } else {
-        if (input_text_with_left_label("name", name_label.c_str(),
-                                       name_buffer.data(), name_buffer.size(),
-                                       ImGuiInputTextFlags_EnterReturnsTrue |
-                                           ImGuiInputTextFlags_AutoSelectAll)) {
-          (void)context.editor.scene().rename(primary, name_buffer.data());
-        }
-      }
-    }
-
     std::vector<EntityId> editable_selected;
     editable_selected.reserve(selected.size());
     for (const EntityId id : selected) {
@@ -920,56 +838,93 @@ void InspectorPanel::draw_content(UIContext& context) {
 
     const BoolAggregate visibility_aggregate =
         aggregate_visibility(document, editable_selected);
-    if (visibility_aggregate.has_value) {
-      bool hidden = !visibility_aggregate.all_true;
-      const std::string hidden_label =
-          localization.text("ui.inspector.hidden", "Hidden");
-      if (checkbox_with_left_label("hidden", hidden_label.c_str(), &hidden)) {
-        std::vector<QuaderSceneVisibilityEdit> edits;
-        edits.reserve(editable_selected.size());
-        for (const EntityId id : editable_selected) {
-          if (const VisibilityComponent *current = document.visibility(id)) {
-            edits.push_back(QuaderSceneVisibilityEdit{
-                .entity = id,
-                .before = current->visible,
-                .after = !hidden,
-            });
-          }
-        }
-        (void)context.editor.scene().set_visibility(
-            std::span<const QuaderSceneVisibilityEdit>(edits.data(),
-                                                       edits.size()));
-      }
-      if (visibility_aggregate.mixed()) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s", mixed_label.c_str());
-      }
-    }
-
     const BoolAggregate lock_aggregate =
         aggregate_lock(document, editable_selected);
-    if (lock_aggregate.has_value) {
-      bool locked = lock_aggregate.all_true;
-      const std::string locked_label =
-          localization.text("ui.inspector.locked", "Locked");
-      if (checkbox_with_left_label("locked", locked_label.c_str(), &locked)) {
-        std::vector<QuaderSceneLockEdit> edits;
-        edits.reserve(editable_selected.size());
-        for (const EntityId id : editable_selected) {
-          if (const LockComponent *current = document.lock(id)) {
-            edits.push_back(QuaderSceneLockEdit{
-                .entity = id,
-                .before = current->locked,
-                .after = locked,
-            });
+
+    if (!quader_begin_property_table("inspector_properties")) {
+      return;
+    }
+
+    const bool has_general_properties =
+        selected.size() == 1u || visibility_aggregate.has_value ||
+        lock_aggregate.has_value;
+    if (has_general_properties) {
+      const std::string general_label =
+          localization.text("ui.inspector.general", "General");
+      if (quader_property_section("general", general_label.c_str())) {
+        if (selected.size() == 1u) {
+          std::array<char, 128> name_buffer;
+          copy_name_to_buffer(document.name(primary), name_buffer);
+          const std::string name_label =
+              localization.text("ui.inspector.name", "Name");
+          if (primary_is_scene_root) {
+            (void)input_text_with_left_label(
+                "name", name_label.c_str(), name_buffer.data(),
+                name_buffer.size(), ImGuiInputTextFlags_ReadOnly);
+          } else {
+            if (input_text_with_left_label(
+                    "name", name_label.c_str(), name_buffer.data(),
+                    name_buffer.size(),
+                    ImGuiInputTextFlags_EnterReturnsTrue |
+                        ImGuiInputTextFlags_AutoSelectAll)) {
+              (void)context.editor.scene().rename(primary, name_buffer.data());
+            }
           }
         }
-        (void)context.editor.scene().set_locks(
-            std::span<const QuaderSceneLockEdit>(edits.data(), edits.size()));
-      }
-      if (lock_aggregate.mixed()) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s", mixed_label.c_str());
+
+        if (visibility_aggregate.has_value) {
+          bool hidden = !visibility_aggregate.all_true;
+          const std::string hidden_label =
+              localization.text("ui.inspector.hidden", "Hidden");
+          if (checkbox_with_left_label("hidden", hidden_label.c_str(),
+                                       &hidden)) {
+            std::vector<QuaderSceneVisibilityEdit> edits;
+            edits.reserve(editable_selected.size());
+            for (const EntityId id : editable_selected) {
+              if (const VisibilityComponent *current = document.visibility(id)) {
+                edits.push_back(QuaderSceneVisibilityEdit{
+                    .entity = id,
+                    .before = current->visible,
+                    .after = !hidden,
+                });
+              }
+            }
+            (void)context.editor.scene().set_visibility(
+                std::span<const QuaderSceneVisibilityEdit>(edits.data(),
+                                                           edits.size()));
+          }
+          if (visibility_aggregate.mixed()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", mixed_label.c_str());
+          }
+        }
+
+        if (lock_aggregate.has_value) {
+          bool locked = lock_aggregate.all_true;
+          const std::string locked_label =
+              localization.text("ui.inspector.locked", "Locked");
+          if (checkbox_with_left_label("locked", locked_label.c_str(),
+                                       &locked)) {
+            std::vector<QuaderSceneLockEdit> edits;
+            edits.reserve(editable_selected.size());
+            for (const EntityId id : editable_selected) {
+              if (const LockComponent *current = document.lock(id)) {
+                edits.push_back(QuaderSceneLockEdit{
+                    .entity = id,
+                    .before = current->locked,
+                    .after = locked,
+                });
+              }
+            }
+            (void)context.editor.scene().set_locks(
+                std::span<const QuaderSceneLockEdit>(edits.data(),
+                                                     edits.size()));
+          }
+          if (lock_aggregate.mixed()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", mixed_label.c_str());
+          }
+        }
       }
     }
 
@@ -984,12 +939,16 @@ void InspectorPanel::draw_content(UIContext& context) {
 
         const std::string transform_label =
             localization.text("ui.inspector.transform", "Transform");
-        if (quader_collapsing_header(transform_label.c_str())) {
+        if (quader_property_section("transform", transform_label.c_str())) {
           if (selected.size() > 1u) {
             const std::string spatial_entities = localization.format(
                 "ui.inspector.spatial_entities", "{count} spatial entities",
                 {{"count", std::to_string(transform_count)}});
+            const std::string selection_label =
+                localization.text("ui.inspector.selection", "Selection");
+            quader_property_row("spatial_entities", selection_label.c_str());
             ImGui::TextDisabled("%s", spatial_entities.c_str());
+            quader_end_property_row();
           }
 
           auto transform_edit_matches = [&](InspectorTransformEditKind kind) {
@@ -997,6 +956,10 @@ void InspectorPanel::draw_content(UIContext& context) {
                    active_transform_edit_->kind == kind &&
                    active_transform_edit_->primary == primary &&
                    active_transform_edit_->selection == selected;
+          };
+
+          auto refresh_primary_transform = [&]() {
+            transform = document.transform(primary);
           };
 
           auto apply_active_transform_edit_values =
@@ -1019,6 +982,35 @@ void InspectorPanel::draw_content(UIContext& context) {
             };
           };
 
+          auto begin_transform_preview = [&](InspectorTransformEditKind kind) {
+            if (transform_edit_matches(kind) &&
+                active_transform_preview_.preview_active()) {
+              return true;
+            }
+
+            cancel_active_transform_edit();
+            refresh_primary_transform();
+            if (transform == nullptr) {
+              return false;
+            }
+
+            switch (kind) {
+            case InspectorTransformEditKind::Position:
+              return active_transform_preview_
+                  .begin_move_selected_to_primary_position_preview(
+                      document, primary, "Set Transform");
+            case InspectorTransformEditKind::Rotation:
+              return active_transform_preview_
+                  .begin_rotate_selected_to_primary_euler_preview(
+                      document, context.assets, primary, "Set Transform");
+            case InspectorTransformEditKind::Scale:
+              return active_transform_preview_
+                  .begin_scale_selected_to_primary_scale_preview(
+                      document, context.assets, primary, "Set Transform");
+            }
+            return false;
+          };
+
           auto final_transform_edit_values =
               [&](InspectorTransformEditKind kind, const float values[3]) {
                 std::array<float, 3> result{values[0], values[1], values[2]};
@@ -1028,8 +1020,46 @@ void InspectorPanel::draw_content(UIContext& context) {
                 return result;
               };
 
-          auto refresh_primary_transform = [&]() {
-            transform = document.transform(primary);
+          auto preview_transform_edit = [&](InspectorTransformEditKind kind,
+                                            const float values[3]) {
+            if (!transform_edit_matches(kind) ||
+                !active_transform_preview_.preview_active()) {
+              return;
+            }
+
+            DocumentCommandResult preview_result;
+            switch (kind) {
+            case InspectorTransformEditKind::Position:
+              preview_result =
+                  active_transform_preview_.preview_selected_to_primary_position(
+                      document, primary, {values[0], values[1], values[2]});
+              break;
+            case InspectorTransformEditKind::Rotation:
+              preview_result =
+                  active_transform_preview_.preview_selected_to_primary_euler(
+                      document, primary,
+                      {values[0] * kDegToRad, values[1] * kDegToRad,
+                       values[2] * kDegToRad});
+              break;
+            case InspectorTransformEditKind::Scale:
+              preview_result =
+                  active_transform_preview_.preview_selected_to_primary_scale(
+                      document, primary, {values[0], values[1], values[2]});
+              break;
+            }
+
+            if (!preview_result.ok) {
+              cancel_active_transform_edit();
+            }
+            refresh_primary_transform();
+          };
+
+          auto finish_transform_preview = [&]() {
+            if (active_transform_preview_.preview_active()) {
+              (void)active_transform_preview_.commit(context.editor);
+            }
+            active_transform_edit_.reset();
+            refresh_primary_transform();
           };
 
           float position[3] = {transform->position.x, transform->position.y,
@@ -1043,21 +1073,26 @@ void InspectorPanel::draw_content(UIContext& context) {
           const AxisDragFloatResult position_result = axis_drag_float3(
               "position", position_label.c_str(), position, position_mixed,
               mixed_label.c_str(), context.style, 0.05f);
+          if (position_result.activated) {
+            (void)begin_transform_preview(InspectorTransformEditKind::Position);
+          }
           if (position_result.activated || position_result.changed) {
             stage_transform_edit(InspectorTransformEditKind::Position,
                                  position);
+          }
+          if (position_result.changed) {
+            preview_transform_edit(InspectorTransformEditKind::Position,
+                                   position);
           }
           if (position_result.deactivated_after_edit) {
             const std::array<float, 3> final_position =
                 final_transform_edit_values(
                     InspectorTransformEditKind::Position, position);
-            const QVec3 next_position{final_position[0], final_position[1],
-                                      final_position[2]};
-            active_transform_edit_.reset();
-            SceneTransformDragService transform_service;
-            (void)transform_service.move_selected_to_primary_position(
-                context.editor, document, primary, next_position,
-                "Set Transform");
+            preview_transform_edit(InspectorTransformEditKind::Position,
+                                   final_position.data());
+            finish_transform_preview();
+          } else if (position_result.deactivated) {
+            cancel_active_transform_edit();
             refresh_primary_transform();
           }
 
@@ -1077,25 +1112,26 @@ void InspectorPanel::draw_content(UIContext& context) {
           const AxisDragFloatResult rotation_result = axis_drag_float3(
               "rotation", rotation_label.c_str(), rotation, rotation_mixed,
               mixed_label.c_str(), context.style, 0.5f);
+          if (rotation_result.activated) {
+            (void)begin_transform_preview(InspectorTransformEditKind::Rotation);
+          }
           if (rotation_result.activated || rotation_result.changed) {
             stage_transform_edit(InspectorTransformEditKind::Rotation,
                                  rotation);
+          }
+          if (rotation_result.changed) {
+            preview_transform_edit(InspectorTransformEditKind::Rotation,
+                                   rotation);
           }
           if (rotation_result.deactivated_after_edit) {
             const std::array<float, 3> final_rotation =
                 final_transform_edit_values(
                     InspectorTransformEditKind::Rotation, rotation);
-            const QVec3 next_rotation{
-                final_rotation[0] * kDegToRad,
-                final_rotation[1] * kDegToRad,
-                final_rotation[2] * kDegToRad,
-            };
-            active_transform_edit_.reset();
-            SceneTransformDragService transform_service;
-            (void)transform_service
-                .rotate_selected_to_primary_euler_around_selection_pivot(
-                    context.editor, document, context.assets, primary,
-                    next_rotation, "Set Transform");
+            preview_transform_edit(InspectorTransformEditKind::Rotation,
+                                   final_rotation.data());
+            finish_transform_preview();
+          } else if (rotation_result.deactivated) {
+            cancel_active_transform_edit();
             refresh_primary_transform();
           }
 
@@ -1110,20 +1146,24 @@ void InspectorPanel::draw_content(UIContext& context) {
           const AxisDragFloatResult scale_result = axis_drag_float3(
               "scale", scale_label.c_str(), scale, scale_mixed,
               mixed_label.c_str(), context.style, 0.02f, 0.001f, 1000.0f);
+          if (scale_result.activated) {
+            (void)begin_transform_preview(InspectorTransformEditKind::Scale);
+          }
           if (scale_result.activated || scale_result.changed) {
             stage_transform_edit(InspectorTransformEditKind::Scale, scale);
+          }
+          if (scale_result.changed) {
+            preview_transform_edit(InspectorTransformEditKind::Scale, scale);
           }
           if (scale_result.deactivated_after_edit) {
             const std::array<float, 3> final_scale =
                 final_transform_edit_values(InspectorTransformEditKind::Scale,
                                             scale);
-            active_transform_edit_.reset();
-            SceneTransformDragService transform_service;
-            (void)transform_service
-                .scale_selected_to_primary_scale_around_selection_pivot(
-                    context.editor, document, context.assets, primary,
-                    {final_scale[0], final_scale[1], final_scale[2]},
-                    "Set Transform");
+            preview_transform_edit(InspectorTransformEditKind::Scale,
+                                   final_scale.data());
+            finish_transform_preview();
+          } else if (scale_result.deactivated) {
+            cancel_active_transform_edit();
             refresh_primary_transform();
           }
         }
@@ -1137,6 +1177,7 @@ void InspectorPanel::draw_content(UIContext& context) {
             std::span<const EntityId>(selected.data(), selected.size()),
             active_continuous_edit_, *settings, localization);
       }
+      quader_end_property_table();
       return;
     }
 
@@ -1150,7 +1191,7 @@ void InspectorPanel::draw_content(UIContext& context) {
 
         const std::string export_label =
             localization.text("ui.inspector.export", "Export");
-        if (quader_collapsing_header(export_label.c_str())) {
+        if (quader_property_section("export", export_label.c_str())) {
           bool editor_only = mesh.editor_only;
           const std::string editor_only_label =
               localization.text("ui.inspector.editor_only", "Editor Only");
@@ -1163,7 +1204,7 @@ void InspectorPanel::draw_content(UIContext& context) {
 
         const std::string lighting_label =
             localization.text("ui.inspector.lighting", "Lighting");
-        if (quader_collapsing_header(lighting_label.c_str())) {
+        if (quader_property_section("lighting", lighting_label.c_str())) {
           bool cast_shadows = mesh.cast_shadows;
           const std::string cast_shadows_label =
               localization.text("ui.inspector.cast_shadows", "Cast Shadows");
@@ -1185,7 +1226,7 @@ void InspectorPanel::draw_content(UIContext& context) {
 
         const std::string physics_label =
             localization.text("ui.inspector.physics", "Physics");
-        if (quader_collapsing_header(physics_label.c_str())) {
+        if (quader_property_section("physics", physics_label.c_str())) {
           bool generate_collisions = mesh.generate_collisions;
           const std::string generate_collisions_label = localization.text(
               "ui.inspector.generate_collisions", "Generate Collisions");
@@ -1266,7 +1307,7 @@ void InspectorPanel::draw_content(UIContext& context) {
 
         const std::string light_label =
             localization.text("ui.inspector.light", "Light");
-        if (quader_collapsing_header(light_label.c_str())) {
+        if (quader_property_section("light", light_label.c_str())) {
           LightType type = light.type;
           const std::string type_label =
               localization.text("ui.inspector.light_type", "Type");
@@ -1354,17 +1395,20 @@ void InspectorPanel::draw_content(UIContext& context) {
 
       const std::string components_label =
           localization.text("ui.inspector.components", "Components");
-      if (quader_collapsing_header(components_label.c_str())) {
+      if (quader_property_section("components", components_label.c_str())) {
         const std::string meshes_label =
             localization.text("ui.inspector.meshes", "Meshes");
         const std::string lights_label =
             localization.text("ui.inspector.lights", "Lights");
-        ImGui::Text("%s: %llu", meshes_label.c_str(),
-                    static_cast<unsigned long long>(mesh_count));
-        ImGui::Text("%s: %llu", lights_label.c_str(),
-                    static_cast<unsigned long long>(light_count));
+        quader_property_row("meshes", meshes_label.c_str());
+        ImGui::Text("%llu", static_cast<unsigned long long>(mesh_count));
+        quader_end_property_row();
+        quader_property_row("lights", lights_label.c_str());
+        ImGui::Text("%llu", static_cast<unsigned long long>(light_count));
+        quader_end_property_row();
       }
     }
+    quader_end_property_table();
 }
 
 } // namespace quader

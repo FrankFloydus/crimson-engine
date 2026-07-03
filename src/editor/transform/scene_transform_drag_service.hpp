@@ -49,11 +49,27 @@ public:
     [[nodiscard]] bool begin(SceneDocument &document, QVec3 world_pivot,
                              bool start_preview,
                              std::string label = "Transform Selection");
+    [[nodiscard]] bool begin_move_selected_to_primary_position_preview(
+        SceneDocument &document, EntityId primary,
+        std::string label = "Transform Selection");
+    [[nodiscard]] bool begin_rotate_selected_to_primary_euler_preview(
+        SceneDocument &document, const AssetRegistry &assets, EntityId primary,
+        std::string label = "Transform Selection");
+    [[nodiscard]] bool begin_scale_selected_to_primary_scale_preview(
+        SceneDocument &document, const AssetRegistry &assets, EntityId primary,
+        std::string label = "Transform Selection");
     [[nodiscard]] bool preview_active() const;
     [[nodiscard]] const std::vector<SceneTransformDragTarget>& targets() const;
 
     DocumentCommandResult preview_transform(EntityId entity,
                                             TransformComponent transform);
+    DocumentCommandResult preview_selected_to_primary_position(
+        SceneDocument &document, EntityId primary, QVec3 next_primary_position);
+    DocumentCommandResult preview_selected_to_primary_euler(
+        SceneDocument &document, EntityId primary,
+        QVec3 next_primary_euler_radians);
+    DocumentCommandResult preview_selected_to_primary_scale(
+        SceneDocument &document, EntityId primary, QVec3 next_primary_scale);
     DocumentCommandResult
     preview_world_transform_delta(SceneDocument &document,
                                   const QMat4 &world_transform_delta);
@@ -87,10 +103,14 @@ public:
   private:
     [[nodiscard]] bool capture_targets(SceneDocument &document,
                                        QVec3 world_pivot);
+    [[nodiscard]] const TransformComponent *
+    captured_primary_transform(const SceneDocument &document,
+                               EntityId primary) const;
 
     std::optional<SceneTransformPreviewTransaction> preview_;
     std::vector<SceneTransformDragTarget> targets_;
     std::string label_ = "Transform Selection";
+    QVec3 world_pivot_ = {};
 };
 
 } // namespace quader
