@@ -27,6 +27,16 @@ namespace {
 
 using Json = nlohmann::ordered_json;
 
+QdrReadResult read_error_result(QdrDiagnostic diagnostic) {
+  const std::string message = diagnostic.message;
+  return {false, {}, message, {std::move(diagnostic)}};
+}
+
+QdrReadResult read_error_result(std::string_view code, std::string_view path,
+                                std::string message) {
+  return read_error_result(qdr_make_error(code, path, std::move(message)));
+}
+
 std::string qdr_format_name_string()
 {
   return qdr_string_from_view(kQdrFormatName);
@@ -567,21 +577,37 @@ QdrReadResult deserialize_document(std::string_view text)
           require_qdr_root_object(root);
           const QdrRootHeader header = read_qdr_root_header(root);
           if (header.format != qdr_format_name_string()) {
-            return {
-                false, {}, "Unsupported Quader file format: " + header.format};
+            return read_error_result(
+                "qdr.unsupported_format", "/format",
+                "Unsupported Quader file format: " + header.format);
           }
 
 		const int version = header.version;
 		if (!is_supported_document_version(version)) {
-			return { false, {}, "Unsupported Quader file version: " + std::to_string(version) };
+			return read_error_result(
+            "qdr.unsupported_version", "/version",
+            "Unsupported Quader file version: " +
+                std::to_string(version));
 		}
 
 		QdrDocument document = qdr_document_from_json(migrate_document_payload_to_current(root, version));
 		return { true, std::move(document), {} };
+	} catch (const QdrDiagnosticException& exception) {
+		return read_error_result(exception.diagnostic());
+	} catch (const nlohmann::json::parse_error& exception) {
+          const QdrTextLocation location =
+              qdr_text_location_from_parse_byte(text, exception.byte);
+          return read_error_result(qdr_make_error(
+              "qdr.json_parse_error", "", exception.what(), location.line,
+              location.column));
+	} catch (const nlohmann::json::exception& exception) {
+		return read_error_result(
+        "qdr.json_shape_error", "", exception.what());
 	} catch (const std::exception& exception) {
-		return { false, {}, exception.what() };
+		return read_error_result("qdr.read_failed", "", exception.what());
 	} catch (...) {
-		return { false, {}, "Unknown error reading Quader file." };
+		return read_error_result("qdr.unknown_error", "",
+                             "Unknown error reading Quader file.");
 	}
 }
 

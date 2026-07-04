@@ -14,6 +14,7 @@
 namespace quader {
 
 struct ModelingBoxPreview;
+class ViewportToolPreviewPort;
 struct ViewportToolContext;
 struct ViewportToolEvent;
 struct ViewportToolResult;
@@ -35,8 +36,10 @@ public:
     bool active_tool_owns_viewport() const;
     bool active_tool_blocks_viewport_focus_shortcuts() const;
     bool active_tool_allows_selection_fallback() const;
-    bool has_active_modal_preview() const;
-    const ModelingBoxPreview &box_preview() const;
+    bool has_active_modal_preview(const ViewportToolPreviewPort &preview,
+                                  bool snap_enabled = true) const;
+    ModelingBoxPreview box_preview(const ViewportToolPreviewPort &preview,
+                                   bool snap_enabled = true) const;
     void clear_modal_tool_state();
     void clear_modal_drag_state();
     ViewportToolResult handle_active_tool_event(ViewportToolContext &context,

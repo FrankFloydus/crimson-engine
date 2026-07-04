@@ -19,6 +19,7 @@
 #include "render/viewport_overlay_policy.hpp"
 #include "render/overlay/overlay_camera_projector.hpp"
 #include "render/overlay/overlay_proxy_factory.hpp"
+#include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/overlay/overlay_renderable_cache.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
@@ -45,6 +46,7 @@ using namespace quader;
 namespace {
 
 using quader::test::guardrail::read_source_file;
+using quader::test::guardrail::source_slice;
 
 ViewportOverlayCamera test_overlay_camera() {
   return {
@@ -394,67 +396,478 @@ TEST(RenderSignatureBuilderTests, KeepsRenderHashPolicyInSingleOwner) {
   }
 }
 
-TEST(SceneRenderExtractionTests, BuildsSharedVisibleMeshAndLightPlan) {
-    SceneDocument document;
-    AssetRegistry assets;
-    MaterialBindingService material_binding;
+TEST(RenderSceneSnapshotTests, BuildsVisibleMeshLightAndMaterialRecords) {
+  SceneDocument document;
+  AssetRegistry assets;
 
-    const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
-    const AssetId material =
-        assets.add_material(make_default_quader_material("Render Material"));
+  TextureAsset texture;
+  texture.name = "Snapshot Base Color";
+  texture.color_space = TextureColorSpace::Srgb;
+  const AssetId base_color_texture = assets.add_texture(texture);
 
-    const EntityId renderable =
-        document.create_entity("Renderable", EntityKind::Mesh);
-    document.set_mesh(renderable, MeshComponent{.mesh = mesh,
-                                                .cast_shadows = false,
-                                                .double_sided = true});
-    document.set_material(renderable, MaterialComponent{.material = material});
+  MaterialDocument material_document;
+  material_document.name = "Snapshot Material";
+  material_document.texture_slots.emplace(material_texture_slot::kBaseColor,
+                                          base_color_texture);
+  const AssetId material = assets.add_material(std::move(material_document));
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
 
-    const EntityId missing_mesh =
-        document.create_entity("Missing Mesh", EntityKind::Mesh);
-    document.set_mesh(missing_mesh, MeshComponent{.mesh = mesh + 1000u});
+  const EntityId renderable =
+      document.create_entity("Renderable", EntityKind::Mesh);
+  document.set_mesh(renderable, MeshComponent{
+                                    .mesh = mesh,
+                                    .cast_shadows = false,
+                                    .double_sided = true,
+                                });
+  document.set_material(renderable, MaterialComponent{.material = material});
 
-    const EntityId hidden =
-        document.create_entity("Hidden Mesh", EntityKind::Mesh);
-    document.set_mesh(hidden, MeshComponent{.mesh = mesh});
-    document.set_visible(hidden, false);
+  const EntityId missing_mesh =
+      document.create_entity("Missing Mesh", EntityKind::Mesh);
+  document.set_mesh(missing_mesh, MeshComponent{.mesh = mesh + 1000u});
 
-    const EntityId light = document.create_entity("Light", EntityKind::Light);
-    document.set_light(light, LightComponent{});
+  const EntityId hidden = document.create_entity("Hidden Mesh", EntityKind::Mesh);
+  document.set_mesh(hidden, MeshComponent{.mesh = mesh});
+  document.set_visible(hidden, false);
 
-    const SceneRenderExtractionPlan plan =
-        build_scene_render_extraction_plan(document, assets, material_binding);
+  const EntityId light = document.create_entity("Light", EntityKind::Light);
+  const LightComponent light_component{
+      .type = LightType::Point,
+      .color = {0.25f, 0.5f, 0.75f},
+      .intensity = 3.0f,
+      .range = 7.0f,
+      .casts_shadows = true,
+  };
+  document.set_light(light, light_component);
 
-    ASSERT_EQ(plan.meshes.size(), 2u);
-    const auto renderable_entry =
-        std::find_if(plan.meshes.begin(), plan.meshes.end(),
-                     [renderable](const SceneRenderMeshEntry &entry) {
-                       return entry.entity_id == renderable;
-                     });
-    ASSERT_NE(renderable_entry, plan.meshes.end());
-    EXPECT_TRUE(renderable_entry->renderable());
-    EXPECT_EQ(renderable_entry->mesh_id, mesh);
-    EXPECT_EQ(renderable_entry->material_id, material);
-    EXPECT_FALSE(renderable_entry->cast_shadows());
-    EXPECT_TRUE(renderable_entry->double_sided());
-    EXPECT_EQ(renderable_entry->material_revision,
-              material_binding.material_revision(
-                  assets, renderable_entry->material_component));
-    EXPECT_TRUE(plan.live_mesh_entities.contains(renderable));
+  const RenderSceneSnapshot snapshot =
+      build_render_scene_snapshot(document, assets);
 
-    const auto missing_entry =
-        std::find_if(plan.meshes.begin(), plan.meshes.end(),
-                     [missing_mesh](const SceneRenderMeshEntry &entry) {
-                       return entry.entity_id == missing_mesh;
-                     });
-    ASSERT_NE(missing_entry, plan.meshes.end());
-    EXPECT_FALSE(missing_entry->renderable());
-    EXPECT_FALSE(plan.live_mesh_entities.contains(missing_mesh));
-    EXPECT_FALSE(plan.live_mesh_entities.contains(hidden));
+  EXPECT_EQ(snapshot.scene_revision, document.revision());
+  EXPECT_EQ(snapshot.asset_revision, assets.revision());
+  ASSERT_EQ(snapshot.meshes.size(), 2u);
+  const auto renderable_entry =
+      std::ranges::find_if(snapshot.meshes, [renderable](const auto &entry) {
+        return entry.entity_id == renderable;
+      });
+  ASSERT_NE(renderable_entry, snapshot.meshes.end());
+  EXPECT_TRUE(renderable_entry->renderable());
+  EXPECT_EQ(renderable_entry->mesh.mesh_id, mesh);
+  EXPECT_EQ(renderable_entry->mesh.mesh_revision,
+            assets.mesh_revision(mesh).value);
+  ASSERT_NE(assets.mesh(mesh), nullptr);
+  EXPECT_EQ(renderable_entry->mesh.vertices.data(),
+            assets.mesh(mesh)->vertices.data());
+  EXPECT_EQ(renderable_entry->material_id, material);
+  EXPECT_EQ(renderable_entry->material_revision,
+            render_material_binding_signature(renderable_entry->material));
+  EXPECT_FALSE(renderable_entry->cast_shadows());
+  EXPECT_TRUE(renderable_entry->double_sided());
+  ASSERT_TRUE(renderable_entry->material.present);
+  EXPECT_EQ(renderable_entry->material.primary_material.material_id, material);
+  const RenderTextureAssetSnapshot *texture_snapshot =
+      renderable_entry->material.primary_material.texture_for_slot(
+          material_texture_slot::kBaseColor);
+  ASSERT_NE(texture_snapshot, nullptr);
+  EXPECT_TRUE(texture_snapshot->present);
+  EXPECT_EQ(texture_snapshot->texture_id, base_color_texture);
+  EXPECT_TRUE(snapshot.live_mesh_entities.contains(renderable));
 
-    ASSERT_EQ(plan.lights.size(), 1u);
-    EXPECT_EQ(plan.lights.front().entity_id, light);
-    EXPECT_TRUE(plan.live_light_entities.contains(light));
+  const auto missing_entry =
+      std::ranges::find_if(snapshot.meshes, [missing_mesh](const auto &entry) {
+        return entry.entity_id == missing_mesh;
+      });
+  ASSERT_NE(missing_entry, snapshot.meshes.end());
+  EXPECT_FALSE(missing_entry->renderable());
+  EXPECT_FALSE(missing_entry->mesh.present);
+  EXPECT_FALSE(snapshot.live_mesh_entities.contains(missing_mesh));
+  EXPECT_FALSE(snapshot.live_mesh_entities.contains(hidden));
+
+  ASSERT_EQ(snapshot.lights.size(), 1u);
+  EXPECT_EQ(snapshot.lights.front().entity_id, light);
+  EXPECT_EQ(snapshot.lights.front().light, light_component);
+  EXPECT_EQ(snapshot.lights.front().rebuild_revision,
+            LightRenderableCache::light_signature(light_component));
+  EXPECT_TRUE(snapshot.live_light_entities.contains(light));
+}
+
+TEST(RenderSceneSnapshotTests, MeshAndLightRecordsAreValueSnapshotInputs) {
+  const std::string snapshot_header =
+      read_source_file("src/render/render_scene_snapshot.hpp");
+  const std::string extraction_header =
+      read_source_file("src/render/scene_render_extraction.hpp");
+  const std::string extraction_source =
+      read_source_file("src/render/scene_render_extraction.cpp");
+  const std::string mesh_record =
+      source_slice(snapshot_header, "struct RenderSceneMeshRecord",
+                   "struct RenderSceneLightRecord");
+  const std::string light_record =
+      source_slice(snapshot_header, "struct RenderSceneLightRecord",
+                   "struct RenderSceneSnapshotDirtyState");
+
+  EXPECT_NE(snapshot_header.find("struct RenderSceneSnapshot"),
+            std::string::npos);
+  EXPECT_NE(snapshot_header.find("RenderSceneMeshRecord"), std::string::npos);
+  EXPECT_NE(snapshot_header.find("RenderSceneLightRecord"), std::string::npos);
+  EXPECT_NE(snapshot_header.find("std::vector<RenderSceneMeshRecord>"),
+            std::string::npos);
+  EXPECT_NE(snapshot_header.find("std::vector<RenderSceneLightRecord>"),
+            std::string::npos);
+  EXPECT_NE(snapshot_header.find("scene_revision"), std::string::npos);
+  EXPECT_NE(snapshot_header.find("asset_revision"), std::string::npos);
+  EXPECT_NE(snapshot_header.find("mesh_revision"), std::string::npos);
+  EXPECT_NE(snapshot_header.find("material_revision"), std::string::npos);
+
+  EXPECT_EQ(mesh_record.find("const MeshAsset *"), std::string::npos);
+  EXPECT_EQ(mesh_record.find("const MeshComponent *"), std::string::npos);
+  EXPECT_EQ(mesh_record.find("const MaterialComponent *"), std::string::npos);
+  EXPECT_EQ(light_record.find("const LightComponent *"), std::string::npos);
+  EXPECT_NE(extraction_header.find("build_render_scene_snapshot"),
+            std::string::npos);
+  EXPECT_EQ(extraction_source.find(".mesh = assets.mesh("),
+            std::string::npos);
+  EXPECT_EQ(extraction_source.find(".mesh_component = mesh_component"),
+            std::string::npos);
+  EXPECT_EQ(extraction_source.find(".material_component = material_component"),
+            std::string::npos);
+  EXPECT_EQ(extraction_source.find(".light = light"), std::string::npos);
+}
+
+TEST(RenderSceneSnapshotTests, OverlayRecordsStayBehindRenderBoundary) {
+  const std::string snapshot_header =
+      read_source_file("src/render/render_scene_snapshot.hpp");
+  const std::string render_bridge_source =
+      read_source_file("src/render/scene_render_bridge.cpp");
+  const std::string viewport_panel_source =
+      read_source_file("src/ui/viewport_panel.cpp");
+
+  for (std::string_view token : {
+           std::string_view{"SelectedObject"},
+           std::string_view{"SceneWireframe"},
+           std::string_view{"HierarchySelection"},
+           std::string_view{"GroupBounds"},
+           std::string_view{"SelectedLight"},
+           std::string_view{"ToolOverlay"},
+       }) {
+    EXPECT_NE(snapshot_header.find(token), std::string::npos) << token;
+  }
+
+  EXPECT_NE(render_bridge_source.find("RenderSceneSnapshot"),
+            std::string::npos);
+  EXPECT_EQ(viewport_panel_source.find("ViewportSceneOverlayBuilder::"),
+            std::string::npos);
+  EXPECT_EQ(viewport_panel_source.find("build_render_overlay_"),
+            std::string::npos);
+  EXPECT_EQ(viewport_panel_source.find("sync_selected_object_overlay("),
+            std::string::npos);
+  EXPECT_EQ(viewport_panel_source.find("sync_scene_wireframe_overlay("),
+            std::string::npos);
+}
+
+TEST(RenderOverlaySnapshotTests,
+     CapturesSelectionGroupLightHierarchyAndToolOverlayRecords) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId group = document.create_empty("Selected Group");
+  const EntityId child =
+      document.create_entity("Child Mesh", EntityKind::Mesh);
+  document.set_mesh(child, MeshComponent{.mesh = mesh});
+  ASSERT_TRUE(document.set_parent(child, group));
+  ASSERT_TRUE(document.set_selected(group, true));
+
+  const EntityId point_light =
+      document.create_entity("Point Light", EntityKind::Light);
+  document.set_transform(
+      point_light, TransformComponent{.position = {2.0f, 3.0f, 4.0f}});
+  document.set_light(point_light, LightComponent{.type = LightType::Point});
+  ASSERT_TRUE(document.set_selected(point_light, true));
+
+  const EntityId directional_light =
+      document.create_entity("Directional Light", EntityKind::Light);
+  document.set_light(directional_light,
+                     LightComponent{.type = LightType::Directional});
+  ASSERT_TRUE(document.set_selected(directional_light, true));
+
+  const EntityId hidden_light =
+      document.create_entity("Hidden Light", EntityKind::Light);
+  document.set_light(hidden_light, LightComponent{.type = LightType::Point});
+  document.set_visible(hidden_light, false);
+  ASSERT_TRUE(document.set_selected(hidden_light, true));
+
+  ViewportOverlayFrame tool_frame;
+  tool_frame.lines.push_back({
+      .layer = ViewportOverlayLayer::ToolPreviewLine,
+      .start = {},
+      .end = {1.0f, 0.0f, 0.0f},
+      .source = ViewportOverlaySource::Tool,
+  });
+
+  const RenderOverlaySelectionSnapshot snapshot =
+      build_render_overlay_selection_snapshot(document, assets, tool_frame);
+
+  EXPECT_EQ(snapshot.scene_revision, document.revision());
+  EXPECT_EQ(snapshot.asset_revision, assets.revision());
+  ASSERT_EQ(snapshot.hierarchy_selection_wires.size(), 1u);
+  EXPECT_EQ(snapshot.hierarchy_selection_wires.front().entity, child);
+  EXPECT_EQ(snapshot.hierarchy_selection_wires.front().mesh_id, mesh);
+  EXPECT_EQ(snapshot.hierarchy_selection_wires.front().vertices.size(), 3u);
+  ASSERT_EQ(snapshot.group_bounds.size(), 1u);
+  EXPECT_EQ(snapshot.selected_lights.size(), 2u);
+  EXPECT_EQ(snapshot.tool_overlays.lines.size(), 1u);
+
+  const ViewportOverlayFrame frame =
+      ViewportSceneOverlayBuilder::build_selection_frame({}, snapshot);
+
+  EXPECT_EQ(
+      line_source_count_for(frame, ViewportOverlaySource::HierarchySelection),
+      3u);
+  EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::GroupBounds), 12u);
+  EXPECT_EQ(point_count_for(frame, ViewportOverlayLayer::SelectedVertex), 2u);
+  EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 5u);
+  EXPECT_EQ(line_source_count_for(frame, ViewportOverlaySource::Tool), 1u);
+}
+
+TEST(RenderOverlaySnapshotTests,
+     CapturesSelectedObjectAndSceneWireframeRecordsWithDirtyRevisions) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId triangle_mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const AssetId quad_mesh = assets.add_mesh(make_authored_quad_mesh());
+  const EntityId selected_mesh =
+      document.create_entity("Selected Mesh", EntityKind::Mesh);
+  document.set_mesh(selected_mesh, MeshComponent{.mesh = triangle_mesh});
+  ASSERT_TRUE(document.set_selected(selected_mesh, true));
+  const EntityId wireframe_mesh =
+      document.create_entity("Wireframe Mesh", EntityKind::Mesh);
+  document.set_mesh(wireframe_mesh, MeshComponent{.mesh = quad_mesh});
+  const EntityId hidden_selected_mesh =
+      document.create_entity("Hidden Selected Mesh", EntityKind::Mesh);
+  document.set_mesh(hidden_selected_mesh,
+                    MeshComponent{.mesh = triangle_mesh});
+  document.set_visible(hidden_selected_mesh, false);
+  ASSERT_TRUE(document.set_selected(hidden_selected_mesh, true));
+
+  const RenderOverlaySelectedObjectSnapshot selected_snapshot =
+      build_render_overlay_selected_object_snapshot(document, assets, true);
+
+  EXPECT_TRUE(selected_snapshot.visible);
+  EXPECT_EQ(selected_snapshot.scene_revision, document.revision());
+  EXPECT_EQ(selected_snapshot.asset_revision, assets.revision());
+  EXPECT_EQ(selected_snapshot.selection_revision,
+            document.selection_revision());
+  EXPECT_EQ(selected_snapshot.visibility_revision,
+            document.visibility_revision());
+  EXPECT_EQ(selected_snapshot.transform_revision,
+            document.transform_revision());
+  EXPECT_EQ(selected_snapshot.mesh_binding_revision,
+            document.mesh_binding_revision());
+  ASSERT_EQ(selected_snapshot.meshes.size(), 1u);
+  EXPECT_EQ(selected_snapshot.meshes.front().entity, selected_mesh);
+  EXPECT_EQ(selected_snapshot.meshes.front().mesh_id, triangle_mesh);
+  EXPECT_EQ(selected_snapshot.meshes.front().mesh_revision,
+            assets.mesh(triangle_mesh)->revision.value);
+
+  const RenderOverlaySelectedObjectSnapshot hidden_snapshot =
+      build_render_overlay_selected_object_snapshot(document, assets, false);
+  EXPECT_FALSE(hidden_snapshot.visible);
+  EXPECT_TRUE(hidden_snapshot.meshes.empty());
+
+  const RenderOverlaySceneWireframeSnapshot wireframe_snapshot =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 0x03u);
+
+  EXPECT_EQ(wireframe_snapshot.scene_revision, document.revision());
+  EXPECT_EQ(wireframe_snapshot.asset_revision, assets.revision());
+  EXPECT_EQ(wireframe_snapshot.layer_mask, 0x03u);
+  ASSERT_EQ(wireframe_snapshot.meshes.size(), 2u);
+  const auto authored_record =
+      std::find_if(wireframe_snapshot.meshes.begin(),
+                   wireframe_snapshot.meshes.end(),
+                   [wireframe_mesh](const RenderOverlayMeshSnapshot &record) {
+                     return record.entity == wireframe_mesh;
+                   });
+  ASSERT_NE(authored_record, wireframe_snapshot.meshes.end());
+  EXPECT_TRUE(authored_record->has_authored_polygon_geometry());
+
+  const ViewportOverlayFrame frame =
+      ViewportSceneOverlayBuilder::build_wireframe_frame(
+          {}, ModelingSelectionMode::Object, wireframe_snapshot);
+  EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::WireframeXray), 7u);
+}
+
+TEST(RenderOverlaySnapshotTests, SceneOverlayBuildersConsumeSnapshotsOnly) {
+  const std::string builder_source = read_source_file(
+      "src/render/overlay/viewport_scene_overlay_builder.cpp");
+  const std::string builder_header = read_source_file(
+      "src/render/overlay/viewport_scene_overlay_builder.hpp");
+  const std::string selected_cache_source = read_source_file(
+      "src/render/overlay/selected_object_overlay_cache.cpp");
+  const std::string wireframe_cache_source = read_source_file(
+      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
+  const std::string bridge_source =
+      read_source_file("src/render/scene_render_bridge.cpp");
+  const std::string bridge_header =
+      read_source_file("src/render/scene_render_bridge.hpp");
+  const std::string render_snapshot_header =
+      read_source_file("src/render/render_scene_snapshot.hpp");
+
+  EXPECT_EQ(builder_header.find("const SceneDocument &"), std::string::npos);
+  EXPECT_EQ(builder_header.find("const AssetRegistry &"), std::string::npos);
+  EXPECT_EQ(builder_source.find("build_render_overlay_selection_snapshot"),
+            std::string::npos);
+  EXPECT_EQ(builder_source.find("build_render_overlay_scene_wireframe_snapshot"),
+            std::string::npos);
+  EXPECT_NE(
+      builder_source.find("const RenderOverlaySelectionSnapshot &snapshot"),
+      std::string::npos);
+  EXPECT_NE(builder_source.find(
+                "const RenderOverlaySceneWireframeSnapshot &snapshot"),
+            std::string::npos);
+  EXPECT_NE(selected_cache_source.find(
+                "const RenderOverlaySelectedObjectSnapshot &snapshot"),
+            std::string::npos);
+  EXPECT_NE(wireframe_cache_source.find(
+                "const RenderOverlaySceneWireframeSnapshot &snapshot"),
+            std::string::npos);
+  EXPECT_EQ(bridge_header.find("const SceneDocument &"), std::string::npos);
+  EXPECT_EQ(bridge_header.find("const AssetRegistry &"), std::string::npos);
+  EXPECT_EQ(bridge_source.find("build_render_overlay_selected_object_snapshot"),
+            std::string::npos);
+  EXPECT_EQ(bridge_source.find("build_render_overlay_scene_wireframe_snapshot"),
+            std::string::npos);
+  EXPECT_NE(bridge_header.find("const RenderOverlaySelectedObjectSnapshot"),
+            std::string::npos);
+  EXPECT_NE(bridge_header.find("const RenderOverlaySceneWireframeSnapshot"),
+            std::string::npos);
+  EXPECT_NE(render_snapshot_header.find(
+                "using RenderSelectedObjectOverlaySnapshotRecord"),
+            std::string::npos);
+  EXPECT_NE(render_snapshot_header.find("using OverlaySnapshot"),
+            std::string::npos);
+}
+
+TEST(RenderSceneSnapshotTests, BuildsValueSpanRecordsAndTracksDirtyState) {
+  SceneDocument document;
+  AssetRegistry assets;
+
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const AssetId material =
+      assets.add_material(make_default_quader_material("Render Material"));
+  const EntityId renderable =
+      document.create_entity("Renderable", EntityKind::Mesh);
+  document.set_mesh(renderable, MeshComponent{.mesh = mesh,
+                                              .cast_shadows = false,
+                                              .double_sided = true});
+  document.set_material(renderable, MaterialComponent{.material = material});
+
+  const EntityId missing =
+      document.create_entity("Missing Mesh", EntityKind::Mesh);
+  document.set_mesh(missing, MeshComponent{.mesh = mesh + 1000u});
+
+  const EntityId hidden =
+      document.create_entity("Hidden Mesh", EntityKind::Mesh);
+  document.set_mesh(hidden, MeshComponent{.mesh = mesh});
+  document.set_visible(hidden, false);
+
+  const EntityId light = document.create_entity("Light", EntityKind::Light);
+  document.set_light(light, LightComponent{.type = LightType::Point});
+
+  const RenderSceneSnapshot initial =
+      build_render_scene_snapshot(document, assets, {.frame_index = 1u});
+  ASSERT_EQ(initial.meshes.size(), 2u);
+  ASSERT_EQ(initial.lights.size(), 1u);
+  EXPECT_EQ(initial.frame_index, 1u);
+  EXPECT_EQ(initial.scene_revision, document.revision());
+  EXPECT_EQ(initial.selection_revision, document.selection_revision());
+  EXPECT_EQ(initial.visibility_revision, document.visibility_revision());
+  EXPECT_EQ(initial.transform_revision, document.transform_revision());
+  EXPECT_EQ(initial.mesh_binding_revision, document.mesh_binding_revision());
+  EXPECT_EQ(initial.asset_revision, assets.revision());
+  EXPECT_TRUE(initial.dirty.any_dirty());
+
+  const auto renderable_record =
+      std::ranges::find_if(initial.meshes, [renderable](const auto &record) {
+        return record.entity_id == renderable;
+      });
+  ASSERT_NE(renderable_record, initial.meshes.end());
+  ASSERT_NE(assets.mesh(mesh), nullptr);
+  EXPECT_TRUE(renderable_record->renderable());
+  EXPECT_EQ(renderable_record->mesh.mesh_id, mesh);
+  EXPECT_EQ(renderable_record->mesh.mesh_revision,
+            assets.mesh(mesh)->revision.value);
+  EXPECT_EQ(renderable_record->mesh.vertices.data(),
+            assets.mesh(mesh)->vertices.data());
+  EXPECT_EQ(renderable_record->mesh.indices.size(),
+            assets.mesh(mesh)->indices.size());
+  EXPECT_EQ(renderable_record->material_id, material);
+  EXPECT_EQ(renderable_record->material_revision,
+            render_material_binding_signature(renderable_record->material));
+  EXPECT_NE(&renderable_record->mesh_component, document.mesh(renderable));
+  ASSERT_TRUE(renderable_record->material.present);
+  EXPECT_EQ(renderable_record->material.component.material, material);
+  EXPECT_FALSE(renderable_record->cast_shadows());
+  EXPECT_TRUE(renderable_record->double_sided());
+  EXPECT_TRUE(initial.live_mesh_entities.contains(renderable));
+
+  const auto missing_record =
+      std::ranges::find_if(initial.meshes, [missing](const auto &record) {
+        return record.entity_id == missing;
+      });
+  ASSERT_NE(missing_record, initial.meshes.end());
+  EXPECT_FALSE(missing_record->renderable());
+  EXPECT_FALSE(missing_record->mesh.present);
+  EXPECT_FALSE(initial.live_mesh_entities.contains(missing));
+  EXPECT_FALSE(initial.live_mesh_entities.contains(hidden));
+
+  EXPECT_EQ(initial.lights.front().entity_id, light);
+  EXPECT_EQ(initial.lights.front().rebuild_revision,
+            RenderSignatureBuilder::light_signature(
+                initial.lights.front().light));
+  EXPECT_TRUE(initial.live_light_entities.contains(light));
+
+  const RenderSceneSnapshot unchanged =
+      build_render_scene_snapshot(document, assets,
+                                  {.previous = &initial, .frame_index = 2u});
+  ASSERT_EQ(unchanged.meshes.size(), 2u);
+  EXPECT_EQ(unchanged.frame_index, 2u);
+  EXPECT_FALSE(unchanged.dirty.any_dirty());
+  EXPECT_FALSE(unchanged.meshes.front().mesh_dirty);
+  EXPECT_FALSE(unchanged.meshes.front().material_dirty);
+  EXPECT_FALSE(unchanged.meshes.front().transform_dirty);
+  EXPECT_FALSE(unchanged.meshes.front().binding_dirty);
+  EXPECT_FALSE(unchanged.lights.front().light_dirty);
+  EXPECT_FALSE(unchanged.lights.front().transform_dirty);
+
+  document.set_transform(renderable,
+                         TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+  const RenderSceneSnapshot moved =
+      build_render_scene_snapshot(document, assets,
+                                  {.previous = &unchanged, .frame_index = 3u});
+  const auto moved_record =
+      std::ranges::find_if(moved.meshes, [renderable](const auto &record) {
+        return record.entity_id == renderable;
+      });
+  ASSERT_NE(moved_record, moved.meshes.end());
+  EXPECT_TRUE(moved.dirty.scene_changed);
+  EXPECT_TRUE(moved.dirty.transforms_changed);
+  EXPECT_TRUE(moved_record->transform_dirty);
+  EXPECT_FALSE(moved_record->mesh_dirty);
+  EXPECT_FALSE(moved_record->material_dirty);
+  EXPECT_FALSE(moved_record->binding_dirty);
+
+  MeshAsset replacement = make_overlay_triangle_mesh();
+  replacement.vertices.front().rgba = 0xff00ffffu;
+  ASSERT_TRUE(assets.replace_mesh(mesh, std::move(replacement)));
+  const RenderSceneSnapshot replaced =
+      build_render_scene_snapshot(document, assets,
+                                  {.previous = &moved, .frame_index = 4u});
+  const auto replaced_record =
+      std::ranges::find_if(replaced.meshes, [renderable](const auto &record) {
+        return record.entity_id == renderable;
+      });
+  ASSERT_NE(replaced_record, replaced.meshes.end());
+  EXPECT_TRUE(replaced.dirty.assets_changed);
+  EXPECT_TRUE(replaced_record->mesh_dirty);
+  EXPECT_FALSE(replaced_record->transform_dirty);
 }
 
 TEST(LightRenderableCacheTests, SeparatesRebuildAndTransformSignatures) {
@@ -521,10 +934,10 @@ TEST(LightRenderableCacheTests, OwnsIncrementalLightSyncPolicy) {
   EXPECT_NE(
       source.find("kViewportPunctualLightExposureCompensation = 10000.0f"),
       std::string::npos);
-  EXPECT_NE(source.find("needs_rebuild(entity_id, light)"), std::string::npos);
-  EXPECT_NE(
-      source.find("update_light_transform(existing->second, world_transform)"),
-      std::string::npos);
+  EXPECT_NE(source.find("needs_rebuild(light)"), std::string::npos);
+  EXPECT_NE(source.find("update_light_transform(existing->second, "
+                        "light.world_transform)"),
+            std::string::npos);
   EXPECT_NE(source.find(".intensity(filament_intensity(light))"),
             std::string::npos);
   EXPECT_NE(source.find(".position(position_from_matrix(world_transform))"),
@@ -558,9 +971,11 @@ TEST(ViewportSceneOverlayBuilderTests, AddsHierarchySelectionWiresAndGroupBounds
         .source = ViewportOverlaySource::Selection,
     });
 
+    const RenderOverlaySelectionSnapshot snapshot =
+        build_render_overlay_selection_snapshot(document, assets);
     const ViewportOverlayFrame frame =
         ViewportSceneOverlayBuilder::build_selection_frame(
-            std::move(base_frame), document, assets);
+            std::move(base_frame), snapshot);
 
     EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 1u);
     EXPECT_EQ(
@@ -601,9 +1016,11 @@ TEST(ViewportSceneOverlayBuilderTests, AddsSelectedLightMarker) {
                        LightComponent{.type = LightType::Directional});
     ASSERT_TRUE(document.set_selected(selected_directional, true));
 
+    const RenderOverlaySelectionSnapshot snapshot =
+        build_render_overlay_selection_snapshot(document, assets);
     const ViewportOverlayFrame frame =
         ViewportSceneOverlayBuilder::build_selection_frame(
-            ViewportOverlayFrame{}, document, assets);
+            ViewportOverlayFrame{}, snapshot);
 
     EXPECT_EQ(point_count_for(frame, ViewportOverlayLayer::SelectedVertex), 2u);
     ASSERT_EQ(frame.points.size(), 2u);
@@ -656,9 +1073,12 @@ TEST(ViewportSceneOverlayBuilderTests, BuildsWireframeOverlayWithoutObjectFaceFi
         .source = ViewportOverlaySource::Tool,
     });
 
+    const RenderOverlaySceneWireframeSnapshot snapshot =
+        build_render_overlay_scene_wireframe_snapshot(
+            document, assets, static_cast<std::uint8_t>(0xffu));
     const ViewportOverlayFrame object_frame =
         ViewportSceneOverlayBuilder::build_wireframe_frame(
-            base_frame, ModelingSelectionMode::Object, document, assets);
+            base_frame, ModelingSelectionMode::Object, snapshot);
 
     EXPECT_EQ(triangle_count_for(object_frame,
                                  ViewportOverlayLayer::SelectedVisibleFace),
@@ -683,7 +1103,7 @@ TEST(ViewportSceneOverlayBuilderTests, BuildsWireframeOverlayWithoutObjectFaceFi
 
     const ViewportOverlayFrame face_frame =
         ViewportSceneOverlayBuilder::build_wireframe_frame(
-            base_frame, ModelingSelectionMode::Face, document, assets);
+            base_frame, ModelingSelectionMode::Face, snapshot);
 
     EXPECT_EQ(triangle_count_for(face_frame,
                                  ViewportOverlayLayer::SelectedVisibleFace),
@@ -707,9 +1127,12 @@ TEST(ViewportSceneOverlayBuilderTests, WireframeModeUsesAuthoredTopologyWithoutT
         document.create_entity("Authored Quad", EntityKind::Mesh);
     document.set_mesh(entity, MeshComponent{.mesh = mesh});
 
+    const RenderOverlaySceneWireframeSnapshot snapshot =
+        build_render_overlay_scene_wireframe_snapshot(
+            document, assets, static_cast<std::uint8_t>(0xffu));
     const ViewportOverlayFrame frame =
         ViewportSceneOverlayBuilder::build_wireframe_frame(
-            {}, ModelingSelectionMode::Object, document, assets);
+            {}, ModelingSelectionMode::Object, snapshot);
 
     EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::WireframeBase), 0u);
     EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::WireframeXray), 4u);

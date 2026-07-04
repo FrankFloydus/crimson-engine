@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 #include <array>
 
@@ -92,6 +92,8 @@ TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedEdgeElementsCreate
 	const OperationResult result = extrude_selected_elements(fixture.document, selection, { 0.0F, -0.5F, 0.0F });
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
         EXPECT_TRUE(selection.mode == SelectionMode::Edge);
         EXPECT_TRUE(selection.edges.size() == 1U);
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
@@ -115,6 +117,8 @@ TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedCircularBoundaryEd
 		const OperationResult result = extrude_selected_elements(fixture.document, selection, offset);
 
 		EXPECT_TRUE(result.changed);
+
+		qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
                 EXPECT_TRUE(selection.mode == SelectionMode::Edge);
                 EXPECT_TRUE(selection.edges.size() == fixture.inner_edges.size());
 		EXPECT_TRUE(fixture.document.faces.size() == 16U);

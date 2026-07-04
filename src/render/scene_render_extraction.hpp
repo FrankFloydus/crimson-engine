@@ -6,60 +6,53 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "assets/mesh_asset.hpp"
 #include "core/types.hpp"
 #include "math/types.hpp"
-#include "scene/components.hpp"
+#include "render/render_scene_snapshot.hpp"
 
 #include <cstdint>
-#include <unordered_set>
 #include <vector>
 
 namespace quader {
 
 class AssetRegistry;
-class MaterialBindingService;
-class MeshAsset;
 class SceneDocument;
 
 /**
- * Describes one scene mesh extracted for render sync.
+ * Captures a transient tool preview mesh before render material dependencies
+ * are expanded into a render-owned preview snapshot.
  */
-struct SceneRenderMeshEntry {
-  EntityId entity_id = kInvalidEntityId;
-  AssetId mesh_id = kInvalidAssetId;
-  const MeshAsset *mesh = nullptr;
-  const MeshComponent *mesh_component = nullptr;
-  const MaterialComponent *material_component = nullptr;
-  AssetId material_id = kInvalidAssetId;
-  std::uint64_t material_revision = 0;
-  QMat4 world_transform;
-
-  [[nodiscard]] bool renderable() const;
-  [[nodiscard]] bool cast_shadows() const;
-  [[nodiscard]] bool double_sided() const;
+struct ToolPreviewMesh {
+  EntityId source_entity = kInvalidEntityId;
+  AssetId material = kInvalidAssetId;
+  MeshAsset mesh;
+  QMat4 transform;
 };
 
-/**
- * Describes one scene light extracted for render sync.
- */
-struct SceneRenderLightEntry {
-  EntityId entity_id = kInvalidEntityId;
-  const LightComponent *light = nullptr;
-  QMat4 world_transform;
-};
+using SceneRenderMeshEntry = RenderSceneMeshRecord;
+using SceneRenderLightEntry = RenderSceneLightRecord;
+using SceneRenderExtractionPlan = RenderSceneSnapshot;
 
-/**
- * Shared render extraction plan consumed by cache invalidation and rebuild.
- */
-struct SceneRenderExtractionPlan {
-    std::vector<SceneRenderMeshEntry> meshes;
-    std::vector<SceneRenderLightEntry> lights;
-    std::unordered_set<EntityId> live_mesh_entities;
-    std::unordered_set<EntityId> live_light_entities;
-};
-
+[[nodiscard]] RenderMeshAssetSnapshot
+render_mesh_asset_snapshot(AssetId mesh_id, const MeshAsset &asset);
+[[nodiscard]] std::vector<MeshPrimitiveSpan>
+normalized_render_mesh_primitive_spans(const RenderMeshAssetSnapshot &mesh);
+[[nodiscard]] std::vector<MeshPrimitiveSpan>
+coalesced_render_mesh_primitive_spans(const RenderMeshAssetSnapshot &mesh);
+[[nodiscard]] RenderMaterialBindingSnapshot
+build_render_material_binding_snapshot(const AssetRegistry &assets,
+                                       const MaterialComponent *material);
+[[nodiscard]] std::uint64_t render_material_binding_signature(
+    const RenderMaterialBindingSnapshot &material);
+[[nodiscard]] RenderSceneSnapshot
+build_render_scene_snapshot(const SceneDocument &document,
+                            const AssetRegistry &assets,
+                            RenderSceneSnapshotBuildOptions options = {});
 [[nodiscard]] SceneRenderExtractionPlan build_scene_render_extraction_plan(
-    const SceneDocument &document, const AssetRegistry &assets,
-    const MaterialBindingService &material_binding);
+    const SceneDocument &document, const AssetRegistry &assets);
+[[nodiscard]] std::vector<RenderToolPreviewMeshRecord>
+build_render_tool_preview_snapshot(const std::vector<ToolPreviewMesh> &meshes,
+                                   const AssetRegistry &assets);
 
 } // namespace quader

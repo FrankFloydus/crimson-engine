@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 using namespace quader_poly;
 
@@ -45,6 +45,8 @@ TEST(QdrDocumentOperationKnifeStrokeTests, KnifeStrokeAppliesConnectedStrokeSegm
 	const OperationResult result = knife_stroke(fixture.document, selection, points, segments);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
         EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
         EXPECT_TRUE(selection.vertices.size() == 3U);
@@ -88,6 +90,8 @@ TEST(QdrDocumentOperationKnifeStrokeTests, KnifeStrokeSupportsTwoSplitPointsOnTh
 	const OperationResult result = knife_stroke(fixture.document, selection, points, segments);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
         EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
         EXPECT_TRUE(selection.vertices.size() == 3U);
@@ -133,6 +137,8 @@ TEST(QdrDocumentOperationKnifeStrokeTests, KnifeStrokeRoutesAdjacentFaceCutsThro
 	const OperationResult result = knife_stroke(document, selection, points, segments);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
         EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
         EXPECT_TRUE(selection.vertices.size() == 2U);
 	const auto boundary = std::find_if(document.vertices.begin(), document.vertices.end(), [](const Vertex& vertex) {

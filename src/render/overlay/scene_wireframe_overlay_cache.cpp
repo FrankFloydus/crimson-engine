@@ -6,18 +6,16 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
 
-#include "assets/asset_registry.hpp"
 #include "core/color_space.hpp"
 #include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
-#include "mesh/polygon/document.hpp"
+#include "mesh/polygon/document_model.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
 #include "render/filament_utils.hpp"
 #include "render/render_layers.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
 #include "render/overlay/overlay_mesh_types.hpp"
 #include "render/viewport_overlay_policy.hpp"
-#include "scene/scene_document.hpp"
 
 #include <backend/DriverEnums.h>
 #include <filament/Engine.h>
@@ -34,6 +32,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <span>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -158,40 +158,87 @@ void append_wireframe_line_quad(std::vector<SceneWireframeLineVertex> &vertices,
   indices.push_back(offset + 3u);
 }
 
+const RenderOverlayMeshSnapshot *find_wireframe_mesh_snapshot(
+    const std::vector<RenderOverlayMeshSnapshot> &meshes, EntityId entity) {
+  const auto found =
+      std::find_if(meshes.begin(), meshes.end(),
+                   [entity](const RenderOverlayMeshSnapshot &mesh) {
+                     return mesh.entity == entity;
+                   });
+  return found == meshes.end() ? nullptr : &*found;
+}
+
+filament::Box bounds_for_mesh_vertices(std::span<const MeshVertex> vertices) {
+  if (vertices.empty()) {
+    return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
+  }
+
+  QVec3 min_value{
+      std::numeric_limits<float>::max(),
+      std::numeric_limits<float>::max(),
+      std::numeric_limits<float>::max(),
+  };
+  QVec3 max_value{
+      std::numeric_limits<float>::lowest(),
+      std::numeric_limits<float>::lowest(),
+      std::numeric_limits<float>::lowest(),
+  };
+  for (const MeshVertex &vertex : vertices) {
+    min_value.x = std::min(min_value.x, vertex.position.x);
+    min_value.y = std::min(min_value.y, vertex.position.y);
+    min_value.z = std::min(min_value.z, vertex.position.z);
+    max_value.x = std::max(max_value.x, vertex.position.x);
+    max_value.y = std::max(max_value.y, vertex.position.y);
+    max_value.z = std::max(max_value.z, vertex.position.z);
+  }
+
+  filament::Box box;
+  box.set(to_filament(min_value), to_filament(max_value));
+  return box;
+}
+
 bool append_authored_polygon_wireframe_lines(
-    const MeshAsset &mesh, std::uint32_t color,
+    const RenderOverlayMeshSnapshot &mesh, std::uint32_t color,
     std::vector<SceneWireframeLineVertex> &vertices,
     std::vector<std::uint32_t> &indices) {
-  if (!mesh.has_authored_polygon_document || !mesh.authored_polygon_document) {
+  if (!mesh.has_authored_polygon_geometry()) {
     return false;
   }
 
-  const quader_poly::Document &document = *mesh.authored_polygon_document;
   std::unordered_map<quader_poly::ElementId, QVec3> positions;
-  positions.reserve(document.vertices.size());
-  for (const quader_poly::Vertex &vertex : document.vertices) {
+  positions.reserve(mesh.authored_vertices.size());
+  for (const quader_poly::Vertex &vertex : mesh.authored_vertices) {
     positions.emplace(vertex.id, vertex.position);
   }
 
   std::unordered_set<std::uint64_t> emitted_edges;
-  for (const quader_poly::Edge edge : quader_poly::document_edges(document)) {
-    const auto a = positions.find(edge.a);
-    const auto b = positions.find(edge.b);
-    if (a == positions.end() || b == positions.end()) {
+  for (const quader_poly::Face &face : mesh.authored_faces) {
+    if (face.vertices.size() < 2u) {
       continue;
     }
-    const std::uint64_t key = edge_key(static_cast<std::uint32_t>(edge.a),
-                                       static_cast<std::uint32_t>(edge.b));
-    if (!emitted_edges.insert(key).second) {
-      continue;
+    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+      const quader_poly::ElementId a_id = face.vertices[index];
+      const quader_poly::ElementId b_id =
+          face.vertices[(index + 1u) % face.vertices.size()];
+      const std::uint64_t key = edge_key(static_cast<std::uint32_t>(a_id),
+                                         static_cast<std::uint32_t>(b_id));
+      if (!emitted_edges.insert(key).second) {
+        continue;
+      }
+      const auto a = positions.find(a_id);
+      const auto b = positions.find(b_id);
+      if (a == positions.end() || b == positions.end()) {
+        continue;
+      }
+      append_wireframe_line_quad(vertices, indices, a->second, b->second,
+                                 color);
     }
-    append_wireframe_line_quad(vertices, indices, a->second, b->second, color);
   }
   return !emitted_edges.empty();
 }
 
 void append_triangle_mesh_wireframe_lines(
-    const MeshAsset &mesh, std::uint32_t color,
+    const RenderOverlayMeshSnapshot &mesh, std::uint32_t color,
     std::vector<SceneWireframeLineVertex> &vertices,
     std::vector<std::uint32_t> &indices) {
   std::unordered_set<std::uint64_t> emitted_edges;
@@ -221,7 +268,7 @@ create_proxy(filament::Engine &engine, filament::Scene &scene,
              ViewportOverlayLayer layer,
              const std::vector<SceneWireframeLineVertex> &vertices,
              const std::vector<std::uint32_t> &indices,
-             const MeshAsset &bounds_mesh, std::uint8_t layer_mask) {
+             const filament::Box &bounds, std::uint8_t layer_mask) {
   SceneWireframeOverlayCache::Proxy proxy;
   if (vertices.empty() || indices.empty()) {
     return proxy;
@@ -286,7 +333,7 @@ create_proxy(filament::Engine &engine, filament::Scene &scene,
       .blendOrder(0, state.blend_order)
       .globalBlendOrderEnabled(0, true)
       .layerMask(kViewportAllLayerMask, layer_mask)
-      .boundingBox(compute_bounds(bounds_mesh))
+      .boundingBox(bounds)
       .culling(false)
       .castShadows(false)
       .receiveShadows(false)
@@ -354,32 +401,29 @@ void SceneWireframeOverlayCache::shutdown() {
     line_material_ = nullptr;
 }
 
-void SceneWireframeOverlayCache::sync(const SceneDocument &document,
-                                      const AssetRegistry &assets,
-                                      std::uint8_t layer_mask) {
+void SceneWireframeOverlayCache::sync(
+    const RenderOverlaySceneWireframeSnapshot &snapshot) {
   QDR_PROFILE_FUNCTION();
   if (!initialized()) {
     return;
   }
 
-  set_layer_mask(layer_mask);
-  if (layer_mask == 0u) {
+  set_layer_mask(snapshot.layer_mask);
+  if (snapshot.layer_mask == 0u) {
     return;
   }
 
-  const std::uint64_t scene_revision = document.revision();
-  const std::uint64_t asset_revision = assets.revision();
-  if (has_synced_ && synced_scene_revision_ == scene_revision &&
-      synced_asset_revision_ == asset_revision) {
+  if (has_synced_ && synced_scene_revision_ == snapshot.scene_revision &&
+      synced_asset_revision_ == snapshot.asset_revision) {
     return;
   }
 
   const std::vector<WireframeEntityState> states =
-      wireframe_entity_states(document, assets);
-  if (has_synced_ && synced_asset_revision_ == asset_revision &&
+      wireframe_entity_states(snapshot);
+  if (has_synced_ && synced_asset_revision_ == snapshot.asset_revision &&
       states == synced_states_) {
-    update_entry_transforms(document);
-    synced_scene_revision_ = scene_revision;
+    update_entry_transforms(snapshot);
+    synced_scene_revision_ = snapshot.scene_revision;
     return;
   }
 
@@ -399,89 +443,81 @@ void SceneWireframeOverlayCache::sync(const SceneDocument &document,
         destroy_entry(existing->second);
         entries_.erase(existing);
       }
-      Entry entry = create_entry(state.entity, state.mesh_id, state.selected,
-                                 document, assets);
+      const RenderOverlayMeshSnapshot *mesh =
+          find_wireframe_mesh_snapshot(snapshot.meshes, state.entity);
+      if (mesh == nullptr) {
+        continue;
+      }
+      Entry entry = create_entry(*mesh);
       existing = entries_.emplace(state.entity, std::move(entry)).first;
     }
-    update_entry_transform(existing->second, document, state.entity);
+    const RenderOverlayMeshSnapshot *mesh =
+        find_wireframe_mesh_snapshot(snapshot.meshes, state.entity);
+    if (mesh != nullptr) {
+      update_entry_transform(existing->second, mesh->world_transform);
+    }
   }
 
   remove_except(live_entities);
   synced_states_ = states;
-  synced_scene_revision_ = scene_revision;
-  synced_asset_revision_ = asset_revision;
+  synced_scene_revision_ = snapshot.scene_revision;
+  synced_asset_revision_ = snapshot.asset_revision;
   has_synced_ = true;
 }
 
 std::vector<SceneWireframeOverlayCache::WireframeEntityState>
 SceneWireframeOverlayCache::wireframe_entity_states(
-    const SceneDocument &document, const AssetRegistry &assets) const {
+    const RenderOverlaySceneWireframeSnapshot &snapshot) const {
   QDR_PROFILE_FUNCTION();
   std::vector<WireframeEntityState> states;
-  const std::vector<EntityId> entities = document.entities();
-  states.reserve(entities.size());
-  for (const EntityId entity_id : entities) {
-    if (!document.is_effectively_visible(entity_id)) {
-      continue;
-    }
-    const MeshComponent *mesh_component = document.mesh(entity_id);
-    if (mesh_component == nullptr || mesh_component->mesh == kInvalidAssetId) {
-      continue;
-    }
-    const MeshAsset *mesh = assets.mesh(mesh_component->mesh);
-    if (mesh == nullptr || mesh->vertices.empty() ||
-        mesh->indices.size() < 3u) {
+  states.reserve(snapshot.meshes.size());
+  for (const RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
+    if (!mesh.has_triangle_geometry() || mesh.mesh_id == kInvalidAssetId) {
       continue;
     }
     states.push_back({
-        .entity = entity_id,
-        .mesh_id = mesh_component->mesh,
-        .mesh_revision = mesh->revision.value,
-        .selected =
-            [&]() {
-              const SelectionComponent *selection =
-                  document.selection(entity_id);
-              return selection != nullptr && selection->selected;
-            }(),
+        .entity = mesh.entity,
+        .mesh_id = mesh.mesh_id,
+        .mesh_revision = mesh.mesh_revision,
+        .selected = mesh.selected,
     });
   }
   return states;
 }
 
 SceneWireframeOverlayCache::Entry SceneWireframeOverlayCache::create_entry(
-    EntityId entity_id, AssetId mesh_id, bool selected,
-    const SceneDocument &document, const AssetRegistry &assets) {
+    const RenderOverlayMeshSnapshot &mesh) {
   QDR_PROFILE_FUNCTION();
   Entry entry;
-  entry.mesh_id = mesh_id;
-  const MeshAsset *mesh = assets.mesh(mesh_id);
-  if (mesh == nullptr || mesh->vertices.empty() || mesh->indices.size() < 3u) {
+  entry.mesh_id = mesh.mesh_id;
+  if (!mesh.has_triangle_geometry()) {
     return entry;
   }
-  entry.mesh_revision = mesh->revision.value;
-  entry.selected = selected;
+  entry.mesh_revision = mesh.mesh_revision;
+  entry.selected = mesh.selected;
   entry.transform_root = utils::EntityManager::get().create();
   filament::TransformManager &transforms = engine_->getTransformManager();
   transforms.create(entry.transform_root);
   const filament::TransformManager::Instance parent_transform =
       transforms.getInstance(entry.transform_root);
 
-  const ViewportOverlayLayer layer = selected
+  const ViewportOverlayLayer layer = mesh.selected
                                          ? ViewportOverlayLayer::SelectedEdge
                                          : ViewportOverlayLayer::WireframeXray;
   const std::uint32_t color =
-      selected ? kOverlaySelectionWireColor : kOverlayWireframeXrayColor;
+      mesh.selected ? kOverlaySelectionWireColor : kOverlayWireframeXrayColor;
   std::vector<SceneWireframeLineVertex> line_vertices;
   std::vector<std::uint32_t> line_indices;
-  if (!append_authored_polygon_wireframe_lines(*mesh, color, line_vertices,
+  if (!append_authored_polygon_wireframe_lines(mesh, color, line_vertices,
                                                line_indices)) {
-    append_triangle_mesh_wireframe_lines(*mesh, color, line_vertices,
+    append_triangle_mesh_wireframe_lines(mesh, color, line_vertices,
                                          line_indices);
   }
+  const filament::Box bounds = bounds_for_mesh_vertices(mesh.vertices);
   entry.line_proxy =
       create_proxy(*engine_, *scene_, *line_material_, parent_transform, layer,
-                   line_vertices, line_indices, *mesh, layer_mask_);
-  update_entry_transform(entry, document, entity_id);
+                   line_vertices, line_indices, bounds, layer_mask_);
+  update_entry_transform(entry, mesh.world_transform);
   return entry;
 }
 
@@ -558,8 +594,7 @@ void SceneWireframeOverlayCache::set_layer_mask(std::uint8_t layer_mask) {
 }
 
 void SceneWireframeOverlayCache::update_entry_transform(
-    const Entry &entry, const SceneDocument &document,
-    EntityId entity_id) const {
+    const Entry &entry, const QMat4 &world_transform) const {
   if (!engine_ || !entry.transform_root) {
     return;
   }
@@ -570,12 +605,11 @@ void SceneWireframeOverlayCache::update_entry_transform(
     transforms.create(entry.transform_root);
     instance = transforms.getInstance(entry.transform_root);
   }
-  transforms.setTransform(
-      instance, make_transform(document.world_transform_matrix(entity_id)));
+  transforms.setTransform(instance, make_transform(world_transform));
 }
 
 void SceneWireframeOverlayCache::update_entry_transforms(
-    const SceneDocument &document) {
+    const RenderOverlaySceneWireframeSnapshot &snapshot) {
   QDR_PROFILE_FUNCTION();
   if (!engine_) {
     return;
@@ -585,7 +619,11 @@ void SceneWireframeOverlayCache::update_entry_transforms(
   for (const WireframeEntityState &state : synced_states_) {
     const auto existing = entries_.find(state.entity);
     if (existing != entries_.end()) {
-      update_entry_transform(existing->second, document, state.entity);
+      const RenderOverlayMeshSnapshot *mesh =
+          find_wireframe_mesh_snapshot(snapshot.meshes, state.entity);
+      if (mesh != nullptr) {
+        update_entry_transform(existing->second, mesh->world_transform);
+      }
     }
   }
   transforms.commitLocalTransformTransaction();

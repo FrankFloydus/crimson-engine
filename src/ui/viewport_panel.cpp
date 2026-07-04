@@ -16,8 +16,8 @@
 #include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
+#include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
-#include "render/overlay/viewport_scene_overlay_builder.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
 #include "render/overlay/viewport_transform_gizmo_overlay_builder.hpp"
@@ -36,6 +36,7 @@
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_settings.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
+#include "editor/tools/viewport_tool_ports.hpp"
 
 #include <algorithm>
 #include <array>
@@ -75,7 +76,8 @@ overlay_selection_context(ModelingSelectionMode mode) {
 
 bool should_defer_pane_render_resize(const UIContext &ui_context,
                                      const ViewportRenderer &renderer) {
-  return ui_context.viewport_render_resize_suspended &&
+  return ui_context.viewport != nullptr &&
+         ui_context.viewport->render_resize_suspended &&
          renderer.texture_handle() != kInvalidRenderTextureHandle &&
          renderer.overlay_texture_handle() != kInvalidRenderTextureHandle;
 }
@@ -347,7 +349,7 @@ ModelingBoxToolEvent modeling_box_event(const ViewportCameraController &camera,
   };
 }
 
-void focus_document(SceneDocument &document, const AssetRegistry &assets,
+void focus_document(const SceneDocument &document, const AssetRegistry &assets,
                     ViewportCameraController &camera) {
   std::optional<SceneBounds> bounds = selected_world_bounds(document, assets);
   if (!bounds) {
@@ -731,9 +733,8 @@ void ViewportPanel::initialize(RenderSystem &render_system) {
     if (pane_state.initialized) {
       continue;
     }
-    pane_state.renderer.initialize(
-        render_system.engine(), render_system.scene(), render_system.textures(),
-        render_system.ground_grid_material(),
+    render_system.initialize_viewport_renderer(
+        pane_state.renderer,
         viewport_grid_layer_mask(viewport_pane_index(pane_state.id)));
     pane_state.initialized = true;
   }
@@ -760,6 +761,7 @@ void ViewportPanel::shutdown() {
 }
 
 void ViewportPanel::prepare_viewports(ViewportWorkspaceService &workspace,
+                                      QuaderEditorApi &editor,
                                       SceneRenderBridge &render_bridge,
                                       const SceneDocument &document,
                                       const AssetRegistry &assets) {
@@ -779,9 +781,6 @@ void ViewportPanel::prepare_viewports(ViewportWorkspaceService &workspace,
           ? selection_overlay_cache_.key().selection_mode
           : viewport_selection_mode_to_app(
                 input_router_.state().selection_mode);
-  render_bridge.sync_selected_object_overlay(
-      document, assets,
-      overlays_visible && cached_overlay_mode == ModelingSelectionMode::Object);
   std::uint8_t wireframe_layer_mask = 0u;
   for (ViewportPaneId pane_id : active_render_panes_) {
     const ViewportWorkspacePaneState &pane_workspace = workspace.pane(pane_id);
@@ -792,8 +791,14 @@ void ViewportPanel::prepare_viewports(ViewportWorkspaceService &workspace,
           viewport_grid_layer_mask(viewport_pane_index(pane_id)));
     }
   }
-  render_bridge.sync_scene_wireframe_overlay(document, assets,
-                                             wireframe_layer_mask);
+  (void)QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
+      editor.render(), render_bridge,
+      QuaderRenderSceneOverlaySyncRequest{
+          .selected_object_overlay_visible =
+              overlays_visible &&
+              cached_overlay_mode == ModelingSelectionMode::Object,
+          .scene_wireframe_layer_mask = wireframe_layer_mask,
+      });
   for (ViewportPaneId pane_id : active_render_panes_) {
     QDR_PROFILE_SCOPE("Viewport prepare pane");
     Pane &pane_state = pane(pane_id);
@@ -826,11 +831,15 @@ void ViewportPanel::prepare_viewports(ViewportWorkspaceService &workspace,
         overlays_visible && selection_overlay_cache_.valid()
             ? selection_overlay_cache_.frame()
             : ViewportOverlayFrame{};
-    if (pane_workspace.shading == ViewportShadingMode::Wireframe) {
-      QDR_PROFILE_SCOPE("Viewport strip wireframe selection fills");
-      overlay_frame =
-          ViewportSceneOverlayBuilder::strip_wireframe_selection_fills(
-              std::move(overlay_frame), cached_overlay_mode);
+    if (overlays_visible && selection_overlay_cache_.valid()) {
+      QDR_PROFILE_SCOPE("Viewport build render-owned scene overlay frame");
+      overlay_frame = QuaderRenderApiRuntimeAccess::build_scene_overlay_frame(
+          editor.render(), render_bridge, std::move(overlay_frame),
+          ViewportSceneOverlayFrameRequest{
+              .selection_mode = cached_overlay_mode,
+              .wireframe_pane =
+                  pane_workspace.shading == ViewportShadingMode::Wireframe,
+          });
     }
     if (pane_id == interaction_pane_id_) {
       const ViewportOverlayCamera overlay_camera =
@@ -865,7 +874,7 @@ void ViewportPanel::prepare_viewports(ViewportWorkspaceService &workspace,
   }
 }
 
-void ViewportPanel::render_viewports(filament::Renderer &renderer) {
+void ViewportPanel::render_viewports(RenderSystem &render_system) {
   QDR_PROFILE_FUNCTION();
   for (ViewportPaneId pane_id : active_render_panes_) {
     QDR_PROFILE_SCOPE("Viewport render pane");
@@ -874,7 +883,7 @@ void ViewportPanel::render_viewports(filament::Renderer &renderer) {
         !workspace_->pane_visible(pane_id)) {
       continue;
     }
-    pane_state.renderer.render(renderer);
+    render_system.render_viewport(pane_state.renderer);
   }
 }
 
@@ -1115,12 +1124,16 @@ const ViewportSettings &ViewportPanel::active_viewport_settings() const {
 }
 
 void ViewportPanel::draw(UIContext& context) {
-  viewport_settings_ = &context.viewport_settings;
-  draw(context.render_bridge, context.document, context.assets,
-       context.modeling, context.default_material,
-       context.viewport_relative_mouse_delta,
-       context.viewport_cursor_capture_requested,
-       context.viewport_cursor_capture_point, context);
+  if (context.viewport == nullptr) {
+    return;
+  }
+  UIViewportSurfaceContext &viewport = *context.viewport;
+  viewport_settings_ = &context.preferences.viewport;
+  draw(viewport.render_bridge, viewport.document, viewport.assets,
+       viewport.modeling, viewport.default_material,
+       viewport.relative_mouse_delta,
+       viewport.cursor_capture_requested,
+       viewport.cursor_capture_point, context);
 }
 
 void ViewportPanel::draw(SceneRenderBridge &render_bridge,
@@ -1140,10 +1153,11 @@ void ViewportPanel::draw(SceneRenderBridge &render_bridge,
                                         ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::PopStyleVar(2);
   ViewportWorkspaceService &viewport_workspace =
-      QuaderViewportApiRuntimeAccess::workspace(ui_context.editor.viewports());
+      QuaderViewportApiRuntimeAccess::workspace(
+          ui_context.intent.editor.viewports());
   workspace_ = &viewport_workspace;
   input_router_.sync_grid_preset_snapshot(viewport_workspace.grid_preset());
-  sync_active_tool_from_editor(ui_context.editor, modeling);
+  sync_active_tool_from_editor(ui_context.intent.editor, modeling);
   if (!visible) {
     for (Pane &pane_state : panes_) {
       render_bridge.set_overlay_frame(
@@ -1152,8 +1166,9 @@ void ViewportPanel::draw(SceneRenderBridge &render_bridge,
           ViewportCameraAdapter::overlay_camera(
               viewport_workspace.camera(pane_state.id), {1.0f, 1.0f}));
     }
-    render_bridge.sync_selected_object_overlay(document, assets, false);
-    render_bridge.sync_scene_wireframe_overlay(document, assets, 0u);
+    (void)QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
+        ui_context.intent.editor.render(), render_bridge,
+        QuaderRenderSceneOverlaySyncRequest{});
     last_fly_navigation_active_ = false;
     viewport_workspace.clear_pane_visibility();
     active_render_panes_.clear();
@@ -1297,8 +1312,9 @@ void ViewportPanel::draw(SceneRenderBridge &render_bridge,
       continue;
     }
     draw_pane_decorations(*draw_pane.pane, document, assets, modeling,
-                          ui_context.selection, ui_context.editor,
-                          draw_pane.item_min, draw_pane.item_size);
+                          ui_context.viewport->selection,
+                          ui_context.intent.editor, draw_pane.item_min,
+                          draw_pane.item_size);
   }
   if (active_viewport_settings().bool_value(ViewportBoolSettingId::ShowInfo)) {
     for (const DrawPane &draw_pane : draw_panes) {
@@ -1310,7 +1326,7 @@ void ViewportPanel::draw(SceneRenderBridge &render_bridge,
       break;
     }
   }
-  refresh_cached_selection_overlay_frame(document, assets, modeling);
+  refresh_cached_selection_overlay_frame(modeling, document, assets);
   ImGui::SetCursorScreenPos({canvas_min.x, canvas_min.y + available.y});
   ImGui::End();
 }
@@ -1360,11 +1376,14 @@ void ViewportPanel::draw_viewport_info_overlay(const SceneDocument &document,
     viewport_info_scene_stats_valid_ = true;
   }
   const RenderFramePerformanceStats &render_stats =
-      ui_context.render_performance;
+      ui_context.viewport->render_performance;
 
-  const bool fps_available = ui_context.frame_timing.raw_delta_seconds > 0.0001;
+  const bool fps_available =
+      ui_context.viewport->frame_timing.raw_delta_seconds > 0.0001;
   const double fps =
-      fps_available ? 1.0 / ui_context.frame_timing.raw_delta_seconds : 0.0;
+      fps_available ? 1.0 /
+                          ui_context.viewport->frame_timing.raw_delta_seconds
+                    : 0.0;
 
   const std::string unavailable =
       ui_context.localization.text("ui.viewport.info.unavailable", "--");
@@ -1405,8 +1424,8 @@ void ViewportPanel::draw_viewport_info_overlay(const SceneDocument &document,
 }
 
 void ViewportPanel::refresh_cached_selection_overlay_frame(
-    const SceneDocument &document, const AssetRegistry &assets,
-    ModelingSessionService &modeling) {
+    ModelingSessionService &modeling, const SceneDocument &document,
+    const AssetRegistry &assets) {
   const ModelingSelectionSummary overlay_summary = [&]() {
     QDR_PROFILE_SCOPE("Viewport selection overlay summary");
     return modeling.selection_summary();
@@ -1441,12 +1460,7 @@ void ViewportPanel::refresh_cached_selection_overlay_frame(
           QDR_PROFILE_SCOPE("Viewport selection overlay source frame");
           return modeling.selection_overlay_frame(overlay_options);
         }();
-        ViewportOverlayFrame frame = [&]() {
-            QDR_PROFILE_SCOPE("Viewport selection overlay project frame");
-            return ViewportSceneOverlayBuilder::build_selection_frame(
-                std::move(source_frame), document, assets);
-        }();
-        selection_overlay_cache_.update(std::move(frame), key);
+        selection_overlay_cache_.update(std::move(source_frame), key);
       };
 
   switch (refresh_reason) {
@@ -1524,12 +1538,14 @@ void ViewportPanel::draw_pane_contents(
   QDR_PROFILE_FUNCTION();
   ViewportWorkspaceService &viewport_workspace = workspace();
   ViewportCameraController &camera = viewport_workspace.camera(pane_state.id);
+  ViewportModelingToolPortAdapter preview_port_adapter(modeling);
+  ViewportToolPorts preview_ports = preview_port_adapter.ports();
   const ImVec2 item_max{item_min.x + item_size.x, item_min.y + item_size.y};
   const ViewportFocusState focus_state =
       focus_controller_.resolve(focus_hovered, ui_context, UIPanelId::Viewport);
   auto modal_tool_owns_viewport = [&]() {
     return input_router_.active_tool_owns_viewport() ||
-           input_router_.has_active_modal_preview() ||
+           input_router_.has_active_modal_preview(*preview_ports.preview) ||
            modeling.modal_tool_owns_viewport();
   };
 
@@ -1547,7 +1563,7 @@ void ViewportPanel::draw_pane_contents(
         .use_captured_mouse_delta = use_captured_mouse_delta,
         .captured_mouse_delta = captured_mouse_delta,
         .delta_seconds = static_cast<float>(
-            std::max(ui_context.frame_timing.delta_seconds, 0.0)),
+            std::max(ui_context.viewport->frame_timing.delta_seconds, 0.0)),
     });
   }
   const ModelingToolSettingsTarget tool_settings_target =
@@ -1556,7 +1572,11 @@ void ViewportPanel::draw_pane_contents(
   input.fly_navigation_active = input_router_.fly_navigating();
   input.orbit_navigation_active = input_router_.orbit_navigating();
   input.pan_navigation_active = input_router_.pan_navigating();
-  input.modal_tool_active = input_router_.has_active_modal_preview() ||
+  input.modal_tool_active = input_router_.has_active_modal_preview(
+                                *preview_ports.preview,
+                                viewport_grid_snap_active(
+                                    active_viewport_settings(),
+                                    input.modifiers.primary)) ||
                             modeling.modal_tool_owns_viewport();
   input.active_tool_owns_viewport = input_router_.active_tool_owns_viewport();
   input.operation_preview_active =
@@ -1564,8 +1584,9 @@ void ViewportPanel::draw_pane_contents(
   input.grid_preset = viewport_workspace.grid_preset();
   {
     QDR_PROFILE_SCOPE("Viewport resolve keybindings");
-    resolve_keybindings_for_frame(ui_context.editor, input_router_.state(),
-                                  input, ui_context.command_shortcut_consumed);
+    resolve_keybindings_for_frame(ui_context.intent.editor,
+                                  input_router_.state(), input,
+                                  ui_context.command_shortcut_consumed);
   }
   const ViewportInputResult result = [&]() {
     QDR_PROFILE_SCOPE("Viewport route input frame");
@@ -1573,7 +1594,7 @@ void ViewportPanel::draw_pane_contents(
   }();
   const ViewportShortcutControllerResult operation_preview_shortcut =
       shortcut_controller_.handle_operation_preview_shortcut(
-          result, tool_settings_target, ui_context.editor);
+          result, tool_settings_target, ui_context.intent.editor);
   const bool operation_preview_shortcut_consumed =
       operation_preview_shortcut.consumed;
   if (operation_preview_shortcut.invalidate_hover) {
@@ -1663,16 +1684,16 @@ void ViewportPanel::draw_pane_contents(
       result.shortcut.kind == ViewportShortcutKind::SetSelectionMode;
   if (selection_mode_shortcut_handled) {
     const QuaderApiVoidResult command =
-        ui_context.editor.selection().set_mode(to_api_selection_mode(
+        ui_context.intent.editor.selection().set_mode(to_api_selection_mode(
             viewport_selection_mode_to_app(result.shortcut.selection_mode)));
     if (!command.ok) {
       LOG_ERROR("Selection mode change failed: {}", command.message);
     }
     input_router_.set_selection_mode(
         app_selection_mode_to_viewport(to_modeling_selection_mode(
-            ui_context.editor.selection().summary().mode)));
+            ui_context.intent.editor.selection().summary().mode)));
     input_router_.clear_modal_drag_state();
-    interaction_controller_.reset(&ui_context.editor);
+    interaction_controller_.reset(&ui_context.intent.editor);
     hover_controller_.invalidate();
     selection_overlay_cache_.mark_dirty();
   }
@@ -1680,12 +1701,12 @@ void ViewportPanel::draw_pane_contents(
     LOG_INFO("Viewport tool changed to {}",
              viewport_tool_id(input_router_.state().active_tool));
     input_router_.clear_modal_drag_state();
-    interaction_controller_.reset(&ui_context.editor);
+    interaction_controller_.reset(&ui_context.intent.editor);
     hover_controller_.invalidate();
     selection_overlay_cache_.mark_dirty();
     const ViewportTool *active_tool = input_router_.active_tool();
     const QuaderApiVoidResult command =
-        active_tool != nullptr ? ui_context.editor.tools().activate(
+        active_tool != nullptr ? ui_context.intent.editor.tools().activate(
                                      input_router_.state().active_tool)
                                : QuaderApiVoidResult{
                                      .ok = false,
@@ -1695,11 +1716,11 @@ void ViewportPanel::draw_pane_contents(
     if (!command.ok) {
       LOG_ERROR("Viewport tool activation failed: {}", command.message);
       input_router_.set_active_tool(ViewportToolId::Select);
-      (void)ui_context.editor.tools().activate(ViewportToolId::Select);
+      (void)ui_context.intent.editor.tools().activate(ViewportToolId::Select);
     } else {
       input_router_.set_selection_mode(
           app_selection_mode_to_viewport(to_modeling_selection_mode(
-              ui_context.editor.selection().summary().mode)));
+              ui_context.intent.editor.selection().summary().mode)));
     }
     input_router_.clear_modal_tool_state();
   }
@@ -1707,11 +1728,11 @@ void ViewportPanel::draw_pane_contents(
   if (!operation_preview_shortcut_consumed) {
     const ViewportShortcutControllerResult shortcut =
         shortcut_controller_.handle_modeling_shortcut(result,
-                                                      ui_context.editor);
+                                                      ui_context.intent.editor);
     if (shortcut.command_executed) {
       input_router_.set_selection_mode(
           app_selection_mode_to_viewport(to_modeling_selection_mode(
-              ui_context.editor.selection().summary().mode)));
+              ui_context.intent.editor.selection().summary().mode)));
     }
     if (shortcut.invalidate_hover) {
       hover_controller_.invalidate();
@@ -1723,7 +1744,8 @@ void ViewportPanel::draw_pane_contents(
   if (!operation_preview_shortcut_consumed && result.shortcut_handled &&
       result.shortcut.kind == ViewportShortcutKind::DeletePopup) {
     const ModelingSelectionSummary delete_summary =
-        to_modeling_selection_summary(ui_context.editor.selection().summary());
+        to_modeling_selection_summary(
+            ui_context.intent.editor.selection().summary());
     if (delete_summary.mode == ModelingSelectionMode::Object ||
         delete_summary.mode == ModelingSelectionMode::Group ||
         scene_aware_delete_has_selected_root(document)) {
@@ -1737,17 +1759,20 @@ void ViewportPanel::draw_pane_contents(
   }
 
   auto cancel_active_modal_tool = [&](bool exit_tool) {
+    ViewportModelingToolPortCallbacks cancel_callbacks;
+    cancel_callbacks.invalidate_hover = [&]() { hover_controller_.invalidate(); };
+    cancel_callbacks.mark_overlay_dirty = [&]() {
+      selection_overlay_cache_.mark_dirty();
+    };
+    ViewportModelingToolPortAdapter cancel_ports(modeling,
+                                                 std::move(cancel_callbacks));
     ViewportToolContext tool_context{
         .state = const_cast<ViewportToolState &>(input_router_.state()),
         .camera = camera,
-        .modeling = modeling,
+        .ports = cancel_ports.ports(),
     };
     tool_context.set_active_tool = [&](ViewportToolId tool) {
       input_router_.set_active_tool(tool);
-    };
-    tool_context.invalidate_hover = [&]() { hover_controller_.invalidate(); };
-    tool_context.mark_overlay_dirty = [&]() {
-      selection_overlay_cache_.mark_dirty();
     };
     (void)input_router_.handle_active_tool_event(
         tool_context, ViewportToolEvent{
@@ -1755,7 +1780,7 @@ void ViewportPanel::draw_pane_contents(
                           .tool = input_router_.state().active_tool,
                           .exit_active_modal_tool = exit_tool,
                       });
-    interaction_controller_.reset(&ui_context.editor);
+    interaction_controller_.reset(&ui_context.intent.editor);
     hover_controller_.invalidate();
     selection_overlay_cache_.mark_dirty();
   };
@@ -1763,7 +1788,8 @@ void ViewportPanel::draw_pane_contents(
   bool cancel_consumed = false;
   if (!operation_preview_shortcut_consumed && result.cancel_requested) {
     if (interaction_controller_.dragging()) {
-      (void)interaction_controller_.cancel_active_drag(ui_context.editor);
+      (void)interaction_controller_.cancel_active_drag(
+          ui_context.intent.editor);
       selection_overlay_cache_.mark_dirty();
       cancel_consumed = true;
     }
@@ -1814,7 +1840,7 @@ void ViewportPanel::draw_pane_contents(
     QDR_PROFILE_SCOPE("Viewport before tool interaction");
     return cancel_consumed ? ViewportBeforeToolInteractionResult{}
                            : interaction_controller_.handle_before_active_tool(
-                                 ui_context.editor, interaction_frame);
+                                 ui_context.intent.editor, interaction_frame);
   }();
   if (interaction_controller_.dragging() || before_tool.gizmo_consumed) {
     interaction_pane_id_ = pane_state.id;
@@ -1845,7 +1871,8 @@ void ViewportPanel::draw_pane_contents(
   }
 
   const ModelingSelectionSummary hover_selection_summary =
-      to_modeling_selection_summary(ui_context.editor.selection().summary());
+      to_modeling_selection_summary(
+          ui_context.intent.editor.selection().summary());
   auto make_viewport_hover_work_key = [&](bool consumed_by_gizmo) {
     const ViewportSettings &settings = active_viewport_settings();
     return hover_controller_.make_key(
@@ -1854,7 +1881,13 @@ void ViewportPanel::draw_pane_contents(
             .pane_id = pane_state.id,
             .active_tool = input_router_.state().active_tool,
             .selection_mode = input_router_.state().selection_mode,
-            .box_drag_state = input_router_.box_preview().drag_state,
+            .box_drag_state =
+                input_router_
+                    .box_preview(
+                        *preview_ports.preview,
+                        viewport_grid_snap_active(settings,
+                                                  input.modifiers.primary))
+                    .drag_state,
             .grid_preset = input_router_.state().grid_preset,
             .mouse_local = input.mouse_local,
             .viewport_size = input.viewport_size,
@@ -1929,8 +1962,8 @@ void ViewportPanel::draw_pane_contents(
   box_tool_context.commit_preview =
       [&](std::string name, AssetId material) {
         const QuaderApiResult<QuaderModelingObjectRef> result =
-            ui_context.editor.modeling().commit_box_preview(std::move(name),
-                                                            material);
+            ui_context.intent.editor.modeling().commit_box_preview(
+                std::move(name), material);
         ModelingCreateBoxResult committed{
                 .ok = result.ok,
                 .changed = result.changed,
@@ -1966,38 +1999,42 @@ void ViewportPanel::draw_pane_contents(
                                     item_size);
       };
 
-  ViewportToolContext tool_context{
-      .state = const_cast<ViewportToolState &>(input_router_.state()),
-      .camera = camera,
-      .modeling = modeling,
-      .document = &document,
-      .settings = &active_viewport_settings(),
-      .box = &box_tool_context,
-      .point = &point_tool_context,
-  };
-  tool_context.claim_hover = claim_tool_hover;
-  tool_context.invalidate_hover = [&]() { hover_controller_.invalidate(); };
-  tool_context.mark_overlay_dirty = [&]() {
+  ViewportModelingToolPortCallbacks tool_port_callbacks;
+  tool_port_callbacks.claim_hover = claim_tool_hover;
+  tool_port_callbacks.invalidate_hover = [&]() { hover_controller_.invalidate(); };
+  tool_port_callbacks.mark_overlay_dirty = [&]() {
     selection_overlay_cache_.mark_dirty();
   };
-  tool_context.set_active_tool = [&](ViewportToolId tool) {
-    input_router_.set_active_tool(tool);
-  };
-  tool_context.set_selection_mode = [&](ViewportSelectionMode mode) {
+  tool_port_callbacks.set_selection_mode = [&](ViewportSelectionMode mode) {
     input_router_.set_selection_mode(mode);
   };
-  tool_context.set_app_selection_mode = [&](ModelingSelectionMode mode) {
+  tool_port_callbacks.set_app_selection_mode = [&](ModelingSelectionMode mode) {
     const QuaderApiVoidResult command =
-        ui_context.editor.selection().set_mode(to_api_selection_mode(mode));
+        ui_context.intent.editor.selection().set_mode(
+            to_api_selection_mode(mode));
     if (!command.ok) {
       LOG_ERROR("Selection mode change failed: {}",
                 command.message.empty() ? "Command failed." : command.message);
     }
     input_router_.set_selection_mode(
         app_selection_mode_to_viewport(to_modeling_selection_mode(
-            ui_context.editor.selection().summary().mode)));
+            ui_context.intent.editor.selection().summary().mode)));
   };
-  tool_context.handle_tool_command_result = handle_tool_command_result;
+  tool_port_callbacks.handle_tool_command_result = handle_tool_command_result;
+  ViewportModelingToolPortAdapter tool_ports(modeling,
+                                             std::move(tool_port_callbacks));
+  ViewportToolContext tool_context{
+      .state = const_cast<ViewportToolState &>(input_router_.state()),
+      .camera = camera,
+      .ports = tool_ports.ports(),
+      .document = &document,
+      .settings = &active_viewport_settings(),
+      .box = &box_tool_context,
+      .point = &point_tool_context,
+  };
+  tool_context.set_active_tool = [&](ViewportToolId tool) {
+    input_router_.set_active_tool(tool);
+  };
 
   const bool can_interact_with_active_tool =
       hovered && !gizmo_consumed && !result.navigation_active;
@@ -2027,7 +2064,10 @@ void ViewportPanel::draw_pane_contents(
                               },
                       });
   }();
-  const ModelingBoxPreview &box_preview = input_router_.box_preview();
+  const ModelingBoxPreview box_preview = input_router_.box_preview(
+      *preview_ports.preview,
+      viewport_grid_snap_active(active_viewport_settings(),
+                                input.modifiers.primary));
   if (box_preview.drag_state != ModelingBoxDragState::Height) {
     modal_tool_overlay_renderer_.draw_box_preview(
         ImGui::GetWindowDrawList(), box_preview, camera, item_min, item_size);
@@ -2036,7 +2076,7 @@ void ViewportPanel::draw_pane_contents(
   {
     QDR_PROFILE_SCOPE("Viewport after tool interaction");
     interaction_controller_.handle_after_active_tool(
-        ui_context.editor, interaction_frame, active_tool_frame_result,
+        ui_context.intent.editor, interaction_frame, active_tool_frame_result,
         before_tool);
   }
 
@@ -2054,8 +2094,8 @@ void ViewportPanel::draw_pane_contents(
         .input_result = result,
     };
     const QuaderSelectionSummary summary =
-        interaction_controller_.pick_context_menu_target(ui_context.editor,
-                                                         context_frame);
+        interaction_controller_.pick_context_menu_target(
+            ui_context.intent.editor, context_frame);
     const ModelingActionQuery query{
         .surface = ModelingActionSurface::ViewportContextMenu,
         .modal_tool_owns_viewport = modal_tool_owns_viewport(),
@@ -2076,19 +2116,19 @@ void ViewportPanel::draw_pane_contents(
 
   {
     QDR_PROFILE_SCOPE("Viewport refresh selection overlay");
-    refresh_cached_selection_overlay_frame(document, assets, modeling);
+    refresh_cached_selection_overlay_frame(modeling, document, assets);
   }
   modal_tool_overlay_renderer_.draw_fly_navigation_overlay(
       ImGui::GetWindowDrawList(), item_min, item_size, result.fly_hud_active,
       result.fly_hud_active && !camera.fly_speed_is_default(),
       result.fly_hud_active, camera.fly_speed(), ui_context.localization);
   context_menu_presenter_.draw_operations_popup(
-      ui_context.editor, modeling, input_router_, ui_context.localization,
+      ui_context.intent.editor, modeling, input_router_, ui_context.localization,
       modal_tool_owns_viewport());
   if (draw_viewport_delete_popup(
           delete_objects_popup_open_, delete_objects_popup_position_pending_,
-          delete_objects_popup_position_, ui_context.editor, input_router_,
-          ui_context.localization)) {
+          delete_objects_popup_position_, ui_context.intent.editor,
+          input_router_, ui_context.localization)) {
     hover_controller_.invalidate();
     selection_overlay_cache_.mark_dirty();
   }

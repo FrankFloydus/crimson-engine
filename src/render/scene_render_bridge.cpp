@@ -7,6 +7,7 @@
 #include "render/scene_render_bridge.hpp"
 
 #include "diagnostics/profile.hpp"
+#include "render/overlay/viewport_scene_overlay_builder.hpp"
 
 #include <utility>
 
@@ -65,40 +66,47 @@ void SceneRenderBridge::shutdown() {
     scene_ = nullptr;
 }
 
-void SceneRenderBridge::sync(const SceneDocument& document, const AssetRegistry& assets) {
-    QDR_PROFILE_FUNCTION();
-    if (!engine_ || !scene_ || !sync_service_.initialized()) {
-      return;
-    }
-    (void)sync_service_.sync(document, assets);
-}
-
-void SceneRenderBridge::sync_selected_object_overlay(
-    const SceneDocument &document, const AssetRegistry &assets, bool visible) {
+void SceneRenderBridge::sync(const RenderSceneSnapshot &snapshot) {
   QDR_PROFILE_FUNCTION();
-  if (!engine_ || !scene_ || !selected_object_overlay_cache_.initialized()) {
+  if (!engine_ || !scene_ || !sync_service_.initialized()) {
     return;
   }
-  selected_object_overlay_cache_.sync(document, assets, visible);
+  (void)sync_service_.sync(snapshot);
 }
 
-void SceneRenderBridge::sync_scene_wireframe_overlay(
-    const SceneDocument &document, const AssetRegistry &assets,
-    std::uint8_t layer_mask) {
+void SceneRenderBridge::sync_scene_asset_overlays(
+    const RenderOverlaySelectedObjectSnapshot &selected_object_snapshot,
+    const RenderOverlaySceneWireframeSnapshot &wireframe_snapshot) {
   QDR_PROFILE_FUNCTION();
-  if (!engine_ || !scene_ || !scene_wireframe_overlay_cache_.initialized()) {
-    return;
+  if (engine_ && scene_ && selected_object_overlay_cache_.initialized()) {
+    selected_object_overlay_cache_.sync(selected_object_snapshot);
   }
-  scene_wireframe_overlay_cache_.sync(document, assets, layer_mask);
+  if (engine_ && scene_ && scene_wireframe_overlay_cache_.initialized()) {
+    scene_wireframe_overlay_cache_.sync(wireframe_snapshot);
+  }
 }
 
-void SceneRenderBridge::set_tool_preview_meshes(std::vector<PreviewMesh> meshes,
-                                                const AssetRegistry &assets) {
+ViewportOverlayFrame SceneRenderBridge::build_scene_overlay_frame(
+    ViewportOverlayFrame base_frame,
+    const RenderOverlaySelectionSnapshot &snapshot,
+    const ViewportSceneOverlayFrameRequest &request) const {
+  QDR_PROFILE_FUNCTION();
+  ViewportOverlayFrame frame = ViewportSceneOverlayBuilder::build_selection_frame(
+      std::move(base_frame), snapshot);
+  if (request.wireframe_pane) {
+    frame = ViewportSceneOverlayBuilder::strip_wireframe_selection_fills(
+        std::move(frame), request.selection_mode);
+  }
+  return frame;
+}
+
+void SceneRenderBridge::set_tool_preview_meshes(
+    std::vector<RenderToolPreviewMeshRecord> meshes) {
   QDR_PROFILE_FUNCTION();
   if (!engine_ || !scene_ || !tool_preview_cache_.initialized()) {
     return;
   }
-  (void)tool_preview_cache_.set_meshes(meshes, assets);
+  (void)tool_preview_cache_.set_meshes(meshes);
 }
 
 void SceneRenderBridge::set_overlay_frame(ViewportOverlayFrame frame,

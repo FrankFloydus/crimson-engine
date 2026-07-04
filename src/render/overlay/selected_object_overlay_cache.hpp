@@ -8,6 +8,7 @@
 
 #include "core/types.hpp"
 #include "math/types/qvec3.hpp"
+#include "render/overlay/render_overlay_snapshot.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -27,9 +28,6 @@ class VertexBuffer;
 } // namespace filament
 
 namespace quader {
-
-class AssetRegistry;
-class SceneDocument;
 
 inline constexpr std::size_t kSelectedObjectFaceFillSelectionLimit = 64u;
 
@@ -58,7 +56,7 @@ public:
              face_fill_material_ != nullptr && line_material_ != nullptr;
     }
 
-    void sync(const SceneDocument& document, const AssetRegistry& assets, bool visible);
+    void sync(const RenderOverlaySelectedObjectSnapshot &snapshot);
 
     /**
      * Owns one Filament renderable and its GPU buffers for a cached selected-object overlay part.
@@ -123,18 +121,16 @@ private:
       std::vector<SelectedObjectLineSegment> segments;
     };
 
-    std::vector<SelectedEntityState>
-    selected_entity_states(const SceneDocument &document,
-                           const AssetRegistry &assets) const;
-    LineEntry create_line_entry(AssetId mesh_id,
-                                const AssetRegistry &assets) const;
+    std::vector<SelectedEntityState> selected_entity_states(
+        const RenderOverlaySelectedObjectSnapshot &snapshot) const;
+    LineEntry create_line_entry(const RenderOverlayMeshSnapshot &mesh) const;
     void sync_line_entries(const std::vector<SelectedEntityState> &states,
-                           const AssetRegistry &assets);
+                           const RenderOverlaySelectedObjectSnapshot
+                               &snapshot);
     void update_line_proxy(const std::vector<SelectedEntityState> &states,
-                           const SceneDocument &document);
-    Entry create_entry(EntityId entity_id, AssetId mesh_id,
-                       const SceneDocument &document,
-                       const AssetRegistry &assets);
+                           const RenderOverlaySelectedObjectSnapshot
+                               &snapshot);
+    Entry create_entry(const RenderOverlayMeshSnapshot &mesh);
     void destroy_entry(Entry &entry);
     void destroy_proxy(Proxy &proxy, bool remove_from_scene);
     void destroy_line_batch_root();
@@ -143,9 +139,9 @@ private:
     void set_proxy_layer_mask(const Proxy &proxy,
                               std::uint8_t layer_mask) const;
     void update_entry_transform(const Entry &entry,
-                                const SceneDocument &document,
-                                EntityId entity_id) const;
-    void update_entry_transforms(const SceneDocument &document);
+                                const QMat4 &world_transform) const;
+    void update_entry_transforms(
+        const RenderOverlaySelectedObjectSnapshot &snapshot);
     void set_visible(bool visible);
     void remove_except(const std::unordered_set<EntityId> &live_entities);
 

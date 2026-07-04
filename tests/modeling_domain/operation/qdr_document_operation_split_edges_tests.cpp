@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 using namespace quader_poly;
 
@@ -18,6 +18,18 @@ TEST(QdrDocumentOperationSplitEdgesTests, SplitEdgesSeparatesAdjacentFacesWithou
 	const OperationResult result = split_selected_edges(document, selection);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
+	EXPECT_TRUE(result.message.empty());
+	EXPECT_TRUE(result.created.vertices.size() == 2U);
+	EXPECT_TRUE(result.created.edges.size() == 1U);
+	EXPECT_TRUE(result.created.faces.empty());
+	EXPECT_TRUE(result.deleted.empty());
+	EXPECT_TRUE(result.affected.vertices.empty());
+	EXPECT_TRUE(result.affected.edges.size() == 1U);
+	EXPECT_TRUE(result.affected.edges.front() == source_edge);
+	EXPECT_TRUE(result.affected.faces.size() == 1U);
+	EXPECT_TRUE(result.created.edges.front() != source_edge);
 	EXPECT_TRUE(document.vertices.size() == vertex_count_before + 2U);
 	EXPECT_TRUE(document.faces.size() == face_count_before);
         EXPECT_TRUE(selection.mode == SelectionMode::Edge);

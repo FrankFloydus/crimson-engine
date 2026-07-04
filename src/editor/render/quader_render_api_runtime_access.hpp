@@ -16,6 +16,17 @@
 namespace quader {
 
 class SceneRenderBridge;
+struct ViewportSceneOverlayFrameRequest;
+
+/**
+ * Stores viewport presentation state needed to synchronize persistent
+ * scene-derived overlay renderables without exposing scene or asset owners to
+ * UI panels.
+ */
+struct QuaderRenderSceneOverlaySyncRequest {
+  bool selected_object_overlay_visible = false;
+  std::uint8_t scene_wireframe_layer_mask = 0u;
+};
 
 /**
  * Provides runtime-only access to render synchronization without exposing render resources on the public API.
@@ -26,6 +37,13 @@ public:
                                         SceneRenderBridge &bridge);
   static QuaderApiVoidResult sync_tool_previews(QuaderRenderApi &api,
                                                 SceneRenderBridge &bridge);
+  static QuaderApiVoidResult sync_scene_asset_overlays(
+      QuaderRenderApi &api, SceneRenderBridge &bridge,
+      const QuaderRenderSceneOverlaySyncRequest &request);
+  [[nodiscard]] static ViewportOverlayFrame build_scene_overlay_frame(
+      QuaderRenderApi &api, SceneRenderBridge &bridge,
+      ViewportOverlayFrame base_frame,
+      const ViewportSceneOverlayFrameRequest &request);
   static QuaderApiResult<QuaderRenderOverlaySubmission> sync_selection_overlay(
       QuaderRenderApi &api, SceneRenderBridge &bridge,
       std::size_t viewport_index, std::uint8_t layer_mask,

@@ -11,9 +11,9 @@
 namespace quader {
 
 inline constexpr ViewportSettingColor kDefaultViewportGridMinorColor = {
-    199.0f / 255.0f, 199.0f / 255.0f, 199.0f / 255.0f, 54.0f / 255.0f};
+    150.0f / 255.0f, 150.0f / 255.0f, 150.0f / 255.0f, 1.0f};
 inline constexpr ViewportSettingColor kDefaultViewportGridMajorColor = {
-    172.0f / 255.0f, 172.0f / 255.0f, 172.0f / 255.0f, 1.0f};
+    210.0f / 255.0f, 210.0f / 255.0f, 210.0f / 255.0f, 1.0f};
 inline constexpr float kDefaultViewportGridMinorLineSize = 0.325f;
 inline constexpr float kDefaultViewportGridMajorLineSize = 0.250f;
 inline constexpr float kDefaultViewportGridAxisLineSize = 1.0f;

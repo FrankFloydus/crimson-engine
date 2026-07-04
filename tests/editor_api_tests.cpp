@@ -597,7 +597,7 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(user_entity_count(editor), 1u);
 
     const quader::QuaderApiVoidResult undo =
-        editor.commands().execute(quader::quader_command::kHistoryUndo);
+        editor.commands().execute(quader::quader_command::kEditUndo);
     EXPECT_TRUE(undo.ok()) << undo.error_message();
     EXPECT_TRUE(undo.changed());
 }
@@ -804,6 +804,86 @@ TEST(EditorApiTests, PublicAssetApiOwnsStandaloneMeshReplacementPolicy) {
     EXPECT_FALSE(api_rejected.ok());
     EXPECT_NE(api_rejected.error_message().find("modeling object"),
               std::string::npos);
+}
+
+TEST(EditorApiTests, PublicAssetApiEditsAreUndoableThroughHistory) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+
+    const quader::QuaderApiResult<quader::QuaderAssetRef> material =
+        editor.assets().add_material(
+            quader::QuaderMaterialArgs{.name = "Undoable API Material"});
+    ASSERT_TRUE(material.ok()) << material.error_message();
+    EXPECT_TRUE(material.changed());
+    EXPECT_EQ(material.mutation_kind, quader::QuaderMutationKind::Asset);
+    EXPECT_EQ(editor.query().history().undo_label, "Add Material");
+    ASSERT_TRUE(editor.query().material(material.value().id).has_value());
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_FALSE(editor.query().material(material.value().id).has_value());
+    ASSERT_TRUE(editor.history().redo().ok());
+    ASSERT_TRUE(editor.query().material(material.value().id).has_value());
+
+    const quader::QuaderApiVoidResult color_changed =
+        editor.assets().set_material_base_color(material.value().id,
+                                                {0.2f, 0.4f, 0.6f});
+    ASSERT_TRUE(color_changed.ok()) << color_changed.error_message();
+    EXPECT_TRUE(color_changed.changed());
+    EXPECT_EQ(color_changed.mutation_kind, quader::QuaderMutationKind::Asset);
+    ASSERT_TRUE(editor.query().material(material.value().id).has_value());
+    EXPECT_FLOAT_EQ(editor.query().material(material.value().id)->base_color.z,
+                    0.6f);
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_FLOAT_EQ(editor.query().material(material.value().id)->base_color.z,
+                    1.0f);
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_FLOAT_EQ(editor.query().material(material.value().id)->base_color.x,
+                    0.2f);
+
+    quader::QuaderTextureAsset texture;
+    texture.name = "Undoable API Texture";
+    texture.usage = quader::QuaderTextureUsage::BaseColor;
+    const quader::QuaderApiResult<quader::QuaderAssetRef> texture_ref =
+        editor.assets().add_texture(std::move(texture));
+    ASSERT_TRUE(texture_ref.ok()) << texture_ref.error_message();
+    const quader::QuaderApiVoidResult texture_slot =
+        editor.assets().set_material_texture(
+            material.value().id, "baseColor", texture_ref.value().id);
+    ASSERT_TRUE(texture_slot.ok()) << texture_slot.error_message();
+    ASSERT_TRUE(editor.query().material(material.value().id).has_value());
+    EXPECT_TRUE(editor.query()
+                    .material(material.value().id)
+                    ->texture_slots.contains("baseColorTexture"));
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(editor.query().material(material.value().id).has_value());
+    EXPECT_FALSE(editor.query()
+                     .material(material.value().id)
+                     ->texture_slots.contains("baseColorTexture"));
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(editor.query()
+                  .material(material.value().id)
+                  ->texture_slots.at("baseColorTexture"),
+              texture_ref.value().id);
+
+    const quader::QuaderApiResult<quader::QuaderAssetRef> mesh =
+        editor.assets().add_standalone_mesh(triangle_mesh("Undoable API Mesh"));
+    ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+    quader::QuaderMeshAsset replacement =
+        triangle_mesh("Undoable API Replacement");
+    replacement.vertices.push_back(
+        {.position = {0.0f, 2.0f, 0.0f},
+         .normal = {0.0f, 1.0f, 0.0f},
+         .uv = {0.0f, 0.0f}});
+    const quader::QuaderApiVoidResult mesh_replaced =
+        editor.assets().replace_standalone_mesh(mesh.value().id, replacement);
+    ASSERT_TRUE(mesh_replaced.ok()) << mesh_replaced.error_message();
+    ASSERT_TRUE(editor.query().mesh(mesh.value().id).has_value());
+    EXPECT_EQ(editor.query().mesh(mesh.value().id)->vertex_count, 4u);
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(editor.query().mesh(mesh.value().id).has_value());
+    EXPECT_EQ(editor.query().mesh(mesh.value().id)->vertex_count, 3u);
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(editor.query().mesh(mesh.value().id)->vertex_count, 4u);
 }
 
 TEST(EditorApiTests, SceneCommandsRejectModelingOwnedEntityStructuralAndMeshMutations) {
@@ -1102,7 +1182,7 @@ TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithoutViewportFocus) {
             quader::quader_command::kEditUndo.string());
 
   ASSERT_TRUE(
-      editor.commands().execute(quader::quader_command::kHistoryUndo).ok());
+      editor.commands().execute(quader::quader_command::kEditUndo).ok());
 
   const quader::QuaderViewportKeybindingDispatch redo_dispatch =
       editor.commands().dispatch_viewport_input_binding(
@@ -1121,7 +1201,7 @@ TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithoutViewportFocus) {
             quader::quader_command::kEditRedo.string());
 
   ASSERT_TRUE(
-      editor.commands().execute(quader::quader_command::kHistoryRedo).ok());
+      editor.commands().execute(quader::quader_command::kEditRedo).ok());
 
   ASSERT_TRUE(editor.preferences()
                   .set_shortcut(quader::quader_command::kEditUndo, "Ctrl+Alt+Z")
@@ -2039,7 +2119,7 @@ TEST(EditorApiTests, HistoryUndoCancelsActiveBevelPreviewBeforeDocumentHistory) 
     EXPECT_GT(preview_mesh->primitive_count, before->primitive_count);
 
     const quader::QuaderApiVoidResult undo =
-        editor.commands().execute(quader::quader_command::kHistoryUndo);
+        editor.commands().execute(quader::quader_command::kEditUndo);
     ASSERT_TRUE(undo.ok()) << undo.error_message();
     EXPECT_TRUE(undo.changed());
     EXPECT_FALSE(editor.modeling().can_cancel_active_tool_or_preview());
@@ -2079,7 +2159,7 @@ TEST(EditorApiTests, HistoryRedoIsUnavailableWhileActivePreviewCanBeCanceled) {
     EXPECT_FALSE(editor.query().history().can_redo);
 
     const quader::QuaderApiVoidResult redo =
-        editor.commands().execute(quader::quader_command::kHistoryRedo);
+        editor.commands().execute(quader::quader_command::kEditRedo);
     EXPECT_FALSE(redo.ok());
     EXPECT_FALSE(redo.changed());
     EXPECT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
@@ -2124,7 +2204,7 @@ TEST(EditorApiTests, HistoryUndoAfterSliceQuadFinalizeRestoresPreOperationMeshAn
     EXPECT_GT(committed_selection.selected_face_count, 1u);
 
     const quader::QuaderApiVoidResult undo =
-        editor.commands().execute(quader::quader_command::kHistoryUndo);
+        editor.commands().execute(quader::quader_command::kEditUndo);
     ASSERT_TRUE(undo.ok()) << undo.error_message();
     EXPECT_TRUE(undo.changed());
     EXPECT_TRUE(entity_named(editor, "Undo Slice Quad Box").has_value());
@@ -2169,7 +2249,7 @@ TEST(EditorApiTests, MixedUndoRedoPreviewStackPreservesTexturedMaterial) {
     EXPECT_GT(bevel_preview_mesh->primitive_count, original->primitive_count);
 
     const quader::QuaderApiVoidResult cancel_preview_via_undo =
-        editor.commands().execute(quader::quader_command::kHistoryUndo);
+        editor.commands().execute(quader::quader_command::kEditUndo);
     ASSERT_TRUE(cancel_preview_via_undo.ok())
         << cancel_preview_via_undo.error_message();
     EXPECT_TRUE(cancel_preview_via_undo.changed());
@@ -2182,7 +2262,7 @@ TEST(EditorApiTests, MixedUndoRedoPreviewStackPreservesTexturedMaterial) {
     expect_entity_textured(editor, box.entity, refs);
 
     const quader::QuaderApiVoidResult undo_material =
-        editor.commands().execute(quader::quader_command::kHistoryUndo);
+        editor.commands().execute(quader::quader_command::kEditUndo);
     ASSERT_TRUE(undo_material.ok()) << undo_material.error_message();
     EXPECT_TRUE(undo_material.changed());
     const std::optional<quader::QuaderEntitySnapshot> unassigned = editor.query().entity(box.entity);
@@ -2190,7 +2270,7 @@ TEST(EditorApiTests, MixedUndoRedoPreviewStackPreservesTexturedMaterial) {
     EXPECT_FALSE(unassigned->has_material);
 
     const quader::QuaderApiVoidResult redo_material =
-        editor.commands().execute(quader::quader_command::kHistoryRedo);
+        editor.commands().execute(quader::quader_command::kEditRedo);
     ASSERT_TRUE(redo_material.ok()) << redo_material.error_message();
     EXPECT_TRUE(redo_material.changed());
     expect_entity_textured(editor, box.entity, refs);
@@ -2218,7 +2298,7 @@ TEST(EditorApiTests, MixedUndoRedoPreviewStackPreservesTexturedMaterial) {
     expect_entity_textured(editor, box.entity, refs);
 
     const quader::QuaderApiVoidResult undo_slice =
-        editor.commands().execute(quader::quader_command::kHistoryUndo);
+        editor.commands().execute(quader::quader_command::kEditUndo);
     ASSERT_TRUE(undo_slice.ok()) << undo_slice.error_message();
     EXPECT_TRUE(undo_slice.changed());
     const std::optional<quader::QuaderMeshSnapshot> after_slice_undo =
@@ -2230,7 +2310,7 @@ TEST(EditorApiTests, MixedUndoRedoPreviewStackPreservesTexturedMaterial) {
     expect_entity_textured(editor, box.entity, refs);
 
     const quader::QuaderApiVoidResult redo_slice =
-        editor.commands().execute(quader::quader_command::kHistoryRedo);
+        editor.commands().execute(quader::quader_command::kEditRedo);
     ASSERT_TRUE(redo_slice.ok()) << redo_slice.error_message();
     EXPECT_TRUE(redo_slice.changed());
     const std::optional<quader::QuaderMeshSnapshot> after_slice_redo =
@@ -2251,7 +2331,7 @@ TEST(EditorApiTests, MixedUndoRedoPreviewStackPreservesTexturedMaterial) {
     EXPECT_FALSE(entity_by_id(editor, box.entity).has_value());
 
     const quader::QuaderApiVoidResult undo_delete =
-        editor.commands().execute(quader::quader_command::kHistoryUndo);
+        editor.commands().execute(quader::quader_command::kEditUndo);
     ASSERT_TRUE(undo_delete.ok()) << undo_delete.error_message();
     EXPECT_TRUE(undo_delete.changed());
     ASSERT_TRUE(entity_by_id(editor, box.entity).has_value());
@@ -2263,13 +2343,13 @@ TEST(EditorApiTests, MixedUndoRedoPreviewStackPreservesTexturedMaterial) {
     expect_entity_textured(editor, box.entity, refs);
 
     const quader::QuaderApiVoidResult redo_delete =
-        editor.commands().execute(quader::quader_command::kHistoryRedo);
+        editor.commands().execute(quader::quader_command::kEditRedo);
     ASSERT_TRUE(redo_delete.ok()) << redo_delete.error_message();
     EXPECT_TRUE(redo_delete.changed());
     EXPECT_FALSE(entity_by_id(editor, box.entity).has_value());
 
     const quader::QuaderApiVoidResult undo_delete_again =
-        editor.commands().execute(quader::quader_command::kHistoryUndo);
+        editor.commands().execute(quader::quader_command::kEditUndo);
     ASSERT_TRUE(undo_delete_again.ok()) << undo_delete_again.error_message();
     EXPECT_TRUE(undo_delete_again.changed());
     ASSERT_TRUE(entity_by_id(editor, box.entity).has_value());
@@ -2375,6 +2455,49 @@ TEST(EditorApiTests, RightClickPickOnUnselectedObjectChangesSelectionBeforeConte
     EXPECT_FALSE(harness.editor.query().entity(right.value().entity).has_value());
 }
 
+TEST(EditorApiTests, ObjectPickSelectionRoutesThroughDocumentHistory) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+    const quader::QuaderModelingObjectRef left =
+        create_selected_box(editor, "Pick History Left");
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> right =
+        editor.modeling().create_box(
+            quader::QuaderBounds{.min = {4.0f, -1.0f, -1.0f},
+                                 .max = {6.0f, 1.0f, 1.0f}},
+            "Pick History Right");
+    ASSERT_TRUE(right.ok()) << right.error_message();
+    ASSERT_TRUE(editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok());
+    ASSERT_TRUE(editor.selection().select_object(left).ok());
+
+    quader::QuaderPickSelectRequest pick_right;
+    pick_right.ray = {
+        .origin = {5.0f, 0.0f, 5.0f},
+        .direction = {0.0f, 0.0f, -1.0f},
+    };
+    const quader::QuaderApiResult<quader::QuaderSelectionSummary> picked =
+        editor.selection().pick_select(pick_right);
+    ASSERT_TRUE(picked.ok()) << picked.error_message();
+    EXPECT_TRUE(picked.changed());
+    EXPECT_EQ(picked.mutation_kind, quader::QuaderMutationKind::Document);
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{right.value().entity});
+    EXPECT_EQ(editor.query().history().undo_label, "Select Entities");
+
+    const quader::QuaderApiVoidResult undo = editor.history().undo();
+    ASSERT_TRUE(undo.ok()) << undo.error_message();
+    EXPECT_TRUE(undo.changed());
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{left.entity});
+
+    const quader::QuaderApiVoidResult redo = editor.history().redo();
+    ASSERT_TRUE(redo.ok()) << redo.error_message();
+    EXPECT_TRUE(redo.changed());
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{right.value().entity});
+}
+
 TEST(EditorApiTests, BoxSelectApiSelectsContainedObjectByViewportRectangle) {
     CommandTestHarness harness;
     const quader::QuaderApiResult<quader::QuaderModelingObjectRef> left =
@@ -2417,6 +2540,65 @@ TEST(EditorApiTests, BoxSelectApiSelectsContainedObjectByViewportRectangle) {
     EXPECT_EQ(selected.value().mode, quader::QuaderSelectionMode::Object);
     EXPECT_EQ(selected.value().selected_object_count, 1u);
     EXPECT_EQ(selected_entities(harness.editor),
+              std::vector<quader::EntityId>{left.value().entity});
+}
+
+TEST(EditorApiTests, ObjectBoxSelectionRoutesThroughDocumentHistory) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> left =
+        editor.modeling().create_box(
+            quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                                 .max = {1.0f, 1.0f, 1.0f}},
+            "Box History Left");
+    ASSERT_TRUE(left.ok()) << left.error_message();
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> right =
+        editor.modeling().create_box(
+            quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                                 .max = {1.0f, 1.0f, 1.0f}},
+            "Box History Right");
+    ASSERT_TRUE(right.ok()) << right.error_message();
+    ASSERT_TRUE(editor.scene()
+                    .set_transform(left.value().entity,
+                                   quader::QuaderTransform{
+                                       .position = {-20.0f, 0.0f, 0.0f}})
+                    .ok());
+    ASSERT_TRUE(editor.scene()
+                    .set_transform(right.value().entity,
+                                   quader::QuaderTransform{
+                                       .position = {20.0f, 0.0f, 0.0f}})
+                    .ok());
+    ASSERT_TRUE(editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok());
+    ASSERT_TRUE(editor.selection().select_object(right.value()).ok());
+
+    quader::QuaderBoxSelectRequest request;
+    request.camera = api_orthographic_camera();
+    request.start = {25.0f, 45.0f};
+    request.end = {35.0f, 55.0f};
+    request.edit = quader::QuaderSelectionEdit::Replace;
+    request.rule = quader::QuaderBoxSelectionRule::Contain;
+    const quader::QuaderApiResult<quader::QuaderSelectionSummary> selected =
+        editor.selection().box_select(request);
+
+    ASSERT_TRUE(selected.ok()) << selected.error_message();
+    EXPECT_TRUE(selected.changed());
+    EXPECT_EQ(selected.mutation_kind, quader::QuaderMutationKind::Document);
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{left.value().entity});
+    EXPECT_EQ(editor.query().history().undo_label, "Select Entities");
+
+    const quader::QuaderApiVoidResult undo = editor.history().undo();
+    ASSERT_TRUE(undo.ok()) << undo.error_message();
+    EXPECT_TRUE(undo.changed());
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{right.value().entity});
+
+    const quader::QuaderApiVoidResult redo = editor.history().redo();
+    ASSERT_TRUE(redo.ok()) << redo.error_message();
+    EXPECT_TRUE(redo.changed());
+    EXPECT_EQ(selected_entities(editor),
               std::vector<quader::EntityId>{left.value().entity});
 }
 
@@ -2492,6 +2674,35 @@ TEST(EditorApiTests, BoxSelectApiPreservesActiveFaceFromBaseline) {
               quader::QuaderActiveSelectionKind::Face);
     EXPECT_EQ(selected.value().active_face_id, 1);
     EXPECT_EQ(selected.value().selected_face_count, 1u);
+}
+
+TEST(EditorApiTests, ComponentPickSelectionRemainsRuntimeOwned) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+    (void)create_selected_box(editor, "Runtime Pick Component Box");
+    ASSERT_TRUE(
+        editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+    const quader::QuaderHistorySnapshot history_before_pick =
+        editor.query().history();
+
+    quader::QuaderPickSelectRequest pick_face;
+    pick_face.ray = {
+        .origin = {0.0f, 0.0f, 5.0f},
+        .direction = {0.0f, 0.0f, -1.0f},
+    };
+    const quader::QuaderApiResult<quader::QuaderSelectionSummary> picked =
+        editor.selection().pick_select(pick_face);
+
+    ASSERT_TRUE(picked.ok()) << picked.error_message();
+    EXPECT_TRUE(picked.changed());
+    EXPECT_EQ(picked.mutation_kind, quader::QuaderMutationKind::Modeling);
+    EXPECT_EQ(picked.value().selected_face_count, 1u);
+    EXPECT_EQ(editor.query().history().can_undo,
+              history_before_pick.can_undo);
+    EXPECT_EQ(editor.query().history().undo_label,
+              history_before_pick.undo_label);
+    EXPECT_EQ(editor.query().history().redo_label,
+              history_before_pick.redo_label);
 }
 
 TEST(EditorApiTests, GroupModeBoxSelectsContainingGroupByViewportRectangle) {
@@ -3713,13 +3924,13 @@ TEST(EditorApiTests, SceneSettingsPropertiesUndoAndRedoIndividually) {
         expect_scene_settings_eq(scene_root_settings(editor), edited);
 
         const quader::QuaderApiVoidResult undo =
-            editor.commands().execute(quader::quader_command::kHistoryUndo);
+            editor.commands().execute(quader::quader_command::kEditUndo);
         ASSERT_TRUE(undo.ok()) << undo.error_message();
         EXPECT_TRUE(undo.changed());
         expect_scene_settings_eq(scene_root_settings(editor), before);
 
         const quader::QuaderApiVoidResult redo =
-            editor.commands().execute(quader::quader_command::kHistoryRedo);
+            editor.commands().execute(quader::quader_command::kEditRedo);
         ASSERT_TRUE(redo.ok()) << redo.error_message();
         EXPECT_TRUE(redo.changed());
         expect_scene_settings_eq(scene_root_settings(editor), edited);
@@ -4350,6 +4561,27 @@ TEST(EditorApiTests, DirectApiStatusesUseFullRevisionStamp) {
               editor.revisions().modeling_content_revision);
     EXPECT_EQ(updated_setting.revisions.modeling_selection_revision,
               editor.revisions().modeling_selection_revision);
+
+}
+
+TEST(EditorApiTests, ToolsApiSetsCutKeepModeThroughPublicSetting) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+
+    create_selected_box(editor, "Cut Setting Box");
+    const quader::QuaderApiVoidResult activate_cut =
+        editor.tools().activate(quader::ViewportToolId::Cut);
+    ASSERT_TRUE(activate_cut.ok()) << activate_cut.error_message();
+
+    const quader::QuaderApiVoidResult updated_cut_setting =
+        editor.tools().set_setting(
+            "cut", "operation.cut.keep_mode",
+            static_cast<double>(
+                static_cast<int>(quader::QuaderCutMode::DiscardRight)));
+    ASSERT_TRUE(updated_cut_setting.ok())
+        << updated_cut_setting.error_message();
+    EXPECT_EQ(editor.query().tool_status().cut_mode,
+              quader::QuaderCutMode::DiscardRight);
 }
 
 TEST(EditorApiTests, PublicHistoryUndoRedoMatchesCommandApiStatus) {
@@ -4366,7 +4598,7 @@ TEST(EditorApiTests, PublicHistoryUndoRedoMatchesCommandApiStatus) {
   create_selected_box(command_history.editor, "Command History Box");
   const quader::QuaderApiVoidResult command_undo =
       command_history.editor.commands().execute(
-          quader::quader_command::kHistoryUndo);
+          quader::quader_command::kEditUndo);
   expect_same_api_status(command_undo, direct_undo);
   EXPECT_FALSE(
       entity_named(command_history.editor, "Command History Box").has_value());
@@ -4380,7 +4612,7 @@ TEST(EditorApiTests, PublicHistoryUndoRedoMatchesCommandApiStatus) {
 
   const quader::QuaderApiVoidResult command_redo =
       command_history.editor.commands().execute(
-          quader::quader_command::kHistoryRedo);
+          quader::quader_command::kEditRedo);
   expect_same_api_status(command_redo, direct_redo);
   EXPECT_TRUE(
       entity_named(command_history.editor, "Command History Box").has_value());
@@ -4419,7 +4651,7 @@ TEST(EditorApiTests, HistoryUndoUsesDocumentHistoryWhenOnlyIdleModalToolIsActive
     EXPECT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
 
     const quader::QuaderApiVoidResult undo =
-        editor.commands().execute(quader::quader_command::kHistoryUndo);
+        editor.commands().execute(quader::quader_command::kEditUndo);
     ASSERT_TRUE(undo.ok()) << undo.error_message();
     EXPECT_TRUE(undo.changed());
     EXPECT_FALSE(entity_named(editor, "Idle Modal Undo Box").has_value());

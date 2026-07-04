@@ -22,12 +22,28 @@ namespace quader {
 class SceneDocument;
 
 /**
+ * Reports whether a runtime selection application was attempted and changed
+ * selection state.
+ */
+struct ModelingSelectionApplyResult {
+  bool applied = false;
+  bool changed = false;
+};
+
+/**
  * Coordinates Modeling Selection Service responsibilities for the modeling application service layer.
  */
 class ModelingSelectionService {
 public:
   [[nodiscard]] static bool
   has_component_selection(const ModelingSelectionSummary &summary);
+  [[nodiscard]] ModelingSelectionMode
+  selection_mode(const quader_editor_core::EditorSession &session,
+                 ModelingSelectionMode app_selection_mode) const;
+  [[nodiscard]] ModelingSelectionSummary
+  selection_summary(const quader_editor_core::EditorSession &session,
+                    const SceneDocument &scene,
+                    ModelingSelectionMode app_selection_mode) const;
 
   void invalidate_picking_cache() const;
   [[nodiscard]] const std::vector<quader_editor_core::PolygonObject> &
@@ -49,10 +65,11 @@ public:
                             const SceneDocument &scene,
                             const ModelingObjectRuntimeMap &object_map,
                             quader_poly::PickOptions pick_options = {}) const;
-  bool apply_pick_selection(quader_editor_core::EditorSession &session,
-                            const SceneDocument &scene,
-                            const ModelingObjectRuntimeMap &object_map,
-                            const ModelingPickSelectRequest &request) const;
+  [[nodiscard]] ModelingSelectionApplyResult
+  apply_pick_selection(quader_editor_core::EditorSession &session,
+                       const SceneDocument &scene,
+                       const ModelingObjectRuntimeMap &object_map,
+                       const ModelingPickSelectRequest &request) const;
   [[nodiscard]] std::optional<int>
   pick_object_id(const quader_editor_core::EditorSession &session,
                  const SceneDocument &scene,
@@ -74,9 +91,24 @@ public:
                       const SceneDocument &scene,
                       const ModelingObjectRuntimeMap &object_map,
                       const ModelingBoxSelectRequest &request) const;
-  bool apply_rectangle_selection(
+  [[nodiscard]] bool apply_rectangle_selection(
       quader_editor_core::EditorSession &session,
       const quader_editor_core::RectangleSelectionState &selection) const;
+  [[nodiscard]] ModelingSelectionApplyResult apply_rectangle_selection(
+      quader_editor_core::EditorSession &session, const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_map,
+      const ModelingBoxSelectRequest &request,
+      const quader_editor_core::RectangleSelectionState &baseline) const;
+  ModelingCommandResult
+  set_group_selection_mode(quader_editor_core::EditorSession &session,
+                           ModelingSelectionMode &app_selection_mode) const;
+  ModelingCommandResult
+  set_runtime_selection_mode(quader_editor_core::EditorSession &session,
+                             quader_editor_core::EditorRuntime &runtime,
+                             ModelingSelectionMode mode) const;
+  ModelingCommandResult set_component_selection(
+      quader_editor_core::EditorSession &session,
+      const ModelingComponentSelectionRequest &request) const;
   [[nodiscard]] static bool
   selection_matches(const quader_poly::Selection &left,
                     const quader_poly::Selection &right);

@@ -11,16 +11,20 @@
 #include "render/filament_material_library.hpp"
 #include "render/render_performance_stats.hpp"
 #include "render/texture_registry.hpp"
+#include "render/ui_icon_texture_service.hpp"
 
 #include <filament/Engine.h>
-#include <filament/Renderer.h>
-#include <filament/Scene.h>
-#include <filament/Skybox.h>
 #include <filament/SwapChain.h>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
+
+namespace filament {
+class Renderer;
+class Scene;
+} // namespace filament
 
 namespace quader {
 
@@ -33,6 +37,9 @@ enum class SwapChainPresentationColorSpace {
 };
 
 class RenderSystem;
+class ImGuiFilamentRenderer;
+class SceneRenderBridge;
+class ViewportRenderer;
 
 /**
  * Owns one additional Filament swapchain through the RenderSystem that created it.
@@ -92,32 +99,17 @@ public:
                                      SwapChainPresentationColorSpace::Native);
     void destroy_additional_swap_chain(filament::SwapChain *swap_chain);
 
-    filament::Engine& engine() { return *engine_; }
-    filament::Renderer& renderer() { return *renderer_; }
-    filament::Scene& scene() { return *scene_; }
-    filament::Material &quader_mesh_material() {
-      return material_library_.quader_mesh();
-    }
-    filament::Material &quader_mesh_lit_material() {
-      return material_library_.quader_mesh_lit();
-    }
-    filament::Material &vertex_color_overlay_material() {
-      return material_library_.vertex_color_overlay();
-    }
-    filament::Material &overlay_line_material() {
-      return material_library_.overlay_line();
-    }
-    filament::Material &selected_object_line_material() {
-      return material_library_.selected_object_line();
-    }
-    filament::Material &overlay_point_material() {
-      return material_library_.overlay_point();
-    }
-    filament::Material &imgui_material() { return material_library_.imgui(); }
-    filament::Material &ground_grid_material() {
-      return material_library_.ground_grid();
-    }
-    TextureRegistry &textures() { return texture_registry_; }
+    void initialize_scene_render_bridge(
+        SceneRenderBridge &render_bridge,
+        const std::filesystem::path &executable_dir);
+    void initialize_imgui_renderer(ImGuiFilamentRenderer &imgui_renderer);
+    void render_imgui(ImGuiFilamentRenderer &imgui_renderer);
+    void initialize_viewport_renderer(ViewportRenderer &viewport_renderer,
+                                      std::uint8_t grid_layer_mask);
+    void render_viewport(ViewportRenderer &viewport_renderer);
+    RenderUiIconSet
+    load_ui_icon_textures(const std::filesystem::path &executable_dir);
+    void clear_ui_icon_textures();
     void apply_scene_settings(const SceneSettingsComponent &settings);
 
   private:
@@ -131,6 +123,7 @@ public:
     FilamentEnvironmentLibrary environment_library_;
     FilamentMaterialLibrary material_library_;
     TextureRegistry texture_registry_;
+    UiIconTextureService ui_icon_textures_;
     RenderFramePerformanceStats frame_performance_stats_;
     std::chrono::steady_clock::time_point frame_cpu_begin_{};
     bool frame_cpu_active_ = false;

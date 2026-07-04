@@ -10,6 +10,7 @@
 #include <backend/PixelBufferDescriptor.h>
 
 #include <cstddef>
+#include <span>
 #include <vector>
 
 namespace quader {
@@ -27,6 +28,12 @@ public:
   template <typename T>
   static filament::backend::BufferDescriptor
   vector(const std::vector<T> &values) {
+    return bytes(values.data(), sizeof(T) * values.size());
+  }
+
+  template <typename T>
+  static filament::backend::BufferDescriptor
+  span(std::span<const T> values) {
     return bytes(values.data(), sizeof(T) * values.size());
   }
 };

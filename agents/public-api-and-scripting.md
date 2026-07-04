@@ -35,7 +35,7 @@ editor.modeling().create_box(...);
 editor.object(object).rename("Wall").select();
 editor.selection().select_face(object, face);
 editor.scene().batch("Arrange").set_transform(entity, moved).commit();
-editor.commands().execute(quader::quader_command::kHistoryUndo);
+editor.commands().execute(quader::quader_command::kEditUndo);
 editor.main_viewport().set_shading_mode(QuaderShadingMode::Wireframe);
 ```
 

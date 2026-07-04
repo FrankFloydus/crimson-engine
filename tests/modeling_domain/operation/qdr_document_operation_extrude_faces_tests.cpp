@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 using namespace quader_poly;
 
@@ -15,6 +15,16 @@ TEST(QdrDocumentOperationExtrudeFacesTests, ExtrudeFacesCreatesACapAndSideWallsW
 	const OperationResult result = extrude_selected_faces(fixture.document, selection, 0.5F);
 
 	EXPECT_TRUE(result.changed);
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
+	EXPECT_TRUE(result.message.empty());
+	EXPECT_TRUE(result.created.vertices.size() == 4U);
+	EXPECT_TRUE(result.created.faces.size() == 4U);
+	EXPECT_TRUE(result.created.edges.empty());
+	EXPECT_TRUE(result.deleted.empty());
+	EXPECT_TRUE(result.affected.vertices.empty());
+	EXPECT_TRUE(result.affected.edges.empty());
+	EXPECT_TRUE(result.affected.faces.size() == 1U);
+	EXPECT_TRUE(result.affected.faces.front() == fixture.face);
 	EXPECT_TRUE(fixture.document.vertices.size() == 8U);
 	EXPECT_TRUE(fixture.document.faces.size() == 5U);
         EXPECT_TRUE(selection.mode == SelectionMode::Face);

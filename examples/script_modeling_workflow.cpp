@@ -26,7 +26,17 @@ int main() {
         return 1;
     }
 
-    editor.commands().execute(quader::quader_command::kHistoryUndo);
-    editor.commands().execute(quader::quader_command::kHistoryRedo);
+    const quader::QuaderApiVoidResult undo =
+        editor.commands().execute(quader::quader_command::kEditUndo);
+    if (!undo.ok()) {
+        return 1;
+    }
+
+    const quader::QuaderApiVoidResult redo =
+        editor.commands().execute(quader::quader_command::kEditRedo);
+    if (!redo.ok()) {
+        return 1;
+    }
+
     return 0;
 }

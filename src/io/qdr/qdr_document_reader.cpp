@@ -22,6 +22,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -45,6 +46,33 @@ struct DecodedMeshAsset {
   AssetId id = kInvalidAssetId;
   MeshAsset mesh;
 };
+
+[[nodiscard]] std::string
+required_project_enum_string(const Json &value, const char *key,
+                             std::string_view label);
+
+QdrProjectReadResult project_error_result(
+    quader_io::QdrDiagnostic diagnostic) {
+  const std::string message = diagnostic.message;
+  return {false, ProjectDocument{}, message, false, {std::move(diagnostic)}};
+}
+
+QdrProjectReadResult project_error_result(std::string_view code,
+                                          std::string_view path,
+                                          std::string message) {
+  return project_error_result(
+      quader_io::qdr_make_error(code, path, std::move(message)));
+}
+
+QdrProjectReadResult project_read_result_with_source_path(
+    QdrProjectReadResult result, const std::filesystem::path &path) {
+  for (quader_io::QdrDiagnostic &diagnostic : result.diagnostics) {
+    if (!diagnostic.source_path.has_value()) {
+      diagnostic.source_path = path;
+    }
+  }
+  return result;
+}
 
 void require_object(const Json &value, std::string_view label) {
   if (!value.is_object()) {
@@ -101,7 +129,9 @@ MeshAsset mesh_from_json(const Json &value) {
       polygon != value.end() && polygon->is_object()) {
     mesh.has_authored_polygon_document = true;
     mesh.authored_polygon_document = std::make_shared<quader_poly::Document>(
-        quader_io::qdr_polygon_document_from_json(*polygon));
+        quader_io::qdr_polygon_document_from_json(
+            *polygon,
+            quader_io::QdrPolygonDocumentParseMode::StrictCurrentSchema));
     if (mesh.vertices.empty() && mesh.indices.empty()) {
       mesh = mesh_from_polygon_document(*mesh.authored_polygon_document,
                                         mesh.name);
@@ -114,10 +144,13 @@ MeshAsset mesh_from_json(const Json &value) {
 TextureAsset texture_from_json(const Json &value) {
   TextureAsset texture;
   texture.name = value.value("name", std::string("Texture"));
-  texture.usage =
-      qdr_texture_usage_from_name(value.value("usage", std::string("unknown")));
+  texture.usage = qdr_texture_usage_from_name(
+      required_project_enum_string(value, "usage", "texture usage"),
+      QdrProjectEnumParseMode::StrictCurrentSchema);
   texture.color_space = qdr_texture_color_space_from_name(
-      value.value("colorSpace", std::string("srgb")));
+      required_project_enum_string(value, "colorSpace",
+                                   "texture color space"),
+      QdrProjectEnumParseMode::StrictCurrentSchema);
   texture.width = value.value("width", 0u);
   texture.height = value.value("height", 0u);
   texture.source_path =
@@ -215,6 +248,24 @@ const Json &field_or_default(const Json &value, const char *key,
   return found == value.end() ? fallback : *found;
 }
 
+std::string required_project_enum_string(const Json &value, const char *key,
+                                         std::string_view label) {
+  const auto field = value.find(key);
+  if (field == value.end()) {
+    throw quader_io::QdrDiagnosticException(quader_io::qdr_make_error(
+        "qdr.missing_enum", "",
+        "QDR project document is missing " + std::string(label) +
+            " enum field."));
+  }
+  if (!field->is_string()) {
+    throw quader_io::QdrDiagnosticException(quader_io::qdr_make_error(
+        "qdr.invalid_enum", "",
+        "QDR project document " + std::string(label) +
+            " enum field must be a string."));
+  }
+  return field->get<std::string>();
+}
+
 ProjectDocument project_document_from_app_payload(const Json &payload) {
   QDR_PROFILE_FUNCTION();
   require_object(payload, "QDR project document payload");
@@ -292,7 +343,8 @@ ProjectDocument project_document_from_app_payload(const Json &payload) {
             : kInvalidEditorObjectId;
     const std::string name = entity_json.value("name", std::string("Entity"));
     const EntityKind kind = qdr_entity_kind_from_name(
-        entity_json.value("kind", std::string("generic")));
+        required_project_enum_string(entity_json, "kind", "entity kind"),
+        QdrProjectEnumParseMode::StrictCurrentSchema);
     const EntityId entity = document.scene().create_entity_with_id(
         requested_id, name, kind, editor_object_id);
     if (entity == kInvalidEntityId) {
@@ -332,8 +384,10 @@ ProjectDocument project_document_from_app_payload(const Json &payload) {
     }
     if (const auto mesh_json = entity_json.find("mesh");
         mesh_json != entity_json.end() && mesh_json->is_object()) {
-      document.scene().set_mesh(entity,
-                                qdr_mesh_component_from_json(*mesh_json));
+      document.scene().set_mesh(
+          entity, qdr_mesh_component_from_json(
+                      *mesh_json,
+                      QdrProjectEnumParseMode::StrictCurrentSchema));
     }
     if (const auto material_json = entity_json.find("material");
         material_json != entity_json.end() && material_json->is_object()) {
@@ -345,15 +399,20 @@ ProjectDocument project_document_from_app_payload(const Json &payload) {
     }
     if (const auto light_json = entity_json.find("light");
         light_json != entity_json.end() && light_json->is_object()) {
-      document.scene().set_light(entity,
-                                 qdr_light_component_from_json(*light_json));
+      document.scene().set_light(
+          entity, qdr_light_component_from_json(
+                      *light_json,
+                      QdrProjectEnumParseMode::StrictCurrentSchema));
     }
     if (entity_json.value("sceneRoot", false) ||
         entity_json.find("sceneSettings") != entity_json.end()) {
       const Json settings_json =
           entity_json.value("sceneSettings", Json::object());
       if (!document.scene().set_scene_settings(
-              entity, qdr_scene_settings_component_from_json(settings_json))) {
+              entity,
+              qdr_scene_settings_component_from_json(
+                  settings_json,
+                  QdrProjectEnumParseMode::StrictCurrentSchema))) {
         throw std::runtime_error(
             "QDR project document contains multiple scene root entities.");
       }
@@ -548,7 +607,8 @@ QdrProjectReadResult legacy_read_result(std::string_view text) {
   QDR_PROFILE_FUNCTION();
   quader_io::QdrReadResult legacy = quader_io::deserialize_document(text);
   if (!legacy.ok) {
-    return {false, ProjectDocument{}, legacy.message, false};
+    return {false, ProjectDocument{}, legacy.message, false,
+            std::move(legacy.diagnostics)};
   }
   return {true, project_document_from_legacy_qdr(legacy.document), {}, true};
 }
@@ -558,44 +618,47 @@ QdrProjectReadResult read_from_root(const Json &root, std::string_view text) {
   quader_io::require_qdr_root_object(root);
   const quader_io::QdrRootHeader header = quader_io::read_qdr_root_header(root);
   if (header.format != quader_io::qdr_string_from_view(kQdrFormatName)) {
-    return {false, ProjectDocument{},
-            "Unsupported Quader file format: " + header.format, false};
+    return project_error_result(
+        "qdr.unsupported_format", "/format",
+        "Unsupported Quader file format: " + header.format);
   }
 
   const int version = header.version;
   if (version < kQdrMinSupportedFormatVersion ||
       version > kQdrProjectFormatVersion) {
-    return {false, ProjectDocument{},
-            "Unsupported Quader file version: " + std::to_string(version),
-            false};
+    return project_error_result(
+        "qdr.unsupported_version", "/version",
+        "Unsupported Quader file version: " + std::to_string(version));
   }
 
   const auto document_payload =
       root.find(quader_io::qdr_string_from_view(kQdrDocumentPayloadKey));
   if (document_payload != root.end()) {
     if (!document_payload->is_object()) {
-      return {false, ProjectDocument{},
-              "QDR document payload must be an object.", false};
+      return project_error_result(
+          "qdr.invalid_payload", "/document",
+          "QDR document payload must be an object.");
     }
 
     const auto kind = document_payload->find("kind");
     if (kind != document_payload->end()) {
       if (!kind->is_string()) {
-        return {false, ProjectDocument{},
-                "QDR project document payload kind must be a string.", false};
+        return project_error_result(
+            "qdr.invalid_payload_kind", "/document/kind",
+            "QDR project document payload kind must be a string.");
       }
       const std::string kind_text = kind->get<std::string>();
       if (kind_text !=
           quader_io::qdr_string_from_view(kQdrProjectDocumentKind)) {
-        return {false, ProjectDocument{},
-                "Unsupported QDR project document payload kind: " + kind_text,
-                false};
+        return project_error_result(
+            "qdr.unsupported_payload_kind", "/document/kind",
+            "Unsupported QDR project document payload kind: " + kind_text);
       }
       if (version != kQdrProjectFormatVersion) {
-        return {false, ProjectDocument{},
-                "QDR project document payload requires version " +
-                    std::to_string(kQdrProjectFormatVersion) + ".",
-                false};
+        return project_error_result(
+            "qdr.payload_version_mismatch", "/version",
+            "QDR project document payload requires version " +
+                std::to_string(kQdrProjectFormatVersion) + ".");
       }
       return {true,
               project_document_from_app_payload(*document_payload),
@@ -604,8 +667,9 @@ QdrProjectReadResult read_from_root(const Json &root, std::string_view text) {
     }
 
     if (version == kQdrProjectFormatVersion) {
-      return {false, ProjectDocument{},
-              "QDR project document payload is missing its kind.", false};
+      return project_error_result(
+          "qdr.missing_payload_kind", "/document/kind",
+          "QDR project document payload is missing its kind.");
     }
     return legacy_read_result(text);
   }
@@ -615,8 +679,8 @@ QdrProjectReadResult read_from_root(const Json &root, std::string_view text) {
     return legacy_read_result(text);
   }
 
-  return {false, ProjectDocument{},
-          "QDR document is missing its document payload.", false};
+  return project_error_result("qdr.missing_payload", "",
+                              "QDR document is missing its document payload.");
 }
 
 } // namespace
@@ -630,11 +694,21 @@ QdrDocumentReader::deserialize_project_document(std::string_view text) {
       return Json::parse(text.begin(), text.end());
     }();
     return read_from_root(root, text);
+  } catch (const quader_io::QdrDiagnosticException &exception) {
+    return project_error_result(exception.diagnostic());
+  } catch (const nlohmann::json::parse_error &exception) {
+    const quader_io::QdrTextLocation location =
+        quader_io::qdr_text_location_from_parse_byte(text, exception.byte);
+    return project_error_result(quader_io::qdr_make_error(
+        "qdr.json_parse_error", "", exception.what(), location.line,
+        location.column));
+  } catch (const nlohmann::json::exception &exception) {
+    return project_error_result("qdr.json_shape_error", "", exception.what());
   } catch (const std::exception &exception) {
-    return {false, ProjectDocument{}, exception.what(), false};
+    return project_error_result("qdr.read_failed", "", exception.what());
   } catch (...) {
-    return {false, ProjectDocument{}, "Unknown error reading QDR document.",
-            false};
+    return project_error_result("qdr.unknown_error", "",
+                                "Unknown error reading QDR document.");
   }
 }
 
@@ -643,15 +717,18 @@ QdrDocumentReader::read_project_document(const std::filesystem::path &path) {
   QDR_PROFILE_FUNCTION();
   std::ifstream stream(path, std::ios::binary);
   if (!stream.is_open()) {
-    return {false, ProjectDocument{},
-            "Could not open QDR document: " + path.string(), false};
+    return project_error_result(quader_io::qdr_make_error(
+        "qdr.file_open_failed", "",
+        "Could not open QDR document: " + path.string(), std::nullopt,
+        std::nullopt, path));
   }
   const std::string text = [&]() {
     QDR_PROFILE_SCOPE("QDR read project file bytes");
     return std::string{std::istreambuf_iterator<char>(stream),
                        std::istreambuf_iterator<char>()};
   }();
-  return deserialize_project_document(text);
+  return project_read_result_with_source_path(deserialize_project_document(text),
+                                             path);
 }
 
 } // namespace quader

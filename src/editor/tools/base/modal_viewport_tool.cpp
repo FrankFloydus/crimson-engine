@@ -7,7 +7,6 @@
 #include "editor/tools/base/modal_viewport_tool.hpp"
 
 #include "core/logger.hpp"
-#include "editor/modeling/services/modeling_session_service.hpp"
 
 namespace quader {
 
@@ -26,8 +25,11 @@ ViewportToolResult ModalViewportTool::handle_event(
 ViewportToolResult
 ModalViewportTool::cancel_active_modal_tool(ViewportToolContext &context,
                                             bool exit_tool) const {
+  if (context.ports.cancel == nullptr) {
+    return {};
+  }
   const ModelingCommandResult cancel =
-      context.modeling.cancel_active_modal_tool();
+      context.ports.cancel->cancel_active_modal_tool();
   if (!cancel.ok) {
     LOG_ERROR("Modal tool cancel failed: {}", cancel.message);
   }
@@ -36,11 +38,11 @@ ModalViewportTool::cancel_active_modal_tool(ViewportToolContext &context,
     context.modal_state->cut_drag_active = false;
     context.modal_state->mirror_drag_active = false;
   }
-  if (context.invalidate_hover) {
-    context.invalidate_hover();
+  if (context.ports.hover != nullptr) {
+    context.ports.hover->invalidate();
   }
-  if (context.mark_overlay_dirty) {
-    context.mark_overlay_dirty();
+  if (context.ports.command_result != nullptr) {
+    context.ports.command_result->mark_overlay_dirty();
   }
   return {
       .handled = true,

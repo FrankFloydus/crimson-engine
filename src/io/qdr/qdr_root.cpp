@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "io/qdr/qdr_root.hpp"
 
+#include "io/qdr/qdr_diagnostic.hpp"
+
 #include <limits>
 #include <stdexcept>
 
@@ -17,39 +19,53 @@ std::string qdr_string_from_view(std::string_view value) {
 
 void require_qdr_root_object(const QdrJson& root) {
     if (!root.is_object()) {
-        throw std::runtime_error("QDR document root must be an object.");
+        throw QdrDiagnosticException(qdr_make_error(
+            "qdr.root_not_object", "",
+            "QDR document root must be an object."));
     }
 }
 
 QdrRootHeader read_qdr_root_header(const QdrJson& root) {
     const auto format = root.find("format");
     if (format == root.end()) {
-        throw std::runtime_error("QDR document is missing its format header.");
+        throw QdrDiagnosticException(qdr_make_error(
+            "qdr.missing_format", "/format",
+            "QDR document is missing its format header."));
     }
     if (!format->is_string()) {
-        throw std::runtime_error("QDR document format header must be a string.");
+        throw QdrDiagnosticException(qdr_make_error(
+            "qdr.invalid_format", "/format",
+            "QDR document format header must be a string."));
     }
 
     const auto version = root.find("version");
     if (version == root.end()) {
-        throw std::runtime_error("QDR document is missing its version header.");
+        throw QdrDiagnosticException(qdr_make_error(
+            "qdr.missing_version", "/version",
+            "QDR document is missing its version header."));
     }
     if (!version->is_number_integer()) {
-        throw std::runtime_error("QDR document version header must be an integer.");
+        throw QdrDiagnosticException(qdr_make_error(
+            "qdr.invalid_version", "/version",
+            "QDR document version header must be an integer."));
     }
 
     int parsed_version = 0;
     if (version->is_number_unsigned()) {
         const auto value = version->get<unsigned long long>();
         if (value > static_cast<unsigned long long>(std::numeric_limits<int>::max())) {
-            throw std::runtime_error("QDR document version header is outside the supported integer range.");
+            throw QdrDiagnosticException(qdr_make_error(
+                "qdr.version_out_of_range", "/version",
+                "QDR document version header is outside the supported integer range."));
         }
         parsed_version = static_cast<int>(value);
     } else {
         const auto value = version->get<long long>();
         if (value < static_cast<long long>(std::numeric_limits<int>::min()) ||
                 value > static_cast<long long>(std::numeric_limits<int>::max())) {
-            throw std::runtime_error("QDR document version header is outside the supported integer range.");
+            throw QdrDiagnosticException(qdr_make_error(
+                "qdr.version_out_of_range", "/version",
+                "QDR document version header is outside the supported integer range."));
         }
         parsed_version = static_cast<int>(value);
     }
@@ -69,7 +85,9 @@ const QdrJson &qdr_payload_from_root(const QdrJson &root,
   if (root.contains(qdr_string_from_view(legacy_payload_key))) {
     return root.at(qdr_string_from_view(legacy_payload_key));
   }
-  throw std::runtime_error("QDR document is missing its document payload.");
+  throw QdrDiagnosticException(qdr_make_error(
+      "qdr.missing_payload", "",
+      "QDR document is missing its document payload."));
 }
 
 } // namespace quader_io

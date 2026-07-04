@@ -6,18 +6,16 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/selected_object_overlay_cache.hpp"
 
-#include "assets/asset_registry.hpp"
 #include "core/color_space.hpp"
 #include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
-#include "mesh/polygon/document.hpp"
+#include "mesh/polygon/document_model.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
 #include "render/filament_utils.hpp"
 #include "render/render_layers.hpp"
 #include "render/overlay/overlay_mesh_types.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
 #include "render/viewport_overlay_policy.hpp"
-#include "scene/scene_document.hpp"
 
 #include <backend/DriverEnums.h>
 #include <filament/Engine.h>
@@ -37,6 +35,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -220,27 +219,68 @@ filament::Box bounds_for_selected_line_vertices(
   return box;
 }
 
-std::vector<OverlayFaceFillVertex>
-selected_face_vertices(const MeshAsset &mesh) {
-  std::vector<OverlayFaceFillVertex> vertices;
-  vertices.reserve(mesh.vertices.size());
-  const std::uint32_t color = rgba8_srgb_to_linear(kOverlaySelectionFaceColor);
-  for (const MeshVertex &vertex : mesh.vertices) {
-    vertices.push_back(
-        {{vertex.position.x, vertex.position.y, vertex.position.z}, {}, color});
-  }
-  return vertices;
+const RenderOverlayMeshSnapshot *find_overlay_mesh_snapshot(
+    const std::vector<RenderOverlayMeshSnapshot> &meshes, EntityId entity) {
+  const auto found =
+      std::find_if(meshes.begin(), meshes.end(),
+                   [entity](const RenderOverlayMeshSnapshot &mesh) {
+                     return mesh.entity == entity;
+                   });
+  return found == meshes.end() ? nullptr : &*found;
 }
 
-std::vector<std::uint32_t> valid_triangle_indices(const MeshAsset &mesh) {
+filament::Box bounds_for_mesh_vertices(std::span<const MeshVertex> vertices) {
+  if (vertices.empty()) {
+    return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
+  }
+
+  QVec3 min_value{
+      std::numeric_limits<float>::max(),
+      std::numeric_limits<float>::max(),
+      std::numeric_limits<float>::max(),
+  };
+  QVec3 max_value{
+      std::numeric_limits<float>::lowest(),
+      std::numeric_limits<float>::lowest(),
+      std::numeric_limits<float>::lowest(),
+  };
+  for (const MeshVertex &vertex : vertices) {
+    min_value.x = std::min(min_value.x, vertex.position.x);
+    min_value.y = std::min(min_value.y, vertex.position.y);
+    min_value.z = std::min(min_value.z, vertex.position.z);
+    max_value.x = std::max(max_value.x, vertex.position.x);
+    max_value.y = std::max(max_value.y, vertex.position.y);
+    max_value.z = std::max(max_value.z, vertex.position.z);
+  }
+
+  filament::Box box;
+  box.set(to_filament(min_value), to_filament(max_value));
+  return box;
+}
+
+std::vector<OverlayFaceFillVertex>
+selected_face_vertices(std::span<const MeshVertex> mesh_vertices) {
+  std::vector<OverlayFaceFillVertex> result;
+  result.reserve(mesh_vertices.size());
+  const std::uint32_t color = rgba8_srgb_to_linear(kOverlaySelectionFaceColor);
+  for (const MeshVertex &vertex : mesh_vertices) {
+    result.push_back(
+        {{vertex.position.x, vertex.position.y, vertex.position.z}, {}, color});
+  }
+  return result;
+}
+
+std::vector<std::uint32_t> valid_triangle_indices(
+    std::span<const MeshVertex> vertices,
+    std::span<const std::uint32_t> indices_source) {
   std::vector<std::uint32_t> indices;
-  indices.reserve(mesh.indices.size());
-  for (std::size_t index = 0u; index + 2u < mesh.indices.size(); index += 3u) {
-    const std::uint32_t a = mesh.indices[index];
-    const std::uint32_t b = mesh.indices[index + 1u];
-    const std::uint32_t c = mesh.indices[index + 2u];
-    if (a < mesh.vertices.size() && b < mesh.vertices.size() &&
-        c < mesh.vertices.size()) {
+  indices.reserve(indices_source.size());
+  for (std::size_t index = 0u; index + 2u < indices_source.size();
+       index += 3u) {
+    const std::uint32_t a = indices_source[index];
+    const std::uint32_t b = indices_source[index + 1u];
+    const std::uint32_t c = indices_source[index + 2u];
+    if (a < vertices.size() && b < vertices.size() && c < vertices.size()) {
       indices.push_back(a);
       indices.push_back(b);
       indices.push_back(c);
@@ -373,65 +413,56 @@ void SelectedObjectOverlayCache::shutdown() {
 }
 
 void SelectedObjectOverlayCache::sync(
-        const SceneDocument& document,
-        const AssetRegistry& assets,
-        bool visible) {
+    const RenderOverlaySelectedObjectSnapshot &snapshot) {
     QDR_PROFILE_FUNCTION();
     if (!initialized()) {
         return;
     }
 
-    if (!visible) {
+    if (!snapshot.visible) {
       set_visible(false);
       return;
     }
     set_visible(true);
 
-    const std::uint64_t scene_revision = document.revision();
-    const std::uint64_t asset_revision = assets.revision();
-    const std::uint64_t selection_revision = document.selection_revision();
-    const std::uint64_t visibility_revision = document.visibility_revision();
-    const std::uint64_t transform_revision = document.transform_revision();
-    const std::uint64_t mesh_binding_revision =
-        document.mesh_binding_revision();
-    if (has_synced_ && synced_asset_revision_ == asset_revision &&
-        synced_selection_revision_ == selection_revision &&
-        synced_visibility_revision_ == visibility_revision &&
-        synced_mesh_binding_revision_ == mesh_binding_revision) {
-      if (synced_transform_revision_ != transform_revision) {
-        update_line_proxy(synced_states_, document);
+    if (has_synced_ && synced_asset_revision_ == snapshot.asset_revision &&
+        synced_selection_revision_ == snapshot.selection_revision &&
+        synced_visibility_revision_ == snapshot.visibility_revision &&
+        synced_mesh_binding_revision_ == snapshot.mesh_binding_revision) {
+      if (synced_transform_revision_ != snapshot.transform_revision) {
+        update_line_proxy(synced_states_, snapshot);
         if (synced_face_fills_enabled_) {
-          update_entry_transforms(document);
+          update_entry_transforms(snapshot);
         }
-        synced_transform_revision_ = transform_revision;
+        synced_transform_revision_ = snapshot.transform_revision;
       }
-      synced_scene_revision_ = scene_revision;
+      synced_scene_revision_ = snapshot.scene_revision;
       return;
     }
 
     const std::vector<SelectedEntityState> states =
-        selected_entity_states(document, assets);
+        selected_entity_states(snapshot);
     const bool face_fills_enabled =
         selected_object_face_fills_enabled_for_selection_count(states.size());
     if (has_synced_ && synced_face_fills_enabled_ == face_fills_enabled &&
         states == synced_states_) {
-      if (synced_transform_revision_ != transform_revision) {
-        update_line_proxy(synced_states_, document);
+      if (synced_transform_revision_ != snapshot.transform_revision) {
+        update_line_proxy(synced_states_, snapshot);
         if (synced_face_fills_enabled_) {
-          update_entry_transforms(document);
+          update_entry_transforms(snapshot);
         }
       }
-      synced_scene_revision_ = scene_revision;
-      synced_asset_revision_ = asset_revision;
-      synced_selection_revision_ = selection_revision;
-      synced_visibility_revision_ = visibility_revision;
-      synced_transform_revision_ = transform_revision;
-      synced_mesh_binding_revision_ = mesh_binding_revision;
+      synced_scene_revision_ = snapshot.scene_revision;
+      synced_asset_revision_ = snapshot.asset_revision;
+      synced_selection_revision_ = snapshot.selection_revision;
+      synced_visibility_revision_ = snapshot.visibility_revision;
+      synced_transform_revision_ = snapshot.transform_revision;
+      synced_mesh_binding_revision_ = snapshot.mesh_binding_revision;
       return;
     }
 
-    sync_line_entries(states, assets);
-    update_line_proxy(states, document);
+    sync_line_entries(states, snapshot);
+    update_line_proxy(states, snapshot);
 
     if (face_fills_enabled) {
       std::unordered_set<EntityId> live_entities;
@@ -449,11 +480,19 @@ void SelectedObjectOverlayCache::sync(
             destroy_entry(existing->second);
             entries_.erase(existing);
           }
-          Entry entry =
-              create_entry(state.entity, state.mesh_id, document, assets);
+          const RenderOverlayMeshSnapshot *mesh =
+              find_overlay_mesh_snapshot(snapshot.meshes, state.entity);
+          if (mesh == nullptr) {
+            continue;
+          }
+          Entry entry = create_entry(*mesh);
           existing = entries_.emplace(state.entity, std::move(entry)).first;
         }
-        update_entry_transform(existing->second, document, state.entity);
+        const RenderOverlayMeshSnapshot *mesh =
+            find_overlay_mesh_snapshot(snapshot.meshes, state.entity);
+        if (mesh != nullptr) {
+          update_entry_transform(existing->second, mesh->world_transform);
+        }
       }
       remove_except(live_entities);
     } else {
@@ -461,39 +500,30 @@ void SelectedObjectOverlayCache::sync(
     }
 
     synced_states_ = states;
-    synced_scene_revision_ = scene_revision;
-    synced_asset_revision_ = asset_revision;
-    synced_selection_revision_ = selection_revision;
-    synced_visibility_revision_ = visibility_revision;
-    synced_transform_revision_ = transform_revision;
-    synced_mesh_binding_revision_ = mesh_binding_revision;
+    synced_scene_revision_ = snapshot.scene_revision;
+    synced_asset_revision_ = snapshot.asset_revision;
+    synced_selection_revision_ = snapshot.selection_revision;
+    synced_visibility_revision_ = snapshot.visibility_revision;
+    synced_transform_revision_ = snapshot.transform_revision;
+    synced_mesh_binding_revision_ = snapshot.mesh_binding_revision;
     synced_face_fills_enabled_ = face_fills_enabled;
     has_synced_ = true;
 }
 
 std::vector<SelectedObjectOverlayCache::SelectedEntityState>
 SelectedObjectOverlayCache::selected_entity_states(
-    const SceneDocument &document, const AssetRegistry &assets) const {
+    const RenderOverlaySelectedObjectSnapshot &snapshot) const {
   QDR_PROFILE_FUNCTION();
   std::vector<SelectedEntityState> states;
-  const std::vector<EntityId> selected = document.selected_entities();
-  states.reserve(selected.size());
-  for (const EntityId entity_id : selected) {
-    if (!document.is_effectively_visible(entity_id)) {
-      continue;
-    }
-    const MeshComponent *mesh_component = document.mesh(entity_id);
-    if (mesh_component == nullptr || mesh_component->mesh == kInvalidAssetId) {
-      continue;
-    }
-    const MeshAsset *mesh = assets.mesh(mesh_component->mesh);
-    if (mesh == nullptr || mesh->vertices.empty() || mesh->indices.empty()) {
+  states.reserve(snapshot.meshes.size());
+  for (const RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
+    if (!mesh.has_triangle_geometry() || mesh.mesh_id == kInvalidAssetId) {
       continue;
     }
     states.push_back({
-        .entity = entity_id,
-        .mesh_id = mesh_component->mesh,
-        .mesh_revision = mesh->revision.value,
+        .entity = mesh.entity,
+        .mesh_id = mesh.mesh_id,
+        .mesh_revision = mesh.mesh_revision,
     });
   }
   return states;
@@ -501,32 +531,44 @@ SelectedObjectOverlayCache::selected_entity_states(
 
 SelectedObjectOverlayCache::LineEntry
 SelectedObjectOverlayCache::create_line_entry(
-    AssetId mesh_id, const AssetRegistry &assets) const {
+    const RenderOverlayMeshSnapshot &mesh) const {
   QDR_PROFILE_FUNCTION();
   LineEntry entry;
-  entry.mesh_id = mesh_id;
-  const MeshAsset *mesh = assets.mesh(mesh_id);
-  if (mesh == nullptr || mesh->vertices.empty() || mesh->indices.empty()) {
+  entry.mesh_id = mesh.mesh_id;
+  if (!mesh.has_triangle_geometry()) {
     return entry;
   }
-  entry.mesh_revision = mesh->revision.value;
+  entry.mesh_revision = mesh.mesh_revision;
 
-  if (mesh->has_authored_polygon_document && mesh->authored_polygon_document) {
+  if (mesh.has_authored_polygon_geometry()) {
     std::unordered_map<quader_poly::ElementId, QVec3> positions;
-    positions.reserve(mesh->authored_polygon_document->vertices.size());
-    for (const quader_poly::Vertex &vertex :
-         mesh->authored_polygon_document->vertices) {
+    positions.reserve(mesh.authored_vertices.size());
+    for (const quader_poly::Vertex &vertex : mesh.authored_vertices) {
       positions.emplace(vertex.id, vertex.position);
     }
 
-    for (const quader_poly::Edge edge :
-         quader_poly::document_edges(*mesh->authored_polygon_document)) {
-      const auto a = positions.find(edge.a);
-      const auto b = positions.find(edge.b);
-      if (a == positions.end() || b == positions.end()) {
+    std::unordered_set<std::uint64_t> emitted_edges;
+    for (const quader_poly::Face &face : mesh.authored_faces) {
+      if (face.vertices.size() < 2u) {
         continue;
       }
-      entry.segments.push_back({.start = a->second, .end = b->second});
+      for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+        const quader_poly::ElementId a_id = face.vertices[index];
+        const quader_poly::ElementId b_id =
+            face.vertices[(index + 1u) % face.vertices.size()];
+        if (!emitted_edges
+                 .insert(edge_key(static_cast<std::uint32_t>(a_id),
+                                  static_cast<std::uint32_t>(b_id)))
+                 .second) {
+          continue;
+        }
+        const auto a = positions.find(a_id);
+        const auto b = positions.find(b_id);
+        if (a == positions.end() || b == positions.end()) {
+          continue;
+        }
+        entry.segments.push_back({.start = a->second, .end = b->second});
+      }
     }
   }
 
@@ -535,10 +577,10 @@ SelectedObjectOverlayCache::create_line_entry(
   }
 
   std::unordered_map<std::uint64_t, TriangleEdgeRecord> edges;
-  edges.reserve(mesh->indices.size());
+  edges.reserve(mesh.indices.size());
 
   auto append_edge = [&](std::uint32_t a, std::uint32_t b, QVec3 normal) {
-    if (a >= mesh->vertices.size() || b >= mesh->vertices.size() || a == b) {
+    if (a >= mesh.vertices.size() || b >= mesh.vertices.size() || a == b) {
       return;
     }
     TriangleEdgeRecord &record = edges[edge_key(a, b)];
@@ -555,17 +597,17 @@ SelectedObjectOverlayCache::create_line_entry(
     ++record.count;
   };
 
-  for (std::size_t index = 0u; index + 2u < mesh->indices.size(); index += 3u) {
-    const std::uint32_t a = mesh->indices[index];
-    const std::uint32_t b = mesh->indices[index + 1u];
-    const std::uint32_t c = mesh->indices[index + 2u];
-    if (a >= mesh->vertices.size() || b >= mesh->vertices.size() ||
-        c >= mesh->vertices.size()) {
+  for (std::size_t index = 0u; index + 2u < mesh.indices.size(); index += 3u) {
+    const std::uint32_t a = mesh.indices[index];
+    const std::uint32_t b = mesh.indices[index + 1u];
+    const std::uint32_t c = mesh.indices[index + 2u];
+    if (a >= mesh.vertices.size() || b >= mesh.vertices.size() ||
+        c >= mesh.vertices.size()) {
       continue;
     }
     QVec3 normal =
-        cross(mesh->vertices[b].position - mesh->vertices[a].position,
-              mesh->vertices[c].position - mesh->vertices[a].position);
+        cross(mesh.vertices[b].position - mesh.vertices[a].position,
+              mesh.vertices[c].position - mesh.vertices[a].position);
     if (length(normal) > 0.000001f) {
       normal = normalize(normal);
     }
@@ -581,8 +623,8 @@ SelectedObjectOverlayCache::create_line_entry(
       continue;
     }
     entry.segments.push_back({
-        .start = mesh->vertices[edge.a].position,
-        .end = mesh->vertices[edge.b].position,
+        .start = mesh.vertices[edge.a].position,
+        .end = mesh.vertices[edge.b].position,
     });
   }
   return entry;
@@ -590,7 +632,7 @@ SelectedObjectOverlayCache::create_line_entry(
 
 void SelectedObjectOverlayCache::sync_line_entries(
     const std::vector<SelectedEntityState> &states,
-    const AssetRegistry &assets) {
+    const RenderOverlaySelectedObjectSnapshot &snapshot) {
   QDR_PROFILE_FUNCTION();
   std::unordered_set<EntityId> live_entities;
   live_entities.reserve(states.size());
@@ -601,7 +643,11 @@ void SelectedObjectOverlayCache::sync_line_entries(
     if (existing == line_entries_.end() ||
         existing->second.mesh_id != state.mesh_id ||
         existing->second.mesh_revision != state.mesh_revision) {
-      line_entries_[state.entity] = create_line_entry(state.mesh_id, assets);
+      const RenderOverlayMeshSnapshot *mesh =
+          find_overlay_mesh_snapshot(snapshot.meshes, state.entity);
+      if (mesh != nullptr) {
+        line_entries_[state.entity] = create_line_entry(*mesh);
+      }
     }
   }
 
@@ -616,7 +662,7 @@ void SelectedObjectOverlayCache::sync_line_entries(
 
 void SelectedObjectOverlayCache::update_line_proxy(
     const std::vector<SelectedEntityState> &states,
-    const SceneDocument &document) {
+    const RenderOverlaySelectedObjectSnapshot &snapshot) {
   QDR_PROFILE_FUNCTION();
   if (states.empty()) {
     destroy_proxy(line_proxy_, true);
@@ -642,13 +688,16 @@ void SelectedObjectOverlayCache::update_line_proxy(
     if (existing == line_entries_.end()) {
       continue;
     }
-    const QMat4 world_from_local =
-        document.world_transform_matrix(state.entity);
+    const RenderOverlayMeshSnapshot *mesh =
+        find_overlay_mesh_snapshot(snapshot.meshes, state.entity);
+    if (mesh == nullptr) {
+      continue;
+    }
     for (const SelectedObjectLineSegment &segment : existing->second.segments) {
       append_selected_line_quad(
           line_vertices, line_indices,
-          transform_point(world_from_local, segment.start),
-          transform_point(world_from_local, segment.end));
+          transform_point(mesh->world_transform, segment.start),
+          transform_point(mesh->world_transform, segment.end));
     }
   }
   if (line_vertices.empty() || line_indices.empty()) {
@@ -729,17 +778,15 @@ void SelectedObjectOverlayCache::update_line_proxy(
 }
 
 SelectedObjectOverlayCache::Entry
-SelectedObjectOverlayCache::create_entry(EntityId entity_id, AssetId mesh_id,
-                                         const SceneDocument &document,
-                                         const AssetRegistry &assets) {
+SelectedObjectOverlayCache::create_entry(
+    const RenderOverlayMeshSnapshot &mesh) {
   QDR_PROFILE_FUNCTION();
   Entry entry;
-  entry.mesh_id = mesh_id;
-  const MeshAsset *mesh = assets.mesh(mesh_id);
-  if (mesh == nullptr || mesh->vertices.empty() || mesh->indices.empty()) {
+  entry.mesh_id = mesh.mesh_id;
+  if (!mesh.has_triangle_geometry()) {
     return entry;
   }
-  entry.mesh_revision = mesh->revision.value;
+  entry.mesh_revision = mesh.mesh_revision;
   entry.transform_root = utils::EntityManager::get().create();
   filament::TransformManager &transforms = engine_->getTransformManager();
   transforms.create(entry.transform_root);
@@ -748,10 +795,11 @@ SelectedObjectOverlayCache::create_entry(EntityId entity_id, AssetId mesh_id,
 
   const std::uint8_t layer_mask = visible_ ? kViewportOverlayLayerMask : 0u;
   std::vector<OverlayFaceFillVertex> face_vertices =
-      selected_face_vertices(*mesh);
-  std::vector<std::uint32_t> face_indices = valid_triangle_indices(*mesh);
+      selected_face_vertices(mesh.vertices);
+  std::vector<std::uint32_t> face_indices =
+      valid_triangle_indices(mesh.vertices, mesh.indices);
   if (!face_vertices.empty() && !face_indices.empty()) {
-    const filament::Box bounds = compute_bounds(*mesh);
+    const filament::Box bounds = bounds_for_mesh_vertices(mesh.vertices);
     for (const ViewportOverlayLayer layer : {
              ViewportOverlayLayer::SelectedXrayFace,
              ViewportOverlayLayer::SelectedFaceMask,
@@ -814,7 +862,7 @@ SelectedObjectOverlayCache::create_entry(EntityId entity_id, AssetId mesh_id,
     }
   }
 
-  update_entry_transform(entry, document, entity_id);
+  update_entry_transform(entry, mesh.world_transform);
   return entry;
 }
 
@@ -900,8 +948,7 @@ void SelectedObjectOverlayCache::set_proxy_layer_mask(
 }
 
 void SelectedObjectOverlayCache::update_entry_transform(
-    const Entry &entry, const SceneDocument &document,
-    EntityId entity_id) const {
+    const Entry &entry, const QMat4 &world_transform) const {
   if (!engine_ || !entry.transform_root) {
     return;
   }
@@ -912,12 +959,11 @@ void SelectedObjectOverlayCache::update_entry_transform(
     transforms.create(entry.transform_root);
     instance = transforms.getInstance(entry.transform_root);
   }
-  transforms.setTransform(
-      instance, make_transform(document.world_transform_matrix(entity_id)));
+  transforms.setTransform(instance, make_transform(world_transform));
 }
 
 void SelectedObjectOverlayCache::update_entry_transforms(
-    const SceneDocument &document) {
+    const RenderOverlaySelectedObjectSnapshot &snapshot) {
   QDR_PROFILE_FUNCTION();
   if (!engine_) {
     return;
@@ -927,7 +973,11 @@ void SelectedObjectOverlayCache::update_entry_transforms(
   for (const SelectedEntityState &state : synced_states_) {
     const auto existing = entries_.find(state.entity);
     if (existing != entries_.end()) {
-      update_entry_transform(existing->second, document, state.entity);
+      const RenderOverlayMeshSnapshot *mesh =
+          find_overlay_mesh_snapshot(snapshot.meshes, state.entity);
+      if (mesh != nullptr) {
+        update_entry_transform(existing->second, mesh->world_transform);
+      }
     }
   }
   transforms.commitLocalTransformTransaction();

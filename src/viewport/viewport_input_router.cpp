@@ -296,14 +296,18 @@ bool ViewportInputRouter::active_tool_allows_selection_fallback() const {
          tool_runtime_->tool_allows_selection_fallback(state_.active_tool);
 }
 
-bool ViewportInputRouter::has_active_modal_preview() const {
-  return tool_runtime_ != nullptr && tool_runtime_->has_active_modal_preview();
+bool ViewportInputRouter::has_active_modal_preview(
+    const ViewportToolPreviewPort &preview, bool snap_enabled) const {
+  return tool_runtime_ != nullptr &&
+         tool_runtime_->has_active_modal_preview(preview, snap_enabled);
 }
 
-const ModelingBoxPreview &ViewportInputRouter::box_preview() const {
-  static const ModelingBoxPreview kEmptyPreview;
-  return tool_runtime_ != nullptr ? tool_runtime_->box_preview()
-                                  : kEmptyPreview;
+ModelingBoxPreview
+ViewportInputRouter::box_preview(const ViewportToolPreviewPort &preview,
+                                 bool snap_enabled) const {
+  return tool_runtime_ != nullptr ? tool_runtime_->box_preview(preview,
+                                                               snap_enabled)
+                                  : ModelingBoxPreview{};
 }
 
 void ViewportInputRouter::clear_modal_tool_state() {

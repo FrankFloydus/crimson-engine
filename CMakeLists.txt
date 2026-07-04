@@ -117,6 +117,7 @@ set(QUADER_MODELING_TOOL_SOURCES
 
 set(QUADER_EDITOR_VIEWPORT_TOOL_SOURCES
     src/editor/tools/viewport_tool.cpp
+    src/editor/tools/viewport_tool_ports.cpp
     src/editor/tools/viewport_tool_runtime.cpp
     src/editor/tools/base/drag_commit_tool.cpp
     src/editor/tools/base/drawn_plane_tool.cpp
@@ -135,6 +136,7 @@ add_library(quader_modeling STATIC
     src/editor/projection/picking_cache_projection.cpp
     src/editor/projection/selection_overlay_projection.cpp
     src/editor/projection/tool_preview_mesh_projection.cpp
+    src/editor/selection/scene_selection_application.cpp
     src/editor/selection/selection_projection_service.cpp
     src/editor/modeling/runtime/modeling_object_runtime_map.cpp
     src/editor/modeling/services/modeling_action_catalog.cpp
@@ -142,8 +144,10 @@ add_library(quader_modeling STATIC
     src/editor/modeling/services/modeling_instant_operation_catalog.cpp
     src/editor/modeling/services/modeling_mesh_sync_service.cpp
     src/editor/modeling/services/modeling_operation_settings.cpp
+    src/editor/modeling/services/runtime_tool_command_service.cpp
     src/editor/modeling/services/modeling_session_services.cpp
     src/editor/modeling/services/modeling_session_service.cpp
+    src/editor/modeling/services/modeling_transform_drag_service.cpp
     src/editor/modeling/preview/transform_preview_service.cpp
     src/editor/modeling/runtime_state/modal_tool_runtime.cpp
     src/editor/modeling/runtime_state/transform_drag_controller.cpp
@@ -162,34 +166,102 @@ target_link_libraries(quader_modeling
     PUBLIC
         quader_modeling_runtime
         quader_editor_metadata
-        quader_qdr_runtime_io
     PRIVATE
+        quader_qdr_runtime_io
         quader_modeling_profile
 )
 
-add_library(quader_core STATIC
-    src/assets/asset_registry.cpp
-    src/assets/bake_service.cpp
-    src/assets/material_document.cpp
+function(quader_configure_core_module target)
+    quader_enable_common_pch(${target})
+    target_include_directories(${target} PUBLIC src)
+    target_compile_definitions(${target}
+        PUBLIC
+            GLM_ENABLE_EXPERIMENTAL)
+    target_compile_features(${target} PUBLIC cxx_std_20)
+endfunction()
+
+add_library(quader_core_utilities STATIC
     src/core/localization_service.cpp
     src/core/logger.cpp
     src/core/qstr.cpp
     src/core/undo_redo_manager.cpp
     src/core/user_config_paths.cpp
-    src/editor/commands/document_command_service.cpp
+)
+
+quader_configure_core_module(quader_core_utilities)
+target_link_libraries(quader_core_utilities PUBLIC spdlog::spdlog)
+
+add_library(quader_assets STATIC
+    src/assets/asset_registry.cpp
+    src/assets/bake_service.cpp
+    src/assets/material_document.cpp
+)
+
+quader_configure_core_module(quader_assets)
+target_link_libraries(quader_assets PUBLIC quader_core_utilities)
+
+add_library(quader_document STATIC
     src/scene/document/project_document.cpp
-    src/scene/document/project_session.cpp
-    src/editor/history/editor_history_service.cpp
+    src/scene/scene_bounds.cpp
+    src/scene/scene_document.cpp
+)
+
+quader_configure_core_module(quader_document)
+target_link_libraries(quader_document
+    PUBLIC
+        quader_assets
+        EnTT::EnTT
+    PRIVATE
+        stduuid)
+
+add_library(quader_editor_services STATIC
+    src/editor/commands/asset_command_service.cpp
+    src/editor/commands/document_command_service.cpp
     src/editor/commands/modeling_command_execution_service.cpp
+    src/editor/history/editor_history_service.cpp
     src/editor/selection/editor_selection_service.cpp
+    src/editor/session/project_asset_bootstrap_service.cpp
+    src/editor/session/project_session.cpp
+)
+
+quader_configure_core_module(quader_editor_services)
+target_link_libraries(quader_editor_services
+    PUBLIC
+        quader_document
+        quader_modeling
+    PRIVATE
+        quader_modeling_profile)
+
+add_library(quader_project_qdr_io STATIC
     src/io/qdr/qdr_document_reader.cpp
     src/io/qdr/qdr_document_writer.cpp
     src/io/qdr/qdr_project_codecs.cpp
-    src/scene/scene_bounds.cpp
-    src/scene/scene_document.cpp
+    src/io/qdr/qdr_project_write_snapshot.cpp
+)
+
+quader_configure_core_module(quader_project_qdr_io)
+target_include_directories(quader_project_qdr_io
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
+target_link_libraries(quader_project_qdr_io
+    PUBLIC
+        quader_document
+        quader_qdr_shared_io
+    PRIVATE
+        Taskflow::Taskflow
+        quader_modeling
+        quader_modeling_profile
+        quader_qdr_document_io)
+
+add_library(quader_core_ui_support STATIC
     src/ui/console_model.cpp
     src/ui/viewport_context_menu_policy.cpp
     src/ui/ui_settings.cpp
+)
+
+quader_configure_core_module(quader_core_ui_support)
+target_link_libraries(quader_core_ui_support PUBLIC quader_core_utilities)
+
+add_library(quader_viewport_services STATIC
     src/viewport/viewport_camera_controller.cpp
     src/viewport/host_viewport_contract_adapter.cpp
     src/viewport/viewport_input_router.cpp
@@ -199,17 +271,30 @@ add_library(quader_core STATIC
     ${QUADER_EDITOR_VIEWPORT_TOOL_SOURCES}
 )
 
-quader_enable_common_pch(quader_core)
-target_include_directories(quader_core
-    PUBLIC src
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
-target_link_libraries(quader_core
-    PUBLIC spdlog::spdlog quader_modeling quader_qdr_shared_io
-    PRIVATE stduuid Taskflow::Taskflow quader_modeling_profile)
-target_compile_definitions(quader_core
+quader_configure_core_module(quader_viewport_services)
+target_link_libraries(quader_viewport_services
     PUBLIC
+        quader_core_utilities
+        quader_editor_metadata
+        quader_modeling
+    PRIVATE
+        quader_modeling_profile)
+
+add_library(quader_core INTERFACE)
+target_include_directories(quader_core INTERFACE src)
+target_compile_definitions(quader_core
+    INTERFACE
         GLM_ENABLE_EXPERIMENTAL)
-target_compile_features(quader_core PUBLIC cxx_std_20)
+target_compile_features(quader_core INTERFACE cxx_std_20)
+target_link_libraries(quader_core
+    INTERFACE
+        quader_assets
+        quader_core_ui_support
+        quader_core_utilities
+        quader_document
+        quader_editor_services
+        quader_project_qdr_io
+        quader_viewport_services)
 
 add_library(quader_api STATIC
     src/api/quader_api.cpp
@@ -357,25 +442,36 @@ quader_register_filament_material(quader_overlay_point_material resources/materi
 quader_register_filament_material(imgui_material resources/materials/imgui.mat imgui)
 quader_register_filament_material(ground_grid_material resources/materials/ground_grid.mat ground_grid)
 
-add_library(quader_runtime STATIC
-    src/app/app_frame_clock.cpp
-    src/app/app_window_settings.cpp
-    src/app/app.cpp
-    src/editor/viewport/transform_gizmo_interaction.cpp
-    src/editor/viewport/viewport_interaction_controller.cpp
-    src/editor/viewport/viewport_selection_interaction.cpp
-    src/editor/transform/scene_transform_drag_service.cpp
+add_library(quader_platform STATIC
     src/platform/fatal_error_handler.cpp
     src/platform/platform_file_dialog.cpp
     src/platform/platform_window.cpp
     src/platform/sdl_event_utils.cpp
     src/platform/sdl_input_adapter.cpp
+)
+
+quader_enable_common_pch(quader_platform)
+target_include_directories(quader_platform PUBLIC src)
+target_link_libraries(quader_platform
+    PUBLIC
+        quader_core
+        SDL3::SDL3)
+target_compile_features(quader_platform PUBLIC cxx_std_20)
+if(WIN32)
+    target_link_libraries(quader_platform
+        PRIVATE
+            Dbghelp
+            Dwmapi
+            Advapi32
+            Comdlg32)
+endif()
+
+add_library(quader_render STATIC
     src/render/filament_utils.cpp
     src/render/filament_buffer_descriptor_factory.cpp
     src/render/filament_environment_library.cpp
     src/render/filament_material_library.cpp
     src/render/imgui_filament_renderer.cpp
-    src/api/quader_editor_api.cpp
     src/api/quader_render_api.cpp
     src/render/light_renderable_cache.cpp
     src/render/material_binding_service.cpp
@@ -387,6 +483,7 @@ add_library(quader_runtime STATIC
     src/render/overlay/overlay_line_mesh_builder.cpp
     src/render/overlay/overlay_point_mesh_builder.cpp
     src/render/overlay/overlay_proxy_factory.cpp
+    src/render/overlay/render_overlay_snapshot.cpp
     src/render/overlay/overlay_renderable_builder.cpp
     src/render/overlay/overlay_renderable_cache.cpp
     src/render/overlay/scene_wireframe_overlay_cache.cpp
@@ -404,11 +501,36 @@ add_library(quader_runtime STATIC
     src/render/texture_binding_service.cpp
     src/render/texture_registry.cpp
     src/render/tool_preview_renderable_cache.cpp
+    src/render/ui_icon_texture_service.cpp
     src/render/viewport_grid_renderer.cpp
     src/render/viewport_overlay_policy.cpp
     src/render/viewport_render_pass_coordinator.cpp
     src/render/viewport_render_target.cpp
     src/render/viewport_renderer.cpp
+)
+
+quader_enable_common_pch(quader_render)
+target_include_directories(quader_render PUBLIC src)
+target_compile_definitions(quader_render
+    PUBLIC
+        QUADER_DEFAULT_FILAMENT_SDK_ROOT="${FILAMENT_SDK_ROOT}"
+)
+target_link_libraries(quader_render
+    PUBLIC
+        quader_api
+        filament_sdk
+    PRIVATE
+        lodepng
+        quader_modeling_profile)
+target_compile_features(quader_render PUBLIC cxx_std_20)
+add_dependencies(quader_render
+    ${QUADER_FILAMENT_MATERIAL_TARGETS})
+
+add_library(quader_ui STATIC
+    src/editor/viewport/transform_gizmo_interaction.cpp
+    src/editor/viewport/viewport_interaction_controller.cpp
+    src/editor/viewport/viewport_selection_interaction.cpp
+    src/editor/transform/scene_transform_drag_service.cpp
     src/ui/console_panel.cpp
     src/ui/imgui_popup_utils.cpp
     src/ui/imgui_quader_widgets.cpp
@@ -432,27 +554,55 @@ add_library(quader_runtime STATIC
     src/ui/viewport_panel.cpp
 )
 
-quader_enable_common_pch(quader_runtime)
-target_include_directories(quader_runtime PUBLIC src "${QUADER_GENERATED_DIR}")
-target_compile_definitions(quader_runtime
-    PUBLIC
-        QUADER_DEFAULT_FILAMENT_SDK_ROOT="${FILAMENT_SDK_ROOT}"
-)
-target_link_libraries(quader_runtime
+quader_enable_common_pch(quader_ui)
+target_include_directories(quader_ui
+    PUBLIC src
+    PRIVATE "${QUADER_GENERATED_DIR}")
+target_link_libraries(quader_ui
     PUBLIC
         quader_api
-        filament_sdk
-        SDL3::SDL3
+        quader_render
         imgui::imgui
-        lodepng
     PRIVATE
-        quader_modeling_profile
+        lodepng
+        quader_modeling_profile)
+target_compile_features(quader_ui PUBLIC cxx_std_20)
+
+add_library(quader_app STATIC
+    src/app/app_frame_clock.cpp
+    src/app/app_window_settings.cpp
+    src/app/app.cpp
+    src/api/quader_editor_api.cpp
 )
-if(WIN32)
-    target_link_libraries(quader_runtime PUBLIC Dbghelp Dwmapi Advapi32 Comdlg32)
-endif()
-add_dependencies(quader_runtime
-    ${QUADER_FILAMENT_MATERIAL_TARGETS})
+
+quader_enable_common_pch(quader_app)
+target_include_directories(quader_app PUBLIC src)
+target_link_libraries(quader_app
+    PUBLIC
+        quader_api
+        quader_platform
+        quader_render
+        quader_ui
+    PRIVATE
+        quader_modeling_profile)
+target_compile_features(quader_app PUBLIC cxx_std_20)
+
+add_library(quader_runtime INTERFACE)
+target_include_directories(quader_runtime
+    INTERFACE
+        src
+        "${QUADER_GENERATED_DIR}")
+target_compile_definitions(quader_runtime
+    INTERFACE
+        QUADER_DEFAULT_FILAMENT_SDK_ROOT="${FILAMENT_SDK_ROOT}"
+)
+target_compile_features(quader_runtime INTERFACE cxx_std_20)
+target_link_libraries(quader_runtime
+    INTERFACE
+        quader_app
+        quader_platform
+        quader_render
+        quader_ui)
 
 add_executable(quader WIN32 src/main.cpp)
 target_link_libraries(quader PRIVATE quader_runtime)
@@ -519,6 +669,8 @@ if(QUADER_BUILD_TESTS)
     add_executable(quader_guardrail_tests
         tests/agent_instruction_routing_tests.cpp
         tests/build_guardrail_tests.cpp
+        tests/cpp_style_guardrail_tests.cpp
+        tests/dependency_matrix_guardrail_tests.cpp
         tests/oop_architecture_guardrail_tests.cpp
         tests/programmatic_api_guardrail_tests.cpp
         tests/ui_layout_guardrail_tests.cpp

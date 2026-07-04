@@ -9,7 +9,7 @@
 #include "app/app_frame_clock.hpp"
 #include "app/app_window_settings.hpp"
 #include "core/types.hpp"
-#include "scene/document/project_session.hpp"
+#include "editor/session/project_session.hpp"
 #include "platform/platform_window.hpp"
 #include "render/render_system.hpp"
 #include "render/scene_render_bridge.hpp"
@@ -23,6 +23,7 @@
 namespace quader {
 
 class QuaderEditorApi;
+class UIPlatformAdapter;
 
 /**
  * Stores the App Options data contract used by the native application shell.
@@ -46,7 +47,6 @@ public:
     void shutdown();
 
 private:
-  void create_startup_scene();
   void handle_window_chrome_action(WindowChromeAction action);
   void save_window_settings();
   bool render_frame(const FrameTiming &frame_timing);
@@ -60,6 +60,7 @@ private:
   RenderSystem render_system_;
   SceneRenderBridge render_bridge_;
   UISystem ui_;
+  std::unique_ptr<UIPlatformAdapter> ui_platform_adapter_;
   ProjectSession project_session_;
   std::unique_ptr<QuaderEditorApi> editor_;
   std::filesystem::path window_settings_path_;

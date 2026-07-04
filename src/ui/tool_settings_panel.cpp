@@ -15,6 +15,7 @@
 #include <imgui.h>
 
 #include <string>
+#include <string_view>
 
 namespace quader {
 namespace {
@@ -59,11 +60,20 @@ localized_tool_settings_title(const LocalizationService &localization,
   return localization.text("ui.panel.tool_settings", "Tool Settings");
 }
 
+std::string_view tool_settings_target_id(
+    const ModelingToolSettingsTarget &target, std::string_view fallback) {
+  if (!target.operation_id.empty()) {
+    return target.operation_id;
+  }
+  return fallback;
+}
+
 } // namespace
 
 void ToolSettingsPanel::draw(UIContext& context, bool& open) {
+  const ModelingSessionService &modeling = context.scene.modeling;
   const ModelingToolSettingsTarget target =
-      context.modeling.tool_settings_target();
+      modeling.tool_settings_target();
   if (!target.active) {
     open = false;
     should_open_for_active_target_ = false;
@@ -91,23 +101,21 @@ void ToolSettingsPanel::before_begin(UIContext& context, bool& open) {
 }
 
 void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
-  ModelingToolSettingsTarget target = context.modeling.tool_settings_target();
-  ModelingInteractionSettings settings =
-      context.modeling.interaction_settings();
-  bool changed = false;
+  const ModelingSessionService &modeling = context.scene.modeling;
+  ModelingToolSettingsTarget target = modeling.tool_settings_target();
+  const ModelingInteractionSettings settings =
+      modeling.interaction_settings();
+  bool setting_write_attempted = false;
 
-  auto apply_settings_update = [&]() {
-    if (!changed) {
-      return;
-    }
-    const ModelingCommandResult result =
-        context.modeling.set_interaction_settings(settings);
+  auto apply_tool_setting_update = [&](std::string_view tool_id,
+                                       std::string_view name, double value) {
+    setting_write_attempted = true;
+    const QuaderApiVoidResult result =
+        context.intent.editor.tools().set_setting(tool_id, name, value);
     if (!result.ok) {
       LOG_ERROR("Tool settings update failed: {}",
                 result.message.empty() ? "Command failed." : result.message);
     }
-    changed = false;
-    target = context.modeling.tool_settings_target();
   };
 
   const std::string title =
@@ -117,7 +125,7 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
 
   switch (target.kind) {
   case ModelingToolSettingsTargetKind::Cut: {
-    const ModelingToolStatus status = context.modeling.tool_status();
+    const ModelingToolStatus status = modeling.tool_status();
     int cut_mode = static_cast<int>(settings.cut_mode);
     const std::string keep_mode =
         context.localization.text("tool_settings.cut.keep_mode", "Keep Mode");
@@ -129,8 +137,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
             discard_left.c_str(),
             cut_mode == static_cast<int>(ModelingCutMode::DiscardLeft))) {
       cut_mode = static_cast<int>(ModelingCutMode::DiscardLeft);
-      settings.cut_mode = ModelingCutMode::DiscardLeft;
-      changed = true;
+      apply_tool_setting_update("cut", "operation.cut.keep_mode",
+                                static_cast<double>(cut_mode));
     }
     const std::string discard_right = context.localization.imgui_label(
         "tool_settings.cut.discard_right", "tool_settings.cut.discard_right",
@@ -139,8 +147,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
             discard_right.c_str(),
             cut_mode == static_cast<int>(ModelingCutMode::DiscardRight))) {
       cut_mode = static_cast<int>(ModelingCutMode::DiscardRight);
-      settings.cut_mode = ModelingCutMode::DiscardRight;
-      changed = true;
+      apply_tool_setting_update("cut", "operation.cut.keep_mode",
+                                static_cast<double>(cut_mode));
     }
     const std::string keep_both = context.localization.imgui_label(
         "tool_settings.cut.keep_both", "tool_settings.cut.keep_both",
@@ -149,12 +157,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
                            cut_mode ==
                                static_cast<int>(ModelingCutMode::KeepBoth))) {
       cut_mode = static_cast<int>(ModelingCutMode::KeepBoth);
-      settings.cut_mode = ModelingCutMode::KeepBoth;
-      changed = true;
-    }
-    if (settings.cut_mode != static_cast<ModelingCutMode>(cut_mode)) {
-      settings.cut_mode = static_cast<ModelingCutMode>(cut_mode);
-      changed = true;
+      apply_tool_setting_update("cut", "operation.cut.keep_mode",
+                                static_cast<double>(cut_mode));
     }
     if (status.cut_active) {
       const std::string preview_points = context.localization.text(
@@ -172,16 +176,17 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
           "operation.edge_bevel.width", "operation.edge_bevel.width", "Width");
       if (quader_slider_float(width_label.c_str(), &width, 0.0625f, 16384.0f,
                               "%.3f")) {
-        settings.edge_bevel_width = width;
-        changed = true;
+        apply_tool_setting_update(tool_settings_target_id(target, "edge_bevel"),
+                                  "operation.edge_bevel.width", width);
       }
         ImGui::SetNextItemWidth(180.0f);
         const std::string segments_label = context.localization.imgui_label(
             "operation.edge_bevel.segments", "operation.edge_bevel.segments",
             "Segments");
         if (quader_slider_int(segments_label.c_str(), &segments, 1, 16)) {
-          settings.edge_bevel_segments = segments;
-          changed = true;
+          apply_tool_setting_update(
+              tool_settings_target_id(target, "edge_bevel"),
+              "operation.edge_bevel.segments", segments);
         }
         ImGui::SetNextItemWidth(180.0f);
         const std::string profile_label = context.localization.imgui_label(
@@ -189,8 +194,9 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
             "Profile");
         if (quader_slider_float(profile_label.c_str(), &profile, 0.0f, 1.0f,
                                 "%.2f")) {
-          settings.edge_bevel_profile = profile;
-          changed = true;
+          apply_tool_setting_update(
+              tool_settings_target_id(target, "edge_bevel"),
+              "operation.edge_bevel.profile", profile);
         }
         break;
     }
@@ -200,8 +206,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
       const std::string steps_label = context.localization.imgui_label(
           "operation.bridge.steps", "operation.bridge.steps", "Steps");
       if (quader_slider_int(steps_label.c_str(), &steps, 1, 64)) {
-        settings.bridge_steps = steps;
-        changed = true;
+        apply_tool_setting_update(tool_settings_target_id(target, "bridge"),
+                                  "operation.bridge.steps", steps);
       }
         break;
     }
@@ -213,8 +219,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
           "Distance");
       if (quader_slider_float(distance_label.c_str(), &thickness, -4.0f, 4.0f,
                               "%.3f")) {
-        settings.thicken_thickness = thickness;
-        changed = true;
+        apply_tool_setting_update(tool_settings_target_id(target, "thicken"),
+                                  "operation.thicken.thickness", thickness);
       }
         break;
     }
@@ -226,16 +232,17 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
           "operation.slice_quad.x_slices", "operation.slice_quad.x_slices",
           "X");
       if (quader_slider_int(x_label.c_str(), &x_slices, 0, 64)) {
-        settings.slice_quad_x_slices = x_slices;
-        changed = true;
+        apply_tool_setting_update(tool_settings_target_id(target, "slice_quad"),
+                                  "operation.slice_quad.x_slices", x_slices);
       }
         ImGui::SetNextItemWidth(180.0f);
         const std::string y_label = context.localization.imgui_label(
             "operation.slice_quad.y_slices", "operation.slice_quad.y_slices",
             "Y");
         if (quader_slider_int(y_label.c_str(), &y_slices, 0, 64)) {
-          settings.slice_quad_y_slices = y_slices;
-          changed = true;
+          apply_tool_setting_update(
+              tool_settings_target_id(target, "slice_quad"),
+              "operation.slice_quad.y_slices", y_slices);
         }
         break;
     }
@@ -248,8 +255,9 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
           "operation.merge_by_distance.tolerance", "Tolerance");
       if (quader_slider_float(tolerance_label.c_str(), &tolerance, 0.0f,
                               128.0f, "%.4f")) {
-        settings.merge_by_distance_tolerance = tolerance;
-        changed = true;
+        apply_tool_setting_update(
+            tool_settings_target_id(target, "merge_by_distance"),
+            "operation.merge_by_distance.tolerance", tolerance);
       }
         break;
     }
@@ -257,7 +265,9 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
         break;
     }
 
-    apply_settings_update();
+    if (setting_write_attempted) {
+      target = modeling.tool_settings_target();
+    }
     if (!target.active) {
         open = false;
     }
@@ -271,28 +281,28 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
             "history.apply_operation", "Apply {operation}",
             {{"operation", title}});
         const QuaderApiVoidResult result =
-            context.editor.modeling().commit_preview(history_label);
+            context.intent.editor.modeling().commit_preview(history_label);
         if (!result.ok) {
           LOG_ERROR("Tool preview apply failed: {}", result.message.empty()
                                                          ? "Command failed."
                                                          : result.message);
         }
         open =
-            result.ok ? false : context.modeling.tool_settings_target().active;
+            result.ok ? false : modeling.tool_settings_target().active;
       }
       ImGui::SameLine();
       const std::string cancel_label = context.localization.imgui_label(
           "ui.action.cancel", "ui.action.cancel", "Cancel");
       if (ImGui::Button(cancel_label.c_str())) {
         const QuaderApiVoidResult result =
-            context.editor.modeling().cancel_preview();
+            context.intent.editor.modeling().cancel_preview();
         if (!result.ok) {
           LOG_ERROR("Tool preview cancel failed: {}", result.message.empty()
                                                           ? "Command failed."
                                                           : result.message);
         }
         open =
-            result.ok ? false : context.modeling.tool_settings_target().active;
+            result.ok ? false : modeling.tool_settings_target().active;
       }
     }
 }

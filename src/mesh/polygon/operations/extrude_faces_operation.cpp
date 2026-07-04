@@ -60,6 +60,7 @@ OperationResult extrude_selected_faces_impl(Document& document, Selection& selec
 
     std::vector<ElementId> selected_faces;
     selected_faces.reserve(faces.size());
+    OperationResult result;
     bool changed = false;
     for (const Face& original_face : faces) {
         Face* face = find_face(document, original_face.id);
@@ -85,6 +86,8 @@ OperationResult extrude_selected_faces_impl(Document& document, Selection& selec
             continue;
         }
 
+        result.created.vertices.insert(
+            result.created.vertices.end(), cap_vertices.begin(), cap_vertices.end());
         face->vertices = cap_vertices;
         for (std::size_t index = 0; index < original_face.vertices.size(); ++index) {
             const std::array side {
@@ -93,10 +96,14 @@ OperationResult extrude_selected_faces_impl(Document& document, Selection& selec
                 cap_vertices[(index + 1U) % cap_vertices.size()],
                 cap_vertices[index],
             };
-            [[maybe_unused]] const ElementId side_face_id = add_face(document, side, original_face.material_slot);
+            const ElementId side_face_id = add_face(document, side, original_face.material_slot);
+            if (side_face_id != kInvalidElementId) {
+                result.created.faces.push_back(side_face_id);
+            }
         }
 
         selected_faces.push_back(original_face.id);
+        result.affected.faces.push_back(original_face.id);
         changed = true;
     }
 
@@ -109,7 +116,8 @@ OperationResult extrude_selected_faces_impl(Document& document, Selection& selec
     selection.mode = SelectionMode::Face;
     selection.faces = std::move(selected_faces);
     activate_face_or_last_selection(selection, active_face_id);
-    return { true, {} };
+    result.changed = true;
+    return result;
 }
 
 OperationResult ExtrudeFacesOperation::apply(Document& document, Selection& selection) const

@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 #include <algorithm>
 
@@ -55,6 +55,8 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadSubdividesASelectedQuadIntoAnX
 	const OperationResult result = slice_selected_quads(fixture.document, selection, 1, 1);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 	EXPECT_TRUE(fixture.document.vertices.size() == 9U);
 	EXPECT_TRUE(fixture.document.faces.size() == 4U);
 	EXPECT_TRUE(count_vertices_at(fixture.document, { 0.0F, 0.0F, 0.0F }) == 1U);
@@ -80,6 +82,8 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadSupportsOneAxisStripsAndZeroCo
 		const OperationResult result = slice_selected_quads(fixture.document, selection, 2, 0);
 
 		EXPECT_TRUE(result.changed);
+
+		qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 		EXPECT_TRUE(fixture.document.faces.size() == 3U);
 		EXPECT_TRUE(fixture.document.vertices.size() == 8U);
 		EXPECT_TRUE(selection.faces.size() == 3U);
@@ -103,6 +107,8 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadSupportsOneAxisStripsAndZeroCo
 		const OperationResult result = slice_selected_quads(fixture.document, selection, 0, 2);
 
 		EXPECT_TRUE(result.changed);
+
+		qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 		EXPECT_TRUE(fixture.document.faces.size() == 3U);
 		EXPECT_TRUE(fixture.document.vertices.size() == 8U);
 		EXPECT_TRUE(selection.faces.size() == 3U);
@@ -164,6 +170,8 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadUsesStableAxesForCoplanarQuads
 	const OperationResult result = slice_selected_quads(document, selection, 1, 2);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
 	EXPECT_TRUE(document.faces.size() == 12U);
 	EXPECT_TRUE(document.vertices.size() == 24U);
 	EXPECT_TRUE(count_vertices_at(document, { -1.0F, 1.0F, 1.0F / 3.0F }) == 1U);
@@ -195,6 +203,8 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadKeepsGeneratedRightSideWallCel
 	const OperationResult result = slice_selected_quads(document, selection, 1, 1);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
 	EXPECT_TRUE(document.faces.size() == 4U);
 	EXPECT_TRUE(selection.faces.size() == 4U);
 	for (const Face& face : document.faces) {
@@ -213,6 +223,8 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadPropagatesSelectedCubeFaceBoun
 	const OperationResult result = slice_selected_quads(document, selection, 3, 3);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
 	EXPECT_TRUE(selection.faces.size() == 16U);
 	EXPECT_TRUE(qdr_test::open_edge_count(document) == 0U);
 	EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
@@ -230,6 +242,8 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadSlicesSelectedTriangleFaces) {
       slice_selected_quads(document, selection, 1, 1);
 
   EXPECT_TRUE(result.changed);
+
+  qdr_test::expect_valid_polygon_document_after_success(document, result);
   EXPECT_GT(document.faces.size(), 1U);
   EXPECT_GT(document.vertices.size(), 3U);
   EXPECT_TRUE(selection.mode == SelectionMode::Face);
@@ -261,6 +275,8 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadSupportsMixedQuadAndTriangleFa
 	const OperationResult result = slice_selected_quads(document, selection, 1, 1);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
 	EXPECT_GT(document.faces.size(), 5U);
 	EXPECT_GT(document.vertices.size(), 7U);
         EXPECT_TRUE(selection.mode == SelectionMode::Face);

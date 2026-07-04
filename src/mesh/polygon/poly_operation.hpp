@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include <mesh/polygon/document.hpp>
+#include <mesh/polygon/document_operations.hpp>
 
 #include <string_view>
 

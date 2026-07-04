@@ -11,7 +11,9 @@
 namespace quader {
 
 /**
- * Implements Transform Viewport Tool behavior for editor-owned viewport tool interactions.
+ * Descriptor wrapper for Move, Rotate, and Scale viewport tools. TransformGizmoInteraction owns
+ * the viewport state machine and ModelingTransformDragService owns runtime/scene preview
+ * orchestration.
  */
 class TransformViewportTool : public InteractiveViewportTool {
 public:

@@ -93,6 +93,32 @@ filament::Texture *TextureBindingService::resolve_texture(
   return loaded ? loaded : fallback;
 }
 
+filament::Texture *TextureBindingService::resolve_texture(
+    const RenderMaterialAssetSnapshot *material, const char *slot_name,
+    filament::Texture *fallback) {
+  if (!material || !material->present) {
+    return fallback;
+  }
+  const RenderTextureAssetSnapshot *texture =
+      material->texture_for_slot(slot_name);
+  if (!texture || !texture->present) {
+    return fallback;
+  }
+  const TextureCacheKey cache_key{
+      .id = texture->texture_id,
+      .revision = texture->texture.revision.value,
+      .color_space = texture->texture.color_space,
+  };
+  if (const auto cached = texture_cache_.find(cache_key);
+      cached != texture_cache_.end()) {
+    return cached->second ? cached->second : fallback;
+  }
+  filament::Texture *loaded = load_texture_asset(texture->texture);
+  texture_cache_[cache_key] = loaded;
+  evict_obsolete_texture_revisions(cache_key);
+  return loaded ? loaded : fallback;
+}
+
 filament::Texture *
 TextureBindingService::load_texture_asset(const TextureAsset &texture) {
   if (!engine_ || texture.source_path.empty()) {

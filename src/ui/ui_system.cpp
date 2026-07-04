@@ -12,28 +12,22 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "quader_app_version.hpp"
-#include "render/filament_buffer_descriptor_factory.hpp"
+#include "render/scene_render_extraction.hpp"
 #include "ui/console_panel.hpp"
 #include "ui/imgui_popup_utils.hpp"
 #include "ui/inspector_panel.hpp"
 #include "ui/outliner_panel.hpp"
 #include "ui/ui_context.hpp"
+#include "ui/ui_platform_adapter.hpp"
 #include "ui/viewport_input_frame_builder.hpp"
 
-#include <filament/Texture.h>
 #include <imgui.h>
-#include <imgui_impl_sdl3.h>
 #include <imgui_internal.h>
-#include <lodepng.h>
-#include <SDL3/SDL_error.h>
-#include <SDL3/SDL_mouse.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <cstring>
 #include <filesystem>
-#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <string>
@@ -67,6 +61,18 @@ ImVec4 ui_color(int red, int green, int blue, float alpha = 1.0f) {
 
 ImU32 ui_packed_color(int red, int green, int blue, int alpha = 255) {
   return IM_COL32(red, green, blue, alpha);
+}
+
+UIIconSet to_ui_icon_set(const RenderUiIconSet &icons) {
+  return UIIconSet{
+      .logo = static_cast<ImTextureID>(icons.logo),
+      .mesh = static_cast<ImTextureID>(icons.mesh),
+      .empty = static_cast<ImTextureID>(icons.empty),
+      .lock = static_cast<ImTextureID>(icons.lock),
+      .unlock = static_cast<ImTextureID>(icons.unlock),
+      .hide = static_cast<ImTextureID>(icons.hide),
+      .show = static_cast<ImTextureID>(icons.show),
+  };
 }
 
 void clamp_dock_leaf_node_width(ImGuiDockNode *node, float minimum_width) {
@@ -315,10 +321,12 @@ UISystem::~UISystem() {
     shutdown();
 }
 
-void UISystem::initialize(SDL_Window *window, RenderSystem &render_system,
+void UISystem::initialize(UIPlatformAdapter &platform_adapter,
+                          RenderSystem &render_system,
                           const std::filesystem::path &executable_dir,
                           bool custom_chrome) {
-  window_ = window;
+  platform_adapter_ = &platform_adapter;
+  render_system_ = &render_system;
   custom_chrome_ = custom_chrome;
   settings_paths_ = UISettings::resolve_paths(executable_dir);
   std::error_code error;
@@ -356,12 +364,11 @@ void UISystem::initialize(SDL_Window *window, RenderSystem &render_system,
   load_ui_default_font(executable_dir, style_);
   apply_ui_style(style_);
 
-  LOG_INFO("Initializing ImGui SDL3 backend");
-  ImGui_ImplSDL3_InitForOther(window_);
+  LOG_INFO("Initializing ImGui platform backend");
+  platform_adapter_->initialize_imgui_backend();
   LOG_INFO("Initializing ImGui Filament renderer");
-  renderer_.initialize(render_system.engine(), render_system.imgui_material(),
-                       render_system.textures());
-  load_icons(render_system.engine(), render_system.textures(), executable_dir);
+  render_system.initialize_imgui_renderer(renderer_);
+  icons_ = to_ui_icon_set(render_system.load_ui_icon_textures(executable_dir));
   initialized_ = true;
   LOG_INFO("ImGui docking UI initialized");
 }
@@ -382,18 +389,24 @@ void UISystem::shutdown() {
       viewport_panel_->shutdown();
     }
     renderer_.shutdown();
-    destroy_icons();
-    ImGui_ImplSDL3_Shutdown();
+    if (render_system_ != nullptr) {
+      render_system_->clear_ui_icon_textures();
+    }
+    icons_ = UIIconSet{};
+    if (platform_adapter_ != nullptr) {
+      platform_adapter_->shutdown_imgui_backend();
+    }
     ImGui::DestroyContext();
     initialized_ = false;
-    window_ = nullptr;
+    platform_adapter_ = nullptr;
+    render_system_ = nullptr;
     custom_chrome_ = false;
     pending_chrome_action_.reset();
     viewport_panel_ = nullptr;
 }
 
-bool UISystem::process_event(const SDL_Event &event) {
-  return ImGui_ImplSDL3_ProcessEvent(&event);
+bool UISystem::process_event(const UIPlatformEvent &event) {
+  return platform_adapter_ != nullptr && platform_adapter_->process_event(event);
 }
 
 void UISystem::begin_frame(const FrameTiming &frame_timing,
@@ -404,12 +417,9 @@ void UISystem::begin_frame(const FrameTiming &frame_timing,
   renderer_.release_frame_resources();
   relative_mouse_delta_ = {};
   if (relative_mouse_captured_) {
-    float delta_x = 0.0f;
-    float delta_y = 0.0f;
-    (void)SDL_GetRelativeMouseState(&delta_x, &delta_y);
-    relative_mouse_delta_ = {delta_x, delta_y};
+    relative_mouse_delta_ = platform_adapter_->relative_mouse_delta();
   }
-  ImGui_ImplSDL3_NewFrame();
+  platform_adapter_->begin_frame();
   ImGuiIO &io = ImGui::GetIO();
   io.DisplaySize = {
       static_cast<float>(std::max(1u, framebuffer_width)),
@@ -427,12 +437,7 @@ void UISystem::end_frame_without_render() {
   }
 }
 
-void UISystem::draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
-                    SceneDocument &document, AssetRegistry &assets,
-                    ModelingSessionService &modeling,
-                    EditorSelectionService &selection, AssetId default_material,
-                    bool &quit_requested) {
-  QDR_PROFILE_FUNCTION();
+void UISystem::install_runtime_hooks(QuaderEditorApi &editor) {
   editor.ui().set_runtime_hooks(QuaderUIRuntimeHooks{
       .is_panel_visible =
           [this](std::string_view panel) {
@@ -507,6 +512,14 @@ void UISystem::draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
             return runtime_status(before != visible);
           },
   });
+}
+
+void UISystem::draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
+                    SceneDocument &document, AssetRegistry &assets,
+                    ModelingSessionService &modeling,
+                    EditorSelectionService &selection, AssetId default_material,
+                    bool &quit_requested) {
+  QDR_PROFILE_FUNCTION();
   {
     QDR_PROFILE_SCOPE("UI menus and chrome");
     close_menu_popup_for_pass_through_click();
@@ -539,32 +552,51 @@ void UISystem::draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
   UIStyleTokens frame_style = style_;
   frame_style.sidebar_min_width = effective_sidebar_minimum_width(
       ImGui::GetMainViewport()->Size.x, panels_, style_.sidebar_min_width);
-  UIContext context{
-      .editor = editor,
+  UIInspectorPreviewContext inspector_preview_context{
+      .document = document,
+      .assets = assets,
+  };
+  UIPreferencesContext preferences_context{
+      .ui = settings_,
+      .viewport = viewport_settings_,
+      .ui_settings_changed = &settings_changed,
+  };
+  UIViewportSurfaceContext viewport_context{
       .render_bridge = render_bridge,
       .document = document,
       .assets = assets,
       .modeling = modeling,
       .selection = selection,
       .default_material = default_material,
+      .frame_timing = current_frame_timing_,
+      .render_performance = render_performance_stats_,
+      .relative_mouse_delta = relative_mouse_delta_,
+      .render_resize_suspended = viewport_render_resize_suspended_,
+      .cursor_capture_requested = &viewport_cursor_capture_requested,
+      .cursor_capture_point = &viewport_cursor_capture_point,
+  };
+  UIContext context{
+      .intent = {.editor = editor},
+      .scene =
+          {
+              .document = document,
+              .assets = assets,
+              .modeling = modeling,
+              .selection = selection,
+              .default_material = default_material,
+          },
+      .inspector_preview = &inspector_preview_context,
+      .viewport = &viewport_context,
+      .preferences = preferences_context,
       .quit_requested = quit_requested,
       .style = frame_style,
       .icons = icons_,
       .localization = localization_,
-      .settings = settings_,
-      .viewport_settings = viewport_settings_,
-      .frame_timing = current_frame_timing_,
-      .render_performance = render_performance_stats_,
-      .viewport_relative_mouse_delta = relative_mouse_delta_,
-      .viewport_render_resize_suspended = viewport_render_resize_suspended_,
-      .viewport_cursor_capture_requested = &viewport_cursor_capture_requested,
-      .viewport_cursor_capture_point = &viewport_cursor_capture_point,
       .focused_panel = focused_panel_,
       .previous_focused_panel = previous_focused_panel,
       .focused_panel_storage = &focused_panel_,
       .panel_focus_changed = &panel_focus_changed,
       .command_shortcut_consumed = &command_shortcut_consumed,
-      .settings_changed = &settings_changed,
   };
   {
     QDR_PROFILE_SCOPE("UI draw panels");
@@ -593,21 +625,21 @@ void UISystem::draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
     std::vector<ModelingToolPreviewMesh> modeling_preview_meshes =
         has_tool_preview_meshes ? modeling.tool_preview_meshes()
                                 : std::vector<ModelingToolPreviewMesh>{};
-    std::vector<SceneRenderBridge::PreviewMesh> render_preview_meshes;
+    std::vector<ToolPreviewMesh> render_preview_meshes;
     render_preview_meshes.reserve(modeling_preview_meshes.size());
     for (ModelingToolPreviewMesh &preview_mesh : modeling_preview_meshes) {
       const AssetId material = preview_mesh.material != kInvalidAssetId
                                    ? preview_mesh.material
                                    : default_material;
-      render_preview_meshes.push_back(SceneRenderBridge::PreviewMesh{
+      render_preview_meshes.push_back(ToolPreviewMesh{
           .source_entity = preview_mesh.source_entity,
           .material = material,
           .mesh = std::move(preview_mesh.mesh),
           .transform = {},
       });
     }
-    render_bridge.set_tool_preview_meshes(std::move(render_preview_meshes),
-                                          assets);
+    render_bridge.set_tool_preview_meshes(
+        build_render_tool_preview_snapshot(render_preview_meshes, assets));
   }
   enforce_sidebar_dock_minimums(frame_style.sidebar_min_width);
   set_viewport_cursor_captured(viewport_cursor_capture_requested);
@@ -632,20 +664,20 @@ void UISystem::prepare_viewports(QuaderEditorApi &editor,
   if (viewport_panel_ != nullptr) {
     viewport_panel_->prepare_viewports(
         QuaderViewportApiRuntimeAccess::workspace(editor.viewports()),
-        render_bridge, document, assets);
+        editor, render_bridge, document, assets);
   }
 }
 
 void UISystem::render_viewports(RenderSystem &render_system) {
   QDR_PROFILE_FUNCTION();
   if (viewport_panel_ != nullptr) {
-    viewport_panel_->render_viewports(render_system.renderer());
+    viewport_panel_->render_viewports(render_system);
   }
 }
 
 void UISystem::render(RenderSystem &render_system) {
   QDR_PROFILE_FUNCTION();
-  renderer_.render(render_system.renderer());
+  render_system.render_imgui(renderer_);
 }
 
 void UISystem::set_render_performance_stats(RenderFramePerformanceStats stats) {
@@ -909,14 +941,16 @@ void UISystem::enforce_sidebar_dock_minimums(float sidebar_minimum_width) {
 }
 
 void UISystem::set_viewport_cursor_captured(bool captured) {
-  if (window_ == nullptr || relative_mouse_captured_ == captured) {
+  if (platform_adapter_ == nullptr || relative_mouse_captured_ == captured) {
     return;
   }
 
-  if (!SDL_SetWindowRelativeMouseMode(window_, captured)) {
+  std::string error_message;
+  if (!platform_adapter_->set_relative_mouse_captured(captured,
+                                                      error_message)) {
     if (!relative_mouse_capture_warning_issued_) {
       LOG_WARN("Unable to {} viewport relative mouse mode: {}",
-               captured ? "enable" : "disable", SDL_GetError());
+               captured ? "enable" : "disable", error_message);
       relative_mouse_capture_warning_issued_ = true;
     }
     return;
@@ -925,118 +959,18 @@ void UISystem::set_viewport_cursor_captured(bool captured) {
   relative_mouse_captured_ = captured;
   relative_mouse_capture_warning_issued_ = false;
   if (captured) {
-    float discard_x = 0.0f;
-    float discard_y = 0.0f;
-    (void)SDL_GetRelativeMouseState(&discard_x, &discard_y);
+    platform_adapter_->discard_relative_mouse_delta();
     relative_mouse_delta_ = {};
   }
 }
 
 void UISystem::warp_captured_cursor(QVec2 point) {
-  if (window_ == nullptr || !relative_mouse_captured_) {
+  if (platform_adapter_ == nullptr || !relative_mouse_captured_) {
     return;
   }
-  SDL_WarpMouseInWindow(window_, point.x, point.y);
-  float discard_x = 0.0f;
-  float discard_y = 0.0f;
-  (void)SDL_GetRelativeMouseState(&discard_x, &discard_y);
+  platform_adapter_->warp_mouse_in_window(point);
+  platform_adapter_->discard_relative_mouse_delta();
   relative_mouse_delta_ = {};
-}
-
-void UISystem::load_icons(filament::Engine &engine, TextureRegistry &textures,
-                          const std::filesystem::path &executable_dir) {
-  icon_engine_ = &engine;
-  icon_texture_registry_ = &textures;
-
-  auto load_path =
-      [&](const std::filesystem::path &icon_path) {
-        std::vector<unsigned char> pixels;
-        unsigned width = 0;
-        unsigned height = 0;
-        const unsigned error =
-            lodepng::decode(pixels, width, height, icon_path.string());
-        if (error != 0u || pixels.empty() || width == 0u || height == 0u) {
-          LOG_WARN("Unable to load UI icon {}: {}", icon_path.string(),
-                   lodepng_error_text(error));
-          return ImTextureID_Invalid;
-        }
-
-        const std::size_t row_byte_count = static_cast<std::size_t>(width) * 4u;
-        std::vector<unsigned char> flipped(pixels.size());
-        for (unsigned y = 0; y < height; ++y) {
-          const std::size_t source_offset =
-              static_cast<std::size_t>(y) * row_byte_count;
-          const std::size_t target_offset =
-              static_cast<std::size_t>(height - 1u - y) * row_byte_count;
-          std::memcpy(flipped.data() + target_offset,
-                      pixels.data() + source_offset, row_byte_count);
-        }
-
-        filament::Texture* texture = filament::Texture::Builder()
-                .width(width)
-                .height(height)
-                .levels(1)
-                .format(filament::Texture::InternalFormat::RGBA8)
-                .usage(filament::Texture::Usage::UPLOADABLE | filament::Texture::Usage::SAMPLEABLE)
-                .build(engine);
-        texture->setImage(engine, 0,
-                          FilamentBufferDescriptorFactory::rgba_pixels(
-                              flipped.data(), flipped.size()));
-        const ImTextureID id = textures.register_texture(texture);
-        icon_textures_.push_back(texture);
-        icon_texture_ids_.push_back(id);
-        return id;
-      };
-  auto load = [&](const char *filename) {
-    return load_path(executable_dir / "icons" / filename);
-  };
-  auto load_first_available =
-      [&](std::initializer_list<std::filesystem::path> paths) {
-        for (const std::filesystem::path& path : paths) {
-          if (!std::filesystem::exists(path)) {
-            continue;
-          }
-          const ImTextureID texture = load_path(path);
-          if (texture != ImTextureID_Invalid) {
-            return texture;
-          }
-        }
-        return ImTextureID_Invalid;
-      };
-
-  icons_.logo = load_first_available({
-      executable_dir / "icons" / "quader-logo@2x.png",
-      executable_dir / "icons" / "logo.png",
-  });
-  icons_.mesh = load("mesh_icon.png");
-  icons_.empty = load("empty_icon.png");
-  icons_.lock = load("lock_icon.png");
-  icons_.unlock = load("unlock_icon.png");
-  icons_.hide = load("hide_icon.png");
-  icons_.show = load("show_icon.png");
-}
-
-void UISystem::destroy_icons() {
-  if (icon_texture_registry_ != nullptr) {
-    for (const ImTextureID id : icon_texture_ids_) {
-      if (id != ImTextureID_Invalid) {
-        icon_texture_registry_->unregister_texture(id);
-      }
-    }
-  }
-  icon_texture_ids_.clear();
-
-  if (icon_engine_ != nullptr) {
-    for (filament::Texture *texture : icon_textures_) {
-      if (texture != nullptr) {
-        icon_engine_->destroy(texture);
-      }
-    }
-  }
-  icon_textures_.clear();
-  icons_ = UIIconSet{};
-  icon_engine_ = nullptr;
-  icon_texture_registry_ = nullptr;
 }
 
 void UISystem::save_settings() {

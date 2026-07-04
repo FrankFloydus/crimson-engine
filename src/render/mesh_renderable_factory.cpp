@@ -20,9 +20,11 @@
 #include <math/mat4.h>
 #include <utils/EntityManager.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace quader {
@@ -119,6 +121,36 @@ filament::math::float4 tangent_frame_from_normal(QVec3 normal) {
   return {packed.x, packed.y, packed.z, packed.w};
 }
 
+filament::Box compute_bounds(const RenderMeshAssetSnapshot &mesh) {
+  if (mesh.vertices.empty()) {
+    return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
+  }
+
+  QVec3 min_value{
+      std::numeric_limits<float>::max(),
+      std::numeric_limits<float>::max(),
+      std::numeric_limits<float>::max(),
+  };
+  QVec3 max_value{
+      std::numeric_limits<float>::lowest(),
+      std::numeric_limits<float>::lowest(),
+      std::numeric_limits<float>::lowest(),
+  };
+
+  for (const MeshVertex &vertex : mesh.vertices) {
+    min_value.x = std::min(min_value.x, vertex.position.x);
+    min_value.y = std::min(min_value.y, vertex.position.y);
+    min_value.z = std::min(min_value.z, vertex.position.z);
+    max_value.x = std::max(max_value.x, vertex.position.x);
+    max_value.y = std::max(max_value.y, vertex.position.y);
+    max_value.z = std::max(max_value.z, vertex.position.z);
+  }
+
+  filament::Box box;
+  box.set(to_filament(min_value), to_filament(max_value));
+  return box;
+}
+
 void destroy_mesh_renderable_proxy_resources(filament::Engine &engine,
                                              filament::Scene *scene,
                                              MeshRenderableProxy &proxy,
@@ -170,20 +202,20 @@ void MeshRenderableFactory::shutdown() {
 }
 
 MeshRenderableProxy MeshRenderableFactory::create(
-    EntityId entity_id, AssetId mesh_id, const MeshAsset &mesh,
-    const MaterialComponent *material, const AssetRegistry &assets,
+    EntityId entity_id, const RenderMeshAssetSnapshot &mesh,
+    const RenderMaterialBindingSnapshot *material,
     const QMat4 &world_transform, bool cast_shadows, bool double_sided,
-    std::uint64_t material_revision, std::uint8_t layer_mask, bool editor_unlit,
-    bool depth_only, std::uint8_t channel) {
+    std::uint8_t layer_mask, bool editor_unlit, bool depth_only,
+    std::uint8_t channel) {
   QDR_PROFILE_FUNCTION();
   MeshRenderableProxy proxy;
   MeshRenderableCreationGuard creation_guard(*engine_, *scene_, proxy);
   proxy.entity = utils::EntityManager::get().create();
   proxy.source_entity = entity_id;
-  proxy.mesh = mesh_id;
-  proxy.mesh_revision = mesh.revision.value;
-  proxy.material = material ? material->material : kInvalidAssetId;
-  proxy.material_revision = material_revision;
+  proxy.mesh = mesh.mesh_id;
+  proxy.mesh_revision = mesh.mesh_revision;
+  proxy.material = material ? material->component.material : kInvalidAssetId;
+  proxy.material_revision = material ? material->revision : 0;
   proxy.cast_shadows = cast_shadows;
   proxy.double_sided = double_sided;
 
@@ -229,11 +261,11 @@ MeshRenderableProxy MeshRenderableFactory::create(
             .bufferType(filament::IndexBuffer::IndexType::UINT)
             .build(*engine_);
     proxy.index_buffer->setBuffer(
-        *engine_, FilamentBufferDescriptorFactory::vector(mesh.indices));
+        *engine_, FilamentBufferDescriptorFactory::span(mesh.indices));
   }
 
   const std::vector<MeshPrimitiveSpan> primitive_spans =
-      coalesced_mesh_primitive_spans(mesh);
+      coalesced_render_mesh_primitive_spans(mesh);
   proxy.material_slots.reserve(primitive_spans.size());
   proxy.material_instances.reserve(primitive_spans.size());
   filament::RenderableManager::Builder builder(primitive_spans.size());
@@ -242,14 +274,12 @@ MeshRenderableProxy MeshRenderableFactory::create(
     for (std::size_t primitive_index = 0;
          primitive_index < primitive_spans.size(); ++primitive_index) {
       const MeshPrimitiveSpan &primitive = primitive_spans[primitive_index];
-      const AssetId primitive_material_id =
+      const RenderMaterialAssetSnapshot *primitive_material =
           material ? material->material_for_slot(primitive.material_slot)
-                   : kInvalidAssetId;
-      const MaterialDocument *primitive_material =
-          assets.material(primitive_material_id);
+                   : nullptr;
       filament::MaterialInstance *material_instance =
           material_binding_->create_mesh_material_instance(
-              assets, primitive_material, double_sided, editor_unlit);
+              primitive_material, double_sided, editor_unlit);
       if (depth_only && material_instance) {
         material_instance->setColorWrite(false);
         material_instance->setDepthWrite(true);

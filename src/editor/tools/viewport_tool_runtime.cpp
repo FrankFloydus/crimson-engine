@@ -151,13 +151,16 @@ void ViewportToolRuntime::sync_active_tool(ViewportToolId tool) {
   active_tool_ = registry_.find(tool);
 }
 
-bool ViewportToolRuntime::has_active_modal_preview() const {
-  return modal_state_.box_preview.valid ||
-         modal_state_.box_preview.drag_state != ModelingBoxDragState::Idle;
+bool ViewportToolRuntime::has_active_modal_preview(
+    const ViewportToolPreviewPort &preview, bool snap_enabled) const {
+  const ModelingBoxPreview box = box_preview(preview, snap_enabled);
+  return box.valid || box.drag_state != ModelingBoxDragState::Idle;
 }
 
-const ModelingBoxPreview &ViewportToolRuntime::box_preview() const {
-  return modal_state_.box_preview;
+ModelingBoxPreview
+ViewportToolRuntime::box_preview(const ViewportToolPreviewPort &preview,
+                                 bool snap_enabled) const {
+  return preview.box_preview(snap_enabled);
 }
 
 void ViewportToolRuntime::clear_modal_tool_state() { modal_state_ = {}; }
@@ -256,8 +259,12 @@ ViewportToolRuntime::handle_active_tool_event(ViewportToolState &state,
   context.modal_state = &modal_state_;
   ViewportToolResult result = active_tool_->handle_event(context, event);
   if (result.sync_active_tool_from_modeling) {
+    if (context.ports.preview == nullptr) {
+      return result;
+    }
     const ViewportToolId next_tool =
-        viewport_tool_for_modeling(context.modeling.tool_status().active_tool);
+        viewport_tool_for_modeling(
+            context.ports.preview->tool_status().active_tool);
     const bool changed = state.active_tool != next_tool;
     if (set_active_tool(state, next_tool)) {
       result.active_tool_changed = result.active_tool_changed || changed;

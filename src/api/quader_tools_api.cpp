@@ -8,12 +8,14 @@
 #include "api/quader_api_session_internal_access.hpp"
 
 #include "api/quader_api_status_internal.hpp"
-#include "scene/document/project_session.hpp"
+#include "editor/session/project_session.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace quader {
@@ -21,6 +23,27 @@ namespace {
 
 ProjectSession &project_session(QuaderApiSession session) {
   return QuaderApiSessionInternalAccess::project_session(session);
+}
+
+bool is_cut_mode_setting(std::string_view tool_id, std::string_view name) {
+  const bool cut_tool = tool_id.empty() || tool_id == "cut";
+  const bool cut_setting = name == "operation.cut.keep_mode" ||
+                           name == "keep_mode" || name == "cut_mode";
+  return cut_tool && cut_setting;
+}
+
+std::optional<ModelingCutMode> cut_mode_from_setting_value(double value) {
+  switch (static_cast<int>(value)) {
+  case static_cast<int>(ModelingCutMode::DiscardLeft):
+    return ModelingCutMode::DiscardLeft;
+  case static_cast<int>(ModelingCutMode::DiscardRight):
+    return ModelingCutMode::DiscardRight;
+  case static_cast<int>(ModelingCutMode::KeepBoth):
+    return ModelingCutMode::KeepBoth;
+  default:
+    break;
+  }
+  return std::nullopt;
 }
 
 } // namespace
@@ -54,8 +77,23 @@ QuaderApiVoidResult QuaderToolsApi::activate(ViewportToolId tool) {
 }
 
 QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
-                                                std::string_view name,
-                                                double value) {
+                                                 std::string_view name,
+                                                 double value) {
+  if (is_cut_mode_setting(tool_id, name)) {
+    const std::optional<ModelingCutMode> mode =
+        cut_mode_from_setting_value(value);
+    if (!mode.has_value()) {
+      return quader_api_failure_status(project_session(session_),
+                                       "Invalid cut mode.");
+    }
+    ModelingCommandResult result =
+        project_session(session_).modeling().set_cut_mode(*mode);
+    return quader_api_void_status(project_session(session_), result.ok,
+                                  result.changed, std::move(result.message),
+                                  QuaderMutationKind::Modeling,
+                                  "Set Tool Setting");
+  }
+
   ModelingInteractionSettings settings =
       project_session(session_).modeling().interaction_settings();
 

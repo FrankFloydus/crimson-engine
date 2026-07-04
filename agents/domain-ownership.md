@@ -109,3 +109,16 @@ or dynamic catalog lookup requires strings.
 
 Filament resource ownership and render extraction belong in `src/render/**`. `SceneRenderBridge` is
 a render facade/composition root, not the owner of new render algorithms.
+
+## Diagnostics And Fatal Errors
+
+`Logger` and the `LOG_*` macros are explicit shared-core diagnostics exceptions, not a pattern for
+new global editor services. `src/core/logger.*` owns the logger facade and memory sink. App startup
+may initialize it, domain code may emit logs through the macros, and the console panel may read or
+clear the memory sink for presentation. UI or app code must not add separate logger singletons,
+diagnostic registries, crash sinks, or direct `spdlog` global configuration.
+
+Fatal-error handling is platform-owned. `src/platform/fatal_error_handler.*` owns terminate,
+abort, invalid-parameter, unhandled-exception, crash artifact, and message-box behavior; `src/main.cpp`
+installs that boundary during executable startup. Do not move fatal policy into UI/app services or
+add parallel fatal handlers in panels, app loop code, or runtime composition.

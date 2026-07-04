@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 using namespace quader_poly;
 
@@ -21,6 +21,8 @@ TEST(QdrDocumentOperationCollapseEdgesTests, CollapseEdgesReplacesAnEdgeWithOneC
 	const OperationResult result = collapse_selected_edges(document, selection);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
         EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
         EXPECT_TRUE(selection.vertices.size() == 1U);
 	const Vertex* survivor = find_vertex(document, selection.vertices.front());

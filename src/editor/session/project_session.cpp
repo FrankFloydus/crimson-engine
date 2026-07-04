@@ -4,11 +4,12 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "scene/document/project_session.hpp"
+#include "editor/session/project_session.hpp"
 
 #include "diagnostics/profile.hpp"
-#include "editor/selection/editor_selection_service.hpp"
+#include "editor/commands/asset_command_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/selection/editor_selection_service.hpp"
 
 #include <utility>
 
@@ -34,10 +35,22 @@ void ProjectSession::rebuild_services() {
   history_ = std::make_unique<EditorHistoryService>();
   document_commands_ = std::make_unique<DocumentCommandService>(
       document_.scene(), *history_, &document_.assets());
+  asset_commands_ = std::make_unique<AssetCommandService>(
+      document_.assets(), *history_, &document_.scene());
   modeling_ = std::make_unique<ModelingSessionService>(document_.scene(),
                                                        document_.assets());
   selection_ = std::make_unique<EditorSelectionService>(
       document_.scene(), *document_commands_, *modeling_);
+}
+
+ProjectSessionReadView ProjectSession::read_view() const {
+  return {
+      .document = document_,
+      .scene = document_.scene(),
+      .assets = document_.assets(),
+      .modeling = *modeling_,
+      .selection = *selection_,
+  };
 }
 
 ProjectContentRevisionStamp ProjectSession::content_revision_stamp() const {
@@ -56,25 +69,13 @@ bool ProjectSession::dirty() const {
 
 ProjectAssetMutationResult
 ProjectSession::replace_standalone_mesh(AssetId mesh, MeshAsset replacement) {
-  if (mesh == kInvalidAssetId) {
-    return {.ok = false, .changed = false, .message = "Mesh asset is invalid"};
-  }
-  for (const EntityId entity : scene().entities()) {
-    const MeshComponent *mesh_component = scene().mesh(entity);
-    if (mesh_component == nullptr || mesh_component->mesh != mesh) {
-      continue;
-    }
-    if (scene().modeling_object(entity) != nullptr) {
-      return {.ok = false,
-              .changed = false,
-              .message = "Mesh asset is owned by a modeling object"};
-    }
-  }
-  if (!assets().replace_mesh(mesh, std::move(replacement))) {
-    return {
-        .ok = false, .changed = false, .message = "Mesh asset does not exist"};
-  }
-  return {.ok = true, .changed = true, .message = "Mesh replaced"};
+  const AssetCommandResult result =
+      asset_commands().replace_mesh(mesh, std::move(replacement));
+  return {
+      .ok = result.ok,
+      .changed = result.changed,
+      .message = result.message,
+  };
 }
 
 void ProjectSession::replace_document(ProjectDocument document) {

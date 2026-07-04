@@ -96,13 +96,13 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceCatalogExpos
         EXPECT_TRUE(grid_minor.value_kind ==
                     qhc::HostPreferenceValueKind::ColorRgba);
         EXPECT_TRUE(same_text(grid_minor.group_id, "viewport.grid"));
-	check_color(grid_minor.default_color, 199.0 / 255.0, 199.0 / 255.0, 199.0 / 255.0, 54.0 / 255.0);
+	check_color(grid_minor.default_color, 150.0 / 255.0, 150.0 / 255.0, 150.0 / 255.0, 1.0);
 
 	const qhc::HostPreferenceDescriptor& grid_major = require_preference("viewport.grid.major_color");
         EXPECT_TRUE(grid_major.value_kind ==
                     qhc::HostPreferenceValueKind::ColorRgba);
         EXPECT_TRUE(same_text(grid_major.group_id, "viewport.grid"));
-	check_color(grid_major.default_color, 172.0 / 255.0, 172.0 / 255.0, 172.0 / 255.0, 1.0);
+	check_color(grid_major.default_color, 210.0 / 255.0, 210.0 / 255.0, 210.0 / 255.0, 1.0);
 
 	const qhc::HostPreferenceDescriptor& selection_wire = require_preference("viewport.selection.wire_color");
         EXPECT_TRUE(selection_wire.value_kind ==

@@ -8,6 +8,7 @@
 
 #include "assets/asset_registry.hpp"
 #include "assets/material_document.hpp"
+#include "render/scene_render_extraction.hpp"
 #include "scene/components.hpp"
 
 #include <filament/Material.h>
@@ -42,9 +43,14 @@ public:
 
     std::uint64_t material_revision(const AssetRegistry &assets,
                                     const MaterialComponent *material) const;
+    std::uint64_t
+    material_revision(const RenderMaterialBindingSnapshot &material) const;
     filament::MaterialInstance *create_mesh_material_instance(
         const AssetRegistry &assets, const MaterialDocument *material,
         bool double_sided, bool editor_unlit = false) const;
+    filament::MaterialInstance *create_mesh_material_instance(
+        const RenderMaterialAssetSnapshot *material, bool double_sided,
+        bool editor_unlit = false) const;
 
   private:
     filament::Material *shaded_mesh_material_ = nullptr;

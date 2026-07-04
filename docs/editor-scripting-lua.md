@@ -14,6 +14,18 @@ There is currently no Lua runtime, binding layer, script console, startup script
 dependency in the native app. Future Lua work should bind only public API surfaces such as
 `QuaderEditorApi`, `QuaderApi`, and stable value types.
 
+Future bindings should start from a public `quader` scripting object that mirrors the public C++
+front doors instead of internal owners. Editor-wide workflows should map to `QuaderEditorApi`
+behavior, document/modeling-only workflows should map to `QuaderApi`, object workflows should use
+stable handle-style values, and command execution should be backed by canonical typed C++ command
+IDs such as `quader::quader_command::kEditUndo`.
+
+Lua-facing results should preserve the same shape as C++ public results: success checks, changed
+state, returned values, and structured error messages should correspond to `ok()`, `changed()`,
+`value()`, and `error_message()` in the C++ API. Bindings must not expose mutable internal pointers
+or raw services such as scene documents, asset registries, modeling services, UI, render, platform,
+ECS, or backend internals.
+
 Before enabling Lua, the project must add an explicit dependency and license decision, a sandbox
 policy, structured script error reporting, cancellation behavior, and undo transaction grouping.
 Startup scripts should remain disabled until that policy exists.

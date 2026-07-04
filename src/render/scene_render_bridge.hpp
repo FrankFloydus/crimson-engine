@@ -6,11 +6,13 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "assets/asset_registry.hpp"
 #include "core/types.hpp"
+#include "editor/modeling/modeling_types.hpp"
+#include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_cache.hpp"
 #include "render/mesh_renderable_factory.hpp"
+#include "render/render_scene_snapshot.hpp"
 #include "render/scene_render_sync_service.hpp"
 #include "render/texture_binding_service.hpp"
 #include "render/tool_preview_renderable_cache.hpp"
@@ -19,7 +21,6 @@
 #include "render/overlay/overlay_renderable_cache.hpp"
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
 #include "render/overlay/selected_object_overlay_cache.hpp"
-#include "scene/scene_document.hpp"
 
 #include <filament/Engine.h>
 #include <filament/Material.h>
@@ -33,12 +34,19 @@
 namespace quader {
 
 /**
+ * Stores the viewport-pane presentation data needed for render-owned scene
+ * overlay extraction.
+ */
+struct ViewportSceneOverlayFrameRequest {
+    ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
+    bool wireframe_pane = false;
+};
+
+/**
  * Owns Scene Render Bridge behavior within the render extraction and Filament resource layer.
  */
 class SceneRenderBridge {
 public:
-    using PreviewMesh = ToolPreviewMesh;
-
     SceneRenderBridge() = default;
     SceneRenderBridge(const SceneRenderBridge&) = delete;
     SceneRenderBridge& operator=(const SceneRenderBridge&) = delete;
@@ -55,15 +63,16 @@ public:
                     filament::Material &overlay_point_material,
                     std::filesystem::path resource_root);
     void shutdown();
-    void sync(const SceneDocument& document, const AssetRegistry& assets);
-    void sync_selected_object_overlay(const SceneDocument &document,
-                                      const AssetRegistry &assets,
-                                      bool visible);
-    void sync_scene_wireframe_overlay(const SceneDocument &document,
-                                      const AssetRegistry &assets,
-                                      std::uint8_t layer_mask);
-    void set_tool_preview_meshes(std::vector<PreviewMesh> meshes,
-                                 const AssetRegistry &assets);
+    void sync(const RenderSceneSnapshot &snapshot);
+    void sync_scene_asset_overlays(
+        const RenderOverlaySelectedObjectSnapshot &selected_object_snapshot,
+        const RenderOverlaySceneWireframeSnapshot &wireframe_snapshot);
+    [[nodiscard]] ViewportOverlayFrame build_scene_overlay_frame(
+        ViewportOverlayFrame base_frame,
+        const RenderOverlaySelectionSnapshot &snapshot,
+        const ViewportSceneOverlayFrameRequest &request) const;
+    void
+    set_tool_preview_meshes(std::vector<RenderToolPreviewMeshRecord> meshes);
     void set_overlay_frame(ViewportOverlayFrame frame,
                            ViewportOverlayCamera camera);
     void set_overlay_frame(std::size_t viewport_index, std::uint8_t layer_mask,

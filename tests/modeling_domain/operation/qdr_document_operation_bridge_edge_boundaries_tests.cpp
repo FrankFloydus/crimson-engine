@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 using namespace quader_poly;
 
@@ -19,6 +19,8 @@ TEST(QdrDocumentOperationBridgeEdgeBoundariesTests, BridgeEdgeBoundariesCreatesA
 		const OperationResult result = bridge_edge_boundaries(document, selection, first_vertices, second_vertices, true, 2);
 
 		EXPECT_TRUE(result.changed);
+
+		qdr_test::expect_valid_polygon_document_after_success(document, result);
                 EXPECT_TRUE(selection.mode == SelectionMode::Face);
                 EXPECT_TRUE(selection.faces.size() == 8U);
 		EXPECT_TRUE(document.faces.size() == 10U);

@@ -102,7 +102,7 @@ specialized subtree, read the nearest nested `AGENTS.md` before editing.
 
 Use the public API when code expresses user/editor intent, such as
 `editor.modeling().create_box(...)`, `editor.scene().batch(...)`,
-`editor.commands().execute(quader::quader_command::kHistoryUndo)`, or
+`editor.commands().execute(quader::quader_command::kEditUndo)`, or
 `editor.main_viewport().set_shading_mode(...)`.
 
 Prefer typed command IDs from `quader::quader_command` in C++ call sites. Stable string command IDs remain

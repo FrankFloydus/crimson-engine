@@ -67,6 +67,8 @@ public:
   begin_tracked_modeling_preview(std::string_view action_id);
   QuaderApiVoidResult commit_modeling_preview(std::string label);
   QuaderApiVoidResult cancel_modeling_preview();
+  QuaderApiVoidResult run_asset_result(CommandResult result,
+                                       std::string_view label);
   QuaderApiVoidResult run_asset_result(bool changed, std::string_view label);
   QuaderApiVoidResult run_asset_failure(std::string message);
   [[nodiscard]] bool can_undo() const;

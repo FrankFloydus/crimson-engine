@@ -11,6 +11,7 @@
 #include "assets/texture_asset.hpp"
 #include "core/color_space.hpp"
 #include "core/types.hpp"
+#include "render/scene_render_extraction.hpp"
 
 #include <filament/Engine.h>
 #include <filament/Texture.h>
@@ -53,6 +54,9 @@ public:
 
     filament::Texture *resolve_texture(const AssetRegistry &assets,
                                        const MaterialDocument *material,
+                                       const char *slot_name,
+                                       filament::Texture *fallback);
+    filament::Texture *resolve_texture(const RenderMaterialAssetSnapshot *material,
                                        const char *slot_name,
                                        filament::Texture *fallback);
 

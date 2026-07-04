@@ -8,6 +8,9 @@
 
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
+#include "render/imgui_filament_renderer.hpp"
+#include "render/scene_render_bridge.hpp"
+#include "render/viewport_renderer.hpp"
 
 #include <filament/Renderer.h>
 #include <math/vec4.h>
@@ -144,6 +147,7 @@ bool RenderSystem::initialize(void *native_window,
     return fail("Unable to initialize Filament material library");
   }
   environment_library_.initialize(*engine_, *scene_, executable_dir);
+  ui_icon_textures_.initialize(*engine_, texture_registry_);
 
   return true;
 }
@@ -153,6 +157,7 @@ void RenderSystem::shutdown() {
         return;
     }
 
+    ui_icon_textures_.clear();
     texture_registry_.clear();
     environment_library_.shutdown();
     material_library_.shutdown();
@@ -264,6 +269,67 @@ void RenderSystem::destroy_additional_swap_chain(
   }
 
   engine_->destroy(swap_chain);
+}
+
+void RenderSystem::initialize_scene_render_bridge(
+    SceneRenderBridge &render_bridge,
+    const std::filesystem::path &executable_dir) {
+  if (engine_ == nullptr || scene_ == nullptr) {
+    return;
+  }
+
+  render_bridge.initialize(*engine_, *scene_, material_library_.quader_mesh(),
+                           material_library_.quader_mesh_lit(),
+                           material_library_.vertex_color_overlay(),
+                           material_library_.overlay_line(),
+                           material_library_.selected_object_line(),
+                           material_library_.overlay_point(), executable_dir);
+}
+
+void RenderSystem::initialize_imgui_renderer(
+    ImGuiFilamentRenderer &imgui_renderer) {
+  if (engine_ == nullptr) {
+    return;
+  }
+
+  imgui_renderer.initialize(*engine_, material_library_.imgui(),
+                            texture_registry_);
+}
+
+void RenderSystem::render_imgui(ImGuiFilamentRenderer &imgui_renderer) {
+  if (renderer_ == nullptr) {
+    return;
+  }
+
+  imgui_renderer.render(*renderer_);
+}
+
+void RenderSystem::initialize_viewport_renderer(
+    ViewportRenderer &viewport_renderer, std::uint8_t grid_layer_mask) {
+  if (engine_ == nullptr || scene_ == nullptr) {
+    return;
+  }
+
+  viewport_renderer.initialize(*engine_, *scene_, texture_registry_,
+                               material_library_.ground_grid(),
+                               grid_layer_mask);
+}
+
+void RenderSystem::render_viewport(ViewportRenderer &viewport_renderer) {
+  if (renderer_ == nullptr) {
+    return;
+  }
+
+  viewport_renderer.render(*renderer_);
+}
+
+RenderUiIconSet RenderSystem::load_ui_icon_textures(
+    const std::filesystem::path &executable_dir) {
+  return ui_icon_textures_.load_icons(executable_dir);
+}
+
+void RenderSystem::clear_ui_icon_textures() {
+  ui_icon_textures_.clear();
 }
 
 void RenderSystem::apply_scene_settings(

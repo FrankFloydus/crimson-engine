@@ -6,11 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "assets/asset_registry.hpp"
 #include "core/types.hpp"
 #include "math/types.hpp"
 #include "render/mesh_renderable_factory.hpp"
 #include "render/mesh_renderable_proxy.hpp"
+#include "render/scene_render_extraction.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -18,16 +18,6 @@
 namespace quader {
 
 class MaterialBindingService;
-
-/**
- * Represents a Tool Preview Mesh value used by the render extraction and Filament resource layer.
- */
-struct ToolPreviewMesh {
-  EntityId source_entity = kInvalidEntityId;
-  AssetId material = kInvalidAssetId;
-  MeshAsset mesh;
-  QMat4 transform;
-};
 
 /**
  * Caches Tool Preview Renderable Cache derived state for the render extraction and Filament resource layer.
@@ -49,8 +39,7 @@ public:
       return factory_ != nullptr && material_binding_ != nullptr;
     }
 
-    bool set_meshes(const std::vector<ToolPreviewMesh> &meshes,
-                    const AssetRegistry &assets);
+    bool set_meshes(const std::vector<RenderToolPreviewMeshRecord> &meshes);
     void clear();
 
     std::uint64_t signature() const { return mesh_signature_; }
@@ -59,13 +48,10 @@ public:
 
   private:
     static std::uint64_t
-    preview_mesh_signature(const ToolPreviewMesh &preview_mesh,
-                           const AssetRegistry &assets,
-                           const MaterialBindingService &material_binding);
+    preview_mesh_signature(const RenderToolPreviewMeshRecord &preview_mesh);
     static std::uint64_t
-    preview_meshes_signature(const std::vector<ToolPreviewMesh> &preview_meshes,
-                             const AssetRegistry &assets,
-                             const MaterialBindingService &material_binding);
+    preview_meshes_signature(
+        const std::vector<RenderToolPreviewMeshRecord> &preview_meshes);
 
     MeshRenderableFactory* factory_ = nullptr;
     MaterialBindingService *material_binding_ = nullptr;

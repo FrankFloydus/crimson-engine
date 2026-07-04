@@ -9,13 +9,13 @@
 
 #include "api/quader_api_mutation_runner.hpp"
 #include "editor/history/editor_history_service.hpp"
-#include "scene/document/project_session.hpp"
+#include "editor/session/project_session.hpp"
 
 namespace quader {
 namespace {
 
-ProjectSession &project_session(QuaderApiSession session) {
-  return QuaderApiSessionInternalAccess::project_session(session);
+const ProjectSession &read_project_session(QuaderApiSession session) {
+  return QuaderApiSessionInternalAccess::read_project_session(session);
 }
 
 } // namespace
@@ -45,11 +45,11 @@ QuaderHistorySnapshot QuaderHistoryApi::snapshot() const {
     result.can_undo = can_undo();
     result.can_redo = can_redo();
     if (const std::string *label =
-            project_session(session_).history().undo_label()) {
+            read_project_session(session_).history().undo_label()) {
       result.undo_label = *label;
     }
     if (const std::string *label =
-            project_session(session_).history().redo_label()) {
+            read_project_session(session_).history().redo_label()) {
       result.redo_label = *label;
     }
     return result;

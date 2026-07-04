@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 #include <array>
 
@@ -45,6 +45,8 @@ TEST(QdrDocumentOperationMergeEdgesTests, MergeEdgesWeldsSourceEndpointsIntoTheC
 	const OperationResult result = merge_selected_edges(document, selection);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
 	EXPECT_TRUE(find_vertex(document, active_edge.a) != nullptr);
 	EXPECT_TRUE(find_vertex(document, active_edge.b) != nullptr);
 	EXPECT_TRUE(find_vertex(document, source_edge.a) == nullptr);

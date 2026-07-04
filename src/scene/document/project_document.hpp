@@ -37,6 +37,9 @@ enum class ProjectDocumentRootPolicy {
 
 /**
  * Stores the Project Object Record data contract used by the editor document ownership layer.
+ * For records bound to a live scene entity, component-backed fields are a
+ * projection from SceneDocument and are rehydrated before indexing or
+ * serialization.
  */
 struct ProjectObjectRecord {
   EditorObjectId id = kInvalidEditorObjectId;

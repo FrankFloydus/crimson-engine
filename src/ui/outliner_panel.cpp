@@ -73,18 +73,19 @@ entity_range_selection(const std::vector<EntityRecord> &records,
 
 bool select_only(UIContext &context, const std::vector<EntityId> &entities,
                  EntityId active = kInvalidEntityId) {
-  QuaderApiVoidResult result = context.editor.selection().select_objects(
+  QuaderApiVoidResult result = context.intent.editor.selection().select_objects(
       std::span<const EntityId>(entities.data(), entities.size()), active);
   return result.ok && result.changed;
 }
 
 bool select_current_scene_selection(UIContext &context) {
-  const std::vector<EntityId> selected = context.document.selected_entities();
-  return select_only(context, selected, context.document.primary_selection());
+  const SceneDocument &document = context.scene.document;
+  const std::vector<EntityId> selected = document.selected_entities();
+  return select_only(context, selected, document.primary_selection());
 }
 
 void group_selection(UIContext &context) {
-  SceneDocument &document = context.document;
+  const SceneDocument &document = context.scene.document;
   const std::vector<EntityId> roots =
       document_command_selected_root_entities(document);
   if (roots.empty()) {
@@ -92,14 +93,14 @@ void group_selection(UIContext &context) {
   }
 
   const QuaderApiVoidResult result =
-      context.editor.commands().execute(quader_command::kGroupSelection);
+      context.intent.editor.commands().execute(quader_command::kGroupSelection);
   if (result.ok && result.changed) {
     (void)select_current_scene_selection(context);
   }
 }
 
 void ungroup_entity(UIContext &context, EntityId group) {
-  SceneDocument &document = context.document;
+  const SceneDocument &document = context.scene.document;
   if (!document.exists(group) || document.kind(group) != EntityKind::Empty ||
       !document.has_children(group)) {
     return;
@@ -109,7 +110,7 @@ void ungroup_entity(UIContext &context, EntityId group) {
     (void)select_only(context, {group}, group);
   }
   QuaderApiVoidResult result =
-      context.editor.commands().execute(quader_command::kUngroupSelection);
+      context.intent.editor.commands().execute(quader_command::kUngroupSelection);
   if (result.ok && result.changed) {
     (void)select_current_scene_selection(context);
   }
@@ -117,14 +118,14 @@ void ungroup_entity(UIContext &context, EntityId group) {
 
 void ungroup_selection(UIContext &context) {
   QuaderApiVoidResult result =
-      context.editor.commands().execute(quader_command::kUngroupSelection);
+      context.intent.editor.commands().execute(quader_command::kUngroupSelection);
   if (result.ok && result.changed) {
     (void)select_current_scene_selection(context);
   }
 }
 
 void delete_selection(UIContext &context) {
-  SceneDocument &document = context.document;
+  const SceneDocument &document = context.scene.document;
   const std::vector<EntityId> roots =
       document_command_selected_root_entities(document);
   if (roots.empty()) {
@@ -132,16 +133,16 @@ void delete_selection(UIContext &context) {
   }
 
   const QuaderSelectionMode previous_mode =
-      context.editor.selection().summary().mode;
+      context.intent.editor.selection().summary().mode;
   if (previous_mode != QuaderSelectionMode::Object &&
       previous_mode != QuaderSelectionMode::Group) {
-    (void)context.editor.selection().set_mode(QuaderSelectionMode::Object);
+    (void)context.intent.editor.selection().set_mode(QuaderSelectionMode::Object);
   }
-  (void)context.editor.commands().execute(quader_command::kDeleteSelection);
+  (void)context.intent.editor.commands().execute(quader_command::kDeleteSelection);
 }
 
 void duplicate_selection(UIContext &context) {
-  (void)context.editor.commands().execute(quader_command::kDuplicateSelection);
+  (void)context.intent.editor.commands().execute(quader_command::kDuplicateSelection);
 }
 
 ImTextureID icon_for(const UIIconSet &icons, EntityKind kind) {
@@ -239,7 +240,7 @@ ImGuiWindowFlags OutlinerPanel::window_flags(const UIContext& context) const {
 }
 
 void OutlinerPanel::draw_content(UIContext& context) {
-    SceneDocument& document = context.document;
+    const SceneDocument& document = context.scene.document;
 
     const TreeCache &tree = refresh_tree_cache(document);
     const ImGuiIO& io = ImGui::GetIO();

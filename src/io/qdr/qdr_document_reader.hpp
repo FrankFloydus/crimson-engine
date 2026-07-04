@@ -6,11 +6,13 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "io/qdr/qdr_diagnostic.hpp"
 #include "scene/document/project_document.hpp"
 
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace quader {
 
@@ -22,6 +24,7 @@ struct QdrProjectReadResult {
     ProjectDocument document;
     std::string message;
     bool migrated_legacy_session = false;
+    std::vector<quader_io::QdrDiagnostic> diagnostics;
 };
 
 /**

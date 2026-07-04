@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 using namespace quader_poly;
 
@@ -24,6 +24,8 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopSplitsAQuadThroughTh
 	const OperationResult result = insert_edge_loop(fixture.document, selection, 0.25F);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 	EXPECT_TRUE(fixture.document.vertices.size() == 6U);
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
         EXPECT_TRUE(selection.mode == SelectionMode::Edge);
@@ -46,6 +48,8 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopPreservesSideEdgeFac
 		const OperationResult result = insert_edge_loop(fixture.document, selection, 0.75F);
 
 		EXPECT_TRUE(result.changed);
+
+		qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 		EXPECT_TRUE(selection.edges.size() == 1U);
 		EXPECT_TRUE(qdr_test::edge_positions_match_unordered(fixture.document, selection.edges.front(), { -1.0F, 0.5F, 0.0F }, { 1.0F, 0.5F, 0.0F }));
 	}
@@ -60,11 +64,13 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopPreservesSideEdgeFac
 		qdr_test::QuadFixture low = qdr_test::make_quad_document();
 		Selection low_selection = qdr_test::edge_selection({ make_edge(low.bottom_left, low.bottom_right) });
 		EXPECT_TRUE(insert_edge_loop(low.document, low_selection, -4.0F).changed);
+		qdr_test::expect_valid_polygon_document(low.document, "successful topology operation");
 		EXPECT_TRUE(qdr_test::edge_positions_match_unordered(low.document, low_selection.edges.front(), { -0.98F, -1.0F, 0.0F }, { -0.98F, 1.0F, 0.0F }));
 
 		qdr_test::QuadFixture high = qdr_test::make_quad_document();
 		Selection high_selection = qdr_test::edge_selection({ make_edge(high.bottom_left, high.bottom_right) });
 		EXPECT_TRUE(insert_edge_loop(high.document, high_selection, 4.0F).changed);
+		qdr_test::expect_valid_polygon_document(high.document, "successful topology operation");
 		EXPECT_TRUE(qdr_test::edge_positions_match_unordered(high.document, high_selection.edges.front(), { 0.98F, -1.0F, 0.0F }, { 0.98F, 1.0F, 0.0F }));
 	}
 }
@@ -78,6 +84,8 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopTraversesAClosedCube
 	const OperationResult result = insert_edge_loop(document, selection, 0.5F);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
 	EXPECT_TRUE(document.vertices.size() == vertex_count_before + 4U);
 	EXPECT_TRUE(document.faces.size() == 10U);
         EXPECT_TRUE(selection.mode == SelectionMode::Edge);
@@ -118,6 +126,11 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopAllowsUnrelatedNonMa
 	const OperationResult result = insert_edge_loop(document, selection, 0.5F);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_polygon_document_validation_issue_after_success(
+		document,
+		result,
+		PolygonDocumentDiagnosticCode::NonmanifoldEdge);
 	EXPECT_TRUE(qdr_test::edge_incidence_count(document, make_edge(shared_a, shared_b)) == 3);
 	EXPECT_TRUE(selection.edges.size() == 1U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));

@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 using namespace quader_poly;
 
@@ -19,6 +19,8 @@ TEST(QdrDocumentOperationConnectEdgesTests, ConnectEdgesCutsBetweenOppositeQuadE
 	const OperationResult result = connect_selected_edges(fixture.document, selection);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 	EXPECT_TRUE(fixture.document.vertices.size() == vertex_count_before + 2U);
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
         EXPECT_TRUE(selection.mode == SelectionMode::Edge);
@@ -40,6 +42,8 @@ TEST(QdrDocumentOperationConnectEdgesTests, ConnectEdgesSplitsSharedCubeEdgesWit
 	const OperationResult result = connect_selected_edges(document, selection);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
 	EXPECT_TRUE(document.vertices.size() == vertex_count_before + 2U);
 	EXPECT_TRUE(document.faces.size() == 7U);
         EXPECT_TRUE(selection.mode == SelectionMode::Edge);
@@ -74,6 +78,8 @@ TEST(QdrDocumentOperationConnectEdgesTests, ConnectEdgesCutsAnUnorderedWallStrip
 	const OperationResult result = connect_selected_edges(document, selection);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
 	EXPECT_TRUE(document.vertices.size() == 16U);
 	EXPECT_TRUE(document.faces.size() == 8U);
         EXPECT_TRUE(selection.mode == SelectionMode::Edge);

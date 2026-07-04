@@ -7,7 +7,6 @@
 #include "editor/tools/base/drawn_plane_tool.hpp"
 
 #include "core/logger.hpp"
-#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 
 #include <array>
@@ -20,15 +19,16 @@ namespace {
 
 void handle_result(ViewportToolContext &context, std::string_view label,
                    const ModelingCommandResult &command) {
-  if (context.handle_tool_command_result) {
-    context.handle_tool_command_result(label, command);
+  if (context.ports.command_result != nullptr) {
+    context.ports.command_result->handle_tool_command_result(label, command);
   }
 }
 
 void finish_drawn_plane_tool(ViewportToolContext &context) {
-  if (context.set_selection_mode) {
-    context.set_selection_mode(app_selection_mode_to_viewport(
-        context.modeling.selection_summary().mode));
+  if (context.ports.selection_mode != nullptr) {
+    context.ports.selection_mode->set_viewport_selection_mode(
+        app_selection_mode_to_viewport(
+            context.ports.selection_mode->selection_summary().mode));
   }
 }
 
@@ -92,49 +92,56 @@ bool drawn_plane_has_line(const ModelingToolStatus &status,
 }
 
 ModelingCommandResult
-update_drawn_plane_hover(ModelingSessionService &modeling,
+update_drawn_plane_hover(ViewportToolHoverPort &hover,
                          DrawnPlaneToolKind kind,
                          const ModelingToolRayEvent &event) {
-  return kind == DrawnPlaneToolKind::Cut ? modeling.update_cut_hover(event)
-                                         : modeling.update_mirror_hover(event);
+  return hover.update_drawn_plane_hover(
+      kind == DrawnPlaneToolKind::Cut ? ModelingViewportTool::Cut
+                                      : ModelingViewportTool::Mirror,
+      event);
 }
 
 ModelingCommandResult
-begin_drawn_plane_point_drag(ModelingSessionService &modeling,
+begin_drawn_plane_point_drag(ViewportToolPreviewPort &preview,
                              DrawnPlaneToolKind kind, int point_index) {
-  return kind == DrawnPlaneToolKind::Cut
-             ? modeling.begin_cut_point_drag(point_index)
-             : modeling.begin_mirror_point_drag(point_index);
+  return preview.begin_drawn_plane_point_drag(
+      kind == DrawnPlaneToolKind::Cut ? ModelingViewportTool::Cut
+                                      : ModelingViewportTool::Mirror,
+      point_index);
 }
 
 ModelingCommandResult
-begin_drawn_plane_line_drag(ModelingSessionService &modeling,
+begin_drawn_plane_line_drag(ViewportToolPreviewPort &preview,
                             DrawnPlaneToolKind kind,
                             const ModelingToolRayEvent &event) {
-  return kind == DrawnPlaneToolKind::Cut
-             ? modeling.begin_cut_line_drag(event)
-             : modeling.begin_mirror_line_drag(event);
+  return preview.begin_drawn_plane_line_drag(
+      kind == DrawnPlaneToolKind::Cut ? ModelingViewportTool::Cut
+                                      : ModelingViewportTool::Mirror,
+      event);
 }
 
-ModelingCommandResult
-click_drawn_plane_point(ModelingSessionService &modeling,
-                        DrawnPlaneToolKind kind,
-                        const ModelingToolRayEvent &event) {
-  return kind == DrawnPlaneToolKind::Cut ? modeling.click_cut(event)
-                                         : modeling.click_mirror(event);
+ModelingCommandResult click_drawn_plane_point(
+    ViewportToolPreviewPort &preview, DrawnPlaneToolKind kind,
+    const ModelingToolRayEvent &event) {
+  return preview.click_drawn_plane_point(
+      kind == DrawnPlaneToolKind::Cut ? ModelingViewportTool::Cut
+                                      : ModelingViewportTool::Mirror,
+      event);
 }
 
-ModelingCommandResult end_drawn_plane_drag(ModelingSessionService &modeling,
+ModelingCommandResult end_drawn_plane_drag(ViewportToolPreviewPort &preview,
                                            DrawnPlaneToolKind kind) {
-  return kind == DrawnPlaneToolKind::Cut ? modeling.end_cut_drag()
-                                         : modeling.end_mirror_drag();
+  return preview.end_drawn_plane_drag(
+      kind == DrawnPlaneToolKind::Cut ? ModelingViewportTool::Cut
+                                      : ModelingViewportTool::Mirror);
 }
 
 ModelingCommandResult
-finalize_drawn_plane_tool(ModelingSessionService &modeling,
+finalize_drawn_plane_tool(ViewportToolCommitPort &commit,
                           DrawnPlaneToolKind kind) {
-  return kind == DrawnPlaneToolKind::Cut ? modeling.finalize_cut_tool()
-                                         : modeling.finalize_mirror_tool();
+  return commit.finalize_drawn_plane_tool(
+      kind == DrawnPlaneToolKind::Cut ? ModelingViewportTool::Cut
+                                      : ModelingViewportTool::Mirror);
 }
 
 void log_drawn_plane_commit_blocked(DrawnPlaneToolKind kind, bool dragging) {
@@ -158,20 +165,26 @@ void log_drawn_plane_commit_blocked(DrawnPlaneToolKind kind, bool dragging) {
 ViewportToolResult handle_drawn_plane_lifecycle(
     ViewportToolContext &context, const ViewportPointerToolEvent &pointer,
     ViewportPointToolContext &point_context, DrawnPlaneToolKind kind) {
+  if (context.ports.hover == nullptr || context.ports.preview == nullptr ||
+      context.ports.commit == nullptr) {
+    return {};
+  }
+  ViewportToolHoverPort &hover_port = *context.ports.hover;
+  ViewportToolPreviewPort &preview_port = *context.ports.preview;
+  ViewportToolCommitPort &commit_port = *context.ports.commit;
   bool &drag_active = drawn_plane_drag_active(*context.modal_state, kind);
   const std::string_view tool_name = drawn_plane_tool_name(kind);
 
   if (pointer.can_interact && !pointer.suppress_hover_work &&
       !(pointer.left_down && drag_active) &&
-      (!context.claim_hover ||
-       context.claim_hover(ModelingBoxDragState::Idle))) {
+      hover_port.claim(ModelingBoxDragState::Idle)) {
     handle_result(context, std::string(tool_name) + " hover",
-                  update_drawn_plane_hover(
-                      context.modeling, kind,
-                      point_context.make_event_at(pointer.mouse_local, false)));
+                  update_drawn_plane_hover(hover_port, kind,
+                                           point_context.make_event_at(
+                                               pointer.mouse_local, false)));
   }
   if (pointer.can_interact && pointer.left_clicked) {
-    const ModelingToolStatus before = context.modeling.tool_status();
+    const ModelingToolStatus before = preview_port.tool_status();
     ModelingCommandResult command;
     if (point_context.hit_drawn_plane_captured_point) {
       if (const std::optional<int> point_index =
@@ -179,7 +192,7 @@ ViewportToolResult handle_drawn_plane_lifecycle(
                   drawn_plane_points(before, kind),
                   drawn_plane_captured_point_count(before, kind))) {
         command =
-            begin_drawn_plane_point_drag(context.modeling, kind, *point_index);
+            begin_drawn_plane_point_drag(preview_port, kind, *point_index);
         handle_result(context, std::string(tool_name) + " point drag begin",
                       command);
       }
@@ -191,42 +204,42 @@ ViewportToolResult handle_drawn_plane_lifecycle(
             drawn_plane_captured_point_count(before, kind),
             drawn_plane_has_line(before, kind))) {
       command = begin_drawn_plane_line_drag(
-          context.modeling, kind,
+          preview_port, kind,
           point_context.make_event_at(pointer.left_click_local, true));
       handle_result(context, std::string(tool_name) + " line drag begin",
                     command);
     } else if (!command.ok && command.message.empty()) {
       command = click_drawn_plane_point(
-          context.modeling, kind,
+          preview_port, kind,
           point_context.make_event_at(pointer.left_click_local, false));
       handle_result(context, std::string(tool_name) + " point", command);
     }
     drag_active = command.ok &&
-                  drawn_plane_dragging(context.modeling.tool_status(), kind);
+                  drawn_plane_dragging(preview_port.tool_status(), kind);
   } else if (pointer.can_interact && pointer.left_down &&
              (drag_active ||
-              drawn_plane_dragging(context.modeling.tool_status(), kind))) {
+              drawn_plane_dragging(preview_port.tool_status(), kind))) {
     handle_result(context, std::string(tool_name) + " drag update",
-                  update_drawn_plane_hover(
-                      context.modeling, kind,
-                      point_context.make_event_at(pointer.mouse_local, true)));
-    drag_active = drawn_plane_dragging(context.modeling.tool_status(), kind);
+                  update_drawn_plane_hover(hover_port, kind,
+                                           point_context.make_event_at(
+                                               pointer.mouse_local, true)));
+    drag_active = drawn_plane_dragging(preview_port.tool_status(), kind);
   }
   if (pointer.left_released &&
       (drag_active ||
-       drawn_plane_dragging(context.modeling.tool_status(), kind))) {
+       drawn_plane_dragging(preview_port.tool_status(), kind))) {
     const ModelingCommandResult command =
-        end_drawn_plane_drag(context.modeling, kind);
+        end_drawn_plane_drag(preview_port, kind);
     handle_result(context, std::string(tool_name) + " drag end", command);
     drag_active = false;
   }
   if (kind == DrawnPlaneToolKind::Cut && pointer.mode_cycle_pressed) {
-    handle_result(context, "Cut mode", context.modeling.cycle_cut_mode());
+    handle_result(context, "Cut mode", preview_port.cycle_cut_mode());
   }
 
   bool committed = false;
   if (pointer.finalize_pressed) {
-    const ModelingToolStatus status = context.modeling.tool_status();
+    const ModelingToolStatus status = preview_port.tool_status();
     if (drawn_plane_dragging(status, kind)) {
       log_drawn_plane_commit_blocked(kind, true);
     } else if (!drawn_plane_can_preview(status, kind) ||
@@ -234,7 +247,7 @@ ViewportToolResult handle_drawn_plane_lifecycle(
       log_drawn_plane_commit_blocked(kind, false);
     } else {
       const ModelingCommandResult command =
-          finalize_drawn_plane_tool(context.modeling, kind);
+          finalize_drawn_plane_tool(commit_port, kind);
       handle_result(context, std::string(tool_name) + " commit", command);
       if (command.ok) {
         finish_drawn_plane_tool(context);

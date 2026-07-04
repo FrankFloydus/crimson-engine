@@ -11,7 +11,7 @@
 #include "diagnostics/profile.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_document_writer.hpp"
-#include "scene/document/project_session.hpp"
+#include "editor/session/project_session.hpp"
 
 #include <filesystem>
 #include <optional>
@@ -23,6 +23,10 @@ namespace {
 
 ProjectSession &project_session(QuaderApiSession session) {
   return QuaderApiSessionInternalAccess::project_session(session);
+}
+
+const ProjectSession &read_project_session(QuaderApiSession session) {
+  return QuaderApiSessionInternalAccess::read_project_session(session);
 }
 
 QuaderApiVoidResult project_runtime_status(ProjectSession &session,
@@ -115,7 +119,7 @@ void QuaderProjectApi::set_runtime_hooks(QuaderProjectRuntimeHooks hooks) {
 }
 
 bool QuaderProjectApi::dirty() const {
-  return project_session(session_).dirty();
+  return read_project_session(session_).dirty();
 }
 
 const std::filesystem::path& QuaderProjectApi::path() const {
@@ -123,7 +127,7 @@ const std::filesystem::path& QuaderProjectApi::path() const {
 }
 
 QuaderProjectMetadata QuaderProjectApi::metadata() const {
-  ProjectSession &session = project_session(session_);
+  const ProjectSession &session = read_project_session(session_);
   return {
       .id = session.document().id(),
       .name = session.document().name(),
@@ -131,7 +135,7 @@ QuaderProjectMetadata QuaderProjectApi::metadata() const {
 }
 
 QuaderApiVoidResult QuaderProjectApi::unsupported(std::string message) const {
-  return quader_api_failure_status(project_session(session_),
+  return quader_api_failure_status(read_project_session(session_),
                                    std::move(message));
 }
 

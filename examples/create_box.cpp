@@ -22,7 +22,8 @@ int main() {
     }
 
     quader::QuaderObjectHandle object = editor.object(box.value());
-    const quader::QuaderApiVoidResult renamed = object.rename("Selected Example Box");
+    const quader::QuaderApiVoidResult renamed =
+        object.rename("Selected Example Box");
     if (!renamed.ok()) {
         return 1;
     }
@@ -31,7 +32,12 @@ int main() {
         return 1;
     }
 
-    editor.main_viewport().set_shading_mode(
+    const quader::QuaderApiVoidResult shading =
+        editor.main_viewport().set_shading_mode(
         quader::QuaderShadingMode::Wireframe);
+    if (!shading.ok()) {
+        return 1;
+    }
+
     return 0;
 }

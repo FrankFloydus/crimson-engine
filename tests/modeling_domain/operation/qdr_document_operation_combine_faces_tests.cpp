@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 using namespace quader_poly;
 
@@ -15,6 +15,7 @@ TEST(QdrDocumentOperationCombineFacesTests, CombineFacesRemovesASupportEdgeBetwe
 		make_edge(fixture.top_right, fixture.top_left),
 	});
 	EXPECT_TRUE(connect_selected_edges(fixture.document, split).changed);
+	qdr_test::expect_valid_polygon_document(fixture.document, "successful topology operation");
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
 	Selection selection;
         selection.mode = SelectionMode::Face;
@@ -25,6 +26,8 @@ TEST(QdrDocumentOperationCombineFacesTests, CombineFacesRemovesASupportEdgeBetwe
 	const OperationResult result = combine_selected_faces(fixture.document, selection);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 	EXPECT_TRUE(fixture.document.faces.size() == 1U);
 	EXPECT_TRUE(fixture.document.faces.front().vertices.size() == 4U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
@@ -34,12 +37,15 @@ TEST(QdrDocumentOperationCombineFacesTests, CombineFacesRestoresAnInsetFaceIslan
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 	Selection inset_selection = qdr_test::face_selection({ fixture.face }, fixture.face);
 	EXPECT_TRUE(inset_selected_faces(fixture.document, inset_selection, 0.2F).changed);
+	qdr_test::expect_valid_polygon_document(fixture.document, "successful topology operation");
 	EXPECT_TRUE(fixture.document.faces.size() == 5U);
 
 	Selection selection = qdr_test::all_face_selection(fixture.document);
 	const OperationResult result = combine_selected_faces(fixture.document, selection);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 	EXPECT_TRUE(fixture.document.faces.size() == 1U);
 	EXPECT_TRUE(fixture.document.faces.front().vertices.size() == 4U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));

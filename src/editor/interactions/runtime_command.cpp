@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/modeling/runtime/runtime_command.hpp>
 #include <editor/interactions/selection_edit.hpp>
+#include <editor/interactions/viewport_projection.hpp>
 #include <editor/modeling/runtime/tool_runtime_policy.hpp>
 
 #include <cmath>
@@ -1113,6 +1114,43 @@ CommandResult finalize_mirror(EditorSession& session, EditorRuntime& runtime)
 	return result;
 }
 
+CommandResult update_poly_hover(
+    EditorRuntime &runtime, PolyHoverRuntimeCommandSettings settings) {
+  const CutGridPointResult grid_point = viewport_grid_point_from_ray(
+      settings.camera, settings.ray, settings.grid_size,
+      settings.snap_enabled);
+  if (!grid_point.ok) {
+    return {true, false, grid_point.message};
+  }
+  const PolyToolResult result = runtime.update_poly_hover(
+      grid_point.position, grid_point.plane_normal, settings.constrain_axis,
+      settings.grid_size, settings.snap_enabled);
+  return {result.ok, result.changed, result.message};
+}
+
+CommandResult accept_poly_point(EditorRuntime &runtime) {
+  const PolyToolResult result = runtime.accept_poly_current_point();
+  return {result.ok, result.changed, result.message};
+}
+
+CommandResult commit_poly(EditorSession &session, EditorRuntime &runtime) {
+  return runtime.commit_poly_tool(session);
+}
+
+CommandResult cancel_poly(EditorRuntime &runtime) {
+  const EditorRuntimeStatus before = runtime.status();
+  runtime.reset_poly_state();
+  runtime.clear_hover();
+  const EditorRuntimeStatus after = runtime.status();
+  const bool changed = before.poly_active != after.poly_active ||
+                       before.poly_closed != after.poly_closed ||
+                       before.poly_has_current != after.poly_has_current ||
+                       before.poly_can_commit != after.poly_can_commit ||
+                       before.poly_point_count != after.poly_point_count ||
+                       before.hover_active != after.hover_active;
+  return {true, changed, ""};
+}
+
 bool is_world_mirror_axis(TransformAxis axis)
 {
   return axis == TransformAxis::X || axis == TransformAxis::Y ||
@@ -1504,6 +1542,30 @@ EditorRuntimeCommandResult execute_runtime_command(
           }
           return runtime_command_result(runtime,
                                         finalize_mirror(session, runtime));
+        case EditorRuntimeCommandId::UpdatePolyHover: {
+          const auto *settings =
+              std::get_if<PolyHoverRuntimeCommandSettings>(&command.settings);
+          if (settings == nullptr) {
+            return runtime_command_result(runtime, settings_mismatch_result());
+          }
+          return runtime_command_result(runtime,
+                                        update_poly_hover(runtime, *settings));
+        }
+        case EditorRuntimeCommandId::AcceptPolyPoint:
+          if (!std::holds_alternative<std::monostate>(command.settings)) {
+            return runtime_command_result(runtime, settings_mismatch_result());
+          }
+          return runtime_command_result(runtime, accept_poly_point(runtime));
+        case EditorRuntimeCommandId::CommitPoly:
+          if (!std::holds_alternative<std::monostate>(command.settings)) {
+            return runtime_command_result(runtime, settings_mismatch_result());
+          }
+          return runtime_command_result(runtime, commit_poly(session, runtime));
+        case EditorRuntimeCommandId::CancelPoly:
+          if (!std::holds_alternative<std::monostate>(command.settings)) {
+            return runtime_command_result(runtime, settings_mismatch_result());
+          }
+          return runtime_command_result(runtime, cancel_poly(runtime));
         case EditorRuntimeCommandId::MirrorAxis: {
           const auto *settings =
               std::get_if<MirrorAxisRuntimeCommandSettings>(&command.settings);

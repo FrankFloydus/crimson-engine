@@ -9,6 +9,195 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-04 - Component Transforms Keep Generated UVs Procedural
+
+Task/context: an attempted UV regression fix materialized generated face-loop UVs before component
+transforms, which made point/vertex manipulation stretch the checker texture from the base shape.
+
+Invariant:
+
+- Component-mode transforms (`Vertex`, `Edge`, `Face`) must preserve the pre-refactor runtime
+  behavior: after geometry changes they clear stored face-loop UVs and leave checker coordinates
+  procedural/generated at mesh compile time.
+- Only object-mode texture-lock paths materialize and preserve loop UVs during transforms. Do not
+  extend those texture-lock semantics to component transforms unless an explicit UV-editing feature
+  changes the owner invariant.
+
+Affected owners/files:
+
+- `src/editor/modeling/runtime/session_transform_bounds.cpp`
+- `tests/modeling_domain/operation/qdr_modeling_runtime_operation_translate_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_modeling_domain_tests`
+- `build\vs2026\Debug\quader_modeling_domain_tests.exe --gtest_color=no --gtest_filter=QdrModelingRuntimeOperationTranslateTests.*`
+- `python tools\check_cpp_style.py --paths-only`
+- `git diff --check`
+- `cmake --build --preset vs2026-debug --target quader_tests quader_guardrail_tests quader_modeling_domain_tests`
+- `ctest --preset vs2026-debug --output-on-failure`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-07-04 - QDR Project Writes Consume Export Snapshots
+
+Task/context: Phase 7 architecture work prepared project export for future background workers.
+
+Invariant:
+
+- QDR project serialization and atomic write internals consume `QdrProjectWriteSnapshot`, not live
+  `ProjectDocument`, `SceneDocument`, or `AssetRegistry` state. Compatibility overloads may still
+  accept `const ProjectDocument&`, but they must immediately build a snapshot and delegate.
+- Snapshot mesh records own authored polygon documents by value; copying `MeshAsset` directly would
+  preserve a shared pointer to mutable live polygon data.
+
+Affected owners/files:
+
+- `src/io/qdr/qdr_project_write_snapshot.*`
+- `src/io/qdr/qdr_document_writer.*`
+- `tests/io_qdr_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=QdrDocumentIoTests.ProjectWriteSnapshotOwnsCopiesForBackgroundExport:QdrDocumentIoTests.ProjectWriterConsumesImmutableExportSnapshot:QdrDocumentIoTests.AtomicProjectWriteUsesCompactJsonWhileDebugSerializerStaysPretty:QdrDocumentIoTests.ProjectAtomicWritePolicySkipsHotSaveSelfParseAndKeepsRoundTripCoverage`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=QdrDocumentIoTests.*`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-07-04 - Render Snapshot Boundary Owns Scene/Asset Extraction
+
+Task/context: Phase 5 architecture migration moved render scene, overlay, preview, and UI icon
+inputs behind render-owned snapshots and services.
+
+Invariants:
+
+- `SceneRenderBridge`, `SceneRenderSyncService`, mesh caches, light caches, overlay caches, and tool
+  preview cache consume render snapshot records, not `SceneDocument` / `AssetRegistry` pointers.
+- `ViewportPanel` may submit viewport presentation requests and overlay frames, but must not call
+  `build_render_overlay_*` or `ViewportSceneOverlayBuilder` directly. Runtime render access builds
+  scene/asset overlay snapshots from the project session and hands them to the render bridge.
+- UI icon textures are allocated and destroyed by `UiIconTextureService` under `src/render`; UI
+  receives only ImGui texture IDs through `RenderSystem::load_ui_icon_textures()` and clears them
+  through `RenderSystem::clear_ui_icon_textures()`.
+
+Affected owners/files:
+
+- `src/render/render_scene_snapshot.hpp`
+- `src/render/scene_render_extraction.*`
+- `src/render/scene_render_bridge.*`
+- `src/render/scene_render_sync_service.*`
+- `src/render/overlay/render_overlay_snapshot.*`
+- `src/render/ui_icon_texture_service.*`
+- `src/editor/render/quader_render_api_runtime_access.hpp`
+- `src/api/quader_render_api.cpp`
+- `src/ui/viewport_panel.cpp`
+- `src/ui/ui_system.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=RenderSceneSnapshotTests.*:RenderOverlaySnapshotTests.*:SceneRenderBridgeTests.UsesRenderSceneSnapshotsForIncrementalMeshSync:SceneRenderBridgeTests.UsesDepthStampedFaceFillForOverlayTriangles:RenderProxyLifecycleTests.*:TextureRegistryTests.*:ViewportRendererTests.PresentsSceneAndOverlayViewportTexturesThroughUiEncoder`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=OopArchitectureGuardrailTests.UiShellLeavesSceneOverlayExtractionToRenderBuilder:OopArchitectureGuardrailTests.RenderSnapshotBoundaryOwnsSceneAndOverlayExtraction:OopArchitectureGuardrailTests.UiDoesNotOwnFilamentResourceAllocation:OopArchitectureGuardrailTests.RenderCodeDoesNotCallDocumentOrAssetMutators:BuildGuardrailTests.UiIconTexturesStayBehindRenderSystemAdapters:BuildGuardrailTests.ImGuiRuntimeResourcesArePackagedWithRuntime:ProgrammaticApiGuardrailTests.ReadOnlyApiPathsUseConstProjectSessionAccess`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-07-04 - Viewport Selection Overlay Cache Follows Scene Preview Transforms
+
+Task/context: scene-transform drags moved the shaded mesh immediately, but the semantic wire cage
+could stay at the pre-drag position until release.
+
+Invariant:
+
+- `ViewportPanel`'s `ViewportPaneOverlayCacheKey` must include `SceneDocument::revision()` and
+  `AssetRegistry::revision()`. Modeling overlay extraction already keys on scene revision, but the
+  viewport pane cache can otherwise skip asking the modeling owner for a fresh frame during live
+  scene-transform previews.
+- Persistent selected-object render overlays still live behind render snapshot/cache ownership; UI
+  should only decide whether its pane-level semantic overlay frame is stale.
+
+Affected owners/files:
+
+- `src/ui/viewport_panel.*`
+- `src/ui/viewport_pane_overlay_cache.*`
+- `src/editor/modeling/services/modeling_session_services.cpp`
+- `tests/core_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=ViewportPaneOverlayCacheTests.*:ViewportOverlayPolicyTests.NativeViewportSkipsTransientObjectSelectionOverlayBeforeProjection:ModelingSessionServiceTests.TransformDragObjectSelectionUsesSceneTransformPreview:ModelingSessionServiceTests.ObjectTransformDragRefreshesViewportOverlayCacheKeyDuringScenePreview`
+- `ctest --preset vs2026-debug --output-on-failure`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-07-04 - Scene Selection Application Has One Owner
+
+Task/context: Phase 3 architecture work consolidated scene entity selection writes that had drifted
+between `SelectEntitiesCommand`, `EditorSelectionService`, and `SelectionProjectionService`.
+
+Invariants:
+
+- Scene entity selection application lives in `src/editor/selection/scene_selection_application.*`.
+- `SceneSelectionApplicationMode::UndoableCommand` preserves command undo/redo clear-then-set
+  behavior; `SceneSelectionApplicationMode::RuntimeSync` uses diff-style sync for modeling/runtime
+  projection so unchanged projection does not churn scene selection revisions.
+- `EditorSelectionService` still owns user selection intent, filtering, and modeling projection
+  orchestration, but uses the shared owner for selectability, edit resolution, and command payloads.
+- Component selection remains modeling-runtime owned; this owner only applies `SceneDocument`
+  entity selection.
+
+Affected owners/files:
+
+- `src/editor/selection/scene_selection_application.*`
+- `src/editor/selection/editor_selection_service.*`
+- `src/editor/selection/selection_projection_service.cpp`
+- `src/editor/commands/document/select_entities_command.hpp`
+- `src/editor/commands/document/document_command_scene_helpers.hpp`
+- `src/editor/commands/document_command_service.*`
+- `tests/programmatic_api_guardrail_tests.cpp`
+- `tests/modeling_session_service_split_tests.cpp`
+
+Verification:
+
+- `cmake --preset vs2026`
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=ProgrammaticApiGuardrailTests.PublicSelectionApiDelegatesEntityEditPolicyToEditorSelectionService:ProgrammaticApiGuardrailTests.ObjectAndGroupSelectionCommandsUseSceneDocumentSelectionOwner:ProgrammaticApiGuardrailTests.SceneSelectionApplicationOwnerCoversCommandServiceAndProjection`
+- `cmake --build --preset vs2026-debug --target quader`
+- `cmake --build --preset vs2026-debug --target quader_tests quader_guardrail_tests` was attempted but
+  `quader_tests` was blocked by unrelated dirty `tests/core_tests.cpp` compile errors around
+  `ProjectSessionTests.PublicHistoryIgnoresUntrackedModelingSessionHistory`.
+
+## 2026-07-04 - ProjectObjectRecord Scene Components Stay Canonical
+
+Task/context: Phase 3 migration revisited duplicated live fields on `ProjectObjectRecord`.
+
+Invariant:
+
+- For records bound to live scene entities, mesh, material, modeling object, visibility, and material
+  slot fields are projections of `SceneDocument` components. Stale object-record copies must not
+  become a second source of truth during indexing, synchronization, validation, or QDR load/save.
+- Detached object records without a live scene entity may still carry their own stored fields.
+
+Affected owners/files:
+
+- `src/scene/document/project_document.*`
+- `src/io/qdr/qdr_document_reader.cpp`
+- `src/io/qdr/qdr_document_writer.cpp`
+- `tests/io_qdr_tests.cpp`
+
+Resolved approach:
+
+- `ProjectDocument` rehydrates scene-linked component fields before indexing and per-record asset
+  validation, so stale QDR object-record component copies are ignored when valid scene components
+  exist.
+- Added document and QDR tests proving stale record fields do not dirty a second sync pass and are
+  rewritten from scene components.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_document quader_project_qdr_io`
+- `cmake --build --preset vs2026-debug --target quader`
+- `cmake --build --preset vs2026-debug --target quader_tests` currently blocked by unrelated dirty
+  `tests/core_tests.cpp` compile errors in another worker's ProjectSession read-view assertions.
+
 ## 2026-07-03 - Property Table Numeric Sliders And Grid Defaults
 
 Task/context: inspector/property settings were using mixed ImGui numeric semantics: bounded

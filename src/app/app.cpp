@@ -6,20 +6,22 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "app/app.hpp"
 
-#include "api/quader_editor_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
-#include "assets/default_material_catalog.hpp"
-#include "assets/material_document.hpp"
+#include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
+#include "editor/session/project_asset_bootstrap_service.hpp"
 #include "platform/platform_file_dialog.hpp"
 #include "platform/sdl_event_utils.hpp"
+#include "ui/ui_platform_adapter.hpp"
 
+#include <imgui_impl_sdl3.h>
 #include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <optional>
+#include <string>
 #include <utility>
 
 namespace quader {
@@ -56,6 +58,58 @@ bool chrome_action_invalidates_current_frame(WindowChromeAction action) {
   return action == WindowChromeAction::Minimize ||
          action == WindowChromeAction::ToggleMaximizeRestore;
 }
+
+/**
+ * Bridges SDL window and event calls into the SDL-free UI platform contract.
+ */
+class SdlUIPlatformAdapter final : public UIPlatformAdapter {
+public:
+  explicit SdlUIPlatformAdapter(SDL_Window *window) : window_(window) {}
+
+  void initialize_imgui_backend() override {
+    ImGui_ImplSDL3_InitForOther(window_);
+  }
+
+  void shutdown_imgui_backend() override { ImGui_ImplSDL3_Shutdown(); }
+
+  bool process_event(const UIPlatformEvent &event) override {
+    const SDL_Event *sdl_event =
+        static_cast<const SDL_Event *>(event.native_event);
+    return sdl_event != nullptr && ImGui_ImplSDL3_ProcessEvent(sdl_event);
+  }
+
+  void begin_frame() override { ImGui_ImplSDL3_NewFrame(); }
+
+  QVec2 relative_mouse_delta() override {
+    float delta_x = 0.0f;
+    float delta_y = 0.0f;
+    (void)SDL_GetRelativeMouseState(&delta_x, &delta_y);
+    return {delta_x, delta_y};
+  }
+
+  bool set_relative_mouse_captured(bool captured,
+                                   std::string &error_message) override {
+    if (SDL_SetWindowRelativeMouseMode(window_, captured)) {
+      error_message.clear();
+      return true;
+    }
+    error_message = SDL_GetError();
+    return false;
+  }
+
+  void discard_relative_mouse_delta() override {
+    float discard_x = 0.0f;
+    float discard_y = 0.0f;
+    (void)SDL_GetRelativeMouseState(&discard_x, &discard_y);
+  }
+
+  void warp_mouse_in_window(QVec2 point) override {
+    SDL_WarpMouseInWindow(window_, point.x, point.y);
+  }
+
+private:
+  SDL_Window *window_ = nullptr;
+};
 
 } // namespace
 
@@ -96,24 +150,23 @@ bool App::initialize(const std::filesystem::path &executable_path,
   }
 
   LOG_INFO("Initializing scene render bridge");
-  render_bridge_.initialize(render_system_.engine(), render_system_.scene(),
-                            render_system_.quader_mesh_material(),
-                            render_system_.quader_mesh_lit_material(),
-                            render_system_.vertex_color_overlay_material(),
-                            render_system_.overlay_line_material(),
-                            render_system_.selected_object_line_material(),
-                            render_system_.overlay_point_material(),
-                            executable_dir);
+  render_system_.initialize_scene_render_bridge(render_bridge_,
+                                                executable_dir);
   LOG_INFO("Scene render bridge initialized");
 
   LOG_INFO("Initializing UI system");
-  ui_.initialize(window_.sdl_window(), render_system_, executable_dir,
+  ui_platform_adapter_ =
+      std::make_unique<SdlUIPlatformAdapter>(window_.sdl_window());
+  ui_.initialize(*ui_platform_adapter_, render_system_, executable_dir,
                  options.borderless_window);
   LOG_INFO("UI system initialized");
 
-  create_startup_scene();
+  const ProjectDefaultAssets default_assets =
+      ProjectAssetBootstrapService{}.bootstrap_default_assets(project_session_);
+  default_material_ = default_assets.default_material;
   editor_ = std::make_unique<QuaderEditorApi>(
       QuaderApiSessionInternalAccess::from_project_session(project_session_));
+  ui_.install_runtime_hooks(*editor_);
   editor_->project().set_runtime_hooks(QuaderProjectRuntimeHooks{
       .choose_open_path =
           [this]() {
@@ -161,7 +214,7 @@ int App::run() {
       while (SDL_PollEvent(&event)) {
         const bool chrome_consumed = window_.process_chrome_event(event);
         if (!chrome_consumed) {
-          ui_.process_event(event);
+          ui_.process_event(UIPlatformEvent{&event});
           if (event.type == SDL_EVENT_MOUSE_MOTION) {
             (void)window_.process_chrome_event(event);
           }
@@ -224,35 +277,11 @@ void App::shutdown() {
   window_.set_live_resize_frame_callback({});
   save_window_settings();
   ui_.shutdown();
+  ui_platform_adapter_.reset();
   editor_.reset();
   render_bridge_.shutdown();
   render_system_.shutdown();
   window_.destroy();
-}
-
-void App::create_startup_scene() {
-  TextureAsset albedo;
-  albedo.name = std::string(kDefaultMaterialAlbedoTextureName);
-  albedo.usage = TextureUsage::BaseColor;
-  albedo.color_space = TextureColorSpace::Srgb;
-  albedo.source_path = std::string(kDefaultMaterialAlbedoTexturePackagePath);
-  const AssetId albedo_texture =
-      project_session_.assets().add_texture(std::move(albedo));
-
-  TextureAsset roughness;
-  roughness.name = std::string(kDefaultMaterialRoughnessTextureName);
-  roughness.usage = TextureUsage::Roughness;
-  roughness.color_space = TextureColorSpace::Linear;
-  roughness.source_path =
-      std::string(kDefaultMaterialRoughnessTexturePackagePath);
-  project_session_.assets().add_texture(std::move(roughness));
-
-  MaterialDocument default_material =
-      make_default_quader_material("Default Quader");
-  set_material_texture_slot(default_material, material_texture_slot::kBaseColor,
-                            albedo_texture);
-  default_material_ =
-      project_session_.assets().add_material(std::move(default_material));
 }
 
 void App::handle_window_chrome_action(WindowChromeAction action) {
@@ -348,18 +377,19 @@ bool App::render_frame(const FrameTiming &frame_timing) {
     (void)QuaderRenderApiRuntimeAccess::sync_scene(editor_->render(),
                                                    render_bridge_);
   }
-  if (const EntityId root = project_session_.scene().scene_root();
+  const ProjectSessionReadView session_view = project_session_.read_view();
+  if (const EntityId root = session_view.scene.scene_root();
       root != kInvalidEntityId) {
     if (const SceneSettingsComponent *settings =
-            project_session_.scene().scene_settings(root)) {
+            session_view.scene.scene_settings(root)) {
       render_system_.apply_scene_settings(*settings);
     }
   }
 
   {
     QDR_PROFILE_SCOPE("UI prepare viewports");
-    ui_.prepare_viewports(*editor_, render_bridge_, project_session_.scene(),
-                          project_session_.assets());
+    ui_.prepare_viewports(*editor_, render_bridge_, session_view.scene,
+                          session_view.assets);
   }
   {
     QDR_PROFILE_SCOPE("UI prepare render data");

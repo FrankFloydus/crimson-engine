@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -19,6 +19,8 @@ TEST(QdrDocumentOperationMergeVerticesToActiveTests, MergeVerticesToActivePreser
 	const OperationResult result = merge_selected_vertices_to_active(fixture.document, selection);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 	EXPECT_TRUE(find_vertex(fixture.document, fixture.bottom_left) != nullptr);
 	EXPECT_TRUE(find_vertex(fixture.document, fixture.bottom_right) == nullptr);
         EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
@@ -37,6 +39,8 @@ TEST(QdrDocumentOperationMergeVerticesToActiveTests, MergeVerticesToActivePreser
 		const OperationResult result = merge_selected_vertices_to_active(document, selection);
 
 		EXPECT_TRUE(result.changed);
+
+		qdr_test::expect_valid_polygon_document_after_success(document, result);
 		EXPECT_TRUE(document.vertices.size() == vertex_count_before - 1U);
 		EXPECT_TRUE(find_vertex(document, edge.a) != nullptr);
 		EXPECT_TRUE(find_vertex(document, edge.b) == nullptr);
@@ -67,6 +71,8 @@ TEST(QdrDocumentOperationMergeVerticesToActiveTests, MergeVerticesToActivePreser
 		const OperationResult result = merge_selected_vertices_to_active(document, selection);
 
 		EXPECT_TRUE(result.changed);
+
+		qdr_test::expect_valid_polygon_document_after_success(document, result);
 		EXPECT_TRUE(document.vertices.size() == vertex_count_before - 1U);
 		EXPECT_TRUE(find_vertex(document, active_vertex) != nullptr);
 		EXPECT_TRUE(find_vertex(document, source_vertex) == nullptr);
@@ -114,10 +120,12 @@ TEST(QdrDocumentOperationMergeVerticesToActiveTests, MergeVerticesToActivePreser
 
 		Selection first = qdr_test::vertex_selection({ top_front_left, top_front_right }, top_front_right);
 		EXPECT_TRUE(merge_selected_vertices_to_active(document, first).changed);
+		qdr_test::expect_valid_polygon_document(document, "successful topology operation");
 		EXPECT_TRUE(qdr_test::document_has_edge(document, make_edge(top_front_right, top_back_left)));
 
 		Selection second = qdr_test::vertex_selection({ top_back_right, top_back_left }, top_back_left);
 		EXPECT_TRUE(merge_selected_vertices_to_active(document, second).changed);
+		qdr_test::expect_valid_polygon_document(document, "successful topology operation");
 		EXPECT_TRUE(qdr_test::document_has_edge(document, make_edge(top_front_right, top_back_left)));
 
 		bool checked_sloped_uv = false;
@@ -170,6 +178,7 @@ TEST(QdrDocumentOperationMergeVerticesToActiveTests, MergeVerticesToActiveCollap
 		}));
 	};
 	EXPECT_TRUE(result.changed);
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
 	EXPECT_TRUE(find_vertex(document, top_front_left) == nullptr);
 	const Vertex* active = find_vertex(document, top_back_right);
 	EXPECT_TRUE(active != nullptr);

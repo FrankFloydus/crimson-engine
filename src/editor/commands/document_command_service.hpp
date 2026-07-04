@@ -10,6 +10,7 @@
 #include "editor/commands/document/document_command_edits.hpp"
 #include "editor/commands/document/document_command_result.hpp"
 #include "editor/history/editor_history_service.hpp"
+#include "editor/selection/scene_selection_application.hpp"
 #include "scene/components.hpp"
 
 #include <string>
@@ -55,7 +56,10 @@ public:
         TransformComponent transform = TransformComponent{},
         bool select_created = false);
     DocumentCommandResult select_entities(std::vector<EntityId> entities,
-                                          EntityId active = kInvalidEntityId);
+                                          EntityId active = kInvalidEntityId,
+                                          SceneSelectionApplicationMode mode =
+                                              SceneSelectionApplicationMode::
+                                                  UndoableCommand);
     DocumentCommandResult apply_entity_transform(EntityId entity,
                                                  TransformComponent transform);
     DocumentCommandResult rename_entity(EntityId entity, std::string name);

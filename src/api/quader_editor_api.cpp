@@ -7,7 +7,7 @@
 #include "api/quader_editor_api.hpp"
 
 #include "api/quader_api_session_internal_access.hpp"
-#include "scene/document/project_session.hpp"
+#include "editor/session/project_session.hpp"
 
 namespace quader {
 

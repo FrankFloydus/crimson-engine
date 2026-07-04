@@ -39,6 +39,11 @@ std::uint64_t MaterialBindingService::material_revision(
   return RenderSignatureBuilder::material_signature(assets, material);
 }
 
+std::uint64_t MaterialBindingService::material_revision(
+    const RenderMaterialBindingSnapshot &material) const {
+  return material.revision;
+}
+
 filament::MaterialInstance *
 MaterialBindingService::create_mesh_material_instance(
     const AssetRegistry &assets, const MaterialDocument *material,
@@ -82,6 +87,56 @@ MaterialBindingService::create_mesh_material_instance(
                                     material ? material->metallic : 0.0f);
     material_instance->setParameter("roughnessFactor",
                                     material ? material->roughness : 1.0f);
+  }
+  return material_instance;
+}
+
+filament::MaterialInstance *
+MaterialBindingService::create_mesh_material_instance(
+    const RenderMaterialAssetSnapshot *material, bool double_sided,
+    bool editor_unlit) const {
+  if (!shaded_mesh_material_ || !rendered_mesh_material_ || !texture_binding_) {
+    return nullptr;
+  }
+
+  filament::TextureSampler sampler(
+      filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
+      filament::TextureSampler::MagFilter::LINEAR,
+      filament::TextureSampler::WrapMode::REPEAT);
+  sampler.setAnisotropy(kMeshTextureAnisotropy);
+
+  filament::Material &mesh_material =
+      editor_unlit ? *shaded_mesh_material_ : *rendered_mesh_material_;
+  filament::MaterialInstance *material_instance =
+      mesh_material.createInstance();
+  material_instance->setCullingMode(
+      double_sided ? filament::MaterialInstance::CullingMode::NONE
+                   : filament::MaterialInstance::CullingMode::BACK);
+  material_instance->setParameter(
+      material_texture_slot::kBaseColor,
+      texture_binding_->resolve_texture(
+          material, material_texture_slot::kBaseColor,
+          texture_binding_->fallback_albedo_texture()),
+      sampler);
+  const QVec3 base_color = material && material->present
+                               ? material->document.base_color
+                               : QVec3{1.0f, 1.0f, 1.0f};
+  material_instance->setParameter(
+      "baseColorFactor",
+      filament::math::float4{base_color.x, base_color.y, base_color.z, 1.0f});
+  if (!editor_unlit) {
+    material_instance->setParameter(
+        material_texture_slot::kRoughness,
+        texture_binding_->resolve_texture(
+            material, material_texture_slot::kRoughness,
+            texture_binding_->fallback_roughness_texture()),
+        sampler);
+    material_instance->setParameter(
+        "metallicFactor",
+        material && material->present ? material->document.metallic : 0.0f);
+    material_instance->setParameter(
+        "roughnessFactor",
+        material && material->present ? material->document.roughness : 1.0f);
   }
   return material_instance;
 }

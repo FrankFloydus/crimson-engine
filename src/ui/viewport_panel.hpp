@@ -35,10 +35,6 @@
 #include <optional>
 #include <vector>
 
-namespace filament {
-class Renderer;
-}
-
 namespace quader {
 
 class RenderSystem;
@@ -65,10 +61,11 @@ public:
     void initialize(RenderSystem &render_system);
     void shutdown();
     void prepare_viewports(ViewportWorkspaceService &workspace,
+                           QuaderEditorApi &editor,
                            SceneRenderBridge &render_bridge,
                            const SceneDocument &document,
                            const AssetRegistry &assets);
-    void render_viewports(filament::Renderer &renderer);
+    void render_viewports(RenderSystem &render_system);
     bool activate_tool_from_menu(ViewportToolId tool, QuaderEditorApi &editor,
                                  ModelingSessionService &modeling);
     const ViewportToolState &tool_state() const {
@@ -121,10 +118,9 @@ private:
                                     const AssetRegistry &assets,
                                     const UIContext &ui_context,
                                     ImVec2 item_min, ImVec2 item_size);
-    void
-    refresh_cached_selection_overlay_frame(const SceneDocument &document,
-                                           const AssetRegistry &assets,
-                                           ModelingSessionService &modeling);
+    void refresh_cached_selection_overlay_frame(
+        ModelingSessionService &modeling, const SceneDocument &document,
+        const AssetRegistry &assets);
     ViewportWorkspaceService& workspace();
     const ViewportWorkspaceService& workspace() const;
     Pane &pane(ViewportPaneId pane_id);

@@ -52,6 +52,9 @@ public:
   AssetId add_material(AssetId id, MaterialDocument material);
   AssetId add_texture(TextureAsset texture);
   AssetId add_texture(AssetId id, TextureAsset texture);
+  bool remove_mesh(AssetId id);
+  bool remove_material(AssetId id);
+  bool remove_texture(AssetId id);
   bool replace_mesh(AssetId id, MeshAsset mesh);
   bool replace_material(AssetId id, MaterialDocument material);
   bool replace_texture(AssetId id, TextureAsset texture);

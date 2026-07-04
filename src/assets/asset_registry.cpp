@@ -77,6 +77,30 @@ AssetId AssetRegistry::add_texture(AssetId id, TextureAsset texture) {
   return id;
 }
 
+bool AssetRegistry::remove_mesh(AssetId id) {
+  if (!meshes_.remove(id)) {
+    return false;
+  }
+  mark_dirty();
+  return true;
+}
+
+bool AssetRegistry::remove_material(AssetId id) {
+  if (!materials_.remove(id)) {
+    return false;
+  }
+  mark_dirty();
+  return true;
+}
+
+bool AssetRegistry::remove_texture(AssetId id) {
+  if (!textures_.remove(id)) {
+    return false;
+  }
+  mark_dirty();
+  return true;
+}
+
 bool AssetRegistry::replace_mesh(AssetId id, MeshAsset mesh) {
   if (!meshes_.replace(id, std::move(mesh))) {
     return false;

@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 #include <algorithm>
 
@@ -93,6 +93,8 @@ TEST(QdrDocumentOperationMergeVerticesByDistanceTests, MergeVerticesByDistanceWe
 	const OperationResult result = merge_selected_vertices_by_distance(fixture.document, selection, 0.1F);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 	EXPECT_TRUE(fixture.document.vertices.size() == 5U);
 	const Vertex* survivor = find_vertex(fixture.document, fixture.c);
 	EXPECT_TRUE(survivor != nullptr);
@@ -142,6 +144,8 @@ TEST(QdrDocumentOperationMergeVerticesByDistanceTests, MergeVerticesByDistancePi
 	const OperationResult result = merge_selected_vertices_by_distance(document, selection, 1.1F);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
 	EXPECT_TRUE(find_vertex(document, a) == nullptr);
 	EXPECT_TRUE(find_vertex(document, c) == nullptr);
 	const Vertex* survivor = find_vertex(document, b);
@@ -169,6 +173,11 @@ TEST(QdrDocumentOperationMergeVerticesByDistanceTests, MergeVerticesByDistanceCo
 	const OperationResult result = merge_selected_vertices_by_distance(document, selection, 0.0F);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_polygon_document_validation_issue_after_success(
+		document,
+		result,
+		PolygonDocumentDiagnosticCode::NonmanifoldEdge);
 	EXPECT_TRUE(document.vertices.size() == vertex_count_before - 4U);
 	EXPECT_TRUE(document.faces.size() == 11U);
 	EXPECT_TRUE(face_count_on_plane_x(document, 1.0F) == 1U);
@@ -205,6 +214,11 @@ TEST(QdrDocumentOperationMergeVerticesByDistanceTests, MergeVerticesByDistanceAl
 	const OperationResult result = merge_selected_vertices_by_distance(document, selection, 0.001F);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_polygon_document_validation_issue_after_success(
+		document,
+		result,
+		PolygonDocumentDiagnosticCode::NonmanifoldEdge);
 	EXPECT_TRUE(result.message.empty());
 	EXPECT_TRUE(document.vertices.size() == 8U);
 	EXPECT_TRUE(qdr_test::edge_incidence_count(document, make_edge(a1, b1)) == 3);

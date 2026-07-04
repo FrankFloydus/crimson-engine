@@ -6,6 +6,20 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor_operation_test_helpers.hpp"
 
+namespace {
+
+bool all_face_uvs_empty(const quader_poly::Document& document)
+{
+	for (const quader_poly::Face& face : document.faces) {
+		if (!face.uvs.empty()) {
+			return false;
+		}
+	}
+	return true;
+}
+
+} // namespace
+
 TEST(QdrModelingRuntimeOperationTranslateTests, TranslateOperationMovesSelectedObjectVerticesAndRecordsContentChangeObjectModeMovesEverySelectedObjectVertex) {
 	{
 		quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
@@ -24,6 +38,54 @@ TEST(QdrModelingRuntimeOperationTranslateTests, TranslateOperationMovesSelectedO
 	
 
 	
+}
+
+TEST(QdrModelingRuntimeOperationTranslateTests, VertexTranslateClearsStoredLoopUvsAndKeepsGeneratedProjectionProcedural) {
+	quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
+	ASSERT_FALSE(session.objects().empty());
+	quader_editor_core::PolygonObject& object = session.objects().front();
+	quader_poly::ensure_face_uvs(object.document);
+	ASSERT_FALSE(object.document.faces.empty());
+	ASSERT_FALSE(all_face_uvs_empty(object.document));
+	const int object_id = object.id;
+	const quader_poly::ElementId selected_id = object.document.vertices.front().id;
+
+	session.set_component_selection(
+	    object_id,
+	    qdr_test::vertex_selection({selected_id}, selected_id),
+	    quader_editor_core::SelectionMode::Vertex);
+
+	const quader_editor_core::CommandResult result =
+	    session.translate_selected({0.0F, 3.0F, 0.0F});
+
+	EXPECT_TRUE(result.ok);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(all_face_uvs_empty(session.objects().front().document));
+}
+
+TEST(QdrModelingRuntimeOperationTranslateTests, VertexMatrixTransformClearsStoredLoopUvsAndKeepsGeneratedProjectionProcedural) {
+	quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
+	ASSERT_FALSE(session.objects().empty());
+	quader_editor_core::PolygonObject& object = session.objects().front();
+	quader_poly::ensure_face_uvs(object.document);
+	ASSERT_FALSE(object.document.faces.empty());
+	ASSERT_FALSE(all_face_uvs_empty(object.document));
+	const int object_id = object.id;
+	const quader_poly::ElementId selected_id = object.document.vertices.front().id;
+
+	session.set_component_selection(
+	    object_id,
+	    qdr_test::vertex_selection({selected_id}, selected_id),
+	    quader_editor_core::SelectionMode::Vertex);
+
+	quader_poly::Transform3 transform;
+	transform.origin = {0.0F, 3.0F, 0.0F};
+	const quader_editor_core::CommandResult result =
+	    session.transform_selected(transform, {});
+
+	EXPECT_TRUE(result.ok);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(all_face_uvs_empty(session.objects().front().document));
 }
 
 TEST(QdrModelingRuntimeOperationTranslateTests, TranslateOperationMovesSelectedObjectVerticesAndRecordsContentChangeVertexModeMovesOnlySelectedVertices) {

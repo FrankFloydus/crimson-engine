@@ -21,7 +21,11 @@ class SceneDocument;
 class SceneModelingSyncService;
 
 /**
- * Coordinates Modeling Mesh Sync Service responsibilities for the modeling application service layer.
+ * Owns the modeling runtime to SceneDocument / AssetRegistry synchronization boundary.
+ *
+ * Modeling runtime code that needs to create, destroy, or update scene mesh
+ * entities and projected mesh assets should route through this service instead
+ * of mutating SceneDocument or AssetRegistry directly.
  */
 class ModelingMeshSyncService {
 public:

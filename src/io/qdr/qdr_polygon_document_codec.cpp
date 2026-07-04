@@ -6,10 +6,13 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "io/qdr/qdr_polygon_document_codec.hpp"
 
+#include "io/qdr/qdr_diagnostic.hpp"
+
 #include <algorithm>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -83,7 +86,34 @@ quader_poly::SurfaceShading parse_surface_shading(const std::string& value) {
     if (value == "authored") {
       return quader_poly::SurfaceShading::Authored;
     }
-    throw std::runtime_error("Unknown face normal shading: " + value);
+    throw QdrDiagnosticException(qdr_make_error(
+        "qdr.unsupported_enum", "",
+        "QDR polygon document contains unsupported face normal shading enum "
+        "value: " +
+            value + "."));
+}
+
+std::string enum_field_string(const Json &value, const char *key,
+                              std::string_view label,
+                              QdrPolygonDocumentParseMode mode,
+                              std::string_view legacy_fallback) {
+  const auto field = value.find(key);
+  if (field == value.end()) {
+    if (mode == QdrPolygonDocumentParseMode::LegacyDefault) {
+      return std::string(legacy_fallback);
+    }
+    throw QdrDiagnosticException(qdr_make_error(
+        "qdr.missing_enum", "",
+        "QDR polygon document is missing " + std::string(label) +
+            " enum field."));
+  }
+  if (!field->is_string()) {
+    throw QdrDiagnosticException(qdr_make_error(
+        "qdr.invalid_enum", "",
+        "QDR polygon document " + std::string(label) +
+            " enum field must be a string."));
+  }
+  return field->get<std::string>();
 }
 
 bool contains_duplicate_ids(std::vector<quader_poly::ElementId> ids) {
@@ -159,7 +189,14 @@ QdrJson qdr_polygon_document_to_json(const quader_poly::Document& document) {
     };
 }
 
-quader_poly::Document qdr_polygon_document_from_json(const QdrJson& value) {
+quader_poly::Document qdr_polygon_document_from_json(const QdrJson &value) {
+  return qdr_polygon_document_from_json(
+      value, QdrPolygonDocumentParseMode::LegacyDefault);
+}
+
+quader_poly::Document
+qdr_polygon_document_from_json(const QdrJson &value,
+                               QdrPolygonDocumentParseMode mode) {
     quader_poly::Document document;
     document.next_vertex_id = value.at("nextVertexId").get<quader_poly::ElementId>();
     document.next_face_id = value.at("nextFaceId").get<quader_poly::ElementId>();
@@ -194,7 +231,8 @@ quader_poly::Document qdr_polygon_document_from_json(const QdrJson& value) {
           face_json.at("vertices").get<std::vector<quader_poly::ElementId>>();
       face.material_slot = face_json.value("materialSlot", 0U);
       face.normal_shading = parse_surface_shading(
-          face_json.value("normalShading", std::string("flat")));
+          enum_field_string(face_json, "normalShading", "face normal shading",
+                            mode, "flat"));
       face.uvs.reserve(face_json.at("uvs").size());
       for (const Json &uv_json : face_json.at("uvs")) {
         face.uvs.push_back(vec2_from_json(uv_json));

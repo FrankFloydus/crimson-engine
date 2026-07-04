@@ -14,7 +14,7 @@
 #include "render/overlay/viewport_box_overlay_builder.hpp"
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
 #include "render/overlay/viewport_transform_gizmo_overlay_builder.hpp"
-#include "scene/document/project_session.hpp"
+#include "editor/session/project_session.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_input_router.hpp"
@@ -898,7 +898,7 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObj
       ASSERT_TRUE(harness.editor.history().can_undo());
       const quader::QuaderApiVoidResult undo =
           harness.editor.commands().execute(
-              quader::quader_command::kHistoryUndo);
+              quader::quader_command::kEditUndo);
       ASSERT_TRUE(undo.ok()) << undo.error_message();
       EXPECT_TRUE(undo.changed());
       ASSERT_NE(harness.session.scene().transform(box.entity), nullptr);
@@ -1096,7 +1096,7 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedPoi
       ASSERT_TRUE(harness.editor.history().can_undo());
       const quader::QuaderApiVoidResult undo =
           harness.editor.commands().execute(
-              quader::quader_command::kHistoryUndo);
+              quader::quader_command::kEditUndo);
       ASSERT_TRUE(undo.ok()) << undo.error_message();
       EXPECT_TRUE(undo.changed());
       ASSERT_NE(harness.session.scene().transform(light.value().id), nullptr);

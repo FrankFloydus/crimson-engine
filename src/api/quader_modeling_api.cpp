@@ -12,7 +12,7 @@
 #include "api/quader_api_mutation_runner.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "diagnostics/profile.hpp"
-#include "scene/document/project_session.hpp"
+#include "editor/session/project_session.hpp"
 #include "editor/commands/modeling/commit_box_preview_command.hpp"
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/selection/editor_selection_service.hpp"

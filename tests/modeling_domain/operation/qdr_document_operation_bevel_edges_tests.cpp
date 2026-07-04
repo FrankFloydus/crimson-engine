@@ -4,6 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#include "operation_validation_test_helpers.hpp"
 #include "test_support.hpp"
 #include <mesh/polygon/document.hpp>
 
@@ -807,6 +808,8 @@ TEST(QdrDocumentOperationBevelEdgesTests, TopEdgeLoopBevelSharesSegmentedCornerC
     const OperationResult result = bevel_selected_edges(document, selection, settings);
 
     EXPECT_TRUE(result.changed);
+
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
     EXPECT_TRUE(document.vertices.size() == 48U);
     EXPECT_TRUE(document.faces.size() == 46U);
     EXPECT_TRUE(std::all_of(document.faces.begin(), document.faces.end(), [](const Face& face) {
@@ -851,6 +854,8 @@ TEST(QdrDocumentOperationBevelEdgesTests, TopEdgeLoopSquareProfileKeepsClosedOut
     const OperationResult result = bevel_selected_edges(document, selection, settings);
 
     EXPECT_TRUE(result.changed);
+
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
     EXPECT_TRUE(selection.mode == SelectionMode::Face);
     EXPECT_FALSE(selection.faces.empty());
     EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), face_has_repeated_vertices));
@@ -919,6 +924,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, TopPerimeterBevelKeepsUnselectedSpokeE
 
     SCOPED_TRACE(::testing::Message() << result.message);
     EXPECT_TRUE(result.changed);
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
     EXPECT_TRUE(selection.mode == SelectionMode::Face);
     EXPECT_FALSE(selection.faces.empty());
     EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), face_has_repeated_vertices));
@@ -969,6 +975,8 @@ TEST(QdrDocumentOperationBevelEdgesTests, TwoConnectedEdgeBevelsCloseTheSharedCo
     const OperationResult result = bevel_selected_edges(document, selection, settings);
 
     EXPECT_TRUE(result.changed);
+
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
     EXPECT_TRUE(selection.mode == SelectionMode::Face);
     EXPECT_TRUE(selection.faces.size() == 18U);
     EXPECT_TRUE(find_vertex(document, shared_corner) == nullptr);
@@ -993,6 +1001,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, SingleEdgeBevelPreservesExactProfileEn
 
         const OperationResult result = bevel_selected_edges(document, selection, settings);
         EXPECT_TRUE(result.changed);
+        qdr_test::expect_valid_polygon_document_after_success(document, result);
         return document;
     };
 
@@ -1031,6 +1040,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, SingleEdgeBevelWidthReachesAvailableFa
 
     SCOPED_TRACE(::testing::Message() << result.message);
     EXPECT_TRUE(result.changed);
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
     EXPECT_TRUE(has_vertex_near_position(document, { -64.0F, 32.0F, -28.0F }, 0.002F));
     EXPECT_TRUE(has_vertex_near_position(document, { 64.0F, 32.0F, -28.0F }, 0.002F));
     EXPECT_TRUE(has_vertex_near_position(document, { -64.0F, -28.0F, 32.0F }, 0.002F));
@@ -1072,6 +1082,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, SingleHalfEdgeBevelClosesSplitCubeEdge
 
     SCOPED_TRACE(::testing::Message() << result.message);
     EXPECT_TRUE(result.changed);
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
     EXPECT_TRUE(selection.mode == SelectionMode::Face);
     EXPECT_FALSE(selection.faces.empty());
     EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), face_has_repeated_vertices));
@@ -1119,6 +1130,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, SingleSplitCornerHalfEdgeBevelMatchesB
 
     SCOPED_TRACE(::testing::Message() << result.message);
     EXPECT_TRUE(result.changed);
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
     EXPECT_TRUE(selection.mode == SelectionMode::Face);
     EXPECT_FALSE(selection.faces.empty());
     EXPECT_TRUE(document.vertices.size() == 20U);
@@ -1153,6 +1165,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, EdgeBevelClampsSegmentCountAtTheDocume
 
         const OperationResult result = bevel_selected_edges(document, selection, settings);
         EXPECT_TRUE(result.changed);
+        qdr_test::expect_valid_polygon_document_after_success(document, result);
         return document;
     };
 
@@ -1210,6 +1223,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, ConvexValenceThreeCubeCornersKeepValid
 
         SCOPED_TRACE(::testing::Message() << result.message);
         EXPECT_TRUE(result.changed);
+        qdr_test::expect_valid_polygon_document_after_success(document, result);
         EXPECT_TRUE(selection.mode == SelectionMode::Face);
         EXPECT_FALSE(selection.faces.empty());
         EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), face_has_repeated_vertices));
@@ -1287,6 +1301,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, SideExtrusionBevelClosesAndOrientsAllE
 
         SCOPED_TRACE(::testing::Message() << result.message);
         EXPECT_TRUE(result.changed);
+        qdr_test::expect_valid_polygon_document_after_success(document, result);
         EXPECT_TRUE(selection.mode == SelectionMode::Face);
         EXPECT_TRUE(selection.faces.size() >= expected.min_selected_faces);
         EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), face_has_repeated_vertices));
@@ -1352,6 +1367,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, ParallelTopOpeningEdgeBevelsCloseDoorw
 
     SCOPED_TRACE(::testing::Message() << result.message);
     EXPECT_TRUE(result.changed);
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
     EXPECT_TRUE(selection.mode == SelectionMode::Face);
     EXPECT_FALSE(selection.faces.empty());
     EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), face_has_repeated_vertices));

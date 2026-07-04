@@ -10,6 +10,7 @@
 #include "editor/modeling/services/modeling_session_services.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
+#include "editor/selection/scene_selection_application.hpp"
 #include "editor/selection/selection_projection_service.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "scene/scene_document.hpp"
@@ -25,6 +26,7 @@
 #include <vector>
 #include <variant>
 
+#include <editor/interactions/cut_tool.hpp>
 #include <editor/modeling/runtime/session.hpp>
 
 namespace quader {
@@ -32,6 +34,163 @@ namespace {
 
 using test::guardrail::read_source_file;
 using test::guardrail::source_root;
+
+void expect_vec3_eq(QVec3 actual, QVec3 expected) {
+  EXPECT_FLOAT_EQ(actual.x, expected.x);
+  EXPECT_FLOAT_EQ(actual.y, expected.y);
+  EXPECT_FLOAT_EQ(actual.z, expected.z);
+}
+
+TEST(ModelingSessionServiceSplitTests, RuntimeToolCommandServiceBuildsTypedToolCommands) {
+  ModelingToolRayEvent ray_event;
+  ray_event.ray.origin = {1.0f, 2.0f, 3.0f};
+  ray_event.ray.direction = {0.0f, -2.0f, 0.0f};
+  ray_event.camera.viewport_size = {640.0f, 480.0f};
+  ray_event.grid_size = 0.25;
+  ray_event.vertex_radius = 0.11;
+  ray_event.edge_radius = 0.22;
+  ray_event.snap_enabled = false;
+  ray_event.constrain_axis = true;
+  ray_event.dragging = true;
+
+  const quader_editor_core::EditorRuntimeCommand insert_hover =
+      RuntimeToolCommandService::update_insert_edge_loop_hover(ray_event);
+  EXPECT_EQ(insert_hover.command_id,
+            quader_editor_core::EditorRuntimeCommandId::
+                UpdateInsertEdgeLoopHover);
+  const auto *insert_settings =
+      std::get_if<quader_editor_core::InsertEdgeLoopPickRuntimeCommandSettings>(
+          &insert_hover.settings);
+  ASSERT_NE(insert_settings, nullptr);
+  EXPECT_NEAR(insert_settings->ray.origin.x, 1.0, 0.0001);
+  EXPECT_NEAR(insert_settings->ray.direction.y, -1.0, 0.0001);
+  EXPECT_EQ(insert_settings->grid_size, ray_event.grid_size);
+  EXPECT_EQ(insert_settings->vertex_radius, ray_event.vertex_radius);
+  EXPECT_EQ(insert_settings->edge_radius, ray_event.edge_radius);
+  EXPECT_FALSE(insert_settings->snap_enabled);
+
+  const quader_editor_core::EditorRuntimeCommand cut_line =
+      RuntimeToolCommandService::begin_cut_line_drag(ray_event);
+  EXPECT_EQ(cut_line.command_id,
+            quader_editor_core::EditorRuntimeCommandId::BeginCutLineDrag);
+  const auto *cut_settings =
+      std::get_if<quader_editor_core::CutRayRuntimeCommandSettings>(
+          &cut_line.settings);
+  ASSERT_NE(cut_settings, nullptr);
+  EXPECT_TRUE(cut_settings->dragging);
+  EXPECT_EQ(cut_settings->grid_size, ray_event.grid_size);
+
+  const quader_editor_core::EditorRuntimeCommand cut_mode =
+      RuntimeToolCommandService::set_cut_mode(ModelingCutMode::DiscardLeft);
+  const auto *cut_mode_settings =
+      std::get_if<quader_editor_core::SetCutModeRuntimeCommandSettings>(
+          &cut_mode.settings);
+  ASSERT_NE(cut_mode_settings, nullptr);
+  EXPECT_EQ(cut_mode_settings->mode,
+            quader_editor_core::cut_mode_id(
+                quader_editor_core::CutMode::KeepBack));
+
+  const quader_editor_core::EditorRuntimeCommand mirror_point =
+      RuntimeToolCommandService::begin_mirror_point_drag(2);
+  EXPECT_EQ(mirror_point.command_id,
+            quader_editor_core::EditorRuntimeCommandId::
+                BeginMirrorPointDrag);
+  const auto *mirror_settings =
+      std::get_if<quader_editor_core::MirrorPointDragRuntimeCommandSettings>(
+          &mirror_point.settings);
+  ASSERT_NE(mirror_settings, nullptr);
+  EXPECT_EQ(mirror_settings->point_index, 2);
+
+  const quader_editor_core::EditorRuntimeCommand poly_hover =
+      RuntimeToolCommandService::update_poly_hover(ray_event);
+  EXPECT_EQ(poly_hover.command_id,
+            quader_editor_core::EditorRuntimeCommandId::UpdatePolyHover);
+  const auto *poly_settings =
+      std::get_if<quader_editor_core::PolyHoverRuntimeCommandSettings>(
+          &poly_hover.settings);
+  ASSERT_NE(poly_settings, nullptr);
+  EXPECT_TRUE(poly_settings->constrain_axis);
+  EXPECT_FALSE(poly_settings->snap_enabled);
+  EXPECT_EQ(poly_settings->grid_size, ray_event.grid_size);
+
+  ModelingBoxToolEvent box_event;
+  box_event.screen_position = {320.0f, 240.0f};
+  box_event.ray = ray_event.ray;
+  box_event.grid_size = 2.0;
+  box_event.snap_enabled = false;
+  box_event.has_camera = true;
+  box_event.camera.viewport_size = {800.0f, 600.0f};
+
+  const quader_editor_core::EditorRuntimeCommand box_height =
+      RuntimeToolCommandService::begin_box_height(box_event);
+  EXPECT_EQ(box_height.command_id,
+            quader_editor_core::EditorRuntimeCommandId::BeginBoxHeight);
+  const auto *box_height_settings =
+      std::get_if<quader_editor_core::BoxHeightRuntimeCommandSettings>(
+          &box_height.settings);
+  ASSERT_NE(box_height_settings, nullptr);
+  EXPECT_NEAR(box_height_settings->screen_position.x, 320.0, 0.0001);
+  EXPECT_TRUE(box_height_settings->has_camera);
+  EXPECT_FALSE(box_height_settings->snap_enabled);
+
+  ModelingCreateBoxRequest box_request;
+  box_request.bounds.min = {-2.0f, -1.0f, -3.0f};
+  box_request.bounds.max = {2.0f, 1.0f, 3.0f};
+  const quader_editor_core::EditorRuntimeCommand create_box =
+      RuntimeToolCommandService::create_box_from_bounds(box_request);
+  EXPECT_EQ(create_box.command_id,
+            quader_editor_core::EditorRuntimeCommandId::CreateBoxFromBounds);
+  const auto *create_box_settings =
+      std::get_if<quader_editor_core::CreateBoxFromBoundsRuntimeCommandSettings>(
+          &create_box.settings);
+  ASSERT_NE(create_box_settings, nullptr);
+  EXPECT_NEAR(create_box_settings->min_bounds.x, -2.0, 0.0001);
+  EXPECT_NEAR(create_box_settings->max_bounds.z, 3.0, 0.0001);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     RuntimeToolCommandConstructionLivesOutsideFacade) {
+  const std::string facade = read_source_file(
+      "src/editor/modeling/services/modeling_session_service.cpp");
+  const std::string command_service = read_source_file(
+      "src/editor/modeling/services/runtime_tool_command_service.cpp");
+
+  const std::array<std::string, 10> settings_types = {
+      "InsertEdgeLoopPickRuntimeCommandSettings",
+      "CutRayRuntimeCommandSettings",
+      "CutPointDragRuntimeCommandSettings",
+      "SetCutModeRuntimeCommandSettings",
+      "MirrorRayRuntimeCommandSettings",
+      "MirrorPointDragRuntimeCommandSettings",
+      "PolyHoverRuntimeCommandSettings",
+      "BoxRayRuntimeCommandSettings",
+      "BoxHeightRuntimeCommandSettings",
+      "CreateBoxFromBoundsRuntimeCommandSettings",
+  };
+  for (const std::string &settings_type : settings_types) {
+    EXPECT_EQ(facade.find(settings_type), std::string::npos)
+        << settings_type;
+    EXPECT_NE(command_service.find(settings_type), std::string::npos)
+        << settings_type;
+  }
+
+  EXPECT_NE(
+      facade.find("RuntimeToolCommandService::update_insert_edge_loop_hover"),
+      std::string::npos);
+  EXPECT_NE(facade.find("RuntimeToolCommandService::update_cut_hover"),
+            std::string::npos);
+  EXPECT_NE(facade.find("RuntimeToolCommandService::update_mirror_hover"),
+            std::string::npos);
+  EXPECT_NE(facade.find("RuntimeToolCommandService::update_poly_hover"),
+            std::string::npos);
+  EXPECT_NE(facade.find("RuntimeToolCommandService::update_box_hover"),
+            std::string::npos);
+  EXPECT_EQ(facade.find("viewport_grid_point_from_ray("), std::string::npos);
+  EXPECT_EQ(facade.find("runtime_.update_poly_hover"), std::string::npos);
+  EXPECT_EQ(facade.find("runtime_.accept_poly_current_point"),
+            std::string::npos);
+  EXPECT_EQ(facade.find("runtime_.commit_poly_tool"), std::string::npos);
+}
 
 TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapOwnsModelingSceneMappingsAndBuildsRecords) {
     SceneDocument scene;
@@ -453,6 +612,30 @@ TEST(ModelingSessionServiceSplitTests, SelectionProjectionServicePromotionClears
               quader_editor_core::SelectionMode::Object);
 }
 
+TEST(ModelingSessionServiceSplitTests, SceneSelectionApplicationModesAreExplicit) {
+  SceneDocument scene;
+  const EntityId first = scene.create_entity("First", EntityKind::Mesh);
+  const EntityId second = scene.create_entity("Second", EntityKind::Mesh);
+  const std::array<EntityId, 2> selected{first, second};
+  const SceneSelectionState state =
+      make_scene_selection(scene, selected, second);
+
+  EXPECT_TRUE(apply_scene_selection(
+      scene, state, SceneSelectionApplicationMode::UndoableCommand));
+  EXPECT_EQ(scene.selected_entities(), (std::vector<EntityId>{first, second}));
+  EXPECT_EQ(scene.primary_selection(), second);
+
+  const std::uint64_t revision_after_first_apply =
+      scene.selection_revision();
+  EXPECT_FALSE(apply_scene_selection(
+      scene, state, SceneSelectionApplicationMode::RuntimeSync));
+  EXPECT_EQ(scene.selection_revision(), revision_after_first_apply);
+
+  EXPECT_TRUE(apply_scene_selection(
+      scene, state, SceneSelectionApplicationMode::UndoableCommand));
+  EXPECT_GT(scene.selection_revision(), revision_after_first_apply);
+}
+
 TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapStaysOutOfServiceBucket) {
   const std::string cmake = read_source_file("CMakeLists.txt");
   const std::string services = read_source_file(
@@ -506,6 +689,8 @@ TEST(ModelingSessionServiceSplitTests, ObjectSelectionMappingLivesInSelectionPro
       "src/editor/modeling/services/modeling_session_service.cpp");
   const std::string projection =
       read_source_file("src/editor/selection/selection_projection_service.cpp");
+  const std::string selection_owner =
+      read_source_file("src/editor/selection/scene_selection_application.cpp");
 
   EXPECT_NE(facade.find("project_object_selection_for_scene_entities("),
             std::string::npos);
@@ -522,7 +707,11 @@ TEST(ModelingSessionServiceSplitTests, ObjectSelectionMappingLivesInSelectionPro
   EXPECT_NE(projection.find("resolve_projected_active_selection("),
             std::string::npos);
   EXPECT_NE(projection.find("apply_runtime_object_selection("), std::string::npos);
-  EXPECT_NE(projection.find("apply_exact_scene_selection("), std::string::npos);
+  EXPECT_EQ(projection.find("apply_exact_scene_selection("), std::string::npos);
+  EXPECT_NE(projection.find("SceneSelectionApplicationMode::RuntimeSync"),
+            std::string::npos);
+  EXPECT_NE(selection_owner.find("apply_runtime_sync_scene_selection("),
+            std::string::npos);
   EXPECT_EQ(projection.find("ordered_selected.front()"), std::string::npos);
 }
 
@@ -594,6 +783,54 @@ TEST(ModelingSessionServiceSplitTests, ClickPickSelectionUsesSelectionServiceCac
       runtime_picking.find("pick_nearest_object(objects, ray, options, "
                            "hit_index, hit, object_bounds, face_geometry)"),
       std::string::npos);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     SelectionApplicationLivesInModelingSelectionService) {
+  const std::string facade = read_source_file(
+      "src/editor/modeling/services/modeling_session_service.cpp");
+  const std::string selection_header = read_source_file(
+      "src/editor/modeling/services/modeling_selection_service.hpp");
+  const std::string selection_service = read_source_file(
+      "src/editor/modeling/services/modeling_session_services.cpp");
+
+  EXPECT_NE(selection_header.find("struct ModelingSelectionApplyResult"),
+            std::string::npos);
+  EXPECT_NE(selection_header.find("selection_summary("), std::string::npos);
+  EXPECT_NE(selection_header.find("set_component_selection("),
+            std::string::npos);
+  EXPECT_NE(selection_header.find("set_group_selection_mode("),
+            std::string::npos);
+
+  EXPECT_NE(selection_service.find(
+                "ModelingSelectionService::selection_summary("),
+            std::string::npos);
+  EXPECT_NE(selection_service.find(
+                "ModelingSelectionService::set_component_selection("),
+            std::string::npos);
+  EXPECT_NE(selection_service.find("validated_component_selection_edit("),
+            std::string::npos);
+  EXPECT_NE(selection_service.find(
+                "ModelingSelectionService::apply_rectangle_selection("),
+            std::string::npos);
+  EXPECT_NE(selection_service.find("to_runtime_selection_edit(request.edit)"),
+            std::string::npos);
+
+  EXPECT_NE(facade.find("selection_service_.selection_summary("),
+            std::string::npos);
+  EXPECT_NE(facade.find("selection_service_.set_component_selection("),
+            std::string::npos);
+  EXPECT_NE(facade.find("selection_service_.apply_rectangle_selection("),
+            std::string::npos);
+  EXPECT_NE(facade.find("selection_projection_service_.restore_scene_selection("),
+            std::string::npos);
+  EXPECT_EQ(facade.find("validated_component_selection_edit("),
+            std::string::npos);
+  EXPECT_EQ(facade.find("ComponentSelectionEditResult"), std::string::npos);
+  EXPECT_EQ(facade.find("quader_editor_core::apply_rectangle_selection("
+                        "rectangle_request)"),
+            std::string::npos);
+  EXPECT_EQ(facade.find("scene_.clear_selection()"), std::string::npos);
 }
 
 TEST(ModelingSessionServiceSplitTests, SelectionCenterWorldProjectionLivesInSelectionProjectionService) {
@@ -669,10 +906,14 @@ TEST(ModelingSessionServiceSplitTests, DuplicateSceneIdentityLivesInRuntimeMapAn
 TEST(ModelingSessionServiceSplitTests, TransformDragPreviewRoutingLivesInController) {
   const std::string facade = read_source_file(
       "src/editor/modeling/services/modeling_session_service.cpp");
+  const std::string service = read_source_file(
+      "src/editor/modeling/services/modeling_transform_drag_service.cpp");
   const std::string controller = read_source_file(
       "src/editor/modeling/runtime_state/transform_drag_controller.cpp");
 
-  EXPECT_NE(facade.find("TransformDragController::preview_routing("),
+  EXPECT_EQ(facade.find("TransformDragController::preview_routing("),
+            std::string::npos);
+  EXPECT_NE(service.find("TransformDragController::preview_routing("),
             std::string::npos);
   EXPECT_EQ(facade.find("duplicate_scene_transform_preview"), std::string::npos);
   EXPECT_EQ(facade.find("needs_runtime_preview_transaction ="), std::string::npos);
@@ -688,6 +929,39 @@ TEST(ModelingSessionServiceSplitTests, TransformDragPreviewRoutingLivesInControl
       "src/editor/modeling/services/transform_preview_service.hpp"));
   EXPECT_FALSE(std::filesystem::exists(
       source_root() / "src/editor/modeling/services/modal_tool_runtime.hpp"));
+}
+
+TEST(ModelingSessionServiceSplitTests, TransformDragLifecycleLivesInFocusedService) {
+  const std::string facade = read_source_file(
+      "src/editor/modeling/services/modeling_session_service.cpp");
+  const std::string service = read_source_file(
+      "src/editor/modeling/services/modeling_transform_drag_service.cpp");
+  const std::string service_header = read_source_file(
+      "src/editor/modeling/services/modeling_transform_drag_service.hpp");
+  const std::string transform_tool = read_source_file(
+      "src/editor/tools/base/transform_viewport_tool.hpp");
+
+  EXPECT_NE(facade.find("transform_drag_service_.begin_transform_drag("),
+            std::string::npos);
+  EXPECT_NE(facade.find("transform_drag_service_.update_transform_drag("),
+            std::string::npos);
+  EXPECT_NE(facade.find("transform_drag_service_.commit_transform_drag("),
+            std::string::npos);
+  EXPECT_NE(facade.find("transform_drag_service_.cancel_transform_drag("),
+            std::string::npos);
+  EXPECT_EQ(facade.find("quader_editor_core::begin_move_drag("),
+            std::string::npos);
+  EXPECT_EQ(facade.find("SceneTransformDragService"), std::string::npos);
+  EXPECT_NE(service.find("quader_editor_core::begin_move_drag("),
+            std::string::npos);
+  EXPECT_NE(service.find("quader_editor_core::begin_rotate_drag("),
+            std::string::npos);
+  EXPECT_NE(service.find("quader_editor_core::begin_scale_drag("),
+            std::string::npos);
+  EXPECT_NE(service_header.find("SceneTransformDragService"),
+            std::string::npos);
+  EXPECT_NE(transform_tool.find("TransformGizmoInteraction owns"),
+            std::string::npos);
 }
 
 TEST(ModelingSessionServiceSplitTests, PickingAndOverlayProjectionHelpersStayOutOfFacade) {
@@ -720,6 +994,37 @@ TEST(ModelingSessionServiceSplitTests, PickingAndOverlayProjectionHelpersStayOut
   EXPECT_NE(picking_projection.find("object_face_geometry_signature("),
             std::string::npos);
   EXPECT_NE(picking_projection.find("build_object_pick_bounds("),
+            std::string::npos);
+}
+
+TEST(ModelingSessionServiceSplitTests, ToolStatusProjectionLivesInOverlayService) {
+  const std::string facade = read_source_file(
+      "src/editor/modeling/services/modeling_session_service.cpp");
+  const std::string services = read_source_file(
+      "src/editor/modeling/services/modeling_session_services.cpp");
+  const std::string overlay_header = read_source_file(
+      "src/editor/modeling/services/modeling_overlay_service.hpp");
+
+  EXPECT_NE(overlay_header.find("ModelingToolStatus tool_status("),
+            std::string::npos);
+  EXPECT_NE(services.find("ModelingOverlayService::tool_status("),
+            std::string::npos);
+  EXPECT_NE(facade.find("return overlay_service_.tool_status("
+                        "runtime_, modal_tool_owns_viewport());"),
+            std::string::npos);
+  EXPECT_EQ(facade.find("runtime_.cut_state()"), std::string::npos);
+  EXPECT_EQ(facade.find("runtime_.mirror_state()"), std::string::npos);
+  EXPECT_EQ(facade.find("quader_editor_core::cut_overlay_points("),
+            std::string::npos);
+  EXPECT_EQ(facade.find("quader_editor_core::mirror_overlay_points("),
+            std::string::npos);
+  EXPECT_EQ(facade.find("quader_editor_core::cut_is_dragging("),
+            std::string::npos);
+  EXPECT_EQ(facade.find("quader_editor_core::mirror_is_dragging("),
+            std::string::npos);
+  EXPECT_NE(services.find("quader_editor_core::cut_overlay_points("),
+            std::string::npos);
+  EXPECT_NE(services.find("quader_editor_core::mirror_overlay_points("),
             std::string::npos);
 }
 
@@ -966,6 +1271,57 @@ TEST(ModelingSessionServiceSplitTests, PolicyServicesExposeDirectBehavior) {
   EXPECT_FALSE(ModelingOverlayService::has_modal_overlay(status));
   status.cut_has_line = true;
   EXPECT_TRUE(ModelingOverlayService::has_modal_overlay(status));
+
+  quader_editor_core::EditorRuntimeState runtime_state;
+  runtime_state.active_tool = quader_editor_core::ViewportInteractionTool::Cut;
+  runtime_state.cut.points = {{1.0f, 2.0f, 3.0f}};
+  runtime_state.cut.mode = quader_editor_core::CutMode::KeepFront;
+  runtime_state.cut.dragging_new_point = true;
+  runtime_state.cut.dragging_point_index = 0;
+  runtime_state.cut.preview_valid = true;
+  runtime_state.cut_hover.valid = true;
+  runtime_state.cut_hover.position = {4.0f, 5.0f, 6.0f};
+  runtime_state.mirror.plane.points = {{7.0f, 8.0f, 9.0f}};
+  runtime_state.mirror.plane.dragging_line = true;
+  runtime_state.mirror.plane.drag_line_anchor = {7.0f, 8.0f, 9.0f};
+  runtime_state.mirror.preview_valid = true;
+  runtime_state.mirror_hover.valid = true;
+  runtime_state.mirror_hover.position = {10.0f, 11.0f, 12.0f};
+  runtime_state.poly.active = true;
+  runtime_state.poly.closed = true;
+  runtime_state.poly.has_current = true;
+  runtime_state.poly.points = {{0.0f, 0.0f, 0.0f},
+                               {1.0f, 0.0f, 0.0f},
+                               {0.0f, 1.0f, 0.0f}};
+
+  const ModelingToolStatus projected_status =
+      ModelingOverlayService{}.tool_status(
+          quader_editor_core::EditorRuntime(runtime_state), true);
+  EXPECT_EQ(projected_status.active_tool, ModelingViewportTool::Cut);
+  EXPECT_TRUE(projected_status.modal_tool_owns_viewport);
+  EXPECT_TRUE(projected_status.cut_active);
+  EXPECT_TRUE(projected_status.cut_dragging);
+  EXPECT_TRUE(projected_status.cut_dragging_new_point);
+  EXPECT_EQ(projected_status.cut_dragging_point_index, 0);
+  EXPECT_EQ(projected_status.cut_mode, ModelingCutMode::DiscardRight);
+  EXPECT_EQ(projected_status.cut_captured_point_count, 1);
+  EXPECT_EQ(projected_status.cut_point_count, 2);
+  EXPECT_TRUE(projected_status.cut_has_line);
+  expect_vec3_eq(projected_status.cut_points[0], {1.0f, 2.0f, 3.0f});
+  expect_vec3_eq(projected_status.cut_points[1], {4.0f, 5.0f, 6.0f});
+  EXPECT_TRUE(projected_status.mirror_active);
+  EXPECT_TRUE(projected_status.mirror_dragging);
+  EXPECT_TRUE(projected_status.mirror_dragging_line);
+  EXPECT_EQ(projected_status.mirror_captured_point_count, 1);
+  EXPECT_EQ(projected_status.mirror_point_count, 2);
+  EXPECT_TRUE(projected_status.mirror_has_line);
+  expect_vec3_eq(projected_status.mirror_points[0], {7.0f, 8.0f, 9.0f});
+  expect_vec3_eq(projected_status.mirror_points[1], {10.0f, 11.0f, 12.0f});
+  EXPECT_TRUE(projected_status.poly_active);
+  EXPECT_TRUE(projected_status.poly_closed);
+  EXPECT_TRUE(projected_status.poly_has_current);
+  EXPECT_TRUE(projected_status.poly_can_commit);
+  EXPECT_EQ(projected_status.poly_point_count, 3);
 
   EXPECT_TRUE(ModalToolRuntime::owns_viewport(ModelingViewportTool::Box));
   EXPECT_TRUE(ModalToolRuntime::owns_viewport(ModelingViewportTool::Mirror));

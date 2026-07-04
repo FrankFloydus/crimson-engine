@@ -7,7 +7,6 @@
 #include "editor/tools/base/two_stage_box_tool.hpp"
 
 #include "core/logger.hpp"
-#include "editor/modeling/services/modeling_session_service.hpp"
 
 #include <utility>
 
@@ -15,11 +14,11 @@ namespace quader {
 namespace {
 
 void invalidate(ViewportToolContext& context) {
-  if (context.invalidate_hover) {
-    context.invalidate_hover();
+  if (context.ports.hover != nullptr) {
+    context.ports.hover->invalidate();
   }
-  if (context.mark_overlay_dirty) {
-    context.mark_overlay_dirty();
+  if (context.ports.command_result != nullptr) {
+    context.ports.command_result->mark_overlay_dirty();
   }
 }
 
@@ -62,11 +61,13 @@ ViewportToolResult TwoStageBoxTool::handle_event(
       if (context.modal_state == nullptr) {
         return ModalViewportTool::handle_event(context, event);
       }
-      const ModelingCommandResult cancel = context.modeling.cancel_box();
+      if (context.ports.cancel == nullptr) {
+        return ModalViewportTool::handle_event(context, event);
+      }
+      const ModelingCommandResult cancel = context.ports.cancel->cancel_box();
       if (!cancel.ok) {
         LOG_ERROR("Box cancel failed: {}", cancel.message);
       }
-      context.modal_state->box_preview = {};
       context.modal_state->insert_edge_loop_drag_active = false;
       context.modal_state->cut_drag_active = false;
       context.modal_state->mirror_drag_active = false;
@@ -83,22 +84,23 @@ ViewportToolResult TwoStageBoxTool::handle_event(
     if (event.kind != ViewportToolEventKind::Frame ||
         event.tool != viewport_tool() || context.modal_state == nullptr ||
         context.box == nullptr || !context.box->make_event ||
-        !context.box->commit_preview) {
+        !context.box->commit_preview || context.ports.preview == nullptr) {
       return ModalViewportTool::handle_event(context, event);
     }
 
     ViewportBoxToolContext &box_context = *context.box;
-    ModelingBoxPreview &preview = context.modal_state->box_preview;
+    ViewportToolPreviewPort &preview_port = *context.ports.preview;
     const ViewportPointerToolEvent& pointer = event.pointer;
     const ModelingBoxToolEvent box_event = box_context.make_event();
+    ModelingBoxPreview preview = preview_port.box_preview(box_event.snap_enabled);
     bool action_consumed = false;
     bool active_tool_sync_requested = false;
 
     auto finish_footprint_and_commit = [&]() {
-      preview = context.modeling.update_box_footprint(box_event);
+      preview = preview_port.update_box_footprint(box_event);
       log_preview_failure("Box footprint finalize update", preview);
       if (preview.ok) {
-        preview = context.modeling.begin_box_height(box_event);
+        preview = preview_port.begin_box_height(box_event);
         log_preview_failure("Box height begin", preview);
       }
       if (preview.ok) {
@@ -106,11 +108,11 @@ ViewportToolResult TwoStageBoxTool::handle_event(
                                      ? box_context.next_mesh_name()
                                      : std::string{"Mesh"};
         if (commit_preview(box_context, name)) {
-          if (context.set_selection_mode) {
-            context.set_selection_mode(ViewportSelectionMode::Object);
-          }
-          if (context.set_app_selection_mode) {
-            context.set_app_selection_mode(ModelingSelectionMode::Object);
+          if (context.ports.selection_mode != nullptr) {
+            context.ports.selection_mode->set_viewport_selection_mode(
+                ViewportSelectionMode::Object);
+            context.ports.selection_mode->set_app_selection_mode(
+                ModelingSelectionMode::Object);
           }
           active_tool_sync_requested = true;
         }
@@ -122,8 +124,11 @@ ViewportToolResult TwoStageBoxTool::handle_event(
 
     if (pointer.hovered && !pointer.left_down && !pointer.suppress_hover_work &&
         preview.drag_state == ModelingBoxDragState::Idle &&
-        (!context.claim_hover || context.claim_hover(preview.drag_state))) {
-      preview = context.modeling.update_box_hover(box_event);
+        (context.ports.hover == nullptr ||
+         context.ports.hover->claim(preview.drag_state))) {
+      preview = context.ports.hover != nullptr
+                    ? context.ports.hover->update_box_hover(box_event)
+                    : ModelingBoxPreview{};
       log_preview_failure("Box hover", preview);
     }
 
@@ -132,7 +137,7 @@ ViewportToolResult TwoStageBoxTool::handle_event(
       if (preview.drag_state == ModelingBoxDragState::Footprint) {
         finish_footprint_and_commit();
       } else {
-        preview = context.modeling.begin_box_footprint(box_event);
+        preview = preview_port.begin_box_footprint(box_event);
         log_preview_failure("Box footprint begin", preview);
         invalidate(context);
         action_consumed = true;
@@ -149,7 +154,7 @@ ViewportToolResult TwoStageBoxTool::handle_event(
         preview.drag_state == ModelingBoxDragState::Footprint &&
         pointer.hovered && !pointer.suppress_hover_work &&
         !pointer.navigation_active) {
-      preview = context.modeling.update_box_footprint(box_event);
+      preview = preview_port.update_box_footprint(box_event);
       log_preview_failure("Box footprint update", preview);
       invalidate(context);
     }

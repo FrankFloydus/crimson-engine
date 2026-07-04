@@ -8,7 +8,7 @@
 
 #include "api/quader_api_result.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
-#include "scene/document/project_session.hpp"
+#include "editor/session/project_session.hpp"
 
 #include <string>
 #include <string_view>

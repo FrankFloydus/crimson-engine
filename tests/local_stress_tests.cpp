@@ -8,7 +8,7 @@
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
-#include "scene/document/project_session.hpp"
+#include "editor/session/project_session.hpp"
 
 #include <gtest/gtest.h>
 

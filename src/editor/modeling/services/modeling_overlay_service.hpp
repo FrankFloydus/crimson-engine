@@ -62,6 +62,9 @@ public:
  */
 class ModelingOverlayService {
 public:
+  [[nodiscard]] ModelingToolStatus tool_status(
+      const quader_editor_core::EditorRuntime &runtime,
+      bool modal_tool_owns_viewport) const;
   [[nodiscard]] static bool has_modal_overlay(const ModelingToolStatus &status);
   void invalidate() const;
   [[nodiscard]] std::uint64_t selection_overlay_signature(

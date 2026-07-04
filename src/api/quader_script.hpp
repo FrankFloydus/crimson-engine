@@ -39,7 +39,17 @@ struct QuaderScriptResult : QuaderApiStatus {
 };
 
 /**
- * Owns Quader Script behavior within the public Quader API surface.
+ * Small C++ automation DSL built only on public Quader API calls.
+ *
+ * QuaderScript is the compiled scripting path used by tests, examples, and
+ * automation while Lua bindings remain future work. Steps should express the
+ * same intent a user could perform through QuaderApi or QuaderEditorApi:
+ * create objects, select components, run tools, and execute history through
+ * typed command routes such as quader::quader_command::kEditUndo.
+ *
+ * A script run stops on the first failing step and returns structured public
+ * API status plus any named object refs and the final snapshot. Script steps
+ * must not capture owner services, runtime internals, or mutable backend state.
  */
 class QuaderScript final {
 public:

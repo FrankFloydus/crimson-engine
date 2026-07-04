@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "io/qdr/qdr_project_write_snapshot.hpp"
 #include "scene/document/project_document.hpp"
 
 #include <filesystem>
@@ -27,7 +28,12 @@ struct QdrProjectWriteResult {
 class QdrDocumentWriter final {
 public:
   [[nodiscard]] static std::string
+  serialize_project_document(const QdrProjectWriteSnapshot &snapshot);
+  [[nodiscard]] static std::string
   serialize_project_document(const ProjectDocument &document);
+  [[nodiscard]] static QdrProjectWriteResult
+  write_project_document_atomic(const std::filesystem::path &path,
+                                const QdrProjectWriteSnapshot &snapshot);
   [[nodiscard]] static QdrProjectWriteResult
   write_project_document_atomic(const std::filesystem::path &path,
                                 const ProjectDocument &document);

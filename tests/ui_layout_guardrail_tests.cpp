@@ -182,7 +182,8 @@ TEST(UiLayoutGuardrailTests, InspectorLightEditsRouteThroughPublicSceneApi) {
       "if (const LightComponent *current_light = document.light(primary))",
       "if (selected.size() > 1u)");
 
-  expect_contains(light_section, "context.editor.scene().set_light_component");
+  expect_contains(light_section,
+                  "context.intent.editor.scene().set_light_component");
   expect_contains(light_section, "to_api_light_component");
   expect_missing(inspector, "document.set_light(");
 }
@@ -194,7 +195,7 @@ TEST(UiLayoutGuardrailTests, InspectorSceneSettingsEditThroughPublicSceneApi) {
       inspector, "void draw_scene_settings_inspector", "struct BoolAggregate");
 
   expect_contains(scene_settings_section,
-                  "context.editor.scene().set_scene_settings");
+                  "context.intent.editor.scene().set_scene_settings");
   expect_contains(scene_settings_section, "to_api_scene_settings");
   expect_contains(scene_settings_section, "environment_clear_color");
   expect_contains(scene_settings_section, "ui.inspector.clear_color");
@@ -449,7 +450,8 @@ TEST(UiLayoutGuardrailTests, ViewportUsesRendererCapacityUvsDuringPanelSplitterD
   expect_contains(viewport_panel,
                   "should_defer_pane_render_resize(const UIContext &ui_context,");
   expect_contains(viewport_panel, "const ViewportRenderer &renderer)");
-  expect_contains(viewport_panel, "ui_context.viewport_render_resize_suspended");
+  expect_contains(viewport_panel,
+                  "ui_context.viewport->render_resize_suspended");
   expect_contains(viewport_panel,
                   "renderer.texture_handle() != kInvalidRenderTextureHandle");
   expect_contains(
@@ -469,7 +471,8 @@ TEST(UiLayoutGuardrailTests, ViewportUsesRendererCapacityUvsDuringPanelSplitterD
   expect_contains(pane_image, "texture_uv_max");
   expect_missing(pane_image, "activeRenderSize");
   expect_missing(pane_image, "viewportPaneTextureUvRect(");
-  expect_missing(pane_image, "if (!ui_context.viewport_render_resize_suspended)");
+  expect_missing(pane_image,
+                 "if (!ui_context.viewport->render_resize_suspended)");
 }
 
 TEST(UiLayoutGuardrailTests, SidebarDockMinimumsCompressBeforeViewportCollapses) {

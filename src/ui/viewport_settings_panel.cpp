@@ -68,7 +68,7 @@ void draw_locale_settings(UIContext &context) {
     return;
   }
 
-  const std::string selected_locale = context.settings.locale();
+  const std::string selected_locale = context.preferences.ui.locale();
   std::string preview = localization.locale_display_name(selected_locale);
   if (preview.empty()) {
     preview = selected_locale;
@@ -85,11 +85,12 @@ void draw_locale_settings(UIContext &context) {
                                    "locale." + locale.id, locale.display_name);
       if (ImGui::Selectable(item_label.c_str(), selected)) {
         if (context.localization.select_locale(locale.id)) {
-          context.settings.set_locale(context.localization.current_locale());
+          context.preferences.ui.set_locale(
+              context.localization.current_locale());
         }
-        if (context.settings_changed != nullptr &&
-            context.settings.locale() != selected_locale) {
-          *context.settings_changed = true;
+        if (context.preferences.ui_settings_changed != nullptr &&
+            context.preferences.ui.locale() != selected_locale) {
+          *context.preferences.ui_settings_changed = true;
         }
       }
       if (selected) {
@@ -117,7 +118,7 @@ void ViewportSettingsPanel::draw_content(UIContext& context, bool& open) {
         "ui.settings.viewport.reset_to_defaults",
         "ui.settings.viewport.reset_to_defaults", "Reset to Defaults");
     if (ImGui::Button(reset_label.c_str())) {
-      context.viewport_settings.reset_to_defaults();
+      context.preferences.viewport.reset_to_defaults();
       changed_this_frame_ = true;
     }
 
@@ -138,7 +139,7 @@ void ViewportSettingsPanel::draw_content(UIContext& context, bool& open) {
           continue;
         }
         ViewportSettingColor color =
-            context.viewport_settings.color(descriptor.id);
+            context.preferences.viewport.color(descriptor.id);
         float values[4] = {color.r, color.g, color.b, color.a};
         ImGui::SetNextItemWidth(180.0f);
         const std::string label = setting_label(
@@ -148,7 +149,7 @@ void ViewportSettingsPanel::draw_content(UIContext& context, bool& open) {
                                   ImGuiColorEditFlags_AlphaBar |
                                   ImGuiColorEditFlags_AlphaPreviewHalf)) {
           changed_this_frame_ =
-              context.viewport_settings.set_color(
+              context.preferences.viewport.set_color(
                   descriptor.id, ViewportSettingColor{values[0], values[1],
                                                       values[2], values[3]}) ||
               changed_this_frame_;
@@ -160,14 +161,15 @@ void ViewportSettingsPanel::draw_content(UIContext& context, bool& open) {
         if (descriptor.section != section.id) {
           continue;
         }
-        float value = context.viewport_settings.float_value(descriptor.id);
+        float value = context.preferences.viewport.float_value(descriptor.id);
         ImGui::SetNextItemWidth(220.0f);
         const std::string label = setting_label(
             context.localization, descriptor.key, descriptor.label);
         if (quader_slider_float(label.c_str(), &value, descriptor.minimum,
                                 descriptor.maximum, "%.3f")) {
           changed_this_frame_ =
-              context.viewport_settings.set_float_value(descriptor.id, value) ||
+              context.preferences.viewport.set_float_value(descriptor.id,
+                                                           value) ||
               changed_this_frame_;
         }
       }
@@ -177,12 +179,13 @@ void ViewportSettingsPanel::draw_content(UIContext& context, bool& open) {
         if (descriptor.section != section.id) {
           continue;
         }
-        bool value = context.viewport_settings.bool_value(descriptor.id);
+        bool value = context.preferences.viewport.bool_value(descriptor.id);
         const std::string label = setting_label(
             context.localization, descriptor.key, descriptor.label);
         if (ImGui::Checkbox(label.c_str(), &value)) {
           changed_this_frame_ =
-              context.viewport_settings.set_bool_value(descriptor.id, value) ||
+              context.preferences.viewport.set_bool_value(descriptor.id,
+                                                          value) ||
               changed_this_frame_;
         }
       }

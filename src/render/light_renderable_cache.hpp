@@ -8,6 +8,7 @@
 
 #include "core/types.hpp"
 #include "math/types.hpp"
+#include "render/scene_render_extraction.hpp"
 #include "scene/components.hpp"
 
 #include <filament/Engine.h>
@@ -41,10 +42,9 @@ public:
     }
 
     bool contains(EntityId entity_id) const;
-    bool needs_rebuild(EntityId entity_id, const LightComponent &light) const;
+    bool needs_rebuild(const RenderSceneLightRecord &light) const;
 
-    void sync_light(EntityId entity_id, const LightComponent &light,
-                    const QMat4 &world_transform);
+    void sync_light(const RenderSceneLightRecord &light);
     void remove(EntityId entity_id);
     void remove_except(const std::unordered_set<EntityId> &live_light_entities);
 

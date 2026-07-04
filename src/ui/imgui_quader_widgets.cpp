@@ -141,6 +141,9 @@ void draw_tree_child_guides(ImDrawList &draw_list, ImVec2 cell_min,
                     1.0f);
 }
 
+/**
+ * Stores a deferred property-tree guide segment for the next visible child row.
+ */
 struct PendingPropertyChildGuide {
   bool active = false;
   ImDrawList *draw_list = nullptr;

@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 using namespace quader_poly;
 
@@ -20,6 +20,8 @@ TEST(QdrDocumentOperationBridgeEdgePairsTests, BridgeEdgePairsCreatesFacesBetwee
 		const OperationResult result = bridge_edge_pairs(document, selection, { { first, second } }, 2);
 
 		EXPECT_TRUE(result.changed);
+
+		qdr_test::expect_valid_polygon_document_after_success(document, result);
                 EXPECT_TRUE(selection.mode == SelectionMode::Face);
                 EXPECT_TRUE(selection.faces.size() == 2U);
 		EXPECT_TRUE(qdr_test::edge_incidence_count(document, first) == 2);
@@ -47,6 +49,11 @@ TEST(QdrDocumentOperationBridgeEdgePairsTests, BridgeEdgePairsCreatesFacesBetwee
 		const OperationResult result = bridge_edge_pairs(document, selection, { { first, second } }, 1);
 
 		EXPECT_TRUE(result.changed);
+
+		qdr_test::expect_polygon_document_validation_issue_after_success(
+			document,
+			result,
+			PolygonDocumentDiagnosticCode::NonmanifoldEdge);
 		EXPECT_TRUE(document.faces.size() == face_count_before + 1U);
                 EXPECT_TRUE(selection.mode == SelectionMode::Face);
                 EXPECT_TRUE(selection.faces.size() == 1U);

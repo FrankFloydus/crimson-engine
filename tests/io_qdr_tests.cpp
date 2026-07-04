@@ -12,6 +12,7 @@
 #include "io/qdr/qdr_document.hpp"
 #include "io/qdr/qdr_format.hpp"
 #include "io/qdr/qdr_project_codecs.hpp"
+#include "io/qdr/qdr_project_write_snapshot.hpp"
 #include "support/guardrail_file_scan.hpp"
 
 #include <gtest/gtest.h>
@@ -22,11 +23,13 @@
 #include <filesystem>
 #include <fstream>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 using namespace quader;
 
@@ -36,6 +39,7 @@ using quader::test::guardrail::read_file;
 using quader::test::guardrail::read_source_file;
 using quader::test::guardrail::source_files_under;
 using quader::test::guardrail::source_path;
+using quader::test::guardrail::source_slice;
 
 MeshAsset make_triangle_mesh(std::string name) {
   MeshAsset mesh;
@@ -150,6 +154,68 @@ std::string replace_once(std::string text, std::string_view from,
   }
   text.replace(position, from.size(), to);
   return text;
+}
+
+std::string canonical_qdr_text(std::string text) {
+  text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
+  while (!text.empty() && text.back() == '\n') {
+    text.pop_back();
+  }
+  return text;
+}
+
+ProjectDocument make_material_slot_order_project(
+    std::initializer_list<std::uint32_t> slot_order) {
+  ProjectDocument document(
+      ProjectDocumentRecord{.id = 94u, .name = "Material Slot Order"});
+  const AssetId base_material =
+      document.assets().add_material(22u, make_default_quader_material("Base"));
+  const AssetId slot_2_material = document.assets().add_material(
+      23u, make_default_quader_material("Slot 2"));
+  const AssetId slot_10_material = document.assets().add_material(
+      24u, make_default_quader_material("Slot 10"));
+  const AssetId slot_30_material = document.assets().add_material(
+      25u, make_default_quader_material("Slot 30"));
+
+  const EntityId scene_root = document.ensure_scene_root();
+  (void)document.scene().set_entity_uuid(
+      scene_root, "00000000-0000-4000-8000-000000000001");
+  const EntityId entity = document.scene().create_entity_with_id(
+      200u, "Slot Ordered Mesh", EntityKind::Mesh);
+  (void)document.scene().set_entity_uuid(
+      entity, "00000000-0000-4000-8000-000000000002");
+  (void)document.scene().set_parent(entity, scene_root, false);
+
+  const auto material_for_slot = [&](std::uint32_t slot) {
+    switch (slot) {
+    case 2u:
+      return slot_2_material;
+    case 10u:
+      return slot_10_material;
+    case 30u:
+      return slot_30_material;
+    default:
+      return base_material;
+    }
+  };
+
+  MaterialComponent material{.material = base_material};
+  for (const std::uint32_t slot : slot_order) {
+    material.material_slots[slot] = material_for_slot(slot);
+  }
+  document.scene().set_material(entity, std::move(material));
+  return document;
+}
+
+void expect_qdr_diagnostic(
+    const std::vector<quader_io::QdrDiagnostic> &diagnostics,
+    std::string_view code, std::string_view path) {
+  ASSERT_EQ(diagnostics.size(), 1u);
+  const quader_io::QdrDiagnostic &diagnostic = diagnostics.front();
+  EXPECT_EQ(diagnostic.code, code);
+  EXPECT_EQ(diagnostic.severity, quader_io::QdrDiagnosticSeverity::Error);
+  EXPECT_EQ(diagnostic.path, path);
+  EXPECT_FALSE(diagnostic.message.empty());
 }
 
 } // namespace
@@ -382,6 +448,43 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
     EXPECT_TRUE(identity.ok()) << (identity.issues.empty() ? std::string{} : identity.issues.front().message);
 }
 
+TEST(QdrDocumentIoTests, SortsMaterialSlotsForDeterministicProjectSerialization) {
+  ProjectDocument reverse_order =
+      make_material_slot_order_project({30u, 10u, 2u});
+  ProjectDocument shuffled_order =
+      make_material_slot_order_project({10u, 30u, 2u});
+
+  const std::string text =
+      QdrDocumentWriter::serialize_project_document(reverse_order);
+  EXPECT_EQ(text,
+            QdrDocumentWriter::serialize_project_document(shuffled_order));
+
+  const std::size_t slots = text.find("\"slots\": {");
+  ASSERT_NE(slots, std::string::npos);
+  const std::size_t slot_2 = text.find("\"2\": 23", slots);
+  const std::size_t slot_10 = text.find("\"10\": 24", slots);
+  const std::size_t slot_30 = text.find("\"30\": 25", slots);
+  ASSERT_NE(slot_2, std::string::npos);
+  ASSERT_NE(slot_10, std::string::npos);
+  ASSERT_NE(slot_30, std::string::npos);
+  EXPECT_LT(slot_2, slot_10);
+  EXPECT_LT(slot_10, slot_30);
+
+  QdrProjectReadResult result =
+      QdrDocumentReader::deserialize_project_document(text);
+  ASSERT_TRUE(result.ok) << result.message;
+  const MaterialComponent *loaded_material =
+      result.document.scene().material(200u);
+  ASSERT_NE(loaded_material, nullptr);
+  EXPECT_EQ(loaded_material->material, 22u);
+  EXPECT_EQ(loaded_material->material_for_slot(2u), 23u);
+  EXPECT_EQ(loaded_material->material_for_slot(10u), 24u);
+  EXPECT_EQ(loaded_material->material_for_slot(30u), 25u);
+
+  EXPECT_EQ(QdrDocumentWriter::serialize_project_document(result.document),
+            text);
+}
+
 TEST(QdrDocumentIoTests, WritesAndReadsUnreferencedProjectAssets) {
     ProjectDocument document(ProjectDocumentRecord{.id = 88u, .name = "Unreferenced Assets"});
     const AssetId mesh_id =
@@ -409,6 +512,62 @@ TEST(QdrDocumentIoTests, WritesAndReadsUnreferencedProjectAssets) {
     EXPECT_NE(result.document.assets().mesh(mesh_id), nullptr);
     EXPECT_NE(result.document.assets().material(material_id), nullptr);
     EXPECT_NE(result.document.assets().texture(texture_id), nullptr);
+}
+
+TEST(ProjectDocumentTests, SceneObjectRecordComponentFieldsStaySceneCanonical) {
+    ProjectDocument document(ProjectDocumentRecord{
+        .id = 92u,
+        .name = "Canonical Object Records",
+    });
+    const AssetId stale_mesh =
+        document.assets().add_mesh(12u, make_triangle_mesh("Stale Mesh"));
+    const AssetId canonical_mesh =
+        document.assets().add_mesh(13u, make_triangle_mesh("Canonical Mesh"));
+    const AssetId stale_material = document.assets().add_material(
+        22u, make_default_quader_material("Stale Material"));
+    const AssetId canonical_material = document.assets().add_material(
+        23u, make_default_quader_material("Canonical Material"));
+    ASSERT_NE(stale_mesh, kInvalidAssetId);
+    ASSERT_NE(canonical_mesh, kInvalidAssetId);
+    ASSERT_NE(stale_material, kInvalidAssetId);
+    ASSERT_NE(canonical_material, kInvalidAssetId);
+
+    const EntityId entity = document.scene().create_entity_with_id(
+        200u, "Canonical Mesh", EntityKind::Mesh);
+    ASSERT_NE(entity, kInvalidEntityId);
+    const EditorObjectId object_id = document.scene().editor_object_id(entity);
+    ASSERT_NE(object_id, kInvalidEditorObjectId);
+    document.scene().set_visible(entity, false);
+    document.scene().set_modeling_object(
+        entity, ModelingObjectComponent{.object_id = 42, .material_slot = 2u});
+    document.scene().set_mesh(entity, MeshComponent{.mesh = canonical_mesh});
+    document.scene().set_material(
+        entity, MaterialComponent{.material = canonical_material});
+
+    EXPECT_EQ(document.upsert_object_record(ProjectObjectRecord{
+                  .id = object_id,
+                  .scene_entity = entity,
+                  .mesh = stale_mesh,
+                  .material = stale_material,
+                  .modeling_object = 99,
+                  .authored_name = "Imported Authored Name",
+                  .visible = true,
+                  .material_slot = 7u,
+              }),
+              object_id);
+
+    const std::optional<ProjectObjectRecord> record =
+        document.object_record(object_id);
+    ASSERT_TRUE(record.has_value());
+    EXPECT_EQ(record->mesh, canonical_mesh);
+    EXPECT_EQ(record->material, canonical_material);
+    EXPECT_EQ(record->modeling_object, 42);
+    EXPECT_FALSE(record->visible);
+    EXPECT_EQ(record->material_slot, 2u);
+
+    const std::uint64_t revision_after_upsert = document.revision();
+    EXPECT_FALSE(document.synchronize_object_records_with_scene());
+    EXPECT_EQ(document.revision(), revision_after_upsert);
 }
 
 TEST(QdrDocumentIoTests, AtomicProjectWriteUsesCompactJsonWhileDebugSerializerStaysPretty) {
@@ -445,6 +604,87 @@ TEST(QdrDocumentIoTests, AtomicProjectWriteUsesCompactJsonWhileDebugSerializerSt
     ASSERT_TRUE(result.ok) << result.message;
     EXPECT_NE(result.document.assets().mesh(mesh_id), nullptr);
     EXPECT_TRUE(result.document.scene().exists(mesh));
+}
+
+TEST(QdrDocumentIoTests, ProjectWriteSnapshotOwnsCopiesForBackgroundExport) {
+    ProjectDocument document(ProjectDocumentRecord{.id = 93u, .name = "Snapshot Project"});
+
+    MeshAsset authored_mesh = make_triangle_mesh("Snapshot Mesh");
+    authored_mesh.has_authored_polygon_document = true;
+    authored_mesh.authored_polygon_document =
+        std::make_shared<quader_poly::Document>(make_authored_polygon_document());
+    const AssetId mesh_id =
+        document.assets().add_mesh(12u, std::move(authored_mesh));
+    ASSERT_NE(mesh_id, kInvalidAssetId);
+
+    MaterialDocument material;
+    material.name = "Snapshot Material";
+    material.base_color = {0.2f, 0.4f, 0.6f};
+    const AssetId material_id =
+        document.assets().add_material(13u, std::move(material));
+    ASSERT_NE(material_id, kInvalidAssetId);
+
+    const EntityId mesh_entity =
+        document.scene().create_entity_with_id(200u, "Snapshot Entity", EntityKind::Mesh);
+    ASSERT_NE(mesh_entity, kInvalidEntityId);
+    document.scene().set_mesh(mesh_entity, MeshComponent{.mesh = mesh_id});
+    document.scene().set_material(mesh_entity,
+                                  MaterialComponent{.material = material_id});
+
+    const QdrProjectWriteSnapshot snapshot =
+        qdr_project_write_snapshot_from_document(document);
+
+    document.rename("Mutated Project");
+    ASSERT_TRUE(document.scene().rename_entity(mesh_entity, "Mutated Entity"));
+    ASSERT_TRUE(document.assets().update_mesh(mesh_id, [](MeshAsset &mesh) {
+      mesh.name = "Mutated Mesh";
+      if (mesh.authored_polygon_document &&
+          !mesh.authored_polygon_document->faces.empty()) {
+        mesh.authored_polygon_document->faces.front().material_slot = 9u;
+      }
+    }));
+    ASSERT_TRUE(document.assets().update_material(
+        material_id, [](MaterialDocument &updated_material) {
+          updated_material.name = "Mutated Material";
+          updated_material.base_color = {0.9f, 0.8f, 0.7f};
+        }));
+
+    const std::string text =
+        QdrDocumentWriter::serialize_project_document(snapshot);
+    EXPECT_NE(text.find("Snapshot Project"), std::string::npos);
+    EXPECT_NE(text.find("Snapshot Entity"), std::string::npos);
+    EXPECT_NE(text.find("Snapshot Mesh"), std::string::npos);
+    EXPECT_NE(text.find("Snapshot Material"), std::string::npos);
+    EXPECT_EQ(text.find("Mutated Project"), std::string::npos);
+    EXPECT_EQ(text.find("Mutated Entity"), std::string::npos);
+    EXPECT_EQ(text.find("Mutated Mesh"), std::string::npos);
+    EXPECT_EQ(text.find("Mutated Material"), std::string::npos);
+
+    const QdrProjectReadResult result =
+        QdrDocumentReader::deserialize_project_document(text);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_EQ(result.document.name(), "Snapshot Project");
+
+    const NameComponent *loaded_name =
+        result.document.scene().name(mesh_entity);
+    ASSERT_NE(loaded_name, nullptr);
+    EXPECT_EQ(loaded_name->name, "Snapshot Entity");
+
+    const MeshAsset *loaded_mesh = result.document.assets().mesh(mesh_id);
+    ASSERT_NE(loaded_mesh, nullptr);
+    EXPECT_EQ(loaded_mesh->name, "Snapshot Mesh");
+    ASSERT_TRUE(loaded_mesh->authored_polygon_document);
+    ASSERT_FALSE(loaded_mesh->authored_polygon_document->faces.empty());
+    EXPECT_EQ(loaded_mesh->authored_polygon_document->faces.front().material_slot,
+              2u);
+
+    const MaterialDocument *loaded_material =
+        result.document.assets().material(material_id);
+    ASSERT_NE(loaded_material, nullptr);
+    EXPECT_EQ(loaded_material->name, "Snapshot Material");
+    EXPECT_FLOAT_EQ(loaded_material->base_color.x, 0.2f);
+    EXPECT_FLOAT_EQ(loaded_material->base_color.y, 0.4f);
+    EXPECT_FLOAT_EQ(loaded_material->base_color.z, 0.6f);
 }
 
 TEST(QdrDocumentIoTests, MissingMeshDoubleSidedFieldDefaultsToSingleSided) {
@@ -575,6 +815,198 @@ TEST(QdrDocumentIoTests, ImportsLegacySessionPayloadButWritesProjectDocumentPayl
   EXPECT_FALSE(round_trip.migrated_legacy_session);
 }
 
+TEST(QdrDocumentIoTests, LegacySessionPayloadDefaultsMissingFaceNormalShading) {
+  std::string text = read_source_file(
+      {"tests", "fixtures", "qdr", "legacy_session_payload.qdr"});
+  text = replace_once(text,
+                      "              \"materialSlot\": 7,\n"
+                      "              \"normalShading\": \"flat\"\n",
+                      "              \"materialSlot\": 7\n");
+
+  QdrProjectReadResult result =
+      QdrDocumentReader::deserialize_project_document(text);
+  ASSERT_TRUE(result.ok) << result.message;
+  EXPECT_TRUE(result.migrated_legacy_session);
+
+  const std::vector<EntityId> entities = result.document.scene().entities();
+  const auto imported =
+      std::find_if(entities.begin(), entities.end(), [&](EntityId entity) {
+        return entity != result.document.scene().scene_root() &&
+               result.document.scene().mesh(entity) != nullptr;
+      });
+  ASSERT_NE(imported, entities.end());
+  const MeshAsset *mesh = result.document.assets().mesh(
+      result.document.scene().mesh(*imported)->mesh);
+  ASSERT_NE(mesh, nullptr);
+  ASSERT_TRUE(mesh->authored_polygon_document);
+  ASSERT_EQ(mesh->authored_polygon_document->faces.size(), 1u);
+  EXPECT_EQ(mesh->authored_polygon_document->faces.front().normal_shading,
+            quader_poly::SurfaceShading::Flat);
+}
+
+TEST(QdrDocumentIoTests, RejectsCanonicalProjectPayloadWithMalformedEnumFields) {
+  ProjectDocument document(
+      ProjectDocumentRecord{.id = 94u, .name = "Strict Enums"});
+
+  SceneSettingsComponent settings;
+  settings.post_process.tone_mapping = SceneToneMapping::Filmic;
+  ASSERT_TRUE(
+      document.scene().set_scene_settings(document.scene().scene_root(),
+                                          settings));
+
+  MeshAsset mesh = make_triangle_mesh("Authored Mesh");
+  mesh.has_authored_polygon_document = true;
+  mesh.authored_polygon_document =
+      std::make_shared<quader_poly::Document>(make_authored_polygon_document());
+  const AssetId mesh_id = document.assets().add_mesh(12u, std::move(mesh));
+  ASSERT_NE(mesh_id, kInvalidAssetId);
+
+  const AssetId texture_id = document.assets().add_texture(
+      31u, make_texture_asset("Base Texture", TextureUsage::BaseColor,
+                              TextureColorSpace::Srgb, 1u, 1u,
+                              "textures/base.png"));
+  ASSERT_NE(texture_id, kInvalidAssetId);
+
+  const EntityId mesh_entity =
+      document.scene().create_entity_with_id(200u, "Mesh", EntityKind::Mesh);
+  ASSERT_NE(mesh_entity, kInvalidEntityId);
+  MeshComponent mesh_component;
+  mesh_component.mesh = mesh_id;
+  mesh_component.collision_type = MeshCollisionType::Mesh;
+  mesh_component.body_type = MeshPhysicsBodyType::RigidBody;
+  document.scene().set_mesh(mesh_entity, mesh_component);
+
+  const EntityId light_entity =
+      document.scene().create_entity_with_id(300u, "Light", EntityKind::Light);
+  ASSERT_NE(light_entity, kInvalidEntityId);
+  document.scene().set_light(light_entity,
+                             LightComponent{.type = LightType::Point});
+
+  const std::string valid =
+      QdrDocumentWriter::serialize_project_document(document);
+  ASSERT_NE(valid.find("\"kind\": \"mesh\""), std::string::npos);
+  ASSERT_NE(valid.find("\"usage\": \"baseColor\""), std::string::npos);
+  ASSERT_NE(valid.find("\"colorSpace\": \"srgb\""), std::string::npos);
+  ASSERT_NE(valid.find("\"collisionType\": \"mesh\""), std::string::npos);
+  ASSERT_NE(valid.find("\"bodyType\": \"rigidBody\""), std::string::npos);
+  ASSERT_NE(valid.find("\"type\": \"point\""), std::string::npos);
+  ASSERT_NE(valid.find("\"toneMapping\": \"filmic\""), std::string::npos);
+  ASSERT_NE(valid.find("\"normalShading\": \"authored\""), std::string::npos);
+
+  /**
+   * Describes a single canonical enum mutation expected to fail strict reads.
+   */
+  struct MalformedEnumCase {
+    std::string_view from;
+    std::string_view to;
+    std::string_view expected_message;
+    std::string_view expected_code;
+  };
+  const MalformedEnumCase cases[] = {
+      {"\"kind\": \"mesh\"", "\"kind\": \"bad-kind\"",
+       "unsupported entity kind enum value", "qdr.unsupported_enum"},
+      {"\"usage\": \"baseColor\"", "\"usage\": \"bad-usage\"",
+       "unsupported texture usage enum value", "qdr.unsupported_enum"},
+      {"\"colorSpace\": \"srgb\"", "\"colorSpace\": \"displayP3\"",
+       "unsupported texture color space enum value", "qdr.unsupported_enum"},
+      {"\"collisionType\": \"mesh\"", "\"collisionType\": \"capsule\"",
+       "unsupported mesh collision type enum value", "qdr.unsupported_enum"},
+      {"\"bodyType\": \"rigidBody\"", "\"bodyType\": \"dynamic\"",
+       "unsupported mesh physics body type enum value",
+       "qdr.unsupported_enum"},
+      {"\"type\": \"point\"", "\"type\": \"area\"",
+       "unsupported light type enum value", "qdr.unsupported_enum"},
+      {"\"toneMapping\": \"filmic\"", "\"toneMapping\": \"logC\"",
+       "unsupported scene tone mapping enum value", "qdr.unsupported_enum"},
+      {"\"normalShading\": \"authored\"", "\"normalShading\": \"weighted\"",
+       "unsupported face normal shading enum value", "qdr.unsupported_enum"},
+      {"\"bodyType\": \"rigidBody\"", "\"bodyKind\": \"rigidBody\"",
+       "missing mesh physics body type enum field", "qdr.missing_enum"},
+  };
+
+  for (const MalformedEnumCase &test_case : cases) {
+    const std::string text =
+        replace_once(valid, test_case.from, test_case.to);
+    QdrProjectReadResult result =
+        QdrDocumentReader::deserialize_project_document(text);
+    EXPECT_FALSE(result.ok) << test_case.from;
+    EXPECT_FALSE(result.migrated_legacy_session) << test_case.from;
+    EXPECT_NE(result.message.find(test_case.expected_message),
+              std::string::npos)
+        << result.message;
+    ASSERT_FALSE(result.diagnostics.empty()) << test_case.from;
+    EXPECT_EQ(result.diagnostics.front().code, test_case.expected_code);
+    EXPECT_EQ(result.diagnostics.front().message, result.message);
+  }
+}
+
+TEST(QdrDocumentIoTests, CurrentProjectDocumentGoldenFixtureRewritesIdempotently) {
+  const std::string fixture = read_source_file(
+      {"tests", "fixtures", "qdr", "current_project_document_v4.qdr"});
+  ASSERT_FALSE(fixture.empty());
+  EXPECT_NE(fixture.find("\"version\": 4"), std::string::npos);
+  EXPECT_NE(fixture.find("\"kind\": \"quader.project-document\""),
+            std::string::npos);
+  EXPECT_NE(fixture.find("\"polygonDocument\""), std::string::npos);
+  EXPECT_NE(fixture.find("\"sceneSettings\""), std::string::npos);
+  EXPECT_EQ(fixture.find("\"session\""), std::string::npos);
+
+  QdrProjectReadResult result =
+      QdrDocumentReader::deserialize_project_document(fixture);
+  ASSERT_TRUE(result.ok) << result.message;
+  EXPECT_FALSE(result.migrated_legacy_session);
+  EXPECT_EQ(result.document.id(), 104u);
+  EXPECT_EQ(result.document.name(), "Current Project Golden");
+
+  const EntityId scene_root = result.document.scene().scene_root();
+  ASSERT_EQ(scene_root, 1u);
+  ASSERT_NE(result.document.scene().scene_settings(scene_root), nullptr);
+  EXPECT_EQ(result.document.scene()
+                .scene_settings(scene_root)
+                ->environment.environment_id,
+            "pillars_2k");
+
+  const EntityId wall = 200u;
+  ASSERT_TRUE(result.document.scene().exists(wall));
+  ASSERT_NE(result.document.scene().mesh(wall), nullptr);
+  ASSERT_NE(result.document.scene().material(wall), nullptr);
+  EXPECT_EQ(result.document.scene().primary_selection(), wall);
+  const MeshAsset *mesh =
+      result.document.assets().mesh(result.document.scene().mesh(wall)->mesh);
+  ASSERT_NE(mesh, nullptr);
+  EXPECT_TRUE(mesh->has_authored_polygon_document);
+  ASSERT_TRUE(mesh->authored_polygon_document);
+  EXPECT_EQ(mesh->authored_polygon_document->faces.size(), 1u);
+  ASSERT_NE(result.document.assets().material(22u), nullptr);
+  ASSERT_TRUE(result.document.assets()
+                  .material(22u)
+                  ->texture_slots.contains(
+                      material_texture_slot::kBaseColor));
+  ASSERT_NE(result.document.assets().texture(31u), nullptr);
+  ASSERT_NE(result.document.assets().texture(32u), nullptr);
+
+  const std::string first_rewrite = canonical_qdr_text(
+      QdrDocumentWriter::serialize_project_document(result.document));
+  EXPECT_NE(first_rewrite.find("\"kind\": \"quader.project-document\""),
+            std::string::npos);
+  EXPECT_NE(first_rewrite.find("\"polygonDocument\""), std::string::npos);
+  EXPECT_EQ(first_rewrite.find("\"session\""), std::string::npos);
+
+  QdrProjectReadResult rewritten_result =
+      QdrDocumentReader::deserialize_project_document(first_rewrite);
+  ASSERT_TRUE(rewritten_result.ok) << rewritten_result.message;
+  EXPECT_FALSE(rewritten_result.migrated_legacy_session);
+
+  const std::string second_rewrite = canonical_qdr_text(
+      QdrDocumentWriter::serialize_project_document(rewritten_result.document));
+  EXPECT_EQ(second_rewrite, first_rewrite);
+
+  QdrProjectReadResult second_result =
+      QdrDocumentReader::deserialize_project_document(second_rewrite);
+  ASSERT_TRUE(second_result.ok) << second_result.message;
+  EXPECT_FALSE(second_result.migrated_legacy_session);
+}
+
 TEST(QdrDocumentIoTests, RejectsUnknownCanonicalProjectPayloadKindWithoutLegacyMigration) {
     const std::string text = R"json({
   "format": "quader.qdr",
@@ -595,6 +1027,10 @@ TEST(QdrDocumentIoTests, RejectsUnknownCanonicalProjectPayloadKindWithoutLegacyM
     EXPECT_FALSE(result.ok);
     EXPECT_FALSE(result.migrated_legacy_session);
     EXPECT_NE(result.message.find("Unsupported QDR project document payload kind"), std::string::npos);
+    expect_qdr_diagnostic(result.diagnostics,
+                          "qdr.unsupported_payload_kind",
+                          "/document/kind");
+    EXPECT_EQ(result.diagnostics.front().message, result.message);
 }
 
 TEST(QdrDocumentIoTests, RootHeaderParsingUsesSharedHelperAcrossReaderSurfaces) {
@@ -603,6 +1039,8 @@ TEST(QdrDocumentIoTests, RootHeaderParsingUsesSharedHelperAcrossReaderSurfaces) 
   EXPECT_FALSE(missing_root_project.ok);
   EXPECT_NE(missing_root_project.message.find("root must be an object"),
             std::string::npos);
+  expect_qdr_diagnostic(missing_root_project.diagnostics,
+                        "qdr.root_not_object", "");
 
   const std::string oversized_version = R"json({
   "format": "quader.qdr",
@@ -615,12 +1053,16 @@ TEST(QdrDocumentIoTests, RootHeaderParsingUsesSharedHelperAcrossReaderSurfaces) 
   EXPECT_NE(
       oversized_project.message.find("outside the supported integer range"),
       std::string::npos);
+  expect_qdr_diagnostic(oversized_project.diagnostics,
+                        "qdr.version_out_of_range", "/version");
 
   const quader_io::QdrReadResult missing_root_legacy =
       quader_io::deserialize_document("[]");
   EXPECT_FALSE(missing_root_legacy.ok);
   EXPECT_NE(missing_root_legacy.message.find("root must be an object"),
             std::string::npos);
+  expect_qdr_diagnostic(missing_root_legacy.diagnostics,
+                        "qdr.root_not_object", "");
 
   const quader_io::QdrReadResult oversized_legacy =
       quader_io::deserialize_document(oversized_version);
@@ -628,6 +1070,8 @@ TEST(QdrDocumentIoTests, RootHeaderParsingUsesSharedHelperAcrossReaderSurfaces) 
   EXPECT_NE(
       oversized_legacy.message.find("outside the supported integer range"),
       std::string::npos);
+  expect_qdr_diagnostic(oversized_legacy.diagnostics,
+                        "qdr.version_out_of_range", "/version");
 
   const std::string qdr_root_header = read_source_file("src/io/qdr/qdr_root.hpp");
   const std::string legacy_reader =
@@ -641,6 +1085,29 @@ TEST(QdrDocumentIoTests, RootHeaderParsingUsesSharedHelperAcrossReaderSurfaces) 
             std::string::npos);
   EXPECT_EQ(legacy_reader.find("read_version_header"), std::string::npos);
   EXPECT_EQ(project_reader.find("readVersionHeader"), std::string::npos);
+}
+
+TEST(QdrDocumentIoTests, ProjectReadReportsStructuredJsonParseDiagnostic) {
+  ScopedTempDirectory temp("structured-diagnostics");
+  const std::filesystem::path path = temp.path() / "broken.qdr";
+  write_text_file(path, R"json({
+  "format": "quader.qdr",
+  "version": 4,
+  "document": {
+)json");
+
+  QdrProjectReadResult result = QdrDocumentReader::read_project_document(path);
+  EXPECT_FALSE(result.ok);
+  EXPECT_FALSE(result.migrated_legacy_session);
+  expect_qdr_diagnostic(result.diagnostics, "qdr.json_parse_error", "");
+  const quader_io::QdrDiagnostic &diagnostic = result.diagnostics.front();
+  EXPECT_EQ(diagnostic.message, result.message);
+  ASSERT_TRUE(diagnostic.line.has_value());
+  ASSERT_TRUE(diagnostic.column.has_value());
+  EXPECT_GE(*diagnostic.line, 4u);
+  EXPECT_GE(*diagnostic.column, 1u);
+  ASSERT_TRUE(diagnostic.source_path.has_value());
+  EXPECT_EQ(*diagnostic.source_path, path);
 }
 
 TEST(QdrDocumentIoTests, RejectsCanonicalProjectPayloadWithDanglingObjectRecordEntity) {
@@ -701,6 +1168,102 @@ TEST(QdrDocumentIoTests, RejectsCanonicalProjectPayloadWithMismatchedEditorObjec
     EXPECT_NE(result.message.find("does not match the scene editor object id"), std::string::npos);
 }
 
+TEST(QdrDocumentIoTests, ReadsSceneComponentsAsCanonicalOverStaleObjectRecordFields) {
+    const std::string text = R"json({
+  "format": "quader.qdr",
+  "version": 4,
+  "document": {
+    "kind": "quader.project-document",
+    "project": {
+      "id": 93,
+      "name": "Canonical Record Load"
+    },
+    "assets": {
+      "meshes": [
+        {
+          "id": 12,
+          "name": "Canonical Mesh",
+          "hasStableCpuTopology": true,
+          "vertices": [],
+          "indices": [],
+          "primitives": []
+        }
+      ],
+      "materials": [
+        {
+          "id": 22,
+          "name": "Canonical Material",
+          "baseColor": {"x": 1, "y": 1, "z": 1},
+          "roughness": 1,
+          "metallic": 0,
+          "textureSlots": {},
+          "nodeGraphReserved": true
+        }
+      ],
+      "textures": []
+    },
+    "entities": [
+      {
+        "id": 200,
+        "editorObjectId": 900,
+        "name": "Canonical Entity",
+        "kind": "mesh",
+        "parent": 0,
+        "visibility": {
+          "visible": false,
+          "selectable": true
+        },
+        "modelingObject": {
+          "objectId": 42,
+          "materialSlot": 2
+        },
+        "mesh": {
+          "mesh": 12,
+          "collisionType": "box",
+          "bodyType": "staticBody"
+        },
+        "material": {
+          "material": 22
+        }
+      }
+    ],
+    "objects": [
+      {
+        "editorObjectId": 900,
+        "sceneEntity": 200,
+        "mesh": 404,
+        "material": 405,
+        "modelingObject": 99,
+        "authoredName": "Imported Authored Name",
+        "visible": true,
+        "materialSlot": 7
+      }
+    ]
+  }
+})json";
+
+    QdrProjectReadResult result =
+        QdrDocumentReader::deserialize_project_document(text);
+    ASSERT_TRUE(result.ok) << result.message;
+
+    const std::optional<ProjectObjectRecord> record =
+        result.document.object_record(900u);
+    ASSERT_TRUE(record.has_value());
+    EXPECT_EQ(record->scene_entity, 200u);
+    EXPECT_EQ(record->mesh, 12u);
+    EXPECT_EQ(record->material, 22u);
+    EXPECT_EQ(record->modeling_object, 42);
+    EXPECT_FALSE(record->visible);
+    EXPECT_EQ(record->material_slot, 2u);
+
+    const std::string rewritten =
+        QdrDocumentWriter::serialize_project_document(result.document);
+    EXPECT_EQ(rewritten.find("\"mesh\": 404"), std::string::npos);
+    EXPECT_EQ(rewritten.find("\"material\": 405"), std::string::npos);
+    EXPECT_EQ(rewritten.find("\"modelingObject\": 99"), std::string::npos);
+    EXPECT_EQ(rewritten.find("\"materialSlot\": 7"), std::string::npos);
+}
+
 TEST(QdrDocumentIoTests, RejectsCanonicalProjectPayloadWithMissingMeshAssetReference) {
     const std::string text = R"json({
   "format": "quader.qdr",
@@ -722,7 +1285,9 @@ TEST(QdrDocumentIoTests, RejectsCanonicalProjectPayloadWithMissingMeshAssetRefer
         "kind": "mesh",
         "parent": 0,
         "mesh": {
-          "mesh": 404
+          "mesh": 404,
+          "collisionType": "box",
+          "bodyType": "staticBody"
         }
       }
     ],
@@ -1173,6 +1738,91 @@ TEST(QdrDocumentIoTests, QdrPolygonDocumentCodecAndAtomicWriteHaveSingleOwners) 
     EXPECT_EQ(legacy.find(token), std::string::npos) << token;
     EXPECT_NE(atomic.find(token), std::string::npos) << token;
   }
+}
+
+TEST(QdrDocumentIoTests,
+     ProjectAtomicWritePolicySkipsHotSaveSelfParseAndKeepsRoundTripCoverage) {
+  const std::string readme =
+      read_source_file({"src", "io", "qdr", "README.md"});
+  EXPECT_NE(readme.find("Hot project saves intentionally"), std::string::npos);
+  EXPECT_NE(readme.find("skip temporary-file self-parse validation"),
+            std::string::npos);
+  EXPECT_NE(readme.find("round-trip coverage"), std::string::npos);
+
+  const std::string writer =
+      read_source_file({"src", "io", "qdr", "qdr_document_writer.cpp"});
+  const std::string project_write = source_slice(
+      writer,
+      "QdrProjectWriteResult QdrDocumentWriter::write_project_document_atomic(",
+      "} // namespace quader");
+  ASSERT_FALSE(project_write.empty());
+  EXPECT_NE(project_write.find("write_qdr_text_atomic(path, serialized)"),
+            std::string::npos);
+  EXPECT_EQ(project_write.find("deserialize_project_document"),
+            std::string::npos);
+  EXPECT_EQ(project_write.find("validate_temp"), std::string::npos);
+
+  const std::string tests = read_source_file("tests/io_qdr_tests.cpp");
+  const std::string project_round_trip = source_slice(
+      tests,
+      std::string("TEST(QdrDocumentIoTests, ") +
+          "WritesAndReadsProjectDocumentPayloadWithStableIdsAndBindings)",
+      std::string("TEST(QdrDocumentIoTests, ") +
+          "WritesAndReadsUnreferencedProjectAssets)");
+  const std::string atomic_round_trip = source_slice(
+      tests,
+      std::string("TEST(QdrDocumentIoTests, ") +
+          "AtomicProjectWriteUsesCompactJsonWhileDebugSerializerStaysPretty)",
+      std::string("TEST(QdrDocumentIoTests, ") +
+          "MissingMeshDoubleSidedFieldDefaultsToSingleSided)");
+  ASSERT_FALSE(project_round_trip.empty());
+  ASSERT_FALSE(atomic_round_trip.empty());
+  EXPECT_NE(project_round_trip.find(
+                "QdrDocumentReader::deserialize_project_document(text)"),
+            std::string::npos);
+  EXPECT_NE(atomic_round_trip.find(
+                "QdrDocumentReader::deserialize_project_document(saved_text)"),
+            std::string::npos);
+}
+
+TEST(QdrDocumentIoTests, ProjectWriterConsumesImmutableExportSnapshot) {
+  const std::string cmake = read_source_file("CMakeLists.txt");
+  const std::string writer_header =
+      read_source_file({"src", "io", "qdr", "qdr_document_writer.hpp"});
+  const std::string writer =
+      read_source_file({"src", "io", "qdr", "qdr_document_writer.cpp"});
+  const std::string snapshot_header =
+      read_source_file({"src", "io", "qdr", "qdr_project_write_snapshot.hpp"});
+  const std::string snapshot_source =
+      read_source_file({"src", "io", "qdr", "qdr_project_write_snapshot.cpp"});
+
+  EXPECT_NE(cmake.find("src/io/qdr/qdr_project_write_snapshot.cpp"),
+            std::string::npos);
+  EXPECT_NE(writer_header.find("qdr_project_write_snapshot.hpp"),
+            std::string::npos);
+  EXPECT_NE(writer_header.find("const QdrProjectWriteSnapshot &snapshot"),
+            std::string::npos);
+  EXPECT_NE(snapshot_source.find(
+                "qdr_project_write_snapshot_from_document"),
+            std::string::npos);
+  EXPECT_NE(snapshot_header.find(
+                "std::optional<quader_poly::Document>"),
+            std::string::npos);
+  EXPECT_EQ(snapshot_header.find("std::shared_ptr<quader_poly::Document>"),
+            std::string::npos);
+
+  const std::string project_payload = source_slice(
+      writer,
+      "Json project_payload_to_json(const QdrProjectWriteSnapshot &snapshot)",
+      "Json project_root_to_json(const QdrProjectWriteSnapshot &snapshot)");
+  ASSERT_FALSE(project_payload.empty());
+  EXPECT_EQ(project_payload.find("AssetRegistry"), std::string::npos);
+  EXPECT_EQ(project_payload.find("SceneDocument"), std::string::npos);
+  EXPECT_EQ(project_payload.find("document.scene()"), std::string::npos);
+  EXPECT_EQ(project_payload.find("document.assets()"), std::string::npos);
+  EXPECT_EQ(project_payload.find("const ProjectDocument &"),
+            std::string::npos);
+  EXPECT_EQ(project_payload.find("const MeshAsset *"), std::string::npos);
 }
 
 TEST(QdrDocumentIoTests, QdrFormatConstantsAndProjectCodecsHaveSingleOwners) {

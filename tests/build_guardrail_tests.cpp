@@ -282,6 +282,120 @@ std::string trimmed(std::string value) {
     return {first, last};
 }
 
+std::size_t matching_cmake_call_end(std::string_view source,
+                                    std::size_t call_begin) {
+  const std::size_t open = source.find('(', call_begin);
+  if (open == std::string_view::npos) {
+    return std::string_view::npos;
+  }
+
+  int depth = 0;
+  bool in_quote = false;
+  bool in_comment = false;
+  for (std::size_t index = open; index < source.size(); ++index) {
+    const char character = source[index];
+    if (in_comment) {
+      if (character == '\n') {
+        in_comment = false;
+      }
+      continue;
+    }
+    if (!in_quote && character == '#') {
+      in_comment = true;
+      continue;
+    }
+    if (character == '"') {
+      in_quote = !in_quote;
+      continue;
+    }
+    if (in_quote) {
+      continue;
+    }
+    if (character == '(') {
+      ++depth;
+      continue;
+    }
+    if (character == ')') {
+      --depth;
+      if (depth == 0) {
+        return index + 1;
+      }
+    }
+  }
+
+  return std::string_view::npos;
+}
+
+std::vector<std::string> tokenize_cmake_arguments(std::string_view source) {
+  std::vector<std::string> tokens;
+  std::string token;
+  bool in_quote = false;
+  bool in_comment = false;
+
+  for (const char character : source) {
+    if (in_comment) {
+      if (character == '\n') {
+        in_comment = false;
+      }
+      continue;
+    }
+    if (!in_quote && character == '#') {
+      in_comment = true;
+      continue;
+    }
+    if (character == '"') {
+      in_quote = !in_quote;
+      continue;
+    }
+    if (!in_quote &&
+        std::isspace(static_cast<unsigned char>(character)) != 0) {
+      if (!token.empty()) {
+        tokens.push_back(token);
+        token.clear();
+      }
+      continue;
+    }
+    token.push_back(character);
+  }
+  if (!token.empty()) {
+    tokens.push_back(token);
+  }
+  return tokens;
+}
+
+std::string cmake_target_source_blocks(std::string_view source,
+                                       std::string_view target) {
+  const std::vector<std::string_view> commands = {
+      "add_library",
+      "add_executable",
+      "target_sources",
+  };
+  std::string blocks;
+
+  for (std::string_view command : commands) {
+    const std::string marker = std::string(command) + "(";
+    std::size_t cursor = 0;
+    while ((cursor = source.find(marker, cursor)) != std::string_view::npos) {
+      const std::size_t args_begin = cursor + marker.size();
+      const std::size_t call_end = matching_cmake_call_end(source, cursor);
+      if (call_end == std::string_view::npos) {
+        break;
+      }
+      const std::size_t args_end = call_end - 1;
+      const std::vector<std::string> tokens =
+          tokenize_cmake_arguments(source.substr(args_begin,
+                                                 args_end - args_begin));
+      if (!tokens.empty() && tokens.front() == target) {
+        blocks.append(source.substr(cursor, call_end - cursor));
+        blocks.push_back('\n');
+      }
+      cursor = call_end;
+    }
+  }
+
+  return blocks;
+}
+
 /**
  * Describes manifest and license evidence required for a project dependency.
  */
@@ -508,6 +622,114 @@ TEST(BuildGuardrailTests, FormerSdkBoundaryIsAbsorbedIntoAppBuild) {
       std::filesystem::exists(source_path("src/editor/commands/document")));
 }
 
+TEST(BuildGuardrailTests,
+     PolygonOperationResultsReportStructuredTopologyDeltas) {
+  const std::string document_header =
+      read_source_file("src/mesh/polygon/document_operations.hpp");
+  expect_contains(document_header, "struct OperationElementDelta");
+  expect_contains(document_header, "std::vector<ElementId> vertices;");
+  expect_contains(document_header, "std::vector<Edge> edges;");
+  expect_contains(document_header, "std::vector<ElementId> faces;");
+  expect_contains(document_header, "OperationElementDelta created;");
+  expect_contains(document_header, "OperationElementDelta deleted;");
+  expect_contains(document_header, "OperationElementDelta affected;");
+
+  /**
+   * Stores the expected structured result-delta markers for one operation.
+   */
+  struct OperationResultExpectation {
+    std::string_view path;
+    std::vector<std::string_view> delta_needles;
+  };
+
+  const std::vector<OperationResultExpectation> expectations = {
+      {"src/mesh/polygon/operations/extrude_faces_operation.cpp",
+       {"OperationResult result;", "result.created.vertices",
+        "result.created.faces", "result.affected.faces", "return result;"}},
+      {"src/mesh/polygon/operations/thicken_faces_operation.cpp",
+       {"OperationResult result;", "result.created.vertices",
+        "result.created.faces", "result.affected.faces", "return result;"}},
+      {"src/mesh/polygon/operations/split_edges_operation.cpp",
+       {"OperationResult result;", "result.created.vertices",
+        "result.created.edges", "result.affected.edges",
+        "result.affected.faces", "return result;"}},
+      {"src/mesh/polygon/operations/delete_selection_operation.cpp",
+       {"OperationResult result;", "result.deleted = deleted_element_delta",
+        "return result;"}},
+  };
+
+  for (const OperationResultExpectation& expectation : expectations) {
+    const std::string source = read_source_file(expectation.path);
+    for (std::string_view needle : expectation.delta_needles) {
+      expect_contains(source, std::string(needle));
+    }
+    EXPECT_EQ(source.find("return { true, {} };"), std::string::npos)
+        << expectation.path
+        << " should not report successful topology changes only through "
+           "changed/message and remapped Selection.";
+  }
+}
+
+TEST(BuildGuardrailTests,
+     PolygonDocumentPublicSurfaceIsSplitBehindCompatibilityUmbrella) {
+  /**
+   * Stores the ownership markers expected in one split polygon header.
+   */
+  struct PolygonHeaderExpectation {
+    std::string_view path;
+    std::vector<std::string_view> owner_needles;
+  };
+
+  const std::vector<PolygonHeaderExpectation> headers = {
+      {"src/mesh/polygon/document_model.hpp",
+       {"struct Document", "add_vertex", "make_cube"}},
+      {"src/mesh/polygon/document_selection.hpp",
+       {"struct Selection", "select_only", "selection_center"}},
+      {"src/mesh/polygon/document_operations.hpp",
+       {"struct OperationResult", "PlaneCutRequest",
+        "thicken_selected_faces"}},
+      {"src/mesh/polygon/document_topology.hpp",
+       {"FacePerimeterInfo", "document_edges", "face_normal"}},
+      {"src/mesh/polygon/document_mesh_compilation.hpp",
+       {"CompiledMesh", "compile_document"}},
+      {"src/mesh/polygon/document_picking.hpp",
+       {"PickOptions", "PickResult", "pick_element"}},
+      {"src/mesh/polygon/document_overlay_preview.hpp",
+       {"OverlayData", "KnifeSegmentPreview", "build_overlay"}},
+      {"src/mesh/polygon/element_handles.hpp",
+       {"struct VertexId", "struct FaceId", "struct EdgeKey"}},
+  };
+
+  const std::string umbrella =
+      read_source_file("src/mesh/polygon/document.hpp");
+  for (const PolygonHeaderExpectation &header : headers) {
+    const std::string path(header.path);
+    ASSERT_TRUE(std::filesystem::exists(source_path(path))) << path;
+    const std::string source = read_source_file(path);
+    for (const std::string_view needle : header.owner_needles) {
+      expect_contains(source, std::string(needle));
+    }
+    expect_missing(source, "#include <mesh/polygon/document.hpp>");
+
+    const std::string include_path =
+        path.substr(std::string("src/mesh/polygon/").size());
+    expect_contains(umbrella,
+                    "#include <mesh/polygon/" + include_path + ">");
+  }
+
+  expect_contains(umbrella, "#include <mesh/polygon/poly_operation.hpp>");
+  expect_missing(umbrella, "struct Document {");
+  expect_missing(umbrella, "struct Selection {");
+  expect_missing(umbrella, "struct PickOptions {");
+  expect_missing(umbrella, "struct OverlayData {");
+
+  const std::string poly_operation =
+      read_source_file("src/mesh/polygon/poly_operation.hpp");
+  expect_contains(poly_operation,
+                  "#include <mesh/polygon/document_operations.hpp>");
+  expect_missing(poly_operation, "#include <mesh/polygon/document.hpp>");
+}
+
 TEST(BuildGuardrailTests, BuildOptionsAndDependencyPinsHaveSingleCMakeOwner) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string options =
@@ -610,6 +832,54 @@ TEST(BuildGuardrailTests, RootQuaderTestsListsEveryRootTestSource) {
 
     expect_contains(guardrail_target, relative);
     expect_missing(app_target, relative);
+  }
+}
+
+TEST(BuildGuardrailTests,
+     PhaseOneTargetMapRejectsMonolithicCoreAndRuntimeSourceBlocks) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string modeling_c_make =
+      read_source_file("cmake/QuaderModeling.cmake");
+  const std::string build_files = root_c_make + "\n" + modeling_c_make;
+  const std::string migration_plan =
+      read_source_file("docs/architecture_migration_plan.md");
+
+  for (const std::string &target_area :
+       {"`core`", "`math`", "`geometry`", "`polygon`", "`assets`",
+        "`document`", "`commands`", "`editor_modeling`", "`viewport`",
+        "`render`", "`io_qdr`", "`api`", "`ui`", "`app`"}) {
+    expect_contains(migration_plan, target_area);
+  }
+
+  const std::string core_sources =
+      cmake_target_source_blocks(build_files, "quader_core");
+  for (const std::string &forbidden : {
+           "src/assets/",
+           "src/editor/commands/",
+           "src/editor/history/",
+           "src/editor/selection/",
+           "src/editor/tools/",
+           "src/io/qdr/",
+           "src/scene/",
+           "src/ui/",
+           "src/viewport/",
+       }) {
+    expect_missing(core_sources, forbidden);
+  }
+
+  const std::string runtime_sources =
+      cmake_target_source_blocks(build_files, "quader_runtime");
+  for (const std::string &forbidden : {
+           "src/app/",
+           "src/api/quader_editor_api.cpp",
+           "src/api/quader_render_api.cpp",
+           "src/editor/transform/",
+           "src/editor/viewport/",
+           "src/platform/",
+           "src/render/",
+           "src/ui/",
+       }) {
+    expect_missing(runtime_sources, forbidden);
   }
 }
 
@@ -942,6 +1212,8 @@ TEST(BuildGuardrailTests, PublicDocsDoNotExposeStaleSdkBoundaryLanguage) {
 TEST(BuildGuardrailTests, DefaultMaterialMetadataMatchesRuntimePackagePath) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string app_source = read_source_file("src/app/app.cpp");
+  const std::string bootstrap_source =
+      read_source_file("src/editor/session/project_asset_bootstrap_service.cpp");
   const std::string host_contract =
       read_source_file("src/editor/metadata/host_contract.cpp");
   const std::string default_catalog =
@@ -956,14 +1228,18 @@ TEST(BuildGuardrailTests, DefaultMaterialMetadataMatchesRuntimePackagePath) {
   expect_contains(default_catalog, "kDefaultMaterialAlbedoTexturePackagePath");
   expect_contains(default_catalog,
                   "kDefaultMaterialRoughnessTexturePackagePath");
-  expect_contains(app_source, "default_material_catalog.hpp");
-  expect_contains(app_source, "kDefaultMaterialAlbedoTexturePackagePath");
-  expect_contains(app_source, "kDefaultMaterialRoughnessTexturePackagePath");
+  expect_contains(app_source, "ProjectAssetBootstrapService");
+  expect_contains(bootstrap_source, "default_material_catalog.hpp");
+  expect_contains(bootstrap_source, "kDefaultMaterialAlbedoTexturePackagePath");
+  expect_contains(bootstrap_source,
+                  "kDefaultMaterialRoughnessTexturePackagePath");
   expect_contains(host_contract, "default_material_catalog.hpp");
   expect_contains(host_contract, "kDefaultMaterialAlbedoTexturePackagePath");
   expect_contains(host_contract, "kDefaultMaterialRoughnessTexturePackagePath");
   expect_missing(host_contract, "assets/materials/default/");
+  expect_missing(app_source, "default_material_catalog.hpp");
   expect_missing(app_source, "\"materials/default/default_albedo.png\"");
+  expect_missing(bootstrap_source, "\"materials/default/default_albedo.png\"");
   expect_missing(host_contract, "\"materials/default/default_albedo.png\"");
 }
 
@@ -1162,9 +1438,12 @@ TEST(BuildGuardrailTests, ImGuiRuntimeResourcesArePackagedWithRuntime) {
   const std::string style_source =
       read_source_file("src/ui/ui_style_tokens.cpp");
   const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string icon_texture_service =
+      read_source_file("src/render/ui_icon_texture_service.cpp");
 
   expect_contains(root_c_make, "src/ui/ui_system.cpp");
   expect_contains(root_c_make, "src/ui/viewport_panel.cpp");
+  expect_contains(root_c_make, "src/render/ui_icon_texture_service.cpp");
   expect_contains(root_c_make, "quader_register_filament_material");
   expect_contains(root_c_make, "QUADER_FILAMENT_MATERIAL_COPY_COMMANDS");
   expect_contains(root_c_make, "resources/materials/quader_mesh.mat");
@@ -1190,10 +1469,11 @@ TEST(BuildGuardrailTests, ImGuiRuntimeResourcesArePackagedWithRuntime) {
   expect_contains(icon_header, "unlock");
   expect_contains(icon_header, "hide");
   expect_contains(icon_header, "show");
-  expect_contains(ui_system_source, "lock_icon.png");
-  expect_contains(ui_system_source, "unlock_icon.png");
-  expect_contains(ui_system_source, "hide_icon.png");
-  expect_contains(ui_system_source, "show_icon.png");
+  expect_contains(ui_system_source, "load_ui_icon_textures");
+  expect_contains(icon_texture_service, "lock_icon.png");
+  expect_contains(icon_texture_service, "unlock_icon.png");
+  expect_contains(icon_texture_service, "hide_icon.png");
+  expect_contains(icon_texture_service, "show_icon.png");
   expect_contains(phosphor_header, "kPhosphorCaretDown");
   expect_contains(phosphor_header, "kPhosphorCaretRight");
   expect_contains(quader_widgets, "draw_combo_caret");
@@ -1223,12 +1503,81 @@ TEST(BuildGuardrailTests, ImGuiRuntimeResourcesArePackagedWithRuntime) {
             512u);
 }
 
+TEST(BuildGuardrailTests, UiIconTexturesStayBehindRenderSystemAdapters) {
+  const std::string ui_system_header = read_source_file("src/ui/ui_system.hpp");
+  const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string viewport_panel_source =
+      read_source_file("src/ui/viewport_panel.cpp");
+  const std::string render_system_header =
+      read_source_file("src/render/render_system.hpp");
+  const std::string render_system_source =
+      read_source_file("src/render/render_system.cpp");
+  const std::string icon_texture_service =
+      read_source_file("src/render/ui_icon_texture_service.cpp");
+
+  expect_missing(ui_system_header, "TextureRegistry");
+  expect_missing(ui_system_header, "filament::Engine");
+  expect_missing(ui_system_header, "filament::Texture");
+  expect_missing(ui_system_source, "#include <filament/");
+  expect_missing(ui_system_source, "filament::Texture::Builder");
+  expect_missing(ui_system_source, "TextureRegistry");
+  expect_missing(ui_system_source, "icon_textures_");
+  expect_missing(ui_system_source, "icon_engine_");
+  expect_missing(ui_system_source, "render_system.engine()");
+  expect_missing(ui_system_source, "render_system.textures()");
+  expect_missing(ui_system_source, "render_system.renderer()");
+  expect_missing(viewport_panel_source, "render_system.engine()");
+  expect_missing(viewport_panel_source, "render_system.scene()");
+  expect_missing(viewport_panel_source, "render_system.textures()");
+  expect_missing(viewport_panel_source, "render_system.ground_grid_material()");
+
+  expect_contains(render_system_header, "load_ui_icon_textures");
+  expect_contains(render_system_header, "clear_ui_icon_textures");
+  expect_contains(render_system_header, "initialize_imgui_renderer");
+  expect_contains(render_system_header, "initialize_viewport_renderer");
+  expect_contains(render_system_source, "ui_icon_textures_.load_icons");
+  expect_contains(render_system_source, "ui_icon_textures_.clear");
+  expect_contains(icon_texture_service, "filament::Texture::Builder()");
+  expect_contains(icon_texture_service, "textures_->register_texture(texture)");
+  expect_contains(icon_texture_service,
+                  "textures_->unregister_texture(record.handle)");
+  expect_contains(icon_texture_service, "engine_->destroy(record.texture)");
+}
+
+TEST(BuildGuardrailTests, UiSystemKeepsSdlBehindAppPlatformAdapter) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string ui_system_header = read_source_file("src/ui/ui_system.hpp");
+  const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string ui_platform_adapter =
+      read_source_file("src/ui/ui_platform_adapter.hpp");
+  const std::string app_source = read_source_file("src/app/app.cpp");
+  const std::string ui_link_block = source_slice(
+      root_c_make, "target_link_libraries(quader_ui",
+      "target_compile_features(quader_ui");
+
+  for (const std::string &forbidden : {"SDL", "imgui_impl_sdl3"}) {
+    expect_missing(ui_system_header, forbidden);
+    expect_missing(ui_system_source, forbidden);
+    expect_missing(ui_platform_adapter, forbidden);
+  }
+  expect_contains(ui_system_header, "UIPlatformAdapter");
+  expect_contains(ui_system_header, "UIPlatformEvent");
+  expect_contains(ui_platform_adapter, "const void *native_event");
+  expect_contains(app_source, "class SdlUIPlatformAdapter");
+  expect_contains(app_source, "ImGui_ImplSDL3_InitForOther");
+  expect_contains(app_source, "SDL_SetWindowRelativeMouseMode");
+  expect_contains(app_source, "UIPlatformEvent{&event}");
+  expect_missing(ui_link_block, "SDL3::SDL3");
+}
+
 TEST(BuildGuardrailTests, ImGuiShellViewportAndControlStylingStayVisible) {
   const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
   const std::string main_menu_source =
       read_source_file("src/ui/main_menu_bar.cpp");
   const std::string style_source =
       read_source_file("src/ui/ui_style_tokens.cpp");
+  const std::string icon_texture_service =
+      read_source_file("src/render/ui_icon_texture_service.cpp");
   const std::string viewport_panel_source =
       read_source_file("src/ui/viewport_panel.cpp");
   const std::string window_chrome_source = source_slice(
@@ -1287,7 +1636,7 @@ TEST(BuildGuardrailTests, ImGuiShellViewportAndControlStylingStayVisible) {
   expect_contains(ui_system_source, "kWindowChromeControlsWidth");
   expect_contains(window_chrome_source, "ImGuiWindowFlags_MenuBar");
   expect_contains(window_chrome_source, "main_menu_bar_.draw_menus");
-  expect_contains(ui_system_source, "quader-logo@2x.png");
+  expect_contains(icon_texture_service, "quader-logo@2x.png");
   expect_contains(main_menu_source, "MainMenuBarResult MainMenuBar::draw_menus");
   expect_missing(main_menu_source, "drawInlinePopupMenu");
   expect_missing(main_menu_source, "ImGui::Button(label.c_str())");
@@ -1428,46 +1777,44 @@ TEST(BuildGuardrailTests, AppVersionMetadataUsesRootVersionSource) {
                                  "failed/no-change, or explanation-only");
 }
 
-TEST(BuildGuardrailTests, EditorAggregateStaysInRuntimeTarget) {
+TEST(BuildGuardrailTests, EditorAggregateStaysOutOfDocumentApiTarget) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
 
-  const std::size_t api_target =
-      root_c_make.find("add_library(quader_api STATIC");
-  const std::size_t runtime_target =
-      root_c_make.find("add_library(quader_runtime STATIC");
-  const std::size_t editor_api_source =
-      root_c_make.find("src/api/quader_editor_api.cpp");
-  const std::size_t render_api_source =
-      root_c_make.find("src/api/quader_render_api.cpp");
+  const std::string api_sources =
+      cmake_target_source_blocks(root_c_make, "quader_api");
+  const std::string runtime_sources =
+      cmake_target_source_blocks(root_c_make, "quader_runtime");
+  const std::string app_sources =
+      cmake_target_source_blocks(root_c_make, "quader_app");
 
-  ASSERT_NE(api_target, std::string::npos);
-  ASSERT_NE(runtime_target, std::string::npos);
-  ASSERT_NE(editor_api_source, std::string::npos);
-  ASSERT_NE(render_api_source, std::string::npos);
-  EXPECT_GT(editor_api_source, runtime_target);
-  EXPECT_LT(editor_api_source, render_api_source);
-  EXPECT_GT(editor_api_source, api_target);
+  expect_missing(api_sources, "src/api/quader_editor_api.cpp");
+  expect_missing(api_sources, "src/api/quader_render_api.cpp");
+  EXPECT_TRUE(runtime_sources.find("src/api/quader_editor_api.cpp") !=
+                  std::string::npos ||
+              app_sources.find("src/api/quader_editor_api.cpp") !=
+                  std::string::npos)
+      << "QuaderEditorApi belongs to the native editor/app composition target, "
+         "not the document/modeling API target";
 }
 
-TEST(BuildGuardrailTests, ViewportWorkspaceServiceStaysCoreAndRuntimeFree) {
+TEST(BuildGuardrailTests,
+     ViewportWorkspaceServiceStaysViewportOwnedAndRuntimeFree) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string header =
       read_source_file("src/viewport/viewport_workspace_service.hpp");
   const std::string source =
       read_source_file("src/viewport/viewport_workspace_service.cpp");
 
-  const std::size_t core_target =
-      root_c_make.find("add_library(quader_core STATIC");
-  const std::size_t api_target =
-      root_c_make.find("add_library(quader_api STATIC");
-  const std::size_t workspace_source =
-      root_c_make.find("src/viewport/viewport_workspace_service.cpp");
+  const std::string runtime_sources =
+      cmake_target_source_blocks(root_c_make, "quader_runtime");
+  const std::string viewport_sources =
+      cmake_target_source_blocks(root_c_make, "quader_viewport");
 
-  ASSERT_NE(core_target, std::string::npos);
-  ASSERT_NE(api_target, std::string::npos);
-  ASSERT_NE(workspace_source, std::string::npos);
-  EXPECT_GT(workspace_source, core_target);
-  EXPECT_LT(workspace_source, api_target);
+  expect_missing(runtime_sources, "src/viewport/viewport_workspace_service.cpp");
+  if (!viewport_sources.empty()) {
+    expect_contains(viewport_sources,
+                    "src/viewport/viewport_workspace_service.cpp");
+  }
 
   for (const std::string &forbidden : {
            "SDL",

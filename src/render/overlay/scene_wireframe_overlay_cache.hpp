@@ -7,6 +7,7 @@
 #pragma once
 
 #include "core/types.hpp"
+#include "render/overlay/render_overlay_snapshot.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -26,9 +27,6 @@ class VertexBuffer;
 } // namespace filament
 
 namespace quader {
-
-class AssetRegistry;
-class SceneDocument;
 
 /**
  * Caches full-scene wireframe renderables outside the transient viewport overlay frame.
@@ -51,8 +49,7 @@ public:
              line_material_ != nullptr;
     }
 
-    void sync(const SceneDocument &document, const AssetRegistry &assets,
-              std::uint8_t layer_mask);
+    void sync(const RenderOverlaySceneWireframeSnapshot &snapshot);
 
     /**
      * Owns one persistent wireframe line renderable and its GPU buffers.
@@ -103,11 +100,9 @@ private:
     };
 
     std::vector<WireframeEntityState>
-    wireframe_entity_states(const SceneDocument &document,
-                            const AssetRegistry &assets) const;
-    Entry create_entry(EntityId entity_id, AssetId mesh_id, bool selected,
-                       const SceneDocument &document,
-                       const AssetRegistry &assets);
+    wireframe_entity_states(
+        const RenderOverlaySceneWireframeSnapshot &snapshot) const;
+    Entry create_entry(const RenderOverlayMeshSnapshot &mesh);
     void destroy_entry(Entry &entry);
     void destroy_proxy(Proxy &proxy, bool remove_from_scene);
     void destroy_transform_root(Entry &entry);
@@ -115,9 +110,9 @@ private:
                               std::uint8_t layer_mask) const;
     void set_layer_mask(std::uint8_t layer_mask);
     void update_entry_transform(const Entry &entry,
-                                const SceneDocument &document,
-                                EntityId entity_id) const;
-    void update_entry_transforms(const SceneDocument &document);
+                                const QMat4 &world_transform) const;
+    void update_entry_transforms(
+        const RenderOverlaySceneWireframeSnapshot &snapshot);
     void remove_except(const std::unordered_set<EntityId> &live_entities);
 
     filament::Engine* engine_ = nullptr;

@@ -497,10 +497,12 @@ DocumentCreateEntityResult DocumentCommandService::create_directional_light(
 
 DocumentCommandResult
 DocumentCommandService::select_entities(std::vector<EntityId> entities,
-                                        EntityId active) {
+                                        EntityId active,
+                                        SceneSelectionApplicationMode mode) {
   return execute_document_command(history_,
                                   std::make_unique<SelectEntitiesCommand>(
-                                      scene_, std::move(entities), active));
+                                      scene_, std::move(entities), active,
+                                      mode));
 }
 
 DocumentCommandResult

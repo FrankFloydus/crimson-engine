@@ -52,13 +52,22 @@ inline constexpr QuaderCommandId kSceneCreatePointLight{
 inline constexpr QuaderCommandId kSceneCreateDirectionalLight{
     "scene.create_directional_light"};
 
+/// Deprecated compatibility spelling. Use kEditUndo for new C++ callers.
 inline constexpr QuaderCommandId kHistoryUndo{"edit.undo"};
+/// Deprecated compatibility spelling. Use kEditRedo for new C++ callers.
 inline constexpr QuaderCommandId kHistoryRedo{"edit.redo"};
+/// Deprecated compatibility spelling. Use kEditRepeatLastAction for new C++
+/// callers.
 inline constexpr QuaderCommandId kHistoryRepeatLastAction{
     "edit.repeat_last_action"};
 
+/// Deprecated compatibility spelling. Use kEditClearSelection for new C++
+/// callers.
 inline constexpr QuaderCommandId kSelectionClear{"edit.clear_selection"};
+/// Deprecated compatibility spelling. Use kEditSelectAll for new C++ callers.
 inline constexpr QuaderCommandId kSelectionSelectAll{"edit.select_all"};
+/// Deprecated compatibility spelling. Use kEditInvertSelection for new C++
+/// callers.
 inline constexpr QuaderCommandId kSelectionInvert{"edit.invert_selection"};
 
 inline constexpr QuaderCommandId kViewportFrameSelection{
@@ -74,6 +83,7 @@ inline constexpr QuaderCommandId kViewportViewRight{"viewport.view.right"};
 inline constexpr QuaderCommandId kViewportViewFront{"viewport.view.front"};
 inline constexpr QuaderCommandId kViewportViewBack{"viewport.view.back"};
 
+/// Deprecated compatibility spelling. Use kDeleteSelection for new C++ callers.
 inline constexpr QuaderCommandId kModelingDeleteSelection{"edit.delete"};
 inline constexpr QuaderCommandId kModelingDuplicateMeshes{
     "modeling.duplicate_meshes"};
@@ -164,6 +174,7 @@ inline constexpr QuaderCommandId kModelingFlipHorizontal{
     "modeling.flip_horizontal"};
 inline constexpr QuaderCommandId kModelingFlipVertical{
     "modeling.flip_vertical"};
+/// Deprecated compatibility spelling. Use kApplyMaterial for new C++ callers.
 inline constexpr QuaderCommandId kModelingApplyActiveMaterial{
     "edit.apply_material"};
 inline constexpr QuaderCommandId kModelingApplyActivePreview{

@@ -6,8 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "editor/commands/document/document_command_scene_helpers.hpp"
+#include "editor/commands/document/document_command_result.hpp"
 #include "editor/commands/document/scene_command.hpp"
+#include "editor/selection/scene_selection_application.hpp"
 
 #include <vector>
 
@@ -19,27 +20,31 @@ namespace quader {
 class SelectEntitiesCommand final : public SceneCommand {
 public:
   SelectEntitiesCommand(SceneDocument &scene, std::vector<EntityId> entities,
-                        EntityId active = kInvalidEntityId)
+                        EntityId active = kInvalidEntityId,
+                        SceneSelectionApplicationMode mode =
+                            SceneSelectionApplicationMode::UndoableCommand)
       : SceneCommand(scene, "Select Entities"),
-        before_(document_command_capture_selection(scene)),
-        after_(document_command_selection_for(scene, entities, active)) {}
+        before_(capture_scene_selection(scene)),
+        after_(make_scene_selection(scene, entities, active)), mode_(mode) {}
 
   DocumentCommandResult undo() override {
-    document_command_apply_selection(scene(), before_);
+    apply_scene_selection(scene(), before_, mode_);
     return document_command_changed_result();
   }
 
     DocumentCommandResult redo() override {
-      if (document_command_same_selection(before_, after_)) {
+      if (same_scene_selection(before_, after_)) {
         return document_command_unchanged_result();
       }
-      document_command_apply_selection(scene(), after_);
+      apply_scene_selection(scene(), after_, mode_);
       return document_command_changed_result();
     }
 
 private:
-    DocumentSelectionState before_;
-    DocumentSelectionState after_;
+    SceneSelectionState before_;
+    SceneSelectionState after_;
+    SceneSelectionApplicationMode mode_ =
+        SceneSelectionApplicationMode::UndoableCommand;
 };
 
 } // namespace quader

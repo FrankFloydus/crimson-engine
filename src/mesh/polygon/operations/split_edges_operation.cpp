@@ -66,6 +66,7 @@ OperationResult SplitEdgesOperation::apply(Document& document, Selection& select
     Document candidate = document;
     std::map<std::pair<ElementId, ElementId>, ElementId> duplicate_vertices;
     std::vector<Edge> split_open_edges;
+    OperationResult result;
     bool changed = false;
 
     for (Face& face : candidate.faces) {
@@ -76,6 +77,10 @@ OperationResult SplitEdgesOperation::apply(Document& document, Selection& select
 
         std::map<ElementId, ElementId> replacements;
         for (const Edge& edge : found_edges->second) {
+            const bool creates_duplicate_a =
+                duplicate_vertices.find({face.id, edge.a}) == duplicate_vertices.end();
+            const bool creates_duplicate_b =
+                duplicate_vertices.find({face.id, edge.b}) == duplicate_vertices.end();
             const ElementId duplicate_a = duplicate_vertex_for_face(candidate, duplicate_vertices, face.id, edge.a);
             const ElementId duplicate_b = duplicate_vertex_for_face(candidate, duplicate_vertices, face.id, edge.b);
             if (duplicate_a == kInvalidElementId ||
@@ -83,11 +88,20 @@ OperationResult SplitEdgesOperation::apply(Document& document, Selection& select
               return {false,
                       "Edge Split could not duplicate selected edge vertices."};
             }
+            if (creates_duplicate_a) {
+                result.created.vertices.push_back(duplicate_a);
+            }
+            if (creates_duplicate_b) {
+                result.created.vertices.push_back(duplicate_b);
+            }
 
             replacements[edge.a] = duplicate_a;
             replacements[edge.b] = duplicate_b;
             add_unique_edge(split_open_edges, edge);
-            add_unique_edge(split_open_edges, make_edge(duplicate_a, duplicate_b));
+            const Edge duplicate_edge = make_edge(duplicate_a, duplicate_b);
+            add_unique_edge(split_open_edges, duplicate_edge);
+            add_unique_edge(result.created.edges, duplicate_edge);
+            add_unique_edge(result.affected.edges, edge);
         }
 
         bool face_changed = false;
@@ -101,6 +115,7 @@ OperationResult SplitEdgesOperation::apply(Document& document, Selection& select
         }
         if (face_changed) {
             face.uvs.clear();
+            add_unique_id(result.affected.faces, face.id);
             changed = true;
         }
     }
@@ -121,7 +136,8 @@ OperationResult SplitEdgesOperation::apply(Document& document, Selection& select
     selection.mode = SelectionMode::Edge;
     selection.edges = std::move(split_open_edges);
     activate_last_selection(selection);
-    return { true, {} };
+    result.changed = true;
+    return result;
 }
 
 } // namespace

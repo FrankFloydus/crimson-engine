@@ -367,7 +367,7 @@ TEST(GroupingPublicApiTests, ModelingDeleteCommandDeletesSelectedGroupInsteadOfS
   scenario.when().group_selection("group", "Delete Me");
   select_group_for_command_delete(scenario, "group");
 
-  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.when().execute(quader_command::kDeleteSelection);
   scenario.then().command().ok_changed();
   scenario.then()
       .scene()
@@ -400,7 +400,7 @@ TEST(GroupingPublicApiTests, ViewportDeleteShortcutDeletesSelectedGroup) {
       .named_missing("Shortcut Right")
       .named_exists("Shortcut Decoy");
 
-  scenario.when().execute(quader_command::kHistoryUndo);
+  scenario.when().execute(quader_command::kEditUndo);
   scenario.remember_entity_named("group", "Shortcut Group");
   scenario.remember_entity_named("left", "Shortcut Left");
   scenario.remember_entity_named("right", "Shortcut Right");
@@ -410,7 +410,7 @@ TEST(GroupingPublicApiTests, ViewportDeleteShortcutDeletesSelectedGroup) {
       .parent("left", "group")
       .parent("right", "group");
 
-  scenario.when().execute(quader_command::kHistoryRedo);
+  scenario.when().execute(quader_command::kEditRedo);
   scenario.then()
       .scene()
       .named_missing("Shortcut Group")
@@ -437,7 +437,7 @@ TEST(GroupingPublicApiTests, ContextDeleteActionDeletesSelectedGroup) {
       .named_missing("Action First")
       .named_missing("Action Second");
 
-  scenario.when().execute(quader_command::kHistoryUndo);
+  scenario.when().execute(quader_command::kEditUndo);
   scenario.remember_entity_named("group", "Action Group");
   scenario.remember_entity_named("first", "Action First");
   scenario.remember_entity_named("second", "Action Second");
@@ -464,7 +464,7 @@ TEST(GroupingPublicApiTests, ObjectModeSceneSelectedGroupDeleteUsesSceneRoots) {
       .selected("group");
   scenario.then().selection().mode(QuaderSelectionMode::Object);
 
-  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.when().execute(quader_command::kDeleteSelection);
   scenario.then().command().ok_changed();
   scenario.then()
       .scene()
@@ -485,7 +485,7 @@ TEST(GroupingPublicApiTests, ComponentModeSceneSelectedGroupForcesEntityModeAndD
   scenario.given().selection_mode(QuaderSelectionMode::Face).selected("group");
   scenario.then().selection().mode(QuaderSelectionMode::Object);
 
-  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.when().execute(quader_command::kDeleteSelection);
   scenario.then().command().ok_changed();
   scenario.then()
       .scene()
@@ -493,7 +493,7 @@ TEST(GroupingPublicApiTests, ComponentModeSceneSelectedGroupForcesEntityModeAndD
       .named_missing("Component Mode Child")
       .named_missing("Component Mode Sibling");
 
-  scenario.when().execute(quader_command::kHistoryUndo);
+  scenario.when().execute(quader_command::kEditUndo);
   scenario.remember_entity_named("group", "Component Mode Group");
   scenario.remember_entity_named("child", "Component Mode Child");
   scenario.remember_entity_named("sibling", "Component Mode Sibling");
@@ -513,7 +513,7 @@ TEST(GroupingPublicApiTests, EmptySceneSelectionWithStaleModelingObjectDoesNotDe
   scenario.when().clear_scene_selection();
   scenario.then().scene().selected_aliases({});
 
-  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.when().execute(quader_command::kDeleteSelection);
   scenario.then().command().failed();
   scenario.then().scene().named_exists("Stale Delete Decoy");
 }
@@ -530,10 +530,10 @@ TEST(GroupingPublicApiTests, ModelingDeleteCommandUndoRedoRestoresSelectedGroupS
   scenario.when().group_selection("group", "Command Group");
   select_group_for_command_delete(scenario, "group");
 
-  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.when().execute(quader_command::kDeleteSelection);
   scenario.then().scene().named_missing("Command Group");
 
-  scenario.when().execute(quader_command::kHistoryUndo);
+  scenario.when().execute(quader_command::kEditUndo);
   scenario.remember_entity_named("group", "Command Group");
   scenario.remember_entity_named("first", "Command First");
   scenario.remember_entity_named("second", "Command Second");
@@ -547,7 +547,7 @@ TEST(GroupingPublicApiTests, ModelingDeleteCommandUndoRedoRestoresSelectedGroupS
       .has_material("first", material)
       .has_material("second", material);
 
-  scenario.when().execute(quader_command::kHistoryRedo);
+  scenario.when().execute(quader_command::kEditRedo);
   scenario.then()
       .scene()
       .named_missing("Command Group")
@@ -568,13 +568,13 @@ TEST(GroupingPublicApiTests, ModelingDeleteGroupedChildUndoKeepsChildGroupedAndT
   scenario.given()
       .selection_mode(QuaderSelectionMode::Object)
       .selected("target");
-  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.when().execute(quader_command::kDeleteSelection);
   scenario.then()
       .scene()
       .named_missing("Delete Child")
       .named_exists("Child Delete Group");
 
-  scenario.when().execute(quader_command::kHistoryUndo);
+  scenario.when().execute(quader_command::kEditUndo);
   scenario.remember_entity_named("target", "Delete Child");
   scenario.then()
       .scene()
@@ -591,12 +591,12 @@ TEST(GroupingPublicApiTests, RestoredGroupCanBeDeletedAgainWithModelingCommand) 
   scenario.when().group_selection("group", "Again Group");
   select_group_for_command_delete(scenario, "group");
 
-  scenario.when().execute(quader_command::kModelingDeleteSelection);
-  scenario.when().execute(quader_command::kHistoryUndo);
+  scenario.when().execute(quader_command::kDeleteSelection);
+  scenario.when().execute(quader_command::kEditUndo);
   scenario.remember_entity_named("group", "Again Group");
 
   select_group_for_command_delete(scenario, "group");
-  scenario.when().execute(quader_command::kModelingDeleteSelection);
+  scenario.when().execute(quader_command::kDeleteSelection);
   scenario.then()
       .scene()
       .named_missing("Again Group")
@@ -612,8 +612,8 @@ TEST(GroupingPublicApiTests, SceneAwareDeleteRedoClearedByDocumentEditDoesNotRep
   scenario.when().group_selection("group", "Redo Guard Group");
   select_group_for_command_delete(scenario, "group");
 
-  scenario.when().execute(quader_command::kModelingDeleteSelection);
-  scenario.when().execute(quader_command::kHistoryUndo);
+  scenario.when().execute(quader_command::kDeleteSelection);
+  scenario.when().execute(quader_command::kEditUndo);
   scenario.remember_entity_named("group", "Redo Guard Group");
   scenario.then()
       .scene()
@@ -624,7 +624,7 @@ TEST(GroupingPublicApiTests, SceneAwareDeleteRedoClearedByDocumentEditDoesNotRep
   scenario.when().rename("group", "Redo Guard Edited");
   scenario.then().history().can_redo(false);
 
-  scenario.when().execute(quader_command::kHistoryRedo);
+  scenario.when().execute(quader_command::kEditRedo);
   scenario.then().command().failed();
   scenario.then()
       .scene()

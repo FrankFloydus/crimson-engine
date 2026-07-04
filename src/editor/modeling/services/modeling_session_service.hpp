@@ -211,6 +211,8 @@ public:
     ModelingBoxPreview update_box_footprint(const ModelingBoxToolEvent &event);
     ModelingBoxPreview begin_box_height(const ModelingBoxToolEvent &event);
     ModelingBoxPreview update_box_height(const ModelingBoxToolEvent &event);
+    [[nodiscard]] ModelingBoxPreview
+    box_preview(bool snap_enabled = true) const;
     ModelingCreateBoxResult commit_box(std::string name);
     ModelingCommandResult cancel_box();
     ModelingCreateBoxResult

@@ -6,11 +6,15 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "io/qdr/qdr_project_codecs.hpp"
 
+#include "io/qdr/qdr_diagnostic.hpp"
+
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -19,6 +23,37 @@ using Json = nlohmann::ordered_json;
 
 std::string qdr_string(std::string_view value) {
   return std::string(value.data(), value.size());
+}
+
+[[noreturn]] void throw_unsupported_enum(std::string_view label,
+                                         std::string_view value) {
+  throw quader_io::QdrDiagnosticException(quader_io::qdr_make_error(
+      "qdr.unsupported_enum", "",
+      "QDR project document contains unsupported " + qdr_string(label) +
+          " enum value: " + qdr_string(value) + "."));
+}
+
+std::string enum_field_string(const Json &value, const char *key,
+                              std::string_view label,
+                              QdrProjectEnumParseMode mode,
+                              std::string_view legacy_fallback) {
+  const auto field = value.find(key);
+  if (field == value.end()) {
+    if (mode == QdrProjectEnumParseMode::LegacyDefault) {
+      return qdr_string(legacy_fallback);
+    }
+    throw quader_io::QdrDiagnosticException(quader_io::qdr_make_error(
+        "qdr.missing_enum", "",
+        "QDR project document is missing " + qdr_string(label) +
+            " enum field."));
+  }
+  if (!field->is_string()) {
+    throw quader_io::QdrDiagnosticException(quader_io::qdr_make_error(
+        "qdr.invalid_enum", "",
+        "QDR project document " + qdr_string(label) +
+            " enum field must be a string."));
+  }
+  return field->get<std::string>();
 }
 
 } // namespace
@@ -38,6 +73,12 @@ std::string_view qdr_entity_kind_name(EntityKind kind) {
 }
 
 EntityKind qdr_entity_kind_from_name(std::string_view value) {
+  return qdr_entity_kind_from_name(value,
+                                   QdrProjectEnumParseMode::LegacyDefault);
+}
+
+EntityKind qdr_entity_kind_from_name(std::string_view value,
+                                     QdrProjectEnumParseMode mode) {
   if (value == "empty") {
     return EntityKind::Empty;
   }
@@ -46,6 +87,12 @@ EntityKind qdr_entity_kind_from_name(std::string_view value) {
   }
   if (value == "light") {
     return EntityKind::Light;
+  }
+  if (value == "generic") {
+    return EntityKind::Generic;
+  }
+  if (mode == QdrProjectEnumParseMode::StrictCurrentSchema) {
+    throw_unsupported_enum("entity kind", value);
   }
   return EntityKind::Generic;
 }
@@ -63,11 +110,23 @@ std::string_view qdr_light_type_name(LightType type) {
 }
 
 LightType qdr_light_type_from_name(std::string_view value) {
+  return qdr_light_type_from_name(value,
+                                  QdrProjectEnumParseMode::LegacyDefault);
+}
+
+LightType qdr_light_type_from_name(std::string_view value,
+                                   QdrProjectEnumParseMode mode) {
+  if (value == "directional") {
+    return LightType::Directional;
+  }
   if (value == "point") {
     return LightType::Point;
   }
   if (value == "spot") {
     return LightType::Spot;
+  }
+  if (mode == QdrProjectEnumParseMode::StrictCurrentSchema) {
+    throw_unsupported_enum("light type", value);
   }
   return LightType::Directional;
 }
@@ -89,6 +148,13 @@ std::string_view qdr_scene_tone_mapping_name(SceneToneMapping tone_mapping) {
 }
 
 SceneToneMapping qdr_scene_tone_mapping_from_name(std::string_view value) {
+  return qdr_scene_tone_mapping_from_name(
+      value, QdrProjectEnumParseMode::LegacyDefault);
+}
+
+SceneToneMapping
+qdr_scene_tone_mapping_from_name(std::string_view value,
+                                 QdrProjectEnumParseMode mode) {
   if (value == "linear") {
     return SceneToneMapping::Linear;
   }
@@ -103,6 +169,9 @@ SceneToneMapping qdr_scene_tone_mapping_from_name(std::string_view value) {
   }
   if (value == "displayRange") {
     return SceneToneMapping::DisplayRange;
+  }
+  if (mode == QdrProjectEnumParseMode::StrictCurrentSchema) {
+    throw_unsupported_enum("scene tone mapping", value);
   }
   return SceneToneMapping::Aces;
 }
@@ -124,6 +193,16 @@ std::string_view qdr_mesh_collision_type_name(MeshCollisionType type) {
 }
 
 MeshCollisionType qdr_mesh_collision_type_from_name(std::string_view value) {
+  return qdr_mesh_collision_type_from_name(
+      value, QdrProjectEnumParseMode::LegacyDefault);
+}
+
+MeshCollisionType
+qdr_mesh_collision_type_from_name(std::string_view value,
+                                  QdrProjectEnumParseMode mode) {
+  if (value == "box") {
+    return MeshCollisionType::Box;
+  }
   if (value == "sphere") {
     return MeshCollisionType::Sphere;
   }
@@ -135,6 +214,9 @@ MeshCollisionType qdr_mesh_collision_type_from_name(std::string_view value) {
   }
   if (value == "mesh") {
     return MeshCollisionType::Mesh;
+  }
+  if (mode == QdrProjectEnumParseMode::StrictCurrentSchema) {
+    throw_unsupported_enum("mesh collision type", value);
   }
   return MeshCollisionType::Box;
 }
@@ -151,8 +233,21 @@ std::string_view qdr_mesh_physics_body_type_name(MeshPhysicsBodyType type) {
 
 MeshPhysicsBodyType
 qdr_mesh_physics_body_type_from_name(std::string_view value) {
+  return qdr_mesh_physics_body_type_from_name(
+      value, QdrProjectEnumParseMode::LegacyDefault);
+}
+
+MeshPhysicsBodyType
+qdr_mesh_physics_body_type_from_name(std::string_view value,
+                                     QdrProjectEnumParseMode mode) {
+  if (value == "staticBody") {
+    return MeshPhysicsBodyType::StaticBody;
+  }
   if (value == "rigidBody") {
     return MeshPhysicsBodyType::RigidBody;
+  }
+  if (mode == QdrProjectEnumParseMode::StrictCurrentSchema) {
+    throw_unsupported_enum("mesh physics body type", value);
   }
   return MeshPhysicsBodyType::StaticBody;
 }
@@ -186,6 +281,15 @@ std::string_view qdr_texture_usage_name(TextureUsage usage) {
 }
 
 TextureUsage qdr_texture_usage_from_name(std::string_view value) {
+  return qdr_texture_usage_from_name(value,
+                                     QdrProjectEnumParseMode::LegacyDefault);
+}
+
+TextureUsage qdr_texture_usage_from_name(std::string_view value,
+                                         QdrProjectEnumParseMode mode) {
+  if (value == "unknown") {
+    return TextureUsage::Unknown;
+  }
   if (value == "baseColor") {
     return TextureUsage::BaseColor;
   }
@@ -216,6 +320,9 @@ TextureUsage qdr_texture_usage_from_name(std::string_view value) {
   if (value == "mask") {
     return TextureUsage::Mask;
   }
+  if (mode == QdrProjectEnumParseMode::StrictCurrentSchema) {
+    throw_unsupported_enum("texture usage", value);
+  }
   return TextureUsage::Unknown;
 }
 
@@ -230,8 +337,21 @@ std::string_view qdr_texture_color_space_name(TextureColorSpace color_space) {
 }
 
 TextureColorSpace qdr_texture_color_space_from_name(std::string_view value) {
+  return qdr_texture_color_space_from_name(
+      value, QdrProjectEnumParseMode::LegacyDefault);
+}
+
+TextureColorSpace
+qdr_texture_color_space_from_name(std::string_view value,
+                                  QdrProjectEnumParseMode mode) {
   if (value == "linear") {
     return TextureColorSpace::Linear;
+  }
+  if (value == "srgb") {
+    return TextureColorSpace::Srgb;
+  }
+  if (mode == QdrProjectEnumParseMode::StrictCurrentSchema) {
+    throw_unsupported_enum("texture color space", value);
   }
   return TextureColorSpace::Srgb;
 }
@@ -302,6 +422,13 @@ nlohmann::ordered_json qdr_mesh_component_to_json(const MeshComponent &mesh) {
 
 MeshComponent
 qdr_mesh_component_from_json(const nlohmann::ordered_json &value) {
+  return qdr_mesh_component_from_json(
+      value, QdrProjectEnumParseMode::LegacyDefault);
+}
+
+MeshComponent
+qdr_mesh_component_from_json(const nlohmann::ordered_json &value,
+                             QdrProjectEnumParseMode mode) {
   MeshComponent mesh;
   mesh.mesh = value.value("mesh", kInvalidAssetId);
   mesh.editor_only = value.value("editorOnly", false);
@@ -309,10 +436,14 @@ qdr_mesh_component_from_json(const nlohmann::ordered_json &value) {
   mesh.double_sided = value.value("doubleSided", false);
   mesh.generate_collisions = value.value("generateCollisions", true);
   mesh.collision_type = qdr_mesh_collision_type_from_name(
-      value.value("collisionType", std::string("box")));
+      enum_field_string(value, "collisionType", "mesh collision type", mode,
+                        "box"),
+      mode);
   mesh.display_collision = value.value("displayCollision", false);
   mesh.body_type = qdr_mesh_physics_body_type_from_name(
-      value.value("bodyType", std::string("staticBody")));
+      enum_field_string(value, "bodyType", "mesh physics body type", mode,
+                        "staticBody"),
+      mode);
   return mesh;
 }
 
@@ -320,9 +451,19 @@ nlohmann::ordered_json
 qdr_material_component_to_json(const MaterialComponent &material) {
   Json material_json{{"material", material.material}};
   if (!material.material_slots.empty()) {
+    std::vector<std::pair<std::uint32_t, AssetId>> sorted_slots;
+    sorted_slots.reserve(material.material_slots.size());
+    for (const auto &[slot, material_id] : material.material_slots) {
+      sorted_slots.emplace_back(slot, material_id);
+    }
+    std::sort(sorted_slots.begin(), sorted_slots.end(),
+              [](const auto &left, const auto &right) {
+                return left.first < right.first;
+              });
+
     Json slots = Json::object();
-    for (const auto &[slot, materialId] : material.material_slots) {
-      slots[std::to_string(slot)] = materialId;
+    for (const auto &[slot, material_id] : sorted_slots) {
+      slots[std::to_string(slot)] = material_id;
     }
     material_json["slots"] = std::move(slots);
   }
@@ -363,9 +504,17 @@ qdr_light_component_to_json(const LightComponent &light) {
 
 LightComponent
 qdr_light_component_from_json(const nlohmann::ordered_json &value) {
+  return qdr_light_component_from_json(
+      value, QdrProjectEnumParseMode::LegacyDefault);
+}
+
+LightComponent
+qdr_light_component_from_json(const nlohmann::ordered_json &value,
+                              QdrProjectEnumParseMode mode) {
   LightComponent light;
-  light.type =
-      qdr_light_type_from_name(value.value("type", std::string("directional")));
+  light.type = qdr_light_type_from_name(
+      enum_field_string(value, "type", "light type", mode, "directional"),
+      mode);
   light.color = qdr_vec3_from_json(value.value("color", Json::object()),
                                    {1.0f, 1.0f, 1.0f});
   light.intensity = value.value("intensity", 1.0f);
@@ -415,6 +564,13 @@ qdr_scene_settings_component_to_json(const SceneSettingsComponent &settings) {
 
 SceneSettingsComponent
 qdr_scene_settings_component_from_json(const nlohmann::ordered_json &value) {
+  return qdr_scene_settings_component_from_json(
+      value, QdrProjectEnumParseMode::LegacyDefault);
+}
+
+SceneSettingsComponent
+qdr_scene_settings_component_from_json(const nlohmann::ordered_json &value,
+                                       QdrProjectEnumParseMode mode) {
   SceneSettingsComponent settings;
   if (!value.is_object()) {
     return settings;
@@ -474,7 +630,9 @@ qdr_scene_settings_component_from_json(const nlohmann::ordered_json &value) {
     settings.post_process.dithering =
         post_process_json->value("dithering", settings.post_process.dithering);
     settings.post_process.tone_mapping = qdr_scene_tone_mapping_from_name(
-        post_process_json->value("toneMapping", std::string("aces")));
+        enum_field_string(*post_process_json, "toneMapping",
+                          "scene tone mapping", mode, "aces"),
+        mode);
   }
   return settings;
 }

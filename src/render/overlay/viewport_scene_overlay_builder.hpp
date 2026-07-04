@@ -7,12 +7,10 @@
 #pragma once
 
 #include "editor/modeling/modeling_types.hpp"
+#include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/viewport_overlay_frame.hpp"
 
 namespace quader {
-
-class AssetRegistry;
-class SceneDocument;
 
 /**
  * Builds scene-derived viewport overlay geometry for renderer submission.
@@ -21,11 +19,10 @@ class ViewportSceneOverlayBuilder final {
 public:
   [[nodiscard]] static ViewportOverlayFrame
   build_selection_frame(ViewportOverlayFrame base_frame,
-                        const SceneDocument &document,
-                        const AssetRegistry &assets);
+                        const RenderOverlaySelectionSnapshot &snapshot);
   [[nodiscard]] static ViewportOverlayFrame build_wireframe_frame(
       ViewportOverlayFrame base_frame, ModelingSelectionMode selection_mode,
-      const SceneDocument &document, const AssetRegistry &assets);
+      const RenderOverlaySceneWireframeSnapshot &snapshot);
   [[nodiscard]] static ViewportOverlayFrame
   strip_persistent_object_selection(ViewportOverlayFrame frame,
                                     ModelingSelectionMode selection_mode);

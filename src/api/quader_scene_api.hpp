@@ -54,7 +54,17 @@ struct QuaderSceneLockEdit {
 };
 
 /**
- * Owns Quader Scene Batch behavior within the public Quader API surface.
+ * Groups scene mutations into one public API transaction.
+ *
+ * Use editor.scene().batch("Label") when a user action or script should rename,
+ * reparent, transform, hide, or lock several entities and commit them as one
+ * undoable history entry. The batch records requested editor intent only; the
+ * actual validation, ownership invariants, history mutation, and selection of
+ * low-level services remain behind QuaderSceneApi::commit_batch().
+ *
+ * A batch is single-use: build the operation list, call commit(), and then
+ * discard it. Individual calls are intentionally chainable so public examples
+ * can express grouped scene edits without reaching into document-owner internals.
  */
 class QuaderSceneBatch final {
 public:

@@ -28,8 +28,12 @@ key as a migration alias, but writers must not emit it.
 
 Project-document persistence emits texture assets referenced by material
 `textureSlots` in `assets.textures`. Readers reject material texture slots that
-point at missing or invalid texture asset ids, and atomic project writes validate
-the temporary file by reading it back before replacing the target.
+point at missing or invalid texture asset ids. Hot project saves intentionally
+skip temporary-file self-parse validation before the atomic replace; save
+performance depends on not parsing the just-serialized payload on every save.
+Project writer changes must keep focused round-trip coverage in
+`tests/io_qdr_tests.cpp` proving serialized and atomic-saved project payloads
+can still be read back.
 
 The legacy `<io/qdr/qdr_runtime_io_compat.hpp>` API remains as a modeling-runtime
 compatibility adapter for callers that still save or load `SessionState`. It

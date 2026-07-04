@@ -396,6 +396,10 @@ ProjectDocument::validate_asset_references() const {
 ProjectDocumentAssetReferenceReport
 ProjectDocument::validate_asset_references(ProjectObjectRecord record) const {
   ProjectDocumentAssetReferenceReport report;
+  if (record.scene_entity != kInvalidEntityId &&
+      scene_.exists(record.scene_entity)) {
+    hydrate_record_from_scene(record);
+  }
   if (record.id == kInvalidEditorObjectId) {
     report.issues.push_back(ProjectDocumentAssetReferenceIssue{
         .entity = record.scene_entity,
@@ -580,37 +584,39 @@ ProjectDocument::merged_scene_object_record(ProjectObjectRecord record) const {
 
 void ProjectDocument::hydrate_record_from_scene(
     ProjectObjectRecord &record) const {
-  if (record.authored_name.empty() && record.scene_entity != kInvalidEntityId) {
+  if (record.scene_entity == kInvalidEntityId ||
+      !scene_.exists(record.scene_entity)) {
+    return;
+  }
+  if (record.authored_name.empty()) {
     if (const NameComponent *name = scene_.name(record.scene_entity)) {
       record.authored_name = name->name;
     }
   }
-  if (record.visible && record.scene_entity != kInvalidEntityId) {
-    if (const VisibilityComponent *visibility =
-            scene_.visibility(record.scene_entity)) {
-      record.visible = visibility->visible;
-    }
+  if (const VisibilityComponent *visibility =
+          scene_.visibility(record.scene_entity)) {
+    record.visible = visibility->visible;
+  } else {
+    record.visible = true;
   }
-  if (record.modeling_object == kInvalidModelingObjectId &&
-      record.scene_entity != kInvalidEntityId) {
-    if (const ModelingObjectComponent *object =
-            scene_.modeling_object(record.scene_entity)) {
-      record.modeling_object = object->object_id;
-      record.material_slot = object->material_slot;
-    }
+  if (const ModelingObjectComponent *object =
+          scene_.modeling_object(record.scene_entity)) {
+    record.modeling_object = object->object_id;
+    record.material_slot = object->material_slot;
+  } else {
+    record.modeling_object = kInvalidModelingObjectId;
+    record.material_slot = 0;
   }
-  if (record.mesh == kInvalidAssetId &&
-      record.scene_entity != kInvalidEntityId) {
-    if (const MeshComponent *mesh = scene_.mesh(record.scene_entity)) {
-      record.mesh = mesh->mesh;
-    }
+  if (const MeshComponent *mesh = scene_.mesh(record.scene_entity)) {
+    record.mesh = mesh->mesh;
+  } else {
+    record.mesh = kInvalidAssetId;
   }
-  if (record.material == kInvalidAssetId &&
-      record.scene_entity != kInvalidEntityId) {
-    if (const MaterialComponent *material =
-            scene_.material(record.scene_entity)) {
-      record.material = material->material;
-    }
+  if (const MaterialComponent *material =
+          scene_.material(record.scene_entity)) {
+    record.material = material->material;
+  } else {
+    record.material = kInvalidAssetId;
   }
 }
 

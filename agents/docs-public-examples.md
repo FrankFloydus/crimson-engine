@@ -23,7 +23,7 @@ Public examples should prefer the polished API surface:
 
 - callable result helpers: `result.ok()`, `result.changed()`, `result.value()`,
   `result.error_message()`;
-- typed command IDs: `quader::quader_command::kHistoryUndo`,
+- typed command IDs: `quader::quader_command::kEditUndo`,
   `quader::quader_command::kModelingDuplicateMeshes`, and other
   `quader::quader_command::*` constants;
 - `QuaderObjectHandle` for object workflows;

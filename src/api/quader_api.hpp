@@ -23,7 +23,16 @@ class QuaderObjectHandle;
 class QuaderApiMutationRunner;
 
 /**
- * Exposes Quader API operations through the public Quader API surface.
+ * Public document and modeling automation facade.
+ *
+ * Use this API for tests, examples, scripts, and tools that need scene, modeling, selection, asset,
+ * history, or query workflows without runtime editor domains. Operations express user-document
+ * intent and delegate to the owning domain APIs; this class is not an owner for document, modeling,
+ * asset, history, storage, render, UI, viewport, or platform invariants.
+ *
+ * Use QuaderEditorApi instead when the workflow needs projects, commands, preferences, tools,
+ * viewports, UI, events, or rendering. Keep public automation on this front door rather than on
+ * backend objects or mutable service internals.
  */
 class QuaderApi final {
 public:

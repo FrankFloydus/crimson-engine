@@ -58,12 +58,16 @@ TEST(MathTypesTests, QUmbrellaOnlyIncludesSplitVectorHeaders) {
 
 TEST(MathTypesTests, PolygonDocumentUsesSharedVectorTypes) {
   const std::string polygon_document =
+      read_source_file("src/mesh/polygon/document_model.hpp");
+  const std::string polygon_umbrella =
       read_source_file("src/mesh/polygon/document.hpp");
 
   EXPECT_NE(polygon_document.find("quader::QVec2"), std::string::npos);
   EXPECT_NE(polygon_document.find("quader::QVec3"), std::string::npos);
   EXPECT_EQ(polygon_document.find("struct QVec2"), std::string::npos);
   EXPECT_EQ(polygon_document.find("struct QVec3"), std::string::npos);
+  EXPECT_NE(polygon_umbrella.find("#include <mesh/polygon/document_model.hpp>"),
+            std::string::npos);
 }
 
 TEST(MathTypesTests, QuaternionFromEulerMatchesExpectedAxisRotations) {

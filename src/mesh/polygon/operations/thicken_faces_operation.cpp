@@ -90,6 +90,7 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
 
     Document candidate = document;
     std::map<ElementId, ElementId> duplicate_vertices;
+    OperationResult result;
     auto duplicate_vertex = [&](ElementId source_vertex_id) -> ElementId {
         const auto existing = duplicate_vertices.find(source_vertex_id);
         if (existing != duplicate_vertices.end()) {
@@ -107,12 +108,16 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
           return kInvalidElementId;
         }
         const quader::QVec3 offset = normal * -thickness;
-        duplicate_vertices[source_vertex_id] = add_vertex(candidate, source_position->second + offset);
-        return duplicate_vertices[source_vertex_id];
+        const ElementId duplicate_id = add_vertex(candidate, source_position->second + offset);
+        duplicate_vertices[source_vertex_id] = duplicate_id;
+        result.created.vertices.push_back(duplicate_id);
+        return duplicate_id;
     };
 
     std::vector<ElementId> cap_face_ids;
+    std::vector<ElementId> created_cap_face_ids;
     cap_face_ids.reserve(selected_faces.size() * 2U);
+    created_cap_face_ids.reserve(selected_faces.size());
     ElementId active_cap_face_id = active_face_id;
     const bool flip_normals = thickness < 0.0F;
     for (const Face& source_face : selected_faces) {
@@ -145,6 +150,7 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
             return { false, "Thicken Faces would create invalid cap geometry." };
         }
         cap_face_ids.push_back(cap_face.id);
+        created_cap_face_ids.push_back(cap_face.id);
         candidate.faces.push_back(std::move(cap_face));
     }
 
@@ -188,6 +194,10 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
         return { false, "Thicken Faces would create invalid face geometry." };
     }
 
+    result.affected.faces.assign(selected_face_ids.begin(), selected_face_ids.end());
+    result.created.faces = std::move(created_cap_face_ids);
+    result.created.faces.insert(
+        result.created.faces.end(), side_face_ids.begin(), side_face_ids.end());
     document = std::move(candidate);
     selection.clear();
     selection.mode = SelectionMode::Face;
@@ -198,7 +208,8 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
     } else {
       activate_last_selection(selection);
     }
-    return { true, {} };
+    result.changed = true;
+    return result;
 }
 
 OperationResult ThickenFacesOperation::apply(Document& document, Selection& selection) const

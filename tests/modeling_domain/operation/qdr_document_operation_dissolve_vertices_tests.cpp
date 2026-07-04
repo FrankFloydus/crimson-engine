@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 using namespace quader_poly;
 
@@ -22,6 +22,8 @@ TEST(QdrDocumentOperationDissolveVerticesTests, DissolveVerticesRemovesRedundant
 	const OperationResult result = dissolve_selected_vertices(document, selection);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
 	EXPECT_TRUE(find_vertex(document, middle) == nullptr);
 	EXPECT_TRUE(document.faces.size() == 1U);
 	EXPECT_TRUE(document.faces.front().vertices.size() == 3U);

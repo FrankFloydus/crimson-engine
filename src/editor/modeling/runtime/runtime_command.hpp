@@ -54,6 +54,10 @@ enum class EditorRuntimeCommandId {
   BeginMirrorLineDrag,
   EndMirrorDrag,
   FinalizeMirror,
+  UpdatePolyHover,
+  AcceptPolyPoint,
+  CommitPoly,
+  CancelPoly,
   MirrorAxis,
   FlipView,
   CreateBoxFromBounds,
@@ -156,6 +160,17 @@ struct MirrorPointDragRuntimeCommandSettings {
 };
 
 /**
+ * Represents a Poly Hover Runtime Command Settings value used by the modeling runtime domain.
+ */
+struct PolyHoverRuntimeCommandSettings {
+	ViewportCameraState camera;
+	quader_poly::Ray ray;
+	double grid_size = 1.0;
+	bool snap_enabled = true;
+	bool constrain_axis = false;
+};
+
+/**
  * Represents a Mirror QAxis Runtime Command Settings value used by the modeling runtime domain.
  */
 struct MirrorAxisRuntimeCommandSettings {
@@ -210,6 +225,7 @@ using EditorRuntimeCommandSettings = std::variant<
 		CutPointDragRuntimeCommandSettings,
 		MirrorRayRuntimeCommandSettings,
 		MirrorPointDragRuntimeCommandSettings,
+		PolyHoverRuntimeCommandSettings,
 		MirrorAxisRuntimeCommandSettings,
 		ViewFlipRuntimeCommandSettings,
 		BoxRayRuntimeCommandSettings,

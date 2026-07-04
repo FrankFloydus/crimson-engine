@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 using namespace quader_poly;
 
@@ -122,6 +122,8 @@ TEST(QdrDocumentOperationBridgeEdgesTests, BridgeEdgesCreatesASingleQuadBetweenT
 	const OperationResult result = bridge_selected_edges(document, selection);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
         EXPECT_TRUE(selection.mode == SelectionMode::Face);
         EXPECT_TRUE(selection.faces.size() == 1U);
 	const Face* bridged_face = find_face(document, selection.faces.front());
@@ -141,6 +143,11 @@ TEST(QdrDocumentOperationBridgeEdgesTests, BridgeEdgesChoosesGapFacingAdjacentFa
 	const OperationResult result = bridge_selected_edges(fixture.document, selection);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_polygon_document_validation_issue_after_success(
+		fixture.document,
+		result,
+		PolygonDocumentDiagnosticCode::NonmanifoldEdge);
         EXPECT_TRUE(selection.mode == SelectionMode::Face);
         EXPECT_TRUE(selection.faces.size() == 1U);
 	const Face* bridged_face = find_face(fixture.document, selection.faces.front());
@@ -159,6 +166,11 @@ TEST(QdrDocumentOperationBridgeEdgesTests, BridgeEdgesPairsEndpointsWithoutCross
 	const OperationResult result = bridge_selected_edges(fixture.document, selection);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_polygon_document_validation_issue_after_success(
+		fixture.document,
+		result,
+		PolygonDocumentDiagnosticCode::NonmanifoldEdge);
         EXPECT_TRUE(selection.mode == SelectionMode::Face);
         EXPECT_TRUE(selection.faces.size() == 1U);
 	const Face* bridged_face = find_face(fixture.document, selection.faces.front());
@@ -195,6 +207,8 @@ TEST(QdrDocumentOperationBridgeEdgesTests, BridgeEdgesSupportsSteppedSpansBetwee
 	const OperationResult result = bridge_selected_edges(document, selection, 3);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
         EXPECT_TRUE(selection.mode == SelectionMode::Face);
         EXPECT_TRUE(selection.faces.size() == 3U);
 	EXPECT_TRUE(qdr_test::edge_incidence_count(document, make_edge(removed_face.vertices[0], removed_face.vertices[1])) == 2);

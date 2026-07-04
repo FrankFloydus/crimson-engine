@@ -79,37 +79,32 @@ bool LightRenderableCache::contains(EntityId entity_id) const {
   return light_proxies_.contains(entity_id);
 }
 
-bool LightRenderableCache::needs_rebuild(EntityId entity_id,
-                                         const LightComponent &light) const {
-  const auto existing = light_proxies_.find(entity_id);
+bool LightRenderableCache::needs_rebuild(
+    const RenderSceneLightRecord &light) const {
+  const auto existing = light_proxies_.find(light.entity_id);
   return existing == light_proxies_.end() ||
-         existing->second.rebuild_signature != light_signature(light);
+         existing->second.rebuild_signature != light.rebuild_revision;
 }
 
-void LightRenderableCache::sync_light(EntityId entity_id,
-                                      const LightComponent &light,
-                                      const QMat4 &world_transform) {
+void LightRenderableCache::sync_light(const RenderSceneLightRecord &light) {
   if (!engine_ || !scene_) {
     return;
   }
 
-  const std::uint64_t next_rebuild_signature = light_signature(light);
-  const std::uint64_t next_transform_signature =
-      light_transform_signature(world_transform);
-  if (needs_rebuild(entity_id, light)) {
-    remove(entity_id);
+  if (needs_rebuild(light)) {
+    remove(light.entity_id);
     LightProxy proxy =
-        create_light_proxy(entity_id, light, world_transform,
-                           next_rebuild_signature, next_transform_signature);
-    light_proxies_.emplace(entity_id, std::move(proxy));
+        create_light_proxy(light.entity_id, light.light, light.world_transform,
+                           light.rebuild_revision, light.transform_revision);
+    light_proxies_.emplace(light.entity_id, std::move(proxy));
     return;
   }
 
-  auto existing = light_proxies_.find(entity_id);
+  auto existing = light_proxies_.find(light.entity_id);
   if (existing != light_proxies_.end() &&
-      existing->second.transform_signature != next_transform_signature) {
-    update_light_transform(existing->second, world_transform);
-    existing->second.transform_signature = next_transform_signature;
+      existing->second.transform_signature != light.transform_revision) {
+    update_light_transform(existing->second, light.world_transform);
+    existing->second.transform_signature = light.transform_revision;
   }
 }
 

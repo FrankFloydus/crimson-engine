@@ -25,9 +25,6 @@
 #include "ui/viewport_panel.hpp"
 #include "viewport/viewport_settings.hpp"
 
-#include <SDL3/SDL_events.h>
-#include <SDL3/SDL_video.h>
-
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -39,7 +36,8 @@ namespace quader {
 class QuaderEditorApi;
 class EditorSelectionService;
 class ModelingSessionService;
-class TextureRegistry;
+class UIPlatformAdapter;
+struct UIPlatformEvent;
 
 /**
  * Enumerates native window chrome actions requested by the ImGui shell.
@@ -57,12 +55,14 @@ class UISystem {
 public:
     ~UISystem();
 
-    void initialize(SDL_Window *window, RenderSystem &render_system,
+    void initialize(UIPlatformAdapter &platform_adapter,
+                    RenderSystem &render_system,
                     const std::filesystem::path &executable_dir,
                     bool custom_chrome);
+    void install_runtime_hooks(QuaderEditorApi &editor);
     void shutdown();
 
-    bool process_event(const SDL_Event &event);
+    bool process_event(const UIPlatformEvent &event);
     void begin_frame(const FrameTiming &frame_timing,
                      std::uint32_t framebuffer_width,
                      std::uint32_t framebuffer_height);
@@ -102,13 +102,11 @@ private:
   void enforce_sidebar_dock_minimums(float sidebar_minimum_width);
   void set_viewport_cursor_captured(bool captured);
   void warp_captured_cursor(QVec2 point);
-  void load_icons(filament::Engine &engine, TextureRegistry &textures,
-                  const std::filesystem::path &executable_dir);
-  void destroy_icons();
   void save_settings();
   void save_viewport_settings();
 
-  SDL_Window *window_ = nullptr;
+  UIPlatformAdapter *platform_adapter_ = nullptr;
+  RenderSystem *render_system_ = nullptr;
   ImGuiFilamentRenderer renderer_;
   UIStyleTokens style_;
   UIPanelManager panels_;
@@ -118,10 +116,6 @@ private:
   ViewportPanel *viewport_panel_ = nullptr;
   UIIconSet icons_;
   LocalizationService localization_;
-  std::vector<filament::Texture *> icon_textures_;
-  std::vector<ImTextureID> icon_texture_ids_;
-  filament::Engine *icon_engine_ = nullptr;
-  TextureRegistry *icon_texture_registry_ = nullptr;
   UISettings settings_;
   UISettingsPaths settings_paths_;
   ViewportSettings viewport_settings_;

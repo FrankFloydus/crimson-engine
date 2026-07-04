@@ -11,6 +11,7 @@
 #include "editor/commands/document/document_command_result.hpp"
 #include "editor/modeling/modeling_selection_box_baseline.hpp"
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/selection/scene_selection_application.hpp"
 #include "scene/components.hpp"
 
 #include <optional>
@@ -35,15 +36,7 @@ enum class EditorSelectionTargetKind {
     Face,
 };
 
-/**
- * Enumerates EditorSelectionEdit values used by the editor selection authority.
- */
-enum class EditorSelectionEdit {
-    Replace,
-    Add,
-    Remove,
-    Toggle,
-};
+using EditorSelectionEdit = SceneSelectionEdit;
 
 /**
  * Represents an Editor Selection Target value used by the editor selection authority.

@@ -4,9 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "test_support.hpp"
-
-#include <mesh/polygon/document.hpp>
+#include "operation_validation_test_helpers.hpp"
 
 #include <algorithm>
 #include <map>
@@ -134,6 +132,7 @@ TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSplitsACubeAndKeepsBothClosedHal
         const PlaneCutResult result = quader_poly::plane_cut(
             document, center_x_cut(PlaneCutMode::KeepBoth));
         EXPECT_TRUE(result.changed);
+	qdr_test::expect_valid_polygon_document_after_success(result);
 	EXPECT_TRUE(result.split_count == 1);
 	EXPECT_TRUE(result.removed_count == 0);
 	EXPECT_TRUE(cap_face_count(result.front_selection) == 1);
@@ -159,6 +158,7 @@ TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSupportsDestructiveFrontAndBackM
         const PlaneCutResult front = quader_poly::plane_cut(
             document, center_x_cut(PlaneCutMode::KeepFront));
         EXPECT_TRUE(front.changed);
+	qdr_test::expect_valid_polygon_document_after_success(front, "successful front plane cut");
 	EXPECT_TRUE(front.removed_count == 1);
         EXPECT_TRUE(front.front_selection.mode ==
                     quader_poly::SelectionMode::Face);
@@ -170,6 +170,7 @@ TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSupportsDestructiveFrontAndBackM
         const PlaneCutResult back = quader_poly::plane_cut(
             document, center_x_cut(PlaneCutMode::KeepBack));
         EXPECT_TRUE(back.changed);
+	qdr_test::expect_valid_polygon_document_after_success(back, "successful back plane cut");
 	EXPECT_TRUE(back.removed_count == 1);
         EXPECT_TRUE(back.back_selection.mode ==
                     quader_poly::SelectionMode::Face);
@@ -185,6 +186,7 @@ TEST(QdrDocumentOperationPlaneCutTests, PlaneCutCreatesValidCapsForTiltedPlanes)
         const PlaneCutResult result = quader_poly::plane_cut(
             document, tilted_cut(PlaneCutMode::KeepBoth));
         EXPECT_TRUE(result.changed);
+	qdr_test::expect_valid_polygon_document_after_success(result, "successful tilted plane cut");
 	EXPECT_TRUE(cap_face_count(result.front_selection) == 1);
 	EXPECT_TRUE(cap_face_count(result.back_selection) == 1);
 	check_closed_manifold(result.front_document);
@@ -197,6 +199,7 @@ TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSupportsCutsThroughExistingVerti
         const PlaneCutResult result = quader_poly::plane_cut(
             document, corner_on_vertex_cut(PlaneCutMode::KeepBoth));
         EXPECT_TRUE(result.changed);
+	qdr_test::expect_valid_polygon_document_after_success(result, "successful vertex plane cut");
 	EXPECT_TRUE(cap_face_count(result.front_selection) == 1);
 	EXPECT_TRUE(cap_face_count(result.back_selection) == 1);
 	check_closed_manifold(result.front_document);
@@ -214,6 +217,7 @@ TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSupportsMultipleSimpleCapLoopsIn
         const PlaneCutResult result = quader_poly::plane_cut(
             document, center_x_cut(PlaneCutMode::KeepBoth));
         EXPECT_TRUE(result.changed);
+	qdr_test::expect_valid_polygon_document_after_success(result, "successful multi-loop plane cut");
 	EXPECT_TRUE(cap_face_count(result.front_selection) == 2);
 	EXPECT_TRUE(cap_face_count(result.back_selection) == 2);
 	check_closed_manifold(result.front_document);

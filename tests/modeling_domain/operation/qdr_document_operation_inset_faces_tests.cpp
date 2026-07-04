@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 using namespace quader_poly;
 
@@ -15,6 +15,8 @@ TEST(QdrDocumentOperationInsetFacesTests, InsetFacesCreatesAnInnerCapAndRimFaces
 	const OperationResult result = inset_selected_faces(fixture.document, selection, 0.25F);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 	EXPECT_TRUE(fixture.document.vertices.size() == 8U);
 	EXPECT_TRUE(fixture.document.faces.size() == 5U);
         EXPECT_TRUE(selection.mode == SelectionMode::Face);

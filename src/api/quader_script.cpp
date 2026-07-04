@@ -11,7 +11,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
-#include "scene/document/project_session.hpp"
+#include "editor/session/project_session.hpp"
 
 #include <memory>
 #include <optional>

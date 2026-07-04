@@ -6,12 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "assets/asset_registry.hpp"
 #include "core/types.hpp"
 #include "math/types.hpp"
 #include "render/mesh_renderable_factory.hpp"
 #include "render/mesh_renderable_proxy.hpp"
-#include "scene/scene_document.hpp"
+#include "render/scene_render_extraction.hpp"
 
 #include <cstdint>
 #include <unordered_map>
@@ -42,16 +41,9 @@ public:
     }
 
     bool contains(EntityId entity_id) const;
-    bool needs_rebuild(EntityId entity_id, AssetId mesh_id,
-                       const MeshAsset &mesh, AssetId material_id,
-                       bool cast_shadows, bool double_sided,
-                       std::uint64_t material_revision) const;
+    bool needs_rebuild(const RenderSceneMeshRecord &mesh) const;
 
-    void sync_mesh(EntityId entity_id, AssetId mesh_id, const MeshAsset &mesh,
-                   AssetId material_id, const MaterialComponent *material,
-                   const AssetRegistry &assets, const QMat4 &world_transform,
-                   bool cast_shadows, bool double_sided,
-                   std::uint64_t material_revision);
+    void sync_mesh(const RenderSceneMeshRecord &mesh);
     void remove(EntityId entity_id);
     void remove_except(const std::unordered_set<EntityId> &live_mesh_entities);
     void drain_retired_destroy_queue(std::size_t max_proxy_count);

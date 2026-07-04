@@ -6,12 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "assets/asset_registry.hpp"
 #include "core/types.hpp"
 #include "math/types.hpp"
 #include "render/mesh_renderable_proxy.hpp"
 #include "render/render_layers.hpp"
-#include "scene/scene_document.hpp"
+#include "render/scene_render_extraction.hpp"
 
 #include <filament/Engine.h>
 #include <filament/Scene.h>
@@ -43,10 +42,9 @@ public:
     }
 
     MeshRenderableProxy
-    create(EntityId entity_id, AssetId mesh_id, const MeshAsset &mesh,
-           const MaterialComponent *material, const AssetRegistry &assets,
+    create(EntityId entity_id, const RenderMeshAssetSnapshot &mesh,
+           const RenderMaterialBindingSnapshot *material,
            const QMat4 &world_transform, bool cast_shadows, bool double_sided,
-           std::uint64_t material_revision,
            std::uint8_t layer_mask = kViewportRenderedSceneLayerMask,
            bool editor_unlit = false, bool depth_only = false,
            std::uint8_t channel = kViewportDefaultRenderableChannel);

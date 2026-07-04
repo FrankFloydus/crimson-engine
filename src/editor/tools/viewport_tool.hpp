@@ -9,6 +9,7 @@
 #include "assets/asset_registry.hpp"
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
+#include "editor/tools/viewport_tool_ports.hpp"
 #include "scene/scene_document.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_input_types.hpp"
@@ -70,7 +71,6 @@ struct ViewportToolEvent {
  * Stores the Viewport Modal Tool State data contract used by editor-owned viewport tool interactions.
  */
 struct ViewportModalToolState {
-  ModelingBoxPreview box_preview = {};
   bool insert_edge_loop_drag_active = false;
   bool cut_drag_active = false;
   bool mirror_drag_active = false;
@@ -115,21 +115,14 @@ struct ViewportPointToolContext {
 struct ViewportToolContext {
     ViewportToolState& state;
     ViewportCameraController& camera;
-    ModelingSessionService& modeling;
+    ViewportToolPorts ports;
     SceneDocument* document = nullptr;
     const ViewportSettings* settings = nullptr;
     ViewportModalToolState *modal_state = nullptr;
     ViewportBoxToolContext* box = nullptr;
     ViewportPointToolContext* point = nullptr;
 
-    std::function<bool(ModelingBoxDragState)> claim_hover;
-    std::function<void()> invalidate_hover;
-    std::function<void()> mark_overlay_dirty;
     std::function<void(ViewportToolId)> set_active_tool;
-    std::function<void(ViewportSelectionMode)> set_selection_mode;
-    std::function<void(ModelingSelectionMode)> set_app_selection_mode;
-    std::function<void(std::string_view, const ModelingCommandResult &)>
-        handle_tool_command_result;
 };
 
 /**

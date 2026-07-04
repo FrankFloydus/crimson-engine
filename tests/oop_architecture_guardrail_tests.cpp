@@ -20,9 +20,12 @@ namespace {
 
 using quader::test::guardrail::contains_any;
 using quader::test::guardrail::files_with_extension;
+using quader::test::guardrail::lines_containing;
 using quader::test::guardrail::normalized_relative;
 using quader::test::guardrail::read_file;
+using quader::test::guardrail::source_files_under;
 using quader::test::guardrail::source_root;
+using quader::test::guardrail::source_slice;
 using quader::test::guardrail::split_lines;
 using quader::test::guardrail::starts_with;
 
@@ -83,6 +86,99 @@ std::string first_include_line(const std::string &source) {
   return {};
 }
 
+std::string include_root_relative(const std::filesystem::path &file) {
+  std::string relative = normalized_relative(file);
+  constexpr std::string_view source_prefix = "src/";
+  if (starts_with(relative, source_prefix)) {
+    relative.erase(0, source_prefix.size());
+  }
+  return relative;
+}
+
+std::vector<std::string>
+matching_header_first_include_forms(const std::filesystem::path &header) {
+  const std::string include_path = include_root_relative(header);
+  return {
+      "#include \"" + include_path + "\"",
+      "#include <" + include_path + ">",
+      "#include \"" + header.filename().generic_string() + "\"",
+  };
+}
+
+bool has_matching_header_first_include(const std::filesystem::path &source_file,
+                                       const std::filesystem::path &header) {
+  const std::string first_include = first_include_line(read_file(source_file));
+  const std::vector<std::string> allowed =
+      matching_header_first_include_forms(header);
+  return std::find(allowed.begin(), allowed.end(), first_include) !=
+         allowed.end();
+}
+
+bool is_matching_header_first_legacy_exception(std::string_view relative) {
+  return relative == "src/editor/modeling/runtime/session.cpp";
+}
+
+std::vector<std::string> significant_header_lines(const std::string &source) {
+  std::vector<std::string> lines;
+  bool in_block_comment = false;
+  bool at_file_start = true;
+
+  for (const std::string &line : split_lines(source)) {
+    std::string trimmed = trim(line);
+    if (at_file_start && trimmed.size() >= 3 &&
+        static_cast<unsigned char>(trimmed[0]) == 0xEF &&
+        static_cast<unsigned char>(trimmed[1]) == 0xBB &&
+        static_cast<unsigned char>(trimmed[2]) == 0xBF) {
+      trimmed.erase(0, 3);
+    }
+    at_file_start = false;
+    while (!trimmed.empty()) {
+      if (in_block_comment) {
+        const std::size_t comment_end = trimmed.find("*/");
+        if (comment_end == std::string::npos) {
+          trimmed.clear();
+          break;
+        }
+        trimmed = trim(trimmed.substr(comment_end + 2));
+        in_block_comment = false;
+        continue;
+      }
+
+      if (starts_with(trimmed, "//")) {
+        trimmed.clear();
+        break;
+      }
+      if (starts_with(trimmed, "/*")) {
+        const std::size_t comment_end = trimmed.find("*/", 2);
+        if (comment_end == std::string::npos) {
+          trimmed.clear();
+          in_block_comment = true;
+          break;
+        }
+        trimmed = trim(trimmed.substr(comment_end + 2));
+        continue;
+      }
+
+      lines.push_back(trimmed);
+      break;
+    }
+  }
+
+  return lines;
+}
+
+bool has_header_self_containment_boundary(const std::string &source) {
+  const std::vector<std::string> lines = significant_header_lines(source);
+  if (lines.empty()) {
+    return false;
+  }
+  if (lines.front() == "#pragma once") {
+    return true;
+  }
+  return lines.size() >= 2 && starts_with(lines[0], "#ifndef ") &&
+         starts_with(lines[1], "#define ");
+}
+
 std::size_t count_occurrences(std::string_view haystack,
                               std::string_view needle) {
   std::size_t count = 0;
@@ -92,6 +188,35 @@ std::size_t count_occurrences(std::string_view haystack,
     position = haystack.find(needle, position + needle.size());
   }
   return count;
+}
+
+std::string source_text_under(const std::filesystem::path &root) {
+  std::string combined;
+  for (const std::filesystem::path &file : source_files_under(root)) {
+    combined.append("\n// ");
+    combined.append(normalized_relative(file));
+    combined.append("\n");
+    combined.append(read_file(file));
+  }
+  return combined;
+}
+
+bool is_logger_policy_owner(std::string_view relative) {
+  return relative == "src/core/logger.cpp" ||
+         relative == "src/core/logger.hpp";
+}
+
+bool is_fatal_policy_owner_or_startup(std::string_view relative) {
+  return relative == "src/platform/fatal_error_handler.cpp" ||
+         relative == "src/platform/fatal_error_handler.hpp" ||
+         relative == "src/main.cpp";
+}
+
+bool is_console_logger_memory_access(std::string_view relative,
+                                     const std::string &line) {
+  return relative == "src/ui/console_panel.cpp" &&
+         (line.find("Logger::clear_memory()") != std::string::npos ||
+          line.find("Logger::entries_snapshot()") != std::string::npos);
 }
 
 bool has_nearby_declaration_doc(const std::vector<std::string> &file_lines,
@@ -157,27 +282,37 @@ TEST(OopArchitectureGuardrailTests, SourceCppFilesAreNotEmptyOrConstructorOnly) 
   }
 }
 
-TEST(OopArchitectureGuardrailTests, InteractionSourceFilesIncludeTheirPublicHeaderFirst) {
-  const std::filesystem::path root = source_root() / "src/editor/interactions";
-  for (const std::filesystem::path &file : files_with_extension(root, ".cpp")) {
+TEST(OopArchitectureGuardrailTests, SourceFilesWithMatchingHeadersIncludeThemFirst) {
+  for (const std::filesystem::path &file :
+       files_with_extension(source_root() / "src", ".cpp")) {
     const std::filesystem::path header =
         file.parent_path() / (file.stem().string() + ".hpp");
     if (!std::filesystem::exists(header)) {
       continue;
     }
 
-    const std::string first_include = first_include_line(read_file(file));
     const std::string relative = normalized_relative(file);
-    const std::string stem = file.stem().string();
-    const std::vector<std::string> allowed{
-        "#include <editor/interactions/" + stem + ".hpp>",
-        "#include \"editor/interactions/" + stem + ".hpp\"",
-        "#include \"" + stem + ".hpp\"",
-    };
+    if (is_matching_header_first_legacy_exception(relative)) {
+      EXPECT_EQ(first_include_line(read_file(file)),
+                "#include \"session_internal.hpp\"")
+          << relative;
+      continue;
+    }
 
-    EXPECT_NE(std::find(allowed.begin(), allowed.end(), first_include),
-              allowed.end())
-        << relative << " first include was: " << first_include;
+    EXPECT_TRUE(has_matching_header_first_include(file, header))
+        << relative << " first include was: "
+        << first_include_line(read_file(file));
+  }
+}
+
+TEST(OopArchitectureGuardrailTests, ProjectHeadersDeclareSelfContainmentBoundary) {
+  for (const std::string_view extension :
+       {std::string_view{".hpp"}, std::string_view{".h"}}) {
+    for (const std::filesystem::path &file :
+         files_with_extension(source_root() / "src", extension)) {
+      EXPECT_TRUE(has_header_self_containment_boundary(read_file(file)))
+          << normalized_relative(file);
+    }
   }
 }
 
@@ -275,6 +410,114 @@ TEST(OopArchitectureGuardrailTests, UiDoesNotBypassCommandAndPreviewBoundaries) 
   }
 }
 
+TEST(OopArchitectureGuardrailTests,
+     DiagnosticsGlobalsStayInCoreAndPlatformOwners) {
+  const std::string architecture =
+      read_file(source_root() / "docs/architecture.md");
+  const std::string ownership =
+      read_file(source_root() / "agents/domain-ownership.md");
+  const std::string logger_header =
+      read_file(source_root() / "src/core/logger.hpp");
+  const std::string logger_source =
+      read_file(source_root() / "src/core/logger.cpp");
+  const std::string fatal_source =
+      read_file(source_root() / "src/platform/fatal_error_handler.cpp");
+  const std::string main_source = read_file(source_root() / "src/main.cpp");
+
+  EXPECT_NE(architecture.find("## Diagnostics Exceptions"), std::string::npos);
+  EXPECT_NE(architecture.find("Logger"), std::string::npos);
+  EXPECT_NE(architecture.find("src/platform/fatal_error_handler.*"),
+            std::string::npos);
+  EXPECT_NE(ownership.find("## Diagnostics And Fatal Errors"),
+            std::string::npos);
+  EXPECT_NE(ownership.find("explicit shared-core diagnostics exceptions"),
+            std::string::npos);
+  EXPECT_NE(ownership.find("Fatal-error handling is platform-owned"),
+            std::string::npos);
+
+  EXPECT_NE(logger_header.find("class Logger"), std::string::npos);
+  EXPECT_NE(logger_header.find("#define LOG_ERROR"), std::string::npos);
+  EXPECT_NE(logger_source.find("std::shared_ptr<spdlog::logger> g_logger"),
+            std::string::npos);
+  EXPECT_NE(logger_source.find("spdlog::set_default_logger(g_logger)"),
+            std::string::npos);
+  EXPECT_NE(fatal_source.find("std::set_terminate(terminate_handler)"),
+            std::string::npos);
+  EXPECT_NE(fatal_source.find("SetUnhandledExceptionFilter("),
+            std::string::npos);
+  EXPECT_NE(fatal_source.find("MessageBoxW("), std::string::npos);
+  EXPECT_NE(main_source.find("Logger::initialize("), std::string::npos);
+  EXPECT_NE(main_source.find("install_fatal_error_handler(log_path)"),
+            std::string::npos);
+
+  const std::vector<std::string_view> logger_global_configuration = {
+      "spdlog::set_default_logger",
+      "spdlog::drop_all(",
+      "std::shared_ptr<spdlog::logger> g_",
+      "static std::shared_ptr<spdlog::logger>",
+      "std::unique_ptr<spdlog::logger> g_",
+      "static std::unique_ptr<spdlog::logger>",
+  };
+  const std::vector<std::string_view> fatal_runtime_hooks = {
+      "std::set_terminate(",
+      "std::signal(SIGABRT",
+      "SetUnhandledExceptionFilter(",
+      "_set_invalid_parameter_handler(",
+      "_set_abort_behavior(",
+      "MessageBoxW(",
+      "MessageBoxA(",
+      "SDL_ShowSimpleMessageBox(",
+      "MiniDumpWriteDump(",
+      "install_fatal_error_handler(",
+      "report_fatal_error_and_exit(",
+  };
+  const std::vector<std::string_view> ui_app_diagnostic_globals = {
+      "Logger::",
+      "std::shared_ptr<spdlog::logger>",
+      "std::unique_ptr<spdlog::logger>",
+      "spdlog::logger g_",
+      "g_logger",
+      "g_log_sink",
+      "g_diagnostic",
+      "g_diagnostics",
+      "g_crash",
+      "g_fatal",
+  };
+
+  for (const std::filesystem::path &file :
+       source_files_under(source_root() / "src")) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
+
+    for (const std::string &line : split_lines(source)) {
+      if (contains_any(line, logger_global_configuration)) {
+        EXPECT_TRUE(is_logger_policy_owner(relative))
+            << relative << ": " << line;
+      }
+      if (contains_any(line, fatal_runtime_hooks)) {
+        EXPECT_TRUE(is_fatal_policy_owner_or_startup(relative))
+            << relative << ": " << line;
+      }
+    }
+  }
+
+  for (const std::filesystem::path &root :
+       {source_root() / "src/ui", source_root() / "src/app"}) {
+    for (const std::filesystem::path &file : source_files_under(root)) {
+      const std::string source = read_file(file);
+      const std::string relative = normalized_relative(file);
+
+      for (const std::string &line : split_lines(source)) {
+        if (is_console_logger_memory_access(relative, line)) {
+          continue;
+        }
+        EXPECT_FALSE(contains_any(line, ui_app_diagnostic_globals))
+            << relative << ": " << line;
+      }
+    }
+  }
+}
+
 TEST(OopArchitectureGuardrailTests, UiShellDoesNotOwnToolImplementations) {
   const std::string source = read_file(source_root() / "src/ui/ui_system.cpp");
 
@@ -297,6 +540,69 @@ TEST(OopArchitectureGuardrailTests, UiShellDoesNotOwnToolImplementations) {
            "commit_transform_drag",
        }) {
     EXPECT_EQ(source.find(forbidden), std::string::npos) << forbidden;
+  }
+}
+
+TEST(OopArchitectureGuardrailTests,
+     UIContextSplitsIntentPresentationAndViewportSurfaces) {
+  const std::string header = read_file(source_root() / "src/ui/ui_context.hpp");
+  const std::string context =
+      source_slice(header, "struct UIContext {", "};");
+  const std::string presentation =
+      source_slice(header, "struct UIScenePresentationContext {", "};");
+
+  EXPECT_NE(header.find("struct UIIntentContext"), std::string::npos);
+  EXPECT_NE(header.find("struct UIScenePresentationContext"),
+            std::string::npos);
+  EXPECT_NE(header.find("struct UIPreferencesContext"), std::string::npos);
+  EXPECT_NE(header.find("struct UIViewportSurfaceContext"), std::string::npos);
+  EXPECT_NE(context.find("UIIntentContext intent;"), std::string::npos);
+  EXPECT_NE(context.find("UIScenePresentationContext scene;"),
+            std::string::npos);
+  EXPECT_NE(context.find("UIPreferencesContext preferences;"),
+            std::string::npos);
+  EXPECT_NE(context.find("UIViewportSurfaceContext *viewport"),
+            std::string::npos);
+
+  EXPECT_NE(presentation.find("const SceneDocument& document"),
+            std::string::npos);
+  EXPECT_NE(presentation.find("const AssetRegistry& assets"),
+            std::string::npos);
+  EXPECT_NE(presentation.find("const ModelingSessionService& modeling"),
+            std::string::npos);
+  EXPECT_NE(presentation.find("const EditorSelectionService& selection"),
+            std::string::npos);
+
+  for (std::string_view forbidden : {
+           "QuaderEditorApi& editor",
+           "SceneRenderBridge &render_bridge",
+           "SceneDocument& document",
+           "AssetRegistry& assets",
+           "ModelingSessionService& modeling",
+           "EditorSelectionService& selection",
+           "ViewportSettings &viewport_settings",
+           "FrameTiming frame_timing",
+           "RenderFramePerformanceStats render_performance",
+       }) {
+    EXPECT_EQ(context.find(forbidden), std::string::npos) << forbidden;
+  }
+
+  for (const std::filesystem::path &file :
+       source_files_under(source_root() / "src/ui")) {
+    const std::string relative = normalized_relative(file);
+    const std::string source = read_file(file);
+    for (const std::string &line :
+         lines_containing(source, {"context.viewport->", "context.viewport ==",
+                                   "*context.viewport",
+                                   "ui_context.viewport->"})) {
+      EXPECT_TRUE(relative == "src/ui/viewport_panel.cpp")
+          << relative << ": " << line;
+    }
+    for (const std::string &line :
+         lines_containing(source, {"context.inspector_preview"})) {
+      EXPECT_TRUE(relative == "src/ui/inspector_panel.cpp")
+          << relative << ": " << line;
+    }
   }
 }
 
@@ -344,18 +650,34 @@ TEST(OopArchitectureGuardrailTests, UiShellLeavesSceneOverlayExtractionToRenderB
   const std::string ui_shell = ui_system + viewport_panel;
   const std::string builder = read_file(
       source_root() / "src/render/overlay/viewport_scene_overlay_builder.cpp");
+  const std::string render_bridge =
+      read_file(source_root() / "src/render/scene_render_bridge.cpp");
 
   EXPECT_NE(builder.find("append_hierarchy_selection_wires"), std::string::npos);
   EXPECT_NE(builder.find("append_group_selection_cages"), std::string::npos);
   EXPECT_NE(builder.find("append_scene_wireframe_overlay"), std::string::npos);
   EXPECT_NE(builder.find("strip_wireframe_object_face_fills"), std::string::npos);
-  EXPECT_NE(
-      viewport_panel.find("ViewportSceneOverlayBuilder::build_selection_frame("),
-      std::string::npos);
-  EXPECT_NE(viewport_panel.find(
+  EXPECT_NE(render_bridge.find(
+                "ViewportSceneOverlayBuilder::build_selection_frame("),
+            std::string::npos);
+  EXPECT_NE(render_bridge.find(
                 "ViewportSceneOverlayBuilder::strip_wireframe_selection_fills("),
             std::string::npos);
-  EXPECT_NE(viewport_panel.find("render_bridge.sync_scene_wireframe_overlay("),
+  EXPECT_NE(viewport_panel.find(
+                "QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays("),
+            std::string::npos);
+  EXPECT_NE(viewport_panel.find(
+                "QuaderRenderApiRuntimeAccess::build_scene_overlay_frame("),
+            std::string::npos);
+  EXPECT_EQ(viewport_panel.find("build_render_overlay_"), std::string::npos);
+  EXPECT_EQ(viewport_panel.find(
+                "#include \"render/overlay/viewport_scene_overlay_builder.hpp\""),
+            std::string::npos);
+  EXPECT_EQ(viewport_panel.find("ViewportSceneOverlayBuilder::"),
+            std::string::npos);
+  EXPECT_EQ(viewport_panel.find("render_bridge.sync_selected_object_overlay("),
+            std::string::npos);
+  EXPECT_EQ(viewport_panel.find("render_bridge.sync_scene_wireframe_overlay("),
             std::string::npos);
 
   for (std::string_view forbidden : {
@@ -503,8 +825,11 @@ TEST(OopArchitectureGuardrailTests, OverlayGeometryAndPixelPolicyStayShared) {
 
     for (const std::string& source : {box, marquee, gizmo}) {
         EXPECT_EQ(source.find("normalizedOr("), std::string::npos);
+        EXPECT_EQ(source.find("normalized_or("), std::string::npos);
         EXPECT_EQ(source.find("safeNormalize("), std::string::npos);
+        EXPECT_EQ(source.find("safe_normalize("), std::string::npos);
         EXPECT_EQ(source.find("fallbackPerpendicular("), std::string::npos);
+        EXPECT_EQ(source.find(" fallback_perpendicular("), std::string::npos);
     }
 }
 
@@ -545,6 +870,8 @@ TEST(OopArchitectureGuardrailTests, RuntimeMaterialResourceContractsUseCatalogs)
   const std::string default_catalog =
       read_file(source_root() / "src/assets/default_material_catalog.hpp");
   const std::string app = read_file(source_root() / "src/app/app.cpp");
+  const std::string bootstrap = read_file(
+      source_root() / "src/editor/session/project_asset_bootstrap_service.cpp");
   const std::string host =
       read_file(source_root() / "src/editor/metadata/host_contract.cpp");
 
@@ -566,13 +893,17 @@ TEST(OopArchitectureGuardrailTests, RuntimeMaterialResourceContractsUseCatalogs)
             std::string::npos);
   EXPECT_NE(default_catalog.find("kDefaultMaterialRoughnessTexturePackagePath"),
             std::string::npos);
-  EXPECT_NE(app.find("default_material_catalog.hpp"), std::string::npos);
+  EXPECT_NE(app.find("ProjectAssetBootstrapService"), std::string::npos);
+  EXPECT_NE(bootstrap.find("default_material_catalog.hpp"), std::string::npos);
   EXPECT_NE(host.find("default_material_catalog.hpp"), std::string::npos);
-  EXPECT_NE(app.find("kDefaultMaterialAlbedoTexturePackagePath"),
+  EXPECT_NE(bootstrap.find("kDefaultMaterialAlbedoTexturePackagePath"),
             std::string::npos);
   EXPECT_NE(host.find("kDefaultMaterialAlbedoTexturePackagePath"),
             std::string::npos);
+  EXPECT_EQ(app.find("default_material_catalog.hpp"), std::string::npos);
   EXPECT_EQ(app.find("\"materials/default/default_albedo.png\""),
+            std::string::npos);
+  EXPECT_EQ(bootstrap.find("\"materials/default/default_albedo.png\""),
             std::string::npos);
   EXPECT_EQ(host.find("\"materials/default/default_albedo.png\""),
             std::string::npos);
@@ -590,6 +921,9 @@ TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPrevie
 
   const std::string service_source = read_file(
       source_root() / "src/editor/transform/scene_transform_drag_service.cpp");
+  const std::string transform_drag_source =
+      read_file(source_root() /
+                "src/editor/modeling/services/modeling_transform_drag_service.cpp");
   const std::string modeling_source =
       read_file(source_root() /
                 "src/editor/modeling/services/modeling_session_service.cpp");
@@ -613,12 +947,15 @@ TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPrevie
             std::string::npos);
   EXPECT_NE(service_source.find("editor.scene().batch(label)"),
             std::string::npos);
-  EXPECT_NE(modeling_source.find("scene_transform_drag_service_.begin("),
+  EXPECT_NE(transform_drag_source.find("scene_transform_drag_service_.begin("),
             std::string::npos);
-  EXPECT_NE(modeling_source.find(
+  EXPECT_NE(transform_drag_source.find(
                 "scene_transform_drag_service_.preview_world_transform_delta("),
             std::string::npos);
-  EXPECT_NE(modeling_source.find("scene_transform_drag_service_.commit(*history)"),
+  EXPECT_NE(transform_drag_source.find(
+                "scene_transform_drag_service_.commit(*history)"),
+            std::string::npos);
+  EXPECT_NE(modeling_source.find("transform_drag_service_.begin_transform_drag("),
             std::string::npos);
   EXPECT_NE(inspector_source.find("active_transform_preview_"),
             std::string::npos);
@@ -708,4 +1045,134 @@ TEST(OopArchitectureGuardrailTests, RenderFacadeDoesNotOwnOverlayProxyInternals)
        }) {
     EXPECT_EQ(combined.find(forbidden), std::string::npos) << forbidden;
   }
+}
+
+TEST(OopArchitectureGuardrailTests, UiDoesNotOwnFilamentResourceAllocation) {
+  const std::vector<std::string_view> forbidden = {
+      "<filament/",
+      "\"filament/",
+      "filament::",
+      "FilamentBufferDescriptorFactory",
+      "TextureRegistry",
+      "register_texture(",
+      "unregister_texture(",
+      "->destroy(",
+  };
+
+  for (const std::filesystem::path &file :
+       source_files_under(source_root() / "src/ui")) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
+    for (const std::string &line : split_lines(source)) {
+      EXPECT_FALSE(contains_any(line, forbidden)) << relative << ": " << line;
+    }
+  }
+}
+
+TEST(OopArchitectureGuardrailTests,
+     UiRuntimeHooksAreInstalledDuringAppComposition) {
+  const std::string ui_system_header =
+      read_file(source_root() / "src/ui/ui_system.hpp");
+  const std::string ui_system_source =
+      read_file(source_root() / "src/ui/ui_system.cpp");
+  const std::string app_source =
+      read_file(source_root() / "src/app/app.cpp");
+  const std::string ui_draw = source_slice(ui_system_source,
+                                           "void UISystem::draw(",
+                                           "void UISystem::prepare_render_data");
+  ASSERT_FALSE(ui_draw.empty());
+
+  EXPECT_NE(ui_system_header.find(
+                "void install_runtime_hooks(QuaderEditorApi &editor);"),
+            std::string::npos);
+  EXPECT_NE(ui_system_source.find(
+                "void UISystem::install_runtime_hooks(QuaderEditorApi &editor)"),
+            std::string::npos);
+  EXPECT_NE(app_source.find("ui_.install_runtime_hooks(*editor_);"),
+            std::string::npos);
+  EXPECT_EQ(ui_draw.find("set_runtime_hooks("), std::string::npos);
+}
+
+TEST(OopArchitectureGuardrailTests, RenderCodeDoesNotCallDocumentOrAssetMutators) {
+  const std::vector<std::string_view> forbidden = {
+      "document.create_",
+      "document.destroy",
+      "document.remove_",
+      "document.set_",
+      "document.clear_",
+      "scene_document.create_",
+      "scene_document.destroy",
+      "scene_document.remove_",
+      "scene_document.set_",
+      "scene_document.clear_",
+      "assets.add_",
+      "assets.replace_",
+      "assets.remove_",
+      "assets.set_",
+      "asset_registry.add_",
+      "asset_registry.replace_",
+      "asset_registry.remove_",
+      "asset_registry.set_",
+      "registry.add_",
+      "registry.replace_",
+      "registry.remove_",
+      "registry.set_",
+  };
+
+  for (const std::filesystem::path &file :
+       source_files_under(source_root() / "src/render")) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
+    for (const std::string &line : split_lines(source)) {
+      EXPECT_FALSE(contains_any(line, forbidden)) << relative << ": " << line;
+    }
+  }
+}
+
+TEST(OopArchitectureGuardrailTests,
+     RenderSnapshotBoundaryOwnsSceneAndOverlayExtraction) {
+  const std::string render_sources =
+      source_text_under(source_root() / "src/render");
+  const std::string snapshot_contract =
+      read_file(source_root() / "src/render/scene_render_extraction.hpp");
+  const std::string scene_render_bridge =
+      read_file(source_root() / "src/render/scene_render_bridge.hpp");
+  const std::string sync_service =
+      read_file(source_root() / "src/render/scene_render_sync_service.hpp");
+  const std::string selected_object_cache = read_file(
+      source_root() / "src/render/overlay/selected_object_overlay_cache.hpp");
+  const std::string scene_wireframe_cache = read_file(
+      source_root() / "src/render/overlay/scene_wireframe_overlay_cache.hpp");
+  const std::string mesh_record =
+      source_slice(snapshot_contract, "struct RenderSceneMeshRecord",
+                   "struct RenderSceneLightRecord");
+  const std::string light_record =
+      source_slice(snapshot_contract, "struct RenderSceneLightRecord",
+                   "struct RenderSceneSnapshotDirtyState");
+
+  EXPECT_NE(render_sources.find("RenderSceneSnapshot"), std::string::npos);
+  EXPECT_NE(render_sources.find("RenderSceneMeshRecord"), std::string::npos);
+  EXPECT_NE(render_sources.find("RenderSceneLightRecord"), std::string::npos);
+  EXPECT_NE(render_sources.find("OverlaySnapshot"), std::string::npos);
+  EXPECT_NE(render_sources.find("scene_revision"), std::string::npos);
+  EXPECT_NE(render_sources.find("asset_revision"), std::string::npos);
+
+  for (const std::string &source :
+       {scene_render_bridge, sync_service}) {
+    EXPECT_EQ(source.find("const SceneDocument &"), std::string::npos);
+    EXPECT_EQ(source.find("const AssetRegistry &"), std::string::npos);
+    EXPECT_NE(source.find("RenderSceneSnapshot"), std::string::npos);
+  }
+
+  for (const std::string &source :
+       {selected_object_cache, scene_wireframe_cache}) {
+    EXPECT_EQ(source.find("const SceneDocument &"), std::string::npos);
+    EXPECT_EQ(source.find("const AssetRegistry &"), std::string::npos);
+    EXPECT_NE(source.find("Snapshot"), std::string::npos);
+  }
+
+  EXPECT_EQ(mesh_record.find("const MeshAsset *"), std::string::npos);
+  EXPECT_EQ(mesh_record.find("const MeshComponent *"), std::string::npos);
+  EXPECT_EQ(mesh_record.find("const MaterialComponent *"), std::string::npos);
+  EXPECT_EQ(light_record.find("const LightComponent *"), std::string::npos);
 }

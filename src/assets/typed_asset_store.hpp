@@ -44,6 +44,10 @@ public:
         return true;
     }
 
+    bool remove(AssetId id) {
+        return documents_.erase(id) != 0u;
+    }
+
     bool update(AssetId id, const std::function<void(Document&)>& edit) {
         auto existing = documents_.find(id);
         if (existing == documents_.end()) {

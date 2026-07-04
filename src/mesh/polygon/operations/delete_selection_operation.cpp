@@ -45,6 +45,46 @@ public:
 using namespace document_internal;
 
 namespace {
+OperationElementDelta document_element_delta(const Document& document)
+{
+    OperationElementDelta elements;
+    elements.vertices.reserve(document.vertices.size());
+    elements.faces.reserve(document.faces.size());
+    for (const Vertex& vertex : document.vertices) {
+        elements.vertices.push_back(vertex.id);
+    }
+    for (const Face& face : document.faces) {
+        elements.faces.push_back(face.id);
+    }
+    elements.edges = document_edges(document);
+    return elements;
+}
+
+template <typename Element>
+std::vector<Element> removed_elements(
+    const std::vector<Element>& before,
+    const std::vector<Element>& after)
+{
+    std::vector<Element> removed;
+    for (const Element& element : before) {
+        if (std::find(after.begin(), after.end(), element) == after.end()) {
+            removed.push_back(element);
+        }
+    }
+    return removed;
+}
+
+OperationElementDelta deleted_element_delta(
+    const OperationElementDelta& before,
+    const OperationElementDelta& after)
+{
+    OperationElementDelta deleted;
+    deleted.vertices = removed_elements(before.vertices, after.vertices);
+    deleted.edges = removed_elements(before.edges, after.edges);
+    deleted.faces = removed_elements(before.faces, after.faces);
+    return deleted;
+}
+
 OperationResult delete_selection_impl(Document& document, const Selection& selection)
 {
     if (selection.empty()) {
@@ -53,6 +93,7 @@ OperationResult delete_selection_impl(Document& document, const Selection& selec
 
     const std::size_t original_face_count = document.faces.size();
     const std::size_t original_vertex_count = document.vertices.size();
+    const OperationElementDelta before_elements = document_element_delta(document);
 
     switch (selection.mode) {
     case SelectionMode::Vertex:
@@ -78,7 +119,13 @@ OperationResult delete_selection_impl(Document& document, const Selection& selec
     prune_invalid_faces(document);
     prune_unused_vertices(document);
     const bool changed = original_face_count != document.faces.size() || original_vertex_count != document.vertices.size();
-    return { changed, changed ? std::string {} : "No selected polygon elements were found." };
+    OperationResult result;
+    result.changed = changed;
+    result.message = changed ? std::string {} : "No selected polygon elements were found.";
+    if (changed) {
+        result.deleted = deleted_element_delta(before_elements, document_element_delta(document));
+    }
+    return result;
 }
 
 } // namespace

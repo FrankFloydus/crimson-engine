@@ -227,6 +227,17 @@ inline bool document_has_edge(const Document& document, Edge edge)
 	return std::find(edges.begin(), edges.end(), normalized) != edges.end();
 }
 
+inline bool contains_element_id(const std::vector<ElementId>& ids, ElementId id)
+{
+	return std::find(ids.begin(), ids.end(), id) != ids.end();
+}
+
+inline bool contains_edge(const std::vector<Edge>& edges, Edge edge)
+{
+	const Edge normalized = make_edge(edge.a, edge.b);
+	return std::find(edges.begin(), edges.end(), normalized) != edges.end();
+}
+
 inline bool edge_positions_match_unordered(const Document& document, Edge edge, quader::QVec3 first_position, quader::QVec3 second_position)
 {
 	const Vertex* first = find_vertex(document, edge.a);

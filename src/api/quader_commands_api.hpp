@@ -58,7 +58,17 @@ struct QuaderViewportKeybindingContext {
 };
 
 /**
- * Exposes Quader Commands API operations through the public Quader API surface.
+ * Public command and keybinding gateway for editor intent.
+ *
+ * C++ callers should prefer typed command IDs from quader::quader_command, for
+ * example editor.commands().execute(quader::quader_command::kEditUndo), and
+ * use command_id_for_modeling_action() or command_id_for_tool_activation()
+ * when bridging user-facing modeling actions or tools to stable command IDs.
+ * The string overloads are the command-palette and scripting representation;
+ * they expect canonical IDs and must not be used to reintroduce legacy aliases.
+ *
+ * Shortcut mutation is part of the public API contract so UI, automation, and
+ * future scripting surfaces do not parse or persist keybinding storage directly.
  */
 class QuaderCommandsApi final {
 public:

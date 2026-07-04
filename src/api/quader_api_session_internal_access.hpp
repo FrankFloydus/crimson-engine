@@ -7,7 +7,7 @@
 #pragma once
 
 #include "api/quader_api_session.hpp"
-#include "scene/document/project_session.hpp"
+#include "editor/session/project_session.hpp"
 
 namespace quader {
 
@@ -24,6 +24,11 @@ public:
   [[nodiscard]] static ProjectSession &
   project_session(QuaderApiSession session) noexcept {
     return *static_cast<ProjectSession *>(session.session_);
+  }
+
+  [[nodiscard]] static const ProjectSession &
+  read_project_session(QuaderApiSession session) noexcept {
+    return project_session(session);
   }
 };
 

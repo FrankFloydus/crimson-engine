@@ -14,7 +14,12 @@
 namespace quader {
 
 /**
- * Represents a Quader API Flag value used by the public Quader API surface.
+ * Callable public API boolean flag.
+ *
+ * The public result types keep ok and changed as fields for source
+ * compatibility, while QuaderApiFlag also acts like a bool and a nullary helper
+ * so callers can write either result.ok or result.ok(). Prefer the helper-style
+ * accessors on QuaderApiStatus in new examples.
  */
 struct QuaderApiFlag {
     bool state = false;
@@ -35,7 +40,13 @@ struct QuaderApiFlag {
 };
 
 /**
- * Represents a Quader API Status value used by the public Quader API surface.
+ * Shared status header for every public API operation result.
+ *
+ * ok reports whether the request succeeded, changed reports whether it mutated
+ * project/editor state, message preserves the user-facing error text for UI and
+ * scripting compatibility, and mutation_kind/revisions describe the committed
+ * mutation when one happened. New public examples should prefer succeeded(),
+ * did_change(), error_message(), and bool(result) over direct field inspection.
  */
 struct QuaderApiStatus {
     QuaderApiFlag ok = false;
@@ -52,7 +63,11 @@ struct QuaderApiStatus {
 
 template <typename T>
 /**
- * Stores the Quader API Result Value data contract used by the public Quader API surface.
+ * Value carrier that preserves QuaderApiResult<T>::value compatibility.
+ *
+ * The wrapper derives from T so older field-style code keeps compiling, and it
+ * also provides value() call syntax for newer examples:
+ * auto object = editor.modeling().create_box(args).value();
  */
 struct QuaderApiResultValue : T {
     constexpr QuaderApiResultValue() = default;
@@ -78,7 +93,12 @@ struct QuaderApiResultValue : T {
 
 template <typename T>
 /**
- * Stores the Quader API Result data contract used by the public Quader API surface.
+ * Public API result for operations that return a value.
+ *
+ * QuaderApiResult<T> combines QuaderApiStatus with a compatible value field.
+ * Check result.ok(), bool(result), or result.succeeded() before using
+ * result.value(); failed results preserve message/error_message() and may leave
+ * value default-initialized.
  */
 struct QuaderApiResult : QuaderApiStatus {
     QuaderApiResultValue<T> value {};

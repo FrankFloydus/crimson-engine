@@ -9,7 +9,7 @@
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "diagnostics/profile.hpp"
-#include "scene/document/project_session.hpp"
+#include "editor/session/project_session.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 
@@ -251,6 +251,12 @@ QuaderApiMutationRunner::commit_modeling_preview(std::string label) {
 QuaderApiVoidResult QuaderApiMutationRunner::cancel_modeling_preview() {
   return status_from(modeling_commands_.cancel_preview(session_.modeling()),
                      QuaderMutationKind::Runtime, "Cancel Operation Preview");
+}
+
+QuaderApiVoidResult
+QuaderApiMutationRunner::run_asset_result(CommandResult result,
+                                          std::string_view label) {
+  return status_from(std::move(result), QuaderMutationKind::Asset, label);
 }
 
 QuaderApiVoidResult

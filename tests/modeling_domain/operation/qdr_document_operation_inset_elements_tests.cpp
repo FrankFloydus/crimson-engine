@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 using namespace quader_poly;
 
@@ -18,6 +18,8 @@ TEST(QdrDocumentOperationInsetElementsTests, InsetSelectedEdgeElementsTransforms
 	const OperationResult result = inset_selected_elements(fixture.document, selection, transform, {});
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
         EXPECT_TRUE(selection.mode == SelectionMode::Edge);
         EXPECT_TRUE(selection.edges.size() == 1U);
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);

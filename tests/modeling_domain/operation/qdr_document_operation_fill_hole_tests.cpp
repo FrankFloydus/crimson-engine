@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 #include <array>
 
@@ -70,6 +70,8 @@ TEST(QdrDocumentOperationFillHoleTests, FillHoleCreatesOneFaceFromASelectedOpenE
 	const OperationResult result = fill_hole_from_selected_edges(document, selection);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
 	EXPECT_TRUE(document.faces.size() == 6U);
         EXPECT_TRUE(selection.mode == SelectionMode::Face);
         EXPECT_TRUE(selection.faces.size() == 1U);
@@ -116,11 +118,15 @@ TEST(QdrDocumentOperationFillHoleTests, FillHoleOrientsCapsFromAdjacentBoundaryW
 	}, fixture.inner_edges.back());
 
 	EXPECT_TRUE(extrude_selected_elements(fixture.document, selection, quader::QVec3 { 0.0F, -0.5F, 0.0F }).changed);
+
+	qdr_test::expect_valid_polygon_document(fixture.document, "successful topology operation");
 	const Selection copied_boundary_selection = selection;
 
 	const OperationResult result = fill_hole_from_selected_edges(fixture.document, selection);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
         EXPECT_TRUE(selection.mode == SelectionMode::Face);
         EXPECT_TRUE(selection.faces.size() == 1U);
 	const Face* fill_face = find_face(fixture.document, selection.faces.front());

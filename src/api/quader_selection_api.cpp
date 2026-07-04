@@ -10,7 +10,8 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_api_mutation_runner.hpp"
 #include "diagnostics/profile.hpp"
-#include "scene/document/project_session.hpp"
+#include "editor/modeling/services/selection_mode_adapter.hpp"
+#include "editor/session/project_session.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 
 #include <memory>
@@ -287,17 +288,23 @@ QuaderApiVoidResult QuaderSelectionApi::set_mode(QuaderSelectionMode mode) {
 QuaderApiResult<QuaderSelectionSummary>
 QuaderSelectionApi::pick_select(const QuaderPickSelectRequest &request) {
   QDR_PROFILE_FUNCTION();
-  const ModelingSelectionSummary before =
-      project_session(session_).selection().summary();
+  ProjectSession &session = project_session(session_);
+  const bool document_selection_mode =
+      selection_mode_uses_scene_document(session.selection().mode());
+  const ModelingSelectionSummary before = session.selection().summary();
   const ModelingSelectionSummary picked =
-      project_session(session_).selection().pick_select(
-          to_modeling_pick_select_request(request));
-  const ModelingSelectionSummary after =
-      project_session(session_).selection().summary();
+      session.selection().pick_select(to_modeling_pick_select_request(request));
+  const ModelingSelectionSummary after = session.selection().summary();
   const bool changed = before.content_revision != after.content_revision ||
                        before.selection_revision != after.selection_revision;
-  QuaderApiVoidResult status = mutations_.run_modeling_result(
-      ModelingCommandResult{.ok = true, .changed = changed}, "Pick Select");
+  QuaderApiVoidResult status =
+      document_selection_mode
+          ? mutations_.run_document_result(
+                DocumentCommandResult{.ok = true, .changed = changed},
+                "Pick Select")
+          : mutations_.run_modeling_result(
+                ModelingCommandResult{.ok = true, .changed = changed},
+                "Pick Select");
   return selection_result_from_status(std::move(status), picked);
 }
 
@@ -314,17 +321,23 @@ QuaderSelectionApi::capture_box_selection_baseline() const {
 QuaderApiResult<QuaderSelectionSummary>
 QuaderSelectionApi::box_select(const QuaderBoxSelectRequest &request) {
   QDR_PROFILE_FUNCTION();
-  const ModelingSelectionSummary before =
-      project_session(session_).selection().summary();
+  ProjectSession &session = project_session(session_);
+  const bool document_selection_mode =
+      selection_mode_uses_scene_document(session.selection().mode());
+  const ModelingSelectionSummary before = session.selection().summary();
   const ModelingSelectionSummary selected =
-      project_session(session_).selection().box_select(
-          to_modeling_box_select_request(request));
-  const ModelingSelectionSummary after =
-      project_session(session_).selection().summary();
+      session.selection().box_select(to_modeling_box_select_request(request));
+  const ModelingSelectionSummary after = session.selection().summary();
   const bool changed = before.content_revision != after.content_revision ||
                        before.selection_revision != after.selection_revision;
-  QuaderApiVoidResult status = mutations_.run_modeling_result(
-      ModelingCommandResult{.ok = true, .changed = changed}, "Box Select");
+  QuaderApiVoidResult status =
+      document_selection_mode
+          ? mutations_.run_document_result(
+                DocumentCommandResult{.ok = true, .changed = changed},
+                "Box Select")
+          : mutations_.run_modeling_result(
+                ModelingCommandResult{.ok = true, .changed = changed},
+                "Box Select");
   return selection_result_from_status(std::move(status), selected);
 }
 
@@ -332,21 +345,27 @@ QuaderApiResult<QuaderSelectionSummary>
 QuaderSelectionApi::box_select(const QuaderBoxSelectRequest &request,
                                const QuaderSelectionBoxBaseline &baseline) {
   QDR_PROFILE_FUNCTION();
-  const ModelingSelectionSummary before =
-      project_session(session_).selection().summary();
+  ProjectSession &session = project_session(session_);
+  const bool document_selection_mode =
+      selection_mode_uses_scene_document(session.selection().mode());
+  const ModelingSelectionSummary before = session.selection().summary();
   const ModelingSelectionSummary selected =
-      baseline.impl_ != nullptr
-          ? project_session(session_).selection().box_select(
-                to_modeling_box_select_request(request),
-                baseline.impl_->baseline)
-          : project_session(session_).selection().box_select(
-                to_modeling_box_select_request(request));
-  const ModelingSelectionSummary after =
-      project_session(session_).selection().summary();
+      baseline.impl_ != nullptr ? session.selection().box_select(
+                                      to_modeling_box_select_request(request),
+                                      baseline.impl_->baseline)
+                                : session.selection().box_select(
+                                      to_modeling_box_select_request(request));
+  const ModelingSelectionSummary after = session.selection().summary();
   const bool changed = before.content_revision != after.content_revision ||
                        before.selection_revision != after.selection_revision;
-  QuaderApiVoidResult status = mutations_.run_modeling_result(
-      ModelingCommandResult{.ok = true, .changed = changed}, "Box Select");
+  QuaderApiVoidResult status =
+      document_selection_mode
+          ? mutations_.run_document_result(
+                DocumentCommandResult{.ok = true, .changed = changed},
+                "Box Select")
+          : mutations_.run_modeling_result(
+                ModelingCommandResult{.ok = true, .changed = changed},
+                "Box Select");
   return selection_result_from_status(std::move(status), selected);
 }
 

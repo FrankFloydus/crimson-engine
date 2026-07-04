@@ -8,7 +8,7 @@
 
 #include "core/types.hpp"
 #include "render/light_renderable_cache.hpp"
-#include "scene/scene_document.hpp"
+#include "render/scene_render_extraction.hpp"
 
 #include <filament/Engine.h>
 #include <filament/Scene.h>
@@ -20,6 +20,7 @@ namespace quader {
 class AssetRegistry;
 class MaterialBindingService;
 class MeshRenderableCache;
+class SceneDocument;
 
 /**
  * Coordinates Scene Render Sync Service responsibilities for the render extraction and Filament resource layer.
@@ -43,12 +44,12 @@ public:
              mesh_cache_ != nullptr && material_binding_ != nullptr;
     }
 
-    bool sync(const SceneDocument& document, const AssetRegistry& assets);
-    bool render_asset_revisions_changed(const SceneDocument &document,
-                                        const AssetRegistry &assets) const;
+    bool sync(const RenderSceneSnapshot &snapshot);
+    bool render_asset_revisions_changed(
+        const RenderSceneSnapshot &snapshot) const;
 
   private:
-    void rebuild(const SceneDocument& document, const AssetRegistry& assets);
+    void rebuild(const RenderSceneSnapshot &snapshot);
 
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;

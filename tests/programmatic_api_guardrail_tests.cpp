@@ -90,6 +90,17 @@ PublicDocsExamplesManifest public_docs_examples_manifest() {
   return manifest;
 }
 
+const std::vector<std::string_view> &required_internal_architecture_docs() {
+  static const std::vector<std::string_view> kDocs = {
+      "docs/architecture.md",
+      "docs/code_map.md",
+      "docs/decisions/ADR-template.md",
+      "docs/tasks/TASK-template.md",
+      "docs/agent_mistakes.md",
+  };
+  return kDocs;
+}
+
 std::vector<std::filesystem::path> public_doc_and_example_files() {
   return public_docs_examples_manifest().public_files;
 }
@@ -121,6 +132,11 @@ bool allowed_raw_modeling_mutation(std::string_view relative,
   (void)relative;
   (void)line;
   return false;
+}
+
+bool is_modeling_mesh_sync_owner(std::string_view relative) {
+  return relative ==
+         "src/editor/modeling/services/modeling_mesh_sync_service.cpp";
 }
 
 bool is_identifier_character(char value) {
@@ -159,32 +175,51 @@ std::string trim(std::string value) {
     return value;
 }
 
-std::unordered_map<std::string, std::string>
-quader_command_ids_by_constant_name(const std::string &source) {
-  std::unordered_map<std::string, std::string> result;
+/**
+ * Captures one typed command constant declaration and its stable string id.
+ */
+struct QuaderCommandConstant {
+  std::string name;
+  std::string id;
+};
+
+std::vector<QuaderCommandConstant>
+quader_command_constants(const std::string &source) {
+  std::vector<QuaderCommandConstant> result;
   constexpr std::string_view kMarker = "inline constexpr QuaderCommandId ";
   for (std::size_t marker_position = source.find(kMarker);
        marker_position != std::string::npos;
-       marker_position = source.find(kMarker, marker_position + kMarker.size())) {
-    if (marker_position == std::string::npos) {
-      continue;
-    }
+       marker_position =
+           source.find(kMarker, marker_position + kMarker.size())) {
     const std::size_t name_begin = marker_position + kMarker.size();
     const std::size_t name_end = source.find('{', name_begin);
     if (name_end == std::string::npos) {
       continue;
     }
-    const std::string name = trim(source.substr(name_begin, name_end - name_begin));
+    const std::string name =
+        trim(source.substr(name_begin, name_end - name_begin));
     if (name.find('[') != std::string::npos) {
       continue;
     }
     const std::size_t value_begin = source.find('"', name_end);
     const std::size_t value_end = source.find('"', value_begin + 1u);
-    if (value_begin == std::string::npos || value_end == std::string::npos) {
+    if (value_begin == std::string::npos ||
+        value_end == std::string::npos) {
       continue;
     }
-    result.emplace(name, source.substr(value_begin + 1u,
-                                       value_end - value_begin - 1u));
+    result.push_back({name,
+                      source.substr(value_begin + 1u,
+                                    value_end - value_begin - 1u)});
+  }
+  return result;
+}
+
+std::unordered_map<std::string, std::string>
+quader_command_ids_by_constant_name(const std::string &source) {
+  std::unordered_map<std::string, std::string> result;
+  for (const QuaderCommandConstant &constant :
+       quader_command_constants(source)) {
+    result.emplace(constant.name, constant.id);
   }
   return result;
 }
@@ -234,6 +269,118 @@ bool allowed_public_behavior_harness_use(std::string_view relative,
                                          std::string_view line) {
   (void)relative;
   (void)line;
+  return false;
+}
+
+std::vector<std::string_view> ui_mutating_owner_api_tokens() {
+  return {
+      "context.document.create_",
+      "context.document.destroy_",
+      "context.document.remove_",
+      "context.document.rename_",
+      "context.document.set_",
+      "context.document.clear_",
+      "context.document.select_",
+      "ui_context.document.create_",
+      "ui_context.document.destroy_",
+      "ui_context.document.remove_",
+      "ui_context.document.rename_",
+      "ui_context.document.set_",
+      "ui_context.document.clear_",
+      "ui_context.document.select_",
+      "document.create_",
+      "document.destroy_",
+      "document.remove_",
+      "document.rename_",
+      "document.set_",
+      "document.clear_",
+      "document.select_",
+
+      "context.assets.add_",
+      "context.assets.replace_",
+      "context.assets.remove_",
+      "context.assets.set_",
+      "context.assets.update_",
+      "ui_context.assets.add_",
+      "ui_context.assets.replace_",
+      "ui_context.assets.remove_",
+      "ui_context.assets.set_",
+      "ui_context.assets.update_",
+      "assets.add_",
+      "assets.replace_",
+      "assets.remove_",
+      "assets.set_",
+      "assets.update_",
+      "asset_registry.add_",
+      "asset_registry.replace_",
+      "asset_registry.remove_",
+      "asset_registry.set_",
+      "asset_registry.update_",
+      "registry.add_",
+      "registry.replace_",
+      "registry.remove_",
+      "registry.set_",
+      "registry.update_",
+
+      "context.modeling.execute_",
+      "context.modeling.commit_",
+      "context.modeling.cancel_",
+      "context.modeling.begin_",
+      "context.modeling.update_",
+      "context.modeling.create_",
+      "context.modeling.delete_",
+      "context.modeling.apply_",
+      "context.modeling.select_",
+      "context.modeling.sync_",
+      "context.modeling.pick_",
+      "context.modeling.set_",
+      "ui_context.modeling.execute_",
+      "ui_context.modeling.commit_",
+      "ui_context.modeling.cancel_",
+      "ui_context.modeling.begin_",
+      "ui_context.modeling.update_",
+      "ui_context.modeling.create_",
+      "ui_context.modeling.delete_",
+      "ui_context.modeling.apply_",
+      "ui_context.modeling.select_",
+      "ui_context.modeling.sync_",
+      "ui_context.modeling.pick_",
+      "ui_context.modeling.set_",
+      "modeling.execute_",
+      "modeling.commit_",
+      "modeling.cancel_",
+      "modeling.begin_",
+      "modeling.update_",
+      "modeling.create_",
+      "modeling.delete_",
+      "modeling.apply_",
+      "modeling.select_",
+      "modeling.sync_",
+      "modeling.pick_",
+      "modeling.set_",
+
+      "context.selection.select_",
+      "context.selection.clear_",
+      "context.selection.set_",
+      "ui_context.selection.select_",
+      "ui_context.selection.clear_",
+      "ui_context.selection.set_",
+      "selection_service.select_",
+      "selection_service.clear_",
+      "selection_service.set_",
+  };
+}
+
+bool allowed_ui_mutating_owner_api_call(std::string_view relative,
+                                        std::string_view line) {
+  const std::string trimmed_line = trim(std::string(line));
+  if (trimmed_line.empty() || starts_with(trimmed_line, "//")) {
+    return true;
+  }
+
+  // UI-owned settings, viewport workspace state, and render presentation
+  // routes are intentionally absent from the forbidden owner-token list.
+  (void)relative;
   return false;
 }
 
@@ -315,6 +462,75 @@ TEST(ProgrammaticApiGuardrailTests, PublicTypedCommandCatalogStaysCanonicalAndUn
            std::string_view{"kModelingApplyActiveMaterial"},
        }) {
     EXPECT_EQ(typed_catalog.find(alias), std::string::npos) << alias;
+  }
+}
+
+TEST(ProgrammaticApiGuardrailTests,
+     PublicCommandAliasesStayExplicitAndOutOfTypedCatalog) {
+  /**
+   * Describes one deprecated compatibility alias set allowed by the public
+   * command catalog guardrail.
+   */
+  struct ExpectedAliasSet {
+    std::string_view id;
+    std::string_view canonical;
+    std::vector<std::string_view> aliases;
+  };
+
+  const std::string command_header =
+      read_file(source_root() / "src/api/quader_command_ids.hpp");
+  const std::string typed_catalog = source_slice(
+      command_header, "inline constexpr QuaderCommandId kTypedCommandIds[]",
+      "[[nodiscard]] inline constexpr std::span");
+
+  std::unordered_map<std::string, std::set<std::string>> names_by_id;
+  for (const QuaderCommandConstant &constant :
+       quader_command_constants(command_header)) {
+    names_by_id[constant.id].insert(constant.name);
+  }
+
+  const std::vector<ExpectedAliasSet> expected_alias_sets = {
+      {"edit.undo", "kEditUndo", {"kHistoryUndo"}},
+      {"edit.redo", "kEditRedo", {"kHistoryRedo"}},
+      {"edit.repeat_last_action",
+       "kEditRepeatLastAction",
+       {"kHistoryRepeatLastAction"}},
+      {"edit.clear_selection", "kEditClearSelection", {"kSelectionClear"}},
+      {"edit.select_all", "kEditSelectAll", {"kSelectionSelectAll"}},
+      {"edit.invert_selection", "kEditInvertSelection", {"kSelectionInvert"}},
+      {"edit.delete", "kDeleteSelection", {"kModelingDeleteSelection"}},
+      {"edit.apply_material",
+       "kApplyMaterial",
+       {"kModelingApplyActiveMaterial"}},
+  };
+
+  std::set<std::string> expected_duplicate_ids;
+  for (const ExpectedAliasSet &alias_set : expected_alias_sets) {
+    expected_duplicate_ids.insert(std::string(alias_set.id));
+
+    std::set<std::string> expected_names = {
+        std::string(alias_set.canonical)};
+    for (std::string_view alias : alias_set.aliases) {
+      expected_names.insert(std::string(alias));
+    }
+
+    const auto found = names_by_id.find(std::string(alias_set.id));
+    ASSERT_NE(found, names_by_id.end()) << alias_set.id;
+    EXPECT_TRUE(found->second == expected_names) << alias_set.id;
+    EXPECT_NE(typed_catalog.find(alias_set.canonical), std::string::npos)
+        << alias_set.canonical;
+    for (std::string_view alias : alias_set.aliases) {
+      EXPECT_EQ(typed_catalog.find(alias), std::string::npos) << alias;
+    }
+  }
+
+  for (const auto &[id, names] : names_by_id) {
+    if (names.size() <= 1u) {
+      continue;
+    }
+    EXPECT_NE(expected_duplicate_ids.find(id), expected_duplicate_ids.end())
+        << "new duplicate command constant for " << id
+        << " must be removed or explicitly deprecated by this guardrail";
   }
 }
 
@@ -455,6 +671,32 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersDoNotExposeMutableInternalOw
   }
 }
 
+TEST(ProgrammaticApiGuardrailTests, ReadOnlyApiPathsUseConstProjectSessionAccess) {
+  const std::string internal_access = read_file(
+      source_root() / "src/api/quader_api_session_internal_access.hpp");
+  const std::string query_api =
+      read_file(source_root() / "src/api/quader_query_api.cpp");
+  const std::string render_api =
+      read_file(source_root() / "src/api/quader_render_api.cpp");
+  const std::string history_api =
+      read_file(source_root() / "src/api/quader_history_api.cpp");
+
+  EXPECT_NE(internal_access.find("const ProjectSession &"),
+            std::string::npos);
+  EXPECT_NE(internal_access.find("read_project_session("),
+            std::string::npos);
+  for (const std::string &source : {query_api, render_api, history_api}) {
+    EXPECT_NE(source.find("read_project_session("), std::string::npos);
+    EXPECT_EQ(source.find("ProjectSession &project_session("),
+              std::string::npos);
+  }
+  EXPECT_NE(render_api.find(".read_view()"), std::string::npos);
+  EXPECT_NE(render_api.find("build_render_scene_snapshot(session.scene, session.assets)"),
+            std::string::npos);
+  EXPECT_NE(render_api.find("bridge.sync(build_render_scene_snapshot("),
+            std::string::npos);
+}
+
 TEST(ProgrammaticApiGuardrailTests, PublicCommandApiUsesViewportInputValueContracts) {
   for (const std::filesystem::path &file : public_api_header_files()) {
     const std::string source = read_file(file);
@@ -507,8 +749,74 @@ TEST(ProgrammaticApiGuardrailTests, ModelingSessionServiceDoesNotExposeSelection
                 "editor_selection_service.hpp");
   EXPECT_EQ(editor_selection_header.find("syncObjectsFromScene("),
             std::string::npos);
+  EXPECT_EQ(editor_selection_header.find("sync_objects_from_scene("),
+            std::string::npos);
   EXPECT_EQ(editor_selection_header.find("syncSceneFromModeling("),
             std::string::npos);
+  EXPECT_EQ(editor_selection_header.find("sync_scene_from_modeling("),
+            std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests,
+     ModelingMeshSyncServiceOwnsSceneAssetSyncMutations) {
+  const std::string header = read_file(
+      source_root() /
+      "src/editor/modeling/services/modeling_mesh_sync_service.hpp");
+  const std::string owner = read_file(
+      source_root() /
+      "src/editor/modeling/services/modeling_mesh_sync_service.cpp");
+
+  EXPECT_NE(header.find("Owns the modeling runtime to SceneDocument / "
+                        "AssetRegistry synchronization boundary"),
+            std::string::npos);
+  for (std::string_view required_owner_call : {
+           std::string_view{".create_entity("},
+           std::string_view{".destroy_entity("},
+           std::string_view{".set_modeling_object("},
+           std::string_view{".set_mesh("},
+           std::string_view{".set_material("},
+           std::string_view{".add_mesh("},
+           std::string_view{".replace_mesh("},
+       }) {
+    EXPECT_NE(owner.find(required_owner_call), std::string::npos)
+        << required_owner_call;
+  }
+
+  const std::vector<std::string_view> sync_mutations = {
+      ".create_entity(",
+      ".create_entity_with_id(",
+      ".destroy_entity(",
+      ".set_parent(",
+      ".set_transform(",
+      ".set_transforms(",
+      ".set_visible(",
+      ".set_locked(",
+      ".set_modeling_object(",
+      ".set_mesh(",
+      ".set_material(",
+      ".clear_material(",
+      ".add_mesh(",
+      ".replace_mesh(",
+      ".update_mesh(",
+      ".add_material(",
+      ".replace_material(",
+      ".update_material(",
+      ".add_texture(",
+      ".replace_texture(",
+      ".update_texture(",
+      ".set_material_texture(",
+  };
+
+  for (const std::filesystem::path &file :
+       source_files_under(source_root() / "src/editor/modeling")) {
+    const std::string relative = normalized_relative(file);
+    const std::string source = read_file(file);
+    for (const std::string &line : lines_containing(source, sync_mutations)) {
+      EXPECT_TRUE(is_modeling_mesh_sync_owner(relative))
+          << relative << ": route scene/asset sync mutation through "
+          << "ModelingMeshSyncService: " << line;
+    }
+  }
 }
 
 TEST(ProgrammaticApiGuardrailTests, ApiImplementationDoesNotBypassCommandExecutionBoundary) {
@@ -570,12 +878,20 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiAndBehaviorDslDoNotExposeModelingAc
 
       EXPECT_EQ(source.find(".modeling().executeAction("), std::string::npos)
           << relative;
+      EXPECT_EQ(source.find(".modeling().execute_action("), std::string::npos)
+          << relative;
       EXPECT_EQ(source.find("QuaderModelingApi::execute_action"),
                 std::string::npos)
           << relative;
       EXPECT_EQ(source.find("QuaderScript& executeAction"), std::string::npos)
           << relative;
+      EXPECT_EQ(source.find("QuaderScript& execute_action"),
+                std::string::npos)
+          << relative;
       EXPECT_EQ(source.find("BehaviorWhen& executeAction"), std::string::npos)
+          << relative;
+      EXPECT_EQ(source.find("BehaviorWhen& execute_action"),
+                std::string::npos)
           << relative;
     }
   }
@@ -595,8 +911,13 @@ TEST(ProgrammaticApiGuardrailTests, CommandLayerDoesNotExposeGenericModelingActi
 
     EXPECT_EQ(source.find("runTrackedModelingAction"), std::string::npos)
         << relative;
+    EXPECT_EQ(source.find("run_tracked_modeling_action"), std::string::npos)
+        << relative;
     EXPECT_EQ(source.find("executeAction("), std::string::npos) << relative;
+    EXPECT_EQ(source.find("execute_action("), std::string::npos) << relative;
     EXPECT_EQ(source.find("executeActionUntracked("), std::string::npos)
+        << relative;
+    EXPECT_EQ(source.find("execute_action_untracked("), std::string::npos)
         << relative;
   }
 }
@@ -647,6 +968,9 @@ TEST(ProgrammaticApiGuardrailTests, ObjectAndGroupSelectionCommandsUseSceneDocum
                 "src/editor/modeling/services/selection_mode_adapter.hpp");
   const std::string service_source = read_file(
       source_root() / "src/editor/selection/editor_selection_service.cpp");
+  const std::string selection_owner = read_file(
+      source_root() /
+      "src/editor/selection/scene_selection_application.cpp");
   const std::string delete_source = read_file(
       source_root() /
       "src/editor/commands/modeling/scene_aware_delete_selection_command.cpp");
@@ -672,9 +996,12 @@ TEST(ProgrammaticApiGuardrailTests, ObjectAndGroupSelectionCommandsUseSceneDocum
                 "scene_aware_delete_uses_document_route(ModelingSelectionMode mode) "
                 "{\n    return mode == ModelingSelectionMode::Object"),
             std::string::npos);
-  EXPECT_NE(service_source.find("user_selectable_scene_entities_for_mode"),
+  EXPECT_NE(selection_owner.find("user_selectable_scene_entities_for_mode"),
             std::string::npos);
-  EXPECT_NE(service_source.find("scene.is_scene_root(entity)"),
+  EXPECT_NE(selection_owner.find("scene.is_scene_root(entity)"),
+            std::string::npos);
+  EXPECT_NE(service_source.find(
+                "make_user_scene_selection(scene_, entities, active)"),
             std::string::npos);
   EXPECT_NE(service_source.find("set_scene_selection(selected, active)"),
             std::string::npos);
@@ -682,6 +1009,76 @@ TEST(ProgrammaticApiGuardrailTests, ObjectAndGroupSelectionCommandsUseSceneDocum
       service_source.find(
           "set_scene_selection(std::span<const EntityId>{}, kInvalidEntityId)"),
       std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests, SceneSelectionApplicationOwnerCoversCommandServiceAndProjection) {
+  const std::string cmake = read_file(source_root() / "CMakeLists.txt");
+  const std::string owner_header = read_file(
+      source_root() / "src/editor/selection/scene_selection_application.hpp");
+  const std::string owner_source = read_file(
+      source_root() / "src/editor/selection/scene_selection_application.cpp");
+  const std::string command = read_file(
+      source_root() /
+      "src/editor/commands/document/select_entities_command.hpp");
+  const std::string document_service = read_file(
+      source_root() / "src/editor/commands/document_command_service.cpp");
+  const std::string editor_selection = read_file(
+      source_root() / "src/editor/selection/editor_selection_service.cpp");
+  const std::string projection = read_file(
+      source_root() / "src/editor/selection/selection_projection_service.cpp");
+
+  EXPECT_NE(cmake.find("src/editor/selection/scene_selection_application.cpp"),
+            std::string::npos);
+  EXPECT_NE(owner_header.find("enum class SceneSelectionApplicationMode"),
+            std::string::npos);
+  EXPECT_NE(owner_header.find("UndoableCommand"), std::string::npos);
+  EXPECT_NE(owner_header.find("RuntimeSync"), std::string::npos);
+  EXPECT_NE(owner_source.find("apply_undoable_scene_selection("),
+            std::string::npos);
+  EXPECT_NE(owner_source.find("apply_runtime_sync_scene_selection("),
+            std::string::npos);
+
+  EXPECT_NE(command.find("editor/selection/scene_selection_application.hpp"),
+            std::string::npos);
+  EXPECT_NE(command.find("capture_scene_selection(scene)"),
+            std::string::npos);
+  EXPECT_NE(command.find("make_scene_selection(scene, entities, active)"),
+            std::string::npos);
+  EXPECT_NE(command.find("SceneSelectionApplicationMode::UndoableCommand"),
+            std::string::npos);
+  EXPECT_NE(command.find("apply_scene_selection(scene(), before_, mode_)"),
+            std::string::npos);
+  EXPECT_NE(command.find("apply_scene_selection(scene(), after_, mode_)"),
+            std::string::npos);
+
+  EXPECT_NE(document_service.find("SceneSelectionApplicationMode mode"),
+            std::string::npos);
+  EXPECT_NE(document_service.find("scene_, std::move(entities), active,\n"
+                                  "                                      mode"),
+            std::string::npos);
+
+  EXPECT_NE(editor_selection.find(
+                "make_user_scene_selection(scene_, entities, active)"),
+            std::string::npos);
+  EXPECT_NE(editor_selection.find(
+                "SceneSelectionApplicationMode::UndoableCommand"),
+            std::string::npos);
+  EXPECT_NE(editor_selection.find("resolve_scene_selection_edit("),
+            std::string::npos);
+  EXPECT_EQ(editor_selection.find(
+                "bool scene_entity_selectable_for_user_selection"),
+            std::string::npos);
+  EXPECT_EQ(editor_selection.find("struct ResolvedSceneSelectionEdit"),
+            std::string::npos);
+
+  EXPECT_NE(projection.find("SceneSelectionApplicationMode::RuntimeSync"),
+            std::string::npos);
+  EXPECT_NE(projection.find("apply_scene_selection("), std::string::npos);
+  EXPECT_NE(projection.find("quader::add_scene_selection("),
+            std::string::npos);
+  EXPECT_EQ(projection.find("apply_exact_scene_selection("),
+            std::string::npos);
+  EXPECT_EQ(projection.find("scene.set_selected("), std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, GroupSelectionPickingUsesModelingSelectionService) {
@@ -885,13 +1282,50 @@ TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotAddRawModelingMutations
   }
 }
 
+TEST(ProgrammaticApiGuardrailTests,
+     ToolSettingsPanelWritesSettingsThroughPublicToolsApi) {
+  const std::string panel =
+      read_file(source_root() / "src/ui/tool_settings_panel.cpp");
+
+  EXPECT_TRUE(panel.find("context.editor.tools().set_setting(") !=
+                  std::string::npos ||
+              panel.find("context.intent.editor.tools().set_setting(") !=
+                  std::string::npos);
+  EXPECT_EQ(panel.find("set_interaction_settings("), std::string::npos);
+  EXPECT_EQ(panel.find("context.tool_settings"), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests,
+     UiMutatingOwnerApiCallsRouteThroughPublicEditorApi) {
+  const std::vector<std::string_view> forbidden_owner_mutations =
+      ui_mutating_owner_api_tokens();
+
+  for (const std::filesystem::path &file :
+       source_files_under(source_root() / "src/ui")) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
+    for (const std::string &line :
+         lines_containing(source, forbidden_owner_mutations)) {
+      EXPECT_TRUE(allowed_ui_mutating_owner_api_call(relative, line))
+          << relative
+          << ": UI editor intent must route through UIContext::editor / "
+             "QuaderEditorApi. Direct UI mutation is limited to UI settings, "
+             "viewport workspace state, and render presentation exceptions: "
+          << line;
+    }
+  }
+}
+
 TEST(ProgrammaticApiGuardrailTests, ViewportRoutesDoNotExecuteFixedRawModelingCommandStrings) {
   const std::vector<std::string_view> forbidden_raw_command_routes = {
       "commands().execute(\"modeling.",
       "std::string command = \"modeling.\"",
       "command.append(tool_id)",
       "contextMenuCommandId(std::string_view",
+      "context_menu_command_id(std::string_view",
       "const std::string command_id = contextMenuCommandId(action.action_id)",
+      "const std::string command_id = "
+      "context_menu_command_id(action.action_id)",
   };
 
   for (std::string_view relative : {
@@ -914,7 +1348,10 @@ TEST(ProgrammaticApiGuardrailTests, ViewportShortcutControllerDoesNotRemapComman
 
   EXPECT_EQ(source.find("QuaderCommand::"), std::string::npos);
   EXPECT_EQ(source.find("executeViewportModelingShortcut"), std::string::npos);
+  EXPECT_EQ(source.find("execute_viewport_modeling_shortcut"),
+            std::string::npos);
   EXPECT_EQ(source.find("commandForMirrorAxis"), std::string::npos);
+  EXPECT_EQ(source.find("command_for_mirror_axis"), std::string::npos);
   EXPECT_EQ(source.find("ModelingSessionService"), std::string::npos);
   EXPECT_EQ(header.find("ModelingSessionService"), std::string::npos);
 }
@@ -983,9 +1420,12 @@ TEST(ProgrammaticApiGuardrailTests, ViewportPanelDoesNotExposeWorkspacePassThrou
   EXPECT_NE(source.find("ViewportPaneController::pane_rect_size("),
             std::string::npos);
   EXPECT_EQ(header.find("setViewportLayout("), std::string::npos);
+  EXPECT_EQ(header.find("set_viewport_layout("), std::string::npos);
   EXPECT_EQ(header.find("set_grid_preset("), std::string::npos);
   EXPECT_EQ(header.find("paneShadingMode("), std::string::npos);
+  EXPECT_EQ(header.find("pane_shading_mode("), std::string::npos);
   EXPECT_EQ(header.find("setPaneShadingMode("), std::string::npos);
+  EXPECT_EQ(header.find("set_pane_shading_mode("), std::string::npos);
   EXPECT_EQ(header.find("paneView("), std::string::npos);
   EXPECT_EQ(header.find("active_pane_placements()"), std::string::npos);
   EXPECT_EQ(header.find("active_split_handles()"), std::string::npos);
@@ -1004,6 +1444,7 @@ TEST(ProgrammaticApiGuardrailTests, ViewportPanelDoesNotExposeWorkspacePassThrou
   EXPECT_EQ(source.find("ViewportPanel::pane_rect_min("), std::string::npos);
   EXPECT_EQ(source.find("ViewportPanel::pane_rect_size("), std::string::npos);
   EXPECT_EQ(source.find("fromModelingViewportTool"), std::string::npos);
+  EXPECT_EQ(source.find("from_modeling_viewport_tool"), std::string::npos);
   EXPECT_NE(source.find("editor.tools().activate(tool)"), std::string::npos);
   EXPECT_NE(
       source.find("viewport_tool_for_modeling(modeling.tool_status().active_tool)"),
@@ -1031,6 +1472,8 @@ TEST(ProgrammaticApiGuardrailTests, OutlinerUsesDocumentCommandRootSelectionOwne
   EXPECT_NE(scene_aware_delete_header.find("scene_aware_delete_handles_selection"),
             std::string::npos);
   EXPECT_EQ(outliner.find("std::vector<EntityId> selectedRootEntities("),
+            std::string::npos);
+  EXPECT_EQ(outliner.find("std::vector<EntityId> selected_root_entities("),
             std::string::npos);
   EXPECT_EQ(outliner.find("std::unordered_set<EntityId> selected_set"),
             std::string::npos);
@@ -1073,9 +1516,13 @@ TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotExposeRawHistoryOrDocum
 TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotUseModelingActionCompatibilityRoute) {
   const std::vector<std::string_view> forbidden_action_routes = {
       "editor.modeling().executeAction(",
+      "editor.modeling().execute_action(",
       "context.editor.modeling().executeAction(",
+      "context.editor.modeling().execute_action(",
       "ui_context.editor.modeling().executeAction(",
+      "ui_context.editor.modeling().execute_action(",
       ".modeling().executeAction(",
+      ".modeling().execute_action(",
   };
 
   for (const std::filesystem::path &root :
@@ -1243,15 +1690,37 @@ TEST(ProgrammaticApiGuardrailTests, RepeatedCodecAndCutHelpersStayWithTheirOwner
             std::string::npos);
   EXPECT_EQ(qdr_reader.find("SceneToneMapping sceneToneMappingFromName"),
             std::string::npos);
+  EXPECT_EQ(qdr_reader.find("SceneToneMapping scene_tone_mapping_from_name"),
+            std::string::npos);
   EXPECT_EQ(qdr_writer.find("sceneToneMappingName(SceneToneMapping"),
             std::string::npos);
+  EXPECT_EQ(qdr_writer.find("scene_tone_mapping_name(SceneToneMapping"),
+            std::string::npos);
+  EXPECT_EQ(qdr_reader.find("TransformComponent transform_component_from_json"),
+            std::string::npos);
   EXPECT_EQ(qdr_reader.find("transformComponentFromJson"), std::string::npos);
+  EXPECT_EQ(qdr_reader.find("MeshComponent mesh_component_from_json"),
+            std::string::npos);
   EXPECT_EQ(qdr_reader.find("meshComponentFromJson"), std::string::npos);
+  EXPECT_EQ(qdr_reader.find("MaterialComponent material_component_from_json"),
+            std::string::npos);
   EXPECT_EQ(qdr_reader.find("materialComponentFromJson"), std::string::npos);
+  EXPECT_EQ(qdr_reader.find("LightComponent light_component_from_json"),
+            std::string::npos);
   EXPECT_EQ(qdr_reader.find("lightComponentFromJson"), std::string::npos);
+  EXPECT_EQ(qdr_writer.find(
+                "nlohmann::ordered_json transform_component_to_json"),
+            std::string::npos);
   EXPECT_EQ(qdr_writer.find("transformComponentToJson"), std::string::npos);
+  EXPECT_EQ(qdr_writer.find("nlohmann::ordered_json mesh_component_to_json"),
+            std::string::npos);
   EXPECT_EQ(qdr_writer.find("meshComponentToJson"), std::string::npos);
+  EXPECT_EQ(qdr_writer.find(
+                "nlohmann::ordered_json material_component_to_json"),
+            std::string::npos);
   EXPECT_EQ(qdr_writer.find("materialComponentToJson"), std::string::npos);
+  EXPECT_EQ(qdr_writer.find("nlohmann::ordered_json light_component_to_json"),
+            std::string::npos);
   EXPECT_EQ(qdr_writer.find("lightComponentToJson"), std::string::npos);
   EXPECT_EQ(session_ops.find("to_plane_cut_mode("), std::string::npos);
   EXPECT_EQ(session_ops.find("plane_cut_request_from_state("),
@@ -1267,7 +1736,8 @@ TEST(ProgrammaticApiGuardrailTests, EditorHistoryBoundaryHidesCoreUndoRedoManage
       source_root() / "src/api/quader_api.cpp",
       source_root() / "src/api/quader_scene_api.cpp",
       source_root() / "src/scene/document/project_session.hpp",
-      source_root() / "src/scene/document/project_session.cpp",
+      source_root() / "src/editor/session/project_session.hpp",
+      source_root() / "src/editor/session/project_session.cpp",
       source_root() / "src/editor/commands/document_command_service.hpp",
       source_root() / "src/editor/commands/document_command_service.cpp",
       source_root() /
@@ -1387,6 +1857,7 @@ TEST(ProgrammaticApiGuardrailTests, PublicDocsExamplesManifestClassifiesEveryDoc
   EXPECT_FALSE(manifest.public_files.empty());
 
   std::set<std::string> classified;
+  std::set<std::string> internal_classified;
   for (const std::filesystem::path &file : manifest.public_files) {
     const std::string relative = normalized_relative(file);
     EXPECT_TRUE(std::filesystem::exists(file)) << relative;
@@ -1396,6 +1867,15 @@ TEST(ProgrammaticApiGuardrailTests, PublicDocsExamplesManifestClassifiesEveryDoc
     const std::string relative = normalized_relative(file);
     EXPECT_TRUE(std::filesystem::exists(file)) << relative;
     classified.insert(relative);
+    internal_classified.insert(relative);
+  }
+
+  for (std::string_view relative : required_internal_architecture_docs()) {
+    EXPECT_TRUE(std::filesystem::exists(source_root() / relative)) << relative;
+    EXPECT_NE(internal_classified.find(std::string(relative)),
+              internal_classified.end())
+        << relative
+        << " must be listed as internal in docs/public-docs-examples.txt";
   }
 
   for (const std::filesystem::path &root :
@@ -1439,6 +1919,19 @@ TEST(ProgrammaticApiGuardrailTests, PublicExamplesAndDocsDoNotStartFromInternalO
             "ui/ui_system.hpp",
             "platform/platform_window.hpp",
             "scene/document/project_session.hpp",
+            "editor/session/project_session.hpp",
+            "core/undo_redo_manager.hpp",
+            "editor/selection/",
+            "mesh/polygon/",
+            "viewport/host_viewport_contract_adapter.hpp",
+            "quader_editor_core::",
+            "quader_host_contract::",
+            "quader_io::",
+            "quader_poly::",
+            "DocumentCommandService",
+            "EditorSession",
+            "SceneRenderBridge",
+            "UndoRedoManager",
             "ProjectSession",
         }))
         << relative;
@@ -1475,6 +1968,69 @@ TEST(ProgrammaticApiGuardrailTests, PublicCppExamplesUseCallableResultHelpers) {
   }
 }
 
+TEST(ProgrammaticApiGuardrailTests,
+     PublicDocsExamplesUseCanonicalTypedCommandSpelling) {
+  const std::vector<std::string_view> raw_command_string_patterns = {
+      "commands().execute(\"",
+      ".shortcut_for(\"",
+      ".set_shortcut(\"",
+      ".remove_shortcut(\"",
+      ".reset_shortcut(\"",
+  };
+  const std::vector<std::string_view> legacy_command_route_patterns = {
+      "\"history.",
+      "\"modeling.action.",
+      "\"selection.",
+  };
+  constexpr std::string_view kTypedCommandToken = "quader_command::k";
+  constexpr std::string_view kRequiredNamespace = "quader::";
+
+  for (const std::filesystem::path &file : public_doc_and_example_files()) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
+
+    for (const std::string &line :
+         lines_containing(source, {"QuaderCommand::"})) {
+      ADD_FAILURE() << relative
+                    << ": use quader::quader_command::k... spelling, not "
+                       "QuaderCommand::...: "
+                    << line;
+    }
+
+    for (const std::string &line :
+         lines_containing(source, {kTypedCommandToken})) {
+      for (std::size_t position = line.find(kTypedCommandToken);
+           position != std::string::npos;
+           position = line.find(kTypedCommandToken,
+                                position + kTypedCommandToken.size())) {
+        const bool fully_qualified =
+            position >= kRequiredNamespace.size() &&
+            line.substr(position - kRequiredNamespace.size(),
+                        kRequiredNamespace.size()) == kRequiredNamespace;
+        EXPECT_TRUE(fully_qualified)
+            << relative
+            << ": public docs/examples should spell typed commands as "
+               "quader::quader_command::k...: "
+            << line;
+      }
+    }
+
+    for (const std::string &line :
+         lines_containing(source, raw_command_string_patterns)) {
+      ADD_FAILURE() << relative
+                    << ": public docs/examples should use typed command IDs: "
+                    << line;
+    }
+    for (const std::string &line :
+         lines_containing(source, legacy_command_route_patterns)) {
+      ADD_FAILURE() << relative
+                    << ": public docs/examples should not advertise legacy "
+                       "command alias routes: "
+                    << line;
+    }
+  }
+}
+
 TEST(ProgrammaticApiGuardrailTests, PublicExamplesStartFromEditorApiOrScriptSurface) {
   const std::vector<std::string_view> public_entry_surfaces = {
       "QuaderEditorApi",
@@ -1504,20 +2060,32 @@ TEST(ProgrammaticApiGuardrailTests, PublicModelingCommandBridgeIsDescriptorDrive
             std::string::npos);
   EXPECT_EQ(commands_api.find("modelingActionCommandBridgeCatalog"),
             std::string::npos);
+  EXPECT_EQ(commands_api.find("modeling_action_command_bridge_catalog"),
+            std::string::npos);
   EXPECT_EQ(commands_api.find("fixedCommandIdForModelingAction"),
+            std::string::npos);
+  EXPECT_EQ(commands_api.find("fixed_command_id_for_modeling_action"),
             std::string::npos);
   EXPECT_EQ(commands_api.find("modeling.action."), std::string::npos);
   EXPECT_EQ(commands_api.find("publicCompatibilityAlias"), std::string::npos);
+  EXPECT_EQ(commands_api.find("public_compatibility_alias"),
+            std::string::npos);
   EXPECT_EQ(commands_api.find("registerAlias"), std::string::npos);
+  EXPECT_EQ(commands_api.find("register_alias"), std::string::npos);
   EXPECT_EQ(commands_api.find("canonicalCommandId"), std::string::npos);
+  EXPECT_EQ(commands_api.find("canonical_command_id"), std::string::npos);
   EXPECT_EQ(commands_api.find("executeModelingAction"), std::string::npos);
+  EXPECT_EQ(commands_api.find("execute_modeling_action"), std::string::npos);
   EXPECT_EQ(commands_api.find("executeToolActivation"), std::string::npos);
+  EXPECT_EQ(commands_api.find("execute_tool_activation"), std::string::npos);
   EXPECT_NE(commands_api.find("tool->public_command_target_id()"),
             std::string::npos);
   EXPECT_NE(command_descriptor.find("public_command_id"), std::string::npos);
   EXPECT_NE(command_descriptor.find("registers_public_command"),
             std::string::npos);
   EXPECT_EQ(command_descriptor.find("publicCompatibilityAlias"),
+            std::string::npos);
+  EXPECT_EQ(command_descriptor.find("public_compatibility_alias"),
             std::string::npos);
   EXPECT_NE(command_catalog.find(".public_command_id = entry.public_command_id"),
             std::string::npos);
@@ -1551,11 +2119,18 @@ TEST(ProgrammaticApiGuardrailTests, PublicCommandTargetsUseSharedPrefixOwner) {
             std::string::npos);
 
   EXPECT_EQ(commands_api.find("canonicalTargetId"), std::string::npos);
+  EXPECT_EQ(commands_api.find("canonical_target_id"), std::string::npos);
   EXPECT_EQ(command_registry_header.find("registerPrefix"), std::string::npos);
+  EXPECT_EQ(command_registry_header.find("register_prefix"), std::string::npos);
   EXPECT_EQ(command_registry_header.find("PrefixRoute"), std::string::npos);
+  EXPECT_EQ(command_registry_header.find("prefix_route"), std::string::npos);
   EXPECT_EQ(command_registry_source.find("registerPrefix"), std::string::npos);
+  EXPECT_EQ(command_registry_source.find("register_prefix"), std::string::npos);
   EXPECT_EQ(command_registry_source.find("PrefixRoute"), std::string::npos);
+  EXPECT_EQ(command_registry_source.find("prefix_route"), std::string::npos);
   EXPECT_EQ(commands_api.find("registerPrefix(\"tools.activate."),
+            std::string::npos);
+  EXPECT_EQ(commands_api.find("register_prefix(\"tools.activate."),
             std::string::npos);
   EXPECT_EQ(command_tool.find("std::string command_id(\"modeling."),
             std::string::npos);
@@ -1563,6 +2138,9 @@ TEST(ProgrammaticApiGuardrailTests, PublicCommandTargetsUseSharedPrefixOwner) {
             std::string::npos);
   EXPECT_EQ(viewport_adapter.find(
                 "constexpr std::string_view toolPrefix = \"tools.activate."),
+            std::string::npos);
+  EXPECT_EQ(viewport_adapter.find(
+                "constexpr std::string_view tool_prefix = \"tools.activate."),
             std::string::npos);
 }
 

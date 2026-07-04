@@ -6,14 +6,17 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "assets/asset_registry.hpp"
 #include "assets/bake_service.hpp"
+#include "assets/default_material_catalog.hpp"
 #include "assets/material_document.hpp"
 #include "app/app_window_settings.hpp"
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
 #include "core/public_command_targets.hpp"
 #include "core/undo_redo_manager.hpp"
+#include "editor/commands/asset_command_service.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "editor/history/scene_transform_preview_transaction.hpp"
+#include "editor/session/project_asset_bootstrap_service.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
 #include "editor/commands/document/apply_entity_transform_command.hpp"
 #include "editor/commands/document/batch_document_command.hpp"
@@ -28,7 +31,7 @@
 #include "editor/commands/document/set_visibility_command.hpp"
 #include "editor/commands/document/ungroup_selection_command.hpp"
 #include "scene/document/project_document.hpp"
-#include "scene/document/project_session.hpp"
+#include "editor/session/project_session.hpp"
 #include "editor/commands/editor_command_service.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/history/modeling_memento_command.hpp"
@@ -53,6 +56,7 @@
 #include "render/texture_binding_service.hpp"
 #include "render/texture_registry.hpp"
 #include "render/tool_preview_renderable_cache.hpp"
+#include "render/ui_icon_texture_service.hpp"
 #include "render/viewport_grid_renderer.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "render/overlay/overlay_renderable_proxy.hpp"
@@ -71,6 +75,7 @@
 #include "ui/console_model.hpp"
 #include "ui/ui_settings.hpp"
 #include "ui/viewport_context_menu_policy.hpp"
+#include "ui/viewport_pane_overlay_cache.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
@@ -1194,10 +1199,10 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
     expect_color_near(settings.color(ViewportColorSettingId::SourceWire),
                       overlay_policy_setting_color(kOverlaySourceWireColor));
     expect_color_near(settings.color(ViewportColorSettingId::GridMinor),
-                      {199.0f / 255.0f, 199.0f / 255.0f, 199.0f / 255.0f,
-                       54.0f / 255.0f});
+                      {150.0f / 255.0f, 150.0f / 255.0f, 150.0f / 255.0f,
+                       1.0f});
     expect_color_near(settings.color(ViewportColorSettingId::GridMajor),
-                      {172.0f / 255.0f, 172.0f / 255.0f, 172.0f / 255.0f,
+                      {210.0f / 255.0f, 210.0f / 255.0f, 210.0f / 255.0f,
                        1.0f});
     const SceneSettingsComponent scene_settings_defaults;
     expect_vec3_near(scene_settings_defaults.environment.clear_color,
@@ -1772,11 +1777,12 @@ TEST(ViewportOverlayPolicyTests, DenseObjectSelectionKeepsWireAndSuppressesFaceF
 
   const std::string cache_source =
       read_source_file("src/render/overlay/selected_object_overlay_cache.cpp");
-  EXPECT_NE(cache_source.find("sync_line_entries(states, assets)"),
+  EXPECT_NE(cache_source.find("sync_line_entries(states, snapshot)"),
             std::string::npos);
-  EXPECT_NE(cache_source.find("update_line_proxy(states, document)"),
+  EXPECT_NE(cache_source.find("update_line_proxy(states, snapshot)"),
             std::string::npos);
-  EXPECT_NE(cache_source.find("synced_selection_revision_ == selection_revision"),
+  EXPECT_NE(cache_source.find(
+                "synced_selection_revision_ == snapshot.selection_revision"),
             std::string::npos);
   EXPECT_NE(cache_source.find("line_proxy_.vertex_buffer->setBufferAt"),
             std::string::npos);
@@ -1799,6 +1805,15 @@ TEST(ViewportOverlayPolicyTests, NativeViewportSkipsTransientObjectSelectionOver
   EXPECT_NE(viewport_panel_source.find(
                 "modeling.selection_overlay_frame(overlay_options)"),
             std::string::npos);
+  EXPECT_NE(viewport_panel_source.find(
+                "refresh_cached_selection_overlay_frame(modeling, document, assets)"),
+            std::string::npos);
+  EXPECT_NE(viewport_panel_source.find(
+                ".scene_revision = document.revision()"),
+            std::string::npos);
+  EXPECT_NE(viewport_panel_source.find(
+                ".asset_revision = assets.revision()"),
+            std::string::npos);
   EXPECT_EQ(viewport_panel_source.find("strip_persistent_object_selection("),
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
@@ -1810,8 +1825,7 @@ TEST(ViewportOverlayPolicyTests, NativeViewportSkipsTransientObjectSelectionOver
 TEST(ViewportOverlayPolicyTests, WireframeCacheUsesSelectionStyleForSelectedMeshes) {
   const std::string cache_source =
       read_source_file("src/render/overlay/scene_wireframe_overlay_cache.cpp");
-  EXPECT_NE(cache_source.find("selection != nullptr && selection->selected"),
-            std::string::npos);
+  EXPECT_NE(cache_source.find("mesh.selected"), std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       cache_source, "ViewportOverlayLayer::SelectedEdge : "
                     "ViewportOverlayLayer::WireframeXray"));
@@ -2233,9 +2247,9 @@ TEST(SceneRenderBridgeTests, UsesDepthStampedFaceFillForOverlayTriangles) {
   EXPECT_NE(builder_source.find("OverlayTransparencyMode::TwoPassesTwoSides"),
             std::string::npos);
   EXPECT_NE(bridge_source.find(
-                "set_tool_preview_meshes(std::vector<PreviewMesh> meshes"),
+                "std::vector<RenderToolPreviewMeshRecord> meshes"),
             std::string::npos);
-  EXPECT_NE(bridge_source.find("tool_preview_cache_.set_meshes(meshes, assets)"),
+  EXPECT_NE(bridge_source.find("tool_preview_cache_.set_meshes(meshes)"),
             std::string::npos);
   EXPECT_NE(tool_preview_cache_source.find("mesh_proxies_"), std::string::npos);
   EXPECT_NE(tool_preview_cache_source.find(
@@ -2297,7 +2311,7 @@ TEST(SceneRenderBridgeTests, BindsNormalsAndBuildsPrimitiveSpans) {
             std::string::npos);
   EXPECT_NE(source.find("filament::VertexAttribute::TANGENTS"),
             std::string::npos);
-  EXPECT_NE(source.find("coalesced_mesh_primitive_spans(mesh)"),
+  EXPECT_NE(source.find("coalesced_render_mesh_primitive_spans(mesh)"),
             std::string::npos);
   EXPECT_NE(source.find("primitive.index_offset"), std::string::npos);
   EXPECT_NE(source.find("primitive.index_count"), std::string::npos);
@@ -2306,40 +2320,57 @@ TEST(SceneRenderBridgeTests, BindsNormalsAndBuildsPrimitiveSpans) {
             std::string::npos);
 }
 
-TEST(SceneRenderBridgeTests, UsesAssetRevisionsForIncrementalMeshSync) {
+TEST(SceneRenderBridgeTests, UsesRenderSceneSnapshotsForIncrementalMeshSync) {
+  const std::string snapshot_header =
+      read_source_file("src/render/render_scene_snapshot.hpp");
+  const std::string sync_header =
+      read_source_file("src/render/scene_render_sync_service.hpp");
   const std::string sync_source =
       read_source_file("src/render/scene_render_sync_service.cpp");
-  const std::string extraction_header =
-      read_source_file("src/render/scene_render_extraction.hpp");
-  const std::string extraction_source =
-      read_source_file("src/render/scene_render_extraction.cpp");
   const std::string cache_source =
       read_source_file("src/render/mesh_renderable_cache.cpp");
+  const std::string mesh_record =
+      quader::test::guardrail::source_slice(snapshot_header,
+                                           "struct RenderSceneMeshRecord",
+                                           "struct RenderSceneLightRecord");
+  const std::string light_record =
+      quader::test::guardrail::source_slice(
+          snapshot_header, "struct RenderSceneLightRecord",
+          "struct RenderSceneSnapshotDirtyState");
+
+  EXPECT_NE(snapshot_header.find("struct RenderSceneSnapshot"),
+            std::string::npos);
+  EXPECT_NE(snapshot_header.find("RenderSceneMeshRecord"), std::string::npos);
+  EXPECT_NE(snapshot_header.find("RenderSceneLightRecord"), std::string::npos);
+  EXPECT_NE(snapshot_header.find("scene_revision"), std::string::npos);
+  EXPECT_NE(snapshot_header.find("asset_revision"), std::string::npos);
+  EXPECT_NE(sync_header.find("sync(const RenderSceneSnapshot"),
+            std::string::npos);
+  EXPECT_EQ(sync_header.find("sync(const SceneDocument"), std::string::npos);
+  EXPECT_EQ(sync_header.find("sync(const AssetRegistry"), std::string::npos);
 
   EXPECT_NE(sync_source.find("synced_asset_revision_"), std::string::npos);
   EXPECT_NE(sync_source.find("render_asset_revisions_changed"), std::string::npos);
-  EXPECT_NE(sync_source.find("build_scene_render_extraction_plan(document, assets,"),
+  EXPECT_NE(sync_source.find("snapshot.scene_revision"), std::string::npos);
+  EXPECT_NE(sync_source.find("snapshot.asset_revision"), std::string::npos);
+  EXPECT_EQ(sync_source.find("build_scene_render_extraction_plan(document, assets,"),
             std::string::npos);
-  EXPECT_NE(sync_source.find("*material_binding_)"),
-            std::string::npos);
+  EXPECT_EQ(sync_source.find("const SceneDocument"), std::string::npos);
+  EXPECT_EQ(sync_source.find("const AssetRegistry"), std::string::npos);
   EXPECT_NE(sync_source.find("mesh_cache_->needs_rebuild"), std::string::npos);
-  EXPECT_NE(extraction_header.find("struct SceneRenderExtractionPlan"),
-            std::string::npos);
-  EXPECT_NE(extraction_source.find(
-                "material_binding.material_revision(assets, material_component)"),
-            std::string::npos);
-  EXPECT_NE(extraction_source.find("document.is_effectively_visible(entity_id)"),
-            std::string::npos);
-  EXPECT_NE(extraction_source.find("document.world_transform_matrix(entity_id)"),
-            std::string::npos);
+  EXPECT_EQ(mesh_record.find("const MeshAsset *"), std::string::npos);
+  EXPECT_EQ(mesh_record.find("const MeshComponent *"), std::string::npos);
+  EXPECT_EQ(mesh_record.find("const MaterialComponent *"), std::string::npos);
+  EXPECT_EQ(light_record.find("const LightComponent *"), std::string::npos);
   EXPECT_NE(
-      cache_source.find("existing->second.mesh_revision != mesh.revision.value"),
+      cache_source.find(
+          "existing->second.mesh_revision != mesh.mesh.mesh_revision"),
       std::string::npos);
   EXPECT_NE(cache_source.find(
-                "existing->second.material_revision != material_revision"),
+                "existing->second.material_revision != mesh.material_revision"),
             std::string::npos);
   EXPECT_NE(cache_source.find(
-                "factory_->update_transform(existing->second, world_transform)"),
+                "factory_->update_transform(existing->second, mesh.world_transform)"),
             std::string::npos);
   const std::size_t change_start = sync_source.find(
       "bool SceneRenderSyncService::render_asset_revisions_changed");
@@ -2357,9 +2388,37 @@ TEST(SceneRenderBridgeTests, UsesAssetRevisionsForIncrementalMeshSync) {
             std::string::npos);
   const std::string rebuild_source = sync_source.substr(rebuild_start);
   EXPECT_NE(
-      rebuild_source.find("mesh_cache_->remove_except(plan.live_mesh_entities)"),
+      rebuild_source.find(
+          "mesh_cache_->remove_except(snapshot.live_mesh_entities)"),
       std::string::npos);
   EXPECT_EQ(rebuild_source.find("mesh_proxies_.clear()"), std::string::npos);
+}
+
+TEST(ViewportPaneOverlayCacheTests,
+     SceneAndAssetRevisionsInvalidateSelectionOverlayFrame) {
+  ViewportPaneOverlayCache cache;
+  const ViewportPaneOverlayCacheKey key{
+      .content_revision = 1u,
+      .selection_revision = 2u,
+      .scene_revision = 3u,
+      .asset_revision = 4u,
+      .overlay_signature = 5u,
+      .selection_mode = ModelingSelectionMode::Object,
+  };
+  cache.update({}, key);
+
+  EXPECT_EQ(cache.refresh_reason(key),
+            ViewportPaneOverlayCacheRefreshReason::None);
+
+  ViewportPaneOverlayCacheKey scene_changed = key;
+  scene_changed.scene_revision = key.scene_revision + 1u;
+  EXPECT_EQ(cache.refresh_reason(scene_changed),
+            ViewportPaneOverlayCacheRefreshReason::SceneRevision);
+
+  ViewportPaneOverlayCacheKey asset_changed = key;
+  asset_changed.asset_revision = key.asset_revision + 1u;
+  EXPECT_EQ(cache.refresh_reason(asset_changed),
+            ViewportPaneOverlayCacheRefreshReason::AssetRevision);
 }
 
 TEST(SceneRenderBridgeTests, UsesAnisotropicSamplingForMeshTextures) {
@@ -2527,7 +2586,7 @@ TEST(RenderProxyLifecycleTests, RenderableProxyHandlesAreMoveOnly) {
         light_cache_header.find("LightProxy(LightProxy &&other) noexcept"),
         std::string::npos);
     EXPECT_NE(light_cache_source.find(
-                  "light_proxies_.emplace(entity_id, std::move(proxy))"),
+                  "light_proxies_.emplace(light.entity_id, std::move(proxy))"),
               std::string::npos);
     EXPECT_NE(light_cache_source.find("LightProxyCreationGuard creation_guard"),
               std::string::npos);
@@ -2568,9 +2627,37 @@ TEST(RenderProxyLifecycleTests, FilamentResourceCreationUsesRenderOwnedGuards) {
   EXPECT_LT(register_texture, render_target_source.find("creation_guard.release()"));
 }
 
+TEST(RenderProxyLifecycleTests, UiIconTexturesAreRenderOwned) {
+  const std::string service_header =
+      read_source_file("src/render/ui_icon_texture_service.hpp");
+  const std::string service_source =
+      read_source_file("src/render/ui_icon_texture_service.cpp");
+  const std::string render_system_header =
+      read_source_file("src/render/render_system.hpp");
+  const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
+
+  EXPECT_NE(service_header.find("class UiIconTextureService"),
+            std::string::npos);
+  EXPECT_NE(service_header.find("RenderUiIconSet"), std::string::npos);
+  EXPECT_NE(service_source.find("filament::Texture::Builder()"),
+            std::string::npos);
+  EXPECT_NE(service_source.find("textures_->register_texture(texture)"),
+            std::string::npos);
+  EXPECT_NE(service_source.find("textures_->unregister_texture(record.handle)"),
+            std::string::npos);
+  EXPECT_NE(service_source.find("engine_->destroy(record.texture)"),
+            std::string::npos);
+  EXPECT_NE(render_system_header.find("UiIconTextureService ui_icon_textures_"),
+            std::string::npos);
+  EXPECT_NE(ui_system_source.find("to_ui_icon_set("), std::string::npos);
+  EXPECT_EQ(ui_system_source.find("filament::Texture::Builder"),
+            std::string::npos);
+}
+
 TEST(RenderProxyLifecycleTests, RenderResourceOwnersAreNonTransferable) {
   EXPECT_TRUE(render_owner_is_non_transferable<RenderSystem>());
   EXPECT_TRUE(render_owner_is_non_transferable<FilamentMaterialLibrary>());
+  EXPECT_TRUE(render_owner_is_non_transferable<UiIconTextureService>());
   EXPECT_TRUE(render_owner_is_non_transferable<TextureRegistry>());
   EXPECT_TRUE(render_owner_is_non_transferable<TextureBindingService>());
   EXPECT_TRUE(render_owner_is_non_transferable<MaterialBindingService>());
@@ -2724,6 +2811,8 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
   const std::string factory_source =
       read_source_file("src/render/mesh_renderable_factory.cpp");
   const std::string app_source = read_source_file("src/app/app.cpp");
+  const std::string bootstrap_source =
+      read_source_file("src/editor/session/project_asset_bootstrap_service.cpp");
   const std::string material_library_source =
       read_source_file("src/render/filament_material_library.cpp");
   const std::string scene_bridge_source =
@@ -2766,21 +2855,27 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
       material_source.find(
           "setCullingMode(filament::MaterialInstance::CullingMode::BACK);"),
       std::string::npos);
-  EXPECT_NE(app_source.find(
-                "project_session_.assets().add_texture(std::move(roughness));"),
+  EXPECT_NE(bootstrap_source.find(
+                "session.assets().add_texture(std::move(roughness));"),
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
-      app_source, "set_material_texture_slot(default_material, "
-                  "material_texture_slot::kBaseColor, albedo_texture)"));
-  EXPECT_EQ(app_source.find(
+      bootstrap_source, "set_material_texture_slot(default_material, "
+                        "material_texture_slot::kBaseColor, albedo_texture)"));
+  EXPECT_EQ(bootstrap_source.find(
                 "make_default_quader_material(\"Default Quader\", albedo_texture"),
             std::string::npos);
-  EXPECT_EQ(app_source.find("const AssetId roughnessTexture = "
-                            "project_session_.assets().add_texture"),
+  EXPECT_EQ(bootstrap_source.find("const AssetId roughnessTexture = "
+                                  "session.assets().add_texture"),
             std::string::npos);
-  EXPECT_NE(app_source.find("render_system_.quader_mesh_material()"),
+  EXPECT_EQ(app_source.find("set_material_texture_slot("), std::string::npos);
+  EXPECT_EQ(app_source.find("make_default_quader_material("),
             std::string::npos);
-  EXPECT_NE(app_source.find("render_system_.quader_mesh_lit_material()"),
+  EXPECT_NE(app_source.find(
+                "render_system_.initialize_scene_render_bridge(render_bridge_"),
+            std::string::npos);
+  EXPECT_EQ(app_source.find("render_system_.quader_mesh_material()"),
+            std::string::npos);
+  EXPECT_EQ(app_source.find("render_system_.quader_mesh_lit_material()"),
             std::string::npos);
   EXPECT_NE(material_library_source.find("filament_material_catalog.hpp"),
             std::string::npos);
@@ -2807,7 +2902,7 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
       factory_source.find("material_binding_->create_mesh_material_instance("),
       std::string::npos);
   EXPECT_NE(factory_source.find(
-                "assets, primitive_material, double_sided, editor_unlit)"),
+                "primitive_material, double_sided, editor_unlit)"),
             std::string::npos);
   EXPECT_NE(material_source.find(
                 "editor_unlit ? *shaded_mesh_material_ : *rendered_mesh_material_"),
@@ -3040,7 +3135,7 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
 
 TEST(ModelingSessionServiceTests, TransformDragBuildsVertexSnapCachesOnlyWhenRuntimeCanUseThem) {
   const std::string source = read_source_file(
-      "src/editor/modeling/services/modeling_session_service.cpp");
+      "src/editor/modeling/services/modeling_transform_drag_service.cpp");
 
   EXPECT_NE(source.find("bool transform_drag_can_use_vertex_snap("),
             std::string::npos);
@@ -3054,6 +3149,10 @@ TEST(ModelingSessionServiceTests, TransformDragBuildsVertexSnapCachesOnlyWhenRun
   EXPECT_NE(source.find("request.vertex_snap_radius > 0.0 &&"),
             std::string::npos);
   EXPECT_NE(source.find("transform_drag_can_use_vertex_snap(drag_before_update)"),
+            std::string::npos);
+  EXPECT_NE(source.find("context.port.cached_pick_object_bounds()"),
+            std::string::npos);
+  EXPECT_NE(source.find("context.port.cached_pick_face_geometry()"),
             std::string::npos);
 }
 
@@ -3287,9 +3386,9 @@ TEST(ViewportRendererTests, ViewportInfoOverlayUsesRendererTimingAndVisibleMeshS
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("ui.viewport.info.draw_calls"),
             std::string::npos);
-  EXPECT_NE(
-      viewport_panel_source.find("1.0 / ui_context.frame_timing.raw_delta_seconds"),
-      std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      viewport_panel_source,
+      "1.0 / ui_context.viewport->frame_timing.raw_delta_seconds"));
   EXPECT_EQ(viewport_panel_source.find("1000.0 / render_stats.gpu_frame_ms"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("draw_viewport_info_text("),
@@ -3490,6 +3589,40 @@ TEST(AppStartupTests, DoesNotCreateDefaultModelingMesh) {
   EXPECT_EQ(source.find("startup box"), std::string::npos);
   EXPECT_EQ(source.find("Fake Directional Light"), std::string::npos);
   EXPECT_EQ(source.find("document_.set_light"), std::string::npos);
+}
+
+TEST(AppStartupTests, DelegatesDefaultAssetsAndUsesSessionReadView) {
+  const std::string app_header = read_source_file("src/app/app.hpp");
+  const std::string app_source = read_source_file("src/app/app.cpp");
+  const std::string bootstrap_source =
+      read_source_file("src/editor/session/project_asset_bootstrap_service.cpp");
+  const std::string build_source = read_source_file("CMakeLists.txt");
+
+  EXPECT_NE(app_source.find("ProjectAssetBootstrapService{}."
+                            "bootstrap_default_assets(project_session_)"),
+            std::string::npos);
+  EXPECT_NE(app_source.find("const ProjectSessionReadView session_view = "
+                            "project_session_.read_view();"),
+            std::string::npos);
+  EXPECT_NE(app_source.find("ui_.prepare_viewports(*editor_, render_bridge_, "
+                            "session_view.scene"),
+            std::string::npos);
+  EXPECT_EQ(app_header.find("create_startup_scene"), std::string::npos);
+  EXPECT_EQ(app_source.find("create_startup_scene"), std::string::npos);
+  EXPECT_EQ(app_source.find("default_material_catalog.hpp"),
+            std::string::npos);
+  EXPECT_EQ(app_source.find("make_default_quader_material("),
+            std::string::npos);
+  EXPECT_EQ(app_source.find(".assets().add_texture("), std::string::npos);
+  EXPECT_EQ(app_source.find(".assets().add_material("), std::string::npos);
+  EXPECT_NE(bootstrap_source.find("default_material_catalog.hpp"),
+            std::string::npos);
+  EXPECT_NE(bootstrap_source.find(
+                "ProjectAssetBootstrapService::bootstrap_default_assets"),
+            std::string::npos);
+  EXPECT_NE(build_source.find(
+                "src/editor/session/project_asset_bootstrap_service.cpp"),
+            std::string::npos);
 }
 
 TEST(AppLoopTests, SuspendsGpuSubmissionForNonDrawableWindowsAndIdlesBetweenFrames) {
@@ -6391,6 +6524,140 @@ TEST(AssetRegistryTests, MaterialTextureMutationOwnsSlotTextureAndReplacementVal
     EXPECT_EQ(result.message, "Material asset does not exist");
 }
 
+TEST(AssetCommandServiceTests,
+     AddCommandsUndoRedoMaterialTextureAndMeshWithStableIds) {
+    AssetRegistry assets;
+    EditorHistoryService history;
+    AssetCommandService commands(assets, history);
+
+    TextureAsset texture;
+    texture.name = "Undoable Texture";
+    texture.width = 16;
+    texture.height = 8;
+    AssetCreateResult texture_result =
+        commands.add_texture(std::move(texture));
+    ASSERT_TRUE(texture_result.ok) << texture_result.message;
+    const AssetId texture_id = texture_result.asset;
+    ASSERT_NE(texture_id, kInvalidAssetId);
+
+    MaterialDocument material = make_default_quader_material("Undoable Material");
+    AssetCreateResult material_result =
+        commands.add_material(std::move(material));
+    ASSERT_TRUE(material_result.ok) << material_result.message;
+    const AssetId material_id = material_result.asset;
+    ASSERT_NE(material_id, kInvalidAssetId);
+
+    AssetCreateResult mesh_result =
+        commands.add_mesh(make_test_triangle_mesh("Undoable Mesh"));
+    ASSERT_TRUE(mesh_result.ok) << mesh_result.message;
+    const AssetId mesh_id = mesh_result.asset;
+    ASSERT_NE(mesh_id, kInvalidAssetId);
+
+    ASSERT_NE(assets.texture(texture_id), nullptr);
+    ASSERT_NE(assets.material(material_id), nullptr);
+    ASSERT_NE(assets.mesh(mesh_id), nullptr);
+    ASSERT_NE(history.undo_label(), nullptr);
+    EXPECT_EQ(*history.undo_label(), "Add Mesh");
+
+    ASSERT_TRUE(history.undo().ok);
+    EXPECT_EQ(assets.mesh(mesh_id), nullptr);
+    ASSERT_TRUE(history.undo().ok);
+    EXPECT_EQ(assets.material(material_id), nullptr);
+    ASSERT_TRUE(history.undo().ok);
+    EXPECT_EQ(assets.texture(texture_id), nullptr);
+
+    ASSERT_TRUE(history.redo().ok);
+    ASSERT_NE(assets.texture(texture_id), nullptr);
+    EXPECT_EQ(assets.texture(texture_id)->name, "Undoable Texture");
+    ASSERT_TRUE(history.redo().ok);
+    ASSERT_NE(assets.material(material_id), nullptr);
+    EXPECT_EQ(assets.material(material_id)->name, "Undoable Material");
+    ASSERT_TRUE(history.redo().ok);
+    ASSERT_NE(assets.mesh(mesh_id), nullptr);
+    EXPECT_EQ(assets.mesh(mesh_id)->name, "Undoable Mesh");
+}
+
+TEST(AssetCommandServiceTests,
+     ReplaceAndUpdateCommandsUndoRedoMaterialTextureAndMeshPayloads) {
+    AssetRegistry assets;
+    SceneDocument scene;
+    EditorHistoryService history;
+    AssetCommandService commands(assets, history, &scene);
+
+    const AssetId material =
+        assets.add_material(make_default_quader_material("Source Material"));
+    ASSERT_NE(material, kInvalidAssetId);
+    AssetCommandResult material_update =
+        commands.update_material(material, [](MaterialDocument &asset) {
+          asset.base_color = {0.25f, 0.5f, 0.75f};
+          asset.roughness = 0.35f;
+        });
+    ASSERT_TRUE(material_update.ok) << material_update.message;
+    ASSERT_NE(assets.material(material), nullptr);
+    EXPECT_FLOAT_EQ(assets.material(material)->roughness, 0.35f);
+    ASSERT_TRUE(history.undo().ok);
+    ASSERT_NE(assets.material(material), nullptr);
+    EXPECT_FLOAT_EQ(assets.material(material)->roughness, 1.0f);
+    ASSERT_TRUE(history.redo().ok);
+    EXPECT_FLOAT_EQ(assets.material(material)->base_color.z, 0.75f);
+
+    TextureAsset source_texture;
+    source_texture.name = "Source Texture";
+    source_texture.width = 4;
+    const AssetId texture = assets.add_texture(std::move(source_texture));
+    ASSERT_NE(texture, kInvalidAssetId);
+    AssetCommandResult texture_update =
+        commands.update_texture(texture, [](TextureAsset &asset) {
+          asset.name = "Updated Texture";
+          asset.width = 64;
+        });
+    ASSERT_TRUE(texture_update.ok) << texture_update.message;
+    EXPECT_EQ(assets.texture(texture)->width, 64u);
+    ASSERT_TRUE(history.undo().ok);
+    EXPECT_EQ(assets.texture(texture)->name, "Source Texture");
+    ASSERT_TRUE(history.redo().ok);
+    EXPECT_EQ(assets.texture(texture)->name, "Updated Texture");
+
+    const AssetId mesh = assets.add_mesh(make_test_triangle_mesh("Source Mesh"));
+    ASSERT_NE(mesh, kInvalidAssetId);
+    MeshAsset replacement = make_test_triangle_mesh("Replacement Mesh");
+    replacement.vertices.push_back(MeshVertex{
+        .position = {2.0f, 0.0f, 0.0f},
+        .normal = {0.0f, 1.0f, 0.0f},
+        .uv = {0.0f, 0.0f},
+    });
+    AssetCommandResult mesh_replace =
+        commands.replace_mesh(mesh, std::move(replacement));
+    ASSERT_TRUE(mesh_replace.ok) << mesh_replace.message;
+    EXPECT_EQ(assets.mesh(mesh)->vertices.size(), 4u);
+    ASSERT_TRUE(history.undo().ok);
+    EXPECT_EQ(assets.mesh(mesh)->vertices.size(), 3u);
+    EXPECT_EQ(assets.mesh(mesh)->name, "Source Mesh");
+    ASSERT_TRUE(history.redo().ok);
+    EXPECT_EQ(assets.mesh(mesh)->name, "Replacement Mesh");
+}
+
+TEST(AssetCommandServiceTests,
+     RejectsModelingOwnedMeshReplacementWithoutRecordingHistory) {
+    AssetRegistry assets;
+    SceneDocument scene;
+    EditorHistoryService history;
+    AssetCommandService commands(assets, history, &scene);
+
+    const AssetId mesh = assets.add_mesh(make_test_triangle_mesh("Owned Mesh"));
+    const EntityId entity = scene.create_entity("Modeled");
+    scene.set_mesh(entity, MeshComponent{.mesh = mesh});
+    scene.set_modeling_object(entity, ModelingObjectComponent{.object_id = 7});
+
+    AssetCommandResult result =
+        commands.replace_mesh(mesh, make_test_triangle_mesh("Rejected"));
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.message, "Mesh asset is owned by a modeling object");
+    EXPECT_FALSE(history.can_undo());
+    ASSERT_NE(assets.mesh(mesh), nullptr);
+    EXPECT_EQ(assets.mesh(mesh)->name, "Owned Mesh");
+}
+
 TEST(AssetProjectArchitectureTests, TypedStoreAliasesStampDocumentsWithoutAssetRegistryCeremony) {
     static_assert(std::is_same_v<MeshAssetStore, TypedAssetStore<MeshAsset, MeshAssetRevision>>);
     static_assert(std::is_same_v<MaterialAssetStore, TypedAssetStore<MaterialDocument, MaterialAssetRevision>>);
@@ -6913,7 +7180,7 @@ TEST(ProjectSessionTests, PublicHistoryIgnoresUntrackedModelingSessionHistory) {
     EXPECT_TRUE(entity_named("Hidden Modeling Box"));
 
     const QuaderApiVoidResult command_undo =
-        editor.commands().execute(quader_command::kHistoryUndo);
+        editor.commands().execute(quader_command::kEditUndo);
     EXPECT_FALSE(command_undo.ok());
     EXPECT_FALSE(command_undo.changed());
     EXPECT_EQ(command_undo.error_message(), "Command is disabled.");
@@ -6982,6 +7249,73 @@ TEST(ProjectSessionTests, ServiceCreatesSessionsWithDocumentAssetsAndCommandsWir
     EXPECT_EQ(opened->document().entity_for_object_id(object), authored_entity);
 }
 
+TEST(ProjectSessionTests, ReadViewExposesConstProjectSceneAndAssetState) {
+  static_assert(std::is_same_v<
+                decltype(std::declval<ProjectSessionReadView>().document),
+                const ProjectDocument &>);
+  static_assert(std::is_same_v<
+                decltype(std::declval<ProjectSessionReadView>().scene),
+                const SceneDocument &>);
+  static_assert(std::is_same_v<
+                decltype(std::declval<ProjectSessionReadView>().assets),
+                const AssetRegistry &>);
+
+  ProjectSession session;
+  const ProjectContentRevisionStamp before = session.content_revision_stamp();
+  const ProjectSessionReadView view = session.read_view();
+
+  EXPECT_EQ(&view.document, &std::as_const(session).document());
+  EXPECT_EQ(&view.scene, &std::as_const(session).scene());
+  EXPECT_EQ(&view.assets, &std::as_const(session).assets());
+  EXPECT_EQ(&view.modeling, &std::as_const(session).modeling());
+  EXPECT_EQ(&view.selection, &std::as_const(session).selection());
+  EXPECT_EQ(view.document.revision(), before.project_revision);
+  EXPECT_EQ(view.scene.revision(), before.scene_revision);
+  EXPECT_EQ(view.assets.revision(), before.asset_revision);
+  EXPECT_EQ(session.content_revision_stamp(), before);
+}
+
+TEST(ProjectSessionTests, DefaultAssetBootstrapServiceCreatesRuntimeDefaultMaterial) {
+  ProjectSession session;
+  const ProjectDefaultAssets defaults =
+      ProjectAssetBootstrapService{}.bootstrap_default_assets(session);
+
+  ASSERT_NE(defaults.albedo_texture, kInvalidAssetId);
+  ASSERT_NE(defaults.roughness_texture, kInvalidAssetId);
+  ASSERT_NE(defaults.default_material, kInvalidAssetId);
+  const ProjectSessionReadView view = session.read_view();
+  EXPECT_EQ(view.assets.texture_count(), 2u);
+  EXPECT_EQ(view.assets.material_count(), 1u);
+
+  const TextureAsset *albedo = view.assets.texture(defaults.albedo_texture);
+  ASSERT_NE(albedo, nullptr);
+  EXPECT_EQ(std::string_view(albedo->name), kDefaultMaterialAlbedoTextureName);
+  EXPECT_EQ(albedo->usage, TextureUsage::BaseColor);
+  EXPECT_EQ(albedo->color_space, TextureColorSpace::Srgb);
+  EXPECT_EQ(albedo->source_path.generic_string(),
+            std::string(kDefaultMaterialAlbedoTexturePackagePath));
+
+  const TextureAsset *roughness = view.assets.texture(defaults.roughness_texture);
+  ASSERT_NE(roughness, nullptr);
+  EXPECT_EQ(std::string_view(roughness->name),
+            kDefaultMaterialRoughnessTextureName);
+  EXPECT_EQ(roughness->usage, TextureUsage::Roughness);
+  EXPECT_EQ(roughness->color_space, TextureColorSpace::Linear);
+  EXPECT_EQ(roughness->source_path.generic_string(),
+            std::string(kDefaultMaterialRoughnessTexturePackagePath));
+
+  const MaterialDocument *material =
+      view.assets.material(defaults.default_material);
+  ASSERT_NE(material, nullptr);
+  EXPECT_EQ(material->name, "Default Quader");
+  EXPECT_EQ(material_texture_slot_asset(*material,
+                                        material_texture_slot::kBaseColor),
+            std::optional<AssetId>{defaults.albedo_texture});
+  EXPECT_FALSE(material_texture_slot_asset(*material,
+                                           material_texture_slot::kRoughness)
+                   .has_value());
+}
+
 TEST(AssetProjectArchitectureTests, SourceExposesNamedAssetAndProjectArchitectureTypes) {
   const std::string asset_document_source =
       read_source_file("src/assets/asset_document.hpp");
@@ -6992,6 +7326,8 @@ TEST(AssetProjectArchitectureTests, SourceExposesNamedAssetAndProjectArchitectur
   const std::string project_document_source =
       read_source_file("src/scene/document/project_document.hpp");
   const std::string project_session_source =
+      read_source_file("src/editor/session/project_session.hpp");
+  const std::string project_session_compat_source =
       read_source_file("src/scene/document/project_session.hpp");
 
   EXPECT_NE(asset_document_source.find("struct AssetDocumentBase"),
@@ -7053,6 +7389,11 @@ TEST(AssetProjectArchitectureTests, SourceExposesNamedAssetAndProjectArchitectur
   EXPECT_NE(
       project_session_source.find("open_session(ProjectDocument document)"),
       std::string::npos);
+  EXPECT_NE(project_session_compat_source.find(
+                "#include \"editor/session/project_session.hpp\""),
+            std::string::npos);
+  EXPECT_EQ(project_session_compat_source.find("class ProjectSession"),
+            std::string::npos);
 }
 
 TEST(DocumentCommandServiceTests, RecordsUndoRedoForNativeSceneEdits) {
@@ -11548,6 +11889,60 @@ TEST(ModelingSessionServiceTests, TransformDragObjectSelectionUsesSceneTransform
     EXPECT_FALSE(after_commit_update.active);
 }
 
+TEST(ModelingSessionServiceTests,
+     ObjectTransformDragRefreshesViewportOverlayCacheKeyDuringScenePreview) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+    const ModelingCreateBoxResult box = service.create_box_from_bounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Object Drag Overlay Cache Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_EQ(service.selection_mode(), ModelingSelectionMode::Object);
+
+    const ModelingSelectionOverlayOptions overlay_options{
+        .suppress_persistent_object_selection = true,
+    };
+    auto make_viewport_overlay_key = [&]() {
+      const ModelingSelectionSummary summary = service.selection_summary();
+      return ViewportPaneOverlayCacheKey{
+          .content_revision = summary.content_revision,
+          .selection_revision = summary.selection_revision,
+          .scene_revision = scene.revision(),
+          .asset_revision = assets.revision(),
+          .overlay_signature =
+              service.selection_overlay_signature(overlay_options),
+          .selection_mode = summary.mode,
+      };
+    };
+
+    ViewportPaneOverlayCache cache;
+    const ViewportPaneOverlayCacheKey before_key = make_viewport_overlay_key();
+    cache.update(service.selection_overlay_frame(overlay_options), before_key);
+
+    ModelingTransformDragPreview begin =
+        service.begin_transform_drag(test_x_move_drag_begin_request());
+    ASSERT_TRUE(begin.ok) << begin.message;
+    ASSERT_TRUE(begin.scene_transform);
+
+    ModelingTransformDragPreview update =
+        service.update_transform_drag(test_x_move_drag_update_request(2.0f));
+    ASSERT_TRUE(update.ok) << update.message;
+    ASSERT_TRUE(update.scene_transform);
+    ASSERT_NE(scene.transform(box.object.entity), nullptr);
+    EXPECT_NEAR(scene.transform(box.object.entity)->position.x, 2.0f, 0.001f);
+
+    const ViewportPaneOverlayCacheKey preview_key =
+        make_viewport_overlay_key();
+    EXPECT_EQ(cache.refresh_reason(preview_key),
+              ViewportPaneOverlayCacheRefreshReason::SceneRevision);
+
+    const ModelingCommandResult cancel = service.cancel_transform_drag();
+    ASSERT_TRUE(cancel.ok) << cancel.message;
+}
+
 TEST(ModelingSessionServiceTests, PublicTransformDragObjectSelectionRecordsSceneTransformHistory) {
     ProjectSession session;
     QuaderEditorApi editor(
@@ -12480,6 +12875,16 @@ TEST(ModelingSessionServiceTests, SupportsRuntimeBoxPreviewLifecycle) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
+    const EntityId previous_selection =
+        scene.create_entity("Previous Selection");
+    scene.set_selected(previous_selection, true);
+    EXPECT_EQ(scene.primary_selection(), previous_selection);
+    const std::size_t scene_entity_count_before = scene.entities().size();
+    const std::size_t mesh_count_before = assets.mesh_count();
+    auto expect_preview_not_document_truth = [&]() {
+      EXPECT_EQ(scene.entities().size(), scene_entity_count_before);
+      EXPECT_EQ(assets.mesh_count(), mesh_count_before);
+    };
 
     const ModelingBoxToolEvent start{
         .screen_position = {400.0f, 300.0f},
@@ -12511,28 +12916,34 @@ TEST(ModelingSessionServiceTests, SupportsRuntimeBoxPreviewLifecycle) {
     EXPECT_TRUE(hover.ok);
     EXPECT_TRUE(hover.valid);
     EXPECT_EQ(hover.drag_state, ModelingBoxDragState::Idle);
-
-    const EntityId previous_selection =
-        scene.create_entity("Previous Selection");
-    scene.set_selected(previous_selection, true);
+    EXPECT_TRUE(service.box_preview().valid);
+    EXPECT_EQ(service.box_preview().drag_state, ModelingBoxDragState::Idle);
     EXPECT_EQ(scene.primary_selection(), previous_selection);
+    expect_preview_not_document_truth();
 
     const ModelingBoxPreview footprint_begin =
         service.begin_box_footprint(start);
     EXPECT_TRUE(footprint_begin.ok);
     EXPECT_EQ(footprint_begin.drag_state, ModelingBoxDragState::Footprint);
+    EXPECT_EQ(service.box_preview().drag_state, ModelingBoxDragState::Footprint);
     EXPECT_TRUE(scene.selected_entities().empty());
     EXPECT_EQ(scene.primary_selection(), kInvalidEntityId);
+    expect_preview_not_document_truth();
 
     const ModelingBoxPreview footprint_update =
         service.update_box_footprint(footprint_end);
     EXPECT_TRUE(footprint_update.ok);
     EXPECT_TRUE(footprint_update.valid);
     EXPECT_EQ(footprint_update.drag_state, ModelingBoxDragState::Footprint);
+    EXPECT_TRUE(service.box_preview().valid);
+    EXPECT_EQ(service.box_preview().drag_state, ModelingBoxDragState::Footprint);
+    expect_preview_not_document_truth();
 
     const ModelingBoxPreview height_begin = service.begin_box_height(start);
     EXPECT_TRUE(height_begin.ok);
     EXPECT_EQ(height_begin.drag_state, ModelingBoxDragState::Height);
+    EXPECT_EQ(service.box_preview().drag_state, ModelingBoxDragState::Height);
+    expect_preview_not_document_truth();
 
     const ModelingBoxPreview height_update =
         service.update_box_height(height_end);
@@ -12541,13 +12952,19 @@ TEST(ModelingSessionServiceTests, SupportsRuntimeBoxPreviewLifecycle) {
     EXPECT_EQ(height_update.drag_state, ModelingBoxDragState::Height);
     EXPECT_GT(height_update.distance, 0.0);
     EXPECT_GE(height_update.corner_count, 8u);
+    EXPECT_EQ(service.box_preview().drag_state, ModelingBoxDragState::Height);
+    EXPECT_GE(service.box_preview().corner_count, 8u);
+    expect_preview_not_document_truth();
 
     const ModelingCreateBoxResult commit = service.commit_box("Preview Box");
     ASSERT_TRUE(commit.ok) << commit.message;
     EXPECT_TRUE(commit.changed);
     EXPECT_NE(commit.object.entity, kInvalidEntityId);
+    EXPECT_EQ(service.box_preview().drag_state, ModelingBoxDragState::Idle);
+    EXPECT_FALSE(service.box_preview().valid);
     EXPECT_EQ(scene.primary_selection(), commit.object.entity);
-    EXPECT_EQ(assets.mesh_count(), 1u);
+    EXPECT_EQ(scene.entities().size(), scene_entity_count_before + 1U);
+    EXPECT_EQ(assets.mesh_count(), mesh_count_before + 1U);
 }
 
 TEST(MaterialDocumentTests, DefaultQuaderMaterialUsesDefaultMaterialTextureSlots) {
@@ -12617,6 +13034,8 @@ TEST(MaterialDocumentTests, MaterialTextureSlotPolicyOwnsApiQdrAndRenderSlotNorm
       read_source_file("src/assets/asset_registry.cpp");
   const std::string api_source =
       read_source_file("src/api/quader_asset_api.cpp");
+  const std::string asset_command_source =
+      read_source_file("src/editor/commands/replace_asset_command.hpp");
   const std::string document_command_source =
       read_source_file("src/editor/commands/document_command_service.cpp");
   const std::string qdr_reader_source =
@@ -12657,7 +13076,11 @@ TEST(MaterialDocumentTests, MaterialTextureSlotPolicyOwnsApiQdrAndRenderSlotNorm
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       set_texture_source,
-      ".assets().set_material_texture(material, slot, texture)"));
+      ".asset_commands().set_material_texture(material, std::move(slot), texture)"));
+  EXPECT_NE(asset_command_source.find("assets().set_material_texture"),
+            std::string::npos);
+  EXPECT_EQ(set_texture_source.find(".assets().set_material_texture"),
+            std::string::npos);
   EXPECT_NE(document_command_source.find("DocumentCommandService::set_material"),
             std::string::npos);
   EXPECT_NE(document_command_source.find("assets_->material(material)"),

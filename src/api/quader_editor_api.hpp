@@ -22,7 +22,15 @@
 namespace quader {
 
 /**
- * Exposes Quader Editor API operations through the public Quader API surface.
+ * Whole-editor public front door for native app user intent.
+ *
+ * Use this surface when an operation needs runtime editor domains in addition to document/modeling
+ * automation: projects, viewports, tools, commands, preferences, UI, events, or rendering. Methods
+ * on this facade express editor-level intent and delegate to the owning domain APIs; this class is
+ * not an owner for storage, render, UI, platform, modeling, document, or asset invariants.
+ *
+ * Public callers should keep crossing owner boundaries through these API methods instead of
+ * depending on backend objects or mutable service internals.
  */
 class QuaderEditorApi final {
 public:
@@ -80,6 +88,10 @@ private:
 
 /**
  * Owns a standalone editor session for public examples and small automation programs.
+ *
+ * The returned editor API remains the only public entry point to the session. Callers should use the
+ * editor, document, and modeling facades exposed by QuaderEditorApi rather than reaching into
+ * backend-specific services.
  */
 class QuaderStandaloneEditor final {
 public:

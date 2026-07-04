@@ -16,6 +16,8 @@
 #include "editor/modeling/services/modeling_overlay_service.hpp"
 #include "editor/modeling/services/modeling_selection_service.hpp"
 #include "editor/modeling/services/modeling_tool_settings_service.hpp"
+#include "editor/modeling/services/modeling_transform_drag_service.hpp"
+#include "editor/modeling/services/runtime_tool_command_service.hpp"
 #include "editor/modeling/services/scene_modeling_sync_service.hpp"
 #include "editor/modeling/services/runtime_operation_executor.hpp"
 #include "editor/modeling/preview/transform_preview_service.hpp"

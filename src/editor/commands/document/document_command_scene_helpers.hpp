@@ -8,6 +8,7 @@
 
 #include "core/types.hpp"
 #include "editor/commands/document/document_command_result.hpp"
+#include "editor/selection/scene_selection_application.hpp"
 #include "scene/components.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_entity_naming.hpp"
@@ -22,13 +23,7 @@
 
 namespace quader {
 
-/**
- * Stores the Document Selection State data contract used by the editor document command layer.
- */
-struct DocumentSelectionState {
-    std::vector<EntityId> selected;
-    EntityId active = kInvalidEntityId;
-};
+using DocumentSelectionState = SceneSelectionState;
 
 /**
  * Stores the Document Entity Snapshot data contract used by the editor document command layer.
@@ -77,56 +72,27 @@ document_command_normalize_existing_entities(const SceneDocument &scene,
 
 inline DocumentSelectionState
 document_command_capture_selection(const SceneDocument &scene) {
-  return {
-      .selected = scene.selected_entities(),
-      .active = scene.primary_selection(),
-  };
+  return capture_scene_selection(scene);
 }
 
 inline DocumentSelectionState
 document_command_selection_for(const SceneDocument &scene,
                                const std::vector<EntityId> &entities,
                                EntityId active = kInvalidEntityId) {
-  EntityId resolved_active = active;
-  if (resolved_active == kInvalidEntityId) {
-    for (auto it = entities.rbegin(); it != entities.rend(); ++it) {
-      if (*it != kInvalidEntityId && scene.exists(*it)) {
-        resolved_active = *it;
-        break;
-      }
-    }
-  }
-
-  std::vector<EntityId> selected =
-      document_command_normalize_existing_entities(scene, entities);
-  if (std::find(selected.begin(), selected.end(), resolved_active) ==
-      selected.end()) {
-    resolved_active = selected.empty() ? kInvalidEntityId : selected.front();
-  }
-  return {
-      .selected = std::move(selected),
-      .active = resolved_active,
-  };
+  return make_scene_selection(scene, entities, active);
 }
 
 inline bool
 document_command_same_selection(const DocumentSelectionState &left,
                                 const DocumentSelectionState &right) {
-  return left.active == right.active && left.selected == right.selected;
+  return same_scene_selection(left, right);
 }
 
 inline void
 document_command_apply_selection(SceneDocument &scene,
                                  const DocumentSelectionState &state) {
-  scene.clear_selection();
-  for (const EntityId entity : state.selected) {
-    if (scene.exists(entity)) {
-      scene.set_selected(entity, true);
-    }
-  }
-  if (state.active != kInvalidEntityId && scene.exists(state.active)) {
-    scene.set_active_selection(state.active);
-  }
+  (void)apply_scene_selection(
+      scene, state, SceneSelectionApplicationMode::UndoableCommand);
 }
 
 inline EntityId document_command_remap_entity(

@@ -8,24 +8,31 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Quader Public Editor API
 
-Quader editor automation should start from `create_standalone_editor()` in small standalone programs,
-from `QuaderEditorApi` in the native app runtime, or from `QuaderApi` for document/modeling-only
-behavior tests and examples.
+`QuaderEditorApi` is the default public front door for native-app editor intent. Use `QuaderApi`
+for document/modeling-only automation, tests, and examples that do not need runtime editor domains.
+Small standalone programs can create an editor through `create_standalone_editor()` and then stay on
+the public `QuaderEditorApi` / `QuaderApi` surface.
 
 ```cpp
 quader::QuaderStandaloneEditor standalone = quader::create_standalone_editor();
 quader::QuaderEditorApi& editor = standalone.editor();
 
-auto created = editor.modeling().create_box({
+const auto created = editor.modeling().create_box({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "API Box",
 });
 
-if (created.ok()) {
-    auto object = editor.object(created.value());
-    object.rename("Renamed API Box");
-    object.select();
-    editor.commands().execute(quader::quader_command::kHistoryUndo);
+if (!created.ok()) {
+    throw std::runtime_error(created.error_message());
+}
+
+auto object = editor.object(created.value());
+object.rename("Renamed API Box");
+object.select();
+
+const auto undo = editor.commands().execute(quader::quader_command::kEditUndo);
+if (!undo.ok()) {
+    throw std::runtime_error(undo.error_message());
 }
 ```
 
@@ -36,23 +43,59 @@ Use public API domains for editor intent:
   `editor.history()`, and `editor.query()` for document/modeling work.
 - `editor.commands()` for stable command IDs shared by menus, shortcuts, tests, and future scripts.
 - `editor.viewports()`, `editor.tools()`, `editor.preferences()`, and `editor.ui()` for runtime
-  editor state. Viewport layout, pane view, pane shading, grid preset, focused pane, and camera state
-  are backed by the viewport workspace service rather than UI callbacks.
+  editor state such as viewport layout, pane view, pane shading, grid preset, focused pane, camera
+  state, active tools, user preferences, and visible panels.
 
 Common ergonomic patterns:
 
 ```cpp
-editor.scene().select(entity);
-editor.selection().select_object(object.entity);
-editor.commands().execute(quader::quader_command::kDuplicateSelection);
+quader::QuaderApi& api = editor.api();
+
+api.selection().select_object(object.ref());
+const auto duplicated =
+        editor.commands().execute(quader::quader_command::kModelingDuplicateMeshes);
+if (!duplicated.ok()) {
+    throw std::runtime_error(duplicated.error_message());
+}
 editor.main_viewport().set_shading_mode(quader::QuaderShadingMode::Wireframe);
 
-editor.scene().batch("Arrange blockout")
-        .rename(entity, "North Wall")
-        .set_transform(entity, moved)
-        .set_visible(helper, false)
-        .commit();
+quader::QuaderSceneBatch batch = editor.scene().batch("Arrange blockout");
+const auto arranged = batch.rename(entity, "North Wall")
+                              .set_transform(entity, moved)
+                              .set_visible(helper, false)
+                              .commit();
+if (!arranged.ok()) {
+    throw std::runtime_error(arranged.error_message());
+}
 ```
 
-Low-level document, absorbed modeling internals, render, UI, and platform services remain owner
-layers. Public examples should not start from those internals.
+The `object` variable above is a `QuaderObjectHandle`, the preferred fluent surface for object
+workflows. `QuaderSceneBatch` groups scene edits into one undoable operation. Check API results
+through the callable helpers: `result.ok()`, `result.changed()`, `result.value()`, and
+`result.error_message()`.
+
+`QuaderScript` is the current C++ automation DSL. Build scripts from a public API facade and inspect
+the same result helpers after `run()`:
+
+```cpp
+const quader::QuaderBounds wall_bounds{
+        .min = {-2.0f, 0.0f, -0.1f},
+        .max = {2.0f, 3.0f, 0.1f},
+};
+quader::QuaderScript script = api.script("Blockout");
+const auto script_result = script.create_box("wall", wall_bounds, "Wall")
+        .select("wall")
+        .move_selection({0.0f, 0.0f, 2.0f})
+        .run();
+
+if (!script_result.ok()) {
+    throw std::runtime_error(script_result.error_message());
+}
+```
+
+Future Lua examples should start from the public `quader` scripting object once native Lua bindings
+exist. Do not expose or depend on raw editor services from public scripting docs.
+
+**Internal Architecture Note:** Low-level document, absorbed modeling, render, UI, and platform
+services remain owner layers. Internal architecture docs may discuss those systems, but public
+examples should not start from them.

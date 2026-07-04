@@ -373,7 +373,7 @@ void draw_scene_settings_inspector(UIContext &context, EntityId entity,
         std::max(next.post_process.ambient_occlusion_radius, 0.0f);
     next.post_process.bloom_strength =
         std::max(next.post_process.bloom_strength, 0.0f);
-    (void)context.editor.scene().set_scene_settings(
+    (void)context.intent.editor.scene().set_scene_settings(
         entity, to_api_scene_settings(next),
         QuaderSceneEditOptions{.merge_key = std::move(merge_key)});
   };
@@ -753,8 +753,8 @@ void InspectorPanel::cancel_active_transform_edit() {
 
 void InspectorPanel::draw_content(UIContext& context) {
     // UIDockPanel routes hover input through context.requestPanelFocus(id()) before content draws.
-    SceneDocument& document = context.document;
-    ModelingSessionService& modeling = context.modeling;
+    const SceneDocument& document = context.scene.document;
+    const ModelingSessionService& modeling = context.scene.modeling;
 
     const std::vector<EntityId> selected = document.selected_entities();
     const ModelingSelectionSummary selection = modeling.selection_summary();
@@ -867,7 +867,7 @@ void InspectorPanel::draw_content(UIContext& context) {
                     name_buffer.size(),
                     ImGuiInputTextFlags_EnterReturnsTrue |
                         ImGuiInputTextFlags_AutoSelectAll)) {
-              (void)context.editor.scene().rename(primary, name_buffer.data());
+              (void)context.intent.editor.scene().rename(primary, name_buffer.data());
             }
           }
         }
@@ -889,7 +889,7 @@ void InspectorPanel::draw_content(UIContext& context) {
                 });
               }
             }
-            (void)context.editor.scene().set_visibility(
+            (void)context.intent.editor.scene().set_visibility(
                 std::span<const QuaderSceneVisibilityEdit>(edits.data(),
                                                            edits.size()));
           }
@@ -916,7 +916,7 @@ void InspectorPanel::draw_content(UIContext& context) {
                 });
               }
             }
-            (void)context.editor.scene().set_locks(
+            (void)context.intent.editor.scene().set_locks(
                 std::span<const QuaderSceneLockEdit>(edits.data(),
                                                      edits.size()));
           }
@@ -987,6 +987,11 @@ void InspectorPanel::draw_content(UIContext& context) {
                 active_transform_preview_.preview_active()) {
               return true;
             }
+            if (context.inspector_preview == nullptr) {
+              return false;
+            }
+            SceneDocument &preview_document = context.inspector_preview->document;
+            const AssetRegistry &preview_assets = context.inspector_preview->assets;
 
             cancel_active_transform_edit();
             refresh_primary_transform();
@@ -998,15 +1003,17 @@ void InspectorPanel::draw_content(UIContext& context) {
             case InspectorTransformEditKind::Position:
               return active_transform_preview_
                   .begin_move_selected_to_primary_position_preview(
-                      document, primary, "Set Transform");
+                      preview_document, primary, "Set Transform");
             case InspectorTransformEditKind::Rotation:
               return active_transform_preview_
                   .begin_rotate_selected_to_primary_euler_preview(
-                      document, context.assets, primary, "Set Transform");
+                      preview_document, preview_assets, primary,
+                      "Set Transform");
             case InspectorTransformEditKind::Scale:
               return active_transform_preview_
                   .begin_scale_selected_to_primary_scale_preview(
-                      document, context.assets, primary, "Set Transform");
+                      preview_document, preview_assets, primary,
+                      "Set Transform");
             }
             return false;
           };
@@ -1026,25 +1033,31 @@ void InspectorPanel::draw_content(UIContext& context) {
                 !active_transform_preview_.preview_active()) {
               return;
             }
+            if (context.inspector_preview == nullptr) {
+              return;
+            }
+            SceneDocument &preview_document = context.inspector_preview->document;
 
             DocumentCommandResult preview_result;
             switch (kind) {
             case InspectorTransformEditKind::Position:
               preview_result =
                   active_transform_preview_.preview_selected_to_primary_position(
-                      document, primary, {values[0], values[1], values[2]});
+                      preview_document, primary,
+                      {values[0], values[1], values[2]});
               break;
             case InspectorTransformEditKind::Rotation:
               preview_result =
                   active_transform_preview_.preview_selected_to_primary_euler(
-                      document, primary,
+                      preview_document, primary,
                       {values[0] * kDegToRad, values[1] * kDegToRad,
                        values[2] * kDegToRad});
               break;
             case InspectorTransformEditKind::Scale:
               preview_result =
                   active_transform_preview_.preview_selected_to_primary_scale(
-                      document, primary, {values[0], values[1], values[2]});
+                      preview_document, primary,
+                      {values[0], values[1], values[2]});
               break;
             }
 
@@ -1056,7 +1069,7 @@ void InspectorPanel::draw_content(UIContext& context) {
 
           auto finish_transform_preview = [&]() {
             if (active_transform_preview_.preview_active()) {
-              (void)active_transform_preview_.commit(context.editor);
+              (void)active_transform_preview_.commit(context.intent.editor);
             }
             active_transform_edit_.reset();
             refresh_primary_transform();
@@ -1182,10 +1195,10 @@ void InspectorPanel::draw_content(UIContext& context) {
     }
 
     if (selected.size() == 1u) {
-      if (const MeshComponent *current_mesh = document.mesh(primary)) {
-        MeshComponent mesh = *current_mesh;
-        auto apply_mesh_component = [&](MeshComponent next) {
-          (void)context.editor.scene().set_mesh_component(
+        if (const MeshComponent *current_mesh = document.mesh(primary)) {
+          MeshComponent mesh = *current_mesh;
+          auto apply_mesh_component = [&](MeshComponent next) {
+          (void)context.intent.editor.scene().set_mesh_component(
               primary, to_api_mesh_component(next));
         };
 
@@ -1300,7 +1313,7 @@ void InspectorPanel::draw_content(UIContext& context) {
                                          std::string merge_key = {}) {
           next.range = std::max(next.range, 0.001f);
           next.intensity = std::max(next.intensity, 0.0f);
-          (void)context.editor.scene().set_light_component(
+          (void)context.intent.editor.scene().set_light_component(
               primary, to_api_light_component(next),
               QuaderSceneEditOptions{.merge_key = std::move(merge_key)});
         };

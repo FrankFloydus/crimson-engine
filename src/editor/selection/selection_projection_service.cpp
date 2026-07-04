@@ -8,6 +8,7 @@
 
 #include "assets/asset_registry.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
+#include "editor/selection/scene_selection_application.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/components.hpp"
 #include "scene/scene_bounds.hpp"
@@ -128,45 +129,6 @@ EntityId active_scene_entity_for_runtime_object(
   return kInvalidEntityId;
 }
 
-bool apply_exact_scene_selection(SceneDocument &scene,
-                                 std::span<const EntityId> selected,
-                                 EntityId active) {
-  const std::uint64_t revision_before = scene.revision();
-  std::unordered_set<EntityId> desired;
-  desired.reserve(selected.size());
-  std::vector<EntityId> ordered_selected;
-  ordered_selected.reserve(selected.size());
-
-  for (const EntityId entity : selected) {
-    if (scene.exists(entity) && !desired.contains(entity)) {
-      desired.insert(entity);
-      ordered_selected.push_back(entity);
-    }
-  }
-
-  for (const EntityId entity : scene.selected_entities()) {
-    if (!desired.contains(entity)) {
-      scene.set_selected(entity, false);
-    }
-  }
-  for (const EntityId entity : ordered_selected) {
-    const SelectionComponent *selection = scene.selection(entity);
-    if (selection == nullptr || !selection->selected) {
-      scene.set_selected(entity, true);
-    }
-  }
-
-  const EntityId resolved_active = resolve_projected_active_selection<EntityId>(
-      std::span<const EntityId>(ordered_selected.data(),
-                                ordered_selected.size()),
-      active, kInvalidEntityId);
-  if (resolved_active != kInvalidEntityId) {
-    scene.set_active_selection(resolved_active);
-  }
-
-  return scene.revision() != revision_before;
-}
-
 QVec3 world_point_for_modeling_object(
     int object_id, QVec3 point, const ModelingObjectRuntimeMap &object_registry,
     const SceneDocument &scene) {
@@ -256,28 +218,23 @@ bool SelectionProjectionService::project_scene_selection_from_modeling(
       selected_entities.begin(), selected_entities.end());
   const EntityId active = active_scene_entity_for_runtime_object(
       session.active_object_id(), desired_selection, object_registry);
-  return apply_exact_scene_selection(scene, selected_entities, active);
+  return apply_scene_selection(
+      scene, make_scene_selection(scene, selected_entities, active),
+      SceneSelectionApplicationMode::RuntimeSync);
 }
 
 bool SelectionProjectionService::restore_scene_selection(
     SceneDocument &scene, std::span<const EntityId> selected,
     EntityId active) const {
-  return apply_exact_scene_selection(scene, selected, active);
+  return apply_scene_selection(scene, make_scene_selection(scene, selected, active),
+                               SceneSelectionApplicationMode::RuntimeSync);
 }
 
 bool SelectionProjectionService::add_scene_selection(
     SceneDocument &scene, std::span<const EntityId> selected,
     EntityId active) const {
-  const std::uint64_t revision_before = scene.revision();
-  for (const EntityId entity : selected) {
-    if (scene.exists(entity)) {
-      scene.set_selected(entity, true);
-    }
-  }
-  if (active != kInvalidEntityId && scene.exists(active)) {
-    scene.set_active_selection(active);
-  }
-  return scene.revision() != revision_before;
+  return quader::add_scene_selection(
+      scene, selected, active, SceneSelectionApplicationMode::RuntimeSync);
 }
 
 std::optional<QVec3> SelectionProjectionService::world_selection_center(

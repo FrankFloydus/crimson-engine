@@ -11,6 +11,7 @@
 #include <editor/modeling/runtime/runtime_command.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -1817,6 +1818,70 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadePickSelectDoubleC
         EXPECT_TRUE(vertex_session.selection_mode() ==
                     qec::SelectionMode::Vertex);
         EXPECT_FALSE(vertex_session.history_status().can_undo);
+}
+
+TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeDrivesPolyHoverAcceptAndCommit) {
+	qec::EditorSession session;
+	session.set_objects({});
+	qec::EditorRuntime runtime;
+	session.clear_history();
+
+	const auto poly_hover_command = [](float x, float z) {
+		qec::PolyHoverRuntimeCommandSettings settings;
+		settings.camera.projection = qec::CameraProjection::Perspective;
+		settings.ray = { { x, 2.0F, z }, { 0.0F, -1.0F, 0.0F } };
+		settings.grid_size = 1.0;
+		settings.snap_enabled = true;
+
+		qec::EditorRuntimeCommand command;
+		command.command_id = qec::EditorRuntimeCommandId::UpdatePolyHover;
+		command.settings = settings;
+		return command;
+	};
+
+	const std::array<quader::QVec3, 4> corners {{
+		{ 0.0F, 0.0F, 0.0F },
+		{ 1.0F, 0.0F, 0.0F },
+		{ 1.0F, 0.0F, 1.0F },
+		{ 0.0F, 0.0F, 1.0F },
+	}};
+	for (const quader::QVec3 corner : corners) {
+		const qec::EditorRuntimeCommandResult hover_result =
+			qec::execute_runtime_command(session, runtime, poly_hover_command(corner.x, corner.z));
+		EXPECT_TRUE(hover_result.command.ok);
+		EXPECT_TRUE(hover_result.runtime.poly_active);
+		EXPECT_TRUE(hover_result.runtime.poly_has_current);
+
+		const qec::EditorRuntimeCommandResult accept_result =
+			qec::execute_runtime_command(
+				session,
+				runtime,
+				no_settings_command(qec::EditorRuntimeCommandId::AcceptPolyPoint));
+		EXPECT_TRUE(accept_result.command.ok);
+		EXPECT_TRUE(accept_result.command.changed);
+	}
+
+	EXPECT_TRUE(runtime.status().poly_can_commit);
+	EXPECT_TRUE(runtime.status().poly_point_count == 4);
+	const qec::EditorRuntimeCommandResult commit_result =
+		qec::execute_runtime_command(
+			session,
+			runtime,
+			no_settings_command(qec::EditorRuntimeCommandId::CommitPoly));
+	EXPECT_TRUE(commit_result.command.ok);
+	EXPECT_TRUE(commit_result.command.changed);
+	EXPECT_FALSE(commit_result.runtime.poly_active);
+	EXPECT_TRUE(session.objects().size() == 1U);
+	EXPECT_TRUE(session.objects().front().selected);
+	EXPECT_TRUE(session.history_status().can_undo);
+
+	qec::EditorRuntimeCommand mismatched;
+	mismatched.command_id = qec::EditorRuntimeCommandId::UpdatePolyHover;
+	mismatched.settings = std::monostate {};
+	const qec::EditorRuntimeCommandResult mismatch_result =
+		qec::execute_runtime_command(session, runtime, mismatched);
+	EXPECT_FALSE(mismatch_result.command.ok);
+	EXPECT_TRUE(mismatch_result.command.message == "Runtime command settings do not match the command id.");
 }
 
 TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeRejectsPickSelectWithMismatchedSettings) {

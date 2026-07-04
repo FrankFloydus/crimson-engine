@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "io/qdr/qdr_diagnostic.hpp"
 #include "io/qdr/qdr_format.hpp"
 
 #include <mesh/polygon/document.hpp>
@@ -111,6 +112,7 @@ struct QdrReadResult {
 	bool ok = false;
 	QdrDocument document;
 	std::string message;
+	std::vector<QdrDiagnostic> diagnostics;
 };
 
 /**

@@ -6,29 +6,20 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
 
-#include "assets/asset_registry.hpp"
 #include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
-#include "mesh/polygon/document.hpp"
+#include "mesh/polygon/document_model.hpp"
 #include "render/viewport_overlay_policy.hpp"
-#include "scene/scene_bounds.hpp"
-#include "scene/scene_document.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <optional>
 #include <unordered_map>
 #include <utility>
 
 namespace quader {
 namespace {
-
-bool entity_selected(const SceneDocument &document, EntityId entity) {
-  const SelectionComponent *selection = document.selection(entity);
-  return selection != nullptr && selection->selected;
-}
 
 /**
  * Represents a Wire Edge Point value used by scene overlay extraction.
@@ -114,41 +105,29 @@ WireEdgeKey wire_edge_key(QVec3 a, QVec3 b) {
 }
 
 void append_mesh_selection_wire(
-    ViewportOverlayFrame &frame, const SceneDocument &document,
-    const AssetRegistry &assets, EntityId entity,
+    ViewportOverlayFrame &frame, const RenderOverlayMeshSnapshot &mesh,
     std::uint32_t color = kOverlaySelectionWireColor,
     ViewportOverlayLayer layer = ViewportOverlayLayer::SourceWire,
     ViewportOverlayStyleRole style_role =
         ViewportOverlayStyleRole::SelectedSourceWire,
     ViewportOverlaySource source = ViewportOverlaySource::Selection) {
   QDR_PROFILE_FUNCTION();
-  if (!document.is_effectively_visible(entity)) {
+  if (!mesh.has_triangle_geometry()) {
     return;
   }
 
-  const MeshComponent *mesh_component = document.mesh(entity);
-  if (mesh_component == nullptr) {
-    return;
-  }
-
-  const MeshAsset *mesh = assets.mesh(mesh_component->mesh);
-  if (mesh == nullptr || mesh->vertices.empty() || mesh->indices.size() < 3u) {
-    return;
-  }
-
-  const QMat4 world_from_local = document.world_transform_matrix(entity);
   std::unordered_map<WireEdgeKey, WireEdgeRecord, WireEdgeKeyHash> edges;
-  edges.reserve(mesh->indices.size());
+  edges.reserve(mesh.indices.size());
 
   auto append_edge = [&](std::uint32_t a, std::uint32_t b,
                          QVec3 triangle_normal) {
-    if (a >= mesh->vertices.size() || b >= mesh->vertices.size() || a == b) {
+    if (a >= mesh.vertices.size() || b >= mesh.vertices.size() || a == b) {
       return;
     }
     const QVec3 start =
-        transform_point(world_from_local, mesh->vertices[a].position);
+        transform_point(mesh.world_transform, mesh.vertices[a].position);
     const QVec3 end =
-        transform_point(world_from_local, mesh->vertices[b].position);
+        transform_point(mesh.world_transform, mesh.vertices[b].position);
     const WireEdgeKey key = wire_edge_key(start, end);
     WireEdgeRecord &record = edges[key];
     if (record.count == 0u) {
@@ -165,20 +144,20 @@ void append_mesh_selection_wire(
     ++record.count;
   };
 
-  for (std::size_t index = 0; index + 2u < mesh->indices.size(); index += 3u) {
-    const std::uint32_t a = mesh->indices[index];
-    const std::uint32_t b = mesh->indices[index + 1u];
-    const std::uint32_t c = mesh->indices[index + 2u];
-    if (a >= mesh->vertices.size() || b >= mesh->vertices.size() ||
-        c >= mesh->vertices.size()) {
+  for (std::size_t index = 0; index + 2u < mesh.indices.size(); index += 3u) {
+    const std::uint32_t a = mesh.indices[index];
+    const std::uint32_t b = mesh.indices[index + 1u];
+    const std::uint32_t c = mesh.indices[index + 2u];
+    if (a >= mesh.vertices.size() || b >= mesh.vertices.size() ||
+        c >= mesh.vertices.size()) {
       continue;
     }
     const QVec3 world_a =
-        transform_point(world_from_local, mesh->vertices[a].position);
+        transform_point(mesh.world_transform, mesh.vertices[a].position);
     const QVec3 world_b =
-        transform_point(world_from_local, mesh->vertices[b].position);
+        transform_point(mesh.world_transform, mesh.vertices[b].position);
     const QVec3 world_c =
-        transform_point(world_from_local, mesh->vertices[c].position);
+        transform_point(mesh.world_transform, mesh.vertices[c].position);
     QVec3 normal = cross(world_b - world_a, world_c - world_a);
     if (length(normal) > 0.000001f) {
       normal = normalize(normal);
@@ -234,23 +213,21 @@ void emit_wireframe_edges(ViewportOverlayFrame &frame,
   }
 }
 
-bool append_authored_polygon_wireframe(ViewportOverlayFrame &frame,
-                                       const MeshAsset &mesh,
-                                       const QMat4 &world_from_local) {
-  if (!mesh.has_authored_polygon_document || !mesh.authored_polygon_document) {
+bool append_authored_polygon_wireframe(
+    ViewportOverlayFrame &frame, const RenderOverlayMeshSnapshot &mesh) {
+  if (!mesh.has_authored_polygon_geometry()) {
     return false;
   }
 
-  const quader_poly::Document &document = *mesh.authored_polygon_document;
   std::unordered_map<quader_poly::ElementId, QVec3> vertices;
-  vertices.reserve(document.vertices.size());
-  for (const quader_poly::Vertex &vertex : document.vertices) {
+  vertices.reserve(mesh.authored_vertices.size());
+  for (const quader_poly::Vertex &vertex : mesh.authored_vertices) {
     vertices.emplace(vertex.id,
-                     transform_point(world_from_local, vertex.position));
+                     transform_point(mesh.world_transform, vertex.position));
   }
 
   std::unordered_map<WireEdgeKey, WireEdgeRecord, WireEdgeKeyHash> edges;
-  for (const quader_poly::Face &face : document.faces) {
+  for (const quader_poly::Face &face : mesh.authored_faces) {
     if (face.vertices.size() < 2u) {
       continue;
     }
@@ -275,8 +252,7 @@ bool append_authored_polygon_wireframe(ViewportOverlayFrame &frame,
 }
 
 void append_triangle_mesh_wireframe(ViewportOverlayFrame &frame,
-                                    const MeshAsset &mesh,
-                                    const QMat4 &world_from_local) {
+                                    const RenderOverlayMeshSnapshot &mesh) {
   std::unordered_map<WireEdgeKey, WireEdgeRecord, WireEdgeKeyHash> edges;
   edges.reserve(mesh.indices.size());
   auto append_triangle_edge = [&](std::uint32_t a, std::uint32_t b) {
@@ -284,8 +260,8 @@ void append_triangle_mesh_wireframe(ViewportOverlayFrame &frame,
       return;
     }
     append_wire_edge(
-        edges, transform_point(world_from_local, mesh.vertices[a].position),
-        transform_point(world_from_local, mesh.vertices[b].position));
+        edges, transform_point(mesh.world_transform, mesh.vertices[a].position),
+        transform_point(mesh.world_transform, mesh.vertices[b].position));
   };
 
   for (std::size_t index = 0; index + 2u < mesh.indices.size(); index += 3u) {
@@ -297,27 +273,19 @@ void append_triangle_mesh_wireframe(ViewportOverlayFrame &frame,
 }
 
 void append_hierarchy_selection_wires(ViewportOverlayFrame &frame,
-                                      const SceneDocument &document,
-                                      const AssetRegistry &assets) {
-  for (const EntityId selected : document.selected_entities()) {
-    if (!document.has_children(selected)) {
-      continue;
-    }
-    for (const EntityId descendant : document.descendants(selected, false)) {
-      if (entity_selected(document, descendant)) {
-        continue;
-      }
-      append_mesh_selection_wire(frame, document, assets, descendant,
-                                 kOverlaySelectionWireColor,
-                                 ViewportOverlayLayer::SourceWire,
-                                 ViewportOverlayStyleRole::SelectedSourceWire,
-                                 ViewportOverlaySource::HierarchySelection);
-    }
+                                      const RenderOverlaySelectionSnapshot
+                                          &snapshot) {
+  for (const RenderOverlayMeshSnapshot &mesh :
+       snapshot.hierarchy_selection_wires) {
+    append_mesh_selection_wire(frame, mesh, kOverlaySelectionWireColor,
+                               ViewportOverlayLayer::SourceWire,
+                               ViewportOverlayStyleRole::SelectedSourceWire,
+                               ViewportOverlaySource::HierarchySelection);
   }
 }
 
 void append_bounds_cage(ViewportOverlayFrame &frame,
-                        const SceneBounds &bounds) {
+                        const RenderOverlayBoundsSnapshot &bounds) {
   const std::array<QVec3, 8> corners{{
       {bounds.min.x, bounds.min.y, bounds.min.z},
       {bounds.max.x, bounds.min.y, bounds.min.z},
@@ -356,22 +324,16 @@ void append_bounds_cage(ViewportOverlayFrame &frame,
 }
 
 void append_group_selection_cages(ViewportOverlayFrame &frame,
-                                  const SceneDocument &document,
-                                  const AssetRegistry &assets) {
-  for (const EntityId selected : document.selected_entities()) {
-    if (document.kind(selected) != EntityKind::Empty ||
-        !document.has_children(selected)) {
-      continue;
-    }
-    if (const std::optional<SceneBounds> bounds =
-            entity_hierarchy_world_bounds(document, assets, selected)) {
-      append_bounds_cage(frame, *bounds);
-    }
+                                  const RenderOverlaySelectionSnapshot
+                                      &snapshot) {
+  for (const RenderOverlayBoundsSnapshot &bounds : snapshot.group_bounds) {
+    append_bounds_cage(frame, bounds);
   }
 }
 
 void append_selected_light_markers(ViewportOverlayFrame &frame,
-                                   const SceneDocument &document) {
+                                   const RenderOverlaySelectionSnapshot
+                                       &snapshot) {
   constexpr float kLightMarkerRadius = 0.28f;
   constexpr float kDirectionalLightLength = 0.85f;
   const std::array<QVec3, 3> axes{{
@@ -380,12 +342,9 @@ void append_selected_light_markers(ViewportOverlayFrame &frame,
       {0.0f, 0.0f, kLightMarkerRadius},
   }};
 
-  for (const EntityId selected : document.selected_entities()) {
-    const LightComponent *light = document.light(selected);
-    if (light == nullptr || !document.is_effectively_visible(selected)) {
-      continue;
-    }
-    const QMat4 world = document.world_transform_matrix(selected);
+  for (const RenderOverlayLightMarkerSnapshot &light :
+       snapshot.selected_lights) {
+    const QMat4 world = light.world_transform;
     const QVec3 position = transform_point(world, {});
     frame.points.push_back(ViewportOverlayPoint{
         .layer = ViewportOverlayLayer::SelectedVertex,
@@ -397,7 +356,7 @@ void append_selected_light_markers(ViewportOverlayFrame &frame,
         .outline_growth_pixels = kOverlayLightMarkerOutlineGrowthPixels,
     });
 
-    if (light->type == LightType::Directional) {
+    if (light.type == LightType::Directional) {
       QVec3 direction = normalize(transform_vector(world, {0.0f, -1.0f, 0.0f}));
       if (length(direction) <= 0.000001f) {
         direction = {0.0f, -1.0f, 0.0f};
@@ -443,26 +402,13 @@ void append_selected_light_markers(ViewportOverlayFrame &frame,
 }
 
 void append_scene_wireframe_overlay(ViewportOverlayFrame &frame,
-                                    const SceneDocument &document,
-                                    const AssetRegistry &assets) {
+                                    const RenderOverlaySceneWireframeSnapshot
+                                        &snapshot) {
   QDR_PROFILE_FUNCTION();
-  for (const EntityId entity : document.entities()) {
+  for (const RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
     QDR_PROFILE_SCOPE("Viewport scene wireframe entity");
-    if (!document.is_effectively_visible(entity)) {
-      continue;
-    }
-    const MeshComponent *mesh_component = document.mesh(entity);
-    if (mesh_component == nullptr) {
-      continue;
-    }
-    const MeshAsset *mesh = assets.mesh(mesh_component->mesh);
-    if (mesh == nullptr || mesh->vertices.empty() ||
-        mesh->indices.size() < 3u) {
-      continue;
-    }
-    const QMat4 world_from_local = document.world_transform_matrix(entity);
-    if (!append_authored_polygon_wireframe(frame, *mesh, world_from_local)) {
-      append_triangle_mesh_wireframe(frame, *mesh, world_from_local);
+    if (!append_authored_polygon_wireframe(frame, mesh)) {
+      append_triangle_mesh_wireframe(frame, mesh);
     }
   }
 }
@@ -517,12 +463,24 @@ void strip_wireframe_object_face_fills(ViewportOverlayFrame &frame,
 } // namespace
 
 ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
-    ViewportOverlayFrame base_frame, const SceneDocument &document,
-    const AssetRegistry &assets) {
+    ViewportOverlayFrame base_frame,
+    const RenderOverlaySelectionSnapshot &snapshot) {
   QDR_PROFILE_FUNCTION();
-  append_hierarchy_selection_wires(base_frame, document, assets);
-  append_group_selection_cages(base_frame, document, assets);
-  append_selected_light_markers(base_frame, document);
+  append_hierarchy_selection_wires(base_frame, snapshot);
+  append_group_selection_cages(base_frame, snapshot);
+  append_selected_light_markers(base_frame, snapshot);
+  base_frame.lines.insert(base_frame.lines.end(),
+                          snapshot.tool_overlays.lines.begin(),
+                          snapshot.tool_overlays.lines.end());
+  base_frame.triangles.insert(base_frame.triangles.end(),
+                              snapshot.tool_overlays.triangles.begin(),
+                              snapshot.tool_overlays.triangles.end());
+  base_frame.points.insert(base_frame.points.end(),
+                           snapshot.tool_overlays.points.begin(),
+                           snapshot.tool_overlays.points.end());
+  base_frame.hover_target_selected =
+      base_frame.hover_target_selected ||
+      snapshot.tool_overlays.hover_target_selected;
   return base_frame;
 }
 
@@ -552,10 +510,10 @@ ViewportSceneOverlayBuilder::strip_wireframe_selection_fills(
 
 ViewportOverlayFrame ViewportSceneOverlayBuilder::build_wireframe_frame(
     ViewportOverlayFrame base_frame, ModelingSelectionMode selection_mode,
-    const SceneDocument &document, const AssetRegistry &assets) {
+    const RenderOverlaySceneWireframeSnapshot &snapshot) {
   QDR_PROFILE_FUNCTION();
   strip_wireframe_object_face_fills(base_frame, selection_mode);
-  append_scene_wireframe_overlay(base_frame, document, assets);
+  append_scene_wireframe_overlay(base_frame, snapshot);
   return base_frame;
 }
 

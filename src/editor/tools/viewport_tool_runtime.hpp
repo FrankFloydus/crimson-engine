@@ -103,8 +103,12 @@ public:
     tool_allows_selection_fallback(ViewportToolId tool) const;
     [[nodiscard]] ModelingTransformTool
     transform_tool(ViewportToolId tool) const;
-    [[nodiscard]] bool has_active_modal_preview() const;
-    [[nodiscard]] const ModelingBoxPreview &box_preview() const;
+    [[nodiscard]] bool
+    has_active_modal_preview(const ViewportToolPreviewPort &preview,
+                             bool snap_enabled = true) const;
+    [[nodiscard]] ModelingBoxPreview
+    box_preview(const ViewportToolPreviewPort &preview,
+                bool snap_enabled = true) const;
 
     bool set_active_tool(ViewportToolState &state, ViewportToolId tool,
                          ViewportInputResult *result = nullptr);

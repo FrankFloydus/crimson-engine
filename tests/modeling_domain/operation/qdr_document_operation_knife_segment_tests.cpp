@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.hpp"
+#include "operation_validation_test_helpers.hpp"
 
 using namespace quader_poly;
 
@@ -42,6 +42,8 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBou
 	const OperationResult result = knife_segment(fixture.document, selection, previous, current);
 
 	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 	EXPECT_TRUE(fixture.document.vertices.size() == vertex_count_before + 2U);
 	EXPECT_TRUE(fixture.document.faces.size() == 2U);
         EXPECT_TRUE(selection.mode == SelectionMode::Vertex);
@@ -75,6 +77,7 @@ TEST(QdrDocumentOperationKnifeSegmentTests, KnifeSegmentSplitsAQuadBetweenTwoBou
         };
         const OperationResult continued_result = knife_segment(fixture.document, selection, inserted_previous, existing_vertex_current);
 	EXPECT_TRUE(continued_result.changed);
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, continued_result);
 	EXPECT_TRUE(fixture.document.faces.size() == 3U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }

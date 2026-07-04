@@ -8,9 +8,6 @@ set(QUADER_APP_THIRDPARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
 set(QUADER_MODELING_DOMAIN_TEST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/tests/modeling_domain")
 
 add_library(quader_modeling_profile INTERFACE)
-target_include_directories(quader_modeling_profile
-    INTERFACE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 if(QUADER_ENABLE_TRACY)
     set(_quader_tracy_source_dir "${QUADER_TRACY_SOURCE_DIR}")
@@ -213,16 +210,14 @@ add_library(quader_qdr_shared_io STATIC
     src/io/qdr/qdr_root.cpp
     src/io/qdr/qdr_polygon_document_codec.cpp)
 quader_enable_common_pch(quader_qdr_shared_io)
-target_compile_features(quader_qdr_shared_io PUBLIC cxx_std_20)
+target_compile_features(quader_qdr_shared_io PRIVATE cxx_std_20)
 target_include_directories(quader_qdr_shared_io
-    PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
     PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
         "${QUADER_APP_THIRDPARTY_DIR}")
 target_link_libraries(quader_qdr_shared_io
-    PUBLIC
-        quader_modeling_polygon
     PRIVATE
+        quader_modeling_polygon
         quader_modeling_profile)
 
 add_library(quader_qdr_document_io STATIC
@@ -237,12 +232,13 @@ target_include_directories(quader_qdr_document_io
 target_link_libraries(quader_qdr_document_io
     PUBLIC
         quader_modeling_polygon
-        quader_qdr_shared_io
     PRIVATE
+        quader_qdr_shared_io
         quader_modeling_profile)
 
 add_library(quader_qdr_runtime_io STATIC
     src/io/qdr/qdr_runtime_io_compat.cpp)
+add_library(quader_qdr_modeling_runtime_io ALIAS quader_qdr_runtime_io)
 quader_enable_common_pch(quader_qdr_runtime_io)
 target_compile_features(quader_qdr_runtime_io PUBLIC cxx_std_20)
 target_include_directories(quader_qdr_runtime_io
@@ -292,6 +288,7 @@ function(quader_configure_modeling_domain_test_compile target)
     target_compile_definitions(${target}
         PRIVATE
             "QUADER_CUSTOM_ENGINE_SMOKE_SOURCE_PATH=\"${QUADER_MODELING_DOMAIN_TEST_ROOT}/qdr_custom_engine_modeling_runtime_smoke_tests.cpp\""
+            "QUADER_MODELING_DOMAIN_TEST_ROOT_PATH=\"${QUADER_MODELING_DOMAIN_TEST_ROOT}\""
             "QUADER_HOST_CONTRACT_HEADER_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/src/editor/metadata/host_contract.hpp\""
             "QUADER_HOST_CONTRACT_SOURCE_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/src/editor/metadata/host_contract.cpp\""
             "QUADER_QDR_TEST_FIXTURE_DIR=\"${QUADER_MODELING_DOMAIN_TEST_ROOT}/fixtures/io\"")
@@ -355,9 +352,12 @@ if(QUADER_BUILD_TESTS)
         tests/modeling_domain/qdr_geometry_tests.cpp)
 
     quader_add_modeling_domain_test_source(polygon qdr_poly_geometry_characterization_tests tests/modeling_domain/qdr_poly_geometry_characterization_tests.cpp)
+    quader_add_modeling_domain_test_source(polygon qdr_polygon_element_handle_tests tests/modeling_domain/qdr_polygon_element_handle_tests.cpp)
     quader_add_modeling_domain_test_source(polygon qdr_document_model_api_tests tests/modeling_domain/qdr_document_model_api_tests.cpp)
+    quader_add_modeling_domain_test_source(polygon qdr_document_liveness_tests tests/modeling_domain/qdr_document_liveness_tests.cpp)
     quader_add_modeling_domain_test_source(polygon qdr_document_primitive_tests tests/modeling_domain/qdr_document_primitive_tests.cpp)
     quader_add_modeling_domain_test_source(polygon qdr_document_mesh_uv_tests tests/modeling_domain/qdr_document_mesh_uv_tests.cpp)
+    quader_add_modeling_domain_test_source(polygon qdr_document_validation_tests tests/modeling_domain/qdr_document_validation_tests.cpp)
     quader_add_modeling_domain_test_source(polygon qdr_document_builder_tests tests/modeling_domain/qdr_document_builder_tests.cpp)
     if(QUADER_USE_OPENMESH_TOPOLOGY)
         quader_add_modeling_domain_test_source(polygon qdr_document_openmesh_topology_query_tests tests/modeling_domain/qdr_document_openmesh_topology_query_tests.cpp)
@@ -430,6 +430,7 @@ if(QUADER_BUILD_TESTS)
         tests/modeling_domain/operation/qdr_document_operation_translate_selection_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_uv_align_face_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_uv_align_grid_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_validation_guardrail_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_uv_fit_both_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_uv_fit_x_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_uv_fit_y_tests.cpp
