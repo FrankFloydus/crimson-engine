@@ -66,9 +66,8 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
   static const std::vector<SourceModulePolicy> kPolicies = {
       {"editor_commands",
        {"src/editor/commands/"},
-       {"assets", "core", "diagnostics", "editor_commands",
-        "editor_history", "editor_metadata", "editor_modeling",
-        "editor_selection", "scene"}},
+       {"assets", "core", "diagnostics", "editor_commands", "editor_history",
+        "editor_metadata", "editor_modeling", "editor_selection", "scene"}},
       {"editor_history",
        {"src/editor/history/"},
        {"core", "editor_commands", "editor_history", "editor_modeling",
@@ -90,24 +89,21 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
         "editor_modeling", "editor_tools", "viewport"}},
       {"editor_modeling",
        {"src/editor/modeling/"},
-       {"assets", "core", "diagnostics", "editor_commands",
-        "editor_history", "editor_interactions", "editor_metadata",
-        "editor_modeling", "editor_projection", "editor_selection",
-        "editor_tools", "editor_transform", "math", "mesh_geometry",
-        "mesh_polygon", "render", "scene", "viewport"}},
+       {"assets", "core", "diagnostics", "editor_commands", "editor_history",
+        "editor_interactions", "editor_metadata", "editor_modeling",
+        "editor_projection", "editor_selection", "editor_tools",
+        "editor_transform", "math", "mesh_geometry", "mesh_polygon", "render",
+        "scene", "viewport"}},
       {"editor_projection",
        {"src/editor/projection/"},
        {"assets", "core", "diagnostics", "editor_interactions",
         "editor_modeling", "editor_projection", "math", "mesh_polygon",
         "render", "scene"}},
-      {"editor_render",
-       {"src/editor/render/"},
-       {"api", "render"}},
+      {"editor_render", {"src/editor/render/"}, {"api", "render"}},
       {"editor_selection",
        {"src/editor/selection/"},
-       {"assets", "core", "diagnostics", "editor_commands",
-        "editor_modeling", "editor_selection", "math", "mesh_polygon",
-        "scene"}},
+       {"assets", "core", "diagnostics", "editor_commands", "editor_modeling",
+        "editor_selection", "math", "mesh_polygon", "scene"}},
       {"editor_tools",
        {"src/editor/tools/"},
        {"assets", "core", "editor_interactions", "editor_modeling",
@@ -118,24 +114,38 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
         "editor_transform", "math", "scene"}},
       {"editor_viewport",
        {"src/editor/viewport/"},
-       {"api", "core", "diagnostics", "editor_interactions",
-        "editor_modeling", "editor_selection", "editor_tools",
-        "editor_viewport", "render", "viewport"}},
+       {"api", "core", "diagnostics", "editor_interactions", "editor_modeling",
+        "editor_selection", "editor_tools", "editor_viewport", "render",
+        "viewport"}},
       {"mesh_geometry", {"src/mesh/geometry/"}, {"mesh_geometry"}},
       {"mesh_polygon",
        {"src/mesh/polygon/"},
        {"diagnostics", "math", "mesh_geometry", "mesh_polygon"}},
       {"io_qdr",
        {"src/io/qdr/"},
-       {"assets", "core", "diagnostics", "io_qdr", "mesh_polygon",
-        "scene"}},
+       {"assets", "core", "diagnostics", "io_qdr", "mesh_polygon", "scene"}},
       {"api",
        {"src/api/"},
-       {"api", "assets", "core", "diagnostics", "editor_commands",
-        "editor_history", "editor_input", "editor_modeling",
-        "editor_render", "editor_selection", "editor_session", "editor_tools",
-        "editor_transform", "editor_viewport", "io_qdr", "math",
-        "mesh_polygon", "render", "scene", "viewport"}},
+       {"api",
+        "assets",
+        "core",
+        "diagnostics",
+        "editor_commands",
+        "editor_history",
+        "editor_input",
+        "editor_modeling",
+        "editor_render",
+        "editor_selection",
+        "editor_session",
+        "editor_tools",
+        "editor_transform",
+        "editor_viewport",
+        "io_qdr",
+        "math",
+        "mesh_polygon",
+        "render",
+        "scene",
+        "viewport"}},
       {"app",
        {"src/app/", "src/main.cpp"},
        {"api", "app", "assets", "core", "diagnostics", "editor_render",
@@ -148,17 +158,17 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
       {"render",
        {"src/render/"},
        {"assets", "core", "diagnostics", "editor_interactions",
-        "editor_modeling", "editor_viewport", "math", "mesh_polygon",
-        "render", "scene", "viewport"}},
+        "editor_modeling", "editor_viewport", "math", "mesh_polygon", "render",
+        "scene", "viewport"}},
       {"scene",
        {"src/scene/"},
        {"assets", "core", "diagnostics", "math", "scene"}},
       {"ui",
        {"src/ui/"},
        {"api", "assets", "core", "diagnostics", "editor_commands",
-        "editor_interactions", "editor_modeling", "editor_render", "editor_tools",
-        "editor_transform", "editor_viewport", "math", "render", "scene",
-        "ui", "viewport"}},
+        "editor_interactions", "editor_modeling", "editor_render",
+        "editor_tools", "editor_transform", "editor_viewport", "math", "render",
+        "scene", "ui", "viewport"}},
       {"viewport",
        {"src/viewport/"},
        {"api", "core", "diagnostics", "editor_commands", "editor_input",
@@ -183,6 +193,16 @@ const std::vector<IncludeException> &allowed_include_exceptions() {
       {"src/scene/document/project_session.hpp",
        "editor/session/project_session.hpp",
        "legacy scene include wrapper during the session move"},
+      {"src/ui/ui_context.hpp", "editor/input/quader_input_binding.hpp",
+       "UI context carries the currently pressed input chord until input value "
+       "types move to core"},
+      {"src/ui/ui_platform_adapter.hpp",
+       "editor/input/quader_input_binding.hpp",
+       "platform adapter carries the currently pressed input chord until input "
+       "value types move to core"},
+      {"src/ui/ui_system.hpp", "editor/input/quader_input_binding.hpp",
+       "UI system stores the currently pressed input chord until input value "
+       "types move to core"},
   };
   return kExceptions;
 }
@@ -192,40 +212,36 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
       {"filament_sdk", {}},
       {"quader", {"quader_app", "quader_runtime"}},
       {"quader_api",
-       {"quader_assets", "quader_commands", "quader_core",
-        "quader_document", "quader_editor_modeling", "quader_io_qdr",
-        "quader_modeling_profile", "quader_render", "quader_viewport"}},
+       {"quader_assets", "quader_commands", "quader_core", "quader_document",
+        "quader_editor_modeling", "quader_io_qdr", "quader_modeling_profile",
+        "quader_render", "quader_viewport"}},
       {"quader_app",
        {"quader_api", "quader_assets", "quader_core", "quader_document",
         "quader_modeling_profile", "quader_platform", "quader_render",
         "quader_ui", "quader_viewport"}},
       {"quader_assets",
        {"quader_core", "quader_core_utilities", "quader_math",
-        "quader_modeling_polygon",
-        "quader_polygon"}},
+        "quader_modeling_polygon", "quader_polygon"}},
       {"quader_commands",
        {"quader_assets", "quader_core", "quader_document",
-        "quader_editor_metadata", "quader_editor_modeling",
-        "quader_modeling", "quader_modeling_profile",
-        "quader_modeling_runtime", "quader_viewport"}},
+        "quader_editor_metadata", "quader_editor_modeling", "quader_modeling",
+        "quader_modeling_profile", "quader_modeling_runtime",
+        "quader_viewport"}},
       {"quader_core",
-       {"quader_assets", "quader_core_ui_support",
-        "quader_core_utilities", "quader_document",
-        "quader_editor_services", "quader_project_qdr_io",
+       {"quader_assets", "quader_core_ui_support", "quader_core_utilities",
+        "quader_document", "quader_editor_services", "quader_project_qdr_io",
         "quader_viewport_services"}},
       {"quader_core_ui_support", {"quader_core_utilities"}},
       {"quader_core_utilities", {}},
       {"quader_document", {"quader_assets", "quader_core", "quader_math"}},
-      {"quader_editor_input",
-       {"quader_api", "quader_core", "quader_viewport"}},
+      {"quader_editor_input", {"quader_api", "quader_core", "quader_viewport"}},
       {"quader_editor_metadata", {"quader_modeling_runtime"}},
       {"quader_editor_modeling",
-       {"quader_assets", "quader_commands", "quader_core",
-        "quader_document", "quader_editor_metadata", "quader_geometry",
-        "quader_io_qdr", "quader_modeling", "quader_modeling_polygon",
-        "quader_modeling_profile", "quader_modeling_runtime",
-        "quader_polygon", "quader_qdr_runtime_io", "quader_render",
-        "quader_viewport"}},
+       {"quader_assets", "quader_commands", "quader_core", "quader_document",
+        "quader_editor_metadata", "quader_geometry", "quader_io_qdr",
+        "quader_modeling", "quader_modeling_polygon", "quader_modeling_profile",
+        "quader_modeling_runtime", "quader_polygon", "quader_qdr_runtime_io",
+        "quader_render", "quader_viewport"}},
       {"quader_editor_services",
        {"quader_document", "quader_modeling", "quader_modeling_profile"}},
       {"quader_geometry", {"quader_math", "quader_modeling_gte_math"}},
@@ -233,9 +249,9 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
       {"quader_io_qdr",
        {"quader_assets", "quader_core", "quader_document",
         "quader_editor_modeling", "quader_modeling_polygon",
-        "quader_modeling_profile", "quader_modeling_runtime",
-        "quader_polygon", "quader_qdr_document_io",
-        "quader_qdr_runtime_io", "quader_qdr_shared_io"}},
+        "quader_modeling_profile", "quader_modeling_runtime", "quader_polygon",
+        "quader_qdr_document_io", "quader_qdr_runtime_io",
+        "quader_qdr_shared_io"}},
       {"quader_math", {"quader_core"}},
       {"quader_modeling",
        {"quader_editor_metadata", "quader_modeling_profile",
@@ -246,9 +262,9 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
        {"quader_geometry", "quader_modeling_polygon",
         "quader_qdr_document_io"}},
       {"quader_modeling_domain_runtime_loop_tests",
-       {"quader_editor_metadata", "quader_geometry",
-        "quader_modeling_polygon", "quader_modeling_runtime",
-        "quader_qdr_document_io", "quader_qdr_runtime_io"}},
+       {"quader_editor_metadata", "quader_geometry", "quader_modeling_polygon",
+        "quader_modeling_runtime", "quader_qdr_document_io",
+        "quader_qdr_runtime_io"}},
       {"quader_modeling_gte_math", {}},
       {"quader_modeling_polygon",
        {"quader_geometry", "quader_math", "quader_modeling_profile"}},
@@ -276,23 +292,23 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
       {"quader_render",
        {"filament_sdk", "quader_api", "quader_assets", "quader_core",
         "quader_document", "quader_editor_modeling", "quader_geometry",
-        "quader_modeling_polygon", "quader_modeling_profile",
-        "quader_polygon", "quader_viewport"}},
+        "quader_modeling_polygon", "quader_modeling_profile", "quader_polygon",
+        "quader_viewport"}},
       {"quader_runtime",
        {"quader_api", "quader_app", "quader_modeling_profile",
         "quader_platform", "quader_render", "quader_ui"}},
       {"quader_tests", {"quader_app", "quader_runtime"}},
       {"quader_ui",
        {"quader_api", "quader_assets", "quader_commands", "quader_core",
-        "quader_document", "quader_editor_modeling",
-        "quader_modeling_profile", "quader_render", "quader_viewport"}},
+        "quader_document", "quader_editor_modeling", "quader_modeling_profile",
+        "quader_render", "quader_viewport"}},
       {"quader_viewport",
        {"quader_api", "quader_commands", "quader_core",
-        "quader_editor_metadata", "quader_editor_modeling",
-        "quader_math", "quader_render"}},
+        "quader_editor_metadata", "quader_editor_modeling", "quader_math",
+        "quader_render"}},
       {"quader_viewport_services",
-       {"quader_core_utilities", "quader_editor_metadata",
-        "quader_modeling", "quader_modeling_profile"}},
+       {"quader_core_utilities", "quader_editor_metadata", "quader_modeling",
+        "quader_modeling_profile"}},
       {"qdr_performance_baseline",
        {"quader_modeling_polygon", "quader_modeling_profile",
         "quader_modeling_runtime"}},
@@ -305,8 +321,8 @@ bool contains_value(const std::vector<std::string_view> &values,
   return std::find(values.begin(), values.end(), value) != values.end();
 }
 
-std::optional<std::string_view> module_for_relative_path(
-    std::string_view relative_path) {
+std::optional<std::string_view>
+module_for_relative_path(std::string_view relative_path) {
   for (const SourceModulePolicy &policy : source_module_policies()) {
     for (std::string_view prefix : policy.path_prefixes) {
       if (relative_path == prefix || starts_with(relative_path, prefix)) {
@@ -339,13 +355,15 @@ project_include_relative_path(const std::filesystem::path &includer,
   const std::string include_string(include_path);
   const std::filesystem::path include_file(include_string);
   const std::filesystem::path project_relative =
-      starts_with(include_string, "src/") ? source_root() / include_file
-                                          : source_root() / "src" / include_file;
+      starts_with(include_string, "src/")
+          ? source_root() / include_file
+          : source_root() / "src" / include_file;
   if (std::filesystem::exists(project_relative)) {
     return normalized_relative(project_relative);
   }
 
-  const std::filesystem::path local_relative = includer.parent_path() / include_file;
+  const std::filesystem::path local_relative =
+      includer.parent_path() / include_file;
   if (std::filesystem::exists(local_relative)) {
     return normalized_relative(local_relative);
   }
@@ -367,8 +385,9 @@ std::string include_exception_key(std::string_view includer,
   return std::string(includer) + " -> " + std::string(include_path);
 }
 
-const IncludeException *allowed_include_exception(std::string_view includer,
-                                                  std::string_view include_path) {
+const IncludeException *
+allowed_include_exception(std::string_view includer,
+                          std::string_view include_path) {
   for (const IncludeException &exception : allowed_include_exceptions()) {
     if (exception.includer == includer &&
         exception.include_path == include_path) {
@@ -403,8 +422,7 @@ std::vector<std::string> tokenize_cmake_arguments(std::string_view source) {
       in_quote = !in_quote;
       continue;
     }
-    if (!in_quote &&
-        std::isspace(static_cast<unsigned char>(character)) != 0) {
+    if (!in_quote && std::isspace(static_cast<unsigned char>(character)) != 0) {
       if (!token.empty()) {
         tokens.push_back(token);
         token.clear();
@@ -452,9 +470,8 @@ std::vector<CMakeLinkEdge> project_cmake_link_edges() {
     std::size_t cursor = 0;
     while ((cursor = cmake.find("target_link_libraries(", cursor)) !=
            std::string::npos) {
-      const std::size_t args_begin = cursor + std::string_view(
-                                               "target_link_libraries(")
-                                               .size();
+      const std::size_t args_begin =
+          cursor + std::string_view("target_link_libraries(").size();
       const std::size_t args_end = cmake.find(')', args_begin);
       if (args_end == std::string::npos) {
         ADD_FAILURE() << relative_path.generic_string()
@@ -462,9 +479,8 @@ std::vector<CMakeLinkEdge> project_cmake_link_edges() {
         break;
       }
 
-      const std::vector<std::string> tokens =
-          tokenize_cmake_arguments(std::string_view(cmake).substr(
-              args_begin, args_end - args_begin));
+      const std::vector<std::string> tokens = tokenize_cmake_arguments(
+          std::string_view(cmake).substr(args_begin, args_end - args_begin));
       cursor = args_end + 1;
       if (tokens.empty() || is_dynamic_cmake_token(tokens.front())) {
         continue;
@@ -501,7 +517,8 @@ TEST(DependencyMatrixGuardrailTests,
         module_for_relative_path(includer);
     ASSERT_TRUE(source_module.has_value()) << includer;
 
-    const std::vector<std::string> lines = split_lines(read_source_file(includer));
+    const std::vector<std::string> lines =
+        split_lines(read_source_file(includer));
     for (std::size_t line_index = 0; line_index < lines.size(); ++line_index) {
       const std::optional<std::string> include_path =
           include_path_from_line(lines[line_index]);
@@ -526,8 +543,8 @@ TEST(DependencyMatrixGuardrailTests,
       const IncludeException *exception =
           allowed_include_exception(includer, *include_path);
       if (exception != nullptr) {
-        used_exceptions.insert(
-            include_exception_key(exception->includer, exception->include_path));
+        used_exceptions.insert(include_exception_key(exception->includer,
+                                                     exception->include_path));
         continue;
       }
 

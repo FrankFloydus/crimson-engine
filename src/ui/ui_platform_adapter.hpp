@@ -7,8 +7,11 @@
 #pragma once
 
 #include "core/types.hpp"
+#include "editor/input/quader_input_binding.hpp"
 
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace quader {
 
@@ -17,6 +20,7 @@ namespace quader {
  */
 struct UIPlatformEvent {
   const void *native_event = nullptr;
+  std::optional<QuaderInputChord> pressed_input_chord;
 };
 
 /**
@@ -33,6 +37,8 @@ public:
   [[nodiscard]] virtual QVec2 relative_mouse_delta() = 0;
   [[nodiscard]] virtual bool set_relative_mouse_captured(
       bool captured, std::string &error_message) = 0;
+  [[nodiscard]] virtual bool set_clipboard_text(
+      std::string_view text, std::string &error_message) = 0;
   virtual void discard_relative_mouse_delta() = 0;
   virtual void warp_mouse_in_window(QVec2 point) = 0;
 };

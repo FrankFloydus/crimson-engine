@@ -43,9 +43,17 @@ enum class ViewportOverlayLayer {
     WireframeBase = 22,
     SourceWireDepthStamp = 23,
     WireframeXray = 24,
+    PointLightGizmo = 25,
 };
 
-inline constexpr std::size_t kViewportOverlayLayerCount = 25u;
+inline constexpr std::size_t kViewportOverlayLayerCount = 26u;
+
+/**
+ * Enumerates ViewportOverlayIconKind values used by render-owned billboard overlays.
+ */
+enum class ViewportOverlayIconKind {
+    PointLight,
+};
 
 /**
  * Enumerates ViewportOverlayStyleRole values used by the render layer.
@@ -91,6 +99,7 @@ enum class ViewportOverlaySource {
     Unknown,
     Selection,
     Hover,
+    Gizmo,
     SceneWireframe,
     HierarchySelection,
     GroupBounds,
@@ -163,6 +172,19 @@ struct ViewportOverlayPoint {
 };
 
 /**
+ * Represents a Viewport Overlay Icon value used by render-owned billboard gizmos.
+ */
+struct ViewportOverlayIcon {
+    ViewportOverlayLayer layer = ViewportOverlayLayer::PointLightGizmo;
+    ViewportOverlayIconKind kind = ViewportOverlayIconKind::PointLight;
+    QVec3 position;
+    std::uint32_t color = rgba8(255, 255, 255);
+    float size_pixels = 28.0f;
+    ViewportOverlaySource source = ViewportOverlaySource::Gizmo;
+    ViewportOverlayElementRef element;
+};
+
+/**
  * Enumerates ViewportOverlayProjection values used by the render layer.
  */
 enum class ViewportOverlayProjection {
@@ -193,6 +215,7 @@ struct ViewportOverlayFrame {
     std::vector<ViewportOverlayLine> lines;
     std::vector<ViewportOverlayTriangle> triangles;
     std::vector<ViewportOverlayPoint> points;
+    std::vector<ViewportOverlayIcon> icons;
     bool hover_target_selected = false;
 };
 

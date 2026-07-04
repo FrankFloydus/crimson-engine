@@ -7,22 +7,22 @@
 #include "api/quader_modeling_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 
+#include "api/quader_api_mutation_runner.hpp"
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
-#include "api/quader_api_mutation_runner.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "diagnostics/profile.hpp"
-#include "editor/session/project_session.hpp"
 #include "editor/commands/modeling/commit_box_preview_command.hpp"
 #include "editor/history/modeling_memento_command.hpp"
-#include "editor/selection/editor_selection_service.hpp"
-#include "editor/transform/scene_transform_drag_service.hpp"
-#include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modeling/services/selection_mode_adapter.hpp"
+#include "editor/selection/editor_selection_service.hpp"
+#include "editor/session/project_session.hpp"
+#include "editor/transform/scene_transform_drag_service.hpp"
 #include "math/glm_bridge.hpp"
 
-#include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <memory>
 #include <utility>
@@ -96,9 +96,9 @@ QMat4 world_transform_delta_from_api_transform(
 
 } // namespace
 
-QuaderModelingApi::QuaderModelingApi(QuaderApiSession session, QuaderApiMutationRunner& mutations)
-    : session_(session)
-    , mutations_(mutations) {}
+QuaderModelingApi::QuaderModelingApi(QuaderApiSession session,
+                                     QuaderApiMutationRunner &mutations)
+    : session_(session), mutations_(mutations) {}
 
 QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::create_box(const QuaderCreateBoxArgs &args) {
@@ -181,6 +181,10 @@ bool QuaderModelingApi::can_execute_tool(std::string_view tool_id) const {
 
 QuaderApiVoidResult QuaderModelingApi::execute_tool(std::string_view tool_id) {
   return mutations_.run_tracked_modeling_tool(tool_id);
+}
+
+QuaderApiVoidResult QuaderModelingApi::remove_doubles() {
+  return mutations_.run_tracked_modeling_tool("remove_doubles");
 }
 
 QuaderApiVoidResult
@@ -520,7 +524,7 @@ std::vector<QuaderModelingObjectRecord> QuaderModelingApi::objects() const {
   for (const ModelingObjectRecord &record : records) {
     result.push_back(to_api_modeling_object_record(record));
   }
-    return result;
+  return result;
 }
 
 QuaderModelingObjectRef QuaderModelingApi::ref_from_record(

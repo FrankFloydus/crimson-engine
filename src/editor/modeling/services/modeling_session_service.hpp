@@ -7,9 +7,10 @@
 #pragma once
 
 #include "editor/modeling/modeling_selection_box_baseline.hpp"
-#include "editor/modeling/services/modeling_action_catalog.hpp"
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/modeling/services/modeling_action_catalog.hpp"
 #include "render/viewport_overlay_frame.hpp"
+#include "scene/scene_bounds.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -28,215 +29,216 @@ class IUndoableCommand;
 class SceneDocument;
 
 /**
- * Stores an opaque Modeling Session Memento restore point for editor-owned history commands.
+ * Stores an opaque Modeling Session Memento restore point for editor-owned
+ * history commands.
  */
 class ModelingSessionMemento final {
 public:
-    ModelingSessionMemento();
-    ~ModelingSessionMemento();
-    ModelingSessionMemento(const ModelingSessionMemento&) noexcept = default;
-    ModelingSessionMemento& operator=(const ModelingSessionMemento&) noexcept = default;
-    ModelingSessionMemento(ModelingSessionMemento&&) noexcept = default;
-    ModelingSessionMemento& operator=(ModelingSessionMemento&&) noexcept = default;
+  ModelingSessionMemento();
+  ~ModelingSessionMemento();
+  ModelingSessionMemento(const ModelingSessionMemento &) noexcept = default;
+  ModelingSessionMemento &
+  operator=(const ModelingSessionMemento &) noexcept = default;
+  ModelingSessionMemento(ModelingSessionMemento &&) noexcept = default;
+  ModelingSessionMemento &
+  operator=(ModelingSessionMemento &&) noexcept = default;
 
-    [[nodiscard]] bool valid() const;
+  [[nodiscard]] bool valid() const;
 
 private:
-    friend class ModelingSessionService;
+  friend class ModelingSessionService;
 
-    struct Impl;
-    explicit ModelingSessionMemento(std::shared_ptr<const Impl> impl);
+  struct Impl;
+  explicit ModelingSessionMemento(std::shared_ptr<const Impl> impl);
 
-    std::shared_ptr<const Impl> impl_;
+  std::shared_ptr<const Impl> impl_;
 };
 
 /**
- * Coordinates Modeling Session Service responsibilities for the modeling application service layer.
+ * Coordinates Modeling Session Service responsibilities for the modeling
+ * application service layer.
  */
 class ModelingSessionService {
 public:
-    ModelingSessionService(SceneDocument& scene, AssetRegistry& assets);
-    ~ModelingSessionService();
+  ModelingSessionService(SceneDocument &scene, AssetRegistry &assets);
+  ~ModelingSessionService();
 
-    ModelingSessionService(const ModelingSessionService&) = delete;
-    ModelingSessionService& operator=(const ModelingSessionService&) = delete;
-    ModelingSessionService(ModelingSessionService&&) noexcept;
-    ModelingSessionService& operator=(ModelingSessionService&&) noexcept;
+  ModelingSessionService(const ModelingSessionService &) = delete;
+  ModelingSessionService &operator=(const ModelingSessionService &) = delete;
+  ModelingSessionService(ModelingSessionService &&) noexcept;
+  ModelingSessionService &operator=(ModelingSessionService &&) noexcept;
 
-    [[nodiscard]] ModelingCommandDescriptor box_tool_command() const;
-    [[nodiscard]] ModelingCommandDescriptor
-    create_box_from_bounds_command() const;
-    [[nodiscard]] std::vector<ModelingObjectRecord> objects() const;
-    [[nodiscard]] std::optional<EntityId>
-    entity_for_modeling_object(int modeling_object_id) const;
-    [[nodiscard]] std::optional<int>
-    modeling_object_for_entity(EntityId entity) const;
-    [[nodiscard]] std::optional<MeshAsset>
-    compile_object_mesh(int modeling_object_id) const;
-    [[nodiscard]] std::optional<EntityId>
-    pick_object_entity(const ModelingPickSelectRequest &request) const;
-    [[nodiscard]] std::vector<EntityId>
-    box_pick_object_entities(const ModelingBoxSelectRequest &request) const;
-    [[nodiscard]] std::optional<QVec3> selection_center() const;
-    [[nodiscard]] ModelingSelectionMode selection_mode() const;
-    [[nodiscard]] ModelingSelectionSummary selection_summary() const;
-    [[nodiscard]] std::uint64_t selection_overlay_signature(
-        ModelingSelectionOverlayOptions options = {}) const;
-    [[nodiscard]] ViewportOverlayFrame
-    selection_overlay_frame(ModelingSelectionOverlayOptions options = {}) const;
-    [[nodiscard]] std::vector<ModelingToolPreviewMesh>
-    tool_preview_meshes() const;
-    [[nodiscard]] ModelingSessionMemento capture_history_memento() const;
-    [[nodiscard]] ModelingSessionMemento
-    capture_active_preview_history_memento() const;
-    ModelingCommandResult
-    restore_history_memento(const ModelingSessionMemento &memento);
-    void reset_from_scene();
+  [[nodiscard]] ModelingCommandDescriptor box_tool_command() const;
+  [[nodiscard]] ModelingCommandDescriptor
+  create_box_from_bounds_command() const;
+  [[nodiscard]] std::vector<ModelingObjectRecord> objects() const;
+  [[nodiscard]] std::optional<EntityId>
+  entity_for_modeling_object(int modeling_object_id) const;
+  [[nodiscard]] std::optional<int>
+  modeling_object_for_entity(EntityId entity) const;
+  [[nodiscard]] std::optional<MeshAsset>
+  compile_object_mesh(int modeling_object_id) const;
+  [[nodiscard]] std::optional<EntityId>
+  pick_object_entity(const ModelingPickSelectRequest &request) const;
+  [[nodiscard]] std::vector<EntityId>
+  box_pick_object_entities(const ModelingBoxSelectRequest &request) const;
+  [[nodiscard]] std::optional<QVec3> selection_center() const;
+  [[nodiscard]] std::optional<SceneBounds> selection_bounds() const;
+  [[nodiscard]] ModelingSelectionMode selection_mode() const;
+  [[nodiscard]] ModelingSelectionSummary selection_summary() const;
+  [[nodiscard]] ModelingSelectionExport export_selection() const;
+  [[nodiscard]] std::uint64_t selection_overlay_signature(
+      ModelingSelectionOverlayOptions options = {}) const;
+  [[nodiscard]] ViewportOverlayFrame
+  selection_overlay_frame(ModelingSelectionOverlayOptions options = {}) const;
+  [[nodiscard]] std::vector<ModelingToolPreviewMesh>
+  tool_preview_meshes() const;
+  [[nodiscard]] ModelingSessionMemento capture_history_memento() const;
+  [[nodiscard]] ModelingSessionMemento
+  capture_active_preview_history_memento() const;
+  ModelingCommandResult
+  restore_history_memento(const ModelingSessionMemento &memento);
+  void reset_from_scene();
 
-    ModelingCommandResult duplicate_selected_hierarchy_for_group_drag(
-        DocumentCommandService &document_commands);
-    ModelingCommandResult duplicate_selected_entity_hierarchy(
-        DocumentCommandService &document_commands);
-    ModelingCommandResult set_selection_mode(ModelingSelectionMode mode);
-    ModelingCommandResult select_all();
-    ModelingCommandResult invert_selection();
-    ModelingCommandResult clear_selection();
-    std::unique_ptr<IUndoableCommand> create_delete_selection_command();
-    [[nodiscard]] bool has_selected_scene_aware_delete_root() const;
-    ModelingCommandResult delete_component_selection();
-    ModelingCommandResult copy_selection();
-    ModelingCommandResult paste_selection();
-    ModelingCommandResult repeat_last_action();
-    ModelingCommandResult mirror_selection(ModelingMirrorAxis axis);
-    ModelingCommandResult flip_selection(ModelingFlipOrientation orientation);
-    ModelingCommandResult
-    apply_active_material(std::uint32_t material_slot = 0);
-    [[nodiscard]] bool modal_tool_owns_viewport() const;
-    [[nodiscard]] bool can_cancel_active_tool_or_preview() const;
-    [[nodiscard]] bool can_cancel_active_preview_for_undo() const;
-    [[nodiscard]] ModelingToolStatus tool_status() const;
-    [[nodiscard]] ModelingToolSettingsTarget tool_settings_target() const;
-    [[nodiscard]] ModelingInteractionSettings interaction_settings() const;
-    ModelingCommandResult
-    set_interaction_settings(const ModelingInteractionSettings &settings);
-    [[nodiscard]] ModelingActionSet
-    context_action_set(const ModelingActionQuery &query = {}) const;
-    [[nodiscard]] std::vector<ModelingActionItem>
-    context_actions(const ModelingActionQuery &query = {}) const;
-    [[nodiscard]] std::optional<ModelingActionItem>
-    context_action(std::string_view action_id,
-                   const ModelingActionQuery &query = {}) const;
-    ModelingCommandResult execute_context_action(std::string_view action_id);
-    ModelingCommandResult commit_active_operation_preview();
-    ModelingCommandResult cancel_active_operation_preview();
-    [[nodiscard]] std::vector<ModelingInstantOperationDescriptor>
-    instant_operations() const;
-    ModelingCommandResult
-    execute_instant_operation(ModelingInstantOperationId operation);
-    ModelingCommandResult begin_transform_preview(bool duplicate_selected);
-    ModelingCommandResult update_transform_translate_preview(QVec3 delta);
-    ModelingCommandResult
-    update_transform_matrix_preview(const ModelingTransform3 &transform,
-                                    QVec3 pivot);
-    ModelingCommandResult
-    update_transform_extrude_preview(QVec3 offset,
-                                     float closed_edge_ledge_size = 0.0f);
-    ModelingCommandResult
-    update_transform_inset_preview(const ModelingTransform3 &transform,
-                                   QVec3 pivot);
-    ModelingCommandResult commit_transform_preview();
-    ModelingCommandResult cancel_transform_preview();
-    ModelingCommandResult
-    record_repeatable_transform(const ModelingRepeatTransform &transform);
-    ModelingTransformDragPreview
-    begin_transform_drag(const ModelingTransformDragBeginRequest &request);
-    ModelingTransformDragPreview
-    update_transform_drag(const ModelingTransformDragUpdateRequest &request);
-    ModelingTransformDragPreview commit_transform_drag();
-    ModelingTransformDragPreview
-    commit_transform_drag(EditorHistoryService &history);
-    ModelingCommandResult cancel_transform_drag();
-    ModelingSelectionSummary
-    pick_select(const ModelingPickSelectRequest &request);
-    [[nodiscard]] ModelingSelectionBoxBaseline
-    capture_box_selection_baseline() const;
-    ModelingSelectionSummary
-    box_select(const ModelingBoxSelectRequest &request);
-    ModelingSelectionSummary
-    box_select(const ModelingBoxSelectRequest &request,
-               const ModelingSelectionBoxBaseline &baseline);
-    ModelingCommandResult
-    update_selection_hover(const ModelingHoverRequest &request);
-    [[nodiscard]] ModelingHoverSummary selection_hover_summary() const;
-    [[nodiscard]] ModelingHoverSummary
-    preview_selection_hover(const ModelingHoverRequest &request) const;
-    ModelingCommandResult clear_selection_hover();
-    ModelingCommandResult activate_viewport_tool(ModelingViewportTool tool);
-    ModelingCommandResult cancel_active_modal_tool();
-    ModelingCommandResult
-    update_insert_edge_loop_hover(const ModelingToolRayEvent &event);
-    ModelingCommandResult
-    begin_insert_edge_loop_drag(const ModelingToolRayEvent &event);
-    ModelingCommandResult
-    update_insert_edge_loop_drag(const ModelingToolRayEvent &event);
-    ModelingCommandResult commit_insert_edge_loop_drag();
-    ModelingCommandResult update_knife_hover(const ModelingToolRayEvent &event);
-    ModelingCommandResult accept_knife_point(const ModelingToolRayEvent &event);
-    ModelingCommandResult commit_knife_tool();
-    ModelingCommandResult update_cut_hover(const ModelingToolRayEvent &event);
-    ModelingCommandResult click_cut(const ModelingToolRayEvent &event);
-    ModelingCommandResult begin_cut_point_drag(int point_index);
-    ModelingCommandResult
-    begin_cut_line_drag(const ModelingToolRayEvent &event);
-    ModelingCommandResult end_cut_drag();
-    ModelingCommandResult set_cut_mode(ModelingCutMode mode);
-    ModelingCommandResult cycle_cut_mode();
-    ModelingCommandResult finalize_cut_tool();
-    ModelingCommandResult
-    update_mirror_hover(const ModelingToolRayEvent &event);
-    ModelingCommandResult click_mirror(const ModelingToolRayEvent &event);
-    ModelingCommandResult begin_mirror_point_drag(int point_index);
-    ModelingCommandResult
-    begin_mirror_line_drag(const ModelingToolRayEvent &event);
-    ModelingCommandResult end_mirror_drag();
-    ModelingCommandResult finalize_mirror_tool();
-    ModelingCommandResult update_poly_hover(const ModelingToolRayEvent &event);
-    ModelingCommandResult accept_poly_point();
-    ModelingCommandResult commit_poly_tool();
-    ModelingCommandResult activate_box_tool();
-    ModelingCreateBoxResult
-    create_box_from_bounds(const ModelingCreateBoxRequest &request);
-    ModelingBoxPreview update_box_hover(const ModelingBoxToolEvent &event);
-    ModelingBoxPreview begin_box_footprint(const ModelingBoxToolEvent &event);
-    ModelingBoxPreview update_box_footprint(const ModelingBoxToolEvent &event);
-    ModelingBoxPreview begin_box_height(const ModelingBoxToolEvent &event);
-    ModelingBoxPreview update_box_height(const ModelingBoxToolEvent &event);
-    [[nodiscard]] ModelingBoxPreview
-    box_preview(bool snap_enabled = true) const;
-    ModelingCreateBoxResult commit_box(std::string name);
-    ModelingCommandResult cancel_box();
-    ModelingCreateBoxResult
-    create_mesh(const ModelingCreateMeshRequest &request);
-    void project_object_selection_from_scene(bool force_object_mode = false);
-    ModelingCommandResult
-    set_object_selection(std::span<const EntityId> entities,
-                         EntityId active = kInvalidEntityId);
-    ModelingCommandResult
-    set_component_selection(const ModelingComponentSelectionRequest &request);
-    ModelingCommandResult move_selection(QVec3 delta);
-    ModelingCommandResult
-    transform_selection(const ModelingTransform3 &transform, QVec3 pivot);
-    ModelingCommandResult
-    assign_material_slot_to_selection(std::uint32_t material_slot);
-    ModelingCommandResult
-    assign_material_slot_to_face(int modeling_object_id, int face_id,
-                                 std::uint32_t material_slot);
-    ModelingCommandResult
-    set_selection_hover(const ModelingDirectHoverRequest &request);
+  ModelingCommandResult duplicate_selected_hierarchy_for_group_drag(
+      DocumentCommandService &document_commands);
+  ModelingCommandResult duplicate_selected_entity_hierarchy(
+      DocumentCommandService &document_commands);
+  ModelingCommandResult set_selection_mode(ModelingSelectionMode mode);
+  ModelingCommandResult select_all();
+  ModelingCommandResult invert_selection();
+  ModelingCommandResult clear_selection();
+  std::unique_ptr<IUndoableCommand> create_delete_selection_command();
+  [[nodiscard]] bool has_selected_scene_aware_delete_root() const;
+  ModelingCommandResult delete_component_selection();
+  ModelingCommandResult copy_selection();
+  ModelingCommandResult paste_selection();
+  ModelingCommandResult repeat_last_action();
+  ModelingCommandResult mirror_selection(ModelingMirrorAxis axis);
+  ModelingCommandResult flip_selection(ModelingFlipOrientation orientation);
+  ModelingCommandResult apply_active_material(std::uint32_t material_slot = 0);
+  [[nodiscard]] bool modal_tool_owns_viewport() const;
+  [[nodiscard]] bool can_cancel_active_tool_or_preview() const;
+  [[nodiscard]] bool can_cancel_active_preview_for_undo() const;
+  [[nodiscard]] ModelingToolStatus tool_status() const;
+  [[nodiscard]] ModelingLiveStatus live_status() const;
+  [[nodiscard]] ModelingToolSettingsTarget tool_settings_target() const;
+  [[nodiscard]] ModelingInteractionSettings interaction_settings() const;
+  ModelingCommandResult
+  set_interaction_settings(const ModelingInteractionSettings &settings);
+  [[nodiscard]] ModelingActionSet
+  context_action_set(const ModelingActionQuery &query = {}) const;
+  [[nodiscard]] std::vector<ModelingActionItem>
+  context_actions(const ModelingActionQuery &query = {}) const;
+  [[nodiscard]] std::optional<ModelingActionItem>
+  context_action(std::string_view action_id,
+                 const ModelingActionQuery &query = {}) const;
+  ModelingCommandResult execute_context_action(std::string_view action_id);
+  ModelingCommandResult commit_active_operation_preview();
+  ModelingCommandResult cancel_active_operation_preview();
+  [[nodiscard]] std::vector<ModelingInstantOperationDescriptor>
+  instant_operations() const;
+  ModelingCommandResult
+  execute_instant_operation(ModelingInstantOperationId operation);
+  ModelingCommandResult begin_transform_preview(bool duplicate_selected);
+  ModelingCommandResult update_transform_translate_preview(QVec3 delta);
+  ModelingCommandResult
+  update_transform_matrix_preview(const ModelingTransform3 &transform,
+                                  QVec3 pivot);
+  ModelingCommandResult
+  update_transform_extrude_preview(QVec3 offset,
+                                   float closed_edge_ledge_size = 0.0f);
+  ModelingCommandResult
+  update_transform_inset_preview(const ModelingTransform3 &transform,
+                                 QVec3 pivot);
+  ModelingCommandResult commit_transform_preview();
+  ModelingCommandResult cancel_transform_preview();
+  ModelingCommandResult
+  record_repeatable_transform(const ModelingRepeatTransform &transform);
+  ModelingTransformDragPreview
+  begin_transform_drag(const ModelingTransformDragBeginRequest &request);
+  ModelingTransformDragPreview
+  update_transform_drag(const ModelingTransformDragUpdateRequest &request);
+  ModelingTransformDragPreview commit_transform_drag();
+  ModelingTransformDragPreview
+  commit_transform_drag(EditorHistoryService &history);
+  ModelingCommandResult cancel_transform_drag();
+  ModelingSelectionSummary
+  pick_select(const ModelingPickSelectRequest &request);
+  [[nodiscard]] ModelingSelectionBoxBaseline
+  capture_box_selection_baseline() const;
+  ModelingSelectionSummary box_select(const ModelingBoxSelectRequest &request);
+  ModelingSelectionSummary
+  box_select(const ModelingBoxSelectRequest &request,
+             const ModelingSelectionBoxBaseline &baseline);
+  ModelingCommandResult
+  update_selection_hover(const ModelingHoverRequest &request);
+  [[nodiscard]] ModelingHoverSummary selection_hover_summary() const;
+  [[nodiscard]] ModelingHoverSummary
+  preview_selection_hover(const ModelingHoverRequest &request) const;
+  ModelingCommandResult clear_selection_hover();
+  ModelingCommandResult activate_viewport_tool(ModelingViewportTool tool);
+  ModelingCommandResult cancel_active_modal_tool();
+  ModelingCommandResult
+  update_insert_edge_loop_hover(const ModelingToolRayEvent &event);
+  ModelingCommandResult
+  begin_insert_edge_loop_drag(const ModelingToolRayEvent &event);
+  ModelingCommandResult
+  update_insert_edge_loop_drag(const ModelingToolRayEvent &event);
+  ModelingCommandResult commit_insert_edge_loop_drag();
+  ModelingCommandResult update_knife_hover(const ModelingToolRayEvent &event);
+  ModelingCommandResult accept_knife_point(const ModelingToolRayEvent &event);
+  ModelingCommandResult commit_knife_tool();
+  ModelingCommandResult update_cut_hover(const ModelingToolRayEvent &event);
+  ModelingCommandResult click_cut(const ModelingToolRayEvent &event);
+  ModelingCommandResult begin_cut_point_drag(int point_index);
+  ModelingCommandResult begin_cut_line_drag(const ModelingToolRayEvent &event);
+  ModelingCommandResult end_cut_drag();
+  ModelingCommandResult set_cut_mode(ModelingCutMode mode);
+  ModelingCommandResult cycle_cut_mode();
+  ModelingCommandResult finalize_cut_tool();
+  ModelingCommandResult update_mirror_hover(const ModelingToolRayEvent &event);
+  ModelingCommandResult click_mirror(const ModelingToolRayEvent &event);
+  ModelingCommandResult begin_mirror_point_drag(int point_index);
+  ModelingCommandResult
+  begin_mirror_line_drag(const ModelingToolRayEvent &event);
+  ModelingCommandResult end_mirror_drag();
+  ModelingCommandResult finalize_mirror_tool();
+  ModelingCommandResult update_poly_hover(const ModelingToolRayEvent &event);
+  ModelingCommandResult accept_poly_point();
+  ModelingCommandResult commit_poly_tool();
+  ModelingCommandResult activate_box_tool();
+  ModelingCreateBoxResult
+  create_box_from_bounds(const ModelingCreateBoxRequest &request);
+  ModelingBoxPreview update_box_hover(const ModelingBoxToolEvent &event);
+  ModelingBoxPreview begin_box_footprint(const ModelingBoxToolEvent &event);
+  ModelingBoxPreview update_box_footprint(const ModelingBoxToolEvent &event);
+  ModelingBoxPreview begin_box_height(const ModelingBoxToolEvent &event);
+  ModelingBoxPreview update_box_height(const ModelingBoxToolEvent &event);
+  [[nodiscard]] ModelingBoxPreview box_preview(bool snap_enabled = true) const;
+  ModelingCreateBoxResult commit_box(std::string name);
+  ModelingCommandResult cancel_box();
+  ModelingCreateBoxResult create_mesh(const ModelingCreateMeshRequest &request);
+  void project_object_selection_from_scene(bool force_object_mode = false);
+  ModelingCommandResult
+  set_object_selection(std::span<const EntityId> entities,
+                       EntityId active = kInvalidEntityId);
+  ModelingCommandResult
+  set_component_selection(const ModelingComponentSelectionRequest &request);
+  ModelingCommandResult move_selection(QVec3 delta);
+  ModelingCommandResult transform_selection(const ModelingTransform3 &transform,
+                                            QVec3 pivot);
+  ModelingCommandResult
+  assign_material_slot_to_selection(std::uint32_t material_slot);
+  ModelingCommandResult
+  assign_material_slot_to_face(int modeling_object_id, int face_id,
+                               std::uint32_t material_slot);
+  ModelingCommandResult
+  set_selection_hover(const ModelingDirectHoverRequest &request);
 
-  private:
-    class Impl;
-    std::unique_ptr<Impl> impl_;
+private:
+  class Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 } // namespace quader

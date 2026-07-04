@@ -86,6 +86,12 @@ filament::ColorGrading *build_color_grading(filament::Engine &engine,
   return build_color_grading(engine, tone_mapper);
 }
 
+TextureSampleColorSpace
+scene_texture_sample_color_space(bool post_processing_enabled) {
+  return post_processing_enabled ? TextureSampleColorSpace::DisplaySrgb
+                                 : TextureSampleColorSpace::LinearSrgb;
+}
+
 } // namespace
 
 ViewportRenderer::~ViewportRenderer() {
@@ -192,7 +198,7 @@ void ViewportRenderer::resize(std::uint32_t width, std::uint32_t height) {
     height_ = std::max(1u, height);
     if (surface_ == ViewportRenderSurface::Texture) {
       render_target_.resize(width_, height_, view_,
-                            TextureSampleColorSpace::LinearSrgb);
+                            scene_texture_sample_color_space_);
       overlay_render_target_.resize(
           width_, height_, overlay_view_,
           TextureSampleColorSpace::DisplaySrgbPremultipliedAlpha);
@@ -274,6 +280,11 @@ void ViewportRenderer::apply_scene_settings(
 
   const bool post_processing_enabled =
       rendered_mode && settings.post_process.enabled;
+  scene_texture_sample_color_space_ =
+      scene_texture_sample_color_space(post_processing_enabled);
+  if (surface_ == ViewportRenderSurface::Texture) {
+    render_target_.set_sample_color_space(scene_texture_sample_color_space_);
+  }
   camera_near_plane_ = std::max(settings.camera.near_plane, 0.001f);
   camera_far_plane_ =
       std::max(settings.camera.far_plane, camera_near_plane_ + 0.001f);

@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "platform/sdl_input_adapter.hpp"
 
+#include <SDL3/SDL_events.h>
+#include <SDL3/SDL_keycode.h>
 #include <SDL3/SDL_mouse.h>
 
 namespace quader {
@@ -220,6 +222,35 @@ std::optional<QuaderKeyCode> quader_key_code_from_sdl_key(SDL_Keycode key) {
   default:
     return std::nullopt;
   }
+}
+
+QuaderInputChord quader_input_chord_from_sdl_key(SDL_Keycode key,
+                                                 SDL_Keymod modifiers) {
+  const std::optional<QuaderKeyCode> key_code =
+      quader_key_code_from_sdl_key(key);
+  if (!key_code) {
+    return {};
+  }
+  return {
+      .primary = (modifiers & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0,
+      .shift = (modifiers & SDL_KMOD_SHIFT) != 0,
+      .alt = (modifiers & SDL_KMOD_ALT) != 0,
+      .device = QuaderInputDevice::Keyboard,
+      .key = *key_code,
+  };
+}
+
+std::optional<QuaderInputChord>
+quader_pressed_input_chord_from_sdl_event(const SDL_Event &event) {
+  if (event.type != SDL_EVENT_KEY_DOWN || event.key.repeat) {
+    return std::nullopt;
+  }
+  QuaderInputChord chord =
+      quader_input_chord_from_sdl_key(event.key.key, event.key.mod);
+  if (chord.empty()) {
+    return std::nullopt;
+  }
+  return chord;
 }
 
 std::optional<QuaderMouseButton>

@@ -59,7 +59,8 @@ struct RenderOverlayBoundsSnapshot {
 };
 
 /**
- * Stores one selected light marker input for render overlay projection.
+ * Stores one selected non-billboard light marker input for render overlay
+ * projection.
  */
 struct RenderOverlayLightMarkerSnapshot {
   EntityId entity = kInvalidEntityId;
@@ -103,6 +104,7 @@ struct RenderOverlaySelectionSnapshot {
   std::vector<RenderOverlayMeshSnapshot> hierarchy_selection_wires;
   std::vector<RenderOverlayBoundsSnapshot> group_bounds;
   std::vector<RenderOverlayLightMarkerSnapshot> selected_lights;
+  std::vector<RenderOverlayLightMarkerSnapshot> point_light_gizmos;
   ViewportOverlayFrame tool_overlays;
 };
 

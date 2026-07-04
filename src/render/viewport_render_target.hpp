@@ -40,6 +40,7 @@ public:
     void resize(std::uint32_t width, std::uint32_t height, filament::View *view,
                 TextureSampleColorSpace sample_color_space =
                     TextureSampleColorSpace::LinearSrgb);
+    void set_sample_color_space(TextureSampleColorSpace sample_color_space);
     void destroy();
 
     filament::RenderTarget *render_target() const { return render_target_; }

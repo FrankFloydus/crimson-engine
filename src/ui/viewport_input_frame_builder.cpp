@@ -54,6 +54,18 @@ QuaderInputChord keyboard_input_chord(QuaderKeyCode key,
   };
 }
 
+ViewportModifiers
+viewport_modifiers_from_imgui_state(bool key_ctrl, bool key_super,
+                                    bool key_shift, bool key_alt,
+                                    ImGuiKeyChord key_mods) {
+  return {
+      .primary = key_ctrl || key_super ||
+                 (key_mods & (ImGuiMod_Ctrl | ImGuiMod_Super)) != 0,
+      .shift = key_shift || (key_mods & ImGuiMod_Shift) != 0,
+      .alt = key_alt || (key_mods & ImGuiMod_Alt) != 0,
+  };
+}
+
 QuaderInputChord mouse_input_chord(QuaderMouseButton button,
                                    QuaderInputGesture gesture,
                                    ViewportModifiers modifiers) {
@@ -82,11 +94,8 @@ ImGuiKeyboardInputChords collect_im_gui_keyboard_input_chords() {
   ImGuiIO &io = ImGui::GetIO();
   ImGuiKeyboardInputChords input;
   input.text_input_active = io.WantTextInput;
-  input.modifiers = {
-      .primary = io.KeyCtrl || io.KeySuper,
-      .shift = io.KeyShift,
-      .alt = io.KeyAlt,
-  };
+  input.modifiers = viewport_modifiers_from_imgui_state(
+      io.KeyCtrl, io.KeySuper, io.KeyShift, io.KeyAlt, io.KeyMods);
 
   add_key(input, ImGuiKey_A, QuaderKeyCode::A);
   add_key(input, ImGuiKey_B, QuaderKeyCode::B);
@@ -254,9 +263,15 @@ ViewportInputFrame ViewportInputFrameBuilder::build(const ViewportInputFrameBuil
     }
     add_wheel_chords(input);
 
-    input.pressed_input_chords.insert(input.pressed_input_chords.end(),
-                                      keyboard.pressed.begin(),
-                                      keyboard.pressed.end());
+    if (!request.pressed_input_chords.empty()) {
+      input.pressed_input_chords.insert(input.pressed_input_chords.end(),
+                                        request.pressed_input_chords.begin(),
+                                        request.pressed_input_chords.end());
+    } else {
+      input.pressed_input_chords.insert(input.pressed_input_chords.end(),
+                                        keyboard.pressed.begin(),
+                                        keyboard.pressed.end());
+    }
     input.active_input_chords.insert(input.active_input_chords.end(),
                                      keyboard.active.begin(),
                                      keyboard.active.end());

@@ -140,9 +140,24 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot(
   };
 
   const std::vector<EntityId> selected = document.selected_entities();
+  const std::vector<EntityId> entities = document.entities();
   snapshot.hierarchy_selection_wires.reserve(selected.size());
   snapshot.group_bounds.reserve(selected.size());
   snapshot.selected_lights.reserve(selected.size());
+  snapshot.point_light_gizmos.reserve(entities.size());
+  for (const EntityId entity : entities) {
+    const LightComponent *scene_light = document.light(entity);
+    if (scene_light == nullptr || scene_light->type != LightType::Point ||
+        !document.is_effectively_visible(entity)) {
+      continue;
+    }
+    snapshot.point_light_gizmos.push_back(RenderOverlayLightMarkerSnapshot{
+        .entity = entity,
+        .type = scene_light->type,
+        .world_transform = document.world_transform_matrix(entity),
+    });
+  }
+
   for (const EntityId entity : selected) {
     if (document.has_children(entity)) {
       for (const EntityId descendant : document.descendants(entity, false)) {
@@ -166,7 +181,8 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot(
     }
 
     const LightComponent *scene_light = document.light(entity);
-    if (scene_light == nullptr || !document.is_effectively_visible(entity)) {
+    if (scene_light == nullptr || scene_light->type == LightType::Point ||
+        !document.is_effectively_visible(entity)) {
       continue;
     }
     snapshot.selected_lights.push_back(RenderOverlayLightMarkerSnapshot{

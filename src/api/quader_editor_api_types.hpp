@@ -76,6 +76,7 @@ struct QuaderNotification {
  * Represents a Quader Viewport Runtime Hooks value used by the public Quader API surface.
  */
 struct QuaderViewportRuntimeHooks {
+  std::function<QuaderApiVoidResult(ViewportPaneId)> frame_all;
   std::function<QuaderApiVoidResult(ViewportPaneId)> frame_selection;
   std::function<QuaderApiVoidResult(ViewportPaneId)> focus_origin;
   std::function<QuaderApiVoidResult()> spawn_window;

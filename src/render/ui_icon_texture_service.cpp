@@ -7,24 +7,15 @@
 #include "render/ui_icon_texture_service.hpp"
 
 #include "core/logger.hpp"
-#include "render/filament_buffer_descriptor_factory.hpp"
+#include "render/png_texture_loader.hpp"
 
 #include <filament/Engine.h>
 #include <filament/Texture.h>
-#include <lodepng.h>
 
-#include <cstddef>
-#include <cstring>
 #include <filesystem>
 #include <initializer_list>
-#include <vector>
 
 namespace quader {
-namespace {
-
-constexpr unsigned kRgbaChannelCount = 4u;
-
-} // namespace
 
 UiIconTextureService::~UiIconTextureService() {
   clear();
@@ -99,47 +90,17 @@ void UiIconTextureService::clear() {
 
 RenderTextureHandle
 UiIconTextureService::load_path(const std::filesystem::path &icon_path) {
-  std::vector<unsigned char> pixels;
-  unsigned width = 0;
-  unsigned height = 0;
-  const unsigned error = lodepng::decode(pixels, width, height,
-                                         icon_path.string());
-  if (error != 0u || pixels.empty() || width == 0u || height == 0u) {
-    LOG_WARN("Unable to load UI icon {}: {}", icon_path.string(),
-             lodepng_error_text(error));
-    return kInvalidRenderTextureHandle;
-  }
-
-  const std::size_t row_byte_count =
-      static_cast<std::size_t>(width) * kRgbaChannelCount;
-  std::vector<unsigned char> flipped(pixels.size());
-  for (unsigned y = 0; y < height; ++y) {
-    const std::size_t source_offset =
-        static_cast<std::size_t>(y) * row_byte_count;
-    const std::size_t target_offset =
-        static_cast<std::size_t>(height - 1u - y) * row_byte_count;
-    std::memcpy(flipped.data() + target_offset, pixels.data() + source_offset,
-                row_byte_count);
-  }
-
-  filament::Texture *texture =
-      filament::Texture::Builder()
-          .width(width)
-          .height(height)
-          .levels(1)
-          .format(filament::Texture::InternalFormat::RGBA8)
-          .usage(filament::Texture::Usage::UPLOADABLE |
-                 filament::Texture::Usage::SAMPLEABLE)
-          .build(*engine_);
+  filament::Texture *texture = load_png_texture(
+      *engine_, icon_path,
+      PngTextureLoadOptions{
+          .color_space = PngTextureColorSpace::Linear,
+          .flip_y = true,
+          .label = "UI icon",
+      });
   if (texture == nullptr) {
-    LOG_WARN("Unable to create render texture for UI icon {}",
-             icon_path.string());
     return kInvalidRenderTextureHandle;
   }
 
-  texture->setImage(*engine_, 0,
-                    FilamentBufferDescriptorFactory::rgba_pixels(
-                        flipped.data(), flipped.size()));
   const RenderTextureHandle handle = textures_->register_texture(texture);
   icon_textures_.push_back(IconTextureRecord{
       .texture = texture,

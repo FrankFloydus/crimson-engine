@@ -17,6 +17,8 @@
 #include "viewport/viewport_camera_controller.hpp"
 
 #include <algorithm>
+#include <limits>
+#include <optional>
 
 namespace quader {
 namespace {
@@ -157,6 +159,67 @@ make_box_select_request(const ViewportCameraController &camera,
   };
 }
 
+bool entity_is_selected(const QuaderEditorApi &editor, EntityId entity) {
+  const std::optional<QuaderEntitySnapshot> snapshot =
+      editor.query().entity(entity);
+  return snapshot.has_value() && snapshot->selected;
+}
+
+std::optional<EntityId> pick_scene_billboard_entity(
+    const ViewportInteractionFrame &frame, QVec2 local_mouse) {
+  EntityId best_entity = kInvalidEntityId;
+  float best_depth = std::numeric_limits<float>::max();
+  for (const ViewportSceneBillboardPickCandidate &candidate :
+       frame.scene_billboard_pick_candidates) {
+    if (candidate.entity == kInvalidEntityId) {
+      continue;
+    }
+    const ViewportScreenPoint projected =
+        frame.camera.project_world_point(candidate.position);
+    if (!projected.visible || projected.depth < 0.0f ||
+        projected.depth >= best_depth) {
+      continue;
+    }
+    const float half_size = std::max(candidate.size_pixels, 1.0f) * 0.5f;
+    if (local_mouse.x < projected.position.x - half_size ||
+        local_mouse.x > projected.position.x + half_size ||
+        local_mouse.y < projected.position.y - half_size ||
+        local_mouse.y > projected.position.y + half_size) {
+      continue;
+    }
+    best_entity = candidate.entity;
+    best_depth = projected.depth;
+  }
+  if (best_entity == kInvalidEntityId) {
+    return std::nullopt;
+  }
+  return best_entity;
+}
+
+QuaderSelectionSummary select_billboard_entity(
+    QuaderEditorApi &editor, ViewportInputRouter &input_router,
+    const ViewportInteractionFrame &frame, EntityId entity,
+    bool preserve_selection_on_selected_hit) {
+  QDR_PROFILE_FUNCTION();
+  const QuaderSelectionEdit edit =
+      selection_edit_from_modifiers(frame.input.modifiers);
+  const bool preserves_selected_hit =
+      preserve_selection_on_selected_hit &&
+      edit == QuaderSelectionEdit::Replace && entity_is_selected(editor, entity);
+  if (!preserves_selected_hit) {
+    const QuaderApiVoidResult result =
+        editor.selection().select_object(entity, edit);
+    if (!result.ok) {
+      LOG_ERROR("Viewport billboard selection failed: {}",
+                result.message.empty() ? "Selection failed." : result.message);
+    }
+  }
+  const QuaderSelectionSummary summary = editor.selection().summary();
+  input_router.set_selection_mode(
+      app_selection_mode_to_viewport(to_modeling_selection_mode(summary.mode)));
+  return summary;
+}
+
 QuaderSelectionSummary
 pick_selection(QuaderEditorApi &editor, ViewportInputRouter &input_router,
                const ViewportInteractionFrame &frame, QVec2 local_mouse,
@@ -164,6 +227,12 @@ pick_selection(QuaderEditorApi &editor, ViewportInputRouter &input_router,
                bool preserve_selection_on_selected_hit = false,
                bool preserve_existing_component_selection_on_hit = false) {
   QDR_PROFILE_FUNCTION();
+  if (const std::optional<EntityId> billboard_entity =
+          pick_scene_billboard_entity(frame, local_mouse)) {
+    return select_billboard_entity(editor, input_router, frame,
+                                   *billboard_entity,
+                                   preserve_selection_on_selected_hit);
+  }
   const QuaderApiResult<QuaderSelectionSummary> result =
       editor.selection().pick_select(make_pick_select_request(
           frame.camera, frame.settings, local_mouse, frame.input.modifiers,

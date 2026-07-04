@@ -8,11 +8,11 @@
 
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
+#include "api/quader_viewport_layout_types.hpp"
 #include "core/localization_service.hpp"
+#include "editor/tools/viewport_tool_catalog.hpp"
 #include "ui/ui_panel_manager.hpp"
 #include "ui/viewport_panel.hpp"
-#include "api/quader_viewport_layout_types.hpp"
-#include "editor/tools/viewport_tool_catalog.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <imgui.h>
@@ -128,6 +128,8 @@ void draw_file_menu_contents(MainMenuBarContext &context) {
   const std::vector<QuaderCommandDescriptor> commands =
       context.editor.commands().available();
 
+  (void)draw_command_menu_item(context, commands, quader_command::kProjectNew,
+                               "ui.menu.file.new", "New");
   (void)draw_command_menu_item(context, commands, quader_command::kProjectOpen,
                                "ui.menu.file.open", "Open...");
   (void)draw_command_menu_item(context, commands, quader_command::kProjectSave,
@@ -225,6 +227,15 @@ void draw_edit_menu_contents(MainMenuBarContext &context,
   }
 }
 
+void draw_cleanup_menu_contents(MainMenuBarContext &context) {
+  const std::vector<QuaderCommandDescriptor> commands =
+      context.editor.commands().available();
+
+  (void)draw_command_menu_item(
+      context, commands, quader_command::kModelingRemoveDoubles,
+      "ui.menu.cleanup.remove_doubles", "Remove Doubles");
+}
+
 void draw_tools_menu_contents(MainMenuBarContext &context) {
   ToolMenuGroup current_group = ToolMenuGroup::Navigation;
   bool first_tool = true;
@@ -297,6 +308,9 @@ void draw_view_menu_contents(MainMenuBarContext &context,
       result.viewport_settings_changed;
   ImGui::Separator();
 
+  (void)draw_command_menu_item(context, commands,
+                               quader_command::kViewportFocusAll,
+                               "ui.menu.view.focus_all", "Focus All");
   (void)draw_command_menu_item(
       context, commands, quader_command::kViewportFrameSelection,
       "ui.menu.view.focus_selection", "Focus Selection");
@@ -352,7 +366,7 @@ void draw_layout_menu_contents(MainMenuBarContext &context) {
 
 } // namespace
 
-bool FileMenu::draw(MainMenuBarContext& context) const {
+bool FileMenu::draw(MainMenuBarContext &context) const {
   const std::string label =
       context.localization.imgui_label("ui.menu.file", "ui.menu.file", "File");
   if (!begin_menu_with_popup_spacing(label)) {
@@ -364,7 +378,8 @@ bool FileMenu::draw(MainMenuBarContext& context) const {
   return true;
 }
 
-bool EditMenu::draw(MainMenuBarContext& context, MainMenuBarResult& result) const {
+bool EditMenu::draw(MainMenuBarContext &context,
+                    MainMenuBarResult &result) const {
   const std::string label =
       context.localization.imgui_label("ui.menu.edit", "ui.menu.edit", "Edit");
   if (!begin_menu_with_popup_spacing(label)) {
@@ -376,7 +391,19 @@ bool EditMenu::draw(MainMenuBarContext& context, MainMenuBarResult& result) cons
   return true;
 }
 
-bool ToolsMenu::draw(MainMenuBarContext& context) const {
+bool CleanUpMenu::draw(MainMenuBarContext &context) const {
+  const std::string label = context.localization.imgui_label(
+      "ui.menu.cleanup", "ui.menu.cleanup", "Clean Up");
+  if (!begin_menu_with_popup_spacing(label)) {
+    return false;
+  }
+
+  draw_cleanup_menu_contents(context);
+  end_menu_with_popup_spacing();
+  return true;
+}
+
+bool ToolsMenu::draw(MainMenuBarContext &context) const {
   const std::string label = context.localization.imgui_label(
       "ui.menu.tools", "ui.menu.tools", "Tools");
   if (!begin_menu_with_popup_spacing(label)) {
@@ -388,7 +415,7 @@ bool ToolsMenu::draw(MainMenuBarContext& context) const {
   return true;
 }
 
-bool CreateMenu::draw(MainMenuBarContext& context) const {
+bool CreateMenu::draw(MainMenuBarContext &context) const {
   const std::string label = context.localization.imgui_label(
       "ui.menu.create", "ui.menu.create", "Create");
   if (!begin_menu_with_popup_spacing(label)) {
@@ -400,7 +427,8 @@ bool CreateMenu::draw(MainMenuBarContext& context) const {
   return true;
 }
 
-bool ViewMenu::draw(MainMenuBarContext& context, MainMenuBarResult& result) const {
+bool ViewMenu::draw(MainMenuBarContext &context,
+                    MainMenuBarResult &result) const {
   const std::string label =
       context.localization.imgui_label("ui.menu.view", "ui.menu.view", "View");
   if (!begin_menu_with_popup_spacing(label)) {
@@ -412,7 +440,7 @@ bool ViewMenu::draw(MainMenuBarContext& context, MainMenuBarResult& result) cons
   return true;
 }
 
-bool LayoutMenu::draw(MainMenuBarContext& context) const {
+bool LayoutMenu::draw(MainMenuBarContext &context) const {
   const std::string label = context.localization.imgui_label(
       "ui.menu.layout", "ui.menu.layout", "Layout");
   if (!begin_menu_with_popup_spacing(label)) {
@@ -425,20 +453,21 @@ bool LayoutMenu::draw(MainMenuBarContext& context) const {
 }
 
 MainMenuBarResult MainMenuBar::draw(MainMenuBarContext context) const {
-    MainMenuBarResult result;
-    if (!ImGui::BeginMenuBar()) {
-        return result;
-    }
-
-    result = draw_menus(context);
-    ImGui::EndMenuBar();
+  MainMenuBarResult result;
+  if (!ImGui::BeginMenuBar()) {
     return result;
+  }
+
+  result = draw_menus(context);
+  ImGui::EndMenuBar();
+  return result;
 }
 
 MainMenuBarResult MainMenuBar::draw_menus(MainMenuBarContext context) const {
   MainMenuBarResult result;
   result.popup_open = file_menu_.draw(context) || result.popup_open;
   result.popup_open = edit_menu_.draw(context, result) || result.popup_open;
+  result.popup_open = cleanup_menu_.draw(context) || result.popup_open;
   result.popup_open = tools_menu_.draw(context) || result.popup_open;
   result.popup_open = create_menu_.draw(context) || result.popup_open;
   result.popup_open = view_menu_.draw(context, result) || result.popup_open;

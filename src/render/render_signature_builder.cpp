@@ -73,6 +73,15 @@ void add_point_signature(RenderSignatureBuilder &signature,
   signature.add_vec3(point.position);
 }
 
+void add_icon_signature(RenderSignatureBuilder &signature,
+                        const ViewportOverlayIcon &icon) {
+  signature.add_value(static_cast<std::uint32_t>(icon.layer))
+      .add_value(static_cast<std::uint32_t>(icon.kind))
+      .add_value(icon.color)
+      .add_float(icon.size_pixels)
+      .add_vec3(icon.position);
+}
+
 } // namespace
 
 RenderSignatureBuilder::RenderSignatureBuilder()
@@ -265,6 +274,14 @@ OverlayFrameSignatures RenderSignatureBuilder::overlay_frame_signatures(
     ++result.point_counts[overlay_layer_index(point.layer)];
     add_point_signature(layer_signatures[overlay_layer_index(point.layer)],
                         point);
+  }
+
+  frame_signature.add_size(frame.icons.size());
+  for (const ViewportOverlayIcon &icon : frame.icons) {
+    add_icon_signature(frame_signature, icon);
+    ++result.icon_counts[overlay_layer_index(icon.layer)];
+    add_icon_signature(layer_signatures[overlay_layer_index(icon.layer)],
+                       icon);
   }
 
   result.frame_signature = frame_signature.value();

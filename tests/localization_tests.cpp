@@ -108,7 +108,6 @@ TEST(LocalizationResourceTests, ShellRuntimeStringsRouteThroughLocaleKeys) {
   const std::string shortcut_controller =
       read_file(source_path("src/ui/viewport_shortcut_controller.cpp"));
 
-  EXPECT_NE(ui_system.find("ui.shell.status.ready"), std::string::npos);
   EXPECT_NE(ui_system.find("ui.runtime.unknown_panel"), std::string::npos);
   EXPECT_NE(ui_system.find("ui.runtime.unknown_locale"), std::string::npos);
   EXPECT_NE(ui_system.find("ui.runtime.preferences_saved"), std::string::npos);

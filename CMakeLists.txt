@@ -92,6 +92,20 @@ find_package(glm CONFIG REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
 find_package(stduuid CONFIG REQUIRED)
 find_package(Taskflow CONFIG REQUIRED)
+if(QUADER_ENABLE_SENTRY)
+    find_package(sentry CONFIG REQUIRED)
+    if(WIN32 AND TARGET sentry_crashpad::crashpad_wer)
+        get_target_property(_QUADER_SENTRY_WER_DEBUG sentry_crashpad::crashpad_wer IMPORTED_LOCATION_DEBUG)
+        get_target_property(_QUADER_SENTRY_WER_RELEASE sentry_crashpad::crashpad_wer IMPORTED_LOCATION_RELEASE)
+        set_target_properties(sentry_crashpad::crashpad_wer PROPERTIES
+            IMPORTED_IMPLIB_DEBUG "${_QUADER_SENTRY_WER_DEBUG}"
+            IMPORTED_IMPLIB_RELEASE "${_QUADER_SENTRY_WER_RELEASE}"
+            IMPORTED_IMPLIB_MINSIZEREL "${_QUADER_SENTRY_WER_RELEASE}"
+            IMPORTED_IMPLIB_RELWITHDEBINFO "${_QUADER_SENTRY_WER_RELEASE}"
+            IMPORTED_LOCATION_MINSIZEREL "${_QUADER_SENTRY_WER_RELEASE}"
+            IMPORTED_LOCATION_RELWITHDEBINFO "${_QUADER_SENTRY_WER_RELEASE}")
+    endif()
+endif()
 
 if(QUADER_BUILD_TESTS)
     enable_testing()
@@ -302,6 +316,7 @@ add_library(quader_api STATIC
     src/api/quader_api_mutation_runner.cpp
     src/api/quader_asset_api.cpp
     src/api/quader_commands_api.cpp
+    src/api/quader_dev_tools_api.cpp
     src/api/quader_events_api.cpp
     src/api/quader_history_api.cpp
     src/api/quader_modeling_api.cpp
@@ -319,7 +334,9 @@ add_library(quader_api STATIC
 )
 
 quader_enable_common_pch(quader_api)
-target_include_directories(quader_api PUBLIC src)
+target_include_directories(quader_api
+    PUBLIC src
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
 target_link_libraries(quader_api PUBLIC quader_core PRIVATE quader_modeling_profile)
 target_compile_definitions(quader_api
     PUBLIC
@@ -439,12 +456,15 @@ quader_register_filament_material(vertex_color_overlay_material resources/materi
 quader_register_filament_material(quader_overlay_line_material resources/materials/quader_overlay_line.mat quader_overlay_line)
 quader_register_filament_material(quader_selected_object_line_material resources/materials/quader_selected_object_line.mat quader_selected_object_line)
 quader_register_filament_material(quader_overlay_point_material resources/materials/quader_overlay_point.mat quader_overlay_point)
+quader_register_filament_material(quader_overlay_icon_material resources/materials/quader_overlay_icon.mat quader_overlay_icon)
 quader_register_filament_material(imgui_material resources/materials/imgui.mat imgui)
 quader_register_filament_material(ground_grid_material resources/materials/ground_grid.mat ground_grid)
 
 add_library(quader_platform STATIC
     src/platform/fatal_error_handler.cpp
+    src/platform/platform_event.cpp
     src/platform/platform_file_dialog.cpp
+    src/platform/sentry_client.cpp
     src/platform/platform_window.cpp
     src/platform/sdl_event_utils.cpp
     src/platform/sdl_input_adapter.cpp
@@ -456,6 +476,10 @@ target_link_libraries(quader_platform
     PUBLIC
         quader_core
         SDL3::SDL3)
+if(QUADER_ENABLE_SENTRY)
+    target_compile_definitions(quader_platform PRIVATE QUADER_ENABLE_SENTRY=1)
+    target_link_libraries(quader_platform PRIVATE sentry::sentry)
+endif()
 target_compile_features(quader_platform PUBLIC cxx_std_20)
 if(WIN32)
     target_link_libraries(quader_platform
@@ -478,6 +502,7 @@ add_library(quader_render STATIC
     src/render/material_compiler_service.cpp
     src/render/mesh_renderable_cache.cpp
     src/render/mesh_renderable_factory.cpp
+    src/render/png_texture_loader.cpp
     src/render/overlay/overlay_camera_projector.cpp
     src/render/overlay/overlay_face_fill_builder.cpp
     src/render/overlay/overlay_line_mesh_builder.cpp
@@ -596,6 +621,9 @@ target_compile_definitions(quader_runtime
     INTERFACE
         QUADER_DEFAULT_FILAMENT_SDK_ROOT="${FILAMENT_SDK_ROOT}"
 )
+if(QUADER_ENABLE_SENTRY)
+    target_compile_definitions(quader_runtime INTERFACE QUADER_ENABLE_SENTRY=1)
+endif()
 target_compile_features(quader_runtime INTERFACE cxx_std_20)
 target_link_libraries(quader_runtime
     INTERFACE
@@ -603,6 +631,29 @@ target_link_libraries(quader_runtime
         quader_platform
         quader_render
         quader_ui)
+
+if(QUADER_ENABLE_SENTRY AND WIN32)
+    get_filename_component(_QUADER_SENTRY_ROOT "${sentry_DIR}/../.." ABSOLUTE)
+    find_program(QUADER_SENTRY_CRASHPAD_HANDLER
+        NAMES crashpad_handler.exe crashpad_handler
+        PATHS
+            "${_QUADER_SENTRY_ROOT}/tools/sentry-native"
+            "${_QUADER_SENTRY_ROOT}/bin"
+        NO_DEFAULT_PATH)
+    if(NOT QUADER_SENTRY_CRASHPAD_HANDLER)
+        message(FATAL_ERROR "Sentry crashpad_handler was not found in the vcpkg sentry-native package.")
+    endif()
+    get_filename_component(_QUADER_SENTRY_CRASHPAD_DIR "${QUADER_SENTRY_CRASHPAD_HANDLER}" DIRECTORY)
+    find_file(QUADER_SENTRY_CRASHPAD_ZDLL
+        NAMES z.dll
+        PATHS
+            "${_QUADER_SENTRY_CRASHPAD_DIR}"
+            "${_QUADER_SENTRY_ROOT}/bin"
+        NO_DEFAULT_PATH)
+    if(NOT QUADER_SENTRY_CRASHPAD_ZDLL)
+        message(FATAL_ERROR "Sentry crashpad_handler dependency z.dll was not found in the vcpkg package.")
+    endif()
+endif()
 
 add_executable(quader WIN32 src/main.cpp)
 target_link_libraries(quader PRIVATE quader_runtime)
@@ -651,6 +702,17 @@ add_custom_command(TARGET quader POST_BUILD
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/locales"
             "$<TARGET_FILE_DIR:quader>/locales"
     VERBATIM)
+
+if(QUADER_ENABLE_SENTRY AND WIN32)
+    add_custom_command(TARGET quader POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${QUADER_SENTRY_CRASHPAD_HANDLER}"
+                "$<TARGET_FILE_DIR:quader>/crashpad_handler.exe"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${QUADER_SENTRY_CRASHPAD_ZDLL}"
+                "$<TARGET_FILE_DIR:quader>/z.dll"
+        VERBATIM)
+endif()
 
 if(EXISTS "${QUADER_DEFAULT_ALBEDO_TEXTURE}" AND EXISTS "${QUADER_DEFAULT_ROUGHNESS_TEXTURE}")
     add_custom_command(TARGET quader POST_BUILD

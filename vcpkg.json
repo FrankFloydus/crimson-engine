@@ -1,6 +1,6 @@
 {
   "name": "quader-app",
-  "version-string": "0.0.42",
+  "version-string": "0.0.48",
   "builtin-baseline": "d0c191d142b7bc048141ddfb618aa9ae5dba0233",
   "dependencies": [
     "entt",
@@ -15,8 +15,10 @@
     },
     "gtest",
     "lodepng",
+    "sentry-native",
     "spdlog",
     "stduuid",
-    "taskflow"
+    "taskflow",
+    "zlib"
   ]
 }

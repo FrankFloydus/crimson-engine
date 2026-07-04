@@ -6,12 +6,24 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "core/types.hpp"
 #include "viewport/viewport_input_router.hpp"
 #include "viewport/viewport_settings.hpp"
+
+#include <span>
 
 namespace quader {
 
 class ViewportCameraController;
+
+/**
+ * Stores a selectable scene billboard projected by the viewport interaction layer.
+ */
+struct ViewportSceneBillboardPickCandidate {
+  EntityId entity = kInvalidEntityId;
+  QVec3 position = {};
+  float size_pixels = 1.0f;
+};
 
 /**
  * Stores the editor-owned viewport interaction input for one viewport frame.
@@ -27,6 +39,8 @@ struct ViewportInteractionFrame {
   bool left_pressed = false;
   bool left_down = false;
   bool left_released = false;
+  std::span<const ViewportSceneBillboardPickCandidate>
+      scene_billboard_pick_candidates;
 };
 
 /**

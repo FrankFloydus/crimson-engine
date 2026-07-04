@@ -30,7 +30,9 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -224,9 +226,61 @@ QuaderApiVoidResult runtime_failure(std::string message) {
   };
 }
 
+std::string
+status_bar_message(const ModelingLiveStatus &live_status,
+                   const LocalizationService &localization,
+                   const std::optional<QuaderApiStatus> &command_status) {
+  if (live_status.kind ==
+      ModelingLiveStatusKind::MergeByDistanceMergedVertices) {
+    std::string message =
+        localization.text("ui.status.merge_by_distance.merged_vertices",
+                          "Merged {count} vertices");
+    const std::string count = std::to_string(live_status.count);
+    constexpr std::string_view kCountToken = "{count}";
+    if (const std::size_t token = message.find(kCountToken);
+        token != std::string::npos) {
+      message.replace(token, kCountToken.size(), count);
+    }
+    return message;
+  }
+  if (!command_status) {
+    return {};
+  }
+  if (!command_status->ok && command_status->message.empty()) {
+    return "Command failed.";
+  }
+  return command_status->message;
+}
+
+std::string ellipsized_text_to_width(std::string text, float max_width) {
+  if (text.empty() || max_width <= 0.0f) {
+    return {};
+  }
+  if (ImGui::CalcTextSize(text.c_str()).x <= max_width) {
+    return text;
+  }
+
+  constexpr const char *kEllipsis = "...";
+  const float ellipsis_width = ImGui::CalcTextSize(kEllipsis).x;
+  if (ellipsis_width > max_width) {
+    return {};
+  }
+
+  while (!text.empty()) {
+    std::string candidate = text;
+    candidate.append(kEllipsis);
+    if (ImGui::CalcTextSize(candidate.c_str()).x <= max_width) {
+      return candidate;
+    }
+    text.pop_back();
+  }
+  return {};
+}
+
 bool dispatch_focused_panel_command_shortcut(
     QuaderEditorApi &editor, const ViewportToolState &viewport_tool_state,
-    UIPanelId focused_panel, bool command_shortcut_consumed) {
+    UIPanelId focused_panel, bool command_shortcut_consumed,
+    std::span<const QuaderInputChord> pressed_input_chords) {
   if (command_shortcut_consumed || focused_panel == UIPanelId::Viewport) {
     return false;
   }
@@ -238,7 +292,12 @@ bool dispatch_focused_panel_command_shortcut(
     return false;
   }
 
-  for (const QuaderInputChord &chord : keyboard.pressed) {
+  const std::span<const QuaderInputChord> pressed_chords =
+      pressed_input_chords.empty()
+          ? std::span<const QuaderInputChord>(keyboard.pressed)
+          : pressed_input_chords;
+
+  for (const QuaderInputChord &chord : pressed_chords) {
     const QuaderViewportKeybindingDispatch dispatch =
         editor.commands().dispatch_viewport_input_binding(
             chord, viewport_tool_state, false, false);
@@ -261,8 +320,10 @@ bool dispatch_focused_panel_command_shortcut(
   return false;
 }
 
-void draw_static_bottom_bar(const ImGuiViewport &viewport,
-                            const LocalizationService &localization) {
+void draw_static_bottom_bar(
+    const ImGuiViewport &viewport, const ModelingLiveStatus &live_status,
+    const LocalizationService &localization,
+    const std::optional<QuaderApiStatus> &command_status) {
   ImGui::SetNextWindowPos(
       {viewport.Pos.x,
        viewport.Pos.y +
@@ -302,24 +363,34 @@ void draw_static_bottom_bar(const ImGuiViewport &viewport,
   const float text_y =
       min.y +
       std::floor((bottom_bar_text_height - ImGui::GetTextLineHeight()) * 0.5f);
-  const std::string ready = localization.text("ui.shell.status.ready", "Ready");
-  draw_list->AddText({min.x + 12.0f, text_y}, ui_packed_color(216, 216, 216),
-                     ready.c_str());
 
   const char *right_label = kQuaderAppVersionDisplay;
   const ImVec2 right_label_size = ImGui::CalcTextSize(right_label);
-  draw_list->AddText(
-      {std::max(min.x + 72.0f, max.x - right_label_size.x - 12.0f), text_y},
-      ui_packed_color(150, 154, 163), right_label);
+  const float right_label_x =
+      std::max(min.x + 72.0f, max.x - right_label_size.x - 12.0f);
+  const float message_max_width = std::max(0.0f, right_label_x - min.x - 24.0f);
+  const std::string message = ellipsized_text_to_width(
+      status_bar_message(live_status, localization, command_status),
+      message_max_width);
+  if (!message.empty()) {
+    const bool live_message_active =
+        live_status.kind != ModelingLiveStatusKind::None;
+    const ImU32 message_color =
+        !live_message_active && command_status && !command_status->ok
+            ? ui_packed_color(238, 117, 117)
+            : ui_packed_color(216, 216, 216);
+    draw_list->AddText({min.x + 12.0f, text_y}, message_color, message.c_str());
+  }
+
+  draw_list->AddText({right_label_x, text_y}, ui_packed_color(150, 154, 163),
+                     right_label);
 
   ImGui::End();
 }
 
 } // namespace
 
-UISystem::~UISystem() {
-    shutdown();
-}
+UISystem::~UISystem() { shutdown(); }
 
 void UISystem::initialize(UIPlatformAdapter &platform_adapter,
                           RenderSystem &render_system,
@@ -374,39 +445,43 @@ void UISystem::initialize(UIPlatformAdapter &platform_adapter,
 }
 
 void UISystem::shutdown() {
-    if (!initialized_) {
-        return;
-    }
+  if (!initialized_) {
+    return;
+  }
 
-    set_viewport_cursor_captured(false);
-    save_settings();
-    save_viewport_settings();
-    if (!imgui_ini_path_.empty()) {
-      ImGui::SaveIniSettingsToDisk(imgui_ini_path_.c_str());
-    }
+  set_viewport_cursor_captured(false);
+  save_settings();
+  save_viewport_settings();
+  if (!imgui_ini_path_.empty()) {
+    ImGui::SaveIniSettingsToDisk(imgui_ini_path_.c_str());
+  }
 
-    if (viewport_panel_ != nullptr) {
-      viewport_panel_->shutdown();
-    }
-    renderer_.shutdown();
-    if (render_system_ != nullptr) {
-      render_system_->clear_ui_icon_textures();
-    }
-    icons_ = UIIconSet{};
-    if (platform_adapter_ != nullptr) {
-      platform_adapter_->shutdown_imgui_backend();
-    }
-    ImGui::DestroyContext();
-    initialized_ = false;
-    platform_adapter_ = nullptr;
-    render_system_ = nullptr;
-    custom_chrome_ = false;
-    pending_chrome_action_.reset();
-    viewport_panel_ = nullptr;
+  if (viewport_panel_ != nullptr) {
+    viewport_panel_->shutdown();
+  }
+  renderer_.shutdown();
+  if (render_system_ != nullptr) {
+    render_system_->clear_ui_icon_textures();
+  }
+  icons_ = UIIconSet{};
+  if (platform_adapter_ != nullptr) {
+    platform_adapter_->shutdown_imgui_backend();
+  }
+  ImGui::DestroyContext();
+  initialized_ = false;
+  platform_adapter_ = nullptr;
+  render_system_ = nullptr;
+  custom_chrome_ = false;
+  pending_chrome_action_.reset();
+  viewport_panel_ = nullptr;
 }
 
 bool UISystem::process_event(const UIPlatformEvent &event) {
-  return platform_adapter_ != nullptr && platform_adapter_->process_event(event);
+  if (event.pressed_input_chord) {
+    pending_pressed_input_chords_.push_back(*event.pressed_input_chord);
+  }
+  return platform_adapter_ != nullptr &&
+         platform_adapter_->process_event(event);
 }
 
 void UISystem::begin_frame(const FrameTiming &frame_timing,
@@ -435,9 +510,51 @@ void UISystem::end_frame_without_render() {
   if (ImGui::GetCurrentContext() != nullptr) {
     ImGui::EndFrame();
   }
+  pending_pressed_input_chords_.clear();
 }
 
-void UISystem::install_runtime_hooks(QuaderEditorApi &editor) {
+void UISystem::install_runtime_hooks(QuaderEditorApi &editor,
+                                     SceneDocument &document,
+                                     AssetRegistry &assets,
+                                     ModelingSessionService &modeling) {
+  editor.viewports().set_runtime_hooks(QuaderViewportRuntimeHooks{
+      .frame_all =
+          [this, &editor, &document, &assets](ViewportPaneId pane) {
+            if (viewport_panel_ == nullptr) {
+              return runtime_failure(
+                  localization_.text("ui.runtime.viewport_panel_unavailable",
+                                     "Viewport panel is not available."));
+            }
+            return viewport_panel_->frame_all(
+                QuaderViewportApiRuntimeAccess::workspace(editor.viewports()),
+                document, assets, pane);
+          },
+      .frame_selection =
+          [this, &editor, &document, &assets, &modeling](ViewportPaneId pane) {
+            if (viewport_panel_ == nullptr) {
+              return runtime_failure(
+                  localization_.text("ui.runtime.viewport_panel_unavailable",
+                                     "Viewport panel is not available."));
+            }
+            return viewport_panel_->frame_selection(
+                QuaderViewportApiRuntimeAccess::workspace(editor.viewports()),
+                document, assets, modeling, pane);
+          },
+  });
+#ifndef NDEBUG
+  editor.dev_tools().set_runtime_hooks(QuaderDevToolsRuntimeHooks{
+      .set_clipboard_text =
+          [this](std::string_view text, std::string &error_message) {
+            if (platform_adapter_ == nullptr) {
+              error_message =
+                  localization_.text("ui.runtime.platform_unavailable",
+                                     "UI platform is not available.");
+              return false;
+            }
+            return platform_adapter_->set_clipboard_text(text, error_message);
+          },
+  });
+#endif
   editor.ui().set_runtime_hooks(QuaderUIRuntimeHooks{
       .is_panel_visible =
           [this](std::string_view panel) {
@@ -571,6 +688,7 @@ void UISystem::draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
       .frame_timing = current_frame_timing_,
       .render_performance = render_performance_stats_,
       .relative_mouse_delta = relative_mouse_delta_,
+      .pressed_input_chords = pending_pressed_input_chords_,
       .render_resize_suspended = viewport_render_resize_suspended_,
       .cursor_capture_requested = &viewport_cursor_capture_requested,
       .cursor_capture_point = &viewport_cursor_capture_point,
@@ -612,9 +730,10 @@ void UISystem::draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
   if (viewport_panel_ != nullptr) {
     (void)dispatch_focused_panel_command_shortcut(
         editor, viewport_panel_->tool_state(), focused_panel_,
-        command_shortcut_consumed);
+        command_shortcut_consumed, pending_pressed_input_chords_);
   }
-  draw_static_bottom_bar(*ImGui::GetMainViewport(), localization_);
+  draw_static_bottom_bar(*ImGui::GetMainViewport(), modeling.live_status(),
+                         localization_, editor.commands().last_status());
   {
     QDR_PROFILE_SCOPE("UI sync tool preview meshes");
     const ModelingToolStatus tool_status = modeling.tool_status();
@@ -646,6 +765,7 @@ void UISystem::draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
   if (viewport_cursor_capture_requested) {
     warp_captured_cursor(viewport_cursor_capture_point);
   }
+  pending_pressed_input_chords_.clear();
 }
 
 void UISystem::prepare_render_data(std::uint32_t framebuffer_width,
@@ -663,8 +783,8 @@ void UISystem::prepare_viewports(QuaderEditorApi &editor,
   QDR_PROFILE_FUNCTION();
   if (viewport_panel_ != nullptr) {
     viewport_panel_->prepare_viewports(
-        QuaderViewportApiRuntimeAccess::workspace(editor.viewports()),
-        editor, render_bridge, document, assets);
+        QuaderViewportApiRuntimeAccess::workspace(editor.viewports()), editor,
+        render_bridge, document, assets);
   }
 }
 

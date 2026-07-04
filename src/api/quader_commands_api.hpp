@@ -13,6 +13,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -20,6 +21,9 @@
 namespace quader {
 
 class QuaderApi;
+#ifndef NDEBUG
+class QuaderDevToolsApi;
+#endif
 class QuaderProjectApi;
 class QuaderToolsApi;
 class QuaderViewportApi;
@@ -72,7 +76,11 @@ struct QuaderViewportKeybindingContext {
  */
 class QuaderCommandsApi final {
 public:
+#ifndef NDEBUG
+    QuaderCommandsApi(QuaderApi& api, QuaderProjectApi& project, QuaderViewportApi& viewports, QuaderToolsApi& tools, QuaderDevToolsApi& dev_tools);
+#else
     QuaderCommandsApi(QuaderApi& api, QuaderProjectApi& project, QuaderViewportApi& viewports, QuaderToolsApi& tools);
+#endif
     ~QuaderCommandsApi();
 
     QuaderCommandsApi(const QuaderCommandsApi&) = delete;
@@ -80,6 +88,7 @@ public:
 
     QuaderApiVoidResult execute(std::string_view command_id);
     QuaderApiVoidResult execute(QuaderCommandId command_id);
+    [[nodiscard]] std::optional<QuaderApiStatus> last_status() const;
     [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
     [[nodiscard]] std::string
     command_id_for_modeling_action(std::string_view action_id) const;

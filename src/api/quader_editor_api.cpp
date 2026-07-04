@@ -20,7 +20,12 @@ public:
         : api(session)
         , project(session)
         , tools(session)
+#ifndef NDEBUG
+        , dev_tools(session)
+        , commands(api, project, viewports, tools, dev_tools)
+#else
         , commands(api, project, viewports, tools)
+#endif
         , preferences(commands)
         , render(session, api.query()) {}
 
@@ -28,6 +33,9 @@ public:
     QuaderProjectApi project;
     QuaderViewportApi viewports;
     QuaderToolsApi tools;
+#ifndef NDEBUG
+    QuaderDevToolsApi dev_tools;
+#endif
     QuaderCommandsApi commands;
     QuaderPreferencesApi preferences;
     QuaderUIApi ui;
@@ -130,6 +138,16 @@ QuaderCommandsApi& QuaderEditorApi::commands() {
 const QuaderCommandsApi& QuaderEditorApi::commands() const {
     return impl_->commands;
 }
+
+#ifndef NDEBUG
+QuaderDevToolsApi& QuaderEditorApi::dev_tools() {
+    return impl_->dev_tools;
+}
+
+const QuaderDevToolsApi& QuaderEditorApi::dev_tools() const {
+    return impl_->dev_tools;
+}
+#endif
 
 QuaderPreferencesApi& QuaderEditorApi::preferences() {
     return impl_->preferences;

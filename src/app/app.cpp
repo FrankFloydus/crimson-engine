@@ -12,8 +12,8 @@
 #include "diagnostics/profile.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
+#include "platform/platform_event.hpp"
 #include "platform/platform_file_dialog.hpp"
-#include "platform/sdl_event_utils.hpp"
 #include "ui/ui_platform_adapter.hpp"
 
 #include <imgui_impl_sdl3.h>
@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace quader {
@@ -90,6 +91,17 @@ public:
   bool set_relative_mouse_captured(bool captured,
                                    std::string &error_message) override {
     if (SDL_SetWindowRelativeMouseMode(window_, captured)) {
+      error_message.clear();
+      return true;
+    }
+    error_message = SDL_GetError();
+    return false;
+  }
+
+  bool set_clipboard_text(std::string_view text,
+                          std::string &error_message) override {
+    const std::string stable_text(text);
+    if (SDL_SetClipboardText(stable_text.c_str())) {
       error_message.clear();
       return true;
     }
@@ -166,7 +178,9 @@ bool App::initialize(const std::filesystem::path &executable_path,
   default_material_ = default_assets.default_material;
   editor_ = std::make_unique<QuaderEditorApi>(
       QuaderApiSessionInternalAccess::from_project_session(project_session_));
-  ui_.install_runtime_hooks(*editor_);
+  ui_.install_runtime_hooks(*editor_, project_session_.scene(),
+                            project_session_.assets(),
+                            project_session_.modeling());
   editor_->project().set_runtime_hooks(QuaderProjectRuntimeHooks{
       .choose_open_path =
           [this]() {
@@ -192,11 +206,10 @@ bool App::initialize(const std::filesystem::path &executable_path,
     return frame_submitted;
   });
 
-  if (SDL_AddEventWatch(&App::live_resize_event_watch, this)) {
-    event_watch_installed_ = true;
-  } else {
-    LOG_WARN("SDL_AddEventWatch failed for live resize redraw: {}",
-             SDL_GetError());
+  if (!live_resize_event_watch_.install(window_, &App::live_resize_event_watch,
+                                        this)) {
+    LOG_WARN("Platform event watch failed for live resize redraw: {}",
+             live_resize_event_watch_.last_error());
   }
 
   running_ = true;
@@ -204,63 +217,50 @@ bool App::initialize(const std::filesystem::path &executable_path,
 }
 
 int App::run() {
-    LOG_INFO("Entering main loop");
-    frame_clock_.reset();
-    const SDL_WindowID main_window_id = SDL_GetWindowID(window_.sdl_window());
+  LOG_INFO("Entering main loop");
+  frame_clock_.reset();
+  PlatformEventPump events(window_);
 
-    while (running_) {
-      const FrameTiming frame_timing = frame_clock_.tick();
-      SDL_Event event;
-      while (SDL_PollEvent(&event)) {
-        const bool chrome_consumed = window_.process_chrome_event(event);
-        if (!chrome_consumed) {
-          ui_.process_event(UIPlatformEvent{&event});
-          if (event.type == SDL_EVENT_MOUSE_MOTION) {
-            (void)window_.process_chrome_event(event);
-          }
+  while (running_) {
+    const FrameTiming frame_timing = frame_clock_.tick();
+    PlatformEvent event;
+    while (events.poll(event)) {
+      const bool chrome_consumed = window_.process_chrome_event(event);
+      if (!chrome_consumed) {
+        ui_.process_event(UIPlatformEvent{
+            .native_event = event.native_event,
+            .pressed_input_chord = event.pressed_input_chord,
+        });
+        if (event.mouse_motion) {
+          (void)window_.process_chrome_event(event);
         }
-        if (event.type == SDL_EVENT_QUIT ||
-            (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
-             sdl_event_targets_window(event, main_window_id))) {
-          running_ = false;
-        }
-        if ((event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
-             event.type == SDL_EVENT_WINDOW_RESIZED ||
-             event.type == SDL_EVENT_WINDOW_MAXIMIZED ||
-             event.type == SDL_EVENT_WINDOW_RESTORED ||
-             event.type == SDL_EVENT_WINDOW_SHOWN ||
-             event.type == SDL_EVENT_WINDOW_EXPOSED) &&
-            sdl_event_targets_window(event, main_window_id)) {
-          window_.refresh_pixel_size();
-        }
-        if ((event.type == SDL_EVENT_WINDOW_FOCUS_GAINED ||
-             event.type == SDL_EVENT_WINDOW_FOCUS_LOST ||
-             event.type == SDL_EVENT_WINDOW_MAXIMIZED ||
-             event.type == SDL_EVENT_WINDOW_RESTORED ||
-             event.type == SDL_EVENT_WINDOW_SHOWN ||
-             event.type == SDL_EVENT_WINDOW_HIDDEN ||
-             event.type == SDL_EVENT_WINDOW_MINIMIZED ||
-             event.type == SDL_EVENT_WINDOW_OCCLUDED) &&
-            sdl_event_targets_window(event, main_window_id)) {
-          window_.refresh_native_chrome();
-        }
-        }
-        if (!running_) {
-            break;
-        }
-
-        if (live_resize_frame_rendered_) {
-          live_resize_frame_rendered_ = false;
-        } else {
-          if (window_.can_render_frames()) {
-            render_frame(frame_timing);
-          }
-        }
-
-        wait_until_next_frame();
+      }
+      if (event.quit_requested) {
+        running_ = false;
+      }
+      if (event.window_pixel_size_changed) {
+        window_.refresh_pixel_size();
+      }
+      if (event.window_chrome_state_changed) {
+        window_.refresh_native_chrome();
+      }
+    }
+    if (!running_) {
+      break;
     }
 
-    return 0;
+    if (live_resize_frame_rendered_) {
+      live_resize_frame_rendered_ = false;
+    } else {
+      if (window_.can_render_frames()) {
+        render_frame(frame_timing);
+      }
+    }
+
+    wait_until_next_frame();
+  }
+
+  return 0;
 }
 
 void App::shutdown() {
@@ -270,10 +270,7 @@ void App::shutdown() {
 
   shutdown_complete_ = true;
   running_ = false;
-  if (event_watch_installed_) {
-    SDL_RemoveEventWatch(&App::live_resize_event_watch, this);
-    event_watch_installed_ = false;
-  }
+  live_resize_event_watch_.uninstall();
   window_.set_live_resize_frame_callback({});
   save_window_settings();
   ui_.shutdown();
@@ -429,12 +426,12 @@ void App::wait_until_next_frame() {
                            window_.native_chrome_interaction_active()
                        ? kActiveFrameWaitMs
                        : kIdleFrameWaitMs);
-  (void)SDL_WaitEventTimeout(nullptr, wait_ms);
+  (void)platform_wait_for_event_timeout(wait_ms);
 }
 
-bool App::should_render_live_resize_event(const SDL_Event &event) const {
+bool App::should_render_live_resize_event(const PlatformEvent &event) const {
   if (!running_ || shutdown_complete_ || rendering_frame_ ||
-      event.type != SDL_EVENT_WINDOW_EXPOSED || event.window.data1 != 1 ||
+      !event.live_resize_exposed_frame ||
       window_.sdl_window() == nullptr || !window_.can_render_frames()) {
     return false;
   }
@@ -445,17 +442,17 @@ bool App::should_render_live_resize_event(const SDL_Event &event) const {
     return false;
   }
 
-  return sdl_event_targets_window(event, SDL_GetWindowID(window_.sdl_window()));
+  return true;
 }
 
-bool App::live_resize_event_watch(void *userdata, SDL_Event *event) {
-  if (userdata == nullptr || event == nullptr ||
-      event->type != SDL_EVENT_WINDOW_EXPOSED) {
+bool App::live_resize_event_watch(void *userdata,
+                                  const PlatformEvent &event) {
+  if (userdata == nullptr || !event.live_resize_exposed_frame) {
     return true;
   }
 
   App *app = static_cast<App *>(userdata);
-  if (!app->should_render_live_resize_event(*event)) {
+  if (!app->should_render_live_resize_event(event)) {
     return true;
   }
 

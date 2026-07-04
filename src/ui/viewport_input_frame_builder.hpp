@@ -12,6 +12,7 @@
 #include <imgui.h>
 
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace quader {
@@ -28,6 +29,10 @@ struct ImGuiKeyboardInputChords {
 
 [[nodiscard]] QuaderInputChord
 keyboard_input_chord(QuaderKeyCode key, ViewportModifiers modifiers);
+[[nodiscard]] ViewportModifiers
+viewport_modifiers_from_imgui_state(bool key_ctrl, bool key_super,
+                                    bool key_shift, bool key_alt,
+                                    ImGuiKeyChord key_mods);
 [[nodiscard]] QuaderInputChord mouse_input_chord(QuaderMouseButton button,
                                                  QuaderInputGesture gesture,
                                                  ViewportModifiers modifiers);
@@ -46,6 +51,7 @@ struct ViewportInputFrameBuildRequest {
     bool route_active_navigation_input = false;
     bool use_captured_mouse_delta = false;
     QVec2 captured_mouse_delta = {};
+    std::span<const QuaderInputChord> pressed_input_chords;
     float delta_seconds = 1.0f / 60.0f;
 };
 

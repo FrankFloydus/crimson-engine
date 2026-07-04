@@ -17,7 +17,8 @@ class ViewportPanel;
 class ViewportSettings;
 
 /**
- * Stores the Main Menu Bar Context data contract used by the ImGui editor presentation layer.
+ * Stores the Main Menu Bar Context data contract used by the ImGui editor
+ * presentation layer.
  */
 struct MainMenuBarContext {
   bool &quit_requested;
@@ -32,7 +33,8 @@ struct MainMenuBarContext {
 };
 
 /**
- * Stores the Main Menu Bar Result data contract used by the ImGui editor presentation layer.
+ * Stores the Main Menu Bar Result data contract used by the ImGui editor
+ * presentation layer.
  */
 struct MainMenuBarResult {
   bool settings_changed = false;
@@ -45,7 +47,7 @@ struct MainMenuBarResult {
  */
 class FileMenu {
 public:
-    bool draw(MainMenuBarContext& context) const;
+  bool draw(MainMenuBarContext &context) const;
 };
 
 /**
@@ -53,7 +55,16 @@ public:
  */
 class EditMenu {
 public:
-    bool draw(MainMenuBarContext& context, MainMenuBarResult& result) const;
+  bool draw(MainMenuBarContext &context, MainMenuBarResult &result) const;
+};
+
+/**
+ * Owns Clean Up Menu behavior within the ImGui editor presentation layer.
+
+ */
+class CleanUpMenu {
+public:
+  bool draw(MainMenuBarContext &context) const;
 };
 
 /**
@@ -61,7 +72,7 @@ public:
  */
 class ToolsMenu {
 public:
-    bool draw(MainMenuBarContext& context) const;
+  bool draw(MainMenuBarContext &context) const;
 };
 
 /**
@@ -69,7 +80,7 @@ public:
  */
 class CreateMenu {
 public:
-    bool draw(MainMenuBarContext& context) const;
+  bool draw(MainMenuBarContext &context) const;
 };
 
 /**
@@ -77,7 +88,7 @@ public:
  */
 class ViewMenu {
 public:
-    bool draw(MainMenuBarContext& context, MainMenuBarResult& result) const;
+  bool draw(MainMenuBarContext &context, MainMenuBarResult &result) const;
 };
 
 /**
@@ -85,7 +96,7 @@ public:
  */
 class LayoutMenu {
 public:
-    bool draw(MainMenuBarContext& context) const;
+  bool draw(MainMenuBarContext &context) const;
 };
 
 /**
@@ -93,16 +104,17 @@ public:
  */
 class MainMenuBar {
 public:
-    MainMenuBarResult draw(MainMenuBarContext context) const;
-    MainMenuBarResult draw_menus(MainMenuBarContext context) const;
+  MainMenuBarResult draw(MainMenuBarContext context) const;
+  MainMenuBarResult draw_menus(MainMenuBarContext context) const;
 
-  private:
-    FileMenu file_menu_;
-    EditMenu edit_menu_;
-    ToolsMenu tools_menu_;
-    CreateMenu create_menu_;
-    ViewMenu view_menu_;
-    LayoutMenu layout_menu_;
+private:
+  FileMenu file_menu_;
+  EditMenu edit_menu_;
+  CleanUpMenu cleanup_menu_;
+  ToolsMenu tools_menu_;
+  CreateMenu create_menu_;
+  ViewMenu view_menu_;
+  LayoutMenu layout_menu_;
 };
 
 } // namespace quader

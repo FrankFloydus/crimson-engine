@@ -239,18 +239,19 @@ ViewportInputRouter::handle_frame(const ViewportInputFrame &input,
       input.viewport_focused && !input.text_input_active && !navigating();
   if (accepts_shortcuts) {
     QDR_PROFILE_SCOPE("Viewport shortcuts");
-    for (const ViewportShortcut &shortcut : input.resolved_shortcuts) {
-      if (shortcut.kind == ViewportShortcutKind::None) {
-        result.consumed = true;
-        result.shortcut_handled = true;
-        result.shortcut = shortcut;
-        break;
-      }
-      if (handle_shortcut(shortcut, camera, result)) {
-        result.consumed = true;
-        result.shortcut_handled = true;
-        result.shortcut = shortcut;
-        break;
+    if (input.keybinding_input_consumed) {
+      result.consumed = true;
+    } else {
+      for (const ViewportShortcut &shortcut : input.resolved_shortcuts) {
+        if (shortcut.kind == ViewportShortcutKind::None) {
+          continue;
+        }
+        if (handle_shortcut(shortcut, camera, result)) {
+          result.consumed = true;
+          result.shortcut_handled = true;
+          result.shortcut = shortcut;
+          break;
+        }
       }
     }
   }

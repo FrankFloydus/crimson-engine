@@ -43,6 +43,7 @@ public:
       return *selected_object_line_material_;
     }
     filament::Material &overlay_point() { return *overlay_point_material_; }
+    filament::Material &overlay_icon() { return *overlay_icon_material_; }
     filament::Material &imgui() { return *imgui_material_; }
     filament::Material &ground_grid() { return *ground_grid_material_; }
 
@@ -57,6 +58,7 @@ public:
     filament::Material *overlay_line_material_ = nullptr;
     filament::Material *selected_object_line_material_ = nullptr;
     filament::Material *overlay_point_material_ = nullptr;
+    filament::Material *overlay_icon_material_ = nullptr;
     filament::Material *imgui_material_ = nullptr;
     filament::Material *ground_grid_material_ = nullptr;
 };

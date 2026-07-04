@@ -8,10 +8,8 @@
 
 #include "core/logger.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
+#include "render/png_texture_loader.hpp"
 
-#include <lodepng.h>
-
-#include <algorithm>
 #include <array>
 #include <optional>
 #include <string>
@@ -19,19 +17,6 @@
 #include <vector>
 
 namespace quader {
-namespace {
-
-std::uint8_t mip_level_count(unsigned width, unsigned height) {
-  unsigned dimension = std::max(width, height);
-  std::uint8_t levels = 1;
-  while (dimension > 1u) {
-    dimension /= 2u;
-    ++levels;
-  }
-  return levels;
-}
-
-} // namespace
 
 TextureBindingService::~TextureBindingService() {
     shutdown();
@@ -130,39 +115,15 @@ TextureBindingService::load_texture_asset(const TextureAsset &texture) {
     path = resource_root_ / path;
   }
 
-  std::vector<unsigned char> pixels;
-  unsigned width = 0;
-  unsigned height = 0;
-  const unsigned error = lodepng::decode(pixels, width, height, path.string());
-  if (error != 0u) {
-    LOG_ERROR("Failed to decode material texture '{}': {}", path.string(),
-              lodepng_error_text(error));
-    return nullptr;
-  }
-
-  const std::uint8_t levels = mip_level_count(width, height);
-  filament::Texture *loaded =
-      filament::Texture::Builder()
-          .width(width)
-          .height(height)
-          .levels(levels)
-          .sampler(filament::Texture::Sampler::SAMPLER_2D)
-          .format(texture.color_space == TextureColorSpace::Srgb
-                      ? filament::Texture::InternalFormat::SRGB8_A8
-                      : filament::Texture::InternalFormat::RGBA8)
-          .usage(filament::Texture::Usage::UPLOADABLE |
-                 filament::Texture::Usage::SAMPLEABLE |
-                 filament::Texture::Usage::GEN_MIPMAPPABLE)
-          .build(*engine_);
-  loaded->setImage(*engine_, 0,
-                   FilamentBufferDescriptorFactory::rgba_pixels(pixels.data(),
-                                                                pixels.size()));
-  if (levels > 1u) {
-    loaded->generateMipmaps(*engine_);
-  }
-  LOG_INFO("Loaded material texture '{}' ({}x{})", path.string(), width,
-           height);
-  return loaded;
+  return load_png_texture(
+      *engine_, path,
+      PngTextureLoadOptions{
+          .color_space = texture.color_space == TextureColorSpace::Srgb
+                             ? PngTextureColorSpace::Srgb
+                             : PngTextureColorSpace::Linear,
+          .generate_mipmaps = true,
+          .label = "material texture",
+      });
 }
 
 filament::Texture *

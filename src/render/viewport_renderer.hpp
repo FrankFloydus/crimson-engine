@@ -98,6 +98,8 @@ public:
     ViewportRenderPassCoordinator render_pass_coordinator_;
     ViewportRenderTarget render_target_;
     ViewportRenderTarget overlay_render_target_;
+    TextureSampleColorSpace scene_texture_sample_color_space_ =
+        TextureSampleColorSpace::LinearSrgb;
     ViewportRenderSurface surface_ = ViewportRenderSurface::Texture;
     std::uint32_t width_ = 1u;
     std::uint32_t height_ = 1u;

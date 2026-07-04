@@ -15,14 +15,13 @@ namespace quader {
  * Represents a Quader Command ID value used by the public Quader API surface.
  */
 struct QuaderCommandId {
-    std::string_view id;
+  std::string_view id;
 
-    constexpr QuaderCommandId() = default;
-    constexpr explicit QuaderCommandId(std::string_view value)
-        : id(value) {}
+  constexpr QuaderCommandId() = default;
+  constexpr explicit QuaderCommandId(std::string_view value) : id(value) {}
 
-    [[nodiscard]] constexpr std::string_view string() const { return id; }
-    [[nodiscard]] constexpr operator std::string_view() const { return id; }
+  [[nodiscard]] constexpr std::string_view string() const { return id; }
+  [[nodiscard]] constexpr operator std::string_view() const { return id; }
 };
 
 namespace quader_command {
@@ -41,6 +40,11 @@ inline constexpr QuaderCommandId kDuplicateSelection{"edit.duplicate"};
 inline constexpr QuaderCommandId kGroupSelection{"edit.group"};
 inline constexpr QuaderCommandId kUngroupSelection{"edit.ungroup"};
 inline constexpr QuaderCommandId kApplyMaterial{"edit.apply_material"};
+
+#ifndef NDEBUG
+inline constexpr QuaderCommandId kDevCopySelectionJson{
+    "dev.copy_selection_json"};
+#endif
 
 inline constexpr QuaderCommandId kProjectNew{"project.new"};
 inline constexpr QuaderCommandId kProjectOpen{"project.open"};
@@ -72,6 +76,7 @@ inline constexpr QuaderCommandId kSelectionInvert{"edit.invert_selection"};
 
 inline constexpr QuaderCommandId kViewportFrameSelection{
     "viewport.frame_selection"};
+inline constexpr QuaderCommandId kViewportFocusAll{"viewport.focus_all"};
 inline constexpr QuaderCommandId kViewportFocusOrigin{"viewport.focus_origin"};
 inline constexpr QuaderCommandId kViewportSpawnWindow{"viewport.spawn_window"};
 inline constexpr QuaderCommandId kViewportViewPerspective{
@@ -107,6 +112,8 @@ inline constexpr QuaderCommandId kModelingMergeVerticesToActive{
     "modeling.merge_vertices_to_active"};
 inline constexpr QuaderCommandId kModelingMergeVerticesToCenter{
     "modeling.merge_vertices_to_center"};
+inline constexpr QuaderCommandId kModelingRemoveDoubles{
+    "modeling.remove_doubles"};
 inline constexpr QuaderCommandId kModelingSnapEdgesToActive{
     "modeling.snap_edges_to_active"};
 inline constexpr QuaderCommandId kModelingConnectEdges{
@@ -211,6 +218,9 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kGroupSelection,
     kUngroupSelection,
     kApplyMaterial,
+#ifndef NDEBUG
+    kDevCopySelectionJson,
+#endif
     kProjectNew,
     kProjectOpen,
     kProjectSave,
@@ -218,6 +228,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kSceneCreatePointLight,
     kSceneCreateDirectionalLight,
     kViewportFrameSelection,
+    kViewportFocusAll,
     kViewportFocusOrigin,
     kViewportSpawnWindow,
     kViewportViewPerspective,
@@ -239,6 +250,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kModelingCombineMeshes,
     kModelingMergeVerticesToActive,
     kModelingMergeVerticesToCenter,
+    kModelingRemoveDoubles,
     kModelingSnapEdgesToActive,
     kModelingConnectEdges,
     kModelingSplitEdges,

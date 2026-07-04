@@ -40,6 +40,7 @@ namespace quader {
 struct ViewportSceneOverlayFrameRequest {
     ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
     bool wireframe_pane = false;
+    bool point_light_gizmos_visible = false;
 };
 
 /**
@@ -61,6 +62,7 @@ public:
                     filament::Material &overlay_line_material,
                     filament::Material &selected_object_line_material,
                     filament::Material &overlay_point_material,
+                    filament::Material &overlay_icon_material,
                     std::filesystem::path resource_root);
     void shutdown();
     void sync(const RenderSceneSnapshot &snapshot);

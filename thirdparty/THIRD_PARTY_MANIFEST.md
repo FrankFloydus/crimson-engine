@@ -16,6 +16,8 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | Phosphor Icons | https://github.com/phosphor-icons/web | `Phosphor.ttf` runtime font asset | MIT, see `licenses/phosphor-icons-MIT.txt` | ImGui icon glyphs for editor controls. |
 | GoogleTest | https://github.com/google/googletest | vcpkg `1.17.0` | BSD 3-Clause, see `licenses/gtest-BSD-3-Clause.txt` | Native C++ tests. |
 | lodepng | https://github.com/lvandeve/lodepng | vcpkg `2021-12-04` | zlib license, see `licenses/lodepng-Zlib.txt` | PNG image loading support. |
+| Sentry Native SDK | https://github.com/getsentry/sentry-native | vcpkg `0.14.0` | MIT, see `licenses/sentry-native-MIT.txt` | Native crash and event reporting through Sentry. |
+| zlib | https://www.zlib.net | vcpkg `1.3.2` | Zlib, see `licenses/zlib-Zlib.txt` | Compression runtime dependency for the Sentry crashpad handler. |
 | spdlog | https://github.com/gabime/spdlog | vcpkg `1.17.0` | MIT, see `licenses/spdlog-MIT.txt` | Runtime logging. |
 | {fmt} | https://github.com/fmtlib/fmt | vcpkg `12.1.0` | MIT, see `licenses/fmt-MIT.txt` | spdlog default formatting backend. |
 | stduuid | https://github.com/mariusbancila/stduuid | vcpkg `1.2.3` | MIT, see `licenses/stduuid-MIT.txt` | Stable UUID generation and parsing for scene entity identity. |

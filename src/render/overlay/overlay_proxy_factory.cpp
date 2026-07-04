@@ -7,6 +7,7 @@
 #include "render/overlay/overlay_proxy_factory.hpp"
 
 #include "render/filament_buffer_descriptor_factory.hpp"
+#include "render/png_texture_loader.hpp"
 #include "render/render_layers.hpp"
 #include "render/viewport_overlay_policy.hpp"
 
@@ -18,6 +19,8 @@
 #include <filament/MaterialInstance.h>
 #include <filament/RenderableManager.h>
 #include <filament/Scene.h>
+#include <filament/Texture.h>
+#include <filament/TextureSampler.h>
 #include <filament/VertexBuffer.h>
 #include <utils/Entity.h>
 #include <utils/EntityManager.h>
@@ -257,20 +260,27 @@ void OverlayProxyFactory::initialize(
     filament::Engine &engine, filament::Scene &scene,
     filament::Material &overlay_material,
     filament::Material &overlay_line_material,
-    filament::Material &overlay_point_material) {
+    filament::Material &overlay_point_material,
+    filament::Material &overlay_icon_material,
+    const std::filesystem::path &resource_root) {
+  shutdown();
   engine_ = &engine;
   scene_ = &scene;
   overlay_material_ = &overlay_material;
   overlay_line_material_ = &overlay_line_material;
   overlay_point_material_ = &overlay_point_material;
+  overlay_icon_material_ = &overlay_icon_material;
+  load_icon_textures(resource_root);
 }
 
 void OverlayProxyFactory::shutdown() {
-    engine_ = nullptr;
-    scene_ = nullptr;
-    overlay_material_ = nullptr;
-    overlay_line_material_ = nullptr;
-    overlay_point_material_ = nullptr;
+  destroy_icon_textures();
+  engine_ = nullptr;
+  scene_ = nullptr;
+  overlay_material_ = nullptr;
+  overlay_line_material_ = nullptr;
+  overlay_point_material_ = nullptr;
+  overlay_icon_material_ = nullptr;
 }
 
 std::vector<OverlayRenderableProxy>
@@ -281,7 +291,7 @@ OverlayProxyFactory::create_layer_proxies(const OverlayLayerBuildPlan &plan,
     return proxies;
   }
 
-  proxies.reserve(planned_proxy_count(plan));
+  proxies.reserve(planned_loaded_proxy_count(plan));
   for (const OverlayFaceFillBatch &batch : plan.face_fill_batches) {
     create_triangle_proxy(batch, layer_mask, proxies);
   }
@@ -291,13 +301,16 @@ OverlayProxyFactory::create_layer_proxies(const OverlayLayerBuildPlan &plan,
   for (const OverlayPointBatch &batch : plan.point_batches) {
     create_point_proxy(batch, layer_mask, proxies);
   }
+  for (const OverlayIconBatch &batch : plan.icon_batches) {
+    create_icon_proxy(batch, layer_mask, proxies);
+  }
   return proxies;
 }
 
 bool OverlayProxyFactory::update_layer_proxies(
     std::vector<OverlayRenderableProxy> &proxies,
     const OverlayLayerBuildPlan &plan, std::uint8_t layer_mask) {
-  if (!initialized() || proxies.size() != planned_proxy_count(plan)) {
+  if (!initialized() || proxies.size() != planned_loaded_proxy_count(plan)) {
     return false;
   }
 
@@ -333,6 +346,16 @@ bool OverlayProxyFactory::update_layer_proxies(
       return false;
     }
   }
+  for (const OverlayIconBatch &batch : plan.icon_batches) {
+    if (batch.mesh.empty() || texture_for_icon(batch.icon) == nullptr) {
+      continue;
+    }
+    if (index >= proxies.size() ||
+        !proxy_can_update_mesh(proxies[index++],
+                               OverlayRenderableProxyKind::Icon, batch.mesh)) {
+      return false;
+    }
+  }
 
   index = 0;
   for (const OverlayFaceFillBatch &batch : plan.face_fill_batches) {
@@ -348,6 +371,11 @@ bool OverlayProxyFactory::update_layer_proxies(
   for (const OverlayPointBatch &batch : plan.point_batches) {
     if (!batch.mesh.empty()) {
       update_point_proxy(proxies[index++], batch, layer_mask);
+    }
+  }
+  for (const OverlayIconBatch &batch : plan.icon_batches) {
+    if (!batch.mesh.empty() && texture_for_icon(batch.icon) != nullptr) {
+      update_icon_proxy(proxies[index++], batch, layer_mask);
     }
   }
   return true;
@@ -371,6 +399,9 @@ OverlayProxyFactory::planned_proxy_count(const OverlayLayerBuildPlan &plan) {
     count += batch.mesh.empty() ? 0u : 1u;
   }
   for (const OverlayPointBatch &batch : plan.point_batches) {
+    count += batch.mesh.empty() ? 0u : 1u;
+  }
+  for (const OverlayIconBatch &batch : plan.icon_batches) {
     count += batch.mesh.empty() ? 0u : 1u;
   }
   return count;
@@ -474,6 +505,44 @@ void OverlayProxyFactory::create_point_proxy(
       });
 }
 
+void OverlayProxyFactory::create_icon_proxy(
+    const OverlayIconBatch &batch, std::uint8_t layer_mask,
+    std::vector<OverlayRenderableProxy> &proxies) {
+  filament::Texture *icon_texture = texture_for_icon(batch.icon);
+  if (batch.mesh.empty() || icon_texture == nullptr) {
+    return;
+  }
+
+  (void)batch.size_pixels;
+  (void)batch.depth_bias;
+  append_overlay_proxy(
+      *engine_, *scene_, *overlay_icon_material_, batch.mesh.vertices,
+      batch.mesh.indices, OverlayRenderableProxyKind::Icon, batch.state,
+      layer_mask, proxies,
+      [](filament::VertexBuffer::Builder &builder) {
+        builder
+            .attribute(filament::VertexAttribute::POSITION, 0,
+                       AttributeType::FLOAT4,
+                       offsetof(OverlayPointVertex, position),
+                       sizeof(OverlayPointVertex))
+            .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2,
+                       offsetof(OverlayPointVertex, uv),
+                       sizeof(OverlayPointVertex))
+            .attribute(
+                filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4,
+                offsetof(OverlayPointVertex, color), sizeof(OverlayPointVertex))
+            .normalized(filament::VertexAttribute::COLOR);
+      },
+      [this, &batch, icon_texture](filament::MaterialInstance &material) {
+        configure_overlay_material(material, batch.state);
+        const filament::TextureSampler sampler(
+            filament::TextureSampler::MinFilter::LINEAR,
+            filament::TextureSampler::MagFilter::LINEAR,
+            filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
+        material.setParameter("iconTexture", icon_texture, sampler);
+      });
+}
+
 void OverlayProxyFactory::update_triangle_proxy(
     OverlayRenderableProxy &proxy, const OverlayFaceFillBatch &batch,
     std::uint8_t layer_mask) {
@@ -499,6 +568,21 @@ void OverlayProxyFactory::update_point_proxy(OverlayRenderableProxy &proxy,
   proxy.material_instance->setParameter("innerRadius", batch.inner_radius);
 }
 
+void OverlayProxyFactory::update_icon_proxy(OverlayRenderableProxy &proxy,
+                                            const OverlayIconBatch &batch,
+                                            std::uint8_t layer_mask) {
+  update_proxy_buffers(*engine_, proxy, batch.mesh, layer_mask);
+  configure_overlay_material(*proxy.material_instance, batch.state);
+  if (filament::Texture *icon_texture = texture_for_icon(batch.icon)) {
+    const filament::TextureSampler sampler(
+        filament::TextureSampler::MinFilter::LINEAR,
+        filament::TextureSampler::MagFilter::LINEAR,
+        filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
+    proxy.material_instance->setParameter("iconTexture", icon_texture,
+                                          sampler);
+  }
+}
+
 void OverlayProxyFactory::configure_overlay_material(
     filament::MaterialInstance &material,
     const OverlayRenderState &state) const {
@@ -511,6 +595,51 @@ void OverlayProxyFactory::configure_overlay_material(
       to_filament_transparency_mode(state.transparency_mode));
   material.setPolygonOffset(state.polygon_offset_scale,
                             state.polygon_offset_constant);
+}
+
+void OverlayProxyFactory::load_icon_textures(
+    const std::filesystem::path &resource_root) {
+  if (engine_ == nullptr) {
+    return;
+  }
+  point_light_icon_texture_ = load_png_texture(
+      *engine_, resource_root / "icons" / "point_light.png",
+      PngTextureLoadOptions{
+          .color_space = PngTextureColorSpace::Srgb,
+          .flip_y = false,
+          .label = "point light viewport icon",
+      });
+}
+
+void OverlayProxyFactory::destroy_icon_textures() {
+  if (engine_ == nullptr) {
+    point_light_icon_texture_ = nullptr;
+    return;
+  }
+  if (point_light_icon_texture_ != nullptr) {
+    engine_->destroy(point_light_icon_texture_);
+    point_light_icon_texture_ = nullptr;
+  }
+}
+
+std::size_t OverlayProxyFactory::planned_loaded_proxy_count(
+    const OverlayLayerBuildPlan &plan) const {
+  std::size_t count = planned_proxy_count(plan);
+  for (const OverlayIconBatch &batch : plan.icon_batches) {
+    if (!batch.mesh.empty() && texture_for_icon(batch.icon) == nullptr) {
+      --count;
+    }
+  }
+  return count;
+}
+
+filament::Texture *
+OverlayProxyFactory::texture_for_icon(ViewportOverlayIconKind icon) const {
+  switch (icon) {
+  case ViewportOverlayIconKind::PointLight:
+    return point_light_icon_texture_;
+  }
+  return nullptr;
 }
 
 } // namespace quader

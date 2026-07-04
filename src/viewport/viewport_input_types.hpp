@@ -75,6 +75,7 @@ struct ViewportInputFrame {
   std::vector<QuaderInputChord> active_input_chords;
   std::vector<QuaderInputChord> released_input_chords;
   std::vector<QuaderInputChord> wheel_input_chords;
+  bool keybinding_input_consumed = false;
   std::vector<ViewportShortcut> resolved_shortcuts;
   ViewportNavigationInput navigation_bindings = {};
 };

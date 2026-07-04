@@ -21,6 +21,8 @@ internal docs/architecture.md
 internal docs/light-export-calibration.md
 internal docs/architecture_migration_plan.md
 internal docs/code_map.md
+internal docs/core-modeling-sdk-extraction-plan.md
+internal docs/modeling-architecture-simplification-transition-plan.md
 internal docs/decisions/ADR-template.md
 internal docs/tasks/TASK-template.md
 internal docs/agent_mistakes.md

@@ -8,6 +8,7 @@
 
 #include "core/types.hpp"
 #include "math/types.hpp"
+#include "scene/scene_bounds.hpp"
 
 #include <optional>
 #include <span>
@@ -75,6 +76,12 @@ public:
 
   [[nodiscard]] std::optional<QVec3>
   world_selection_center(const quader_editor_core::EditorSession &session,
+                         const SceneDocument &scene,
+                         const AssetRegistry &assets,
+                         const ModelingObjectRuntimeMap &object_registry) const;
+
+  [[nodiscard]] std::optional<SceneBounds>
+  world_selection_bounds(const quader_editor_core::EditorSession &session,
                          const SceneDocument &scene,
                          const AssetRegistry &assets,
                          const ModelingObjectRuntimeMap &object_registry) const;

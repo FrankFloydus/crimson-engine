@@ -7,6 +7,7 @@
 #pragma once
 
 #include "assets/asset_registry.hpp"
+#include "api/quader_api_result.hpp"
 #include "api/quader_api_types.hpp"
 #include "core/types.hpp"
 #include "editor/modeling/modeling_types.hpp"
@@ -66,6 +67,15 @@ public:
                            const SceneDocument &document,
                            const AssetRegistry &assets);
     void render_viewports(RenderSystem &render_system);
+    QuaderApiVoidResult frame_all(ViewportWorkspaceService &workspace,
+                                  const SceneDocument &document,
+                                  const AssetRegistry &assets,
+                                  ViewportPaneId pane);
+    QuaderApiVoidResult frame_selection(ViewportWorkspaceService &workspace,
+                                         const SceneDocument &document,
+                                         const AssetRegistry &assets,
+                                         const ModelingSessionService &modeling,
+                                         ViewportPaneId pane);
     bool activate_tool_from_menu(ViewportToolId tool, QuaderEditorApi &editor,
                                  ModelingSessionService &modeling);
     const ViewportToolState &tool_state() const {

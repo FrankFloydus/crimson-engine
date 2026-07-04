@@ -241,10 +241,23 @@ std::optional<QVec3> SelectionProjectionService::world_selection_center(
     const quader_editor_core::EditorSession &session,
     const SceneDocument &scene, const AssetRegistry &assets,
     const ModelingObjectRuntimeMap &object_registry) const {
+  if (const std::optional<SceneBounds> bounds =
+          world_selection_bounds(session, scene, assets, object_registry)) {
+    return bounds_center(*bounds);
+  }
+
+  const std::optional<quader::QVec3> center = session.selection_center();
+  return center ? std::optional<QVec3>{*center} : std::nullopt;
+}
+
+std::optional<SceneBounds> SelectionProjectionService::world_selection_bounds(
+    const quader_editor_core::EditorSession &session,
+    const SceneDocument &scene, const AssetRegistry &assets,
+    const ModelingObjectRuntimeMap &object_registry) const {
   if (session.selection_mode() == quader_editor_core::SelectionMode::Object) {
     if (const std::optional<SceneBounds> bounds =
             selected_world_bounds(scene, assets)) {
-      return bounds_center(*bounds);
+      return bounds;
     }
   }
 
@@ -277,11 +290,14 @@ std::optional<QVec3> SelectionProjectionService::world_selection_center(
     }
   }
   if (bounds) {
-    return bounds_center(*bounds);
+    return bounds;
   }
 
-  const std::optional<quader::QVec3> center = session.selection_center();
-  return center ? std::optional<QVec3>{*center} : std::nullopt;
+  const quader_editor_core::Bounds3 runtime_bounds = session.selection_bounds();
+  if (!runtime_bounds.empty) {
+    return SceneBounds{.min = runtime_bounds.min, .max = runtime_bounds.max};
+  }
+  return std::nullopt;
 }
 
 } // namespace quader

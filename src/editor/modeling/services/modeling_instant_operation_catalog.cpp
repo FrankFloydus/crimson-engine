@@ -90,6 +90,10 @@ face_selection(std::uint32_t minimum_faces = 1) {
               ModelingActionSelectionRequirement::ObjectOrFaceSelection};
 }
 
+[[nodiscard]] ModelingActionAvailabilityRule any_selection() {
+  return {.requirement = ModelingActionSelectionRequirement::AnySelection};
+}
+
 } // namespace
 
 std::span<const ModelingInstantOperationCatalogEntry>
@@ -134,6 +138,9 @@ modeling_instant_operation_catalog() {
                     "merge_vertices_to_center", "Merge Vertices to Center",
                     "Merge Vertices To Center", vertex_selection(2),
                     RuntimeId::MergeVerticesToCenter),
+      runtime_entry(ModelingInstantOperationId::RemoveDoubles, "remove_doubles",
+                    "Remove Doubles", "Remove Doubles", any_selection(),
+                    RuntimeId::RemoveDoubles, "modeling.remove_doubles"),
       runtime_entry(ModelingInstantOperationId::SnapEdgesToActive,
                     "snap_edges_to_active", "Snap Edges to Active",
                     "Snap to Edge",

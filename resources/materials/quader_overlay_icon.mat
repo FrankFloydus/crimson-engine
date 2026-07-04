@@ -1,0 +1,32 @@
+material {
+    name : QuaderOverlayIcon,
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : false,
+    depthCulling : false,
+    doubleSided : true,
+    vertexDomain : device,
+    requires : [
+        uv0,
+        color
+    ],
+    parameters : [
+        {
+            type : sampler2d,
+            name : iconTexture
+        }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec4 sampled = texture(materialParams_iconTexture, getUV0());
+        vec4 tint = getColor();
+        float alpha = sampled.a * tint.a;
+        if (alpha <= 0.003) {
+            discard;
+        }
+        material.baseColor = vec4(sampled.rgb * tint.rgb * alpha, alpha);
+    }
+}

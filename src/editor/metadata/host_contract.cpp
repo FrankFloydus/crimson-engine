@@ -558,7 +558,7 @@ std::span<const HostUiPlacementDescriptor> ui_placement_descriptors()
 
 std::span<const HostInteractionDescriptor> interaction_descriptors()
 {
-  static constexpr std::array<HostInteractionDescriptor, 38> kDescriptors{{
+  static constexpr std::array<HostInteractionDescriptor, 39> kDescriptors{{
       {"open_editor", "Open Editor", HostInteractionKind::EditorAction},
       {"new_document", "New Document", HostInteractionKind::EditorAction},
       {"open_document", "Open Document", HostInteractionKind::EditorAction},
@@ -596,6 +596,8 @@ std::span<const HostInteractionDescriptor> interaction_descriptors()
       {"layout_four_view_quad", "Four-View Quad",
        HostInteractionKind::ViewportAction},
       {"focus_all", "Focus All", HostInteractionKind::ViewportAction},
+      {"focus_selection", "Focus Selection",
+       HostInteractionKind::ViewportAction},
       {"focus_origin", "Focus Origin", HostInteractionKind::ViewportAction},
       {"mirror_axis_x", "Mirror Across X QAxis",
        HostInteractionKind::ViewportAction},

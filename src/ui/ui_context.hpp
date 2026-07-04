@@ -8,11 +8,14 @@
 
 #include "core/frame_timing.hpp"
 #include "core/types.hpp"
+#include "editor/input/quader_input_binding.hpp"
 #include "math/types.hpp"
 #include "render/render_performance_stats.hpp"
 #include "ui/ui_icon_set.hpp"
 #include "ui/ui_panel.hpp"
 #include "viewport/viewport_settings.hpp"
+
+#include <span>
 
 namespace quader {
 
@@ -74,6 +77,7 @@ struct UIViewportSurfaceContext {
     FrameTiming frame_timing = {};
     RenderFramePerformanceStats render_performance = {};
     QVec2 relative_mouse_delta = {};
+    std::span<const QuaderInputChord> pressed_input_chords;
     bool render_resize_suspended = false;
     bool *cursor_capture_requested = nullptr;
     QVec2 *cursor_capture_point = nullptr;

@@ -27,6 +27,7 @@ enum class EditorOperationId {
   Thicken,
   SliceQuad,
   MergeByDistance,
+  RemoveDoubles,
   BevelVertices,
   DuplicateMeshes,
   ConnectVertices,
@@ -63,64 +64,68 @@ inline constexpr double kDefaultCommandGridWorldSize = 1.0;
  * Represents a Command Grid Fact value used by the modeling runtime domain.
  */
 struct CommandGridFact {
-	double value = 0.0;
-	bool valid = false;
+  double value = 0.0;
+  bool valid = false;
 };
 
 /**
  * Represents a Command Distance Fact value used by the modeling runtime domain.
  */
 struct CommandDistanceFact {
-	double value = 0.0;
-	bool valid = false;
+  double value = 0.0;
+  bool valid = false;
 };
 
 /**
  * Represents a Command QVec3 Fact value used by the modeling runtime domain.
  */
 struct CommandVec3Fact {
-	quader::QVec3 value {};
-	bool valid = false;
+  quader::QVec3 value{};
+  bool valid = false;
 };
 
 /**
- * Represents an Int Operation Option Schema value used by the modeling runtime domain.
+ * Represents an Int Operation Option Schema value used by the modeling runtime
+ * domain.
  */
 struct IntOperationOptionSchema {
-	std::string_view id;
-	std::string_view label;
-	int default_value = 0;
-	int minimum = 0;
-	int maximum = 0;
-	int step = 1;
-	bool hard_limits = true;
+  std::string_view id;
+  std::string_view label;
+  int default_value = 0;
+  int minimum = 0;
+  int maximum = 0;
+  int step = 1;
+  bool hard_limits = true;
 };
 
 /**
- * Represents a Float Operation Option Schema value used by the modeling runtime domain.
+ * Represents a Float Operation Option Schema value used by the modeling runtime
+ * domain.
  */
 struct FloatOperationOptionSchema {
-	std::string_view id;
-	std::string_view label;
-	double default_value = 0.0;
-	double minimum = 0.0;
-	double maximum = 0.0;
-	double step = 0.01;
-	bool hard_limits = true;
+  std::string_view id;
+  std::string_view label;
+  double default_value = 0.0;
+  double minimum = 0.0;
+  double maximum = 0.0;
+  double step = 0.01;
+  bool hard_limits = true;
 };
 
 /**
- * Represents a Bool Operation Option Schema value used by the modeling runtime domain.
+ * Represents a Bool Operation Option Schema value used by the modeling runtime
+ * domain.
  */
 struct BoolOperationOptionSchema {
-	std::string_view id;
-	std::string_view label;
-	bool default_value = false;
-	bool visible = true;
+  std::string_view id;
+  std::string_view label;
+  bool default_value = false;
+  bool visible = true;
 };
 
 /**
- * Enumerates EditorOperationOptionValueKind values used by the modeling runtime domain.
+ * Enumerates EditorOperationOptionValueKind values used by the modeling runtime
+ * domain.
  */
 enum class EditorOperationOptionValueKind {
   Integer,
@@ -129,7 +134,8 @@ enum class EditorOperationOptionValueKind {
 };
 
 /**
- * Stores flattened operation option metadata owned by the operation schema layer.
+ * Stores flattened operation option metadata owned by the operation schema
+ * layer.
  */
 struct EditorOperationOptionDescriptor {
   EditorOperationId operation = EditorOperationId::Bridge;
@@ -155,7 +161,8 @@ struct EditorOperationOptionDescriptor {
 };
 
 /**
- * Represents a Bridge Operation Schema value used by the modeling runtime domain.
+ * Represents a Bridge Operation Schema value used by the modeling runtime
+ * domain.
  */
 struct BridgeOperationSchema {
   EditorOperationId id = EditorOperationId::Bridge;
@@ -165,7 +172,8 @@ struct BridgeOperationSchema {
 };
 
 /**
- * Represents an Edge Bevel Operation Schema value used by the modeling runtime domain.
+ * Represents an Edge Bevel Operation Schema value used by the modeling runtime
+ * domain.
  */
 struct EdgeBevelOperationSchema {
   EditorOperationId id = EditorOperationId::EdgeBevel;
@@ -179,7 +187,8 @@ struct EdgeBevelOperationSchema {
 };
 
 /**
- * Represents a Thicken Operation Schema value used by the modeling runtime domain.
+ * Represents a Thicken Operation Schema value used by the modeling runtime
+ * domain.
  */
 struct ThickenOperationSchema {
   EditorOperationId id = EditorOperationId::Thicken;
@@ -190,7 +199,8 @@ struct ThickenOperationSchema {
 };
 
 /**
- * Represents a Slice Quad Operation Schema value used by the modeling runtime domain.
+ * Represents a Slice Quad Operation Schema value used by the modeling runtime
+ * domain.
  */
 struct SliceQuadOperationSchema {
   EditorOperationId id = EditorOperationId::SliceQuad;
@@ -201,7 +211,8 @@ struct SliceQuadOperationSchema {
 };
 
 /**
- * Represents a Merge By Distance Operation Schema value used by the modeling runtime domain.
+ * Represents a Merge By Distance Operation Schema value used by the modeling
+ * runtime domain.
  */
 struct MergeByDistanceOperationSchema {
   EditorOperationId id = EditorOperationId::MergeByDistance;
@@ -211,7 +222,8 @@ struct MergeByDistanceOperationSchema {
 };
 
 /**
- * Represents a Bevel Vertices Operation Schema value used by the modeling runtime domain.
+ * Represents a Bevel Vertices Operation Schema value used by the modeling
+ * runtime domain.
  */
 struct BevelVerticesOperationSchema {
   EditorOperationId id = EditorOperationId::BevelVertices;
@@ -220,7 +232,8 @@ struct BevelVerticesOperationSchema {
 };
 
 /**
- * Represents a Duplicate Meshes Operation Schema value used by the modeling runtime domain.
+ * Represents a Duplicate Meshes Operation Schema value used by the modeling
+ * runtime domain.
  */
 struct DuplicateMeshesOperationSchema {
   EditorOperationId id = EditorOperationId::DuplicateMeshes;
@@ -229,86 +242,94 @@ struct DuplicateMeshesOperationSchema {
 };
 
 /**
- * Represents a Bridge Operation Settings value used by the modeling runtime domain.
+ * Represents a Bridge Operation Settings value used by the modeling runtime
+ * domain.
  */
 struct BridgeOperationSettings {
-	int steps = 1;
+  int steps = 1;
 };
 
 /**
- * Represents an Edge Bevel Operation Settings value used by the modeling runtime domain.
+ * Represents an Edge Bevel Operation Settings value used by the modeling
+ * runtime domain.
  */
 struct EdgeBevelOperationSettings {
-	double width = 1.0;
-	double profile = 0.5;
-        int profile_type =
-            static_cast<int>(quader_poly::BevelProfileType::Offset);
-        int segments = 1;
+  double width = 1.0;
+  double profile = 0.5;
+  int profile_type = static_cast<int>(quader_poly::BevelProfileType::Offset);
+  int segments = 1;
 };
 
 /**
- * Represents a Thicken Operation Settings value used by the modeling runtime domain.
+ * Represents a Thicken Operation Settings value used by the modeling runtime
+ * domain.
  */
 struct ThickenOperationSettings {
-	double thickness = 0.25;
-	bool from_center = false;
+  double thickness = 0.25;
+  bool from_center = false;
 };
 
 /**
- * Represents a Slice Quad Operation Settings value used by the modeling runtime domain.
+ * Represents a Slice Quad Operation Settings value used by the modeling runtime
+ * domain.
  */
 struct SliceQuadOperationSettings {
-	int x_slices = 1;
-	int y_slices = 1;
+  int x_slices = 1;
+  int y_slices = 1;
 };
 
 /**
- * Represents a Merge By Distance Operation Settings value used by the modeling runtime domain.
+ * Represents a Merge By Distance Operation Settings value used by the modeling
+ * runtime domain.
  */
 struct MergeByDistanceOperationSettings {
-	double tolerance = 0.125;
+  double tolerance = 0.125;
 };
 
 /**
- * Represents a Bevel Vertices Operation Settings value used by the modeling runtime domain.
+ * Represents a Bevel Vertices Operation Settings value used by the modeling
+ * runtime domain.
  */
 struct BevelVerticesOperationSettings {
-	CommandGridFact focused_grid;
-	CommandDistanceFact explicit_distance;
+  CommandGridFact focused_grid;
+  CommandDistanceFact explicit_distance;
 };
 
 /**
- * Represents a Duplicate Meshes Operation Settings value used by the modeling runtime domain.
+ * Represents a Duplicate Meshes Operation Settings value used by the modeling
+ * runtime domain.
  */
 struct DuplicateMeshesOperationSettings {
-	CommandGridFact focused_grid;
-	CommandVec3Fact explicit_offset;
+  CommandGridFact focused_grid;
+  CommandVec3Fact explicit_offset;
 };
 
 /**
- * Represents a Recalculate Face Normals Operation Settings value used by the modeling runtime domain.
+ * Represents a Recalculate Face Normals Operation Settings value used by the
+ * modeling runtime domain.
  */
 struct RecalculateFaceNormalsOperationSettings {
-	bool outside = true;
+  bool outside = true;
 };
 
 /**
- * Represents an Assign Material Operation Settings value used by the modeling runtime domain.
+ * Represents an Assign Material Operation Settings value used by the modeling
+ * runtime domain.
  */
 struct AssignMaterialOperationSettings {
-	std::uint32_t material_slot = 0;
-	bool explicit_target = false;
-	int object_id = -1;
-        quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
+  std::uint32_t material_slot = 0;
+  bool explicit_target = false;
+  int object_id = -1;
+  quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
 };
 
 /**
- * Represents a Selection Operation Settings value used by the modeling runtime domain.
+ * Represents a Selection Operation Settings value used by the modeling runtime
+ * domain.
  */
 struct SelectionOperationSettings {};
 
-inline constexpr BridgeOperationSchema bridge_operation_schema()
-{
+inline constexpr BridgeOperationSchema bridge_operation_schema() {
   return {
       EditorOperationId::Bridge,
       "bridge",
@@ -317,8 +338,7 @@ inline constexpr BridgeOperationSchema bridge_operation_schema()
   };
 }
 
-inline constexpr EdgeBevelOperationSchema edge_bevel_operation_schema()
-{
+inline constexpr EdgeBevelOperationSchema edge_bevel_operation_schema() {
   return {
       EditorOperationId::EdgeBevel,
       "edge_bevel",
@@ -330,8 +350,7 @@ inline constexpr EdgeBevelOperationSchema edge_bevel_operation_schema()
   };
 }
 
-inline constexpr ThickenOperationSchema thicken_operation_schema()
-{
+inline constexpr ThickenOperationSchema thicken_operation_schema() {
   return {
       EditorOperationId::Thicken,
       "thicken",
@@ -341,8 +360,7 @@ inline constexpr ThickenOperationSchema thicken_operation_schema()
   };
 }
 
-inline constexpr SliceQuadOperationSchema slice_quad_operation_schema()
-{
+inline constexpr SliceQuadOperationSchema slice_quad_operation_schema() {
   return {
       EditorOperationId::SliceQuad,
       "slice_quad",
@@ -352,8 +370,8 @@ inline constexpr SliceQuadOperationSchema slice_quad_operation_schema()
   };
 }
 
-inline constexpr MergeByDistanceOperationSchema merge_by_distance_operation_schema()
-{
+inline constexpr MergeByDistanceOperationSchema
+merge_by_distance_operation_schema() {
   return {
       EditorOperationId::MergeByDistance,
       "merge_by_distance",
@@ -362,8 +380,8 @@ inline constexpr MergeByDistanceOperationSchema merge_by_distance_operation_sche
   };
 }
 
-inline constexpr BevelVerticesOperationSchema bevel_vertices_operation_schema()
-{
+inline constexpr BevelVerticesOperationSchema
+bevel_vertices_operation_schema() {
   return {
       EditorOperationId::BevelVertices,
       "bevel_vertices",
@@ -371,8 +389,8 @@ inline constexpr BevelVerticesOperationSchema bevel_vertices_operation_schema()
   };
 }
 
-inline constexpr DuplicateMeshesOperationSchema duplicate_meshes_operation_schema()
-{
+inline constexpr DuplicateMeshesOperationSchema
+duplicate_meshes_operation_schema() {
   return {
       EditorOperationId::DuplicateMeshes,
       "duplicate_meshes",
@@ -381,13 +399,9 @@ inline constexpr DuplicateMeshesOperationSchema duplicate_meshes_operation_schem
 }
 
 inline constexpr EditorOperationOptionDescriptor operation_option_descriptor(
-		EditorOperationId operation,
-		std::string_view operation_id,
-		std::string_view operation_label,
-		std::string_view preference_group_id,
-		std::string_view preference_id,
-		const IntOperationOptionSchema& schema)
-{
+    EditorOperationId operation, std::string_view operation_id,
+    std::string_view operation_label, std::string_view preference_group_id,
+    std::string_view preference_id, const IntOperationOptionSchema &schema) {
   return {
       operation,
       operation_id,
@@ -412,13 +426,9 @@ inline constexpr EditorOperationOptionDescriptor operation_option_descriptor(
 }
 
 inline constexpr EditorOperationOptionDescriptor operation_option_descriptor(
-		EditorOperationId operation,
-		std::string_view operation_id,
-		std::string_view operation_label,
-		std::string_view preference_group_id,
-		std::string_view preference_id,
-		const FloatOperationOptionSchema& schema)
-{
+    EditorOperationId operation, std::string_view operation_id,
+    std::string_view operation_label, std::string_view preference_group_id,
+    std::string_view preference_id, const FloatOperationOptionSchema &schema) {
   return {
       operation,
       operation_id,
@@ -443,13 +453,9 @@ inline constexpr EditorOperationOptionDescriptor operation_option_descriptor(
 }
 
 inline constexpr EditorOperationOptionDescriptor operation_option_descriptor(
-		EditorOperationId operation,
-		std::string_view operation_id,
-		std::string_view operation_label,
-		std::string_view preference_group_id,
-		std::string_view preference_id,
-		const BoolOperationOptionSchema& schema)
-{
+    EditorOperationId operation, std::string_view operation_id,
+    std::string_view operation_label, std::string_view preference_group_id,
+    std::string_view preference_id, const BoolOperationOptionSchema &schema) {
   return {
       operation,
       operation_id,
@@ -473,8 +479,8 @@ inline constexpr EditorOperationOptionDescriptor operation_option_descriptor(
   };
 }
 
-inline std::span<const EditorOperationOptionDescriptor> operation_option_descriptor_catalog()
-{
+inline std::span<const EditorOperationOptionDescriptor>
+operation_option_descriptor_catalog() {
   constexpr BridgeOperationSchema kBridge = bridge_operation_schema();
   constexpr EdgeBevelOperationSchema kEdgeBevel = edge_bevel_operation_schema();
   constexpr ThickenOperationSchema kThicken = thicken_operation_schema();
@@ -523,151 +529,162 @@ inline std::span<const EditorOperationOptionDescriptor> operation_option_descrip
 }
 
 inline bool operation_option_matches_setting_name(
-		const EditorOperationOptionDescriptor& descriptor,
-		std::string_view setting_name)
-{
-	if (setting_name == descriptor.option_id || setting_name == descriptor.preference_id) {
-		return true;
-	}
-        if (descriptor.operation == EditorOperationId::Bridge &&
-            descriptor.option_id == "steps") {
-          return setting_name == "bridge_steps";
-        }
-        if (descriptor.operation == EditorOperationId::EdgeBevel &&
-            descriptor.option_id == "width") {
-          return setting_name == "amount" || setting_name == "edge_bevel_width";
-        }
-        if (descriptor.operation == EditorOperationId::EdgeBevel &&
-            descriptor.option_id == "profile") {
-          return setting_name == "edge_bevel_profile";
-        }
-        if (descriptor.operation == EditorOperationId::EdgeBevel &&
-            descriptor.option_id == "segments") {
-          return setting_name == "edge_bevel_segments";
-        }
-        if (descriptor.operation == EditorOperationId::Thicken &&
-            descriptor.option_id == "thickness") {
-          return setting_name == "amount";
-        }
-        if (descriptor.operation == EditorOperationId::MergeByDistance &&
-            descriptor.option_id == "tolerance") {
-          return setting_name == "distance";
-        }
-        return false;
+    const EditorOperationOptionDescriptor &descriptor,
+    std::string_view setting_name) {
+  if (setting_name == descriptor.option_id ||
+      setting_name == descriptor.preference_id) {
+    return true;
+  }
+  if (descriptor.operation == EditorOperationId::Bridge &&
+      descriptor.option_id == "steps") {
+    return setting_name == "bridge_steps";
+  }
+  if (descriptor.operation == EditorOperationId::EdgeBevel &&
+      descriptor.option_id == "width") {
+    return setting_name == "amount" || setting_name == "edge_bevel_width";
+  }
+  if (descriptor.operation == EditorOperationId::EdgeBevel &&
+      descriptor.option_id == "profile") {
+    return setting_name == "edge_bevel_profile";
+  }
+  if (descriptor.operation == EditorOperationId::EdgeBevel &&
+      descriptor.option_id == "segments") {
+    return setting_name == "edge_bevel_segments";
+  }
+  if (descriptor.operation == EditorOperationId::Thicken &&
+      descriptor.option_id == "thickness") {
+    return setting_name == "amount";
+  }
+  if (descriptor.operation == EditorOperationId::MergeByDistance &&
+      descriptor.option_id == "tolerance") {
+    return setting_name == "distance";
+  }
+  return false;
 }
 
-inline std::optional<EditorOperationOptionDescriptor> operation_option_for_setting(
-		std::string_view operation_id,
-		std::string_view setting_name)
-{
-	for (const EditorOperationOptionDescriptor& descriptor : operation_option_descriptor_catalog()) {
-		if (!operation_id.empty() && descriptor.operation_id != operation_id) {
-			continue;
-		}
-		if (operation_option_matches_setting_name(descriptor, setting_name)) {
-			return descriptor;
-		}
-	}
-	return std::nullopt;
+inline std::optional<EditorOperationOptionDescriptor>
+operation_option_for_setting(std::string_view operation_id,
+                             std::string_view setting_name) {
+  for (const EditorOperationOptionDescriptor &descriptor :
+       operation_option_descriptor_catalog()) {
+    if (!operation_id.empty() && descriptor.operation_id != operation_id) {
+      continue;
+    }
+    if (operation_option_matches_setting_name(descriptor, setting_name)) {
+      return descriptor;
+    }
+  }
+  return std::nullopt;
 }
 
-inline int normalize_operation_int(const IntOperationOptionSchema& schema, int value)
-{
-	if (!schema.hard_limits) {
-		return value;
-	}
-	return std::clamp(value, schema.minimum, schema.maximum);
+inline int normalize_operation_int(const IntOperationOptionSchema &schema,
+                                   int value) {
+  if (!schema.hard_limits) {
+    return value;
+  }
+  return std::clamp(value, schema.minimum, schema.maximum);
 }
 
-inline double normalize_operation_float(const FloatOperationOptionSchema& schema, double value)
-{
-	if (!std::isfinite(value)) {
-		return schema.default_value;
-	}
-	if (!schema.hard_limits) {
-		return value;
-	}
-	return std::clamp(value, schema.minimum, schema.maximum);
+inline double
+normalize_operation_float(const FloatOperationOptionSchema &schema,
+                          double value) {
+  if (!std::isfinite(value)) {
+    return schema.default_value;
+  }
+  if (!schema.hard_limits) {
+    return value;
+  }
+  return std::clamp(value, schema.minimum, schema.maximum);
 }
 
-inline double command_grid_world_size_or_default(CommandGridFact grid)
-{
+inline double command_grid_world_size_or_default(CommandGridFact grid) {
   return grid.valid && std::isfinite(grid.value) && grid.value > 0.0
              ? grid.value
              : kDefaultCommandGridWorldSize;
 }
 
-inline float bevel_vertices_distance_from_settings(BevelVerticesOperationSettings settings)
-{
-	if (settings.explicit_distance.valid && std::isfinite(settings.explicit_distance.value)) {
-		return static_cast<float>(settings.explicit_distance.value);
-	}
-	return static_cast<float>(command_grid_world_size_or_default(settings.focused_grid));
+inline float
+bevel_vertices_distance_from_settings(BevelVerticesOperationSettings settings) {
+  if (settings.explicit_distance.valid &&
+      std::isfinite(settings.explicit_distance.value)) {
+    return static_cast<float>(settings.explicit_distance.value);
+  }
+  return static_cast<float>(
+      command_grid_world_size_or_default(settings.focused_grid));
 }
 
-inline quader::QVec3 duplicate_meshes_offset_from_settings(DuplicateMeshesOperationSettings settings)
-{
-	if (settings.explicit_offset.valid &&
-			std::isfinite(settings.explicit_offset.value.x) &&
-			std::isfinite(settings.explicit_offset.value.y) &&
-			std::isfinite(settings.explicit_offset.value.z)) {
-		return settings.explicit_offset.value;
-	}
-	return {};
+inline quader::QVec3 duplicate_meshes_offset_from_settings(
+    DuplicateMeshesOperationSettings settings) {
+  if (settings.explicit_offset.valid &&
+      std::isfinite(settings.explicit_offset.value.x) &&
+      std::isfinite(settings.explicit_offset.value.y) &&
+      std::isfinite(settings.explicit_offset.value.z)) {
+    return settings.explicit_offset.value;
+  }
+  return {};
 }
 
-inline quader_poly::BevelProfileType sanitize_edge_bevel_profile_type(int profile_type)
-{
+inline quader_poly::BevelProfileType
+sanitize_edge_bevel_profile_type(int profile_type) {
   return profile_type == static_cast<int>(quader_poly::BevelProfileType::Offset)
              ? quader_poly::BevelProfileType::Offset
              : quader_poly::BevelProfileType::Offset;
 }
 
-inline BridgeOperationSettings normalize_bridge_operation_settings(BridgeOperationSettings settings)
-{
-	settings.steps = normalize_operation_int(bridge_operation_schema().steps, settings.steps);
-	return settings;
+inline BridgeOperationSettings
+normalize_bridge_operation_settings(BridgeOperationSettings settings) {
+  settings.steps =
+      normalize_operation_int(bridge_operation_schema().steps, settings.steps);
+  return settings;
 }
 
-inline EdgeBevelOperationSettings normalize_edge_bevel_operation_settings(EdgeBevelOperationSettings settings)
-{
-	const EdgeBevelOperationSchema schema = edge_bevel_operation_schema();
-	settings.width = normalize_operation_float(schema.width, settings.width);
-	settings.profile = normalize_operation_float(schema.profile, settings.profile);
-	settings.profile_type = static_cast<int>(sanitize_edge_bevel_profile_type(settings.profile_type));
-	settings.segments = normalize_operation_int(schema.segments, settings.segments);
-	return settings;
+inline EdgeBevelOperationSettings
+normalize_edge_bevel_operation_settings(EdgeBevelOperationSettings settings) {
+  const EdgeBevelOperationSchema schema = edge_bevel_operation_schema();
+  settings.width = normalize_operation_float(schema.width, settings.width);
+  settings.profile =
+      normalize_operation_float(schema.profile, settings.profile);
+  settings.profile_type =
+      static_cast<int>(sanitize_edge_bevel_profile_type(settings.profile_type));
+  settings.segments =
+      normalize_operation_int(schema.segments, settings.segments);
+  return settings;
 }
 
-inline ThickenOperationSettings normalize_thicken_operation_settings(ThickenOperationSettings settings)
-{
-	settings.thickness = normalize_operation_float(thicken_operation_schema().thickness, settings.thickness);
-	return settings;
+inline ThickenOperationSettings
+normalize_thicken_operation_settings(ThickenOperationSettings settings) {
+  settings.thickness = normalize_operation_float(
+      thicken_operation_schema().thickness, settings.thickness);
+  return settings;
 }
 
-inline SliceQuadOperationSettings normalize_slice_quad_operation_settings(SliceQuadOperationSettings settings)
-{
-	const SliceQuadOperationSchema schema = slice_quad_operation_schema();
-	settings.x_slices = normalize_operation_int(schema.x_slices, settings.x_slices);
-	settings.y_slices = normalize_operation_int(schema.y_slices, settings.y_slices);
-	return settings;
+inline SliceQuadOperationSettings
+normalize_slice_quad_operation_settings(SliceQuadOperationSettings settings) {
+  const SliceQuadOperationSchema schema = slice_quad_operation_schema();
+  settings.x_slices =
+      normalize_operation_int(schema.x_slices, settings.x_slices);
+  settings.y_slices =
+      normalize_operation_int(schema.y_slices, settings.y_slices);
+  return settings;
 }
 
-inline MergeByDistanceOperationSettings normalize_merge_by_distance_operation_settings(MergeByDistanceOperationSettings settings)
-{
-	settings.tolerance = normalize_operation_float(merge_by_distance_operation_schema().tolerance, settings.tolerance);
-	return settings;
+inline MergeByDistanceOperationSettings
+normalize_merge_by_distance_operation_settings(
+    MergeByDistanceOperationSettings settings) {
+  settings.tolerance = normalize_operation_float(
+      merge_by_distance_operation_schema().tolerance, settings.tolerance);
+  return settings;
 }
 
-inline quader_poly::EdgeBevelSettings to_edge_bevel_settings(EdgeBevelOperationSettings settings)
-{
-	settings = normalize_edge_bevel_operation_settings(settings);
-	quader_poly::EdgeBevelSettings result;
-	result.width = static_cast<float>(settings.width);
-	result.profile = static_cast<float>(settings.profile);
-	result.profile_type = sanitize_edge_bevel_profile_type(settings.profile_type);
-	result.segments = settings.segments;
-	return result;
+inline quader_poly::EdgeBevelSettings
+to_edge_bevel_settings(EdgeBevelOperationSettings settings) {
+  settings = normalize_edge_bevel_operation_settings(settings);
+  quader_poly::EdgeBevelSettings result;
+  result.width = static_cast<float>(settings.width);
+  result.profile = static_cast<float>(settings.profile);
+  result.profile_type = sanitize_edge_bevel_profile_type(settings.profile_type);
+  result.segments = settings.segments;
+  return result;
 }
 
 } // namespace quader_editor_core

@@ -39,6 +39,8 @@ struct ViewportInteractionHarness {
     quader::ViewportInteractionController controller;
     quader::ViewportInputFrame input;
     quader::ViewportInputResult input_result;
+    std::vector<quader::ViewportSceneBillboardPickCandidate>
+        billboard_pick_candidates;
 
     ViewportInteractionHarness()
         : editor(quader::QuaderApiSessionInternalAccess::from_project_session(
@@ -68,6 +70,7 @@ struct ViewportInteractionHarness {
           .left_pressed = left_pressed,
           .left_down = left_down,
           .left_released = left_released,
+          .scene_billboard_pick_candidates = billboard_pick_candidates,
       };
     }
 };
@@ -467,6 +470,104 @@ TEST(ViewportInteractionControllerTests, ClickFrameSelectsComponentThroughViewpo
         quader::ViewportBeforeToolInteractionResult{});
     EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
               quader::QuaderActiveSelectionKind::None);
+}
+
+TEST(ViewportInteractionControllerTests,
+     ClickFrameSelectsPointLightBillboardThroughViewportFallback) {
+    ViewportInteractionHarness harness;
+    quader::QuaderCreatePointLightArgs args;
+    args.name = "Viewport Billboard Point Light";
+    const quader::QuaderApiResult<quader::QuaderEntityRef> light =
+        harness.editor.scene().create_point_light(args);
+    ASSERT_TRUE(light.ok()) << light.error_message();
+
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok);
+    ASSERT_TRUE(harness.editor.selection().clear().ok);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+
+    const quader::ViewportScreenPoint projected =
+        harness.camera.project_world_point({});
+    ASSERT_TRUE(projected.visible);
+    const quader::QVec2 hit =
+        projected.position +
+        quader::QVec2{quader::kOverlayPointLightGizmoSizePixels * 0.45f, 0.0f};
+    harness.input.mouse_local = hit;
+    harness.input.mouse_screen = hit;
+    harness.billboard_pick_candidates.push_back({
+        .entity = light.value().id,
+        .position = {},
+        .size_pixels = quader::kOverlayPointLightGizmoSizePixels,
+    });
+
+    const quader::ViewportBeforeToolInteractionResult before_tool =
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(true, true, false, hit));
+    EXPECT_FALSE(before_tool.gizmo_consumed);
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(true, true, false, hit),
+        quader::ViewportToolResult{}, before_tool);
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(false, false, true, hit),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
+
+    const std::vector<quader::EntityId> selected = selected_entities(harness);
+    ASSERT_EQ(selected.size(), 1u);
+    EXPECT_EQ(selected.front(), light.value().id);
+    EXPECT_EQ(harness.editor.selection().summary().mode,
+              quader::QuaderSelectionMode::Object);
+    EXPECT_EQ(harness.router.state().selection_mode,
+              quader::ViewportSelectionMode::Object);
+}
+
+TEST(ViewportInteractionControllerTests,
+     ContextMenuPointLightBillboardPreservesSelectedHitSelection) {
+    ViewportInteractionHarness harness;
+    quader::QuaderCreatePointLightArgs first_args;
+    first_args.name = "First Billboard Point Light";
+    const quader::QuaderApiResult<quader::QuaderEntityRef> first =
+        harness.editor.scene().create_point_light(first_args);
+    ASSERT_TRUE(first.ok()) << first.error_message();
+
+    quader::QuaderCreatePointLightArgs second_args;
+    second_args.name = "Second Billboard Point Light";
+    second_args.transform.position = {3.0f, 0.0f, 0.0f};
+    const quader::QuaderApiResult<quader::QuaderEntityRef> second =
+        harness.editor.scene().create_point_light(second_args);
+    ASSERT_TRUE(second.ok()) << second.error_message();
+
+    ASSERT_TRUE(harness.editor.selection()
+                    .select_objects({first.value().id, second.value().id},
+                                    second.value().id)
+                    .ok);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+
+    const quader::ViewportScreenPoint projected =
+        harness.camera.project_world_point({});
+    ASSERT_TRUE(projected.visible);
+    harness.input.mouse_local = projected.position;
+    harness.input.mouse_screen = projected.position;
+    harness.billboard_pick_candidates.push_back({
+        .entity = first.value().id,
+        .position = {},
+        .size_pixels = quader::kOverlayPointLightGizmoSizePixels,
+    });
+
+    const quader::QuaderSelectionSummary summary =
+        harness.controller.pick_context_menu_target(harness.editor,
+                                                    harness.frame());
+
+    EXPECT_TRUE(summary.has_selection);
+    EXPECT_EQ(summary.selected_object_count, 2u);
+    const std::vector<quader::EntityId> selected = selected_entities(harness);
+    ASSERT_EQ(selected.size(), 2u);
+    EXPECT_NE(std::find(selected.begin(), selected.end(), first.value().id),
+              selected.end());
+    EXPECT_NE(std::find(selected.begin(), selected.end(), second.value().id),
+              selected.end());
+    EXPECT_EQ(harness.session.scene().primary_selection(), second.value().id);
 }
 
 TEST(ViewportInteractionControllerTests, VertexSnapDoesNotStealPendingMoveGizmoVertexClick) {

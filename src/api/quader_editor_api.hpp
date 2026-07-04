@@ -8,6 +8,9 @@
 
 #include "api/quader_api.hpp"
 #include "api/quader_commands_api.hpp"
+#ifndef NDEBUG
+#include "api/quader_dev_tools_api.hpp"
+#endif
 #include "api/quader_events_api.hpp"
 #include "api/quader_object_handle.hpp"
 #include "api/quader_preferences_api.hpp"
@@ -65,6 +68,10 @@ public:
     [[nodiscard]] const QuaderToolsApi& tools() const;
     [[nodiscard]] QuaderCommandsApi& commands();
     [[nodiscard]] const QuaderCommandsApi& commands() const;
+#ifndef NDEBUG
+    [[nodiscard]] QuaderDevToolsApi& dev_tools();
+    [[nodiscard]] const QuaderDevToolsApi& dev_tools() const;
+#endif
     [[nodiscard]] QuaderPreferencesApi& preferences();
     [[nodiscard]] const QuaderPreferencesApi& preferences() const;
     [[nodiscard]] QuaderUIApi& ui();

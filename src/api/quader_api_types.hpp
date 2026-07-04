@@ -638,6 +638,7 @@ enum class QuaderOverlayLayer {
     WireframeBase = 22,
     SourceWireDepthStamp = 23,
     WireframeXray = 24,
+    PointLightGizmo = 25,
 };
 
 /**
@@ -684,6 +685,7 @@ enum class QuaderOverlaySource {
     Unknown,
     Selection,
     Hover,
+    Gizmo,
     SceneWireframe,
     HierarchySelection,
     GroupBounds,

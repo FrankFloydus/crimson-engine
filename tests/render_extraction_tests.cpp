@@ -166,6 +166,15 @@ std::size_t point_count_for(const ViewportOverlayFrame &frame,
                     }));
 }
 
+std::size_t icon_count_for(const ViewportOverlayFrame &frame,
+                           ViewportOverlayLayer layer) {
+  return static_cast<std::size_t>(
+      std::count_if(frame.icons.begin(), frame.icons.end(),
+                    [layer](const ViewportOverlayIcon &icon) {
+                      return icon.layer == layer;
+                    }));
+}
+
 void append_source_wire_depth_stamp_triangle(ViewportOverlayFrame &frame,
                                              int object_id, QVec3 a, QVec3 b,
                                              QVec3 c, bool inside_out) {
@@ -315,6 +324,14 @@ TEST(RenderSignatureBuilderTests, BuildsOverlayFrameLayerSignaturesInOnePass) {
         .size_pixels = 8.0f,
         .element = {.object_id = 7, .vertex_id = 1},
     });
+    frame.icons.push_back({
+        .layer = ViewportOverlayLayer::PointLightGizmo,
+        .kind = ViewportOverlayIconKind::PointLight,
+        .position = {0.25f, 0.5f, -2.0f},
+        .color = rgba8(255, 255, 255, 255),
+        .size_pixels = kOverlayPointLightGizmoSizePixels,
+        .element = {.object_id = 12},
+    });
 
     const OverlayFrameSignatures signatures =
         OverlayRenderableBuilder::frame_signatures(frame);
@@ -338,8 +355,13 @@ TEST(RenderSignatureBuilderTests, BuildsOverlayFrameLayerSignaturesInOnePass) {
     EXPECT_EQ(signatures.point_counts[static_cast<std::size_t>(
                   ViewportOverlayLayer::SelectedVertex)],
               1u);
+    EXPECT_EQ(signatures.icon_counts[static_cast<std::size_t>(
+                  ViewportOverlayLayer::PointLightGizmo)],
+              1u);
     EXPECT_TRUE(OverlayRenderableBuilder::layer_has_renderable_primitives(
         signatures, ViewportOverlayLayer::SourceWire));
+    EXPECT_TRUE(OverlayRenderableBuilder::layer_has_renderable_primitives(
+        signatures, ViewportOverlayLayer::PointLightGizmo));
     EXPECT_FALSE(OverlayRenderableBuilder::layer_has_renderable_primitives(
         signatures, ViewportOverlayLayer::SourceWireDepthStamp));
 }
@@ -612,7 +634,9 @@ TEST(RenderOverlaySnapshotTests,
   EXPECT_EQ(snapshot.hierarchy_selection_wires.front().mesh_id, mesh);
   EXPECT_EQ(snapshot.hierarchy_selection_wires.front().vertices.size(), 3u);
   ASSERT_EQ(snapshot.group_bounds.size(), 1u);
-  EXPECT_EQ(snapshot.selected_lights.size(), 2u);
+  EXPECT_EQ(snapshot.selected_lights.size(), 1u);
+  ASSERT_EQ(snapshot.point_light_gizmos.size(), 1u);
+  EXPECT_EQ(snapshot.point_light_gizmos.front().entity, point_light);
   EXPECT_EQ(snapshot.tool_overlays.lines.size(), 1u);
 
   const ViewportOverlayFrame frame =
@@ -622,9 +646,15 @@ TEST(RenderOverlaySnapshotTests,
       line_source_count_for(frame, ViewportOverlaySource::HierarchySelection),
       3u);
   EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::GroupBounds), 12u);
-  EXPECT_EQ(point_count_for(frame, ViewportOverlayLayer::SelectedVertex), 2u);
-  EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 5u);
+  EXPECT_EQ(point_count_for(frame, ViewportOverlayLayer::SelectedVertex), 1u);
+  EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 2u);
+  EXPECT_EQ(icon_count_for(frame, ViewportOverlayLayer::PointLightGizmo), 0u);
   EXPECT_EQ(line_source_count_for(frame, ViewportOverlaySource::Tool), 1u);
+
+  const ViewportOverlayFrame gizmo_frame =
+      ViewportSceneOverlayBuilder::build_selection_frame({}, snapshot, true);
+  EXPECT_EQ(icon_count_for(gizmo_frame, ViewportOverlayLayer::PointLightGizmo),
+            1u);
 }
 
 TEST(RenderOverlaySnapshotTests,
@@ -992,7 +1022,8 @@ TEST(ViewportSceneOverlayBuilderTests, AddsHierarchySelectionWiresAndGroupBounds
         }));
 }
 
-TEST(ViewportSceneOverlayBuilderTests, AddsSelectedLightMarker) {
+TEST(ViewportSceneOverlayBuilderTests,
+     AddsSelectedDirectionalLightMarkerAndRetiresPointLightCross) {
     SceneDocument document;
     AssetRegistry assets;
     const EntityId light =
@@ -1022,8 +1053,8 @@ TEST(ViewportSceneOverlayBuilderTests, AddsSelectedLightMarker) {
         ViewportSceneOverlayBuilder::build_selection_frame(
             ViewportOverlayFrame{}, snapshot);
 
-    EXPECT_EQ(point_count_for(frame, ViewportOverlayLayer::SelectedVertex), 2u);
-    ASSERT_EQ(frame.points.size(), 2u);
+    EXPECT_EQ(point_count_for(frame, ViewportOverlayLayer::SelectedVertex), 1u);
+    ASSERT_EQ(frame.points.size(), 1u);
     const auto point_marker =
         std::find_if(frame.points.begin(), frame.points.end(),
                      [](const ViewportOverlayPoint &point) {
@@ -1031,17 +1062,69 @@ TEST(ViewportSceneOverlayBuilderTests, AddsSelectedLightMarker) {
                               point.position.y == 3.0f &&
                               point.position.z == 4.0f;
                      });
-    ASSERT_NE(point_marker, frame.points.end());
-    EXPECT_EQ(point_marker->source, ViewportOverlaySource::Selection);
-    EXPECT_EQ(point_marker->style_role,
-              ViewportOverlayStyleRole::SelectedVertex);
-    EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 5u);
+    EXPECT_EQ(point_marker, frame.points.end());
+    EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 2u);
     EXPECT_TRUE(std::all_of(
         frame.lines.begin(), frame.lines.end(),
         [](const ViewportOverlayLine &line) {
           return line.source == ViewportOverlaySource::Selection &&
                  line.style_role == ViewportOverlayStyleRole::SelectionWire;
         }));
+}
+
+TEST(ViewportSceneOverlayBuilderTests, AddsPointLightBillboardGizmosWhenRequested) {
+    SceneDocument document;
+    AssetRegistry assets;
+    const EntityId selected_light =
+        document.create_entity("Selected Point Light", EntityKind::Light);
+    document.set_transform(
+        selected_light, TransformComponent{.position = {2.0f, 3.0f, 4.0f}});
+    document.set_light(selected_light, LightComponent{.type = LightType::Point});
+    ASSERT_TRUE(document.set_selected(selected_light, true));
+    const EntityId unselected_light =
+        document.create_entity("Unselected Point Light", EntityKind::Light);
+    document.set_transform(
+        unselected_light, TransformComponent{.position = {-1.0f, 0.5f, 6.0f}});
+    document.set_light(unselected_light,
+                       LightComponent{.type = LightType::Point});
+    const EntityId hidden_light =
+        document.create_entity("Hidden Point Light", EntityKind::Light);
+    document.set_light(hidden_light, LightComponent{.type = LightType::Point});
+    document.set_visible(hidden_light, false);
+    const EntityId directional_light =
+        document.create_entity("Directional Light", EntityKind::Light);
+    document.set_light(directional_light,
+                       LightComponent{.type = LightType::Directional});
+    ASSERT_TRUE(document.set_selected(directional_light, true));
+
+    const RenderOverlaySelectionSnapshot snapshot =
+        build_render_overlay_selection_snapshot(document, assets);
+    EXPECT_EQ(snapshot.selected_lights.size(), 1u);
+    EXPECT_EQ(snapshot.point_light_gizmos.size(), 2u);
+
+    const ViewportOverlayFrame hidden_frame =
+        ViewportSceneOverlayBuilder::build_selection_frame(
+            ViewportOverlayFrame{}, snapshot, false);
+    EXPECT_TRUE(hidden_frame.icons.empty());
+
+    const ViewportOverlayFrame frame =
+        ViewportSceneOverlayBuilder::build_selection_frame(
+            ViewportOverlayFrame{}, snapshot, true);
+    ASSERT_EQ(icon_count_for(frame, ViewportOverlayLayer::PointLightGizmo), 2u);
+    EXPECT_TRUE(std::all_of(
+        frame.icons.begin(), frame.icons.end(), [](const ViewportOverlayIcon &icon) {
+          return icon.kind == ViewportOverlayIconKind::PointLight &&
+                 icon.source == ViewportOverlaySource::Gizmo &&
+                 icon.size_pixels == kOverlayPointLightGizmoSizePixels;
+        }));
+    const auto selected_icon =
+        std::find_if(frame.icons.begin(), frame.icons.end(),
+                     [](const ViewportOverlayIcon &icon) {
+                       return icon.position.x == 2.0f &&
+                              icon.position.y == 3.0f &&
+                              icon.position.z == 4.0f;
+                     });
+    EXPECT_NE(selected_icon, frame.icons.end());
 }
 
 TEST(ViewportSceneOverlayBuilderTests, BuildsWireframeOverlayWithoutObjectFaceFills) {
@@ -1361,7 +1444,8 @@ TEST(OverlayLineMeshBuilderTests, SourceWireDrawsBackFacingBoundaryEdges) {
     EXPECT_FALSE(batch.state.depth_culling);
 }
 
-TEST(OverlayLineMeshBuilderTests, SourceWireUsesOneOnTopBatchBesideDepthStamps) {
+TEST(OverlayLineMeshBuilderTests,
+     SourceWireUsesOneOnTopBatchBesideDepthStamps) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
         .layer = ViewportOverlayLayer::SourceWire,
@@ -1639,6 +1723,31 @@ TEST(OverlayPointMeshBuilderTests, BuildsOutlineAndFillPointPasses) {
     }
 }
 
+TEST(OverlayPointMeshBuilderTests, BuildsPointLightIconBillboardBatch) {
+    ViewportOverlayFrame frame;
+    frame.icons.push_back({
+        .layer = ViewportOverlayLayer::PointLightGizmo,
+        .kind = ViewportOverlayIconKind::PointLight,
+        .position = {0.0f, 0.0f, -1.0f},
+        .color = rgba8(255, 255, 255, 255),
+        .size_pixels = kOverlayPointLightGizmoSizePixels,
+    });
+
+    const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+        frame, test_overlay_camera(), ViewportOverlayLayer::PointLightGizmo);
+
+    ASSERT_EQ(plan.icon_batches.size(), 1u);
+    EXPECT_EQ(plan.icon_batches[0].icon, ViewportOverlayIconKind::PointLight);
+    EXPECT_FLOAT_EQ(plan.icon_batches[0].size_pixels,
+                    kOverlayPointLightGizmoSizePixels);
+    EXPECT_EQ(plan.icon_batches[0].mesh.vertices.size(), 4u);
+    EXPECT_EQ(plan.icon_batches[0].mesh.indices.size(), 6u);
+    EXPECT_EQ(plan.icon_batches[0].state.depth_func, OverlayDepthFunc::Always);
+    EXPECT_FALSE(plan.icon_batches[0].state.depth_culling);
+    EXPECT_TRUE(OverlayRenderableBuilder::layer_build_depends_on_camera(
+        ViewportOverlayLayer::PointLightGizmo));
+}
+
 TEST(OverlayRenderableBuilderTests, SanitizesCameraBeforeSigning) {
   ViewportOverlayCamera camera = test_overlay_camera();
   camera.viewport_size = {0.0f, -3.0f};
@@ -1730,8 +1839,27 @@ TEST(OverlayProxyFactoryTests, CountsOnlyNonEmptyRenderableBatches) {
             },
     });
     plan.point_batches.push_back({});
+    plan.icon_batches.push_back({});
+    plan.icon_batches.push_back({
+        .mesh =
+            {
+                .vertices =
+                    {
+                        {{0.0f, 0.0f, 0.0f, 1.0f},
+                         {0.0f, 0.0f},
+                         rgba8(255, 255, 255, 255)},
+                        {{1.0f, 0.0f, 0.0f, 1.0f},
+                         {1.0f, 0.0f},
+                         rgba8(255, 255, 255, 255)},
+                        {{1.0f, 1.0f, 0.0f, 1.0f},
+                         {1.0f, 1.0f},
+                         rgba8(255, 255, 255, 255)},
+                    },
+                .indices = {0u, 1u, 2u},
+            },
+    });
 
-    EXPECT_EQ(OverlayProxyFactory::planned_proxy_count(plan), 2u);
+    EXPECT_EQ(OverlayProxyFactory::planned_proxy_count(plan), 3u);
 }
 
 TEST(OverlayRenderableCacheTests, TracksSlotSignaturesWithoutOwningFilamentProxies) {

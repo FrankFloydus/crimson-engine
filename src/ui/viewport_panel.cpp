@@ -18,6 +18,7 @@
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
+#include "math/glm_bridge.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
 #include "render/overlay/viewport_transform_gizmo_overlay_builder.hpp"
@@ -25,6 +26,7 @@
 #include "scene/scene_entity_naming.hpp"
 #include "render/render_layers.hpp"
 #include "render/render_system.hpp"
+#include "render/viewport_overlay_policy.hpp"
 #include "ui/imgui_popup_utils.hpp"
 #include "ui/imgui_quader_widgets.hpp"
 #include "ui/ui_context.hpp"
@@ -80,6 +82,36 @@ bool should_defer_pane_render_resize(const UIContext &ui_context,
          ui_context.viewport->render_resize_suspended &&
          renderer.texture_handle() != kInvalidRenderTextureHandle &&
          renderer.overlay_texture_handle() != kInvalidRenderTextureHandle;
+}
+
+bool viewport_shading_shows_point_light_gizmos(ViewportShadingMode shading) {
+  return shading == ViewportShadingMode::Shaded ||
+         shading == ViewportShadingMode::Rendered;
+}
+
+bool point_light_gizmos_visible_for_pane(bool gizmos_visible,
+                                         ViewportShadingMode shading) {
+  return gizmos_visible && viewport_shading_shows_point_light_gizmos(shading);
+}
+
+std::vector<ViewportSceneBillboardPickCandidate>
+point_light_billboard_pick_candidates(const SceneDocument &document) {
+  std::vector<ViewportSceneBillboardPickCandidate> candidates;
+  const std::vector<EntityId> entities = document.entities();
+  candidates.reserve(entities.size());
+  for (const EntityId entity : entities) {
+    const LightComponent *light = document.light(entity);
+    if (light == nullptr || light->type != LightType::Point ||
+        !document.is_effectively_visible(entity)) {
+      continue;
+    }
+    candidates.push_back(ViewportSceneBillboardPickCandidate{
+        .entity = entity,
+        .position = transform_point(document.world_transform_matrix(entity), {}),
+        .size_pixels = kOverlayPointLightGizmoSizePixels,
+    });
+  }
+  return candidates;
 }
 
 float grid_size_for_preset(int preset) {
@@ -349,17 +381,28 @@ ModelingBoxToolEvent modeling_box_event(const ViewportCameraController &camera,
   };
 }
 
-void focus_document(const SceneDocument &document, const AssetRegistry &assets,
-                    ViewportCameraController &camera) {
-  std::optional<SceneBounds> bounds = selected_world_bounds(document, assets);
-  if (!bounds) {
-    bounds = document_world_bounds(document, assets);
-  }
+void focus_bounds_or_origin(std::optional<SceneBounds> bounds,
+                            ViewportCameraController &camera) {
   if (bounds) {
     camera.focus_bounds(bounds->min, bounds->max);
   } else {
     camera.focus_origin();
   }
+}
+
+void focus_all(const SceneDocument &document, const AssetRegistry &assets,
+               ViewportCameraController &camera) {
+  focus_bounds_or_origin(document_world_bounds(document, assets), camera);
+}
+
+bool focus_selection(const ModelingSessionService &modeling,
+                     ViewportCameraController &camera) {
+  const std::optional<SceneBounds> bounds = modeling.selection_bounds();
+  if (!bounds) {
+    return false;
+  }
+  camera.focus_bounds(bounds->min, bounds->max);
+  return true;
 }
 
 void log_command_failure(std::string_view source,
@@ -531,7 +574,7 @@ bool apply_viewport_keybinding_dispatch(
     ViewportInputFrame &input, bool *command_shortcut_consumed) {
   switch (dispatch.kind) {
   case QuaderViewportKeybindingDispatch::Kind::PendingChord:
-    input.resolved_shortcuts.push_back(ViewportShortcut{});
+    input.keybinding_input_consumed = true;
     return true;
   case QuaderViewportKeybindingDispatch::Kind::ViewportShortcut:
     input.resolved_shortcuts.push_back(dispatch.shortcut);
@@ -542,7 +585,7 @@ bool apply_viewport_keybinding_dispatch(
     if (command_shortcut_consumed != nullptr) {
       *command_shortcut_consumed = true;
     }
-    input.resolved_shortcuts.push_back(ViewportShortcut{});
+    input.keybinding_input_consumed = true;
     return true;
   case QuaderViewportKeybindingDispatch::Kind::NoMatch:
     return false;
@@ -827,11 +870,15 @@ void ViewportPanel::prepare_viewports(ViewportWorkspaceService &workspace,
     pane_state.renderer.set_overlay_visible(
         overlays_visible || gizmos_visible ||
         pane_workspace.shading == ViewportShadingMode::Wireframe);
+    const bool point_light_gizmos_visible =
+        point_light_gizmos_visible_for_pane(gizmos_visible,
+                                            pane_workspace.shading);
     ViewportOverlayFrame overlay_frame =
         overlays_visible && selection_overlay_cache_.valid()
             ? selection_overlay_cache_.frame()
             : ViewportOverlayFrame{};
-    if (overlays_visible && selection_overlay_cache_.valid()) {
+    if ((overlays_visible && selection_overlay_cache_.valid()) ||
+        point_light_gizmos_visible) {
       QDR_PROFILE_SCOPE("Viewport build render-owned scene overlay frame");
       overlay_frame = QuaderRenderApiRuntimeAccess::build_scene_overlay_frame(
           editor.render(), render_bridge, std::move(overlay_frame),
@@ -839,6 +886,7 @@ void ViewportPanel::prepare_viewports(ViewportWorkspaceService &workspace,
               .selection_mode = cached_overlay_mode,
               .wireframe_pane =
                   pane_workspace.shading == ViewportShadingMode::Wireframe,
+              .point_light_gizmos_visible = point_light_gizmos_visible,
           });
     }
     if (pane_id == interaction_pane_id_) {
@@ -885,6 +933,44 @@ void ViewportPanel::render_viewports(RenderSystem &render_system) {
     }
     render_system.render_viewport(pane_state.renderer);
   }
+}
+
+QuaderApiVoidResult
+ViewportPanel::frame_all(ViewportWorkspaceService &workspace,
+                         const SceneDocument &document,
+                         const AssetRegistry &assets,
+                         ViewportPaneId pane_id) {
+  focus_all(document, assets, workspace.camera(pane_id));
+  return {
+      .ok = true,
+      .changed = true,
+      .message = "Focus All",
+      .mutation_kind = QuaderMutationKind::Runtime,
+  };
+}
+
+QuaderApiVoidResult
+ViewportPanel::frame_selection(ViewportWorkspaceService &workspace,
+                               const SceneDocument &document,
+                               const AssetRegistry &assets,
+                               const ModelingSessionService &modeling,
+                               ViewportPaneId pane_id) {
+  (void)document;
+  (void)assets;
+  if (!focus_selection(modeling, workspace.camera(pane_id))) {
+    return {
+        .ok = false,
+        .changed = false,
+        .message = "Select something to focus.",
+        .mutation_kind = QuaderMutationKind::None,
+    };
+  }
+  return {
+      .ok = true,
+      .changed = true,
+      .message = "Focus Selection",
+      .mutation_kind = QuaderMutationKind::Runtime,
+  };
 }
 
 bool ViewportPanel::activate_tool_from_menu(ViewportToolId tool,
@@ -1562,6 +1648,7 @@ void ViewportPanel::draw_pane_contents(
         .route_active_navigation_input = input_router_.navigating(),
         .use_captured_mouse_delta = use_captured_mouse_delta,
         .captured_mouse_delta = captured_mouse_delta,
+        .pressed_input_chords = ui_context.viewport->pressed_input_chords,
         .delta_seconds = static_cast<float>(
             std::max(ui_context.viewport->frame_timing.delta_seconds, 0.0)),
     });
@@ -1677,7 +1764,7 @@ void ViewportPanel::draw_pane_contents(
     context_menu_right_drag_delta_ = {};
   }
   if (result.focus_document_requested) {
-    focus_document(document, assets, camera);
+    focus_all(document, assets, camera);
   }
   const bool selection_mode_shortcut_handled =
       result.shortcut_handled &&
@@ -1824,6 +1911,15 @@ void ViewportPanel::draw_pane_contents(
                                      : input.mouse_local;
   const int left_click_count =
       std::max(1, ImGui::GetMouseClickedCount(ImGuiMouseButton_Left));
+  const bool point_light_gizmos_visible =
+      point_light_gizmos_visible_for_pane(
+          active_viewport_settings().bool_value(ViewportBoolSettingId::ShowGizmos),
+          viewport_workspace.pane(pane_state.id).shading);
+  const std::vector<ViewportSceneBillboardPickCandidate>
+      scene_billboard_pick_candidates =
+          point_light_gizmos_visible
+              ? point_light_billboard_pick_candidates(document)
+              : std::vector<ViewportSceneBillboardPickCandidate>{};
   const ViewportInteractionFrame interaction_frame{
       .input_router = input_router_,
       .camera = camera,
@@ -1835,6 +1931,7 @@ void ViewportPanel::draw_pane_contents(
       .left_pressed = left_clicked,
       .left_down = left_down,
       .left_released = left_released,
+      .scene_billboard_pick_candidates = scene_billboard_pick_candidates,
   };
   const ViewportBeforeToolInteractionResult before_tool = [&]() {
     QDR_PROFILE_SCOPE("Viewport before tool interaction");
@@ -2092,6 +2189,7 @@ void ViewportPanel::draw_pane_contents(
         .settings = active_viewport_settings(),
         .input = context_input,
         .input_result = result,
+        .scene_billboard_pick_candidates = scene_billboard_pick_candidates,
     };
     const QuaderSelectionSummary summary =
         interaction_controller_.pick_context_menu_target(

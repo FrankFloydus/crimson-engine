@@ -74,6 +74,10 @@ bool overlay_layer_can_build_points(ViewportOverlayLayer layer) {
          layer == ViewportOverlayLayer::ToolHandle;
 }
 
+bool overlay_layer_can_build_icons(ViewportOverlayLayer layer) {
+  return layer == ViewportOverlayLayer::PointLightGizmo;
+}
+
 QVec3 point_on_line(QVec3 a, QVec3 b, float t) { return a + ((b - a) * t); }
 
 QVec3 camera_forward(const ViewportOverlayCamera &camera) {
@@ -268,7 +272,8 @@ std::uint64_t OverlayRenderableBuilder::layer_signature(
 bool OverlayRenderableBuilder::layer_build_depends_on_camera(
     ViewportOverlayLayer layer) {
   return overlay_layer_can_build_lines(layer) ||
-         overlay_layer_can_build_points(layer);
+         overlay_layer_can_build_points(layer) ||
+         overlay_layer_can_build_icons(layer);
 }
 
 bool OverlayRenderableBuilder::layer_has_renderable_primitives(
@@ -279,7 +284,9 @@ bool OverlayRenderableBuilder::layer_has_renderable_primitives(
          (overlay_layer_can_build_lines(layer) &&
           signatures.line_counts[layer_index] > 0u) ||
          (overlay_layer_can_build_points(layer) &&
-          signatures.point_counts[layer_index] > 0u);
+          signatures.point_counts[layer_index] > 0u) ||
+         (overlay_layer_can_build_icons(layer) &&
+          signatures.icon_counts[layer_index] > 0u);
 }
 
 std::uint64_t OverlayRenderableBuilder::layer_build_signature(
@@ -445,6 +452,16 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
       append_point_pass(plan, points, camera, layer, blend_order, false);
     }
   }
+  if (overlay_layer_can_build_icons(layer)) {
+    const std::vector<const ViewportOverlayIcon *> icons = [&]() {
+      QDR_PROFILE_SCOPE("Overlay collect layer icons");
+      return icons_for_layer(frame, layer);
+    }();
+    {
+      QDR_PROFILE_SCOPE("Overlay build icon pass");
+      append_icon_pass(plan, icons, camera, layer, blend_order);
+    }
+  }
   return plan;
 }
 
@@ -480,6 +497,19 @@ OverlayRenderableBuilder::points_for_layer(
     }
   }
   return points;
+}
+
+std::vector<const ViewportOverlayIcon *>
+OverlayRenderableBuilder::icons_for_layer(const ViewportOverlayFrame &frame,
+                                          ViewportOverlayLayer layer) {
+  std::vector<const ViewportOverlayIcon *> icons;
+  icons.reserve(frame.icons.size());
+  for (const ViewportOverlayIcon &icon : frame.icons) {
+    if (icon.layer == layer) {
+      icons.push_back(&icon);
+    }
+  }
+  return icons;
 }
 
 std::vector<OverlayRenderableBuilder::LineBatchKey>
@@ -572,6 +602,56 @@ void OverlayRenderableBuilder::append_point_pass(
               outline && viewport_overlay_point_is_outline_only(layer)
                   ? viewport_overlay_point_inner_radius(layer)
                   : 0.0f,
+          .depth_bias = depth_bias,
+      });
+    }
+  }
+}
+
+void OverlayRenderableBuilder::append_icon_pass(
+    OverlayLayerBuildPlan &plan,
+    const std::vector<const ViewportOverlayIcon *> &icons,
+    const ViewportOverlayCamera &camera, ViewportOverlayLayer layer,
+    std::uint16_t &blend_order) {
+  std::vector<IconBatchKey> keys;
+  for (const ViewportOverlayIcon *icon : icons) {
+    const IconBatchKey key{
+        .icon = icon->kind,
+        .size_pixels = viewport_overlay_point_size_pixels(layer,
+                                                          icon->size_pixels),
+    };
+    const auto existing = std::find_if(
+        keys.begin(), keys.end(), [&](const IconBatchKey &candidate) {
+          return candidate.icon == key.icon &&
+                 candidate.size_pixels == key.size_pixels;
+        });
+    if (existing == keys.end()) {
+      keys.push_back(key);
+    }
+  }
+
+  const float depth_bias =
+      viewport_overlay_depth_bias(layer, ViewportOverlayGeometryKind::Icons);
+  for (const IconBatchKey &key : keys) {
+    std::vector<const ViewportOverlayIcon *> batch_icons;
+    batch_icons.reserve(icons.size());
+    for (const ViewportOverlayIcon *icon : icons) {
+      const float icon_size =
+          viewport_overlay_point_size_pixels(layer, icon->size_pixels);
+      if (icon->kind == key.icon && icon_size == key.size_pixels) {
+        batch_icons.push_back(icon);
+      }
+    }
+
+    OverlayPointMesh mesh = OverlayPointMeshBuilder::build_icons(
+        batch_icons, camera, key.size_pixels, depth_bias);
+    if (!mesh.empty()) {
+      plan.icon_batches.push_back({
+          .mesh = std::move(mesh),
+          .state = make_state(layer, ViewportOverlayGeometryKind::Icons,
+                              blend_order++),
+          .icon = key.icon,
+          .size_pixels = key.size_pixels,
           .depth_bias = depth_bias,
       });
     }

@@ -655,6 +655,7 @@ TEST(OopArchitectureGuardrailTests, UiShellLeavesSceneOverlayExtractionToRenderB
 
   EXPECT_NE(builder.find("append_hierarchy_selection_wires"), std::string::npos);
   EXPECT_NE(builder.find("append_group_selection_cages"), std::string::npos);
+  EXPECT_NE(builder.find("append_point_light_gizmos"), std::string::npos);
   EXPECT_NE(builder.find("append_scene_wireframe_overlay"), std::string::npos);
   EXPECT_NE(builder.find("strip_wireframe_object_face_fills"), std::string::npos);
   EXPECT_NE(render_bridge.find(
@@ -798,6 +799,7 @@ TEST(OopArchitectureGuardrailTests, OverlayGeometryAndPixelPolicyStayShared) {
            std::string_view{"kOverlayDrawnPlaneLineWidthPixels"},
            std::string_view{"kOverlayLightMarkerPointSizePixels"},
            std::string_view{"kOverlayLightMarkerOutlineGrowthPixels"},
+           std::string_view{"kOverlayPointLightGizmoSizePixels"},
            std::string_view{"kOverlayTransformGizmoSizePixels"},
            std::string_view{"kOverlayTransformGizmoPickRadiusPixels"},
            std::string_view{"kOverlayTransformGizmoMoveCenterRadiusPixels"},
@@ -818,6 +820,7 @@ TEST(OopArchitectureGuardrailTests, OverlayGeometryAndPixelPolicyStayShared) {
     EXPECT_NE(interaction.find("kOverlayTransformGizmoPickRadiusPixels"), std::string::npos);
     EXPECT_NE(scene.find("kOverlayLightMarkerPointSizePixels"), std::string::npos);
     EXPECT_NE(scene.find("kOverlayLightMarkerOutlineGrowthPixels"), std::string::npos);
+    EXPECT_NE(scene.find("kOverlayPointLightGizmoSizePixels"), std::string::npos);
     EXPECT_NE(drawn_plane.find("kOverlayDrawnPlanePointSizePixels"),
               std::string::npos);
     EXPECT_NE(drawn_plane.find("kOverlayDrawnPlaneLineWidthPixels"),
@@ -1083,12 +1086,16 @@ TEST(OopArchitectureGuardrailTests,
   ASSERT_FALSE(ui_draw.empty());
 
   EXPECT_NE(ui_system_header.find(
-                "void install_runtime_hooks(QuaderEditorApi &editor);"),
+                "void install_runtime_hooks(QuaderEditorApi &editor,"),
             std::string::npos);
-  EXPECT_NE(ui_system_source.find(
-                "void UISystem::install_runtime_hooks(QuaderEditorApi &editor)"),
+  EXPECT_NE(
+      ui_system_source.find(
+          "void UISystem::install_runtime_hooks(QuaderEditorApi &editor,"),
+      std::string::npos);
+  EXPECT_NE(app_source.find(
+                "ui_.install_runtime_hooks(*editor_, project_session_.scene()"),
             std::string::npos);
-  EXPECT_NE(app_source.find("ui_.install_runtime_hooks(*editor_);"),
+  EXPECT_NE(app_source.find("project_session_.modeling()"),
             std::string::npos);
   EXPECT_EQ(ui_draw.find("set_runtime_hooks("), std::string::npos);
 }

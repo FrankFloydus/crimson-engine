@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <vector>
 
 namespace filament {
@@ -18,6 +19,7 @@ class Engine;
 class Material;
 class MaterialInstance;
 class Scene;
+class Texture;
 } // namespace filament
 
 namespace quader {
@@ -36,14 +38,17 @@ public:
     void initialize(filament::Engine &engine, filament::Scene &scene,
                     filament::Material &overlay_material,
                     filament::Material &overlay_line_material,
-                    filament::Material &overlay_point_material);
+                    filament::Material &overlay_point_material,
+                    filament::Material &overlay_icon_material,
+                    const std::filesystem::path &resource_root);
     void shutdown();
 
     bool initialized() const {
       return engine_ != nullptr && scene_ != nullptr &&
              overlay_material_ != nullptr &&
              overlay_line_material_ != nullptr &&
-             overlay_point_material_ != nullptr;
+             overlay_point_material_ != nullptr &&
+             overlay_icon_material_ != nullptr;
     }
 
     std::vector<OverlayRenderableProxy>
@@ -66,6 +71,9 @@ public:
     void create_point_proxy(const OverlayPointBatch &batch,
                             std::uint8_t layer_mask,
                             std::vector<OverlayRenderableProxy> &proxies);
+    void create_icon_proxy(const OverlayIconBatch &batch,
+                           std::uint8_t layer_mask,
+                           std::vector<OverlayRenderableProxy> &proxies);
     void update_triangle_proxy(OverlayRenderableProxy &proxy,
                                const OverlayFaceFillBatch &batch,
                                std::uint8_t layer_mask);
@@ -75,14 +83,25 @@ public:
     void update_point_proxy(OverlayRenderableProxy &proxy,
                             const OverlayPointBatch &batch,
                             std::uint8_t layer_mask);
+    void update_icon_proxy(OverlayRenderableProxy &proxy,
+                           const OverlayIconBatch &batch,
+                           std::uint8_t layer_mask);
     void configure_overlay_material(filament::MaterialInstance &material,
                                     const OverlayRenderState &state) const;
+    void load_icon_textures(const std::filesystem::path &resource_root);
+    void destroy_icon_textures();
+    [[nodiscard]] std::size_t
+    planned_loaded_proxy_count(const OverlayLayerBuildPlan &plan) const;
+    [[nodiscard]] filament::Texture *
+    texture_for_icon(ViewportOverlayIconKind icon) const;
 
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
     filament::Material *overlay_material_ = nullptr;
     filament::Material *overlay_line_material_ = nullptr;
     filament::Material *overlay_point_material_ = nullptr;
+    filament::Material *overlay_icon_material_ = nullptr;
+    filament::Texture *point_light_icon_texture_ = nullptr;
 };
 
 } // namespace quader

@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,208 +26,212 @@ namespace quader {
  * Enumerates ModelingCommandId values used by the modeling layer.
  */
 enum class ModelingCommandId {
-    ActivateBoxTool,
-    CreateBoxFromBounds,
-    SelectAll,
-    InvertSelection,
-    ClearSelection,
-    DeleteSelection,
-    ExecuteInstantOperation,
+  ActivateBoxTool,
+  CreateBoxFromBounds,
+  SelectAll,
+  InvertSelection,
+  ClearSelection,
+  DeleteSelection,
+  ExecuteInstantOperation,
 };
 
 /**
  * Enumerates ModelingInstantOperationId values used by the modeling layer.
  */
 enum class ModelingInstantOperationId {
-    DeleteSelection,
-    DuplicateMeshes,
-    CombineMeshes,
-    ExtractFaces,
-    DetachFaces,
-    Bridge,
-    SnapVerticesToActive,
-    ConnectVertices,
-    DissolveVertices,
-    BevelVertices,
-    MergeVerticesToActive,
-    MergeVerticesToCenter,
-    SnapEdgesToActive,
-    ConnectEdges,
-    SplitEdges,
-    DissolveEdges,
-    MergeEdges,
-    CollapseEdges,
-    FillHole,
-    CombineFaces,
-    CollapseFaces,
-    RadialAlign,
-    FlipFaceNormals,
-    RecalculateFaceNormals,
-    ShadeFacesSmooth,
-    ShadeFacesFlat,
-    HardenEdgeNormals,
-    SoftenEdgeNormals,
+  DeleteSelection,
+  DuplicateMeshes,
+  CombineMeshes,
+  ExtractFaces,
+  DetachFaces,
+  Bridge,
+  SnapVerticesToActive,
+  ConnectVertices,
+  DissolveVertices,
+  BevelVertices,
+  MergeVerticesToActive,
+  MergeVerticesToCenter,
+  RemoveDoubles,
+  SnapEdgesToActive,
+  ConnectEdges,
+  SplitEdges,
+  DissolveEdges,
+  MergeEdges,
+  CollapseEdges,
+  FillHole,
+  CombineFaces,
+  CollapseFaces,
+  RadialAlign,
+  FlipFaceNormals,
+  RecalculateFaceNormals,
+  ShadeFacesSmooth,
+  ShadeFacesFlat,
+  HardenEdgeNormals,
+  SoftenEdgeNormals,
 };
 
 /**
  * Enumerates ModelingMirrorAxis values used by the modeling layer.
  */
 enum class ModelingMirrorAxis {
-    X,
-    Y,
-    Z,
+  X,
+  Y,
+  Z,
 };
 
 /**
  * Enumerates ModelingFlipOrientation values used by the modeling layer.
  */
 enum class ModelingFlipOrientation {
-    Horizontal,
-    Vertical,
+  Horizontal,
+  Vertical,
 };
 
 /**
  * Enumerates ModelingTransformTool values used by the modeling layer.
  */
 enum class ModelingTransformTool {
-    Move,
-    Rotate,
-    Scale,
+  Move,
+  Rotate,
+  Scale,
 };
 
 /**
  * Enumerates ModelingViewportTool values used by the modeling layer.
  */
 enum class ModelingViewportTool {
-    Select,
-    Move,
-    Extend,
-    Extrude,
-    Rotate,
-    Scale,
-    Box,
-    InsertEdgeLoop,
-    Knife,
-    Cut,
-    Poly,
-    Mirror,
+  Select,
+  Move,
+  Extend,
+  Extrude,
+  Rotate,
+  Scale,
+  Box,
+  InsertEdgeLoop,
+  Knife,
+  Cut,
+  Poly,
+  Mirror,
 };
 
 /**
  * Enumerates ModelingCutMode values used by the modeling layer.
  */
 enum class ModelingCutMode {
-    DiscardLeft,
-    DiscardRight,
-    KeepBoth,
+  DiscardLeft,
+  DiscardRight,
+  KeepBoth,
 };
 
 /**
  * Enumerates ModelingTransformOperation values used by the modeling layer.
  */
 enum class ModelingTransformOperation {
-    Transform,
-    Extrude,
-    Inset,
+  Transform,
+  Extrude,
+  Inset,
 };
 
 /**
  * Enumerates ModelingTransformAxis values used by the modeling layer.
  */
 enum class ModelingTransformAxis {
-    None,
-    X,
-    Y,
-    Z,
-    XY,
-    XZ,
-    YZ,
-    All,
+  None,
+  X,
+  Y,
+  Z,
+  XY,
+  XZ,
+  YZ,
+  All,
 };
 
 /**
- * Stores the Modeling Command Descriptor data contract used by the modeling domain.
+ * Stores the Modeling Command Descriptor data contract used by the modeling
+ * domain.
  */
 struct ModelingCommandDescriptor {
-    ModelingCommandId command = ModelingCommandId::ActivateBoxTool;
-    std::string id;
-    std::string label;
-    std::string shortcut;
-    bool viewport_scoped = true;
-    bool rebuilds_mesh_on_success = false;
+  ModelingCommandId command = ModelingCommandId::ActivateBoxTool;
+  std::string id;
+  std::string label;
+  std::string shortcut;
+  bool viewport_scoped = true;
+  bool rebuilds_mesh_on_success = false;
 };
 
 /**
- * Stores the Modeling Instant Operation Descriptor data contract used by the modeling domain.
+ * Stores the Modeling Instant Operation Descriptor data contract used by the
+ * modeling domain.
  */
 struct ModelingInstantOperationDescriptor {
-    ModelingInstantOperationId operation = ModelingInstantOperationId::DuplicateMeshes;
-    std::string id;
-    std::string label;
-    bool enabled = false;
-    bool rebuilds_mesh_on_success = true;
+  ModelingInstantOperationId operation =
+      ModelingInstantOperationId::DuplicateMeshes;
+  std::string id;
+  std::string label;
+  bool enabled = false;
+  bool rebuilds_mesh_on_success = true;
 };
 
 /**
  * Represents a Modeling Bounds value used by the modeling domain.
  */
 struct ModelingBounds {
-    QVec3 min;
-    QVec3 max;
+  QVec3 min;
+  QVec3 max;
 };
 
 /**
  * Enumerates ModelingBoxDragState values used by the modeling layer.
  */
 enum class ModelingBoxDragState {
-    Idle,
-    Footprint,
-    Height,
+  Idle,
+  Footprint,
+  Height,
 };
 
 /**
  * Enumerates ModelingSelectionMode values used by the modeling layer.
  */
 enum class ModelingSelectionMode {
-    Vertex,
-    Edge,
-    Face,
-    Object,
-    Group,
+  Vertex,
+  Edge,
+  Face,
+  Object,
+  Group,
 };
 
 /**
  * Enumerates ModelingActiveSelectionKind values used by the modeling layer.
  */
 enum class ModelingActiveSelectionKind {
-    None,
-    Object,
-    Vertex,
-    Edge,
-    Face,
-    Light,
+  None,
+  Object,
+  Vertex,
+  Edge,
+  Face,
+  Light,
 };
 
 /**
  * Represents a Modeling Ray value used by the modeling domain.
  */
 struct ModelingRay {
-    QVec3 origin;
-    QVec3 direction;
+  QVec3 origin;
+  QVec3 direction;
 };
 
 /**
  * Represents a Modeling Viewport Camera value used by the modeling domain.
  */
 struct ModelingViewportCamera {
-    bool orthographic = false;
-    QVec3 origin = {};
-    QVec3 x_axis = {1.0f, 0.0f, 0.0f};
-    QVec3 y_axis = {0.0f, 1.0f, 0.0f};
-    QVec3 z_axis = {0.0f, 0.0f, 1.0f};
-    QVec2 viewport_size = {1.0f, 1.0f};
-    double orthographic_size = 24.0;
-    double fov_degrees = 60.0;
+  bool orthographic = false;
+  QVec3 origin = {};
+  QVec3 x_axis = {1.0f, 0.0f, 0.0f};
+  QVec3 y_axis = {0.0f, 1.0f, 0.0f};
+  QVec3 z_axis = {0.0f, 0.0f, 1.0f};
+  QVec2 viewport_size = {1.0f, 1.0f};
+  double orthographic_size = 24.0;
+  double fov_degrees = 60.0;
 };
 
 /**
@@ -270,61 +275,64 @@ struct ModelingToolRayEvent {
  * Represents a Modeling Box Preview value used by the modeling domain.
  */
 struct ModelingBoxPreview {
-    bool ok = false;
-    bool valid = false;
-    ModelingBoxDragState drag_state = ModelingBoxDragState::Idle;
-    std::string message;
-    std::array<QVec3, 4> footprint = {};
-    std::size_t footprint_count = 0;
-    std::array<QVec3, 8> corners = {};
-    std::size_t corner_count = 0;
-    QVec3 normal = {0.0f, 1.0f, 0.0f};
-    double distance = 0.0;
-    ModelingBounds bounds {};
-    bool bounds_empty = true;
+  bool ok = false;
+  bool valid = false;
+  ModelingBoxDragState drag_state = ModelingBoxDragState::Idle;
+  std::string message;
+  std::array<QVec3, 4> footprint = {};
+  std::size_t footprint_count = 0;
+  std::array<QVec3, 8> corners = {};
+  std::size_t corner_count = 0;
+  QVec3 normal = {0.0f, 1.0f, 0.0f};
+  double distance = 0.0;
+  ModelingBounds bounds{};
+  bool bounds_empty = true;
 };
 
 /**
- * Stores the Modeling Create Box Request data contract used by the modeling domain.
+ * Stores the Modeling Create Box Request data contract used by the modeling
+ * domain.
  */
 struct ModelingCreateBoxRequest {
-    ModelingBounds bounds {
-        .min = {-1.0f, -1.0f, -1.0f},
-        .max = {1.0f, 1.0f, 1.0f},
-    };
-    std::string name = "Box";
+  ModelingBounds bounds{
+      .min = {-1.0f, -1.0f, -1.0f},
+      .max = {1.0f, 1.0f, 1.0f},
+  };
+  std::string name = "Box";
 };
 
 /**
- * Stores the Modeling Create Mesh Request data contract used by the modeling domain.
+ * Stores the Modeling Create Mesh Request data contract used by the modeling
+ * domain.
  */
 struct ModelingCreateMeshRequest {
-    quader_poly::Document document;
-    std::string name = "Mesh";
-    std::uint32_t material_slot = 0;
+  quader_poly::Document document;
+  std::string name = "Mesh";
+  std::uint32_t material_slot = 0;
 };
 
 /**
  * Enumerates ModelingSelectionEdit values used by the modeling layer.
  */
 enum class ModelingSelectionEdit {
-    Replace,
-    Add,
-    Remove,
-    Toggle,
+  Replace,
+  Add,
+  Remove,
+  Toggle,
 };
 
 /**
  * Enumerates ModelingBoxSelectionRule values used by the modeling layer.
  */
 enum class ModelingBoxSelectionRule {
-    DragDirection,
-    Contain,
-    Crossing,
+  DragDirection,
+  Contain,
+  Crossing,
 };
 
 /**
- * Stores the Modeling Component Selection Request data contract used by the modeling domain.
+ * Stores the Modeling Component Selection Request data contract used by the
+ * modeling domain.
  */
 struct ModelingComponentSelectionRequest {
   int modeling_object_id = -1;
@@ -340,7 +348,8 @@ struct ModelingComponentSelectionRequest {
 };
 
 /**
- * Stores the Modeling Direct Hover Request data contract used by the modeling domain.
+ * Stores the Modeling Direct Hover Request data contract used by the modeling
+ * domain.
  */
 struct ModelingDirectHoverRequest {
   int modeling_object_id = -1;
@@ -352,86 +361,138 @@ struct ModelingDirectHoverRequest {
 };
 
 /**
- * Stores the Modeling Pick Select Request data contract used by the modeling domain.
+ * Stores the Modeling Pick Select Request data contract used by the modeling
+ * domain.
  */
 struct ModelingPickSelectRequest {
-    ModelingRay ray;
-    int click_count = 1;
-    bool control_pressed = false;
-    bool shift_pressed = false;
-    bool command_pressed = false;
-    bool alt_pressed = false;
-    bool preserve_selection_on_miss = false;
-    bool preserve_selection_on_selected_hit = false;
-    bool preserve_existing_component_selection_on_hit = false;
-    double vertex_radius = 0.3;
-    double edge_radius = 0.2;
+  ModelingRay ray;
+  int click_count = 1;
+  bool control_pressed = false;
+  bool shift_pressed = false;
+  bool command_pressed = false;
+  bool alt_pressed = false;
+  bool preserve_selection_on_miss = false;
+  bool preserve_selection_on_selected_hit = false;
+  bool preserve_existing_component_selection_on_hit = false;
+  double vertex_radius = 0.3;
+  double edge_radius = 0.2;
 };
 
 /**
- * Stores the Modeling Box Select Request data contract used by the modeling domain.
+ * Stores the Modeling Box Select Request data contract used by the modeling
+ * domain.
  */
 struct ModelingBoxSelectRequest {
-    ModelingViewportCamera camera;
-    QVec2 start = {};
-    QVec2 end = {};
-    ModelingSelectionEdit edit = ModelingSelectionEdit::Replace;
-    ModelingBoxSelectionRule rule = ModelingBoxSelectionRule::DragDirection;
+  ModelingViewportCamera camera;
+  QVec2 start = {};
+  QVec2 end = {};
+  ModelingSelectionEdit edit = ModelingSelectionEdit::Replace;
+  ModelingBoxSelectionRule rule = ModelingBoxSelectionRule::DragDirection;
 };
 
 /**
  * Stores the Modeling Hover Request data contract used by the modeling domain.
  */
 struct ModelingHoverRequest {
-    ModelingRay ray;
-    bool selected_modifier_pressed = false;
-    double vertex_radius = 0.3;
-    double edge_radius = 0.2;
+  ModelingRay ray;
+  bool selected_modifier_pressed = false;
+  double vertex_radius = 0.3;
+  double edge_radius = 0.2;
 };
 
 /**
  * Represents a Modeling Hover Target value used by the modeling domain.
  */
 struct ModelingHoverTarget {
-    ModelingActiveSelectionKind kind = ModelingActiveSelectionKind::None;
-    int object_id = -1;
-    int vertex_id = -1;
-    int edge_a = -1;
-    int edge_b = -1;
-    int face_id = -1;
+  ModelingActiveSelectionKind kind = ModelingActiveSelectionKind::None;
+  int object_id = -1;
+  int vertex_id = -1;
+  int edge_a = -1;
+  int edge_b = -1;
+  int face_id = -1;
 };
 
 /**
  * Represents a Modeling Hover Summary value used by the modeling domain.
  */
 struct ModelingHoverSummary {
-    bool changed = false;
-    ModelingHoverTarget target;
-    bool target_selected = false;
+  bool changed = false;
+  ModelingHoverTarget target;
+  bool target_selected = false;
 };
 
 /**
  * Represents a Modeling Selection Summary value used by the modeling domain.
  */
 struct ModelingSelectionSummary {
-    ModelingSelectionMode mode = ModelingSelectionMode::Object;
-    bool has_selection = false;
-    ModelingActiveSelectionKind active_kind = ModelingActiveSelectionKind::None;
-    int active_object_id = -1;
-    int active_vertex_id = -1;
-    int active_edge_a = -1;
-    int active_edge_b = -1;
-    int active_face_id = -1;
-    std::uint32_t selected_object_count = 0;
-    std::uint32_t selected_vertex_count = 0;
-    std::uint32_t selected_edge_count = 0;
-    std::uint32_t selected_face_count = 0;
-    std::uint64_t content_revision = 0;
-    std::uint64_t selection_revision = 0;
+  ModelingSelectionMode mode = ModelingSelectionMode::Object;
+  bool has_selection = false;
+  ModelingActiveSelectionKind active_kind = ModelingActiveSelectionKind::None;
+  int active_object_id = -1;
+  int active_vertex_id = -1;
+  int active_edge_a = -1;
+  int active_edge_b = -1;
+  int active_face_id = -1;
+  std::uint32_t selected_object_count = 0;
+  std::uint32_t selected_vertex_count = 0;
+  std::uint32_t selected_edge_count = 0;
+  std::uint32_t selected_face_count = 0;
+  std::uint64_t content_revision = 0;
+  std::uint64_t selection_revision = 0;
 };
 
 /**
- * Stores selection overlay projection options for callers that have dedicated renderers for some
+ * Stores one selected vertex snapshot for debug selection export.
+ */
+struct ModelingSelectionExportVertex {
+  quader_poly::ElementId id = quader_poly::kInvalidElementId;
+  QVec3 position = {};
+};
+
+/**
+ * Stores one selected edge snapshot for debug selection export.
+ */
+struct ModelingSelectionExportEdge {
+  quader_poly::ElementId a = quader_poly::kInvalidElementId;
+  quader_poly::ElementId b = quader_poly::kInvalidElementId;
+  std::optional<QVec3> a_position;
+  std::optional<QVec3> b_position;
+};
+
+/**
+ * Stores one selected face snapshot for debug selection export.
+ */
+struct ModelingSelectionExportFace {
+  quader_poly::ElementId id = quader_poly::kInvalidElementId;
+  std::vector<quader_poly::ElementId> vertices;
+};
+
+/**
+ * Stores the selected subset of one runtime modeling object.
+ */
+struct ModelingSelectionExportObject {
+  int modeling_object_id = -1;
+  EntityId entity = kInvalidEntityId;
+  std::string entity_uuid;
+  std::string name;
+  bool selected = false;
+  quader_poly::Selection selection;
+  std::vector<ModelingSelectionExportVertex> selected_vertices;
+  std::vector<ModelingSelectionExportEdge> selected_edges;
+  std::vector<ModelingSelectionExportFace> selected_faces;
+};
+
+/**
+ * Stores a bounded debug snapshot of the current modeling selection.
+ */
+struct ModelingSelectionExport {
+  ModelingSelectionSummary summary;
+  std::vector<ModelingSelectionExportObject> objects;
+};
+
+/**
+ * Stores selection overlay projection options for callers that have
+ * dedicated renderers for some
  * selection feedback.
  */
 struct ModelingSelectionOverlayOptions {
@@ -439,7 +500,8 @@ struct ModelingSelectionOverlayOptions {
 };
 
 /**
- * Stores the Modeling Object Record data contract used by the modeling domain.
+ * Stores the Modeling Object Record data contract used by the modeling
+ * domain.
  */
 struct ModelingObjectRecord {
   int modeling_object_id = -1;
@@ -452,23 +514,23 @@ struct ModelingObjectRecord {
  * Stores the Modeling Command Result data contract used by the modeling domain.
  */
 struct ModelingCommandResult {
-    bool ok = false;
-    bool changed = false;
-    std::string message;
+  bool ok = false;
+  bool changed = false;
+  std::string message;
 };
 
 /**
  * Represents a Modeling Repeat Transform value used by the modeling domain.
  */
 struct ModelingRepeatTransform {
-    bool active = false;
-    ModelingTransformTool tool = ModelingTransformTool::Move;
-    ModelingTransformOperation operation = ModelingTransformOperation::Transform;
-    ModelingTransformAxis axis = ModelingTransformAxis::None;
-    bool duplicate_selected = false;
-    QVec3 move_delta = {};
-    double rotate_angle_degrees = 0.0;
-    QVec3 scale = {1.0f, 1.0f, 1.0f};
+  bool active = false;
+  ModelingTransformTool tool = ModelingTransformTool::Move;
+  ModelingTransformOperation operation = ModelingTransformOperation::Transform;
+  ModelingTransformAxis axis = ModelingTransformAxis::None;
+  bool duplicate_selected = false;
+  QVec3 move_delta = {};
+  double rotate_angle_degrees = 0.0;
+  QVec3 scale = {1.0f, 1.0f, 1.0f};
 };
 
 /**
@@ -514,29 +576,47 @@ struct ModelingToolStatus {
 };
 
 /**
- * Enumerates ModelingToolSettingsTargetKind values used by the modeling layer.
+ * Enumerates live status message kinds for status-bar operation feedback.
+
+ */
+enum class ModelingLiveStatusKind {
+  None,
+  MergeByDistanceMergedVertices,
+};
+
+/**
+ * Represents a live status value used by editor UI surfaces.
+ */
+struct ModelingLiveStatus {
+  ModelingLiveStatusKind kind = ModelingLiveStatusKind::None;
+  std::uint32_t count = 0;
+};
+
+/**
+ * Enumerates ModelingToolSettingsTargetKind values used by the modeling
+ * layer.
  */
 enum class ModelingToolSettingsTargetKind {
-    None,
-    Cut,
-    Mirror,
-    Bridge,
-    EdgeBevel,
-    Thicken,
-    SliceQuad,
-    MergeByDistance,
+  None,
+  Cut,
+  Mirror,
+  Bridge,
+  EdgeBevel,
+  Thicken,
+  SliceQuad,
+  MergeByDistance,
 };
 
 /**
  * Represents a Modeling Tool Settings Target value used by the modeling domain.
  */
 struct ModelingToolSettingsTarget {
-    ModelingToolSettingsTargetKind kind = ModelingToolSettingsTargetKind::None;
-    bool active = false;
-    bool operation_preview_active = false;
-    std::string label;
-    std::string action_id;
-    std::string operation_id;
+  ModelingToolSettingsTargetKind kind = ModelingToolSettingsTargetKind::None;
+  bool active = false;
+  bool operation_preview_active = false;
+  std::string label;
+  std::string action_id;
+  std::string operation_id;
 };
 
 /**
@@ -565,29 +645,31 @@ struct ModelingToolPreviewMesh {
 };
 
 /**
- * Stores the Modeling Transform Drag Begin Request data contract used by the modeling domain.
+ * Stores the Modeling Transform Drag Begin Request data contract used by the
+ * modeling domain.
  */
 struct ModelingTransformDragBeginRequest {
-    ModelingTransformTool tool = ModelingTransformTool::Move;
-    ModelingTransformOperation operation = ModelingTransformOperation::Transform;
-    ModelingTransformAxis axis = ModelingTransformAxis::None;
-    QVec3 pivot = {};
-    QVec2 screen_position = {};
-    QVec2 screen_pivot = {};
-    QVec2 screen_tip = {};
-    bool has_world_direction = false;
-    QVec3 world_direction = {};
-    ModelingRay ray;
-    ModelingViewportCamera camera;
-    double grid_size = 1.0;
-    double vertex_snap_radius = 0.3;
-    bool grid_snap_enabled = true;
-    bool precision = false;
-    bool duplicate_selected = false;
+  ModelingTransformTool tool = ModelingTransformTool::Move;
+  ModelingTransformOperation operation = ModelingTransformOperation::Transform;
+  ModelingTransformAxis axis = ModelingTransformAxis::None;
+  QVec3 pivot = {};
+  QVec2 screen_position = {};
+  QVec2 screen_pivot = {};
+  QVec2 screen_tip = {};
+  bool has_world_direction = false;
+  QVec3 world_direction = {};
+  ModelingRay ray;
+  ModelingViewportCamera camera;
+  double grid_size = 1.0;
+  double vertex_snap_radius = 0.3;
+  bool grid_snap_enabled = true;
+  bool precision = false;
+  bool duplicate_selected = false;
 };
 
 /**
- * Stores the Modeling Transform Drag Update Request data contract used by the modeling domain.
+ * Stores the Modeling Transform Drag Update Request data contract used by the
+ * modeling domain.
  */
 struct ModelingTransformDragUpdateRequest {
   QVec2 screen_position = {};
@@ -600,36 +682,38 @@ struct ModelingTransformDragUpdateRequest {
 };
 
 /**
- * Represents a Modeling Transform Drag Preview value used by the modeling domain.
+ * Represents a Modeling Transform Drag Preview value used by the modeling
+ * domain.
  */
 struct ModelingTransformDragPreview {
-    bool ok = false;
-    bool active = false;
-    bool changed = false;
-    bool preview_driven = false;
-    std::string message;
-    ModelingTransformTool tool = ModelingTransformTool::Move;
-    ModelingTransformOperation operation = ModelingTransformOperation::Transform;
-    ModelingTransformAxis axis = ModelingTransformAxis::None;
-    QVec3 pivot = {};
-    QVec3 move_delta = {};
-    double rotate_angle_degrees = 0.0;
-    QVec3 scale = {1.0f, 1.0f, 1.0f};
-    std::uint64_t content_revision = 0;
-    std::uint64_t selection_revision = 0;
-    bool scene_transform = false;
-    bool has_scene_preview_transform = false;
-    ModelingTransform3 scene_preview_transform = {};
+  bool ok = false;
+  bool active = false;
+  bool changed = false;
+  bool preview_driven = false;
+  std::string message;
+  ModelingTransformTool tool = ModelingTransformTool::Move;
+  ModelingTransformOperation operation = ModelingTransformOperation::Transform;
+  ModelingTransformAxis axis = ModelingTransformAxis::None;
+  QVec3 pivot = {};
+  QVec3 move_delta = {};
+  double rotate_angle_degrees = 0.0;
+  QVec3 scale = {1.0f, 1.0f, 1.0f};
+  std::uint64_t content_revision = 0;
+  std::uint64_t selection_revision = 0;
+  bool scene_transform = false;
+  bool has_scene_preview_transform = false;
+  ModelingTransform3 scene_preview_transform = {};
 };
 
 /**
- * Stores the Modeling Create Box Result data contract used by the modeling domain.
+ * Stores the Modeling Create Box Result data contract used by the modeling
+ * domain.
  */
 struct ModelingCreateBoxResult {
-    bool ok = false;
-    bool changed = false;
-    std::string message;
-    ModelingObjectRecord object;
+  bool ok = false;
+  bool changed = false;
+  std::string message;
+  ModelingObjectRecord object;
 };
 
 } // namespace quader

@@ -163,6 +163,19 @@ void ViewportRenderTarget::resize(std::uint32_t width, std::uint32_t height,
   creation_guard.release();
 }
 
+void ViewportRenderTarget::set_sample_color_space(
+    TextureSampleColorSpace sample_color_space) {
+  if (sample_color_space_ == sample_color_space) {
+    return;
+  }
+  sample_color_space_ = sample_color_space;
+  if (texture_registry_ && texture_handle_ != kInvalidRenderTextureHandle &&
+      color_texture_) {
+    texture_registry_->update_texture(texture_handle_, color_texture_,
+                                      sample_color_space_);
+  }
+}
+
 void ViewportRenderTarget::destroy() {
   if (texture_registry_ && texture_handle_ != kInvalidRenderTextureHandle) {
     texture_registry_->unregister_texture(texture_handle_);

@@ -66,7 +66,8 @@ TEST(UiLayoutGuardrailTests, SidebarPanelsDoNotForceEmptyVerticalScrollbars) {
   expect_missing(outliner_flags, "ImGuiWindowFlags_AlwaysVerticalScrollbar");
 }
 
-TEST(UiLayoutGuardrailTests, InspectorTransformAxisInputsStretchInsideSidebarWidth) {
+TEST(UiLayoutGuardrailTests,
+     InspectorTransformAxisInputsStretchInsideSidebarWidth) {
   const std::string inspector =
       read_source_file({"src", "ui", "inspector_panel.cpp"});
   const std::string axis_drag_float = source_slice(
@@ -86,7 +87,8 @@ TEST(UiLayoutGuardrailTests, InspectorTransformAxisInputsStretchInsideSidebarWid
   expect_missing(axis_drag_float3, "ImGuiTableFlags_SizingFixedFit");
 }
 
-TEST(UiLayoutGuardrailTests, PropertyTableWidgetIsResizableStripedTwoColumnTable) {
+TEST(UiLayoutGuardrailTests,
+     PropertyTableWidgetIsResizableStripedTwoColumnTable) {
   const std::string header =
       read_source_file({"src", "ui", "imgui_quader_widgets.hpp"});
   const std::string widgets =
@@ -109,7 +111,8 @@ TEST(UiLayoutGuardrailTests, PropertyTableWidgetIsResizableStripedTwoColumnTable
   expect_contains(widgets, "flush_pending_property_child_guide(false)");
   expect_contains(widgets, "TableSetupColumn(\"Label\"");
   expect_contains(widgets, "TableSetupColumn(\"Value\"");
-  expect_contains(inspector, "quader_begin_property_table(\"inspector_properties\"");
+  expect_contains(inspector,
+                  "quader_begin_property_table(\"inspector_properties\"");
   expect_contains(inspector, "quader_property_section(\"general\"");
   expect_contains(inspector, "quader_property_section(\"transform\"");
   expect_contains(inspector, "quader_property_section(\"light\"");
@@ -128,9 +131,9 @@ TEST(UiLayoutGuardrailTests, NumericSlidersUseSharedDoubleClickInputWrapper) {
       read_source_file({"src", "ui", "tool_settings_panel.cpp"});
   const std::string inspector =
       read_source_file({"src", "ui", "inspector_panel.cpp"});
-  const std::string continuous_float_helper =
-      source_slice(inspector, "UIContinuousEditResult drag_float_with_left_label",
-                   "UIContinuousEditResult color_edit3_with_left_label");
+  const std::string continuous_float_helper = source_slice(
+      inspector, "UIContinuousEditResult drag_float_with_left_label",
+      "UIContinuousEditResult color_edit3_with_left_label");
   const std::string axis_float_helper = source_slice(
       inspector, "AxisDragFloatResult axis_drag_float(const char *axis",
       "axis_drag_float3(const char *stable_id");
@@ -162,14 +165,13 @@ TEST(UiLayoutGuardrailTests, HierarchyGuideBranchesTerminateAtLastChild) {
       read_source_file({"src", "ui", "outliner_panel.cpp"});
 
   expect_contains(widgets, "bool has_next_sibling");
-  expect_contains(widgets,
-                  "has_next_sibling ? cell_min.y + row_height + 1.0f : center_y");
+  expect_contains(
+      widgets, "has_next_sibling ? cell_min.y + row_height + 1.0f : center_y");
   expect_contains(widgets,
                   "draw_tree_child_guides(*ImGui::GetWindowDrawList()");
   expect_contains(widgets, "queue_property_child_guide");
   expect_contains(outliner, "const std::vector<bool> &ancestor_has_next");
-  expect_contains(outliner,
-                  "has_next_sibling ? row_max.y + 1.0f");
+  expect_contains(outliner, "has_next_sibling ? row_max.y + 1.0f");
   expect_contains(outliner, "child_ancestors.push_back(has_next_sibling)");
   expect_contains(outliner, "index + 1u < children.size()");
 }
@@ -185,6 +187,13 @@ TEST(UiLayoutGuardrailTests, InspectorLightEditsRouteThroughPublicSceneApi) {
   expect_contains(light_section,
                   "context.intent.editor.scene().set_light_component");
   expect_contains(light_section, "to_api_light_component");
+  expect_contains(inspector, "constexpr float kInspectorLightRangeMin = 0.1f");
+  expect_contains(inspector,
+                  "constexpr float kInspectorLightRangeSliderMax = 100.0f");
+  expect_contains(light_section, "kInspectorLightRangeMin");
+  expect_contains(light_section, "kInspectorLightRangeSliderMax");
+  expect_contains(light_section, "ImGuiSliderFlags_None");
+  expect_missing(light_section, "10000.0f");
   expect_missing(inspector, "document.set_light(");
 }
 
@@ -226,7 +235,8 @@ TEST(UiLayoutGuardrailTests, OutlinerNonLeafNodesStartExpanded) {
   expect_contains(tree_node_setup, "ImGuiTreeNodeFlags_DefaultOpen");
 }
 
-TEST(UiLayoutGuardrailTests, OutlinerCachesTreeRecordsAndSkipsOffscreenCustomDrawing) {
+TEST(UiLayoutGuardrailTests,
+     OutlinerCachesTreeRecordsAndSkipsOffscreenCustomDrawing) {
   const std::string outliner_header =
       read_source_file({"src", "ui", "outliner_panel.hpp"});
   const std::string outliner =
@@ -236,10 +246,11 @@ TEST(UiLayoutGuardrailTests, OutlinerCachesTreeRecordsAndSkipsOffscreenCustomDra
   expect_contains(outliner, "cache.scene_revision == document.revision()");
   expect_contains(outliner,
                   "cache.records = document.entity_records_tree_order()");
-  expect_contains(outliner,
-                  "cache.children_by_entity[record.parent].push_back(record.id)");
   expect_contains(
-      outliner, "const bool row_visible = ImGui::IsRectVisible(row_min, row_max)");
+      outliner, "cache.children_by_entity[record.parent].push_back(record.id)");
+  expect_contains(
+      outliner,
+      "const bool row_visible = ImGui::IsRectVisible(row_min, row_max)");
   expect_contains(outliner, "if (row_visible)");
 }
 
@@ -310,10 +321,39 @@ TEST(UiLayoutGuardrailTests, StaticBottomBarTextCentersAboveAccentStrip) {
   expect_contains(bottom_bar,
                   "kStaticBottomBarHeight - kStaticBottomBarAccentHeight");
   expect_contains(bottom_bar, "ImGui::GetTextLineHeight()");
+  expect_contains(
+      bottom_bar,
+      "status_bar_message(live_status, localization, command_status)");
+  expect_contains(ui_system, "modeling.live_status()");
+  expect_contains(bottom_bar, "ellipsized_text_to_width");
+  expect_missing(bottom_bar, "ui.shell.status.ready");
+  expect_missing(bottom_bar, "\"Ready\"");
   expect_missing(bottom_bar, "kStaticBottomBarHeight - ImGui::GetFontSize()");
 }
 
-TEST(UiLayoutGuardrailTests, MainMenuDropdownsUsePopupPaddingAndVerticalSpacing) {
+TEST(UiLayoutGuardrailTests, ViewportRuntimeHooksRestoreFrameSelectionCommand) {
+  const std::string ui_system =
+      read_source_file({"src", "ui", "ui_system.cpp"});
+  const std::string viewport_panel_header =
+      read_source_file({"src", "ui", "viewport_panel.hpp"});
+  const std::string runtime_hooks =
+      source_slice(ui_system, "void UISystem::install_runtime_hooks",
+                   "editor.ui().set_runtime_hooks");
+
+  expect_contains(runtime_hooks, "editor.viewports().set_runtime_hooks");
+  expect_contains(runtime_hooks, ".frame_all =");
+  expect_contains(runtime_hooks, "viewport_panel_->frame_all");
+  expect_contains(runtime_hooks, ".frame_selection =");
+  expect_contains(runtime_hooks, "viewport_panel_->frame_selection");
+  expect_contains(
+      runtime_hooks,
+      "QuaderViewportApiRuntimeAccess::workspace(editor.viewports())");
+  expect_contains(viewport_panel_header, "QuaderApiVoidResult frame_all");
+  expect_contains(viewport_panel_header, "QuaderApiVoidResult frame_selection");
+}
+
+TEST(UiLayoutGuardrailTests,
+     MainMenuDropdownsUsePopupPaddingAndVerticalSpacing) {
   const std::string main_menu =
       read_source_file({"src", "ui", "main_menu_bar.cpp"});
   const std::string main_menu_header =
@@ -344,9 +384,11 @@ TEST(UiLayoutGuardrailTests, MainMenuDropdownsUsePopupPaddingAndVerticalSpacing)
   expect_contains(main_menu, "context.editor.commands().available()");
   expect_contains(main_menu, "context.editor.commands().execute(command_id)");
   expect_contains(main_menu, "command->shortcut");
+  expect_contains(main_menu, "ui.menu.file.new");
   expect_contains(main_menu, "ui.menu.file.open");
   expect_contains(main_menu, "ui.menu.file.save");
   expect_contains(main_menu, "ui.menu.file.save_as");
+  expect_contains(main_menu, "quader_command::kProjectNew");
   expect_contains(main_menu, "quader_command::kProjectOpen");
   expect_contains(main_menu, "quader_command::kProjectSave");
   expect_contains(main_menu, "quader_command::kProjectSaveAs");
@@ -364,11 +406,11 @@ TEST(UiLayoutGuardrailTests, MainMenuDropdownsUsePopupPaddingAndVerticalSpacing)
   expect_contains(main_menu, "quader_command::kDeleteSelection");
   expect_contains(main_menu, "quader_command::kGroupSelection");
   expect_contains(main_menu, "quader_command::kUngroupSelection");
+  expect_contains(main_menu, "ui.menu.view.focus_all");
+  expect_contains(main_menu, "quader_command::kViewportFocusAll");
   expect_contains(main_menu, "ui.menu.view.focus_selection");
   expect_contains(main_menu, "quader_command::kViewportFrameSelection");
   expect_missing(main_menu, "ui.menu.help");
-  expect_missing(main_menu, "ui.menu.view.focus_all");
-  expect_missing(main_menu, "Focus All");
   expect_missing(main_menu, "Symmetrize");
   expect_missing(main_menu, "kViewportFocusOrigin");
   expect_contains(main_menu, "bool draw_viewport_bool_setting_menu_item");
@@ -389,66 +431,80 @@ TEST(UiLayoutGuardrailTests, MainMenuDropdownsUsePopupPaddingAndVerticalSpacing)
   expect_contains(main_menu_header, "bool viewport_settings_changed = false;");
   expect_contains(ui_system, "save_viewport_settings();");
   expect_contains(main_menu_header, "bool popup_open = false;");
+  expect_contains(main_menu_header, "CleanUpMenu cleanup_menu_;");
   expect_contains(main_menu_header, "CreateMenu create_menu_;");
   expect_contains(main_menu, "result.popup_open");
+  expect_contains(main_menu, "ui.menu.cleanup");
+  expect_contains(main_menu, "ui.menu.cleanup.remove_doubles");
+  expect_contains(main_menu, "quader_command::kModelingRemoveDoubles");
+  expect_contains(
+      main_menu,
+      "result.popup_open = cleanup_menu_.draw(context) || result.popup_open;");
   expect_contains(
       main_menu,
       "result.popup_open = tools_menu_.draw(context) || result.popup_open;");
   expect_contains(
       main_menu,
       "result.popup_open = create_menu_.draw(context) || result.popup_open;");
+  EXPECT_LT(main_menu.find("result.popup_open = cleanup_menu_.draw(context) || "
+                           "result.popup_open;"),
+            main_menu.find("result.popup_open = tools_menu_.draw(context) || "
+                           "result.popup_open;"));
+  EXPECT_LT(main_menu.find("result.popup_open = tools_menu_.draw(context) || "
+                           "result.popup_open;"),
+            main_menu.find("result.popup_open = create_menu_.draw(context) || "
+                           "result.popup_open;"));
   EXPECT_LT(
-      main_menu.find(
-          "result.popup_open = tools_menu_.draw(context) || result.popup_open;"),
-      main_menu.find(
-          "result.popup_open = create_menu_.draw(context) || result.popup_open;"));
-  EXPECT_LT(
-      main_menu.find(
-          "result.popup_open = create_menu_.draw(context) || result.popup_open;"),
+      main_menu.find("result.popup_open = create_menu_.draw(context) || "
+                     "result.popup_open;"),
       main_menu.find("result.popup_open = view_menu_.draw(context, result) || "
                      "result.popup_open;"));
   expect_contains(main_menu, "ui.menu.create.point_light");
   expect_contains(main_menu, "quader_command::kSceneCreatePointLight");
   expect_contains(main_menu, "ui.menu.create.directional_light");
   expect_contains(main_menu, "quader_command::kSceneCreateDirectionalLight");
-  expect_contains(ui_system_header, "close_menu_popup_for_pass_through_click()");
+  expect_contains(ui_system_header,
+                  "close_menu_popup_for_pass_through_click()");
   expect_contains(ui_system_header, "bool main_menu_popup_open_ = false;");
   expect_contains(ui_system, "#include \"ui/imgui_popup_utils.hpp\"");
   expect_contains(ui_system, "close_menu_popup_for_pass_through_click();");
   expect_contains(ui_system, "const float menu_click_exclusion_height =");
-  expect_contains(ui_system,
-                  "custom_chrome_ ? kWindowChromeHeight : ImGui::GetFrameHeight();");
+  expect_contains(
+      ui_system,
+      "custom_chrome_ ? kWindowChromeHeight : ImGui::GetFrameHeight();");
   expect_contains(ui_system,
                   "mouse.y <= viewport->Pos.y + menu_click_exclusion_height");
   expect_contains(ui_system, "viewport->Pos.y + menu_click_exclusion_height");
-  expect_contains(
-      ui_system,
-      "imgui_close_popup_for_pass_through_click(pass_through_min");
+  expect_contains(ui_system,
+                  "imgui_close_popup_for_pass_through_click(pass_through_min");
   expect_contains(popup_utils, "ImGui::ClosePopupsExceptModals();");
 }
 
-TEST(UiLayoutGuardrailTests, ViewportInputHoverRespectsActiveDockingAndPanelItems) {
+TEST(UiLayoutGuardrailTests,
+     ViewportInputHoverRespectsActiveDockingAndPanelItems) {
   const std::string viewport_panel =
       read_source_file({"src", "ui", "viewport_panel.cpp"});
-  const std::string pane_collection = source_slice(
-      viewport_panel, "DrawPane draw_pane{", "draw_panes.push_back(draw_pane);");
+  const std::string pane_collection =
+      source_slice(viewport_panel, "DrawPane draw_pane{",
+                   "draw_panes.push_back(draw_pane);");
 
   expect_contains(pane_collection, ".hovered = ImGui::IsItemHovered(),");
   expect_missing(pane_collection,
                  "ImGuiHoveredFlags_AllowWhenBlockedByActiveItem");
 }
 
-TEST(UiLayoutGuardrailTests, ViewportUsesRendererCapacityUvsDuringPanelSplitterDrag) {
+TEST(UiLayoutGuardrailTests,
+     ViewportUsesRendererCapacityUvsDuringPanelSplitterDrag) {
   const std::string viewport_panel_header =
       read_source_file({"src", "ui", "viewport_panel.hpp"});
   const std::string viewport_panel =
       read_source_file({"src", "ui", "viewport_panel.cpp"});
-  const std::string pane_image =
-      source_slice(viewport_panel, "const QVec2 render_size",
-                   "DrawPane draw_pane{");
+  const std::string pane_image = source_slice(
+      viewport_panel, "const QVec2 render_size", "DrawPane draw_pane{");
 
-  expect_contains(viewport_panel,
-                  "should_defer_pane_render_resize(const UIContext &ui_context,");
+  expect_contains(
+      viewport_panel,
+      "should_defer_pane_render_resize(const UIContext &ui_context,");
   expect_contains(viewport_panel, "const ViewportRenderer &renderer)");
   expect_contains(viewport_panel,
                   "ui_context.viewport->render_resize_suspended");
@@ -457,9 +513,8 @@ TEST(UiLayoutGuardrailTests, ViewportUsesRendererCapacityUvsDuringPanelSplitterD
   expect_contains(
       viewport_panel,
       "renderer.overlay_texture_handle() != kInvalidRenderTextureHandle");
-  expect_contains(
-      pane_image,
-      "viewport_workspace.set_pane_render_size(placement.pane_id, render_size)");
+  expect_contains(pane_image, "viewport_workspace.set_pane_render_size("
+                              "placement.pane_id, render_size)");
   expect_contains(pane_image,
                   "pane_state.renderer.resize(render_width, render_height);");
   expect_contains(
@@ -475,7 +530,8 @@ TEST(UiLayoutGuardrailTests, ViewportUsesRendererCapacityUvsDuringPanelSplitterD
                  "if (!ui_context.viewport->render_resize_suspended)");
 }
 
-TEST(UiLayoutGuardrailTests, SidebarDockMinimumsCompressBeforeViewportCollapses) {
+TEST(UiLayoutGuardrailTests,
+     SidebarDockMinimumsCompressBeforeViewportCollapses) {
   const std::string ui_system =
       read_source_file({"src", "ui", "ui_system.cpp"});
   const std::string ui_system_header =
@@ -493,18 +549,20 @@ TEST(UiLayoutGuardrailTests, SidebarDockMinimumsCompressBeforeViewportCollapses)
                   "effective_sidebar_minimum_width(float dockspace_width,");
   expect_contains(ui_system, "const UIPanelManager &panels,");
   expect_contains(ui_system, "dockspace_width - kReservedViewportDockWidth");
-  expect_contains(ui_system,
-                  "std::min(preferred_minimum_width,");
+  expect_contains(ui_system, "std::min(preferred_minimum_width,");
   expect_contains(ui_system,
                   "std::max(kCompressedSidebarMinWidth, width_per_sidebar)");
-  expect_contains(ui_system,
-                  "frame_style.sidebar_min_width = effective_sidebar_minimum_width");
+  expect_contains(
+      ui_system,
+      "frame_style.sidebar_min_width = effective_sidebar_minimum_width");
   expect_contains(ui_system, "draw_dockspace(editor, quit_requested, document, "
                              "modeling,");
-  expect_contains(ui_system,
-                  "enforce_sidebar_dock_minimums(frame_style.sidebar_min_width)");
-  expect_contains(ui_system_header,
-                  "draw_dockspace(QuaderEditorApi &editor, bool &quit_requested,");
+  expect_contains(
+      ui_system,
+      "enforce_sidebar_dock_minimums(frame_style.sidebar_min_width)");
+  expect_contains(
+      ui_system_header,
+      "draw_dockspace(QuaderEditorApi &editor, bool &quit_requested,");
   expect_contains(ui_system_header,
                   "SceneDocument &document, ModelingSessionService &modeling,");
   expect_contains(ui_system_header,
@@ -518,7 +576,8 @@ TEST(UiLayoutGuardrailTests, SidebarDockMinimumsCompressBeforeViewportCollapses)
       "ImVec2(std::max(saved_window_min_size.x, style_.sidebar_min_width)");
 }
 
-TEST(UiLayoutGuardrailTests, ViewportChromeCombosSharePopupPassThroughClickHandling) {
+TEST(UiLayoutGuardrailTests,
+     ViewportChromeCombosSharePopupPassThroughClickHandling) {
   const std::string viewport_panel =
       read_source_file({"src", "ui", "viewport_panel.cpp"});
   const std::string popup_utils =
@@ -535,19 +594,22 @@ TEST(UiLayoutGuardrailTests, ViewportChromeCombosSharePopupPassThroughClickHandl
   expect_contains(popup_utils,
                   "!screen_point_inside(mouse, target_min, target_max)");
   expect_contains(chrome, "(void)imgui_close_combo_popup_for_click_inside(");
-  expect_contains(chrome, "item_min, item_max, chrome_rect.Min, chrome_rect.Max");
+  expect_contains(chrome,
+                  "item_min, item_max, chrome_rect.Min, chrome_rect.Max");
+  expect_missing(chrome, "imgui_close_popup_for_pass_through_click(chrome_rect."
+                         "Min, chrome_rect.Max)");
   expect_missing(
       chrome,
-      "imgui_close_popup_for_pass_through_click(chrome_rect.Min, chrome_rect.Max)");
-  expect_missing(
-      chrome, "imguiClosePopupForClickOutside(chrome_rect.Min, chrome_rect.Max)");
+      "imguiClosePopupForClickOutside(chrome_rect.Min, chrome_rect.Max)");
   expect_missing(
       chrome,
       "imguiCloseComboPopupForClickOutside(chrome_rect.Min, chrome_rect.Max)");
-  expect_contains(chrome, "quader_begin_combo(\"##ViewportView\", preview.c_str(),");
-  expect_contains(chrome, "ImGuiComboFlags_HeightSmall)");
   expect_contains(chrome,
-                  "quader_begin_combo(\"##ViewportShading\", shading_preview.c_str(),");
+                  "quader_begin_combo(\"##ViewportView\", preview.c_str(),");
+  expect_contains(chrome, "ImGuiComboFlags_HeightSmall)");
+  expect_contains(
+      chrome,
+      "quader_begin_combo(\"##ViewportShading\", shading_preview.c_str(),");
   expect_missing(chrome, "ImGuiComboFlags_HeightSmall, false");
   expect_missing(chrome, "consumes_input = true;\n    }\n\n    "
                          "ImGui::SetCursorScreenPos(combo_pos)");

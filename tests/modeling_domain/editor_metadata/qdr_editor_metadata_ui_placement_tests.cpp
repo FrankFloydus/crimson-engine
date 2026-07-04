@@ -104,7 +104,7 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractUIGroupsAndShellTargetsAreDi
 	EXPECT_TRUE(qhc::find_ui_group_descriptor("operation_settings") != nullptr);
 
 	const std::span<const qhc::HostInteractionDescriptor> interactions = qhc::interaction_catalog();
-	EXPECT_TRUE(interactions.size() == 38U);
+	EXPECT_TRUE(interactions.size() == 39U);
         EXPECT_TRUE(has_interaction_kind(
             "open_editor", qhc::HostInteractionKind::EditorAction));
         EXPECT_TRUE(has_interaction_kind(
@@ -113,6 +113,8 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractUIGroupsAndShellTargetsAreDi
             "save_as_document", qhc::HostInteractionKind::EditorAction));
         EXPECT_TRUE(has_interaction_kind(
             "layout_four_view_quad", qhc::HostInteractionKind::ViewportAction));
+        EXPECT_TRUE(has_interaction_kind(
+            "focus_selection", qhc::HostInteractionKind::ViewportAction));
         EXPECT_TRUE(
             has_interaction_kind("active_preview_commit_or_cancel",
                                  qhc::HostInteractionKind::PreviewAction));

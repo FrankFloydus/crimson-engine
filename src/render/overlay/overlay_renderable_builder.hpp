@@ -89,12 +89,24 @@ struct OverlayPointBatch {
 };
 
 /**
+ * Represents an Overlay Icon Batch value used by the render extraction and Filament resource layer.
+ */
+struct OverlayIconBatch {
+    OverlayPointMesh mesh;
+    OverlayRenderState state;
+    ViewportOverlayIconKind icon = ViewportOverlayIconKind::PointLight;
+    float size_pixels = 1.0f;
+    float depth_bias = 0.0f;
+};
+
+/**
  * Represents an Overlay Layer Build Plan value used by the render extraction and Filament resource layer.
  */
 struct OverlayLayerBuildPlan {
   std::vector<OverlayFaceFillBatch> face_fill_batches;
   std::vector<OverlayLineBatch> line_batches;
   std::vector<OverlayPointBatch> point_batches;
+  std::vector<OverlayIconBatch> icon_batches;
 };
 
 /**
@@ -142,6 +154,14 @@ private:
       float width_pixels = 0.0f;
     };
 
+    /**
+     * Stores the Icon Batch Key data contract used by the render extraction and Filament resource layer.
+     */
+    struct IconBatchKey {
+      ViewportOverlayIconKind icon = ViewportOverlayIconKind::PointLight;
+      float size_pixels = 0.0f;
+    };
+
     static std::vector<const ViewportOverlayLine *>
     lines_for_layer(const ViewportOverlayFrame &frame,
                     ViewportOverlayLayer layer,
@@ -152,6 +172,9 @@ private:
                      ViewportOverlayLayer layer,
                      const ViewportOverlayCamera &camera,
                      const OverlayDepthStampVisibilityFilter *visibility);
+    static std::vector<const ViewportOverlayIcon *>
+    icons_for_layer(const ViewportOverlayFrame &frame,
+                    ViewportOverlayLayer layer);
     static std::vector<LineBatchKey>
     line_batch_keys(const std::vector<const ViewportOverlayLine *> &lines,
                     ViewportOverlayLayer layer);
@@ -161,6 +184,11 @@ private:
                       const ViewportOverlayCamera &camera,
                       ViewportOverlayLayer layer, std::uint16_t &blend_order,
                       bool outline);
+    static void
+    append_icon_pass(OverlayLayerBuildPlan &plan,
+                     const std::vector<const ViewportOverlayIcon *> &icons,
+                     const ViewportOverlayCamera &camera,
+                     ViewportOverlayLayer layer, std::uint16_t &blend_order);
 };
 
 } // namespace quader

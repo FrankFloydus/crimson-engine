@@ -25,11 +25,12 @@ void SceneRenderBridge::initialize(
     filament::Material &overlay_line_material,
     filament::Material &selected_object_line_material,
     filament::Material &overlay_point_material,
+    filament::Material &overlay_icon_material,
     std::filesystem::path resource_root) {
   shutdown();
   engine_ = &engine;
   scene_ = &scene;
-  texture_binding_.initialize(engine, std::move(resource_root));
+  texture_binding_.initialize(engine, resource_root);
   material_binding_.initialize(shaded_mesh_material, rendered_mesh_material,
                                texture_binding_);
   mesh_factory_.initialize(engine, scene, material_binding_);
@@ -37,7 +38,8 @@ void SceneRenderBridge::initialize(
   tool_preview_cache_.initialize(mesh_factory_, material_binding_);
   overlay_proxy_factory_.initialize(engine, scene, overlay_material,
                                     overlay_line_material,
-                                    overlay_point_material);
+                                    overlay_point_material,
+                                    overlay_icon_material, resource_root);
   overlay_cache_.initialize(overlay_proxy_factory_);
   scene_wireframe_overlay_cache_.initialize(engine, scene,
                                             selected_object_line_material);
@@ -92,7 +94,7 @@ ViewportOverlayFrame SceneRenderBridge::build_scene_overlay_frame(
     const ViewportSceneOverlayFrameRequest &request) const {
   QDR_PROFILE_FUNCTION();
   ViewportOverlayFrame frame = ViewportSceneOverlayBuilder::build_selection_frame(
-      std::move(base_frame), snapshot);
+      std::move(base_frame), snapshot, request.point_light_gizmos_visible);
   if (request.wireframe_pane) {
     frame = ViewportSceneOverlayBuilder::strip_wireframe_selection_fills(
         std::move(frame), request.selection_mode);

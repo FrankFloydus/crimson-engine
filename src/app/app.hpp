@@ -10,12 +10,11 @@
 #include "app/app_window_settings.hpp"
 #include "core/types.hpp"
 #include "editor/session/project_session.hpp"
+#include "platform/platform_event.hpp"
 #include "platform/platform_window.hpp"
 #include "render/render_system.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "ui/ui_system.hpp"
-
-#include <SDL3/SDL_events.h>
 
 #include <filesystem>
 #include <memory>
@@ -52,8 +51,9 @@ private:
   bool render_frame(const FrameTiming &frame_timing);
   void wait_until_next_frame();
   [[nodiscard]] bool
-  should_render_live_resize_event(const SDL_Event &event) const;
-  static bool SDLCALL live_resize_event_watch(void *userdata, SDL_Event *event);
+  should_render_live_resize_event(const PlatformEvent &event) const;
+  static bool live_resize_event_watch(void *userdata,
+                                      const PlatformEvent &event);
 
   AppFrameClock frame_clock_;
   PlatformWindow window_;
@@ -70,7 +70,7 @@ private:
   bool shutdown_complete_ = false;
   bool rendering_frame_ = false;
   bool live_resize_frame_rendered_ = false;
-  bool event_watch_installed_ = false;
+  PlatformEventWatch live_resize_event_watch_;
 };
 
 } // namespace quader

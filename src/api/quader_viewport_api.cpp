@@ -96,6 +96,12 @@ QuaderApiVoidResult QuaderViewportApi::set_view(ViewportPaneId pane,
   return runtime_status(impl_->workspace.set_view(pane, view));
 }
 
+QuaderApiVoidResult QuaderViewportApi::frame_all(ViewportPaneId pane) {
+  return impl_->hooks.frame_all
+             ? impl_->hooks.frame_all(pane)
+             : unavailable("Viewport camera runtime is not attached.");
+}
+
 QuaderApiVoidResult QuaderViewportApi::frame_selection(ViewportPaneId pane) {
   return impl_->hooks.frame_selection
              ? impl_->hooks.frame_selection(pane)
@@ -158,6 +164,10 @@ QuaderViewportApi::runtime_status(bool changed, std::string message) const {
 QuaderCameraHandle::QuaderCameraHandle(QuaderViewportApi& viewports, ViewportPaneId pane)
     : viewports_(viewports)
     , pane_(pane) {}
+
+QuaderApiVoidResult QuaderCameraHandle::frame_all() {
+  return viewports_.frame_all(pane_);
+}
 
 QuaderApiVoidResult QuaderCameraHandle::frame_selection() {
   return viewports_.frame_selection(pane_);

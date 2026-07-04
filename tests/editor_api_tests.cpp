@@ -14,6 +14,9 @@
 #include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <gtest/gtest.h>
+#ifndef NDEBUG
+#include <nlohmann/json.hpp>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -522,6 +525,14 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(
         editor.commands().shortcut_for(quader::quader_command::kProjectSaveAs),
         "Ctrl+Shift+S");
+#ifndef NDEBUG
+    EXPECT_TRUE(command_descriptor(editor,
+                                   quader::quader_command::kDevCopySelectionJson)
+                    .has_value());
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kDevCopySelectionJson),
+              "Ctrl+Shift+C");
+#endif
     EXPECT_EQ(editor.commands().shortcut_for(
                   quader::quader_command::kSceneCreatePointLight),
               "");
@@ -529,8 +540,11 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
                   quader::quader_command::kSceneCreateDirectionalLight),
               "");
     EXPECT_EQ(editor.commands().shortcut_for(
-                  quader::quader_command::kViewportFrameSelection),
+                  quader::quader_command::kViewportFocusAll),
               "Home");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kViewportFrameSelection),
+              "");
     EXPECT_EQ(editor.commands().shortcut_for(
                   quader::quader_command::kViewportFocusOrigin),
               "Shift+Home");
@@ -570,10 +584,14 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
               quader::quader_modeling_command_target_id("bridge_edges"));
     EXPECT_EQ(editor.commands().command_id_for_tool_activation("knife"),
               quader::quader_tool_activation_command_target_id("knife"));
-    EXPECT_FALSE(editor.commands().execute("__missing_command__").ok());
-    EXPECT_FALSE(editor.commands().execute("__missing_command__"));
-    EXPECT_EQ(editor.commands().execute("__missing_command__").error_message(),
-              "Unknown command id.");
+    EXPECT_FALSE(editor.commands().last_status().has_value());
+    const quader::QuaderApiVoidResult missing_command =
+        editor.commands().execute("__missing_command__");
+    EXPECT_FALSE(missing_command.ok());
+    EXPECT_FALSE(missing_command);
+    EXPECT_EQ(missing_command.error_message(), "Unknown command id.");
+    ASSERT_TRUE(editor.commands().last_status().has_value());
+    expect_same_api_status(*editor.commands().last_status(), missing_command);
     EXPECT_EQ(editor.commands()
                   .execute("modeling.__missing_action__")
                   .error_message(),
@@ -600,6 +618,8 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
         editor.commands().execute(quader::quader_command::kEditUndo);
     EXPECT_TRUE(undo.ok()) << undo.error_message();
     EXPECT_TRUE(undo.changed());
+    ASSERT_TRUE(editor.commands().last_status().has_value());
+    expect_same_api_status(*editor.commands().last_status(), undo);
 }
 
 TEST(EditorApiTests, ProjectDocumentCommandsRouteThroughProjectApi) {
@@ -733,6 +753,42 @@ TEST(EditorApiTests, ProjectSaveAsSaveAndOpenUseQdrDocumentIo) {
   const quader::QuaderApiVoidResult saved_again = opened.project().save();
   ASSERT_TRUE(saved_again.ok()) << saved_again.error_message();
   EXPECT_FALSE(opened.project().dirty());
+}
+
+TEST(EditorApiTests, ProjectNewCommandOpensCleanUnsavedEmptyProject) {
+  const std::filesystem::path path = project_test_path("new-command");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  (void)create_selected_box(editor, "Project New Saved Box");
+
+  const quader::QuaderApiVoidResult saved = editor.project().save_as(path);
+  ASSERT_TRUE(saved.ok()) << saved.error_message();
+  EXPECT_EQ(editor.project().path(), path);
+  EXPECT_FALSE(editor.project().dirty());
+  EXPECT_TRUE(editor.history().can_undo());
+  EXPECT_FALSE(selected_entities(editor).empty());
+
+  quader::QuaderCreateEntityArgs entity_args;
+  entity_args.name = "Project New Dirty Entity";
+  const quader::QuaderApiResult<quader::QuaderEntityRef> dirty_entity =
+      editor.scene().create_entity(entity_args);
+  ASSERT_TRUE(dirty_entity.ok()) << dirty_entity.error_message();
+  EXPECT_TRUE(editor.project().dirty());
+  EXPECT_GT(user_entity_count(editor), 1u);
+
+  const quader::QuaderApiVoidResult created =
+      editor.commands().execute(quader::quader_command::kProjectNew);
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  EXPECT_TRUE(created.changed());
+  EXPECT_TRUE(editor.project().path().empty());
+  EXPECT_FALSE(editor.project().dirty());
+  EXPECT_EQ(user_entity_count(editor), 0u);
+  EXPECT_TRUE(selected_entities(editor).empty());
+  EXPECT_TRUE(scene_root(editor).has_value());
+  EXPECT_FALSE(editor.history().can_undo());
+  EXPECT_FALSE(editor.history().can_redo());
+  EXPECT_FALSE(editor.query().history().can_undo);
+  EXPECT_FALSE(editor.query().history().can_redo);
 }
 
 TEST(EditorApiTests, ProjectCommandsUseRuntimePathHooksForEmptyPaths) {
@@ -1140,7 +1196,7 @@ TEST(EditorApiTests, ViewportKeybindingsResolveContextAndUserOverrides) {
       shortcut));
 }
 
-TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithoutViewportFocus) {
+TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithAndWithoutViewportFocus) {
   const std::filesystem::path path =
       keybinding_test_path("global-command-shortcuts");
   CommandTestHarness harness;
@@ -1172,6 +1228,34 @@ TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithoutViewportFocus) {
             quader::QuaderViewportKeybindingDispatch::Kind::Command);
   EXPECT_EQ(save_as_dispatch.command_id,
             quader::quader_command::kProjectSaveAs.string());
+
+  const quader::QuaderViewportKeybindingDispatch focused_copy_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+C"), state, true, false);
+  ASSERT_EQ(focused_copy_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(focused_copy_dispatch.command_id,
+            quader::quader_command::kCopySelection.string());
+  EXPECT_NE(focused_copy_dispatch.command_id,
+            quader::quader_command::kViewportFrameSelection.string());
+
+#ifndef NDEBUG
+  const quader::QuaderViewportKeybindingDispatch dev_copy_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Shift+C"), state, false, false);
+  ASSERT_EQ(dev_copy_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(dev_copy_dispatch.command_id,
+            quader::quader_command::kDevCopySelectionJson.string());
+
+  const quader::QuaderViewportKeybindingDispatch focused_dev_copy_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Shift+C"), state, true, false);
+  ASSERT_EQ(focused_dev_copy_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(focused_dev_copy_dispatch.command_id,
+            quader::quader_command::kDevCopySelectionJson.string());
+#endif
 
   const quader::QuaderViewportKeybindingDispatch undo_dispatch =
       editor.commands().dispatch_viewport_input_binding(
@@ -1214,6 +1298,134 @@ TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithoutViewportFocus) {
   EXPECT_EQ(rebound_undo_dispatch.command_id,
             quader::quader_command::kEditUndo.string());
 }
+
+#ifndef NDEBUG
+TEST(EditorApiTests, DebugCopySelectionJsonShortcutWinsOverFocusSelectionBind) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path(
+                          "debug-copy-selection-json-reserved-shortcut"))
+                  .ok());
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(quader::quader_command::kViewportFrameSelection,
+                                "Ctrl+Shift+C")
+                  .ok());
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader::quader_command::kViewportFrameSelection),
+            "Ctrl+Shift+C");
+
+  quader::ViewportToolState state;
+  const quader::QuaderViewportKeybindingDispatch dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Shift+C"), state, true, false);
+  ASSERT_EQ(dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(dispatch.command_id,
+            quader::quader_command::kDevCopySelectionJson.string());
+  EXPECT_NE(dispatch.command_id,
+            quader::quader_command::kViewportFrameSelection.string());
+}
+#endif
+
+TEST(EditorApiTests, FocusSelectionUserShortcutUsesViewportContext) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("focus-selection-shortcut-context"))
+                  .ok());
+
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(quader::quader_command::kViewportFrameSelection,
+                                "Ctrl+Alt+F")
+                  .ok());
+
+  quader::ViewportToolState state;
+  const quader::QuaderViewportKeybindingDispatch without_viewport_focus =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Alt+F"), state, false, false);
+  EXPECT_EQ(without_viewport_focus.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+
+  const quader::QuaderViewportKeybindingDispatch with_viewport_focus =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Alt+F"), state, true, false);
+  ASSERT_EQ(with_viewport_focus.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(with_viewport_focus.command_id,
+            quader::quader_command::kViewportFrameSelection.string());
+}
+
+#ifndef NDEBUG
+TEST(EditorApiTests, DebugCopySelectionJsonCopiesEdgeSelectionAndReportsStatus) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands()
+                  .set_keybinding_storage_path(
+                      keybinding_test_path("debug-copy-selection-json"))
+                  .ok());
+
+  std::string copied_text;
+  editor.dev_tools().set_runtime_hooks(quader::QuaderDevToolsRuntimeHooks{
+      .set_clipboard_text =
+          [&copied_text](std::string_view text, std::string &error_message) {
+            copied_text = std::string(text);
+            error_message.clear();
+            return true;
+          },
+  });
+
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Dev Copy Edge Box");
+  ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
+  const quader::QuaderSelectionSummary selected =
+      editor.selection().summary();
+  ASSERT_EQ(selected.mode, quader::QuaderSelectionMode::Edge);
+  ASSERT_EQ(selected.selected_edge_count, 1u);
+
+  const quader::QuaderApiVoidResult copied =
+      editor.commands().execute(quader::quader_command::kDevCopySelectionJson);
+  ASSERT_TRUE(copied.ok()) << copied.error_message();
+  EXPECT_FALSE(copied.changed());
+  EXPECT_EQ(copied.error_message(), "Copied selection JSON to clipboard.");
+  ASSERT_TRUE(editor.commands().last_status().has_value());
+  expect_same_api_status(*editor.commands().last_status(), copied);
+  ASSERT_FALSE(copied_text.empty());
+
+  const nlohmann::ordered_json root = nlohmann::ordered_json::parse(copied_text);
+  EXPECT_EQ(root.at("kind"), "quader.dev.selection");
+  EXPECT_EQ(root.at("version"), 1);
+
+  const nlohmann::ordered_json &selection = root.at("selection");
+  EXPECT_EQ(selection.at("mode"), "edge");
+  EXPECT_TRUE(selection.at("hasSelection").get<bool>());
+  EXPECT_EQ(selection.at("active").at("kind"), "edge");
+  EXPECT_EQ(selection.at("active").at("modelingObjectId"),
+            box.modeling_object_id);
+  EXPECT_EQ(selection.at("counts").at("objects"), 1);
+  EXPECT_EQ(selection.at("counts").at("edges"), 1);
+  ASSERT_EQ(selection.at("objects").size(), 1u);
+
+  const nlohmann::ordered_json &object = selection.at("objects").at(0);
+  EXPECT_EQ(object.at("modelingObjectId"), box.modeling_object_id);
+  EXPECT_EQ(object.at("entity"), box.entity);
+  EXPECT_EQ(object.at("name"), "Dev Copy Edge Box");
+  EXPECT_TRUE(object.at("selected").get<bool>());
+  ASSERT_EQ(object.at("selection").at("edges").size(), 1u);
+  EXPECT_EQ(object.at("selection").at("edges").at(0).at("a"), 1);
+  EXPECT_EQ(object.at("selection").at("edges").at(0).at("b"), 2);
+  ASSERT_EQ(object.at("selectedGeometry").at("edges").size(), 1u);
+  const nlohmann::ordered_json &edge =
+      object.at("selectedGeometry").at("edges").at(0);
+  EXPECT_EQ(edge.at("a"), 1);
+  EXPECT_EQ(edge.at("b"), 2);
+  EXPECT_TRUE(edge.at("aPosition").contains("x"));
+  EXPECT_TRUE(edge.at("bPosition").contains("x"));
+}
+#endif
 
 TEST(EditorApiTests, GlobalCommandKeybindingsDoNotStealTextInputOrViewportOnlyShortcuts) {
   const std::filesystem::path path =
@@ -2942,6 +3154,69 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
     EXPECT_TRUE(viewport.camera().focus_origin().ok());
     EXPECT_FALSE(viewport.camera().frame_selection().ok());
     EXPECT_FALSE(editor.viewports().spawn_window().ok());
+}
+
+TEST(EditorApiTests, ViewportFocusCommandsUseRuntimeHooksForFocusedPane) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+    ASSERT_TRUE(
+        editor.viewports().set_layout(quader::ViewportLayoutId::FourQuad).ok());
+    quader::ViewportWorkspaceService& workspace =
+            quader::QuaderViewportApiRuntimeAccess::workspace(editor.viewports());
+    ASSERT_TRUE(workspace.focus_pane(quader::ViewportPaneId::Top));
+
+    int frame_all_requests = 0;
+    int frame_selection_requests = 0;
+    quader::ViewportPaneId requested_pane = quader::ViewportPaneId::Perspective;
+    editor.viewports().set_runtime_hooks(quader::QuaderViewportRuntimeHooks{
+        .frame_all =
+            [&](quader::ViewportPaneId pane) {
+              ++frame_all_requests;
+              requested_pane = pane;
+              return quader::QuaderApiVoidResult{
+                  .ok = true,
+                  .changed = true,
+                  .message = "Focus All",
+                  .mutation_kind = quader::QuaderMutationKind::Runtime,
+                  .revisions = editor.revisions(),
+              };
+            },
+        .frame_selection =
+            [&](quader::ViewportPaneId pane) {
+              ++frame_selection_requests;
+              requested_pane = pane;
+              return quader::QuaderApiVoidResult{
+                  .ok = true,
+                  .changed = true,
+                  .message = "Focus Selection",
+                  .mutation_kind = quader::QuaderMutationKind::Runtime,
+                  .revisions = editor.revisions(),
+              };
+            },
+    });
+
+    const quader::QuaderApiVoidResult focus_all_result =
+        editor.commands().execute(quader::quader_command::kViewportFocusAll);
+
+    ASSERT_TRUE(focus_all_result.ok()) << focus_all_result.error_message();
+    EXPECT_TRUE(focus_all_result.changed());
+    EXPECT_EQ(focus_all_result.error_message(), "Focus All");
+    EXPECT_EQ(frame_all_requests, 1);
+    EXPECT_EQ(requested_pane, quader::ViewportPaneId::Top);
+    ASSERT_TRUE(editor.commands().last_status().has_value());
+    expect_same_api_status(*editor.commands().last_status(), focus_all_result);
+
+    requested_pane = quader::ViewportPaneId::Perspective;
+    const quader::QuaderApiVoidResult result =
+        editor.commands().execute(quader::quader_command::kViewportFrameSelection);
+
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    EXPECT_TRUE(result.changed());
+    EXPECT_EQ(result.error_message(), "Focus Selection");
+    EXPECT_EQ(frame_selection_requests, 1);
+    EXPECT_EQ(requested_pane, quader::ViewportPaneId::Top);
+    ASSERT_TRUE(editor.commands().last_status().has_value());
+    expect_same_api_status(*editor.commands().last_status(), result);
 }
 
 TEST(EditorApiTests, ViewportViewCommandsTargetFocusedPane) {

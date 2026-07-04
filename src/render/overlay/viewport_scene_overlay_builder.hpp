@@ -19,7 +19,8 @@ class ViewportSceneOverlayBuilder final {
 public:
   [[nodiscard]] static ViewportOverlayFrame
   build_selection_frame(ViewportOverlayFrame base_frame,
-                        const RenderOverlaySelectionSnapshot &snapshot);
+                        const RenderOverlaySelectionSnapshot &snapshot,
+                        bool point_light_gizmos_visible = false);
   [[nodiscard]] static ViewportOverlayFrame build_wireframe_frame(
       ViewportOverlayFrame base_frame, ModelingSelectionMode selection_mode,
       const RenderOverlaySceneWireframeSnapshot &snapshot);

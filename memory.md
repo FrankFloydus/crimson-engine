@@ -9,6 +9,121 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-04 - Point Lights Use Selectable Billboard Gizmos
+
+Task/context: point lights needed a larger upright PNG viewport gizmo, visible in shaded and
+rendered viewports, selectable from the viewport, and governed by the existing Show Gizmos toggle.
+
+Invariant:
+
+- Visible point lights are represented by `ViewportOverlayIconKind::PointLight` billboard icons,
+  not the old selected-light cross/line marker.
+- Point-light billboard icons are shown only when Show Gizmos is enabled and the pane shading is
+  `Shaded` or `Rendered`; wireframe panes do not show them.
+- Point-light icons are scene gizmos, so they are emitted for all effectively visible point lights,
+  selected or not, and use screen-facing icon quads with `OverlayDepthFunc::Always`.
+- Viewport selection must include matching screen-space billboard pick candidates so clicking or
+  context-clicking the icon selects the light through the public selection API.
+
+Affected owners/files:
+
+- `src/ui/viewport_panel.cpp`
+- `src/render/overlay/render_overlay_snapshot.*`
+- `src/editor/viewport/viewport_interaction_frame.hpp`
+- `src/editor/viewport/viewport_selection_interaction.cpp`
+- `tests/render_extraction_tests.cpp`
+- `tests/viewport_interaction_controller_tests.cpp`
+- `tests/core_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportRendererTests.MultiViewportRenderDoesNotMutateSceneInsideFilamentFrame:RenderOverlaySnapshotTests.CapturesSelectionGroupLightHierarchyAndToolOverlayRecords:ViewportSceneOverlayBuilderTests.AddsSelectedDirectionalLightMarkerAndRetiresPointLightCross:ViewportSceneOverlayBuilderTests.AddsPointLightBillboardGizmosWhenRequested:ViewportInteractionControllerTests.ClickFrameSelectsPointLightBillboardThroughViewportFallback:ViewportInteractionControllerTests.ContextMenuPointLightBillboardPreservesSelectedHitSelection`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-07-04 - Post-Processed Viewport Textures Are Display Encoded
+
+Task/context: rendered viewport dithering looked like heavy noise in black areas, while disabling
+dithering made textured surfaces look posterized compared with Filament's material sandbox.
+
+Invariant:
+
+- `ViewportRenderer` owns the scene viewport texture presentation color-space. When Filament
+  post-processing is enabled, the scene target has already gone through color grading/gamma output
+  and must be registered as `TextureSampleColorSpace::DisplaySrgb` for the ImGui composite pass.
+- When post-processing is disabled, the scene target remains linear and must be registered as
+  `TextureSampleColorSpace::LinearSrgb` so the ImGui material performs the one required
+  `linearToSrgb` encode.
+- Overlay viewport targets remain separate premultiplied display-sRGB textures with post-processing
+  and dithering disabled.
+- The default albedo PNG is 16-bit, but preserving 16-bit PNG precision is a separate texture-loader
+  follow-up because sRGB 16-bit content needs a deliberate high-precision linear upload path.
+
+Affected owners/files:
+
+- `src/render/viewport_renderer.*`
+- `src/render/viewport_render_target.*`
+- `tests/core_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests quader_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportRendererTests.PresentsSceneAndOverlayViewportTexturesThroughUiEncoder:OverlayMaterialTests.ImGuiMaterialCanCompositePremultipliedDisplayTextures:TextureRegistryTests.*`
+
+## 2026-07-04 - Fill Hole Filters Selected Boundary Loops
+
+Task/context: Fill Hole failed on a valid hole when the selection also contained an unrelated
+non-boundary edge, matching Blender's more tolerant Fill Holes behavior.
+
+Invariant:
+
+- `src/mesh/polygon/operations/fill_hole_from_edges_operation.cpp` owns polygon Fill Hole topology.
+- The operation should fill closed components made from selected open-boundary edges and ignore
+  extra selected non-boundary or wire edges when at least one valid boundary loop exists.
+- If selected open-boundary edges do not themselves form a closed loop, the operation should expand
+  to the containing open-boundary ring when at least three selected edges belong to that ring.
+- Fully non-boundary edge loops remain rejected; valid fills switch selection to generated face IDs.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_modeling_domain_polygon_loop_tests`
+- `build\vs2026\Debug\quader_modeling_domain_polygon_loop_tests.exe --gtest_color=no --gtest_filter=QdrDocumentOperationFillHoleTests.*`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-07-04 - App Loop Consumes Typed Platform Events
+
+Task/context: `App::run()` classified SDL window event enums directly for quit, resize, native
+chrome refresh, idle wait, and live-resize redraw handling.
+
+Invariant:
+
+- Backend event polling, waiting, event-watch installation, and SDL event classification live in
+  `src/platform/platform_event.*`.
+- `App::run()` consumes `PlatformEvent` flags (`quit_requested`, `mouse_motion`,
+  `window_pixel_size_changed`, `window_chrome_state_changed`) and passes only the opaque
+  `native_event` payload to UI/chrome backend adapters.
+- App headers must not expose `SDL_Event`; live-resize event watches use `PlatformEventWatch` and
+  `PlatformEvent` callbacks.
+
+Affected owners/files:
+
+- `src/platform/platform_event.*`
+- `src/platform/platform_window.*`
+- `src/app/app.*`
+- `tests/build_guardrail_tests.cpp`
+- `tests/core_tests.cpp`
+
+Verification:
+
+- `cmake --preset vs2026`
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.UiSystemKeepsSdlBehindAppPlatformAdapter:BuildGuardrailTests.AppLoopConsumesTypedPlatformEvents`
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=AppLoopTests.*:SdlEventUtilsTests.*`
+- `ctest --preset vs2026-debug --output-on-failure`
+- `cmake --build --preset vs2026-debug --target quader`
+
 ## 2026-07-04 - Component Transforms Keep Generated UVs Procedural
 
 Task/context: an attempted UV regression fix materialized generated face-loop UVs before component
@@ -2137,4 +2252,45 @@ Verification:
 - `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=AppLoopTests.SuspendsGpuSubmissionForNonDrawableWindowsAndIdlesBetweenFrames:PlatformWindowChromeTests.*:OverlayMaterialTests.ImGuiMaterialCanCompositePremultipliedDisplayTextures:ViewportRendererTests.PresentsSceneAndOverlayViewportTexturesThroughUiEncoder`
 - `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
 - `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=WindowGuardrailTests.*:UiLayoutGuardrailTests.ViewportUsesRendererCapacityUvsDuringPanelSplitterDrag`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-07-04 - Pressed Shortcut Chords Must Use SDL Event Modifiers
+
+Task/context: `Ctrl+C` and debug-only `Ctrl+Shift+C` copied selection data but also triggered
+viewport focus behavior. The root cause was split input ownership: command keybindings used the
+frame's pressed chords, the viewport router also received a placeholder shortcut after command
+execution, and the host adapter treated an empty viewport shortcut as a command target that could
+resolve to focus selection.
+
+Invariants:
+
+- SDL keydown events own exact pressed shortcut chords because `SDL_KeyboardEvent::mod` is the
+  modifier state at the keydown event. ImGui remains the source for UI/text focus, mouse/wheel, and
+  held per-frame navigation state.
+- A resolved command keybinding or pending chord must mark the `ViewportInputFrame` keybinding input
+  as consumed. The viewport router must not interpret a command shortcut as a viewport action in the
+  same frame.
+- `ViewportShortcutKind::None` is a sentinel only. It must not map to a command target and must not
+  request focus/document navigation.
+- User shortcuts for viewport commands with no existing binding must use the command's default
+  keybinding context, so Focus Selection remains viewport-scoped instead of becoming a global
+  shortcut.
+
+Affected owners/files:
+
+- `src/platform/sdl_input_adapter.*`
+- `src/platform/platform_event.*`
+- `src/ui/ui_system.*`
+- `src/ui/viewport_input_frame_builder.*`
+- `src/ui/viewport_panel.cpp`
+- `src/viewport/viewport_input_router.cpp`
+- `src/viewport/host_viewport_contract_adapter.cpp`
+- `src/api/quader_commands_api.cpp`
+- `tests/core_tests.cpp`
+- `tests/editor_api_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportInputFrameBuilderTests.ModifierHelperPreservesCanonicalKeyMods:SdlInputAdapterTests.KeyEventModifiersBuildPressedShortcutChord:ViewportInputFrameBuilderTests.EventPressedChordsOverrideImGuiPressedFallback:ViewportInputRouterTests.ConsumedCommandKeybindingDoesNotRouteViewportShortcut:ViewportInputRouterTests.EmptyShortcutSentinelDoesNotRouteViewportAction:ViewportHostContractAdapterTests.EmptyShortcutDoesNotMapToCommandTarget:EditorApiTests.GlobalCommandKeybindingsResolveWithAndWithoutViewportFocus:EditorApiTests.DebugCopySelectionJsonShortcutWinsOverFocusSelectionBind:EditorApiTests.FocusSelectionUserShortcutUsesViewportContext`
 - `cmake --build --preset vs2026-debug --target quader`

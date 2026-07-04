@@ -401,6 +401,24 @@ void append_selected_light_markers(ViewportOverlayFrame &frame,
   }
 }
 
+void append_point_light_gizmos(ViewportOverlayFrame &frame,
+                               const RenderOverlaySelectionSnapshot
+                                   &snapshot) {
+  for (const RenderOverlayLightMarkerSnapshot &light :
+       snapshot.point_light_gizmos) {
+    const QVec3 position = transform_point(light.world_transform, {});
+    frame.icons.push_back(ViewportOverlayIcon{
+        .layer = ViewportOverlayLayer::PointLightGizmo,
+        .kind = ViewportOverlayIconKind::PointLight,
+        .position = position,
+        .color = rgba8(255, 255, 255, 255),
+        .size_pixels = kOverlayPointLightGizmoSizePixels,
+        .source = ViewportOverlaySource::Gizmo,
+        .element = {.object_id = static_cast<int>(light.entity)},
+    });
+  }
+}
+
 void append_scene_wireframe_overlay(ViewportOverlayFrame &frame,
                                     const RenderOverlaySceneWireframeSnapshot
                                         &snapshot) {
@@ -464,11 +482,15 @@ void strip_wireframe_object_face_fills(ViewportOverlayFrame &frame,
 
 ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
     ViewportOverlayFrame base_frame,
-    const RenderOverlaySelectionSnapshot &snapshot) {
+    const RenderOverlaySelectionSnapshot &snapshot,
+    bool point_light_gizmos_visible) {
   QDR_PROFILE_FUNCTION();
   append_hierarchy_selection_wires(base_frame, snapshot);
   append_group_selection_cages(base_frame, snapshot);
   append_selected_light_markers(base_frame, snapshot);
+  if (point_light_gizmos_visible) {
+    append_point_light_gizmos(base_frame, snapshot);
+  }
   base_frame.lines.insert(base_frame.lines.end(),
                           snapshot.tool_overlays.lines.begin(),
                           snapshot.tool_overlays.lines.end());
@@ -478,6 +500,9 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
   base_frame.points.insert(base_frame.points.end(),
                            snapshot.tool_overlays.points.begin(),
                            snapshot.tool_overlays.points.end());
+  base_frame.icons.insert(base_frame.icons.end(),
+                          snapshot.tool_overlays.icons.begin(),
+                          snapshot.tool_overlays.icons.end());
   base_frame.hover_target_selected =
       base_frame.hover_target_selected ||
       snapshot.tool_overlays.hover_target_selected;

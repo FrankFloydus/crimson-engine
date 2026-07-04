@@ -38,6 +38,8 @@ constexpr float kRadToDeg = 57.29577951308232f;
 constexpr float kDegToRad = 0.017453292519943295f;
 constexpr float kAxisTextColumnWidth = 12.0f;
 constexpr float kMinAxisInputWidth = 58.0f;
+constexpr float kInspectorLightRangeMin = 0.1f;
+constexpr float kInspectorLightRangeSliderMax = 100.0f;
 
 void copy_name_to_buffer(const NameComponent *name,
                          std::array<char, 128> &buffer) {
@@ -263,7 +265,8 @@ UIContinuousEditResult drag_float_with_left_label(
     const char *stable_id, const char *label, float *value,
     UIContinuousEditTracker &active_edit, EntityId primary,
     std::span<const EntityId> selection, float speed, float min_value,
-    float max_value, const char *format = "%.3f") {
+    float max_value, const char *format = "%.3f",
+    ImGuiSliderFlags slider_flags = ImGuiSliderFlags_AlwaysClamp) {
   std::array<float, 1> staged{*value};
   active_edit.apply_active_values(
       stable_id, primary, selection,
@@ -274,7 +277,8 @@ UIContinuousEditResult drag_float_with_left_label(
   quader_property_row(stable_id, label);
   result.changed =
       min_value < max_value
-          ? quader_slider_float("##value", value, min_value, max_value, format)
+          ? quader_slider_float("##value", value, min_value, max_value, format,
+                                slider_flags)
           : ImGui::DragFloat("##value", value, speed, min_value, max_value,
                              format);
   result.activated = ImGui::IsItemActivated();
@@ -1311,7 +1315,7 @@ void InspectorPanel::draw_content(UIContext& context) {
         LightComponent light = *current_light;
         auto apply_light_component = [&](LightComponent next,
                                          std::string merge_key = {}) {
-          next.range = std::max(next.range, 0.001f);
+          next.range = std::max(next.range, kInspectorLightRangeMin);
           next.intensity = std::max(next.intensity, 0.0f);
           (void)context.intent.editor.scene().set_light_component(
               primary, to_api_light_component(next),
@@ -1378,7 +1382,9 @@ void InspectorPanel::draw_content(UIContext& context) {
                     "light_range", range_label.c_str(), &range,
                     active_continuous_edit_, primary,
                     std::span<const EntityId>(selected.data(), selected.size()),
-                    0.1f, 0.001f, 10000.0f, "%.2f");
+                    0.1f, kInspectorLightRangeMin,
+                    kInspectorLightRangeSliderMax, "%.2f",
+                    ImGuiSliderFlags_None);
             if (range_edit.should_apply()) {
               light.range = range;
               apply_light_component(light, range_edit.merge_key);

@@ -17,6 +17,8 @@
 
 namespace quader {
 
+struct PlatformEvent;
+
 inline constexpr int kPlatformWindowMinimumWidth = 800;
 inline constexpr int kPlatformWindowMinimumHeight = 600;
 
@@ -116,6 +118,7 @@ public:
     [[nodiscard]] bool can_render_frames() const;
     [[nodiscard]] std::optional<PlatformWindowPlacement> placement() const;
     void apply_placement(const PlatformWindowPlacement &placement);
+    [[nodiscard]] bool process_chrome_event(const PlatformEvent &event);
     [[nodiscard]] bool process_chrome_event(const SDL_Event &event);
     [[nodiscard]] bool chrome_resize_active() const;
     [[nodiscard]] bool native_chrome_message_active() const;

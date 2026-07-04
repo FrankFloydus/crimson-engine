@@ -48,6 +48,8 @@ public:
     QuaderApiVoidResult set_view(ViewportPaneId pane, ViewportView view);
 
     QuaderApiVoidResult
+    frame_all(ViewportPaneId pane = ViewportPaneId::Perspective);
+    QuaderApiVoidResult
     frame_selection(ViewportPaneId pane = ViewportPaneId::Perspective);
     QuaderApiVoidResult
     focus_origin(ViewportPaneId pane = ViewportPaneId::Perspective);
@@ -78,6 +80,7 @@ class QuaderCameraHandle final {
 public:
     QuaderCameraHandle(QuaderViewportApi& viewports, ViewportPaneId pane);
 
+    QuaderApiVoidResult frame_all();
     QuaderApiVoidResult frame_selection();
     QuaderApiVoidResult focus_origin();
 

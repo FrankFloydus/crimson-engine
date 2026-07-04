@@ -27,7 +27,7 @@ const ProjectSession &read_project_session(QuaderApiSession session) {
 
 bool viewport_overlay_frame_visible(const ViewportOverlayFrame &frame) {
   return !frame.lines.empty() || !frame.triangles.empty() ||
-         !frame.points.empty();
+         !frame.points.empty() || !frame.icons.empty();
 }
 
 void append_overlay_frame(ViewportOverlayFrame &frame,
@@ -39,6 +39,8 @@ void append_overlay_frame(ViewportOverlayFrame &frame,
                          appended_frame.triangles.end());
   frame.points.insert(frame.points.end(), appended_frame.points.begin(),
                       appended_frame.points.end());
+  frame.icons.insert(frame.icons.end(), appended_frame.icons.begin(),
+                     appended_frame.icons.end());
 }
 
 } // namespace

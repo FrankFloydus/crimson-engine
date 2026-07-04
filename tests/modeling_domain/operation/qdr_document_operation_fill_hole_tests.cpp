@@ -83,6 +83,83 @@ TEST(QdrDocumentOperationFillHoleTests, FillHoleCreatesOneFaceFromASelectedOpenE
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }
 
+TEST(QdrDocumentOperationFillHoleTests, FillHoleIgnoresExtraSelectedNonBoundaryEdgesWhenBoundaryLoopExists) {
+	Document document = make_cube({});
+	const Face removed_face = document.faces.front();
+	const quader::QVec3 removed_face_normal = face_normal(document, removed_face);
+	document.faces.erase(document.faces.begin());
+
+	Selection selection;
+	selection.mode = SelectionMode::Edge;
+	for (std::size_t index = 0; index < removed_face.vertices.size(); ++index) {
+		selection.edges.push_back(make_edge(removed_face.vertices[index], removed_face.vertices[(index + 1U) % removed_face.vertices.size()]));
+	}
+
+	Edge extra_non_boundary_edge {};
+	bool found_extra_non_boundary_edge = false;
+	for (const Face& face : document.faces) {
+		for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+			const Edge edge = make_edge(face.vertices[index], face.vertices[(index + 1U) % face.vertices.size()]);
+			if (!qdr_test::contains_edge(selection.edges, edge) &&
+			    qdr_test::edge_incidence_count(document, edge) == 2) {
+				extra_non_boundary_edge = edge;
+				found_extra_non_boundary_edge = true;
+				break;
+			}
+		}
+		if (found_extra_non_boundary_edge) {
+			break;
+		}
+	}
+	ASSERT_TRUE(found_extra_non_boundary_edge);
+	selection.edges.push_back(extra_non_boundary_edge);
+
+	const OperationResult result = fill_hole_from_selected_edges(document, selection);
+
+	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
+	EXPECT_TRUE(document.faces.size() == 6U);
+	EXPECT_TRUE(selection.mode == SelectionMode::Face);
+	EXPECT_TRUE(selection.faces.size() == 1U);
+	const Face* fill_face = find_face(document, selection.faces.front());
+	EXPECT_TRUE(fill_face != nullptr);
+	EXPECT_TRUE(dot(face_normal(document, *fill_face), removed_face_normal) > 0.5F);
+	EXPECT_TRUE(qdr_test::edge_incidence_count(document, extra_non_boundary_edge) == 2);
+	EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
+	EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+}
+
+TEST(QdrDocumentOperationFillHoleTests, FillHoleExpandsSelectedBoundarySubsetToContainingOpenLoop) {
+	Document document = make_cube({});
+	const Face removed_face = document.faces.front();
+	const quader::QVec3 removed_face_normal = face_normal(document, removed_face);
+	document.faces.erase(document.faces.begin());
+
+	Selection selection;
+	selection.mode = SelectionMode::Edge;
+	for (std::size_t index = 0; index + 1U < removed_face.vertices.size(); ++index) {
+		selection.edges.push_back(make_edge(removed_face.vertices[index], removed_face.vertices[(index + 1U) % removed_face.vertices.size()]));
+	}
+	ASSERT_TRUE(selection.edges.size() == 3U);
+
+	const OperationResult result = fill_hole_from_selected_edges(document, selection);
+
+	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(document, result);
+	EXPECT_TRUE(document.faces.size() == 6U);
+	EXPECT_TRUE(selection.mode == SelectionMode::Face);
+	EXPECT_TRUE(selection.faces.size() == 1U);
+	const Face* fill_face = find_face(document, selection.faces.front());
+	EXPECT_TRUE(fill_face != nullptr);
+	EXPECT_TRUE(dot(face_normal(document, *fill_face), removed_face_normal) > 0.5F);
+	EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
+	EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+}
+
 TEST(QdrDocumentOperationFillHoleTests, FillHoleRejectsASelectedNonBoundaryEdgeLoop) {
 	Document document = make_cube({});
 	Face& source_face = document.faces.front();

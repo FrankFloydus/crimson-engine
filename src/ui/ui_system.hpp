@@ -10,6 +10,7 @@
 #include "core/frame_timing.hpp"
 #include "core/localization_service.hpp"
 #include "core/types.hpp"
+#include "editor/input/quader_input_binding.hpp"
 #include "render/imgui_filament_renderer.hpp"
 #include "render/render_system.hpp"
 #include "render/scene_render_bridge.hpp"
@@ -59,7 +60,10 @@ public:
                     RenderSystem &render_system,
                     const std::filesystem::path &executable_dir,
                     bool custom_chrome);
-    void install_runtime_hooks(QuaderEditorApi &editor);
+    void install_runtime_hooks(QuaderEditorApi &editor,
+                               SceneDocument &document,
+                               AssetRegistry &assets,
+                               ModelingSessionService &modeling);
     void shutdown();
 
     bool process_event(const UIPlatformEvent &event);
@@ -130,6 +134,7 @@ private:
   bool relative_mouse_captured_ = false;
   bool relative_mouse_capture_warning_issued_ = false;
   QVec2 relative_mouse_delta_ = {};
+  std::vector<QuaderInputChord> pending_pressed_input_chords_;
   FrameTiming current_frame_timing_ = {};
   RenderFramePerformanceStats render_performance_stats_;
   UIPanelId focused_panel_ = UIPanelId::Viewport;

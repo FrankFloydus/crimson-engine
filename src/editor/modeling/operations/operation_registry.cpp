@@ -12,25 +12,25 @@ namespace quader_editor_core {
 
 namespace {
 
-EditorOperationRegistryEntry operation_entry(const EditorOperation& operation, std::string_view class_name)
-{
-	return {
-		operation.operation_id(),
-		operation.id(),
-		class_name,
-		&operation,
-	};
+EditorOperationRegistryEntry operation_entry(const EditorOperation &operation,
+                                             std::string_view class_name) {
+  return {
+      operation.operation_id(),
+      operation.id(),
+      class_name,
+      &operation,
+  };
 }
 
-std::span<const EditorOperationRegistryEntry> operation_registry_entries()
-{
-  static const std::array<EditorOperationRegistryEntry, 33> kEntries{{
+std::span<const EditorOperationRegistryEntry> operation_registry_entries() {
+  static const std::array<EditorOperationRegistryEntry, 34> kEntries{{
       operation_entry(bridge_operation(), "BridgeOperation"),
       operation_entry(edge_bevel_operation(), "EdgeBevelOperation"),
       operation_entry(thicken_operation(), "ThickenOperation"),
       operation_entry(slice_quad_operation(), "SliceQuadOperation"),
       operation_entry(merge_by_distance_operation(),
                       "MergeByDistanceOperation"),
+      operation_entry(remove_doubles_operation(), "RemoveDoublesOperation"),
       operation_entry(bevel_vertices_operation(), "BevelVerticesOperation"),
       operation_entry(duplicate_meshes_operation(), "DuplicateMeshesOperation"),
       operation_entry(connect_vertices_operation(), "ConnectVerticesOperation"),
@@ -73,10 +73,9 @@ std::span<const EditorOperationRegistryEntry> operation_registry_entries()
   return kEntries;
 }
 
-std::span<const EditorOperation* const> operation_entries()
-{
-  static const std::array<const EditorOperation *, 33> kOperations = [] {
-    std::array<const EditorOperation *, 33> result{};
+std::span<const EditorOperation *const> operation_entries() {
+  static const std::array<const EditorOperation *, 34> kOperations = [] {
+    std::array<const EditorOperation *, 34> result{};
     const std::span<const EditorOperationRegistryEntry> entries =
         operation_registry_entries();
     for (std::size_t index = 0; index < entries.size(); ++index) {
@@ -89,55 +88,49 @@ std::span<const EditorOperation* const> operation_entries()
 
 } // namespace
 
-std::span<const EditorOperationRegistryEntry> OperationRegistry::entries() const
-{
-	return operation_registry_entries();
+std::span<const EditorOperationRegistryEntry>
+OperationRegistry::entries() const {
+  return operation_registry_entries();
 }
 
-std::span<const EditorOperation* const> OperationRegistry::operations() const
-{
-	return operation_entries();
+std::span<const EditorOperation *const> OperationRegistry::operations() const {
+  return operation_entries();
 }
 
-const EditorOperation *OperationRegistry::find(EditorOperationId operation_id) const
-{
-	for (const EditorOperationRegistryEntry& entry : entries()) {
-		if (entry.operation_id == operation_id) {
-			return entry.operation;
-		}
-	}
-	return nullptr;
+const EditorOperation *
+OperationRegistry::find(EditorOperationId operation_id) const {
+  for (const EditorOperationRegistryEntry &entry : entries()) {
+    if (entry.operation_id == operation_id) {
+      return entry.operation;
+    }
+  }
+  return nullptr;
 }
 
-const EditorOperation *OperationRegistry::find(std::string_view id) const
-{
-	for (const EditorOperationRegistryEntry& entry : entries()) {
-		if (entry.id == id) {
-			return entry.operation;
-		}
-	}
-	return nullptr;
+const EditorOperation *OperationRegistry::find(std::string_view id) const {
+  for (const EditorOperationRegistryEntry &entry : entries()) {
+    if (entry.id == id) {
+      return entry.operation;
+    }
+  }
+  return nullptr;
 }
 
-const OperationRegistry& operation_registry()
-{
+const OperationRegistry &operation_registry() {
   static const OperationRegistry kRegistry;
   return kRegistry;
 }
 
-std::span<const EditorOperation* const> editor_operation_registry()
-{
-	return operation_registry().operations();
+std::span<const EditorOperation *const> editor_operation_registry() {
+  return operation_registry().operations();
 }
 
-const EditorOperation *editor_operation_for_id(EditorOperationId operation_id)
-{
-	return operation_registry().find(operation_id);
+const EditorOperation *editor_operation_for_id(EditorOperationId operation_id) {
+  return operation_registry().find(operation_id);
 }
 
-const EditorOperation *editor_operation_for_id(std::string_view id)
-{
-	return operation_registry().find(id);
+const EditorOperation *editor_operation_for_id(std::string_view id) {
+  return operation_registry().find(id);
 }
 
 } // namespace quader_editor_core

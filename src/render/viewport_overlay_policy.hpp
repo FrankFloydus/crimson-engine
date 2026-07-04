@@ -20,6 +20,7 @@ enum class ViewportOverlayGeometryKind {
     Triangles,
     Lines,
     Points,
+    Icons,
 };
 
 /**
@@ -61,6 +62,7 @@ inline constexpr std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> kV
         ViewportOverlayLayer::SelectedVertex,
         ViewportOverlayLayer::HoverVertex,
         ViewportOverlayLayer::SnapTargetVertex,
+        ViewportOverlayLayer::PointLightGizmo,
         ViewportOverlayLayer::ToolPlane,
         ViewportOverlayLayer::ToolPreviewFill,
         ViewportOverlayLayer::ToolPlaneLine,
@@ -136,6 +138,7 @@ inline constexpr float kOverlayDrawnPlanePointSizePixels = 8.0f;
 inline constexpr float kOverlayDrawnPlaneLineWidthPixels = 2.0f;
 inline constexpr float kOverlayLightMarkerPointSizePixels = 13.0f;
 inline constexpr float kOverlayLightMarkerOutlineGrowthPixels = 2.0f;
+inline constexpr float kOverlayPointLightGizmoSizePixels = 64.0f;
 inline constexpr float kOverlayTransformGizmoSizePixels = 80.0f;
 inline constexpr float kOverlayTransformGizmoPickRadiusPixels = 12.0f;
 inline constexpr float kOverlayTransformGizmoMoveCenterRadiusPixels = 3.5f;

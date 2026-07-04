@@ -7,6 +7,9 @@
 #include "api/quader_commands_api.hpp"
 
 #include "api/quader_api.hpp"
+#ifndef NDEBUG
+#include "api/quader_dev_tools_api.hpp"
+#endif
 #include "api/quader_project_api.hpp"
 #include "api/quader_tools_api.hpp"
 #include "api/quader_viewport_api.hpp"
@@ -90,6 +93,17 @@ default_keybinding_context_for_command(std::string_view command_id) {
   return global_command_keybinding_context();
 }
 
+int default_keybinding_weight_for_command(std::string_view command_id) {
+#ifndef NDEBUG
+  if (command_id == quader_command::kDevCopySelectionJson.string()) {
+    return 2000;
+  }
+#else
+  (void)command_id;
+#endif
+  return 0;
+}
+
 std::string_view
 default_keybinding_context_for_contract_target(std::string_view target_id) {
   const std::optional<std::string> command_target =
@@ -148,10 +162,15 @@ viewport_keybinding_context(const ViewportToolState &state,
  */
 class QuaderCommandsApi::Impl final {
 public:
+#ifndef NDEBUG
+    Impl(QuaderApi& api, QuaderProjectApi& project, QuaderViewportApi& viewports, QuaderToolsApi& tools, QuaderDevToolsApi& dev_tools);
+#else
     Impl(QuaderApi& api, QuaderProjectApi& project, QuaderViewportApi& viewports, QuaderToolsApi& tools);
+#endif
 
     QuaderApiVoidResult execute(std::string_view command_id);
     QuaderApiVoidResult execute(QuaderCommandId command_id);
+    [[nodiscard]] std::optional<QuaderApiStatus> last_status() const;
     [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
     [[nodiscard]] std::string
     command_id_for_modeling_action(std::string_view action_id) const;
@@ -223,15 +242,30 @@ public:
     QuaderProjectApi& project_;
     QuaderViewportApi& viewports_;
     QuaderToolsApi& tools_;
+#ifndef NDEBUG
+    QuaderDevToolsApi& dev_tools_;
+#endif
     EditorCommandRegistry registry_;
     QuaderKeybindingService keybindings_;
+    std::optional<QuaderApiStatus> last_status_;
 };
 
-QuaderCommandsApi::Impl::Impl(QuaderApi& api, QuaderProjectApi& project, QuaderViewportApi& viewports, QuaderToolsApi& tools)
+QuaderCommandsApi::Impl::Impl(
+    QuaderApi &api, QuaderProjectApi &project, QuaderViewportApi &viewports,
+    QuaderToolsApi &tools
+#ifndef NDEBUG
+    ,
+    QuaderDevToolsApi &dev_tools
+#endif
+    )
     : api_(api)
     , project_(project)
     , viewports_(viewports)
-    , tools_(tools) {
+    , tools_(tools)
+#ifndef NDEBUG
+    , dev_tools_(dev_tools)
+#endif
+{
   keybindings_.set_storage_path(default_keybindings_path());
   register_commands();
   register_default_keybindings();
@@ -254,9 +288,17 @@ QuaderCommandsApi::Impl::execute(std::string_view command_id) {
   if (std::optional<QuaderApiVoidResult> result =
           registry_.execute(command_id)) {
     result->revisions = api_.revisions();
+    last_status_ = *result;
     return *result;
   }
-  return failure("Unknown command id.");
+  QuaderApiVoidResult result = failure("Unknown command id.");
+  last_status_ = result;
+  return result;
+}
+
+std::optional<QuaderApiStatus>
+QuaderCommandsApi::Impl::last_status() const {
+  return last_status_;
 }
 
 std::vector<QuaderCommandDescriptor> QuaderCommandsApi::Impl::available() const {
@@ -430,6 +472,9 @@ QuaderCommandsApi::Impl::set_shortcut(std::string_view command_id,
       break;
     }
   }
+  if (when.empty()) {
+    when = std::string(default_keybinding_context_for_command(target_id));
+  }
   const QuaderKeybindingMutationResult mutation =
       keybindings_.set_user_shortcut(target_id, std::move(shortcut), when);
   if (!mutation.ok) {
@@ -575,6 +620,14 @@ void QuaderCommandsApi::Impl::register_commands() {
   register_modeling_tool_public_command(quader_command::kApplyMaterial,
                                         "apply_active_material",
                                         "Apply Material");
+#ifndef NDEBUG
+  register_command(quader_command::kDevCopySelectionJson,
+                   "Dev: Copy Selection JSON",
+                   [this] {
+                     return dev_tools_.copy_selection_json_to_clipboard();
+                   },
+                   "Ctrl+Shift+C");
+#endif
   register_command(
       quader_command::kModelingApplyActivePreview, "Apply Active Preview",
       [this] { return api_.modeling().commit_preview("Apply Tool Preview"); });
@@ -610,8 +663,13 @@ void QuaderCommandsApi::Impl::register_commands() {
                      return quader_api_status_from_result(result);
                    });
   register_command(
-      quader_command::kViewportFrameSelection, "Frame Selection",
+      quader_command::kViewportFrameSelection, "Focus Selection",
       [this] { return viewports_.frame_selection(viewports_.focused_pane()); });
+  register_command(quader_command::kViewportFocusAll, "Focus All",
+                   [this] {
+                     return viewports_.frame_all(viewports_.focused_pane());
+                   },
+                   "Home");
   register_command(
       quader_command::kViewportFocusOrigin, "Focus Origin",
       [this] { return viewports_.focus_origin(viewports_.focused_pane()); });
@@ -681,7 +739,8 @@ void QuaderCommandsApi::Impl::register_default_keybindings() {
     if (!command.shortcut.empty()) {
       keybindings_.add_default_keybinding(
           command.id, command.shortcut,
-          std::string(default_keybinding_context_for_command(command.id)), 0);
+          std::string(default_keybinding_context_for_command(command.id)),
+          default_keybinding_weight_for_command(command.id));
     }
   }
 
@@ -800,8 +859,21 @@ QuaderApiVoidResult QuaderCommandsApi::Impl::failure(std::string message) const 
   };
 }
 
-QuaderCommandsApi::QuaderCommandsApi(QuaderApi& api, QuaderProjectApi& project, QuaderViewportApi& viewports, QuaderToolsApi& tools)
+#ifndef NDEBUG
+QuaderCommandsApi::QuaderCommandsApi(QuaderApi &api,
+                                     QuaderProjectApi &project,
+                                     QuaderViewportApi &viewports,
+                                     QuaderToolsApi &tools,
+                                     QuaderDevToolsApi &dev_tools)
+    : impl_(std::make_unique<Impl>(api, project, viewports, tools,
+                                   dev_tools)) {}
+#else
+QuaderCommandsApi::QuaderCommandsApi(QuaderApi &api,
+                                     QuaderProjectApi &project,
+                                     QuaderViewportApi &viewports,
+                                     QuaderToolsApi &tools)
     : impl_(std::make_unique<Impl>(api, project, viewports, tools)) {}
+#endif
 
 QuaderCommandsApi::~QuaderCommandsApi() = default;
 
@@ -811,6 +883,10 @@ QuaderApiVoidResult QuaderCommandsApi::execute(QuaderCommandId command_id) {
 
 QuaderApiVoidResult QuaderCommandsApi::execute(std::string_view command_id) {
   return impl_->execute(command_id);
+}
+
+std::optional<QuaderApiStatus> QuaderCommandsApi::last_status() const {
+  return impl_->last_status();
 }
 
 std::vector<QuaderCommandDescriptor> QuaderCommandsApi::available() const {

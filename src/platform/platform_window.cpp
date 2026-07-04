@@ -7,6 +7,7 @@
 #include "platform/platform_window.hpp"
 
 #include "core/logger.hpp"
+#include "platform/platform_event.hpp"
 #include "platform/sdl_event_utils.hpp"
 
 #include <SDL3/SDL_hints.h>
@@ -762,6 +763,11 @@ void PlatformWindow::apply_placement(const PlatformWindowPlacement &placement) {
     }
     refresh_pixel_size();
     request_live_resize_frame(true);
+}
+
+bool PlatformWindow::process_chrome_event(const PlatformEvent &event) {
+  const auto *sdl_event = static_cast<const SDL_Event *>(event.native_event);
+  return sdl_event != nullptr && process_chrome_event(*sdl_event);
 }
 
 bool PlatformWindow::process_chrome_event(const SDL_Event &event) {

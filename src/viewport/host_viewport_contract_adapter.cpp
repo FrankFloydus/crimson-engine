@@ -111,7 +111,7 @@ std::string viewport_grid_preset_target_id(int preset) {
 
 std::span<const ViewportShortcutTargetDescriptor>
 viewport_shortcut_target_catalog() {
-  static const std::array<ViewportShortcutTargetDescriptor, 27> kDescriptors{{
+  static const std::array<ViewportShortcutTargetDescriptor, 28> kDescriptors{{
       {"new_document", quader_command::kProjectNew.string(),
        viewport_target_shortcut(ViewportShortcutKind::None,
                                 ViewportShortcutContext::Global)},
@@ -168,8 +168,9 @@ viewport_shortcut_target_catalog() {
       {"invert_mesh",
        {},
        viewport_target_shortcut(ViewportShortcutKind::FlipMeshNormals)},
-      {"focus_all", quader_command::kViewportFrameSelection.string(),
+      {"focus_all", quader_command::kViewportFocusAll.string(),
        viewport_target_shortcut(ViewportShortcutKind::FocusDocument)},
+      {"focus_selection", quader_command::kViewportFrameSelection.string(), {}},
       {"focus_origin", quader_command::kViewportFocusOrigin.string(),
        viewport_target_shortcut(ViewportShortcutKind::FocusOrigin)},
       {"mirror_axis_x",
@@ -605,7 +606,7 @@ bool viewport_shortcut_for_command_target_id(std::string_view target_id,
 
 bool viewport_target_requires_router_dispatch(std::string_view target_id) {
   return viewport_view_for_command_target_id(target_id).has_value() ||
-         target_id == quader_command::kViewportFrameSelection.string() ||
+         target_id == quader_command::kViewportFocusAll.string() ||
          target_id == quader_command::kViewportFocusOrigin.string() ||
          target_id == "viewport.cancel_active_tool" ||
          target_id == "viewport.toggle_maximized" ||
@@ -660,6 +661,9 @@ bool viewport_shortcuts_match(const ViewportShortcut &lhs,
 
 std::optional<std::string> viewport_command_target_id_for_router_shortcut(
     const ViewportShortcut &shortcut) {
+  if (shortcut.kind == ViewportShortcutKind::None) {
+    return std::nullopt;
+  }
   for (const ViewportShortcutTargetDescriptor &descriptor :
        viewport_shortcut_target_catalog()) {
     const std::optional<std::string> command_target =

@@ -66,6 +66,10 @@ bool viewport_overlay_point_draws_on_top(ViewportOverlayLayer layer) {
          layer == ViewportOverlayLayer::ToolHandle;
 }
 
+bool viewport_overlay_icon_draws_on_top(ViewportOverlayLayer layer) {
+  return layer == ViewportOverlayLayer::PointLightGizmo;
+}
+
 ViewportOverlayDepthMode
 viewport_overlay_depth_mode(ViewportOverlayLayer layer,
                             ViewportOverlayGeometryKind kind) {
@@ -80,6 +84,10 @@ viewport_overlay_depth_mode(ViewportOverlayLayer layer,
   }
   if (kind == ViewportOverlayGeometryKind::Points &&
       viewport_overlay_point_draws_on_top(layer)) {
+    return ViewportOverlayDepthMode::DrawOnTop;
+  }
+  if (kind == ViewportOverlayGeometryKind::Icons &&
+      viewport_overlay_icon_draws_on_top(layer)) {
     return ViewportOverlayDepthMode::DrawOnTop;
   }
   return ViewportOverlayDepthMode::DepthTested;
@@ -102,6 +110,7 @@ float viewport_overlay_depth_bias(ViewportOverlayLayer layer,
   case ViewportOverlayGeometryKind::Lines:
     return kOverlayLineDepthBias;
   case ViewportOverlayGeometryKind::Points:
+  case ViewportOverlayGeometryKind::Icons:
     return kOverlayPointDepthBias;
   }
   return 0.0f;

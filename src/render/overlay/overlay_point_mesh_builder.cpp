@@ -73,4 +73,18 @@ bool OverlayPointMeshBuilder::append_point_quad(
   return true;
 }
 
+OverlayPointMesh OverlayPointMeshBuilder::build_icons(
+    const std::vector<const ViewportOverlayIcon *> &icons,
+    const ViewportOverlayCamera &camera, float size_pixels, float depth_bias) {
+  OverlayPointMesh mesh;
+  mesh.vertices.reserve(icons.size() * 4u);
+  mesh.indices.reserve(icons.size() * 6u);
+  const OverlayCameraProjector projector(camera);
+  for (const ViewportOverlayIcon *icon : icons) {
+    (void)append_point_quad(mesh, icon->position, icon->color, projector,
+                            size_pixels, depth_bias);
+  }
+  return mesh;
+}
+
 } // namespace quader
