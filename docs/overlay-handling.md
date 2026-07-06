@@ -68,9 +68,12 @@ Object mode:
 
 Vertex, edge, and face modes:
 
-- The active or selected mesh emits ordinary `SourceWire` lines for the editable topology.
-- The active or selected mesh also emits `SourceWireDepthStamp` triangle metadata. This is metadata
-  for visibility/picking support, not a rendered fill layer.
+- The active edit mesh emits ordinary `SourceWire` lines for editable topology. Other selected
+  meshes in component modes must not emit full-mesh source wire just because they are selected.
+- Entering component mode from a selected mesh must immediately show that mesh's `SourceWire`,
+  even before any component has been selected. This is the default active-edit-mesh wire.
+- The active edit mesh also emits `SourceWireDepthStamp` triangle metadata. This is metadata for
+  visibility/picking support, not a rendered fill layer.
 - Component modes must not emit object-mode `SelectedXrayFace` fill for the whole active mesh.
 - Hover candidates in component modes may emit source-wire lines and source-wire depth stamps before
   click selection. This is how component handles appear when the mesh is not yet selected.
@@ -80,11 +83,63 @@ Vertex, edge, and face modes:
 The common failure mode is mixing these rows: adding object-mode x-ray to component modes, or
 removing component source-wire visibility while trying to suppress object-mode x-ray.
 
+## Component Source-Wire Stickiness
+
+Component source-wire ownership has two different states:
+
+- Default active edit mesh: selected object or active object entered from object mode, with no
+  selected components yet.
+- Sticky component edit mesh: object with selected components for the current component mode.
+
+The default active edit mesh is only a fallback. It draws `SourceWire` while there is no component
+hover candidate, so switching from object mode into face, edge, or vertex mode immediately shows
+editable topology. Once the user hovers another mesh, the fallback active wire yields to the hover
+candidate unless the active mesh has a real component selection for the current mode.
+
+Sticky component ownership is mode-specific:
+
+- Face mode sticks only when `selection.faces` is non-empty.
+- Edge mode sticks only when `selection.edges` is non-empty.
+- Vertex mode sticks only when `selection.vertices` is non-empty.
+- Object selection, `active_object_id`, or a component selection from another mode is not enough.
+  For example, selected faces do not make the source wire stick in edge mode.
+
+The intended runtime behavior is:
+
+1. Select a mesh in object mode, switch to face mode, and see that mesh's cyan source wire
+   immediately.
+2. Hover a different mesh before selecting any face; the cyan source wire moves to the hovered mesh.
+3. Select a face on the first mesh; the cyan source wire sticks to that mesh and beats hover
+   candidates until the face selection is removed or converted away.
+4. Remove the last selected component; with no hover candidate, the active edit mesh wire is visible
+   again as fallback.
+
+Implementation ownership:
+
+- `component_selection_has_mode_components(...)` owns the mode-specific selection predicate.
+- `inferred_component_source_wire_object_id(...)` owns semantic frame fallback selection:
+  sticky component selection, then hover candidate, then fallback active selected mesh.
+- `ModelingOverlayService::selection_overlay_base_frame(...)` caches the fallback active edit mesh
+  source wire.
+- `ModelingOverlayService::selection_overlay_current_frame(...)` composes hover overlays and removes
+  the fallback active source wire when a different hover candidate replaces it.
+
+Do not make `object.selected` alone sticky in component mode. That recreates the old bug where
+clicking anywhere in component mode pinned the cyan wire to the previous object. Also do not require
+selected components just to draw the initial wire after a mode switch; that breaks the object-to-edit
+mode workflow.
+
 ## Source Wire And Depth Stamps
 
 `SourceWire` is editable topology. It should be crisp, stable, screen-space expanded, and drawn on
 top after render extraction. Do not depth-test ordinary source-wire line batches directly against
 the shaded mesh, because that causes disappearing or fading edges at distance and shallow angles.
+
+Component selected and hover handles are different from source wire. Projection marks selected and
+hover component edge/vertex handles with component-specific overlay sources, and render extraction
+depth-tests only those marked primitives. This prevents selected component highlights from x-raying
+through opaque geometry while preserving the old source-wire behavior for the active edit mesh in
+inverted-normal rooms.
 
 `SourceWireDepthStamp` is metadata:
 
@@ -150,6 +205,8 @@ The policy owner is `src/render/viewport_overlay_policy.cpp`.
 - Draw-on-top lines include `SourceWire`, `SelectedFaceEdge`, `SelectedEdge`, `HoverFaceEdge`,
   `HoverEdge`, `GroupBounds`, `DiagnosticEdge`, `WireframeXray`, and tool line/handle layers.
 - Draw-on-top points include selected, hover, snap, and tool handles.
+- Component-mode selected/hover edge and vertex handles carry component overlay sources and are
+  batched as depth-tested primitives even though their layers remain draw-on-top by default.
 - Depth-tested layers include base wireframe, open edges, and unselected vertices unless policy says
   otherwise.
 - `WireframeBase` is the depth-tested overlay policy layer. Wireframe viewport mode must use
@@ -175,6 +232,146 @@ The policy owner is `src/render/viewport_overlay_policy.cpp`.
   with the selected wire color instead of relying on the normal selected-object overlay layer,
   because wireframe mode uses per-pane grid layer masks.
 
+## bgfx Renderer Translation
+
+The bgfx port should keep the same ownership split as Quader: build semantic overlay frames outside
+the renderer, then let the renderer batch and draw those primitives. Do not put selection rules in
+bgfx draw code.
+
+### Semantic Overlay Data
+
+Keep renderer-facing overlay records close to these shapes:
+
+- Line: layer, style role, source kind, world-space start/end, color token or resolved color, pixel
+  width, object id, face id, edge id/endpoints.
+- Point: layer, style role, source kind, world-space position, color, pixel size, object id, vertex
+  id.
+- Triangle: layer, style role, world-space vertices, color, object id, face id.
+
+The `source kind` must distinguish at least:
+
+- object selection;
+- component selection;
+- component hover;
+- source wire;
+- tool preview;
+- scene/wireframe diagnostics.
+
+This is required because selected/hover component edges may use the same visual layer names as
+draw-on-top overlays, but they need depth-tested batches. Layer alone is not enough.
+
+### Selection Policy Before Rendering
+
+Implement the component source-wire owner before producing bgfx draw batches:
+
+1. If object mode, selected meshes emit selected object wire and optional object x-ray fill. They do
+   not emit `SourceWire`.
+2. If component mode and an object has selected components for that exact mode, that object owns the
+   sticky source wire.
+3. Else if a component hover candidate exists, the candidate owns the source wire.
+4. Else if a selected/active mesh exists, that mesh owns the fallback edit source wire.
+5. No other selected mesh emits full source wire.
+
+Selected component handles are emitted separately from source wire. Hover component handles are also
+separate. A selected face/edge/vertex can add highlighted handles over the wire, but must not remove
+the source-wire topology.
+
+### Recommended bgfx Views
+
+Use explicit views or explicit submit ordering for these overlay phases:
+
+1. Scene/depth view: normal shaded scene depth.
+2. Optional overlay depth-proxy view: depth-only mesh proxies when shaded/rendered scene is visible.
+3. Face-fill depth view: selected/hover face fill depth stamp.
+4. Face-fill color view: selected/hover face fill color where depth equals the stamped fill depth.
+5. Depth-tested component handle view: selected/hover component lines and points.
+6. Draw-on-top line/point view: source wire, object selected wire, hover helpers, tool lines, snap
+   handles, diagnostics, and x-ray wireframe.
+
+Do not depth-test `SourceWire` in the component handle view. It belongs in the draw-on-top view.
+
+### bgfx State Mapping
+
+Draw-on-top source wire and object/helper lines:
+
+- Build screen-space-expanded line quads from world-space endpoints.
+- Use alpha blending and color writes.
+- Disable depth test by omitting bgfx depth-test state bits, or use an always-pass state if your
+  renderer wrapper requires one.
+- Disable depth writes.
+- Disable culling.
+- Keep stable pixel width from viewport settings.
+
+Depth-tested component selected/hover lines and points:
+
+- Build the same screen-space line/point quads, but submit them in the component handle view.
+- Bind the scene/overlay depth buffer for testing.
+- Use `BGFX_STATE_DEPTH_TEST_LEQUAL` for normal depth buffers.
+- Use `BGFX_STATE_DEPTH_TEST_GEQUAL` for reversed-depth buffers.
+- Disable depth writes.
+- Use alpha blending and color writes.
+- Disable culling.
+- Apply a tiny post-projection depth bias toward the camera. Do not move X/Y.
+
+Depth bias rule:
+
+- Normal depth: closer means smaller depth, so subtract a small NDC/device depth offset.
+- Reversed depth: closer means larger depth, so add a small NDC/device depth offset.
+- In clip-space terms, apply the offset as `clip.z += ndcOffset * clip.w`, with the sign chosen for
+  the depth convention, then clamp to the valid clip/depth range.
+- Keep the offset tiny and capped; it is only to avoid same-surface z fighting, not to make hidden
+  component handles x-ray.
+
+Selected and hover face fills:
+
+- Submit a depth-only pass first with depth writes enabled.
+- Submit a color pass with alpha blending and equal-depth testing against the fill depth pass.
+- Use `LEQUAL`/`EQUAL` for normal depth or the equivalent reversed-depth tests for a reversed buffer.
+- Disable triangle culling for both passes.
+- Treat the fill as two-sided transparency; do not duplicate reversed triangles as a workaround.
+
+Source-wire depth stamps:
+
+- Keep them as semantic metadata, not a bgfx draw batch.
+- If the bgfx project implements source-wire self-visibility filtering, compute it as a separate
+  camera-dependent filter over the metadata. Never erase source-wire topology from the semantic
+  overlay frame.
+- Preserve the inverted-normal rule: inside-out rooms keep internal topology visible. Do not use
+  face winding or normal direction to hide all backfacing/internal source-wire edges.
+
+### Batching And Caching
+
+Cache by primitive kind, layer, style role, source kind, depth mode, texture/material, and viewport
+view id. A single visual layer can split into two bgfx batches when one subset is component
+depth-tested and another subset is draw-on-top.
+
+Camera-only changes:
+
+- Rebuild screen-space line and point buffers because quad expansion depends on projection.
+- Do not rebuild world-space face-fill geometry unless the semantic overlay frame changed.
+- Recompute any source-wire depth-stamp visibility filter only when the frame contains depth-stamp
+  metadata.
+
+Scene transform-only changes:
+
+- Stream transformed line/point vertices where possible.
+- Keep selected object wire topology cached by mesh/entity revision.
+
+### bgfx Regression Checklist
+
+Before accepting the port, verify these cases visually and with headless policy tests where
+possible:
+
+- Object mode hover does not show source wire before selection.
+- Object mode selection shows selected wire and optional object x-ray fill, but no `SourceWire`.
+- Switching a selected mesh into component mode immediately shows fallback source wire.
+- Hovering another mesh before selecting a component moves source wire to the hover candidate.
+- Selected face, edge, or vertex sticks source wire only in the matching mode.
+- Component mode never shows whole-object x-ray fill.
+- `SourceWire` stays crisp and draw-on-top on inverted rooms from outside and inside.
+- Component selected/hover handles depth-test and do not x-ray through opaque geometry.
+- Inverted selected/hover face fills are visible because face-fill passes are two-sided.
+
 ## Regression Tests
 
 Before changing overlays, find or add coverage in these suites:
@@ -182,6 +379,9 @@ Before changing overlays, find or add coverage in these suites:
 - `tests/modeling_domain/qdr_modeling_runtime_overlay_tests.cpp`
   - object mode selected mesh x-ray and selected outline;
   - component mode source-wire color and no object x-ray;
+  - component mode source wire emitted only by the active edit mesh;
+  - component source-wire stickiness, including fallback active wire, hover replacement, and
+    mode-specific selected components;
   - component hover candidate source-wire behavior;
   - inverted open-cube inner edge hover/deselect color;
   - selected component overlays preserving active mesh source wire;
@@ -192,6 +392,7 @@ Before changing overlays, find or add coverage in these suites:
 - `tests/render_extraction_tests.cpp`
   - screen-space line expansion;
   - source-wire draw-on-top batches;
+  - component selected/hover line and point batches split into depth-tested render state;
   - outward source-wire depth-stamp culling;
   - inside-out source-wire depth-stamp visibility;
   - source-wire depth stamps producing no render batches;
@@ -199,7 +400,7 @@ Before changing overlays, find or add coverage in these suites:
 - `tests/core_tests.cpp`
   - native overlay layer order;
   - depth mode, draw-on-top, color, width, and style resolver policy;
-  - service-level selection overlay extraction.
+  - service-level selection overlay extraction, including active-only component source wire.
 
 If a visual overlay bug is fixed without a test in one of those suites, expect the same regression
 to return.

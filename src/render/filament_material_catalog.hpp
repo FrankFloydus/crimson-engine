@@ -16,6 +16,7 @@ inline constexpr std::string_view kQuaderMeshLitMaterialFile = "quader_mesh_lit.
 inline constexpr std::string_view kVertexColorOverlayMaterialFile = "vertex_color_overlay.filamat";
 inline constexpr std::string_view kOverlayLineMaterialFile = "quader_overlay_line.filamat";
 inline constexpr std::string_view kSelectedObjectLineMaterialFile = "quader_selected_object_line.filamat";
+inline constexpr std::string_view kEditWireLineMaterialFile = "quader_edit_wire_line.filamat";
 inline constexpr std::string_view kOverlayPointMaterialFile = "quader_overlay_point.filamat";
 inline constexpr std::string_view kOverlayIconMaterialFile = "quader_overlay_icon.filamat";
 inline constexpr std::string_view kImguiMaterialFile = "imgui.filamat";

@@ -280,6 +280,21 @@ quader_poly::SelectionMode component_selection_mode(SelectionMode mode) {
   }
 }
 
+bool component_selection_has_mode_components(
+    const quader_poly::Selection &selection, SelectionMode mode) {
+  switch (mode) {
+  case SelectionMode::Vertex:
+    return !selection.vertices.empty();
+  case SelectionMode::Edge:
+    return !selection.edges.empty();
+  case SelectionMode::Face:
+    return !selection.faces.empty();
+  case SelectionMode::Object:
+    return false;
+  }
+  return false;
+}
+
 bool polygon_selection_matches(const quader_poly::Selection &left,
                                const quader_poly::Selection &right) {
   return left.mode == right.mode && left.vertices == right.vertices &&

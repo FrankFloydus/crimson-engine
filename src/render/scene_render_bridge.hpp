@@ -33,6 +33,8 @@
 
 namespace quader {
 
+class ViewportSettings;
+
 /**
  * Stores the viewport-pane presentation data needed for render-owned scene
  * overlay extraction.
@@ -61,11 +63,14 @@ public:
                     filament::Material &overlay_material,
                     filament::Material &overlay_line_material,
                     filament::Material &selected_object_line_material,
+                    filament::Material &edit_wire_line_material,
                     filament::Material &overlay_point_material,
                     filament::Material &overlay_icon_material,
                     std::filesystem::path resource_root);
     void shutdown();
     void sync(const RenderSceneSnapshot &snapshot);
+    void update_mesh_surface_grid(float grid_world_spacing,
+                                  const ViewportSettings &settings);
     void sync_scene_asset_overlays(
         const RenderOverlaySelectedObjectSnapshot &selected_object_snapshot,
         const RenderOverlaySceneWireframeSnapshot &wireframe_snapshot);

@@ -9,6 +9,78 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-04 - Component Source-Wire Stickiness Is Mode-Specific
+
+Task/context: after source-wire overlay changes, component mode either stuck the cyan wire to the
+previous object after any click or hid the wire when switching from selected object mode into
+component mode.
+
+Invariant:
+
+- Entering component mode from a selected mesh shows that mesh's fallback `SourceWire` immediately,
+  even with no selected components.
+- A component hover candidate replaces that fallback wire when the active object has no selected
+  component for the current mode.
+- Sticky source-wire ownership requires selected components for the exact mode: faces for face mode,
+  edges for edge mode, vertices for vertex mode. Object selection, `active_object_id`, and component
+  selections from another mode are not sticky.
+- Removing the last selected component leaves the active mesh fallback wire visible until another
+  hover candidate replaces it.
+
+Affected owners/files:
+
+- `src/editor/modeling/runtime/session.cpp`
+- `src/editor/modeling/runtime/session_selection_overlay.cpp`
+- `src/editor/modeling/services/modeling_session_services.cpp`
+- `tests/modeling_domain/qdr_modeling_runtime_overlay_tests.cpp`
+- `docs/overlay-handling.md`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader`
+- `cmake --build --preset vs2026-debug --target quader_modeling_domain_runtime_loop_tests`
+- `build\vs2026\Debug\quader_modeling_domain_runtime_loop_tests.exe --gtest_color=no --gtest_filter=QdrModelingRuntimeOverlayTests.QdrEditorCoreOverlayTests`
+
+## 2026-07-04 - Component Handles Depth-Test Without Source-Wire Depth Testing
+
+Task/context: component selected/hover handles needed to stop x-raying through opaque geometry, but
+a broader attempt to depth-test `SourceWire` revived old inverted-normal visibility failures.
+
+Invariant:
+
+- `SourceWire` remains draw-on-top editable topology and keeps `SourceWireDepthStamp` as
+  non-rendered visibility metadata.
+- Component-mode base-frame `SourceWire` and `SourceWireDepthStamp` emission is active-edit-mesh
+  only. Other selected meshes must not emit full-mesh source wire just because they are selected.
+- Component selected/hover edge and vertex handles are projected with component-specific
+  `ViewportOverlaySource` values.
+- `ViewportOverlayPolicy` depth-tests only those marked component selected/hover primitives.
+  Object-mode selected wires and unmarked helper overlays keep their layer-level draw-on-top
+  behavior.
+- `OverlayRenderableBuilder` must split line and point batches by primitive depth mode so a single
+  native layer can contain both component depth-tested handles and object/helper draw-on-top
+  handles.
+
+Affected owners/files:
+
+- `src/editor/projection/selection_overlay_projection.*`
+- `src/editor/modeling/runtime/session_selection_overlay.cpp`
+- `src/editor/modeling/services/modeling_session_services.cpp`
+- `src/render/viewport_overlay_frame.hpp`
+- `src/render/viewport_overlay_policy.*`
+- `src/render/overlay/overlay_renderable_builder.*`
+- `tests/core_tests.cpp`
+- `tests/modeling_domain/qdr_modeling_runtime_overlay_tests.cpp`
+- `tests/render_extraction_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ModelingSessionServiceTests.ComponentModeSourceWireUsesActiveEditMeshOnly:ModelingSessionServiceTests.SwitchingSelectedObjectToEdgeModeShowsHandlesImmediately:ModelingSessionServiceTests.SwitchingSelectedObjectToFaceModeShowsHandlesImmediately:ViewportOverlayPolicyTests.*:SelectionOverlayProjectionTests.*:OverlayLineMeshBuilderTests.*:OverlayPointMeshBuilderTests.*:SceneRenderBridgeTests.MeshRenderablesReceiveShadowsAndViewportEnablesShadowing`
+- `cmake --build --preset vs2026-debug --target quader_modeling_domain_runtime_loop_tests`
+- `build\vs2026\Debug\quader_modeling_domain_runtime_loop_tests.exe --gtest_color=no --gtest_filter=QdrModelingRuntimeOverlayTests.*:QdrModelingRuntimePickingTests.*`
+- `cmake --build --preset vs2026-debug --target quader`
+
 ## 2026-07-04 - Point Lights Use Selectable Billboard Gizmos
 
 Task/context: point lights needed a larger upright PNG viewport gizmo, visible in shaded and
@@ -2293,4 +2365,49 @@ Verification:
 
 - `cmake --build --preset vs2026-debug --target quader_tests`
 - `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportInputFrameBuilderTests.ModifierHelperPreservesCanonicalKeyMods:SdlInputAdapterTests.KeyEventModifiersBuildPressedShortcutChord:ViewportInputFrameBuilderTests.EventPressedChordsOverrideImGuiPressedFallback:ViewportInputRouterTests.ConsumedCommandKeybindingDoesNotRouteViewportShortcut:ViewportInputRouterTests.EmptyShortcutSentinelDoesNotRouteViewportAction:ViewportHostContractAdapterTests.EmptyShortcutDoesNotMapToCommandTarget:EditorApiTests.GlobalCommandKeybindingsResolveWithAndWithoutViewportFocus:EditorApiTests.DebugCopySelectionJsonShortcutWinsOverFocusSelectionBind:EditorApiTests.FocusSelectionUserShortcutUsesViewportContext`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-07-06 - Mesh Surface Grid Shader Is A Mesh Material Uniform Path
+
+Task/context: Add an optional TrenchBroom-style grid drawn on mesh surfaces while keeping the
+ground grid and overlay systems as separate owners. The feature is toggled from View > Mesh Grid and
+uses dedicated mesh-grid minor/major color-alpha settings plus existing viewport grid line-size
+settings.
+
+Invariants:
+
+- Mesh surface grid drawing belongs in the mesh Filament materials and `MaterialBindingService`
+  uniforms. Do not add separate overlay geometry for this path; overlay depth proxies must remain
+  depth-only and must not receive visible grid updates.
+- `ViewportSettings` owns the persisted `ShowMeshGrid` toggle. The UI menu should route through the
+  normal viewport bool setting helper, while `ViewportPanel::prepare_viewports()` passes the full
+  current settings and grid preset to `SceneRenderBridge::update_mesh_surface_grid(...)`.
+- `ViewportSettings` also owns `MeshGridMinorColor` and `MeshGridMajorColor`; the settings panel
+  exposes them from the normal descriptor model and `MaterialBindingService` maps them to
+  `surfaceGridMinorColor` / `surfaceGridMajorColor`.
+- Mesh grid line thickness changes width only. Do not multiply mesh-grid line coverage by
+  `min(thickness, 1.0)`, because that makes selected RGB colors unable to reach the chosen color
+  even when color alpha is 1.0.
+- Default mesh albedo still resolves through `materials/default/default_albedo.png`; temporary
+  source swaps should preserve the previous image beside it instead of changing catalog package
+  paths.
+
+Affected owners/files:
+
+- `resources/materials/quader_mesh*.mat`
+- `src/render/material_binding_service.*`
+- `src/render/mesh_renderable_factory.*`
+- `src/render/mesh_renderable_cache.*`
+- `src/render/scene_render_bridge.*`
+- `src/ui/main_menu_bar.cpp`
+- `src/ui/viewport_panel.cpp`
+- `src/viewport/viewport_settings.*`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_mesh_material quader_mesh_lit_material`
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportSettingsTests.*:QuaderMeshMaterialTests.*:SceneRenderBridgeTests.UsesExplicitTextureColorSpaceForMaterialUploads:ViewportRendererTests.MultiViewportRenderDoesNotMutateSceneInsideFilamentFrame:GroundGridMaterialTests.*:LocalizationTests.*:Localization*`
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=UiLayoutGuardrailTests.*:BuildGuardrailTests.LocalizationResourcesArePackagedWithRuntime:BuildGuardrailTests.ImGuiRuntimeResourcesArePackagedWithRuntime:BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime:BuildGuardrailTests.ImGuiShellViewportAndControlStylingStayVisible:ProgrammaticApiGuardrailTests.*Viewport*`
 - `cmake --build --preset vs2026-debug --target quader`

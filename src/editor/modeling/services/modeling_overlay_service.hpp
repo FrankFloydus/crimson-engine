@@ -118,6 +118,7 @@ private:
       quader_editor_core::SelectionMode selection_mode =
           quader_editor_core::SelectionMode::Object;
       bool selected = false;
+      bool active_source_wire_object = false;
       quader_poly::Selection selection;
       quader_editor_core::SelectionOverlayFrame frame;
     };
@@ -129,6 +130,7 @@ private:
         bool valid = false;
         std::uint64_t content_revision = 0;
         std::uint64_t selection_revision = 0;
+        int active_object_id = -1;
         quader_editor_core::SelectionMode selection_mode =
             quader_editor_core::SelectionMode::Object;
         bool suppress_persistent_object_selection = false;

@@ -44,6 +44,15 @@ void destroy_detached_proxy_vector(MeshRenderableFactory &factory,
   proxies.clear();
 }
 
+void update_surface_grid_proxy_map(
+    MeshRenderableFactory &factory,
+    const std::unordered_map<EntityId, MeshRenderableProxy> &proxies,
+    float grid_world_spacing, const ViewportSettings &settings) {
+  for (const auto &entry : proxies) {
+    factory.update_surface_grid(entry.second, grid_world_spacing, settings);
+  }
+}
+
 } // namespace
 
 MeshRenderableCache::~MeshRenderableCache() {
@@ -122,6 +131,19 @@ void MeshRenderableCache::sync_mesh(const RenderSceneMeshRecord &mesh) {
     QDR_PROFILE_SCOPE("Mesh renderable update depth transform");
     factory_->update_transform(existing->second, mesh.world_transform);
   }
+}
+
+void MeshRenderableCache::update_surface_grid(
+    float grid_world_spacing, const ViewportSettings &settings) {
+  QDR_PROFILE_FUNCTION();
+  if (!factory_) {
+    return;
+  }
+
+  update_surface_grid_proxy_map(*factory_, rendered_mesh_proxies_,
+                                grid_world_spacing, settings);
+  update_surface_grid_proxy_map(*factory_, shaded_mesh_proxies_,
+                                grid_world_spacing, settings);
 }
 
 void MeshRenderableCache::remove(EntityId entity_id) {

@@ -14,6 +14,10 @@ inline constexpr ViewportSettingColor kDefaultViewportGridMinorColor = {
     150.0f / 255.0f, 150.0f / 255.0f, 150.0f / 255.0f, 1.0f};
 inline constexpr ViewportSettingColor kDefaultViewportGridMajorColor = {
     210.0f / 255.0f, 210.0f / 255.0f, 210.0f / 255.0f, 1.0f};
+inline constexpr ViewportSettingColor kDefaultViewportMeshGridMinorColor = {
+    0.02f, 0.02f, 0.02f, 1.0f};
+inline constexpr ViewportSettingColor kDefaultViewportMeshGridMajorColor = {
+    1.0f, 0.84f, 0.22f, 1.0f};
 inline constexpr float kDefaultViewportGridMinorLineSize = 0.325f;
 inline constexpr float kDefaultViewportGridMajorLineSize = 0.250f;
 inline constexpr float kDefaultViewportGridAxisLineSize = 1.0f;

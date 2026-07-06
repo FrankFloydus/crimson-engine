@@ -41,6 +41,9 @@ bool FilamentMaterialLibrary::initialize(
     LOG_INFO("Loading selected object line material");
     selected_object_line_material_ =
         load(material_dir / std::string(kSelectedObjectLineMaterialFile));
+    LOG_INFO("Loading edit wire line material");
+    edit_wire_line_material_ =
+        load(material_dir / std::string(kEditWireLineMaterialFile));
     LOG_INFO("Loading overlay point material");
     overlay_point_material_ =
         load(material_dir / std::string(kOverlayPointMaterialFile));
@@ -71,6 +74,7 @@ void FilamentMaterialLibrary::shutdown() {
     destroy(vertex_color_overlay_material_);
     destroy(overlay_line_material_);
     destroy(selected_object_line_material_);
+    destroy(edit_wire_line_material_);
     destroy(overlay_point_material_);
     destroy(overlay_icon_material_);
     destroy(imgui_material_);

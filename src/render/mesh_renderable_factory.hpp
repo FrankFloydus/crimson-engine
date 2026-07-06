@@ -20,6 +20,7 @@
 namespace quader {
 
 class MaterialBindingService;
+class ViewportSettings;
 
 /**
  * Creates Mesh Renderable Factory resources for the render extraction and Filament resource layer.
@@ -50,6 +51,9 @@ public:
            std::uint8_t channel = kViewportDefaultRenderableChannel);
     void update_transform(const MeshRenderableProxy &proxy,
                           const QMat4 &world_transform);
+    void update_surface_grid(const MeshRenderableProxy &proxy,
+                             float grid_world_spacing,
+                             const ViewportSettings &settings);
     void remove_from_scene(const MeshRenderableProxy &proxy);
     void destroy(MeshRenderableProxy& proxy);
     void destroy_detached(MeshRenderableProxy &proxy);

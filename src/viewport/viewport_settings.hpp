@@ -44,6 +44,8 @@ enum class ViewportSettingsSectionId {
 enum class ViewportColorSettingId {
     GridMinor,
     GridMajor,
+    MeshGridMinor,
+    MeshGridMajor,
     GridXAxis,
     GridYAxis,
     GridZAxis,
@@ -91,6 +93,7 @@ enum class ViewportFloatSettingId {
  */
 enum class ViewportBoolSettingId {
     ShowGrid,
+    ShowMeshGrid,
     ShowGizmos,
     ShowOverlays,
     ShowInfo,

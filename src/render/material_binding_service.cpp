@@ -6,16 +6,39 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/material_binding_service.hpp"
 
+#include "core/color_space.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/texture_binding_service.hpp"
+#include "viewport/viewport_settings.hpp"
 
 #include <filament/TextureSampler.h>
 #include <math/vec4.h>
+
+#include <algorithm>
 
 namespace quader {
 namespace {
 
 constexpr float kMeshTextureAnisotropy = 8.0f;
+constexpr float kMeshSurfaceMajorGridMultiplier = 4.0f;
+
+filament::math::float4 setting_color(ViewportSettingColor color) {
+  return {
+      srgb_to_linear(color.r),
+      srgb_to_linear(color.g),
+      srgb_to_linear(color.b),
+      color.a,
+  };
+}
+
+void bind_default_mesh_surface_grid(const MaterialBindingService &binding,
+                                    filament::MaterialInstance *instance) {
+  if (!instance) {
+    return;
+  }
+  const ViewportSettings default_settings = ViewportSettings::defaults();
+  binding.apply_mesh_surface_grid(*instance, 1.0f, default_settings);
+}
 
 } // namespace
 
@@ -76,6 +99,7 @@ MaterialBindingService::create_mesh_material_instance(
   material_instance->setParameter(
       "baseColorFactor",
       filament::math::float4{base_color.x, base_color.y, base_color.z, 1.0f});
+  bind_default_mesh_surface_grid(*this, material_instance);
   if (!editor_unlit) {
     material_instance->setParameter(
         material_texture_slot::kRoughness,
@@ -124,6 +148,7 @@ MaterialBindingService::create_mesh_material_instance(
   material_instance->setParameter(
       "baseColorFactor",
       filament::math::float4{base_color.x, base_color.y, base_color.z, 1.0f});
+  bind_default_mesh_surface_grid(*this, material_instance);
   if (!editor_unlit) {
     material_instance->setParameter(
         material_texture_slot::kRoughness,
@@ -139,6 +164,31 @@ MaterialBindingService::create_mesh_material_instance(
         material && material->present ? material->document.roughness : 1.0f);
   }
   return material_instance;
+}
+
+void MaterialBindingService::apply_mesh_surface_grid(
+    filament::MaterialInstance &material_instance, float grid_world_spacing,
+    const ViewportSettings &settings) const {
+  const float spacing = std::max(grid_world_spacing, 0.0001f);
+  material_instance.setParameter(
+      "surfaceGridMinorColor",
+      setting_color(settings.color(ViewportColorSettingId::MeshGridMinor)));
+  material_instance.setParameter(
+      "surfaceGridMajorColor",
+      setting_color(settings.color(ViewportColorSettingId::MeshGridMajor)));
+  material_instance.setParameter("surfaceGridSize", spacing);
+  material_instance.setParameter(
+      "surfaceGridMajorSize",
+      std::max(spacing * kMeshSurfaceMajorGridMultiplier, spacing));
+  material_instance.setParameter(
+      "surfaceGridMinorLineThickness",
+      settings.float_value(ViewportFloatSettingId::GridMinorLineSize));
+  material_instance.setParameter(
+      "surfaceGridMajorLineThickness",
+      settings.float_value(ViewportFloatSettingId::GridMajorLineSize));
+  material_instance.setParameter(
+      "surfaceGridEnabled",
+      settings.bool_value(ViewportBoolSettingId::ShowMeshGrid) ? 1.0f : 0.0f);
 }
 
 } // namespace quader

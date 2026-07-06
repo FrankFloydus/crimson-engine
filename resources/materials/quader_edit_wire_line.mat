@@ -1,0 +1,51 @@
+material {
+    name : QuaderEditWireLine,
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : false,
+    depthCulling : true,
+    doubleSided : true,
+    vertexDomain : device,
+    requires : [
+        color,
+        custom0
+    ],
+    variables : [
+        lineDistancePixels
+    ],
+    parameters : [
+        {
+            type : float,
+            name : lineWidth
+        },
+        {
+            type : float,
+            name : featherPixels
+        }
+    ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        material.lineDistancePixels = getCustom0();
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        float lineWidth = max(materialParams.lineWidth, 1.0);
+        float smoothWidth = max(materialParams.featherPixels, 0.0);
+        float alphaScale = 1.0;
+        if (smoothWidth <= 0.0001) {
+            alphaScale = step(abs(variable_lineDistancePixels.x), lineWidth * 0.5);
+        } else {
+            alphaScale = saturate((lineWidth + smoothWidth) * 0.5 - abs(variable_lineDistancePixels.x));
+        }
+
+        vec4 color = getColor();
+        color.a *= alphaScale;
+        material.baseColor = vec4(color.rgb * color.a, color.a);
+    }
+}

@@ -19,6 +19,7 @@
 namespace quader {
 
 class TextureBindingService;
+class ViewportSettings;
 
 /**
  * Coordinates Material Binding Service responsibilities for the render extraction and Filament resource layer.
@@ -51,6 +52,9 @@ public:
     filament::MaterialInstance *create_mesh_material_instance(
         const RenderMaterialAssetSnapshot *material, bool double_sided,
         bool editor_unlit = false) const;
+    void apply_mesh_surface_grid(filament::MaterialInstance &material_instance,
+                                 float grid_world_spacing,
+                                 const ViewportSettings &settings) const;
 
   private:
     filament::Material *shaded_mesh_material_ = nullptr;

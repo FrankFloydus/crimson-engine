@@ -819,6 +819,7 @@ void ViewportPanel::prepare_viewports(ViewportWorkspaceService &workspace,
       settings.bool_value(ViewportBoolSettingId::ShowGizmos);
   const bool overlays_visible =
       settings.bool_value(ViewportBoolSettingId::ShowOverlays);
+  render_bridge.update_mesh_surface_grid(grid_world_size, settings);
   const ModelingSelectionMode cached_overlay_mode =
       selection_overlay_cache_.valid()
           ? selection_overlay_cache_.key().selection_mode

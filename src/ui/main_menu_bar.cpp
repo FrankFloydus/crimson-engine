@@ -292,6 +292,11 @@ void draw_view_menu_contents(MainMenuBarContext &context,
                                            "ui.menu.view.grid", "Grid") ||
       result.viewport_settings_changed;
   result.viewport_settings_changed =
+      draw_viewport_bool_setting_menu_item(
+          context, ViewportBoolSettingId::ShowMeshGrid,
+          "ui.menu.view.mesh_grid", "Mesh Grid") ||
+      result.viewport_settings_changed;
+  result.viewport_settings_changed =
       draw_viewport_bool_setting_menu_item(context,
                                            ViewportBoolSettingId::ShowGizmos,
                                            "ui.menu.view.gizmos", "Gizmos") ||

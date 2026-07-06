@@ -19,6 +19,8 @@
 
 namespace quader {
 
+class ViewportSettings;
+
 /**
  * Caches Mesh Renderable Cache derived state for the render extraction and Filament resource layer.
  */
@@ -44,6 +46,8 @@ public:
     bool needs_rebuild(const RenderSceneMeshRecord &mesh) const;
 
     void sync_mesh(const RenderSceneMeshRecord &mesh);
+    void update_surface_grid(float grid_world_spacing,
+                             const ViewportSettings &settings);
     void remove(EntityId entity_id);
     void remove_except(const std::unordered_set<EntityId> &live_mesh_entities);
     void drain_retired_destroy_queue(std::size_t max_proxy_count);

@@ -227,6 +227,53 @@ void append_source_wire_depth_stamp(
         }
 }
 
+void append_source_wire_line(
+		SelectionOverlayFrame& frame,
+		quader::QVec3 start,
+		quader::QVec3 end,
+		std::uint32_t color,
+		float width,
+		int object_id,
+		quader_poly::ElementId face_id,
+		quader_poly::Edge edge)
+{
+	frame.lines.push_back({
+			SelectionOverlayLayer::SourceWire,
+			start,
+			end,
+			color,
+			width,
+			object_id,
+			face_id,
+			edge,
+	});
+}
+
+void append_source_wire_face_edges(
+		SelectionOverlayFrame& frame,
+		const PolygonObject& object,
+		const SelectionOverlayStyle& style)
+{
+	for (const quader_poly::Face& face : object.document.faces) {
+		if (face.vertices.size() < 2) {
+			continue;
+		}
+		for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+			const quader_poly::ElementId a_id = face.vertices[index];
+			const quader_poly::ElementId b_id = face.vertices[(index + 1U) % face.vertices.size()];
+			const quader_poly::Vertex* a = quader_poly::find_vertex(object.document, a_id);
+			const quader_poly::Vertex* b = quader_poly::find_vertex(object.document, b_id);
+			if (a == nullptr || b == nullptr) {
+				continue;
+			}
+			const quader_poly::Edge edge = quader_poly::make_edge(a_id, b_id);
+			append_source_wire_line(frame, a->position, b->position,
+					style.source_wire_color_abgr,
+					style.edge_line_width_pixels, object.id, face.id, edge);
+		}
+	}
+}
+
 void append_hover_source_wire(
 		SelectionOverlayFrame& frame,
 		const PolygonObject& object,
@@ -242,16 +289,9 @@ void append_hover_source_wire(
 		if (a == nullptr || b == nullptr) {
 			continue;
 		}
-                frame.lines.push_back({
-                    SelectionOverlayLayer::SourceWire,
-                    a->position,
-                    b->position,
-                    style.source_wire_color_abgr,
-                    style.edge_line_width_pixels,
-                    object.id,
-                    quader_poly::kInvalidElementId,
-                    edge,
-                });
+                append_source_wire_line(frame, a->position, b->position,
+                    style.source_wire_color_abgr, style.edge_line_width_pixels,
+                    object.id, quader_poly::kInvalidElementId, edge);
         }
 }
 
@@ -358,11 +398,57 @@ void append_hover_vertex_overlay(
         });
 }
 
+bool object_has_sticky_component_source_wire(const PolygonObject &object,
+                                             SelectionMode mode)
+{
+  return object.selected && object.id > 0 &&
+         component_selection_has_mode_components(object.selection, mode);
+}
+
+int inferred_component_source_wire_object_id(
+    std::span<const PolygonObject> objects, SelectionMode mode,
+    int active_object_id, const SelectionHoverState &hover)
+{
+  if (mode == SelectionMode::Object) {
+    return -1;
+  }
+  if (active_object_id > 0) {
+    for (const PolygonObject &object : objects) {
+      if (object.id == active_object_id &&
+          object_has_sticky_component_source_wire(object, mode)) {
+        return object.id;
+      }
+    }
+  }
+  for (const PolygonObject &object : objects) {
+    if (object_has_sticky_component_source_wire(object, mode)) {
+      return object.id;
+    }
+  }
+  if (hover.candidate_object_id > 0) {
+    return hover.candidate_object_id;
+  }
+  if (active_object_id > 0) {
+    for (const PolygonObject &object : objects) {
+      if (object.id == active_object_id && object.selected && object.id > 0) {
+        return object.id;
+      }
+    }
+  }
+  for (const PolygonObject &object : objects) {
+    if (object.selected && object.id > 0) {
+      return object.id;
+    }
+  }
+  return -1;
+}
+
 } // namespace
 
 SelectionOverlayFrame build_selection_overlay_frame(
 		std::span<const PolygonObject> objects,
 		SelectionMode mode,
+		int active_object_id,
 		const SelectionHoverState& hover,
 		const SelectionOverlayStyle& style)
 {
@@ -573,12 +659,14 @@ SelectionOverlayFrame build_selection_overlay_frame(
 		}
 	};
 
+        const int component_source_wire_object_id =
+            inferred_component_source_wire_object_id(objects, mode,
+                                                     active_object_id, hover);
 	auto object_draws_source_wire = [&](const PolygonObject& object) {
-		const bool selected_object = object.selected;
-                const bool component_hovered_object =
-                    mode != SelectionMode::Object && object.id > 0 &&
-                    object.id == hover.candidate_object_id;
-                return selected_object || component_hovered_object;
+		if (mode == SelectionMode::Object) {
+			return object.selected;
+		}
+		return object.id > 0 && object.id == component_source_wire_object_id;
 	};
 
 	for (const PolygonObject& object : objects) {
@@ -586,7 +674,8 @@ SelectionOverlayFrame build_selection_overlay_frame(
 			continue;
 		}
                 if (mode != SelectionMode::Object) {
-                  append_source_wire_depth_stamp(frame, object, style);
+                  append_hover_source_wire(frame, object, style, true);
+                  continue;
                 }
                 for (const quader_poly::Edge edge : quader_poly::document_edges(object.document)) {
 			const quader_poly::Vertex* a = quader_poly::find_vertex(object.document, edge.a);
@@ -760,6 +849,30 @@ SelectionOverlayFrame build_selection_overlay_frame(
         }
 
 	return frame;
+}
+
+SelectionOverlayFrame build_selection_overlay_frame(
+		std::span<const PolygonObject> objects,
+		SelectionMode mode,
+		const SelectionHoverState& hover,
+		const SelectionOverlayStyle& style)
+{
+	return build_selection_overlay_frame(
+			objects, mode,
+			inferred_component_source_wire_object_id(objects, mode, -1, hover),
+			hover, style);
+}
+
+SelectionOverlayFrame build_selection_overlay_frame(
+		const std::vector<PolygonObject>& objects,
+		SelectionMode mode,
+		int active_object_id,
+		const SelectionHoverState& hover,
+		const SelectionOverlayStyle& style)
+{
+	return build_selection_overlay_frame(
+			std::span<const PolygonObject>(objects), mode, active_object_id,
+			hover, style);
 }
 
 SelectionOverlayFrame build_selection_overlay_frame(

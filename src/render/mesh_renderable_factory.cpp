@@ -329,6 +329,23 @@ void MeshRenderableFactory::update_transform(const MeshRenderableProxy &proxy,
   transform_manager.setTransform(instance, make_transform(world_transform));
 }
 
+void MeshRenderableFactory::update_surface_grid(
+    const MeshRenderableProxy &proxy, float grid_world_spacing,
+    const ViewportSettings &settings) {
+  QDR_PROFILE_FUNCTION();
+  if (!material_binding_) {
+    return;
+  }
+
+  for (filament::MaterialInstance *material_instance :
+       proxy.material_instances) {
+    if (material_instance) {
+      material_binding_->apply_mesh_surface_grid(
+          *material_instance, grid_world_spacing, settings);
+    }
+  }
+}
+
 void MeshRenderableFactory::remove_from_scene(
     const MeshRenderableProxy &proxy) {
   if (!scene_ || !proxy.entity) {

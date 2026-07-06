@@ -80,6 +80,7 @@ struct OverlayMesh {
 
 using OverlayFaceFillMesh = OverlayMesh<OverlayFaceFillVertex>;
 using OverlayLineMesh = OverlayMesh<OverlayLineVertex>;
+using OverlayEditWireMesh = OverlayMesh<OverlayLineVertex>;
 using OverlayPointMesh = OverlayMesh<OverlayPointVertex>;
 
 } // namespace quader

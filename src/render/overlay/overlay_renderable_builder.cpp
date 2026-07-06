@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/overlay_renderable_builder.hpp"
 
+#include "core/color_space.hpp"
 #include "diagnostics/profile.hpp"
 #include "render/render_signature_builder.hpp"
 #include "render/overlay/overlay_camera_projector.hpp"
@@ -24,15 +25,15 @@ namespace quader {
 namespace {
 
 constexpr float kOverlayVisibilityEpsilon = 0.000001f;
+constexpr float kOverlayOwnershipTolerance = 0.001f;
+constexpr int kOverlaySourceWireSegmentSamples = 17;
+constexpr float kOverlayEditWireNearPlane = 0.05f;
+constexpr float kOverlayEditWireViewDepthBias = 0.04f;
+constexpr float kOverlayEditWireMaxDeviceDepthOffset = -0.0008f;
 
 bool overlay_layer_uses_depth_stamp_visibility(ViewportOverlayLayer layer) {
-  return layer == ViewportOverlayLayer::SourceWire ||
-         layer == ViewportOverlayLayer::SelectedFaceEdge ||
-         layer == ViewportOverlayLayer::SelectedEdge ||
-         layer == ViewportOverlayLayer::HoverFaceEdge ||
-         layer == ViewportOverlayLayer::HoverEdge ||
-         layer == ViewportOverlayLayer::SelectedVertex ||
-         layer == ViewportOverlayLayer::HoverVertex;
+  (void)layer;
+  return false;
 }
 
 std::size_t overlay_layer_index(ViewportOverlayLayer layer) {
@@ -78,7 +79,115 @@ bool overlay_layer_can_build_icons(ViewportOverlayLayer layer) {
   return layer == ViewportOverlayLayer::PointLightGizmo;
 }
 
+OverlayRenderState make_state_with_depth_mode(
+    ViewportOverlayLayer layer, ViewportOverlayGeometryKind kind,
+    std::uint16_t blend_order, ViewportOverlayDepthMode depth_mode,
+    bool depth_stamp = false, bool face_color_pass = false) {
+  const bool draw_on_top = depth_mode == ViewportOverlayDepthMode::DrawOnTop;
+  OverlayRenderState state;
+  state.depth_write = depth_stamp;
+  state.color_write = !depth_stamp;
+  state.depth_culling = depth_stamp || face_color_pass || !draw_on_top;
+  state.depth_func = depth_stamp       ? OverlayDepthFunc::GreaterOrEqual
+                     : face_color_pass ? OverlayDepthFunc::Equal
+                     : draw_on_top     ? OverlayDepthFunc::Always
+                                       : OverlayDepthFunc::GreaterOrEqual;
+  const bool two_sided_triangle =
+      kind == ViewportOverlayGeometryKind::Triangles &&
+      viewport_overlay_triangle_is_two_sided(layer);
+  state.culling_mode =
+      kind == ViewportOverlayGeometryKind::Triangles && !two_sided_triangle
+          ? OverlayCullingMode::Back
+          : OverlayCullingMode::None;
+  state.transparency_mode =
+      kind == ViewportOverlayGeometryKind::Triangles && two_sided_triangle
+          ? OverlayTransparencyMode::TwoPassesTwoSides
+      : kind == ViewportOverlayGeometryKind::Triangles
+          ? OverlayTransparencyMode::TwoPassesOneSide
+          : OverlayTransparencyMode::Default;
+  if (kind == ViewportOverlayGeometryKind::Triangles) {
+    state.polygon_offset_scale = -1.0f;
+    state.polygon_offset_constant = -1.0f;
+  }
+  state.blend_order = blend_order;
+  return state;
+}
+
 QVec3 point_on_line(QVec3 a, QVec3 b, float t) { return a + ((b - a) * t); }
+
+bool line_uses_edit_wire_batch(const ViewportOverlayLine &line) {
+  if (line.source != ViewportOverlaySource::ComponentSelection &&
+      line.source != ViewportOverlaySource::ComponentHover) {
+    return false;
+  }
+  return line.layer == ViewportOverlayLayer::SourceWire ||
+         line.layer == ViewportOverlayLayer::SelectedFaceEdge ||
+         line.layer == ViewportOverlayLayer::SelectedEdge ||
+         line.layer == ViewportOverlayLayer::HoverFaceEdge ||
+         line.layer == ViewportOverlayLayer::HoverEdge;
+}
+
+void apply_edit_wire_depth_bias(OverlayEditWireMesh &mesh,
+                                const ViewportOverlayCamera &raw_camera) {
+  const ViewportOverlayCamera camera =
+      OverlayCameraProjector::sanitized_camera(raw_camera);
+  for (OverlayLineVertex &vertex : mesh.vertices) {
+    float device_offset = 0.0f;
+    if (camera.projection == ViewportOverlayProjection::Perspective) {
+      const float depth_denominator =
+          std::max(0.000001f, 1.0f - vertex.position.z);
+      const float depth =
+          std::max(camera.near_plane,
+                   (2.0f * camera.near_plane) / depth_denominator);
+      device_offset =
+          -(2.0f * camera.near_plane * kOverlayEditWireViewDepthBias) /
+          std::max(depth * depth, 0.000001f);
+      device_offset =
+          std::max(device_offset, kOverlayEditWireMaxDeviceDepthOffset);
+    } else {
+      device_offset =
+          -(2.0f * kOverlayEditWireViewDepthBias) /
+          std::max(camera.far_plane - camera.near_plane, 0.000001f);
+      device_offset =
+          std::max(device_offset, kOverlayEditWireMaxDeviceDepthOffset);
+    }
+    vertex.position.z += device_offset;
+  }
+}
+
+void apply_component_point_depth_bias(OverlayPointMesh &mesh,
+                                      const ViewportOverlayCamera &raw_camera) {
+  const ViewportOverlayCamera camera =
+      OverlayCameraProjector::sanitized_camera(raw_camera);
+  for (OverlayPointVertex &vertex : mesh.vertices) {
+    float device_offset = 0.0f;
+    if (camera.projection == ViewportOverlayProjection::Perspective) {
+      const float depth_denominator =
+          std::max(0.000001f, 1.0f - vertex.position.z);
+      const float depth =
+          std::max(camera.near_plane,
+                   (2.0f * camera.near_plane) / depth_denominator);
+      device_offset =
+          -(2.0f * camera.near_plane * kOverlayEditWireViewDepthBias) /
+          std::max(depth * depth, 0.000001f);
+      device_offset =
+          std::max(device_offset, kOverlayEditWireMaxDeviceDepthOffset);
+    } else {
+      device_offset =
+          -(2.0f * kOverlayEditWireViewDepthBias) /
+          std::max(camera.far_plane - camera.near_plane, 0.000001f);
+      device_offset =
+          std::max(device_offset, kOverlayEditWireMaxDeviceDepthOffset);
+    }
+    vertex.position.z += device_offset;
+  }
+}
+
+bool layer_uses_component_point_bias(ViewportOverlayLayer layer) {
+  return layer == ViewportOverlayLayer::UnselectedVertex ||
+         layer == ViewportOverlayLayer::SelectedVertex ||
+         layer == ViewportOverlayLayer::HoverVertex;
+}
 
 QVec3 camera_forward(const ViewportOverlayCamera &camera) {
   QVec3 forward = normalize(camera.forward);
@@ -117,6 +226,45 @@ bool intersect_ray_triangle(QVec3 origin, QVec3 direction,
   return true;
 }
 
+bool point_lies_on_triangle_plane(QVec3 point,
+                                  const ViewportOverlayTriangle &triangle,
+                                  float tolerance) {
+  const QVec3 normal = cross(triangle.b - triangle.a, triangle.c - triangle.a);
+  const float normal_length = length(normal);
+  if (normal_length <= kOverlayVisibilityEpsilon) {
+    return false;
+  }
+  const float signed_distance = dot(point - triangle.a, normal) / normal_length;
+  return std::abs(signed_distance) <= tolerance;
+}
+
+bool points_near(QVec3 a, QVec3 b, float tolerance) {
+  const QVec3 delta = a - b;
+  return length_squared(delta) <= tolerance * tolerance;
+}
+
+bool triangle_contains_point(QVec3 point,
+                             const ViewportOverlayTriangle &triangle,
+                             float tolerance) {
+  return points_near(point, triangle.a, tolerance) ||
+         points_near(point, triangle.b, tolerance) ||
+         points_near(point, triangle.c, tolerance);
+}
+
+bool triangle_contains_line_endpoints(const ViewportOverlayLine &line,
+                                      const ViewportOverlayTriangle &triangle,
+                                      float tolerance) {
+  return triangle_contains_point(line.start, triangle, tolerance) &&
+         triangle_contains_point(line.end, triangle, tolerance);
+}
+
+bool line_lies_on_triangle_plane(const ViewportOverlayLine &line,
+                                 const ViewportOverlayTriangle &triangle,
+                                 float tolerance) {
+  return point_lies_on_triangle_plane(line.start, triangle, tolerance) &&
+         point_lies_on_triangle_plane(line.end, triangle, tolerance);
+}
+
 } // namespace
 
 /**
@@ -151,23 +299,66 @@ public:
     [[nodiscard]] bool line_visible(const ViewportOverlayLine &line,
                                     const ViewportOverlayCamera &camera) const {
       const StampSet *stamps = stamps_for(line.element.object_id);
-      if (stamps == nullptr || stamps->inside_out) {
+      if (stamps == nullptr) {
         return true;
       }
-      return point_visible(point_on_line(line.start, line.end, 0.2f), camera,
-                           *stamps) &&
-             point_visible(point_on_line(line.start, line.end, 0.5f), camera,
-                           *stamps) &&
-             point_visible(point_on_line(line.start, line.end, 0.8f), camera,
-                           *stamps);
+      int visible_samples = 0;
+      visible_samples += point_visible(point_on_line(line.start, line.end, 0.2f),
+                                       camera, *stamps, &line)
+                             ? 1
+                             : 0;
+      visible_samples += point_visible(point_on_line(line.start, line.end, 0.5f),
+                                       camera, *stamps, &line)
+                             ? 1
+                             : 0;
+      visible_samples += point_visible(point_on_line(line.start, line.end, 0.8f),
+                                       camera, *stamps, &line)
+                             ? 1
+                             : 0;
+      return visible_samples >= 2;
+    }
+
+    void append_visible_line_segments(
+        const ViewportOverlayLine &line, const ViewportOverlayCamera &camera,
+        std::vector<ViewportOverlayLine> &out_lines) const {
+      const StampSet *stamps = stamps_for(line.element.object_id);
+      if (stamps == nullptr) {
+        out_lines.push_back(line);
+        return;
+      }
+
+      bool previous_visible = false;
+      float previous_t = 0.0f;
+      for (int sample = 0; sample < kOverlaySourceWireSegmentSamples;
+           ++sample) {
+        const float t = static_cast<float>(sample) /
+                        static_cast<float>(kOverlaySourceWireSegmentSamples - 1);
+        const bool visible =
+            point_visible(point_on_line(line.start, line.end, t), camera,
+                          *stamps, &line);
+        if (sample > 0) {
+          const float midpoint_t = (previous_t + t) * 0.5f;
+          const bool midpoint_visible =
+              point_visible(point_on_line(line.start, line.end, midpoint_t),
+                            camera, *stamps, &line);
+          if (previous_visible && visible && midpoint_visible) {
+            ViewportOverlayLine segment = line;
+            segment.start = point_on_line(line.start, line.end, previous_t);
+            segment.end = point_on_line(line.start, line.end, t);
+            out_lines.push_back(segment);
+          }
+        }
+        previous_visible = visible;
+        previous_t = t;
+      }
     }
 
     [[nodiscard]] bool
     point_visible(const ViewportOverlayPoint &point,
                   const ViewportOverlayCamera &camera) const {
       const StampSet *stamps = stamps_for(point.element.object_id);
-      return stamps == nullptr || stamps->inside_out ||
-             point_visible(point.position, camera, *stamps);
+      return stamps == nullptr ||
+             point_visible(point.position, camera, *stamps, nullptr);
     }
 
 private:
@@ -200,7 +391,8 @@ private:
 
     [[nodiscard]] static bool
     point_visible(QVec3 point, const ViewportOverlayCamera &raw_camera,
-                  const StampSet &stamps) {
+                  const StampSet &stamps,
+                  const ViewportOverlayLine *source_line) {
       const ViewportOverlayCamera camera =
           OverlayCameraProjector::sanitized_camera(raw_camera);
       const QVec3 forward = camera_forward(camera);
@@ -224,17 +416,29 @@ private:
         direction = to_point / target_distance;
       }
 
-      const float tolerance = std::max(0.001f, target_distance * 0.00025f);
-      const float max_distance = target_distance - tolerance;
+      const float occlusion_tolerance =
+          std::max(0.015f, target_distance * 0.0005f);
+      const float max_distance = target_distance - occlusion_tolerance;
       if (max_distance <= 0.0001f) {
         return true;
       }
       for (const ViewportOverlayTriangle *triangle : stamps.triangles) {
         float hit_distance = 0.0f;
         if (intersect_ray_triangle(origin, direction, *triangle,
-                                   hit_distance) &&
-            hit_distance < max_distance) {
-          return false;
+                                   hit_distance)) {
+          if (source_line != nullptr &&
+              source_line->element.face_id > 0 &&
+              source_line->element.face_id == triangle->element.face_id) {
+            continue;
+          }
+          if (source_line != nullptr &&
+              triangle_contains_line_endpoints(*source_line, *triangle,
+                                               kOverlayOwnershipTolerance)) {
+            continue;
+          }
+          if (hit_distance < max_distance) {
+            return false;
+          }
         }
       }
       return true;
@@ -310,35 +514,9 @@ std::uint64_t OverlayRenderableBuilder::layer_build_signature(
 OverlayRenderState OverlayRenderableBuilder::make_state(
     ViewportOverlayLayer layer, ViewportOverlayGeometryKind kind,
     std::uint16_t blend_order, bool depth_stamp, bool face_color_pass) {
-  const bool draw_on_top = viewport_overlay_depth_mode(layer, kind) ==
-                           ViewportOverlayDepthMode::DrawOnTop;
-  OverlayRenderState state;
-  state.depth_write = depth_stamp;
-  state.color_write = !depth_stamp;
-  state.depth_culling = depth_stamp || face_color_pass || !draw_on_top;
-  state.depth_func = depth_stamp       ? OverlayDepthFunc::GreaterOrEqual
-                     : face_color_pass ? OverlayDepthFunc::Equal
-                     : draw_on_top     ? OverlayDepthFunc::Always
-                                       : OverlayDepthFunc::GreaterOrEqual;
-  const bool two_sided_triangle =
-      kind == ViewportOverlayGeometryKind::Triangles &&
-      viewport_overlay_triangle_is_two_sided(layer);
-  state.culling_mode =
-      kind == ViewportOverlayGeometryKind::Triangles && !two_sided_triangle
-          ? OverlayCullingMode::Back
-          : OverlayCullingMode::None;
-  state.transparency_mode =
-      kind == ViewportOverlayGeometryKind::Triangles && two_sided_triangle
-          ? OverlayTransparencyMode::TwoPassesTwoSides
-      : kind == ViewportOverlayGeometryKind::Triangles
-          ? OverlayTransparencyMode::TwoPassesOneSide
-          : OverlayTransparencyMode::Default;
-  if (kind == ViewportOverlayGeometryKind::Triangles) {
-    state.polygon_offset_scale = -1.0f;
-    state.polygon_offset_constant = -1.0f;
-  }
-  state.blend_order = blend_order;
-  return state;
+  return make_state_with_depth_mode(
+      layer, kind, blend_order, viewport_overlay_depth_mode(layer, kind),
+      depth_stamp, face_color_pass);
 }
 
 OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
@@ -403,25 +581,58 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
   }
 
   if (overlay_layer_can_build_lines(layer)) {
+    std::vector<ViewportOverlayLine> line_storage;
     const std::vector<const ViewportOverlayLine *> lines = [&]() {
       QDR_PROFILE_SCOPE("Overlay collect layer lines");
       return lines_for_layer(frame, layer, camera,
-                             visibility ? &*visibility : nullptr);
+                             visibility ? &*visibility : nullptr,
+                             line_storage);
     }();
-    const std::vector<LineBatchKey> line_keys = line_batch_keys(lines, layer);
+    std::vector<const ViewportOverlayLine *> edit_wire_lines;
+    std::vector<const ViewportOverlayLine *> generic_lines;
+    edit_wire_lines.reserve(lines.size());
+    generic_lines.reserve(lines.size());
+    for (const ViewportOverlayLine *line : lines) {
+      if (line_uses_edit_wire_batch(*line)) {
+        edit_wire_lines.push_back(line);
+      } else {
+        generic_lines.push_back(line);
+      }
+    }
+    if (!edit_wire_lines.empty()) {
+      QDR_PROFILE_SCOPE("Overlay build edit wire batch");
+      const float width_pixels =
+          viewport_overlay_line_width_pixels(layer, 0.0f);
+      OverlayEditWireMesh mesh = OverlayLineMeshBuilder::build(
+          edit_wire_lines, camera, width_pixels, 0.0f);
+      apply_edit_wire_depth_bias(mesh, camera);
+      if (!mesh.empty()) {
+        plan.edit_wire_batches.push_back({
+            .mesh = std::move(mesh),
+            .state = make_state_with_depth_mode(
+                layer, ViewportOverlayGeometryKind::Lines, blend_order++,
+                ViewportOverlayDepthMode::DepthTested),
+            .width_pixels = width_pixels,
+            .near_plane = kOverlayEditWireNearPlane,
+        });
+      }
+    }
+    const std::vector<LineBatchKey> line_keys =
+        line_batch_keys(generic_lines, layer);
     for (const LineBatchKey &key : line_keys) {
       QDR_PROFILE_SCOPE("Overlay build line batch");
       std::vector<const ViewportOverlayLine *> batch_lines;
-      batch_lines.reserve(lines.size());
-      for (const ViewportOverlayLine *line : lines) {
+      batch_lines.reserve(generic_lines.size());
+      for (const ViewportOverlayLine *line : generic_lines) {
         if (viewport_overlay_line_width_pixels(layer, line->width_pixels) !=
-            key.width_pixels) {
+                key.width_pixels ||
+            viewport_overlay_depth_mode(*line) != key.depth_mode) {
           continue;
         }
         batch_lines.push_back(line);
       }
       const float depth_bias = viewport_overlay_depth_bias(
-          layer, ViewportOverlayGeometryKind::Lines);
+          key.depth_mode, ViewportOverlayGeometryKind::Lines);
       OverlayLineMesh mesh = OverlayLineMeshBuilder::build(
           batch_lines, camera, key.width_pixels, depth_bias);
       if (mesh.empty()) {
@@ -429,8 +640,9 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
       }
       plan.line_batches.push_back({
           .mesh = std::move(mesh),
-          .state = make_state(layer, ViewportOverlayGeometryKind::Lines,
-                              blend_order++),
+          .state = make_state_with_depth_mode(
+              layer, ViewportOverlayGeometryKind::Lines, blend_order++,
+              key.depth_mode),
           .width_pixels = key.width_pixels,
           .depth_bias = depth_bias,
       });
@@ -469,7 +681,9 @@ std::vector<const ViewportOverlayLine *>
 OverlayRenderableBuilder::lines_for_layer(
     const ViewportOverlayFrame &frame, ViewportOverlayLayer layer,
     const ViewportOverlayCamera &camera,
-    const OverlayDepthStampVisibilityFilter *visibility) {
+    const OverlayDepthStampVisibilityFilter *visibility,
+    std::vector<ViewportOverlayLine> &line_storage) {
+  (void)line_storage;
   std::vector<const ViewportOverlayLine *> lines;
   lines.reserve(frame.lines.size());
   for (const ViewportOverlayLine &line : frame.lines) {
@@ -521,10 +735,12 @@ OverlayRenderableBuilder::line_batch_keys(
     const LineBatchKey key{
         .width_pixels =
             viewport_overlay_line_width_pixels(layer, line->width_pixels),
+        .depth_mode = viewport_overlay_depth_mode(*line),
     };
     const auto existing = std::find_if(
         keys.begin(), keys.end(), [&](const LineBatchKey &candidate) {
-          return candidate.width_pixels == key.width_pixels;
+          return candidate.width_pixels == key.width_pixels &&
+                 candidate.depth_mode == key.depth_mode;
         });
     if (existing == keys.end()) {
       keys.push_back(key);
@@ -554,7 +770,7 @@ void OverlayRenderableBuilder::append_point_pass(
     return;
   }
 
-  std::vector<float> point_sizes;
+  std::vector<PointBatchKey> point_keys;
   for (const ViewportOverlayPoint *point : points) {
     const float base_size =
         viewport_overlay_point_size_pixels(layer, point->size_pixels);
@@ -563,15 +779,24 @@ void OverlayRenderableBuilder::append_point_pass(
     const float size_pixels = outline && !outline_uses_native_color
                                   ? base_size + outline_growth_for(point)
                                   : base_size;
-    if (std::find(point_sizes.begin(), point_sizes.end(), size_pixels) ==
-        point_sizes.end()) {
-      point_sizes.push_back(size_pixels);
+    const PointBatchKey key{
+        .size_pixels = size_pixels,
+        .depth_mode = viewport_overlay_depth_mode(*point),
+    };
+    const auto existing = std::find_if(
+        point_keys.begin(), point_keys.end(),
+        [&](const PointBatchKey &candidate) {
+          return candidate.size_pixels == key.size_pixels &&
+                 candidate.depth_mode == key.depth_mode;
+        });
+    if (existing == point_keys.end()) {
+      point_keys.push_back(key);
     }
   }
 
-  const float depth_bias =
-      viewport_overlay_depth_bias(layer, ViewportOverlayGeometryKind::Points);
-  for (const float size_pixels : point_sizes) {
+  for (const PointBatchKey &key : point_keys) {
+    const float depth_bias = viewport_overlay_depth_bias(
+        key.depth_mode, ViewportOverlayGeometryKind::Points);
     std::vector<const ViewportOverlayPoint *> batch_points;
     batch_points.reserve(points.size());
     for (const ViewportOverlayPoint *point : points) {
@@ -582,7 +807,8 @@ void OverlayRenderableBuilder::append_point_pass(
       const float point_size = outline && !outline_uses_native_color
                                    ? base_size + outline_growth_for(point)
                                    : base_size;
-      if (point_size == size_pixels) {
+      if (point_size == key.size_pixels &&
+          viewport_overlay_depth_mode(*point) == key.depth_mode) {
         batch_points.push_back(point);
       }
     }
@@ -590,14 +816,19 @@ void OverlayRenderableBuilder::append_point_pass(
     const bool override_color =
         outline && layer != ViewportOverlayLayer::SnapTargetVertex;
     OverlayPointMesh mesh = OverlayPointMeshBuilder::build(
-        batch_points, camera, size_pixels, depth_bias,
+        batch_points, camera, key.size_pixels, depth_bias,
         kOverlayVertexOutlineColor, override_color);
+    if (key.depth_mode == ViewportOverlayDepthMode::DepthTested &&
+        layer_uses_component_point_bias(layer)) {
+      apply_component_point_depth_bias(mesh, camera);
+    }
     if (!mesh.empty()) {
       plan.point_batches.push_back({
           .mesh = std::move(mesh),
-          .state = make_state(layer, ViewportOverlayGeometryKind::Points,
-                              blend_order++),
-          .size_pixels = size_pixels,
+          .state = make_state_with_depth_mode(
+              layer, ViewportOverlayGeometryKind::Points, blend_order++,
+              key.depth_mode),
+          .size_pixels = key.size_pixels,
           .inner_radius =
               outline && viewport_overlay_point_is_outline_only(layer)
                   ? viewport_overlay_point_inner_radius(layer)

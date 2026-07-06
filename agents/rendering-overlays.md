@@ -59,6 +59,13 @@ inverted-mesh visualization rules, and regression test map.
 - Draw-on-top: `SourceWire`, `SelectedFaceEdge`, `SelectedEdge`, `HoverFaceEdge`, `HoverEdge`,
   `GroupBounds`, `DiagnosticEdge`, `WireframeXray`, selected/hover/snap vertices, tool line/handle
   overlays, and tool fill layers such as `ToolPlane` and `ToolPreviewFill`.
+- Component-mode selected/hover edge and vertex handles carry component overlay sources and
+  depth-test as primitives even though their native layers stay draw-on-top by default. Do not
+  apply this to `SourceWire`; source wire remains the crisp draw-on-top topology path for
+  inverted-normal modeling workflows.
+- In component modes, base-frame `SourceWire` and `SourceWireDepthStamp` emission is for the active
+  edit mesh only. Other selected meshes may still show their selected component highlights, but they
+  must not emit full-mesh source wire just because they are selected.
 - Wireframe viewport mode uses `WireframeXray` for unselected scene topology. Do not route that
   mode through the depth-tested `WireframeBase` layer.
 - Global depth-only mesh proxies live on `kViewportOverlayLayerMask` and must only be visible in the

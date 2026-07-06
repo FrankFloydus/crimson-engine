@@ -38,6 +38,7 @@ public:
     void initialize(filament::Engine &engine, filament::Scene &scene,
                     filament::Material &overlay_material,
                     filament::Material &overlay_line_material,
+                    filament::Material &edit_wire_line_material,
                     filament::Material &overlay_point_material,
                     filament::Material &overlay_icon_material,
                     const std::filesystem::path &resource_root);
@@ -47,6 +48,7 @@ public:
       return engine_ != nullptr && scene_ != nullptr &&
              overlay_material_ != nullptr &&
              overlay_line_material_ != nullptr &&
+             edit_wire_line_material_ != nullptr &&
              overlay_point_material_ != nullptr &&
              overlay_icon_material_ != nullptr;
     }
@@ -68,6 +70,9 @@ public:
     void create_line_proxy(const OverlayLineBatch &batch,
                            std::uint8_t layer_mask,
                            std::vector<OverlayRenderableProxy> &proxies);
+    void create_edit_wire_proxy(const OverlayEditWireBatch &batch,
+                                std::uint8_t layer_mask,
+                                std::vector<OverlayRenderableProxy> &proxies);
     void create_point_proxy(const OverlayPointBatch &batch,
                             std::uint8_t layer_mask,
                             std::vector<OverlayRenderableProxy> &proxies);
@@ -80,6 +85,9 @@ public:
     void update_line_proxy(OverlayRenderableProxy &proxy,
                            const OverlayLineBatch &batch,
                            std::uint8_t layer_mask);
+    void update_edit_wire_proxy(OverlayRenderableProxy &proxy,
+                                const OverlayEditWireBatch &batch,
+                                std::uint8_t layer_mask);
     void update_point_proxy(OverlayRenderableProxy &proxy,
                             const OverlayPointBatch &batch,
                             std::uint8_t layer_mask);
@@ -99,6 +107,7 @@ public:
     filament::Scene* scene_ = nullptr;
     filament::Material *overlay_material_ = nullptr;
     filament::Material *overlay_line_material_ = nullptr;
+    filament::Material *edit_wire_line_material_ = nullptr;
     filament::Material *overlay_point_material_ = nullptr;
     filament::Material *overlay_icon_material_ = nullptr;
     filament::Texture *point_light_icon_texture_ = nullptr;

@@ -26,7 +26,7 @@ public:
   [[nodiscard]] static ViewportOverlayFrame project_selection_overlay_frame(
       const quader_editor_core::SelectionOverlayFrame &frame,
       const ModelingObjectRuntimeMap &object_registry,
-      const SceneDocument &scene);
+      const SceneDocument &scene, quader_editor_core::SelectionMode mode);
   static void append_projected_overlay_lines(
       ViewportOverlayFrame &frame,
       const std::vector<quader_editor_core::SelectionOverlayLine> &lines,

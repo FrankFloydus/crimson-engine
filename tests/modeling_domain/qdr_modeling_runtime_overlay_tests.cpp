@@ -34,6 +34,31 @@ std::size_t line_count_for_layer(const quader_editor_core::SelectionOverlayFrame
 	}));
 }
 
+std::size_t line_count_for_layer_and_object(
+    const quader_editor_core::SelectionOverlayFrame &frame,
+    quader_editor_core::SelectionOverlayLayer layer, int object_id)
+{
+  return static_cast<std::size_t>(
+      std::count_if(frame.lines.begin(), frame.lines.end(),
+                    [layer, object_id](
+                        const quader_editor_core::SelectionOverlayLine &line) {
+                      return line.layer == layer &&
+                             line.object_id == object_id;
+                    }));
+}
+
+std::size_t triangle_count_for_layer_and_object(
+    const quader_editor_core::SelectionOverlayFrame &frame,
+    quader_editor_core::SelectionOverlayLayer layer, int object_id)
+{
+  return static_cast<std::size_t>(std::count_if(
+      frame.triangles.begin(), frame.triangles.end(),
+      [layer, object_id](
+          const quader_editor_core::SelectionOverlayTriangle &triangle) {
+        return triangle.layer == layer && triangle.object_id == object_id;
+      }));
+}
+
 std::size_t line_count_for_layer_and_color(
 	const quader_editor_core::SelectionOverlayFrame& frame,
 	quader_editor_core::SelectionOverlayLayer layer,
@@ -88,6 +113,67 @@ bool document_has_vertex_at(const quader_poly::Document& document, quader::QVec3
 	return std::any_of(document.vertices.begin(), document.vertices.end(), [position](const quader_poly::Vertex& vertex) {
 		return position_matches(vertex.position, position);
 	});
+}
+
+quader_editor_core::PolygonObject *object_by_id(
+    std::vector<quader_editor_core::PolygonObject> &objects, int object_id)
+{
+  const auto found = std::find_if(
+      objects.begin(), objects.end(),
+      [object_id](const quader_editor_core::PolygonObject &object) {
+        return object.id == object_id;
+      });
+  return found == objects.end() ? nullptr : &*found;
+}
+
+quader_editor_core::PolygonObject cube_object_for_overlay(int object_id)
+{
+  quader_editor_core::PolygonObject object;
+  object.id = object_id;
+  object.document = quader_poly::make_cube({});
+  return object;
+}
+
+void select_first_component_for_overlay_mode(
+    quader_editor_core::PolygonObject &object,
+    quader_editor_core::SelectionMode mode)
+{
+  object.selected = true;
+  object.selection = quader_poly::Selection();
+  switch (mode) {
+  case quader_editor_core::SelectionMode::Vertex:
+    require_test(!object.document.vertices.empty(),
+                 "component source-wire fixture should have vertices");
+    object.selection.mode = quader_poly::SelectionMode::Vertex;
+    object.selection.vertices.push_back(object.document.vertices.front().id);
+    object.selection.has_active = true;
+    object.selection.active_kind = quader_poly::ElementKind::Vertex;
+    object.selection.active_vertex = object.selection.vertices.front();
+    return;
+  case quader_editor_core::SelectionMode::Edge: {
+    const std::vector<quader_poly::Edge> edges =
+        quader_poly::document_edges(object.document);
+    require_test(!edges.empty(),
+                 "component source-wire fixture should have edges");
+    object.selection.mode = quader_poly::SelectionMode::Edge;
+    object.selection.edges.push_back(edges.front());
+    object.selection.has_active = true;
+    object.selection.active_kind = quader_poly::ElementKind::Edge;
+    object.selection.active_edge = object.selection.edges.front();
+    return;
+  }
+  case quader_editor_core::SelectionMode::Face:
+    require_test(!object.document.faces.empty(),
+                 "component source-wire fixture should have faces");
+    object.selection.mode = quader_poly::SelectionMode::Face;
+    object.selection.faces.push_back(object.document.faces.front().id);
+    object.selection.has_active = true;
+    object.selection.active_kind = quader_poly::ElementKind::Face;
+    object.selection.active_face = object.selection.faces.front();
+    return;
+  case quader_editor_core::SelectionMode::Object:
+    return;
+  }
 }
 
 quader_editor_core::PolygonObject diagnostic_single_edge_object(
@@ -348,6 +434,7 @@ void selected_mesh_source_wire_uses_source_color_in_component_mode()
             .changed,
         "selected mesh source-wire color fixture should create a box");
     session.set_selection_mode(mode);
+    select_first_component_for_overlay_mode(session.objects().front(), mode);
 
     const quader_editor_core::SelectionOverlayFrame frame =
         quader_editor_core::build_selection_overlay_frame(
@@ -377,10 +464,10 @@ void selected_mesh_source_wire_uses_source_color_in_component_mode()
                      style.selected_edge_color_abgr) == 0U,
                  "component mode selected mesh source wire should not use "
                  "selected-wire color");
+    const std::size_t selected_edge_count = line_count_for_layer(
+        frame, quader_editor_core::SelectionOverlayLayer::SelectedEdge);
     require_test(
-        line_count_for_layer(
-            frame, quader_editor_core::SelectionOverlayLayer::SelectedEdge) ==
-            0U,
+        selected_edge_count < source_wire_count,
         "component mode selected mesh should not promote the full mesh source "
         "wire to draw-on-top selected edges");
   }
@@ -400,6 +487,8 @@ void component_modes_do_not_emit_object_xray_fill()
             .changed,
         "component no-xray selected fixture should create a box");
     selected_session.set_selection_mode(mode);
+    select_first_component_for_overlay_mode(selected_session.objects().front(),
+                                            mode);
 
     const quader_editor_core::SelectionOverlayFrame selected_frame =
         quader_editor_core::build_selection_overlay_frame(
@@ -456,6 +545,155 @@ void component_modes_do_not_emit_object_xray_fill()
             quader_editor_core::SelectionOverlayLayer::SelectedXrayFace) == 0U,
         "component hover candidates must not emit object-mode x-ray face fill");
   }
+}
+
+void component_modes_emit_source_wire_only_for_active_edit_mesh()
+{
+  for (const quader_editor_core::SelectionMode mode : {
+           quader_editor_core::SelectionMode::Face,
+           quader_editor_core::SelectionMode::Edge,
+           quader_editor_core::SelectionMode::Vertex,
+       }) {
+    quader_editor_core::EditorSession session = two_box_session();
+    session.set_selected_object_ids({1, 2}, 2);
+    session.set_selection_mode(mode);
+    require_test(session.active_object_id() == 2,
+                 "multi-object source-wire fixture should keep the second "
+                 "mesh active");
+    quader_editor_core::PolygonObject *active_object =
+        object_by_id(session.objects(), 2);
+    require_test(active_object != nullptr,
+                 "multi-object source-wire fixture should find the active "
+                 "mesh");
+    select_first_component_for_overlay_mode(*active_object, mode);
+
+    const quader_editor_core::SelectionOverlayFrame frame =
+        quader_editor_core::build_selection_overlay_frame(
+            session.objects(), session.selection_mode(),
+            session.active_object_id(), {});
+
+    require_test(
+        line_count_for_layer_and_object(
+            frame, quader_editor_core::SelectionOverlayLayer::SourceWire, 1) ==
+            0U,
+        "component source wire should not x-ray inactive selected meshes");
+    require_test(
+        line_count_for_layer_and_object(
+            frame, quader_editor_core::SelectionOverlayLayer::SourceWire, 2) ==
+            12U,
+        "component source wire should stay visible for the active edit mesh");
+    require_test(
+        triangle_count_for_layer_and_object(
+            frame,
+            quader_editor_core::SelectionOverlayLayer::SourceWireDepthStamp,
+            1) == 0U,
+        "inactive selected meshes should not emit source-wire depth stamps");
+    require_test(
+        triangle_count_for_layer_and_object(
+            frame,
+            quader_editor_core::SelectionOverlayLayer::SourceWireDepthStamp,
+            2) > 0U,
+        "active edit mesh should keep source-wire depth stamps for inverted "
+        "normal cases");
+  }
+}
+
+void component_source_wire_does_not_stick_without_mode_selection()
+{
+  std::vector<quader_editor_core::PolygonObject> objects{
+      cube_object_for_overlay(1), cube_object_for_overlay(2)};
+  objects[0].selected = true;
+  quader_editor_core::SelectionHoverState hover;
+  hover.candidate_object_id = 2;
+
+  const quader_editor_core::SelectionOverlayFrame hover_frame =
+      quader_editor_core::build_selection_overlay_frame(
+          objects, quader_editor_core::SelectionMode::Face, 1, hover, {});
+
+  require_test(
+      line_count_for_layer_and_object(
+          hover_frame, quader_editor_core::SelectionOverlayLayer::SourceWire,
+          1) == 0U,
+      "face-mode source wire should not stick to an active object without "
+      "selected faces");
+  require_test(
+      line_count_for_layer_and_object(
+          hover_frame, quader_editor_core::SelectionOverlayLayer::SourceWire,
+          2) == 12U,
+      "face-mode source wire should move to the hover candidate when the "
+      "previous object has no selected faces");
+
+  const quader_editor_core::SelectionOverlayFrame empty_frame =
+      quader_editor_core::build_selection_overlay_frame(
+          objects, quader_editor_core::SelectionMode::Face, 1, {}, {});
+  require_test(line_count_for_layer(empty_frame,
+                                    quader_editor_core::SelectionOverlayLayer::
+                                        SourceWire) == 12U,
+               "active object selection should show component source wire "
+               "while there is no hover candidate");
+}
+
+void component_source_wire_sticks_only_to_current_mode_selection()
+{
+  std::vector<quader_editor_core::PolygonObject> objects{
+      cube_object_for_overlay(1), cube_object_for_overlay(2)};
+  quader_editor_core::SelectionHoverState hover;
+  hover.candidate_object_id = 2;
+
+  select_first_component_for_overlay_mode(
+      objects[0], quader_editor_core::SelectionMode::Face);
+  const quader_editor_core::SelectionOverlayFrame face_frame =
+      quader_editor_core::build_selection_overlay_frame(
+          objects, quader_editor_core::SelectionMode::Face, 1, hover, {});
+  require_test(
+      line_count_for_layer_and_object(
+          face_frame, quader_editor_core::SelectionOverlayLayer::SourceWire,
+          1) == 12U,
+      "face-mode source wire should stick to an object with selected faces");
+  require_test(
+      line_count_for_layer_and_object(
+          face_frame, quader_editor_core::SelectionOverlayLayer::SourceWire,
+          2) == 0U,
+      "face-mode selected components should beat the hover candidate");
+
+  const quader_editor_core::SelectionOverlayFrame edge_mismatch_frame =
+      quader_editor_core::build_selection_overlay_frame(
+          objects, quader_editor_core::SelectionMode::Edge, 1, hover, {});
+  require_test(
+      line_count_for_layer_and_object(
+          edge_mismatch_frame,
+          quader_editor_core::SelectionOverlayLayer::SourceWire, 1) == 0U,
+      "edge-mode source wire should not stick to an object that only has "
+      "selected faces");
+  require_test(
+      line_count_for_layer_and_object(
+          edge_mismatch_frame,
+          quader_editor_core::SelectionOverlayLayer::SourceWire, 2) == 12U,
+      "edge-mode source wire should fall back to hover when the active object "
+      "has no selected edges");
+
+  select_first_component_for_overlay_mode(
+      objects[0], quader_editor_core::SelectionMode::Edge);
+  const quader_editor_core::SelectionOverlayFrame edge_frame =
+      quader_editor_core::build_selection_overlay_frame(
+          objects, quader_editor_core::SelectionMode::Edge, 1, hover, {});
+  require_test(
+      line_count_for_layer_and_object(
+          edge_frame, quader_editor_core::SelectionOverlayLayer::SourceWire,
+          1) == 12U,
+      "edge-mode source wire should stick to an object with selected edges");
+
+  select_first_component_for_overlay_mode(
+      objects[0], quader_editor_core::SelectionMode::Vertex);
+  const quader_editor_core::SelectionOverlayFrame vertex_frame =
+      quader_editor_core::build_selection_overlay_frame(
+          objects, quader_editor_core::SelectionMode::Vertex, 1, hover, {});
+  require_test(
+      line_count_for_layer_and_object(
+          vertex_frame, quader_editor_core::SelectionOverlayLayer::SourceWire,
+          1) == 12U,
+      "vertex-mode source wire should stick to an object with selected "
+      "vertices");
 }
 
 void selected_component_does_not_cut_holes_in_active_mesh_source_wire()
@@ -1219,6 +1457,9 @@ TEST(QdrModelingRuntimeOverlayTests, QdrEditorCoreOverlayTests) {
 	selected_object_overlay_uses_xray_fill_and_draw_on_top_active_wire();
 	selected_mesh_source_wire_uses_source_color_in_component_mode();
 	component_modes_do_not_emit_object_xray_fill();
+	component_modes_emit_source_wire_only_for_active_edit_mesh();
+	component_source_wire_does_not_stick_without_mode_selection();
+	component_source_wire_sticks_only_to_current_mode_selection();
 	selected_component_does_not_cut_holes_in_active_mesh_source_wire();
 	selected_inner_edge_hover_uses_active_source_wire_selected_color();
 	inverted_open_cube_inner_edge_hover_uses_selected_deselect_color();

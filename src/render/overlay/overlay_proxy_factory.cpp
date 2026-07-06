@@ -260,6 +260,7 @@ void OverlayProxyFactory::initialize(
     filament::Engine &engine, filament::Scene &scene,
     filament::Material &overlay_material,
     filament::Material &overlay_line_material,
+    filament::Material &edit_wire_line_material,
     filament::Material &overlay_point_material,
     filament::Material &overlay_icon_material,
     const std::filesystem::path &resource_root) {
@@ -268,6 +269,7 @@ void OverlayProxyFactory::initialize(
   scene_ = &scene;
   overlay_material_ = &overlay_material;
   overlay_line_material_ = &overlay_line_material;
+  edit_wire_line_material_ = &edit_wire_line_material;
   overlay_point_material_ = &overlay_point_material;
   overlay_icon_material_ = &overlay_icon_material;
   load_icon_textures(resource_root);
@@ -279,6 +281,7 @@ void OverlayProxyFactory::shutdown() {
   scene_ = nullptr;
   overlay_material_ = nullptr;
   overlay_line_material_ = nullptr;
+  edit_wire_line_material_ = nullptr;
   overlay_point_material_ = nullptr;
   overlay_icon_material_ = nullptr;
 }
@@ -297,6 +300,9 @@ OverlayProxyFactory::create_layer_proxies(const OverlayLayerBuildPlan &plan,
   }
   for (const OverlayLineBatch &batch : plan.line_batches) {
     create_line_proxy(batch, layer_mask, proxies);
+  }
+  for (const OverlayEditWireBatch &batch : plan.edit_wire_batches) {
+    create_edit_wire_proxy(batch, layer_mask, proxies);
   }
   for (const OverlayPointBatch &batch : plan.point_batches) {
     create_point_proxy(batch, layer_mask, proxies);
@@ -336,6 +342,17 @@ bool OverlayProxyFactory::update_layer_proxies(
       return false;
     }
   }
+  for (const OverlayEditWireBatch &batch : plan.edit_wire_batches) {
+    if (batch.mesh.empty()) {
+      continue;
+    }
+    if (index >= proxies.size() ||
+        !proxy_can_update_mesh(proxies[index++],
+                               OverlayRenderableProxyKind::EditWire,
+                               batch.mesh)) {
+      return false;
+    }
+  }
   for (const OverlayPointBatch &batch : plan.point_batches) {
     if (batch.mesh.empty()) {
       continue;
@@ -368,6 +385,11 @@ bool OverlayProxyFactory::update_layer_proxies(
       update_line_proxy(proxies[index++], batch, layer_mask);
     }
   }
+  for (const OverlayEditWireBatch &batch : plan.edit_wire_batches) {
+    if (!batch.mesh.empty()) {
+      update_edit_wire_proxy(proxies[index++], batch, layer_mask);
+    }
+  }
   for (const OverlayPointBatch &batch : plan.point_batches) {
     if (!batch.mesh.empty()) {
       update_point_proxy(proxies[index++], batch, layer_mask);
@@ -396,6 +418,9 @@ OverlayProxyFactory::planned_proxy_count(const OverlayLayerBuildPlan &plan) {
     count += batch.mesh.empty() ? 0u : 1u;
   }
   for (const OverlayLineBatch &batch : plan.line_batches) {
+    count += batch.mesh.empty() ? 0u : 1u;
+  }
+  for (const OverlayEditWireBatch &batch : plan.edit_wire_batches) {
     count += batch.mesh.empty() ? 0u : 1u;
   }
   for (const OverlayPointBatch &batch : plan.point_batches) {
@@ -449,6 +474,39 @@ void OverlayProxyFactory::create_line_proxy(
   append_overlay_proxy(
       *engine_, *scene_, *overlay_line_material_, batch.mesh.vertices,
       batch.mesh.indices, OverlayRenderableProxyKind::Line, batch.state,
+      layer_mask, proxies,
+      [](filament::VertexBuffer::Builder &builder) {
+        builder
+            .attribute(filament::VertexAttribute::POSITION, 0,
+                       AttributeType::FLOAT4,
+                       offsetof(OverlayLineVertex, position),
+                       sizeof(OverlayLineVertex))
+            .attribute(filament::VertexAttribute::CUSTOM0, 0,
+                       AttributeType::FLOAT4,
+                       offsetof(OverlayLineVertex, line_distance_pixels),
+                       sizeof(OverlayLineVertex))
+            .attribute(
+                filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4,
+                offsetof(OverlayLineVertex, color), sizeof(OverlayLineVertex))
+            .normalized(filament::VertexAttribute::COLOR);
+      },
+      [this, &batch](filament::MaterialInstance &material) {
+        configure_overlay_material(material, batch.state);
+        material.setParameter("lineWidth", batch.width_pixels);
+        material.setParameter("featherPixels", kOverlayLineFeatherPixels);
+      });
+}
+
+void OverlayProxyFactory::create_edit_wire_proxy(
+    const OverlayEditWireBatch &batch, std::uint8_t layer_mask,
+    std::vector<OverlayRenderableProxy> &proxies) {
+  if (batch.mesh.empty()) {
+    return;
+  }
+
+  append_overlay_proxy(
+      *engine_, *scene_, *edit_wire_line_material_, batch.mesh.vertices,
+      batch.mesh.indices, OverlayRenderableProxyKind::EditWire, batch.state,
       layer_mask, proxies,
       [](filament::VertexBuffer::Builder &builder) {
         builder
@@ -553,6 +611,16 @@ void OverlayProxyFactory::update_triangle_proxy(
 void OverlayProxyFactory::update_line_proxy(OverlayRenderableProxy &proxy,
                                             const OverlayLineBatch &batch,
                                             std::uint8_t layer_mask) {
+  update_proxy_buffers(*engine_, proxy, batch.mesh, layer_mask);
+  configure_overlay_material(*proxy.material_instance, batch.state);
+  proxy.material_instance->setParameter("lineWidth", batch.width_pixels);
+  proxy.material_instance->setParameter("featherPixels",
+                                        kOverlayLineFeatherPixels);
+}
+
+void OverlayProxyFactory::update_edit_wire_proxy(
+    OverlayRenderableProxy &proxy, const OverlayEditWireBatch &batch,
+    std::uint8_t layer_mask) {
   update_proxy_buffers(*engine_, proxy, batch.mesh, layer_mask);
   configure_overlay_material(*proxy.material_instance, batch.state);
   proxy.material_instance->setParameter("lineWidth", batch.width_pixels);

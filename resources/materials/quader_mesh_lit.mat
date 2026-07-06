@@ -24,11 +24,98 @@ material {
         {
             type : float,
             name : roughnessFactor
+        },
+        {
+            type : float4,
+            name : surfaceGridMinorColor
+        },
+        {
+            type : float4,
+            name : surfaceGridMajorColor
+        },
+        {
+            type : float,
+            name : surfaceGridSize
+        },
+        {
+            type : float,
+            name : surfaceGridMajorSize
+        },
+        {
+            type : float,
+            name : surfaceGridMinorLineThickness
+        },
+        {
+            type : float,
+            name : surfaceGridMajorLineThickness
+        },
+        {
+            type : float,
+            name : surfaceGridEnabled
         }
     ]
 }
 
 fragment {
+    float surfaceGridLine(float coord, float spacing, float thicknessValue) {
+        float safeSpacing = max(spacing, 0.0001);
+        float wrapped = abs(fract(coord / safeSpacing + 0.5) - 0.5) * safeSpacing;
+        float thickness = clamp(thicknessValue, 0.05, 8.0);
+        float antialias = max(fwidth(coord), safeSpacing * 0.0005);
+        float lineWidth = antialias * 0.75 * thickness;
+        float coverage = 1.0 - smoothstep(lineWidth, lineWidth + antialias, wrapped);
+        return coverage;
+    }
+
+    vec3 safeSurfaceNormal(vec3 worldPosition) {
+        vec3 normal = cross(dFdx(worldPosition), dFdy(worldPosition));
+        float len = length(normal);
+        if (len <= 0.000001) {
+            return vec3(0.0, 1.0, 0.0);
+        }
+        return normal / len;
+    }
+
+    vec2 surfaceGridCoordinates(vec3 worldPosition, vec3 normal) {
+        vec3 dominant = abs(normal);
+        if (dominant.x >= dominant.y && dominant.x >= dominant.z) {
+            return worldPosition.yz;
+        }
+        if (dominant.y >= dominant.z) {
+            return worldPosition.xz;
+        }
+        return worldPosition.xy;
+    }
+
+    vec3 applySurfaceGrid(vec3 baseColor) {
+        if (materialParams.surfaceGridEnabled <= 0.5) {
+            return baseColor;
+        }
+
+        vec3 worldPosition = getUserWorldPosition().xyz;
+        vec2 coords = surfaceGridCoordinates(
+                worldPosition, safeSurfaceNormal(worldPosition));
+        float baseSpacing = max(materialParams.surfaceGridSize, 0.0001);
+        float majorSpacing = max(materialParams.surfaceGridMajorSize, baseSpacing);
+        float minorLine = max(
+                surfaceGridLine(coords.x, baseSpacing, materialParams.surfaceGridMinorLineThickness),
+                surfaceGridLine(coords.y, baseSpacing, materialParams.surfaceGridMinorLineThickness));
+        float majorLine = max(
+                surfaceGridLine(coords.x, majorSpacing, materialParams.surfaceGridMajorLineThickness),
+                surfaceGridLine(coords.y, majorSpacing, materialParams.surfaceGridMajorLineThickness));
+
+        float majorCoverage = majorLine * materialParams.surfaceGridMajorColor.a;
+        float minorCoverage = minorLine * materialParams.surfaceGridMinorColor.a
+                * (1.0 - clamp(majorCoverage, 0.0, 1.0));
+        float alpha = clamp(minorCoverage + majorCoverage, 0.0, 1.0);
+        if (alpha <= 0.000001) {
+            return baseColor;
+        }
+        vec3 gridColor = (materialParams.surfaceGridMinorColor.rgb * minorCoverage
+                + materialParams.surfaceGridMajorColor.rgb * majorCoverage) / alpha;
+        return mix(baseColor, gridColor, alpha);
+    }
+
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
 
@@ -36,6 +123,7 @@ fragment {
         vec4 baseSample = texture(materialParams_baseColorTexture, uv);
         float roughnessSample = texture(materialParams_roughnessTexture, uv).r;
         vec3 baseColor = baseSample.rgb * materialParams.baseColorFactor.rgb;
+        baseColor = applySurfaceGrid(baseColor);
 
         material.baseColor = vec4(baseColor, baseSample.a * materialParams.baseColorFactor.a);
         material.roughness = clamp(roughnessSample * materialParams.roughnessFactor, 0.04, 1.0);

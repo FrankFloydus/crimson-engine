@@ -24,6 +24,7 @@ enum class OverlayRenderableProxyKind {
     Unknown,
     Triangle,
     Line,
+    EditWire,
     Point,
     Icon,
 };

@@ -24,6 +24,7 @@ void SceneRenderBridge::initialize(
     filament::Material &overlay_material,
     filament::Material &overlay_line_material,
     filament::Material &selected_object_line_material,
+    filament::Material &edit_wire_line_material,
     filament::Material &overlay_point_material,
     filament::Material &overlay_icon_material,
     std::filesystem::path resource_root) {
@@ -38,6 +39,7 @@ void SceneRenderBridge::initialize(
   tool_preview_cache_.initialize(mesh_factory_, material_binding_);
   overlay_proxy_factory_.initialize(engine, scene, overlay_material,
                                     overlay_line_material,
+                                    edit_wire_line_material,
                                     overlay_point_material,
                                     overlay_icon_material, resource_root);
   overlay_cache_.initialize(overlay_proxy_factory_);
@@ -74,6 +76,15 @@ void SceneRenderBridge::sync(const RenderSceneSnapshot &snapshot) {
     return;
   }
   (void)sync_service_.sync(snapshot);
+}
+
+void SceneRenderBridge::update_mesh_surface_grid(
+    float grid_world_spacing, const ViewportSettings &settings) {
+  QDR_PROFILE_FUNCTION();
+  if (!engine_ || !scene_ || !mesh_cache_.initialized()) {
+    return;
+  }
+  mesh_cache_.update_surface_grid(grid_world_spacing, settings);
 }
 
 void SceneRenderBridge::sync_scene_asset_overlays(

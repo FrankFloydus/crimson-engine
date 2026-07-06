@@ -1316,6 +1316,50 @@ TEST(OverlayLineMeshBuilderTests, BatchesSameWidthLinesWithDifferentColors) {
               rgba8_srgb_to_linear(rgba8(90, 170, 255, 255)));
 }
 
+TEST(OverlayLineMeshBuilderTests,
+     SplitsComponentSelectionLinesIntoDepthTestedBatches) {
+  ViewportOverlayFrame frame;
+  frame.lines.push_back({
+      .layer = ViewportOverlayLayer::SelectedEdge,
+      .start = {-0.5f, 0.0f, -1.0f},
+      .end = {0.0f, 0.0f, -1.0f},
+      .color = rgba8(255, 224, 92, 235),
+      .width_pixels = 2.0f,
+      .source = ViewportOverlaySource::ComponentSelection,
+  });
+  frame.lines.push_back({
+      .layer = ViewportOverlayLayer::SelectedEdge,
+      .start = {0.0f, 0.0f, -1.0f},
+      .end = {0.5f, 0.0f, -1.0f},
+      .color = rgba8(255, 224, 92, 235),
+      .width_pixels = 2.0f,
+      .source = ViewportOverlaySource::Selection,
+  });
+
+  const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+      frame, test_overlay_camera(), ViewportOverlayLayer::SelectedEdge);
+
+  ASSERT_EQ(plan.line_batches.size(), 2u);
+  const auto depth_tested =
+      std::find_if(plan.line_batches.begin(), plan.line_batches.end(),
+                   [](const OverlayLineBatch &batch) {
+                     return batch.state.depth_func ==
+                            OverlayDepthFunc::GreaterOrEqual;
+                   });
+  ASSERT_NE(depth_tested, plan.line_batches.end());
+  EXPECT_FLOAT_EQ(depth_tested->depth_bias, kOverlayLineDepthBias);
+  EXPECT_TRUE(depth_tested->state.depth_culling);
+
+  const auto draw_on_top =
+      std::find_if(plan.line_batches.begin(), plan.line_batches.end(),
+                   [](const OverlayLineBatch &batch) {
+                     return batch.state.depth_func == OverlayDepthFunc::Always;
+                   });
+  ASSERT_NE(draw_on_top, plan.line_batches.end());
+  EXPECT_FLOAT_EQ(draw_on_top->depth_bias, 0.0f);
+  EXPECT_FALSE(draw_on_top->state.depth_culling);
+}
+
 TEST(OverlayLineMeshBuilderTests, SourceWireDepthStampsCullOutwardOccludedHandles) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
@@ -1721,6 +1765,50 @@ TEST(OverlayPointMeshBuilderTests, BuildsOutlineAndFillPointPasses) {
       EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::Always);
       EXPECT_FALSE(batch.state.depth_culling);
     }
+}
+
+TEST(OverlayPointMeshBuilderTests,
+     SplitsComponentSelectionPointsIntoDepthTestedBatches) {
+  ViewportOverlayFrame frame;
+  frame.points.push_back({
+      .layer = ViewportOverlayLayer::SelectedVertex,
+      .position = {-0.25f, 0.0f, -1.0f},
+      .color = rgba8(255, 211, 31, 255),
+      .size_pixels = 6.0f,
+      .source = ViewportOverlaySource::ComponentSelection,
+      .outline_growth_pixels = 0.0f,
+  });
+  frame.points.push_back({
+      .layer = ViewportOverlayLayer::SelectedVertex,
+      .position = {0.25f, 0.0f, -1.0f},
+      .color = rgba8(255, 211, 31, 255),
+      .size_pixels = 6.0f,
+      .source = ViewportOverlaySource::Selection,
+      .outline_growth_pixels = 0.0f,
+  });
+
+  const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+      frame, test_overlay_camera(), ViewportOverlayLayer::SelectedVertex);
+
+  ASSERT_EQ(plan.point_batches.size(), 2u);
+  const auto depth_tested =
+      std::find_if(plan.point_batches.begin(), plan.point_batches.end(),
+                   [](const OverlayPointBatch &batch) {
+                     return batch.state.depth_func ==
+                            OverlayDepthFunc::GreaterOrEqual;
+                   });
+  ASSERT_NE(depth_tested, plan.point_batches.end());
+  EXPECT_FLOAT_EQ(depth_tested->depth_bias, kOverlayPointDepthBias);
+  EXPECT_TRUE(depth_tested->state.depth_culling);
+
+  const auto draw_on_top =
+      std::find_if(plan.point_batches.begin(), plan.point_batches.end(),
+                   [](const OverlayPointBatch &batch) {
+                     return batch.state.depth_func == OverlayDepthFunc::Always;
+                   });
+  ASSERT_NE(draw_on_top, plan.point_batches.end());
+  EXPECT_FLOAT_EQ(draw_on_top->depth_bias, 0.0f);
+  EXPECT_FALSE(draw_on_top->state.depth_culling);
 }
 
 TEST(OverlayPointMeshBuilderTests, BuildsPointLightIconBillboardBatch) {

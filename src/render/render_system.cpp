@@ -283,6 +283,7 @@ void RenderSystem::initialize_scene_render_bridge(
                            material_library_.vertex_color_overlay(),
                            material_library_.overlay_line(),
                            material_library_.selected_object_line(),
+                           material_library_.edit_wire_line(),
                            material_library_.overlay_point(),
                            material_library_.overlay_icon(), executable_dir);
 }

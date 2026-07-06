@@ -418,10 +418,12 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(main_menu, "ui.menu.edit.snap.grid");
   expect_contains(main_menu, "ui.menu.edit.snap.vertex");
   expect_contains(main_menu, "ui.menu.view.grid");
+  expect_contains(main_menu, "ui.menu.view.mesh_grid");
   expect_contains(main_menu, "ui.menu.view.gizmos");
   expect_contains(main_menu, "ui.menu.view.overlays");
   expect_contains(main_menu, "ui.menu.view.show_info");
   expect_contains(main_menu, "ViewportBoolSettingId::ShowGrid");
+  expect_contains(main_menu, "ViewportBoolSettingId::ShowMeshGrid");
   expect_contains(main_menu, "ViewportBoolSettingId::ShowGizmos");
   expect_contains(main_menu, "ViewportBoolSettingId::ShowOverlays");
   expect_contains(main_menu, "ViewportBoolSettingId::ShowInfo");

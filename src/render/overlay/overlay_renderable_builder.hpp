@@ -78,6 +78,16 @@ struct OverlayLineBatch {
 };
 
 /**
+ * Represents an Overlay Edit Wire Batch value used by the render extraction and Filament resource layer.
+ */
+struct OverlayEditWireBatch {
+    OverlayEditWireMesh mesh;
+    OverlayRenderState state;
+    float width_pixels = 1.0f;
+    float near_plane = 0.05f;
+};
+
+/**
  * Represents an Overlay Point Batch value used by the render extraction and Filament resource layer.
  */
 struct OverlayPointBatch {
@@ -105,6 +115,7 @@ struct OverlayIconBatch {
 struct OverlayLayerBuildPlan {
   std::vector<OverlayFaceFillBatch> face_fill_batches;
   std::vector<OverlayLineBatch> line_batches;
+  std::vector<OverlayEditWireBatch> edit_wire_batches;
   std::vector<OverlayPointBatch> point_batches;
   std::vector<OverlayIconBatch> icon_batches;
 };
@@ -152,6 +163,17 @@ private:
      */
     struct LineBatchKey {
       float width_pixels = 0.0f;
+      ViewportOverlayDepthMode depth_mode =
+          ViewportOverlayDepthMode::DepthTested;
+    };
+
+    /**
+     * Stores the Point Batch Key data contract used by the render extraction and Filament resource layer.
+     */
+    struct PointBatchKey {
+      float size_pixels = 0.0f;
+      ViewportOverlayDepthMode depth_mode =
+          ViewportOverlayDepthMode::DepthTested;
     };
 
     /**
@@ -166,7 +188,8 @@ private:
     lines_for_layer(const ViewportOverlayFrame &frame,
                     ViewportOverlayLayer layer,
                     const ViewportOverlayCamera &camera,
-                    const OverlayDepthStampVisibilityFilter *visibility);
+                    const OverlayDepthStampVisibilityFilter *visibility,
+                    std::vector<ViewportOverlayLine> &line_storage);
     static std::vector<const ViewportOverlayPoint *>
     points_for_layer(const ViewportOverlayFrame &frame,
                      ViewportOverlayLayer layer,

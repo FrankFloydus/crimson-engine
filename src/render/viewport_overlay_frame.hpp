@@ -105,6 +105,8 @@ enum class ViewportOverlaySource {
     GroupBounds,
     Tool,
     Diagnostic,
+    ComponentSelection,
+    ComponentHover,
     External,
 };
 

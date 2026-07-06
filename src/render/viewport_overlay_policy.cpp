@@ -70,6 +70,32 @@ bool viewport_overlay_icon_draws_on_top(ViewportOverlayLayer layer) {
   return layer == ViewportOverlayLayer::PointLightGizmo;
 }
 
+bool viewport_overlay_component_selection_source(ViewportOverlaySource source) {
+  return source == ViewportOverlaySource::ComponentSelection ||
+         source == ViewportOverlaySource::ComponentHover;
+}
+
+bool viewport_overlay_line_uses_component_depth(
+    const ViewportOverlayLine &line) {
+  if (!viewport_overlay_component_selection_source(line.source)) {
+    return false;
+  }
+  return line.layer == ViewportOverlayLayer::SourceWire ||
+         line.layer == ViewportOverlayLayer::SelectedFaceEdge ||
+         line.layer == ViewportOverlayLayer::SelectedEdge ||
+         line.layer == ViewportOverlayLayer::HoverFaceEdge ||
+         line.layer == ViewportOverlayLayer::HoverEdge;
+}
+
+bool viewport_overlay_point_uses_component_depth(
+    const ViewportOverlayPoint &point) {
+  if (!viewport_overlay_component_selection_source(point.source)) {
+    return false;
+  }
+  return point.layer == ViewportOverlayLayer::SelectedVertex ||
+         point.layer == ViewportOverlayLayer::HoverVertex;
+}
+
 ViewportOverlayDepthMode
 viewport_overlay_depth_mode(ViewportOverlayLayer layer,
                             ViewportOverlayGeometryKind kind) {
@@ -93,15 +119,33 @@ viewport_overlay_depth_mode(ViewportOverlayLayer layer,
   return ViewportOverlayDepthMode::DepthTested;
 }
 
+ViewportOverlayDepthMode
+viewport_overlay_depth_mode(const ViewportOverlayLine &line) {
+  if (viewport_overlay_line_uses_component_depth(line)) {
+    return ViewportOverlayDepthMode::DepthTested;
+  }
+  return viewport_overlay_depth_mode(line.layer,
+                                     ViewportOverlayGeometryKind::Lines);
+}
+
+ViewportOverlayDepthMode
+viewport_overlay_depth_mode(const ViewportOverlayPoint &point) {
+  if (viewport_overlay_point_uses_component_depth(point)) {
+    return ViewportOverlayDepthMode::DepthTested;
+  }
+  return viewport_overlay_depth_mode(point.layer,
+                                     ViewportOverlayGeometryKind::Points);
+}
+
 bool viewport_overlay_depth_tested(ViewportOverlayLayer layer,
                                    ViewportOverlayGeometryKind kind) {
   return viewport_overlay_depth_mode(layer, kind) ==
          ViewportOverlayDepthMode::DepthTested;
 }
 
-float viewport_overlay_depth_bias(ViewportOverlayLayer layer,
+float viewport_overlay_depth_bias(ViewportOverlayDepthMode mode,
                                   ViewportOverlayGeometryKind kind) {
-  if (!viewport_overlay_depth_tested(layer, kind)) {
+  if (mode != ViewportOverlayDepthMode::DepthTested) {
     return 0.0f;
   }
   switch (kind) {
@@ -114,6 +158,12 @@ float viewport_overlay_depth_bias(ViewportOverlayLayer layer,
     return kOverlayPointDepthBias;
   }
   return 0.0f;
+}
+
+float viewport_overlay_depth_bias(ViewportOverlayLayer layer,
+                                  ViewportOverlayGeometryKind kind) {
+  return viewport_overlay_depth_bias(viewport_overlay_depth_mode(layer, kind),
+                                     kind);
 }
 
 bool viewport_overlay_layer_writes_transient_hover_suppression_mask(

@@ -1315,6 +1315,10 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
                     {150.0f / 255.0f, 150.0f / 255.0f, 150.0f / 255.0f, 1.0f});
   expect_color_near(settings.color(ViewportColorSettingId::GridMajor),
                     {210.0f / 255.0f, 210.0f / 255.0f, 210.0f / 255.0f, 1.0f});
+  expect_color_near(settings.color(ViewportColorSettingId::MeshGridMinor),
+                    {0.02f, 0.02f, 0.02f, 1.0f});
+  expect_color_near(settings.color(ViewportColorSettingId::MeshGridMajor),
+                    {1.0f, 0.84f, 0.22f, 1.0f});
   const SceneSettingsComponent scene_settings_defaults;
   expect_vec3_near(scene_settings_defaults.environment.clear_color,
                    {2.0f / 255.0f, 2.0f / 255.0f, 2.0f / 255.0f});
@@ -1331,8 +1335,9 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
       settings.float_value(ViewportFloatSettingId::PickVertexRadius), 0.3f);
   EXPECT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::GizmoSize),
                   1.0f);
-  ASSERT_EQ(viewport_bool_settings().size(), 6u);
+  ASSERT_EQ(viewport_bool_settings().size(), 7u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
+  EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGizmos));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowOverlays));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowInfo));
@@ -1445,9 +1450,15 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
                                  {0.25f, 0.5f, 0.75f, 0.6f}));
   EXPECT_TRUE(settings.set_color(ViewportColorSettingId::GridMajor,
                                  {0.0f, 0.0f, 0.0f, 1.0f}));
+  EXPECT_TRUE(settings.set_color(ViewportColorSettingId::MeshGridMinor,
+                                 {0.1f, 0.2f, 0.3f, 0.4f}));
+  EXPECT_TRUE(settings.set_color(ViewportColorSettingId::MeshGridMajor,
+                                 {0.8f, 0.7f, 0.6f, 0.5f}));
   EXPECT_TRUE(
       settings.set_float_value(ViewportFloatSettingId::GizmoSize, 10.0f));
   EXPECT_TRUE(settings.set_bool_value(ViewportBoolSettingId::ShowGrid, false));
+  EXPECT_TRUE(
+      settings.set_bool_value(ViewportBoolSettingId::ShowMeshGrid, true));
   EXPECT_TRUE(settings.set_bool_value(ViewportBoolSettingId::ShowInfo, true));
   EXPECT_TRUE(settings.set_bool_value(ViewportBoolSettingId::GridSnap, false));
   EXPECT_TRUE(
@@ -1459,8 +1470,13 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
                     {0.25098f, 0.501961f, 0.74902f, 0.6f});
   expect_color_near(loaded.color(ViewportColorSettingId::GridMajor),
                     {0.0f, 0.0f, 0.0f, 1.0f});
+  expect_color_near(loaded.color(ViewportColorSettingId::MeshGridMinor),
+                    {0.101961f, 0.2f, 0.301961f, 0.4f});
+  expect_color_near(loaded.color(ViewportColorSettingId::MeshGridMajor),
+                    {0.8f, 0.701961f, 0.6f, 0.501961f});
   EXPECT_FLOAT_EQ(loaded.float_value(ViewportFloatSettingId::GizmoSize), 2.0f);
   EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::ShowGrid));
+  EXPECT_TRUE(loaded.bool_value(ViewportBoolSettingId::ShowMeshGrid));
   EXPECT_TRUE(loaded.bool_value(ViewportBoolSettingId::ShowInfo));
   EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::GridSnap));
   EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::VertexSnap));
@@ -1475,9 +1491,15 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
     EXPECT_NE(
         source.find("QVertexWorks.Quader.Viewport.GridMajorColor=000000FF"),
         std::string::npos);
+    EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.MeshGridMinorColor"),
+              std::string::npos);
+    EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.MeshGridMajorColor"),
+              std::string::npos);
     EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.GizmoSize"),
               std::string::npos);
     EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.ShowGrid"),
+              std::string::npos);
+    EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.ShowMeshGrid"),
               std::string::npos);
     EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.ShowInfo"),
               std::string::npos);
@@ -1574,6 +1596,32 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
       source.find("material.metallic = clamp(materialParams.metallicFactor"),
       std::string::npos);
   EXPECT_EQ(source.find("editor_unlit"), std::string::npos);
+}
+
+TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
+  const std::array<std::string, 2> sources = {
+      read_source_file("resources/materials/quader_mesh.mat"),
+      read_source_file("resources/materials/quader_mesh_lit.mat"),
+  };
+
+  for (const std::string &source : sources) {
+    EXPECT_NE(source.find("surfaceGridMinorColor"), std::string::npos);
+    EXPECT_NE(source.find("surfaceGridMajorColor"), std::string::npos);
+    EXPECT_NE(source.find("surfaceGridEnabled"), std::string::npos);
+    EXPECT_NE(source.find("getUserWorldPosition()"), std::string::npos);
+    EXPECT_NE(source.find("cross(dFdx(worldPosition), dFdy(worldPosition))"),
+              std::string::npos);
+    EXPECT_NE(source.find("surfaceGridCoordinates("), std::string::npos);
+    EXPECT_NE(source.find("surfaceGridMinorLineThickness"),
+              std::string::npos);
+    EXPECT_NE(source.find("surfaceGridMajorLineThickness"),
+              std::string::npos);
+    EXPECT_NE(source.find("baseColor = applySurfaceGrid(baseColor)"),
+              std::string::npos);
+    EXPECT_NE(source.find("return coverage;"), std::string::npos);
+    EXPECT_EQ(source.find("return coverage * min(thickness, 1.0)"),
+              std::string::npos);
+  }
 }
 
 TEST(OverlayMaterialTests, PremultipliesVertexAlphaForTransparentFaceFill) {
@@ -1803,6 +1851,47 @@ TEST(ViewportOverlayPolicyTests, MatchesDepthAndHoverSuppressionContract) {
       ViewportOverlayLayer::SourceWire));
 }
 
+TEST(ViewportOverlayPolicyTests,
+     ComponentSelectionHandlesUseDepthTestedPrimitiveState) {
+  const ViewportOverlayLine source_wire{
+      .layer = ViewportOverlayLayer::SourceWire,
+      .source = ViewportOverlaySource::Selection,
+  };
+  const ViewportOverlayLine object_selected_edge{
+      .layer = ViewportOverlayLayer::SelectedEdge,
+      .source = ViewportOverlaySource::Selection,
+  };
+  const ViewportOverlayLine component_selected_edge{
+      .layer = ViewportOverlayLayer::SelectedEdge,
+      .source = ViewportOverlaySource::ComponentSelection,
+  };
+  const ViewportOverlayLine component_hover_edge{
+      .layer = ViewportOverlayLayer::HoverEdge,
+      .source = ViewportOverlaySource::ComponentHover,
+  };
+  const ViewportOverlayPoint object_selected_vertex{
+      .layer = ViewportOverlayLayer::SelectedVertex,
+      .source = ViewportOverlaySource::Selection,
+  };
+  const ViewportOverlayPoint component_selected_vertex{
+      .layer = ViewportOverlayLayer::SelectedVertex,
+      .source = ViewportOverlaySource::ComponentSelection,
+  };
+
+  EXPECT_EQ(viewport_overlay_depth_mode(source_wire),
+            ViewportOverlayDepthMode::DrawOnTop);
+  EXPECT_EQ(viewport_overlay_depth_mode(object_selected_edge),
+            ViewportOverlayDepthMode::DrawOnTop);
+  EXPECT_EQ(viewport_overlay_depth_mode(component_selected_edge),
+            ViewportOverlayDepthMode::DepthTested);
+  EXPECT_EQ(viewport_overlay_depth_mode(component_hover_edge),
+            ViewportOverlayDepthMode::DepthTested);
+  EXPECT_EQ(viewport_overlay_depth_mode(object_selected_vertex),
+            ViewportOverlayDepthMode::DrawOnTop);
+  EXPECT_EQ(viewport_overlay_depth_mode(component_selected_vertex),
+            ViewportOverlayDepthMode::DepthTested);
+}
+
 TEST(ViewportOverlayPolicyTests, MatchesNativeColorsAndRuntimePointSizes) {
   EXPECT_EQ(
       viewport_overlay_color_for(ViewportOverlayLayer::SelectedVisibleFace,
@@ -2009,7 +2098,8 @@ TEST(ViewportOverlayPolicyTests,
   SceneDocument scene;
   ViewportOverlayFrame projected =
       SelectionOverlayProjection::project_selection_overlay_frame(
-          frame, object_registry, scene);
+          frame, object_registry, scene,
+          quader_editor_core::SelectionMode::Object);
 
   ASSERT_EQ(projected.triangles.size(), 1u);
   EXPECT_EQ(projected.triangles[0].style_role,
@@ -2043,6 +2133,64 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_EQ(projection.find(
                 "viewport_overlay_is_native_selection_wire_color(color_abgr)"),
             std::string::npos);
+}
+
+TEST(SelectionOverlayProjectionTests,
+     ComponentModeMarksSelectedAndHoverHandlesWithoutMarkingSourceWire) {
+  const quader_editor_core::SelectionOverlayStyle style;
+  quader_editor_core::SelectionOverlayFrame frame;
+  frame.lines.push_back({
+      .layer = quader_editor_core::SelectionOverlayLayer::SourceWire,
+      .start = {0.0f, 0.0f, 0.0f},
+      .end = {1.0f, 0.0f, 0.0f},
+      .color_abgr = style.source_wire_color_abgr,
+  });
+  frame.lines.push_back({
+      .layer = quader_editor_core::SelectionOverlayLayer::SelectedEdge,
+      .start = {0.0f, 1.0f, 0.0f},
+      .end = {1.0f, 1.0f, 0.0f},
+      .color_abgr = style.selected_edge_color_abgr,
+  });
+  frame.lines.push_back({
+      .layer = quader_editor_core::SelectionOverlayLayer::HoverEdge,
+      .start = {0.0f, 2.0f, 0.0f},
+      .end = {1.0f, 2.0f, 0.0f},
+      .color_abgr = style.hover_edge_color_abgr,
+  });
+  frame.points.push_back({
+      .layer = quader_editor_core::SelectionOverlayLayer::SelectedVertex,
+      .position = {0.0f, 0.0f, 0.0f},
+      .color_abgr = style.selected_handle_color_abgr,
+  });
+
+  ModelingObjectRuntimeMap object_registry;
+  SceneDocument scene;
+  const ViewportOverlayFrame component_projected =
+      SelectionOverlayProjection::project_selection_overlay_frame(
+          frame, object_registry, scene,
+          quader_editor_core::SelectionMode::Edge);
+  ASSERT_EQ(component_projected.lines.size(), 3u);
+  EXPECT_EQ(component_projected.lines[0].layer,
+            ViewportOverlayLayer::SourceWire);
+  EXPECT_EQ(component_projected.lines[0].source,
+            ViewportOverlaySource::Selection);
+  EXPECT_EQ(component_projected.lines[1].layer,
+            ViewportOverlayLayer::SelectedEdge);
+  EXPECT_EQ(component_projected.lines[1].source,
+            ViewportOverlaySource::ComponentSelection);
+  EXPECT_EQ(component_projected.lines[2].source,
+            ViewportOverlaySource::ComponentHover);
+  ASSERT_EQ(component_projected.points.size(), 1u);
+  EXPECT_EQ(component_projected.points[0].source,
+            ViewportOverlaySource::ComponentSelection);
+
+  const ViewportOverlayFrame object_projected =
+      SelectionOverlayProjection::project_selection_overlay_frame(
+          frame, object_registry, scene,
+          quader_editor_core::SelectionMode::Object);
+  ASSERT_EQ(object_projected.lines.size(), 3u);
+  EXPECT_EQ(object_projected.lines[1].source, ViewportOverlaySource::Selection);
+  EXPECT_EQ(object_projected.lines[2].source, ViewportOverlaySource::Hover);
 }
 
 TEST(ViewportOverlayStyleResolverTests,
@@ -3093,6 +3241,18 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
           "editor_unlit ? *shaded_mesh_material_ : *rendered_mesh_material_"),
       std::string::npos);
   EXPECT_NE(material_source.find("if (!editor_unlit)"), std::string::npos);
+  EXPECT_NE(material_source.find("apply_mesh_surface_grid"),
+            std::string::npos);
+  EXPECT_NE(material_source.find("surfaceGridMinorColor"), std::string::npos);
+  EXPECT_NE(material_source.find("surfaceGridMajorSize"), std::string::npos);
+  EXPECT_NE(material_source.find("ViewportBoolSettingId::ShowMeshGrid"),
+            std::string::npos);
+  EXPECT_NE(material_source.find("ViewportColorSettingId::MeshGridMinor"),
+            std::string::npos);
+  EXPECT_NE(material_source.find("ViewportColorSettingId::MeshGridMajor"),
+            std::string::npos);
+  EXPECT_NE(material_source.find("ViewportFloatSettingId::GridMinorLineSize"),
+            std::string::npos);
   EXPECT_EQ(
       material_source.find("material_instance->setParameter(\"editor_unlit\""),
       std::string::npos);
@@ -3639,6 +3799,12 @@ TEST(ViewportRendererTests,
       read_source_file("src/render/overlay/overlay_renderable_cache.cpp");
   const std::string overlay_proxy_factory_source =
       read_source_file("src/render/overlay/overlay_proxy_factory.cpp");
+  const std::string scene_bridge_source =
+      read_source_file("src/render/scene_render_bridge.cpp");
+  const std::string mesh_cache_source =
+      read_source_file("src/render/mesh_renderable_cache.cpp");
+  const std::string mesh_factory_source =
+      read_source_file("src/render/mesh_renderable_factory.cpp");
 
   const std::size_t render_start =
       renderer_source.find("void ViewportRenderer::render");
@@ -3735,6 +3901,27 @@ TEST(ViewportRendererTests,
       viewport_panel_source,
       "pane_state.renderer.update_ground_grid(pane_workspace.camera, "
       "grid_world_size, settings, grid_visible)"));
+  EXPECT_TRUE(source_contains_compact(
+      viewport_panel_source,
+      "render_bridge.update_mesh_surface_grid(grid_world_size, settings)"));
+  EXPECT_TRUE(source_contains_compact(
+      scene_bridge_source,
+      "mesh_cache_.update_surface_grid(grid_world_spacing, settings)"));
+  EXPECT_TRUE(source_contains_compact(
+      mesh_cache_source,
+      "update_surface_grid_proxy_map(*factory_, rendered_mesh_proxies_, "
+      "grid_world_spacing, settings)"));
+  EXPECT_TRUE(source_contains_compact(
+      mesh_cache_source,
+      "update_surface_grid_proxy_map(*factory_, shaded_mesh_proxies_, "
+      "grid_world_spacing, settings)"));
+  EXPECT_EQ(
+      mesh_cache_source.find(
+          "update_surface_grid_proxy_map(*factory_, overlay_depth_mesh_proxies_"),
+      std::string::npos);
+  EXPECT_NE(mesh_factory_source.find(
+                "material_binding_->apply_mesh_surface_grid("),
+            std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
       "pane_state.renderer.set_overlay_visible(overlays_visible ||"));
@@ -13168,6 +13355,67 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_NE(edge_line, edge_frame.lines.end());
   EXPECT_GT(edge_line->width_pixels, 0.0f);
+}
+
+TEST(ModelingSessionServiceTests,
+     ComponentModeSourceWireUsesActiveEditMeshOnly) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  EditorSelectionTestHarness editor_selection(scene, assets, service);
+
+  const ModelingCreateBoxResult first = service.create_box_from_bounds({
+      .bounds =
+          {
+              .min = {-1.0f, -1.0f, -1.0f},
+              .max = {1.0f, 1.0f, 1.0f},
+          },
+      .name = "Inactive Component Source Box",
+  });
+  ASSERT_TRUE(first.ok) << first.message;
+  const ModelingCreateBoxResult second = service.create_box_from_bounds({
+      .bounds =
+          {
+              .min = {4.0f, -1.0f, -1.0f},
+              .max = {6.0f, 1.0f, 1.0f},
+          },
+      .name = "Active Component Source Box",
+  });
+  ASSERT_TRUE(second.ok) << second.message;
+
+  ASSERT_TRUE(select_through_editor(editor_selection.selection,
+                                    {first.object.entity,
+                                     second.object.entity},
+                                    second.object.entity)
+                  .ok);
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Edge).ok);
+  const ModelingSelectionSummary summary = service.selection_summary();
+  ASSERT_EQ(summary.active_object_id, second.object.modeling_object_id);
+
+  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const auto source_wire_count_for_object = [&](int object_id) {
+    return static_cast<std::size_t>(std::count_if(
+        frame.lines.begin(), frame.lines.end(),
+        [object_id](const ViewportOverlayLine &line) {
+          return line.layer == ViewportOverlayLayer::SourceWire &&
+                 line.element.object_id == object_id;
+        }));
+  };
+  const auto source_stamp_count_for_object = [&](int object_id) {
+    return static_cast<std::size_t>(std::count_if(
+        frame.triangles.begin(), frame.triangles.end(),
+        [object_id](const ViewportOverlayTriangle &triangle) {
+          return triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp &&
+                 triangle.element.object_id == object_id;
+        }));
+  };
+
+  EXPECT_EQ(source_wire_count_for_object(first.object.modeling_object_id), 0u);
+  EXPECT_EQ(source_wire_count_for_object(second.object.modeling_object_id),
+            12u);
+  EXPECT_EQ(source_stamp_count_for_object(first.object.modeling_object_id), 0u);
+  EXPECT_GT(source_stamp_count_for_object(second.object.modeling_object_id),
+            0u);
 }
 
 TEST(ModelingSessionServiceTests,

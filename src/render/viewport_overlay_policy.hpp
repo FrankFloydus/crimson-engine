@@ -161,8 +161,14 @@ bool viewport_overlay_point_draws_on_top(ViewportOverlayLayer layer);
 ViewportOverlayDepthMode
 viewport_overlay_depth_mode(ViewportOverlayLayer layer,
                             ViewportOverlayGeometryKind kind);
+ViewportOverlayDepthMode
+viewport_overlay_depth_mode(const ViewportOverlayLine &line);
+ViewportOverlayDepthMode
+viewport_overlay_depth_mode(const ViewportOverlayPoint &point);
 bool viewport_overlay_depth_tested(ViewportOverlayLayer layer,
                                    ViewportOverlayGeometryKind kind);
+float viewport_overlay_depth_bias(ViewportOverlayDepthMode mode,
+                                  ViewportOverlayGeometryKind kind);
 float viewport_overlay_depth_bias(ViewportOverlayLayer layer,
                                   ViewportOverlayGeometryKind kind);
 bool viewport_overlay_layer_writes_transient_hover_suppression_mask(

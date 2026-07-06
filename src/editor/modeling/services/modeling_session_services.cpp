@@ -165,6 +165,59 @@ void append_selected_hover_filtered_base_frame(
   }
 }
 
+const quader_editor_core::PolygonObject *find_polygon_object_by_id(
+    const std::vector<quader_editor_core::PolygonObject> &objects,
+    int object_id) {
+  const auto found = std::find_if(
+      objects.begin(), objects.end(),
+      [object_id](const quader_editor_core::PolygonObject &object) {
+        return object.id == object_id;
+      });
+  return found == objects.end() ? nullptr : &*found;
+}
+
+bool component_hover_replaces_fallback_active_source_wire(
+    const quader_editor_core::EditorSession &session,
+    const quader_editor_core::SelectionHoverState &hover) {
+  const quader_editor_core::SelectionMode mode = session.selection_mode();
+  if (mode == quader_editor_core::SelectionMode::Object ||
+      hover.candidate_object_id <= 0) {
+    return false;
+  }
+  const int active_object_id = session.active_object_id();
+  if (active_object_id <= 0 || active_object_id == hover.candidate_object_id) {
+    return false;
+  }
+  const quader_editor_core::PolygonObject *active_object =
+      find_polygon_object_by_id(session.objects(), active_object_id);
+  return active_object != nullptr && active_object->selected &&
+         !quader_editor_core::component_selection_has_mode_components(
+             active_object->selection, mode);
+}
+
+void remove_source_wire_for_object(
+    quader_editor_core::SelectionOverlayFrame &frame, int object_id) {
+  frame.lines.erase(
+      std::remove_if(
+          frame.lines.begin(), frame.lines.end(),
+          [object_id](const quader_editor_core::SelectionOverlayLine &line) {
+            return line.object_id == object_id &&
+                   line.layer ==
+                       quader_editor_core::SelectionOverlayLayer::SourceWire;
+          }),
+      frame.lines.end());
+  frame.triangles.erase(
+      std::remove_if(
+          frame.triangles.begin(), frame.triangles.end(),
+          [object_id](
+              const quader_editor_core::SelectionOverlayTriangle &triangle) {
+            return triangle.object_id == object_id &&
+                   triangle.layer == quader_editor_core::SelectionOverlayLayer::
+                                         SourceWireDepthStamp;
+          }),
+      frame.triangles.end());
+}
+
 void mix_overlay_signature_hash(std::uint64_t &hash, std::uint64_t value) {
   hash ^= value;
   hash *= 1099511628211ULL;
@@ -1549,11 +1602,13 @@ ModelingOverlayService::selection_overlay_base_frame(
     ModelingSelectionOverlayOptions options) const {
   const std::uint64_t content_revision = session.state().content_revision;
   const std::uint64_t selection_revision = session.state().selection_revision;
+  const int active_object_id = session.active_object_id();
   const quader_editor_core::SelectionMode selection_mode =
       session.selection_mode();
   if (overlay_base_cache_.valid &&
       overlay_base_cache_.content_revision == content_revision &&
       overlay_base_cache_.selection_revision == selection_revision &&
+      overlay_base_cache_.active_object_id == active_object_id &&
       overlay_base_cache_.selection_mode == selection_mode &&
       overlay_base_cache_.suppress_persistent_object_selection ==
           options.suppress_persistent_object_selection) {
@@ -1572,6 +1627,7 @@ ModelingOverlayService::selection_overlay_base_frame(
   next.valid = true;
   next.content_revision = content_revision;
   next.selection_revision = selection_revision;
+  next.active_object_id = active_object_id;
   next.selection_mode = selection_mode;
   next.suppress_persistent_object_selection =
       options.suppress_persistent_object_selection;
@@ -1587,12 +1643,17 @@ ModelingOverlayService::selection_overlay_base_frame(
     const std::uint64_t signature =
         PickingCacheProjection::object_face_geometry_signature(object);
     const auto reusable = previous_entry_by_object_id.find(object.id);
+    const bool active_source_wire_object =
+        selection_mode != quader_editor_core::SelectionMode::Object &&
+        object.id > 0 && object.id == active_object_id && object.selected;
 
     OverlayBaseObjectCacheEntry entry;
     if (reusable != previous_entry_by_object_id.end() &&
         previous_entries[reusable->second].geometry_signature == signature &&
         previous_entries[reusable->second].selection_mode == selection_mode &&
         previous_entries[reusable->second].selected == object.selected &&
+        previous_entries[reusable->second].active_source_wire_object ==
+            active_source_wire_object &&
         ModelingSelectionService::selection_matches(
             previous_entries[reusable->second].selection, object.selection)) {
       entry = std::move(previous_entries[reusable->second]);
@@ -1601,10 +1662,12 @@ ModelingOverlayService::selection_overlay_base_frame(
       entry.geometry_signature = signature;
       entry.selection_mode = selection_mode;
       entry.selected = object.selected;
+      entry.active_source_wire_object = active_source_wire_object;
       entry.selection = object.selection;
       entry.frame = quader_editor_core::build_selection_overlay_frame(
           std::span<const quader_editor_core::PolygonObject>(&object, 1U),
-          selection_mode, empty_hover, {});
+          selection_mode, active_source_wire_object ? object.id : -1,
+          empty_hover, {});
     }
     append_overlay_frame(next.frame, entry.frame);
     next.object_entries.push_back(std::move(entry));
@@ -1653,6 +1716,9 @@ ModelingOverlayService::selection_overlay_current_frame(
   }
 
   quader_editor_core::SelectionOverlayFrame frame = base;
+  if (component_hover_replaces_fallback_active_source_wire(session, hover)) {
+    remove_source_wire_for_object(frame, session.active_object_id());
+  }
   append_overlay_frame(frame, hover_frame);
   append_runtime_tool_overlay(frame);
   return frame;
@@ -1682,7 +1748,7 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
       selection_overlay_current_frame(session, runtime, hover, options);
   ViewportOverlayFrame frame =
       SelectionOverlayProjection::project_selection_overlay_frame(
-          current_frame, object_registry, scene);
+          current_frame, object_registry, scene, selection_mode);
   SelectionOverlayProjection::append_projected_overlay_lines(
       frame, runtime.knife_state().preview_lines, object_registry, scene,
       ViewportOverlayLayer::ToolPreviewLine,

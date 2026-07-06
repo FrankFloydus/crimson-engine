@@ -211,6 +211,49 @@ ViewportOverlaySource overlay_source_for_role(ViewportOverlayStyleRole role) {
   return ViewportOverlaySource::Unknown;
 }
 
+bool overlay_projection_component_mode(quader_editor_core::SelectionMode mode) {
+  return mode != quader_editor_core::SelectionMode::Object;
+}
+
+bool component_selection_line_layer(ViewportOverlayLayer layer) {
+  return layer == ViewportOverlayLayer::SourceWire ||
+         layer == ViewportOverlayLayer::SelectedFaceEdge ||
+         layer == ViewportOverlayLayer::SelectedEdge;
+}
+
+bool component_hover_line_layer(ViewportOverlayLayer layer) {
+  return layer == ViewportOverlayLayer::HoverFaceEdge ||
+         layer == ViewportOverlayLayer::HoverEdge;
+}
+
+ViewportOverlaySource
+overlay_source_for_line(ViewportOverlayLayer layer, ViewportOverlayStyleRole role,
+                        quader_editor_core::SelectionMode mode) {
+  if (overlay_projection_component_mode(mode)) {
+    if (component_selection_line_layer(layer)) {
+      return ViewportOverlaySource::ComponentSelection;
+    }
+    if (component_hover_line_layer(layer)) {
+      return ViewportOverlaySource::ComponentHover;
+    }
+  }
+  return overlay_source_for_role(role);
+}
+
+ViewportOverlaySource
+overlay_source_for_point(ViewportOverlayLayer layer, ViewportOverlayStyleRole role,
+                         quader_editor_core::SelectionMode mode) {
+  if (overlay_projection_component_mode(mode) &&
+      layer == ViewportOverlayLayer::SelectedVertex) {
+    return ViewportOverlaySource::ComponentSelection;
+  }
+  if (overlay_projection_component_mode(mode) &&
+      layer == ViewportOverlayLayer::HoverVertex) {
+    return ViewportOverlaySource::ComponentHover;
+  }
+  return overlay_source_for_role(role);
+}
+
 std::uint32_t projected_color_for(ViewportOverlayLayer layer,
                                   ViewportOverlayStyleRole role,
                                   std::uint32_t authored_color) {
@@ -334,7 +377,7 @@ ViewportOverlayFrame
 SelectionOverlayProjection::project_selection_overlay_frame(
     const quader_editor_core::SelectionOverlayFrame &frame,
     const ModelingObjectRuntimeMap &object_registry,
-    const SceneDocument &scene) {
+    const SceneDocument &scene, quader_editor_core::SelectionMode mode) {
   QDR_PROFILE_FUNCTION();
   ViewportOverlayFrame result;
   result.triangles.reserve(frame.triangles.size());
@@ -388,7 +431,7 @@ SelectionOverlayProjection::project_selection_overlay_frame(
           .color = projected_color_for(layer, role, line.color_abgr),
           .width_pixels = line.width_pixels,
           .style_role = role,
-          .source = overlay_source_for_role(role),
+          .source = overlay_source_for_line(layer, role, mode),
           .element = runtime_element_ref(line.object_id,
                                          quader_poly::kInvalidElementId,
                                          line.edge, line.face_id),
@@ -414,7 +457,7 @@ SelectionOverlayProjection::project_selection_overlay_frame(
           .color = projected_color_for(layer, role, point.color_abgr),
           .size_pixels = point.size_pixels,
           .style_role = role,
-          .source = overlay_source_for_role(role),
+          .source = overlay_source_for_point(layer, role, mode),
           .element = runtime_element_ref(point.object_id, point.vertex_id, {},
                                          quader_poly::kInvalidElementId),
       });

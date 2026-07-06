@@ -1221,6 +1221,8 @@ SessionState default_scene_state();
 SelectionMode sanitize_selection_mode(int mode);
 SelectionEditOperation sanitize_selection_operation(int operation);
 quader_poly::SelectionMode component_selection_mode(SelectionMode mode);
+bool component_selection_has_mode_components(
+    const quader_poly::Selection &selection, SelectionMode mode);
 bool polygon_selection_matches(const quader_poly::Selection &left,
                                const quader_poly::Selection &right);
 
@@ -1453,6 +1455,14 @@ SelectionOverlayFrame build_selection_overlay_frame(
 SelectionOverlayFrame build_selection_overlay_frame(
     const std::vector<PolygonObject> &objects, SelectionMode mode,
     const SelectionHoverState &hover, const SelectionOverlayStyle &style = {});
+SelectionOverlayFrame build_selection_overlay_frame(
+    std::span<const PolygonObject> objects, SelectionMode mode,
+    int active_object_id, const SelectionHoverState &hover,
+    const SelectionOverlayStyle &style = {});
+SelectionOverlayFrame build_selection_overlay_frame(
+    const std::vector<PolygonObject> &objects, SelectionMode mode,
+    int active_object_id, const SelectionHoverState &hover,
+    const SelectionOverlayStyle &style = {});
 SelectionOverlayFrame build_selection_hover_overlay_frame(
     std::span<const PolygonObject> objects, SelectionMode mode,
     const SelectionHoverState &hover, const SelectionOverlayStyle &style = {});
