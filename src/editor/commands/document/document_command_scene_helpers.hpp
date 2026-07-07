@@ -311,6 +311,9 @@ document_command_selected_root_entities(const SceneDocument &scene) {
     if (scene.is_scene_root(entity)) {
       continue;
     }
+    if (scene.is_effectively_locked(entity)) {
+      continue;
+    }
 
     bool ancestor_selected = false;
     EntityId parent = scene.parent(entity);

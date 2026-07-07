@@ -2410,15 +2410,30 @@ private:
 
   [[nodiscard]] quader_editor_core::Bounds3
   transform_drag_bounds() const override {
+    const auto to_runtime_bounds =
+        [](const SceneBounds &scene_bounds) -> quader_editor_core::Bounds3 {
+      return {
+          .empty = false,
+          .min = scene_bounds.min,
+          .max = scene_bounds.max,
+      };
+    };
+
+    if (session_.selection_mode() ==
+        quader_editor_core::SelectionMode::Object) {
+      if (const std::optional<SceneBounds> scene_bounds =
+              selected_transform_world_bounds(scene_, assets_)) {
+        return to_runtime_bounds(*scene_bounds);
+      }
+    }
+
     quader_editor_core::Bounds3 bounds = session_.selection_bounds();
     if (!bounds.empty) {
       return bounds;
     }
     if (const std::optional<SceneBounds> scene_bounds =
             selected_transform_world_bounds(scene_, assets_)) {
-      bounds.empty = false;
-      bounds.min = scene_bounds->min;
-      bounds.max = scene_bounds->max;
+      return to_runtime_bounds(*scene_bounds);
     }
     return bounds;
   }

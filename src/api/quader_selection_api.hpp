@@ -53,6 +53,12 @@ public:
                                        EntityId active = kInvalidEntityId);
     QuaderApiVoidResult select_objects(std::initializer_list<EntityId> entities,
                                        EntityId active = kInvalidEntityId);
+    QuaderApiVoidResult select_objects_for_inspection(
+        std::span<const EntityId> entities,
+        EntityId active = kInvalidEntityId);
+    QuaderApiVoidResult select_objects_for_inspection(
+        std::initializer_list<EntityId> entities,
+        EntityId active = kInvalidEntityId);
     QuaderApiVoidResult
     select_object(EntityId entity,
                   QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);

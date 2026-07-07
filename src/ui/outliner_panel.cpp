@@ -11,7 +11,6 @@
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "scene/scene_document.hpp"
 #include "ui/ui_context.hpp"
-#include "ui/ui_style_tokens.hpp"
 
 #include <imgui.h>
 
@@ -73,8 +72,9 @@ entity_range_selection(const std::vector<EntityRecord> &records,
 
 bool select_only(UIContext &context, const std::vector<EntityId> &entities,
                  EntityId active = kInvalidEntityId) {
-  QuaderApiVoidResult result = context.intent.editor.selection().select_objects(
-      std::span<const EntityId>(entities.data(), entities.size()), active);
+  QuaderApiVoidResult result =
+      context.intent.editor.selection().select_objects_for_inspection(
+          std::span<const EntityId>(entities.data(), entities.size()), active);
   return result.ok && result.changed;
 }
 
@@ -145,67 +145,6 @@ void duplicate_selection(UIContext &context) {
   (void)context.intent.editor.commands().execute(quader_command::kDuplicateSelection);
 }
 
-ImTextureID icon_for(const UIIconSet &icons, EntityKind kind) {
-  switch (kind) {
-  case EntityKind::Empty:
-    return icons.empty;
-  case EntityKind::Mesh:
-    return icons.mesh;
-  case EntityKind::Light:
-  case EntityKind::Generic:
-    return ImTextureID_Invalid;
-  }
-  return ImTextureID_Invalid;
-}
-
-void draw_outliner_text(ImDrawList *draw_list, ImVec2 position, ImU32 color,
-                        const std::string &text, bool italic,
-                        const ImVec4 &clip_rect) {
-  const int vertex_start = draw_list->VtxBuffer.Size;
-  draw_list->AddText(ImGui::GetFont(), ImGui::GetFontSize(), position, color,
-                     text.c_str(), text.c_str() + text.size(), 0.0f,
-                     &clip_rect);
-  if (!italic) {
-    return;
-  }
-
-  const float baseline = position.y + ImGui::GetTextLineHeight();
-  for (int index = vertex_start; index < draw_list->VtxBuffer.Size; ++index) {
-    ImDrawVert &vertex = draw_list->VtxBuffer[index];
-    vertex.pos.x += (baseline - vertex.pos.y) * 0.16f;
-  }
-}
-
-void draw_hierarchy_guides(ImDrawList *draw_list, ImVec2 row_min,
-                           ImVec2 row_max, float content_x, int depth,
-                           float indent,
-                           const std::vector<bool> &ancestor_has_next,
-                           bool has_next_sibling, ImU32 color) {
-  if (depth <= 0) {
-    return;
-  }
-
-  const float row_center_y = (row_min.y + row_max.y) * 0.5f;
-  for (std::size_t level = 0; level < ancestor_has_next.size(); ++level) {
-    if (!ancestor_has_next[level]) {
-      continue;
-    }
-    const float line_x =
-        row_min.x -
-        static_cast<float>(depth - static_cast<int>(level)) * indent +
-        indent * 0.5f;
-    draw_list->AddLine({line_x, row_min.y - 1.0f},
-                       {line_x, row_max.y + 1.0f}, color, 1.0f);
-  }
-  const float branch_x = row_min.x - indent * 0.5f;
-  const float branch_bottom = has_next_sibling ? row_max.y + 1.0f
-                                               : row_center_y;
-  draw_list->AddLine({branch_x, row_min.y - 1.0f},
-                     {branch_x, branch_bottom}, color, 1.0f);
-  draw_list->AddLine({branch_x, row_center_y}, {content_x - 3.0f, row_center_y},
-                     color, 1.0f);
-}
-
 } // namespace
 
 /**
@@ -246,16 +185,6 @@ void OutlinerPanel::draw_content(UIContext& context) {
     const ImGuiIO& io = ImGui::GetIO();
     PendingOutlinerAction pending_action = PendingOutlinerAction::None;
     EntityId pending_target = kInvalidEntityId;
-    constexpr float kOutlinerRowLeftPadding = 3.0f;
-    constexpr float kOutlinerTreeIndent = 14.0f;
-    constexpr float kOutlinerIconSize = 16.0f;
-    constexpr float kOutlinerStatusIconSize = 14.0f;
-    constexpr float kOutlinerIconTextGap = 4.0f;
-    const ImGuiStyle& style = ImGui::GetStyle();
-    ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, kOutlinerTreeIndent);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{kOutlinerRowLeftPadding, style.FramePadding.y});
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{kOutlinerIconTextGap, style.ItemSpacing.y});
-
     auto handle_selection = [&](const EntityRecord &record) {
       EntityId active_selection = record.id;
       std::vector<EntityId> next_selection;
@@ -281,9 +210,7 @@ void OutlinerPanel::draw_content(UIContext& context) {
       (void)select_only(context, next_selection, active_selection);
     };
 
-    std::function<void(EntityId, const std::vector<bool> &, bool)> draw_node =
-        [&](EntityId entity, const std::vector<bool> &ancestor_has_next,
-            bool has_next_sibling) {
+    std::function<void(EntityId)> draw_node = [&](EntityId entity) {
       const auto record_it = tree.record_index_by_entity.find(entity);
       if (record_it == tree.record_index_by_entity.end() ||
           record_it->second >= tree.records.size()) {
@@ -301,6 +228,7 @@ void OutlinerPanel::draw_content(UIContext& context) {
 
       ImGuiTreeNodeFlags tree_flags = ImGuiTreeNodeFlags_OpenOnArrow |
                                       ImGuiTreeNodeFlags_OpenOnDoubleClick |
+                                      ImGuiTreeNodeFlags_DrawLinesFull |
                                       ImGuiTreeNodeFlags_SpanAvailWidth;
       if (record.selected) {
         tree_flags |= ImGuiTreeNodeFlags_Selected;
@@ -312,10 +240,7 @@ void OutlinerPanel::draw_content(UIContext& context) {
         tree_flags |= ImGuiTreeNodeFlags_DefaultOpen;
       }
 
-      const bool open = ImGui::TreeNodeEx("##TreeNode", tree_flags);
-      const ImVec2 row_min = ImGui::GetItemRectMin();
-      const ImVec2 row_max = ImGui::GetItemRectMax();
-      const bool row_visible = ImGui::IsRectVisible(row_min, row_max);
+      const bool open = ImGui::TreeNodeEx(record.name.c_str(), tree_flags);
       const bool row_left_clicked =
           ImGui::IsItemClicked(ImGuiMouseButton_Left) &&
           !ImGui::IsItemToggledOpen();
@@ -327,69 +252,14 @@ void OutlinerPanel::draw_content(UIContext& context) {
         handle_selection(record);
       }
 
-      if (row_visible) {
-        const ImTextureID icon = icon_for(context.icons, record.kind);
-        const float row_height =
-            std::max(row_max.y - row_min.y, ImGui::GetTextLineHeight());
-        const float content_x = row_min.x + ImGui::GetTreeNodeToLabelSpacing();
-        float text_x = content_x;
-        ImDrawList *draw_list = ImGui::GetWindowDrawList();
-        const ImU32 guide_color = ImGui::GetColorU32(ImGuiCol_Border, 0.75f);
-        draw_hierarchy_guides(draw_list, row_min, row_max, content_x,
-                              record.depth, kOutlinerTreeIndent,
-                              ancestor_has_next, has_next_sibling,
-                              guide_color);
-        if (icon != ImTextureID_Invalid) {
-          const ImVec2 icon_min{
-              content_x,
-              row_min.y +
-                  std::max((row_height - kOutlinerIconSize) * 0.5f, 0.0f)};
-          const ImVec2 icon_max{icon_min.x + kOutlinerIconSize,
-                                icon_min.y + kOutlinerIconSize};
-          draw_list->AddImage(icon, icon_min, icon_max);
-          text_x += kOutlinerIconSize + kOutlinerIconTextGap;
-        }
-        const ImVec2 text_pos{
-            text_x,
-            row_min.y +
-                std::max((row_height - ImGui::GetTextLineHeight()) * 0.5f,
-                         0.0f)};
-        float status_right = row_max.x - kOutlinerRowLeftPadding;
-        auto draw_status_icon = [&](ImTextureID status_icon) {
-          if (status_icon == ImTextureID_Invalid) {
-            return;
-          }
-          const ImVec2 icon_max{
-              status_right,
-              row_min.y +
-                  std::max((row_height + kOutlinerStatusIconSize) * 0.5f,
-                           kOutlinerStatusIconSize)};
-          const ImVec2 icon_min{icon_max.x - kOutlinerStatusIconSize,
-                                icon_max.y - kOutlinerStatusIconSize};
-          draw_list->AddImage(status_icon, icon_min, icon_max);
-          status_right = icon_min.x - kOutlinerIconTextGap;
-        };
-        if (!record.effectively_visible) {
-          draw_status_icon(context.icons.hide);
-        }
-        if (record.effectively_locked) {
-          draw_status_icon(context.icons.lock);
-        }
-        const ImVec4 text_clip{
-            text_x, row_min.y,
-            std::max(text_x, status_right - kOutlinerIconTextGap), row_max.y};
-        draw_outliner_text(draw_list, text_pos,
-                           ImGui::GetColorU32(ImGuiCol_Text), record.name,
-                           subdued, text_clip);
-      }
-
       if (row_right_clicked) {
         if (!record.selected) {
           (void)select_only(context, {record.id}, record.id);
         }
       }
       if (ImGui::BeginPopup("EntityContext")) {
-        const bool can_mutate_hierarchy = !record.is_scene_root;
+        const bool can_mutate_hierarchy =
+            !record.is_scene_root && !record.effectively_locked;
         const std::string delete_label = context.localization.imgui_label(
             "ui.outliner.delete", "ui.outliner.delete", "Delete");
         if (ImGui::MenuItem(delete_label.c_str(), nullptr, false,
@@ -431,14 +301,9 @@ void OutlinerPanel::draw_content(UIContext& context) {
       if (open && record.has_children) {
         if (const auto children_it = tree.children_by_entity.find(record.id);
             children_it != tree.children_by_entity.end()) {
-          std::vector<bool> child_ancestors = ancestor_has_next;
-          if (record.depth > 0) {
-            child_ancestors.push_back(has_next_sibling);
-          }
           const std::vector<EntityId> &children = children_it->second;
-          for (std::size_t index = 0; index < children.size(); ++index) {
-            draw_node(children[index], child_ancestors,
-                      index + 1u < children.size());
+          for (const EntityId child : children) {
+            draw_node(child);
           }
         }
         ImGui::TreePop();
@@ -446,13 +311,9 @@ void OutlinerPanel::draw_content(UIContext& context) {
       ImGui::PopID();
     };
 
-    const std::vector<bool> root_ancestors;
-    for (std::size_t index = 0; index < tree.roots.size(); ++index) {
-      draw_node(tree.roots[index], root_ancestors,
-                index + 1u < tree.roots.size());
+    for (const EntityId root : tree.roots) {
+      draw_node(root);
     }
-
-    ImGui::PopStyleVar(3);
 
     switch (pending_action) {
     case PendingOutlinerAction::Delete:

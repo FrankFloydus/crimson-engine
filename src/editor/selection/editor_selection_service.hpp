@@ -89,6 +89,9 @@ public:
 
   DocumentCommandResult set_scene_selection(std::span<const EntityId> entities,
                                             EntityId active = kInvalidEntityId);
+  DocumentCommandResult
+  set_inspection_scene_selection(std::span<const EntityId> entities,
+                                 EntityId active = kInvalidEntityId);
   DocumentCommandResult edit_scene_selection(EntityId entity,
                                              EditorSelectionEdit edit);
   DocumentCommandResult edit_scene_selection(std::span<const EntityId> entities,

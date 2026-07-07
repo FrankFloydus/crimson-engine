@@ -159,6 +159,7 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot(
   const std::vector<EntityId> entities = document.entities();
   snapshot.hierarchy_selection_wires.reserve(selected.size());
   snapshot.group_bounds.reserve(selected.size());
+  snapshot.selected_mesh_bounds.reserve(selected.size());
   snapshot.selected_lights.reserve(selected.size());
   snapshot.point_light_gizmos.reserve(entities.size());
   for (const EntityId entity : entities) {
@@ -175,6 +176,13 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot(
   }
 
   for (const EntityId entity : selected) {
+    if (document.mesh(entity) != nullptr) {
+      if (const std::optional<SceneBounds> bounds =
+              entity_world_bounds(document, assets, entity)) {
+        snapshot.selected_mesh_bounds.push_back(bounds_snapshot(*bounds));
+      }
+    }
+
     if (document.has_children(entity)) {
       for (const EntityId descendant : document.descendants(entity, false)) {
         const SelectionComponent *selection = document.selection(descendant);

@@ -106,6 +106,7 @@ struct RenderOverlaySelectionSnapshot {
   std::uint64_t asset_revision = 0;
   std::vector<RenderOverlayMeshSnapshot> hierarchy_selection_wires;
   std::vector<RenderOverlayBoundsSnapshot> group_bounds;
+  std::vector<RenderOverlayBoundsSnapshot> selected_mesh_bounds;
   std::vector<RenderOverlayLightMarkerSnapshot> selected_lights;
   std::vector<RenderOverlayLightMarkerSnapshot> point_light_gizmos;
   ViewportOverlayFrame tool_overlays;

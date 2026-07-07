@@ -504,6 +504,11 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_TRUE(
         command_descriptor(editor, quader::quader_command::kProjectSaveAs)
             .has_value());
+    const std::optional<quader::QuaderCommandDescriptor> export_obj =
+        command_descriptor(editor,
+                           quader::quader_command::kProjectExportSelectionObj);
+    ASSERT_TRUE(export_obj.has_value());
+    EXPECT_FALSE(export_obj->enabled);
     EXPECT_TRUE(command_descriptor(
                     editor, quader::quader_command::kSceneCreatePointLight)
                     .has_value());
@@ -525,6 +530,9 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(
         editor.commands().shortcut_for(quader::quader_command::kProjectSaveAs),
         "Ctrl+Shift+S");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kProjectExportSelectionObj),
+              "");
 #ifndef NDEBUG
     EXPECT_TRUE(command_descriptor(editor,
                                    quader::quader_command::kDevCopySelectionJson)
@@ -3520,23 +3528,68 @@ TEST(EditorApiTests, LockingParentClearsSelectedModelingDescendantAndUndoRestore
     EXPECT_FALSE(editor.modeling().selection_summary().has_selection);
 }
 
-TEST(EditorApiTests, LockedEntitiesCannotBeSelectedThroughPublicSelectionApi) {
+TEST(EditorApiTests,
+     LockedEntitiesCannotBeUserSelectedButCanBeInspectedAndUnlocked) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
 
-    quader::QuaderCreateEntityArgs args;
-    args.name = "Locked Selection Target";
-    const quader::QuaderApiResult<quader::QuaderEntityRef> entity =
-        editor.scene().create_entity(args);
-    ASSERT_TRUE(entity.ok()) << entity.error_message();
-    ASSERT_TRUE(editor.scene().set_locked(entity.value().id, true).ok());
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> box =
+        editor.modeling().create_box(
+            quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                                 .max = {1.0f, 1.0f, 1.0f}},
+            "Locked Selection Target");
+    ASSERT_TRUE(box.ok()) << box.error_message();
+    ASSERT_TRUE(editor.scene().set_locked(box.value().entity, true).ok());
 
     const quader::QuaderApiVoidResult selected =
-        editor.selection().select_object(entity.value().id);
+        editor.selection().select_object(box.value().entity);
     ASSERT_TRUE(selected.ok()) << selected.error_message();
-    EXPECT_FALSE(entity_by_id(editor, entity.value().id)->selected);
-    EXPECT_FALSE(entity_by_id(editor, entity.value().id)->active);
+    EXPECT_FALSE(entity_by_id(editor, box.value().entity)->selected);
+    EXPECT_FALSE(entity_by_id(editor, box.value().entity)->active);
     EXPECT_FALSE(editor.query().selection().has_selection);
+
+    const quader::QuaderApiVoidResult inspected =
+        editor.selection().select_objects_for_inspection(
+            {box.value().entity}, box.value().entity);
+    ASSERT_TRUE(inspected.ok()) << inspected.error_message();
+    EXPECT_TRUE(inspected.changed());
+
+    std::optional<quader::QuaderEntitySnapshot> snapshot =
+        entity_by_id(editor, box.value().entity);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_TRUE(snapshot->locked);
+    EXPECT_TRUE(snapshot->selected);
+    EXPECT_TRUE(snapshot->active);
+    EXPECT_TRUE(editor.query().selection().has_selection);
+
+    const std::optional<quader::QuaderCommandDescriptor> delete_descriptor =
+        command_descriptor(editor, quader::quader_command::kDeleteSelection);
+    ASSERT_TRUE(delete_descriptor.has_value());
+    EXPECT_FALSE(delete_descriptor->enabled);
+    const std::optional<quader::QuaderCommandDescriptor> duplicate_descriptor =
+        command_descriptor(editor, quader::quader_command::kDuplicateSelection);
+    ASSERT_TRUE(duplicate_descriptor.has_value());
+    EXPECT_FALSE(duplicate_descriptor->enabled);
+
+    const quader::QuaderApiVoidResult deleted =
+        editor.commands().execute(quader::quader_command::kDeleteSelection);
+    EXPECT_FALSE(deleted.changed());
+    EXPECT_TRUE(entity_by_id(editor, box.value().entity).has_value());
+
+    const quader::QuaderApiVoidResult duplicated =
+        editor.commands().execute(quader::quader_command::kDuplicateSelection);
+    EXPECT_FALSE(duplicated.changed());
+    EXPECT_EQ(user_entity_count(editor), 1u);
+
+    const quader::QuaderApiVoidResult unlocked =
+        editor.scene().set_locked(box.value().entity, false);
+    ASSERT_TRUE(unlocked.ok()) << unlocked.error_message();
+    EXPECT_TRUE(unlocked.changed());
+    snapshot = entity_by_id(editor, box.value().entity);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_FALSE(snapshot->locked);
+    EXPECT_TRUE(snapshot->selected);
+    EXPECT_TRUE(snapshot->active);
 }
 
 TEST(EditorApiTests, SceneLightCreationUsesExplicitApiLightDefaults) {

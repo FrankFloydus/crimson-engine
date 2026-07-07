@@ -163,6 +163,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
     const std::map<std::pair<ElementId, ElementId>, int> incidence_counts = edge_incidence_counts(document);
     std::set<std::pair<ElementId, ElementId>> selected_edge_keys;
     std::map<ElementId, int> selected_edge_counts;
+    std::map<ElementId, std::vector<ElementId>> selected_neighbors_by_vertex;
     for (const Edge& edge : selected_edges) {
         const auto count = incidence_counts.find(edge_key(edge));
         if (count == incidence_counts.end() || count->second != 2) {
@@ -171,6 +172,8 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
         selected_edge_keys.insert(edge_key(edge));
         ++selected_edge_counts[edge.a];
         ++selected_edge_counts[edge.b];
+        selected_neighbors_by_vertex[edge.a].push_back(edge.b);
+        selected_neighbors_by_vertex[edge.b].push_back(edge.a);
     }
     if (selected_edge_keys.empty()) {
         return { false, {} };
@@ -959,6 +962,31 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                 } else {
                     const auto terminal_profile = terminal_profiles_by_vertex.find(vertex_id);
                     const bool terminal_vertex = terminal_profile != terminal_profiles_by_vertex.end();
+                    const int selected_count = selected_edge_counts.contains(vertex_id)
+                        ? selected_edge_counts.at(vertex_id)
+                        : 0;
+                    const bool selected_edge_leaves_face_plane = [&]() {
+                        if (terminal_vertex || selected_count < 2) {
+                            return false;
+                        }
+                        const Vertex* source_vertex = find_vertex(document, vertex_id);
+                        const auto neighbors = selected_neighbors_by_vertex.find(vertex_id);
+                        const quader::QVec3 normal = normalize_or_zero(face_normal(document, face));
+                        if (source_vertex == nullptr || neighbors == selected_neighbors_by_vertex.end() ||
+                            length_squared(normal) <= kEpsilon) {
+                            return false;
+                        }
+                        return std::ranges::any_of(neighbors->second, [&](ElementId neighbor_id) {
+                            const Vertex* neighbor_vertex = find_vertex(document, neighbor_id);
+                            if (neighbor_vertex == nullptr) {
+                                return false;
+                            }
+                            const quader::QVec3 direction =
+                                normalize_or_zero(neighbor_vertex->position - source_vertex->position);
+                            return std::abs(dot(direction, normal)) > 0.0001F;
+                        });
+                    }();
+                    const bool selected_open_corner_vertex = selected_edge_leaves_face_plane;
                     if (terminal_vertex) {
                         if (edge_bevel_endpoint_profile_lies_in_face_corner(
                                 candidate,
@@ -1037,7 +1065,8 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                                   face_normal(document, face),
                               });
                             }
-                        } else if (terminal_vertex && rebuilt_loop.size() > before_offsets) {
+                        } else if ((terminal_vertex || selected_open_corner_vertex) &&
+                            rebuilt_loop.size() > before_offsets) {
                             const ElementId previous_boundary_id = terminal_boundary_vertex(vertex_id, previous_id);
                             if (previous_boundary_id != kInvalidElementId &&
                                 (rebuilt_loop.size() == before_offsets ||

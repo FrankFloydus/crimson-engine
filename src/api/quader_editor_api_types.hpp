@@ -47,11 +47,19 @@ struct QuaderProjectMetadata {
 };
 
 /**
+ * Stores the OBJ export result returned by the project API.
+ */
+struct QuaderObjExportResult {
+  std::vector<std::filesystem::path> paths;
+};
+
+/**
  * Represents Quader Project Runtime Hooks value used by the native shell.
  */
 struct QuaderProjectRuntimeHooks {
   std::function<std::optional<std::filesystem::path>()> choose_open_path;
   std::function<std::optional<std::filesystem::path>()> choose_save_as_path;
+  std::function<std::optional<std::filesystem::path>()> choose_export_obj_path;
 };
 
 /**

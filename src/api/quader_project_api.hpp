@@ -22,9 +22,12 @@ public:
     QuaderApiVoidResult open(const std::filesystem::path& path);
     QuaderApiVoidResult save();
     QuaderApiVoidResult save_as(const std::filesystem::path &path);
+    QuaderApiResult<QuaderObjExportResult>
+    export_selected_meshes_as_obj(const std::filesystem::path &path);
     QuaderApiVoidResult close();
     void set_runtime_hooks(QuaderProjectRuntimeHooks hooks);
 
+    [[nodiscard]] bool can_export_selected_meshes_as_obj() const;
     [[nodiscard]] bool dirty() const;
     [[nodiscard]] const std::filesystem::path& path() const;
     [[nodiscard]] QuaderProjectMetadata metadata() const;
@@ -36,6 +39,8 @@ private:
     [[nodiscard]] std::optional<std::filesystem::path> choose_open_path() const;
     [[nodiscard]] std::optional<std::filesystem::path>
     choose_save_as_path() const;
+    [[nodiscard]] std::optional<std::filesystem::path>
+    choose_export_obj_path() const;
 
     QuaderApiSession session_;
     std::filesystem::path path_;

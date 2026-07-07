@@ -214,6 +214,13 @@ add_library(quader_assets STATIC
 quader_configure_core_module(quader_assets)
 target_link_libraries(quader_assets PUBLIC quader_core_utilities)
 
+add_library(quader_mesh_io STATIC
+    src/io/mesh/obj_writer.cpp
+)
+
+quader_configure_core_module(quader_mesh_io)
+target_link_libraries(quader_mesh_io PUBLIC quader_assets)
+
 add_library(quader_document STATIC
     src/scene/document/project_document.cpp
     src/scene/scene_bounds.cpp
@@ -307,6 +314,7 @@ target_link_libraries(quader_core
         quader_core_utilities
         quader_document
         quader_editor_services
+        quader_mesh_io
         quader_project_qdr_io
         quader_viewport_services)
 
@@ -559,8 +567,6 @@ add_library(quader_ui STATIC
     src/editor/transform/scene_transform_drag_service.cpp
     src/ui/console_panel.cpp
     src/ui/imgui_popup_utils.cpp
-    src/ui/imgui_quader_slider.cpp
-    src/ui/imgui_quader_widgets.cpp
     src/ui/inspector_panel.cpp
     src/ui/main_menu_bar.cpp
     src/ui/modal_tool_overlay_renderer.cpp
@@ -754,6 +760,7 @@ if(QUADER_BUILD_TESTS)
         tests/local_stress_tests.cpp
         tests/localization_tests.cpp
         tests/math_types_tests.cpp
+        tests/obj_export_tests.cpp
         tests/qstr_tests.cpp
         tests/editor_api_tests.cpp
         tests/programmatic_api_tests.cpp

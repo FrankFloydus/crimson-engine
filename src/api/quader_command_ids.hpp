@@ -50,6 +50,8 @@ inline constexpr QuaderCommandId kProjectNew{"project.new"};
 inline constexpr QuaderCommandId kProjectOpen{"project.open"};
 inline constexpr QuaderCommandId kProjectSave{"project.save"};
 inline constexpr QuaderCommandId kProjectSaveAs{"project.save_as"};
+inline constexpr QuaderCommandId kProjectExportSelectionObj{
+    "project.export_selection_obj"};
 
 inline constexpr QuaderCommandId kSceneCreatePointLight{
     "scene.create_point_light"};
@@ -225,6 +227,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kProjectOpen,
     kProjectSave,
     kProjectSaveAs,
+    kProjectExportSelectionObj,
     kSceneCreatePointLight,
     kSceneCreateDirectionalLight,
     kViewportFrameSelection,

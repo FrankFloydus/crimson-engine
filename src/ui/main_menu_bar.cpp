@@ -137,6 +137,9 @@ void draw_file_menu_contents(MainMenuBarContext &context) {
   (void)draw_command_menu_item(context, commands,
                                quader_command::kProjectSaveAs,
                                "ui.menu.file.save_as", "Save As...");
+  (void)draw_command_menu_item(context, commands,
+                               quader_command::kProjectExportSelectionObj,
+                               "ui.menu.file.export_obj", "Export OBJ...");
   ImGui::Separator();
 
   const std::string exit_label = context.localization.imgui_label(

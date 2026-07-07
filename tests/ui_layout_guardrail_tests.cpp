@@ -78,7 +78,8 @@ TEST(UiLayoutGuardrailTests,
                    "bool input_text_with_left_label");
 
   expect_contains(axis_drag_float, "input_width < 0.0f");
-  expect_contains(axis_drag_float3, "quader_property_row(stable_id, label);");
+  expect_contains(axis_drag_float3,
+                  "inspector_property_row(stable_id, label);");
   expect_contains(axis_drag_float3, "ImGuiTableFlags_SizingStretchProp");
   expect_contains(axis_drag_float3, "ImGuiTableColumnFlags_WidthStretch");
   expect_contains(axis_drag_float3, "min_axis_column_width");
@@ -88,45 +89,30 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     PropertyTableWidgetIsResizableStripedTwoColumnTable) {
-  const std::string header =
-      read_source_file({"src", "ui", "imgui_quader_widgets.hpp"});
-  const std::string widgets =
-      read_source_file({"src", "ui", "imgui_quader_widgets.cpp"});
+     InspectorPropertiesUseFramelessDefaultControls) {
   const std::string inspector =
       read_source_file({"src", "ui", "inspector_panel.cpp"});
 
-  expect_contains(header, "struct QuaderPropertyTableOptions");
-  expect_contains(header, "quader_begin_property_table");
-  expect_contains(header, "quader_property_section");
-  expect_contains(header, "quader_property_row");
-  expect_contains(widgets, "ImGuiTableFlags_Resizable");
-  expect_contains(widgets, "ImGuiTableFlags_RowBg");
-  expect_contains(widgets, "ImGuiCol_TableRowBg");
-  expect_contains(widgets, "ImGuiCol_TableRowBgAlt");
-  expect_contains(widgets, "draw_clipped_table_text");
-  expect_contains(widgets, "draw_tree_expander");
-  expect_contains(widgets, "property_table_guide_stack");
-  expect_contains(widgets, "flush_pending_property_child_guide(true)");
-  expect_contains(widgets, "flush_pending_property_child_guide(false)");
-  expect_contains(widgets, "TableSetupColumn(\"Label\"");
-  expect_contains(widgets, "TableSetupColumn(\"Value\"");
+  expect_contains(inspector, "bool begin_inspector_property_table");
+  expect_contains(inspector, "ImGui::BeginTable(\"##PropertyTable\"");
+  expect_missing(inspector, "ImGuiTableFlags_Resizable");
+  expect_missing(inspector, "ImGuiTableFlags_RowBg");
+  expect_missing(inspector, "ImGuiTableFlags_BordersOuter");
+  expect_missing(inspector, "ImGuiTableFlags_BordersInnerV");
+  expect_contains(inspector, "ImGui::TableSetupColumn(\"Label\"");
+  expect_contains(inspector, "ImGui::TableSetupColumn(\"Value\"");
+  expect_contains(inspector, "ImGui::CollapsingHeader(");
   expect_contains(inspector,
-                  "quader_begin_property_table(\"inspector_properties\"");
-  expect_contains(inspector, "quader_property_section(\"general\"");
-  expect_contains(inspector, "quader_property_section(\"transform\"");
-  expect_contains(inspector, "quader_property_section(\"light\"");
-  expect_missing(inspector, "quader_begin_property_table(\"general\"");
+                  "begin_inspector_property_table(\"inspector_properties\"");
+  expect_contains(inspector, "inspector_property_section(\"general\"");
+  expect_contains(inspector, "inspector_property_section(\"transform\"");
+  expect_contains(inspector, "inspector_property_section(\"light\"");
+  expect_missing(inspector, "quader_begin_property_table");
+  expect_missing(inspector, "quader_property_section");
   expect_missing(inspector, "begin_labeled_control_table");
 }
 
-TEST(UiLayoutGuardrailTests, NumericSlidersUseSharedDoubleClickInputWrapper) {
-  const std::string header =
-      read_source_file({"src", "ui", "imgui_quader_widgets.hpp"});
-  const std::string widgets =
-      read_source_file({"src", "ui", "imgui_quader_widgets.cpp"});
-  const std::string slider =
-      read_source_file({"src", "ui", "imgui_quader_slider.cpp"});
+TEST(UiLayoutGuardrailTests, NumericSlidersUseDefaultImGuiWidgets) {
   const std::string viewport_settings =
       read_source_file({"src", "ui", "viewport_settings_panel.cpp"});
   const std::string tool_settings =
@@ -140,52 +126,37 @@ TEST(UiLayoutGuardrailTests, NumericSlidersUseSharedDoubleClickInputWrapper) {
       inspector, "AxisDragFloatResult axis_drag_float(const char *axis",
       "axis_drag_float3(const char *stable_id");
 
-  expect_contains(widgets, "bool quader_slider_float");
-  expect_contains(widgets, "bool quader_slider_int");
-  expect_contains(widgets, "quader_theme_slider_float");
-  expect_contains(widgets, "quader_theme_slider_int");
-  expect_missing(widgets, "ImGui::SliderFloat(");
-  expect_missing(widgets, "ImGui::SliderInt(");
-  expect_contains(slider, "bool quader_theme_slider_float");
-  expect_contains(slider, "bool quader_theme_slider_int");
-  expect_contains(slider, "ImGui::SliderBehavior");
-  expect_contains(slider, "render_slider_text_row");
-  expect_contains(slider, "render_slider_track");
-  expect_contains(slider, "ImGui::IsMouseDoubleClicked");
-  expect_contains(slider, "ImGuiActivateFlags_PreferInput");
-  expect_contains(slider, "ImGuiCol_SliderGrab");
-  expect_contains(header, "ImGuiSliderFlags_AlwaysClamp");
-  expect_contains(viewport_settings, "quader_slider_float(");
-  expect_missing(viewport_settings, "ImGui::SliderFloat(");
-  expect_contains(tool_settings, "quader_slider_float(");
-  expect_contains(tool_settings, "quader_slider_int(");
-  expect_missing(tool_settings, "ImGui::SliderFloat(");
-  expect_missing(tool_settings, "ImGui::SliderInt(");
+  expect_contains(viewport_settings, "ImGui::SliderFloat(");
+  expect_contains(viewport_settings, "ImGuiSliderFlags_AlwaysClamp");
+  expect_contains(tool_settings, "ImGui::SliderFloat(");
+  expect_contains(tool_settings, "ImGui::SliderInt(");
+  expect_contains(tool_settings, "ImGuiSliderFlags_AlwaysClamp");
   expect_missing(tool_settings, "ImGui::DragFloat(");
   expect_contains(continuous_float_helper, "min_value < max_value");
-  expect_contains(continuous_float_helper, "quader_slider_float");
+  expect_contains(continuous_float_helper, "ImGui::SliderFloat");
   expect_contains(continuous_float_helper, "ImGui::DragFloat");
   expect_contains(axis_float_helper, "ImGui::DragFloat");
   expect_missing(axis_float_helper, "quader_slider_float");
+  expect_missing(inspector, "imgui_quader_widgets");
+  expect_missing(inspector, "quader_slider_float");
+  expect_missing(viewport_settings, "quader_slider_float(");
+  expect_missing(tool_settings, "quader_slider_float(");
+  expect_missing(tool_settings, "quader_slider_int(");
   expect_missing(inspector, "0.5f, 0.0f, 360.0f");
 }
 
-TEST(UiLayoutGuardrailTests, HierarchyGuideBranchesTerminateAtLastChild) {
-  const std::string widgets =
-      read_source_file({"src", "ui", "imgui_quader_widgets.cpp"});
+TEST(UiLayoutGuardrailTests, OutlinerUsesDefaultTreeHierarchyLines) {
   const std::string outliner =
       read_source_file({"src", "ui", "outliner_panel.cpp"});
 
-  expect_contains(widgets, "bool has_next_sibling");
-  expect_contains(
-      widgets, "has_next_sibling ? cell_min.y + row_height + 1.0f : center_y");
-  expect_contains(widgets,
-                  "draw_tree_child_guides(*ImGui::GetWindowDrawList()");
-  expect_contains(widgets, "queue_property_child_guide");
-  expect_contains(outliner, "const std::vector<bool> &ancestor_has_next");
-  expect_contains(outliner, "has_next_sibling ? row_max.y + 1.0f");
-  expect_contains(outliner, "child_ancestors.push_back(has_next_sibling)");
-  expect_contains(outliner, "index + 1u < children.size()");
+  expect_contains(outliner, "ImGuiTreeNodeFlags_DrawLinesFull");
+  expect_contains(outliner,
+                  "ImGui::TreeNodeEx(record.name.c_str(), tree_flags)");
+  expect_missing(outliner, "kOutlinerTreeIndent");
+  expect_missing(outliner, "ImGuiStyleVar_IndentSpacing");
+  expect_missing(outliner, "draw_hierarchy_guides");
+  expect_missing(outliner, "ancestor_has_next");
+  expect_missing(outliner, "has_next_sibling ? row_max.y + 1.0f");
 }
 
 TEST(UiLayoutGuardrailTests, InspectorLightEditsRouteThroughPublicSceneApi) {
@@ -231,7 +202,8 @@ TEST(UiLayoutGuardrailTests, InspectorSectionsStartCollapsed) {
   const std::string inspector =
       read_source_file({"src", "ui", "inspector_panel.cpp"});
 
-  expect_contains(inspector, "quader_property_section(");
+  expect_contains(inspector, "inspector_property_section(");
+  expect_contains(inspector, "ImGui::CollapsingHeader(");
   expect_missing(inspector, "quader_collapsing_header(");
   expect_missing(inspector, "ImGuiTreeNodeFlags_DefaultOpen");
 }
@@ -247,8 +219,7 @@ TEST(UiLayoutGuardrailTests, OutlinerNonLeafNodesStartExpanded) {
   expect_contains(tree_node_setup, "ImGuiTreeNodeFlags_DefaultOpen");
 }
 
-TEST(UiLayoutGuardrailTests,
-     OutlinerCachesTreeRecordsAndSkipsOffscreenCustomDrawing) {
+TEST(UiLayoutGuardrailTests, OutlinerCachesTreeRecords) {
   const std::string outliner_header =
       read_source_file({"src", "ui", "outliner_panel.hpp"});
   const std::string outliner =
@@ -260,10 +231,8 @@ TEST(UiLayoutGuardrailTests,
                   "cache.records = document.entity_records_tree_order()");
   expect_contains(
       outliner, "cache.children_by_entity[record.parent].push_back(record.id)");
-  expect_contains(
-      outliner,
-      "const bool row_visible = ImGui::IsRectVisible(row_min, row_max)");
-  expect_contains(outliner, "if (row_visible)");
+  expect_missing(outliner, "ImGui::IsRectVisible");
+  expect_missing(outliner, "if (row_visible)");
 }
 
 TEST(UiLayoutGuardrailTests, InspectorContinuousInputsLiveApplyWithMergeKeys) {
@@ -400,10 +369,12 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(main_menu, "ui.menu.file.open");
   expect_contains(main_menu, "ui.menu.file.save");
   expect_contains(main_menu, "ui.menu.file.save_as");
+  expect_contains(main_menu, "ui.menu.file.export_obj");
   expect_contains(main_menu, "quader_command::kProjectNew");
   expect_contains(main_menu, "quader_command::kProjectOpen");
   expect_contains(main_menu, "quader_command::kProjectSave");
   expect_contains(main_menu, "quader_command::kProjectSaveAs");
+  expect_contains(main_menu, "quader_command::kProjectExportSelectionObj");
   expect_contains(main_menu, "quader_command::kEditUndo");
   expect_contains(main_menu, "quader_command::kEditRedo");
   expect_contains(main_menu, "quader_command::kEditRepeatLastAction");
@@ -601,7 +572,7 @@ TEST(UiLayoutGuardrailTests,
                    "void ViewportPanel::set_pane_view");
 
   expect_contains(viewport_panel, "#include \"ui/imgui_popup_utils.hpp\"");
-  expect_contains(viewport_panel, "#include \"ui/imgui_quader_widgets.hpp\"");
+  expect_missing(viewport_panel, "imgui_quader_widgets");
   expect_contains(popup_utils, "ImGuiMouseButton_Middle");
   expect_contains(popup_utils, "open_combo_popup_exists");
   expect_contains(popup_utils, "\"##Combo_\"");
@@ -619,11 +590,11 @@ TEST(UiLayoutGuardrailTests,
       chrome,
       "imguiCloseComboPopupForClickOutside(chrome_rect.Min, chrome_rect.Max)");
   expect_contains(chrome,
-                  "quader_begin_combo(\"##ViewportView\", preview.c_str(),");
+                  "ImGui::BeginCombo(\"##ViewportView\", preview.c_str(),");
   expect_contains(chrome, "ImGuiComboFlags_HeightSmall)");
   expect_contains(
       chrome,
-      "quader_begin_combo(\"##ViewportShading\", shading_preview.c_str(),");
+      "ImGui::BeginCombo(\"##ViewportShading\", shading_preview.c_str(),");
   expect_missing(chrome, "ImGuiComboFlags_HeightSmall, false");
   expect_missing(chrome, "consumes_input = true;\n    }\n\n    "
                          "ImGui::SetCursorScreenPos(combo_pos)");

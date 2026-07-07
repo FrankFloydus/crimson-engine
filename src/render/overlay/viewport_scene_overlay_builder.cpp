@@ -331,6 +331,25 @@ void append_group_selection_cages(ViewportOverlayFrame &frame,
   }
 }
 
+bool selection_mode_uses_selected_mesh_bounds(ModelingSelectionMode mode) {
+  return mode == ModelingSelectionMode::Object ||
+         mode == ModelingSelectionMode::Group;
+}
+
+void append_selected_mesh_bounds_cages(ViewportOverlayFrame &frame,
+                                       const RenderOverlaySelectionSnapshot
+                                           &snapshot,
+                                       ModelingSelectionMode selection_mode) {
+  if (!selection_mode_uses_selected_mesh_bounds(selection_mode)) {
+    return;
+  }
+
+  for (const RenderOverlayBoundsSnapshot &bounds :
+       snapshot.selected_mesh_bounds) {
+    append_bounds_cage(frame, bounds);
+  }
+}
+
 void append_selected_light_markers(ViewportOverlayFrame &frame,
                                    const RenderOverlaySelectionSnapshot
                                        &snapshot) {
@@ -483,10 +502,12 @@ void strip_wireframe_object_face_fills(ViewportOverlayFrame &frame,
 ViewportOverlayFrame ViewportSceneOverlayBuilder::build_selection_frame(
     ViewportOverlayFrame base_frame,
     const RenderOverlaySelectionSnapshot &snapshot,
-    bool point_light_gizmos_visible) {
+    bool point_light_gizmos_visible,
+    ModelingSelectionMode selection_mode) {
   QDR_PROFILE_FUNCTION();
   append_hierarchy_selection_wires(base_frame, snapshot);
   append_group_selection_cages(base_frame, snapshot);
+  append_selected_mesh_bounds_cages(base_frame, snapshot, selection_mode);
   append_selected_light_markers(base_frame, snapshot);
   if (point_light_gizmos_visible) {
     append_point_light_gizmos(base_frame, snapshot);

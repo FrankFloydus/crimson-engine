@@ -1442,8 +1442,6 @@ TEST(BuildGuardrailTests, ImGuiRuntimeResourcesArePackagedWithRuntime) {
   const std::string icon_header = read_source_file("src/ui/ui_icon_set.hpp");
   const std::string phosphor_header =
       read_source_file("src/ui/phosphor_icons.hpp");
-  const std::string quader_widgets =
-      read_source_file("src/ui/imgui_quader_widgets.cpp");
   const std::string style_source =
       read_source_file("src/ui/ui_style_tokens.cpp");
   const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
@@ -1494,15 +1492,8 @@ TEST(BuildGuardrailTests, ImGuiRuntimeResourcesArePackagedWithRuntime) {
   expect_contains(icon_texture_service, "load_png_texture(");
   expect_contains(png_texture_loader, "lodepng::decode");
   expect_contains(png_texture_loader, "filament::Texture::Builder()");
-  expect_contains(phosphor_header, "kPhosphorCaretDown");
-  expect_contains(phosphor_header, "kPhosphorCaretRight");
-  expect_contains(quader_widgets, "draw_combo_caret");
-  expect_contains(quader_widgets, "ClosePopupToLevel");
-  expect_contains(quader_widgets, "##QuaderComboWasOpen");
-  expect_contains(quader_widgets, "BeginComboPopup");
-  expect_contains(quader_widgets, "ImGuiComboFlags_HeightMask_");
-  expect_contains(quader_widgets, "kPhosphorCaretDown");
-  expect_contains(quader_widgets, "kPhosphorCaretRight");
+  expect_contains(phosphor_header, "kPhosphorIconRangeStart");
+  expect_contains(phosphor_header, "kPhosphorIconRangeEnd");
   expect_contains(style_source, "Phosphor.ttf");
   expect_contains(style_source, "GlyphExcludeRanges = kIconRanges");
   expect_contains(style_source, "MergeMode = true");

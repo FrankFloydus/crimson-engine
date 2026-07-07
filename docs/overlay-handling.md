@@ -63,6 +63,9 @@ Object mode:
   object-mode x-ray face fill; dense multi-selections suppress that face fill and keep the selected
   wire as the stable selection signal so viewport navigation does not multiply face-fill renderables
   by every selected mesh.
+- A selected mesh also emits a world-space AABB cage in object/group selection contexts using the
+  `GroupBounds` style. The cage comes from scene/entity world bounds, so scene-rotated mesh geometry
+  stays rotated while the visible outline and object transform drag bounds remain world-aligned.
 - A selected mesh in object mode must not emit ordinary `SourceWire` lines or
   `SourceWireDepthStamp` metadata.
 
@@ -211,6 +214,8 @@ The policy owner is `src/render/viewport_overlay_policy.cpp`.
 
 - Draw-on-top lines include `SourceWire`, `SelectedFaceEdge`, `SelectedEdge`, `HoverFaceEdge`,
   `HoverEdge`, `GroupBounds`, `DiagnosticEdge`, `WireframeXray`, and tool line/handle layers.
+- `GroupBounds` covers both empty/group hierarchy bounds and object/group-mode selected mesh AABB
+  cages. Component modes must not add the selected mesh AABB cage over edit topology.
 - Draw-on-top points include snap and tool handles. Editable vertex point layers (`UnselectedVertex`,
   `SelectedVertex`, and `HoverVertex`) are depth-tested by default and use the normal point
   post-projection depth bias.

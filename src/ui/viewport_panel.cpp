@@ -28,7 +28,6 @@
 #include "render/render_system.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "ui/imgui_popup_utils.hpp"
-#include "ui/imgui_quader_widgets.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/viewport_context_menu_policy.hpp"
 #include "ui/viewport_pane_controller.hpp"
@@ -1086,8 +1085,8 @@ bool ViewportPanel::draw_pane_chrome(Pane &pane_state, ImVec2 item_min,
     const ViewportView current_view = viewport_workspace.view(pane_state.id);
     const std::string preview =
         localized_viewport_view_label(localization, current_view);
-    if (quader_begin_combo("##ViewportView", preview.c_str(),
-                           ImGuiComboFlags_HeightSmall)) {
+    if (ImGui::BeginCombo("##ViewportView", preview.c_str(),
+                          ImGuiComboFlags_HeightSmall)) {
       consumes_input = true;
       for (const ViewportView view : kViewportChromeViews) {
         const bool selected = current_view == view;
@@ -1107,8 +1106,8 @@ bool ViewportPanel::draw_pane_chrome(Pane &pane_state, ImVec2 item_min,
   ImGui::SetNextItemWidth(shading_width);
   const std::string shading_preview = localized_viewport_shading_mode_label(
       localization, pane_workspace.shading);
-  if (quader_begin_combo("##ViewportShading", shading_preview.c_str(),
-                         ImGuiComboFlags_HeightSmall)) {
+  if (ImGui::BeginCombo("##ViewportShading", shading_preview.c_str(),
+                        ImGuiComboFlags_HeightSmall)) {
     consumes_input = true;
     for (const ViewportShadingMode mode : kViewportChromeShadingModes) {
       const bool selected = pane_workspace.shading == mode;

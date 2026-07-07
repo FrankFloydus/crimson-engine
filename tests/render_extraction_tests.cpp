@@ -24,6 +24,7 @@
 #include "render/overlay/overlay_renderable_builder.hpp"
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_bounds.hpp"
 #include "support/guardrail_file_scan.hpp"
 
 #include <mesh/polygon/document.hpp>
@@ -36,6 +37,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -146,6 +148,45 @@ std::size_t line_source_count_for(const ViewportOverlayFrame &frame,
                     [source](const ViewportOverlayLine &line) {
                       return line.source == source;
                     }));
+}
+
+std::optional<SceneBounds>
+line_bounds_for(const ViewportOverlayFrame &frame, ViewportOverlayLayer layer) {
+  std::optional<SceneBounds> bounds;
+  for (const ViewportOverlayLine &line : frame.lines) {
+    if (line.layer != layer) {
+      continue;
+    }
+    if (!bounds.has_value()) {
+      bounds = SceneBounds{.min = line.start, .max = line.start};
+    } else {
+      include_point(*bounds, line.start);
+    }
+    include_point(*bounds, line.end);
+  }
+  return bounds;
+}
+
+void expect_scene_bounds_near(const SceneBounds &actual,
+                              const SceneBounds &expected) {
+  constexpr float kTolerance = 0.0001f;
+  EXPECT_NEAR(actual.min.x, expected.min.x, kTolerance);
+  EXPECT_NEAR(actual.min.y, expected.min.y, kTolerance);
+  EXPECT_NEAR(actual.min.z, expected.min.z, kTolerance);
+  EXPECT_NEAR(actual.max.x, expected.max.x, kTolerance);
+  EXPECT_NEAR(actual.max.y, expected.max.y, kTolerance);
+  EXPECT_NEAR(actual.max.z, expected.max.z, kTolerance);
+}
+
+void expect_bounds_snapshot_near(const RenderOverlayBoundsSnapshot &actual,
+                                 const SceneBounds &expected) {
+  constexpr float kTolerance = 0.0001f;
+  EXPECT_NEAR(actual.min.x, expected.min.x, kTolerance);
+  EXPECT_NEAR(actual.min.y, expected.min.y, kTolerance);
+  EXPECT_NEAR(actual.min.z, expected.min.z, kTolerance);
+  EXPECT_NEAR(actual.max.x, expected.max.x, kTolerance);
+  EXPECT_NEAR(actual.max.y, expected.max.y, kTolerance);
+  EXPECT_NEAR(actual.max.z, expected.max.z, kTolerance);
 }
 
 std::size_t triangle_count_for(const ViewportOverlayFrame &frame,
@@ -1067,6 +1108,52 @@ TEST(ViewportSceneOverlayBuilderTests, AddsHierarchySelectionWiresAndGroupBounds
                   line.style_role == ViewportOverlayStyleRole::GroupBounds &&
                   line.source == ViewportOverlaySource::GroupBounds);
         }));
+}
+
+TEST(ViewportSceneOverlayBuilderTests,
+     AddsSelectedMeshWorldAabbBoundsInObjectMode) {
+    SceneDocument document;
+    AssetRegistry assets;
+    const AssetId mesh = assets.add_mesh(make_authored_quad_mesh());
+    const EntityId selected_mesh =
+        document.create_entity("Rotated Mesh", EntityKind::Mesh);
+    document.set_mesh(selected_mesh, MeshComponent{.mesh = mesh});
+    document.set_transform(
+        selected_mesh,
+        TransformComponent{
+            .position = {3.0f, 0.5f, -2.0f},
+            .rotation_euler = {0.0f, 0.0f, 0.5f},
+        });
+    ASSERT_TRUE(document.set_selected(selected_mesh, true));
+
+    const std::optional<SceneBounds> expected_bounds =
+        entity_world_bounds(document, assets, selected_mesh);
+    ASSERT_TRUE(expected_bounds.has_value());
+
+    const RenderOverlaySelectionSnapshot snapshot =
+        build_render_overlay_selection_snapshot(document, assets);
+    EXPECT_TRUE(snapshot.group_bounds.empty());
+    ASSERT_EQ(snapshot.selected_mesh_bounds.size(), 1u);
+    expect_bounds_snapshot_near(snapshot.selected_mesh_bounds.front(),
+                                *expected_bounds);
+
+    const ViewportOverlayFrame object_frame =
+        ViewportSceneOverlayBuilder::build_selection_frame(
+            ViewportOverlayFrame{}, snapshot, false,
+            ModelingSelectionMode::Object);
+    EXPECT_EQ(line_count_for(object_frame, ViewportOverlayLayer::GroupBounds),
+              12u);
+    const std::optional<SceneBounds> cage_bounds =
+        line_bounds_for(object_frame, ViewportOverlayLayer::GroupBounds);
+    ASSERT_TRUE(cage_bounds.has_value());
+    expect_scene_bounds_near(*cage_bounds, *expected_bounds);
+
+    const ViewportOverlayFrame face_frame =
+        ViewportSceneOverlayBuilder::build_selection_frame(
+            ViewportOverlayFrame{}, snapshot, false,
+            ModelingSelectionMode::Face);
+    EXPECT_EQ(line_count_for(face_frame, ViewportOverlayLayer::GroupBounds),
+              0u);
 }
 
 TEST(ViewportSceneOverlayBuilderTests,

@@ -2088,6 +2088,27 @@ TEST(ViewportOverlayPolicyTests,
 }
 
 TEST(ViewportOverlayPolicyTests,
+     ObjectTransformDragBoundsPreferSceneWorldAabb) {
+  const std::string source = read_source_file(
+      "src/editor/modeling/services/modeling_session_service.cpp");
+
+  const std::size_t object_mode =
+      source.find("session_.selection_mode()");
+  ASSERT_NE(object_mode, std::string::npos);
+  const std::size_t object_selection =
+      source.find("quader_editor_core::SelectionMode::Object", object_mode);
+  ASSERT_NE(object_selection, std::string::npos);
+  const std::size_t scene_bounds =
+      source.find("selected_transform_world_bounds(scene_, assets_)",
+                  object_selection);
+  ASSERT_NE(scene_bounds, std::string::npos);
+  const std::size_t runtime_bounds =
+      source.find("session_.selection_bounds()", object_selection);
+  ASSERT_NE(runtime_bounds, std::string::npos);
+  EXPECT_LT(scene_bounds, runtime_bounds);
+}
+
+TEST(ViewportOverlayPolicyTests,
      WireframeCacheUsesSelectionStyleForSelectedMeshes) {
   const std::string cache_source =
       read_source_file("src/render/overlay/scene_wireframe_overlay_cache.cpp");

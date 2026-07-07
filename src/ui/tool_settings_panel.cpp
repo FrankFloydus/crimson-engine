@@ -10,7 +10,6 @@
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
-#include "ui/imgui_quader_widgets.hpp"
 
 #include <imgui.h>
 
@@ -174,8 +173,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
       ImGui::SetNextItemWidth(180.0f);
       const std::string width_label = context.localization.imgui_label(
           "operation.edge_bevel.width", "operation.edge_bevel.width", "Width");
-      if (quader_slider_float(width_label.c_str(), &width, 0.0625f, 16384.0f,
-                              "%.3f")) {
+      if (ImGui::SliderFloat(width_label.c_str(), &width, 0.0625f, 16384.0f,
+                             "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
         apply_tool_setting_update(tool_settings_target_id(target, "edge_bevel"),
                                   "operation.edge_bevel.width", width);
       }
@@ -183,7 +182,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
         const std::string segments_label = context.localization.imgui_label(
             "operation.edge_bevel.segments", "operation.edge_bevel.segments",
             "Segments");
-        if (quader_slider_int(segments_label.c_str(), &segments, 1, 16)) {
+        if (ImGui::SliderInt(segments_label.c_str(), &segments, 1, 16, "%d",
+                             ImGuiSliderFlags_AlwaysClamp)) {
           apply_tool_setting_update(
               tool_settings_target_id(target, "edge_bevel"),
               "operation.edge_bevel.segments", segments);
@@ -192,8 +192,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
         const std::string profile_label = context.localization.imgui_label(
             "operation.edge_bevel.profile", "operation.edge_bevel.profile",
             "Profile");
-        if (quader_slider_float(profile_label.c_str(), &profile, 0.0f, 1.0f,
-                                "%.2f")) {
+        if (ImGui::SliderFloat(profile_label.c_str(), &profile, 0.0f, 1.0f,
+                               "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
           apply_tool_setting_update(
               tool_settings_target_id(target, "edge_bevel"),
               "operation.edge_bevel.profile", profile);
@@ -205,7 +205,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
       ImGui::SetNextItemWidth(180.0f);
       const std::string steps_label = context.localization.imgui_label(
           "operation.bridge.steps", "operation.bridge.steps", "Steps");
-      if (quader_slider_int(steps_label.c_str(), &steps, 1, 64)) {
+      if (ImGui::SliderInt(steps_label.c_str(), &steps, 1, 64, "%d",
+                           ImGuiSliderFlags_AlwaysClamp)) {
         apply_tool_setting_update(tool_settings_target_id(target, "bridge"),
                                   "operation.bridge.steps", steps);
       }
@@ -217,8 +218,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
       const std::string distance_label = context.localization.imgui_label(
           "operation.thicken.distance", "operation.thicken.distance",
           "Distance");
-      if (quader_slider_float(distance_label.c_str(), &thickness, -4.0f, 4.0f,
-                              "%.3f")) {
+      if (ImGui::SliderFloat(distance_label.c_str(), &thickness, -4.0f, 4.0f,
+                             "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
         apply_tool_setting_update(tool_settings_target_id(target, "thicken"),
                                   "operation.thicken.thickness", thickness);
       }
@@ -231,7 +232,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
       const std::string x_label = context.localization.imgui_label(
           "operation.slice_quad.x_slices", "operation.slice_quad.x_slices",
           "X");
-      if (quader_slider_int(x_label.c_str(), &x_slices, 0, 64)) {
+      if (ImGui::SliderInt(x_label.c_str(), &x_slices, 0, 64, "%d",
+                           ImGuiSliderFlags_AlwaysClamp)) {
         apply_tool_setting_update(tool_settings_target_id(target, "slice_quad"),
                                   "operation.slice_quad.x_slices", x_slices);
       }
@@ -239,7 +241,8 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
         const std::string y_label = context.localization.imgui_label(
             "operation.slice_quad.y_slices", "operation.slice_quad.y_slices",
             "Y");
-        if (quader_slider_int(y_label.c_str(), &y_slices, 0, 64)) {
+        if (ImGui::SliderInt(y_label.c_str(), &y_slices, 0, 64, "%d",
+                             ImGuiSliderFlags_AlwaysClamp)) {
           apply_tool_setting_update(
               tool_settings_target_id(target, "slice_quad"),
               "operation.slice_quad.y_slices", y_slices);
@@ -253,8 +256,9 @@ void ToolSettingsPanel::draw_content(UIContext& context, bool& open) {
       const std::string tolerance_label = context.localization.imgui_label(
           "operation.merge_by_distance.tolerance",
           "operation.merge_by_distance.tolerance", "Tolerance");
-      if (quader_slider_float(tolerance_label.c_str(), &tolerance, 0.0f,
-                              128.0f, "%.4f")) {
+      if (ImGui::SliderFloat(tolerance_label.c_str(), &tolerance, 0.0f,
+                             128.0f, "%.4f",
+                             ImGuiSliderFlags_AlwaysClamp)) {
         apply_tool_setting_update(
             tool_settings_target_id(target, "merge_by_distance"),
             "operation.merge_by_distance.tolerance", tolerance);

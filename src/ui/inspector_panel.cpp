@@ -15,7 +15,6 @@
 #include "core/scene_environment_catalog.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/transform_pivot.hpp"
-#include "ui/imgui_quader_widgets.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_style_tokens.hpp"
 
@@ -38,6 +37,9 @@ constexpr float kRadToDeg = 57.29577951308232f;
 constexpr float kDegToRad = 0.017453292519943295f;
 constexpr float kAxisTextColumnWidth = 12.0f;
 constexpr float kMinAxisInputWidth = 58.0f;
+constexpr float kInspectorPropertyLabelColumnWidth = 132.0f;
+constexpr float kInspectorPropertyMinimumLabelColumnWidth = 76.0f;
+constexpr float kInspectorPropertyMinimumValueColumnWidth = 92.0f;
 constexpr float kInspectorLightRangeMin = 0.1f;
 constexpr float kInspectorLightRangeSliderMax = 100.0f;
 
@@ -128,6 +130,65 @@ struct AxisDragFloatResult {
     bool deactivated_after_edit = false;
 };
 
+float inspector_property_label_width() {
+  const float available_width = std::max(0.0f, ImGui::GetContentRegionAvail().x);
+  const float maximum_label_width =
+      std::max(kInspectorPropertyMinimumLabelColumnWidth,
+               available_width - kInspectorPropertyMinimumValueColumnWidth);
+  return std::clamp(kInspectorPropertyLabelColumnWidth,
+                    kInspectorPropertyMinimumLabelColumnWidth,
+                    maximum_label_width);
+}
+
+bool begin_inspector_property_table(const char *stable_id) {
+  ImGui::PushID(stable_id);
+  const ImGuiStyle &style = ImGui::GetStyle();
+  ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,
+                      ImVec2(style.FramePadding.x, style.FramePadding.y));
+
+  constexpr ImGuiTableFlags kPropertyTableFlags =
+      ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings |
+      ImGuiTableFlags_NoPadOuterX;
+  if (!ImGui::BeginTable("##PropertyTable", 2, kPropertyTableFlags)) {
+    ImGui::PopStyleVar();
+    ImGui::PopID();
+    return false;
+  }
+
+  ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed,
+                          inspector_property_label_width());
+  ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+  return true;
+}
+
+bool inspector_property_section(const char *stable_id, const char *label) {
+  ImGui::TableNextRow();
+  ImGui::TableSetColumnIndex(0);
+  ImGui::PushID(stable_id);
+  const bool open =
+      ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_SpanAllColumns);
+  ImGui::PopID();
+  return open;
+}
+
+void inspector_property_row(const char *stable_id, const char *label) {
+  ImGui::PushID(stable_id);
+  ImGui::TableNextRow();
+  ImGui::TableSetColumnIndex(0);
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted(label);
+  ImGui::TableSetColumnIndex(1);
+  ImGui::SetNextItemWidth(-FLT_MIN);
+}
+
+void inspector_end_property_row() { ImGui::PopID(); }
+
+void end_inspector_property_table() {
+  ImGui::EndTable();
+  ImGui::PopStyleVar();
+  ImGui::PopID();
+}
+
 AxisDragFloatResult axis_drag_float(const char *axis, ImVec4 color,
                                     float *value, bool mixed,
                                     const char *mixed_label, float speed,
@@ -172,7 +233,7 @@ axis_drag_float3(const char *stable_id, const char *label, float values[3],
       kAxisTextColumnWidth + imgui_style.ItemInnerSpacing.x +
       kMinAxisInputWidth + imgui_style.CellPadding.x * 2.0f;
 
-  quader_property_row(stable_id, label);
+  inspector_property_row(stable_id, label);
   if (ImGui::BeginTable("##AxisDragFloat3", 3,
                         ImGuiTableFlags_SizingStretchProp |
                             ImGuiTableFlags_NoSavedSettings |
@@ -215,24 +276,24 @@ axis_drag_float3(const char *stable_id, const char *label, float values[3],
 
     ImGui::EndTable();
   }
-  quader_end_property_row();
+  inspector_end_property_row();
   return result;
 }
 
 bool input_text_with_left_label(const char *stable_id, const char *label,
                                 char *buffer, std::size_t buffer_size,
                                 ImGuiInputTextFlags flags) {
-  quader_property_row(stable_id, label);
+  inspector_property_row(stable_id, label);
   const bool changed = ImGui::InputText("##value", buffer, buffer_size, flags);
-  quader_end_property_row();
+  inspector_end_property_row();
   return changed;
 }
 
 bool checkbox_with_left_label(const char *stable_id, const char *label,
                               bool *value) {
-  quader_property_row(stable_id, label);
+  inspector_property_row(stable_id, label);
   const bool changed = ImGui::Checkbox("##value", value);
-  quader_end_property_row();
+  inspector_end_property_row();
   return changed;
 }
 
@@ -274,17 +335,17 @@ UIContinuousEditResult drag_float_with_left_label(
   *value = staged[0];
 
   UIContinuousEditResult result;
-  quader_property_row(stable_id, label);
+  inspector_property_row(stable_id, label);
   result.changed =
       min_value < max_value
-          ? quader_slider_float("##value", value, min_value, max_value, format,
-                                slider_flags)
+          ? ImGui::SliderFloat("##value", value, min_value, max_value, format,
+                               slider_flags)
           : ImGui::DragFloat("##value", value, speed, min_value, max_value,
                              format);
   result.activated = ImGui::IsItemActivated();
   result.deactivated = ImGui::IsItemDeactivated();
   result.deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
-  quader_end_property_row();
+  inspector_end_property_row();
 
   staged[0] = *value;
   update_continuous_edit_tracker(stable_id, active_edit, primary, selection,
@@ -307,14 +368,14 @@ UIContinuousEditResult color_edit3_with_left_label(
   values[2] = staged[2];
 
   UIContinuousEditResult result;
-  quader_property_row(stable_id, label);
+  inspector_property_row(stable_id, label);
   result.changed = ImGui::ColorEdit3("##value", values,
                                      ImGuiColorEditFlags_Float |
                                          ImGuiColorEditFlags_NoInputs);
   result.activated = ImGui::IsItemActivated();
   result.deactivated = ImGui::IsItemDeactivated();
   result.deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
-  quader_end_property_row();
+  inspector_end_property_row();
 
   staged = {values[0], values[1], values[2]};
   update_continuous_edit_tracker(stable_id, active_edit, primary, selection,
@@ -331,14 +392,14 @@ bool combo_with_left_label(
     const char *stable_id, const char *label, Enum *value,
     const std::vector<std::pair<Enum, std::string>> &options) {
   bool changed = false;
-  quader_property_row(stable_id, label);
+  inspector_property_row(stable_id, label);
   const auto selected =
       std::find_if(options.begin(), options.end(), [&](const auto &option) {
         return option.first == *value;
       });
   const char *preview =
       selected == options.end() ? "" : selected->second.c_str();
-  if (quader_begin_combo("##value", preview)) {
+  if (ImGui::BeginCombo("##value", preview)) {
     for (const auto &[optionValue, optionLabel] : options) {
       const bool is_selected = optionValue == *value;
       if (ImGui::Selectable(optionLabel.c_str(), is_selected)) {
@@ -351,7 +412,7 @@ bool combo_with_left_label(
     }
     ImGui::EndCombo();
   }
-  quader_end_property_row();
+  inspector_end_property_row();
   return changed;
 }
 
@@ -384,7 +445,7 @@ void draw_scene_settings_inspector(UIContext &context, EntityId entity,
 
   const std::string environment_label =
       localization.text("ui.inspector.environment", "Environment");
-  if (quader_property_section("environment", environment_label.c_str())) {
+  if (inspector_property_section("environment", environment_label.c_str())) {
     const std::string preset_label =
         localization.text("ui.inspector.environment_preset", "Preset");
     std::string environment_id = settings.environment.environment_id;
@@ -477,7 +538,7 @@ void draw_scene_settings_inspector(UIContext &context, EntityId entity,
 
   const std::string camera_label =
       localization.text("ui.inspector.camera", "Camera");
-  if (quader_property_section("camera", camera_label.c_str())) {
+  if (inspector_property_section("camera", camera_label.c_str())) {
     float aperture = settings.camera.aperture;
     const std::string aperture_label =
         localization.text("ui.inspector.aperture", "Aperture");
@@ -536,7 +597,7 @@ void draw_scene_settings_inspector(UIContext &context, EntityId entity,
 
   const std::string post_process_label =
       localization.text("ui.inspector.post_process", "Post Process");
-  if (quader_property_section("post_process", post_process_label.c_str())) {
+  if (inspector_property_section("post_process", post_process_label.c_str())) {
     bool enabled = settings.post_process.enabled;
     const std::string enabled_label =
         localization.text("ui.inspector.enabled", "Enabled");
@@ -845,7 +906,7 @@ void InspectorPanel::draw_content(UIContext& context) {
     const BoolAggregate lock_aggregate =
         aggregate_lock(document, editable_selected);
 
-    if (!quader_begin_property_table("inspector_properties")) {
+    if (!begin_inspector_property_table("inspector_properties")) {
       return;
     }
 
@@ -855,7 +916,7 @@ void InspectorPanel::draw_content(UIContext& context) {
     if (has_general_properties) {
       const std::string general_label =
           localization.text("ui.inspector.general", "General");
-      if (quader_property_section("general", general_label.c_str())) {
+      if (inspector_property_section("general", general_label.c_str())) {
         if (selected.size() == 1u) {
           std::array<char, 128> name_buffer;
           copy_name_to_buffer(document.name(primary), name_buffer);
@@ -943,16 +1004,16 @@ void InspectorPanel::draw_content(UIContext& context) {
 
         const std::string transform_label =
             localization.text("ui.inspector.transform", "Transform");
-        if (quader_property_section("transform", transform_label.c_str())) {
+        if (inspector_property_section("transform", transform_label.c_str())) {
           if (selected.size() > 1u) {
             const std::string spatial_entities = localization.format(
                 "ui.inspector.spatial_entities", "{count} spatial entities",
                 {{"count", std::to_string(transform_count)}});
             const std::string selection_label =
                 localization.text("ui.inspector.selection", "Selection");
-            quader_property_row("spatial_entities", selection_label.c_str());
+            inspector_property_row("spatial_entities", selection_label.c_str());
             ImGui::TextDisabled("%s", spatial_entities.c_str());
-            quader_end_property_row();
+            inspector_end_property_row();
           }
 
           auto transform_edit_matches = [&](InspectorTransformEditKind kind) {
@@ -1194,7 +1255,7 @@ void InspectorPanel::draw_content(UIContext& context) {
             std::span<const EntityId>(selected.data(), selected.size()),
             active_continuous_edit_, *settings, localization);
       }
-      quader_end_property_table();
+      end_inspector_property_table();
       return;
     }
 
@@ -1208,7 +1269,7 @@ void InspectorPanel::draw_content(UIContext& context) {
 
         const std::string export_label =
             localization.text("ui.inspector.export", "Export");
-        if (quader_property_section("export", export_label.c_str())) {
+        if (inspector_property_section("export", export_label.c_str())) {
           bool editor_only = mesh.editor_only;
           const std::string editor_only_label =
               localization.text("ui.inspector.editor_only", "Editor Only");
@@ -1221,7 +1282,7 @@ void InspectorPanel::draw_content(UIContext& context) {
 
         const std::string lighting_label =
             localization.text("ui.inspector.lighting", "Lighting");
-        if (quader_property_section("lighting", lighting_label.c_str())) {
+        if (inspector_property_section("lighting", lighting_label.c_str())) {
           bool cast_shadows = mesh.cast_shadows;
           const std::string cast_shadows_label =
               localization.text("ui.inspector.cast_shadows", "Cast Shadows");
@@ -1243,7 +1304,7 @@ void InspectorPanel::draw_content(UIContext& context) {
 
         const std::string physics_label =
             localization.text("ui.inspector.physics", "Physics");
-        if (quader_property_section("physics", physics_label.c_str())) {
+        if (inspector_property_section("physics", physics_label.c_str())) {
           bool generate_collisions = mesh.generate_collisions;
           const std::string generate_collisions_label = localization.text(
               "ui.inspector.generate_collisions", "Generate Collisions");
@@ -1324,7 +1385,7 @@ void InspectorPanel::draw_content(UIContext& context) {
 
         const std::string light_label =
             localization.text("ui.inspector.light", "Light");
-        if (quader_property_section("light", light_label.c_str())) {
+        if (inspector_property_section("light", light_label.c_str())) {
           LightType type = light.type;
           const std::string type_label =
               localization.text("ui.inspector.light_type", "Type");
@@ -1414,20 +1475,20 @@ void InspectorPanel::draw_content(UIContext& context) {
 
       const std::string components_label =
           localization.text("ui.inspector.components", "Components");
-      if (quader_property_section("components", components_label.c_str())) {
+      if (inspector_property_section("components", components_label.c_str())) {
         const std::string meshes_label =
             localization.text("ui.inspector.meshes", "Meshes");
         const std::string lights_label =
             localization.text("ui.inspector.lights", "Lights");
-        quader_property_row("meshes", meshes_label.c_str());
+        inspector_property_row("meshes", meshes_label.c_str());
         ImGui::Text("%llu", static_cast<unsigned long long>(mesh_count));
-        quader_end_property_row();
-        quader_property_row("lights", lights_label.c_str());
+        inspector_end_property_row();
+        inspector_property_row("lights", lights_label.c_str());
         ImGui::Text("%llu", static_cast<unsigned long long>(light_count));
-        quader_end_property_row();
+        inspector_end_property_row();
       }
     }
-    quader_end_property_table();
+    end_inspector_property_table();
 }
 
 } // namespace quader

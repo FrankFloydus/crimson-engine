@@ -135,6 +135,21 @@ EditorSelectionService::set_scene_selection(std::span<const EntityId> entities,
                                          modeling_.selection_summary());
 }
 
+DocumentCommandResult EditorSelectionService::set_inspection_scene_selection(
+    std::span<const EntityId> entities, EntityId active) {
+  QDR_PROFILE_FUNCTION();
+  const ModelingSelectionSummary before = modeling_.selection_summary();
+  SceneSelectionState selection = make_scene_selection(scene_, entities, active);
+  DocumentCommandResult result = document_commands_.select_entities(
+      std::move(selection.selected), selection.active,
+      SceneSelectionApplicationMode::UndoableCommand);
+  if (result.ok && modeling_.selection_mode() != ModelingSelectionMode::Group) {
+    modeling_.project_object_selection_from_scene(true);
+  }
+  return merge_modeling_selection_change(result, before,
+                                         modeling_.selection_summary());
+}
+
 DocumentCommandResult
 EditorSelectionService::edit_scene_selection(EntityId entity,
                                              EditorSelectionEdit edit) {

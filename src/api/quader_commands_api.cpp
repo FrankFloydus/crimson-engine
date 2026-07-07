@@ -646,6 +646,13 @@ void QuaderCommandsApi::Impl::register_commands() {
   register_command(
       quader_command::kProjectSaveAs, "Save Project As",
       [this] { return project_.save_as({}); }, "Ctrl+Shift+S");
+  register_command(
+      quader_command::kProjectExportSelectionObj, "Export Selection OBJ",
+      [this] {
+        return quader_api_status_from_result(
+            project_.export_selected_meshes_as_obj({}));
+      },
+      {}, [this] { return project_.can_export_selected_meshes_as_obj(); });
   register_command(quader_command::kSceneCreatePointLight, "Create Point Light",
                    [this] {
                      QuaderCreatePointLightArgs args;

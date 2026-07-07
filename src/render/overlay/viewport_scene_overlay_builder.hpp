@@ -20,7 +20,9 @@ public:
   [[nodiscard]] static ViewportOverlayFrame
   build_selection_frame(ViewportOverlayFrame base_frame,
                         const RenderOverlaySelectionSnapshot &snapshot,
-                        bool point_light_gizmos_visible = false);
+                        bool point_light_gizmos_visible = false,
+                        ModelingSelectionMode selection_mode =
+                            ModelingSelectionMode::Object);
   [[nodiscard]] static ViewportOverlayFrame build_wireframe_frame(
       ViewportOverlayFrame base_frame, ModelingSelectionMode selection_mode,
       const RenderOverlaySceneWireframeSnapshot &snapshot);

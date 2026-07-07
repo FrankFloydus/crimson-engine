@@ -7,7 +7,6 @@
 #include "ui/viewport_settings_panel.hpp"
 
 #include "core/localization_service.hpp"
-#include "ui/imgui_quader_widgets.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
@@ -64,7 +63,7 @@ void draw_locale_settings(UIContext &context) {
   ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen;
   const std::string header = localization.imgui_label(
       "ui.settings.interface", "ui.settings.interface", "Interface");
-  if (!quader_collapsing_header(header.c_str(), flags)) {
+  if (!ImGui::CollapsingHeader(header.c_str(), flags)) {
     return;
   }
 
@@ -77,7 +76,7 @@ void draw_locale_settings(UIContext &context) {
   const std::string combo_label = localization.imgui_label(
       "ui.settings.locale", "ui.settings.locale", "Language");
   ImGui::SetNextItemWidth(220.0f);
-  if (quader_begin_combo(combo_label.c_str(), preview.c_str())) {
+  if (ImGui::BeginCombo(combo_label.c_str(), preview.c_str())) {
     for (const LocaleInfo &locale : localization.available_locales()) {
       const bool selected = locale.id == selected_locale;
       const std::string item_label =
@@ -129,7 +128,7 @@ void ViewportSettingsPanel::draw_content(UIContext& context, bool& open) {
         flags |= ImGuiTreeNodeFlags_DefaultOpen;
       }
       const std::string header = section_label(context.localization, section);
-      if (!quader_collapsing_header(header.c_str(), flags)) {
+      if (!ImGui::CollapsingHeader(header.c_str(), flags)) {
         continue;
       }
 
@@ -165,8 +164,9 @@ void ViewportSettingsPanel::draw_content(UIContext& context, bool& open) {
         ImGui::SetNextItemWidth(220.0f);
         const std::string label = setting_label(
             context.localization, descriptor.key, descriptor.label);
-        if (quader_slider_float(label.c_str(), &value, descriptor.minimum,
-                                descriptor.maximum, "%.3f")) {
+        if (ImGui::SliderFloat(label.c_str(), &value, descriptor.minimum,
+                               descriptor.maximum, "%.3f",
+                               ImGuiSliderFlags_AlwaysClamp)) {
           changed_this_frame_ =
               context.preferences.viewport.set_float_value(descriptor.id,
                                                            value) ||

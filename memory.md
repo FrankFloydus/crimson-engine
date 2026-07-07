@@ -9,12 +9,85 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-07 - Rotated Mesh Selection Uses World AABB Cage
+
+Task/context: Source/Hammer-style object selection for non-world-aligned meshes should keep the mesh
+geometry rotated while the editor outline, grid snap reference, and transform drag bounds use a
+world-aligned AABB cage.
+
+Invariant:
+
+- `src/render/overlay/render_overlay_snapshot.*` records direct selected mesh world bounds through
+  `entity_world_bounds`; group/empty hierarchy bounds stay separate.
+- `src/render/overlay/viewport_scene_overlay_builder.*` draws selected mesh AABB cages with the
+  existing `GroupBounds` style only in object/group selection contexts. Component modes do not add
+  the selected mesh AABB over edit topology.
+- `src/editor/modeling/services/modeling_session_service.cpp` makes object-mode transform drag
+  bounds prefer `selected_transform_world_bounds` before runtime selection bounds, keeping scale and
+  snap math aligned with the visible world-space cage.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportSceneOverlayBuilderTests.AddsSelectedMeshWorldAabbBoundsInObjectMode:ViewportSceneOverlayBuilderTests.AddsHierarchySelectionWiresAndGroupBounds:RenderOverlaySnapshotTests.CapturesSelectionGroupLightHierarchyAndToolOverlayRecords:ViewportOverlayPolicyTests.ObjectTransformDragBoundsPreferSceneWorldAabb`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-07-07 - Outliner Inspection Selection Can Target Locked Entities
+
+Task/context: locked meshes could no longer be selected from the outliner, making the inspector
+lock checkbox unreachable and preventing normal unlock from the UI.
+
+Invariant:
+
+- Normal user/editor selection (`select_object`, viewport picking, box select, select-all, invert)
+  still filters missing, effectively locked, and non-selectable scene entities.
+- Outliner row clicks use `QuaderSelectionApi::select_objects_for_inspection`, which records an
+  exact existing-entity scene selection through `EditorSelectionService::set_inspection_scene_selection`
+  so locked/non-pickable rows can be inspected and unlocked.
+- Selection-driven hierarchy mutations (`DeleteSelection`, duplicate, group, ungroup) use
+  `document_command_selected_root_entities`, which ignores effectively locked roots. Selecting a
+  locked row for inspection must not become a delete/duplicate/group back door.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=EditorApiTests.LockedEntitiesCannotBeUserSelectedButCanBeInspectedAndUnlocked:EditorApiTests.LockingParentClearsSelectedModelingDescendantAndUndoRestoresIt:EditorApiTests.ObjectSelectAllAndInvertUseSceneEntitiesAndExcludeLockedAndRoot`
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=ProgrammaticApiGuardrailTests.SceneSelectionApplicationOwnerCoversCommandServiceAndProjection:ProgrammaticApiGuardrailTests.OutlinerUsesDocumentCommandRootSelectionOwner`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=GroupingPublicApiTests.*:EditorApiTests.DeleteCommandRouteRemovesSameObjectAndExposesUndoLabel:EditorApiTests.DeleteSelectionDeletesSelectedLightsThroughSceneAwareRoute:EditorApiTests.PublicDuplicateSelectionDuplicatesLightEntityThroughSceneHierarchy:EditorApiTests.SceneRootSelectionCanEditSettingsButCannotBeDeletedOrDuplicated:EditorApiTests.DuplicateMeshesHistoryRestoresSceneOnlyDuplicateState:EditorApiTests.DuplicateMeshesActionCommandPreservesSceneOnlyDuplicateState`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-07-07 - Object-Mode Mesh Selection OBJ Export
+
+Task/context: File > Export OBJ needed to export only the direct object-mode selected meshes,
+without adding Assimp or another mesh export dependency for v1.
+
+Invariant:
+
+- `src/io/mesh/obj_writer.*` owns geometry-only Wavefront OBJ serialization and validation.
+- `QuaderProjectApi::export_selected_meshes_as_obj` owns export intent: require object mode, collect
+  direct selected mesh entities, prefer live modeling mesh compilation, then fall back to
+  `AssetRegistry` mesh data for plain mesh entities.
+- OBJ export writes local mesh coordinates only; scene transforms, materials, MTL files, textures,
+  hierarchy, history, dirty state, and project path are not mutated.
+- Single selection writes the chosen path exactly; multi-selection writes sibling
+  `Base_<EntityName>.obj` files with sanitized names and numeric collision suffixes.
+
+Verification:
+
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=EditorApiTests.AggregatesDocumentApisAndCommandRouting:EditorApiTests.CommandRegistryCoversEveryAppOperationAndViewportTool:ObjExportTests.*`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=LocalizationResourceTests.*:LocalizationServiceTests.*`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no`
+- `cmake --build --preset vs2026-debug --target quader`
+
 ## 2026-07-07 - Edge Bevel Corners Fill Local Open Profile Loops
 
 Task/context: beveling adjacent L-shaped opening edges could leave a black terminal hole at the
 opposite unshared endpoint; beveling opposite side plus bottom opening edges could leave two bottom
 holes at two-selected-edge corners. Both matched missing pieces of Blender's bevel boundary rebuild
-around selected endpoints.
+around selected endpoints. The opposite side plus bottom opening case also needed straight wall
+support edges: the source wall face must not connect old support vertices directly into bevel
+profile vertices when a selected edge leaves that wall plane.
 
 Invariant:
 
@@ -25,6 +98,10 @@ Invariant:
   bevel profile, offset vertices, and unselected support/boundary vertices.
 - The local close pass must be constrained to the affected bevel profile component so it does not fill
   unrelated document holes.
+- For non-terminal selected corners on an unselected source face, insert the same boundary support
+  vertices only when a selected edge leaves that face plane. Flat in-plane L selections should keep
+  their existing miter path; mixed wall/extrusion selections need boundary vertices to prevent
+  converging or diverging wall support lines.
 
 Verification:
 

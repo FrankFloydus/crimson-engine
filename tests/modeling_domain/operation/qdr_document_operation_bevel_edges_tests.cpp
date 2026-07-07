@@ -1484,4 +1484,22 @@ TEST(QdrDocumentOperationBevelEdgesTests, OppositeSideAndBottomOpeningBevelClose
     SCOPED_TRACE(::testing::Message() << doorway_top_region_summary(document));
     EXPECT_TRUE(every_edge_is_closed(document));
     EXPECT_TRUE(every_shared_edge_has_opposite_winding(document));
+    const std::array<quader::QVec3, 4> expected_bottom_boundary_vertices {{
+        { 1.0F, -0.47F, -0.35F },
+        { 1.0F, -0.35F, -0.47F },
+        { 1.0F, -0.47F, 0.35F },
+        { 1.0F, -0.35F, 0.47F },
+    }};
+    for (const quader::QVec3 boundary_position : expected_bottom_boundary_vertices) {
+        EXPECT_TRUE(has_vertex_near_position(document, boundary_position));
+    }
+    const std::array<std::pair<quader::QVec3, quader::QVec3>, 4> forbidden_bottom_wall_diagonals {{
+        { { 1.0F, -1.0F, -0.35F }, { 1.0F, -0.35F, -0.47F } },
+        { { 1.0F, -1.0F, -0.35F }, { 1.0F, -0.35F, -0.23F } },
+        { { 1.0F, -1.0F, 0.35F }, { 1.0F, -0.35F, 0.47F } },
+        { { 1.0F, -1.0F, 0.35F }, { 1.0F, -0.35F, 0.23F } },
+    }};
+    for (const auto& [source_face_neighbor, bevel_profile_position] : forbidden_bottom_wall_diagonals) {
+        EXPECT_TRUE(edge_use_count_between_positions(document, source_face_neighbor, bevel_profile_position) == 0);
+    }
 }

@@ -1465,6 +1465,8 @@ TEST(ProgrammaticApiGuardrailTests, OutlinerUsesDocumentCommandRootSelectionOwne
 
   EXPECT_NE(outliner.find("document_command_selected_root_entities"),
             std::string::npos);
+  EXPECT_NE(outliner.find("select_objects_for_inspection"),
+            std::string::npos);
   EXPECT_NE(outliner.find("quader_command::kDuplicateSelection"),
             std::string::npos);
   EXPECT_NE(viewport.find("scene_aware_delete_has_selected_root"),

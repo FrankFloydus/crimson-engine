@@ -40,6 +40,14 @@ default_project_save_file_name(const QuaderProjectApi &project) {
   return std::filesystem::path(std::move(name));
 }
 
+std::filesystem::path
+default_obj_export_file_name(const QuaderProjectApi &project) {
+  std::string name = project.metadata().name.empty() ? "Selection"
+                                                     : project.metadata().name;
+  name.append(".obj");
+  return std::filesystem::path(std::move(name));
+}
+
 PlatformFileDialogOptions
 project_file_dialog_options(void *owner_window_handle,
                             const QuaderProjectApi &project) {
@@ -52,6 +60,19 @@ project_file_dialog_options(void *owner_window_handle,
   } else {
     options.initial_file_name = default_project_save_file_name(project);
   }
+  return options;
+}
+
+PlatformFileDialogOptions
+obj_export_file_dialog_options(void *owner_window_handle,
+                               const QuaderProjectApi &project) {
+  PlatformFileDialogOptions options;
+  options.owner_window_handle = owner_window_handle;
+  const std::filesystem::path &current_path = project.path();
+  if (!current_path.empty()) {
+    options.initial_directory = current_path.parent_path();
+  }
+  options.initial_file_name = default_obj_export_file_name(project);
   return options;
 }
 
@@ -193,6 +214,12 @@ bool App::initialize(const std::filesystem::path &executable_path,
             return platform_save_project_file_dialog(
                 project_file_dialog_options(window_.native_window_handle(),
                                             editor_->project()));
+          },
+      .choose_export_obj_path =
+          [this]() {
+            return platform_save_obj_file_dialog(
+                obj_export_file_dialog_options(window_.native_window_handle(),
+                                               editor_->project()));
           },
   });
   window_.set_live_resize_frame_callback([this]() {

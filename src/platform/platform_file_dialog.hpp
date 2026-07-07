@@ -24,5 +24,7 @@ struct PlatformFileDialogOptions {
 platform_open_project_file_dialog(const PlatformFileDialogOptions &options);
 [[nodiscard]] std::optional<std::filesystem::path>
 platform_save_project_file_dialog(const PlatformFileDialogOptions &options);
+[[nodiscard]] std::optional<std::filesystem::path>
+platform_save_obj_file_dialog(const PlatformFileDialogOptions &options);
 
 } // namespace quader

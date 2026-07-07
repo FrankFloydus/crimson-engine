@@ -107,6 +107,20 @@ QuaderSelectionApi::select_objects(std::initializer_list<EntityId> entities,
       std::span<const EntityId>(entities.begin(), entities.size()), active);
 }
 
+QuaderApiVoidResult QuaderSelectionApi::select_objects_for_inspection(
+    std::span<const EntityId> entities, EntityId active) {
+  return mutations_.run_document_result(
+      project_session(session_).selection().set_inspection_scene_selection(
+          entities, active),
+      "Select Objects");
+}
+
+QuaderApiVoidResult QuaderSelectionApi::select_objects_for_inspection(
+    std::initializer_list<EntityId> entities, EntityId active) {
+  return select_objects_for_inspection(
+      std::span<const EntityId>(entities.begin(), entities.size()), active);
+}
+
 QuaderApiVoidResult
 QuaderSelectionApi::select_object(EntityId entity, QuaderSelectionEdit edit) {
   return mutations_.run_document_result(

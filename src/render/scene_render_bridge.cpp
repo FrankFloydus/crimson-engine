@@ -104,7 +104,8 @@ ViewportOverlayFrame SceneRenderBridge::build_scene_overlay_frame(
     const ViewportSceneOverlayFrameRequest &request) const {
   QDR_PROFILE_FUNCTION();
   ViewportOverlayFrame frame = ViewportSceneOverlayBuilder::build_selection_frame(
-      std::move(base_frame), snapshot, request.point_light_gizmos_visible);
+      std::move(base_frame), snapshot, request.point_light_gizmos_visible,
+      request.selection_mode);
   if (request.wireframe_pane) {
     frame = ViewportSceneOverlayBuilder::strip_wireframe_selection_fills(
         std::move(frame), request.selection_mode);
