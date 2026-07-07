@@ -58,6 +58,24 @@ void append_overlay_frame(
       target.hover_target_selected || source.hover_target_selected;
 }
 
+bool persistent_object_selection_face_fill_triangle(
+    const quader_editor_core::SelectionOverlayTriangle &triangle) {
+  return triangle.layer ==
+             quader_editor_core::SelectionOverlayLayer::SelectedVisibleFace ||
+         triangle.layer ==
+             quader_editor_core::SelectionOverlayLayer::SelectedXrayFace ||
+         triangle.layer ==
+             quader_editor_core::SelectionOverlayLayer::SelectedFaceMask;
+}
+
+void remove_persistent_object_face_fill_triangles(
+    quader_editor_core::SelectionOverlayFrame &frame) {
+  frame.triangles.erase(
+      std::remove_if(frame.triangles.begin(), frame.triangles.end(),
+                     persistent_object_selection_face_fill_triangle),
+      frame.triangles.end());
+}
+
 bool edges_match_unordered(quader_poly::Edge left, quader_poly::Edge right) {
   return (left.a == right.a && left.b == right.b) ||
          (left.a == right.b && left.b == right.a);
@@ -1615,6 +1633,8 @@ ModelingOverlayService::selection_overlay_base_frame(
     return overlay_base_cache_.frame;
   }
 
+  const bool previous_suppressed_persistent_object_selection =
+      overlay_base_cache_.suppress_persistent_object_selection;
   std::vector<OverlayBaseObjectCacheEntry> previous_entries =
       std::move(overlay_base_cache_.object_entries);
   std::unordered_map<int, std::size_t> previous_entry_by_object_id;
@@ -1635,11 +1655,6 @@ ModelingOverlayService::selection_overlay_base_frame(
 
   const quader_editor_core::SelectionHoverState empty_hover;
   for (const quader_editor_core::PolygonObject &object : session.objects()) {
-    if (options.suppress_persistent_object_selection &&
-        selection_mode == quader_editor_core::SelectionMode::Object &&
-        object.selected) {
-      continue;
-    }
     const std::uint64_t signature =
         PickingCacheProjection::object_face_geometry_signature(object);
     const auto reusable = previous_entry_by_object_id.find(object.id);
@@ -1654,6 +1669,8 @@ ModelingOverlayService::selection_overlay_base_frame(
         previous_entries[reusable->second].selected == object.selected &&
         previous_entries[reusable->second].active_source_wire_object ==
             active_source_wire_object &&
+        previous_suppressed_persistent_object_selection ==
+            options.suppress_persistent_object_selection &&
         ModelingSelectionService::selection_matches(
             previous_entries[reusable->second].selection, object.selection)) {
       entry = std::move(previous_entries[reusable->second]);
@@ -1668,6 +1685,15 @@ ModelingOverlayService::selection_overlay_base_frame(
           std::span<const quader_editor_core::PolygonObject>(&object, 1U),
           selection_mode, active_source_wire_object ? object.id : -1,
           empty_hover, {});
+      if (selection_mode != quader_editor_core::SelectionMode::Object &&
+          !active_source_wire_object) {
+        remove_source_wire_for_object(entry.frame, object.id);
+      }
+    }
+    if (options.suppress_persistent_object_selection &&
+        selection_mode == quader_editor_core::SelectionMode::Object &&
+        object.selected) {
+      remove_persistent_object_face_fill_triangles(entry.frame);
     }
     append_overlay_frame(next.frame, entry.frame);
     next.object_entries.push_back(std::move(entry));

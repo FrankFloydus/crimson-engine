@@ -47,13 +47,12 @@ public:
     ~SelectedObjectOverlayCache();
 
     void initialize(filament::Engine &engine, filament::Scene &scene,
-                    filament::Material &face_fill_material,
-                    filament::Material &line_material);
+                    filament::Material &face_fill_material);
     void shutdown();
 
     bool initialized() const {
       return engine_ != nullptr && scene_ != nullptr &&
-             face_fill_material_ != nullptr && line_material_ != nullptr;
+             face_fill_material_ != nullptr;
     }
 
     void sync(const RenderOverlaySelectedObjectSnapshot &snapshot);
@@ -104,36 +103,11 @@ private:
       bool operator==(const SelectedEntityState &) const = default;
     };
 
-    /**
-     * Stores one selected-object outline segment in world space.
-     */
-    struct SelectedObjectLineSegment {
-        QVec3 start;
-        QVec3 end;
-    };
-
-    /**
-     * Caches extracted outline segments for one mesh revision.
-     */
-    struct LineEntry {
-      AssetId mesh_id = kInvalidAssetId;
-      std::uint64_t mesh_revision = 0;
-      std::vector<SelectedObjectLineSegment> segments;
-    };
-
     std::vector<SelectedEntityState> selected_entity_states(
         const RenderOverlaySelectedObjectSnapshot &snapshot) const;
-    LineEntry create_line_entry(const RenderOverlayMeshSnapshot &mesh) const;
-    void sync_line_entries(const std::vector<SelectedEntityState> &states,
-                           const RenderOverlaySelectedObjectSnapshot
-                               &snapshot);
-    void update_line_proxy(const std::vector<SelectedEntityState> &states,
-                           const RenderOverlaySelectedObjectSnapshot
-                               &snapshot);
     Entry create_entry(const RenderOverlayMeshSnapshot &mesh);
     void destroy_entry(Entry &entry);
     void destroy_proxy(Proxy &proxy, bool remove_from_scene);
-    void destroy_line_batch_root();
     void destroy_face_entries();
     void destroy_transform_root(Entry &entry);
     void set_proxy_layer_mask(const Proxy &proxy,
@@ -148,11 +122,7 @@ private:
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
     filament::Material *face_fill_material_ = nullptr;
-    filament::Material *line_material_ = nullptr;
-    utils::Entity line_batch_transform_root_;
-    Proxy line_proxy_;
     std::unordered_map<EntityId, Entry> entries_;
-    std::unordered_map<EntityId, LineEntry> line_entries_;
     std::vector<SelectedEntityState> synced_states_;
     std::uint64_t synced_scene_revision_ = 0;
     std::uint64_t synced_asset_revision_ = 0;

@@ -60,9 +60,7 @@ bool viewport_overlay_line_draws_on_top(ViewportOverlayLayer layer) {
 }
 
 bool viewport_overlay_point_draws_on_top(ViewportOverlayLayer layer) {
-  return layer == ViewportOverlayLayer::SelectedVertex ||
-         layer == ViewportOverlayLayer::HoverVertex ||
-         layer == ViewportOverlayLayer::SnapTargetVertex ||
+  return layer == ViewportOverlayLayer::SnapTargetVertex ||
          layer == ViewportOverlayLayer::ToolHandle;
 }
 
@@ -85,15 +83,6 @@ bool viewport_overlay_line_uses_component_depth(
          line.layer == ViewportOverlayLayer::SelectedEdge ||
          line.layer == ViewportOverlayLayer::HoverFaceEdge ||
          line.layer == ViewportOverlayLayer::HoverEdge;
-}
-
-bool viewport_overlay_point_uses_component_depth(
-    const ViewportOverlayPoint &point) {
-  if (!viewport_overlay_component_selection_source(point.source)) {
-    return false;
-  }
-  return point.layer == ViewportOverlayLayer::SelectedVertex ||
-         point.layer == ViewportOverlayLayer::HoverVertex;
 }
 
 ViewportOverlayDepthMode
@@ -130,9 +119,6 @@ viewport_overlay_depth_mode(const ViewportOverlayLine &line) {
 
 ViewportOverlayDepthMode
 viewport_overlay_depth_mode(const ViewportOverlayPoint &point) {
-  if (viewport_overlay_point_uses_component_depth(point)) {
-    return ViewportOverlayDepthMode::DepthTested;
-  }
   return viewport_overlay_depth_mode(point.layer,
                                      ViewportOverlayGeometryKind::Points);
 }

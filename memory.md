@@ -2411,3 +2411,139 @@ Verification:
 - `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
 - `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=UiLayoutGuardrailTests.*:BuildGuardrailTests.LocalizationResourcesArePackagedWithRuntime:BuildGuardrailTests.ImGuiRuntimeResourcesArePackagedWithRuntime:BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime:BuildGuardrailTests.ImGuiShellViewportAndControlStylingStayVisible:ProgrammaticApiGuardrailTests.*Viewport*`
 - `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-07-06 - Object Selection Wire Uses Transient Camera-Clipped Overlay Lines
+
+Task/context: Object/mesh selection mode orange wires disappeared or faded near the viewport camera
+because they used the persistent selected-object shader-expanded line cache, while component-mode
+cyan/blue wires used CPU-clipped per-viewport overlay line quads.
+
+Invariants:
+
+- Selected object wire lines must stay in the transient `ViewportOverlayFrame` path so
+  `OverlayLineMeshBuilder` clips them with the active `ViewportOverlayCamera`, matching component
+  wire behavior in every viewport.
+- `SelectedObjectOverlayCache` is face-fill-only. Do not reintroduce selected-object wire proxies,
+  `SelectedObjectLineVertex`, or selected-object `nearPlane` shader uniforms there.
+- `ModelingSelectionOverlayOptions::suppress_persistent_object_selection` suppresses selected object
+  face-fill triangles from the transient frame, not the selected object wire lines. The persistent
+  cache supplies the face fills for object mode; the transient frame supplies the wires.
+- The remaining persistent shader-expanded line path is the scene wireframe cache. Keep it separate
+  from object selection wire behavior unless wireframe mode itself is being changed.
+
+Affected owners/files:
+
+- `src/editor/modeling/services/modeling_session_services.cpp`
+- `src/render/overlay/selected_object_overlay_cache.*`
+- `src/render/scene_render_bridge.cpp`
+- `tests/core_tests.cpp`
+- `tests/render_extraction_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportOverlayPolicyTests.PersistentObjectSelectionCacheOwnsFaceFillsOnly:ViewportOverlayPolicyTests.NativeViewportKeepsTransientObjectSelectionWireBeforeProjection:ModelingSessionServiceTests.PersistentObjectSelectionSuppressionKeepsTransientWire:RenderOverlaySnapshotTests.PersistentSceneWireframeLineCacheUsesSnapshotClipPlanes:RenderOverlaySnapshotTests.CapturesSelectedObjectAndSceneWireframeRecordsWithDirtyRevisions`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-07-06 - Ground Grid Far Clip Is A Shader Fade
+
+Task/context: The scene camera far clip affected scene geometry, but the ground grid did not fade
+like Blender when the far clip was reduced. The grid is a render-owned overlay plane with a custom
+unlit material, not normal scene mesh material, so it needs its own far-plane uniform and alpha
+fade.
+
+Invariants:
+
+- `ViewportGridRenderer` must pass the active perspective camera far plane into `ground_grid.mat`.
+- `ground_grid.mat` should keep its existing large-distance and plane-edge fades, then multiply by
+  a Blender-style far fade from half the far clip to the far clip using full world distance to the
+  camera.
+- Do not apply that distance fade in orthographic mode; orthographic grid size is viewport-derived
+  and camera-to-plane distance can be unrelated to visible grid coverage.
+
+Affected owners/files:
+
+- `resources/materials/ground_grid.mat`
+- `src/render/viewport_grid_renderer.cpp`
+- `tests/core_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target ground_grid_material`
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=GroundGridMaterialTests.UsesUserWorldAnchoring`
+
+## 2026-07-06 - Superseded: Vertex Handles Drew On Top
+
+Task/context: Flipped-normal meshes made vertex handle dots disappear unless the camera was very
+close, while the same vertices on normal exterior faces stayed visible. The points were normal
+depth-tested billboards, so two-sided or flipped surface depth could win over the dot quad.
+
+Superseded: the 2026-07-07 vertex leakage fix below replaces this draw-on-top policy with
+depth-tested vertex points plus a small point depth bias.
+
+Former invariants, kept only as historical context:
+
+- `UnselectedVertex`, `SelectedVertex`, and `HoverVertex` are editable viewport handles and should
+  draw on top. Do not route component selected/hover vertex points through a separate depth-tested
+  policy.
+- Component wires/edges still use the depth-tested edit-wire batch path. This change is for point
+  handles only.
+- Do not reintroduce component-point private depth bias helpers in
+  `OverlayRenderableBuilder`; avoiding the surface-depth fight is the owner policy.
+- The per-object selection overlay cache must strip `SourceWire` and `SourceWireDepthStamp`
+  primitives for inactive selected objects in component modes. Building one object in isolation can
+  otherwise re-infer that inactive selected object as the source-wire owner.
+
+Affected owners/files:
+
+- `src/render/viewport_overlay_policy.cpp`
+- `src/render/overlay/overlay_renderable_builder.cpp`
+- `src/editor/modeling/services/modeling_session_services.cpp`
+- `tests/core_tests.cpp`
+- `tests/render_extraction_tests.cpp`
+
+Verification:
+
+- Superseded; use the 2026-07-07 depth-tested vertex point verification below.
+
+## 2026-07-07 - Vertex Points Depth-Test With Bias And Inside-Out Room Exception
+
+Task/context: after vertex points were made draw-on-top to avoid flipped-normal depth fights, normal
+outward meshes still showed back/hidden vertex dots through shaded surfaces. CPU source-wire
+depth-stamp filtering was not enough because the real point batches still used an always-pass depth
+state. After switching editable vertex point batches to depth-tested, inside flipped-normal rooms lost
+their visible/selectable vertex handles because the room surface depth could hide them from inside.
+
+Invariant:
+
+- `UnselectedVertex`, `SelectedVertex`, and `HoverVertex` point batches are depth-tested by policy;
+  they must not use `OverlayDepthFunc::Always`.
+- Use the existing point post-projection depth bias (`kOverlayPointDepthBias`) to keep same-surface
+  vertex handles from z-fighting. Do not move point X/Y and do not add private component-point depth
+  hacks.
+- `SourceWireDepthStamp` remains non-rendered metadata. `OverlayRenderableBuilder` may use it to
+  pre-filter outward-facing same-object vertex point inputs before building point batches. GPU depth
+  testing is the normal visibility authority except for the camera-inside inside-out room exception.
+- Inside-out source-wire depth stamps must not CPU-cull internal vertex point inputs. When the camera
+  is inside the inside-out stamped volume, editable vertex point batches draw on top so inverted-room
+  vertices remain visible/selectable. Outside the stamped volume they keep the normal depth-tested
+  point path.
+- Ordinary `SourceWire` line batches remain crisp draw-on-top topology; do not use this fix to
+  CPU-delete source-wire lines.
+
+Affected owners/files:
+
+- `src/render/viewport_overlay_policy.cpp`
+- `src/render/overlay/overlay_renderable_builder.cpp`
+- `src/editor/metadata/host_contract.cpp`
+- `docs/overlay-handling.md`
+- `tests/core_tests.cpp`
+- `tests/modeling_domain/editor_metadata/qdr_editor_metadata_overlay_catalog_tests.cpp`
+- `tests/render_extraction_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportOverlayPolicyTests.MatchesDepthAndHoverSuppressionContract:ViewportOverlayPolicyTests.ComponentSelectionWiresAndVertexPointsUseDepthTestedState:OverlayLineMeshBuilderTests.PerspectiveDepthBiasDoesNotMoveLineOrPointScreenPosition:OverlayPointMeshBuilderTests.*`
+- `build\vs2026\Debug\quader_modeling_domain_tests.exe --gtest_color=no --gtest_filter=QdrEditorMetadataOverlayCatalogTests.HostContractOverlayLayerCatalogStatesRenderDepthSemantics`

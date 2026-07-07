@@ -103,8 +103,6 @@ public:
     ViewportRenderSurface surface_ = ViewportRenderSurface::Texture;
     std::uint32_t width_ = 1u;
     std::uint32_t height_ = 1u;
-    float camera_near_plane_ = 0.05f;
-    float camera_far_plane_ = 1000.0f;
     SceneToneMapping color_grading_tone_mapping_ = SceneToneMapping::Aces;
     bool has_color_grading_tone_mapping_ = false;
 };

@@ -1529,8 +1529,19 @@ TEST(GroundGridMaterialTests, UsesUserWorldAnchoring) {
   EXPECT_NE(source.find("localPosition"), std::string::npos);
   EXPECT_NE(source.find("variable_localPosition"), std::string::npos);
   EXPECT_NE(source.find("cameraSize"), std::string::npos);
+  EXPECT_NE(source.find("cameraFarPlane"), std::string::npos);
+  EXPECT_NE(source.find("cameraFarFade"), std::string::npos);
   EXPECT_NE(source.find("visibleGridSize"), std::string::npos);
   EXPECT_NE(source.find("minGridWorldSpacing"), std::string::npos);
+  EXPECT_NE(source.find("cameraDistance = length(worldPosition - "
+                        "materialParams.cameraPosition)"),
+            std::string::npos);
+  EXPECT_NE(source.find("farHalf = max(materialParams.cameraFarPlane * 0.5"),
+            std::string::npos);
+  EXPECT_NE(source.find("farClipFade = mix(1.0, farClipFade"),
+            std::string::npos);
+  EXPECT_NE(source.find("distanceFade * edgeFade * farClipFade"),
+            std::string::npos);
   EXPECT_NE(source.find("majorCoverage = parentGridValue * "
                         "materialParams.majorGridColor.a"),
             std::string::npos);
@@ -1543,6 +1554,13 @@ TEST(GroundGridMaterialTests, UsesUserWorldAnchoring) {
   EXPECT_NE(source.find("vec4(color * alpha, alpha)"), std::string::npos);
   EXPECT_EQ(source.find("getUV0()"), std::string::npos);
   EXPECT_EQ(source.find("planeCenter"), std::string::npos);
+  EXPECT_NE(grid_renderer_source.find("\"cameraFarPlane\""),
+            std::string::npos);
+  EXPECT_NE(grid_renderer_source.find("\"cameraFarFade\""),
+            std::string::npos);
+  EXPECT_NE(grid_renderer_source.find(
+                "ViewportProjection::Perspective ? 1.0f"),
+            std::string::npos);
   EXPECT_NE(grid_renderer_source.find(".castShadows(false)"),
             std::string::npos);
   EXPECT_NE(grid_renderer_source.find(".receiveShadows(false)"),
@@ -1608,17 +1626,37 @@ TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
     EXPECT_NE(source.find("surfaceGridMinorColor"), std::string::npos);
     EXPECT_NE(source.find("surfaceGridMajorColor"), std::string::npos);
     EXPECT_NE(source.find("surfaceGridEnabled"), std::string::npos);
+    EXPECT_NE(source.find("tangents"), std::string::npos);
     EXPECT_NE(source.find("getUserWorldPosition()"), std::string::npos);
-    EXPECT_NE(source.find("cross(dFdx(worldPosition), dFdy(worldPosition))"),
+    EXPECT_NE(source.find("getWorldGeometricNormalVector()"),
               std::string::npos);
     EXPECT_NE(source.find("surfaceGridCoordinates("), std::string::npos);
+    EXPECT_NE(source.find("surfaceGridFloor("), std::string::npos);
+    EXPECT_NE(source.find("surfaceGridLineCoverage("), std::string::npos);
+    EXPECT_NE(source.find("float worldPixelWidth = max(length(dFdx(worldPosition)), "
+                          "length(dFdy(worldPosition)))"),
+              std::string::npos);
     EXPECT_NE(source.find("surfaceGridMinorLineThickness"),
               std::string::npos);
     EXPECT_NE(source.find("surfaceGridMajorLineThickness"),
               std::string::npos);
     EXPECT_NE(source.find("baseColor = applySurfaceGrid(baseColor)"),
               std::string::npos);
-    EXPECT_NE(source.find("return coverage;"), std::string::npos);
+    EXPECT_NE(source.find("float derivativeWidth = fwidth(coord)"),
+              std::string::npos);
+    EXPECT_NE(source.find("float lodSpacing = max(surfaceGridFloor"),
+              std::string::npos);
+    EXPECT_NE(source.find("return mix(currentCoverage, nextCoverage, blend);"),
+              std::string::npos);
+    EXPECT_EQ(source.find("surfaceGridVisibility("), std::string::npos);
+    EXPECT_EQ(source.find("coverage * surfaceGridVisibility"),
+              std::string::npos);
+    EXPECT_EQ(source.find("cross(dFdx(worldPosition), dFdy(worldPosition))"),
+              std::string::npos);
+    EXPECT_EQ(source.find("Strip test"), std::string::npos);
+    EXPECT_EQ(source.find("vec2 coords = worldPosition.xz;"),
+              std::string::npos);
+    EXPECT_EQ(source.find("return coverage;"), std::string::npos);
     EXPECT_EQ(source.find("return coverage * min(thickness, 1.0)"),
               std::string::npos);
   }
@@ -1798,10 +1836,10 @@ TEST(ViewportOverlayPolicyTests, MatchesDepthAndHoverSuppressionContract) {
             ViewportOverlayDepthMode::DrawOnTop);
   EXPECT_EQ(viewport_overlay_depth_mode(ViewportOverlayLayer::SelectedVertex,
                                         ViewportOverlayGeometryKind::Points),
-            ViewportOverlayDepthMode::DrawOnTop);
+            ViewportOverlayDepthMode::DepthTested);
   EXPECT_EQ(viewport_overlay_depth_mode(ViewportOverlayLayer::HoverVertex,
                                         ViewportOverlayGeometryKind::Points),
-            ViewportOverlayDepthMode::DrawOnTop);
+            ViewportOverlayDepthMode::DepthTested);
   EXPECT_EQ(viewport_overlay_depth_mode(ViewportOverlayLayer::ToolPlane,
                                         ViewportOverlayGeometryKind::Triangles),
             ViewportOverlayDepthMode::DrawOnTop);
@@ -1852,7 +1890,7 @@ TEST(ViewportOverlayPolicyTests, MatchesDepthAndHoverSuppressionContract) {
 }
 
 TEST(ViewportOverlayPolicyTests,
-     ComponentSelectionHandlesUseDepthTestedPrimitiveState) {
+     ComponentSelectionWiresAndVertexPointsUseDepthTestedState) {
   const ViewportOverlayLine source_wire{
       .layer = ViewportOverlayLayer::SourceWire,
       .source = ViewportOverlaySource::Selection,
@@ -1887,7 +1925,7 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_EQ(viewport_overlay_depth_mode(component_hover_edge),
             ViewportOverlayDepthMode::DepthTested);
   EXPECT_EQ(viewport_overlay_depth_mode(object_selected_vertex),
-            ViewportOverlayDepthMode::DrawOnTop);
+            ViewportOverlayDepthMode::DepthTested);
   EXPECT_EQ(viewport_overlay_depth_mode(component_selected_vertex),
             ViewportOverlayDepthMode::DepthTested);
 }
@@ -1992,7 +2030,7 @@ TEST(ViewportOverlayPolicyTests, MatchesNativeColorsAndRuntimePointSizes) {
 }
 
 TEST(ViewportOverlayPolicyTests,
-     DenseObjectSelectionKeepsWireAndSuppressesFaceFillProxies) {
+     PersistentObjectSelectionCacheOwnsFaceFillsOnly) {
   EXPECT_FALSE(selected_object_face_fills_enabled_for_selection_count(0u));
   EXPECT_TRUE(selected_object_face_fills_enabled_for_selection_count(1u));
   EXPECT_TRUE(selected_object_face_fills_enabled_for_selection_count(
@@ -2002,20 +2040,19 @@ TEST(ViewportOverlayPolicyTests,
 
   const std::string cache_source =
       read_source_file("src/render/overlay/selected_object_overlay_cache.cpp");
-  EXPECT_NE(cache_source.find("sync_line_entries(states, snapshot)"),
-            std::string::npos);
-  EXPECT_NE(cache_source.find("update_line_proxy(states, snapshot)"),
-            std::string::npos);
   EXPECT_NE(cache_source.find(
                 "synced_selection_revision_ == snapshot.selection_revision"),
             std::string::npos);
-  EXPECT_NE(cache_source.find("line_proxy_.vertex_buffer->setBufferAt"),
+  EXPECT_EQ(cache_source.find("SelectedObjectLineVertex"), std::string::npos);
+  EXPECT_EQ(cache_source.find("update_line_proxy"), std::string::npos);
+  EXPECT_EQ(cache_source.find("line_proxy_"), std::string::npos);
+  EXPECT_EQ(cache_source.find("setParameter(\"nearPlane\""),
             std::string::npos);
   EXPECT_NE(cache_source.find("destroy_face_entries()"), std::string::npos);
 }
 
 TEST(ViewportOverlayPolicyTests,
-     NativeViewportSkipsTransientObjectSelectionOverlayBeforeProjection) {
+     NativeViewportKeepsTransientObjectSelectionWireBeforeProjection) {
   const std::string viewport_panel_source =
       read_source_file("src/ui/viewport_panel.cpp");
   const std::string overlay_service_source = read_source_file(
@@ -2045,6 +2082,9 @@ TEST(ViewportOverlayPolicyTests,
       overlay_service_source,
       "options.suppress_persistent_object_selection && selection_mode == "
       "quader_editor_core::SelectionMode::Object && object.selected"));
+  EXPECT_NE(overlay_service_source.find(
+                "remove_persistent_object_face_fill_triangles(entry.frame)"),
+            std::string::npos);
 }
 
 TEST(ViewportOverlayPolicyTests,
@@ -2136,7 +2176,7 @@ TEST(ViewportOverlayPolicyTests,
 }
 
 TEST(SelectionOverlayProjectionTests,
-     ComponentModeMarksSelectedAndHoverHandlesWithoutMarkingSourceWire) {
+     ComponentModeMarksSourceWireSelectedAndHoverHandles) {
   const quader_editor_core::SelectionOverlayStyle style;
   quader_editor_core::SelectionOverlayFrame frame;
   frame.lines.push_back({
@@ -2173,7 +2213,7 @@ TEST(SelectionOverlayProjectionTests,
   EXPECT_EQ(component_projected.lines[0].layer,
             ViewportOverlayLayer::SourceWire);
   EXPECT_EQ(component_projected.lines[0].source,
-            ViewportOverlaySource::Selection);
+            ViewportOverlaySource::ComponentSelection);
   EXPECT_EQ(component_projected.lines[1].layer,
             ViewportOverlayLayer::SelectedEdge);
   EXPECT_EQ(component_projected.lines[1].source,
@@ -2444,6 +2484,7 @@ TEST(ModelingSessionServiceOverlayTests, MapsRuntimeOverlayLayersExplicitly) {
 TEST(ViewportCameraAdapterTests,
      BuildsOverlayAndModelingCamerasFromSharedBasis) {
   ViewportCameraController camera;
+  camera.set_clip_planes(0.01f, 250.0f);
   const ViewportOverlayCamera overlay =
       ViewportCameraAdapter::overlay_camera(camera, {0.0f, 240.0f});
   const ModelingViewportCamera modeling =
@@ -2453,6 +2494,8 @@ TEST(ViewportCameraAdapterTests,
   EXPECT_FALSE(modeling.orthographic);
   EXPECT_FLOAT_EQ(overlay.viewport_size.x, 1.0f);
   EXPECT_FLOAT_EQ(overlay.viewport_size.y, 240.0f);
+  EXPECT_FLOAT_EQ(overlay.near_plane, 0.01f);
+  EXPECT_FLOAT_EQ(overlay.far_plane, 250.0f);
   expect_vec3_near(modeling.origin, overlay.eye);
   expect_vec3_near(modeling.x_axis, overlay.right);
   expect_vec3_near(modeling.y_axis, overlay.up);
@@ -2799,6 +2842,8 @@ TEST(ViewportRendererTests,
      EnvironmentClearColorAndRenderedBackgroundPathsStaySceneOwned) {
   const std::string renderer =
       read_source_file("src/render/viewport_renderer.cpp");
+  const std::string renderer_header =
+      read_source_file("src/render/viewport_renderer.hpp");
   const std::string environment_library =
       read_source_file("src/render/filament_environment_library.cpp");
 
@@ -2811,6 +2856,10 @@ TEST(ViewportRendererTests,
             std::string::npos);
   EXPECT_EQ(renderer.find("settings.color(ViewportColorSettingId"),
             std::string::npos);
+  EXPECT_EQ(renderer_header.find("camera_near_plane_"), std::string::npos);
+  EXPECT_EQ(renderer_header.find("camera_far_plane_"), std::string::npos);
+  EXPECT_NE(renderer.find("controller.state().near_plane"), std::string::npos);
+  EXPECT_NE(renderer.find("controller.state().far_plane"), std::string::npos);
   EXPECT_NE(
       environment_library.find(
           "settings.show_background && settings.background_intensity > 0.0f"),
@@ -3881,6 +3930,12 @@ TEST(ViewportRendererTests,
   EXPECT_NE(viewport_panel_source.find(
                 "pane_state.renderer.update_camera(pane_workspace.camera)"),
             std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      viewport_panel_source,
+      "pane_workspace.camera.set_clip_planes( "
+      "scene_settings->camera.near_plane, "
+      "scene_settings->camera.far_plane); "
+      "pane_state.renderer.apply_scene_settings("));
   EXPECT_NE(
       viewport_panel_source.find("pane_state.renderer.set_scene_layer_mask"),
       std::string::npos);
@@ -5291,6 +5346,26 @@ TEST(ViewportCameraTests, ProjectsWorldPointsToViewportPixels) {
   EXPECT_GT(right_up.position.x, center.position.x);
   EXPECT_LT(right_up.position.y, center.position.y);
   EXPECT_GT(right_up.depth, 0.0f);
+}
+
+TEST(ViewportCameraTests, ClipPlanesSanitizeAndControlProjectedVisibility) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.set_clip_planes(0.01f, 0.2f);
+
+  EXPECT_FLOAT_EQ(camera.state().near_plane, 0.01f);
+  EXPECT_FLOAT_EQ(camera.state().far_plane, 0.2f);
+
+  const ViewportCameraPose pose = camera.pose();
+  const QVec3 forward = normalize(pose.target - pose.eye);
+
+  EXPECT_FALSE(camera.project_world_point(pose.eye + forward * 0.005f).visible);
+  EXPECT_TRUE(camera.project_world_point(pose.eye + forward * 0.02f).visible);
+  EXPECT_FALSE(camera.project_world_point(pose.eye + forward * 0.25f).visible);
+
+  camera.set_clip_planes(-1.0f, -2.0f);
+  EXPECT_FLOAT_EQ(camera.state().near_plane, 0.001f);
+  EXPECT_FLOAT_EQ(camera.state().far_plane, 0.002f);
 }
 
 TEST(ViewportCameraTests, FocusBoundsFramesDocumentCenter) {
@@ -10394,6 +10469,50 @@ TEST(ModelingSessionServiceTests, InsertEdgeLoopUsesViewportPickRadius) {
   ASSERT_TRUE(command.ok) << command.message;
   EXPECT_TRUE(command.changed);
   EXPECT_FALSE(service.tool_status().insert_edge_loop_active);
+}
+
+TEST(ModelingSessionServiceTests,
+     PersistentObjectSelectionSuppressionKeepsTransientWire) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Object Selection Wire Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  ASSERT_EQ(service.selection_mode(), ModelingSelectionMode::Object);
+
+  const auto selected_face_fill_count = [](const ViewportOverlayFrame &frame) {
+    return static_cast<std::size_t>(std::count_if(
+        frame.triangles.begin(), frame.triangles.end(),
+        [](const ViewportOverlayTriangle &triangle) {
+          return triangle.layer == ViewportOverlayLayer::SelectedVisibleFace ||
+                 triangle.layer == ViewportOverlayLayer::SelectedXrayFace ||
+                 triangle.layer == ViewportOverlayLayer::SelectedFaceMask;
+        }));
+  };
+  const auto selected_wire_count = [](const ViewportOverlayFrame &frame) {
+    return static_cast<std::size_t>(std::count_if(
+        frame.lines.begin(), frame.lines.end(),
+        [](const ViewportOverlayLine &line) {
+          return line.layer == ViewportOverlayLayer::SelectedFaceEdge ||
+                 line.layer == ViewportOverlayLayer::SelectedEdge;
+        }));
+  };
+
+  const ViewportOverlayFrame full_frame = service.selection_overlay_frame();
+  EXPECT_GT(selected_face_fill_count(full_frame), 0u);
+  EXPECT_GT(selected_wire_count(full_frame), 0u);
+
+  const ModelingSelectionOverlayOptions overlay_options{
+      .suppress_persistent_object_selection = true,
+  };
+  const ViewportOverlayFrame transient_wire_frame =
+      service.selection_overlay_frame(overlay_options);
+  EXPECT_EQ(selected_face_fill_count(transient_wire_frame), 0u);
+  EXPECT_GT(selected_wire_count(transient_wire_frame), 0u);
 }
 
 TEST(ModelingSessionServiceTests, CutAndMirrorEmitDrawnPlaneOverlay) {

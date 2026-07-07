@@ -7,6 +7,7 @@
 #include "viewport/viewport_camera_controller.hpp"
 
 #include "viewport/host_viewport_contract_adapter.hpp"
+#include "viewport/viewport_camera_clip_planes.hpp"
 
 #include <editor/interactions/viewport_navigation.hpp>
 #include <editor/interactions/viewport_projection.hpp>
@@ -494,6 +495,14 @@ void ViewportCameraController::adjust_fly_speed(float wheel_steps) {
 
 void ViewportCameraController::reset_fly_speed() {
   fly_speed_ = default_fly_speed();
+}
+
+void ViewportCameraController::set_clip_planes(float near_plane,
+                                               float far_plane) {
+  const ViewportCameraClipPlanes clip_planes =
+      sanitize_viewport_camera_clip_planes(near_plane, far_plane);
+  state_.near_plane = clip_planes.near_plane;
+  state_.far_plane = clip_planes.far_plane;
 }
 
 bool ViewportCameraController::fly_speed_is_default() const {

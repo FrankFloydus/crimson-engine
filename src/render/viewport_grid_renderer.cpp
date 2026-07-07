@@ -219,6 +219,12 @@ void ViewportGridRenderer::update(const ViewportCameraController &controller,
                                                kGroundGridFadeStart);
   ground_grid_material_instance_->setParameter("fadeEnd", kGroundGridFadeEnd);
   ground_grid_material_instance_->setParameter(
+      "cameraFarPlane", std::max(controller.state().far_plane, 0.0001f));
+  ground_grid_material_instance_->setParameter(
+      "cameraFarFade",
+      controller.state().projection == ViewportProjection::Perspective ? 1.0f
+                                                                       : 0.0f);
+  ground_grid_material_instance_->setParameter(
       "planeHalfSize", std::max(grid.plane_size.x, grid.plane_size.y) * 0.5f);
   ground_grid_material_instance_->setParameter(
       "cameraSize", std::max(0.0001f, controller.state().orthographic_size));

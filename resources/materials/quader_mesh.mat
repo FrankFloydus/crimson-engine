@@ -2,7 +2,8 @@ material {
     name : QuaderDefaultMesh,
     shadingModel : unlit,
     requires : [
-        uv0
+        uv0,
+        tangents
     ],
     parameters : [
         {
@@ -45,23 +46,30 @@ material {
 }
 
 fragment {
-    float surfaceGridLine(float coord, float spacing, float thicknessValue) {
+    float surfaceGridFloor(float spacing) {
+        return exp2(floor(log2(max(spacing, 0.0001))));
+    }
+
+    float surfaceGridLineCoverage(float coord, float spacing, float thicknessValue) {
         float safeSpacing = max(spacing, 0.0001);
         float wrapped = abs(fract(coord / safeSpacing + 0.5) - 0.5) * safeSpacing;
         float thickness = clamp(thicknessValue, 0.05, 8.0);
-        float antialias = max(fwidth(coord), safeSpacing * 0.0005);
-        float lineWidth = antialias * 0.75 * thickness;
-        float coverage = 1.0 - smoothstep(lineWidth, lineWidth + antialias, wrapped);
-        return coverage;
+        float derivativeWidth = fwidth(coord);
+        float antialias = clamp(derivativeWidth, safeSpacing * 0.0005, safeSpacing * 0.125);
+        float lineWidth = min(antialias * 0.75 * thickness, safeSpacing * 0.125);
+        float feather = min(antialias, safeSpacing * 0.125);
+        return 1.0 - smoothstep(lineWidth, lineWidth + feather, wrapped);
     }
 
-    vec3 safeSurfaceNormal(vec3 worldPosition) {
-        vec3 normal = cross(dFdx(worldPosition), dFdy(worldPosition));
-        float len = length(normal);
-        if (len <= 0.000001) {
-            return vec3(0.0, 1.0, 0.0);
-        }
-        return normal / len;
+    float surfaceGridLine(float coord, float spacing, float thicknessValue, float worldPixelWidth) {
+        float safeSpacing = max(spacing, 0.0001);
+        float minRenderableSpacing = max(worldPixelWidth, 0.0) * 2.0;
+        float lodSpacing = max(surfaceGridFloor(max(minRenderableSpacing, safeSpacing)), safeSpacing);
+        float nextSpacing = max(lodSpacing * 2.0, lodSpacing + 0.0001);
+        float blend = smoothstep(lodSpacing, nextSpacing, minRenderableSpacing);
+        float currentCoverage = surfaceGridLineCoverage(coord, lodSpacing, thicknessValue);
+        float nextCoverage = surfaceGridLineCoverage(coord, nextSpacing, thicknessValue);
+        return mix(currentCoverage, nextCoverage, blend);
     }
 
     vec2 surfaceGridCoordinates(vec3 worldPosition, vec3 normal) {
@@ -82,15 +90,16 @@ fragment {
 
         vec3 worldPosition = getUserWorldPosition().xyz;
         vec2 coords = surfaceGridCoordinates(
-                worldPosition, safeSurfaceNormal(worldPosition));
+                worldPosition, getWorldGeometricNormalVector());
+        float worldPixelWidth = max(length(dFdx(worldPosition)), length(dFdy(worldPosition)));
         float baseSpacing = max(materialParams.surfaceGridSize, 0.0001);
         float majorSpacing = max(materialParams.surfaceGridMajorSize, baseSpacing);
         float minorLine = max(
-                surfaceGridLine(coords.x, baseSpacing, materialParams.surfaceGridMinorLineThickness),
-                surfaceGridLine(coords.y, baseSpacing, materialParams.surfaceGridMinorLineThickness));
+                surfaceGridLine(coords.x, baseSpacing, materialParams.surfaceGridMinorLineThickness, worldPixelWidth),
+                surfaceGridLine(coords.y, baseSpacing, materialParams.surfaceGridMinorLineThickness, worldPixelWidth));
         float majorLine = max(
-                surfaceGridLine(coords.x, majorSpacing, materialParams.surfaceGridMajorLineThickness),
-                surfaceGridLine(coords.y, majorSpacing, materialParams.surfaceGridMajorLineThickness));
+                surfaceGridLine(coords.x, majorSpacing, materialParams.surfaceGridMajorLineThickness, worldPixelWidth),
+                surfaceGridLine(coords.y, majorSpacing, materialParams.surfaceGridMajorLineThickness, worldPixelWidth));
 
         float majorCoverage = majorLine * materialParams.surfaceGridMajorColor.a;
         float minorCoverage = minorLine * materialParams.surfaceGridMinorColor.a

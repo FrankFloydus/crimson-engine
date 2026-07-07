@@ -136,28 +136,35 @@ top after render extraction. Do not depth-test ordinary source-wire line batches
 the shaded mesh, because that causes disappearing or fading edges at distance and shallow angles.
 
 Component selected and hover handles are different from source wire. Projection marks selected and
-hover component edge/vertex handles with component-specific overlay sources, and render extraction
-depth-tests only those marked primitives. This prevents selected component highlights from x-raying
-through opaque geometry while preserving the old source-wire behavior for the active edit mesh in
-inverted-normal rooms.
+hover component edge handles with component-specific overlay sources, and render extraction
+depth-tests those marked edge primitives. Editable vertex point handles (`UnselectedVertex`,
+`SelectedVertex`, and `HoverVertex`) are also depth-tested point quads with a small post-projection
+depth bias. The bias keeps same-surface handles from z-fighting; it is not an x-ray path, so points
+hidden behind opaque mesh depth must fail depth. Render extraction may still pre-filter outward
+same-mesh vertex points against `SourceWireDepthStamp` metadata before batching, but GPU depth is the
+normal visibility authority except for the camera-inside inside-out room exception below.
 
 `SourceWireDepthStamp` is metadata:
 
 - It can exist in the overlay frame as triangles.
 - `OverlayRenderableBuilder` must emit no render batches for the `SourceWireDepthStamp` layer.
-- It is used by render-side visibility filtering for outward-facing meshes and by interaction
+- It is used by render-side pre-filtering for outward-facing mesh vertex points and by interaction
   policy to keep source-wire handles coherent.
 - It must not CPU-delete the source-wire topology from the runtime overlay frame.
 
-Render-side source-wire visibility has one special case:
+Render-side vertex point pre-filtering has one special case:
 
-- Outward-facing source-wire depth stamps may cull source-wire handles that are occluded by the
-  same mesh surface.
-- Inside-out source-wire depth stamps must keep internal topology visible, because an inverted room
-  needs its internal edges and vertices drawn from outside and inside.
+- Outward-facing source-wire depth stamps may CPU-cull vertex point handles that are occluded by the
+  same mesh surface before the point batch is built.
+- Inside-out source-wire depth stamps must not CPU-cull internal vertex point inputs. When the
+  viewport camera is inside that stamped volume, editable vertex point batches draw on top so the
+  inverted-room workflow remains visible and selectable. From outside the volume they keep the normal
+  depth-tested point path.
 
 This means source-wire depth stamps are allowed to affect which handles are visible for a camera,
-but they are not a replacement wire layer and they are not a rendered x-ray fill.
+but they are not a replacement wire layer and they are not a rendered x-ray fill. Ordinary
+`SourceWire` lines still render as crisp draw-on-top topology; do not depth-test or CPU-delete them
+while fixing vertex point occlusion.
 
 ## Picking Is Separate From Visualization
 
@@ -204,11 +211,15 @@ The policy owner is `src/render/viewport_overlay_policy.cpp`.
 
 - Draw-on-top lines include `SourceWire`, `SelectedFaceEdge`, `SelectedEdge`, `HoverFaceEdge`,
   `HoverEdge`, `GroupBounds`, `DiagnosticEdge`, `WireframeXray`, and tool line/handle layers.
-- Draw-on-top points include selected, hover, snap, and tool handles.
-- Component-mode selected/hover edge and vertex handles carry component overlay sources and are
-  batched as depth-tested primitives even though their layers remain draw-on-top by default.
-- Depth-tested layers include base wireframe, open edges, and unselected vertices unless policy says
-  otherwise.
+- Draw-on-top points include snap and tool handles. Editable vertex point layers (`UnselectedVertex`,
+  `SelectedVertex`, and `HoverVertex`) are depth-tested by default and use the normal point
+  post-projection depth bias.
+- Component-mode selected/hover edge handles carry component overlay sources and are batched as
+  depth-tested edit-wire primitives even though their layers remain draw-on-top by default. Component
+  vertex handles carry component sources for semantics, but use the same depth-tested point policy as
+  object vertex handles.
+- Depth-tested layers include base wireframe, open edges, and editable vertex points unless policy
+  says otherwise.
 - `WireframeBase` is the depth-tested overlay policy layer. Wireframe viewport mode must use
   `WireframeXray` for unselected scene topology so hidden/back edges remain visible and authored
   polygon edges are not lost behind depth-only mesh proxies.
@@ -284,7 +295,7 @@ Use explicit views or explicit submit ordering for these overlay phases:
 2. Optional overlay depth-proxy view: depth-only mesh proxies when shaded/rendered scene is visible.
 3. Face-fill depth view: selected/hover face fill depth stamp.
 4. Face-fill color view: selected/hover face fill color where depth equals the stamped fill depth.
-5. Depth-tested component handle view: selected/hover component lines and points.
+5. Depth-tested handle view: selected/hover component lines and editable vertex point batches.
 6. Draw-on-top line/point view: source wire, object selected wire, hover helpers, tool lines, snap
    handles, diagnostics, and x-ray wireframe.
 
@@ -302,9 +313,9 @@ Draw-on-top source wire and object/helper lines:
 - Disable culling.
 - Keep stable pixel width from viewport settings.
 
-Depth-tested component selected/hover lines and points:
+Depth-tested edit handles:
 
-- Build the same screen-space line/point quads, but submit them in the component handle view.
+- Build the same screen-space line/point quads, but submit them in the depth-tested handle view.
 - Bind the scene/overlay depth buffer for testing.
 - Use `BGFX_STATE_DEPTH_TEST_LEQUAL` for normal depth buffers.
 - Use `BGFX_STATE_DEPTH_TEST_GEQUAL` for reversed-depth buffers.
@@ -321,6 +332,16 @@ Depth bias rule:
   the depth convention, then clamp to the valid clip/depth range.
 - Keep the offset tiny and capped; it is only to avoid same-surface z fighting, not to make hidden
   component handles x-ray.
+
+Vertex point handles:
+
+- Submit editable vertex point quads in the depth-tested handle view with the normal point depth
+  bias.
+- Use source-wire depth-stamp metadata to hide outward-facing same-mesh vertex points occluded by a
+  nearer same-object surface before batching.
+- Keep inside-out source-wire depth stamps from CPU-culling internal vertex point inputs. If the
+  camera is inside the inside-out stamped volume, batch those editable vertex points as draw-on-top
+  handles; outside that volume, keep them depth-tested.
 
 Selected and hover face fills:
 
@@ -392,9 +413,11 @@ Before changing overlays, find or add coverage in these suites:
 - `tests/render_extraction_tests.cpp`
   - screen-space line expansion;
   - source-wire draw-on-top batches;
-  - component selected/hover line and point batches split into depth-tested render state;
+  - component selected/hover line batches split into depth-tested render state;
+  - editable vertex point batches using depth-tested render state with point depth bias;
   - outward source-wire depth-stamp culling;
-  - inside-out source-wire depth-stamp visibility;
+  - inside-out source-wire depth stamps not CPU-culling vertex point inputs, and camera-inside
+    inside-out vertex point batches drawing on top;
   - source-wire depth stamps producing no render batches;
   - selected/hover face fills being two-sided.
 - `tests/core_tests.cpp`

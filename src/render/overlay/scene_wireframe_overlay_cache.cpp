@@ -43,8 +43,6 @@ namespace {
 
 using AttributeType = filament::backend::ElementType;
 
-constexpr float kSceneWireframeLineNearPlane = 0.05f;
-
 /**
  * Stores one shader-expanded persistent wireframe line vertex.
  */
@@ -268,7 +266,8 @@ create_proxy(filament::Engine &engine, filament::Scene &scene,
              ViewportOverlayLayer layer,
              const std::vector<SceneWireframeLineVertex> &vertices,
              const std::vector<std::uint32_t> &indices,
-             const filament::Box &bounds, std::uint8_t layer_mask) {
+             const filament::Box &bounds, std::uint8_t layer_mask,
+             ViewportCameraClipPlanes clip_planes) {
   SceneWireframeOverlayCache::Proxy proxy;
   if (vertices.empty() || indices.empty()) {
     return proxy;
@@ -288,8 +287,7 @@ create_proxy(filament::Engine &engine, filament::Scene &scene,
       "lineWidth", viewport_overlay_line_width_pixels(layer, 0.0f));
   proxy.material_instance->setParameter("featherPixels",
                                         kOverlayLineFeatherPixels);
-  proxy.material_instance->setParameter("nearPlane",
-                                        kSceneWireframeLineNearPlane);
+  proxy.material_instance->setParameter("nearPlane", clip_planes.near_plane);
 
   proxy.vertex_buffer =
       filament::VertexBuffer::Builder()
@@ -394,6 +392,7 @@ void SceneWireframeOverlayCache::shutdown() {
     synced_states_.clear();
     synced_scene_revision_ = 0;
     synced_asset_revision_ = 0;
+    synced_clip_planes_ = {};
     layer_mask_ = 0u;
     has_synced_ = false;
     engine_ = nullptr;
@@ -412,9 +411,16 @@ void SceneWireframeOverlayCache::sync(
   if (snapshot.layer_mask == 0u) {
     return;
   }
+  const bool clip_planes_changed =
+      !has_synced_ || synced_clip_planes_ != snapshot.clip_planes;
+  if (clip_planes_changed) {
+    set_proxy_clip_planes(snapshot.clip_planes);
+  }
+  synced_clip_planes_ = snapshot.clip_planes;
 
   if (has_synced_ && synced_scene_revision_ == snapshot.scene_revision &&
-      synced_asset_revision_ == snapshot.asset_revision) {
+      synced_asset_revision_ == snapshot.asset_revision &&
+      !clip_planes_changed) {
     return;
   }
 
@@ -516,7 +522,8 @@ SceneWireframeOverlayCache::Entry SceneWireframeOverlayCache::create_entry(
   const filament::Box bounds = bounds_for_mesh_vertices(mesh.vertices);
   entry.line_proxy =
       create_proxy(*engine_, *scene_, *line_material_, parent_transform, layer,
-                   line_vertices, line_indices, bounds, layer_mask_);
+                   line_vertices, line_indices, bounds, layer_mask_,
+                   synced_clip_planes_);
   update_entry_transform(entry, mesh.world_transform);
   return entry;
 }
@@ -590,6 +597,18 @@ void SceneWireframeOverlayCache::set_layer_mask(std::uint8_t layer_mask) {
   for (auto &[entityId, entry] : entries_) {
     (void)entityId;
     set_proxy_layer_mask(entry.line_proxy, layer_mask_);
+  }
+}
+
+void SceneWireframeOverlayCache::set_proxy_clip_planes(
+    ViewportCameraClipPlanes clip_planes) {
+  for (auto &[entityId, entry] : entries_) {
+    (void)entityId;
+    if (entry.line_proxy.material_instance == nullptr) {
+      continue;
+    }
+    entry.line_proxy.material_instance->setParameter(
+        "nearPlane", clip_planes.near_plane);
   }
 }
 

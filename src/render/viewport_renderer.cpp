@@ -260,10 +260,12 @@ void ViewportRenderer::update_camera(
       const double half_width = half_height * aspect;
       camera->setProjection(filament::Camera::Projection::ORTHO, -half_width,
                             half_width, -half_height, half_height,
-                            camera_near_plane_, camera_far_plane_);
+                            controller.state().near_plane,
+                            controller.state().far_plane);
     } else {
       camera->setProjection(controller.state().fov_degrees, aspect,
-                            camera_near_plane_, camera_far_plane_);
+                            controller.state().near_plane,
+                            controller.state().far_plane);
     }
   };
   apply_projection(camera_);
@@ -285,9 +287,6 @@ void ViewportRenderer::apply_scene_settings(
   if (surface_ == ViewportRenderSurface::Texture) {
     render_target_.set_sample_color_space(scene_texture_sample_color_space_);
   }
-  camera_near_plane_ = std::max(settings.camera.near_plane, 0.001f);
-  camera_far_plane_ =
-      std::max(settings.camera.far_plane, camera_near_plane_ + 0.001f);
   view_->setPostProcessingEnabled(post_processing_enabled);
   view_->setAntiAliasing(post_processing_enabled &&
                                  settings.post_process.anti_aliasing

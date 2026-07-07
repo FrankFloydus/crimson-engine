@@ -111,6 +111,7 @@ public:
     void fly_move(QVec3 local_direction, float delta_seconds);
     void adjust_fly_speed(float wheel_steps);
     void reset_fly_speed();
+    void set_clip_planes(float near_plane, float far_plane);
 
     const ViewportCameraState& state() const { return state_; }
     float fly_speed() const { return fly_speed_; }

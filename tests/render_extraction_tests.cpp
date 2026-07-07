@@ -175,6 +175,14 @@ std::size_t icon_count_for(const ViewportOverlayFrame &frame,
                     }));
 }
 
+std::size_t point_mesh_vertex_count(const OverlayLayerBuildPlan &plan) {
+  std::size_t count = 0u;
+  for (const OverlayPointBatch &batch : plan.point_batches) {
+    count += batch.mesh.vertices.size();
+  }
+  return count;
+}
+
 void append_source_wire_depth_stamp_triangle(ViewportOverlayFrame &frame,
                                              int object_id, QVec3 a, QVec3 b,
                                              QVec3 c, bool inside_out) {
@@ -661,6 +669,12 @@ TEST(RenderOverlaySnapshotTests,
      CapturesSelectedObjectAndSceneWireframeRecordsWithDirtyRevisions) {
   SceneDocument document;
   AssetRegistry assets;
+  const EntityId root =
+      document.create_entity("Scene Settings", EntityKind::Empty);
+  SceneSettingsComponent scene_settings;
+  scene_settings.camera.near_plane = 0.01f;
+  scene_settings.camera.far_plane = 250.0f;
+  ASSERT_TRUE(document.set_scene_settings(root, scene_settings));
   const AssetId triangle_mesh = assets.add_mesh(make_overlay_triangle_mesh());
   const AssetId quad_mesh = assets.add_mesh(make_authored_quad_mesh());
   const EntityId selected_mesh =
@@ -691,6 +705,8 @@ TEST(RenderOverlaySnapshotTests,
             document.transform_revision());
   EXPECT_EQ(selected_snapshot.mesh_binding_revision,
             document.mesh_binding_revision());
+  EXPECT_FLOAT_EQ(selected_snapshot.clip_planes.near_plane, 0.01f);
+  EXPECT_FLOAT_EQ(selected_snapshot.clip_planes.far_plane, 250.0f);
   ASSERT_EQ(selected_snapshot.meshes.size(), 1u);
   EXPECT_EQ(selected_snapshot.meshes.front().entity, selected_mesh);
   EXPECT_EQ(selected_snapshot.meshes.front().mesh_id, triangle_mesh);
@@ -707,6 +723,8 @@ TEST(RenderOverlaySnapshotTests,
 
   EXPECT_EQ(wireframe_snapshot.scene_revision, document.revision());
   EXPECT_EQ(wireframe_snapshot.asset_revision, assets.revision());
+  EXPECT_FLOAT_EQ(wireframe_snapshot.clip_planes.near_plane, 0.01f);
+  EXPECT_FLOAT_EQ(wireframe_snapshot.clip_planes.far_plane, 250.0f);
   EXPECT_EQ(wireframe_snapshot.layer_mask, 0x03u);
   ASSERT_EQ(wireframe_snapshot.meshes.size(), 2u);
   const auto authored_record =
@@ -722,6 +740,35 @@ TEST(RenderOverlaySnapshotTests,
       ViewportSceneOverlayBuilder::build_wireframe_frame(
           {}, ModelingSelectionMode::Object, wireframe_snapshot);
   EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::WireframeXray), 7u);
+}
+
+TEST(RenderOverlaySnapshotTests,
+     PersistentSceneWireframeLineCacheUsesSnapshotClipPlanes) {
+  const std::string selected_cache_source = read_source_file(
+      "src/render/overlay/selected_object_overlay_cache.cpp");
+  const std::string wireframe_cache_source = read_source_file(
+      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
+  const std::string snapshot_header =
+      read_source_file("src/render/overlay/render_overlay_snapshot.hpp");
+
+  EXPECT_NE(snapshot_header.find("ViewportCameraClipPlanes clip_planes"),
+            std::string::npos);
+  EXPECT_EQ(selected_cache_source.find("kSelectedObjectLineNearPlane"),
+            std::string::npos);
+  EXPECT_EQ(wireframe_cache_source.find("kSceneWireframeLineNearPlane"),
+            std::string::npos);
+  EXPECT_EQ(selected_cache_source.find("setParameter(\"nearPlane\", 0.05"),
+            std::string::npos);
+  EXPECT_EQ(wireframe_cache_source.find("setParameter(\"nearPlane\", 0.05"),
+            std::string::npos);
+  EXPECT_EQ(selected_cache_source.find("SelectedObjectLineVertex"),
+            std::string::npos);
+  EXPECT_EQ(selected_cache_source.find("update_line_proxy"),
+            std::string::npos);
+  EXPECT_EQ(selected_cache_source.find("setParameter(\"nearPlane\""),
+            std::string::npos);
+  EXPECT_NE(wireframe_cache_source.find("clip_planes.near_plane"),
+            std::string::npos);
 }
 
 TEST(RenderOverlaySnapshotTests, SceneOverlayBuildersConsumeSnapshotsOnly) {
@@ -1317,7 +1364,7 @@ TEST(OverlayLineMeshBuilderTests, BatchesSameWidthLinesWithDifferentColors) {
 }
 
 TEST(OverlayLineMeshBuilderTests,
-     SplitsComponentSelectionLinesIntoDepthTestedBatches) {
+     SplitsComponentSelectionLinesIntoEditWireAndDrawOnTopBatches) {
   ViewportOverlayFrame frame;
   frame.lines.push_back({
       .layer = ViewportOverlayLayer::SelectedEdge,
@@ -1339,28 +1386,39 @@ TEST(OverlayLineMeshBuilderTests,
   const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
       frame, test_overlay_camera(), ViewportOverlayLayer::SelectedEdge);
 
-  ASSERT_EQ(plan.line_batches.size(), 2u);
-  const auto depth_tested =
-      std::find_if(plan.line_batches.begin(), plan.line_batches.end(),
-                   [](const OverlayLineBatch &batch) {
-                     return batch.state.depth_func ==
-                            OverlayDepthFunc::GreaterOrEqual;
-                   });
-  ASSERT_NE(depth_tested, plan.line_batches.end());
-  EXPECT_FLOAT_EQ(depth_tested->depth_bias, kOverlayLineDepthBias);
-  EXPECT_TRUE(depth_tested->state.depth_culling);
+  ASSERT_EQ(plan.edit_wire_batches.size(), 1u);
+  EXPECT_EQ(plan.edit_wire_batches.front().state.depth_func,
+            OverlayDepthFunc::GreaterOrEqual);
+  EXPECT_TRUE(plan.edit_wire_batches.front().state.depth_culling);
 
-  const auto draw_on_top =
-      std::find_if(plan.line_batches.begin(), plan.line_batches.end(),
-                   [](const OverlayLineBatch &batch) {
-                     return batch.state.depth_func == OverlayDepthFunc::Always;
-                   });
-  ASSERT_NE(draw_on_top, plan.line_batches.end());
-  EXPECT_FLOAT_EQ(draw_on_top->depth_bias, 0.0f);
-  EXPECT_FALSE(draw_on_top->state.depth_culling);
+  ASSERT_EQ(plan.line_batches.size(), 1u);
+  const OverlayLineBatch &draw_on_top = plan.line_batches.front();
+  EXPECT_EQ(draw_on_top.state.depth_func, OverlayDepthFunc::Always);
+  EXPECT_FLOAT_EQ(draw_on_top.depth_bias, 0.0f);
+  EXPECT_FALSE(draw_on_top.state.depth_culling);
 }
 
-TEST(OverlayLineMeshBuilderTests, SourceWireDepthStampsCullOutwardOccludedHandles) {
+TEST(OverlayLineMeshBuilderTests, EditWireBatchesDoNotOwnPrivateClipPlane) {
+  const std::string builder_header =
+      read_source_file("src/render/overlay/overlay_renderable_builder.hpp");
+  const std::string builder_source =
+      read_source_file("src/render/overlay/overlay_renderable_builder.cpp");
+  const std::string proxy_source =
+      read_source_file("src/render/overlay/overlay_proxy_factory.cpp");
+  const std::string edit_wire_material =
+      read_source_file("resources/materials/quader_edit_wire_line.mat");
+
+  const std::string edit_wire_batch =
+      source_slice(builder_header, "struct OverlayEditWireBatch",
+                   "struct OverlayPointBatch");
+  EXPECT_EQ(edit_wire_batch.find("near_plane"), std::string::npos);
+  EXPECT_EQ(builder_source.find("kOverlayEditWireNearPlane"),
+            std::string::npos);
+  EXPECT_EQ(proxy_source.find("batch.near_plane"), std::string::npos);
+  EXPECT_EQ(edit_wire_material.find("nearPlane"), std::string::npos);
+}
+
+TEST(OverlayLineMeshBuilderTests, SourceWireDepthStampsRemainInactiveForVisibility) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
         .layer = ViewportOverlayLayer::SourceWire,
@@ -1385,8 +1443,8 @@ TEST(OverlayLineMeshBuilderTests, SourceWireDepthStampsCullOutwardOccludedHandle
 
     ASSERT_EQ(plan.line_batches.size(), 1u);
     const OverlayLineBatch &batch = plan.line_batches.front();
-    EXPECT_EQ(batch.mesh.vertices.size(), 4u);
-    EXPECT_EQ(batch.mesh.indices.size(), 6u);
+    EXPECT_EQ(batch.mesh.vertices.size(), 8u);
+    EXPECT_EQ(batch.mesh.indices.size(), 12u);
     EXPECT_FLOAT_EQ(batch.depth_bias, 0.0f);
     EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::Always);
     EXPECT_FALSE(batch.state.depth_culling);
@@ -1762,13 +1820,14 @@ TEST(OverlayPointMeshBuilderTests, BuildsOutlineAndFillPointPasses) {
     for (const OverlayPointBatch &batch : plan.point_batches) {
       EXPECT_EQ(batch.mesh.vertices.size(), 4u);
       EXPECT_EQ(batch.mesh.indices.size(), 6u);
-      EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::Always);
-      EXPECT_FALSE(batch.state.depth_culling);
+      EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+      EXPECT_FLOAT_EQ(batch.depth_bias, kOverlayPointDepthBias);
+      EXPECT_TRUE(batch.state.depth_culling);
     }
 }
 
 TEST(OverlayPointMeshBuilderTests,
-     SplitsComponentSelectionPointsIntoDepthTestedBatches) {
+     KeepsComponentSelectionPointsInDepthTestedBatch) {
   ViewportOverlayFrame frame;
   frame.points.push_back({
       .layer = ViewportOverlayLayer::SelectedVertex,
@@ -1790,25 +1849,123 @@ TEST(OverlayPointMeshBuilderTests,
   const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
       frame, test_overlay_camera(), ViewportOverlayLayer::SelectedVertex);
 
-  ASSERT_EQ(plan.point_batches.size(), 2u);
-  const auto depth_tested =
-      std::find_if(plan.point_batches.begin(), plan.point_batches.end(),
-                   [](const OverlayPointBatch &batch) {
-                     return batch.state.depth_func ==
-                            OverlayDepthFunc::GreaterOrEqual;
-                   });
-  ASSERT_NE(depth_tested, plan.point_batches.end());
-  EXPECT_FLOAT_EQ(depth_tested->depth_bias, kOverlayPointDepthBias);
-  EXPECT_TRUE(depth_tested->state.depth_culling);
+  ASSERT_EQ(plan.point_batches.size(), 1u);
+  const OverlayPointBatch &batch = plan.point_batches.front();
+  EXPECT_EQ(batch.mesh.vertices.size(), 8u);
+  EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+  EXPECT_FLOAT_EQ(batch.depth_bias, kOverlayPointDepthBias);
+  EXPECT_TRUE(batch.state.depth_culling);
+}
 
-  const auto draw_on_top =
-      std::find_if(plan.point_batches.begin(), plan.point_batches.end(),
-                   [](const OverlayPointBatch &batch) {
-                     return batch.state.depth_func == OverlayDepthFunc::Always;
-                   });
-  ASSERT_NE(draw_on_top, plan.point_batches.end());
-  EXPECT_FLOAT_EQ(draw_on_top->depth_bias, 0.0f);
-  EXPECT_FALSE(draw_on_top->state.depth_culling);
+TEST(OverlayPointMeshBuilderTests,
+     SourceWireDepthStampsCullOutwardOccludedVertexPoints) {
+  const std::array<ViewportOverlayLayer, 3u> layers{{
+      ViewportOverlayLayer::UnselectedVertex,
+      ViewportOverlayLayer::SelectedVertex,
+      ViewportOverlayLayer::HoverVertex,
+  }};
+
+  for (const ViewportOverlayLayer layer : layers) {
+    SCOPED_TRACE(static_cast<int>(layer));
+    ViewportOverlayFrame frame;
+    frame.points.push_back({
+        .layer = layer,
+        .position = {0.25f, 0.25f, -1.0f},
+        .color = rgba8(255, 211, 31, 255),
+        .size_pixels = 6.0f,
+        .element = {.object_id = 1, .vertex_id = 1},
+        .outline_growth_pixels = 0.0f,
+    });
+    frame.points.push_back({
+        .layer = layer,
+        .position = {0.25f, 0.25f, -3.0f},
+        .color = rgba8(255, 211, 31, 255),
+        .size_pixels = 6.0f,
+        .element = {.object_id = 1, .vertex_id = 2},
+        .outline_growth_pixels = 0.0f,
+    });
+    append_source_wire_depth_stamp_box(frame, 1, false);
+
+    const OverlayLayerBuildPlan plan =
+        OverlayRenderableBuilder::build_layer(frame, test_overlay_camera(),
+                                              layer);
+
+    ASSERT_EQ(plan.point_batches.size(), 1u);
+    EXPECT_EQ(point_mesh_vertex_count(plan), 4u);
+    EXPECT_EQ(plan.point_batches.front().state.depth_func,
+              OverlayDepthFunc::GreaterOrEqual);
+    EXPECT_FLOAT_EQ(plan.point_batches.front().depth_bias,
+                    kOverlayPointDepthBias);
+    EXPECT_TRUE(plan.point_batches.front().state.depth_culling);
+  }
+}
+
+TEST(OverlayPointMeshBuilderTests,
+     SourceWireDepthStampsDoNotCpuCullInsideOutVertexPoints) {
+  ViewportOverlayFrame frame;
+  frame.points.push_back({
+      .layer = ViewportOverlayLayer::UnselectedVertex,
+      .position = {0.25f, 0.25f, -1.0f},
+      .color = rgba8(255, 211, 31, 255),
+      .size_pixels = 6.0f,
+      .element = {.object_id = 1, .vertex_id = 1},
+  });
+  frame.points.push_back({
+      .layer = ViewportOverlayLayer::UnselectedVertex,
+      .position = {0.25f, 0.25f, -3.0f},
+      .color = rgba8(255, 211, 31, 255),
+      .size_pixels = 6.0f,
+      .element = {.object_id = 1, .vertex_id = 2},
+  });
+  append_source_wire_depth_stamp_box(frame, 1, true);
+
+  const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::build_layer(
+      frame, test_overlay_camera(), ViewportOverlayLayer::UnselectedVertex);
+
+  ASSERT_EQ(plan.point_batches.size(), 1u);
+  EXPECT_EQ(point_mesh_vertex_count(plan), 8u);
+  EXPECT_EQ(plan.point_batches.front().state.depth_func,
+            OverlayDepthFunc::GreaterOrEqual);
+  EXPECT_FLOAT_EQ(plan.point_batches.front().depth_bias,
+                  kOverlayPointDepthBias);
+  EXPECT_TRUE(plan.point_batches.front().state.depth_culling);
+}
+
+TEST(OverlayPointMeshBuilderTests,
+     InsideOutVertexPointsDrawOnTopWhenCameraIsInsideStampVolume) {
+  const std::array<ViewportOverlayLayer, 3u> layers{{
+      ViewportOverlayLayer::UnselectedVertex,
+      ViewportOverlayLayer::SelectedVertex,
+      ViewportOverlayLayer::HoverVertex,
+  }};
+
+  ViewportOverlayCamera camera = test_perspective_overlay_camera();
+  camera.eye = {0.0f, 0.0f, -2.0f};
+  camera.forward = {0.0f, 0.0f, -1.0f};
+
+  for (const ViewportOverlayLayer layer : layers) {
+    SCOPED_TRACE(static_cast<int>(layer));
+    ViewportOverlayFrame frame;
+    frame.points.push_back({
+        .layer = layer,
+        .position = {0.25f, 0.25f, -3.0f},
+        .color = rgba8(255, 211, 31, 255),
+        .size_pixels = 6.0f,
+        .element = {.object_id = 1, .vertex_id = 1},
+        .outline_growth_pixels = 0.0f,
+    });
+    append_source_wire_depth_stamp_box(frame, 1, true);
+
+    const OverlayLayerBuildPlan plan =
+        OverlayRenderableBuilder::build_layer(frame, camera, layer);
+
+    ASSERT_EQ(plan.point_batches.size(), 1u);
+    EXPECT_EQ(point_mesh_vertex_count(plan), 4u);
+    EXPECT_EQ(plan.point_batches.front().state.depth_func,
+              OverlayDepthFunc::Always);
+    EXPECT_FLOAT_EQ(plan.point_batches.front().depth_bias, 0.0f);
+    EXPECT_FALSE(plan.point_batches.front().state.depth_culling);
+  }
 }
 
 TEST(OverlayPointMeshBuilderTests, BuildsPointLightIconBillboardBatch) {

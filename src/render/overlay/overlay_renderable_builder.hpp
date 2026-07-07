@@ -84,7 +84,6 @@ struct OverlayEditWireBatch {
     OverlayEditWireMesh mesh;
     OverlayRenderState state;
     float width_pixels = 1.0f;
-    float near_plane = 0.05f;
 };
 
 /**
@@ -206,7 +205,8 @@ private:
                       const std::vector<const ViewportOverlayPoint *> &points,
                       const ViewportOverlayCamera &camera,
                       ViewportOverlayLayer layer, std::uint16_t &blend_order,
-                      bool outline);
+                      bool outline,
+                      const OverlayDepthStampVisibilityFilter *visibility);
     static void
     append_icon_pass(OverlayLayerBuildPlan &plan,
                      const std::vector<const ViewportOverlayIcon *> &icons,

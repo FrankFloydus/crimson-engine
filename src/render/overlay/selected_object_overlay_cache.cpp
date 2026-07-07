@@ -46,30 +46,6 @@ namespace {
 
 using AttributeType = filament::backend::ElementType;
 
-constexpr float kSelectedObjectLineNearPlane = 0.05f;
-
-/**
- * Stores one shader-expanded selected object line vertex.
- */
-struct SelectedObjectLineVertex {
-    OverlayFloat4 position;
-    OverlayFloat4 start;
-    OverlayFloat4 end;
-    OverlayFloat4 control;
-    std::uint32_t color = 0u;
-};
-
-/**
- * Stores one fallback triangle edge collected from a mesh asset.
- */
-struct TriangleEdgeRecord {
-    std::uint32_t a = 0u;
-    std::uint32_t b = 0u;
-    std::uint32_t count = 0u;
-    QVec3 first_normal;
-    bool coplanar_with_first = true;
-};
-
 filament::math::mat4f make_transform(const QMat4 &transform) {
   const glm::mat4 glm_transform = to_glm(transform);
   filament::math::mat4f result;
@@ -129,94 +105,6 @@ void configure_overlay_material(filament::MaterialInstance &material,
       to_filament_transparency_mode(state.transparency_mode));
   material.setPolygonOffset(state.polygon_offset_scale,
                             state.polygon_offset_constant);
-}
-
-std::uint64_t edge_key(std::uint32_t a, std::uint32_t b) {
-  const std::uint32_t lo = std::min(a, b);
-  const std::uint32_t hi = std::max(a, b);
-  return (static_cast<std::uint64_t>(lo) << 32u) |
-         static_cast<std::uint64_t>(hi);
-}
-
-void append_selected_line_quad(
-    std::vector<SelectedObjectLineVertex> &vertices,
-    std::vector<std::uint32_t> &indices, QVec3 start, QVec3 end,
-    std::uint32_t color_rgba = kOverlaySelectionWireColor) {
-  const std::uint32_t color = rgba8_srgb_to_linear(color_rgba);
-  const std::uint32_t offset = static_cast<std::uint32_t>(vertices.size());
-  const OverlayFloat4 start_value{start.x, start.y, start.z, 1.0f};
-  const OverlayFloat4 end_value{end.x, end.y, end.z, 1.0f};
-  const OverlayFloat4 device_origin{0.0f, 0.0f, 0.0f, 1.0f};
-  vertices.push_back({device_origin,
-                      start_value,
-                      end_value,
-                      {-1.0f, -1.0f, 0.0f, 0.0f},
-                      color});
-  vertices.push_back({device_origin,
-                      start_value,
-                      end_value,
-                      {-1.0f, 1.0f, 1.0f, 0.0f},
-                      color});
-  vertices.push_back(
-      {device_origin, start_value, end_value, {1.0f, 1.0f, 1.0f, 0.0f}, color});
-  vertices.push_back({device_origin,
-                      start_value,
-                      end_value,
-                      {1.0f, -1.0f, 0.0f, 0.0f},
-                      color});
-  indices.push_back(offset);
-  indices.push_back(offset + 1u);
-  indices.push_back(offset + 2u);
-  indices.push_back(offset);
-  indices.push_back(offset + 2u);
-  indices.push_back(offset + 3u);
-}
-
-filament::Box bounds_for_selected_line_vertices(
-    const std::vector<SelectedObjectLineVertex> &vertices) {
-  if (vertices.empty()) {
-    return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
-  }
-
-  QVec3 min_value{
-      std::numeric_limits<float>::max(),
-      std::numeric_limits<float>::max(),
-      std::numeric_limits<float>::max(),
-  };
-  QVec3 max_value{
-      std::numeric_limits<float>::lowest(),
-      std::numeric_limits<float>::lowest(),
-      std::numeric_limits<float>::lowest(),
-  };
-  auto include = [&](const OverlayFloat4 &point) {
-    min_value.x = std::min(min_value.x, point.x);
-    min_value.y = std::min(min_value.y, point.y);
-    min_value.z = std::min(min_value.z, point.z);
-    max_value.x = std::max(max_value.x, point.x);
-    max_value.y = std::max(max_value.y, point.y);
-    max_value.z = std::max(max_value.z, point.z);
-  };
-
-  for (const SelectedObjectLineVertex &vertex : vertices) {
-    include(vertex.start);
-    include(vertex.end);
-  }
-  if (min_value.x == max_value.x) {
-    min_value.x -= 0.5f;
-    max_value.x += 0.5f;
-  }
-  if (min_value.y == max_value.y) {
-    min_value.y -= 0.5f;
-    max_value.y += 0.5f;
-  }
-  if (min_value.z == max_value.z) {
-    min_value.z -= 0.5f;
-    max_value.z += 0.5f;
-  }
-
-  filament::Box box;
-  box.set(to_filament(min_value), to_filament(max_value));
-  return box;
 }
 
 const RenderOverlayMeshSnapshot *find_overlay_mesh_snapshot(
@@ -380,11 +268,10 @@ SelectedObjectOverlayCache::~SelectedObjectOverlayCache() {
 
 void SelectedObjectOverlayCache::initialize(
     filament::Engine &engine, filament::Scene &scene,
-    filament::Material &face_fill_material, filament::Material &line_material) {
+    filament::Material &face_fill_material) {
   engine_ = &engine;
   scene_ = &scene;
   face_fill_material_ = &face_fill_material;
-  line_material_ = &line_material;
 }
 
 void SelectedObjectOverlayCache::shutdown() {
@@ -392,10 +279,7 @@ void SelectedObjectOverlayCache::shutdown() {
         return;
     }
 
-    destroy_proxy(line_proxy_, true);
-    destroy_line_batch_root();
     destroy_face_entries();
-    line_entries_.clear();
     synced_states_.clear();
     synced_scene_revision_ = 0;
     synced_asset_revision_ = 0;
@@ -408,7 +292,6 @@ void SelectedObjectOverlayCache::shutdown() {
     engine_ = nullptr;
     scene_ = nullptr;
     face_fill_material_ = nullptr;
-    line_material_ = nullptr;
     visible_ = true;
 }
 
@@ -424,13 +307,11 @@ void SelectedObjectOverlayCache::sync(
       return;
     }
     set_visible(true);
-
     if (has_synced_ && synced_asset_revision_ == snapshot.asset_revision &&
         synced_selection_revision_ == snapshot.selection_revision &&
         synced_visibility_revision_ == snapshot.visibility_revision &&
         synced_mesh_binding_revision_ == snapshot.mesh_binding_revision) {
       if (synced_transform_revision_ != snapshot.transform_revision) {
-        update_line_proxy(synced_states_, snapshot);
         if (synced_face_fills_enabled_) {
           update_entry_transforms(snapshot);
         }
@@ -447,7 +328,6 @@ void SelectedObjectOverlayCache::sync(
     if (has_synced_ && synced_face_fills_enabled_ == face_fills_enabled &&
         states == synced_states_) {
       if (synced_transform_revision_ != snapshot.transform_revision) {
-        update_line_proxy(synced_states_, snapshot);
         if (synced_face_fills_enabled_) {
           update_entry_transforms(snapshot);
         }
@@ -460,9 +340,6 @@ void SelectedObjectOverlayCache::sync(
       synced_mesh_binding_revision_ = snapshot.mesh_binding_revision;
       return;
     }
-
-    sync_line_entries(states, snapshot);
-    update_line_proxy(states, snapshot);
 
     if (face_fills_enabled) {
       std::unordered_set<EntityId> live_entities;
@@ -527,254 +404,6 @@ SelectedObjectOverlayCache::selected_entity_states(
     });
   }
   return states;
-}
-
-SelectedObjectOverlayCache::LineEntry
-SelectedObjectOverlayCache::create_line_entry(
-    const RenderOverlayMeshSnapshot &mesh) const {
-  QDR_PROFILE_FUNCTION();
-  LineEntry entry;
-  entry.mesh_id = mesh.mesh_id;
-  if (!mesh.has_triangle_geometry()) {
-    return entry;
-  }
-  entry.mesh_revision = mesh.mesh_revision;
-
-  if (mesh.has_authored_polygon_geometry()) {
-    std::unordered_map<quader_poly::ElementId, QVec3> positions;
-    positions.reserve(mesh.authored_vertices.size());
-    for (const quader_poly::Vertex &vertex : mesh.authored_vertices) {
-      positions.emplace(vertex.id, vertex.position);
-    }
-
-    std::unordered_set<std::uint64_t> emitted_edges;
-    for (const quader_poly::Face &face : mesh.authored_faces) {
-      if (face.vertices.size() < 2u) {
-        continue;
-      }
-      for (std::size_t index = 0; index < face.vertices.size(); ++index) {
-        const quader_poly::ElementId a_id = face.vertices[index];
-        const quader_poly::ElementId b_id =
-            face.vertices[(index + 1u) % face.vertices.size()];
-        if (!emitted_edges
-                 .insert(edge_key(static_cast<std::uint32_t>(a_id),
-                                  static_cast<std::uint32_t>(b_id)))
-                 .second) {
-          continue;
-        }
-        const auto a = positions.find(a_id);
-        const auto b = positions.find(b_id);
-        if (a == positions.end() || b == positions.end()) {
-          continue;
-        }
-        entry.segments.push_back({.start = a->second, .end = b->second});
-      }
-    }
-  }
-
-  if (!entry.segments.empty()) {
-    return entry;
-  }
-
-  std::unordered_map<std::uint64_t, TriangleEdgeRecord> edges;
-  edges.reserve(mesh.indices.size());
-
-  auto append_edge = [&](std::uint32_t a, std::uint32_t b, QVec3 normal) {
-    if (a >= mesh.vertices.size() || b >= mesh.vertices.size() || a == b) {
-      return;
-    }
-    TriangleEdgeRecord &record = edges[edge_key(a, b)];
-    if (record.count == 0u) {
-      record.a = a;
-      record.b = b;
-      record.first_normal = normal;
-    } else if (length(record.first_normal) > 0.000001f &&
-               length(normal) > 0.000001f) {
-      record.coplanar_with_first = record.coplanar_with_first &&
-                                   std::abs(dot(normalize(record.first_normal),
-                                                normalize(normal))) > 0.999f;
-    }
-    ++record.count;
-  };
-
-  for (std::size_t index = 0u; index + 2u < mesh.indices.size(); index += 3u) {
-    const std::uint32_t a = mesh.indices[index];
-    const std::uint32_t b = mesh.indices[index + 1u];
-    const std::uint32_t c = mesh.indices[index + 2u];
-    if (a >= mesh.vertices.size() || b >= mesh.vertices.size() ||
-        c >= mesh.vertices.size()) {
-      continue;
-    }
-    QVec3 normal =
-        cross(mesh.vertices[b].position - mesh.vertices[a].position,
-              mesh.vertices[c].position - mesh.vertices[a].position);
-    if (length(normal) > 0.000001f) {
-      normal = normalize(normal);
-    }
-    append_edge(a, b, normal);
-    append_edge(b, c, normal);
-    append_edge(c, a, normal);
-  }
-
-  entry.segments.reserve(edges.size());
-  for (const auto &[key, edge] : edges) {
-    (void)key;
-    if (edge.count == 2u && edge.coplanar_with_first) {
-      continue;
-    }
-    entry.segments.push_back({
-        .start = mesh.vertices[edge.a].position,
-        .end = mesh.vertices[edge.b].position,
-    });
-  }
-  return entry;
-}
-
-void SelectedObjectOverlayCache::sync_line_entries(
-    const std::vector<SelectedEntityState> &states,
-    const RenderOverlaySelectedObjectSnapshot &snapshot) {
-  QDR_PROFILE_FUNCTION();
-  std::unordered_set<EntityId> live_entities;
-  live_entities.reserve(states.size());
-  for (const SelectedEntityState &state : states) {
-    QDR_PROFILE_SCOPE("Selected object overlay sync line entity");
-    live_entities.insert(state.entity);
-    const auto existing = line_entries_.find(state.entity);
-    if (existing == line_entries_.end() ||
-        existing->second.mesh_id != state.mesh_id ||
-        existing->second.mesh_revision != state.mesh_revision) {
-      const RenderOverlayMeshSnapshot *mesh =
-          find_overlay_mesh_snapshot(snapshot.meshes, state.entity);
-      if (mesh != nullptr) {
-        line_entries_[state.entity] = create_line_entry(*mesh);
-      }
-    }
-  }
-
-  for (auto it = line_entries_.begin(); it != line_entries_.end();) {
-    if (!live_entities.contains(it->first)) {
-      it = line_entries_.erase(it);
-    } else {
-      ++it;
-    }
-  }
-}
-
-void SelectedObjectOverlayCache::update_line_proxy(
-    const std::vector<SelectedEntityState> &states,
-    const RenderOverlaySelectedObjectSnapshot &snapshot) {
-  QDR_PROFILE_FUNCTION();
-  if (states.empty()) {
-    destroy_proxy(line_proxy_, true);
-    destroy_line_batch_root();
-    return;
-  }
-
-  std::size_t segment_count = 0u;
-  for (const SelectedEntityState &state : states) {
-    const auto existing = line_entries_.find(state.entity);
-    if (existing != line_entries_.end()) {
-      segment_count += existing->second.segments.size();
-    }
-  }
-
-  std::vector<SelectedObjectLineVertex> line_vertices;
-  std::vector<std::uint32_t> line_indices;
-  line_vertices.reserve(segment_count * 4u);
-  line_indices.reserve(segment_count * 6u);
-  for (const SelectedEntityState &state : states) {
-    QDR_PROFILE_SCOPE("Selected object overlay transform batched wire entity");
-    const auto existing = line_entries_.find(state.entity);
-    if (existing == line_entries_.end()) {
-      continue;
-    }
-    const RenderOverlayMeshSnapshot *mesh =
-        find_overlay_mesh_snapshot(snapshot.meshes, state.entity);
-    if (mesh == nullptr) {
-      continue;
-    }
-    for (const SelectedObjectLineSegment &segment : existing->second.segments) {
-      append_selected_line_quad(
-          line_vertices, line_indices,
-          transform_point(mesh->world_transform, segment.start),
-          transform_point(mesh->world_transform, segment.end));
-    }
-  }
-  if (line_vertices.empty() || line_indices.empty()) {
-    destroy_proxy(line_proxy_, true);
-    destroy_line_batch_root();
-    return;
-  }
-
-  if (!line_batch_transform_root_) {
-    line_batch_transform_root_ = utils::EntityManager::get().create();
-    engine_->getTransformManager().create(line_batch_transform_root_);
-  }
-  const filament::TransformManager::Instance parent_transform =
-      engine_->getTransformManager().getInstance(line_batch_transform_root_);
-  const std::uint16_t line_blend_order = static_cast<std::uint16_t>(
-      viewport_overlay_draw_order(ViewportOverlayLayer::SelectedEdge) * 64);
-  const OverlayRenderState line_state = OverlayRenderableBuilder::make_state(
-      ViewportOverlayLayer::SelectedEdge, ViewportOverlayGeometryKind::Lines,
-      line_blend_order);
-  const filament::Box bounds = bounds_for_selected_line_vertices(line_vertices);
-  const std::uint32_t vertex_count =
-      static_cast<std::uint32_t>(line_vertices.size());
-  const std::uint32_t index_count =
-      static_cast<std::uint32_t>(line_indices.size());
-  if (line_proxy_.entity && line_proxy_.vertex_buffer != nullptr &&
-      line_proxy_.index_buffer != nullptr &&
-      line_proxy_.vertex_count == vertex_count &&
-      line_proxy_.index_count == index_count) {
-    line_proxy_.vertex_buffer->setBufferAt(
-        *engine_, 0, FilamentBufferDescriptorFactory::vector(line_vertices));
-    filament::RenderableManager &renderables = engine_->getRenderableManager();
-    const filament::RenderableManager::Instance instance =
-        renderables.getInstance(line_proxy_.entity);
-    if (instance) {
-      renderables.setAxisAlignedBoundingBox(instance, bounds);
-    }
-    set_proxy_layer_mask(line_proxy_,
-                         visible_ ? kViewportOverlayLayerMask : 0u);
-    return;
-  }
-
-  destroy_proxy(line_proxy_, true);
-  line_proxy_ = create_proxy(
-      *engine_, *scene_, *line_material_, parent_transform, line_vertices,
-      line_indices, bounds, line_state,
-      visible_ ? kViewportOverlayLayerMask : 0u,
-      [](filament::VertexBuffer::Builder &builder) {
-        builder
-            .attribute(filament::VertexAttribute::POSITION, 0,
-                       AttributeType::FLOAT4,
-                       offsetof(SelectedObjectLineVertex, position),
-                       sizeof(SelectedObjectLineVertex))
-            .attribute(filament::VertexAttribute::CUSTOM0, 0,
-                       AttributeType::FLOAT4,
-                       offsetof(SelectedObjectLineVertex, start),
-                       sizeof(SelectedObjectLineVertex))
-            .attribute(filament::VertexAttribute::CUSTOM1, 0,
-                       AttributeType::FLOAT4,
-                       offsetof(SelectedObjectLineVertex, end),
-                       sizeof(SelectedObjectLineVertex))
-            .attribute(filament::VertexAttribute::CUSTOM2, 0,
-                       AttributeType::FLOAT4,
-                       offsetof(SelectedObjectLineVertex, control),
-                       sizeof(SelectedObjectLineVertex))
-            .attribute(filament::VertexAttribute::COLOR, 0,
-                       AttributeType::UBYTE4,
-                       offsetof(SelectedObjectLineVertex, color),
-                       sizeof(SelectedObjectLineVertex))
-            .normalized(filament::VertexAttribute::COLOR);
-      },
-      [&line_state](filament::MaterialInstance &material) {
-        configure_overlay_material(material, line_state);
-        material.setParameter("lineWidth",
-                              kOverlaySelectionWireLineWidthPixels);
-        material.setParameter("featherPixels", kOverlayLineFeatherPixels);
-        material.setParameter("nearPlane", kSelectedObjectLineNearPlane);
-      });
 }
 
 SelectedObjectOverlayCache::Entry
@@ -907,15 +536,6 @@ void SelectedObjectOverlayCache::destroy_proxy(Proxy &proxy,
   proxy.index_count = 0u;
 }
 
-void SelectedObjectOverlayCache::destroy_line_batch_root() {
-  if (!engine_ || !line_batch_transform_root_) {
-    return;
-  }
-  engine_->getTransformManager().destroy(line_batch_transform_root_);
-  utils::EntityManager::get().destroy(line_batch_transform_root_);
-  line_batch_transform_root_.clear();
-}
-
 void SelectedObjectOverlayCache::destroy_face_entries() {
   for (auto &[entityId, entry] : entries_) {
     (void)entityId;
@@ -989,7 +609,6 @@ void SelectedObjectOverlayCache::set_visible(bool visible) {
   }
   visible_ = visible;
   const std::uint8_t layer_mask = visible_ ? kViewportOverlayLayerMask : 0u;
-  set_proxy_layer_mask(line_proxy_, layer_mask);
   for (auto &[entityId, entry] : entries_) {
     (void)entityId;
     for (const Proxy &proxy : entry.face_proxies) {

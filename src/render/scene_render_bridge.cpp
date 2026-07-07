@@ -45,8 +45,7 @@ void SceneRenderBridge::initialize(
   overlay_cache_.initialize(overlay_proxy_factory_);
   scene_wireframe_overlay_cache_.initialize(engine, scene,
                                             selected_object_line_material);
-  selected_object_overlay_cache_.initialize(engine, scene, overlay_material,
-                                            selected_object_line_material);
+  selected_object_overlay_cache_.initialize(engine, scene, overlay_material);
   sync_service_.initialize(engine, scene, mesh_cache_, material_binding_);
 }
 

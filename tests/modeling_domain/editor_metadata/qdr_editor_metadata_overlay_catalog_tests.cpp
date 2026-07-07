@@ -131,17 +131,23 @@ TEST(QdrEditorMetadataOverlayCatalogTests, HostContractOverlayLayerCatalogStates
   EXPECT_TRUE(hover_edge.line_draws_on_top);
   EXPECT_FALSE(hover_edge.depth_tested_by_default);
 
+  const qhc::HostOverlayLayerDescriptor &unselected_vertex =
+      require_layer(qec::SelectionOverlayLayer::UnselectedVertex);
+  EXPECT_TRUE(unselected_vertex.points);
+  EXPECT_FALSE(unselected_vertex.point_draws_on_top);
+  EXPECT_TRUE(unselected_vertex.depth_tested_by_default);
+
   const qhc::HostOverlayLayerDescriptor &selected_vertex =
       require_layer(qec::SelectionOverlayLayer::SelectedVertex);
   EXPECT_TRUE(selected_vertex.points);
-  EXPECT_TRUE(selected_vertex.point_draws_on_top);
-  EXPECT_FALSE(selected_vertex.depth_tested_by_default);
+  EXPECT_FALSE(selected_vertex.point_draws_on_top);
+  EXPECT_TRUE(selected_vertex.depth_tested_by_default);
 
   const qhc::HostOverlayLayerDescriptor &hover_vertex =
       require_layer(qec::SelectionOverlayLayer::HoverVertex);
   EXPECT_TRUE(hover_vertex.points);
-  EXPECT_TRUE(hover_vertex.point_draws_on_top);
-  EXPECT_FALSE(hover_vertex.depth_tested_by_default);
+  EXPECT_FALSE(hover_vertex.point_draws_on_top);
+  EXPECT_TRUE(hover_vertex.depth_tested_by_default);
 
   const qhc::HostOverlayLayerDescriptor &snap_target_vertex =
       require_layer(qec::SelectionOverlayLayer::SnapTargetVertex);

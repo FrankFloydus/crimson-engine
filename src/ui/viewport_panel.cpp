@@ -851,10 +851,14 @@ void ViewportPanel::prepare_viewports(ViewportWorkspaceService &workspace,
       continue;
     }
     if (const EntityId root = document.scene_root(); root != kInvalidEntityId) {
-      if (const SceneSettingsComponent *settings =
+      if (const SceneSettingsComponent *scene_settings =
               document.scene_settings(root)) {
+        pane_workspace.camera.set_clip_planes(
+            scene_settings->camera.near_plane,
+            scene_settings->camera.far_plane);
         pane_state.renderer.apply_scene_settings(
-            *settings, pane_workspace.shading == ViewportShadingMode::Rendered);
+            *scene_settings,
+            pane_workspace.shading == ViewportShadingMode::Rendered);
       }
     }
     pane_state.renderer.update_camera(pane_workspace.camera);

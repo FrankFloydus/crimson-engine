@@ -11,6 +11,7 @@
 #include "math/types.hpp"
 #include "render/viewport_overlay_frame.hpp"
 #include "scene/components.hpp"
+#include "viewport/viewport_camera_clip_planes.hpp"
 
 #include <cstdint>
 #include <span>
@@ -79,6 +80,7 @@ struct RenderOverlaySelectedObjectSnapshot {
   std::uint64_t visibility_revision = 0;
   std::uint64_t transform_revision = 0;
   std::uint64_t mesh_binding_revision = 0;
+  ViewportCameraClipPlanes clip_planes;
   bool visible = true;
   std::vector<RenderOverlayMeshSnapshot> meshes;
 };
@@ -90,6 +92,7 @@ struct RenderOverlaySelectedObjectSnapshot {
 struct RenderOverlaySceneWireframeSnapshot {
   std::uint64_t scene_revision = 0;
   std::uint64_t asset_revision = 0;
+  ViewportCameraClipPlanes clip_planes;
   std::uint8_t layer_mask = 0u;
   std::vector<RenderOverlayMeshSnapshot> meshes;
 };

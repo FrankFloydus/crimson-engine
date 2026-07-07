@@ -66,6 +66,14 @@ material {
         },
         {
             type : float,
+            name : cameraFarPlane
+        },
+        {
+            type : float,
+            name : cameraFarFade
+        },
+        {
+            type : float,
             name : planeHalfSize
         },
         {
@@ -142,9 +150,13 @@ fragment {
 
         float distanceToCamera = length(coords - cameraCoords);
         float distanceFade = 1.0 - smoothstep(materialParams.fadeStart, materialParams.fadeEnd, distanceToCamera);
+        float cameraDistance = length(worldPosition - materialParams.cameraPosition);
+        float farHalf = max(materialParams.cameraFarPlane * 0.5, 0.0001);
+        float farClipFade = 1.0 - smoothstep(0.0, farHalf, cameraDistance - farHalf);
+        farClipFade = mix(1.0, farClipFade, clamp(materialParams.cameraFarFade, 0.0, 1.0));
         float edgeDistance = max(abs(variable_localPosition.x), abs(variable_localPosition.z));
         float edgeFade = 1.0 - smoothstep(materialParams.planeHalfSize * 0.88, materialParams.planeHalfSize, edgeDistance);
-        float fade = clamp(distanceFade * edgeFade, 0.0, 1.0);
+        float fade = clamp(distanceFade * edgeFade * farClipFade, 0.0, 1.0);
         fade += (materialParams.cameraSize + materialParams.viewportHeight
                 + materialParams.visibleGridSize + materialParams.minGridWorldSpacing) * 0.0;
 

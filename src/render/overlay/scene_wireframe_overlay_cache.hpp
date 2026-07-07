@@ -8,6 +8,7 @@
 
 #include "core/types.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
+#include "viewport/viewport_camera_clip_planes.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -109,6 +110,7 @@ private:
     void set_proxy_layer_mask(const Proxy &proxy,
                               std::uint8_t layer_mask) const;
     void set_layer_mask(std::uint8_t layer_mask);
+    void set_proxy_clip_planes(ViewportCameraClipPlanes clip_planes);
     void update_entry_transform(const Entry &entry,
                                 const QMat4 &world_transform) const;
     void update_entry_transforms(
@@ -122,6 +124,7 @@ private:
     std::vector<WireframeEntityState> synced_states_;
     std::uint64_t synced_scene_revision_ = 0;
     std::uint64_t synced_asset_revision_ = 0;
+    ViewportCameraClipPlanes synced_clip_planes_;
     std::uint8_t layer_mask_ = 0u;
     bool has_synced_ = false;
 };

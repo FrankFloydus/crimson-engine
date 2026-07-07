@@ -78,6 +78,20 @@ RenderOverlayBoundsSnapshot bounds_snapshot(const SceneBounds &bounds) {
   return {.min = bounds.min, .max = bounds.max};
 }
 
+ViewportCameraClipPlanes scene_camera_clip_planes(
+    const SceneDocument &document) {
+  if (const EntityId root = document.scene_root(); root != kInvalidEntityId) {
+    if (const SceneSettingsComponent *settings =
+            document.scene_settings(root)) {
+      return sanitize_viewport_camera_clip_planes(
+          settings->camera.near_plane, settings->camera.far_plane);
+    }
+  }
+  const SceneCameraSettings defaults;
+  return sanitize_viewport_camera_clip_planes(defaults.near_plane,
+                                             defaults.far_plane);
+}
+
 } // namespace
 
 RenderOverlaySelectedObjectSnapshot
@@ -91,6 +105,7 @@ build_render_overlay_selected_object_snapshot(const SceneDocument &document,
       .visibility_revision = document.visibility_revision(),
       .transform_revision = document.transform_revision(),
       .mesh_binding_revision = document.mesh_binding_revision(),
+      .clip_planes = scene_camera_clip_planes(document),
       .visible = visible,
   };
   if (!visible) {
@@ -114,6 +129,7 @@ build_render_overlay_scene_wireframe_snapshot(const SceneDocument &document,
   RenderOverlaySceneWireframeSnapshot snapshot{
       .scene_revision = document.revision(),
       .asset_revision = assets.revision(),
+      .clip_planes = scene_camera_clip_planes(document),
       .layer_mask = layer_mask,
   };
   if (layer_mask == 0u) {
