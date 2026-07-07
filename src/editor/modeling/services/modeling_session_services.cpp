@@ -1956,6 +1956,15 @@ quader_editor_core::EditorOperationCommandResult RuntimeOperationExecutor::execu
   return quader_editor_core::execute_command(session, make_command(operation));
 }
 
+quader_editor_core::EditorOperationCommandResult
+RuntimeOperationExecutor::execute_with_history_state(
+    quader_editor_core::EditorSession &session,
+    const OperationCommand &operation,
+    quader_editor_core::SessionState history_state) {
+  return quader_editor_core::execute_command_with_history_state(
+      session, make_command(operation), std::move(history_state));
+}
+
 quader_editor_core::EditorRuntimeCommandId
 ModelingClipboardService::copy_command() {
   return quader_editor_core::EditorRuntimeCommandId::CopySelectedMeshes;

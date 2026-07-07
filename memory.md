@@ -9,6 +9,65 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-07 - Shift Rotate Component Drag Extrudes
+
+Task/context: Shift+dragging a selected face with the Rotate transform gizmo regressed to a plain
+component rotation instead of creating extruded topology first.
+
+Invariant:
+
+- In face/edge component modes, transform gizmo Shift+drag maps Move and Rotate to `Extrude`, and
+  Scale to `Inset`; object mode Shift remains duplicate-selection behavior.
+- `TransformDragOperation::Extrude` is valid for Move and Rotate. Move extrudes with an offset;
+  Rotate extrudes selected elements through the rotate `Transform3` so the selected cap is copied
+  and rotated before commit/repeat-last.
+- Component transform previews must convert world-space gizmo deltas through each selected object's
+  scene transform before mutating polygon documents. The runtime documents are local to their scene
+  object; applying a world pivot or world affine directly moves transformed, mirrored, or pivot-edited
+  component selections.
+- Cross-object Bridge executes in the survivor object's local space. Before appending another
+  selected object document, convert that source document by `inverse(survivorWorld) * sourceWorld`;
+  record undo from the original session state, not from the temporary normalized bridge input.
+- Cross-object Bridge preview updates cannot re-query live scene transforms after begin-preview,
+  because the preview may have temporarily removed the merged source entity. Capture participant
+  world transforms when the scene-workspace preview begins and reuse them for every Bridge preview
+  settings update and commit.
+- Runtime operations that combine selected object documents, currently Bridge and Combine Meshes,
+  must route through `ModelingSessionService::execute_runtime_operation_command()` so the editor
+  scene-space adapter supplies survivor-local/common-local inputs and the history command records
+  the original scene-authored state.
+- When the scene-space adapter maps a participant by `inverse(survivorWorld) * sourceWorld`, it
+  must reverse that participant's face loops and loop UVs when the relative transform has negative
+  determinant. Otherwise mirrored sources keep transformed positions but enter Bridge,
+  Interpolated Bridge, or Combine Meshes with inverted winding.
+- Repeat-last for component transforms must also convert the repeated world affine or offset into
+  object-local transform payloads before calling runtime transform previews; repeat-last for
+  runtime operations should re-enter `execute_runtime_operation_command()` instead of bypassing the
+  scene-space adapter.
+- `src/mesh/polygon` owns copied-vertex extrusion topology. Viewport and runtime drag layers only
+  choose and route the semantic operation.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests quader_modeling_domain_metadata_loop_tests quader_modeling_domain_polygon_loop_tests quader_modeling_domain_runtime_loop_tests quader_tests`
+- `build\vs2026\Debug\quader_modeling_domain_polygon_loop_tests.exe --gtest_color=no --gtest_filter=QdrDocumentOperationExtrudeElementsTests.*`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ProgrammaticBehaviorScenarioTests.ShiftFaceMoveAndRotateExtrudeAndShiftFaceScaleInsetsThroughGizmoDrag:ViewportInteractionControllerTests.ShiftRotateGizmoDragExtrudesSelectedFace`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=ProgrammaticApiGuardrailTests.*Viewport*`
+- `build\vs2026\Debug\quader_modeling_domain_polygon_loop_tests.exe --gtest_color=no --gtest_filter=QdrDocument*:QdrDocumentOperation*:QdrDocumentOperationExtrudeElementsTests.*:QdrPoly*`
+- `build\vs2026\Debug\quader_modeling_domain_runtime_loop_tests.exe --gtest_color=no --gtest_filter=QdrModelingRuntime*`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=EditorApiTests.*BoxSelect*:EditorApiTests.*Input*:EditorApiTests.*Keybinding*:EditorApiTests.*RightClickPick*:EditorApiTests.*Viewport*:GroupingPublicApiTests.*:ProgrammaticBehaviorScenarioTests.*:SelectionModeAdapterTests.*:Viewport*:ViewportBoxOverlayBuilderTests.*:ViewportInteractionControllerTests.*:ViewportSelectionMarqueeOverlayBuilderTests.*:ViewportTool*:ViewportTransformGizmoOverlayBuilderTests.*`
+- `cmake --build --preset vs2026-debug --target quader_tests quader_modeling_domain_runtime_loop_tests quader_modeling_domain_polygon_loop_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ProgrammaticBehaviorScenarioTests.ShiftFaceMoveAndRotateExtrudeAndShiftFaceScaleInsetsThroughGizmoDrag:ProgrammaticBehaviorScenarioTests.ShiftRotateExtrudeUsesWorldPivotForTransformedComponentSelection:ProgrammaticBehaviorScenarioTests.BridgeAfterShiftRotateExtrudeKeepsTransformedSourceInWorldPlace:ViewportInteractionControllerTests.ShiftRotateGizmoDragExtrudesSelectedFace`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ProgrammaticBehaviorScenarioTests.BridgeFacesPreservesWindingForMirroredSceneSource:ProgrammaticBehaviorScenarioTests.InterpolatedBridgePreviewPreservesWindingForMirroredSceneSource:ProgrammaticBehaviorScenarioTests.CombineMeshesPreservesWindingForMirroredSceneSource`
+- `build\vs2026\Debug\quader_modeling_domain_polygon_loop_tests.exe --gtest_color=no --gtest_filter=QdrDocumentOperationExtrudeElementsTests.*`
+- `build\vs2026\Debug\quader_modeling_domain_runtime_loop_tests.exe --gtest_color=no --gtest_filter=QdrModelingRuntimeOperationBridgeTests.*:QdrModelingRuntimeOperationTransformPreviewTests.*:QdrModelingRuntimeRepeatLastActionTests.*`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=*Bridge*:*ShiftRotate*:*CombineMeshes*`
+- `build\vs2026\Debug\quader_modeling_domain_runtime_loop_tests.exe --gtest_color=no --gtest_filter=QdrModelingRuntimeOperationBridgeTests.*:QdrModelingRuntimeOperationCombineMeshTests.*:QdrModelingRuntimeOperationTransformPreviewTests.*`
+
+Note: `QdrEditorMetadataToolCatalogTests.HostContractToolCatalogMirrorsEditorCoreRegistryIdentity`
+was already red in the affected metadata loop because the viewport descriptor catalog includes
+Pivot while the legacy editor-core tool registry has 12 tools.
+
 ## 2026-07-07 - Rotated Mesh Selection Uses World AABB Cage
 
 Task/context: Source/Hammer-style object selection for non-world-aligned meshes should keep the mesh

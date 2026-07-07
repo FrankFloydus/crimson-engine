@@ -1008,6 +1008,48 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObj
     }
 }
 
+TEST(ViewportInteractionControllerTests,
+     ShiftRotateGizmoDragExtrudesSelectedFace) {
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+    select_single_component(harness, box, quader::QuaderSelectionMode::Face);
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Rotate).ok);
+    harness.router.set_active_tool(quader::ViewportToolId::Rotate);
+    harness.input.modifiers.shift = true;
+
+    const std::optional<quader::QuaderMeshSnapshot> before_mesh =
+        harness.editor.query().mesh(box.mesh);
+    ASSERT_TRUE(before_mesh.has_value());
+
+    const quader::ViewportBeforeToolInteractionResult warmup =
+        harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+    ASSERT_FALSE(warmup.gizmo_consumed);
+    const quader_editor_core::TransformGizmoFrame *frame =
+        harness.controller.transform_gizmo_frame();
+    ASSERT_NE(frame, nullptr);
+    const quader_editor_core::TransformGizmoRingSegmentPrimitive *ring =
+        find_ring(*frame, quader_editor_core::TransformAxis::Z);
+    ASSERT_NE(ring, nullptr);
+
+    const quader::QVec2 start = ring->screen_start;
+    const quader::QVec2 update =
+        rotated_point(frame->info.screen_pivot, start, 0.6f);
+    press_update_release_gizmo(harness, start, update);
+
+    const std::optional<quader::QuaderMeshSnapshot> after_mesh =
+        harness.editor.query().mesh(box.mesh);
+    ASSERT_TRUE(after_mesh.has_value());
+    EXPECT_GT(after_mesh->vertex_count, before_mesh->vertex_count);
+    EXPECT_GT(after_mesh->index_count, before_mesh->index_count);
+
+    const quader::QuaderSelectionSummary selection =
+        harness.editor.selection().summary();
+    EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Face);
+    EXPECT_EQ(selection.selected_face_count, 1u);
+    EXPECT_EQ(selection.selected_object_count, 1u);
+}
+
 TEST(ViewportInteractionControllerTests, MoveGizmoComponentAxisDragKeepsPickedAxisUnderMouse) {
     /**
      * Stores the component selection mode exercised by a gizmo axis drag case.

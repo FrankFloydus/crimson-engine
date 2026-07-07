@@ -293,6 +293,42 @@ EditorSession::update_transform_translate_preview(quader::QVec3 delta,
       translate_selected(delta, texture_lock_enabled));
 }
 
+CommandResult EditorSession::update_transform_translate_preview(
+    std::span<const ObjectLocalOffset> offsets, bool texture_lock_enabled) {
+  QDR_PROFILE_SCOPE(
+      "qdr_editor_core.update_transform_translate_preview_local_offsets");
+  if (!preview_transaction_active(PreviewTransactionKind::Transform)) {
+    return error_result("No transform preview is active.");
+  }
+  set_state(preview_transaction_.base_state);
+  bool has_non_zero_offset = false;
+  for (const ObjectLocalOffset &offset : offsets) {
+    if (quader::length(offset.offset) > kTransformPointEpsilon) {
+      has_non_zero_offset = true;
+      break;
+    }
+  }
+  if (!has_non_zero_offset) {
+    const bool base_changed = state_revisions_differ(
+        preview_transaction_.base_state, preview_transaction_.history_state);
+    preview_transaction_.changed = base_changed;
+    return ok_result(base_changed);
+  }
+  std::vector<ObjectLocalTransform> transforms;
+  transforms.reserve(offsets.size());
+  for (const ObjectLocalOffset &offset : offsets) {
+    if (quader::length(offset.offset) <= kTransformPointEpsilon) {
+      continue;
+    }
+    transforms.push_back(ObjectLocalTransform{
+        .object_id = offset.object_id,
+        .transform = {.origin = offset.offset},
+    });
+  }
+  return update_transform_preview_from_base(
+      transform_selected(transforms, texture_lock_enabled, false));
+}
+
 CommandResult EditorSession::update_transform_matrix_preview(
     const quader_poly::Transform3 &transform, quader::QVec3 pivot,
     bool texture_lock_enabled, bool texture_lock_scale_enabled) {
@@ -303,6 +339,33 @@ CommandResult EditorSession::update_transform_matrix_preview(
   set_state(preview_transaction_.base_state);
   return update_transform_preview_from_base(transform_selected(
       transform, pivot, texture_lock_enabled, texture_lock_scale_enabled));
+}
+
+CommandResult EditorSession::update_transform_matrix_preview(
+    std::span<const ObjectLocalTransform> transforms,
+    bool texture_lock_enabled, bool texture_lock_scale_enabled) {
+  QDR_PROFILE_SCOPE(
+      "qdr_editor_core.update_transform_matrix_preview_local_transforms");
+  if (!preview_transaction_active(PreviewTransactionKind::Transform)) {
+    return error_result("No transform preview is active.");
+  }
+  set_state(preview_transaction_.base_state);
+  bool has_non_identity_transform = false;
+  for (const ObjectLocalTransform &transform : transforms) {
+    if (!basis_is_identity(transform.transform) ||
+        quader::length(transform.transform.origin) > kTransformPointEpsilon) {
+      has_non_identity_transform = true;
+      break;
+    }
+  }
+  if (!has_non_identity_transform) {
+    const bool base_changed = state_revisions_differ(
+        preview_transaction_.base_state, preview_transaction_.history_state);
+    preview_transaction_.changed = base_changed;
+    return ok_result(base_changed);
+  }
+  return update_transform_preview_from_base(transform_selected(
+      transforms, texture_lock_enabled, texture_lock_scale_enabled));
 }
 
 CommandResult
@@ -323,6 +386,76 @@ EditorSession::update_transform_extrude_preview(quader::QVec3 offset,
       extrude_selected_elements(offset, closed_edge_ledge_size));
 }
 
+CommandResult EditorSession::update_transform_extrude_preview(
+    std::span<const ObjectLocalOffset> offsets, float closed_edge_ledge_size) {
+  QDR_PROFILE_SCOPE(
+      "qdr_editor_core.update_transform_extrude_preview_local_offsets");
+  if (!preview_transaction_active(PreviewTransactionKind::Transform)) {
+    return error_result("No transform preview is active.");
+  }
+  set_state(preview_transaction_.base_state);
+  bool has_non_zero_offset = false;
+  for (const ObjectLocalOffset &offset : offsets) {
+    if (quader::length(offset.offset) > kTransformPointEpsilon) {
+      has_non_zero_offset = true;
+      break;
+    }
+  }
+  if (!has_non_zero_offset) {
+    const bool base_changed = state_revisions_differ(
+        preview_transaction_.base_state, preview_transaction_.history_state);
+    preview_transaction_.changed = base_changed;
+    return ok_result(base_changed);
+  }
+  return update_transform_preview_from_base(
+      extrude_selected_elements(offsets, closed_edge_ledge_size));
+}
+
+CommandResult EditorSession::update_transform_extrude_preview(
+    const quader_poly::Transform3 &transform, quader::QVec3 pivot) {
+  QDR_PROFILE_SCOPE(
+      "qdr_editor_core.update_transform_extrude_preview_transform");
+  if (!preview_transaction_active(PreviewTransactionKind::Transform)) {
+    return error_result("No transform preview is active.");
+  }
+  set_state(preview_transaction_.base_state);
+  if (basis_is_identity(transform) &&
+      quader::length(transform.origin) <= kTransformPointEpsilon) {
+    const bool base_changed = state_revisions_differ(
+        preview_transaction_.base_state, preview_transaction_.history_state);
+    preview_transaction_.changed = base_changed;
+    return ok_result(base_changed);
+  }
+  return update_transform_preview_from_base(
+      transform_extrude_selected_elements(transform, pivot));
+}
+
+CommandResult EditorSession::update_transform_extrude_preview(
+    std::span<const ObjectLocalTransform> transforms) {
+  QDR_PROFILE_SCOPE(
+      "qdr_editor_core.update_transform_extrude_preview_local_transforms");
+  if (!preview_transaction_active(PreviewTransactionKind::Transform)) {
+    return error_result("No transform preview is active.");
+  }
+  set_state(preview_transaction_.base_state);
+  bool has_non_identity_transform = false;
+  for (const ObjectLocalTransform &transform : transforms) {
+    if (!basis_is_identity(transform.transform) ||
+        quader::length(transform.transform.origin) > kTransformPointEpsilon) {
+      has_non_identity_transform = true;
+      break;
+    }
+  }
+  if (!has_non_identity_transform) {
+    const bool base_changed = state_revisions_differ(
+        preview_transaction_.base_state, preview_transaction_.history_state);
+    preview_transaction_.changed = base_changed;
+    return ok_result(base_changed);
+  }
+  return update_transform_preview_from_base(
+      transform_extrude_selected_elements(transforms));
+}
+
 CommandResult EditorSession::update_transform_inset_preview(
     const quader_poly::Transform3 &transform, quader::QVec3 pivot) {
   QDR_PROFILE_SCOPE("qdr_editor_core.update_transform_inset_preview");
@@ -339,6 +472,30 @@ CommandResult EditorSession::update_transform_inset_preview(
   }
   return update_transform_preview_from_base(
       inset_selected_elements(transform, pivot));
+}
+
+CommandResult EditorSession::update_transform_inset_preview(
+    std::span<const ObjectLocalTransform> transforms) {
+  QDR_PROFILE_SCOPE("qdr_editor_core.update_transform_inset_preview_local");
+  if (!preview_transaction_active(PreviewTransactionKind::Transform)) {
+    return error_result("No transform preview is active.");
+  }
+  set_state(preview_transaction_.base_state);
+  bool has_non_identity_transform = false;
+  for (const ObjectLocalTransform &transform : transforms) {
+    if (!basis_is_identity(transform.transform) ||
+        quader::length(transform.transform.origin) > kTransformPointEpsilon) {
+      has_non_identity_transform = true;
+      break;
+    }
+  }
+  if (!has_non_identity_transform) {
+    const bool base_changed = state_revisions_differ(
+        preview_transaction_.base_state, preview_transaction_.history_state);
+    preview_transaction_.changed = base_changed;
+    return ok_result(base_changed);
+  }
+  return update_transform_preview_from_base(inset_selected_elements(transforms));
 }
 
 PreviewTransactionFinishResult EditorSession::commit_preview_transaction(

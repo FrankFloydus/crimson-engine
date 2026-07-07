@@ -40,6 +40,11 @@ public:
     [[nodiscard]] static quader_editor_core::EditorOperationCommandResult execute(
             quader_editor_core::EditorSession& session,
             const OperationCommand& operation);
+    [[nodiscard]] static quader_editor_core::EditorOperationCommandResult
+    execute_with_history_state(
+        quader_editor_core::EditorSession &session,
+        const OperationCommand &operation,
+        quader_editor_core::SessionState history_state);
 };
 
 } // namespace quader

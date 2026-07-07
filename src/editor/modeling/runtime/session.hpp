@@ -198,6 +198,22 @@ struct PolygonObject {
 };
 
 /**
+ * Represents an object-scoped affine transform in polygon-document local space.
+ */
+struct ObjectLocalTransform {
+  int object_id = -1;
+  quader_poly::Transform3 transform;
+};
+
+/**
+ * Represents an object-scoped vector in polygon-document local space.
+ */
+struct ObjectLocalOffset {
+  int object_id = -1;
+  quader::QVec3 offset;
+};
+
+/**
  * Represents a Light Entity value used by the modeling runtime domain.
  */
 struct LightEntity {
@@ -1531,6 +1547,10 @@ CommandResult transform_selected(std::vector<PolygonObject> &objects,
                                  const quader_poly::Transform3 &transform,
                                  quader::QVec3 pivot, bool texture_lock_enabled,
                                  bool texture_lock_scale_enabled);
+CommandResult transform_selected(
+    std::vector<PolygonObject> &objects, SelectionMode mode,
+    std::span<const ObjectLocalTransform> transforms,
+    bool texture_lock_enabled, bool texture_lock_scale_enabled);
 CommandResult
 snap_selected_vertices_to_active(std::vector<PolygonObject> &objects,
                                  SelectionMode mode, int &active_object_id);
@@ -1627,10 +1647,25 @@ CommandResult extrude_selected_elements(std::vector<PolygonObject> &objects,
                                         SelectionMode mode,
                                         quader::QVec3 offset,
                                         float closed_edge_ledge_size = 0.0F);
+CommandResult extrude_selected_elements(
+    std::vector<PolygonObject> &objects, SelectionMode mode,
+    std::span<const ObjectLocalOffset> offsets,
+    float closed_edge_ledge_size = 0.0F);
+CommandResult
+transform_extrude_selected_elements(std::vector<PolygonObject> &objects,
+                                    SelectionMode mode,
+                                    const quader_poly::Transform3 &transform,
+                                    quader::QVec3 pivot);
+CommandResult transform_extrude_selected_elements(
+    std::vector<PolygonObject> &objects, SelectionMode mode,
+    std::span<const ObjectLocalTransform> transforms);
 CommandResult inset_selected_elements(std::vector<PolygonObject> &objects,
                                       SelectionMode mode,
                                       const quader_poly::Transform3 &transform,
                                       quader::QVec3 pivot);
+CommandResult inset_selected_elements(
+    std::vector<PolygonObject> &objects, SelectionMode mode,
+    std::span<const ObjectLocalTransform> transforms);
 CommandResult extrude_selected_faces(std::vector<PolygonObject> &objects,
                                      float distance);
 CommandResult inset_selected_faces(std::vector<PolygonObject> &objects,
@@ -1787,6 +1822,19 @@ public:
     }
     return result;
   }
+  template <typename Command>
+  CommandResult apply_history_command_from(SessionState before,
+                                           Command &&command) {
+    CommandResult result = std::forward<Command>(command)(*this);
+    if (!result.ok) {
+      set_state(std::move(before));
+      return result;
+    }
+    if (result.changed) {
+      record_history(std::move(before));
+    }
+    return result;
+  }
   HistoryRestoreResult undo();
   HistoryRestoreResult redo();
   [[nodiscard]] PreviewTransactionStatus preview_transaction_status() const;
@@ -1803,6 +1851,10 @@ public:
   CommandResult begin_bridge_preview(BridgeOperationSettings settings);
   CommandResult update_bridge_preview(int steps = 1);
   CommandResult update_bridge_preview(BridgeOperationSettings settings);
+  CommandResult begin_bridge_preview_from_working_state(
+      SessionState preview_base, SessionState working_base, int steps = 1);
+  CommandResult update_bridge_preview_from_working_state(
+      SessionState preview_base, SessionState working_base, int steps = 1);
   CommandResult
   begin_edge_bevel_preview(const quader_poly::EdgeBevelSettings &settings = {});
   CommandResult begin_edge_bevel_preview(EdgeBevelOperationSettings settings);
@@ -1827,17 +1879,34 @@ public:
   CommandResult
   update_transform_translate_preview(quader::QVec3 delta,
                                      bool texture_lock_enabled = false);
+  CommandResult update_transform_translate_preview(
+      std::span<const ObjectLocalOffset> offsets,
+      bool texture_lock_enabled = false);
   CommandResult
   update_transform_matrix_preview(const quader_poly::Transform3 &transform,
                                   quader::QVec3 pivot,
                                   bool texture_lock_enabled = false,
                                   bool texture_lock_scale_enabled = false);
+  CommandResult update_transform_matrix_preview(
+      std::span<const ObjectLocalTransform> transforms,
+      bool texture_lock_enabled = false,
+      bool texture_lock_scale_enabled = false);
   CommandResult
   update_transform_extrude_preview(quader::QVec3 offset,
                                    float closed_edge_ledge_size = 0.0F);
+  CommandResult update_transform_extrude_preview(
+      std::span<const ObjectLocalOffset> offsets,
+      float closed_edge_ledge_size = 0.0F);
+  CommandResult
+  update_transform_extrude_preview(const quader_poly::Transform3 &transform,
+                                   quader::QVec3 pivot);
+  CommandResult update_transform_extrude_preview(
+      std::span<const ObjectLocalTransform> transforms);
   CommandResult
   update_transform_inset_preview(const quader_poly::Transform3 &transform,
                                  quader::QVec3 pivot);
+  CommandResult update_transform_inset_preview(
+      std::span<const ObjectLocalTransform> transforms);
   PreviewTransactionFinishResult commit_preview_transaction(
       PreviewTransactionKind expected_kind = PreviewTransactionKind::None);
   PreviewTransactionFinishResult cancel_preview_transaction(
@@ -1903,6 +1972,10 @@ public:
                                    quader::QVec3 pivot,
                                    bool texture_lock_enabled = false,
                                    bool texture_lock_scale_enabled = false);
+  CommandResult transform_selected(
+      std::span<const ObjectLocalTransform> transforms,
+      bool texture_lock_enabled = false,
+      bool texture_lock_scale_enabled = false);
   CommandResult snap_selected_vertices_to_active();
   CommandResult snap_selected_edges_to_active();
   CommandResult merge_selected_vertices_to_active();
@@ -1951,9 +2024,19 @@ public:
   CommandResult radial_align_selected();
   CommandResult extrude_selected_elements(quader::QVec3 offset,
                                           float closed_edge_ledge_size = 0.0F);
+  CommandResult extrude_selected_elements(
+      std::span<const ObjectLocalOffset> offsets,
+      float closed_edge_ledge_size = 0.0F);
+  CommandResult
+  transform_extrude_selected_elements(const quader_poly::Transform3 &transform,
+                                      quader::QVec3 pivot);
+  CommandResult transform_extrude_selected_elements(
+      std::span<const ObjectLocalTransform> transforms);
   CommandResult
   inset_selected_elements(const quader_poly::Transform3 &transform,
                           quader::QVec3 pivot);
+  CommandResult
+  inset_selected_elements(std::span<const ObjectLocalTransform> transforms);
   CommandResult extrude_selected_faces(float distance);
   CommandResult inset_selected_faces(float amount);
   CommandResult insert_edge_loop(float factor);

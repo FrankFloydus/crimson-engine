@@ -280,6 +280,28 @@ quader_poly::SelectionMode component_selection_mode(SelectionMode mode) {
   }
 }
 
+const ObjectLocalOffset *
+find_object_local_offset(std::span<const ObjectLocalOffset> offsets,
+                         int object_id) {
+  for (const ObjectLocalOffset &offset : offsets) {
+    if (offset.object_id == object_id) {
+      return &offset;
+    }
+  }
+  return nullptr;
+}
+
+const ObjectLocalTransform *
+find_object_local_transform(std::span<const ObjectLocalTransform> transforms,
+                            int object_id) {
+  for (const ObjectLocalTransform &transform : transforms) {
+    if (transform.object_id == object_id) {
+      return &transform;
+    }
+  }
+  return nullptr;
+}
+
 bool component_selection_has_mode_components(
     const quader_poly::Selection &selection, SelectionMode mode) {
   switch (mode) {
@@ -2800,6 +2822,122 @@ CommandResult extrude_selected_elements(std::vector<PolygonObject> &objects,
   return ok_result(true);
 }
 
+CommandResult extrude_selected_elements(
+    std::vector<PolygonObject> &objects, SelectionMode mode,
+    std::span<const ObjectLocalOffset> offsets, float closed_edge_ledge_size) {
+  if (mode != SelectionMode::Face && mode != SelectionMode::Edge) {
+    return error_result("Extrude needs face or edge selection mode.");
+  }
+
+  bool changed = false;
+  std::string last_message = mode == SelectionMode::Face
+                                 ? "Select a polygon face first."
+                                 : "Select a polygon edge first.";
+  for (PolygonObject &object : objects) {
+    if (!object.selected) {
+      continue;
+    }
+
+    const ObjectLocalOffset *offset = find_object_local_offset(offsets,
+                                                               object.id);
+    if (offset == nullptr) {
+      continue;
+    }
+    object.selection.mode = component_selection_mode(mode);
+    const quader_poly::OperationResult result =
+        quader_poly::extrude_selected_elements(
+            object.document, object.selection, offset->offset,
+            closed_edge_ledge_size);
+    if (result.changed) {
+      quader_poly::clear_face_uvs(object.document);
+      object.selected = !object.selection.empty();
+      changed = true;
+    } else if (!result.message.empty()) {
+      last_message = result.message;
+    }
+  }
+
+  if (!changed) {
+    return error_result(last_message);
+  }
+  return ok_result(true);
+}
+
+CommandResult transform_extrude_selected_elements(
+    std::vector<PolygonObject> &objects, SelectionMode mode,
+    const quader_poly::Transform3 &transform, quader::QVec3 pivot) {
+  if (mode != SelectionMode::Face && mode != SelectionMode::Edge) {
+    return error_result("Extrude needs face or edge selection mode.");
+  }
+
+  bool changed = false;
+  std::string last_message = mode == SelectionMode::Face
+                                 ? "Select a polygon face first."
+                                 : "Select a polygon edge first.";
+  for (PolygonObject &object : objects) {
+    if (!object.selected) {
+      continue;
+    }
+
+    object.selection.mode = component_selection_mode(mode);
+    const quader_poly::OperationResult result =
+        quader_poly::transform_extrude_selected_elements(
+            object.document, object.selection, transform, pivot);
+    if (result.changed) {
+      quader_poly::clear_face_uvs(object.document);
+      object.selected = !object.selection.empty();
+      changed = true;
+    } else if (!result.message.empty()) {
+      last_message = result.message;
+    }
+  }
+
+  if (!changed) {
+    return error_result(last_message);
+  }
+  return ok_result(true);
+}
+
+CommandResult transform_extrude_selected_elements(
+    std::vector<PolygonObject> &objects, SelectionMode mode,
+    std::span<const ObjectLocalTransform> transforms) {
+  if (mode != SelectionMode::Face && mode != SelectionMode::Edge) {
+    return error_result("Extrude needs face or edge selection mode.");
+  }
+
+  bool changed = false;
+  std::string last_message = mode == SelectionMode::Face
+                                 ? "Select a polygon face first."
+                                 : "Select a polygon edge first.";
+  for (PolygonObject &object : objects) {
+    if (!object.selected) {
+      continue;
+    }
+
+    const ObjectLocalTransform *transform =
+        find_object_local_transform(transforms, object.id);
+    if (transform == nullptr) {
+      continue;
+    }
+    object.selection.mode = component_selection_mode(mode);
+    const quader_poly::OperationResult result =
+        quader_poly::transform_extrude_selected_elements(
+            object.document, object.selection, transform->transform, {});
+    if (result.changed) {
+      quader_poly::clear_face_uvs(object.document);
+      object.selected = !object.selection.empty();
+      changed = true;
+    } else if (!result.message.empty()) {
+      last_message = result.message;
+    }
+  }
+
+  if (!changed) {
+    return error_result(last_message);
+  }
+  return ok_result(true);
+}
+
 CommandResult inset_selected_elements(std::vector<PolygonObject> &objects,
                                       SelectionMode mode,
                                       const quader_poly::Transform3 &transform,
@@ -2821,6 +2959,46 @@ CommandResult inset_selected_elements(std::vector<PolygonObject> &objects,
     const quader_poly::OperationResult result =
         quader_poly::inset_selected_elements(object.document, object.selection,
                                              transform, pivot);
+    if (result.changed) {
+      quader_poly::clear_face_uvs(object.document);
+      object.selected = !object.selection.empty();
+      changed = true;
+    } else if (!result.message.empty()) {
+      last_message = result.message;
+    }
+  }
+
+  if (!changed) {
+    return error_result(last_message);
+  }
+  return ok_result(true);
+}
+
+CommandResult inset_selected_elements(
+    std::vector<PolygonObject> &objects, SelectionMode mode,
+    std::span<const ObjectLocalTransform> transforms) {
+  if (mode != SelectionMode::Face && mode != SelectionMode::Edge) {
+    return error_result("Inset needs face or edge selection mode.");
+  }
+
+  bool changed = false;
+  std::string last_message = mode == SelectionMode::Face
+                                 ? "Select a polygon face first."
+                                 : "Select a polygon edge first.";
+  for (PolygonObject &object : objects) {
+    if (!object.selected) {
+      continue;
+    }
+
+    const ObjectLocalTransform *transform =
+        find_object_local_transform(transforms, object.id);
+    if (transform == nullptr) {
+      continue;
+    }
+    object.selection.mode = component_selection_mode(mode);
+    const quader_poly::OperationResult result =
+        quader_poly::inset_selected_elements(
+            object.document, object.selection, transform->transform, {});
     if (result.changed) {
       quader_poly::clear_face_uvs(object.document);
       object.selected = !object.selection.empty();

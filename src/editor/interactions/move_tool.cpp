@@ -457,7 +457,8 @@ public:
             return TransformDragOperation::Transform;
           }
           if (operation == TransformDragOperation::Extrude &&
-              tool == ViewportInteractionTool::Move) {
+              (tool == ViewportInteractionTool::Move ||
+               tool == ViewportInteractionTool::Rotate)) {
             return TransformDragOperation::Extrude;
           }
           if (operation == TransformDragOperation::Inset &&
@@ -561,6 +562,10 @@ public:
                   if (std::abs(preview.preview_angle_degrees) <= epsilon) {
                     return session.update_transform_matrix_preview(
                         {}, state.pivot, false, false);
+                  }
+                  if (state.operation == TransformDragOperation::Extrude) {
+                    return session.update_transform_extrude_preview(
+                        preview.transform, state.pivot);
                   }
                   return session.update_transform_matrix_preview(
                       preview.transform, state.pivot, false, false);

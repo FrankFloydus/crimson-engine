@@ -26,6 +26,7 @@
 #include "scene/scene_entity_naming.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <iterator>
 #include <memory>
@@ -40,6 +41,7 @@
 #include <editor/interactions/box_tool.hpp>
 #include <editor/interactions/cut_tool.hpp>
 #include <editor/interactions/mirror_tool.hpp>
+#include <editor/interactions/tool_transform_math.hpp>
 #include <editor/interactions/selection_box.hpp>
 #include <editor/interactions/selection_edit.hpp>
 #include <editor/interactions/viewport_projection.hpp>
@@ -1061,7 +1063,7 @@ public:
   ModelingCommandResult repeat_last_action() {
     const std::uint64_t content_before = session_.state().content_revision;
     const quader_editor_core::CommandResult result =
-        history_bridge_.execute_repeat_last_action(session_);
+        execute_repeat_last_action_scene_aware();
     if (session_.state().content_revision != content_before) {
       sync_scene_objects_from_modeling();
     }
@@ -1247,6 +1249,7 @@ public:
   void clear_inactive_operation_preview_metadata() {
     if (!session_.preview_transaction_status().active) {
       tool_settings_service_.clear_preview_metadata();
+      scene_workspace_preview_.reset();
     }
   }
 
@@ -1264,8 +1267,40 @@ public:
     const quader_editor_core::PreviewTransactionStatus preview_before =
         session_.preview_transaction_status();
     const std::uint64_t content_before = session_.state().content_revision;
-    const quader_editor_core::EditorOperationCommandResult result =
-        runtime_operation_executor_.execute(session_, operation_command);
+    if (phase == quader_editor_core::EditorOperationCommandPhase::BeginPreview) {
+      scene_workspace_preview_.reset();
+    }
+    std::optional<SceneWorkspaceOperationState> scene_workspace =
+        scene_workspace_operation_state(runtime_operation, phase);
+    std::optional<SceneWorkspacePreviewState> pending_scene_workspace_preview;
+    if (scene_workspace.has_value() &&
+        phase == quader_editor_core::EditorOperationCommandPhase::BeginPreview) {
+      pending_scene_workspace_preview =
+          preview_state_from_scene_workspace(runtime_operation,
+                                             *scene_workspace);
+    }
+    quader_editor_core::EditorOperationCommandResult result =
+        scene_workspace.has_value()
+            ? execute_scene_workspace_operation_command(operation_command,
+                                                        *scene_workspace)
+            : runtime_operation_executor_.execute(session_, operation_command);
+    if (scene_workspace.has_value() &&
+        (!result.command.ok || !result.command.changed) &&
+        phase == quader_editor_core::EditorOperationCommandPhase::Execute) {
+      session_.set_state(std::move(scene_workspace->source_state));
+    }
+    if (phase == quader_editor_core::EditorOperationCommandPhase::BeginPreview &&
+        result.command.ok && pending_scene_workspace_preview.has_value()) {
+      scene_workspace_preview_ = std::move(pending_scene_workspace_preview);
+    }
+    if (phase ==
+            quader_editor_core::EditorOperationCommandPhase::CommitPreview ||
+        phase ==
+            quader_editor_core::EditorOperationCommandPhase::CancelPreview ||
+        (phase == quader_editor_core::EditorOperationCommandPhase::BeginPreview &&
+         !result.command.ok)) {
+      scene_workspace_preview_.reset();
+    }
 
     history_bridge_.record_operation(command, result.command);
 
@@ -1289,6 +1324,488 @@ public:
     }
     clear_inactive_operation_preview_metadata();
     return command_executor_.from_runtime(result.command);
+  }
+
+  quader_poly::Transform3 runtime_transform_from_matrix(
+      const QMat4 &matrix) const {
+    const glm::mat4 value = to_glm(matrix);
+    return {
+        .x_axis = from_glm(glm::vec3{value[0]}),
+        .y_axis = from_glm(glm::vec3{value[1]}),
+        .z_axis = from_glm(glm::vec3{value[2]}),
+        .origin = from_glm(glm::vec3{value[3]}),
+    };
+  }
+
+  QMat4 world_affine_from_transform(
+      const quader_poly::Transform3 &transform, QVec3 pivot) const {
+    const quader_poly::Transform3 pivoted =
+        quader_editor_core::pivoted_transform(transform, to_runtime(pivot));
+    glm::mat4 matrix{1.0f};
+    matrix[0] = glm::vec4{to_glm(pivoted.x_axis), 0.0f};
+    matrix[1] = glm::vec4{to_glm(pivoted.y_axis), 0.0f};
+    matrix[2] = glm::vec4{to_glm(pivoted.z_axis), 0.0f};
+    matrix[3] = glm::vec4{to_glm(pivoted.origin), 1.0f};
+    return from_glm(matrix);
+  }
+
+  QMat4 world_translation_affine(QVec3 delta) const {
+    return from_glm(glm::translate(glm::mat4{1.0f}, to_glm(delta)));
+  }
+
+  std::vector<quader_editor_core::ObjectLocalTransform>
+  local_transforms_for_selected_objects(const QMat4 &world_affine,
+                                        std::string &message) const {
+    std::vector<quader_editor_core::ObjectLocalTransform> transforms;
+    const glm::mat4 world_delta = to_glm(world_affine);
+    for (const quader_editor_core::PolygonObject &object :
+         session_.objects()) {
+      if (!object.selected) {
+        continue;
+      }
+      const std::optional<QMat4> world_from_object =
+          modeling_object_world_transform(object.id);
+      if (!world_from_object.has_value()) {
+        message = "Could not resolve selected object scene transform.";
+        return {};
+      }
+      const glm::mat4 object_world = to_glm(*world_from_object);
+      const glm::mat4 local_delta =
+          glm::inverse(object_world) * world_delta * object_world;
+      transforms.push_back({
+          .object_id = object.id,
+          .transform = runtime_transform_from_matrix(from_glm(local_delta)),
+      });
+    }
+    if (transforms.empty()) {
+      message = "Select something before repeating the last transform.";
+    }
+    return transforms;
+  }
+
+  std::vector<quader_editor_core::ObjectLocalOffset>
+  local_offsets_for_selected_objects(QVec3 world_delta,
+                                     std::string &message) const {
+    const std::vector<quader_editor_core::ObjectLocalTransform> transforms =
+        local_transforms_for_selected_objects(
+            world_translation_affine(world_delta), message);
+    std::vector<quader_editor_core::ObjectLocalOffset> offsets;
+    offsets.reserve(transforms.size());
+    for (const quader_editor_core::ObjectLocalTransform &transform :
+         transforms) {
+      offsets.push_back({
+          .object_id = transform.object_id,
+          .offset = transform.transform.origin,
+      });
+    }
+    return offsets;
+  }
+
+  quader_editor_core::CommandResult commit_repeat_transform_preview_result(
+      const quader_editor_core::CommandResult &update_result) {
+    if (!update_result.ok) {
+      (void)session_.cancel_preview_transaction(
+          quader_editor_core::PreviewTransactionKind::Transform);
+      return update_result;
+    }
+    const quader_editor_core::PreviewTransactionStatus status =
+        session_.preview_transaction_status();
+    const bool changed =
+        status.active &&
+        status.kind == quader_editor_core::PreviewTransactionKind::Transform &&
+        status.changed;
+    (void)session_.commit_preview_transaction(
+        quader_editor_core::PreviewTransactionKind::Transform);
+    return {true, changed, {}};
+  }
+
+  quader_editor_core::CommandResult execute_repeat_transform_scene_aware(
+      const quader_editor_core::RepeatTransformAction &action) {
+    if (!session_.has_selection()) {
+      return {false, false,
+              "Select something before repeating the last transform."};
+    }
+    if (session_.selection_mode() ==
+        quader_editor_core::SelectionMode::Object) {
+      return quader_editor_core::execute_repeatable_transform(session_, action);
+    }
+
+    quader_editor_core::CommandResult begin_result =
+        session_.begin_transform_preview(action.duplicate_selected);
+    if (!begin_result.ok) {
+      return begin_result;
+    }
+
+    std::string message;
+    quader_editor_core::CommandResult update_result;
+    if (action.tool == quader_editor_core::ViewportInteractionTool::Move) {
+      const std::vector<quader_editor_core::ObjectLocalOffset> offsets =
+          local_offsets_for_selected_objects(action.move_delta, message);
+      if (offsets.empty()) {
+        (void)session_.cancel_preview_transaction(
+            quader_editor_core::PreviewTransactionKind::Transform);
+        return {false, false, message};
+      }
+      if (action.operation ==
+          quader_editor_core::TransformDragOperation::Extrude) {
+        update_result = session_.update_transform_extrude_preview(offsets);
+      } else {
+        update_result = session_.update_transform_translate_preview(offsets,
+                                                                    false);
+      }
+      return commit_repeat_transform_preview_result(update_result);
+    }
+
+    const QVec3 pivot = selection_center().value_or(QVec3{});
+    if (action.tool == quader_editor_core::ViewportInteractionTool::Rotate) {
+      const quader_poly::Transform3 world_transform =
+          quader_editor_core::rotation_transform(
+              action.axis,
+              action.rotate_angle_degrees * std::acos(-1.0) / 180.0);
+      const std::vector<quader_editor_core::ObjectLocalTransform> transforms =
+          local_transforms_for_selected_objects(
+              world_affine_from_transform(world_transform, pivot), message);
+      if (transforms.empty()) {
+        (void)session_.cancel_preview_transaction(
+            quader_editor_core::PreviewTransactionKind::Transform);
+        return {false, false, message};
+      }
+      if (action.operation ==
+          quader_editor_core::TransformDragOperation::Extrude) {
+        update_result = session_.update_transform_extrude_preview(transforms);
+      } else {
+        update_result = session_.update_transform_matrix_preview(transforms,
+                                                                 false, false);
+      }
+      return commit_repeat_transform_preview_result(update_result);
+    }
+
+    if (action.tool == quader_editor_core::ViewportInteractionTool::Scale) {
+      const quader_poly::Transform3 world_transform =
+          quader_editor_core::scale_transform(action.scale);
+      const std::vector<quader_editor_core::ObjectLocalTransform> transforms =
+          local_transforms_for_selected_objects(
+              world_affine_from_transform(world_transform, pivot), message);
+      if (transforms.empty()) {
+        (void)session_.cancel_preview_transaction(
+            quader_editor_core::PreviewTransactionKind::Transform);
+        return {false, false, message};
+      }
+      if (action.operation ==
+          quader_editor_core::TransformDragOperation::Inset) {
+        update_result = session_.update_transform_inset_preview(transforms);
+      } else {
+        update_result = session_.update_transform_matrix_preview(transforms,
+                                                                 false, false);
+      }
+      return commit_repeat_transform_preview_result(update_result);
+    }
+
+    (void)session_.cancel_preview_transaction(
+        quader_editor_core::PreviewTransactionKind::Transform);
+    return {false, false, "Unsupported repeat transform tool."};
+  }
+
+  quader_editor_core::CommandResult execute_repeat_last_action_scene_aware() {
+    quader_editor_core::RepeatLastActionState &repeat =
+        history_bridge_.repeat_last_action();
+    if (repeat.last_action_kind ==
+        quader_editor_core::RepeatableActionKind::Transform) {
+      if (!repeat.last_transform.has_value()) {
+        return {false, false, "No repeatable transform is available."};
+      }
+      return execute_repeat_transform_scene_aware(*repeat.last_transform);
+    }
+    if (repeat.last_action_kind ==
+            quader_editor_core::RepeatableActionKind::Operation &&
+        repeat.last_operation.has_value()) {
+      quader_editor_core::EditorOperationCommand command =
+          *repeat.last_operation;
+      command.phase = quader_editor_core::EditorOperationCommandPhase::Execute;
+      const ModelingCommandResult result = execute_runtime_operation_command(
+          command.operation_id, command.phase, command.settings);
+      return {
+          .ok = result.ok,
+          .changed = result.changed,
+          .message = result.message,
+      };
+    }
+    return {false, false, "No repeatable action is available."};
+  }
+
+  struct SceneWorkspaceOperationState {
+    quader_editor_core::SessionState source_state;
+    quader_editor_core::SessionState working_state;
+    int survivor_id = -1;
+    std::unordered_map<int, QMat4> world_from_object_by_id;
+  };
+
+  struct SceneWorkspacePreviewState {
+    quader_editor_core::EditorOperationId operation =
+        quader_editor_core::EditorOperationId::Bridge;
+    int survivor_id = -1;
+    std::unordered_map<int, QMat4> world_from_object_by_id;
+  };
+
+  std::optional<quader_editor_core::BridgeOperationSettings>
+  bridge_operation_settings_from(
+      const quader_editor_core::EditorOperationSettings &settings) const {
+    const auto *bridge =
+        std::get_if<quader_editor_core::BridgeOperationSettings>(&settings);
+    if (bridge == nullptr) {
+      return std::nullopt;
+    }
+    return quader_editor_core::normalize_bridge_operation_settings(*bridge);
+  }
+
+  std::vector<int> selected_object_indices(
+      const quader_editor_core::SessionState &state) const {
+    std::vector<int> indices;
+    for (int index = 0; index < static_cast<int>(state.objects.size());
+         ++index) {
+      if (state.objects[index].selected) {
+        indices.push_back(index);
+      }
+    }
+    return indices;
+  }
+
+  [[nodiscard]] bool transform_flips_handedness(const QMat4 &transform) const {
+    return glm::determinant(glm::mat3{to_glm(transform)}) < 0.0f;
+  }
+
+  void reverse_document_winding(quader_poly::Document &document) const {
+    for (quader_poly::Face &face : document.faces) {
+      std::ranges::reverse(face.vertices);
+      if (face.uvs.size() == face.vertices.size()) {
+        std::ranges::reverse(face.uvs);
+      } else {
+        face.uvs.clear();
+      }
+    }
+  }
+
+  std::vector<int> scene_workspace_participant_indices(
+      quader_editor_core::EditorOperationId runtime_operation,
+      const quader_editor_core::SessionState &state) const {
+    if (runtime_operation ==
+        quader_editor_core::EditorOperationId::CombineMeshes) {
+      return state.selection_mode == quader_editor_core::SelectionMode::Object
+                 ? selected_object_indices(state)
+                 : std::vector<int>{};
+    }
+
+    if (runtime_operation != quader_editor_core::EditorOperationId::Bridge) {
+      return {};
+    }
+    if (state.selection_mode != quader_editor_core::SelectionMode::Edge &&
+        state.selection_mode != quader_editor_core::SelectionMode::Face) {
+      return {};
+    }
+
+    std::vector<int> indices;
+    for (int index = 0; index < static_cast<int>(state.objects.size());
+         ++index) {
+      const quader_editor_core::PolygonObject &object = state.objects[index];
+      const bool has_bridge_selection =
+          state.selection_mode == quader_editor_core::SelectionMode::Face
+              ? !object.selection.faces.empty()
+              : !object.selection.edges.empty();
+      if (object.selected && has_bridge_selection) {
+        indices.push_back(index);
+      }
+    }
+    return indices.size() == 2U ? indices : std::vector<int>{};
+  }
+
+  int scene_workspace_survivor_index(
+      const quader_editor_core::SessionState &state,
+      const std::vector<int> &participant_indices) const {
+    int survivor_index = participant_indices.empty()
+                             ? -1
+                             : participant_indices.front();
+    for (const int index : participant_indices) {
+      if (index >= 0 && index < static_cast<int>(state.objects.size()) &&
+          state.objects[index].id == state.active_object_id) {
+        survivor_index = index;
+        break;
+      }
+    }
+    return survivor_index;
+  }
+
+  [[nodiscard]] const std::unordered_map<int, QMat4> *
+  captured_scene_workspace_transforms(
+      quader_editor_core::EditorOperationId runtime_operation) const {
+    if (!scene_workspace_preview_.has_value() ||
+        scene_workspace_preview_->operation != runtime_operation) {
+      return nullptr;
+    }
+    return &scene_workspace_preview_->world_from_object_by_id;
+  }
+
+  [[nodiscard]] std::optional<QMat4> scene_workspace_object_world_transform(
+      int modeling_object_id,
+      const std::unordered_map<int, QMat4> *captured_transforms) const {
+    if (captured_transforms != nullptr) {
+      const auto found = captured_transforms->find(modeling_object_id);
+      if (found != captured_transforms->end()) {
+        return found->second;
+      }
+    }
+    return modeling_object_world_transform(modeling_object_id);
+  }
+
+  [[nodiscard]] std::optional<SceneWorkspacePreviewState>
+  preview_state_from_scene_workspace(
+      quader_editor_core::EditorOperationId runtime_operation,
+      const SceneWorkspaceOperationState &scene_workspace) const {
+    if (scene_workspace.world_from_object_by_id.empty()) {
+      return std::nullopt;
+    }
+    return SceneWorkspacePreviewState{
+        .operation = runtime_operation,
+        .survivor_id = scene_workspace.survivor_id,
+        .world_from_object_by_id = scene_workspace.world_from_object_by_id,
+    };
+  }
+
+  std::optional<SceneWorkspaceOperationState>
+  scene_workspace_operation_state(
+      quader_editor_core::EditorOperationId runtime_operation,
+      quader_editor_core::EditorOperationCommandPhase phase) {
+    quader_editor_core::SessionState source_state;
+    const std::unordered_map<int, QMat4> *captured_transforms = nullptr;
+    switch (phase) {
+    case quader_editor_core::EditorOperationCommandPhase::Execute:
+    case quader_editor_core::EditorOperationCommandPhase::BeginPreview:
+      source_state = session_.state();
+      break;
+    case quader_editor_core::EditorOperationCommandPhase::UpdatePreview: {
+      if (runtime_operation != quader_editor_core::EditorOperationId::Bridge) {
+        return std::nullopt;
+      }
+      const std::optional<quader_editor_core::SessionState> preview_base =
+          session_.preview_transaction_history_state(
+              quader_editor_core::PreviewTransactionKind::Bridge);
+      if (!preview_base.has_value()) {
+        return std::nullopt;
+      }
+      source_state = *preview_base;
+      captured_transforms =
+          captured_scene_workspace_transforms(runtime_operation);
+      break;
+    }
+    case quader_editor_core::EditorOperationCommandPhase::CommitPreview:
+    case quader_editor_core::EditorOperationCommandPhase::CancelPreview:
+      return std::nullopt;
+    }
+
+    const std::vector<int> participant_indices =
+        scene_workspace_participant_indices(runtime_operation, source_state);
+    if (participant_indices.size() < 2U) {
+      return std::nullopt;
+    }
+    const int survivor_index =
+        scene_workspace_survivor_index(source_state, participant_indices);
+    if (survivor_index < 0 ||
+        survivor_index >= static_cast<int>(source_state.objects.size())) {
+      return std::nullopt;
+    }
+    const int survivor_id = source_state.objects[survivor_index].id;
+    const std::optional<QMat4> survivor_world =
+        scene_workspace_object_world_transform(survivor_id,
+                                               captured_transforms);
+    if (!survivor_world.has_value()) {
+      return std::nullopt;
+    }
+
+    quader_editor_core::SessionState working_state = source_state;
+    std::unordered_map<int, QMat4> world_from_object_by_id;
+    const glm::mat4 survivor_from_world = glm::inverse(to_glm(*survivor_world));
+    bool changed = false;
+    for (const int index : participant_indices) {
+      if (index < 0 || index >= static_cast<int>(working_state.objects.size())) {
+        continue;
+      }
+      quader_editor_core::PolygonObject &object =
+          working_state.objects[index];
+      const std::optional<QMat4> object_world =
+          scene_workspace_object_world_transform(object.id,
+                                                 captured_transforms);
+      if (!object_world.has_value()) {
+        return std::nullopt;
+      }
+      world_from_object_by_id.insert_or_assign(object.id, *object_world);
+      if (object.id == survivor_id) {
+        continue;
+      }
+      const QMat4 survivor_from_object =
+          from_glm(survivor_from_world * to_glm(*object_world));
+      for (quader_poly::Vertex &vertex : object.document.vertices) {
+        vertex.position =
+            transform_point(survivor_from_object, vertex.position);
+      }
+      if (transform_flips_handedness(survivor_from_object)) {
+        reverse_document_winding(object.document);
+      }
+      changed = true;
+    }
+
+    return changed ? std::optional<SceneWorkspaceOperationState>{
+                          SceneWorkspaceOperationState{
+                              .source_state = std::move(source_state),
+                              .working_state = std::move(working_state),
+                              .survivor_id = survivor_id,
+                              .world_from_object_by_id =
+                                  std::move(world_from_object_by_id),
+                          }}
+                   : std::nullopt;
+  }
+
+  quader_editor_core::EditorOperationCommandResult
+  execute_scene_workspace_operation_command(
+      const RuntimeOperationExecutor::OperationCommand &operation_command,
+      const SceneWorkspaceOperationState &scene_workspace) {
+    if (operation_command.operation ==
+            quader_editor_core::EditorOperationId::Bridge &&
+        operation_command.phase ==
+            quader_editor_core::EditorOperationCommandPhase::BeginPreview) {
+      const std::optional<quader_editor_core::BridgeOperationSettings>
+          bridge_settings =
+              bridge_operation_settings_from(operation_command.settings);
+      if (!bridge_settings.has_value()) {
+        return runtime_operation_executor_.execute(session_, operation_command);
+      }
+      return {
+          session_.begin_bridge_preview_from_working_state(
+              scene_workspace.source_state, scene_workspace.working_state,
+              bridge_settings->steps),
+          std::nullopt,
+      };
+    }
+
+    if (operation_command.operation ==
+            quader_editor_core::EditorOperationId::Bridge &&
+        operation_command.phase ==
+            quader_editor_core::EditorOperationCommandPhase::UpdatePreview) {
+      const std::optional<quader_editor_core::BridgeOperationSettings>
+          bridge_settings =
+              bridge_operation_settings_from(operation_command.settings);
+      if (!bridge_settings.has_value()) {
+        return runtime_operation_executor_.execute(session_, operation_command);
+      }
+      return {
+          session_.update_bridge_preview_from_working_state(
+              scene_workspace.source_state, scene_workspace.working_state,
+              bridge_settings->steps),
+          std::nullopt,
+      };
+    }
+
+    session_.set_state(scene_workspace.working_state);
+    return RuntimeOperationExecutor::execute_with_history_state(
+        session_, operation_command, scene_workspace.source_state);
   }
 
   ModelingCommandResult begin_operation_preview(
@@ -2408,6 +2925,16 @@ private:
     return false;
   }
 
+  [[nodiscard]] std::optional<QMat4>
+  modeling_object_world_transform(int modeling_object_id) const override {
+    const std::optional<EntityId> entity =
+        object_registry_.entity_for_modeling_object(modeling_object_id);
+    if (!entity.has_value() || !scene_.exists(*entity)) {
+      return std::nullopt;
+    }
+    return scene_.world_transform_matrix(*entity);
+  }
+
   [[nodiscard]] quader_editor_core::Bounds3
   transform_drag_bounds() const override {
     const auto to_runtime_bounds =
@@ -2546,6 +3073,7 @@ private:
   ModalToolRuntime modal_tool_runtime_;
   ModelingClipboardService clipboard_service_;
   ModelingHistoryBridge history_bridge_;
+  std::optional<SceneWorkspacePreviewState> scene_workspace_preview_;
   ModelingSelectionMode app_selection_mode_ = ModelingSelectionMode::Object;
 
   quader_editor_core::EditorSession session_;

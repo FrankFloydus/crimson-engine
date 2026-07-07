@@ -229,6 +229,30 @@ execute_command(EditorSession &session, const EditorOperationCommand &command) {
   return command_result({false, false, "Unknown operation command phase."});
 }
 
+EditorOperationCommandResult execute_command_with_history_state(
+    EditorSession &session, const EditorOperationCommand &command,
+    SessionState history_state) {
+  if (command.phase != EditorOperationCommandPhase::Execute) {
+    return execute_command(session, command);
+  }
+
+  const EditorOperation *operation =
+      editor_operation_for_id(command.operation_id);
+  if (operation == nullptr) {
+    return command_result({false, false, "Unknown operation."});
+  }
+  if (!command_settings_match_operation(command.operation_id,
+                                        command.settings)) {
+    return command_result(settings_mismatch_result());
+  }
+
+  return command_result(session.apply_history_command_from(
+      std::move(history_state),
+      [operation, &command](EditorSession &editor_session) {
+        return operation->execute(editor_session, command.settings);
+      }));
+}
+
 EditorOperationCommandResult
 dispatch_editor_operation_command(EditorSession &session,
                                   const EditorOperationCommand &command) {

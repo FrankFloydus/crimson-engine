@@ -383,6 +383,16 @@ CommandResult EditorSession::transform_selected(
   return result;
 }
 
+CommandResult EditorSession::transform_selected(
+    std::span<const ObjectLocalTransform> transforms,
+    bool texture_lock_enabled, bool texture_lock_scale_enabled) {
+  const CommandResult result = quader_editor_core::transform_selected(
+      state_.objects, state_.selection_mode, transforms, texture_lock_enabled,
+      texture_lock_scale_enabled);
+  note_content_result(result);
+  return result;
+}
+
 CommandResult EditorSession::snap_selected_vertices_to_active() {
   const CommandResult result =
       quader_editor_core::snap_selected_vertices_to_active(
@@ -838,11 +848,58 @@ EditorSession::extrude_selected_elements(quader::QVec3 offset,
   return result;
 }
 
+CommandResult EditorSession::extrude_selected_elements(
+    std::span<const ObjectLocalOffset> offsets,
+    float closed_edge_ledge_size) {
+  const CommandResult result = quader_editor_core::extrude_selected_elements(
+      state_.objects, state_.selection_mode, offsets, closed_edge_ledge_size);
+  note_content_result(result);
+  if (result.changed) {
+    note_selection_changed();
+  }
+  return result;
+}
+
+CommandResult EditorSession::transform_extrude_selected_elements(
+    const quader_poly::Transform3 &transform, quader::QVec3 pivot) {
+  const CommandResult result =
+      quader_editor_core::transform_extrude_selected_elements(
+          state_.objects, state_.selection_mode, transform, pivot);
+  note_content_result(result);
+  if (result.changed) {
+    note_selection_changed();
+  }
+  return result;
+}
+
+CommandResult EditorSession::transform_extrude_selected_elements(
+    std::span<const ObjectLocalTransform> transforms) {
+  const CommandResult result =
+      quader_editor_core::transform_extrude_selected_elements(
+          state_.objects, state_.selection_mode, transforms);
+  note_content_result(result);
+  if (result.changed) {
+    note_selection_changed();
+  }
+  return result;
+}
+
 CommandResult
 EditorSession::inset_selected_elements(const quader_poly::Transform3 &transform,
                                        quader::QVec3 pivot) {
   const CommandResult result = quader_editor_core::inset_selected_elements(
       state_.objects, state_.selection_mode, transform, pivot);
+  note_content_result(result);
+  if (result.changed) {
+    note_selection_changed();
+  }
+  return result;
+}
+
+CommandResult EditorSession::inset_selected_elements(
+    std::span<const ObjectLocalTransform> transforms) {
+  const CommandResult result = quader_editor_core::inset_selected_elements(
+      state_.objects, state_.selection_mode, transforms);
   note_content_result(result);
   if (result.changed) {
     note_selection_changed();

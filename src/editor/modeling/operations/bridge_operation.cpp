@@ -8,6 +8,8 @@
 
 #include <editor/modeling/operations/operation_registry.hpp>
 
+#include <utility>
+
 namespace quader_editor_core {
 
 namespace {
@@ -138,6 +140,28 @@ CommandResult EditorSession::update_bridge_preview(int steps)
 CommandResult EditorSession::update_bridge_preview(BridgeOperationSettings settings)
 {
 	return concrete_bridge_operation().update_preview(*this, settings);
+}
+
+CommandResult EditorSession::begin_bridge_preview_from_working_state(
+    SessionState preview_base, SessionState working_base, int steps) {
+  begin_preview_transaction(PreviewTransactionKind::Bridge);
+  preview_transaction_.base_state = preview_base;
+  preview_transaction_.history_state = preview_base;
+  return finish_preview_begin(update_bridge_preview_from_working_state(
+      std::move(preview_base), std::move(working_base), steps));
+}
+
+CommandResult EditorSession::update_bridge_preview_from_working_state(
+    SessionState preview_base, SessionState working_base, int steps) {
+  if (!preview_transaction_active(PreviewTransactionKind::Bridge)) {
+    return error_result("No bridge preview is active.");
+  }
+  set_state(std::move(working_base));
+  const CommandResult result = selection_mode() == SelectionMode::Face
+                                   ? bridge_selected_faces(steps)
+                                   : bridge_selected_edges(steps);
+  return finish_preview_update_from_base(
+      preview_base, result, CommandResult{false, false, result.message});
 }
 
 CommandResult EditorSession::bridge_selected_edges(int steps)

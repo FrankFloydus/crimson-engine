@@ -73,6 +73,9 @@ struct EditorOperationCommandResult {
 [[nodiscard]] EditorOperationCommandResult execute_command(
 		EditorSession& session,
 		const EditorOperationCommand& command);
+[[nodiscard]] EditorOperationCommandResult execute_command_with_history_state(
+    EditorSession &session, const EditorOperationCommand &command,
+    SessionState history_state);
 [[nodiscard]] EditorOperationCommandResult dispatch_editor_operation_command(
 		EditorSession& session,
 		const EditorOperationCommand& command);

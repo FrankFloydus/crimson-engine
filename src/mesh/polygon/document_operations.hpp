@@ -252,6 +252,10 @@ extrude_selected_elements(Document &document, Selection &selection,
                           quader::QVec3 offset,
                           float closed_edge_ledge_size = 0.0F);
 [[nodiscard]] OperationResult
+transform_extrude_selected_elements(Document &document, Selection &selection,
+                                    const Transform3 &transform,
+                                    quader::QVec3 pivot);
+[[nodiscard]] OperationResult
 inset_selected_elements(Document &document, Selection &selection,
                         const Transform3 &transform, quader::QVec3 pivot);
 [[nodiscard]] OperationResult inset_selected_faces(Document &document,

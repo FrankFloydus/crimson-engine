@@ -530,6 +530,39 @@ OperationResult extrude_selected_elements_impl(Document& document, Selection& se
     return { false, "Extrude needs a face or edge selection." };
 }
 
+OperationResult transform_extrude_selected_elements_impl(Document& document, Selection& selection, const Transform3& transform, quader::QVec3 pivot)
+{
+    QDR_PROFILE_SCOPE("qdr_document.transform_extrude_selected_elements_impl");
+    if (selection.mode == SelectionMode::Face) {
+      return extrude_selected_faces_with_copied_vertices(
+          document, selection,
+          [&document, &transform,
+           pivot](std::map<ElementId, ElementId> &copied_vertices,
+                  ElementId source_id) {
+            return copied_vertex_with_transform(document, copied_vertices,
+                                                source_id, transform, pivot);
+          },
+          "Select one or more faces to extrude.",
+          "No selected faces were found.", "No selected faces were extruded.");
+    }
+
+    if (selection.mode == SelectionMode::Edge) {
+      return extrude_selected_edges_with_copied_vertices(
+          document, selection,
+          [&document, &transform,
+           pivot](std::map<ElementId, ElementId> &copied_vertices,
+                  ElementId source_id) {
+            return copied_vertex_with_transform(document, copied_vertices,
+                                                source_id, transform, pivot);
+          },
+          0.0F, "Select one or more edges to extrude.",
+          "Select one or more valid edges to extrude.",
+          "No selected edges were extruded.");
+    }
+
+    return { false, "Extrude needs a face or edge selection." };
+}
+
 OperationResult inset_selected_elements_impl(Document& document, Selection& selection, const Transform3& transform, quader::QVec3 pivot)
 {
     QDR_PROFILE_SCOPE("qdr_document.inset_selected_elements_impl");

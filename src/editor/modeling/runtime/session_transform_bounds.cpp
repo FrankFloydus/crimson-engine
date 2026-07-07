@@ -85,6 +85,75 @@ quader_poly::Selection all_vertex_selection(const quader_poly::Document& documen
 	return selection;
 }
 
+const ObjectLocalTransform*
+find_object_local_transform(std::span<const ObjectLocalTransform> transforms,
+                            int object_id) {
+  for (const ObjectLocalTransform &transform : transforms) {
+    if (transform.object_id == object_id) {
+      return &transform;
+    }
+  }
+  return nullptr;
+}
+
+bool preserve_object_uvs_for_transform(
+    SelectionMode mode, const quader_poly::Transform3 &transform,
+    bool texture_lock_enabled, bool texture_lock_scale_enabled) {
+  if (mode != SelectionMode::Object) {
+    return false;
+  }
+  const bool identity_basis = basis_is_identity(transform);
+  const bool scale_or_shear_basis = basis_has_scale_or_shear(transform);
+  const bool pure_rotation_basis = !identity_basis && !scale_or_shear_basis;
+  return pure_rotation_basis || (identity_basis && texture_lock_enabled) ||
+         (scale_or_shear_basis && texture_lock_scale_enabled);
+}
+
+std::unordered_set<quader_poly::ElementId>
+transform_vertex_ids_for_object(const PolygonObject &object,
+                                SelectionMode mode) {
+  std::unordered_set<quader_poly::ElementId> vertex_ids;
+  if (mode == SelectionMode::Object) {
+    for (const quader_poly::Vertex &vertex : object.document.vertices) {
+      vertex_ids.insert(vertex.id);
+    }
+    return vertex_ids;
+  }
+  const std::vector<quader_poly::ElementId> selected_ids =
+      quader_poly::selected_vertex_ids(object.document, object.selection);
+  vertex_ids.insert(selected_ids.begin(), selected_ids.end());
+  return vertex_ids;
+}
+
+bool transform_object_vertices(PolygonObject &object, SelectionMode mode,
+                               const quader_poly::Transform3 &transform,
+                               quader::QVec3 pivot,
+                               bool preserve_object_uvs) {
+  if (preserve_object_uvs) {
+    quader_poly::ensure_face_uvs(object.document);
+  }
+  const std::unordered_set<quader_poly::ElementId> vertex_ids =
+      transform_vertex_ids_for_object(object, mode);
+  bool object_changed = false;
+  for (quader_poly::Vertex &vertex : object.document.vertices) {
+    if (!vertex_ids.contains(vertex.id)) {
+      continue;
+    }
+    const quader::QVec3 after =
+        transformed_point(transform, pivot, vertex.position);
+    if (quader_geometry::length_squared(to_geometry_vec3(after - vertex.position)) <=
+        kTransformPointEpsilon) {
+      continue;
+    }
+    vertex.position = after;
+    object_changed = true;
+  }
+  if (object_changed && !preserve_object_uvs) {
+    quader_poly::clear_face_uvs(object.document);
+  }
+  return object_changed;
+}
+
 } // namespace
 
 Bounds3 document_bounds(const std::vector<PolygonObject>& objects)
@@ -164,53 +233,44 @@ CommandResult translate_selected(std::vector<PolygonObject>& objects, SelectionM
 CommandResult transform_selected(std::vector<PolygonObject>& objects, SelectionMode mode, const quader_poly::Transform3& transform, quader::QVec3 pivot, bool texture_lock_enabled, bool texture_lock_scale_enabled)
 {
 	bool changed = false;
-	const bool identity_basis = basis_is_identity(transform);
-	const bool scale_or_shear_basis = basis_has_scale_or_shear(transform);
-	const bool pure_rotation_basis = !identity_basis && !scale_or_shear_basis;
 	for (PolygonObject& object : objects) {
 		if (!object.selected) {
 			continue;
 		}
                 const bool preserve_object_uvs =
-                    mode == SelectionMode::Object &&
-                    (pure_rotation_basis ||
-                     (identity_basis && texture_lock_enabled) ||
-                     (scale_or_shear_basis && texture_lock_scale_enabled));
-                if (preserve_object_uvs) {
-			quader_poly::ensure_face_uvs(object.document);
-		}
-		std::unordered_set<quader_poly::ElementId> vertex_ids;
-                if (mode == SelectionMode::Object) {
-                  for (const quader_poly::Vertex &vertex :
-                       object.document.vertices) {
-                    vertex_ids.insert(vertex.id);
-                  }
-                } else {
-                  const std::vector<quader_poly::ElementId> selected_ids =
-                      quader_poly::selected_vertex_ids(object.document,
-                                                       object.selection);
-                  vertex_ids.insert(selected_ids.begin(), selected_ids.end());
-                }
-                bool object_changed = false;
-		for (quader_poly::Vertex& vertex : object.document.vertices) {
-			if (!vertex_ids.contains(vertex.id)) {
-				continue;
-			}
-			const quader::QVec3 after = transformed_point(transform, pivot, vertex.position);
-                        if (quader_geometry::length_squared(
-                                to_geometry_vec3(after - vertex.position)) <=
-                            kTransformPointEpsilon) {
-                          continue;
-                        }
-                        vertex.position = after;
-			object_changed = true;
-			changed = true;
-		}
-		if (object_changed && !preserve_object_uvs) {
-			quader_poly::clear_face_uvs(object.document);
-		}
+                    preserve_object_uvs_for_transform(
+                        mode, transform, texture_lock_enabled,
+                        texture_lock_scale_enabled);
+                changed = transform_object_vertices(object, mode, transform,
+                                                    pivot,
+                                                    preserve_object_uvs) ||
+                          changed;
 	}
 	return ok_result(changed);
+}
+
+CommandResult transform_selected(
+    std::vector<PolygonObject> &objects, SelectionMode mode,
+    std::span<const ObjectLocalTransform> transforms,
+    bool texture_lock_enabled, bool texture_lock_scale_enabled) {
+  bool changed = false;
+  for (PolygonObject &object : objects) {
+    if (!object.selected) {
+      continue;
+    }
+    const ObjectLocalTransform *transform =
+        find_object_local_transform(transforms, object.id);
+    if (transform == nullptr) {
+      continue;
+    }
+    const bool preserve_object_uvs = preserve_object_uvs_for_transform(
+        mode, transform->transform, texture_lock_enabled,
+        texture_lock_scale_enabled);
+    changed = transform_object_vertices(object, mode, transform->transform, {},
+                                        preserve_object_uvs) ||
+              changed;
+  }
+  return ok_result(changed);
 }
 
 } // namespace quader_editor_core

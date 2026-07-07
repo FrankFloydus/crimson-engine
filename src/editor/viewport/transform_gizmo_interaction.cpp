@@ -90,7 +90,7 @@ QuaderTransformOperation transform_operation_for(ViewportToolId tool,
       !is_component_selection_mode(to_modeling_selection_mode(mode))) {
     return QuaderTransformOperation::Transform;
   }
-  if (tool == ViewportToolId::Move) {
+  if (tool == ViewportToolId::Move || tool == ViewportToolId::Rotate) {
     return QuaderTransformOperation::Extrude;
   }
   if (tool == ViewportToolId::Scale) {

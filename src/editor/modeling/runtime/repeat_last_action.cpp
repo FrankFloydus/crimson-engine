@@ -295,8 +295,13 @@ CommandResult execute_repeatable_transform(
                     preview.message.empty() ? "Rotate repeat failed."
                                             : preview.message};
           }
-          update_result = session.update_transform_matrix_preview(
-              preview.transform, pivot, false, false);
+          if (action.operation == TransformDragOperation::Extrude) {
+            update_result = session.update_transform_extrude_preview(
+                preview.transform, pivot);
+          } else {
+            update_result = session.update_transform_matrix_preview(
+                preview.transform, pivot, false, false);
+          }
           return commit_repeat_transform_preview(session, update_result);
         }
 

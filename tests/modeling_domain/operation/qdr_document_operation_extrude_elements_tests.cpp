@@ -100,6 +100,35 @@ TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedEdgeElementsCreate
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
 
+TEST(QdrDocumentOperationExtrudeElementsTests, TransformExtrudeSelectedFaceCopiesCapThroughSuppliedTransform) {
+	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	Selection selection = qdr_test::face_selection({ fixture.face }, fixture.face);
+	Transform3 transform;
+	transform.x_axis = { 0.0F, 1.0F, 0.0F };
+	transform.y_axis = { -1.0F, 0.0F, 0.0F };
+	transform.origin = { 0.0F, 0.0F, 1.0F };
+
+	const OperationResult result =
+		transform_extrude_selected_elements(fixture.document, selection, transform, {});
+
+	EXPECT_TRUE(result.changed);
+
+	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
+	EXPECT_TRUE(selection.mode == SelectionMode::Face);
+	EXPECT_TRUE(selection.faces.size() == 1U);
+	EXPECT_TRUE(selection.faces.front() == fixture.face);
+	EXPECT_TRUE(fixture.document.vertices.size() == 8U);
+	EXPECT_TRUE(fixture.document.faces.size() == 5U);
+	const Face* cap = find_face(fixture.document, fixture.face);
+	ASSERT_NE(cap, nullptr);
+	ASSERT_EQ(cap->vertices.size(), 4U);
+	EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, cap->vertices[0])->position, { 1.0F, -1.0F, 1.0F }));
+	EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, cap->vertices[1])->position, { 1.0F, 1.0F, 1.0F }));
+	EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, cap->vertices[2])->position, { -1.0F, 1.0F, 1.0F }));
+	EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, cap->vertices[3])->position, { -1.0F, -1.0F, 1.0F }));
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
+}
+
 TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedCircularBoundaryEdgesKeepsWallNormalsAndWindingCoherent) {
 	for (const quader::QVec3 offset : { quader::QVec3 { 0.0F, 0.5F, 0.0F }, quader::QVec3 { 0.0F, -0.5F, 0.0F } }) {
 		CircularBoundaryFixture fixture = make_circular_boundary_fixture();

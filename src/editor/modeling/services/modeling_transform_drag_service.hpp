@@ -11,7 +11,9 @@
 #include "editor/modeling/runtime_state/transform_drag_controller.hpp"
 #include "editor/modeling/services/modeling_history_bridge.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
+#include "math/types.hpp"
 
+#include <optional>
 #include <vector>
 
 #include <editor/modeling/runtime/session.hpp>
@@ -48,6 +50,8 @@ public:
   capture_history_memento() const = 0;
   virtual ModelingCommandResult
   restore_history_memento(const ModelingSessionMemento &memento) = 0;
+  [[nodiscard]] virtual std::optional<QMat4>
+  modeling_object_world_transform(int modeling_object_id) const = 0;
   [[nodiscard]] virtual const std::vector<quader_editor_core::PickObjectBounds>
       &cached_pick_object_bounds() const = 0;
   [[nodiscard]] virtual const std::vector<

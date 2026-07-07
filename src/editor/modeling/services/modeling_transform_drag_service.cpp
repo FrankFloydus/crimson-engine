@@ -22,6 +22,7 @@
 #include <editor/interactions/move_tool.hpp>
 #include <editor/interactions/rotate_tool.hpp>
 #include <editor/interactions/scale_tool.hpp>
+#include <editor/interactions/tool_transform_math.hpp>
 #include <editor/interactions/transform_drag.hpp>
 
 namespace quader {
@@ -66,6 +67,129 @@ QMat4 matrix_from_runtime_transform(const quader_poly::Transform3 &transform) {
   matrix[2] = glm::vec4{to_glm(transform.z_axis), 0.0f};
   matrix[3] = glm::vec4{to_glm(transform.origin), 1.0f};
   return from_glm(matrix);
+}
+
+quader_poly::Transform3 runtime_transform_from_matrix(const QMat4 &matrix) {
+  const glm::mat4 value = to_glm(matrix);
+  return {
+      .x_axis = from_glm(glm::vec3{value[0]}),
+      .y_axis = from_glm(glm::vec3{value[1]}),
+      .z_axis = from_glm(glm::vec3{value[2]}),
+      .origin = from_glm(glm::vec3{value[3]}),
+  };
+}
+
+QMat4 world_affine_from_transform(const quader_poly::Transform3 &transform,
+                                  QVec3 pivot) {
+  return matrix_from_runtime_transform(
+      quader_editor_core::pivoted_transform(transform, to_runtime(pivot)));
+}
+
+QMat4 world_translation_affine(QVec3 delta) {
+  return from_glm(glm::translate(glm::mat4{1.0f}, to_glm(delta)));
+}
+
+std::vector<quader_editor_core::ObjectLocalTransform>
+local_transforms_for_selected_objects(
+    const ModelingTransformDragServiceContext &context,
+    const QMat4 &world_affine) {
+  std::vector<quader_editor_core::ObjectLocalTransform> transforms;
+  const glm::mat4 world_delta = to_glm(world_affine);
+  for (const quader_editor_core::PolygonObject &object :
+       context.session.objects()) {
+    if (!object.selected) {
+      continue;
+    }
+    const QMat4 world_from_object =
+        context.port.modeling_object_world_transform(object.id)
+            .value_or(QMat4{});
+    const glm::mat4 object_world = to_glm(world_from_object);
+    const glm::mat4 local_delta =
+        glm::inverse(object_world) * world_delta * object_world;
+    transforms.push_back({
+        .object_id = object.id,
+        .transform = runtime_transform_from_matrix(from_glm(local_delta)),
+    });
+  }
+  return transforms;
+}
+
+std::vector<quader_editor_core::ObjectLocalOffset>
+local_offsets_for_selected_objects(
+    const ModelingTransformDragServiceContext &context, QVec3 world_delta) {
+  std::vector<quader_editor_core::ObjectLocalOffset> offsets;
+  const std::vector<quader_editor_core::ObjectLocalTransform> transforms =
+      local_transforms_for_selected_objects(context,
+                                            world_translation_affine(world_delta));
+  offsets.reserve(transforms.size());
+  for (const quader_editor_core::ObjectLocalTransform &transform :
+       transforms) {
+    offsets.push_back({
+        .object_id = transform.object_id,
+        .offset = transform.transform.origin,
+    });
+  }
+  return offsets;
+}
+
+bool transform_drag_uses_component_modeling_preview(
+    const ModelingTransformDragServiceContext &context,
+    const TransformDragController &controller) {
+  return controller.preview_driven() &&
+         context.session.selection_mode() !=
+             quader_editor_core::SelectionMode::Object;
+}
+
+quader_editor_core::CommandResult apply_component_modeling_preview_in_local_space(
+    ModelingTransformDragServiceContext context,
+    const quader_editor_core::TransformDragState &drag,
+    const quader_editor_core::TransformDragPreviewInput &input) {
+  if (drag.tool == quader_editor_core::ViewportInteractionTool::Move) {
+    const std::vector<quader_editor_core::ObjectLocalOffset> offsets =
+        local_offsets_for_selected_objects(context, drag.move.preview_delta);
+    if (drag.operation ==
+        quader_editor_core::TransformDragOperation::Extrude) {
+      return context.session.update_transform_extrude_preview(
+          offsets, static_cast<float>(std::max(input.grid_size, 0.0001)));
+    }
+    return context.session.update_transform_translate_preview(offsets, false);
+  }
+
+  if (drag.tool == quader_editor_core::ViewportInteractionTool::Rotate) {
+    const quader_poly::Transform3 world_transform =
+        quader_editor_core::rotation_transform(
+            drag.axis,
+            drag.rotate.preview_angle_degrees * std::acos(-1.0) / 180.0);
+    const std::vector<quader_editor_core::ObjectLocalTransform> transforms =
+        local_transforms_for_selected_objects(
+            context, world_affine_from_transform(world_transform,
+                                                 drag.pivot));
+    if (drag.operation ==
+        quader_editor_core::TransformDragOperation::Extrude) {
+      return context.session.update_transform_extrude_preview(transforms);
+    }
+    return context.session.update_transform_matrix_preview(transforms, false,
+                                                           false);
+  }
+
+  if (drag.tool == quader_editor_core::ViewportInteractionTool::Scale) {
+    const quader_poly::Transform3 world_transform =
+        quader_editor_core::scale_transform(drag.scale.preview_scale);
+    const std::vector<quader_editor_core::ObjectLocalTransform> transforms =
+        local_transforms_for_selected_objects(
+            context, world_affine_from_transform(world_transform,
+                                                 drag.pivot));
+    if (drag.operation == quader_editor_core::TransformDragOperation::Inset) {
+      return context.session.update_transform_inset_preview(transforms);
+    }
+    return context.session.update_transform_matrix_preview(transforms, false,
+                                                           false);
+  }
+
+  return {
+      .ok = true,
+      .changed = false,
+  };
 }
 
 CommandResult
@@ -760,6 +884,28 @@ ModelingTransformDragService::apply_transform_drag_preview(
   }
 
   bool changed = result.changed;
+  if (transform_drag_uses_component_modeling_preview(context, controller_)) {
+    const quader_editor_core::CommandResult local_result = [&]() {
+      QDR_PROFILE_SCOPE(
+          "Modeling transform drag apply local-space component preview");
+      return apply_component_modeling_preview_in_local_space(
+          context, context.runtime.transform_drag_state(), input);
+    }();
+    if (!local_result.ok) {
+      const bool was_preview_driven = controller_.preview_driven();
+      (void)cancel_transform_drag(context);
+      return {
+          .ok = false,
+          .preview_driven = was_preview_driven,
+          .message =
+              local_result.message.empty()
+                  ? "Could not update local-space transform drag preview."
+                  : local_result.message,
+      };
+    }
+    changed = changed || local_result.changed;
+  }
+
   if (scene_transform_drag_service_.preview_active()) {
     QDR_PROFILE_SCOPE("Modeling transform drag apply scene preview");
     quader_poly::Transform3 scene_transform;
