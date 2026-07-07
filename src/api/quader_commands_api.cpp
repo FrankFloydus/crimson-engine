@@ -685,8 +685,8 @@ void QuaderCommandsApi::Impl::register_commands() {
       [this] { return viewports_.spawn_window(); }, {},
       [this] { return viewports_.can_spawn_window(); });
   register_viewport_view_command(quader_command::kViewportViewPerspective,
-                                 "Perspective View", ViewportView::Perspective,
-                                 "P");
+                                 "Perspective View",
+                                 ViewportView::Perspective);
   register_viewport_view_command(quader_command::kViewportViewTop, "Top View",
                                  ViewportView::Top);
   register_viewport_view_command(quader_command::kViewportViewBottom,

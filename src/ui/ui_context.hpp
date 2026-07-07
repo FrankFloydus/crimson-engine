@@ -23,6 +23,7 @@ class AssetRegistry;
 class EditorSelectionService;
 class LocalizationService;
 class ModelingSessionService;
+class PivotToolService;
 class QuaderEditorApi;
 class SceneDocument;
 class SceneRenderBridge;
@@ -73,6 +74,7 @@ struct UIViewportSurfaceContext {
     AssetRegistry& assets;
     ModelingSessionService& modeling;
     EditorSelectionService& selection;
+    PivotToolService *pivot = nullptr;
     AssetId default_material = kInvalidAssetId;
     FrameTiming frame_timing = {};
     RenderFramePerformanceStats render_performance = {};

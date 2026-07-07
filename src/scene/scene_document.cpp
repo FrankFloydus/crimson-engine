@@ -66,7 +66,8 @@ bool same_transform(const TransformComponent &left,
          left.rotation_euler.y == right.rotation_euler.y &&
          left.rotation_euler.z == right.rotation_euler.z &&
          left.scale.x == right.scale.x && left.scale.y == right.scale.y &&
-         left.scale.z == right.scale.z;
+         left.scale.z == right.scale.z &&
+         left.custom_pivot == right.custom_pivot;
 }
 
 } // namespace
@@ -490,9 +491,12 @@ bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
                                    ? scene_transform_identity_matrix()
                                    : world_transform_matrix(new_parent);
     if (TransformComponent *local_transform = mutable_transform(child)) {
-      *local_transform = transform_component_from_matrix(
+      const bool custom_pivot = local_transform->custom_pivot;
+      TransformComponent next_transform = transform_component_from_matrix(
           scene_local_matrix_from_world_matrix(parent_world, child_world),
           local_transform->rotation_euler);
+      next_transform.custom_pivot = custom_pivot;
+      *local_transform = next_transform;
     }
   }
 

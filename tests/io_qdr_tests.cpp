@@ -270,7 +270,8 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
         document.scene().editor_object_id(group);
     document.scene().set_parent(wall, group, false);
     document.scene().set_transform(
-        wall, TransformComponent{.position = {2.0f, 3.0f, 4.0f}});
+        wall, TransformComponent{.position = {2.0f, 3.0f, 4.0f},
+                                 .custom_pivot = true});
     document.scene().set_modeling_object(
         wall, ModelingObjectComponent{.object_id = 42, .material_slot = 2u});
     document.scene().set_mesh(wall, MeshComponent{.mesh = mesh_id});
@@ -319,6 +320,7 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
     EXPECT_NE(text.find("\"type\": \"point\""), std::string::npos);
     EXPECT_NE(text.find("\"range\": 14"), std::string::npos);
     EXPECT_NE(text.find("\"castsShadows\": true"), std::string::npos);
+    EXPECT_NE(text.find("\"customPivot\": true"), std::string::npos);
     EXPECT_NE(text.find("\"textures\": ["), std::string::npos);
     EXPECT_NE(text.find("\"baseColorTexture\": 31"), std::string::npos);
     EXPECT_NE(text.find("\"roughnessTexture\": 32"), std::string::npos);
@@ -380,8 +382,10 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
     EXPECT_EQ(loaded.scene().parent(wall), group);
     ASSERT_NE(loaded.scene().transform(wall), nullptr);
     EXPECT_FLOAT_EQ(loaded.scene().transform(wall)->position.x, 2.0f);
+    EXPECT_TRUE(loaded.scene().transform(wall)->custom_pivot);
     ASSERT_NE(loaded.scene().transform(light), nullptr);
     EXPECT_FLOAT_EQ(loaded.scene().transform(light)->position.y, 5.0f);
+    EXPECT_FALSE(loaded.scene().transform(light)->custom_pivot);
     ASSERT_NE(loaded.scene().light(light), nullptr);
     EXPECT_EQ(loaded.scene().light(light)->type, LightType::Point);
     EXPECT_FLOAT_EQ(loaded.scene().light(light)->color.y, 0.75f);

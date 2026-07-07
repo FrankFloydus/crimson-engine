@@ -89,6 +89,7 @@ inline constexpr std::uint32_t kOverlayVertexOutlineColor = 0xe6000000U;
 inline constexpr std::uint32_t kOverlayToolPlaneColor = rgba8(209, 219, 224, 46);
 inline constexpr std::uint32_t kOverlayToolPlaneLineColor = rgba8(235, 245, 255, 148);
 inline constexpr std::uint32_t kOverlayToolHandleColor = rgba8(0, 245, 255, 255);
+inline constexpr std::uint32_t kOverlayPivotHandleColor = rgba8(255, 214, 0, 255);
 inline constexpr std::uint32_t kOverlayToolAxisXColor = rgba8(245, 51, 82, 230);
 inline constexpr std::uint32_t kOverlayToolAxisYColor = rgba8(135, 214, 3, 230);
 inline constexpr std::uint32_t kOverlayToolAxisZColor = rgba8(41, 140, 245, 230);

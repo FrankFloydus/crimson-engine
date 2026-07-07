@@ -19,6 +19,7 @@ namespace quader {
 class AssetCommandService;
 class EditorSelectionService;
 class ModelingSessionService;
+class PivotToolService;
 
 /**
  * Stores the persisted-content revision stamp used by the project session dirty-state boundary.
@@ -85,6 +86,8 @@ public:
   const ModelingSessionService &modeling() const { return *modeling_; }
   EditorSelectionService &selection() { return *selection_; }
   const EditorSelectionService &selection() const { return *selection_; }
+  PivotToolService &pivot() { return *pivot_; }
+  const PivotToolService &pivot() const { return *pivot_; }
 
   [[nodiscard]] ProjectSessionReadView read_view() const;
   [[nodiscard]] ProjectContentRevisionStamp content_revision_stamp() const;
@@ -104,6 +107,7 @@ private:
   std::unique_ptr<AssetCommandService> asset_commands_;
   std::unique_ptr<ModelingSessionService> modeling_;
   std::unique_ptr<EditorSelectionService> selection_;
+  std::unique_ptr<PivotToolService> pivot_;
 };
 
 /**

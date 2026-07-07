@@ -398,11 +398,12 @@ DocumentCommandResult SceneTransformDragService::preview_world_transform_delta(
     const QMat4 parent_world_transform =
         parent == kInvalidEntityId ? scene_transform_identity_matrix()
                                    : document.world_transform_matrix(parent);
-    const TransformComponent preview_transform =
+    TransformComponent preview_transform =
         transform_component_from_matrix(
             scene_local_matrix_from_world_matrix(parent_world_transform,
                                                  preview_world_transform),
             target.transform.rotation_euler);
+    preview_transform.custom_pivot = target.transform.custom_pivot;
     preview_edits.push_back(DocumentTransformEdit{
         .entity = target.entity,
         .before = target.transform,
@@ -636,10 +637,12 @@ SceneTransformDragService::transform_selected_by_world_delta(
             parent == kInvalidEntityId
                 ? scene_transform_identity_matrix()
                 : document.world_transform_matrix(parent);
-        return transform_component_from_matrix(
+        TransformComponent next_transform = transform_component_from_matrix(
             scene_local_matrix_from_world_matrix(parent_world_transform,
                                                  next_world_transform),
             target.transform.rotation_euler);
+        next_transform.custom_pivot = target.transform.custom_pivot;
+        return next_transform;
       });
   DocumentCommandResult result =
       document_commands.set_transforms(std::move(edits), label_);

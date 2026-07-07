@@ -15,6 +15,8 @@
 #include "editor/session/project_session.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/pivot/pivot_tool_service.hpp"
+#include "math/glm_bridge.hpp"
 #include "scene/scene_bounds.hpp"
 
 #include <optional>
@@ -118,6 +120,29 @@ QuaderMeshSnapshot mesh_snapshot_for(AssetId id, const MeshAsset &mesh) {
     snapshot.bounds = api_bounds(*bounds);
   }
   return snapshot;
+}
+
+std::optional<QVec3>
+single_object_selection_custom_pivot(const ProjectSession &session) {
+  const EditorSelectionState state = session.selection().state();
+  if (state.mode != ModelingSelectionMode::Object &&
+      state.mode != ModelingSelectionMode::Group) {
+    return std::nullopt;
+  }
+
+  const SceneDocument &scene = session.scene();
+  const std::vector<EntityId> selected = scene.selected_entities();
+  if (selected.size() != 1u) {
+    return std::nullopt;
+  }
+
+  const EntityId entity = selected.front();
+  const TransformComponent *transform = scene.transform(entity);
+  if (!scene.exists(entity) || transform == nullptr ||
+      !transform->custom_pivot) {
+    return std::nullopt;
+  }
+  return transform_point(scene.world_transform_matrix(entity), {});
 }
 
 } // namespace
@@ -241,6 +266,20 @@ std::optional<QVec3> QuaderQueryApi::selection_center() const {
     }
   }
   return session.modeling().selection_center();
+}
+
+std::optional<QVec3> QuaderQueryApi::selection_transform_pivot() const {
+  const ProjectSession &session = read_project_session(session_);
+  const SelectionPivotOverride pivot =
+      session.pivot().selection_pivot_override();
+  if (pivot.valid) {
+    return pivot.world_position;
+  }
+  if (const std::optional<QVec3> origin =
+          single_object_selection_custom_pivot(session)) {
+    return origin;
+  }
+  return selection_center();
 }
 
 QuaderSelectionSummary QuaderQueryApi::selection() const {

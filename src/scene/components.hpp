@@ -58,6 +58,7 @@ struct TransformComponent {
     QVec3 position = {};
     QVec3 rotation_euler = {};
     QVec3 scale = {1.0f, 1.0f, 1.0f};
+    bool custom_pivot = false;
 
     QTransform spatial_transform() const {
       return QTransform{

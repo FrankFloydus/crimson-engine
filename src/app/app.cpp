@@ -372,7 +372,8 @@ bool App::render_frame(const FrameTiming &frame_timing) {
     QDR_PROFILE_SCOPE("UI draw");
     ui_.draw(*editor_, render_bridge_, project_session_.scene(),
              project_session_.assets(), project_session_.modeling(),
-             project_session_.selection(), default_material_, quit_requested);
+             project_session_.selection(), project_session_.pivot(),
+             default_material_, quit_requested);
   }
   if (const std::optional<WindowChromeAction> chrome_action =
           ui_.take_window_chrome_action()) {
@@ -413,7 +414,7 @@ bool App::render_frame(const FrameTiming &frame_timing) {
   {
     QDR_PROFILE_SCOPE("UI prepare viewports");
     ui_.prepare_viewports(*editor_, render_bridge_, session_view.scene,
-                          session_view.assets);
+                          session_view.assets, project_session_.pivot());
   }
   {
     QDR_PROFILE_SCOPE("UI prepare render data");

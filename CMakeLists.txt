@@ -240,6 +240,7 @@ add_library(quader_editor_services STATIC
     src/editor/commands/document_command_service.cpp
     src/editor/commands/modeling_command_execution_service.cpp
     src/editor/history/editor_history_service.cpp
+    src/editor/pivot/pivot_tool_service.cpp
     src/editor/selection/editor_selection_service.cpp
     src/editor/session/project_asset_bootstrap_service.cpp
     src/editor/session/project_session.cpp

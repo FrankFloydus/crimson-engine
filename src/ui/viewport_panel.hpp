@@ -43,6 +43,7 @@ class LocalizationService;
 class QuaderEditorApi;
 class EditorSelectionService;
 class ModelingSessionService;
+class PivotToolService;
 
 /**
  * Owns Viewport Panel behavior within the ImGui editor presentation layer.
@@ -65,7 +66,8 @@ public:
                            QuaderEditorApi &editor,
                            SceneRenderBridge &render_bridge,
                            const SceneDocument &document,
-                           const AssetRegistry &assets);
+                           const AssetRegistry &assets,
+                           const PivotToolService *pivot);
     void render_viewports(RenderSystem &render_system);
     QuaderApiVoidResult frame_all(ViewportWorkspaceService &workspace,
                                   const SceneDocument &document,
@@ -169,6 +171,7 @@ private:
     bool delete_objects_popup_open_ = false;
     bool delete_objects_popup_position_pending_ = false;
     ImVec2 delete_objects_popup_position_ = {};
+    bool pivot_handle_dragging_ = false;
     bool last_fly_navigation_active_ = false;
     const SceneDocument *viewport_info_cached_document_ = nullptr;
     const AssetRegistry *viewport_info_cached_assets_ = nullptr;

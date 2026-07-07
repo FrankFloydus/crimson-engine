@@ -634,8 +634,8 @@ void UISystem::install_runtime_hooks(QuaderEditorApi &editor,
 void UISystem::draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
                     SceneDocument &document, AssetRegistry &assets,
                     ModelingSessionService &modeling,
-                    EditorSelectionService &selection, AssetId default_material,
-                    bool &quit_requested) {
+                    EditorSelectionService &selection, PivotToolService &pivot,
+                    AssetId default_material, bool &quit_requested) {
   QDR_PROFILE_FUNCTION();
   {
     QDR_PROFILE_SCOPE("UI menus and chrome");
@@ -684,6 +684,7 @@ void UISystem::draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
       .assets = assets,
       .modeling = modeling,
       .selection = selection,
+      .pivot = &pivot,
       .default_material = default_material,
       .frame_timing = current_frame_timing_,
       .render_performance = render_performance_stats_,
@@ -779,12 +780,13 @@ void UISystem::prepare_render_data(std::uint32_t framebuffer_width,
 void UISystem::prepare_viewports(QuaderEditorApi &editor,
                                  SceneRenderBridge &render_bridge,
                                  const SceneDocument &document,
-                                 const AssetRegistry &assets) {
+                                 const AssetRegistry &assets,
+                                 const PivotToolService &pivot) {
   QDR_PROFILE_FUNCTION();
   if (viewport_panel_ != nullptr) {
     viewport_panel_->prepare_viewports(
         QuaderViewportApiRuntimeAccess::workspace(editor.viewports()), editor,
-        render_bridge, document, assets);
+        render_bridge, document, assets, &pivot);
   }
 }
 

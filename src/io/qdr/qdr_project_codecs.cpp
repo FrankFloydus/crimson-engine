@@ -384,11 +384,15 @@ QVec3 qdr_vec3_from_json(const nlohmann::ordered_json &value, QVec3 fallback) {
 
 nlohmann::ordered_json
 qdr_transform_component_to_json(const TransformComponent &transform) {
-  return Json{
+  Json value = Json{
       {"position", qdr_vec3_to_json(transform.position)},
       {"rotationEuler", qdr_vec3_to_json(transform.rotation_euler)},
       {"scale", qdr_vec3_to_json(transform.scale)},
   };
+  if (transform.custom_pivot) {
+    value["customPivot"] = true;
+  }
+  return value;
 }
 
 TransformComponent
@@ -403,6 +407,7 @@ qdr_transform_component_from_json(const nlohmann::ordered_json &value) {
       qdr_vec3_from_json(value.value("rotationEuler", Json::object()));
   transform.scale = qdr_vec3_from_json(value.value("scale", Json::object()),
                                        {1.0f, 1.0f, 1.0f});
+  transform.custom_pivot = value.value("customPivot", false);
   return transform;
 }
 

@@ -26,6 +26,7 @@ enum class ViewportToolId {
     Cut,
     Poly,
     Mirror,
+    Pivot,
 };
 
 /**
@@ -175,6 +176,7 @@ enum class ViewportInputActionKind {
     FlyLeft,
     ModalToolFinalize,
     ModalToolModeCycle,
+    QuickPivot,
 };
 
 /**

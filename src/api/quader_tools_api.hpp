@@ -23,8 +23,18 @@ public:
 
     QuaderApiVoidResult activate(std::string_view tool_id);
     QuaderApiVoidResult activate(ViewportToolId tool);
+    [[nodiscard]] QuaderToolSettingsTarget active_settings() const;
     QuaderApiVoidResult set_setting(std::string_view tool_id,
                                     std::string_view name, double value);
+    QuaderApiVoidResult set_setting(std::string_view tool_id,
+                                    std::string_view name, bool value);
+    QuaderApiVoidResult set_setting(std::string_view tool_id,
+                                    std::string_view name,
+                                    std::string_view value);
+    QuaderApiVoidResult execute_action(std::string_view tool_id,
+                                       std::string_view action_id);
+    QuaderApiVoidResult commit_active_tool_preview();
+    QuaderApiVoidResult cancel_active_tool_preview();
     QuaderApiVoidResult cancel_modal_tool();
 
     [[nodiscard]] std::string active_tool() const;

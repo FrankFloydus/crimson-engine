@@ -36,6 +36,7 @@
 #include "editor/metadata/host_contract.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/projection/selection_overlay_projection.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
@@ -7798,6 +7799,56 @@ TEST(ProjectSessionTests, PublicHistoryIgnoresUntrackedModelingSessionHistory) {
             editor.revisions().scene_revision);
   EXPECT_EQ(unknown_tool.revisions.modeling_content_revision,
             editor.revisions().modeling_content_revision);
+}
+
+TEST(ProjectSessionTests,
+     QuickPivotOverrideFeedsTransformPivotAndClearsOnSelectionChange) {
+  ProjectSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_project_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> first =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Quick Pivot A");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  const QuaderApiResult<QuaderModelingObjectRef> second =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Quick Pivot B");
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({first.value().entity, second.value().entity},
+                                  second.value().entity)
+                  .ok());
+
+  session.pivot().begin_quick({4.0f, 5.0f, 6.0f});
+  EXPECT_TRUE(session.pivot().quick_edit_active());
+  std::optional<QVec3> pivot = editor.query().selection_transform_pivot();
+  ASSERT_TRUE(pivot.has_value());
+  expect_vec3_near(*pivot, {4.0f, 5.0f, 6.0f});
+
+  session.pivot().set_quick_preview_position({7.0f, 8.0f, 9.0f});
+  session.pivot().end_quick_edit();
+  EXPECT_FALSE(session.pivot().quick_edit_active());
+  pivot = editor.query().selection_transform_pivot();
+  ASSERT_TRUE(pivot.has_value());
+  expect_vec3_near(*pivot, {7.0f, 8.0f, 9.0f});
+
+  ASSERT_TRUE(editor.selection().select_object(first.value()).ok());
+  pivot = editor.query().selection_transform_pivot();
+  ASSERT_TRUE(pivot.has_value());
+  EXPECT_TRUE(length(*pivot - QVec3{7.0f, 8.0f, 9.0f}) > 0.0001f);
+
+  session.pivot().begin_quick({1.0f, 2.0f, 3.0f});
+  session.pivot().end_quick_edit();
+  pivot = editor.query().selection_transform_pivot();
+  ASSERT_TRUE(pivot.has_value());
+  expect_vec3_near(*pivot, {1.0f, 2.0f, 3.0f});
+
+  ASSERT_TRUE(editor.selection().clear().ok());
+  EXPECT_FALSE(editor.query().selection_transform_pivot().has_value());
 }
 
 TEST(ProjectSessionTests,

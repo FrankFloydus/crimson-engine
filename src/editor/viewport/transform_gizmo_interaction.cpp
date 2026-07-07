@@ -287,7 +287,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
   } else {
     selection = editor.query().selection();
     const std::optional<QVec3> queried_pivot =
-        editor.query().selection_center();
+        editor.query().selection_transform_pivot();
     if (!selection->has_selection || !queried_pivot.has_value()) {
       clear_frame();
       reset_pending_drag();

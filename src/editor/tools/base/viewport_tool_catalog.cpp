@@ -38,7 +38,8 @@ std::span<const ViewportTool *const> viewport_tool_catalog() {
   static const CutTool kCutTool;
   static const PolyTool kPolyTool;
   static const MirrorTool kMirrorTool;
-  static const std::array<const ViewportTool *, 12> kTools{{
+  static const ViewportTool kPivotTool(ViewportToolId::Pivot);
+  static const std::array<const ViewportTool *, 13> kTools{{
       &kSelectTool,
       &kMoveTool,
       &kExtendTool,
@@ -51,6 +52,7 @@ std::span<const ViewportTool *const> viewport_tool_catalog() {
       &kCutTool,
       &kPolyTool,
       &kMirrorTool,
+      &kPivotTool,
   }};
   return {kTools.data(), kTools.size()};
 }

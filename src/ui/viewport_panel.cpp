@@ -16,6 +16,7 @@
 #include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
+#include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "math/glm_bridge.hpp"
@@ -50,6 +51,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -111,6 +113,294 @@ point_light_billboard_pick_candidates(const SceneDocument &document) {
     });
   }
   return candidates;
+}
+
+float screen_distance_squared(QVec2 left, QVec2 right) {
+  const QVec2 delta = left - right;
+  return delta.x * delta.x + delta.y * delta.y;
+}
+
+std::optional<QVec3> ray_plane_y_intersection(const ViewportRay &ray,
+                                              float y) {
+  if (std::abs(ray.direction.y) <= 0.000001f) {
+    return std::nullopt;
+  }
+  const float t = (y - ray.origin.y) / ray.direction.y;
+  if (t < 0.0f) {
+    return std::nullopt;
+  }
+  return ray.origin + ray.direction * t;
+}
+
+std::optional<QVec3> grid_snap_point(const ViewportCameraController &camera,
+                                     QVec2 mouse_local, float grid_size) {
+  const std::optional<QVec3> hit =
+      ray_plane_y_intersection(camera.ray_from_viewport_point(mouse_local),
+                               0.0f);
+  if (!hit.has_value()) {
+    return std::nullopt;
+  }
+  const float size = std::max(grid_size, 0.0001f);
+  return QVec3{
+      std::round(hit->x / size) * size,
+      0.0f,
+      std::round(hit->z / size) * size,
+  };
+}
+
+QVec3 free_pivot_drag_point(const ViewportCameraController &camera,
+                            QVec2 mouse_local, QVec3 current_position) {
+  return ray_plane_y_intersection(camera.ray_from_viewport_point(mouse_local),
+                                  current_position.y)
+      .value_or(current_position);
+}
+
+int pivot_snap_priority(PivotSnapKind kind) {
+  switch (kind) {
+  case PivotSnapKind::Vertex:
+    return 0;
+  case PivotSnapKind::EdgeMidpoint:
+    return 1;
+  case PivotSnapKind::FaceCenter:
+    return 2;
+  case PivotSnapKind::Grid:
+    return 3;
+  case PivotSnapKind::None:
+    break;
+  }
+  return 4;
+}
+
+/**
+ * Stores one projected snap target candidate during pivot-handle dragging.
+ */
+struct PivotSnapCandidate {
+    QVec3 world_position = {};
+    PivotSnapKind kind = PivotSnapKind::None;
+    float screen_distance_sq = 0.0f;
+};
+
+void consider_pivot_candidate(const ViewportCameraController &camera,
+                              QVec2 mouse_local, float radius_sq,
+                              QVec3 world_position, PivotSnapKind kind,
+                              std::optional<PivotSnapCandidate> &best) {
+  const ViewportScreenPoint screen =
+      camera.project_world_point(world_position);
+  if (!screen.visible) {
+    return;
+  }
+  const float distance_sq =
+      screen_distance_squared(screen.position, mouse_local);
+  if (distance_sq > radius_sq) {
+    return;
+  }
+  if (!best.has_value() ||
+      distance_sq + 0.001f < best->screen_distance_sq ||
+      (std::abs(distance_sq - best->screen_distance_sq) <= 0.001f &&
+       pivot_snap_priority(kind) < pivot_snap_priority(best->kind))) {
+    best = PivotSnapCandidate{
+        .world_position = world_position,
+        .kind = kind,
+        .screen_distance_sq = distance_sq,
+    };
+  }
+}
+
+std::uint64_t edge_key(std::uint32_t a, std::uint32_t b) {
+  const std::uint32_t low = std::min(a, b);
+  const std::uint32_t high = std::max(a, b);
+  return (static_cast<std::uint64_t>(low) << 32u) |
+         static_cast<std::uint64_t>(high);
+}
+
+void consider_mesh_pivot_candidates(
+    const ViewportCameraController &camera, QVec2 mouse_local, float radius_sq,
+    const SceneDocument &document, const AssetRegistry &assets, EntityId entity,
+    PivotSnapSettings settings, std::optional<PivotSnapCandidate> &best) {
+  if (!document.is_effectively_visible(entity)) {
+    return;
+  }
+  const VisibilityComponent *visibility = document.visibility(entity);
+  if (visibility != nullptr && !visibility->selectable) {
+    return;
+  }
+  const MeshComponent *component = document.mesh(entity);
+  if (component == nullptr) {
+    return;
+  }
+  const MeshAsset *mesh = assets.mesh(component->mesh);
+  if (mesh == nullptr || mesh->vertices.empty()) {
+    return;
+  }
+  const QMat4 world = document.world_transform_matrix(entity);
+  if (settings.vertex) {
+    for (const MeshVertex &vertex : mesh->vertices) {
+      consider_pivot_candidate(camera, mouse_local, radius_sq,
+                               transform_point(world, vertex.position),
+                               PivotSnapKind::Vertex, best);
+    }
+  }
+  if (!settings.edge_midpoint && !settings.face_center) {
+    return;
+  }
+  std::unordered_set<std::uint64_t> edges;
+  for (std::size_t index = 0; index + 2u < mesh->indices.size();
+       index += 3u) {
+    const std::uint32_t ia = mesh->indices[index];
+    const std::uint32_t ib = mesh->indices[index + 1u];
+    const std::uint32_t ic = mesh->indices[index + 2u];
+    if (ia >= mesh->vertices.size() || ib >= mesh->vertices.size() ||
+        ic >= mesh->vertices.size()) {
+      continue;
+    }
+    const QVec3 a = transform_point(world, mesh->vertices[ia].position);
+    const QVec3 b = transform_point(world, mesh->vertices[ib].position);
+    const QVec3 c = transform_point(world, mesh->vertices[ic].position);
+    if (settings.face_center) {
+      consider_pivot_candidate(camera, mouse_local, radius_sq,
+                               (a + b + c) / 3.0f,
+                               PivotSnapKind::FaceCenter, best);
+    }
+    if (settings.edge_midpoint) {
+      const std::array<std::pair<std::uint32_t, std::uint32_t>, 3> face_edges{{
+          {ia, ib},
+          {ib, ic},
+          {ic, ia},
+      }};
+      for (const auto &[left, right] : face_edges) {
+        if (!edges.insert(edge_key(left, right)).second) {
+          continue;
+        }
+        const QVec3 midpoint =
+            (transform_point(world, mesh->vertices[left].position) +
+             transform_point(world, mesh->vertices[right].position)) *
+            0.5f;
+        consider_pivot_candidate(camera, mouse_local, radius_sq, midpoint,
+                                 PivotSnapKind::EdgeMidpoint, best);
+      }
+    }
+  }
+}
+
+QVec3 resolved_pivot_drag_position(
+    const ViewportCameraController &camera, QVec2 mouse_local,
+    QVec3 current_position, const SceneDocument &document,
+    const AssetRegistry &assets, PivotSnapSettings settings, float grid_size) {
+  constexpr float kPivotSnapRadiusPixels = 14.0f;
+  const float radius_sq = kPivotSnapRadiusPixels * kPivotSnapRadiusPixels;
+  std::optional<PivotSnapCandidate> best;
+  for (const EntityId entity : document.entities()) {
+    consider_mesh_pivot_candidates(camera, mouse_local, radius_sq, document,
+                                   assets, entity, settings, best);
+  }
+  if (settings.grid) {
+    if (const std::optional<QVec3> grid =
+            grid_snap_point(camera, mouse_local, grid_size)) {
+      consider_pivot_candidate(camera, mouse_local, radius_sq, *grid,
+                               PivotSnapKind::Grid, best);
+    }
+  }
+  return best.has_value() ? best->world_position
+                          : free_pivot_drag_point(camera, mouse_local,
+                                                  current_position);
+}
+
+bool pivot_handle_hit(const ViewportCameraController &camera,
+                      const PivotHandleState &handle, QVec2 mouse_local) {
+  if (!handle.visible) {
+    return false;
+  }
+  const ViewportScreenPoint screen =
+      camera.project_world_point(handle.world_position);
+  if (!screen.visible) {
+    return false;
+  }
+  constexpr float kPivotHandlePickRadiusPixels = 16.0f;
+  return screen_distance_squared(screen.position, mouse_local) <=
+         kPivotHandlePickRadiusPixels * kPivotHandlePickRadiusPixels;
+}
+
+std::optional<QVec3> intersect_ray_plane(const ViewportRay &ray,
+                                         QVec3 plane_point,
+                                         QVec3 plane_normal) {
+  const float denom = dot(plane_normal, ray.direction);
+  if (std::abs(denom) <= 0.000001f) {
+    return std::nullopt;
+  }
+  const float t = dot(plane_point - ray.origin, plane_normal) / denom;
+  if (!std::isfinite(t)) {
+    return std::nullopt;
+  }
+  return ray.origin + ray.direction * t;
+}
+
+float pivot_handle_world_radius(const ViewportCameraController &camera,
+                                QVec3 world_position) {
+  constexpr float kPivotHandleRadiusPixels = 7.0f;
+  const ViewportScreenPoint screen =
+      camera.project_world_point(world_position);
+  if (!screen.visible) {
+    return 0.08f;
+  }
+
+  const ViewportCameraPose pose = camera.pose();
+  const QVec3 plane_normal = normalize_or_zero(pose.target - pose.eye);
+  if (length_squared(plane_normal) <= 0.000001f) {
+    return 0.08f;
+  }
+
+  const std::optional<QVec3> center =
+      intersect_ray_plane(camera.ray_from_viewport_point(screen.position),
+                          world_position, plane_normal);
+  const std::optional<QVec3> edge = intersect_ray_plane(
+      camera.ray_from_viewport_point(
+          {screen.position.x + kPivotHandleRadiusPixels, screen.position.y}),
+      world_position, plane_normal);
+  if (!center.has_value() || !edge.has_value()) {
+    return 0.08f;
+  }
+  return std::clamp(length(*edge - *center), 0.025f, 100.0f);
+}
+
+void append_pivot_ring(ViewportOverlayFrame &frame, QVec3 center, QVec3 axis_a,
+                       QVec3 axis_b, float radius) {
+  constexpr int kSegments = 32;
+  constexpr float kTau = 6.2831853071795864769f;
+  for (int segment = 0; segment < kSegments; ++segment) {
+    const float angle0 =
+        kTau * static_cast<float>(segment) / static_cast<float>(kSegments);
+    const float angle1 =
+        kTau * static_cast<float>(segment + 1) /
+        static_cast<float>(kSegments);
+    const QVec3 start = center + axis_a * (std::cos(angle0) * radius) +
+                        axis_b * (std::sin(angle0) * radius);
+    const QVec3 end = center + axis_a * (std::cos(angle1) * radius) +
+                      axis_b * (std::sin(angle1) * radius);
+    frame.lines.push_back(ViewportOverlayLine{
+        .layer = ViewportOverlayLayer::ToolHandle,
+        .start = start,
+        .end = end,
+        .color = kOverlayPivotHandleColor,
+        .width_pixels = 2.0f,
+        .style_role = ViewportOverlayStyleRole::ExplicitColor,
+        .source = ViewportOverlaySource::Tool,
+    });
+  }
+}
+
+void append_pivot_handle_overlay(ViewportOverlayFrame &frame,
+                                 const ViewportCameraController &camera,
+                                 const PivotHandleState &handle) {
+  if (!handle.visible) {
+    return;
+  }
+  const float radius = pivot_handle_world_radius(camera, handle.world_position);
+  append_pivot_ring(frame, handle.world_position, {1.0f, 0.0f, 0.0f},
+                    {0.0f, 1.0f, 0.0f}, radius);
+  append_pivot_ring(frame, handle.world_position, {1.0f, 0.0f, 0.0f},
+                    {0.0f, 0.0f, 1.0f}, radius);
+  append_pivot_ring(frame, handle.world_position, {0.0f, 1.0f, 0.0f},
+                    {0.0f, 0.0f, 1.0f}, radius);
 }
 
 float grid_size_for_preset(int preset) {
@@ -464,6 +754,10 @@ void mark_resolved_input_action_pressed(ViewportInputFrame &input,
   case ViewportInputActionKind::ModalToolModeCycle:
     input.modal_tool_mode_cycle_pressed = true;
     break;
+  case ViewportInputActionKind::QuickPivot:
+    input.quick_pivot_pressed = true;
+    input.quick_pivot_down = true;
+    break;
   default:
     mark_navigation_pressed(input.navigation_bindings, action);
     break;
@@ -508,6 +802,18 @@ void mark_navigation_down(ViewportNavigationInput &navigation,
   }
 }
 
+void mark_resolved_input_action_down(ViewportInputFrame &input,
+                                     ViewportInputActionKind action) {
+  switch (action) {
+  case ViewportInputActionKind::QuickPivot:
+    input.quick_pivot_down = true;
+    break;
+  default:
+    mark_navigation_down(input.navigation_bindings, action);
+    break;
+  }
+}
+
 void mark_navigation_released(ViewportNavigationInput &navigation,
                               ViewportInputActionKind action) {
   switch (action) {
@@ -524,6 +830,18 @@ void mark_navigation_released(ViewportNavigationInput &navigation,
     navigation.fly_released = true;
     break;
   default:
+    break;
+  }
+}
+
+void mark_resolved_input_action_released(ViewportInputFrame &input,
+                                         ViewportInputActionKind action) {
+  switch (action) {
+  case ViewportInputActionKind::QuickPivot:
+    input.quick_pivot_released = true;
+    break;
+  default:
+    mark_navigation_released(input.navigation_bindings, action);
     break;
   }
 }
@@ -607,14 +925,14 @@ void resolve_keybindings_for_frame(QuaderEditorApi &editor,
     ViewportInputActionKind action = ViewportInputActionKind::None;
     if (resolve_viewport_input_action_for_chord(editor, state, input, chord,
                                                 action)) {
-      mark_navigation_down(input.navigation_bindings, action);
+      mark_resolved_input_action_down(input, action);
     }
   }
   for (const QuaderInputChord &chord : input.released_input_chords) {
     ViewportInputActionKind action = ViewportInputActionKind::None;
     if (resolve_viewport_input_action_for_chord(editor, state, input, chord,
                                                 action)) {
-      mark_navigation_released(input.navigation_bindings, action);
+      mark_resolved_input_action_released(input, action);
     }
   }
   for (const QuaderInputChord &chord : input.wheel_input_chords) {
@@ -806,7 +1124,8 @@ void ViewportPanel::prepare_viewports(ViewportWorkspaceService &workspace,
                                       QuaderEditorApi &editor,
                                       SceneRenderBridge &render_bridge,
                                       const SceneDocument &document,
-                                      const AssetRegistry &assets) {
+                                      const AssetRegistry &assets,
+                                      const PivotToolService *pivot) {
   QDR_PROFILE_FUNCTION();
   workspace_ = &workspace;
   const float grid_world_size =
@@ -818,6 +1137,10 @@ void ViewportPanel::prepare_viewports(ViewportWorkspaceService &workspace,
       settings.bool_value(ViewportBoolSettingId::ShowGizmos);
   const bool overlays_visible =
       settings.bool_value(ViewportBoolSettingId::ShowOverlays);
+  const PivotHandleState pivot_handle =
+      pivot != nullptr ? pivot->handle_state() : PivotHandleState{};
+  const bool pivot_handle_editing =
+      pivot_handle.visible && pivot_handle.editing;
   render_bridge.update_mesh_surface_grid(grid_world_size, settings);
   const ModelingSelectionMode cached_overlay_mode =
       selection_overlay_cache_.valid()
@@ -873,7 +1196,8 @@ void ViewportPanel::prepare_viewports(ViewportWorkspaceService &workspace,
                                           ViewportShadingMode::Wireframe);
     pane_state.renderer.set_overlay_visible(
         overlays_visible || gizmos_visible ||
-        pane_workspace.shading == ViewportShadingMode::Wireframe);
+        pane_workspace.shading == ViewportShadingMode::Wireframe ||
+        pivot_handle.visible);
     const bool point_light_gizmos_visible =
         point_light_gizmos_visible_for_pane(gizmos_visible,
                                             pane_workspace.shading);
@@ -899,7 +1223,7 @@ void ViewportPanel::prepare_viewports(ViewportWorkspaceService &workspace,
                                                 pane_workspace.render_size);
       if (const quader_editor_core::TransformGizmoFrame *gizmo_frame =
               interaction_controller_.transform_gizmo_frame()) {
-        if (gizmos_visible) {
+        if (gizmos_visible && !pivot_handle_editing) {
           ViewportTransformGizmoOverlayBuilder::append(
               overlay_frame, *gizmo_frame, overlay_camera);
         }
@@ -910,6 +1234,8 @@ void ViewportPanel::prepare_viewports(ViewportWorkspaceService &workspace,
             interaction_controller_.selection_marquee());
       }
     }
+    append_pivot_handle_overlay(overlay_frame, pane_workspace.camera,
+                                pivot_handle);
     ViewportOverlayStyleResolver::apply(
         overlay_frame, settings,
         ViewportOverlayStyleContext{
@@ -1850,6 +2176,22 @@ void ViewportPanel::draw_pane_contents(
   }
 
   auto cancel_active_modal_tool = [&](bool exit_tool) {
+    if (input_router_.state().active_tool == ViewportToolId::Pivot) {
+      const QuaderApiVoidResult cancel =
+          ui_context.intent.editor.tools().cancel_active_tool_preview();
+      if (!cancel.ok) {
+        LOG_ERROR("Pivot cancel failed: {}",
+                  cancel.message.empty() ? "Command failed."
+                                         : cancel.message);
+      }
+      pivot_handle_dragging_ = false;
+      sync_active_tool_from_editor(ui_context.intent.editor, modeling);
+      interaction_controller_.reset(&ui_context.intent.editor);
+      hover_controller_.invalidate();
+      selection_overlay_cache_.mark_dirty();
+      (void)exit_tool;
+      return;
+    }
     ViewportModelingToolPortCallbacks cancel_callbacks;
     cancel_callbacks.invalidate_hover = [&]() { hover_controller_.invalidate(); };
     cancel_callbacks.mark_overlay_dirty = [&]() {
@@ -1937,17 +2279,90 @@ void ViewportPanel::draw_pane_contents(
       .left_released = left_released,
       .scene_billboard_pick_candidates = scene_billboard_pick_candidates,
   };
+  PivotToolService *pivot_service =
+      ui_context.viewport != nullptr ? ui_context.viewport->pivot : nullptr;
+  bool pivot_consumed = false;
+  if (pivot_service != nullptr) {
+    if (input.quick_pivot_released) {
+      pivot_service->end_quick_edit();
+      pivot_handle_dragging_ = false;
+      pivot_consumed = true;
+    }
+    if (input.quick_pivot_down && !pivot_service->quick_edit_active()) {
+      if (const std::optional<QVec3> initial =
+              ui_context.intent.editor.query().selection_transform_pivot()) {
+        pivot_service->begin_quick(*initial);
+        pivot_consumed = true;
+      }
+    }
+    if (pivot_service->persistent_active() &&
+        input.modal_tool_finalize_pressed) {
+      const QuaderApiVoidResult apply =
+          ui_context.intent.editor.tools().commit_active_tool_preview();
+      if (!apply.ok) {
+        LOG_ERROR("Pivot apply failed: {}",
+                  apply.message.empty() ? "Command failed." : apply.message);
+      }
+      pivot_handle_dragging_ = false;
+      sync_active_tool_from_editor(ui_context.intent.editor, modeling);
+      hover_controller_.invalidate();
+      selection_overlay_cache_.mark_dirty();
+      pivot_consumed = true;
+    }
+
+    const PivotHandleState handle = pivot_service->handle_state();
+    const bool pivot_can_interact =
+        handle.visible && hovered && !result.navigation_active &&
+        !input.text_input_active && !navigation_gizmo_consumed;
+    if (pivot_can_interact && left_clicked &&
+        pivot_handle_hit(camera, handle, left_click_local)) {
+      pivot_handle_dragging_ = true;
+      interaction_pane_id_ = pane_state.id;
+      pivot_consumed = true;
+    }
+    if (pivot_handle_dragging_) {
+      pivot_consumed = true;
+      if (left_down && handle.visible) {
+        PivotSnapSettings snap_settings =
+            handle.persistent ? pivot_service->snap_settings()
+                              : PivotSnapSettings{
+                                    .vertex = true,
+                                    .edge_midpoint = false,
+                                    .face_center = false,
+                                    .grid = true,
+                                };
+        const QVec3 position = resolved_pivot_drag_position(
+            camera, input.mouse_local, handle.world_position, document, assets,
+            snap_settings, grid_size_for_preset(input.grid_preset));
+        if (handle.persistent) {
+          pivot_service->set_persistent_preview_position(position);
+        } else {
+          pivot_service->set_quick_preview_position(position);
+        }
+        selection_overlay_cache_.mark_dirty();
+      }
+      if (left_released || !left_down || !handle.visible) {
+        pivot_handle_dragging_ = false;
+      }
+    }
+  }
+  const PivotHandleState pivot_handle_after_input =
+      pivot_service != nullptr ? pivot_service->handle_state()
+                               : PivotHandleState{};
+  const bool pivot_blocks_gizmo =
+      pivot_handle_after_input.visible && pivot_handle_after_input.editing;
   const ViewportBeforeToolInteractionResult before_tool = [&]() {
     QDR_PROFILE_SCOPE("Viewport before tool interaction");
-    return cancel_consumed ? ViewportBeforeToolInteractionResult{}
-                           : interaction_controller_.handle_before_active_tool(
-                                 ui_context.intent.editor, interaction_frame);
+    return (cancel_consumed || pivot_blocks_gizmo || pivot_consumed)
+               ? ViewportBeforeToolInteractionResult{.gizmo_consumed = true}
+               : interaction_controller_.handle_before_active_tool(
+                     ui_context.intent.editor, interaction_frame);
   }();
   if (interaction_controller_.dragging() || before_tool.gizmo_consumed) {
     interaction_pane_id_ = pane_state.id;
   }
   const bool gizmo_consumed = cancel_consumed || navigation_gizmo_consumed ||
-                              before_tool.gizmo_consumed;
+                              pivot_consumed || before_tool.gizmo_consumed;
   const ModelingToolStatus release_tool_status = modeling.tool_status();
   const bool insert_edge_loop_drag_release =
       release_tool_status.insert_edge_loop_dragging && left_released;

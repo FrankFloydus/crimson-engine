@@ -266,6 +266,7 @@ enum class QuaderViewportTool {
     Cut,
     Poly,
     Mirror,
+    Pivot,
 };
 
 /**

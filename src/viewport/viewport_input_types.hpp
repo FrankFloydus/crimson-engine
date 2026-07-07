@@ -56,6 +56,9 @@ struct ViewportInputFrame {
   bool operation_preview_active = false;
   bool modal_tool_finalize_pressed = false;
   bool modal_tool_mode_cycle_pressed = false;
+  bool quick_pivot_pressed = false;
+  bool quick_pivot_down = false;
+  bool quick_pivot_released = false;
   bool middle_pressed = false;
   bool middle_down = false;
   bool middle_released = false;

@@ -12,7 +12,7 @@
 namespace quader {
 namespace {
 
-constexpr std::array<ToolDescriptor, 12> kViewportToolDescriptors{{
+constexpr std::array<ToolDescriptor, 13> kViewportToolDescriptors{{
     {
         .tool = ViewportToolId::Select,
         .modeling_tool = ModelingViewportTool::Select,
@@ -138,6 +138,17 @@ constexpr std::array<ToolDescriptor, 12> kViewportToolDescriptors{{
         .label = "Mirror",
         .kind = ToolKind::Modal,
         .menu_group = ToolMenuGroup::Modeling,
+        .owns_viewport = true,
+        .blocks_viewport_focus_shortcuts = true,
+    },
+    {
+        .tool = ViewportToolId::Pivot,
+        .modeling_tool = ModelingViewportTool::Select,
+        .id = "pivot",
+        .label = "Pivot",
+        .shortcut = "P",
+        .kind = ToolKind::Modal,
+        .menu_group = ToolMenuGroup::Navigation,
         .owns_viewport = true,
         .blocks_viewport_focus_shortcuts = true,
     },

@@ -55,15 +55,27 @@ group_transform_or_selected_bounds_center(ProjectSession &session,
   return scene_transform;
 }
 
+TransformComponent scene_transform_preserving_pivot_marker(
+    const ProjectSession &session, EntityId entity, QuaderTransform transform) {
+  TransformComponent scene_transform = to_scene_transform(transform);
+  if (const TransformComponent *current = session.scene().transform(entity)) {
+    scene_transform.custom_pivot = current->custom_pivot;
+  }
+  return scene_transform;
+}
+
 std::vector<DocumentTransformEdit>
-to_document_transform_edits(std::span<const QuaderSceneTransformEdit> edits) {
+to_document_transform_edits(const ProjectSession &session,
+                            std::span<const QuaderSceneTransformEdit> edits) {
   std::vector<DocumentTransformEdit> document_edits;
   document_edits.reserve(edits.size());
   for (const QuaderSceneTransformEdit &edit : edits) {
     document_edits.push_back(DocumentTransformEdit{
         .entity = edit.entity,
-        .before = to_scene_transform(edit.before),
-        .after = to_scene_transform(edit.after),
+        .before = scene_transform_preserving_pivot_marker(
+            session, edit.entity, edit.before),
+        .after = scene_transform_preserving_pivot_marker(
+            session, edit.entity, edit.after),
     });
   }
   return document_edits;
@@ -250,17 +262,20 @@ QuaderApiVoidResult QuaderSceneApi::reparent(EntityId entity, EntityId parent,
 
 QuaderApiVoidResult QuaderSceneApi::set_transform(EntityId entity,
                                                   QuaderTransform transform) {
+  ProjectSession &session = project_session(session_);
   return mutations_.run_document_result(
-      project_session(session_).document_commands().set_transform(
-          entity, to_scene_transform(transform)),
+      session.document_commands().set_transform(
+          entity,
+          scene_transform_preserving_pivot_marker(session, entity, transform)),
       "Set Transform");
 }
 
 QuaderApiVoidResult QuaderSceneApi::set_transforms(
     std::span<const QuaderSceneTransformEdit> edits) {
+  ProjectSession &session = project_session(session_);
   return mutations_.run_document_result(
-      project_session(session_).document_commands().set_transforms(
-          to_document_transform_edits(edits)),
+      session.document_commands().set_transforms(
+          to_document_transform_edits(session, edits)),
       "Set Transform");
 }
 
@@ -424,13 +439,15 @@ QuaderSceneApi::commit_batch(const QuaderSceneBatch &batch) {
   std::vector<DocumentSceneBatchOperation> operations;
   operations.reserve(batch.operations_.size());
   bool project_selection_after_batch = false;
+  ProjectSession &session = project_session(session_);
   for (const QuaderSceneBatch::Operation &operation : batch.operations_) {
     DocumentSceneBatchOperation document_operation{
         .entity = operation.entity,
         .parent = operation.parent,
         .preserve_world_transform = operation.preserve_world_transform,
         .flag = operation.flag,
-        .transform = to_scene_transform(operation.transform),
+        .transform = scene_transform_preserving_pivot_marker(
+            session, operation.entity, operation.transform),
         .name = operation.name,
     };
     switch (operation.kind) {
@@ -454,7 +471,6 @@ QuaderSceneApi::commit_batch(const QuaderSceneBatch &batch) {
     operations.push_back(std::move(document_operation));
   }
 
-  ProjectSession &session = project_session(session_);
   DocumentCommandResult result = session.document_commands().apply_scene_batch(
       batch.label_, std::move(operations));
   if (project_selection_after_batch) {

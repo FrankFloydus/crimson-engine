@@ -25,6 +25,7 @@ struct ImGuiKeyboardInputChords {
   ViewportModifiers modifiers = {};
   std::vector<QuaderInputChord> pressed;
   std::vector<QuaderInputChord> active;
+  std::vector<QuaderInputChord> released;
 };
 
 [[nodiscard]] QuaderInputChord

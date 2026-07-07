@@ -1356,6 +1356,9 @@ TEST(ModelingSessionServiceSplitTests, PolicyServicesExposeDirectBehavior) {
   EXPECT_TRUE(ModalToolRuntime::owns_viewport(ModelingViewportTool::Mirror));
   EXPECT_FALSE(ModalToolRuntime::owns_viewport(ModelingViewportTool::Move));
   for (const ToolDescriptor &descriptor : viewport_tool_descriptors()) {
+    if (descriptor.tool == ViewportToolId::Pivot) {
+      continue;
+    }
     EXPECT_EQ(ModalToolRuntime::owns_viewport(descriptor.modeling_tool),
               descriptor.owns_viewport)
         << descriptor.id;

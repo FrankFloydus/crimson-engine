@@ -9,6 +9,7 @@
 #include "diagnostics/profile.hpp"
 #include "editor/commands/asset_command_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 
 #include <utility>
@@ -41,6 +42,8 @@ void ProjectSession::rebuild_services() {
                                                        document_.assets());
   selection_ = std::make_unique<EditorSelectionService>(
       document_.scene(), *document_commands_, *modeling_);
+  pivot_ = std::make_unique<PivotToolService>(
+      document_.scene(), document_.assets(), *history_, *modeling_);
 }
 
 ProjectSessionReadView ProjectSession::read_view() const {

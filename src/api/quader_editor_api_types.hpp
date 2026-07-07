@@ -73,6 +73,54 @@ struct QuaderCommandDescriptor {
 };
 
 /**
+ * Enumerates Quader Tool Setting Control Kind values used by the public tools API.
+ */
+enum class QuaderToolSettingControlKind {
+  Toggle,
+  Number,
+  Choice,
+  Action,
+};
+
+/**
+ * Represents a selectable value for a tool setting choice control.
+ */
+struct QuaderToolSettingChoiceOption {
+  std::string id;
+  std::string label;
+  double value = 0.0;
+};
+
+/**
+ * Represents one editable or executable tool setting control.
+ */
+struct QuaderToolSettingControl {
+  QuaderToolSettingControlKind kind = QuaderToolSettingControlKind::Toggle;
+  std::string id;
+  std::string label;
+  bool bool_value = false;
+  double number_value = 0.0;
+  double min_value = 0.0;
+  double max_value = 1.0;
+  double step = 1.0;
+  std::string choice_value;
+  std::vector<QuaderToolSettingChoiceOption> choices;
+};
+
+/**
+ * Represents the active tool settings target exposed through the public tools API.
+ */
+struct QuaderToolSettingsTarget {
+  bool active = false;
+  bool preview_active = false;
+  std::string tool_id;
+  std::string title;
+  std::vector<QuaderToolSettingControl> controls;
+  bool can_apply = false;
+  bool can_cancel = false;
+};
+
+/**
  * Represents a Quader Notification value used by the public Quader API surface.
  */
 struct QuaderNotification {
@@ -99,6 +147,8 @@ struct QuaderViewportRuntimeHooks {
 struct QuaderToolsRuntimeHooks {
     std::function<QuaderApiVoidResult(std::string_view)> activate;
     std::function<QuaderApiVoidResult()> cancel_modal_tool;
+    std::function<QuaderApiVoidResult()> commit_active_tool_preview;
+    std::function<QuaderApiVoidResult()> cancel_active_tool_preview;
 };
 
 /**

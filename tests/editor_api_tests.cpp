@@ -233,6 +233,97 @@ create_selected_box(quader::QuaderEditorApi &editor,
   return created.value();
 }
 
+constexpr float kTestPositionEpsilon = 0.0001f;
+
+void expect_vec3_near(quader::QVec3 actual, quader::QVec3 expected) {
+  EXPECT_NEAR(actual.x, expected.x, kTestPositionEpsilon);
+  EXPECT_NEAR(actual.y, expected.y, kTestPositionEpsilon);
+  EXPECT_NEAR(actual.z, expected.z, kTestPositionEpsilon);
+}
+
+std::optional<quader::QVec3>
+entity_world_origin_translation_only(const quader::QuaderEditorApi &editor,
+                                     quader::EntityId entity) {
+  quader::QVec3 origin{};
+  quader::EntityId current = entity;
+  int guard = 0;
+  while (current != quader::kInvalidEntityId && guard < 128) {
+    const std::optional<quader::QuaderEntitySnapshot> snapshot =
+        editor.query().entity(current);
+    if (!snapshot.has_value()) {
+      return std::nullopt;
+    }
+    origin += snapshot->transform.position;
+    current = snapshot->parent;
+    ++guard;
+  }
+  return current == quader::kInvalidEntityId ? std::optional<quader::QVec3>{origin}
+                                             : std::nullopt;
+}
+
+/**
+ * Stores translation-only world bounds for API-level pivot rebase assertions.
+ */
+struct TestWorldBounds {
+    quader::QVec3 min;
+    quader::QVec3 max;
+};
+
+std::optional<TestWorldBounds>
+compiled_object_world_bounds_translation_only(
+    const quader::QuaderEditorApi &editor,
+    quader::QuaderModelingObjectRef object) {
+  const std::optional<quader::QuaderMeshAsset> mesh =
+      editor.query().compiled_object_mesh(object);
+  const std::optional<quader::QVec3> origin =
+      entity_world_origin_translation_only(editor, object.entity);
+  if (!mesh.has_value() || !origin.has_value() || mesh->vertices.empty()) {
+    return std::nullopt;
+  }
+
+  TestWorldBounds bounds{
+      .min = *origin + mesh->vertices.front().position,
+      .max = *origin + mesh->vertices.front().position,
+  };
+  for (const quader::QuaderMeshVertex &vertex : mesh->vertices) {
+    const quader::QVec3 world = *origin + vertex.position;
+    bounds.min.x = std::min(bounds.min.x, world.x);
+    bounds.min.y = std::min(bounds.min.y, world.y);
+    bounds.min.z = std::min(bounds.min.z, world.z);
+    bounds.max.x = std::max(bounds.max.x, world.x);
+    bounds.max.y = std::max(bounds.max.y, world.y);
+    bounds.max.z = std::max(bounds.max.z, world.z);
+  }
+  return bounds;
+}
+
+void expect_bounds_near(const TestWorldBounds &actual,
+                        const TestWorldBounds &expected) {
+  expect_vec3_near(actual.min, expected.min);
+  expect_vec3_near(actual.max, expected.max);
+}
+
+const quader::QuaderToolSettingControl *
+find_tool_setting_control(const quader::QuaderToolSettingsTarget &target,
+                          std::string_view id) {
+  const auto found =
+      std::find_if(target.controls.begin(), target.controls.end(),
+                   [&](const quader::QuaderToolSettingControl &control) {
+                     return control.id == id;
+                   });
+  return found == target.controls.end() ? nullptr : &(*found);
+}
+
+std::size_t count_tool_setting_controls_of_kind(
+    const quader::QuaderToolSettingsTarget &target,
+    quader::QuaderToolSettingControlKind kind) {
+  return static_cast<std::size_t>(
+      std::count_if(target.controls.begin(), target.controls.end(),
+                    [kind](const quader::QuaderToolSettingControl &control) {
+                      return control.kind == kind;
+                    }));
+}
+
 /// Captures material and texture ids used by undo/redo preservation regressions.
 struct TexturedMaterialRefs {
   quader::AssetId material = quader::kInvalidAssetId;
@@ -566,6 +657,9 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_FALSE(spawn_window->enabled);
     EXPECT_EQ(editor.commands().shortcut_for(
                   quader::quader_command::kViewportViewPerspective),
+              "");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kToolsActivatePivot),
               "P");
     EXPECT_EQ(editor.commands().shortcut_for(
                   quader::quader_command::kModelingApplyActivePreview),
@@ -1455,21 +1549,21 @@ TEST(EditorApiTests, GlobalCommandKeybindingsDoNotStealTextInputOrViewportOnlySh
   EXPECT_EQ(text_input_undo.kind,
             quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
 
-  const quader::QuaderViewportKeybindingDispatch
-      perspective_without_viewport_focus =
+  const quader::QuaderViewportKeybindingDispatch pivot_without_viewport_focus =
           editor.commands().dispatch_viewport_input_binding(
               single_input_chord("P"), state, false, false);
-  EXPECT_EQ(perspective_without_viewport_focus.kind,
+  EXPECT_EQ(pivot_without_viewport_focus.kind,
             quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
 
-  const quader::QuaderViewportKeybindingDispatch
-      perspective_with_viewport_focus =
+  const quader::QuaderViewportKeybindingDispatch pivot_with_viewport_focus =
           editor.commands().dispatch_viewport_input_binding(
               single_input_chord("P"), state, true, false);
-  ASSERT_EQ(perspective_with_viewport_focus.kind,
+  ASSERT_EQ(pivot_with_viewport_focus.kind,
             quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
-  EXPECT_EQ(perspective_with_viewport_focus.shortcut.kind,
-            quader::ViewportShortcutKind::SetView);
+  EXPECT_EQ(pivot_with_viewport_focus.shortcut.kind,
+            quader::ViewportShortcutKind::ActivateTool);
+  EXPECT_EQ(pivot_with_viewport_focus.shortcut.tool,
+            quader::ViewportToolId::Pivot);
 }
 
 TEST(EditorApiTests, ViewportSelectionModeShortcutsResolveAsRouterIntents) {
@@ -1726,19 +1820,18 @@ TEST(EditorApiTests, ViewportHostShortcutCatalogDrivesCommandKeybindings) {
 
     EXPECT_GT(checked, 0);
 
-    const std::optional<std::vector<quader::QuaderInputChord>> perspective =
+    const std::optional<std::vector<quader::QuaderInputChord>> pivot =
         quader::quader_input_parse_shortcut("P");
-    ASSERT_TRUE(perspective.has_value());
-    ASSERT_EQ(perspective->size(), 1u);
-    const quader::QuaderViewportKeybindingDispatch perspective_dispatch =
-        editor.commands().dispatch_viewport_input_binding(perspective->front(),
+    ASSERT_TRUE(pivot.has_value());
+    ASSERT_EQ(pivot->size(), 1u);
+    const quader::QuaderViewportKeybindingDispatch pivot_dispatch =
+        editor.commands().dispatch_viewport_input_binding(pivot->front(),
                                                           state, true, false);
-    ASSERT_EQ(perspective_dispatch.kind,
+    ASSERT_EQ(pivot_dispatch.kind,
               quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
-    EXPECT_EQ(perspective_dispatch.shortcut.kind,
-              quader::ViewportShortcutKind::SetView);
-    EXPECT_EQ(perspective_dispatch.shortcut.view,
-              quader::ViewportView::Perspective);
+    EXPECT_EQ(pivot_dispatch.shortcut.kind,
+              quader::ViewportShortcutKind::ActivateTool);
+    EXPECT_EQ(pivot_dispatch.shortcut.tool, quader::ViewportToolId::Pivot);
 
     EXPECT_TRUE(has_keybinding(
         rules, quader::quader_command::kModelingApplyActivePreview.string(),
@@ -1838,6 +1931,7 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
     const bool fly_only_action =
         descriptor.when.find("navigation.flyActive") != std::string_view::npos;
     const bool modal_only_action =
+        descriptor.when.find("!modalTool.active") == std::string_view::npos &&
         descriptor.when.find("modalTool.active") != std::string_view::npos;
     quader::QuaderViewportKeybindingContext input_context;
     if (navigation_only_action) {
@@ -1878,6 +1972,14 @@ TEST(EditorApiTests, ViewportModalToolGesturesUseKeybindingTargets) {
   ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
       *quader::quader_input_parse_chord("Enter"), state, true, false, action,
       modal_context));
+  EXPECT_EQ(action, quader::ViewportInputActionKind::ModalToolFinalize);
+
+  const quader::QuaderViewportKeybindingContext viewport_tool_context{
+      .active_tool_owns_viewport = true};
+  action = quader::ViewportInputActionKind::None;
+  ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
+      *quader::quader_input_parse_chord("Space"), state, true, false, action,
+      viewport_tool_context));
   EXPECT_EQ(action, quader::ViewportInputActionKind::ModalToolFinalize);
 
   action = quader::ViewportInputActionKind::None;
@@ -1963,6 +2065,36 @@ TEST(EditorApiTests, ViewportKeybindingContextsSeparateNavigationFromToolShortcu
           .fly_navigation_active = true,
       }));
   EXPECT_EQ(action, quader::ViewportInputActionKind::FlyForward);
+
+  action = quader::ViewportInputActionKind::None;
+  ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
+      *quader::quader_input_parse_chord("D"), state, true, false, action));
+  EXPECT_EQ(action, quader::ViewportInputActionKind::QuickPivot);
+
+  action = quader::ViewportInputActionKind::None;
+  ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
+      *quader::quader_input_parse_chord("D"), state, true, false, action,
+      quader::QuaderViewportKeybindingContext{
+          .navigation_active = true,
+          .fly_navigation_active = true,
+      }));
+  EXPECT_EQ(action, quader::ViewportInputActionKind::FlyRight);
+
+  action = quader::ViewportInputActionKind::None;
+  EXPECT_FALSE(editor.commands().resolve_viewport_input_action(
+      *quader::quader_input_parse_chord("D"), state, true, false, action,
+      quader::QuaderViewportKeybindingContext{.navigation_active = true}));
+
+  action = quader::ViewportInputActionKind::None;
+  EXPECT_FALSE(editor.commands().resolve_viewport_input_action(
+      *quader::quader_input_parse_chord("D"), state, true, false, action,
+      quader::QuaderViewportKeybindingContext{.modal_tool_active = true}));
+
+  action = quader::ViewportInputActionKind::None;
+  EXPECT_FALSE(editor.commands().resolve_viewport_input_action(
+      *quader::quader_input_parse_chord("D"), state, true, false, action,
+      quader::QuaderViewportKeybindingContext{
+          .active_tool_owns_viewport = true}));
 
   ASSERT_TRUE(editor.preferences()
                   .set_shortcut("viewport.navigation.fly_forward", "Up")
@@ -4900,6 +5032,14 @@ TEST(EditorApiTests, ToolsApiSetsCutKeepModeThroughPublicSetting) {
     const quader::QuaderApiVoidResult activate_cut =
         editor.tools().activate(quader::ViewportToolId::Cut);
     ASSERT_TRUE(activate_cut.ok()) << activate_cut.error_message();
+    const quader::QuaderToolSettingsTarget cut_settings =
+        editor.tools().active_settings();
+    ASSERT_TRUE(cut_settings.active);
+    EXPECT_EQ(cut_settings.tool_id, "cut");
+    const quader::QuaderToolSettingControl *keep_mode =
+        find_tool_setting_control(cut_settings, "operation.cut.keep_mode");
+    ASSERT_NE(keep_mode, nullptr);
+    EXPECT_EQ(keep_mode->kind, quader::QuaderToolSettingControlKind::Choice);
 
     const quader::QuaderApiVoidResult updated_cut_setting =
         editor.tools().set_setting(
@@ -4910,6 +5050,380 @@ TEST(EditorApiTests, ToolsApiSetsCutKeepModeThroughPublicSetting) {
         << updated_cut_setting.error_message();
     EXPECT_EQ(editor.query().tool_status().cut_mode,
               quader::QuaderCutMode::DiscardRight);
+}
+
+TEST(EditorApiTests, DefaultSingleMeshTransformPivotUsesSelectedBoundsCenter) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> left =
+      editor.modeling().create_box(
+          quader::QuaderBounds{.min = {-4.0f, -1.0f, -1.0f},
+                               .max = {-2.0f, 1.0f, 1.0f}},
+          "Default Pivot Left");
+  ASSERT_TRUE(left.ok()) << left.error_message();
+  ASSERT_TRUE(editor.selection().select_object(left.value()).ok());
+  std::optional<quader::QVec3> pivot =
+      editor.query().selection_transform_pivot();
+  ASSERT_TRUE(pivot.has_value());
+  expect_vec3_near(*pivot, {-3.0f, 0.0f, 0.0f});
+
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> right =
+      editor.modeling().create_box(
+          quader::QuaderBounds{.min = {2.0f, -1.0f, -1.0f},
+                               .max = {4.0f, 1.0f, 1.0f}},
+          "Default Pivot Right");
+  ASSERT_TRUE(right.ok()) << right.error_message();
+  ASSERT_TRUE(editor.selection().select_object(right.value()).ok());
+  pivot = editor.query().selection_transform_pivot();
+  ASSERT_TRUE(pivot.has_value());
+  expect_vec3_near(*pivot, {3.0f, 0.0f, 0.0f});
+}
+
+TEST(EditorApiTests, PivotToolAppliesMeshOriginRebaseWithoutMovingWorldBounds) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Pivot Mesh Box");
+  const std::optional<TestWorldBounds> before_bounds =
+      compiled_object_world_bounds_translation_only(editor, box);
+  ASSERT_TRUE(before_bounds.has_value());
+
+  const quader::QuaderApiVoidResult activated =
+      editor.tools().activate(quader::ViewportToolId::Pivot);
+  ASSERT_TRUE(activated.ok()) << activated.error_message();
+  EXPECT_EQ(editor.tools().active_tool(), "pivot");
+  const quader::QuaderToolSettingsTarget settings =
+      editor.tools().active_settings();
+  ASSERT_TRUE(settings.active);
+  EXPECT_TRUE(settings.preview_active);
+  EXPECT_EQ(settings.tool_id, "pivot");
+  EXPECT_TRUE(settings.can_apply);
+  EXPECT_TRUE(settings.can_cancel);
+  ASSERT_NE(find_tool_setting_control(settings, "pivot.align.prev"), nullptr);
+  ASSERT_NE(find_tool_setting_control(settings, "pivot.align.next"), nullptr);
+  EXPECT_EQ(count_tool_setting_controls_of_kind(
+                settings, quader::QuaderToolSettingControlKind::Action),
+            2u);
+  EXPECT_EQ(find_tool_setting_control(settings, "pivot.align.top_center"),
+            nullptr);
+  constexpr std::string_view kGridSnapSetting = "pivot.snap.grid";
+  const quader::QuaderToolSettingControl *grid =
+      find_tool_setting_control(settings, kGridSnapSetting);
+  ASSERT_NE(grid, nullptr);
+  EXPECT_EQ(grid->kind, quader::QuaderToolSettingControlKind::Toggle);
+  EXPECT_TRUE(grid->bool_value);
+
+  const quader::QuaderApiVoidResult disable_grid =
+      editor.tools().set_setting("pivot", kGridSnapSetting, false);
+  ASSERT_TRUE(disable_grid.ok()) << disable_grid.error_message();
+  const quader::QuaderToolSettingsTarget settings_after_grid_toggle =
+      editor.tools().active_settings();
+  const quader::QuaderToolSettingControl *grid_after =
+      find_tool_setting_control(settings_after_grid_toggle, kGridSnapSetting);
+  ASSERT_NE(grid_after, nullptr);
+  EXPECT_FALSE(grid_after->bool_value);
+
+  const quader::QuaderApiVoidResult unknown_action =
+      editor.tools().execute_action("pivot", "pivot.align.__missing__");
+  EXPECT_FALSE(unknown_action.ok());
+  EXPECT_EQ(unknown_action.error_message(), "Unknown pivot align action.");
+
+  const quader::QuaderApiVoidResult aligned_bottom =
+      editor.tools().execute_action("pivot", "pivot.align.next");
+  ASSERT_TRUE(aligned_bottom.ok()) << aligned_bottom.error_message();
+  const quader::QuaderApiVoidResult aligned_top =
+      editor.tools().execute_action("pivot", "pivot.align.next");
+  ASSERT_TRUE(aligned_top.ok()) << aligned_top.error_message();
+  const quader::QuaderApiVoidResult applied =
+      editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  EXPECT_TRUE(applied.changed());
+  EXPECT_EQ(editor.query().history().undo_label, "Set Pivot");
+
+  const std::optional<quader::QuaderEntitySnapshot> after =
+      editor.query().entity(box.entity);
+  ASSERT_TRUE(after.has_value());
+  expect_vec3_near(after->transform.position, {0.0f, 1.0f, 0.0f});
+  const std::optional<quader::QVec3> applied_transform_pivot =
+      editor.query().selection_transform_pivot();
+  ASSERT_TRUE(applied_transform_pivot.has_value());
+  expect_vec3_near(*applied_transform_pivot, {0.0f, 1.0f, 0.0f});
+  const std::optional<TestWorldBounds> after_bounds =
+      compiled_object_world_bounds_translation_only(editor, box);
+  ASSERT_TRUE(after_bounds.has_value());
+  expect_bounds_near(*after_bounds, *before_bounds);
+
+  const quader::QuaderApiVoidResult undo = editor.history().undo();
+  ASSERT_TRUE(undo.ok()) << undo.error_message();
+  const std::optional<quader::QuaderEntitySnapshot> undone =
+      editor.query().entity(box.entity);
+  ASSERT_TRUE(undone.has_value());
+  expect_vec3_near(undone->transform.position, {});
+  const std::optional<quader::QVec3> undone_transform_pivot =
+      editor.query().selection_transform_pivot();
+  ASSERT_TRUE(undone_transform_pivot.has_value());
+  expect_vec3_near(*undone_transform_pivot, {});
+  const std::optional<TestWorldBounds> undo_bounds =
+      compiled_object_world_bounds_translation_only(editor, box);
+  ASSERT_TRUE(undo_bounds.has_value());
+  expect_bounds_near(*undo_bounds, *before_bounds);
+
+  const quader::QuaderApiVoidResult redo = editor.history().redo();
+  ASSERT_TRUE(redo.ok()) << redo.error_message();
+  const std::optional<quader::QuaderEntitySnapshot> redone =
+      editor.query().entity(box.entity);
+  ASSERT_TRUE(redone.has_value());
+  expect_vec3_near(redone->transform.position, {0.0f, 1.0f, 0.0f});
+  const std::optional<quader::QVec3> redone_transform_pivot =
+      editor.query().selection_transform_pivot();
+  ASSERT_TRUE(redone_transform_pivot.has_value());
+  expect_vec3_near(*redone_transform_pivot, {0.0f, 1.0f, 0.0f});
+  const std::optional<TestWorldBounds> redo_bounds =
+      compiled_object_world_bounds_translation_only(editor, box);
+  ASSERT_TRUE(redo_bounds.has_value());
+  expect_bounds_near(*redo_bounds, *before_bounds);
+}
+
+TEST(EditorApiTests, PivotToolCancelDiscardsMeshPreview) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Pivot Cancel Box");
+  const std::optional<TestWorldBounds> before_bounds =
+      compiled_object_world_bounds_translation_only(editor, box);
+  ASSERT_TRUE(before_bounds.has_value());
+  const quader::QuaderHistorySnapshot history_before =
+      editor.query().history();
+
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  ASSERT_TRUE(
+      editor.tools().execute_action("pivot", "pivot.align.bottom_center").ok());
+  const quader::QuaderApiVoidResult canceled =
+      editor.tools().cancel_active_tool_preview();
+  ASSERT_TRUE(canceled.ok()) << canceled.error_message();
+  EXPECT_TRUE(canceled.changed());
+  EXPECT_FALSE(editor.tools().active_settings().active);
+
+  const std::optional<quader::QuaderEntitySnapshot> after =
+      editor.query().entity(box.entity);
+  ASSERT_TRUE(after.has_value());
+  expect_vec3_near(after->transform.position, {});
+  const std::optional<TestWorldBounds> after_bounds =
+      compiled_object_world_bounds_translation_only(editor, box);
+  ASSERT_TRUE(after_bounds.has_value());
+  expect_bounds_near(*after_bounds, *before_bounds);
+  EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
+}
+
+TEST(EditorApiTests, PivotToolActivationReducesMultiSelectionToActiveTarget) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef first =
+      create_selected_box(editor, "Pivot Multi A");
+  const quader::QuaderModelingObjectRef second =
+      create_selected_box(editor, "Pivot Multi B");
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({first.entity, second.entity}, second.entity)
+                  .ok());
+
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{second.entity});
+  const std::optional<quader::QuaderEntitySnapshot> active =
+      editor.query().entity(second.entity);
+  ASSERT_TRUE(active.has_value());
+  EXPECT_TRUE(active->active);
+
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{second.entity});
+}
+
+TEST(EditorApiTests, PivotQuickAlignActionsUseAxisStableBoundsPositions) {
+  /**
+   * Describes one quick-align action and the expected rebased origin position.
+   */
+  struct AlignCase {
+      std::string_view action;
+      quader::QVec3 expected_position;
+  };
+  constexpr std::array kCases{
+      AlignCase{"pivot.align.center", {0.0f, 0.0f, 0.0f}},
+      AlignCase{"pivot.align.bottom_center", {0.0f, -1.0f, 0.0f}},
+      AlignCase{"pivot.align.top_center", {0.0f, 1.0f, 0.0f}},
+      AlignCase{"pivot.align.bottom_left_front", {-1.0f, -1.0f, -1.0f}},
+      AlignCase{"pivot.align.bottom_left_back", {-1.0f, -1.0f, 1.0f}},
+      AlignCase{"pivot.align.bottom_right_front", {1.0f, -1.0f, -1.0f}},
+      AlignCase{"pivot.align.bottom_right_back", {1.0f, -1.0f, 1.0f}},
+      AlignCase{"pivot.align.top_left_front", {-1.0f, 1.0f, -1.0f}},
+      AlignCase{"pivot.align.top_left_back", {-1.0f, 1.0f, 1.0f}},
+      AlignCase{"pivot.align.top_right_front", {1.0f, 1.0f, -1.0f}},
+      AlignCase{"pivot.align.top_right_back", {1.0f, 1.0f, 1.0f}},
+  };
+
+  for (const AlignCase &align : kCases) {
+    SCOPED_TRACE(align.action);
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const quader::QuaderModelingObjectRef box =
+        create_selected_box(editor, "Pivot Align Box");
+    const std::optional<TestWorldBounds> before_bounds =
+        compiled_object_world_bounds_translation_only(editor, box);
+    ASSERT_TRUE(before_bounds.has_value());
+
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+    const quader::QuaderApiVoidResult aligned =
+        editor.tools().execute_action("pivot", align.action);
+    ASSERT_TRUE(aligned.ok()) << aligned.error_message();
+    const quader::QuaderApiVoidResult applied =
+        editor.tools().commit_active_tool_preview();
+    ASSERT_TRUE(applied.ok()) << applied.error_message();
+
+    const std::optional<quader::QuaderEntitySnapshot> entity =
+        editor.query().entity(box.entity);
+    ASSERT_TRUE(entity.has_value());
+    expect_vec3_near(entity->transform.position, align.expected_position);
+    const std::optional<TestWorldBounds> after_bounds =
+        compiled_object_world_bounds_translation_only(editor, box);
+    ASSERT_TRUE(after_bounds.has_value());
+    expect_bounds_near(*after_bounds, *before_bounds);
+  }
+}
+
+TEST(EditorApiTests, PivotQuickAlignCycleSkipsDuplicateCenterPreset) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Pivot Align Cycle Box");
+  const std::optional<TestWorldBounds> before_bounds =
+      compiled_object_world_bounds_translation_only(editor, box);
+  ASSERT_TRUE(before_bounds.has_value());
+
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  const quader::QuaderApiVoidResult next =
+      editor.tools().execute_action("pivot", "pivot.align.next");
+  ASSERT_TRUE(next.ok()) << next.error_message();
+  const quader::QuaderApiVoidResult applied =
+      editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+
+  const std::optional<quader::QuaderEntitySnapshot> entity =
+      editor.query().entity(box.entity);
+  ASSERT_TRUE(entity.has_value());
+  expect_vec3_near(entity->transform.position, {0.0f, -1.0f, 0.0f});
+  const std::optional<TestWorldBounds> after_bounds =
+      compiled_object_world_bounds_translation_only(editor, box);
+  ASSERT_TRUE(after_bounds.has_value());
+  expect_bounds_near(*after_bounds, *before_bounds);
+}
+
+TEST(EditorApiTests, PivotToolAppliesGroupPivotWithoutMovingChildren) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef left =
+      create_selected_box(editor, "Pivot Group Left");
+  const quader::QuaderModelingObjectRef right =
+      create_selected_box(editor, "Pivot Group Right");
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(left.entity,
+                                 quader::QuaderTransform{
+                                     .position = {-3.0f, 0.0f, 0.0f}})
+                  .ok());
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(right.entity,
+                                 quader::QuaderTransform{
+                                     .position = {3.0f, 0.0f, 0.0f}})
+                  .ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({left.entity, right.entity}, right.entity)
+                  .ok());
+  const quader::QuaderApiResult<quader::QuaderEntityRef> group =
+      editor.scene().group_selection("Pivot Group");
+  ASSERT_TRUE(group.ok()) << group.error_message();
+
+  const std::optional<quader::QVec3> left_before =
+      entity_world_origin_translation_only(editor, left.entity);
+  const std::optional<quader::QVec3> right_before =
+      entity_world_origin_translation_only(editor, right.entity);
+  ASSERT_TRUE(left_before.has_value());
+  ASSERT_TRUE(right_before.has_value());
+
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  ASSERT_TRUE(
+      editor.tools().execute_action("pivot", "pivot.align.top_center").ok());
+  const quader::QuaderApiVoidResult applied =
+      editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  EXPECT_EQ(editor.query().history().undo_label, "Set Pivot");
+
+  const std::optional<quader::QuaderEntitySnapshot> group_after =
+      editor.query().entity(group.value().id);
+  ASSERT_TRUE(group_after.has_value());
+  expect_vec3_near(group_after->transform.position, {0.0f, 1.0f, 0.0f});
+  const std::optional<quader::QVec3> group_transform_pivot =
+      editor.query().selection_transform_pivot();
+  ASSERT_TRUE(group_transform_pivot.has_value());
+  expect_vec3_near(*group_transform_pivot, {0.0f, 1.0f, 0.0f});
+  expect_vec3_near(*entity_world_origin_translation_only(editor, left.entity),
+                   *left_before);
+  expect_vec3_near(*entity_world_origin_translation_only(editor, right.entity),
+                   *right_before);
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  const std::optional<quader::QuaderEntitySnapshot> group_undone =
+      editor.query().entity(group.value().id);
+  ASSERT_TRUE(group_undone.has_value());
+  expect_vec3_near(group_undone->transform.position, {});
+  expect_vec3_near(*entity_world_origin_translation_only(editor, left.entity),
+                   *left_before);
+  expect_vec3_near(*entity_world_origin_translation_only(editor, right.entity),
+                   *right_before);
+
+  ASSERT_TRUE(editor.history().redo().ok());
+  const std::optional<quader::QuaderEntitySnapshot> group_redone =
+      editor.query().entity(group.value().id);
+  ASSERT_TRUE(group_redone.has_value());
+  expect_vec3_near(group_redone->transform.position, {0.0f, 1.0f, 0.0f});
+  expect_vec3_near(*entity_world_origin_translation_only(editor, left.entity),
+                   *left_before);
+  expect_vec3_near(*entity_world_origin_translation_only(editor, right.entity),
+                   *right_before);
+}
+
+TEST(EditorApiTests, PivotToolCancelDiscardsGroupPreview) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef left =
+      create_selected_box(editor, "Pivot Cancel Group Left");
+  const quader::QuaderModelingObjectRef right =
+      create_selected_box(editor, "Pivot Cancel Group Right");
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({left.entity, right.entity}, right.entity)
+                  .ok());
+  const quader::QuaderApiResult<quader::QuaderEntityRef> group =
+      editor.scene().group_selection("Pivot Cancel Group");
+  ASSERT_TRUE(group.ok()) << group.error_message();
+  const std::optional<quader::QVec3> left_before =
+      entity_world_origin_translation_only(editor, left.entity);
+  const std::optional<quader::QVec3> right_before =
+      entity_world_origin_translation_only(editor, right.entity);
+  ASSERT_TRUE(left_before.has_value());
+  ASSERT_TRUE(right_before.has_value());
+  const quader::QuaderHistorySnapshot history_before =
+      editor.query().history();
+
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  ASSERT_TRUE(
+      editor.tools().execute_action("pivot", "pivot.align.bottom_center").ok());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+
+  const std::optional<quader::QuaderEntitySnapshot> group_after =
+      editor.query().entity(group.value().id);
+  ASSERT_TRUE(group_after.has_value());
+  expect_vec3_near(group_after->transform.position, {});
+  expect_vec3_near(*entity_world_origin_translation_only(editor, left.entity),
+                   *left_before);
+  expect_vec3_near(*entity_world_origin_translation_only(editor, right.entity),
+                   *right_before);
+  EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
 }
 
 TEST(EditorApiTests, PublicHistoryUndoRedoMatchesCommandApiStatus) {

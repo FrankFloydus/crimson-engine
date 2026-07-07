@@ -274,7 +274,8 @@ viewport_input_action_binding_catalog() {
       {
           .target_id = viewport_input_action_target_id("modal_tool.finalize"),
           .shortcut = "Space",
-          .when = "viewportFocus && !textInputActive && modalTool.active && "
+          .when = "viewportFocus && !textInputActive && "
+                  "(modalTool.active || activeTool.ownsViewport) && "
                   "!navigation.active",
           .weight = 30,
           .action = ViewportInputActionKind::ModalToolFinalize,
@@ -282,7 +283,8 @@ viewport_input_action_binding_catalog() {
       {
           .target_id = viewport_input_action_target_id("modal_tool.finalize"),
           .shortcut = "Enter",
-          .when = "viewportFocus && !textInputActive && modalTool.active && "
+          .when = "viewportFocus && !textInputActive && "
+                  "(modalTool.active || activeTool.ownsViewport) && "
                   "!navigation.active",
           .weight = 30,
           .action = ViewportInputActionKind::ModalToolFinalize,
@@ -294,6 +296,14 @@ viewport_input_action_binding_catalog() {
                   "!navigation.active",
           .weight = 30,
           .action = ViewportInputActionKind::ModalToolModeCycle,
+      },
+      {
+          .target_id = viewport_input_action_target_id("quick_pivot"),
+          .shortcut = "D",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "!modalTool.active && !activeTool.ownsViewport",
+          .weight = 20,
+          .action = ViewportInputActionKind::QuickPivot,
       },
   };
 }
@@ -420,6 +430,9 @@ bool viewport_tool_has_host_contract(ViewportToolId tool) {
 }
 
 bool viewport_tool_has_native_controller(ViewportToolId tool) {
+  if (tool == ViewportToolId::Pivot) {
+    return find_viewport_tool_descriptor(tool) != nullptr;
+  }
   return find_viewport_tool_descriptor(tool) != nullptr &&
          viewport_tool_has_host_contract(tool);
 }

@@ -2647,3 +2647,53 @@ Verification:
 - `cmake --build --preset vs2026-debug --target quader_tests`
 - `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportOverlayPolicyTests.MatchesDepthAndHoverSuppressionContract:ViewportOverlayPolicyTests.ComponentSelectionWiresAndVertexPointsUseDepthTestedState:OverlayLineMeshBuilderTests.PerspectiveDepthBiasDoesNotMoveLineOrPointScreenPosition:OverlayPointMeshBuilderTests.*`
 - `build\vs2026\Debug\quader_modeling_domain_tests.exe --gtest_color=no --gtest_filter=QdrEditorMetadataOverlayCatalogTests.HostContractOverlayLayerCatalogStatesRenderDepthSemantics`
+
+## 2026-07-07 - Pivot Tool Uses Tool Settings And Origin Rebasing
+
+Task/context: Pivot needed to become a first-class viewport tool on `P`, with hold-`D` Quick Pivot,
+generic tool settings, snapping, quick-align actions, undoable permanent pivot changes, and no
+visible model jump when rebasing origins.
+
+Invariant:
+
+- Tool settings are exposed through `QuaderToolsApi::active_settings()` as generic
+  `QuaderToolSettingsTarget` controls. The UI panel must render these controls and write back
+  through `editor.tools()`, not switch on modeling operation kinds.
+- Persistent Pivot is owned by `PivotToolService` under `ProjectSession`. Applying it rebases the
+  target origin by moving the scene transform and compensating mesh vertices or group child local
+  transforms so world bounds/child world matrices stay fixed. Mesh data must be editable CPU data;
+  shared mesh assets use clone-on-write.
+- Pivot quick-align action labels are axis-stable: Top/Bottom use world Y, Left/Right use world X,
+  and Front/Back use world Z. The AABB corner actions must keep that mapping.
+- Quick Pivot is a temporary selection pivot override. It survives `D` release, feeds
+  `selection_transform_pivot()` for subsequent transform gizmo drags, and clears on selection
+  change or deselect. It must not resolve while WASD fly navigation is active.
+- Transform gizmos must ask `QuaderQueryApi::selection_transform_pivot()`: quick-pivot override
+  first, single selected object/group custom-pivot world origin second, otherwise the normal
+  selection center. Default created/imported meshes are not custom-pivoted, so their gizmo stays at
+  their selected bounds center; only an applied Pivot rebase marks the transform origin as the later
+  transform pivot.
+- The Pivot handle overlay is a small yellow `ToolHandle` line-ring sphere, not an overlay point
+  billboard. Pivot editing/dragging must mark before-tool interaction as gizmo-consumed so viewport
+  selection fallback and box marquee do not run while the pivot handle is being moved.
+- Pivot settings expose only Prev/Next align-cycle actions. The cycle has one center preset only;
+  Bounds Center is not a separate preset because it resolves to the same position.
+
+Affected owners/files:
+
+- `src/editor/pivot/pivot_tool_service.*`
+- `src/api/quader_tools_api.*`
+- `src/api/quader_query_api.*`
+- `src/ui/tool_settings_panel.cpp`
+- `src/ui/viewport_panel.cpp`
+- `src/viewport/host_viewport_contract_adapter.cpp`
+- `src/editor/tools/base/viewport_tool_descriptor_catalog.cpp`
+- `tests/editor_api_tests.cpp`
+- `tests/core_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=EditorApiTests.Pivot*:EditorApiTests.QuickPivot*:ProjectSessionTests.QuickPivotOverrideFeedsTransformPivotAndClearsOnSelectionChange:EditorApiTests.ViewportKeybindingContextsSeparateNavigationFromToolShortcuts`
+- `ctest --preset vs2026-debug --output-on-failure`

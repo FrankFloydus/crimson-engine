@@ -20,6 +20,9 @@ void add_key(ImGuiKeyboardInputChords &input, ImGuiKey imgui_key,
   if (ImGui::IsKeyDown(imgui_key)) {
     input.active.push_back(keyboard_input_chord(key, input.modifiers));
   }
+  if (ImGui::IsKeyReleased(imgui_key)) {
+    input.released.push_back(keyboard_input_chord(key, input.modifiers));
+  }
 }
 
 void add_key_pair(ImGuiKeyboardInputChords &input, ImGuiKey primary_key,
@@ -275,6 +278,9 @@ ViewportInputFrame ViewportInputFrameBuilder::build(const ViewportInputFrameBuil
     input.active_input_chords.insert(input.active_input_chords.end(),
                                      keyboard.active.begin(),
                                      keyboard.active.end());
+    input.released_input_chords.insert(input.released_input_chords.end(),
+                                       keyboard.released.begin(),
+                                       keyboard.released.end());
 
     return input;
 }

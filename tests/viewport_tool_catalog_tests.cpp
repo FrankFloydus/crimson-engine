@@ -38,8 +38,10 @@ TEST(ViewportToolCatalogTests, CatalogContainsExpectedInteractiveToolContracts) 
   for (const ToolDescriptor &descriptor : viewport_tool_descriptors()) {
     EXPECT_EQ(find_viewport_tool_descriptor(descriptor.id), &descriptor);
     EXPECT_EQ(find_viewport_tool_descriptor(descriptor.tool), &descriptor);
-    EXPECT_EQ(find_viewport_tool_descriptor(descriptor.modeling_tool),
-              &descriptor);
+    if (descriptor.tool != ViewportToolId::Pivot) {
+      EXPECT_EQ(find_viewport_tool_descriptor(descriptor.modeling_tool),
+                &descriptor);
+    }
 
     const ViewportTool *tool = find_viewport_tool(descriptor.tool);
     ASSERT_NE(tool, nullptr) << static_cast<int>(descriptor.tool);
@@ -57,9 +59,11 @@ TEST(ViewportToolCatalogTests, CatalogContainsExpectedInteractiveToolContracts) 
               descriptor.supports_transform_gizmo);
     EXPECT_EQ(viewport_tool_supports_transform_gizmo(descriptor.tool),
               descriptor.supports_transform_gizmo);
-    EXPECT_EQ(
-        viewport_tool_interaction_tool(descriptor.tool),
-        quader_editor_core::viewport_interaction_tool_from_id(descriptor.id));
+    if (descriptor.tool != ViewportToolId::Pivot) {
+      EXPECT_EQ(
+          viewport_tool_interaction_tool(descriptor.tool),
+          quader_editor_core::viewport_interaction_tool_from_id(descriptor.id));
+    }
   }
 }
 
@@ -610,7 +614,7 @@ TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalToo
   const std::size_t navigation_skip = transform_gizmo.find(
       "camera_navigation_frame && !dragging_ && !pending_drag_.has_value()");
   const std::size_t selection_center =
-      transform_gizmo.find("editor.query().selection_center()");
+      transform_gizmo.find("editor.query().selection_transform_pivot()");
   ASSERT_NE(navigation_skip, std::string::npos);
   ASSERT_NE(selection_center, std::string::npos);
   EXPECT_LT(navigation_skip, selection_center);
@@ -714,7 +718,39 @@ TEST(ViewportToolGuardrailTests, HostViewportAdapterUsesViewportToolDescriptors)
     EXPECT_NE(adapter.find("find_viewport_tool_descriptor(id)"), std::string::npos);
     EXPECT_NE(adapter.find("quader_host_contract::find_action_descriptor(id)"), std::string::npos);
     EXPECT_EQ(adapter.find("case ViewportToolId::"), std::string::npos);
-    EXPECT_EQ(adapter.find("tool == ViewportToolId::"), std::string::npos);
+    const std::size_t pivot_native_controller =
+        adapter.find("tool == ViewportToolId::Pivot");
+    ASSERT_NE(pivot_native_controller, std::string::npos);
+    EXPECT_EQ(adapter.find("tool == ViewportToolId::",
+                           pivot_native_controller + 1),
+              std::string::npos);
+}
+
+TEST(ViewportToolGuardrailTests,
+     PivotHandleUsesSphereOverlayAndConsumesSelectionFallback) {
+  const std::filesystem::path root = source_root();
+  const std::string viewport_panel =
+      read_source_file(root / "src" / "ui" / "viewport_panel.cpp");
+
+  const std::string pivot_overlay =
+      source_slice(viewport_panel, "void append_pivot_handle_overlay",
+                   "float grid_size_for_preset");
+  EXPECT_NE(viewport_panel.find("void append_pivot_ring("), std::string::npos);
+  EXPECT_NE(pivot_overlay.find("append_pivot_ring("), std::string::npos);
+  EXPECT_NE(viewport_panel.find("frame.lines.push_back(ViewportOverlayLine{"),
+            std::string::npos);
+  EXPECT_EQ(pivot_overlay.find("frame.points.push_back"), std::string::npos);
+
+  const std::string pivot_input =
+      source_slice(viewport_panel,
+                   "const PivotHandleState pivot_handle_after_input",
+                   "const ModelingToolStatus release_tool_status");
+  EXPECT_NE(pivot_input.find("pivot_blocks_gizmo || pivot_consumed"),
+            std::string::npos);
+  EXPECT_NE(
+      pivot_input.find(
+          "ViewportBeforeToolInteractionResult{.gizmo_consumed = true}"),
+      std::string::npos);
 }
 
 } // namespace

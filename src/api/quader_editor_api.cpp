@@ -27,7 +27,14 @@ public:
         , commands(api, project, viewports, tools)
 #endif
         , preferences(commands)
-        , render(session, api.query()) {}
+        , render(session, api.query()) {
+      tools.set_runtime_hooks(QuaderToolsRuntimeHooks{
+          .commit_active_tool_preview =
+              [this] { return api.modeling().commit_preview(); },
+          .cancel_active_tool_preview =
+              [this] { return api.modeling().cancel_preview(); },
+      });
+    }
 
     QuaderApi api;
     QuaderProjectApi project;

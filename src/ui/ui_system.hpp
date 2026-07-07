@@ -37,6 +37,7 @@ namespace quader {
 class QuaderEditorApi;
 class EditorSelectionService;
 class ModelingSessionService;
+class PivotToolService;
 class UIPlatformAdapter;
 struct UIPlatformEvent;
 
@@ -74,14 +75,15 @@ public:
     void draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
               SceneDocument &document, AssetRegistry &assets,
               ModelingSessionService &modeling,
-              EditorSelectionService &selection, AssetId default_material,
-              bool &quit_requested);
+              EditorSelectionService &selection, PivotToolService &pivot,
+              AssetId default_material, bool &quit_requested);
     void prepare_render_data(std::uint32_t framebuffer_width,
                              std::uint32_t framebuffer_height);
     void prepare_viewports(QuaderEditorApi &editor,
                            SceneRenderBridge &render_bridge,
                            const SceneDocument &document,
-                           const AssetRegistry &assets);
+                           const AssetRegistry &assets,
+                           const PivotToolService &pivot);
     void render_viewports(RenderSystem &render_system);
     void render(RenderSystem &render_system);
     void set_render_performance_stats(RenderFramePerformanceStats stats);
