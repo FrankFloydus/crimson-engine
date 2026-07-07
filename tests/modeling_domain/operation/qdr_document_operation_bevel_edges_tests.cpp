@@ -1413,3 +1413,75 @@ TEST(QdrDocumentOperationBevelEdgesTests, ParallelTopOpeningEdgeBevelsCloseDoorw
         EXPECT_TRUE(find_vertex(document, terminal_vertex_id) == nullptr);
     }
 }
+
+TEST(QdrDocumentOperationBevelEdgesTests, AdjacentOpeningEdgeBevelClosesOppositeTerminalPatch) {
+    SideExtrusionFixture fixture = make_side_extrusion_fixture();
+    Document document = fixture.document;
+
+    Selection selection;
+    selection.mode = SelectionMode::Edge;
+    selection.edges = {
+        make_edge(fixture.root_corners[0], fixture.root_corners[1]),
+        make_edge(fixture.root_corners[1], fixture.root_corners[2]),
+    };
+    selection.has_active = true;
+    selection.active_kind = ElementKind::Edge;
+    selection.active_edge = selection.edges.front();
+
+    EdgeBevelSettings settings;
+    settings.width = 0.12F;
+    settings.profile = 0.5F;
+    settings.profile_type = BevelProfileType::Offset;
+    settings.segments = 3;
+
+    const OperationResult result = bevel_selected_edges(document, selection, settings);
+
+    SCOPED_TRACE(::testing::Message() << result.message);
+    EXPECT_TRUE(result.changed);
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
+    EXPECT_TRUE(selection.mode == SelectionMode::Face);
+    EXPECT_FALSE(selection.faces.empty());
+    EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), face_has_repeated_vertices));
+    EXPECT_TRUE(every_face_compiles_to_triangles(document));
+    SCOPED_TRACE(::testing::Message() << open_edge_summary(document));
+    SCOPED_TRACE(::testing::Message() << doorway_top_region_summary(document));
+    EXPECT_TRUE(every_edge_is_closed(document));
+    EXPECT_TRUE(every_shared_edge_has_opposite_winding(document));
+}
+
+TEST(QdrDocumentOperationBevelEdgesTests, OppositeSideAndBottomOpeningBevelClosesBottomTerminalPatches) {
+    SideExtrusionFixture fixture = make_side_extrusion_fixture();
+    Document document = fixture.document;
+
+    Selection selection;
+    selection.mode = SelectionMode::Edge;
+    selection.edges = {
+        make_edge(fixture.root_corners[0], fixture.root_corners[1]),
+        make_edge(fixture.root_corners[3], fixture.root_corners[2]),
+        make_edge(fixture.root_corners[0], fixture.extrusion_corners[4]),
+        make_edge(fixture.root_corners[3], fixture.extrusion_corners[7]),
+    };
+    selection.has_active = true;
+    selection.active_kind = ElementKind::Edge;
+    selection.active_edge = selection.edges.front();
+
+    EdgeBevelSettings settings;
+    settings.width = 0.12F;
+    settings.profile = 0.5F;
+    settings.profile_type = BevelProfileType::Offset;
+    settings.segments = 3;
+
+    const OperationResult result = bevel_selected_edges(document, selection, settings);
+
+    SCOPED_TRACE(::testing::Message() << result.message);
+    EXPECT_TRUE(result.changed);
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
+    EXPECT_TRUE(selection.mode == SelectionMode::Face);
+    EXPECT_FALSE(selection.faces.empty());
+    EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), face_has_repeated_vertices));
+    EXPECT_TRUE(every_face_compiles_to_triangles(document));
+    SCOPED_TRACE(::testing::Message() << open_edge_summary(document));
+    SCOPED_TRACE(::testing::Message() << doorway_top_region_summary(document));
+    EXPECT_TRUE(every_edge_is_closed(document));
+    EXPECT_TRUE(every_shared_edge_has_opposite_winding(document));
+}

@@ -1657,6 +1657,168 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
         }
     }
 
+    auto append_terminal_open_patch_faces = [&]() {
+        std::map<std::pair<ElementId, ElementId>, int> edge_counts =
+            combined_face_edge_counts();
+        const auto record_patch_face_edges = [&edge_counts](const std::vector<ElementId>& vertices) {
+            for (std::size_t index = 0; index < vertices.size(); ++index) {
+                const Edge edge = make_edge(vertices[index], vertices[(index + 1U) % vertices.size()]);
+                ++edge_counts[edge_key(edge)];
+            }
+        };
+        const auto append_local_loop = [&](ElementId source_vertex_id, std::vector<ElementId> loop) {
+            loop = compact_edge_bevel_face_loop(std::move(loop));
+            if (loop.size() < 3U) {
+                return false;
+            }
+
+            std::uint32_t material_slot = 0;
+            for (const EdgeBevelBuild& build : builds) {
+                if (build.edge.a == source_vertex_id || build.edge.b == source_vertex_id) {
+                    material_slot = build.sides[0].material_slot;
+                    break;
+                }
+            }
+
+            quader::QVec3 expected_normal;
+            if (const Vertex* source_vertex = find_vertex(candidate, source_vertex_id)) {
+                Face probe;
+                probe.vertices = loop;
+                expected_normal = face_centroid(candidate, probe) - source_vertex->position;
+            }
+            if (length_squared(expected_normal) <= kEpsilon) {
+                Face probe;
+                probe.vertices = loop;
+                expected_normal = face_normal(candidate, probe);
+            }
+            if (length_squared(expected_normal) <= kEpsilon) {
+                return false;
+            }
+
+            if (!append_edge_bevel_face(
+                    candidate,
+                    bevel_faces,
+                    generated_face_ids,
+                    loop,
+                    material_slot,
+                    expected_normal)) {
+                return false;
+            }
+            record_patch_face_edges(loop);
+            return true;
+        };
+
+        std::map<ElementId, std::vector<ElementId>> local_profiles_by_vertex =
+            terminal_profiles_by_vertex;
+        for (const auto& [vertex_id, selected_count] : selected_edge_counts) {
+            if (selected_count <= 1 || !offsets_by_vertex.contains(vertex_id)) {
+                continue;
+            }
+            auto& profile_vertices = local_profiles_by_vertex[vertex_id];
+            for (const EdgeBevelBuild& build : builds) {
+                if (build.edge.a != vertex_id && build.edge.b != vertex_id) {
+                    continue;
+                }
+                const std::vector<ElementId> endpoint_profile =
+                    edge_bevel_endpoint_profile_vertices(build, vertex_id);
+                for (const ElementId profile_vertex_id : endpoint_profile) {
+                    add_unique_id(profile_vertices, profile_vertex_id);
+                }
+            }
+        }
+
+        const auto expand_local_open_edge_component = [&edge_counts](std::set<ElementId>& local_vertex_ids) {
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                for (const auto& [edge_pair, count] : edge_counts) {
+                    if (count != 1) {
+                        continue;
+                    }
+                    const bool has_first = local_vertex_ids.contains(edge_pair.first);
+                    const bool has_second = local_vertex_ids.contains(edge_pair.second);
+                    if (has_first == has_second) {
+                        continue;
+                    }
+                    local_vertex_ids.insert(has_first ? edge_pair.second : edge_pair.first);
+                    changed = true;
+                }
+            }
+        };
+
+        for (const auto& [vertex_id, profile_vertices] : local_profiles_by_vertex) {
+            if (profile_vertices.size() < 2U) {
+                continue;
+            }
+
+            std::set<ElementId> local_vertex_ids(profile_vertices.begin(), profile_vertices.end());
+            if (const auto offsets = offsets_by_vertex.find(vertex_id); offsets != offsets_by_vertex.end()) {
+                for (const EdgeBevelFaceVertexOffset& offset : offsets->second) {
+                    if (offset.offset_vertex_id != kInvalidElementId) {
+                        local_vertex_ids.insert(offset.offset_vertex_id);
+                    }
+                }
+            }
+            for (const auto& [terminal_edge, boundary_vertex_id] : terminal_boundary_vertices_by_edge) {
+                if (terminal_edge.first == vertex_id && boundary_vertex_id != kInvalidElementId) {
+                    local_vertex_ids.insert(boundary_vertex_id);
+                }
+            }
+            if (local_vertex_ids.size() < 3U) {
+                continue;
+            }
+            expand_local_open_edge_component(local_vertex_ids);
+
+            std::vector<Edge> local_open_edges;
+            for (const auto& [edge_pair, count] : edge_counts) {
+                if (count != 1) {
+                    continue;
+                }
+                if (!local_vertex_ids.contains(edge_pair.first) ||
+                    !local_vertex_ids.contains(edge_pair.second)) {
+                    continue;
+                }
+                local_open_edges.push_back(make_edge(edge_pair.first, edge_pair.second));
+            }
+            if (local_open_edges.size() < 3U) {
+                continue;
+            }
+
+            std::set<std::pair<ElementId, ElementId>> remaining_edges;
+            for (const Edge& edge : local_open_edges) {
+                remaining_edges.insert(edge_key(edge));
+            }
+            while (!remaining_edges.empty()) {
+                const std::pair first_edge_key = *remaining_edges.begin();
+                std::vector<ElementId> stack { first_edge_key.first, first_edge_key.second };
+                std::vector<Edge> component_edges;
+                while (!stack.empty()) {
+                    const ElementId current_id = stack.back();
+                    stack.pop_back();
+                    for (auto edge = remaining_edges.begin(); edge != remaining_edges.end();) {
+                        if (edge->first != current_id && edge->second != current_id) {
+                            ++edge;
+                            continue;
+                        }
+                        const ElementId next_id = edge->first == current_id ? edge->second : edge->first;
+                        component_edges.push_back(make_edge(edge->first, edge->second));
+                        edge = remaining_edges.erase(edge);
+                        stack.push_back(next_id);
+                    }
+                }
+
+                const std::optional<std::vector<ElementId>> loop =
+                    closed_edge_loop_from_edges(component_edges);
+                if (!loop.has_value()) {
+                    continue;
+                }
+                append_local_loop(vertex_id, *loop);
+            }
+        }
+    };
+
+    append_terminal_open_patch_faces();
+
     rebuilt_faces.insert(rebuilt_faces.end(), bevel_faces.begin(), bevel_faces.end());
     candidate.faces = std::move(rebuilt_faces);
     prune_invalid_faces(candidate);

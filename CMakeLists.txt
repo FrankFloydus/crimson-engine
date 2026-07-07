@@ -559,6 +559,7 @@ add_library(quader_ui STATIC
     src/editor/transform/scene_transform_drag_service.cpp
     src/ui/console_panel.cpp
     src/ui/imgui_popup_utils.cpp
+    src/ui/imgui_quader_slider.cpp
     src/ui/imgui_quader_widgets.cpp
     src/ui/inspector_panel.cpp
     src/ui/main_menu_bar.cpp

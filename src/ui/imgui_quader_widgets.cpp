@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/imgui_quader_widgets.hpp"
 
+#include "ui/imgui_quader_slider.hpp"
 #include "ui/phosphor_icons.hpp"
 
 #include <algorithm>
@@ -189,38 +190,6 @@ void queue_property_child_guide(ImVec2 cell_min, float row_height) {
   pending->clip_min = draw_list->GetClipRectMin();
   pending->clip_max = draw_list->GetClipRectMax();
   pending->row_height = row_height;
-}
-
-void activate_slider_temp_input_on_double_click(const char *label,
-                                                ImGuiSliderFlags flags) {
-  if ((flags & ImGuiSliderFlags_NoInput) != 0) {
-    return;
-  }
-
-  ImGuiContext &context = *GImGui;
-  ImGuiWindow *window = ImGui::GetCurrentWindow();
-  if (window == nullptr || window->SkipItems) {
-    return;
-  }
-
-  const ImGuiID id = window->GetID(label);
-  const char *label_end = ImGui::FindRenderedTextEnd(label);
-  const ImVec2 label_size = ImGui::CalcTextSize(label, label_end, false);
-  const float width = ImGui::CalcItemWidth();
-  const ImVec2 cursor = window->DC.CursorPos;
-  const ImRect frame_rect(
-      cursor,
-      ImVec2(cursor.x + width,
-             cursor.y + label_size.y + context.Style.FramePadding.y * 2.0f));
-  if (!ImGui::IsMouseHoveringRect(frame_rect.Min, frame_rect.Max) ||
-      !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ||
-      !ImGui::TestKeyOwner(ImGuiKey_MouseLeft, id)) {
-    return;
-  }
-
-  ImGui::SetKeyOwner(ImGuiKey_MouseLeft, id);
-  context.NavActivateId = id;
-  context.NavActivateFlags = ImGuiActivateFlags_PreferInput;
 }
 
 } // namespace
@@ -472,14 +441,13 @@ void quader_end_property_table() {
 bool quader_slider_float(const char *label, float *value, float minimum,
                          float maximum, const char *format,
                          ImGuiSliderFlags flags) {
-  activate_slider_temp_input_on_double_click(label, flags);
-  return ImGui::SliderFloat(label, value, minimum, maximum, format, flags);
+  return quader_theme_slider_float(label, value, minimum, maximum, format,
+                                   flags);
 }
 
 bool quader_slider_int(const char *label, int *value, int minimum, int maximum,
                        const char *format, ImGuiSliderFlags flags) {
-  activate_slider_temp_input_on_double_click(label, flags);
-  return ImGui::SliderInt(label, value, minimum, maximum, format, flags);
+  return quader_theme_slider_int(label, value, minimum, maximum, format, flags);
 }
 
 } // namespace quader

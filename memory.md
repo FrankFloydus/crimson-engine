@@ -9,6 +9,29 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-07 - Edge Bevel Corners Fill Local Open Profile Loops
+
+Task/context: beveling adjacent L-shaped opening edges could leave a black terminal hole at the
+opposite unshared endpoint; beveling opposite side plus bottom opening edges could leave two bottom
+holes at two-selected-edge corners. Both matched missing pieces of Blender's bevel boundary rebuild
+around selected endpoints.
+
+Invariant:
+
+- `src/mesh/polygon/operations/bevel_edges_operation.cpp` owns edge bevel topology. Runtime/UI
+  bevel paths should not patch terminal holes outside the polygon operation.
+- After source-face rebuilds, strip faces, and normal corner/terminal support faces are emitted,
+  selected endpoints must close any remaining local open-edge loop connected to that endpoint's
+  bevel profile, offset vertices, and unselected support/boundary vertices.
+- The local close pass must be constrained to the affected bevel profile component so it does not fill
+  unrelated document holes.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_modeling_domain_polygon_loop_tests`
+- `build\vs2026\Debug\quader_modeling_domain_polygon_loop_tests.exe --gtest_color=no --gtest_filter=QdrDocumentOperationBevelEdgesTests.*`
+- `cmake --build --preset vs2026-debug --target quader`
+
 ## 2026-07-04 - Component Source-Wire Stickiness Is Mode-Specific
 
 Task/context: after source-wire overlay changes, component mode either stuck the cyan wire to the

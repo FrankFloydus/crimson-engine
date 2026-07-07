@@ -125,6 +125,8 @@ TEST(UiLayoutGuardrailTests, NumericSlidersUseSharedDoubleClickInputWrapper) {
       read_source_file({"src", "ui", "imgui_quader_widgets.hpp"});
   const std::string widgets =
       read_source_file({"src", "ui", "imgui_quader_widgets.cpp"});
+  const std::string slider =
+      read_source_file({"src", "ui", "imgui_quader_slider.cpp"});
   const std::string viewport_settings =
       read_source_file({"src", "ui", "viewport_settings_panel.cpp"});
   const std::string tool_settings =
@@ -140,8 +142,18 @@ TEST(UiLayoutGuardrailTests, NumericSlidersUseSharedDoubleClickInputWrapper) {
 
   expect_contains(widgets, "bool quader_slider_float");
   expect_contains(widgets, "bool quader_slider_int");
-  expect_contains(widgets, "ImGui::IsMouseDoubleClicked");
-  expect_contains(widgets, "ImGuiActivateFlags_PreferInput");
+  expect_contains(widgets, "quader_theme_slider_float");
+  expect_contains(widgets, "quader_theme_slider_int");
+  expect_missing(widgets, "ImGui::SliderFloat(");
+  expect_missing(widgets, "ImGui::SliderInt(");
+  expect_contains(slider, "bool quader_theme_slider_float");
+  expect_contains(slider, "bool quader_theme_slider_int");
+  expect_contains(slider, "ImGui::SliderBehavior");
+  expect_contains(slider, "render_slider_text_row");
+  expect_contains(slider, "render_slider_track");
+  expect_contains(slider, "ImGui::IsMouseDoubleClicked");
+  expect_contains(slider, "ImGuiActivateFlags_PreferInput");
+  expect_contains(slider, "ImGuiCol_SliderGrab");
   expect_contains(header, "ImGuiSliderFlags_AlwaysClamp");
   expect_contains(viewport_settings, "quader_slider_float(");
   expect_missing(viewport_settings, "ImGui::SliderFloat(");
