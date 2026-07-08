@@ -31,6 +31,26 @@ TEST(QdrDocumentOperationBridgeEdgeBoundariesTests, BridgeEdgeBoundariesCreatesA
 	
 }
 
+TEST(QdrDocumentOperationBridgeEdgeBoundariesTests, BridgeEdgeBoundariesKeepsSharedEdgesOppositeForNormalAndInterpolatedBridge) {
+	for (const int steps : {1, 3}) {
+		Document document = qdr_test::make_parallel_quad_document();
+		const std::vector<ElementId> first_vertices = document.faces[0].vertices;
+		const std::vector<ElementId> second_vertices = document.faces[1].vertices;
+		Selection selection;
+
+		const OperationResult result = bridge_edge_boundaries(
+			document, selection, first_vertices, second_vertices, true, steps);
+
+		ASSERT_TRUE(result.changed) << result.message;
+		qdr_test::expect_valid_polygon_document_after_success(document, result);
+		EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
+		EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+		EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+		EXPECT_EQ(selection.mode, SelectionMode::Face);
+		EXPECT_EQ(selection.faces.size(), 4U * static_cast<std::size_t>(steps));
+	}
+}
+
 TEST(QdrDocumentOperationBridgeEdgeBoundariesTests, BridgeEdgeBoundariesCreatesABridgeBetweenMatchingOpenChainsMismatchedOrTooShortBoundariesFailWithoutMutating) {
 	
 

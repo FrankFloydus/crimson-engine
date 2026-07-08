@@ -3362,7 +3362,9 @@ bool append_bridge_face(Document& document, std::vector<ElementId> vertices, std
             return false;
         }
     }
-    orient_face_toward_normal(document, face, expected_normal);
+    if (!orient_face_against_adjacent_winding(document, face)) {
+        orient_face_toward_normal(document, face, expected_normal);
+    }
     bridge_face_ids.push_back(face.id);
     document.faces.push_back(std::move(face));
     return true;

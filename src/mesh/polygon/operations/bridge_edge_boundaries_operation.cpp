@@ -18,8 +18,10 @@
 
 #include <array>
 #include <cmath>
+#include <limits>
 
 #include <string_view>
+#include <utility>
 
 namespace quader_poly {
 
@@ -34,6 +36,107 @@ OperationResult bridge_edge_boundaries_impl(
     std::span<const ElementId> second_vertices,
     bool closed,
     int steps);
+
+std::vector<ElementId> bridge_reoriented_boundary_vertices(
+    std::span<const ElementId> vertices,
+    bool closed,
+    bool reversed)
+{
+    std::vector<ElementId> result;
+    result.reserve(vertices.size());
+    if (!reversed) {
+        result.assign(vertices.begin(), vertices.end());
+        return result;
+    }
+
+    if (!closed) {
+        result.assign(vertices.rbegin(), vertices.rend());
+        return result;
+    }
+
+    if (vertices.empty()) {
+        return result;
+    }
+    result.push_back(vertices.front());
+    for (std::size_t index = vertices.size() - 1U; index > 0U; --index) {
+        result.push_back(vertices[index]);
+    }
+    return result;
+}
+
+int bridge_boundary_winding_score(
+    const Document& document,
+    std::span<const ElementId> first_vertices,
+    std::span<const ElementId> second_vertices,
+    bool closed)
+{
+    if (first_vertices.size() != second_vertices.size()) {
+        return std::numeric_limits<int>::min();
+    }
+    const std::size_t vertex_count = first_vertices.size();
+    const std::size_t edge_count = closed ? vertex_count : (vertex_count > 0U ? vertex_count - 1U : 0U);
+    if (edge_count == 0U) {
+        return std::numeric_limits<int>::min();
+    }
+
+    int score = 0;
+    for (std::size_t edge_index = 0; edge_index < edge_count; ++edge_index) {
+        const std::size_t next_index = (edge_index + 1U) % vertex_count;
+        const std::array<ElementId, 4> quad {
+            first_vertices[edge_index],
+            first_vertices[next_index],
+            second_vertices[next_index],
+            second_vertices[edge_index],
+        };
+        for (std::size_t vertex_index = 0; vertex_index < quad.size(); ++vertex_index) {
+            const ElementId from_id = quad[vertex_index];
+            const ElementId to_id = quad[(vertex_index + 1U) % quad.size()];
+            if (from_id == kInvalidElementId || to_id == kInvalidElementId || from_id == to_id) {
+                continue;
+            }
+            for (const Face& adjacent_face : document.faces) {
+                if (directed_face_edge_index(adjacent_face, from_id, to_id).has_value()) {
+                    --score;
+                }
+                if (directed_face_edge_index(adjacent_face, to_id, from_id).has_value()) {
+                    ++score;
+                }
+            }
+        }
+    }
+    return score;
+}
+
+std::pair<std::vector<ElementId>, std::vector<ElementId>>
+bridge_winding_aligned_boundaries(
+    const Document& document,
+    std::span<const ElementId> first_vertices,
+    std::span<const ElementId> second_vertices,
+    bool closed)
+{
+    std::vector<ElementId> best_first(first_vertices.begin(), first_vertices.end());
+    std::vector<ElementId> best_second(second_vertices.begin(), second_vertices.end());
+    int best_score = bridge_boundary_winding_score(document, best_first, best_second, closed);
+    for (const bool reverse_first : {false, true}) {
+        for (const bool reverse_second : {false, true}) {
+            if (!reverse_first && !reverse_second) {
+                continue;
+            }
+            std::vector<ElementId> candidate_first =
+                bridge_reoriented_boundary_vertices(first_vertices, closed, reverse_first);
+            std::vector<ElementId> candidate_second =
+                bridge_reoriented_boundary_vertices(second_vertices, closed, reverse_second);
+            const int score = bridge_boundary_winding_score(
+                document, candidate_first, candidate_second, closed);
+            if (score > best_score) {
+                best_score = score;
+                best_first = std::move(candidate_first);
+                best_second = std::move(candidate_second);
+            }
+        }
+    }
+    return {std::move(best_first), std::move(best_second)};
+}
 
 /**
  * Implements the Bridge Edge Boundaries Operation modeling operation for the polygon document and mesh editing core.
@@ -74,6 +177,9 @@ OperationResult bridge_edge_boundaries_impl(
         return { false, "Bridge needs two valid boundary edge chains." };
     }
 
+    auto [oriented_first_vertices, oriented_second_vertices] =
+        bridge_winding_aligned_boundaries(document, first_vertices, second_vertices, closed);
+
     const std::map<std::pair<ElementId, ElementId>, int> incidence_counts = edge_incidence_counts(document);
     std::vector<quader::QVec3> first_outwards(vertex_count);
     std::vector<quader::QVec3> second_outwards(vertex_count);
@@ -88,8 +194,8 @@ OperationResult bridge_edge_boundaries_impl(
 
     for (std::size_t edge_index = 0; edge_index < edge_count; ++edge_index) {
         const std::size_t next_index = (edge_index + 1U) % vertex_count;
-        const Edge first_edge = make_edge(first_vertices[edge_index], first_vertices[next_index]);
-        const Edge second_edge = make_edge(second_vertices[edge_index], second_vertices[next_index]);
+        const Edge first_edge = make_edge(oriented_first_vertices[edge_index], oriented_first_vertices[next_index]);
+        const Edge second_edge = make_edge(oriented_second_vertices[edge_index], oriented_second_vertices[next_index]);
         if (first_edge.a == kInvalidElementId ||
             first_edge.b == kInvalidElementId ||
             second_edge.a == kInvalidElementId ||
@@ -131,13 +237,13 @@ OperationResult bridge_edge_boundaries_impl(
     Document candidate = document;
     std::vector<std::vector<ElementId>> rings;
     rings.reserve(static_cast<std::size_t>(step_count + 1));
-    rings.emplace_back(first_vertices.begin(), first_vertices.end());
+    rings.push_back(oriented_first_vertices);
     for (int step_index = 1; step_index < step_count; ++step_index) {
         std::vector<ElementId> ring;
         ring.reserve(vertex_count);
         for (std::size_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index) {
-            const Vertex* first_vertex = find_vertex(document, first_vertices[vertex_index]);
-            const Vertex* second_vertex = find_vertex(document, second_vertices[vertex_index]);
+            const Vertex* first_vertex = find_vertex(document, oriented_first_vertices[vertex_index]);
+            const Vertex* second_vertex = find_vertex(document, oriented_second_vertices[vertex_index]);
             if (first_vertex == nullptr || second_vertex == nullptr) {
                 return { false, "Bridge could not find boundary vertices." };
             }
@@ -145,7 +251,7 @@ OperationResult bridge_edge_boundaries_impl(
         }
         rings.push_back(std::move(ring));
     }
-    rings.emplace_back(second_vertices.begin(), second_vertices.end());
+    rings.push_back(oriented_second_vertices);
 
     std::vector<ElementId> bridge_face_ids;
     bridge_face_ids.reserve(edge_count * static_cast<std::size_t>(step_count));

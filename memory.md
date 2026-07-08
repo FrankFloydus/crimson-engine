@@ -9,6 +9,36 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-08 - Bridge Boundary Winding Uses Adjacent Face Votes
+
+Task/context: bridging the preselected open edge loops from `test.qdr` could generate many bridge
+faces with reversed normals. Normal Bridge and Interpolated Bridge share the same boundary bridge
+surface owner, so both paths needed the same winding fix.
+
+Invariant:
+
+- Boundary Bridge must not rely on shortest-distance loop alignment alone. Before creating bridge
+  faces, choose the loop orientation whose candidate quads get the strongest opposite-winding vote
+  from adjacent source faces, matching Blender's bridge-loop winding vote behavior.
+- `append_bridge_face` must preserve adjacent-edge winding when existing faces can vote; the
+  expected-normal fallback is only for isolated faces with no adjacent winding evidence.
+- Regression coverage must assert shared edges have opposite winding for both `steps=1` and
+  interpolated `steps>1` bridge-edge-boundary operations.
+
+Affected owners/files:
+
+- `src/mesh/polygon/operations/bridge_edge_boundaries_operation.cpp`
+- `src/mesh/polygon/quader_poly_document_bridge_surface_helpers.cpp`
+- `tests/modeling_domain/operation/qdr_document_operation_bridge_edge_boundaries_tests.cpp`
+
+Verification:
+
+- `build\vs2026\Debug\quader_modeling_domain_polygon_loop_tests.exe --gtest_filter=QdrDocumentOperationBridgeEdgeBoundariesTests.*`
+- `build\vs2026\Debug\quader_modeling_domain_runtime_loop_tests.exe --gtest_filter=QdrModelingRuntimeOperationBridgeTests.*`
+- `build\vs2026\Debug\quader_modeling_domain_polygon_loop_tests.exe --gtest_filter=*Bridge*`
+- `powershell -NoProfile -ExecutionPolicy Bypass -File tools/affected_check.ps1 -ChangedPath src/mesh/polygon/operations/bridge_edge_boundaries_operation.cpp,src/mesh/polygon/quader_poly_document_bridge_surface_helpers.cpp,tests/modeling_domain/operation/qdr_document_operation_bridge_edge_boundaries_tests.cpp`
+- `cmake --build --preset vs2026-debug --target quader`
+
 ## 2026-07-07 - Occluded Maximized Windows And Face-Aware Edge Loops
 
 Task/context: a maximized background Quader window could return fully dark, including custom chrome,
