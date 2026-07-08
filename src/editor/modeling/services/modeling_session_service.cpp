@@ -1961,10 +1961,14 @@ public:
       return begin_operation_preview(action.action, *operation);
     }
 
-    return execute_runtime_operation(
-        operation->operation_id(),
+    quader_editor_core::EditorOperationSettings settings =
         settings_for_operation(operation->operation_id(),
-                               interaction_settings_service_.settings()));
+                               interaction_settings_service_.settings());
+    if (operation->operation_id() ==
+        quader_editor_core::EditorOperationId::Bridge) {
+      settings = quader_editor_core::BridgeOperationSettings{.steps = 1};
+    }
+    return execute_runtime_operation(operation->operation_id(), settings);
   }
 
   ModelingCommandResult commit_active_operation_preview() {

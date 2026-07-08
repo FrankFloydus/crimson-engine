@@ -9,6 +9,77 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-07 - Occluded Maximized Windows And Face-Aware Edge Loops
+
+Task/context: a maximized background Quader window could return fully dark, including custom chrome,
+until restored/unmaximized; edge double-click on an open boundary/fan shape failed to select the
+Blender-like loop. The first boundary-only pass still failed on the screenshot class because the
+selected edge can be a shared corner/manifold edge; the loop side must come from the picked surface
+face.
+
+Invariant:
+
+- `SDL_WINDOW_OCCLUDED` is not a hard non-drawable state for `PlatformWindow::can_render_frames()`.
+  Hidden/minimized and zero-sized windows still suspend GPU submission; stale occlusion on a
+  maximized focused window must not block the ImGui/custom-chrome frame.
+- Polygon edge-loop selection owns boundary fan traversal. A boundary seed follows adjacent face
+  fans across manifold edges until the next boundary edge, while disconnected same-vertex fan faces
+  are not selected. Quader has one double-click edge-loop action, so this boundary path is used
+  directly instead of Blender's separate loop/boundary cycling UI.
+- Runtime edge picks must preserve or re-query the adjacent picked face for double-click edge-loop
+  expansion. Shared corner edges use that face to select the connected coplanar surface boundary
+  loop; edge-only topology is ambiguous and can stop at the seed.
+
+Affected owners/files:
+
+- `src/platform/platform_window.cpp`
+- `src/mesh/polygon/quader_poly_document_selection_api.cpp`
+- `src/mesh/polygon/quader_poly_document_picking_overlay.cpp`
+- `src/editor/modeling/runtime/session_picking.cpp`
+- `tests/core_tests.cpp`
+- `tests/build_guardrail_tests.cpp`
+- `tests/modeling_domain/operation/*`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests quader_guardrail_tests quader_modeling_domain_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=PlatformWindowChromeTests.RenderFrameAvailabilityRejectsHiddenOrMinimizedWindowStates:AppLoopTests.SuspendsGpuSubmissionForNonDrawableWindowsAndIdlesBetweenFrames`
+- `build\vs2026\Debug\quader_modeling_domain_tests.exe --gtest_filter=QdrDocumentOperationInsertEdgeLoopTests.*:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadePickSelectDoubleClickDelegatesBySelectionMode:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeShiftAndCtrlDoubleClickEditWholeEdgeLoop:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeDoubleClickSelectsBoundaryFanEdgeLoop:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeDoubleClickUsesPickedFaceForSharedCornerEdgeLoop`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_filter=*Chrome*:*Window*:*App*`
+
+## 2026-07-07 - Bridge, Viewport Stats, Gizmo Selection Regressions
+
+Task/context: bug-fix pass for normal Bridge inheriting Interpolated Bridge steps, unreliable FPS
+and draw-call overlay values, transform gizmos disappearing during navigation or clearing edge
+selection on short clicks, Shift/Ctrl edge-loop double-click selection, Quick Pivot leaking through
+RMB fly navigation, settings modal close affordance, and same-mesh grouped edge Bridge rejection.
+
+Invariant:
+
+- Normal/instant Bridge always uses one segment. Interpolated Bridge remains the operation that owns
+  user-configurable `BridgeOperationSettings::steps`.
+- Runtime same-object edge Bridge accepts exactly two connected selected edge groups on one mesh and
+  routes through the same boundary-alignment bridge owner as cross-object edge Bridge.
+- Viewport info FPS is sampled from completed render frames over the render system's sample window;
+  CPU/GPU frame timings stay render-owned. Viewport draw-call/object/primitive counts are scene
+  info estimates owned by `src/render/viewport_info_stats.*` and are camera-visible, not raw
+  Filament submission counters.
+- Transform gizmo frames survive orbit/fly camera movement, but hover is suppressed while
+  navigation/camera changes are active. Deferred gizmo clicks preserve existing component
+  selection on selected hits and misses.
+- Quick Pivot must clear its temporary override if RMB navigation/fly navigation starts before the
+  `D` key is released.
+- Edge double-click Shift/Ctrl selection must apply Add/Remove to every edge returned by the
+  topology edge-loop helper, not just the picked edge.
+- `ViewportSettingsPanel` is intentionally a floating settings surface without a close button.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `cmake --build --preset vs2026-debug --target quader_modeling_domain_runtime_loop_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=ViewportInfoStatsTests.*:RenderSystemTests.ExposesCompletedFramePerformanceStatsFromRendererHistory:ViewportRendererTests.ViewportInfoOverlayUsesRendererTimingAndVisibleMeshSubmissionStats:ModelingSessionServiceSplitTests.*:ModelingSessionServiceTests.NormalBridgeFacesIgnoresInterpolatedBridgeSteps:ViewportInteractionControllerTests.ShortMoveGizmoClickKeepsEdgeSelection:ViewportInteractionControllerTests.TransformGizmoFrameSurvivesNavigationFrames:ViewportToolGuardrailTests.*:UiLayoutGuardrailTests.ViewportSettingsFloatingPanelHasNoCloseButton`
+- `build\vs2026\Debug\quader_modeling_domain_runtime_loop_tests.exe --gtest_filter=QdrModelingRuntimeOperationBridgeTests.BridgeSelectedEdgesBridgesTwoEdgeGroupsOnOneCombinedMesh:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeShiftAndCtrlDoubleClickEditWholeEdgeLoop:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadePickSelectDoubleClickDelegatesBySelectionMode`
+
 ## 2026-07-07 - Shift Rotate Component Drag Extrudes
 
 Task/context: Shift+dragging a selected face with the Rotate transform gizmo regressed to a plain
@@ -2756,3 +2827,47 @@ Verification:
 - `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
 - `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=EditorApiTests.Pivot*:EditorApiTests.QuickPivot*:ProjectSessionTests.QuickPivotOverrideFeedsTransformPivotAndClearsOnSelectionChange:EditorApiTests.ViewportKeybindingContextsSeparateNavigationFromToolShortcuts`
 - `ctest --preset vs2026-debug --output-on-failure`
+
+## 2026-07-08 - Selected Source-Wire Edge Loop Face Context
+
+Task/context: double-click edge-loop selection on an already selected open/shared lip edge could
+select only the seed or the wrong adjacent side. The selected source-wire path synthesized edge
+hits without a `face_id`, and shared-edge face picks could depend on document face order when the
+ray hit exactly on the edge. A later open-box repro showed a true boundary seed could still expand
+through the picked face perimeter instead of the Blender-style hole loop because face-context
+selection ran before boundary fan traversal.
+
+Invariant:
+
+- Runtime source-wire edge hits must carry the same picked-surface context as normal polygon edge
+  hits before loop expansion.
+- For shared-edge context, face order must not decide the loop side. Choose the incident pickable
+  face most facing the pick ray, then use `edge_loop_edges(document, edge, face_id)` so shared lip
+  edges expand over the intended picked surface region.
+- True open-boundary seed edges must run the boundary fan loop before picked-face context. The
+  picked face is still needed for manifold/shared lip edges, but it must not turn a hole boundary
+  seed into the surrounding face perimeter.
+- Edge-mode `Alt + left click` is an explicit loop-select gesture and routes to the same
+  `pick_select_edge_loop` owner as edge double-click. Shift/Ctrl still decide add/remove; Alt only
+  chooses the loop gesture.
+- Keep regression coverage for a selected/source-wire shared lip edge where the vertical drop face
+  is ordered before the top face, plus an open-box missing-side boundary edge whose pick carries
+  the top-face context.
+
+Affected owners/files:
+
+- `src/editor/modeling/runtime/session_picking.cpp`
+- `src/editor/interactions/runtime_command.cpp`
+- `src/editor/modeling/services/modeling_session_services.cpp`
+- `src/mesh/polygon/quader_poly_document_picking_overlay.cpp`
+- `src/mesh/polygon/quader_poly_document_selection_api.cpp`
+- `tests/modeling_domain/operation/operation_test_helpers.hpp`
+- `tests/modeling_domain/operation/qdr_document_operation_insert_edge_loop_tests.cpp`
+- `tests/modeling_domain/operation/qdr_modeling_runtime_command_tests.cpp`
+- `tests/viewport_interaction_controller_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_modeling_domain_tests`
+- `build\vs2026\Debug\quader_modeling_domain_tests.exe --gtest_filter=QdrDocumentOperationInsertEdgeLoopTests.EdgeLoopSelection*:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadePickSelectDoubleClickDelegatesBySelectionMode:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeShiftAndCtrlDoubleClickEditWholeEdgeLoop:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeAltClickSelectsWholeEdgeLoop:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeDoubleClickSelectsBoundaryFanEdgeLoop:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeDoubleClickUsesPickedFaceForSharedCornerEdgeLoop:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeDoubleClickSelectedSharedLipEdgeUsesPickedSurfaceBoundary:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeDoubleClickSelectedOpenBoxBoundaryUsesHoleLoop`
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=ViewportInteractionControllerTests.AltClickEdgeSelectsLoopThroughViewportFallback:ViewportInteractionControllerTests.ShortMoveGizmoClickKeepsEdgeSelection:ViewportInteractionControllerTests.TransformGizmoFrameSurvivesNavigationFrames`

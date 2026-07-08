@@ -144,7 +144,6 @@ CommandResult set_active_tool(
 CommandResult pick_select(EditorSession& session, PickSelectRuntimeCommandSettings settings)
 {
 	(void)settings.command_pressed;
-	(void)settings.alt_pressed;
 	const SelectionMode mode = session.selection_mode();
 	SelectionEditOperation operation =
 			selection_edit_operation_from_modifiers(settings.control_pressed, settings.shift_pressed);
@@ -162,6 +161,8 @@ CommandResult pick_select(EditorSession& session, PickSelectRuntimeCommandSettin
           }
                 return { true, session.pick_select(operation, settings.ray, pick_options, false), "" };
 	}
+	const bool edge_loop_select =
+		settings.alt_pressed && mode == SelectionMode::Edge;
 	const bool multi_click = settings.click_count > 1;
         if (multi_click && mode == SelectionMode::Face) {
           return {true,
@@ -169,7 +170,7 @@ CommandResult pick_select(EditorSession& session, PickSelectRuntimeCommandSettin
                                                 pick_options),
                   ""};
         }
-        if (multi_click && mode == SelectionMode::Edge) {
+        if ((multi_click || edge_loop_select) && mode == SelectionMode::Edge) {
           return {true,
                   session.pick_select_edge_loop(operation, settings.ray,
                                                 pick_options),

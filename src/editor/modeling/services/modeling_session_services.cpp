@@ -777,6 +777,7 @@ ModelingSelectionApplyResult ModelingSelectionService::apply_pick_selection(
               .ray = to_runtime_ray(request.ray),
               .pick_options = pick_options,
               .click_count = request.click_count,
+              .edge_loop_select = request.alt_pressed,
               .preserve_existing_component_selection_on_hit =
                   request.preserve_existing_component_selection_on_hit,
               .preserve_selection_on_selected_hit =
@@ -1937,6 +1938,9 @@ RuntimeOperationExecutor::operation_for_instant_command(
   command.operation = *entry->runtime_operation;
   command.settings =
       settings_for_operation(*entry->runtime_operation, interaction_settings);
+  if (operation == ModelingInstantOperationId::Bridge) {
+    command.settings = quader_editor_core::BridgeOperationSettings{.steps = 1};
+  }
 
   return command;
 }

@@ -126,6 +126,8 @@ public:
     UiIconTextureService ui_icon_textures_;
     RenderFramePerformanceStats frame_performance_stats_;
     std::chrono::steady_clock::time_point frame_cpu_begin_{};
+    std::chrono::steady_clock::time_point frame_rate_sample_begin_{};
+    std::uint32_t frame_rate_sample_count_ = 0;
     bool frame_cpu_active_ = false;
 };
 

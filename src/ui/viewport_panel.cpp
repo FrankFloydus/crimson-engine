@@ -27,6 +27,7 @@
 #include "scene/scene_entity_naming.hpp"
 #include "render/render_layers.hpp"
 #include "render/render_system.hpp"
+#include "render/viewport_info_stats.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "ui/imgui_popup_utils.hpp"
 #include "ui/ui_context.hpp"
@@ -501,49 +502,6 @@ float viewport_shading_combo_width(const LocalizationService &localization) {
   return width;
 }
 
-/**
- * Stores the scene-visible counters presented by the View > Show Info viewport overlay.
- */
-struct ViewportInfoSceneStats {
-    std::uint64_t objects = 0;
-    std::uint64_t primitives = 0;
-    std::uint64_t draw_calls = 0;
-};
-
-ViewportInfoSceneStats
-collect_viewport_info_scene_stats(const SceneDocument &document,
-                                  const AssetRegistry &assets) {
-  ViewportInfoSceneStats stats;
-  for (const EntityId entity_id : document.entities()) {
-    if (!document.is_effectively_visible(entity_id)) {
-      continue;
-    }
-
-    const MeshComponent *mesh_component = document.mesh(entity_id);
-    if (mesh_component == nullptr) {
-      continue;
-    }
-
-    const MeshAsset *mesh = assets.mesh(mesh_component->mesh);
-    if (mesh == nullptr || mesh->vertices.empty() || mesh->indices.empty()) {
-      continue;
-    }
-
-    const std::vector<MeshPrimitiveSpan> spans =
-        coalesced_mesh_primitive_spans(*mesh);
-    if (spans.empty()) {
-      continue;
-    }
-
-    ++stats.objects;
-    stats.draw_calls += spans.size();
-    for (const MeshPrimitiveSpan &span : spans) {
-      stats.primitives += span.index_count / 3u;
-    }
-  }
-  return stats;
-}
-
 std::string format_viewport_info_number(std::uint64_t value) {
   return std::to_string(value);
 }
@@ -564,6 +522,23 @@ std::string format_viewport_info_frames_per_second(double value) {
   char buffer[32] = {};
   std::snprintf(buffer, sizeof(buffer), "%.1f", value);
   return buffer;
+}
+
+bool same_viewport_info_camera(const ViewportOverlayCamera &left,
+                               const ViewportOverlayCamera &right) {
+  return left.eye.x == right.eye.x && left.eye.y == right.eye.y &&
+         left.eye.z == right.eye.z && left.forward.x == right.forward.x &&
+         left.forward.y == right.forward.y && left.forward.z == right.forward.z &&
+         left.right.x == right.right.x && left.right.y == right.right.y &&
+         left.right.z == right.right.z && left.up.x == right.up.x &&
+         left.up.y == right.up.y && left.up.z == right.up.z &&
+         left.viewport_size.x == right.viewport_size.x &&
+         left.viewport_size.y == right.viewport_size.y &&
+         left.projection == right.projection &&
+         left.orthographic_size == right.orthographic_size &&
+         left.fov_degrees == right.fov_degrees &&
+         left.near_plane == right.near_plane &&
+         left.far_plane == right.far_plane;
 }
 
 std::string viewport_info_line(std::string_view label,
@@ -1737,8 +1712,12 @@ void ViewportPanel::draw(SceneRenderBridge &render_bridge,
       if (draw_pane.pane->id != viewport_workspace.focused_pane()) {
         continue;
       }
-      draw_viewport_info_overlay(document, assets, ui_context,
-                                 draw_pane.item_min, draw_pane.item_size);
+      draw_viewport_info_overlay(
+          document, assets, ui_context,
+          ViewportCameraAdapter::overlay_camera(
+              viewport_workspace.camera(draw_pane.pane->id),
+              {draw_pane.item_size.x, draw_pane.item_size.y}),
+          draw_pane.item_min, draw_pane.item_size);
       break;
     }
   }
@@ -1764,6 +1743,7 @@ void ViewportPanel::draw_pane_decorations(
 void ViewportPanel::draw_viewport_info_overlay(const SceneDocument &document,
                                                const AssetRegistry &assets,
                                                const UIContext &ui_context,
+                                               ViewportOverlayCamera camera,
                                                ImVec2 item_min,
                                                ImVec2 item_size) {
   const std::uint64_t scene_revision = document.revision();
@@ -1773,7 +1753,8 @@ void ViewportPanel::draw_viewport_info_overlay(const SceneDocument &document,
       viewport_info_cached_document_ == &document &&
       viewport_info_cached_assets_ == &assets &&
       viewport_info_cached_scene_revision_ == scene_revision &&
-      viewport_info_cached_asset_revision_ == asset_revision;
+      viewport_info_cached_asset_revision_ == asset_revision &&
+      same_viewport_info_camera(viewport_info_cached_camera_, camera);
   ViewportInfoSceneStats scene_stats;
   if (cache_hit) {
     scene_stats.objects = viewport_info_cached_objects_;
@@ -1781,11 +1762,12 @@ void ViewportPanel::draw_viewport_info_overlay(const SceneDocument &document,
     scene_stats.draw_calls = viewport_info_cached_draw_calls_;
   } else {
     QDR_PROFILE_SCOPE("Viewport info collect scene stats");
-    scene_stats = collect_viewport_info_scene_stats(document, assets);
+    scene_stats = collect_viewport_info_scene_stats(document, assets, camera);
     viewport_info_cached_document_ = &document;
     viewport_info_cached_assets_ = &assets;
     viewport_info_cached_scene_revision_ = scene_revision;
     viewport_info_cached_asset_revision_ = asset_revision;
+    viewport_info_cached_camera_ = camera;
     viewport_info_cached_objects_ = scene_stats.objects;
     viewport_info_cached_primitives_ = scene_stats.primitives;
     viewport_info_cached_draw_calls_ = scene_stats.draw_calls;
@@ -1793,13 +1775,6 @@ void ViewportPanel::draw_viewport_info_overlay(const SceneDocument &document,
   }
   const RenderFramePerformanceStats &render_stats =
       ui_context.viewport->render_performance;
-
-  const bool fps_available =
-      ui_context.viewport->frame_timing.raw_delta_seconds > 0.0001;
-  const double fps =
-      fps_available ? 1.0 /
-                          ui_context.viewport->frame_timing.raw_delta_seconds
-                    : 0.0;
 
   const std::string unavailable =
       ui_context.localization.text("ui.viewport.info.unavailable", "--");
@@ -1812,7 +1787,10 @@ void ViewportPanel::draw_viewport_info_overlay(const SceneDocument &document,
           ? format_viewport_info_milliseconds(render_stats.gpu_frame_ms)
           : unavailable;
   const std::string fps_value =
-      fps_available ? format_viewport_info_frames_per_second(fps) : unavailable;
+      render_stats.frames_per_second_available
+          ? format_viewport_info_frames_per_second(
+                render_stats.frames_per_second)
+          : unavailable;
 
   const std::array<std::string, 6> lines{{
       viewport_info_line(
@@ -2283,12 +2261,21 @@ void ViewportPanel::draw_pane_contents(
       ui_context.viewport != nullptr ? ui_context.viewport->pivot : nullptr;
   bool pivot_consumed = false;
   if (pivot_service != nullptr) {
+    const bool quick_pivot_blocked_by_navigation =
+        result.fly_navigation_active || result.navigation_active;
     if (input.quick_pivot_released) {
       pivot_service->end_quick_edit();
       pivot_handle_dragging_ = false;
       pivot_consumed = true;
     }
-    if (input.quick_pivot_down && !pivot_service->quick_edit_active()) {
+    if (quick_pivot_blocked_by_navigation &&
+        pivot_service->quick_edit_active()) {
+      pivot_service->clear_quick_override();
+      pivot_handle_dragging_ = false;
+      pivot_consumed = true;
+    }
+    if (!quick_pivot_blocked_by_navigation && input.quick_pivot_down &&
+        !pivot_service->quick_edit_active()) {
       if (const std::optional<QVec3> initial =
               ui_context.intent.editor.query().selection_transform_pivot()) {
         pivot_service->begin_quick(*initial);

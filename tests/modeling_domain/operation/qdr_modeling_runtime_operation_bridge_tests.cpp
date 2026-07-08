@@ -221,6 +221,39 @@ TEST(QdrModelingRuntimeOperationBridgeTests, BridgeOperationPreviewsFromBaseTopo
         }
 }
 
+TEST(QdrModelingRuntimeOperationBridgeTests, BridgeSelectedEdgesBridgesTwoEdgeGroupsOnOneCombinedMesh) {
+	quader_poly::Document document = qdr_test::make_parallel_quad_document();
+	const std::size_t face_count_before = document.faces.size();
+	const std::vector<quader_poly::Edge> edges = quader_poly::document_edges(document);
+	ASSERT_EQ(edges.size(), 8U);
+
+	quader_editor_core::PolygonObject object =
+		qdr_test::make_object(1, std::move(document), true);
+	object.selection.mode = quader_poly::SelectionMode::Edge;
+	object.selection.edges = edges;
+	object.selection.has_active = true;
+	object.selection.active_kind = quader_poly::ElementKind::Edge;
+	object.selection.active_edge = edges.front();
+
+	quader_editor_core::SessionState state;
+	state.objects.push_back(std::move(object));
+	state.selection_mode = quader_editor_core::SelectionMode::Edge;
+	state.active_object_id = 1;
+	quader_editor_core::EditorSession session(std::move(state));
+
+	const quader_editor_core::CommandResult result = session.bridge_selected_edges(1);
+
+	ASSERT_TRUE(result.ok) << result.message;
+	ASSERT_TRUE(result.changed) << result.message;
+	ASSERT_EQ(session.objects().size(), 1U);
+	const quader_editor_core::PolygonObject& survivor = qdr_test::require_object(session, 1);
+	EXPECT_GT(survivor.document.faces.size(), face_count_before);
+	EXPECT_TRUE(session.active_object_id() == 1);
+	EXPECT_TRUE(survivor.selection.mode == quader_poly::SelectionMode::Edge);
+	EXPECT_GT(survivor.selection.edges.size(), 0U);
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(survivor.document));
+}
+
 TEST(QdrModelingRuntimeOperationBridgeTests, CrossObjectEdgeBridgeConsumesDocumentsAlreadyConvertedToCommonLocalSpace) {
 	CrossObjectBridgeFixture fixture = make_cross_object_edge_bridge_fixture();
 

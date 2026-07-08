@@ -32,7 +32,8 @@ public:
       ImGui::SetNextWindowSize(default_size(), ImGuiCond_FirstUseEver);
       const std::string window_title = context.localization.imgui_label(
           title_key(), title_stable_id(), title());
-      if (ImGui::Begin(window_title.c_str(), &open, window_flags(context))) {
+      bool *open_ptr = show_close_button() ? &open : nullptr;
+      if (ImGui::Begin(window_title.c_str(), open_ptr, window_flags(context))) {
         draw_content(context, open);
       }
       ImGui::End();
@@ -45,6 +46,7 @@ protected:
     virtual void draw_content(UIContext &context, bool &open) = 0;
 
     virtual ImVec2 default_size() const { return {360.0f, 240.0f}; }
+    virtual bool show_close_button() const { return true; }
 
     virtual void before_begin(UIContext &context, bool &open) {
       (void)context;

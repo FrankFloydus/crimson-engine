@@ -22,6 +22,7 @@ protected:
     const char *title_key() const override { return "ui.panel.settings"; }
     const char *title_stable_id() const override { return "floating.settings"; }
     ImVec2 default_size() const override { return {420.0f, 560.0f}; }
+    bool show_close_button() const override { return false; }
     void draw_content(UIContext &context, bool &open) override;
 
   private:

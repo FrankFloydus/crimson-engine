@@ -170,6 +170,85 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests, EdgeLoopSelectionSurvivesConversio
 	select_edge_loop(fixture.document, loop_selection, seed);
 
         EXPECT_TRUE(loop_selection.mode == SelectionMode::Edge);
-        EXPECT_FALSE(loop_selection.edges.empty());
+        EXPECT_TRUE(loop_selection.edges.size() == 4U);
 	EXPECT_TRUE(selection_contains(loop_selection, seed));
+	EXPECT_TRUE(selection_contains(loop_selection, make_edge(fixture.bottom_right, fixture.top_right)));
+	EXPECT_TRUE(selection_contains(loop_selection, make_edge(fixture.top_right, fixture.top_left)));
+	EXPECT_TRUE(selection_contains(loop_selection, make_edge(fixture.top_left, fixture.bottom_left)));
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests, EdgeLoopSelectionFollowsBoundaryFanThroughSharedEdges) {
+	qdr_test::BoundaryFanLoopFixture fixture = qdr_test::make_boundary_fan_loop_document();
+
+	Selection selection;
+	select_edge_loop(fixture.document, selection, fixture.seed);
+
+	EXPECT_TRUE(selection.mode == SelectionMode::Edge);
+	ASSERT_TRUE(selection.edges.size() == fixture.expected_loop_edges.size());
+	for (const Edge& edge : fixture.expected_loop_edges) {
+		EXPECT_TRUE(selection_contains(selection, edge));
+	}
+	for (const Edge& edge : fixture.disconnected_fan_edges) {
+		EXPECT_FALSE(selection_contains(selection, edge));
+	}
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests, EdgeLoopSelectionUsesFaceContextForSharedCornerEdges) {
+	qdr_test::ManifoldCornerLoopFixture fixture =
+		qdr_test::make_manifold_corner_loop_document();
+
+	const std::vector<Edge> loop_edges =
+		edge_loop_edges(fixture.document, fixture.seed, fixture.top_face);
+	Selection loop_selection;
+	loop_selection.mode = SelectionMode::Edge;
+	loop_selection.edges = loop_edges;
+
+	ASSERT_TRUE(loop_edges.size() == fixture.expected_top_loop_edges.size());
+	for (const Edge& edge : fixture.expected_top_loop_edges) {
+		EXPECT_TRUE(selection_contains(loop_selection, edge));
+	}
+	for (const Edge& edge : fixture.side_only_edges) {
+		EXPECT_FALSE(selection_contains(loop_selection, edge));
+	}
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests, EdgeLoopSelectionUsesPickedSurfaceBoundaryForSharedLipEdges) {
+	qdr_test::SharedLipLoopFixture fixture =
+		qdr_test::make_shared_lip_loop_document();
+
+	const std::vector<Edge> loop_edges =
+		edge_loop_edges(fixture.document, fixture.seed,
+		                fixture.top_mid_face);
+	Selection loop_selection;
+	loop_selection.mode = SelectionMode::Edge;
+	loop_selection.edges = loop_edges;
+
+	ASSERT_TRUE(loop_edges.size() ==
+	            fixture.expected_top_region_loop_edges.size());
+	for (const Edge& edge : fixture.expected_top_region_loop_edges) {
+		EXPECT_TRUE(selection_contains(loop_selection, edge));
+	}
+	for (const Edge& edge : fixture.excluded_edges) {
+		EXPECT_FALSE(selection_contains(loop_selection, edge));
+	}
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests, EdgeLoopSelectionKeepsBoundaryHoleLoopWhenPickedFaceContextExists) {
+	qdr_test::OpenBoxBoundaryLoopFixture fixture =
+		qdr_test::make_open_box_boundary_loop_document();
+
+	const std::vector<Edge> loop_edges =
+		edge_loop_edges(fixture.document, fixture.seed, fixture.top_face);
+	Selection loop_selection;
+	loop_selection.mode = SelectionMode::Edge;
+	loop_selection.edges = loop_edges;
+
+	ASSERT_TRUE(loop_edges.size() ==
+	            fixture.expected_open_side_loop_edges.size());
+	for (const Edge& edge : fixture.expected_open_side_loop_edges) {
+		EXPECT_TRUE(selection_contains(loop_selection, edge));
+	}
+	for (const Edge& edge : fixture.excluded_face_perimeter_edges) {
+		EXPECT_FALSE(selection_contains(loop_selection, edge));
+	}
 }

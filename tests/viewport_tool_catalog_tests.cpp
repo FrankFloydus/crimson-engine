@@ -611,13 +611,23 @@ TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalToo
             std::string::npos);
   EXPECT_NE(transform_gizmo.find(".precision = frame.input.modifiers.primary"),
             std::string::npos);
-  const std::size_t navigation_skip = transform_gizmo.find(
-      "camera_navigation_frame && !dragging_ && !pending_drag_.has_value()");
   const std::size_t selection_center =
       transform_gizmo.find("editor.query().selection_transform_pivot()");
-  ASSERT_NE(navigation_skip, std::string::npos);
+  EXPECT_EQ(transform_gizmo.find(
+                "camera_navigation_frame && !dragging_ && "
+                "!pending_drag_.has_value()"),
+            std::string::npos);
   ASSERT_NE(selection_center, std::string::npos);
-  EXPECT_LT(navigation_skip, selection_center);
+  const std::size_t suppress_hover =
+      transform_gizmo.find("const bool suppress_hover");
+  const std::size_t build_frame =
+      transform_gizmo.find("build_transform_gizmo_frame");
+  ASSERT_NE(suppress_hover, std::string::npos);
+  ASSERT_NE(build_frame, std::string::npos);
+  EXPECT_LT(selection_center, suppress_hover);
+  EXPECT_LT(suppress_hover, build_frame);
+  EXPECT_NE(transform_gizmo.find("frame.input_result.navigation_active ||"),
+            std::string::npos);
   const std::size_t active_drag_pivot =
       transform_gizmo.find("pivot = active_drag_pivot_");
   ASSERT_NE(active_drag_pivot, std::string::npos);
@@ -740,6 +750,13 @@ TEST(ViewportToolGuardrailTests,
   EXPECT_NE(viewport_panel.find("frame.lines.push_back(ViewportOverlayLine{"),
             std::string::npos);
   EXPECT_EQ(pivot_overlay.find("frame.points.push_back"), std::string::npos);
+  EXPECT_NE(viewport_panel.find("quick_pivot_blocked_by_navigation"),
+            std::string::npos);
+  EXPECT_NE(viewport_panel.find("pivot_service->clear_quick_override()"),
+            std::string::npos);
+  EXPECT_NE(viewport_panel.find("!quick_pivot_blocked_by_navigation && "
+                                "input.quick_pivot_down"),
+            std::string::npos);
 
   const std::string pivot_input =
       source_slice(viewport_panel,

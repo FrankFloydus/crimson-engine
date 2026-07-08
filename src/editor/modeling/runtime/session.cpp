@@ -865,6 +865,61 @@ std::optional<BridgeAlignedBoundaryGroups> bridge_aligned_boundary_groups(
                                      first_group->closed};
 }
 
+std::optional<std::array<std::vector<quader_poly::Edge>, 2>>
+split_bridge_edges_into_two_connected_groups(
+    const std::vector<quader_poly::Edge> &selected_edges) {
+  std::vector<quader_poly::Edge> edges;
+  edges.reserve(selected_edges.size());
+  for (quader_poly::Edge edge : selected_edges) {
+    edge = quader_poly::make_edge(edge.a, edge.b);
+    if (std::find(edges.begin(), edges.end(), edge) != edges.end()) {
+      return std::nullopt;
+    }
+    edges.push_back(edge);
+  }
+
+  std::vector<std::vector<quader_poly::Edge>> groups;
+  std::vector<bool> visited(edges.size(), false);
+  for (std::size_t start = 0; start < edges.size(); ++start) {
+    if (visited[start]) {
+      continue;
+    }
+
+    std::vector<quader_poly::Edge> group;
+    std::vector<std::size_t> stack{start};
+    visited[start] = true;
+    while (!stack.empty()) {
+      const std::size_t current = stack.back();
+      stack.pop_back();
+      const quader_poly::Edge current_edge = edges[current];
+      group.push_back(current_edge);
+
+      for (std::size_t candidate = 0; candidate < edges.size(); ++candidate) {
+        if (visited[candidate]) {
+          continue;
+        }
+        const quader_poly::Edge candidate_edge = edges[candidate];
+        const bool connected =
+            current_edge.a == candidate_edge.a ||
+            current_edge.a == candidate_edge.b ||
+            current_edge.b == candidate_edge.a ||
+            current_edge.b == candidate_edge.b;
+        if (connected) {
+          visited[candidate] = true;
+          stack.push_back(candidate);
+        }
+      }
+    }
+    groups.push_back(std::move(group));
+  }
+
+  if (groups.size() != 2U) {
+    return std::nullopt;
+  }
+  return std::array<std::vector<quader_poly::Edge>, 2>{
+      std::move(groups[0]), std::move(groups[1])};
+}
+
 CommandResult select_all(std::vector<PolygonObject> &objects,
                          SelectionMode mode, int &active_object_id) {
   QDR_PROFILE_FUNCTION();
@@ -1744,15 +1799,35 @@ CommandResult bridge_selected_edges(std::vector<PolygonObject> &objects,
   }
 
   if (selected_edge_indices.size() == 1) {
-    if (selected_edge_count != 2) {
-      return error_result("Bridge needs exactly two selected open edges on one "
-                          "mesh, or equal edge groups on two meshes.");
-    }
     PolygonObject &target_object = candidate[selected_edge_indices.front()];
     target_object.selection.mode = quader_poly::SelectionMode::Edge;
-    const quader_poly::OperationResult result =
-        quader_poly::bridge_selected_edges(target_object.document,
-                                           target_object.selection, steps);
+    quader_poly::OperationResult result;
+    if (selected_edge_count == 2U) {
+      result = quader_poly::bridge_selected_edges(target_object.document,
+                                                  target_object.selection,
+                                                  steps);
+    } else {
+      const std::optional<std::array<std::vector<quader_poly::Edge>, 2>>
+          edge_groups = split_bridge_edges_into_two_connected_groups(
+              target_object.selection.edges);
+      if (!edge_groups.has_value()) {
+        return error_result("Bridge needs exactly two selected open edges on "
+                            "one mesh, or two equal edge groups on one mesh.");
+      }
+      const std::optional<BridgeAlignedBoundaryGroups> bridge_groups =
+          bridge_aligned_boundary_groups(target_object.document,
+                                         (*edge_groups)[0], (*edge_groups)[1]);
+      if (!bridge_groups.has_value()) {
+        return error_result("Bridge needs each selected edge group to form one "
+                            "matching connected boundary chain or loop.");
+      }
+
+      quader_poly::Selection bridge_selection;
+      result = quader_poly::bridge_edge_boundaries(
+          target_object.document, bridge_selection, bridge_groups->first_vertices,
+          bridge_groups->second_vertices, bridge_groups->closed, steps);
+      target_object.selection = std::move(bridge_selection);
+    }
     if (!result.changed) {
       return error_result(result.message.empty()
                               ? std::string("Could not bridge selected edges.")

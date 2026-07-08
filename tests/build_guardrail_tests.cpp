@@ -2051,9 +2051,8 @@ TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
   expect_contains(platform_source, "SDL_SetWindowSize");
   expect_contains(platform_source, "SDL_MinimizeWindow");
   expect_contains(platform_source, "SDL_SyncWindow failed after minimize");
-  expect_contains(
-      platform_source,
-      "SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN | SDL_WINDOW_OCCLUDED");
+  expect_contains(platform_source, "SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN");
+  expect_contains(platform_source, "SDL occlusion can remain stale");
   expect_contains(platform_source, "SDL_MaximizeWindow");
   expect_contains(platform_source, "SDL_RestoreWindow");
   expect_contains(platform_source, "HTLEFT");

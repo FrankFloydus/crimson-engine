@@ -37,5 +37,6 @@ struct FacePerimeterInfo {
 [[nodiscard]] std::optional<float> edge_factor_from_position(const Document& document, Edge edge, quader::QVec3 position);
 [[nodiscard]] std::optional<float> edge_factor_from_ray(const Document& document, Edge edge, const Ray& ray);
 [[nodiscard]] std::vector<Edge> edge_loop_edges(const Document& document, Edge seed_edge);
+[[nodiscard]] std::vector<Edge> edge_loop_edges(const Document& document, Edge seed_edge, ElementId face_id);
 
 } // namespace quader_poly

@@ -1235,20 +1235,24 @@ TEST(PlatformWindowChromeTests,
 }
 
 TEST(PlatformWindowChromeTests,
-     RenderFrameAvailabilityRejectsNonDrawableWindowStates) {
+     RenderFrameAvailabilityRejectsHiddenOrMinimizedWindowStates) {
   EXPECT_TRUE(platform_window_can_render_frames(0u, 1600, 900));
   EXPECT_TRUE(
       platform_window_can_render_frames(SDL_WINDOW_INPUT_FOCUS, 1600, 900));
   EXPECT_TRUE(
       platform_window_can_render_frames(SDL_WINDOW_MAXIMIZED, 1600, 900));
+  EXPECT_TRUE(
+      platform_window_can_render_frames(SDL_WINDOW_OCCLUDED, 1600, 900));
+  EXPECT_TRUE(platform_window_can_render_frames(
+      SDL_WINDOW_MAXIMIZED | SDL_WINDOW_OCCLUDED, 1600, 900));
 
   EXPECT_FALSE(
       platform_window_can_render_frames(SDL_WINDOW_MINIMIZED, 1600, 900));
   EXPECT_FALSE(platform_window_can_render_frames(SDL_WINDOW_HIDDEN, 1600, 900));
-  EXPECT_FALSE(
-      platform_window_can_render_frames(SDL_WINDOW_OCCLUDED, 1600, 900));
   EXPECT_FALSE(platform_window_can_render_frames(
       SDL_WINDOW_MINIMIZED | SDL_WINDOW_INPUT_FOCUS, 1600, 900));
+  EXPECT_FALSE(platform_window_can_render_frames(
+      SDL_WINDOW_MINIMIZED | SDL_WINDOW_OCCLUDED, 1600, 900));
   EXPECT_FALSE(platform_window_can_render_frames(0u, 0, 900));
   EXPECT_FALSE(platform_window_can_render_frames(0u, 1600, 0));
 }
@@ -2844,10 +2848,14 @@ TEST(RenderSystemTests,
             std::string::npos);
   EXPECT_NE(header.find("RenderFramePerformanceStats frame_performance_stats_"),
             std::string::npos);
+  EXPECT_NE(header.find("frame_rate_sample_begin_"), std::string::npos);
+  EXPECT_NE(header.find("frame_rate_sample_count_"), std::string::npos);
   EXPECT_NE(source.find("frame_cpu_begin_ = std::chrono::steady_clock::now()"),
             std::string::npos);
   EXPECT_NE(source.find("std::chrono::duration<double, std::milli>"),
             std::string::npos);
+  EXPECT_NE(source.find("kFrameRateSampleSeconds"), std::string::npos);
+  EXPECT_NE(source.find("frames_per_second"), std::string::npos);
   EXPECT_NE(source.find("renderer_->getFrameInfoHistory(history_size)"),
             std::string::npos);
   EXPECT_NE(source.find("renderer_->getMaxFrameHistorySize()"),
@@ -3792,6 +3800,8 @@ TEST(ViewportRendererTests,
       read_source_file("src/ui/viewport_panel.hpp");
   const std::string viewport_panel_source =
       read_source_file("src/ui/viewport_panel.cpp");
+  const std::string viewport_info_stats_source =
+      read_source_file("src/render/viewport_info_stats.cpp");
 
   EXPECT_NE(app_source.find("ui_.set_render_performance_stats(render_system_."
                             "frame_performance_stats())"),
@@ -3812,13 +3822,20 @@ TEST(ViewportRendererTests,
             std::string::npos);
   EXPECT_NE(viewport_panel_header.find("viewport_info_cached_asset_revision_"),
             std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("collect_viewport_info_scene_stats"),
+  EXPECT_NE(viewport_panel_header.find("viewport_info_cached_camera_"),
+            std::string::npos);
+  EXPECT_NE(viewport_panel_source.find("same_viewport_info_camera"),
+            std::string::npos);
+  EXPECT_NE(viewport_panel_source.find(
+                "collect_viewport_info_scene_stats(document, assets, camera)"),
             std::string::npos);
   EXPECT_NE(
-      viewport_panel_source.find("document.is_effectively_visible(entity_id)"),
+      viewport_info_stats_source.find(
+          "document.is_effectively_visible(entity_id)"),
       std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("coalesced_mesh_primitive_spans(*mesh)"),
-            std::string::npos);
+  EXPECT_NE(
+      viewport_info_stats_source.find("coalesced_mesh_primitive_spans(*mesh)"),
+      std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
       "const bool cache_hit = viewport_info_scene_stats_valid_"));
@@ -3826,18 +3843,23 @@ TEST(ViewportRendererTests,
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("asset_revision = assets.revision()"),
             std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("stats.draw_calls += spans.size()"),
+  EXPECT_NE(viewport_info_stats_source.find("viewport_info_bounds_visible"),
+            std::string::npos);
+  EXPECT_NE(viewport_info_stats_source.find("stats.draw_calls += spans.size()"),
             std::string::npos);
   EXPECT_NE(
-      viewport_panel_source.find("stats.primitives += span.index_count / 3u"),
+      viewport_info_stats_source.find(
+          "stats.primitives += span.index_count / 3u"),
       std::string::npos);
   EXPECT_NE(viewport_panel_source.find("ViewportBoolSettingId::ShowInfo"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("ui.viewport.info.draw_calls"),
             std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      viewport_panel_source,
-      "1.0 / ui_context.viewport->frame_timing.raw_delta_seconds"));
+  EXPECT_NE(viewport_panel_source.find("render_stats.frames_per_second"),
+            std::string::npos);
+  EXPECT_EQ(viewport_panel_source.find(
+                "1.0 / ui_context.viewport->frame_timing.raw_delta_seconds"),
+            std::string::npos);
   EXPECT_EQ(viewport_panel_source.find("1000.0 / render_stats.gpu_frame_ms"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("draw_viewport_info_text("),
@@ -4154,10 +4176,10 @@ TEST(AppLoopTests,
             std::string::npos);
   EXPECT_NE(platform_header.find("native_live_resize_frame_active() const"),
             std::string::npos);
-  EXPECT_NE(
-      platform_source.find(
-          "SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN | SDL_WINDOW_OCCLUDED"),
-      std::string::npos);
+  EXPECT_NE(platform_source.find("SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN"),
+            std::string::npos);
+  EXPECT_NE(platform_source.find("SDL occlusion can remain stale"),
+            std::string::npos);
   EXPECT_TRUE(source_contains_compact(platform_source,
                                       "pixel_width > 0 && pixel_height > 0"));
   EXPECT_TRUE(source_contains_compact(
@@ -9871,6 +9893,44 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(replaced_preview.has_value());
   EXPECT_NE(mesh_position_fingerprint(*first_preview),
             mesh_position_fingerprint(*replaced_preview));
+}
+
+TEST(ModelingSessionServiceTests,
+     NormalBridgeFacesIgnoresInterpolatedBridgeSteps) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  PreviewBridgeFixture fixture = make_preview_bridge_fixture();
+
+  const ModelingCreateBoxResult mesh = service.create_mesh({
+      .document = fixture.document,
+      .name = "Normal Bridge Fixed Step Mesh",
+  });
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+
+  ModelingInteractionSettings settings = service.interaction_settings();
+  settings.bridge_steps = 4;
+  const ModelingCommandResult settings_update =
+      service.set_interaction_settings(settings);
+  ASSERT_TRUE(settings_update.ok) << settings_update.message;
+
+  const ModelingCommandResult selected = service.set_component_selection({
+      .modeling_object_id = mesh.object.modeling_object_id,
+      .mode = ModelingSelectionMode::Face,
+      .faces = {fixture.first_front_face, fixture.first_back_face},
+      .active_kind = ModelingActiveSelectionKind::Face,
+      .active_face = fixture.first_back_face,
+  });
+  ASSERT_TRUE(selected.ok) << selected.message;
+  ASSERT_TRUE(selected.changed);
+
+  const ModelingCommandResult bridge =
+      service.execute_context_action("bridge_faces");
+
+  ASSERT_TRUE(bridge.ok) << bridge.message;
+  ASSERT_TRUE(bridge.changed) << bridge.message;
+  EXPECT_EQ(service.selection_summary().selected_face_count, 4u);
+  EXPECT_FALSE(service.tool_settings_target().operation_preview_active);
 }
 
 TEST(ModelingSessionServiceTests,

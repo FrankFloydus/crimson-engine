@@ -1500,7 +1500,7 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     InstantOperationSettingsComeFromSharedOperationSettingsOwner) {
+     InstantOperationSettingsComeFromSharedOperationSettingsOwnerExceptNormalBridge) {
   RuntimeOperationExecutor executor;
   ModelingInteractionSettings interaction_settings;
   interaction_settings.bridge_steps = 4;
@@ -1512,11 +1512,12 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(bridge->operation, quader_editor_core::EditorOperationId::Bridge);
   const auto &bridge_settings =
       std::get<quader_editor_core::BridgeOperationSettings>(bridge->settings);
-  const auto expected_bridge =
+  const auto interpolated_bridge =
       std::get<quader_editor_core::BridgeOperationSettings>(
           settings_for_operation(quader_editor_core::EditorOperationId::Bridge,
                                  interaction_settings));
-  EXPECT_EQ(bridge_settings.steps, expected_bridge.steps);
+  EXPECT_EQ(interpolated_bridge.steps, 4);
+  EXPECT_EQ(bridge_settings.steps, 1);
 
   const std::optional<RuntimeOperationExecutor::OperationCommand> bevel =
       executor.operation_for_instant_command(

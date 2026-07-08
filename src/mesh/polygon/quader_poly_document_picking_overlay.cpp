@@ -210,6 +210,38 @@ bool edge_has_front_facing_pickable_face(
     return false;
 }
 
+ElementId edge_pick_context_face_id(
+    const Document& document,
+    Edge edge,
+    const Ray& ray,
+    const PickOptions& options,
+    const std::optional<FaceRayHit>& surface_hit)
+{
+    ElementId best_face_id = kInvalidElementId;
+    float best_score = -std::numeric_limits<float>::infinity();
+    for (const Face& face : document.faces) {
+        if (!face_uses_edge(face, edge) || !face_can_be_picked(face, options)) {
+            continue;
+        }
+        const float score = -dot(face_normal(document, face), ray.direction);
+        if (best_face_id == kInvalidElementId ||
+            score > best_score + kEpsilon) {
+            best_face_id = face.id;
+            best_score = score;
+        }
+    }
+    if (best_face_id != kInvalidElementId) {
+        return best_face_id;
+    }
+    if (surface_hit.has_value()) {
+        const Face* face = find_face(document, surface_hit->face_id);
+        if (face != nullptr && face_uses_edge(*face, edge)) {
+            return face->id;
+        }
+    }
+    return best_face_id;
+}
+
 bool component_pick_is_better(
     float pick_distance,
     float ray_distance,
@@ -442,7 +474,10 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
                                      options)) {
           best = {
               true,     ElementKind::Edge, kInvalidElementId,
-              edge,     kInvalidElementId, ray_distance,
+              edge,
+              edge_pick_context_face_id(document, edge, ray, options,
+                                        surface_hit),
+              ray_distance,
               position,
           };
           best_pick_distance = distance;

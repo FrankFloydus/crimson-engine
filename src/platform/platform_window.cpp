@@ -446,8 +446,10 @@ int platform_window_chrome_resize_border_for_system_metrics(int fallback_border,
 
 bool platform_window_can_render_frames(std::uint64_t window_flags,
                                        int pixel_width, int pixel_height) {
+  // SDL occlusion can remain stale after a maximized background window is
+  // focused again, so only true non-drawable states suspend GPU submission.
   constexpr std::uint64_t kNonDrawableWindowFlags =
-      SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN | SDL_WINDOW_OCCLUDED;
+      SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN;
   return (window_flags & kNonDrawableWindowFlags) == 0u && pixel_width > 0 &&
          pixel_height > 0;
 }

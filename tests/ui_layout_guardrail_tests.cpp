@@ -145,6 +145,22 @@ TEST(UiLayoutGuardrailTests, NumericSlidersUseDefaultImGuiWidgets) {
   expect_missing(inspector, "0.5f, 0.0f, 360.0f");
 }
 
+TEST(UiLayoutGuardrailTests, ViewportSettingsFloatingPanelHasNoCloseButton) {
+  const std::string floating_panel =
+      read_source_file({"src", "ui", "ui_floating_panel.hpp"});
+  const std::string viewport_settings =
+      read_source_file({"src", "ui", "viewport_settings_panel.hpp"});
+
+  expect_contains(floating_panel,
+                  "bool *open_ptr = show_close_button() ? &open : nullptr");
+  expect_contains(floating_panel,
+                  "ImGui::Begin(window_title.c_str(), open_ptr");
+  expect_contains(floating_panel,
+                  "virtual bool show_close_button() const { return true; }");
+  expect_contains(viewport_settings,
+                  "bool show_close_button() const override { return false; }");
+}
+
 TEST(UiLayoutGuardrailTests, OutlinerUsesDefaultTreeHierarchyLines) {
   const std::string outliner =
       read_source_file({"src", "ui", "outliner_panel.cpp"});

@@ -624,6 +624,89 @@ TEST(ViewportInteractionControllerTests, VertexSnapDoesNotStealPendingMoveGizmoV
         harness.editor.query().selection_overlay()));
 }
 
+TEST(ViewportInteractionControllerTests, ShortMoveGizmoClickKeepsEdgeSelection) {
+    ViewportInteractionHarness harness;
+    harness.camera.set_view_direction({-0.45f, -0.35f, -0.82f});
+
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+    select_single_component(harness, box, quader::QuaderSelectionMode::Edge);
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok);
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+    const quader::ViewportBeforeToolInteractionResult warmup =
+        harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+    ASSERT_FALSE(warmup.gizmo_consumed);
+    const quader_editor_core::TransformGizmoFrame *frame =
+        harness.controller.transform_gizmo_frame();
+    ASSERT_NE(frame, nullptr);
+    const quader::QVec2 click = frame->info.screen_pivot;
+
+    harness.input.mouse_local = click;
+    harness.input.mouse_screen = click;
+    const quader::ViewportBeforeToolInteractionResult press =
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(true, true, false, click));
+    ASSERT_TRUE(press.gizmo_consumed);
+    EXPECT_FALSE(press.selection_click_requested);
+
+    const quader::ViewportInteractionFrame release_frame =
+        harness.frame(false, false, true, click);
+    const quader::ViewportBeforeToolInteractionResult release =
+        harness.controller.handle_before_active_tool(harness.editor,
+                                                     release_frame);
+    EXPECT_FALSE(release.gizmo_consumed);
+    ASSERT_TRUE(release.selection_click_requested);
+    harness.controller.handle_after_active_tool(
+        harness.editor, release_frame, quader::ViewportToolResult{}, release);
+
+    const quader::QuaderSelectionSummary selection =
+        harness.editor.selection().summary();
+    EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Edge);
+    EXPECT_EQ(selection.selected_edge_count, 1u);
+    EXPECT_EQ(selection.active_kind, quader::QuaderActiveSelectionKind::Edge);
+    EXPECT_FALSE(harness.controller.dragging());
+}
+
+TEST(ViewportInteractionControllerTests, AltClickEdgeSelectsLoopThroughViewportFallback) {
+    ViewportInteractionHarness harness;
+    (void)create_unit_box(harness);
+
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Edge)
+                    .ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+
+    const quader::ViewportScreenPoint edge_midpoint =
+        harness.camera.project_world_point({1.0f, 0.0f, 1.0f});
+    ASSERT_TRUE(edge_midpoint.visible);
+    harness.input.modifiers.alt = true;
+    harness.input.mouse_local = edge_midpoint.position;
+    harness.input.mouse_screen = edge_midpoint.position;
+
+    const quader::ViewportInteractionFrame press_frame =
+        harness.frame(true, true, false, edge_midpoint.position);
+    const quader::ViewportBeforeToolInteractionResult before_tool =
+        harness.controller.handle_before_active_tool(harness.editor,
+                                                     press_frame);
+    EXPECT_FALSE(before_tool.gizmo_consumed);
+    harness.controller.handle_after_active_tool(
+        harness.editor, press_frame, quader::ViewportToolResult{},
+        before_tool);
+
+    const quader::ViewportInteractionFrame release_frame =
+        harness.frame(false, false, true, edge_midpoint.position);
+    harness.controller.handle_after_active_tool(
+        harness.editor, release_frame, quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
+
+    const quader::QuaderSelectionSummary selection =
+        harness.editor.selection().summary();
+    EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Edge);
+    EXPECT_EQ(selection.selected_edge_count, 4u);
+    EXPECT_EQ(selection.active_kind, quader::QuaderActiveSelectionKind::Edge);
+}
+
 TEST(ViewportInteractionControllerTests, ShiftClickRebuildsSliceQuadPreviewThroughViewportFallback) {
     ViewportInteractionHarness harness;
     const quader::QuaderModelingObjectRef box = create_unit_box(harness);
@@ -884,6 +967,32 @@ TEST(ViewportInteractionControllerTests, FastDragStartsFromAcceptedPressWhenCurr
     EXPECT_EQ(marquee.end.y, end.y);
     EXPECT_EQ(marquee.rule, quader::ModelingBoxSelectionRule::Crossing);
     EXPECT_EQ(harness.editor.selection().summary().selected_object_count, 1u);
+}
+
+TEST(ViewportInteractionControllerTests, TransformGizmoFrameSurvivesNavigationFrames) {
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok);
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok);
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+    const quader::ViewportBeforeToolInteractionResult warmup =
+        harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+    ASSERT_FALSE(warmup.gizmo_consumed);
+    ASSERT_NE(harness.controller.transform_gizmo_frame(), nullptr);
+
+    harness.input_result.navigation_active = true;
+    harness.input_result.camera_changed = true;
+    const quader::ViewportBeforeToolInteractionResult navigation =
+        harness.controller.handle_before_active_tool(harness.editor,
+                                                     harness.frame());
+
+    EXPECT_FALSE(navigation.gizmo_consumed);
+    const quader_editor_core::TransformGizmoFrame *frame =
+        harness.controller.transform_gizmo_frame();
+    ASSERT_NE(frame, nullptr);
+    EXPECT_TRUE(frame->info.ok);
 }
 
 TEST(ViewportInteractionControllerTests, HoverSurvivesNavigationSuppressionAndClearsWhenPointerLeaves) {

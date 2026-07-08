@@ -352,7 +352,8 @@ void ViewportSelectionInteraction::handle_frame(
         editor.selection().hover_summary().target;
     const QuaderSelectionSummary summary = pick_selection(
         editor, frame.input_router, frame, before_tool.selection_click_local,
-        std::max(1, before_tool.selection_click_count));
+        std::max(1, before_tool.selection_click_count),
+        true, true, true);
     paint_selection_active_ =
         is_component_selection_mode(to_modeling_selection_mode(summary.mode));
     suppress_hover_after_selection(before_tool.selection_click_local,

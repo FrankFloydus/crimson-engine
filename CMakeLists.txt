@@ -536,6 +536,7 @@ add_library(quader_render STATIC
     src/render/texture_binding_service.cpp
     src/render/texture_registry.cpp
     src/render/tool_preview_renderable_cache.cpp
+    src/render/viewport_info_stats.cpp
     src/render/ui_icon_texture_service.cpp
     src/render/viewport_grid_renderer.cpp
     src/render/viewport_overlay_policy.cpp

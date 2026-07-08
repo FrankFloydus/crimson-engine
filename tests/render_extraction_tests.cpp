@@ -14,6 +14,7 @@
 #include "render/render_signature_builder.hpp"
 #include "render/scene_render_extraction.hpp"
 #include "render/render_layers.hpp"
+#include "render/viewport_info_stats.hpp"
 #include "render/viewport_render_pass_coordinator.hpp"
 #include "render/viewport_overlay_frame.hpp"
 #include "render/viewport_overlay_policy.hpp"
@@ -559,6 +560,50 @@ TEST(RenderSceneSnapshotTests, BuildsVisibleMeshLightAndMaterialRecords) {
   EXPECT_EQ(snapshot.lights.front().rebuild_revision,
             LightRenderableCache::light_signature(light_component));
   EXPECT_TRUE(snapshot.live_light_entities.contains(light));
+}
+
+TEST(ViewportInfoStatsTests, CountsOnlyCameraVisibleRenderableMeshes) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+
+  const EntityId visible =
+      document.create_entity("Visible Mesh", EntityKind::Mesh);
+  document.set_mesh(visible, MeshComponent{.mesh = mesh});
+  document.set_transform(
+      visible, TransformComponent{.position = {0.0f, 0.0f, -3.0f}});
+
+  const EntityId missing =
+      document.create_entity("Missing Mesh", EntityKind::Mesh);
+  document.set_mesh(missing, MeshComponent{.mesh = mesh + 1000u});
+  document.set_transform(
+      missing, TransformComponent{.position = {0.0f, 0.0f, -3.0f}});
+
+  const EntityId hidden =
+      document.create_entity("Hidden Mesh", EntityKind::Mesh);
+  document.set_mesh(hidden, MeshComponent{.mesh = mesh});
+  document.set_transform(hidden,
+                         TransformComponent{.position = {0.0f, 0.0f, -3.0f}});
+  document.set_visible(hidden, false);
+
+  const ViewportOverlayCamera camera = test_perspective_overlay_camera();
+  const ViewportInfoSceneStats visible_stats =
+      collect_viewport_info_scene_stats(document, assets, camera);
+
+  EXPECT_EQ(visible_stats.objects, 1u);
+  EXPECT_EQ(visible_stats.primitives, 1u);
+  EXPECT_EQ(visible_stats.draw_calls, 1u);
+
+  ViewportOverlayCamera looked_away = camera;
+  looked_away.forward = {0.0f, 1.0f, 0.0f};
+  looked_away.right = {1.0f, 0.0f, 0.0f};
+  looked_away.up = {0.0f, 0.0f, -1.0f};
+  const ViewportInfoSceneStats empty_view_stats =
+      collect_viewport_info_scene_stats(document, assets, looked_away);
+
+  EXPECT_EQ(empty_view_stats.objects, 0u);
+  EXPECT_EQ(empty_view_stats.primitives, 0u);
+  EXPECT_EQ(empty_view_stats.draw_calls, 0u);
 }
 
 TEST(RenderSceneSnapshotTests, MeshAndLightRecordsAreValueSnapshotInputs) {

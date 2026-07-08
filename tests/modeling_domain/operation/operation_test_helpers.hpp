@@ -36,6 +36,39 @@ struct QuadFixture {
         ElementId face = kInvalidElementId;
 };
 
+struct BoundaryFanLoopFixture {
+	Document document;
+	Edge seed;
+	std::vector<Edge> expected_loop_edges;
+	std::vector<Edge> disconnected_fan_edges;
+};
+
+struct ManifoldCornerLoopFixture {
+	Document document;
+	ElementId top_face = kInvalidElementId;
+	ElementId side_face = kInvalidElementId;
+	Edge seed;
+	std::vector<Edge> expected_top_loop_edges;
+	std::vector<Edge> side_only_edges;
+};
+
+struct SharedLipLoopFixture {
+	Document document;
+	ElementId top_mid_face = kInvalidElementId;
+	ElementId drop_face = kInvalidElementId;
+	Edge seed;
+	std::vector<Edge> expected_top_region_loop_edges;
+	std::vector<Edge> excluded_edges;
+};
+
+struct OpenBoxBoundaryLoopFixture {
+	Document document;
+	ElementId top_face = kInvalidElementId;
+	Edge seed;
+	std::vector<Edge> expected_open_side_loop_edges;
+	std::vector<Edge> excluded_face_perimeter_edges;
+};
+
 inline bool vec_nearly_equal(quader::QVec3 left, quader::QVec3 right, float epsilon = 0.0001F)
 {
 	const bool matches = nearly_equal(left.x, right.x, epsilon) &&
@@ -67,6 +100,260 @@ inline QuadFixture make_quad_document(std::uint32_t material_slot = 0)
           ADD_FAILURE() << "Quad fixture face was not created";
         }
         return fixture;
+}
+
+inline BoundaryFanLoopFixture make_boundary_fan_loop_document()
+{
+	BoundaryFanLoopFixture fixture;
+	const ElementId v0 = add_vertex(fixture.document, { 0.0F, 0.0F, 0.0F });
+	const ElementId v1 = add_vertex(fixture.document, { 1.0F, 0.0F, 0.0F });
+	const ElementId v2 = add_vertex(fixture.document, { 1.0F, 1.0F, 0.0F });
+	const ElementId v3 = add_vertex(fixture.document, { 0.0F, 1.0F, 0.0F });
+	const ElementId v4 = add_vertex(fixture.document, { 2.0F, 0.0F, 0.0F });
+	const ElementId v5 = add_vertex(fixture.document, { 2.0F, 1.0F, 0.0F });
+
+	EXPECT_TRUE(add_face(fixture.document,
+	                    std::array<ElementId, 4>{v0, v1, v2, v3}) !=
+	            kInvalidElementId);
+	EXPECT_TRUE(add_face(fixture.document,
+	                    std::array<ElementId, 4>{v1, v4, v5, v2}) !=
+	            kInvalidElementId);
+
+	const ElementId c1 = add_vertex(fixture.document, { 1.0F, -1.0F, 0.0F });
+	const ElementId c2 = add_vertex(fixture.document, { 2.0F, -1.0F, 0.0F });
+	const ElementId c3 = add_vertex(fixture.document, { 2.0F, -2.0F, 0.0F });
+	EXPECT_TRUE(add_face(fixture.document,
+	                    std::array<ElementId, 4>{v1, c1, c2, c3}) !=
+	            kInvalidElementId);
+
+	const ElementId d1 = add_vertex(fixture.document, { -1.0F, 0.0F, 0.0F });
+	const ElementId d2 = add_vertex(fixture.document, { -1.0F, -1.0F, 0.0F });
+	const ElementId d3 = add_vertex(fixture.document, { -2.0F, -1.0F, 0.0F });
+	EXPECT_TRUE(add_face(fixture.document,
+	                    std::array<ElementId, 4>{v0, d1, d2, d3}) !=
+	            kInvalidElementId);
+
+	fixture.seed = make_edge(v0, v1);
+	fixture.expected_loop_edges = {
+		make_edge(v0, v1),
+		make_edge(v1, v4),
+		make_edge(v4, v5),
+		make_edge(v5, v2),
+		make_edge(v2, v3),
+		make_edge(v3, v0),
+	};
+	fixture.disconnected_fan_edges = {
+		make_edge(v1, c1),
+		make_edge(v1, c3),
+		make_edge(v0, d1),
+		make_edge(v0, d3),
+	};
+	return fixture;
+}
+
+inline ManifoldCornerLoopFixture make_manifold_corner_loop_document()
+{
+	ManifoldCornerLoopFixture fixture;
+	const ElementId top_front_left =
+		add_vertex(fixture.document, { -1.0F, -1.0F, 0.0F });
+	const ElementId top_front_right =
+		add_vertex(fixture.document, { 1.0F, -1.0F, 0.0F });
+	const ElementId top_back_right =
+		add_vertex(fixture.document, { 1.0F, 1.0F, 0.0F });
+	const ElementId top_back_left =
+		add_vertex(fixture.document, { -1.0F, 1.0F, 0.0F });
+	const ElementId side_bottom_left =
+		add_vertex(fixture.document, { -1.0F, -1.0F, -1.0F });
+	const ElementId side_bottom_right =
+		add_vertex(fixture.document, { 1.0F, -1.0F, -1.0F });
+
+	fixture.top_face = add_face(
+		fixture.document,
+		std::array<ElementId, 4>{
+			top_front_left,
+			top_front_right,
+			top_back_right,
+			top_back_left,
+		});
+	EXPECT_TRUE(fixture.top_face != kInvalidElementId);
+	fixture.side_face = add_face(
+		fixture.document,
+		std::array<ElementId, 4>{
+			top_front_right,
+			top_front_left,
+			side_bottom_left,
+			side_bottom_right,
+		});
+	EXPECT_TRUE(fixture.side_face != kInvalidElementId);
+
+	fixture.seed = make_edge(top_front_left, top_front_right);
+	fixture.expected_top_loop_edges = {
+		make_edge(top_front_left, top_front_right),
+		make_edge(top_front_right, top_back_right),
+		make_edge(top_back_right, top_back_left),
+		make_edge(top_back_left, top_front_left),
+	};
+	fixture.side_only_edges = {
+		make_edge(top_front_left, side_bottom_left),
+		make_edge(side_bottom_left, side_bottom_right),
+		make_edge(side_bottom_right, top_front_right),
+	};
+	return fixture;
+}
+
+inline SharedLipLoopFixture make_shared_lip_loop_document()
+{
+	SharedLipLoopFixture fixture;
+	const ElementId front0 = add_vertex(fixture.document, { 0.0F, 0.0F, 0.0F });
+	const ElementId front1 = add_vertex(fixture.document, { 1.0F, 0.0F, 0.0F });
+	const ElementId front2 = add_vertex(fixture.document, { 2.0F, 0.0F, 0.0F });
+	const ElementId front3 = add_vertex(fixture.document, { 3.0F, 0.0F, 0.0F });
+	const ElementId back0 = add_vertex(fixture.document, { 0.0F, 1.0F, 0.0F });
+	const ElementId back1 = add_vertex(fixture.document, { 1.0F, 1.0F, 0.0F });
+	const ElementId back2 = add_vertex(fixture.document, { 2.0F, 1.0F, 0.0F });
+	const ElementId back3 = add_vertex(fixture.document, { 3.0F, 1.0F, 0.0F });
+
+	EXPECT_TRUE(add_face(fixture.document,
+	                    std::array<ElementId, 4>{
+	                        front0,
+	                        front1,
+	                        back1,
+	                        back0,
+	                    }) != kInvalidElementId);
+	fixture.top_mid_face = add_face(
+		fixture.document,
+		std::array<ElementId, 4>{
+			front1,
+			front2,
+			back2,
+			back1,
+		});
+	EXPECT_TRUE(fixture.top_mid_face != kInvalidElementId);
+	EXPECT_TRUE(add_face(fixture.document,
+	                    std::array<ElementId, 4>{
+	                        front2,
+	                        front3,
+	                        back3,
+	                        back2,
+	                    }) != kInvalidElementId);
+
+	const ElementId drop1 = add_vertex(fixture.document, { 1.0F, 0.0F, -1.0F });
+	const ElementId drop2 = add_vertex(fixture.document, { 2.0F, 0.0F, -1.0F });
+	fixture.drop_face = add_face(
+		fixture.document,
+		std::array<ElementId, 4>{
+			front2,
+			front1,
+			drop1,
+			drop2,
+		});
+	EXPECT_TRUE(fixture.drop_face != kInvalidElementId);
+
+	const ElementId right_front = add_vertex(fixture.document, { 3.0F, 0.0F, -1.0F });
+	const ElementId right_back = add_vertex(fixture.document, { 3.0F, 1.0F, -1.0F });
+	EXPECT_TRUE(add_face(fixture.document,
+	                    std::array<ElementId, 4>{
+	                        front3,
+	                        right_front,
+	                        right_back,
+	                        back3,
+	                    }) != kInvalidElementId);
+
+	fixture.seed = make_edge(front1, front2);
+	fixture.expected_top_region_loop_edges = {
+		make_edge(front0, front1),
+		make_edge(front1, front2),
+		make_edge(front2, front3),
+		make_edge(front3, back3),
+		make_edge(back3, back2),
+		make_edge(back2, back1),
+		make_edge(back1, back0),
+		make_edge(back0, front0),
+	};
+	fixture.excluded_edges = {
+		make_edge(front1, back1),
+		make_edge(front2, back2),
+		make_edge(front1, drop1),
+		make_edge(drop1, drop2),
+		make_edge(drop2, front2),
+		make_edge(front3, right_front),
+		make_edge(right_front, right_back),
+		make_edge(right_back, back3),
+	};
+	return fixture;
+}
+
+inline OpenBoxBoundaryLoopFixture make_open_box_boundary_loop_document()
+{
+	OpenBoxBoundaryLoopFixture fixture;
+	const ElementId bottom_front_left =
+		add_vertex(fixture.document, { -8.0F, 0.0F, -4.0F });
+	const ElementId bottom_back_left =
+		add_vertex(fixture.document, { -8.0F, 0.0F, 4.0F });
+	const ElementId bottom_back_open =
+		add_vertex(fixture.document, { 4.0F, 0.0F, 4.0F });
+	const ElementId bottom_front_open =
+		add_vertex(fixture.document, { 4.0F, 0.0F, -4.0F });
+	const ElementId top_front_left =
+		add_vertex(fixture.document, { -8.0F, 1.0F, -4.0F });
+	const ElementId top_back_left =
+		add_vertex(fixture.document, { -8.0F, 1.0F, 4.0F });
+	const ElementId top_back_open =
+		add_vertex(fixture.document, { 4.0F, 1.0F, 4.0F });
+	const ElementId top_front_open =
+		add_vertex(fixture.document, { 4.0F, 1.0F, -4.0F });
+
+	EXPECT_TRUE(add_face(fixture.document,
+	                    std::array<ElementId, 4>{
+	                        bottom_front_open,
+	                        bottom_back_open,
+	                        bottom_back_left,
+	                        bottom_front_left,
+	                    }) != kInvalidElementId);
+	fixture.top_face = add_face(
+		fixture.document,
+		std::array<ElementId, 4>{
+			top_front_left,
+			top_back_left,
+			top_back_open,
+			top_front_open,
+		});
+	EXPECT_TRUE(fixture.top_face != kInvalidElementId);
+	EXPECT_TRUE(add_face(fixture.document,
+	                    std::array<ElementId, 4>{
+	                        bottom_back_left,
+	                        top_back_left,
+	                        top_front_left,
+	                        bottom_front_left,
+	                    }) != kInvalidElementId);
+	EXPECT_TRUE(add_face(fixture.document,
+	                    std::array<ElementId, 4>{
+	                        bottom_back_open,
+	                        top_back_open,
+	                        top_back_left,
+	                        bottom_back_left,
+	                    }) != kInvalidElementId);
+	EXPECT_TRUE(add_face(fixture.document,
+	                    std::array<ElementId, 4>{
+	                        bottom_front_left,
+	                        top_front_left,
+	                        top_front_open,
+	                        bottom_front_open,
+	                    }) != kInvalidElementId);
+
+	fixture.seed = make_edge(top_back_open, top_front_open);
+	fixture.expected_open_side_loop_edges = {
+		make_edge(top_back_open, top_front_open),
+		make_edge(bottom_back_open, top_back_open),
+		make_edge(bottom_back_open, bottom_front_open),
+		make_edge(bottom_front_open, top_front_open),
+	};
+	fixture.excluded_face_perimeter_edges = {
+		make_edge(top_front_left, top_back_left),
+		make_edge(top_back_left, top_back_open),
+		make_edge(top_front_left, top_front_open),
+	};
+	return fixture;
 }
 
 inline Selection vertex_selection(std::initializer_list<ElementId> vertices,

@@ -25,6 +25,8 @@
 namespace quader {
 namespace {
 
+constexpr double kFrameRateSampleSeconds = 0.5;
+
 filament::backend::Backend to_filament_backend(RendererBackend backend) {
   switch (backend) {
   case RendererBackend::Vulkan:
@@ -215,15 +217,30 @@ bool RenderSystem::begin_frame_with_swap_chain(
 }
 
 void RenderSystem::update_frame_performance_stats_after_end_frame() {
+  const std::chrono::steady_clock::time_point frame_end =
+      std::chrono::steady_clock::now();
   if (frame_cpu_active_) {
-    const std::chrono::steady_clock::time_point frame_cpu_end =
-        std::chrono::steady_clock::now();
     frame_performance_stats_.cpu_frame_ms =
-        std::chrono::duration<double, std::milli>(frame_cpu_end -
-                                                  frame_cpu_begin_)
+        std::chrono::duration<double, std::milli>(frame_end - frame_cpu_begin_)
             .count();
     frame_performance_stats_.cpu_frame_ms_available = true;
     frame_cpu_active_ = false;
+  }
+
+  if (frame_rate_sample_begin_ == std::chrono::steady_clock::time_point{}) {
+    frame_rate_sample_begin_ = frame_end;
+  }
+  ++frame_rate_sample_count_;
+  const double frame_rate_sample_seconds =
+      std::chrono::duration<double>(frame_end - frame_rate_sample_begin_)
+          .count();
+  if (frame_rate_sample_seconds >= kFrameRateSampleSeconds) {
+    frame_performance_stats_.frames_per_second =
+        static_cast<double>(frame_rate_sample_count_) /
+        frame_rate_sample_seconds;
+    frame_performance_stats_.frames_per_second_available = true;
+    frame_rate_sample_begin_ = frame_end;
+    frame_rate_sample_count_ = 0;
   }
 
   frame_performance_stats_.gpu_frame_ms_available = false;

@@ -217,6 +217,47 @@ bool source_wire_face_contains_edge(const quader_poly::Face& face, quader_poly::
 	return false;
 }
 
+quader_poly::ElementId source_wire_edge_context_face_id(
+		const quader_poly::Document& document,
+		quader_poly::Edge edge,
+		const quader_poly::Ray& ray,
+		quader_poly::PickOptions options)
+{
+	quader_poly::ElementId best_face_id = quader_poly::kInvalidElementId;
+	float best_score = -std::numeric_limits<float>::infinity();
+	for (const quader_poly::Face& face : document.faces) {
+		if (!source_wire_face_contains_edge(face, edge) ||
+				options.hides_material_slot(face.material_slot)) {
+			continue;
+		}
+		const float score =
+			-quader::dot(quader_poly::face_normal(document, face),
+			             ray.direction);
+		if (best_face_id == quader_poly::kInvalidElementId ||
+				score > best_score + kTransformPointEpsilon) {
+			best_face_id = face.id;
+			best_score = score;
+		}
+	}
+	if (best_face_id != quader_poly::kInvalidElementId) {
+		return best_face_id;
+	}
+
+	options.mode = quader_poly::SelectionMode::Face;
+	const quader_poly::PickResult surface_hit =
+		quader_poly::pick_element(document, ray, options);
+	if (surface_hit.hit) {
+		const quader_poly::Face* surface_face =
+			quader_poly::find_face(document, surface_hit.face_id);
+		if (surface_face != nullptr &&
+				source_wire_face_contains_edge(*surface_face, edge)) {
+			return surface_face->id;
+		}
+	}
+
+	return quader_poly::kInvalidElementId;
+}
+
 bool source_wire_face_contains_vertex(const quader_poly::Face& face, quader_poly::ElementId vertex_id)
 {
 	return std::ranges::find(face.vertices, vertex_id) != face.vertices.end();
@@ -435,6 +476,8 @@ std::optional<SourceWireComponentPick> pick_active_source_wire_component(
 				closest.segment_point.y,
 				closest.segment_point.z,
 			};
+			hit.face_id = source_wire_edge_context_face_id(
+				object.document, hit.edge, pick_ray, options);
 			if (source_wire_component_is_occluded_by_object_faces(object, pick_ray, options, hit)) {
 				continue;
 			}
@@ -575,6 +618,62 @@ bool face_contains_edge(const quader_poly::Face& face, quader_poly::Edge edge)
 		}
 	}
 	return false;
+}
+
+quader_poly::ElementId best_edge_context_face_id(
+		const quader_poly::Document& document,
+		quader_poly::Edge edge,
+		const quader_poly::Ray& ray,
+		const quader_poly::PickOptions& options)
+{
+	quader_poly::ElementId best_face_id = quader_poly::kInvalidElementId;
+	float best_score = -std::numeric_limits<float>::infinity();
+	for (const quader_poly::Face& face : document.faces) {
+		if (!face_contains_edge(face, edge) ||
+				options.hides_material_slot(face.material_slot)) {
+			continue;
+		}
+		const float score = -quader::dot(quader_poly::face_normal(document, face), ray.direction);
+		if (best_face_id == quader_poly::kInvalidElementId ||
+				score > best_score + kTransformPointEpsilon) {
+			best_face_id = face.id;
+			best_score = score;
+		}
+	}
+	return best_face_id;
+}
+
+quader_poly::ElementId edge_loop_context_face_id(
+		const quader_poly::Document& document,
+		const quader_poly::PickResult& hit,
+		const quader_poly::Ray& ray,
+		quader_poly::PickOptions options)
+{
+	if (hit.kind != quader_poly::ElementKind::Edge) {
+		return quader_poly::kInvalidElementId;
+	}
+	const quader_poly::ElementId best_context_face =
+		best_edge_context_face_id(document, hit.edge, ray, options);
+	if (best_context_face != quader_poly::kInvalidElementId) {
+		return best_context_face;
+	}
+	if (const quader_poly::Face* picked_face =
+			quader_poly::find_face(document, hit.face_id);
+			picked_face != nullptr && face_contains_edge(*picked_face, hit.edge)) {
+		return picked_face->id;
+	}
+
+	options.mode = quader_poly::SelectionMode::Face;
+	const quader_poly::PickResult surface_hit =
+		quader_poly::pick_element(document, ray, options);
+	if (!surface_hit.hit) {
+		return best_edge_context_face_id(document, hit.edge, ray, options);
+	}
+	const quader_poly::Face* surface_face =
+		quader_poly::find_face(document, surface_hit.face_id);
+	return surface_face != nullptr && face_contains_edge(*surface_face, hit.edge)
+		? surface_face->id
+		: quader_poly::kInvalidElementId;
 }
 
 bool face_contains_vertex(const quader_poly::Face& face, quader_poly::ElementId vertex_id)
@@ -1833,7 +1932,12 @@ bool pick_select_edge_loop(
     }
     return false;
   }
-        const std::vector<quader_poly::Edge> loop_edges = quader_poly::edge_loop_edges(objects[hit_index].document, hit.edge);
+        const quader_poly::ElementId context_face_id =
+            edge_loop_context_face_id(objects[hit_index].document, hit, ray,
+                                      options);
+        const std::vector<quader_poly::Edge> loop_edges =
+            quader_poly::edge_loop_edges(objects[hit_index].document, hit.edge,
+                                         context_face_id);
 	if (loop_edges.empty()) {
 		return false;
 	}
@@ -2083,9 +2187,13 @@ ApplyPickSelectionResult apply_pick_selection(
                 return result;
 	}
 
+	const bool edge_loop_select =
+		request.edge_loop_select && mode == SelectionMode::Edge;
 	const bool multi_click = request.click_count > 1;
+	const bool single_component_pick = !multi_click && !edge_loop_select;
         if (request.preserve_existing_component_selection_on_hit &&
-            operation == SelectionEditOperation::Replace && !multi_click &&
+            operation == SelectionEditOperation::Replace &&
+            single_component_pick &&
             session_has_component_selection(session, mode) &&
             pick_selection_request_hits_target(
                 picking_objects, mode, request.ray, request.pick_options,
@@ -2096,7 +2204,8 @@ ApplyPickSelectionResult apply_pick_selection(
         }
 
         if (request.preserve_selection_on_selected_hit &&
-            operation == SelectionEditOperation::Replace && !multi_click) {
+            operation == SelectionEditOperation::Replace &&
+            single_component_pick) {
           const SelectionHoverUpdateResult hovered = update_selection_hover(
               picking_objects, mode, {}, request.ray, false,
               request.pick_options, request.object_bounds,
@@ -2125,7 +2234,8 @@ ApplyPickSelectionResult apply_pick_selection(
               picking_objects, mode, operation, request.ray, active_object_id,
               request.pick_options, request.object_bounds,
               request.face_geometry);
-        } else if (multi_click && mode == SelectionMode::Edge) {
+        } else if ((multi_click || edge_loop_select) &&
+                   mode == SelectionMode::Edge) {
           result.hit = pick_select_edge_loop(
               picking_objects, mode, operation, request.ray, active_object_id,
               request.pick_options, request.object_bounds,

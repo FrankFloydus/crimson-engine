@@ -545,6 +545,7 @@ struct ApplyPickSelectionRequest {
   quader_poly::Ray ray;
   quader_poly::PickOptions pick_options;
   int click_count = 1;
+  bool edge_loop_select = false;
   bool preserve_existing_component_selection_on_hit = false;
   bool preserve_selection_on_selected_hit = false;
   bool preserve_selection_on_miss = false;

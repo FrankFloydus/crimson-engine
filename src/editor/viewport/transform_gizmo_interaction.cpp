@@ -270,14 +270,6 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
     return result;
   }
 
-  const bool camera_navigation_frame =
-      frame.input_result.navigation_active || frame.input_result.camera_changed;
-  if (camera_navigation_frame && !dragging_ && !pending_drag_.has_value()) {
-    clear_frame();
-    hover_axis_ = quader_editor_core::TransformAxis::None;
-    return result;
-  }
-
   std::optional<QuaderSelectionSummary> selection;
   QVec3 pivot = {};
   if (dragging_) {

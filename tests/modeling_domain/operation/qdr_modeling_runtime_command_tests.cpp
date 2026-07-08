@@ -9,11 +9,14 @@
 #include "test_support.hpp"
 
 #include <editor/modeling/runtime/runtime_command.hpp>
+#include <mesh/polygon/document_picking.hpp>
+#include <mesh/polygon/document_topology.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace qec = quader_editor_core;
 
@@ -79,13 +82,15 @@ qec::EditorRuntimeCommand pick_select_command(
 		quader_poly::Ray ray = front_center_ray(),
 		int click_count = 1,
 		bool control_pressed = false,
-		bool shift_pressed = false)
+		bool shift_pressed = false,
+		bool alt_pressed = false)
 {
 	qec::PickSelectRuntimeCommandSettings settings;
 	settings.ray = ray;
 	settings.click_count = click_count;
 	settings.control_pressed = control_pressed;
 	settings.shift_pressed = shift_pressed;
+	settings.alt_pressed = alt_pressed;
 	settings.vertex_radius = 0.12;
 	settings.edge_radius = 0.10;
 
@@ -108,6 +113,103 @@ quader_poly::Ray top_center_ray()
 quader_poly::Ray front_right_top_vertex_ray()
 {
 	return { { 1.0F, 1.0F, 5.0F }, { 0.0F, 0.0F, -1.0F } };
+}
+
+std::optional<quader::QVec3> edge_midpoint(const quader_poly::Document& document, quader_poly::Edge edge)
+{
+	const quader_poly::Vertex* a = quader_poly::find_vertex(document, edge.a);
+	const quader_poly::Vertex* b = quader_poly::find_vertex(document, edge.b);
+	if (a == nullptr || b == nullptr) {
+		return std::nullopt;
+	}
+	return quader::QVec3 {
+		(a->position.x + b->position.x) * 0.5F,
+		(a->position.y + b->position.y) * 0.5F,
+		(a->position.z + b->position.z) * 0.5F,
+	};
+}
+
+quader_poly::Ray edge_pick_ray(quader::QVec3 point, quader::QVec3 direction)
+{
+	return {
+		{
+			point.x - (direction.x * 5.0F),
+			point.y - (direction.y * 5.0F),
+			point.z - (direction.z * 5.0F),
+		},
+		direction,
+	};
+}
+
+struct PickableEdgeLoopFixture {
+	qec::EditorSession session;
+	quader_poly::Ray ray;
+	std::vector<quader_poly::Edge> loop_edges;
+};
+
+std::optional<PickableEdgeLoopFixture> make_pickable_edge_loop_fixture()
+{
+	const qec::EditorSession base_session = qdr_test::selected_cube_session();
+	if (base_session.objects().empty()) {
+		return std::nullopt;
+	}
+	const std::vector<quader_poly::Edge> seed_edges =
+		quader_poly::document_edges(base_session.objects().front().document);
+	const std::array<quader::QVec3, 6> ray_directions {{
+		{ 0.0F, 0.0F, -1.0F },
+		{ 0.0F, 0.0F, 1.0F },
+		{ 0.0F, -1.0F, 0.0F },
+		{ 0.0F, 1.0F, 0.0F },
+		{ -1.0F, 0.0F, 0.0F },
+		{ 1.0F, 0.0F, 0.0F },
+	}};
+
+	quader_poly::PickOptions options;
+	options.mode = quader_poly::SelectionMode::Edge;
+	options.edge_radius = 0.10F;
+	options.pick_backfaces = true;
+	options.prefer_front_facing_faces = false;
+
+	for (const quader_poly::Edge seed_edge : seed_edges) {
+		qec::EditorSession candidate = qdr_test::selected_cube_session();
+		const qec::CommandResult insert_result =
+			candidate.insert_edge_loop(1, seed_edge, 0.5F);
+		if (!insert_result.ok || !insert_result.changed || candidate.objects().empty()) {
+			continue;
+		}
+
+		const quader_poly::Document& document = candidate.objects().front().document;
+		for (const quader_poly::Edge edge : quader_poly::document_edges(document)) {
+			std::vector<quader_poly::Edge> loop_edges =
+				quader_poly::edge_loop_edges(document, edge);
+			if (loop_edges.size() <= 1U) {
+				continue;
+			}
+			const std::optional<quader::QVec3> midpoint = edge_midpoint(document, edge);
+			if (!midpoint.has_value()) {
+				continue;
+			}
+			for (const quader::QVec3 direction : ray_directions) {
+				const quader_poly::Ray ray = edge_pick_ray(*midpoint, direction);
+				const quader_poly::PickResult pick =
+					quader_poly::pick_element(document, ray, options);
+				if (pick.hit &&
+					pick.kind == quader_poly::ElementKind::Edge &&
+					quader_poly::make_edge(pick.edge.a, pick.edge.b) ==
+						quader_poly::make_edge(edge.a, edge.b)) {
+					loop_edges = quader_poly::edge_loop_edges(
+						document, edge, pick.face_id);
+					return PickableEdgeLoopFixture {
+						std::move(candidate),
+						ray,
+						std::move(loop_edges),
+					};
+				}
+			}
+		}
+	}
+
+	return std::nullopt;
 }
 
 qec::EditorRuntimeCommand insert_edge_loop_pick_command(
@@ -1798,14 +1900,19 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadePickSelectDoubleC
         EXPECT_TRUE(face_result.command.changed == (face_session.state().selection_revision > 0U));
 	EXPECT_FALSE(face_session.history_status().can_undo);
 
-	qec::EditorSession edge_session = qdr_test::selected_cube_session();
+	std::optional<PickableEdgeLoopFixture> edge_loop =
+		make_pickable_edge_loop_fixture();
+	ASSERT_TRUE(edge_loop.has_value());
+	qec::EditorSession edge_session = std::move(edge_loop->session);
 	qec::EditorRuntime edge_runtime;
 	edge_session.clear_selection();
         edge_session.set_selection_mode(qec::SelectionMode::Edge);
-        const qec::EditorRuntimeCommandResult edge_result =
-		qec::execute_runtime_command(edge_session, edge_runtime, pick_select_command({ { 0.0F, 1.0F, 5.0F }, { 0.0F, 0.0F, -1.0F } }, 2));
+	const qec::EditorRuntimeCommandResult edge_result =
+		qec::execute_runtime_command(edge_session, edge_runtime,
+			pick_select_command(edge_loop->ray, 2));
 	EXPECT_TRUE(edge_result.command.ok);
         EXPECT_TRUE(edge_session.selection_mode() == qec::SelectionMode::Edge);
+        EXPECT_EQ(selected_edge_count(edge_session), edge_loop->loop_edges.size());
         EXPECT_FALSE(edge_session.history_status().can_undo);
 
 	qec::EditorSession vertex_session = qdr_test::selected_cube_session();
@@ -1818,6 +1925,282 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadePickSelectDoubleC
         EXPECT_TRUE(vertex_session.selection_mode() ==
                     qec::SelectionMode::Vertex);
         EXPECT_FALSE(vertex_session.history_status().can_undo);
+}
+
+TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeShiftAndCtrlDoubleClickEditWholeEdgeLoop) {
+	std::optional<PickableEdgeLoopFixture> edge_loop =
+		make_pickable_edge_loop_fixture();
+	ASSERT_TRUE(edge_loop.has_value());
+	qec::EditorSession session = std::move(edge_loop->session);
+	qec::EditorRuntime runtime;
+	session.clear_selection();
+	session.set_selection_mode(qec::SelectionMode::Edge);
+
+	const qec::EditorRuntimeCommandResult seed_result =
+		qec::execute_runtime_command(session, runtime,
+			pick_select_command(edge_loop->ray));
+	ASSERT_TRUE(seed_result.command.ok);
+	ASSERT_TRUE(seed_result.command.changed);
+	ASSERT_EQ(selected_edge_count(session), 1U);
+	ASSERT_GT(edge_loop->loop_edges.size(), 1U);
+
+	const qec::EditorRuntimeCommandResult add_loop =
+		qec::execute_runtime_command(session, runtime,
+			pick_select_command(edge_loop->ray, 2, false, true));
+	ASSERT_TRUE(add_loop.command.ok);
+	EXPECT_EQ(selected_edge_count(session), edge_loop->loop_edges.size());
+
+	const qec::EditorRuntimeCommandResult remove_loop =
+		qec::execute_runtime_command(session, runtime,
+			pick_select_command(edge_loop->ray, 2, true, false));
+	ASSERT_TRUE(remove_loop.command.ok);
+	EXPECT_EQ(selected_edge_count(session), 0U);
+}
+
+TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeAltClickSelectsWholeEdgeLoop) {
+	std::optional<PickableEdgeLoopFixture> edge_loop =
+		make_pickable_edge_loop_fixture();
+	ASSERT_TRUE(edge_loop.has_value());
+	qec::EditorSession session = std::move(edge_loop->session);
+	qec::EditorRuntime runtime;
+	session.clear_selection();
+	session.set_selection_mode(qec::SelectionMode::Edge);
+
+	const qec::EditorRuntimeCommandResult select_loop =
+		qec::execute_runtime_command(session, runtime,
+			pick_select_command(edge_loop->ray, 1, false, false, true));
+	ASSERT_TRUE(select_loop.command.ok);
+	EXPECT_TRUE(select_loop.command.changed);
+	EXPECT_EQ(selected_edge_count(session), edge_loop->loop_edges.size());
+}
+
+TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeDoubleClickSelectsBoundaryFanEdgeLoop) {
+	qdr_test::BoundaryFanLoopFixture fixture =
+		qdr_test::make_boundary_fan_loop_document();
+	const std::optional<quader::QVec3> midpoint =
+		edge_midpoint(fixture.document, fixture.seed);
+	ASSERT_TRUE(midpoint.has_value());
+	const quader_poly::Ray ray =
+		edge_pick_ray(*midpoint, { 0.0F, 0.0F, -1.0F });
+	const std::vector<quader_poly::Edge> expected_loop_edges =
+		fixture.expected_loop_edges;
+	const std::vector<quader_poly::Edge> disconnected_fan_edges =
+		fixture.disconnected_fan_edges;
+
+	qec::EditorSession session({
+		qdr_test::make_object(1, std::move(fixture.document), true),
+	});
+	qec::EditorRuntime runtime;
+	session.clear_selection();
+	session.set_selection_mode(qec::SelectionMode::Edge);
+
+	const qec::EditorRuntimeCommandResult select_edge =
+		qec::execute_runtime_command(session, runtime,
+			pick_select_command(ray));
+	ASSERT_TRUE(select_edge.command.ok);
+	EXPECT_TRUE(select_edge.command.changed);
+	ASSERT_EQ(selected_edge_count(session), 1U);
+
+	const qec::EditorRuntimeCommandResult select_loop =
+		qec::execute_runtime_command(session, runtime,
+			pick_select_command(ray, 2));
+	ASSERT_TRUE(select_loop.command.ok);
+	EXPECT_TRUE(select_loop.command.changed);
+	ASSERT_EQ(selected_edge_count(session), expected_loop_edges.size());
+	const qec::PolygonObject& object = qdr_test::require_object(session, 1);
+	for (const quader_poly::Edge& edge : expected_loop_edges) {
+		EXPECT_TRUE(quader_poly::selection_contains(object.selection, edge));
+	}
+	for (const quader_poly::Edge& edge : disconnected_fan_edges) {
+		EXPECT_FALSE(quader_poly::selection_contains(object.selection, edge));
+	}
+
+	const qec::EditorRuntimeCommandResult remove_loop =
+		qec::execute_runtime_command(session, runtime,
+			pick_select_command(ray, 2, true, false));
+	ASSERT_TRUE(remove_loop.command.ok);
+	EXPECT_EQ(selected_edge_count(session), 0U);
+
+	const qec::EditorRuntimeCommandResult add_loop =
+		qec::execute_runtime_command(session, runtime,
+			pick_select_command(ray, 2, false, true));
+	ASSERT_TRUE(add_loop.command.ok);
+	EXPECT_EQ(selected_edge_count(session), expected_loop_edges.size());
+}
+
+TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeDoubleClickUsesPickedFaceForSharedCornerEdgeLoop) {
+	qdr_test::ManifoldCornerLoopFixture fixture =
+		qdr_test::make_manifold_corner_loop_document();
+	const std::optional<quader::QVec3> midpoint =
+		edge_midpoint(fixture.document, fixture.seed);
+	ASSERT_TRUE(midpoint.has_value());
+	const quader_poly::Ray ray =
+		edge_pick_ray(*midpoint, { 0.0F, 0.0F, -1.0F });
+
+	quader_poly::PickOptions pick_options;
+	pick_options.mode = quader_poly::SelectionMode::Edge;
+	pick_options.edge_radius = 0.10F;
+	pick_options.pick_backfaces = true;
+	pick_options.prefer_front_facing_faces = false;
+	const quader_poly::PickResult direct_pick =
+		quader_poly::pick_element(fixture.document, ray, pick_options);
+	ASSERT_TRUE(direct_pick.hit);
+	ASSERT_TRUE(direct_pick.kind == quader_poly::ElementKind::Edge);
+	EXPECT_EQ(direct_pick.face_id, fixture.top_face);
+
+	const std::vector<quader_poly::Edge> expected_top_loop_edges =
+		fixture.expected_top_loop_edges;
+	const std::vector<quader_poly::Edge> side_only_edges =
+		fixture.side_only_edges;
+	qec::EditorSession session({
+		qdr_test::make_object(1, std::move(fixture.document), true),
+	});
+	qec::EditorRuntime runtime;
+	session.clear_selection();
+	session.set_selection_mode(qec::SelectionMode::Edge);
+
+	const qec::EditorRuntimeCommandResult select_edge =
+		qec::execute_runtime_command(session, runtime,
+			pick_select_command(ray));
+	ASSERT_TRUE(select_edge.command.ok);
+	EXPECT_TRUE(select_edge.command.changed);
+	ASSERT_EQ(selected_edge_count(session), 1U);
+
+	const qec::EditorRuntimeCommandResult select_loop =
+		qec::execute_runtime_command(session, runtime,
+			pick_select_command(ray, 2));
+	ASSERT_TRUE(select_loop.command.ok);
+	EXPECT_TRUE(select_loop.command.changed);
+	ASSERT_EQ(selected_edge_count(session), expected_top_loop_edges.size());
+	const qec::PolygonObject& object = qdr_test::require_object(session, 1);
+	for (const quader_poly::Edge& edge : expected_top_loop_edges) {
+		EXPECT_TRUE(quader_poly::selection_contains(object.selection, edge));
+	}
+	for (const quader_poly::Edge& edge : side_only_edges) {
+		EXPECT_FALSE(quader_poly::selection_contains(object.selection, edge));
+	}
+}
+
+TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeDoubleClickSelectedSharedLipEdgeUsesPickedSurfaceBoundary) {
+	qdr_test::SharedLipLoopFixture fixture =
+		qdr_test::make_shared_lip_loop_document();
+	const auto drop_face =
+		std::ranges::find_if(fixture.document.faces,
+		                     [&](const quader_poly::Face& face) {
+			                     return face.id == fixture.drop_face;
+		                     });
+	ASSERT_NE(drop_face, fixture.document.faces.end());
+	std::rotate(fixture.document.faces.begin(), drop_face,
+	            std::next(drop_face));
+	const std::optional<quader::QVec3> midpoint =
+		edge_midpoint(fixture.document, fixture.seed);
+	ASSERT_TRUE(midpoint.has_value());
+	const quader_poly::Ray ray =
+		edge_pick_ray(*midpoint, { 0.0F, 0.196116F, -0.980581F });
+
+	quader_poly::PickOptions pick_options;
+	pick_options.mode = quader_poly::SelectionMode::Edge;
+	pick_options.edge_radius = 0.10F;
+	pick_options.pick_backfaces = true;
+	pick_options.prefer_front_facing_faces = false;
+	const quader_poly::PickResult direct_pick =
+		quader_poly::pick_element(fixture.document, ray, pick_options);
+	ASSERT_TRUE(direct_pick.hit);
+	ASSERT_TRUE(direct_pick.kind == quader_poly::ElementKind::Edge);
+	EXPECT_EQ(direct_pick.face_id, fixture.top_mid_face);
+
+	const std::vector<quader_poly::Edge> expected_loop_edges =
+		fixture.expected_top_region_loop_edges;
+	const std::vector<quader_poly::Edge> excluded_edges =
+		fixture.excluded_edges;
+	qec::EditorSession session({
+		qdr_test::make_object(1, std::move(fixture.document), true),
+	});
+	qec::EditorRuntime runtime;
+	session.clear_selection();
+	session.set_selection_mode(qec::SelectionMode::Edge);
+
+	const qec::EditorRuntimeCommandResult select_edge =
+		qec::execute_runtime_command(session, runtime,
+			pick_select_command(ray));
+	ASSERT_TRUE(select_edge.command.ok);
+	EXPECT_TRUE(select_edge.command.changed);
+	ASSERT_EQ(selected_edge_count(session), 1U);
+
+	const qec::EditorRuntimeCommandResult select_loop =
+		qec::execute_runtime_command(session, runtime,
+			pick_select_command(ray, 2));
+	ASSERT_TRUE(select_loop.command.ok);
+	EXPECT_TRUE(select_loop.command.changed);
+	ASSERT_EQ(selected_edge_count(session), expected_loop_edges.size());
+	const qec::PolygonObject& object = qdr_test::require_object(session, 1);
+	for (const quader_poly::Edge& edge : expected_loop_edges) {
+		EXPECT_TRUE(quader_poly::selection_contains(object.selection, edge));
+	}
+	for (const quader_poly::Edge& edge : excluded_edges) {
+		EXPECT_FALSE(quader_poly::selection_contains(object.selection, edge));
+	}
+
+	const qec::EditorRuntimeCommandResult remove_loop =
+		qec::execute_runtime_command(session, runtime,
+			pick_select_command(ray, 2, true, false));
+	ASSERT_TRUE(remove_loop.command.ok);
+	EXPECT_EQ(selected_edge_count(session), 0U);
+}
+
+TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeDoubleClickSelectedOpenBoxBoundaryUsesHoleLoop) {
+	qdr_test::OpenBoxBoundaryLoopFixture fixture =
+		qdr_test::make_open_box_boundary_loop_document();
+	const std::optional<quader::QVec3> midpoint =
+		edge_midpoint(fixture.document, fixture.seed);
+	ASSERT_TRUE(midpoint.has_value());
+	const quader_poly::Ray ray =
+		edge_pick_ray(*midpoint, { 0.0F, -1.0F, 0.0F });
+
+	quader_poly::PickOptions pick_options;
+	pick_options.mode = quader_poly::SelectionMode::Edge;
+	pick_options.edge_radius = 0.10F;
+	pick_options.pick_backfaces = true;
+	pick_options.prefer_front_facing_faces = false;
+	const quader_poly::PickResult direct_pick =
+		quader_poly::pick_element(fixture.document, ray, pick_options);
+	ASSERT_TRUE(direct_pick.hit);
+	ASSERT_TRUE(direct_pick.kind == quader_poly::ElementKind::Edge);
+	EXPECT_EQ(quader_poly::make_edge(direct_pick.edge.a, direct_pick.edge.b),
+	          fixture.seed);
+	EXPECT_EQ(direct_pick.face_id, fixture.top_face);
+
+	const std::vector<quader_poly::Edge> expected_loop_edges =
+		fixture.expected_open_side_loop_edges;
+	const std::vector<quader_poly::Edge> excluded_edges =
+		fixture.excluded_face_perimeter_edges;
+	qec::EditorSession session({
+		qdr_test::make_object(1, std::move(fixture.document), true),
+	});
+	qec::EditorRuntime runtime;
+	session.clear_selection();
+	session.set_selection_mode(qec::SelectionMode::Edge);
+
+	const qec::EditorRuntimeCommandResult select_edge =
+		qec::execute_runtime_command(session, runtime,
+			pick_select_command(ray));
+	ASSERT_TRUE(select_edge.command.ok);
+	EXPECT_TRUE(select_edge.command.changed);
+	ASSERT_EQ(selected_edge_count(session), 1U);
+
+	const qec::EditorRuntimeCommandResult select_loop =
+		qec::execute_runtime_command(session, runtime,
+			pick_select_command(ray, 2));
+	ASSERT_TRUE(select_loop.command.ok);
+	EXPECT_TRUE(select_loop.command.changed);
+	ASSERT_EQ(selected_edge_count(session), expected_loop_edges.size());
+	const qec::PolygonObject& object = qdr_test::require_object(session, 1);
+	for (const quader_poly::Edge& edge : expected_loop_edges) {
+		EXPECT_TRUE(quader_poly::selection_contains(object.selection, edge));
+	}
+	for (const quader_poly::Edge& edge : excluded_edges) {
+		EXPECT_FALSE(quader_poly::selection_contains(object.selection, edge));
+	}
 }
 
 TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeDrivesPolyHoverAcceptAndCommit) {

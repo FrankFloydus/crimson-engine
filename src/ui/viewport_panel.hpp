@@ -129,6 +129,7 @@ private:
     void draw_viewport_info_overlay(const SceneDocument &document,
                                     const AssetRegistry &assets,
                                     const UIContext &ui_context,
+                                    ViewportOverlayCamera camera,
                                     ImVec2 item_min, ImVec2 item_size);
     void refresh_cached_selection_overlay_frame(
         ModelingSessionService &modeling, const SceneDocument &document,
@@ -177,6 +178,7 @@ private:
     const AssetRegistry *viewport_info_cached_assets_ = nullptr;
     std::uint64_t viewport_info_cached_scene_revision_ = 0;
     std::uint64_t viewport_info_cached_asset_revision_ = 0;
+    ViewportOverlayCamera viewport_info_cached_camera_ = {};
     std::uint64_t viewport_info_cached_objects_ = 0;
     std::uint64_t viewport_info_cached_primitives_ = 0;
     std::uint64_t viewport_info_cached_draw_calls_ = 0;
