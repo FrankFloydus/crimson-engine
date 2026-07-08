@@ -25,6 +25,7 @@ namespace {
 struct ObjectSelectionSnapshot {
   int id = -1;
   bool selected = false;
+  bool component_edit_target = false;
   quader_poly::Selection selection;
 };
 
@@ -46,7 +47,9 @@ capture_selection_snapshot(const std::vector<PolygonObject> &objects,
   snapshot.active_object_id = active_object_id;
   snapshot.objects.reserve(objects.size());
   for (const PolygonObject &object : objects) {
-    snapshot.objects.push_back({object.id, object.selected, object.selection});
+    snapshot.objects.push_back({object.id, object.selected,
+                                object.component_edit_target,
+                                object.selection});
   }
   return snapshot;
 }
@@ -63,6 +66,8 @@ bool selection_snapshot_matches(const SelectionSnapshot &left,
     const ObjectSelectionSnapshot &right_object = right.objects[index];
     if (left_object.id != right_object.id ||
         left_object.selected != right_object.selected ||
+        left_object.component_edit_target !=
+            right_object.component_edit_target ||
         !polygon_selection_matches(left_object.selection,
                                    right_object.selection)) {
       return false;
@@ -84,9 +89,11 @@ void EditorSession::set_selection_mode(SelectionMode mode) {
   if (state_.selection_mode == mode) {
     return;
   }
+  const SelectionMode previous_mode = state_.selection_mode;
   state_.selection_mode = mode;
   quader_editor_core::set_selection_mode(state_.objects, state_.selection_mode,
-                                         state_.active_object_id);
+                                         state_.active_object_id,
+                                         previous_mode);
   note_selection_changed();
 }
 
@@ -112,6 +119,7 @@ void EditorSession::set_selected_object_ids(const std::vector<int> &object_ids,
   state_.selection_mode = SelectionMode::Object;
   for (PolygonObject &object : state_.objects) {
     object.selection = quader_poly::Selection();
+    object.component_edit_target = false;
     object.selected = std::find(object_ids.begin(), object_ids.end(),
                                 object.id) != object_ids.end();
   }
@@ -130,12 +138,14 @@ void EditorSession::set_component_selection(int object_id,
   for (PolygonObject &object : state_.objects) {
     if (object.id != object_id) {
       object.selected = false;
+      object.component_edit_target = false;
       object.selection = quader_poly::Selection();
       continue;
     }
     object.selection = std::move(selection);
     object.selection.mode = component_selection_mode(state_.selection_mode);
     object.selected = !object.selection.empty();
+    object.component_edit_target = object.selected;
     state_.active_object_id = object.selected ? object.id : -1;
   }
   normalize_active_object();
@@ -701,6 +711,7 @@ EditorSession::create_object_from_document(quader_poly::Document document,
 
   for (PolygonObject &object : state_.objects) {
     object.selected = false;
+    object.component_edit_target = false;
     object.selection = quader_poly::Selection();
   }
   clear_light_selection_state(state_.lights, state_.active_light_id);
@@ -711,6 +722,7 @@ EditorSession::create_object_from_document(quader_poly::Document document,
   object.id = state_.next_object_id++;
   object.material_id = static_cast<int>(material_id);
   object.selected = true;
+  object.component_edit_target = false;
   object.document = std::move(document);
   state_.active_object_id = object.id;
   state_.selection_mode = SelectionMode::Object;

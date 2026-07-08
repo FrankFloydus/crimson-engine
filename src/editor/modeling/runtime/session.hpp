@@ -195,6 +195,7 @@ struct PolygonObject {
   bool selected = false;
   quader_poly::Document document;
   quader_poly::Selection selection;
+  bool component_edit_target = false;
 };
 
 /**
@@ -1240,6 +1241,8 @@ SelectionEditOperation sanitize_selection_operation(int operation);
 quader_poly::SelectionMode component_selection_mode(SelectionMode mode);
 bool component_selection_has_mode_components(
     const quader_poly::Selection &selection, SelectionMode mode);
+bool component_selection_has_any_components(
+    const quader_poly::Selection &selection);
 bool polygon_selection_matches(const quader_poly::Selection &left,
                                const quader_poly::Selection &right);
 
@@ -1257,7 +1260,7 @@ void normalize_active_light_id(const std::vector<LightEntity> &lights,
 std::vector<int> selected_light_ids(const std::vector<LightEntity> &lights);
 
 void set_selection_mode(std::vector<PolygonObject> &objects, SelectionMode mode,
-                        int &active_object_id);
+                        int &active_object_id, SelectionMode previous_mode);
 void clear_selection(std::vector<PolygonObject> &objects,
                      int &active_object_id);
 bool has_selection(const std::vector<PolygonObject> &objects,

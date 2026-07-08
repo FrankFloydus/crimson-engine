@@ -401,46 +401,63 @@ void append_hover_vertex_overlay(
 bool object_has_sticky_component_source_wire(const PolygonObject &object,
                                              SelectionMode mode)
 {
-  return object.selected && object.id > 0 &&
-         component_selection_has_mode_components(object.selection, mode);
+  return mode != SelectionMode::Object && object.selected && object.id > 0 &&
+         (object.component_edit_target ||
+          component_selection_has_any_components(object.selection));
+}
+
+std::vector<int> inferred_component_source_wire_object_ids(
+    std::span<const PolygonObject> objects, SelectionMode mode,
+    int active_object_id, const SelectionHoverState &hover)
+{
+  std::vector<int> object_ids;
+  if (mode == SelectionMode::Object) {
+    return object_ids;
+  }
+  auto append_unique_object_id = [&](int object_id) {
+    if (object_id <= 0 ||
+        std::find(object_ids.begin(), object_ids.end(), object_id) !=
+            object_ids.end()) {
+      return;
+    }
+    object_ids.push_back(object_id);
+  };
+
+  for (const PolygonObject &object : objects) {
+    if (object_has_sticky_component_source_wire(object, mode)) {
+      append_unique_object_id(object.id);
+    }
+  }
+  append_unique_object_id(hover.candidate_object_id);
+  if (!object_ids.empty()) {
+    return object_ids;
+  }
+
+  if (active_object_id > 0) {
+    for (const PolygonObject &object : objects) {
+      if (object.id == active_object_id && object.selected && object.id > 0) {
+        append_unique_object_id(object.id);
+        return object_ids;
+      }
+    }
+  }
+  for (const PolygonObject &object : objects) {
+    if (object.selected && object.id > 0) {
+      append_unique_object_id(object.id);
+      return object_ids;
+    }
+  }
+  return object_ids;
 }
 
 int inferred_component_source_wire_object_id(
     std::span<const PolygonObject> objects, SelectionMode mode,
     int active_object_id, const SelectionHoverState &hover)
 {
-  if (mode == SelectionMode::Object) {
-    return -1;
-  }
-  if (active_object_id > 0) {
-    for (const PolygonObject &object : objects) {
-      if (object.id == active_object_id &&
-          object_has_sticky_component_source_wire(object, mode)) {
-        return object.id;
-      }
-    }
-  }
-  for (const PolygonObject &object : objects) {
-    if (object_has_sticky_component_source_wire(object, mode)) {
-      return object.id;
-    }
-  }
-  if (hover.candidate_object_id > 0) {
-    return hover.candidate_object_id;
-  }
-  if (active_object_id > 0) {
-    for (const PolygonObject &object : objects) {
-      if (object.id == active_object_id && object.selected && object.id > 0) {
-        return object.id;
-      }
-    }
-  }
-  for (const PolygonObject &object : objects) {
-    if (object.selected && object.id > 0) {
-      return object.id;
-    }
-  }
-  return -1;
+  const std::vector<int> object_ids =
+      inferred_component_source_wire_object_ids(objects, mode,
+                                                active_object_id, hover);
+  return object_ids.empty() ? -1 : object_ids.front();
 }
 
 } // namespace
@@ -659,14 +676,18 @@ SelectionOverlayFrame build_selection_overlay_frame(
 		}
 	};
 
-        const int component_source_wire_object_id =
-            inferred_component_source_wire_object_id(objects, mode,
-                                                     active_object_id, hover);
+        const std::vector<int> component_source_wire_object_ids =
+            inferred_component_source_wire_object_ids(
+                objects, mode, active_object_id, hover);
 	auto object_draws_source_wire = [&](const PolygonObject& object) {
 		if (mode == SelectionMode::Object) {
 			return object.selected;
 		}
-		return object.id > 0 && object.id == component_source_wire_object_id;
+		return object.id > 0 &&
+                       std::find(component_source_wire_object_ids.begin(),
+                                 component_source_wire_object_ids.end(),
+                                 object.id) !=
+                           component_source_wire_object_ids.end();
 	};
 
 	for (const PolygonObject& object : objects) {
@@ -701,9 +722,14 @@ SelectionOverlayFrame build_selection_overlay_frame(
 
 	for (const PolygonObject& object : objects) {
           const bool vertex_candidate_object =
-              !object.selected && mode == SelectionMode::Vertex &&
-              object.id > 0 && object.id == hover.candidate_object_id;
-          if (object.selected || vertex_candidate_object) {
+              mode == SelectionMode::Vertex && object.id > 0 &&
+              object.id == hover.candidate_object_id &&
+              object.selection.vertices.empty();
+          const bool selected_component_object =
+              object.selected &&
+              (mode != SelectionMode::Vertex ||
+               !object.selection.vertices.empty());
+          if (selected_component_object || vertex_candidate_object) {
             if (mode == SelectionMode::Object) {
               quader_poly::Selection selection =
                   overlay_all_face_selection(object.document);
@@ -857,10 +883,7 @@ SelectionOverlayFrame build_selection_overlay_frame(
 		const SelectionHoverState& hover,
 		const SelectionOverlayStyle& style)
 {
-	return build_selection_overlay_frame(
-			objects, mode,
-			inferred_component_source_wire_object_id(objects, mode, -1, hover),
-			hover, style);
+	return build_selection_overlay_frame(objects, mode, -1, hover, style);
 }
 
 SelectionOverlayFrame build_selection_overlay_frame(
@@ -899,22 +922,24 @@ SelectionOverlayFrame build_selection_hover_overlay_frame(
           const bool component_candidate =
               mode != SelectionMode::Object && hover.candidate_object_id > 0 &&
               object.id == hover.candidate_object_id;
-          if (!object.selected && component_candidate) {
+          if (component_candidate &&
+              !object_has_sticky_component_source_wire(object, mode)) {
             append_hover_source_wire(frame, object, style, component_candidate);
-            if (mode == SelectionMode::Vertex) {
-              for (const quader_poly::Vertex &vertex :
-                   object.document.vertices) {
-                frame.points.push_back({
-                    SelectionOverlayLayer::UnselectedVertex,
-                    vertex.position,
-                    style.handle_color_abgr,
-                    style.vertex_point_size_pixels,
-                    object.id,
-                    vertex.id,
-                });
-              }
+          }
+          if (component_candidate && mode == SelectionMode::Vertex &&
+              object.selection.vertices.empty()) {
+            for (const quader_poly::Vertex &vertex :
+                 object.document.vertices) {
+              frame.points.push_back({
+                  SelectionOverlayLayer::UnselectedVertex,
+                  vertex.position,
+                  style.handle_color_abgr,
+                  style.vertex_point_size_pixels,
+                  object.id,
+                  vertex.id,
+              });
             }
-                }
+          }
 
                 if (object.id != hover.object_id ||
                     hover.kind == SelectionHoverKind::None) {

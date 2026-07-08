@@ -317,6 +317,12 @@ bool component_selection_has_mode_components(
   return false;
 }
 
+bool component_selection_has_any_components(
+    const quader_poly::Selection &selection) {
+  return !selection.vertices.empty() || !selection.edges.empty() ||
+         !selection.faces.empty();
+}
+
 bool polygon_selection_matches(const quader_poly::Selection &left,
                                const quader_poly::Selection &right) {
   return left.mode == right.mode && left.vertices == right.vertices &&
@@ -403,14 +409,21 @@ void normalize_active_object_id(const std::vector<PolygonObject> &objects,
 }
 
 void set_selection_mode(std::vector<PolygonObject> &objects, SelectionMode mode,
-                        int &active_object_id) {
+                        int &active_object_id, SelectionMode previous_mode) {
   for (PolygonObject &object : objects) {
     if (mode == SelectionMode::Object) {
       object.selection = quader_poly::Selection();
+      object.component_edit_target = false;
       continue;
     }
+    const bool keep_component_edit_target =
+        object.selected &&
+        (component_selection_has_any_components(object.selection) ||
+         (previous_mode != SelectionMode::Object &&
+          object.component_edit_target));
     quader_poly::convert_selection_mode(object.document, object.selection,
                                         component_selection_mode(mode));
+    object.component_edit_target = keep_component_edit_target;
   }
   normalize_active_object_id(objects, active_object_id);
 }
@@ -421,17 +434,23 @@ void align_component_selection_to_mode(std::vector<PolygonObject> &objects,
   if (mode == SelectionMode::Object) {
     for (PolygonObject &object : objects) {
       object.selection = quader_poly::Selection();
+      object.component_edit_target = false;
     }
     normalize_active_object_id(objects, active_object_id);
     return;
   }
   for (PolygonObject &object : objects) {
     if (!object.selected) {
+      object.component_edit_target = false;
       continue;
     }
+    const bool keep_component_edit_target =
+        object.component_edit_target ||
+        component_selection_has_any_components(object.selection);
     quader_poly::convert_selection_mode(object.document, object.selection,
                                         component_selection_mode(mode));
-    object.selected = !object.selection.empty();
+    object.component_edit_target = keep_component_edit_target;
+    object.selected = !object.selection.empty() || object.component_edit_target;
   }
   normalize_active_object_id(objects, active_object_id);
 }
@@ -440,6 +459,7 @@ void clear_selection(std::vector<PolygonObject> &objects,
                      int &active_object_id) {
   for (PolygonObject &object : objects) {
     object.selected = false;
+    object.component_edit_target = false;
     object.selection = quader_poly::Selection();
   }
   active_object_id = -1;

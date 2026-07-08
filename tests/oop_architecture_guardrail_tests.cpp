@@ -103,16 +103,16 @@ std::string first_include_line(const std::string &source) {
 
 std::string include_root_relative(const std::filesystem::path &file) {
   std::string relative = normalized_relative(file);
-  constexpr std::string_view sdk_internal_prefix =
+  constexpr std::string_view kSdkInternalPrefix =
       "src/sdk/core/modeling/internal/";
-  if (starts_with(relative, sdk_internal_prefix)) {
-    relative.erase(0, sdk_internal_prefix.size());
+  if (starts_with(relative, kSdkInternalPrefix)) {
+    relative.erase(0, kSdkInternalPrefix.size());
     return relative;
   }
 
-  constexpr std::string_view source_prefix = "src/";
-  if (starts_with(relative, source_prefix)) {
-    relative.erase(0, source_prefix.size());
+  constexpr std::string_view kSourcePrefix = "src/";
+  if (starts_with(relative, kSourcePrefix)) {
+    relative.erase(0, kSourcePrefix.size());
   }
   return relative;
 }

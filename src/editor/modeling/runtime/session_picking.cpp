@@ -42,6 +42,7 @@ struct SourceWireComponentPick {
 void keep_component_edit_target(PolygonObject& object, int& active_object_id)
 {
 	object.selected = true;
+	object.component_edit_target = true;
 	if (object.id > 0) {
 		active_object_id = object.id;
 	}
@@ -1688,6 +1689,7 @@ bool pick_select(
           }
           PolygonObject &object = objects[hit_index];
           object.selected = !remove_selection_value;
+          object.component_edit_target = false;
           if (object.selected) {
             active_object_id = object.id;
           } else {
@@ -1699,6 +1701,7 @@ bool pick_select(
         for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
 		if (index != hit_index && replace_selection) {
 			objects[index].selected = false;
+			objects[index].component_edit_target = false;
 			objects[index].selection = quader_poly::Selection();
 		}
 	}
@@ -1715,11 +1718,13 @@ bool pick_select(
 		}
 		if (!remove_selection_value) {
 			object.selected = true;
+			object.component_edit_target = true;
 			active_object_id = object.id;
 		} else if (was_edit_target) {
 			keep_component_edit_target(object, active_object_id);
 		} else {
 			object.selected = false;
+			object.component_edit_target = false;
 			normalize_active_object_id(objects, active_object_id);
 		}
 		return true;
@@ -1733,6 +1738,7 @@ bool pick_select(
 	}
 	if (!object.selection.empty()) {
 		object.selected = true;
+		object.component_edit_target = true;
 		if (!remove_selection_value) {
 			active_object_id = object.id;
 		} else {
@@ -1742,6 +1748,7 @@ bool pick_select(
 		keep_component_edit_target(object, active_object_id);
 	} else {
 		object.selected = false;
+		object.component_edit_target = false;
 		normalize_active_object_id(objects, active_object_id);
 	}
 	return true;
@@ -1780,6 +1787,7 @@ bool pick_select_face(
 	for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
 		if (index != hit_index && replace_selection) {
 			objects[index].selected = false;
+			objects[index].component_edit_target = false;
 			objects[index].selection = quader_poly::Selection();
 		}
 	}
@@ -1795,6 +1803,7 @@ bool pick_select_face(
 	}
 	if (!object.selection.empty()) {
 		object.selected = true;
+		object.component_edit_target = true;
 		if (!remove_selection_value) {
 			active_object_id = object.id;
 		} else {
@@ -1804,6 +1813,7 @@ bool pick_select_face(
 		keep_component_edit_target(object, active_object_id);
 	} else {
 		object.selected = false;
+		object.component_edit_target = false;
 		normalize_active_object_id(objects, active_object_id);
 	}
 	return true;
@@ -1844,6 +1854,7 @@ bool pick_select_all_faces(
 	for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
 		if (index != hit_index && replace_selection) {
 			objects[index].selected = false;
+			objects[index].component_edit_target = false;
 			objects[index].selection = quader_poly::Selection();
 		}
 	}
@@ -1860,6 +1871,7 @@ bool pick_select_all_faces(
 			keep_component_edit_target(object, active_object_id);
 		} else {
 			object.selected = false;
+			object.component_edit_target = false;
 			normalize_active_object_id(objects, active_object_id);
 		}
 		return true;
@@ -1876,6 +1888,7 @@ bool pick_select_all_faces(
 	}
 	if (object.selection.faces.empty()) {
 		object.selected = false;
+		object.component_edit_target = false;
 		normalize_active_object_id(objects, active_object_id);
 		return was_edit_target;
 	}
@@ -1885,6 +1898,7 @@ bool pick_select_all_faces(
                                            ? quader_poly::kInvalidElementId
                                            : object.selection.faces.back();
         object.selected = true;
+        object.component_edit_target = true;
 	active_object_id = object.id;
 	return true;
 }
@@ -1944,6 +1958,7 @@ bool pick_select_edge_loop(
 	for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
 		if (index != hit_index && replace_selection) {
 			objects[index].selected = false;
+			objects[index].component_edit_target = false;
 			objects[index].selection = quader_poly::Selection();
 		}
 	}
@@ -1981,11 +1996,13 @@ bool pick_select_edge_loop(
 			keep_component_edit_target(object, active_object_id);
 		} else {
 			object.selected = false;
+			object.component_edit_target = false;
 			normalize_active_object_id(objects, active_object_id);
 		}
 		return true;
 	}
 	object.selected = true;
+	object.component_edit_target = true;
 	active_object_id = object.id;
 	return true;
 }
@@ -2036,6 +2053,7 @@ bool pick_select_all_vertices(
         for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
 		if (index != hit_index && replace_selection) {
 			objects[index].selected = false;
+			objects[index].component_edit_target = false;
 			objects[index].selection = quader_poly::Selection();
 		}
 	}
@@ -2067,11 +2085,13 @@ bool pick_select_all_vertices(
 			keep_component_edit_target(object, active_object_id);
 		} else {
 			object.selected = false;
+			object.component_edit_target = false;
 			normalize_active_object_id(objects, active_object_id);
 		}
 		return true;
 	}
 	object.selected = true;
+	object.component_edit_target = true;
 	active_object_id = object.id;
 	return true;
 }
@@ -2144,8 +2164,13 @@ bool apply_picked_selection_to_session(
 				picked != picking_objects.end() ? picked->selection : quader_poly::Selection{};
 		changed = changed ||
 				object.selected != next_selected ||
+				object.component_edit_target !=
+				    (picked != picking_objects.end() &&
+				     picked->component_edit_target) ||
 				!polygon_selection_matches(object.selection, next_selection);
 		object.selected = next_selected;
+		object.component_edit_target =
+				picked != picking_objects.end() && picked->component_edit_target;
 		object.selection = next_selection;
 	}
 	if (!changed) {

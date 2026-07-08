@@ -15,7 +15,14 @@ template <typename T>
                                             const std::vector<T> &selected) {
   std::vector<T> result;
   for (const T &id : all) {
-    if (std::ranges::find(selected, id) == selected.end()) {
+    bool found = false;
+    for (const T &selected_id : selected) {
+      if (selected_id == id) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
       result.push_back(id);
     }
   }

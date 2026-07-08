@@ -118,6 +118,7 @@ private:
       quader_editor_core::SelectionMode selection_mode =
           quader_editor_core::SelectionMode::Object;
       bool selected = false;
+      bool component_edit_target = false;
       bool active_source_wire_object = false;
       quader_poly::Selection selection;
       quader_editor_core::SelectionOverlayFrame frame;

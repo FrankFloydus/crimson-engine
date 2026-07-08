@@ -104,6 +104,19 @@ std::size_t point_count_for_layer(const quader_editor_core::SelectionOverlayFram
 	}));
 }
 
+std::size_t point_count_for_layer_and_object(
+    const quader_editor_core::SelectionOverlayFrame &frame,
+    quader_editor_core::SelectionOverlayLayer layer, int object_id)
+{
+  return static_cast<std::size_t>(
+      std::count_if(frame.points.begin(), frame.points.end(),
+                    [layer, object_id](
+                        const quader_editor_core::SelectionOverlayPoint &point) {
+                      return point.layer == layer &&
+                             point.object_id == object_id;
+                    }));
+}
+
 std::size_t point_count_for_layer_and_color(
 	const quader_editor_core::SelectionOverlayFrame& frame,
 	quader_editor_core::SelectionOverlayLayer layer,
@@ -157,6 +170,7 @@ void select_first_component_for_overlay_mode(
     quader_editor_core::SelectionMode mode)
 {
   object.selected = true;
+  object.component_edit_target = true;
   object.selection = quader_poly::Selection();
   switch (mode) {
   case quader_editor_core::SelectionMode::Vertex:
@@ -651,7 +665,7 @@ void component_source_wire_does_not_stick_without_mode_selection()
                "while there is no hover candidate");
 }
 
-void component_source_wire_sticks_only_to_current_mode_selection()
+void component_source_wire_sticks_to_component_edit_targets()
 {
   std::vector<quader_editor_core::PolygonObject> objects{
       cube_object_for_overlay(1), cube_object_for_overlay(2)};
@@ -671,8 +685,9 @@ void component_source_wire_sticks_only_to_current_mode_selection()
   require_test(
       line_count_for_layer_and_object(
           face_frame, quader_editor_core::SelectionOverlayLayer::SourceWire,
-          2) == 0U,
-      "face-mode selected components should beat the hover candidate");
+          2) == 12U,
+      "face-mode hover candidate should show source wire without erasing the "
+      "selected edit target");
 
   const quader_editor_core::SelectionOverlayFrame edge_mismatch_frame =
       quader_editor_core::build_selection_overlay_frame(
@@ -680,15 +695,15 @@ void component_source_wire_sticks_only_to_current_mode_selection()
   require_test(
       line_count_for_layer_and_object(
           edge_mismatch_frame,
-          quader_editor_core::SelectionOverlayLayer::SourceWire, 1) == 0U,
-      "edge-mode source wire should not stick to an object that only has "
-      "selected faces");
+          quader_editor_core::SelectionOverlayLayer::SourceWire, 1) == 12U,
+      "edge-mode source wire should stick to a component edit target even "
+      "after mode conversion empties the current bucket");
   require_test(
       line_count_for_layer_and_object(
           edge_mismatch_frame,
           quader_editor_core::SelectionOverlayLayer::SourceWire, 2) == 12U,
-      "edge-mode source wire should fall back to hover when the active object "
-      "has no selected edges");
+      "edge-mode hover candidate should remain visible alongside the selected "
+      "edit target");
 
   select_first_component_for_overlay_mode(
       objects[0], quader_editor_core::SelectionMode::Edge);
@@ -700,6 +715,12 @@ void component_source_wire_sticks_only_to_current_mode_selection()
           edge_frame, quader_editor_core::SelectionOverlayLayer::SourceWire,
           1) == 12U,
       "edge-mode source wire should stick to an object with selected edges");
+  require_test(
+      line_count_for_layer_and_object(
+          edge_frame, quader_editor_core::SelectionOverlayLayer::SourceWire,
+          2) == 12U,
+      "edge-mode hover candidate should show source wire next to selected "
+      "edges");
 
   select_first_component_for_overlay_mode(
       objects[0], quader_editor_core::SelectionMode::Vertex);
@@ -712,6 +733,90 @@ void component_source_wire_sticks_only_to_current_mode_selection()
           1) == 12U,
       "vertex-mode source wire should stick to an object with selected "
       "vertices");
+  require_test(
+      line_count_for_layer_and_object(
+          vertex_frame, quader_editor_core::SelectionOverlayLayer::SourceWire,
+          2) == 12U,
+      "vertex-mode hover candidate should show source wire next to selected "
+      "vertices");
+}
+
+void component_edit_target_source_wire_survives_mode_switch()
+{
+  std::vector<quader_editor_core::PolygonObject> objects{
+      cube_object_for_overlay(1), cube_object_for_overlay(2)};
+  select_first_component_for_overlay_mode(
+      objects[0], quader_editor_core::SelectionMode::Vertex);
+  select_first_component_for_overlay_mode(
+      objects[1], quader_editor_core::SelectionMode::Vertex);
+  int active_object_id = 2;
+
+  quader_editor_core::set_selection_mode(
+      objects, quader_editor_core::SelectionMode::Edge, active_object_id,
+      quader_editor_core::SelectionMode::Vertex);
+
+  const quader_editor_core::SelectionOverlayFrame frame =
+      quader_editor_core::build_selection_overlay_frame(
+          objects, quader_editor_core::SelectionMode::Edge, active_object_id,
+          {}, {});
+
+  require_test(
+      line_count_for_layer_and_object(
+          frame, quader_editor_core::SelectionOverlayLayer::SourceWire, 1) ==
+          12U,
+      "component mode change should keep the first selected mesh source wire");
+  require_test(
+      line_count_for_layer_and_object(
+          frame, quader_editor_core::SelectionOverlayLayer::SourceWire, 2) ==
+          12U,
+      "component mode change should keep the second selected mesh source wire");
+}
+
+void selected_vertex_hover_candidate_exposes_unselected_handles()
+{
+  std::vector<quader_editor_core::PolygonObject> objects{
+      cube_object_for_overlay(1), cube_object_for_overlay(2)};
+  select_first_component_for_overlay_mode(
+      objects[0], quader_editor_core::SelectionMode::Vertex);
+  objects[1].selected = true;
+  objects[1].component_edit_target = false;
+  objects[1].selection = quader_poly::Selection();
+
+  quader_editor_core::SelectionHoverState hover;
+  hover.candidate_object_id = 2;
+
+  const quader_editor_core::SelectionOverlayFrame full_frame =
+      quader_editor_core::build_selection_overlay_frame(
+          objects, quader_editor_core::SelectionMode::Vertex, 1, hover, {});
+  require_test(
+      line_count_for_layer_and_object(
+          full_frame, quader_editor_core::SelectionOverlayLayer::SourceWire,
+          1) == 12U,
+      "hover candidate should not erase the selected mesh source wire");
+  require_test(
+      line_count_for_layer_and_object(
+          full_frame, quader_editor_core::SelectionOverlayLayer::SourceWire,
+          2) == 12U,
+      "selected hover candidate without vertices should show source wire");
+  require_test(
+      point_count_for_layer_and_object(
+          full_frame, quader_editor_core::SelectionOverlayLayer::UnselectedVertex,
+          2) > 0U,
+      "selected hover candidate without vertices should expose vertex handles");
+
+  const quader_editor_core::SelectionOverlayFrame hover_frame =
+      quader_editor_core::build_selection_hover_overlay_frame(
+          objects, quader_editor_core::SelectionMode::Vertex, hover, {});
+  require_test(
+      line_count_for_layer_and_object(
+          hover_frame, quader_editor_core::SelectionOverlayLayer::SourceWire,
+          2) == 12U,
+      "hover-only overlay should expose selected candidate source wire");
+  require_test(
+      point_count_for_layer_and_object(
+          hover_frame,
+          quader_editor_core::SelectionOverlayLayer::UnselectedVertex, 2) > 0U,
+      "hover-only overlay should expose selected candidate vertex handles");
 }
 
 void selected_component_does_not_cut_holes_in_active_mesh_source_wire()
@@ -1477,7 +1582,9 @@ TEST(QdrModelingRuntimeOverlayTests, QdrEditorCoreOverlayTests) {
 	component_modes_do_not_emit_object_xray_fill();
 	component_modes_emit_source_wire_only_for_active_edit_mesh();
 	component_source_wire_does_not_stick_without_mode_selection();
-	component_source_wire_sticks_only_to_current_mode_selection();
+	component_source_wire_sticks_to_component_edit_targets();
+	component_edit_target_source_wire_survives_mode_switch();
+	selected_vertex_hover_candidate_exposes_unselected_handles();
 	selected_component_does_not_cut_holes_in_active_mesh_source_wire();
 	selected_inner_edge_hover_uses_active_source_wire_selected_color();
 	inverted_open_cube_inner_edge_hover_uses_selected_deselect_color();

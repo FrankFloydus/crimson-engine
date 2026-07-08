@@ -220,6 +220,17 @@ validate_edge_key(const quader_poly::Document &document, EdgeKey edge) {
 }
 
 template <typename T>
+[[nodiscard]] typename std::vector<T>::iterator find_value(std::vector<T> &target,
+                                                           const T &value) {
+  for (auto item = target.begin(); item != target.end(); ++item) {
+    if (*item == value) {
+      return item;
+    }
+  }
+  return target.end();
+}
+
+template <typename T>
 void apply_edit(std::vector<T> &target, std::span<const T> values,
                 SelectionEdit edit) {
   if (edit == SelectionEdit::Replace) {
@@ -228,7 +239,7 @@ void apply_edit(std::vector<T> &target, std::span<const T> values,
   }
 
   for (const T &value : values) {
-    const auto found = std::ranges::find(target, value);
+    const auto found = find_value(target, value);
     if (edit == SelectionEdit::Add) {
       if (found == target.end()) {
         target.push_back(value);
@@ -462,7 +473,9 @@ std::vector<EdgeKey> PolygonDocument::soft_edge_ids() const {
   std::vector<EdgeKey> ids = edge_ids();
   const std::vector<EdgeKey> hard = hard_edge_ids();
   std::erase_if(ids, [&](const EdgeKey edge) {
-    return std::ranges::find(hard, edge) != hard.end();
+    return std::ranges::any_of(hard, [edge](const EdgeKey hard_edge) {
+      return hard_edge == edge;
+    });
   });
   return ids;
 }
