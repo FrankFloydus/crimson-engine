@@ -226,7 +226,7 @@ TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSupportsMultipleSimpleCapLoopsIn
 
 TEST(QdrDocumentOperationPlaneCutTests, PlaneCutRejectsInvalidInputsAndUnsupportedMeshesOpenMesh) {
 	{
-		Document plane = quader_poly::make_plane({});
+		Document plane = qdr_test::make_quad_document().document;
                 const PlaneCutResult result = quader_poly::plane_cut(
                     plane, center_x_cut(PlaneCutMode::KeepBoth));
                 EXPECT_FALSE(result.changed);

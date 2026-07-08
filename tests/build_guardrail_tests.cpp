@@ -20,6 +20,7 @@ namespace {
 
 using quader::test::guardrail::files_with_extension;
 using quader::test::guardrail::normalized_relative;
+using quader::test::guardrail::read_file;
 using quader::test::guardrail::read_source_file;
 using quader::test::guardrail::source_path;
 using quader::test::guardrail::source_root;
@@ -617,7 +618,7 @@ TEST(BuildGuardrailTests, FormerSdkBoundaryIsAbsorbedIntoAppBuild) {
   expect_missing(build_files, "src/document");
   expect_missing(build_files, "src/editor/actions");
   expect_missing(build_files, "src/editor/mesh");
-  expect_missing(build_files, "src/geometry");
+  expect_missing(build_files, "src/geometry/");
   expect_missing(build_files, "resources/modeling/default_materials");
   expect_missing(build_files, "src/editor/tools/host_contract");
   expect_contains(build_files, "QUADER_ALLOW_EXTERNAL_OPENMESH_FETCH");
@@ -744,6 +745,7 @@ TEST(BuildGuardrailTests, BuildOptionsAndDependencyPinsHaveSingleCMakeOwner) {
   expect_contains(root_c_make, "include(cmake/QuaderBuildOptions.cmake)");
   for (const std::string &option_name : {
            "QUADER_BUILD_TESTS",
+           "QUADER_BUILD_NATIVE_APP",
            "QUADER_USE_OPENMESH_TOPOLOGY",
            "QUADER_ALLOW_EXTERNAL_OPENMESH_FETCH",
            "QUADER_ENABLE_TRACY",
@@ -801,16 +803,24 @@ TEST(BuildGuardrailTests, BuildOptionsAndDependencyPinsHaveSingleCMakeOwner) {
 
 TEST(BuildGuardrailTests, RootQuaderTestsListsEveryRootTestSource) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string modeling_c_make =
+      read_source_file("cmake/QuaderModeling.cmake");
+  const std::string sdk_consumer_c_make =
+      read_source_file("tests/sdk_consumer/CMakeLists.txt");
+  const std::string test_build_files =
+      root_c_make + "\n" + modeling_c_make + "\n" + sdk_consumer_c_make;
 
   for (const std::filesystem::path &file :
        files_with_extension(source_root() / "tests", ".cpp")) {
     const std::string relative = normalized_relative(file);
-    if (starts_with(relative, "tests/modeling_domain/")) {
+    if (starts_with(relative, "tests/modeling_domain/") ||
+        starts_with(relative, "tests/sdk_consumer/")) {
       continue;
     }
 
-    EXPECT_NE(root_c_make.find(relative), std::string::npos) << relative;
+    EXPECT_NE(test_build_files.find(relative), std::string::npos) << relative;
   }
+  expect_contains(sdk_consumer_c_make, "main.cpp");
 
   const std::string guardrail_target = source_slice(
       root_c_make, "add_executable(quader_guardrail_tests",
@@ -1102,6 +1112,77 @@ TEST(BuildGuardrailTests, ArchitectureReviewNamesRealModelingDomainTargets) {
   expect_missing(review, "`qdr_modeling_domain_smoke`");
 }
 
+TEST(BuildGuardrailTests, AppOwnedModelingSdkBoundaryIsAdditiveAndGuarded) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string modeling_c_make =
+      read_source_file("cmake/QuaderModeling.cmake");
+  const std::string options =
+      read_source_file("cmake/QuaderBuildOptions.cmake");
+  const std::string build_files = root_c_make + "\n" + modeling_c_make;
+
+  EXPECT_FALSE(std::filesystem::exists(source_path("sdk")));
+  EXPECT_TRUE(
+      std::filesystem::exists(source_path("src/sdk/core/modeling")));
+  expect_contains(options, "option(QUADER_BUILD_NATIVE_APP");
+  expect_contains(root_c_make, "if(QUADER_BUILD_NATIVE_APP)");
+  expect_contains(build_files, "quader_modeling_sdk_geometry");
+  expect_contains(build_files, "quader_modeling_sdk_polygon");
+  expect_contains(build_files, "quader_modeling_sdk_qdr_document");
+  expect_contains(build_files, "quader_modeling_sdk_runtime");
+  expect_contains(build_files, "quader_modeling_sdk");
+  expect_contains(build_files, "quader_modeling_sdk_consumer_tests");
+  expect_contains(build_files, "quader_modeling_sdk_only_configure_build");
+  expect_contains(build_files, "QUADER_SDK_CPP_EXAMPLES");
+  expect_contains(build_files, "QUADER_MODELING_SDK_INCLUDE_DIR");
+  expect_contains(build_files, "QuaderModelingSdkTargets.cmake");
+  expect_missing(build_files, "QUADER_MODELING_SDK_DIR");
+  expect_missing(build_files, "QUADER_BUILD_SDK_TESTS");
+}
+
+TEST(BuildGuardrailTests, ModelingSdkPublicHeadersStayNativeOwnerFree) {
+  const std::vector<std::string> banned_needles = {
+      "SceneDocument",
+      "ProjectDocument",
+      "ProjectSession",
+      "AssetRegistry",
+      "ModelingSessionService",
+      "SceneRenderBridge",
+      "ViewportOverlayFrame",
+      "QuaderEditorApi",
+      "SDL",
+      "ImGui",
+      "filament",
+      "entt",
+      "nlohmann",
+      "#include <mesh/",
+      "#include \"mesh/",
+      "#include <io/qdr/",
+      "#include \"io/qdr/",
+      "#include <assets/",
+      "#include \"assets/",
+      "#include <scene/",
+      "#include \"scene/",
+      "#include <render/",
+      "#include \"render/",
+      "#include <ui/",
+      "#include \"ui/",
+      "#include <platform/",
+      "#include \"platform/",
+      "#include <api/",
+      "#include \"api/",
+  };
+
+  for (const std::filesystem::path &file :
+       files_with_extension(source_root() / "src/sdk/core/modeling/include",
+                            ".hpp")) {
+    const std::string source = read_file(file);
+    for (const std::string &needle : banned_needles) {
+      EXPECT_EQ(source.find(needle), std::string::npos)
+          << normalized_relative(file) << " contains " << needle;
+    }
+  }
+}
+
 TEST(BuildGuardrailTests, DependencyCommitLiteralsStayInDependencyOwnerFiles) {
   const std::vector<std::filesystem::path> allowed_commit_owner_files = {
       "cmake/QuaderBuildOptions.cmake",
@@ -1350,8 +1431,6 @@ TEST(BuildGuardrailTests,
   expect_missing(tool, "\"tests/oop_architecture_guardrail_tests.cpp\"");
   expect_missing(tool, "\"tests/programmatic_api_guardrail_tests.cpp\"");
   expect_contains(tool, "fill_hole_from_edges");
-  expect_contains(tool, "apply_uv");
-  expect_contains(tool, "QdrDocumentOperationUv*");
   expect_contains(tool, "assign_material");
   expect_contains(tool, "assign_material_slot");
   expect_contains(tool, "selection_operations.cpp");

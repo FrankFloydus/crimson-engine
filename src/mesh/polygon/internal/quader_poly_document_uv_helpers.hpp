@@ -7,7 +7,6 @@
 #pragma once
 
 #include "quader_poly_document_mesh_internal.hpp"
-#include "quader_poly_document_uv_types.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -16,7 +15,6 @@
 #include <set>
 #include <span>
 #include <string>
-#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -41,13 +39,5 @@ void stitch_uv_axis_to_reference_seam(Face& target_face, const Face& reference_f
 void stitch_merge_split_uv_pair(const Face& reference_face, Face& target_face, Edge shared_edge);
 void stitch_merge_split_uv_density(Document& document, std::span<const MergeFaceUvAssignment> assignments);
 bool assign_face_uvs_from_source_projection( Document& document, Face& face, const Document& source_document, const std::set<ElementId>& merge_vertex_ids, ElementId survivor_vertex_id);
-bool face_uvs_equal(std::span<const quader::QVec2> left, std::span<const quader::QVec2> right);
-FaceUvBounds face_uv_bounds(const Face& face);
-std::vector<ElementId> unique_face_ids(std::vector<ElementId> ids);
-std::vector<ElementId> uv_target_face_ids(const Document& document, const Selection& selection);
-bool fit_face_uvs(Face& face, bool fit_u, bool fit_v);
-bool shift_face_uvs(Face& face, float delta_u, float delta_v);
-bool justify_face_uvs(Face& face, std::string_view operation);
-bool shift_face_uvs_for_operation(Face& face, std::string_view operation, float shift_uv_amount);
 quader::QVec3 transform_point(const Transform3& transform, quader::QVec3 point);
 } // namespace quader_poly::document_internal

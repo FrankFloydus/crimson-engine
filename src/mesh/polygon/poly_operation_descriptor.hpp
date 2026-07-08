@@ -18,7 +18,6 @@ namespace quader_poly {
  * Enumerates the stable descriptor slots for public polygon operations.
  */
 enum class PolyOperationKey : std::size_t {
-  ApplyUv,
   AssignSelectedFaceMaterialSlot,
   TranslateSelection,
   TransformSelection,
@@ -69,7 +68,6 @@ enum class PolyOperationKey : std::size_t {
 inline constexpr std::array<PolyOperationMetadata,
                             static_cast<std::size_t>(PolyOperationKey::Count)>
     kPolyOperationDescriptors{{
-        {"apply_uv", "Apply UV Operation", "ApplyUvOperation"},
         {"assign_selected_face_material_slot", "Assign Face Material Slot",
          "AssignMaterialSlotOperation"},
         {"translate_selection", "Translate Selection",

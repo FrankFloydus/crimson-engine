@@ -1161,8 +1161,14 @@ TEST(OopArchitectureGuardrailTests,
   EXPECT_NE(render_sources.find("scene_revision"), std::string::npos);
   EXPECT_NE(render_sources.find("asset_revision"), std::string::npos);
 
-  for (const std::string &source :
-       {scene_render_bridge, sync_service}) {
+  EXPECT_NE(scene_render_bridge.find("sync(const SceneDocument &document"),
+            std::string::npos);
+  EXPECT_NE(scene_render_bridge.find("const AssetRegistry &assets"),
+            std::string::npos);
+  EXPECT_NE(scene_render_bridge.find("RenderSceneSnapshot previous_scene_snapshot_"),
+            std::string::npos);
+
+  for (const std::string &source : {sync_service}) {
     EXPECT_EQ(source.find("const SceneDocument &"), std::string::npos);
     EXPECT_EQ(source.find("const AssetRegistry &"), std::string::npos);
     EXPECT_NE(source.find("RenderSceneSnapshot"), std::string::npos);

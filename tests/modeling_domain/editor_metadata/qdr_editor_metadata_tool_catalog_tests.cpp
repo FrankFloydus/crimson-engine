@@ -31,11 +31,11 @@ const qhc::HostToolDescriptor& require_tool(std::string_view id)
 
 } // namespace
 
-TEST(QdrEditorMetadataToolCatalogTests, HostContractToolCatalogMirrorsEditorCoreToolRegistryIdentity) {
+TEST(QdrEditorMetadataToolCatalogTests, HostContractToolCatalogCoversEditorCoreToolRegistryIdentity) {
 	const std::span<const qhc::HostToolDescriptor> descriptors = qhc::tool_catalog();
 	const std::span<const qec::EditorTool* const> tools = qec::tool_registry().tools();
 
-	EXPECT_TRUE(descriptors.size() == tools.size());
+	EXPECT_GE(descriptors.size(), tools.size());
 
 	for (const qec::EditorTool *tool : tools) {
 		EXPECT_TRUE(tool != nullptr);

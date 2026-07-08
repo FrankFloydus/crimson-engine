@@ -891,8 +891,10 @@ TEST(RenderOverlaySnapshotTests, SceneOverlayBuildersConsumeSnapshotsOnly) {
   EXPECT_NE(wireframe_cache_source.find(
                 "const RenderOverlaySceneWireframeSnapshot &snapshot"),
             std::string::npos);
-  EXPECT_EQ(bridge_header.find("const SceneDocument &"), std::string::npos);
-  EXPECT_EQ(bridge_header.find("const AssetRegistry &"), std::string::npos);
+  EXPECT_NE(bridge_header.find("sync(const SceneDocument &document"),
+            std::string::npos);
+  EXPECT_NE(bridge_header.find("const AssetRegistry &assets"),
+            std::string::npos);
   EXPECT_EQ(bridge_source.find("build_render_overlay_selected_object_snapshot"),
             std::string::npos);
   EXPECT_EQ(bridge_source.find("build_render_overlay_scene_wireframe_snapshot"),
@@ -946,6 +948,7 @@ TEST(RenderSceneSnapshotTests, BuildsValueSpanRecordsAndTracksDirtyState) {
   EXPECT_EQ(initial.mesh_binding_revision, document.mesh_binding_revision());
   EXPECT_EQ(initial.asset_revision, assets.revision());
   EXPECT_TRUE(initial.dirty.any_dirty());
+  EXPECT_FALSE(initial.reused_previous_records);
 
   const auto renderable_record =
       std::ranges::find_if(initial.meshes, [renderable](const auto &record) {
@@ -993,6 +996,7 @@ TEST(RenderSceneSnapshotTests, BuildsValueSpanRecordsAndTracksDirtyState) {
   ASSERT_EQ(unchanged.meshes.size(), 2u);
   EXPECT_EQ(unchanged.frame_index, 2u);
   EXPECT_FALSE(unchanged.dirty.any_dirty());
+  EXPECT_TRUE(unchanged.reused_previous_records);
   EXPECT_FALSE(unchanged.meshes.front().mesh_dirty);
   EXPECT_FALSE(unchanged.meshes.front().material_dirty);
   EXPECT_FALSE(unchanged.meshes.front().transform_dirty);
@@ -1010,6 +1014,7 @@ TEST(RenderSceneSnapshotTests, BuildsValueSpanRecordsAndTracksDirtyState) {
         return record.entity_id == renderable;
       });
   ASSERT_NE(moved_record, moved.meshes.end());
+  EXPECT_FALSE(moved.reused_previous_records);
   EXPECT_TRUE(moved.dirty.scene_changed);
   EXPECT_TRUE(moved.dirty.transforms_changed);
   EXPECT_TRUE(moved_record->transform_dirty);
@@ -1028,6 +1033,7 @@ TEST(RenderSceneSnapshotTests, BuildsValueSpanRecordsAndTracksDirtyState) {
         return record.entity_id == renderable;
       });
   ASSERT_NE(replaced_record, replaced.meshes.end());
+  EXPECT_FALSE(replaced.reused_previous_records);
   EXPECT_TRUE(replaced.dirty.assets_changed);
   EXPECT_TRUE(replaced_record->mesh_dirty);
   EXPECT_FALSE(replaced_record->transform_dirty);

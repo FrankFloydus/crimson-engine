@@ -87,20 +87,6 @@ struct Document {
 };
 
 /**
- * Enumerates PrimitiveKind values used by the modeling layer.
- */
-enum class PrimitiveKind {
-  Cube,
-  Plane,
-  Cylinder,
-  Cone,
-  QuadSphere,
-  UvSphere,
-  IcoSphere,
-  Torus,
-};
-
-/**
  * Represents a Cube Primitive Spec value used by the polygon document and mesh editing core.
  */
 struct CubePrimitiveSpec {
@@ -112,82 +98,9 @@ struct CubePrimitiveSpec {
     int depth_segments = 1;
 };
 
-/**
- * Represents a Plane Primitive Spec value used by the polygon document and mesh editing core.
- */
-struct PlanePrimitiveSpec {
-    float width = 2.0F;
-    float depth = 2.0F;
-    int width_segments = 1;
-    int depth_segments = 1;
-};
-
-/**
- * Represents a Cylinder Primitive Spec value used by the polygon document and mesh editing core.
- */
-struct CylinderPrimitiveSpec {
-    float radius = 1.0F;
-    float height = 2.0F;
-    int sides = 16;
-    bool cap_top = true;
-    bool cap_bottom = true;
-};
-
-/**
- * Represents a Cone Primitive Spec value used by the polygon document and mesh editing core.
- */
-struct ConePrimitiveSpec {
-    float radius = 1.0F;
-    float height = 2.0F;
-    int sides = 16;
-    bool cap_bottom = true;
-};
-
-/**
- * Represents a Quad Sphere Primitive Spec value used by the polygon document and mesh editing core.
- */
-struct QuadSpherePrimitiveSpec {
-    float radius = 1.0F;
-    int segments_per_face = 4;
-};
-
-/**
- * Represents an UV Sphere Primitive Spec value used by the polygon document and mesh editing core.
- */
-struct UvSpherePrimitiveSpec {
-    float radius = 1.0F;
-    int segments = 16;
-    int rings = 8;
-};
-
-/**
- * Represents an Ico Sphere Primitive Spec value used by the polygon document and mesh editing core.
- */
-struct IcoSpherePrimitiveSpec {
-    float radius = 1.0F;
-    int subdivisions = 2;
-};
-
-/**
- * Represents a Torus Primitive Spec value used by the polygon document and mesh editing core.
- */
-struct TorusPrimitiveSpec {
-    float major_radius = 0.7F;
-    float minor_radius = 0.3F;
-    int major_segments = 16;
-    int minor_segments = 8;
-};
-
 [[nodiscard]] Edge make_edge(ElementId a, ElementId b);
 
 [[nodiscard]] Document make_cube(const CubePrimitiveSpec& spec);
-[[nodiscard]] Document make_plane(const PlanePrimitiveSpec& spec);
-[[nodiscard]] Document make_cylinder(const CylinderPrimitiveSpec& spec);
-[[nodiscard]] Document make_cone(const ConePrimitiveSpec& spec);
-[[nodiscard]] Document make_quad_sphere(const QuadSpherePrimitiveSpec& spec);
-[[nodiscard]] Document make_uv_sphere(const UvSpherePrimitiveSpec& spec);
-[[nodiscard]] Document make_ico_sphere(const IcoSpherePrimitiveSpec& spec);
-[[nodiscard]] Document make_torus(const TorusPrimitiveSpec& spec);
 [[nodiscard]] ElementId add_vertex(Document& document, quader::QVec3 position);
 [[nodiscard]] ElementId add_face(Document& document, std::span<const ElementId> vertices, std::uint32_t material_slot = 0);
 [[nodiscard]] const Vertex* find_vertex(const Document& document, ElementId id);

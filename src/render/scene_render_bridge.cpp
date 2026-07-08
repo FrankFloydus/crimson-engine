@@ -8,6 +8,7 @@
 
 #include "diagnostics/profile.hpp"
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
+#include "render/scene_render_extraction.hpp"
 
 #include <utility>
 
@@ -65,8 +66,25 @@ void SceneRenderBridge::shutdown() {
     material_binding_.shutdown();
     texture_binding_.shutdown();
 
+    previous_scene_snapshot_ = {};
+    has_previous_scene_snapshot_ = false;
     engine_ = nullptr;
     scene_ = nullptr;
+}
+
+void SceneRenderBridge::sync(const SceneDocument &document,
+                             const AssetRegistry &assets,
+                             std::uint64_t frame_index) {
+  QDR_PROFILE_FUNCTION();
+  if (!engine_ || !scene_ || !sync_service_.initialized()) {
+    return;
+  }
+  RenderSceneSnapshot snapshot = build_render_scene_snapshot(
+      document, assets,
+      {.previous = has_previous_scene_snapshot_ ? &previous_scene_snapshot_
+                                                : nullptr,
+       .frame_index = frame_index});
+  sync(snapshot);
 }
 
 void SceneRenderBridge::sync(const RenderSceneSnapshot &snapshot) {
@@ -75,6 +93,8 @@ void SceneRenderBridge::sync(const RenderSceneSnapshot &snapshot) {
     return;
   }
   (void)sync_service_.sync(snapshot);
+  previous_scene_snapshot_ = snapshot;
+  has_previous_scene_snapshot_ = true;
 }
 
 void SceneRenderBridge::update_mesh_surface_grid(

@@ -17,7 +17,7 @@ Current helper boundaries:
 
 - constants: private implementation constants shared by current document sources
 - mesh internals: triangulation and generated-UV helpers declared in `quader_poly_document_mesh_internal.hpp`
-- operation-owned types live in narrow private headers such as `quader_poly_document_knife_types.hpp`, `quader_poly_document_bridge_types.hpp`, `quader_poly_document_bevel_types.hpp`, `quader_poly_document_hull_types.hpp`, and `quader_poly_document_uv_types.hpp`
+- operation-owned types live in narrow private headers such as `quader_poly_document_knife_types.hpp`, `quader_poly_document_bridge_types.hpp`, `quader_poly_document_bevel_types.hpp`, and `quader_poly_document_hull_types.hpp`
 - topology backend: `quader_poly_document_topology_backend.hpp` declares backend-neutral document topology query and mutation helpers for production sources
 - OpenMesh helpers: `quader_poly_document_openmesh_helpers.hpp` keeps OpenMesh-named compatibility shims for focused backend tests
 - narrow helper headers cover topology/validation, hull/plane, knife, UV, picking, and bridge/surface helpers

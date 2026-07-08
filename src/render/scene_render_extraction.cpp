@@ -170,6 +170,36 @@ void mark_light_dirty(RenderSceneLightRecord &record,
       previous->transform_revision != record.transform_revision;
 }
 
+[[nodiscard]] bool can_reuse_previous_render_records(
+    const RenderSceneSnapshot &snapshot, const RenderSceneSnapshot *previous) {
+  return previous != nullptr &&
+         previous->scene_revision == snapshot.scene_revision &&
+         previous->selection_revision == snapshot.selection_revision &&
+         previous->visibility_revision == snapshot.visibility_revision &&
+         previous->transform_revision == snapshot.transform_revision &&
+         previous->mesh_binding_revision == snapshot.mesh_binding_revision &&
+         previous->asset_revision == snapshot.asset_revision;
+}
+
+void reuse_previous_render_records(RenderSceneSnapshot &snapshot,
+                                   const RenderSceneSnapshot &previous) {
+  snapshot.meshes = previous.meshes;
+  snapshot.lights = previous.lights;
+  snapshot.live_mesh_entities = previous.live_mesh_entities;
+  snapshot.live_light_entities = previous.live_light_entities;
+  snapshot.reused_previous_records = true;
+  for (RenderSceneMeshRecord &mesh : snapshot.meshes) {
+    mesh.mesh_dirty = false;
+    mesh.material_dirty = false;
+    mesh.transform_dirty = false;
+    mesh.binding_dirty = false;
+  }
+  for (RenderSceneLightRecord &light : snapshot.lights) {
+    light.light_dirty = false;
+    light.transform_dirty = false;
+  }
+}
+
 } // namespace
 
 const RenderTextureAssetSnapshot *
@@ -321,6 +351,10 @@ RenderSceneSnapshot build_render_scene_snapshot(
   snapshot.mesh_binding_revision = document.mesh_binding_revision();
   snapshot.asset_revision = assets.revision();
   snapshot.dirty = scene_snapshot_dirty_state(snapshot, options.previous);
+  if (can_reuse_previous_render_records(snapshot, options.previous)) {
+    reuse_previous_render_records(snapshot, *options.previous);
+    return snapshot;
+  }
 
   for (const EntityId entity_id : document.entities()) {
     QDR_PROFILE_SCOPE("Scene render extract entity");

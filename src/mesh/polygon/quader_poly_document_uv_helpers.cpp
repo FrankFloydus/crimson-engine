@@ -24,7 +24,6 @@
 #include <set>
 #include <span>
 #include <string>
-#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -32,11 +31,6 @@
 namespace quader_poly::document_internal {
 
 quader_geometry::QVec2f geometry_uv(quader::QVec2 value)
-{
-    return { value.x, value.y };
-}
-
-quader::QVec2 poly_uv(quader_geometry::QVec2f value)
 {
     return { value.x, value.y };
 }
@@ -602,153 +596,6 @@ bool assign_face_uvs_from_source_projection(
     const std::optional<FaceUvProjectionAssignment> assignment =
         face_uv_projection_assignment_from_source(document, face, source_document, merge_vertex_ids, survivor_vertex_id);
     return assignment.has_value() && assign_face_uvs_from_projection_assignment(document, face, *assignment);
-}
-
-bool face_uvs_equal(std::span<const quader::QVec2> left, std::span<const quader::QVec2> right)
-{
-    if (left.size() != right.size()) {
-        return false;
-    }
-    for (std::size_t index = 0; index < left.size(); ++index) {
-      if (std::abs(left[index].x - right[index].x) > kEpsilon ||
-          std::abs(left[index].y - right[index].y) > kEpsilon) {
-        return false;
-      }
-    }
-    return true;
-}
-
-
-FaceUvBounds face_uv_bounds(const Face& face)
-{
-    FaceUvBounds bounds;
-    if (!face_has_loop_uvs(face)) {
-        return bounds;
-    }
-    quader_geometry::QRect2f rect = quader_geometry::empty_rect2<float>();
-    for (const quader::QVec2& uv : face.uvs) {
-        quader_geometry::rect_include(rect, geometry_uv(uv));
-    }
-    if (quader_geometry::rect_is_valid(rect)) {
-        bounds.min = poly_uv(rect.min);
-        bounds.max = poly_uv(rect.max);
-        bounds.valid = true;
-    }
-    return bounds;
-}
-
-std::vector<ElementId> unique_face_ids(std::vector<ElementId> ids)
-{
-    std::ranges::sort(ids);
-    ids.erase(std::ranges::unique(ids).begin(), ids.end());
-    return ids;
-}
-
-std::vector<ElementId> uv_target_face_ids(const Document& document, const Selection& selection)
-{
-    std::vector<ElementId> ids;
-    switch (selection.mode) {
-    case SelectionMode::Face:
-      ids = selection.faces;
-      break;
-    case SelectionMode::Edge:
-      for (const Face &face : document.faces) {
-        if (face_uses_any_edge(face, selection.edges)) {
-          ids.push_back(face.id);
-        }
-      }
-      break;
-    case SelectionMode::Vertex:
-      for (const Face &face : document.faces) {
-        if (face_uses_any_vertex(face, selection.vertices)) {
-          ids.push_back(face.id);
-        }
-      }
-      break;
-    }
-    ids = unique_face_ids(std::move(ids));
-    std::erase_if(ids, [&document](ElementId id) {
-        return find_face(document, id) == nullptr;
-    });
-    return ids;
-}
-
-bool fit_face_uvs(Face& face, bool fit_u, bool fit_v)
-{
-    const FaceUvBounds bounds = face_uv_bounds(face);
-    if (!bounds.valid) {
-        return false;
-    }
-    const float width = bounds.max.x - bounds.min.x;
-    const float height = bounds.max.y - bounds.min.y;
-    if ((fit_u && width <= kEpsilon) || (fit_v && height <= kEpsilon)) {
-      return false;
-    }
-    for (quader::QVec2& uv : face.uvs) {
-        if (fit_u) {
-            uv.x = (uv.x - bounds.min.x) / width;
-        }
-        if (fit_v) {
-            uv.y = (uv.y - bounds.min.y) / height;
-        }
-    }
-    return true;
-}
-
-bool shift_face_uvs(Face& face, float delta_u, float delta_v)
-{
-  if (!face_has_loop_uvs(face) ||
-      (std::abs(delta_u) <= kEpsilon && std::abs(delta_v) <= kEpsilon)) {
-    return false;
-  }
-    for (quader::QVec2& uv : face.uvs) {
-        uv.x += delta_u;
-        uv.y += delta_v;
-    }
-    return true;
-}
-
-bool justify_face_uvs(Face& face, std::string_view operation)
-{
-    const FaceUvBounds bounds = face_uv_bounds(face);
-    if (!bounds.valid) {
-        return false;
-    }
-    if (operation == "justify_left") {
-        return shift_face_uvs(face, -bounds.min.x, 0.0F);
-    }
-    if (operation == "justify_right") {
-        return shift_face_uvs(face, 1.0F - bounds.max.x, 0.0F);
-    }
-    if (operation == "justify_top") {
-        return shift_face_uvs(face, 0.0F, -bounds.min.y);
-    }
-    if (operation == "justify_bottom") {
-        return shift_face_uvs(face, 0.0F, 1.0F - bounds.max.y);
-    }
-    if (operation == "justify_center") {
-        const float center_u = (bounds.min.x + bounds.max.x) * 0.5F;
-        const float center_v = (bounds.min.y + bounds.max.y) * 0.5F;
-        return shift_face_uvs(face, 0.5F - center_u, 0.5F - center_v);
-    }
-    return false;
-}
-
-bool shift_face_uvs_for_operation(Face& face, std::string_view operation, float shift_uv_amount)
-{
-    if (operation == "shift_left") {
-        return shift_face_uvs(face, -shift_uv_amount, 0.0F);
-    }
-    if (operation == "shift_right") {
-        return shift_face_uvs(face, shift_uv_amount, 0.0F);
-    }
-    if (operation == "shift_up") {
-        return shift_face_uvs(face, 0.0F, -shift_uv_amount);
-    }
-    if (operation == "shift_down") {
-        return shift_face_uvs(face, 0.0F, shift_uv_amount);
-    }
-    return false;
 }
 
 quader::QVec3 transform_point(const Transform3& transform, quader::QVec3 point)

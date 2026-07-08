@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/projection/tool_preview_mesh_projection.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
 #include "scene/scene_document.hpp"
@@ -19,6 +20,7 @@ namespace quader {
 std::optional<MeshAsset>
 ToolPreviewMeshProjection::box_preview_mesh_from_descriptor(
     const quader_editor_core::BoxPreviewDescriptor &preview) {
+  QDR_PROFILE_FUNCTION();
   if (!preview.ok ||
       preview.drag_state != quader_editor_core::BoxDragState::Height ||
       preview.bounds.empty) {
@@ -56,6 +58,7 @@ ToolPreviewMeshProjection::mirror_preview_meshes(
     const quader_editor_core::EditorRuntime &runtime,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
     const std::vector<quader_editor_core::PolygonObject> &preview_objects) {
+  QDR_PROFILE_FUNCTION();
   std::vector<ModelingToolPreviewMesh> preview_meshes;
   const quader_editor_core::MirrorToolState &mirror = runtime.mirror_state();
   if (!quader_editor_core::mirror_is_active(mirror) ||

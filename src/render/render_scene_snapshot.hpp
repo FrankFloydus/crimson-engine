@@ -158,6 +158,7 @@ struct RenderSceneSnapshot {
   std::uint64_t mesh_binding_revision = 0;
   std::uint64_t asset_revision = 0;
   RenderSceneSnapshotDirtyState dirty;
+  bool reused_previous_records = false;
   std::vector<RenderSceneMeshRecord> meshes;
   std::vector<RenderSceneLightRecord> lights;
   std::unordered_set<EntityId> live_mesh_entities;

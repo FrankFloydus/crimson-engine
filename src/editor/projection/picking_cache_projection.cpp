@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/projection/picking_cache_projection.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/scene_document.hpp"
@@ -76,6 +77,7 @@ std::vector<quader_editor_core::PolygonObject>
 PickingCacheProjection::scene_transformed_objects_for_picking(
     const std::vector<quader_editor_core::PolygonObject> &objects,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map) {
+  QDR_PROFILE_FUNCTION();
   std::vector<quader_editor_core::PolygonObject> transformed;
   transformed.reserve(objects.size());
   for (quader_editor_core::PolygonObject object : objects) {
@@ -102,6 +104,7 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
 quader_editor_core::PickObjectBounds
 PickingCacheProjection::build_object_pick_bounds(
     const quader_editor_core::PolygonObject &object) {
+  QDR_PROFILE_FUNCTION();
   quader_editor_core::PickObjectBounds bounds;
   bounds.object_id = object.id;
   for (const quader_poly::Vertex &vertex : object.document.vertices) {
@@ -113,6 +116,7 @@ PickingCacheProjection::build_object_pick_bounds(
 std::uint64_t PickingCacheProjection::object_face_geometry_signature(
     const quader_editor_core::PolygonObject &object,
     quader_poly::PickOptions pick_options) {
+  QDR_PROFILE_FUNCTION();
   std::uint64_t hash = mix_pick_geometry_hash(kPickGeometryHashSeed, object.id);
   hash = mix_pick_geometry_hash(hash, static_cast<int>(pick_options.mode));
   hash = mix_pick_geometry_hash(hash, pick_options.vertex_radius);

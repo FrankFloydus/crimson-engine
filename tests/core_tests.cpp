@@ -81,6 +81,7 @@
 #include "ui/viewport_input_frame_builder.hpp"
 #include "ui/viewport_pane_overlay_cache.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
+#include "viewport/modeling_sdk_viewport_input_adapter.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_grid_placement_policy.hpp"
@@ -343,6 +344,65 @@ TEST(ViewportInputFrameBuilderTests,
   EXPECT_EQ(frame.pressed_input_chords.front().key, QuaderKeyCode::C);
   EXPECT_TRUE(frame.pressed_input_chords.front().primary);
   EXPECT_TRUE(frame.pressed_input_chords.front().shift);
+}
+
+TEST(ModelingSdkViewportInputAdapterTests,
+     ConvertsNativeViewportFrameToSdkSnapshot) {
+  ViewportInputFrame frame;
+  frame.viewport_focused = true;
+  frame.text_input_active = true;
+  frame.active_tool_owns_viewport = true;
+  frame.mouse_local = {42.0F, 64.0F};
+  frame.viewport_size = {1280.0F, 720.0F};
+  frame.mouse_wheel = -2.0F;
+  frame.delta_seconds = 0.25F;
+  frame.middle_down = true;
+  frame.modifiers.primary = true;
+  frame.modifiers.alt = true;
+  frame.pressed_input_chords.push_back(
+      keyboard_input_chord(QuaderKeyCode::C, {.primary = true}));
+  frame.active_input_chords.push_back(mouse_input_chord(
+      QuaderMouseButton::Left, QuaderInputGesture::Press, {}));
+
+  const quader::modeling::ViewportHostInputSnapshot snapshot =
+      modeling_sdk_viewport_input_snapshot(frame, {.x = 10.0F, .y = 20.0F});
+
+  EXPECT_EQ(snapshot.pointer_position.x, 42.0F);
+  EXPECT_EQ(snapshot.pointer_position.y, 64.0F);
+  EXPECT_EQ(snapshot.viewport_rect.x, 10.0F);
+  EXPECT_EQ(snapshot.viewport_rect.y, 20.0F);
+  EXPECT_EQ(snapshot.viewport_rect.width, 1280.0F);
+  EXPECT_EQ(snapshot.viewport_rect.height, 720.0F);
+  EXPECT_EQ(snapshot.wheel_delta, -2.0F);
+  EXPECT_TRUE(snapshot.buttons.left);
+  EXPECT_TRUE(snapshot.buttons.middle);
+  EXPECT_FALSE(snapshot.buttons.right);
+  EXPECT_TRUE(snapshot.modifiers.control);
+  EXPECT_FALSE(snapshot.modifiers.shift);
+  EXPECT_TRUE(snapshot.modifiers.alt);
+  EXPECT_FALSE(snapshot.modifiers.command);
+  EXPECT_TRUE(snapshot.focused);
+  EXPECT_TRUE(snapshot.text_input_active);
+  EXPECT_TRUE(snapshot.navigation_capture);
+  ASSERT_EQ(snapshot.pressed_chords.size(), 1U);
+  EXPECT_EQ(snapshot.pressed_chords.front(),
+            modeling_sdk_encode_input_chord(frame.pressed_input_chords.front()));
+  EXPECT_DOUBLE_EQ(snapshot.frame_time_seconds, 0.25);
+}
+
+TEST(ModelingSdkViewportInputAdapterTests,
+     ClampsEmptyViewportSizeForSdkSnapshots) {
+  ViewportInputFrame frame;
+  frame.viewport_size = {};
+  frame.pressed_input_chords.push_back({});
+
+  const quader::modeling::ViewportHostInputSnapshot snapshot =
+      modeling_sdk_viewport_input_snapshot(frame);
+
+  EXPECT_EQ(snapshot.viewport_rect.width, 1.0F);
+  EXPECT_EQ(snapshot.viewport_rect.height, 1.0F);
+  EXPECT_TRUE(snapshot.pressed_chords.empty());
+  EXPECT_FALSE(snapshot.navigation_capture);
 }
 
 void set_navigation_down(ViewportInputFrame &input,

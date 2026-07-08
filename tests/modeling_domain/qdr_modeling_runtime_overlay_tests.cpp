@@ -47,6 +47,24 @@ std::size_t line_count_for_layer_and_object(
                     }));
 }
 
+quader_poly::Document make_open_quad_document()
+{
+  quader_poly::Document document;
+  const quader_poly::ElementId bottom_left =
+      quader_poly::add_vertex(document, {-1.0F, 0.0F, -1.0F});
+  const quader_poly::ElementId bottom_right =
+      quader_poly::add_vertex(document, {1.0F, 0.0F, -1.0F});
+  const quader_poly::ElementId top_right =
+      quader_poly::add_vertex(document, {1.0F, 0.0F, 1.0F});
+  const quader_poly::ElementId top_left =
+      quader_poly::add_vertex(document, {-1.0F, 0.0F, 1.0F});
+  const std::array<quader_poly::ElementId, 4> vertices{
+      bottom_left, bottom_right, top_right, top_left};
+  [[maybe_unused]] const quader_poly::ElementId face =
+      quader_poly::add_face(document, vertices);
+  return document;
+}
+
 std::size_t triangle_count_for_layer_and_object(
     const quader_editor_core::SelectionOverlayFrame &frame,
     quader_editor_core::SelectionOverlayLayer layer, int object_id)
@@ -1299,7 +1317,7 @@ void selected_plane_overlay_marks_open_edges()
 	quader_editor_core::PolygonObject plane;
 	plane.id = 1;
 	plane.selected = true;
-	plane.document = quader_poly::make_plane({});
+	plane.document = make_open_quad_document();
         plane.selection.mode = quader_poly::SelectionMode::Edge;
         plane.selection.edges = quader_poly::document_edges(plane.document);
 

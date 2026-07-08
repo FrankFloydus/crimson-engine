@@ -33,6 +33,8 @@
 
 namespace quader {
 
+class AssetRegistry;
+class SceneDocument;
 class ViewportSettings;
 
 /**
@@ -68,6 +70,8 @@ public:
                     filament::Material &overlay_icon_material,
                     std::filesystem::path resource_root);
     void shutdown();
+    void sync(const SceneDocument &document, const AssetRegistry &assets,
+              std::uint64_t frame_index = 0);
     void sync(const RenderSceneSnapshot &snapshot);
     void update_mesh_surface_grid(float grid_world_spacing,
                                   const ViewportSettings &settings);
@@ -99,6 +103,8 @@ public:
     SceneWireframeOverlayCache scene_wireframe_overlay_cache_;
     SelectedObjectOverlayCache selected_object_overlay_cache_;
     SceneRenderSyncService sync_service_;
+    RenderSceneSnapshot previous_scene_snapshot_;
+    bool has_previous_scene_snapshot_ = false;
 };
 
 } // namespace quader

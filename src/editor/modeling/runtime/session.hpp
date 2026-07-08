@@ -1755,9 +1755,6 @@ CommandResult harden_selected_edge_normals(std::vector<PolygonObject> &objects,
                                            SelectionMode mode);
 CommandResult soften_selected_edge_normals(std::vector<PolygonObject> &objects,
                                            SelectionMode mode);
-CommandResult apply_uv_operation(std::vector<PolygonObject> &objects,
-                                 SelectionMode mode, std::string_view operation,
-                                 float shift_world_amount);
 CommandResult assign_material_to_selection(std::vector<PolygonObject> &objects,
                                            SelectionMode mode,
                                            std::uint32_t material_slot);
@@ -2078,8 +2075,6 @@ public:
   CommandResult shade_selected_faces_flat();
   CommandResult harden_selected_edge_normals();
   CommandResult soften_selected_edge_normals();
-  CommandResult apply_uv_operation(std::string_view operation,
-                                   float shift_world_amount);
   CommandResult assign_material(AssignMaterialOperationSettings settings);
   CommandResult assign_material_to_selection(std::uint32_t material_slot);
   CommandResult assign_material_to_face(int object_id,

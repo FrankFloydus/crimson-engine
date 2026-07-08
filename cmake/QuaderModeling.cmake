@@ -251,6 +251,115 @@ target_link_libraries(quader_qdr_runtime_io
     PRIVATE
         quader_modeling_profile)
 
+set(QUADER_MODELING_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src/sdk/core/modeling")
+set(QUADER_MODELING_SDK_INCLUDE_DIR "${QUADER_MODELING_SDK_ROOT}/include")
+set(QUADER_MODELING_SDK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/modeling-sdk")
+
+function(quader_configure_modeling_sdk_target target)
+    quader_enable_common_pch(${target})
+    target_compile_features(${target} PUBLIC cxx_std_20)
+    target_include_directories(${target}
+        PUBLIC
+            "$<BUILD_INTERFACE:${QUADER_MODELING_SDK_INCLUDE_DIR}>"
+            "$<INSTALL_INTERFACE:include>"
+        PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src")
+endfunction()
+
+add_library(quader_modeling_sdk_geometry STATIC
+    src/sdk/core/modeling/src/geometry.cpp)
+add_library(quader::modeling_sdk_geometry ALIAS quader_modeling_sdk_geometry)
+quader_configure_modeling_sdk_target(quader_modeling_sdk_geometry)
+target_link_libraries(quader_modeling_sdk_geometry
+    PRIVATE
+        "$<BUILD_INTERFACE:quader_geometry>")
+
+add_library(quader_modeling_sdk_polygon STATIC
+    src/sdk/core/modeling/src/obj_mesh_view.cpp
+    src/sdk/core/modeling/src/polygon_document.cpp)
+add_library(quader::modeling_sdk_polygon ALIAS quader_modeling_sdk_polygon)
+quader_configure_modeling_sdk_target(quader_modeling_sdk_polygon)
+target_link_libraries(quader_modeling_sdk_polygon
+    PUBLIC
+        quader_modeling_sdk_geometry
+    PRIVATE
+        "$<BUILD_INTERFACE:quader_modeling_polygon>")
+
+add_library(quader_modeling_sdk_qdr_document STATIC
+    src/sdk/core/modeling/src/qdr_document.cpp)
+add_library(quader::modeling_sdk_qdr_document ALIAS quader_modeling_sdk_qdr_document)
+quader_configure_modeling_sdk_target(quader_modeling_sdk_qdr_document)
+target_link_libraries(quader_modeling_sdk_qdr_document
+    PUBLIC
+        quader_modeling_sdk_polygon
+    PRIVATE
+        "$<BUILD_INTERFACE:quader_qdr_document_io>")
+
+add_library(quader_modeling_sdk_runtime STATIC
+    src/sdk/core/modeling/src/session.cpp)
+add_library(quader::modeling_sdk_runtime ALIAS quader_modeling_sdk_runtime)
+quader_configure_modeling_sdk_target(quader_modeling_sdk_runtime)
+target_link_libraries(quader_modeling_sdk_runtime
+    PUBLIC
+        quader_modeling_sdk_polygon)
+
+add_library(quader_modeling_sdk INTERFACE)
+add_library(quader::modeling_sdk ALIAS quader_modeling_sdk)
+target_link_libraries(quader_modeling_sdk
+    INTERFACE
+        quader_modeling_sdk_qdr_document
+        quader_modeling_sdk_runtime)
+
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/QuaderModelingSdkConfig.cmake.in"
+    "${QUADER_MODELING_SDK_GENERATED_DIR}/QuaderModelingSdkConfig.cmake"
+    INSTALL_DESTINATION "lib/cmake/QuaderModelingSdk")
+write_basic_package_version_file(
+    "${QUADER_MODELING_SDK_GENERATED_DIR}/QuaderModelingSdkConfigVersion.cmake"
+    VERSION "${PROJECT_VERSION}"
+    COMPATIBILITY SameMajorVersion)
+
+set(QUADER_MODELING_SDK_LICENSE_BUNDLE
+    "${QUADER_MODELING_SDK_GENERATED_DIR}/QuaderModelingSdkThirdPartyLicenses.txt")
+file(GLOB QUADER_MODELING_SDK_LICENSE_INPUTS CONFIGURE_DEPENDS
+    "${QUADER_APP_THIRDPARTY_DIR}/licenses/*.txt")
+list(SORT QUADER_MODELING_SDK_LICENSE_INPUTS)
+file(WRITE "${QUADER_MODELING_SDK_LICENSE_BUNDLE}"
+    "Quader Modeling SDK third-party license bundle\n")
+foreach(_quader_modeling_sdk_license IN LISTS QUADER_MODELING_SDK_LICENSE_INPUTS)
+    get_filename_component(_quader_modeling_sdk_license_name
+        "${_quader_modeling_sdk_license}" NAME)
+    file(READ "${_quader_modeling_sdk_license}"
+        _quader_modeling_sdk_license_text)
+    file(APPEND "${QUADER_MODELING_SDK_LICENSE_BUNDLE}"
+        "\n===== ${_quader_modeling_sdk_license_name} =====\n\n"
+        "${_quader_modeling_sdk_license_text}\n")
+endforeach()
+
+install(TARGETS
+        quader_modeling_sdk_geometry
+        quader_modeling_sdk_polygon
+        quader_modeling_sdk_qdr_document
+        quader_modeling_sdk_runtime
+        quader_modeling_sdk
+    EXPORT QuaderModelingSdkTargets
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin
+    INCLUDES DESTINATION include)
+install(DIRECTORY "${QUADER_MODELING_SDK_INCLUDE_DIR}/" DESTINATION include)
+install(EXPORT QuaderModelingSdkTargets
+    NAMESPACE quader::
+    FILE QuaderModelingSdkTargets.cmake
+    DESTINATION lib/cmake/QuaderModelingSdk)
+install(FILES
+        "${QUADER_MODELING_SDK_GENERATED_DIR}/QuaderModelingSdkConfig.cmake"
+        "${QUADER_MODELING_SDK_GENERATED_DIR}/QuaderModelingSdkConfigVersion.cmake"
+    DESTINATION lib/cmake/QuaderModelingSdk)
+install(FILES "${QUADER_MODELING_SDK_LICENSE_BUNDLE}"
+    DESTINATION share/QuaderModelingSdk)
+
 if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
     add_executable(qdr_performance_baseline
         benchmarks/modeling/qdr_performance_baseline.cpp)
@@ -428,22 +537,7 @@ if(QUADER_BUILD_TESTS)
         tests/modeling_domain/operation/qdr_document_operation_thicken_faces_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_transform_selection_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_translate_selection_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_uv_align_face_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_uv_align_grid_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_validation_guardrail_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_uv_fit_both_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_uv_fit_x_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_uv_fit_y_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_uv_justify_bottom_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_uv_justify_center_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_uv_justify_left_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_uv_justify_right_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_uv_justify_top_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_uv_shift_down_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_uv_shift_left_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_uv_shift_right_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_uv_shift_up_tests.cpp
-        tests/modeling_domain/operation/qdr_document_operation_uv_validation_tests.cpp)
+        tests/modeling_domain/operation/qdr_document_operation_validation_guardrail_tests.cpp)
     foreach(_quader_domain_operation_test_source IN LISTS QUADER_POLYGON_OPERATION_TEST_SOURCES)
         get_filename_component(_quader_domain_operation_test_target "${_quader_domain_operation_test_source}" NAME_WE)
         quader_add_modeling_domain_test_source(polygon "${_quader_domain_operation_test_target}" "${_quader_domain_operation_test_source}")
@@ -549,4 +643,57 @@ if(QUADER_BUILD_TESTS)
     target_link_libraries(quader_modeling_domain_metadata_loop_tests
         PRIVATE
             quader_editor_metadata)
+
+    add_executable(quader_modeling_sdk_consumer_tests
+        tests/sdk/modeling_sdk_consumer_tests.cpp)
+    quader_enable_common_pch(quader_modeling_sdk_consumer_tests)
+    target_compile_features(quader_modeling_sdk_consumer_tests PRIVATE cxx_std_20)
+    target_link_libraries(quader_modeling_sdk_consumer_tests
+        PRIVATE
+            quader_modeling_sdk
+            GTest::gtest
+            GTest::gtest_main)
+    add_test(NAME quader_modeling_sdk_consumer_tests
+        COMMAND quader_modeling_sdk_consumer_tests)
+
+    set(_QUADER_SDK_ONLY_BUILD_CHECK_ARGS
+        "-DQUADER_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DQUADER_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/sdk-only-check"
+        "-DQUADER_CMAKE_GENERATOR=${CMAKE_GENERATOR}"
+        "-DQUADER_BUILD_CONFIG=$<CONFIG>")
+    if(NOT "${CMAKE_GENERATOR_PLATFORM}" STREQUAL "")
+        list(APPEND _QUADER_SDK_ONLY_BUILD_CHECK_ARGS
+            "-DQUADER_CMAKE_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}")
+    endif()
+    set(_QUADER_SDK_ONLY_CMAKE_TOOLCHAIN_FILE "")
+    if(DEFINED CMAKE_TOOLCHAIN_FILE AND NOT "${CMAKE_TOOLCHAIN_FILE}" STREQUAL "")
+        set(_QUADER_SDK_ONLY_CMAKE_TOOLCHAIN_FILE "${CMAKE_TOOLCHAIN_FILE}")
+    else()
+        get_property(_QUADER_SDK_ONLY_CMAKE_TOOLCHAIN_FILE
+            CACHE CMAKE_TOOLCHAIN_FILE PROPERTY VALUE)
+    endif()
+    if(NOT "${_QUADER_SDK_ONLY_CMAKE_TOOLCHAIN_FILE}" STREQUAL "")
+        list(APPEND _QUADER_SDK_ONLY_BUILD_CHECK_ARGS
+            "-DQUADER_CMAKE_TOOLCHAIN_FILE=${_QUADER_SDK_ONLY_CMAKE_TOOLCHAIN_FILE}")
+    endif()
+
+    set(_QUADER_SDK_ONLY_VCPKG_TARGET_TRIPLET "")
+    if(DEFINED VCPKG_TARGET_TRIPLET AND NOT "${VCPKG_TARGET_TRIPLET}" STREQUAL "")
+        set(_QUADER_SDK_ONLY_VCPKG_TARGET_TRIPLET "${VCPKG_TARGET_TRIPLET}")
+    else()
+        get_property(_QUADER_SDK_ONLY_VCPKG_TARGET_TRIPLET
+            CACHE VCPKG_TARGET_TRIPLET PROPERTY VALUE)
+    endif()
+    if(NOT "${_QUADER_SDK_ONLY_VCPKG_TARGET_TRIPLET}" STREQUAL "")
+        list(APPEND _QUADER_SDK_ONLY_BUILD_CHECK_ARGS
+            "-DQUADER_VCPKG_TARGET_TRIPLET=${_QUADER_SDK_ONLY_VCPKG_TARGET_TRIPLET}")
+    endif()
+    if(NOT "${QUADER_OPENMESH_SOURCE_DIR}" STREQUAL "")
+        list(APPEND _QUADER_SDK_ONLY_BUILD_CHECK_ARGS
+            "-DQUADER_OPENMESH_SOURCE_DIR=${QUADER_OPENMESH_SOURCE_DIR}")
+    endif()
+    list(APPEND _QUADER_SDK_ONLY_BUILD_CHECK_ARGS
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/QuaderSdkOnlyBuildCheck.cmake")
+    add_test(NAME quader_modeling_sdk_only_configure_build
+        COMMAND "${CMAKE_COMMAND}" ${_QUADER_SDK_ONLY_BUILD_CHECK_ARGS})
 endif()

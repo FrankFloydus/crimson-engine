@@ -298,7 +298,7 @@ std::pair<int, int> grid_segments_for_triangle_budget(std::uint64_t triangle_bud
 	return { width_segments, depth_segments };
 }
 
-void offset_document(quader_poly::Document& document, quader_poly::Vec3 offset)
+void offset_document(quader_poly::Document& document, quader::QVec3 offset)
 {
 	for (quader_poly::Vertex& vertex : document.vertices) {
 		vertex.position.x += offset.x;
@@ -330,14 +330,14 @@ BenchmarkScene make_scene(const BenchmarkOptions& options)
 		object.id = index + 1;
 		object.selected = true;
 		object.document = std::move(document);
-		object.selection.mode = quader_poly::SelectionMode::face;
+		object.selection.mode = quader_poly::SelectionMode::Face;
 		object.selection.faces.reserve(object.document.faces.size());
 		for (const quader_poly::Face& face : object.document.faces) {
 			object.selection.faces.push_back(face.id);
 		}
 		if (!object.selection.faces.empty()) {
 			object.selection.has_active = true;
-			object.selection.active_kind = quader_poly::ElementKind::face;
+			object.selection.active_kind = quader_poly::ElementKind::Face;
 			object.selection.active_face = object.selection.faces.front();
 		}
 
@@ -373,9 +373,9 @@ BenchmarkResult measure(std::string name, std::string unit, int iterations, std:
 	return result;
 }
 
-std::vector<quader_poly::Vec3> compiled_positions(const quader_poly::CompiledMesh& mesh)
+std::vector<quader::QVec3> compiled_positions(const quader_poly::CompiledMesh& mesh)
 {
-	std::vector<quader_poly::Vec3> positions;
+	std::vector<quader::QVec3> positions;
 	positions.reserve(mesh.vertices.size());
 	for (const quader_poly::CompiledVertex& vertex : mesh.vertices) {
 		positions.push_back(vertex.position);
@@ -386,7 +386,7 @@ std::vector<quader_poly::Vec3> compiled_positions(const quader_poly::CompiledMes
 quader_editor_core::ViewportCameraState benchmark_camera()
 {
 	quader_editor_core::ViewportCameraState camera;
-	camera.projection = quader_editor_core::CameraProjection::perspective;
+	camera.projection = quader_editor_core::CameraProjection::Perspective;
 	camera.transform.origin = { 0.0F, 90.0F, 140.0F };
 	camera.transform.x_axis = { 1.0F, 0.0F, 0.0F };
 	camera.transform.y_axis = { 0.0F, 1.0F, 0.0F };
@@ -409,7 +409,7 @@ std::vector<BenchmarkResult> run_benchmarks(const BenchmarkOptions& options, con
 		[&](int) {
 			std::uint64_t checksum = 0;
 			for (const quader_editor_core::PolygonObject& object : scene.objects) {
-				const quader_poly::CompiledMesh mesh = quader_poly::compile_document(object.document, quader_poly::SurfaceShading::flat);
+				const quader_poly::CompiledMesh mesh = quader_poly::compile_document(object.document, quader_poly::SurfaceShading::Flat);
 				checksum += mesh.vertices.size();
 				checksum += mesh.indices.size();
 				checksum += mesh.primitives.size();
@@ -425,7 +425,7 @@ std::vector<BenchmarkResult> run_benchmarks(const BenchmarkOptions& options, con
 		[&](int) {
 			std::uint64_t checksum = 0;
 			for (const quader_editor_core::PolygonObject& object : scene.objects) {
-				const quader_poly::CompiledMesh mesh = quader_poly::compile_document(object.document, quader_poly::SurfaceShading::smooth);
+				const quader_poly::CompiledMesh mesh = quader_poly::compile_document(object.document, quader_poly::SurfaceShading::Smooth);
 				checksum += mesh.vertices.size();
 				checksum += mesh.indices.size();
 				checksum += mesh.primitives.size();
@@ -440,7 +440,7 @@ std::vector<BenchmarkResult> run_benchmarks(const BenchmarkOptions& options, con
 		scene.stats.triangles,
 		[&](int) {
 			const quader_editor_core::SelectionOverlayFrame frame =
-				quader_editor_core::build_selection_overlay_frame(scene.objects, quader_editor_core::SelectionMode::object, {});
+				quader_editor_core::build_selection_overlay_frame(scene.objects, quader_editor_core::SelectionMode::Object, {});
 			return frame.triangles.size() + frame.lines.size() + frame.points.size();
 		}));
 
@@ -451,12 +451,12 @@ std::vector<BenchmarkResult> run_benchmarks(const BenchmarkOptions& options, con
 		scene.stats.selected_faces,
 		[&](int) {
 			const quader_editor_core::SelectionOverlayFrame frame =
-				quader_editor_core::build_selection_overlay_frame(scene.objects, quader_editor_core::SelectionMode::face, {});
+				quader_editor_core::build_selection_overlay_frame(scene.objects, quader_editor_core::SelectionMode::Face, {});
 			return frame.triangles.size() + frame.lines.size() + frame.points.size();
 		}));
 
 	quader_poly::PickOptions face_pick_options;
-	face_pick_options.mode = quader_poly::SelectionMode::face;
+	face_pick_options.mode = quader_poly::SelectionMode::Face;
 	results.push_back(measure(
 		"pick_nearest_face_rays",
 		"ray",
@@ -484,7 +484,7 @@ std::vector<BenchmarkResult> run_benchmarks(const BenchmarkOptions& options, con
 			const quader_editor_core::SelectionHoverUpdateResult result =
 				quader_editor_core::update_selection_hover(
 					scene.objects,
-					quader_editor_core::SelectionMode::face,
+					quader_editor_core::SelectionMode::Face,
 					hover,
 					{ { x, 100.0F, z }, { 0.0F, -1.0F, 0.0F } },
 					false,
@@ -499,7 +499,7 @@ std::vector<BenchmarkResult> run_benchmarks(const BenchmarkOptions& options, con
 		static_cast<std::uint64_t>(options.transform_iterations),
 		[&](int) {
 			quader_editor_core::EditorSession session(scene.objects);
-			session.set_selection_mode(quader_editor_core::SelectionMode::object);
+			session.set_selection_mode(quader_editor_core::SelectionMode::Object);
 			const quader_editor_core::CommandResult begin = session.begin_transform_preview(false);
 			std::uint64_t checksum = begin.ok ? 1ULL : 0ULL;
 			for (int iteration = 0; iteration < options.transform_iterations; ++iteration) {
@@ -510,7 +510,7 @@ std::vector<BenchmarkResult> run_benchmarks(const BenchmarkOptions& options, con
 				checksum += session.objects().size();
 			}
 			const quader_editor_core::PreviewTransactionFinishResult cancel =
-				session.cancel_preview_transaction(quader_editor_core::PreviewTransactionKind::transform);
+				session.cancel_preview_transaction(quader_editor_core::PreviewTransactionKind::Transform);
 			return checksum + (cancel.restored ? 1ULL : 0ULL);
 		}));
 
@@ -521,13 +521,13 @@ std::vector<BenchmarkResult> run_benchmarks(const BenchmarkOptions& options, con
 		static_cast<std::uint64_t>(options.navigation_iterations),
 		[&](int iteration) {
 			quader_editor_core::ViewportCameraState camera = benchmark_camera();
-			const quader_poly::Vec3 pivot { 0.0F, 0.0F, 0.0F };
+			const quader::QVec3 pivot { 0.0F, 0.0F, 0.0F };
 			std::uint64_t checksum = 0;
 			const quader_editor_core::ViewportNavigationResult orbit = quader_editor_core::viewport_orbit({
 				camera.transform,
 				pivot,
 				{ static_cast<float>((iteration % 17) - 8), static_cast<float>((iteration % 13) - 6) },
-				quader_editor_core::navigation_orbit_radians_per_pixel,
+				quader_editor_core::kNavigationOrbitRadiansPerPixel,
 				(iteration % 97) == 0,
 			});
 			checksum += orbit.ok ? 1ULL : 0ULL;
@@ -558,8 +558,8 @@ std::vector<BenchmarkResult> run_benchmarks(const BenchmarkOptions& options, con
 				return 0ULL;
 			}
 			const quader_poly::CompiledMesh mesh =
-				quader_poly::compile_document(scene.objects.front().document, quader_poly::SurfaceShading::flat);
-			const std::vector<quader_poly::Vec3> positions = compiled_positions(mesh);
+				quader_poly::compile_document(scene.objects.front().document, quader_poly::SurfaceShading::Flat);
+			const std::vector<quader::QVec3> positions = compiled_positions(mesh);
 			quader_editor_core::OverlayVisibilityOccluder occluder;
 			occluder.set_mesh(positions, mesh.indices);
 			const quader_editor_core::ViewportCameraState camera = benchmark_camera();

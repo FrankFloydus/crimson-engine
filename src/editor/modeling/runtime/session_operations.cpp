@@ -1112,14 +1112,6 @@ CommandResult EditorSession::soften_selected_edge_normals() {
   return result;
 }
 
-CommandResult EditorSession::apply_uv_operation(std::string_view operation,
-                                                float shift_world_amount) {
-  const CommandResult result = quader_editor_core::apply_uv_operation(
-      state_.objects, state_.selection_mode, operation, shift_world_amount);
-  note_content_result(result);
-  return result;
-}
-
 CommandResult
 EditorSession::assign_material(AssignMaterialOperationSettings settings) {
   return settings.explicit_target

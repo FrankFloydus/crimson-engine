@@ -79,27 +79,9 @@ void generated_uvs_and_translation_shift_share_document_helper_boundary()
     }
 }
 
-void align_face_operation_keeps_compile_output_renderable()
-{
-    Document document = make_uv_quad_document(3);
-    Selection selection;
-    selection.mode = SelectionMode::Face;
-    selection.faces = { document.faces.front().id };
-
-    const OperationResult result = apply_uv_operation(document, selection, "align_face", 64.0F);
-    require_test(result.changed, "align_face should assign local loop UVs to the selected face");
-    require_test(document.faces.front().uvs.size() == document.faces.front().vertices.size(), "align_face should leave explicit loop UVs");
-
-    const CompiledMesh mesh =
-        compile_document(document, SurfaceShading::Smooth);
-    require_test(mesh.indices.size() == 6U, "aligned face should still compile to triangles");
-    require_test(mesh.primitives.size() == 1U && mesh.primitives.front().material_slot == 3U, "aligned face compile should keep material metadata");
-}
-
 } // namespace
 
 TEST(QdrDocumentMeshUvTests, QdrDocumentMeshUvTests) {
     compile_document_preserves_loop_uvs_material_slots_and_normals();
     generated_uvs_and_translation_shift_share_document_helper_boundary();
-    align_face_operation_keeps_compile_output_renderable();
 }

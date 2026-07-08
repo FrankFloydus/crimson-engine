@@ -54,7 +54,7 @@ QuaderRenderApiRuntimeAccess::sync_scene(QuaderRenderApi &api,
                                          SceneRenderBridge &bridge) {
   const ProjectSessionReadView session =
       read_project_session(api.session_).read_view();
-  bridge.sync(build_render_scene_snapshot(session.scene, session.assets));
+  bridge.sync(session.scene, session.assets);
   return api.runtime_status("Render scene synchronized.");
 }
 

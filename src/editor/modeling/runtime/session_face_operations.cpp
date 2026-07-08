@@ -218,30 +218,6 @@ CommandResult soften_selected_edge_normals(std::vector<PolygonObject>& objects, 
 	return changed ? ok_result(true) : error_result(last_message);
 }
 
-CommandResult apply_uv_operation(std::vector<PolygonObject>& objects, SelectionMode mode, std::string_view operation, float shift_world_amount)
-{
-	bool changed = false;
-	std::string last_message = "Select a polygon face or object first.";
-	for (PolygonObject& object : objects) {
-		if (!object.selected) {
-			continue;
-		}
-                quader_poly::Selection selection =
-                    mode == SelectionMode::Object
-                        ? all_face_selection(object.document)
-                        : object.selection;
-                const quader_poly::OperationResult result = quader_poly::apply_uv_operation(object.document, selection, operation, shift_world_amount);
-		if (!result.changed) {
-			if (!result.message.empty()) {
-				last_message = result.message;
-			}
-			continue;
-		}
-		changed = true;
-	}
-	return changed ? ok_result(true) : error_result(last_message);
-}
-
 CommandResult assign_material_to_selection(std::vector<PolygonObject>& objects, SelectionMode mode, std::uint32_t material_slot)
 {
   if (mode != SelectionMode::Face && mode != SelectionMode::Object) {

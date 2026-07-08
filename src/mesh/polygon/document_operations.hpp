@@ -151,9 +151,6 @@ void regenerate_face_uvs(Document &document);
 void clear_face_uvs(Document &document);
 void shift_face_uvs_for_translation(Document &document, quader::QVec3 delta);
 [[nodiscard]] OperationResult
-apply_uv_operation(Document &document, const Selection &selection,
-                   std::string_view operation, float shift_world_amount = 1.0F);
-[[nodiscard]] OperationResult
 assign_selected_face_material_slot(Document &document,
                                    const Selection &selection,
                                    std::uint32_t material_slot);

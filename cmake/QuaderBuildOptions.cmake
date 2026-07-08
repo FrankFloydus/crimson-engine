@@ -5,6 +5,7 @@
 # file except through prior written authorization from Francesco Di Blasi.
 ################################################################################
 option(QUADER_BUILD_TESTS "Build Quader tests" ON)
+option(QUADER_BUILD_NATIVE_APP "Build the native Quader Windows editor app." ON)
 option(QUADER_USE_OPENMESH_TOPOLOGY "Use OpenMesh for topology-backed polygon edit operations." ON)
 option(QUADER_ALLOW_EXTERNAL_OPENMESH_FETCH "Allow CMake to download OpenMesh when a local source checkout is not supplied." OFF)
 option(QUADER_ENABLE_TRACY "Enable Tracy profiler instrumentation for Quader targets." OFF)

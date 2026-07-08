@@ -7,6 +7,7 @@
 #include "render/overlay/render_overlay_snapshot.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "diagnostics/profile.hpp"
 #include "mesh/polygon/document_model.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
@@ -98,6 +99,7 @@ RenderOverlaySelectedObjectSnapshot
 build_render_overlay_selected_object_snapshot(const SceneDocument &document,
                                               const AssetRegistry &assets,
                                               bool visible) {
+  QDR_PROFILE_FUNCTION();
   RenderOverlaySelectedObjectSnapshot snapshot{
       .scene_revision = document.revision(),
       .asset_revision = assets.revision(),
@@ -126,6 +128,7 @@ RenderOverlaySceneWireframeSnapshot
 build_render_overlay_scene_wireframe_snapshot(const SceneDocument &document,
                                               const AssetRegistry &assets,
                                               std::uint8_t layer_mask) {
+  QDR_PROFILE_FUNCTION();
   RenderOverlaySceneWireframeSnapshot snapshot{
       .scene_revision = document.revision(),
       .asset_revision = assets.revision(),
@@ -149,6 +152,7 @@ build_render_overlay_scene_wireframe_snapshot(const SceneDocument &document,
 RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
     ViewportOverlayFrame tool_overlays) {
+  QDR_PROFILE_FUNCTION();
   RenderOverlaySelectionSnapshot snapshot{
       .scene_revision = document.revision(),
       .asset_revision = assets.revision(),

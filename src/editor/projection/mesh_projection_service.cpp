@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/projection/mesh_projection_service.hpp"
 
+#include "diagnostics/profile.hpp"
+
 #include <memory>
 
 #include <mesh/polygon/document.hpp>
@@ -47,16 +49,19 @@ mesh_asset_from_compiled_mesh(const quader_poly::CompiledMesh &compiled) {
 
 MeshAsset MeshProjectionService::mesh_asset_from_compiled_mesh(
     const quader_poly::CompiledMesh &compiled) {
+  QDR_PROFILE_FUNCTION();
   return quader::mesh_asset_from_compiled_mesh(compiled);
 }
 
 MeshAsset MeshProjectionService::compile_polygon_document_mesh(
     const quader_poly::Document &document) {
+  QDR_PROFILE_FUNCTION();
   return mesh_asset_from_compiled_mesh(quader_poly::compile_document(document));
 }
 
 MeshAsset MeshProjectionService::compile_object_mesh(
     const quader_editor_core::PolygonObject &object) {
+  QDR_PROFILE_FUNCTION();
   MeshAsset mesh = compile_polygon_document_mesh(object.document);
   mesh.has_authored_polygon_document = true;
   mesh.authored_polygon_document =

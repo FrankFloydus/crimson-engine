@@ -87,23 +87,25 @@ function(quader_enable_common_pch target)
             <vector>)
 endfunction()
 
-find_package(spdlog CONFIG REQUIRED)
-find_package(glm CONFIG REQUIRED)
-find_package(EnTT CONFIG REQUIRED)
-find_package(stduuid CONFIG REQUIRED)
-find_package(Taskflow CONFIG REQUIRED)
-if(QUADER_ENABLE_SENTRY)
-    find_package(sentry CONFIG REQUIRED)
-    if(WIN32 AND TARGET sentry_crashpad::crashpad_wer)
-        get_target_property(_QUADER_SENTRY_WER_DEBUG sentry_crashpad::crashpad_wer IMPORTED_LOCATION_DEBUG)
-        get_target_property(_QUADER_SENTRY_WER_RELEASE sentry_crashpad::crashpad_wer IMPORTED_LOCATION_RELEASE)
-        set_target_properties(sentry_crashpad::crashpad_wer PROPERTIES
-            IMPORTED_IMPLIB_DEBUG "${_QUADER_SENTRY_WER_DEBUG}"
-            IMPORTED_IMPLIB_RELEASE "${_QUADER_SENTRY_WER_RELEASE}"
-            IMPORTED_IMPLIB_MINSIZEREL "${_QUADER_SENTRY_WER_RELEASE}"
-            IMPORTED_IMPLIB_RELWITHDEBINFO "${_QUADER_SENTRY_WER_RELEASE}"
-            IMPORTED_LOCATION_MINSIZEREL "${_QUADER_SENTRY_WER_RELEASE}"
-            IMPORTED_LOCATION_RELWITHDEBINFO "${_QUADER_SENTRY_WER_RELEASE}")
+if(QUADER_BUILD_NATIVE_APP)
+    find_package(spdlog CONFIG REQUIRED)
+    find_package(glm CONFIG REQUIRED)
+    find_package(EnTT CONFIG REQUIRED)
+    find_package(stduuid CONFIG REQUIRED)
+    find_package(Taskflow CONFIG REQUIRED)
+    if(QUADER_ENABLE_SENTRY)
+        find_package(sentry CONFIG REQUIRED)
+        if(WIN32 AND TARGET sentry_crashpad::crashpad_wer)
+            get_target_property(_QUADER_SENTRY_WER_DEBUG sentry_crashpad::crashpad_wer IMPORTED_LOCATION_DEBUG)
+            get_target_property(_QUADER_SENTRY_WER_RELEASE sentry_crashpad::crashpad_wer IMPORTED_LOCATION_RELEASE)
+            set_target_properties(sentry_crashpad::crashpad_wer PROPERTIES
+                IMPORTED_IMPLIB_DEBUG "${_QUADER_SENTRY_WER_DEBUG}"
+                IMPORTED_IMPLIB_RELEASE "${_QUADER_SENTRY_WER_RELEASE}"
+                IMPORTED_IMPLIB_MINSIZEREL "${_QUADER_SENTRY_WER_RELEASE}"
+                IMPORTED_IMPLIB_RELWITHDEBINFO "${_QUADER_SENTRY_WER_RELEASE}"
+                IMPORTED_LOCATION_MINSIZEREL "${_QUADER_SENTRY_WER_RELEASE}"
+                IMPORTED_LOCATION_RELWITHDEBINFO "${_QUADER_SENTRY_WER_RELEASE}")
+        endif()
     endif()
 endif()
 
@@ -142,6 +144,20 @@ set(QUADER_EDITOR_VIEWPORT_TOOL_SOURCES
 )
 
 include(cmake/QuaderModeling.cmake)
+
+set(QUADER_SDK_CPP_EXAMPLES
+    examples/sdk/mesh_operation.cpp
+    examples/sdk/qdr_roundtrip.cpp
+    examples/sdk/session_preview.cpp)
+
+foreach(_quader_sdk_example IN LISTS QUADER_SDK_CPP_EXAMPLES)
+    get_filename_component(_quader_sdk_example_name "${_quader_sdk_example}" NAME_WE)
+    add_executable("quader_sdk_example_${_quader_sdk_example_name}" "${_quader_sdk_example}")
+    target_compile_features("quader_sdk_example_${_quader_sdk_example_name}" PRIVATE cxx_std_20)
+    target_link_libraries("quader_sdk_example_${_quader_sdk_example_name}" PRIVATE quader_modeling_sdk)
+endforeach()
+
+if(QUADER_BUILD_NATIVE_APP)
 
 add_library(quader_modeling STATIC
     src/editor/projection/cut_preview_overlay_projection.cpp
@@ -286,6 +302,7 @@ target_link_libraries(quader_core_ui_support PUBLIC quader_core_utilities)
 add_library(quader_viewport_services STATIC
     src/viewport/viewport_camera_controller.cpp
     src/viewport/host_viewport_contract_adapter.cpp
+    src/viewport/modeling_sdk_viewport_input_adapter.cpp
     src/viewport/viewport_input_router.cpp
     src/viewport/viewport_layout.cpp
     src/viewport/viewport_settings.cpp
@@ -299,6 +316,7 @@ target_link_libraries(quader_viewport_services
         quader_core_utilities
         quader_editor_metadata
         quader_modeling
+        quader_modeling_sdk
     PRIVATE
         quader_modeling_profile)
 
@@ -562,6 +580,18 @@ target_compile_features(quader_render PUBLIC cxx_std_20)
 add_dependencies(quader_render
     ${QUADER_FILAMENT_MATERIAL_TARGETS})
 
+if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
+    add_executable(qdr_phase8_performance_baseline
+        benchmarks/modeling/qdr_phase8_performance_baseline.cpp)
+    quader_enable_common_pch(qdr_phase8_performance_baseline)
+    target_compile_features(qdr_phase8_performance_baseline PRIVATE cxx_std_20)
+    target_link_libraries(qdr_phase8_performance_baseline
+        PRIVATE
+            quader_modeling
+            quader_modeling_sdk
+            quader_render)
+endif()
+
 add_library(quader_ui STATIC
     src/editor/viewport/transform_gizmo_interaction.cpp
     src/editor/viewport/viewport_interaction_controller.cpp
@@ -735,6 +765,8 @@ if(EXISTS "${QUADER_DEFAULT_ALBEDO_TEXTURE}" AND EXISTS "${QUADER_DEFAULT_ROUGHN
     VERBATIM)
 endif()
 
+endif()
+
 if(QUADER_BUILD_TESTS)
     find_package(GTest CONFIG REQUIRED)
 
@@ -756,6 +788,7 @@ if(QUADER_BUILD_TESTS)
     target_link_libraries(quader_guardrail_tests PRIVATE GTest::gtest GTest::gtest_main)
     add_test(NAME quader_guardrail_tests COMMAND quader_guardrail_tests)
 
+    if(QUADER_BUILD_NATIVE_APP)
     add_executable(quader_tests
         tests/app_frame_clock_tests.cpp
         tests/core_tests.cpp
@@ -787,5 +820,19 @@ if(QUADER_BUILD_TESTS)
             QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest GTest::gtest_main)
     add_test(NAME quader_tests COMMAND quader_tests)
+
+    add_executable(quader_modeling_sdk_parity_tests
+        tests/sdk/modeling_sdk_parity_tests.cpp)
+    quader_enable_common_pch(quader_modeling_sdk_parity_tests)
+    target_compile_features(quader_modeling_sdk_parity_tests PRIVATE cxx_std_20)
+    target_link_libraries(quader_modeling_sdk_parity_tests
+        PRIVATE
+            quader_runtime
+            quader_modeling_sdk
+            GTest::gtest
+            GTest::gtest_main)
+    add_test(NAME quader_modeling_sdk_parity_tests
+        COMMAND quader_modeling_sdk_parity_tests)
+    endif()
 
 endif()

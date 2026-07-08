@@ -645,9 +645,11 @@ TEST(ProgrammaticApiGuardrailTests, ReadOnlyApiPathsUseConstProjectSessionAccess
               std::string::npos);
   }
   EXPECT_NE(render_api.find(".read_view()"), std::string::npos);
-  EXPECT_NE(render_api.find("build_render_scene_snapshot(session.scene, session.assets)"),
+  EXPECT_EQ(render_api.find("build_render_scene_snapshot(session.scene, session.assets)"),
             std::string::npos);
-  EXPECT_NE(render_api.find("bridge.sync(build_render_scene_snapshot("),
+  EXPECT_EQ(render_api.find("bridge.sync(build_render_scene_snapshot("),
+            std::string::npos);
+  EXPECT_NE(render_api.find("bridge.sync(session.scene, session.assets)"),
             std::string::npos);
 }
 
@@ -1964,6 +1966,7 @@ TEST(ProgrammaticApiGuardrailTests, PublicExamplesStartFromEditorApiOrScriptSurf
       "QuaderApi",
       "QuaderObjectHandle",
       "QuaderScript",
+      "quader::modeling",
       "public `quader` scripting object",
       "BehaviorScenario",
   };

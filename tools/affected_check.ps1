@@ -338,13 +338,6 @@ function Get-PolygonOperationFilterForSourcePath {
     }
 
     $slug = $Matches[1]
-    $filterOverrides = @{
-        "apply_uv" = "QdrDocumentOperationUv*"
-    }
-    if ($filterOverrides.ContainsKey($slug)) {
-        return $filterOverrides[$slug]
-    }
-
     $testSlugOverrides = @{
         "fill_hole_from_edges" = "fill_hole"
         "flip_face_normals" = "flip_normals"
