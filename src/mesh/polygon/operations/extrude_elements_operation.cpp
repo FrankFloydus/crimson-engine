@@ -25,6 +25,9 @@ private:
     float closed_edge_ledge_size_ = 0.0F;
 };
 
+/**
+ * Extrudes selected elements by applying an affine transform around a pivot.
+ */
 class TransformExtrudeElementsOperation final : public PolyOperation {
 public:
     TransformExtrudeElementsOperation(Transform3 transform, quader::QVec3 pivot);

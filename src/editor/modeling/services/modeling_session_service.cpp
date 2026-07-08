@@ -1533,6 +1533,9 @@ public:
     return {false, false, "No repeatable action is available."};
   }
 
+  /**
+   * Captures normalized scene-space inputs for a runtime operation.
+   */
   struct SceneWorkspaceOperationState {
     quader_editor_core::SessionState source_state;
     quader_editor_core::SessionState working_state;
@@ -1540,6 +1543,9 @@ public:
     std::unordered_map<int, QMat4> world_from_object_by_id;
   };
 
+  /**
+   * Tracks the active scene-space preview participant mapping.
+   */
   struct SceneWorkspacePreviewState {
     quader_editor_core::EditorOperationId operation =
         quader_editor_core::EditorOperationId::Bridge;

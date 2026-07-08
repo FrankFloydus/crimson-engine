@@ -16,8 +16,8 @@ file except through prior written authorization from Francesco Di Blasi.
 - Prefer deterministic, documented inputs and outputs.
 - Avoid destructive filesystem behavior; require explicit user intent for cleanup, migration, or
   overwrite actions.
-- If a tool encodes build, dependency, documentation, or test policy, keep it aligned with the
-  matching `agents/` domain instruction file.
+- If a tool encodes build, dependency, documentation, or test policy, keep it aligned with root
+  `AGENTS.md` and the nearest local package guide.
 
 ## C++ Style Tool
 

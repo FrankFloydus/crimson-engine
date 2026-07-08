@@ -15,6 +15,9 @@
 
 namespace {
 
+/**
+ * Stores a polygon bridge document and expected source geometry.
+ */
 struct BridgeDocumentFixture {
 	quader_poly::Document document;
 	quader_poly::Edge bridge_edge;
@@ -22,6 +25,9 @@ struct BridgeDocumentFixture {
 	std::vector<quader::QVec3> vertex_positions;
 };
 
+/**
+ * Stores a runtime cross-object bridge session and survivor-local source points.
+ */
 struct CrossObjectBridgeFixture {
 	quader_editor_core::EditorSession session;
 	std::vector<quader::QVec3> source_common_local_positions;

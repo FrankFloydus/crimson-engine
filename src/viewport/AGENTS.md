@@ -8,7 +8,8 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Viewport Package Guide
 
-Read `../../agents/viewport-tools.md` before changing viewport behavior.
+Follow root `AGENTS.md` viewport, input, public API, and testing rules before changing viewport
+behavior.
 
 ## Viewport Rules
 

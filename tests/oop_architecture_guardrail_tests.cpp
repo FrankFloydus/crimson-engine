@@ -412,10 +412,7 @@ TEST(OopArchitectureGuardrailTests, UiDoesNotBypassCommandAndPreviewBoundaries) 
 
 TEST(OopArchitectureGuardrailTests,
      DiagnosticsGlobalsStayInCoreAndPlatformOwners) {
-  const std::string architecture =
-      read_file(source_root() / "docs/architecture.md");
-  const std::string ownership =
-      read_file(source_root() / "agents/domain-ownership.md");
+  const std::string root_agents = read_file(source_root() / "AGENTS.md");
   const std::string logger_header =
       read_file(source_root() / "src/core/logger.hpp");
   const std::string logger_source =
@@ -424,15 +421,15 @@ TEST(OopArchitectureGuardrailTests,
       read_file(source_root() / "src/platform/fatal_error_handler.cpp");
   const std::string main_source = read_file(source_root() / "src/main.cpp");
 
-  EXPECT_NE(architecture.find("## Diagnostics Exceptions"), std::string::npos);
-  EXPECT_NE(architecture.find("Logger"), std::string::npos);
-  EXPECT_NE(architecture.find("src/platform/fatal_error_handler.*"),
+  EXPECT_NE(root_agents.find("## Diagnostics And Fatal Errors"),
             std::string::npos);
-  EXPECT_NE(ownership.find("## Diagnostics And Fatal Errors"),
+  EXPECT_NE(root_agents.find("Logger"),
             std::string::npos);
-  EXPECT_NE(ownership.find("explicit shared-core diagnostics exceptions"),
+  EXPECT_NE(root_agents.find("src/platform/fatal_error_handler.*"),
             std::string::npos);
-  EXPECT_NE(ownership.find("Fatal-error handling is platform-owned"),
+  EXPECT_NE(root_agents.find("explicit shared-core diagnostics exceptions"),
+            std::string::npos);
+  EXPECT_NE(root_agents.find("Fatal-error handling is platform-owned"),
             std::string::npos);
 
   EXPECT_NE(logger_header.find("class Logger"), std::string::npos);

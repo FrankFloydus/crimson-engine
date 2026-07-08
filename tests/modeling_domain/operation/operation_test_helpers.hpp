@@ -36,6 +36,9 @@ struct QuadFixture {
         ElementId face = kInvalidElementId;
 };
 
+/**
+ * Stores an open-boundary fan loop selection fixture.
+ */
 struct BoundaryFanLoopFixture {
 	Document document;
 	Edge seed;
@@ -43,6 +46,9 @@ struct BoundaryFanLoopFixture {
 	std::vector<Edge> disconnected_fan_edges;
 };
 
+/**
+ * Stores a shared-corner edge-loop selection fixture.
+ */
 struct ManifoldCornerLoopFixture {
 	Document document;
 	ElementId top_face = kInvalidElementId;
@@ -52,6 +58,9 @@ struct ManifoldCornerLoopFixture {
 	std::vector<Edge> side_only_edges;
 };
 
+/**
+ * Stores a shared-lip edge-loop fixture with picked-face context.
+ */
 struct SharedLipLoopFixture {
 	Document document;
 	ElementId top_mid_face = kInvalidElementId;
@@ -61,6 +70,9 @@ struct SharedLipLoopFixture {
 	std::vector<Edge> excluded_edges;
 };
 
+/**
+ * Stores an open-box boundary loop fixture with excluded face-perimeter edges.
+ */
 struct OpenBoxBoundaryLoopFixture {
 	Document document;
 	ElementId top_face = kInvalidElementId;

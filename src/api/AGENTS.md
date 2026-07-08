@@ -8,7 +8,8 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # API Package Guide
 
-Read `../../agents/public-api-and-scripting.md` before changing this package.
+Follow root `AGENTS.md` public API, SDK-boundary, scripting, and testing rules before changing this
+package.
 
 ## API Rules
 
@@ -23,5 +24,5 @@ Read `../../agents/public-api-and-scripting.md` before changing this package.
 - Command execution should use typed `QuaderCommand` values or canonical command IDs returned by
   `QuaderCommandsApi` helpers. Do not reintroduce legacy command aliases or registry
   canonicalization for `history.*`, `modeling.action.*`, or `modeling.*` routes.
-- When changing public behavior, update API/behavior guardrail tests and public docs/examples when
-  the user-facing contract changes.
+- When changing public behavior, update API/behavior guardrail tests and public examples when the
+  user-facing contract changes.

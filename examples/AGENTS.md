@@ -8,7 +8,7 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Examples Guide
 
-Read `../agents/docs-public-examples.md` before changing examples.
+Follow root `AGENTS.md` public API and examples rules before changing examples.
 
 ## Example Rules
 

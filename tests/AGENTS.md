@@ -8,7 +8,7 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Tests Guide
 
-Read `../agents/testing-build.md` before changing tests.
+Follow root `AGENTS.md` testing, build, versioning, and guardrail rules before changing tests.
 
 ## Test Rules
 

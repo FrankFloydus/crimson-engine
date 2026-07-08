@@ -8,7 +8,8 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Third-Party Guide
 
-Read `../agents/dependencies.md` before changing this directory.
+Follow root `AGENTS.md` dependency, license, build, and guardrail rules before changing this
+directory.
 
 ## Third-Party Rules
 

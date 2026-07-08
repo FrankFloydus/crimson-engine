@@ -8,9 +8,8 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Editor Package Guide
 
-Read `../../agents/domain-ownership.md` for all editor work. Also read
-`../../agents/modeling-tools.md` for modeling commands/tools and `../../agents/viewport-tools.md`
-for viewport tool behavior.
+Follow root `AGENTS.md` domain ownership, public API, modeling, viewport/input, and testing rules
+before editor work.
 
 ## Editor Rules
 

@@ -31,6 +31,9 @@ struct ComponentPickCase {
 using PointKey = std::array<int, 3>;
 using EdgeKey = std::array<int, 6>;
 
+/**
+ * Records one directed edge use in a triangulated mesh snapshot.
+ */
 struct TriangleEdgeUse {
   PointKey from = {};
   PointKey to = {};

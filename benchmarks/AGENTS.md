@@ -15,4 +15,4 @@ file except through prior written authorization from Francesco Di Blasi.
 - Keep benchmarks out of the default build unless explicitly enabled.
 - Benchmark code should measure a focused domain path and avoid changing product behavior.
 - Prefer deterministic data and clearly named scenarios.
-- If benchmark support needs a dependency, follow `../agents/dependencies.md` first.
+- If benchmark support needs a dependency, follow root `AGENTS.md` dependency rules first.

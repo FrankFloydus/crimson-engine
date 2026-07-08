@@ -90,10 +90,10 @@ bool is_comment_capable_project_file(
 std::vector<std::filesystem::path> project_owned_comment_capable_files() {
   const std::filesystem::path root = source_root();
   const std::vector<std::filesystem::path> roots = {
-      ".clang-tidy", ".gitignore",        "AGENTS.md", "CMakeLists.txt",
-      "agents",      "benchmarks",        "cmake",     "docs",
-      "examples",    "resources/locales", "src",       "tests",
-      "tools",
+      ".clang-tidy",          ".gitignore",        "AGENTS.md",
+      "architecture-review.md", "CMakeLists.txt",    "benchmarks",
+      "cmake",                "examples",          "resources/locales",
+      "src",                  "tests",             "tools",
   };
 
   std::vector<std::filesystem::path> files;
@@ -179,9 +179,11 @@ bool contains_stale_project_cpp_path(std::string source) {
 std::vector<std::filesystem::path> project_owned_recursive_files() {
   const std::filesystem::path root = source_root();
   const std::vector<std::filesystem::path> roots = {
-      ".clang-tidy", ".gitignore", "AGENTS.md", "CMakeLists.txt", "agents",
-      "benchmarks",  "cmake",      "docs",      "examples",       "memory.md",
-      "refactor.md", "resources",  "src",       "tests",          "tools",
+      ".clang-tidy",          ".gitignore", "AGENTS.md",
+      "architecture-review.md", "CMakeLists.txt", "benchmarks",
+      "cmake",                "examples",   "memory.md",
+      "refactor.md",          "resources",  "src",
+      "tests",                "tools",
   };
 
   std::vector<std::filesystem::path> files;
@@ -845,14 +847,14 @@ TEST(BuildGuardrailTests,
   const std::string modeling_c_make =
       read_source_file("cmake/QuaderModeling.cmake");
   const std::string build_files = root_c_make + "\n" + modeling_c_make;
-  const std::string migration_plan =
-      read_source_file("docs/architecture_migration_plan.md");
+  const std::string architecture_review =
+      read_source_file("architecture-review.md");
 
   for (const std::string &target_area :
        {"`core`", "`math`", "`geometry`", "`polygon`", "`assets`", "`document`",
         "`commands`", "`editor_modeling`", "`viewport`", "`render`", "`io_qdr`",
         "`api`", "`ui`", "`app`"}) {
-    expect_contains(migration_plan, target_area);
+    expect_contains(architecture_review, target_area);
   }
 
   const std::string core_sources =
@@ -1074,8 +1076,8 @@ TEST(BuildGuardrailTests,
   EXPECT_LT(openmesh_test, openmesh_end);
 }
 
-TEST(BuildGuardrailTests, AbsorbedModelingDocsNameRealModelingDomainTargets) {
-  const std::string docs = read_source_file("docs/absorbed_modeling/README.md");
+TEST(BuildGuardrailTests, ArchitectureReviewNamesRealModelingDomainTargets) {
+  const std::string review = read_source_file("architecture-review.md");
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string modeling = read_source_file("cmake/QuaderModeling.cmake");
   const std::string build_files = root_c_make + "\n" + modeling;
@@ -1093,17 +1095,16 @@ TEST(BuildGuardrailTests, AbsorbedModelingDocsNameRealModelingDomainTargets) {
       "quader_modeling_domain_metadata_loop_tests",
   };
   for (const std::string &target : documented_targets) {
-    expect_contains(docs, "`" + target + "`");
+    expect_contains(review, "`" + target + "`");
     expect_contains(build_files, target);
   }
 
-  expect_missing(docs, "`qdr_modeling_domain_smoke`");
+  expect_missing(review, "`qdr_modeling_domain_smoke`");
 }
 
 TEST(BuildGuardrailTests, DependencyCommitLiteralsStayInDependencyOwnerFiles) {
   const std::vector<std::filesystem::path> allowed_commit_owner_files = {
       "cmake/QuaderBuildOptions.cmake",
-      "docs/absorbed_modeling/QUADER_NATIVE_SOURCE.txt",
       "thirdparty/THIRD_PARTY_MANIFEST.md",
   };
 
@@ -1173,9 +1174,10 @@ TEST(BuildGuardrailTests,
   }
 }
 
-TEST(BuildGuardrailTests, AbsorbedModelingDocsDoNotDescribeAnSdkBuildBoundary) {
-  const std::vector<std::filesystem::path> docs = {
-      "docs/absorbed_modeling/README.md",
+TEST(BuildGuardrailTests, RootGuidanceDoesNotDescribeOldCopiedSdkBuildBoundary) {
+  const std::vector<std::filesystem::path> guidance = {
+      "AGENTS.md",
+      "architecture-review.md",
       "src/editor/metadata/README.md",
       "src/io/qdr/README.md",
   };
@@ -1187,18 +1189,17 @@ TEST(BuildGuardrailTests, AbsorbedModelingDocsDoNotDescribeAnSdkBuildBoundary) {
       "through CMake `add_subdirectory`",
   };
 
-  for (const std::filesystem::path &doc : docs) {
-    const std::string source = read_source_file(doc);
+  for (const std::filesystem::path &file : guidance) {
+    const std::string source = read_source_file(file);
     for (const std::string &needle : forbidden) {
       EXPECT_EQ(source.find(needle), std::string::npos)
-          << doc.generic_string() << " contains " << needle;
+          << file.generic_string() << " contains " << needle;
     }
   }
 }
 
-TEST(BuildGuardrailTests, PublicDocsDoNotExposeStaleSdkBoundaryLanguage) {
-  const std::vector<std::filesystem::path> docs = {
-      "docs/api-overview.md",
+TEST(BuildGuardrailTests, PublicExamplesDoNotExposeStaleSdkBoundaryLanguage) {
+  const std::vector<std::filesystem::path> public_examples = {
       "examples/lua/README.md",
   };
   const std::vector<std::string> forbidden = {
@@ -1208,11 +1209,11 @@ TEST(BuildGuardrailTests, PublicDocsDoNotExposeStaleSdkBoundaryLanguage) {
       "expose document, SDK",
   };
 
-  for (const std::filesystem::path &doc : docs) {
-    const std::string source = read_source_file(doc);
+  for (const std::filesystem::path &file : public_examples) {
+    const std::string source = read_source_file(file);
     for (const std::string &needle : forbidden) {
       EXPECT_EQ(source.find(needle), std::string::npos)
-          << doc.generic_string() << " contains " << needle;
+          << file.generic_string() << " contains " << needle;
     }
   }
 }
@@ -1307,9 +1308,15 @@ TEST(BuildGuardrailTests, BootSmokeFailsOnLoggedErrorsAndRequiresLogCopy) {
 TEST(BuildGuardrailTests,
      AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogleTestRuns) {
   const std::string tool = read_source_file("tools/affected_check.ps1");
-  const std::string testing_build = read_source_file("agents/testing-build.md");
-  const std::string docs_route = source_slice(
-      tool, "if ($Path -match '^docs/')", "if ($Path -match '^tools/')");
+  const std::string root_agents = read_source_file("AGENTS.md");
+  const std::string instruction_route = source_slice(
+      tool,
+      "if ($Path -match "
+      "'^(AGENTS\\.md|architecture-review\\.md|memory\\.md|refactor\\.md|INPUT_KEYBINDINGS\\.md)$')",
+      "if ($Path -match '^tools/')");
+  const std::string examples_route = source_slice(
+      tool, "if ($Path -match '^examples/')",
+      "if ($Path -match '^src/mesh/geometry/')");
 
   expect_contains(tool, "Before full workflow");
   expect_contains(tool, "After affected workflow");
@@ -1368,39 +1375,43 @@ TEST(BuildGuardrailTests,
   expect_contains(tool, "resources/ibl/");
   expect_contains(tool, "CMakeLists");
   expect_contains(tool, "vcpkg\\.json");
-  expect_contains(docs_route,
+  expect_contains(instruction_route, "AgentInstructionRoutingTests.*");
+  expect_contains(instruction_route,
+                  "BuildGuardrailTests."
+                  "ProjectOwnedCommentCapableFilesCarryProprietaryBanner");
+  expect_contains(examples_route,
                   "ProgrammaticApiGuardrailTests."
                   "PublicExamplesStartFromEditorApiOrScriptSurface");
-  expect_contains(docs_route,
+  expect_contains(examples_route,
                   "ProgrammaticApiGuardrailTests."
-                  "PublicExamplesAndDocsDoNotStartFromInternalOwnerHeaders");
+                  "PublicExamplesDoNotStartFromInternalOwnerHeaders");
 
-  expect_contains(testing_build, "tools/affected_check.ps1");
-  expect_contains(testing_build, "quader_modeling_domain_polygon_loop_tests");
-  expect_contains(testing_build, "-MeasureFull");
-  expect_contains(testing_build, "-ChangedPath");
-  expect_contains(testing_build, "before -> after");
+  expect_contains(root_agents, "tools/affected_check.ps1");
+  expect_contains(root_agents, "quader_modeling_domain_polygon_loop_tests");
+  expect_contains(root_agents, "-MeasureFull");
+  expect_contains(root_agents, "-ChangedPath");
+  expect_contains(root_agents, "before -> after");
 }
 
 TEST(BuildGuardrailTests, TestingDocsExplainPlacementAndSelectionRules) {
-  const std::string testing_build = read_source_file("agents/testing-build.md");
+  const std::string root_agents = read_source_file("AGENTS.md");
   const std::string tests_guide = read_source_file("tests/AGENTS.md");
   const std::string modeling_guide =
       read_source_file("tests/modeling_domain/AGENTS.md");
 
-  expect_contains(testing_build, "## Test Placement");
-  expect_contains(testing_build, "## Test Selection");
-  expect_contains(testing_build, "quader_guardrail_tests");
-  expect_contains(testing_build, "quader_tests");
-  expect_contains(testing_build, "quader_modeling_domain_tests");
-  expect_contains(testing_build, "tests/modeling_domain/operation/"
+  expect_contains(root_agents, "## Test Placement");
+  expect_contains(root_agents, "## Test Selection");
+  expect_contains(root_agents, "quader_guardrail_tests");
+  expect_contains(root_agents, "quader_tests");
+  expect_contains(root_agents, "quader_modeling_domain_tests");
+  expect_contains(root_agents, "tests/modeling_domain/operation/"
                                  "qdr_document_operation_<feature>_tests.cpp");
-  expect_contains(testing_build,
+  expect_contains(root_agents,
                   "qdr_modeling_runtime_operation_<feature>_tests.cpp");
-  expect_contains(testing_build,
+  expect_contains(root_agents,
                   "tools/affected_check.ps1 -PlanOnly -ChangedPath");
-  expect_contains(testing_build, "--gtest_filter=SuiteName.*");
-  expect_contains(testing_build, "-MeasureFull");
+  expect_contains(root_agents, "--gtest_filter=SuiteName.*");
+  expect_contains(root_agents, "-MeasureFull");
 
   expect_contains(tests_guide, "## Placement Rules");
   expect_contains(tests_guide,
@@ -1847,7 +1858,6 @@ TEST(BuildGuardrailTests, AppVersionMetadataUsesRootVersionSource) {
   const std::string version_template =
       read_source_file("src/core/quader_app_version.hpp.in");
   const std::string agents = read_source_file("AGENTS.md");
-  const std::string testing_build = read_source_file("agents/testing-build.md");
 
   expect_contains(
       root_c_make,
@@ -1876,17 +1886,16 @@ TEST(BuildGuardrailTests, AppVersionMetadataUsesRootVersionSource) {
 
   expect_contains(agents, "## Versioning Rule");
   expect_contains(agents, "follow the app version bump rule");
-  expect_contains(testing_build, "## App Versioning");
-  expect_contains(testing_build,
+  expect_contains(agents,
                   "Root `VERSION` is the app version source of truth");
-  expect_contains(testing_build,
+  expect_contains(agents,
                   "`vcpkg.json` `version-string` must mirror it");
-  expect_contains(testing_build, "major/minor fixed at `0.0`");
-  expect_contains(testing_build, "within `1..9999`");
-  expect_contains(testing_build, "before the final handoff `quader` build");
-  expect_contains(testing_build, "Do not");
-  expect_contains(testing_build, "planning, review, inspection-only, "
-                                 "failed/no-change, or explanation-only");
+  expect_contains(agents, "major/minor fixed at `0.0`");
+  expect_contains(agents, "within `1..9999`");
+  expect_contains(agents, "before the final handoff `quader` build");
+  expect_contains(agents, "Do not");
+  expect_contains(agents, "planning, review, inspection-only, "
+                          "failed/no-change, or explanation-only");
 }
 
 TEST(BuildGuardrailTests, EditorAggregateStaysOutOfDocumentApiTarget) {

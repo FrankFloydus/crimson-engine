@@ -8,8 +8,8 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Resources Guide
 
-Read `../agents/ui-localization.md` for locales and `../agents/rendering-overlays.md` for
-materials/overlays.
+Follow root `AGENTS.md` UI, localization, rendering, overlay, dependency, and build/test rules
+before changing resources.
 
 ## Resource Rules
 

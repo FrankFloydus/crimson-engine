@@ -8,9 +8,8 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # UI Package Guide
 
-Read `../../agents/ui-localization.md` before UI edits, and `../../agents/ui-components.md` for
-controls/buttons. If UI changes editor state, also read
-`../../agents/public-api-and-scripting.md`.
+Follow root `AGENTS.md` UI, localization, public API, viewport/input, and testing rules before UI
+edits.
 
 ## UI Rules
 

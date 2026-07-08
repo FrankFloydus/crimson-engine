@@ -8,7 +8,8 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Render Package Guide
 
-Read `../../agents/rendering-overlays.md` before changing this package.
+Follow root `AGENTS.md` rendering, overlay, snapshot, dependency, and testing rules before changing
+this package.
 
 ## Render Rules
 

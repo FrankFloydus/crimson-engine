@@ -8,7 +8,8 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # CMake Guide
 
-Read `../agents/dependencies.md` before changing CMake dependency or build behavior.
+Follow root `AGENTS.md` dependency, SDK-boundary, versioning, and build/test rules before changing
+CMake dependency or build behavior.
 
 ## CMake Rules
 

@@ -470,22 +470,9 @@ function Add-PathPlan {
         return
     }
 
-    if ($Path -match '^(AGENTS\.md|agents/|memory\.md|refactor\.md|INPUT_KEYBINDINGS\.md)$' -or
-            $Path -match '^agents/') {
-        Add-BuildTarget "quader_guardrail_tests" "docs or agent instructions changed"
-        Add-GuardrailTestsFilter "AgentInstructionRoutingTests.*:BuildGuardrailTests.ProjectOwnedCommentCapableFilesCarryProprietaryBanner" "guard docs/instruction routing"
-        if ($Path -eq "agents/testing-build.md") {
-            Add-GuardrailTestsFilter "BuildGuardrailTests.AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogleTestRuns" "guard affected workflow docs"
-        }
-        return
-    }
-
-    if ($Path -match '^docs/') {
-        Add-BuildTarget "quader_guardrail_tests" "docs or agent instructions changed"
-        Add-GuardrailTestsFilter "BuildGuardrailTests.ProjectOwnedCommentCapableFilesCarryProprietaryBanner:ProgrammaticApiGuardrailTests.PublicDocsExamplesManifestClassifiesEveryDocsAndExamplesFile:ProgrammaticApiGuardrailTests.PublicExamplesAndDocsDoNotStartFromInternalOwnerHeaders:ProgrammaticApiGuardrailTests.PublicExamplesStartFromEditorApiOrScriptSurface" "guard docs/instruction routing"
-        if ($Path -eq "docs/absorbed_modeling/README.md") {
-            Add-GuardrailTestsFilter "BuildGuardrailTests.AbsorbedModelingDocsNameRealModelingDomainTargets:BuildGuardrailTests.AbsorbedModelingDocsDoNotDescribeAnSdkBuildBoundary" "guard absorbed modeling docs"
-        }
+    if ($Path -match '^(AGENTS\.md|architecture-review\.md|memory\.md|refactor\.md|INPUT_KEYBINDINGS\.md)$') {
+        Add-BuildTarget "quader_guardrail_tests" "root guidance or architecture changed"
+        Add-GuardrailTestsFilter "AgentInstructionRoutingTests.*:BuildGuardrailTests.ProjectOwnedCommentCapableFilesCarryProprietaryBanner:BuildGuardrailTests.ArchitectureReviewNamesRealModelingDomainTargets:BuildGuardrailTests.TestingDocsExplainPlacementAndSelectionRules:BuildGuardrailTests.AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogleTestRuns" "guard instruction routing"
         return
     }
 
@@ -548,7 +535,7 @@ function Add-PathPlan {
         Add-BuildTarget "quader_example_create_box" "public example changed"
         Add-BuildTarget "quader_example_script_modeling_workflow" "public example changed"
         Add-BuildTarget "quader_guardrail_tests" "public example changed"
-        Add-GuardrailTestsFilter "ProgrammaticApiGuardrailTests.PublicCppExamplesAreCompiledOrMarkedDocumentationOnly:ProgrammaticApiGuardrailTests.PublicCppExamplesUseCallableResultHelpers:ProgrammaticApiGuardrailTests.PublicExamplesAndDocsDoNotStartFromInternalOwnerHeaders:ProgrammaticApiGuardrailTests.PublicExamplesStartFromEditorApiOrScriptSurface" "verify public examples"
+        Add-GuardrailTestsFilter "ProgrammaticApiGuardrailTests.PublicCppExamplesAreCompiledOrMarkedDocumentationOnly:ProgrammaticApiGuardrailTests.PublicCppExamplesUseCallableResultHelpers:ProgrammaticApiGuardrailTests.PublicExamplesDoNotStartFromInternalOwnerHeaders:ProgrammaticApiGuardrailTests.PublicExamplesStartFromEditorApiOrScriptSurface" "verify public examples"
         return
     }
 

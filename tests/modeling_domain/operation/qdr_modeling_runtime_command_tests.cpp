@@ -141,6 +141,9 @@ quader_poly::Ray edge_pick_ray(quader::QVec3 point, quader::QVec3 direction)
 	};
 }
 
+/**
+ * Bundles runtime state for source-wire edge-loop picking tests.
+ */
 struct PickableEdgeLoopFixture {
 	qec::EditorSession session;
 	quader_poly::Ray ray;

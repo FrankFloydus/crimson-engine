@@ -12,7 +12,6 @@
 #include <cctype>
 #include <filesystem>
 #include <set>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -25,20 +24,11 @@ using quader::test::guardrail::files_with_extension;
 using quader::test::guardrail::lines_containing;
 using quader::test::guardrail::normalized_relative;
 using quader::test::guardrail::read_file;
-using quader::test::guardrail::read_source_file;
 using quader::test::guardrail::source_files_under;
 using quader::test::guardrail::source_root;
 using quader::test::guardrail::source_slice;
 using quader::test::guardrail::split_lines;
 using quader::test::guardrail::starts_with;
-
-/**
- * Separates public API-facing docs/examples from internal architecture and provenance docs.
- */
-struct PublicDocsExamplesManifest {
-  std::vector<std::filesystem::path> public_files;
-  std::vector<std::filesystem::path> internal_files;
-};
 
 std::vector<std::filesystem::path>
 doc_and_example_files_under(const std::filesystem::path &root) {
@@ -58,51 +48,15 @@ doc_and_example_files_under(const std::filesystem::path &root) {
   return files;
 }
 
-PublicDocsExamplesManifest public_docs_examples_manifest() {
-  PublicDocsExamplesManifest manifest;
-  const std::string source = read_source_file("docs/public-docs-examples.txt");
-  std::set<std::string> seen;
-
-  for (const std::string &line : split_lines(source)) {
-    if (line.empty() || starts_with(line, "#") || starts_with(line, "//")) {
-      continue;
-    }
-
-    std::istringstream stream(line);
-    std::string visibility;
-    std::string relative;
-    stream >> visibility >> relative;
-    if (visibility.empty() || relative.empty()) {
-      continue;
-    }
-
-    EXPECT_TRUE(visibility == "public" || visibility == "internal") << line;
-    EXPECT_TRUE(seen.insert(relative).second)
-        << "duplicate docs/examples classification: " << relative;
-
-    if (visibility == "public") {
-      manifest.public_files.push_back(source_root() / relative);
-    } else if (visibility == "internal") {
-      manifest.internal_files.push_back(source_root() / relative);
-    }
-  }
-
-  return manifest;
-}
-
-const std::vector<std::string_view> &required_internal_architecture_docs() {
-  static const std::vector<std::string_view> kDocs = {
-      "docs/architecture.md",
-      "docs/code_map.md",
-      "docs/decisions/ADR-template.md",
-      "docs/tasks/TASK-template.md",
-      "docs/agent_mistakes.md",
-  };
-  return kDocs;
-}
-
 std::vector<std::filesystem::path> public_doc_and_example_files() {
-  return public_docs_examples_manifest().public_files;
+  std::vector<std::filesystem::path> files =
+      doc_and_example_files_under(source_root() / "examples");
+  files.erase(std::remove_if(files.begin(), files.end(),
+                             [](const std::filesystem::path &file) {
+                               return file.filename() == "AGENTS.md";
+                             }),
+              files.end());
+  return files;
 }
 
 bool is_internal_api_header(const std::filesystem::path &path) {
@@ -1854,58 +1808,29 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersExposeAppNamedTypes) {
   }
 }
 
-TEST(ProgrammaticApiGuardrailTests, PublicDocsExamplesManifestClassifiesEveryDocsAndExamplesFile) {
-  const PublicDocsExamplesManifest manifest = public_docs_examples_manifest();
-  EXPECT_FALSE(manifest.public_files.empty());
+TEST(ProgrammaticApiGuardrailTests, PublicExamplesAreDiscoverableAndDocsFolderIsRemoved) {
+  const std::vector<std::filesystem::path> files = public_doc_and_example_files();
+  EXPECT_FALSE(files.empty());
+  EXPECT_FALSE(std::filesystem::exists(source_root() / "docs"));
 
-  std::set<std::string> classified;
-  std::set<std::string> internal_classified;
-  for (const std::filesystem::path &file : manifest.public_files) {
+  for (const std::filesystem::path &file : files) {
     const std::string relative = normalized_relative(file);
     EXPECT_TRUE(std::filesystem::exists(file)) << relative;
-    classified.insert(relative);
-  }
-  for (const std::filesystem::path &file : manifest.internal_files) {
-    const std::string relative = normalized_relative(file);
-    EXPECT_TRUE(std::filesystem::exists(file)) << relative;
-    classified.insert(relative);
-    internal_classified.insert(relative);
-  }
-
-  for (std::string_view relative : required_internal_architecture_docs()) {
-    EXPECT_TRUE(std::filesystem::exists(source_root() / relative)) << relative;
-    EXPECT_NE(internal_classified.find(std::string(relative)),
-              internal_classified.end())
-        << relative
-        << " must be listed as internal in docs/public-docs-examples.txt";
-  }
-
-  for (const std::filesystem::path &root :
-       {source_root() / "docs", source_root() / "examples"}) {
-    for (const std::filesystem::path &file :
-         doc_and_example_files_under(root)) {
-      const std::string relative = normalized_relative(file);
-      EXPECT_NE(classified.find(relative), classified.end())
-          << "unclassified docs/examples file: " << relative;
-    }
+    EXPECT_TRUE(starts_with(relative, "examples/")) << relative;
   }
 }
 
-TEST(ProgrammaticApiGuardrailTests, PublicDocsDoNotUseResultAsFluentObjectHandle) {
-  const std::string api_overview =
-      read_file(source_root() / "docs/api-overview.md");
-
-  EXPECT_EQ(
-      api_overview.find(".rename(\"Renamed API Box\")\n            .select()"),
-      std::string::npos);
-  EXPECT_NE(api_overview.find("auto object = editor.object(created.value());"),
-            std::string::npos);
-  EXPECT_NE(api_overview.find("object.rename(\"Renamed API Box\");"),
-            std::string::npos);
-  EXPECT_NE(api_overview.find("object.select();"), std::string::npos);
+TEST(ProgrammaticApiGuardrailTests, PublicExamplesDoNotUseResultAsFluentObjectHandle) {
+  for (const std::filesystem::path &file : public_doc_and_example_files()) {
+    const std::string source = read_file(file);
+    const std::string relative = normalized_relative(file);
+    EXPECT_EQ(source.find(".rename(\"Renamed API Box\")\n            .select()"),
+              std::string::npos)
+        << relative;
+  }
 }
 
-TEST(ProgrammaticApiGuardrailTests, PublicExamplesAndDocsDoNotStartFromInternalOwnerHeaders) {
+TEST(ProgrammaticApiGuardrailTests, PublicExamplesDoNotStartFromInternalOwnerHeaders) {
   for (const std::filesystem::path &file : public_doc_and_example_files()) {
     const std::string source = read_file(file);
     const std::string relative = normalized_relative(file);
@@ -1971,7 +1896,7 @@ TEST(ProgrammaticApiGuardrailTests, PublicCppExamplesUseCallableResultHelpers) {
 }
 
 TEST(ProgrammaticApiGuardrailTests,
-     PublicDocsExamplesUseCanonicalTypedCommandSpelling) {
+     PublicExamplesUseCanonicalTypedCommandSpelling) {
   const std::vector<std::string_view> raw_command_string_patterns = {
       "commands().execute(\"",
       ".shortcut_for(\"",
@@ -2011,7 +1936,7 @@ TEST(ProgrammaticApiGuardrailTests,
                         kRequiredNamespace.size()) == kRequiredNamespace;
         EXPECT_TRUE(fully_qualified)
             << relative
-            << ": public docs/examples should spell typed commands as "
+            << ": public examples should spell typed commands as "
                "quader::quader_command::k...: "
             << line;
       }
@@ -2020,13 +1945,13 @@ TEST(ProgrammaticApiGuardrailTests,
     for (const std::string &line :
          lines_containing(source, raw_command_string_patterns)) {
       ADD_FAILURE() << relative
-                    << ": public docs/examples should use typed command IDs: "
+                    << ": public examples should use typed command IDs: "
                     << line;
     }
     for (const std::string &line :
          lines_containing(source, legacy_command_route_patterns)) {
       ADD_FAILURE() << relative
-                    << ": public docs/examples should not advertise legacy "
+                    << ": public examples should not advertise compatibility "
                        "command alias routes: "
                     << line;
     }

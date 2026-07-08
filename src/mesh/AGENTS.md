@@ -8,7 +8,7 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Mesh Package Guide
 
-Read `../../agents/domain-ownership.md` and `../../agents/modeling-tools.md` before changing
+Follow root `AGENTS.md` domain ownership, SDK-boundary, modeling, and testing rules before changing
 polygon-backed behavior.
 
 ## Mesh Rules
