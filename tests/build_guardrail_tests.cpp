@@ -66,6 +66,7 @@ bool is_comment_capable_project_file(
     const std::filesystem::path &relative_path) {
   const std::string path = relative_path.generic_string();
   if (starts_with(path, "thirdparty/") ||
+      starts_with(path, "src/sdk/core/modeling/internal/thirdparty/") ||
       starts_with(path, "vcpkg_installed/")) {
     return false;
   }
@@ -416,8 +417,6 @@ third_party_license_expectations() {
       {"", "OpenMesh", "licenses/openmesh-BSD-3-Clause.txt", false},
       {"", "earcut.hpp", "licenses/earcut-hpp-ISC.txt", false},
       {"", "nlohmann/json", "licenses/nlohmann-json-MIT.txt", false},
-      {"", "Geometric Tools Engine Mathematics",
-       "licenses/geometrictools-BSL-1.0.txt", false},
       {"entt", "EnTT", "licenses/entt-MIT.txt", true},
       {"glm", "OpenGL Mathematics (GLM)", "licenses/glm-MIT.txt", true},
       {"sdl3", "SDL3", "licenses/sdl3-Zlib-MIT-Apache-2.0.txt", true},
@@ -775,16 +774,14 @@ TEST(BuildGuardrailTests, BuildOptionsAndDependencyPinsHaveSingleCMakeOwner) {
   expect_missing(pch_helper, "gtest/");
 
   expect_contains(options, "set(_QUADER_OPENMESH_COMMIT");
-  expect_contains(options, "set(_QUADER_GEOMETRIC_TOOLS_COMMIT");
-  expect_contains(options, "set(QUADER_GEOMETRIC_TOOLS_VENDOR_DIR");
   expect_contains(options, "function(quader_resolve_dependency_source");
   expect_contains(options, "ENV{${env_var}}");
   expect_contains(options, "Desktop/_QUADER_DEV/_deps/${dev_dep_dir}");
   expect_missing(root_c_make, "set(_QUADER_OPENMESH_COMMIT");
-  expect_missing(root_c_make, "set(_QUADER_GEOMETRIC_TOOLS_COMMIT");
+  expect_missing(root_c_make, "GEOMETRIC_TOOLS");
+  expect_missing(options, "GEOMETRIC_TOOLS");
   expect_missing(modeling, "set(QUADER_OPENMESH_COMMIT");
-  expect_missing(modeling, "gte-8.2-");
-  expect_contains(modeling, "QUADER_GEOMETRIC_TOOLS_VENDOR_DIR");
+  expect_missing(modeling, "GEOMETRIC_TOOLS");
   EXPECT_EQ(count_occurrences(root_c_make + "\n" + modeling,
                               "Desktop/_QUADER_DEV/_deps/openmesh-"),
             0U);

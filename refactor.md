@@ -32,8 +32,8 @@ when it is moved to the reclassified section with concrete code evidence.
 
 ### API, Commands, And Docs
 
-- [x] A01 - `docs/api-overview.md` publishes a broken fluent example.
-  - Evidence: the fluent snippet chains `editor.object(...).rename(...).select()`,
+- [x] A01 - `docs/api-overview.md` publishes a broken chained example.
+  - Evidence: the chained snippet uses `editor.object(...).rename(...).select()`,
     but `QuaderObjectHandle::rename` returns `QuaderApiVoidResult`.
   - Risk: public documentation teaches a compile-time-invalid workflow.
   - Owner/source of truth: `QuaderObjectHandle` result contracts and public docs.

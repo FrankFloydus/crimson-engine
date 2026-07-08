@@ -94,7 +94,7 @@ OperationResult MergeVerticesToActiveOperation::apply(Document& document, Select
     prune_unused_vertices(document);
 
     selection.clear();
-    selection.mode = SelectionMode::vertex;
+    selection.mode = SelectionMode::Vertex;
     selection.vertices.push_back(active_vertex_id);
     activate_vertex_selection(selection, active_vertex_id);
 

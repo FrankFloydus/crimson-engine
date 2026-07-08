@@ -6,6 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include <quader/modeling/ids.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
 namespace quader::modeling {
 
 /**
@@ -41,6 +47,79 @@ struct Transform3 {
 struct Ray {
   Vec3 origin{};
   Vec3 direction{0.0F, 0.0F, 1.0F};
+};
+
+/**
+ * Identifies which component family a public selection value addresses.
+ */
+enum class SelectionKind {
+  Object,
+  Vertex,
+  Edge,
+  Face,
+};
+
+/**
+ * Describes how a public selection value should be committed to session state.
+ */
+enum class SelectionEdit {
+  Replace,
+  Add,
+  Remove,
+  Toggle,
+};
+
+/**
+ * Identifies how a knife point resolves against polygon topology.
+ */
+enum class KnifeTargetKind {
+  ExistingVertex,
+  ExistingEdge,
+  InsertedVertex,
+  FacePoint,
+};
+
+/**
+ * Stores a resolved SDK knife point target without exposing polygon internals.
+ */
+struct KnifeTarget {
+  KnifeTargetKind kind = KnifeTargetKind::ExistingVertex;
+  VertexId vertex{};
+  EdgeKey edge{};
+  float edge_factor = 0.5F;
+  FaceId face{};
+  Vec3 position{};
+};
+
+/**
+ * Connects two knife point indices in a stroke.
+ */
+struct KnifeStrokeSegment {
+  std::uint32_t first_point = 0;
+  std::uint32_t second_point = 0;
+};
+
+/**
+ * Stores a typed union of public selection IDs.
+ */
+struct SelectionUnion {
+  SelectionKind kind = SelectionKind::Object;
+  ObjectId object{};
+  std::vector<ObjectId> objects;
+  std::vector<VertexId> vertices;
+  std::vector<EdgeKey> edges;
+  std::vector<FaceId> faces;
+};
+
+/**
+ * Summarizes session selection state without exposing owner internals.
+ */
+struct SelectionSummary {
+  std::vector<ObjectId> objects;
+  std::size_t vertex_count = 0;
+  std::size_t edge_count = 0;
+  std::size_t face_count = 0;
+  std::uint64_t selection_revision = 0;
 };
 
 } // namespace quader::modeling

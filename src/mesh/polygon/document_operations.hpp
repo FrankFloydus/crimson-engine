@@ -147,9 +147,7 @@ struct ExtractFacesResult {
 };
 
 void ensure_face_uvs(Document &document);
-void regenerate_face_uvs(Document &document);
 void clear_face_uvs(Document &document);
-void shift_face_uvs_for_translation(Document &document, quader::QVec3 delta);
 [[nodiscard]] OperationResult
 assign_selected_face_material_slot(Document &document,
                                    const Selection &selection,

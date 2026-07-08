@@ -90,15 +90,6 @@ if(QUADER_USE_OPENMESH_TOPOLOGY)
     endif()
 endif()
 
-if(NOT EXISTS "${QUADER_APP_THIRDPARTY_DIR}/licenses/geometrictools-BSL-1.0.txt")
-    message(FATAL_ERROR "Missing Geometric Tools license evidence: thirdparty/licenses/geometrictools-BSL-1.0.txt")
-endif()
-
-add_library(quader_modeling_gte_math INTERFACE)
-target_include_directories(quader_modeling_gte_math
-    INTERFACE
-        "${QUADER_APP_THIRDPARTY_DIR}/${QUADER_GEOMETRIC_TOOLS_VENDOR_DIR}")
-
 add_library(quader_geometry STATIC
     src/mesh/geometry/geometry.cpp)
 
@@ -109,7 +100,6 @@ target_include_directories(quader_geometry
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     PRIVATE
         "${QUADER_APP_THIRDPARTY_DIR}")
-target_link_libraries(quader_geometry PRIVATE quader_modeling_gte_math)
 
 file(GLOB QUADER_POLYGON_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh/polygon/*.cpp"
@@ -253,7 +243,19 @@ target_link_libraries(quader_qdr_runtime_io
 
 set(QUADER_MODELING_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src/sdk/core/modeling")
 set(QUADER_MODELING_SDK_INCLUDE_DIR "${QUADER_MODELING_SDK_ROOT}/include")
+set(QUADER_MODELING_SDK_INTERNAL_DIR "${QUADER_MODELING_SDK_ROOT}/internal")
+set(QUADER_MODELING_SDK_THIRDPARTY_DIR "${QUADER_MODELING_SDK_INTERNAL_DIR}/thirdparty")
 set(QUADER_MODELING_SDK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/modeling-sdk")
+
+file(GLOB QUADER_MODELING_SDK_INTERNAL_POLYGON_SOURCES CONFIGURE_DEPENDS
+    "${QUADER_MODELING_SDK_INTERNAL_DIR}/mesh/polygon/*.cpp"
+    "${QUADER_MODELING_SDK_INTERNAL_DIR}/mesh/polygon/operations/*.cpp")
+
+set(QUADER_MODELING_SDK_INTERNAL_QDR_SOURCES
+    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_atomic_write.cpp"
+    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_polygon_document_codec.cpp"
+    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_root.cpp"
+    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_document.cpp")
 
 function(quader_configure_modeling_sdk_target target)
     quader_enable_common_pch(${target})
@@ -263,39 +265,44 @@ function(quader_configure_modeling_sdk_target target)
             "$<BUILD_INTERFACE:${QUADER_MODELING_SDK_INCLUDE_DIR}>"
             "$<INSTALL_INTERFACE:include>"
         PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}/src")
+            "${QUADER_MODELING_SDK_INTERNAL_DIR}"
+            "${QUADER_MODELING_SDK_THIRDPARTY_DIR}")
 endfunction()
 
 add_library(quader_modeling_sdk_geometry STATIC
-    src/sdk/core/modeling/src/geometry.cpp)
+    src/sdk/core/modeling/src/geometry.cpp
+    src/sdk/core/modeling/internal/mesh/geometry/geometry.cpp)
 add_library(quader::modeling_sdk_geometry ALIAS quader_modeling_sdk_geometry)
 quader_configure_modeling_sdk_target(quader_modeling_sdk_geometry)
-target_link_libraries(quader_modeling_sdk_geometry
-    PRIVATE
-        "$<BUILD_INTERFACE:quader_geometry>")
 
 add_library(quader_modeling_sdk_polygon STATIC
     src/sdk/core/modeling/src/obj_mesh_view.cpp
-    src/sdk/core/modeling/src/polygon_document.cpp)
+    src/sdk/core/modeling/src/polygon_document.cpp
+    ${QUADER_MODELING_SDK_INTERNAL_POLYGON_SOURCES})
 add_library(quader::modeling_sdk_polygon ALIAS quader_modeling_sdk_polygon)
 quader_configure_modeling_sdk_target(quader_modeling_sdk_polygon)
 target_link_libraries(quader_modeling_sdk_polygon
     PUBLIC
-        quader_modeling_sdk_geometry
-    PRIVATE
-        "$<BUILD_INTERFACE:quader_modeling_polygon>")
+        quader_modeling_sdk_geometry)
 
 add_library(quader_modeling_sdk_qdr_document STATIC
-    src/sdk/core/modeling/src/qdr_document.cpp)
+    src/sdk/core/modeling/src/qdr_document.cpp
+    ${QUADER_MODELING_SDK_INTERNAL_QDR_SOURCES})
 add_library(quader::modeling_sdk_qdr_document ALIAS quader_modeling_sdk_qdr_document)
 quader_configure_modeling_sdk_target(quader_modeling_sdk_qdr_document)
 target_link_libraries(quader_modeling_sdk_qdr_document
     PUBLIC
-        quader_modeling_sdk_polygon
-    PRIVATE
-        "$<BUILD_INTERFACE:quader_qdr_document_io>")
+        quader_modeling_sdk_polygon)
 
 add_library(quader_modeling_sdk_runtime STATIC
+    src/sdk/core/modeling/src/batch_api.cpp
+    src/sdk/core/modeling/src/mesh_handle.cpp
+    src/sdk/core/modeling/src/mesh_sync_io_api.cpp
+    src/sdk/core/modeling/src/public_api.cpp
+    src/sdk/core/modeling/src/operations_api.cpp
+    src/sdk/core/modeling/src/preview_api.cpp
+    src/sdk/core/modeling/src/selection.cpp
+    src/sdk/core/modeling/src/tools_api.cpp
     src/sdk/core/modeling/src/session.cpp)
 add_library(quader::modeling_sdk_runtime ALIAS quader_modeling_sdk_runtime)
 quader_configure_modeling_sdk_target(quader_modeling_sdk_runtime)
@@ -323,7 +330,7 @@ write_basic_package_version_file(
 set(QUADER_MODELING_SDK_LICENSE_BUNDLE
     "${QUADER_MODELING_SDK_GENERATED_DIR}/QuaderModelingSdkThirdPartyLicenses.txt")
 file(GLOB QUADER_MODELING_SDK_LICENSE_INPUTS CONFIGURE_DEPENDS
-    "${QUADER_APP_THIRDPARTY_DIR}/licenses/*.txt")
+    "${QUADER_MODELING_SDK_THIRDPARTY_DIR}/licenses/*.txt")
 list(SORT QUADER_MODELING_SDK_LICENSE_INPUTS)
 file(WRITE "${QUADER_MODELING_SDK_LICENSE_BUNDLE}"
     "Quader Modeling SDK third-party license bundle\n")

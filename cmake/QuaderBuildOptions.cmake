@@ -15,10 +15,7 @@ option(QUADER_BUILD_PERFORMANCE_BENCHMARKS "Build opt-in Quader performance base
 option(QUADER_ENABLE_PCH "Enable Quader target-local precompiled headers for faster incremental C++ builds." ON)
 
 set(_QUADER_OPENMESH_COMMIT "5f016723f9f183770cffe5787a6f9f628e2914d8")
-set(_QUADER_GEOMETRIC_TOOLS_VERSION "8.2")
-set(_QUADER_GEOMETRIC_TOOLS_COMMIT "e095b84018766274f1546a7baa12c257fd18f7d8")
 set(QUADER_OPENMESH_COMMIT "${_QUADER_OPENMESH_COMMIT}")
-set(QUADER_GEOMETRIC_TOOLS_VENDOR_DIR "geometrictools/gte-${_QUADER_GEOMETRIC_TOOLS_VERSION}-${_QUADER_GEOMETRIC_TOOLS_COMMIT}/GTE")
 
 function(quader_resolve_dependency_source out_var env_var thirdparty_subdir dev_dep_dir marker_file)
     set(_quader_dependency_source_dir "")

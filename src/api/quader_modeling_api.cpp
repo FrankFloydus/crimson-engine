@@ -10,6 +10,8 @@
 #include "api/quader_api_mutation_runner.hpp"
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
+#include "api/quader_query_api.hpp"
+#include "api/quader_selection_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/commands/modeling/commit_box_preview_command.hpp"
@@ -25,6 +27,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <memory>
+#include <span>
 #include <utility>
 
 namespace quader {
@@ -74,6 +77,110 @@ QuaderTransform3 scale_transform(QVec3 scale) {
   };
 }
 
+QuaderApiVoidResult invalid_api_status(QuaderApiSession session,
+                                       std::string message) {
+  return quader_api_failure_status(project_session(session),
+                                   std::move(message));
+}
+
+QuaderApiVoidResult invalid_api_status(
+    const std::optional<QuaderApiSession> &session, std::string message) {
+  if (session.has_value() && session->valid()) {
+    return invalid_api_status(*session, std::move(message));
+  }
+  QuaderApiVoidResult result;
+  result.ok = false;
+  result.changed = false;
+  result.message = std::move(message);
+  return result;
+}
+
+QuaderPreviewSettings preview_settings(QuaderEdgeBevelArgs args) {
+  QuaderPreviewSettings settings;
+  settings.interaction.edge_bevel_width = args.width;
+  settings.interaction.edge_bevel_profile = args.profile;
+  settings.interaction.edge_bevel_segments = args.segments;
+  return settings;
+}
+
+QuaderPreviewSettings preview_settings(QuaderThickenArgs args) {
+  QuaderPreviewSettings settings;
+  settings.interaction.thicken_thickness = args.thickness;
+  settings.interaction.thicken_from_center = args.from_center;
+  return settings;
+}
+
+QuaderPreviewSettings preview_settings(QuaderSliceQuadArgs args) {
+  QuaderPreviewSettings settings;
+  settings.interaction.slice_quad_x_slices = args.x_slices;
+  settings.interaction.slice_quad_y_slices = args.y_slices;
+  return settings;
+}
+
+QuaderPreviewSettings preview_settings(QuaderMergeByDistanceArgs args) {
+  QuaderPreviewSettings settings;
+  settings.interaction.merge_by_distance_tolerance = args.tolerance;
+  return settings;
+}
+
+QuaderPreviewSettings bridge_preview_settings(int steps) {
+  QuaderPreviewSettings settings;
+  settings.interaction.bridge_steps = steps;
+  return settings;
+}
+
+std::vector<QuaderElementId>
+element_vector(std::span<const QuaderElementId> elements) {
+  return {elements.begin(), elements.end()};
+}
+
+std::vector<QuaderEdgeRef> edge_vector(std::span<const QuaderEdgeRef> edges) {
+  return {edges.begin(), edges.end()};
+}
+
+std::vector<std::pair<QuaderElementId, QuaderElementId>>
+edge_pairs(std::span<const QuaderEdgeRef> edges) {
+  std::vector<std::pair<QuaderElementId, QuaderElementId>> result;
+  result.reserve(edges.size());
+  for (const QuaderEdgeRef edge : edges) {
+    result.emplace_back(edge.a, edge.b);
+  }
+  return result;
+}
+
+QuaderComponentRef active_component(QuaderModelingObjectRef object,
+                                    QuaderModelingSelection::Kind kind,
+                                    std::span<const QuaderElementId> elements,
+                                    std::span<const QuaderEdgeRef> edges) {
+  QuaderComponentRef active;
+  active.object = object;
+  switch (kind) {
+  case QuaderModelingSelection::Kind::Vertex:
+    if (!elements.empty()) {
+      active.kind = QuaderComponentKind::Vertex;
+      active.vertex = elements.back();
+    }
+    break;
+  case QuaderModelingSelection::Kind::Edge:
+    if (!edges.empty()) {
+      active.kind = QuaderComponentKind::Edge;
+      active.edge_a = edges.back().a;
+      active.edge_b = edges.back().b;
+    }
+    break;
+  case QuaderModelingSelection::Kind::Face:
+    if (!elements.empty()) {
+      active.kind = QuaderComponentKind::Face;
+      active.face = elements.back();
+    }
+    break;
+  case QuaderModelingSelection::Kind::Object:
+    active.kind = QuaderComponentKind::Object;
+    break;
+  }
+  return active;
+}
+
 bool entity_selection_owns_transforms(ProjectSession &session) {
   const ModelingSelectionSummary summary = session.selection().summary();
   return summary.has_selection &&
@@ -95,6 +202,619 @@ QMat4 world_transform_delta_from_api_transform(
 }
 
 } // namespace
+
+QuaderPreviewHandle::QuaderPreviewHandle(
+    std::optional<QuaderApiSession> session, QuaderApiMutationRunner &mutations,
+    std::string default_label, QuaderApiVoidResult begin_status)
+    : session_(std::move(session)), mutations_(&mutations),
+      default_label_(std::move(default_label)),
+      begin_status_(std::move(begin_status)) {}
+
+bool QuaderPreviewHandle::valid() const {
+  return session_.has_value() && session_->valid() && mutations_ != nullptr &&
+         begin_status_.ok();
+}
+
+const QuaderApiVoidResult &QuaderPreviewHandle::begin_result() const {
+  return begin_status_;
+}
+
+QuaderApiVoidResult
+QuaderPreviewHandle::update(const QuaderPreviewSettings &settings) {
+  if (!valid()) {
+    return begin_status_;
+  }
+  return QuaderModelingApi(*session_, *mutations_).update_preview(settings);
+}
+
+QuaderApiVoidResult QuaderPreviewHandle::update(QuaderEdgeBevelArgs args) {
+  return update(preview_settings(args));
+}
+
+QuaderApiVoidResult QuaderPreviewHandle::update(QuaderThickenArgs args) {
+  return update(preview_settings(args));
+}
+
+QuaderApiVoidResult QuaderPreviewHandle::update(QuaderSliceQuadArgs args) {
+  return update(preview_settings(args));
+}
+
+QuaderApiVoidResult
+QuaderPreviewHandle::update(QuaderMergeByDistanceArgs args) {
+  return update(preview_settings(args));
+}
+
+QuaderApiVoidResult QuaderPreviewHandle::commit(std::string label) {
+  if (!valid()) {
+    return begin_status_;
+  }
+  if (label.empty()) {
+    label = default_label_;
+  }
+  return QuaderModelingApi(*session_, *mutations_).commit_preview(
+      std::move(label));
+}
+
+QuaderApiVoidResult QuaderPreviewHandle::cancel() {
+  if (!valid()) {
+    return begin_status_;
+  }
+  return QuaderModelingApi(*session_, *mutations_).cancel_preview();
+}
+
+QuaderModelingSelection::QuaderModelingSelection(
+    std::optional<QuaderApiSession> session, QuaderApiMutationRunner &mutations,
+    QuaderModelingObjectRef object, Kind kind)
+    : session_(std::move(session)), mutations_(&mutations),
+      object_(std::move(object)), kind_(kind) {}
+
+QuaderModelingObjectRef QuaderModelingSelection::object() const {
+  return object_;
+}
+
+bool QuaderModelingSelection::valid_context() const {
+  return session_.has_value() && session_->valid() && mutations_ != nullptr &&
+         object_.modeling_object_id != kInvalidQuaderModelingObjectId &&
+         object_.entity != kInvalidEntityId;
+}
+
+bool QuaderModelingSelection::empty() const { return count() == 0U; }
+
+std::size_t QuaderModelingSelection::count() const {
+  switch (kind_) {
+  case Kind::Object:
+    return valid_context() ? 1U : 0U;
+  case Kind::Edge:
+    return edges_.size();
+  case Kind::Vertex:
+  case Kind::Face:
+    return elements_.size();
+  }
+  return 0U;
+}
+
+QuaderApiVoidResult
+QuaderModelingSelection::apply(QuaderSelectionEdit edit) const {
+  if (!valid_context()) {
+    return invalid_api_status(session_, "Invalid modeling selection.");
+  }
+  QuaderSelectionApi selection(*session_, *mutations_);
+  if (kind_ == Kind::Object) {
+    return selection.select_object(object_, edit);
+  }
+
+  QuaderComponentSelectionArgs args;
+  args.object = object_;
+  args.edit = edit;
+  args.active = active_component(object_, kind_, elements_, edges_);
+  switch (kind_) {
+  case Kind::Vertex:
+    args.kind = QuaderComponentKind::Vertex;
+    args.vertices = elements_;
+    break;
+  case Kind::Edge:
+    args.kind = QuaderComponentKind::Edge;
+    args.edges = edge_pairs(edges_);
+    break;
+  case Kind::Face:
+    args.kind = QuaderComponentKind::Face;
+    args.faces = elements_;
+    break;
+  case Kind::Object:
+    break;
+  }
+  return selection.select_components(args);
+}
+
+QuaderApiVoidResult QuaderModelingSelection::replace() const {
+  return apply(QuaderSelectionEdit::Replace);
+}
+
+QuaderApiVoidResult QuaderModelingSelection::add() const {
+  return apply(QuaderSelectionEdit::Add);
+}
+
+QuaderApiVoidResult QuaderModelingSelection::remove() const {
+  return apply(QuaderSelectionEdit::Remove);
+}
+
+QuaderApiVoidResult QuaderModelingSelection::toggle() const {
+  return apply(QuaderSelectionEdit::Toggle);
+}
+
+QuaderApiVoidResult QuaderModelingSelection::execute_after_replace(
+    std::string_view action_id) const {
+  const QuaderApiVoidResult selected = replace();
+  if (!selected.ok()) {
+    return selected;
+  }
+  return QuaderModelingApi(*session_, *mutations_).execute_tool(action_id);
+}
+
+QuaderPreviewHandle QuaderModelingSelection::begin_preview_after_replace(
+    std::string_view action_id, const QuaderPreviewSettings &settings,
+    std::string default_label) const {
+  QuaderApiVoidResult selected = replace();
+  if (!selected.ok()) {
+    return QuaderPreviewHandle(session_, *mutations_, std::move(default_label),
+                               std::move(selected));
+  }
+
+  QuaderModelingApi modeling(*session_, *mutations_);
+  QuaderApiVoidResult began = modeling.begin_preview(action_id);
+  if (began.ok()) {
+    QuaderApiVoidResult updated = modeling.update_preview(settings);
+    if (!updated.ok()) {
+      began = std::move(updated);
+    }
+  }
+  return QuaderPreviewHandle(session_, *mutations_, std::move(default_label),
+                             std::move(began));
+}
+
+QuaderObjectSelection::QuaderObjectSelection(
+    std::optional<QuaderApiSession> session, QuaderApiMutationRunner &mutations,
+    QuaderModelingObjectRef object)
+    : QuaderModelingSelection(session, mutations, std::move(object),
+                              Kind::Object) {}
+
+QuaderMeshHandle QuaderObjectSelection::mesh() const {
+  return mutations_ == nullptr ? QuaderMeshHandle{}
+                               : QuaderMeshHandle(session_, *mutations_,
+                                                  object_);
+}
+
+QuaderApiResult<QuaderMeshHandle> QuaderObjectSelection::duplicate() const {
+  QuaderApiVoidResult selected = replace();
+  if (!selected.ok()) {
+    return quader_api_result_from_status<QuaderMeshHandle>(
+        selected, QuaderMeshHandle{});
+  }
+  QuaderApiVoidResult duplicated =
+      QuaderModelingApi(*session_, *mutations_).duplicate_meshes();
+  QuaderMeshHandle handle(session_, *mutations_, {});
+  if (duplicated.ok() && duplicated.changed()) {
+    const QuaderSelectionSummary summary =
+        QuaderQueryApi(*session_, *mutations_).selection();
+    if (const std::optional<QuaderModelingObjectRef> duplicate =
+            QuaderQueryApi(*session_, *mutations_)
+                .modeling_object_for_id(summary.active_object_id)) {
+      handle = QuaderMeshHandle(session_, *mutations_, *duplicate);
+    }
+  }
+  return quader_api_result_from_status<QuaderMeshHandle>(duplicated, handle);
+}
+
+QuaderApiVoidResult QuaderObjectSelection::combine_selected() const {
+  if (!valid_context()) {
+    return invalid_api_status(session_, "Invalid modeling selection.");
+  }
+  return QuaderModelingApi(*session_, *mutations_).combine_meshes();
+}
+
+QuaderVertexSelection::QuaderVertexSelection(
+    std::optional<QuaderApiSession> session, QuaderApiMutationRunner &mutations,
+    QuaderModelingObjectRef object, std::vector<QuaderElementId> vertices)
+    : QuaderModelingSelection(session, mutations, std::move(object),
+                              Kind::Vertex) {
+  elements_ = std::move(vertices);
+}
+
+std::span<const QuaderElementId> QuaderVertexSelection::vertices() const {
+  return {elements_.data(), elements_.size()};
+}
+
+QuaderApiVoidResult QuaderVertexSelection::snap_to_active() const {
+  return execute_after_replace("snap_vertices_to_active");
+}
+
+QuaderApiVoidResult QuaderVertexSelection::merge_to_active() const {
+  return execute_after_replace("merge_vertices_to_active");
+}
+
+QuaderApiVoidResult QuaderVertexSelection::merge_to_center() const {
+  return execute_after_replace("merge_vertices_to_center");
+}
+
+QuaderPreviewHandle
+QuaderVertexSelection::merge_by_distance(QuaderMergeByDistanceArgs args) const {
+  return begin_preview_after_replace("merge_by_distance",
+                                     preview_settings(args),
+                                     "Merge By Distance");
+}
+
+QuaderApiVoidResult
+QuaderVertexSelection::remove_doubles(QuaderMergeByDistanceArgs args) const {
+  QuaderPreviewHandle preview = merge_by_distance(args);
+  return preview.commit("Remove Doubles");
+}
+
+QuaderApiVoidResult QuaderVertexSelection::bevel() const {
+  return execute_after_replace("bevel_vertices");
+}
+
+QuaderApiVoidResult QuaderVertexSelection::connect() const {
+  return execute_after_replace("connect_vertices");
+}
+
+QuaderApiVoidResult QuaderVertexSelection::dissolve() const {
+  return execute_after_replace("dissolve_vertices");
+}
+
+QuaderApiVoidResult QuaderVertexSelection::radial_align() const {
+  return execute_after_replace("radial_align_vertices");
+}
+
+QuaderEdgeSelection::QuaderEdgeSelection(
+    std::optional<QuaderApiSession> session, QuaderApiMutationRunner &mutations,
+    QuaderModelingObjectRef object, std::vector<QuaderEdgeRef> edges)
+    : QuaderModelingSelection(session, mutations, std::move(object),
+                              Kind::Edge) {
+  edges_ = std::move(edges);
+}
+
+std::span<const QuaderEdgeRef> QuaderEdgeSelection::edges() const {
+  return {edges_.data(), edges_.size()};
+}
+
+QuaderApiVoidResult QuaderEdgeSelection::snap_to_active() const {
+  return execute_after_replace("snap_edges_to_active");
+}
+
+QuaderApiVoidResult QuaderEdgeSelection::connect() const {
+  return execute_after_replace("connect_edges");
+}
+
+QuaderApiVoidResult QuaderEdgeSelection::split() const {
+  return execute_after_replace("split_edges");
+}
+
+QuaderApiVoidResult QuaderEdgeSelection::harden_normals() const {
+  return execute_after_replace("harden_edge_normals");
+}
+
+QuaderApiVoidResult QuaderEdgeSelection::soften_normals() const {
+  return execute_after_replace("soften_edge_normals");
+}
+
+QuaderPreviewHandle QuaderEdgeSelection::bevel(QuaderEdgeBevelArgs args) const {
+  return begin_preview_after_replace("bevel_edges", preview_settings(args),
+                                     "Bevel Edges");
+}
+
+QuaderApiVoidResult QuaderEdgeSelection::bridge() const {
+  return execute_after_replace("bridge_edges");
+}
+
+QuaderPreviewHandle QuaderEdgeSelection::interpolated_bridge(int steps) const {
+  return begin_preview_after_replace("interpolated_bridge_edges",
+                                     bridge_preview_settings(steps),
+                                     "Interpolated Bridge Edges");
+}
+
+QuaderApiVoidResult QuaderEdgeSelection::dissolve() const {
+  return execute_after_replace("dissolve_edges");
+}
+
+QuaderApiVoidResult QuaderEdgeSelection::merge() const {
+  return execute_after_replace("merge_edges");
+}
+
+QuaderApiVoidResult QuaderEdgeSelection::collapse() const {
+  return execute_after_replace("collapse_edges");
+}
+
+QuaderApiVoidResult QuaderEdgeSelection::fill_hole() const {
+  return execute_after_replace("fill_hole");
+}
+
+QuaderApiVoidResult QuaderEdgeSelection::radial_align() const {
+  return execute_after_replace("radial_align_edges");
+}
+
+QuaderFaceSelection::QuaderFaceSelection(
+    std::optional<QuaderApiSession> session, QuaderApiMutationRunner &mutations,
+    QuaderModelingObjectRef object, std::vector<QuaderElementId> faces)
+    : QuaderModelingSelection(session, mutations, std::move(object),
+                              Kind::Face) {
+  elements_ = std::move(faces);
+}
+
+std::span<const QuaderElementId> QuaderFaceSelection::faces() const {
+  return {elements_.data(), elements_.size()};
+}
+
+QuaderApiVoidResult QuaderFaceSelection::bridge() const {
+  return execute_after_replace("bridge_faces");
+}
+
+QuaderPreviewHandle QuaderFaceSelection::interpolated_bridge(int steps) const {
+  return begin_preview_after_replace("interpolated_bridge_faces",
+                                     bridge_preview_settings(steps),
+                                     "Interpolated Bridge Faces");
+}
+
+QuaderApiVoidResult QuaderFaceSelection::invert() const {
+  return execute_after_replace("invert_faces");
+}
+
+QuaderApiVoidResult QuaderFaceSelection::combine() const {
+  return execute_after_replace("combine_faces");
+}
+
+QuaderApiVoidResult QuaderFaceSelection::collapse() const {
+  return execute_after_replace("collapse_faces");
+}
+
+QuaderApiVoidResult QuaderFaceSelection::radial_align() const {
+  return execute_after_replace("radial_align_faces");
+}
+
+QuaderPreviewHandle QuaderFaceSelection::slice(QuaderSliceQuadArgs args) const {
+  return begin_preview_after_replace("slice_quad", preview_settings(args),
+                                     "Slice Quad");
+}
+
+QuaderPreviewHandle
+QuaderFaceSelection::thicken(QuaderThickenArgs args) const {
+  return begin_preview_after_replace("thicken_faces", preview_settings(args),
+                                     "Thicken Faces");
+}
+
+QuaderApiVoidResult QuaderFaceSelection::extract() const {
+  return execute_after_replace("extract_faces");
+}
+
+QuaderApiVoidResult QuaderFaceSelection::detach() const {
+  return execute_after_replace("detach_faces");
+}
+
+QuaderApiVoidResult QuaderFaceSelection::shade_smooth() const {
+  return execute_after_replace("shade_faces_smooth");
+}
+
+QuaderApiVoidResult QuaderFaceSelection::shade_flat() const {
+  return execute_after_replace("shade_faces_flat");
+}
+
+QuaderApiVoidResult
+QuaderFaceSelection::assign_material_slot(std::uint32_t material_slot) const {
+  const QuaderApiVoidResult selected = replace();
+  if (!selected.ok()) {
+    return selected;
+  }
+  return QuaderModelingApi(*session_, *mutations_)
+      .assign_material_slot_to_selection(material_slot);
+}
+
+QuaderMeshVertices::QuaderMeshVertices(
+    std::optional<QuaderApiSession> session, QuaderApiMutationRunner &mutations,
+    QuaderModelingObjectRef object)
+    : session_(std::move(session)), mutations_(&mutations),
+      object_(std::move(object)) {}
+
+QuaderVertexSelection
+QuaderMeshVertices::only(std::span<const QuaderElementId> vertices) const {
+  return mutations_ == nullptr
+             ? QuaderVertexSelection{}
+             : QuaderVertexSelection(session_, *mutations_, object_,
+                                     element_vector(vertices));
+}
+
+QuaderVertexSelection QuaderMeshVertices::only(
+    std::initializer_list<QuaderElementId> vertices) const {
+  return only(std::span<const QuaderElementId>(vertices.begin(),
+                                              vertices.size()));
+}
+
+QuaderMeshEdges::QuaderMeshEdges(std::optional<QuaderApiSession> session,
+                                 QuaderApiMutationRunner &mutations,
+                                 QuaderModelingObjectRef object)
+    : session_(std::move(session)), mutations_(&mutations),
+      object_(std::move(object)) {}
+
+QuaderEdgeSelection
+QuaderMeshEdges::only(std::span<const QuaderEdgeRef> edges) const {
+  return mutations_ == nullptr
+             ? QuaderEdgeSelection{}
+             : QuaderEdgeSelection(session_, *mutations_, object_,
+                                   edge_vector(edges));
+}
+
+QuaderEdgeSelection
+QuaderMeshEdges::only(std::initializer_list<QuaderEdgeRef> edges) const {
+  return only(std::span<const QuaderEdgeRef>(edges.begin(), edges.size()));
+}
+
+QuaderMeshFaces::QuaderMeshFaces(std::optional<QuaderApiSession> session,
+                                 QuaderApiMutationRunner &mutations,
+                                 QuaderModelingObjectRef object)
+    : session_(std::move(session)), mutations_(&mutations),
+      object_(std::move(object)) {}
+
+QuaderFaceSelection
+QuaderMeshFaces::only(std::span<const QuaderElementId> faces) const {
+  return mutations_ == nullptr
+             ? QuaderFaceSelection{}
+             : QuaderFaceSelection(session_, *mutations_, object_,
+                                   element_vector(faces));
+}
+
+QuaderFaceSelection
+QuaderMeshFaces::only(std::initializer_list<QuaderElementId> faces) const {
+  return only(std::span<const QuaderElementId>(faces.begin(), faces.size()));
+}
+
+QuaderMeshTransform::QuaderMeshTransform(
+    std::optional<QuaderApiSession> session, QuaderApiMutationRunner &mutations,
+    QuaderModelingObjectRef object)
+    : session_(std::move(session)), mutations_(&mutations),
+      object_(std::move(object)) {}
+
+QuaderApiVoidResult QuaderMeshTransform::translate(QVec3 delta) const {
+  if (mutations_ == nullptr) {
+    return invalid_api_status(session_, "Invalid mesh handle.");
+  }
+  QuaderObjectSelection selected(session_, *mutations_, object_);
+  const QuaderApiVoidResult status = selected.replace();
+  if (!status.ok()) {
+    return status;
+  }
+  return QuaderModelingApi(*session_, *mutations_).move_selection(delta);
+}
+
+QuaderApiVoidResult QuaderMeshTransform::rotate(QVec3 euler_radians,
+                                                QVec3 pivot) const {
+  if (mutations_ == nullptr) {
+    return invalid_api_status(session_, "Invalid mesh handle.");
+  }
+  QuaderObjectSelection selected(session_, *mutations_, object_);
+  const QuaderApiVoidResult status = selected.replace();
+  if (!status.ok()) {
+    return status;
+  }
+  return QuaderModelingApi(*session_, *mutations_)
+      .rotate_selection(euler_radians, pivot);
+}
+
+QuaderApiVoidResult QuaderMeshTransform::scale(QVec3 scale,
+                                               QVec3 pivot) const {
+  if (mutations_ == nullptr) {
+    return invalid_api_status(session_, "Invalid mesh handle.");
+  }
+  QuaderObjectSelection selected(session_, *mutations_, object_);
+  const QuaderApiVoidResult status = selected.replace();
+  if (!status.ok()) {
+    return status;
+  }
+  return QuaderModelingApi(*session_, *mutations_).scale_selection(scale, pivot);
+}
+
+QuaderApiVoidResult
+QuaderMeshTransform::apply(const QuaderTransform3 &transform, QVec3 pivot) const {
+  if (mutations_ == nullptr) {
+    return invalid_api_status(session_, "Invalid mesh handle.");
+  }
+  QuaderObjectSelection selected(session_, *mutations_, object_);
+  const QuaderApiVoidResult status = selected.replace();
+  if (!status.ok()) {
+    return status;
+  }
+  return QuaderModelingApi(*session_, *mutations_)
+      .transform_selection(transform, pivot);
+}
+
+QuaderMeshMaterials::QuaderMeshMaterials(
+    std::optional<QuaderApiSession> session, QuaderApiMutationRunner &mutations,
+    QuaderModelingObjectRef object)
+    : session_(std::move(session)), mutations_(&mutations),
+      object_(std::move(object)) {}
+
+QuaderApiVoidResult
+QuaderMeshMaterials::assign_slot(std::uint32_t material_slot) const {
+  if (mutations_ == nullptr) {
+    return invalid_api_status(session_, "Invalid mesh handle.");
+  }
+  QuaderObjectSelection selected(session_, *mutations_, object_);
+  const QuaderApiVoidResult status = selected.replace();
+  if (!status.ok()) {
+    return status;
+  }
+  return QuaderModelingApi(*session_, *mutations_)
+      .assign_material_slot_to_selection(material_slot);
+}
+
+QuaderApiVoidResult QuaderMeshMaterials::assign_to_face(
+    QuaderElementId face, std::uint32_t material_slot) const {
+  if (mutations_ == nullptr) {
+    return invalid_api_status(session_, "Invalid mesh handle.");
+  }
+  return QuaderModelingApi(*session_, *mutations_)
+      .assign_material_slot_to_face(object_, face, material_slot);
+}
+
+QuaderMeshHandle::QuaderMeshHandle(std::optional<QuaderApiSession> session,
+                                   QuaderApiMutationRunner &mutations,
+                                   QuaderModelingObjectRef ref)
+    : session_(std::move(session)), mutations_(&mutations),
+      ref_(std::move(ref)) {}
+
+QuaderModelingObjectRef QuaderMeshHandle::ref() const { return ref_; }
+
+QuaderModelingObjectId QuaderMeshHandle::id() const {
+  return ref_.modeling_object_id;
+}
+
+bool QuaderMeshHandle::valid() const {
+  if (!session_.has_value() || !session_->valid() || mutations_ == nullptr ||
+      ref_.modeling_object_id == kInvalidQuaderModelingObjectId) {
+    return false;
+  }
+  return QuaderQueryApi(*session_, *mutations_)
+      .modeling_object_for_id(ref_.modeling_object_id)
+      .has_value();
+}
+
+QuaderObjectSelection QuaderMeshHandle::select() const {
+  return mutations_ == nullptr ? QuaderObjectSelection{}
+                               : QuaderObjectSelection(session_, *mutations_,
+                                                       ref_);
+}
+
+QuaderMeshVertices QuaderMeshHandle::vertices() const {
+  return mutations_ == nullptr ? QuaderMeshVertices{}
+                               : QuaderMeshVertices(session_, *mutations_,
+                                                    ref_);
+}
+
+QuaderMeshEdges QuaderMeshHandle::edges() const {
+  return mutations_ == nullptr ? QuaderMeshEdges{}
+                               : QuaderMeshEdges(session_, *mutations_, ref_);
+}
+
+QuaderMeshFaces QuaderMeshHandle::faces() const {
+  return mutations_ == nullptr ? QuaderMeshFaces{}
+                               : QuaderMeshFaces(session_, *mutations_, ref_);
+}
+
+QuaderMeshTransform QuaderMeshHandle::transform() const {
+  return mutations_ == nullptr ? QuaderMeshTransform{}
+                               : QuaderMeshTransform(session_, *mutations_,
+                                                     ref_);
+}
+
+QuaderMeshMaterials QuaderMeshHandle::materials() const {
+  return mutations_ == nullptr ? QuaderMeshMaterials{}
+                               : QuaderMeshMaterials(session_, *mutations_,
+                                                     ref_);
+}
+
+std::optional<QuaderMeshAsset> QuaderMeshHandle::compiled_mesh() const {
+  if (!session_.has_value() || !session_->valid() || mutations_ == nullptr) {
+    return std::nullopt;
+  }
+  return QuaderQueryApi(*session_, *mutations_).compiled_object_mesh(ref_);
+}
 
 QuaderModelingApi::QuaderModelingApi(QuaderApiSession session,
                                      QuaderApiMutationRunner &mutations)
@@ -123,6 +843,21 @@ QuaderModelingApi::create_box(const QuaderCreateBoxArgs &args) {
 QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::create_box(QuaderBounds bounds, std::string name) {
   return create_box(QuaderCreateBoxArgs{
+      .bounds = bounds,
+      .name = std::move(name),
+  });
+}
+
+QuaderApiResult<QuaderMeshHandle>
+QuaderModelingApi::create_box_mesh(const QuaderCreateBoxArgs &args) {
+  const QuaderApiResult<QuaderModelingObjectRef> created = create_box(args);
+  QuaderMeshHandle handle(session_, mutations_, created.value());
+  return quader_api_result_from_status<QuaderMeshHandle>(created, handle);
+}
+
+QuaderApiResult<QuaderMeshHandle>
+QuaderModelingApi::create_box_mesh(QuaderBounds bounds, std::string name) {
+  return create_box_mesh(QuaderCreateBoxArgs{
       .bounds = bounds,
       .name = std::move(name),
   });
@@ -167,6 +902,34 @@ QuaderModelingApi::create_mesh(QuaderPolygonDocument document,
   return result_from_create(std::move(status), created);
 }
 
+QuaderApiResult<QuaderMeshHandle>
+QuaderModelingApi::create_mesh_handle(QuaderPolygonDocument document,
+                                      QuaderCreateMeshArgs args) {
+  const QuaderApiResult<QuaderModelingObjectRef> created =
+      create_mesh(std::move(document), std::move(args));
+  QuaderMeshHandle handle(session_, mutations_, created.value());
+  return quader_api_result_from_status<QuaderMeshHandle>(created, handle);
+}
+
+QuaderMeshHandle QuaderModelingApi::mesh(QuaderModelingObjectRef object) const {
+  return QuaderMeshHandle(session_, mutations_, std::move(object));
+}
+
+QuaderApiResult<QuaderMeshHandle>
+QuaderModelingApi::mesh(QuaderModelingObjectId object_id) const {
+  const std::optional<QuaderModelingObjectRef> object =
+      QuaderQueryApi(session_, mutations_).modeling_object_for_id(object_id);
+  if (!object.has_value()) {
+    return quader_api_result_from_status<QuaderMeshHandle>(
+        invalid_api_status(session_, "Modeling object was not found."),
+        QuaderMeshHandle(session_, mutations_, {}));
+  }
+  return quader_api_result_from_status<QuaderMeshHandle>(
+      quader_api_void_status(project_session(session_), true, false, {},
+                             QuaderMutationKind::None),
+      QuaderMeshHandle(session_, mutations_, *object));
+}
+
 QuaderApiVoidResult
 QuaderModelingApi::set_selection_mode(QuaderSelectionMode mode) {
   return mutations_.run_modeling_result(
@@ -181,6 +944,30 @@ bool QuaderModelingApi::can_execute_tool(std::string_view tool_id) const {
 
 QuaderApiVoidResult QuaderModelingApi::execute_tool(std::string_view tool_id) {
   return mutations_.run_tracked_modeling_tool(tool_id);
+}
+
+QuaderApiVoidResult QuaderModelingApi::delete_selection() {
+  return mutations_.run_tracked_modeling_tool("delete_selection");
+}
+
+QuaderApiVoidResult QuaderModelingApi::copy_selection() {
+  return mutations_.run_tracked_modeling_tool("copy_selection");
+}
+
+QuaderApiVoidResult QuaderModelingApi::paste_selection() {
+  return mutations_.run_tracked_modeling_tool("paste_selection");
+}
+
+QuaderApiVoidResult QuaderModelingApi::repeat_last_action() {
+  return mutations_.repeat_last_action();
+}
+
+QuaderApiVoidResult QuaderModelingApi::duplicate_meshes() {
+  return mutations_.run_tracked_modeling_tool("duplicate_meshes");
+}
+
+QuaderApiVoidResult QuaderModelingApi::combine_meshes() {
+  return mutations_.run_tracked_modeling_tool("combine_meshes");
 }
 
 QuaderApiVoidResult QuaderModelingApi::remove_doubles() {

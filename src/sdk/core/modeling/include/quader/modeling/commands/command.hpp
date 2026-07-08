@@ -16,6 +16,12 @@ namespace quader::modeling {
 struct CommandDescriptor {
   std::string id;
   std::string label;
+  std::string category;
+  bool enabled = true;
+  std::string disabled_reason;
+  bool starts_preview = false;
+  bool commits_preview = false;
+  bool rebuilds_mesh_on_success = true;
 };
 
 } // namespace quader::modeling

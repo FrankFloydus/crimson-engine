@@ -12,7 +12,6 @@
 #include <cmath>
 #include <cstddef>
 #include <iostream>
-#include <vector>
 
 namespace {
 
@@ -62,26 +61,8 @@ void compile_document_preserves_loop_uvs_material_slots_and_normals()
     }
 }
 
-void generated_uvs_and_translation_shift_share_document_helper_boundary()
-{
-    Document document = make_uv_quad_document();
-
-    ensure_face_uvs(document);
-    require_test(document.faces.front().uvs.size() == document.faces.front().vertices.size(), "ensure_face_uvs should generate loop UVs");
-    const std::vector<quader::QVec2> before = document.faces.front().uvs;
-
-    shift_face_uvs_for_translation(document, { 2.0F, 0.0F, 0.0F });
-    const std::vector<quader::QVec2>& after = document.faces.front().uvs;
-    require_test(after.size() == before.size(), "translation shift should preserve loop UV count");
-    for (std::size_t index = 0; index < after.size(); ++index) {
-        require_test(nearly_equal(after[index].x - before[index].x, 1.0F), "two world units on +X should shift generated U by one tile");
-        require_test(nearly_equal(after[index].y - before[index].y, 0.0F), "+X translation should not shift generated V for an XY face");
-    }
-}
-
 } // namespace
 
 TEST(QdrDocumentMeshUvTests, QdrDocumentMeshUvTests) {
     compile_document_preserves_loop_uvs_material_slots_and_normals();
-    generated_uvs_and_translation_shift_share_document_helper_boundary();
 }

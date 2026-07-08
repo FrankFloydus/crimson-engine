@@ -8,6 +8,7 @@
 
 #include <quader/modeling/types.hpp>
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -56,6 +57,35 @@ struct ViewportHostInputSnapshot {
   bool navigation_capture = false;
   std::vector<std::uint32_t> pressed_chords;
   double frame_time_seconds = 0.0;
+};
+
+/**
+ * Identifies the projection model used by the host viewport camera.
+ */
+enum class ViewportProjection {
+  Perspective,
+  Orthographic,
+};
+
+/**
+ * Identifies how the host packed view-projection matrix should be interpreted.
+ */
+enum class MatrixConvention {
+  ColumnMajor,
+  RowMajor,
+};
+
+/**
+ * Captures renderer-neutral camera state for SDK tool interpretation.
+ */
+struct ViewportCameraSnapshot {
+  ViewportProjection projection = ViewportProjection::Perspective;
+  Transform3 camera_transform;
+  Vec2 viewport_size;
+  double orthographic_size = 24.0;
+  double fov_degrees = 60.0;
+  MatrixConvention matrix_convention = MatrixConvention::ColumnMajor;
+  std::array<float, 16> view_projection{};
 };
 
 } // namespace quader::modeling

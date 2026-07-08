@@ -6,42 +6,40 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <quader/modeling/modeling.hpp>
 
-#include <vector>
-
 int main() {
   using namespace quader::modeling;
 
-  Result<PolygonDocument> document_result = PolygonDocument::make_box({});
-  if (!document_result.ok()) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle box = quader.create_box({.name = "Preview Box"});
+  if (!box.valid()) {
     return 1;
   }
 
-  ModelingSession session;
-  Result<ObjectId> object_id =
-      session.add_document(std::move(document_result).value(), "Box");
-  if (!object_id.ok()) {
+  OperationReceipt selected = box.faces().all().replace();
+  if (!selected.success) {
     return 2;
   }
 
-  const PolygonDocument *document = session.document(object_id.value());
-  if (document == nullptr) {
+  TransformTool move = quader.tools().activate_move_tool();
+  OperationReceipt begin = move.begin({0.0F, 1.0F, 0.0F});
+  if (!begin.success) {
     return 3;
   }
-  const std::vector<FaceId> faces = document->face_ids();
-  if (faces.empty() || !session.select_face(object_id.value(), faces.front()).ok()) {
+
+  if (!quader.preview().active()) {
     return 4;
   }
 
-  if (!session.begin_translate_preview(object_id.value(),
-                                       {0.0F, 1.0F, 0.0F})
-           .ok()) {
+  OperationReceipt update = move.update({0.0F, 2.0F, 0.0F});
+  if (!update.success) {
     return 5;
   }
 
-  Result<ToolPreviewPayload> payload = session.preview_payload();
-  if (!payload.ok() || !payload.value().valid) {
+  OperationReceipt committed = move.commit("Move Preview Box");
+  if (!committed.success) {
     return 6;
   }
 
-  return session.commit_preview().ok() ? 0 : 7;
+  MeshPayload mesh = box.payloads().compile_mesh();
+  return mesh.vertices.empty() ? 7 : 0;
 }

@@ -175,7 +175,7 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
        {"assets", "core", "diagnostics", "math", "scene"}},
       {"sdk_modeling",
        {"src/sdk/core/modeling/"},
-       {"io_qdr", "mesh_geometry", "mesh_polygon", "sdk_modeling"}},
+       {"sdk_modeling"}},
       {"ui",
        {"src/ui/"},
        {"api", "assets", "core", "diagnostics", "editor_commands",
@@ -258,7 +258,7 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
         "quader_render", "quader_viewport"}},
       {"quader_editor_services",
        {"quader_document", "quader_modeling", "quader_modeling_profile"}},
-      {"quader_geometry", {"quader_math", "quader_modeling_gte_math"}},
+      {"quader_geometry", {}},
       {"quader_guardrail_tests", {}},
       {"quader_io_qdr",
        {"quader_assets", "quader_core", "quader_document",
@@ -280,7 +280,6 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
        {"quader_editor_metadata", "quader_geometry", "quader_modeling_polygon",
         "quader_modeling_runtime", "quader_qdr_document_io",
         "quader_qdr_runtime_io"}},
-      {"quader_modeling_gte_math", {}},
       {"quader_modeling_polygon",
        {"quader_geometry", "quader_math", "quader_modeling_profile"}},
       {"quader_modeling_profile", {}},
@@ -293,11 +292,9 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
        {"quader_modeling_sdk", "quader_runtime"}},
       {"quader_modeling_sdk", {"quader_modeling_sdk_qdr_document",
                                 "quader_modeling_sdk_runtime"}},
-      {"quader_modeling_sdk_geometry", {"quader_geometry"}},
-      {"quader_modeling_sdk_polygon",
-       {"quader_modeling_polygon", "quader_modeling_sdk_geometry"}},
-      {"quader_modeling_sdk_qdr_document",
-       {"quader_modeling_sdk_polygon", "quader_qdr_document_io"}},
+      {"quader_modeling_sdk_geometry", {}},
+      {"quader_modeling_sdk_polygon", {"quader_modeling_sdk_geometry"}},
+      {"quader_modeling_sdk_qdr_document", {"quader_modeling_sdk_polygon"}},
       {"quader_modeling_sdk_runtime", {"quader_modeling_sdk_polygon"}},
       {"quader_sdk_example_mesh_operation", {"quader_modeling_sdk"}},
       {"quader_sdk_example_qdr_roundtrip", {"quader_modeling_sdk"}},
@@ -386,6 +383,22 @@ project_include_relative_path(const std::filesystem::path &includer,
                               std::string_view include_path) {
   const std::string include_string(include_path);
   const std::filesystem::path include_file(include_string);
+  const std::string includer_relative = normalized_relative(includer);
+  if (starts_with(includer_relative, "src/sdk/core/modeling/")) {
+    const std::filesystem::path sdk_internal_relative =
+        source_root() / "src/sdk/core/modeling/internal" / include_file;
+    if (std::filesystem::exists(sdk_internal_relative)) {
+      return normalized_relative(sdk_internal_relative);
+    }
+
+    const std::filesystem::path sdk_thirdparty_relative =
+        source_root() / "src/sdk/core/modeling/internal/thirdparty" /
+        include_file;
+    if (std::filesystem::exists(sdk_thirdparty_relative)) {
+      return normalized_relative(sdk_thirdparty_relative);
+    }
+  }
+
   const std::filesystem::path project_relative =
       starts_with(include_string, "src/")
           ? source_root() / include_file

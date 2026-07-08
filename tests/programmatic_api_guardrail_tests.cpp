@@ -1822,7 +1822,7 @@ TEST(ProgrammaticApiGuardrailTests, PublicExamplesAreDiscoverableAndDocsFolderIs
   }
 }
 
-TEST(ProgrammaticApiGuardrailTests, PublicExamplesDoNotUseResultAsFluentObjectHandle) {
+TEST(ProgrammaticApiGuardrailTests, PublicExamplesDoNotUseResultAsChainedObjectHandle) {
   for (const std::filesystem::path &file : public_doc_and_example_files()) {
     const std::string source = read_file(file);
     const std::string relative = normalized_relative(file);

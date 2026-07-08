@@ -6,7 +6,7 @@ No permission is granted to use, copy, modify, distribute, or sublicense this
 file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 -->
-# Quader Fluent Modeling API Plan
+# Quader Public Modeling API Plan
 
 Status: review draft only. This document specifies the desired public API shape. It is not an
 implementation patch.
@@ -26,24 +26,24 @@ edges.bevel({.width = 0.15F, .segments = 2}).commit("Bevel Trim Edges");
 ```
 
 The current portable SDK is a good kernel API, but it is too low-level for normal public API use.
-The new layer must be fluent, explicit, and complete enough for Quader, tests, automation, and
+The new layer must be readable, explicit, and complete enough for Quader, tests, automation, and
 portable C++ API use.
 
 ## Non-Negotiable Design Rules
 
 - The API must talk in user/editor intent: `create_box`, `activate_box_tool`,
   `mesh.edges().all()`, `edges.bevel(...)`, `faces.thicken(...)`, `preview.commit(...)`.
-- The fluent API is not allowed to become a second modeling source of truth. It delegates to SDK
+- The public API is not allowed to become a second modeling source of truth. It delegates to SDK
   modeling owners.
 - The raw SDK remains available for advanced code and tests, but it is not the recommended
   day-to-day integration surface.
 - Every current app-reachable tool, public action, and editor operation gets a named public entry
   point or an explicitly documented reason why it remains internal.
-- Kernel-only helpers that are not current app workflows stay out of the fluent public surface until
+- Kernel-only helpers that are not current app workflows stay out of the public API surface until
   the app exposes them through a command, tool, or public workflow.
 - String dispatch remains available for command palettes, scripts, and escape hatches, but C++ API
-  examples must use typed fluent methods.
-- Normal fluent calls return the requested object or receipt directly. Public examples must not
+  examples must use typed direct API methods.
+- Normal direct API calls return the requested object or receipt directly. Public examples must not
   require manual result unwrapping. Checked calls live behind `try_` names or `checked()`.
 - Pointers are not public handles. Public handles are typed, stale-checkable values.
 - Selection is a first-class value, not hidden global state.
@@ -78,21 +78,21 @@ The portable SDK owns polygon documents, typed IDs, operations, validation, QDR 
 selection remaps, preview transactions, undo/redo, mesh payloads, semantic overlays, and
 renderer-neutral snapshots.
 
-### 2. Fluent SDK API
+### 2. Public SDK API
 
 Namespace: `quader::modeling`
 
 Proposed headers:
 
 ```text
-src/sdk/core/modeling/include/quader/modeling/fluent/modeling_api.hpp
-src/sdk/core/modeling/include/quader/modeling/fluent/mesh_handle.hpp
-src/sdk/core/modeling/include/quader/modeling/fluent/selection.hpp
-src/sdk/core/modeling/include/quader/modeling/fluent/tools.hpp
-src/sdk/core/modeling/include/quader/modeling/fluent/previews.hpp
+src/sdk/core/modeling/include/quader/modeling/api/modeling_api.hpp
+src/sdk/core/modeling/include/quader/modeling/api/mesh_handle.hpp
+src/sdk/core/modeling/include/quader/modeling/api/selection.hpp
+src/sdk/core/modeling/include/quader/modeling/api/tools.hpp
+src/sdk/core/modeling/include/quader/modeling/api/previews.hpp
 ```
 
-The fluent SDK wraps only public SDK types. It must not include or name native app owners.
+The public SDK API wraps only public SDK types. It must not include or name native app owners.
 
 ### 3. Native Editor Facade
 
@@ -104,7 +104,7 @@ native history around SDK-owned modeling truth.
 
 ## Banned Public Dependencies
 
-Public SDK and fluent SDK headers must not expose:
+Public SDK and public SDK API headers must not expose:
 
 - SDL, ImGui, Filament, Win32, Qt, or platform headers;
 - `SceneDocument`, `ProjectDocument`, `ProjectSession`, `AssetRegistry`;
@@ -151,7 +151,7 @@ auto mesh = editor.modeling().create_box({.name = "Wall"});
 
 ## Error Policy
 
-The fluent API preserves structured failure without forcing every call site to unwrap a result.
+The public API preserves structured failure without forcing every call site to unwrap a result.
 Normal calls return the requested object directly and report failures through a configured policy.
 
 ```cpp
@@ -166,7 +166,7 @@ public:
 };
 ```
 
-Default C++ fluent behavior:
+Default C++ direct API behavior:
 
 ```cpp
 auto quader = quader::modeling::ModelingApi::create();
@@ -190,7 +190,7 @@ auto mesh = created.or_throw();
 object-returning failures yield an invalid handle and keep the full structured error available
 through `last_error()`.
 
-No fluent API example should require manual result unwrapping. Explicit `Result<T>` exists for
+No public API example should require manual result unwrapping. Explicit `Result<T>` exists for
 call sites that cannot use exceptions, for test assertions, and for low-level SDK/kernel work.
 
 Required lower-level result type:
@@ -210,8 +210,8 @@ public:
 ```
 
 Checked APIs must be named so they are obvious at the call site: `checked().create_box(...)`,
-`try_create_box(...)`, `checked().io().serialize_qdr(...)`. The direct fluent method name stays
-clean: `create_box(...)`.
+`try_create_box(...)`, `checked().io().serialize_qdr(...)`. The direct method name stays clean:
+`create_box(...)`.
 
 Checked facade shape:
 
@@ -226,9 +226,9 @@ public:
 };
 ```
 
-## Fluent OOP Grammar
+## OOP Modeling Grammar
 
-The public API should feel closer to a fluent application framework than to a kernel wrapper:
+The public API should read like an application API instead of a kernel wrapper:
 objects expose relationships, relationships expose scopes, and scoped objects expose actions.
 
 Preferred grammar:
@@ -289,7 +289,7 @@ struct Error {
 ```
 
 Expected invalid input, stale IDs, missing objects, operation precondition failures, validation
-failures, and IO failures are represented as `Error` values. Direct fluent calls report them through
+failures, and IO failures are represented as `Error` values. Direct API calls report them through
 the configured `ErrorPolicy`; checked calls return them as `Result<T>` failures.
 
 ## Identity Types
@@ -309,7 +309,7 @@ struct EdgeKey {
 };
 ```
 
-The fluent layer exposes these directly for C++ callers.
+The public API layer exposes these directly for C++ callers.
 
 Native `src/api` may expose `QuaderMeshId`, `QuaderVertexId`, `QuaderEdgeId`, and `QuaderFaceId`,
 but they must map cleanly to SDK typed IDs.
@@ -413,16 +413,34 @@ struct DuplicateOptions {
   bool use_grid_default = false;
 };
 
+struct PasteOptions {
+  Vec3 offset{1.0F, 0.0F, 0.0F};
+};
+
+enum class KnifeTargetKind {
+  ExistingVertex,
+  ExistingEdge,
+  InsertedVertex,
+  FacePoint,
+};
+
+struct KnifeTarget {
+  KnifeTargetKind kind = KnifeTargetKind::ExistingVertex;
+  VertexId vertex{};
+  EdgeKey edge{};
+  float edge_factor = 0.5F;
+  FaceId face{};
+  Vec3 position{};
+};
+
+struct KnifeStrokeSegment {
+  std::uint32_t first_point = 0;
+  std::uint32_t second_point = 0;
+};
+
 struct TransformOptions {
   Transform3 transform;
   Vec3 pivot{};
-  bool texture_lock = false;
-  bool texture_lock_scale = false;
-};
-
-struct TranslateOptions {
-  Vec3 delta{};
-  bool texture_lock = false;
 };
 
 struct RotateOptions {
@@ -459,12 +477,13 @@ struct PlaneCutOptions {
 };
 
 struct KnifeSegmentOptions {
-  Ray from;
-  Ray to;
+  KnifeTarget from;
+  KnifeTarget to;
 };
 
 struct KnifeStrokeOptions {
-  std::vector<Ray> points;
+  std::vector<KnifeTarget> points;
+  std::vector<KnifeStrokeSegment> segments;
 };
 
 struct InsertEdgeLoopOptions {
@@ -483,8 +502,8 @@ Defaults mirror the existing operation schemas:
 
 ## Operation Receipt
 
-Mutating fluent methods return `OperationReceipt` directly when the operation completes. Operations
-that naturally create another fluent object return that object directly, and the object exposes the
+Mutating direct API methods return `OperationReceipt` directly when the operation completes. Operations
+that naturally create another modeling object return that object directly, and the object exposes the
 receipt that created or last modified it.
 
 ```cpp
@@ -538,7 +557,7 @@ auto preview = mesh.edges().all().bevel({.width = 0.1F});
 OperationReceipt committed = preview.commit("Bevel Column");
 ```
 
-## Root Fluent SDK API
+## Root Public SDK API
 
 ```cpp
 namespace quader::modeling {
@@ -609,7 +628,7 @@ public:
 
 ## Mesh Handle API
 
-`MeshHandle` is the primary fluent object. It is a lightweight handle into a `ModelingApi` session.
+`MeshHandle` is the primary modeling object. It is a lightweight handle into a `ModelingApi` session.
 It must not own a raw `PolygonDocument*`.
 
 ```cpp
@@ -674,7 +693,6 @@ public:
 class MeshTransform {
 public:
   OperationReceipt translate(Vec3 delta);
-  OperationReceipt translate(TranslateOptions options);
   OperationReceipt rotate(RotateOptions options);
   OperationReceipt scale(ScaleOptions options);
   OperationReceipt apply(TransformOptions options);
@@ -828,12 +846,38 @@ Selection implementation rules:
 - no public API exposes raw owning pointers to selections;
 - if runtime polymorphism is used internally, public destruction and copying must stay boring and
   safe;
-- wrong-kind operations fail at the checked/kernel layer, but the fluent API should make those
+- wrong-kind operations fail at the checked/kernel layer, but the public API should make those
   mistakes uncommon by putting verbs on typed subclasses.
 
 ## Selection API
 
 ```cpp
+struct PickRequest {
+  Ray ray;
+  std::optional<SelectionUnion> resolved;
+};
+
+struct PickSelectRequest {
+  PickRequest pick;
+  SelectionEdit edit = SelectionEdit::Replace;
+};
+
+struct BoxSelectionRequest {
+  Vec2 min{};
+  Vec2 max{};
+  SelectionEdit edit = SelectionEdit::Replace;
+  std::optional<SelectionUnion> resolved;
+};
+
+struct HoverRequest {
+  Ray ray;
+  std::optional<SelectionUnion> resolved;
+};
+
+struct HoverTarget {
+  SelectionUnion selection;
+};
+
 class SelectionApi {
 public:
   SelectionEdit default_edit() const;
@@ -870,9 +914,11 @@ public:
 
 ## Complete Operation Inventory
 
-The fluent API must cover this inventory. This inventory mirrors current app-reachable commands,
-tools, and public workflows; kernel-only non-box primitive factories and UV layout helpers are
-intentionally excluded.
+The public API must cover this inventory. This inventory mirrors current app-reachable commands,
+tools, and public workflows. Non-box primitive factories are intentionally excluded because the
+current app exposes box creation only. UV storage and generated UVs stay in the mesh/payload layer
+because the default mesh materials sample `baseColorTexture` and `roughnessTexture` through UV0,
+but UV layout/editing helpers are not public API operations.
 
 ### Mesh Creation And Import
 
@@ -1022,6 +1068,9 @@ public:
   OperationReceipt execute(std::string_view id, OperationSettings settings = {});
 
   OperationReceipt delete_selection();
+  OperationReceipt copy_selection();
+  OperationReceipt paste_selection(PasteOptions options = {});
+  OperationReceipt repeat_last_action();
   MeshHandle duplicate_meshes(DuplicateOptions options = {});
   OperationReceipt combine_meshes();
 
@@ -1100,7 +1149,6 @@ public:
   OperationReceipt update(ThickenOptions options);
   OperationReceipt update(SliceQuadOptions options);
   OperationReceipt update(MergeByDistanceOptions options);
-  OperationReceipt update(TranslateOptions options);
   OperationReceipt update(TransformOptions options);
 
   ToolPreviewPayload payload(PayloadRequest request = {}) const;
@@ -1205,6 +1253,8 @@ class KnifeTool {
 public:
   KnifeTool& add_point(Ray ray);
   KnifeTool& add_segment(Ray from, Ray to);
+  KnifeTool& add_point(KnifeTarget target);
+  KnifeTool& add_segment(KnifeTarget from, KnifeTarget to);
   OperationReceipt commit(std::string label = "Knife");
   OperationReceipt cancel();
 };
@@ -1216,7 +1266,19 @@ public:
   OperationReceipt commit(std::string label = "Cut");
   OperationReceipt cancel();
 };
+
+class PolyTool {
+public:
+  PolyTool& add_point(Vec3 point);
+  PolyTool& set_material(MaterialId material);
+  OperationReceipt commit(std::string label = "Poly");
+  OperationReceipt cancel();
+};
 ```
+
+`TransformTool::begin/update(Vec3)` uses the active tool to interpret the value: `move` and
+`extend` use translation delta, `extrude` uses face offset, `rotate` uses Euler radians, and
+`scale` uses scale factors.
 
 ## Viewport Input
 
@@ -1444,11 +1506,18 @@ Batch requirements:
 
 ## Native API Mirror
 
-Native `QuaderEditorApi` should offer the same grammar where practical:
+Native `QuaderEditorApi` keeps the existing compatibility methods and adds the
+handle-based modeling path where practical. Existing `create_box(...)` still
+returns `QuaderApiResult<QuaderModelingObjectRef>` for old callers; new handle
+workflows use `create_box_mesh(...)` or `mesh(...)`.
 
 ```cpp
-auto mesh = editor.modeling().create_box({.name = "Room"});
-mesh.faces().only({front_face}).thicken({.thickness = 0.25F}).commit("Thicken Room Face");
+auto mesh = editor.modeling().create_box_mesh(
+  {.bounds = {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+   .name = "Room"});
+
+auto face = mesh.value().faces().only({front_face});
+face.slice({.x_slices = 1, .y_slices = 1}).commit("Slice Room Face");
 ```
 
 Native public types:
@@ -1456,8 +1525,16 @@ Native public types:
 ```cpp
 class QuaderModelingApi;
 class QuaderMeshHandle;
-class QuaderModelingSelectionApi;
-class QuaderModelingOperationsApi;
+class QuaderMeshVertices;
+class QuaderMeshEdges;
+class QuaderMeshFaces;
+class QuaderMeshTransform;
+class QuaderMeshMaterials;
+class QuaderModelingSelection;
+class QuaderObjectSelection;
+class QuaderVertexSelection;
+class QuaderEdgeSelection;
+class QuaderFaceSelection;
 class QuaderPreviewHandle;
 class QuaderToolsApi;
 ```
@@ -1477,7 +1554,7 @@ Native implementations route through existing owners:
 ## Current Kernel API To Preserve
 
 The current portable API remains valid as a lower-level kernel surface. It may keep explicit
-`Result<T>` returns because it is not the recommended fluent integration layer.
+`Result<T>` returns because it is not the recommended public API integration layer.
 
 ```cpp
 ModelingSession session;
@@ -1487,7 +1564,7 @@ session.select_object(object.or_throw());
 session.translate_selection({1.0F, 0.0F, 0.0F});
 ```
 
-This is the kernel layer. It is allowed to be lower-level. The fluent layer wraps it.
+This is the kernel layer. It is allowed to be lower-level. The public API layer wraps it.
 
 ## API Examples
 
@@ -1573,7 +1650,7 @@ write_text("imported.obj", obj);
 
 ## Performance Rules
 
-The fluent API must not hide:
+The public API must not hide:
 
 - mesh compilation;
 - full snapshot allocation;
@@ -1612,7 +1689,7 @@ quader.render().scene_snapshot();
 
 Required tests when implemented:
 
-- fluent SDK public-header test using only `quader/modeling/modeling.hpp`;
+- public SDK API header test using only `quader/modeling/modeling.hpp`;
 - named method coverage for every operation in this document;
 - tool controller tests for box, insert edge loop, knife, cut, mirror, poly, pivot;
 - preview begin/update/commit/cancel tests;
@@ -1635,14 +1712,14 @@ cmake --build --preset vs2026-debug --target quader
 
 ## Implementation Plan
 
-1. Add fluent SDK headers under `src/sdk/core/modeling/include/quader/modeling/fluent`.
-2. Add SDK-only tests for the fluent API before native API routing.
+1. Add public SDK API headers under `src/sdk/core/modeling/include/quader/modeling/api`.
+2. Add SDK-only tests for the public API before native API routing.
 3. Expand `ModelingSession` so every operation in this document has a portable method or command.
 4. Add `MeshHandle`, the shared `Selection` contract, typed selections, `PreviewHandle`,
    `ToolsApi`, and `MeshSyncApi`.
-5. Add native `src/api` wrappers that mirror the fluent grammar while routing through native owners.
-6. Add neutral C++ examples that use only the public fluent modeling API.
-7. Replace examples that teach raw `PolygonDocument` plumbing with fluent examples, while keeping
+5. Add native `src/api` wrappers that mirror the object-oriented grammar while routing through native owners.
+6. Add neutral C++ examples that use only the public modeling API.
+7. Replace examples that teach raw `PolygonDocument` plumbing with public API examples, while keeping
    raw SDK examples for kernel tests.
 
 ## Review Checklist

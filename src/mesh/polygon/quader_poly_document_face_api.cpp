@@ -64,32 +64,10 @@ void ensure_face_uvs(Document& document)
     }
 }
 
-void regenerate_face_uvs(Document& document)
-{
-    for (Face& face : document.faces) {
-        [[maybe_unused]] const bool assigned = assign_generated_face_uvs(document, face);
-    }
-}
-
 void clear_face_uvs(Document& document)
 {
     for (Face& face : document.faces) {
         face.uvs.clear();
-    }
-}
-
-void shift_face_uvs_for_translation(Document& document, quader::QVec3 delta)
-{
-    ensure_face_uvs(document);
-    for (Face& face : document.faces) {
-        if (!face_has_loop_uvs(face)) {
-            continue;
-        }
-        const quader::QVec2 delta_uv = translation_uv_delta(document, face, delta);
-        for (quader::QVec2& uv : face.uvs) {
-            uv.x += delta_uv.x;
-            uv.y += delta_uv.y;
-        }
     }
 }
 

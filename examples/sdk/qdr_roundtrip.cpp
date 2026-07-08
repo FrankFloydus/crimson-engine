@@ -11,22 +11,22 @@
 int main() {
   using namespace quader::modeling;
 
-  Result<PolygonDocument> document_result = PolygonDocument::make_box({});
-  if (!document_result.ok()) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle box = quader.create_box({.name = "Roundtrip Box"});
+  if (!box.valid()) {
     return 1;
   }
 
-  PolygonDocument document = std::move(document_result).value();
-  Result<std::string> serialized = serialize_single_document_as_qdr(document);
-  if (!serialized.ok()) {
+  std::string serialized = quader.io().serialize_qdr(box.id());
+  if (serialized.empty()) {
     return 2;
   }
 
-  Result<QdrDocumentDto> round_trip =
-      deserialize_qdr_document(serialized.value());
-  if (!round_trip.ok() || round_trip.value().objects.size() != 1U) {
+  MeshHandle imported =
+      quader.io().deserialize_qdr_object(serialized, "Imported Box");
+  if (!imported.valid()) {
     return 3;
   }
 
-  return round_trip.value().objects.front().document.face_count() == 6U ? 0 : 4;
+  return imported.summary().name == "Imported Box" ? 0 : 4;
 }

@@ -47,6 +47,21 @@ bool covered_by_allowed_c_make_glob(std::string_view relative,
   if (starts_with(relative, "src/mesh/polygon/")) {
     return cmake.find("src/mesh/polygon/*.cpp") != std::string::npos;
   }
+  if (starts_with(relative,
+                  "src/sdk/core/modeling/internal/mesh/polygon/operations/")) {
+    return cmake.find("mesh/polygon/operations/*.cpp") != std::string::npos;
+  }
+  if (starts_with(relative, "src/sdk/core/modeling/internal/mesh/polygon/")) {
+    return cmake.find("mesh/polygon/*.cpp") != std::string::npos;
+  }
+  if (starts_with(relative, "src/sdk/core/modeling/internal/mesh/geometry/")) {
+    return cmake.find("mesh/geometry/geometry.cpp") != std::string::npos;
+  }
+  if (starts_with(relative, "src/sdk/core/modeling/internal/io/qdr/")) {
+    return cmake.find("io/qdr/" +
+                      std::string(std::filesystem::path(relative).filename()
+                                      .generic_string())) != std::string::npos;
+  }
   return false;
 }
 
@@ -88,6 +103,13 @@ std::string first_include_line(const std::string &source) {
 
 std::string include_root_relative(const std::filesystem::path &file) {
   std::string relative = normalized_relative(file);
+  constexpr std::string_view sdk_internal_prefix =
+      "src/sdk/core/modeling/internal/";
+  if (starts_with(relative, sdk_internal_prefix)) {
+    relative.erase(0, sdk_internal_prefix.size());
+    return relative;
+  }
+
   constexpr std::string_view source_prefix = "src/";
   if (starts_with(relative, source_prefix)) {
     relative.erase(0, source_prefix.size());
@@ -116,6 +138,10 @@ bool has_matching_header_first_include(const std::filesystem::path &source_file,
 
 bool is_matching_header_first_legacy_exception(std::string_view relative) {
   return relative == "src/editor/modeling/runtime/session.cpp";
+}
+
+bool is_sdk_internal_thirdparty_path(std::string_view relative) {
+  return starts_with(relative, "src/sdk/core/modeling/internal/thirdparty/");
 }
 
 std::vector<std::string> significant_header_lines(const std::string &source) {
@@ -255,6 +281,9 @@ TEST(OopArchitectureGuardrailTests, TypeDeclarationsHaveMeaningfulDocumentation)
           const std::string source = read_file(file);
           const std::vector<std::string> file_lines = split_lines(source);
           const std::string relative = normalized_relative(file);
+          if (is_sdk_internal_thirdparty_path(relative)) {
+            continue;
+          }
 
           for (std::size_t index = 0; index < file_lines.size(); ++index) {
             const std::string &line = file_lines[index];
@@ -292,6 +321,9 @@ TEST(OopArchitectureGuardrailTests, SourceFilesWithMatchingHeadersIncludeThemFir
     }
 
     const std::string relative = normalized_relative(file);
+    if (is_sdk_internal_thirdparty_path(relative)) {
+      continue;
+    }
     if (is_matching_header_first_legacy_exception(relative)) {
       EXPECT_EQ(first_include_line(read_file(file)),
                 "#include \"session_internal.hpp\"")
@@ -322,6 +354,9 @@ TEST(OopArchitectureGuardrailTests, EverySourceCppIsPartOfCMakeSourceTruth) {
   for (const std::filesystem::path &file :
        files_with_extension(source_root() / "src", ".cpp")) {
     const std::string relative = normalized_relative(file);
+    if (is_sdk_internal_thirdparty_path(relative)) {
+      continue;
+    }
     EXPECT_TRUE(cmake.find(relative) != std::string::npos ||
                 covered_by_allowed_c_make_glob(relative, cmake))
         << relative;

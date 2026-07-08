@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -56,7 +57,19 @@ public:
 
   [[nodiscard]] Result<ObjectId> add_document(PolygonDocument document,
                                               std::string name = "Mesh");
+  [[nodiscard]] Result<OperationResult>
+  apply_object_selection(std::span<const ObjectId> objects,
+                         SelectionEdit edit = SelectionEdit::Replace);
   [[nodiscard]] Result<OperationResult> select_object(ObjectId object_id);
+  [[nodiscard]] Result<OperationResult> rename_object(ObjectId object_id,
+                                                      std::string name);
+  [[nodiscard]] Result<OperationResult> remove_object(ObjectId object_id);
+  [[nodiscard]] Result<ObjectId> duplicate_object(ObjectId object_id,
+                                                  Vec3 offset = {},
+                                                  std::string name = {});
+  [[nodiscard]] Result<OperationResult>
+  combine_objects(std::span<const ObjectId> object_ids,
+                  std::string name = {});
   [[nodiscard]] Result<OperationResult> select_face(ObjectId object_id,
                                                     FaceId face_id);
   [[nodiscard]] Result<OperationResult> translate_selection(Vec3 delta);
@@ -69,9 +82,16 @@ public:
   [[nodiscard]] Result<OperationResult> redo();
   [[nodiscard]] bool can_undo() const;
   [[nodiscard]] bool can_redo() const;
+  [[nodiscard]] std::size_t undo_depth() const;
+  void squash_undo_since(std::size_t mark);
+  [[nodiscard]] bool rollback_undo_since(std::size_t mark);
   [[nodiscard]] bool preview_active() const;
   [[nodiscard]] std::vector<SessionObjectSummary> objects() const;
   [[nodiscard]] const PolygonDocument *document(ObjectId object_id) const;
+  [[nodiscard]] Result<PolygonDocument> document_copy(ObjectId object_id) const;
+  [[nodiscard]] Result<OperationResult>
+  commit_document(ObjectId object_id, PolygonDocument document,
+                  OperationResult receipt);
   [[nodiscard]] Result<ToolPreviewPayload> preview_payload() const;
   [[nodiscard]] PreviewTransactionSummary preview_summary() const;
   [[nodiscard]] Result<SemanticOverlayPayload>

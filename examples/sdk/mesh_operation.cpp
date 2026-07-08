@@ -9,21 +9,21 @@
 int main() {
   using namespace quader::modeling;
 
-  Result<PolygonDocument> document_result =
-      PolygonDocument::make_box({.min = {-1.0F, -1.0F, -1.0F},
-                                 .max = {1.0F, 1.0F, 1.0F}});
-  if (!document_result.ok()) {
+  ModelingApi quader = ModelingApi::create();
+  MeshHandle box = quader.create_box({
+      .name = "Example Box",
+      .min = {-1.0F, -1.0F, -1.0F},
+      .max = {1.0F, 1.0F, 1.0F},
+  });
+  if (!box.valid()) {
     return 1;
   }
 
-  PolygonDocument document = std::move(document_result).value();
-  if (!document.select_all_faces().ok()) {
+  OperationReceipt moved = box.transform().translate({1.0F, 0.0F, 0.0F});
+  if (!moved.success) {
     return 2;
   }
-  if (!document.translate_selection({1.0F, 0.0F, 0.0F}).ok()) {
-    return 3;
-  }
 
-  Result<MeshPayload> mesh = document.compile_mesh();
-  return mesh.ok() && !mesh.value().vertices.empty() ? 0 : 4;
+  MeshPayload mesh = box.payloads().compile_mesh();
+  return !mesh.vertices.empty() ? 0 : 3;
 }

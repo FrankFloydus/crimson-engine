@@ -7,6 +7,7 @@
 #pragma once
 
 #include <quader/modeling/commands/command.hpp>
+#include <quader/modeling/api/modeling_api.hpp>
 #include <quader/modeling/ids.hpp>
 #include <quader/modeling/input/viewport_host_input_snapshot.hpp>
 #include <quader/modeling/io/obj_mesh_view.hpp>

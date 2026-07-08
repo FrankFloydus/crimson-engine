@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -80,6 +81,27 @@ public:
   [[nodiscard]] const T &value() const & { return value_; }
   [[nodiscard]] T &value() & { return value_; }
   [[nodiscard]] T &&value() && { return std::move(value_); }
+  [[nodiscard]] const T &or_throw() const & {
+    if (!ok_) {
+      throw std::runtime_error(error_.message);
+    }
+    return value_;
+  }
+  [[nodiscard]] T &or_throw() & {
+    if (!ok_) {
+      throw std::runtime_error(error_.message);
+    }
+    return value_;
+  }
+  [[nodiscard]] T &&or_throw() && {
+    if (!ok_) {
+      throw std::runtime_error(error_.message);
+    }
+    return std::move(value_);
+  }
+  [[nodiscard]] T value_or(T fallback) const {
+    return ok_ ? value_ : std::move(fallback);
+  }
   [[nodiscard]] const Error &error() const noexcept { return error_; }
   [[nodiscard]] const std::string &error_message() const noexcept {
     return error_.message;

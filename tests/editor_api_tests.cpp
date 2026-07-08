@@ -233,6 +233,42 @@ create_selected_box(quader::QuaderEditorApi &editor,
   return created.value();
 }
 
+TEST(EditorApiTests, NativeModelingMeshHandleRoutesComponentPreviewWorkflow) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+
+  const quader::QuaderApiResult<quader::QuaderMeshHandle> created =
+      editor.modeling().create_box_mesh(
+          quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                               .max = {1.0f, 1.0f, 1.0f}},
+          "Native Handle Box");
+  ASSERT_TRUE(created.ok()) << created.error_message();
+
+  quader::QuaderMeshHandle mesh = created.value();
+  ASSERT_TRUE(mesh.valid());
+  const std::optional<quader::QuaderMeshAsset> before = mesh.compiled_mesh();
+  ASSERT_TRUE(before.has_value());
+
+  const quader::QuaderFaceSelection face = mesh.faces().only({1});
+  ASSERT_EQ(face.count(), 1u);
+  const quader::QuaderApiVoidResult selected = face.replace();
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  EXPECT_EQ(editor.selection().summary().selected_face_count, 1u);
+
+  quader::QuaderPreviewHandle preview =
+      face.slice({.x_slices = 1, .y_slices = 1});
+  ASSERT_TRUE(preview.begin_result().ok())
+      << preview.begin_result().error_message();
+  const quader::QuaderApiVoidResult committed =
+      preview.commit("Slice Native Handle Face");
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_TRUE(committed.changed());
+
+  const std::optional<quader::QuaderMeshAsset> after = mesh.compiled_mesh();
+  ASSERT_TRUE(after.has_value());
+  EXPECT_GT(after->vertices.size(), before->vertices.size());
+}
+
 constexpr float kTestPositionEpsilon = 0.0001f;
 
 void expect_vec3_near(quader::QVec3 actual, quader::QVec3 expected) {

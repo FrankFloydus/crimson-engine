@@ -19,17 +19,15 @@ Owns:
 - normals, barycentric predicates, bounds, and spatial broad-phase helpers;
 - future BVH or spatial index wrappers.
 
-Third-party geometry backends must stay private to this package. Public headers expose only
-Quader-owned types.
+Geometry algorithms are Quader-owned. Public headers expose only Quader-owned types.
 
 ## Source Direction
 
-- Keep GTE Mathematics includes and `gte::` types confined to private implementation files.
-  Consumers should only see `quader_geometry` types from public headers, and backend libraries
-  should remain privately linked.
-- Boundary guards should stay consistent between template fallback paths and GTE-backed `double`
-  paths. Degenerate rays/segments, invalid AABBs, degenerate triangles, and mismatched broad-phase
-  spans are permanent boundary cases for package tests.
+- Keep geometry predicates and distance/intersection helpers implemented in this package instead
+  of adding a native geometry backend dependency.
+- Boundary guards should stay consistent across float and double paths. Degenerate rays/segments,
+  invalid AABBs, degenerate triangles, and mismatched broad-phase spans are permanent boundary
+  cases for package tests.
 - Adapter-local conversion helpers in `src/mesh/polygon` and `src/editor/modeling` are acceptable
   as thin type boundaries, but reusable predicates, spatial broad-phase, or projection math should
   be added here first and consumed upward.
