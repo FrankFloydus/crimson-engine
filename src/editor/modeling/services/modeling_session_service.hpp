@@ -177,6 +177,7 @@ public:
   [[nodiscard]] ModelingHoverSummary
   preview_selection_hover(const ModelingHoverRequest &request) const;
   ModelingCommandResult clear_selection_hover();
+  ModelingCommandResult cut_selected_meshes_by_hovered_face_plane();
   ModelingCommandResult activate_viewport_tool(ModelingViewportTool tool);
   ModelingCommandResult cancel_active_modal_tool();
   ModelingCommandResult

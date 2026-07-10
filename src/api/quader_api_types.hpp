@@ -432,6 +432,7 @@ struct QuaderBoxSelectRequest {
 struct QuaderHoverRequest {
     QuaderRay ray;
     bool selected_modifier_pressed = false;
+    bool face_plane_hover = false;
     double vertex_radius = 0.3;
     double edge_radius = 0.2;
 };
@@ -677,6 +678,8 @@ enum class QuaderOverlayStyleRole {
     CutPreviewKeepBothOutline,
     CutPreviewDiscardOutline,
     CutPreviewSeam,
+    FacePlaneHoverFace,
+    FacePlaneHoverWire,
 };
 
 /**

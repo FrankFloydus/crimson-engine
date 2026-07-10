@@ -9,6 +9,43 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-10 - Hovered Face Plane Cut Splits And Deselects
+
+Task/context: Alt-hovering a face and Alt+RMB cutting selected meshes originally reused the existing
+Plane Cut split operation incorrectly, then briefly routed through an in-place surface cut. The
+final viewport gesture is intended to use the hovered face as one infinite plane, keep both sides,
+separate the pieces into mesh objects, and leave nothing selected.
+
+Invariant:
+
+- `cut_selected_meshes_by_hovered_face_plane` must route through the object-separating
+  `plane_cut` KeepBoth path using per-selected-object local plane requests.
+- The shortcut must keep both sides of every cut mesh, create separate mesh objects for split-off
+  halves, and finish with no selected objects, vertices, edges, or faces.
+- `plane_surface_cut` must directly classify each face against the infinite plane and split by the
+  face/plane intersection segment. Do not route it through `knife_stroke`; knife repair can create
+  off-plane connector diagonals on subdivided meshes.
+- Alt face-plane hover uses dedicated red plane hover overlay roles and must not reuse the blue
+  remove-selection styling.
+- New mesh objects created by the shortcut must inherit the source mesh scene transform/material
+  identity so the separated half appears in-place and can be selected independently.
+
+Affected owners/files:
+
+- `src/mesh/polygon/operations/plane_cut_operation.cpp`
+- `src/editor/modeling/runtime/session.cpp`
+- `src/editor/modeling/services/modeling_session_service.cpp`
+- `src/editor/viewport/viewport_selection_interaction.cpp`
+- `tests/modeling_domain/operation/qdr_document_operation_plane_cut_tests.cpp`
+- `tests/viewport_interaction_controller_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests quader_modeling_domain_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=ViewportInteractionControllerTests.*`
+- `build\vs2026\Debug\quader_modeling_domain_tests.exe --gtest_filter=QdrDocumentOperationPlaneCutTests.*`
+- `cmake --build --preset vs2026-debug --target quader`
+
 ## 2026-07-08 - Bridge Boundary Winding Uses Adjacent Face Votes
 
 Task/context: bridging the preselected open edge loops from `test.qdr` could generate many bridge

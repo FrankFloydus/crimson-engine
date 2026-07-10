@@ -90,6 +90,8 @@ enum class ViewportOverlayStyleRole {
     CutPreviewKeepBothOutline,
     CutPreviewDiscardOutline,
     CutPreviewSeam,
+    FacePlaneHoverFace,
+    FacePlaneHoverWire,
 };
 
 /**

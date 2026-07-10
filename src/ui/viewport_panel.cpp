@@ -2235,6 +2235,17 @@ void ViewportPanel::draw_pane_contents(
                                      : input.mouse_local;
   const int left_click_count =
       std::max(1, ImGui::GetMouseClickedCount(ImGuiMouseButton_Left));
+  const bool right_clicked =
+      hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+  const bool right_down = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+  const bool right_released = ImGui::IsMouseReleased(ImGuiMouseButton_Right);
+  const ImVec2 right_click_screen = io.MouseClickedPos[ImGuiMouseButton_Right];
+  const QVec2 right_click_local =
+      right_clicked ? QVec2{right_click_screen.x - item_min.x,
+                            right_click_screen.y - item_min.y}
+                    : input.mouse_local;
+  const int right_click_count =
+      std::max(1, ImGui::GetMouseClickedCount(ImGuiMouseButton_Right));
   const bool point_light_gizmos_visible =
       point_light_gizmos_visible_for_pane(
           active_viewport_settings().bool_value(ViewportBoolSettingId::ShowGizmos),
@@ -2255,6 +2266,11 @@ void ViewportPanel::draw_pane_contents(
       .left_pressed = left_clicked,
       .left_down = left_down,
       .left_released = left_released,
+      .right_click_local = right_click_local,
+      .right_click_count = right_click_count,
+      .right_pressed = right_clicked,
+      .right_down = right_down,
+      .right_released = right_released,
       .scene_billboard_pick_candidates = scene_billboard_pick_candidates,
   };
   PivotToolService *pivot_service =

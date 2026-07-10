@@ -473,6 +473,7 @@ public:
   assign_material_slot_to_face(QuaderModelingObjectRef object,
                                QuaderElementId face,
                                std::uint32_t material_slot);
+  QuaderApiVoidResult cut_selected_meshes_by_hovered_face_plane();
 
   [[nodiscard]] QuaderActionSet
   available_action_set(const QuaderActionQuery &query = {}) const;

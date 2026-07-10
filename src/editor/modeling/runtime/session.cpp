@@ -3244,6 +3244,118 @@ CommandResult plane_cut(std::vector<PolygonObject> &objects,
   return ok_result(true);
 }
 
+CommandResult plane_cut(std::vector<PolygonObject> &objects,
+                        std::span<const ObjectPlaneCutRequest> requests,
+                        int &next_object_id, int &active_object_id) {
+  if (requests.empty()) {
+    return error_result("Cut needs a selected mesh.");
+  }
+
+  std::vector<PolygonObject> candidate = objects;
+  int local_next_object_id =
+      next_polygon_object_id(candidate, next_object_id);
+
+  for (PolygonObject &object : candidate) {
+    object.selected = false;
+    object.component_edit_target = false;
+    object.selection = quader_poly::Selection();
+  }
+
+  int result_count = 0;
+  std::string last_message = "Could not cut the selected mesh.";
+  for (const ObjectPlaneCutRequest &request : requests) {
+    const int object_index = object_index_by_id(candidate, request.object_id);
+    if (object_index < 0) {
+      return error_result("Cut target mesh was not found.");
+    }
+
+    PolygonObject &source = candidate[static_cast<std::size_t>(object_index)];
+    const quader_poly::PlaneCutResult cut_result =
+        quader_poly::plane_cut(source.document, request.request);
+    if (!cut_result.changed) {
+      return error_result(cut_result.message.empty() ? last_message
+                                                     : cut_result.message);
+    }
+
+    if (request.request.mode == quader_poly::PlaneCutMode::KeepBack) {
+      source.document = cut_result.back_document;
+      ++result_count;
+      continue;
+    }
+
+    source.document = cut_result.front_document;
+    ++result_count;
+
+    if (request.request.mode == quader_poly::PlaneCutMode::KeepBoth) {
+      PolygonObject back = source;
+      back.id = local_next_object_id++;
+      back.document = cut_result.back_document;
+      back.selected = false;
+      back.component_edit_target = false;
+      back.selection = quader_poly::Selection();
+      candidate.push_back(std::move(back));
+      ++result_count;
+    }
+  }
+
+  if (result_count == 0) {
+    return error_result(last_message);
+  }
+
+  objects = std::move(candidate);
+  next_object_id = local_next_object_id;
+  active_object_id = -1;
+  return ok_result(true);
+}
+
+CommandResult plane_surface_cut(std::vector<PolygonObject> &objects,
+                                std::span<const ObjectPlaneCutRequest> requests,
+                                int &active_object_id, SelectionMode &mode) {
+  if (requests.empty()) {
+    return error_result("Cut needs a selected mesh.");
+  }
+
+  std::vector<PolygonObject> candidate = objects;
+
+  for (PolygonObject &object : candidate) {
+    object.selected = false;
+    object.selection = quader_poly::Selection();
+  }
+
+  std::vector<int> result_ids;
+  std::string last_message = "Could not cut the selected mesh.";
+  for (const ObjectPlaneCutRequest &request : requests) {
+    const int object_index = object_index_by_id(candidate, request.object_id);
+    if (object_index < 0) {
+      return error_result("Cut target mesh was not found.");
+    }
+
+    PolygonObject &source = candidate[static_cast<std::size_t>(object_index)];
+    quader_poly::Selection selection;
+    const quader_poly::OperationResult cut_result =
+        quader_poly::plane_surface_cut(source.document, selection,
+                                       request.request);
+    if (!cut_result.changed) {
+      return error_result(cut_result.message.empty() ? last_message
+                                                     : cut_result.message);
+    }
+
+    source.selection = std::move(selection);
+    source.selected = true;
+    result_ids.push_back(source.id);
+  }
+
+  if (result_ids.empty()) {
+    return error_result(last_message);
+  }
+
+  objects = std::move(candidate);
+  mode = SelectionMode::Vertex;
+  active_object_id = result_ids.back();
+  normalize_active_object_id(objects, active_object_id);
+  return ok_result(true);
+}
+
 CommandResult mirror_objects_across_plane(
     std::vector<PolygonObject> &objects, std::span<const int> object_ids,
     std::span<const quader::QVec3> plane_points, int &next_object_id,

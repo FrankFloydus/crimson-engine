@@ -10,6 +10,7 @@
 #include <editor/modeling/operations/operation_schema.hpp>
 #include <editor/modeling/runtime/tool_constants.hpp>
 #include <mesh/polygon/document.hpp>
+#include <mesh/polygon/document_operations.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -141,6 +142,8 @@ enum class SelectionOverlayStyleRole : std::uint32_t {
   OpenEdge = 11,
   SnapTargetVertex = 12,
   DiagnosticEdge = 13,
+  FacePlaneHoverFace = 14,
+  FacePlaneHoverWire = 15,
 };
 
 inline constexpr std::uint32_t kSelectionOverlayStyleRoleTokenMask =
@@ -180,6 +183,8 @@ selection_overlay_style_role_from_token(std::uint32_t token) {
   case SelectionOverlayStyleRole::OpenEdge:
   case SelectionOverlayStyleRole::SnapTargetVertex:
   case SelectionOverlayStyleRole::DiagnosticEdge:
+  case SelectionOverlayStyleRole::FacePlaneHoverFace:
+  case SelectionOverlayStyleRole::FacePlaneHoverWire:
     return static_cast<SelectionOverlayStyleRole>(
         token & kSelectionOverlayStyleRoleTokenValueMask);
   }
@@ -212,6 +217,14 @@ struct ObjectLocalTransform {
 struct ObjectLocalOffset {
   int object_id = -1;
   quader::QVec3 offset;
+};
+
+/**
+ * Stores a per-object plane cut request in object-local space.
+ */
+struct ObjectPlaneCutRequest {
+  int object_id = -1;
+  quader_poly::PlaneCutRequest request;
 };
 
 /**
@@ -289,6 +302,7 @@ struct SelectionHoverState {
   quader_poly::Edge edge;
   quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
   bool selected_modifier_pressed = false;
+  bool face_plane_hover = false;
   int candidate_object_id = -1;
 };
 
@@ -366,6 +380,12 @@ struct SelectionOverlayStyle {
       selection_overlay_style_token(SelectionOverlayStyleRole::HoverWire);
   std::uint32_t hover_vertex_color_abgr =
       selection_overlay_style_token(SelectionOverlayStyleRole::HoverVertex);
+  std::uint32_t face_plane_hover_face_color_abgr =
+      selection_overlay_style_token(
+          SelectionOverlayStyleRole::FacePlaneHoverFace);
+  std::uint32_t face_plane_hover_line_color_abgr =
+      selection_overlay_style_token(
+          SelectionOverlayStyleRole::FacePlaneHoverWire);
   std::uint32_t hover_selected_face_color_abgr = selection_overlay_style_token(
       SelectionOverlayStyleRole::RemoveSelectionFace);
   std::uint32_t hover_selected_line_color_abgr = selection_overlay_style_token(
@@ -1456,7 +1476,8 @@ SelectionHoverUpdateResult update_selection_hover(
     bool selected_modifier_pressed,
     quader_poly::PickOptions pick_options = quader_poly::PickOptions(),
     std::span<const PickObjectBounds> object_bounds = {},
-    std::span<const PickObjectFaceGeometry> face_geometry = {});
+    std::span<const PickObjectFaceGeometry> face_geometry = {},
+    bool face_plane_hover = false);
 bool selection_hover_target_matches_selection(
     std::span<const PolygonObject> objects, SelectionMode mode,
     const SelectionHoverState &hover);
@@ -1685,6 +1706,12 @@ CommandResult plane_cut(std::vector<PolygonObject> &objects,
                         const quader_poly::PlaneCutRequest &request,
                         int &next_object_id, int &active_object_id,
                         SelectionMode &mode);
+CommandResult plane_cut(std::vector<PolygonObject> &objects,
+                        std::span<const ObjectPlaneCutRequest> requests,
+                        int &next_object_id, int &active_object_id);
+CommandResult plane_surface_cut(std::vector<PolygonObject> &objects,
+                                std::span<const ObjectPlaneCutRequest> requests,
+                                int &active_object_id, SelectionMode &mode);
 CommandResult mirror_objects_across_plane(
     std::vector<PolygonObject> &objects, std::span<const int> object_ids,
     std::span<const quader::QVec3> plane_points, int &next_object_id,
@@ -2066,6 +2093,9 @@ public:
                std::span<const quader_poly::KnifeStrokeSegment> segments);
   CommandResult plane_cut(std::span<const int> object_ids,
                           const quader_poly::PlaneCutRequest &request);
+  CommandResult plane_cut(std::span<const ObjectPlaneCutRequest> requests);
+  CommandResult
+  plane_surface_cut(std::span<const ObjectPlaneCutRequest> requests);
   CommandResult
   mirror_objects_across_plane(std::span<const int> object_ids,
                               std::span<const quader::QVec3> plane_points);

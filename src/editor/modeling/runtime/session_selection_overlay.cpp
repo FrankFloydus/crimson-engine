@@ -301,14 +301,18 @@ void append_hover_face_overlay(
 		const quader_poly::Document& document,
 		quader_poly::ElementId face_id,
 		bool selected_hover_target,
+                bool face_plane_hover,
 		const SelectionOverlayStyle& style)
 {
 	quader_poly::Selection hover_selection;
         hover_selection.mode = quader_poly::SelectionMode::Face;
         hover_selection.faces.push_back(face_id);
 	const quader_poly::OverlayData overlay = quader_poly::build_overlay(document, hover_selection);
-	const std::uint32_t triangle_color =
-		selected_hover_target ? style.hover_selected_face_color_abgr : style.hover_face_color_abgr;
+        const std::uint32_t triangle_color =
+            face_plane_hover
+                ? style.face_plane_hover_face_color_abgr
+                : (selected_hover_target ? style.hover_selected_face_color_abgr
+                                         : style.hover_face_color_abgr);
 	for (const quader_poly::OverlayTriangle& triangle : overlay.triangles) {
           frame.triangles.push_back({
               SelectionOverlayLayer::HoverFace,
@@ -325,8 +329,11 @@ void append_hover_face_overlay(
 	if (face == nullptr || face->vertices.size() < 2) {
 		return;
 	}
-	const std::uint32_t line_color =
-		selected_hover_target ? style.hover_selected_line_color_abgr : style.hover_face_edge_color_abgr;
+        const std::uint32_t line_color =
+            face_plane_hover
+                ? style.face_plane_hover_line_color_abgr
+                : (selected_hover_target ? style.hover_selected_line_color_abgr
+                                         : style.hover_face_edge_color_abgr);
 	for (std::size_t index = 0; index < face->vertices.size(); ++index) {
 		const quader_poly::Vertex* a = quader_poly::find_vertex(document, face->vertices[index]);
 		const quader_poly::Vertex* b = quader_poly::find_vertex(document, face->vertices[(index + 1U) % face->vertices.size()]);
@@ -473,6 +480,8 @@ SelectionOverlayFrame build_selection_overlay_frame(
 	SelectionOverlayFrame frame;
 	const bool selected_hover_target = selection_hover_target_matches_selection(objects, mode, hover);
 	frame.hover_target_selected = hover.selected_modifier_pressed && selected_hover_target;
+        const bool face_plane_hover =
+            hover.face_plane_hover && hover.kind == SelectionHoverKind::Face;
 
         auto append_line =
             [&](SelectionOverlayLayer layer, const quader::QVec3 &a,
@@ -620,9 +629,11 @@ SelectionOverlayFrame build_selection_overlay_frame(
                               triangle.b,
                               triangle.c,
                               triangle_layer == SelectionOverlayLayer::HoverFace
-                                  ? (frame.hover_target_selected
-                                         ? style.hover_selected_face_color_abgr
-                                         : style.hover_face_color_abgr)
+                                  ? (face_plane_hover
+                                         ? style.face_plane_hover_face_color_abgr
+                                         : (frame.hover_target_selected
+                                                ? style.hover_selected_face_color_abgr
+                                                : style.hover_face_color_abgr))
                                   : style.selection_face_color_abgr,
                               object_id,
                               triangle.face_id,
@@ -661,11 +672,14 @@ SelectionOverlayFrame build_selection_overlay_frame(
                                     b->position,
                                     line_layer ==
                                             SelectionOverlayLayer::HoverFaceEdge
-                                        ? (frame.hover_target_selected
+                                        ? (face_plane_hover
                                                ? style
-                                                     .hover_selected_line_color_abgr
-                                               : style
-                                                     .hover_face_edge_color_abgr)
+                                                     .face_plane_hover_line_color_abgr
+                                               : (frame.hover_target_selected
+                                                      ? style
+                                                            .hover_selected_line_color_abgr
+                                                      : style
+                                                            .hover_face_edge_color_abgr))
                                         : style.selected_edge_color_abgr,
                                     style.edge_line_width_pixels,
                                     object_id,
@@ -917,6 +931,8 @@ SelectionOverlayFrame build_selection_hover_overlay_frame(
 	SelectionOverlayFrame frame;
 	const bool selected_hover_target = selection_hover_target_matches_selection(objects, mode, hover);
 	frame.hover_target_selected = hover.selected_modifier_pressed && selected_hover_target;
+        const bool face_plane_hover =
+            hover.face_plane_hover && hover.kind == SelectionHoverKind::Face;
 
 	for (const PolygonObject& object : objects) {
           const bool component_candidate =
@@ -949,7 +965,8 @@ SelectionOverlayFrame build_selection_hover_overlay_frame(
                 if (hover.kind == SelectionHoverKind::Face) {
                   append_hover_face_overlay(frame, object.id, object.document,
                                             hover.face_id,
-                                            frame.hover_target_selected, style);
+                                            frame.hover_target_selected,
+                                            face_plane_hover, style);
                 } else if (hover.kind == SelectionHoverKind::Edge) {
                   append_hover_edge_overlay(frame, object.id, object.document,
                                             hover.edge,

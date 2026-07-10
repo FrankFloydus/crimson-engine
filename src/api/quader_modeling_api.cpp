@@ -1266,6 +1266,14 @@ QuaderModelingApi::assign_material_slot_to_face(QuaderModelingObjectRef object,
       "Assign Face Material Slot");
 }
 
+QuaderApiVoidResult
+QuaderModelingApi::cut_selected_meshes_by_hovered_face_plane() {
+  return mutations_.run_modeling_command(
+      std::make_unique<CutSelectedMeshesByHoveredFacePlaneHistoryCommand>(
+          project_session(session_).modeling()),
+      "Cut By Face Plane");
+}
+
 QuaderActionSet
 QuaderModelingApi::available_action_set(const QuaderActionQuery &query) const {
   return to_api_action_set(

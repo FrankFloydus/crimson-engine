@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -58,7 +59,9 @@ struct ViewportInteractionHarness {
 
     [[nodiscard]] quader::ViewportInteractionFrame
     frame(bool left_pressed = false, bool left_down = false,
-          bool left_released = false, quader::QVec2 left_click_local = {}) {
+          bool left_released = false, quader::QVec2 left_click_local = {},
+          bool right_pressed = false, bool right_down = false,
+          bool right_released = false, quader::QVec2 right_click_local = {}) {
       return {
           .input_router = router,
           .camera = camera,
@@ -70,6 +73,11 @@ struct ViewportInteractionHarness {
           .left_pressed = left_pressed,
           .left_down = left_down,
           .left_released = left_released,
+          .right_click_local = right_click_local,
+          .right_click_count = 1,
+          .right_pressed = right_pressed,
+          .right_down = right_down,
+          .right_released = right_released,
           .scene_billboard_pick_candidates = billboard_pick_candidates,
       };
     }
@@ -232,6 +240,22 @@ bool has_snap_target_vertex_point(const quader::QuaderOverlayFrame &frame) {
                      [](const quader::QuaderOverlayPoint &point) {
                        return point.layer ==
                               quader::QuaderOverlayLayer::SnapTargetVertex;
+                     });
+}
+
+bool has_triangle_style(const quader::QuaderOverlayFrame &frame,
+                        quader::QuaderOverlayStyleRole role) {
+  return std::any_of(frame.triangles.begin(), frame.triangles.end(),
+                     [role](const quader::QuaderOverlayTriangle &triangle) {
+                       return triangle.style_role == role;
+                     });
+}
+
+bool has_line_style(const quader::QuaderOverlayFrame &frame,
+                    quader::QuaderOverlayStyleRole role) {
+  return std::any_of(frame.lines.begin(), frame.lines.end(),
+                     [role](const quader::QuaderOverlayLine &line) {
+                       return line.style_role == role;
                      });
 }
 
@@ -705,6 +729,134 @@ TEST(ViewportInteractionControllerTests, AltClickEdgeSelectsLoopThroughViewportF
     EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Edge);
     EXPECT_EQ(selection.selected_edge_count, 4u);
     EXPECT_EQ(selection.active_kind, quader::QuaderActiveSelectionKind::Edge);
+}
+
+TEST(ViewportInteractionControllerTests,
+     AltHoverObjectModeUsesFacePlaneHoverOverlay) {
+    ViewportInteractionHarness harness;
+    (void)create_unit_box(harness);
+
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+
+    const quader::ViewportScreenPoint face_point =
+        harness.camera.project_world_point({0.0f, 0.0f, 1.0f});
+    ASSERT_TRUE(face_point.visible);
+    harness.input.modifiers.alt = true;
+    harness.input.mouse_local = face_point.position;
+    harness.input.mouse_screen = face_point.position;
+
+    harness.controller.handle_after_active_tool(
+        harness.editor, harness.frame(), quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
+
+    const quader::QuaderOverlayFrame overlay =
+        harness.editor.query().selection_overlay();
+    EXPECT_TRUE(has_triangle_style(
+        overlay, quader::QuaderOverlayStyleRole::FacePlaneHoverFace));
+    EXPECT_TRUE(has_line_style(
+        overlay, quader::QuaderOverlayStyleRole::FacePlaneHoverWire));
+    EXPECT_FALSE(has_triangle_style(
+        overlay, quader::QuaderOverlayStyleRole::RemoveSelectionFace));
+}
+
+TEST(ViewportInteractionControllerTests,
+     AltRightClickCutsSelectedMeshByHoveredFacePlane) {
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef target = create_unit_box(harness);
+    quader::QuaderTransform target_transform;
+    target_transform.position = {4.0f, 0.0f, 0.0f};
+    ASSERT_TRUE(harness.editor.scene()
+                    .set_transform(target.entity, target_transform)
+                    .ok());
+    const quader::QuaderModelingObjectRef second_target =
+        create_unit_box(harness);
+    quader::QuaderTransform second_target_transform;
+    second_target_transform.position = {4.0f, -3.0f, 0.0f};
+    ASSERT_TRUE(harness.editor.scene()
+                    .set_transform(second_target.entity,
+                                   second_target_transform)
+                    .ok());
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> reference =
+        harness.editor.modeling().create_box(
+            quader::QuaderBounds{
+                .min = {4.0f, 2.0f, -1.0f},
+                .max = {6.0f, 4.0f, 1.0f},
+            },
+            "Face Plane Reference");
+    ASSERT_TRUE(reference.ok) << reference.message;
+    ASSERT_TRUE(harness.editor.selection()
+                    .select_objects({target, second_target})
+                    .ok());
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Object);
+    const std::size_t object_count_before =
+        harness.editor.modeling().objects().size();
+    const std::unordered_set<int> object_ids_before{
+        target.modeling_object_id, second_target.modeling_object_id,
+        reference.value().modeling_object_id};
+
+    harness.camera.set_view_direction({1.0f, 0.0f, 0.0f});
+    const quader::ViewportScreenPoint face_point =
+        harness.camera.project_world_point({4.0f, 3.0f, 0.0f});
+    ASSERT_TRUE(face_point.visible);
+    harness.input.modifiers.alt = true;
+    harness.input.mouse_local = face_point.position;
+    harness.input.mouse_screen = face_point.position;
+
+    harness.controller.handle_after_active_tool(
+        harness.editor,
+        harness.frame(false, false, false, {}, true, true, false,
+                      face_point.position),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{});
+
+    const std::vector<quader::QuaderModelingObjectRecord> objects =
+        harness.editor.modeling().objects();
+    EXPECT_EQ(objects.size(), object_count_before + 2U);
+    std::vector<quader::QuaderModelingObjectRecord> created_cut_halves;
+    for (const quader::QuaderModelingObjectRecord &object : objects) {
+      if (!object_ids_before.contains(object.modeling_object_id)) {
+        created_cut_halves.push_back(object);
+      }
+    }
+    ASSERT_EQ(created_cut_halves.size(), 2U);
+    const auto expect_created_transform =
+        [&](std::size_t index, quader::QVec3 expected_position) {
+          const quader::TransformComponent *cut_half_transform =
+              harness.session.scene().transform(created_cut_halves[index].entity);
+          ASSERT_NE(cut_half_transform, nullptr);
+          EXPECT_NEAR(cut_half_transform->position.x, expected_position.x,
+                      0.001f);
+          EXPECT_NEAR(cut_half_transform->position.y, expected_position.y,
+                      0.001f);
+          EXPECT_NEAR(cut_half_transform->position.z, expected_position.z,
+                      0.001f);
+        };
+    expect_created_transform(0, target_transform.position);
+    expect_created_transform(1, second_target_transform.position);
+    const quader::QuaderSelectionSummary selection =
+        harness.editor.selection().summary();
+    EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Object);
+    EXPECT_FALSE(selection.has_selection);
+    EXPECT_EQ(selection.selected_object_count, 0u);
+    EXPECT_EQ(selection.selected_vertex_count, 0u);
+    EXPECT_EQ(selection.selected_edge_count, 0u);
+    EXPECT_EQ(selection.selected_face_count, 0u);
+    EXPECT_TRUE(harness.editor.history().can_undo());
+
+    ASSERT_TRUE(harness.editor.selection()
+                    .select_object(created_cut_halves.front().entity)
+                    .ok());
+    const quader::QuaderSelectionSummary selected_cut_half =
+        harness.editor.selection().summary();
+    EXPECT_EQ(selected_cut_half.selected_object_count, 1u);
+    EXPECT_EQ(harness.session.scene().selected_entities().front(),
+              created_cut_halves.front().entity);
 }
 
 TEST(ViewportInteractionControllerTests, ShiftClickRebuildsSliceQuadPreviewThroughViewportFallback) {

@@ -80,6 +80,10 @@ inline constexpr std::uint32_t kOverlayDiagnosticEdgeColor = 0xff0000ffU;
 inline constexpr std::uint32_t kOverlayGroupBoundsColor = rgba8(255, 230, 0, 255);
 inline constexpr std::uint32_t kOverlayHoverFaceColor = 0x161fff66U;
 inline constexpr std::uint32_t kOverlayHoverWireColor = 0xff00ff51U;
+inline constexpr std::uint32_t kOverlayFacePlaneHoverFaceColor =
+    rgba8(255, 36, 52, 70);
+inline constexpr std::uint32_t kOverlayFacePlaneHoverWireColor =
+    rgba8(255, 36, 52, 255);
 inline constexpr std::uint32_t kOverlayRemoveFaceColor = 0x52ff6b1fU;
 inline constexpr std::uint32_t kOverlayRemoveWireColor = 0xffff6b1fU;
 inline constexpr std::uint32_t kOverlayVertexColor = 0xffffe66bU;

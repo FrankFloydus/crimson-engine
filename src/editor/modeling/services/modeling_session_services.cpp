@@ -1461,6 +1461,7 @@ std::uint64_t ModelingOverlayService::selection_overlay_signature(
   mix_overlay_signature_hash(hash, static_cast<int>(hover.edge.b));
   mix_overlay_signature_hash(hash, static_cast<int>(hover.face_id));
   mix_overlay_signature_hash(hash, hover.selected_modifier_pressed);
+  mix_overlay_signature_hash(hash, hover.face_plane_hover);
   mix_overlay_signature_hash(hash, hover.candidate_object_id);
 
   const quader_editor_core::TransformDragState &drag =
@@ -1592,6 +1593,7 @@ bool SelectionOverlayCache::hover_matches(
          left.vertex_id == right.vertex_id && left.edge == right.edge &&
          left.face_id == right.face_id &&
          left.selected_modifier_pressed == right.selected_modifier_pressed &&
+         left.face_plane_hover == right.face_plane_hover &&
          left.candidate_object_id == right.candidate_object_id;
 }
 

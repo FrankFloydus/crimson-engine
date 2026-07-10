@@ -26,6 +26,7 @@
 #include "scene/scene_entity_naming.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <iterator>
@@ -394,6 +395,56 @@ quader_poly::PickOptions
 pick_options_from_request(const ModelingHoverRequest &request) {
   return quader_editor_core::selection_pick_options_from_radii(
       request.vertex_radius, request.edge_radius);
+}
+
+std::optional<std::array<QVec3, 3>> face_plane_points(
+    const quader_poly::Document &document, quader_poly::ElementId face_id) {
+  const quader_poly::Face *face = quader_poly::find_face(document, face_id);
+  if (face == nullptr || face->vertices.size() < 3) {
+    return std::nullopt;
+  }
+
+  const quader_poly::Vertex *anchor =
+      quader_poly::find_vertex(document, face->vertices.front());
+  if (anchor == nullptr) {
+    return std::nullopt;
+  }
+
+  for (std::size_t first_index = 1; first_index < face->vertices.size();
+       ++first_index) {
+    const quader_poly::Vertex *first =
+        quader_poly::find_vertex(document, face->vertices[first_index]);
+    if (first == nullptr) {
+      continue;
+    }
+    for (std::size_t second_index = first_index + 1;
+         second_index < face->vertices.size(); ++second_index) {
+      const quader_poly::Vertex *second =
+          quader_poly::find_vertex(document, face->vertices[second_index]);
+      if (second == nullptr) {
+        continue;
+      }
+      const QVec3 normal =
+          cross(first->position - anchor->position,
+                second->position - anchor->position);
+      if (length_squared(normal) > 0.000001F) {
+        return std::array<QVec3, 3>{anchor->position, first->position,
+                                    second->position};
+      }
+    }
+  }
+
+  return std::nullopt;
+}
+
+quader_poly::PlaneCutRequest
+plane_cut_request_from_points(const std::array<QVec3, 3> &points) {
+  return {
+      .first_point = points[0],
+      .second_point = points[1],
+      .third_point = points[2],
+      .mode = quader_poly::PlaneCutMode::KeepBoth,
+  };
 }
 
 ModelingBoxPreview
@@ -2234,7 +2285,7 @@ public:
             picking_objects, session_.selection_mode(), runtime_.hover(),
             to_runtime(request.ray), request.selected_modifier_pressed,
             pick_options, cached_pick_object_bounds(),
-            cached_pick_face_geometry(pick_options));
+            cached_pick_face_geometry(pick_options), request.face_plane_hover);
     runtime_.apply_hover_update(hover);
     return {
         .ok = true,
@@ -2257,7 +2308,7 @@ public:
             picking_objects, session_.selection_mode(), runtime_.hover(),
             to_runtime(request.ray), request.selected_modifier_pressed,
             pick_options, cached_pick_object_bounds(),
-            cached_pick_face_geometry(pick_options));
+            cached_pick_face_geometry(pick_options), request.face_plane_hover);
     return from_runtime_hover_summary(session_, hover.hover, hover.changed);
   }
 
@@ -2841,11 +2892,122 @@ public:
         .ok = result.ok, .changed = result.changed, .message = result.message};
   }
 
+  ModelingCommandResult cut_selected_meshes_by_hovered_face_plane() {
+    const quader_editor_core::SelectionHoverState hover = runtime_.hover();
+    if (hover.kind != quader_editor_core::SelectionHoverKind::Face ||
+        hover.object_id <= 0 ||
+        hover.face_id == quader_poly::kInvalidElementId) {
+      return {.ok = false,
+              .message =
+                  "Hover a mesh face while holding Alt before cutting."};
+    }
+
+    const std::vector<int> selected_object_ids = session_.selected_object_ids();
+    if (selected_object_ids.empty()) {
+      return {.ok = false,
+              .message =
+                  "Select one or more mesh objects before cutting."};
+    }
+    std::unordered_set<int> object_ids_before;
+    object_ids_before.reserve(session_.objects().size());
+    for (const quader_editor_core::PolygonObject &object :
+         session_.objects()) {
+      object_ids_before.insert(object.id);
+    }
+    const std::unordered_set<int> selected_object_id_set(
+        selected_object_ids.begin(), selected_object_ids.end());
+    const std::unordered_map<int, ModelingObjectSceneIdentity>
+        source_scene_identities =
+            object_registry_.capture_scene_identities_for_modeling_objects(
+                scene_, selected_object_id_set);
+
+    const std::vector<quader_editor_core::PolygonObject> &picking_objects =
+        cached_scene_transformed_objects_for_picking();
+    const auto hovered_object =
+        std::find_if(picking_objects.begin(), picking_objects.end(),
+                     [&](const quader_editor_core::PolygonObject &object) {
+                       return object.id == hover.object_id;
+                     });
+    if (hovered_object == picking_objects.end()) {
+      return {.ok = false, .message = "Hovered face mesh was not found."};
+    }
+
+    const std::optional<std::array<QVec3, 3>> world_points =
+        face_plane_points(hovered_object->document, hover.face_id);
+    if (!world_points.has_value()) {
+      return {.ok = false,
+              .message = "Hovered face does not define a valid plane."};
+    }
+
+    std::vector<quader_editor_core::ObjectPlaneCutRequest> requests;
+    requests.reserve(selected_object_ids.size());
+    for (const int object_id : selected_object_ids) {
+      const std::optional<QMat4> world_transform =
+          modeling_object_world_transform(object_id);
+      if (!world_transform.has_value()) {
+        return {.ok = false,
+                .message = "Cut target mesh world transform was not found."};
+      }
+      const QMat4 object_from_world = inverse(*world_transform);
+      std::array<QVec3, 3> local_points{};
+      for (std::size_t index = 0; index < local_points.size(); ++index) {
+        local_points[index] =
+            transform_point(object_from_world, (*world_points)[index]);
+      }
+      requests.push_back({
+          .object_id = object_id,
+          .request = plane_cut_request_from_points(local_points),
+      });
+    }
+
+    const quader_editor_core::CommandResult result = session_.plane_cut(requests);
+    if (result.ok) {
+      if (result.changed) {
+        sync_scene_objects_from_modeling(true);
+        std::vector<int> created_object_ids;
+        for (const quader_editor_core::PolygonObject &object :
+             session_.objects()) {
+          if (!object_ids_before.contains(object.id)) {
+            created_object_ids.push_back(object.id);
+          }
+        }
+        for (std::size_t index = 0; index < created_object_ids.size();
+             ++index) {
+          if (index >= selected_object_ids.size()) {
+            break;
+          }
+          const auto source_identity =
+              source_scene_identities.find(selected_object_ids[index]);
+          if (source_identity == source_scene_identities.end()) {
+            continue;
+          }
+          const std::optional<EntityId> created_entity =
+              object_registry_.entity_for_modeling_object(
+                  created_object_ids[index]);
+          if (!created_entity.has_value() ||
+              !scene_.exists(*created_entity)) {
+            continue;
+          }
+          mesh_sync_service_.apply_scene_identity_to_duplicate_entity(
+              scene_, *created_entity, source_identity->second);
+          object_registry_.remember_scene_entity(created_object_ids[index],
+                                                 scene_, *created_entity);
+        }
+        runtime_.set_hover({});
+      }
+      sync_scene_selection_from_modeling();
+      invalidate_selection_overlay_caches();
+    }
+    return {
+        .ok = result.ok, .changed = result.changed, .message = result.message};
+  }
+
   ModelingCommandResult
   set_selection_hover(const ModelingDirectHoverRequest &request) {
     quader_editor_core::SelectionHoverState hover;
     hover.object_id = request.modeling_object_id;
     hover.selected_modifier_pressed = request.selected_modifier_pressed;
+    hover.face_plane_hover = request.face_plane_hover;
     hover.candidate_object_id =
         request.kind == ModelingActiveSelectionKind::Object
             ? -1
@@ -3444,6 +3606,11 @@ ModelingHoverSummary ModelingSessionService::preview_selection_hover(
 
 ModelingCommandResult ModelingSessionService::clear_selection_hover() {
   return impl_->clear_selection_hover();
+}
+
+ModelingCommandResult
+ModelingSessionService::cut_selected_meshes_by_hovered_face_plane() {
+  return impl_->cut_selected_meshes_by_hovered_face_plane();
 }
 
 ModelingCommandResult

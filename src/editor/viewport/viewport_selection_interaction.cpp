@@ -136,8 +136,9 @@ QuaderHoverRequest make_hover_request(const ViewportCameraController &camera,
           {
               .origin = world_ray.origin,
               .direction = world_ray.direction,
-          },
+      },
       .selected_modifier_pressed = modifiers.primary,
+      .face_plane_hover = modifiers.alt,
       .vertex_radius =
           settings.float_value(ViewportFloatSettingId::PickVertexRadius),
       .edge_radius =
@@ -358,6 +359,29 @@ void ViewportSelectionInteraction::handle_frame(
         is_component_selection_mode(to_modeling_selection_mode(summary.mode));
     suppress_hover_after_selection(before_tool.selection_click_local,
                                    hovered_before_selection);
+  }
+
+  if (!box_state_.active && can_pick && frame.input.modifiers.alt &&
+      frame.right_pressed) {
+    QDR_PROFILE_SCOPE("Viewport face plane cut");
+    const QuaderApiResult<QuaderHoverSummary> hover = editor.selection().hover(
+        make_hover_request(frame.camera, frame.settings,
+                           frame.right_click_local, frame.input.modifiers));
+    if (!hover.ok) {
+      LOG_ERROR("Viewport face-plane hover failed: {}",
+                hover.message.empty() ? "Hover failed." : hover.message);
+    } else if (hover.value().target.kind == QuaderActiveSelectionKind::Face) {
+      const QuaderApiVoidResult cut =
+          editor.modeling().cut_selected_meshes_by_hovered_face_plane();
+      if (!cut.ok) {
+        LOG_ERROR("Viewport face-plane cut failed: {}",
+                  cut.message.empty() ? "Face-plane cut failed."
+                                      : cut.message);
+      }
+    }
+    hover_clear_issued_ = false;
+    hover_suppressed_target_.reset();
+    return;
   }
 
   if (!box_state_.active && can_use_selection_fallback && frame.left_pressed) {

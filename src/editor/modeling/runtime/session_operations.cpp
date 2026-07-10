@@ -1029,6 +1029,32 @@ EditorSession::plane_cut(std::span<const int> object_ids,
   return result;
 }
 
+CommandResult
+EditorSession::plane_cut(std::span<const ObjectPlaneCutRequest> requests) {
+  const CommandResult result = quader_editor_core::plane_cut(
+      state_.objects, requests, state_.next_object_id,
+      state_.active_object_id);
+  note_content_result(result);
+  if (result.changed) {
+    note_selection_changed();
+  }
+  return result;
+}
+
+CommandResult
+EditorSession::plane_surface_cut(
+    std::span<const ObjectPlaneCutRequest> requests) {
+  const SelectionMode mode_before = state_.selection_mode;
+  const CommandResult result = quader_editor_core::plane_surface_cut(
+      state_.objects, requests, state_.active_object_id,
+      state_.selection_mode);
+  note_content_result(result);
+  if (result.changed || state_.selection_mode != mode_before) {
+    note_selection_changed();
+  }
+  return result;
+}
+
 CommandResult EditorSession::mirror_objects_across_plane(
     std::span<const int> object_ids,
     std::span<const quader::QVec3> plane_points) {

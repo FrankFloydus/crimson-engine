@@ -7,7 +7,9 @@
 #include "operation_validation_test_helpers.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <map>
+#include <set>
 #include <utility>
 
 namespace {
@@ -18,6 +20,7 @@ using quader_poly::Face;
 using quader_poly::PlaneCutMode;
 using quader_poly::PlaneCutRequest;
 using quader_poly::PlaneCutResult;
+using quader_poly::OperationResult;
 using quader::QVec3;
 
 PlaneCutRequest center_x_cut(PlaneCutMode mode)
@@ -36,6 +39,16 @@ PlaneCutRequest tilted_cut(PlaneCutMode mode)
 		{ -0.75F, -1.0F, -0.75F },
 		{ 0.75F, 1.0F, -0.25F },
 		{ -0.25F, -1.0F, 0.75F },
+		mode,
+	};
+}
+
+PlaneCutRequest subdivided_box_surface_cut(PlaneCutMode mode)
+{
+	return {
+		{ -0.35F, -3.0F, -2.0F },
+		{ 0.65F, 3.0F, -2.0F },
+		{ -0.35F, -3.0F, 2.0F },
 		mode,
 	};
 }
@@ -70,6 +83,79 @@ std::map<std::pair<ElementId, ElementId>, int> edge_counts(const Document& docum
 		}
 	}
 	return counts;
+}
+
+std::set<std::pair<ElementId, ElementId>> edge_set(const Document& document)
+{
+	std::set<std::pair<ElementId, ElementId>> edges;
+	for (const quader_poly::Edge edge : quader_poly::document_edges(document)) {
+		edges.emplace(edge.a, edge.b);
+	}
+	return edges;
+}
+
+bool point_lies_on_request_plane(const PlaneCutRequest& request, QVec3 point)
+{
+	const QVec3 first_delta = request.second_point - request.first_point;
+	const QVec3 second_delta = request.third_point - request.first_point;
+	const QVec3 normal = cross(first_delta, second_delta);
+	const float normal_length = std::sqrt(length_squared(normal));
+	if (normal_length <= 0.0001F) {
+		return false;
+	}
+	return std::abs(dot(point - request.first_point, normal)) <=
+	       0.0002F * normal_length;
+}
+
+bool point_lies_on_segment(QVec3 point, QVec3 first, QVec3 second)
+{
+	const QVec3 delta = second - first;
+	const float length_squared_delta = length_squared(delta);
+	if (length_squared_delta <= 0.00000001F) {
+		return qdr_test::vec_nearly_equal(point, first, 0.0002F);
+	}
+	const float factor = dot(point - first, delta) / length_squared_delta;
+	if (factor < -0.0002F || factor > 1.0002F) {
+		return false;
+	}
+	const QVec3 closest = first + (delta * std::clamp(factor, 0.0F, 1.0F));
+	return length_squared(point - closest) <= 0.0002F * 0.0002F;
+}
+
+bool edge_lies_on_source_edge(const Document& source, quader_poly::Edge edge,
+                              const Document& candidate)
+{
+	const quader_poly::Vertex* first = quader_poly::find_vertex(candidate, edge.a);
+	const quader_poly::Vertex* second = quader_poly::find_vertex(candidate, edge.b);
+	if (first == nullptr || second == nullptr) {
+		return false;
+	}
+	for (const quader_poly::Edge source_edge : quader_poly::document_edges(source)) {
+		const quader_poly::Vertex* source_first =
+			quader_poly::find_vertex(source, source_edge.a);
+		const quader_poly::Vertex* source_second =
+			quader_poly::find_vertex(source, source_edge.b);
+		if (source_first == nullptr || source_second == nullptr) {
+			continue;
+		}
+		if (point_lies_on_segment(
+			    first->position, source_first->position, source_second->position) &&
+		    point_lies_on_segment(
+			    second->position, source_first->position, source_second->position)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool edge_lies_on_plane(const Document& document, quader_poly::Edge edge,
+                        const PlaneCutRequest& request)
+{
+	const quader_poly::Vertex* first = quader_poly::find_vertex(document, edge.a);
+	const quader_poly::Vertex* second = quader_poly::find_vertex(document, edge.b);
+	return first != nullptr && second != nullptr &&
+	       point_lies_on_request_plane(request, first->position) &&
+	       point_lies_on_request_plane(request, second->position);
 }
 
 void check_closed_manifold(const Document& document)
@@ -148,6 +234,60 @@ TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSplitsACubeAndKeepsBothClosedHal
 
 	const Face* back_cap = selected_cap_face(result.back_document, result.back_selection);
 	EXPECT_TRUE(dot(face_normal(result.back_document, *back_cap), quader::QVec3 { 1.0F, 0.0F, 0.0F }) > 0.9F);
+}
+
+TEST(QdrDocumentOperationPlaneCutTests,
+     PlaneSurfaceCutBisectsCubeWithoutRemovingOrSplittingParts) {
+  Document document = quader_poly::make_cube({});
+  quader_poly::Selection selection;
+  const std::size_t vertex_count_before = document.vertices.size();
+  const std::size_t face_count_before = document.faces.size();
+
+  const OperationResult result = quader_poly::plane_surface_cut(
+      document, selection, center_x_cut(PlaneCutMode::KeepBoth));
+
+  EXPECT_TRUE(result.changed) << result.message;
+  EXPECT_GT(document.vertices.size(), vertex_count_before);
+  EXPECT_GT(document.faces.size(), face_count_before);
+  EXPECT_EQ(selection.mode, quader_poly::SelectionMode::Vertex);
+  EXPECT_FALSE(selection.vertices.empty());
+  check_closed_manifold(document);
+}
+
+TEST(QdrDocumentOperationPlaneCutTests,
+     PlaneSurfaceCutSubdividedBoxDoesNotCreateOffPlaneConnectorEdges) {
+  quader_poly::CubePrimitiveSpec spec;
+  spec.width = 4.0F;
+  spec.height = 6.0F;
+  spec.depth = 2.0F;
+  spec.width_segments = 4;
+  spec.height_segments = 6;
+  spec.depth_segments = 2;
+  const Document source = quader_poly::make_cube(spec);
+  Document document = source;
+  quader_poly::Selection selection;
+  const std::set<std::pair<ElementId, ElementId>> source_edges =
+      edge_set(source);
+  const PlaneCutRequest request =
+      subdivided_box_surface_cut(PlaneCutMode::KeepBoth);
+
+  const OperationResult result =
+      quader_poly::plane_surface_cut(document, selection, request);
+
+  EXPECT_TRUE(result.changed) << result.message;
+  qdr_test::expect_valid_polygon_document_after_success(document, result);
+  EXPECT_EQ(selection.mode, quader_poly::SelectionMode::Vertex);
+  EXPECT_FALSE(selection.vertices.empty());
+  check_closed_manifold(document);
+  for (const quader_poly::Edge edge : quader_poly::document_edges(document)) {
+    if (source_edges.contains({edge.a, edge.b})) {
+      continue;
+    }
+    EXPECT_TRUE(edge_lies_on_plane(document, edge, request) ||
+                edge_lies_on_source_edge(source, edge, document))
+        << "new edge " << edge.a << "-" << edge.b
+        << " is neither on the cut plane nor on a split source edge";
+  }
 }
 
 TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSupportsDestructiveFrontAndBackModes) {

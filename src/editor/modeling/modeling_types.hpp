@@ -358,6 +358,7 @@ struct ModelingDirectHoverRequest {
   std::pair<int, int> edge = {-1, -1};
   int face_id = -1;
   bool selected_modifier_pressed = false;
+  bool face_plane_hover = false;
 };
 
 /**
@@ -396,6 +397,7 @@ struct ModelingBoxSelectRequest {
 struct ModelingHoverRequest {
   ModelingRay ray;
   bool selected_modifier_pressed = false;
+  bool face_plane_hover = false;
   double vertex_radius = 0.3;
   double edge_radius = 0.2;
 };

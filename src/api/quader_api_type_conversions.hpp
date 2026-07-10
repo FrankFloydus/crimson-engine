@@ -686,6 +686,7 @@ to_modeling_hover_request(const QuaderHoverRequest &request) {
   return {
       .ray = to_modeling_ray(request.ray),
       .selected_modifier_pressed = request.selected_modifier_pressed,
+      .face_plane_hover = request.face_plane_hover,
       .vertex_radius = request.vertex_radius,
       .edge_radius = request.edge_radius,
   };
@@ -696,6 +697,7 @@ to_api_hover_request(const ModelingHoverRequest &request) {
   return {
       .ray = to_api_ray(request.ray),
       .selected_modifier_pressed = request.selected_modifier_pressed,
+      .face_plane_hover = request.face_plane_hover,
       .vertex_radius = request.vertex_radius,
       .edge_radius = request.edge_radius,
   };

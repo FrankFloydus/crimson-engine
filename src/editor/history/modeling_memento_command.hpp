@@ -366,6 +366,23 @@ private:
 };
 
 /**
+ * Applies Cut Selected Meshes By Hovered Face Plane History Command behavior as
+ * a command in the editor coordination layer.
+ */
+class CutSelectedMeshesByHoveredFacePlaneHistoryCommand final
+    : public ModelingMementoCommand {
+public:
+  explicit CutSelectedMeshesByHoveredFacePlaneHistoryCommand(
+      ModelingSessionService &modeling)
+      : ModelingMementoCommand(modeling, "Cut By Face Plane") {}
+
+private:
+  ModelingCommandResult execute_initial() override {
+    return modeling().cut_selected_meshes_by_hovered_face_plane();
+  }
+};
+
+/**
  * Applies Commit Transform Preview History Command behavior as a command in the editor coordination layer.
  */
 class CommitTransformPreviewHistoryCommand final : public ModelingMementoCommand {

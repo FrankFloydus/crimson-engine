@@ -72,6 +72,8 @@ triangle_style_role(quader_editor_core::SelectionOverlayLayer layer,
       return ViewportOverlayStyleRole::SelectionFace;
     case quader_editor_core::SelectionOverlayStyleRole::HoverFace:
       return ViewportOverlayStyleRole::HoverFace;
+    case quader_editor_core::SelectionOverlayStyleRole::FacePlaneHoverFace:
+      return ViewportOverlayStyleRole::FacePlaneHoverFace;
     case quader_editor_core::SelectionOverlayStyleRole::RemoveSelectionFace:
       return ViewportOverlayStyleRole::RemoveSelectionFace;
     default:
@@ -107,6 +109,8 @@ line_style_role(quader_editor_core::SelectionOverlayLayer layer,
                  : ViewportOverlayStyleRole::SelectionWire;
     case quader_editor_core::SelectionOverlayStyleRole::HoverWire:
       return ViewportOverlayStyleRole::HoverWire;
+    case quader_editor_core::SelectionOverlayStyleRole::FacePlaneHoverWire:
+      return ViewportOverlayStyleRole::FacePlaneHoverWire;
     case quader_editor_core::SelectionOverlayStyleRole::RemoveSelectionWire:
       return ViewportOverlayStyleRole::RemoveSelectionWire;
     case quader_editor_core::SelectionOverlayStyleRole::OpenEdge:
@@ -175,6 +179,8 @@ ViewportOverlaySource overlay_source_for_role(ViewportOverlayStyleRole role) {
   case ViewportOverlayStyleRole::HoverFace:
   case ViewportOverlayStyleRole::HoverWire:
   case ViewportOverlayStyleRole::HoverVertex:
+  case ViewportOverlayStyleRole::FacePlaneHoverFace:
+  case ViewportOverlayStyleRole::FacePlaneHoverWire:
   case ViewportOverlayStyleRole::RemoveSelectionFace:
   case ViewportOverlayStyleRole::RemoveSelectionWire:
   case ViewportOverlayStyleRole::RemoveSelectionVertex:
@@ -275,6 +281,10 @@ std::uint32_t projected_color_for(ViewportOverlayLayer layer,
     return kOverlayHoverWireColor;
   case ViewportOverlayStyleRole::HoverVertex:
     return kOverlayHoverVertexColor;
+  case ViewportOverlayStyleRole::FacePlaneHoverFace:
+    return kOverlayFacePlaneHoverFaceColor;
+  case ViewportOverlayStyleRole::FacePlaneHoverWire:
+    return kOverlayFacePlaneHoverWireColor;
   case ViewportOverlayStyleRole::RemoveSelectionFace:
     return kOverlayRemoveFaceColor;
   case ViewportOverlayStyleRole::RemoveSelectionWire:

@@ -39,6 +39,11 @@ struct ViewportInteractionFrame {
   bool left_pressed = false;
   bool left_down = false;
   bool left_released = false;
+  QVec2 right_click_local = {};
+  int right_click_count = 1;
+  bool right_pressed = false;
+  bool right_down = false;
+  bool right_released = false;
   std::span<const ViewportSceneBillboardPickCandidate>
       scene_billboard_pick_candidates;
 };

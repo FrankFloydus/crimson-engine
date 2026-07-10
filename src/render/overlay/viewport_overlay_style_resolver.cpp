@@ -204,6 +204,10 @@ ViewportOverlayStyleResolver::color_for(ViewportOverlayStyleRole role,
     return setting_color(settings, ViewportColorSettingId::HoverFace);
   case ViewportOverlayStyleRole::HoverWire:
     return setting_color(settings, ViewportColorSettingId::HoverWire);
+  case ViewportOverlayStyleRole::FacePlaneHoverFace:
+    return kOverlayFacePlaneHoverFaceColor;
+  case ViewportOverlayStyleRole::FacePlaneHoverWire:
+    return kOverlayFacePlaneHoverWireColor;
   case ViewportOverlayStyleRole::RemoveSelectionFace:
     return setting_color(settings, ViewportColorSettingId::RemoveSelectionFace);
   case ViewportOverlayStyleRole::RemoveSelectionWire:
@@ -266,6 +270,7 @@ float ViewportOverlayStyleResolver::line_width_for(
                      ViewportFloatSettingId::SelectionEdgeLineSize);
   case ViewportOverlayStyleRole::HoverWire:
   case ViewportOverlayStyleRole::RemoveSelectionWire:
+  case ViewportOverlayStyleRole::FacePlaneHoverWire:
     return settings.float_value(ViewportFloatSettingId::HoverWireLineSize);
   case ViewportOverlayStyleRole::OpenEdge:
     return settings.float_value(ViewportFloatSettingId::OpenEdgeLineSize);

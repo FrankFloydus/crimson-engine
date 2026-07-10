@@ -1496,14 +1496,31 @@ SelectionHoverUpdateResult update_selection_hover(
 		bool selected_modifier_pressed,
 		quader_poly::PickOptions pick_options,
 		std::span<const PickObjectBounds> object_bounds,
-		std::span<const PickObjectFaceGeometry> face_geometry)
+		std::span<const PickObjectFaceGeometry> face_geometry,
+                bool face_plane_hover)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_selection_hover");
 	apply_editor_surface_pick_policy(pick_options);
 	SelectionHoverState next;
 	next.candidate_object_id = current_hover.candidate_object_id;
 
-        if (mode == SelectionMode::Object) {
+        if (face_plane_hover) {
+          int hit_index = -1;
+          quader_poly::PickResult hit;
+          quader_poly::PickOptions options = pick_options;
+          options.mode = quader_poly::SelectionMode::Face;
+          if (pick_nearest_object(objects, ray, options, hit_index, hit,
+                                  object_bounds, face_geometry) &&
+              hit_index >= 0 && hit.kind == quader_poly::ElementKind::Face) {
+            next.object_id = objects[hit_index].id;
+            next.kind = SelectionHoverKind::Face;
+            next.face_id = hit.face_id;
+            next.face_plane_hover = true;
+            if (next.object_id > 0) {
+              next.candidate_object_id = next.object_id;
+            }
+          }
+        } else if (mode == SelectionMode::Object) {
           int hit_index = -1;
           quader_poly::PickResult hit;
           quader_poly::PickOptions options = pick_options;
@@ -1573,6 +1590,7 @@ SelectionHoverUpdateResult update_selection_hover(
 		current_hover.edge != next.edge ||
 		current_hover.face_id != next.face_id ||
 		current_hover.selected_modifier_pressed != next.selected_modifier_pressed ||
+                current_hover.face_plane_hover != next.face_plane_hover ||
 		current_hover.candidate_object_id != next.candidate_object_id;
 	return { changed, next };
 }
