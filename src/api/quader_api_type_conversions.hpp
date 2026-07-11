@@ -1219,6 +1219,8 @@ to_api_tool_preview_mesh(const ModelingToolPreviewMesh &preview) {
       .source_entity = preview.source_entity,
       .material = preview.material,
       .mesh = to_api_mesh_asset(preview.mesh),
+      .transform = preview.transform,
+      .instance_transforms = preview.instance_transforms,
   };
 }
 

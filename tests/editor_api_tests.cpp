@@ -143,6 +143,17 @@ selected_entities(const quader::QuaderEditorApi &editor) {
   return selected;
 }
 
+std::size_t child_count(const quader::QuaderEditorApi &editor,
+                        quader::EntityId parent) {
+  const std::vector<quader::QuaderEntitySnapshot> entities =
+      editor.query().entities();
+  return static_cast<std::size_t>(std::count_if(
+      entities.begin(), entities.end(),
+      [parent](const quader::QuaderEntitySnapshot &candidate) {
+        return candidate.parent == parent;
+      }));
+}
+
 std::unordered_set<std::string>
 available_command_ids(const quader::QuaderEditorApi &editor) {
   std::unordered_set<std::string> result;
@@ -1943,6 +1954,11 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
   quader::ViewportToolState state;
   for (const quader::ViewportInputActionBindingDescriptor &descriptor :
        quader::viewport_input_action_binding_catalog()) {
+    state = {};
+    if (descriptor.when.find("activeTool.linear_array") !=
+        std::string_view::npos) {
+      state.active_tool = quader::ViewportToolId::LinearArray;
+    }
     EXPECT_TRUE(
         has_keybinding(rules, descriptor.target_id, descriptor.shortcut))
         << descriptor.target_id << " / " << descriptor.shortcut;
@@ -5084,8 +5100,269 @@ TEST(EditorApiTests, ToolsApiSetsCutKeepModeThroughPublicSetting) {
                 static_cast<int>(quader::QuaderCutMode::DiscardRight)));
     ASSERT_TRUE(updated_cut_setting.ok())
         << updated_cut_setting.error_message();
-    EXPECT_EQ(editor.query().tool_status().cut_mode,
+  EXPECT_EQ(editor.query().tool_status().cut_mode,
               quader::QuaderCutMode::DiscardRight);
+}
+
+TEST(EditorApiTests,
+     LinearArrayToolRequiresOneMeshAndKeepsEndpointFixedWhenCountChanges) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+
+  EXPECT_FALSE(editor.tools().can_activate(quader::ViewportToolId::LinearArray));
+  const std::optional<quader::QuaderCommandDescriptor> unavailable =
+      command_descriptor(editor,
+                         quader::quader_command::kToolsActivateLinearArray);
+  ASSERT_TRUE(unavailable.has_value());
+  EXPECT_FALSE(unavailable->enabled);
+  EXPECT_TRUE(unavailable->shortcut.empty());
+
+  const quader::QuaderModelingObjectRef source =
+      create_selected_box(editor, "Linear Array Tool Source");
+  const quader::QuaderModelingObjectRef second =
+      create_selected_box(editor, "Linear Array Tool Second");
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({source.entity, second.entity}, second.entity)
+                  .ok());
+  EXPECT_FALSE(editor.tools().can_activate(quader::ViewportToolId::LinearArray));
+  EXPECT_FALSE(
+      editor.tools().activate(quader::ViewportToolId::LinearArray).ok());
+  ASSERT_TRUE(editor.selection().select_object(source).ok());
+  ASSERT_TRUE(editor.tools().can_activate(quader::ViewportToolId::LinearArray));
+  const quader::QuaderApiVoidResult activated =
+      editor.tools().activate(quader::ViewportToolId::LinearArray);
+  ASSERT_TRUE(activated.ok()) << activated.error_message();
+  EXPECT_EQ(editor.tools().active_tool(), "linear_array");
+
+  const quader::QuaderToolSettingsTarget initial_settings =
+      editor.tools().active_settings();
+  ASSERT_TRUE(initial_settings.active);
+  EXPECT_TRUE(initial_settings.preview_active);
+  EXPECT_EQ(initial_settings.tool_id, "linear_array");
+  EXPECT_EQ(initial_settings.title, "Linear Array");
+  EXPECT_TRUE(initial_settings.can_apply);
+  EXPECT_TRUE(initial_settings.can_cancel);
+  const quader::QuaderToolSettingControl *count =
+      find_tool_setting_control(initial_settings, "linear_array.count");
+  ASSERT_NE(count, nullptr);
+  EXPECT_EQ(count->kind, quader::QuaderToolSettingControlKind::Number);
+  EXPECT_EQ(count->label, "Num Copies");
+  EXPECT_DOUBLE_EQ(count->number_value, 4.0);
+  EXPECT_DOUBLE_EQ(count->min_value, 2.0);
+  EXPECT_DOUBLE_EQ(count->max_value, 128.0);
+
+  std::vector<quader::QuaderToolPreviewMesh> previews =
+      editor.render().tool_preview_meshes();
+  ASSERT_EQ(previews.size(), 1u);
+  EXPECT_EQ(previews.front().source_entity, source.entity);
+  ASSERT_EQ(previews.front().instance_transforms.size(), 3u);
+  EXPECT_NEAR(previews.front().instance_transforms[0].values[12], 2.0f,
+              kTestPositionEpsilon);
+  EXPECT_NEAR(previews.front().instance_transforms[1].values[12], 4.0f,
+              kTestPositionEpsilon);
+  EXPECT_NEAR(previews.front().instance_transforms[2].values[12], 6.0f,
+              kTestPositionEpsilon);
+
+  const quader::QuaderApiVoidResult changed_count = editor.tools().set_setting(
+      "linear_array", "linear_array.count", 6.0);
+  ASSERT_TRUE(changed_count.ok()) << changed_count.error_message();
+  previews = editor.render().tool_preview_meshes();
+  ASSERT_EQ(previews.size(), 1u);
+  ASSERT_EQ(previews.front().instance_transforms.size(), 5u);
+  EXPECT_NEAR(previews.front().instance_transforms.front().values[12], 1.2f,
+              kTestPositionEpsilon);
+  EXPECT_NEAR(previews.front().instance_transforms.back().values[12], 6.0f,
+              kTestPositionEpsilon);
+
+  const quader::QuaderApiVoidResult canceled =
+      editor.tools().cancel_active_tool_preview();
+  ASSERT_TRUE(canceled.ok()) << canceled.error_message();
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_TRUE(editor.render().tool_preview_meshes().empty());
+  EXPECT_EQ(user_entity_count(editor), 2u);
+}
+
+TEST(EditorApiTests, LinearArrayToolApplyUsesTheAtomicModelingCommand) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  (void)create_selected_box(editor, "Linear Array Apply Source");
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::LinearArray).ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("linear_array", "linear_array.count", 3.0)
+                  .ok());
+  const quader::QuaderApiVoidResult applied =
+      editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(applied.ok()) << applied.error_message();
+  EXPECT_TRUE(applied.changed());
+  EXPECT_EQ(user_entity_count(editor), 3u);
+  EXPECT_EQ(selected_entities(editor).size(), 3u);
+  EXPECT_EQ(editor.query().history().undo_label, "Linear Array");
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+}
+
+TEST(EditorApiTests,
+     LinearArrayPublicApiCreatesOrderedIndependentCopiesInOneHistoryItem) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef source =
+      create_selected_box(editor, "Linear Array Source");
+  const quader::QuaderApiResult<quader::QuaderEntityRef> child =
+      editor.scene().create_entity(quader::QuaderCreateEntityArgs{
+          .name = "Source Child",
+          .kind = quader::QuaderEntityKind::Empty,
+          .parent = source.entity,
+      });
+  ASSERT_TRUE(child.ok()) << child.error_message();
+  ASSERT_TRUE(editor.selection().select_object(source).ok());
+
+  const quader::QuaderApiResult<quader::QuaderLinearArrayResult> array =
+      editor.modeling().create_linear_array(quader::QuaderLinearArrayArgs{
+          .source = source,
+          .endpoint_world = {6.0f, 0.0f, 0.0f},
+          .count = 4,
+      });
+  ASSERT_TRUE(array.ok()) << array.error_message();
+  ASSERT_TRUE(array.changed());
+  ASSERT_EQ(array.value().elements.size(), 4u);
+  EXPECT_EQ(array.value().elements.front().entity, source.entity);
+  EXPECT_EQ(array.value().elements.front().modeling_object_id,
+            source.modeling_object_id);
+  EXPECT_EQ(editor.query().history().undo_label, "Linear Array");
+
+  std::unordered_set<quader::EntityId> entities;
+  std::unordered_set<quader::QuaderModelingObjectId> modeling_ids;
+  std::unordered_set<quader::QuaderEditorObjectId> editor_ids;
+  std::unordered_set<quader::AssetId> meshes;
+  std::unordered_set<std::string> uuids;
+  std::vector<quader::EntityId> expected_selection;
+  std::vector<quader::QuaderEntitySnapshot> snapshots;
+  for (std::size_t index = 0; index < array.value().elements.size(); ++index) {
+    const quader::QuaderModelingObjectRef &element =
+        array.value().elements[index];
+    entities.insert(element.entity);
+    modeling_ids.insert(element.modeling_object_id);
+    editor_ids.insert(element.editor_object_id);
+    meshes.insert(element.mesh);
+    uuids.insert(element.entity_uuid);
+    expected_selection.push_back(element.entity);
+    const std::optional<quader::QuaderEntitySnapshot> snapshot =
+        editor.query().entity(element.entity);
+    ASSERT_TRUE(snapshot.has_value());
+    snapshots.push_back(*snapshot);
+    expect_vec3_near(snapshot->transform.position,
+                     {static_cast<float>(index) * 2.0f, 0.0f, 0.0f});
+    EXPECT_EQ(snapshot->parent,
+              editor.query().entity(source.entity)->parent);
+    if (index > 0u) {
+      EXPECT_EQ(child_count(editor, snapshot->id), 0u);
+    }
+  }
+  EXPECT_EQ(entities.size(), 4u);
+  EXPECT_EQ(modeling_ids.size(), 4u);
+  EXPECT_EQ(editor_ids.size(), 4u);
+  EXPECT_EQ(meshes.size(), 4u);
+  EXPECT_EQ(uuids.size(), 4u);
+  std::sort(expected_selection.begin(), expected_selection.end());
+  EXPECT_EQ(selected_entities(editor), expected_selection);
+  EXPECT_TRUE(snapshots.back().active);
+  EXPECT_EQ(child_count(editor, source.entity), 1u);
+
+  const quader::QuaderApiVoidResult undo = editor.history().undo();
+  ASSERT_TRUE(undo.ok()) << undo.error_message();
+  ASSERT_TRUE(editor.query().entity(source.entity).has_value());
+  EXPECT_EQ(editor.query().entity(source.entity)->uuid, source.entity_uuid);
+  for (std::size_t index = 1u; index < snapshots.size(); ++index) {
+    EXPECT_FALSE(editor.query().entity(snapshots[index].id).has_value());
+  }
+
+  const quader::QuaderApiVoidResult redo = editor.history().redo();
+  ASSERT_TRUE(redo.ok()) << redo.error_message();
+  for (std::size_t index = 1u; index < snapshots.size(); ++index) {
+    const std::optional<quader::QuaderEntitySnapshot> restored =
+        editor.query().entity(snapshots[index].id);
+    ASSERT_TRUE(restored.has_value());
+    EXPECT_EQ(restored->uuid, snapshots[index].uuid);
+    EXPECT_EQ(restored->editor_object_id, snapshots[index].editor_object_id);
+    expect_vec3_near(restored->transform.position,
+                     snapshots[index].transform.position);
+  }
+}
+
+TEST(EditorApiTests, LinearArrayResolvesWorldEndpointThroughSourceParent) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderApiResult<quader::QuaderEntityRef> parent =
+      editor.scene().create_entity(quader::QuaderCreateEntityArgs{
+          .name = "Array Parent",
+          .kind = quader::QuaderEntityKind::Empty,
+          .transform = {.position = {10.0f, 0.0f, 0.0f}},
+      });
+  ASSERT_TRUE(parent.ok()) << parent.error_message();
+  const quader::QuaderModelingObjectRef source =
+      create_selected_box(editor, "Parented Array Source");
+  ASSERT_TRUE(editor.scene().reparent(source.entity, parent.value().id, false).ok());
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(source.entity,
+                                 {.position = {2.0f, 0.0f, 0.0f}})
+                  .ok());
+
+  const quader::QuaderApiResult<quader::QuaderLinearArrayResult> array =
+      editor.modeling().create_linear_array(quader::QuaderLinearArrayArgs{
+          .source = source,
+          .endpoint_world = {18.0f, 0.0f, 0.0f},
+          .count = 4,
+      });
+  ASSERT_TRUE(array.ok()) << array.error_message();
+  ASSERT_EQ(array.value().elements.size(), 4u);
+  for (std::size_t index = 0; index < array.value().elements.size(); ++index) {
+    const std::optional<quader::QuaderEntitySnapshot> snapshot =
+        editor.query().entity(array.value().elements[index].entity);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_EQ(snapshot->parent, parent.value().id);
+    expect_vec3_near(snapshot->transform.position,
+                     {2.0f + static_cast<float>(index) * 2.0f, 0.0f, 0.0f});
+  }
+}
+
+TEST(EditorApiTests, LinearArrayAllowsZeroSpanOverlap) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef source =
+      create_selected_box(editor, "Overlap Array Source");
+  const quader::QuaderApiResult<quader::QuaderLinearArrayResult> array =
+      editor.modeling().create_linear_array(quader::QuaderLinearArrayArgs{
+          .source = source,
+          .endpoint_world = {},
+          .count = 3,
+      });
+  ASSERT_TRUE(array.ok()) << array.error_message();
+  ASSERT_EQ(array.value().elements.size(), 3u);
+  for (const quader::QuaderModelingObjectRef &element :
+       array.value().elements) {
+    const std::optional<quader::QuaderEntitySnapshot> snapshot =
+        editor.query().entity(element.entity);
+    ASSERT_TRUE(snapshot.has_value());
+    expect_vec3_near(snapshot->transform.position, {});
+  }
+}
+
+TEST(EditorApiTests, LinearArrayRejectsStaleSourceBeforeApply) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef source =
+      create_selected_box(editor, "Stale Linear Array Source");
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::LinearArray).ok());
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(source.entity,
+                                 {.position = {1.0f, 0.0f, 0.0f}})
+                  .ok());
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_TRUE(editor.render().tool_preview_meshes().empty());
+  const quader::QuaderApiVoidResult applied =
+      editor.tools().commit_active_tool_preview();
+  EXPECT_FALSE(applied.ok());
+  EXPECT_EQ(user_entity_count(editor), 1u);
+  EXPECT_FALSE(editor.tools().active_settings().active);
 }
 
 TEST(EditorApiTests, DefaultSingleMeshTransformPivotUsesSelectedBoundsCenter) {

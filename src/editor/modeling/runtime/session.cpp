@@ -3407,17 +3407,56 @@ selected_object_copies(const std::vector<PolygonObject> &objects,
   return copied_objects;
 }
 
-CommandResult duplicate_selected_objects(std::vector<PolygonObject> &objects,
+DuplicateObjectsResult duplicate_objects(std::vector<PolygonObject> &objects,
                                          int &next_object_id,
                                          SelectionMode &mode,
                                          int &active_object_id,
-                                         quader::QVec3 offset) {
+                                         DuplicateObjectsRequest request) {
   QDR_PROFILE_FUNCTION();
-  std::vector<PolygonObject> copied_objects =
-      selected_object_copies(objects, mode);
-  if (copied_objects.empty()) {
-    return error_result(
+  DuplicateObjectsResult result;
+  if (mode != SelectionMode::Object || request.source_object_ids.empty()) {
+    result.command = error_result(
         "Select one or more meshes in object mode before duplicating.");
+    return result;
+  }
+  if (request.copies_per_source == 0u) {
+    result.command =
+        error_result("Duplicate batch needs at least one copy per source.");
+    return result;
+  }
+
+  std::vector<PolygonObject> source_objects;
+  std::vector<int> source_ids;
+  source_objects.reserve(request.source_object_ids.size());
+  source_ids.reserve(request.source_object_ids.size());
+  for (const int source_id : request.source_object_ids) {
+    if (std::find(source_ids.begin(), source_ids.end(), source_id) !=
+        source_ids.end()) {
+      continue;
+    }
+    const auto source =
+        std::find_if(objects.begin(), objects.end(), [source_id](const auto &item) {
+          return item.id == source_id;
+        });
+    if (source == objects.end()) {
+      result.command = error_result("Duplicate source object does not exist.");
+      return result;
+    }
+    PolygonObject copy = *source;
+    copy.selected = false;
+    copy.selection = quader_poly::Selection();
+    source_objects.push_back(std::move(copy));
+    source_ids.push_back(source_id);
+  }
+  if (source_objects.empty()) {
+    result.command = error_result(
+        "Select one or more meshes in object mode before duplicating.");
+    return result;
+  }
+  if (request.copies_per_source >
+      std::numeric_limits<std::size_t>::max() / source_objects.size()) {
+    result.command = error_result("Duplicate batch is too large.");
+    return result;
   }
 
   for (PolygonObject &object : objects) {
@@ -3426,23 +3465,74 @@ CommandResult duplicate_selected_objects(std::vector<PolygonObject> &objects,
   }
 
   next_object_id = next_polygon_object_id(objects, next_object_id);
-  std::vector<int> duplicated_ids;
-  duplicated_ids.reserve(copied_objects.size());
-  objects.reserve(objects.size() + copied_objects.size());
-  for (PolygonObject &copy : copied_objects) {
-    QDR_PROFILE_SCOPE("Runtime duplicate polygon object");
-    copy.id = next_object_id++;
-    copy.selected = true;
-    copy.selection = quader_poly::Selection();
-    translate_document_vertices(copy.document, offset);
-    duplicated_ids.push_back(copy.id);
-    objects.push_back(std::move(copy));
+  const std::size_t duplicate_count =
+      source_objects.size() * request.copies_per_source;
+  result.duplicate_object_ids.reserve(duplicate_count);
+  result.selected_object_ids.reserve(
+      duplicate_count +
+      (request.selection_policy ==
+               DuplicateObjectSelectionPolicy::SourcesAndDuplicates
+           ? source_ids.size()
+           : 0u));
+  if (request.selection_policy ==
+      DuplicateObjectSelectionPolicy::SourcesAndDuplicates) {
+    result.selected_object_ids.insert(result.selected_object_ids.end(),
+                                      source_ids.begin(), source_ids.end());
+  }
+
+  objects.reserve(objects.size() + duplicate_count);
+  for (const PolygonObject &source : source_objects) {
+    for (std::uint32_t copy_index = 0u;
+         copy_index < request.copies_per_source; ++copy_index) {
+      QDR_PROFILE_SCOPE("Runtime duplicate polygon object");
+      PolygonObject copy = source;
+      copy.id = next_object_id++;
+      copy.selected = true;
+      copy.selection = quader_poly::Selection();
+      translate_document_vertices(copy.document, request.geometry_offset);
+      result.duplicate_object_ids.push_back(copy.id);
+      result.selected_object_ids.push_back(copy.id);
+      objects.push_back(std::move(copy));
+    }
+  }
+  if (request.selection_policy ==
+      DuplicateObjectSelectionPolicy::SourcesAndDuplicates) {
+    for (PolygonObject &object : objects) {
+      if (std::find(source_ids.begin(), source_ids.end(), object.id) !=
+          source_ids.end()) {
+        object.selected = true;
+      }
+    }
   }
 
   mode = SelectionMode::Object;
-  active_object_id = duplicated_ids.empty() ? -1 : duplicated_ids.back();
+  active_object_id = result.selected_object_ids.empty()
+                         ? -1
+                         : result.selected_object_ids.back();
   normalize_active_object_id(objects, active_object_id);
-  return ok_result(!duplicated_ids.empty());
+  result.command = ok_result(!result.duplicate_object_ids.empty());
+  return result;
+}
+
+CommandResult duplicate_selected_objects(std::vector<PolygonObject> &objects,
+                                         int &next_object_id,
+                                         SelectionMode &mode,
+                                         int &active_object_id,
+                                         quader::QVec3 offset) {
+  std::vector<int> source_ids;
+  if (mode == SelectionMode::Object) {
+    source_ids = selected_object_ids(objects);
+  }
+  return duplicate_objects(
+             objects, next_object_id, mode, active_object_id,
+             DuplicateObjectsRequest{
+                 .source_object_ids = std::move(source_ids),
+                 .copies_per_source = 1u,
+                 .geometry_offset = offset,
+                 .selection_policy =
+                     DuplicateObjectSelectionPolicy::DuplicatesOnly,
+             })
+      .command;
 }
 
 CommandResult paste_objects(std::vector<PolygonObject> &objects,

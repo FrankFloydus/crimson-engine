@@ -38,7 +38,7 @@ TEST(ViewportToolCatalogTests, CatalogContainsExpectedInteractiveToolContracts) 
   for (const ToolDescriptor &descriptor : viewport_tool_descriptors()) {
     EXPECT_EQ(find_viewport_tool_descriptor(descriptor.id), &descriptor);
     EXPECT_EQ(find_viewport_tool_descriptor(descriptor.tool), &descriptor);
-    if (descriptor.tool != ViewportToolId::Pivot) {
+    if (!descriptor.editor_owned_native_lifecycle) {
       EXPECT_EQ(find_viewport_tool_descriptor(descriptor.modeling_tool),
                 &descriptor);
     }
@@ -59,7 +59,7 @@ TEST(ViewportToolCatalogTests, CatalogContainsExpectedInteractiveToolContracts) 
               descriptor.supports_transform_gizmo);
     EXPECT_EQ(viewport_tool_supports_transform_gizmo(descriptor.tool),
               descriptor.supports_transform_gizmo);
-    if (descriptor.tool != ViewportToolId::Pivot) {
+    if (!descriptor.editor_owned_native_lifecycle) {
       EXPECT_EQ(
           viewport_tool_interaction_tool(descriptor.tool),
           quader_editor_core::viewport_interaction_tool_from_id(descriptor.id));
@@ -728,12 +728,9 @@ TEST(ViewportToolGuardrailTests, HostViewportAdapterUsesViewportToolDescriptors)
     EXPECT_NE(adapter.find("find_viewport_tool_descriptor(id)"), std::string::npos);
     EXPECT_NE(adapter.find("quader_host_contract::find_action_descriptor(id)"), std::string::npos);
     EXPECT_EQ(adapter.find("case ViewportToolId::"), std::string::npos);
-    const std::size_t pivot_native_controller =
-        adapter.find("tool == ViewportToolId::Pivot");
-    ASSERT_NE(pivot_native_controller, std::string::npos);
-    EXPECT_EQ(adapter.find("tool == ViewportToolId::",
-                           pivot_native_controller + 1),
+    EXPECT_NE(adapter.find("descriptor->editor_owned_native_lifecycle"),
               std::string::npos);
+    EXPECT_EQ(adapter.find("tool == ViewportToolId::"), std::string::npos);
 }
 
 TEST(ViewportToolGuardrailTests,
@@ -744,7 +741,7 @@ TEST(ViewportToolGuardrailTests,
 
   const std::string pivot_overlay =
       source_slice(viewport_panel, "void append_pivot_handle_overlay",
-                   "float grid_size_for_preset");
+                   "bool linear_array_handle_hit");
   EXPECT_NE(viewport_panel.find("void append_pivot_ring("), std::string::npos);
   EXPECT_NE(pivot_overlay.find("append_pivot_ring("), std::string::npos);
   EXPECT_NE(viewport_panel.find("frame.lines.push_back(ViewportOverlayLine{"),

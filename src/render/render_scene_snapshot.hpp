@@ -183,6 +183,7 @@ struct RenderToolPreviewMeshRecord {
   RenderMaterialBindingSnapshot material;
   std::uint64_t material_revision = 0;
   QMat4 transform;
+  std::vector<QMat4> instance_transforms;
 
   [[nodiscard]] bool renderable() const {
     return !mesh.vertices.empty() && !mesh.indices.empty();

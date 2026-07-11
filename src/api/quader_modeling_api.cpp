@@ -964,6 +964,59 @@ QuaderModelingApi::create_mesh(QuaderPolygonDocument document,
   return result_from_create(std::move(status), created);
 }
 
+QuaderApiResult<QuaderLinearArrayResult>
+QuaderModelingApi::create_linear_array(const QuaderLinearArrayArgs &args) {
+  ProjectSession &session = project_session(session_);
+  const SceneDocument &scene = session.scene();
+  const ModelingObjectComponent *modeling =
+      scene.modeling_object(args.source.entity);
+  const MeshComponent *mesh = scene.mesh(args.source.entity);
+  const MaterialComponent *material = scene.material(args.source.entity);
+  const bool source_matches =
+      args.source.entity != kInvalidEntityId &&
+      scene.exists(args.source.entity) && modeling != nullptr &&
+      mesh != nullptr &&
+      modeling->object_id == args.source.modeling_object_id &&
+      (args.source.entity_uuid.empty() ||
+       scene.uuid(args.source.entity) == args.source.entity_uuid) &&
+      (args.source.editor_object_id == kInvalidQuaderEditorObjectId ||
+       scene.editor_object_id(args.source.entity) ==
+           args.source.editor_object_id) &&
+      (args.source.mesh == kInvalidAssetId || mesh->mesh == args.source.mesh) &&
+      (args.source.material == kInvalidAssetId ||
+       (material != nullptr &&
+        material->material == args.source.material));
+  if (!source_matches) {
+    return quader_api_result_from_status<QuaderLinearArrayResult>(
+        invalid_api_status(session_,
+                           "Linear Array source reference is stale."),
+        {});
+  }
+
+  auto command = std::make_unique<LinearArrayHistoryCommand>(
+      session.modeling(),
+      ModelingLinearArrayRequest{
+          .source_entity = args.source.entity,
+          .source_modeling_object_id = args.source.modeling_object_id,
+          .endpoint_world = args.endpoint_world,
+          .count = args.count,
+      });
+  LinearArrayHistoryCommand *array_command = command.get();
+  QuaderApiVoidResult status =
+      mutations_.run_modeling_command(std::move(command), "Linear Array");
+
+  QuaderLinearArrayResult created;
+  if (status.ok && status.changed) {
+    created.elements.reserve(array_command->created().elements.size());
+    for (const ModelingObjectRecord &record :
+         array_command->created().elements) {
+      created.elements.push_back(
+          ref_from_record(to_api_modeling_object_record(record)));
+    }
+  }
+  return quader_api_result_from_status(status, std::move(created));
+}
+
 QuaderApiResult<QuaderMeshHandle>
 QuaderModelingApi::create_mesh_handle(QuaderPolygonDocument document,
                                       QuaderCreateMeshArgs args) {

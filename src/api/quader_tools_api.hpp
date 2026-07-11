@@ -23,6 +23,8 @@ public:
 
     QuaderApiVoidResult activate(std::string_view tool_id);
     QuaderApiVoidResult activate(ViewportToolId tool);
+    [[nodiscard]] bool can_activate(std::string_view tool_id) const;
+    [[nodiscard]] bool can_activate(ViewportToolId tool) const;
     [[nodiscard]] QuaderToolSettingsTarget active_settings() const;
     QuaderApiVoidResult set_setting(std::string_view tool_id,
                                     std::string_view name, double value);

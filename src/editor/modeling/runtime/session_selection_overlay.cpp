@@ -742,7 +742,8 @@ SelectionOverlayFrame build_selection_overlay_frame(
           const bool selected_component_object =
               object.selected &&
               (mode != SelectionMode::Vertex ||
-               !object.selection.vertices.empty());
+               !object.selection.vertices.empty() ||
+               object_draws_source_wire(object));
           if (selected_component_object || vertex_candidate_object) {
             if (mode == SelectionMode::Object) {
               quader_poly::Selection selection =

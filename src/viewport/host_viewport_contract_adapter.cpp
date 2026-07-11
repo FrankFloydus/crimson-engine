@@ -305,6 +305,33 @@ viewport_input_action_binding_catalog() {
           .weight = 20,
           .action = ViewportInputActionKind::QuickPivot,
       },
+      {
+          .target_id =
+              viewport_input_action_target_id("linear_array.constraint_x"),
+          .shortcut = "X",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "activeTool.linear_array",
+          .weight = 40,
+          .action = ViewportInputActionKind::ToolConstraintX,
+      },
+      {
+          .target_id =
+              viewport_input_action_target_id("linear_array.constraint_y"),
+          .shortcut = "Y",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "activeTool.linear_array",
+          .weight = 40,
+          .action = ViewportInputActionKind::ToolConstraintY,
+      },
+      {
+          .target_id =
+              viewport_input_action_target_id("linear_array.constraint_z"),
+          .shortcut = "Z",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "activeTool.linear_array",
+          .weight = 40,
+          .action = ViewportInputActionKind::ToolConstraintZ,
+      },
   };
 }
 
@@ -430,11 +457,10 @@ bool viewport_tool_has_host_contract(ViewportToolId tool) {
 }
 
 bool viewport_tool_has_native_controller(ViewportToolId tool) {
-  if (tool == ViewportToolId::Pivot) {
-    return find_viewport_tool_descriptor(tool) != nullptr;
-  }
-  return find_viewport_tool_descriptor(tool) != nullptr &&
-         viewport_tool_has_host_contract(tool);
+  const ToolDescriptor *descriptor = find_viewport_tool_descriptor(tool);
+  return descriptor != nullptr &&
+         (descriptor->editor_owned_native_lifecycle ||
+          viewport_tool_has_host_contract(tool));
 }
 
 bool viewport_tool_allows_selection_fallback(ViewportToolId tool) {

@@ -188,6 +188,22 @@ struct QuaderModelingObjectRef {
 };
 
 /**
+ * Describes a source-inclusive linear array whose final origin is endpoint B.
+ */
+struct QuaderLinearArrayArgs {
+  QuaderModelingObjectRef source;
+  QVec3 endpoint_world = {};
+  std::uint32_t count = 4;
+};
+
+/**
+ * Returns source first, followed by independent copies ordered from A to B.
+ */
+struct QuaderLinearArrayResult {
+  std::vector<QuaderModelingObjectRef> elements;
+};
+
+/**
  * Represents a Quader Component Ref value used by the public Quader API surface.
  */
 struct QuaderComponentRef {
@@ -1090,6 +1106,8 @@ struct QuaderToolPreviewMesh {
   EntityId source_entity = kInvalidEntityId;
   AssetId material = kInvalidAssetId;
   QuaderMeshAsset mesh;
+  QMat4 transform;
+  std::vector<QMat4> instance_transforms;
 };
 
 } // namespace quader

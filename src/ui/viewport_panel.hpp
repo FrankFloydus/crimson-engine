@@ -42,6 +42,7 @@ class RenderSystem;
 class LocalizationService;
 class QuaderEditorApi;
 class EditorSelectionService;
+class LinearArrayToolService;
 class ModelingSessionService;
 class PivotToolService;
 
@@ -67,7 +68,8 @@ public:
                            SceneRenderBridge &render_bridge,
                            const SceneDocument &document,
                            const AssetRegistry &assets,
-                           const PivotToolService *pivot);
+                           const PivotToolService *pivot,
+                           const LinearArrayToolService *linear_array);
     void render_viewports(RenderSystem &render_system);
     QuaderApiVoidResult frame_all(ViewportWorkspaceService &workspace,
                                   const SceneDocument &document,
@@ -89,7 +91,8 @@ public:
              active_viewport_settings().bool_value(
                  ViewportBoolSettingId::ShowInfo) ||
              navigation_gizmo_.input_locked() ||
-             interaction_controller_.dragging() || split_handle_dragging_;
+             interaction_controller_.dragging() ||
+             linear_array_handle_dragging_ || split_handle_dragging_;
     }
     bool navigation_gizmo_visible() const {
       return navigation_gizmo_.visible();
@@ -173,6 +176,7 @@ private:
     bool delete_objects_popup_position_pending_ = false;
     ImVec2 delete_objects_popup_position_ = {};
     bool pivot_handle_dragging_ = false;
+    bool linear_array_handle_dragging_ = false;
     bool last_fly_navigation_active_ = false;
     const SceneDocument *viewport_info_cached_document_ = nullptr;
     const AssetRegistry *viewport_info_cached_assets_ = nullptr;

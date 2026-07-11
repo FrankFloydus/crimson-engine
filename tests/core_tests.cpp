@@ -2679,7 +2679,10 @@ TEST(SceneRenderBridgeTests, UsesDepthStampedFaceFillForOverlayTriangles) {
       std::string::npos);
   EXPECT_NE(bridge_source.find("tool_preview_cache_.set_meshes(meshes)"),
             std::string::npos);
-  EXPECT_NE(tool_preview_cache_source.find("mesh_proxies_"), std::string::npos);
+  EXPECT_NE(tool_preview_cache_source.find("preview_groups_"),
+            std::string::npos);
+  EXPECT_NE(tool_preview_cache_source.find("create_shared_instance"),
+            std::string::npos);
   EXPECT_NE(tool_preview_cache_source.find(
                 "void ToolPreviewRenderableCache::clear()"),
             std::string::npos);

@@ -18,7 +18,9 @@ namespace quader {
 
 class AssetCommandService;
 class EditorSelectionService;
+class LinearArrayToolService;
 class ModelingSessionService;
+class NativeViewportToolCoordinator;
 class PivotToolService;
 
 /**
@@ -88,6 +90,12 @@ public:
   const EditorSelectionService &selection() const { return *selection_; }
   PivotToolService &pivot() { return *pivot_; }
   const PivotToolService &pivot() const { return *pivot_; }
+  LinearArrayToolService &linear_array() { return *linear_array_; }
+  const LinearArrayToolService &linear_array() const { return *linear_array_; }
+  NativeViewportToolCoordinator &native_tools() { return *native_tools_; }
+  const NativeViewportToolCoordinator &native_tools() const {
+    return *native_tools_;
+  }
 
   [[nodiscard]] ProjectSessionReadView read_view() const;
   [[nodiscard]] ProjectContentRevisionStamp content_revision_stamp() const;
@@ -108,6 +116,8 @@ private:
   std::unique_ptr<ModelingSessionService> modeling_;
   std::unique_ptr<EditorSelectionService> selection_;
   std::unique_ptr<PivotToolService> pivot_;
+  std::unique_ptr<LinearArrayToolService> linear_array_;
+  std::unique_ptr<NativeViewportToolCoordinator> native_tools_;
 };
 
 /**

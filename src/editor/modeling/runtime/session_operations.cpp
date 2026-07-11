@@ -1193,6 +1193,19 @@ CommandResult EditorSession::duplicate_selected_objects(quader::QVec3 offset) {
   return result;
 }
 
+DuplicateObjectsResult
+EditorSession::duplicate_objects(DuplicateObjectsRequest request) {
+  QDR_PROFILE_FUNCTION();
+  DuplicateObjectsResult result = quader_editor_core::duplicate_objects(
+      state_.objects, state_.next_object_id, state_.selection_mode,
+      state_.active_object_id, std::move(request));
+  note_content_result(result.command);
+  if (result.command.changed) {
+    note_selection_changed();
+  }
+  return result;
+}
+
 CommandResult EditorSession::duplicate_selected_objects(
     DuplicateMeshesOperationSettings settings) {
   return duplicate_selected_objects(

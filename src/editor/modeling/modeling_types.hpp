@@ -644,6 +644,8 @@ struct ModelingToolPreviewMesh {
   EntityId source_entity = kInvalidEntityId;
   AssetId material = kInvalidAssetId;
   MeshAsset mesh;
+  QMat4 transform;
+  std::vector<QMat4> instance_transforms;
 };
 
 /**
@@ -716,6 +718,26 @@ struct ModelingCreateBoxResult {
   bool changed = false;
   std::string message;
   ModelingObjectRecord object;
+};
+
+/**
+ * Describes one native world-space linear array commit.
+ */
+struct ModelingLinearArrayRequest {
+  EntityId source_entity = kInvalidEntityId;
+  int source_modeling_object_id = -1;
+  QVec3 endpoint_world = {};
+  std::uint32_t count = 4;
+};
+
+/**
+ * Returns source and created objects in start-to-end array order.
+ */
+struct ModelingLinearArrayResult {
+  bool ok = false;
+  bool changed = false;
+  std::string message;
+  std::vector<ModelingObjectRecord> elements;
 };
 
 } // namespace quader

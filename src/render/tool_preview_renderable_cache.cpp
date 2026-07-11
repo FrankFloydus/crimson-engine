@@ -11,6 +11,16 @@
 #include "render/render_signature_builder.hpp"
 
 namespace quader {
+namespace {
+
+std::vector<QMat4>
+preview_transforms(const RenderToolPreviewMeshRecord &preview_mesh) {
+  return preview_mesh.instance_transforms.empty()
+             ? std::vector<QMat4>{preview_mesh.transform}
+             : preview_mesh.instance_transforms;
+}
+
+} // namespace
 
 ToolPreviewRenderableCache::~ToolPreviewRenderableCache() {
     shutdown();
@@ -43,40 +53,93 @@ bool ToolPreviewRenderableCache::set_meshes(
     return false;
   }
 
+  bool transforms_only = meshes.size() == preview_groups_.size();
+  if (transforms_only) {
+    for (std::size_t index = 0; index < meshes.size(); ++index) {
+      const std::vector<QMat4> transforms = preview_transforms(meshes[index]);
+      if (preview_geometry_signature(meshes[index]) !=
+              preview_groups_[index].geometry_signature ||
+          transforms.size() != preview_groups_[index].transforms.size()) {
+        transforms_only = false;
+        break;
+      }
+    }
+  }
+  if (transforms_only) {
+    for (std::size_t index = 0; index < meshes.size(); ++index) {
+      PreviewGroup &group = preview_groups_[index];
+      group.transforms = preview_transforms(meshes[index]);
+      factory_->update_transform(group.prototype, group.transforms.front());
+      for (std::size_t instance = 0; instance < group.instances.size();
+           ++instance) {
+        factory_->update_transform(group.instances[instance],
+                                   group.transforms[instance + 1u]);
+      }
+    }
+    mesh_signature_ = next_signature;
+    return true;
+  }
+
   clear();
   mesh_signature_ = next_signature;
-  mesh_proxies_.reserve(meshes.size());
+  preview_groups_.reserve(meshes.size());
   for (const RenderToolPreviewMeshRecord &preview_mesh : meshes) {
     if (!preview_mesh.renderable()) {
       continue;
     }
+    std::vector<QMat4> transforms = preview_transforms(preview_mesh);
+    if (transforms.empty()) {
+      continue;
+    }
     const RenderMeshAssetSnapshot mesh_snapshot =
         render_mesh_asset_snapshot(kInvalidAssetId, preview_mesh.mesh);
-    mesh_proxies_.push_back(factory_->create(
+    MeshRenderableProxy prototype = factory_->create(
         preview_mesh.source_entity, mesh_snapshot, &preview_mesh.material,
-        preview_mesh.transform, false, true, kViewportToolPreviewLayerMask,
-        true));
+        transforms.front(), false, true, kViewportToolPreviewLayerMask,
+        true);
+    PreviewGroup group{
+        .geometry_signature = preview_geometry_signature(preview_mesh),
+        .transforms = std::move(transforms),
+        .prototype = std::move(prototype),
+    };
+    group.instances.reserve(group.transforms.size() - 1u);
+    for (std::size_t index = 1u; index < group.transforms.size(); ++index) {
+      group.instances.push_back(factory_->create_shared_instance(
+          preview_mesh.source_entity, mesh_snapshot, group.prototype,
+          group.transforms[index], kViewportToolPreviewLayerMask));
+    }
+    preview_groups_.push_back(std::move(group));
   }
   return true;
 }
 
 void ToolPreviewRenderableCache::clear() {
     if (factory_) {
-      for (MeshRenderableProxy &proxy : mesh_proxies_) {
-        factory_->destroy(proxy);
+      for (PreviewGroup &group : preview_groups_) {
+        for (MeshRenderableProxy &instance : group.instances) {
+          factory_->destroy(instance);
+        }
+        factory_->destroy(group.prototype);
       }
     }
-    mesh_proxies_.clear();
+    preview_groups_.clear();
     mesh_signature_ = 0;
 }
 
-std::uint64_t ToolPreviewRenderableCache::preview_mesh_signature(
+std::size_t ToolPreviewRenderableCache::proxy_count() const {
+  std::size_t count = 0u;
+  for (const PreviewGroup &group : preview_groups_) {
+    count += 1u + group.instances.size();
+  }
+  return count;
+}
+
+std::uint64_t ToolPreviewRenderableCache::preview_geometry_signature(
     const RenderToolPreviewMeshRecord &preview_mesh) {
   RenderSignatureBuilder signature;
   signature.add_value(preview_mesh.source_entity)
       .add_value(preview_mesh.material_id)
-      .add_value(preview_mesh.material_revision)
-      .add_mat4(preview_mesh.transform);
+      .add_value(preview_mesh.material_revision);
   return MeshRenderableFactory::mesh_asset_signature(signature.value(),
                                                      preview_mesh.mesh);
 }
@@ -86,7 +149,12 @@ std::uint64_t ToolPreviewRenderableCache::preview_meshes_signature(
   RenderSignatureBuilder signature;
   signature.add_size(preview_meshes.size());
   for (const RenderToolPreviewMeshRecord &preview_mesh : preview_meshes) {
-    signature.add_value(preview_mesh_signature(preview_mesh));
+    signature.add_value(preview_geometry_signature(preview_mesh));
+    const std::vector<QMat4> transforms = preview_transforms(preview_mesh);
+    signature.add_size(transforms.size());
+    for (const QMat4 &transform : transforms) {
+      signature.add_mat4(transform);
+    }
   }
   return signature.value();
 }

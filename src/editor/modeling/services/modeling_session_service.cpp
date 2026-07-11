@@ -2779,6 +2779,177 @@ public:
         request.name.empty() ? "Mesh" : request.name, runtime_result.message);
   }
 
+  ModelingLinearArrayResult
+  create_linear_array(const ModelingLinearArrayRequest &request) {
+    constexpr std::uint32_t kMinimumCount = 2u;
+    constexpr std::uint32_t kMaximumCount = 128u;
+    const auto finite_vector = [](QVec3 value) {
+      return std::isfinite(value.x) && std::isfinite(value.y) &&
+             std::isfinite(value.z);
+    };
+    const auto failure = [](std::string message) {
+      return ModelingLinearArrayResult{
+          .ok = false,
+          .changed = false,
+          .message = std::move(message),
+      };
+    };
+
+    if (request.count < kMinimumCount || request.count > kMaximumCount) {
+      return failure("Linear Array count must be between 2 and 128.");
+    }
+    if (!finite_vector(request.endpoint_world)) {
+      return failure("Linear Array endpoint must be finite.");
+    }
+    if (request.source_entity == kInvalidEntityId ||
+        request.source_modeling_object_id == kInvalidModelingObjectId ||
+        !scene_.exists(request.source_entity)) {
+      return failure("Linear Array source mesh was not found.");
+    }
+    if (selection_mode() != ModelingSelectionMode::Object) {
+      return failure("Linear Array only works in object mode.");
+    }
+
+    const ModelingObjectComponent *source_modeling =
+        scene_.modeling_object(request.source_entity);
+    const MeshComponent *source_mesh = scene_.mesh(request.source_entity);
+    const TransformComponent *source_transform =
+        scene_.transform(request.source_entity);
+    const std::optional<EntityId> mapped_entity =
+        object_registry_.entity_for_modeling_object(
+            request.source_modeling_object_id);
+    if (source_modeling == nullptr || source_mesh == nullptr ||
+        source_transform == nullptr ||
+        source_modeling->object_id != request.source_modeling_object_id ||
+        !mapped_entity.has_value() || *mapped_entity != request.source_entity ||
+        assets_.mesh(source_mesh->mesh) == nullptr) {
+      return failure("Linear Array source is not a live modeling mesh.");
+    }
+    if (!scene_.is_effectively_visible(request.source_entity) ||
+        scene_.is_effectively_locked(request.source_entity)) {
+      return failure("Linear Array source must be visible and unlocked.");
+    }
+
+    const std::array<int, 1> source_ids = {
+        request.source_modeling_object_id,
+    };
+    const std::vector<ModelingObjectSceneIdentity> source_identities =
+        object_registry_.capture_scene_identities_for_modeling_objects(
+            scene_, source_ids);
+    if (source_identities.size() != 1u) {
+      return failure("Linear Array source scene identity was not found.");
+    }
+    const ModelingObjectSceneIdentity &source_identity =
+        source_identities.front();
+
+    const QVec3 source_world_origin = transform_point(
+        scene_.world_transform_matrix(request.source_entity), QVec3{});
+    const EntityId parent = scene_.parent(request.source_entity);
+    const QMat4 parent_world =
+        parent == kInvalidEntityId ? QMat4{}
+                                   : scene_.world_transform_matrix(parent);
+    const QVec3 local_span = transform_vector(
+        inverse(parent_world), request.endpoint_world - source_world_origin);
+    if (!finite_vector(source_world_origin) || !finite_vector(local_span)) {
+      return failure("Linear Array source transform is not invertible.");
+    }
+
+    std::vector<TransformComponent> duplicate_transforms;
+    duplicate_transforms.reserve(request.count - 1u);
+    for (std::uint32_t index = 1u; index < request.count; ++index) {
+      const float factor = static_cast<float>(index) /
+                           static_cast<float>(request.count - 1u);
+      TransformComponent transform = *source_transform;
+      transform.position = source_transform->position + local_span * factor;
+      if (!finite_vector(transform.position)) {
+        return failure("Linear Array generated a non-finite transform.");
+      }
+      duplicate_transforms.push_back(transform);
+    }
+
+    const ModelingSessionMemento rollback = capture_history_memento();
+    const quader_editor_core::DuplicateObjectsResult duplicated =
+        session_.duplicate_objects(
+            quader_editor_core::DuplicateObjectsRequest{
+                .source_object_ids = {request.source_modeling_object_id},
+                .copies_per_source = request.count - 1u,
+                .geometry_offset = {},
+                .selection_policy =
+                    quader_editor_core::DuplicateObjectSelectionPolicy::
+                        SourcesAndDuplicates,
+            });
+    if (!duplicated.command.ok || !duplicated.command.changed ||
+        duplicated.duplicate_object_ids.size() != duplicate_transforms.size()) {
+      if (duplicated.command.changed) {
+        (void)restore_history_memento(rollback);
+      }
+      return failure(duplicated.command.message.empty()
+                         ? "Modeling runtime did not create the linear array."
+                         : duplicated.command.message);
+    }
+
+    sync_scene_objects_from_modeling(true);
+    SceneEntityNameAllocator names(scene_);
+    std::vector<SceneTransformAssignment> transform_assignments;
+    transform_assignments.reserve(duplicate_transforms.size());
+    std::vector<ModelingObjectRecord> elements;
+    elements.reserve(request.count);
+
+    const auto append_record = [&](int object_id, EntityId entity) {
+      ModelingObjectRecord record;
+      record.modeling_object_id = object_id;
+      record.entity = entity;
+      if (const MeshComponent *mesh = scene_.mesh(entity)) {
+        record.mesh = mesh->mesh;
+      }
+      if (const NameComponent *name = scene_.name(entity)) {
+        record.name = name->name;
+      }
+      elements.push_back(std::move(record));
+    };
+    append_record(request.source_modeling_object_id, request.source_entity);
+
+    for (std::size_t index = 0;
+         index < duplicated.duplicate_object_ids.size(); ++index) {
+      const int object_id = duplicated.duplicate_object_ids[index];
+      const std::optional<EntityId> entity =
+          object_registry_.entity_for_modeling_object(object_id);
+      if (!entity.has_value() || !scene_.exists(*entity)) {
+        (void)restore_history_memento(rollback);
+        return failure("Linear Array could not create a scene mesh copy.");
+      }
+
+      mesh_sync_service_.apply_scene_identity_to_duplicate_entity(
+          scene_, *entity, source_identity);
+      const std::string base_name =
+          source_identity.name.empty() ? "Mesh" : source_identity.name;
+      (void)scene_.rename_entity(*entity, names.next_name(base_name));
+      transform_assignments.push_back({
+          .entity = *entity,
+          .transform = duplicate_transforms[index],
+      });
+      object_registry_.remember_scene_entity(object_id, scene_, *entity);
+      append_record(object_id, *entity);
+    }
+
+    mesh_sync_service_.apply_scene_transforms(scene_, transform_assignments);
+    for (const int object_id : duplicated.duplicate_object_ids) {
+      const std::optional<EntityId> entity =
+          object_registry_.entity_for_modeling_object(object_id);
+      if (entity.has_value()) {
+        object_registry_.remember_scene_entity(object_id, scene_, *entity);
+      }
+    }
+    sync_scene_selection_from_modeling();
+    invalidate_selection_overlay_caches();
+    return {
+        .ok = true,
+        .changed = true,
+        .message = "Created linear array.",
+        .elements = std::move(elements),
+    };
+  }
+
   ModelingCommandResult set_object_selection(std::span<const EntityId> entities,
                                              EntityId active) {
     if (!scene_objects_synced_for_current_modeling_content()) {
@@ -3783,6 +3954,11 @@ ModelingCommandResult ModelingSessionService::cancel_box() {
 ModelingCreateBoxResult
 ModelingSessionService::create_mesh(const ModelingCreateMeshRequest &request) {
   return impl_->create_mesh(request);
+}
+
+ModelingLinearArrayResult ModelingSessionService::create_linear_array(
+    const ModelingLinearArrayRequest &request) {
+  return impl_->create_linear_array(request);
 }
 
 ModelingCommandResult

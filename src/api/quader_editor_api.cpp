@@ -8,6 +8,7 @@
 
 #include "api/quader_api_session_internal_access.hpp"
 #include "editor/session/project_session.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
 
 namespace quader {
 
@@ -35,6 +36,10 @@ public:
               [this] { return api.modeling().commit_preview(); },
           .cancel_active_tool_preview =
               [this] { return api.modeling().cancel_preview(); },
+          .grid_world_size = [this] {
+            return static_cast<double>(viewport_grid_world_size_from_contract(
+                viewports.grid_preset()));
+          },
       });
     }
 

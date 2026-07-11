@@ -8,12 +8,15 @@
 #include "api/quader_api_session_internal_access.hpp"
 
 #include "api/quader_api_status_internal.hpp"
+#include "editor/array/linear_array_tool_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 
+#include <cmath>
 #include <optional>
 #include <cstdlib>
 #include <string>
@@ -117,6 +120,22 @@ pivot_tool_settings_target(const PivotToolService &pivot) {
       snap.face_center));
   result.controls.push_back(
       toggle_control(std::string(kPivotSnapGridSetting), "Grid", snap.grid));
+  return result;
+}
+
+QuaderToolSettingsTarget linear_array_tool_settings_target(
+    const LinearArrayToolService &linear_array) {
+  QuaderToolSettingsTarget result{
+      .active = true,
+      .preview_active = true,
+      .tool_id = std::string(kLinearArrayToolId),
+      .title = "Linear Array",
+      .can_apply = true,
+      .can_cancel = true,
+  };
+  result.controls.push_back(number_control(
+      std::string(kLinearArrayCountSetting), "Num Copies", linear_array.count(),
+      kLinearArrayMinimumCount, kLinearArrayMaximumCount, 1.0));
   return result;
 }
 
@@ -253,16 +272,19 @@ QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
   }
 
   ProjectSession &session = project_session(session_);
-  if (tool_id == kPivotToolId) {
+  if (session.native_tools().handles(tool_id)) {
+    const double grid_size =
+        hooks_.grid_world_size ? hooks_.grid_world_size() : 1.0;
     return api_status_from_command(
-        session, session.pivot().activate_persistent(session.selection()),
-        QuaderMutationKind::Runtime, "Pivot");
+        session, session.native_tools().activate(tool_id, grid_size),
+        QuaderMutationKind::Runtime, tool_id);
   }
 
   const ViewportTool *tool = find_viewport_tool(tool_id);
   if (tool == nullptr) {
     return quader_api_failure_status(session, "Unknown viewport tool.");
   }
+  (void)session.native_tools().cancel_active();
   ModelingCommandResult result = tool->activate(session.modeling());
   return quader_api_void_status(session, result.ok,
                                 result.changed, std::move(result.message),
@@ -273,8 +295,23 @@ QuaderApiVoidResult QuaderToolsApi::activate(ViewportToolId tool) {
   return activate(viewport_tool_catalog_id(tool));
 }
 
+bool QuaderToolsApi::can_activate(std::string_view tool_id) const {
+  const ProjectSession &session = project_session(session_);
+  if (session.native_tools().handles(tool_id)) {
+    return session.native_tools().can_activate(tool_id);
+  }
+  return find_viewport_tool(tool_id) != nullptr;
+}
+
+bool QuaderToolsApi::can_activate(ViewportToolId tool) const {
+  return can_activate(viewport_tool_catalog_id(tool));
+}
+
 QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
   const ProjectSession &session = project_session(session_);
+  if (session.linear_array().active()) {
+    return linear_array_tool_settings_target(session.linear_array());
+  }
   if (session.pivot().persistent_active()) {
     return pivot_tool_settings_target(session.pivot());
   }
@@ -287,6 +324,18 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  std::string_view name,
                                                  double value) {
   ProjectSession &session = project_session(session_);
+  if ((tool_id.empty() || tool_id == kLinearArrayToolId) &&
+      name == kLinearArrayCountSetting) {
+    if (!std::isfinite(value) || std::round(value) != value || value < 0.0 ||
+        value > static_cast<double>(kLinearArrayMaximumCount)) {
+      return quader_api_failure_status(session,
+                                       "Invalid Linear Array count.");
+    }
+    return api_status_from_command(
+        session,
+        session.linear_array().set_count(static_cast<std::uint32_t>(value)),
+        QuaderMutationKind::Runtime, "Set Linear Array Count");
+  }
   if (tool_id == kPivotToolId) {
     return api_status_from_command(
         session, session.pivot().set_snap_enabled(name, value != 0.0),
@@ -350,10 +399,13 @@ QuaderApiVoidResult QuaderToolsApi::execute_action(std::string_view tool_id,
 
 QuaderApiVoidResult QuaderToolsApi::commit_active_tool_preview() {
   ProjectSession &session = project_session(session_);
-  if (session.pivot().persistent_active()) {
-    return api_status_from_command(session, session.pivot().apply_persistent(),
-                                   QuaderMutationKind::Document,
-                                   "Apply Pivot");
+  if (session.native_tools().has_pending_tool()) {
+    const bool linear_array = session.linear_array().has_session();
+    return api_status_from_command(
+        session, session.native_tools().commit_active(),
+        linear_array ? QuaderMutationKind::Modeling
+                     : QuaderMutationKind::Document,
+        linear_array ? "Apply Linear Array" : "Apply Pivot");
   }
   if (hooks_.commit_active_tool_preview) {
     return hooks_.commit_active_tool_preview();
@@ -363,10 +415,10 @@ QuaderApiVoidResult QuaderToolsApi::commit_active_tool_preview() {
 
 QuaderApiVoidResult QuaderToolsApi::cancel_active_tool_preview() {
   ProjectSession &session = project_session(session_);
-  if (session.pivot().persistent_active()) {
-    return api_status_from_command(session, session.pivot().cancel_persistent(),
-                                   QuaderMutationKind::Runtime,
-                                   "Cancel Pivot");
+  if (session.native_tools().has_pending_tool()) {
+    return api_status_from_command(
+        session, session.native_tools().cancel_active(),
+        QuaderMutationKind::Runtime, "Cancel Native Tool");
   }
   if (hooks_.cancel_active_tool_preview) {
     return hooks_.cancel_active_tool_preview();
@@ -388,8 +440,10 @@ QuaderApiVoidResult QuaderToolsApi::cancel_modal_tool() {
 
 std::string QuaderToolsApi::active_tool() const {
   const ProjectSession &session = project_session(session_);
-  if (session.pivot().persistent_active()) {
-    return std::string(kPivotToolId);
+  if (const std::string_view native_tool =
+          session.native_tools().active_tool_id();
+      !native_tool.empty()) {
+    return std::string(native_tool);
   }
   return std::string(viewport_tool_catalog_id(viewport_tool_for_modeling(
       session.modeling().tool_status().active_tool)));

@@ -39,6 +39,8 @@ struct MeshRenderableProxy {
     std::uint64_t material_revision = 0;
     bool cast_shadows = false;
     bool double_sided = false;
+    bool owns_mesh_buffers = true;
+    bool owns_material_instances = true;
     filament::VertexBuffer *vertex_buffer = nullptr;
     filament::IndexBuffer *index_buffer = nullptr;
     std::vector<std::uint32_t> material_slots;
@@ -55,6 +57,9 @@ struct MeshRenderableProxy {
       material_revision = std::exchange(other.material_revision, 0);
       cast_shadows = std::exchange(other.cast_shadows, false);
       double_sided = std::exchange(other.double_sided, false);
+      owns_mesh_buffers = std::exchange(other.owns_mesh_buffers, true);
+      owns_material_instances =
+          std::exchange(other.owns_material_instances, true);
       vertex_buffer = std::exchange(other.vertex_buffer, nullptr);
       index_buffer = std::exchange(other.index_buffer, nullptr);
       material_slots = std::move(other.material_slots);

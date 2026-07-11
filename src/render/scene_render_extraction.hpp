@@ -28,6 +28,7 @@ struct ToolPreviewMesh {
   AssetId material = kInvalidAssetId;
   MeshAsset mesh;
   QMat4 transform;
+  std::vector<QMat4> instance_transforms;
 };
 
 using SceneRenderMeshEntry = RenderSceneMeshRecord;

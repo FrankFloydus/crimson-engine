@@ -168,6 +168,34 @@ private:
 };
 
 /**
+ * Creates one source-inclusive linear array as a single modeling history item.
+ */
+class LinearArrayHistoryCommand final : public ModelingMementoCommand {
+public:
+  LinearArrayHistoryCommand(ModelingSessionService &modeling,
+                            ModelingLinearArrayRequest request)
+      : ModelingMementoCommand(modeling, "Linear Array"),
+        request_(std::move(request)) {}
+
+  [[nodiscard]] const ModelingLinearArrayResult &created() const {
+    return created_;
+  }
+
+private:
+  ModelingCommandResult execute_initial() override {
+    created_ = modeling().create_linear_array(request_);
+    return {
+        .ok = created_.ok,
+        .changed = created_.changed,
+        .message = created_.message,
+    };
+  }
+
+  ModelingLinearArrayRequest request_;
+  ModelingLinearArrayResult created_;
+};
+
+/**
  * Applies Move Selection History Command behavior as a command in the editor coordination layer.
  */
 class MoveSelectionHistoryCommand final : public ModelingMementoCommand {

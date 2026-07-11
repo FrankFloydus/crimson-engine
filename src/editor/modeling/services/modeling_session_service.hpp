@@ -220,6 +220,8 @@ public:
   ModelingCreateBoxResult commit_box(std::string name);
   ModelingCommandResult cancel_box();
   ModelingCreateBoxResult create_mesh(const ModelingCreateMeshRequest &request);
+  ModelingLinearArrayResult
+  create_linear_array(const ModelingLinearArrayRequest &request);
   void project_object_selection_from_scene(bool force_object_mode = false);
   ModelingCommandResult
   set_object_selection(std::span<const EntityId> entities,

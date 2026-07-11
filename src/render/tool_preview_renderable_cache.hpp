@@ -44,18 +44,29 @@ public:
 
     std::uint64_t signature() const { return mesh_signature_; }
 
-    std::size_t proxy_count() const { return mesh_proxies_.size(); }
+    [[nodiscard]] std::size_t proxy_count() const;
 
   private:
+    /**
+     * Owns one uploaded preview geometry plus transform-only shared instances.
+     */
+    struct PreviewGroup {
+      std::uint64_t geometry_signature = 0;
+      std::vector<QMat4> transforms;
+      MeshRenderableProxy prototype;
+      std::vector<MeshRenderableProxy> instances;
+    };
+
     static std::uint64_t
-    preview_mesh_signature(const RenderToolPreviewMeshRecord &preview_mesh);
+    preview_geometry_signature(
+        const RenderToolPreviewMeshRecord &preview_mesh);
     static std::uint64_t
     preview_meshes_signature(
         const std::vector<RenderToolPreviewMeshRecord> &preview_meshes);
 
     MeshRenderableFactory* factory_ = nullptr;
     MaterialBindingService *material_binding_ = nullptr;
-    std::vector<MeshRenderableProxy> mesh_proxies_;
+    std::vector<PreviewGroup> preview_groups_;
     std::uint64_t mesh_signature_ = 0;
 };
 

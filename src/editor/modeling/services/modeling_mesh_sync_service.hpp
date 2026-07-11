@@ -9,6 +9,7 @@
 #include "editor/modeling/modeling_types.hpp"
 
 #include <optional>
+#include <span>
 #include <string>
 
 #include <editor/modeling/runtime/session.hpp>
@@ -18,6 +19,7 @@ namespace quader {
 class AssetRegistry;
 struct ModelingObjectSceneIdentity;
 class SceneDocument;
+struct SceneTransformAssignment;
 class SceneModelingSyncService;
 
 /**
@@ -40,6 +42,9 @@ public:
   void apply_scene_identity_to_duplicate_entity(
       SceneDocument &scene, EntityId entity,
       const ModelingObjectSceneIdentity &identity) const;
+  void apply_scene_transforms(
+      SceneDocument &scene,
+      std::span<const SceneTransformAssignment> transforms) const;
   void sync_scene_objects_from_modeling(
       const quader_editor_core::EditorSession &session, SceneDocument &scene,
       AssetRegistry &assets, SceneModelingSyncService &scene_sync,

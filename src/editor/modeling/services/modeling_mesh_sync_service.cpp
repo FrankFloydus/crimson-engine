@@ -364,6 +364,9 @@ void reconcile_modeling_object_scene_nodes(
     if (entity == kInvalidEntityId) {
       continue;
     }
+    if (identity.has_value() && !identity->uuid.empty()) {
+      (void)scene.set_entity_uuid(entity, identity->uuid);
+    }
     scene_names.reserve_name(name);
     if (!identity.has_value()) {
       const EntityId parent = modeling_default_parent(scene);
@@ -598,6 +601,12 @@ void ModelingMeshSyncService::apply_scene_identity_to_duplicate_entity(
   } else {
     scene.clear_material(entity);
   }
+}
+
+void ModelingMeshSyncService::apply_scene_transforms(
+    SceneDocument &scene,
+    std::span<const SceneTransformAssignment> transforms) const {
+  scene.set_transforms(transforms);
 }
 
 void ModelingMeshSyncService::sync_scene_objects_from_modeling(

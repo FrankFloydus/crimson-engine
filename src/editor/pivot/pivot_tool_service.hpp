@@ -37,6 +37,8 @@ public:
   [[nodiscard]] PivotHandleState handle_state() const;
   [[nodiscard]] SelectionPivotOverride selection_pivot_override() const;
   [[nodiscard]] std::optional<QVec3> persistent_preview_position() const;
+  [[nodiscard]] bool
+  can_activate_persistent(const EditorSelectionService &selection) const;
 
   CommandResult activate_persistent(EditorSelectionService &selection);
   CommandResult cancel_persistent();

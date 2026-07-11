@@ -162,20 +162,22 @@ void destroy_mesh_renderable_proxy_resources(filament::Engine &engine,
     engine.getRenderableManager().destroy(proxy.entity);
     engine.getTransformManager().destroy(proxy.entity);
   }
-  for (filament::MaterialInstance *&material_instance :
-       proxy.material_instances) {
-    if (material_instance) {
-      engine.destroy(material_instance);
-      material_instance = nullptr;
+  if (proxy.owns_material_instances) {
+    for (filament::MaterialInstance *&material_instance :
+         proxy.material_instances) {
+      if (material_instance) {
+        engine.destroy(material_instance);
+        material_instance = nullptr;
+      }
     }
   }
   proxy.material_instances.clear();
   proxy.material_slots.clear();
-  if (proxy.vertex_buffer) {
+  if (proxy.owns_mesh_buffers && proxy.vertex_buffer) {
     engine.destroy(proxy.vertex_buffer);
     proxy.vertex_buffer = nullptr;
   }
-  if (proxy.index_buffer) {
+  if (proxy.owns_mesh_buffers && proxy.index_buffer) {
     engine.destroy(proxy.index_buffer);
     proxy.index_buffer = nullptr;
   }
@@ -303,6 +305,58 @@ MeshRenderableProxy MeshRenderableFactory::create(
         .receiveShadows(!editor_unlit && !depth_only)
         .build(*engine_, proxy.entity);
   }
+
+  engine_->getTransformManager().create(proxy.entity);
+  update_transform(proxy, world_transform);
+  scene_->addEntity(proxy.entity);
+  creation_guard.mark_scene_added();
+  creation_guard.release();
+  return proxy;
+}
+
+MeshRenderableProxy MeshRenderableFactory::create_shared_instance(
+    EntityId entity_id, const RenderMeshAssetSnapshot &mesh,
+    const MeshRenderableProxy &prototype, const QMat4 &world_transform,
+    std::uint8_t layer_mask, std::uint8_t channel) {
+  QDR_PROFILE_FUNCTION();
+  MeshRenderableProxy proxy;
+  proxy.owns_mesh_buffers = false;
+  proxy.owns_material_instances = false;
+  MeshRenderableCreationGuard creation_guard(*engine_, *scene_, proxy);
+  proxy.entity = utils::EntityManager::get().create();
+  proxy.source_entity = entity_id;
+  proxy.mesh = prototype.mesh;
+  proxy.mesh_revision = prototype.mesh_revision;
+  proxy.material = prototype.material;
+  proxy.material_revision = prototype.material_revision;
+  proxy.cast_shadows = prototype.cast_shadows;
+  proxy.double_sided = prototype.double_sided;
+  proxy.vertex_buffer = prototype.vertex_buffer;
+  proxy.index_buffer = prototype.index_buffer;
+  proxy.material_slots = prototype.material_slots;
+  proxy.material_instances = prototype.material_instances;
+
+  const std::vector<MeshPrimitiveSpan> primitive_spans =
+      coalesced_render_mesh_primitive_spans(mesh);
+  filament::RenderableManager::Builder builder(primitive_spans.size());
+  for (std::size_t primitive_index = 0;
+       primitive_index < primitive_spans.size(); ++primitive_index) {
+    const MeshPrimitiveSpan &primitive = primitive_spans[primitive_index];
+    builder.geometry(primitive_index,
+                     filament::RenderableManager::PrimitiveType::TRIANGLES,
+                     proxy.vertex_buffer, proxy.index_buffer,
+                     primitive.index_offset, primitive.index_count);
+    builder.material(primitive_index,
+                     primitive_index < proxy.material_instances.size()
+                         ? proxy.material_instances[primitive_index]
+                         : nullptr);
+  }
+  builder.boundingBox(compute_bounds(mesh))
+      .layerMask(kViewportAllLayerMask, layer_mask)
+      .channel(channel)
+      .castShadows(proxy.cast_shadows)
+      .receiveShadows(false)
+      .build(*engine_, proxy.entity);
 
   engine_->getTransformManager().create(proxy.entity);
   update_transform(proxy, world_transform);

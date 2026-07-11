@@ -252,6 +252,7 @@ target_link_libraries(quader_document
         stduuid)
 
 add_library(quader_editor_services STATIC
+    src/editor/array/linear_array_tool_service.cpp
     src/editor/commands/asset_command_service.cpp
     src/editor/commands/document_command_service.cpp
     src/editor/commands/modeling_command_execution_service.cpp
@@ -260,6 +261,7 @@ add_library(quader_editor_services STATIC
     src/editor/selection/editor_selection_service.cpp
     src/editor/session/project_asset_bootstrap_service.cpp
     src/editor/session/project_session.cpp
+    src/editor/tools/native_viewport_tool_coordinator.cpp
 )
 
 quader_configure_core_module(quader_editor_services)

@@ -36,6 +36,7 @@ namespace quader {
 
 class QuaderEditorApi;
 class EditorSelectionService;
+class LinearArrayToolService;
 class ModelingSessionService;
 class PivotToolService;
 class UIPlatformAdapter;
@@ -76,6 +77,7 @@ public:
               SceneDocument &document, AssetRegistry &assets,
               ModelingSessionService &modeling,
               EditorSelectionService &selection, PivotToolService &pivot,
+              LinearArrayToolService &linear_array,
               AssetId default_material, bool &quit_requested);
     void prepare_render_data(std::uint32_t framebuffer_width,
                              std::uint32_t framebuffer_height);
@@ -83,7 +85,8 @@ public:
                            SceneRenderBridge &render_bridge,
                            const SceneDocument &document,
                            const AssetRegistry &assets,
-                           const PivotToolService &pivot);
+                           const PivotToolService &pivot,
+                           const LinearArrayToolService &linear_array);
     void render_viewports(RenderSystem &render_system);
     void render(RenderSystem &render_system);
     void set_render_performance_stats(RenderFramePerformanceStats stats);

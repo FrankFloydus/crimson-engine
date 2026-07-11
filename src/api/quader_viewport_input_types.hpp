@@ -27,6 +27,7 @@ enum class ViewportToolId {
     Poly,
     Mirror,
     Pivot,
+    LinearArray,
 };
 
 /**
@@ -177,6 +178,9 @@ enum class ViewportInputActionKind {
     ModalToolFinalize,
     ModalToolModeCycle,
     QuickPivot,
+    ToolConstraintX,
+    ToolConstraintY,
+    ToolConstraintZ,
 };
 
 /**

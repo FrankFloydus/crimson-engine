@@ -482,6 +482,11 @@ std::optional<QVec3> PivotToolService::persistent_preview_position() const {
              : std::nullopt;
 }
 
+bool PivotToolService::can_activate_persistent(
+    const EditorSelectionService &selection) const {
+  return active_selection_target(selection).has_value();
+}
+
 CommandResult
 PivotToolService::activate_persistent(EditorSelectionService &selection) {
   const std::optional<EntityId> target = active_selection_target(selection);

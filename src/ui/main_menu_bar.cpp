@@ -346,7 +346,9 @@ void draw_tools_menu_contents(MainMenuBarContext &context) {
     const char *shortcut =
         tool->shortcut().empty() ? nullptr : tool->shortcut().data();
     const bool enabled = context.viewport_panel != nullptr &&
-                         viewport_tool_available(tool->viewport_tool());
+                         viewport_tool_available(tool->viewport_tool()) &&
+                         context.editor.tools().can_activate(
+                             tool->viewport_tool());
     const std::string localized_label = tool_label(context.localization, *tool);
     if (ImGui::MenuItem(localized_label.c_str(), shortcut, selected, enabled)) {
       (void)context.viewport_panel->activate_tool_from_menu(

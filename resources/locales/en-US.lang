@@ -275,6 +275,7 @@ viewport.tool.cut.label=Cut
 viewport.tool.poly.label=Poly
 viewport.tool.mirror.label=Mirror
 viewport.tool.pivot.label=Pivot
+viewport.tool.linear_array.label=Linear Array
 
 viewport.settings.section.grid.label=Grid
 viewport.settings.section.selection.label=Selection

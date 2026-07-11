@@ -9,6 +9,7 @@
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
+#include "editor/array/linear_array_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "quader_app_version.hpp"
@@ -646,6 +647,7 @@ void UISystem::draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
                     SceneDocument &document, AssetRegistry &assets,
                     ModelingSessionService &modeling,
                     EditorSelectionService &selection, PivotToolService &pivot,
+                    LinearArrayToolService &linear_array,
                     AssetId default_material, bool &quit_requested) {
   QDR_PROFILE_FUNCTION();
   {
@@ -696,6 +698,7 @@ void UISystem::draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
       .modeling = modeling,
       .selection = selection,
       .pivot = &pivot,
+      .linear_array = &linear_array,
       .default_material = default_material,
       .frame_timing = current_frame_timing_,
       .render_performance = render_performance_stats_,
@@ -756,6 +759,18 @@ void UISystem::draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
     std::vector<ModelingToolPreviewMesh> modeling_preview_meshes =
         has_tool_preview_meshes ? modeling.tool_preview_meshes()
                                 : std::vector<ModelingToolPreviewMesh>{};
+    const LinearArrayPreviewState linear_preview = linear_array.preview_state();
+    if (linear_preview.active) {
+      if (const MeshAsset *mesh = assets.mesh(linear_preview.mesh)) {
+        modeling_preview_meshes.push_back(ModelingToolPreviewMesh{
+            .source_entity = linear_preview.source_entity,
+            .material = linear_preview.material,
+            .mesh = *mesh,
+            .transform = {},
+            .instance_transforms = linear_preview.copy_world_transforms,
+        });
+      }
+    }
     std::vector<ToolPreviewMesh> render_preview_meshes;
     render_preview_meshes.reserve(modeling_preview_meshes.size());
     for (ModelingToolPreviewMesh &preview_mesh : modeling_preview_meshes) {
@@ -766,7 +781,9 @@ void UISystem::draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
           .source_entity = preview_mesh.source_entity,
           .material = material,
           .mesh = std::move(preview_mesh.mesh),
-          .transform = {},
+          .transform = preview_mesh.transform,
+          .instance_transforms =
+              std::move(preview_mesh.instance_transforms),
       });
     }
     render_bridge.set_tool_preview_meshes(
@@ -792,12 +809,13 @@ void UISystem::prepare_viewports(QuaderEditorApi &editor,
                                  SceneRenderBridge &render_bridge,
                                  const SceneDocument &document,
                                  const AssetRegistry &assets,
-                                 const PivotToolService &pivot) {
+                                 const PivotToolService &pivot,
+                                 const LinearArrayToolService &linear_array) {
   QDR_PROFILE_FUNCTION();
   if (viewport_panel_ != nullptr) {
     viewport_panel_->prepare_viewports(
         QuaderViewportApiRuntimeAccess::workspace(editor.viewports()), editor,
-        render_bridge, document, assets, &pivot);
+        render_bridge, document, assets, &pivot, &linear_array);
   }
 }
 

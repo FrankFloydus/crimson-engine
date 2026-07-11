@@ -28,6 +28,7 @@ class SceneDocument;
 struct ModelingObjectSceneIdentity {
   EntityId entity = kInvalidEntityId;
   EditorObjectId editor_object_id = kInvalidEditorObjectId;
+  std::string uuid;
   std::string name;
   EntityId parent = kInvalidEntityId;
   TransformComponent transform;

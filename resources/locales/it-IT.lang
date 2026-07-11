@@ -275,6 +275,7 @@ viewport.tool.cut.label=Taglia
 viewport.tool.poly.label=Poligono
 viewport.tool.mirror.label=Specchia
 viewport.tool.pivot.label=Pivot
+viewport.tool.linear_array.label=Serie lineare
 
 viewport.settings.section.grid.label=Griglia
 viewport.settings.section.selection.label=Selezione

@@ -49,6 +49,11 @@ public:
            std::uint8_t layer_mask = kViewportRenderedSceneLayerMask,
            bool editor_unlit = false, bool depth_only = false,
            std::uint8_t channel = kViewportDefaultRenderableChannel);
+    MeshRenderableProxy create_shared_instance(
+        EntityId entity_id, const RenderMeshAssetSnapshot &mesh,
+        const MeshRenderableProxy &prototype, const QMat4 &world_transform,
+        std::uint8_t layer_mask = kViewportRenderedSceneLayerMask,
+        std::uint8_t channel = kViewportDefaultRenderableChannel);
     void update_transform(const MeshRenderableProxy &proxy,
                           const QMat4 &world_transform);
     void update_surface_grid(const MeshRenderableProxy &proxy,

@@ -1167,6 +1167,34 @@ struct CommandResult {
 };
 
 /**
+ * Selects the object-selection result produced by a runtime duplicate batch.
+ */
+enum class DuplicateObjectSelectionPolicy {
+  DuplicatesOnly,
+  SourcesAndDuplicates,
+};
+
+/**
+ * Describes one runtime-owned batch clone request.
+ */
+struct DuplicateObjectsRequest {
+  std::vector<int> source_object_ids;
+  std::uint32_t copies_per_source = 1;
+  quader::QVec3 geometry_offset = {};
+  DuplicateObjectSelectionPolicy selection_policy =
+      DuplicateObjectSelectionPolicy::DuplicatesOnly;
+};
+
+/**
+ * Returns ordered runtime IDs created and selected by a duplicate batch.
+ */
+struct DuplicateObjectsResult {
+  CommandResult command;
+  std::vector<int> duplicate_object_ids;
+  std::vector<int> selected_object_ids;
+};
+
+/**
  * Represents a History Status value used by the modeling runtime domain.
  */
 struct HistoryStatus {
@@ -1800,6 +1828,11 @@ CommandResult duplicate_selected_objects(std::vector<PolygonObject> &objects,
                                          SelectionMode &mode,
                                          int &active_object_id,
                                          quader::QVec3 offset);
+DuplicateObjectsResult duplicate_objects(std::vector<PolygonObject> &objects,
+                                         int &next_object_id,
+                                         SelectionMode &mode,
+                                         int &active_object_id,
+                                         DuplicateObjectsRequest request);
 CommandResult paste_objects(std::vector<PolygonObject> &objects,
                             int &next_object_id, SelectionMode &mode,
                             int &active_object_id,
@@ -2117,6 +2150,7 @@ public:
   CommandResult duplicate_selected_objects(quader::QVec3 offset);
   CommandResult
   duplicate_selected_objects(DuplicateMeshesOperationSettings settings);
+  DuplicateObjectsResult duplicate_objects(DuplicateObjectsRequest request);
   CommandResult paste_objects(const std::vector<PolygonObject> &copied_objects,
                               std::optional<quader::QVec3> target_center);
 

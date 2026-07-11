@@ -177,6 +177,7 @@ public:
   static constexpr ViewportToolId kPoly = ViewportToolId::Poly;
   static constexpr ViewportToolId kMirror = ViewportToolId::Mirror;
   static constexpr ViewportToolId kPivot = ViewportToolId::Pivot;
+  static constexpr ViewportToolId kLinearArray = ViewportToolId::LinearArray;
 
   explicit ViewportTool(ToolDescriptor descriptor);
   ViewportTool(ViewportToolId tool);

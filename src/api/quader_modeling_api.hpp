@@ -418,6 +418,8 @@ public:
   QuaderApiResult<QuaderMeshHandle>
   create_mesh_handle(QuaderPolygonDocument document,
                      QuaderCreateMeshArgs args = {});
+  QuaderApiResult<QuaderLinearArrayResult>
+  create_linear_array(const QuaderLinearArrayArgs &args);
   [[nodiscard]] QuaderMeshHandle mesh(QuaderModelingObjectRef object) const;
   [[nodiscard]] QuaderApiResult<QuaderMeshHandle>
   mesh(QuaderModelingObjectId object_id) const;

@@ -432,6 +432,7 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
         .material = std::move(material_snapshot),
         .material_revision = 0u,
         .transform = mesh.transform,
+        .instance_transforms = mesh.instance_transforms,
     });
     records.back().material_revision = records.back().material.revision;
   }

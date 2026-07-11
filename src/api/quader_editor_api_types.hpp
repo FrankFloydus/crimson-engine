@@ -149,6 +149,7 @@ struct QuaderToolsRuntimeHooks {
     std::function<QuaderApiVoidResult()> cancel_modal_tool;
     std::function<QuaderApiVoidResult()> commit_active_tool_preview;
     std::function<QuaderApiVoidResult()> cancel_active_tool_preview;
+    std::function<double()> grid_world_size;
 };
 
 /**

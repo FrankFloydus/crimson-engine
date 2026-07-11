@@ -800,8 +800,9 @@ void QuaderCommandsApi::Impl::register_commands() {
           return tools_.activate(tool_id);
         },
         std::string(tool->shortcut()),
-        [tool_kind = tool->viewport_tool()] {
-          return viewport_tool_available(tool_kind);
+        [this, tool_kind = tool->viewport_tool()] {
+          return viewport_tool_available(tool_kind) &&
+                 tools_.can_activate(tool_kind);
         });
   }
 }

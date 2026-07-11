@@ -2970,3 +2970,52 @@ Verification:
 - `cmake --build --preset vs2026-debug --target quader_modeling_domain_tests`
 - `build\vs2026\Debug\quader_modeling_domain_tests.exe --gtest_filter=QdrDocumentOperationInsertEdgeLoopTests.EdgeLoopSelection*:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadePickSelectDoubleClickDelegatesBySelectionMode:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeShiftAndCtrlDoubleClickEditWholeEdgeLoop:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeAltClickSelectsWholeEdgeLoop:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeDoubleClickSelectsBoundaryFanEdgeLoop:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeDoubleClickUsesPickedFaceForSharedCornerEdgeLoop:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeDoubleClickSelectedSharedLipEdgeUsesPickedSurfaceBoundary:QdrModelingRuntimeCommandTests.EditorRuntimeCommandFacadeDoubleClickSelectedOpenBoxBoundaryUsesHoleLoop`
 - `build\vs2026\Debug\quader_tests.exe --gtest_filter=ViewportInteractionControllerTests.AltClickEdgeSelectsLoopThroughViewportFallback:ViewportInteractionControllerTests.ShortMoveGizmoClickKeepsEdgeSelection:ViewportInteractionControllerTests.TransformGizmoFrameSurvivesNavigationFrames`
+
+## 2026-07-11 - Linear Array Uses Fixed A/B Origins And Atomic Duplication
+
+Task/context: Linear Array needed to become a first-class native viewport tool: select one mesh,
+drag endpoint B while A stays anchored to the selected mesh origin, preview evenly spaced copies in
+real time, and commit the result as one undoable edit.
+
+Invariant:
+
+- Linear Array activates only for exactly one visible, unlocked modeling mesh in Object mode. Count
+  is source-inclusive, defaults to 4, and stays within 2..128. A is the source world origin; B is the
+  last copy origin. Changing count keeps B fixed, and zero-length arrays intentionally overlap.
+- `LinearArrayToolService` owns transient source validation, count, endpoint, axis constraint, and
+  preview state. X/Y/Z are semantic, remappable constraint actions; pressing the active axis again
+  returns to Free. Space/Enter apply, Escape cancels, and Ctrl inverts global grid snapping during
+  endpoint drag. UI code only projects the handle and dispatches intent.
+- Editor-owned viewport tools route through `NativeViewportToolCoordinator`. Their descriptors set
+  `editor_owned_native_lifecycle`; do not add per-tool exceptions to host-contract lookup.
+- Commit runs one `LinearArrayHistoryCommand` and one runtime `duplicate_objects` batch. Results are
+  source first then copies A-to-B; copies keep the source parent and durable scene properties, do not
+  copy source children, own independent modeling documents/mesh assets, select source plus copies,
+  and make B active.
+- Modeling mementos preserve entity ID, editor object ID, and UUID across undo/redo. Scene/asset sync
+  mutations, including the batch transform assignment, stay behind `ModelingMeshSyncService`.
+- Array preview uploads source geometry once and uses shared Filament mesh/material resources for
+  transform-only instances. Moving B updates instance transforms without re-uploading geometry.
+
+Affected owners/files:
+
+- `src/editor/array/linear_array_tool_service.*`
+- `src/editor/tools/native_viewport_tool_coordinator.*`
+- `src/editor/modeling/runtime/session.*`
+- `src/editor/modeling/services/modeling_session_service.*`
+- `src/editor/modeling/services/modeling_mesh_sync_service.*`
+- `src/api/quader_modeling_api.*`
+- `src/api/quader_tools_api.*`
+- `src/ui/viewport_panel.cpp`
+- `src/render/tool_preview_renderable_cache.*`
+- `src/render/mesh_renderable_factory.*`
+- `tests/editor_api_tests.cpp`
+
+Verification:
+
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=EditorApiTests.LinearArray*` (6/6)
+- `build\vs2026\Debug\quader_tests.exe` (692/692)
+- `build\vs2026\Debug\quader_guardrail_tests.exe` (164/164)
+- `build\vs2026\Debug\quader_modeling_domain_tests.exe --gtest_filter=-QdrGeometryTests.QdrGeometryHelpersRemainStable` (498/498)
+- Full CTest still exposes the pre-existing `QdrGeometryTests.QdrGeometryHelpersRemainStable` float
+  ray/plane precision failure; no geometry source is changed by Linear Array.

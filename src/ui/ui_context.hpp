@@ -21,6 +21,7 @@ namespace quader {
 
 class AssetRegistry;
 class EditorSelectionService;
+class LinearArrayToolService;
 class LocalizationService;
 class ModelingSessionService;
 class PivotToolService;
@@ -75,6 +76,7 @@ struct UIViewportSurfaceContext {
     ModelingSessionService& modeling;
     EditorSelectionService& selection;
     PivotToolService *pivot = nullptr;
+    LinearArrayToolService *linear_array = nullptr;
     AssetId default_material = kInvalidAssetId;
     FrameTiming frame_timing = {};
     RenderFramePerformanceStats render_performance = {};

@@ -19,6 +19,7 @@ ModelingObjectSceneIdentity capture_scene_identity(const SceneDocument &scene,
   ModelingObjectSceneIdentity identity;
   identity.entity = entity;
   identity.editor_object_id = scene.editor_object_id(entity);
+  identity.uuid = scene.uuid(entity);
   if (const NameComponent *name = scene.name(entity)) {
     identity.name = name->name;
   }

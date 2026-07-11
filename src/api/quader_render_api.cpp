@@ -9,6 +9,7 @@
 
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_query_api.hpp"
+#include "editor/array/linear_array_tool_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
@@ -43,6 +44,24 @@ void append_overlay_frame(ViewportOverlayFrame &frame,
                      appended_frame.icons.end());
 }
 
+void append_linear_array_preview(
+    const ProjectSession &session,
+    std::vector<ModelingToolPreviewMesh> &previews) {
+  const LinearArrayPreviewState preview = session.linear_array().preview_state();
+  const MeshAsset *mesh =
+      preview.active ? session.assets().mesh(preview.mesh) : nullptr;
+  if (mesh == nullptr) {
+    return;
+  }
+  previews.push_back(ModelingToolPreviewMesh{
+      .source_entity = preview.source_entity,
+      .material = preview.material,
+      .mesh = *mesh,
+      .transform = {},
+      .instance_transforms = preview.copy_world_transforms,
+  });
+}
+
 } // namespace
 
 QuaderRenderApi::QuaderRenderApi(QuaderApiSession session, QuaderQueryApi& query)
@@ -61,10 +80,11 @@ QuaderRenderApiRuntimeAccess::sync_scene(QuaderRenderApi &api,
 QuaderApiVoidResult
 QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
                                                  SceneRenderBridge &bridge) {
+  const ProjectSession &project = read_project_session(api.session_);
   std::vector<ModelingToolPreviewMesh> modeling_preview_meshes =
-      read_project_session(api.session_).modeling().tool_preview_meshes();
-  const ProjectSessionReadView session =
-      read_project_session(api.session_).read_view();
+      project.modeling().tool_preview_meshes();
+  append_linear_array_preview(project, modeling_preview_meshes);
+  const ProjectSessionReadView session = project.read_view();
   std::vector<ToolPreviewMesh> render_preview_meshes;
   render_preview_meshes.reserve(modeling_preview_meshes.size());
   for (ModelingToolPreviewMesh &preview_mesh : modeling_preview_meshes) {
@@ -72,7 +92,9 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
         .source_entity = preview_mesh.source_entity,
         .material = preview_mesh.material,
         .mesh = std::move(preview_mesh.mesh),
-        .transform = {},
+        .transform = preview_mesh.transform,
+        .instance_transforms =
+            std::move(preview_mesh.instance_transforms),
     });
   }
 
@@ -141,8 +163,10 @@ QuaderOverlayFrame QuaderRenderApi::selection_overlay_frame() const {
 
 std::vector<QuaderToolPreviewMesh>
 QuaderRenderApi::tool_preview_meshes() const {
-  const std::vector<ModelingToolPreviewMesh> previews =
-      read_project_session(session_).modeling().tool_preview_meshes();
+  const ProjectSession &session = read_project_session(session_);
+  std::vector<ModelingToolPreviewMesh> previews =
+      session.modeling().tool_preview_meshes();
+  append_linear_array_preview(session, previews);
   std::vector<QuaderToolPreviewMesh> result;
   result.reserve(previews.size());
   for (const ModelingToolPreviewMesh &preview : previews) {
