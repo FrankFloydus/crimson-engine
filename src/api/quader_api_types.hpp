@@ -251,6 +251,31 @@ enum class QuaderTransformAxis {
 };
 
 /**
+ * Selects which world-AABB coordinate is aligned between mesh objects.
+ */
+enum class QuaderMeshAlignment {
+    Minimum,
+    Center,
+    Maximum,
+};
+
+/**
+ * Selects how mesh objects are distributed along one world axis.
+ */
+enum class QuaderMeshDistribution {
+    Centers,
+    Gaps,
+};
+
+/**
+ * Controls optional world-grid quantization for mesh arrangement commands.
+ */
+struct QuaderMeshArrangementOptions {
+    bool snap_to_grid = false;
+    double grid_size = 1.0;
+};
+
+/**
  * Enumerates Quader Viewport Tool values used by the public Quader API surface.
  */
 enum class QuaderViewportTool {

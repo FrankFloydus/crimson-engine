@@ -7,10 +7,12 @@
 #include "api/quader_commands_api.hpp"
 
 #include "api/quader_api.hpp"
+#include "api/quader_mesh_arrangement_catalog.hpp"
 #ifndef NDEBUG
 #include "api/quader_dev_tools_api.hpp"
 #endif
 #include "api/quader_project_api.hpp"
+#include "api/quader_preferences_api.hpp"
 #include "api/quader_tools_api.hpp"
 #include "api/quader_viewport_api.hpp"
 #include "core/public_command_targets.hpp"
@@ -21,6 +23,7 @@
 #include "editor/input/viewport_input_binding_adapter.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
+#include "viewport/viewport_input_types.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -104,6 +107,51 @@ int default_keybinding_weight_for_command(std::string_view command_id) {
   return 0;
 }
 
+std::string_view arrangement_axis_label(QuaderTransformAxis axis) {
+  switch (axis) {
+  case QuaderTransformAxis::X:
+    return "X";
+  case QuaderTransformAxis::Y:
+    return "Y";
+  case QuaderTransformAxis::Z:
+    return "Z";
+  case QuaderTransformAxis::None:
+  case QuaderTransformAxis::XY:
+  case QuaderTransformAxis::XZ:
+  case QuaderTransformAxis::YZ:
+  case QuaderTransformAxis::All:
+    return "";
+  }
+  return "";
+}
+
+std::string arrangement_command_label(
+    const QuaderMeshArrangementDescriptor &descriptor) {
+  std::string label;
+  if (descriptor.kind == QuaderMeshArrangementKind::Alignment) {
+    label = "Align ";
+    label.append(arrangement_axis_label(descriptor.axis));
+    label.push_back(' ');
+    switch (descriptor.alignment) {
+    case QuaderMeshAlignment::Minimum:
+      label.append("Min");
+      break;
+    case QuaderMeshAlignment::Center:
+      label.append("Center");
+      break;
+    case QuaderMeshAlignment::Maximum:
+      label.append("Max");
+      break;
+    }
+    return label;
+  }
+  label = descriptor.distribution == QuaderMeshDistribution::Centers
+              ? "Distribute Centers "
+              : "Distribute Gaps ";
+  label.append(arrangement_axis_label(descriptor.axis));
+  return label;
+}
+
 std::string_view
 default_keybinding_context_for_contract_target(std::string_view target_id) {
   const std::optional<std::string> command_target =
@@ -163,9 +211,13 @@ viewport_keybinding_context(const ViewportToolState &state,
 class QuaderCommandsApi::Impl final {
 public:
 #ifndef NDEBUG
-    Impl(QuaderApi& api, QuaderProjectApi& project, QuaderViewportApi& viewports, QuaderToolsApi& tools, QuaderDevToolsApi& dev_tools);
+    Impl(QuaderApi& api, QuaderProjectApi& project,
+         QuaderViewportApi& viewports, QuaderToolsApi& tools,
+         QuaderPreferencesApi& preferences, QuaderDevToolsApi& dev_tools);
 #else
-    Impl(QuaderApi& api, QuaderProjectApi& project, QuaderViewportApi& viewports, QuaderToolsApi& tools);
+    Impl(QuaderApi& api, QuaderProjectApi& project,
+         QuaderViewportApi& viewports, QuaderToolsApi& tools,
+         QuaderPreferencesApi& preferences);
 #endif
 
     QuaderApiVoidResult execute(std::string_view command_id);
@@ -242,6 +294,7 @@ public:
     QuaderProjectApi& project_;
     QuaderViewportApi& viewports_;
     QuaderToolsApi& tools_;
+    QuaderPreferencesApi& preferences_;
 #ifndef NDEBUG
     QuaderDevToolsApi& dev_tools_;
 #endif
@@ -252,7 +305,7 @@ public:
 
 QuaderCommandsApi::Impl::Impl(
     QuaderApi &api, QuaderProjectApi &project, QuaderViewportApi &viewports,
-    QuaderToolsApi &tools
+    QuaderToolsApi &tools, QuaderPreferencesApi &preferences
 #ifndef NDEBUG
     ,
     QuaderDevToolsApi &dev_tools
@@ -262,6 +315,7 @@ QuaderCommandsApi::Impl::Impl(
     , project_(project)
     , viewports_(viewports)
     , tools_(tools)
+    , preferences_(preferences)
 #ifndef NDEBUG
     , dev_tools_(dev_tools)
 #endif
@@ -700,6 +754,29 @@ void QuaderCommandsApi::Impl::register_commands() {
   register_viewport_view_command(quader_command::kViewportViewBack, "Back View",
                                  ViewportView::Back);
 
+  for (const QuaderMeshArrangementDescriptor &descriptor :
+       quader_mesh_arrangement_catalog()) {
+    register_command(
+        descriptor.command_id, arrangement_command_label(descriptor),
+        [this, descriptor] {
+          const QuaderMeshArrangementOptions options{
+              .snap_to_grid = preferences_.grid_snap_enabled(),
+              .grid_size = viewport_grid_world_size_for_preset(
+                  viewports_.grid_preset()),
+          };
+          return descriptor.kind == QuaderMeshArrangementKind::Alignment
+                     ? api_.modeling().align_selected_meshes(
+                           descriptor.axis, descriptor.alignment, options)
+                     : api_.modeling().distribute_selected_meshes(
+                           descriptor.axis, descriptor.distribution, options);
+        },
+        {}, [this, kind = descriptor.kind] {
+          return kind == QuaderMeshArrangementKind::Alignment
+                     ? api_.modeling().can_align_selected_meshes()
+                     : api_.modeling().can_distribute_selected_meshes();
+        });
+  }
+
   for (const CommandTool *tool : modeling_command_tools()) {
     if (tool == nullptr) {
       continue;
@@ -871,15 +948,18 @@ QuaderCommandsApi::QuaderCommandsApi(QuaderApi &api,
                                      QuaderProjectApi &project,
                                      QuaderViewportApi &viewports,
                                      QuaderToolsApi &tools,
+                                     QuaderPreferencesApi &preferences,
                                      QuaderDevToolsApi &dev_tools)
-    : impl_(std::make_unique<Impl>(api, project, viewports, tools,
+    : impl_(std::make_unique<Impl>(api, project, viewports, tools, preferences,
                                    dev_tools)) {}
 #else
 QuaderCommandsApi::QuaderCommandsApi(QuaderApi &api,
                                      QuaderProjectApi &project,
                                      QuaderViewportApi &viewports,
-                                     QuaderToolsApi &tools)
-    : impl_(std::make_unique<Impl>(api, project, viewports, tools)) {}
+                                     QuaderToolsApi &tools,
+                                     QuaderPreferencesApi &preferences)
+    : impl_(std::make_unique<Impl>(api, project, viewports, tools,
+                                   preferences)) {}
 #endif
 
 QuaderCommandsApi::~QuaderCommandsApi() = default;

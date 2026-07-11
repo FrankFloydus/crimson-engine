@@ -22,12 +22,14 @@ public:
         , tools(session)
 #ifndef NDEBUG
         , dev_tools(session)
-        , commands(api, project, viewports, tools, dev_tools)
+        , preferences()
+        , commands(api, project, viewports, tools, preferences, dev_tools)
 #else
-        , commands(api, project, viewports, tools)
+        , preferences()
+        , commands(api, project, viewports, tools, preferences)
 #endif
-        , preferences(commands)
         , render(session, api.query()) {
+      preferences.attach_commands(commands);
       tools.set_runtime_hooks(QuaderToolsRuntimeHooks{
           .commit_active_tool_preview =
               [this] { return api.modeling().commit_preview(); },
@@ -43,8 +45,8 @@ public:
 #ifndef NDEBUG
     QuaderDevToolsApi dev_tools;
 #endif
-    QuaderCommandsApi commands;
     QuaderPreferencesApi preferences;
+    QuaderCommandsApi commands;
     QuaderUIApi ui;
     QuaderEventsApi events;
     QuaderRenderApi render;

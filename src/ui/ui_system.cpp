@@ -610,6 +610,17 @@ void UISystem::install_runtime_hooks(QuaderEditorApi &editor,
                 false, localization_.text("ui.runtime.preferences_saved",
                                           "Preferences saved."));
           },
+      .grid_snap_enabled = [this]() {
+        return viewport_settings_.bool_value(ViewportBoolSettingId::GridSnap);
+      },
+      .set_grid_snap_enabled = [this](bool enabled) {
+        const bool changed = viewport_settings_.set_bool_value(
+            ViewportBoolSettingId::GridSnap, enabled);
+        if (changed) {
+          save_viewport_settings();
+        }
+        return runtime_status(changed);
+      },
       .navigation_gizmo_visible =
           [this]() {
             return viewport_panel_ != nullptr &&

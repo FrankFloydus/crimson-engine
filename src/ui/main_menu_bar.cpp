@@ -8,8 +8,10 @@
 
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
+#include "api/quader_mesh_arrangement_catalog.hpp"
 #include "api/quader_viewport_layout_types.hpp"
 #include "core/localization_service.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "ui/ui_panel_manager.hpp"
 #include "ui/viewport_panel.hpp"
@@ -122,6 +124,92 @@ bool draw_viewport_bool_setting_menu_item(MainMenuBarContext &context,
     return context.viewport_settings.set_bool_value(setting_id, value);
   }
   return false;
+}
+
+const QuaderMeshArrangementDescriptor *arrangement_descriptor(
+    QuaderMeshArrangementKind kind, QuaderTransformAxis axis,
+    QuaderMeshAlignment alignment = QuaderMeshAlignment::Center,
+    QuaderMeshDistribution distribution = QuaderMeshDistribution::Centers) {
+  for (const QuaderMeshArrangementDescriptor &descriptor :
+       quader_mesh_arrangement_catalog()) {
+    if (descriptor.kind == kind && descriptor.axis == axis &&
+        (kind != QuaderMeshArrangementKind::Alignment ||
+         descriptor.alignment == alignment) &&
+        (kind != QuaderMeshArrangementKind::Distribution ||
+         descriptor.distribution == distribution)) {
+      return &descriptor;
+    }
+  }
+  return nullptr;
+}
+
+bool draw_arrangement_command(
+    MainMenuBarContext &context,
+    const std::vector<QuaderCommandDescriptor> &commands,
+    const QuaderMeshArrangementDescriptor *descriptor) {
+  if (descriptor == nullptr) {
+    return false;
+  }
+  const QuaderCommandDescriptor *command =
+      find_command_descriptor(commands, descriptor->command_id);
+  const bool enabled = command != nullptr && command->enabled;
+  const std::string label = context.localization.imgui_label(
+      descriptor->localization_key, descriptor->command_id.string(),
+      descriptor->fallback_label);
+  if (ImGui::MenuItem(label.c_str(), nullptr, false, enabled)) {
+    (void)context.editor.commands().execute(descriptor->command_id);
+    return true;
+  }
+  return false;
+}
+
+void draw_alignment_axis_menu(
+    MainMenuBarContext &context,
+    const std::vector<QuaderCommandDescriptor> &commands,
+    QuaderTransformAxis axis, const char *localization_key,
+    const char *fallback_label) {
+  const std::string label = context.localization.imgui_label(
+      localization_key, localization_key, fallback_label);
+  if (!begin_menu_with_popup_spacing(label)) {
+    return;
+  }
+  (void)draw_arrangement_command(
+      context, commands,
+      arrangement_descriptor(QuaderMeshArrangementKind::Alignment, axis,
+                             QuaderMeshAlignment::Minimum));
+  (void)draw_arrangement_command(
+      context, commands,
+      arrangement_descriptor(QuaderMeshArrangementKind::Alignment, axis,
+                             QuaderMeshAlignment::Center));
+  (void)draw_arrangement_command(
+      context, commands,
+      arrangement_descriptor(QuaderMeshArrangementKind::Alignment, axis,
+                             QuaderMeshAlignment::Maximum));
+  end_menu_with_popup_spacing();
+}
+
+void draw_distribution_menu(
+    MainMenuBarContext &context,
+    const std::vector<QuaderCommandDescriptor> &commands,
+    QuaderMeshDistribution distribution, const char *localization_key,
+    const char *fallback_label) {
+  const std::string label = context.localization.imgui_label(
+      localization_key, localization_key, fallback_label);
+  if (!begin_menu_with_popup_spacing(label)) {
+    return;
+  }
+  constexpr QuaderTransformAxis kAxes[] = {
+      QuaderTransformAxis::X,
+      QuaderTransformAxis::Y,
+      QuaderTransformAxis::Z,
+  };
+  for (const QuaderTransformAxis axis : kAxes) {
+    (void)draw_arrangement_command(
+        context, commands,
+        arrangement_descriptor(QuaderMeshArrangementKind::Distribution, axis,
+                               QuaderMeshAlignment::Center, distribution));
+  }
+  end_menu_with_popup_spacing();
 }
 
 void draw_file_menu_contents(MainMenuBarContext &context) {
@@ -399,6 +487,50 @@ bool EditMenu::draw(MainMenuBarContext &context,
   return true;
 }
 
+bool AlignMenu::draw(MainMenuBarContext &context,
+                     MainMenuBarResult &result) const {
+  if (context.modeling.selection_summary().mode !=
+      ModelingSelectionMode::Object) {
+    return false;
+  }
+
+  const std::string label = context.localization.imgui_label(
+      "ui.menu.align", "ui.menu.align", "Align");
+  if (!begin_menu_with_popup_spacing(label)) {
+    return false;
+  }
+
+  bool snap_to_grid = context.editor.preferences().grid_snap_enabled();
+  const std::string snap_label = context.localization.imgui_label(
+      "ui.menu.align.snap_to_grid", "ui.menu.align.snap_to_grid",
+      "Snap to Grid");
+  if (ImGui::MenuItem(snap_label.c_str(), nullptr, &snap_to_grid)) {
+    const QuaderApiVoidResult changed =
+        context.editor.preferences().set_grid_snap_enabled(snap_to_grid);
+    result.viewport_settings_changed =
+        result.viewport_settings_changed || changed.changed;
+  }
+  ImGui::Separator();
+
+  const std::vector<QuaderCommandDescriptor> commands =
+      context.editor.commands().available();
+  draw_alignment_axis_menu(context, commands, QuaderTransformAxis::X,
+                           "ui.menu.align.axis_x", "X");
+  draw_alignment_axis_menu(context, commands, QuaderTransformAxis::Y,
+                           "ui.menu.align.axis_y", "Y");
+  draw_alignment_axis_menu(context, commands, QuaderTransformAxis::Z,
+                           "ui.menu.align.axis_z", "Z");
+  ImGui::Separator();
+  draw_distribution_menu(context, commands, QuaderMeshDistribution::Centers,
+                         "ui.menu.align.distribute_centers",
+                         "Distribute Centers");
+  draw_distribution_menu(context, commands, QuaderMeshDistribution::Gaps,
+                         "ui.menu.align.distribute_gaps", "Distribute Gaps");
+
+  end_menu_with_popup_spacing();
+  return true;
+}
+
 bool CleanUpMenu::draw(MainMenuBarContext &context) const {
   const std::string label = context.localization.imgui_label(
       "ui.menu.cleanup", "ui.menu.cleanup", "Clean Up");
@@ -475,6 +607,7 @@ MainMenuBarResult MainMenuBar::draw_menus(MainMenuBarContext context) const {
   MainMenuBarResult result;
   result.popup_open = file_menu_.draw(context) || result.popup_open;
   result.popup_open = edit_menu_.draw(context, result) || result.popup_open;
+  result.popup_open = align_menu_.draw(context, result) || result.popup_open;
   result.popup_open = cleanup_menu_.draw(context) || result.popup_open;
   result.popup_open = tools_menu_.draw(context) || result.popup_open;
   result.popup_open = create_menu_.draw(context) || result.popup_open;

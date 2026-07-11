@@ -432,6 +432,14 @@ public:
   QuaderApiVoidResult duplicate_meshes();
   QuaderApiVoidResult combine_meshes();
   QuaderApiVoidResult remove_doubles();
+  [[nodiscard]] bool can_align_selected_meshes() const;
+  [[nodiscard]] bool can_distribute_selected_meshes() const;
+  QuaderApiVoidResult align_selected_meshes(
+      QuaderTransformAxis axis, QuaderMeshAlignment alignment,
+      QuaderMeshArrangementOptions options = {});
+  QuaderApiVoidResult distribute_selected_meshes(
+      QuaderTransformAxis axis, QuaderMeshDistribution distribution,
+      QuaderMeshArrangementOptions options = {});
 
   QuaderApiVoidResult begin_preview(std::string_view action_id);
   QuaderApiVoidResult update_preview(const QuaderPreviewSettings &settings);

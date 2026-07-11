@@ -20,6 +20,7 @@
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/transform/mesh_arrangement_service.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
 #include "math/glm_bridge.hpp"
 
@@ -199,6 +200,67 @@ QMat4 world_transform_delta_from_api_transform(
       glm::translate(glm::mat4{1.0f}, to_glm(pivot)) * local_transform *
       glm::translate(glm::mat4{1.0f}, -to_glm(pivot));
   return from_glm(around_pivot);
+}
+
+std::optional<MeshArrangementAxis>
+mesh_arrangement_axis(QuaderTransformAxis axis) {
+  switch (axis) {
+  case QuaderTransformAxis::X:
+    return MeshArrangementAxis::X;
+  case QuaderTransformAxis::Y:
+    return MeshArrangementAxis::Y;
+  case QuaderTransformAxis::Z:
+    return MeshArrangementAxis::Z;
+  case QuaderTransformAxis::None:
+  case QuaderTransformAxis::XY:
+  case QuaderTransformAxis::XZ:
+  case QuaderTransformAxis::YZ:
+  case QuaderTransformAxis::All:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+MeshAlignmentMode mesh_alignment_mode(QuaderMeshAlignment alignment) {
+  switch (alignment) {
+  case QuaderMeshAlignment::Minimum:
+    return MeshAlignmentMode::Minimum;
+  case QuaderMeshAlignment::Center:
+    return MeshAlignmentMode::Center;
+  case QuaderMeshAlignment::Maximum:
+    return MeshAlignmentMode::Maximum;
+  }
+  return MeshAlignmentMode::Center;
+}
+
+MeshDistributionMode
+mesh_distribution_mode(QuaderMeshDistribution distribution) {
+  return distribution == QuaderMeshDistribution::Gaps
+             ? MeshDistributionMode::Gaps
+             : MeshDistributionMode::Centers;
+}
+
+MeshArrangementOptions
+mesh_arrangement_options(QuaderMeshArrangementOptions options) {
+  return {
+      .snap_to_grid = options.snap_to_grid,
+      .grid_size = options.grid_size,
+  };
+}
+
+MeshArrangementSelectionContext
+mesh_arrangement_selection_context(ProjectSession &session) {
+  const ModelingSelectionSummary summary =
+      session.modeling().selection_summary();
+  const std::optional<EntityId> active_mesh =
+      summary.active_object_id > 0
+          ? session.modeling().entity_for_modeling_object(
+                summary.active_object_id)
+          : std::nullopt;
+  return {
+      .object_mode = summary.mode == ModelingSelectionMode::Object,
+      .active_mesh = active_mesh.value_or(kInvalidEntityId),
+  };
 }
 
 } // namespace
@@ -972,6 +1034,66 @@ QuaderApiVoidResult QuaderModelingApi::combine_meshes() {
 
 QuaderApiVoidResult QuaderModelingApi::remove_doubles() {
   return mutations_.run_tracked_modeling_tool("remove_doubles");
+}
+
+bool QuaderModelingApi::can_align_selected_meshes() const {
+  ProjectSession &session = project_session(session_);
+  MeshArrangementService arrangement(
+      session.scene(), session.assets(),
+      mesh_arrangement_selection_context(session),
+      session.document_commands());
+  return arrangement.can_align_selected_meshes();
+}
+
+bool QuaderModelingApi::can_distribute_selected_meshes() const {
+  ProjectSession &session = project_session(session_);
+  MeshArrangementService arrangement(
+      session.scene(), session.assets(),
+      mesh_arrangement_selection_context(session),
+      session.document_commands());
+  return arrangement.can_distribute_selected_meshes();
+}
+
+QuaderApiVoidResult QuaderModelingApi::align_selected_meshes(
+    QuaderTransformAxis axis, QuaderMeshAlignment alignment,
+    QuaderMeshArrangementOptions options) {
+  const std::optional<MeshArrangementAxis> arrangement_axis =
+      mesh_arrangement_axis(axis);
+  if (!arrangement_axis.has_value()) {
+    return invalid_api_status(session_,
+                              "Mesh alignment needs the X, Y, or Z axis.");
+  }
+  ProjectSession &session = project_session(session_);
+  MeshArrangementService arrangement(
+      session.scene(), session.assets(),
+      mesh_arrangement_selection_context(session),
+      session.document_commands());
+  return mutations_.run_document_result(
+      arrangement.align_selected_meshes(
+          *arrangement_axis, mesh_alignment_mode(alignment),
+          mesh_arrangement_options(options)),
+      "Align Meshes");
+}
+
+QuaderApiVoidResult QuaderModelingApi::distribute_selected_meshes(
+    QuaderTransformAxis axis, QuaderMeshDistribution distribution,
+    QuaderMeshArrangementOptions options) {
+  const std::optional<MeshArrangementAxis> arrangement_axis =
+      mesh_arrangement_axis(axis);
+  if (!arrangement_axis.has_value()) {
+    return invalid_api_status(
+        session_, "Mesh distribution needs the X, Y, or Z axis.");
+  }
+  ProjectSession &session = project_session(session_);
+  MeshArrangementService arrangement(
+      session.scene(), session.assets(),
+      mesh_arrangement_selection_context(session),
+      session.document_commands());
+  return mutations_.run_document_result(
+      arrangement.distribute_selected_meshes(
+          *arrangement_axis, mesh_distribution_mode(distribution),
+          mesh_arrangement_options(options)),
+      "Distribute Meshes");
 }
 
 QuaderApiVoidResult

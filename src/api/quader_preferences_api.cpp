@@ -73,6 +73,17 @@ QuaderPreferencesApi::reset_shortcut(QuaderCommandId command_id) {
 }
 
 QuaderApiVoidResult
+QuaderPreferencesApi::set_grid_snap_enabled(bool enabled) {
+  return hooks_.set_grid_snap_enabled
+             ? hooks_.set_grid_snap_enabled(enabled)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::grid_snap_enabled() const {
+  return hooks_.grid_snap_enabled ? hooks_.grid_snap_enabled() : false;
+}
+
+QuaderApiVoidResult
 QuaderPreferencesApi::set_navigation_gizmo_visible(bool visible) {
   return hooks_.set_navigation_gizmo_visible
              ? hooks_.set_navigation_gizmo_visible(visible)

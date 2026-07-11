@@ -142,6 +142,30 @@ inline constexpr QuaderCommandId kModelingHardenEdgeNormals{
     "modeling.harden_edge_normals"};
 inline constexpr QuaderCommandId kModelingSoftenEdgeNormals{
     "modeling.soften_edge_normals"};
+inline constexpr QuaderCommandId kModelingAlignXMin{"modeling.align.x.min"};
+inline constexpr QuaderCommandId kModelingAlignXCenter{
+    "modeling.align.x.center"};
+inline constexpr QuaderCommandId kModelingAlignXMax{"modeling.align.x.max"};
+inline constexpr QuaderCommandId kModelingAlignYMin{"modeling.align.y.min"};
+inline constexpr QuaderCommandId kModelingAlignYCenter{
+    "modeling.align.y.center"};
+inline constexpr QuaderCommandId kModelingAlignYMax{"modeling.align.y.max"};
+inline constexpr QuaderCommandId kModelingAlignZMin{"modeling.align.z.min"};
+inline constexpr QuaderCommandId kModelingAlignZCenter{
+    "modeling.align.z.center"};
+inline constexpr QuaderCommandId kModelingAlignZMax{"modeling.align.z.max"};
+inline constexpr QuaderCommandId kModelingDistributeCentersX{
+    "modeling.distribute.centers.x"};
+inline constexpr QuaderCommandId kModelingDistributeCentersY{
+    "modeling.distribute.centers.y"};
+inline constexpr QuaderCommandId kModelingDistributeCentersZ{
+    "modeling.distribute.centers.z"};
+inline constexpr QuaderCommandId kModelingDistributeGapsX{
+    "modeling.distribute.gaps.x"};
+inline constexpr QuaderCommandId kModelingDistributeGapsY{
+    "modeling.distribute.gaps.y"};
+inline constexpr QuaderCommandId kModelingDistributeGapsZ{
+    "modeling.distribute.gaps.z"};
 inline constexpr QuaderCommandId kModelingMirrorSelectionX{
     "modeling.mirror_selection_x"};
 inline constexpr QuaderCommandId kModelingMirrorSelectionY{
@@ -270,6 +294,21 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kModelingShadeFacesFlat,
     kModelingHardenEdgeNormals,
     kModelingSoftenEdgeNormals,
+    kModelingAlignXMin,
+    kModelingAlignXCenter,
+    kModelingAlignXMax,
+    kModelingAlignYMin,
+    kModelingAlignYCenter,
+    kModelingAlignYMax,
+    kModelingAlignZMin,
+    kModelingAlignZCenter,
+    kModelingAlignZMax,
+    kModelingDistributeCentersX,
+    kModelingDistributeCentersY,
+    kModelingDistributeCentersZ,
+    kModelingDistributeGapsX,
+    kModelingDistributeGapsY,
+    kModelingDistributeGapsZ,
     kModelingMirrorSelectionX,
     kModelingMirrorSelectionY,
     kModelingMirrorSelectionZ,

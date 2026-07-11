@@ -25,6 +25,7 @@ class QuaderApi;
 class QuaderDevToolsApi;
 #endif
 class QuaderProjectApi;
+class QuaderPreferencesApi;
 class QuaderToolsApi;
 class QuaderViewportApi;
 
@@ -77,9 +78,14 @@ struct QuaderViewportKeybindingContext {
 class QuaderCommandsApi final {
 public:
 #ifndef NDEBUG
-    QuaderCommandsApi(QuaderApi& api, QuaderProjectApi& project, QuaderViewportApi& viewports, QuaderToolsApi& tools, QuaderDevToolsApi& dev_tools);
+    QuaderCommandsApi(QuaderApi& api, QuaderProjectApi& project,
+                      QuaderViewportApi& viewports, QuaderToolsApi& tools,
+                      QuaderPreferencesApi& preferences,
+                      QuaderDevToolsApi& dev_tools);
 #else
-    QuaderCommandsApi(QuaderApi& api, QuaderProjectApi& project, QuaderViewportApi& viewports, QuaderToolsApi& tools);
+    QuaderCommandsApi(QuaderApi& api, QuaderProjectApi& project,
+                      QuaderViewportApi& viewports, QuaderToolsApi& tools,
+                      QuaderPreferencesApi& preferences);
 #endif
     ~QuaderCommandsApi();
 

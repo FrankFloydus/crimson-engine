@@ -158,6 +158,8 @@ struct QuaderPreferencesRuntimeHooks {
     std::function<std::string()> locale;
     std::function<QuaderApiVoidResult(std::string)> set_locale;
     std::function<QuaderApiVoidResult()> save;
+    std::function<bool()> grid_snap_enabled;
+    std::function<QuaderApiVoidResult(bool)> set_grid_snap_enabled;
     std::function<bool()> navigation_gizmo_visible;
     std::function<QuaderApiVoidResult(bool)> set_navigation_gizmo_visible;
 };

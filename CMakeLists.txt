@@ -596,6 +596,7 @@ add_library(quader_ui STATIC
     src/editor/viewport/transform_gizmo_interaction.cpp
     src/editor/viewport/viewport_interaction_controller.cpp
     src/editor/viewport/viewport_selection_interaction.cpp
+    src/editor/transform/mesh_arrangement_service.cpp
     src/editor/transform/scene_transform_drag_service.cpp
     src/ui/console_panel.cpp
     src/ui/imgui_popup_utils.cpp
@@ -795,6 +796,7 @@ if(QUADER_BUILD_TESTS)
         tests/local_stress_tests.cpp
         tests/localization_tests.cpp
         tests/math_types_tests.cpp
+        tests/mesh_arrangement_tests.cpp
         tests/obj_export_tests.cpp
         tests/qstr_tests.cpp
         tests/editor_api_tests.cpp

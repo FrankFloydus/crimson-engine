@@ -175,6 +175,28 @@ TEST(UiLayoutGuardrailTests, OutlinerUsesDefaultTreeHierarchyLines) {
   expect_missing(outliner, "has_next_sibling ? row_max.y + 1.0f");
 }
 
+TEST(UiLayoutGuardrailTests,
+     AlignMenuIsObjectModeOnlyAndUsesCatalogCommandsAndSharedSnapPreference) {
+  const std::string menu =
+      read_source_file({"src", "ui", "main_menu_bar.cpp"});
+  const std::string align_menu =
+      source_slice(menu, "bool AlignMenu::draw", "bool CleanUpMenu::draw");
+
+  expect_contains(align_menu, "ModelingSelectionMode::Object");
+  expect_contains(align_menu, "ui.menu.align.snap_to_grid");
+  expect_contains(align_menu, "preferences().grid_snap_enabled()");
+  expect_contains(align_menu, "preferences().set_grid_snap_enabled");
+  EXPECT_EQ(count_occurrences(align_menu, "draw_alignment_axis_menu"), 3u);
+  EXPECT_EQ(count_occurrences(align_menu, "draw_distribution_menu"), 2u);
+  expect_contains(align_menu, "QuaderMeshDistribution::Centers");
+  expect_contains(align_menu, "QuaderMeshDistribution::Gaps");
+
+  const std::string menu_order =
+      source_slice(menu, "MainMenuBarResult MainMenuBar::draw_menus",
+                   "} // namespace quader");
+  expect_contains(menu_order, "align_menu_.draw(context, result)");
+}
+
 TEST(UiLayoutGuardrailTests, InspectorLightEditsRouteThroughPublicSceneApi) {
   const std::string inspector =
       read_source_file({"src", "ui", "inspector_panel.cpp"});

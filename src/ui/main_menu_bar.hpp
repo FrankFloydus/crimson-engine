@@ -59,6 +59,14 @@ public:
 };
 
 /**
+ * Owns Object-mode mesh alignment and distribution menu presentation.
+ */
+class AlignMenu {
+public:
+  bool draw(MainMenuBarContext &context, MainMenuBarResult &result) const;
+};
+
+/**
  * Owns Clean Up Menu behavior within the ImGui editor presentation layer.
 
  */
@@ -110,6 +118,7 @@ public:
 private:
   FileMenu file_menu_;
   EditMenu edit_menu_;
+  AlignMenu align_menu_;
   CleanUpMenu cleanup_menu_;
   ToolsMenu tools_menu_;
   CreateMenu create_menu_;

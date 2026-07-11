@@ -4,6 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#include "api/quader_mesh_arrangement_catalog.hpp"
 #include "core/localization_service.hpp"
 #include "editor/metadata/host_contract.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
@@ -238,6 +239,25 @@ TEST(LocalizationResourceTests, ViewportToolCatalogHasLocaleKeys) {
       ASSERT_NE(found, catalog.end()) << locale << " missing " << key;
       if (locale == LocalizationService::kDefaultLocale) {
         EXPECT_EQ(found->second, tool.label) << key;
+      }
+    }
+  }
+}
+
+TEST(LocalizationResourceTests, MeshArrangementCatalogHasLocaleKeys) {
+  const std::vector<std::pair<std::string, LocalizationService::Catalog>>
+      catalogs = load_resource_locale_catalogs();
+
+  ASSERT_GE(catalogs.size(), 2u);
+  for (const QuaderMeshArrangementDescriptor &action :
+       quader_mesh_arrangement_catalog()) {
+    for (const auto &[locale, catalog] : catalogs) {
+      const auto found = catalog.find(std::string(action.localization_key));
+      ASSERT_NE(found, catalog.end())
+          << locale << " missing " << action.localization_key;
+      if (locale == LocalizationService::kDefaultLocale) {
+        EXPECT_EQ(found->second, action.fallback_label)
+            << action.localization_key;
       }
     }
   }

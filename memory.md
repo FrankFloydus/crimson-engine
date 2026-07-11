@@ -9,6 +9,38 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-11 - Object-Mode Mesh Alignment And Distribution
+
+Task/context: Quader needed native world-space arrangement for selected mesh objects without
+changing polygon topology or adding host transforms to the portable modeling SDK.
+
+Invariant:
+
+- `MeshArrangementService` owns host arrangement through scene world AABBs and one batched document
+  transform command. It operates only in Object mode on topmost selected mesh roots.
+- Alignment promotes a nested active mesh to its selected root and keeps that root fixed.
+  Distribution sorts initial centers by world axis then entity ID and keeps both endpoints fixed;
+  equal gaps remain signed so overlap is valid.
+- World deltas are converted through the inverse parent transform by changing local position only;
+  local rotation, scale, custom pivot, selection, and topology remain unchanged.
+- The 15 typed actions come from `quader_mesh_arrangement_catalog.hpp`. Menu commands read the
+  shared persisted Grid Snap preference and current viewport grid preset, while direct API calls
+  default to exact unsnapped results.
+
+Affected owners/files:
+
+- `src/editor/transform/mesh_arrangement_service.*`
+- `src/api/quader_modeling_api.*`, `src/api/quader_commands_api.*`, and public arrangement types
+- `src/ui/main_menu_bar.*`, `src/ui/ui_system.cpp`, and `resources/locales/*.lang`
+- `tests/mesh_arrangement_tests.cpp`, localization tests, and UI guardrails
+
+Verification:
+
+- `tools/affected_check.ps1` passed 81 affected guardrails and 333 affected app tests.
+- `quader_guardrail_tests` passed all 164 tests.
+- `MeshArrangementTests.*` passed all 7 focused behavior tests.
+- `cmake --build --preset vs2026-debug --target quader`
+
 ## 2026-07-10 - Hovered Face Plane Cut Splits And Deselects
 
 Task/context: Alt-hovering a face and Alt+RMB cutting selected meshes originally reused the existing
