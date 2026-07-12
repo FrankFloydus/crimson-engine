@@ -8,7 +8,7 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Quader Architecture Review Against The Portable Modeling SDK Guide
 
-Generated: 2026-07-08
+Generated: 2026-07-11
 
 Reference: `C:\Users\Drako\Desktop\modeling_app_architecture_guide.md`
 
@@ -30,6 +30,12 @@ polygon code is mostly engine-clean. Rendering has a real snapshot path and keep
 render owner. Viewport input already has semantic, toolkit-neutral structures below the UI adapter.
 Modeling-domain tests and guardrails are broad. QDR project save/open is correctly native: file
 dialogs and project session state stay outside low-level format code.
+
+The current native host shell is retained Qt Widgets: `QApplication` owns the event loop,
+`UISystem` composes a `QMainWindow` with `QDockWidget` panels under the stock `Fusion` style, and
+the central
+`QtViewportPanel` embeds one to four native-child `QWindow` Filament surfaces. This is the host
+baseline for the SDK migration; it does not move UI or renderer concepts into the portable core.
 
 Quader does not yet satisfy the reference guide's portable modeling SDK contract. There is no
 copyable SDK source boundary, SDK umbrella header, SDK install/export package, SDK-only configure
@@ -53,8 +59,8 @@ semantic overlays, host input adapters, render snapshots, performance gates, pac
 7. Old copied SDK: keep old package paths, old macros, old presets, and old external checkout
    wiring banned.
 8. Build mode: add a default-on native app build option named `QUADER_BUILD_NATIVE_APP`; SDK-only
-   configure builds SDK targets without Filament, SDL3, ImGui, native resources, or the app
-   executable.
+   configure builds SDK targets without Filament, Qt Widgets, legacy SDL/ImGui backends, native
+   resources, or the app executable.
 9. First SDK CMake targets:
    - `quader_modeling_sdk_geometry`
    - `quader_modeling_sdk_polygon`
@@ -72,6 +78,12 @@ semantic overlays, host input adapters, render snapshots, performance gates, pac
     targets.
 16. Documentation policy: root `AGENTS.md` and this review hold the architecture plan. New
     architecture guidance belongs in these files or nearest nested `AGENTS.md` files.
+17. Native UI baseline: keep the `QApplication`/`QMainWindow`/`QDockWidget` shell on stock Qt
+    `Fusion` with `fusion_style->standardPalette()` and no QSS, app-authored global palette, font,
+    or custom-chrome theme overrides. A local `QPalette::Button` role is reserved for semantic
+    color swatches, and semantic X/Y/Z labels may set only local `QPalette::WindowText`; Fusion
+    still draws native control frames and states. The one-to-four pane workspace remains owned by
+    `ViewportWorkspaceService`; Qt widgets only adapt and present it.
 
 ## Reference Guide Constraints
 
@@ -118,7 +130,7 @@ overlaps.
 `src/mesh/geometry` and `src/mesh/polygon` are the cleanest SDK seed:
 
 - geometry, polygon documents, topology, picking, compilation, and operations are already isolated
-  from SDL, ImGui, and Filament;
+  from the Qt host UI, legacy UI backends, and Filament;
 - `quader_modeling_polygon` links to geometry, optional OpenMesh, and profiling support;
 - modeling-domain tests cover polygon documents, liveness, validation, operations, QDR document IO,
   runtime operations, runtime tools, and editor metadata.
@@ -152,6 +164,8 @@ Viewport input is partly host-neutral:
   raw SDL/ImGui/Qt types;
 - `ViewportInputRouter` consumes semantic actions, mouse deltas, wheel input, tool state, and
   resolved shortcuts;
+- `src/ui/qt_input_adapter.*` converts Qt key, pointer, wheel, modifier, focus, and text-capture
+  state at the host boundary;
 - `QuaderCommandsApi` owns command/keybinding APIs and user shortcut persistence.
 
 ### Tests And Guardrails
@@ -209,8 +223,8 @@ Required state:
 
 - `src/sdk/core/modeling` exists;
 - SDK targets build without native app dependencies;
-- `QUADER_BUILD_NATIVE_APP` gates app, UI, render-backend, resource, SDL3, ImGui, Filament, and
-  executable setup;
+- `QUADER_BUILD_NATIVE_APP` gates app, Qt Widgets UI, render backend, native resources, Filament,
+  and executable setup;
 - SDK targets use narrow include roots;
 - SDK targets have no transitive link to native app targets;
 - a standalone consumer test links only SDK targets.
@@ -292,10 +306,11 @@ Required state:
 
 ### P2 - UI And Viewport Boundary Is Too Wide
 
-Strong pieces exist, but `ViewportPanel` owns too much: pane rendering, input frame building,
-command dispatch, hover, transform gizmo routing, overlay cache, context menu, render prep,
-point-light billboard picking, pivot snap candidate scanning, frame-all/frame-selection logic, and
-pane drawing.
+The host boundary is now explicit: `UISystem` owns a retained Qt shell, `QtViewportPanel` presents
+the one-to-four pane workspace, `QtViewportSurface` owns native-child surfaces, and the
+`qt_input_adapter` functions convert raw Qt input. The remaining extraction gap is that
+`QtViewportPanel`
+still coordinates input frames, interaction routing, pane render preparation, and frame commands.
 
 Required state:
 
@@ -305,7 +320,7 @@ Required state:
   owner services;
 - `ViewportToolContext` stops carrying native scene/runtime service concepts into tool code that
   belongs below the host boundary;
-- ImGui and SDL stay at adapter boundaries.
+- Qt event and widget types stay at the UI adapter boundary.
 
 ### P2 - Performance Dirty Gates Run Too Late
 
@@ -440,8 +455,8 @@ Actions:
 
 Exit criteria:
 
-- SDK-only configure builds core SDK targets without Filament, SDL3, ImGui, native app resources,
-  or the app executable;
+- SDK-only configure builds core SDK targets without Filament, Qt Widgets, legacy SDL/ImGui
+  backends, native app resources, or the app executable;
 - native app build remains unchanged with default options;
 - guardrails reject native target dependencies from SDK targets.
 
@@ -469,6 +484,7 @@ Actions:
    - `SceneRenderBridge`
    - `ViewportOverlayFrame`
    - `QuaderEditorApi`
+   - `Qt`
    - `SDL`
    - `ImGui`
    - `filament`
@@ -622,7 +638,7 @@ Actions:
    - scene/entity/material/asset binding;
    - command palette and typed Quader command IDs;
    - `EditorHistoryService` integration;
-   - viewport panel and render bridge wiring.
+   - Qt viewport panel and render bridge wiring.
 3. Replace whole-session preview copies with affected-object or patch-style updates after parity
    tests lock behavior.
 4. Add parity transcript tests comparing native API workflows against SDK runtime workflows.
@@ -635,7 +651,8 @@ Exit criteria:
 
 ### Phase 7 - Host Input, Viewport, UI, And Render Adapters
 
-Goal: make host boundaries explicit without rewriting the UI first.
+Goal: keep the current Qt host boundary explicit while extracting reusable viewport and render
+ownership below it.
 
 Actions:
 
@@ -646,12 +663,14 @@ Actions:
    - focus/text/nav capture;
    - pressed chords;
    - frame timing.
-2. Keep SDL and ImGui conversion in UI/platform adapter code.
-3. Extract viewport command resolution from `ViewportPanel` into viewport/input owners.
+2. Keep Qt event conversion in `src/ui/qt_input_adapter.*`; lower owners consume canonical Quader
+   input and semantic viewport frames only.
+3. Extract remaining viewport command resolution from `QtViewportPanel` into viewport/input
+   owners.
 4. Narrow `UIContext` into per-panel intent and read-only presentation contexts.
 5. Move frame-all/frame-selection bounds logic into viewport/editor services.
 6. Move point-light picking candidates, pivot snap candidate scanning, and overlay composition out
-   of `ViewportPanel`.
+   of `QtViewportPanel`.
 7. Neutralize render overlay inputs:
    - render selection context;
    - neutral authored-wire records;
@@ -663,7 +682,7 @@ Exit criteria:
 
 - UI is a host surface and presentation coordinator;
 - render consumes renderer-neutral snapshots;
-- Qt or engine adapters have one input/render translation boundary.
+- the Qt host has one input/render translation boundary.
 
 ### Phase 8 - Performance And Dirty-Flag Work
 
@@ -869,7 +888,7 @@ cmake --build --preset vs2026-debug --target quader
 | Build | Lower modeling targets exist; SDK wrapper targets and native app gating are next. |
 | Core modeling | Mesh/polygon code is the SDK seed; IDs, results, dirty flags, and remaps need SDK contracts. |
 | Public API | Native APIs stay host-facing; SDK APIs are separate under `quader::modeling`. |
-| UI/viewport | Semantic input exists; `ViewportPanel` and UI contexts need owner extraction. |
+| UI/viewport | Qt Widgets/Fusion is the host shell; semantic input exists, while remaining `QtViewportPanel` coordination and UI contexts need owner extraction. |
 | Render | Filament is contained; snapshots and overlays need neutral stable payloads. |
 | IO/assets | Native project IO remains native; portable QDR document IO moves to SDK. |
 | Tests | Native tests are strong; SDK consumer, target, header, golden, and fuzz tests are required. |

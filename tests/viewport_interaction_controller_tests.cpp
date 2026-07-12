@@ -8,6 +8,7 @@
 #include "api/quader_command_ids.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "editor/interactions/transform_gizmo.hpp"
+#include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/tools/viewport_tool.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
 #include "render/viewport_overlay_policy.hpp"
@@ -15,6 +16,7 @@
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
 #include "render/overlay/viewport_transform_gizmo_overlay_builder.hpp"
 #include "editor/session/project_session.hpp"
+#include "ui/viewport_host_interaction_policy.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_input_router.hpp"
@@ -79,6 +81,14 @@ struct ViewportInteractionHarness {
           .right_down = right_down,
           .right_released = right_released,
           .scene_billboard_pick_candidates = billboard_pick_candidates,
+          .selection_state =
+              {
+                  .summary = editor.selection().summary(),
+                  .scene_revision = session.scene().revision(),
+                  .asset_revision = session.assets().revision(),
+                  .pivot_revision =
+                      session.pivot().selection_pivot_revision(),
+              },
       };
     }
 };
@@ -442,6 +452,16 @@ TEST(ViewportInteractionControllerTests, RotateGizmoDragEmitsPieAngleIndicator) 
     EXPECT_NEAR(projected_mouse.position.x, update.x, 1.0f);
     EXPECT_NEAR(projected_mouse.position.y, update.y, 1.0f);
     EXPECT_GT(std::abs(frame->info.rotate_indicator.angle_degrees), 1.0);
+    const double drag_angle = frame->info.rotate_indicator.angle_degrees;
+
+    const quader::ViewportBeforeToolInteractionResult stationary =
+        harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(false, true, false, start));
+    ASSERT_TRUE(stationary.gizmo_consumed);
+    frame = harness.controller.transform_gizmo_frame();
+    ASSERT_NE(frame, nullptr);
+    EXPECT_TRUE(frame->info.rotate_indicator.active);
+    EXPECT_NEAR(frame->info.rotate_indicator.angle_degrees, drag_angle, 0.001);
 
     const quader::ViewportOverlayFrame overlay =
         build_gizmo_overlay(*frame, harness);
@@ -1147,6 +1167,76 @@ TEST(ViewportInteractionControllerTests, TransformGizmoFrameSurvivesNavigationFr
     EXPECT_TRUE(frame->info.ok);
 }
 
+TEST(ViewportInteractionControllerTests,
+     CameraOnlyFramesReuseSelectionPivotWithoutBoundsRecomputation) {
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok);
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok);
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    EXPECT_EQ(harness.controller.transform_gizmo_selection_cache_stats()
+                  .selection_pivot_recompute_count,
+              1u);
+
+    harness.input_result.navigation_active = true;
+    harness.input_result.camera_changed = true;
+    for (const quader::QVec3 direction : {
+             quader::QVec3{-0.8f, -0.2f, -0.5f},
+             quader::QVec3{-0.5f, -0.6f, -0.4f},
+             quader::QVec3{-0.2f, -0.4f, -0.9f},
+             quader::QVec3{-0.7f, -0.5f, -0.1f},
+         }) {
+      harness.camera.set_view_direction(direction);
+      (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                         harness.frame());
+    }
+
+    const quader::TransformGizmoSelectionCacheStats &camera_stats =
+        harness.controller.transform_gizmo_selection_cache_stats();
+    EXPECT_EQ(camera_stats.selection_pivot_recompute_count, 1u);
+    EXPECT_EQ(camera_stats.selection_cache_hit_count, 4u);
+    ASSERT_NE(harness.controller.transform_gizmo_frame(), nullptr);
+
+    harness.input_result = {};
+    ASSERT_TRUE(harness.editor.selection().clear().ok);
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    EXPECT_EQ(harness.controller.transform_gizmo_selection_cache_stats()
+                  .selection_pivot_recompute_count,
+              1u);
+    EXPECT_EQ(harness.controller.transform_gizmo_frame(), nullptr);
+
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok);
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    EXPECT_EQ(harness.controller.transform_gizmo_selection_cache_stats()
+                  .selection_pivot_recompute_count,
+              2u);
+
+    harness.session.pivot().begin_quick({3.0f, 4.0f, 5.0f});
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    EXPECT_EQ(harness.controller.transform_gizmo_selection_cache_stats()
+                  .selection_pivot_recompute_count,
+              3u);
+    const quader_editor_core::TransformGizmoFrame *quick_pivot_frame =
+        harness.controller.transform_gizmo_frame();
+    ASSERT_NE(quick_pivot_frame, nullptr);
+    EXPECT_FLOAT_EQ(quick_pivot_frame->info.pivot.x, 3.0f);
+    EXPECT_FLOAT_EQ(quick_pivot_frame->info.pivot.y, 4.0f);
+    EXPECT_FLOAT_EQ(quick_pivot_frame->info.pivot.z, 5.0f);
+
+    harness.session.pivot().end_quick_edit();
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    EXPECT_EQ(harness.controller.transform_gizmo_selection_cache_stats()
+                  .selection_pivot_recompute_count,
+              3u);
+}
+
 TEST(ViewportInteractionControllerTests, HoverSurvivesNavigationSuppressionAndClearsWhenPointerLeaves) {
     ViewportInteractionHarness harness;
     const quader::QuaderModelingObjectRef box = create_unit_box(harness);
@@ -1270,6 +1360,123 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObj
 }
 
 TEST(ViewportInteractionControllerTests,
+     MoveGizmoCommitsPressMoveReleaseCollapsedIntoOneFrame) {
+    ViewportInteractionHarness harness;
+    ASSERT_TRUE(harness.settings.set_bool_value(
+        quader::ViewportBoolSettingId::GridSnap, false));
+    ASSERT_TRUE(harness.settings.set_bool_value(
+        quader::ViewportBoolSettingId::VertexSnap, false));
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok);
+    ASSERT_TRUE(
+        harness.editor.tools().activate(quader::ViewportToolId::Move).ok);
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    const quader_editor_core::TransformGizmoFrame *gizmo =
+        harness.controller.transform_gizmo_frame();
+    ASSERT_NE(gizmo, nullptr);
+    const quader_editor_core::TransformGizmoAxisPrimitive *axis =
+        find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+    ASSERT_NE(axis, nullptr);
+    const quader::QVec2 press_position = axis->screen_tip;
+    const quader::QVec2 release_position =
+        press_position + quader::QVec2{120.0f, 0.0f};
+    const quader::TransformComponent before =
+        *harness.session.scene().transform(box.entity);
+
+    harness.input.mouse_local = release_position;
+    harness.input.mouse_screen = release_position;
+    const quader::ViewportBeforeToolInteractionResult collapsed =
+        harness.controller.handle_before_active_tool(
+            harness.editor,
+            harness.frame(true, false, true, press_position));
+
+    EXPECT_TRUE(collapsed.gizmo_consumed);
+    EXPECT_FALSE(collapsed.selection_click_requested);
+    EXPECT_FALSE(harness.controller.dragging());
+    const quader::TransformComponent after =
+        *harness.session.scene().transform(box.entity);
+    EXPECT_GT(length(after.position - before.position), 0.001f);
+    ASSERT_TRUE(harness.editor.history().can_undo());
+    const quader::QuaderApiVoidResult undo = harness.editor.commands().execute(
+        quader::quader_command::kEditUndo);
+    ASSERT_TRUE(undo.ok()) << undo.error_message();
+    EXPECT_TRUE(undo.changed());
+    expect_transform_near(*harness.session.scene().transform(box.entity),
+                          before);
+}
+
+TEST(ViewportInteractionControllerTests,
+     MoveGizmoAppliesFinalReleasePositionBeforeCommit) {
+    ViewportInteractionHarness harness;
+    ASSERT_TRUE(harness.settings.set_bool_value(
+        quader::ViewportBoolSettingId::GridSnap, false));
+    ASSERT_TRUE(harness.settings.set_bool_value(
+        quader::ViewportBoolSettingId::VertexSnap, false));
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok);
+    ASSERT_TRUE(
+        harness.editor.tools().activate(quader::ViewportToolId::Move).ok);
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    const quader_editor_core::TransformGizmoFrame *gizmo =
+        harness.controller.transform_gizmo_frame();
+    ASSERT_NE(gizmo, nullptr);
+    const quader_editor_core::TransformGizmoAxisPrimitive *axis =
+        find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+    ASSERT_NE(axis, nullptr);
+    const quader::QVec2 press_position = axis->screen_tip;
+    const quader::QVec2 drag_position =
+        press_position + quader::QVec2{48.0f, 0.0f};
+    const quader::QVec2 release_position =
+        press_position + quader::QVec2{140.0f, 0.0f};
+    const quader::TransformComponent before =
+        *harness.session.scene().transform(box.entity);
+
+    harness.input.mouse_local = press_position;
+    harness.input.mouse_screen = press_position;
+    EXPECT_TRUE(harness.controller
+                    .handle_before_active_tool(
+                        harness.editor,
+                        harness.frame(true, true, false, press_position))
+                    .gizmo_consumed);
+    harness.input.mouse_local = drag_position;
+    harness.input.mouse_screen = drag_position;
+    EXPECT_TRUE(harness.controller
+                    .handle_before_active_tool(
+                        harness.editor,
+                        harness.frame(false, true, false, press_position))
+                    .gizmo_consumed);
+    const quader::TransformComponent during_drag =
+        *harness.session.scene().transform(box.entity);
+
+    harness.input.mouse_local = release_position;
+    harness.input.mouse_screen = release_position;
+    EXPECT_TRUE(harness.controller
+                    .handle_before_active_tool(
+                        harness.editor,
+                        harness.frame(false, false, true, press_position))
+                    .gizmo_consumed);
+
+    EXPECT_FALSE(harness.controller.dragging());
+    const quader::TransformComponent after =
+        *harness.session.scene().transform(box.entity);
+    EXPECT_GT(length(during_drag.position - before.position), 0.001f);
+    EXPECT_GT(length(after.position - during_drag.position), 0.001f);
+    ASSERT_TRUE(harness.editor.history().can_undo());
+    const quader::QuaderApiVoidResult undo = harness.editor.commands().execute(
+        quader::quader_command::kEditUndo);
+    ASSERT_TRUE(undo.ok()) << undo.error_message();
+    EXPECT_TRUE(undo.changed());
+    expect_transform_near(*harness.session.scene().transform(box.entity),
+                          before);
+}
+
+TEST(ViewportInteractionControllerTests,
      ShiftRotateGizmoDragExtrudesSelectedFace) {
     ViewportInteractionHarness harness;
     const quader::QuaderModelingObjectRef box = create_unit_box(harness);
@@ -1389,10 +1596,17 @@ TEST(ViewportInteractionControllerTests, MoveGizmoComponentAxisDragKeepsPickedAx
                 harness.editor, harness.frame(false, true, false, start));
         ASSERT_TRUE(drag.gizmo_consumed);
 
+        const std::uint64_t scene_revision_after_drag =
+            harness.session.scene().revision();
+        const std::uint64_t asset_revision_after_drag =
+            harness.session.assets().revision();
+
         const quader::ViewportBeforeToolInteractionResult refresh =
             harness.controller.handle_before_active_tool(
                 harness.editor, harness.frame(false, true, false, start));
         ASSERT_TRUE(refresh.gizmo_consumed);
+        EXPECT_EQ(harness.session.scene().revision(), scene_revision_after_drag);
+        EXPECT_EQ(harness.session.assets().revision(), asset_revision_after_drag);
         frame = harness.controller.transform_gizmo_frame();
         ASSERT_NE(frame, nullptr);
         axis = find_axis(*frame, axis_case.axis);
@@ -1617,4 +1831,140 @@ TEST(ViewportSelectionMarqueeOverlayBuilderTests, EmitsFillAndRuleSpecificEdges)
                                                            camera, crossing);
     EXPECT_EQ(crossing_overlay.triangles.size(), 2u);
     EXPECT_GT(crossing_overlay.lines.size(), contain_overlay.lines.size());
+}
+
+TEST(ViewportHostInteractionPolicyTests,
+     FocusFollowsHoverWithoutStealingNonViewportKeyboardFocus) {
+  using quader::ViewportPaneFocusRequest;
+  using quader::ViewportPaneFocusTrigger;
+  using quader::viewport_pane_focus_decision;
+
+  const auto passive_hover = viewport_pane_focus_decision({
+      .trigger = ViewportPaneFocusTrigger::Hover,
+  });
+  EXPECT_TRUE(passive_hover.focus_workspace_pane);
+  EXPECT_FALSE(passive_hover.focus_native_surface);
+
+  const auto viewport_hover = viewport_pane_focus_decision({
+      .trigger = ViewportPaneFocusTrigger::Hover,
+      .viewport_keyboard_focus = true,
+  });
+  EXPECT_TRUE(viewport_hover.focus_workspace_pane);
+  EXPECT_TRUE(viewport_hover.focus_native_surface);
+
+  const auto native_focus_in = viewport_pane_focus_decision({
+      .trigger = ViewportPaneFocusTrigger::FocusIn,
+  });
+  EXPECT_TRUE(native_focus_in.focus_workspace_pane);
+  EXPECT_FALSE(native_focus_in.focus_native_surface);
+
+  for (const ViewportPaneFocusTrigger trigger : {
+           ViewportPaneFocusTrigger::PointerPress,
+           ViewportPaneFocusTrigger::Wheel,
+           ViewportPaneFocusTrigger::Programmatic,
+       }) {
+    const auto decision = viewport_pane_focus_decision({.trigger = trigger});
+    EXPECT_TRUE(decision.focus_workspace_pane);
+    EXPECT_TRUE(decision.focus_native_surface);
+  }
+
+  const auto rejected_other_pane =
+      viewport_pane_focus_decision(ViewportPaneFocusRequest{
+          .trigger = ViewportPaneFocusTrigger::PointerPress,
+          .interaction_locked = true,
+          .requested_pane_is_interaction_owner = false,
+      });
+  EXPECT_FALSE(rejected_other_pane.focus_workspace_pane);
+  EXPECT_FALSE(rejected_other_pane.focus_native_surface);
+
+  const auto retained_owner =
+      viewport_pane_focus_decision(ViewportPaneFocusRequest{
+          .trigger = ViewportPaneFocusTrigger::Wheel,
+          .interaction_locked = true,
+          .requested_pane_is_interaction_owner = true,
+      });
+  EXPECT_TRUE(retained_owner.focus_workspace_pane);
+  EXPECT_TRUE(retained_owner.focus_native_surface);
+}
+
+TEST(ViewportHostInteractionPolicyTests,
+     OutsidePointerCancelsModalToolsWithLegacyExceptions) {
+  using quader::ViewportExternalPointerCancelRequest;
+  using quader::should_cancel_modal_tool_for_external_pointer;
+
+  ViewportExternalPointerCancelRequest request{
+      .external_pointer_event = true,
+      .modal_tool_owns_viewport = true,
+  };
+  EXPECT_TRUE(should_cancel_modal_tool_for_external_pointer(request));
+
+  request.external_pointer_event = false;
+  EXPECT_FALSE(should_cancel_modal_tool_for_external_pointer(request));
+  request.external_pointer_event = true;
+  request.modal_tool_owns_viewport = false;
+  EXPECT_FALSE(should_cancel_modal_tool_for_external_pointer(request));
+  request.modal_tool_owns_viewport = true;
+  request.linear_array_active = true;
+  EXPECT_FALSE(should_cancel_modal_tool_for_external_pointer(request));
+  request.linear_array_active = false;
+  request.navigation_active = true;
+  EXPECT_FALSE(should_cancel_modal_tool_for_external_pointer(request));
+
+  request.navigation_active = false;
+  request.left_button_release_only = true;
+  request.insert_edge_loop_dragging = true;
+  EXPECT_FALSE(should_cancel_modal_tool_for_external_pointer(request));
+  request.insert_edge_loop_dragging = false;
+  request.cut_dragging = true;
+  EXPECT_FALSE(should_cancel_modal_tool_for_external_pointer(request));
+  request.cut_dragging = false;
+  request.mirror_dragging = true;
+  EXPECT_FALSE(should_cancel_modal_tool_for_external_pointer(request));
+  request.mirror_dragging = false;
+  EXPECT_TRUE(should_cancel_modal_tool_for_external_pointer(request));
+
+  request.left_button_release_only = false;
+  request.insert_edge_loop_dragging = true;
+  EXPECT_TRUE(should_cancel_modal_tool_for_external_pointer(request));
+}
+
+TEST(ViewportHostInteractionPolicyTests,
+     BoxFootprintKeepsOverlayPassVisibleWhenDisplayTogglesAreOff) {
+  using quader::ViewportOverlayPassVisibilityRequest;
+  using quader::should_enable_viewport_overlay_pass;
+
+  EXPECT_FALSE(should_enable_viewport_overlay_pass({}));
+  EXPECT_TRUE(should_enable_viewport_overlay_pass({
+      .tool_overlay_visible = true,
+  }));
+  EXPECT_TRUE(should_enable_viewport_overlay_pass(
+      ViewportOverlayPassVisibilityRequest{.overlays_visible = true}));
+  EXPECT_TRUE(should_enable_viewport_overlay_pass(
+      ViewportOverlayPassVisibilityRequest{.gizmos_visible = true}));
+  EXPECT_TRUE(should_enable_viewport_overlay_pass(
+      ViewportOverlayPassVisibilityRequest{.wireframe_pane = true}));
+  EXPECT_TRUE(should_enable_viewport_overlay_pass(
+      ViewportOverlayPassVisibilityRequest{.pivot_handle_visible = true}));
+  EXPECT_TRUE(should_enable_viewport_overlay_pass(
+      ViewportOverlayPassVisibilityRequest{
+          .linear_array_handle_visible = true,
+      }));
+}
+
+TEST(ViewportHostInteractionPolicyTests,
+     SceneOverlayExtractionCountStaysOneForOneToFourRequestingPanes) {
+  std::array<bool, 4> pane_requests = {};
+  EXPECT_EQ(quader::viewport_scene_overlay_snapshot_extraction_count(
+                pane_requests),
+            0u);
+
+  for (std::size_t pane_count = 1; pane_count <= pane_requests.size();
+       ++pane_count) {
+    pane_requests.fill(false);
+    std::fill_n(pane_requests.begin(), pane_count, true);
+    EXPECT_EQ(quader::viewport_scene_overlay_snapshot_extraction_count(
+                  std::span<const bool>(pane_requests.data(), pane_count)),
+              1u)
+        << "pane_count=" << pane_count;
+  }
 }

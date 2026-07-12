@@ -11,7 +11,8 @@
 namespace quader {
 
 /**
- * Stores the Viewport Context Menu Open Request data contract used by the ImGui editor presentation layer.
+ * Stores the toolkit-neutral release policy inputs used by the viewport host
+ * before it presents a context menu.
  */
 struct ViewportContextMenuOpenRequest {
   bool modal_tool_owns_viewport = false;
@@ -27,7 +28,7 @@ struct ViewportContextMenuOpenRequest {
 };
 
 /**
- * Stores the Viewport Context Menu Hover Request data contract used by the ImGui editor presentation layer.
+ * Stores the hover-preservation inputs for a pending viewport context click.
  */
 struct ViewportContextMenuHoverRequest {
   bool right_press_tracked = false;

@@ -112,6 +112,8 @@ RenderSceneSnapshotDirtyState scene_snapshot_dirty_state(
           previous->transform_revision != snapshot.transform_revision,
       .mesh_bindings_changed =
           previous->mesh_binding_revision != snapshot.mesh_binding_revision,
+      .render_components_changed = previous->render_component_revision !=
+                                   snapshot.render_component_revision,
       .assets_changed = previous->asset_revision != snapshot.asset_revision,
   };
 }
@@ -121,11 +123,11 @@ const RenderSceneMeshRecord *previous_mesh_record(
   if (previous == nullptr) {
     return nullptr;
   }
-  const auto found =
-      std::ranges::find_if(previous->meshes, [entity_id](const auto &record) {
-        return record.entity_id == entity_id;
-      });
-  return found == previous->meshes.end() ? nullptr : &*found;
+  const auto found = std::ranges::lower_bound(
+      previous->meshes, entity_id, {}, &RenderSceneMeshRecord::entity_id);
+  return found == previous->meshes.end() || found->entity_id != entity_id
+             ? nullptr
+             : &*found;
 }
 
 const RenderSceneLightRecord *previous_light_record(
@@ -133,11 +135,11 @@ const RenderSceneLightRecord *previous_light_record(
   if (previous == nullptr) {
     return nullptr;
   }
-  const auto found =
-      std::ranges::find_if(previous->lights, [entity_id](const auto &record) {
-        return record.entity_id == entity_id;
-      });
-  return found == previous->lights.end() ? nullptr : &*found;
+  const auto found = std::ranges::lower_bound(
+      previous->lights, entity_id, {}, &RenderSceneLightRecord::entity_id);
+  return found == previous->lights.end() || found->entity_id != entity_id
+             ? nullptr
+             : &*found;
 }
 
 void mark_mesh_dirty(RenderSceneMeshRecord &record,
@@ -178,6 +180,8 @@ void mark_light_dirty(RenderSceneLightRecord &record,
          previous->visibility_revision == snapshot.visibility_revision &&
          previous->transform_revision == snapshot.transform_revision &&
          previous->mesh_binding_revision == snapshot.mesh_binding_revision &&
+         previous->render_component_revision ==
+             snapshot.render_component_revision &&
          previous->asset_revision == snapshot.asset_revision;
 }
 
@@ -349,6 +353,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
   snapshot.visibility_revision = document.visibility_revision();
   snapshot.transform_revision = document.transform_revision();
   snapshot.mesh_binding_revision = document.mesh_binding_revision();
+  snapshot.render_component_revision = document.render_component_revision();
   snapshot.asset_revision = assets.revision();
   snapshot.dirty = scene_snapshot_dirty_state(snapshot, options.previous);
   if (can_reuse_previous_render_records(snapshot, options.previous)) {
@@ -410,6 +415,97 @@ RenderSceneSnapshot build_render_scene_snapshot(
   }
 
   return snapshot;
+}
+
+bool try_refresh_render_scene_snapshot_transforms(
+    RenderSceneSnapshot &snapshot, const SceneDocument &document,
+    const AssetRegistry &assets, std::uint64_t frame_index) {
+  QDR_PROFILE_FUNCTION();
+  if (snapshot.asset_revision != assets.revision() ||
+      snapshot.selection_revision != document.selection_revision() ||
+      snapshot.visibility_revision != document.visibility_revision() ||
+      snapshot.mesh_binding_revision != document.mesh_binding_revision() ||
+      snapshot.render_component_revision !=
+          document.render_component_revision() ||
+      snapshot.transform_revision == document.transform_revision()) {
+    return false;
+  }
+
+  const std::uint64_t previous_scene_revision = snapshot.scene_revision;
+  const std::uint64_t previous_selection_revision =
+      snapshot.selection_revision;
+  const std::uint64_t previous_visibility_revision =
+      snapshot.visibility_revision;
+  const std::uint64_t previous_transform_revision =
+      snapshot.transform_revision;
+  const std::uint64_t previous_mesh_binding_revision =
+      snapshot.mesh_binding_revision;
+  const std::uint64_t previous_render_component_revision =
+      snapshot.render_component_revision;
+  const std::uint64_t previous_asset_revision = snapshot.asset_revision;
+
+  snapshot.frame_index = frame_index;
+  snapshot.scene_revision = document.revision();
+  snapshot.selection_revision = document.selection_revision();
+  snapshot.visibility_revision = document.visibility_revision();
+  snapshot.transform_revision = document.transform_revision();
+  snapshot.mesh_binding_revision = document.mesh_binding_revision();
+  snapshot.render_component_revision = document.render_component_revision();
+  snapshot.asset_revision = assets.revision();
+  snapshot.dirty = {
+      .scene_changed = previous_scene_revision != snapshot.scene_revision,
+      .selection_changed =
+          previous_selection_revision != snapshot.selection_revision,
+      .visibility_changed =
+          previous_visibility_revision != snapshot.visibility_revision,
+      .transforms_changed =
+          previous_transform_revision != snapshot.transform_revision,
+      .mesh_bindings_changed =
+          previous_mesh_binding_revision != snapshot.mesh_binding_revision,
+      .render_components_changed = previous_render_component_revision !=
+                                   snapshot.render_component_revision,
+      .assets_changed = previous_asset_revision != snapshot.asset_revision,
+  };
+  snapshot.reused_previous_records = false;
+
+  for (RenderSceneMeshRecord &record : snapshot.meshes) {
+    const QMat4 world_transform =
+        document.world_transform_matrix(record.entity_id);
+    const std::uint64_t transform_revision =
+        RenderSignatureBuilder::light_transform_signature(world_transform);
+    record.mesh_dirty = false;
+    record.material_dirty = false;
+    record.binding_dirty = false;
+    record.transform_dirty =
+        record.transform_revision != transform_revision;
+    record.world_transform = world_transform;
+    record.transform_revision = transform_revision;
+  }
+  for (RenderSceneLightRecord &record : snapshot.lights) {
+    const QMat4 world_transform =
+        document.world_transform_matrix(record.entity_id);
+    const std::uint64_t transform_revision =
+        RenderSignatureBuilder::light_transform_signature(world_transform);
+    record.light_dirty = false;
+    record.transform_dirty =
+        record.transform_revision != transform_revision;
+    record.world_transform = world_transform;
+    record.transform_revision = transform_revision;
+  }
+  return true;
+}
+
+bool render_scene_snapshot_matches_sources(
+    const RenderSceneSnapshot &snapshot, const SceneDocument &document,
+    const AssetRegistry &assets) {
+  return snapshot.scene_revision == document.revision() &&
+         snapshot.selection_revision == document.selection_revision() &&
+         snapshot.visibility_revision == document.visibility_revision() &&
+         snapshot.transform_revision == document.transform_revision() &&
+         snapshot.mesh_binding_revision == document.mesh_binding_revision() &&
+         snapshot.render_component_revision ==
+             document.render_component_revision() &&
+         snapshot.asset_revision == assets.revision();
 }
 
 SceneRenderExtractionPlan build_scene_render_extraction_plan(

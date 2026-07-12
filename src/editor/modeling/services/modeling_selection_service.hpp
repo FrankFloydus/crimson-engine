@@ -10,6 +10,7 @@
 #include "editor/modeling/picking/modeling_picking_cache.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -46,6 +47,8 @@ public:
                     ModelingSelectionMode app_selection_mode) const;
 
   void invalidate_picking_cache() const;
+  [[nodiscard]] std::uint64_t
+  transformed_picking_projection_build_count() const;
   [[nodiscard]] const std::vector<quader_editor_core::PolygonObject> &
   cached_scene_transformed_objects_for_picking(
       const quader_editor_core::EditorSession &session,
@@ -115,6 +118,7 @@ public:
 
 private:
   mutable ModelingPickingCache picking_cache_;
+  mutable std::uint64_t transformed_picking_projection_build_count_ = 0;
 };
 
 } // namespace quader

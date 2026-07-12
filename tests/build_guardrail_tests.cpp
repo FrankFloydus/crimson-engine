@@ -401,6 +401,29 @@ std::string cmake_target_source_blocks(std::string_view source,
   return blocks;
 }
 
+std::vector<std::filesystem::path>
+cmake_target_source_files(std::string_view source,
+                          const std::vector<std::string_view> &targets) {
+  std::string source_blocks;
+  for (std::string_view target : targets) {
+    source_blocks.append(cmake_target_source_blocks(source, target));
+  }
+
+  std::vector<std::filesystem::path> active_sources;
+  for (const std::filesystem::path &relative_path : guardrail_source_files()) {
+    const std::string normalized = relative_path.generic_string();
+    if (starts_with(normalized, "src/") &&
+        source_blocks.find(normalized) != std::string::npos) {
+      active_sources.push_back(relative_path);
+    }
+  }
+  std::sort(active_sources.begin(), active_sources.end());
+  active_sources.erase(
+      std::unique(active_sources.begin(), active_sources.end()),
+      active_sources.end());
+  return active_sources;
+}
+
 /**
  * Describes manifest and license evidence required for a project dependency.
  */
@@ -419,9 +442,7 @@ third_party_license_expectations() {
       {"", "nlohmann/json", "licenses/nlohmann-json-MIT.txt", false},
       {"entt", "EnTT", "licenses/entt-MIT.txt", true},
       {"glm", "OpenGL Mathematics (GLM)", "licenses/glm-MIT.txt", true},
-      {"sdl3", "SDL3", "licenses/sdl3-Zlib-MIT-Apache-2.0.txt", true},
-      {"imgui", "Dear ImGui", "licenses/imgui-MIT.txt", true},
-      {"", "Phosphor Icons", "licenses/phosphor-icons-MIT.txt", false},
+      {"qtbase", "Qt Base", "licenses/qtbase-LGPL-3.0-only.txt", true},
       {"stduuid", "stduuid", "licenses/stduuid-MIT.txt", true},
       {"gtest", "GoogleTest", "licenses/gtest-BSD-3-Clause.txt", true},
       {"lodepng", "lodepng", "licenses/lodepng-Zlib.txt", true},
@@ -1436,7 +1457,9 @@ TEST(BuildGuardrailTests,
   expect_contains(tool, "Add-PathPlan");
   expect_contains(tool, "Remove-RedundantBuildTargets");
   expect_contains(tool, "AGENTS\\.md");
-  expect_contains(tool, "WindowGuardrailTests.*");
+  expect_contains(
+      tool,
+      "WindowGuardrailTests.WindowPlacementPersistenceAndResizeRecoveryStayOwned");
   expect_contains(tool, "AppStartupTests.*");
   expect_contains(tool, "FatalErrorHandlerTests.*");
   expect_contains(tool, "BootSmokeFailsOnLoggedErrorsAndRequiresLogCopy");
@@ -1524,88 +1547,98 @@ TEST(BuildGuardrailTests, LocalizationResourcesArePackagedWithRuntime) {
   EXPECT_FALSE(read_source_file("resources/locales/it-IT.lang").empty());
 }
 
-TEST(BuildGuardrailTests, ImGuiRuntimeResourcesArePackagedWithRuntime) {
+TEST(BuildGuardrailTests, QtWidgetsRuntimeAndLicenseEvidenceAreConfigured) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
-  const std::string icon_header = read_source_file("src/ui/ui_icon_set.hpp");
-  const std::string phosphor_header =
-      read_source_file("src/ui/phosphor_icons.hpp");
-  const std::string style_source =
-      read_source_file("src/ui/ui_style_tokens.cpp");
-  const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
-  const std::string icon_texture_service =
-      read_source_file("src/render/ui_icon_texture_service.cpp");
-  const std::string png_texture_loader =
-      read_source_file("src/render/png_texture_loader.cpp");
+  const std::string vcpkg_manifest = read_source_file("vcpkg.json");
+  const std::string third_party_manifest =
+      read_source_file("thirdparty/THIRD_PARTY_MANIFEST.md");
+  const std::string qt_license =
+      read_source_file("thirdparty/licenses/qtbase-LGPL-3.0-only.txt");
 
-  expect_contains(root_c_make, "src/ui/ui_system.cpp");
-  expect_contains(root_c_make, "src/ui/viewport_panel.cpp");
-  expect_contains(root_c_make, "src/render/ui_icon_texture_service.cpp");
-  expect_contains(root_c_make, "src/render/png_texture_loader.cpp");
+  expect_contains(root_c_make,
+                  "find_package(Qt6 CONFIG REQUIRED COMPONENTS Core Gui "
+                  "Widgets)");
+  expect_contains(root_c_make, "Qt6::Widgets");
+  expect_contains(root_c_make, "src/ui/qt_viewport_panel.cpp");
+  expect_contains(root_c_make, "src/ui/qt_viewport_surface.cpp");
+  expect_contains(root_c_make, "src/ui/qt_color_swatch_button.cpp");
+  expect_contains(root_c_make, "src/ui/qt_auxiliary_window_state.cpp");
+  expect_contains(root_c_make, "src/ui/qt_settings_dialog.cpp");
+  expect_contains(root_c_make, "src/ui/qt_tool_settings_window.cpp");
+  expect_contains(vcpkg_manifest, "\"name\": \"qtbase\"");
+  expect_contains(vcpkg_manifest, "\"widgets\"");
+  expect_contains(third_party_manifest, "Qt Base");
+  expect_contains(third_party_manifest,
+                  "licenses/qtbase-LGPL-3.0-only.txt");
+  expect_contains(qt_license, "GNU LESSER GENERAL PUBLIC LICENSE");
+
+  // Fusion supplies the complete widget appearance. The app must not package
+  // the retired ImGui material or UI fonts that override the stock theme.
+  expect_missing(root_c_make, "resources/materials/imgui.mat");
+  expect_missing(root_c_make, "resources/fonts/Inter.ttf");
+  expect_missing(root_c_make, "resources/fonts/Phosphor.ttf");
+  expect_missing(root_c_make, "copy_directory\n            \"${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts\"");
+
+  // Renderer-owned scene and overlay resources remain native app assets.
   expect_contains(root_c_make, "quader_register_filament_material");
   expect_contains(root_c_make, "QUADER_FILAMENT_MATERIAL_COPY_COMMANDS");
   expect_contains(root_c_make, "resources/materials/quader_mesh.mat");
   expect_contains(root_c_make, "resources/materials/quader_mesh_lit.mat");
-  expect_contains(root_c_make,
-                  "quader_register_filament_material(quader_mesh_material "
-                  "resources/materials/quader_mesh.mat quader_mesh)");
-  expect_contains(root_c_make,
-                  "quader_register_filament_material(quader_mesh_lit_material "
-                  "resources/materials/quader_mesh_lit.mat quader_mesh_lit)");
-  expect_contains(root_c_make, "resources/materials/imgui.mat");
   expect_contains(root_c_make, "resources/materials/quader_overlay_icon.mat");
-  expect_contains(root_c_make,
-                  "quader_register_filament_material(quader_overlay_icon_"
-                  "material resources/materials/quader_overlay_icon.mat "
-                  "quader_overlay_icon)");
-  expect_contains(root_c_make, "quader_register_filament_material(imgui_"
-                               "material resources/materials/imgui.mat imgui)");
-  expect_contains(root_c_make, "resources/fonts/Inter.ttf");
-  expect_contains(root_c_make, "$<TARGET_FILE_DIR:quader>/fonts/Inter.ttf");
-  expect_contains(root_c_make, "resources/fonts/Phosphor.ttf");
-  expect_contains(root_c_make, "$<TARGET_FILE_DIR:quader>/fonts/Phosphor.ttf");
   expect_contains(root_c_make, "resources/icons");
   expect_contains(root_c_make, "$<TARGET_FILE_DIR:quader>/icons");
-  expect_contains(root_c_make, "copy_if_different");
   expect_contains(root_c_make, "copy_directory");
-  expect_contains(icon_header, "lock");
-  expect_contains(icon_header, "unlock");
-  expect_contains(icon_header, "hide");
-  expect_contains(icon_header, "show");
-  expect_contains(ui_system_source, "load_ui_icon_textures");
-  expect_contains(icon_texture_service, "lock_icon.png");
-  expect_contains(icon_texture_service, "unlock_icon.png");
-  expect_contains(icon_texture_service, "hide_icon.png");
-  expect_contains(icon_texture_service, "show_icon.png");
-  expect_contains(icon_texture_service, "load_png_texture(");
-  expect_contains(png_texture_loader, "lodepng::decode");
-  expect_contains(png_texture_loader, "filament::Texture::Builder()");
-  expect_contains(phosphor_header, "kPhosphorIconRangeStart");
-  expect_contains(phosphor_header, "kPhosphorIconRangeEnd");
-  expect_contains(style_source, "Phosphor.ttf");
-  expect_contains(style_source, "GlyphExcludeRanges = kIconRanges");
-  expect_contains(style_source, "MergeMode = true");
-
-  EXPECT_FALSE(read_source_file("resources/materials/imgui.mat").empty());
   EXPECT_FALSE(
       read_source_file("resources/materials/quader_overlay_icon.mat").empty());
   EXPECT_FALSE(read_source_file("resources/materials/quader_mesh.mat").empty());
   EXPECT_FALSE(
       read_source_file("resources/materials/quader_mesh_lit.mat").empty());
-  EXPECT_FALSE(read_source_file("resources/fonts/Inter.ttf").empty());
-  EXPECT_FALSE(read_source_file("resources/fonts/Phosphor.ttf").empty());
   EXPECT_TRUE(std::filesystem::exists(source_path("resources/icons/logo.png")));
-  EXPECT_TRUE(std::filesystem::exists(
-      source_path("resources/icons/quader-logo@2x.png")));
   EXPECT_TRUE(
       std::filesystem::exists(source_path("resources/icons/point_light.png")));
   EXPECT_GT(std::filesystem::file_size(source_path("resources/icons/logo.png")),
             512u);
   EXPECT_GT(std::filesystem::file_size(
-                source_path("resources/icons/quader-logo@2x.png")),
-            512u);
-  EXPECT_GT(std::filesystem::file_size(
                 source_path("resources/icons/point_light.png")),
             512u);
+}
+
+TEST(BuildGuardrailTests, ApplicationIconIsEmbeddedForWindowsAndQt) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string main_source = read_source_file("src/main.cpp");
+  const std::string ui_system_source =
+      read_source_file("src/ui/ui_system.cpp");
+  const std::string windows_resource =
+      read_source_file("resources/icons/quader.rc");
+
+  expect_contains(root_c_make, "enable_language(RC)");
+  expect_contains(root_c_make, "resources/icons/quader.rc");
+  expect_contains(root_c_make, "resources/icons/quader.ico");
+  expect_contains(root_c_make,
+                  "qt_add_resources(quader \"quader_application_icons\"");
+  expect_contains(root_c_make, "PREFIX \"/quader/icons\"");
+  expect_contains(windows_resource,
+                  "IDI_QUADER_APPLICATION ICON DISCARDABLE \"quader.ico\"");
+
+  for (const std::string_view size : {"16", "32", "48", "64", "256"}) {
+    const std::string relative_path =
+        std::string{"resources/icons/quader_"} + std::string{size} + ".png";
+    EXPECT_TRUE(std::filesystem::exists(source_path(relative_path)))
+        << relative_path;
+    expect_contains(root_c_make, relative_path);
+    expect_contains(main_source,
+                    std::string{":/quader/icons/quader_"} +
+                        std::string{size} + ".png");
+  }
+
+  const std::filesystem::path native_icon =
+      source_path("resources/icons/quader.ico");
+  ASSERT_TRUE(std::filesystem::exists(native_icon));
+  EXPECT_GT(std::filesystem::file_size(native_icon), 300000u);
+  expect_contains(main_source,
+                  "qt_application.setWindowIcon(application_icon)");
+  expect_contains(ui_system_source,
+                  "main_window_->setWindowIcon(QApplication::windowIcon())");
 }
 
 TEST(BuildGuardrailTests, SentryNativeRuntimeIsPackagedWithCrashpad) {
@@ -1654,19 +1687,19 @@ TEST(BuildGuardrailTests, SentryNativeRuntimeIsPackagedWithCrashpad) {
   expect_contains(sentry_source, "sentry_close");
 }
 
-TEST(BuildGuardrailTests, UiIconTexturesStayBehindRenderSystemAdapters) {
+TEST(BuildGuardrailTests, QtViewportSwapchainsStayBehindRenderSystemAdapters) {
   const std::string ui_system_header = read_source_file("src/ui/ui_system.hpp");
   const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
   const std::string viewport_panel_source =
-      read_source_file("src/ui/viewport_panel.cpp");
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string viewport_surface_header =
+      read_source_file("src/ui/qt_viewport_surface.hpp");
+  const std::string viewport_surface_source =
+      read_source_file("src/ui/qt_viewport_surface.cpp");
   const std::string render_system_header =
       read_source_file("src/render/render_system.hpp");
   const std::string render_system_source =
       read_source_file("src/render/render_system.cpp");
-  const std::string icon_texture_service =
-      read_source_file("src/render/ui_icon_texture_service.cpp");
-  const std::string png_texture_loader =
-      read_source_file("src/render/png_texture_loader.cpp");
 
   expect_missing(ui_system_header, "TextureRegistry");
   expect_missing(ui_system_header, "filament::Engine");
@@ -1684,198 +1717,202 @@ TEST(BuildGuardrailTests, UiIconTexturesStayBehindRenderSystemAdapters) {
   expect_missing(viewport_panel_source, "render_system.textures()");
   expect_missing(viewport_panel_source, "render_system.ground_grid_material()");
 
-  expect_contains(render_system_header, "load_ui_icon_textures");
-  expect_contains(render_system_header, "clear_ui_icon_textures");
-  expect_contains(render_system_header, "initialize_imgui_renderer");
+  expect_contains(viewport_surface_header,
+                  "class QtViewportSurface final : public QWindow");
+  expect_contains(viewport_surface_header,
+                  "RenderAdditionalSwapChain swap_chain_");
+  expect_contains(viewport_panel_source, "QWidget::createWindowContainer");
+  expect_contains(viewport_surface_source, "native_window_handle()");
+  expect_contains(viewport_surface_source,
+                  "render_system_->create_additional_swap_chain(");
+  expect_contains(viewport_surface_source,
+                  "render_system_->begin_frame(swap_chain_.get())");
+  expect_contains(viewport_surface_source, "swap_chain_.reset()");
+  expect_missing(viewport_surface_source, "filament::Engine");
+  expect_missing(viewport_surface_source, "filament::SwapChain");
+
+  expect_contains(render_system_header, "class RenderAdditionalSwapChain");
+  expect_contains(render_system_header, "create_additional_swap_chain");
   expect_contains(render_system_header, "initialize_viewport_renderer");
-  expect_contains(render_system_source, "ui_icon_textures_.load_icons");
-  expect_contains(render_system_source, "ui_icon_textures_.clear");
-  expect_contains(icon_texture_service, "load_png_texture(");
-  expect_contains(png_texture_loader, "filament::Texture::Builder()");
-  expect_contains(icon_texture_service, "textures_->register_texture(texture)");
-  expect_contains(icon_texture_service,
-                  "textures_->unregister_texture(record.handle)");
-  expect_contains(icon_texture_service, "engine_->destroy(record.texture)");
+  expect_contains(render_system_source,
+                  "RenderSystem::create_additional_swap_chain(");
+  expect_contains(render_system_source, "engine_->createSwapChain(native_window");
 }
 
-TEST(BuildGuardrailTests, UiSystemKeepsSdlBehindAppPlatformAdapter) {
+TEST(BuildGuardrailTests, ActiveAppAndUiUseQtWithoutSdlAdapters) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string ui_system_header = read_source_file("src/ui/ui_system.hpp");
   const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
-  const std::string ui_platform_adapter =
-      read_source_file("src/ui/ui_platform_adapter.hpp");
   const std::string app_source = read_source_file("src/app/app.cpp");
-  const std::string ui_link_block =
-      source_slice(root_c_make, "target_link_libraries(quader_ui",
-                   "target_compile_features(quader_ui");
+  const std::string ui_sources =
+      cmake_target_source_blocks(root_c_make, "quader_ui");
+  const std::string ui_link_block = source_slice(
+      root_c_make, "target_link_libraries(quader_ui",
+      "target_compile_features(quader_ui");
 
-  for (const std::string &forbidden : {"SDL", "imgui_impl_sdl3"}) {
+  expect_contains(ui_link_block, "Qt6::Widgets");
+  expect_missing(ui_link_block, "SDL3::SDL3");
+  expect_missing(ui_link_block, "imgui::imgui");
+  for (const std::string &legacy_source : {
+           "src/ui/main_menu_bar.cpp",
+           "src/ui/settings_panel.cpp",
+           "src/ui/ui_platform_adapter.cpp",
+           "src/ui/ui_style_tokens.cpp",
+           "src/ui/viewport_panel.cpp",
+       }) {
+    expect_missing(ui_sources, legacy_source);
+  }
+
+  for (const std::string &forbidden :
+       {"SDL", "ImGui", "UIPlatformAdapter", "UIPlatformEvent"}) {
     expect_missing(ui_system_header, forbidden);
     expect_missing(ui_system_source, forbidden);
-    expect_missing(ui_platform_adapter, forbidden);
+    expect_missing(app_source, forbidden);
   }
-  expect_contains(ui_system_header, "UIPlatformAdapter");
-  expect_contains(ui_system_header, "UIPlatformEvent");
-  expect_contains(ui_platform_adapter, "const void *native_event");
-  expect_contains(app_source, "class SdlUIPlatformAdapter");
-  expect_contains(app_source, "ImGui_ImplSDL3_InitForOther");
-  expect_contains(app_source, "SDL_SetWindowRelativeMouseMode");
-  expect_contains(app_source, "UIPlatformEvent{");
-  expect_contains(app_source, ".native_event = event.native_event");
-  expect_contains(app_source,
-                  ".pressed_input_chord = event.pressed_input_chord");
-  expect_missing(ui_link_block, "SDL3::SDL3");
+
+  const std::vector<std::filesystem::path> active_sources =
+      cmake_target_source_files(root_c_make,
+                                {"quader", "quader_app", "quader_ui"});
+  ASSERT_FALSE(active_sources.empty());
+  for (const std::filesystem::path &relative_path : active_sources) {
+    const std::string source = read_source_file(relative_path);
+    for (const std::string &forbidden :
+         {"#include <SDL", "SDL_", "#include <imgui", "ImGui::",
+          "ImGui_Impl"}) {
+      EXPECT_EQ(source.find(forbidden), std::string::npos)
+          << relative_path.generic_string() << ": " << forbidden;
+    }
+  }
 }
 
-TEST(BuildGuardrailTests, AppLoopConsumesTypedPlatformEvents) {
-  const std::string root_c_make = read_source_file("CMakeLists.txt");
+TEST(BuildGuardrailTests, AppLoopRunsOnQApplicationEvents) {
+  const std::string main_source = read_source_file("src/main.cpp");
   const std::string app_header = read_source_file("src/app/app.hpp");
   const std::string app_source = read_source_file("src/app/app.cpp");
-  const std::string platform_event_header =
-      read_source_file("src/platform/platform_event.hpp");
-  const std::string platform_event_source =
-      read_source_file("src/platform/platform_event.cpp");
 
-  expect_contains(root_c_make, "src/platform/platform_event.cpp");
-  expect_contains(app_header, "PlatformEventWatch live_resize_event_watch_");
-  expect_contains(app_source, "PlatformEventPump events(window_)");
-  expect_contains(app_source, "events.poll(event)");
-  expect_contains(app_source, "event.quit_requested");
-  expect_contains(app_source, "event.mouse_motion");
-  expect_contains(app_source, "event.window_pixel_size_changed");
-  expect_contains(app_source, "event.window_chrome_state_changed");
-  expect_contains(app_source, "event.live_resize_exposed_frame");
-  expect_contains(app_source, "platform_wait_for_event_timeout(wait_ms)");
-  expect_missing(app_header, "SDL_Event");
-  expect_missing(app_source, "SDL_PollEvent");
-  expect_missing(app_source, "SDL_WaitEventTimeout");
-  expect_missing(app_source, "SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED");
-  expect_missing(app_source, "SDL_EVENT_WINDOW_RESIZED");
-  expect_missing(app_source, "SDL_EVENT_WINDOW_FOCUS_GAINED");
-  expect_missing(app_source, "sdl_event_targets_window");
-  expect_contains(platform_event_header, "struct PlatformEvent");
-  expect_contains(platform_event_header, "class PlatformEventPump");
-  expect_contains(platform_event_header, "class PlatformEventWatch");
-  expect_contains(platform_event_source, "SDL_PollEvent");
-  expect_contains(platform_event_source, "SDL_WaitEventTimeout");
-  expect_contains(platform_event_source, "SDL_AddEventWatch");
-  expect_contains(platform_event_source, "SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED");
-  expect_contains(platform_event_source, "SDL_EVENT_WINDOW_FOCUS_GAINED");
+  expect_contains(main_source, "QApplication qt_application(argc, argv)");
+  expect_contains(app_header, "bool initialize(QApplication &application");
+  expect_contains(app_header, "QApplication *application_ = nullptr");
+  expect_contains(app_source, "#include <QApplication>");
+  expect_contains(app_source, "#include <QTimer>");
+  expect_contains(app_source, "&QTimer::timeout");
+  expect_contains(app_source, "&QApplication::aboutToQuit");
+  expect_contains(app_source, "return application_->exec()");
+  expect_contains(app_source, "frame_timer_->start(0)");
+
+  for (const std::string &legacy_event_path :
+       {"PlatformEvent", "SDL_PollEvent", "SDL_WaitEventTimeout",
+        "platform_wait_for_event_timeout", "native_chrome_interaction"}) {
+    expect_missing(app_header, legacy_event_path);
+    expect_missing(app_source, legacy_event_path);
+  }
 }
 
-TEST(BuildGuardrailTests, ImGuiShellViewportAndControlStylingStayVisible) {
+TEST(BuildGuardrailTests, QtShellUsesMainWindowDocksAndStableNames) {
+  const std::string ui_system_header = read_source_file("src/ui/ui_system.hpp");
+  const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string panel_header = read_source_file("src/ui/ui_panel.hpp");
+  const std::string panel_manager_header =
+      read_source_file("src/ui/ui_panel_manager.hpp");
+  const std::string panel_manager_source =
+      read_source_file("src/ui/ui_panel_manager.cpp");
+  const std::string settings_dialog_header =
+      read_source_file("src/ui/qt_settings_dialog.hpp");
+  const std::string tool_window_header =
+      read_source_file("src/ui/qt_tool_settings_window.hpp");
+
+  expect_contains(ui_system_header, "class QMainWindow");
+  expect_contains(ui_system_header, "class QDockWidget");
+  expect_contains(ui_system_header, "std::unique_ptr<QMainWindow> main_window_");
+  expect_contains(ui_system_source, "#include <QMainWindow>");
+  expect_contains(ui_system_source, "#include <QDockWidget>");
+  expect_contains(ui_system_source,
+                  "main_window_ = std::make_unique<QMainWindow>()");
+  expect_contains(ui_system_source,
+                  "main_window_->setObjectName(QStringLiteral("
+                  "\"quaderMainWindow\"))");
+  expect_contains(ui_system_source,
+                  "main_window_->setCentralWidget(viewport_panel_)");
+  expect_contains(ui_system_source, "QMainWindow::AllowNestedDocks");
+  expect_contains(ui_system_source, "QMainWindow::AllowTabbedDocks");
+
+  expect_contains(ui_system_source,
+                  "UIPanelId::Outliner, *outliner_panel_, "
+                  "Qt::LeftDockWidgetArea");
+  expect_contains(ui_system_source,
+                  "UIPanelId::Inspector, *inspector_panel_, "
+                  "Qt::RightDockWidgetArea");
+  expect_contains(ui_system_source,
+                  "UIPanelId::Console, *console_panel_, "
+                  "Qt::BottomDockWidgetArea");
+  expect_contains(ui_system_source, "new QDockWidget(");
+  expect_contains(ui_system_source,
+                  "QStringLiteral(\"dock_%1\").arg("
+                  "QString::fromUtf8(ui_panel_stable_id(id)))");
+  expect_contains(ui_system_source, "main_window_->addDockWidget(");
+  expect_contains(ui_system_source,
+                  "main_window_->saveState(kQtWindowStateVersion)");
+  expect_contains(ui_system_source,
+                  "main_window_->restoreState(state, kQtWindowStateVersion)");
+
+  expect_contains(panel_header, "return \"viewport\"");
+  expect_contains(panel_header, "return \"outliner\"");
+  expect_contains(panel_header, "return \"inspector\"");
+  expect_contains(panel_header, "return \"console\"");
+  expect_contains(panel_manager_header,
+                  "std::array<QDockWidget *, 4> docks_");
+  expect_contains(panel_manager_source, "void UIPanelManager::add(");
+  expect_contains(panel_manager_source, "QDockWidget *UIPanelManager::dock(");
+
+  expect_contains(settings_dialog_header,
+                  "class QtSettingsDialog final : public QDialog");
+  expect_contains(tool_window_header,
+                  "class QtToolSettingsWindow final : public QWidget");
+  expect_contains(ui_system_source,
+                  "new QtSettingsDialog(main_window_.get())");
+  expect_contains(ui_system_source,
+                  "new QtToolSettingsWindow(main_window_.get())");
+}
+
+TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
   const std::string main_menu_source =
-      read_source_file("src/ui/main_menu_bar.cpp");
-  const std::string style_source =
-      read_source_file("src/ui/ui_style_tokens.cpp");
-  const std::string icon_texture_service =
-      read_source_file("src/render/ui_icon_texture_service.cpp");
-  const std::string viewport_panel_source =
-      read_source_file("src/ui/viewport_panel.cpp");
-  const std::string window_chrome_source =
-      source_slice(ui_system_source, "UISystem::draw_window_chrome",
-                   "void UISystem::draw_dockspace");
-  const std::string static_bottom_bar_source = source_slice(
-      ui_system_source, "void draw_static_bottom_bar", "void UISystem::draw");
-  const std::string chrome_menu_items = source_slice(
-      main_menu_source, "MainMenuBarResult MainMenuBar::draw_menus",
+      read_source_file("src/ui/qt_main_menu.cpp");
+  const std::string frame_refresh = source_slice(
+      ui_system_source, "void UISystem::refresh(",
+      "void UISystem::prepare_viewports(");
+  const std::string settings_show = source_slice(
+      ui_system_source, "void UISystem::show_settings_dialog()",
       "} // namespace quader");
 
-  const std::size_t dockspace_padding = ui_system_source.find(
-      "ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f})");
-  const std::size_t dockspace_begin =
-      ui_system_source.find("ImGui::Begin(\"Main Dockspace\"");
-  ASSERT_NE(dockspace_padding, std::string::npos);
-  ASSERT_NE(dockspace_begin, std::string::npos);
-  EXPECT_LT(dockspace_padding, dockspace_begin);
-  expect_contains(ui_system_source, "ImGui::PopStyleVar(3)");
-  expect_contains(ui_system_source, "kStaticBottomBarHeight = 28.0f");
-  expect_contains(ui_system_source, "draw_static_bottom_bar");
-  expect_contains(ui_system_source, "viewport.Size.y - kStaticBottomBarHeight");
-  expect_contains(ui_system_source, "viewport->Size.y - chrome_height");
-  expect_contains(ui_system_source, "kStaticBottomBarHeight");
-  expect_contains(
-      ui_system_source,
-      "ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse");
-  expect_contains(ui_system_source, "ImGuiWindowFlags_NoInputs");
-  expect_contains(ui_system_source,
-                  "ImGui::Begin(\"Quader Static Bottom Bar\"");
-  expect_contains(ui_system_source, "quader_app_version.hpp");
-  expect_contains(ui_system_source, "kCompressedSidebarMinWidth = 220.0f");
-  expect_contains(ui_system_source, "kReservedViewportDockWidth = 300.0f");
-  expect_contains(ui_system_source, "effective_sidebar_minimum_width");
-  expect_contains(
-      ui_system_source,
-      "frame_style.sidebar_min_width = effective_sidebar_minimum_width");
-  expect_contains(ui_system_source, "draw_dockspace(editor, quit_requested, "
-                                    "document, modeling,");
-  expect_contains(
-      ui_system_source,
-      "enforce_sidebar_dock_minimums(frame_style.sidebar_min_width)");
-  expect_contains(
-      ui_system_source,
-      "clamp_docked_window_width(ui_panel_key(UIPanelId::Outliner),");
-  expect_contains(
-      ui_system_source,
-      "clamp_docked_window_width(ui_panel_key(UIPanelId::Inspector),");
-  expect_contains(ui_system_source, "sidebar_minimum_width);");
-  expect_missing(ui_system_source,
-                 "clamp_docked_window_width(ui_panel_key(UIPanelId::Outliner), "
-                 "style_.sidebar_min_width)");
-  expect_contains(static_bottom_bar_source,
-                  "const char *right_label = kQuaderAppVersionDisplay");
-  expect_missing(static_bottom_bar_source, "right_label = \"Quader\"");
-  expect_contains(ui_system_source,
-                  "ImGui::DockSpace(dockspace_id, dockspace_size");
-  expect_contains(ui_system_source, "ui_packed_color(118, 92, 168)");
-  expect_contains(ui_system_source, "kWindowChromeHeight = 35.0f");
-  expect_contains(ui_system_source, "kWindowChromeControlsWidth");
-  expect_contains(window_chrome_source, "ImGuiWindowFlags_MenuBar");
-  expect_contains(window_chrome_source, "main_menu_bar_.draw_menus");
-  expect_contains(icon_texture_service, "quader-logo@2x.png");
-  expect_contains(main_menu_source,
-                  "MainMenuBarResult MainMenuBar::draw_menus");
-  expect_missing(main_menu_source, "drawInlinePopupMenu");
-  expect_missing(main_menu_source, "ImGui::Button(label.c_str())");
-  expect_missing(static_bottom_bar_source, "ImGuiWindowFlags_MenuBar");
-  expect_missing(chrome_menu_items, "BeginMenuBar(");
-  expect_missing(chrome_menu_items, "drawInline");
-  expect_missing(ui_system_source,
-                 "availableDockspaceSize.y - kStaticBottomBarHeight");
-  expect_missing(ui_system_source, "ImGui::Dummy(barSize)");
-
-  expect_contains(style_source, "style.FrameBorderSize = 1.0f");
-  expect_contains(style_source,
-                  "colors[ImGuiCol_Border] = style_color(72, 74, 82)");
-  expect_contains(style_source,
-                  "colors[ImGuiCol_FrameBg] = style_color(23, 24, 27)");
-  expect_contains(style_source,
-                  "colors[ImGuiCol_FrameBgHovered] = style_color(38, 40, 45)");
-  expect_contains(style_source,
-                  "colors[ImGuiCol_FrameBgActive] = style_color(50, 54, 61)");
-  expect_contains(style_source,
-                  "colors[ImGuiCol_CheckMark] = style_color(236, 241, 245)");
-  expect_missing(style_source, "style.FrameBorderSize = 0.0f");
-
-  expect_contains(viewport_panel_source,
-                  "viewport_chrome_combo_width_for_text");
-  expect_contains(viewport_panel_source, "ImGui::CalcTextSize");
-  expect_contains(viewport_panel_source, "kViewportChromeViews");
-  expect_contains(viewport_panel_source, "kViewportChromeShadingModes");
-  expect_missing(viewport_panel_source,
-                 "constexpr float kViewComboWidth = 112.0f");
-  expect_missing(viewport_panel_source,
-                 "constexpr float kShadingComboWidth = 104.0f");
+  expect_contains(frame_refresh, "outliner_panel_->refresh(context)");
+  expect_contains(frame_refresh, "inspector_panel_->refresh(context)");
+  expect_contains(frame_refresh, "console_panel_->refresh(context)");
+  expect_contains(frame_refresh, "modeling_->transform_drag_active()");
+  expect_contains(frame_refresh,
+                  "!transform_drag_active && panel_visible(UIPanelId::Outliner)");
+  expect_contains(frame_refresh,
+                  "!transform_drag_active && panel_visible(UIPanelId::Inspector)");
+  expect_missing(frame_refresh, "settings_dialog_->refresh()");
+  expect_missing(frame_refresh, "main_menu_->refresh()");
+  expect_missing(frame_refresh, "viewport_panel_->refresh_workspace_layout()");
+  expect_contains(main_menu_source, "&QMenu::aboutToShow");
+  expect_contains(settings_show, "settings_dialog_->refresh()");
 }
 
-TEST(BuildGuardrailTests, ImGuiViewportApiKeepsMultiPaneLayoutWorkspace) {
+TEST(BuildGuardrailTests, QtViewportKeepsMultiPaneLayoutWorkspace) {
   const std::string viewport_api_source =
       read_source_file("src/api/quader_viewport_api.cpp");
   const std::string main_menu_source =
-      read_source_file("src/ui/main_menu_bar.cpp");
+      read_source_file("src/ui/qt_main_menu.cpp");
+  const std::string viewport_panel_header =
+      read_source_file("src/ui/qt_viewport_panel.hpp");
   const std::string viewport_panel_source =
-      read_source_file("src/ui/viewport_panel.cpp");
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string viewport_surface_header =
+      read_source_file("src/ui/qt_viewport_surface.hpp");
+  const std::string viewport_surface_source =
+      read_source_file("src/ui/qt_viewport_surface.cpp");
 
   expect_contains(viewport_api_source,
                   "ViewportWorkspaceService "
@@ -1884,35 +1921,244 @@ TEST(BuildGuardrailTests, ImGuiViewportApiKeepsMultiPaneLayoutWorkspace) {
                  "ViewportWorkspaceService "
                  "workspace{ViewportWorkspaceLayoutPolicy::SinglePaneOnly}");
   expect_contains(main_menu_source,
-                  "context.editor.viewports().set_layout(option.id)");
+                  "context.editor.viewports().set_layout(layout)");
+  expect_contains(viewport_panel_header,
+                  "std::array<Pane, kViewportPaneCount> panes_");
+  expect_contains(viewport_panel_source, "ViewportPaneId::Perspective");
+  expect_contains(viewport_panel_source, "ViewportPaneId::Top");
+  expect_contains(viewport_panel_source, "ViewportPaneId::Front");
+  expect_contains(viewport_panel_source, "ViewportPaneId::Side");
   expect_contains(viewport_panel_source,
-                  "viewport_workspace.active_pane_placements()");
+                  "workspace_->active_pane_placements()");
   expect_contains(viewport_panel_source,
-                  "viewport_workspace.active_split_handles()");
-  expect_missing(viewport_panel_source,
-                 "return workspace().active_pane_placements()");
-  expect_missing(viewport_panel_source,
-                 "return workspace().active_split_handles()");
+                  "QWidget::createWindowContainer(pane_state.surface");
+  expect_contains(viewport_surface_header,
+                  "class QtViewportSurface final : public QWindow");
+  expect_contains(viewport_surface_source, "(void)winId()");
+  expect_contains(viewport_surface_source,
+                  "render_system_->create_additional_swap_chain(");
+  expect_contains(viewport_surface_source,
+                  "render_system_->begin_frame(swap_chain_.get())");
 }
 
-TEST(BuildGuardrailTests, RuntimeUiUsesNativeImGuiStackOnly) {
+TEST(BuildGuardrailTests, QtRuntimePostBuildPurgesRetiredUiArtifactsOnly) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
-  const std::string manifest = read_source_file("vcpkg.json");
+  const std::string cleanup = source_slice(
+      root_c_make,
+      "COMMAND \"${CMAKE_COMMAND}\" -E make_directory \"$<TARGET_FILE_DIR:quader>/materials\"",
+      "if(QUADER_ENABLE_SENTRY AND WIN32)");
 
-  expect_contains(root_c_make, "find_package(imgui CONFIG REQUIRED)");
-  expect_contains(root_c_make, "imgui::imgui");
-  expect_contains(manifest, "\"imgui\"");
+  for (std::string_view retired_directory : {
+           "$<TARGET_FILE_DIR:quader>/fonts",
+           "$<TARGET_FILE_DIR:quader>/styles",
+           "$<TARGET_FILE_DIR:quader>/ui",
+           "$<TARGET_FILE_DIR:quader>/shaders",
+       }) {
+    expect_contains(cleanup, std::string{"remove_directory \""} +
+                                 std::string{retired_directory} + "\"");
+  }
+  for (std::string_view retired_file : {
+           "$<TARGET_FILE_DIR:quader>/SDL3.dll",
+           "$<TARGET_FILE_DIR:quader>/rmlui.dll",
+           "$<TARGET_FILE_DIR:quader>/rmlui_debugger.dll",
+           "$<TARGET_FILE_DIR:quader>/quader_platform_sdl_win32.lib",
+           "$<TARGET_FILE_DIR:quader>/quader_ui_imgui.lib",
+           "$<TARGET_FILE_DIR:quader>/materials/imgui.filamat",
+       }) {
+    expect_contains(cleanup, std::string(retired_file));
+  }
 
-  for (const std::filesystem::path &relative_path : guardrail_source_files()) {
-    const std::string path = relative_path.generic_string();
-    if (!starts_with(path, "src/")) {
-      continue;
+  for (std::string_view current_runtime_directory : {
+           "$<TARGET_FILE_DIR:quader>/materials",
+           "$<TARGET_FILE_DIR:quader>/icons",
+           "$<TARGET_FILE_DIR:quader>/ibl",
+           "$<TARGET_FILE_DIR:quader>/locales",
+           "$<TARGET_FILE_DIR:quader>/platforms",
+           "$<TARGET_FILE_DIR:quader>/imageformats",
+       }) {
+    expect_missing(cleanup, std::string{"remove_directory \""} +
+                                std::string{current_runtime_directory} +
+                                "\"");
+  }
+}
+
+TEST(BuildGuardrailTests,
+     ActiveQtSourcesDoNotRetainImGuiSpecificLocalizationOrOwnershipNames) {
+  const std::string localization_header =
+      read_source_file("src/core/localization_service.hpp");
+  const std::string localization_source =
+      read_source_file("src/core/localization_service.cpp");
+  expect_missing(localization_header, "imgui_label");
+  expect_missing(localization_source, "imgui_label");
+
+  for (std::string_view active_header : {
+           "src/ui/ui_continuous_edit_tracker.hpp",
+           "src/ui/ui_panel.hpp",
+           "src/ui/viewport_hover_controller.hpp",
+           "src/ui/viewport_pane_overlay_cache.hpp",
+           "src/ui/viewport_shortcut_controller.hpp",
+       }) {
+    expect_missing(read_source_file(std::filesystem::path(active_header)),
+                   "ImGui");
+  }
+}
+
+TEST(BuildGuardrailTests, RuntimeUiUsesQtWidgetsFusionOnly) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string vcpkg_manifest = read_source_file("vcpkg.json");
+  const std::string third_party_manifest =
+      read_source_file("thirdparty/THIRD_PARTY_MANIFEST.md");
+  const std::string main_source = read_source_file("src/main.cpp");
+
+  expect_contains(root_c_make,
+                  "find_package(Qt6 CONFIG REQUIRED COMPONENTS Core Gui "
+                  "Widgets)");
+  expect_contains(root_c_make, "Qt6::Widgets");
+  expect_contains(vcpkg_manifest, "\"name\": \"qtbase\"");
+  expect_contains(main_source, "QApplication qt_application(argc, argv)");
+  expect_contains(main_source,
+                  "QStyleFactory::create(QStringLiteral(\"Fusion\"))");
+  expect_contains(main_source, "QApplication::setStyle(fusion_style)");
+
+  for (const std::string &retired_dependency :
+       {"find_package(SDL3", "SDL3::SDL3", "find_package(imgui",
+        "imgui::imgui", "imgui_material", "resources/materials/imgui.mat"}) {
+    expect_missing(root_c_make, retired_dependency);
+  }
+  expect_missing(vcpkg_manifest, "\"sdl3\"");
+  expect_missing(vcpkg_manifest, "\"imgui\"");
+  expect_missing(third_party_manifest, "| SDL3 |");
+  expect_missing(third_party_manifest, "| Dear ImGui |");
+  expect_missing(third_party_manifest, "| Phosphor Icons |");
+
+  std::string active_native_source_blocks;
+  for (std::string_view target :
+       {"quader_platform", "quader_render", "quader_ui", "quader_app",
+        "quader"}) {
+    active_native_source_blocks.append(
+        cmake_target_source_blocks(root_c_make, target));
+  }
+  for (const std::string &retired_source : {
+           "src/platform/platform_event.cpp",
+           "src/platform/platform_window.cpp",
+           "src/platform/sdl_event_utils.cpp",
+           "src/platform/sdl_input_adapter.cpp",
+           "src/render/imgui_filament_renderer.cpp",
+           "src/ui/main_menu_bar.cpp",
+           "src/ui/settings_panel.cpp",
+           "src/ui/ui_platform_adapter.cpp",
+           "src/ui/ui_style_tokens.cpp",
+           "src/ui/viewport_panel.cpp",
+       }) {
+    expect_missing(active_native_source_blocks, retired_source);
+  }
+
+  for (std::string_view retired_path : {
+           "src/platform/platform_event.cpp",
+           "src/platform/platform_event.hpp",
+           "src/platform/platform_window.cpp",
+           "src/platform/platform_window.hpp",
+           "src/platform/sdl_event_utils.cpp",
+           "src/platform/sdl_event_utils.hpp",
+           "src/platform/sdl_input_adapter.cpp",
+           "src/platform/sdl_input_adapter.hpp",
+           "src/render/imgui_filament_renderer.cpp",
+           "src/render/imgui_filament_renderer.hpp",
+           "src/render/ui_icon_texture_service.cpp",
+           "src/render/ui_icon_texture_service.hpp",
+           "src/ui/imgui_popup_utils.cpp",
+           "src/ui/imgui_popup_utils.hpp",
+           "src/ui/main_menu_bar.cpp",
+           "src/ui/main_menu_bar.hpp",
+           "src/ui/modal_tool_overlay_renderer.cpp",
+           "src/ui/modal_tool_overlay_renderer.hpp",
+           "src/ui/navigation_gizmo.cpp",
+           "src/ui/navigation_gizmo.hpp",
+           "src/ui/phosphor_icons.hpp",
+           "src/ui/tool_settings_panel.cpp",
+           "src/ui/tool_settings_panel.hpp",
+           "src/ui/ui_dock_panel.hpp",
+           "src/ui/ui_floating_panel.hpp",
+           "src/ui/ui_icon_set.hpp",
+           "src/ui/ui_layout.hpp",
+           "src/ui/ui_platform_adapter.hpp",
+           "src/ui/ui_style_tokens.cpp",
+           "src/ui/ui_style_tokens.hpp",
+           "src/ui/viewport_context_menu_presenter.cpp",
+           "src/ui/viewport_context_menu_presenter.hpp",
+           "src/ui/viewport_focus_controller.cpp",
+           "src/ui/viewport_focus_controller.hpp",
+           "src/ui/viewport_input_frame_builder.cpp",
+           "src/ui/viewport_input_frame_builder.hpp",
+           "src/ui/viewport_pane_controller.cpp",
+           "src/ui/viewport_pane_controller.hpp",
+           "src/ui/viewport_panel.cpp",
+           "src/ui/viewport_panel.hpp",
+           "src/ui/viewport_screen_geometry.hpp",
+           "src/ui/viewport_settings_panel.cpp",
+           "src/ui/viewport_settings_panel.hpp",
+           "resources/fonts/Inter.ttf",
+           "resources/fonts/Phosphor.ttf",
+           "resources/fonts/OFL.txt",
+           "resources/icons/empty_icon.png",
+           "resources/icons/hide_icon.png",
+           "resources/icons/lock_icon.png",
+           "resources/icons/mesh_icon.png",
+           "resources/icons/quader-logo@2x.png",
+           "resources/icons/show_icon.png",
+           "resources/icons/unlock_icon.png",
+           "resources/materials/imgui.mat",
+           "thirdparty/licenses/imgui-MIT.txt",
+           "thirdparty/licenses/sdl3-Zlib-MIT-Apache-2.0.txt",
+           "thirdparty/licenses/phosphor-icons-MIT.txt",
+       }) {
+    EXPECT_FALSE(std::filesystem::exists(source_path(retired_path)))
+        << retired_path;
+  }
+
+  const std::vector<std::filesystem::path> app_ui_sources =
+      cmake_target_source_files(root_c_make,
+                                {"quader", "quader_app", "quader_ui"});
+  ASSERT_FALSE(app_ui_sources.empty());
+  std::string app_ui_source_text;
+  for (const std::filesystem::path &relative_path : app_ui_sources) {
+    app_ui_source_text.append(read_source_file(relative_path));
+    std::filesystem::path header = relative_path;
+    header.replace_extension(".hpp");
+    if (std::filesystem::exists(source_path(header))) {
+      app_ui_source_text.append(read_source_file(header));
     }
+  }
 
-    const std::string source = read_source_file(relative_path);
-    expect_missing(source, "src/ui/controllers");
-    expect_missing(source, "src/ui/components");
-    expect_missing(source, "src/ui/core");
+  EXPECT_EQ(count_occurrences(app_ui_source_text,
+                              "QStyleFactory::create("),
+            1u);
+  EXPECT_EQ(count_occurrences(app_ui_source_text,
+                               "QApplication::setStyle("),
+            1u);
+  EXPECT_EQ(count_occurrences(app_ui_source_text,
+                              "QApplication::setPalette("),
+            1u);
+  EXPECT_EQ(count_occurrences(app_ui_source_text, "standardPalette()"), 1u);
+  for (const std::string &forbidden_customization : {
+            "setStyleSheet(",
+            ".qss",
+            "QProxyStyle",
+           "QFontDatabase",
+           "setFont(",
+           "Qt::FramelessWindowHint",
+           "Qt::CustomizeWindowHint",
+           "Qt::WA_TranslucentBackground",
+       }) {
+    EXPECT_EQ(app_ui_source_text.find(forbidden_customization),
+              std::string::npos)
+        << forbidden_customization;
+  }
+  for (const std::string &retired_ui_token :
+       {"#include <SDL", "SDL_", "#include <imgui", "ImGui::",
+        "ImGui_Impl"}) {
+    EXPECT_EQ(app_ui_source_text.find(retired_ui_token), std::string::npos)
+        << retired_ui_token;
   }
 }
 
@@ -2040,266 +2286,41 @@ TEST(DependencyLicenseGuardrailTests, LuaDependenciesRequireExplicitDecision) {
   }
 }
 
-TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
+TEST(WindowGuardrailTests,
+     QtShellUsesStandardChromeAndRetiredSdlWindowSourcesAreGone) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string main_source = read_source_file("src/main.cpp");
-  const std::string app_header = read_source_file("src/app/app.hpp");
-  const std::string app_source = read_source_file("src/app/app.cpp");
-  const std::string platform_header =
-      read_source_file("src/platform/platform_window.hpp");
-  const std::string platform_source =
-      read_source_file("src/platform/platform_window.cpp");
-  const std::string ui_system_header = read_source_file("src/ui/ui_system.hpp");
-  const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string window_placement_header =
+      read_source_file("src/platform/window_placement.hpp");
 
-  expect_contains(main_source, "bool borderless_window = true");
-  expect_contains(main_source, "--borderless-window");
-  expect_contains(main_source, "--native-window");
-  expect_contains(main_source, "--no-borderless-window");
-  expect_contains(main_source, "--render-backend=vulkan");
-  expect_contains(main_source, "--render-backend=opengl");
-  expect_contains(main_source, "command_line.render_backend");
-  expect_contains(main_source, "command_line.borderless_window");
-  expect_contains(app_header, "struct AppOptions");
-  expect_contains(app_header, "bool borderless_window = true");
-  expect_contains(app_header,
-                  "RendererBackend render_backend = RendererBackend::Vulkan");
-  expect_contains(app_header,
-                  "handle_window_chrome_action(WindowChromeAction action)");
-  expect_contains(app_source, ".borderless = options.borderless_window");
-  expect_contains(app_source, ".backend = options.render_backend");
-  expect_contains(app_source, "window_.process_chrome_event(event)");
-  expect_contains(app_source, "ui_.take_window_chrome_action()");
-  expect_contains(app_source, "window_.refresh_native_chrome()");
-  expect_contains(app_source, "window_.minimize()");
-  expect_contains(app_source, "window_.toggle_maximize_restore()");
-  expect_contains(app_source, "window_.can_render_frames()");
-  expect_contains(app_source, "render_frame(frame_clock_.tick())");
-  expect_contains(app_source, "render_system_.begin_frame()");
-  expect_contains(app_source,
-                  "if (window_.native_chrome_interaction_active()) {");
-  expect_contains(app_source, "return false;");
-  expect_contains(app_source, "if (!window_.chrome_resize_active())");
-  expect_missing(app_source, "!window_.chrome_resize_active() && "
-                             "!window_.native_chrome_interaction_active()");
-  expect_contains(app_source, "window_.native_chrome_interaction_active()");
-  expect_contains(app_source, "wait_until_next_frame()");
-  expect_contains(app_source, "platform_wait_for_event_timeout(wait_ms)");
-  expect_contains(platform_header, "struct PlatformWindowOptions");
-  expect_contains(platform_header, "kPlatformWindowMinimumWidth = 800");
-  expect_contains(platform_header, "kPlatformWindowMinimumHeight = 600");
-  expect_contains(platform_header, "refresh_native_chrome()");
-  expect_contains(platform_header, "platform_window_can_render_frames");
-  expect_contains(platform_header, "can_render_frames() const");
-  expect_contains(platform_header,
-                  "note_frame_presented(std::uint32_t framebuffer_width,");
-  expect_contains(platform_header, "PlatformWindowChromeHitTest");
-  expect_contains(platform_header, "platform_window_chrome_hit_test_result");
-  expect_contains(platform_header, "PlatformWindowChromeResizeDrag");
-  expect_contains(platform_header, "process_chrome_event");
-  expect_contains(platform_header, "release_chrome_resize_cursor");
-  expect_contains(platform_header, "native_chrome_message_active() const");
-  expect_contains(platform_header, "native_live_resize_frame_active() const");
-  expect_contains(platform_header, "native_chrome_interaction_active() const");
-  expect_contains(platform_header,
-                  "using LiveResizeFrameCallback = std::function<bool()>");
-  expect_contains(platform_header, "schedule_live_resize_frame_callback");
-  expect_contains(platform_header, "dispatch_live_resize_frame_callback");
-  expect_contains(platform_header, "native_chrome_message_depth_");
-  expect_contains(platform_header, "native_move_size_active_");
-  expect_contains(platform_header, "native_live_resize_frame_active_");
-  expect_contains(platform_header, "live_resize_frame_callback_pending_");
-  expect_contains(platform_header, "live_resize_frame_pending_width_pixels_");
-  expect_contains(platform_header, "prime_live_resize_frame_coalescing");
-  expect_contains(platform_header, "apply_native_custom_chrome_styles");
-  expect_missing(platform_source, "SDL_WINDOW_BORDERLESS");
-  expect_contains(platform_source, "install_native_chrome_cursor_hook();");
-  expect_contains(platform_source, "apply_native_custom_chrome_styles();");
-  expect_contains(platform_source, "WS_CAPTION");
-  expect_contains(platform_source, "WS_THICKFRAME");
-  expect_contains(platform_source, "SWP_FRAMECHANGED");
-  expect_contains(
-      platform_source,
-      "GetClientRect(static_cast<HWND>(native_chrome_window_handle_),");
-  expect_contains(platform_source, "SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH");
-  expect_contains(platform_source,
-                  "SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, \"1\")");
-  expect_contains(platform_source,
-                  "SDL_SetWindowMinimumSize(window_, "
-                  "kPlatformWindowMinimumWidth, kPlatformWindowMinimumHeight)");
-  expect_contains(platform_source, "SDL_WINDOW_INPUT_FOCUS");
-  expect_contains(platform_source, "SDL_HITTEST_DRAGGABLE");
-  expect_contains(platform_source, "SDL_HITTEST_RESIZE_TOPLEFT");
-  expect_contains(platform_source, "SDL_CaptureMouse");
-  expect_contains(platform_source, "SDL_GetGlobalMouseState");
-  expect_contains(platform_source, "SDL_SetWindowPosition");
-  expect_contains(platform_source, "SDL_SetWindowSize");
-  expect_contains(platform_source, "SDL_MinimizeWindow");
-  expect_contains(platform_source, "SDL_SyncWindow failed after minimize");
-  expect_contains(platform_source, "SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN");
-  expect_contains(platform_source, "SDL occlusion can remain stale");
-  expect_contains(platform_source, "SDL_MaximizeWindow");
-  expect_contains(platform_source, "SDL_RestoreWindow");
-  expect_contains(platform_source, "HTLEFT");
-  expect_contains(platform_source, "HTTOPRIGHT");
-  expect_contains(platform_source, "WM_SETCURSOR");
-  expect_contains(platform_source, "chrome_resize_cursor_active_");
-  expect_contains(platform_source, "SetWindowLongPtrW");
-  expect_contains(platform_source, "GWLP_WNDPROC");
-  expect_contains(platform_source, "IDC_SIZEWE");
-  expect_contains(platform_source, "case SDL_HITTEST_DRAGGABLE:");
-  expect_contains(platform_source, "return HTCAPTION;");
-  expect_contains(platform_source,
-                  "is_native_chrome_system_hit(SDL_HitTestResult hit)");
-  expect_contains(platform_source, "native_chrome_window_handle_ != nullptr");
-  expect_contains(platform_source, "is_native_chrome_system_hit(hit)");
-  expect_contains(platform_source,
-                  "return native_chrome_hit_test_code_for_hit(hit);");
-  expect_contains(platform_source, "message == WM_ERASEBKGND");
-  expect_contains(platform_source, "return 1;");
-  expect_contains(platform_source, "message == WM_PAINT");
-  expect_contains(platform_source,
-                  "live_resize_frame_paint_scheduled_ = false");
-  expect_contains(platform_source, "BeginPaint(hwnd, &paint)");
-  expect_contains(platform_source, "EndPaint(hwnd, &paint)");
-  expect_contains(platform_source, "NativeChromeMessageScope");
-  expect_contains(platform_source, "native_move_size_active_ = true");
-  expect_contains(platform_source,
-                  "message == WM_SIZE && native_move_size_active_");
-  expect_contains(platform_source, "redraw_native_resize_frame");
-  expect_contains(platform_source, "const bool redraw_native_resize_frame =");
-  expect_contains(platform_source,
-                  "(message != WM_SIZE || w_param != SIZE_MINIMIZED)");
-  expect_missing(platform_source, "const bool redraw_native_resize_frame =\n   "
-                                  "         (message != WM_SIZE "
-                                  "|| w_param != SIZE_MINIMIZED) &&\n          "
-                                  "  (message == WM_SIZE ||\n   "
-                                  "                 message == WM_SIZING");
-  expect_missing(platform_source, "message == WM_WINDOWPOSCHANGED ||\n         "
-                                  "           message == WM_DPICHANGED");
-  expect_contains(platform_source, "prime_live_resize_frame_coalescing();");
-  expect_missing(
-      platform_source,
-      "native_move_size_active_ &&\n            native_resize_active_ &&");
-  expect_missing(platform_source, "kNativeMoveSizeRedrawTimerId");
-  expect_missing(platform_source, "SetTimer(");
-  expect_missing(platform_source, "KillTimer(");
-  expect_missing(platform_source, "message == WM_TIMER");
-  expect_contains(platform_source, "kLiveResizeFrameMessage = WM_APP");
-  expect_contains(platform_source, "message == kLiveResizeFrameMessage");
-  expect_contains(platform_source,
-                  "PostMessageW(hwnd, kLiveResizeFrameMessage");
-  expect_contains(platform_source, "owner.native_chrome_message_depth_ == 0");
-  expect_contains(platform_source, "owner.live_resize_frame_callback_pending_");
-  expect_contains(platform_source,
-                  "owner.schedule_live_resize_frame_callback()");
-  expect_contains(platform_source, "native_chrome_message_depth_ > 0");
-  expect_contains(
-      platform_source,
-      "RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_NOERASE)");
-  expect_missing(platform_source, "RDW_UPDATENOW");
-  expect_missing(platform_source,
-                 "dispatch_live_resize_frame_callback();\n            return;");
-  expect_contains(platform_source, "native_live_resize_frame_active_ = true");
-  expect_contains(platform_source, "if (live_resize_frame_callback_())");
-  expect_contains(platform_source,
-                  "note_frame_presented(pending_width, pending_height)");
-  expect_contains(platform_source,
-                  "live_resize_frame_pending_width_pixels_ = pending_width");
-  expect_contains(platform_source,
-                  "live_resize_frame_pending_height_pixels_ = pending_height");
-  expect_contains(
-      platform_source,
-      "native_move_size_active_ || native_chrome_message_depth_ > 0");
-  expect_missing(
-      platform_source,
-      "void PlatformWindow::prime_live_resize_frame_coalescing() {\n    "
-      "refresh_pixel_size();\n    live_resize_frame_size_valid_ = true;");
-  expect_contains(platform_source,
-                  "SetCursor(LoadCursor(nullptr, IDC_ARROW));");
-  expect_contains(platform_source,
-                  "message == WM_SETCURSOR && hit == SDL_HITTEST_DRAGGABLE");
-  expect_contains(platform_source, "clear_native_move_size_state");
-  expect_missing(platform_source,
-                 "(native_resize_active_ || IsZoomed(hwnd) != FALSE)");
-  expect_contains(platform_source, "DWMWA_WINDOW_CORNER_PREFERENCE");
-  expect_contains(platform_source, "DWMWA_BORDER_COLOR");
-  expect_contains(platform_source, "DWMWA_COLOR_DEFAULT");
-  expect_contains(platform_source, "RegGetValueW");
-  expect_contains(platform_source, "ColorPrevalence");
-  expect_contains(platform_source, "AccentColor");
-  expect_missing(platform_source, "SDL_SetWindowHitTest");
-  expect_missing(platform_source, "WM_NCLBUTTONDOWN");
-  expect_contains(root_c_make, "Dwmapi");
-  expect_contains(root_c_make, "Advapi32");
-  expect_contains(ui_system_header, "enum class WindowChromeAction");
-  expect_contains(ui_system_header, "take_window_chrome_action()");
-  expect_contains(ui_system_header, "needs_continuous_rendering() const");
-  expect_contains(ui_system_header,
-                  "std::optional<WindowChromeAction> pending_chrome_action_");
-  expect_contains(ui_system_source,
-                  "viewport_panel_->needs_continuous_rendering()");
-  expect_contains(
-      ui_system_source,
-      "chrome_icon_button(\"minimize\", WindowChromeAction::Minimize");
-  expect_contains(ui_system_source,
-                  "chrome_icon_button(\"restore\", "
-                  "WindowChromeAction::ToggleMaximizeRestore");
-  expect_contains(ui_system_source,
-                  "chrome_icon_button(\"close\", WindowChromeAction::Close");
-  expect_contains(ui_system_source,
-                  "pending_chrome_action_ = WindowChromeAction::Close");
-}
+  expect_contains(main_source,
+                  "QStyleFactory::create(QStringLiteral(\"Fusion\"))");
+  expect_contains(main_source, "QApplication::setStyle(fusion_style)");
+  expect_contains(ui_source, "std::make_unique<QMainWindow>()");
+  expect_contains(ui_source,
+                  "main_window_->setMinimumSize(kPlatformWindowMinimumWidth,");
+  expect_contains(ui_source, "main_window_->setCentralWidget(viewport_panel_)");
+  expect_missing(ui_source, "Qt::FramelessWindowHint");
+  expect_missing(ui_source, "setWindowFlags(");
+  expect_contains(window_placement_header,
+                  "kPlatformWindowMinimumWidth = 800");
+  expect_contains(window_placement_header,
+                  "kPlatformWindowMinimumHeight = 600");
 
-TEST(WindowGuardrailTests, BorderlessMaximizeUsesMonitorWorkArea) {
-  const std::string platform_source =
-      read_source_file("src/platform/platform_window.cpp");
-
-  expect_contains(platform_source, "native_monitor_work_area");
-  expect_contains(platform_source,
-                  "apply_borderless_chrome_maximized_work_area");
-  expect_contains(platform_source,
-                  "apply_borderless_chrome_maximized_client_area");
-  expect_contains(platform_source, "WM_GETMINMAXINFO");
-  expect_contains(platform_source, "WM_NCCALCSIZE");
-  expect_contains(platform_source, "NCCALCSIZE_PARAMS");
-  expect_contains(platform_source, "ShowWindow(hwnd, SW_MAXIMIZE)");
-  expect_contains(platform_source, "ShowWindow(hwnd, SW_RESTORE)");
-  expect_contains(platform_source,
-                  "MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)");
-  expect_contains(platform_source, "GetMonitorInfoW(monitor, &monitor_info)");
-  expect_contains(platform_source, "monitor_info.rcWork");
-  expect_contains(platform_source, "monitor_info.rcMonitor");
-  expect_contains(
-      platform_source,
-      "min_max_info.ptMaxPosition.x = work_area.left - monitor_area.left");
-  expect_contains(
-      platform_source,
-      "min_max_info.ptMaxSize.y = work_area.bottom - work_area.top");
-  expect_contains(platform_source,
-                  "min_max_info.ptMaxTrackSize.y = min_max_info.ptMaxSize.y");
-  expect_contains(platform_source, "GetSystemMetricsForDpi(SM_CXSIZEFRAME");
-  expect_contains(platform_source, "GetSystemMetricsForDpi(SM_CXPADDEDBORDER");
-  expect_contains(platform_source, "params.rgrc[0] = area->work");
-  expect_contains(platform_source, "message == WM_SIZE");
-  expect_contains(platform_source, "message == WM_SIZING");
-  expect_missing(platform_source, "message == WM_SIZING ||\n                   "
-                                  " message == WM_WINDOWPOSCHANGED");
-  expect_missing(platform_source, "message == WM_MOVING");
-  expect_missing(platform_source, "message == WM_WINDOWPOSCHANGED");
-  expect_contains(platform_source, "message == WM_EXITSIZEMOVE");
-  expect_contains(platform_source, "request_live_resize_frame();");
-  expect_contains(platform_source, "request_live_resize_frame(true)");
-  expect_missing(platform_source, "constrainBorderlessChromeMaximizedFrame");
-  expect_missing(
-      platform_source,
-      "SDL_SyncWindow failed after borderless maximize work-area constraint");
-  expect_missing(platform_source,
-                 "message == WM_WINDOWPOSCHANGED && IsZoomed(hwnd) != FALSE");
-  expect_contains(platform_source,
-                  "min_max_info.ptMinTrackSize.x = "
-                  "std::max<LONG>(min_max_info.ptMinTrackSize.x,");
-  expect_contains(platform_source, "kPlatformWindowMinimumWidth)");
+  for (std::string_view retired_source :
+       {"src/platform/platform_event.cpp",
+        "src/platform/platform_event.hpp",
+        "src/platform/platform_window.cpp",
+        "src/platform/platform_window.hpp",
+        "src/platform/sdl_event_utils.cpp",
+        "src/platform/sdl_event_utils.hpp",
+        "src/platform/sdl_input_adapter.cpp",
+        "src/platform/sdl_input_adapter.hpp"}) {
+    EXPECT_FALSE(std::filesystem::exists(source_path(retired_source)))
+        << retired_source;
+    expect_missing(root_c_make, std::string(retired_source));
+  }
 }
 
 TEST(WindowGuardrailTests,
@@ -2311,10 +2332,10 @@ TEST(WindowGuardrailTests,
       read_source_file("src/app/app_window_settings.hpp");
   const std::string app_settings_source =
       read_source_file("src/app/app_window_settings.cpp");
-  const std::string platform_header =
-      read_source_file("src/platform/platform_window.hpp");
-  const std::string platform_source =
-      read_source_file("src/platform/platform_window.cpp");
+  const std::string window_placement_header =
+      read_source_file("src/platform/window_placement.hpp");
+  const std::string window_placement_source =
+      read_source_file("src/platform/window_placement.cpp");
   const std::string ui_settings_source =
       read_source_file("src/ui/ui_settings.cpp");
   const std::string config_path_source =
@@ -2322,22 +2343,33 @@ TEST(WindowGuardrailTests,
 
   expect_contains(root_c_make, "src/core/user_config_paths.cpp");
   expect_contains(root_c_make, "src/app/app_window_settings.cpp");
+  expect_contains(root_c_make, "src/platform/window_placement.cpp");
+  expect_missing(root_c_make, "src/platform/platform_window.cpp");
   expect_contains(app_header, "AppWindowSettings window_settings_");
+  expect_contains(app_header, "apply_window_settings()");
   expect_contains(app_header, "save_window_settings()");
+  expect_contains(app_source, "#include <QGuiApplication>");
+  expect_contains(app_source, "#include <QMainWindow>");
+  expect_contains(app_source, "#include <QScreen>");
   expect_contains(app_source,
                   "AppWindowSettings::resolve_path(executable_dir)");
   expect_contains(app_source, "AppWindowSettings::load(window_settings_path_)");
-  expect_contains(
-      app_source,
-      "const std::optional<PlatformWindowPlacement> saved_placement");
-  expect_contains(app_source, "const PlatformWindowChromeFrame initial_frame");
   expect_contains(app_source,
-                  "std::max(kPlatformWindowMinimumWidth, initial_frame.width)");
-  expect_contains(
-      app_source,
-      "std::max(kPlatformWindowMinimumHeight, initial_frame.height)");
-  expect_contains(app_source, "window_.apply_placement(*saved_placement)");
-  expect_contains(app_source, "window_.placement()");
+                  "const std::optional<PlatformWindowPlacement> placement");
+  expect_contains(app_source, "QGuiApplication::screens()");
+  expect_contains(app_source, "screen->availableGeometry()");
+  expect_contains(app_source, "const PlatformWindowChromeFrame frame");
+  expect_contains(app_source,
+                  "platform_window_recover_frame_to_display_work_area(");
+  expect_contains(app_source,
+                  "std::max(kPlatformWindowMinimumWidth, frame.width)");
+  expect_contains(app_source,
+                  "std::max(kPlatformWindowMinimumHeight, frame.height)");
+  expect_contains(app_source, "window->setGeometry(frame.x, frame.y");
+  expect_contains(app_source, "window->showMaximized()");
+  expect_contains(app_source, "window->normalGeometry()");
+  expect_contains(app_source, "window->isMaximized()");
+  expect_contains(app_source, "window_settings_.set_placement(");
   expect_contains(app_source, "window_settings_.save(window_settings_path_)");
   expect_contains(app_settings_header,
                   "std::optional<PlatformWindowPlacement>");
@@ -2351,30 +2383,21 @@ TEST(WindowGuardrailTests,
                   "quader_user_config_directory(executable_dir)");
   expect_contains(config_path_source, "LOCALAPPDATA");
   expect_contains(config_path_source, "XDG_CONFIG_HOME");
-  expect_contains(platform_header, "struct PlatformWindowPlacement");
-  expect_contains(platform_header,
-                  "platform_window_chrome_resize_border_for_system_metrics");
-  expect_contains(platform_header,
-                  "platform_window_recover_frame_to_display_work_area");
-  expect_contains(platform_header,
-                  "std::optional<PlatformWindowPlacement> placement() const");
-  expect_contains(platform_header,
-                  "apply_placement(const PlatformWindowPlacement &placement)");
-  expect_contains(platform_header, "live_resize_frame_size_valid_");
-  expect_contains(platform_source, "GetSystemMetricsForDpi(SM_CXSIZEFRAME");
-  expect_contains(platform_source, "GetSystemMetricsForDpi(SM_CYSIZEFRAME");
-  expect_contains(platform_source,
-                  "GetWindowPlacement(hwnd, &native_placement)");
-  expect_contains(platform_source,
-                  "SetWindowPlacement(hwnd, &native_placement)");
-  expect_contains(platform_source, "WPF_RESTORETOMAXIMIZED");
-  expect_contains(platform_source, "SDL_GetDisplayUsableBounds");
-  expect_contains(platform_source,
-                  "platform_window_recover_frame_to_display_work_area");
-  expect_contains(platform_source, "WM_CANCELMODE");
-  expect_contains(platform_source, "WM_CAPTURECHANGED");
-  expect_contains(platform_source, "clear_native_move_size_state()");
-  expect_contains(platform_source, "request_live_resize_frame(true)");
+  expect_contains(window_placement_header, "struct PlatformWindowPlacement");
+  expect_contains(window_placement_header, "kPlatformWindowMinimumWidth");
+  expect_contains(window_placement_header, "kPlatformWindowMinimumHeight");
+  expect_contains(window_placement_header,
+                  "platform_window_recover_frame_to_display_work_area(");
+  expect_contains(window_placement_source,
+                  "std::span<const PlatformWindowChromeFrame> ");
+  expect_contains(window_placement_source, "intersection_area(");
+  expect_contains(window_placement_source, "clamp_origin(");
+  expect_contains(window_placement_source,
+                  "std::clamp(frame.width, kPlatformWindowMinimumWidth");
+  expect_missing(window_placement_header, "QWidget");
+  expect_missing(window_placement_header, "QWindow");
+  expect_missing(window_placement_source, "QScreen");
+  expect_missing(window_placement_source, "QGuiApplication");
 }
 
 TEST(DependencyLicenseGuardrailTests, AppThirdPartyManifestHasLicenseEvidence) {

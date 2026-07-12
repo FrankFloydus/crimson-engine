@@ -16,6 +16,8 @@ param(
 
     [int]$TimeoutSeconds = 30,
 
+    [int]$SettleMilliseconds = 3000,
+
     [switch]$AllowMissingLog
 )
 
@@ -32,7 +34,7 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 $exeFullPath = (Resolve-Path -LiteralPath $Exe).Path
 $exeDir = Split-Path -Parent $exeFullPath
-$process = Start-Process -FilePath $exeFullPath -ArgumentList "--borderless-window" -WorkingDirectory $exeDir -PassThru -WindowStyle Hidden
+$process = Start-Process -FilePath $exeFullPath -WorkingDirectory $exeDir -PassThru
 
 try {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -56,6 +58,15 @@ try {
         throw "Timed out waiting for the Quader window."
     }
 
+    if ($SettleMilliseconds -gt 0) {
+        Start-Sleep -Milliseconds $SettleMilliseconds
+        if ($process.HasExited) {
+            throw "Quader exited during the UI settle interval with code $($process.ExitCode)."
+        }
+        $process.Refresh()
+        $windowHandle = $process.MainWindowHandle
+    }
+
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
     Add-Type @"
@@ -66,6 +77,12 @@ public static class NativeWindowCapture {
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT {
         public int Left;
@@ -75,6 +92,10 @@ public static class NativeWindowCapture {
     }
 }
 "@
+
+    [void][NativeWindowCapture]::ShowWindow($windowHandle, 9)
+    [void][NativeWindowCapture]::SetForegroundWindow($windowHandle)
+    Start-Sleep -Milliseconds 500
 
     $rect = New-Object NativeWindowCapture+RECT
     if (-not [NativeWindowCapture]::GetWindowRect($windowHandle, [ref]$rect)) {

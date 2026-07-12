@@ -510,7 +510,7 @@ function Add-PathPlan {
         Add-BuildTarget "quader" "IBL resource changed"
         Add-BuildTarget "quader_guardrail_tests" "IBL resource changed"
         Add-BuildTarget "quader_tests" "IBL resource changed"
-        Add-GuardrailTestsFilter "BuildGuardrailTests.ImGuiRuntimeResourcesArePackagedWithRuntime:OopArchitectureGuardrailTests.SceneEnvironmentCatalogOwnsIblResourceContract" "verify IBL resource packaging and catalog contract"
+        Add-GuardrailTestsFilter "OopArchitectureGuardrailTests.SceneEnvironmentCatalogOwnsIblResourceContract" "verify IBL resource packaging and catalog contract"
         Add-QuaderTestsFilter "Render*:SceneRenderBridge*:AppStartupTests.*" "verify render environment behavior"
         return
     }
@@ -519,7 +519,7 @@ function Add-PathPlan {
         Add-BuildTarget "quader" "runtime resource changed"
         Add-BuildTarget "quader_guardrail_tests" "runtime resource changed"
         Add-BuildTarget "quader_tests" "runtime resource changed"
-        Add-GuardrailTestsFilter "BuildGuardrailTests.ImGuiRuntimeResourcesArePackagedWithRuntime:BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime" "verify runtime resource packaging"
+        Add-GuardrailTestsFilter "BuildGuardrailTests.QtWidgetsRuntimeAndLicenseEvidenceAreConfigured:BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime" "verify runtime resource packaging"
         Add-QuaderTestsFilter "UI*:Ui*:Viewport*:GroundGridMaterialTests.*:QuaderMeshMaterialTests.*" "verify runtime resource behavior"
         return
     }
@@ -624,8 +624,8 @@ function Add-PathPlan {
         Add-BuildTarget "quader_runtime" "UI source changed"
         Add-BuildTarget "quader_guardrail_tests" "UI source changed"
         Add-BuildTarget "quader_tests" "UI source changed"
-        Add-GuardrailTestsFilter "BuildGuardrailTests.ImGuiRuntimeResourcesArePackagedWithRuntime:BuildGuardrailTests.ImGuiShellViewportAndControlStylingStayVisible" "UI source-policy guardrails"
-        Add-QuaderTestsFilter "UI*:Ui*:Console*:Localization*:PlatformWindow*:Window*:Sdl*:Viewport*:NavigationGizmo*" "UI shell and viewport tests"
+        Add-GuardrailTestsFilter "BuildGuardrailTests.QtWidgetsRuntimeAndLicenseEvidenceAreConfigured:BuildGuardrailTests.ActiveAppAndUiUseQtWithoutSdlAdapters:BuildGuardrailTests.RuntimeUiUsesQtWidgetsFusionOnly:UiLayoutGuardrailTests.*" "UI source-policy guardrails"
+        Add-QuaderTestsFilter "UI*:Ui*:Console*:Localization*:QtInputAdapterTests.*:Viewport*" "UI shell and viewport tests"
         return
     }
 
@@ -642,8 +642,8 @@ function Add-PathPlan {
         Add-BuildTarget "quader_runtime" "app/platform source changed"
         Add-BuildTarget "quader_guardrail_tests" "app/platform source changed"
         Add-BuildTarget "quader_tests" "app/platform source changed"
-        Add-GuardrailTestsFilter "WindowGuardrailTests.*" "app/platform source-policy guardrails"
-        Add-QuaderTestsFilter "AppFrameClockTests.*:AppStartupTests.*:FatalErrorHandlerTests.*:PlatformWindowChromeTests.*:SdlEventUtilsTests.*" "app/platform behavior tests"
+        Add-GuardrailTestsFilter "BuildGuardrailTests.AppLoopRunsOnQApplicationEvents:BuildGuardrailTests.QtShellUsesMainWindowDocksAndStableNames:BuildGuardrailTests.RuntimeUiUsesQtWidgetsFusionOnly:WindowGuardrailTests.WindowPlacementPersistenceAndResizeRecoveryStayOwned" "app/platform source-policy guardrails"
+        Add-QuaderTestsFilter "AppFrameClockTests.*:AppStartupTests.*:FatalErrorHandlerTests.*:QtInputAdapterTests.*" "app/platform behavior tests"
         return
     }
 

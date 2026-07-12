@@ -7,7 +7,9 @@
 #include "render/mesh_renderable_cache.hpp"
 
 #include "diagnostics/profile.hpp"
+#include "render/material_binding_service.hpp"
 #include "render/render_layers.hpp"
+#include "viewport/viewport_settings.hpp"
 
 #include <utility>
 
@@ -72,6 +74,8 @@ void MeshRenderableCache::shutdown() {
     destroy_proxy_map(*factory_, shaded_mesh_proxies_);
     destroy_proxy_map(*factory_, overlay_depth_mesh_proxies_);
     destroy_detached_proxy_vector(*factory_, retired_mesh_proxies_);
+    surface_grid_signature_ = 0u;
+    surface_grid_dirty_ = true;
     factory_ = nullptr;
 }
 
@@ -113,6 +117,7 @@ void MeshRenderableCache::sync_mesh(const RenderSceneMeshRecord &mesh) {
         kViewportOverlayDepthChannel);
     overlay_depth_mesh_proxies_.emplace(mesh.entity_id,
                                         std::move(overlay_depth_proxy));
+    surface_grid_dirty_ = true;
     return;
   }
 
@@ -140,10 +145,18 @@ void MeshRenderableCache::update_surface_grid(
     return;
   }
 
+  const std::uint64_t signature =
+      mesh_surface_grid_signature(grid_world_spacing, settings);
+  if (!surface_grid_dirty_ && surface_grid_signature_ == signature) {
+    return;
+  }
+
   update_surface_grid_proxy_map(*factory_, rendered_mesh_proxies_,
                                 grid_world_spacing, settings);
   update_surface_grid_proxy_map(*factory_, shaded_mesh_proxies_,
                                 grid_world_spacing, settings);
+  surface_grid_signature_ = signature;
+  surface_grid_dirty_ = false;
 }
 
 void MeshRenderableCache::remove(EntityId entity_id) {

@@ -16,8 +16,8 @@ specific subtree being edited.
 ## Project Overview
 
 - Quader is a native standalone Windows polygon modeling editor written in C++ with CMake and vcpkg.
-- The app shell uses SDL3, ImGui, Filament, native Windows integration, QDR project/document IO,
-  a modeling runtime, a scene/asset document model, viewport tools, public editor APIs, examples,
+- The app shell uses Qt Widgets, Filament, native Windows integration, QDR project/document IO, a
+  modeling runtime, a scene/asset document model, viewport tools, public editor APIs, examples,
   and GoogleTest-based headless verification.
 - The current product remains the native app. The active architecture path is to add a new
   app-owned portable modeling core under `src/sdk/core/modeling` and progressively route modeling
@@ -45,7 +45,7 @@ Quader follows one deterministic direction:
 The portable modeling core owns mesh documents, polygon operations, operation results, typed IDs,
 selection remapping, validation, portable QDR document IO, modeling sessions, preview transactions,
 undo/redo for modeling workflows, dirty flags, and renderer-neutral snapshots. Host adapters own
-SDL, ImGui, Filament, Win32, native file dialogs, project sessions, app scene entities, material
+Qt Widgets, Filament, Win32, native file dialogs, project sessions, app scene entities, material
 assets, command palette routing, viewport panels, and platform windows.
 
 Use `architecture-review.md` for the active migration plan. Treat it as an execution plan, not a
@@ -73,10 +73,10 @@ discussion document.
   binding, overlays, viewport rendering, and renderer-owned performance stats.
 - `src/viewport`: Toolkit-neutral viewport state, semantic input routing, shortcut resolution,
   viewport camera/navigation, and host viewport contract adapters.
-- `src/ui`: ImGui presentation, panels, menus, settings surfaces, localization use, and UI input
-  translation. UI does not own modeling, scene, asset, render, or command truth.
-- `src/platform`: SDL and Windows platform integration, native window behavior, dialogs, input
-  adapters, and fatal error presentation.
+- `src/ui`: Qt Widgets presentation, panels, menus, settings surfaces, localization use, and UI
+  input translation. UI does not own modeling, scene, asset, render, or command truth.
+- `src/platform`: Windows platform integration, native dialogs, support utilities, and fatal error
+  presentation. Qt application and window lifecycle stay in `src/app` and `src/ui`.
 - `resources`: Runtime resources, localization, icons, materials, generated Filament assets, and
   packaged UI assets.
 - `tests`: GoogleTest coverage and guardrails. Test ownership follows the behavior being protected.
@@ -127,7 +127,8 @@ The new portable modeling SDK is first-party source inside this repo. It is not 
 The SDK core must:
 
 - build without the native app executable;
-- build without SDL3, ImGui, Filament, Win32 app shell, native dialogs, app resources, and UI code;
+- build without Qt, SDL3, ImGui, Filament, Win32 app shell, native dialogs, app resources, and UI
+  code;
 - expose a single umbrella include rooted at `quader/modeling/modeling.hpp`;
 - use `quader::modeling` names;
 - expose structured `Result<T>`, structured errors, typed generational IDs, dirty flags,
@@ -198,17 +199,26 @@ files add local ownership and verification notes only.
   adding new UI-specific logic.
 - Do not put editor mutations directly in panels when a public API, command service, editor
   service, or SDK owner exists.
-- Keep ImGui and SDL at the UI/platform boundary. Convert raw events into semantic viewport input
-  before lower layers see them.
+- Keep Qt Widgets and raw Qt events at the UI boundary. Convert raw events through the Qt input
+  adapter into canonical Quader input and semantic viewport frames before lower layers see them.
+- The native shell uses `QApplication`, `QMainWindow`, `QDockWidget`, and the stock Qt `Fusion`
+  style together with `fusion_style->standardPalette()`. Do not add QSS, app-authored global
+  palettes, custom UI fonts, custom title-bar chrome, or other theme overrides. A local
+  `QPalette::Button` role is allowed only for semantic color-swatch buttons, and semantic X/Y/Z
+  labels may set only their local `QPalette::WindowText` role through the shared Qt axis-color
+  helper; Fusion still draws every complete native control state.
+- The viewport workspace is one central Qt panel with one to four embedded panes. Each pane hosts a
+  native child `QWindow` Filament surface; `ViewportWorkspaceService` remains the state owner.
 - Text, buttons, icons, and settings controls must remain scannable, localized, and consistent with
   the existing native editor shell.
 
 ## Viewport And Input Rules
 
-- `QuaderKeybindingService`, command IDs, command registry, viewport shortcut descriptors, SDL
-  input adapter, and `ViewportInputRouter` are the source-of-truth map for Quader input.
+- `QuaderKeybindingService`, command IDs, command registry, viewport shortcut descriptors,
+  `src/ui/qt_input_adapter.*`, and `ViewportInputRouter` are the source-of-truth map for Quader
+  input.
 - Do not bypass these owners with ad hoc key checks in UI panels or tools.
-- Viewport navigation and tools consume semantic input frames, not raw SDL/ImGui events.
+- Viewport navigation and tools consume semantic input frames, not raw Qt events.
 - Shortcut contexts remain explicit. Global commands, viewport commands, tool activation, text
   input focus, and navigation capture must not overlap silently.
 - For viewport tool changes, cover navigation suppression, hover, selection fallback, gizmo
@@ -372,9 +382,11 @@ pixel output until a render readback harness exists.
 ## Manual Smoke Checklist
 
 - Vulkan backend initializes.
-- Main SDL window opens without a separate console window.
-- Native ImGui shell appears with custom chrome, top menu, docked panels, viewport, and status bar.
-- The viewport texture renders app-created polygon meshes with the default material.
+- The Qt `QMainWindow` opens without a separate console window and uses the stock `Fusion` style.
+- The native Qt shell shows its menu bar, docked panels, central viewport workspace, and status bar
+  with standard window chrome.
+- Every visible native-child Filament viewport surface renders app-created polygon meshes with the
+  default material.
 - Window resize keeps the viewport texture visible without stale or blank UI content.
 - MMB orbits, Shift+MMB pans, mouse wheel zooms.
 

@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "platform/platform_window.hpp"
+#include "platform/window_placement.hpp"
 
 #include <filesystem>
 #include <optional>

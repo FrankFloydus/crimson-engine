@@ -7,6 +7,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 
@@ -42,7 +43,19 @@ inline std::uint8_t normalized_to_byte(float value) {
 }
 
 inline std::uint8_t srgb_byte_to_linear_byte(std::uint8_t value) {
-  return normalized_to_byte(srgb_to_linear(static_cast<float>(value) / 255.0f));
+  // Overlay mesh generation converts the same small set of packed colors for
+  // every line and point on every camera update.  Preserve the exact byte
+  // conversion while paying the three pow() calls only once per possible
+  // channel value instead of once per generated vertex batch.
+  static const std::array<std::uint8_t, 256> kLookup = [] {
+    std::array<std::uint8_t, 256> values{};
+    for (std::size_t index = 0; index < values.size(); ++index) {
+      values[index] = normalized_to_byte(
+          srgb_to_linear(static_cast<float>(index) / 255.0f));
+    }
+    return values;
+  }();
+  return kLookup[value];
 }
 
 inline std::uint32_t rgba8_srgb_to_linear(std::uint32_t rgba) {

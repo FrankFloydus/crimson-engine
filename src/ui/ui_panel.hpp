@@ -75,7 +75,7 @@ inline const char *ui_panel_localization_key(UIPanelId id) {
 }
 
 /**
- * Owns UI Panel behavior within the ImGui editor presentation layer.
+ * Owns UI Panel behavior within the Qt editor presentation layer.
  */
 class UIPanel {
 public:

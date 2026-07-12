@@ -1,0 +1,40 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+#pragma once
+
+#include <span>
+
+namespace quader {
+
+inline constexpr int kPlatformWindowMinimumWidth = 800;
+inline constexpr int kPlatformWindowMinimumHeight = 600;
+
+/// Toolkit-neutral persisted desktop window rectangle.
+struct PlatformWindowChromeFrame {
+  int x = 0;
+  int y = 0;
+  int width = 1;
+  int height = 1;
+};
+
+/// Persisted normal window placement plus maximized state.
+struct PlatformWindowPlacement {
+  PlatformWindowChromeFrame normal_frame{0, 0, 1600, 960};
+  bool maximized = false;
+};
+
+/**
+ * Clamps a persisted window rectangle to the visible desktop work areas.
+ * The first work area is the fallback for a rectangle that no longer
+ * intersects any connected display.
+ */
+[[nodiscard]] PlatformWindowChromeFrame
+platform_window_recover_frame_to_display_work_area(
+    PlatformWindowChromeFrame frame,
+    std::span<const PlatformWindowChromeFrame> display_work_areas);
+
+} // namespace quader

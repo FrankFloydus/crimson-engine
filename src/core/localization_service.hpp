@@ -55,9 +55,6 @@ public:
     [[nodiscard]] std::string
     locale_display_name(std::string_view locale) const;
     [[nodiscard]] std::string text(std::string_view key, std::string_view fallback) const;
-    [[nodiscard]] std::string imgui_label(std::string_view key,
-                                          std::string_view stable_id,
-                                          std::string_view fallback) const;
     [[nodiscard]] std::string format(std::string_view key,
             std::string_view fallback,
             std::initializer_list<std::pair<std::string_view, std::string_view>> replacements) const;

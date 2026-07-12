@@ -11,10 +11,34 @@
 #include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_cache.hpp"
 
+#include <filament/TransformManager.h>
+
 namespace quader {
 namespace {
 
 constexpr std::size_t kRetiredMeshProxyDestroyBudgetPerSync = 1u;
+
+/**
+ * Commits a Filament local-transform transaction on every exit path.
+ */
+class LocalTransformTransaction final {
+public:
+  explicit LocalTransformTransaction(filament::TransformManager &transforms)
+      : transforms_(transforms) {
+    transforms_.openLocalTransformTransaction();
+  }
+
+  LocalTransformTransaction(const LocalTransformTransaction &) = delete;
+  LocalTransformTransaction &
+  operator=(const LocalTransformTransaction &) = delete;
+
+  ~LocalTransformTransaction() {
+    transforms_.commitLocalTransformTransaction();
+  }
+
+private:
+  filament::TransformManager &transforms_;
+};
 
 } // namespace
 
@@ -97,8 +121,66 @@ bool SceneRenderSyncService::render_asset_revisions_changed(
   return false;
 }
 
+bool SceneRenderSyncService::can_sync_transforms_only(
+    const RenderSceneSnapshot &snapshot) const {
+  if (!snapshot.dirty.transforms_changed ||
+      snapshot.dirty.visibility_changed ||
+      snapshot.dirty.mesh_bindings_changed ||
+      snapshot.dirty.render_components_changed ||
+      snapshot.dirty.assets_changed) {
+    return false;
+  }
+
+  for (const RenderSceneMeshRecord &mesh : snapshot.meshes) {
+    if (mesh.mesh_dirty || mesh.material_dirty || mesh.binding_dirty) {
+      return false;
+    }
+    if (mesh.renderable()) {
+      if (mesh_cache_->needs_rebuild(mesh)) {
+        return false;
+      }
+    } else if (mesh_cache_->contains(mesh.entity_id)) {
+      return false;
+    }
+  }
+  for (const RenderSceneLightRecord &light : snapshot.lights) {
+    if (light.light_dirty || light_cache_.needs_rebuild(light)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void SceneRenderSyncService::sync_dirty_transforms(
+    const RenderSceneSnapshot &snapshot) {
+  QDR_PROFILE_FUNCTION();
+  {
+    filament::TransformManager &transforms = engine_->getTransformManager();
+    LocalTransformTransaction transaction(transforms);
+    for (const RenderSceneMeshRecord &mesh : snapshot.meshes) {
+      if (mesh.renderable() && mesh.transform_dirty) {
+        QDR_PROFILE_SCOPE("Scene render sync dirty mesh transform");
+        mesh_cache_->sync_mesh(mesh);
+      }
+    }
+  }
+
+  for (const RenderSceneLightRecord &light : snapshot.lights) {
+    if (light.transform_dirty) {
+      QDR_PROFILE_SCOPE("Scene render sync dirty light transform");
+      light_cache_.sync_light(light);
+    }
+  }
+}
+
 void SceneRenderSyncService::rebuild(const RenderSceneSnapshot &snapshot) {
     QDR_PROFILE_FUNCTION();
+    if (can_sync_transforms_only(snapshot)) {
+      QDR_PROFILE_SCOPE("Scene render transform-only sync");
+      sync_dirty_transforms(snapshot);
+      return;
+    }
+
     for (const RenderSceneMeshRecord &mesh_entry : snapshot.meshes) {
       QDR_PROFILE_SCOPE("Scene render sync mesh entry");
       if (!mesh_entry.renderable()) {

@@ -6,36 +6,49 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "core/types.hpp"
-#include "ui/ui_dock_panel.hpp"
-
+#include <QWidget>
+#include <cstdint>
 #include <memory>
 
 namespace quader {
 
-class SceneDocument;
+struct UIContext;
 
 /**
- * Owns Outliner Panel behavior within the ImGui editor presentation layer.
+ * Describes how a local scene property is presented in the Outliner.
+ * Inherited means an ancestor changes the property's effective value.
  */
-class OutlinerPanel final : public UIDockPanel {
-public:
-    OutlinerPanel();
-    ~OutlinerPanel() override;
+enum class OutlinerPropertyState {
+  Off,
+  On,
+  Inherited,
+};
 
-    UIPanelId id() const override { return UIPanelId::Outliner; }
+[[nodiscard]] OutlinerPropertyState
+outliner_visibility_property_state(bool visible,
+                                   bool effectively_visible) noexcept;
+[[nodiscard]] OutlinerPropertyState
+outliner_lock_property_state(bool locked,
+                             bool effectively_locked) noexcept;
+[[nodiscard]] bool outliner_selection_sync_required(
+    bool model_rebuilt, bool cached_revision_valid,
+    std::uint64_t cached_selection_revision,
+    std::uint64_t current_selection_revision) noexcept;
+
+/**
+ * Presents the scene hierarchy and routes scene-selection intent through the
+ * public editor API.
+ */
+class OutlinerPanel final : public QWidget {
+public:
+  explicit OutlinerPanel(QWidget *parent = nullptr);
+  ~OutlinerPanel() override;
+
+  void refresh(UIContext &context);
 
 private:
-    struct TreeCache;
-
-    float minimum_width(const UIContext &context) const override;
-    ImVec2 panel_window_padding(const UIContext &context) const override;
-    ImGuiWindowFlags window_flags(const UIContext &context) const override;
-    void draw_content(UIContext &context) override;
-    const TreeCache &refresh_tree_cache(const SceneDocument &document);
-
-    EntityId outliner_anchor_ = kInvalidEntityId;
-    std::unique_ptr<TreeCache> tree_cache_;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 } // namespace quader

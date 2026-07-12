@@ -37,10 +37,6 @@ constexpr float kMaxVertexGrowth = 12.0f;
 constexpr float kMinPickRadius = 0.001f;
 constexpr float kMaxPickRadius = 2.0f;
 
-constexpr ViewportSettingColor color(float r, float g, float b, float a = 1.0f) {
-    return {r, g, b, a};
-}
-
 constexpr ViewportSettingColor rgba8(std::uint32_t rgba) {
     return {
             static_cast<float>((rgba >> 24) & 0xffu) / 255.0f,
@@ -77,9 +73,9 @@ const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kCo
         {ViewportColorSettingId::GridMajor, ViewportSettingsSectionId::Grid, "Major", key("GridMajorColor"), kDefaultViewportGridMajorColor},
         {ViewportColorSettingId::MeshGridMinor, ViewportSettingsSectionId::Grid, "Mesh Minor", key("MeshGridMinorColor"), kDefaultViewportMeshGridMinorColor},
         {ViewportColorSettingId::MeshGridMajor, ViewportSettingsSectionId::Grid, "Mesh Major", key("MeshGridMajorColor"), kDefaultViewportMeshGridMajorColor},
-        {ViewportColorSettingId::GridXAxis, ViewportSettingsSectionId::Grid, "X QAxis", key("GridXAxisColor"), color(1.0f, 0.239f, 0.0f, 0.72f)},
-        {ViewportColorSettingId::GridYAxis, ViewportSettingsSectionId::Grid, "Y QAxis", key("GridYAxisColor"), color(0.29f, 0.58f, 0.0f, 0.0f)},
-        {ViewportColorSettingId::GridZAxis, ViewportSettingsSectionId::Grid, "Z QAxis", key("GridZAxisColor"), color(0.059f, 0.612f, 1.0f, 0.72f)},
+        {ViewportColorSettingId::GridXAxis, ViewportSettingsSectionId::Grid, "X QAxis", key("GridXAxisColor"), kDefaultViewportGridXAxisColor},
+        {ViewportColorSettingId::GridYAxis, ViewportSettingsSectionId::Grid, "Y QAxis", key("GridYAxisColor"), kDefaultViewportGridYAxisColor},
+        {ViewportColorSettingId::GridZAxis, ViewportSettingsSectionId::Grid, "Z QAxis", key("GridZAxisColor"), kDefaultViewportGridZAxisColor},
         {ViewportColorSettingId::SelectionFace, ViewportSettingsSectionId::Selection, "Face Fill", key("SelectionFaceColor"), abgr8(kOverlaySelectionFaceColor)},
         {ViewportColorSettingId::SelectionWire, ViewportSettingsSectionId::Selection, "Wire", key("SelectionWireColor"), abgr8(kOverlaySelectionWireColor)},
         {ViewportColorSettingId::SourceWire, ViewportSettingsSectionId::Overlay, "Source Wire", key("SourceWireColor"), abgr8(kOverlaySourceWireColor)},
@@ -209,11 +205,6 @@ ViewportSettingColor sanitize_color(ViewportSettingColor value,
   };
 }
 
-bool colors_approximately(ViewportSettingColor a, ViewportSettingColor b) {
-  return std::fabs(a.r - b.r) <= 0.001f && std::fabs(a.g - b.g) <= 0.001f &&
-         std::fabs(a.b - b.b) <= 0.001f && std::fabs(a.a - b.a) <= 0.001f;
-}
-
 std::uint8_t color_byte(float value) {
   return static_cast<std::uint8_t>(
       std::clamp(std::round(value * 255.0f), 0.0f, 255.0f));
@@ -278,6 +269,14 @@ viewport_bool_settings() {
   return kBoolSettings;
 }
 
+bool viewport_setting_colors_approximately(ViewportSettingColor left,
+                                           ViewportSettingColor right) {
+  return std::fabs(left.r - right.r) <= 0.001f &&
+         std::fabs(left.g - right.g) <= 0.001f &&
+         std::fabs(left.b - right.b) <= 0.001f &&
+         std::fabs(left.a - right.a) <= 0.001f;
+}
+
 bool viewport_grid_snap_active(const ViewportSettings &settings,
                                bool temporary_toggle_pressed) {
   return settings.bool_value(ViewportBoolSettingId::GridSnap) !=
@@ -290,7 +289,7 @@ float viewport_vertex_snap_radius(const ViewportSettings &settings) {
              : 0.0f;
 }
 
-ViewportSettings::ViewportSettings() { reset_to_defaults(); }
+ViewportSettings::ViewportSettings() { (void)reset_to_defaults(); }
 
 ViewportSettings ViewportSettings::defaults() {
     ViewportSettings settings;
@@ -322,8 +321,13 @@ ViewportSettings ViewportSettings::load(const std::filesystem::path& path) {
         if (key == full_key(descriptor.key)) {
           if (const std::optional<ViewportSettingColor> parsed =
                   parse_color(value)) {
+            ViewportSettingColor loaded_color = *parsed;
+            if (descriptor.id == ViewportColorSettingId::GridYAxis &&
+                color_to_hex(loaded_color) == "4A940000") {
+              loaded_color = descriptor.default_value;
+            }
             settings.colors_[index(descriptor.id)] =
-                sanitize_color(*parsed, descriptor.default_value);
+                sanitize_color(loaded_color, descriptor.default_value);
           }
         }
         }
@@ -368,19 +372,30 @@ bool ViewportSettings::save(const std::filesystem::path& path) const {
       file << full_key(descriptor.key) << '='
            << (bool_value(descriptor.id) ? "true" : "false") << '\n';
     }
-    return true;
+    file.flush();
+    return file.good();
 }
 
-void ViewportSettings::reset_to_defaults() {
+bool ViewportSettings::reset_to_defaults() {
+  bool changed = false;
   for (const ViewportColorSettingDescriptor &descriptor : kColorSettings) {
+    changed = !viewport_setting_colors_approximately(
+                  colors_[index(descriptor.id)], descriptor.default_value) ||
+              changed;
     colors_[index(descriptor.id)] = descriptor.default_value;
   }
   for (const ViewportFloatSettingDescriptor &descriptor : kFloatSettings) {
+    changed = std::fabs(floats_[index(descriptor.id)] -
+                        descriptor.default_value) > 0.0001f ||
+              changed;
     floats_[index(descriptor.id)] = descriptor.default_value;
   }
   for (const ViewportBoolSettingDescriptor &descriptor : kBoolSettings) {
+    changed = bools_[index(descriptor.id)] != descriptor.default_value ||
+              changed;
     bools_[index(descriptor.id)] = descriptor.default_value;
   }
+  return changed;
 }
 
 ViewportSettingColor ViewportSettings::color(ViewportColorSettingId id) const {
@@ -392,7 +407,21 @@ bool ViewportSettings::set_color(ViewportColorSettingId id,
   const ViewportColorSettingDescriptor &descriptor = color_descriptor(id);
   const ViewportSettingColor sanitized =
       sanitize_color(value, descriptor.default_value);
-  if (colors_approximately(colors_[index(id)], sanitized)) {
+  if (viewport_setting_colors_approximately(colors_[index(id)], sanitized)) {
+    return false;
+  }
+  colors_[index(id)] = sanitized;
+  return true;
+}
+
+bool ViewportSettings::restore_color(ViewportColorSettingId id,
+                                     ViewportSettingColor value) {
+  const ViewportColorSettingDescriptor &descriptor = color_descriptor(id);
+  const ViewportSettingColor sanitized =
+      sanitize_color(value, descriptor.default_value);
+  const ViewportSettingColor current = colors_[index(id)];
+  if (current.r == sanitized.r && current.g == sanitized.g &&
+      current.b == sanitized.b && current.a == sanitized.a) {
     return false;
   }
   colors_[index(id)] = sanitized;

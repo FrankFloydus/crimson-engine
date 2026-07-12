@@ -106,27 +106,36 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
 
 QuaderApiVoidResult QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
     QuaderRenderApi &api, SceneRenderBridge &bridge,
+    RenderOverlaySnapshotCache &snapshot_cache,
     const QuaderRenderSceneOverlaySyncRequest &request) {
   const ProjectSessionReadView session =
       read_project_session(api.session_).read_view();
-  bridge.sync_scene_asset_overlays(
-      build_render_overlay_selected_object_snapshot(
-          session.scene, session.assets, request.selected_object_overlay_visible),
-      build_render_overlay_scene_wireframe_snapshot(
-          session.scene, session.assets, request.scene_wireframe_layer_mask));
+  const RenderOverlayPersistentSnapshotUpdate update =
+      snapshot_cache.update_persistent(
+          session.scene, session.assets,
+          request.selected_object_overlay_visible,
+          request.scene_wireframe_layer_mask, request.style);
+  if (update.changed()) {
+    bridge.sync_scene_asset_overlays(*update.selected_object,
+                                     *update.scene_wireframe);
+  }
   return api.runtime_status("Render scene overlays synchronized.");
 }
 
-ViewportOverlayFrame QuaderRenderApiRuntimeAccess::build_scene_overlay_frame(
-    QuaderRenderApi &api, SceneRenderBridge &bridge,
-    ViewportOverlayFrame base_frame,
-    const ViewportSceneOverlayFrameRequest &request) {
+const RenderOverlaySelectionSnapshot &
+QuaderRenderApiRuntimeAccess::build_scene_overlay_snapshot(
+    QuaderRenderApi &api, RenderOverlaySnapshotCache &snapshot_cache) {
   const ProjectSessionReadView session =
       read_project_session(api.session_).read_view();
+  return snapshot_cache.selection_snapshot(session.scene, session.assets);
+}
+
+ViewportOverlayFrame QuaderRenderApiRuntimeAccess::build_scene_overlay_frame(
+    SceneRenderBridge &bridge, ViewportOverlayFrame base_frame,
+    const RenderOverlaySelectionSnapshot &snapshot,
+    const ViewportSceneOverlayFrameRequest &request) {
   return bridge.build_scene_overlay_frame(
-      std::move(base_frame),
-      build_render_overlay_selection_snapshot(session.scene, session.assets),
-      request);
+      std::move(base_frame), snapshot, request);
 }
 
 QuaderApiResult<QuaderRenderOverlaySubmission>

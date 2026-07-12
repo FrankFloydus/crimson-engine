@@ -11,6 +11,12 @@
 #include "platform/sentry_client.hpp"
 #include "quader_app_version.hpp"
 
+#include <QApplication>
+#include <QIcon>
+#include <QSize>
+#include <QStyle>
+#include <QStyleFactory>
+
 #include <exception>
 #include <filesystem>
 #include <memory>
@@ -22,6 +28,17 @@
 #endif
 
 namespace {
+
+QIcon quader_application_icon() {
+  QIcon icon;
+  icon.addFile(QStringLiteral(":/quader/icons/quader_16.png"), QSize(16, 16));
+  icon.addFile(QStringLiteral(":/quader/icons/quader_32.png"), QSize(32, 32));
+  icon.addFile(QStringLiteral(":/quader/icons/quader_48.png"), QSize(48, 48));
+  icon.addFile(QStringLiteral(":/quader/icons/quader_64.png"), QSize(64, 64));
+  icon.addFile(QStringLiteral(":/quader/icons/quader_256.png"),
+               QSize(256, 256));
+  return icon;
+}
 
 std::filesystem::path executable_path(int argc, char **argv) {
   if (argc > 0 && argv && argv[0]) {
@@ -43,7 +60,6 @@ std::filesystem::path executable_path(int argc, char **argv) {
  * Stores the Command Line Options data contract used by the Quader native app.
  */
 struct CommandLineOptions {
-  bool borderless_window = true;
   quader::RendererBackend render_backend = quader::RendererBackend::Vulkan;
   bool sentry_verify = false;
 };
@@ -54,13 +70,7 @@ CommandLineOptions parse_command_line(int argc, char **argv) {
     const std::string_view argument = argv[index] != nullptr
                                           ? std::string_view(argv[index])
                                           : std::string_view();
-    if (argument == "--borderless-window" ||
-        argument == "--window-borderless") {
-      options.borderless_window = true;
-    } else if (argument == "--native-window" ||
-               argument == "--no-borderless-window") {
-      options.borderless_window = false;
-    } else if (argument == "--vulkan" ||
+    if (argument == "--vulkan" ||
                argument == "--render-backend=vulkan") {
       options.render_backend = quader::RendererBackend::Vulkan;
     } else if (argument == "--opengl" ||
@@ -111,6 +121,24 @@ bool sentry_debug_enabled() {
 } // namespace
 
 int main(int argc, char** argv) {
+  QApplication qt_application(argc, argv);
+  qt_application.setApplicationName(QStringLiteral("Quader"));
+  qt_application.setOrganizationName(QStringLiteral("Quader"));
+  QStyle *fusion_style = QStyleFactory::create(QStringLiteral("Fusion"));
+  if (fusion_style == nullptr) {
+    return 1;
+  }
+  QApplication::setStyle(fusion_style);
+  // Fusion's standard palette is the uncustomized theme contract. Applying it
+  // explicitly prevents the Windows accent color from replacing Fusion's
+  // neutral highlight and alternating-row roles.
+  QApplication::setPalette(fusion_style->standardPalette());
+  const QIcon application_icon = quader_application_icon();
+  if (application_icon.isNull()) {
+    return 1;
+  }
+  qt_application.setWindowIcon(application_icon);
+
   const std::filesystem::path exe = executable_path(argc, argv);
   const CommandLineOptions command_line = parse_command_line(argc, argv);
   const std::filesystem::path executable_dir = exe.parent_path();
@@ -132,17 +160,14 @@ int main(int argc, char** argv) {
   }
 #endif
   LOG_INFO("Booting Quader from {}", exe.string());
-  if (command_line.borderless_window) {
-    LOG_INFO("Borderless window mode enabled");
-  }
+  LOG_INFO("Qt Widgets style: Fusion");
   LOG_INFO("Render backend: {}",
            quader::to_string(command_line.render_backend));
 
   try {
     auto app = std::make_unique<quader::App>();
-    if (!app->initialize(exe,
-                         {.borderless_window = command_line.borderless_window,
-                          .render_backend = command_line.render_backend})) {
+    if (!app->initialize(qt_application, exe,
+                         {.render_backend = command_line.render_backend})) {
       LOG_CRITICAL("Application initialization failed");
       app->shutdown();
       app.reset();

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "render/overlay/viewport_persistent_overlay_style.hpp"
 #include "render/viewport_overlay_frame.hpp"
 #include "viewport/viewport_settings.hpp"
 
@@ -54,6 +55,8 @@ struct ViewportOverlayStyleContext {
  */
 class ViewportOverlayStyleResolver {
 public:
+    [[nodiscard]] static ViewportPersistentOverlayStyleSnapshot
+    persistent_style_snapshot(const ViewportSettings &settings);
     static ViewportOverlayFrame resolve(
             ViewportOverlayFrame frame,
             const ViewportSettings& settings,

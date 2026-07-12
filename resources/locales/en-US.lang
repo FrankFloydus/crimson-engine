@@ -66,6 +66,7 @@ ui.menu.view.show_info=Show Info
 ui.menu.view.toolbars=Toolbars
 ui.menu.layout=Layout
 ui.status.merge_by_distance.merged_vertices=Merged {count} vertices
+ui.status.command_failed=Command failed.
 
 ui.panel.viewport=Viewport
 ui.panel.outliner=Outliner
@@ -82,6 +83,7 @@ ui.runtime.unknown_panel=Unknown UI panel.
 ui.runtime.locale_selection_unavailable=Locale selection is not exposed in the app shell yet.
 ui.runtime.unknown_locale=Unknown locale.
 ui.runtime.preferences_saved=Preferences saved.
+ui.runtime.preferences_save_failed=Preferences could not be saved.
 ui.runtime.navigation_gizmo_unavailable=Navigation gizmo is not available in the app shell yet.
 ui.runtime.viewport_panel_unavailable=Viewport panel is not available.
 ui.runtime.platform_unavailable=Platform adapter is not available.
@@ -124,6 +126,8 @@ ui.console.level.critical=Critical
 ui.console.level.off=Off
 ui.console.filter_logs=Filter logs
 
+ui.inspector.property=Property
+ui.inspector.value=Value
 ui.inspector.mixed=Mixed
 ui.inspector.mode=Mode
 ui.inspector.active=Active
@@ -211,6 +215,10 @@ ui.viewport.delete_edges=Delete Edges
 ui.viewport.dissolve_edges=Dissolve Edges
 ui.viewport.dissolve_vertex=Dissolve Vertex
 
+ui.outliner.name=Name
+ui.outliner.visible=Visible
+ui.outliner.locked=Locked
+ui.outliner.rename=Rename
 ui.outliner.delete=Delete
 ui.outliner.duplicate=Duplicate
 ui.outliner.group=Group
@@ -229,7 +237,7 @@ selection.active.face=Face
 selection.active.light=Light
 
 viewport.fly_navigation.speed=Fly Navigation  Speed {speed}
-viewport.fly_navigation.speed_with_reset=Fly Navigation  Speed {speed}  R resets
+viewport.fly_navigation.speed_with_reset=Fly Navigation  Speed {speed}  Middle Mouse resets
 
 viewport.pane.perspective=Perspective
 viewport.pane.top=Top

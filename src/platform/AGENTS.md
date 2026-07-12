@@ -8,12 +8,13 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Platform Package Guide
 
-`src/platform` owns native window/platform integration and fatal-error handling.
+`src/platform` owns native Windows support, file dialogs, and fatal-error handling. The active
+`QApplication`/`QMainWindow` lifecycle belongs to `src/app` and `src/ui`.
 
 ## Platform Rules
 
 - Keep platform-specific behavior behind platform abstractions.
-- Do not leak SDL, OS, or backend details into editor, scene, mesh, or API packages.
+- Do not leak Qt, Win32, OS, or backend details into editor, scene, mesh, or API packages.
 - Window/backend lifecycle changes need manual smoke coverage when headless tests cannot inspect
   them.
 - Preserve clear fatal-error reporting without creating extra user-visible console windows unless

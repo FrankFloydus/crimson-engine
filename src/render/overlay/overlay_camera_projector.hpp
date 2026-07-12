@@ -70,6 +70,12 @@ public:
     static constexpr float kPi = 3.14159265358979323846f;
 
     ViewportOverlayCamera camera_;
+    float aspect_ = 1.0f;
+    float tan_half_fov_ = 1.0f;
+    float orthographic_half_height_ = 1.0f;
+    float orthographic_half_width_ = 1.0f;
+    float orthographic_depth_scale_ = 1.0f;
+    float orthographic_depth_offset_ = 0.0f;
 };
 
 } // namespace quader

@@ -107,6 +107,7 @@ EntityId SceneDocument::create_entity(std::string name, EntityKind kind,
   entity_by_editor_object_id_.emplace(object_id, id);
   ++visibility_revision_;
   ++transform_revision_;
+  ++render_component_revision_;
   mark_dirty();
   return id;
 }
@@ -148,6 +149,7 @@ EntityId SceneDocument::create_entity_with_id(EntityId id, std::string name,
   entity_by_editor_object_id_.emplace(object_id, id);
   ++transform_revision_;
   ++visibility_revision_;
+  ++render_component_revision_;
   mark_dirty();
   return id;
 }
@@ -200,6 +202,7 @@ bool SceneDocument::destroy_entity(EntityId id) {
   ++visibility_revision_;
   ++transform_revision_;
   ++mesh_binding_revision_;
+  ++render_component_revision_;
   mark_dirty();
   return true;
 }
@@ -261,6 +264,7 @@ bool SceneDocument::destroy_entities(std::span<const EntityId> ids) {
   ++visibility_revision_;
   ++transform_revision_;
   ++mesh_binding_revision_;
+  ++render_component_revision_;
   mark_dirty();
   return true;
 }
@@ -563,6 +567,7 @@ void SceneDocument::set_mesh(EntityId id, MeshComponent mesh) {
   registry_.emplace_or_replace<EntityKindComponent>(
       entity, EntityKindComponent{.kind = EntityKind::Mesh});
   ++mesh_binding_revision_;
+  ++render_component_revision_;
   mark_dirty();
 }
 
@@ -572,6 +577,7 @@ void SceneDocument::set_material(EntityId id, MaterialComponent material) {
     return;
   }
   registry_.emplace_or_replace<MaterialComponent>(entity, material);
+  ++render_component_revision_;
   mark_dirty();
 }
 
@@ -581,6 +587,7 @@ bool SceneDocument::clear_material(EntityId id) {
     return false;
   }
   registry_.remove<MaterialComponent>(entity);
+  ++render_component_revision_;
   mark_dirty();
   return true;
 }
@@ -593,6 +600,7 @@ void SceneDocument::set_light(EntityId id, LightComponent light) {
   registry_.emplace_or_replace<LightComponent>(entity, light);
   registry_.emplace_or_replace<EntityKindComponent>(
       entity, EntityKindComponent{.kind = EntityKind::Light});
+  ++render_component_revision_;
   mark_dirty();
 }
 
@@ -975,15 +983,26 @@ QMat4 SceneDocument::local_transform_matrix(EntityId id) const {
 }
 
 QMat4 SceneDocument::world_transform_matrix(EntityId id) const {
-  if (require_entity(id) == entt::null) {
+  const entt::entity entity = require_entity(id);
+  if (entity == entt::null) {
     return scene_transform_identity_matrix();
   }
-  const EntityId parent_id = parent(id);
+
+  const TransformComponent *local_transform =
+      registry_.try_get<TransformComponent>(entity);
+  const QMat4 local_matrix =
+      local_transform != nullptr
+          ? compose_transform(local_transform->spatial_transform())
+          : scene_transform_identity_matrix();
+  const HierarchyComponent *hierarchy =
+      registry_.try_get<HierarchyComponent>(entity);
+  const EntityId parent_id =
+      hierarchy != nullptr ? hierarchy->parent : kInvalidEntityId;
   if (parent_id == kInvalidEntityId) {
-    return local_transform_matrix(id);
+    return local_matrix;
   }
   return scene_transform_multiply(world_transform_matrix(parent_id),
-                                  local_transform_matrix(id));
+                                  local_matrix);
 }
 
 void SceneDocument::advance_revision_for_replacement(
@@ -993,6 +1012,8 @@ void SceneDocument::advance_revision_for_replacement(
   visibility_revision_ = std::max(visibility_revision_ + 1u, revision_);
   transform_revision_ = std::max(transform_revision_ + 1u, revision_);
   mesh_binding_revision_ = std::max(mesh_binding_revision_ + 1u, revision_);
+  render_component_revision_ =
+      std::max(render_component_revision_ + 1u, revision_);
 }
 
 entt::entity SceneDocument::entt_entity(EntityId id) const {

@@ -14,7 +14,7 @@
 namespace quader {
 
 /**
- * Stores the Viewport Pane Overlay Cache Key data contract used by the ImGui editor presentation layer.
+ * Stores the Viewport Pane Overlay Cache Key data contract used by the Qt editor presentation layer.
  */
 struct ViewportPaneOverlayCacheKey {
   std::uint64_t content_revision = 0;
@@ -41,7 +41,7 @@ enum class ViewportPaneOverlayCacheRefreshReason {
 };
 
 /**
- * Caches Viewport Pane Overlay Cache derived state for the ImGui editor presentation layer.
+ * Caches Viewport Pane Overlay Cache derived state for the Qt editor presentation layer.
  */
 class ViewportPaneOverlayCache {
 public:

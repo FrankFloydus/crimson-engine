@@ -6,23 +6,27 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "ui/console_model.hpp"
-#include "ui/ui_dock_panel.hpp"
+#include <QWidget>
+
+#include <memory>
 
 namespace quader {
 
+struct UIContext;
+
 /**
- * Owns Console Panel behavior within the ImGui editor presentation layer.
+ * Presents the in-memory application log with filtering controls.
  */
-class ConsolePanel final : public UIDockPanel {
+class ConsolePanel final : public QWidget {
 public:
-    UIPanelId id() const override { return UIPanelId::Console; }
+  explicit ConsolePanel(QWidget *parent = nullptr);
+  ~ConsolePanel() override;
+
+  void refresh(UIContext &context);
 
 private:
-  void draw_content(UIContext &context) override;
-
-  ConsoleFilter filter_;
-  bool auto_scroll_ = true;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 } // namespace quader

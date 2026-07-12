@@ -22,6 +22,7 @@
 #include <cmath>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -42,12 +43,6 @@ bool has_selected_ancestor(const SceneDocument &document, EntityId entity) {
     parent = document.parent(parent);
   }
   return false;
-}
-
-QVec3 document_local_pivot_for_world_point(const SceneDocument &document,
-                                           EntityId entity, QVec3 world_pivot) {
-  return transform_point(inverse(document.world_transform_matrix(entity)),
-                         world_pivot);
 }
 
 QVec3 component_scale_ratio(QVec3 next, QVec3 previous) {
@@ -84,6 +79,69 @@ QVec3 selected_transform_pivot(const SceneDocument &document,
     return transform_point(document.world_transform_matrix(primary), {});
   }
   return primary_transform.position;
+}
+
+/// Converts a world-space move delta into one selected entity's parent space.
+struct ParentTranslationBasis {
+  QMat4 parent_from_world;
+  QVec3 world_x = {1.0f, 0.0f, 0.0f};
+  QVec3 world_y = {0.0f, 1.0f, 0.0f};
+  QVec3 world_z = {0.0f, 0.0f, 1.0f};
+  bool valid = true;
+};
+
+bool finite_vector(QVec3 value) {
+  return std::isfinite(value.x) && std::isfinite(value.y) &&
+         std::isfinite(value.z);
+}
+
+ParentTranslationBasis
+parent_translation_basis(const SceneDocument &document, EntityId parent) {
+  if (parent == kInvalidEntityId) {
+    return {};
+  }
+  const QMat4 parent_from_world = inverse(document.world_transform_matrix(parent));
+  ParentTranslationBasis basis{
+      .parent_from_world = parent_from_world,
+      .world_x = transform_vector(parent_from_world, {1.0f, 0.0f, 0.0f}),
+      .world_y = transform_vector(parent_from_world, {0.0f, 1.0f, 0.0f}),
+      .world_z = transform_vector(parent_from_world, {0.0f, 0.0f, 1.0f}),
+  };
+  basis.valid = finite_vector(basis.world_x) && finite_vector(basis.world_y) &&
+                finite_vector(basis.world_z);
+  return basis;
+}
+
+QVec3 parent_space_translation(const SceneTransformDragTarget &target,
+                               QVec3 world_delta) {
+  return target.parent_space_world_x * world_delta.x +
+         target.parent_space_world_y * world_delta.y +
+         target.parent_space_world_z * world_delta.z;
+}
+
+QMat4 world_translation_matrix(QVec3 world_delta) {
+  QMat4 transform;
+  transform.values[12] = world_delta.x;
+  transform.values[13] = world_delta.y;
+  transform.values[14] = world_delta.z;
+  return transform;
+}
+
+TransformComponent transformed_target_from_world_delta(
+    const SceneDocument &document, const SceneTransformDragTarget &target,
+    const QMat4 &world_transform_delta) {
+  const QMat4 preview_world_transform =
+      scene_transform_multiply(world_transform_delta, target.world_transform);
+  const EntityId parent = document.parent(target.entity);
+  const QMat4 parent_world_transform =
+      parent == kInvalidEntityId ? scene_transform_identity_matrix()
+                                 : document.world_transform_matrix(parent);
+  TransformComponent preview_transform = transform_component_from_matrix(
+      scene_local_matrix_from_world_matrix(parent_world_transform,
+                                           preview_world_transform),
+      target.transform.rotation_euler);
+  preview_transform.custom_pivot = target.transform.custom_pivot;
+  return preview_transform;
 }
 
 void pin_target_local_pivot_to_world_point(
@@ -392,18 +450,45 @@ DocumentCommandResult SceneTransformDragService::preview_world_transform_delta(
     if (!document.exists(target.entity)) {
       continue;
     }
-    const QMat4 preview_world_transform =
-        scene_transform_multiply(world_transform_delta, target.world_transform);
-    const EntityId parent = document.parent(target.entity);
-    const QMat4 parent_world_transform =
-        parent == kInvalidEntityId ? scene_transform_identity_matrix()
-                                   : document.world_transform_matrix(parent);
-    TransformComponent preview_transform =
-        transform_component_from_matrix(
-            scene_local_matrix_from_world_matrix(parent_world_transform,
-                                                 preview_world_transform),
-            target.transform.rotation_euler);
-    preview_transform.custom_pivot = target.transform.custom_pivot;
+    preview_edits.push_back(DocumentTransformEdit{
+        .entity = target.entity,
+        .before = target.transform,
+        .after = transformed_target_from_world_delta(
+            document, target, world_transform_delta),
+    });
+  }
+  return preview_->preview_transforms(std::move(preview_edits));
+}
+
+DocumentCommandResult
+SceneTransformDragService::preview_world_translation_delta(
+    SceneDocument &document, QVec3 world_translation_delta) {
+  if (!preview_) {
+    return document_command_invalid_request_result(
+        "Transform preview is not active");
+  }
+
+  std::vector<DocumentTransformEdit> preview_edits;
+  preview_edits.reserve(targets_.size());
+  std::optional<QMat4> fallback_world_transform;
+  for (const SceneTransformDragTarget &target : targets_) {
+    if (!document.exists(target.entity)) {
+      continue;
+    }
+    TransformComponent preview_transform;
+    if (target.parent_translation_basis_valid) {
+      preview_transform = target.translation_preview_transform;
+      preview_transform.position =
+          target.translation_preview_transform.position +
+          parent_space_translation(target, world_translation_delta);
+    } else {
+      if (!fallback_world_transform.has_value()) {
+        fallback_world_transform =
+            world_translation_matrix(world_translation_delta);
+      }
+      preview_transform = transformed_target_from_world_delta(
+          document, target, *fallback_world_transform);
+    }
     preview_edits.push_back(DocumentTransformEdit{
         .entity = target.entity,
         .before = target.transform,
@@ -475,7 +560,11 @@ void SceneTransformDragService::reset() {
 bool SceneTransformDragService::capture_targets(SceneDocument &document,
                                                 QVec3 world_pivot) {
   targets_.clear();
-  for (const EntityId entity : document.selected_entities()) {
+  const std::vector<EntityId> selected = document.selected_entities();
+  targets_.reserve(selected.size());
+  std::unordered_map<EntityId, ParentTranslationBasis> basis_by_parent;
+  basis_by_parent.reserve(selected.size());
+  for (const EntityId entity : selected) {
     if (document.is_effectively_locked(entity)) {
       continue;
     }
@@ -484,12 +573,30 @@ bool SceneTransformDragService::capture_targets(SceneDocument &document,
     }
     if (const TransformComponent *selected_transform =
             document.transform(entity)) {
+      const EntityId parent = document.parent(entity);
+      const auto [basis_it, inserted] = basis_by_parent.try_emplace(parent);
+      if (inserted) {
+        basis_it->second = parent_translation_basis(document, parent);
+      }
+      const ParentTranslationBasis &basis = basis_it->second;
+      const QMat4 world_transform = document.world_transform_matrix(entity);
+      TransformComponent translation_preview_transform =
+          transform_component_from_matrix(
+              scene_transform_multiply(basis.parent_from_world,
+                                       world_transform),
+              selected_transform->rotation_euler);
+      translation_preview_transform.custom_pivot =
+          selected_transform->custom_pivot;
       targets_.push_back(SceneTransformDragTarget{
           .entity = entity,
           .transform = *selected_transform,
-          .local_pivot = document_local_pivot_for_world_point(document, entity,
-                                                              world_pivot),
-          .world_transform = document.world_transform_matrix(entity),
+          .translation_preview_transform = translation_preview_transform,
+          .local_pivot = transform_point(inverse(world_transform), world_pivot),
+          .world_transform = world_transform,
+          .parent_space_world_x = basis.world_x,
+          .parent_space_world_y = basis.world_y,
+          .parent_space_world_z = basis.world_z,
+          .parent_translation_basis_valid = basis.valid,
       });
     }
   }

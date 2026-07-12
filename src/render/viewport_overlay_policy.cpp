@@ -275,6 +275,12 @@ bool viewport_overlay_is_native_selection_wire_color(std::uint32_t color) {
                                               kOverlaySelectionWireColor);
 }
 
+bool selected_object_face_fills_enabled_for_selection_count(
+    std::size_t selected_mesh_count) {
+  return selected_mesh_count > 0u &&
+         selected_mesh_count <= kSelectedObjectFaceFillSelectionLimit;
+}
+
 std::uint32_t viewport_overlay_color_for(ViewportOverlayLayer layer,
                                          std::uint32_t original_rgba) {
   switch (layer) {

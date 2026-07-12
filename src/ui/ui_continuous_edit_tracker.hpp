@@ -19,7 +19,7 @@
 namespace quader {
 
 /**
- * Stores the lifecycle emitted by an ImGui continuous edit widget.
+ * Stores the lifecycle emitted by a retained continuous-edit control.
  */
 struct UIContinuousEditResult {
     bool changed = false;

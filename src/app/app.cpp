@@ -12,25 +12,45 @@
 #include "diagnostics/profile.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
-#include "platform/platform_event.hpp"
 #include "platform/platform_file_dialog.hpp"
-#include "ui/ui_platform_adapter.hpp"
 
-#include <imgui_impl_sdl3.h>
-#include <SDL3/SDL.h>
+#include <QApplication>
+#include <QGuiApplication>
+#include <QMainWindow>
+#include <QRect>
+#include <QScreen>
+#include <QTimer>
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
 
-constexpr Sint32 kActiveFrameWaitMs = 1;
-constexpr Sint32 kIdleFrameWaitMs = 100;
-constexpr Sint32 kSuspendedWindowWaitMs = 250;
+constexpr int kIdleFrameIntervalMs = 16;
+constexpr double kFallbackDisplayRefreshRateHz = 60.0;
+constexpr double kMinimumDisplayRefreshRateHz = 30.0;
+constexpr double kMaximumDisplayRefreshRateHz = 240.0;
+
+int presentation_frame_interval_ms(const QMainWindow *window) {
+  const QScreen *screen =
+      window != nullptr ? window->screen() : QGuiApplication::primaryScreen();
+  double refresh_rate =
+      screen != nullptr ? screen->refreshRate() : kFallbackDisplayRefreshRateHz;
+  if (!std::isfinite(refresh_rate) || refresh_rate <= 0.0) {
+    refresh_rate = kFallbackDisplayRefreshRateHz;
+  }
+  refresh_rate = std::clamp(refresh_rate, kMinimumDisplayRefreshRateHz,
+                            kMaximumDisplayRefreshRateHz);
+  return std::max(
+      1, static_cast<int>(std::lround(1000.0 / refresh_rate)));
+}
 
 std::filesystem::path
 default_project_save_file_name(const QuaderProjectApi &project) {
@@ -76,106 +96,24 @@ obj_export_file_dialog_options(void *owner_window_handle,
   return options;
 }
 
-bool chrome_action_invalidates_current_frame(WindowChromeAction action) {
-  return action == WindowChromeAction::Minimize ||
-         action == WindowChromeAction::ToggleMaximizeRestore;
-}
-
-/**
- * Bridges SDL window and event calls into the SDL-free UI platform contract.
- */
-class SdlUIPlatformAdapter final : public UIPlatformAdapter {
-public:
-  explicit SdlUIPlatformAdapter(SDL_Window *window) : window_(window) {}
-
-  void initialize_imgui_backend() override {
-    ImGui_ImplSDL3_InitForOther(window_);
-  }
-
-  void shutdown_imgui_backend() override { ImGui_ImplSDL3_Shutdown(); }
-
-  bool process_event(const UIPlatformEvent &event) override {
-    const SDL_Event *sdl_event =
-        static_cast<const SDL_Event *>(event.native_event);
-    return sdl_event != nullptr && ImGui_ImplSDL3_ProcessEvent(sdl_event);
-  }
-
-  void begin_frame() override { ImGui_ImplSDL3_NewFrame(); }
-
-  QVec2 relative_mouse_delta() override {
-    float delta_x = 0.0f;
-    float delta_y = 0.0f;
-    (void)SDL_GetRelativeMouseState(&delta_x, &delta_y);
-    return {delta_x, delta_y};
-  }
-
-  bool set_relative_mouse_captured(bool captured,
-                                   std::string &error_message) override {
-    if (SDL_SetWindowRelativeMouseMode(window_, captured)) {
-      error_message.clear();
-      return true;
-    }
-    error_message = SDL_GetError();
-    return false;
-  }
-
-  bool set_clipboard_text(std::string_view text,
-                          std::string &error_message) override {
-    const std::string stable_text(text);
-    if (SDL_SetClipboardText(stable_text.c_str())) {
-      error_message.clear();
-      return true;
-    }
-    error_message = SDL_GetError();
-    return false;
-  }
-
-  void discard_relative_mouse_delta() override {
-    float discard_x = 0.0f;
-    float discard_y = 0.0f;
-    (void)SDL_GetRelativeMouseState(&discard_x, &discard_y);
-  }
-
-  void warp_mouse_in_window(QVec2 point) override {
-    SDL_WarpMouseInWindow(window_, point.x, point.y);
-  }
-
-private:
-  SDL_Window *window_ = nullptr;
-};
-
 } // namespace
 
 App::App() = default;
-App::~App() {
-    shutdown();
-}
 
-bool App::initialize(const std::filesystem::path &executable_path,
+App::~App() { shutdown(); }
+
+bool App::initialize(QApplication &application,
+                     const std::filesystem::path &executable_path,
                      AppOptions options) {
   shutdown_complete_ = false;
   running_ = false;
+  application_ = &application;
   const std::filesystem::path executable_dir = executable_path.parent_path();
   window_settings_path_ = AppWindowSettings::resolve_path(executable_dir);
   window_settings_ = AppWindowSettings::load(window_settings_path_);
-  const std::optional<PlatformWindowPlacement> saved_placement =
-      window_settings_.placement();
-  const PlatformWindowChromeFrame initial_frame =
-      saved_placement ? saved_placement->normal_frame
-                      : PlatformWindowChromeFrame{0, 0, 1600, 960};
-
-  if (!window_.create(
-          "Quader", std::max(kPlatformWindowMinimumWidth, initial_frame.width),
-          std::max(kPlatformWindowMinimumHeight, initial_frame.height),
-          {.borderless = options.borderless_window})) {
-    return false;
-  }
-  if (saved_placement) {
-    window_.apply_placement(*saved_placement);
-  }
 
   if (!render_system_.initialize(
-          window_.native_window_handle(), executable_dir,
+          nullptr, executable_dir,
           RenderConfig{.backend = options.render_backend})) {
     LOG_ERROR("Renderer initialization failed");
     shutdown();
@@ -187,107 +125,69 @@ bool App::initialize(const std::filesystem::path &executable_path,
                                                 executable_dir);
   LOG_INFO("Scene render bridge initialized");
 
-  LOG_INFO("Initializing UI system");
-  ui_platform_adapter_ =
-      std::make_unique<SdlUIPlatformAdapter>(window_.sdl_window());
-  ui_.initialize(*ui_platform_adapter_, render_system_, executable_dir,
-                 options.borderless_window);
-  LOG_INFO("UI system initialized");
+  LOG_INFO("Initializing Qt Widgets UI system");
+  if (!ui_.initialize(render_system_, executable_dir)) {
+    LOG_ERROR("Qt Widgets UI initialization failed");
+    shutdown();
+    return false;
+  }
 
   const ProjectDefaultAssets default_assets =
       ProjectAssetBootstrapService{}.bootstrap_default_assets(project_session_);
   default_material_ = default_assets.default_material;
   editor_ = std::make_unique<QuaderEditorApi>(
       QuaderApiSessionInternalAccess::from_project_session(project_session_));
-  ui_.install_runtime_hooks(*editor_, project_session_.scene(),
-                            project_session_.assets(),
-                            project_session_.modeling());
+  ui_.install_runtime_hooks(
+      *editor_, project_session_.scene(), project_session_.assets(),
+      project_session_.modeling(), project_session_.selection(),
+      project_session_.pivot(), project_session_.linear_array(),
+      default_material_);
   editor_->project().set_runtime_hooks(QuaderProjectRuntimeHooks{
       .choose_open_path =
           [this]() {
             return platform_open_project_file_dialog(
-                project_file_dialog_options(window_.native_window_handle(),
+                project_file_dialog_options(ui_.native_window_handle(),
                                             editor_->project()));
           },
       .choose_save_as_path =
           [this]() {
             return platform_save_project_file_dialog(
-                project_file_dialog_options(window_.native_window_handle(),
+                project_file_dialog_options(ui_.native_window_handle(),
                                             editor_->project()));
           },
       .choose_export_obj_path =
           [this]() {
             return platform_save_obj_file_dialog(
-                obj_export_file_dialog_options(window_.native_window_handle(),
+                obj_export_file_dialog_options(ui_.native_window_handle(),
                                                editor_->project()));
           },
   });
-  window_.set_live_resize_frame_callback([this]() {
-    if (!running_ || shutdown_complete_ || rendering_frame_) {
-      return false;
-    }
-    const bool frame_submitted = render_frame(frame_clock_.tick());
-    if (frame_submitted) {
-      live_resize_frame_rendered_ = true;
-    }
-    return frame_submitted;
-  });
 
-  if (!live_resize_event_watch_.install(window_, &App::live_resize_event_watch,
-                                        this)) {
-    LOG_WARN("Platform event watch failed for live resize redraw: {}",
-             live_resize_event_watch_.last_error());
-  }
-
+  apply_window_settings();
+  ui_.show();
+  frame_timer_ = std::make_unique<QTimer>();
+  frame_timer_->setTimerType(Qt::PreciseTimer);
+  QObject::connect(frame_timer_.get(), &QTimer::timeout, application_,
+                   [this]() {
+                     if (running_ && !shutdown_complete_) {
+                       (void)render_frame(frame_clock_.tick());
+                       schedule_next_frame();
+                     }
+                   });
+  QObject::connect(application_, &QApplication::aboutToQuit, application_,
+                   [this]() { running_ = false; });
   running_ = true;
   return true;
 }
 
 int App::run() {
-  LOG_INFO("Entering main loop");
-  frame_clock_.reset();
-  PlatformEventPump events(window_);
-
-  while (running_) {
-    const FrameTiming frame_timing = frame_clock_.tick();
-    PlatformEvent event;
-    while (events.poll(event)) {
-      const bool chrome_consumed = window_.process_chrome_event(event);
-      if (!chrome_consumed) {
-        ui_.process_event(UIPlatformEvent{
-            .native_event = event.native_event,
-            .pressed_input_chord = event.pressed_input_chord,
-        });
-        if (event.mouse_motion) {
-          (void)window_.process_chrome_event(event);
-        }
-      }
-      if (event.quit_requested) {
-        running_ = false;
-      }
-      if (event.window_pixel_size_changed) {
-        window_.refresh_pixel_size();
-      }
-      if (event.window_chrome_state_changed) {
-        window_.refresh_native_chrome();
-      }
-    }
-    if (!running_) {
-      break;
-    }
-
-    if (live_resize_frame_rendered_) {
-      live_resize_frame_rendered_ = false;
-    } else {
-      if (window_.can_render_frames()) {
-        render_frame(frame_timing);
-      }
-    }
-
-    wait_until_next_frame();
+  if (application_ == nullptr || !running_) {
+    return 1;
   }
-
-  return 0;
+  LOG_INFO("Entering Qt application event loop");
+  frame_clock_.reset();
+  frame_timer_->start(0);
+  return application_->exec();
 }
 
 void App::shutdown() {
@@ -297,29 +197,51 @@ void App::shutdown() {
 
   shutdown_complete_ = true;
   running_ = false;
-  live_resize_event_watch_.uninstall();
-  window_.set_live_resize_frame_callback({});
+  if (frame_timer_) {
+    frame_timer_->stop();
+  }
   save_window_settings();
   ui_.shutdown();
-  ui_platform_adapter_.reset();
+  frame_timer_.reset();
+  render_overlay_snapshot_cache_.reset();
   editor_.reset();
   render_bridge_.shutdown();
   render_system_.shutdown();
-  window_.destroy();
+  application_ = nullptr;
 }
 
-void App::handle_window_chrome_action(WindowChromeAction action) {
-  switch (action) {
-  case WindowChromeAction::Minimize:
-    window_.minimize();
-    break;
-  case WindowChromeAction::ToggleMaximizeRestore:
-    window_.toggle_maximize_restore();
-    window_.refresh_native_chrome();
-    break;
-  case WindowChromeAction::Close:
-    running_ = false;
-    break;
+void App::apply_window_settings() {
+  QMainWindow *window = ui_.main_window();
+  if (window == nullptr) {
+    return;
+  }
+  const std::optional<PlatformWindowPlacement> placement =
+      window_settings_.placement();
+  if (!placement.has_value()) {
+    window->resize(1600, 960);
+    return;
+  }
+  std::vector<PlatformWindowChromeFrame> work_areas;
+  for (QScreen *screen : QGuiApplication::screens()) {
+    if (screen == nullptr) {
+      continue;
+    }
+    const QRect area = screen->availableGeometry();
+    work_areas.push_back({
+        .x = area.x(),
+        .y = area.y(),
+        .width = area.width(),
+        .height = area.height(),
+    });
+  }
+  const PlatformWindowChromeFrame frame =
+      platform_window_recover_frame_to_display_work_area(
+          placement->normal_frame, work_areas);
+  window->setGeometry(frame.x, frame.y,
+                      std::max(kPlatformWindowMinimumWidth, frame.width),
+                      std::max(kPlatformWindowMinimumHeight, frame.height));
+  if (placement->maximized) {
+    window->showMaximized();
   }
 }
 
@@ -327,13 +249,21 @@ void App::save_window_settings() {
   if (window_settings_path_.empty()) {
     return;
   }
-
-  const std::optional<PlatformWindowPlacement> placement = window_.placement();
-  if (!placement) {
+  QMainWindow *window = ui_.main_window();
+  if (window == nullptr) {
     return;
   }
-
-  window_settings_.set_placement(*placement);
+  const QRect frame = window->normalGeometry();
+  window_settings_.set_placement(PlatformWindowPlacement{
+      .normal_frame =
+          PlatformWindowChromeFrame{
+              .x = frame.x(),
+              .y = frame.y(),
+              .width = frame.width(),
+              .height = frame.height(),
+          },
+      .maximized = window->isMaximized(),
+  });
   if (!window_settings_.save(window_settings_path_)) {
     LOG_WARN("Unable to save window settings to {}",
              window_settings_path_.string());
@@ -345,64 +275,22 @@ bool App::render_frame(const FrameTiming &frame_timing) {
   if (rendering_frame_ || !editor_) {
     return false;
   }
-  if (window_.native_chrome_message_active() &&
-      !window_.native_live_resize_frame_active()) {
-    return false;
-  }
-
+  const auto frame_begin = std::chrono::steady_clock::now();
   rendering_frame_ = true;
 
-  window_.refresh_pixel_size();
-  const std::uint32_t framebuffer_width = window_.width_pixels();
-  const std::uint32_t framebuffer_height = window_.height_pixels();
-  if (!window_.can_render_frames()) {
-    rendering_frame_ = false;
-    return false;
-  }
-  ui_.set_viewport_render_resize_suspended(
-      window_.chrome_resize_active() ||
-      window_.native_chrome_interaction_active());
-  ui_.set_render_performance_stats(render_system_.frame_performance_stats());
+  ui_.refresh(frame_timing, render_system_.frame_performance_stats());
+  const auto ui_refresh_end = std::chrono::steady_clock::now();
   {
-    QDR_PROFILE_SCOPE("UI begin frame");
-    ui_.begin_frame(frame_timing, framebuffer_width, framebuffer_height);
+    QDR_PROFILE_SCOPE("UI process viewport input");
+    ui_.process_viewport_input();
   }
-  bool quit_requested = false;
-  {
-    QDR_PROFILE_SCOPE("UI draw");
-    ui_.draw(*editor_, render_bridge_, project_session_.scene(),
-             project_session_.assets(), project_session_.modeling(),
-             project_session_.selection(), project_session_.pivot(),
-             project_session_.linear_array(),
-             default_material_, quit_requested);
-  }
-  if (const std::optional<WindowChromeAction> chrome_action =
-          ui_.take_window_chrome_action()) {
-    handle_window_chrome_action(*chrome_action);
-    if (running_ && chrome_action_invalidates_current_frame(*chrome_action)) {
-      ui_.end_frame_without_render();
-      rendering_frame_ = false;
-      return false;
-    }
-  }
-  if (quit_requested) {
-    running_ = false;
-  }
-  if (!running_) {
-    ui_.end_frame_without_render();
-    rendering_frame_ = false;
-    return false;
-  }
-  if (!window_.can_render_frames()) {
-    ui_.end_frame_without_render();
-    rendering_frame_ = false;
-    return false;
-  }
+  const auto viewport_input_end = std::chrono::steady_clock::now();
   {
     QDR_PROFILE_SCOPE("Render sync scene");
     (void)QuaderRenderApiRuntimeAccess::sync_scene(editor_->render(),
                                                    render_bridge_);
   }
+  const auto scene_sync_end = std::chrono::steady_clock::now();
   const ProjectSessionReadView session_view = project_session_.read_view();
   if (const EntityId root = session_view.scene.scene_root();
       root != kInvalidEntityId) {
@@ -411,85 +299,104 @@ bool App::render_frame(const FrameTiming &frame_timing) {
       render_system_.apply_scene_settings(*settings);
     }
   }
-
-  {
-    QDR_PROFILE_SCOPE("UI prepare viewports");
-    ui_.prepare_viewports(*editor_, render_bridge_, session_view.scene,
-                          session_view.assets, project_session_.pivot(),
-                          project_session_.linear_array());
-  }
-  {
-    QDR_PROFILE_SCOPE("UI prepare render data");
-    ui_.prepare_render_data(framebuffer_width, framebuffer_height);
-  }
-
-  {
-    QDR_PROFILE_SCOPE("Render frame submit");
-    if (render_system_.begin_frame()) {
-      {
-        QDR_PROFILE_SCOPE("Render viewport panes");
-        ui_.render_viewports(render_system_);
-      }
-      {
-        QDR_PROFILE_SCOPE("Render ImGui");
-        ui_.render(render_system_);
-      }
-      render_system_.end_frame();
-      window_.note_frame_presented(framebuffer_width, framebuffer_height);
-      rendering_frame_ = false;
-      QDR_PROFILE_FRAME_MARK();
-      return true;
+  const auto scene_settings_end = std::chrono::steady_clock::now();
+  ui_.prepare_viewports(render_bridge_, render_overlay_snapshot_cache_);
+  const auto viewport_prepare_end = std::chrono::steady_clock::now();
+  const std::size_t submitted = ui_.can_render_viewports()
+                                    ? ui_.render_viewports()
+                                    : 0u;
+  const auto viewport_render_end = std::chrono::steady_clock::now();
+  if (std::getenv("QUADER_FRAME_DIAGNOSTICS") != nullptr) {
+    /// Accumulates opt-in frame-stage timings for periodic diagnostic logs.
+    struct FrameDiagnostics {
+      std::chrono::steady_clock::time_point sample_begin =
+          std::chrono::steady_clock::now();
+      std::size_t frames = 0u;
+      std::size_t submitted = 0u;
+      double total_ms = 0.0;
+      double maximum_ms = 0.0;
+      double ui_refresh_ms = 0.0;
+      double viewport_input_ms = 0.0;
+      double scene_sync_ms = 0.0;
+      double scene_settings_ms = 0.0;
+      double viewport_prepare_ms = 0.0;
+      double viewport_render_ms = 0.0;
+    };
+    static FrameDiagnostics diagnostics;
+    const auto now = std::chrono::steady_clock::now();
+    const double elapsed_ms =
+        std::chrono::duration<double, std::milli>(now - frame_begin).count();
+    ++diagnostics.frames;
+    diagnostics.submitted += submitted;
+    diagnostics.total_ms += elapsed_ms;
+    diagnostics.maximum_ms = std::max(diagnostics.maximum_ms, elapsed_ms);
+    diagnostics.ui_refresh_ms +=
+        std::chrono::duration<double, std::milli>(ui_refresh_end - frame_begin)
+            .count();
+    diagnostics.viewport_input_ms +=
+        std::chrono::duration<double, std::milli>(viewport_input_end -
+                                                 ui_refresh_end)
+            .count();
+    diagnostics.scene_sync_ms +=
+        std::chrono::duration<double, std::milli>(scene_sync_end -
+                                                 viewport_input_end)
+            .count();
+    diagnostics.scene_settings_ms +=
+        std::chrono::duration<double, std::milli>(scene_settings_end -
+                                                 scene_sync_end)
+            .count();
+    diagnostics.viewport_prepare_ms +=
+        std::chrono::duration<double, std::milli>(viewport_prepare_end -
+                                                 scene_settings_end)
+            .count();
+    diagnostics.viewport_render_ms +=
+        std::chrono::duration<double, std::milli>(viewport_render_end -
+                                                 viewport_prepare_end)
+            .count();
+    const double sample_seconds =
+        std::chrono::duration<double>(now - diagnostics.sample_begin).count();
+    if (sample_seconds >= 1.0) {
+      const RenderFramePerformanceStats render_stats =
+          render_system_.frame_performance_stats();
+      LOG_INFO(
+          "Frame diagnostics: {:.1f} app fps, {:.2f} ms average, {:.2f} ms "
+          "maximum, {} submissions, stages ui={:.2f} input={:.2f} sync={:.2f} "
+          "settings={:.2f} prepare={:.2f} render={:.2f} ms, renderer {:.1f} "
+          "fps, CPU {:.2f} ms, GPU {:.2f} ms",
+          static_cast<double>(diagnostics.frames) / sample_seconds,
+          diagnostics.total_ms / static_cast<double>(diagnostics.frames),
+          diagnostics.maximum_ms, diagnostics.submitted,
+          diagnostics.ui_refresh_ms / static_cast<double>(diagnostics.frames),
+          diagnostics.viewport_input_ms /
+              static_cast<double>(diagnostics.frames),
+          diagnostics.scene_sync_ms / static_cast<double>(diagnostics.frames),
+          diagnostics.scene_settings_ms /
+              static_cast<double>(diagnostics.frames),
+          diagnostics.viewport_prepare_ms /
+              static_cast<double>(diagnostics.frames),
+          diagnostics.viewport_render_ms /
+              static_cast<double>(diagnostics.frames),
+          render_stats.frames_per_second, render_stats.cpu_frame_ms,
+          render_stats.gpu_frame_ms);
+      diagnostics = {};
     }
   }
-
   rendering_frame_ = false;
   QDR_PROFILE_FRAME_MARK();
-  return false;
+  return submitted > 0u;
 }
 
-void App::wait_until_next_frame() {
-  const bool drawable = window_.can_render_frames();
-  const Sint32 wait_ms =
-      !drawable ? kSuspendedWindowWaitMs
-                : (ui_.needs_continuous_rendering() ||
-                           window_.chrome_resize_active() ||
-                           window_.native_chrome_interaction_active()
-                       ? kActiveFrameWaitMs
-                       : kIdleFrameWaitMs);
-  (void)platform_wait_for_event_timeout(wait_ms);
-}
-
-bool App::should_render_live_resize_event(const PlatformEvent &event) const {
-  if (!running_ || shutdown_complete_ || rendering_frame_ ||
-      !event.live_resize_exposed_frame ||
-      window_.sdl_window() == nullptr || !window_.can_render_frames()) {
-    return false;
+void App::schedule_next_frame() {
+  if (!frame_timer_ || !running_) {
+    return;
   }
-  if (window_.native_chrome_interaction_active()) {
-    return false;
+  const int interval =
+      ui_.needs_continuous_rendering()
+          ? presentation_frame_interval_ms(ui_.main_window())
+          : kIdleFrameIntervalMs;
+  if (frame_timer_->interval() != interval) {
+    frame_timer_->setInterval(interval);
   }
-  if (!window_.chrome_resize_active()) {
-    return false;
-  }
-
-  return true;
-}
-
-bool App::live_resize_event_watch(void *userdata,
-                                  const PlatformEvent &event) {
-  if (userdata == nullptr || !event.live_resize_exposed_frame) {
-    return true;
-  }
-
-  App *app = static_cast<App *>(userdata);
-  if (!app->should_render_live_resize_event(event)) {
-    return true;
-  }
-
-  if (app->render_frame(app->frame_clock_.tick())) {
-    app->live_resize_frame_rendered_ = true;
-  }
-  return true;
 }
 
 } // namespace quader

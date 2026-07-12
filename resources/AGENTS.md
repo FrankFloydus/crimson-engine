@@ -14,12 +14,14 @@ before changing resources.
 ## Resource Rules
 
 - User-facing UI text belongs in `resources/locales/*.lang`.
-- Runtime UI resources include icons, fonts, and ImGui/material outputs copied by the `quader`
-  target post-build step. After changing them, rebuild `quader`; tests alone do not refresh
-  `build/vs2026/Debug`.
+- The Qt Widgets shell uses the stock `Fusion` style and standard Qt controls. Do not add UI theme
+  stylesheets, palette files, custom fonts, or theme-specific icon packs under `resources`.
+- Runtime presentation resources are limited to localization plus assets with non-theme purposes,
+  such as the application logo and renderer-owned overlay icons. After changing them, rebuild
+  `quader`; tests alone do not refresh `build/vs2026/Debug`.
 - If the running UI differs from source, inspect copied runtime files under `build/vs2026/Debug`.
-- Keep icon and font assets license-backed. Do not add third-party fonts, icons, textures, or
-  material assets without license evidence under `thirdparty/`.
+- Keep logos, renderer-owned icons, textures, and material assets license-backed. Do not add
+  third-party assets without license evidence under `thirdparty/`.
 - Material source changes under `resources/materials` must compile through configured Filament
   `matc.exe`.
 - Keep default material assets under the app-owned resources tree and preserve post-build copy

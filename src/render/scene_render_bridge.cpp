@@ -51,10 +51,7 @@ void SceneRenderBridge::initialize(
 }
 
 void SceneRenderBridge::shutdown() {
-    if (!engine_) {
-        return;
-    }
-
+  if (engine_) {
     tool_preview_cache_.shutdown();
     sync_service_.shutdown();
     selected_object_overlay_cache_.shutdown();
@@ -65,11 +62,12 @@ void SceneRenderBridge::shutdown() {
     mesh_factory_.shutdown();
     material_binding_.shutdown();
     texture_binding_.shutdown();
+  }
 
-    previous_scene_snapshot_ = {};
-    has_previous_scene_snapshot_ = false;
-    engine_ = nullptr;
-    scene_ = nullptr;
+  previous_scene_snapshot_ = {};
+  has_previous_scene_snapshot_ = false;
+  engine_ = nullptr;
+  scene_ = nullptr;
 }
 
 void SceneRenderBridge::sync(const SceneDocument &document,
@@ -79,21 +77,35 @@ void SceneRenderBridge::sync(const SceneDocument &document,
   if (!engine_ || !scene_ || !sync_service_.initialized()) {
     return;
   }
+  if (has_previous_scene_snapshot_ && render_scene_snapshot_matches_sources(
+                                          previous_scene_snapshot_, document,
+                                          assets)) {
+    // Keep draining retired GPU proxies while making unchanged camera-only
+    // frames O(1) at the scene-extraction boundary.
+    (void)sync_service_.sync(previous_scene_snapshot_);
+    return;
+  }
+  if (has_previous_scene_snapshot_ &&
+      try_refresh_render_scene_snapshot_transforms(
+          previous_scene_snapshot_, document, assets, frame_index)) {
+    (void)sync_service_.sync(previous_scene_snapshot_);
+    return;
+  }
   RenderSceneSnapshot snapshot = build_render_scene_snapshot(
       document, assets,
       {.previous = has_previous_scene_snapshot_ ? &previous_scene_snapshot_
                                                 : nullptr,
        .frame_index = frame_index});
-  sync(snapshot);
+  sync(std::move(snapshot));
 }
 
-void SceneRenderBridge::sync(const RenderSceneSnapshot &snapshot) {
+void SceneRenderBridge::sync(RenderSceneSnapshot snapshot) {
   QDR_PROFILE_FUNCTION();
   if (!engine_ || !scene_ || !sync_service_.initialized()) {
     return;
   }
   (void)sync_service_.sync(snapshot);
-  previous_scene_snapshot_ = snapshot;
+  previous_scene_snapshot_ = std::move(snapshot);
   has_previous_scene_snapshot_ = true;
 }
 

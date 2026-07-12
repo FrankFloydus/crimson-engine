@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_api_types.hpp"
 #include "core/types.hpp"
 #include "viewport/viewport_input_router.hpp"
 #include "viewport/viewport_settings.hpp"
@@ -23,6 +24,18 @@ struct ViewportSceneBillboardPickCandidate {
   EntityId entity = kInvalidEntityId;
   QVec3 position = {};
   float size_pixels = 1.0f;
+};
+
+/**
+ * Captures camera-independent selection inputs used by transform gizmos.
+ * Revisions let the interaction layer retain an expensive world-space pivot
+ * while camera-only frames continue to rebuild projected gizmo geometry.
+ */
+struct ViewportInteractionSelectionState {
+  QuaderSelectionSummary summary;
+  std::uint64_t scene_revision = 0;
+  std::uint64_t asset_revision = 0;
+  std::uint64_t pivot_revision = 0;
 };
 
 /**
@@ -46,6 +59,7 @@ struct ViewportInteractionFrame {
   bool right_released = false;
   std::span<const ViewportSceneBillboardPickCandidate>
       scene_billboard_pick_candidates;
+  ViewportInteractionSelectionState selection_state;
 };
 
 /**

@@ -147,10 +147,12 @@ filament::Box bounds_for_mesh_vertices(std::span<const MeshVertex> vertices) {
 }
 
 std::vector<OverlayFaceFillVertex>
-selected_face_vertices(std::span<const MeshVertex> mesh_vertices) {
+selected_face_vertices(std::span<const MeshVertex> mesh_vertices,
+                       std::uint32_t selection_face_color) {
   std::vector<OverlayFaceFillVertex> result;
   result.reserve(mesh_vertices.size());
-  const std::uint32_t color = rgba8_srgb_to_linear(kOverlaySelectionFaceColor);
+  const std::uint32_t color =
+      rgba8_srgb_to_linear(selection_face_color);
   for (const MeshVertex &vertex : mesh_vertices) {
     result.push_back(
         {{vertex.position.x, vertex.position.y, vertex.position.z}, {}, color});
@@ -232,12 +234,6 @@ create_proxy(filament::Engine &engine, filament::Scene &scene,
 
 } // namespace
 
-bool selected_object_face_fills_enabled_for_selection_count(
-    std::size_t selected_mesh_count) {
-  return selected_mesh_count > 0u &&
-         selected_mesh_count <= kSelectedObjectFaceFillSelectionLimit;
-}
-
 SelectedObjectOverlayCache::Proxy::Proxy(Proxy &&other) noexcept
     : entity(other.entity),
       vertex_buffer(std::exchange(other.vertex_buffer, nullptr)),
@@ -287,6 +283,7 @@ void SelectedObjectOverlayCache::shutdown() {
     synced_visibility_revision_ = 0;
     synced_transform_revision_ = 0;
     synced_mesh_binding_revision_ = 0;
+    synced_face_style_signature_ = 0;
     synced_face_fills_enabled_ = false;
     has_synced_ = false;
     engine_ = nullptr;
@@ -307,10 +304,13 @@ void SelectedObjectOverlayCache::sync(
       return;
     }
     set_visible(true);
+    const bool face_style_changed = selected_object_face_style_changed(
+        has_synced_, synced_face_style_signature_, snapshot.style);
     if (has_synced_ && synced_asset_revision_ == snapshot.asset_revision &&
         synced_selection_revision_ == snapshot.selection_revision &&
         synced_visibility_revision_ == snapshot.visibility_revision &&
-        synced_mesh_binding_revision_ == snapshot.mesh_binding_revision) {
+        synced_mesh_binding_revision_ == snapshot.mesh_binding_revision &&
+        !face_style_changed) {
       if (synced_transform_revision_ != snapshot.transform_revision) {
         if (synced_face_fills_enabled_) {
           update_entry_transforms(snapshot);
@@ -325,7 +325,8 @@ void SelectedObjectOverlayCache::sync(
         selected_entity_states(snapshot);
     const bool face_fills_enabled =
         selected_object_face_fills_enabled_for_selection_count(states.size());
-    if (has_synced_ && synced_face_fills_enabled_ == face_fills_enabled &&
+    if (has_synced_ && !face_style_changed &&
+        synced_face_fills_enabled_ == face_fills_enabled &&
         states == synced_states_) {
       if (synced_transform_revision_ != snapshot.transform_revision) {
         if (synced_face_fills_enabled_) {
@@ -338,6 +339,7 @@ void SelectedObjectOverlayCache::sync(
       synced_visibility_revision_ = snapshot.visibility_revision;
       synced_transform_revision_ = snapshot.transform_revision;
       synced_mesh_binding_revision_ = snapshot.mesh_binding_revision;
+      synced_face_style_signature_ = snapshot.style.face_signature;
       return;
     }
 
@@ -351,7 +353,8 @@ void SelectedObjectOverlayCache::sync(
         const bool rebuild =
             existing == entries_.end() ||
             existing->second.mesh_id != state.mesh_id ||
-            existing->second.mesh_revision != state.mesh_revision;
+            existing->second.mesh_revision != state.mesh_revision ||
+            face_style_changed;
         if (rebuild) {
           if (existing != entries_.end()) {
             destroy_entry(existing->second);
@@ -362,7 +365,7 @@ void SelectedObjectOverlayCache::sync(
           if (mesh == nullptr) {
             continue;
           }
-          Entry entry = create_entry(*mesh);
+          Entry entry = create_entry(*mesh, snapshot.style);
           existing = entries_.emplace(state.entity, std::move(entry)).first;
         }
         const RenderOverlayMeshSnapshot *mesh =
@@ -383,6 +386,7 @@ void SelectedObjectOverlayCache::sync(
     synced_visibility_revision_ = snapshot.visibility_revision;
     synced_transform_revision_ = snapshot.transform_revision;
     synced_mesh_binding_revision_ = snapshot.mesh_binding_revision;
+    synced_face_style_signature_ = snapshot.style.face_signature;
     synced_face_fills_enabled_ = face_fills_enabled;
     has_synced_ = true;
 }
@@ -408,7 +412,8 @@ SelectedObjectOverlayCache::selected_entity_states(
 
 SelectedObjectOverlayCache::Entry
 SelectedObjectOverlayCache::create_entry(
-    const RenderOverlayMeshSnapshot &mesh) {
+    const RenderOverlayMeshSnapshot &mesh,
+    const ViewportPersistentOverlayStyleSnapshot &style) {
   QDR_PROFILE_FUNCTION();
   Entry entry;
   entry.mesh_id = mesh.mesh_id;
@@ -424,7 +429,7 @@ SelectedObjectOverlayCache::create_entry(
 
   const std::uint8_t layer_mask = visible_ ? kViewportOverlayLayerMask : 0u;
   std::vector<OverlayFaceFillVertex> face_vertices =
-      selected_face_vertices(mesh.vertices);
+      selected_face_vertices(mesh.vertices, style.selection_face_color);
   std::vector<std::uint32_t> face_indices =
       valid_triangle_indices(mesh.vertices, mesh.indices);
   if (!face_vertices.empty() && !face_indices.empty()) {

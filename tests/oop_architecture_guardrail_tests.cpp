@@ -586,33 +586,40 @@ TEST(OopArchitectureGuardrailTests,
   EXPECT_NE(header.find("struct UIIntentContext"), std::string::npos);
   EXPECT_NE(header.find("struct UIScenePresentationContext"),
             std::string::npos);
+  EXPECT_NE(header.find("struct UIInspectorPreviewContext"),
+            std::string::npos);
   EXPECT_NE(header.find("struct UIPreferencesContext"), std::string::npos);
-  EXPECT_NE(header.find("struct UIViewportSurfaceContext"), std::string::npos);
+  EXPECT_EQ(header.find("struct UIViewportSurfaceContext"), std::string::npos);
   EXPECT_NE(context.find("UIIntentContext intent;"), std::string::npos);
   EXPECT_NE(context.find("UIScenePresentationContext scene;"),
             std::string::npos);
+  EXPECT_NE(context.find("UIInspectorPreviewContext *inspector_preview"),
+            std::string::npos);
   EXPECT_NE(context.find("UIPreferencesContext preferences;"),
             std::string::npos);
-  EXPECT_NE(context.find("UIViewportSurfaceContext *viewport"),
-            std::string::npos);
+  EXPECT_EQ(context.find("viewport"), std::string::npos);
 
-  EXPECT_NE(presentation.find("const SceneDocument& document"),
+  EXPECT_NE(presentation.find("const SceneDocument &document"),
             std::string::npos);
-  EXPECT_NE(presentation.find("const AssetRegistry& assets"),
+  EXPECT_NE(presentation.find("const AssetRegistry &assets"),
             std::string::npos);
-  EXPECT_NE(presentation.find("const ModelingSessionService& modeling"),
+  EXPECT_NE(presentation.find("const ModelingSessionService &modeling"),
             std::string::npos);
-  EXPECT_NE(presentation.find("const EditorSelectionService& selection"),
+  EXPECT_NE(presentation.find("const EditorSelectionService &selection"),
             std::string::npos);
 
   for (std::string_view forbidden : {
-           "QuaderEditorApi& editor",
+           "QuaderEditorApi &editor",
            "SceneRenderBridge &render_bridge",
-           "SceneDocument& document",
-           "AssetRegistry& assets",
-           "ModelingSessionService& modeling",
-           "EditorSelectionService& selection",
+           "SceneDocument &document",
+           "AssetRegistry &assets",
+           "ModelingSessionService &modeling",
+           "EditorSelectionService &selection",
            "ViewportSettings &viewport_settings",
+           "ViewportWorkspaceService",
+           "QtViewportPanel",
+           "QtViewportSurface",
+           "RenderSystem",
            "FrameTiming frame_timing",
            "RenderFramePerformanceStats render_performance",
        }) {
@@ -627,7 +634,7 @@ TEST(OopArchitectureGuardrailTests,
          lines_containing(source, {"context.viewport->", "context.viewport ==",
                                    "*context.viewport",
                                    "ui_context.viewport->"})) {
-      EXPECT_TRUE(relative == "src/ui/viewport_panel.cpp")
+      EXPECT_TRUE(relative == "src/ui/qt_viewport_panel.cpp")
           << relative << ": " << line;
     }
     for (const std::string &line :
@@ -678,7 +685,7 @@ TEST(OopArchitectureGuardrailTests, UiShellLeavesSceneOverlayExtractionToRenderB
   const std::string ui_system =
       read_file(source_root() / "src/ui/ui_system.cpp");
   const std::string viewport_panel =
-      read_file(source_root() / "src/ui/viewport_panel.cpp");
+      read_file(source_root() / "src/ui/qt_viewport_panel.cpp");
   const std::string ui_shell = ui_system + viewport_panel;
   const std::string builder = read_file(
       source_root() / "src/render/overlay/viewport_scene_overlay_builder.cpp");
@@ -914,15 +921,22 @@ TEST(OopArchitectureGuardrailTests, RuntimeMaterialResourceContractsUseCatalogs)
             std::string::npos);
   EXPECT_NE(material_catalog.find("kQuaderMeshMaterialFile"),
             std::string::npos);
-  EXPECT_NE(material_catalog.find("kImguiMaterialFile"), std::string::npos);
+  EXPECT_NE(material_catalog.find("kOverlayIconMaterialFile"),
+            std::string::npos);
+  EXPECT_NE(material_catalog.find("kGroundGridMaterialFile"),
+            std::string::npos);
+  EXPECT_EQ(material_catalog.find("kImguiMaterialFile"), std::string::npos);
   EXPECT_NE(material_library.find("filament_material_catalog.hpp"),
             std::string::npos);
   EXPECT_NE(material_library.find("std::string(kFilamentMaterialDirectory)"),
+            std::string::npos);
+  EXPECT_NE(material_library.find("std::string(kOverlayIconMaterialFile)"),
             std::string::npos);
   EXPECT_EQ(material_library.find("\"materials\" / \"quader_mesh.filamat\""),
             std::string::npos);
   EXPECT_EQ(material_library.find("\"materials\" / \"imgui.filamat\""),
             std::string::npos);
+  EXPECT_EQ(material_library.find("imgui.filamat"), std::string::npos);
 
   EXPECT_NE(default_catalog.find("kDefaultMaterialAlbedoTexturePackagePath"),
             std::string::npos);
@@ -965,18 +979,17 @@ TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPrevie
   const std::string inspector_source =
       read_file(source_root() / "src/ui/inspector_panel.cpp");
   const std::string viewport_panel_header =
-      read_file(source_root() / "src/ui/viewport_panel.hpp");
+      read_file(source_root() / "src/ui/qt_viewport_panel.hpp");
   const std::string viewport_panel_source =
-      read_file(source_root() / "src/ui/viewport_panel.cpp");
+      read_file(source_root() / "src/ui/qt_viewport_panel.cpp");
 
   EXPECT_NE(service_source.find("SceneTransformPreviewTransaction"),
             std::string::npos);
   EXPECT_NE(service_source.find("has_selected_ancestor(document, entity)"),
             std::string::npos);
-  EXPECT_NE(
-      service_source.find(
-          "document_local_pivot_for_world_point(document, entity,"),
-      std::string::npos);
+  EXPECT_NE(service_source.find(
+                "transform_point(inverse(world_transform), world_pivot)"),
+            std::string::npos);
   EXPECT_NE(service_source.find("selected_transform_pivot("), std::string::npos);
   EXPECT_NE(service_source.find("pin_target_local_pivot_to_world_point("),
             std::string::npos);
@@ -986,6 +999,9 @@ TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPrevie
             std::string::npos);
   EXPECT_NE(transform_drag_source.find(
                 "scene_transform_drag_service_.preview_world_transform_delta("),
+            std::string::npos);
+  EXPECT_NE(transform_drag_source.find(
+                "scene_transform_drag_service_.preview_world_translation_delta("),
             std::string::npos);
   EXPECT_NE(transform_drag_source.find(
                 "scene_transform_drag_service_.commit(*history)"),
@@ -1112,24 +1128,32 @@ TEST(OopArchitectureGuardrailTests,
       read_file(source_root() / "src/ui/ui_system.cpp");
   const std::string app_source =
       read_file(source_root() / "src/app/app.cpp");
-  const std::string ui_draw = source_slice(ui_system_source,
-                                           "void UISystem::draw(",
-                                           "void UISystem::prepare_render_data");
-  ASSERT_FALSE(ui_draw.empty());
+  const std::string install_hooks = source_slice(
+      ui_system_source, "void UISystem::install_runtime_hooks(",
+      "void UISystem::show()");
+  const std::string ui_refresh = source_slice(
+      ui_system_source, "void UISystem::refresh(",
+      "void UISystem::process_viewport_input()");
+  ASSERT_FALSE(install_hooks.empty());
+  ASSERT_FALSE(ui_refresh.empty());
 
   EXPECT_NE(ui_system_header.find(
                 "void install_runtime_hooks(QuaderEditorApi &editor,"),
             std::string::npos);
-  EXPECT_NE(
-      ui_system_source.find(
-          "void UISystem::install_runtime_hooks(QuaderEditorApi &editor,"),
-      std::string::npos);
-  EXPECT_NE(app_source.find(
-                "ui_.install_runtime_hooks(*editor_, project_session_.scene()"),
+  EXPECT_NE(ui_system_source.find("void UISystem::install_runtime_hooks("),
+            std::string::npos);
+  EXPECT_NE(app_source.find("ui_.install_runtime_hooks("), std::string::npos);
+  EXPECT_NE(app_source.find("*editor_, project_session_.scene()"),
             std::string::npos);
   EXPECT_NE(app_source.find("project_session_.modeling()"),
             std::string::npos);
-  EXPECT_EQ(ui_draw.find("set_runtime_hooks("), std::string::npos);
+  EXPECT_NE(install_hooks.find("editor.viewports().set_runtime_hooks("),
+            std::string::npos);
+  EXPECT_NE(install_hooks.find("editor.ui().set_runtime_hooks("),
+            std::string::npos);
+  EXPECT_NE(install_hooks.find("editor.preferences().set_runtime_hooks("),
+            std::string::npos);
+  EXPECT_EQ(ui_refresh.find("set_runtime_hooks("), std::string::npos);
 }
 
 TEST(OopArchitectureGuardrailTests, RenderCodeDoesNotCallDocumentOrAssetMutators) {

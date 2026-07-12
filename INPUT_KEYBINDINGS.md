@@ -24,9 +24,10 @@ Quader input is split into four layers:
   user JSON persistence.
 - `src/api/QuaderCommandsApi.*` owns command ids, default keybindings, canonical command aliases,
   viewport shortcut/action mapping, keybinding storage path selection, and public API access.
-- `src/ui/viewport_panel.cpp` translates platform events into a `ViewportInputFrame`;
-  `src/viewport/viewport_input_router.*` consumes semantic navigation input and resolved viewport
-  shortcuts.
+- `src/ui/qt_input_adapter.*` translates Qt key, mouse, wheel, modifier, focus, and text-capture
+  events into canonical Quader input; `src/ui/qt_viewport_panel.*` assembles a
+  `ViewportInputFrame`; `src/viewport/viewport_input_router.*` consumes semantic navigation input
+  and resolved viewport shortcuts.
 
 Do not bypass these owners. If a missing capability is needed, add it to the owner first and then
 route callers through that owner.
@@ -110,7 +111,7 @@ Viewport navigation has semantic actions:
 - `viewport.navigation.reset_fly_speed`
 
 These map to `ViewportInputActionKind` and `ViewportNavigationInput`. The router should react to
-semantic navigation input, not raw SDL keys or hardcoded button combinations, except for legacy
+semantic navigation input, not raw Qt keys or hardcoded button combinations, except for legacy
 fallback tests where the keybinding resolver is explicitly inactive.
 
 Default tool, command, selection-mode, and grid shortcuts should normally require
@@ -167,7 +168,8 @@ Cover at least one relevant case from each group:
 - same key resolves differently in different contexts;
 - active navigation continues while modifier keys are pressed after drag start;
 - tool shortcuts do not fire while `navigation.active`;
-- UI/source guardrails keep input routing through `ViewportHost` and `ViewportInputRouter`.
+- UI/source guardrails keep Qt conversion in `src/ui/qt_input_adapter.*` and routing through
+  `ViewportInputRouter`.
 
 Manual smoke checks are still useful for real window, mouse capture, and GPU behavior, but they are
 not a replacement for these synthetic tests.

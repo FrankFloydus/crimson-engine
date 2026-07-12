@@ -40,6 +40,27 @@ void include_bounds(std::optional<SceneBounds> &result,
   }
 }
 
+std::optional<SceneBounds> transformed_local_bounds(
+    const QMat4 &world_from_local,
+    const std::optional<SceneBounds> &local_bounds) {
+  if (local_bounds) {
+    std::optional<SceneBounds> result;
+    for (const QVec3 local_corner : bounds_corners(*local_bounds)) {
+      const QVec3 world_corner =
+          transform_point(world_from_local, local_corner);
+      if (!result) {
+        result = SceneBounds{.min = world_corner, .max = world_corner};
+      } else {
+        include_point(*result, world_corner);
+      }
+    }
+    return result;
+  }
+
+  const QVec3 world_position = transform_point(world_from_local, {});
+  return SceneBounds{.min = world_position, .max = world_position};
+}
+
 } // namespace
 
 std::optional<SceneBounds> local_mesh_bounds(const MeshAsset &mesh) {
@@ -55,6 +76,12 @@ std::optional<SceneBounds> local_mesh_bounds(const MeshAsset &mesh) {
     include_point(bounds, vertex.position);
   }
   return bounds;
+}
+
+std::optional<SceneBounds> world_bounds_from_local_mesh_bounds(
+    const QMat4 &world_from_local,
+    const std::optional<SceneBounds> &local_bounds) {
+  return transformed_local_bounds(world_from_local, local_bounds);
 }
 
 void include_point(SceneBounds &bounds, QVec3 point) {
@@ -82,29 +109,27 @@ std::optional<SceneBounds> entity_world_bounds(const SceneDocument &document,
     return std::nullopt;
   }
 
-  const QMat4 world_from_local = document.world_transform_matrix(entity);
+  std::optional<SceneBounds> local_bounds;
   const MeshComponent *mesh_component = document.mesh(entity);
   if (mesh_component) {
     if (const MeshAsset *mesh = assets.mesh(mesh_component->mesh)) {
-      if (const std::optional<SceneBounds> local_bounds =
-              local_mesh_bounds(*mesh)) {
-        std::optional<SceneBounds> result;
-        for (const QVec3 local_corner : bounds_corners(*local_bounds)) {
-          const QVec3 world_corner =
-              transform_point(world_from_local, local_corner);
-          if (!result) {
-            result = SceneBounds{.min = world_corner, .max = world_corner};
-          } else {
-            include_point(*result, world_corner);
-          }
-        }
-        return result;
-      }
+      local_bounds = local_mesh_bounds(*mesh);
     }
   }
 
-  const QVec3 world_position = transform_point(world_from_local, {});
-  return SceneBounds{.min = world_position, .max = world_position};
+  return world_bounds_from_local_mesh_bounds(
+      document.world_transform_matrix(entity), local_bounds);
+}
+
+std::optional<SceneBounds> entity_world_bounds_from_local_mesh_bounds(
+    const SceneDocument &document, EntityId entity,
+    const std::optional<SceneBounds> &local_bounds) {
+  if (!document.is_effectively_visible(entity) ||
+      document.transform(entity) == nullptr) {
+    return std::nullopt;
+  }
+  return world_bounds_from_local_mesh_bounds(
+      document.world_transform_matrix(entity), local_bounds);
 }
 
 std::optional<SceneBounds>

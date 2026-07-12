@@ -6,145 +6,143 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "assets/asset_registry.hpp"
 #include "core/frame_timing.hpp"
 #include "core/localization_service.hpp"
 #include "core/types.hpp"
-#include "editor/input/quader_input_binding.hpp"
-#include "render/imgui_filament_renderer.hpp"
-#include "render/render_system.hpp"
-#include "render/scene_render_bridge.hpp"
-#include "render/viewport_renderer.hpp"
-#include "scene/scene_document.hpp"
-#include "ui/main_menu_bar.hpp"
-#include "ui/tool_settings_panel.hpp"
+#include "render/render_performance_stats.hpp"
+#include "ui/qt_auxiliary_window_state.hpp"
+#include "ui/qt_main_menu.hpp"
 #include "ui/ui_panel_manager.hpp"
-#include "ui/ui_icon_set.hpp"
 #include "ui/ui_settings.hpp"
-#include "ui/ui_style_tokens.hpp"
-#include "ui/viewport_settings_panel.hpp"
-#include "ui/viewport_panel.hpp"
 #include "viewport/viewport_settings.hpp"
 
-#include <cstdint>
 #include <filesystem>
-#include <optional>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <string>
-#include <vector>
+
+class QDockWidget;
+class QLabel;
+class QMainWindow;
+class QWidget;
 
 namespace quader {
 
-class QuaderEditorApi;
+class AssetRegistry;
+class ConsolePanel;
 class EditorSelectionService;
+class InspectorPanel;
 class LinearArrayToolService;
 class ModelingSessionService;
+class OutlinerPanel;
 class PivotToolService;
-class UIPlatformAdapter;
-struct UIPlatformEvent;
+class QtSettingsDialog;
+class QtCommandEventFilter;
+class QtToolSettingsWindow;
+class QtViewportPanel;
+enum class QtSettingsChangeKind;
+class QuaderEditorApi;
+class RenderOverlaySnapshotCache;
+class RenderSystem;
+class SceneDocument;
+class SceneRenderBridge;
 
 /**
- * Enumerates native window chrome actions requested by the ImGui shell.
+ * Owns Quader's retained Qt Widgets shell and all top-level presentation
+ * surfaces. Domain state remains owned by editor, scene, viewport and render
+ * services.
  */
-enum class WindowChromeAction {
-    Minimize,
-    ToggleMaximizeRestore,
-    Close,
-};
-
-/**
- * Owns UI System behavior within the ImGui editor presentation layer.
- */
-class UISystem {
+class UISystem final {
 public:
-    ~UISystem();
+  UISystem();
+  ~UISystem();
 
-    void initialize(UIPlatformAdapter &platform_adapter,
-                    RenderSystem &render_system,
-                    const std::filesystem::path &executable_dir,
-                    bool custom_chrome);
-    void install_runtime_hooks(QuaderEditorApi &editor,
-                               SceneDocument &document,
-                               AssetRegistry &assets,
-                               ModelingSessionService &modeling);
-    void shutdown();
+  UISystem(const UISystem &) = delete;
+  UISystem &operator=(const UISystem &) = delete;
 
-    bool process_event(const UIPlatformEvent &event);
-    void begin_frame(const FrameTiming &frame_timing,
-                     std::uint32_t framebuffer_width,
-                     std::uint32_t framebuffer_height);
-    void end_frame_without_render();
-    void draw(QuaderEditorApi &editor, SceneRenderBridge &render_bridge,
-              SceneDocument &document, AssetRegistry &assets,
-              ModelingSessionService &modeling,
-              EditorSelectionService &selection, PivotToolService &pivot,
-              LinearArrayToolService &linear_array,
-              AssetId default_material, bool &quit_requested);
-    void prepare_render_data(std::uint32_t framebuffer_width,
-                             std::uint32_t framebuffer_height);
-    void prepare_viewports(QuaderEditorApi &editor,
-                           SceneRenderBridge &render_bridge,
-                           const SceneDocument &document,
-                           const AssetRegistry &assets,
-                           const PivotToolService &pivot,
-                           const LinearArrayToolService &linear_array);
-    void render_viewports(RenderSystem &render_system);
-    void render(RenderSystem &render_system);
-    void set_render_performance_stats(RenderFramePerformanceStats stats);
-    void set_viewport_render_resize_suspended(bool suspended);
-    [[nodiscard]] bool needs_continuous_rendering() const;
-    std::optional<WindowChromeAction> take_window_chrome_action();
-    const ViewportToolState &viewport_tool_state() const {
-      return viewport_panel_->tool_state();
-    }
+  bool initialize(RenderSystem &render_system,
+                  const std::filesystem::path &executable_dir);
+  void install_runtime_hooks(QuaderEditorApi &editor,
+                             SceneDocument &document, AssetRegistry &assets,
+                             ModelingSessionService &modeling,
+                             EditorSelectionService &selection,
+                             PivotToolService &pivot,
+                             LinearArrayToolService &linear_array,
+                             AssetId default_material);
+  void show();
+  void shutdown();
+
+  void refresh(const FrameTiming &frame_timing,
+               RenderFramePerformanceStats render_performance);
+  void process_viewport_input();
+  void prepare_viewports(SceneRenderBridge &render_bridge,
+                         RenderOverlaySnapshotCache &snapshot_cache);
+  [[nodiscard]] std::size_t render_viewports();
+  [[nodiscard]] bool needs_continuous_rendering() const;
+
+  [[nodiscard]] QMainWindow *main_window() const { return main_window_.get(); }
+  [[nodiscard]] void *native_window_handle() const;
+  [[nodiscard]] bool can_render_viewports() const;
+
+  [[nodiscard]] bool save_settings();
+  [[nodiscard]] bool save_viewport_settings();
+  void save_window_state();
 
 private:
-  void register_panels(RenderSystem &render_system);
-  MainMenuBarResult draw_window_chrome(QuaderEditorApi &editor,
-                                       bool &quit_requested,
-                                       SceneDocument &document,
-                                       ModelingSessionService &modeling);
-  void draw_dockspace(QuaderEditorApi &editor, bool &quit_requested,
-                      SceneDocument &document, ModelingSessionService &modeling,
-                      float sidebar_minimum_width);
-  void build_default_dock_layout(ImGuiID dockspace_id, ImVec2 dockspace_size);
-  void close_menu_popup_for_pass_through_click();
-  void enforce_sidebar_dock_minimums(float sidebar_minimum_width);
-  void set_viewport_cursor_captured(bool captured);
-  void warp_captured_cursor(QVec2 point);
-  void save_settings();
-  void save_viewport_settings();
+  void create_docks();
+  QDockWidget &create_dock(UIPanelId id, QWidget &content,
+                           int default_area);
+  void restore_window_state();
+  void save_auxiliary_window_state();
+  void synchronize_auxiliary_window_visibility();
+  void refresh_status_bar();
+  void refresh_localized_chrome();
+  void handle_settings_dialog_change(QtSettingsChangeKind kind);
+  void synchronize_settings_surfaces(bool refresh_dialog);
+  void show_settings_dialog();
+  [[nodiscard]] bool panel_visible(UIPanelId id) const;
+  void set_panel_visible(UIPanelId id, bool visible);
 
-  UIPlatformAdapter *platform_adapter_ = nullptr;
-  RenderSystem *render_system_ = nullptr;
-  ImGuiFilamentRenderer renderer_;
-  UIStyleTokens style_;
+  std::unique_ptr<QMainWindow> main_window_;
+  std::unique_ptr<QtMainMenu> main_menu_;
+  std::unique_ptr<QtCommandEventFilter> command_event_filter_;
+  QtViewportPanel *viewport_panel_ = nullptr;
+  OutlinerPanel *outliner_panel_ = nullptr;
+  InspectorPanel *inspector_panel_ = nullptr;
+  ConsolePanel *console_panel_ = nullptr;
+  QtSettingsDialog *settings_dialog_ = nullptr;
+  QtToolSettingsWindow *tool_settings_window_ = nullptr;
+  QLabel *status_message_ = nullptr;
+  QLabel *status_version_ = nullptr;
   UIPanelManager panels_;
-  MainMenuBar main_menu_bar_;
-  ViewportSettingsPanel viewport_settings_panel_;
-  ToolSettingsPanel tool_settings_panel_;
-  ViewportPanel *viewport_panel_ = nullptr;
-  UIIconSet icons_;
   LocalizationService localization_;
   UISettings settings_;
   UISettingsPaths settings_paths_;
+  QtAuxiliaryWindowState auxiliary_window_state_;
   ViewportSettings viewport_settings_;
-  std::string imgui_ini_path_;
-  bool settings_panel_open_ = false;
-  bool tool_settings_panel_open_ = false;
+  RenderSystem *render_system_ = nullptr;
+  QuaderEditorApi *editor_ = nullptr;
+  SceneDocument *document_ = nullptr;
+  AssetRegistry *assets_ = nullptr;
+  ModelingSessionService *modeling_ = nullptr;
+  EditorSelectionService *selection_ = nullptr;
+  PivotToolService *pivot_ = nullptr;
+  LinearArrayToolService *linear_array_ = nullptr;
+  AssetId default_material_ = kInvalidAssetId;
+  FrameTiming frame_timing_{};
+  RenderFramePerformanceStats render_performance_{};
   bool initialized_ = false;
-  bool custom_chrome_ = false;
-  bool dock_layout_built_ = false;
-  bool has_saved_dock_layout_ = false;
-  bool main_menu_popup_open_ = false;
-  bool relative_mouse_captured_ = false;
-  bool relative_mouse_capture_warning_issued_ = false;
-  QVec2 relative_mouse_delta_ = {};
-  std::vector<QuaderInputChord> pending_pressed_input_chords_;
-  FrameTiming current_frame_timing_ = {};
-  RenderFramePerformanceStats render_performance_stats_;
-  UIPanelId focused_panel_ = UIPanelId::Viewport;
-  std::optional<WindowChromeAction> pending_chrome_action_;
-  bool viewport_render_resize_suspended_ = false;
+  bool ui_settings_changed_ = false;
+  std::string localized_locale_;
+  std::uint64_t outliner_scene_revision_ = 0;
+  std::uint64_t inspector_scene_revision_ = 0;
+  std::uint64_t inspector_modeling_content_revision_ = 0;
+  std::uint64_t inspector_modeling_selection_revision_ = 0;
+  std::string outliner_locale_;
+  std::string inspector_locale_;
+  bool outliner_refresh_valid_ = false;
+  bool inspector_refresh_valid_ = false;
 };
 
 } // namespace quader

@@ -7,8 +7,7 @@
 #pragma once
 
 #include "core/types.hpp"
-#include "editor/commands/document/apply_entity_transform_command.hpp"
-#include "editor/commands/document/batch_document_command.hpp"
+#include "editor/commands/document/apply_entity_transforms_command.hpp"
 #include "editor/commands/document/document_command_edits.hpp"
 #include "editor/commands/document/document_command_result.hpp"
 #include "editor/history/editor_history_service.hpp"
@@ -143,15 +142,19 @@ public:
         }
 
         bool changed = false;
+        std::vector<SceneTransformAssignment> assignments;
+        assignments.reserve(edits_.size());
         for (const DocumentTransformEdit& edit : edits_) {
-            if (!scene_.exists(edit.entity)) {
-                continue;
-            }
-            const TransformComponent* current = scene_.transform(edit.entity);
-            changed = changed || current == nullptr ||
-                      !document_command_same_transform(*current, edit.before);
-            scene_.set_transform(edit.entity, edit.before);
+          if (!scene_.exists(edit.entity)) {
+            continue;
+          }
+          const TransformComponent* current = scene_.transform(edit.entity);
+          changed = changed || current == nullptr ||
+                    !document_command_same_transform(*current, edit.before);
+          assignments.push_back({.entity = edit.entity,
+                                 .transform = edit.before});
         }
+        scene_.set_transforms(assignments);
         active_ = false;
         return changed ? document_command_changed_result()
                        : document_command_unchanged_result();
@@ -164,15 +167,19 @@ public:
         }
 
         bool changed = false;
+        std::vector<SceneTransformAssignment> assignments;
+        assignments.reserve(edits_.size());
         for (const DocumentTransformEdit& edit : edits_) {
           if (!scene_.exists(edit.entity) ||
               scene_.is_effectively_locked(edit.entity)) {
             continue;
           }
-          scene_.set_transform(edit.entity, edit.after);
           changed = changed ||
                     !document_command_same_transform(edit.before, edit.after);
+          assignments.push_back({.entity = edit.entity,
+                                 .transform = edit.after});
         }
+        scene_.set_transforms(assignments);
         active_ = false;
         return changed ? document_command_changed_result()
                        : document_command_unchanged_result();
@@ -186,30 +193,29 @@ public:
 
         std::vector<DocumentTransformEdit> changed_edits;
         changed_edits.reserve(edits_.size());
+        std::vector<SceneTransformAssignment> assignments;
+        assignments.reserve(edits_.size());
         for (const DocumentTransformEdit& edit : edits_) {
           if (!scene_.exists(edit.entity) ||
               scene_.is_effectively_locked(edit.entity)) {
             continue;
           }
-          scene_.set_transform(edit.entity, edit.before);
+          assignments.push_back({.entity = edit.entity,
+                                 .transform = edit.after});
           if (!document_command_same_transform(edit.before, edit.after)) {
             changed_edits.push_back(edit);
           }
         }
+        scene_.set_transforms(assignments);
         active_ = false;
 
         if (changed_edits.empty()) {
           return document_command_unchanged_result();
         }
 
-        std::vector<std::unique_ptr<IUndoableCommand>> commands;
-        commands.reserve(changed_edits.size());
-        for (const DocumentTransformEdit &edit : changed_edits) {
-          commands.push_back(std::make_unique<ApplyEntityTransformCommand>(
-              scene_, edit.entity, edit.before, edit.after, label_));
-        }
-
-        return history.execute(std::make_unique<BatchDocumentCommand>(label_, std::move(commands)));
+        return history.record_executed(
+            std::make_unique<ApplyEntityTransformsCommand>(
+                scene_, std::move(changed_edits), label_));
     }
 
 private:

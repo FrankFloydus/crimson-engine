@@ -9,6 +9,7 @@
 #include "render/viewport_overlay_frame.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace quader {
@@ -154,6 +155,7 @@ inline constexpr float kOverlayVertexSizePixels = 7.0f;
 inline constexpr float kOverlaySelectedVertexGrowthPixels = 0.5f;
 inline constexpr float kOverlayHoverVertexGrowthPixels = 0.5f;
 inline constexpr float kOverlayVertexOutlineSizePixels = 1.0f;
+inline constexpr std::size_t kSelectedObjectFaceFillSelectionLimit = 64u;
 
 int viewport_overlay_draw_order(ViewportOverlayLayer layer);
 bool viewport_overlay_layer_uses_depth_stamped_face_fill(
@@ -193,6 +195,8 @@ float viewport_overlay_point_inner_radius(ViewportOverlayLayer layer);
 bool viewport_overlay_color_approximately(std::uint32_t a, std::uint32_t b);
 bool viewport_overlay_is_native_remove_color(std::uint32_t color);
 bool viewport_overlay_is_native_selection_wire_color(std::uint32_t color);
+bool selected_object_face_fills_enabled_for_selection_count(
+    std::size_t selected_mesh_count);
 std::uint32_t viewport_overlay_color_for(ViewportOverlayLayer layer,
                                          std::uint32_t original_rgba);
 

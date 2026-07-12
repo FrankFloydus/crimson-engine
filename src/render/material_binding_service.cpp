@@ -42,6 +42,30 @@ void bind_default_mesh_surface_grid(const MaterialBindingService &binding,
 
 } // namespace
 
+std::uint64_t mesh_surface_grid_signature(
+    float grid_world_spacing, const ViewportSettings &settings) {
+  const ViewportSettingColor minor =
+      settings.color(ViewportColorSettingId::MeshGridMinor);
+  const ViewportSettingColor major =
+      settings.color(ViewportColorSettingId::MeshGridMajor);
+  RenderSignatureBuilder signature;
+  signature.add_float(std::max(grid_world_spacing, 0.0001f))
+      .add_float(minor.r)
+      .add_float(minor.g)
+      .add_float(minor.b)
+      .add_float(minor.a)
+      .add_float(major.r)
+      .add_float(major.g)
+      .add_float(major.b)
+      .add_float(major.a)
+      .add_float(
+          settings.float_value(ViewportFloatSettingId::GridMinorLineSize))
+      .add_float(
+          settings.float_value(ViewportFloatSettingId::GridMajorLineSize))
+      .add_bool(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
+  return signature.value();
+}
+
 void MaterialBindingService::initialize(
     filament::Material &shaded_mesh_material,
     filament::Material &rendered_mesh_material,

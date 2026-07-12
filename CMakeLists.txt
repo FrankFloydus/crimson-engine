@@ -93,6 +93,7 @@ if(QUADER_BUILD_NATIVE_APP)
     find_package(EnTT CONFIG REQUIRED)
     find_package(stduuid CONFIG REQUIRED)
     find_package(Taskflow CONFIG REQUIRED)
+    find_package(Qt6 CONFIG REQUIRED COMPONENTS Core Gui Widgets)
     if(QUADER_ENABLE_SENTRY)
         find_package(sentry CONFIG REQUIRED)
         if(WIN32 AND TARGET sentry_crashpad::crashpad_wer)
@@ -440,8 +441,6 @@ if(WIN32)
     target_link_libraries(filament_sdk INTERFACE gdi32 user32 opengl32)
 endif()
 
-find_package(SDL3 CONFIG REQUIRED)
-find_package(imgui CONFIG REQUIRED)
 find_package(lodepng CONFIG REQUIRED)
 
 set(QUADER_MATERIAL_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/materials")
@@ -487,25 +486,20 @@ quader_register_filament_material(quader_selected_object_line_material resources
 quader_register_filament_material(quader_edit_wire_line_material resources/materials/quader_edit_wire_line.mat quader_edit_wire_line)
 quader_register_filament_material(quader_overlay_point_material resources/materials/quader_overlay_point.mat quader_overlay_point)
 quader_register_filament_material(quader_overlay_icon_material resources/materials/quader_overlay_icon.mat quader_overlay_icon)
-quader_register_filament_material(imgui_material resources/materials/imgui.mat imgui)
 quader_register_filament_material(ground_grid_material resources/materials/ground_grid.mat ground_grid)
 
 add_library(quader_platform STATIC
     src/platform/fatal_error_handler.cpp
-    src/platform/platform_event.cpp
     src/platform/platform_file_dialog.cpp
     src/platform/sentry_client.cpp
-    src/platform/platform_window.cpp
-    src/platform/sdl_event_utils.cpp
-    src/platform/sdl_input_adapter.cpp
+    src/platform/window_placement.cpp
 )
 
 quader_enable_common_pch(quader_platform)
 target_include_directories(quader_platform PUBLIC src)
 target_link_libraries(quader_platform
     PUBLIC
-        quader_core
-        SDL3::SDL3)
+        quader_core)
 if(QUADER_ENABLE_SENTRY)
     target_compile_definitions(quader_platform PRIVATE QUADER_ENABLE_SENTRY=1)
     target_link_libraries(quader_platform PRIVATE sentry::sentry)
@@ -515,8 +509,6 @@ if(WIN32)
     target_link_libraries(quader_platform
         PRIVATE
             Dbghelp
-            Dwmapi
-            Advapi32
             Comdlg32)
 endif()
 
@@ -525,7 +517,6 @@ add_library(quader_render STATIC
     src/render/filament_buffer_descriptor_factory.cpp
     src/render/filament_environment_library.cpp
     src/render/filament_material_library.cpp
-    src/render/imgui_filament_renderer.cpp
     src/api/quader_render_api.cpp
     src/render/light_renderable_cache.cpp
     src/render/material_binding_service.cpp
@@ -557,7 +548,6 @@ add_library(quader_render STATIC
     src/render/texture_registry.cpp
     src/render/tool_preview_renderable_cache.cpp
     src/render/viewport_info_stats.cpp
-    src/render/ui_icon_texture_service.cpp
     src/render/viewport_grid_renderer.cpp
     src/render/viewport_overlay_policy.cpp
     src/render/viewport_render_pass_coordinator.cpp
@@ -601,25 +591,28 @@ add_library(quader_ui STATIC
     src/editor/transform/mesh_arrangement_service.cpp
     src/editor/transform/scene_transform_drag_service.cpp
     src/ui/console_panel.cpp
-    src/ui/imgui_popup_utils.cpp
     src/ui/inspector_panel.cpp
-    src/ui/main_menu_bar.cpp
-    src/ui/modal_tool_overlay_renderer.cpp
-    src/ui/navigation_gizmo.cpp
     src/ui/outliner_panel.cpp
-    src/ui/tool_settings_panel.cpp
+    src/ui/qt_command_event_filter.cpp
+    src/ui/qt_color_swatch_button.cpp
+    src/ui/qt_input_adapter.cpp
+    src/ui/qt_main_menu.cpp
+    src/ui/qt_navigation_gizmo.cpp
+    src/ui/qt_semantic_axis_colors.hpp
+    src/ui/qt_auxiliary_window_state.cpp
+    src/ui/qt_settings_dialog.cpp
+    src/ui/qt_settings_controller.cpp
+    src/ui/qt_tool_settings_window.cpp
+    src/ui/qt_viewport_context_menu.cpp
+    src/ui/qt_viewport_delete_popup.cpp
+    src/ui/qt_viewport_fly_navigation_hud.cpp
+    src/ui/qt_viewport_panel.cpp
+    src/ui/qt_viewport_surface.cpp
     src/ui/ui_panel_manager.cpp
     src/ui/ui_system.cpp
-    src/ui/ui_style_tokens.cpp
-    src/ui/viewport_context_menu_presenter.cpp
-    src/ui/viewport_focus_controller.cpp
     src/ui/viewport_hover_controller.cpp
-    src/ui/viewport_input_frame_builder.cpp
-    src/ui/viewport_pane_controller.cpp
     src/ui/viewport_pane_overlay_cache.cpp
     src/ui/viewport_shortcut_controller.cpp
-    src/ui/viewport_settings_panel.cpp
-    src/ui/viewport_panel.cpp
 )
 
 quader_enable_common_pch(quader_ui)
@@ -630,9 +623,8 @@ target_link_libraries(quader_ui
     PUBLIC
         quader_api
         quader_render
-        imgui::imgui
+        Qt6::Widgets
     PRIVATE
-        lodepng
         quader_modeling_profile)
 target_compile_features(quader_ui PUBLIC cxx_std_20)
 
@@ -675,6 +667,14 @@ target_link_libraries(quader_runtime
         quader_render
         quader_ui)
 
+if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
+    add_executable(qdr_fixture_performance_baseline
+        benchmarks/modeling/qdr_fixture_performance_baseline.cpp)
+    quader_enable_common_pch(qdr_fixture_performance_baseline)
+    target_compile_features(qdr_fixture_performance_baseline PRIVATE cxx_std_20)
+    target_link_libraries(qdr_fixture_performance_baseline PRIVATE quader_runtime)
+endif()
+
 if(QUADER_ENABLE_SENTRY AND WIN32)
     get_filename_component(_QUADER_SENTRY_ROOT "${sentry_DIR}/../.." ABSOLUTE)
     find_program(QUADER_SENTRY_CRASHPAD_HANDLER
@@ -698,10 +698,48 @@ if(QUADER_ENABLE_SENTRY AND WIN32)
     endif()
 endif()
 
-add_executable(quader WIN32 src/main.cpp)
+set(QUADER_APPLICATION_ICON_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/quader_16.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/quader_32.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/quader_48.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/quader_64.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/quader_256.png")
+
+set(QUADER_NATIVE_APPLICATION_RESOURCES)
+if(WIN32)
+    enable_language(RC)
+    set(QUADER_NATIVE_APPLICATION_RESOURCES resources/icons/quader.rc)
+    set_source_files_properties(resources/icons/quader.rc PROPERTIES
+        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+        OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/quader.ico")
+endif()
+
+add_executable(quader WIN32
+    src/main.cpp
+    ${QUADER_NATIVE_APPLICATION_RESOURCES})
+qt_add_resources(quader "quader_application_icons"
+    PREFIX "/quader/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES ${QUADER_APPLICATION_ICON_FILES})
 target_link_libraries(quader PRIVATE quader_runtime)
 add_dependencies(quader
     ${QUADER_FILAMENT_MATERIAL_TARGETS})
+
+if(WIN32)
+    if(NOT TARGET Qt6::windeployqt)
+        message(FATAL_ERROR "Qt6::windeployqt is required to package the Quader Windows runtime.")
+    endif()
+    add_custom_command(TARGET quader POST_BUILD
+        COMMAND "$<TARGET_FILE:Qt6::windeployqt>"
+                --$<IF:$<CONFIG:Debug>,debug,release>
+                --dir "$<TARGET_FILE_DIR:quader>"
+                --no-translations
+                --skip-plugin-types styles
+                --include-plugins qwindows
+                "$<TARGET_FILE:quader>"
+        COMMENT "Deploying the Qt runtime and qwindows platform plugin"
+        VERBATIM)
+endif()
 
 if(MSVC)
     target_link_options(quader PRIVATE /ENTRY:mainCRTStartup)
@@ -721,23 +759,34 @@ endforeach()
 add_custom_command(TARGET quader POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/materials"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/materials/default"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/fonts"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/icons"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/ibl"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/locales"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory "$<TARGET_FILE_DIR:quader>/fonts"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory "$<TARGET_FILE_DIR:quader>/styles"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory "$<TARGET_FILE_DIR:quader>/ui"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory "$<TARGET_FILE_DIR:quader>/shaders"
+    COMMAND "${CMAKE_COMMAND}" -E rm -f
+            "$<TARGET_FILE_DIR:quader>/SDL3.dll"
+            "$<TARGET_FILE_DIR:quader>/rmlui.dll"
+            "$<TARGET_FILE_DIR:quader>/rmlui_debugger.dll"
+            "$<TARGET_FILE_DIR:quader>/quader_platform_sdl_win32.lib"
+            "$<TARGET_FILE_DIR:quader>/quader_ui_imgui.lib"
+            "$<TARGET_FILE_DIR:quader>/materials/imgui.filamat"
+            "$<TARGET_FILE_DIR:quader>/icons/empty_icon.png"
+            "$<TARGET_FILE_DIR:quader>/icons/hide_icon.png"
+            "$<TARGET_FILE_DIR:quader>/icons/lock_icon.png"
+            "$<TARGET_FILE_DIR:quader>/icons/mesh_icon.png"
+            "$<TARGET_FILE_DIR:quader>/icons/quader-logo@2x.png"
+            "$<TARGET_FILE_DIR:quader>/icons/show_icon.png"
+            "$<TARGET_FILE_DIR:quader>/icons/unlock_icon.png"
     ${QUADER_FILAMENT_MATERIAL_COPY_COMMANDS}
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/Inter.ttf"
-            "$<TARGET_FILE_DIR:quader>/fonts/Inter.ttf"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/logo.png"
+            "$<TARGET_FILE_DIR:quader>/icons/logo.png"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/Phosphor.ttf"
-            "$<TARGET_FILE_DIR:quader>/fonts/Phosphor.ttf"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/OFL.txt"
-            "$<TARGET_FILE_DIR:quader>/fonts/OFL.txt"
-    COMMAND "${CMAKE_COMMAND}" -E copy_directory
-            "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
-            "$<TARGET_FILE_DIR:quader>/icons"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/point_light.png"
+            "$<TARGET_FILE_DIR:quader>/icons/point_light.png"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/ibl"
             "$<TARGET_FILE_DIR:quader>/ibl"
@@ -800,6 +849,14 @@ if(QUADER_BUILD_TESTS)
         tests/math_types_tests.cpp
         tests/mesh_arrangement_tests.cpp
         tests/obj_export_tests.cpp
+        tests/outliner_panel_tests.cpp
+        tests/ui_panel_manager_tests.cpp
+        tests/qt_auxiliary_window_state_tests.cpp
+        tests/qt_input_adapter_tests.cpp
+        tests/qt_navigation_gizmo_tests.cpp
+        tests/qt_settings_controller_tests.cpp
+        tests/qt_viewport_fly_navigation_hud_tests.cpp
+        tests/qt_viewport_delete_popup_tests.cpp
         tests/qstr_tests.cpp
         tests/editor_api_tests.cpp
         tests/programmatic_api_tests.cpp

@@ -1,4 +1,4 @@
-﻿////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
 // This file is part of Quader and is protected proprietary source code.
 // No permission is granted to use, copy, modify, distribute, or sublicense this
@@ -7,34 +7,66 @@
 #pragma once
 
 #include "ui/ui_panel.hpp"
-#include "ui/ui_settings.hpp"
 
-#include <memory>
-#include <vector>
+#include <QObject>
+
+#include <array>
+#include <cstddef>
+#include <functional>
+
+class QDockWidget;
+class QEvent;
 
 namespace quader {
 
+class UISettings;
+
+/// Reports the requested panel visibility and whether it differs from current state.
+struct UIPanelVisibilityTransition {
+  bool visible = false;
+  bool changed = false;
+};
+
+[[nodiscard]] constexpr UIPanelVisibilityTransition
+ui_panel_visibility_transition(bool current, bool requested) noexcept {
+  return {.visible = requested, .changed = current != requested};
+}
+
 /**
- * Owns UI Panel Manager behavior within the ImGui editor presentation layer.
+ * Owns the stable mapping between public panel identifiers and QDockWidgets.
  */
-class UIPanelManager {
+class UIPanelManager final : public QObject {
 public:
-    void add(std::unique_ptr<UIPanel> panel);
-    void apply_settings(const UISettings &settings);
-    void write_settings(UISettings &settings) const;
+  using VisibilityChangedCallback = std::function<void()>;
 
-    bool is_visible(UIPanelId id) const;
-    void set_visible(UIPanelId id, bool visible);
-    UIPanel* panel(UIPanelId id);
+  UIPanelManager() = default;
 
-    void draw(UIContext& context);
-    const std::vector<std::unique_ptr<UIPanel>>& panels() const { return panels_; }
+  void add(UIPanelId id, QDockWidget &dock);
+  void set_visibility_changed_callback(VisibilityChangedCallback callback);
+  void apply_settings(const UISettings &settings);
+  void write_settings(UISettings &settings) const;
+
+  [[nodiscard]] bool is_visible(UIPanelId id) const;
+  bool set_visible(UIPanelId id, bool visible);
+  bool focus(UIPanelId id);
+  [[nodiscard]] QDockWidget *dock(UIPanelId id) const;
 
 private:
-  bool default_visibility(UIPanelId id) const;
+  static constexpr std::size_t index(UIPanelId id) {
+    return static_cast<std::size_t>(id);
+  }
 
-  std::vector<std::unique_ptr<UIPanel>> panels_;
-  std::vector<bool> visibility_;
+  bool eventFilter(QObject *watched, QEvent *event) override;
+  bool record_explicit_visibility(UIPanelId id, bool visible);
+
+  std::array<QDockWidget *, 4> docks_{};
+  std::array<bool, 4> explicit_visibility_{
+      ui_panel_default_visible(UIPanelId::Viewport),
+      ui_panel_default_visible(UIPanelId::Outliner),
+      ui_panel_default_visible(UIPanelId::Inspector),
+      ui_panel_default_visible(UIPanelId::Console),
+  };
+  VisibilityChangedCallback visibility_changed_;
 };
 
 } // namespace quader

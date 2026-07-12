@@ -243,14 +243,35 @@ void update_proxy_layer_mask(filament::Engine &engine,
 }
 
 template <typename Vertex>
+void update_proxy_vertex_buffer(filament::Engine &engine,
+                                OverlayRenderableProxy &proxy,
+                                const OverlayMesh<Vertex> &mesh) {
+  proxy.vertex_buffer->setBufferAt(
+      engine, 0, FilamentBufferDescriptorFactory::vector(mesh.vertices));
+}
+
+template <typename Vertex>
 void update_proxy_buffers(filament::Engine &engine,
                           OverlayRenderableProxy &proxy,
                           const OverlayMesh<Vertex> &mesh,
                           std::uint8_t layer_mask) {
-  proxy.vertex_buffer->setBufferAt(
-      engine, 0, FilamentBufferDescriptorFactory::vector(mesh.vertices));
+  update_proxy_vertex_buffer(engine, proxy, mesh);
   proxy.index_buffer->setBuffer(
       engine, FilamentBufferDescriptorFactory::vector(mesh.indices));
+  update_proxy_layer_mask(engine, proxy, layer_mask);
+}
+
+template <typename Vertex>
+void update_canonical_quad_proxy_vertices(filament::Engine &engine,
+                                          OverlayRenderableProxy &proxy,
+                                          const OverlayMesh<Vertex> &mesh,
+                                          std::uint8_t layer_mask) {
+  // OverlayLineMeshBuilder emits the same six indices for every four-vertex
+  // line quad. proxy_can_update_mesh has already verified the kind and both
+  // counts, so the existing index payload is identical. Line order, clipping,
+  // depth, width and color remain encoded in the freshly uploaded vertices and
+  // material state.
+  update_proxy_vertex_buffer(engine, proxy, mesh);
   update_proxy_layer_mask(engine, proxy, layer_mask);
 }
 
@@ -609,9 +630,10 @@ void OverlayProxyFactory::update_triangle_proxy(
 }
 
 void OverlayProxyFactory::update_line_proxy(OverlayRenderableProxy &proxy,
-                                            const OverlayLineBatch &batch,
-                                            std::uint8_t layer_mask) {
-  update_proxy_buffers(*engine_, proxy, batch.mesh, layer_mask);
+                                             const OverlayLineBatch &batch,
+                                             std::uint8_t layer_mask) {
+  update_canonical_quad_proxy_vertices(*engine_, proxy, batch.mesh,
+                                       layer_mask);
   configure_overlay_material(*proxy.material_instance, batch.state);
   proxy.material_instance->setParameter("lineWidth", batch.width_pixels);
   proxy.material_instance->setParameter("featherPixels",
@@ -621,7 +643,8 @@ void OverlayProxyFactory::update_line_proxy(OverlayRenderableProxy &proxy,
 void OverlayProxyFactory::update_edit_wire_proxy(
     OverlayRenderableProxy &proxy, const OverlayEditWireBatch &batch,
     std::uint8_t layer_mask) {
-  update_proxy_buffers(*engine_, proxy, batch.mesh, layer_mask);
+  update_canonical_quad_proxy_vertices(*engine_, proxy, batch.mesh,
+                                       layer_mask);
   configure_overlay_material(*proxy.material_instance, batch.state);
   proxy.material_instance->setParameter("lineWidth", batch.width_pixels);
   proxy.material_instance->setParameter("featherPixels",

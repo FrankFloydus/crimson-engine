@@ -72,7 +72,7 @@ public:
     void shutdown();
     void sync(const SceneDocument &document, const AssetRegistry &assets,
               std::uint64_t frame_index = 0);
-    void sync(const RenderSceneSnapshot &snapshot);
+    void sync(RenderSceneSnapshot snapshot);
     void update_mesh_surface_grid(float grid_world_spacing,
                                   const ViewportSettings &settings);
     void sync_scene_asset_overlays(

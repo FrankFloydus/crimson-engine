@@ -16,7 +16,11 @@ file except through prior written authorization from Francesco Di Blasi.
 - App code wires services, startup/shutdown, frame flow, and top-level orchestration.
 - User/editor mutations should route through `QuaderEditorApi`, command services, or owner services.
 - Do not hide modeling, rendering, selection, or document logic in app startup code.
-- Preserve the native UI frame order: process window events, draw/update ImGui UI, prepare viewport
-  render data, then render viewport surfaces inside the Filament frame.
+- `QApplication` owns the event loop. The app-owned `QTimer` schedules refresh work, scene/render
+  synchronization, viewport preparation, and submission to each visible native-child Filament
+  surface; do not create a competing event or frame loop.
+- `QMainWindow` construction and retained-widget composition belong to `UISystem`, not app
+  startup. App code owns only lifecycle, service wiring, persisted top-level placement, and frame
+  orchestration.
 - Changes to window lifecycle, backend startup, or frame orchestration need a manual smoke check when
   they cannot be covered by headless tests.

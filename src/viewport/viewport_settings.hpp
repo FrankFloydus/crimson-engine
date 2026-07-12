@@ -168,6 +168,8 @@ viewport_bool_settings();
 bool viewport_grid_snap_active(const ViewportSettings &settings,
                                bool temporary_toggle_pressed);
 float viewport_vertex_snap_radius(const ViewportSettings &settings);
+bool viewport_setting_colors_approximately(ViewportSettingColor left,
+                                           ViewportSettingColor right);
 
 /**
  * Owns Viewport Settings behavior within the viewport input, layout, and camera layer.
@@ -180,10 +182,11 @@ public:
     static ViewportSettings load(const std::filesystem::path& path);
 
     bool save(const std::filesystem::path& path) const;
-    void reset_to_defaults();
+    bool reset_to_defaults();
 
     ViewportSettingColor color(ViewportColorSettingId id) const;
     bool set_color(ViewportColorSettingId id, ViewportSettingColor value);
+    bool restore_color(ViewportColorSettingId id, ViewportSettingColor value);
 
     float float_value(ViewportFloatSettingId id) const;
     bool set_float_value(ViewportFloatSettingId id, float value);

@@ -698,15 +698,19 @@ public:
   [[nodiscard]] ViewportOverlayFrame
   selection_overlay_frame(ModelingSelectionOverlayOptions options = {}) const {
     return overlay_service_.selection_overlay_frame(
-        session_, runtime_, scene_, object_registry_,
-        cached_scene_transformed_objects_for_picking(), options);
+        session_, runtime_, scene_, object_registry_, selection_service_,
+        options);
   }
 
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
   tool_preview_meshes() const {
     return overlay_service_.tool_preview_meshes(
-        runtime_, scene_, object_registry_,
-        cached_scene_transformed_objects_for_picking());
+        session_, runtime_, scene_, object_registry_, selection_service_);
+  }
+
+  [[nodiscard]] std::uint64_t
+  transformed_picking_projection_build_count() const {
+    return selection_service_.transformed_picking_projection_build_count();
   }
 
   [[nodiscard]] static std::unordered_set<int> live_modeling_object_ids(
@@ -1253,6 +1257,11 @@ public:
   [[nodiscard]] bool modal_tool_owns_viewport() const {
     return modal_tool_runtime_.owns_viewport(
         from_runtime_viewport_tool(runtime_.active_tool()));
+  }
+
+  [[nodiscard]] bool transform_drag_active() const {
+    return runtime_.transform_drag_active() ||
+           transform_drag_service_.scene_preview_active();
   }
 
   [[nodiscard]] bool can_cancel_active_tool_or_preview() const {
@@ -3511,6 +3520,11 @@ ModelingSessionService::tool_preview_meshes() const {
   return impl_->tool_preview_meshes();
 }
 
+std::uint64_t
+ModelingSessionService::transformed_picking_projection_build_count() const {
+  return impl_->transformed_picking_projection_build_count();
+}
+
 ModelingSessionMemento ModelingSessionService::capture_history_memento() const {
   return impl_->capture_history_memento();
 }
@@ -3603,6 +3617,10 @@ ModelingSessionService::apply_active_material(std::uint32_t material_slot) {
 
 bool ModelingSessionService::modal_tool_owns_viewport() const {
   return impl_->modal_tool_owns_viewport();
+}
+
+bool ModelingSessionService::transform_drag_active() const {
+  return impl_->transform_drag_active();
 }
 
 bool ModelingSessionService::can_cancel_active_tool_or_preview() const {

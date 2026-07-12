@@ -10,11 +10,14 @@
 #include "core/types.hpp"
 #include "math/types.hpp"
 #include "render/viewport_overlay_frame.hpp"
+#include "render/overlay/viewport_persistent_overlay_style.hpp"
 #include "scene/components.hpp"
 #include "viewport/viewport_camera_clip_planes.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 namespace quader_poly {
@@ -80,6 +83,7 @@ struct RenderOverlaySelectedObjectSnapshot {
   std::uint64_t visibility_revision = 0;
   std::uint64_t transform_revision = 0;
   std::uint64_t mesh_binding_revision = 0;
+  ViewportPersistentOverlayStyleSnapshot style;
   ViewportCameraClipPlanes clip_planes;
   bool visible = true;
   std::vector<RenderOverlayMeshSnapshot> meshes;
@@ -92,6 +96,7 @@ struct RenderOverlaySelectedObjectSnapshot {
 struct RenderOverlaySceneWireframeSnapshot {
   std::uint64_t scene_revision = 0;
   std::uint64_t asset_revision = 0;
+  ViewportPersistentOverlayStyleSnapshot style;
   ViewportCameraClipPlanes clip_planes;
   std::uint8_t layer_mask = 0u;
   std::vector<RenderOverlayMeshSnapshot> meshes;
@@ -104,6 +109,11 @@ struct RenderOverlaySceneWireframeSnapshot {
 struct RenderOverlaySelectionSnapshot {
   std::uint64_t scene_revision = 0;
   std::uint64_t asset_revision = 0;
+  std::uint64_t selection_revision = 0;
+  std::uint64_t visibility_revision = 0;
+  std::uint64_t transform_revision = 0;
+  std::uint64_t mesh_binding_revision = 0;
+  std::uint64_t render_component_revision = 0;
   std::vector<RenderOverlayMeshSnapshot> hierarchy_selection_wires;
   std::vector<RenderOverlayBoundsSnapshot> group_bounds;
   std::vector<RenderOverlayBoundsSnapshot> selected_mesh_bounds;
@@ -112,15 +122,123 @@ struct RenderOverlaySelectionSnapshot {
   ViewportOverlayFrame tool_overlays;
 };
 
+/**
+ * References the persistent overlay snapshots prepared for one render frame.
+ * Pointers remain valid until the owning cache is reset or rebound.
+ */
+struct RenderOverlayPersistentSnapshotUpdate {
+  const RenderOverlaySelectedObjectSnapshot *selected_object = nullptr;
+  const RenderOverlaySceneWireframeSnapshot *scene_wireframe = nullptr;
+  bool selected_object_changed = false;
+  bool scene_wireframe_changed = false;
+
+  [[nodiscard]] bool changed() const {
+    return selected_object_changed || scene_wireframe_changed;
+  }
+};
+
+/**
+ * Records source-derived rebuilds for each overlay snapshot branch. Cache hits
+ * and metadata-only refreshes do not increment these counters, allowing tests
+ * to prove that camera-only frames remain extraction-free.
+ */
+struct RenderOverlaySnapshotCacheStats {
+  std::uint64_t selected_object_build_count = 0;
+  std::uint64_t scene_wireframe_build_count = 0;
+  std::uint64_t selection_build_count = 0;
+  std::uint64_t selection_local_bounds_build_count = 0;
+  std::uint64_t selection_local_bounds_reuse_count = 0;
+  std::uint64_t selection_world_bounds_build_count = 0;
+  std::uint64_t selection_world_bounds_translation_reuse_count = 0;
+  std::uint64_t selection_transform_refresh_count = 0;
+};
+
+/**
+ * Retains renderer-neutral overlay extraction across camera-only frames.
+ * Snapshot mesh spans borrow from the bound AssetRegistry, which must outlive
+ * cache use.
+ */
+class RenderOverlaySnapshotCache final {
+public:
+  [[nodiscard]] RenderOverlayPersistentSnapshotUpdate update_persistent(
+      const SceneDocument &document, const AssetRegistry &assets,
+      bool selected_object_overlay_visible,
+      std::uint8_t scene_wireframe_layer_mask,
+      ViewportPersistentOverlayStyleSnapshot style);
+  [[nodiscard]] const RenderOverlaySelectionSnapshot &selection_snapshot(
+      const SceneDocument &document, const AssetRegistry &assets);
+
+  void reset();
+
+  [[nodiscard]] const RenderOverlaySnapshotCacheStats &stats() const {
+    return stats_;
+  }
+
+private:
+  /// Retains asset-local bounds until the source mesh revision changes.
+  struct CachedLocalMeshBounds {
+    std::uint64_t mesh_revision = 0;
+    bool has_bounds = false;
+    RenderOverlayBoundsSnapshot bounds;
+  };
+
+  /// Retains one entity's world bounds for exact transform-only refreshes.
+  struct CachedWorldMeshBounds {
+    AssetId mesh_id = kInvalidAssetId;
+    std::uint64_t mesh_revision = 0;
+    bool has_mesh_asset = false;
+    QMat4 world_transform;
+    RenderOverlayBoundsSnapshot bounds;
+  };
+
+  void bind_sources(const SceneDocument &document,
+                    const AssetRegistry &assets);
+  void invalidate_snapshots();
+  [[nodiscard]] std::optional<RenderOverlayBoundsSnapshot>
+  selected_mesh_world_bounds(const SceneDocument &document,
+                             const AssetRegistry &assets, EntityId entity);
+  [[nodiscard]] std::optional<RenderOverlayBoundsSnapshot>
+  refresh_selected_mesh_world_bounds(const SceneDocument &document,
+                                     EntityId entity);
+  [[nodiscard]] bool can_refresh_selection_transforms(
+      const SceneDocument &document, const AssetRegistry &assets) const;
+  [[nodiscard]] bool refresh_selection_transforms(
+      const SceneDocument &document, const AssetRegistry &assets);
+
+  const SceneDocument *source_document_ = nullptr;
+  const AssetRegistry *source_assets_ = nullptr;
+  RenderOverlaySelectedObjectSnapshot selected_object_snapshot_;
+  RenderOverlaySceneWireframeSnapshot scene_wireframe_snapshot_;
+  RenderOverlaySelectionSnapshot selection_snapshot_;
+  bool has_selected_object_snapshot_ = false;
+  bool has_scene_wireframe_snapshot_ = false;
+  bool has_selection_snapshot_ = false;
+  std::unordered_map<AssetId, CachedLocalMeshBounds>
+      selection_local_mesh_bounds_;
+  std::unordered_map<EntityId, CachedWorldMeshBounds>
+      selection_world_mesh_bounds_;
+  std::vector<EntityId> selection_selected_mesh_entities_;
+  std::vector<EntityId> selection_group_entities_;
+  RenderOverlaySnapshotCacheStats stats_;
+};
+
 [[nodiscard]] RenderOverlaySelectedObjectSnapshot
 build_render_overlay_selected_object_snapshot(const SceneDocument &document,
                                               const AssetRegistry &assets,
                                               bool visible);
+[[nodiscard]] RenderOverlaySelectedObjectSnapshot
+build_render_overlay_selected_object_snapshot(
+    const SceneDocument &document, const AssetRegistry &assets, bool visible,
+    ViewportPersistentOverlayStyleSnapshot style);
 
 [[nodiscard]] RenderOverlaySceneWireframeSnapshot
 build_render_overlay_scene_wireframe_snapshot(const SceneDocument &document,
                                               const AssetRegistry &assets,
                                               std::uint8_t layer_mask);
+[[nodiscard]] RenderOverlaySceneWireframeSnapshot
+build_render_overlay_scene_wireframe_snapshot(
+    const SceneDocument &document, const AssetRegistry &assets,
+    std::uint8_t layer_mask, ViewportPersistentOverlayStyleSnapshot style);
 
 [[nodiscard]] RenderOverlaySelectionSnapshot
 build_render_overlay_selection_snapshot(

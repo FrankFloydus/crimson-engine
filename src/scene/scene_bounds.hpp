@@ -23,11 +23,17 @@ struct SceneBounds {
 };
 
 std::optional<SceneBounds> local_mesh_bounds(const MeshAsset &mesh);
+std::optional<SceneBounds> world_bounds_from_local_mesh_bounds(
+    const QMat4 &world_from_local,
+    const std::optional<SceneBounds> &local_bounds);
 void include_point(SceneBounds &bounds, QVec3 point);
 QVec3 bounds_center(const SceneBounds &bounds);
 std::optional<SceneBounds> entity_world_bounds(const SceneDocument &document,
                                                const AssetRegistry &assets,
                                                EntityId entity);
+std::optional<SceneBounds> entity_world_bounds_from_local_mesh_bounds(
+    const SceneDocument &document, EntityId entity,
+    const std::optional<SceneBounds> &local_bounds);
 std::optional<SceneBounds>
 entity_hierarchy_world_bounds(const SceneDocument &document,
                               const AssetRegistry &assets, EntityId entity);

@@ -256,6 +256,11 @@ struct TransformDragPreviewInput {
 	bool precision = false;
 	double rotate_snap_degrees = 15.0;
         double epsilon = kToolEpsilon;
+        // Host adapters that must convert the world-space drag into an
+        // object-local component transform can ask the runtime to update only
+        // the drag state. The host then applies the preview exactly once in
+        // the correct local space.
+        bool defer_session_update = false;
         bool vertex_snap_enabled = false;
 	double vertex_snap_radius = 0.0;
 	std::span<const PickObjectBounds> snap_object_bounds;

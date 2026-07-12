@@ -26,6 +26,17 @@
 namespace quader {
 namespace {
 
+bool selection_states_match(const ViewportInteractionSelectionState &left,
+                            const ViewportInteractionSelectionState &right) {
+  return left.scene_revision == right.scene_revision &&
+         left.asset_revision == right.asset_revision &&
+         left.pivot_revision == right.pivot_revision &&
+         left.summary.mode == right.summary.mode &&
+         left.summary.has_selection == right.summary.has_selection &&
+         left.summary.content_revision == right.summary.content_revision &&
+         left.summary.selection_revision == right.summary.selection_revision;
+}
+
 QuaderTransformAxis api_axis_for(quader_editor_core::TransformAxis axis) {
   switch (axis) {
   case quader_editor_core::TransformAxis::X:
@@ -277,15 +288,26 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
   } else if (pending_drag_.has_value()) {
     pivot = pending_drag_->begin_request.pivot;
   } else {
-    selection = editor.query().selection();
-    const std::optional<QVec3> queried_pivot =
-        editor.query().selection_transform_pivot();
-    if (!selection->has_selection || !queried_pivot.has_value()) {
+    selection = frame.selection_state.summary;
+    if (!cached_selection_state_.has_value() ||
+        !selection_states_match(*cached_selection_state_,
+                                frame.selection_state)) {
+      cached_selection_state_ = frame.selection_state;
+      cached_selection_pivot_.reset();
+      if (selection->has_selection) {
+        ++selection_cache_stats_.selection_pivot_recompute_count;
+        cached_selection_pivot_ =
+            editor.query().selection_transform_pivot();
+      }
+    } else {
+      ++selection_cache_stats_.selection_cache_hit_count;
+    }
+    if (!selection->has_selection || !cached_selection_pivot_.has_value()) {
       clear_frame();
       reset_pending_drag();
       return result;
     }
-    pivot = *queried_pivot;
+    pivot = *cached_selection_pivot_;
   }
 
   const bool suppress_hover =
@@ -319,18 +341,86 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
     QDR_PROFILE_SCOPE("Transform gizmo build frame");
     current_frame_ =
         quader_editor_core::build_transform_gizmo_frame(gizmo_input);
+    if (dragging_ && current_frame_.has_value()) {
+      current_frame_->info.rotate_indicator = active_rotate_indicator_;
+    }
+  }
+
+  // Qt can accumulate a complete press-move-release gesture between app
+  // frames. Establish the pending hit before release handling so that a
+  // threshold-crossing sample can still become one committed drag.
+  if (!dragging_ && !pending_drag_.has_value() && frame.left_pressed &&
+      frame.input.viewport_hovered && !suppress_hover) {
+    const quader_editor_core::TransformGizmoPickHit hit = [&]() {
+      QDR_PROFILE_SCOPE("Transform gizmo click pick");
+      return quader_editor_core::pick_transform_gizmo(gizmo_input,
+                                                      frame.left_click_local);
+    }();
+    if (hit.hit && hit.axis != quader_editor_core::TransformAxis::None) {
+      const ViewportRay start_ray =
+          frame.camera.ray_from_viewport_point(frame.left_click_local);
+      const bool duplicate_selected =
+          selection.has_value() &&
+          !is_component_selection_mode(
+              to_modeling_selection_mode(selection->mode)) &&
+          frame.input.modifiers.shift;
+      pending_drag_ = PendingGizmoDrag{
+          .begin_request =
+              {
+                  .tool = api_transform_tool_for(tool),
+                  .operation = transform_operation_for(
+                      tool, selection->mode, frame.input.modifiers),
+                  .axis = api_axis_for(hit.axis),
+                  .pivot = pivot,
+                  .screen_position = frame.left_click_local,
+                  .screen_pivot = current_frame_->info.screen_pivot,
+                  .screen_tip = hit.screen_tip,
+                  .has_world_direction = true,
+                  .world_direction = hit.world_direction,
+                  .ray =
+                      {
+                          .origin = start_ray.origin,
+                          .direction = start_ray.direction,
+                      },
+                  .camera = to_api_viewport_camera(
+                      ViewportCameraAdapter::modeling_camera(
+                          frame.camera, frame.input.viewport_size)),
+                  .grid_size = viewport_grid_world_size_for_preset(
+                      frame.input.grid_preset),
+                  .vertex_snap_radius = 0.0,
+                  .grid_snap_enabled = viewport_grid_snap_active(
+                      frame.settings, frame.input.modifiers.primary),
+                  .precision = frame.input.modifiers.primary,
+                  .duplicate_selected = duplicate_selected,
+              },
+          .tool = tool,
+          .axis = hit.axis,
+          .click_local = frame.left_click_local,
+          .click_count = std::max(1, frame.left_click_count),
+      };
+      result.gizmo_consumed = true;
+    }
   }
 
   if (pending_drag_.has_value()) {
     result.gizmo_consumed = true;
-    if (frame.left_released || !frame.left_down) {
-      return release_pending_click();
-    }
-    if (!frame.input.viewport_hovered || suppress_hover) {
-      reset_pending_drag();
+    const bool release_requested = frame.left_released || !frame.left_down;
+    const bool threshold_reached =
+        pending_drag_threshold_reached(frame.input.mouse_local);
+    if (!threshold_reached) {
+      if (release_requested) {
+        return release_pending_click();
+      }
+      if (!frame.input.viewport_hovered || suppress_hover) {
+        reset_pending_drag();
+      }
       return result;
     }
-    if (!pending_drag_threshold_reached(frame.input.mouse_local)) {
+    if (!frame.input.viewport_hovered || suppress_hover) {
+      if (release_requested) {
+        return release_pending_click();
+      }
+      reset_pending_drag();
       return result;
     }
     if (!begin_pending_drag(editor, frame)) {
@@ -341,7 +431,79 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
 
   if (dragging_) {
     result.gizmo_consumed = true;
-    if (frame.left_released || !frame.left_down) {
+    const bool release_requested = frame.left_released || !frame.left_down;
+    // The release event carries the newest absolute pointer position. Apply
+    // it before committing so a delayed frame catches up instead of retaining
+    // the previous sample's transform.
+    const ViewportRay drag_ray =
+        frame.camera.ray_from_viewport_point(frame.input.mouse_local);
+    const bool snap_active = viewport_grid_snap_active(
+        frame.settings, frame.input.modifiers.primary);
+    const DragUpdateSignature update_signature{
+        .screen_position = frame.input.mouse_local,
+        .viewport_size = frame.input.viewport_size,
+        .grid_preset = frame.input.grid_preset,
+        .vertex_snap_radius =
+            snap_active ? viewport_vertex_snap_radius(frame.settings) : 0.0f,
+        .grid_snap_enabled = snap_active,
+        .precision = frame.input.modifiers.primary,
+    };
+    if (!matches_last_drag_update(update_signature)) {
+      const QuaderApiResult<QuaderTransformDragPreview> preview = [&]() {
+        QDR_PROFILE_SCOPE("Transform gizmo update drag");
+        return editor.modeling().update_transform_drag({
+            .screen_position = frame.input.mouse_local,
+            .ray =
+                {
+                    .origin = drag_ray.origin,
+                    .direction = drag_ray.direction,
+                },
+            .camera =
+                to_api_viewport_camera(ViewportCameraAdapter::modeling_camera(
+                    frame.camera, frame.input.viewport_size)),
+            .grid_size =
+                viewport_grid_world_size_for_preset(frame.input.grid_preset),
+            .vertex_snap_radius = update_signature.vertex_snap_radius,
+            .grid_snap_enabled = snap_active,
+            .precision = frame.input.modifiers.primary,
+        });
+      }();
+      if (!preview.ok) {
+        LOG_ERROR(
+            "Transform drag update failed: {}",
+            preview.message.empty() ? "Update failed." : preview.message);
+      }
+      if (preview.ok) {
+        last_drag_update_signature_ = update_signature;
+      }
+      if (preview.ok && preview.value().active) {
+        active_drag_pivot_ = preview.value().pivot;
+        if (viewport_tool_transform_tool(tool) == ModelingTransformTool::Move) {
+          active_drag_pivot_ += preview.value().move_delta;
+        }
+      }
+      if (preview.ok && preview.value().active &&
+          viewport_tool_interaction_tool(tool) ==
+              quader_editor_core::ViewportInteractionTool::Rotate &&
+          current_frame_.has_value() &&
+          rotation_indicator_start_direction_.has_value()) {
+        const std::optional<QVec3> mouse_position =
+            rotation_indicator_mouse_position_from_mouse(
+                frame.camera, frame.input.mouse_local,
+                current_frame_->info.pivot, active_world_direction_);
+        active_rotate_indicator_ = {
+            .active = true,
+            .axis = active_axis_,
+            .world_axis = active_world_direction_,
+            .start_direction = *rotation_indicator_start_direction_,
+            .has_mouse_position = mouse_position.has_value(),
+            .mouse_position = mouse_position.value_or(QVec3{}),
+            .angle_degrees = preview.value().rotate_angle_degrees,
+        };
+        current_frame_->info.rotate_indicator = active_rotate_indicator_;
+      }
+    }
+    if (release_requested) {
       const QuaderApiResult<QuaderTransformDragPreview> commit =
           editor.modeling().commit_transform_drag();
       if (!commit.ok) {
@@ -349,121 +511,26 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
                   commit.message.empty() ? "Commit failed." : commit.message);
       }
       reset_drag_state();
-      return result;
-    }
-
-    const ViewportRay drag_ray =
-        frame.camera.ray_from_viewport_point(frame.input.mouse_local);
-    const bool snap_active = viewport_grid_snap_active(
-        frame.settings, frame.input.modifiers.primary);
-    const QuaderApiResult<QuaderTransformDragPreview> preview = [&]() {
-      QDR_PROFILE_SCOPE("Transform gizmo update drag");
-      return editor.modeling().update_transform_drag({
-          .screen_position = frame.input.mouse_local,
-          .ray =
-              {
-                  .origin = drag_ray.origin,
-                  .direction = drag_ray.direction,
-              },
-          .camera =
-              to_api_viewport_camera(ViewportCameraAdapter::modeling_camera(
-                  frame.camera, frame.input.viewport_size)),
-          .grid_size =
-              viewport_grid_world_size_for_preset(frame.input.grid_preset),
-          .vertex_snap_radius =
-              snap_active ? viewport_vertex_snap_radius(frame.settings) : 0.0,
-          .grid_snap_enabled = snap_active,
-          .precision = frame.input.modifiers.primary,
-      });
-    }();
-    if (!preview.ok) {
-      LOG_ERROR("Transform drag update failed: {}",
-                preview.message.empty() ? "Update failed." : preview.message);
-    }
-    if (preview.ok && preview.value().active) {
-      active_drag_pivot_ = preview.value().pivot;
-      if (viewport_tool_transform_tool(tool) == ModelingTransformTool::Move) {
-        active_drag_pivot_ += preview.value().move_delta;
-      }
-    }
-    if (preview.ok && preview.value().active &&
-        viewport_tool_interaction_tool(tool) ==
-            quader_editor_core::ViewportInteractionTool::Rotate &&
-        current_frame_.has_value() &&
-        rotation_indicator_start_direction_.has_value()) {
-      const std::optional<QVec3> mouse_position =
-          rotation_indicator_mouse_position_from_mouse(
-              frame.camera, frame.input.mouse_local, current_frame_->info.pivot,
-              active_world_direction_);
-      current_frame_->info.rotate_indicator = {
-          .active = true,
-          .axis = active_axis_,
-          .world_axis = active_world_direction_,
-          .start_direction = *rotation_indicator_start_direction_,
-          .has_mouse_position = mouse_position.has_value(),
-          .mouse_position = mouse_position.value_or(QVec3{}),
-          .angle_degrees = preview.value().rotate_angle_degrees,
-      };
     }
     return result;
   }
-
-  if (!frame.left_pressed || !frame.input.viewport_hovered || suppress_hover) {
-    return result;
-  }
-
-  const quader_editor_core::TransformGizmoPickHit hit = [&]() {
-    QDR_PROFILE_SCOPE("Transform gizmo click pick");
-    return quader_editor_core::pick_transform_gizmo(gizmo_input,
-                                                    frame.left_click_local);
-  }();
-  if (!hit.hit || hit.axis == quader_editor_core::TransformAxis::None) {
-    return result;
-  }
-
-  const ViewportRay start_ray =
-      frame.camera.ray_from_viewport_point(frame.left_click_local);
-  const bool duplicate_selected =
-      selection.has_value() &&
-      !is_component_selection_mode(
-          to_modeling_selection_mode(selection->mode)) &&
-      frame.input.modifiers.shift;
-  pending_drag_ = PendingGizmoDrag{
-      .begin_request =
-          {
-              .tool = api_transform_tool_for(tool),
-              .operation = transform_operation_for(tool, selection->mode,
-                                                   frame.input.modifiers),
-              .axis = api_axis_for(hit.axis),
-              .pivot = pivot,
-              .screen_position = frame.left_click_local,
-              .screen_pivot = current_frame_->info.screen_pivot,
-              .screen_tip = hit.screen_tip,
-              .has_world_direction = true,
-              .world_direction = hit.world_direction,
-              .ray =
-                  {
-                      .origin = start_ray.origin,
-                      .direction = start_ray.direction,
-                  },
-              .camera =
-                  to_api_viewport_camera(ViewportCameraAdapter::modeling_camera(
-                      frame.camera, frame.input.viewport_size)),
-              .grid_size =
-                  viewport_grid_world_size_for_preset(frame.input.grid_preset),
-              .vertex_snap_radius = 0.0,
-              .grid_snap_enabled = viewport_grid_snap_active(
-                  frame.settings, frame.input.modifiers.primary),
-              .precision = frame.input.modifiers.primary,
-              .duplicate_selected = duplicate_selected,
-          },
-      .tool = tool,
-      .axis = hit.axis,
-      .click_local = frame.left_click_local,
-      .click_count = std::max(1, frame.left_click_count),
-  };
-  result.gizmo_consumed = true;
   return result;
+}
+
+bool TransformGizmoInteraction::matches_last_drag_update(
+    const DragUpdateSignature &signature) const {
+  if (!last_drag_update_signature_.has_value()) {
+    return false;
+  }
+  const DragUpdateSignature &last = *last_drag_update_signature_;
+  return last.screen_position.x == signature.screen_position.x &&
+         last.screen_position.y == signature.screen_position.y &&
+         last.viewport_size.x == signature.viewport_size.x &&
+         last.viewport_size.y == signature.viewport_size.y &&
+         last.grid_preset == signature.grid_preset &&
+         last.vertex_snap_radius == signature.vertex_snap_radius &&
+         last.grid_snap_enabled == signature.grid_snap_enabled &&
+         last.precision == signature.precision;
 }
 
 bool TransformGizmoInteraction::cancel_active_drag(QuaderEditorApi &editor) {
@@ -491,6 +558,8 @@ void TransformGizmoInteraction::reset(QuaderEditorApi* editor) {
     }
     reset_pending_drag();
     clear_frame();
+    cached_selection_state_.reset();
+    cached_selection_pivot_.reset();
 }
 
 const quader_editor_core::TransformGizmoFrame* TransformGizmoInteraction::frame() const {
@@ -506,6 +575,8 @@ void TransformGizmoInteraction::reset_drag_state() {
   active_drag_pivot_ = {};
   active_world_direction_ = {};
   rotation_indicator_start_direction_.reset();
+  last_drag_update_signature_.reset();
+  active_rotate_indicator_ = {};
 }
 
 void TransformGizmoInteraction::reset_pending_drag() { pending_drag_.reset(); }

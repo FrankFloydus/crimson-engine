@@ -66,6 +66,7 @@ ui.menu.view.show_info=Mostra info
 ui.menu.view.toolbars=Barre strumenti
 ui.menu.layout=Layout
 ui.status.merge_by_distance.merged_vertices=Vertici uniti: {count}
+ui.status.command_failed=Comando non riuscito.
 
 ui.panel.viewport=Viewport
 ui.panel.outliner=Gerarchia
@@ -82,6 +83,7 @@ ui.runtime.unknown_panel=Pannello UI sconosciuto.
 ui.runtime.locale_selection_unavailable=La selezione della lingua non e ancora esposta nella shell dell'app.
 ui.runtime.unknown_locale=Lingua sconosciuta.
 ui.runtime.preferences_saved=Preferenze salvate.
+ui.runtime.preferences_save_failed=Impossibile salvare le preferenze.
 ui.runtime.navigation_gizmo_unavailable=Il gizmo di navigazione non e disponibile nella shell dell'app.
 ui.runtime.viewport_panel_unavailable=Il pannello viewport non e disponibile.
 ui.runtime.platform_unavailable=Adattatore piattaforma non disponibile.
@@ -124,6 +126,8 @@ ui.console.level.critical=Critico
 ui.console.level.off=Disattivato
 ui.console.filter_logs=Filtra log
 
+ui.inspector.property=Proprietà
+ui.inspector.value=Valore
 ui.inspector.mixed=Misto
 ui.inspector.mode=Modalità
 ui.inspector.active=Attivo
@@ -211,6 +215,10 @@ ui.viewport.delete_edges=Elimina spigoli
 ui.viewport.dissolve_edges=Dissolvi spigoli
 ui.viewport.dissolve_vertex=Dissolvi vertice
 
+ui.outliner.name=Nome
+ui.outliner.visible=Visibile
+ui.outliner.locked=Bloccato
+ui.outliner.rename=Rinomina
 ui.outliner.delete=Elimina
 ui.outliner.duplicate=Duplica
 ui.outliner.group=Raggruppa
@@ -229,7 +237,7 @@ selection.active.face=Faccia
 selection.active.light=Luce
 
 viewport.fly_navigation.speed=Navigazione fly  Velocità {speed}
-viewport.fly_navigation.speed_with_reset=Navigazione fly  Velocità {speed}  R ripristina
+viewport.fly_navigation.speed_with_reset=Navigazione fly  Velocità {speed}  Mouse centrale ripristina
 
 viewport.pane.perspective=Prospettiva
 viewport.pane.top=Alto

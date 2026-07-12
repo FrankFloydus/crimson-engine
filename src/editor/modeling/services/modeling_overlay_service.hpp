@@ -20,6 +20,7 @@
 namespace quader {
 
 class ModelingObjectRuntimeMap;
+class ModelingSelectionService;
 class SceneDocument;
 
 /**
@@ -99,14 +100,14 @@ public:
       const quader_editor_core::EditorRuntime &runtime,
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_registry,
-      const std::vector<quader_editor_core::PolygonObject> &preview_objects,
+      const ModelingSelectionService &selection_service,
       ModelingSelectionOverlayOptions options = {}) const;
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
-  tool_preview_meshes(const quader_editor_core::EditorRuntime &runtime,
+  tool_preview_meshes(const quader_editor_core::EditorSession &session,
+                      const quader_editor_core::EditorRuntime &runtime,
                       const SceneDocument &scene,
                       const ModelingObjectRuntimeMap &object_registry,
-                      const std::vector<quader_editor_core::PolygonObject>
-                          &preview_objects) const;
+                      const ModelingSelectionService &selection_service) const;
 
 private:
     /**

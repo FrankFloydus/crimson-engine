@@ -267,7 +267,8 @@ create_proxy(filament::Engine &engine, filament::Scene &scene,
              const std::vector<SceneWireframeLineVertex> &vertices,
              const std::vector<std::uint32_t> &indices,
              const filament::Box &bounds, std::uint8_t layer_mask,
-             ViewportCameraClipPlanes clip_planes) {
+             ViewportCameraClipPlanes clip_planes,
+             float line_width_pixels) {
   SceneWireframeOverlayCache::Proxy proxy;
   if (vertices.empty() || indices.empty()) {
     return proxy;
@@ -283,8 +284,7 @@ create_proxy(filament::Engine &engine, filament::Scene &scene,
   proxy.index_count = static_cast<std::uint32_t>(indices.size());
   proxy.material_instance = material.createInstance();
   configure_overlay_material(*proxy.material_instance, state);
-  proxy.material_instance->setParameter(
-      "lineWidth", viewport_overlay_line_width_pixels(layer, 0.0f));
+  proxy.material_instance->setParameter("lineWidth", line_width_pixels);
   proxy.material_instance->setParameter("featherPixels",
                                         kOverlayLineFeatherPixels);
   proxy.material_instance->setParameter("nearPlane", clip_planes.near_plane);
@@ -392,6 +392,7 @@ void SceneWireframeOverlayCache::shutdown() {
     synced_states_.clear();
     synced_scene_revision_ = 0;
     synced_asset_revision_ = 0;
+    synced_wire_style_signature_ = 0;
     synced_clip_planes_ = {};
     layer_mask_ = 0u;
     has_synced_ = false;
@@ -417,16 +418,19 @@ void SceneWireframeOverlayCache::sync(
     set_proxy_clip_planes(snapshot.clip_planes);
   }
   synced_clip_planes_ = snapshot.clip_planes;
+  const bool wire_style_changed = scene_wireframe_style_changed(
+      has_synced_, synced_wire_style_signature_, snapshot.style);
 
   if (has_synced_ && synced_scene_revision_ == snapshot.scene_revision &&
       synced_asset_revision_ == snapshot.asset_revision &&
-      !clip_planes_changed) {
+      !clip_planes_changed && !wire_style_changed) {
     return;
   }
 
   const std::vector<WireframeEntityState> states =
       wireframe_entity_states(snapshot);
-  if (has_synced_ && synced_asset_revision_ == snapshot.asset_revision &&
+  if (has_synced_ && !wire_style_changed &&
+      synced_asset_revision_ == snapshot.asset_revision &&
       states == synced_states_) {
     update_entry_transforms(snapshot);
     synced_scene_revision_ = snapshot.scene_revision;
@@ -443,7 +447,8 @@ void SceneWireframeOverlayCache::sync(
         existing == entries_.end() ||
         existing->second.mesh_id != state.mesh_id ||
         existing->second.mesh_revision != state.mesh_revision ||
-        existing->second.selected != state.selected;
+        existing->second.selected != state.selected ||
+        (state.selected && wire_style_changed);
     if (rebuild) {
       if (existing != entries_.end()) {
         destroy_entry(existing->second);
@@ -454,7 +459,7 @@ void SceneWireframeOverlayCache::sync(
       if (mesh == nullptr) {
         continue;
       }
-      Entry entry = create_entry(*mesh);
+      Entry entry = create_entry(*mesh, snapshot.style);
       existing = entries_.emplace(state.entity, std::move(entry)).first;
     }
     const RenderOverlayMeshSnapshot *mesh =
@@ -468,6 +473,7 @@ void SceneWireframeOverlayCache::sync(
   synced_states_ = states;
   synced_scene_revision_ = snapshot.scene_revision;
   synced_asset_revision_ = snapshot.asset_revision;
+  synced_wire_style_signature_ = snapshot.style.wire_signature;
   has_synced_ = true;
 }
 
@@ -492,7 +498,8 @@ SceneWireframeOverlayCache::wireframe_entity_states(
 }
 
 SceneWireframeOverlayCache::Entry SceneWireframeOverlayCache::create_entry(
-    const RenderOverlayMeshSnapshot &mesh) {
+    const RenderOverlayMeshSnapshot &mesh,
+    const ViewportPersistentOverlayStyleSnapshot &style) {
   QDR_PROFILE_FUNCTION();
   Entry entry;
   entry.mesh_id = mesh.mesh_id;
@@ -511,7 +518,11 @@ SceneWireframeOverlayCache::Entry SceneWireframeOverlayCache::create_entry(
                                          ? ViewportOverlayLayer::SelectedEdge
                                          : ViewportOverlayLayer::WireframeXray;
   const std::uint32_t color =
-      mesh.selected ? kOverlaySelectionWireColor : kOverlayWireframeXrayColor;
+      mesh.selected ? style.selection_wire_color : kOverlayWireframeXrayColor;
+  const float line_width_pixels =
+      mesh.selected
+          ? style.selection_edge_line_width_pixels
+          : viewport_overlay_line_width_pixels(layer, 0.0f);
   std::vector<SceneWireframeLineVertex> line_vertices;
   std::vector<std::uint32_t> line_indices;
   if (!append_authored_polygon_wireframe_lines(mesh, color, line_vertices,
@@ -523,7 +534,7 @@ SceneWireframeOverlayCache::Entry SceneWireframeOverlayCache::create_entry(
   entry.line_proxy =
       create_proxy(*engine_, *scene_, *line_material_, parent_transform, layer,
                    line_vertices, line_indices, bounds, layer_mask_,
-                   synced_clip_planes_);
+                   synced_clip_planes_, line_width_pixels);
   update_entry_transform(entry, mesh.world_transform);
   return entry;
 }

@@ -8,7 +8,6 @@
 
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
-#include "render/imgui_filament_renderer.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "render/viewport_renderer.hpp"
 
@@ -24,8 +23,6 @@
 
 namespace quader {
 namespace {
-
-constexpr double kFrameRateSampleSeconds = 0.5;
 
 filament::backend::Backend to_filament_backend(RendererBackend backend) {
   switch (backend) {
@@ -122,11 +119,15 @@ bool RenderSystem::initialize(void *native_window,
   }
   LOG_INFO("Filament engine created");
 
-  swap_chain_ = engine_->createSwapChain(native_window);
-  if (!swap_chain_) {
-    return fail("Unable to create Filament swapchain");
+  if (native_window != nullptr) {
+    swap_chain_ = engine_->createSwapChain(native_window);
+    if (!swap_chain_) {
+      return fail("Unable to create Filament swapchain");
+    }
+    LOG_INFO("Filament swapchain created for native window {}", native_window);
+  } else {
+    LOG_INFO("Filament initialized without a primary swapchain");
   }
-  LOG_INFO("Filament swapchain created for native window {}", native_window);
   renderer_ = engine_->createRenderer();
   if (!renderer_) {
     return fail("Unable to create Filament renderer");
@@ -149,7 +150,6 @@ bool RenderSystem::initialize(void *native_window,
     return fail("Unable to initialize Filament material library");
   }
   environment_library_.initialize(*engine_, *scene_, executable_dir);
-  ui_icon_textures_.initialize(*engine_, texture_registry_);
 
   return true;
 }
@@ -159,7 +159,6 @@ void RenderSystem::shutdown() {
         return;
     }
 
-    ui_icon_textures_.clear();
     texture_registry_.clear();
     environment_library_.shutdown();
     material_library_.shutdown();
@@ -177,7 +176,7 @@ void RenderSystem::shutdown() {
     }
 
     frame_performance_stats_ = {};
-    frame_cpu_active_ = false;
+    presentation_frame_tracker_.reset();
     filament::Engine::destroy(&engine_);
 }
 
@@ -195,7 +194,22 @@ void RenderSystem::end_frame() {
   QDR_PROFILE_FUNCTION();
   if (renderer_) {
     renderer_->endFrame();
-    update_frame_performance_stats_after_end_frame();
+  }
+}
+
+void RenderSystem::begin_presentation_frame() {
+  presentation_frame_tracker_.begin_presentation_frame(
+      RenderPresentationFrameTracker::Clock::now());
+}
+
+void RenderSystem::complete_presentation_frame(
+    std::size_t swap_chain_submissions) {
+  const bool presented =
+      presentation_frame_tracker_.complete_presentation_frame(
+          RenderPresentationFrameTracker::Clock::now(),
+          swap_chain_submissions, frame_performance_stats_);
+  if (presented && renderer_ != nullptr) {
+    update_gpu_frame_performance_stats();
   }
 }
 
@@ -203,46 +217,15 @@ bool RenderSystem::begin_frame_with_swap_chain(
     filament::SwapChain *swap_chain) {
   QDR_PROFILE_FUNCTION();
   if (renderer_ == nullptr || swap_chain == nullptr) {
-    frame_cpu_active_ = false;
     return false;
   }
   if (!renderer_->beginFrame(swap_chain)) {
-    frame_cpu_active_ = false;
     return false;
   }
-
-  frame_cpu_begin_ = std::chrono::steady_clock::now();
-  frame_cpu_active_ = true;
   return true;
 }
 
-void RenderSystem::update_frame_performance_stats_after_end_frame() {
-  const std::chrono::steady_clock::time_point frame_end =
-      std::chrono::steady_clock::now();
-  if (frame_cpu_active_) {
-    frame_performance_stats_.cpu_frame_ms =
-        std::chrono::duration<double, std::milli>(frame_end - frame_cpu_begin_)
-            .count();
-    frame_performance_stats_.cpu_frame_ms_available = true;
-    frame_cpu_active_ = false;
-  }
-
-  if (frame_rate_sample_begin_ == std::chrono::steady_clock::time_point{}) {
-    frame_rate_sample_begin_ = frame_end;
-  }
-  ++frame_rate_sample_count_;
-  const double frame_rate_sample_seconds =
-      std::chrono::duration<double>(frame_end - frame_rate_sample_begin_)
-          .count();
-  if (frame_rate_sample_seconds >= kFrameRateSampleSeconds) {
-    frame_performance_stats_.frames_per_second =
-        static_cast<double>(frame_rate_sample_count_) /
-        frame_rate_sample_seconds;
-    frame_performance_stats_.frames_per_second_available = true;
-    frame_rate_sample_begin_ = frame_end;
-    frame_rate_sample_count_ = 0;
-  }
-
+void RenderSystem::update_gpu_frame_performance_stats() {
   frame_performance_stats_.gpu_frame_ms_available = false;
   const std::size_t history_size =
       std::min<std::size_t>(renderer_->getMaxFrameHistorySize(), 8u);
@@ -305,33 +288,22 @@ void RenderSystem::initialize_scene_render_bridge(
                            material_library_.overlay_icon(), executable_dir);
 }
 
-void RenderSystem::initialize_imgui_renderer(
-    ImGuiFilamentRenderer &imgui_renderer) {
-  if (engine_ == nullptr) {
-    return;
-  }
-
-  imgui_renderer.initialize(*engine_, material_library_.imgui(),
-                            texture_registry_);
-}
-
-void RenderSystem::render_imgui(ImGuiFilamentRenderer &imgui_renderer) {
-  if (renderer_ == nullptr) {
-    return;
-  }
-
-  imgui_renderer.render(*renderer_);
+void RenderSystem::initialize_viewport_renderer(
+    ViewportRenderer &viewport_renderer, std::uint8_t grid_layer_mask) {
+  initialize_viewport_renderer(viewport_renderer, grid_layer_mask,
+                               ViewportRenderSurface::Texture);
 }
 
 void RenderSystem::initialize_viewport_renderer(
-    ViewportRenderer &viewport_renderer, std::uint8_t grid_layer_mask) {
+    ViewportRenderer &viewport_renderer, std::uint8_t grid_layer_mask,
+    ViewportRenderSurface surface) {
   if (engine_ == nullptr || scene_ == nullptr) {
     return;
   }
 
   viewport_renderer.initialize(*engine_, *scene_, texture_registry_,
                                material_library_.ground_grid(),
-                               grid_layer_mask);
+                               grid_layer_mask, surface);
 }
 
 void RenderSystem::render_viewport(ViewportRenderer &viewport_renderer) {
@@ -340,15 +312,6 @@ void RenderSystem::render_viewport(ViewportRenderer &viewport_renderer) {
   }
 
   viewport_renderer.render(*renderer_);
-}
-
-RenderUiIconSet RenderSystem::load_ui_icon_textures(
-    const std::filesystem::path &executable_dir) {
-  return ui_icon_textures_.load_icons(executable_dir);
-}
-
-void RenderSystem::clear_ui_icon_textures() {
-  ui_icon_textures_.clear();
 }
 
 void RenderSystem::apply_scene_settings(

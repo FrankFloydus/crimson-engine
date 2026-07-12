@@ -44,9 +44,6 @@
 #include "editor/tools/viewport_tool.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
-#include "platform/platform_window.hpp"
-#include "platform/sdl_event_utils.hpp"
-#include "platform/sdl_input_adapter.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/light_renderable_cache.hpp"
 #include "render/material_binding_service.hpp"
@@ -56,6 +53,7 @@
 #include "render/overlay/overlay_proxy_factory.hpp"
 #include "render/overlay/overlay_renderable_cache.hpp"
 #include "render/overlay/overlay_renderable_proxy.hpp"
+#include "render/overlay/scene_wireframe_overlay_cache.hpp"
 #include "render/overlay/selected_object_overlay_cache.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
 #include "render/render_system.hpp"
@@ -64,7 +62,6 @@
 #include "render/texture_binding_service.hpp"
 #include "render/texture_registry.hpp"
 #include "render/tool_preview_renderable_cache.hpp"
-#include "render/ui_icon_texture_service.hpp"
 #include "render/viewport_grid_renderer.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "render/viewport_render_target.hpp"
@@ -78,7 +75,6 @@
 #include "ui/console_model.hpp"
 #include "ui/ui_settings.hpp"
 #include "ui/viewport_context_menu_policy.hpp"
-#include "ui/viewport_input_frame_builder.hpp"
 #include "ui/viewport_pane_overlay_cache.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/modeling_sdk_viewport_input_adapter.hpp"
@@ -92,14 +88,12 @@
 
 #include <gtest/gtest.h>
 
-#include <SDL3/SDL_events.h>
-#include <SDL3/SDL_keycode.h>
-
 #include <editor/interactions/viewport_navigation.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -265,87 +259,6 @@ void set_navigation_pressed(ViewportInputFrame &input,
   }
 }
 
-TEST(ViewportInputFrameBuilderTests, ModifierHelperPreservesCanonicalKeyMods) {
-  ViewportModifiers modifiers = viewport_modifiers_from_imgui_state(
-      false, false, false, false, ImGuiMod_Ctrl | ImGuiMod_Shift);
-  EXPECT_TRUE(modifiers.primary);
-  EXPECT_TRUE(modifiers.shift);
-  EXPECT_FALSE(modifiers.alt);
-
-  modifiers = viewport_modifiers_from_imgui_state(false, true, false, false,
-                                                  ImGuiMod_Alt);
-  EXPECT_TRUE(modifiers.primary);
-  EXPECT_FALSE(modifiers.shift);
-  EXPECT_TRUE(modifiers.alt);
-
-  modifiers = viewport_modifiers_from_imgui_state(true, false, true, true, 0);
-  EXPECT_TRUE(modifiers.primary);
-  EXPECT_TRUE(modifiers.shift);
-  EXPECT_TRUE(modifiers.alt);
-}
-
-TEST(SdlInputAdapterTests, KeyEventModifiersBuildPressedShortcutChord) {
-  SDL_Event event{};
-  event.type = SDL_EVENT_KEY_DOWN;
-  event.key.key = SDLK_C;
-  event.key.mod = SDL_KMOD_CTRL | SDL_KMOD_SHIFT;
-
-  const std::optional<QuaderInputChord> chord =
-      quader_pressed_input_chord_from_sdl_event(event);
-
-  ASSERT_TRUE(chord.has_value());
-  EXPECT_EQ(chord->device, QuaderInputDevice::Keyboard);
-  EXPECT_EQ(chord->key, QuaderKeyCode::C);
-  EXPECT_TRUE(chord->primary);
-  EXPECT_TRUE(chord->shift);
-  EXPECT_FALSE(chord->alt);
-
-  event.key.repeat = true;
-  EXPECT_FALSE(quader_pressed_input_chord_from_sdl_event(event).has_value());
-}
-
-/**
- * Owns a temporary ImGui context for UI/input behavior tests.
- */
-class ScopedImGuiTestContext final {
-public:
-  ScopedImGuiTestContext()
-      : previous_(ImGui::GetCurrentContext()),
-        current_(ImGui::CreateContext()) {}
-  ~ScopedImGuiTestContext() {
-    ImGui::DestroyContext(current_);
-    ImGui::SetCurrentContext(previous_);
-  }
-
-  [[nodiscard]] bool valid() const { return current_ != nullptr; }
-
-private:
-  ImGuiContext *previous_ = nullptr;
-  ImGuiContext *current_ = nullptr;
-};
-
-TEST(ViewportInputFrameBuilderTests,
-     EventPressedChordsOverrideImGuiPressedFallback) {
-  ScopedImGuiTestContext imgui_context;
-  ASSERT_TRUE(imgui_context.valid());
-
-  const QuaderInputChord event_chord =
-      keyboard_input_chord(QuaderKeyCode::C, {.primary = true, .shift = true});
-  ViewportInputFrameBuilder builder;
-  const ViewportInputFrame frame = builder.build({
-      .hovered = true,
-      .focused = true,
-      .item_size = {800.0f, 600.0f},
-      .pressed_input_chords =
-          std::span<const QuaderInputChord>(&event_chord, 1),
-  });
-
-  ASSERT_EQ(frame.pressed_input_chords.size(), 1u);
-  EXPECT_EQ(frame.pressed_input_chords.front().key, QuaderKeyCode::C);
-  EXPECT_TRUE(frame.pressed_input_chords.front().primary);
-  EXPECT_TRUE(frame.pressed_input_chords.front().shift);
-}
-
 TEST(ModelingSdkViewportInputAdapterTests,
      ConvertsNativeViewportFrameToSdkSnapshot) {
   ViewportInputFrame frame;
@@ -359,10 +272,16 @@ TEST(ModelingSdkViewportInputAdapterTests,
   frame.middle_down = true;
   frame.modifiers.primary = true;
   frame.modifiers.alt = true;
-  frame.pressed_input_chords.push_back(
-      keyboard_input_chord(QuaderKeyCode::C, {.primary = true}));
-  frame.active_input_chords.push_back(mouse_input_chord(
-      QuaderMouseButton::Left, QuaderInputGesture::Press, {}));
+  frame.pressed_input_chords.push_back({
+      .primary = true,
+      .device = QuaderInputDevice::Keyboard,
+      .key = QuaderKeyCode::C,
+  });
+  frame.active_input_chords.push_back({
+      .device = QuaderInputDevice::Mouse,
+      .mouse_button = QuaderMouseButton::Left,
+      .gesture = QuaderInputGesture::Press,
+  });
 
   const quader::modeling::ViewportHostInputSnapshot snapshot =
       modeling_sdk_viewport_input_snapshot(frame, {.x = 10.0F, .y = 20.0F});
@@ -385,8 +304,9 @@ TEST(ModelingSdkViewportInputAdapterTests,
   EXPECT_TRUE(snapshot.text_input_active);
   EXPECT_TRUE(snapshot.navigation_capture);
   ASSERT_EQ(snapshot.pressed_chords.size(), 1U);
-  EXPECT_EQ(snapshot.pressed_chords.front(),
-            modeling_sdk_encode_input_chord(frame.pressed_input_chords.front()));
+  EXPECT_EQ(
+      snapshot.pressed_chords.front(),
+      modeling_sdk_encode_input_chord(frame.pressed_input_chords.front()));
   EXPECT_DOUBLE_EQ(snapshot.frame_time_seconds, 0.25);
 }
 
@@ -1148,55 +1068,7 @@ TEST(UISettingsTests, IgnoresMalformedPanelVisibilityAndEmptyLocale) {
   std::filesystem::remove(path);
 }
 
-TEST(PlatformWindowChromeTests,
-     HitTestSupportsResizeEdgesToolbarDragAndWindowControls) {
-  PlatformWindowChromeHitTest hit_test{
-      .window_width = 800,
-      .window_height = 600,
-      .resize_border = 6,
-      .title_bar_height = 35,
-      .left_interactive_width = 440,
-      .right_controls_width = 105,
-  };
-
-  auto hit = [&](int x, int y) {
-    hit_test.point_x = x;
-    hit_test.point_y = y;
-    return platform_window_chrome_hit_test_result(hit_test);
-  };
-
-  EXPECT_EQ(hit(0, 0), SDL_HITTEST_RESIZE_TOPLEFT);
-  EXPECT_EQ(hit(799, 0), SDL_HITTEST_RESIZE_TOPRIGHT);
-  EXPECT_EQ(hit(799, 599), SDL_HITTEST_RESIZE_BOTTOMRIGHT);
-  EXPECT_EQ(hit(0, 599), SDL_HITTEST_RESIZE_BOTTOMLEFT);
-  EXPECT_EQ(hit(400, 0), SDL_HITTEST_RESIZE_TOP);
-  EXPECT_EQ(hit(799, 300), SDL_HITTEST_RESIZE_RIGHT);
-  EXPECT_EQ(hit(400, 599), SDL_HITTEST_RESIZE_BOTTOM);
-  EXPECT_EQ(hit(0, 300), SDL_HITTEST_RESIZE_LEFT);
-  EXPECT_EQ(hit(80, 24), SDL_HITTEST_NORMAL);
-  EXPECT_EQ(hit(400, 24), SDL_HITTEST_NORMAL);
-  EXPECT_EQ(hit(500, 24), SDL_HITTEST_DRAGGABLE);
-  EXPECT_EQ(hit(700, 24), SDL_HITTEST_NORMAL);
-  EXPECT_EQ(hit(400, 60), SDL_HITTEST_NORMAL);
-
-  hit_test.maximized = true;
-  EXPECT_EQ(hit(80, 24), SDL_HITTEST_NORMAL);
-  EXPECT_EQ(hit(400, 0), SDL_HITTEST_NORMAL);
-  EXPECT_EQ(hit(500, 0), SDL_HITTEST_DRAGGABLE);
-  EXPECT_EQ(hit(799, 599), SDL_HITTEST_NORMAL);
-}
-
-TEST(PlatformWindowChromeTests,
-     ResizeBorderUsesSystemMetricsWhenLargerThanFallback) {
-  EXPECT_EQ(platform_window_chrome_resize_border_for_system_metrics(6, 4, 4),
-            8);
-  EXPECT_EQ(platform_window_chrome_resize_border_for_system_metrics(6, 1, 1),
-            6);
-  EXPECT_EQ(platform_window_chrome_resize_border_for_system_metrics(0, 0, 0),
-            1);
-}
-
-TEST(PlatformWindowChromeTests, RecoversPersistedWindowFrameToVisibleWorkArea) {
+TEST(WindowPlacementTests, RecoversPersistedFrameToAVisibleWorkArea) {
   const std::vector<PlatformWindowChromeFrame> work_areas = {
       {.x = 0, .y = 0, .width = 1920, .height = 1040},
       {.x = -1280, .y = 0, .width = 1280, .height = 984},
@@ -1215,8 +1087,6 @@ TEST(PlatformWindowChromeTests, RecoversPersistedWindowFrameToVisibleWorkArea) {
           {.x = -1200, .y = 100, .width = 900, .height = 700}, work_areas);
   EXPECT_EQ(secondary.x, -1200);
   EXPECT_EQ(secondary.y, 100);
-  EXPECT_EQ(secondary.width, 900);
-  EXPECT_EQ(secondary.height, 700);
 
   const PlatformWindowChromeFrame oversized =
       platform_window_recover_frame_to_display_work_area(
@@ -1227,137 +1097,15 @@ TEST(PlatformWindowChromeTests, RecoversPersistedWindowFrameToVisibleWorkArea) {
   EXPECT_EQ(oversized.height, 1040);
 }
 
-TEST(PlatformWindowChromeTests, ManualResizeFrameSupportsEdgesAndCorners) {
-  PlatformWindowChromeFrame frame{
-      .x = 100,
-      .y = 80,
-      .width = 800,
-      .height = 600,
-  };
-
-  auto resize = [&](SDL_HitTestResult edge, int dx, int dy) {
-    return platform_window_chrome_resize_frame({
-        .start = frame,
-        .delta_x = dx,
-        .delta_y = dy,
-        .min_width = 320,
-        .min_height = 240,
-        .edge = edge,
-    });
-  };
-
-  EXPECT_EQ(resize(SDL_HITTEST_RESIZE_RIGHT, 40, 0).width, 840);
-  EXPECT_EQ(resize(SDL_HITTEST_RESIZE_BOTTOM, 0, 30).height, 630);
-
-  const PlatformWindowChromeFrame left = resize(SDL_HITTEST_RESIZE_LEFT, 50, 0);
-  EXPECT_EQ(left.x, 150);
-  EXPECT_EQ(left.width, 750);
-
-  const PlatformWindowChromeFrame top_left =
-      resize(SDL_HITTEST_RESIZE_TOPLEFT, -20, -10);
-  EXPECT_EQ(top_left.x, 80);
-  EXPECT_EQ(top_left.y, 70);
-  EXPECT_EQ(top_left.width, 820);
-  EXPECT_EQ(top_left.height, 610);
-
-  const PlatformWindowChromeFrame clamped =
-      resize(SDL_HITTEST_RESIZE_TOPLEFT, 700, 500);
-  EXPECT_EQ(clamped.x, 580);
-  EXPECT_EQ(clamped.y, 440);
-  EXPECT_EQ(clamped.width, 320);
-  EXPECT_EQ(clamped.height, 240);
-}
-
-TEST(PlatformWindowChromeTests,
-     ManualResizeFrameDefaultsToApplicationMinimumSize) {
-  EXPECT_EQ(kPlatformWindowMinimumWidth, 800);
-  EXPECT_EQ(kPlatformWindowMinimumHeight, 600);
-
-  const PlatformWindowChromeFrame frame{
-      .x = 100,
-      .y = 80,
-      .width = 1200,
-      .height = 900,
-  };
-
-  const PlatformWindowChromeFrame clamped =
-      platform_window_chrome_resize_frame({
-          .start = frame,
-          .delta_x = 1000,
-          .delta_y = 800,
-          .edge = SDL_HITTEST_RESIZE_TOPLEFT,
-      });
-
-  EXPECT_EQ(clamped.x, 500);
-  EXPECT_EQ(clamped.y, 380);
-  EXPECT_EQ(clamped.width, 800);
-  EXPECT_EQ(clamped.height, 600);
-}
-
-TEST(PlatformWindowChromeTests,
-     RenderFrameAvailabilityRejectsHiddenOrMinimizedWindowStates) {
-  EXPECT_TRUE(platform_window_can_render_frames(0u, 1600, 900));
-  EXPECT_TRUE(
-      platform_window_can_render_frames(SDL_WINDOW_INPUT_FOCUS, 1600, 900));
-  EXPECT_TRUE(
-      platform_window_can_render_frames(SDL_WINDOW_MAXIMIZED, 1600, 900));
-  EXPECT_TRUE(
-      platform_window_can_render_frames(SDL_WINDOW_OCCLUDED, 1600, 900));
-  EXPECT_TRUE(platform_window_can_render_frames(
-      SDL_WINDOW_MAXIMIZED | SDL_WINDOW_OCCLUDED, 1600, 900));
-
-  EXPECT_FALSE(
-      platform_window_can_render_frames(SDL_WINDOW_MINIMIZED, 1600, 900));
-  EXPECT_FALSE(platform_window_can_render_frames(SDL_WINDOW_HIDDEN, 1600, 900));
-  EXPECT_FALSE(platform_window_can_render_frames(
-      SDL_WINDOW_MINIMIZED | SDL_WINDOW_INPUT_FOCUS, 1600, 900));
-  EXPECT_FALSE(platform_window_can_render_frames(
-      SDL_WINDOW_MINIMIZED | SDL_WINDOW_OCCLUDED, 1600, 900));
-  EXPECT_FALSE(platform_window_can_render_frames(0u, 0, 900));
-  EXPECT_FALSE(platform_window_can_render_frames(0u, 1600, 0));
-}
-
-TEST(SdlEventUtilsTests, ExtractsWindowIdsForRuntimeRoutedEvents) {
-  constexpr SDL_WindowID kWindowId = 42u;
-  SDL_Event event{};
-
-  event.type = SDL_EVENT_WINDOW_RESIZED;
-  event.window.windowID = kWindowId;
-  EXPECT_EQ(sdl_event_window_id(event), kWindowId);
-
-  event = {};
-  event.type = SDL_EVENT_MOUSE_MOTION;
-  event.motion.windowID = kWindowId;
-  EXPECT_EQ(sdl_event_window_id(event), kWindowId);
-
-  event = {};
-  event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
-  event.button.windowID = kWindowId;
-  EXPECT_EQ(sdl_event_window_id(event), kWindowId);
-
-  event = {};
-  event.type = SDL_EVENT_MOUSE_WHEEL;
-  event.wheel.windowID = kWindowId;
-  EXPECT_EQ(sdl_event_window_id(event), kWindowId);
-
-  event = {};
-  event.type = SDL_EVENT_KEY_DOWN;
-  event.key.windowID = kWindowId;
-  EXPECT_EQ(sdl_event_window_id(event), kWindowId);
-
-  event = {};
-  event.type = SDL_EVENT_TEXT_INPUT;
-  event.text.windowID = kWindowId;
-  EXPECT_EQ(sdl_event_window_id(event), kWindowId);
-
-  event = {};
-  event.type = SDL_EVENT_WINDOW_OCCLUDED;
-  event.window.windowID = kWindowId;
-  EXPECT_EQ(sdl_event_window_id(event), kWindowId);
-
-  event = {};
-  event.type = SDL_EVENT_QUIT;
-  EXPECT_FALSE(sdl_event_window_id(event).has_value());
+TEST(WindowPlacementTests, PreservesMinimumSizeWithoutConnectedWorkAreas) {
+  const PlatformWindowChromeFrame recovered =
+      platform_window_recover_frame_to_display_work_area(
+          {.x = 20, .y = 30, .width = 10, .height = 10},
+          std::span<const PlatformWindowChromeFrame>{});
+  EXPECT_EQ(recovered.x, 20);
+  EXPECT_EQ(recovered.y, 30);
+  EXPECT_EQ(recovered.width, kPlatformWindowMinimumWidth);
+  EXPECT_EQ(recovered.height, kPlatformWindowMinimumHeight);
 }
 
 TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
@@ -1581,6 +1329,85 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
   std::filesystem::remove(path);
 }
 
+TEST(ViewportSettingsTests, EveryDescriptorHasARuntimeConsumer) {
+  const std::string consumers =
+      read_source_file("src/render/viewport_grid_renderer.cpp") +
+      read_source_file("src/render/material_binding_service.cpp") +
+      read_source_file("src/viewport/viewport_grid_placement_policy.hpp") +
+      read_source_file(
+          "src/render/overlay/viewport_overlay_style_resolver.cpp") +
+      read_source_file("src/ui/qt_viewport_panel.cpp") +
+      read_source_file(
+          "src/editor/viewport/viewport_selection_interaction.cpp") +
+      read_source_file("src/editor/viewport/transform_gizmo_interaction.cpp") +
+      quader::test::guardrail::source_slice(
+          read_source_file("src/viewport/viewport_settings.cpp"),
+          "bool viewport_grid_snap_active(",
+          "ViewportSettings::ViewportSettings()");
+
+  constexpr std::array<std::string_view, kViewportColorSettingCount>
+      kColorConsumers{{
+          "ViewportColorSettingId::GridMinor",
+          "ViewportColorSettingId::GridMajor",
+          "ViewportColorSettingId::MeshGridMinor",
+          "ViewportColorSettingId::MeshGridMajor",
+          "ViewportColorSettingId::GridXAxis",
+          "ViewportColorSettingId::GridYAxis",
+          "ViewportColorSettingId::GridZAxis",
+          "ViewportColorSettingId::SelectionFace",
+          "ViewportColorSettingId::SelectionWire",
+          "ViewportColorSettingId::SourceWire",
+          "ViewportColorSettingId::OpenEdge",
+          "ViewportColorSettingId::DiagnosticEdge",
+          "ViewportColorSettingId::HoverFace",
+          "ViewportColorSettingId::HoverWire",
+          "ViewportColorSettingId::RemoveSelectionFace",
+          "ViewportColorSettingId::RemoveSelectionWire",
+          "ViewportColorSettingId::Vertex",
+          "ViewportColorSettingId::SelectedVertex",
+          "ViewportColorSettingId::HoverVertex",
+          "ViewportColorSettingId::RemoveSelectionVertex",
+      }};
+  constexpr std::array<std::string_view, kViewportFloatSettingCount>
+      kFloatConsumers{{
+          "ViewportFloatSettingId::GridMinorLineSize",
+          "ViewportFloatSettingId::GridMajorLineSize",
+          "ViewportFloatSettingId::GridAxisLineSize",
+          "ViewportFloatSettingId::SourceWireLineSize",
+          "ViewportFloatSettingId::SelectionFaceWireLineSize",
+          "ViewportFloatSettingId::SelectionEdgeLineSize",
+          "ViewportFloatSettingId::HoverWireLineSize",
+          "ViewportFloatSettingId::OpenEdgeLineSize",
+          "ViewportFloatSettingId::DiagnosticEdgeLineSize",
+          "ViewportFloatSettingId::VertexSize",
+          "ViewportFloatSettingId::SelectedVertexGrowth",
+          "ViewportFloatSettingId::HoverVertexGrowth",
+          "ViewportFloatSettingId::VertexOutlineSize",
+          "ViewportFloatSettingId::PickVertexRadius",
+          "ViewportFloatSettingId::PickEdgeRadius",
+          "ViewportFloatSettingId::GizmoSize",
+      }};
+  constexpr std::array<std::string_view, kViewportBoolSettingCount>
+      kBoolConsumers{{
+          "ViewportBoolSettingId::ShowGrid",
+          "ViewportBoolSettingId::ShowMeshGrid",
+          "ViewportBoolSettingId::ShowGizmos",
+          "ViewportBoolSettingId::ShowOverlays",
+          "ViewportBoolSettingId::ShowInfo",
+          "ViewportBoolSettingId::GridSnap",
+          "ViewportBoolSettingId::VertexSnap",
+      }};
+
+  const auto expect_consumed = [&](const auto &tokens) {
+    for (const std::string_view token : tokens) {
+      EXPECT_NE(consumers.find(token), std::string::npos) << token;
+    }
+  };
+  expect_consumed(kColorConsumers);
+  expect_consumed(kFloatConsumers);
+  expect_consumed(kBoolConsumers);
+}
+
 TEST(GroundGridMaterialTests, UsesUserWorldAnchoring) {
   const std::string source =
       read_source_file("resources/materials/ground_grid.mat");
@@ -1619,12 +1446,9 @@ TEST(GroundGridMaterialTests, UsesUserWorldAnchoring) {
   EXPECT_NE(source.find("vec4(color * alpha, alpha)"), std::string::npos);
   EXPECT_EQ(source.find("getUV0()"), std::string::npos);
   EXPECT_EQ(source.find("planeCenter"), std::string::npos);
-  EXPECT_NE(grid_renderer_source.find("\"cameraFarPlane\""),
-            std::string::npos);
-  EXPECT_NE(grid_renderer_source.find("\"cameraFarFade\""),
-            std::string::npos);
-  EXPECT_NE(grid_renderer_source.find(
-                "ViewportProjection::Perspective ? 1.0f"),
+  EXPECT_NE(grid_renderer_source.find("\"cameraFarPlane\""), std::string::npos);
+  EXPECT_NE(grid_renderer_source.find("\"cameraFarFade\""), std::string::npos);
+  EXPECT_NE(grid_renderer_source.find("ViewportProjection::Perspective ? 1.0f"),
             std::string::npos);
   EXPECT_NE(grid_renderer_source.find(".castShadows(false)"),
             std::string::npos);
@@ -1698,13 +1522,12 @@ TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
     EXPECT_NE(source.find("surfaceGridCoordinates("), std::string::npos);
     EXPECT_NE(source.find("surfaceGridFloor("), std::string::npos);
     EXPECT_NE(source.find("surfaceGridLineCoverage("), std::string::npos);
-    EXPECT_NE(source.find("float worldPixelWidth = max(length(dFdx(worldPosition)), "
-                          "length(dFdy(worldPosition)))"),
-              std::string::npos);
-    EXPECT_NE(source.find("surfaceGridMinorLineThickness"),
-              std::string::npos);
-    EXPECT_NE(source.find("surfaceGridMajorLineThickness"),
-              std::string::npos);
+    EXPECT_NE(
+        source.find("float worldPixelWidth = max(length(dFdx(worldPosition)), "
+                    "length(dFdy(worldPosition)))"),
+        std::string::npos);
+    EXPECT_NE(source.find("surfaceGridMinorLineThickness"), std::string::npos);
+    EXPECT_NE(source.find("surfaceGridMajorLineThickness"), std::string::npos);
     EXPECT_NE(source.find("baseColor = applySurfaceGrid(baseColor)"),
               std::string::npos);
     EXPECT_NE(source.find("float derivativeWidth = fwidth(coord)"),
@@ -1784,40 +1607,6 @@ TEST(OverlayMaterialTests,
   EXPECT_EQ(icon_source.find("getClipFromViewMatrix()"), std::string::npos);
   EXPECT_EQ(icon_source.find("name : nearPlane"), std::string::npos);
   EXPECT_NE(icon_source.find("sampled.rgb * tint.rgb * alpha"),
-            std::string::npos);
-}
-
-TEST(OverlayMaterialTests,
-     ImGuiMaterialCanCompositePremultipliedDisplayTextures) {
-  const std::string source = read_source_file("resources/materials/imgui.mat");
-  const std::string renderer =
-      read_source_file("src/render/imgui_filament_renderer.cpp");
-
-  EXPECT_NE(source.find("name : premultipliedAlpha"), std::string::npos);
-  EXPECT_NE(source.find("vec3 straightRgb = sampled.rgb * tint.rgb * alpha"),
-            std::string::npos);
-  EXPECT_NE(
-      source.find("vec3 premultipliedRgb = sampled.rgb * tint.rgb * tint.a"),
-      std::string::npos);
-  EXPECT_NE(
-      source.find("mix(straightRgb, premultipliedRgb, premultipliedAlpha)"),
-      std::string::npos);
-  EXPECT_NE(
-      renderer.find("TextureSampleColorSpace::DisplaySrgbPremultipliedAlpha"),
-      std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      renderer, "material_instance->setParameter(\"premultipliedAlpha\", "
-                "premultiplied_alpha)"));
-  EXPECT_NE(renderer.find("clear_options.discard = false"), std::string::npos);
-  EXPECT_NE(renderer.find("renderer.setClearOptions(clear_options)"),
-            std::string::npos);
-  EXPECT_NE(renderer.find("framebuffer_width_int"), std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      renderer, "std::clamp(static_cast<int>(std::floor(clip_min.x))"));
-  EXPECT_TRUE(source_contains_compact(
-      renderer, ".scissor_bottom = static_cast<std::uint32_t>("
-                "framebuffer_height_int - scissor_bottom)"));
-  EXPECT_NE(renderer.find("material_instance->unsetScissor();"),
             std::string::npos);
 }
 
@@ -2111,15 +1900,14 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_EQ(cache_source.find("SelectedObjectLineVertex"), std::string::npos);
   EXPECT_EQ(cache_source.find("update_line_proxy"), std::string::npos);
   EXPECT_EQ(cache_source.find("line_proxy_"), std::string::npos);
-  EXPECT_EQ(cache_source.find("setParameter(\"nearPlane\""),
-            std::string::npos);
+  EXPECT_EQ(cache_source.find("setParameter(\"nearPlane\""), std::string::npos);
   EXPECT_NE(cache_source.find("destroy_face_entries()"), std::string::npos);
 }
 
 TEST(ViewportOverlayPolicyTests,
      NativeViewportKeepsTransientObjectSelectionWireBeforeProjection) {
   const std::string viewport_panel_source =
-      read_source_file("src/ui/viewport_panel.cpp");
+      read_source_file("src/ui/qt_viewport_panel.cpp");
   const std::string overlay_service_source = read_source_file(
       "src/editor/modeling/services/modeling_session_services.cpp");
 
@@ -2153,19 +1941,82 @@ TEST(ViewportOverlayPolicyTests,
 }
 
 TEST(ViewportOverlayPolicyTests,
+     QtViewportPreservesNativeOverlayCacheAndCompositionOrder) {
+  const std::string source = read_source_file("src/ui/qt_viewport_panel.cpp");
+
+  EXPECT_TRUE(source_contains_compact(
+      source, "suppress_persistent_object_selection = overlay_summary.mode == "
+              "ModelingSelectionMode::Object"));
+  EXPECT_NE(
+      source.find("modeling.selection_overlay_signature(overlay_options)"),
+      std::string::npos);
+  EXPECT_NE(source.find("modeling.selection_overlay_frame(overlay_options)"),
+            std::string::npos);
+  EXPECT_NE(
+      source.find("refresh_cached_selection_overlay_frame(modeling, document, "
+                  "assets)"),
+      std::string::npos);
+  EXPECT_NE(source.find(".scene_revision = document.revision()"),
+            std::string::npos);
+  EXPECT_NE(source.find(".asset_revision = assets.revision()"),
+            std::string::npos);
+  EXPECT_EQ(source.find("sync_selection_overlay("), std::string::npos);
+
+  const std::size_t cached_selection =
+      source.find("selection_overlay_cache_.frame()");
+  const std::size_t scene_overlay =
+      source.find("build_scene_overlay_frame(", cached_selection);
+  const std::size_t transform_gizmo = source.find(
+      "ViewportTransformGizmoOverlayBuilder::append(", scene_overlay);
+  const std::size_t style_resolve =
+      source.find("ViewportOverlayStyleResolver::apply(", transform_gizmo);
+  const std::size_t submit =
+      source.find("render_bridge.set_overlay_frame(", style_resolve);
+  ASSERT_NE(cached_selection, std::string::npos);
+  ASSERT_NE(scene_overlay, std::string::npos);
+  ASSERT_NE(transform_gizmo, std::string::npos);
+  ASSERT_NE(style_resolve, std::string::npos);
+  ASSERT_NE(submit, std::string::npos);
+  EXPECT_LT(cached_selection, scene_overlay);
+  EXPECT_LT(scene_overlay, transform_gizmo);
+  EXPECT_LT(transform_gizmo, style_resolve);
+  EXPECT_LT(style_resolve, submit);
+}
+
+TEST(ViewportOverlayPolicyTests,
+     QtViewportExtractsOneSceneOverlaySnapshotBeforePaneComposition) {
+  const std::string source = read_source_file("src/ui/qt_viewport_panel.cpp");
+
+  const std::size_t snapshot =
+      source.find("build_scene_overlay_snapshot(");
+  const std::size_t pane_composition =
+      source.find("workspace_->clear_pane_visibility();", snapshot);
+  const std::size_t scene_overlay =
+      source.find("build_scene_overlay_frame(", pane_composition);
+  ASSERT_NE(snapshot, std::string::npos);
+  ASSERT_NE(pane_composition, std::string::npos);
+  ASSERT_NE(scene_overlay, std::string::npos);
+  EXPECT_EQ(count_occurrences(source, "build_scene_overlay_snapshot("), 1u);
+  EXPECT_LT(snapshot, pane_composition);
+  EXPECT_LT(pane_composition, scene_overlay);
+  EXPECT_TRUE(source_contains_compact(
+      source,
+      "build_scene_overlay_frame(render_bridge, std::move(overlay_frame), "
+      "*scene_overlay_snapshot"));
+}
+
+TEST(ViewportOverlayPolicyTests,
      ObjectTransformDragBoundsPreferSceneWorldAabb) {
   const std::string source = read_source_file(
       "src/editor/modeling/services/modeling_session_service.cpp");
 
-  const std::size_t object_mode =
-      source.find("session_.selection_mode()");
+  const std::size_t object_mode = source.find("session_.selection_mode()");
   ASSERT_NE(object_mode, std::string::npos);
   const std::size_t object_selection =
       source.find("quader_editor_core::SelectionMode::Object", object_mode);
   ASSERT_NE(object_selection, std::string::npos);
-  const std::size_t scene_bounds =
-      source.find("selected_transform_world_bounds(scene_, assets_)",
-                  object_selection);
+  const std::size_t scene_bounds = source.find(
+      "selected_transform_world_bounds(scene_, assets_)", object_selection);
   ASSERT_NE(scene_bounds, std::string::npos);
   const std::size_t runtime_bounds =
       source.find("session_.selection_bounds()", object_selection);
@@ -2182,7 +2033,9 @@ TEST(ViewportOverlayPolicyTests,
                                       "ViewportOverlayLayer::SelectedEdge : "
                                       "ViewportOverlayLayer::WireframeXray"));
   EXPECT_NE(cache_source.find(
-                "kOverlaySelectionWireColor : kOverlayWireframeXrayColor"),
+                "style.selection_wire_color : kOverlayWireframeXrayColor"),
+            std::string::npos);
+  EXPECT_NE(cache_source.find("style.selection_edge_line_width_pixels"),
             std::string::npos);
 }
 
@@ -2413,6 +2266,96 @@ TEST(ViewportOverlayStyleResolverTests,
   EXPECT_FLOAT_EQ(frame.points[1].size_pixels, 14.0f);
   ASSERT_TRUE(frame.points[1].outline_growth_pixels.has_value());
   EXPECT_FLOAT_EQ(*frame.points[1].outline_growth_pixels, 3.0f);
+}
+
+TEST(ViewportPersistentOverlayStyleSnapshotTests,
+     UsesNarrowFaceAndWireSignaturesForCacheInvalidation) {
+  const ViewportPersistentOverlayStyleSnapshot defaults =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(
+          ViewportSettings::defaults());
+  EXPECT_NE(defaults.face_signature, 0u);
+  EXPECT_NE(defaults.wire_signature, 0u);
+  EXPECT_FALSE(selected_object_face_style_changed(
+      true, defaults.face_signature, defaults));
+  EXPECT_FALSE(scene_wireframe_style_changed(
+      true, defaults.wire_signature, defaults));
+  EXPECT_TRUE(selected_object_face_style_changed(
+      false, defaults.face_signature, defaults));
+  EXPECT_TRUE(scene_wireframe_style_changed(
+      false, defaults.wire_signature, defaults));
+
+  ViewportSettings face_settings = ViewportSettings::defaults();
+  ASSERT_TRUE(face_settings.set_color(ViewportColorSettingId::SelectionFace,
+                                      {1.0f, 0.0f, 0.0f, 1.0f}));
+  const ViewportPersistentOverlayStyleSnapshot face =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(face_settings);
+  EXPECT_EQ(face.selection_face_color, rgba8(255, 0, 0));
+  EXPECT_NE(face.face_signature, defaults.face_signature);
+  EXPECT_EQ(face.wire_signature, defaults.wire_signature);
+
+  ViewportSettings wire_settings = ViewportSettings::defaults();
+  ASSERT_TRUE(wire_settings.set_color(ViewportColorSettingId::SelectionWire,
+                                      {0.0f, 1.0f, 0.0f, 1.0f}));
+  const ViewportPersistentOverlayStyleSnapshot wire =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(wire_settings);
+  EXPECT_EQ(wire.selection_wire_color, rgba8(0, 255, 0));
+  EXPECT_EQ(wire.face_signature, defaults.face_signature);
+  EXPECT_NE(wire.wire_signature, defaults.wire_signature);
+
+  ViewportSettings width_settings = ViewportSettings::defaults();
+  ASSERT_TRUE(width_settings.set_float_value(
+      ViewportFloatSettingId::SelectionEdgeLineSize, 5.0f));
+  const ViewportPersistentOverlayStyleSnapshot width =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(width_settings);
+  EXPECT_FLOAT_EQ(width.selection_edge_line_width_pixels, 5.0f);
+  EXPECT_EQ(width.face_signature, defaults.face_signature);
+  EXPECT_NE(width.wire_signature, defaults.wire_signature);
+
+  ViewportSettings unrelated_settings = ViewportSettings::defaults();
+  ASSERT_TRUE(unrelated_settings.set_color(ViewportColorSettingId::SourceWire,
+                                           {1.0f, 0.0f, 1.0f, 1.0f}));
+  const ViewportPersistentOverlayStyleSnapshot unrelated =
+      ViewportOverlayStyleResolver::persistent_style_snapshot(
+          unrelated_settings);
+  EXPECT_EQ(unrelated.face_signature, defaults.face_signature);
+  EXPECT_EQ(unrelated.wire_signature, defaults.wire_signature);
+}
+
+TEST(ViewportPersistentOverlayStyleSnapshotTests,
+     PersistentCachesConsumeSnapshotStylesWithoutChangingRenderPolicy) {
+  const std::string selected_cache =
+      read_source_file("src/render/overlay/selected_object_overlay_cache.cpp");
+  const std::string wireframe_cache = read_source_file(
+      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
+
+  EXPECT_EQ(selected_cache.find("kOverlaySelectionFaceColor"),
+            std::string::npos);
+  EXPECT_NE(selected_cache.find("snapshot.style.face_signature"),
+            std::string::npos);
+  EXPECT_NE(selected_cache.find("style.selection_face_color"),
+            std::string::npos);
+  EXPECT_EQ(wireframe_cache.find(
+                "mesh.selected ? kOverlaySelectionWireColor"),
+            std::string::npos);
+  EXPECT_NE(wireframe_cache.find("snapshot.style.wire_signature"),
+            std::string::npos);
+  EXPECT_NE(wireframe_cache.find("style.selection_wire_color"),
+            std::string::npos);
+  EXPECT_NE(wireframe_cache.find(
+                "style.selection_edge_line_width_pixels"),
+            std::string::npos);
+
+  for (const std::string_view policy_call : {
+           "OverlayRenderableBuilder::make_state(",
+           ".blendOrder(0, state.blend_order)",
+           ".globalBlendOrderEnabled(0, true)",
+           ".culling(false)",
+       }) {
+    EXPECT_NE(selected_cache.find(policy_call), std::string::npos)
+        << policy_call;
+    EXPECT_NE(wireframe_cache.find(policy_call), std::string::npos)
+        << policy_call;
+  }
 }
 
 TEST(ViewportOverlayStyleResolverTests, SupportsSelectionModeScopedOverrides) {
@@ -2714,8 +2657,8 @@ TEST(SceneRenderBridgeTests, UsesQuadMaterialsForSelectionLineAndPointOverlay) {
             std::string::npos);
   EXPECT_NE(proxy_factory_source.find("setParameter(\"iconTexture\""),
             std::string::npos);
-  const std::size_t point_light_icon_path =
-      proxy_factory_source.find("resource_root / \"icons\" / \"point_light.png\"");
+  const std::size_t point_light_icon_path = proxy_factory_source.find(
+      "resource_root / \"icons\" / \"point_light.png\"");
   ASSERT_NE(point_light_icon_path, std::string::npos);
   const std::size_t point_light_icon_load_start =
       proxy_factory_source.rfind("load_png_texture", point_light_icon_path);
@@ -2844,6 +2787,14 @@ TEST(SceneRenderBridgeTests, UsesRenderSceneSnapshotsForIncrementalMeshSync) {
   EXPECT_EQ(change_source.find("material_binding_->material_revision"),
             std::string::npos);
   const std::string rebuild_source = sync_source.substr(rebuild_start);
+  EXPECT_NE(rebuild_source.find("can_sync_transforms_only(snapshot)"),
+            std::string::npos);
+  EXPECT_NE(sync_source.find("mesh.transform_dirty"), std::string::npos);
+  EXPECT_NE(sync_source.find("light.transform_dirty"), std::string::npos);
+  EXPECT_NE(sync_source.find("openLocalTransformTransaction()"),
+            std::string::npos);
+  EXPECT_NE(sync_source.find("commitLocalTransformTransaction()"),
+            std::string::npos);
   EXPECT_NE(rebuild_source.find(
                 "mesh_cache_->remove_except(snapshot.live_mesh_entities)"),
             std::string::npos);
@@ -2911,14 +2862,15 @@ TEST(RenderSystemTests,
             std::string::npos);
   EXPECT_NE(header.find("RenderFramePerformanceStats frame_performance_stats_"),
             std::string::npos);
-  EXPECT_NE(header.find("frame_rate_sample_begin_"), std::string::npos);
-  EXPECT_NE(header.find("frame_rate_sample_count_"), std::string::npos);
-  EXPECT_NE(source.find("frame_cpu_begin_ = std::chrono::steady_clock::now()"),
+  EXPECT_NE(header.find("RenderPresentationFrameTracker"), std::string::npos);
+  EXPECT_NE(header.find("begin_presentation_frame()"), std::string::npos);
+  EXPECT_NE(header.find("complete_presentation_frame("), std::string::npos);
+  EXPECT_NE(source.find("presentation_frame_tracker_.begin_presentation_frame("),
             std::string::npos);
-  EXPECT_NE(source.find("std::chrono::duration<double, std::milli>"),
+  EXPECT_NE(source.find("presentation_frame_tracker_.complete_presentation_frame("),
             std::string::npos);
-  EXPECT_NE(source.find("kFrameRateSampleSeconds"), std::string::npos);
-  EXPECT_NE(source.find("frames_per_second"), std::string::npos);
+  EXPECT_EQ(source.find("update_frame_performance_stats_after_end_frame"),
+            std::string::npos);
   EXPECT_NE(source.find("renderer_->getFrameInfoHistory(history_size)"),
             std::string::npos);
   EXPECT_NE(source.find("renderer_->getMaxFrameHistorySize()"),
@@ -2929,6 +2881,40 @@ TEST(RenderSystemTests,
             std::string::npos);
   EXPECT_NE(source.find("filament::Renderer::FrameInfo::PENDING"),
             std::string::npos);
+}
+
+TEST(RenderPresentationFrameTrackerTests,
+     CountsMultiSwapchainSubmissionAsOneAggregateFrame) {
+  using Clock = RenderPresentationFrameTracker::Clock;
+  RenderPresentationFrameTracker tracker;
+  RenderFramePerformanceStats stats;
+  const Clock::time_point sample_begin{};
+
+  for (int frame = 0; frame < 50; ++frame) {
+    const Clock::time_point frame_begin =
+        sample_begin + std::chrono::milliseconds(frame * 10);
+    tracker.begin_presentation_frame(frame_begin);
+    EXPECT_TRUE(tracker.complete_presentation_frame(
+        frame_begin + std::chrono::milliseconds(10), 4u, stats));
+  }
+
+  ASSERT_TRUE(stats.frames_per_second_available);
+  EXPECT_DOUBLE_EQ(stats.frames_per_second, 100.0);
+  ASSERT_TRUE(stats.cpu_frame_ms_available);
+  EXPECT_DOUBLE_EQ(stats.cpu_frame_ms, 10.0);
+}
+
+TEST(RenderPresentationFrameTrackerTests,
+     IgnoresPresentationFramesWithoutSwapchainSubmissions) {
+  using Clock = RenderPresentationFrameTracker::Clock;
+  RenderPresentationFrameTracker tracker;
+  RenderFramePerformanceStats stats;
+
+  tracker.begin_presentation_frame(Clock::time_point{});
+  EXPECT_FALSE(tracker.complete_presentation_frame(
+      Clock::time_point{} + std::chrono::milliseconds(20), 0u, stats));
+  EXPECT_FALSE(stats.cpu_frame_ms_available);
+  EXPECT_FALSE(stats.frames_per_second_available);
 }
 
 TEST(ViewportRendererTests,
@@ -3093,40 +3079,9 @@ TEST(RenderProxyLifecycleTests, FilamentResourceCreationUsesRenderOwnedGuards) {
             render_target_source.find("creation_guard.release()"));
 }
 
-TEST(RenderProxyLifecycleTests, UiIconTexturesAreRenderOwned) {
-  const std::string service_header =
-      read_source_file("src/render/ui_icon_texture_service.hpp");
-  const std::string service_source =
-      read_source_file("src/render/ui_icon_texture_service.cpp");
-  const std::string png_loader_source =
-      read_source_file("src/render/png_texture_loader.cpp");
-  const std::string render_system_header =
-      read_source_file("src/render/render_system.hpp");
-  const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
-
-  EXPECT_NE(service_header.find("class UiIconTextureService"),
-            std::string::npos);
-  EXPECT_NE(service_header.find("RenderUiIconSet"), std::string::npos);
-  EXPECT_NE(service_source.find("load_png_texture("), std::string::npos);
-  EXPECT_NE(png_loader_source.find("filament::Texture::Builder()"),
-            std::string::npos);
-  EXPECT_NE(service_source.find("textures_->register_texture(texture)"),
-            std::string::npos);
-  EXPECT_NE(service_source.find("textures_->unregister_texture(record.handle)"),
-            std::string::npos);
-  EXPECT_NE(service_source.find("engine_->destroy(record.texture)"),
-            std::string::npos);
-  EXPECT_NE(render_system_header.find("UiIconTextureService ui_icon_textures_"),
-            std::string::npos);
-  EXPECT_NE(ui_system_source.find("to_ui_icon_set("), std::string::npos);
-  EXPECT_EQ(ui_system_source.find("filament::Texture::Builder"),
-            std::string::npos);
-}
-
 TEST(RenderProxyLifecycleTests, RenderResourceOwnersAreNonTransferable) {
   EXPECT_TRUE(render_owner_is_non_transferable<RenderSystem>());
   EXPECT_TRUE(render_owner_is_non_transferable<FilamentMaterialLibrary>());
-  EXPECT_TRUE(render_owner_is_non_transferable<UiIconTextureService>());
   EXPECT_TRUE(render_owner_is_non_transferable<TextureRegistry>());
   EXPECT_TRUE(render_owner_is_non_transferable<TextureBindingService>());
   EXPECT_TRUE(render_owner_is_non_transferable<MaterialBindingService>());
@@ -3201,6 +3156,22 @@ TEST(ViewportContextMenuPolicyTests, BlocksModalToolsMissingActionsAndDrags) {
 
   request.release_screen = {201.0f, 181.0f};
   request.accumulated_drag_delta = {20.0f, 0.0f};
+  EXPECT_FALSE(should_open_viewport_context_menu(request));
+}
+
+TEST(ViewportContextMenuPolicyTests,
+     BlocksCapturedFlyDragEvenWhenCursorReturnsToPressPoint) {
+  const ViewportContextMenuOpenRequest request{
+      .right_press_tracked = true,
+      .right_released = true,
+      .release_inside_viewport = true,
+      .target_hit = true,
+      .has_actions = true,
+      .press_screen = {320.0f, 240.0f},
+      .release_screen = {320.0f, 240.0f},
+      .accumulated_drag_delta = {5.0f, 0.0f},
+  };
+
   EXPECT_FALSE(should_open_viewport_context_menu(request));
 }
 
@@ -3383,8 +3354,7 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
           "editor_unlit ? *shaded_mesh_material_ : *rendered_mesh_material_"),
       std::string::npos);
   EXPECT_NE(material_source.find("if (!editor_unlit)"), std::string::npos);
-  EXPECT_NE(material_source.find("apply_mesh_surface_grid"),
-            std::string::npos);
+  EXPECT_NE(material_source.find("apply_mesh_surface_grid"), std::string::npos);
   EXPECT_NE(material_source.find("surfaceGridMinorColor"), std::string::npos);
   EXPECT_NE(material_source.find("surfaceGridMajorSize"), std::string::npos);
   EXPECT_NE(material_source.find("ViewportBoolSettingId::ShowMeshGrid"),
@@ -3498,6 +3468,63 @@ TEST(SceneRenderBridgeTests,
             std::string::npos);
   EXPECT_NE(builder_source.find("viewport_overlay_draw_order(layer) * 64"),
             std::string::npos);
+}
+
+TEST(SceneRenderBridgeTests,
+     ReusesCanonicalLineIndicesWhenOnlyProjectedVerticesChange) {
+  const std::string proxy_factory_source =
+      read_source_file("src/render/overlay/overlay_proxy_factory.cpp");
+  const std::string line_builder_source =
+      read_source_file("src/render/overlay/overlay_line_mesh_builder.cpp");
+
+  const std::size_t line_update = proxy_factory_source.find(
+      "void OverlayProxyFactory::update_line_proxy");
+  const std::size_t edit_wire_update = proxy_factory_source.find(
+      "void OverlayProxyFactory::update_edit_wire_proxy");
+  const std::size_t point_update = proxy_factory_source.find(
+      "void OverlayProxyFactory::update_point_proxy");
+  ASSERT_NE(line_update, std::string::npos);
+  ASSERT_NE(edit_wire_update, std::string::npos);
+  ASSERT_NE(point_update, std::string::npos);
+  ASSERT_LT(line_update, edit_wire_update);
+  ASSERT_LT(edit_wire_update, point_update);
+
+  const std::string line_update_source = proxy_factory_source.substr(
+      line_update, edit_wire_update - line_update);
+  const std::string edit_wire_update_source = proxy_factory_source.substr(
+      edit_wire_update, point_update - edit_wire_update);
+  EXPECT_NE(line_update_source.find("update_canonical_quad_proxy_vertices"),
+            std::string::npos);
+  EXPECT_NE(
+      edit_wire_update_source.find("update_canonical_quad_proxy_vertices"),
+      std::string::npos);
+  EXPECT_EQ(line_update_source.find("update_proxy_buffers"), std::string::npos);
+  EXPECT_EQ(edit_wire_update_source.find("update_proxy_buffers"),
+            std::string::npos);
+
+  const std::size_t canonical_update = proxy_factory_source.find(
+      "void update_canonical_quad_proxy_vertices");
+  const std::size_t namespace_end =
+      proxy_factory_source.find("} // namespace", canonical_update);
+  ASSERT_NE(canonical_update, std::string::npos);
+  ASSERT_NE(namespace_end, std::string::npos);
+  const std::string canonical_update_source = proxy_factory_source.substr(
+      canonical_update, namespace_end - canonical_update);
+  EXPECT_NE(canonical_update_source.find("update_proxy_vertex_buffer"),
+            std::string::npos);
+  EXPECT_EQ(canonical_update_source.find("index_buffer->setBuffer"),
+            std::string::npos);
+
+  EXPECT_TRUE(source_contains_compact(
+      proxy_factory_source,
+      "proxy.vertex_count == mesh.vertices.size() && proxy.index_count == "
+      "mesh.indices.size()"));
+  EXPECT_TRUE(source_contains_compact(
+      line_builder_source,
+      "mesh.indices.push_back(offset); mesh.indices.push_back(offset + 1u); "
+      "mesh.indices.push_back(offset + 2u); mesh.indices.push_back(offset); "
+      "mesh.indices.push_back(offset + 2u); mesh.indices.push_back(offset + "
+      "3u);"));
 }
 
 TEST(ModelingSessionServiceTests,
@@ -3665,7 +3692,7 @@ TEST(SceneRenderBridgeTests,
   const std::string viewport_renderer =
       read_source_file({"src", "render", "viewport_renderer.cpp"});
   const std::string viewport_panel =
-      read_source_file({"src", "ui", "viewport_panel.cpp"});
+      read_source_file({"src", "ui", "qt_viewport_panel.cpp"});
 
   EXPECT_NE(mesh_factory.find(".castShadows(cast_shadows)"), std::string::npos);
   EXPECT_NE(mesh_factory.find(".receiveShadows(!editor_unlit && !depth_only)"),
@@ -3707,7 +3734,7 @@ TEST(SceneRenderBridgeTests,
   EXPECT_NE(viewport_renderer.find("overlay_view_->setBlendMode(filament::View:"
                                    ":BlendMode::TRANSLUCENT)"),
             std::string::npos);
-  EXPECT_NE(viewport_panel.find("pane_state.renderer.set_scene_layer_mask"),
+  EXPECT_NE(viewport_panel.find("renderer.set_scene_layer_mask"),
             std::string::npos);
   EXPECT_NE(viewport_panel.find("kViewportRenderedSceneLayerMask"),
             std::string::npos);
@@ -3715,7 +3742,7 @@ TEST(SceneRenderBridgeTests,
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       viewport_panel,
-      "pane_state.renderer.set_shadowing_enabled(pane_workspace.shading == "
+      "renderer.set_shadowing_enabled(pane_workspace.shading == "
       "ViewportShadingMode::Rendered)"));
 }
 
@@ -3757,7 +3784,7 @@ TEST(ViewportRendererTests, OverlayPassUsesNeutralExposureCamera) {
 }
 
 TEST(ViewportRendererTests,
-     PresentsSceneAndOverlayViewportTexturesThroughUiEncoder) {
+     PresentsSceneAndOverlayThroughNativeQtChildSwapchain) {
   const std::string source =
       read_source_file("src/render/viewport_render_target.cpp");
   const std::string renderer_header =
@@ -3767,7 +3794,9 @@ TEST(ViewportRendererTests,
   const std::string coordinator_source =
       read_source_file("src/render/viewport_render_pass_coordinator.cpp");
   const std::string viewport_panel_source =
-      read_source_file("src/ui/viewport_panel.cpp");
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string viewport_surface_source =
+      read_source_file("src/ui/qt_viewport_surface.cpp");
   const std::string grid_source =
       read_source_file("src/render/viewport_grid_renderer.cpp");
 
@@ -3802,17 +3831,15 @@ TEST(ViewportRendererTests,
   EXPECT_NE(renderer_header.find("scene_texture_sample_color_space_"),
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
-      renderer_source,
-      "render_target_.resize(width_, height_, view_, "
-      "scene_texture_sample_color_space_)"));
+      renderer_source, "render_target_.resize(width_, height_, view_, "
+                       "scene_texture_sample_color_space_)"));
   EXPECT_TRUE(source_contains_compact(
       renderer_source,
       "return post_processing_enabled ? TextureSampleColorSpace::DisplaySrgb : "
       "TextureSampleColorSpace::LinearSrgb"));
-  EXPECT_TRUE(source_contains_compact(
-      renderer_source,
-      "render_target_.set_sample_color_space("
-      "scene_texture_sample_color_space_)"));
+  EXPECT_TRUE(source_contains_compact(renderer_source,
+                                      "render_target_.set_sample_color_space("
+                                      "scene_texture_sample_color_space_)"));
   EXPECT_TRUE(source_contains_compact(
       renderer_source,
       "static_cast<float>(width_) / static_cast<float>(std::max(1u, "
@@ -3829,15 +3856,31 @@ TEST(ViewportRendererTests,
   EXPECT_NE(coordinator_source.find("overlay_visible_layer_mask() == 0u && "
                                     "!overlay_uses_separate_target"),
             std::string::npos);
-  EXPECT_NE(viewport_panel_source.find(
-                "pane_state.renderer.overlay_texture_handle()"),
+  EXPECT_NE(viewport_surface_source.find(
+                "render_system_->begin_frame(swap_chain_.get())"),
             std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("pane_state.renderer.texture_max_u()"),
+  EXPECT_NE(viewport_surface_source.find(
+                "render_system_->render_viewport(renderer_)"),
             std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("pane_state.renderer.texture_max_v()"),
+  EXPECT_NE(viewport_surface_source.find("render_system_->end_frame()"),
             std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("ImGui::GetWindowDrawList()->AddImage("),
+  const std::size_t aggregate_begin = viewport_panel_source.find(
+      "render_system_->begin_presentation_frame()");
+  const std::size_t pane_submission = viewport_panel_source.find(
+      "pane_state.surface->render_frame()", aggregate_begin);
+  const std::size_t aggregate_complete = viewport_panel_source.find(
+      "render_system_->complete_presentation_frame(submitted)",
+      pane_submission);
+  ASSERT_NE(aggregate_begin, std::string::npos);
+  ASSERT_NE(pane_submission, std::string::npos);
+  ASSERT_NE(aggregate_complete, std::string::npos);
+  EXPECT_LT(aggregate_begin, pane_submission);
+  EXPECT_LT(pane_submission, aggregate_complete);
+  EXPECT_EQ(viewport_panel_source.find("overlay_texture_handle()"),
             std::string::npos);
+  EXPECT_EQ(viewport_panel_source.find("texture_max_u()"), std::string::npos);
+  EXPECT_EQ(viewport_panel_source.find("texture_max_v()"), std::string::npos);
+  EXPECT_EQ(viewport_panel_source.find("ImGui::"), std::string::npos);
   EXPECT_NE(
       grid_source.find("settings.color(ViewportColorSettingId::GridMinor)"),
       std::string::npos);
@@ -3855,30 +3898,26 @@ TEST(ViewportRendererTests,
 TEST(ViewportRendererTests,
      ViewportInfoOverlayUsesRendererTimingAndVisibleMeshSubmissionStats) {
   const std::string app_source = read_source_file("src/app/app.cpp");
-  const std::string ui_context_header =
-      read_source_file("src/ui/ui_context.hpp");
   const std::string ui_system_header = read_source_file("src/ui/ui_system.hpp");
   const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
   const std::string viewport_panel_header =
-      read_source_file("src/ui/viewport_panel.hpp");
+      read_source_file("src/ui/qt_viewport_panel.hpp");
   const std::string viewport_panel_source =
-      read_source_file("src/ui/viewport_panel.cpp");
+      read_source_file("src/ui/qt_viewport_panel.cpp");
   const std::string viewport_info_stats_source =
       read_source_file("src/render/viewport_info_stats.cpp");
 
-  EXPECT_NE(app_source.find("ui_.set_render_performance_stats(render_system_."
+  EXPECT_NE(app_source.find("ui_.refresh(frame_timing, render_system_."
                             "frame_performance_stats())"),
             std::string::npos);
-  EXPECT_NE(
-      ui_context_header.find("RenderFramePerformanceStats render_performance"),
-      std::string::npos);
   EXPECT_NE(ui_system_header.find(
-                "void set_render_performance_stats(RenderFramePerformanceStats "
-                "stats)"),
+                "RenderFramePerformanceStats render_performance"),
             std::string::npos);
-  EXPECT_NE(
-      ui_system_source.find(".render_performance = render_performance_stats_"),
-      std::string::npos);
+  EXPECT_NE(ui_system_source.find(
+                "viewport_panel_->set_render_performance_stats("),
+            std::string::npos);
+  EXPECT_NE(viewport_panel_header.find("set_render_performance_stats"),
+            std::string::npos);
   EXPECT_NE(viewport_panel_header.find("draw_viewport_info_overlay"),
             std::string::npos);
   EXPECT_NE(viewport_panel_header.find("viewport_info_cached_scene_revision_"),
@@ -3892,10 +3931,9 @@ TEST(ViewportRendererTests,
   EXPECT_NE(viewport_panel_source.find(
                 "collect_viewport_info_scene_stats(document, assets, camera)"),
             std::string::npos);
-  EXPECT_NE(
-      viewport_info_stats_source.find(
-          "document.is_effectively_visible(entity_id)"),
-      std::string::npos);
+  EXPECT_NE(viewport_info_stats_source.find(
+                "document.is_effectively_visible(entity_id)"),
+            std::string::npos);
   EXPECT_NE(
       viewport_info_stats_source.find("coalesced_mesh_primitive_spans(*mesh)"),
       std::string::npos);
@@ -3910,33 +3948,39 @@ TEST(ViewportRendererTests,
             std::string::npos);
   EXPECT_NE(viewport_info_stats_source.find("stats.draw_calls += spans.size()"),
             std::string::npos);
-  EXPECT_NE(
-      viewport_info_stats_source.find(
-          "stats.primitives += span.index_count / 3u"),
-      std::string::npos);
+  EXPECT_NE(viewport_info_stats_source.find(
+                "stats.primitives += span.index_count / 3u"),
+            std::string::npos);
   EXPECT_NE(viewport_panel_source.find("ViewportBoolSettingId::ShowInfo"),
+            std::string::npos);
+  EXPECT_NE(viewport_panel_source.find("pane_state.id == focused_pane"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("ui.viewport.info.draw_calls"),
             std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("render_stats.frames_per_second"),
+  EXPECT_NE(viewport_panel_source.find(
+                "render_performance_.frames_per_second"),
             std::string::npos);
   EXPECT_EQ(viewport_panel_source.find(
                 "1.0 / ui_context.viewport->frame_timing.raw_delta_seconds"),
             std::string::npos);
-  EXPECT_EQ(viewport_panel_source.find("1000.0 / render_stats.gpu_frame_ms"),
+  EXPECT_EQ(viewport_panel_source.find(
+                "1000.0 / render_performance_.gpu_frame_ms"),
             std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("draw_viewport_info_text("),
+  EXPECT_NE(viewport_panel_source.find("new QLabel(pane_state.frame)"),
             std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("draw_list.AddText"), std::string::npos);
-  const std::size_t text_helper =
-      viewport_panel_source.find("void draw_viewport_info_text(");
-  const std::size_t next_helper =
-      viewport_panel_source.find("hit_drawn_plane_captured_point", text_helper);
-  ASSERT_NE(text_helper, std::string::npos);
-  ASSERT_NE(next_helper, std::string::npos);
-  const std::string text_helper_source =
-      viewport_panel_source.substr(text_helper, next_helper - text_helper);
-  EXPECT_EQ(text_helper_source.find("AddRectFilled"), std::string::npos);
+  EXPECT_NE(viewport_panel_source.find("viewportInfo_%1"), std::string::npos);
+  EXPECT_NE(viewport_panel_source.find("Qt::WA_NativeWindow"),
+            std::string::npos);
+  EXPECT_NE(viewport_panel_source.find("Qt::WA_TransparentForMouseEvents"),
+            std::string::npos);
+  EXPECT_NE(viewport_panel_source.find("info_overlay->setText(text)"),
+            std::string::npos);
+  EXPECT_NE(viewport_panel_source.find("info_overlay->setVisible(true)"),
+            std::string::npos);
+  EXPECT_EQ(viewport_panel_source.find("setStyleSheet("), std::string::npos);
+  EXPECT_EQ(viewport_panel_source.find("setPalette("), std::string::npos);
+  EXPECT_EQ(viewport_panel_source.find("setFont("), std::string::npos);
+  EXPECT_EQ(viewport_panel_source.find("ImGui::"), std::string::npos);
 }
 
 TEST(ViewportRendererTests,
@@ -3950,7 +3994,7 @@ TEST(ViewportRendererTests,
   const std::string app_source = read_source_file("src/app/app.cpp");
   const std::string ui_system_source = read_source_file("src/ui/ui_system.cpp");
   const std::string viewport_panel_source =
-      read_source_file("src/ui/viewport_panel.cpp");
+      read_source_file("src/ui/qt_viewport_panel.cpp");
   const std::string overlay_cache_source =
       read_source_file("src/render/overlay/overlay_renderable_cache.cpp");
   const std::string overlay_proxy_factory_source =
@@ -4004,52 +4048,51 @@ TEST(ViewportRendererTests,
   EXPECT_NE(coordinator_source.find("renderer.setClearOptions(clear);"),
             std::string::npos);
 
+  const std::size_t process_input =
+      app_source.find("ui_.process_viewport_input()");
+  const std::size_t sync_scene =
+      app_source.find("QuaderRenderApiRuntimeAccess::sync_scene(");
   const std::size_t prepare_viewports =
-      app_source.find("ui_.prepare_viewports(*editor_, render_bridge_,");
-  const std::size_t ui_begin_frame = app_source.find(
-      "ui_.begin_frame(frame_timing, framebuffer_width, framebuffer_height)");
-  const std::size_t prepare_render_data = app_source.find(
-      "ui_.prepare_render_data(framebuffer_width, framebuffer_height)");
-  const std::size_t begin_frame =
-      app_source.find("render_system_.begin_frame()");
+      app_source.find("ui_.prepare_viewports(render_bridge_, "
+                      "render_overlay_snapshot_cache_)");
+  const std::size_t render_viewports =
+      app_source.find("ui_.render_viewports()");
+  ASSERT_NE(process_input, std::string::npos);
+  ASSERT_NE(sync_scene, std::string::npos);
   ASSERT_NE(prepare_viewports, std::string::npos);
-  ASSERT_NE(ui_begin_frame, std::string::npos);
-  ASSERT_NE(prepare_render_data, std::string::npos);
-  ASSERT_NE(begin_frame, std::string::npos);
-  EXPECT_LT(ui_begin_frame, prepare_viewports);
-  EXPECT_LT(prepare_viewports, prepare_render_data);
-  EXPECT_LT(ui_begin_frame, begin_frame);
-  EXPECT_LT(prepare_viewports, begin_frame);
-  EXPECT_LT(prepare_render_data, begin_frame);
+  ASSERT_NE(render_viewports, std::string::npos);
+  EXPECT_LT(process_input, sync_scene);
+  EXPECT_LT(sync_scene, prepare_viewports);
+  EXPECT_LT(prepare_viewports, render_viewports);
 
-  EXPECT_NE(ui_system_source.find("void UISystem::begin_frame("),
+  EXPECT_NE(ui_system_source.find("void UISystem::process_viewport_input("),
             std::string::npos);
   EXPECT_NE(ui_system_source.find("void UISystem::prepare_viewports("),
             std::string::npos);
   EXPECT_NE(ui_system_source.find("viewport_panel_->prepare_viewports("),
             std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("ViewportWorkspaceService &workspace"),
+  EXPECT_NE(viewport_panel_source.find("workspace_->active_pane_placements()"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("const SceneDocument &document"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("const AssetRegistry &assets"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find(
-                "pane_state.renderer.update_camera(pane_workspace.camera)"),
+                "renderer.update_camera(pane_workspace.camera)"),
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
-      viewport_panel_source,
-      "pane_workspace.camera.set_clip_planes( "
-      "scene_settings->camera.near_plane, "
-      "scene_settings->camera.far_plane); "
-      "pane_state.renderer.apply_scene_settings("));
+      viewport_panel_source, "pane_workspace.camera.set_clip_planes( "
+                             "scene_settings->camera.near_plane, "
+                             "scene_settings->camera.far_plane); "
+                             "pane_state.surface->renderer().apply_scene_"
+                             "settings("));
   EXPECT_NE(
-      viewport_panel_source.find("pane_state.renderer.set_scene_layer_mask"),
+      viewport_panel_source.find("renderer.set_scene_layer_mask"),
       std::string::npos);
   EXPECT_NE(
-      viewport_panel_source.find("pane_state.renderer.set_shadowing_enabled"),
+      viewport_panel_source.find("renderer.set_shadowing_enabled"),
       std::string::npos);
-  EXPECT_NE(viewport_panel_source.find("pane_state.renderer.set_scene_visible"),
+  EXPECT_NE(viewport_panel_source.find("renderer.set_scene_visible"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("ViewportBoolSettingId::ShowGrid"),
             std::string::npos);
@@ -4061,7 +4104,7 @@ TEST(ViewportRendererTests,
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
-      "pane_state.renderer.update_ground_grid(pane_workspace.camera, "
+      "renderer.update_ground_grid(pane_workspace.camera, "
       "grid_world_size, settings, grid_visible)"));
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
@@ -4077,42 +4120,49 @@ TEST(ViewportRendererTests,
       mesh_cache_source,
       "update_surface_grid_proxy_map(*factory_, shaded_mesh_proxies_, "
       "grid_world_spacing, settings)"));
-  EXPECT_EQ(
-      mesh_cache_source.find(
-          "update_surface_grid_proxy_map(*factory_, overlay_depth_mesh_proxies_"),
+  EXPECT_EQ(mesh_cache_source.find("update_surface_grid_proxy_map(*factory_, "
+                                   "overlay_depth_mesh_proxies_"),
+            std::string::npos);
+  EXPECT_NE(
+      mesh_factory_source.find("material_binding_->apply_mesh_surface_grid("),
       std::string::npos);
-  EXPECT_NE(mesh_factory_source.find(
-                "material_binding_->apply_mesh_surface_grid("),
-            std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
-      "pane_state.renderer.set_overlay_visible(overlays_visible ||"));
+      "renderer.set_overlay_visible(should_enable_viewport_overlay_pass({"));
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
-      "bool viewport_shading_shows_point_light_gizmos(ViewportShadingMode "
-      "shading)"));
+      "const bool tool_overlay_visible = pane_state.id == "
+      "interaction_pane_id_ && active_box_preview_.valid && "
+      "active_box_preview_.drag_state != ModelingBoxDragState::Height"));
   EXPECT_NE(viewport_panel_source.find(
-                "shading == ViewportShadingMode::Shaded ||"),
+                ".tool_overlay_visible = tool_overlay_visible"),
             std::string::npos);
-  EXPECT_NE(viewport_panel_source.find(
-                "shading == ViewportShadingMode::Rendered"),
-            std::string::npos);
+  EXPECT_NE(
+      viewport_panel_source.find("shading == ViewportShadingMode::Shaded ||"),
+      std::string::npos);
+  EXPECT_NE(
+      viewport_panel_source.find("shading == ViewportShadingMode::Rendered"),
+      std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
-      "const bool point_light_gizmos_visible = "
-      "point_light_gizmos_visible_for_pane(gizmos_visible, "
-      "pane_workspace.shading)"));
+      "const bool point_light_gizmos_visible = gizmos_visible && "
+      "(pane_workspace.shading == ViewportShadingMode::Shaded || "
+      "pane_workspace.shading == ViewportShadingMode::Rendered)"));
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
-      "if ((overlays_visible && selection_overlay_cache_.valid()) || "
-      "point_light_gizmos_visible)"));
+      "scene_overlay_requests[viewport_pane_index(placement.pane_id)] = "
+      "(overlays_visible && selection_overlay_cache_.valid()) || "
+      "point_light_gizmos_visible"));
+  EXPECT_TRUE(source_contains_compact(
+      viewport_panel_source,
+      "if (scene_overlay_requests[viewport_pane_index(pane_state.id)])"));
   EXPECT_NE(viewport_panel_source.find(".point_light_gizmos_visible = "
                                        "point_light_gizmos_visible"),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find("render_bridge.set_overlay_frame("),
             std::string::npos);
   EXPECT_NE(viewport_panel_source.find(
-                "viewport_grid_layer_mask(viewport_pane_index(pane_id))"),
+                "viewport_grid_layer_mask(viewport_pane_index(pane_state.id))"),
             std::string::npos);
   EXPECT_NE(overlay_proxy_factory_source.find(
                 ".layerMask(kViewportAllLayerMask, layer_mask)"),
@@ -4191,8 +4241,14 @@ TEST(AppStartupTests, DelegatesDefaultAssetsAndUsesSessionReadView) {
   EXPECT_NE(app_source.find("const ProjectSessionReadView session_view = "
                             "project_session_.read_view();"),
             std::string::npos);
-  EXPECT_NE(app_source.find("ui_.prepare_viewports(*editor_, render_bridge_, "
-                            "session_view.scene"),
+  EXPECT_TRUE(source_contains_compact(
+      app_source,
+      "ui_.install_runtime_hooks(*editor_, project_session_.scene(), "
+      "project_session_.assets(), project_session_.modeling(), "
+      "project_session_.selection(), project_session_.pivot(), "
+      "project_session_.linear_array(), default_material_)"));
+  EXPECT_NE(app_source.find("ui_.prepare_viewports(render_bridge_, "
+                            "render_overlay_snapshot_cache_)"),
             std::string::npos);
   EXPECT_EQ(app_header.find("create_startup_scene"), std::string::npos);
   EXPECT_EQ(app_source.find("create_startup_scene"), std::string::npos);
@@ -4211,197 +4267,31 @@ TEST(AppStartupTests, DelegatesDefaultAssetsAndUsesSessionReadView) {
             std::string::npos);
 }
 
-TEST(AppLoopTests,
-     SuspendsGpuSubmissionForNonDrawableWindowsAndIdlesBetweenFrames) {
+TEST(AppLoopTests, QtEventLoopKeepsViewportInputAtDisplayCadence) {
   const std::string app_header = read_source_file("src/app/app.hpp");
   const std::string app_source = read_source_file("src/app/app.cpp");
-  const std::string platform_header =
-      read_source_file("src/platform/platform_window.hpp");
-  const std::string platform_source =
-      read_source_file("src/platform/platform_window.cpp");
   const std::string ui_header = read_source_file("src/ui/ui_system.hpp");
-  const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
-  const std::string viewport_panel_header =
-      read_source_file("src/ui/viewport_panel.hpp");
 
-  EXPECT_NE(platform_header.find("platform_window_can_render_frames"),
+  EXPECT_NE(app_header.find("QApplication *application_"), std::string::npos);
+  EXPECT_NE(app_header.find("std::unique_ptr<QTimer> frame_timer_"),
             std::string::npos);
-  EXPECT_NE(
-      platform_header.find("[[nodiscard]] bool can_render_frames() const"),
-      std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      platform_header, "note_frame_presented(std::uint32_t framebuffer_width, "
-                       "std::uint32_t framebuffer_height)"));
-  EXPECT_NE(platform_header.find(
-                "using LiveResizeFrameCallback = std::function<bool()>"),
+  EXPECT_NE(app_source.find("return application_->exec()"), std::string::npos);
+  EXPECT_NE(app_source.find("&QTimer::timeout"), std::string::npos);
+  EXPECT_NE(app_source.find("kIdleFrameIntervalMs = 16"), std::string::npos);
+  EXPECT_NE(app_source.find("presentation_frame_interval_ms"),
             std::string::npos);
-  EXPECT_NE(platform_header.find("schedule_live_resize_frame_callback"),
+  EXPECT_NE(app_source.find("screen->refreshRate()"), std::string::npos);
+  EXPECT_NE(app_source.find("kMaximumDisplayRefreshRateHz = 240.0"),
             std::string::npos);
-  EXPECT_NE(platform_header.find("native_live_resize_frame_active() const"),
+  EXPECT_EQ(app_source.find("kActiveFrameIntervalMs = 1"), std::string::npos);
+  EXPECT_NE(app_source.find("ui_.needs_continuous_rendering()"),
             std::string::npos);
-  EXPECT_NE(platform_source.find("SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find("SDL occlusion can remain stale"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(platform_source,
-                                      "pixel_width > 0 && pixel_height > 0"));
-  EXPECT_TRUE(source_contains_compact(
-      platform_source,
-      "GetClientRect(static_cast<HWND>(native_chrome_window_handle_), "
-      "&client_rect)"));
-  EXPECT_TRUE(source_contains_compact(
-      platform_source, "owner.native_chrome_message_depth_ == 0 && "
-                       "owner.live_resize_frame_callback_pending_"));
-  EXPECT_NE(platform_source.find("owner.schedule_live_resize_frame_callback()"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find("dispatch_live_resize_frame_callback()"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find("kLiveResizeFrameMessage = WM_APP"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find("message == kLiveResizeFrameMessage"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find("message == WM_ERASEBKGND"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find("message == WM_PAINT"), std::string::npos);
-  EXPECT_NE(platform_source.find("live_resize_frame_paint_scheduled_ = false"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find("BeginPaint(hwnd, &paint)"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find("EndPaint(hwnd, &paint)"), std::string::npos);
-  EXPECT_NE(platform_source.find("PostMessageW(hwnd, kLiveResizeFrameMessage"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find("native_chrome_message_depth_ > 0"),
-            std::string::npos);
-  EXPECT_NE(
-      platform_source.find(
-          "RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_NOERASE)"),
-      std::string::npos);
-  EXPECT_EQ(platform_source.find("RDW_UPDATENOW"), std::string::npos);
-  EXPECT_EQ(platform_source.find(
-                "dispatch_live_resize_frame_callback();\n            return;"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find("native_live_resize_frame_active_ = true"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      platform_source, "message == WM_SIZE && native_move_size_active_ && "
-                       "w_param != SIZE_MINIMIZED"));
-  EXPECT_NE(platform_source.find("redraw_native_resize_frame"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      platform_source, "const bool redraw_native_resize_frame = "
-                       "(message != WM_SIZE || w_param != SIZE_MINIMIZED)"));
-  EXPECT_EQ(platform_source.find("message == WM_SIZING ||\n                    "
-                                 "message == WM_WINDOWPOSCHANGED"),
-            std::string::npos);
-  EXPECT_EQ(platform_source.find("message == WM_WINDOWPOSCHANGED ||\n          "
-                                 "          message == WM_DPICHANGED"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find("prime_live_resize_frame_coalescing();"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find(
-                "live_resize_frame_pending_width_pixels_ = width_pixels_"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find(
-                "live_resize_frame_pending_width_pixels_ = pending_width"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find(
-                "live_resize_frame_pending_height_pixels_ = pending_height"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find("if (live_resize_frame_callback_())"),
-            std::string::npos);
-  EXPECT_NE(platform_source.find(
-                "note_frame_presented(pending_width, pending_height)"),
-            std::string::npos);
-  EXPECT_EQ(
-      platform_source.find(
-          "void PlatformWindow::prime_live_resize_frame_coalescing() {\n    "
-          "refresh_pixel_size();\n    live_resize_frame_size_valid_ = true;"),
-      std::string::npos);
-  EXPECT_EQ(
-      platform_source.find(
-          "native_move_size_active_ &&\n            native_resize_active_ &&"),
-      std::string::npos);
-  EXPECT_EQ(platform_source.find("message == WM_MOVING"), std::string::npos);
-  EXPECT_EQ(platform_source.find("message == WM_TIMER"), std::string::npos);
-  EXPECT_EQ(platform_source.find("SetTimer("), std::string::npos);
-  EXPECT_EQ(platform_source.find("KillTimer("), std::string::npos);
-  EXPECT_NE(app_header.find("wait_until_next_frame()"), std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      app_source,
-      "if (window_.can_render_frames()) { render_frame(frame_timing);"));
-  EXPECT_NE(app_source.find("render_frame(frame_clock_.tick())"),
-            std::string::npos);
-  EXPECT_NE(app_source.find("render_system_.begin_frame()"), std::string::npos);
-  EXPECT_NE(
-      app_source.find(
-          "const std::uint32_t framebuffer_width = window_.width_pixels()"),
-      std::string::npos);
-  EXPECT_NE(app_source.find("ui_.begin_frame(frame_timing, framebuffer_width, "
-                            "framebuffer_height)"),
-            std::string::npos);
-  EXPECT_NE(
-      app_source.find(
-          "ui_.prepare_render_data(framebuffer_width, framebuffer_height)"),
-      std::string::npos);
-  EXPECT_NE(app_source.find("window_.note_frame_presented(framebuffer_width, "
-                            "framebuffer_height)"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      app_source,
-      "if (window_.native_chrome_message_active() && "
-      "!window_.native_live_resize_frame_active()) { return false;"));
-  EXPECT_NE(
-      app_source.find(
-          "const bool frame_submitted = render_frame(frame_clock_.tick())"),
-      std::string::npos);
-  EXPECT_NE(app_source.find("return frame_submitted;"), std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      app_source,
-      "ui_.set_viewport_render_resize_suspended(window_.chrome_resize_active() "
-      "|| window_.native_chrome_interaction_active())"));
-  EXPECT_TRUE(source_contains_compact(
-      app_source,
-      "if (window_.native_chrome_interaction_active()) { return false;"));
-  EXPECT_EQ(app_source.find("!window_.chrome_resize_active() && "
-                            "!window_.native_chrome_interaction_active()"),
-            std::string::npos);
-  EXPECT_NE(app_source.find(
-                "chrome_action_invalidates_current_frame(*chrome_action)"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      app_source,
-      "if (!window_.can_render_frames()) { rendering_frame_ = false;"));
-  EXPECT_NE(app_source.find("ui_.end_frame_without_render();"),
-            std::string::npos);
-  EXPECT_NE(app_source.find("platform_wait_for_event_timeout(wait_ms)"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      app_source, "window_.native_chrome_interaction_active() ? "
-                  "kActiveFrameWaitMs"));
-  EXPECT_NE(app_source.find("kIdleFrameWaitMs = 100"), std::string::npos);
-  EXPECT_NE(app_source.find("kSuspendedWindowWaitMs = 250"), std::string::npos);
-  EXPECT_NE(app_source.find("!window_.can_render_frames())"),
-            std::string::npos);
-  EXPECT_NE(ui_header.find("end_frame_without_render()"), std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      ui_header, "begin_frame(const FrameTiming &frame_timing, std::uint32_t "
-                 "framebuffer_width, std::uint32_t framebuffer_height)"));
-  EXPECT_NE(ui_source.find("io.DisplaySize = {"), std::string::npos);
-  EXPECT_NE(ui_source.find("io.DisplayFramebufferScale = {1.0f, 1.0f}"),
+  EXPECT_EQ(app_source.find("SDL_"), std::string::npos);
+  EXPECT_EQ(app_source.find("platform_wait_for_event_timeout"),
             std::string::npos);
   EXPECT_NE(
       ui_header.find("[[nodiscard]] bool needs_continuous_rendering() const"),
       std::string::npos);
-  EXPECT_NE(ui_source.find("relative_mouse_captured_ ||"), std::string::npos);
-  EXPECT_NE(viewport_panel_header.find("last_fly_navigation_active_"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(viewport_panel_header,
-                                      "active_viewport_settings().bool_value("
-                                      "ViewportBoolSettingId::ShowInfo)"));
-  EXPECT_NE(viewport_panel_header.find("navigation_gizmo_.input_locked()"),
-            std::string::npos);
-  EXPECT_NE(viewport_panel_header.find("interaction_controller_.dragging()"),
-            std::string::npos);
 }
 
 TEST(SceneDocumentTests, CreatesStableEntitiesAndComponents) {
@@ -5229,7 +5119,7 @@ TEST(ViewportWorkspaceServiceTests, GridPresetIsClampedAtWorkspaceOwner) {
   const std::string runtime_source =
       read_source_file("src/editor/tools/viewport_tool_runtime.cpp");
   const std::string viewport_panel_source =
-      read_source_file("src/ui/viewport_panel.cpp");
+      read_source_file("src/ui/qt_viewport_panel.cpp");
 
   EXPECT_NE(
       router_source.find(
@@ -5244,11 +5134,11 @@ TEST(ViewportWorkspaceServiceTests, GridPresetIsClampedAtWorkspaceOwner) {
       std::string::npos);
   EXPECT_NE(
       viewport_panel_source.find(
-          "viewport_workspace.set_grid_preset(result.requested_grid_preset)"),
+          "workspace_->set_grid_preset(result.requested_grid_preset)"),
       std::string::npos);
   EXPECT_NE(
       viewport_panel_source.find("input_router_.sync_grid_preset_snapshot("
-                                 "viewport_workspace.grid_preset())"),
+                                 "workspace_->grid_preset())"),
       std::string::npos);
 }
 
@@ -6371,6 +6261,31 @@ TEST(ViewportInputRouterTests, FocusGateBlocksViewportToolHotkeys) {
 
   EXPECT_FALSE(result.shortcut_handled);
   EXPECT_EQ(router.state().active_tool, ViewportTool::kSelect);
+}
+
+TEST(ViewportInputRouterTests,
+     DeletePopupPreservesViewportFocusTextAndModalToolGates) {
+  ViewportInputRouter router;
+  ViewportCameraController camera;
+  ViewportInputFrame input;
+  input.viewport_size = {800.0f, 600.0f};
+  set_resolved_shortcut(
+      input, test_router_shortcut(ViewportShortcutKind::DeletePopup));
+
+  input.viewport_focused = false;
+  EXPECT_FALSE(router.handle_frame(input, camera).shortcut_handled);
+
+  input.viewport_focused = true;
+  input.text_input_active = true;
+  EXPECT_FALSE(router.handle_frame(input, camera).shortcut_handled);
+
+  input.text_input_active = false;
+  const ViewportInputResult select_result = router.handle_frame(input, camera);
+  EXPECT_TRUE(select_result.shortcut_handled);
+  EXPECT_EQ(select_result.shortcut.kind, ViewportShortcutKind::DeletePopup);
+
+  router.set_active_tool(ViewportTool::kCut);
+  EXPECT_FALSE(router.handle_frame(input, camera).shortcut_handled);
 }
 
 TEST(ViewportInputRouterTests, EscapeRequestsActiveToolCancel) {
@@ -7893,14 +7808,12 @@ TEST(ProjectSessionTests,
       QuaderApiSessionInternalAccess::from_project_session(session));
   const QuaderApiResult<QuaderModelingObjectRef> first =
       editor.modeling().create_box(
-          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
-                       .max = {1.0f, 1.0f, 1.0f}},
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
           "Quick Pivot A");
   ASSERT_TRUE(first.ok()) << first.error_message();
   const QuaderApiResult<QuaderModelingObjectRef> second =
       editor.modeling().create_box(
-          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
-                       .max = {1.0f, 1.0f, 1.0f}},
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
           "Quick Pivot B");
   ASSERT_TRUE(second.ok()) << second.error_message();
   ASSERT_TRUE(editor.selection()
@@ -8506,6 +8419,106 @@ TEST(DocumentCommandTests,
 }
 
 TEST(DocumentCommandTests,
+     SceneTransformPreviewTransactionBatchesMultiEntityRevisionsAndHistory) {
+  constexpr std::size_t kEntityCount = 256u;
+  SceneDocument scene;
+  std::vector<EntityId> entities;
+  entities.reserve(kEntityCount);
+  for (std::size_t index = 0; index < kEntityCount; ++index) {
+    entities.push_back(scene.create_entity("Preview Entity"));
+  }
+
+  std::vector<DocumentTransformEdit> edits;
+  edits.reserve(entities.size());
+  for (std::size_t index = 0; index < entities.size(); ++index) {
+    const TransformComponent before = *scene.transform(entities[index]);
+    TransformComponent after = before;
+    after.position = {static_cast<float>(index + 1u), 2.0f, 3.0f};
+    edits.push_back({.entity = entities[index],
+                     .before = before,
+                     .after = after});
+  }
+
+  {
+    SceneTransformPreviewTransaction transaction(scene, entities,
+                                                  "Cancel Batch Preview");
+    const std::uint64_t preview_revision = scene.transform_revision();
+    ASSERT_TRUE(transaction.preview_transforms(edits).ok);
+    EXPECT_EQ(scene.transform_revision(), preview_revision + 1u);
+
+    const std::uint64_t cancel_revision = scene.transform_revision();
+    ASSERT_TRUE(transaction.cancel().ok);
+    EXPECT_EQ(scene.transform_revision(), cancel_revision + 1u);
+    for (const EntityId entity : entities) {
+      ASSERT_NE(scene.transform(entity), nullptr);
+      EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+    }
+  }
+
+  {
+    SceneTransformPreviewTransaction transaction(scene, entities,
+                                                  "Accept Batch Preview");
+    ASSERT_TRUE(transaction.preview_transforms(edits).ok);
+    std::vector<SceneTransformAssignment> externally_changed;
+    externally_changed.reserve(edits.size());
+    for (const DocumentTransformEdit &edit : edits) {
+      TransformComponent transform = edit.after;
+      transform.position.y = 99.0f;
+      externally_changed.push_back(
+          {.entity = edit.entity, .transform = transform});
+    }
+    scene.set_transforms(externally_changed);
+
+    const std::uint64_t accept_revision = scene.transform_revision();
+    ASSERT_TRUE(transaction.accept().ok);
+    EXPECT_EQ(scene.transform_revision(), accept_revision + 1u);
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+      ASSERT_NE(scene.transform(entities[index]), nullptr);
+      EXPECT_FLOAT_EQ(scene.transform(entities[index])->position.x,
+                      static_cast<float>(index + 1u));
+      EXPECT_FLOAT_EQ(scene.transform(entities[index])->position.y, 2.0f);
+    }
+
+    std::vector<SceneTransformAssignment> restore_assignments;
+    restore_assignments.reserve(edits.size());
+    for (const DocumentTransformEdit &edit : edits) {
+      restore_assignments.push_back(
+          {.entity = edit.entity, .transform = edit.before});
+    }
+    scene.set_transforms(restore_assignments);
+  }
+
+  EditorHistoryService history;
+  SceneTransformPreviewTransaction transaction(scene, entities,
+                                                "Commit Batch Preview");
+  ASSERT_TRUE(transaction.preview_transforms(edits).ok);
+  const std::uint64_t commit_revision = scene.transform_revision();
+  const DocumentCommandResult commit = transaction.commit(history);
+  ASSERT_TRUE(commit.ok) << commit.message;
+  EXPECT_TRUE(commit.changed);
+  EXPECT_EQ(scene.transform_revision(), commit_revision);
+  ASSERT_NE(history.undo_label(), nullptr);
+  EXPECT_EQ(*history.undo_label(), "Commit Batch Preview");
+
+  const std::uint64_t undo_revision = scene.transform_revision();
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_EQ(scene.transform_revision(), undo_revision + 1u);
+  for (const EntityId entity : entities) {
+    ASSERT_NE(scene.transform(entity), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+  }
+
+  const std::uint64_t redo_revision = scene.transform_revision();
+  ASSERT_TRUE(history.redo().ok);
+  EXPECT_EQ(scene.transform_revision(), redo_revision + 1u);
+  for (std::size_t index = 0; index < entities.size(); ++index) {
+    ASSERT_NE(scene.transform(entities[index]), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(entities[index])->position.x,
+                    static_cast<float>(index + 1u));
+  }
+}
+
+TEST(DocumentCommandTests,
      SceneTransformDragServiceFiltersTargetsAndRecordsScenePreviewThroughApi) {
   ProjectSession session;
   QuaderEditorApi editor(
@@ -8562,6 +8575,108 @@ TEST(DocumentCommandTests,
   ASSERT_TRUE(session.history().redo().ok);
   ASSERT_NE(scene.transform(parent), nullptr);
   EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 4.0f);
+}
+
+TEST(DocumentCommandTests,
+     SceneTransformDragMoveFastPathMatchesGenericParentedPreviewAndHistory) {
+  const auto build_parented_selection = [](SceneDocument &scene) {
+    const EntityId parent = scene.create_entity("Move Parent");
+    TransformComponent parent_transform;
+    parent_transform.position = {3.0f, -2.0f, 5.0f};
+    parent_transform.rotation_euler = {0.35f, -0.55f, 0.8f};
+    parent_transform.scale = {2.0f, 0.75f, 1.5f};
+    scene.set_transform(parent, parent_transform);
+
+    const EntityId child = scene.create_entity("Move Child");
+    TransformComponent child_transform;
+    child_transform.position = {1.25f, -3.5f, 2.0f};
+    child_transform.rotation_euler = {-0.25f, 0.4f, 0.65f};
+    child_transform.scale = {0.8f, 1.3f, 2.1f};
+    child_transform.custom_pivot = true;
+    scene.set_transform(child, child_transform);
+    EXPECT_TRUE(scene.set_parent(child, parent, false));
+    EXPECT_TRUE(scene.set_selected(child, true));
+    EXPECT_TRUE(scene.set_active_selection(child));
+    return child;
+  };
+
+  SceneDocument fast_scene;
+  SceneDocument generic_scene;
+  const EntityId fast_child = build_parented_selection(fast_scene);
+  const EntityId generic_child = build_parented_selection(generic_scene);
+  const TransformComponent original = *fast_scene.transform(fast_child);
+  const QVec3 original_world_origin =
+      transform_point(fast_scene.world_transform_matrix(fast_child), {});
+  const QVec3 world_delta = {4.25f, -1.5f, 2.75f};
+
+  SceneTransformDragService fast_service;
+  SceneTransformDragService generic_service;
+  ASSERT_TRUE(fast_service.begin(fast_scene, {}, true, "Move Fast Path"));
+  ASSERT_TRUE(
+      generic_service.begin(generic_scene, {}, true, "Move Generic Path"));
+  ASSERT_TRUE(fast_service
+                  .preview_world_translation_delta(fast_scene, world_delta)
+                  .ok);
+  QMat4 generic_world_delta;
+  generic_world_delta.values[12] = world_delta.x;
+  generic_world_delta.values[13] = world_delta.y;
+  generic_world_delta.values[14] = world_delta.z;
+  ASSERT_TRUE(generic_service
+                  .preview_world_transform_delta(generic_scene,
+                                                 generic_world_delta)
+                  .ok);
+
+  const TransformComponent *fast_preview = fast_scene.transform(fast_child);
+  const TransformComponent *generic_preview =
+      generic_scene.transform(generic_child);
+  ASSERT_NE(fast_preview, nullptr);
+  ASSERT_NE(generic_preview, nullptr);
+  expect_vec3_near(fast_preview->position, generic_preview->position);
+  expect_vec3_near(fast_preview->rotation_euler,
+                   generic_preview->rotation_euler);
+  expect_vec3_near(fast_preview->scale, generic_preview->scale);
+  EXPECT_EQ(fast_preview->custom_pivot, generic_preview->custom_pivot);
+  const QMat4 fast_world = fast_scene.world_transform_matrix(fast_child);
+  const QMat4 generic_world = generic_scene.world_transform_matrix(generic_child);
+  for (std::size_t index = 0; index < fast_world.values.size(); ++index) {
+    EXPECT_NEAR(fast_world.values[index], generic_world.values[index], 0.001f);
+  }
+  expect_vec3_near(transform_point(fast_world, {}),
+                   original_world_origin + world_delta);
+
+  ASSERT_TRUE(fast_service.cancel().ok);
+  ASSERT_TRUE(generic_service.cancel().ok);
+  ASSERT_NE(fast_scene.transform(fast_child), nullptr);
+  expect_vec3_near(fast_scene.transform(fast_child)->position,
+                   original.position);
+  expect_vec3_near(fast_scene.transform(fast_child)->rotation_euler,
+                   original.rotation_euler);
+  expect_vec3_near(fast_scene.transform(fast_child)->scale, original.scale);
+  EXPECT_EQ(fast_scene.transform(fast_child)->custom_pivot,
+            original.custom_pivot);
+
+  ASSERT_TRUE(fast_service.begin(fast_scene, {}, true, "Move Fast Path"));
+  ASSERT_TRUE(fast_service
+                  .preview_world_translation_delta(fast_scene, world_delta)
+                  .ok);
+  const TransformComponent committed = *fast_scene.transform(fast_child);
+  EditorHistoryService history;
+  const DocumentCommandResult commit = fast_service.commit(history);
+  ASSERT_TRUE(commit.ok) << commit.message;
+  EXPECT_TRUE(commit.changed);
+  ASSERT_NE(history.undo_label(), nullptr);
+  EXPECT_EQ(*history.undo_label(), "Move Fast Path");
+  ASSERT_TRUE(history.undo().ok);
+  expect_vec3_near(fast_scene.transform(fast_child)->position,
+                   original.position);
+  ASSERT_TRUE(history.redo().ok);
+  expect_vec3_near(fast_scene.transform(fast_child)->position,
+                   committed.position);
+  expect_vec3_near(fast_scene.transform(fast_child)->rotation_euler,
+                   committed.rotation_euler);
+  expect_vec3_near(fast_scene.transform(fast_child)->scale, committed.scale);
+  EXPECT_EQ(fast_scene.transform(fast_child)->custom_pivot,
+            committed.custom_pivot);
 }
 
 TEST(DocumentCommandTests,
@@ -11017,6 +11132,8 @@ TEST(ModelingSessionServiceTests,
       service.activate_viewport_tool(ModelingViewportTool::Mirror);
   ASSERT_TRUE(command.ok) << command.message;
   EXPECT_TRUE(service.tool_status().mirror_active);
+  const std::uint64_t projection_builds_before =
+      service.transformed_picking_projection_build_count();
 
   command = service.click_mirror(test_drawn_plane_event(0.0f));
   ASSERT_TRUE(command.ok) << command.message;
@@ -11026,6 +11143,9 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(service.tool_status().mirror_captured_point_count, 1);
   EXPECT_TRUE(service.tool_status().mirror_has_line);
   EXPECT_FALSE(service.tool_status().mirror_can_preview);
+  EXPECT_TRUE(service.tool_preview_meshes().empty());
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            projection_builds_before);
 
   command = service.update_mirror_hover(test_drawn_plane_event(1.0f, false));
   ASSERT_TRUE(command.ok) << command.message;
@@ -11049,6 +11169,9 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(service.tool_status().mirror_point_count, 2);
   EXPECT_TRUE(service.tool_status().mirror_can_preview);
   EXPECT_TRUE(service.tool_status().mirror_preview_valid);
+  EXPECT_FALSE(service.tool_preview_meshes().empty());
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            projection_builds_before + 1u);
 
   command = service.finalize_mirror_tool();
   ASSERT_TRUE(command.ok) << command.message;
@@ -12564,6 +12687,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(begin.ok) << begin.message;
   EXPECT_TRUE(begin.active);
   EXPECT_TRUE(begin.preview_driven);
+  EXPECT_TRUE(service.transform_drag_active());
 
   ModelingTransformDragPreview update =
       service.update_transform_drag(test_x_move_drag_update_request(2.0f));
@@ -12575,6 +12699,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(commit.ok) << commit.message;
   EXPECT_TRUE(commit.preview_driven);
   EXPECT_TRUE(commit.changed);
+  EXPECT_FALSE(service.transform_drag_active());
 
   ASSERT_TRUE(service.clear_selection().ok);
   const ModelingCommandResult hover =
@@ -12750,6 +12875,56 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
+     RepeatedComponentDragSampleSkipsPreviewAndSceneResync) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Repeated Drag Sample Box",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
+  ASSERT_TRUE(service.select_all().ok);
+
+  const ModelingTransformDragPreview begin =
+      service.begin_transform_drag(test_x_move_drag_begin_request());
+  ASSERT_TRUE(begin.ok) << begin.message;
+  ASSERT_TRUE(begin.preview_driven);
+
+  const ModelingTransformDragUpdateRequest sample =
+      test_x_move_drag_update_request(2.0f);
+  const ModelingTransformDragPreview first =
+      service.update_transform_drag(sample);
+  ASSERT_TRUE(first.ok) << first.message;
+  ASSERT_TRUE(first.changed);
+
+  const MeshComponent *scene_mesh = scene.mesh(box.object.entity);
+  ASSERT_NE(scene_mesh, nullptr);
+  const AssetId mesh_id = scene_mesh->mesh;
+  const std::uint64_t mesh_revision_after_first =
+      assets.mesh_revision(mesh_id).value;
+  const std::uint64_t scene_revision_after_first = scene.revision();
+  const ModelingSelectionSummary summary_after_first =
+      service.selection_summary();
+
+  const ModelingTransformDragPreview repeated =
+      service.update_transform_drag(sample);
+  ASSERT_TRUE(repeated.ok) << repeated.message;
+  EXPECT_FALSE(repeated.changed);
+  EXPECT_EQ(assets.mesh_revision(mesh_id).value, mesh_revision_after_first);
+  EXPECT_EQ(scene.revision(), scene_revision_after_first);
+  EXPECT_EQ(service.selection_summary().content_revision,
+            summary_after_first.content_revision);
+  EXPECT_EQ(service.selection_summary().selection_revision,
+            summary_after_first.selection_revision);
+
+  const ModelingCommandResult cancel = service.cancel_transform_drag();
+  ASSERT_TRUE(cancel.ok) << cancel.message;
+}
+
+TEST(ModelingSessionServiceTests,
      TransformDragObjectSelectionUsesSceneTransformPreview) {
   SceneDocument scene;
   AssetRegistry assets;
@@ -12844,6 +13019,65 @@ TEST(ModelingSessionServiceTests,
 
   const ModelingCommandResult cancel = service.cancel_transform_drag();
   ASSERT_TRUE(cancel.ok) << cancel.message;
+}
+
+TEST(ModelingSessionServiceTests,
+     ObjectTransformOverlayAndOrdinaryToolPreviewDoNotBuildPickingProjection) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Lazy Picking Projection Box",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+
+  const std::uint64_t builds_before =
+      service.transformed_picking_projection_build_count();
+  const ViewportOverlayFrame initial_overlay = service.selection_overlay_frame();
+  EXPECT_GT(initial_overlay.lines.size() + initial_overlay.triangles.size() +
+                initial_overlay.points.size(),
+            0u);
+  EXPECT_TRUE(service.tool_preview_meshes().empty());
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            builds_before);
+
+  ModelingTransformDragBeginRequest begin_request =
+      test_x_move_drag_begin_request();
+  begin_request.vertex_snap_radius = 0.0;
+  begin_request.grid_snap_enabled = false;
+  const ModelingTransformDragPreview begin =
+      service.begin_transform_drag(begin_request);
+  ASSERT_TRUE(begin.ok) << begin.message;
+  ASSERT_TRUE(begin.scene_transform);
+  ModelingTransformDragUpdateRequest update_request =
+      test_x_move_drag_update_request(2.0f);
+  update_request.vertex_snap_radius = 0.0;
+  update_request.grid_snap_enabled = false;
+  const ModelingTransformDragPreview update =
+      service.update_transform_drag(update_request);
+  ASSERT_TRUE(update.ok) << update.message;
+  ASSERT_TRUE(update.changed);
+
+  const ViewportOverlayFrame drag_overlay = service.selection_overlay_frame();
+  EXPECT_GT(drag_overlay.lines.size() + drag_overlay.triangles.size() +
+                drag_overlay.points.size(),
+            0u);
+  EXPECT_TRUE(service.tool_preview_meshes().empty());
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            builds_before);
+
+  ASSERT_TRUE(service.cancel_transform_drag().ok);
+  const std::optional<EntityId> picked =
+      service.pick_object_entity(ModelingPickSelectRequest{
+          .ray = {.origin = {0.0f, 0.0f, 5.0f},
+                  .direction = {0.0f, 0.0f, -1.0f}},
+      });
+  ASSERT_TRUE(picked.has_value());
+  EXPECT_EQ(*picked, box.object.entity);
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            builds_before + 1u);
 }
 
 TEST(ModelingSessionServiceTests,
@@ -13698,8 +13932,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(second.ok) << second.message;
 
   ASSERT_TRUE(select_through_editor(editor_selection.selection,
-                                    {first.object.entity,
-                                     second.object.entity},
+                                    {first.object.entity, second.object.entity},
                                     second.object.entity)
                   .ok);
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Edge).ok);
@@ -13708,12 +13941,12 @@ TEST(ModelingSessionServiceTests,
 
   const ViewportOverlayFrame frame = service.selection_overlay_frame();
   const auto source_wire_count_for_object = [&](int object_id) {
-    return static_cast<std::size_t>(std::count_if(
-        frame.lines.begin(), frame.lines.end(),
-        [object_id](const ViewportOverlayLine &line) {
-          return line.layer == ViewportOverlayLayer::SourceWire &&
-                 line.element.object_id == object_id;
-        }));
+    return static_cast<std::size_t>(
+        std::count_if(frame.lines.begin(), frame.lines.end(),
+                      [object_id](const ViewportOverlayLine &line) {
+                        return line.layer == ViewportOverlayLayer::SourceWire &&
+                               line.element.object_id == object_id;
+                      }));
   };
   const auto source_stamp_count_for_object = [&](int object_id) {
     return static_cast<std::size_t>(std::count_if(

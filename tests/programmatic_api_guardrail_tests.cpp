@@ -1239,14 +1239,11 @@ TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotAddRawModelingMutations
 }
 
 TEST(ProgrammaticApiGuardrailTests,
-     ToolSettingsPanelWritesSettingsThroughPublicToolsApi) {
+     QtToolSettingsWindowWritesSettingsThroughPublicToolsApi) {
   const std::string panel =
-      read_file(source_root() / "src/ui/tool_settings_panel.cpp");
+      read_file(source_root() / "src/ui/qt_tool_settings_window.cpp");
 
-  EXPECT_TRUE(panel.find("context.editor.tools().set_setting(") !=
-                  std::string::npos ||
-              panel.find("context.intent.editor.tools().set_setting(") !=
-                  std::string::npos);
+  EXPECT_NE(panel.find("editor_->tools().set_setting("), std::string::npos);
   EXPECT_EQ(panel.find("set_interaction_settings("), std::string::npos);
   EXPECT_EQ(panel.find("context.tool_settings"), std::string::npos);
 }
@@ -1316,7 +1313,7 @@ TEST(ProgrammaticApiGuardrailTests, ViewportShadingConversionUsesSharedApiHelper
   const std::string viewport_api =
       read_file(source_root() / "src/api/quader_viewport_api.cpp");
   const std::string viewport_panel =
-      read_file(source_root() / "src/ui/viewport_panel.cpp");
+      read_file(source_root() / "src/ui/qt_viewport_panel.cpp");
   const std::string conversion_helper = read_file(
       source_root() / "src/viewport/viewport_shading_mode_conversions.hpp");
 
@@ -1336,9 +1333,9 @@ TEST(ProgrammaticApiGuardrailTests, ViewportShadingConversionUsesSharedApiHelper
 
 TEST(ProgrammaticApiGuardrailTests, UiPanelRoutingUsesStableIdsAndNoDeadShowMenu) {
   const std::string main_menu_header =
-      read_file(source_root() / "src/ui/main_menu_bar.hpp");
+      read_file(source_root() / "src/ui/qt_main_menu.hpp");
   const std::string main_menu_source =
-      read_file(source_root() / "src/ui/main_menu_bar.cpp");
+      read_file(source_root() / "src/ui/qt_main_menu.cpp");
   const std::string settings_source =
       read_file(source_root() / "src/ui/ui_settings.cpp");
   const std::string ui_panel_header =
@@ -1353,27 +1350,35 @@ TEST(ProgrammaticApiGuardrailTests, UiPanelRoutingUsesStableIdsAndNoDeadShowMenu
   EXPECT_EQ(main_menu_header.find("UISettings& settings"), std::string::npos);
   EXPECT_EQ(main_menu_source.find("show_panel(ui_panel_key"), std::string::npos);
   EXPECT_EQ(main_menu_source.find("hide_panel(ui_panel_key"), std::string::npos);
+  EXPECT_NE(main_menu_header.find("std::function<bool(UIPanelId)> panel_visible"),
+            std::string::npos);
+  EXPECT_NE(
+      main_menu_header.find("std::function<void(UIPanelId, bool)> set_panel_visible"),
+      std::string::npos);
+  EXPECT_NE(main_menu_source.find("ui_panel_stable_id(id)"),
+            std::string::npos);
   EXPECT_EQ(settings_source.find("file << ui_panel_key"), std::string::npos);
   EXPECT_NE(settings_source.find("ui_panel_stable_id(UIPanelId::Outliner)"),
             std::string::npos);
 }
 
-TEST(ProgrammaticApiGuardrailTests, ViewportPanelDoesNotExposeWorkspacePassThroughs) {
+TEST(ProgrammaticApiGuardrailTests,
+     QtViewportPanelUsesWorkspaceOwnerWithoutPublicPassThroughs) {
   const std::string header =
-      read_file(source_root() / "src/ui/viewport_panel.hpp");
+      read_file(source_root() / "src/ui/qt_viewport_panel.hpp");
   const std::string source =
-      read_file(source_root() / "src/ui/viewport_panel.cpp");
+      read_file(source_root() / "src/ui/qt_viewport_panel.cpp");
 
   EXPECT_NE(header.find("sync_active_tool_from_editor("), std::string::npos);
-  EXPECT_NE(source.find("ViewportPanel::sync_active_tool_from_editor("),
+  EXPECT_NE(source.find("QtViewportPanel::sync_active_tool_from_editor("),
             std::string::npos);
-  EXPECT_NE(source.find("viewport_workspace.active_pane_placements()"),
+  EXPECT_NE(source.find("workspace_->active_pane_placements()"),
             std::string::npos);
-  EXPECT_NE(source.find("viewport_workspace.active_split_handles()"),
+  EXPECT_NE(source.find("workspace_->active_split_handles()"),
             std::string::npos);
-  EXPECT_NE(source.find("ViewportPaneController::pane_rect_min("),
+  EXPECT_NE(header.find("void update_pane_geometry()"),
             std::string::npos);
-  EXPECT_NE(source.find("ViewportPaneController::pane_rect_size("),
+  EXPECT_NE(header.find("void update_split_handles()"),
             std::string::npos);
   EXPECT_EQ(header.find("setViewportLayout("), std::string::npos);
   EXPECT_EQ(header.find("set_viewport_layout("), std::string::npos);
@@ -1401,17 +1406,16 @@ TEST(ProgrammaticApiGuardrailTests, ViewportPanelDoesNotExposeWorkspacePassThrou
   EXPECT_EQ(source.find("ViewportPanel::pane_rect_size("), std::string::npos);
   EXPECT_EQ(source.find("fromModelingViewportTool"), std::string::npos);
   EXPECT_EQ(source.find("from_modeling_viewport_tool"), std::string::npos);
-  EXPECT_NE(source.find("editor.tools().activate(tool)"), std::string::npos);
-  EXPECT_NE(
-      source.find("viewport_tool_for_modeling(modeling.tool_status().active_tool)"),
-      std::string::npos);
+  EXPECT_NE(source.find(
+                "editor.tools().activate(input_router_.state().active_tool)"),
+            std::string::npos);
+  EXPECT_NE(source.find("find_viewport_tool(editor.tools().active_tool())"),
+            std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, OutlinerUsesDocumentCommandRootSelectionOwner) {
   const std::string outliner =
       read_file(source_root() / "src/ui/outliner_panel.cpp");
-  const std::string viewport =
-      read_file(source_root() / "src/ui/viewport_panel.cpp");
   const std::string scene_aware_delete_header = read_file(
       source_root() /
       "src/editor/commands/modeling/scene_aware_delete_selection_command.hpp");
@@ -1425,7 +1429,12 @@ TEST(ProgrammaticApiGuardrailTests, OutlinerUsesDocumentCommandRootSelectionOwne
             std::string::npos);
   EXPECT_NE(outliner.find("quader_command::kDuplicateSelection"),
             std::string::npos);
-  EXPECT_NE(viewport.find("scene_aware_delete_has_selected_root"),
+  EXPECT_NE(outliner.find("quader_command::kDeleteSelection"),
+            std::string::npos);
+  EXPECT_NE(outliner.find("editor_->scene().rename("), std::string::npos);
+  EXPECT_NE(outliner.find("editor_->scene().set_visible("),
+            std::string::npos);
+  EXPECT_NE(outliner.find("editor_->scene().set_locked("),
             std::string::npos);
   EXPECT_NE(scene_aware_delete_header.find("scene_aware_delete_handles_selection"),
             std::string::npos);
@@ -1437,10 +1446,10 @@ TEST(ProgrammaticApiGuardrailTests, OutlinerUsesDocumentCommandRootSelectionOwne
             std::string::npos);
   EXPECT_EQ(outliner.find("editor.scene().duplicate_selected_hierarchy"),
             std::string::npos);
+  EXPECT_EQ(outliner.find("document_->rename_entity("), std::string::npos);
+  EXPECT_EQ(outliner.find("document_->set_visible("), std::string::npos);
+  EXPECT_EQ(outliner.find("document_->set_locked("), std::string::npos);
   EXPECT_EQ(outliner.find("ImGuiKey_G"), std::string::npos);
-  EXPECT_EQ(viewport.find("document_command_selected_root_entities"),
-            std::string::npos);
-  EXPECT_EQ(viewport.find("hasSelectedSceneGroupRoot"), std::string::npos);
   EXPECT_EQ(modeling_execution.find("shouldUseSceneAwareDelete"),
             std::string::npos);
   EXPECT_NE(modeling_execution.find("scene_aware_delete_handles_selection"),

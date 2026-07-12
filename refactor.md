@@ -191,13 +191,15 @@ when it is moved to the reclassified section with concrete code evidence.
 
 ### UI, Resources, Render, Scene, And Assets
 
-- [x] R01 - Packaged UI icon resources are not all represented in `UIIconSet`.
-  - Evidence: `resources/icons/show_icon.png` and `unlock_icon.png` are packaged
-    but `UISystem::loadIcons` and `UIIconSet` only model hide/lock.
-  - Risk: resource inventory and runtime icon contracts can drift.
-  - Owner/source of truth: `UIIconSet` and icon loading.
-  - Fix checklist: model and load all packaged UI icons; add a guardrail that the
-    packaged icon set matches the runtime icon set.
+- [x] R01 - Retired ImGui UI icons no longer remain in the Qt runtime package.
+  - Evidence: the stock Fusion shell uses standard Qt widget visuals, while the
+    build guardrail requires the old hide/show/lock/unlock/mesh icon assets and
+    their former `UIIconSet` owners to be physically absent.
+  - Risk: retaining unused theme assets would leave a second visual contract
+    beside the uncustomized Fusion style.
+  - Owner/source of truth: Qt Widgets and `BuildGuardrailTests`.
+  - Fix checklist: keep only renderer-owned runtime icons such as the logo and
+    point-light viewport marker.
 
 - [x] R02 - Overlay pixel policy is encoded in producers instead of a named
   policy owner.

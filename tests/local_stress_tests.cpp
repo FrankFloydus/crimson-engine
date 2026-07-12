@@ -7,11 +7,13 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "editor/session/project_session.hpp"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -222,4 +224,89 @@ TEST(LocalStressTests, MyFirstProjectLargeWorkflow) {
     });
 
     std::filesystem::remove(save_path, remove_error);
+}
+
+TEST(LocalStressTests, MyFirstProjectRepeatedAllSelectionDragSamples) {
+  constexpr std::size_t kSampleCount = 32u;
+  const std::filesystem::path project_path = stress_project_path();
+  if (!std::filesystem::exists(project_path)) {
+    GTEST_SKIP() << "Local stress project is missing: "
+                 << project_path.string();
+  }
+
+  quader::QdrProjectReadResult read =
+      quader::QdrDocumentReader::read_project_document(project_path);
+  ASSERT_TRUE(read.ok) << read.message;
+
+  quader::ProjectSessionService sessions;
+  std::unique_ptr<quader::ProjectSession> session =
+      sessions.open_session(std::move(read.document));
+  ASSERT_NE(session, nullptr);
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_project_session(*session));
+  const quader::QuaderApiVoidResult selected = editor.selection().select_all();
+  ASSERT_TRUE(selected.ok()) << selected.error_message();
+  const std::size_t selected_count = selected_entity_count(editor);
+  ASSERT_GT(selected_count, 0u);
+
+  quader::QuaderApiResult<quader::QuaderTransformDragPreview> begin =
+      editor.modeling().begin_transform_drag(
+          stress_x_move_drag_begin_request());
+  ASSERT_TRUE(begin.ok) << begin.message;
+  ASSERT_TRUE(begin.value().active);
+
+  const std::uint64_t projection_builds_before =
+      session->modeling().transformed_picking_projection_build_count();
+  const std::uint64_t transform_revision_before =
+      session->scene().transform_revision();
+  std::vector<double> sample_milliseconds;
+  sample_milliseconds.reserve(kSampleCount);
+  std::size_t workload_checksum = 0u;
+  for (std::size_t sample = 0; sample < kSampleCount; ++sample) {
+    const auto start = std::chrono::steady_clock::now();
+    const quader::QuaderApiResult<quader::QuaderTransformDragPreview> update =
+        editor.modeling().update_transform_drag(
+            stress_x_move_drag_update_request(
+                0.25f * static_cast<float>(sample + 1u)));
+    ASSERT_TRUE(update.ok) << update.message;
+    ASSERT_TRUE(update.value().changed);
+
+    const quader::ViewportOverlayFrame overlay =
+        session->modeling().selection_overlay_frame(
+            {.suppress_persistent_object_selection = true});
+    const std::vector<quader::ModelingToolPreviewMesh> previews =
+        session->modeling().tool_preview_meshes();
+    workload_checksum += overlay.lines.size() + overlay.triangles.size() +
+                         overlay.points.size() + previews.size() +
+                         static_cast<std::size_t>(
+                             session->scene().transform_revision());
+    const auto stop = std::chrono::steady_clock::now();
+    sample_milliseconds.push_back(
+        std::chrono::duration<double, std::milli>(stop - start).count());
+  }
+
+  EXPECT_GT(workload_checksum, 0u);
+  EXPECT_EQ(session->modeling().transformed_picking_projection_build_count(),
+            projection_builds_before);
+  EXPECT_EQ(session->scene().transform_revision(),
+            transform_revision_before + kSampleCount);
+
+  std::sort(sample_milliseconds.begin(), sample_milliseconds.end());
+  const double median_ms = sample_milliseconds[kSampleCount / 2u];
+  const double p95_ms = sample_milliseconds[
+      static_cast<std::size_t>(static_cast<double>(kSampleCount - 1u) * 0.95)];
+  const double maximum_ms = sample_milliseconds.back();
+  std::cout << "[local-stress] repeated_drag_sample_count=" << kSampleCount
+            << '\n';
+  std::cout << "[local-stress] repeated_drag_selected_entity_count="
+            << selected_count << '\n';
+  std::cout << "[local-stress] repeated_drag_median_ms=" << median_ms << '\n';
+  std::cout << "[local-stress] repeated_drag_p95_ms=" << p95_ms << '\n';
+  std::cout << "[local-stress] repeated_drag_max_ms=" << maximum_ms << '\n';
+  std::cout << "[local-stress] repeated_drag_workload_checksum="
+            << workload_checksum << '\n';
+
+  const quader::QuaderApiVoidResult canceled =
+      editor.modeling().cancel_transform_drag();
+  ASSERT_TRUE(canceled.ok()) << canceled.error_message();
 }

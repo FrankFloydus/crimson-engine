@@ -527,6 +527,9 @@ public:
                       state.operation == TransformDragOperation::Transform) {
                     return {true, non_zero_preview || snap_changed, {}};
                   }
+                  if (input.defer_session_update) {
+                    return {true, non_zero_preview || snap_changed, {}};
+                  }
                   if (state.operation == TransformDragOperation::Extrude) {
                     return mark_snap_change(
                         session.update_transform_extrude_preview(
@@ -559,6 +562,12 @@ public:
                                      previous_angle_degrees) > epsilon,
                             {}};
                   }
+                  if (input.defer_session_update) {
+                    return {true,
+                            std::abs(preview.preview_angle_degrees -
+                                     previous_angle_degrees) > epsilon,
+                            {}};
+                  }
                   if (std::abs(preview.preview_angle_degrees) <= epsilon) {
                     return session.update_transform_matrix_preview(
                         {}, state.pivot, false, false);
@@ -584,6 +593,13 @@ public:
                                                     : preview.message};
                   }
                   if (state.scene_transform_preview_eligible) {
+                    const double preview_change =
+                        std::abs(preview.preview_scale.x - previous_scale.x) +
+                        std::abs(preview.preview_scale.y - previous_scale.y) +
+                        std::abs(preview.preview_scale.z - previous_scale.z);
+                    return {true, preview_change > epsilon, {}};
+                  }
+                  if (input.defer_session_update) {
                     const double preview_change =
                         std::abs(preview.preview_scale.x - previous_scale.x) +
                         std::abs(preview.preview_scale.y - previous_scale.y) +

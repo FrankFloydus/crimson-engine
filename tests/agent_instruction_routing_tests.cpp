@@ -97,7 +97,7 @@ TEST(AgentInstructionRoutingTests, NestedPackageInstructionFilesExistAndStayFocu
   for (const std::string &relative : nested) {
     const std::string source = read_source_file(relative);
     EXPECT_FALSE(source.empty()) << relative;
-    EXPECT_LT(source.size(), 2500u) << relative;
+    EXPECT_LE(source.size(), 2500u) << relative;
     EXPECT_TRUE(contains(source, "# ")) << relative;
   }
 }

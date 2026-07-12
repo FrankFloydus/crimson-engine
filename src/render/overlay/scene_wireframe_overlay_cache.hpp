@@ -29,6 +29,12 @@ class VertexBuffer;
 
 namespace quader {
 
+[[nodiscard]] constexpr bool scene_wireframe_style_changed(
+    bool has_synced, std::uint64_t synced_signature,
+    const ViewportPersistentOverlayStyleSnapshot &style) {
+  return !has_synced || synced_signature != style.wire_signature;
+}
+
 /**
  * Caches full-scene wireframe renderables outside the transient viewport overlay frame.
  */
@@ -103,7 +109,9 @@ private:
     std::vector<WireframeEntityState>
     wireframe_entity_states(
         const RenderOverlaySceneWireframeSnapshot &snapshot) const;
-    Entry create_entry(const RenderOverlayMeshSnapshot &mesh);
+    Entry create_entry(
+        const RenderOverlayMeshSnapshot &mesh,
+        const ViewportPersistentOverlayStyleSnapshot &style);
     void destroy_entry(Entry &entry);
     void destroy_proxy(Proxy &proxy, bool remove_from_scene);
     void destroy_transform_root(Entry &entry);
@@ -124,6 +132,7 @@ private:
     std::vector<WireframeEntityState> synced_states_;
     std::uint64_t synced_scene_revision_ = 0;
     std::uint64_t synced_asset_revision_ = 0;
+    std::uint64_t synced_wire_style_signature_ = 0;
     ViewportCameraClipPlanes synced_clip_planes_;
     std::uint8_t layer_mask_ = 0u;
     bool has_synced_ = false;

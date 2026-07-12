@@ -10,22 +10,23 @@
 
 namespace quader {
 
-std::vector<LogEntry> ConsoleModel::filter(const std::vector<LogEntry>& entries, const ConsoleFilter& filter) {
-    std::vector<LogEntry> result;
-    const std::string search = QStr::to_ascii_lower(filter.search_text);
+std::vector<LogEntry> ConsoleModel::filter(const std::vector<LogEntry> &entries,
+                                           const ConsoleFilter &filter) {
+  std::vector<LogEntry> result;
+  const std::string search = QStr::to_ascii_lower(filter.search_text);
 
-    for (const LogEntry& entry : entries) {
-      if (entry.level < filter.minimum_level) {
-        continue;
-      }
-      if (!search.empty() && QStr::to_ascii_lower(entry.message).find(search) ==
-                                 std::string::npos) {
-        continue;
-      }
-        result.push_back(entry);
+  for (const LogEntry &entry : entries) {
+    if (entry.level < filter.minimum_level) {
+      continue;
     }
+    if (!search.empty() &&
+        QStr::to_ascii_lower(entry.message).find(search) == std::string::npos) {
+      continue;
+    }
+    result.push_back(entry);
+  }
 
-    return result;
+  return result;
 }
 
 } // namespace quader

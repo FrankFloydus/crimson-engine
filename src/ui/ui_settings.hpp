@@ -14,17 +14,18 @@
 namespace quader {
 
 /**
- * Represents an UI Settings Paths value used by the ImGui editor presentation layer.
+ * Represents UI settings paths used by the Qt Widgets editor shell.
  */
 struct UISettingsPaths {
     std::filesystem::path directory;
-    std::filesystem::path imgui_ini_file;
+    std::filesystem::path qt_window_state_file;
+    std::filesystem::path qt_auxiliary_window_state_file;
     std::filesystem::path settings_file;
     std::filesystem::path viewport_settings_file;
 };
 
 /**
- * Owns UI Settings behavior within the ImGui editor presentation layer.
+ * Owns backend-neutral editor UI preferences.
  */
 class UISettings {
 public:

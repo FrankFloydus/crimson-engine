@@ -8,6 +8,8 @@
 
 #include "api/quader_api_result.hpp"
 #include "api/quader_render_api.hpp"
+#include "render/overlay/render_overlay_snapshot.hpp"
+#include "render/overlay/viewport_persistent_overlay_style.hpp"
 #include "render/viewport_overlay_frame.hpp"
 
 #include <cstddef>
@@ -26,6 +28,7 @@ struct ViewportSceneOverlayFrameRequest;
 struct QuaderRenderSceneOverlaySyncRequest {
   bool selected_object_overlay_visible = false;
   std::uint8_t scene_wireframe_layer_mask = 0u;
+  ViewportPersistentOverlayStyleSnapshot style;
 };
 
 /**
@@ -39,10 +42,14 @@ public:
                                                 SceneRenderBridge &bridge);
   static QuaderApiVoidResult sync_scene_asset_overlays(
       QuaderRenderApi &api, SceneRenderBridge &bridge,
+      RenderOverlaySnapshotCache &snapshot_cache,
       const QuaderRenderSceneOverlaySyncRequest &request);
+  [[nodiscard]] static const RenderOverlaySelectionSnapshot &
+  build_scene_overlay_snapshot(QuaderRenderApi &api,
+                               RenderOverlaySnapshotCache &snapshot_cache);
   [[nodiscard]] static ViewportOverlayFrame build_scene_overlay_frame(
-      QuaderRenderApi &api, SceneRenderBridge &bridge,
-      ViewportOverlayFrame base_frame,
+      SceneRenderBridge &bridge, ViewportOverlayFrame base_frame,
+      const RenderOverlaySelectionSnapshot &snapshot,
       const ViewportSceneOverlayFrameRequest &request);
   static QuaderApiResult<QuaderRenderOverlaySubmission> sync_selection_overlay(
       QuaderRenderApi &api, SceneRenderBridge &bridge,

@@ -93,6 +93,8 @@ public:
   selection_overlay_frame(ModelingSelectionOverlayOptions options = {}) const;
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
   tool_preview_meshes() const;
+  [[nodiscard]] std::uint64_t
+  transformed_picking_projection_build_count() const;
   [[nodiscard]] ModelingSessionMemento capture_history_memento() const;
   [[nodiscard]] ModelingSessionMemento
   capture_active_preview_history_memento() const;
@@ -118,6 +120,7 @@ public:
   ModelingCommandResult flip_selection(ModelingFlipOrientation orientation);
   ModelingCommandResult apply_active_material(std::uint32_t material_slot = 0);
   [[nodiscard]] bool modal_tool_owns_viewport() const;
+  [[nodiscard]] bool transform_drag_active() const;
   [[nodiscard]] bool can_cancel_active_tool_or_preview() const;
   [[nodiscard]] bool can_cancel_active_preview_for_undo() const;
   [[nodiscard]] ModelingToolStatus tool_status() const;

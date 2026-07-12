@@ -14,7 +14,8 @@ directory.
 ## Third-Party Rules
 
 - Keep dependency version notes and license evidence under `thirdparty/`.
-- Do not vendor SDL, UI backend libraries, spdlog, GoogleTest, or a new Filament SDK into this repo.
+- Do not vendor Qt, UI backend libraries, spdlog, GoogleTest, or a new Filament SDK into this repo;
+  use the manifest-managed native dependency path.
 - Avoid GPL, AGPL, LGPL with unclear linking obligations, SSPL, BUSL, copyleft, or source-available
   dependencies unless explicitly approved.
 - Any new dependency must have license evidence and a clear CMake/vcpkg integration path.

@@ -1348,13 +1348,19 @@ std::vector<HostPreferenceDescriptor> build_preference_descriptors()
                                          "viewport.grid"));
   descriptors.push_back(
       color_preference("viewport.grid.x_axis_color", "X QAxis",
-                       color_rgba(1.0, 0.239, 0.0, 0.72), "viewport.grid"));
+                       color_from_viewport_setting(
+                           quader::kDefaultViewportGridXAxisColor),
+                       "viewport.grid"));
   descriptors.push_back(
       color_preference("viewport.grid.y_axis_color", "Y QAxis",
-                       color_rgba(0.29, 0.58, 0.0, 0.0), "viewport.grid"));
+                       color_from_viewport_setting(
+                           quader::kDefaultViewportGridYAxisColor),
+                       "viewport.grid"));
   descriptors.push_back(
       color_preference("viewport.grid.z_axis_color", "Z QAxis",
-                       color_rgba(0.059, 0.612, 1.0, 0.72), "viewport.grid"));
+                       color_from_viewport_setting(
+                           quader::kDefaultViewportGridZAxisColor),
+                       "viewport.grid"));
   descriptors.push_back(
       color_preference("viewport.selection.face_color", "Face Fill",
                        color_from_abgr(0x081facffU), "viewport.selection",

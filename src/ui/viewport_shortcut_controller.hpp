@@ -14,7 +14,7 @@ namespace quader {
 class QuaderEditorApi;
 
 /**
- * Stores the Viewport Shortcut Controller Result data contract used by the ImGui editor presentation layer.
+ * Stores the Viewport Shortcut Controller Result data contract used by the Qt editor presentation layer.
  */
 struct ViewportShortcutControllerResult {
     bool consumed = false;
@@ -24,7 +24,7 @@ struct ViewportShortcutControllerResult {
 };
 
 /**
- * Coordinates Viewport Shortcut Controller state transitions for the ImGui editor presentation layer.
+ * Coordinates Viewport Shortcut Controller state transitions for the Qt editor presentation layer.
  */
 class ViewportShortcutController {
 public:

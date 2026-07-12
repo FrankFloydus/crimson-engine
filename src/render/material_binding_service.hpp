@@ -22,6 +22,14 @@ class TextureBindingService;
 class ViewportSettings;
 
 /**
+ * Builds the narrow signature used to avoid rewriting unchanged mesh-surface
+ * grid uniforms on every presentation frame.
+ */
+[[nodiscard]] std::uint64_t
+mesh_surface_grid_signature(float grid_world_spacing,
+                            const ViewportSettings &settings);
+
+/**
  * Coordinates Material Binding Service responsibilities for the render extraction and Filament resource layer.
  */
 class MaterialBindingService {

@@ -16,7 +16,7 @@
 namespace quader {
 
 /**
- * Represents a Console Filter value used by the ImGui editor presentation layer.
+ * Describes the active application-log filter.
  */
 struct ConsoleFilter {
   spdlog::level::level_enum minimum_level = spdlog::level::trace;
@@ -24,11 +24,12 @@ struct ConsoleFilter {
 };
 
 /**
- * Owns Console Model behavior within the ImGui editor presentation layer.
+ * Owns toolkit-neutral console filtering behavior.
  */
 class ConsoleModel {
 public:
-    static std::vector<LogEntry> filter(const std::vector<LogEntry>& entries, const ConsoleFilter& filter);
+  static std::vector<LogEntry> filter(const std::vector<LogEntry> &entries,
+                                      const ConsoleFilter &filter);
 };
 
 } // namespace quader

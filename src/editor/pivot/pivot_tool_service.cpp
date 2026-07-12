@@ -611,14 +611,21 @@ void PivotToolService::begin_quick(QVec3 initial_world_position) {
       .selection_revision = scene_.selection_revision(),
       .world_position = initial_world_position,
   };
+  ++selection_pivot_revision_;
 }
 
 void PivotToolService::set_quick_preview_position(QVec3 world_position) {
   if (!quick_edit_active()) {
     return;
   }
+  if (quick_.world_position.x == world_position.x &&
+      quick_.world_position.y == world_position.y &&
+      quick_.world_position.z == world_position.z && quick_.override_valid) {
+    return;
+  }
   quick_.world_position = world_position;
   quick_.override_valid = true;
+  ++selection_pivot_revision_;
 }
 
 void PivotToolService::end_quick_edit() {
@@ -627,7 +634,15 @@ void PivotToolService::end_quick_edit() {
   }
 }
 
-void PivotToolService::clear_quick_override() { quick_ = QuickState{}; }
+void PivotToolService::clear_quick_override() {
+  if (!quick_.override_valid && !quick_.editing &&
+      quick_.selection_revision == 0 && quick_.world_position.x == 0.0f &&
+      quick_.world_position.y == 0.0f && quick_.world_position.z == 0.0f) {
+    return;
+  }
+  quick_ = QuickState{};
+  ++selection_pivot_revision_;
+}
 
 bool PivotToolService::quick_edit_active() const {
   return quick_.editing && quick_.override_valid &&

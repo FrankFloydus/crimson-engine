@@ -7,6 +7,7 @@
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
 
 #include "core/color_space.hpp"
+#include "render/render_signature_builder.hpp"
 #include "render/viewport_overlay_policy.hpp"
 
 namespace quader {
@@ -19,6 +20,28 @@ bool selection_context_matches(ViewportOverlaySelectionContext override_mode,
 }
 
 } // namespace
+
+ViewportPersistentOverlayStyleSnapshot
+ViewportOverlayStyleResolver::persistent_style_snapshot(
+    const ViewportSettings &settings) {
+  ViewportPersistentOverlayStyleSnapshot snapshot{
+      .selection_face_color =
+          setting_color(settings, ViewportColorSettingId::SelectionFace),
+      .selection_wire_color =
+          setting_color(settings, ViewportColorSettingId::SelectionWire),
+      .selection_edge_line_width_pixels = settings.float_value(
+          ViewportFloatSettingId::SelectionEdgeLineSize),
+  };
+  RenderSignatureBuilder face_signature;
+  face_signature.add_value(snapshot.selection_face_color);
+  snapshot.face_signature = face_signature.value();
+
+  RenderSignatureBuilder wire_signature;
+  wire_signature.add_value(snapshot.selection_wire_color)
+      .add_float(snapshot.selection_edge_line_width_pixels);
+  snapshot.wire_signature = wire_signature.value();
+  return snapshot;
+}
 
 ViewportOverlayFrame ViewportOverlayStyleResolver::resolve(
         ViewportOverlayFrame frame,

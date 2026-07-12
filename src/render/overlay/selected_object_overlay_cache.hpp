@@ -29,10 +29,11 @@ class VertexBuffer;
 
 namespace quader {
 
-inline constexpr std::size_t kSelectedObjectFaceFillSelectionLimit = 64u;
-
-bool selected_object_face_fills_enabled_for_selection_count(
-    std::size_t selected_mesh_count);
+[[nodiscard]] constexpr bool selected_object_face_style_changed(
+    bool has_synced, std::uint64_t synced_signature,
+    const ViewportPersistentOverlayStyleSnapshot &style) {
+  return !has_synced || synced_signature != style.face_signature;
+}
 
 /**
  * Caches selected object overlay renderables outside the transient viewport overlay frame.
@@ -105,7 +106,9 @@ private:
 
     std::vector<SelectedEntityState> selected_entity_states(
         const RenderOverlaySelectedObjectSnapshot &snapshot) const;
-    Entry create_entry(const RenderOverlayMeshSnapshot &mesh);
+    Entry create_entry(
+        const RenderOverlayMeshSnapshot &mesh,
+        const ViewportPersistentOverlayStyleSnapshot &style);
     void destroy_entry(Entry &entry);
     void destroy_proxy(Proxy &proxy, bool remove_from_scene);
     void destroy_face_entries();
@@ -130,6 +133,7 @@ private:
     std::uint64_t synced_visibility_revision_ = 0;
     std::uint64_t synced_transform_revision_ = 0;
     std::uint64_t synced_mesh_binding_revision_ = 0;
+    std::uint64_t synced_face_style_signature_ = 0;
     bool synced_face_fills_enabled_ = false;
     bool has_synced_ = false;
     bool visible_ = true;

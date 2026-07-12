@@ -18,7 +18,7 @@
 namespace quader {
 
 /**
- * Stores the Viewport Hover Work Key data contract used by the ImGui editor presentation layer.
+ * Stores the Viewport Hover Work Key data contract used by the Qt editor presentation layer.
  */
 struct ViewportHoverWorkKey {
     bool valid = false;
@@ -54,7 +54,7 @@ struct ViewportHoverWorkKey {
 };
 
 /**
- * Stores the Viewport Hover Work Request data contract used by the ImGui editor presentation layer.
+ * Stores the Viewport Hover Work Request data contract used by the Qt editor presentation layer.
  */
 struct ViewportHoverWorkRequest {
   ViewportPaneId pane_id = ViewportPaneId::Perspective;
@@ -75,7 +75,7 @@ struct ViewportHoverWorkRequest {
 };
 
 /**
- * Coordinates Viewport Hover Controller state transitions for the ImGui editor presentation layer.
+ * Coordinates Viewport Hover Controller state transitions for the Qt editor presentation layer.
  */
 class ViewportHoverController {
 public:

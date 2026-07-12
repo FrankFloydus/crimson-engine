@@ -11,12 +11,11 @@
 #include "render/filament_material_library.hpp"
 #include "render/render_performance_stats.hpp"
 #include "render/texture_registry.hpp"
-#include "render/ui_icon_texture_service.hpp"
 
 #include <filament/Engine.h>
 #include <filament/SwapChain.h>
 
-#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -37,9 +36,9 @@ enum class SwapChainPresentationColorSpace {
 };
 
 class RenderSystem;
-class ImGuiFilamentRenderer;
 class SceneRenderBridge;
 class ViewportRenderer;
+enum class ViewportRenderSurface;
 
 /**
  * Owns one additional Filament swapchain through the RenderSystem that created it.
@@ -90,6 +89,8 @@ public:
     bool begin_frame();
     bool begin_frame(filament::SwapChain *swap_chain);
     void end_frame();
+    void begin_presentation_frame();
+    void complete_presentation_frame(std::size_t swap_chain_submissions);
     [[nodiscard]] RenderFramePerformanceStats frame_performance_stats() const {
       return frame_performance_stats_;
     }
@@ -102,19 +103,17 @@ public:
     void initialize_scene_render_bridge(
         SceneRenderBridge &render_bridge,
         const std::filesystem::path &executable_dir);
-    void initialize_imgui_renderer(ImGuiFilamentRenderer &imgui_renderer);
-    void render_imgui(ImGuiFilamentRenderer &imgui_renderer);
     void initialize_viewport_renderer(ViewportRenderer &viewport_renderer,
                                       std::uint8_t grid_layer_mask);
+    void initialize_viewport_renderer(ViewportRenderer &viewport_renderer,
+                                      std::uint8_t grid_layer_mask,
+                                      ViewportRenderSurface surface);
     void render_viewport(ViewportRenderer &viewport_renderer);
-    RenderUiIconSet
-    load_ui_icon_textures(const std::filesystem::path &executable_dir);
-    void clear_ui_icon_textures();
     void apply_scene_settings(const SceneSettingsComponent &settings);
 
   private:
     bool begin_frame_with_swap_chain(filament::SwapChain *swap_chain);
-    void update_frame_performance_stats_after_end_frame();
+    void update_gpu_frame_performance_stats();
 
     filament::Engine* engine_ = nullptr;
     filament::Renderer* renderer_ = nullptr;
@@ -123,12 +122,8 @@ public:
     FilamentEnvironmentLibrary environment_library_;
     FilamentMaterialLibrary material_library_;
     TextureRegistry texture_registry_;
-    UiIconTextureService ui_icon_textures_;
     RenderFramePerformanceStats frame_performance_stats_;
-    std::chrono::steady_clock::time_point frame_cpu_begin_{};
-    std::chrono::steady_clock::time_point frame_rate_sample_begin_{};
-    std::uint32_t frame_rate_sample_count_ = 0;
-    bool frame_cpu_active_ = false;
+    RenderPresentationFrameTracker presentation_frame_tracker_;
 };
 
 } // namespace quader

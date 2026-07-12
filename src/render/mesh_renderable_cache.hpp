@@ -68,6 +68,8 @@ public:
     std::unordered_map<EntityId, MeshRenderableProxy>
         overlay_depth_mesh_proxies_;
     std::vector<MeshRenderableProxy> retired_mesh_proxies_;
+    std::uint64_t surface_grid_signature_ = 0u;
+    bool surface_grid_dirty_ = true;
 };
 
 } // namespace quader

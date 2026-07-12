@@ -17,8 +17,8 @@ package.
 - `QuaderApi` is for document/modeling workflows that do not need runtime editor domains.
 - Public API code delegates to owner services; it must not become the owner of document, render,
   asset, UI, viewport, or platform invariants.
-- Public headers must avoid backend/internal owner headers such as UI backend, Filament, SDL, EnTT
-  internals, and mutable service pointers.
+- Public headers must avoid backend/internal owner headers such as Qt/UI backend, Filament, Win32,
+  EnTT internals, and mutable service pointers.
 - Prefer `quader_command::*`, `QuaderObjectHandle`, `QuaderSceneBatch`, and
   `QuaderApiResult`/`QuaderApiVoidResult` helpers in public-facing surfaces and examples.
 - Command execution should use typed `QuaderCommand` values or canonical command IDs returned by

@@ -213,16 +213,8 @@ const std::vector<IncludeException> &allowed_include_exceptions() {
       {"src/scene/document/project_session.hpp",
        "editor/session/project_session.hpp",
        "legacy scene include wrapper during the session move"},
-      {"src/ui/ui_context.hpp", "editor/input/quader_input_binding.hpp",
-       "UI context carries the currently pressed input chord until input value "
-       "types move to core"},
-      {"src/ui/ui_platform_adapter.hpp",
-       "editor/input/quader_input_binding.hpp",
-       "platform adapter carries the currently pressed input chord until input "
-       "value types move to core"},
-      {"src/ui/ui_system.hpp", "editor/input/quader_input_binding.hpp",
-       "UI system stores the currently pressed input chord until input value "
-       "types move to core"},
+      {"src/ui/ui_system.cpp", "platform/window_placement.hpp",
+       "Qt shell applies platform-neutral persisted window placement values"},
   };
   return kExceptions;
 }
@@ -342,6 +334,7 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
       {"quader_viewport_services",
        {"quader_core_utilities", "quader_editor_metadata", "quader_modeling",
         "quader_modeling_profile", "quader_modeling_sdk"}},
+      {"qdr_fixture_performance_baseline", {"quader_runtime"}},
       {"qdr_performance_baseline",
        {"quader_modeling_polygon", "quader_modeling_profile",
         "quader_modeling_runtime"}},

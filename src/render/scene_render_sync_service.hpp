@@ -49,6 +49,9 @@ public:
         const RenderSceneSnapshot &snapshot) const;
 
   private:
+    [[nodiscard]] bool
+    can_sync_transforms_only(const RenderSceneSnapshot &snapshot) const;
+    void sync_dirty_transforms(const RenderSceneSnapshot &snapshot);
     void rebuild(const RenderSceneSnapshot &snapshot);
 
     filament::Engine* engine_ = nullptr;

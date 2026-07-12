@@ -9,24 +9,57 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
+#include "core/scene_environment_catalog.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
-#include "core/scene_environment_catalog.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/transform_pivot.hpp"
+#include "ui/qt_color_swatch_button.hpp"
+#include "ui/qt_semantic_axis_colors.hpp"
 #include "ui/ui_context.hpp"
-#include "ui/ui_style_tokens.hpp"
+#include "ui/ui_continuous_edit_tracker.hpp"
+#include "ui/ui_panel.hpp"
 
-#include <imgui.h>
+#include <QCheckBox>
+#include <QColor>
+#include <QColorDialog>
+#include <QComboBox>
+#include <QDialog>
+#include <QDoubleSpinBox>
+#include <QFocusEvent>
+#include <QGridLayout>
+#include <QHeaderView>
+#include <QHBoxLayout>
+#include <QKeyEvent>
+#include <QLabel>
+#include <QLineEdit>
+#include <QPainter>
+#include <QPen>
+#include <QPointer>
+#include <QScrollBar>
+#include <QSizePolicy>
+#include <QStyledItemDelegate>
+#include <QStyleOptionViewItem>
+#include <QString>
+#include <QTimer>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
+#include <QVBoxLayout>
+#include <QVariant>
 
 #include <algorithm>
 #include <array>
-#include <cfloat>
 #include <cmath>
-#include <cstdio>
+#include <cstdint>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -35,21 +68,12 @@ namespace {
 
 constexpr float kRadToDeg = 57.29577951308232f;
 constexpr float kDegToRad = 0.017453292519943295f;
-constexpr float kAxisTextColumnWidth = 12.0f;
-constexpr float kMinAxisInputWidth = 58.0f;
-constexpr float kInspectorPropertyLabelColumnWidth = 132.0f;
-constexpr float kInspectorPropertyMinimumLabelColumnWidth = 76.0f;
-constexpr float kInspectorPropertyMinimumValueColumnWidth = 92.0f;
 constexpr float kInspectorLightRangeMin = 0.1f;
 constexpr float kInspectorLightRangeSliderMax = 100.0f;
+constexpr int kInspectorMinimumValueColumnWidth = 96;
 
-void copy_name_to_buffer(const NameComponent *name,
-                         std::array<char, 128> &buffer) {
-  buffer.fill('\0');
-  if (!name) {
-    return;
-  }
-  std::snprintf(buffer.data(), buffer.size(), "%s", name->name.c_str());
+QString qt_text(std::string_view text) {
+  return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
 }
 
 const char *selection_mode_key(ModelingSelectionMode mode) {
@@ -120,602 +144,13 @@ const char *active_selection_kind_fallback(ModelingActiveSelectionKind kind) {
   return "None";
 }
 
-/**
- * Stores edit lifecycle flags emitted by one Inspector axis input.
- */
-struct AxisDragFloatResult {
-    bool changed = false;
-    bool activated = false;
-    bool deactivated = false;
-    bool deactivated_after_edit = false;
-};
-
-float inspector_property_label_width() {
-  const float available_width = std::max(0.0f, ImGui::GetContentRegionAvail().x);
-  const float maximum_label_width =
-      std::max(kInspectorPropertyMinimumLabelColumnWidth,
-               available_width - kInspectorPropertyMinimumValueColumnWidth);
-  return std::clamp(kInspectorPropertyLabelColumnWidth,
-                    kInspectorPropertyMinimumLabelColumnWidth,
-                    maximum_label_width);
-}
-
-bool begin_inspector_property_table(const char *stable_id) {
-  ImGui::PushID(stable_id);
-  const ImGuiStyle &style = ImGui::GetStyle();
-  ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,
-                      ImVec2(style.FramePadding.x, style.FramePadding.y));
-
-  constexpr ImGuiTableFlags kPropertyTableFlags =
-      ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings |
-      ImGuiTableFlags_NoPadOuterX;
-  if (!ImGui::BeginTable("##PropertyTable", 2, kPropertyTableFlags)) {
-    ImGui::PopStyleVar();
-    ImGui::PopID();
-    return false;
-  }
-
-  ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed,
-                          inspector_property_label_width());
-  ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-  return true;
-}
-
-bool inspector_property_section(const char *stable_id, const char *label) {
-  ImGui::TableNextRow();
-  ImGui::TableSetColumnIndex(0);
-  ImGui::PushID(stable_id);
-  const bool open =
-      ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_SpanAllColumns);
-  ImGui::PopID();
-  return open;
-}
-
-void inspector_property_row(const char *stable_id, const char *label) {
-  ImGui::PushID(stable_id);
-  ImGui::TableNextRow();
-  ImGui::TableSetColumnIndex(0);
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted(label);
-  ImGui::TableSetColumnIndex(1);
-  ImGui::SetNextItemWidth(-FLT_MIN);
-}
-
-void inspector_end_property_row() { ImGui::PopID(); }
-
-void end_inspector_property_table() {
-  ImGui::EndTable();
-  ImGui::PopStyleVar();
-  ImGui::PopID();
-}
-
-AxisDragFloatResult axis_drag_float(const char *axis, ImVec4 color,
-                                    float *value, bool mixed,
-                                    const char *mixed_label, float speed,
-                                    float min_value, float max_value,
-                                    float input_width) {
-  ImGui::PushID(axis);
-  ImGui::PushStyleColor(ImGuiCol_Text, color);
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextUnformatted(axis);
-  ImGui::PopStyleColor();
-  ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
-  ImGui::SetNextItemWidth(input_width < 0.0f
-                              ? input_width
-                              : std::max(input_width, kMinAxisInputWidth));
-  AxisDragFloatResult result;
-  if (mixed) {
-    std::array<char, 64> mixed_buffer{};
-    std::snprintf(mixed_buffer.data(), mixed_buffer.size(), "%s", mixed_label);
-    ImGui::BeginDisabled();
-    ImGui::InputText("##value", mixed_buffer.data(), mixed_buffer.size(),
-                     ImGuiInputTextFlags_ReadOnly);
-    ImGui::EndDisabled();
-  } else {
-    result.changed =
-        ImGui::DragFloat("##value", value, speed, min_value, max_value, "%.3f");
-    result.activated = ImGui::IsItemActivated();
-    result.deactivated = ImGui::IsItemDeactivated();
-    result.deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
-  }
-  ImGui::PopID();
-  return result;
-}
-
-AxisDragFloatResult
-axis_drag_float3(const char *stable_id, const char *label, float values[3],
-                 const std::array<bool, 3> &mixed, const char *mixed_label,
-                 const UIStyleTokens &style, float speed,
-                 float min_value = 0.0f, float max_value = 0.0f) {
-  AxisDragFloatResult result;
-  const ImGuiStyle &imgui_style = ImGui::GetStyle();
-  const float min_axis_column_width =
-      kAxisTextColumnWidth + imgui_style.ItemInnerSpacing.x +
-      kMinAxisInputWidth + imgui_style.CellPadding.x * 2.0f;
-
-  inspector_property_row(stable_id, label);
-  if (ImGui::BeginTable("##AxisDragFloat3", 3,
-                        ImGuiTableFlags_SizingStretchProp |
-                            ImGuiTableFlags_NoSavedSettings |
-                            ImGuiTableFlags_NoPadOuterX)) {
-    ImGui::TableSetupColumn("X", ImGuiTableColumnFlags_WidthStretch,
-                            min_axis_column_width);
-    ImGui::TableSetupColumn("Y", ImGuiTableColumnFlags_WidthStretch,
-                            min_axis_column_width);
-    ImGui::TableSetupColumn("Z", ImGuiTableColumnFlags_WidthStretch,
-                            min_axis_column_width);
-    ImGui::TableNextRow();
-
-    ImGui::TableSetColumnIndex(0);
-    const AxisDragFloatResult x =
-        axis_drag_float("X", style.axis_x, &values[0], mixed[0], mixed_label,
-                        speed, min_value, max_value, -FLT_MIN);
-    result.changed = result.changed || x.changed;
-    result.activated = result.activated || x.activated;
-    result.deactivated = result.deactivated || x.deactivated;
-    result.deactivated_after_edit =
-        result.deactivated_after_edit || x.deactivated_after_edit;
-    ImGui::TableSetColumnIndex(1);
-    const AxisDragFloatResult y =
-        axis_drag_float("Y", style.axis_y, &values[1], mixed[1], mixed_label,
-                        speed, min_value, max_value, -FLT_MIN);
-    result.changed = result.changed || y.changed;
-    result.activated = result.activated || y.activated;
-    result.deactivated = result.deactivated || y.deactivated;
-    result.deactivated_after_edit =
-        result.deactivated_after_edit || y.deactivated_after_edit;
-    ImGui::TableSetColumnIndex(2);
-    const AxisDragFloatResult z =
-        axis_drag_float("Z", style.axis_z, &values[2], mixed[2], mixed_label,
-                        speed, min_value, max_value, -FLT_MIN);
-    result.changed = result.changed || z.changed;
-    result.activated = result.activated || z.activated;
-    result.deactivated = result.deactivated || z.deactivated;
-    result.deactivated_after_edit =
-        result.deactivated_after_edit || z.deactivated_after_edit;
-
-    ImGui::EndTable();
-  }
-  inspector_end_property_row();
-  return result;
-}
-
-bool input_text_with_left_label(const char *stable_id, const char *label,
-                                char *buffer, std::size_t buffer_size,
-                                ImGuiInputTextFlags flags) {
-  inspector_property_row(stable_id, label);
-  const bool changed = ImGui::InputText("##value", buffer, buffer_size, flags);
-  inspector_end_property_row();
-  return changed;
-}
-
-bool checkbox_with_left_label(const char *stable_id, const char *label,
-                              bool *value) {
-  inspector_property_row(stable_id, label);
-  const bool changed = ImGui::Checkbox("##value", value);
-  inspector_end_property_row();
-  return changed;
-}
-
-void update_continuous_edit_tracker(const char *stable_id,
-                                    UIContinuousEditTracker &active_edit,
-                                    EntityId primary,
-                                    std::span<const EntityId> selection,
-                                    std::span<float> values,
-                                    UIContinuousEditResult &result) {
-  if (result.should_apply() || result.activated) {
-    result.merge_key =
-        active_edit.ensure_merge_key(stable_id, primary, selection);
-  }
-  if (result.activated || result.changed) {
-    active_edit.stage(stable_id, primary, selection,
-                      std::span<const float>(values.data(), values.size()));
-  }
-  if (result.deactivated_after_edit) {
-    const std::vector<float> final_values = active_edit.final_values(
-        stable_id, primary, selection,
-        std::span<const float>(values.data(), values.size()));
-    std::copy(final_values.begin(), final_values.end(), values.begin());
-    active_edit.reset();
-  } else if (result.deactivated) {
-    active_edit.reset();
-  }
-}
-
-UIContinuousEditResult drag_float_with_left_label(
-    const char *stable_id, const char *label, float *value,
-    UIContinuousEditTracker &active_edit, EntityId primary,
-    std::span<const EntityId> selection, float speed, float min_value,
-    float max_value, const char *format = "%.3f",
-    ImGuiSliderFlags slider_flags = ImGuiSliderFlags_AlwaysClamp) {
-  std::array<float, 1> staged{*value};
-  active_edit.apply_active_values(
-      stable_id, primary, selection,
-      std::span<float>(staged.data(), staged.size()));
-  *value = staged[0];
-
-  UIContinuousEditResult result;
-  inspector_property_row(stable_id, label);
-  result.changed =
-      min_value < max_value
-          ? ImGui::SliderFloat("##value", value, min_value, max_value, format,
-                               slider_flags)
-          : ImGui::DragFloat("##value", value, speed, min_value, max_value,
-                             format);
-  result.activated = ImGui::IsItemActivated();
-  result.deactivated = ImGui::IsItemDeactivated();
-  result.deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
-  inspector_end_property_row();
-
-  staged[0] = *value;
-  update_continuous_edit_tracker(stable_id, active_edit, primary, selection,
-                                 std::span<float>(staged.data(), staged.size()),
-                                 result);
-  *value = staged[0];
-  return result;
-}
-
-UIContinuousEditResult color_edit3_with_left_label(
-    const char *stable_id, const char *label, float values[3],
-    UIContinuousEditTracker &active_edit, EntityId primary,
-    std::span<const EntityId> selection) {
-  std::array<float, 3> staged{values[0], values[1], values[2]};
-  active_edit.apply_active_values(
-      stable_id, primary, selection,
-      std::span<float>(staged.data(), staged.size()));
-  values[0] = staged[0];
-  values[1] = staged[1];
-  values[2] = staged[2];
-
-  UIContinuousEditResult result;
-  inspector_property_row(stable_id, label);
-  result.changed = ImGui::ColorEdit3("##value", values,
-                                     ImGuiColorEditFlags_Float |
-                                         ImGuiColorEditFlags_NoInputs);
-  result.activated = ImGui::IsItemActivated();
-  result.deactivated = ImGui::IsItemDeactivated();
-  result.deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
-  inspector_end_property_row();
-
-  staged = {values[0], values[1], values[2]};
-  update_continuous_edit_tracker(stable_id, active_edit, primary, selection,
-                                 std::span<float>(staged.data(), staged.size()),
-                                 result);
-  values[0] = staged[0];
-  values[1] = staged[1];
-  values[2] = staged[2];
-  return result;
-}
-
-template <typename Enum>
-bool combo_with_left_label(
-    const char *stable_id, const char *label, Enum *value,
-    const std::vector<std::pair<Enum, std::string>> &options) {
-  bool changed = false;
-  inspector_property_row(stable_id, label);
-  const auto selected =
-      std::find_if(options.begin(), options.end(), [&](const auto &option) {
-        return option.first == *value;
-      });
-  const char *preview =
-      selected == options.end() ? "" : selected->second.c_str();
-  if (ImGui::BeginCombo("##value", preview)) {
-    for (const auto &[optionValue, optionLabel] : options) {
-      const bool is_selected = optionValue == *value;
-      if (ImGui::Selectable(optionLabel.c_str(), is_selected)) {
-        *value = optionValue;
-        changed = true;
-      }
-      if (is_selected) {
-        ImGui::SetItemDefaultFocus();
-      }
-    }
-    ImGui::EndCombo();
-  }
-  inspector_end_property_row();
-  return changed;
-}
-
-void draw_scene_settings_inspector(UIContext &context, EntityId entity,
-                                   std::span<const EntityId> selection,
-                                   UIContinuousEditTracker &active_edit,
-                                   SceneSettingsComponent settings,
-                                   LocalizationService &localization) {
-  auto apply_settings = [&](SceneSettingsComponent next,
-                            std::string merge_key = {}) {
-    next.environment.intensity = std::max(next.environment.intensity, 0.0f);
-    next.environment.background_intensity =
-        std::max(next.environment.background_intensity, 0.0f);
-    next.camera.aperture = std::max(next.camera.aperture, 0.01f);
-    next.camera.shutter_speed = std::max(next.camera.shutter_speed, 0.000001f);
-    next.camera.sensitivity = std::max(next.camera.sensitivity, 1.0f);
-    next.camera.near_plane = std::max(next.camera.near_plane, 0.001f);
-    next.camera.far_plane =
-        std::max(next.camera.far_plane, next.camera.near_plane + 0.001f);
-    next.post_process.ambient_occlusion_intensity =
-        std::max(next.post_process.ambient_occlusion_intensity, 0.0f);
-    next.post_process.ambient_occlusion_radius =
-        std::max(next.post_process.ambient_occlusion_radius, 0.0f);
-    next.post_process.bloom_strength =
-        std::max(next.post_process.bloom_strength, 0.0f);
-    (void)context.intent.editor.scene().set_scene_settings(
-        entity, to_api_scene_settings(next),
-        QuaderSceneEditOptions{.merge_key = std::move(merge_key)});
-  };
-
-  const std::string environment_label =
-      localization.text("ui.inspector.environment", "Environment");
-  if (inspector_property_section("environment", environment_label.c_str())) {
-    const std::string preset_label =
-        localization.text("ui.inspector.environment_preset", "Preset");
-    std::string environment_id = settings.environment.environment_id;
-    std::vector<std::pair<std::string, std::string>> environment_options;
-    for (const SceneEnvironmentDescriptor &descriptor :
-         scene_environment_catalog()) {
-      environment_options.emplace_back(
-          std::string(descriptor.id),
-          localization.text(std::string(descriptor.label_key),
-                            std::string(descriptor.fallback_label)));
-    }
-    if (combo_with_left_label("environment_preset", preset_label.c_str(),
-                              &environment_id, environment_options)) {
-      settings.environment.environment_id = environment_id;
-      apply_settings(settings);
-    }
-
-    bool enabled = settings.environment.enabled;
-    const std::string enabled_label =
-        localization.text("ui.inspector.enabled", "Enabled");
-    if (checkbox_with_left_label("environment_enabled", enabled_label.c_str(),
-                                 &enabled)) {
-      settings.environment.enabled = enabled;
-      apply_settings(settings);
-    }
-
-    bool show_background = settings.environment.show_background;
-    const std::string background_label =
-        localization.text("ui.inspector.background", "Background");
-    if (checkbox_with_left_label("environment_background",
-                                 background_label.c_str(), &show_background)) {
-      settings.environment.show_background = show_background;
-      apply_settings(settings);
-    }
-
-    float clear_color[3] = {
-        settings.environment.clear_color.x,
-        settings.environment.clear_color.y,
-        settings.environment.clear_color.z,
-    };
-    const std::string clear_color_label =
-        localization.text("ui.inspector.clear_color", "Clear Color");
-    const UIContinuousEditResult clear_color_edit = color_edit3_with_left_label(
-        "environment_clear_color", clear_color_label.c_str(), clear_color,
-        active_edit, entity, selection);
-    if (clear_color_edit.should_apply()) {
-      settings.environment.clear_color = {
-          std::clamp(clear_color[0], 0.0f, 1.0f),
-          std::clamp(clear_color[1], 0.0f, 1.0f),
-          std::clamp(clear_color[2], 0.0f, 1.0f),
-      };
-      apply_settings(settings, clear_color_edit.merge_key);
-    }
-
-    float intensity = settings.environment.intensity;
-    const std::string intensity_label =
-        localization.text("ui.inspector.intensity", "Intensity");
-    const UIContinuousEditResult intensity_edit = drag_float_with_left_label(
-        "environment_intensity", intensity_label.c_str(), &intensity,
-        active_edit, entity, selection, 0.01f, 0.0f, 16.0f, "%.3f");
-    if (intensity_edit.should_apply()) {
-      settings.environment.intensity = intensity;
-      apply_settings(settings, intensity_edit.merge_key);
-    }
-
-    float background_intensity = settings.environment.background_intensity;
-    const std::string background_intensity_label = localization.text(
-        "ui.inspector.background_intensity", "Background Intensity");
-    const UIContinuousEditResult background_intensity_edit =
-        drag_float_with_left_label("environment_background_intensity",
-                                   background_intensity_label.c_str(),
-                                   &background_intensity, active_edit, entity,
-                                   selection, 0.01f, 0.0f, 16.0f, "%.3f");
-    if (background_intensity_edit.should_apply()) {
-      settings.environment.background_intensity = background_intensity;
-      apply_settings(settings, background_intensity_edit.merge_key);
-    }
-
-    float rotation_y = settings.environment.rotation_y * kRadToDeg;
-    const std::string rotation_label =
-        localization.text("ui.inspector.rotation", "Rotation");
-    const UIContinuousEditResult rotation_edit = drag_float_with_left_label(
-        "environment_rotation", rotation_label.c_str(), &rotation_y,
-        active_edit, entity, selection, 0.5f, -360.0f, 360.0f, "%.2f");
-    if (rotation_edit.should_apply()) {
-      settings.environment.rotation_y = rotation_y * kDegToRad;
-      apply_settings(settings, rotation_edit.merge_key);
-    }
-  }
-
-  const std::string camera_label =
-      localization.text("ui.inspector.camera", "Camera");
-  if (inspector_property_section("camera", camera_label.c_str())) {
-    float aperture = settings.camera.aperture;
-    const std::string aperture_label =
-        localization.text("ui.inspector.aperture", "Aperture");
-    const UIContinuousEditResult aperture_edit = drag_float_with_left_label(
-        "camera_aperture", aperture_label.c_str(), &aperture, active_edit,
-        entity, selection, 0.05f, 0.01f, 128.0f, "%.2f");
-    if (aperture_edit.should_apply()) {
-      settings.camera.aperture = aperture;
-      apply_settings(settings, aperture_edit.merge_key);
-    }
-
-    float shutter_speed = settings.camera.shutter_speed;
-    const std::string shutter_label =
-        localization.text("ui.inspector.shutter_speed", "Shutter");
-    const UIContinuousEditResult shutter_edit = drag_float_with_left_label(
-        "camera_shutter", shutter_label.c_str(), &shutter_speed, active_edit,
-        entity, selection, 0.0001f, 0.000001f, 10.0f, "%.6f");
-    if (shutter_edit.should_apply()) {
-      settings.camera.shutter_speed = shutter_speed;
-      apply_settings(settings, shutter_edit.merge_key);
-    }
-
-    float sensitivity = settings.camera.sensitivity;
-    const std::string sensitivity_label =
-        localization.text("ui.inspector.sensitivity", "ISO");
-    const UIContinuousEditResult sensitivity_edit = drag_float_with_left_label(
-        "camera_sensitivity", sensitivity_label.c_str(), &sensitivity,
-        active_edit, entity, selection, 1.0f, 1.0f, 51200.0f, "%.0f");
-    if (sensitivity_edit.should_apply()) {
-      settings.camera.sensitivity = sensitivity;
-      apply_settings(settings, sensitivity_edit.merge_key);
-    }
-
-    float near_plane = settings.camera.near_plane;
-    const std::string near_label =
-        localization.text("ui.inspector.near_plane", "Near");
-    const UIContinuousEditResult near_edit = drag_float_with_left_label(
-        "camera_near", near_label.c_str(), &near_plane, active_edit, entity,
-        selection, 0.001f, 0.001f, 10000.0f, "%.4f");
-    if (near_edit.should_apply()) {
-      settings.camera.near_plane = near_plane;
-      apply_settings(settings, near_edit.merge_key);
-    }
-
-    float far_plane = settings.camera.far_plane;
-    const std::string far_label =
-        localization.text("ui.inspector.far_plane", "Far");
-    const UIContinuousEditResult far_edit = drag_float_with_left_label(
-        "camera_far", far_label.c_str(), &far_plane, active_edit, entity,
-        selection, 1.0f, 0.001f, 1000000.0f, "%.2f");
-    if (far_edit.should_apply()) {
-      settings.camera.far_plane = far_plane;
-      apply_settings(settings, far_edit.merge_key);
-    }
-  }
-
-  const std::string post_process_label =
-      localization.text("ui.inspector.post_process", "Post Process");
-  if (inspector_property_section("post_process", post_process_label.c_str())) {
-    bool enabled = settings.post_process.enabled;
-    const std::string enabled_label =
-        localization.text("ui.inspector.enabled", "Enabled");
-    if (checkbox_with_left_label("post_process_enabled", enabled_label.c_str(),
-                                 &enabled)) {
-      settings.post_process.enabled = enabled;
-      apply_settings(settings);
-    }
-
-    bool anti_aliasing = settings.post_process.anti_aliasing;
-    const std::string aa_label =
-        localization.text("ui.inspector.anti_aliasing", "Anti-Aliasing");
-    if (checkbox_with_left_label("post_process_aa", aa_label.c_str(),
-                                 &anti_aliasing)) {
-      settings.post_process.anti_aliasing = anti_aliasing;
-      apply_settings(settings);
-    }
-
-    bool dithering = settings.post_process.dithering;
-    const std::string dithering_label =
-        localization.text("ui.inspector.dithering", "Dithering");
-    if (checkbox_with_left_label("post_process_dithering",
-                                 dithering_label.c_str(), &dithering)) {
-      settings.post_process.dithering = dithering;
-      apply_settings(settings);
-    }
-
-    SceneToneMapping tone_mapping = settings.post_process.tone_mapping;
-    const std::string tone_mapping_label =
-        localization.text("ui.inspector.tone_mapping", "Tone Mapping");
-    const std::vector<std::pair<SceneToneMapping, std::string>>
-        tone_mapping_options{
-            {SceneToneMapping::Linear,
-             localization.text("ui.inspector.tone_mapping.linear", "Linear")},
-            {SceneToneMapping::AcesLegacy,
-             localization.text("ui.inspector.tone_mapping.aces_legacy",
-                               "ACES Legacy")},
-            {SceneToneMapping::Aces,
-             localization.text("ui.inspector.tone_mapping.aces", "ACES")},
-            {SceneToneMapping::Filmic,
-             localization.text("ui.inspector.tone_mapping.filmic", "Filmic")},
-            {SceneToneMapping::DisplayRange,
-             localization.text("ui.inspector.tone_mapping.display_range",
-                               "Display Range")},
-        };
-    if (combo_with_left_label("post_process_tone_mapping",
-                              tone_mapping_label.c_str(), &tone_mapping,
-                              tone_mapping_options)) {
-      settings.post_process.tone_mapping = tone_mapping;
-      apply_settings(settings);
-    }
-
-    bool ambient_occlusion = settings.post_process.ambient_occlusion;
-    const std::string ao_label = localization.text(
-        "ui.inspector.ambient_occlusion", "Ambient Occlusion");
-    if (checkbox_with_left_label("post_process_ao", ao_label.c_str(),
-                                 &ambient_occlusion)) {
-      settings.post_process.ambient_occlusion = ambient_occlusion;
-      apply_settings(settings);
-    }
-    if (settings.post_process.ambient_occlusion) {
-      float ao_intensity = settings.post_process.ambient_occlusion_intensity;
-      const std::string ao_intensity_label = localization.text(
-          "ui.inspector.ambient_occlusion_intensity", "AO Intensity");
-      const UIContinuousEditResult ao_intensity_edit =
-          drag_float_with_left_label("post_process_ao_intensity",
-                                     ao_intensity_label.c_str(), &ao_intensity,
-                                     active_edit, entity, selection, 0.01f,
-                                     0.0f, 8.0f, "%.3f");
-      if (ao_intensity_edit.should_apply()) {
-        settings.post_process.ambient_occlusion_intensity = ao_intensity;
-        apply_settings(settings, ao_intensity_edit.merge_key);
-      }
-
-      float ao_radius = settings.post_process.ambient_occlusion_radius;
-      const std::string ao_radius_label = localization.text(
-          "ui.inspector.ambient_occlusion_radius", "AO Radius");
-      const UIContinuousEditResult ao_radius_edit = drag_float_with_left_label(
-          "post_process_ao_radius", ao_radius_label.c_str(), &ao_radius,
-          active_edit, entity, selection, 0.01f, 0.0f, 10.0f, "%.3f");
-      if (ao_radius_edit.should_apply()) {
-        settings.post_process.ambient_occlusion_radius = ao_radius;
-        apply_settings(settings, ao_radius_edit.merge_key);
-      }
-    }
-
-    bool bloom = settings.post_process.bloom;
-    const std::string bloom_label =
-        localization.text("ui.inspector.bloom", "Bloom");
-    if (checkbox_with_left_label("post_process_bloom", bloom_label.c_str(),
-                                 &bloom)) {
-      settings.post_process.bloom = bloom;
-      apply_settings(settings);
-    }
-    float bloom_strength = settings.post_process.bloom_strength;
-    const std::string bloom_strength_label =
-        localization.text("ui.inspector.bloom_strength", "Bloom Strength");
-    const UIContinuousEditResult bloom_strength_edit =
-        drag_float_with_left_label("post_process_bloom_strength",
-                                   bloom_strength_label.c_str(),
-                                   &bloom_strength, active_edit, entity,
-                                   selection, 0.01f, 0.0f, 1.0f, "%.3f");
-    if (bloom_strength_edit.should_apply()) {
-      settings.post_process.bloom_strength = bloom_strength;
-      apply_settings(settings, bloom_strength_edit.merge_key);
-    }
-  }
-}
-
-/**
- * Represents a Bool Aggregate value used by the ImGui editor presentation layer.
- */
+/// Summarizes a boolean property across the inspected entity selection.
 struct BoolAggregate {
   bool has_value = false;
   bool all_true = true;
   bool any_true = false;
 
-  bool mixed() const { return any_true && !all_true; }
+  [[nodiscard]] bool mixed() const { return any_true && !all_true; }
 };
 
 BoolAggregate aggregate_visibility(const SceneDocument &document,
@@ -744,7 +179,9 @@ BoolAggregate aggregate_lock(const SceneDocument &document,
   return result;
 }
 
-bool same_float(float a, float b) { return std::fabs(a - b) <= 0.0001f; }
+bool same_float(float left, float right) {
+  return std::fabs(left - right) <= 0.0001f;
+}
 
 std::array<bool, 3> mixed_position_axes(const SceneDocument &document,
                                         const std::vector<EntityId> &selected,
@@ -794,701 +231,1472 @@ std::array<bool, 3> mixed_scale_axes(const SceneDocument &document,
   return mixed;
 }
 
+/// Selects the complete editor value when keyboard focus enters the field.
+class SelectAllLineEdit final : public QLineEdit {
+public:
+  explicit SelectAllLineEdit(QWidget *parent = nullptr) : QLineEdit(parent) {}
+
+protected:
+  void focusInEvent(QFocusEvent *event) override {
+    QLineEdit::focusInEvent(event);
+    QTimer::singleShot(0, this, &QLineEdit::selectAll);
+  }
+};
+
+/// Extends the stock spin box with an explicit cancel callback for previews.
+class InspectorDoubleSpinBox final : public QDoubleSpinBox {
+public:
+  explicit InspectorDoubleSpinBox(QWidget *parent = nullptr)
+      : QDoubleSpinBox(parent) {}
+
+  std::function<void()> cancel_handler;
+
+protected:
+  void keyPressEvent(QKeyEvent *event) override {
+    if (event != nullptr && event->key() == Qt::Key_Escape &&
+        cancel_handler != nullptr) {
+      cancel_handler();
+      clearFocus();
+      event->accept();
+      return;
+    }
+    QDoubleSpinBox::keyPressEvent(event);
+  }
+};
+
+/// Draws inspector property-cell separators from the active Fusion palette.
+class InspectorPropertyDelegate final : public QStyledItemDelegate {
+public:
+  using QStyledItemDelegate::QStyledItemDelegate;
+
+  void paint(QPainter *painter, const QStyleOptionViewItem &option,
+             const QModelIndex &index) const override {
+    QStyledItemDelegate::paint(painter, option, index);
+    if (painter == nullptr || !index.isValid()) {
+      return;
+    }
+
+    painter->save();
+    QPen separator(option.palette.mid().color());
+    separator.setCosmetic(true);
+    painter->setPen(separator);
+    painter->drawLine(option.rect.bottomLeft(), option.rect.bottomRight());
+    if (index.parent().isValid() && index.column() == 0) {
+      painter->drawLine(option.rect.topRight(), option.rect.bottomRight());
+    }
+    painter->restore();
+  }
+};
+
+/// Identifies which transform component an inspector preview edits.
+enum class TransformEditKind {
+  Position,
+  Rotation,
+  Scale,
+};
+
+/// Captures the selection and baseline values for one transform edit preview.
+struct TransformEditState {
+  TransformEditKind kind = TransformEditKind::Position;
+  EntityId primary = kInvalidEntityId;
+  std::vector<EntityId> selection;
+  std::array<float, 3> values{};
+};
+
 } // namespace
 
-float InspectorPanel::minimum_width(const UIContext& context) const {
-    // UIDockPanel applies setNextWindowMinWidth(context.style.sidebarMinWidth) before opening the window.
-    return context.style.sidebar_min_width;
-}
+/// Owns InspectorPanel's retained sections and transform preview state.
+struct InspectorPanel::Impl {
+  /// Identifies the expandable property-tree item that owns one section.
+  struct Section {
+    QTreeWidgetItem *item = nullptr;
+    QWidget *editor_parent = nullptr;
+  };
 
-ImVec2 InspectorPanel::panel_window_padding(const UIContext& context) const {
-  return {context.style.window_padding.x, context.style.window_padding.y};
-}
+  explicit Impl(InspectorPanel &panel) : panel_(panel) {
+    panel_.setObjectName(
+        QString::fromLatin1(ui_panel_stable_id(UIPanelId::Inspector)));
+    panel_.setWindowTitle(
+        QString::fromLatin1(ui_panel_key(UIPanelId::Inspector)));
 
-ImGuiWindowFlags InspectorPanel::window_flags(const UIContext& context) const {
-  return context.style.panel_window_flags;
-}
+    auto *root_layout = new QVBoxLayout(&panel_);
+    root_layout->setObjectName(QStringLiteral("inspector.layout"));
+    root_layout->setContentsMargins(0, 0, 0, 0);
 
-void InspectorPanel::cancel_active_transform_edit() {
-  if (active_transform_preview_.preview_active()) {
-    (void)active_transform_preview_.cancel();
+    tree_ = new QTreeWidget(&panel_);
+    tree_->setObjectName(QStringLiteral("inspector.tree"));
+    tree_->setColumnCount(2);
+    tree_->setRootIsDecorated(true);
+    tree_->setItemsExpandable(true);
+    tree_->setAlternatingRowColors(true);
+    tree_->setUniformRowHeights(false);
+    tree_->setWordWrap(false);
+    tree_->setSelectionMode(QAbstractItemView::NoSelection);
+    tree_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    tree_->setTextElideMode(Qt::ElideRight);
+    tree_->setItemDelegate(new InspectorPropertyDelegate(tree_));
+    tree_->header()->setVisible(true);
+    tree_->header()->setSectionsMovable(false);
+    tree_->header()->setSectionsClickable(false);
+    tree_->header()->setHighlightSections(false);
+    tree_->header()->setMinimumSectionSize(64);
+    tree_->header()->setSectionResizeMode(0, QHeaderView::Interactive);
+    tree_->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+    tree_->header()->setStretchLastSection(true);
+    tree_->header()->resizeSection(0, 140);
+    root_layout->addWidget(tree_);
+
+    const auto remember_section_state = [this](QTreeWidgetItem *item,
+                                                bool expanded) {
+      if (rebuilding_ || item == nullptr) {
+        return;
+      }
+      const QString stable_id = item->data(0, Qt::UserRole).toString();
+      if (!stable_id.isEmpty()) {
+        expanded_sections_[stable_id.toUtf8().toStdString()] = expanded;
+      }
+    };
+    QObject::connect(tree_, &QTreeWidget::itemExpanded, &panel_,
+                     [remember_section_state](QTreeWidgetItem *item) {
+                       remember_section_state(item, true);
+                     });
+    QObject::connect(tree_, &QTreeWidget::itemCollapsed, &panel_,
+                     [remember_section_state](QTreeWidgetItem *item) {
+                       remember_section_state(item, false);
+                     });
+    QObject::connect(tree_->header(), &QHeaderView::sectionResized, &panel_,
+                     [this](int, int, int) {
+                       clamp_label_column_width();
+                     });
+    QObject::connect(tree_->header(), &QHeaderView::geometriesChanged, &panel_,
+                     [this]() { clamp_label_column_width(); });
   }
-  active_transform_edit_.reset();
-}
 
-void InspectorPanel::draw_content(UIContext& context) {
-    // UIDockPanel routes hover input through context.requestPanelFocus(id()) before content draws.
-    const SceneDocument& document = context.scene.document;
-    const ModelingSessionService& modeling = context.scene.modeling;
+  void refresh(UIContext &context) {
+    editor_ = &context.intent.editor;
+    document_ = &context.scene.document;
+    modeling_ = &context.scene.modeling;
+    localization_ = &context.localization;
+    preview_document_ = context.inspector_preview != nullptr
+                            ? &context.inspector_preview->document
+                            : nullptr;
+    preview_assets_ = context.inspector_preview != nullptr
+                          ? &context.inspector_preview->assets
+                          : nullptr;
 
-    const std::vector<EntityId> selected = document.selected_entities();
-    const ModelingSelectionSummary selection = modeling.selection_summary();
-    LocalizationService& localization = context.localization;
-    const std::string mixed_label =
-        localization.text("ui.inspector.mixed", "Mixed");
-    const std::string mode_prefix =
-        localization.text("ui.inspector.mode", "Mode");
-    const std::string active_prefix =
-        localization.text("ui.inspector.active", "Active");
-    const std::string vertices_prefix =
-        localization.text("ui.inspector.vertices", "Vertices");
-    const std::string edges_prefix =
-        localization.text("ui.inspector.edges", "Edges");
-    const std::string faces_prefix =
-        localization.text("ui.inspector.faces", "Faces");
-    if (selected.empty()) {
+    std::vector<EntityId> next_selection = document_->selected_entities();
+    EntityId next_primary = document_->primary_selection();
+    if (next_primary == kInvalidEntityId && !next_selection.empty()) {
+      next_primary = next_selection.front();
+    }
+    const bool selection_changed =
+        next_selection != selection_ || next_primary != primary_;
+    if (selection_changed && active_color_dialog_ != nullptr) {
+      active_color_dialog_->reject();
+      return;
+    }
+    if (selection_changed) {
       cancel_active_transform_edit();
       active_continuous_edit_.reset();
-      if (selection.has_selection) {
-        const std::string mode =
-            localization.text(selection_mode_key(selection.mode),
-                              selection_mode_fallback(selection.mode));
-        const std::string active = localization.text(
-            active_selection_kind_key(selection.active_kind),
-            active_selection_kind_fallback(selection.active_kind));
-        ImGui::Text("%s: %s", mode_prefix.c_str(), mode.c_str());
-        ImGui::Text("%s: %s", active_prefix.c_str(), active.c_str());
-        ImGui::Text("%s: %u", vertices_prefix.c_str(),
-                    selection.selected_vertex_count);
-        ImGui::Text("%s: %u", edges_prefix.c_str(),
-                    selection.selected_edge_count);
-        ImGui::Text("%s: %u", faces_prefix.c_str(),
-                    selection.selected_face_count);
-      } else {
-        const std::string no_selection =
-            localization.text("ui.inspector.no_selection", "No selection");
-        ImGui::TextUnformatted(no_selection.c_str());
-      }
-        return;
+      continuous_edit_active_ = false;
+      active_continuous_id_.clear();
+      selection_ = std::move(next_selection);
+      primary_ = next_primary;
+      force_rebuild_ = true;
     }
 
-    EntityId primary = document.primary_selection();
-    if (primary == kInvalidEntityId) {
-      primary = selected.front();
+    const ModelingSelectionSummary summary = modeling_->selection_summary();
+    const bool presentation_changed =
+        force_rebuild_ || built_scene_revision_ != document_->revision() ||
+        built_modeling_content_revision_ != summary.content_revision ||
+        built_modeling_selection_revision_ != summary.selection_revision ||
+        built_locale_ != localization_->current_locale();
+    if (!presentation_changed) {
+      return;
     }
-    if (active_transform_edit_ &&
-        (active_transform_edit_->primary != primary ||
-         active_transform_edit_->selection != selected)) {
-      cancel_active_transform_edit();
-    }
-    active_continuous_edit_.reset_if_entity_scope_changed(
-        primary, std::span<const EntityId>(selected.data(), selected.size()));
-    const bool primary_is_scene_root = document.is_scene_root(primary);
-    if (is_component_selection_mode(selection.mode)) {
-      const std::string active = localization.text(
-          active_selection_kind_key(selection.active_kind),
-          active_selection_kind_fallback(selection.active_kind));
-      ImGui::Text("%s: %s", active_prefix.c_str(), active.c_str());
-      if (selection.selected_vertex_count > 0u) {
-        ImGui::Text("%s: %u", vertices_prefix.c_str(),
-                    selection.selected_vertex_count);
-      }
-      if (selection.selected_edge_count > 0u) {
-        ImGui::Text("%s: %u", edges_prefix.c_str(),
-                    selection.selected_edge_count);
-      }
-      if (selection.selected_face_count > 0u) {
-        ImGui::Text("%s: %u", faces_prefix.c_str(),
-                    selection.selected_face_count);
-      }
-    }
-
-    std::vector<EntityId> editable_selected;
-    editable_selected.reserve(selected.size());
-    for (const EntityId id : selected) {
-      if (!document.is_scene_root(id)) {
-        editable_selected.push_back(id);
-      }
-    }
-
-    const BoolAggregate visibility_aggregate =
-        aggregate_visibility(document, editable_selected);
-    const BoolAggregate lock_aggregate =
-        aggregate_lock(document, editable_selected);
-
-    if (!begin_inspector_property_table("inspector_properties")) {
+    if (!selection_changed &&
+        (active_transform_edit_.has_value() || continuous_edit_active_)) {
       return;
     }
 
-    const bool has_general_properties =
-        selected.size() == 1u || visibility_aggregate.has_value ||
-        lock_aggregate.has_value;
-    if (has_general_properties) {
-      const std::string general_label =
-          localization.text("ui.inspector.general", "General");
-      if (inspector_property_section("general", general_label.c_str())) {
-        if (selected.size() == 1u) {
-          std::array<char, 128> name_buffer;
-          copy_name_to_buffer(document.name(primary), name_buffer);
-          const std::string name_label =
-              localization.text("ui.inspector.name", "Name");
-          if (primary_is_scene_root) {
-            (void)input_text_with_left_label(
-                "name", name_label.c_str(), name_buffer.data(),
-                name_buffer.size(), ImGuiInputTextFlags_ReadOnly);
-          } else {
-            if (input_text_with_left_label(
-                    "name", name_label.c_str(), name_buffer.data(),
-                    name_buffer.size(),
-                    ImGuiInputTextFlags_EnterReturnsTrue |
-                        ImGuiInputTextFlags_AutoSelectAll)) {
-              (void)context.intent.editor.scene().rename(primary, name_buffer.data());
-            }
-          }
-        }
+    rebuild(summary);
+  }
 
-        if (visibility_aggregate.has_value) {
-          bool hidden = !visibility_aggregate.all_true;
-          const std::string hidden_label =
-              localization.text("ui.inspector.hidden", "Hidden");
-          if (checkbox_with_left_label("hidden", hidden_label.c_str(),
-                                       &hidden)) {
-            std::vector<QuaderSceneVisibilityEdit> edits;
-            edits.reserve(editable_selected.size());
-            for (const EntityId id : editable_selected) {
-              if (const VisibilityComponent *current = document.visibility(id)) {
-                edits.push_back(QuaderSceneVisibilityEdit{
-                    .entity = id,
-                    .before = current->visible,
-                    .after = !hidden,
-                });
-              }
-            }
-            (void)context.intent.editor.scene().set_visibility(
-                std::span<const QuaderSceneVisibilityEdit>(edits.data(),
-                                                           edits.size()));
-          }
-          if (visibility_aggregate.mixed()) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("%s", mixed_label.c_str());
-          }
-        }
+private:
+  void clamp_label_column_width() {
+    if (adjusting_label_column_width_ || tree_ == nullptr ||
+        !panel_.isVisible()) {
+      return;
+    }
+    QHeaderView *header = tree_->header();
+    const int maximum_label_width =
+        std::max(header->minimumSectionSize(),
+                 tree_->viewport()->width() -
+                     kInspectorMinimumValueColumnWidth);
+    if (header->sectionSize(0) <= maximum_label_width) {
+      return;
+    }
+    adjusting_label_column_width_ = true;
+    header->resizeSection(0, maximum_label_width);
+    adjusting_label_column_width_ = false;
+  }
 
-        if (lock_aggregate.has_value) {
-          bool locked = lock_aggregate.all_true;
-          const std::string locked_label =
-              localization.text("ui.inspector.locked", "Locked");
-          if (checkbox_with_left_label("locked", locked_label.c_str(),
-                                       &locked)) {
-            std::vector<QuaderSceneLockEdit> edits;
-            edits.reserve(editable_selected.size());
-            for (const EntityId id : editable_selected) {
-              if (const LockComponent *current = document.lock(id)) {
-                edits.push_back(QuaderSceneLockEdit{
-                    .entity = id,
-                    .before = current->locked,
-                    .after = locked,
-                });
-              }
-            }
-            (void)context.intent.editor.scene().set_locks(
-                std::span<const QuaderSceneLockEdit>(edits.data(),
-                                                     edits.size()));
-          }
-          if (lock_aggregate.mixed()) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("%s", mixed_label.c_str());
-          }
-        }
+  QString localized(std::string_view key, std::string_view fallback) const {
+    return localization_ != nullptr
+               ? qt_text(localization_->text(key, fallback))
+               : qt_text(fallback);
+  }
+
+  QString stable_name(std::string_view stable_id) const {
+    QString result = QStringLiteral("inspector.");
+    result.append(qt_text(stable_id));
+    return result;
+  }
+
+  void clear_content() {
+    tree_->clear();
+  }
+
+  void rebuild(const ModelingSelectionSummary &summary) {
+    const int previous_scroll = tree_->verticalScrollBar()->value();
+    rebuilding_ = true;
+    clear_content();
+
+    panel_.setWindowTitle(qt_text(
+        localization_->text(ui_panel_localization_key(UIPanelId::Inspector),
+                            ui_panel_key(UIPanelId::Inspector))));
+    tree_->setHeaderLabels(
+        {localized("ui.inspector.property", "Property"),
+         localized("ui.inspector.value", "Value")});
+
+    if (selection_.empty()) {
+      build_empty_selection(summary);
+    } else {
+      if (is_component_selection_mode(summary.mode)) {
+        build_component_selection_summary(summary);
+      }
+      build_general_section();
+      build_transform_section();
+
+      if (selection_.size() == 1u && document_->is_scene_root(primary_)) {
+        build_scene_settings_sections();
+      } else if (selection_.size() == 1u) {
+        build_mesh_sections();
+        build_light_section();
+      }
+      if (selection_.size() > 1u) {
+        build_component_count_section();
       }
     }
 
-    const TransformComponent* transform = document.transform(primary);
-    if (transform) {
-      std::size_t transform_count = 0;
-      for (const EntityId id : selected) {
-        if (document.transform(id)) {
-          ++transform_count;
-        }
-        }
+    built_scene_revision_ = document_->revision();
+    built_modeling_content_revision_ = summary.content_revision;
+    built_modeling_selection_revision_ = summary.selection_revision;
+    built_locale_ = localization_->current_locale();
+    force_rebuild_ = false;
+    rebuilding_ = false;
 
-        const std::string transform_label =
-            localization.text("ui.inspector.transform", "Transform");
-        if (inspector_property_section("transform", transform_label.c_str())) {
-          if (selected.size() > 1u) {
-            const std::string spatial_entities = localization.format(
-                "ui.inspector.spatial_entities", "{count} spatial entities",
-                {{"count", std::to_string(transform_count)}});
-            const std::string selection_label =
-                localization.text("ui.inspector.selection", "Selection");
-            inspector_property_row("spatial_entities", selection_label.c_str());
-            ImGui::TextDisabled("%s", spatial_entities.c_str());
-            inspector_end_property_row();
+    QTimer::singleShot(0, &panel_, [this, previous_scroll]() {
+      tree_->verticalScrollBar()->setValue(previous_scroll);
+      clamp_label_column_width();
+    });
+  }
+
+  QTreeWidgetItem *add_summary_label(std::string_view stable_id,
+                                     const QString &text) {
+    auto *item = new QTreeWidgetItem(tree_);
+    item->setText(0, text);
+    item->setData(0, Qt::UserRole, stable_name(stable_id));
+    item->setFlags(Qt::ItemIsEnabled);
+    item->setFirstColumnSpanned(true);
+    return item;
+  }
+
+  void build_empty_selection(const ModelingSelectionSummary &summary) {
+    if (!summary.has_selection) {
+      add_summary_label("summary.no_selection",
+                        localized("ui.inspector.no_selection", "No selection"));
+      return;
+    }
+
+    const QString mode = localized(selection_mode_key(summary.mode),
+                                   selection_mode_fallback(summary.mode));
+    const QString active =
+        localized(active_selection_kind_key(summary.active_kind),
+                  active_selection_kind_fallback(summary.active_kind));
+    add_summary_label("summary.mode",
+                      QStringLiteral("%1: %2").arg(
+                          localized("ui.inspector.mode", "Mode"), mode));
+    add_summary_label("summary.active",
+                      QStringLiteral("%1: %2").arg(
+                          localized("ui.inspector.active", "Active"), active));
+    add_summary_label("summary.vertices",
+                      QStringLiteral("%1: %2")
+                          .arg(localized("ui.inspector.vertices", "Vertices"))
+                          .arg(summary.selected_vertex_count));
+    add_summary_label("summary.edges",
+                      QStringLiteral("%1: %2")
+                          .arg(localized("ui.inspector.edges", "Edges"))
+                          .arg(summary.selected_edge_count));
+    add_summary_label("summary.faces",
+                      QStringLiteral("%1: %2")
+                          .arg(localized("ui.inspector.faces", "Faces"))
+                          .arg(summary.selected_face_count));
+  }
+
+  void
+  build_component_selection_summary(const ModelingSelectionSummary &summary) {
+    const QString active =
+        localized(active_selection_kind_key(summary.active_kind),
+                  active_selection_kind_fallback(summary.active_kind));
+    add_summary_label("summary.active",
+                      QStringLiteral("%1: %2").arg(
+                          localized("ui.inspector.active", "Active"), active));
+    if (summary.selected_vertex_count > 0u) {
+      add_summary_label("summary.vertices",
+                        QStringLiteral("%1: %2")
+                            .arg(localized("ui.inspector.vertices", "Vertices"))
+                            .arg(summary.selected_vertex_count));
+    }
+    if (summary.selected_edge_count > 0u) {
+      add_summary_label("summary.edges",
+                        QStringLiteral("%1: %2")
+                            .arg(localized("ui.inspector.edges", "Edges"))
+                            .arg(summary.selected_edge_count));
+    }
+    if (summary.selected_face_count > 0u) {
+      add_summary_label("summary.faces",
+                        QStringLiteral("%1: %2")
+                            .arg(localized("ui.inspector.faces", "Faces"))
+                            .arg(summary.selected_face_count));
+    }
+  }
+
+  Section add_section(std::string stable_id, const QString &title) {
+    const auto state = expanded_sections_.try_emplace(stable_id, false).first;
+    auto *item = new QTreeWidgetItem(tree_);
+    item->setText(0, title);
+    item->setData(0, Qt::UserRole, qt_text(stable_id));
+    item->setFlags(Qt::ItemIsEnabled);
+    item->setFirstColumnSpanned(true);
+    item->setExpanded(state->second);
+    return {.item = item, .editor_parent = tree_->viewport()};
+  }
+
+  void add_row(Section &section, std::string_view stable_id,
+               const QString &label, QWidget *field) {
+    auto *item = new QTreeWidgetItem(section.item);
+    item->setText(0, label);
+    item->setData(0, Qt::UserRole, stable_name(stable_id));
+    item->setFlags(Qt::ItemIsEnabled);
+
+    field->setMinimumWidth(0);
+    QSizePolicy policy = field->sizePolicy();
+    policy.setHorizontalPolicy(QSizePolicy::Ignored);
+    policy.setHorizontalStretch(1);
+    field->setSizePolicy(policy);
+    tree_->setItemWidget(item, 1, field);
+  }
+
+  QCheckBox *add_checkbox(Section &section, std::string stable_id,
+                          const QString &label, bool checked,
+                          std::function<void(bool)> changed) {
+    auto *box = new QCheckBox(section.editor_parent);
+    box->setObjectName(stable_name(stable_id));
+    box->setChecked(checked);
+    add_row(section, stable_id, label, box);
+    QObject::connect(box, &QCheckBox::toggled, &panel_,
+                     [this, changed = std::move(changed)](bool value) {
+                       if (!rebuilding_) {
+                         changed(value);
+                       }
+                     });
+    return box;
+  }
+
+  void add_mixed_checkbox(Section &section, std::string stable_id,
+                          const QString &label, bool checked, bool mixed,
+                          std::function<void(bool)> changed) {
+    auto *field = new QWidget(section.editor_parent);
+    field->setObjectName(stable_name(stable_id + ".field"));
+    auto *layout = new QHBoxLayout(field);
+    layout->setContentsMargins(0, 0, 0, 0);
+    auto *box = new QCheckBox(field);
+    box->setObjectName(stable_name(stable_id));
+    box->setChecked(checked);
+    layout->addWidget(box);
+    if (mixed) {
+      auto *mixed_label =
+          new QLabel(localized("ui.inspector.mixed", "Mixed"), field);
+      mixed_label->setObjectName(stable_name(stable_id + ".mixed"));
+      layout->addWidget(mixed_label);
+    }
+    layout->addStretch(1);
+    add_row(section, stable_id, label, field);
+    QObject::connect(box, &QCheckBox::toggled, &panel_,
+                     [this, changed = std::move(changed)](bool value) {
+                       if (!rebuilding_) {
+                         changed(value);
+                       }
+                     });
+  }
+
+  template <typename Enum>
+  QComboBox *
+  add_enum_combo(Section &section, std::string stable_id, const QString &label,
+                 Enum current,
+                 const std::vector<std::pair<Enum, QString>> &options,
+                 std::function<void(Enum)> changed) {
+    auto *combo = new QComboBox(section.editor_parent);
+    combo->setObjectName(stable_name(stable_id));
+    int selected_index = -1;
+    for (std::size_t index = 0; index < options.size(); ++index) {
+      combo->addItem(options[index].second,
+                     static_cast<int>(options[index].first));
+      if (options[index].first == current) {
+        selected_index = static_cast<int>(index);
+      }
+    }
+    combo->setCurrentIndex(selected_index);
+    add_row(section, stable_id, label, combo);
+    QObject::connect(combo, &QComboBox::activated, &panel_,
+                     [this, combo, changed = std::move(changed)](int index) {
+                       if (rebuilding_ || index < 0) {
+                         return;
+                       }
+                       changed(
+                           static_cast<Enum>(combo->itemData(index).toInt()));
+                     });
+    return combo;
+  }
+
+  QDoubleSpinBox *
+  add_continuous_number(Section &section, std::string stable_id,
+                        const QString &label, double value, double minimum,
+                        double maximum, double step, int decimals,
+                        std::function<void(double, std::string)> changed) {
+    auto *spin = new InspectorDoubleSpinBox(section.editor_parent);
+    spin->setObjectName(stable_name(stable_id));
+    spin->setRange(minimum, maximum);
+    spin->setSingleStep(step);
+    spin->setDecimals(decimals);
+    spin->setKeyboardTracking(true);
+    spin->setValue(value);
+    add_row(section, stable_id, label, spin);
+
+    QObject::connect(
+        spin, &QDoubleSpinBox::valueChanged, &panel_,
+        [this, stable_id, changed = std::move(changed)](double next) {
+          if (rebuilding_) {
+            return;
           }
+          const std::span<const EntityId> selection(selection_.data(),
+                                                    selection_.size());
+          const std::string merge_key =
+              active_continuous_edit_.ensure_merge_key(stable_id, primary_,
+                                                       selection);
+          const std::array<float, 1> staged{static_cast<float>(next)};
+          active_continuous_edit_.stage(
+              stable_id, primary_, selection,
+              std::span<const float>(staged.data(), staged.size()));
+          continuous_edit_active_ = true;
+          active_continuous_id_ = stable_id;
+          changed(next, merge_key);
+        });
+    QObject::connect(spin, &QDoubleSpinBox::editingFinished, &panel_,
+                     [this, stable_id]() {
+                       if (rebuilding_ || active_continuous_id_ != stable_id) {
+                         return;
+                       }
+                       active_continuous_edit_.reset();
+                       continuous_edit_active_ = false;
+                       active_continuous_id_.clear();
+                       force_rebuild_ = true;
+                     });
+    return spin;
+  }
 
-          auto transform_edit_matches = [&](InspectorTransformEditKind kind) {
-            return active_transform_edit_ &&
-                   active_transform_edit_->kind == kind &&
-                   active_transform_edit_->primary == primary &&
-                   active_transform_edit_->selection == selected;
-          };
+  QtColorSwatchButton *
+  add_color_button(Section &section, std::string stable_id,
+                   const QString &label, QVec3 value,
+                   std::function<void(QVec3, std::string)> changed) {
+    const QColor initial = QColor::fromRgbF(std::clamp(value.x, 0.0f, 1.0f),
+                                            std::clamp(value.y, 0.0f, 1.0f),
+                                            std::clamp(value.z, 0.0f, 1.0f));
+    auto *button = new QtColorSwatchButton(section.editor_parent);
+    button->setObjectName(stable_name(stable_id));
+    button->setAccessibleName(label);
+    button->set_swatch_color(initial);
+    add_row(section, stable_id, label, button);
 
-          auto refresh_primary_transform = [&]() {
-            transform = document.transform(primary);
-          };
+    QObject::connect(
+        button, &QtColorSwatchButton::clicked, &panel_,
+        [this, stable_id, initial, button,
+         changed = std::move(changed)]() mutable {
+          const std::vector<EntityId> edit_selection = selection_;
+          const EntityId edit_primary = primary_;
+          const std::span<const EntityId> selection_span(edit_selection.data(),
+                                                         edit_selection.size());
+          const std::string merge_key =
+              active_continuous_edit_.ensure_merge_key(stable_id, edit_primary,
+                                                       selection_span);
+          continuous_edit_active_ = true;
+          active_continuous_id_ = stable_id;
 
-          auto apply_active_transform_edit_values =
-              [&](InspectorTransformEditKind kind, float values[3]) {
-                if (!transform_edit_matches(kind)) {
+          QColorDialog dialog(initial, &panel_);
+          dialog.setObjectName(stable_name(stable_id + ".dialog"));
+          dialog.setOption(QColorDialog::DontUseNativeDialog, true);
+          active_color_dialog_ = &dialog;
+          QPointer<QtColorSwatchButton> guarded_button(button);
+          QColor last_applied = initial;
+          bool color_changed = false;
+          QObject::connect(
+              &dialog, &QColorDialog::currentColorChanged, &dialog,
+              [this, &last_applied, &color_changed, guarded_button, merge_key,
+               edit_primary, edit_selection, stable_id,
+               changed](const QColor &color) {
+                if (!color.isValid() || color == last_applied) {
                   return;
                 }
-                values[0] = active_transform_edit_->values[0];
-                values[1] = active_transform_edit_->values[1];
-                values[2] = active_transform_edit_->values[2];
-              };
-
-          auto stage_transform_edit = [&](InspectorTransformEditKind kind,
-                                          const float values[3]) {
-            active_transform_edit_ = InspectorTransformEditState{
-                .kind = kind,
-                .primary = primary,
-                .selection = selected,
-                .values = {values[0], values[1], values[2]},
-            };
-          };
-
-          auto begin_transform_preview = [&](InspectorTransformEditKind kind) {
-            if (transform_edit_matches(kind) &&
-                active_transform_preview_.preview_active()) {
-              return true;
-            }
-            if (context.inspector_preview == nullptr) {
-              return false;
-            }
-            SceneDocument &preview_document = context.inspector_preview->document;
-            const AssetRegistry &preview_assets = context.inspector_preview->assets;
-
-            cancel_active_transform_edit();
-            refresh_primary_transform();
-            if (transform == nullptr) {
-              return false;
-            }
-
-            switch (kind) {
-            case InspectorTransformEditKind::Position:
-              return active_transform_preview_
-                  .begin_move_selected_to_primary_position_preview(
-                      preview_document, primary, "Set Transform");
-            case InspectorTransformEditKind::Rotation:
-              return active_transform_preview_
-                  .begin_rotate_selected_to_primary_euler_preview(
-                      preview_document, preview_assets, primary,
-                      "Set Transform");
-            case InspectorTransformEditKind::Scale:
-              return active_transform_preview_
-                  .begin_scale_selected_to_primary_scale_preview(
-                      preview_document, preview_assets, primary,
-                      "Set Transform");
-            }
-            return false;
-          };
-
-          auto final_transform_edit_values =
-              [&](InspectorTransformEditKind kind, const float values[3]) {
-                std::array<float, 3> result{values[0], values[1], values[2]};
-                if (transform_edit_matches(kind)) {
-                  result = active_transform_edit_->values;
+                last_applied = color;
+                color_changed = true;
+                const QVec3 next{
+                    static_cast<float>(color.redF()),
+                    static_cast<float>(color.greenF()),
+                    static_cast<float>(color.blueF()),
+                };
+                const std::array<float, 3> staged{next.x, next.y, next.z};
+                const std::span<const EntityId> edit_selection_span(
+                    edit_selection.data(), edit_selection.size());
+                active_continuous_edit_.stage(
+                    stable_id, edit_primary, edit_selection_span,
+                    std::span<const float>(staged.data(), staged.size()));
+                changed(next, merge_key);
+                if (guarded_button != nullptr) {
+                  guarded_button->set_swatch_color(color);
                 }
-                return result;
-              };
+              });
 
-          auto preview_transform_edit = [&](InspectorTransformEditKind kind,
-                                            const float values[3]) {
-            if (!transform_edit_matches(kind) ||
-                !active_transform_preview_.preview_active()) {
-              return;
+          const int result = dialog.exec();
+          if (result != QDialog::Accepted && color_changed) {
+            changed({static_cast<float>(initial.redF()),
+                     static_cast<float>(initial.greenF()),
+                     static_cast<float>(initial.blueF())},
+                    merge_key);
+            if (guarded_button != nullptr) {
+              guarded_button->set_swatch_color(initial);
             }
-            if (context.inspector_preview == nullptr) {
-              return;
-            }
-            SceneDocument &preview_document = context.inspector_preview->document;
+          }
+          active_color_dialog_ = nullptr;
+          if (active_continuous_id_ == stable_id) {
+            active_continuous_edit_.reset();
+            continuous_edit_active_ = false;
+            active_continuous_id_.clear();
+          }
+          force_rebuild_ = true;
+        });
+    return button;
+  }
 
-            DocumentCommandResult preview_result;
-            switch (kind) {
-            case InspectorTransformEditKind::Position:
-              preview_result =
-                  active_transform_preview_.preview_selected_to_primary_position(
-                      preview_document, primary,
-                      {values[0], values[1], values[2]});
-              break;
-            case InspectorTransformEditKind::Rotation:
-              preview_result =
-                  active_transform_preview_.preview_selected_to_primary_euler(
-                      preview_document, primary,
-                      {values[0] * kDegToRad, values[1] * kDegToRad,
-                       values[2] * kDegToRad});
-              break;
-            case InspectorTransformEditKind::Scale:
-              preview_result =
-                  active_transform_preview_.preview_selected_to_primary_scale(
-                      preview_document, primary,
-                      {values[0], values[1], values[2]});
-              break;
-            }
+  void add_read_only_value(Section &section, std::string stable_id,
+                           const QString &label, const QString &value) {
+    auto *text = new QLabel(value, section.editor_parent);
+    text->setObjectName(stable_name(stable_id));
+    text->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    add_row(section, stable_id, label, text);
+  }
 
-            if (!preview_result.ok) {
-              cancel_active_transform_edit();
-            }
-            refresh_primary_transform();
-          };
-
-          auto finish_transform_preview = [&]() {
-            if (active_transform_preview_.preview_active()) {
-              (void)active_transform_preview_.commit(context.intent.editor);
-            }
-            active_transform_edit_.reset();
-            refresh_primary_transform();
-          };
-
-          float position[3] = {transform->position.x, transform->position.y,
-                               transform->position.z};
-          apply_active_transform_edit_values(
-              InspectorTransformEditKind::Position, position);
-          const std::array<bool, 3> position_mixed =
-              mixed_position_axes(document, selected, *transform);
-          const std::string position_label =
-              localization.text("ui.inspector.position", "Position");
-          const AxisDragFloatResult position_result = axis_drag_float3(
-              "position", position_label.c_str(), position, position_mixed,
-              mixed_label.c_str(), context.style, 0.05f);
-          if (position_result.activated) {
-            (void)begin_transform_preview(InspectorTransformEditKind::Position);
-          }
-          if (position_result.activated || position_result.changed) {
-            stage_transform_edit(InspectorTransformEditKind::Position,
-                                 position);
-          }
-          if (position_result.changed) {
-            preview_transform_edit(InspectorTransformEditKind::Position,
-                                   position);
-          }
-          if (position_result.deactivated_after_edit) {
-            const std::array<float, 3> final_position =
-                final_transform_edit_values(
-                    InspectorTransformEditKind::Position, position);
-            preview_transform_edit(InspectorTransformEditKind::Position,
-                                   final_position.data());
-            finish_transform_preview();
-          } else if (position_result.deactivated) {
-            cancel_active_transform_edit();
-            refresh_primary_transform();
-          }
-
-          const QVec3 displayed_rotation =
-              positive_euler_radians(transform->rotation_euler);
-          float rotation[3] = {
-              displayed_rotation.x * kRadToDeg,
-              displayed_rotation.y * kRadToDeg,
-              displayed_rotation.z * kRadToDeg,
-          };
-          apply_active_transform_edit_values(
-              InspectorTransformEditKind::Rotation, rotation);
-          const std::array<bool, 3> rotation_mixed =
-              mixed_rotation_axes(document, selected, *transform);
-          const std::string rotation_label =
-              localization.text("ui.inspector.rotation", "Rotation");
-          const AxisDragFloatResult rotation_result = axis_drag_float3(
-              "rotation", rotation_label.c_str(), rotation, rotation_mixed,
-              mixed_label.c_str(), context.style, 0.5f);
-          if (rotation_result.activated) {
-            (void)begin_transform_preview(InspectorTransformEditKind::Rotation);
-          }
-          if (rotation_result.activated || rotation_result.changed) {
-            stage_transform_edit(InspectorTransformEditKind::Rotation,
-                                 rotation);
-          }
-          if (rotation_result.changed) {
-            preview_transform_edit(InspectorTransformEditKind::Rotation,
-                                   rotation);
-          }
-          if (rotation_result.deactivated_after_edit) {
-            const std::array<float, 3> final_rotation =
-                final_transform_edit_values(
-                    InspectorTransformEditKind::Rotation, rotation);
-            preview_transform_edit(InspectorTransformEditKind::Rotation,
-                                   final_rotation.data());
-            finish_transform_preview();
-          } else if (rotation_result.deactivated) {
-            cancel_active_transform_edit();
-            refresh_primary_transform();
-          }
-
-          float scale[3] = {transform->scale.x, transform->scale.y,
-                            transform->scale.z};
-          apply_active_transform_edit_values(InspectorTransformEditKind::Scale,
-                                             scale);
-          const std::array<bool, 3> scale_mixed =
-              mixed_scale_axes(document, selected, *transform);
-          const std::string scale_label =
-              localization.text("ui.inspector.scale", "Scale");
-          const AxisDragFloatResult scale_result = axis_drag_float3(
-              "scale", scale_label.c_str(), scale, scale_mixed,
-              mixed_label.c_str(), context.style, 0.02f, 0.001f, 1000.0f);
-          if (scale_result.activated) {
-            (void)begin_transform_preview(InspectorTransformEditKind::Scale);
-          }
-          if (scale_result.activated || scale_result.changed) {
-            stage_transform_edit(InspectorTransformEditKind::Scale, scale);
-          }
-          if (scale_result.changed) {
-            preview_transform_edit(InspectorTransformEditKind::Scale, scale);
-          }
-          if (scale_result.deactivated_after_edit) {
-            const std::array<float, 3> final_scale =
-                final_transform_edit_values(InspectorTransformEditKind::Scale,
-                                            scale);
-            preview_transform_edit(InspectorTransformEditKind::Scale,
-                                   final_scale.data());
-            finish_transform_preview();
-          } else if (scale_result.deactivated) {
-            cancel_active_transform_edit();
-            refresh_primary_transform();
-          }
-        }
+  void apply_scene_settings(
+      EntityId entity,
+      const std::function<void(SceneSettingsComponent &)> &mutation,
+      std::string merge_key = {}) {
+    if (editor_ == nullptr || document_ == nullptr) {
+      return;
     }
+    const SceneSettingsComponent *current = document_->scene_settings(entity);
+    if (current == nullptr) {
+      return;
+    }
+    SceneSettingsComponent next = *current;
+    mutation(next);
+    next.environment.intensity = std::max(next.environment.intensity, 0.0f);
+    next.environment.background_intensity =
+        std::max(next.environment.background_intensity, 0.0f);
+    next.camera.aperture = std::max(next.camera.aperture, 0.01f);
+    next.camera.shutter_speed = std::max(next.camera.shutter_speed, 0.000001f);
+    next.camera.sensitivity = std::max(next.camera.sensitivity, 1.0f);
+    next.camera.near_plane = std::max(next.camera.near_plane, 0.001f);
+    next.camera.far_plane =
+        std::max(next.camera.far_plane, next.camera.near_plane + 0.001f);
+    next.post_process.ambient_occlusion_intensity =
+        std::max(next.post_process.ambient_occlusion_intensity, 0.0f);
+    next.post_process.ambient_occlusion_radius =
+        std::max(next.post_process.ambient_occlusion_radius, 0.0f);
+    next.post_process.bloom_strength =
+        std::max(next.post_process.bloom_strength, 0.0f);
+    (void)editor_->scene().set_scene_settings(
+        entity, to_api_scene_settings(next),
+        QuaderSceneEditOptions{.merge_key = std::move(merge_key)});
+  }
 
-    if (selected.size() == 1u && primary_is_scene_root) {
-      if (const SceneSettingsComponent *settings =
-              document.scene_settings(primary)) {
-        draw_scene_settings_inspector(
-            context, primary,
-            std::span<const EntityId>(selected.data(), selected.size()),
-            active_continuous_edit_, *settings, localization);
+  void
+  apply_mesh_component(EntityId entity,
+                       const std::function<void(MeshComponent &)> &mutation) {
+    if (editor_ == nullptr || document_ == nullptr) {
+      return;
+    }
+    const MeshComponent *current = document_->mesh(entity);
+    if (current == nullptr) {
+      return;
+    }
+    MeshComponent next = *current;
+    mutation(next);
+    (void)editor_->scene().set_mesh_component(entity,
+                                              to_api_mesh_component(next));
+  }
+
+  void
+  apply_light_component(EntityId entity,
+                        const std::function<void(LightComponent &)> &mutation,
+                        std::string merge_key = {}) {
+    if (editor_ == nullptr || document_ == nullptr) {
+      return;
+    }
+    const LightComponent *current = document_->light(entity);
+    if (current == nullptr) {
+      return;
+    }
+    LightComponent next = *current;
+    mutation(next);
+    next.range = std::max(next.range, kInspectorLightRangeMin);
+    next.intensity = std::max(next.intensity, 0.0f);
+    (void)editor_->scene().set_light_component(
+        entity, to_api_light_component(next),
+        QuaderSceneEditOptions{.merge_key = std::move(merge_key)});
+  }
+
+  void build_general_section() {
+    std::vector<EntityId> editable_selected;
+    editable_selected.reserve(selection_.size());
+    for (const EntityId entity : selection_) {
+      if (!document_->is_scene_root(entity)) {
+        editable_selected.push_back(entity);
       }
-      end_inspector_property_table();
+    }
+    const BoolAggregate visibility =
+        aggregate_visibility(*document_, editable_selected);
+    const BoolAggregate lock = aggregate_lock(*document_, editable_selected);
+    if (selection_.size() != 1u && !visibility.has_value && !lock.has_value) {
       return;
     }
 
-    if (selected.size() == 1u) {
-        if (const MeshComponent *current_mesh = document.mesh(primary)) {
-          MeshComponent mesh = *current_mesh;
-          auto apply_mesh_component = [&](MeshComponent next) {
-          (void)context.intent.editor.scene().set_mesh_component(
-              primary, to_api_mesh_component(next));
-        };
-
-        const std::string export_label =
-            localization.text("ui.inspector.export", "Export");
-        if (inspector_property_section("export", export_label.c_str())) {
-          bool editor_only = mesh.editor_only;
-          const std::string editor_only_label =
-              localization.text("ui.inspector.editor_only", "Editor Only");
-          if (checkbox_with_left_label("editor_only", editor_only_label.c_str(),
-                                       &editor_only)) {
-            mesh.editor_only = editor_only;
-            apply_mesh_component(mesh);
-          }
-        }
-
-        const std::string lighting_label =
-            localization.text("ui.inspector.lighting", "Lighting");
-        if (inspector_property_section("lighting", lighting_label.c_str())) {
-          bool cast_shadows = mesh.cast_shadows;
-          const std::string cast_shadows_label =
-              localization.text("ui.inspector.cast_shadows", "Cast Shadows");
-          if (checkbox_with_left_label(
-                  "cast_shadows", cast_shadows_label.c_str(), &cast_shadows)) {
-            mesh.cast_shadows = cast_shadows;
-            apply_mesh_component(mesh);
-          }
-
-          bool double_sided = mesh.double_sided;
-          const std::string double_sided_label =
-              localization.text("ui.inspector.double_sided", "Double sided");
-          if (checkbox_with_left_label(
-                  "double_sided", double_sided_label.c_str(), &double_sided)) {
-            mesh.double_sided = double_sided;
-            apply_mesh_component(mesh);
-          }
-        }
-
-        const std::string physics_label =
-            localization.text("ui.inspector.physics", "Physics");
-        if (inspector_property_section("physics", physics_label.c_str())) {
-          bool generate_collisions = mesh.generate_collisions;
-          const std::string generate_collisions_label = localization.text(
-              "ui.inspector.generate_collisions", "Generate Collisions");
-          if (checkbox_with_left_label("generate_collisions",
-                                       generate_collisions_label.c_str(),
-                                       &generate_collisions)) {
-            mesh.generate_collisions = generate_collisions;
-            apply_mesh_component(mesh);
-          }
-
-          MeshCollisionType collision_type = mesh.collision_type;
-          const std::string collision_type_label = localization.text(
-              "ui.inspector.collision_type", "Collision Type");
-          const std::vector<std::pair<MeshCollisionType, std::string>>
-              collision_options{
-                  {MeshCollisionType::Box,
-                   localization.text("ui.inspector.collision_type.box", "Box")},
-                  {MeshCollisionType::Sphere,
-                   localization.text("ui.inspector.collision_type.sphere",
-                                     "Sphere")},
-                  {MeshCollisionType::Cylinder,
-                   localization.text("ui.inspector.collision_type.cylinder",
-                                     "Cylinder")},
-                  {MeshCollisionType::ConvexHull,
-                   localization.text("ui.inspector.collision_type.convex_hull",
-                                     "Convex Hull")},
-                  {MeshCollisionType::Mesh,
-                   localization.text("ui.inspector.collision_type.mesh",
-                                     "Mesh")},
-              };
-          if (combo_with_left_label("collision_type",
-                                    collision_type_label.c_str(),
-                                    &collision_type, collision_options)) {
-            mesh.collision_type = collision_type;
-            apply_mesh_component(mesh);
-          }
-
-          bool display_collision = mesh.display_collision;
-          const std::string display_collision_label = localization.text(
-              "ui.inspector.display_collision", "Display Collision");
-          if (checkbox_with_left_label("display_collision",
-                                       display_collision_label.c_str(),
-                                       &display_collision)) {
-            mesh.display_collision = display_collision;
-            apply_mesh_component(mesh);
-          }
-
-          MeshPhysicsBodyType body_type = mesh.body_type;
-          const std::string body_type_label =
-              localization.text("ui.inspector.body_type", "Body type");
-          const std::vector<std::pair<MeshPhysicsBodyType, std::string>>
-              body_options{
-                  {MeshPhysicsBodyType::StaticBody,
-                   localization.text("ui.inspector.body_type.static_body",
-                                     "Static Body")},
-                  {MeshPhysicsBodyType::RigidBody,
-                   localization.text("ui.inspector.body_type.rigid_body",
-                                     "Rigid Body")},
-              };
-          if (combo_with_left_label("body_type", body_type_label.c_str(),
-                                    &body_type, body_options)) {
-            mesh.body_type = body_type;
-            apply_mesh_component(mesh);
-          }
-        }
+    Section section =
+        add_section("general", localized("ui.inspector.general", "General"));
+    if (selection_.size() == 1u) {
+      auto *name = new SelectAllLineEdit(section.editor_parent);
+      name->setObjectName(stable_name("general.name"));
+      name->setMaxLength(127);
+      if (const NameComponent *component = document_->name(primary_)) {
+        name->setText(qt_text(component->name));
       }
+      const bool scene_root = document_->is_scene_root(primary_);
+      name->setReadOnly(scene_root);
+      add_row(section, "general.name", localized("ui.inspector.name", "Name"),
+              name);
+      if (!scene_root) {
+        const EntityId entity = primary_;
+        QObject::connect(name, &QLineEdit::returnPressed, &panel_,
+                         [this, name, entity]() {
+                           if (!rebuilding_) {
+                             (void)editor_->scene().rename(
+                                 entity, name->text().toUtf8().toStdString());
+                           }
+                         });
+      }
+    }
 
-      if (const LightComponent *current_light = document.light(primary)) {
-        LightComponent light = *current_light;
-        auto apply_light_component = [&](LightComponent next,
-                                         std::string merge_key = {}) {
-          next.range = std::max(next.range, kInspectorLightRangeMin);
-          next.intensity = std::max(next.intensity, 0.0f);
-          (void)context.intent.editor.scene().set_light_component(
-              primary, to_api_light_component(next),
-              QuaderSceneEditOptions{.merge_key = std::move(merge_key)});
-        };
+    if (visibility.has_value) {
+      const bool hidden = !visibility.all_true;
+      add_mixed_checkbox(section, "general.hidden",
+                         localized("ui.inspector.hidden", "Hidden"), hidden,
+                         visibility.mixed(),
+                         [this, editable_selected](bool next_hidden) {
+                           std::vector<QuaderSceneVisibilityEdit> edits;
+                           edits.reserve(editable_selected.size());
+                           for (const EntityId entity : editable_selected) {
+                             if (const VisibilityComponent *current =
+                                     document_->visibility(entity)) {
+                               edits.push_back({.entity = entity,
+                                                .before = current->visible,
+                                                .after = !next_hidden});
+                             }
+                           }
+                           (void)editor_->scene().set_visibility(
+                               std::span<const QuaderSceneVisibilityEdit>(
+                                   edits.data(), edits.size()));
+                         });
+    }
 
-        const std::string light_label =
-            localization.text("ui.inspector.light", "Light");
-        if (inspector_property_section("light", light_label.c_str())) {
-          LightType type = light.type;
-          const std::string type_label =
-              localization.text("ui.inspector.light_type", "Type");
-          const std::vector<std::pair<LightType, std::string>> type_options{
-              {LightType::Directional,
-               localization.text("ui.inspector.light_type.directional",
-                                 "Directional")},
-              {LightType::Point,
-               localization.text("ui.inspector.light_type.point", "Point")},
-              {LightType::Spot,
-               localization.text("ui.inspector.light_type.spot", "Spot")},
-          };
-          if (combo_with_left_label("light_type", type_label.c_str(), &type,
-                                    type_options)) {
-            light.type = type;
-            apply_light_component(light);
-          }
-
-          float color[3] = {light.color.x, light.color.y, light.color.z};
-          const std::string color_label =
-              localization.text("ui.inspector.color", "Color");
-          const UIContinuousEditResult color_edit = color_edit3_with_left_label(
-              "light_color", color_label.c_str(), color,
-              active_continuous_edit_, primary,
-              std::span<const EntityId>(selected.data(), selected.size()));
-          if (color_edit.should_apply()) {
-            light.color = {
-                std::clamp(color[0], 0.0f, 1.0f),
-                std::clamp(color[1], 0.0f, 1.0f),
-                std::clamp(color[2], 0.0f, 1.0f),
-            };
-            apply_light_component(light, color_edit.merge_key);
-          }
-
-          float intensity = light.intensity;
-          const std::string intensity_label =
-              localization.text("ui.inspector.intensity", "Intensity");
-          const UIContinuousEditResult intensity_edit =
-              drag_float_with_left_label(
-                  "light_intensity", intensity_label.c_str(), &intensity,
-                  active_continuous_edit_, primary,
-                  std::span<const EntityId>(selected.data(), selected.size()),
-                  0.01f, 0.0f, 16.0f, "%.3f");
-          if (intensity_edit.should_apply()) {
-            light.intensity = intensity;
-            apply_light_component(light, intensity_edit.merge_key);
-          }
-
-          if (light.type == LightType::Point || light.type == LightType::Spot) {
-            float range = light.range;
-            const std::string range_label =
-                localization.text("ui.inspector.range", "Range");
-            const UIContinuousEditResult range_edit =
-                drag_float_with_left_label(
-                    "light_range", range_label.c_str(), &range,
-                    active_continuous_edit_, primary,
-                    std::span<const EntityId>(selected.data(), selected.size()),
-                    0.1f, kInspectorLightRangeMin,
-                    kInspectorLightRangeSliderMax, "%.2f",
-                    ImGuiSliderFlags_None);
-            if (range_edit.should_apply()) {
-              light.range = range;
-              apply_light_component(light, range_edit.merge_key);
+    if (lock.has_value) {
+      add_mixed_checkbox(
+          section, "general.locked", localized("ui.inspector.locked", "Locked"),
+          lock.all_true, lock.mixed(),
+          [this, editable_selected](bool next_locked) {
+            std::vector<QuaderSceneLockEdit> edits;
+            edits.reserve(editable_selected.size());
+            for (const EntityId entity : editable_selected) {
+              if (const LockComponent *current = document_->lock(entity)) {
+                edits.push_back({.entity = entity,
+                                 .before = current->locked,
+                                 .after = next_locked});
+              }
             }
-          }
+            (void)editor_->scene().set_locks(
+                std::span<const QuaderSceneLockEdit>(edits.data(),
+                                                     edits.size()));
+          });
+    }
+  }
 
-          bool cast_shadows = light.casts_shadows;
-          const std::string cast_shadows_label =
-              localization.text("ui.inspector.cast_shadows", "Cast Shadows");
-          if (checkbox_with_left_label("light_cast_shadows",
-                                       cast_shadows_label.c_str(),
-                                       &cast_shadows)) {
-            light.casts_shadows = cast_shadows;
-            apply_light_component(light);
-          }
+  void build_transform_section() {
+    const TransformComponent *transform = document_->transform(primary_);
+    if (transform == nullptr) {
+      return;
+    }
+    Section section = add_section(
+        "transform", localized("ui.inspector.transform", "Transform"));
+
+    if (selection_.size() > 1u) {
+      std::size_t transform_count = 0;
+      for (const EntityId entity : selection_) {
+        transform_count += document_->transform(entity) != nullptr ? 1u : 0u;
+      }
+      const std::string value = localization_->format(
+          "ui.inspector.spatial_entities", "{count} spatial entities",
+          {{"count", std::to_string(transform_count)}});
+      add_read_only_value(section, "transform.selection",
+                          localized("ui.inspector.selection", "Selection"),
+                          qt_text(value));
+    }
+
+    const std::array<double, 3> position{
+        transform->position.x,
+        transform->position.y,
+        transform->position.z,
+    };
+    add_transform_row(section, "transform.position",
+                      localized("ui.inspector.position", "Position"),
+                      TransformEditKind::Position, position,
+                      mixed_position_axes(*document_, selection_, *transform),
+                      0.05, -std::numeric_limits<double>::max(),
+                      std::numeric_limits<double>::max());
+
+    const QVec3 rotation = positive_euler_radians(transform->rotation_euler);
+    const std::array<double, 3> rotation_degrees{
+        rotation.x * kRadToDeg,
+        rotation.y * kRadToDeg,
+        rotation.z * kRadToDeg,
+    };
+    add_transform_row(section, "transform.rotation",
+                      localized("ui.inspector.rotation", "Rotation"),
+                      TransformEditKind::Rotation, rotation_degrees,
+                      mixed_rotation_axes(*document_, selection_, *transform),
+                      0.5, -std::numeric_limits<double>::max(),
+                      std::numeric_limits<double>::max());
+
+    const std::array<double, 3> scale{
+        transform->scale.x,
+        transform->scale.y,
+        transform->scale.z,
+    };
+    add_transform_row(section, "transform.scale",
+                      localized("ui.inspector.scale", "Scale"),
+                      TransformEditKind::Scale, scale,
+                      mixed_scale_axes(*document_, selection_, *transform),
+                      0.02, 0.001, 1000.0);
+  }
+
+  void add_transform_row(Section &section, std::string stable_id,
+                         const QString &label, TransformEditKind kind,
+                         const std::array<double, 3> &initial_values,
+                         const std::array<bool, 3> &mixed, double step,
+                         double minimum, double maximum) {
+    auto values = std::make_shared<std::array<double, 3>>(initial_values);
+    auto *field = new QWidget(section.editor_parent);
+    field->setObjectName(stable_name(stable_id));
+    field->setMinimumWidth(0);
+    field->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    auto *layout = new QGridLayout(field);
+    layout->setContentsMargins(0, 0, 0, 0);
+    constexpr std::array<const char *, 3> kAxes{{"x", "y", "z"}};
+    constexpr std::array<const char *, 3> kAxisLabels{{"X", "Y", "Z"}};
+    constexpr std::array<quader_editor_core::ViewAxis, 3> kAxisKinds{{
+        quader_editor_core::ViewAxis::X,
+        quader_editor_core::ViewAxis::Y,
+        quader_editor_core::ViewAxis::Z,
+    }};
+
+    for (std::size_t axis = 0; axis < kAxes.size(); ++axis) {
+      const int label_column = static_cast<int>(axis * 2u);
+      const int field_column = label_column + 1;
+      auto *axis_label =
+          new QLabel(QString::fromLatin1(kAxisLabels[axis]), field);
+      axis_label->setObjectName(
+          stable_name(stable_id + "." + kAxes[axis] + ".label"));
+      axis_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+      apply_qt_semantic_axis_label_color(*axis_label, kAxisKinds[axis]);
+      layout->addWidget(axis_label, 0, label_column);
+      layout->setColumnStretch(field_column, 1);
+
+      if (mixed[axis]) {
+        auto *mixed_field =
+            new QLineEdit(localized("ui.inspector.mixed", "Mixed"), field);
+        mixed_field->setObjectName(stable_name(stable_id + "." + kAxes[axis]));
+        mixed_field->setReadOnly(true);
+        mixed_field->setEnabled(false);
+        mixed_field->setMinimumWidth(0);
+        mixed_field->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        layout->addWidget(mixed_field, 0, field_column);
+        continue;
+      }
+
+      auto *spin = new InspectorDoubleSpinBox(field);
+      spin->setObjectName(stable_name(stable_id + "." + kAxes[axis]));
+      spin->setRange(minimum, maximum);
+      spin->setSingleStep(step);
+      spin->setDecimals(3);
+      spin->setKeyboardTracking(true);
+      spin->setValue((*values)[axis]);
+      spin->setMinimumWidth(0);
+      spin->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+      layout->addWidget(spin, 0, field_column);
+
+      QObject::connect(spin, &QDoubleSpinBox::valueChanged, &panel_,
+                       [this, kind, axis, values](double next) {
+                         if (rebuilding_) {
+                           return;
+                         }
+                         (*values)[axis] = next;
+                         preview_transform_edit(kind, *values);
+                       });
+      QObject::connect(spin, &QDoubleSpinBox::editingFinished, &panel_,
+                       [this, kind]() {
+                         if (!rebuilding_) {
+                           finish_transform_edit(kind);
+                         }
+                       });
+      spin->cancel_handler = [this, kind]() {
+        if (active_transform_edit_ && active_transform_edit_->kind == kind) {
+          cancel_active_transform_edit();
+          force_rebuild_ = true;
         }
-      }
+      };
+    }
+    add_row(section, stable_id, label, field);
+  }
+
+  bool transform_edit_matches(TransformEditKind kind) const {
+    return active_transform_edit_ && active_transform_edit_->kind == kind &&
+           active_transform_edit_->primary == primary_ &&
+           active_transform_edit_->selection == selection_;
+  }
+
+  bool begin_transform_edit(TransformEditKind kind,
+                            const std::array<double, 3> &values) {
+    if (transform_edit_matches(kind) &&
+        active_transform_preview_.preview_active()) {
+      return true;
+    }
+    if (preview_document_ == nullptr) {
+      return false;
     }
 
-    if (selected.size() > 1u) {
-      std::size_t mesh_count = 0;
-      std::size_t light_count = 0;
-      for (const EntityId id : selected) {
-        mesh_count += document.mesh(id) ? 1u : 0u;
-        light_count += document.light(id) ? 1u : 0u;
-      }
-
-      const std::string components_label =
-          localization.text("ui.inspector.components", "Components");
-      if (inspector_property_section("components", components_label.c_str())) {
-        const std::string meshes_label =
-            localization.text("ui.inspector.meshes", "Meshes");
-        const std::string lights_label =
-            localization.text("ui.inspector.lights", "Lights");
-        inspector_property_row("meshes", meshes_label.c_str());
-        ImGui::Text("%llu", static_cast<unsigned long long>(mesh_count));
-        inspector_end_property_row();
-        inspector_property_row("lights", lights_label.c_str());
-        ImGui::Text("%llu", static_cast<unsigned long long>(light_count));
-        inspector_end_property_row();
-      }
+    cancel_active_transform_edit();
+    bool began = false;
+    switch (kind) {
+    case TransformEditKind::Position:
+      began = active_transform_preview_
+                  .begin_move_selected_to_primary_position_preview(
+                      *preview_document_, primary_, "Set Transform");
+      break;
+    case TransformEditKind::Rotation:
+      began = preview_assets_ != nullptr &&
+              active_transform_preview_
+                  .begin_rotate_selected_to_primary_euler_preview(
+                      *preview_document_, *preview_assets_, primary_,
+                      "Set Transform");
+      break;
+    case TransformEditKind::Scale:
+      began = preview_assets_ != nullptr &&
+              active_transform_preview_
+                  .begin_scale_selected_to_primary_scale_preview(
+                      *preview_document_, *preview_assets_, primary_,
+                      "Set Transform");
+      break;
     }
-    end_inspector_property_table();
-}
+    if (!began) {
+      return false;
+    }
+
+    active_transform_edit_ = TransformEditState{
+        .kind = kind,
+        .primary = primary_,
+        .selection = selection_,
+        .values = {static_cast<float>(values[0]), static_cast<float>(values[1]),
+                   static_cast<float>(values[2])},
+    };
+    return true;
+  }
+
+  void preview_transform_edit(TransformEditKind kind,
+                              const std::array<double, 3> &values) {
+    if (!begin_transform_edit(kind, values) ||
+        !active_transform_preview_.preview_active()) {
+      force_rebuild_ = true;
+      return;
+    }
+    active_transform_edit_->values = {
+        static_cast<float>(values[0]),
+        static_cast<float>(values[1]),
+        static_cast<float>(values[2]),
+    };
+
+    DocumentCommandResult result;
+    switch (kind) {
+    case TransformEditKind::Position:
+      result = active_transform_preview_.preview_selected_to_primary_position(
+          *preview_document_, primary_,
+          {active_transform_edit_->values[0], active_transform_edit_->values[1],
+           active_transform_edit_->values[2]});
+      break;
+    case TransformEditKind::Rotation:
+      result = active_transform_preview_.preview_selected_to_primary_euler(
+          *preview_document_, primary_,
+          {active_transform_edit_->values[0] * kDegToRad,
+           active_transform_edit_->values[1] * kDegToRad,
+           active_transform_edit_->values[2] * kDegToRad});
+      break;
+    case TransformEditKind::Scale:
+      result = active_transform_preview_.preview_selected_to_primary_scale(
+          *preview_document_, primary_,
+          {active_transform_edit_->values[0], active_transform_edit_->values[1],
+           active_transform_edit_->values[2]});
+      break;
+    }
+    if (!result.ok) {
+      cancel_active_transform_edit();
+      force_rebuild_ = true;
+    }
+  }
+
+  void finish_transform_edit(TransformEditKind kind) {
+    if (!transform_edit_matches(kind)) {
+      return;
+    }
+    if (active_transform_preview_.preview_active()) {
+      (void)active_transform_preview_.commit(*editor_);
+    }
+    active_transform_edit_.reset();
+    force_rebuild_ = true;
+  }
+
+  void cancel_active_transform_edit() {
+    if (active_transform_preview_.preview_active()) {
+      (void)active_transform_preview_.cancel();
+    }
+    active_transform_edit_.reset();
+  }
+
+  void build_scene_settings_sections() {
+    const SceneSettingsComponent *settings =
+        document_->scene_settings(primary_);
+    if (settings == nullptr) {
+      return;
+    }
+    const EntityId entity = primary_;
+
+    Section environment = add_section(
+        "environment", localized("ui.inspector.environment", "Environment"));
+    auto *environment_combo = new QComboBox(environment.editor_parent);
+    environment_combo->setObjectName(
+        stable_name("environment.environment_preset"));
+    int environment_index = -1;
+    int descriptor_index = 0;
+    for (const SceneEnvironmentDescriptor &descriptor :
+         scene_environment_catalog()) {
+      environment_combo->addItem(
+          localized(descriptor.label_key, descriptor.fallback_label),
+          qt_text(descriptor.id));
+      if (descriptor.id == settings->environment.environment_id) {
+        environment_index = descriptor_index;
+      }
+      ++descriptor_index;
+    }
+    environment_combo->setCurrentIndex(environment_index);
+    add_row(environment, "environment.environment_preset",
+            localized("ui.inspector.environment_preset", "Preset"),
+            environment_combo);
+    QObject::connect(environment_combo, &QComboBox::activated, &panel_,
+                     [this, environment_combo, entity](int index) {
+                       if (rebuilding_ || index < 0) {
+                         return;
+                       }
+                       const std::string id = environment_combo->itemData(index)
+                                                  .toString()
+                                                  .toUtf8()
+                                                  .toStdString();
+                       apply_scene_settings(
+                           entity, [id](SceneSettingsComponent &next) {
+                             next.environment.environment_id = id;
+                           });
+                     });
+    add_checkbox(environment, "environment.enabled",
+                 localized("ui.inspector.enabled", "Enabled"),
+                 settings->environment.enabled, [this, entity](bool enabled) {
+                   apply_scene_settings(
+                       entity, [enabled](SceneSettingsComponent &next) {
+                         next.environment.enabled = enabled;
+                       });
+                 });
+    add_checkbox(
+        environment, "environment.background",
+        localized("ui.inspector.background", "Background"),
+        settings->environment.show_background, [this, entity](bool visible) {
+          apply_scene_settings(entity, [visible](SceneSettingsComponent &next) {
+            next.environment.show_background = visible;
+          });
+        });
+    add_color_button(environment, "environment.clear_color",
+                     localized("ui.inspector.clear_color", "Clear Color"),
+                     settings->environment.clear_color,
+                     [this, entity](QVec3 color, std::string merge_key) {
+                       apply_scene_settings(
+                           entity,
+                           [color](SceneSettingsComponent &next) {
+                             next.environment.clear_color = {
+                                 std::clamp(color.x, 0.0f, 1.0f),
+                                 std::clamp(color.y, 0.0f, 1.0f),
+                                 std::clamp(color.z, 0.0f, 1.0f),
+                             };
+                           },
+                           std::move(merge_key));
+                     });
+    add_continuous_number(environment, "environment.intensity",
+                          localized("ui.inspector.intensity", "Intensity"),
+                          settings->environment.intensity, 0.0, 16.0, 0.01, 3,
+                          [this, entity](double value, std::string merge_key) {
+                            apply_scene_settings(
+                                entity,
+                                [value](SceneSettingsComponent &next) {
+                                  next.environment.intensity =
+                                      static_cast<float>(value);
+                                },
+                                std::move(merge_key));
+                          });
+    add_continuous_number(
+        environment, "environment.background_intensity",
+        localized("ui.inspector.background_intensity", "Background Intensity"),
+        settings->environment.background_intensity, 0.0, 16.0, 0.01, 3,
+        [this, entity](double value, std::string merge_key) {
+          apply_scene_settings(
+              entity,
+              [value](SceneSettingsComponent &next) {
+                next.environment.background_intensity =
+                    static_cast<float>(value);
+              },
+              std::move(merge_key));
+        });
+    add_continuous_number(environment, "environment.rotation",
+                          localized("ui.inspector.rotation", "Rotation"),
+                          settings->environment.rotation_y * kRadToDeg, -360.0,
+                          360.0, 0.5, 2,
+                          [this, entity](double value, std::string merge_key) {
+                            apply_scene_settings(
+                                entity,
+                                [value](SceneSettingsComponent &next) {
+                                  next.environment.rotation_y =
+                                      static_cast<float>(value) * kDegToRad;
+                                },
+                                std::move(merge_key));
+                          });
+
+    Section camera =
+        add_section("camera", localized("ui.inspector.camera", "Camera"));
+    add_continuous_number(camera, "camera.aperture",
+                          localized("ui.inspector.aperture", "Aperture"),
+                          settings->camera.aperture, 0.01, 128.0, 0.05, 2,
+                          [this, entity](double value, std::string merge_key) {
+                            apply_scene_settings(
+                                entity,
+                                [value](SceneSettingsComponent &next) {
+                                  next.camera.aperture =
+                                      static_cast<float>(value);
+                                },
+                                std::move(merge_key));
+                          });
+    add_continuous_number(
+        camera, "camera.shutter",
+        localized("ui.inspector.shutter_speed", "Shutter"),
+        settings->camera.shutter_speed, 0.000001, 10.0, 0.0001, 6,
+        [this, entity](double value, std::string merge_key) {
+          apply_scene_settings(
+              entity,
+              [value](SceneSettingsComponent &next) {
+                next.camera.shutter_speed = static_cast<float>(value);
+              },
+              std::move(merge_key));
+        });
+    add_continuous_number(camera, "camera.sensitivity",
+                          localized("ui.inspector.sensitivity", "ISO"),
+                          settings->camera.sensitivity, 1.0, 51200.0, 1.0, 0,
+                          [this, entity](double value, std::string merge_key) {
+                            apply_scene_settings(
+                                entity,
+                                [value](SceneSettingsComponent &next) {
+                                  next.camera.sensitivity =
+                                      static_cast<float>(value);
+                                },
+                                std::move(merge_key));
+                          });
+    add_continuous_number(
+        camera, "camera.near", localized("ui.inspector.near_plane", "Near"),
+        settings->camera.near_plane, 0.001, 10000.0, 0.001, 4,
+        [this, entity](double value, std::string merge_key) {
+          apply_scene_settings(
+              entity,
+              [value](SceneSettingsComponent &next) {
+                next.camera.near_plane = static_cast<float>(value);
+              },
+              std::move(merge_key));
+        });
+    add_continuous_number(
+        camera, "camera.far", localized("ui.inspector.far_plane", "Far"),
+        settings->camera.far_plane, 0.001, 1000000.0, 1.0, 2,
+        [this, entity](double value, std::string merge_key) {
+          apply_scene_settings(
+              entity,
+              [value](SceneSettingsComponent &next) {
+                next.camera.far_plane = static_cast<float>(value);
+              },
+              std::move(merge_key));
+        });
+
+    Section post = add_section(
+        "post_process", localized("ui.inspector.post_process", "Post Process"));
+    add_checkbox(post, "post_process.enabled",
+                 localized("ui.inspector.enabled", "Enabled"),
+                 settings->post_process.enabled, [this, entity](bool enabled) {
+                   apply_scene_settings(
+                       entity, [enabled](SceneSettingsComponent &next) {
+                         next.post_process.enabled = enabled;
+                       });
+                 });
+    add_checkbox(
+        post, "post_process.anti_aliasing",
+        localized("ui.inspector.anti_aliasing", "Anti-Aliasing"),
+        settings->post_process.anti_aliasing, [this, entity](bool enabled) {
+          apply_scene_settings(entity, [enabled](SceneSettingsComponent &next) {
+            next.post_process.anti_aliasing = enabled;
+          });
+        });
+    add_checkbox(
+        post, "post_process.dithering",
+        localized("ui.inspector.dithering", "Dithering"),
+        settings->post_process.dithering, [this, entity](bool enabled) {
+          apply_scene_settings(entity, [enabled](SceneSettingsComponent &next) {
+            next.post_process.dithering = enabled;
+          });
+        });
+    add_enum_combo<SceneToneMapping>(
+        post, "post_process.tone_mapping",
+        localized("ui.inspector.tone_mapping", "Tone Mapping"),
+        settings->post_process.tone_mapping,
+        {
+            {SceneToneMapping::Linear,
+             localized("ui.inspector.tone_mapping.linear", "Linear")},
+            {SceneToneMapping::AcesLegacy,
+             localized("ui.inspector.tone_mapping.aces_legacy", "ACES Legacy")},
+            {SceneToneMapping::Aces,
+             localized("ui.inspector.tone_mapping.aces", "ACES")},
+            {SceneToneMapping::Filmic,
+             localized("ui.inspector.tone_mapping.filmic", "Filmic")},
+            {SceneToneMapping::DisplayRange,
+             localized("ui.inspector.tone_mapping.display_range",
+                       "Display Range")},
+        },
+        [this, entity](SceneToneMapping value) {
+          apply_scene_settings(entity, [value](SceneSettingsComponent &next) {
+            next.post_process.tone_mapping = value;
+          });
+        });
+    add_checkbox(
+        post, "post_process.ambient_occlusion",
+        localized("ui.inspector.ambient_occlusion", "Ambient Occlusion"),
+        settings->post_process.ambient_occlusion, [this, entity](bool enabled) {
+          apply_scene_settings(entity, [enabled](SceneSettingsComponent &next) {
+            next.post_process.ambient_occlusion = enabled;
+          });
+        });
+    if (settings->post_process.ambient_occlusion) {
+      add_continuous_number(
+          post, "post_process.ambient_occlusion_intensity",
+          localized("ui.inspector.ambient_occlusion_intensity", "AO Intensity"),
+          settings->post_process.ambient_occlusion_intensity, 0.0, 8.0, 0.01, 3,
+          [this, entity](double value, std::string merge_key) {
+            apply_scene_settings(
+                entity,
+                [value](SceneSettingsComponent &next) {
+                  next.post_process.ambient_occlusion_intensity =
+                      static_cast<float>(value);
+                },
+                std::move(merge_key));
+          });
+      add_continuous_number(
+          post, "post_process.ambient_occlusion_radius",
+          localized("ui.inspector.ambient_occlusion_radius", "AO Radius"),
+          settings->post_process.ambient_occlusion_radius, 0.0, 10.0, 0.01, 3,
+          [this, entity](double value, std::string merge_key) {
+            apply_scene_settings(
+                entity,
+                [value](SceneSettingsComponent &next) {
+                  next.post_process.ambient_occlusion_radius =
+                      static_cast<float>(value);
+                },
+                std::move(merge_key));
+          });
+    }
+    add_checkbox(
+        post, "post_process.bloom", localized("ui.inspector.bloom", "Bloom"),
+        settings->post_process.bloom, [this, entity](bool enabled) {
+          apply_scene_settings(entity, [enabled](SceneSettingsComponent &next) {
+            next.post_process.bloom = enabled;
+          });
+        });
+    add_continuous_number(
+        post, "post_process.bloom_strength",
+        localized("ui.inspector.bloom_strength", "Bloom Strength"),
+        settings->post_process.bloom_strength, 0.0, 1.0, 0.01, 3,
+        [this, entity](double value, std::string merge_key) {
+          apply_scene_settings(
+              entity,
+              [value](SceneSettingsComponent &next) {
+                next.post_process.bloom_strength = static_cast<float>(value);
+              },
+              std::move(merge_key));
+        });
+  }
+
+  void build_mesh_sections() {
+    const MeshComponent *mesh = document_->mesh(primary_);
+    if (mesh == nullptr) {
+      return;
+    }
+    const EntityId entity = primary_;
+
+    Section export_section =
+        add_section("export", localized("ui.inspector.export", "Export"));
+    add_checkbox(export_section, "export.editor_only",
+                 localized("ui.inspector.editor_only", "Editor Only"),
+                 mesh->editor_only, [this, entity](bool enabled) {
+                   apply_mesh_component(entity, [enabled](MeshComponent &next) {
+                     next.editor_only = enabled;
+                   });
+                 });
+
+    Section lighting =
+        add_section("lighting", localized("ui.inspector.lighting", "Lighting"));
+    add_checkbox(lighting, "lighting.cast_shadows",
+                 localized("ui.inspector.cast_shadows", "Cast Shadows"),
+                 mesh->cast_shadows, [this, entity](bool enabled) {
+                   apply_mesh_component(entity, [enabled](MeshComponent &next) {
+                     next.cast_shadows = enabled;
+                   });
+                 });
+    add_checkbox(lighting, "lighting.double_sided",
+                 localized("ui.inspector.double_sided", "Double sided"),
+                 mesh->double_sided, [this, entity](bool enabled) {
+                   apply_mesh_component(entity, [enabled](MeshComponent &next) {
+                     next.double_sided = enabled;
+                   });
+                 });
+
+    Section physics =
+        add_section("physics", localized("ui.inspector.physics", "Physics"));
+    add_checkbox(
+        physics, "physics.generate_collisions",
+        localized("ui.inspector.generate_collisions", "Generate Collisions"),
+        mesh->generate_collisions, [this, entity](bool enabled) {
+          apply_mesh_component(entity, [enabled](MeshComponent &next) {
+            next.generate_collisions = enabled;
+          });
+        });
+    add_enum_combo<MeshCollisionType>(
+        physics, "physics.collision_type",
+        localized("ui.inspector.collision_type", "Collision Type"),
+        mesh->collision_type,
+        {
+            {MeshCollisionType::Box,
+             localized("ui.inspector.collision_type.box", "Box")},
+            {MeshCollisionType::Sphere,
+             localized("ui.inspector.collision_type.sphere", "Sphere")},
+            {MeshCollisionType::Cylinder,
+             localized("ui.inspector.collision_type.cylinder", "Cylinder")},
+            {MeshCollisionType::ConvexHull,
+             localized("ui.inspector.collision_type.convex_hull",
+                       "Convex Hull")},
+            {MeshCollisionType::Mesh,
+             localized("ui.inspector.collision_type.mesh", "Mesh")},
+        },
+        [this, entity](MeshCollisionType value) {
+          apply_mesh_component(entity, [value](MeshComponent &next) {
+            next.collision_type = value;
+          });
+        });
+    add_checkbox(
+        physics, "physics.display_collision",
+        localized("ui.inspector.display_collision", "Display Collision"),
+        mesh->display_collision, [this, entity](bool enabled) {
+          apply_mesh_component(entity, [enabled](MeshComponent &next) {
+            next.display_collision = enabled;
+          });
+        });
+    add_enum_combo<MeshPhysicsBodyType>(
+        physics, "physics.body_type",
+        localized("ui.inspector.body_type", "Body type"), mesh->body_type,
+        {
+            {MeshPhysicsBodyType::StaticBody,
+             localized("ui.inspector.body_type.static_body", "Static Body")},
+            {MeshPhysicsBodyType::RigidBody,
+             localized("ui.inspector.body_type.rigid_body", "Rigid Body")},
+        },
+        [this, entity](MeshPhysicsBodyType value) {
+          apply_mesh_component(
+              entity, [value](MeshComponent &next) { next.body_type = value; });
+        });
+  }
+
+  void build_light_section() {
+    const LightComponent *light = document_->light(primary_);
+    if (light == nullptr) {
+      return;
+    }
+    const EntityId entity = primary_;
+    Section section =
+        add_section("light", localized("ui.inspector.light", "Light"));
+    add_enum_combo<LightType>(
+        section, "light.type", localized("ui.inspector.light_type", "Type"),
+        light->type,
+        {
+            {LightType::Directional,
+             localized("ui.inspector.light_type.directional", "Directional")},
+            {LightType::Point,
+             localized("ui.inspector.light_type.point", "Point")},
+            {LightType::Spot,
+             localized("ui.inspector.light_type.spot", "Spot")},
+        },
+        [this, entity](LightType value) {
+          apply_light_component(
+              entity, [value](LightComponent &next) { next.type = value; });
+        });
+    add_color_button(section, "light.color",
+                     localized("ui.inspector.color", "Color"), light->color,
+                     [this, entity](QVec3 color, std::string merge_key) {
+                       apply_light_component(
+                           entity,
+                           [color](LightComponent &next) {
+                             next.color = {
+                                 std::clamp(color.x, 0.0f, 1.0f),
+                                 std::clamp(color.y, 0.0f, 1.0f),
+                                 std::clamp(color.z, 0.0f, 1.0f),
+                             };
+                           },
+                           std::move(merge_key));
+                     });
+    add_continuous_number(section, "light.intensity",
+                          localized("ui.inspector.intensity", "Intensity"),
+                          light->intensity, 0.0, 16.0, 0.01, 3,
+                          [this, entity](double value, std::string merge_key) {
+                            apply_light_component(
+                                entity,
+                                [value](LightComponent &next) {
+                                  next.intensity = static_cast<float>(value);
+                                },
+                                std::move(merge_key));
+                          });
+    if (light->type == LightType::Point || light->type == LightType::Spot) {
+      add_continuous_number(
+          section, "light.range", localized("ui.inspector.range", "Range"),
+          light->range, kInspectorLightRangeMin, kInspectorLightRangeSliderMax,
+          0.1, 2, [this, entity](double value, std::string merge_key) {
+            apply_light_component(
+                entity,
+                [value](LightComponent &next) {
+                  next.range = static_cast<float>(value);
+                },
+                std::move(merge_key));
+          });
+    }
+    add_checkbox(section, "light.cast_shadows",
+                 localized("ui.inspector.cast_shadows", "Cast Shadows"),
+                 light->casts_shadows, [this, entity](bool enabled) {
+                   apply_light_component(entity,
+                                         [enabled](LightComponent &next) {
+                                           next.casts_shadows = enabled;
+                                         });
+                 });
+  }
+
+  void build_component_count_section() {
+    std::size_t mesh_count = 0;
+    std::size_t light_count = 0;
+    for (const EntityId entity : selection_) {
+      mesh_count += document_->mesh(entity) != nullptr ? 1u : 0u;
+      light_count += document_->light(entity) != nullptr ? 1u : 0u;
+    }
+    Section section = add_section(
+        "components", localized("ui.inspector.components", "Components"));
+    add_read_only_value(section, "components.meshes",
+                        localized("ui.inspector.meshes", "Meshes"),
+                        QString::number(static_cast<qulonglong>(mesh_count)));
+    add_read_only_value(section, "components.lights",
+                        localized("ui.inspector.lights", "Lights"),
+                        QString::number(static_cast<qulonglong>(light_count)));
+  }
+
+  InspectorPanel &panel_;
+  QTreeWidget *tree_ = nullptr;
+  QuaderEditorApi *editor_ = nullptr;
+  const SceneDocument *document_ = nullptr;
+  const ModelingSessionService *modeling_ = nullptr;
+  LocalizationService *localization_ = nullptr;
+  SceneDocument *preview_document_ = nullptr;
+  const AssetRegistry *preview_assets_ = nullptr;
+  SceneTransformDragService active_transform_preview_;
+  std::optional<TransformEditState> active_transform_edit_;
+  UIContinuousEditTracker active_continuous_edit_;
+  QColorDialog *active_color_dialog_ = nullptr;
+  std::vector<EntityId> selection_;
+  EntityId primary_ = kInvalidEntityId;
+  std::unordered_map<std::string, bool> expanded_sections_;
+  std::uint64_t built_scene_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t built_modeling_content_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t built_modeling_selection_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
+  std::string built_locale_;
+  std::string active_continuous_id_;
+  bool continuous_edit_active_ = false;
+  bool rebuilding_ = false;
+  bool force_rebuild_ = true;
+  bool adjusting_label_column_width_ = false;
+};
+
+InspectorPanel::InspectorPanel(QWidget *parent)
+    : QWidget(parent), impl_(std::make_unique<Impl>(*this)) {}
+
+InspectorPanel::~InspectorPanel() = default;
+
+void InspectorPanel::refresh(UIContext &context) { impl_->refresh(context); }
 
 } // namespace quader

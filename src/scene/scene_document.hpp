@@ -150,6 +150,9 @@ public:
     std::uint64_t mesh_binding_revision() const {
       return mesh_binding_revision_;
     }
+    std::uint64_t render_component_revision() const {
+      return render_component_revision_;
+    }
 
 private:
   NameComponent *mutable_name(EntityId id);
@@ -179,6 +182,7 @@ private:
   std::uint64_t visibility_revision_ = 0;
   std::uint64_t transform_revision_ = 0;
   std::uint64_t mesh_binding_revision_ = 0;
+  std::uint64_t render_component_revision_ = 0;
   EditorObjectIdAllocator editor_object_id_allocator_;
   entt::registry registry_;
   std::unordered_map<EntityId, entt::entity> entities_;

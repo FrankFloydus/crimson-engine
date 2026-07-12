@@ -126,11 +126,13 @@ struct RenderSceneSnapshotDirtyState {
   bool visibility_changed = true;
   bool transforms_changed = true;
   bool mesh_bindings_changed = true;
+  bool render_components_changed = true;
   bool assets_changed = true;
 
   [[nodiscard]] bool any_dirty() const {
     return scene_changed || selection_changed || visibility_changed ||
-           transforms_changed || mesh_bindings_changed || assets_changed;
+           transforms_changed || mesh_bindings_changed ||
+           render_components_changed || assets_changed;
   }
 };
 
@@ -156,6 +158,7 @@ struct RenderSceneSnapshot {
   std::uint64_t visibility_revision = 0;
   std::uint64_t transform_revision = 0;
   std::uint64_t mesh_binding_revision = 0;
+  std::uint64_t render_component_revision = 0;
   std::uint64_t asset_revision = 0;
   RenderSceneSnapshotDirtyState dirty;
   bool reused_previous_records = false;

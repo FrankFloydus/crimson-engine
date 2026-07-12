@@ -78,7 +78,9 @@ UISettingsPaths
 UISettings::resolve_paths(const std::filesystem::path &executable_dir) {
   UISettingsPaths paths;
   paths.directory = quader_user_config_directory(executable_dir);
-  paths.imgui_ini_file = paths.directory / "quader_ui.ini";
+  paths.qt_window_state_file = paths.directory / "qt_window_state.bin";
+  paths.qt_auxiliary_window_state_file =
+      paths.directory / "qt_auxiliary_windows.ini";
   paths.settings_file = paths.directory / "ui_settings.ini";
   paths.viewport_settings_file = paths.directory / "viewport_settings.ini";
   return paths;
@@ -105,7 +107,8 @@ bool UISettings::save(const std::filesystem::path& path) const {
          << '\n';
     file << "\n[Localization]\n";
     file << "Locale=" << locale_ << '\n';
-    return true;
+    file.flush();
+    return file.good();
 }
 
 bool UISettings::is_panel_visible(UIPanelId id) const {

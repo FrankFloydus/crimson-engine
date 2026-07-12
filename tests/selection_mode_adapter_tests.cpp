@@ -136,7 +136,7 @@ TEST(SelectionModeAdapterTests, SelectionModeIdsHaveOneHostCatalogAdapter) {
   const std::string action_catalog = read_source_file(
       "src/editor/modeling/services/modeling_action_catalog.cpp");
   const std::string viewport_panel =
-      read_source_file("src/ui/viewport_panel.cpp");
+      read_source_file("src/ui/qt_viewport_panel.cpp");
   const std::string viewport_adapter =
       read_source_file("src/viewport/host_viewport_contract_adapter.cpp");
 

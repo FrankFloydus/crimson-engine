@@ -14,7 +14,7 @@ file except through prior written authorization from Francesco Di Blasi.
 
 - Public SDK headers live under `include/quader/modeling` and use the `quader::modeling`
   namespace.
-- Public headers must not include native app, scene, asset, render, UI, platform, editor API,
+- Public headers must not include native app, scene, asset, render, UI, platform, editor API, Qt,
   SDL, ImGui, Filament, EnTT, or JSON owner headers.
 - Implementation files may adapt existing clean mesh and QDR owners during migration, but native
   app identity, command IDs, scene entities, materials, render bridges, and UI state stay outside

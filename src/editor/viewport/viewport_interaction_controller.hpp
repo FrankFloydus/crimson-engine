@@ -35,6 +35,8 @@ public:
 
   [[nodiscard]] const quader_editor_core::TransformGizmoFrame *
   transform_gizmo_frame() const;
+  [[nodiscard]] const TransformGizmoSelectionCacheStats &
+  transform_gizmo_selection_cache_stats() const;
   [[nodiscard]] ViewportSelectionMarquee selection_marquee() const;
 
 private:

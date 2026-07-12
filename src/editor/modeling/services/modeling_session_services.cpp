@@ -618,6 +618,11 @@ void ModelingSelectionService::invalidate_picking_cache() const {
   picking_cache_ = {};
 }
 
+std::uint64_t
+ModelingSelectionService::transformed_picking_projection_build_count() const {
+  return transformed_picking_projection_build_count_;
+}
+
 const std::vector<quader_editor_core::PolygonObject> &
 ModelingSelectionService::cached_scene_transformed_objects_for_picking(
     const quader_editor_core::EditorSession &session,
@@ -639,6 +644,7 @@ ModelingSelectionService::cached_scene_transformed_objects_for_picking(
 
   const std::vector<quader_editor_core::PolygonObject> runtime_objects =
       session.objects();
+  ++transformed_picking_projection_build_count_;
   picking_cache_.objects =
       PickingCacheProjection::scene_transformed_objects_for_picking(
           runtime_objects, scene, object_registry);
@@ -1780,7 +1786,7 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
     const quader_editor_core::EditorSession &session,
     const quader_editor_core::EditorRuntime &runtime,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
-    const std::vector<quader_editor_core::PolygonObject> &preview_objects,
+    const ModelingSelectionService &selection_service,
     ModelingSelectionOverlayOptions options) const {
   const quader_editor_core::SelectionHoverState &hover = runtime.hover();
   const std::uint64_t content_revision = session.state().content_revision;
@@ -1816,6 +1822,9 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
         quader_editor_core::cut_overlay_points(
             cut, runtime.cut_hover().position, runtime.cut_hover().valid);
     if (quader_editor_core::cut_can_preview(cut) && cut.preview_valid) {
+      const std::vector<quader_editor_core::PolygonObject> &preview_objects =
+          selection_service.cached_scene_transformed_objects_for_picking(
+              session, scene, object_registry);
       const CutPreviewOverlayProjection::PreviewTriangleMesh keep_mesh =
           CutPreviewOverlayProjection::mesh_from_documents(
               runtime.cut_preview_documents(
@@ -1876,10 +1885,10 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
 
 std::vector<ModelingToolPreviewMesh>
 ModelingOverlayService::tool_preview_meshes(
+    const quader_editor_core::EditorSession &session,
     const quader_editor_core::EditorRuntime &runtime,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
-    const std::vector<quader_editor_core::PolygonObject> &preview_objects)
-    const {
+    const ModelingSelectionService &selection_service) const {
   std::vector<ModelingToolPreviewMesh> preview_meshes;
   if (const std::optional<MeshAsset> box_preview =
           ToolPreviewMeshProjection::box_preview_mesh_from_descriptor(
@@ -1890,6 +1899,15 @@ ModelingOverlayService::tool_preview_meshes(
         .mesh = *box_preview,
     });
   }
+  const quader_editor_core::MirrorToolState &mirror = runtime.mirror_state();
+  if (!quader_editor_core::mirror_is_active(mirror) ||
+      !quader_editor_core::mirror_can_preview(mirror) ||
+      !mirror.preview_valid) {
+    return preview_meshes;
+  }
+  const std::vector<quader_editor_core::PolygonObject> &preview_objects =
+      selection_service.cached_scene_transformed_objects_for_picking(
+          session, scene, object_registry);
   std::vector<ModelingToolPreviewMesh> mirror_meshes =
       ToolPreviewMeshProjection::mirror_preview_meshes(
           runtime, scene, object_registry, preview_objects);

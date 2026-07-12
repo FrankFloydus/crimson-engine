@@ -1,4 +1,4 @@
-﻿////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
 // This file is part of Quader and is protected proprietary source code.
 // No permission is granted to use, copy, modify, distribute, or sublicense this
@@ -6,123 +6,56 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "core/frame_timing.hpp"
 #include "core/types.hpp"
-#include "editor/input/quader_input_binding.hpp"
-#include "math/types.hpp"
-#include "render/render_performance_stats.hpp"
-#include "ui/ui_icon_set.hpp"
-#include "ui/ui_panel.hpp"
-#include "viewport/viewport_settings.hpp"
-
-#include <span>
 
 namespace quader {
 
 class AssetRegistry;
 class EditorSelectionService;
-class LinearArrayToolService;
 class LocalizationService;
 class ModelingSessionService;
-class PivotToolService;
 class QuaderEditorApi;
 class SceneDocument;
-class SceneRenderBridge;
 class UISettings;
-struct UIStyleTokens;
+class ViewportSettings;
 
-/**
- * Stores the public editor API surface used by UI controls to express user intent.
- */
+/// Public editor intent exposed to retained Qt widgets.
 struct UIIntentContext {
-    QuaderEditorApi& editor;
+  QuaderEditorApi &editor;
 };
 
-/**
- * Stores read-only scene and query data used by UI panels for presentation.
- */
+/// Read-only document data projected into retained Qt widgets.
 struct UIScenePresentationContext {
-    const SceneDocument& document;
-    const AssetRegistry& assets;
-    const ModelingSessionService& modeling;
-    const EditorSelectionService& selection;
-    AssetId default_material = kInvalidAssetId;
+  const SceneDocument &document;
+  const AssetRegistry &assets;
+  const ModelingSessionService &modeling;
+  const EditorSelectionService &selection;
+  AssetId default_material = kInvalidAssetId;
 };
 
-/**
- * Stores the narrow inspector preview owner access kept for transform preview staging.
- */
+/// Narrow mutable owner access used only for inspector transform previews.
 struct UIInspectorPreviewContext {
-    SceneDocument& document;
-    const AssetRegistry& assets;
+  SceneDocument &document;
+  const AssetRegistry &assets;
 };
 
-/**
- * Stores mutable UI and viewport preference state used by settings surfaces.
- */
+/// Mutable user preference state exposed to settings surfaces.
 struct UIPreferencesContext {
-    UISettings& ui;
-    ViewportSettings& viewport;
-    bool *ui_settings_changed = nullptr;
+  UISettings &ui;
+  ViewportSettings &viewport;
+  bool *ui_settings_changed = nullptr;
 };
 
 /**
- * Stores viewport-only scene, modeling, and render data used by viewport surfaces.
- */
-struct UIViewportSurfaceContext {
-    SceneRenderBridge& render_bridge;
-    SceneDocument& document;
-    AssetRegistry& assets;
-    ModelingSessionService& modeling;
-    EditorSelectionService& selection;
-    PivotToolService *pivot = nullptr;
-    LinearArrayToolService *linear_array = nullptr;
-    AssetId default_material = kInvalidAssetId;
-    FrameTiming frame_timing = {};
-    RenderFramePerformanceStats render_performance = {};
-    QVec2 relative_mouse_delta = {};
-    std::span<const QuaderInputChord> pressed_input_chords;
-    bool render_resize_suspended = false;
-    bool *cursor_capture_requested = nullptr;
-    QVec2 *cursor_capture_point = nullptr;
-};
-
-/**
- * Stores the UI Context data contract used by the ImGui editor presentation layer.
+ * Per-refresh context. Widgets must not retain this object or its transient
+ * pointers; long-lived owners referenced by it remain app-owned.
  */
 struct UIContext {
-    UIIntentContext intent;
-    UIScenePresentationContext scene;
-    UIInspectorPreviewContext *inspector_preview = nullptr;
-    UIViewportSurfaceContext *viewport = nullptr;
-    UIPreferencesContext preferences;
-    bool &quit_requested;
-    const UIStyleTokens& style;
-    const UIIconSet& icons;
-    LocalizationService& localization;
-    UIPanelId focused_panel = UIPanelId::Viewport;
-    UIPanelId previous_focused_panel = UIPanelId::Viewport;
-    UIPanelId *focused_panel_storage = nullptr;
-    bool *panel_focus_changed = nullptr;
-    bool *command_shortcut_consumed = nullptr;
-
-    void request_panel_focus(UIPanelId panel) const {
-      if (focused_panel_storage == nullptr) {
-        return;
-      }
-      if (*focused_panel_storage != panel) {
-        *focused_panel_storage = panel;
-        if (panel_focus_changed != nullptr) {
-          *panel_focus_changed = true;
-        }
-      }
-    }
-
-    void mark_command_shortcut_consumed() const {
-      if (command_shortcut_consumed != nullptr) {
-        *command_shortcut_consumed = true;
-      }
-    }
+  UIIntentContext intent;
+  UIScenePresentationContext scene;
+  UIInspectorPreviewContext *inspector_preview = nullptr;
+  UIPreferencesContext preferences;
+  LocalizationService &localization;
 };
 
 } // namespace quader

@@ -29,8 +29,13 @@ class AssetRegistry;
 struct SceneTransformDragTarget {
   EntityId entity = kInvalidEntityId;
   TransformComponent transform;
+  TransformComponent translation_preview_transform;
   QVec3 local_pivot = {};
   QMat4 world_transform;
+  QVec3 parent_space_world_x = {1.0f, 0.0f, 0.0f};
+  QVec3 parent_space_world_y = {0.0f, 1.0f, 0.0f};
+  QVec3 parent_space_world_z = {0.0f, 0.0f, 1.0f};
+  bool parent_translation_basis_valid = true;
 };
 
 /**
@@ -73,6 +78,9 @@ public:
     DocumentCommandResult
     preview_world_transform_delta(SceneDocument &document,
                                   const QMat4 &world_transform_delta);
+    DocumentCommandResult
+    preview_world_translation_delta(SceneDocument &document,
+                                    QVec3 world_translation_delta);
     DocumentCommandResult accept();
     DocumentCommandResult commit(EditorHistoryService& history);
     QuaderApiVoidResult commit(QuaderEditorApi& editor);

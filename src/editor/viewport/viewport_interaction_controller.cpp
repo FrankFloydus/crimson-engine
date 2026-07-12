@@ -50,6 +50,11 @@ ViewportInteractionController::transform_gizmo_frame() const {
   return transform_gizmo_.frame();
 }
 
+const TransformGizmoSelectionCacheStats &
+ViewportInteractionController::transform_gizmo_selection_cache_stats() const {
+  return transform_gizmo_.selection_cache_stats();
+}
+
 ViewportSelectionMarquee
 ViewportInteractionController::selection_marquee() const {
   return selection_.marquee();

@@ -462,20 +462,18 @@ void project_modeling_meshes_to_scene(
         scene.modeling_object(entity);
     const bool had_projected_mesh_signature =
         scene_sync.projected_mesh_signature_known(object.id);
-    if (!force) {
-      const MeshComponent *current_mesh = scene.mesh(entity);
-      if (current_mesh != nullptr && current_mesh->mesh != kInvalidAssetId &&
-          assets.mesh(current_mesh->mesh) != nullptr &&
-          scene_sync.projected_mesh_signature_matches(object.id,
-                                                      mesh_signature)) {
-        if (current_object == nullptr ||
-            current_object->object_id != next_object.object_id ||
-            current_object->material_slot != next_object.material_slot) {
-          scene.set_modeling_object(entity, next_object);
-        }
-        object_registry.remember_scene_entity(object.id, scene, entity);
-        continue;
+    const MeshComponent *bound_mesh = scene.mesh(entity);
+    if (bound_mesh != nullptr && bound_mesh->mesh != kInvalidAssetId &&
+        assets.mesh(bound_mesh->mesh) != nullptr &&
+        scene_sync.projected_mesh_signature_matches(object.id,
+                                                    mesh_signature)) {
+      if (current_object == nullptr ||
+          current_object->object_id != next_object.object_id ||
+          current_object->material_slot != next_object.material_slot) {
+        scene.set_modeling_object(entity, next_object);
       }
+      object_registry.remember_scene_entity(object.id, scene, entity);
+      continue;
     }
 
     MeshAsset mesh = [&]() {

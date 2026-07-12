@@ -14,7 +14,21 @@
 namespace quader {
 
 OverlayCameraProjector::OverlayCameraProjector(ViewportOverlayCamera camera)
-    : camera_(sanitized_camera(camera)) {}
+    : camera_(sanitized_camera(camera)) {
+  // These values are camera constants. A selected scene can project tens of
+  // thousands of overlay endpoints per frame, so computing trigonometry and
+  // viewport divisions for every endpoint dominates navigation without
+  // changing any overlay policy or generated geometry.
+  aspect_ = camera_.viewport_size.x / camera_.viewport_size.y;
+  tan_half_fov_ =
+      std::tan((camera_.fov_degrees * kPi / 180.0f) * 0.5f);
+  orthographic_half_height_ = camera_.orthographic_size * 0.5f;
+  orthographic_half_width_ = orthographic_half_height_ * aspect_;
+  const float clip_range = camera_.far_plane - camera_.near_plane;
+  orthographic_depth_scale_ = -2.0f / clip_range;
+  orthographic_depth_offset_ =
+      -(camera_.far_plane + camera_.near_plane) / clip_range;
+}
 
 const ViewportOverlayCamera& OverlayCameraProjector::camera() const {
     return camera_;
@@ -96,25 +110,17 @@ OverlayProjectedPoint OverlayCameraProjector::project(OverlayViewPoint point) co
         if (depth <= 0.000001f) {
             return projected;
         }
-        const float aspect = camera_.viewport_size.x / camera_.viewport_size.y;
-        const float tan_half_fov =
-            std::tan((camera_.fov_degrees * kPi / 180.0f) * 0.5f);
         projected.device = {
-            point.x / (depth * tan_half_fov * aspect),
-            point.y / (depth * tan_half_fov),
+            point.x / (depth * tan_half_fov_ * aspect_),
+            point.y / (depth * tan_half_fov_),
             1.0f - (2.0f * camera_.near_plane / depth),
             1.0f,
         };
     } else {
-      const float aspect = camera_.viewport_size.x / camera_.viewport_size.y;
-      const float half_height = camera_.orthographic_size * 0.5f;
-      const float half_width = half_height * aspect;
       projected.device = {
-          point.x / half_width,
-          point.y / half_height,
-          (-2.0f / (camera_.far_plane - camera_.near_plane)) * point.z -
-              ((camera_.far_plane + camera_.near_plane) /
-               (camera_.far_plane - camera_.near_plane)),
+          point.x / orthographic_half_width_,
+          point.y / orthographic_half_height_,
+          orthographic_depth_scale_ * point.z + orthographic_depth_offset_,
           1.0f,
       };
     }
@@ -135,7 +141,12 @@ void OverlayCameraProjector::apply_device_depth_bias(
   }
   const float device_offset = depth_bias_units * camera_.near_plane *
                               kOverlayDeviceDepthBiasPerNearPlane;
-  projected.device.z += device_offset;
+  // Filament's DEVICE vertex domain accepts OpenGL NDC, then maps its Z to
+  // reversed device depth as `z * -0.5 + 0.5`.  A smaller GL-domain Z is
+  // therefore closer for the GreaterOrEqual overlay depth test.  Adding this
+  // offset used to push depth-tested vertex quads into the shaded mesh, which
+  // could completely hide a convex corner surrounded by rasterized faces.
+  projected.device.z = std::max(-1.0f, projected.device.z - device_offset);
 }
 
 OverlayFloat4

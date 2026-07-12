@@ -50,8 +50,6 @@ bool FilamentMaterialLibrary::initialize(
     LOG_INFO("Loading overlay icon material");
     overlay_icon_material_ =
         load(material_dir / std::string(kOverlayIconMaterialFile));
-    LOG_INFO("Loading ImGui material");
-    imgui_material_ = load(material_dir / std::string(kImguiMaterialFile));
     LOG_INFO("Loading ground grid material");
     ground_grid_material_ =
         load(material_dir / std::string(kGroundGridMaterialFile));
@@ -77,7 +75,6 @@ void FilamentMaterialLibrary::shutdown() {
     destroy(edit_wire_line_material_);
     destroy(overlay_point_material_);
     destroy(overlay_icon_material_);
-    destroy(imgui_material_);
     destroy(ground_grid_material_);
     engine_ = nullptr;
 }

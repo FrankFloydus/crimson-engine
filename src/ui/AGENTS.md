@@ -8,23 +8,30 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # UI Package Guide
 
-Follow root `AGENTS.md` UI, localization, public API, viewport/input, and testing rules before UI
-edits.
+Also follow root `AGENTS.md` UI, localization, API, viewport/input, and testing rules.
 
 ## UI Rules
 
-- Current UI is the native ImGui shell: custom chrome, menu bar, docked panels, static bottom bar,
-  and multi-pane viewport live under `UISystem` and `ViewportPanel`.
-- `UISystem` owns composition glue, panel registration, settings, localization, and top-level
-  chrome actions.
-- `ViewportPanel` owns viewport pane layout, pane chrome, input frame assembly, render prep,
-  overlay submission, context menus, modal-tool viewport context, and transform gizmo routing.
-- `UIPanelManager` owns panel registration and visibility; individual panels own their local
-  presentation only.
+- The retained Qt Widgets shell uses `UISystem` to compose `QMainWindow`, native menu/status bars,
+  `QDockWidget` panels, settings/tool windows, and the central `QtViewportPanel`.
+- `main.cpp` selects stock `Fusion` with its `standardPalette()`. Do not add QSS, global palettes,
+  custom fonts/chrome, or app theme colors. Color swatches may set only local `QPalette::Button`;
+  semantic X/Y/Z labels may set only local `QPalette::WindowText` via
+  `qt_semantic_axis_colors.hpp`. Fusion draws all complete control states.
+- `UISystem` owns composition, dock registration, window-state persistence, localization, and
+  top-level presentation actions, never editor/domain behavior.
+- `QtViewportPanel` hosts one to four panes. Each embeds a native child `QWindow` through
+  `QtViewportSurface` and owns only Qt event adaptation, presentation, render submission
+  coordination, and interaction routing.
+- `UIPanelManager` owns public-panel-to-`QDockWidget` mapping and visibility; widgets own only local
+  presentation state.
 - User/editor intent routes through `QuaderEditorApi`, `QuaderApi`, commands, or owner services.
-- `ViewportWorkspaceService` owns viewport layout, focused pane, pane view, shading, grid preset,
-  render size/visibility, and pane camera state. Do not mirror those fields in UI widgets.
+- `ViewportWorkspaceService` owns layout, focused pane, view, shading, grid preset, render
+  size/visibility, and camera state. Do not mirror them in widgets.
+- Route Qt key, pointer, wheel, focus, and text-capture state through `qt_input_adapter.*`, the
+  canonical keybinding service, and semantic `ViewportInputFrame`. Never create a second command
+  map with `QAction` shortcuts or ad-hoc widget key checks.
 - User-facing labels, menu text, panel titles, settings names, and status text use localization.
-- Add/update owner tests when changing chrome, panels, sidebar sizing, viewport pane layout,
-  viewport input routing, UI settings, or resource packaging.
-- When changing runtime icons, fonts, locales, or materials, rebuild `quader` as well as tests.
+- Update owner tests for chrome, panels, sidebar sizing, pane layout/input, settings, or resources.
+- For runtime logos, overlay icons, locales, or materials, rebuild `quader` and tests. Stock Qt UI
+  visuals do not use packaged theme fonts or icon sets.

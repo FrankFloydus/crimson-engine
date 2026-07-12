@@ -27,6 +27,7 @@
 #include "scene/scene_document.hpp"
 #include "scene/scene_bounds.hpp"
 #include "support/guardrail_file_scan.hpp"
+#include "viewport/viewport_settings.hpp"
 
 #include <mesh/polygon/document.hpp>
 
@@ -562,6 +563,69 @@ TEST(RenderSceneSnapshotTests, BuildsVisibleMeshLightAndMaterialRecords) {
   EXPECT_TRUE(snapshot.live_light_entities.contains(light));
 }
 
+TEST(RenderHotPathTests, SceneSnapshotSourceMatchTracksOwnerRevisions) {
+  SceneDocument document;
+  AssetRegistry assets;
+  RenderSceneSnapshot snapshot = build_render_scene_snapshot(document, assets);
+
+  EXPECT_TRUE(render_scene_snapshot_matches_sources(snapshot, document,
+                                                    assets));
+
+  const EntityId entity =
+      document.create_entity("Revision Probe", EntityKind::Empty);
+  EXPECT_FALSE(render_scene_snapshot_matches_sources(snapshot, document,
+                                                     assets));
+
+  snapshot = build_render_scene_snapshot(document, assets);
+  EXPECT_TRUE(render_scene_snapshot_matches_sources(snapshot, document,
+                                                    assets));
+
+  document.set_transform(
+      entity, TransformComponent{.position = {3.0f, 2.0f, 1.0f}});
+  EXPECT_FALSE(render_scene_snapshot_matches_sources(snapshot, document,
+                                                     assets));
+
+  snapshot = build_render_scene_snapshot(document, assets);
+  EXPECT_TRUE(render_scene_snapshot_matches_sources(snapshot, document,
+                                                    assets));
+
+  (void)assets.add_mesh(make_overlay_triangle_mesh());
+  EXPECT_FALSE(render_scene_snapshot_matches_sources(snapshot, document,
+                                                     assets));
+}
+
+TEST(RenderHotPathTests, MeshSurfaceGridSignatureIsNarrowAndStable) {
+  ViewportSettings settings = ViewportSettings::defaults();
+  const std::uint64_t initial = mesh_surface_grid_signature(1.0f, settings);
+
+  ASSERT_TRUE(settings.set_bool_value(
+      ViewportBoolSettingId::ShowInfo,
+      !settings.bool_value(ViewportBoolSettingId::ShowInfo)));
+  EXPECT_EQ(mesh_surface_grid_signature(1.0f, settings), initial);
+
+  ASSERT_TRUE(settings.set_bool_value(
+      ViewportBoolSettingId::ShowMeshGrid,
+      !settings.bool_value(ViewportBoolSettingId::ShowMeshGrid)));
+  EXPECT_NE(mesh_surface_grid_signature(1.0f, settings), initial);
+
+  const ViewportSettings defaults = ViewportSettings::defaults();
+  EXPECT_NE(mesh_surface_grid_signature(2.0f, defaults), initial);
+
+  ViewportSettings recolored = defaults;
+  ASSERT_TRUE(recolored.set_color(ViewportColorSettingId::MeshGridMinor,
+                                  {0.2f, 0.4f, 0.6f, 0.8f}));
+  EXPECT_NE(mesh_surface_grid_signature(1.0f, recolored), initial);
+}
+
+TEST(RenderHotPathTests, SrgbByteLookupPreservesReferenceConversion) {
+  for (std::uint32_t value = 0; value <= 255u; ++value) {
+    const std::uint8_t channel = static_cast<std::uint8_t>(value);
+    const std::uint8_t reference = normalized_to_byte(
+        srgb_to_linear(static_cast<float>(channel) / 255.0f));
+    EXPECT_EQ(srgb_byte_to_linear_byte(channel), reference) << value;
+  }
+}
+
 TEST(ViewportInfoStatsTests, CountsOnlyCameraVisibleRenderableMeshes) {
   SceneDocument document;
   AssetRegistry assets;
@@ -654,7 +718,7 @@ TEST(RenderSceneSnapshotTests, OverlayRecordsStayBehindRenderBoundary) {
   const std::string render_bridge_source =
       read_source_file("src/render/scene_render_bridge.cpp");
   const std::string viewport_panel_source =
-      read_source_file("src/ui/viewport_panel.cpp");
+      read_source_file("src/ui/qt_viewport_panel.cpp");
 
   for (std::string_view token : {
            std::string_view{"SelectedObject"},
@@ -777,10 +841,22 @@ TEST(RenderOverlaySnapshotTests,
   document.set_visible(hidden_selected_mesh, false);
   ASSERT_TRUE(document.set_selected(hidden_selected_mesh, true));
 
+  const ViewportPersistentOverlayStyleSnapshot persistent_style{
+      .selection_face_color = rgba8(12, 34, 56, 78),
+      .selection_wire_color = rgba8(90, 87, 65, 43),
+      .selection_edge_line_width_pixels = 4.5f,
+      .face_signature = 101u,
+      .wire_signature = 202u,
+  };
   const RenderOverlaySelectedObjectSnapshot selected_snapshot =
-      build_render_overlay_selected_object_snapshot(document, assets, true);
+      build_render_overlay_selected_object_snapshot(document, assets, true,
+                                                    persistent_style);
 
   EXPECT_TRUE(selected_snapshot.visible);
+  EXPECT_EQ(selected_snapshot.style.selection_face_color,
+            persistent_style.selection_face_color);
+  EXPECT_EQ(selected_snapshot.style.face_signature,
+            persistent_style.face_signature);
   EXPECT_EQ(selected_snapshot.scene_revision, document.revision());
   EXPECT_EQ(selected_snapshot.asset_revision, assets.revision());
   EXPECT_EQ(selected_snapshot.selection_revision,
@@ -805,10 +881,18 @@ TEST(RenderOverlaySnapshotTests,
   EXPECT_TRUE(hidden_snapshot.meshes.empty());
 
   const RenderOverlaySceneWireframeSnapshot wireframe_snapshot =
-      build_render_overlay_scene_wireframe_snapshot(document, assets, 0x03u);
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 0x03u,
+                                                    persistent_style);
 
   EXPECT_EQ(wireframe_snapshot.scene_revision, document.revision());
   EXPECT_EQ(wireframe_snapshot.asset_revision, assets.revision());
+  EXPECT_EQ(wireframe_snapshot.style.selection_wire_color,
+            persistent_style.selection_wire_color);
+  EXPECT_FLOAT_EQ(
+      wireframe_snapshot.style.selection_edge_line_width_pixels,
+      persistent_style.selection_edge_line_width_pixels);
+  EXPECT_EQ(wireframe_snapshot.style.wire_signature,
+            persistent_style.wire_signature);
   EXPECT_FLOAT_EQ(wireframe_snapshot.clip_planes.near_plane, 0.01f);
   EXPECT_FLOAT_EQ(wireframe_snapshot.clip_planes.far_plane, 250.0f);
   EXPECT_EQ(wireframe_snapshot.layer_mask, 0x03u);
@@ -857,6 +941,424 @@ TEST(RenderOverlaySnapshotTests,
             std::string::npos);
 }
 
+TEST(RenderOverlaySnapshotCacheTests,
+     StableSourcesReuseAllOverlayExtractionsUntilOwnerRevisionChanges) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId entity =
+      document.create_entity("Cached Overlay Mesh", EntityKind::Mesh);
+  document.set_mesh(entity, MeshComponent{.mesh = mesh});
+  ASSERT_TRUE(document.set_selected(entity, true));
+
+  const ViewportPersistentOverlayStyleSnapshot style{
+      .face_signature = 101u,
+      .wire_signature = 202u,
+  };
+  RenderOverlaySnapshotCache cache;
+  const RenderOverlayPersistentSnapshotUpdate first =
+      cache.update_persistent(document, assets, true, 0x01u, style);
+  ASSERT_NE(first.selected_object, nullptr);
+  ASSERT_NE(first.scene_wireframe, nullptr);
+  EXPECT_TRUE(first.selected_object_changed);
+  EXPECT_TRUE(first.scene_wireframe_changed);
+  (void)cache.selection_snapshot(document, assets);
+  EXPECT_EQ(cache.stats().selected_object_build_count, 1u);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+
+  const RenderOverlayPersistentSnapshotUpdate stable =
+      cache.update_persistent(document, assets, true, 0x01u, style);
+  EXPECT_FALSE(stable.changed());
+  (void)cache.selection_snapshot(document, assets);
+  EXPECT_EQ(cache.stats().selected_object_build_count, 1u);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+
+  document.set_transform(
+      entity, TransformComponent{.position = {3.0f, 2.0f, 1.0f}});
+  const RenderOverlayPersistentSnapshotUpdate transformed =
+      cache.update_persistent(document, assets, true, 0x01u, style);
+  EXPECT_TRUE(transformed.selected_object_changed);
+  EXPECT_TRUE(transformed.scene_wireframe_changed);
+  (void)cache.selection_snapshot(document, assets);
+  EXPECT_EQ(cache.stats().selected_object_build_count, 2u);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, 2u);
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_transform_refresh_count, 1u);
+}
+
+TEST(RenderOverlaySnapshotCacheTests,
+     TransformOnlyRefreshMatchesFullSelectionSnapshotWithoutReordering) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+
+  const EntityId group = document.create_empty("Moving Group");
+  const EntityId group_child =
+      document.create_entity("Moving Group Child", EntityKind::Mesh);
+  document.set_mesh(group_child, MeshComponent{.mesh = mesh});
+  ASSERT_TRUE(document.set_parent(group_child, group, false));
+  ASSERT_TRUE(document.set_selected(group, true));
+
+  const EntityId selected_mesh =
+      document.create_entity("Moving Selected Mesh", EntityKind::Mesh);
+  document.set_mesh(selected_mesh, MeshComponent{.mesh = mesh});
+  ASSERT_TRUE(document.set_selected(selected_mesh, true));
+
+  const EntityId directional_light =
+      document.create_entity("Moving Directional Light", EntityKind::Light);
+  document.set_light(
+      directional_light, LightComponent{.type = LightType::Directional});
+  ASSERT_TRUE(document.set_selected(directional_light, true));
+
+  const EntityId point_light =
+      document.create_entity("Moving Point Light", EntityKind::Light);
+  document.set_light(point_light, LightComponent{.type = LightType::Point});
+
+  RenderOverlaySnapshotCache cache;
+  const RenderOverlaySelectionSnapshot &initial =
+      cache.selection_snapshot(document, assets);
+  ASSERT_EQ(initial.hierarchy_selection_wires.size(), 1u);
+  ASSERT_EQ(initial.group_bounds.size(), 1u);
+  ASSERT_EQ(initial.selected_mesh_bounds.size(), 1u);
+  ASSERT_EQ(initial.selected_lights.size(), 1u);
+  ASSERT_EQ(initial.point_light_gizmos.size(), 1u);
+
+  const std::array<SceneTransformAssignment, 4> transforms{{
+      {
+          .entity = group,
+          .transform = TransformComponent{
+              .position = {4.0f, -2.0f, 1.0f},
+              .rotation_euler = {0.2f, 0.4f, -0.1f},
+          },
+      },
+      {
+          .entity = selected_mesh,
+          .transform = TransformComponent{
+              .position = {-3.0f, 5.0f, 2.0f},
+              .rotation_euler = {-0.3f, 0.1f, 0.6f},
+              .scale = {1.5f, 0.75f, 2.0f},
+          },
+      },
+      {
+          .entity = directional_light,
+          .transform = TransformComponent{.position = {7.0f, 8.0f, 9.0f}},
+      },
+      {
+          .entity = point_light,
+          .transform = TransformComponent{.position = {-7.0f, 3.0f, 6.0f}},
+      },
+  }};
+  document.set_transforms(transforms);
+
+  const RenderOverlaySelectionSnapshot &refreshed =
+      cache.selection_snapshot(document, assets);
+  const RenderOverlaySelectionSnapshot rebuilt =
+      build_render_overlay_selection_snapshot(document, assets);
+
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_transform_refresh_count, 1u);
+  EXPECT_EQ(refreshed.scene_revision, rebuilt.scene_revision);
+  EXPECT_EQ(refreshed.asset_revision, rebuilt.asset_revision);
+  EXPECT_EQ(refreshed.selection_revision, rebuilt.selection_revision);
+  EXPECT_EQ(refreshed.visibility_revision, rebuilt.visibility_revision);
+  EXPECT_EQ(refreshed.transform_revision, rebuilt.transform_revision);
+  EXPECT_EQ(refreshed.mesh_binding_revision,
+            rebuilt.mesh_binding_revision);
+  EXPECT_EQ(refreshed.render_component_revision,
+            rebuilt.render_component_revision);
+
+  ASSERT_EQ(refreshed.hierarchy_selection_wires.size(),
+            rebuilt.hierarchy_selection_wires.size());
+  for (std::size_t index = 0;
+       index < refreshed.hierarchy_selection_wires.size(); ++index) {
+    const RenderOverlayMeshSnapshot &actual =
+        refreshed.hierarchy_selection_wires[index];
+    const RenderOverlayMeshSnapshot &expected =
+        rebuilt.hierarchy_selection_wires[index];
+    EXPECT_EQ(actual.entity, expected.entity);
+    EXPECT_EQ(actual.mesh_id, expected.mesh_id);
+    EXPECT_EQ(actual.mesh_revision, expected.mesh_revision);
+    EXPECT_EQ(actual.selected, expected.selected);
+    EXPECT_EQ(actual.world_transform.values,
+              expected.world_transform.values);
+  }
+
+  ASSERT_EQ(refreshed.group_bounds.size(), rebuilt.group_bounds.size());
+  for (std::size_t index = 0; index < refreshed.group_bounds.size(); ++index) {
+    expect_bounds_snapshot_near(
+        refreshed.group_bounds[index],
+        SceneBounds{.min = rebuilt.group_bounds[index].min,
+                    .max = rebuilt.group_bounds[index].max});
+  }
+  ASSERT_EQ(refreshed.selected_mesh_bounds.size(),
+            rebuilt.selected_mesh_bounds.size());
+  for (std::size_t index = 0; index < refreshed.selected_mesh_bounds.size();
+       ++index) {
+    expect_bounds_snapshot_near(
+        refreshed.selected_mesh_bounds[index],
+        SceneBounds{.min = rebuilt.selected_mesh_bounds[index].min,
+                    .max = rebuilt.selected_mesh_bounds[index].max});
+  }
+
+  ASSERT_EQ(refreshed.selected_lights.size(), rebuilt.selected_lights.size());
+  for (std::size_t index = 0; index < refreshed.selected_lights.size();
+       ++index) {
+    EXPECT_EQ(refreshed.selected_lights[index].entity,
+              rebuilt.selected_lights[index].entity);
+    EXPECT_EQ(refreshed.selected_lights[index].type,
+              rebuilt.selected_lights[index].type);
+    EXPECT_EQ(refreshed.selected_lights[index].world_transform.values,
+              rebuilt.selected_lights[index].world_transform.values);
+  }
+  ASSERT_EQ(refreshed.point_light_gizmos.size(),
+            rebuilt.point_light_gizmos.size());
+  for (std::size_t index = 0; index < refreshed.point_light_gizmos.size();
+       ++index) {
+    EXPECT_EQ(refreshed.point_light_gizmos[index].entity,
+              rebuilt.point_light_gizmos[index].entity);
+    EXPECT_EQ(refreshed.point_light_gizmos[index].type,
+              rebuilt.point_light_gizmos[index].type);
+    EXPECT_EQ(refreshed.point_light_gizmos[index].world_transform.values,
+              rebuilt.point_light_gizmos[index].world_transform.values);
+  }
+}
+
+TEST(RenderOverlaySnapshotCacheTests,
+     TransformFastPathRejectsEveryStructuralOverlaySourceChange) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId first_mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const AssetId second_mesh = assets.add_mesh(make_authored_quad_mesh());
+  const EntityId parent = document.create_empty("Hierarchy Parent");
+  const EntityId selected =
+      document.create_entity("Selected Mesh", EntityKind::Mesh);
+  document.set_mesh(selected, MeshComponent{.mesh = first_mesh});
+  ASSERT_TRUE(document.set_selected(selected, true));
+  const EntityId second =
+      document.create_entity("Second Mesh", EntityKind::Mesh);
+  document.set_mesh(second, MeshComponent{.mesh = first_mesh});
+  const EntityId light =
+      document.create_entity("Point Light", EntityKind::Light);
+  document.set_light(light, LightComponent{.type = LightType::Point});
+
+  RenderOverlaySnapshotCache cache;
+  (void)cache.selection_snapshot(document, assets);
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+
+  ASSERT_TRUE(document.set_selected(second, true));
+  (void)cache.selection_snapshot(document, assets);
+  EXPECT_EQ(cache.stats().selection_build_count, 2u);
+  EXPECT_EQ(cache.stats().selection_transform_refresh_count, 0u);
+
+  document.set_transform(
+      selected, TransformComponent{.position = {1.0f, 2.0f, 3.0f}});
+  (void)cache.selection_snapshot(document, assets);
+  EXPECT_EQ(cache.stats().selection_build_count, 2u);
+  EXPECT_EQ(cache.stats().selection_transform_refresh_count, 1u);
+
+  ASSERT_TRUE(document.set_visible(second, false));
+  (void)cache.selection_snapshot(document, assets);
+  EXPECT_EQ(cache.stats().selection_build_count, 3u);
+
+  document.set_mesh(selected, MeshComponent{.mesh = second_mesh});
+  (void)cache.selection_snapshot(document, assets);
+  EXPECT_EQ(cache.stats().selection_build_count, 4u);
+
+  document.set_light(light,
+                     LightComponent{.type = LightType::Point,
+                                    .intensity = 2.0f});
+  (void)cache.selection_snapshot(document, assets);
+  EXPECT_EQ(cache.stats().selection_build_count, 5u);
+
+  (void)assets.add_mesh(make_overlay_triangle_mesh());
+  (void)cache.selection_snapshot(document, assets);
+  EXPECT_EQ(cache.stats().selection_build_count, 6u);
+
+  ASSERT_TRUE(document.set_parent(selected, parent, false));
+  (void)cache.selection_snapshot(document, assets);
+  EXPECT_EQ(cache.stats().selection_build_count, 7u);
+  EXPECT_EQ(cache.stats().selection_transform_refresh_count, 1u);
+}
+
+TEST(RenderOverlaySnapshotCacheTests,
+     SelectionWorldBoundsTranslateExactlyAndFallBackForLinearChanges) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId entity =
+      document.create_entity("Moving Selection Cage", EntityKind::Mesh);
+  document.set_mesh(entity, MeshComponent{.mesh = mesh});
+  ASSERT_TRUE(document.set_selected(entity, true));
+
+  RenderOverlaySnapshotCache cache;
+  const RenderOverlaySelectionSnapshot &initial =
+      cache.selection_snapshot(document, assets);
+  ASSERT_EQ(initial.selected_mesh_bounds.size(), 1u);
+  EXPECT_EQ(cache.stats().selection_local_bounds_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_local_bounds_reuse_count, 0u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_translation_reuse_count, 0u);
+
+  document.set_transform(
+      entity,
+      TransformComponent{
+          .position = {3.0f, -2.0f, 5.0f},
+          .rotation_euler = {0.31f, -0.47f, 0.19f},
+          .scale = {1.7f, 0.6f, 2.2f},
+      });
+  const std::optional<SceneBounds> expected =
+      entity_world_bounds(document, assets, entity);
+  ASSERT_TRUE(expected.has_value());
+
+  const RenderOverlaySelectionSnapshot &transformed =
+      cache.selection_snapshot(document, assets);
+  ASSERT_EQ(transformed.selected_mesh_bounds.size(), 1u);
+  expect_bounds_snapshot_near(transformed.selected_mesh_bounds.front(),
+                              *expected);
+  const ViewportOverlayFrame overlay =
+      ViewportSceneOverlayBuilder::build_selection_frame(
+          {}, transformed, false, ModelingSelectionMode::Object);
+  EXPECT_EQ(line_source_count_for(overlay, ViewportOverlaySource::GroupBounds),
+            12u);
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_transform_refresh_count, 1u);
+  EXPECT_EQ(cache.stats().selection_local_bounds_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_local_bounds_reuse_count, 1u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_build_count, 2u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_translation_reuse_count, 0u);
+
+  document.set_transform(
+      entity,
+      TransformComponent{
+          .position = {8.0f, 1.0f, -4.0f},
+          .rotation_euler = {0.31f, -0.47f, 0.19f},
+          .scale = {1.7f, 0.6f, 2.2f},
+      });
+  const std::optional<SceneBounds> translated_expected =
+      entity_world_bounds(document, assets, entity);
+  ASSERT_TRUE(translated_expected.has_value());
+  const RenderOverlaySelectionSnapshot &translated =
+      cache.selection_snapshot(document, assets);
+  ASSERT_EQ(translated.selected_mesh_bounds.size(), 1u);
+  expect_bounds_snapshot_near(translated.selected_mesh_bounds.front(),
+                              *translated_expected);
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_transform_refresh_count, 2u);
+  EXPECT_EQ(cache.stats().selection_local_bounds_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_local_bounds_reuse_count, 1u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_build_count, 2u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_translation_reuse_count, 1u);
+}
+
+TEST(RenderOverlaySnapshotCacheTests,
+     ParentedMoveTranslatesWorldBoundsAndParentRotationFallsBackExactly) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId parent =
+      document.create_entity("Selection Cage Parent", EntityKind::Empty);
+  const EntityId child =
+      document.create_entity("Parented Selection Cage", EntityKind::Mesh);
+  document.set_mesh(child, MeshComponent{.mesh = mesh});
+  ASSERT_TRUE(document.set_parent(child, parent, false));
+  document.set_transform(
+      parent,
+      TransformComponent{
+          .position = {1.0f, 2.0f, 3.0f},
+          .rotation_euler = {0.2f, -0.3f, 0.4f},
+          .scale = {1.5f, 0.8f, 1.2f},
+      });
+  document.set_transform(
+      child, TransformComponent{.position = {2.0f, -1.0f, 0.5f}});
+  ASSERT_TRUE(document.set_selected(child, true));
+
+  RenderOverlaySnapshotCache cache;
+  (void)cache.selection_snapshot(document, assets);
+  EXPECT_EQ(cache.stats().selection_world_bounds_build_count, 1u);
+
+  document.set_transform(
+      parent,
+      TransformComponent{
+          .position = {6.0f, -4.0f, 8.0f},
+          .rotation_euler = {0.2f, -0.3f, 0.4f},
+          .scale = {1.5f, 0.8f, 1.2f},
+      });
+  const std::optional<SceneBounds> moved_expected =
+      entity_world_bounds(document, assets, child);
+  ASSERT_TRUE(moved_expected.has_value());
+  const RenderOverlaySelectionSnapshot &moved =
+      cache.selection_snapshot(document, assets);
+  ASSERT_EQ(moved.selected_mesh_bounds.size(), 1u);
+  expect_bounds_snapshot_near(moved.selected_mesh_bounds.front(),
+                              *moved_expected);
+  EXPECT_EQ(cache.stats().selection_world_bounds_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_translation_reuse_count, 1u);
+
+  document.set_transform(
+      parent,
+      TransformComponent{
+          .position = {6.0f, -4.0f, 8.0f},
+          .rotation_euler = {0.5f, -0.1f, 0.25f},
+          .scale = {1.5f, 0.8f, 1.2f},
+      });
+  const std::optional<SceneBounds> rotated_expected =
+      entity_world_bounds(document, assets, child);
+  ASSERT_TRUE(rotated_expected.has_value());
+  const RenderOverlaySelectionSnapshot &rotated =
+      cache.selection_snapshot(document, assets);
+  ASSERT_EQ(rotated.selected_mesh_bounds.size(), 1u);
+  expect_bounds_snapshot_near(rotated.selected_mesh_bounds.front(),
+                              *rotated_expected);
+  EXPECT_EQ(cache.stats().selection_local_bounds_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_local_bounds_reuse_count, 1u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_build_count, 2u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_translation_reuse_count, 1u);
+}
+
+TEST(RenderOverlaySnapshotCacheTests,
+     LocalMeshBoundsReuseUnrelatedAssetChangesAndInvalidateOnMeshRevision) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId entity =
+      document.create_entity("Revision Selection Cage", EntityKind::Mesh);
+  document.set_mesh(entity, MeshComponent{.mesh = mesh});
+  ASSERT_TRUE(document.set_selected(entity, true));
+
+  RenderOverlaySnapshotCache cache;
+  (void)cache.selection_snapshot(document, assets);
+  EXPECT_EQ(cache.stats().selection_local_bounds_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_local_bounds_reuse_count, 0u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_build_count, 1u);
+
+  (void)assets.add_mesh(make_authored_quad_mesh());
+  (void)cache.selection_snapshot(document, assets);
+  EXPECT_EQ(cache.stats().selection_local_bounds_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_local_bounds_reuse_count, 0u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_build_count, 1u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_translation_reuse_count, 1u);
+
+  ASSERT_TRUE(assets.update_mesh(mesh, [](MeshAsset &updated) {
+    updated.vertices.front().position = {-4.0f, -3.0f, -2.0f};
+    updated.vertices.back().position = {6.0f, 5.0f, 7.0f};
+  }));
+  const std::optional<SceneBounds> expected =
+      entity_world_bounds(document, assets, entity);
+  ASSERT_TRUE(expected.has_value());
+
+  const RenderOverlaySelectionSnapshot &revised =
+      cache.selection_snapshot(document, assets);
+  ASSERT_EQ(revised.selected_mesh_bounds.size(), 1u);
+  expect_bounds_snapshot_near(revised.selected_mesh_bounds.front(), *expected);
+  EXPECT_EQ(cache.stats().selection_build_count, 3u);
+  EXPECT_EQ(cache.stats().selection_local_bounds_build_count, 2u);
+  EXPECT_EQ(cache.stats().selection_local_bounds_reuse_count, 0u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_build_count, 2u);
+  EXPECT_EQ(cache.stats().selection_world_bounds_translation_reuse_count, 1u);
+}
+
 TEST(RenderOverlaySnapshotTests, SceneOverlayBuildersConsumeSnapshotsOnly) {
   const std::string builder_source = read_source_file(
       "src/render/overlay/viewport_scene_overlay_builder.cpp");
@@ -870,6 +1372,8 @@ TEST(RenderOverlaySnapshotTests, SceneOverlayBuildersConsumeSnapshotsOnly) {
       read_source_file("src/render/scene_render_bridge.cpp");
   const std::string bridge_header =
       read_source_file("src/render/scene_render_bridge.hpp");
+  const std::string overlay_snapshot_header =
+      read_source_file("src/render/overlay/render_overlay_snapshot.hpp");
   const std::string render_snapshot_header =
       read_source_file("src/render/render_scene_snapshot.hpp");
 
@@ -898,6 +1402,11 @@ TEST(RenderOverlaySnapshotTests, SceneOverlayBuildersConsumeSnapshotsOnly) {
   EXPECT_EQ(bridge_source.find("build_render_overlay_selected_object_snapshot"),
             std::string::npos);
   EXPECT_EQ(bridge_source.find("build_render_overlay_scene_wireframe_snapshot"),
+            std::string::npos);
+  EXPECT_EQ(bridge_header.find("RenderOverlaySnapshotCache"),
+            std::string::npos);
+  EXPECT_NE(overlay_snapshot_header.find(
+                "class RenderOverlaySnapshotCache final"),
             std::string::npos);
   EXPECT_NE(bridge_header.find("const RenderOverlaySelectedObjectSnapshot"),
             std::string::npos);
@@ -1037,6 +1546,186 @@ TEST(RenderSceneSnapshotTests, BuildsValueSpanRecordsAndTracksDirtyState) {
   EXPECT_TRUE(replaced.dirty.assets_changed);
   EXPECT_TRUE(replaced_record->mesh_dirty);
   EXPECT_FALSE(replaced_record->transform_dirty);
+}
+
+TEST(SceneDocumentRevisionTests,
+     RenderComponentRevisionTracksStructuralAndComponentMutations) {
+  SceneDocument document;
+  const std::uint64_t initial_revision =
+      document.render_component_revision();
+
+  const EntityId entity =
+      document.create_entity("Revision Probe", EntityKind::Mesh);
+  EXPECT_GT(document.render_component_revision(), initial_revision);
+
+  const std::uint64_t after_create = document.render_component_revision();
+  document.set_transform(
+      entity, TransformComponent{.position = {1.0f, 2.0f, 3.0f}});
+  EXPECT_EQ(document.render_component_revision(), after_create);
+  ASSERT_TRUE(document.set_visible(entity, false));
+  EXPECT_EQ(document.render_component_revision(), after_create);
+
+  const EntityId parent =
+      document.create_entity("Revision Parent", EntityKind::Empty);
+  const std::uint64_t after_parent_create =
+      document.render_component_revision();
+  ASSERT_TRUE(document.set_parent(entity, parent, false));
+  EXPECT_EQ(document.render_component_revision(), after_parent_create);
+
+  document.set_mesh(entity, MeshComponent{.mesh = 17u});
+  const std::uint64_t after_mesh = document.render_component_revision();
+  EXPECT_GT(after_mesh, after_parent_create);
+
+  document.set_material(entity, MaterialComponent{.material = 23u});
+  const std::uint64_t after_material =
+      document.render_component_revision();
+  EXPECT_GT(after_material, after_mesh);
+  ASSERT_TRUE(document.clear_material(entity));
+  const std::uint64_t after_clear_material =
+      document.render_component_revision();
+  EXPECT_GT(after_clear_material, after_material);
+
+  document.set_light(entity, LightComponent{.type = LightType::Point});
+  const std::uint64_t after_light = document.render_component_revision();
+  EXPECT_GT(after_light, after_clear_material);
+
+  const EntityId explicit_entity = document.create_entity_with_id(
+      9001u, "Explicit Revision Probe", EntityKind::Empty);
+  ASSERT_NE(explicit_entity, kInvalidEntityId);
+  const std::uint64_t after_explicit_create =
+      document.render_component_revision();
+  EXPECT_GT(after_explicit_create, after_light);
+  ASSERT_TRUE(document.destroy_entity(explicit_entity));
+  const std::uint64_t after_single_destroy =
+      document.render_component_revision();
+  EXPECT_GT(after_single_destroy, after_explicit_create);
+
+  const std::array<EntityId, 2u> batch{{
+      document.create_entity("Batch Revision A", EntityKind::Empty),
+      document.create_entity("Batch Revision B", EntityKind::Empty),
+  }};
+  const std::uint64_t before_batch_destroy =
+      document.render_component_revision();
+  ASSERT_TRUE(document.destroy_entities(batch));
+  EXPECT_GT(document.render_component_revision(), before_batch_destroy);
+
+  const std::uint64_t before_replacement =
+      document.render_component_revision();
+  document.advance_revision_for_replacement(document.revision());
+  EXPECT_GT(document.render_component_revision(), before_replacement);
+}
+
+TEST(RenderSceneSnapshotTests,
+     RefreshesOnlyPureTransformSnapshotsAndRejectsOtherSourceChanges) {
+  SceneDocument document;
+  AssetRegistry assets;
+
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const AssetId alternate_mesh = assets.add_mesh(make_authored_quad_mesh());
+  const AssetId material =
+      assets.add_material(make_default_quader_material("Render Material"));
+  const EntityId first = document.create_entity("First", EntityKind::Mesh);
+  document.set_mesh(first, MeshComponent{.mesh = mesh});
+  document.set_material(first, MaterialComponent{.material = material});
+  const EntityId second = document.create_entity("Second", EntityKind::Mesh);
+  document.set_mesh(second, MeshComponent{.mesh = mesh});
+  document.set_material(second, MaterialComponent{.material = material});
+  const EntityId light = document.create_entity("Light", EntityKind::Light);
+  document.set_light(light, LightComponent{.type = LightType::Point});
+
+  RenderSceneSnapshot snapshot =
+      build_render_scene_snapshot(document, assets, {.frame_index = 1u});
+  ASSERT_EQ(snapshot.meshes.size(), 2u);
+  ASSERT_EQ(snapshot.lights.size(), 1u);
+  EXPECT_EQ(snapshot.render_component_revision,
+            document.render_component_revision());
+  const MeshVertex *const retained_vertices =
+      snapshot.meshes.front().mesh.vertices.data();
+  const std::uint64_t second_transform_revision =
+      snapshot.meshes[1].transform_revision;
+
+  document.set_transform(
+      first, TransformComponent{.position = {3.0f, 4.0f, 5.0f}});
+  ASSERT_TRUE(try_refresh_render_scene_snapshot_transforms(
+      snapshot, document, assets, 2u));
+  EXPECT_EQ(snapshot.frame_index, 2u);
+  EXPECT_EQ(snapshot.scene_revision, document.revision());
+  EXPECT_EQ(snapshot.transform_revision, document.transform_revision());
+  EXPECT_TRUE(snapshot.dirty.scene_changed);
+  EXPECT_TRUE(snapshot.dirty.transforms_changed);
+  EXPECT_FALSE(snapshot.dirty.visibility_changed);
+  EXPECT_FALSE(snapshot.dirty.mesh_bindings_changed);
+  EXPECT_FALSE(snapshot.dirty.render_components_changed);
+  EXPECT_FALSE(snapshot.dirty.assets_changed);
+  EXPECT_TRUE(snapshot.meshes[0].transform_dirty);
+  EXPECT_FALSE(snapshot.meshes[0].mesh_dirty);
+  EXPECT_FALSE(snapshot.meshes[0].material_dirty);
+  EXPECT_FALSE(snapshot.meshes[0].binding_dirty);
+  EXPECT_FALSE(snapshot.meshes[1].transform_dirty);
+  EXPECT_EQ(snapshot.meshes[1].transform_revision,
+            second_transform_revision);
+  EXPECT_EQ(snapshot.meshes.front().mesh.vertices.data(), retained_vertices);
+  EXPECT_FALSE(snapshot.lights.front().light_dirty);
+  EXPECT_FALSE(snapshot.lights.front().transform_dirty);
+
+  std::uint64_t next_frame_index = 3u;
+  const auto expect_rejected_and_rebuild = [&](std::string_view cause) {
+    SCOPED_TRACE(std::string(cause));
+    TransformComponent moved = *document.transform(first);
+    moved.position.x += 1.0f;
+    document.set_transform(first, moved);
+    const std::uint64_t retained_scene_revision = snapshot.scene_revision;
+    const std::uint64_t retained_frame_index = snapshot.frame_index;
+    EXPECT_FALSE(try_refresh_render_scene_snapshot_transforms(
+        snapshot, document, assets, next_frame_index++));
+    EXPECT_EQ(snapshot.scene_revision, retained_scene_revision);
+    EXPECT_EQ(snapshot.frame_index, retained_frame_index);
+    snapshot = build_render_scene_snapshot(
+        document, assets, {.frame_index = next_frame_index++});
+  };
+
+  MaterialComponent changed_material{.material = material};
+  changed_material.material_slots.emplace(3u, material);
+  document.set_material(first, changed_material);
+  EXPECT_NE(snapshot.render_component_revision,
+            document.render_component_revision());
+  expect_rejected_and_rebuild("material edit");
+
+  ASSERT_TRUE(document.clear_material(first));
+  expect_rejected_and_rebuild("material removal");
+  document.set_material(first, MaterialComponent{.material = material});
+  expect_rejected_and_rebuild("material addition");
+
+  LightComponent changed_light = *document.light(light);
+  changed_light.intensity += 2.0f;
+  document.set_light(light, changed_light);
+  expect_rejected_and_rebuild("light edit");
+
+  document.set_mesh(second, MeshComponent{.mesh = alternate_mesh});
+  expect_rejected_and_rebuild("mesh binding edit");
+
+  const EntityId created =
+      document.create_entity("Created After Snapshot", EntityKind::Empty);
+  expect_rejected_and_rebuild("entity creation");
+  ASSERT_TRUE(document.destroy_entity(created));
+  expect_rejected_and_rebuild("entity destruction");
+
+  ASSERT_TRUE(document.set_visible(second, false));
+  expect_rejected_and_rebuild("visibility edit");
+  ASSERT_TRUE(document.set_visible(second, true));
+  snapshot = build_render_scene_snapshot(
+      document, assets, {.frame_index = next_frame_index++});
+
+  ASSERT_TRUE(document.set_parent(second, first, false));
+  expect_rejected_and_rebuild("hierarchy edit");
+
+  MeshAsset replacement = make_authored_quad_mesh();
+  replacement.vertices.front().rgba = 0xff00ffffu;
+  ASSERT_TRUE(assets.replace_mesh(alternate_mesh, std::move(replacement)));
+  expect_rejected_and_rebuild("asset edit");
+
+  document.advance_revision_for_replacement(document.revision());
+  expect_rejected_and_rebuild("document replacement");
 }
 
 TEST(LightRenderableCacheTests, SeparatesRebuildAndTransformSignatures) {
@@ -1762,7 +2451,8 @@ TEST(OverlayLineMeshBuilderTests, ExtendsLineCapsInScreenSpace) {
               0.00001f);
 }
 
-TEST(OverlayLineMeshBuilderTests, PerspectiveDepthBiasDoesNotMoveLineOrPointScreenPosition) {
+TEST(OverlayLineMeshBuilderTests,
+     PerspectiveDepthBiasMovesTowardCameraWithoutMovingScreenPosition) {
   const ViewportOverlayCamera camera = test_perspective_overlay_camera();
   const QVec3 line_start{-0.5f, 0.2f, -1.0f};
   const QVec3 line_end{0.5f, 0.2f, -1.0f};
@@ -1808,7 +2498,7 @@ TEST(OverlayLineMeshBuilderTests, PerspectiveDepthBiasDoesNotMoveLineOrPointScre
   ASSERT_TRUE(projected_point.valid);
 
   const float expected_line_depth =
-      projected_line_start.device.z + camera.near_plane *
+      projected_line_start.device.z - camera.near_plane *
                                           kOverlayDeviceDepthBiasPerNearPlane *
                                           kOverlayLineDepthBias;
   const float line_center_x =
@@ -1828,9 +2518,13 @@ TEST(OverlayLineMeshBuilderTests, PerspectiveDepthBiasDoesNotMoveLineOrPointScre
                   0.5f,
               0.00001f);
   EXPECT_NEAR(line_mesh.vertices[0].position.z, expected_line_depth, 0.00001f);
+  EXPECT_LT(line_mesh.vertices[0].position.z,
+            projected_line_start.device.z);
+  EXPECT_GT(line_mesh.vertices[0].position.z * -0.5f + 0.5f,
+            projected_line_start.device.z * -0.5f + 0.5f);
 
   const float expected_point_depth =
-      projected_point.device.z + camera.near_plane *
+      projected_point.device.z - camera.near_plane *
                                      kOverlayDeviceDepthBiasPerNearPlane *
                                      kOverlayPointDepthBias;
   const float point_center_x =
@@ -1845,6 +2539,28 @@ TEST(OverlayLineMeshBuilderTests, PerspectiveDepthBiasDoesNotMoveLineOrPointScre
   EXPECT_NEAR(point_center_y, projected_point.device.y, 0.00001f);
   EXPECT_NEAR(point_mesh.vertices[0].position.z, expected_point_depth,
               0.00001f);
+  EXPECT_LT(point_mesh.vertices[0].position.z, projected_point.device.z);
+  EXPECT_GT(point_mesh.vertices[0].position.z * -0.5f + 0.5f,
+            projected_point.device.z * -0.5f + 0.5f);
+}
+
+TEST(OverlayCameraProjectorTests,
+     TowardCameraDepthBiasClampsAtFilamentDeviceNearPlane) {
+  ViewportOverlayCamera camera = test_perspective_overlay_camera();
+  camera.near_plane = 0.05f;
+  const OverlayCameraProjector projector(camera);
+  OverlayProjectedPoint projected{
+      .device = {0.25f, -0.5f, -0.99999f, 1.0f},
+      .pixel = {100.0f, 200.0f},
+      .valid = true,
+  };
+
+  projector.apply_device_depth_bias(projected, 1000.0f);
+
+  EXPECT_FLOAT_EQ(projected.device.x, 0.25f);
+  EXPECT_FLOAT_EQ(projected.device.y, -0.5f);
+  EXPECT_FLOAT_EQ(projected.device.z, -1.0f);
+  EXPECT_FLOAT_EQ(projected.device.w, 1.0f);
 }
 
 TEST(OverlayFaceFillBuilderTests, CreatesDepthStampedFaceFillPasses) {
@@ -2035,6 +2751,50 @@ TEST(OverlayPointMeshBuilderTests,
     EXPECT_FLOAT_EQ(plan.point_batches.front().depth_bias,
                     kOverlayPointDepthBias);
     EXPECT_TRUE(plan.point_batches.front().state.depth_culling);
+  }
+}
+
+TEST(OverlayPointMeshBuilderTests,
+     KeepsOutwardNearestCornerVertexVisibleFromDiagonalCamera) {
+  const std::array<ViewportOverlayLayer, 3u> layers{{
+      ViewportOverlayLayer::UnselectedVertex,
+      ViewportOverlayLayer::SelectedVertex,
+      ViewportOverlayLayer::HoverVertex,
+  }};
+  const QVec3 target{0.0f, 0.0f, -2.0f};
+  const QVec3 eye = target + QVec3{6.0f, 5.0f, 8.0f};
+  const QVec3 forward = normalize(target - eye);
+  const QVec3 right = normalize(cross(forward, QVec3{0.0f, 1.0f, 0.0f}));
+  const ViewportOverlayCamera camera{
+      .eye = eye,
+      .forward = forward,
+      .right = right,
+      .up = normalize(cross(right, forward)),
+      .viewport_size = {945.0f, 710.0f},
+      .projection = ViewportOverlayProjection::Perspective,
+      .fov_degrees = 60.0f,
+      .near_plane = 0.05f,
+      .far_plane = 1000.0f,
+  };
+
+  for (const ViewportOverlayLayer layer : layers) {
+    SCOPED_TRACE(static_cast<int>(layer));
+    ViewportOverlayFrame frame;
+    frame.points.push_back({
+        .layer = layer,
+        .position = {1.0f, 1.0f, -1.0f},
+        .color = rgba8(255, 211, 31, 255),
+        .size_pixels = 6.0f,
+        .element = {.object_id = 1, .vertex_id = 1},
+        .outline_growth_pixels = 0.0f,
+    });
+    append_source_wire_depth_stamp_box(frame, 1, false);
+
+    const OverlayLayerBuildPlan plan =
+        OverlayRenderableBuilder::build_layer(frame, camera, layer);
+
+    ASSERT_EQ(plan.point_batches.size(), 1u);
+    EXPECT_EQ(point_mesh_vertex_count(plan), 4u);
   }
 }
 

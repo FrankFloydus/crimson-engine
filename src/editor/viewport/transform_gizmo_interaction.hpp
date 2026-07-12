@@ -17,6 +17,12 @@ namespace quader {
 
 class QuaderEditorApi;
 
+/// Counts camera-independent selection-pivot cache work for diagnostics and tests.
+struct TransformGizmoSelectionCacheStats {
+  std::uint64_t selection_pivot_recompute_count = 0;
+  std::uint64_t selection_cache_hit_count = 0;
+};
+
 /**
  * Owns transform gizmo hit testing and transform drag lifecycle routing for viewport frames.
  */
@@ -29,6 +35,10 @@ public:
 
   [[nodiscard]] bool dragging() const { return dragging_; }
   [[nodiscard]] const quader_editor_core::TransformGizmoFrame *frame() const;
+  [[nodiscard]] const TransformGizmoSelectionCacheStats &
+  selection_cache_stats() const {
+    return selection_cache_stats_;
+  }
 
 private:
     /**
@@ -43,12 +53,26 @@ private:
       int click_count = 1;
     };
 
+    /**
+     * Captures the inputs that can change an active transform preview.
+     */
+    struct DragUpdateSignature {
+      quader::QVec2 screen_position = {};
+      quader::QVec2 viewport_size = {};
+      int grid_preset = 0;
+      float vertex_snap_radius = 0.0f;
+      bool grid_snap_enabled = false;
+      bool precision = false;
+    };
+
     [[nodiscard]] bool
     pending_drag_threshold_reached(quader::QVec2 current) const;
     [[nodiscard]] bool
     begin_pending_drag(QuaderEditorApi &editor,
                        const ViewportInteractionFrame &frame);
     [[nodiscard]] ViewportBeforeToolInteractionResult release_pending_click();
+    [[nodiscard]] bool
+    matches_last_drag_update(const DragUpdateSignature &signature) const;
     void reset_drag_state();
     void reset_pending_drag();
     void clear_frame();
@@ -62,7 +86,13 @@ private:
     quader::QVec3 active_drag_pivot_ = {};
     quader::QVec3 active_world_direction_ = {};
     std::optional<quader::QVec3> rotation_indicator_start_direction_;
+    std::optional<DragUpdateSignature> last_drag_update_signature_;
+    quader_editor_core::TransformGizmoRotateIndicator
+        active_rotate_indicator_;
     std::optional<quader_editor_core::TransformGizmoFrame> current_frame_;
+    std::optional<ViewportInteractionSelectionState> cached_selection_state_;
+    std::optional<quader::QVec3> cached_selection_pivot_;
+    TransformGizmoSelectionCacheStats selection_cache_stats_;
 };
 
 } // namespace quader

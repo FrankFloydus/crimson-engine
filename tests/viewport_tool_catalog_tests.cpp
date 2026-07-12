@@ -568,21 +568,21 @@ TEST(ViewportToolGuardrailTests, DrawnPlaneToolUsesSharedCutMirrorLifecycle) {
 TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalTools) {
   const std::filesystem::path root = source_root();
   const std::string viewport_panel =
-      read_source_file(root / "src" / "ui" / "viewport_panel.cpp");
+      read_source_file(root / "src" / "ui" / "qt_viewport_panel.cpp");
   const std::string transform_gizmo = read_source_file(
       root / "src" / "editor" / "viewport" / "transform_gizmo_interaction.cpp");
 
-  EXPECT_NE(viewport_panel.find("ViewportPointToolContext point_tool_context"),
+  EXPECT_NE(viewport_panel.find("ViewportPointToolContext point_context"),
             std::string::npos);
-  EXPECT_NE(viewport_panel.find("point_tool_context.make_event_at"),
+  EXPECT_NE(viewport_panel.find("point_context.make_event_at"),
             std::string::npos);
-  EXPECT_NE(viewport_panel.find("point_tool_context.hit_drawn_plane_captured_point"),
+  EXPECT_NE(viewport_panel.find("point_context.hit_drawn_plane_captured_point"),
             std::string::npos);
-  EXPECT_NE(viewport_panel.find("point_tool_context.hit_drawn_plane_line"),
+  EXPECT_NE(viewport_panel.find("point_context.hit_drawn_plane_line"),
             std::string::npos);
-  EXPECT_NE(viewport_panel.find(".point = &point_tool_context"),
+  EXPECT_NE(viewport_panel.find(".point = &point_context"),
             std::string::npos);
-  EXPECT_NE(viewport_panel.find("make_modeling_tool_event_at"), std::string::npos);
+  EXPECT_NE(viewport_panel.find("make_tool_event_at"), std::string::npos);
   EXPECT_NE(viewport_panel.find("snap_enabled ="), std::string::npos);
   EXPECT_NE(
       viewport_panel.find(
@@ -737,30 +737,30 @@ TEST(ViewportToolGuardrailTests,
      PivotHandleUsesSphereOverlayAndConsumesSelectionFallback) {
   const std::filesystem::path root = source_root();
   const std::string viewport_panel =
-      read_source_file(root / "src" / "ui" / "viewport_panel.cpp");
+      read_source_file(root / "src" / "ui" / "qt_viewport_panel.cpp");
 
   const std::string pivot_overlay =
       source_slice(viewport_panel, "void append_pivot_handle_overlay",
-                   "bool linear_array_handle_hit");
+                   "std::uint32_t linear_array_axis_color");
   EXPECT_NE(viewport_panel.find("void append_pivot_ring("), std::string::npos);
   EXPECT_NE(pivot_overlay.find("append_pivot_ring("), std::string::npos);
-  EXPECT_NE(viewport_panel.find("frame.lines.push_back(ViewportOverlayLine{"),
+  EXPECT_NE(viewport_panel.find("frame.lines.push_back({"),
             std::string::npos);
   EXPECT_EQ(pivot_overlay.find("frame.points.push_back"), std::string::npos);
-  EXPECT_NE(viewport_panel.find("quick_pivot_blocked_by_navigation"),
+  EXPECT_NE(viewport_panel.find("blocked_by_navigation"),
             std::string::npos);
-  EXPECT_NE(viewport_panel.find("pivot_service->clear_quick_override()"),
+  EXPECT_NE(viewport_panel.find("pivot->clear_quick_override()"),
             std::string::npos);
-  EXPECT_NE(viewport_panel.find("!quick_pivot_blocked_by_navigation && "
+  EXPECT_NE(viewport_panel.find("!blocked_by_navigation && "
                                 "input.quick_pivot_down"),
             std::string::npos);
 
   const std::string pivot_input =
       source_slice(viewport_panel,
-                   "const PivotHandleState pivot_handle_after_input",
-                   "const ModelingToolStatus release_tool_status");
-  EXPECT_NE(pivot_input.find("pivot_blocks_gizmo || pivot_consumed"),
-            std::string::npos);
+                   "const PivotHandleState pivot_after_input",
+                   "const ModelingSelectionSummary hover_selection");
+  EXPECT_NE(pivot_input.find("pivot_blocks_gizmo ||"), std::string::npos);
+  EXPECT_NE(pivot_input.find("pivot_consumed)"), std::string::npos);
   EXPECT_NE(
       pivot_input.find(
           "ViewportBeforeToolInteractionResult{.gizmo_consumed = true}"),

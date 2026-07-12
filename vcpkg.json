@@ -1,16 +1,16 @@
 {
   "name": "quader-app",
-  "version-string": "0.0.90",
+  "version-string": "0.0.91",
   "builtin-baseline": "d0c191d142b7bc048141ddfb618aa9ae5dba0233",
   "dependencies": [
     "entt",
     "glm",
-    "sdl3",
     {
-      "name": "imgui",
+      "name": "qtbase",
+      "default-features": false,
       "features": [
-        "docking-experimental",
-        "sdl3-binding"
+        "png",
+        "widgets"
       ]
     },
     "gtest",

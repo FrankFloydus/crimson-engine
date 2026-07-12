@@ -79,7 +79,7 @@ std::set<std::string> localization_placeholder_tokens(std::string_view text) {
 std::set<std::string> literal_localization_keys_referenced_by_ui_source() {
   const std::filesystem::path ui_root = source_path({"src", "ui"});
   const std::regex direct_localization_call(
-      R"regex((?:[A-Za-z_][A-Za-z0-9_]*\.)?localization_?\.(?:text|format|imgui_label)\(\s*"([^"]+)")regex");
+      R"regex((?:[A-Za-z_][A-Za-z0-9_]*\.)?localization_?\.(?:text|format)\(\s*"([^"]+)")regex");
   std::set<std::string> keys;
 
   for (const std::filesystem::path &file : source_files_under(ui_root)) {
@@ -220,9 +220,17 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("viewport.tool.move.label", "Move"), "Sposta");
     EXPECT_EQ(localization.text("modeling.action.bridge_faces.label", "Bridge Faces"), "Bridge facce");
     EXPECT_EQ(localization.text("ui.viewport.delete_popup.window_title", "Delete"), "Elimina");
+    EXPECT_EQ(localization.text("ui.panel.tool_settings", "Tool Settings"),
+              "Impostazioni strumento");
+    EXPECT_EQ(localization.text("ui.action.apply", "Apply"), "Applica");
+    EXPECT_EQ(localization.text("ui.action.cancel", "Cancel"), "Annulla");
     EXPECT_TRUE(localization.select_locale("en-US"));
     EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "Edit");
     EXPECT_EQ(localization.text("ui.viewport.delete_popup.window_title", "Delete"), "Delete");
+    EXPECT_EQ(localization.text("ui.panel.tool_settings", "Tool Settings"),
+              "Tool Settings");
+    EXPECT_EQ(localization.text("ui.action.apply", "Apply"), "Apply");
+    EXPECT_EQ(localization.text("ui.action.cancel", "Cancel"), "Cancel");
 }
 
 TEST(LocalizationResourceTests, ViewportToolCatalogHasLocaleKeys) {

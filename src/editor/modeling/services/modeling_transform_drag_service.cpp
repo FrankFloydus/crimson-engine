@@ -858,6 +858,9 @@ ModelingTransformDragService::apply_transform_drag_preview(
   input.grid_size = request.grid_size;
   input.grid_enabled = request.grid_snap_enabled;
   input.precision = request.precision;
+  const bool component_modeling_preview =
+      transform_drag_uses_component_modeling_preview(context, controller_);
+  input.defer_session_update = component_modeling_preview;
   if (request.vertex_snap_radius > 0.0 &&
       transform_drag_can_use_vertex_snap(drag_before_update)) {
     QDR_PROFILE_SCOPE("Modeling transform drag build snap caches");
@@ -884,7 +887,7 @@ ModelingTransformDragService::apply_transform_drag_preview(
   }
 
   bool changed = result.changed;
-  if (transform_drag_uses_component_modeling_preview(context, controller_)) {
+  if (component_modeling_preview && result.changed) {
     const quader_editor_core::CommandResult local_result = [&]() {
       QDR_PROFILE_SCOPE(
           "Modeling transform drag apply local-space component preview");
@@ -908,12 +911,17 @@ ModelingTransformDragService::apply_transform_drag_preview(
 
   if (scene_transform_drag_service_.preview_active()) {
     QDR_PROFILE_SCOPE("Modeling transform drag apply scene preview");
+    const quader_editor_core::TransformDragState scene_drag =
+        context.runtime.transform_drag_state();
     quader_poly::Transform3 scene_transform;
-    if (scene_preview_transform_for_drag(context.runtime.transform_drag_state(),
-                                         scene_transform)) {
+    if (scene_preview_transform_for_drag(scene_drag, scene_transform)) {
       const DocumentCommandResult scene_preview =
-          scene_transform_drag_service_.preview_world_transform_delta(
-              context.scene, matrix_from_runtime_transform(scene_transform));
+          scene_drag.tool == quader_editor_core::ViewportInteractionTool::Move
+              ? scene_transform_drag_service_.preview_world_translation_delta(
+                    context.scene, scene_transform.origin)
+              : scene_transform_drag_service_.preview_world_transform_delta(
+                    context.scene,
+                    matrix_from_runtime_transform(scene_transform));
       if (!scene_preview.ok) {
         const bool was_preview_driven = controller_.preview_driven();
         (void)cancel_transform_drag(context);
@@ -929,7 +937,7 @@ ModelingTransformDragService::apply_transform_drag_preview(
     }
   }
 
-  if (controller_.preview_driven()) {
+  if (controller_.preview_driven() && changed) {
     {
       QDR_PROFILE_SCOPE(
           "Modeling transform drag invalidate overlay caches after apply");

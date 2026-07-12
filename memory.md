@@ -9,6 +9,173 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-12 - Stock Fusion Uses Its Own Neutral Palette And Button Faces
+
+Task/context: selecting the Fusion style alone still allowed the Windows
+accent color to replace alternating-row and highlight roles, and a manually
+painted color swatch looked like a square block inside a button.
+
+Invariant:
+
+- `main.cpp` selects Fusion and applies exactly
+  `fusion_style->standardPalette()`. This is Qt's uncustomized Fusion palette,
+  not an app-authored color theme, and prevents OS accent colors from leaking
+  into editor tables.
+- `QtColorSwatchButton` remains a normal `QPushButton`. It changes only its
+  local `QPalette::Button` role and lets Fusion draw the rounded face, border,
+  hover, pressed, and focus states; do not custom-paint a rectangular swatch.
+- The Outliner Name section stretches to consume remaining header width while
+  Visible and Locked size to their labels, so resizing the dock never leaves a
+  dead header strip.
+
+Affected owners/files:
+
+- `src/main.cpp`
+- `src/ui/qt_color_swatch_button.*`
+- `src/ui/outliner_panel.cpp`
+- `tests/ui_layout_guardrail_tests.cpp`
+- `tests/build_guardrail_tests.cpp`
+
+Verification:
+
+- focused Fusion/Outliner/swatch guardrails: 5/5.
+- `OutlinerPanelTests.*`: 2/2.
+
+## 2026-07-12 - Qt Outliner Collapse Does Not Resynchronize Hidden Selection
+
+Task/context: collapsing an Outliner branch could freeze the Qt shell while the
+selected primary entity was inside that branch.
+
+Invariant:
+
+- Collapse/expand signals only update retained `collapsed_entities_`; they do
+  not mutate the scene, rebuild the model, or synchronize selection.
+- Qt selection synchronization runs only after a model rebuild or a real
+  `SceneDocument::selection_revision()` change. It must not call
+  `setCurrentIndex()` for a primary row hidden below a collapsed ancestor,
+  because Qt can reveal/re-expand that row and re-enter layout/event work.
+- The stock-Fusion Outliner is a three-column hierarchy table. Name stretches
+  across remaining width; Visible and Locked size to content. Partial check states mean an ancestor determines
+  the effective visibility/lock. Rename, visibility, and lock changes route
+  only through `QuaderEditorApi::scene()`.
+
+Affected owners/files:
+
+- `src/ui/outliner_panel.*`
+- `tests/outliner_panel_tests.cpp`
+- `tests/ui_layout_guardrail_tests.cpp`
+- `tests/programmatic_api_guardrail_tests.cpp`
+
+Verification:
+
+- `OutlinerPanelTests.*`: 2/2.
+- Outliner/API focused guardrails: 3/3.
+- `UiLayoutGuardrailTests.*`: 21/21.
+- `cmake --build --preset vs2026-debug --target quader`.
+
+## 2026-07-12 - Qt Fly HUD And Focused Pane Use Retained Fusion Widgets
+
+Task/context: the Qt viewport migration had no fly-navigation HUD and no
+visible distinction between the command-targeted pane in multi-viewport
+layouts.
+
+Invariant:
+
+- `ViewportInputResult::fly_hud_active` is the fly HUD authority. It shows a
+  centered crosshair for the whole fly session; the localized speed/reset
+  banner appears only when the pane camera's fly speed differs from default,
+  matching the legacy behavior.
+- The reset hint names the canonical Middle Mouse binding in every locale; do
+  not hardcode an unrelated key in the Qt presentation.
+- `ViewportWorkspaceService::focused_pane()` remains the command-target owner.
+  A stock `QFocusFrame` identifies it only when multiple panes are visible,
+  and surface, viewport-combo, and navigation-gizmo interactions update that
+  owner before subsequent commands.
+- The HUD and focus cue use stock Fusion widgets and the inherited Qt palette.
+  Do not add QSS, app-authored viewport palette overrides, or app-specific theme colors.
+
+Affected owners/files:
+
+- `src/ui/qt_viewport_fly_navigation_hud.*`
+- `src/ui/qt_viewport_panel.*`
+- `resources/locales/*.lang`
+- `tests/qt_viewport_fly_navigation_hud_tests.cpp`
+- `tests/ui_layout_guardrail_tests.cpp`
+
+Verification:
+
+- `QtViewportFlyNavigationHudTests.*`: 3/3.
+- affected UI/localization app tests: 189/189.
+- affected Fusion/UI layout guardrails: 20/20.
+- `cmake --build --preset vs2026-debug --target quader`.
+
+## 2026-07-11 - Qt Viewport X Retains The Legacy Delete Choice Policy
+
+Task/context: the Qt viewport routed the canonical X/DeletePopup shortcut but consumed it without
+presenting the legacy deletion choices.
+
+Invariant:
+
+- X remains owned and gated by `ViewportInputRouter`; Qt must not add a QAction shortcut or raw key
+  check. Viewport focus, text input, navigation, operation-preview, and modal-tool gates stay intact.
+- Object mode, Group mode, or any selected scene root uses a stock Qt confirmation before the
+  scene-aware `edit.delete` command. Component mode uses a stock Qt menu with Delete
+  Vertices/Edges/Face and Dissolve Vertices/Edges enabled only for the applicable nonempty mode.
+- Commands execute through `QuaderEditorApi`, then synchronize the router's selection-mode
+  snapshot. A changed command invalidates hover/overlay caches, and closing either surface restores
+  viewport focus. Do not add custom styling or rendering work.
+
+Affected owners/files:
+
+- `src/ui/qt_viewport_delete_popup.*`
+- `src/ui/qt_viewport_panel.*`
+- `tests/qt_viewport_delete_popup_tests.cpp`
+- `tests/core_tests.cpp`
+
+Verification:
+
+- `QtViewportDeletePopupTests.*`: 5/5.
+- `ViewportInputRouterTests.DeletePopupPreservesViewportFocusTextAndModalToolGates`.
+- `cmake --build --preset vs2026-debug --target quader_tests quader_guardrail_tests quader`.
+
+## 2026-07-11 - Qt Component Drags Run At Presentation Cadence
+
+Task/context: after the Qt shell migration, moving a face or vertex on an otherwise empty box could
+feel dramatically slower even though the raw polygon transform was cheap. Diagnostics showed the
+app timer attempting roughly 700-900 callbacks per second for about 165 actual submissions, while
+component drags also rebuilt the same preview first in world space and then again in object-local
+space.
+
+Invariant:
+
+- The Qt app timer follows the active screen refresh rate, clamped to 30-240 Hz. Do not restore a
+  continuously visible viewport to a 1 ms timer; Qt input still wakes through its event loop and
+  the next presentation tick consumes the latest state.
+- Component transform drags let the runtime update drag math without mutating the session, then the
+  host applies the preview once in object-local space. An unchanged computed sample must not rebuild
+  the local preview, invalidate overlays, or force scene synchronization.
+- A forced modeling mesh sync bypasses the coarse content-revision gate so changing preview geometry
+  reaches the scene, but it still honors per-object projected mesh signatures. Unaffected mesh
+  objects must not be recompiled merely because another object's component preview changed.
+- Preserve frame ordering: viewport input, modeling-to-scene sync, overlay preparation, render.
+
+Affected owners/files:
+
+- `src/app/app.cpp`
+- `src/editor/interactions/transform_drag.hpp`
+- `src/editor/interactions/move_tool.cpp`
+- `src/editor/modeling/services/modeling_transform_drag_service.cpp`
+- `src/editor/modeling/services/modeling_mesh_sync_service.cpp`
+- `tests/core_tests.cpp`
+
+Verification:
+
+- Empty-box runtime transform preview benchmark: 5,000 updates in 105.883 ms median-like sample,
+  about 0.021 ms/update; the observed stall was not polygon transform math.
+- `quader_tests`: 698/698.
+- `quader_modeling_domain_runtime_loop_tests`: 281/281.
+- `cmake --build --preset vs2026-debug --target quader`.
+
 ## 2026-07-11 - Object-Mode Mesh Alignment And Distribution
 
 Task/context: Quader needed native world-space arrangement for selected mesh objects without
@@ -2877,6 +3044,38 @@ Verification:
 - `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportOverlayPolicyTests.MatchesDepthAndHoverSuppressionContract:ViewportOverlayPolicyTests.ComponentSelectionWiresAndVertexPointsUseDepthTestedState:OverlayLineMeshBuilderTests.PerspectiveDepthBiasDoesNotMoveLineOrPointScreenPosition:OverlayPointMeshBuilderTests.*`
 - `build\vs2026\Debug\quader_modeling_domain_tests.exe --gtest_color=no --gtest_filter=QdrEditorMetadataOverlayCatalogTests.HostContractOverlayLayerCatalogStatesRenderDepthSemantics`
 
+## 2026-07-11 - Device-Domain Overlay Bias Must Account For Filament Reversed Z
+
+Task/context: after the Qt direct-swapchain migration, outward-facing convex box corners could be
+pickable while their vertex dots were completely hidden by the adjacent shaded faces. CPU overlay
+emission and picking tests passed, so they did not prove the real pixel result.
+
+Invariant:
+
+- `OverlayCameraProjector` outputs OpenGL-domain NDC Z for Filament `vertexDomain : device`
+  materials. Filament then maps that input with `z * -0.5 + 0.5`, producing reversed device depth.
+- A positive toward-camera bias must therefore be **subtracted** from the projector's GL-domain Z
+  before Filament performs that mapping. Adding it makes the later reversed depth smaller, pushes
+  `GreaterOrEqual` point quads behind the surface, and can hide an entire convex-corner billboard.
+- Clamp the biased GL-domain Z at `-1.0f`. Do not turn ordinary editable vertex points into
+  draw-on-top geometry; the existing outward hidden-point filtering, GPU occlusion, and inside-out
+  room exception remain authoritative.
+- Headless projection/emission tests protect the sign and hidden/flipped policy, but final
+  verification for this class of regression requires the Vulkan app. The user visually confirmed
+  the formerly missing top-corner marker in the rebuilt Qt app.
+
+Affected owners/files:
+
+- `src/render/overlay/overlay_camera_projector.cpp`
+- `tests/render_extraction_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests quader`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=OverlayCameraProjectorTests.*:OverlayLineMeshBuilderTests.PerspectiveDepthBiasMovesTowardCameraWithoutMovingScreenPosition:OverlayPointMeshBuilderTests.*`
+- Manual Vulkan smoke: create/view a box in vertex mode from a diagonal camera; the outward top
+  convex corner dot is visible while occluded back vertices remain governed by the existing policy.
+
 ## 2026-07-07 - Pivot Tool Uses Tool Settings And Origin Rebasing
 
 Task/context: Pivot needed to become a first-class viewport tool on `P`, with hold-`D` Quick Pivot,
@@ -3019,3 +3218,252 @@ Verification:
 - `build\vs2026\Debug\quader_modeling_domain_tests.exe --gtest_filter=-QdrGeometryTests.QdrGeometryHelpersRemainStable` (498/498)
 - Full CTest still exposes the pre-existing `QdrGeometryTests.QdrGeometryHelpersRemainStable` float
   ray/plane precision failure; no geometry source is changed by Linear Array.
+
+## 2026-07-12 - Qt Viewport Navigation Gizmo Keeps Per-Pane Input Ownership
+
+Task/context: the Qt Widgets migration preserved the Navigation Gizmo preference and View menu
+toggle but omitted the rendered, interactive per-pane view cube that the ImGui viewport exposed.
+
+Invariant:
+
+- Every retained Qt viewport pane owns one `QtNavigationGizmo`. Visibility follows the existing
+  public preference; the widget uses the stock Fusion palette and frame rather than QSS, palette
+  overrides, custom fonts, or custom window chrome. Semantic X/Y/Z colors remain editor visuals.
+- Cube geometry and hit testing stay in `quader_editor_core` through
+  `build_view_cube_primitives()` and `pick_view_cube()`. Qt only paints those primitives and adapts
+  pointer events.
+- A face click applies the same unlocked orthographic axis view as the legacy gizmo. Crossing the
+  three-pixel drag threshold converts the gesture to orbit and suppresses the click snap.
+- A gizmo press focuses its owning workspace pane and grabs the mouse until release or cancel.
+  While grabbed, viewport routing remains locked to that pane and modeling hover, selection,
+  transform gizmos, pivot, and linear-array interactions are suppressed.
+- The gizmo is a native sibling above each embedded Filament child surface and is positioned below
+  that pane's floating view/shading controls. Do not move this behavior into render overlays or
+  alter render-owned overlay depth policy.
+
+Affected owners/files:
+
+- `src/ui/qt_navigation_gizmo.*`
+- `src/ui/qt_viewport_panel.*`
+- `tests/qt_navigation_gizmo_tests.cpp`
+- `tests/ui_layout_guardrail_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=QtNavigationGizmoInteractionTests.*:ViewportCameraTests.ViewCube*` (6/6)
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=UiLayoutGuardrailTests.QtViewportRestoresPerPaneInteractiveNavigationGizmos:UiLayoutGuardrailTests.QtShellSelectsStockFusionExactlyOnceWithoutThemeOverrides:BuildGuardrailTests.RuntimeUiUsesQtWidgetsFusionOnly` (3/3)
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-07-12 - Qt Settings And Tool Windows Retain Stock Auxiliary State
+
+Task/context: the Qt migration needed localized Tool Settings chrome, retained auxiliary-window
+placement, and a scannable Settings layout without reintroducing custom theme code.
+
+Invariant:
+
+- `QtAuxiliaryWindowState` persists Settings and Tool Settings geometry plus logical visibility in
+  `qt_auxiliary_windows.ini` through `QSettings`. The versioned `QMainWindow::saveState` binary
+  remains dedicated to dock layout so existing main-window state stays compatible.
+- Settings remains a normal non-modal `QDialog` with the stock Fusion/platform close chrome. Tool
+  Settings remains a stock `Qt::Tool` window whose visibility follows the active public tool target.
+- Tool Settings title, active-target title, Apply, and Cancel text resolve through
+  `LocalizationService`; stable Qt object names remain untranslated.
+- Settings categories use a stock `QListWidget` sidebar and `QStackedWidget` right-hand pages.
+  Reusable `QtColorSwatchButton` controls set only the local `QPalette::Button` role to the selected
+  color, so Fusion draws the normal rounded button face, border, hover, press, focus, and disabled
+  states across the complete fluid width. Exact `#AARRGGBB` values remain in tooltip/accessibility
+  data, and `QColorDialog::ShowAlphaChannel` preserves alpha editing. Do not replace this with QSS,
+  custom painting, icon previews, or custom window chrome.
+
+Affected owners/files:
+
+- `src/ui/qt_auxiliary_window_state.*`
+- `src/ui/qt_color_swatch_button.*`
+- `src/ui/qt_settings_dialog.cpp`
+- `src/ui/qt_tool_settings_window.*`
+- `src/ui/ui_settings.*`
+- `src/ui/ui_system.*`
+- `tests/qt_auxiliary_window_state_tests.cpp`
+- `tests/localization_tests.cpp`
+- `tests/ui_layout_guardrail_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests quader_guardrail_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=QtAuxiliaryWindowStateTests.*:LocalizationResourceTests.*:LocalizationServiceTests.*` (17/17)
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=UiLayoutGuardrailTests.*` (19/19)
+
+## 2026-07-12 - Qt Settings Stay Live, Reversible, And Event Driven
+
+Task/context: after the Qt migration, settings controls could display or persist a value without
+updating the live viewport/render behavior. Color buttons also needed preview, accept, and cancel
+semantics without reintroducing a custom theme.
+
+Invariant:
+
+- The retained Settings dialog covers every viewport preference descriptor: locale, 20 colors,
+  16 floating-point values, and 7 booleans. A control write must update the owner state immediately,
+  notify retained consumers, and persist through the existing settings owner; the dialog is not a
+  second source of truth.
+- `QtSettingsController` emits a typed change kind. `UISystem`, the Settings dialog, menus, and
+  viewport presentation synchronize from that event, not from per-frame dialog reconstruction or
+  polling.
+- A `QColorDialog` live preview applies through the same owner route. Accept keeps and persists the
+  chosen color; cancel restores the exact pre-dialog value and live presentation. Alpha remains
+  part of the value.
+- Persistent selected-object and scene-wireframe overlay caches consume narrow immutable style
+  snapshots/signatures. A settings edit invalidates only the affected cache; it must not alter
+  overlay layer order, depth, blend, visibility, or flipped-mesh policy.
+- Settings persistence failures are logged. Legacy/missing semantic-axis values migrate to the
+  canonical X/Y/Z defaults without overwriting valid user values.
+
+Affected owners/files:
+
+- `src/ui/qt_settings_controller.*`
+- `src/ui/qt_settings_dialog.*`
+- `src/ui/qt_color_swatch_button.*`
+- `src/ui/ui_system.*`
+- `src/viewport/viewport_settings.*`
+- `src/render/overlay/viewport_persistent_overlay_style.hpp`
+- `src/render/overlay/selected_object_overlay_cache.*`
+- `src/render/overlay/scene_wireframe_overlay_cache.*`
+
+Verification:
+
+- Headless control-contract coverage exercises all 44 controls plus color preview/accept/cancel,
+  dialog/menu synchronization, and persistence.
+- `QtSettingsControllerTests.*`, `ViewportSettingsTests.*`,
+  `ViewportPersistentOverlayStyleSnapshotTests.*`, and the relevant UI/render guardrails pass.
+- Manual Vulkan verification confirmed a grid-color edit updates the open viewport immediately and
+  cancel restores it; the user's original settings file was restored afterward.
+
+## 2026-07-12 - Large-Scene Navigation And Transforms Gate Stable Work
+
+Task/context: `my_first_project.qdr` was the real stress fixture. With 403 selectable entities,
+all-selected navigation and transform interaction became effectively unusable even though the GPU
+timing was small. The bottleneck was repeated CPU extraction, projection, uniform, retained-widget,
+and per-entity history work ahead of presentation.
+
+Invariant:
+
+- The fixture identity for this regression is 2,703,006 bytes with SHA-256
+  `05604D3C885792458C0B748F25DC12E19DC7C59949AE0B522B1853CD65D1AB4B`: 418 entities, 416 mesh
+  entities, 14 locked entities, and 403 entities selected by Select All. Benchmarks must never write
+  the input and must verify its identity after the run.
+- Stable owner revisions stop work before scene extraction. `RenderOverlaySnapshotCache` owns the
+  renderer-neutral selected-object, scene-wireframe, and scene-overlay snapshots and their narrow
+  revision/style signatures; `SceneRenderBridge` remains a snapshot consumer. One prepare pass
+  updates the cache once and all visible panes reuse it.
+- Mesh surface-grid uniforms use a narrow signature and are not rewritten on unchanged frames.
+  Camera projection constants and the exact sRGB-byte conversion table are precomputed/reused for
+  overlay projection. These are mechanical hot-path reductions; overlay draw/depth/blend/visibility
+  policy is unchanged.
+- Transform gizmo selection pivots are cached by selection/scene revisions. Qt navigation-gizmo
+  setters ignore identical pointer/pose/visibility state. Outliner and Inspector refresh only for
+  relevant scene/modeling/locale revisions and defer retained rebuilds during an active transform.
+- Multi-entity transform preview applies one batch assignment per update and records one
+  `ApplyEntityTransformsCommand` at commit. Cancel, accept, commit, undo, and redo preserve exact
+  transforms while revision growth stays O(1), not O(selected entities).
+- Expensive transformed picking projections are lazy. Only an active, previewable, valid Cut or
+  Mirror consumer requests them, and a selection-overlay cache hit returns before projection.
+  `ModelingSessionService` remains a thin adapter; tool-state gates stay in
+  `ModelingOverlayService`.
+- The opt-in `qdr_fixture_performance_baseline` target measures the exact load/select/navigation/
+  unchanged-snapshot/overlay/transform workload, emits JSON, restores transforms bit-for-bit, and
+  rejects any output path that resolves to the input QDR.
+
+Affected owners/files:
+
+- `src/render/scene_render_extraction.*`
+- `src/render/scene_render_bridge.*`
+- `src/render/overlay/render_overlay_snapshot.*`
+- `src/render/material_binding_service.*`
+- `src/render/mesh_renderable_cache.*`
+- `src/render/overlay/overlay_camera_projector.*`
+- `src/core/color_space.hpp`
+- `src/editor/viewport/transform_gizmo_interaction.*`
+- `src/editor/history/scene_transform_preview_transaction.hpp`
+- `src/editor/commands/document/apply_entity_transforms_command.hpp`
+- `src/editor/modeling/services/modeling_overlay_service.*`
+- `src/editor/modeling/services/modeling_selection_service.*`
+- `src/ui/qt_viewport_panel.*`
+- `src/ui/qt_navigation_gizmo.*`
+- `src/ui/ui_system.*`
+- `benchmarks/modeling/qdr_fixture_performance_baseline.cpp`
+
+Verification:
+
+- Release exact-fixture p50: Select All 0.1056 ms; navigation input 0.0003 ms; unchanged snapshot
+  baseline 0.1654 ms; 4,824-line camera overlay build 0.3197 ms; 403-entity transform preview
+  0.1321 ms. All 403 transforms changed during preview and cancel restored the original checksum.
+- Debug 403-entity repeated-drag median is about 6.5-6.7 ms; the dedicated 200-sample fixture run
+  measured 6.5006 ms p50 and 10.6451 ms p95.
+- In the real Vulkan app, ten all-selected zoom inputs completed in 174 ms and the immediate UI
+  state capture returned in 45 ms, replacing the prior multi-second/tens-of-seconds apparent freeze.
+- Focused render, viewport, modeling-session, document-command, UI, guardrail, and native-app build
+  checks pass; benchmark JSON lives under `build/perf/`.
+
+## 2026-07-12 - All-Selected Gizmo Drag End-To-End Frame Fix
+
+Task/context: the modeling-only stress benchmark was green while the real Qt viewport still let the
+403-object selection trail the move gizmo. A genuine red-axis drag and Undo first proved that the
+gizmo handle, transform transaction, and restored selection were the path under test. The missing
+cost was the rest of the same frame: scene extraction, Filament proxy transforms, selection bounds,
+semantic cage generation, camera projection, and GPU buffer updates.
+
+Invariant:
+
+- Qt may deliver press, threshold-crossing move, and release in one input frame. Transform gizmo
+  interaction must establish the pending hit before release handling, begin/apply/commit a collapsed
+  drag in that frame, and apply the newest pointer sample before any active-drag commit.
+- Pure Move previews cache each target's parent-space world basis and reference-aware decomposition
+  template at begin. Per-sample work updates local positions only. Rotate/Scale keep the generic
+  matrix/decomposition path. Parented transforms, custom pivots, cancel, commit, undo, and redo must
+  remain equivalent.
+- `SceneDocument::render_component_revision()` covers render-structural/material/light changes.
+  A retained `RenderSceneSnapshot` may refresh transforms in place only when asset, selection,
+  visibility, mesh-binding, and render-component revisions prove all other sources stable.
+- Filament mesh transform updates are dirty-record-only and run inside one local-transform
+  transaction. Mesh/material/visibility/light rebuild paths remain conservative fallbacks.
+- `RenderOverlaySnapshotCache` retains local bounds by mesh revision, world bounds by entity, and
+  stable selected/group ordering. Pure affine translation moves cached AABBs; linear changes use the
+  exact eight-corner fallback. Transform-only frames update the retained selection snapshot in place.
+  Selection, visibility, hierarchy, mesh, render-component, asset, or mixed scene changes force a
+  full rebuild.
+- Generic line and edit-wire proxies retain canonical indices when kind and vertex/index counts are
+  unchanged, uploading changed projected vertices only. Overlay line count/order, style, depth,
+  blend, visibility, and picking policy are not performance knobs and must not change.
+- The fixture revision used for this follow-up is 2,703,035 bytes, SHA-256
+  `D5516A98E4C4222B2EA11207C066444C88B2D0A701FB1E9C2E8BC949FDE556B0`, FNV-1a64
+  `0x28d995351cafb8d6`: 418 entities, 416 mesh entities, 14 locked entities, and 403 Select-All
+  transform targets. The benchmark must restore transforms exactly and leave this input unchanged.
+
+Affected owners/files:
+
+- `src/editor/viewport/transform_gizmo_interaction.cpp`
+- `src/editor/transform/scene_transform_drag_service.*`
+- `src/editor/modeling/services/modeling_transform_drag_service.cpp`
+- `src/scene/scene_document.*`
+- `src/scene/scene_bounds.*`
+- `src/render/render_scene_snapshot.hpp`
+- `src/render/scene_render_extraction.*`
+- `src/render/scene_render_sync_service.*`
+- `src/render/overlay/render_overlay_snapshot.*`
+- `src/render/overlay/overlay_proxy_factory.cpp`
+- `benchmarks/modeling/qdr_fixture_performance_baseline.cpp`
+
+Verification:
+
+- Debug exact-fixture 200-sample end-to-end CPU median improved from 24.4116 ms to 14.6155 ms;
+  final p95 was 18.7171 ms. Final medians: transform preview 2.6150 ms, scene snapshot refresh
+  3.0657 ms, modeling overlay refresh 0.0491 ms, selection-overlay snapshot refresh 3.1339 ms,
+  semantic/style build 1.4160 ms, and camera line build 4.2698 ms.
+- The final run refreshed the transform-only overlay snapshot 210/210 times, reused translated world
+  bounds 84,057 times, emitted the same 4,824 cage lines, changed all 403 target transforms, restored
+  the original transform checksum exactly, and reported `inputUnchanged=true`.
+- Focused render/overlay/scene/transform/viewport coverage passed 60/60 after a fresh full link. An
+  earlier pre-main `0xC0000005` was corrupted concurrent MSVC incremental-link state; deleting only
+  the test EXE/ILK/PDB and exclusively relinking fixed it without source rollback.
+- Final report: `build/perf/my_first_project_debug_transform_frame_final.json`.
