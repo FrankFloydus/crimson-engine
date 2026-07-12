@@ -1224,6 +1224,7 @@ enum class PreviewTransactionKind {
   Transform = 4,
   SliceQuad = 5,
   MergeByDistance = 6,
+  HalfCut = 7,
 };
 
 /**
@@ -1740,6 +1741,9 @@ CommandResult plane_cut(std::vector<PolygonObject> &objects,
 CommandResult plane_surface_cut(std::vector<PolygonObject> &objects,
                                 std::span<const ObjectPlaneCutRequest> requests,
                                 int &active_object_id, SelectionMode &mode);
+CommandResult half_cut(std::vector<PolygonObject> &objects,
+                       HalfCutOperationSettings settings, int &next_object_id,
+                       int &active_object_id, SelectionMode &mode);
 CommandResult mirror_objects_across_plane(
     std::vector<PolygonObject> &objects, std::span<const int> object_ids,
     std::span<const quader::QVec3> plane_points, int &next_object_id,
@@ -1936,6 +1940,8 @@ public:
   CommandResult update_merge_by_distance_preview(double tolerance);
   CommandResult
   update_merge_by_distance_preview(MergeByDistanceOperationSettings settings);
+  CommandResult begin_half_cut_preview(HalfCutOperationSettings settings);
+  CommandResult update_half_cut_preview(HalfCutOperationSettings settings);
   CommandResult begin_transform_preview(bool duplicate_selected = false);
   CommandResult
   update_transform_translate_preview(quader::QVec3 delta,
@@ -2129,6 +2135,7 @@ public:
   CommandResult plane_cut(std::span<const ObjectPlaneCutRequest> requests);
   CommandResult
   plane_surface_cut(std::span<const ObjectPlaneCutRequest> requests);
+  CommandResult half_cut_selected_objects(HalfCutOperationSettings settings);
   CommandResult
   mirror_objects_across_plane(std::span<const int> object_ids,
                               std::span<const quader::QVec3> plane_points);
@@ -2179,6 +2186,8 @@ private:
                                                  bool from_center);
   CommandResult update_slice_quad_preview_from_base(int x_slices, int y_slices);
   CommandResult update_merge_by_distance_preview_from_base(double tolerance);
+  CommandResult
+  update_half_cut_preview_from_base(HalfCutOperationSettings settings);
   CommandResult update_transform_preview_from_base(CommandResult result);
 };
 

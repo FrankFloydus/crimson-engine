@@ -320,6 +320,15 @@ enum class QuaderCutMode {
 };
 
 /**
+ * Enumerates the local mesh axis used by the Half-Cut operation.
+ */
+enum class QuaderHalfCutAxis {
+    X = 0,
+    Y = 1,
+    Z = 2,
+};
+
+/**
  * Stores the Quader Modeling Object Record data contract used by the public Quader API surface.
  */
 struct QuaderModelingObjectRecord {
@@ -404,6 +413,9 @@ struct QuaderInteractionSettings {
   int slice_quad_x_slices = 1;
   int slice_quad_y_slices = 1;
   double merge_by_distance_tolerance = 0.125;
+  QuaderHalfCutAxis half_cut_axis = QuaderHalfCutAxis::X;
+  bool half_cut_separate_parts = false;
+  bool half_cut_fill_parts = true;
   QuaderCutMode cut_mode = QuaderCutMode::KeepBoth;
 };
 
@@ -592,6 +604,7 @@ enum class QuaderActionPreviewKind {
     Thicken,
     SliceQuad,
     MergeByDistance,
+    HalfCut,
 };
 
 /**

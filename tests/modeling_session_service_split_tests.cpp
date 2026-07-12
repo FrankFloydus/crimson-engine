@@ -1385,6 +1385,9 @@ TEST(ModelingSessionServiceSplitTests, PolicyServicesExposeDirectBehavior) {
       fallback_tool_settings_label(ModelingToolSettingsTargetKind::EdgeBevel),
       "Bevel Edges");
   EXPECT_STREQ(
+      fallback_tool_settings_label(ModelingToolSettingsTargetKind::HalfCut),
+      "Half-Cut");
+  EXPECT_STREQ(
       fallback_tool_settings_label(ModelingToolSettingsTargetKind::None),
       "Tool Settings");
 }
@@ -1561,6 +1564,24 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_TRUE(
       apply_modeling_interaction_setting(settings, "", "distance", 0.0625));
   EXPECT_DOUBLE_EQ(settings.merge_by_distance_tolerance, 0.0625);
+
+  EXPECT_TRUE(apply_modeling_interaction_setting(
+      settings, "half_cut", "operation.half_cut.axis", 2.0));
+  EXPECT_EQ(settings.half_cut_axis, ModelingHalfCutAxis::Z);
+  EXPECT_TRUE(apply_modeling_interaction_setting(
+      settings, "half_cut", "separate_parts", 1.0));
+  EXPECT_TRUE(settings.half_cut_separate_parts);
+  EXPECT_TRUE(apply_modeling_interaction_setting(
+      settings, "half_cut", "fill_parts", 0.0));
+  EXPECT_FALSE(settings.half_cut_fill_parts);
+
+  const auto half_cut =
+      std::get<quader_editor_core::HalfCutOperationSettings>(
+          settings_for_operation(quader_editor_core::EditorOperationId::HalfCut,
+                                 settings));
+  EXPECT_EQ(half_cut.axis, quader_editor_core::HalfCutAxis::Z);
+  EXPECT_TRUE(half_cut.separate_parts);
+  EXPECT_FALSE(half_cut.fill_parts);
 
   EXPECT_FALSE(apply_modeling_interaction_setting(settings, "edge_bevel",
                                                   "tolerance", 0.25));

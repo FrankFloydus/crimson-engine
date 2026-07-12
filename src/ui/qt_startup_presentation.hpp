@@ -10,6 +10,9 @@
 
 namespace quader {
 
+/**
+ * Describes whether startup geometry should remain hidden or may be revealed.
+ */
 enum class QtStartupPresentationAction {
   WaitForStableGeometry,
   GeometryStabilized,

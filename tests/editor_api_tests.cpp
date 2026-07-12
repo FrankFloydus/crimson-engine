@@ -5104,6 +5104,266 @@ TEST(EditorApiTests, ToolsApiSetsCutKeepModeThroughPublicSetting) {
               quader::QuaderCutMode::DiscardRight);
 }
 
+TEST(EditorApiTests, HalfCutPreviewExposesLiveAxisAndPartSettings) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+
+    create_selected_box(editor, "Half-Cut Settings Box");
+    const std::string command_id =
+        editor.commands().command_id_for_modeling_action("half_cut");
+    EXPECT_EQ(command_id,
+              std::string(quader::quader_command::kModelingHalfCut.string()));
+    const quader::QuaderApiVoidResult preview =
+        editor.commands().execute(command_id);
+    ASSERT_TRUE(preview.ok()) << preview.error_message();
+
+    quader::QuaderToolSettingsTarget settings =
+        editor.tools().active_settings();
+    ASSERT_TRUE(settings.active);
+    EXPECT_TRUE(settings.preview_active);
+    EXPECT_EQ(settings.tool_id, "half_cut");
+    EXPECT_EQ(settings.title, "Half-Cut");
+    EXPECT_TRUE(settings.can_apply);
+    EXPECT_TRUE(settings.can_cancel);
+
+    const quader::QuaderToolSettingControl *axis =
+        find_tool_setting_control(settings, "operation.half_cut.axis");
+    ASSERT_NE(axis, nullptr);
+    EXPECT_EQ(axis->kind, quader::QuaderToolSettingControlKind::Choice);
+    EXPECT_EQ(axis->choice_value, "0");
+    ASSERT_EQ(axis->choices.size(), 3u);
+    EXPECT_EQ(axis->choices[0].label, "X");
+    EXPECT_EQ(axis->choices[1].label, "Y");
+    EXPECT_EQ(axis->choices[2].label, "Z");
+
+    const quader::QuaderToolSettingControl *separate =
+        find_tool_setting_control(
+            settings, "operation.half_cut.separate_parts");
+    const quader::QuaderToolSettingControl *fill =
+        find_tool_setting_control(settings, "operation.half_cut.fill_parts");
+    ASSERT_NE(separate, nullptr);
+    ASSERT_NE(fill, nullptr);
+    EXPECT_EQ(separate->kind, quader::QuaderToolSettingControlKind::Toggle);
+    EXPECT_EQ(fill->kind, quader::QuaderToolSettingControlKind::Toggle);
+    EXPECT_FALSE(separate->bool_value);
+    EXPECT_TRUE(fill->bool_value);
+
+    ASSERT_TRUE(editor.tools()
+                    .set_setting("half_cut", "operation.half_cut.axis", 2.0)
+                    .ok());
+    ASSERT_TRUE(editor.tools()
+                    .set_setting("half_cut",
+                                 "operation.half_cut.separate_parts", true)
+                    .ok());
+    ASSERT_TRUE(editor.tools()
+                    .set_setting("half_cut", "operation.half_cut.fill_parts",
+                                 false)
+                    .ok());
+
+    settings = editor.tools().active_settings();
+    axis = find_tool_setting_control(settings, "operation.half_cut.axis");
+    separate = find_tool_setting_control(
+        settings, "operation.half_cut.separate_parts");
+    fill = find_tool_setting_control(settings, "operation.half_cut.fill_parts");
+    ASSERT_NE(axis, nullptr);
+    ASSERT_NE(separate, nullptr);
+    ASSERT_NE(fill, nullptr);
+    EXPECT_EQ(axis->choice_value, "2");
+    EXPECT_TRUE(separate->bool_value);
+    EXPECT_FALSE(fill->bool_value);
+
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    EXPECT_FALSE(editor.tools().active_settings().active);
+}
+
+TEST(EditorApiTests,
+     HalfCutSeparatedPreviewPartsPreserveSourceSceneIdentityAcrossToggles) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+
+    const quader::QuaderApiResult<quader::QuaderEntityRef> parent =
+        editor.scene().create_entity({
+            .name = "Half-Cut Parent",
+            .kind = quader::QuaderEntityKind::Empty,
+        });
+    ASSERT_TRUE(parent.ok()) << parent.error_message();
+    const quader::QuaderModelingObjectRef source =
+        create_selected_box(editor, "Half-Cut Identity Source");
+    ASSERT_TRUE(editor.scene().reparent(source.entity, parent.value().id, false)
+                    .ok());
+
+    quader::QuaderTransform transform;
+    transform.position = {4.0f, 5.0f, 6.0f};
+    transform.rotation_euler = {0.25f, 0.5f, 0.75f};
+    ASSERT_TRUE(editor.scene().set_transform(source.entity, transform).ok());
+    ASSERT_TRUE(editor.scene().set_visible(source.entity, false).ok());
+    const quader::QuaderApiResult<quader::QuaderAssetRef> material =
+        editor.assets().add_material(
+            quader::QuaderMaterialArgs{.name = "Half-Cut Material"});
+    ASSERT_TRUE(material.ok()) << material.error_message();
+    ASSERT_TRUE(editor.assets()
+                    .assign_material_to_entity(source.entity,
+                                               material.value().id)
+                    .ok());
+
+    ASSERT_TRUE(editor.commands()
+                    .execute(editor.commands().command_id_for_modeling_action(
+                        "half_cut"))
+                    .ok());
+
+    const auto separated_part = [&]()
+        -> std::optional<quader::QuaderEntitySnapshot> {
+      for (const quader::QuaderEntitySnapshot &candidate :
+           editor.query().entities()) {
+        if (candidate.id != source.entity && candidate.has_mesh) {
+          return candidate;
+        }
+      }
+      return std::nullopt;
+    };
+
+    ASSERT_TRUE(editor.tools()
+                    .set_setting("half_cut",
+                                 "operation.half_cut.separate_parts", true)
+                    .ok());
+    std::optional<quader::QuaderEntitySnapshot> part = separated_part();
+    ASSERT_TRUE(part.has_value());
+    EXPECT_EQ(part->parent, parent.value().id);
+    EXPECT_NEAR(part->transform.position.x, 4.0f, 0.001f);
+    EXPECT_NEAR(part->transform.position.y, 5.0f, 0.001f);
+    EXPECT_NEAR(part->transform.position.z, 6.0f, 0.001f);
+    EXPECT_NEAR(part->transform.rotation_euler.z, 0.75f, 0.001f);
+    EXPECT_FALSE(part->visible);
+    EXPECT_TRUE(part->has_material);
+    EXPECT_EQ(part->material, material.value().id);
+
+    ASSERT_TRUE(editor.tools()
+                    .set_setting("half_cut",
+                                 "operation.half_cut.separate_parts", false)
+                    .ok());
+    EXPECT_FALSE(separated_part().has_value());
+
+    ASSERT_TRUE(editor.tools()
+                    .set_setting("half_cut",
+                                 "operation.half_cut.separate_parts", true)
+                    .ok());
+    part = separated_part();
+    ASSERT_TRUE(part.has_value());
+    EXPECT_EQ(part->parent, parent.value().id);
+    EXPECT_NEAR(part->transform.position.x, 4.0f, 0.001f);
+    EXPECT_FALSE(part->visible);
+    EXPECT_TRUE(part->has_material);
+    EXPECT_EQ(part->material, material.value().id);
+
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    EXPECT_FALSE(separated_part().has_value());
+    EXPECT_TRUE(entity_by_id(editor, source.entity).has_value());
+}
+
+TEST(EditorApiTests,
+     HalfCutSeparatedPreviewPreservesEachSourceIdentityForMultipleMeshes) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+
+    const quader::QuaderApiResult<quader::QuaderEntityRef> first_parent =
+        editor.scene().create_entity({
+            .name = "First Half-Cut Parent",
+            .kind = quader::QuaderEntityKind::Empty,
+        });
+    const quader::QuaderApiResult<quader::QuaderEntityRef> second_parent =
+        editor.scene().create_entity({
+            .name = "Second Half-Cut Parent",
+            .kind = quader::QuaderEntityKind::Empty,
+        });
+    ASSERT_TRUE(first_parent.ok()) << first_parent.error_message();
+    ASSERT_TRUE(second_parent.ok()) << second_parent.error_message();
+
+    const quader::QuaderModelingObjectRef first =
+        create_selected_box(editor, "First Half-Cut Source");
+    const quader::QuaderModelingObjectRef second =
+        create_selected_box(editor, "Second Half-Cut Source");
+    ASSERT_TRUE(editor.scene()
+                    .reparent(first.entity, first_parent.value().id, false)
+                    .ok());
+    ASSERT_TRUE(editor.scene()
+                    .reparent(second.entity, second_parent.value().id, false)
+                    .ok());
+
+    quader::QuaderTransform first_transform;
+    first_transform.position = {3.0f, 4.0f, 5.0f};
+    quader::QuaderTransform second_transform;
+    second_transform.position = {-6.0f, 7.0f, 8.0f};
+    ASSERT_TRUE(editor.scene()
+                    .set_transform(first.entity, first_transform)
+                    .ok());
+    ASSERT_TRUE(editor.scene()
+                    .set_transform(second.entity, second_transform)
+                    .ok());
+    ASSERT_TRUE(editor.scene().set_visible(first.entity, false).ok());
+
+    const auto first_material = editor.assets().add_material(
+        quader::QuaderMaterialArgs{.name = "First Half-Cut Material"});
+    const auto second_material = editor.assets().add_material(
+        quader::QuaderMaterialArgs{.name = "Second Half-Cut Material"});
+    ASSERT_TRUE(first_material.ok()) << first_material.error_message();
+    ASSERT_TRUE(second_material.ok()) << second_material.error_message();
+    ASSERT_TRUE(editor.assets()
+                    .assign_material_to_entity(first.entity,
+                                               first_material.value().id)
+                    .ok());
+    ASSERT_TRUE(editor.assets()
+                    .assign_material_to_entity(second.entity,
+                                               second_material.value().id)
+                    .ok());
+    ASSERT_TRUE(editor.selection()
+                    .select_objects({first.entity, second.entity},
+                                    second.entity)
+                    .ok());
+
+    ASSERT_TRUE(editor.commands()
+                    .execute(editor.commands().command_id_for_modeling_action(
+                        "half_cut"))
+                    .ok());
+    ASSERT_TRUE(editor.tools()
+                    .set_setting("half_cut",
+                                 "operation.half_cut.separate_parts", true)
+                    .ok());
+
+    std::vector<quader::QuaderEntitySnapshot> separated_parts;
+    for (const quader::QuaderEntitySnapshot &candidate :
+         editor.query().entities()) {
+      if (candidate.has_mesh && candidate.id != first.entity &&
+          candidate.id != second.entity) {
+        separated_parts.push_back(candidate);
+      }
+    }
+    ASSERT_EQ(separated_parts.size(), 2U);
+
+    const auto part_for_parent = [&](quader::EntityId parent)
+        -> const quader::QuaderEntitySnapshot * {
+      const auto found = std::ranges::find_if(
+          separated_parts, [parent](const quader::QuaderEntitySnapshot &part) {
+            return part.parent == parent;
+          });
+      return found == separated_parts.end() ? nullptr : &*found;
+    };
+    const quader::QuaderEntitySnapshot *first_part =
+        part_for_parent(first_parent.value().id);
+    const quader::QuaderEntitySnapshot *second_part =
+        part_for_parent(second_parent.value().id);
+    ASSERT_NE(first_part, nullptr);
+    ASSERT_NE(second_part, nullptr);
+    EXPECT_NEAR(first_part->transform.position.x, 3.0f, 0.001f);
+    EXPECT_FALSE(first_part->visible);
+    EXPECT_EQ(first_part->material, first_material.value().id);
+    EXPECT_NEAR(second_part->transform.position.x, -6.0f, 0.001f);
+    EXPECT_TRUE(second_part->visible);
+    EXPECT_EQ(second_part->material, second_material.value().id);
+
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    EXPECT_EQ(editor.query().modeling_objects().size(), 2U);
+}
+
 TEST(EditorApiTests,
      LinearArrayToolRequiresOneMeshAndKeepsEndpointFixedWhenCountChanges) {
   CommandTestHarness harness;

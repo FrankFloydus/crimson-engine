@@ -27,6 +27,7 @@ enum class EditorOperationId {
   Thicken,
   SliceQuad,
   MergeByDistance,
+  HalfCut,
   RemoveDoubles,
   BevelVertices,
   DuplicateMeshes,
@@ -222,6 +223,28 @@ struct MergeByDistanceOperationSchema {
 };
 
 /**
+ * Enumerates the local mesh axis used by the centered Half-Cut plane.
+ */
+enum class HalfCutAxis {
+  X = 0,
+  Y = 1,
+  Z = 2,
+};
+
+/**
+ * Represents a Half-Cut Operation Schema value used by the modeling runtime
+ * domain.
+ */
+struct HalfCutOperationSchema {
+  EditorOperationId id = EditorOperationId::HalfCut;
+  std::string_view operation_id = "half_cut";
+  std::string_view label = "Half-Cut";
+  IntOperationOptionSchema axis;
+  BoolOperationOptionSchema separate_parts;
+  BoolOperationOptionSchema fill_parts;
+};
+
+/**
  * Represents a Bevel Vertices Operation Schema value used by the modeling
  * runtime domain.
  */
@@ -284,6 +307,16 @@ struct SliceQuadOperationSettings {
  */
 struct MergeByDistanceOperationSettings {
   double tolerance = 0.125;
+};
+
+/**
+ * Represents a Half-Cut Operation Settings value used by the modeling runtime
+ * domain.
+ */
+struct HalfCutOperationSettings {
+  HalfCutAxis axis = HalfCutAxis::X;
+  bool separate_parts = false;
+  bool fill_parts = true;
 };
 
 /**
@@ -377,6 +410,19 @@ merge_by_distance_operation_schema() {
       "merge_by_distance",
       "Merge by Distance",
       {"tolerance", "Tolerance", 0.125, 0.0, 128.0, 0.001, true},
+  };
+}
+
+inline constexpr HalfCutOperationSchema half_cut_operation_schema() {
+  return {
+      EditorOperationId::HalfCut,
+      "half_cut",
+      "Half-Cut",
+      {"axis", "Axis", static_cast<int>(HalfCutAxis::X),
+       static_cast<int>(HalfCutAxis::X), static_cast<int>(HalfCutAxis::Z), 1,
+       true},
+      {"separate_parts", "Separate Parts", false, true},
+      {"fill_parts", "Fill Parts", true, true},
   };
 }
 
@@ -487,8 +533,9 @@ operation_option_descriptor_catalog() {
   constexpr SliceQuadOperationSchema kSliceQuad = slice_quad_operation_schema();
   constexpr MergeByDistanceOperationSchema kMergeByDistance =
       merge_by_distance_operation_schema();
+  constexpr HalfCutOperationSchema kHalfCut = half_cut_operation_schema();
 
-  static constexpr std::array<EditorOperationOptionDescriptor, 9> kDescriptors{{
+  static constexpr std::array<EditorOperationOptionDescriptor, 12> kDescriptors{{
       operation_option_descriptor(kBridge.id, kBridge.operation_id,
                                   kBridge.label, "operation.bridge",
                                   "operation.bridge.steps", kBridge.steps),
@@ -524,6 +571,17 @@ operation_option_descriptor_catalog() {
           kMergeByDistance.id, kMergeByDistance.operation_id,
           kMergeByDistance.label, "operation.merge_by_distance",
           "operation.merge_by_distance.tolerance", kMergeByDistance.tolerance),
+      operation_option_descriptor(kHalfCut.id, kHalfCut.operation_id,
+                                  kHalfCut.label, "operation.half_cut",
+                                  "operation.half_cut.axis", kHalfCut.axis),
+      operation_option_descriptor(
+          kHalfCut.id, kHalfCut.operation_id, kHalfCut.label,
+          "operation.half_cut", "operation.half_cut.separate_parts",
+          kHalfCut.separate_parts),
+      operation_option_descriptor(
+          kHalfCut.id, kHalfCut.operation_id, kHalfCut.label,
+          "operation.half_cut", "operation.half_cut.fill_parts",
+          kHalfCut.fill_parts),
   }};
   return kDescriptors;
 }
@@ -673,6 +731,25 @@ normalize_merge_by_distance_operation_settings(
     MergeByDistanceOperationSettings settings) {
   settings.tolerance = normalize_operation_float(
       merge_by_distance_operation_schema().tolerance, settings.tolerance);
+  return settings;
+}
+
+inline HalfCutAxis sanitize_half_cut_axis(int axis) {
+  switch (axis) {
+  case static_cast<int>(HalfCutAxis::X):
+    return HalfCutAxis::X;
+  case static_cast<int>(HalfCutAxis::Y):
+    return HalfCutAxis::Y;
+  case static_cast<int>(HalfCutAxis::Z):
+    return HalfCutAxis::Z;
+  default:
+    return HalfCutAxis::X;
+  }
+}
+
+inline HalfCutOperationSettings
+normalize_half_cut_operation_settings(HalfCutOperationSettings settings) {
+  settings.axis = sanitize_half_cut_axis(static_cast<int>(settings.axis));
   return settings;
 }
 

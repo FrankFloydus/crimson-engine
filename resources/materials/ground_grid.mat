@@ -109,7 +109,7 @@ fragment {
         float antialias = max(fwidth(coord), safeSpacing * 0.001);
         float lineWidth = antialias * max(widthScale, 0.05) * thickness;
         float coverage = 1.0 - smoothstep(lineWidth, lineWidth + antialias, wrapped);
-        return coverage * min(thickness, 1.0);
+        return coverage;
     }
 
     float axisLine(float coord) {
@@ -117,7 +117,7 @@ fragment {
         float antialias = max(fwidth(coord), 0.0001);
         float lineWidth = antialias * 0.9 * thickness;
         float coverage = 1.0 - smoothstep(lineWidth, lineWidth + antialias, abs(coord));
-        return coverage * min(thickness, 1.0);
+        return coverage;
     }
 
     vec3 safeNormalize(vec3 value, vec3 fallback) {

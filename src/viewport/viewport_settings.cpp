@@ -69,10 +69,10 @@ const std::array<ViewportSettingsSectionDescriptor, kViewportSettingsSectionCoun
 }};
 
 const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kColorSettings{{
-        {ViewportColorSettingId::GridMinor, ViewportSettingsSectionId::Grid, "Minor", key("GridMinorColor"), kDefaultViewportGridMinorColor},
-        {ViewportColorSettingId::GridMajor, ViewportSettingsSectionId::Grid, "Major", key("GridMajorColor"), kDefaultViewportGridMajorColor},
-        {ViewportColorSettingId::MeshGridMinor, ViewportSettingsSectionId::Grid, "Mesh Minor", key("MeshGridMinorColor"), kDefaultViewportMeshGridMinorColor},
-        {ViewportColorSettingId::MeshGridMajor, ViewportSettingsSectionId::Grid, "Mesh Major", key("MeshGridMajorColor"), kDefaultViewportMeshGridMajorColor},
+        {ViewportColorSettingId::GridMinor, ViewportSettingsSectionId::Grid, "Ground Minor", key("GridMinorColor"), kDefaultViewportGridMinorColor},
+        {ViewportColorSettingId::GridMajor, ViewportSettingsSectionId::Grid, "Ground Major", key("GridMajorColor"), kDefaultViewportGridMajorColor},
+        {ViewportColorSettingId::MeshGridMinor, ViewportSettingsSectionId::Grid, "Mesh Surface Minor", key("MeshGridMinorColor"), kDefaultViewportMeshGridMinorColor},
+        {ViewportColorSettingId::MeshGridMajor, ViewportSettingsSectionId::Grid, "Mesh Surface Major", key("MeshGridMajorColor"), kDefaultViewportMeshGridMajorColor},
         {ViewportColorSettingId::GridXAxis, ViewportSettingsSectionId::Grid, "X QAxis", key("GridXAxisColor"), kDefaultViewportGridXAxisColor},
         {ViewportColorSettingId::GridYAxis, ViewportSettingsSectionId::Grid, "Y QAxis", key("GridYAxisColor"), kDefaultViewportGridYAxisColor},
         {ViewportColorSettingId::GridZAxis, ViewportSettingsSectionId::Grid, "Z QAxis", key("GridZAxisColor"), kDefaultViewportGridZAxisColor},
@@ -111,8 +111,8 @@ const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFl
 }};
 
 const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBoolSettings{{
-        {ViewportBoolSettingId::ShowGrid, ViewportSettingsSectionId::Grid, "Show Grid", key("ShowGrid"), true},
-        {ViewportBoolSettingId::ShowMeshGrid, ViewportSettingsSectionId::Grid, "Show Mesh Grid", key("ShowMeshGrid"), false},
+        {ViewportBoolSettingId::ShowGrid, ViewportSettingsSectionId::Grid, "Show Ground Grid", key("ShowGrid"), true},
+        {ViewportBoolSettingId::ShowMeshGrid, ViewportSettingsSectionId::Grid, "Show Mesh Surface Grid", key("ShowMeshGrid"), false},
         {ViewportBoolSettingId::ShowGizmos, ViewportSettingsSectionId::Gizmo, "Show Gizmos", key("ShowGizmos"), true},
         {ViewportBoolSettingId::ShowOverlays, ViewportSettingsSectionId::Overlay, "Show Overlays", key("ShowOverlays"), true},
         {ViewportBoolSettingId::ShowInfo, ViewportSettingsSectionId::Overlay, "Show Info", key("ShowInfo"), false},

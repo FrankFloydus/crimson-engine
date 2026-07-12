@@ -84,6 +84,12 @@ command_schema_for_operation(EditorOperationId operation_id) {
         EditorOperationSettingsKind::MergeByDistance,
         PreviewTransactionKind::MergeByDistance,
     };
+  case EditorOperationId::HalfCut:
+    return EditorOperationCommandSchema{
+        operation_id,
+        EditorOperationSettingsKind::HalfCut,
+        PreviewTransactionKind::HalfCut,
+    };
   case EditorOperationId::BevelVertices:
     return EditorOperationCommandSchema{
         operation_id, EditorOperationSettingsKind::BevelVertices, std::nullopt};
@@ -151,6 +157,8 @@ bool command_settings_match_operation(EditorOperationId operation_id,
     return std::holds_alternative<SliceQuadOperationSettings>(settings);
   case EditorOperationSettingsKind::MergeByDistance:
     return std::holds_alternative<MergeByDistanceOperationSettings>(settings);
+  case EditorOperationSettingsKind::HalfCut:
+    return std::holds_alternative<HalfCutOperationSettings>(settings);
   case EditorOperationSettingsKind::BevelVertices:
     return std::holds_alternative<BevelVerticesOperationSettings>(settings);
   case EditorOperationSettingsKind::DuplicateMeshes:

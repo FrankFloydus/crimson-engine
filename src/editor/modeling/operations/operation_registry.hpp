@@ -46,6 +46,7 @@ public:
 [[nodiscard]] const EditorOperation &merge_by_distance_operation();
 [[nodiscard]] const EditorOperation &bevel_vertices_operation();
 [[nodiscard]] const EditorOperation &duplicate_meshes_operation();
+[[nodiscard]] const EditorOperation &half_cut_operation();
 [[nodiscard]] const EditorOperation &connect_vertices_operation();
 [[nodiscard]] const EditorOperation &dissolve_vertices_operation();
 [[nodiscard]] const EditorOperation &connect_edges_operation();

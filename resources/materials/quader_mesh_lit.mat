@@ -84,6 +84,17 @@ fragment {
         return mix(currentCoverage, nextCoverage, blend);
     }
 
+    float surfaceGridLineSlotCoverage(
+            float coord, float spacing, float thicknessValue, float worldPixelWidth) {
+        float safeSpacing = max(spacing, 0.0001);
+        float minRenderableSpacing = max(worldPixelWidth, 0.0) * 2.0;
+        float lodSpacing = max(surfaceGridFloor(max(minRenderableSpacing, safeSpacing)), safeSpacing);
+        float nextSpacing = max(lodSpacing * 2.0, lodSpacing + 0.0001);
+        float currentCoverage = surfaceGridLineCoverage(coord, lodSpacing, thicknessValue);
+        float nextCoverage = surfaceGridLineCoverage(coord, nextSpacing, thicknessValue);
+        return max(currentCoverage, nextCoverage);
+    }
+
     vec2 surfaceGridCoordinates(vec3 worldPosition, vec3 normal) {
         vec3 dominant = abs(normal);
         if (dominant.x >= dominant.y && dominant.x >= dominant.z) {
@@ -113,9 +124,17 @@ fragment {
                 surfaceGridLine(coords.x, majorSpacing, materialParams.surfaceGridMajorLineThickness, worldPixelWidth),
                 surfaceGridLine(coords.y, majorSpacing, materialParams.surfaceGridMajorLineThickness, worldPixelWidth));
 
+        float majorSlotThickness = max(
+                materialParams.surfaceGridMinorLineThickness,
+                materialParams.surfaceGridMajorLineThickness);
+        float majorSlotCoverage = max(
+                surfaceGridLineSlotCoverage(coords.x, majorSpacing, majorSlotThickness, worldPixelWidth),
+                surfaceGridLineSlotCoverage(coords.y, majorSpacing, majorSlotThickness, worldPixelWidth));
+        float majorSlotMask = step(0.000001, majorSlotCoverage);
+
         float majorCoverage = majorLine * materialParams.surfaceGridMajorColor.a;
         float minorCoverage = minorLine * materialParams.surfaceGridMinorColor.a
-                * (1.0 - clamp(majorCoverage, 0.0, 1.0));
+                * (1.0 - majorSlotMask);
         float alpha = clamp(minorCoverage + majorCoverage, 0.0, 1.0);
         if (alpha <= 0.000001) {
             return baseColor;

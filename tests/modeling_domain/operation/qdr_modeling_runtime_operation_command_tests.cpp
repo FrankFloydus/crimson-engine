@@ -36,6 +36,8 @@ qec::EditorOperationSettings matching_settings(qec::EditorOperationSettingsKind 
           return qec::SliceQuadOperationSettings{};
         case qec::EditorOperationSettingsKind::MergeByDistance:
           return qec::MergeByDistanceOperationSettings{};
+        case qec::EditorOperationSettingsKind::HalfCut:
+          return qec::HalfCutOperationSettings{};
         case qec::EditorOperationSettingsKind::BevelVertices:
           return qec::BevelVerticesOperationSettings{};
         case qec::EditorOperationSettingsKind::DuplicateMeshes:

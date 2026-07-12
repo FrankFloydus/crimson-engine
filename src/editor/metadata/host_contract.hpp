@@ -91,6 +91,7 @@ enum class HostPreviewKind {
   Thicken,
   SliceQuad,
   MergeByDistance,
+  HalfCut,
 };
 
 /**
@@ -183,6 +184,7 @@ enum class HostUiVisibilityCondition {
   ThickenPreviewActive,
   SliceQuadPreviewActive,
   MergeByDistancePreviewActive,
+  HalfCutPreviewActive,
   CutToolActive,
 };
 

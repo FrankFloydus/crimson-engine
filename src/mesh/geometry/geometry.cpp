@@ -114,7 +114,14 @@ triangulate_projected_polygon(std::span<const QVec2d> points, double epsilon,
 QRayPlaneHit<float> intersect_ray_plane(const QRay3<float> &ray,
                                         const QPlane3<float> &plane,
                                         float epsilon) {
-  return intersect_ray_plane<float>(ray, plane, epsilon);
+  const QRayPlaneHit<double> hit = intersect_ray_plane<double>(
+      QRay3<double>{ray}, QPlane3<double>{plane},
+      static_cast<double>(epsilon));
+  return {
+      hit.hit,
+      static_cast<float>(hit.distance),
+      QBasicVec3<float>{hit.point},
+  };
 }
 
 QRayTriangleHit<double>

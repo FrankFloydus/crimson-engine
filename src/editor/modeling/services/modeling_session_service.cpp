@@ -883,6 +883,96 @@ public:
                                                           active);
   }
 
+  /**
+   * Preserves the scene identity of every source mesh while Half-Cut previews
+   * optionally materialize a second runtime object for each source.
+   */
+  struct HalfCutSceneIdentitySnapshot {
+    std::vector<int> source_object_ids;
+    std::unordered_set<int> object_ids_before;
+    std::unordered_map<int, ModelingObjectSceneIdentity> source_identities;
+  };
+
+  [[nodiscard]] std::optional<HalfCutSceneIdentitySnapshot>
+  capture_half_cut_scene_identities(
+      quader_editor_core::EditorOperationId operation,
+      quader_editor_core::EditorOperationCommandPhase phase) const {
+    if (operation != quader_editor_core::EditorOperationId::HalfCut) {
+      return std::nullopt;
+    }
+
+    std::optional<quader_editor_core::SessionState> preview_base;
+    const quader_editor_core::SessionState *source_state = nullptr;
+    switch (phase) {
+    case quader_editor_core::EditorOperationCommandPhase::Execute:
+    case quader_editor_core::EditorOperationCommandPhase::BeginPreview:
+      source_state = &session_.state();
+      break;
+    case quader_editor_core::EditorOperationCommandPhase::UpdatePreview:
+      preview_base = session_.preview_transaction_history_state(
+          quader_editor_core::PreviewTransactionKind::HalfCut);
+      if (preview_base.has_value()) {
+        source_state = &*preview_base;
+      }
+      break;
+    case quader_editor_core::EditorOperationCommandPhase::CommitPreview:
+    case quader_editor_core::EditorOperationCommandPhase::CancelPreview:
+      break;
+    }
+    if (source_state == nullptr) {
+      return std::nullopt;
+    }
+
+    HalfCutSceneIdentitySnapshot snapshot;
+    snapshot.object_ids_before.reserve(source_state->objects.size());
+    for (const quader_editor_core::PolygonObject &object :
+         source_state->objects) {
+      snapshot.object_ids_before.insert(object.id);
+      if (object.selected) {
+        snapshot.source_object_ids.push_back(object.id);
+      }
+    }
+    if (snapshot.source_object_ids.empty()) {
+      return std::nullopt;
+    }
+
+    const std::unordered_set<int> source_id_set(
+        snapshot.source_object_ids.begin(), snapshot.source_object_ids.end());
+    snapshot.source_identities =
+        object_registry_.capture_scene_identities_for_modeling_objects(
+            scene_, source_id_set);
+    return snapshot;
+  }
+
+  void apply_half_cut_scene_identities(
+      const HalfCutSceneIdentitySnapshot &snapshot) {
+    std::vector<int> created_object_ids;
+    for (const quader_editor_core::PolygonObject &object : session_.objects()) {
+      if (!snapshot.object_ids_before.contains(object.id)) {
+        created_object_ids.push_back(object.id);
+      }
+    }
+
+    const std::size_t count =
+        std::min(created_object_ids.size(), snapshot.source_object_ids.size());
+    for (std::size_t index = 0; index < count; ++index) {
+      const auto source_identity =
+          snapshot.source_identities.find(snapshot.source_object_ids[index]);
+      if (source_identity == snapshot.source_identities.end()) {
+        continue;
+      }
+      const std::optional<EntityId> created_entity =
+          object_registry_.entity_for_modeling_object(created_object_ids[index]);
+      if (!created_entity.has_value() || !scene_.exists(*created_entity)) {
+        continue;
+      }
+      mesh_sync_service_.apply_scene_identity_to_duplicate_entity(
+          scene_, *created_entity, source_identity->second);
+      object_registry_.remember_scene_entity(created_object_ids[index], scene_,
+                                             *created_entity);
+    }
+  }
+
   [[nodiscard]] std::vector<ModelingObjectSceneIdentity>
   capture_selected_duplicate_scene_identities() const {
     QDR_PROFILE_FUNCTION();
@@ -1327,6 +1417,9 @@ public:
     const quader_editor_core::PreviewTransactionStatus preview_before =
         session_.preview_transaction_status();
     const std::uint64_t content_before = session_.state().content_revision;
+    const std::optional<HalfCutSceneIdentitySnapshot>
+        half_cut_scene_identities = capture_half_cut_scene_identities(
+            runtime_operation, phase);
     if (phase == quader_editor_core::EditorOperationCommandPhase::BeginPreview) {
       scene_workspace_preview_.reset();
     }
@@ -1378,6 +1471,9 @@ public:
     }
     if (sync_plan.sync_meshes) {
       sync_scene_objects_from_modeling(sync_plan.force_mesh_sync);
+      if (result.command.ok && half_cut_scene_identities.has_value()) {
+        apply_half_cut_scene_identities(*half_cut_scene_identities);
+      }
     }
     if (sync_plan.sync_selection) {
       sync_scene_selection_from_modeling();
@@ -1949,7 +2045,8 @@ public:
         !operation_for_preview_kind(preview.kind).has_value()) {
       return std::nullopt;
     }
-    if (preview.kind == quader_editor_core::PreviewTransactionKind::Thicken &&
+    if ((preview.kind == quader_editor_core::PreviewTransactionKind::Thicken ||
+         preview.kind == quader_editor_core::PreviewTransactionKind::HalfCut) &&
         session_.selection_mode() ==
             quader_editor_core::SelectionMode::Object) {
       return std::nullopt;

@@ -112,6 +112,7 @@ modeling.action.disabled.single_object=Seleziona elementi da un solo oggetto.
 
 ui.settings.interface=Interfaccia
 ui.settings.locale=Lingua
+ui.settings.color.opacity=Opacità: %1%
 ui.settings.viewport.reset_to_defaults=Ripristina predefiniti
 
 ui.console.clear=Pulisci
@@ -292,10 +293,10 @@ viewport.settings.section.vertices.label=Vertici
 viewport.settings.section.picking.label=Picking
 viewport.settings.section.gizmo.label=Gizmo
 
-viewport.settings.GridMinorColor.label=Minore
-viewport.settings.GridMajorColor.label=Maggiore
-viewport.settings.MeshGridMinorColor.label=Mesh minore
-viewport.settings.MeshGridMajorColor.label=Mesh maggiore
+viewport.settings.GridMinorColor.label=Griglia a terra minore
+viewport.settings.GridMajorColor.label=Griglia a terra maggiore
+viewport.settings.MeshGridMinorColor.label=Superficie mesh minore
+viewport.settings.MeshGridMajorColor.label=Superficie mesh maggiore
 viewport.settings.GridXAxisColor.label=Asse X
 viewport.settings.GridYAxisColor.label=Asse Y
 viewport.settings.GridZAxisColor.label=Asse Z
@@ -328,8 +329,8 @@ viewport.settings.VertexOutlineSize.label=Dimensione contorno
 viewport.settings.PickVertexRadius.label=Raggio vertice
 viewport.settings.PickEdgeRadius.label=Raggio spigolo
 viewport.settings.GizmoSize.label=Dimensione
-viewport.settings.ShowGrid.label=Mostra griglia
-viewport.settings.ShowMeshGrid.label=Mostra griglia mesh
+viewport.settings.ShowGrid.label=Mostra griglia a terra
+viewport.settings.ShowMeshGrid.label=Mostra griglia superficie mesh
 viewport.settings.ShowGizmos.label=Mostra gizmo
 viewport.settings.ShowOverlays.label=Mostra overlay
 viewport.settings.ShowInfo.label=Mostra info
@@ -343,6 +344,7 @@ tool_settings.target.edge_bevel=Smussa spigoli
 tool_settings.target.thicken=Distanza
 tool_settings.target.slice_quad=Suddividi quad
 tool_settings.target.merge_by_distance=Unisci per distanza
+tool_settings.target.half_cut=Taglio a meta
 tool_settings.target.pivot=Pivot
 operation.cut.keep_mode=Modalita mantenimento
 operation.thicken.from_center=Dal centro
@@ -378,6 +380,9 @@ operation.thicken.thickness=Distanza
 operation.slice_quad.x_slices=X
 operation.slice_quad.y_slices=Y
 operation.merge_by_distance.tolerance=Tolleranza
+operation.half_cut.axis=Asse
+operation.half_cut.separate_parts=Separa parti
+operation.half_cut.fill_parts=Riempi parti
 
 history.apply_operation=Applica {operation}
 
@@ -386,6 +391,7 @@ modeling.operation.edge_bevel.label=Smussa spigoli
 modeling.operation.thicken.label=Ispessisci
 modeling.operation.slice_quad.label=Suddividi quad
 modeling.operation.merge_by_distance.label=Unisci per distanza
+modeling.operation.half_cut.label=Taglio a meta
 modeling.operation.create_box_from_bounds.label=Crea box dai limiti
 
 modeling.action.delete_selection.label=Elimina
@@ -394,6 +400,7 @@ modeling.action.invert_mesh.label=Inverti normali mesh
 modeling.action.shade_smooth_mesh.label=Ombreggiatura morbida
 modeling.action.shade_flat_mesh.label=Ombreggiatura piatta
 modeling.action.combine_mesh.label=Combina mesh
+modeling.action.half_cut.label=Taglio a meta
 modeling.action.create_outer_hull.label=Crea guscio esterno
 modeling.action.snap_vertices_to_active.label=Aggancia al vertice
 modeling.action.merge_vertices.label=Unisci

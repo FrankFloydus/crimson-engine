@@ -9,6 +9,79 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-12 - Grid Width And Tier Composition Preserve Color
+
+Task/context: reducing ground-grid or axis line size made the axis colors turn gray and made color
+alpha appear unreliable. Ground-grid and mesh-surface-grid controls were also easy to confuse, and
+mesh major lines blended with coincident minor lines, producing a light fringe around dark majors.
+
+Invariant:
+
+- Ground-grid `lineThickness`, `majorLineThickness`, and `axisLineThickness` affect only geometric
+  anti-aliased width. They must not multiply line coverage amplitude; the corresponding RGBA color
+  alpha is the sole opacity control.
+- Ground-grid and mesh-surface-grid colors remain separate settings. Their visible labels and show
+  toggles must say which grid they control.
+- Mesh-surface major slots exclude minor coverage before RGBA composition. The exclusion reserves
+  both current and next LOD footprints, uses the wider configured tier, and is independent of the
+  major color alpha; a major line therefore anti-aliases directly against the mesh surface.
+- Qt color swatches remain stock Fusion palette-only buttons. Their tooltip and accessibility text
+  expose localized numeric opacity without adding button text, icons, QSS, or custom painting.
+
+Affected owners/files:
+
+- `resources/materials/ground_grid.mat`
+- `resources/materials/quader_mesh.mat` and `resources/materials/quader_mesh_lit.mat`
+- `src/viewport/viewport_settings.cpp`
+- `src/ui/qt_settings_dialog.cpp`
+- `resources/locales/*.lang`
+- `tests/core_tests.cpp`, `tests/qt_settings_controller_tests.cpp`, and UI guardrails
+
+Verification:
+
+- Focused ground-grid, viewport-settings, Qt-settings, mesh-signature, and UI guardrail tests:
+  14/14.
+- Mesh-material shader contract tests: 4/4; both shaded and rendered mesh materials compiled to
+  Filament packages during the test build.
+- Full CTest: 6/6 targets passed.
+- `cmake --build --preset vs2026-debug --target quader` produced the v0.0.99 executable, and the
+  GPU/window boot smoke completed without runtime material or log errors.
+
+## 2026-07-12 - Half-Cut Inserts Or Separates Per-Mesh Center Cuts
+
+Task/context: Half-Cut needed to operate on one or more selected meshes, default to adding only a
+centered edge loop, and optionally separate and cap both halves through live tool settings.
+
+Invariant:
+
+- Half-Cut is Object-mode only. Each selected mesh uses its own local AABB center and local X/Y/Z
+  axis; multi-mesh execution is atomic.
+- The default (`Separate Parts = false`) routes through `plane_surface_cut`, keeps one object, and
+  only inserts the centered topology cut. `Fill Parts` is ignored in this mode.
+- `Separate Parts = true` keeps both plane-cut outputs as distinct selected mesh objects. `Fill
+  Parts = true` caps both halves; false leaves their cut boundaries open while still rejecting
+  non-manifold output.
+- Every preview update rebuilds from the original base state. Cancel restores the exact state and
+  history; Apply creates one undo step. New separated scene entities inherit their corresponding
+  source's parent, transform, visibility, lock, mesh metadata, and material.
+- The action is metadata-driven as `half_cut`, exposes generic X/Y/Z, Separate Parts, and Fill
+  Parts controls, and owns the typed public command `quader_command::kModelingHalfCut`.
+
+Affected owners/files:
+
+- `src/mesh/polygon/operations/plane_cut_operation.cpp` and the mirrored SDK-internal operation
+- `src/editor/modeling/operations/half_cut_operation.cpp`
+- `src/editor/modeling/runtime/session.*`
+- `src/editor/modeling/services/modeling_session_service.cpp`
+- modeling metadata, public API tool settings, command IDs, locales, CMake, and focused tests
+
+Verification:
+
+- Half-Cut, Plane Cut, command-schema, and geometry focus: 22/22.
+- Half-Cut editor API, multi-source scene identity, and command catalog focus: 4/4.
+- Full CTest: 6/6 targets passed.
+- `cmake --build --preset vs2026-debug --target quader` produced the v0.0.97 executable.
+
 ## 2026-07-12 - Saved-Maximized Qt Startup Reveals Only The Final Shell
 
 Task/context: a saved maximized launch briefly painted the retained normal-size

@@ -1456,6 +1456,35 @@ TEST(GroundGridMaterialTests, UsesUserWorldAnchoring) {
             std::string::npos);
 }
 
+TEST(GroundGridMaterialTests,
+     LineThicknessNarrowsCoverageWithoutScalingCenterOpacity) {
+  const std::string source =
+      read_source_file("resources/materials/ground_grid.mat");
+  const std::size_t grid_line_start = source.find("float gridLine(");
+  const std::size_t axis_line_start = source.find("float axisLine(");
+  const std::size_t normalize_start = source.find("vec3 safeNormalize(");
+
+  ASSERT_NE(grid_line_start, std::string::npos);
+  ASSERT_NE(axis_line_start, std::string::npos);
+  ASSERT_NE(normalize_start, std::string::npos);
+  ASSERT_LT(grid_line_start, axis_line_start);
+  ASSERT_LT(axis_line_start, normalize_start);
+
+  const std::string grid_line =
+      source.substr(grid_line_start, axis_line_start - grid_line_start);
+  const std::string axis_line =
+      source.substr(axis_line_start, normalize_start - axis_line_start);
+  EXPECT_NE(grid_line.find("lineWidth = antialias * max(widthScale, 0.05) * "
+                           "thickness"),
+            std::string::npos);
+  EXPECT_NE(axis_line.find("lineWidth = antialias * 0.9 * thickness"),
+            std::string::npos);
+  EXPECT_NE(grid_line.find("return coverage;"), std::string::npos);
+  EXPECT_NE(axis_line.find("return coverage;"), std::string::npos);
+  EXPECT_EQ(grid_line.find("coverage * min(thickness"), std::string::npos);
+  EXPECT_EQ(axis_line.find("coverage * min(thickness"), std::string::npos);
+}
+
 TEST(QuaderMeshMaterialTests, UsesOverlaySelectionInsteadOfStandaloneTint) {
   const std::string source =
       read_source_file("resources/materials/quader_mesh.mat");
@@ -1546,6 +1575,46 @@ TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
               std::string::npos);
     EXPECT_EQ(source.find("return coverage;"), std::string::npos);
     EXPECT_EQ(source.find("return coverage * min(thickness, 1.0)"),
+              std::string::npos);
+  }
+}
+
+TEST(QuaderMeshMaterialTests,
+     SurfaceGridMajorSlotsExcludeMinorCoverageIndependentOfMajorAlpha) {
+  const std::array<std::string, 2> sources = {
+      read_source_file("resources/materials/quader_mesh.mat"),
+      read_source_file("resources/materials/quader_mesh_lit.mat"),
+  };
+
+  for (const std::string &source : sources) {
+    const std::size_t slot_function_start =
+        source.find("float surfaceGridLineSlotCoverage(");
+    const std::size_t coordinates_function_start =
+        source.find("vec2 surfaceGridCoordinates(");
+    ASSERT_NE(slot_function_start, std::string::npos);
+    ASSERT_NE(coordinates_function_start, std::string::npos);
+    ASSERT_LT(slot_function_start, coordinates_function_start);
+    const std::string slot_function = source.substr(
+        slot_function_start, coordinates_function_start - slot_function_start);
+
+    EXPECT_NE(slot_function.find("return max(currentCoverage, nextCoverage)"),
+              std::string::npos);
+    EXPECT_TRUE(source_contains_compact(
+        source, "float majorSlotThickness = max("
+                "materialParams.surfaceGridMinorLineThickness, "
+                "materialParams.surfaceGridMajorLineThickness)"));
+    EXPECT_NE(source.find("float majorSlotMask = step(0.000001, "
+                          "majorSlotCoverage)"),
+              std::string::npos);
+    EXPECT_NE(source.find("float majorCoverage = majorLine * "
+                          "materialParams.surfaceGridMajorColor.a"),
+              std::string::npos);
+    EXPECT_TRUE(source_contains_compact(
+        source, "float minorCoverage = minorLine * "
+                "materialParams.surfaceGridMinorColor.a * "
+                "(1.0 - majorSlotMask)"));
+    EXPECT_EQ(source.find("1.0 - clamp(majorCoverage"), std::string::npos);
+    EXPECT_EQ(source.find("float majorMask = clamp(majorLine"),
               std::string::npos);
   }
 }

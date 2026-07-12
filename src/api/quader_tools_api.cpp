@@ -171,6 +171,8 @@ std::string tool_settings_target_tool_id(
     return "slice_quad";
   case ModelingToolSettingsTargetKind::MergeByDistance:
     return "merge_by_distance";
+  case ModelingToolSettingsTargetKind::HalfCut:
+    return "half_cut";
   case ModelingToolSettingsTargetKind::None:
     break;
   }
@@ -249,6 +251,29 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
         "operation.merge_by_distance.tolerance", "Tolerance",
         settings.merge_by_distance_tolerance, 0.0, 128.0, 0.0001));
     break;
+  case ModelingToolSettingsTargetKind::HalfCut: {
+    const int axis = static_cast<int>(settings.half_cut_axis);
+    result.controls.push_back(choice_control(
+        "operation.half_cut.axis", "Axis", std::to_string(axis),
+        {
+            {.id = "axis_x",
+             .label = "X",
+             .value = static_cast<double>(ModelingHalfCutAxis::X)},
+            {.id = "axis_y",
+             .label = "Y",
+             .value = static_cast<double>(ModelingHalfCutAxis::Y)},
+            {.id = "axis_z",
+             .label = "Z",
+             .value = static_cast<double>(ModelingHalfCutAxis::Z)},
+        }));
+    result.controls.push_back(toggle_control(
+        "operation.half_cut.separate_parts", "Separate Parts",
+        settings.half_cut_separate_parts));
+    result.controls.push_back(toggle_control(
+        "operation.half_cut.fill_parts", "Fill Parts",
+        settings.half_cut_fill_parts));
+    break;
+  }
   case ModelingToolSettingsTargetKind::Mirror:
   case ModelingToolSettingsTargetKind::None:
     break;

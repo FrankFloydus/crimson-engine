@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -106,9 +107,25 @@ ViewportSettingColor from_q_color(const QColor &color) {
   };
 }
 
-void set_color_button_presentation(QtColorSwatchButton &button,
-                                   ViewportSettingColor color) {
-  button.set_swatch_color(to_q_color(color));
+QString color_opacity_text(const LocalizationService *localization,
+                           const QColor &color) {
+  const int percent = static_cast<int>(std::lround(
+      std::clamp(static_cast<double>(color.alphaF()), 0.0, 1.0) * 100.0));
+  return qtext(localization, "ui.settings.color.opacity", "Opacity: %1%")
+      .arg(percent);
+}
+
+void set_color_button_presentation(
+    QtColorSwatchButton &button, ViewportSettingColor color,
+    const LocalizationService *localization) {
+  const QColor swatch_color = to_q_color(color);
+  button.set_swatch_color(swatch_color);
+  const QString opacity = color_opacity_text(localization, swatch_color);
+  const QString details =
+      QStringLiteral("%1 | %2")
+          .arg(swatch_color.name(QColor::HexArgb).toUpper(), opacity);
+  button.setToolTip(details);
+  button.setAccessibleDescription(details);
 }
 
 } // namespace
@@ -379,10 +396,11 @@ struct QtSettingsDialog::Impl {
       if (viewport_settings != nullptr) {
         set_color_button_presentation(
             *control.button,
-            viewport_settings->color(control.descriptor->id));
+            viewport_settings->color(control.descriptor->id), localization);
       } else {
         set_color_button_presentation(*control.button,
-                                      control.descriptor->default_value);
+                                      control.descriptor->default_value,
+                                      localization);
       }
     }
 
@@ -490,7 +508,7 @@ struct QtSettingsDialog::Impl {
           (void)controller.preview_color(id, from_q_color(color));
           if (guarded_button != nullptr && viewport_settings != nullptr) {
             set_color_button_presentation(
-                *guarded_button, viewport_settings->color(id));
+                *guarded_button, viewport_settings->color(id), localization);
           }
         });
 
@@ -506,7 +524,8 @@ struct QtSettingsDialog::Impl {
     }
     if (guarded_button != nullptr) {
       set_color_button_presentation(
-          *guarded_button, viewport_settings->color(descriptor.id));
+          *guarded_button, viewport_settings->color(descriptor.id),
+          localization);
     }
   }
 };

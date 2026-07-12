@@ -124,6 +124,15 @@ enum class ModelingCutMode {
 };
 
 /**
+ * Enumerates the local mesh axis used by the Half-Cut operation.
+ */
+enum class ModelingHalfCutAxis {
+  X = 0,
+  Y = 1,
+  Z = 2,
+};
+
+/**
  * Enumerates ModelingTransformOperation values used by the modeling layer.
  */
 enum class ModelingTransformOperation {
@@ -607,6 +616,7 @@ enum class ModelingToolSettingsTargetKind {
   Thicken,
   SliceQuad,
   MergeByDistance,
+  HalfCut,
 };
 
 /**
@@ -634,6 +644,9 @@ struct ModelingInteractionSettings {
   int slice_quad_x_slices = 1;
   int slice_quad_y_slices = 1;
   double merge_by_distance_tolerance = 0.125;
+  ModelingHalfCutAxis half_cut_axis = ModelingHalfCutAxis::X;
+  bool half_cut_separate_parts = false;
+  bool half_cut_fill_parts = true;
   ModelingCutMode cut_mode = ModelingCutMode::KeepBoth;
 };
 

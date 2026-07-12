@@ -87,15 +87,16 @@ TEST(QdrEditorMetadataPanelCatalogTests, HostContractOperationPanelItemsResolveT
 		}
 	}
 
-	EXPECT_TRUE(item_count == 36U);
+	EXPECT_TRUE(item_count == 37U);
 }
 
 TEST(QdrEditorMetadataPanelCatalogTests, HostContractOperationPanelPreservesNativePanelOrdering) {
-	check_action_order(require_panel("object_operations"), std::array<std::string_view, 5> {{
+	check_action_order(require_panel("object_operations"), std::array<std::string_view, 6> {{
 		"invert_mesh",
 		"shade_smooth_mesh",
 		"shade_flat_mesh",
 		"combine_mesh",
+		"half_cut",
 		"create_outer_hull",
 	}});
 

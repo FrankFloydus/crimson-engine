@@ -17,6 +17,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #ifndef QUADER_SOURCE_DIR
@@ -45,12 +46,63 @@ float changed_float(const ViewportFloatSettingDescriptor &descriptor) {
                                                         : descriptor.maximum;
 }
 
-LocalizationService loaded_localization() {
+LocalizationService loaded_localization(std::string_view locale = "en-US") {
   LocalizationService localization;
   EXPECT_TRUE(localization.load(
       std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales",
-      "en-US"));
+      std::string{locale}));
   return localization;
+}
+
+TEST(QtSettingsControllerTests,
+     GridLabelsClearlySeparateGroundAndMeshSurfaceColors) {
+  /**
+   * Describes one expected localized grid color-setting label.
+   */
+  struct ExpectedColorLabel {
+    ViewportColorSettingId id;
+    std::string_view fallback;
+    std::string_view english;
+    std::string_view italian;
+  };
+  constexpr std::array<ExpectedColorLabel, 4> kExpectedColors{{
+      {ViewportColorSettingId::GridMinor, "Ground Minor", "Ground Minor",
+       "Griglia a terra minore"},
+      {ViewportColorSettingId::GridMajor, "Ground Major", "Ground Major",
+       "Griglia a terra maggiore"},
+      {ViewportColorSettingId::MeshGridMinor, "Mesh Surface Minor",
+       "Mesh Surface Minor", "Superficie mesh minore"},
+      {ViewportColorSettingId::MeshGridMajor, "Mesh Surface Major",
+       "Mesh Surface Major", "Superficie mesh maggiore"},
+  }};
+
+  const LocalizationService english = loaded_localization();
+  const LocalizationService italian = loaded_localization("it-IT");
+  for (const ExpectedColorLabel &expected : kExpectedColors) {
+    const auto descriptor = std::find_if(
+        viewport_color_settings().begin(), viewport_color_settings().end(),
+        [&](const ViewportColorSettingDescriptor &candidate) {
+          return candidate.id == expected.id;
+        });
+    ASSERT_NE(descriptor, viewport_color_settings().end());
+    EXPECT_EQ(descriptor->label, expected.fallback);
+    const std::string key =
+        std::string{"viewport.settings."} + std::string{descriptor->key} +
+        ".label";
+    EXPECT_EQ(english.text(key, descriptor->label), expected.english);
+    EXPECT_EQ(italian.text(key, descriptor->label), expected.italian);
+  }
+
+  EXPECT_EQ(english.text("viewport.settings.ShowGrid.label", ""),
+            "Show Ground Grid");
+  EXPECT_EQ(english.text("viewport.settings.ShowMeshGrid.label", ""),
+            "Show Mesh Surface Grid");
+  EXPECT_EQ(italian.text("viewport.settings.ShowGrid.label", ""),
+            "Mostra griglia a terra");
+  EXPECT_EQ(italian.text("viewport.settings.ShowMeshGrid.label", ""),
+            "Mostra griglia superficie mesh");
+  EXPECT_EQ(english.text("ui.settings.color.opacity", ""), "Opacity: %1%");
+  EXPECT_EQ(italian.text("ui.settings.color.opacity", ""), "Opacità: %1%");
 }
 
 TEST(QtSettingsControllerTests,

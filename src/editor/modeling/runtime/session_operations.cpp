@@ -1055,6 +1055,18 @@ EditorSession::plane_surface_cut(
   return result;
 }
 
+CommandResult
+EditorSession::half_cut_selected_objects(HalfCutOperationSettings settings) {
+  const CommandResult result = quader_editor_core::half_cut(
+      state_.objects, settings, state_.next_object_id, state_.active_object_id,
+      state_.selection_mode);
+  note_content_result(result);
+  if (result.changed) {
+    note_selection_changed();
+  }
+  return result;
+}
+
 CommandResult EditorSession::mirror_objects_across_plane(
     std::span<const int> object_ids,
     std::span<const quader::QVec3> plane_points) {

@@ -242,6 +242,12 @@ TEST(ModelingToolCatalogTests, PreviewCommandsUseHostActionIds) {
             std::string_view("merge_by_distance"));
   EXPECT_EQ(merge_by_distance->preview_kind(),
             ModelingActionPreviewKind::MergeByDistance);
+
+  const PreviewCommandTool *half_cut =
+      find_modeling_preview_command_tool("half_cut");
+  ASSERT_NE(half_cut, nullptr);
+  EXPECT_EQ(half_cut->operation_id(), std::string_view("half_cut"));
+  EXPECT_EQ(half_cut->preview_kind(), ModelingActionPreviewKind::HalfCut);
 }
 
 TEST(ModelingToolCatalogTests, DispatcherUsesCatalogAndHistoryPolicy) {

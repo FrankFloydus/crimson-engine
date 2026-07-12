@@ -112,6 +112,7 @@ modeling.action.disabled.single_object=Select elements from one object.
 
 ui.settings.interface=Interface
 ui.settings.locale=Language
+ui.settings.color.opacity=Opacity: %1%
 ui.settings.viewport.reset_to_defaults=Reset to Defaults
 
 ui.console.clear=Clear
@@ -292,10 +293,10 @@ viewport.settings.section.vertices.label=Vertices
 viewport.settings.section.picking.label=Picking
 viewport.settings.section.gizmo.label=Gizmo
 
-viewport.settings.GridMinorColor.label=Minor
-viewport.settings.GridMajorColor.label=Major
-viewport.settings.MeshGridMinorColor.label=Mesh Minor
-viewport.settings.MeshGridMajorColor.label=Mesh Major
+viewport.settings.GridMinorColor.label=Ground Minor
+viewport.settings.GridMajorColor.label=Ground Major
+viewport.settings.MeshGridMinorColor.label=Mesh Surface Minor
+viewport.settings.MeshGridMajorColor.label=Mesh Surface Major
 viewport.settings.GridXAxisColor.label=X Axis
 viewport.settings.GridYAxisColor.label=Y Axis
 viewport.settings.GridZAxisColor.label=Z Axis
@@ -328,8 +329,8 @@ viewport.settings.VertexOutlineSize.label=Outline Size
 viewport.settings.PickVertexRadius.label=Vertex Radius
 viewport.settings.PickEdgeRadius.label=Edge Radius
 viewport.settings.GizmoSize.label=Size
-viewport.settings.ShowGrid.label=Show Grid
-viewport.settings.ShowMeshGrid.label=Show Mesh Grid
+viewport.settings.ShowGrid.label=Show Ground Grid
+viewport.settings.ShowMeshGrid.label=Show Mesh Surface Grid
 viewport.settings.ShowGizmos.label=Show Gizmos
 viewport.settings.ShowOverlays.label=Show Overlays
 viewport.settings.ShowInfo.label=Show Info
@@ -343,6 +344,7 @@ tool_settings.target.edge_bevel=Bevel Edges
 tool_settings.target.thicken=Distance
 tool_settings.target.slice_quad=Slice Quad
 tool_settings.target.merge_by_distance=Merge by Distance
+tool_settings.target.half_cut=Half-Cut
 tool_settings.target.pivot=Pivot
 operation.cut.keep_mode=Keep Mode
 operation.thicken.from_center=From Center
@@ -378,6 +380,9 @@ operation.thicken.thickness=Distance
 operation.slice_quad.x_slices=X
 operation.slice_quad.y_slices=Y
 operation.merge_by_distance.tolerance=Tolerance
+operation.half_cut.axis=Axis
+operation.half_cut.separate_parts=Separate Parts
+operation.half_cut.fill_parts=Fill Parts
 
 history.apply_operation=Apply {operation}
 
@@ -386,6 +391,7 @@ modeling.operation.edge_bevel.label=Bevel Edges
 modeling.operation.thicken.label=Thicken
 modeling.operation.slice_quad.label=Slice Quad
 modeling.operation.merge_by_distance.label=Merge by Distance
+modeling.operation.half_cut.label=Half-Cut
 modeling.operation.create_box_from_bounds.label=Create Box From Bounds
 
 modeling.action.delete_selection.label=Delete
@@ -394,6 +400,7 @@ modeling.action.invert_mesh.label=Flip Mesh Normals
 modeling.action.shade_smooth_mesh.label=Shade Smooth
 modeling.action.shade_flat_mesh.label=Shade Flat
 modeling.action.combine_mesh.label=Combine Mesh
+modeling.action.half_cut.label=Half-Cut
 modeling.action.create_outer_hull.label=Create Outer Hull
 modeling.action.snap_vertices_to_active.label=Snap to Vertex
 modeling.action.merge_vertices.label=Merge

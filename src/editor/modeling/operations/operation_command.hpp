@@ -33,6 +33,7 @@ enum class EditorOperationSettingsKind {
   Thicken,
   SliceQuad,
   MergeByDistance,
+  HalfCut,
   BevelVertices,
   DuplicateMeshes,
   RecalculateFaceNormals,

@@ -7,6 +7,34 @@
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 
 namespace quader {
+namespace {
+
+quader_editor_core::HalfCutAxis
+to_runtime_half_cut_axis(ModelingHalfCutAxis axis) {
+  switch (axis) {
+  case ModelingHalfCutAxis::X:
+    return quader_editor_core::HalfCutAxis::X;
+  case ModelingHalfCutAxis::Y:
+    return quader_editor_core::HalfCutAxis::Y;
+  case ModelingHalfCutAxis::Z:
+    return quader_editor_core::HalfCutAxis::Z;
+  }
+  return quader_editor_core::HalfCutAxis::X;
+}
+
+ModelingHalfCutAxis to_modeling_half_cut_axis(int axis) {
+  switch (quader_editor_core::sanitize_half_cut_axis(axis)) {
+  case quader_editor_core::HalfCutAxis::X:
+    return ModelingHalfCutAxis::X;
+  case quader_editor_core::HalfCutAxis::Y:
+    return ModelingHalfCutAxis::Y;
+  case quader_editor_core::HalfCutAxis::Z:
+    return ModelingHalfCutAxis::Z;
+  }
+  return ModelingHalfCutAxis::X;
+}
+
+} // namespace
 
 const char *fallback_tool_settings_label(ModelingToolSettingsTargetKind kind) {
   switch (kind) {
@@ -24,6 +52,8 @@ const char *fallback_tool_settings_label(ModelingToolSettingsTargetKind kind) {
     return "Slice Quad";
   case ModelingToolSettingsTargetKind::MergeByDistance:
     return "Merge by Distance";
+  case ModelingToolSettingsTargetKind::HalfCut:
+    return "Half-Cut";
   case ModelingToolSettingsTargetKind::None:
     break;
   }
@@ -62,6 +92,12 @@ quader_editor_core::EditorOperationSettings settings_for_operation(
   case quader_editor_core::EditorOperationSettingsKind::MergeByDistance:
     return quader_editor_core::MergeByDistanceOperationSettings{
         .tolerance = interaction_settings.merge_by_distance_tolerance,
+    };
+  case quader_editor_core::EditorOperationSettingsKind::HalfCut:
+    return quader_editor_core::HalfCutOperationSettings{
+        .axis = to_runtime_half_cut_axis(interaction_settings.half_cut_axis),
+        .separate_parts = interaction_settings.half_cut_separate_parts,
+        .fill_parts = interaction_settings.half_cut_fill_parts,
     };
   case quader_editor_core::EditorOperationSettingsKind::BevelVertices:
     return quader_editor_core::BevelVerticesOperationSettings{};
@@ -131,6 +167,21 @@ bool apply_modeling_interaction_setting(
   case quader_editor_core::EditorOperationId::MergeByDistance:
     interaction_settings.merge_by_distance_tolerance = value;
     return true;
+  case quader_editor_core::EditorOperationId::HalfCut:
+    if (option->option_id == std::string_view("axis")) {
+      interaction_settings.half_cut_axis =
+          to_modeling_half_cut_axis(static_cast<int>(value));
+      return true;
+    }
+    if (option->option_id == std::string_view("separate_parts")) {
+      interaction_settings.half_cut_separate_parts = value != 0.0;
+      return true;
+    }
+    if (option->option_id == std::string_view("fill_parts")) {
+      interaction_settings.half_cut_fill_parts = value != 0.0;
+      return true;
+    }
+    break;
   default:
     break;
   }
@@ -150,6 +201,8 @@ ModelingToolSettingsTargetKind tool_settings_target_kind_for_preview(
     return ModelingToolSettingsTargetKind::SliceQuad;
   case quader_editor_core::PreviewTransactionKind::MergeByDistance:
     return ModelingToolSettingsTargetKind::MergeByDistance;
+  case quader_editor_core::PreviewTransactionKind::HalfCut:
+    return ModelingToolSettingsTargetKind::HalfCut;
   case quader_editor_core::PreviewTransactionKind::None:
   case quader_editor_core::PreviewTransactionKind::Transform:
     break;

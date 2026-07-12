@@ -798,7 +798,8 @@ void publish_cap_selection(PlaneCutBuilder& builder)
     }
 }
 
-bool finalize_cut_document(PlaneCutBuilder& builder, std::string& message)
+bool finalize_cut_document(PlaneCutBuilder& builder, bool require_closed,
+                           std::string& message)
 {
     prune_invalid_faces(builder.document);
     prune_unused_vertices(builder.document);
@@ -806,8 +807,12 @@ bool finalize_cut_document(PlaneCutBuilder& builder, std::string& message)
         message = "Cut removed all faces from one side.";
         return false;
     }
-    if (!document_is_closed_manifold(builder.document)) {
-        message = "Cut would create open or non-manifold geometry.";
+    if ((require_closed && !document_is_closed_manifold(builder.document)) ||
+        (!require_closed &&
+         document_has_nonmanifold_edges(builder.document))) {
+        message = require_closed
+                      ? "Cut would create open or non-manifold geometry."
+                      : "Cut would create non-manifold open geometry.";
         return false;
     }
     if (!every_face_triangulates(builder.document)) {
@@ -864,21 +869,32 @@ PlaneCutResult plane_cut_impl(const Document& document, const PlaneCutRequest& r
         return result;
     }
 
-    std::optional<std::vector<std::vector<ElementId>>> cap_loops = cap_loops_from_segments(work.cut_segments, message);
-    if (!cap_loops.has_value()) {
-        result.message = message.empty() ? "Cut cap boundary is invalid." : std::move(message);
-        return result;
-    }
-
-    for (const std::vector<ElementId>& loop : *cap_loops) {
-        if (!append_cap_face(front, loop, work.plane_vertex_positions, work.cap_material_slot, poly_vec3(work.plane.normal * -1.0F), message) ||
-            !append_cap_face(back, loop, work.plane_vertex_positions, work.cap_material_slot, poly_vec3(work.plane.normal), message)) {
-            result.message = message.empty() ? "Cut could not create cap faces." : std::move(message);
+    if (request.cap) {
+        std::optional<std::vector<std::vector<ElementId>>> cap_loops =
+            cap_loops_from_segments(work.cut_segments, message);
+        if (!cap_loops.has_value()) {
+            result.message = message.empty() ? "Cut cap boundary is invalid."
+                                             : std::move(message);
             return result;
+        }
+
+        for (const std::vector<ElementId>& loop : *cap_loops) {
+            if (!append_cap_face(front, loop, work.plane_vertex_positions,
+                                 work.cap_material_slot,
+                                 poly_vec3(work.plane.normal * -1.0F), message) ||
+                !append_cap_face(back, loop, work.plane_vertex_positions,
+                                 work.cap_material_slot,
+                                 poly_vec3(work.plane.normal), message)) {
+                result.message = message.empty()
+                                     ? "Cut could not create cap faces."
+                                     : std::move(message);
+                return result;
+            }
         }
     }
 
-    if (!finalize_cut_document(front, message) || !finalize_cut_document(back, message)) {
+    if (!finalize_cut_document(front, request.cap, message) ||
+        !finalize_cut_document(back, request.cap, message)) {
         result.message = message.empty() ? "Cut would create invalid mesh geometry." : std::move(message);
         return result;
     }

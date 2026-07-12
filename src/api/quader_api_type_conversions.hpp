@@ -384,6 +384,19 @@ inline QuaderCutMode to_api_cut_mode(ModelingCutMode mode) {
   return QuaderCutMode::KeepBoth;
 }
 
+inline ModelingHalfCutAxis
+to_modeling_half_cut_axis(QuaderHalfCutAxis axis) {
+  switch (axis) {
+  case QuaderHalfCutAxis::X:
+    return ModelingHalfCutAxis::X;
+  case QuaderHalfCutAxis::Y:
+    return ModelingHalfCutAxis::Y;
+  case QuaderHalfCutAxis::Z:
+    return ModelingHalfCutAxis::Z;
+  }
+  return ModelingHalfCutAxis::X;
+}
+
 inline ModelingInteractionSettings
 to_modeling_interaction_settings(const QuaderInteractionSettings &settings) {
   return {
@@ -396,6 +409,9 @@ to_modeling_interaction_settings(const QuaderInteractionSettings &settings) {
       .slice_quad_x_slices = settings.slice_quad_x_slices,
       .slice_quad_y_slices = settings.slice_quad_y_slices,
       .merge_by_distance_tolerance = settings.merge_by_distance_tolerance,
+      .half_cut_axis = to_modeling_half_cut_axis(settings.half_cut_axis),
+      .half_cut_separate_parts = settings.half_cut_separate_parts,
+      .half_cut_fill_parts = settings.half_cut_fill_parts,
       .cut_mode = to_modeling_cut_mode(settings.cut_mode),
   };
 }
@@ -947,6 +963,8 @@ to_api_action_preview_kind(ModelingActionPreviewKind kind) {
     return QuaderActionPreviewKind::SliceQuad;
   case ModelingActionPreviewKind::MergeByDistance:
     return QuaderActionPreviewKind::MergeByDistance;
+  case ModelingActionPreviewKind::HalfCut:
+    return QuaderActionPreviewKind::HalfCut;
   }
   return QuaderActionPreviewKind::None;
 }

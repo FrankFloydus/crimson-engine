@@ -433,6 +433,8 @@ ModelingActionPreviewKind ModelingActionCatalog::preview_kind_from_host(
     return ModelingActionPreviewKind::SliceQuad;
   case quader_host_contract::HostPreviewKind::MergeByDistance:
     return ModelingActionPreviewKind::MergeByDistance;
+  case quader_host_contract::HostPreviewKind::HalfCut:
+    return ModelingActionPreviewKind::HalfCut;
   case quader_host_contract::HostPreviewKind::None:
     return ModelingActionPreviewKind::None;
   }

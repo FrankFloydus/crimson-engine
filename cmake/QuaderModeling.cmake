@@ -143,6 +143,7 @@ set(QUADER_MODELING_RUNTIME_SOURCES
     src/editor/modeling/operations/duplicate_meshes_operation.cpp
     src/editor/modeling/operations/edge_bevel_operation.cpp
     src/editor/modeling/operations/editor_operation.cpp
+    src/editor/modeling/operations/half_cut_operation.cpp
     src/editor/modeling/operations/merge_by_distance_operation.cpp
     src/editor/modeling/operations/operation_command.cpp
     src/editor/modeling/operations/operation_registry.cpp
@@ -566,6 +567,7 @@ if(QUADER_BUILD_TESTS)
         tests/modeling_domain/operation/qdr_modeling_runtime_operation_duplicate_tests.cpp
         tests/modeling_domain/operation/qdr_modeling_runtime_operation_edge_bevel_tests.cpp
         tests/modeling_domain/operation/qdr_modeling_runtime_operation_fill_hole_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_half_cut_tests.cpp
         tests/modeling_domain/operation/qdr_modeling_runtime_operation_invert_mesh_tests.cpp
         tests/modeling_domain/operation/qdr_modeling_runtime_operation_invert_selection_tests.cpp
         tests/modeling_domain/operation/qdr_modeling_runtime_operation_merge_by_distance_tests.cpp

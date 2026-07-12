@@ -144,12 +144,13 @@ TEST(QdrEditorMetadataConsumerSmokeTests, CustomEngineShellCanAssembleChromeFrom
 	EXPECT_TRUE(contains_target(viewport_toolbar_items, "mirror"));
 	EXPECT_TRUE(contains_target(viewport_toolbar_items, "poly"));
 
-	EXPECT_TRUE(settings_panel_items.size() == 6U);
+	EXPECT_TRUE(settings_panel_items.size() == 7U);
 	EXPECT_TRUE(contains_target(settings_panel_items, "operation.bridge"));
 	EXPECT_TRUE(contains_target(settings_panel_items, "operation.edge_bevel"));
 	EXPECT_TRUE(contains_target(settings_panel_items, "operation.thicken"));
 	EXPECT_TRUE(contains_target(settings_panel_items, "operation.slice_quad"));
 	EXPECT_TRUE(contains_target(settings_panel_items, "operation.merge_by_distance"));
+	EXPECT_TRUE(contains_target(settings_panel_items, "operation.half_cut"));
 	EXPECT_TRUE(contains_target(settings_panel_items, "operation.cut"));
 }
 

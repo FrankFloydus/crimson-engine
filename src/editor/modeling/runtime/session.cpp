@@ -136,6 +136,31 @@ quader::QVec3 bounds_center(const Bounds3 &bounds) {
       to_geometry_vec3(bounds.min), to_geometry_vec3(bounds.max)}));
 }
 
+quader_poly::PlaneCutRequest centered_half_cut_request(
+    const Bounds3 &bounds, HalfCutAxis axis, bool cap) {
+  const quader::QVec3 center = bounds_center(bounds);
+  quader_poly::PlaneCutRequest request;
+  request.first_point = center;
+  request.mode = quader_poly::PlaneCutMode::KeepBoth;
+  request.cap = cap;
+
+  switch (axis) {
+  case HalfCutAxis::X:
+    request.second_point = center + quader::QVec3{0.0F, 1.0F, 0.0F};
+    request.third_point = center + quader::QVec3{0.0F, 0.0F, 1.0F};
+    break;
+  case HalfCutAxis::Y:
+    request.second_point = center + quader::QVec3{0.0F, 0.0F, 1.0F};
+    request.third_point = center + quader::QVec3{1.0F, 0.0F, 0.0F};
+    break;
+  case HalfCutAxis::Z:
+    request.second_point = center + quader::QVec3{1.0F, 0.0F, 0.0F};
+    request.third_point = center + quader::QVec3{0.0F, 1.0F, 0.0F};
+    break;
+  }
+  return request;
+}
+
 void translate_document_vertices(quader_poly::Document &document,
                                  quader::QVec3 delta) {
   for (quader_poly::Vertex &vertex : document.vertices) {
@@ -3352,6 +3377,93 @@ CommandResult plane_surface_cut(std::vector<PolygonObject> &objects,
   objects = std::move(candidate);
   mode = SelectionMode::Vertex;
   active_object_id = result_ids.back();
+  normalize_active_object_id(objects, active_object_id);
+  return ok_result(true);
+}
+
+CommandResult half_cut(std::vector<PolygonObject> &objects,
+                       HalfCutOperationSettings settings, int &next_object_id,
+                       int &active_object_id, SelectionMode &mode) {
+  settings = normalize_half_cut_operation_settings(settings);
+  if (mode != SelectionMode::Object) {
+    return error_result("Half-Cut requires object selection mode.");
+  }
+
+  std::vector<int> target_ids;
+  for (const PolygonObject &object : objects) {
+    if (object.selected) {
+      target_ids.push_back(object.id);
+    }
+  }
+  if (target_ids.empty()) {
+    return error_result("Half-Cut needs one or more selected meshes.");
+  }
+
+  std::vector<PolygonObject> candidate = objects;
+  int local_next_object_id =
+      next_polygon_object_id(candidate, next_object_id);
+  std::vector<int> result_ids;
+  result_ids.reserve(target_ids.size() * (settings.separate_parts ? 2U : 1U));
+
+  for (const int object_id : target_ids) {
+    const int object_index = object_index_by_id(candidate, object_id);
+    if (object_index < 0) {
+      return error_result("Half-Cut target mesh was not found.");
+    }
+
+    PolygonObject &source = candidate[static_cast<std::size_t>(object_index)];
+    const Bounds3 bounds = document_bounds(source);
+    if (bounds.empty) {
+      return error_result("Half-Cut target mesh has no vertices.");
+    }
+    const quader_poly::PlaneCutRequest request = centered_half_cut_request(
+        bounds, settings.axis, settings.fill_parts);
+
+    if (!settings.separate_parts) {
+      quader_poly::Selection cut_selection;
+      const quader_poly::OperationResult cut = quader_poly::plane_surface_cut(
+          source.document, cut_selection, request);
+      if (!cut.changed) {
+        return error_result(cut.message.empty()
+                                ? "Half-Cut could not split the mesh faces."
+                                : cut.message);
+      }
+      source.selection = {};
+      source.component_edit_target = false;
+      source.selected = true;
+      result_ids.push_back(source.id);
+      continue;
+    }
+
+    const quader_poly::PlaneCutResult cut =
+        quader_poly::plane_cut(source.document, request);
+    if (!cut.changed) {
+      return error_result(cut.message.empty()
+                              ? "Half-Cut could not separate the mesh."
+                              : cut.message);
+    }
+
+    source.document = cut.front_document;
+    source.selection = {};
+    source.component_edit_target = false;
+    source.selected = true;
+    result_ids.push_back(source.id);
+
+    PolygonObject back = source;
+    back.id = local_next_object_id++;
+    back.document = cut.back_document;
+    back.selection = {};
+    back.component_edit_target = false;
+    back.selected = true;
+    result_ids.push_back(back.id);
+    candidate.push_back(std::move(back));
+  }
+
+  objects = std::move(candidate);
+  next_object_id = local_next_object_id;
+  if (std::ranges::find(result_ids, active_object_id) == result_ids.end()) {
+    active_object_id = result_ids.back();
+  }
   normalize_active_object_id(objects, active_object_id);
   return ok_result(true);
 }

@@ -2123,6 +2123,17 @@ ModelingInteractionSettings ModelingInteractionSettingsService::normalize(
             quader_editor_core::MergeByDistanceOperationSettings{
                 .tolerance = normalized.merge_by_distance_tolerance})
             .tolerance;
+    const quader_editor_core::HalfCutOperationSettings half_cut =
+        quader_editor_core::normalize_half_cut_operation_settings({
+            .axis = static_cast<quader_editor_core::HalfCutAxis>(
+                normalized.half_cut_axis),
+            .separate_parts = normalized.half_cut_separate_parts,
+            .fill_parts = normalized.half_cut_fill_parts,
+        });
+    normalized.half_cut_axis =
+        static_cast<ModelingHalfCutAxis>(half_cut.axis);
+    normalized.half_cut_separate_parts = half_cut.separate_parts;
+    normalized.half_cut_fill_parts = half_cut.fill_parts;
     return normalized;
 }
 
@@ -2140,6 +2151,9 @@ bool ModelingInteractionSettingsService::set_normalized(
       settings.slice_quad_y_slices != settings_.slice_quad_y_slices ||
       settings.merge_by_distance_tolerance !=
           settings_.merge_by_distance_tolerance ||
+      settings.half_cut_axis != settings_.half_cut_axis ||
+      settings.half_cut_separate_parts != settings_.half_cut_separate_parts ||
+      settings.half_cut_fill_parts != settings_.half_cut_fill_parts ||
       settings.cut_mode != settings_.cut_mode;
   settings_ = settings;
   return changed;
@@ -2162,6 +2176,11 @@ void ModelingInteractionSettingsService::reset_for_preview_action(
   case ModelingActionPreviewKind::MergeByDistance:
     settings_.merge_by_distance_tolerance =
         defaults.merge_by_distance_tolerance;
+    return;
+  case ModelingActionPreviewKind::HalfCut:
+    settings_.half_cut_axis = defaults.half_cut_axis;
+    settings_.half_cut_separate_parts = defaults.half_cut_separate_parts;
+    settings_.half_cut_fill_parts = defaults.half_cut_fill_parts;
     return;
   case ModelingActionPreviewKind::Bridge:
   case ModelingActionPreviewKind::SliceQuad:

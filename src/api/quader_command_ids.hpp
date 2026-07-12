@@ -200,6 +200,7 @@ inline constexpr QuaderCommandId kModelingThickenFaces{
     "modeling.thicken_faces"};
 inline constexpr QuaderCommandId kModelingCreateOuterHull{
     "modeling.create_outer_hull"};
+inline constexpr QuaderCommandId kModelingHalfCut{"modeling.half_cut"};
 inline constexpr QuaderCommandId kModelingSliceQuad{"modeling.slice_quad"};
 inline constexpr QuaderCommandId kModelingMergeByDistance{
     "modeling.merge_by_distance"};
@@ -331,6 +332,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kModelingInterpolatedBridgeFaces,
     kModelingThickenFaces,
     kModelingCreateOuterHull,
+    kModelingHalfCut,
     kModelingSliceQuad,
     kModelingMergeByDistance,
     kModelingFlipHorizontal,

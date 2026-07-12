@@ -60,6 +60,7 @@ struct PlaneCutRequest {
   quader::QVec3 second_point;
   quader::QVec3 third_point;
   PlaneCutMode mode = PlaneCutMode::KeepBoth;
+  bool cap = true;
 };
 
 /**

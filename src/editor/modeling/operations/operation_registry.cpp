@@ -23,7 +23,7 @@ EditorOperationRegistryEntry operation_entry(const EditorOperation &operation,
 }
 
 std::span<const EditorOperationRegistryEntry> operation_registry_entries() {
-  static const std::array<EditorOperationRegistryEntry, 34> kEntries{{
+  static const std::array<EditorOperationRegistryEntry, 35> kEntries{{
       operation_entry(bridge_operation(), "BridgeOperation"),
       operation_entry(edge_bevel_operation(), "EdgeBevelOperation"),
       operation_entry(thicken_operation(), "ThickenOperation"),
@@ -33,6 +33,7 @@ std::span<const EditorOperationRegistryEntry> operation_registry_entries() {
       operation_entry(remove_doubles_operation(), "RemoveDoublesOperation"),
       operation_entry(bevel_vertices_operation(), "BevelVerticesOperation"),
       operation_entry(duplicate_meshes_operation(), "DuplicateMeshesOperation"),
+      operation_entry(half_cut_operation(), "HalfCutOperation"),
       operation_entry(connect_vertices_operation(), "ConnectVerticesOperation"),
       operation_entry(dissolve_vertices_operation(),
                       "DissolveVerticesOperation"),
@@ -74,8 +75,8 @@ std::span<const EditorOperationRegistryEntry> operation_registry_entries() {
 }
 
 std::span<const EditorOperation *const> operation_entries() {
-  static const std::array<const EditorOperation *, 34> kOperations = [] {
-    std::array<const EditorOperation *, 34> result{};
+  static const std::array<const EditorOperation *, 35> kOperations = [] {
+    std::array<const EditorOperation *, 35> result{};
     const std::span<const EditorOperationRegistryEntry> entries =
         operation_registry_entries();
     for (std::size_t index = 0; index < entries.size(); ++index) {

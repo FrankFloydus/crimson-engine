@@ -169,7 +169,7 @@ HostActionDescriptor tool_action(
 
 std::span<const HostActionDescriptor> action_descriptors()
 {
-  static const std::array<HostActionDescriptor, 42> kDescriptors{{
+  static const std::array<HostActionDescriptor, 43> kDescriptors{{
       operation_action("invert_mesh", "Flip Mesh Normals", "flip_face_normals",
                        action_availability(HostSelectionMode::Object, 0, 0,
                                            HostActiveSelectionKind::None, false,
@@ -186,6 +186,11 @@ std::span<const HostActionDescriptor> action_descriptors()
                        action_availability(HostSelectionMode::Object, 0, 0,
                                            HostActiveSelectionKind::None, false,
                                            0, 0, 2)),
+      operation_action("half_cut", "Half-Cut", "half_cut",
+                       action_availability(HostSelectionMode::Object, 0, 0,
+                                           HostActiveSelectionKind::None, false,
+                                           0, 0, 1),
+                       HostPreviewKind::HalfCut),
       operation_action("create_outer_hull", "Create Outer Hull", "thicken",
                        action_availability(HostSelectionMode::Object, 0, 0,
                                            HostActiveSelectionKind::None, false,
@@ -351,11 +356,12 @@ std::span<const HostActionDescriptor> action_descriptors()
 
 std::span<const HostOperationPanelDescriptor> operation_panel_descriptors()
 {
-  static constexpr std::array<std::string_view, 5> kObjectActions{{
+  static constexpr std::array<std::string_view, 6> kObjectActions{{
       "invert_mesh",
       "shade_smooth_mesh",
       "shade_flat_mesh",
       "combine_mesh",
+      "half_cut",
       "create_outer_hull",
   }};
   static constexpr std::array<std::string_view, 8> kVertexActions{{
@@ -464,7 +470,7 @@ HostUiPlacementDescriptor viewport_tool_placement(
 
 std::span<const HostUiPlacementDescriptor> ui_placement_descriptors()
 {
-  static const std::array<HostUiPlacementDescriptor, 31> kDescriptors{{
+  static const std::array<HostUiPlacementDescriptor, 32> kDescriptors{{
       {"menu_open_editor", "main_menu", "editor", "Open Editor",
        HostUiPlacementTargetKind::EditorAction, "open_editor", 0, false},
       {"menu_new_document", "main_menu", "file", "New Document",
@@ -549,9 +555,13 @@ std::span<const HostUiPlacementDescriptor> ui_placement_descriptors()
        HostUiPlacementTargetKind::PreferenceGroup,
        "operation.merge_by_distance", 40, false,
        HostUiVisibilityCondition::MergeByDistancePreviewActive},
+      {"settings_half_cut", "tool_settings_panel", "operation_settings",
+       "Half-Cut", HostUiPlacementTargetKind::PreferenceGroup,
+       "operation.half_cut", 50, false,
+       HostUiVisibilityCondition::HalfCutPreviewActive},
       {"settings_cut_keep_mode", "tool_settings_panel", "operation_settings",
        "Keep Mode", HostUiPlacementTargetKind::PreferenceGroup, "operation.cut",
-       50, false, HostUiVisibilityCondition::CutToolActive},
+       60, false, HostUiVisibilityCondition::CutToolActive},
   }};
   return kDescriptors;
 }

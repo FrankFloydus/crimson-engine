@@ -138,6 +138,13 @@ TEST(QdrEditorMetadataSchemaMirrorTests, HostContractExposesEditorCoreOperationO
 	const qhc::HostOperationDescriptor& merge_by_distance_descriptor = require_operation(merge_by_distance.operation_id);
 	EXPECT_TRUE(merge_by_distance_descriptor.options.size() == 1U);
 	check_float_option(require_option(merge_by_distance_descriptor, merge_by_distance.tolerance.id), merge_by_distance.tolerance);
+
+	const qec::HalfCutOperationSchema half_cut = qec::half_cut_operation_schema();
+	const qhc::HostOperationDescriptor& half_cut_descriptor = require_operation(half_cut.operation_id);
+	EXPECT_TRUE(half_cut_descriptor.options.size() == 3U);
+	check_int_option(require_option(half_cut_descriptor, half_cut.axis.id), half_cut.axis);
+	check_bool_option(require_option(half_cut_descriptor, half_cut.separate_parts.id), half_cut.separate_parts);
+	check_bool_option(require_option(half_cut_descriptor, half_cut.fill_parts.id), half_cut.fill_parts);
 }
 
 TEST(QdrEditorMetadataSchemaMirrorTests, HostOperationOptionsCoverSchemaOwnedOptionDescriptorCatalog) {

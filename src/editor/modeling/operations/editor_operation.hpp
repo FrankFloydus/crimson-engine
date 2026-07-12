@@ -19,6 +19,7 @@ using EditorOperationSettings = std::variant<
 		ThickenOperationSettings,
 		SliceQuadOperationSettings,
 		MergeByDistanceOperationSettings,
+		HalfCutOperationSettings,
 		BevelVerticesOperationSettings,
 		DuplicateMeshesOperationSettings,
 		RecalculateFaceNormalsOperationSettings,

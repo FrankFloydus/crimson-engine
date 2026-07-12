@@ -81,7 +81,7 @@ void check_float_preference(
 
 TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceCatalogExposesViewportSettingDefaultsAsEngineNeutralDescriptors) {
 	const std::span<const qhc::HostPreferenceDescriptor> preferences = qhc::preference_catalog();
-	EXPECT_TRUE(preferences.size() == 45U);
+	EXPECT_TRUE(preferences.size() == 48U);
 
 	const qhc::HostPreferenceDescriptor& background = require_preference("viewport.scene.background_color");
         EXPECT_TRUE(background.scope ==
@@ -175,6 +175,25 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractOperationPreferencesLi
 	EXPECT_TRUE(steps.maximum_integer == bridge.steps.maximum);
 	EXPECT_TRUE(steps.integer_step == bridge.steps.step);
 
+	const qec::HalfCutOperationSchema half_cut = qec::half_cut_operation_schema();
+	const qhc::HostPreferenceDescriptor& half_cut_axis =
+		require_preference("operation.half_cut.axis");
+        EXPECT_TRUE(half_cut_axis.value_kind ==
+                    qhc::HostPreferenceValueKind::Integer);
+        EXPECT_TRUE(same_text(half_cut_axis.related_operation_id,
+                              half_cut.operation_id));
+	EXPECT_TRUE(same_text(half_cut_axis.related_option_id, half_cut.axis.id));
+	EXPECT_TRUE(half_cut_axis.default_integer == half_cut.axis.default_value);
+
+	const qhc::HostPreferenceDescriptor& separate_parts =
+		require_preference("operation.half_cut.separate_parts");
+        EXPECT_TRUE(separate_parts.value_kind ==
+                    qhc::HostPreferenceValueKind::Boolean);
+	EXPECT_FALSE(separate_parts.default_bool);
+	const qhc::HostPreferenceDescriptor& fill_parts =
+		require_preference("operation.half_cut.fill_parts");
+	EXPECT_TRUE(fill_parts.default_bool);
+
 	const qhc::HostPreferenceDescriptor& cut_mode = require_preference("operation.cut.keep_mode");
         EXPECT_TRUE(cut_mode.value_kind ==
                     qhc::HostPreferenceValueKind::Choice);
@@ -201,12 +220,21 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractOperationPreferencesLi
 
 TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceGroupsCanDriveCustomEngineSettingsPanes) {
 	const std::span<const qhc::HostPreferenceGroupDescriptor> groups = qhc::preference_group_catalog();
-	EXPECT_TRUE(groups.size() == 13U);
+	EXPECT_TRUE(groups.size() == 14U);
 
 	const qhc::HostPreferenceGroupDescriptor& cut = require_group("operation.cut");
         EXPECT_TRUE(cut.scope == qhc::HostPreferenceScope::Operation);
         EXPECT_TRUE(cut.preference_ids.size() == 1U);
 	EXPECT_TRUE(group_contains(cut, "operation.cut.keep_mode"));
+
+	const qhc::HostPreferenceGroupDescriptor& half_cut =
+		require_group("operation.half_cut");
+        EXPECT_TRUE(half_cut.scope == qhc::HostPreferenceScope::Operation);
+        EXPECT_TRUE(half_cut.preference_ids.size() == 3U);
+	EXPECT_TRUE(group_contains(half_cut, "operation.half_cut.axis"));
+	EXPECT_TRUE(group_contains(half_cut,
+	                           "operation.half_cut.separate_parts"));
+	EXPECT_TRUE(group_contains(half_cut, "operation.half_cut.fill_parts"));
 
 	const qhc::HostPreferenceGroupDescriptor& grid = require_group("viewport.grid");
 	EXPECT_TRUE(same_text(grid.label, "Grid"));

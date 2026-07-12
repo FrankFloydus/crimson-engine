@@ -699,7 +699,12 @@ TEST(UiLayoutGuardrailTests,
 
   expect_contains(settings, "#include \"ui/qt_color_swatch_button.hpp\"");
   expect_contains(settings, "new QtColorSwatchButton(");
-  expect_contains(settings, "button.set_swatch_color(to_q_color(color))");
+  expect_contains(settings, "button.set_swatch_color(swatch_color)");
+  expect_contains(settings, "color_opacity_text(");
+  expect_contains(settings, "\"ui.settings.color.opacity\"");
+  expect_contains(settings, "button.setToolTip(details)");
+  expect_contains(settings, "button.setAccessibleDescription(details)");
+  expect_missing(settings, "button.setText(");
   expect_contains(swatch_header,
                   "class QtColorSwatchButton final : public QPushButton");
   expect_contains(swatch_header, "void set_swatch_color(QColor color)");

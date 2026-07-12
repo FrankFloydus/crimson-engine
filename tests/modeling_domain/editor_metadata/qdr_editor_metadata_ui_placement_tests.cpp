@@ -143,7 +143,7 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractUIGroupsAndShellTargetsAreDi
 
 TEST(QdrEditorMetadataUiPlacementTests, HostContractUIPlacementsResolveToKnownDescriptorOnlyTargets) {
 	const std::span<const qhc::HostUiPlacementDescriptor> placements = qhc::ui_placement_catalog();
-	EXPECT_TRUE(placements.size() == 31U);
+	EXPECT_TRUE(placements.size() == 32U);
 
 	for (const qhc::HostUiPlacementDescriptor& placement : placements) {
 		EXPECT_FALSE(placement.id.empty());
@@ -266,6 +266,7 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractToolSettingsPanelPlacesPrevi
 	const qhc::HostUiPlacementDescriptor& thicken = require_placement("settings_thicken");
 	const qhc::HostUiPlacementDescriptor& slice_quad = require_placement("settings_slice_quad");
 	const qhc::HostUiPlacementDescriptor& merge_by_distance = require_placement("settings_merge_by_distance");
+	const qhc::HostUiPlacementDescriptor& half_cut = require_placement("settings_half_cut");
 	const qhc::HostUiPlacementDescriptor& cut = require_placement("settings_cut_keep_mode");
 
 	EXPECT_TRUE(same_text(bridge.surface_id, "tool_settings_panel"));
@@ -287,6 +288,9 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractToolSettingsPanelPlacesPrevi
         EXPECT_TRUE(
             merge_by_distance.visibility ==
             qhc::HostUiVisibilityCondition::MergeByDistancePreviewActive);
+        EXPECT_TRUE(same_text(half_cut.target_id, "operation.half_cut"));
+        EXPECT_TRUE(half_cut.visibility ==
+                    qhc::HostUiVisibilityCondition::HalfCutPreviewActive);
         EXPECT_TRUE(same_text(cut.target_id, "operation.cut"));
         EXPECT_TRUE(cut.visibility ==
                     qhc::HostUiVisibilityCondition::CutToolActive);
@@ -295,5 +299,6 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractToolSettingsPanelPlacesPrevi
 	EXPECT_TRUE(edge_bevel.order < thicken.order);
 	EXPECT_TRUE(thicken.order < slice_quad.order);
 	EXPECT_TRUE(slice_quad.order < merge_by_distance.order);
-	EXPECT_TRUE(merge_by_distance.order < cut.order);
+	EXPECT_TRUE(merge_by_distance.order < half_cut.order);
+	EXPECT_TRUE(half_cut.order < cut.order);
 }

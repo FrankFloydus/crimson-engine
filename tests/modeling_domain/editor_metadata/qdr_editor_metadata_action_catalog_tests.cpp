@@ -30,7 +30,7 @@ const qhc::HostActionDescriptor& require_action(std::string_view id)
 
 TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogLinksPanelActionsToDescriptorOnlyOperationsOrTools) {
 	const std::span<const qhc::HostActionDescriptor> actions = qhc::action_catalog();
-	EXPECT_TRUE(actions.size() == 42U);
+	EXPECT_TRUE(actions.size() == 43U);
 
 	for (const qhc::HostActionDescriptor& action : actions) {
 		EXPECT_FALSE(action.id.empty());
@@ -65,6 +65,8 @@ TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogPreservesOper
               qhc::HostPreviewKind::Thicken);
   EXPECT_TRUE(require_action("thicken_faces").preview_kind ==
               qhc::HostPreviewKind::Thicken);
+  EXPECT_TRUE(require_action("half_cut").preview_kind ==
+              qhc::HostPreviewKind::HalfCut);
   EXPECT_TRUE(require_action("bridge_edges").preview_kind ==
               qhc::HostPreviewKind::None);
 
@@ -89,6 +91,12 @@ TEST(QdrEditorMetadataActionCatalogTests, HostContractActionCatalogDescribesSele
         EXPECT_TRUE(create_outer_hull.availability.selection_mode ==
                     qhc::HostSelectionMode::Object);
         EXPECT_TRUE(create_outer_hull.availability.minimum_selected_objects == 1U);
+
+	const qhc::HostActionDescriptor& half_cut = require_action("half_cut");
+        EXPECT_TRUE(half_cut.availability.selection_mode ==
+                    qhc::HostSelectionMode::Object);
+        EXPECT_TRUE(half_cut.availability.minimum_selected_objects == 1U);
+        EXPECT_FALSE(half_cut.availability.requires_single_object);
 
 	const qhc::HostActionDescriptor& snap_vertices = require_action("snap_vertices_to_active");
         EXPECT_TRUE(snap_vertices.availability.selection_mode ==

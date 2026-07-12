@@ -290,6 +290,23 @@ TEST(QdrDocumentOperationPlaneCutTests,
   }
 }
 
+TEST(QdrDocumentOperationPlaneCutTests,
+     PlaneCutCanLeaveSeparatedPartsOpenWhenCapsAreDisabled) {
+  const Document document = quader_poly::make_cube({});
+  PlaneCutRequest request = center_x_cut(PlaneCutMode::KeepBoth);
+  request.cap = false;
+
+  const PlaneCutResult result = quader_poly::plane_cut(document, request);
+
+  ASSERT_TRUE(result.changed) << result.message;
+  EXPECT_TRUE(result.front_selection.faces.empty());
+  EXPECT_TRUE(result.back_selection.faces.empty());
+  EXPECT_GT(qdr_test::open_edge_count(result.front_document), 0U);
+  EXPECT_GT(qdr_test::open_edge_count(result.back_document), 0U);
+  EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(result.front_document));
+  EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(result.back_document));
+}
+
 TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSupportsDestructiveFrontAndBackModes) {
 	Document document = quader_poly::make_cube({});
 
