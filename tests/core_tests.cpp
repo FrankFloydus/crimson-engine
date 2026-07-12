@@ -2843,10 +2843,11 @@ TEST(SceneRenderBridgeTests, UsesAnisotropicSamplingForMeshTextures) {
 TEST(RenderSystemTests, ShadedViewportUsesClearColorWithoutSkybox) {
   const std::string source = read_source_file("src/render/render_system.cpp");
 
-  EXPECT_NE(source.find("renderer_->setClearOptions(clear)"),
+  EXPECT_NE(source.find("renderer.setClearOptions(clear)"),
             std::string::npos);
+  EXPECT_NE(source.find("configure_renderer(*renderer_)"), std::string::npos);
   EXPECT_NE(source.find("clear.discard = false"), std::string::npos);
-  EXPECT_NE(source.find("clear.clearColor = {environment.clear_color.x"),
+  EXPECT_NE(source.find("renderer_clear_color_ = {environment.clear_color.x"),
             std::string::npos);
   EXPECT_EQ(source.find("scene_->setSkybox(skybox_)"), std::string::npos);
   EXPECT_EQ(source.find("Skybox::Builder()"), std::string::npos);
@@ -2871,10 +2872,11 @@ TEST(RenderSystemTests,
             std::string::npos);
   EXPECT_EQ(source.find("update_frame_performance_stats_after_end_frame"),
             std::string::npos);
-  EXPECT_NE(source.find("renderer_->getFrameInfoHistory(history_size)"),
+  EXPECT_NE(source.find("renderer->getFrameInfoHistory(history_size)"),
             std::string::npos);
-  EXPECT_NE(source.find("renderer_->getMaxFrameHistorySize()"),
+  EXPECT_NE(source.find("renderer->getMaxFrameHistorySize()"),
             std::string::npos);
+  EXPECT_NE(source.find("performance_renderer_"), std::string::npos);
   EXPECT_NE(source.find("info.denoisedGpuFrameDuration"), std::string::npos);
   EXPECT_NE(source.find("info.gpuFrameDuration"), std::string::npos);
   EXPECT_NE(source.find("filament::Renderer::FrameInfo::INVALID"),
@@ -2964,8 +2966,45 @@ TEST(RenderSystemTests, InitializeUnwindsPartialFilamentStateOnFailure) {
             std::string::npos);
   EXPECT_NE(source.find("return begin_frame_with_swap_chain(swap_chain_)"),
             std::string::npos);
-  EXPECT_NE(source.find("if (!renderer_->beginFrame(swap_chain))"),
+  EXPECT_NE(source.find("if (!renderer->beginFrame(swap_chain))"),
             std::string::npos);
+}
+
+TEST(RenderSystemTests,
+     NativeViewportSwapChainsOwnDedicatedFilamentRenderers) {
+  const std::string header = read_source_file("src/render/render_system.hpp");
+  const std::string source = read_source_file("src/render/render_system.cpp");
+  const std::string surface =
+      read_source_file("src/ui/qt_viewport_surface.cpp");
+
+  EXPECT_NE(header.find("filament::Renderer *renderer_ = nullptr"),
+            std::string::npos);
+  EXPECT_NE(header.find("bool begin_frame(RenderAdditionalSwapChain &surface)"),
+            std::string::npos);
+  EXPECT_NE(header.find("void end_frame(RenderAdditionalSwapChain &surface)"),
+            std::string::npos);
+  EXPECT_NE(source.find("filament::Renderer *renderer = "
+                        "engine_->createRenderer()"),
+            std::string::npos);
+  EXPECT_NE(source.find("configure_renderer(*renderer)"), std::string::npos);
+  EXPECT_NE(source.find(
+                "RenderAdditionalSwapChain(*this, swap_chain, renderer)"),
+            std::string::npos);
+  EXPECT_NE(source.find("begin_frame_with_renderer(surface.renderer_, "
+                        "surface.swap_chain_)"),
+            std::string::npos);
+  EXPECT_NE(source.find("viewport_renderer.render(*surface.renderer_)"),
+            std::string::npos);
+  EXPECT_NE(source.find("end_frame_with_renderer(surface.renderer_)"),
+            std::string::npos);
+  EXPECT_NE(surface.find("render_system_->begin_frame(swap_chain_)"),
+            std::string::npos);
+  EXPECT_NE(surface.find(
+                "render_system_->render_viewport(renderer_, swap_chain_)"),
+            std::string::npos);
+  EXPECT_NE(surface.find("render_system_->end_frame(swap_chain_)"),
+            std::string::npos);
+  EXPECT_EQ(surface.find("begin_frame(swap_chain_.get())"), std::string::npos);
 }
 
 TEST(RenderProxyLifecycleTests, RenderableProxyHandlesAreMoveOnly) {
@@ -3857,12 +3896,13 @@ TEST(ViewportRendererTests,
                                     "!overlay_uses_separate_target"),
             std::string::npos);
   EXPECT_NE(viewport_surface_source.find(
-                "render_system_->begin_frame(swap_chain_.get())"),
+                "render_system_->begin_frame(swap_chain_)"),
             std::string::npos);
   EXPECT_NE(viewport_surface_source.find(
-                "render_system_->render_viewport(renderer_)"),
+                "render_system_->render_viewport(renderer_, swap_chain_)"),
             std::string::npos);
-  EXPECT_NE(viewport_surface_source.find("render_system_->end_frame()"),
+  EXPECT_NE(viewport_surface_source.find(
+                "render_system_->end_frame(swap_chain_)"),
             std::string::npos);
   const std::size_t aggregate_begin = viewport_panel_source.find(
       "render_system_->begin_presentation_frame()");

@@ -34,7 +34,10 @@
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_entity_naming.hpp"
+#include "ui/qt_viewport_chrome_layout.hpp"
 #include "ui/qt_viewport_fly_navigation_hud.hpp"
+#include "ui/qt_viewport_pane_activation.hpp"
+#include "ui/qt_viewport_render_submission_policy.hpp"
 #include "ui/viewport_context_menu_policy.hpp"
 #include "ui/viewport_host_interaction_policy.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
@@ -1262,6 +1265,10 @@ void QtViewportPanel::prepare_viewports(
       continue;
     }
     workspace_->set_pane_visible(pane_state.id, true);
+    // The QWidget container owns native-child geometry, but Qt can defer the
+    // corresponding QWindow resize event. Synchronize Filament's viewport
+    // before camera projection and grid generation consume its dimensions.
+    pane_state.surface->synchronize_render_size();
     const QVec2 render_size = pane_state.surface->render_size_pixels();
     workspace_->set_pane_render_size(pane_state.id, render_size);
     ViewportWorkspacePaneState &pane_workspace =
@@ -1432,15 +1439,15 @@ std::size_t QtViewportPanel::render_viewports() {
     return 0u;
   }
   render_system_->begin_presentation_frame();
-  std::size_t submitted = 0u;
-  for (const ViewportPanePlacement &placement :
-       workspace_->active_pane_placements()) {
-    Pane &pane_state = pane(placement.pane_id);
-    if (workspace_->pane_visible(pane_state.id) &&
-        pane_state.surface->render_frame()) {
-      ++submitted;
-    }
-  }
+  const std::vector<ViewportPanePlacement> active_placements =
+      workspace_->active_pane_placements();
+  const std::size_t submitted = qt_submit_viewport_render_frames(
+      active_placements, input_router_.navigating(), interaction_pane_id_,
+      [this](const ViewportPanePlacement &placement) {
+        Pane &pane_state = pane(placement.pane_id);
+        return workspace_->pane_visible(pane_state.id) &&
+               pane_state.surface->render_frame();
+      });
   render_system_->complete_presentation_frame(submitted);
   if (diagnostics_enabled) {
     const ViewportProbeClock::time_point now = ViewportProbeClock::now();
@@ -1765,28 +1772,36 @@ void QtViewportPanel::update_pane_geometry() {
     return;
   }
   std::array<bool, kViewportPaneCount> active{};
+  std::array<const ViewportPanePlacement *, kViewportPaneCount> placements{};
   const int full_width = std::max(1, width());
   const int full_height = std::max(1, height());
-  for (const ViewportPanePlacement &placement :
-       workspace_->active_pane_placements()) {
-    Pane &pane_state = pane(placement.pane_id);
-    active[viewport_pane_index(pane_state.id)] = true;
-    const ViewportNormalizedRect &rect = placement.normalized_rect;
-    const int x = static_cast<int>(std::lround(rect.x * full_width));
-    const int y = static_cast<int>(std::lround(rect.y * full_height));
-    const int right =
-        static_cast<int>(std::lround((rect.x + rect.width) * full_width));
-    const int bottom =
-        static_cast<int>(std::lround((rect.y + rect.height) * full_height));
-    pane_state.frame->setGeometry(x, y, std::max(1, right - x),
-                                  std::max(1, bottom - y));
-    update_pane_overlay_geometry(pane_state);
+  const std::vector<ViewportPanePlacement> active_placements =
+      workspace_->active_pane_placements();
+  for (const ViewportPanePlacement &placement : active_placements) {
+    const std::size_t index = viewport_pane_index(placement.pane_id);
+    active[index] = true;
+    placements[index] = &placement;
   }
-  for (Pane &pane_state : panes_) {
-    pane_state.frame->setVisible(
-        active[viewport_pane_index(pane_state.id)] &&
-        !startup_presentation_blocked_);
-  }
+  qt_apply_viewport_pane_activation(
+      active,
+      [this](std::size_t index, bool visible) {
+        panes_[index].frame->setVisible(
+            visible && !startup_presentation_blocked_);
+      },
+      [this, &placements, full_width, full_height](std::size_t index) {
+        Pane &pane_state = panes_[index];
+        const ViewportNormalizedRect &rect =
+            placements[index]->normalized_rect;
+        const int x = static_cast<int>(std::lround(rect.x * full_width));
+        const int y = static_cast<int>(std::lround(rect.y * full_height));
+        const int right = static_cast<int>(
+            std::lround((rect.x + rect.width) * full_width));
+        const int bottom = static_cast<int>(
+            std::lround((rect.y + rect.height) * full_height));
+        pane_state.frame->setGeometry(x, y, std::max(1, right - x),
+                                      std::max(1, bottom - y));
+        update_pane_overlay_geometry(pane_state);
+      });
   update_split_handles();
   update_focused_pane_indicator();
 }
@@ -1799,14 +1814,25 @@ void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
     return;
   }
   pane_state.surface_container->setGeometry(pane_state.frame->rect());
-  pane_state.surface->resize(pane_state.surface_container->size());
-  pane_state.toolbar->adjustSize();
   constexpr int kOverlayInset = 6;
-  const QSize toolbar_size = pane_state.toolbar->sizeHint();
+  constexpr int kOverlayControlGap = 6;
+  pane_state.view_combo->setMinimumWidth(0);
+  pane_state.view_combo->setMaximumWidth(QWIDGETSIZE_MAX);
+  pane_state.shading_combo->setMinimumWidth(0);
+  pane_state.shading_combo->setMaximumWidth(QWIDGETSIZE_MAX);
+  const QSize view_size = pane_state.view_combo->sizeHint();
+  const QSize shading_size = pane_state.shading_combo->sizeHint();
+  const QtViewportChromeLayout chrome = qt_viewport_chrome_layout(
+      pane_state.frame->width(), view_size.width(), shading_size.width(),
+      kOverlayInset, kOverlayControlGap);
+  pane_state.view_combo->setVisible(chrome.view_visible);
+  pane_state.view_combo->setFixedWidth(chrome.view_width);
+  pane_state.shading_combo->setFixedWidth(chrome.shading_width);
+  pane_state.toolbar->layout()->setSpacing(chrome.control_gap);
+  const int toolbar_height =
+      std::max({1, view_size.height(), shading_size.height()});
   pane_state.toolbar->setGeometry(
-      std::max(kOverlayInset, pane_state.frame->width() - toolbar_size.width() -
-                                  kOverlayInset),
-      kOverlayInset, toolbar_size.width(), toolbar_size.height());
+      chrome.toolbar_x, kOverlayInset, chrome.toolbar_width, toolbar_height);
   pane_state.toolbar->raise();
 
   constexpr int kNavigationGizmoExtent = 96;

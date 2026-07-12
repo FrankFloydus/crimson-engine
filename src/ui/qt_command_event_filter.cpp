@@ -25,6 +25,7 @@
 #include <QWindow>
 
 #include <optional>
+#include <utility>
 
 namespace quader {
 namespace {
@@ -52,9 +53,19 @@ bool is_viewport_surface_container(const QWidget *widget) {
 
 } // namespace
 
-QtCommandEventFilter::QtCommandEventFilter(QuaderEditorApi &editor,
-                                           QObject *parent)
-    : QObject(parent), editor_(&editor) {}
+ViewportToolState
+qt_command_dispatch_tool_state(const QtViewportToolStateProvider &provider,
+                               int grid_preset) {
+  ViewportToolState state = provider ? provider() : ViewportToolState{};
+  state.grid_preset = grid_preset;
+  return state;
+}
+
+QtCommandEventFilter::QtCommandEventFilter(
+    QuaderEditorApi &editor, QtViewportToolStateProvider tool_state_provider,
+    QObject *parent)
+    : QObject(parent), editor_(&editor),
+      tool_state_provider_(std::move(tool_state_provider)) {}
 
 bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
   if (editor_ == nullptr || event == nullptr) {
@@ -85,9 +96,8 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       return QObject::eventFilter(watched, event);
     }
 
-    const ViewportToolState state{
-        .grid_preset = editor_->viewports().grid_preset(),
-    };
+    const ViewportToolState state = qt_command_dispatch_tool_state(
+        tool_state_provider_, editor_->viewports().grid_preset());
     const QuaderViewportKeybindingDispatch dispatch =
         editor_->commands().dispatch_viewport_input_binding(
             *chord, state, false, text_input_has_focus());

@@ -1726,12 +1726,14 @@ TEST(BuildGuardrailTests, QtViewportSwapchainsStayBehindRenderSystemAdapters) {
   expect_contains(viewport_surface_source,
                   "render_system_->create_additional_swap_chain(");
   expect_contains(viewport_surface_source,
-                  "render_system_->begin_frame(swap_chain_.get())");
+                  "render_system_->begin_frame(swap_chain_)");
   expect_contains(viewport_surface_source, "swap_chain_.reset()");
   expect_missing(viewport_surface_source, "filament::Engine");
   expect_missing(viewport_surface_source, "filament::SwapChain");
 
   expect_contains(render_system_header, "class RenderAdditionalSwapChain");
+  expect_contains(render_system_header,
+                  "filament::Renderer *renderer_ = nullptr");
   expect_contains(render_system_header, "create_additional_swap_chain");
   expect_contains(render_system_header, "initialize_viewport_renderer");
   expect_contains(render_system_source,
@@ -1938,7 +1940,7 @@ TEST(BuildGuardrailTests, QtViewportKeepsMultiPaneLayoutWorkspace) {
   expect_contains(viewport_surface_source,
                   "render_system_->create_additional_swap_chain(");
   expect_contains(viewport_surface_source,
-                  "render_system_->begin_frame(swap_chain_.get())");
+                  "render_system_->begin_frame(swap_chain_)");
 }
 
 TEST(BuildGuardrailTests, QtRuntimePostBuildPurgesRetiredUiArtifactsOnly) {
@@ -2332,6 +2334,8 @@ TEST(WindowGuardrailTests,
       read_source_file("src/app/app_window_settings.hpp");
   const std::string app_settings_source =
       read_source_file("src/app/app_window_settings.cpp");
+  const std::string ui_system_source =
+      read_source_file("src/ui/ui_system.cpp");
   const std::string window_placement_header =
       read_source_file("src/platform/window_placement.hpp");
   const std::string window_placement_source =
@@ -2370,6 +2374,15 @@ TEST(WindowGuardrailTests,
       app_source,
       "window->setWindowState(window->windowState() | Qt::WindowMaximized)");
   expect_missing(app_source, "window->showMaximized()");
+  expect_contains(ui_system_source, "main_window_->show()");
+  EXPECT_EQ(count_occurrences(ui_system_source, "main_window_->show()"), 1u);
+  const std::size_t apply_window_settings =
+      app_source.find("apply_window_settings();");
+  const std::size_t reveal_window =
+      app_source.find("ui_.show();", apply_window_settings);
+  ASSERT_NE(apply_window_settings, std::string::npos);
+  ASSERT_NE(reveal_window, std::string::npos);
+  EXPECT_LT(apply_window_settings, reveal_window);
   expect_contains(app_source, "window->normalGeometry()");
   expect_contains(app_source, "window->isMaximized()");
   expect_contains(app_source, "window_settings_.set_placement(");
@@ -2401,6 +2414,8 @@ TEST(WindowGuardrailTests,
   expect_contains(window_placement_source, "intersection_area(");
   expect_contains(window_placement_source, "IsZoomed(");
   expect_contains(window_placement_source, "GetClientRect(");
+  expect_contains(ui_system_source, "platform_window_is_maximized(");
+  expect_contains(ui_system_source, "platform_window_client_extent(");
   expect_contains(window_placement_source, "clamp_origin(");
   expect_contains(window_placement_source,
                   "std::clamp(frame.width, kPlatformWindowMinimumWidth");

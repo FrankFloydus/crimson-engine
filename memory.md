@@ -38,16 +38,16 @@ Affected owners/files:
 - `src/ui/ui_system.*`
 - `src/ui/qt_startup_presentation.hpp`
 - `src/ui/qt_viewport_panel.*`
-- `tests/qt_startup_presentation_tests.cpp`
+- `tests/qt_viewport_pane_activation_tests.cpp`
 - `tests/ui_layout_guardrail_tests.cpp`
 - `tests/build_guardrail_tests.cpp`
 
 Verification:
 
-- startup presentation tests: 2/2.
-- focused startup/window/UI guardrails: 3/3.
-- affected UI/app tests: 206/206.
-- `cmake --build --preset vs2026-debug --target quader` produced the v0.0.92
+- startup presentation and pane activation tests: 3/3.
+- affected UI/app tests: 212/212.
+- affected build, window, dependency, and UI guardrails: 80/80.
+- `cmake --build --preset vs2026-debug --target quader` produced the v0.0.96
   executable.
 
 ## 2026-07-12 - Stock Fusion Uses Its Own Neutral Palette And Button Faces
@@ -3508,3 +3508,164 @@ Verification:
   earlier pre-main `0xC0000005` was corrupted concurrent MSVC incremental-link state; deleting only
   the test EXE/ILK/PDB and exclusively relinking fixed it without source rollback.
 - Final report: `build/perf/my_first_project_debug_transform_frame_final.json`.
+
+## 2026-07-12 - Qt Captured Fly Relative-Pointer Parity
+
+Invariant:
+
+- Captured right-mouse fly navigation drains retained genuine motion once per viewport input frame.
+  A relative raw packet contributes its delta and suppresses its following duplicate Qt move; an
+  absolute raw packet selects its following translated Qt delta. Packet-mode changes never discard
+  genuine deltas already retained in the current frame.
+- Legacy Qt mouse events remain enabled and continue to own button/focus state plus physical local
+  coordinates used for picking. Failed raw registration uses accepted Qt deltas after cursor-warp
+  suppression while the native filter remains installed to observe capture theft.
+- A failed Qt mouse-grab enable must never advertise logical capture or hide/recenter the cursor.
+  Verify Win32 transitions through `GetCapture()`; on the portable fallback use the boolean
+  operation-success result returned by `QWindow::setMouseGrabEnabled()`. Disable failure still
+  clears logical capture.
+- Focus loss releases capture immediately and restores the pre-capture cursor position. External
+  `WM_CAPTURECHANGED` follows the same release/restore lifecycle but cancels the RMB drag chord
+  without synthesizing a click release that could open the context menu. Capture transitions and a
+  queued generation check guard against synchronous focus re-entry and stale capture-loss delivery.
+
+Owners:
+
+- `src/platform/raw_mouse_input.*` owns Win32 registration and complete-packet decoding.
+- `src/ui/qt_relative_pointer_input.*` owns the Qt native-event bridge, packet-ordered frame
+  accumulator, capture transition policy, and warning gate.
+- `src/ui/qt_viewport_surface.*` drains captured delta input, preserves Qt picking coordinates, and
+  owns the queued capture-loss release/restore lifecycle.
+
+Verification:
+
+- `QtRelativePointerInputTests.*` passes 12/12, including native capture postconditions,
+  mixed relative/absolute packet routing, per-frame reset, zero raw packets, and failure policy.
+- Focused Qt input, fly camera, and viewport-router coverage passes 61/61.
+- The two captured-pointer source guardrails pass with the native `quader` target built
+  successfully.
+
+## 2026-07-12 - Qt Widgets / ImGui Feature-Parity Closure
+
+Task/context: compare the Qt Widgets editor against the last ImGui editor baseline at `8d47a86`
+and restore user-facing behavior without changing the render-owned overlay policy or replacing
+stock Qt Fusion styling.
+
+Invariant:
+
+- Parity covers the full editor workflow rather than visual imitation: the menu/command surface,
+  outliner and inspector actions, console and status surfaces, settings descriptors and live
+  consumers, one-to-four resizable viewport layouts, maximize/restore, per-viewport view and
+  shading controls, navigation gizmo and fly HUD, focus, selection marquee, transform/pivot/array
+  tools, context/delete popups, and tool preview/commit/cancel lifecycles.
+- Narrow viewport chrome must compact and then hide controls instead of clipping them. Numeric
+  tool settings use paired Fusion sliders and spin boxes; both paths dispatch the same representable
+  value and floating controls preserve at least the old ImGui four-decimal precision.
+- Non-viewport custom keybindings preserve the active tool and current selection state. Captured
+  RMB fly navigation consumes retained relative-pointer motion while Qt remains responsible for
+  button/focus state and physical picking coordinates.
+- ImGui-only chrome, theme colors, and resources are not parity requirements. The Qt shell remains
+  stock Fusion with no application stylesheet or custom global palette.
+- Modeling and render semantics are not UI migration knobs. In particular, box footprint/cross
+  selection remains dashed exactly as in the ImGui baseline, and overlay visibility, ordering,
+  depth, blend, picking, and stale-geometry policy remain render-owned and unchanged by this pass.
+
+Verification:
+
+- Focused Qt viewport chrome, numeric tool settings, keybinding dispatch, captured-pointer input,
+  input adapter/router, and navigation-gizmo coverage passes 75/75.
+- Focused Fusion/UI/version guardrails pass 32/32; dependency-matrix and OOP documentation
+  guardrails pass 3/3.
+- Full CTest passes five of six executables. The only failure is the pre-existing
+  `QdrGeometryTests.QdrGeometryHelpersRemainStable` ray-plane floating-point precision assertion
+  (the modeling-domain executable otherwise passes 498/499 tests).
+- The native `quader` v0.0.93 target builds successfully. A live stock-Fusion smoke check rendered
+  all four viewports, resized both split regions interactively, and restored single-view before
+  exit. Continuous RMB holding is not supported by the desktop automation API, so that hardware
+  interaction remains covered by the captured-pointer tests and requires human smoke confirmation.
+
+## 2026-07-12 - Four-Quad Native Pane First-Presentation Fix
+
+Task/context: after switching from Single to Four Quad, Top/Front/Side displayed their Fusion
+controls but their native Filament surfaces stayed blank until a splitter was dragged. The user
+reserved the PC, so diagnosis and verification were source-, test-, and build-based only.
+
+Invariant:
+
+- `ViewportWorkspaceService` remains the layout source of truth. A Qt layout refresh first applies
+  visibility to every pane, then assigns geometry to active panes. Newly activated native children
+  must never be geometrized while hidden and shown only after their one cached geometry pass.
+- `QWidget::createWindowContainer()` exclusively owns its embedded `QWindow` geometry and
+  visibility. `QtViewportPanel` sizes the container; it never directly calls `resize()` on the
+  embedded `QtViewportSurface`.
+- Qt native resize delivery may be deferred. Before workspace render size, camera projection, or
+  ground-grid preparation consumes dimensions, `QtViewportSurface` explicitly synchronizes the
+  Filament `ViewportRenderer` with the physical-pixel QWindow size. The same guarded synchronization
+  runs before readiness and submission; equal dimensions are a no-op.
+- Layout placement caching is an optimization only after the activation pass has made every pane
+  presentable. No splitter mutation may be required to initialize a newly visible pane.
+- This fix changes Qt presentation lifecycle only. Swapchain ownership, render/scene dirty gates,
+  grid policy, overlay ordering/depth/blend/picking, and modeling state remain unchanged.
+
+Owners:
+
+- `src/ui/qt_viewport_pane_activation.hpp` owns the visibility-before-geometry ordering primitive.
+- `src/ui/qt_viewport_panel.cpp` applies the workspace layout and synchronizes active pane sizes
+  before camera/grid preparation.
+- `src/ui/qt_viewport_surface.*` owns idempotent physical render-size synchronization.
+
+Verification:
+
+- `QtViewportPaneActivationTests.SingleToFourMakesEveryPanePresentableWithoutSplitMutation` covers
+  Single -> Four activation followed by the cached unchanged-layout path without splitter input.
+- UI lifecycle guardrails enforce activation ordering, container-owned QWindow geometry, and
+  renderer-size synchronization before camera preparation and Filament submission.
+- Native GPU first-presentation smoke remains intentionally deferred until the user releases the PC.
+
+## 2026-07-12 - Qt Four-Quad Lower-Pane Navigation Latency Fix
+
+Task/context: Four Quad made RMB pan in Front and Right trail badly while Perspective remained much
+more responsive. The Qt migration had changed the old single Filament frame into four native-window
+frames per application tick, all driven through one Renderer in fixed Perspective, Top, Front, Side
+order. That put the lower panes third and fourth in one frame-pacing queue.
+
+Invariant:
+
+- A Filament `Renderer` represents one operating-system window and owns that window's frame-latency
+  state. Every Qt native viewport swapchain therefore owns a dedicated Renderer; render begin,
+  viewport draw, end, performance-history access, move/reset, and failure cleanup use that paired
+  surface context. The primary RenderSystem APIs remain available for non-Qt presentation paths.
+- While `ViewportInputRouter::navigating()` is true, Qt submits only the active
+  `interaction_pane_id_`. Unchanged native panes retain their last presented pixels. Release,
+  cancel, or capture loss clears navigation before presentation, so every active pane refreshes in
+  its original layout order on that same release frame.
+- A failed active-pane `beginFrame` remains a zero-submission frame and retries the same pane next
+  tick; it never falls through to static panes. A stale interaction pane conservatively falls back
+  to all active panes.
+- This is presentation scheduling and native-renderer ownership only. Camera math, scene/mesh
+  extraction, grid behavior, overlay visibility/order/depth/blend/picking, and modeling state are
+  unchanged.
+
+Owners:
+
+- `src/render/render_system.*` owns each native swapchain plus its dedicated Filament Renderer.
+- `src/ui/qt_viewport_surface.cpp` presents through the paired native-surface context.
+- `src/ui/qt_viewport_render_submission_policy.hpp` owns the camera-navigation submission rule.
+- `src/ui/qt_viewport_panel.cpp` supplies router state, interaction pane, and active placements.
+
+Verification:
+
+- Held camera navigation changes native submissions from 4 to 1 per app tick: 3 fewer submissions,
+  a 75% reduction. Focused policy coverage proves Front-only submission, no failure fallthrough,
+  full release refresh, and stale-pane fallback.
+- `RenderSystemTests.*`, `ViewportInputRouterTests.*`, `QtRelativePointerInputTests.*`, and
+  `QtViewportRenderSubmissionPolicyTests.*` pass 59/59. The relevant Fusion/UI guardrails pass
+  32/32, and the full guardrail executable passes 176/176 when run alone.
+- Native `quader` v0.0.95 builds and boots with Vulkan/Fusion. Four Quad presents all panes
+  immediately; rapid lower-left and lower-right navigation input updates both panes, and the log
+  records four successful paired native surfaces with no errors.
+- Full CTest still reproduces the unrelated pre-existing
+  `QdrGeometryTests.QdrGeometryHelpersRemainStable` large-dot-product precision failure. Its first
+  concurrent guardrail run also hit a temporary recursive-directory race with the SDK-only build;
+  the complete standalone guardrail rerun passed. Desktop automation cannot hold RMB continuously,
+  so final physical held-pan feel remains a human smoke check.

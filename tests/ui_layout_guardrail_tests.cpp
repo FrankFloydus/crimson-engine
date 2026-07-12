@@ -266,6 +266,16 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(apply_body, "showNormal(");
   expect_missing(apply_body, "window->show(");
 
+  const std::size_t initialize_app =
+      app_source.find("bool App::initialize(");
+  const std::size_t apply_placement =
+      app_source.find("apply_window_settings();", initialize_app);
+  const std::size_t reveal = app_source.find("ui_.show();", apply_placement);
+  ASSERT_NE(initialize_app, std::string::npos);
+  ASSERT_NE(apply_placement, std::string::npos);
+  ASSERT_NE(reveal, std::string::npos);
+  EXPECT_LT(apply_placement, reveal);
+
   const std::size_t show_owner = ui_source.find("void UISystem::show()");
   const std::size_t shutdown_owner =
       ui_source.find("void UISystem::shutdown()", show_owner);
@@ -302,7 +312,6 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(timeout_hard_invariants, std::string::npos);
   ASSERT_NE(timeout_finish, std::string::npos);
   EXPECT_LT(timeout_hard_invariants, timeout_finish);
-
   const std::size_t finish_shell =
       ui_source.find("void UISystem::finish_startup_presentation(");
   const std::size_t release_panes = ui_source.find(
@@ -318,21 +327,37 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(repaint_shell, std::string::npos);
   EXPECT_LT(release_panes, enable_updates);
   EXPECT_LT(enable_updates, repaint_shell);
+  expect_missing(ui_source, "startupCurtain");
+  expect_missing(ui_source, "prepare_startup_curtain");
 
   expect_contains(startup_policy, "consecutive_equal_samples");
+  expect_contains(startup_policy,
+                  "QtStartupPresentationAction::GeometryStabilized");
+  expect_contains(startup_policy,
+                  "QtStartupPresentationAction::PresentationReady");
   expect_contains(ui_source, "main_window_->updatesEnabled()");
   expect_contains(ui_source,
                   "!viewport_panel_->startup_presentation_blocked()");
   expect_contains(viewport_header, "set_startup_presentation_blocked(");
   expect_contains(viewport_source,
-                  "!startup_presentation_blocked_");
+                  "visible && !startup_presentation_blocked_");
+
+  const std::size_t create_pane =
+      viewport_source.find("void QtViewportPanel::create_pane(");
+  const std::size_t refresh_controls =
+      viewport_source.find("void QtViewportPanel::refresh_pane_controls(",
+                           create_pane);
+  ASSERT_NE(create_pane, std::string::npos);
+  ASSERT_NE(refresh_controls, std::string::npos);
+  const std::string_view create_pane_body(
+      viewport_source.data() + create_pane, refresh_controls - create_pane);
+  expect_contains(create_pane_body, "surface_container->hide()");
+  expect_contains(viewport_source, "setAutoFillBackground(true)");
 
   const std::size_t render_viewports =
       viewport_source.find("std::size_t QtViewportPanel::render_viewports()");
   const std::size_t startup_gate = viewport_source.find(
       "qt_startup_presentation_action(", render_viewports);
-  const std::size_t invalidated_surface_hide =
-      viewport_source.find("surface_container->hide()", startup_gate);
   const std::size_t reveal_surface =
       viewport_source.find("surface_container->show()", startup_gate);
   const std::size_t exposure_turn =
@@ -341,13 +366,21 @@ TEST(UiLayoutGuardrailTests,
       "render_system_->begin_presentation_frame()", reveal_surface);
   ASSERT_NE(render_viewports, std::string::npos);
   ASSERT_NE(startup_gate, std::string::npos);
-  ASSERT_NE(invalidated_surface_hide, std::string::npos);
   ASSERT_NE(reveal_surface, std::string::npos);
   ASSERT_NE(exposure_turn, std::string::npos);
   ASSERT_NE(begin_presentation, std::string::npos);
-  EXPECT_LT(invalidated_surface_hide, reveal_surface);
+  EXPECT_LT(startup_gate, reveal_surface);
   EXPECT_LT(reveal_surface, exposure_turn);
   EXPECT_LT(exposure_turn, begin_presentation);
+  expect_contains(viewport_source, "devicePixelRatioF()");
+  expect_contains(viewport_source,
+                  "qt_invalidate_startup_presentation_geometry(");
+  expect_contains(viewport_source,
+                  "qt_startup_native_child_should_be_visible(");
+  const std::size_t invalidated_surface_hide =
+      viewport_source.find("surface_container->hide()", startup_gate);
+  ASSERT_NE(invalidated_surface_hide, std::string::npos);
+  EXPECT_LT(invalidated_surface_hide, reveal_surface);
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -372,6 +405,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(outliner, "QStringLiteral(\"outliner.model\")");
   expect_contains(outliner, "QStringLiteral(\"outliner.context_menu\")");
   expect_contains(outliner, "tree_->setHeaderHidden(false)");
+  expect_contains(outliner, "tree_->setAlternatingRowColors(true)");
   expect_contains(outliner,
                   "header->setSectionResizeMode(column_index(OutlinerColumn::Name),");
   expect_contains(outliner, "QHeaderView::Stretch");
@@ -618,6 +652,13 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(tool, "QStringLiteral(\"tool_settings.apply\")");
   expect_contains(tool, "QStringLiteral(\"tool_settings.cancel\")");
   expect_contains(tool, "new QCheckBox");
+  expect_contains(tool, "new QSlider(Qt::Horizontal, row)");
+  expect_contains(tool, "slider->setTracking(true)");
+  expect_contains(tool, "const QSignalBlocker spin_blocker(spin)");
+  expect_contains(tool, "const QSignalBlocker slider_blocker(slider)");
+  expect_contains(tool,
+                  "std::max(4, decimal_places_for_step(control.step))");
+  expect_contains(tool, "dispatch_number(spin->value())");
   expect_contains(tool, "new QDoubleSpinBox");
   expect_contains(tool, "new QRadioButton");
   expect_contains(tool, "new QPushButton");
@@ -832,9 +873,10 @@ TEST(UiLayoutGuardrailTests, QtViewportSupportsOneThroughFourPaneLayouts) {
   expect_contains(panel, "ViewportPaneId::Side");
   EXPECT_GE(count_occurrences(panel, "workspace_->active_pane_placements()"),
             3u);
-  expect_contains(panel, "pane_state.frame->setVisible(");
-  expect_contains(panel,
-                  "active[viewport_pane_index(pane_state.id)]");
+  expect_contains(panel, "qt_apply_viewport_pane_activation(");
+  expect_contains(panel, "panes_[index].frame->setVisible(");
+  expect_contains(panel, "visible && !startup_presentation_blocked_");
+  expect_contains(panel, "active[index] = true");
   expect_contains(menu, "viewport_layout_options()");
   expect_contains(menu, "editor.viewports().set_layout(layout)");
 }
@@ -927,7 +969,7 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     InactiveNativeViewportPanesAreExplicitlyHiddenBeforePresentation) {
+     NativeViewportActivationPrecedesGeometryAndPresentation) {
   const std::string panel =
       read_source_file("src/ui/qt_viewport_panel.cpp");
   const std::size_t geometry =
@@ -940,11 +982,26 @@ TEST(UiLayoutGuardrailTests,
   const std::string body =
       panel.substr(geometry, overlay_geometry - geometry);
 
-  expect_contains(body, "pane_state.frame->setVisible(");
-  expect_contains(body, "active[viewport_pane_index(pane_state.id)]");
+  const std::size_t activation =
+      body.find("qt_apply_viewport_pane_activation(");
+  const std::size_t visibility =
+      body.find("frame->setVisible(", activation);
+  const std::size_t geometry_sync =
+      body.find("frame->setGeometry(", activation);
+  ASSERT_NE(activation, std::string::npos);
+  ASSERT_NE(visibility, std::string::npos);
+  ASSERT_NE(geometry_sync, std::string::npos);
+  EXPECT_LT(visibility, geometry_sync);
+  expect_contains(body, "active[index] = true");
+  expect_contains(body, "visible && !startup_presentation_blocked_");
   expect_missing(body, "pane_state.frame->isVisible()");
   expect_missing(body, "pane_state.frame->show()");
   expect_missing(body, "pane_state.frame->hide()");
+
+  const std::string overlay_body = panel.substr(overlay_geometry);
+  expect_contains(overlay_body,
+                  "pane_state.surface_container->setGeometry(");
+  expect_missing(overlay_body, "pane_state.surface->resize(");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -964,7 +1021,9 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(surface, "(void)winId()");
   expect_contains(surface, "native_window_handle()");
   expect_contains(surface, "create_additional_swap_chain(");
-  expect_contains(surface, "begin_frame(swap_chain_.get())");
+  expect_contains(surface, "begin_frame(swap_chain_)");
+  expect_contains(surface, "render_viewport(renderer_, swap_chain_)");
+  expect_contains(surface, "end_frame(swap_chain_)");
   expect_contains(surface, "QEvent::PlatformSurface");
   expect_contains(surface, "QPlatformSurfaceEvent::SurfaceCreated");
   expect_contains(surface,
@@ -973,6 +1032,50 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(surface, "swap_chain_.reset()");
   expect_missing(surface, "ImGui");
   expect_missing(surface, "SDL");
+}
+
+TEST(UiLayoutGuardrailTests,
+     NativeViewportRendererSizeSynchronizesBeforeCameraAndSubmission) {
+  const std::string panel =
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string surface_header =
+      read_source_file("src/ui/qt_viewport_surface.hpp");
+  const std::string surface =
+      read_source_file("src/ui/qt_viewport_surface.cpp");
+
+  const std::size_t prepare =
+      panel.find("void QtViewportPanel::prepare_viewports(");
+  const std::size_t size_sync =
+      panel.find("surface->synchronize_render_size()", prepare);
+  const std::size_t workspace_size =
+      panel.find("surface->render_size_pixels()", size_sync);
+  const std::size_t camera_update =
+      panel.find("renderer.update_camera(", workspace_size);
+  ASSERT_NE(prepare, std::string::npos);
+  ASSERT_NE(size_sync, std::string::npos);
+  ASSERT_NE(workspace_size, std::string::npos);
+  ASSERT_NE(camera_update, std::string::npos);
+  EXPECT_LT(size_sync, workspace_size);
+  EXPECT_LT(workspace_size, camera_update);
+
+  const std::size_t render_frame =
+      surface.find("bool QtViewportSurface::render_frame()");
+  const std::size_t submission_sync =
+      surface.find("synchronize_render_size()", render_frame);
+  const std::size_t readiness =
+      surface.find("if (!ready_to_render())", submission_sync);
+  const std::size_t begin_frame =
+      surface.find("render_system_->begin_frame(", readiness);
+  ASSERT_NE(render_frame, std::string::npos);
+  ASSERT_NE(submission_sync, std::string::npos);
+  ASSERT_NE(readiness, std::string::npos);
+  ASSERT_NE(begin_frame, std::string::npos);
+  EXPECT_LT(submission_sync, readiness);
+  EXPECT_LT(readiness, begin_frame);
+
+  expect_contains(surface_header, "void synchronize_render_size()");
+  expect_contains(surface, "renderer_.width() == width");
+  expect_contains(surface, "renderer_.height() == height");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -1118,6 +1221,13 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(menu, "command->shortcut");
   expect_contains(menu, "QLatin1Char('\\t')");
   expect_contains(menu, "entry.action->setText(action_text(");
+  for (std::string_view axis_key :
+       {"ui.menu.align.axis_x", "ui.menu.align.axis_y",
+        "ui.menu.align.axis_z"}) {
+    expect_contains(menu, axis_key);
+  }
+  expect_contains(
+      menu, "align_menu->addMenu(qtext(context.localization, key, fallback))");
 
   for (std::string_view forbidden :
        {"setShortcut(", "setShortcuts(", "setShortcutContext(",
@@ -1163,6 +1273,108 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
+     QtCapturedPointerDrainsRawMotionAndRejectsWarpFallbackMotion) {
+  const std::string surface =
+      read_source_file("src/ui/qt_viewport_surface.cpp");
+
+  const std::size_t frame =
+      surface.find("QtViewportSurface::take_input_frame(");
+  const std::size_t captured_choice =
+      surface.find("frame.input.mouse_delta = pointer_captured()", frame);
+  const std::size_t raw_drain =
+      surface.find("relative_pointer_input_.take_delta()", captured_choice);
+  const std::size_t absolute_frame_delta =
+      surface.find(": input_->mouse_delta", raw_drain);
+  ASSERT_NE(frame, std::string::npos);
+  ASSERT_NE(captured_choice, std::string::npos);
+  ASSERT_NE(raw_drain, std::string::npos);
+  ASSERT_NE(absolute_frame_delta, std::string::npos);
+  EXPECT_LT(captured_choice, raw_drain);
+  EXPECT_LT(raw_drain, absolute_frame_delta);
+
+  const std::size_t record_move =
+      surface.find("void QtViewportSurface::record_mouse_move(");
+  const std::size_t suppress_warp =
+      surface.find("if (input_->suppress_warp_event)", record_move);
+  const std::size_t suppressed_return =
+      surface.find("return;", suppress_warp);
+  const std::size_t fallback_accumulation = surface.find(
+      "relative_pointer_input_.add_fallback_delta(", suppressed_return);
+  const std::size_t record_wheel =
+      surface.find("void QtViewportSurface::record_wheel(", record_move);
+  ASSERT_NE(record_move, std::string::npos);
+  ASSERT_NE(suppress_warp, std::string::npos);
+  ASSERT_NE(suppressed_return, std::string::npos);
+  ASSERT_NE(fallback_accumulation, std::string::npos);
+  ASSERT_NE(record_wheel, std::string::npos);
+  EXPECT_LT(suppress_warp, suppressed_return);
+  EXPECT_LT(suppressed_return, fallback_accumulation);
+  EXPECT_LT(fallback_accumulation, record_wheel);
+  const std::string record_move_source =
+      surface.substr(record_move, record_wheel - record_move);
+  expect_missing(record_move_source, "raw_input_active()");
+}
+
+TEST(UiLayoutGuardrailTests,
+     QtCapturedPointerVerifiesCaptureAndMonitorsExternalCaptureLoss) {
+  const std::string surface =
+      read_source_file("src/ui/qt_viewport_surface.cpp");
+  const std::string relative =
+      read_source_file("src/ui/qt_relative_pointer_input.cpp");
+  const std::string platform =
+      read_source_file("src/platform/raw_mouse_input.cpp");
+
+  expect_contains(
+      surface,
+      "platform_pointer_capture_transition_achieved(qt_result,");
+  expect_contains(surface, "Qt::QueuedConnection");
+  expect_contains(
+      surface,
+      "input_->right_down && !capture_was_stolen");
+
+  const std::size_t start =
+      relative.find("bool QtRelativePointerInput::start_raw_input(");
+  const std::size_t stop =
+      relative.find("bool QtRelativePointerInput::stop_raw_input(", start);
+  const std::size_t filter_install =
+      relative.find("installNativeEventFilter(this)", start);
+  const std::size_t filter_remove =
+      relative.find("removeNativeEventFilter(this)", start);
+  ASSERT_NE(start, std::string::npos);
+  ASSERT_NE(stop, std::string::npos);
+  ASSERT_NE(filter_install, std::string::npos);
+  ASSERT_NE(filter_remove, std::string::npos);
+  EXPECT_LT(filter_install, stop);
+  EXPECT_GT(filter_remove, stop);
+
+  const std::size_t classifier =
+      platform.find("PlatformRawMouseInput::classify_native_message(");
+  const std::size_t capture_changed =
+      platform.find("message->message == WM_CAPTURECHANGED", classifier);
+  const std::size_t active_gate =
+      platform.find("if (!active_ || message->message != WM_INPUT)",
+                    classifier);
+  ASSERT_NE(classifier, std::string::npos);
+  ASSERT_NE(capture_changed, std::string::npos);
+  ASSERT_NE(active_gate, std::string::npos);
+  EXPECT_LT(capture_changed, active_gate);
+
+  const std::size_t external_loss = surface.find(
+      "void QtViewportSurface::record_native_pointer_capture_lost()");
+  const std::size_t next_method =
+      surface.find("bool QtViewportSurface::apply_native_mouse_grab(",
+                   external_loss);
+  ASSERT_NE(external_loss, std::string::npos);
+  ASSERT_NE(next_method, std::string::npos);
+  const std::string external_loss_source =
+      surface.substr(external_loss, next_method - external_loss);
+  expect_contains(external_loss_source,
+                  "input_->released.push_back(*input_->right_drag)");
+  expect_contains(external_loss_source, "input_->right_down = false");
+  expect_missing(external_loss_source, "input_->right_released =");
+}
+
+TEST(UiLayoutGuardrailTests,
      QtApplicationCommandsYieldToActiveModalAndPopupWidgets) {
   const std::string filter_header =
       read_source_file("src/ui/qt_command_event_filter.hpp");
@@ -1182,6 +1394,31 @@ TEST(UiLayoutGuardrailTests,
   ASSERT_NE(ownership_check, std::string::npos);
   ASSERT_NE(command_dispatch, std::string::npos);
   EXPECT_LT(ownership_check, command_dispatch);
+}
+
+TEST(UiLayoutGuardrailTests,
+     QtApplicationCommandsPreserveCurrentViewportToolContext) {
+  const std::string filter_header =
+      read_source_file("src/ui/qt_command_event_filter.hpp");
+  const std::string filter =
+      read_source_file("src/ui/qt_command_event_filter.cpp");
+  const std::string panel_header =
+      read_source_file("src/ui/qt_viewport_panel.hpp");
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+
+  expect_contains(filter_header, "QtViewportToolStateProvider");
+  expect_contains(filter, "qt_command_dispatch_tool_state(");
+  expect_contains(filter, "tool_state_provider_");
+  expect_contains(panel_header, "const ViewportToolState &tool_state() const");
+  expect_contains(ui_system, "viewport_panel_->tool_state()");
+}
+
+TEST(UiLayoutGuardrailTests,
+     QtDebugClipboardFailureUsesLocalizedPlatformError) {
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+
+  expect_contains(ui_system, "ui.runtime.platform_unavailable");
+  expect_missing(ui_system, "Qt clipboard is unavailable.");
 }
 
 TEST(UiLayoutGuardrailTests,

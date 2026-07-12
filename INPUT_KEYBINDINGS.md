@@ -25,9 +25,12 @@ Quader input is split into four layers:
 - `src/api/QuaderCommandsApi.*` owns command ids, default keybindings, canonical command aliases,
   viewport shortcut/action mapping, keybinding storage path selection, and public API access.
 - `src/ui/qt_input_adapter.*` translates Qt key, mouse, wheel, modifier, focus, and text-capture
-  events into canonical Quader input; `src/ui/qt_viewport_panel.*` assembles a
-  `ViewportInputFrame`; `src/viewport/viewport_input_router.*` consumes semantic navigation input
-  and resolved viewport shortcuts.
+  events into canonical Quader input; `src/ui/qt_relative_pointer_input.*` accumulates captured
+  relative motion from the platform backend or portable Qt fallback;
+  `src/platform/raw_mouse_input.*` owns Win32 raw mouse registration and message decoding;
+  `src/ui/qt_viewport_panel.*` assembles a `ViewportInputFrame`; and
+  `src/viewport/viewport_input_router.*` consumes semantic navigation input and resolved viewport
+  shortcuts.
 
 Do not bypass these owners. If a missing capability is needed, add it to the owner first and then
 route callers through that owner.
@@ -97,6 +100,18 @@ Canonical input supports:
 For active mouse drags, keep the drag-start chord stable. Do not recompute drag modifiers every
 frame. Example: `RightMouseDrag` fly navigation must continue if the user presses Shift after the
 drag has started.
+
+Captured right-mouse fly navigation uses unbounded relative motion on Windows. The native-event
+boundary classifies each raw packet before its corresponding legacy Qt move: relative packets add
+raw deltas and suppress the following duplicate Qt move, while absolute-device packets accept the
+translated Qt delta. Genuine raw and Qt fallback motion are retained together and drained exactly
+once by the next captured viewport input frame. Failed raw registration also uses the Qt fallback,
+but keeps capture-loss monitoring active. Cursor-warp events must be discarded before fallback
+accumulation. Capture enable/disable is verified against the actual native postcondition; focus loss
+or external capture theft releases fly navigation, clears pending motion, and restores the
+pre-capture cursor position. External capture theft cancels the drag chord without synthesizing an
+RMB click. Never expose Win32 messages or duplicate relative-pointer state below the UI/platform
+boundary.
 
 ## Viewport Navigation Rules
 

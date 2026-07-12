@@ -187,8 +187,8 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
        {"api", "assets", "core", "diagnostics", "editor_array",
         "editor_commands", "editor_interactions", "editor_modeling",
         "editor_pivot", "editor_render",
-        "editor_tools", "editor_transform", "editor_viewport", "math", "render",
-        "scene", "ui", "viewport"}},
+        "editor_tools", "editor_transform", "editor_viewport", "math",
+        "platform", "render", "scene", "ui", "viewport"}},
       {"viewport",
        {"src/viewport/"},
        {"api", "core", "diagnostics", "editor_commands", "editor_input",
@@ -213,8 +213,6 @@ const std::vector<IncludeException> &allowed_include_exceptions() {
       {"src/scene/document/project_session.hpp",
        "editor/session/project_session.hpp",
        "legacy scene include wrapper during the session move"},
-      {"src/ui/ui_system.cpp", "platform/window_placement.hpp",
-       "Qt shell applies platform-neutral persisted window placement values"},
   };
   return kExceptions;
 }
@@ -326,7 +324,7 @@ const std::vector<CMakeTargetPolicy> &cmake_target_policies() {
       {"quader_ui",
        {"quader_api", "quader_assets", "quader_commands", "quader_core",
         "quader_document", "quader_editor_modeling", "quader_modeling_profile",
-        "quader_render", "quader_viewport"}},
+        "quader_platform", "quader_render", "quader_viewport"}},
       {"quader_viewport",
        {"quader_api", "quader_commands", "quader_core",
         "quader_editor_metadata", "quader_editor_modeling", "quader_math",

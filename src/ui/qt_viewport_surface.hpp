@@ -10,6 +10,7 @@
 #include "math/types.hpp"
 #include "render/render_system.hpp"
 #include "render/viewport_renderer.hpp"
+#include "ui/qt_relative_pointer_input.hpp"
 #include "viewport/viewport_input_types.hpp"
 
 #include <QWindow>
@@ -72,6 +73,7 @@ public:
   [[nodiscard]] ViewportRenderer &renderer() { return renderer_; }
   [[nodiscard]] const ViewportRenderer &renderer() const { return renderer_; }
   [[nodiscard]] QVec2 render_size_pixels() const;
+  void synchronize_render_size();
 
   /**
    * Consumes edge-triggered events accumulated since the previous app frame.
@@ -107,7 +109,6 @@ protected:
 
 private:
   void recreate_swap_chain();
-  void resize_renderer_to_surface();
   [[nodiscard]] void *native_window_handle() const;
   void record_focus_in();
   void record_focus_out();
@@ -117,6 +118,8 @@ private:
   void record_mouse_release(QMouseEvent &event);
   void record_mouse_move(QMouseEvent &event);
   void record_wheel(QWheelEvent &event);
+  void record_native_pointer_capture_lost();
+  [[nodiscard]] bool apply_native_mouse_grab(bool captured);
   void recenter_captured_pointer();
 
   struct InputAccumulator;
@@ -129,6 +132,13 @@ private:
   std::function<void()> surface_changed_callback_;
   std::function<void(ViewportPaneId, ViewportPaneFocusTrigger)>
       focus_request_callback_;
+  QtPointerCapturePolicy pointer_capture_policy_;
+  QtPointerCaptureWarningGate pointer_capture_warning_gate_;
+  QtRelativePointerInput relative_pointer_input_;
+  bool raw_input_warning_issued_ = false;
+  bool pointer_capture_transition_active_ = false;
+  bool native_capture_loss_pending_ = false;
+  std::uint64_t pointer_capture_generation_ = 0u;
   bool initialized_ = false;
   bool native_surface_available_ = false;
   std::uintptr_t swap_chain_native_id_ = 0u;

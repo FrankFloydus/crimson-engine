@@ -93,6 +93,9 @@ public:
   [[nodiscard]] std::size_t render_viewports();
   [[nodiscard]] bool needs_continuous_rendering() const;
   [[nodiscard]] bool focus_active_pane();
+  [[nodiscard]] const ViewportToolState &tool_state() const {
+    return input_router_.state();
+  }
 
   [[nodiscard]] QtViewportSurface *surface(ViewportPaneId pane_id);
   [[nodiscard]] const QtViewportSurface *surface(ViewportPaneId pane_id) const;

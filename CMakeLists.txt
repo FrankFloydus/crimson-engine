@@ -491,6 +491,7 @@ quader_register_filament_material(ground_grid_material resources/materials/groun
 add_library(quader_platform STATIC
     src/platform/fatal_error_handler.cpp
     src/platform/platform_file_dialog.cpp
+    src/platform/raw_mouse_input.cpp
     src/platform/sentry_client.cpp
     src/platform/window_placement.cpp
 )
@@ -599,14 +600,17 @@ add_library(quader_ui STATIC
     src/ui/qt_input_adapter.cpp
     src/ui/qt_main_menu.cpp
     src/ui/qt_navigation_gizmo.cpp
+    src/ui/qt_relative_pointer_input.cpp
     src/ui/qt_semantic_axis_colors.hpp
     src/ui/qt_auxiliary_window_state.cpp
     src/ui/qt_settings_dialog.cpp
     src/ui/qt_settings_controller.cpp
+    src/ui/qt_tool_settings_number_slider.cpp
     src/ui/qt_tool_settings_window.cpp
     src/ui/qt_viewport_context_menu.cpp
     src/ui/qt_viewport_delete_popup.cpp
     src/ui/qt_viewport_fly_navigation_hud.cpp
+    src/ui/qt_viewport_render_submission_policy.hpp
     src/ui/qt_viewport_panel.cpp
     src/ui/qt_viewport_surface.cpp
     src/ui/ui_panel_manager.cpp
@@ -854,10 +858,15 @@ if(QUADER_BUILD_TESTS)
         tests/outliner_panel_tests.cpp
         tests/ui_panel_manager_tests.cpp
         tests/qt_auxiliary_window_state_tests.cpp
+        tests/qt_command_event_filter_tests.cpp
         tests/qt_input_adapter_tests.cpp
         tests/qt_navigation_gizmo_tests.cpp
+        tests/qt_relative_pointer_input_tests.cpp
         tests/qt_settings_controller_tests.cpp
         tests/qt_startup_presentation_tests.cpp
+        tests/qt_tool_settings_number_slider_tests.cpp
+        tests/qt_viewport_pane_activation_tests.cpp
+        tests/qt_viewport_render_submission_policy_tests.cpp
         tests/qt_viewport_fly_navigation_hud_tests.cpp
         tests/qt_viewport_delete_popup_tests.cpp
         tests/qstr_tests.cpp

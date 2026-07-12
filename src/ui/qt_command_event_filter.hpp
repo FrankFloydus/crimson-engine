@@ -6,7 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_viewport_input_types.hpp"
+
 #include <QObject>
+
+#include <functional>
 
 class QEvent;
 class QWidget;
@@ -14,6 +18,12 @@ class QWidget;
 namespace quader {
 
 class QuaderEditorApi;
+
+using QtViewportToolStateProvider = std::function<ViewportToolState()>;
+
+[[nodiscard]] ViewportToolState
+qt_command_dispatch_tool_state(const QtViewportToolStateProvider &provider,
+                               int grid_preset);
 
 /**
  * Routes application-level Qt key presses through Quader's canonical command
@@ -23,6 +33,7 @@ class QuaderEditorApi;
 class QtCommandEventFilter final : public QObject {
 public:
   explicit QtCommandEventFilter(QuaderEditorApi &editor,
+                                QtViewportToolStateProvider tool_state_provider,
                                 QObject *parent = nullptr);
 
   QtCommandEventFilter(const QtCommandEventFilter &) = delete;
@@ -39,6 +50,7 @@ private:
   void reset_pending_chord();
 
   QuaderEditorApi *editor_ = nullptr;
+  QtViewportToolStateProvider tool_state_provider_;
 };
 
 } // namespace quader

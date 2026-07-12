@@ -341,6 +341,7 @@ struct OutlinerPanel::Impl {
                            QAbstractItemView::EditKeyPressed);
     tree_->setSelectionBehavior(QAbstractItemView::SelectRows);
     tree_->setSelectionMode(QAbstractItemView::NoSelection);
+    tree_->setAlternatingRowColors(true);
     tree_->setUniformRowHeights(true);
     tree_->setItemDelegate(new SubduedRowDelegate(tree_));
 

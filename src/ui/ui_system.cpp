@@ -267,10 +267,12 @@ void UISystem::install_runtime_hooks(
 #ifndef NDEBUG
   editor.dev_tools().set_runtime_hooks(QuaderDevToolsRuntimeHooks{
       .set_clipboard_text =
-          [](std::string_view text, std::string &error_message) {
+          [this](std::string_view text, std::string &error_message) {
             QClipboard *clipboard = QApplication::clipboard();
             if (clipboard == nullptr) {
-              error_message = "Qt clipboard is unavailable.";
+              error_message = localization_.text(
+                  "ui.runtime.platform_unavailable",
+                  "UI platform is not available.");
               return false;
             }
             clipboard->setText(QString::fromUtf8(
@@ -376,7 +378,11 @@ void UISystem::install_runtime_hooks(
           },
   });
 
-  command_event_filter_ = std::make_unique<QtCommandEventFilter>(editor);
+  command_event_filter_ = std::make_unique<QtCommandEventFilter>(
+      editor, [this]() {
+        return viewport_panel_ != nullptr ? viewport_panel_->tool_state()
+                                          : ViewportToolState{};
+      });
   if (QCoreApplication *application = QApplication::instance()) {
     application->installEventFilter(command_event_filter_.get());
   }

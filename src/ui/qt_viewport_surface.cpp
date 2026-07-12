@@ -18,6 +18,7 @@
 #include <QFocusEvent>
 #include <QGuiApplication>
 #include <QKeyEvent>
+#include <QMetaObject>
 #include <QMouseEvent>
 #include <QPlatformSurfaceEvent>
 #include <QResizeEvent>
@@ -80,7 +81,6 @@ bool viewport_surface_diagnostics_enabled() {
 struct QtViewportSurface::InputAccumulator {
   bool hovered = false;
   bool focused = false;
-  bool pointer_captured = false;
   bool suppress_warp_event = false;
   QPoint warp_target_local;
   QPoint capture_restore_global;
@@ -118,6 +118,18 @@ QtViewportSurface::QtViewportSurface(ViewportPaneId pane_id)
                     .arg(QString::fromUtf8(viewport_pane_stable_id(pane_id_)
                                                .data())));
   setSurfaceType(QSurface::RasterSurface);
+  relative_pointer_input_.set_capture_lost_callback([this]() {
+    native_capture_loss_pending_ = true;
+    const std::uint64_t capture_generation = pointer_capture_generation_;
+    QMetaObject::invokeMethod(
+        this,
+        [this, capture_generation]() {
+          if (pointer_capture_generation_ == capture_generation) {
+            record_native_pointer_capture_lost();
+          }
+        },
+        Qt::QueuedConnection);
+  });
 }
 
 QtViewportSurface::~QtViewportSurface() { shutdown(); }
@@ -140,7 +152,7 @@ bool QtViewportSurface::initialize(RenderSystem &render_system,
   if (!swap_chain_) {
     recreate_swap_chain();
   }
-  resize_renderer_to_surface();
+  synchronize_render_size();
   return static_cast<bool>(swap_chain_);
 }
 
@@ -159,6 +171,7 @@ void QtViewportSurface::shutdown() {
 }
 
 bool QtViewportSurface::render_frame() {
+  synchronize_render_size();
   if (!ready_to_render()) {
     return false;
   }
@@ -167,17 +180,17 @@ bool QtViewportSurface::render_frame() {
   const ViewportSurfaceProbeClock::time_point begin_start =
       diagnostics_enabled ? ViewportSurfaceProbeClock::now()
                           : ViewportSurfaceProbeClock::time_point{};
-  if (!render_system_->begin_frame(swap_chain_.get())) {
+  if (!render_system_->begin_frame(swap_chain_)) {
     return false;
   }
   const ViewportSurfaceProbeClock::time_point render_start =
       diagnostics_enabled ? ViewportSurfaceProbeClock::now()
                           : ViewportSurfaceProbeClock::time_point{};
-  render_system_->render_viewport(renderer_);
+  render_system_->render_viewport(renderer_, swap_chain_);
   const ViewportSurfaceProbeClock::time_point end_start =
       diagnostics_enabled ? ViewportSurfaceProbeClock::now()
                           : ViewportSurfaceProbeClock::time_point{};
-  render_system_->end_frame();
+  render_system_->end_frame(swap_chain_);
   if (diagnostics_enabled) {
     const ViewportSurfaceProbeClock::time_point now =
         ViewportSurfaceProbeClock::now();
@@ -245,7 +258,9 @@ QtViewportSurface::take_input_frame(float delta_seconds,
       (input_->hovered || route_active_navigation) ? input_->mouse_wheel : 0.0f;
   frame.input.delta_seconds = std::max(delta_seconds, 0.0f);
   frame.input.mouse_screen = input_->mouse_screen;
-  frame.input.mouse_delta = input_->mouse_delta;
+  frame.input.mouse_delta = pointer_captured()
+                                ? relative_pointer_input_.take_delta()
+                                : input_->mouse_delta;
   frame.input.mouse_local = input_->mouse_local;
   frame.input.viewport_size = render_size_pixels();
   frame.input.modifiers = input_->modifiers;
@@ -288,24 +303,97 @@ QtViewportSurface::take_input_frame(float delta_seconds,
   input_->pressed.clear();
   input_->released.clear();
   input_->wheel.clear();
-  if (input_->pointer_captured) {
+  if (pointer_captured()) {
     recenter_captured_pointer();
   }
   return frame;
 }
 
 void QtViewportSurface::set_pointer_capture(bool captured) {
-  if (input_ == nullptr || input_->pointer_captured == captured) {
+  if (input_ == nullptr || pointer_capture_transition_active_ ||
+      pointer_capture_policy_.captured() == captured) {
     return;
   }
-  input_->pointer_captured = captured;
+  /**
+   * Prevents synchronous Qt focus/grab notifications from re-entering a
+   * partially applied capture transition.
+   */
+  struct CaptureTransitionGuard {
+    explicit CaptureTransitionGuard(bool &active_state)
+        : active(active_state) {
+      active = true;
+    }
+    ~CaptureTransitionGuard() { active = false; }
+    bool &active;
+  } transition_guard(pointer_capture_transition_active_);
+
   if (captured) {
+    native_capture_loss_pending_ = false;
     input_->capture_restore_global = QCursor::pos();
+    const bool grab_succeeded =
+        apply_native_mouse_grab(true) && input_->focused;
+    const QtPointerCaptureTransition transition =
+        pointer_capture_policy_.apply(true, grab_succeeded);
+    if (transition == QtPointerCaptureTransition::EnableFailed) {
+      if (pointer_capture_warning_gate_.should_warn(
+              QtPointerCaptureFailure::Enable)) {
+        LOG_WARN("Unable to enable Qt mouse grab for viewport pane {}",
+                 viewport_pane_stable_id(pane_id_));
+      }
+      // A synchronous focus loss can make the combined enable predicate fail
+      // after Qt accepted the grab. Always clean up the platform state while
+      // the transition guard prevents focus notifications from re-entering.
+      const bool cleanup_succeeded = apply_native_mouse_grab(false);
+      if (!cleanup_succeeded && pointer_capture_warning_gate_.should_warn(
+                                    QtPointerCaptureFailure::Disable)) {
+        LOG_WARN("Unable to disable Qt mouse grab for viewport pane {}",
+                 viewport_pane_stable_id(pane_id_));
+      } else if (cleanup_succeeded) {
+        pointer_capture_warning_gate_.note_success(
+            QtPointerCaptureFailure::Disable);
+      }
+      relative_pointer_input_.clear();
+      unsetCursor();
+      return;
+    }
+    pointer_capture_warning_gate_.note_success(
+        QtPointerCaptureFailure::Enable);
+    ++pointer_capture_generation_;
+
+    input_->mouse_delta = {};
+    const bool raw_input_active =
+        relative_pointer_input_.start_raw_input(native_window_handle());
+    if (PlatformRawMouseInput::supported() && !raw_input_active) {
+      if (!raw_input_warning_issued_) {
+        LOG_WARN(
+            "Unable to enable raw relative mouse input for viewport pane {} "
+            "(native error {}); using the Qt pointer-delta fallback",
+            viewport_pane_stable_id(pane_id_),
+            relative_pointer_input_.last_native_error());
+        raw_input_warning_issued_ = true;
+      }
+    } else if (raw_input_active) {
+      raw_input_warning_issued_ = false;
+    }
     setCursor(QCursor(Qt::BlankCursor));
-    (void)setMouseGrabEnabled(true);
     recenter_captured_pointer();
   } else {
-    (void)setMouseGrabEnabled(false);
+    (void)relative_pointer_input_.stop_raw_input();
+    const bool release_succeeded = apply_native_mouse_grab(false);
+    const QtPointerCaptureTransition transition =
+        pointer_capture_policy_.apply(false, release_succeeded);
+    native_capture_loss_pending_ = false;
+    ++pointer_capture_generation_;
+    if (transition == QtPointerCaptureTransition::DisableFailed) {
+      if (pointer_capture_warning_gate_.should_warn(
+              QtPointerCaptureFailure::Disable)) {
+        LOG_WARN("Unable to disable Qt mouse grab for viewport pane {}",
+                 viewport_pane_stable_id(pane_id_));
+      }
+    } else {
+      pointer_capture_warning_gate_.note_success(
+          QtPointerCaptureFailure::Disable);
+    }
     unsetCursor();
     const QPoint restore = input_->capture_restore_global;
     input_->warp_target_local = mapFromGlobal(restore);
@@ -319,7 +407,7 @@ void QtViewportSurface::set_pointer_capture(bool captured) {
 }
 
 bool QtViewportSurface::pointer_captured() const {
-  return input_ != nullptr && input_->pointer_captured;
+  return input_ != nullptr && pointer_capture_policy_.captured();
 }
 
 bool QtViewportSurface::event(QEvent *event) {
@@ -334,7 +422,7 @@ bool QtViewportSurface::event(QEvent *event) {
                QPlatformSurfaceEvent::SurfaceCreated) {
       native_surface_available_ = true;
       recreate_swap_chain();
-      resize_renderer_to_surface();
+      synchronize_render_size();
     }
   } else if (event != nullptr &&
              (event->type() == QEvent::DevicePixelRatioChange ||
@@ -343,14 +431,14 @@ bool QtViewportSurface::event(QEvent *event) {
     if (event->type() == QEvent::WinIdChange) {
       recreate_swap_chain();
     }
-    resize_renderer_to_surface();
+    synchronize_render_size();
   } else if (event != nullptr && event->type() == QEvent::Enter) {
     input_->hovered = true;
     if (focus_request_callback_) {
       focus_request_callback_(pane_id_, ViewportPaneFocusTrigger::Hover);
     }
   } else if (event != nullptr && event->type() == QEvent::Leave) {
-    input_->hovered = input_->pointer_captured;
+    input_->hovered = pointer_captured();
   }
   return QWindow::event(event);
 }
@@ -395,7 +483,7 @@ bool QtViewportSurface::eventFilter(QObject *watched, QEvent *event) {
 
 void QtViewportSurface::exposeEvent(QExposeEvent *event) {
   QWindow::exposeEvent(event);
-  resize_renderer_to_surface();
+  synchronize_render_size();
   if (surface_changed_callback_) {
     surface_changed_callback_();
   }
@@ -403,7 +491,7 @@ void QtViewportSurface::exposeEvent(QExposeEvent *event) {
 
 void QtViewportSurface::resizeEvent(QResizeEvent *event) {
   QWindow::resizeEvent(event);
-  resize_renderer_to_surface();
+  synchronize_render_size();
   if (surface_changed_callback_) {
     surface_changed_callback_();
   }
@@ -492,6 +580,11 @@ void QtViewportSurface::record_focus_in() { input_->focused = true; }
 
 void QtViewportSurface::record_focus_out() {
   input_->focused = false;
+  // Native grabs can be dropped by the window manager before the next app
+  // frame. Release Quader's logical capture immediately so the cursor cannot
+  // remain hidden or be re-centered after focus moves elsewhere.
+  const bool capture_was_stolen = native_capture_loss_pending_;
+  set_pointer_capture(false);
   for (const auto &[key, chord] : input_->active_keys) {
     (void)key;
     input_->released.push_back(chord);
@@ -505,9 +598,10 @@ void QtViewportSurface::record_focus_out() {
   }
   input_->middle_drag.reset();
   input_->right_drag.reset();
-  input_->left_released = input_->left_down;
-  input_->middle_released = input_->middle_down;
-  input_->right_released = input_->right_down;
+  input_->left_released = input_->left_released || input_->left_down;
+  input_->middle_released = input_->middle_released || input_->middle_down;
+  input_->right_released =
+      input_->right_released || (input_->right_down && !capture_was_stolen);
   input_->left_down = false;
   input_->middle_down = false;
   input_->right_down = false;
@@ -659,7 +753,7 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
       input_->mouse_local = local;
       input_->mouse_screen = screen;
       input_->has_mouse_position = true;
-      input_->hovered = input_->pointer_captured ||
+      input_->hovered = pointer_captured() ||
                         (event_local.x() >= 0 && event_local.y() >= 0 &&
                          event_local.x() < width() &&
                          event_local.y() < height());
@@ -670,7 +764,15 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
     input_->suppress_warp_event = false;
   }
   if (input_->has_mouse_position) {
-    input_->mouse_delta = input_->mouse_delta + (local - input_->mouse_local);
+    const QVec2 absolute_delta = local - input_->mouse_local;
+    if (pointer_captured()) {
+      // Raw input is the captured navigation source on Windows. The portable
+      // fallback uses accepted absolute Qt motion but never warp-generated
+      // events, which returned through the suppression branch above.
+      relative_pointer_input_.add_fallback_delta(absolute_delta);
+    } else {
+      input_->mouse_delta = input_->mouse_delta + absolute_delta;
+    }
   }
   input_->mouse_local = local;
   input_->mouse_screen = screen;
@@ -679,8 +781,34 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
   input_->modifiers = viewport_modifiers(event.modifiers());
 }
 
+void QtViewportSurface::record_native_pointer_capture_lost() {
+  if (!pointer_captured()) {
+    native_capture_loss_pending_ = false;
+    return;
+  }
+  const bool capture_was_stolen = native_capture_loss_pending_;
+  set_pointer_capture(false);
+  if (input_->right_drag.has_value()) {
+    input_->released.push_back(*input_->right_drag);
+    input_->right_drag.reset();
+  }
+  // Capture theft cancels fly navigation, but it is not a physical button-up
+  // and must not synthesize a click that can open the viewport context menu.
+  if (capture_was_stolen) {
+    input_->right_down = false;
+  }
+}
+
+bool QtViewportSurface::apply_native_mouse_grab(bool captured) {
+  const bool qt_result = setMouseGrabEnabled(captured);
+  const PlatformPointerCapturePostcondition postcondition =
+      platform_pointer_capture_postcondition(native_window_handle(), captured);
+  return platform_pointer_capture_transition_achieved(qt_result,
+                                                      postcondition);
+}
+
 void QtViewportSurface::recenter_captured_pointer() {
-  if (input_ == nullptr || !input_->pointer_captured || width() <= 0 ||
+  if (input_ == nullptr || !pointer_captured() || width() <= 0 ||
       height() <= 0) {
     return;
   }
@@ -751,13 +879,19 @@ void QtViewportSurface::recreate_swap_chain() {
   }
 }
 
-void QtViewportSurface::resize_renderer_to_surface() {
+void QtViewportSurface::synchronize_render_size() {
   if (!initialized_) {
     return;
   }
   const QVec2 size = render_size_pixels();
-  renderer_.resize(static_cast<std::uint32_t>(std::max(1.0f, size.x)),
-                   static_cast<std::uint32_t>(std::max(1.0f, size.y)));
+  const std::uint32_t width =
+      static_cast<std::uint32_t>(std::max(1.0f, size.x));
+  const std::uint32_t height =
+      static_cast<std::uint32_t>(std::max(1.0f, size.y));
+  if (renderer_.width() == width && renderer_.height() == height) {
+    return;
+  }
+  renderer_.resize(width, height);
 }
 
 void *QtViewportSurface::native_window_handle() const {

@@ -300,17 +300,19 @@ struct QtMainMenu::Impl {
     bool_setting_actions.push_back(
         {snap, ViewportBoolSettingId::GridSnap});
     align_menu->addSeparator();
-    constexpr std::array<std::pair<QuaderTransformAxis, std::string_view>, 3>
+    constexpr std::array<
+        std::tuple<QuaderTransformAxis, std::string_view, std::string_view>, 3>
         kAxes{{
-            {QuaderTransformAxis::X, "X"},
-            {QuaderTransformAxis::Y, "Y"},
-            {QuaderTransformAxis::Z, "Z"},
+            {QuaderTransformAxis::X, "ui.menu.align.axis_x", "X"},
+            {QuaderTransformAxis::Y, "ui.menu.align.axis_y", "Y"},
+            {QuaderTransformAxis::Z, "ui.menu.align.axis_z", "Z"},
         }};
-    for (const auto &[axis, label] : kAxes) {
-      QMenu *axis_menu = align_menu->addMenu(QString::fromUtf8(label.data()));
+    for (const auto &[axis, key, fallback] : kAxes) {
+      QMenu *axis_menu =
+          align_menu->addMenu(qtext(context.localization, key, fallback));
       axis_menu->setObjectName(
           QStringLiteral("menu_align_%1")
-              .arg(QString::fromUtf8(label.data()).toLower()));
+              .arg(QString::fromUtf8(fallback.data()).toLower()));
       for (QuaderMeshAlignment alignment :
            {QuaderMeshAlignment::Minimum, QuaderMeshAlignment::Center,
             QuaderMeshAlignment::Maximum}) {
@@ -334,8 +336,9 @@ struct QtMainMenu::Impl {
           QStringLiteral("menu_%1")
               .arg(QString::fromUtf8(key.data(),
                                      static_cast<qsizetype>(key.size()))));
-      for (const auto &[axis, label] : kAxes) {
-        (void)label;
+      for (const auto &[axis, key, fallback] : kAxes) {
+        (void)key;
+        (void)fallback;
         add_arrangement_action(
             *distribution_menu,
             arrangement_descriptor(QuaderMeshArrangementKind::Distribution,

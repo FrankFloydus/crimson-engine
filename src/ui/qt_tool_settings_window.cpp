@@ -9,6 +9,7 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
+#include "ui/qt_tool_settings_number_slider.hpp"
 
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -22,6 +23,7 @@
 #include <QRadioButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QSlider>
 #include <QSpinBox>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -212,6 +214,8 @@ struct QtToolSettingsWindow::Impl {
     QCheckBox *toggle = nullptr;
     QSpinBox *integer = nullptr;
     QDoubleSpinBox *floating = nullptr;
+    QSlider *number_slider = nullptr;
+    QtToolSettingsNumberSliderMapping number_slider_mapping;
     std::vector<ChoiceWidget> choices;
   };
 
@@ -425,30 +429,74 @@ private:
       field_label->setObjectName(object_name + QStringLiteral(".label"));
       row_layout->addWidget(field_label);
 
-      if (uses_integer_spin_box(control)) {
+      const bool integer_control = uses_integer_spin_box(control);
+      const QtToolSettingsNumberSliderMapping slider_mapping =
+          qt_tool_settings_number_slider_mapping(
+              control.min_value, control.max_value, integer_control);
+      auto *slider = new QSlider(Qt::Horizontal, row);
+      slider->setObjectName(object_name + QStringLiteral(".slider"));
+      slider->setAccessibleName(label);
+      slider->setRange(slider_mapping.slider_minimum,
+                       slider_mapping.slider_maximum);
+      slider->setTracking(true);
+      row_layout->addWidget(slider, 1);
+      binding.number_slider = slider;
+      binding.number_slider_mapping = slider_mapping;
+
+      const auto dispatch_number =
+          [this, tool_id = target.tool_id,
+           control_id = control.id](double value) {
+            if (editor_ == nullptr) {
+              return;
+            }
+            const QuaderApiVoidResult result =
+                editor_->tools().set_setting(tool_id, control_id, value);
+            log_failure("Tool settings update", result);
+            if (!result.ok()) {
+              schedule_refresh();
+            }
+          };
+
+      if (integer_control) {
         auto *spin = new QSpinBox(row);
         spin->setObjectName(object_name);
         spin->setAccessibleName(label);
-        spin->setRange(static_cast<int>(std::llround(control.min_value)),
-                       static_cast<int>(std::llround(control.max_value)));
+        spin->setRange(slider_mapping.slider_minimum,
+                       slider_mapping.slider_maximum);
         spin->setSingleStep(
             std::max(1, static_cast<int>(std::llround(control.step))));
+        slider->setSingleStep(spin->singleStep());
+        QObject::connect(
+            slider, &QSlider::valueChanged, &window_,
+            [this, spin, slider_mapping, dispatch_number](int position) {
+              if (editor_ == nullptr || synchronizing_) {
+                return;
+              }
+              const int value = static_cast<int>(std::llround(
+                  qt_tool_settings_number_slider_value(slider_mapping,
+                                                       position)));
+              {
+                const QSignalBlocker spin_blocker(spin);
+                spin->setValue(value);
+              }
+              dispatch_number(static_cast<double>(value));
+            });
         QObject::connect(spin, &QSpinBox::valueChanged, &window_,
-                         [this, tool_id = target.tool_id,
-                          control_id = control.id](int value) {
+                         [this, slider, slider_mapping,
+                          dispatch_number](int value) {
                            if (editor_ == nullptr || synchronizing_) {
                              return;
                            }
-                           const QuaderApiVoidResult result =
-                               editor_->tools().set_setting(
-                                   tool_id, control_id,
-                                   static_cast<double>(value));
-                           log_failure("Tool settings update", result);
-                           if (!result.ok()) {
-                             schedule_refresh();
+                           {
+                             const QSignalBlocker slider_blocker(slider);
+                             slider->setValue(
+                                 qt_tool_settings_number_slider_position(
+                                     slider_mapping,
+                                     static_cast<double>(value)));
                            }
+                           dispatch_number(static_cast<double>(value));
                          });
-        row_layout->addWidget(spin, 1);
+        row_layout->addWidget(spin);
         field_label->setBuddy(spin);
         binding.integer = spin;
       } else {
@@ -461,22 +509,40 @@ private:
         spin->setSingleStep(std::isfinite(control.step) && control.step > 0.0
                                 ? control.step
                                 : 0.001);
-        spin->setDecimals(decimal_places_for_step(control.step));
+        // The legacy ImGui slider displayed four decimal places. Preserve at
+        // least that precision so descriptor endpoints such as 0.0625 remain
+        // representable by the paired stock Fusion spin box.
+        spin->setDecimals(
+            std::max(4, decimal_places_for_step(control.step)));
+        QObject::connect(
+            slider, &QSlider::valueChanged, &window_,
+            [this, spin, slider_mapping, dispatch_number](int position) {
+              if (editor_ == nullptr || synchronizing_) {
+                return;
+              }
+              const double value = qt_tool_settings_number_slider_value(
+                  slider_mapping, position);
+              {
+                const QSignalBlocker spin_blocker(spin);
+                spin->setValue(value);
+              }
+              dispatch_number(spin->value());
+            });
         QObject::connect(spin, &QDoubleSpinBox::valueChanged, &window_,
-                         [this, tool_id = target.tool_id,
-                          control_id = control.id](double value) {
+                         [this, slider, slider_mapping,
+                          dispatch_number](double value) {
                            if (editor_ == nullptr || synchronizing_) {
                              return;
                            }
-                           const QuaderApiVoidResult result =
-                               editor_->tools().set_setting(tool_id, control_id,
-                                                            value);
-                           log_failure("Tool settings update", result);
-                           if (!result.ok()) {
-                             schedule_refresh();
+                           {
+                             const QSignalBlocker slider_blocker(slider);
+                             slider->setValue(
+                                 qt_tool_settings_number_slider_position(
+                                     slider_mapping, value));
                            }
+                           dispatch_number(value);
                          });
-        row_layout->addWidget(spin, 1);
+        row_layout->addWidget(spin);
         field_label->setBuddy(spin);
         binding.floating = spin;
       }
@@ -566,6 +632,12 @@ private:
       if (binding.floating != nullptr) {
         const QSignalBlocker blocker(binding.floating);
         binding.floating->setValue(control.number_value);
+      }
+      if (binding.number_slider != nullptr) {
+        const QSignalBlocker blocker(binding.number_slider);
+        binding.number_slider->setValue(
+            qt_tool_settings_number_slider_position(
+                binding.number_slider_mapping, control.number_value));
       }
       for (std::size_t option_index = 0;
            option_index < binding.choices.size() &&
