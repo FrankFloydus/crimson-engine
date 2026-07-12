@@ -11,6 +11,7 @@
 #include "editor/viewport/viewport_interaction_controller.hpp"
 #include "render/render_system.hpp"
 #include "ui/qt_navigation_gizmo.hpp"
+#include "ui/qt_startup_presentation.hpp"
 #include "ui/qt_viewport_context_menu.hpp"
 #include "ui/qt_viewport_delete_popup.hpp"
 #include "ui/qt_viewport_surface.hpp"
@@ -67,6 +68,10 @@ public:
   void set_viewport_settings(const ViewportSettings &settings);
   void set_render_performance_stats(RenderFramePerformanceStats stats);
   void set_localization(LocalizationService &localization);
+  void set_startup_presentation_blocked(bool blocked);
+  [[nodiscard]] bool startup_presentation_blocked() const {
+    return startup_presentation_blocked_;
+  }
   void refresh_workspace_layout();
   void process_input(QuaderEditorApi &editor, SceneDocument &document,
                      AssetRegistry &assets, ModelingSessionService &modeling,
@@ -200,6 +205,8 @@ private:
   std::uint64_t viewport_info_cached_primitives_ = 0;
   std::uint64_t viewport_info_cached_draw_calls_ = 0;
   bool viewport_info_scene_stats_valid_ = false;
+  QtStartupPresentationState native_surface_startup_;
+  bool startup_presentation_blocked_ = true;
   bool initialized_ = false;
 };
 

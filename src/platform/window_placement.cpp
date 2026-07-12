@@ -9,6 +9,16 @@
 #include <algorithm>
 #include <cstdint>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#endif
+
 namespace quader {
 namespace {
 
@@ -71,6 +81,39 @@ PlatformWindowChromeFrame platform_window_recover_frame_to_display_work_area(
   frame.y = clamp_origin(frame.y, frame.height, target_area->y,
                          std::max(1, target_area->height));
   return frame;
+}
+
+bool platform_window_is_maximized(void *native_window_handle) {
+#if defined(_WIN32)
+  if (native_window_handle == nullptr) {
+    return false;
+  }
+  return IsZoomed(static_cast<HWND>(native_window_handle)) != FALSE;
+#else
+  (void)native_window_handle;
+  return false;
+#endif
+}
+
+PlatformWindowClientExtent
+platform_window_client_extent(void *native_window_handle) {
+#if defined(_WIN32)
+  if (native_window_handle == nullptr) {
+    return {};
+  }
+  RECT client{};
+  if (GetClientRect(static_cast<HWND>(native_window_handle), &client) == FALSE) {
+    return {};
+  }
+  return {
+      .width = static_cast<int>(std::max<LONG>(0, client.right - client.left)),
+      .height =
+          static_cast<int>(std::max<LONG>(0, client.bottom - client.top)),
+  };
+#else
+  (void)native_window_handle;
+  return {};
+#endif
 }
 
 } // namespace quader

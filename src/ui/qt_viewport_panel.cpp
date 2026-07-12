@@ -55,6 +55,7 @@
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QVBoxLayout>
+#include <QWindow>
 
 #include <algorithm>
 #include <array>
@@ -960,6 +961,7 @@ QtViewportPanel::QtViewportPanel(QWidget *parent) : QWidget(parent) {
   setObjectName(QStringLiteral("viewportWorkspace"));
   setMinimumSize(300, 200);
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+  setAutoFillBackground(true);
 
   panes_[viewport_pane_index(ViewportPaneId::Perspective)].id =
       ViewportPaneId::Perspective;
@@ -1002,8 +1004,10 @@ bool QtViewportPanel::initialize(RenderSystem &render_system) {
     return true;
   }
   render_system_ = &render_system;
+  native_surface_startup_ = {};
   bool success = true;
   for (Pane &pane_state : panes_) {
+    pane_state.surface_container->hide();
     success =
         pane_state.surface->initialize(
             render_system,
@@ -1022,6 +1026,7 @@ void QtViewportPanel::shutdown() {
   }
   for (Pane &pane_state : panes_) {
     pane_state.navigation_gizmo->set_camera(nullptr);
+    pane_state.surface_container->hide();
     if (pane_state.surface != nullptr) {
       pane_state.surface->set_pointer_capture(false);
       pane_state.surface->shutdown();
@@ -1037,6 +1042,8 @@ void QtViewportPanel::shutdown() {
   modal_tool_owns_viewport_snapshot_ = false;
   pending_external_pointer_event_ = false;
   pending_external_pointer_left_release_only_ = true;
+  native_surface_startup_ = {};
+  startup_presentation_blocked_ = true;
   initialized_ = false;
   render_system_ = nullptr;
   if (workspace_ != nullptr) {
@@ -1070,6 +1077,27 @@ void QtViewportPanel::set_localization(LocalizationService &localization) {
   }
 }
 
+void QtViewportPanel::set_startup_presentation_blocked(bool blocked) {
+  if (startup_presentation_blocked_ == blocked) {
+    return;
+  }
+  startup_presentation_blocked_ = blocked;
+  native_surface_startup_ = {};
+  if (blocked) {
+    for (Pane &pane_state : panes_) {
+      pane_state.surface_container->hide();
+      pane_state.frame->hide();
+    }
+    focused_pane_frame_->hide();
+    for (SplitHandleHost &handle : split_handles_) {
+      handle.widget->hide();
+    }
+    return;
+  }
+  displayed_placements_.clear();
+  refresh_workspace_layout();
+}
+
 void QtViewportPanel::refresh_workspace_layout() {
   if (workspace_ == nullptr) {
     return;
@@ -1080,6 +1108,7 @@ void QtViewportPanel::refresh_workspace_layout() {
       !same_pane_placements(displayed_placements_, placements);
   displayed_layout_ = workspace_->layout();
   if (geometry_changed) {
+    qt_invalidate_startup_presentation_geometry(native_surface_startup_);
     displayed_placements_ = placements;
     update_pane_geometry();
   }
@@ -1367,7 +1396,39 @@ std::size_t QtViewportPanel::render_viewports() {
   const ViewportProbeClock::time_point render_start =
       diagnostics_enabled ? ViewportProbeClock::now()
                           : ViewportProbeClock::time_point{};
-  if (!initialized_ || workspace_ == nullptr || render_system_ == nullptr) {
+  if (!initialized_ || startup_presentation_blocked_ || workspace_ == nullptr ||
+      render_system_ == nullptr) {
+    return 0u;
+  }
+  const qreal pixel_scale = devicePixelRatioF();
+  const int host_width_pixels =
+      static_cast<int>(std::lround(width() * pixel_scale));
+  const int host_height_pixels =
+      static_cast<int>(std::lround(height() * pixel_scale));
+  const QWindow *host_window =
+      window() != nullptr ? window()->windowHandle() : nullptr;
+  const std::uint64_t geometry_signature =
+      (static_cast<std::uint64_t>(static_cast<std::uint32_t>(
+           host_width_pixels))
+       << 32u) |
+      static_cast<std::uint32_t>(host_height_pixels);
+  const QtStartupPresentationAction startup_action =
+      qt_startup_presentation_action(
+          native_surface_startup_,
+          host_window != nullptr && host_window->isExposed(),
+          geometry_signature);
+  if (!qt_startup_native_child_should_be_visible(startup_action)) {
+    for (Pane &pane_state : panes_) {
+      pane_state.surface_container->hide();
+    }
+    return 0u;
+  }
+  if (startup_action == QtStartupPresentationAction::GeometryStabilized) {
+    for (Pane &pane_state : panes_) {
+      pane_state.surface_container->show();
+      update_pane_overlay_geometry(pane_state);
+    }
+    update_focused_pane_indicator();
     return 0u;
   }
   render_system_->begin_presentation_frame();
@@ -1554,6 +1615,7 @@ bool QtViewportPanel::eventFilter(QObject *watched, QEvent *event) {
 
 void QtViewportPanel::resizeEvent(QResizeEvent *event) {
   QWidget::resizeEvent(event);
+  qt_invalidate_startup_presentation_geometry(native_surface_startup_);
   update_pane_geometry();
 }
 
@@ -1566,6 +1628,7 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   pane_state.frame->setFrameShape(QFrame::StyledPanel);
   pane_state.frame->setSizePolicy(QSizePolicy::Expanding,
                                   QSizePolicy::Expanding);
+  pane_state.frame->hide();
 
   pane_state.surface = new QtViewportSurface(pane_state.id);
   pane_state.surface_container =
@@ -1578,6 +1641,7 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   pane_state.surface_container->setSizePolicy(QSizePolicy::Expanding,
                                               QSizePolicy::Expanding);
   pane_state.surface_container->setGeometry(pane_state.frame->rect());
+  pane_state.surface_container->hide();
   pane_state.surface_container->installEventFilter(pane_state.surface);
   pane_state.surface->set_focus_request_callback(
       [this](ViewportPaneId pane_id, ViewportPaneFocusTrigger trigger) {
@@ -1720,7 +1784,8 @@ void QtViewportPanel::update_pane_geometry() {
   }
   for (Pane &pane_state : panes_) {
     pane_state.frame->setVisible(
-        active[viewport_pane_index(pane_state.id)]);
+        active[viewport_pane_index(pane_state.id)] &&
+        !startup_presentation_blocked_);
   }
   update_split_handles();
   update_focused_pane_indicator();
@@ -1776,6 +1841,10 @@ void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
 
 void QtViewportPanel::update_focused_pane_indicator() {
   if (workspace_ == nullptr || focused_pane_frame_ == nullptr) {
+    return;
+  }
+  if (startup_presentation_blocked_) {
+    focused_pane_frame_->hide();
     return;
   }
   const std::vector<ViewportPanePlacement> placements =
@@ -1990,7 +2059,7 @@ void QtViewportPanel::draw_viewport_info_overlay(
 }
 
 void QtViewportPanel::update_split_handles() {
-  if (workspace_ == nullptr) {
+  if (workspace_ == nullptr || startup_presentation_blocked_) {
     for (SplitHandleHost &host : split_handles_) {
       host.visible = false;
       host.widget->hide();

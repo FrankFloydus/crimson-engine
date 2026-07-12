@@ -241,7 +241,10 @@ void App::apply_window_settings() {
                       std::max(kPlatformWindowMinimumWidth, frame.width),
                       std::max(kPlatformWindowMinimumHeight, frame.height));
   if (placement->maximized) {
-    window->showMaximized();
+    // Configure placement while hidden so UISystem remains the sole owner of
+    // mapping the composed shell and suppresses painting until the native
+    // maximized state and retained dock layout have both stabilized.
+    window->setWindowState(window->windowState() | Qt::WindowMaximized);
   }
 }
 

@@ -12,13 +12,15 @@
 #include "render/render_performance_stats.hpp"
 #include "ui/qt_auxiliary_window_state.hpp"
 #include "ui/qt_main_menu.hpp"
+#include "ui/qt_startup_presentation.hpp"
 #include "ui/ui_panel_manager.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/viewport_settings.hpp"
 
-#include <filesystem>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -94,6 +96,13 @@ private:
   QDockWidget &create_dock(UIPanelId id, QWidget &content,
                            int default_area);
   void restore_window_state();
+  void prepare_startup_presentation();
+  void advance_startup_presentation();
+  void finish_startup_presentation(bool forced_fallback);
+  [[nodiscard]] bool startup_layout_ready() const;
+  [[nodiscard]] std::uint64_t startup_layout_geometry_signature(
+      int native_client_width_pixels,
+      int native_client_height_pixels) const;
   void save_auxiliary_window_state();
   void synchronize_auxiliary_window_visibility();
   void refresh_status_bar();
@@ -132,6 +141,9 @@ private:
   AssetId default_material_ = kInvalidAssetId;
   FrameTiming frame_timing_{};
   RenderFramePerformanceStats render_performance_{};
+  QtStartupPresentationState startup_presentation_;
+  std::chrono::steady_clock::time_point startup_presentation_started_{};
+  bool startup_expected_maximized_ = false;
   bool initialized_ = false;
   bool ui_settings_changed_ = false;
   std::string localized_locale_;

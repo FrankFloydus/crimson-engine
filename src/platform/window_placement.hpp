@@ -27,6 +27,12 @@ struct PlatformWindowPlacement {
   bool maximized = false;
 };
 
+/// Physical-pixel extent of a native top-level window's client area.
+struct PlatformWindowClientExtent {
+  int width = 0;
+  int height = 0;
+};
+
 /**
  * Clamps a persisted window rectangle to the visible desktop work areas.
  * The first work area is the fallback for a rectangle that no longer
@@ -36,5 +42,12 @@ struct PlatformWindowPlacement {
 platform_window_recover_frame_to_display_work_area(
     PlatformWindowChromeFrame frame,
     std::span<const PlatformWindowChromeFrame> display_work_areas);
+
+/** Returns whether the native top-level window has reached its maximized OS state. */
+[[nodiscard]] bool platform_window_is_maximized(void *native_window_handle);
+
+/** Returns the native client-area extent in physical pixels, or an empty extent. */
+[[nodiscard]] PlatformWindowClientExtent
+platform_window_client_extent(void *native_window_handle);
 
 } // namespace quader

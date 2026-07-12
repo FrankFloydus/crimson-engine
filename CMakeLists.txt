@@ -509,7 +509,8 @@ if(WIN32)
     target_link_libraries(quader_platform
         PRIVATE
             Dbghelp
-            Comdlg32)
+            Comdlg32
+            User32)
 endif()
 
 add_library(quader_render STATIC
@@ -625,6 +626,7 @@ target_link_libraries(quader_ui
         quader_render
         Qt6::Widgets
     PRIVATE
+        quader_platform
         quader_modeling_profile)
 target_compile_features(quader_ui PUBLIC cxx_std_20)
 
@@ -855,6 +857,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_input_adapter_tests.cpp
         tests/qt_navigation_gizmo_tests.cpp
         tests/qt_settings_controller_tests.cpp
+        tests/qt_startup_presentation_tests.cpp
         tests/qt_viewport_fly_navigation_hud_tests.cpp
         tests/qt_viewport_delete_popup_tests.cpp
         tests/qstr_tests.cpp

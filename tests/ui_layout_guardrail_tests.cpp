@@ -207,6 +207,150 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
+     StartupSuppressesWholeShellUntilFinalDockLayoutAndNativePresentation) {
+  const std::string app_source = read_source_file("src/app/app.cpp");
+  const std::string ui_header = read_source_file("src/ui/ui_system.hpp");
+  const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string viewport_header =
+      read_source_file("src/ui/qt_viewport_panel.hpp");
+  const std::string viewport_source =
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string startup_policy =
+      read_source_file("src/ui/qt_startup_presentation.hpp");
+
+  const std::size_t ui_initialize =
+      ui_source.find("bool UISystem::initialize(");
+  const std::size_t ui_install_hooks =
+      ui_source.find("void UISystem::install_runtime_hooks(", ui_initialize);
+  ASSERT_NE(ui_initialize, std::string::npos);
+  ASSERT_NE(ui_install_hooks, std::string::npos);
+  const std::string_view initialize_body(ui_source.data() + ui_initialize,
+                                         ui_install_hooks - ui_initialize);
+  const std::size_t create_docks = initialize_body.find("create_docks();");
+  const std::size_t restore_state =
+      initialize_body.find("restore_window_state();", create_docks);
+  ASSERT_NE(create_docks, std::string_view::npos);
+  ASSERT_NE(restore_state, std::string_view::npos);
+  EXPECT_LT(create_docks, restore_state);
+  EXPECT_EQ(count_occurrences(initialize_body, "create_docks();"), 1u);
+
+  const std::size_t create_docks_owner =
+      ui_source.find("void UISystem::create_docks()");
+  const std::size_t create_dock_factory =
+      ui_source.find("QDockWidget &UISystem::create_dock(",
+                     create_docks_owner);
+  ASSERT_NE(create_docks_owner, std::string::npos);
+  ASSERT_NE(create_dock_factory, std::string::npos);
+  const std::string_view create_docks_body(
+      ui_source.data() + create_docks_owner,
+      create_dock_factory - create_docks_owner);
+  for (std::string_view panel : {"UIPanelId::Outliner", "UIPanelId::Inspector",
+                                 "UIPanelId::Console"}) {
+    EXPECT_EQ(count_occurrences(create_docks_body, panel), 1u) << panel;
+  }
+
+  const std::size_t apply_window_settings =
+      app_source.find("void App::apply_window_settings()");
+  const std::size_t save_window_settings =
+      app_source.find("void App::save_window_settings()", apply_window_settings);
+  ASSERT_NE(apply_window_settings, std::string::npos);
+  ASSERT_NE(save_window_settings, std::string::npos);
+  const std::string_view apply_body(
+      app_source.data() + apply_window_settings,
+      save_window_settings - apply_window_settings);
+  expect_contains(apply_body, "window->setGeometry(");
+  expect_contains(
+      apply_body,
+      "window->setWindowState(window->windowState() | Qt::WindowMaximized)");
+  expect_missing(apply_body, "showMaximized(");
+  expect_missing(apply_body, "showNormal(");
+  expect_missing(apply_body, "window->show(");
+
+  const std::size_t show_owner = ui_source.find("void UISystem::show()");
+  const std::size_t shutdown_owner =
+      ui_source.find("void UISystem::shutdown()", show_owner);
+  ASSERT_NE(show_owner, std::string::npos);
+  ASSERT_NE(shutdown_owner, std::string::npos);
+  const std::string_view show_body(ui_source.data() + show_owner,
+                                   shutdown_owner - show_owner);
+  EXPECT_EQ(count_occurrences(show_body, "main_window_->show()"), 1u);
+  const std::size_t prepare_shell =
+      show_body.find("prepare_startup_presentation()");
+  const std::size_t show_shell = show_body.find("main_window_->show()");
+  ASSERT_NE(prepare_shell, std::string_view::npos);
+  ASSERT_NE(show_shell, std::string_view::npos);
+  EXPECT_LT(prepare_shell, show_shell);
+
+  expect_contains(ui_header, "QtStartupPresentationState");
+  expect_contains(ui_source, "main_window_->setUpdatesEnabled(false)");
+  expect_contains(ui_source,
+                  "viewport_panel_->set_startup_presentation_blocked(true)");
+  expect_contains(ui_source, "platform_window_is_maximized(");
+  expect_contains(ui_source, "platform_window_client_extent(");
+  expect_contains(ui_source, "qt_startup_client_extents_match(");
+  expect_contains(ui_source, "startup_layout_ready()");
+  expect_contains(ui_source, "startup_layout_geometry_signature(");
+  expect_contains(ui_source, "main_window_->devicePixelRatioF()");
+  expect_contains(ui_source, "main_window_->setUpdatesEnabled(true)");
+  const std::size_t timeout_guard =
+      ui_source.find("kStartupPresentationTimeout");
+  const std::size_t timeout_hard_invariants =
+      ui_source.find("hard_invariants_ready", timeout_guard);
+  const std::size_t timeout_finish =
+      ui_source.find("finish_startup_presentation(true)", timeout_guard);
+  ASSERT_NE(timeout_guard, std::string::npos);
+  ASSERT_NE(timeout_hard_invariants, std::string::npos);
+  ASSERT_NE(timeout_finish, std::string::npos);
+  EXPECT_LT(timeout_hard_invariants, timeout_finish);
+
+  const std::size_t finish_shell =
+      ui_source.find("void UISystem::finish_startup_presentation(");
+  const std::size_t release_panes = ui_source.find(
+      "viewport_panel_->set_startup_presentation_blocked(false)",
+      finish_shell);
+  const std::size_t enable_updates =
+      ui_source.find("main_window_->setUpdatesEnabled(true)", release_panes);
+  const std::size_t repaint_shell =
+      ui_source.find("main_window_->repaint()", enable_updates);
+  ASSERT_NE(finish_shell, std::string::npos);
+  ASSERT_NE(release_panes, std::string::npos);
+  ASSERT_NE(enable_updates, std::string::npos);
+  ASSERT_NE(repaint_shell, std::string::npos);
+  EXPECT_LT(release_panes, enable_updates);
+  EXPECT_LT(enable_updates, repaint_shell);
+
+  expect_contains(startup_policy, "consecutive_equal_samples");
+  expect_contains(ui_source, "main_window_->updatesEnabled()");
+  expect_contains(ui_source,
+                  "!viewport_panel_->startup_presentation_blocked()");
+  expect_contains(viewport_header, "set_startup_presentation_blocked(");
+  expect_contains(viewport_source,
+                  "!startup_presentation_blocked_");
+
+  const std::size_t render_viewports =
+      viewport_source.find("std::size_t QtViewportPanel::render_viewports()");
+  const std::size_t startup_gate = viewport_source.find(
+      "qt_startup_presentation_action(", render_viewports);
+  const std::size_t invalidated_surface_hide =
+      viewport_source.find("surface_container->hide()", startup_gate);
+  const std::size_t reveal_surface =
+      viewport_source.find("surface_container->show()", startup_gate);
+  const std::size_t exposure_turn =
+      viewport_source.find("return 0u;", reveal_surface);
+  const std::size_t begin_presentation = viewport_source.find(
+      "render_system_->begin_presentation_frame()", reveal_surface);
+  ASSERT_NE(render_viewports, std::string::npos);
+  ASSERT_NE(startup_gate, std::string::npos);
+  ASSERT_NE(invalidated_surface_hide, std::string::npos);
+  ASSERT_NE(reveal_surface, std::string::npos);
+  ASSERT_NE(exposure_turn, std::string::npos);
+  ASSERT_NE(begin_presentation, std::string::npos);
+  EXPECT_LT(invalidated_surface_hide, reveal_surface);
+  EXPECT_LT(reveal_surface, exposure_turn);
+  EXPECT_LT(exposure_turn, begin_presentation);
+}
+
+TEST(UiLayoutGuardrailTests,
      OutlinerInspectorAndConsoleUseStockWidgetsAndStableNames) {
   const std::string outliner_header =
       read_source_file("src/ui/outliner_panel.hpp");

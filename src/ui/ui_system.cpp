@@ -30,12 +30,17 @@
 #include <QDockWidget>
 #include <QIcon>
 #include <QLabel>
+#include <QLayout>
 #include <QMainWindow>
 #include <QMenuBar>
+#include <QRect>
 #include <QStatusBar>
 #include <QWidget>
+#include <QWindow>
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -379,11 +384,8 @@ void UISystem::install_runtime_hooks(
 
 void UISystem::show() {
   if (main_window_ != nullptr && !main_window_->isVisible()) {
+    prepare_startup_presentation();
     main_window_->show();
-  }
-  if (auxiliary_window_state_.settings_dialog_visible &&
-      settings_dialog_ != nullptr && !settings_dialog_->isVisible()) {
-    show_settings_dialog();
   }
 }
 
@@ -409,6 +411,9 @@ void UISystem::shutdown() {
   panels_.set_visibility_changed_callback({});
   main_menu_.reset();
   main_window_.reset();
+  startup_presentation_ = {};
+  startup_presentation_started_ = {};
+  startup_expected_maximized_ = false;
   viewport_panel_ = nullptr;
   outliner_panel_ = nullptr;
   inspector_panel_ = nullptr;
@@ -435,6 +440,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   if (viewport_panel_ != nullptr) {
     viewport_panel_->set_render_performance_stats(render_performance_);
   }
+  advance_startup_presentation();
   if (!initialized_ || editor_ == nullptr || document_ == nullptr ||
       assets_ == nullptr || modeling_ == nullptr || selection_ == nullptr) {
     return;
@@ -547,7 +553,9 @@ void *UISystem::native_window_handle() const {
 
 bool UISystem::can_render_viewports() const {
   return main_window_ != nullptr && main_window_->isVisible() &&
-         !main_window_->isMinimized();
+         !main_window_->isMinimized() && main_window_->updatesEnabled() &&
+         viewport_panel_ != nullptr &&
+         !viewport_panel_->startup_presentation_blocked();
 }
 
 bool UISystem::save_settings() {
@@ -651,6 +659,163 @@ void UISystem::restore_window_state() {
   }
 }
 
+void UISystem::prepare_startup_presentation() {
+  if (main_window_ == nullptr || viewport_panel_ == nullptr) {
+    return;
+  }
+  startup_presentation_ = {};
+  startup_presentation_started_ = std::chrono::steady_clock::now();
+  startup_expected_maximized_ =
+      main_window_->windowState().testFlag(Qt::WindowMaximized);
+  viewport_panel_->set_startup_presentation_blocked(true);
+  main_window_->setUpdatesEnabled(false);
+}
+
+void UISystem::advance_startup_presentation() {
+  if (main_window_ == nullptr || main_window_->updatesEnabled()) {
+    return;
+  }
+  if (QLayout *layout = main_window_->layout()) {
+    (void)layout->activate();
+  }
+  const QWindow *host_window = main_window_->windowHandle();
+  void *const native_handle = native_window_handle();
+  const PlatformWindowClientExtent native_client =
+      platform_window_client_extent(native_handle);
+  const qreal pixel_scale = main_window_->devicePixelRatioF();
+  const int retained_client_width_pixels =
+      static_cast<int>(std::lround(main_window_->width() * pixel_scale));
+  const int retained_client_height_pixels =
+      static_cast<int>(std::lround(main_window_->height() * pixel_scale));
+  const bool native_state_ready =
+      !startup_expected_maximized_ ||
+      platform_window_is_maximized(native_handle);
+  const bool native_client_ready = qt_startup_client_extents_match(
+      retained_client_width_pixels, retained_client_height_pixels,
+      native_client.width, native_client.height);
+  const bool layout_ready = startup_layout_ready();
+  const bool hard_invariants_ready =
+      host_window != nullptr && host_window->isExposed() &&
+      !main_window_->isMinimized() && native_state_ready &&
+      native_client_ready && layout_ready;
+  const QtStartupPresentationAction action = qt_startup_presentation_action(
+      startup_presentation_, hard_invariants_ready,
+      hard_invariants_ready
+          ? startup_layout_geometry_signature(native_client.width,
+                                              native_client.height)
+          : 0u);
+  if (action == QtStartupPresentationAction::PresentationReady) {
+    finish_startup_presentation(false);
+    return;
+  }
+
+  constexpr auto kStartupPresentationTimeout = std::chrono::seconds(2);
+  if (startup_presentation_started_ !=
+          std::chrono::steady_clock::time_point{} &&
+      std::chrono::steady_clock::now() - startup_presentation_started_ >=
+          kStartupPresentationTimeout &&
+      hard_invariants_ready) {
+    finish_startup_presentation(true);
+  }
+}
+
+void UISystem::finish_startup_presentation(bool forced_fallback) {
+  if (main_window_ == nullptr || main_window_->updatesEnabled()) {
+    return;
+  }
+  if (forced_fallback) {
+    LOG_WARN("Qt startup presentation did not stabilize within two seconds; "
+             "revealing the shell with its latest layout.");
+  }
+  if (viewport_panel_ != nullptr) {
+    viewport_panel_->set_startup_presentation_blocked(false);
+  }
+  main_window_->setUpdatesEnabled(true);
+  main_window_->repaint();
+  if (auxiliary_window_state_.settings_dialog_visible &&
+      settings_dialog_ != nullptr && !settings_dialog_->isVisible()) {
+    show_settings_dialog();
+  }
+}
+
+bool UISystem::startup_layout_ready() const {
+  if (main_window_ == nullptr || main_window_->centralWidget() == nullptr ||
+      main_window_->menuBar() == nullptr ||
+      main_window_->statusBar() == nullptr) {
+    return false;
+  }
+  const QRect client = main_window_->contentsRect();
+  const int expected_left = client.x();
+  const int expected_right = client.x() + client.width();
+  const auto left_edge = [](const QWidget *widget) {
+    return widget->geometry().x();
+  };
+  const auto right_edge = [](const QWidget *widget) {
+    return widget->geometry().x() + widget->geometry().width();
+  };
+
+  int body_left = left_edge(main_window_->centralWidget());
+  int body_right = right_edge(main_window_->centralWidget());
+  for (UIPanelId id : {UIPanelId::Outliner, UIPanelId::Inspector}) {
+    if (!panels_.is_visible(id)) {
+      continue;
+    }
+    if (const QDockWidget *dock = panels_.dock(id);
+        dock != nullptr && !dock->isFloating()) {
+      body_left = std::min(body_left, left_edge(dock));
+      body_right = std::max(body_right, right_edge(dock));
+    }
+  }
+
+  constexpr int kLayoutTolerance = 2;
+  return body_left <= expected_left + kLayoutTolerance &&
+         body_right >= expected_right - kLayoutTolerance &&
+         right_edge(main_window_->menuBar()) >=
+             expected_right - kLayoutTolerance &&
+         right_edge(main_window_->statusBar()) >=
+             expected_right - kLayoutTolerance;
+}
+
+std::uint64_t UISystem::startup_layout_geometry_signature(
+    int native_client_width_pixels,
+    int native_client_height_pixels) const {
+  if (main_window_ == nullptr) {
+    return 0u;
+  }
+  std::uint64_t signature = 1469598103934665603ull;
+  const auto mix = [&signature](int value) {
+    signature ^= static_cast<std::uint32_t>(value);
+    signature *= 1099511628211ull;
+  };
+  const qreal pixel_scale = main_window_->devicePixelRatioF();
+  const auto mix_rect = [&mix, pixel_scale](const QRect &rect) {
+    mix(static_cast<int>(std::lround(rect.x() * pixel_scale)));
+    mix(static_cast<int>(std::lround(rect.y() * pixel_scale)));
+    mix(static_cast<int>(std::lround(rect.width() * pixel_scale)));
+    mix(static_cast<int>(std::lround(rect.height() * pixel_scale)));
+  };
+
+  mix(static_cast<int>(std::lround(pixel_scale * 1000.0)));
+  mix(native_client_width_pixels);
+  mix(native_client_height_pixels);
+  mix_rect(main_window_->rect());
+  mix_rect(main_window_->contentsRect());
+  if (const QWidget *central = main_window_->centralWidget()) {
+    mix_rect(central->geometry());
+  }
+  mix_rect(main_window_->menuBar()->geometry());
+  mix_rect(main_window_->statusBar()->geometry());
+  for (UIPanelId id : {UIPanelId::Outliner, UIPanelId::Inspector,
+                       UIPanelId::Console}) {
+    mix(panels_.is_visible(id) ? 1 : 0);
+    if (const QDockWidget *dock = panels_.dock(id)) {
+      mix(dock->isFloating() ? 1 : 0);
+      mix_rect(dock->geometry());
+    }
+  }
+  return signature;
+}
+
 void UISystem::save_auxiliary_window_state() {
   if (settings_paths_.qt_auxiliary_window_state_file.empty()) {
     return;
@@ -668,7 +833,8 @@ void UISystem::save_auxiliary_window_state() {
 }
 
 void UISystem::synchronize_auxiliary_window_visibility() {
-  if (main_window_ == nullptr || !main_window_->isVisible()) {
+  if (main_window_ == nullptr || !main_window_->isVisible() ||
+      !main_window_->updatesEnabled()) {
     return;
   }
 

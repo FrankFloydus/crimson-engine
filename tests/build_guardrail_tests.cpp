@@ -2366,7 +2366,10 @@ TEST(WindowGuardrailTests,
   expect_contains(app_source,
                   "std::max(kPlatformWindowMinimumHeight, frame.height)");
   expect_contains(app_source, "window->setGeometry(frame.x, frame.y");
-  expect_contains(app_source, "window->showMaximized()");
+  expect_contains(
+      app_source,
+      "window->setWindowState(window->windowState() | Qt::WindowMaximized)");
+  expect_missing(app_source, "window->showMaximized()");
   expect_contains(app_source, "window->normalGeometry()");
   expect_contains(app_source, "window->isMaximized()");
   expect_contains(app_source, "window_settings_.set_placement(");
@@ -2388,9 +2391,16 @@ TEST(WindowGuardrailTests,
   expect_contains(window_placement_header, "kPlatformWindowMinimumHeight");
   expect_contains(window_placement_header,
                   "platform_window_recover_frame_to_display_work_area(");
+  expect_contains(window_placement_header, "platform_window_is_maximized(");
+  expect_contains(window_placement_header,
+                  "struct PlatformWindowClientExtent");
+  expect_contains(window_placement_header,
+                  "platform_window_client_extent(");
   expect_contains(window_placement_source,
                   "std::span<const PlatformWindowChromeFrame> ");
   expect_contains(window_placement_source, "intersection_area(");
+  expect_contains(window_placement_source, "IsZoomed(");
+  expect_contains(window_placement_source, "GetClientRect(");
   expect_contains(window_placement_source, "clamp_origin(");
   expect_contains(window_placement_source,
                   "std::clamp(frame.width, kPlatformWindowMinimumWidth");

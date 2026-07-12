@@ -9,6 +9,47 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-12 - Saved-Maximized Qt Startup Reveals Only The Final Shell
+
+Task/context: a saved maximized launch briefly painted the retained normal-size
+viewport and dock layout, leaving a white strip and apparent duplicate docks
+until Qt completed the maximized layout.
+
+Invariant:
+
+- `UISystem` disables painting for the complete `QMainWindow` before its first
+  show. It reveals the shell with one synchronous repaint only after the HWND
+  is exposed, Windows reports the expected maximized state, the Qt client
+  physical size matches `GetClientRect`, and the central widget, menu/status
+  bars, and dock geometry cover the final client for three stable samples.
+- A timeout may skip only the extra stability samples after those hard
+  invariants pass. It must never reveal an internally consistent saved-normal
+  layout inside a larger native client.
+- Embedded native viewport surfaces stay hidden through the shell gate. If
+  their pre-presentation geometry or exposure changes, they hide again and
+  restart stabilization before Filament submission.
+- Apply the maximized Qt state while hidden; `UISystem::show()` remains the
+  sole owner of mapping the top-level window.
+
+Affected owners/files:
+
+- `src/app/app.cpp`
+- `src/platform/window_placement.*`
+- `src/ui/ui_system.*`
+- `src/ui/qt_startup_presentation.hpp`
+- `src/ui/qt_viewport_panel.*`
+- `tests/qt_startup_presentation_tests.cpp`
+- `tests/ui_layout_guardrail_tests.cpp`
+- `tests/build_guardrail_tests.cpp`
+
+Verification:
+
+- startup presentation tests: 2/2.
+- focused startup/window/UI guardrails: 3/3.
+- affected UI/app tests: 206/206.
+- `cmake --build --preset vs2026-debug --target quader` produced the v0.0.92
+  executable.
+
 ## 2026-07-12 - Stock Fusion Uses Its Own Neutral Palette And Button Faces
 
 Task/context: selecting the Fusion style alone still allowed the Windows
