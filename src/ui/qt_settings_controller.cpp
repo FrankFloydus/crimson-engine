@@ -76,23 +76,14 @@ bool QtSettingsController::set_bool(ViewportBoolSettingId id, bool value) {
   return true;
 }
 
-bool QtSettingsController::reset_viewport_to_defaults() {
-  if (viewport_settings_ == nullptr ||
-      !viewport_settings_->reset_to_defaults()) {
-    return false;
-  }
-  notify(QtSettingsChangeKind::ViewportCommit);
-  return true;
-}
-
 bool QtSettingsController::select_locale(std::string_view locale_id) {
   if (ui_settings_ == nullptr || localization_ == nullptr ||
-      locale_id.empty() || !localization_->select_locale(locale_id)) {
+      locale_id.empty() || !localization_->has_locale(locale_id)) {
     return false;
   }
 
   const std::string previous_locale = ui_settings_->locale();
-  ui_settings_->set_locale(localization_->current_locale());
+  ui_settings_->set_locale(std::string{locale_id});
   if (ui_settings_->locale() == previous_locale) {
     return false;
   }

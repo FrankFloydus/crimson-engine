@@ -41,7 +41,6 @@ public:
                     ViewportSettingColor initial_value);
   bool set_float(ViewportFloatSettingId id, float value);
   bool set_bool(ViewportBoolSettingId id, bool value);
-  bool reset_viewport_to_defaults();
   bool select_locale(std::string_view locale_id);
 
 private:

@@ -626,7 +626,16 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(settings, "QStringLiteral(\"settingsDialog\")");
   expect_contains(settings, "QStringLiteral(\"settingsCategories\")");
   expect_contains(settings, "QStringLiteral(\"settingsPages\")");
-  expect_contains(settings, "QStringLiteral(\"settingsResetDefaults\")");
+  expect_missing(settings, "QStringLiteral(\"settingsResetDefaults\")");
+  expect_contains(settings, "new QDialogButtonBox(");
+  expect_contains(settings, "QDialogButtonBox::Apply");
+  expect_contains(settings, "QDialogButtonBox::Ok");
+  expect_contains(settings, "QDialogButtonBox::Cancel");
+  expect_contains(settings, "QStringLiteral(\"settingsApply\")");
+  expect_contains(settings, "QStringLiteral(\"settingsOk\")");
+  expect_contains(settings, "QStringLiteral(\"settingsCancel\")");
+  expect_contains(settings, "void QtSettingsDialog::accept()");
+  expect_contains(settings, "void QtSettingsDialog::reject()");
   expect_contains(settings, "viewport_settings_sections()");
   expect_contains(settings, "viewport_color_settings()");
   expect_contains(settings, "viewport_float_settings()");
@@ -634,6 +643,8 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(settings, "controller.set_float(");
   expect_contains(settings, "controller.set_bool(");
   expect_contains(settings, "controller.select_locale(");
+  expect_contains(settings,
+                  "localization->select_locale(draft_ui_settings.locale())");
   expect_contains(settings_controller,
                   "QtSettingsChangeKind::ViewportCommit");
   expect_contains(settings_controller,

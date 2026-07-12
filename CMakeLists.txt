@@ -863,6 +863,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_navigation_gizmo_tests.cpp
         tests/qt_relative_pointer_input_tests.cpp
         tests/qt_settings_controller_tests.cpp
+        tests/qt_settings_dialog_tests.cpp
         tests/qt_startup_presentation_tests.cpp
         tests/qt_tool_settings_number_slider_tests.cpp
         tests/qt_viewport_pane_activation_tests.cpp

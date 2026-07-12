@@ -16,6 +16,7 @@
 #include <QColor>
 #include <QColorDialog>
 #include <QComboBox>
+#include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -26,6 +27,7 @@
 #include <QScopedValueRollback>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QShowEvent>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QVariant>
@@ -169,10 +171,20 @@ struct QtSettingsDialog::Impl {
   explicit Impl(QtSettingsDialog &dialog) : owner(dialog) { build(); }
 
   QtSettingsDialog &owner;
+  UISettings *target_ui_settings = nullptr;
+  ViewportSettings *target_viewport_settings = nullptr;
+  UISettings draft_ui_settings = UISettings::defaults();
+  ViewportSettings draft_viewport_settings = ViewportSettings::defaults();
   UISettings *ui_settings = nullptr;
   ViewportSettings *viewport_settings = nullptr;
   LocalizationService *localization = nullptr;
   QtSettingsController controller;
+  std::function<void(QtSettingsChangeKind)> settings_changed;
+  std::array<bool, kViewportColorSettingCount> dirty_colors{};
+  std::array<bool, kViewportFloatSettingCount> dirty_floats{};
+  std::array<bool, kViewportBoolSettingCount> dirty_bools{};
+  bool locale_dirty = false;
+  bool transaction_active = false;
   bool refreshing = false;
 
   QListWidget *category_list = nullptr;
@@ -180,27 +192,238 @@ struct QtSettingsDialog::Impl {
   QListWidgetItem *interface_category_item = nullptr;
   QLabel *locale_label = nullptr;
   QComboBox *locale_combo = nullptr;
-  QPushButton *reset_button = nullptr;
+  QDialogButtonBox *button_box = nullptr;
+  QPushButton *apply_button = nullptr;
+  QPushButton *ok_button = nullptr;
+  QPushButton *cancel_button = nullptr;
   std::vector<SectionWidgets> sections;
   std::vector<ColorWidgets> color_controls;
   std::vector<FloatWidgets> float_controls;
   std::vector<BoolWidgets> bool_controls;
 
+  [[nodiscard]] bool has_context() const {
+    return target_ui_settings != nullptr &&
+           target_viewport_settings != nullptr && localization != nullptr;
+  }
+
+  void clear_dirty() {
+    dirty_colors.fill(false);
+    dirty_floats.fill(false);
+    dirty_bools.fill(false);
+    locale_dirty = false;
+  }
+
+  [[nodiscard]] bool has_pending_changes() const {
+    return locale_dirty ||
+           std::any_of(dirty_colors.begin(), dirty_colors.end(),
+                       [](bool dirty) { return dirty; }) ||
+           std::any_of(dirty_floats.begin(), dirty_floats.end(),
+                       [](bool dirty) { return dirty; }) ||
+           std::any_of(dirty_bools.begin(), dirty_bools.end(),
+                       [](bool dirty) { return dirty; });
+  }
+
+  void refresh_action_state() const {
+    if (apply_button != nullptr) {
+      apply_button->setEnabled(transaction_active && has_pending_changes());
+    }
+  }
+
+  void synchronize_draft_from_targets(bool force) {
+    if (!has_context()) {
+      clear_dirty();
+      refresh_action_state();
+      return;
+    }
+
+    for (const ViewportColorSettingDescriptor &descriptor :
+         viewport_color_settings()) {
+      const std::size_t id = static_cast<std::size_t>(descriptor.id);
+      if (!force && dirty_colors[id]) {
+        dirty_colors[id] = !viewport_setting_colors_approximately(
+            draft_viewport_settings.color(descriptor.id),
+            target_viewport_settings->color(descriptor.id));
+      }
+      if (force || !dirty_colors[id]) {
+        (void)draft_viewport_settings.restore_color(
+            descriptor.id, target_viewport_settings->color(descriptor.id));
+        dirty_colors[id] = false;
+      }
+    }
+    for (const ViewportFloatSettingDescriptor &descriptor :
+         viewport_float_settings()) {
+      const std::size_t id = static_cast<std::size_t>(descriptor.id);
+      if (!force && dirty_floats[id]) {
+        dirty_floats[id] =
+            std::fabs(draft_viewport_settings.float_value(descriptor.id) -
+                      target_viewport_settings->float_value(descriptor.id)) >
+            0.0001f;
+      }
+      if (force || !dirty_floats[id]) {
+        (void)draft_viewport_settings.set_float_value(
+            descriptor.id,
+            target_viewport_settings->float_value(descriptor.id));
+        dirty_floats[id] = false;
+      }
+    }
+    for (const ViewportBoolSettingDescriptor &descriptor :
+         viewport_bool_settings()) {
+      const std::size_t id = static_cast<std::size_t>(descriptor.id);
+      if (!force && dirty_bools[id]) {
+        dirty_bools[id] =
+            draft_viewport_settings.bool_value(descriptor.id) !=
+            target_viewport_settings->bool_value(descriptor.id);
+      }
+      if (force || !dirty_bools[id]) {
+        (void)draft_viewport_settings.set_bool_value(
+            descriptor.id,
+            target_viewport_settings->bool_value(descriptor.id));
+        dirty_bools[id] = false;
+      }
+    }
+
+    if (!force && locale_dirty) {
+      locale_dirty =
+          draft_ui_settings.locale() != target_ui_settings->locale();
+    }
+    if (force || !locale_dirty) {
+      draft_ui_settings.set_locale(target_ui_settings->locale());
+      locale_dirty = false;
+    }
+    refresh_action_state();
+  }
+
+  void mark_color_dirty(ViewportColorSettingId id) {
+    if (!has_context()) {
+      return;
+    }
+    dirty_colors[static_cast<std::size_t>(id)] =
+        !viewport_setting_colors_approximately(
+            draft_viewport_settings.color(id),
+            target_viewport_settings->color(id));
+    refresh_action_state();
+  }
+
+  void mark_float_dirty(ViewportFloatSettingId id) {
+    if (!has_context()) {
+      return;
+    }
+    dirty_floats[static_cast<std::size_t>(id)] =
+        std::fabs(draft_viewport_settings.float_value(id) -
+                  target_viewport_settings->float_value(id)) >
+        0.0001f;
+    refresh_action_state();
+  }
+
+  void mark_bool_dirty(ViewportBoolSettingId id) {
+    if (!has_context()) {
+      return;
+    }
+    dirty_bools[static_cast<std::size_t>(id)] =
+        draft_viewport_settings.bool_value(id) !=
+        target_viewport_settings->bool_value(id);
+    refresh_action_state();
+  }
+
+  void begin_transaction() {
+    if (!has_context() || transaction_active) {
+      return;
+    }
+    clear_dirty();
+    synchronize_draft_from_targets(true);
+    transaction_active = true;
+    refresh();
+  }
+
+  bool apply_changes() {
+    if (!transaction_active || !has_context()) {
+      return true;
+    }
+    synchronize_draft_from_targets(false);
+
+    if (locale_dirty &&
+        (!localization->has_locale(draft_ui_settings.locale()) ||
+         !localization->select_locale(draft_ui_settings.locale()))) {
+      return false;
+    }
+
+    bool viewport_changed = false;
+    for (const ViewportColorSettingDescriptor &descriptor :
+         viewport_color_settings()) {
+      const std::size_t id = static_cast<std::size_t>(descriptor.id);
+      if (dirty_colors[id]) {
+        viewport_changed = target_viewport_settings->restore_color(
+                               descriptor.id,
+                               draft_viewport_settings.color(descriptor.id)) ||
+                           viewport_changed;
+      }
+    }
+    for (const ViewportFloatSettingDescriptor &descriptor :
+         viewport_float_settings()) {
+      const std::size_t id = static_cast<std::size_t>(descriptor.id);
+      if (dirty_floats[id]) {
+        viewport_changed = target_viewport_settings->set_float_value(
+                               descriptor.id,
+                               draft_viewport_settings.float_value(
+                                   descriptor.id)) ||
+                           viewport_changed;
+      }
+    }
+    for (const ViewportBoolSettingDescriptor &descriptor :
+         viewport_bool_settings()) {
+      const std::size_t id = static_cast<std::size_t>(descriptor.id);
+      if (dirty_bools[id]) {
+        viewport_changed = target_viewport_settings->set_bool_value(
+                               descriptor.id,
+                               draft_viewport_settings.bool_value(
+                                   descriptor.id)) ||
+                           viewport_changed;
+      }
+    }
+
+    const bool interface_changed =
+        locale_dirty &&
+        target_ui_settings->locale() != localization->current_locale();
+    if (locale_dirty) {
+      target_ui_settings->set_locale(localization->current_locale());
+    }
+
+    clear_dirty();
+    synchronize_draft_from_targets(true);
+    if (viewport_changed && settings_changed) {
+      settings_changed(QtSettingsChangeKind::ViewportCommit);
+    }
+    if (interface_changed && settings_changed) {
+      settings_changed(QtSettingsChangeKind::InterfaceCommit);
+    }
+    refresh();
+    return true;
+  }
+
+  void discard_changes() {
+    if (!transaction_active) {
+      return;
+    }
+    transaction_active = false;
+    clear_dirty();
+    synchronize_draft_from_targets(true);
+  }
+
   void build() {
     owner.setObjectName(QStringLiteral("settingsDialog"));
-    owner.setModal(false);
-    owner.setWindowModality(Qt::NonModal);
+    owner.setWindowModality(Qt::WindowModal);
     owner.setAttribute(Qt::WA_DeleteOnClose, false);
     owner.setSizeGripEnabled(true);
     owner.resize(720, 560);
 
-    auto *dialog_layout = new QHBoxLayout(&owner);
+    auto *dialog_layout = new QVBoxLayout(&owner);
+    auto *content_layout = new QHBoxLayout();
     category_list = new QListWidget(&owner);
     category_list->setObjectName(QStringLiteral("settingsCategories"));
     category_list->setSelectionMode(QAbstractItemView::SingleSelection);
     category_list->setMinimumWidth(160);
     category_list->setMaximumWidth(220);
-    dialog_layout->addWidget(category_list);
+    content_layout->addWidget(category_list);
 
     auto *options_container = new QWidget(&owner);
     options_container->setObjectName(QStringLiteral("settingsOptions"));
@@ -209,26 +432,40 @@ struct QtSettingsDialog::Impl {
     page_stack->setObjectName(QStringLiteral("settingsPages"));
     options_layout->addWidget(page_stack, 1);
 
-    reset_button = new QPushButton(options_container);
-    reset_button->setObjectName(QStringLiteral("settingsResetDefaults"));
-    options_layout->addWidget(reset_button);
-    dialog_layout->addWidget(options_container, 1);
+    content_layout->addWidget(options_container, 1);
+    dialog_layout->addLayout(content_layout, 1);
+
+    button_box = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel |
+            QDialogButtonBox::Apply,
+        &owner);
+    button_box->setObjectName(QStringLiteral("settingsButtonBox"));
+    apply_button = button_box->button(QDialogButtonBox::Apply);
+    ok_button = button_box->button(QDialogButtonBox::Ok);
+    cancel_button = button_box->button(QDialogButtonBox::Cancel);
+    apply_button->setObjectName(QStringLiteral("settingsApply"));
+    ok_button->setObjectName(QStringLiteral("settingsOk"));
+    cancel_button->setObjectName(QStringLiteral("settingsCancel"));
+    apply_button->setAutoDefault(false);
+    apply_button->setDefault(false);
+    cancel_button->setAutoDefault(false);
+    cancel_button->setDefault(false);
+    ok_button->setAutoDefault(true);
+    ok_button->setDefault(true);
+    dialog_layout->addWidget(button_box);
 
     QObject::connect(category_list, &QListWidget::currentRowChanged, &owner,
                      [this](int row) {
                        if (row >= 0 && row < page_stack->count()) {
                          page_stack->setCurrentIndex(row);
                        }
-                       reset_button->setVisible(row > 0);
                      });
-
-    QObject::connect(reset_button, &QPushButton::clicked, &owner, [this]() {
-      if (viewport_settings == nullptr) {
-        return;
-      }
-      (void)controller.reset_viewport_to_defaults();
-      refresh();
-    });
+    QObject::connect(apply_button, &QPushButton::clicked, &owner,
+                     [this]() { (void)apply_changes(); });
+    QObject::connect(button_box, &QDialogButtonBox::accepted, &owner,
+                     [this]() { owner.accept(); });
+    QObject::connect(button_box, &QDialogButtonBox::rejected, &owner,
+                     [this]() { owner.reject(); });
 
     create_interface_page();
 
@@ -249,6 +486,8 @@ struct QtSettingsDialog::Impl {
       auto *label = new QLabel(form->parentWidget());
       auto *button = new QtColorSwatchButton(form->parentWidget());
       button->setObjectName(setting_object_name(descriptor.key));
+      button->setAutoDefault(false);
+      button->setDefault(false);
       label->setBuddy(button);
       form->addRow(label, button);
       color_controls.push_back({&descriptor, label, button});
@@ -282,8 +521,10 @@ struct QtSettingsDialog::Impl {
                          if (refreshing || viewport_settings == nullptr) {
                            return;
                          }
-                         (void)controller.set_float(
-                             id, static_cast<float>(value));
+                         if (controller.set_float(
+                                 id, static_cast<float>(value))) {
+                           mark_float_dirty(id);
+                         }
                        });
     }
 
@@ -302,7 +543,9 @@ struct QtSettingsDialog::Impl {
                          if (refreshing || viewport_settings == nullptr) {
                            return;
                          }
-                         (void)controller.set_bool(id, checked);
+                         if (controller.set_bool(id, checked)) {
+                           mark_bool_dirty(id);
+                         }
                        });
     }
 
@@ -359,25 +602,34 @@ struct QtSettingsDialog::Impl {
                    LocalizationService &new_localization,
                    std::function<void(QtSettingsChangeKind)>
                        new_settings_changed) {
-    ui_settings = &new_ui_settings;
-    viewport_settings = &new_viewport_settings;
+    target_ui_settings = &new_ui_settings;
+    target_viewport_settings = &new_viewport_settings;
+    ui_settings = &draft_ui_settings;
+    viewport_settings = &draft_viewport_settings;
     localization = &new_localization;
-    controller.bind(new_ui_settings, new_viewport_settings, new_localization,
-                    std::move(new_settings_changed));
+    settings_changed = std::move(new_settings_changed);
+    controller.bind(draft_ui_settings, draft_viewport_settings,
+                    new_localization, [](QtSettingsChangeKind) {});
+    transaction_active = false;
+    clear_dirty();
+    synchronize_draft_from_targets(true);
     refresh();
   }
 
   void refresh() {
     QScopedValueRollback<bool> refresh_guard(refreshing, true);
 
+    synchronize_draft_from_targets(!transaction_active);
+
     owner.setWindowTitle(qtext(localization, "ui.panel.settings", "Settings"));
     interface_category_item->setText(
         qtext(localization, "ui.settings.interface", "Interface"));
     locale_label->setText(
         qtext(localization, "ui.settings.locale", "Language"));
-    reset_button->setText(qtext(localization,
-                                "ui.settings.viewport.reset_to_defaults",
-                                "Reset to Defaults"));
+    apply_button->setText(qtext(localization, "ui.action.apply", "Apply"));
+    ok_button->setText(qtext(localization, "ui.action.ok", "OK"));
+    cancel_button->setText(
+        qtext(localization, "ui.action.cancel", "Cancel"));
 
     refresh_locale_combo();
 
@@ -429,7 +681,9 @@ struct QtSettingsDialog::Impl {
               : control.descriptor->default_value);
     }
 
-    reset_button->setEnabled(viewport_settings != nullptr);
+    ok_button->setEnabled(has_context());
+    cancel_button->setEnabled(has_context());
+    refresh_action_state();
   }
 
   void refresh_locale_combo() {
@@ -470,15 +724,16 @@ struct QtSettingsDialog::Impl {
   }
 
   void select_locale(int index) {
-    if (refreshing || ui_settings == nullptr || localization == nullptr ||
-        index < 0) {
+    if (refreshing || ui_settings == nullptr || target_ui_settings == nullptr ||
+        localization == nullptr || index < 0) {
       return;
     }
 
     const std::string locale_id =
         locale_combo->itemData(index).toString().toStdString();
     if (controller.select_locale(locale_id)) {
-      refresh();
+      locale_dirty = ui_settings->locale() != target_ui_settings->locale();
+      refresh_action_state();
     }
   }
 
@@ -505,7 +760,9 @@ struct QtSettingsDialog::Impl {
           if (!color.isValid()) {
             return;
           }
-          (void)controller.preview_color(id, from_q_color(color));
+          if (controller.preview_color(id, from_q_color(color))) {
+            mark_color_dirty(id);
+          }
           if (guarded_button != nullptr && viewport_settings != nullptr) {
             set_color_button_presentation(
                 *guarded_button, viewport_settings->color(id), localization);
@@ -515,12 +772,16 @@ struct QtSettingsDialog::Impl {
     const int result = dialog.exec();
     if (result == QDialog::Accepted) {
       if (dialog.currentColor().isValid()) {
-        (void)controller.preview_color(
-            descriptor.id, from_q_color(dialog.currentColor()));
+        if (controller.preview_color(
+                descriptor.id, from_q_color(dialog.currentColor()))) {
+          mark_color_dirty(descriptor.id);
+        }
       }
       (void)controller.commit_color(descriptor.id, initial);
+      mark_color_dirty(descriptor.id);
     } else {
       (void)controller.rollback_color(descriptor.id, initial);
+      mark_color_dirty(descriptor.id);
     }
     if (guarded_button != nullptr) {
       set_color_button_presentation(
@@ -545,5 +806,22 @@ void QtSettingsDialog::set_context(UISettings &ui_settings,
 }
 
 void QtSettingsDialog::refresh() { impl_->refresh(); }
+
+void QtSettingsDialog::accept() {
+  if (impl_->apply_changes()) {
+    impl_->transaction_active = false;
+    QDialog::accept();
+  }
+}
+
+void QtSettingsDialog::reject() {
+  impl_->discard_changes();
+  QDialog::reject();
+}
+
+void QtSettingsDialog::showEvent(QShowEvent *event) {
+  impl_->begin_transaction();
+  QDialog::showEvent(event);
+}
 
 } // namespace quader

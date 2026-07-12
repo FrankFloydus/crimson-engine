@@ -9,6 +9,7 @@ locale.en-US.name=English
 locale.it-IT.name=Italian
 
 ui.action.apply=Apply
+ui.action.ok=OK
 ui.action.cancel=Cancel
 
 ui.menu.file=File
@@ -113,7 +114,6 @@ modeling.action.disabled.single_object=Select elements from one object.
 ui.settings.interface=Interface
 ui.settings.locale=Language
 ui.settings.color.opacity=Opacity: %1%
-ui.settings.viewport.reset_to_defaults=Reset to Defaults
 
 ui.console.clear=Clear
 ui.console.auto_scroll=Auto-scroll

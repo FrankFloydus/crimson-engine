@@ -157,7 +157,7 @@ TEST(QtSettingsControllerTests,
 
   ASSERT_TRUE(controller.select_locale("it-IT"));
   EXPECT_EQ(ui_settings.locale(), "it-IT");
-  EXPECT_EQ(localization.current_locale(), "it-IT");
+  EXPECT_EQ(localization.current_locale(), "en-US");
 
   EXPECT_EQ(static_cast<std::size_t>(std::count(
                 changes.begin(), changes.end(),
@@ -194,41 +194,6 @@ TEST(QtSettingsControllerTests,
   EXPECT_EQ(changes[0], QtSettingsChangeKind::ViewportPreview);
   EXPECT_EQ(changes[1], QtSettingsChangeKind::ViewportPreview);
   EXPECT_FALSE(controller.commit_color(kSetting, initial));
-}
-
-TEST(QtSettingsControllerTests,
-     ResetCommitsOnceAndRestoresEveryDescriptorDefault) {
-  UISettings ui_settings = UISettings::defaults();
-  ViewportSettings viewport_settings = ViewportSettings::defaults();
-  LocalizationService localization = loaded_localization();
-  std::vector<QtSettingsChangeKind> changes;
-  QtSettingsController controller;
-  controller.bind(ui_settings, viewport_settings, localization,
-                  [&](QtSettingsChangeKind kind) { changes.push_back(kind); });
-
-  ASSERT_TRUE(controller.set_bool(ViewportBoolSettingId::ShowGrid, false));
-  ASSERT_TRUE(controller.set_float(ViewportFloatSettingId::GizmoSize, 2.0f));
-  changes.clear();
-  ASSERT_TRUE(controller.reset_viewport_to_defaults());
-  ASSERT_EQ(changes, std::vector<QtSettingsChangeKind>{
-                         QtSettingsChangeKind::ViewportCommit});
-
-  for (const ViewportColorSettingDescriptor &descriptor :
-       viewport_color_settings()) {
-    expect_color_exact(viewport_settings.color(descriptor.id),
-                       descriptor.default_value);
-  }
-  for (const ViewportFloatSettingDescriptor &descriptor :
-       viewport_float_settings()) {
-    EXPECT_FLOAT_EQ(viewport_settings.float_value(descriptor.id),
-                    descriptor.default_value);
-  }
-  for (const ViewportBoolSettingDescriptor &descriptor :
-       viewport_bool_settings()) {
-    EXPECT_EQ(viewport_settings.bool_value(descriptor.id),
-              descriptor.default_value);
-  }
-  EXPECT_FALSE(controller.reset_viewport_to_defaults());
 }
 
 TEST(QtSettingsControllerTests,

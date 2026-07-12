@@ -9,6 +9,39 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-12 - Settings Uses An Explicit Apply Transaction
+
+Task/context: committing a viewport numeric setting with Enter appeared to randomly reset every
+viewport preference to its default. The Settings window also needed conventional Apply, OK, and
+Cancel actions instead of a destructive Reset button.
+
+Invariant:
+
+- The Settings window has no Reset button. Its stock `QDialogButtonBox` exposes Apply, OK, and
+  Cancel; OK is the only default action, while Apply, Cancel, and color swatches can never become
+  implicit dialog defaults.
+- Controls edit a staged per-field draft. Apply merges only dirty fields into the authoritative
+  settings, persists each changed domain once, rebases the draft, and remains open. OK performs the
+  same merge and closes. Cancel, Escape, and title-bar close discard changes since the last Apply.
+- External settings changes merge into non-dirty draft fields, so an open dialog cannot overwrite
+  unrelated menu or runtime changes with a stale whole-object snapshot.
+
+Root cause: Qt propagates the spin box's handled-and-ignored Enter key to its containing `QDialog`.
+The first auto-default `QPushButton` was Reset, so Qt clicked it; the controller then reset all
+viewport descriptors and `UISystem` correctly saved that new all-default state. With the classic
+button row, Enter intentionally activates OK instead.
+
+Affected owners/files:
+
+- `src/ui/qt_settings_dialog.cpp`
+- `tests/qt_settings_dialog_tests.cpp`
+
+Verification:
+
+- The widget regression reproduced two Reset clicks before the fix (Return and keypad Enter).
+- The transaction regression covers Apply without close, OK, clean OK, Cancel, Escape, title-bar
+  close, both Enter keys, reopen/rebase, locale, and per-field external-change merging.
+
 ## 2026-07-12 - Grid Width And Tier Composition Preserve Color
 
 Task/context: reducing ground-grid or axis line size made the axis colors turn gray and made color

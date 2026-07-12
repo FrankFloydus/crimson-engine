@@ -13,6 +13,8 @@
 #include <functional>
 #include <memory>
 
+class QShowEvent;
+
 namespace quader {
 
 class LocalizationService;
@@ -21,8 +23,8 @@ class ViewportSettings;
 
 /**
  * Qt Widgets presentation of Quader's interface and viewport preferences.
- * The dialog mutates the existing settings owners directly and remains
- * non-modal so viewport changes are visible while it is open.
+ * Controls edit a per-field draft. Apply merges and persists the draft without
+ * closing, OK applies and closes, and every reject path discards it.
  */
 class QtSettingsDialog final : public QDialog {
 public:
@@ -36,6 +38,11 @@ public:
                    LocalizationService &localization,
                    std::function<void(QtSettingsChangeKind)> settings_changed);
   void refresh();
+  void accept() override;
+  void reject() override;
+
+protected:
+  void showEvent(QShowEvent *event) override;
 
 private:
   struct Impl;
