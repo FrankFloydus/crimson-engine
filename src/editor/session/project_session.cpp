@@ -40,8 +40,20 @@ void ProjectSession::rebuild_services() {
       document_.scene(), *history_, &document_.assets());
   asset_commands_ = std::make_unique<AssetCommandService>(
       document_.assets(), *history_, &document_.scene());
-  modeling_ = std::make_unique<ModelingSessionService>(document_.scene(),
-                                                       document_.assets());
+  modeling_ = std::make_unique<ModelingSessionService>(
+      document_.scene(), document_.assets(),
+      ModelingOperationPreviewCheckpointHooks{
+          .begin = [this]() { begin_modeling_preview_checkpoint(); },
+          .observe_before_projection = [this]() {
+            observe_before_modeling_preview_projection();
+          },
+          .record_after_projection = [this]() {
+            record_after_modeling_preview_projection();
+          },
+          .finish = [this](bool restored_by_cancel) {
+            finish_modeling_preview_checkpoint(restored_by_cancel);
+          },
+      });
   selection_ = std::make_unique<EditorSelectionService>(
       document_.scene(), *document_commands_, *modeling_);
   pivot_ = std::make_unique<PivotToolService>(
@@ -50,7 +62,7 @@ void ProjectSession::rebuild_services() {
       document_.scene(), document_.assets(), *history_, *modeling_,
       *selection_);
   native_tools_ = std::make_unique<NativeViewportToolCoordinator>(
-      *pivot_, *linear_array_, *selection_);
+      *pivot_, *linear_array_, *selection_, *modeling_);
 }
 
 ProjectSessionReadView ProjectSession::read_view() const {
@@ -77,6 +89,47 @@ bool ProjectSession::dirty() const {
   return !(content_revision_stamp() == clean_stamp_);
 }
 
+void ProjectSession::begin_modeling_preview_checkpoint() {
+  const ProjectContentRevisionStamp current = content_revision_stamp();
+  preview_content_checkpoint_ = PreviewContentCheckpoint{
+      .expected_stamp = current,
+      .began_clean = current == clean_stamp_,
+  };
+}
+
+void ProjectSession::observe_before_modeling_preview_projection() {
+  if (!preview_content_checkpoint_.has_value()) {
+    return;
+  }
+  if (!(content_revision_stamp() ==
+        preview_content_checkpoint_->expected_stamp)) {
+    preview_content_checkpoint_->contaminated = true;
+  }
+}
+
+void ProjectSession::record_after_modeling_preview_projection() {
+  if (preview_content_checkpoint_.has_value()) {
+    preview_content_checkpoint_->expected_stamp = content_revision_stamp();
+  }
+}
+
+void ProjectSession::finish_modeling_preview_checkpoint(
+    bool restored_by_cancel) {
+  if (!preview_content_checkpoint_.has_value()) {
+    return;
+  }
+
+  const ProjectContentRevisionStamp current = content_revision_stamp();
+  if (!(current == preview_content_checkpoint_->expected_stamp)) {
+    preview_content_checkpoint_->contaminated = true;
+  }
+  if (restored_by_cancel && preview_content_checkpoint_->began_clean &&
+      !preview_content_checkpoint_->contaminated) {
+    clean_stamp_ = current;
+  }
+  preview_content_checkpoint_.reset();
+}
+
 ProjectAssetMutationResult
 ProjectSession::replace_standalone_mesh(AssetId mesh, MeshAsset replacement) {
   const AssetCommandResult result =
@@ -91,6 +144,10 @@ ProjectSession::replace_standalone_mesh(AssetId mesh, MeshAsset replacement) {
 void ProjectSession::replace_document(ProjectDocument document) {
   QDR_PROFILE_FUNCTION();
   const std::uint64_t previous_scene_revision = document_.scene().revision();
+  const std::uint64_t previous_asset_revision = document_.assets().revision();
+  modeling_->clear_transient_state_for_document_replacement();
+  native_tools_->reset_transient_state();
+  preview_content_checkpoint_.reset();
   document_ = std::move(document);
   {
     QDR_PROFILE_SCOPE("ProjectSession replace ensure scene root");
@@ -101,6 +158,11 @@ void ProjectSession::replace_document(ProjectDocument document) {
     document_.scene().advance_revision_for_replacement(previous_scene_revision);
   }
   {
+    QDR_PROFILE_SCOPE("ProjectSession replace advance asset revision");
+    document_.assets().advance_revision_for_replacement(
+        previous_asset_revision);
+  }
+  {
     QDR_PROFILE_SCOPE("ProjectSession replace clear history");
     history_->clear();
   }
@@ -108,13 +170,25 @@ void ProjectSession::replace_document(ProjectDocument document) {
     QDR_PROFILE_SCOPE("ProjectSession replace reset modeling from scene");
     modeling_->reset_from_scene();
   }
+  if (document_replacement_finalizer_) {
+    QDR_PROFILE_SCOPE("ProjectSession replace finalize native document");
+    document_replacement_finalizer_(*this);
+  }
   {
     QDR_PROFILE_SCOPE("ProjectSession replace mark clean");
     mark_clean();
   }
 }
 
-void ProjectSession::mark_clean() { clean_stamp_ = content_revision_stamp(); }
+void ProjectSession::set_document_replacement_finalizer(
+    std::function<void(ProjectSession &)> finalizer) {
+  document_replacement_finalizer_ = std::move(finalizer);
+}
+
+void ProjectSession::mark_clean() {
+  clean_stamp_ = content_revision_stamp();
+  preview_content_checkpoint_.reset();
+}
 
 std::unique_ptr<ProjectSession> ProjectSessionService::create_session() const {
   return std::make_unique<ProjectSession>();

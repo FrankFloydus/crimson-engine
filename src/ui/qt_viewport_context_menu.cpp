@@ -10,8 +10,6 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
-#include "editor/modeling/services/modeling_action_catalog.hpp"
-#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "viewport/viewport_input_router.hpp"
 
@@ -35,7 +33,7 @@ bool is_generic_context_action(std::string_view action_id) {
   return action_id == "delete_selection" || action_id == "duplicate_meshes";
 }
 
-QString localized_action_label(const ModelingActionItem &action,
+QString localized_action_label(const QuaderActionItem &action,
                                const LocalizationService &localization) {
   std::string key = "modeling.action.";
   key.append(action.action_id);
@@ -43,7 +41,7 @@ QString localized_action_label(const ModelingActionItem &action,
   return QString::fromStdString(localization.text(key, action.label));
 }
 
-QString localized_disabled_reason(const ModelingActionItem &action,
+QString localized_disabled_reason(const QuaderActionItem &action,
                                   const LocalizationService &localization) {
   if (action.disabled_reason_key.empty()) {
     return QString::fromStdString(action.disabled_reason);
@@ -62,26 +60,26 @@ QString localized_disabled_reason(const ModelingActionItem &action,
 
 void QtViewportContextMenuPresenter::show(
     QWidget &parent, const QPoint &global_point, QuaderEditorApi &editor,
-    ModelingSessionService &modeling, ViewportInputRouter &input_router,
-    LocalizationService &localization, bool modal_tool_owns_viewport) const {
-  const ModelingActionQuery query{
-      .surface = ModelingActionSurface::ViewportContextMenu,
+    ViewportInputRouter &input_router, LocalizationService &localization,
+    bool modal_tool_owns_viewport) const {
+  const QuaderActionQuery query{
+      .surface = QuaderActionSurface::ViewportContextMenu,
       .modal_tool_owns_viewport = modal_tool_owns_viewport,
       .include_disabled = true,
       .include_hidden = false,
   };
-  const std::vector<ModelingActionItem> actions =
-      modeling.context_actions(query);
+  const std::vector<QuaderActionItem> actions =
+      editor.modeling().available_actions(query);
 
   QMenu menu(&parent);
   menu.setObjectName(QStringLiteral("viewport_operations_context_menu"));
   menu.setToolTipsVisible(true);
 
-  std::vector<std::pair<QAction *, const ModelingActionItem *>> menu_actions;
+  std::vector<std::pair<QAction *, const QuaderActionItem *>> menu_actions;
   menu_actions.reserve(actions.size());
   bool separated_generic_actions = false;
-  for (const ModelingActionItem &action : actions) {
-    if (action.visibility == ModelingActionVisibility::Hidden) {
+  for (const QuaderActionItem &action : actions) {
+    if (action.visibility == QuaderActionVisibility::Hidden) {
       continue;
     }
     if (!separated_generic_actions &&
@@ -94,7 +92,7 @@ void QtViewportContextMenuPresenter::show(
         menu.addAction(localized_action_label(action, localization));
     menu_action->setObjectName(QString::fromStdString(action.action_id));
     const bool enabled =
-        action.visibility == ModelingActionVisibility::Enabled;
+        action.visibility == QuaderActionVisibility::Enabled;
     menu_action->setEnabled(enabled);
     if (!enabled) {
       const QString reason = localized_disabled_reason(action, localization);
@@ -118,9 +116,9 @@ void QtViewportContextMenuPresenter::show(
     return;
   }
 
-  const ModelingActionItem &action = *selected->second;
+  const QuaderActionItem &action = *selected->second;
   const std::string command_id =
-      action.kind == ModelingActionKind::Tool
+      action.kind == QuaderActionKind::Tool
           ? editor.commands().command_id_for_tool_activation(action.tool_id)
           : editor.commands().command_id_for_modeling_action(action.action_id);
   const QuaderApiVoidResult result = editor.commands().execute(command_id);

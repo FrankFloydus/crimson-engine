@@ -18,8 +18,10 @@
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
+#include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/transform/mesh_arrangement_service.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
 #include "math/glm_bridge.hpp"
@@ -186,6 +188,77 @@ bool entity_selection_owns_transforms(ProjectSession &session) {
   const ModelingSelectionSummary summary = session.selection().summary();
   return summary.has_selection &&
          selection_mode_uses_scene_document(summary.mode);
+}
+
+bool copy_pivot_from_active_is_available(const ProjectSession &session) {
+  return !session.native_tools().has_pending_tool() &&
+         !session.modeling().can_cancel_active_tool_or_preview() &&
+         session.pivot().can_copy_pivot_from_active(session.selection());
+}
+
+QuaderActionItem copy_pivot_from_active_action(const ProjectSession &session) {
+  const ModelingSelectionSummary summary = session.selection().summary();
+  const QuaderActionVisibility visibility =
+      summary.mode != ModelingSelectionMode::Object
+          ? QuaderActionVisibility::Hidden
+          : copy_pivot_from_active_is_available(session)
+                ? QuaderActionVisibility::Enabled
+                : QuaderActionVisibility::Disabled;
+  return {
+      .action_id = "copy_pivot_from_active",
+      .label = "Copy Pivot From Active",
+      .kind = QuaderActionKind::Operation,
+      .visibility = visibility,
+      .disabled_reason_key =
+          visibility == QuaderActionVisibility::Disabled
+              ? "modeling.action.disabled.copy_pivot_from_active_selection"
+              : std::string{},
+      .rebuilds_mesh_on_success = true,
+  };
+}
+
+bool action_is_included(const QuaderActionItem &action,
+                        const QuaderActionQuery &query) {
+  if (action.visibility == QuaderActionVisibility::Hidden) {
+    return query.include_hidden;
+  }
+  if (action.visibility == QuaderActionVisibility::Disabled) {
+    return query.include_disabled;
+  }
+  return true;
+}
+
+void inject_copy_pivot_from_active(QuaderActionSet &action_set,
+                                   const QuaderActionQuery &query,
+                                   const ProjectSession &session) {
+  QuaderActionItem action = copy_pivot_from_active_action(session);
+  if (!action_is_included(action, query)) {
+    return;
+  }
+
+  if (query.surface == QuaderActionSurface::OperationsPanel) {
+    for (QuaderActionPanel &panel : action_set.panels) {
+      if (panel.panel_id == "object_operations") {
+        panel.actions.push_back(std::move(action));
+        return;
+      }
+    }
+    return;
+  }
+
+  for (QuaderActionPanel &panel : action_set.panels) {
+    if (panel.panel_id != "viewport_context_menu") {
+      continue;
+    }
+    auto insertion = panel.actions.begin();
+    while (insertion != panel.actions.end() &&
+           insertion->action_id != "delete_selection" &&
+           insertion->action_id != "duplicate_meshes") {
+      ++insertion;
+    }
+    panel.actions.insert(insertion, std::move(action));
+    return;
+  }
 }
 
 QMat4 world_transform_delta_from_api_transform(
@@ -930,7 +1003,7 @@ QuaderModelingApi::commit_box_preview(std::string name,
                                       AssetId default_material) {
   auto command = std::make_unique<CommitBoxPreviewCommand>(
       project_session(session_).modeling(), project_session(session_).scene(),
-      std::move(name), default_material);
+      project_session(session_).assets(), std::move(name), default_material);
   CommitBoxPreviewCommand *commit_command = command.get();
   QuaderApiVoidResult status = mutations_.run_modeling_undoable_command(
       std::move(command), "Create Box");
@@ -1047,10 +1120,7 @@ QuaderModelingApi::mesh(QuaderModelingObjectId object_id) const {
 
 QuaderApiVoidResult
 QuaderModelingApi::set_selection_mode(QuaderSelectionMode mode) {
-  return mutations_.run_modeling_result(
-      project_session(session_).selection().set_mode(
-          to_modeling_selection_mode(mode)),
-      "Set Selection Mode");
+  return mutations_.set_selection_mode(to_modeling_selection_mode(mode));
 }
 
 bool QuaderModelingApi::can_execute_tool(std::string_view tool_id) const {
@@ -1087,6 +1157,25 @@ QuaderApiVoidResult QuaderModelingApi::combine_meshes() {
 
 QuaderApiVoidResult QuaderModelingApi::remove_doubles() {
   return mutations_.run_tracked_modeling_tool("remove_doubles");
+}
+
+bool QuaderModelingApi::can_copy_pivot_from_active() const {
+  const ProjectSession &session = project_session(session_);
+  return copy_pivot_from_active_is_available(session);
+}
+
+QuaderApiVoidResult QuaderModelingApi::copy_pivot_from_active() {
+  ProjectSession &session = project_session(session_);
+  if (session.native_tools().has_pending_tool() ||
+      session.modeling().can_cancel_active_tool_or_preview()) {
+    return mutations_.run_document_command(
+        command_invalid_result(
+            "Apply or cancel the active tool before copying a pivot."),
+        "Copy Pivot From Active");
+  }
+  return mutations_.run_document_command(
+      session.pivot().copy_pivot_from_active(session.selection()),
+      "Copy Pivot From Active");
 }
 
 bool QuaderModelingApi::can_align_selected_meshes() const {
@@ -1343,6 +1432,8 @@ QuaderApiVoidResult QuaderModelingApi::duplicate_selected_entity_hierarchy() {
                                "editor transaction is active."),
         "Duplicate Selection");
   }
+  const ModelingSessionMemento before_modeling =
+      session.modeling().capture_history_memento();
   const ModelingCommandResult duplicate = [&]() {
     QDR_PROFILE_SCOPE("Duplicate selected entity hierarchy owner");
     return session.modeling().duplicate_selected_entity_hierarchy(
@@ -1350,17 +1441,46 @@ QuaderApiVoidResult QuaderModelingApi::duplicate_selected_entity_hierarchy() {
   }();
   if (!duplicate.ok) {
     const CommandResult cancel = transaction.cancel();
+    const ModelingCommandResult restore =
+        session.modeling().restore_history_memento(before_modeling);
     if (!cancel.ok) {
       return mutations_.run_document_command(cancel, "Duplicate Selection");
+    }
+    if (!restore.ok) {
+      return mutations_.run_modeling_result(restore, "Duplicate Selection");
     }
     return mutations_.run_modeling_result(duplicate, "Duplicate Selection");
   }
   if (!duplicate.changed) {
     const CommandResult cancel = transaction.cancel();
+    const ModelingCommandResult restore =
+        session.modeling().restore_history_memento(before_modeling);
     if (!cancel.ok) {
       return mutations_.run_document_command(cancel, "Duplicate Selection");
     }
+    if (!restore.ok) {
+      return mutations_.run_modeling_result(restore, "Duplicate Selection");
+    }
     return mutations_.run_modeling_result(duplicate, "Duplicate Selection");
+  }
+
+  const CommandResult recorded_modeling =
+      transaction.record_executed_before_existing(
+          std::make_unique<RecordedModelingMementoCommand>(
+              session.modeling(), "Duplicate Selection", before_modeling,
+              session.modeling().capture_history_memento(), true));
+  if (!recorded_modeling.ok) {
+    const CommandResult cancel = transaction.cancel();
+    const ModelingCommandResult restore =
+        session.modeling().restore_history_memento(before_modeling);
+    if (!cancel.ok) {
+      return mutations_.run_document_command(cancel, "Duplicate Selection");
+    }
+    if (!restore.ok) {
+      return mutations_.run_modeling_result(restore, "Duplicate Selection");
+    }
+    return mutations_.run_document_command(recorded_modeling,
+                                           "Duplicate Selection");
   }
 
   {
@@ -1383,6 +1503,9 @@ QuaderModelingApi::duplicate_selected_hierarchy_for_group_drag() {
         "Duplicate Group Selection");
   }
 
+  const ModelingSessionMemento before_modeling =
+      session.modeling().capture_history_memento();
+
   const ModelingCommandResult duplicate = [&]() {
     QDR_PROFILE_SCOPE("Duplicate group hierarchy owner");
     return session.modeling().duplicate_selected_hierarchy_for_group_drag(
@@ -1390,21 +1513,55 @@ QuaderModelingApi::duplicate_selected_hierarchy_for_group_drag() {
   }();
   if (!duplicate.ok) {
     const CommandResult cancel = transaction.cancel();
+    const ModelingCommandResult restore =
+        session.modeling().restore_history_memento(before_modeling);
     if (!cancel.ok) {
       return mutations_.run_document_command(cancel,
                                              "Duplicate Group Selection");
+    }
+    if (!restore.ok) {
+      return mutations_.run_modeling_result(restore,
+                                            "Duplicate Group Selection");
     }
     return mutations_.run_modeling_result(duplicate,
                                           "Duplicate Group Selection");
   }
   if (!duplicate.changed) {
     const CommandResult cancel = transaction.cancel();
+    const ModelingCommandResult restore =
+        session.modeling().restore_history_memento(before_modeling);
     if (!cancel.ok) {
       return mutations_.run_document_command(cancel,
                                              "Duplicate Group Selection");
     }
+    if (!restore.ok) {
+      return mutations_.run_modeling_result(restore,
+                                            "Duplicate Group Selection");
+    }
     return mutations_.run_modeling_result(duplicate,
                                           "Duplicate Group Selection");
+  }
+
+  const CommandResult recorded_modeling =
+      transaction.record_executed_before_existing(
+          std::make_unique<RecordedModelingMementoCommand>(
+              session.modeling(), "Duplicate Group Selection",
+              before_modeling, session.modeling().capture_history_memento(),
+              true));
+  if (!recorded_modeling.ok) {
+    const CommandResult cancel = transaction.cancel();
+    const ModelingCommandResult restore =
+        session.modeling().restore_history_memento(before_modeling);
+    if (!cancel.ok) {
+      return mutations_.run_document_command(cancel,
+                                             "Duplicate Group Selection");
+    }
+    if (!restore.ok) {
+      return mutations_.run_modeling_result(restore,
+                                            "Duplicate Group Selection");
+    }
+    return mutations_.run_document_command(recorded_modeling,
+                                           "Duplicate Group Selection");
   }
 
   {
@@ -1451,20 +1608,19 @@ QuaderModelingApi::cut_selected_meshes_by_hovered_face_plane() {
 
 QuaderActionSet
 QuaderModelingApi::available_action_set(const QuaderActionQuery &query) const {
-  return to_api_action_set(
+  QuaderActionSet result = to_api_action_set(
       project_session(session_).modeling().context_action_set(
           to_modeling_action_query(query)));
+  inject_copy_pivot_from_active(result, query, project_session(session_));
+  return result;
 }
 
 std::vector<QuaderActionItem>
 QuaderModelingApi::available_actions(const QuaderActionQuery &query) const {
-  const std::vector<ModelingActionItem> actions =
-      project_session(session_).modeling().context_actions(
-          to_modeling_action_query(query));
+  const QuaderActionSet action_set = available_action_set(query);
   std::vector<QuaderActionItem> result;
-  result.reserve(actions.size());
-  for (const ModelingActionItem &action : actions) {
-    result.push_back(to_api_action_item(action));
+  for (const QuaderActionPanel &panel : action_set.panels) {
+    result.insert(result.end(), panel.actions.begin(), panel.actions.end());
   }
   return result;
 }

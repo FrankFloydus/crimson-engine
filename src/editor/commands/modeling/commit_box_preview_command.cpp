@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/commands/modeling/commit_box_preview_command.hpp"
 
+#include "assets/asset_registry.hpp"
 #include "editor/commands/document/set_material_command.hpp"
 #include "scene/scene_document.hpp"
 
@@ -35,9 +36,9 @@ CommandResult command_result_from(const ModelingCreateBoxResult &result) {
 } // namespace
 
 CommitBoxPreviewCommand::CommitBoxPreviewCommand(
-    ModelingSessionService &modeling, SceneDocument &scene, std::string name,
-    AssetId default_material)
-    : modeling_(modeling), scene_(scene), name_(std::move(name)),
+    ModelingSessionService &modeling, SceneDocument &scene,
+    AssetRegistry &assets, std::string name, AssetId default_material)
+    : modeling_(modeling), scene_(scene), assets_(assets), name_(std::move(name)),
       default_material_(default_material) {}
 
 const std::string& CommitBoxPreviewCommand::label() const {
@@ -84,6 +85,11 @@ CommandResult CommitBoxPreviewCommand::undo() {
 }
 
 CommandResult CommitBoxPreviewCommand::execute_initial() {
+  if (default_material_ == kInvalidAssetId ||
+      assets_.material(default_material_) == nullptr) {
+    return command_invalid_result(
+        "Default material asset is missing from the current project");
+  }
   before_ = modeling_.capture_history_memento();
   committed_ = modeling_.commit_box(name_);
   CommandResult result = command_result_from(committed_);
@@ -125,6 +131,11 @@ CommandResult CommitBoxPreviewCommand::execute_initial() {
 }
 
 CommandResult CommitBoxPreviewCommand::redo_recorded() {
+  if (default_material_ == kInvalidAssetId ||
+      assets_.material(default_material_) == nullptr) {
+    return command_invalid_result(
+        "Default material asset is missing from the current project");
+  }
   CommandResult restore =
       command_result_from(modeling_.restore_history_memento(after_));
   if (!restore.ok) {

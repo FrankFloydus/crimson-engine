@@ -142,6 +142,11 @@ int plane_side(float distance)
     return 0;
 }
 
+float cut_edge_factor(const PlaneCutPlane& plane,
+                      quader::QVec3 first_position,
+                      quader::QVec3 second_position, float first_distance,
+                      float second_distance);
+
 quader::QVec2 interpolate_uv(quader::QVec2 first, quader::QVec2 second, float factor)
 {
     return {
@@ -286,7 +291,8 @@ bool append_face_from_points(
     PlaneCutBuilder& builder,
     const Face& source_face,
     std::vector<PlaneCutPoint> points,
-    std::string& message)
+    std::string& message,
+    std::optional<ElementId> face_id = std::nullopt)
 {
     points = compact_output_points(std::move(points));
     if (points.empty()) {
@@ -298,8 +304,9 @@ bool append_face_from_points(
     }
 
     Face face;
-    face.id = source_face.id;
+    face.id = face_id.value_or(source_face.id);
     face.material_slot = source_face.material_slot;
+    face.normal_shading = source_face.normal_shading;
     face.vertices.reserve(points.size());
     const bool has_uvs = std::ranges::all_of(points, [](const PlaneCutPoint& point) {
         return point.has_uv;
@@ -474,6 +481,200 @@ bool split_face_by_plane(
     return
         append_face_from_points(front, face, std::move(front_points), message) &&
         append_face_from_points(back, face, std::move(back_points), message);
+}
+
+std::vector<PlaneCutPoint> source_points_for_face(
+    const PlaneCutWork& work,
+    const Face& face,
+    bool has_loop_uvs)
+{
+    std::vector<PlaneCutPoint> points;
+    points.reserve(face.vertices.size());
+    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+        points.push_back(source_point_for_face_vertex(work, face, index, has_loop_uvs));
+    }
+    return points;
+}
+
+bool append_surface_cut_segment_from_split_face(
+    PlaneCutWork& work,
+    std::span<const PlaneCutPoint> front_points,
+    std::span<const PlaneCutPoint> back_points,
+    std::vector<ElementId>& cut_vertex_ids,
+    std::string& message)
+{
+    std::vector<ElementId> plane_ids =
+        plane_vertices_for_split_loop(work.plane, work.plane_vertex_positions, front_points);
+    for (const ElementId id :
+         plane_vertices_for_split_loop(work.plane, work.plane_vertex_positions, back_points)) {
+        add_unique_id(plane_ids, id);
+    }
+    if (plane_ids.size() != 2U) {
+        message = "Cut plane intersects a face in unsupported topology.";
+        return false;
+    }
+
+    const Edge edge = make_edge(plane_ids[0], plane_ids[1]);
+    if (edge.a == edge.b) {
+        message = "Cut would create a degenerate face split.";
+        return false;
+    }
+    add_unique_edge(work.cut_segments, edge);
+    add_unique_id(cut_vertex_ids, plane_ids[0]);
+    add_unique_id(cut_vertex_ids, plane_ids[1]);
+    return true;
+}
+
+bool append_surface_face_by_plane(
+    PlaneCutWork& work,
+    PlaneCutBuilder& builder,
+    const Face& face,
+    std::vector<ElementId>& cut_vertex_ids,
+    std::vector<ElementId>& created_face_ids,
+    std::vector<ElementId>& affected_face_ids,
+    std::string& message)
+{
+    if (face.vertices.size() < 3U) {
+        return true;
+    }
+
+    const bool has_loop_uvs = face_has_loop_uvs(face);
+    std::vector<float> distances;
+    distances.reserve(face.vertices.size());
+    bool has_front = false;
+    bool has_back = false;
+    bool has_on = false;
+    for (const ElementId vertex_id : face.vertices) {
+        const auto found = work.source_vertices.find(vertex_id);
+        if (found == work.source_vertices.end()) {
+            message = "Cut could not find a face vertex.";
+            return false;
+        }
+        const float distance =
+            signed_distance_to_cut_plane(work.plane, found->second.position);
+        distances.push_back(distance);
+        const int side = plane_side(distance);
+        has_front = has_front || side > 0;
+        has_back = has_back || side < 0;
+        has_on = has_on || side == 0;
+        if (side == 0) {
+            work.plane_vertex_positions[vertex_id] = found->second.position;
+        }
+    }
+
+    if ((has_on && !has_front && !has_back) || !has_back || !has_front) {
+        return append_face_from_points(
+            builder,
+            face,
+            source_points_for_face(work, face, has_loop_uvs),
+            message);
+    }
+
+    std::vector<PlaneCutPoint> front_points;
+    std::vector<PlaneCutPoint> back_points;
+    front_points.reserve(face.vertices.size() + 2U);
+    back_points.reserve(face.vertices.size() + 2U);
+
+    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+        const std::size_t next_index = (index + 1U) % face.vertices.size();
+        const int side = plane_side(distances[index]);
+        const int next_side = plane_side(distances[next_index]);
+        const PlaneCutPoint current =
+            source_point_for_face_vertex(work, face, index, has_loop_uvs);
+
+        if (side >= 0) {
+            front_points.push_back(current);
+        }
+        if (side <= 0) {
+            back_points.push_back(current);
+        }
+
+        if ((side > 0 && next_side < 0) || (side < 0 && next_side > 0)) {
+            PlaneCutPoint intersection = intersection_point_for_edge(
+                work,
+                face,
+                index,
+                next_index,
+                distances[index],
+                distances[next_index],
+                has_loop_uvs);
+            front_points.push_back(intersection);
+            back_points.push_back(intersection);
+        }
+    }
+
+    front_points = compact_output_points(std::move(front_points));
+    back_points = compact_output_points(std::move(back_points));
+    if (front_points.size() < 3U || back_points.size() < 3U) {
+        message = "Cut would create degenerate split faces.";
+        return false;
+    }
+    if (!append_surface_cut_segment_from_split_face(
+            work, front_points, back_points, cut_vertex_ids, message)) {
+        return false;
+    }
+
+    const ElementId created_face_id = builder.document.next_face_id++;
+    if (!append_face_from_points(builder, face, std::move(front_points), message) ||
+        !append_face_from_points(
+            builder, face, std::move(back_points), message, created_face_id)) {
+        return false;
+    }
+    add_unique_id(created_face_ids, created_face_id);
+    add_unique_id(affected_face_ids, face.id);
+    return true;
+}
+
+bool face_contains_edge(const Face& face, Edge edge)
+{
+    edge = make_edge(edge.a, edge.b);
+    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+        const Edge candidate = make_edge(
+            face.vertices[index],
+            face.vertices[(index + 1U) % face.vertices.size()]);
+        if (candidate == edge) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool document_contains_edge(const Document& document, Edge edge)
+{
+    edge = make_edge(edge.a, edge.b);
+    for (const Face& face : document.faces) {
+        if (face_contains_edge(face, edge)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<Edge> surface_cut_hard_normal_edges(
+    const Document& source,
+    const Document& candidate,
+    const std::map<std::pair<ElementId, ElementId>, PlaneCutIntersection>& intersections)
+{
+    std::vector<Edge> hard_edges;
+    for (Edge edge : source.hard_normal_edges) {
+        edge = make_edge(edge.a, edge.b);
+        const auto found = intersections.find({edge.a, edge.b});
+        if (found != intersections.end() && found->second.id != kInvalidElementId) {
+            const Edge first = make_edge(edge.a, found->second.id);
+            const Edge second = make_edge(found->second.id, edge.b);
+            if (document_contains_edge(candidate, first)) {
+                add_unique_edge(hard_edges, first);
+            }
+            if (document_contains_edge(candidate, second)) {
+                add_unique_edge(hard_edges, second);
+            }
+            continue;
+        }
+        if (document_contains_edge(candidate, edge)) {
+            add_unique_edge(hard_edges, edge);
+        }
+    }
+    return hard_edges;
 }
 
 std::optional<std::vector<std::vector<ElementId>>> cap_loops_from_segments(std::span<const Edge> segments, std::string& message)
@@ -744,6 +945,74 @@ PlaneCutResult plane_cut(const Document& document, const PlaneCutRequest& reques
 {
     QDR_PROFILE_SCOPE("qdr_document.plane_cut");
     return plane_cut_impl(document, request);
+}
+
+OperationResult plane_surface_cut(Document &document, Selection &selection,
+                                  const PlaneCutRequest &request) {
+  QDR_PROFILE_SCOPE("qdr_document.plane_surface_cut");
+  if (document.faces.empty()) {
+    return {false, "Cut needs a mesh."};
+  }
+
+  const std::optional<PlaneCutPlane> plane = plane_from_request(request);
+  if (!plane.has_value()) {
+    return {false, "Cut plane needs three non-collinear points."};
+  }
+
+  PlaneCutWork work;
+  work.plane = *plane;
+  work.next_vertex_id = document.next_vertex_id;
+  for (const Vertex& vertex : document.vertices) {
+    work.source_vertices[vertex.id] = {vertex.id, vertex.position};
+  }
+
+  PlaneCutBuilder builder;
+  builder.document.next_vertex_id = document.next_vertex_id;
+  builder.document.next_face_id = document.next_face_id;
+
+  OperationResult result;
+  std::vector<ElementId> cut_vertex_ids;
+  std::string message;
+  for (const Face& face : document.faces) {
+    if (!append_surface_face_by_plane(
+            work,
+            builder,
+            face,
+            cut_vertex_ids,
+            result.created.faces,
+            result.affected.faces,
+            message)) {
+      return {false,
+              message.empty() ? std::string("Cut could not split the mesh faces.")
+                              : std::move(message)};
+    }
+  }
+
+  if (work.cut_segments.empty()) {
+    return {false, "Cut plane did not create any face cuts."};
+  }
+
+  builder.document.hard_normal_edges =
+      surface_cut_hard_normal_edges(document, builder.document, work.intersections);
+  prune_unused_vertices(builder.document);
+  restore_source_face_orientation(document, builder.document);
+  if (!every_face_triangulates(builder.document)) {
+    return {false, "Cut would create a face that cannot be triangulated."};
+  }
+
+  for (const auto& [edge, intersection] : work.intersections) {
+    (void)edge;
+    add_unique_id(result.created.vertices, intersection.id);
+  }
+  result.affected.edges = work.cut_segments;
+  result.changed = true;
+
+  document = std::move(builder.document);
+  selection.clear();
+  selection.mode = SelectionMode::Vertex;
+  selection.vertices = std::move(cut_vertex_ids);
+  activate_last_selection(selection);
+  return result;
 }
 
 } // namespace quader_poly

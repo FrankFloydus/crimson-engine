@@ -11,6 +11,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 
 #include <editor/modeling/runtime/session.hpp>
 
@@ -39,13 +40,19 @@ public:
   void apply_scene_identity_to_entity(
       SceneDocument &scene, EntityId entity,
       const ModelingObjectSceneIdentity &identity) const;
+  [[nodiscard]] bool restore_history_mesh_assets(
+      AssetRegistry &assets,
+      const std::unordered_map<AssetId, MeshAsset> &mesh_assets) const;
+  void remove_unreferenced_history_mesh_assets(
+      const SceneDocument &scene, AssetRegistry &assets,
+      std::span<const AssetId> mesh_assets) const;
   void apply_scene_identity_to_duplicate_entity(
       SceneDocument &scene, EntityId entity,
       const ModelingObjectSceneIdentity &identity) const;
   void apply_scene_transforms(
       SceneDocument &scene,
       std::span<const SceneTransformAssignment> transforms) const;
-  void sync_scene_objects_from_modeling(
+  [[nodiscard]] bool sync_scene_objects_from_modeling(
       const quader_editor_core::EditorSession &session, SceneDocument &scene,
       AssetRegistry &assets, SceneModelingSyncService &scene_sync,
       bool force = false) const;

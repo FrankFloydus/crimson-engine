@@ -61,9 +61,9 @@ std::string stable_object_suffix(std::string_view value) {
 
 const QuaderCommandDescriptor *
 find_command(const std::vector<QuaderCommandDescriptor> &commands,
-             QuaderCommandId command_id) {
+             std::string_view command_id) {
   for (const QuaderCommandDescriptor &command : commands) {
-    if (command.id == command_id.string()) {
+    if (command.id == command_id) {
       return &command;
     }
   }
@@ -135,6 +135,9 @@ struct QtMainMenu::Impl {
   struct ToolAction {
     QAction *action = nullptr;
     ViewportToolId tool = ViewportToolId::Select;
+    std::string tool_id;
+    std::string localization_key;
+    std::string fallback;
   };
 
   explicit Impl(QtMainMenuContext value) : context(std::move(value)) {}
@@ -380,11 +383,19 @@ struct QtMainMenu::Impl {
                                      static_cast<qsizetype>(tool->id().size()))));
       action->setCheckable(true);
       const ViewportToolId tool_id = tool->viewport_tool();
+      const std::string command_id =
+          context.editor.commands().command_id_for_tool_activation(tool->id());
       QObject::connect(action, &QAction::triggered, menu_bar,
-                       [this, tool_id]() {
-                         (void)context.editor.tools().activate(tool_id);
+                       [this, command_id]() {
+                         (void)context.editor.commands().execute(command_id);
                        });
-      tool_actions.push_back({action, tool_id});
+      tool_actions.push_back({
+          .action = action,
+          .tool = tool_id,
+          .tool_id = std::string(tool->id()),
+          .localization_key = tool_localization_key(*tool),
+          .fallback = std::string(tool->label()),
+      });
     }
   }
 
@@ -523,7 +534,7 @@ void QtMainMenu::refresh() {
       impl_->context.editor.commands().available();
   for (Impl::CommandAction &entry : impl_->command_actions) {
     const QuaderCommandDescriptor *command =
-        find_command(commands, entry.command_id);
+        find_command(commands, entry.command_id.string());
     const std::string_view shortcut =
         command != nullptr ? std::string_view(command->shortcut)
                            : std::string_view{};
@@ -553,10 +564,18 @@ void QtMainMenu::refresh() {
       impl_->context.editor.tools().active_tool();
   for (const Impl::ToolAction &entry : impl_->tool_actions) {
     const QSignalBlocker blocker(entry.action);
+    const std::string command_id =
+        impl_->context.editor.commands().command_id_for_tool_activation(
+            entry.tool_id);
+    const QuaderCommandDescriptor *command = find_command(commands, command_id);
+    const std::string_view shortcut =
+        command != nullptr ? std::string_view(command->shortcut)
+                           : std::string_view{};
+    entry.action->setText(action_text(impl_->context.localization,
+                                      entry.localization_key, entry.fallback,
+                                      shortcut));
     entry.action->setChecked(active_tool == viewport_tool_id(entry.tool));
-    entry.action->setEnabled(viewport_tool_available(entry.tool) &&
-                             impl_->context.editor.tools().can_activate(
-                                 entry.tool));
+    entry.action->setEnabled(command != nullptr && command->enabled);
   }
   if (impl_->navigation_gizmo_action != nullptr) {
     const QSignalBlocker blocker(impl_->navigation_gizmo_action);

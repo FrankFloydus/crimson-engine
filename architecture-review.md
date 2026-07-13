@@ -8,7 +8,7 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Quader Architecture Review Against The Portable Modeling SDK Guide
 
-Generated: 2026-07-11
+Updated: 2026-07-13
 
 Reference: `C:\Users\Drako\Desktop\modeling_app_architecture_guide.md`
 
@@ -37,20 +37,23 @@ the central
 `QtViewportPanel` embeds one to four native-child `QWindow` Filament surfaces. This is the host
 baseline for the SDK migration; it does not move UI or renderer concepts into the portable core.
 
-Quader does not yet satisfy the reference guide's portable modeling SDK contract. There is no
-copyable SDK source boundary, SDK umbrella header, SDK install/export package, SDK-only configure
-path, or standalone SDK consumer test. Current runtime/editor DTOs still carry app scene, asset,
-viewport, overlay, and history concepts into layers that look like extraction candidates. Public
-APIs are native editor APIs, not SDK APIs. Mesh IDs, operation results, render snapshots, QDR DTOs,
-and preview transactions need SDK-grade contracts before runtime code moves.
+Quader now has a real portable modeling SDK boundary under `src/sdk/core/modeling`: the umbrella
+header, geometry, polygon, QDR document, runtime, install/export package, examples, SDK-only build,
+and clean installed external-consumer check are present. Native and SDK polygon/QDR targets compile
+the same canonical portable sources. The SDK-only vcpkg path disables default features and enables
+only the test dependency, so it does not install Qt, EnTT, GLM, Sentry, or other native-host
+packages.
 
-The plan starts with governance and build guardrails, then moves pure geometry/polygon behavior,
-portable QDR document IO, SDK result/ID contracts, runtime-neutral DTOs, headless modeling sessions,
-semantic overlays, host input adapters, render snapshots, performance gates, packaging, and tests.
+The remaining work is adapter migration and contract depth, not creation of the boundary. Native
+runtime/editor DTOs still carry scene, asset, viewport, overlay, and history concepts. The native
+public APIs remain intentionally host-facing while overlapping modeling behavior moves behind SDK
+owners. Render snapshot lifetime, early dirty gates, parity depth, golden fixtures, and seeded
+property tests remain active migration work.
 
 ## Resolved Architecture Decisions
 
-1. Active plan: create the app-owned portable modeling core described in this review.
+1. Active plan: continue migrating modeling truth into the app-owned portable core described in
+   this review.
 2. Source path: `src/sdk/core/modeling`.
 3. Public namespace: `quader::modeling`.
 4. Umbrella header: `quader/modeling/modeling.hpp`.
@@ -58,15 +61,17 @@ semantic overlays, host input adapters, render snapshots, performance gates, pac
 6. SDK APIs: add separate SDK APIs; do not rename native APIs into SDK APIs.
 7. Old copied SDK: keep old package paths, old macros, old presets, and old external checkout
    wiring banned.
-8. Build mode: add a default-on native app build option named `QUADER_BUILD_NATIVE_APP`; SDK-only
+8. Build mode: use the default-on native app build option named `QUADER_BUILD_NATIVE_APP`; SDK-only
    configure builds SDK targets without Filament, Qt Widgets, legacy SDL/ImGui backends, native
    resources, or the app executable.
-9. First SDK CMake targets:
+9. SDK CMake targets:
    - `quader_modeling_sdk_geometry`
    - `quader_modeling_sdk_polygon`
    - `quader_modeling_sdk_qdr_document`
-10. Deferred SDK target: `quader_modeling_sdk_runtime` is added only after DTO and header hygiene
-    guardrails pass.
+   - `quader_modeling_sdk_runtime`
+   - `quader_modeling_sdk`
+10. SDK dependency policy: native vcpkg dependencies live in the default `native-app` feature;
+    SDK-only verification disables defaults and enables only the `tests` feature.
 11. ID policy: SDK public IDs are typed and generational.
 12. Result policy: SDK operations return structured `Result<T>` values with error codes,
     diagnostics, dirty flags, element deltas, and selection remap data.
@@ -127,10 +132,11 @@ overlaps.
 
 ### Mesh And Polygon Core
 
-`src/mesh/geometry` and `src/mesh/polygon` are the cleanest SDK seed:
+`src/sdk/core/modeling/internal/mesh` is the canonical geometry and polygon implementation:
 
-- geometry, polygon documents, topology, picking, compilation, and operations are already isolated
-  from the Qt host UI, legacy UI backends, and Filament;
+- geometry, polygon documents, topology, picking, compilation, and operations are isolated from
+  the Qt host UI, legacy UI backends, and Filament;
+- native `src/mesh` headers mirror the canonical headers only as a transitional include boundary;
 - `quader_modeling_polygon` links to geometry, optional OpenMesh, and profiling support;
 - modeling-domain tests cover polygon documents, liveness, validation, operations, QDR document IO,
   runtime operations, runtime tools, and editor metadata.
@@ -199,7 +205,7 @@ The native target map remains split across these areas and must stay split durin
 - `ui`
 - `app`
 
-Current modeling-domain targets that stay valid while SDK targets are added:
+Current modeling-domain targets that stay valid during SDK adapter migration:
 
 - `quader_geometry`
 - `quader_modeling_polygon`
@@ -212,12 +218,14 @@ Current modeling-domain targets that stay valid while SDK targets are added:
 - `quader_modeling_domain_runtime_loop_tests`
 - `quader_modeling_domain_metadata_loop_tests`
 
-The SDK adds wrapper/extraction targets around the clean lower layers first. Runtime waits for DTO
-hygiene.
+Current portable targets are `quader_modeling_sdk_geometry`,
+`quader_modeling_sdk_polygon`, `quader_modeling_sdk_qdr_document`,
+`quader_modeling_sdk_runtime`, and the umbrella `quader_modeling_sdk`. They install through
+`QuaderModelingSdk`, and a separate consumer configures against the installed package.
 
 ## Main Gaps
 
-### P0 - SDK Build Boundary Is Missing
+### Completed P0 - SDK Build Boundary
 
 Required state:
 
@@ -231,13 +239,14 @@ Required state:
 
 Current state:
 
-- no SDK source boundary exists;
-- no SDK umbrella header exists;
-- top-level configure validates native app dependencies;
-- examples link the native runtime;
-- no install/export package exists for a modeling SDK.
+- `src/sdk/core/modeling` and `quader/modeling/modeling.hpp` are live;
+- native dependency discovery is gated by `QUADER_BUILD_NATIVE_APP`;
+- SDK examples link only `quader_modeling_sdk`;
+- SDK targets have install/export metadata and a clean external-consumer build;
+- SDK-only vcpkg configuration installs only the `tests` feature dependency;
+- dependency and public-header guardrails reject native owner leakage.
 
-### P0 - Header Hygiene Is Not SDK-Ready
+### P1 - Native Adapter Extraction Is Incomplete
 
 Current candidate runtime/modeling headers carry app concepts:
 
@@ -339,15 +348,18 @@ Required state:
 - render API can reuse previous snapshots;
 - picking signatures are cached by object revision, transform, and pick-affecting options.
 
-### P3 - SDK Portability Tests Are Missing
+### P2 - SDK Portability Coverage Needs More Depth
 
-Required state:
+Established state:
 
-- SDK consumer test;
-- SDK header hygiene guardrails;
-- SDK dependency guardrails;
-- SDK target package/export check;
-- SDK public examples;
+- SDK consumer test, public-header hygiene, and dependency guardrails;
+- SDK-only configure/build/test without native vcpkg packages;
+- SDK target install/export and clean external-consumer check;
+- SDK public examples.
+
+Remaining state:
+
+- broader native/SDK parity transcripts;
 - mesh-operation golden fixtures;
 - deterministic seeded fuzz/property tests for topology, validation, malformed data, and
   serialization.
@@ -412,6 +424,16 @@ Revision and signature gates run before:
 - whole-session preview-state copies.
 
 ## Progressive Migration Plan
+
+Execution status as of 2026-07-13:
+
+- Phases 0 and 1 are complete.
+- The public SDK contracts, runtime target, canonical polygon/QDR ownership, packaging, examples,
+  SDK consumer, and the install/export check described across Phases 2 through 6 and 9 are live.
+- Phases 2 through 9 remain open only for the uncompleted adapter migration, parity, snapshot,
+  performance, golden-fixture, and fuzz/property-test items listed below.
+- Phase 10 cleanup is in progress; transitional native header mirrors remain guarded so they cannot
+  become a second compiled implementation.
 
 ### Phase 0 - Lock Authority
 
@@ -781,24 +803,26 @@ Exit criteria:
 - no transitional SDK/app boundary exceptions remain;
 - source layout, CMake, tests, examples, and guardrails tell the same story.
 
-## First Milestone
+## First Milestone (Completed)
 
-The first milestone is fixed:
+The first milestone delivered:
 
 1. Root `AGENTS.md` is self-contained.
 2. Top-level instruction and documentation folders are deleted.
 3. This review contains the active deterministic architecture plan.
 4. Guardrails route instruction, architecture, and example changes through root guidance and live
    examples.
-5. Add `src/sdk/core/modeling` as the only allowed SDK path.
-6. Add additive SDK wrapper targets:
+5. `src/sdk/core/modeling` as the only allowed SDK path.
+6. SDK targets:
    - `quader_modeling_sdk_geometry`
    - `quader_modeling_sdk_polygon`
    - `quader_modeling_sdk_qdr_document`
-7. Add `QUADER_BUILD_NATIVE_APP`.
-8. Add SDK target dependency guardrails.
-9. Add one SDK consumer test.
-10. Build the native app.
+   - `quader_modeling_sdk_runtime`
+   - `quader_modeling_sdk`
+7. `QUADER_BUILD_NATIVE_APP` gating of native dependencies and targets.
+8. SDK target dependency and manifest-feature guardrails.
+9. SDK consumer tests, public examples, install/export, and a clean external consumer.
+10. Native app compatibility verification.
 
 Verification for this milestone:
 
@@ -885,16 +909,16 @@ cmake --build --preset vs2026-debug --target quader
 | Area | Final Finding |
 | --- | --- |
 | Governance | Root `AGENTS.md` and this review are the active authorities. |
-| Build | Lower modeling targets exist; SDK wrapper targets and native app gating are next. |
-| Core modeling | Mesh/polygon code is the SDK seed; IDs, results, dirty flags, and remaps need SDK contracts. |
-| Public API | Native APIs stay host-facing; SDK APIs are separate under `quader::modeling`. |
+| Build | SDK targets, native app gating, install/export, clean consumer, and vcpkg feature isolation are live. |
+| Core modeling | Polygon and portable QDR implementation have one canonical SDK-owned compiled source; typed IDs, structured results, dirty flags, and remaps are public SDK contracts. |
+| Public API | Native APIs stay host-facing; the separate SDK API is under `quader::modeling`. |
 | UI/viewport | Qt Widgets/Fusion is the host shell; semantic input exists, while remaining `QtViewportPanel` coordination and UI contexts need owner extraction. |
 | Render | Filament is contained; snapshots and overlays need neutral stable payloads. |
-| IO/assets | Native project IO remains native; portable QDR document IO moves to SDK. |
-| Tests | Native tests are strong; SDK consumer, target, header, golden, and fuzz tests are required. |
+| IO/assets | Native project IO remains native; portable QDR document IO is SDK-owned. |
+| Tests | Native, SDK consumer, header/dependency guardrail, parity, and package-consumer coverage exist; golden and fuzz/property depth remain. |
 | Performance | Dirty gates move before compile/hash/regenerate work. |
-| Migration | Start with authority, guardrails, additive targets, DTO hygiene, and consumer tests. |
+| Migration | Continue adapter extraction, snapshot/performance work, deeper parity, and compatibility cleanup. |
 
-The core theme is fixed: Quader has many strong native pieces, and the SDK promise becomes real only
-when CMake targets, headers, guardrails, tests, examples, and host adapters enforce the same
-direction.
+The core theme is fixed: CMake targets, manifest features, headers, guardrails, examples, and
+consumer tests now enforce the SDK boundary. The remaining work is to route more native modeling
+behavior through that established source of truth without widening the portable dependency graph.

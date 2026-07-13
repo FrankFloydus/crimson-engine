@@ -330,10 +330,14 @@ function Get-ModelingLoopTargetForTestPath {
 function Get-PolygonOperationFilterForSourcePath {
     param([string]$Path)
 
-    if ($Path -match '^src/mesh/polygon/(operations/)?poly_operation_registry\.(cpp|hpp)$') {
+    $logicalPath = $Path -replace `
+        '^src/sdk/core/modeling/internal/mesh/polygon/',
+        'src/mesh/polygon/'
+
+    if ($logicalPath -match '^src/mesh/polygon/(operations/)?poly_operation_registry\.(cpp|hpp)$') {
         return Get-TestFileFilter "tests/modeling_domain/operation/qdr_document_operation_registry_tests.cpp"
     }
-    if ($Path -notmatch '^src/mesh/polygon/operations/([^/]+)_operation\.cpp$') {
+    if ($logicalPath -notmatch '^src/mesh/polygon/operations/([^/]+)_operation\.cpp$') {
         return ""
     }
 
@@ -538,9 +542,19 @@ function Add-PathPlan {
         return
     }
 
+    if ($Path -match '^src/sdk/core/modeling/internal/mesh/geometry/') {
+        Add-BuildTarget "quader_geometry" "canonical geometry source changed"
+        Add-BuildTarget "quader_modeling_sdk_consumer_tests" "canonical geometry source changed"
+        Add-PolygonModelingLoopFilter "QdrGeometryTests.*:QdrPolyGeometryCharacterizationTests.*" "native geometry-domain parity tests"
+        return
+    }
+
     $polygonOperationFilter = Get-PolygonOperationFilterForSourcePath $Path
     if ($polygonOperationFilter -ne "") {
         Add-BuildTarget "quader_modeling_polygon" "polygon operation source changed"
+        if ($Path -match '^src/sdk/core/modeling/internal/mesh/polygon/') {
+            Add-BuildTarget "quader_modeling_sdk_consumer_tests" "canonical polygon operation source changed"
+        }
         Add-PolygonModelingLoopFilter $polygonOperationFilter "focused polygon operation tests"
         return
     }
@@ -548,6 +562,22 @@ function Add-PathPlan {
     if ($Path -match '^src/mesh/polygon/') {
         Add-BuildTarget "quader_modeling_polygon" "polygon document source changed"
         Add-PolygonModelingLoopFilter "QdrDocument*:QdrPoly*:QdrDocumentOperation*" "polygon and document-operation tests"
+        return
+    }
+
+    if ($Path -match '^src/sdk/core/modeling/internal/mesh/polygon/') {
+        Add-BuildTarget "quader_modeling_polygon" "canonical polygon source changed"
+        Add-BuildTarget "quader_modeling_sdk_consumer_tests" "canonical polygon source changed"
+        Add-PolygonModelingLoopFilter "QdrDocument*:QdrPoly*:QdrDocumentOperation*" "native polygon parity tests"
+        return
+    }
+
+    if ($Path -match '^src/sdk/core/modeling/internal/io/qdr/') {
+        Add-BuildTarget "quader_qdr_document_io" "canonical QDR source changed"
+        Add-BuildTarget "quader_modeling_sdk_consumer_tests" "canonical QDR source changed"
+        Add-BuildTarget "quader_tests" "canonical QDR source changed"
+        Add-PolygonModelingLoopFilter "QdrIoDocumentTests.*" "native QDR document parity tests"
+        Add-QuaderTestsFilter "Qdr*:ProjectionOwnershipGuardrailTests.*" "QDR app IO parity tests"
         return
     }
 
@@ -590,6 +620,16 @@ function Add-PathPlan {
     if ($Path -match '^src/editor/metadata/') {
         Add-BuildTarget "quader_editor_metadata" "editor metadata source changed"
         Add-MetadataModelingLoopFilter "QdrEditorMetadata*" "editor metadata modeling-domain tests"
+        return
+    }
+
+    if ($Path -match '^src/editor/pivot/' -or
+        $Path -match '^src/scene/scene_transform_pivot\.(cpp|hpp)$') {
+        Add-BuildTarget "quader_modeling" "visible pivot source changed"
+        Add-BuildTarget "quader_guardrail_tests" "visible pivot source changed"
+        Add-BuildTarget "quader_tests" "visible pivot source changed"
+        Add-GuardrailTestsFilter "OopArchitectureGuardrailTests.VisiblePivotResolutionHasOneSceneOwner:ProgrammaticApiGuardrailTests.*" "pivot ownership and API source-policy guardrails"
+        Add-QuaderTestsFilter "CopyPivotFromActiveTests.*:EditorApiTests.*Pivot*:ViewportInteractionControllerTests.*Pivot*:ViewportToolRuntimeTests.*Pivot*" "pivot tool and copy-pivot behavior tests"
         return
     }
 

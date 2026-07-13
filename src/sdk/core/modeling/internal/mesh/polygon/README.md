@@ -10,9 +10,9 @@ file except through prior written authorization from Francesco Di Blasi.
 
 Canonical Quader polygon document model and operations.
 
-This package is app-owned native source under the `quader_modeling_polygon` target. It keeps the
-legacy-compatible `quader_poly` namespace/API, but it is no longer an external SDK extraction
-boundary.
+This package is the single implementation source for both `quader_modeling_polygon` and
+`quader_modeling_sdk_polygon`. It keeps the legacy-compatible `quader_poly` namespace/API behind
+the public SDK facade while the native host finishes adapting to SDK-owned modeling truth.
 
 Owns:
 
@@ -27,8 +27,8 @@ Owns:
 
 ## Internal Decomposition
 
-`quader_modeling_polygon` is built from focused `.cpp` files with explicit CMake entries. Shared
-declarations and helper types live in private headers under `src/mesh/polygon/internal`.
+Both polygon targets are built from the same focused `.cpp` source list. Shared declarations and
+helper types live in private headers in this package.
 
 Current owner slices:
 

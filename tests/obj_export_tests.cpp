@@ -16,6 +16,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -216,6 +217,43 @@ TEST(ObjExportTests, MultipleMeshSelectionsWriteSuffixedSiblingObjs) {
   EXPECT_TRUE(std::filesystem::exists(root / "Base_Dup_Mesh_2.obj"));
 }
 
+TEST(ObjExportTests,
+     MultipleMeshExportPreservesEveryExistingFileWhenOneTargetIsInvalid) {
+  const std::filesystem::path root = obj_test_root("multiple-atomic-failure");
+  const std::filesystem::path chosen = root / "Atomic.obj";
+  const std::filesystem::path first_path = root / "Atomic_First.obj";
+  const std::filesystem::path second_path = root / "Atomic_Second.obj";
+  ObjExportHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef first =
+      create_selected_box(editor, "First");
+  const quader::QuaderModelingObjectRef second =
+      create_selected_box(editor, "Second");
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({first.entity, second.entity}, second.entity)
+                  .ok());
+
+  {
+    std::ofstream existing(first_path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(existing.is_open());
+    existing << "existing first export\n";
+  }
+  ASSERT_TRUE(std::filesystem::create_directory(second_path));
+
+  const quader::QuaderApiResult<quader::QuaderObjExportResult> exported =
+      editor.project().export_selected_meshes_as_obj(chosen);
+  EXPECT_FALSE(exported.ok());
+  EXPECT_EQ(read_text_file(first_path), "existing first export\n");
+  EXPECT_TRUE(std::filesystem::is_directory(second_path));
+
+  for (const std::filesystem::directory_entry &entry :
+       std::filesystem::directory_iterator(root)) {
+    EXPECT_EQ(entry.path().filename().string().find(".quader-obj-"),
+              std::string::npos)
+        << entry.path();
+  }
+}
+
 TEST(ObjExportTests, ModelingMeshExportUsesLocalMeshSpace) {
   const std::filesystem::path root = obj_test_root("local-space");
   const std::filesystem::path path = root / "moved.obj";
@@ -287,16 +325,22 @@ TEST(ObjExportTests, NonObjectMeshSelectionsDisableCommandAndDoNotWriteFiles) {
   expect_disabled_export("light");
 }
 
-TEST(ObjExportTests, InvalidSelectedMeshDisablesCommandAndDoesNotWriteFile) {
+TEST(ObjExportTests,
+     RegistryRejectedMeshDisablesCommandAndDoesNotWriteFile) {
   const std::filesystem::path root = obj_test_root("invalid-selection");
   const std::filesystem::path path = root / "invalid.obj";
   InternalObjExportHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   quader::MeshAsset invalid = valid_internal_triangle_mesh();
   invalid.indices = {0, 1};
-  (void)create_selected_plain_mesh_with_asset(harness.session, editor,
-                                             "Invalid Mesh",
-                                             std::move(invalid));
+  const std::uint64_t asset_revision_before =
+      harness.session.assets().revision();
+  const quader::EntityId entity = create_selected_plain_mesh_with_asset(
+      harness.session, editor, "Invalid Mesh", std::move(invalid));
+  EXPECT_EQ(harness.session.assets().revision(), asset_revision_before);
+  ASSERT_NE(harness.session.scene().mesh(entity), nullptr);
+  EXPECT_EQ(harness.session.scene().mesh(entity)->mesh,
+            quader::kInvalidAssetId);
 
   EXPECT_FALSE(editor.project().can_export_selected_meshes_as_obj());
   const std::optional<quader::QuaderCommandDescriptor> command =
@@ -308,7 +352,7 @@ TEST(ObjExportTests, InvalidSelectedMeshDisablesCommandAndDoesNotWriteFile) {
   const quader::QuaderApiResult<quader::QuaderObjExportResult> exported =
       editor.project().export_selected_meshes_as_obj(path);
   EXPECT_FALSE(exported.ok());
-  EXPECT_NE(exported.error_message().find("triangle-aligned"),
+  EXPECT_NE(exported.error_message().find("object-mode mesh selection"),
             std::string::npos);
   EXPECT_FALSE(std::filesystem::exists(path));
 }
@@ -384,4 +428,15 @@ TEST(ObjExportTests, ObjWriterRejectsMalformedMeshData) {
   EXPECT_NE(out_of_bounds_result.message.find("out of bounds"),
             std::string::npos);
   EXPECT_FALSE(std::filesystem::exists(out_of_bounds_path));
+
+  quader::MeshAsset non_finite = valid_internal_triangle_mesh();
+  non_finite.vertices.front().position.x =
+      std::numeric_limits<float>::quiet_NaN();
+  const std::filesystem::path non_finite_path = root / "non-finite.obj";
+  const quader::ObjMeshWriteResult non_finite_result =
+      quader::ObjMeshWriter::write_mesh(non_finite_path, non_finite,
+                                        "Non Finite");
+  EXPECT_FALSE(non_finite_result.ok);
+  EXPECT_NE(non_finite_result.message.find("not finite"), std::string::npos);
+  EXPECT_FALSE(std::filesystem::exists(non_finite_path));
 }

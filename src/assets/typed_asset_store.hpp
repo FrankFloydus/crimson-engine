@@ -26,7 +26,7 @@ template <typename Document, typename Revision>
 class TypedAssetStore {
 public:
     AssetId add(AssetId id, Document document) {
-        if (documents_.contains(id)) {
+        if (id == kInvalidAssetId || documents_.contains(id)) {
           return kInvalidAssetId;
         }
         stamp(id, document);
@@ -84,6 +84,18 @@ public:
     }
 
     std::size_t size() const { return documents_.size(); }
+
+    void restamp_after(Revision revision_floor) {
+      if (next_revision_ < revision_floor) {
+        next_revision_ = revision_floor;
+      }
+      for (const AssetId id : ids()) {
+        auto document = documents_.find(id);
+        if (document != documents_.end()) {
+          stamp(id, document->second);
+        }
+      }
+    }
 
 private:
     void stamp(AssetId id, Document& document) {

@@ -219,6 +219,13 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "Modifica");
     EXPECT_EQ(localization.text("viewport.tool.move.label", "Move"), "Sposta");
     EXPECT_EQ(localization.text("modeling.action.bridge_faces.label", "Bridge Faces"), "Bridge facce");
+    EXPECT_EQ(localization.text("modeling.action.copy_pivot_from_active.label",
+                                "Copy Pivot From Active"),
+              "Copia pivot dall'elemento attivo");
+    EXPECT_EQ(localization.text(
+                  "modeling.action.disabled.copy_pivot_from_active_selection",
+                  "Select an active mesh and at least one other editable mesh."),
+              "Seleziona una mesh attiva e almeno un'altra mesh modificabile.");
     EXPECT_EQ(localization.text("ui.viewport.delete_popup.window_title", "Delete"), "Elimina");
     EXPECT_EQ(localization.text("ui.panel.tool_settings", "Tool Settings"),
               "Impostazioni strumento");
@@ -226,6 +233,13 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("ui.action.cancel", "Cancel"), "Annulla");
     EXPECT_TRUE(localization.select_locale("en-US"));
     EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "Edit");
+    EXPECT_EQ(localization.text("modeling.action.copy_pivot_from_active.label",
+                                "Copy Pivot From Active"),
+              "Copy Pivot From Active");
+    EXPECT_EQ(localization.text(
+                  "modeling.action.disabled.copy_pivot_from_active_selection",
+                  "Select an active mesh and at least one other editable mesh."),
+              "Select an active mesh and at least one other editable mesh.");
     EXPECT_EQ(localization.text("ui.viewport.delete_popup.window_title", "Delete"), "Delete");
     EXPECT_EQ(localization.text("ui.panel.tool_settings", "Tool Settings"),
               "Tool Settings");
@@ -327,6 +341,7 @@ TEST(LocalizationResourceTests, ModelingActionDisabledReasonsUseLocaleKeys) {
       "modeling.action.disabled.minimum_objects",
       "modeling.action.disabled.active_element",
       "modeling.action.disabled.single_object",
+      "modeling.action.disabled.copy_pivot_from_active_selection",
   };
 
   ASSERT_GE(catalogs.size(), 2u);

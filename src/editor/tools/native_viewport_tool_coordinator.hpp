@@ -14,6 +14,7 @@ namespace quader {
 
 class EditorSelectionService;
 class LinearArrayToolService;
+class ModelingSessionService;
 class PivotToolService;
 
 /**
@@ -23,7 +24,8 @@ class NativeViewportToolCoordinator final {
 public:
   NativeViewportToolCoordinator(PivotToolService &pivot,
                                 LinearArrayToolService &linear_array,
-                                EditorSelectionService &selection);
+                                EditorSelectionService &selection,
+                                ModelingSessionService &modeling);
 
   [[nodiscard]] bool handles(std::string_view tool_id) const;
   [[nodiscard]] bool can_activate(std::string_view tool_id) const;
@@ -31,13 +33,18 @@ public:
   [[nodiscard]] std::string_view active_tool_id() const;
 
   CommandResult activate(std::string_view tool_id, double grid_world_size);
+  CommandResult cancel_competing_state_for_tool_activation();
   CommandResult commit_active();
   CommandResult cancel_active();
+  void reset_transient_state();
 
 private:
+  CommandResult cancel_prior_native_state();
+
   PivotToolService &pivot_;
   LinearArrayToolService &linear_array_;
   EditorSelectionService &selection_;
+  ModelingSessionService &modeling_;
 };
 
 } // namespace quader

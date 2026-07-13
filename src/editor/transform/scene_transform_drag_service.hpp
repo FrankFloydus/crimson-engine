@@ -109,8 +109,15 @@ public:
         std::string label = "Transform Selection");
 
   private:
-    [[nodiscard]] bool capture_targets(SceneDocument &document,
-                                       QVec3 world_pivot);
+    /// Distinguishes an empty selection from an unsafe transform capture.
+    enum class CaptureTargetsStatus {
+      Empty,
+      Captured,
+      Invalid,
+    };
+
+    [[nodiscard]] CaptureTargetsStatus
+    capture_targets(SceneDocument &document, QVec3 world_pivot);
     [[nodiscard]] const TransformComponent *
     captured_primary_transform(const SceneDocument &document,
                                EntityId primary) const;

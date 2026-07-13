@@ -67,6 +67,8 @@ public:
   set_material_texture(AssetId material, std::string_view slot,
                        AssetId texture);
   [[nodiscard]] AssetRegistryValidationResult
+  validate_mesh(const MeshAsset &mesh) const;
+  [[nodiscard]] AssetRegistryValidationResult
   validate_material(const MaterialDocument &material) const;
 
   const MeshAsset *mesh(AssetId id) const;
@@ -83,6 +85,7 @@ public:
   std::vector<AssetId> material_ids() const { return materials_.ids(); }
   std::vector<AssetId> texture_ids() const { return textures_.ids(); }
   std::uint64_t revision() const { return revision_; }
+  void advance_revision_for_replacement(std::uint64_t previous_revision);
 
 private:
   void mark_dirty();

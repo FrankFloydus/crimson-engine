@@ -483,14 +483,9 @@ std::string parse_json_string(const std::string &source, std::size_t &offset) {
   return value;
 }
 
-std::vector<std::string> direct_vcpkg_dependencies() {
-  const std::string manifest = read_source_file("vcpkg.json");
-  const std::size_t dependencies_key = manifest.find("\"dependencies\"");
-  EXPECT_NE(dependencies_key, std::string::npos);
-  const std::size_t dependencies_start = manifest.find('[', dependencies_key);
-  EXPECT_NE(dependencies_start, std::string::npos);
-
-  std::vector<std::string> dependencies;
+void append_vcpkg_dependency_array(const std::string &manifest,
+                                   std::size_t dependencies_start,
+                                   std::vector<std::string> &dependencies) {
   int array_depth = 1;
   int object_depth = 0;
   std::size_t offset = dependencies_start + 1;
@@ -527,6 +522,27 @@ std::vector<std::string> direct_vcpkg_dependencies() {
       --object_depth;
     }
     ++offset;
+  }
+}
+
+std::vector<std::string> direct_vcpkg_dependencies() {
+  const std::string manifest = read_source_file("vcpkg.json");
+  std::vector<std::string> dependencies;
+  std::size_t search_offset = 0;
+  while (search_offset < manifest.size()) {
+    const std::size_t dependencies_key =
+        manifest.find("\"dependencies\"", search_offset);
+    if (dependencies_key == std::string::npos) {
+      break;
+    }
+    const std::size_t dependencies_start =
+        manifest.find('[', dependencies_key);
+    EXPECT_NE(dependencies_start, std::string::npos);
+    if (dependencies_start == std::string::npos) {
+      break;
+    }
+    append_vcpkg_dependency_array(manifest, dependencies_start, dependencies);
+    search_offset = dependencies_start + 1;
   }
 
   std::sort(dependencies.begin(), dependencies.end());
@@ -610,8 +626,9 @@ TEST(BuildGuardrailTests, FormerSdkBoundaryIsAbsorbedIntoAppBuild) {
   expect_contains(presets, "\"generator\": \"Ninja Multi-Config\"");
   expect_contains(presets, "${sourceDir}/build/ninja-msvc");
 
-  expect_contains(build_files, "src/mesh/polygon");
-  expect_contains(build_files, "src/mesh/geometry");
+  expect_contains(build_files, "QUADER_CANONICAL_POLYGON_SOURCES");
+  expect_contains(build_files,
+                  "${QUADER_MODELING_SDK_INTERNAL_DIR}/mesh/geometry/geometry.cpp");
   expect_contains(build_files, "src/scene/document");
   expect_contains(build_files, "src/editor/modeling/runtime");
   expect_contains(build_files, "src/editor/modeling/operations");
@@ -671,17 +688,21 @@ TEST(BuildGuardrailTests,
   };
 
   const std::vector<OperationResultExpectation> expectations = {
-      {"src/mesh/polygon/operations/extrude_faces_operation.cpp",
+      {"src/sdk/core/modeling/internal/mesh/polygon/operations/"
+       "extrude_faces_operation.cpp",
        {"OperationResult result;", "result.created.vertices",
         "result.created.faces", "result.affected.faces", "return result;"}},
-      {"src/mesh/polygon/operations/thicken_faces_operation.cpp",
+      {"src/sdk/core/modeling/internal/mesh/polygon/operations/"
+       "thicken_faces_operation.cpp",
        {"OperationResult result;", "result.created.vertices",
         "result.created.faces", "result.affected.faces", "return result;"}},
-      {"src/mesh/polygon/operations/split_edges_operation.cpp",
+      {"src/sdk/core/modeling/internal/mesh/polygon/operations/"
+       "split_edges_operation.cpp",
        {"OperationResult result;", "result.created.vertices",
         "result.created.edges", "result.affected.edges",
         "result.affected.faces", "return result;"}},
-      {"src/mesh/polygon/operations/delete_selection_operation.cpp",
+      {"src/sdk/core/modeling/internal/mesh/polygon/operations/"
+       "delete_selection_operation.cpp",
        {"OperationResult result;", "result.deleted = deleted_element_delta",
         "return result;"}},
   };
@@ -1128,6 +1149,14 @@ TEST(BuildGuardrailTests, ArchitectureReviewNamesRealModelingDomainTargets) {
   }
 
   expect_missing(review, "`qdr_modeling_domain_smoke`");
+  expect_contains(review, "## First Milestone (Completed)");
+  expect_contains(review, "SDK-only vcpkg configuration installs only the "
+                          "`tests` feature dependency");
+  expect_missing(review, "no SDK source boundary exists");
+  expect_missing(review, "no SDK umbrella header exists");
+  expect_missing(review, "no install/export package exists");
+  expect_missing(review,
+                 "SDK wrapper targets and native app gating are next");
 }
 
 TEST(BuildGuardrailTests, AppOwnedModelingSdkBoundaryIsAdditiveAndGuarded) {
@@ -1155,6 +1184,129 @@ TEST(BuildGuardrailTests, AppOwnedModelingSdkBoundaryIsAdditiveAndGuarded) {
   expect_contains(build_files, "QuaderModelingSdkTargets.cmake");
   expect_missing(build_files, "QUADER_MODELING_SDK_DIR");
   expect_missing(build_files, "QUADER_BUILD_SDK_TESTS");
+}
+
+TEST(BuildGuardrailTests,
+     PortableModelingCoreIsTheOnlyCompiledPolygonAndQdrTruth) {
+  const std::string modeling_c_make =
+      read_source_file("cmake/QuaderModeling.cmake");
+
+  expect_contains(modeling_c_make,
+                  "add_library(quader_modeling_polygon STATIC "
+                  "${QUADER_CANONICAL_POLYGON_SOURCES})");
+  expect_contains(modeling_c_make,
+                  "src/sdk/core/modeling/src/polygon_document.cpp\n"
+                  "    ${QUADER_CANONICAL_POLYGON_SOURCES})");
+  expect_contains(modeling_c_make,
+                  "add_library(quader_qdr_shared_io STATIC "
+                  "${QUADER_CANONICAL_QDR_SHARED_SOURCES})");
+  expect_contains(modeling_c_make,
+                  "add_library(quader_qdr_document_io STATIC "
+                  "${QUADER_CANONICAL_QDR_DOCUMENT_SOURCE})");
+  expect_contains(modeling_c_make,
+                  "src/sdk/core/modeling/src/qdr_document.cpp\n"
+                  "    ${QUADER_CANONICAL_QDR_SOURCES})");
+  expect_missing(modeling_c_make, "src/mesh/polygon/*.cpp");
+  expect_missing(modeling_c_make, "src/mesh/geometry/geometry.cpp");
+
+  EXPECT_TRUE(files_with_extension(source_path("src/mesh/geometry"), ".cpp")
+                  .empty());
+  EXPECT_TRUE(files_with_extension(source_path("src/mesh/polygon"), ".cpp")
+                  .empty());
+  for (std::string_view retired_native_source : {
+           "src/io/qdr/qdr_atomic_write.cpp",
+           "src/io/qdr/qdr_root.cpp",
+           "src/io/qdr/qdr_polygon_document_codec.cpp",
+           "src/io/qdr/qdr_document.cpp",
+       }) {
+    EXPECT_FALSE(std::filesystem::exists(source_path(retired_native_source)))
+        << retired_native_source;
+  }
+
+  const std::filesystem::path native_mesh = source_path("src/mesh");
+  const std::filesystem::path canonical_mesh =
+      source_path("src/sdk/core/modeling/internal/mesh");
+  for (const std::filesystem::path &native_header :
+       files_with_extension(native_mesh, ".hpp")) {
+    const std::filesystem::path relative =
+        std::filesystem::relative(native_header, native_mesh);
+    const std::filesystem::path canonical_header = canonical_mesh / relative;
+    ASSERT_TRUE(std::filesystem::exists(canonical_header)) << relative;
+    EXPECT_EQ(read_file(native_header), read_file(canonical_header)) << relative;
+  }
+
+  for (std::string_view portable_qdr_header : {
+           "qdr_atomic_write.hpp",
+           "qdr_diagnostic.hpp",
+           "qdr_document.hpp",
+           "qdr_format.hpp",
+           "qdr_polygon_document_codec.hpp",
+           "qdr_root.hpp",
+       }) {
+    EXPECT_EQ(read_source_file("src/io/qdr/" +
+                               std::string(portable_qdr_header)),
+              read_source_file("src/sdk/core/modeling/internal/io/qdr/" +
+                               std::string(portable_qdr_header)))
+        << portable_qdr_header;
+  }
+}
+
+TEST(BuildGuardrailTests,
+     ModelingSdkInstallExportMatchesExternalConsumerTarget) {
+  const std::string modeling_c_make =
+      read_source_file("cmake/QuaderModeling.cmake");
+  const std::string sdk_only_check =
+      read_source_file("cmake/QuaderSdkOnlyBuildCheck.cmake");
+  const std::string external_consumer =
+      read_source_file("tests/sdk_consumer/CMakeLists.txt");
+
+  for (const std::string &export_name :
+       {"modeling_sdk_geometry", "modeling_sdk_polygon",
+        "modeling_sdk_qdr_document", "modeling_sdk_runtime",
+        "modeling_sdk"}) {
+    expect_contains(modeling_c_make, "EXPORT_NAME " + export_name);
+  }
+  expect_contains(external_consumer, "quader::modeling_sdk");
+  expect_contains(sdk_only_check, "--install");
+  expect_contains(sdk_only_check, "tests/sdk_consumer");
+  expect_contains(sdk_only_check,
+                  "-DCMAKE_PREFIX_PATH=${_quader_sdk_install_dir}");
+  expect_contains(sdk_only_check,
+                  "-DCMAKE_CONFIGURATION_TYPES=${QUADER_BUILD_CONFIG}");
+  expect_contains(sdk_only_check,
+                  "--target quader_modeling_sdk_external_consumer");
+}
+
+TEST(BuildGuardrailTests,
+     ModelingSdkOnlyManifestFeatureExcludesNativeHostDependencies) {
+  const std::string manifest = read_source_file("vcpkg.json");
+  const std::string sdk_only_check =
+      read_source_file("cmake/QuaderSdkOnlyBuildCheck.cmake");
+  const std::string native_feature =
+      source_slice(manifest, "\"native-app\": {", "\"tests\": {");
+  const std::string tests_feature =
+      source_slice(manifest, "\"tests\": {", "\n    }\n  }\n}");
+
+  expect_contains(manifest, "\"dependencies\": []");
+  expect_contains(manifest, "\"default-features\": [");
+  expect_contains(manifest, "\"native-app\"");
+  expect_contains(manifest, "\"tests\"");
+  for (std::string_view native_only_dependency : {
+           "entt", "glm", "lodepng", "qtbase", "sentry-native",
+           "spdlog", "stduuid", "taskflow", "zlib",
+       }) {
+    expect_contains(native_feature,
+                    "\"" + std::string(native_only_dependency) + "\"");
+    expect_missing(tests_feature,
+                   "\"" + std::string(native_only_dependency) + "\"");
+  }
+  expect_contains(tests_feature, "\"gtest\"");
+
+  expect_contains(sdk_only_check,
+                  "-DVCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON");
+  expect_contains(sdk_only_check, "-DVCPKG_MANIFEST_FEATURES=tests");
+  expect_contains(sdk_only_check,
+                  "SDK-only configure installed native app package");
 }
 
 TEST(BuildGuardrailTests, ModelingSdkPublicHeadersStayNativeOwnerFree) {
@@ -1329,10 +1481,10 @@ TEST(BuildGuardrailTests, DefaultMaterialMetadataMatchesRuntimePackagePath) {
 
   expect_contains(
       root_c_make,
-      "$<TARGET_FILE_DIR:quader>/materials/default/default_albedo.png");
+      "${QUADER_RUNTIME_DEPLOY_DIR}/materials/default/default_albedo.png");
   expect_contains(
       root_c_make,
-      "$<TARGET_FILE_DIR:quader>/materials/default/default_roughness.png");
+      "${QUADER_RUNTIME_DEPLOY_DIR}/materials/default/default_roughness.png");
   expect_contains(default_catalog, "kDefaultMaterialAlbedoTexturePackagePath");
   expect_contains(default_catalog,
                   "kDefaultMaterialRoughnessTexturePackagePath");
@@ -1539,12 +1691,46 @@ TEST(BuildGuardrailTests, LocalizationResourcesArePackagedWithRuntime) {
 
   expect_contains(root_c_make, "src/core/localization_service.cpp");
   expect_contains(root_c_make, "tests/localization_tests.cpp");
-  expect_contains(root_c_make, "$<TARGET_FILE_DIR:quader>/locales");
+  expect_contains(root_c_make, "${QUADER_RUNTIME_DEPLOY_DIR}/locales");
   expect_contains(root_c_make, "resources/locales");
   expect_contains(root_c_make, "copy_directory");
 
   EXPECT_FALSE(read_source_file("resources/locales/en-US.lang").empty());
   EXPECT_FALSE(read_source_file("resources/locales/it-IT.lang").empty());
+}
+
+TEST(BuildGuardrailTests,
+     RuntimeResourceDeploymentIsDependencyTrackedAndSynchronizesOwnedDirs) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+
+  expect_contains(root_c_make, "QUADER_RUNTIME_RESOURCE_INPUTS");
+  expect_contains(root_c_make, "CONFIGURE_DEPENDS");
+  expect_contains(root_c_make, "QUADER_RUNTIME_RESOURCE_MANIFEST");
+  expect_contains(root_c_make, "file(GENERATE");
+  expect_contains(root_c_make,
+                  "OUTPUT \"${QUADER_RUNTIME_RESOURCE_STAMP}\"");
+  expect_contains(root_c_make,
+                  "DEPENDS \"${QUADER_RUNTIME_RESOURCE_STAMP}\"");
+  expect_contains(root_c_make,
+                  "add_custom_target(quader_runtime_resources");
+  expect_contains(root_c_make,
+                  "add_dependencies(quader quader_runtime_resources)");
+  expect_contains(root_c_make,
+                  "${CMAKE_CURRENT_BINARY_DIR}/generated/materials");
+  expect_contains(root_c_make,
+                  "\"${QUADER_RUNTIME_RESOURCE_MANIFEST}\"");
+  expect_contains(root_c_make,
+                  "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt");
+
+  for (const std::string &owned_dir :
+       {"materials", "icons", "ibl", "locales"}) {
+    expect_contains(root_c_make,
+                    "${QUADER_RUNTIME_DEPLOY_DIR}/" + owned_dir);
+  }
+  expect_missing(root_c_make, "$<TARGET_FILE_DIR:quader>/locales");
+  expect_missing(root_c_make, "$<TARGET_FILE_DIR:quader>/ibl");
+  expect_missing(root_c_make,
+                 "$<TARGET_FILE_DIR:quader>/materials/default");
 }
 
 TEST(BuildGuardrailTests, QtWidgetsRuntimeAndLicenseEvidenceAreConfigured) {
@@ -1586,7 +1772,7 @@ TEST(BuildGuardrailTests, QtWidgetsRuntimeAndLicenseEvidenceAreConfigured) {
   expect_contains(root_c_make, "resources/materials/quader_mesh_lit.mat");
   expect_contains(root_c_make, "resources/materials/quader_overlay_icon.mat");
   expect_contains(root_c_make, "resources/icons");
-  expect_contains(root_c_make, "$<TARGET_FILE_DIR:quader>/icons");
+  expect_contains(root_c_make, "${QUADER_RUNTIME_DEPLOY_DIR}/icons");
   expect_contains(root_c_make, "copy_directory");
   EXPECT_FALSE(
       read_source_file("resources/materials/quader_overlay_icon.mat").empty());
@@ -1829,7 +2015,9 @@ TEST(BuildGuardrailTests, QtShellUsesMainWindowDocksAndStableNames) {
   expect_contains(ui_system_source, "#include <QMainWindow>");
   expect_contains(ui_system_source, "#include <QDockWidget>");
   expect_contains(ui_system_source,
-                  "main_window_ = std::make_unique<QMainWindow>()");
+                  "auto main_window = std::make_unique<QtMainWindow>()");
+  expect_contains(ui_system_source,
+                  "main_window->set_close_request_handler(");
   expect_contains(ui_system_source,
                   "main_window_->setObjectName(QStringLiteral("
                   "\"quaderMainWindow\"))");
@@ -1943,44 +2131,48 @@ TEST(BuildGuardrailTests, QtViewportKeepsMultiPaneLayoutWorkspace) {
                   "render_system_->begin_frame(swap_chain_)");
 }
 
-TEST(BuildGuardrailTests, QtRuntimePostBuildPurgesRetiredUiArtifactsOnly) {
+TEST(BuildGuardrailTests,
+     RuntimeResourceDeploymentPurgesOwnedAndRetiredArtifactsOnly) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string cleanup = source_slice(
       root_c_make,
-      "COMMAND \"${CMAKE_COMMAND}\" -E make_directory \"$<TARGET_FILE_DIR:quader>/materials\"",
+      "add_custom_command(\n    OUTPUT \"${QUADER_RUNTIME_RESOURCE_STAMP}\"",
       "if(QUADER_ENABLE_SENTRY AND WIN32)");
 
   for (std::string_view retired_directory : {
-           "$<TARGET_FILE_DIR:quader>/fonts",
-           "$<TARGET_FILE_DIR:quader>/styles",
-           "$<TARGET_FILE_DIR:quader>/ui",
-           "$<TARGET_FILE_DIR:quader>/shaders",
+           "${QUADER_RUNTIME_DEPLOY_DIR}/fonts",
+           "${QUADER_RUNTIME_DEPLOY_DIR}/styles",
+           "${QUADER_RUNTIME_DEPLOY_DIR}/ui",
+           "${QUADER_RUNTIME_DEPLOY_DIR}/shaders",
        }) {
-    expect_contains(cleanup, std::string{"remove_directory \""} +
+    expect_contains(cleanup, std::string{"remove_directory\n            \""} +
                                  std::string{retired_directory} + "\"");
   }
   for (std::string_view retired_file : {
-           "$<TARGET_FILE_DIR:quader>/SDL3.dll",
-           "$<TARGET_FILE_DIR:quader>/rmlui.dll",
-           "$<TARGET_FILE_DIR:quader>/rmlui_debugger.dll",
-           "$<TARGET_FILE_DIR:quader>/quader_platform_sdl_win32.lib",
-           "$<TARGET_FILE_DIR:quader>/quader_ui_imgui.lib",
-           "$<TARGET_FILE_DIR:quader>/materials/imgui.filamat",
+           "${QUADER_RUNTIME_DEPLOY_DIR}/SDL3.dll",
+           "${QUADER_RUNTIME_DEPLOY_DIR}/rmlui.dll",
+           "${QUADER_RUNTIME_DEPLOY_DIR}/rmlui_debugger.dll",
+           "${QUADER_RUNTIME_DEPLOY_DIR}/quader_platform_sdl_win32.lib",
+           "${QUADER_RUNTIME_DEPLOY_DIR}/quader_ui_imgui.lib",
        }) {
     expect_contains(cleanup, std::string(retired_file));
   }
 
-  for (std::string_view current_runtime_directory : {
-           "$<TARGET_FILE_DIR:quader>/materials",
-           "$<TARGET_FILE_DIR:quader>/icons",
-           "$<TARGET_FILE_DIR:quader>/ibl",
-           "$<TARGET_FILE_DIR:quader>/locales",
+  for (std::string_view owned_runtime_directory : {
+           "${QUADER_RUNTIME_DEPLOY_DIR}/materials",
+           "${QUADER_RUNTIME_DEPLOY_DIR}/icons",
+           "${QUADER_RUNTIME_DEPLOY_DIR}/ibl",
+           "${QUADER_RUNTIME_DEPLOY_DIR}/locales",
+       }) {
+    expect_contains(cleanup, std::string{"remove_directory\n            \""} +
+                                 std::string{owned_runtime_directory} + "\"");
+  }
+
+  for (std::string_view qt_runtime_directory : {
            "$<TARGET_FILE_DIR:quader>/platforms",
            "$<TARGET_FILE_DIR:quader>/imageformats",
        }) {
-    expect_missing(cleanup, std::string{"remove_directory \""} +
-                                std::string{current_runtime_directory} +
-                                "\"");
+    expect_missing(cleanup, std::string{qt_runtime_directory});
   }
 }
 
@@ -2299,7 +2491,7 @@ TEST(WindowGuardrailTests,
   expect_contains(main_source,
                   "QStyleFactory::create(QStringLiteral(\"Fusion\"))");
   expect_contains(main_source, "QApplication::setStyle(fusion_style)");
-  expect_contains(ui_source, "std::make_unique<QMainWindow>()");
+  expect_contains(ui_source, "std::make_unique<QtMainWindow>()");
   expect_contains(ui_source,
                   "main_window_->setMinimumSize(kPlatformWindowMinimumWidth,");
   expect_contains(ui_source, "main_window_->setCentralWidget(viewport_panel_)");

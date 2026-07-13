@@ -7,6 +7,7 @@
 #include "editor/modeling/services/modeling_mesh_sync_service.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "assets/mesh_asset_payload.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/modeling/services/scene_modeling_sync_service.hpp"
@@ -151,9 +152,13 @@ std::optional<MaterialComponent> material_component_for_modeling_slot(
   if (primary_material == kInvalidAssetId) {
     return std::nullopt;
   }
+  std::unordered_map<std::uint32_t, AssetId> resolved_slots =
+      existing_material != nullptr ? existing_material->material_slots
+                                   : material_by_slot;
+  resolved_slots[material_slot] = primary_material;
   return MaterialComponent{
       .material = primary_material,
-      .material_slots = material_by_slot,
+      .material_slots = std::move(resolved_slots),
   };
 }
 
@@ -161,117 +166,180 @@ EntityId modeling_default_parent(const SceneDocument &scene) {
   return scene.scene_root();
 }
 
-bool vec2_equals(QVec2 left, QVec2 right) {
-  return left.x == right.x && left.y == right.y;
-}
-
-bool vec3_equals(QVec3 left, QVec3 right) {
-  return left.x == right.x && left.y == right.y && left.z == right.z;
-}
-
-bool mesh_vertices_equal(const std::vector<MeshVertex> &left,
-                         const std::vector<MeshVertex> &right) {
-  if (left.size() != right.size()) {
+bool scene_mesh_asset_is_shared(const SceneDocument &scene,
+                                EntityId projected_entity, AssetId mesh) {
+  if (mesh == kInvalidAssetId) {
     return false;
   }
-  for (std::size_t index = 0; index < left.size(); ++index) {
-    if (!vec3_equals(left[index].position, right[index].position) ||
-        !vec3_equals(left[index].normal, right[index].normal) ||
-        !vec2_equals(left[index].uv, right[index].uv) ||
-        left[index].rgba != right[index].rgba) {
-      return false;
+  for (const EntityId entity : scene.entities()) {
+    const MeshComponent *component = scene.mesh(entity);
+    if (entity != projected_entity && component != nullptr &&
+        component->mesh == mesh) {
+      return true;
     }
   }
-  return true;
+  return false;
 }
 
-bool mesh_primitive_spans_equal(const MeshAsset &left, const MeshAsset &right) {
-  const std::vector<MeshPrimitiveSpan> left_spans =
-      normalized_mesh_primitive_spans(left);
-  const std::vector<MeshPrimitiveSpan> right_spans =
-      normalized_mesh_primitive_spans(right);
-  if (left_spans.size() != right_spans.size()) {
-    return false;
-  }
-  for (std::size_t index = 0; index < left_spans.size(); ++index) {
-    if (left_spans[index].index_offset != right_spans[index].index_offset ||
-        left_spans[index].index_count != right_spans[index].index_count ||
-        left_spans[index].material_slot != right_spans[index].material_slot) {
-      return false;
-    }
-  }
-  return true;
+/**
+ * Describes how one prevalidated projected mesh reaches the asset registry.
+ */
+enum class ProjectedMeshInstallKind {
+  Keep,
+  Add,
+  Replace,
+};
+
+/**
+ * Holds every validated input and rollback snapshot for one mesh projection.
+ */
+struct ProjectedMeshPlan {
+  int modeling_object_id = kInvalidModelingObjectId;
+  std::uint32_t material_slot = 0;
+  std::uint64_t signature = 0;
+  std::string scene_name;
+  ProjectedMeshInstallKind install_kind = ProjectedMeshInstallKind::Keep;
+  AssetId installed_mesh = kInvalidAssetId;
+  std::optional<MeshAsset> projected_mesh;
+  std::optional<MeshAsset> mesh_before_replace;
+};
+
+const ProjectedMeshPlan *find_projected_mesh_plan(
+    const std::vector<ProjectedMeshPlan> &plans, int modeling_object_id) {
+  const auto plan = std::find_if(
+      plans.begin(), plans.end(), [&](const ProjectedMeshPlan &candidate) {
+        return candidate.modeling_object_id == modeling_object_id;
+      });
+  return plan == plans.end() ? nullptr : &*plan;
 }
 
-bool polygon_vertices_equal(const std::vector<quader_poly::Vertex> &left,
-                            const std::vector<quader_poly::Vertex> &right) {
-  if (left.size() != right.size()) {
-    return false;
-  }
-  for (std::size_t index = 0; index < left.size(); ++index) {
-    if (left[index].id != right[index].id ||
-        !vec3_equals(left[index].position, right[index].position)) {
-      return false;
-    }
-  }
-  return true;
-}
+std::optional<std::vector<ProjectedMeshPlan>> build_projected_mesh_plans(
+    const quader_editor_core::EditorSession &session,
+    const SceneDocument &scene, const AssetRegistry &assets,
+    const SceneModelingSyncService &scene_sync) {
+  std::vector<ProjectedMeshPlan> plans;
+  plans.reserve(session.objects().size());
+  std::unordered_set<int> planned_objects;
+  SceneEntityNameAllocator scene_names(scene);
 
-bool polygon_faces_equal(const std::vector<quader_poly::Face> &left,
-                         const std::vector<quader_poly::Face> &right) {
-  if (left.size() != right.size()) {
-    return false;
-  }
-  for (std::size_t index = 0; index < left.size(); ++index) {
-    if (left[index].id != right[index].id ||
-        left[index].vertices != right[index].vertices ||
-        left[index].material_slot != right[index].material_slot ||
-        left[index].normal_shading != right[index].normal_shading ||
-        left[index].uvs.size() != right[index].uvs.size()) {
-      return false;
+  for (const quader_editor_core::PolygonObject &object : session.objects()) {
+    if (!planned_objects.insert(object.id).second) {
+      return std::nullopt;
     }
-    for (std::size_t uv_index = 0; uv_index < left[index].uvs.size();
-         ++uv_index) {
-      if (!vec2_equals(left[index].uvs[uv_index], right[index].uvs[uv_index])) {
-        return false;
+
+    ProjectedMeshPlan plan;
+    plan.modeling_object_id = object.id;
+    plan.material_slot = static_cast<std::uint32_t>(object.material_id);
+    plan.signature = projected_mesh_signature(object);
+
+    const std::optional<EntityId> existing =
+        scene_sync.object_map().entity_for_modeling_object(object.id);
+    const EntityId existing_entity =
+        existing.has_value() && scene.exists(*existing) ? *existing
+                                                        : kInvalidEntityId;
+    const std::optional<ModelingObjectSceneIdentity> identity =
+        scene_sync.object_map().scene_identity_for_modeling_object(object.id);
+    if (existing_entity != kInvalidEntityId) {
+      if (const NameComponent *name = scene.name(existing_entity)) {
+        plan.scene_name = name->name;
       }
     }
+    if (plan.scene_name.empty() && identity.has_value() &&
+        !identity->name.empty()) {
+      plan.scene_name = identity->name;
+    }
+    if (plan.scene_name.empty()) {
+      plan.scene_name = scene_names.next_name_for_kind(SceneEntityKind::Mesh);
+      scene_names.reserve_name(plan.scene_name);
+    }
+
+    const MeshComponent *bound_mesh =
+        existing_entity != kInvalidEntityId ? scene.mesh(existing_entity)
+                                            : nullptr;
+    const AssetId current_mesh =
+        bound_mesh != nullptr ? bound_mesh->mesh : kInvalidAssetId;
+    if (current_mesh != kInvalidAssetId && assets.mesh(current_mesh) != nullptr &&
+        scene_sync.projected_mesh_signature_matches(object.id,
+                                                    plan.signature)) {
+      plan.installed_mesh = current_mesh;
+      plans.push_back(std::move(plan));
+      continue;
+    }
+
+    MeshAsset projected = MeshProjectionService::compile_object_mesh(object);
+    projected.name = plan.scene_name;
+    if (!assets.validate_mesh(projected).ok) {
+      return std::nullopt;
+    }
+
+    if (const MeshAsset *current = assets.mesh(current_mesh);
+        current != nullptr && mesh_asset_payload_equal(*current, projected)) {
+      plan.installed_mesh = current_mesh;
+    } else if (current_mesh != kInvalidAssetId && current != nullptr &&
+               !scene_mesh_asset_is_shared(scene, existing_entity,
+                                           current_mesh)) {
+      plan.install_kind = ProjectedMeshInstallKind::Replace;
+      plan.installed_mesh = current_mesh;
+      plan.mesh_before_replace = clone_mesh_asset_payload(*current);
+      plan.projected_mesh = std::move(projected);
+    } else {
+      plan.install_kind = ProjectedMeshInstallKind::Add;
+      plan.projected_mesh = std::move(projected);
+    }
+    plans.push_back(std::move(plan));
+  }
+  return plans;
+}
+
+void rollback_projected_mesh_installs(
+    AssetRegistry &assets, std::vector<ProjectedMeshPlan> &plans,
+    std::span<const std::size_t> installed_plan_indices) {
+  for (auto installed = installed_plan_indices.rbegin();
+       installed != installed_plan_indices.rend(); ++installed) {
+    ProjectedMeshPlan &plan = plans[*installed];
+    if (plan.install_kind == ProjectedMeshInstallKind::Add) {
+      (void)assets.remove_mesh(plan.installed_mesh);
+      plan.installed_mesh = kInvalidAssetId;
+    } else if (plan.install_kind == ProjectedMeshInstallKind::Replace &&
+               plan.mesh_before_replace.has_value()) {
+      (void)assets.replace_mesh(
+          plan.installed_mesh,
+          clone_mesh_asset_payload(*plan.mesh_before_replace));
+    }
+  }
+}
+
+bool install_projected_mesh_assets(AssetRegistry &assets,
+                                   std::vector<ProjectedMeshPlan> &plans,
+                                   std::vector<std::size_t> &installed_plans) {
+  installed_plans.clear();
+  installed_plans.reserve(plans.size());
+  for (std::size_t index = 0; index < plans.size(); ++index) {
+    ProjectedMeshPlan &plan = plans[index];
+    if (plan.install_kind == ProjectedMeshInstallKind::Keep) {
+      continue;
+    }
+    if (!plan.projected_mesh.has_value()) {
+      rollback_projected_mesh_installs(assets, plans, installed_plans);
+      return false;
+    }
+
+    if (plan.install_kind == ProjectedMeshInstallKind::Add) {
+      plan.installed_mesh =
+          assets.add_mesh(clone_mesh_asset_payload(*plan.projected_mesh));
+      if (plan.installed_mesh == kInvalidAssetId) {
+        rollback_projected_mesh_installs(assets, plans, installed_plans);
+        return false;
+      }
+    } else if (!assets.replace_mesh(
+                   plan.installed_mesh,
+                   clone_mesh_asset_payload(*plan.projected_mesh))) {
+      rollback_projected_mesh_installs(assets, plans, installed_plans);
+      return false;
+    }
+    installed_plans.push_back(index);
   }
   return true;
-}
-
-bool polygon_documents_equal(const quader_poly::Document &left,
-                             const quader_poly::Document &right) {
-  return polygon_vertices_equal(left.vertices, right.vertices) &&
-         polygon_faces_equal(left.faces, right.faces) &&
-         left.hard_normal_edges == right.hard_normal_edges &&
-         left.next_vertex_id == right.next_vertex_id &&
-         left.next_face_id == right.next_face_id;
-}
-
-bool authored_polygon_documents_equal(const MeshAsset &left,
-                                      const MeshAsset &right) {
-  if (left.has_authored_polygon_document !=
-      right.has_authored_polygon_document) {
-    return false;
-  }
-  if (!left.has_authored_polygon_document) {
-    return true;
-  }
-  if (!left.authored_polygon_document || !right.authored_polygon_document) {
-    return false;
-  }
-  return polygon_documents_equal(*left.authored_polygon_document,
-                                 *right.authored_polygon_document);
-}
-
-bool modeling_mesh_assets_equal(const MeshAsset &left, const MeshAsset &right) {
-  return left.name == right.name &&
-         left.has_stable_cpu_topology == right.has_stable_cpu_topology &&
-         mesh_vertices_equal(left.vertices, right.vertices) &&
-         left.indices == right.indices &&
-         mesh_primitive_spans_equal(left, right) &&
-         authored_polygon_documents_equal(left, right);
 }
 
 void sync_material_slot_bindings(
@@ -317,29 +385,55 @@ void apply_durable_scene_identity_to_entity(
   }
 }
 
-void reconcile_modeling_object_scene_nodes(
+void apply_complete_scene_identity_to_entity(
+    SceneDocument &scene, EntityId entity,
+    const ModelingObjectSceneIdentity &identity) {
+  apply_durable_scene_identity_to_entity(scene, entity, identity);
+  if (identity.mesh.has_value()) {
+    scene.set_mesh(entity, *identity.mesh);
+  }
+  if (identity.material.has_value()) {
+    scene.set_material(entity, *identity.material);
+  } else {
+    scene.clear_material(entity);
+  }
+}
+
+bool scene_uses_mesh_asset(const SceneDocument &scene, AssetId mesh) {
+  for (const EntityId entity : scene.entities()) {
+    const MeshComponent *component = scene.mesh(entity);
+    if (component != nullptr && component->mesh == mesh) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool reconcile_modeling_object_scene_nodes(
     const quader_editor_core::EditorSession &session, SceneDocument &scene,
-    SceneModelingSyncService &scene_sync) {
+    SceneModelingSyncService &scene_sync,
+    const std::vector<ProjectedMeshPlan> &mesh_plans,
+    std::vector<std::pair<int, EntityId>> &created_entities) {
   QDR_PROFILE_FUNCTION();
   ModelingObjectRuntimeMap &object_map = scene_sync.object_map();
+  created_entities.clear();
 
   std::optional<AssetId> first_modeling_material;
   const std::unordered_map<std::uint32_t, AssetId> material_by_slot =
       material_slots_for_live_modeling_nodes(scene, object_map,
                                              first_modeling_material);
-  SceneEntityNameAllocator scene_names(scene);
 
-  std::unordered_set<int> live_objects;
   for (const quader_editor_core::PolygonObject &object : session.objects()) {
     QDR_PROFILE_SCOPE("Modeling mesh sync reconcile object node");
-    live_objects.insert(object.id);
-    const std::uint32_t material_slot =
-        static_cast<std::uint32_t>(object.material_id);
+    const ProjectedMeshPlan *mesh_plan =
+        find_projected_mesh_plan(mesh_plans, object.id);
+    if (mesh_plan == nullptr) {
+      return false;
+    }
+    const std::uint32_t material_slot = mesh_plan->material_slot;
     const std::optional<EntityId> existing =
         object_map.entity_for_modeling_object(object.id);
     if (existing.has_value() && scene.exists(*existing)) {
-      sync_material_slot_bindings(scene, *existing, material_slot,
-                                  material_by_slot, first_modeling_material);
       continue;
     }
 
@@ -347,12 +441,7 @@ void reconcile_modeling_object_scene_nodes(
       QDR_PROFILE_SCOPE("Modeling mesh sync lookup scene identity");
       return object_map.scene_identity_for_modeling_object(object.id);
     }();
-    const std::string name = [&]() {
-      QDR_PROFILE_SCOPE("Modeling mesh sync resolve scene name");
-      return identity.has_value() && !identity->name.empty()
-                 ? identity->name
-                 : scene_names.next_name_for_kind(SceneEntityKind::Mesh);
-    }();
+    const std::string &name = mesh_plan->scene_name;
     const EntityId entity = [&]() {
       QDR_PROFILE_SCOPE("Modeling mesh sync create scene entity");
       return identity.has_value() && identity->entity != kInvalidEntityId
@@ -362,17 +451,22 @@ void reconcile_modeling_object_scene_nodes(
                  : scene.create_entity(name, EntityKind::Mesh);
     }();
     if (entity == kInvalidEntityId) {
-      continue;
+      return false;
     }
     if (identity.has_value() && !identity->uuid.empty()) {
-      (void)scene.set_entity_uuid(entity, identity->uuid);
+      if (!scene.set_entity_uuid(entity, identity->uuid)) {
+        (void)scene.destroy_entity(entity);
+        return false;
+      }
     }
-    scene_names.reserve_name(name);
     if (!identity.has_value()) {
       const EntityId parent = modeling_default_parent(scene);
       if (parent != kInvalidEntityId && scene.exists(parent)) {
         QDR_PROFILE_SCOPE("Modeling mesh sync set default parent");
-        (void)scene.set_parent(entity, parent, false);
+        if (!scene.set_parent(entity, parent, false)) {
+          (void)scene.destroy_entity(entity);
+          return false;
+        }
       }
     }
 
@@ -385,7 +479,7 @@ void reconcile_modeling_object_scene_nodes(
     }
     if (identity.has_value()) {
       QDR_PROFILE_SCOPE("Modeling mesh sync apply durable scene identity");
-      apply_durable_scene_identity_to_entity(scene, entity, *identity);
+      apply_complete_scene_identity_to_entity(scene, entity, *identity);
     }
     const MaterialComponent *identity_material =
         identity.has_value() && identity->material.has_value()
@@ -404,6 +498,30 @@ void reconcile_modeling_object_scene_nodes(
     {
       QDR_PROFILE_SCOPE("Modeling mesh sync bind object entity");
       object_map.bind(object.id, entity);
+    }
+    created_entities.emplace_back(object.id, entity);
+  }
+
+  return true;
+}
+
+void finalize_reconciled_modeling_object_scene_nodes(
+    const quader_editor_core::EditorSession &session, SceneDocument &scene,
+    SceneModelingSyncService &scene_sync) {
+  ModelingObjectRuntimeMap &object_map = scene_sync.object_map();
+  std::optional<AssetId> first_modeling_material;
+  const std::unordered_map<std::uint32_t, AssetId> material_by_slot =
+      material_slots_for_live_modeling_nodes(scene, object_map,
+                                             first_modeling_material);
+  std::unordered_set<int> live_objects;
+  for (const quader_editor_core::PolygonObject &object : session.objects()) {
+    live_objects.insert(object.id);
+    const std::optional<EntityId> entity =
+        object_map.entity_for_modeling_object(object.id);
+    if (entity.has_value() && scene.exists(*entity)) {
+      sync_material_slot_bindings(
+          scene, *entity, static_cast<std::uint32_t>(object.material_id),
+          material_by_slot, first_modeling_material);
     }
   }
 
@@ -430,122 +548,64 @@ void reconcile_modeling_object_scene_nodes(
   }
 }
 
-void project_modeling_meshes_to_scene(
-    const quader_editor_core::EditorSession &session, SceneDocument &scene,
-    AssetRegistry &assets, SceneModelingSyncService &scene_sync, bool force) {
-  QDR_PROFILE_FUNCTION();
-  if (!force && scene_sync.scene_objects_synced_for_current_modeling_content(
-                    session, scene)) {
-    return;
+void rollback_created_modeling_scene_nodes(
+    SceneDocument &scene, SceneModelingSyncService &scene_sync,
+    std::span<const std::pair<int, EntityId>> created_entities) {
+  ModelingObjectRuntimeMap &object_map = scene_sync.object_map();
+  for (auto created = created_entities.rbegin();
+       created != created_entities.rend(); ++created) {
+    if (object_map.entity_for_modeling_object(created->first) ==
+        created->second) {
+      object_map.unbind_object(created->first);
+    }
+    if (scene.exists(created->second)) {
+      (void)scene.destroy_entity(created->second);
+    }
+    scene_sync.forget_projected_mesh_signature(created->first);
   }
+}
 
+bool project_modeling_meshes_to_scene(
+    const quader_editor_core::EditorSession &session, SceneDocument &scene,
+    const AssetRegistry &assets, SceneModelingSyncService &scene_sync,
+    const std::vector<ProjectedMeshPlan> &mesh_plans) {
+  QDR_PROFILE_FUNCTION();
   ModelingObjectRuntimeMap &object_registry = scene_sync.object_map();
-  bool projected_all_objects = true;
   for (const quader_editor_core::PolygonObject &object : session.objects()) {
-    QDR_PROFILE_SCOPE("Modeling mesh sync project object mesh");
-    const std::uint32_t material_slot =
-        static_cast<std::uint32_t>(object.material_id);
-    const std::uint64_t mesh_signature = projected_mesh_signature(object);
+    const ProjectedMeshPlan *plan =
+        find_projected_mesh_plan(mesh_plans, object.id);
     const std::optional<EntityId> existing =
         object_registry.entity_for_modeling_object(object.id);
-    if (!existing.has_value() || !scene.exists(*existing)) {
-      projected_all_objects = false;
-      continue;
+    if (plan == nullptr || !existing.has_value() ||
+        !scene.exists(*existing) ||
+        plan->installed_mesh == kInvalidAssetId ||
+        assets.mesh(plan->installed_mesh) == nullptr) {
+      return false;
     }
+  }
 
+  for (const quader_editor_core::PolygonObject &object : session.objects()) {
+    QDR_PROFILE_SCOPE("Modeling mesh sync project object mesh");
+    const ProjectedMeshPlan *plan =
+        find_projected_mesh_plan(mesh_plans, object.id);
+    const std::optional<EntityId> existing =
+        object_registry.entity_for_modeling_object(object.id);
     const EntityId entity = *existing;
     const ModelingObjectComponent next_object{
         .object_id = object.id,
-        .material_slot = material_slot,
+        .material_slot = plan->material_slot,
     };
     const ModelingObjectComponent *current_object =
         scene.modeling_object(entity);
-    const bool had_projected_mesh_signature =
-        scene_sync.projected_mesh_signature_known(object.id);
-    const MeshComponent *bound_mesh = scene.mesh(entity);
-    if (bound_mesh != nullptr && bound_mesh->mesh != kInvalidAssetId &&
-        assets.mesh(bound_mesh->mesh) != nullptr &&
-        scene_sync.projected_mesh_signature_matches(object.id,
-                                                    mesh_signature)) {
-      if (current_object == nullptr ||
-          current_object->object_id != next_object.object_id ||
-          current_object->material_slot != next_object.material_slot) {
-        scene.set_modeling_object(entity, next_object);
-      }
-      object_registry.remember_scene_entity(object.id, scene, entity);
-      continue;
-    }
-
-    MeshAsset mesh = [&]() {
-      QDR_PROFILE_SCOPE("Modeling mesh sync compile object mesh");
-      return MeshProjectionService::compile_object_mesh(object);
-    }();
-    if (const NameComponent *name = scene.name(entity)) {
-      mesh.name = name->name;
-    }
-    AssetId mesh_id = kInvalidAssetId;
-    if (const MeshComponent *mesh_component = scene.mesh(entity)) {
-      mesh_id = mesh_component->mesh;
-    }
-    bool mesh_contents_replaced = false;
-    if (mesh_id == kInvalidAssetId) {
-      QDR_PROFILE_SCOPE("Modeling mesh sync add mesh asset");
-      mesh_id = assets.add_mesh(std::move(mesh));
-    } else if (!force && had_projected_mesh_signature) {
-      const bool replaced = [&]() {
-        QDR_PROFILE_SCOPE("Modeling mesh sync replace changed mesh asset");
-        return assets.replace_mesh(mesh_id, std::move(mesh));
-      }();
-      if (replaced) {
-        mesh_contents_replaced = true;
-      } else {
-        MeshAsset replacement = [&]() {
-          QDR_PROFILE_SCOPE(
-              "Modeling mesh sync compile changed replacement mesh");
-          return MeshProjectionService::compile_object_mesh(object);
-        }();
-        if (const NameComponent *name = scene.name(entity)) {
-          replacement.name = name->name;
-        }
-        QDR_PROFILE_SCOPE(
-            "Modeling mesh sync add changed replacement mesh asset");
-        mesh_id = assets.add_mesh(std::move(replacement));
-      }
-    } else if (const MeshAsset *current_mesh = assets.mesh(mesh_id);
-               current_mesh != nullptr &&
-               modeling_mesh_assets_equal(*current_mesh, mesh)) {
-      QDR_PROFILE_SCOPE("Modeling mesh sync keep unchanged mesh asset");
-    } else if (assets.mesh(mesh_id) == nullptr) {
-      QDR_PROFILE_SCOPE("Modeling mesh sync add replacement mesh asset");
-      mesh_id = assets.add_mesh(std::move(mesh));
-      mesh_contents_replaced = true;
-    } else {
-      const bool replaced = [&]() {
-        QDR_PROFILE_SCOPE("Modeling mesh sync replace mesh asset");
-        return assets.replace_mesh(mesh_id, std::move(mesh));
-      }();
-      if (replaced) {
-        mesh_contents_replaced = true;
-      } else {
-        MeshAsset replacement = [&]() {
-          QDR_PROFILE_SCOPE("Modeling mesh sync compile replacement mesh");
-          return MeshProjectionService::compile_object_mesh(object);
-        }();
-        if (const NameComponent *name = scene.name(entity)) {
-          replacement.name = name->name;
-        }
-        QDR_PROFILE_SCOPE("Modeling mesh sync add replacement mesh asset");
-        mesh_id = assets.add_mesh(std::move(replacement));
-      }
-    }
     if (current_object == nullptr ||
         current_object->object_id != next_object.object_id ||
         current_object->material_slot != next_object.material_slot) {
       scene.set_modeling_object(entity, next_object);
     }
     const MeshComponent *current_mesh = scene.mesh(entity);
-    if (current_mesh == nullptr || current_mesh->mesh != mesh_id ||
-        mesh_contents_replaced) {
+    if (current_mesh == nullptr ||
+        current_mesh->mesh != plan->installed_mesh ||
+        plan->install_kind == ProjectedMeshInstallKind::Replace) {
       const std::optional<ModelingObjectSceneIdentity> identity =
           object_registry.scene_identity_for_modeling_object(object.id);
       MeshComponent next_mesh =
@@ -554,15 +614,13 @@ void project_modeling_meshes_to_scene(
               : (identity.has_value() && identity->mesh.has_value()
                      ? *identity->mesh
                      : MeshComponent{});
-      next_mesh.mesh = mesh_id;
+      next_mesh.mesh = plan->installed_mesh;
       scene.set_mesh(entity, next_mesh);
     }
     object_registry.remember_scene_entity(object.id, scene, entity);
-    scene_sync.remember_projected_mesh_signature(object.id, mesh_signature);
+    scene_sync.remember_projected_mesh_signature(object.id, plan->signature);
   }
-  if (projected_all_objects) {
-    scene_sync.mark_scene_objects_synced(session.state().content_revision);
-  }
+  return true;
 }
 
 } // namespace
@@ -580,7 +638,73 @@ std::optional<MeshAsset> ModelingMeshSyncService::compile_object_mesh(
 void ModelingMeshSyncService::apply_scene_identity_to_entity(
     SceneDocument &scene, EntityId entity,
     const ModelingObjectSceneIdentity &identity) const {
-  apply_durable_scene_identity_to_entity(scene, entity, identity);
+  apply_complete_scene_identity_to_entity(scene, entity, identity);
+}
+
+bool ModelingMeshSyncService::restore_history_mesh_assets(
+    AssetRegistry &assets,
+    const std::unordered_map<AssetId, MeshAsset> &mesh_assets) const {
+  std::vector<AssetId> ordered_ids;
+  ordered_ids.reserve(mesh_assets.size());
+  for (const auto &[id, mesh] : mesh_assets) {
+    if (id == kInvalidAssetId || !assets.validate_mesh(mesh).ok) {
+      return false;
+    }
+    ordered_ids.push_back(id);
+  }
+  std::sort(ordered_ids.begin(), ordered_ids.end());
+
+  std::unordered_map<AssetId, std::optional<MeshAsset>> rollback;
+  rollback.reserve(ordered_ids.size());
+  std::vector<AssetId> changed_ids;
+  changed_ids.reserve(ordered_ids.size());
+  for (const AssetId id : ordered_ids) {
+    const MeshAsset &snapshot = mesh_assets.at(id);
+    const MeshAsset *current = assets.mesh(id);
+    if (current != nullptr && mesh_asset_payload_equal(*current, snapshot)) {
+      continue;
+    }
+
+    rollback.emplace(
+        id, current != nullptr
+                ? std::optional<MeshAsset>{clone_mesh_asset_payload(*current)}
+                : std::nullopt);
+    const bool restored =
+        current != nullptr
+            ? assets.replace_mesh(id, clone_mesh_asset_payload(snapshot))
+            : assets.add_mesh(id, clone_mesh_asset_payload(snapshot)) == id;
+    if (restored) {
+      changed_ids.push_back(id);
+      continue;
+    }
+
+    for (auto restored_id = changed_ids.rbegin();
+         restored_id != changed_ids.rend(); ++restored_id) {
+      const std::optional<MeshAsset> &previous = rollback.at(*restored_id);
+      if (previous.has_value()) {
+        (void)assets.replace_mesh(
+            *restored_id, clone_mesh_asset_payload(*previous));
+      } else {
+        (void)assets.remove_mesh(*restored_id);
+      }
+    }
+    return false;
+  }
+  return true;
+}
+
+void ModelingMeshSyncService::remove_unreferenced_history_mesh_assets(
+    const SceneDocument &scene, AssetRegistry &assets,
+    std::span<const AssetId> mesh_assets) const {
+  std::vector<AssetId> ordered_ids(mesh_assets.begin(), mesh_assets.end());
+  std::sort(ordered_ids.begin(), ordered_ids.end());
+  ordered_ids.erase(std::unique(ordered_ids.begin(), ordered_ids.end()),
+                    ordered_ids.end());
+  for (const AssetId id : ordered_ids) {
+    if (id != kInvalidAssetId && !scene_uses_mesh_asset(scene, id)) {
+      (void)assets.remove_mesh(id);
+    }
+  }
 }
 
 void ModelingMeshSyncService::apply_scene_identity_to_duplicate_entity(
@@ -607,23 +731,51 @@ void ModelingMeshSyncService::apply_scene_transforms(
   scene.set_transforms(transforms);
 }
 
-void ModelingMeshSyncService::sync_scene_objects_from_modeling(
+bool ModelingMeshSyncService::sync_scene_objects_from_modeling(
     const quader_editor_core::EditorSession &session, SceneDocument &scene,
     AssetRegistry &assets, SceneModelingSyncService &scene_sync,
     bool force) const {
   QDR_PROFILE_FUNCTION();
   if (!force && scene_sync.scene_objects_synced_for_current_modeling_content(
-                    session, scene)) {
-    return;
+                    session, scene, assets)) {
+    return true;
   }
-  {
-    QDR_PROFILE_SCOPE("Modeling mesh sync reconcile scene nodes");
-    reconcile_modeling_object_scene_nodes(session, scene, scene_sync);
+
+  std::optional<std::vector<ProjectedMeshPlan>> mesh_plans =
+      build_projected_mesh_plans(session, scene, assets, scene_sync);
+  if (!mesh_plans.has_value()) {
+    scene_sync.invalidate_scene_objects();
+    return false;
   }
-  {
-    QDR_PROFILE_SCOPE("Modeling mesh sync project meshes to scene");
-    project_modeling_meshes_to_scene(session, scene, assets, scene_sync, force);
+
+  std::vector<std::size_t> installed_plans;
+  if (!install_projected_mesh_assets(assets, *mesh_plans, installed_plans)) {
+    scene_sync.invalidate_scene_objects();
+    return false;
   }
+
+  std::vector<std::pair<int, EntityId>> created_entities;
+  if (!reconcile_modeling_object_scene_nodes(
+          session, scene, scene_sync, *mesh_plans, created_entities)) {
+    rollback_created_modeling_scene_nodes(scene, scene_sync,
+                                          created_entities);
+    rollback_projected_mesh_installs(assets, *mesh_plans, installed_plans);
+    scene_sync.invalidate_scene_objects();
+    return false;
+  }
+
+  if (!project_modeling_meshes_to_scene(session, scene, assets, scene_sync,
+                                        *mesh_plans)) {
+    rollback_created_modeling_scene_nodes(scene, scene_sync,
+                                          created_entities);
+    rollback_projected_mesh_installs(assets, *mesh_plans, installed_plans);
+    scene_sync.invalidate_scene_objects();
+    return false;
+  }
+
+  finalize_reconciled_modeling_object_scene_nodes(session, scene, scene_sync);
+  scene_sync.mark_scene_objects_synced(session.state().content_revision);
+  return true;
 }
 
 ModelingCreateBoxResult
@@ -631,15 +783,44 @@ ModelingMeshSyncService::create_scene_object_from_latest(
     const quader_editor_core::EditorSession &session, SceneDocument &scene,
     AssetRegistry &assets, SceneModelingSyncService &scene_sync,
     const std::string &name, const std::string &message) const {
+  const auto failure = [&](std::string failure_message) {
+    scene_sync.invalidate_scene_objects();
+    return ModelingCreateBoxResult{
+        .ok = false,
+        .changed = false,
+        .message = std::move(failure_message),
+    };
+  };
+  if (session.objects().empty()) {
+    return failure("Modeling runtime did not provide an object to project.");
+  }
+
   const quader_editor_core::PolygonObject &object = session.objects().back();
   MeshAsset mesh = MeshProjectionService::compile_object_mesh(object);
   mesh.name = name;
+  const AssetRegistryValidationResult validation = assets.validate_mesh(mesh);
+  if (!validation.ok) {
+    return failure(validation.message.empty()
+                       ? "Modeling mesh projection is invalid."
+                       : validation.message);
+  }
   const AssetId mesh_id = assets.add_mesh(std::move(mesh));
+  if (mesh_id == kInvalidAssetId) {
+    return failure("Modeling mesh asset could not be installed.");
+  }
 
   const EntityId entity = scene.create_entity(name);
+  if (entity == kInvalidEntityId) {
+    (void)assets.remove_mesh(mesh_id);
+    return failure("Scene entity could not be created.");
+  }
   const EntityId parent = modeling_default_parent(scene);
   if (parent != kInvalidEntityId && scene.exists(parent)) {
-    (void)scene.set_parent(entity, parent, false);
+    if (!scene.set_parent(entity, parent, false)) {
+      (void)scene.destroy_entity(entity);
+      (void)assets.remove_mesh(mesh_id);
+      return failure("Scene entity could not be parented.");
+    }
   }
   scene.set_modeling_object(
       entity,
@@ -648,8 +829,30 @@ ModelingMeshSyncService::create_scene_object_from_latest(
           .material_slot = static_cast<std::uint32_t>(object.material_id),
       });
   scene.set_mesh(entity, MeshComponent{.mesh = mesh_id});
+  const MeshComponent *installed_mesh = scene.mesh(entity);
+  if (installed_mesh == nullptr || installed_mesh->mesh != mesh_id) {
+    (void)scene.destroy_entity(entity);
+    (void)assets.remove_mesh(mesh_id);
+    return failure("Scene mesh binding could not be installed.");
+  }
+
+  const std::vector<EntityId> selected_before = scene.selected_entities();
+  const EntityId active_before = scene.primary_selection();
   scene.clear_selection();
-  scene.set_selected(entity, true);
+  if (!scene.set_selected(entity, true)) {
+    (void)scene.destroy_entity(entity);
+    (void)assets.remove_mesh(mesh_id);
+    scene.clear_selection();
+    for (const EntityId selected : selected_before) {
+      if (scene.exists(selected)) {
+        (void)scene.set_selected(selected, true);
+      }
+    }
+    if (active_before != kInvalidEntityId && scene.exists(active_before)) {
+      (void)scene.set_active_selection(active_before);
+    }
+    return failure("Scene selection could not be updated.");
+  }
 
   scene_sync.object_map().bind(object.id, entity);
   scene_sync.remember_projected_mesh_signature(

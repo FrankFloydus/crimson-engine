@@ -21,6 +21,7 @@ namespace quader {
 
 class ProjectSession;
 class ModelingSessionMemento;
+enum class ModelingSelectionMode;
 
 /**
  * Owns Quader API Mutation Runner behavior within the public Quader API surface.
@@ -67,6 +68,7 @@ public:
   begin_tracked_modeling_preview(std::string_view action_id);
   QuaderApiVoidResult commit_modeling_preview(std::string label);
   QuaderApiVoidResult cancel_modeling_preview();
+  QuaderApiVoidResult set_selection_mode(ModelingSelectionMode mode);
   QuaderApiVoidResult run_asset_result(CommandResult result,
                                        std::string_view label);
   QuaderApiVoidResult run_asset_result(bool changed, std::string_view label);

@@ -1,24 +1,39 @@
 {
   "name": "quader-app",
-  "version-string": "0.0.100",
+  "version-string": "0.0.106",
   "builtin-baseline": "d0c191d142b7bc048141ddfb618aa9ae5dba0233",
-  "dependencies": [
-    "entt",
-    "glm",
-    {
-      "name": "qtbase",
-      "default-features": false,
-      "features": [
-        "png",
-        "widgets"
+  "dependencies": [],
+  "default-features": [
+    "native-app",
+    "tests"
+  ],
+  "features": {
+    "native-app": {
+      "description": "Dependencies used only by the native Quader editor host.",
+      "dependencies": [
+        "entt",
+        "glm",
+        {
+          "name": "qtbase",
+          "default-features": false,
+          "features": [
+            "png",
+            "widgets"
+          ]
+        },
+        "lodepng",
+        "sentry-native",
+        "spdlog",
+        "stduuid",
+        "taskflow",
+        "zlib"
       ]
     },
-    "gtest",
-    "lodepng",
-    "sentry-native",
-    "spdlog",
-    "stduuid",
-    "taskflow",
-    "zlib"
-  ]
+    "tests": {
+      "description": "GoogleTest dependency for Quader test targets.",
+      "dependencies": [
+        "gtest"
+      ]
+    }
+  }
 }

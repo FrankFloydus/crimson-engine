@@ -122,18 +122,24 @@ EditorTransaction::EditorTransaction(EditorHistoryService& history, std::string 
 
 EditorTransaction::~EditorTransaction() {
     if (history_ != nullptr) {
-        (void)cancel();
+        const CommandResult result = cancel();
+        if (!result.ok) {
+          preserve_or_detach_after_failed_cancel();
+        }
     }
 }
 
 EditorTransaction::EditorTransaction(EditorTransaction&& other) noexcept
     : history_(other.history_)
     , label_(std::move(other.label_))
-    , commands_(std::move(other.commands_)) {
+    , commands_(std::move(other.commands_))
+    , failed_cancel_restored_applied_state_(
+          other.failed_cancel_restored_applied_state_) {
   if (history_ != nullptr && history_->active_transaction_ == &other) {
     history_->active_transaction_ = this;
-  }
+    }
     other.history_ = nullptr;
+    other.failed_cancel_restored_applied_state_ = false;
 }
 
 EditorTransaction& EditorTransaction::operator=(EditorTransaction&& other) noexcept {
@@ -141,15 +147,21 @@ EditorTransaction& EditorTransaction::operator=(EditorTransaction&& other) noexc
         return *this;
     }
     if (history_ != nullptr) {
-        (void)cancel();
+        const CommandResult result = cancel();
+        if (!result.ok) {
+          preserve_or_detach_after_failed_cancel();
+        }
     }
     history_ = other.history_;
     label_ = std::move(other.label_);
     commands_ = std::move(other.commands_);
+    failed_cancel_restored_applied_state_ =
+        other.failed_cancel_restored_applied_state_;
     if (history_ != nullptr && history_->active_transaction_ == &other) {
       history_->active_transaction_ = this;
     }
     other.history_ = nullptr;
+    other.failed_cancel_restored_applied_state_ = false;
     return *this;
 }
 
@@ -196,6 +208,23 @@ EditorTransaction::record_executed(std::unique_ptr<IUndoableCommand> command) {
   return command_changed_result();
 }
 
+CommandResult EditorTransaction::record_executed_before_existing(
+    std::unique_ptr<IUndoableCommand> command) {
+  if (history_ == nullptr) {
+    return command_invalid_result("Editor transaction is not active");
+  }
+  if (!command) {
+    return command_invalid_result("Command is missing");
+  }
+
+  commands_.insert(commands_.begin(),
+                   TransactionCommand{
+                       .command = std::move(command),
+                       .merge_key = {},
+                   });
+  return command_changed_result();
+}
+
 CommandResult EditorTransaction::commit() {
     if (history_ == nullptr) {
       return command_invalid_result("Editor transaction is not active");
@@ -220,17 +249,42 @@ CommandResult EditorTransaction::cancel() {
       return command_invalid_result("Editor transaction is not active");
     }
 
+    failed_cancel_restored_applied_state_ = false;
     bool changed = false;
-    for (std::size_t index = commands_.size(); index > 0u; --index) {
-        IUndoableCommand* command = commands_[index - 1u].command.get();
+    std::vector<std::size_t> undone;
+    undone.reserve(commands_.size());
+    const auto rollback_undone = [this, &undone](CommandResult failure) {
+      for (auto it = undone.rbegin(); it != undone.rend(); ++it) {
+        IUndoableCommand *command = commands_[*it].command.get();
         if (command == nullptr) {
           return command_invalid_result(
-              "Editor transaction command is missing");
+              "Editor transaction cancel failed and rollback command is "
+              "missing");
+        }
+        const CommandResult rollback = command->redo();
+        if (!rollback.ok) {
+          return command_invalid_result(
+              failure.message.empty()
+                  ? "Editor transaction cancel failed and rollback failed"
+                  : failure.message + "; rollback failed: " +
+                        rollback.message);
+        }
+      }
+      failed_cancel_restored_applied_state_ = true;
+      return failure;
+    };
+    for (std::size_t index = commands_.size(); index > 0u; --index) {
+        const std::size_t command_index = index - 1u;
+        IUndoableCommand* command = commands_[command_index].command.get();
+        if (command == nullptr) {
+          return rollback_undone(command_invalid_result(
+              "Editor transaction command is missing"));
         }
         CommandResult result = command->undo();
         if (!result.ok) {
-            return result;
+            return rollback_undone(std::move(result));
         }
+        undone.push_back(command_index);
         changed = changed || result.changed;
     }
 
@@ -239,7 +293,32 @@ CommandResult EditorTransaction::cancel() {
       history_->active_transaction_ = nullptr;
     }
     history_ = nullptr;
+    failed_cancel_restored_applied_state_ = false;
     return changed ? command_changed_result() : command_unchanged_result();
+}
+
+void EditorTransaction::preserve_or_detach_after_failed_cancel() noexcept {
+  EditorHistoryService *history = history_;
+  if (history != nullptr && history->active_transaction_ == this) {
+    history->active_transaction_ = nullptr;
+  }
+  history_ = nullptr;
+  if (history == nullptr || !failed_cancel_restored_applied_state_) {
+    commands_.clear();
+    return;
+  }
+
+  try {
+    std::vector<std::unique_ptr<IUndoableCommand>> commands;
+    commands.reserve(commands_.size());
+    for (TransactionCommand &entry : commands_) {
+      commands.push_back(std::move(entry.command));
+    }
+    commands_.clear();
+    (void)history->commit_transaction(std::move(label_), std::move(commands));
+  } catch (...) {
+    commands_.clear();
+  }
 }
 
 CommandResult EditorTransaction::discard() {

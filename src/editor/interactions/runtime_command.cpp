@@ -396,14 +396,13 @@ CommandResult update_insert_edge_loop_hover(
     return {true, activation.applied || activation.transform_preview_cancelled,
             ""};
   }
-	const bool preview_changed = runtime.set_insert_edge_loop_preview_from_pick(
-			session,
-			settings.ray,
-			settings.grid_size,
-			settings.vertex_radius,
-			settings.edge_radius,
-			settings.snap_enabled,
-			false);
+	const bool preview_changed = settings.resolved_hit.has_value()
+		? runtime.set_insert_edge_loop_preview_from_hit(
+			session, *settings.resolved_hit, settings.resolved_factor, false)
+		: runtime.set_insert_edge_loop_preview_from_pick(
+			session, settings.ray, settings.grid_size, settings.vertex_radius,
+			settings.edge_radius, settings.snap_enabled, false,
+			settings.target_object_id);
 	return { true, activation.applied || activation.transform_preview_cancelled || preview_changed, "" };
 }
 
@@ -414,9 +413,13 @@ CommandResult begin_insert_edge_loop_drag(
 {
   const EditorRuntimeToolActivationResult activation =
       runtime.set_active_tool(session, ViewportInteractionTool::InsertEdgeLoop);
-  const bool valid = runtime.set_insert_edge_loop_preview_from_pick(
-      session, settings.ray, settings.grid_size, settings.vertex_radius,
-      settings.edge_radius, settings.snap_enabled, true);
+  const bool valid = settings.resolved_hit.has_value()
+      ? runtime.set_insert_edge_loop_preview_from_hit(
+            session, *settings.resolved_hit, settings.resolved_factor, true)
+      : runtime.set_insert_edge_loop_preview_from_pick(
+            session, settings.ray, settings.grid_size, settings.vertex_radius,
+            settings.edge_radius, settings.snap_enabled, true,
+            settings.target_object_id);
   const bool dragging_before = runtime.status().insert_edge_loop_dragging;
   runtime.set_insert_edge_loop_dragging(valid);
   runtime.clear_hover();
@@ -436,10 +439,11 @@ CommandResult update_insert_edge_loop_drag(
 	if (!runtime.insert_edge_loop_state().dragging) {
 		return { true, false, "" };
 	}
-	const bool changed = runtime.update_insert_edge_loop_drag_factor(
-			session,
-			settings.ray,
-			settings.grid_size,
+	const bool changed = settings.resolved_factor_from_world
+		? runtime.update_insert_edge_loop_drag_factor_from_world(
+			session, settings.resolved_factor)
+		: runtime.update_insert_edge_loop_drag_factor(
+			session, settings.ray, settings.grid_size,
 			settings.snap_enabled);
 	return { true, changed, "" };
 }

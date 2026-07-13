@@ -6,6 +6,25 @@
 ################################################################################
 set(QUADER_APP_THIRDPARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
 set(QUADER_MODELING_DOMAIN_TEST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/tests/modeling_domain")
+set(QUADER_MODELING_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src/sdk/core/modeling")
+set(QUADER_MODELING_SDK_INCLUDE_DIR "${QUADER_MODELING_SDK_ROOT}/include")
+set(QUADER_MODELING_SDK_INTERNAL_DIR "${QUADER_MODELING_SDK_ROOT}/internal")
+set(QUADER_MODELING_SDK_THIRDPARTY_DIR "${QUADER_MODELING_SDK_INTERNAL_DIR}/thirdparty")
+set(QUADER_MODELING_SDK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/modeling-sdk")
+
+file(GLOB QUADER_CANONICAL_POLYGON_SOURCES CONFIGURE_DEPENDS
+    "${QUADER_MODELING_SDK_INTERNAL_DIR}/mesh/polygon/*.cpp"
+    "${QUADER_MODELING_SDK_INTERNAL_DIR}/mesh/polygon/operations/*.cpp")
+
+set(QUADER_CANONICAL_QDR_SHARED_SOURCES
+    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_atomic_write.cpp"
+    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_polygon_document_codec.cpp"
+    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_root.cpp")
+set(QUADER_CANONICAL_QDR_DOCUMENT_SOURCE
+    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_document.cpp")
+set(QUADER_CANONICAL_QDR_SOURCES
+    ${QUADER_CANONICAL_QDR_SHARED_SOURCES}
+    ${QUADER_CANONICAL_QDR_DOCUMENT_SOURCE})
 
 add_library(quader_modeling_profile INTERFACE)
 
@@ -91,7 +110,7 @@ if(QUADER_USE_OPENMESH_TOPOLOGY)
 endif()
 
 add_library(quader_geometry STATIC
-    src/mesh/geometry/geometry.cpp)
+    "${QUADER_MODELING_SDK_INTERNAL_DIR}/mesh/geometry/geometry.cpp")
 
 quader_enable_common_pch(quader_geometry)
 target_compile_features(quader_geometry PUBLIC cxx_std_20)
@@ -99,19 +118,17 @@ target_include_directories(quader_geometry
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     PRIVATE
+        "${QUADER_MODELING_SDK_INTERNAL_DIR}"
         "${QUADER_APP_THIRDPARTY_DIR}")
 
-file(GLOB QUADER_POLYGON_SOURCES CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh/polygon/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh/polygon/operations/*.cpp")
-
-add_library(quader_modeling_polygon STATIC ${QUADER_POLYGON_SOURCES})
+add_library(quader_modeling_polygon STATIC ${QUADER_CANONICAL_POLYGON_SOURCES})
 quader_enable_common_pch(quader_modeling_polygon)
 target_compile_features(quader_modeling_polygon PUBLIC cxx_std_20)
 target_include_directories(quader_modeling_polygon
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     PRIVATE
+        "${QUADER_MODELING_SDK_INTERNAL_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh/polygon"
         "${QUADER_APP_THIRDPARTY_DIR}")
 if(QUADER_USE_OPENMESH_TOPOLOGY)
@@ -196,14 +213,12 @@ target_include_directories(quader_editor_metadata
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(quader_editor_metadata PRIVATE quader_modeling_runtime)
 
-add_library(quader_qdr_shared_io STATIC
-    src/io/qdr/qdr_atomic_write.cpp
-    src/io/qdr/qdr_root.cpp
-    src/io/qdr/qdr_polygon_document_codec.cpp)
+add_library(quader_qdr_shared_io STATIC ${QUADER_CANONICAL_QDR_SHARED_SOURCES})
 quader_enable_common_pch(quader_qdr_shared_io)
 target_compile_features(quader_qdr_shared_io PRIVATE cxx_std_20)
 target_include_directories(quader_qdr_shared_io
     PRIVATE
+        "${QUADER_MODELING_SDK_INTERNAL_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
         "${QUADER_APP_THIRDPARTY_DIR}")
 target_link_libraries(quader_qdr_shared_io
@@ -211,14 +226,14 @@ target_link_libraries(quader_qdr_shared_io
         quader_modeling_polygon
         quader_modeling_profile)
 
-add_library(quader_qdr_document_io STATIC
-    src/io/qdr/qdr_document.cpp)
+add_library(quader_qdr_document_io STATIC ${QUADER_CANONICAL_QDR_DOCUMENT_SOURCE})
 quader_enable_common_pch(quader_qdr_document_io)
 target_compile_features(quader_qdr_document_io PUBLIC cxx_std_20)
 target_include_directories(quader_qdr_document_io
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     PRIVATE
+        "${QUADER_MODELING_SDK_INTERNAL_DIR}"
         "${QUADER_APP_THIRDPARTY_DIR}")
 target_link_libraries(quader_qdr_document_io
     PUBLIC
@@ -242,22 +257,6 @@ target_link_libraries(quader_qdr_runtime_io
     PRIVATE
         quader_modeling_profile)
 
-set(QUADER_MODELING_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src/sdk/core/modeling")
-set(QUADER_MODELING_SDK_INCLUDE_DIR "${QUADER_MODELING_SDK_ROOT}/include")
-set(QUADER_MODELING_SDK_INTERNAL_DIR "${QUADER_MODELING_SDK_ROOT}/internal")
-set(QUADER_MODELING_SDK_THIRDPARTY_DIR "${QUADER_MODELING_SDK_INTERNAL_DIR}/thirdparty")
-set(QUADER_MODELING_SDK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/modeling-sdk")
-
-file(GLOB QUADER_MODELING_SDK_INTERNAL_POLYGON_SOURCES CONFIGURE_DEPENDS
-    "${QUADER_MODELING_SDK_INTERNAL_DIR}/mesh/polygon/*.cpp"
-    "${QUADER_MODELING_SDK_INTERNAL_DIR}/mesh/polygon/operations/*.cpp")
-
-set(QUADER_MODELING_SDK_INTERNAL_QDR_SOURCES
-    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_atomic_write.cpp"
-    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_polygon_document_codec.cpp"
-    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_root.cpp"
-    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_document.cpp")
-
 function(quader_configure_modeling_sdk_target target)
     quader_enable_common_pch(${target})
     target_compile_features(${target} PUBLIC cxx_std_20)
@@ -274,13 +273,17 @@ add_library(quader_modeling_sdk_geometry STATIC
     src/sdk/core/modeling/src/geometry.cpp
     src/sdk/core/modeling/internal/mesh/geometry/geometry.cpp)
 add_library(quader::modeling_sdk_geometry ALIAS quader_modeling_sdk_geometry)
+set_target_properties(quader_modeling_sdk_geometry PROPERTIES
+    EXPORT_NAME modeling_sdk_geometry)
 quader_configure_modeling_sdk_target(quader_modeling_sdk_geometry)
 
 add_library(quader_modeling_sdk_polygon STATIC
     src/sdk/core/modeling/src/obj_mesh_view.cpp
     src/sdk/core/modeling/src/polygon_document.cpp
-    ${QUADER_MODELING_SDK_INTERNAL_POLYGON_SOURCES})
+    ${QUADER_CANONICAL_POLYGON_SOURCES})
 add_library(quader::modeling_sdk_polygon ALIAS quader_modeling_sdk_polygon)
+set_target_properties(quader_modeling_sdk_polygon PROPERTIES
+    EXPORT_NAME modeling_sdk_polygon)
 quader_configure_modeling_sdk_target(quader_modeling_sdk_polygon)
 target_link_libraries(quader_modeling_sdk_polygon
     PUBLIC
@@ -288,8 +291,10 @@ target_link_libraries(quader_modeling_sdk_polygon
 
 add_library(quader_modeling_sdk_qdr_document STATIC
     src/sdk/core/modeling/src/qdr_document.cpp
-    ${QUADER_MODELING_SDK_INTERNAL_QDR_SOURCES})
+    ${QUADER_CANONICAL_QDR_SOURCES})
 add_library(quader::modeling_sdk_qdr_document ALIAS quader_modeling_sdk_qdr_document)
+set_target_properties(quader_modeling_sdk_qdr_document PROPERTIES
+    EXPORT_NAME modeling_sdk_qdr_document)
 quader_configure_modeling_sdk_target(quader_modeling_sdk_qdr_document)
 target_link_libraries(quader_modeling_sdk_qdr_document
     PUBLIC
@@ -306,6 +311,8 @@ add_library(quader_modeling_sdk_runtime STATIC
     src/sdk/core/modeling/src/tools_api.cpp
     src/sdk/core/modeling/src/session.cpp)
 add_library(quader::modeling_sdk_runtime ALIAS quader_modeling_sdk_runtime)
+set_target_properties(quader_modeling_sdk_runtime PROPERTIES
+    EXPORT_NAME modeling_sdk_runtime)
 quader_configure_modeling_sdk_target(quader_modeling_sdk_runtime)
 target_link_libraries(quader_modeling_sdk_runtime
     PUBLIC
@@ -313,6 +320,8 @@ target_link_libraries(quader_modeling_sdk_runtime
 
 add_library(quader_modeling_sdk INTERFACE)
 add_library(quader::modeling_sdk ALIAS quader_modeling_sdk)
+set_target_properties(quader_modeling_sdk PROPERTIES
+    EXPORT_NAME modeling_sdk)
 target_link_libraries(quader_modeling_sdk
     INTERFACE
         quader_modeling_sdk_qdr_document

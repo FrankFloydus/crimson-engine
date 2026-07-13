@@ -10,6 +10,8 @@ file except through prior written authorization from Francesco Di Blasi.
 
 Portable geometry and mesh-processing helpers.
 
+This directory is the single compiled geometry implementation for both native and SDK targets.
+
 Owns:
 
 - Quader-owned vector, ray, line, plane, segment, triangle, rect, and bounds types;

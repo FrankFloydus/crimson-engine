@@ -232,12 +232,48 @@ inline EntityId document_command_create_entity_from_snapshot(
   return entity;
 }
 
-inline EntityId document_command_duplicate_entity_snapshot_tree(
+/**
+ * Tracks scene mutations made while recursively duplicating one snapshot tree
+ * so a child failure can restore reused clones and destroy new clones.
+ */
+struct DocumentDuplicateSnapshotRollback final {
+  /**
+   * Captures the original state of one existing clone reused by a duplicate.
+   */
+  struct ReusedEntity {
+    EntityId entity = kInvalidEntityId;
+    DocumentEntitySnapshot before;
+  };
+
+  std::vector<EntityId> created;
+  std::vector<ReusedEntity> reused;
+};
+
+inline void document_command_rollback_duplicate_snapshot_tree(
+    SceneDocument &scene, DocumentDuplicateSnapshotRollback &rollback) {
+  for (auto it = rollback.reused.rbegin(); it != rollback.reused.rend(); ++it) {
+    if (!scene.exists(it->entity)) {
+      continue;
+    }
+    (void)scene.set_parent(it->entity, it->before.original_parent, false);
+    document_command_apply_entity_snapshot_common_state(
+        scene, it->entity, it->before, it->before.name);
+  }
+  for (auto it = rollback.created.rbegin(); it != rollback.created.rend();
+       ++it) {
+    if (scene.exists(*it)) {
+      (void)scene.destroy_entity(*it);
+    }
+  }
+}
+
+inline EntityId document_command_duplicate_entity_snapshot_tree_impl(
     SceneDocument &scene, const DocumentEntitySnapshot &snapshot,
     EntityId parent, bool include_modeling_object = false,
     const std::unordered_map<EntityId, EntityId> *existing_clones_by_source =
         nullptr,
-    SceneEntityNameAllocator *name_allocator = nullptr) {
+    SceneEntityNameAllocator *name_allocator = nullptr,
+    DocumentDuplicateSnapshotRollback *rollback = nullptr) {
   EntityId duplicate = kInvalidEntityId;
   const std::string duplicate_name =
       name_allocator != nullptr
@@ -249,6 +285,14 @@ inline EntityId document_command_duplicate_entity_snapshot_tree(
       duplicate = existing->second;
       if (duplicate == kInvalidEntityId || !scene.exists(duplicate)) {
         return kInvalidEntityId;
+      }
+      if (rollback != nullptr) {
+        const std::optional<DocumentEntitySnapshot> before =
+            document_command_capture_entity_snapshot(scene, duplicate);
+        if (!before.has_value()) {
+          return kInvalidEntityId;
+        }
+        rollback->reused.push_back({.entity = duplicate, .before = *before});
       }
       if (scene.parent(duplicate) != parent &&
           !scene.set_parent(duplicate, parent, false)) {
@@ -265,18 +309,46 @@ inline EntityId document_command_duplicate_entity_snapshot_tree(
     if (duplicate == kInvalidEntityId) {
       return kInvalidEntityId;
     }
+    if (rollback != nullptr) {
+      rollback->created.push_back(duplicate);
+    }
   }
 
   for (const DocumentEntitySnapshot &child : snapshot.children) {
     const EntityId child_duplicate =
-        document_command_duplicate_entity_snapshot_tree(
+        document_command_duplicate_entity_snapshot_tree_impl(
             scene, child, duplicate, include_modeling_object,
-            existing_clones_by_source, name_allocator);
+            existing_clones_by_source, name_allocator, rollback);
     if (child_duplicate == kInvalidEntityId) {
       return kInvalidEntityId;
     }
   }
   return duplicate;
+}
+
+inline EntityId document_command_duplicate_entity_snapshot_tree(
+    SceneDocument &scene, const DocumentEntitySnapshot &snapshot,
+    EntityId parent, bool include_modeling_object = false,
+    const std::unordered_map<EntityId, EntityId> *existing_clones_by_source =
+        nullptr,
+    SceneEntityNameAllocator *name_allocator = nullptr) {
+  DocumentDuplicateSnapshotRollback rollback;
+  const EntityId duplicate = document_command_duplicate_entity_snapshot_tree_impl(
+      scene, snapshot, parent, include_modeling_object,
+      existing_clones_by_source, name_allocator, &rollback);
+  if (duplicate == kInvalidEntityId) {
+    document_command_rollback_duplicate_snapshot_tree(scene, rollback);
+  }
+  return duplicate;
+}
+
+inline void document_command_erase_snapshot_remaps(
+    const DocumentEntitySnapshot &snapshot,
+    std::unordered_map<EntityId, EntityId> &remapped_entities) {
+  remapped_entities.erase(snapshot.original_id);
+  for (const DocumentEntitySnapshot &child : snapshot.children) {
+    document_command_erase_snapshot_remaps(child, remapped_entities);
+  }
 }
 
 inline EntityId document_command_restore_entity_snapshot_tree(
@@ -293,6 +365,10 @@ inline EntityId document_command_restore_entity_snapshot_tree(
     if (document_command_restore_entity_snapshot_tree(
             scene, child, restored, remapped_entities,
             include_modeling_object) == kInvalidEntityId) {
+      if (scene.exists(restored)) {
+        (void)scene.destroy_entity(restored);
+      }
+      document_command_erase_snapshot_remaps(snapshot, remapped_entities);
       return kInvalidEntityId;
     }
   }

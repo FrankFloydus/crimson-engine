@@ -67,6 +67,7 @@ const std::vector<std::string_view> &qt_shell_source_paths() {
       "src/ui/qt_viewport_panel.cpp",
       "src/ui/qt_viewport_surface.hpp",
       "src/ui/qt_viewport_surface.cpp",
+      "src/ui/qt_main_window.hpp",
       "src/ui/qt_main_menu.hpp",
       "src/ui/qt_main_menu.cpp",
       "src/ui/qt_input_adapter.hpp",
@@ -166,13 +167,23 @@ TEST(UiLayoutGuardrailTests,
      MainWindowOwnsCentralViewportAndStandardDockPanels) {
   const std::string ui_header = read_source_file("src/ui/ui_system.hpp");
   const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
+  const std::string main_window =
+      read_source_file("src/ui/qt_main_window.hpp");
   const std::string panel_manager_header =
       read_source_file("src/ui/ui_panel_manager.hpp");
   const std::string panel_manager_source =
       read_source_file("src/ui/ui_panel_manager.cpp");
 
   expect_contains(ui_header, "std::unique_ptr<QMainWindow> main_window_");
-  expect_contains(ui_source, "std::make_unique<QMainWindow>()");
+  expect_contains(ui_source, "std::make_unique<QtMainWindow>()");
+  expect_contains(main_window, "void closeEvent(QCloseEvent *event) override");
+  expect_contains(main_window, "!close_request_handler_()");
+  expect_contains(ui_source, "return allow_main_window_close()");
+  expect_contains(ui_source,
+                  "confirm_dirty_project_replacement(\"application.close\")");
+  expect_contains(ui_source,
+                  "editor_->commands().execute(quader_command::kProjectSave)");
+  expect_contains(ui_source, "!editor_->project().dirty()");
   expect_contains(ui_source, "QStringLiteral(\"quaderMainWindow\")");
   expect_contains(ui_source, "setCentralWidget(viewport_panel_)");
   expect_contains(ui_source, "QMainWindow::AllowNestedDocks");
@@ -436,6 +447,12 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(inspector, "QStringLiteral(\"inspector.tree\")");
   expect_contains(inspector, "editor_->scene().set_scene_settings(");
   expect_contains(inspector, "editor_->scene().set_light_component(");
+  expect_contains(inspector,
+                  "if (result == QDialog::Accepted && committed.isValid()");
+  expect_contains(inspector,
+                  "changed({static_cast<float>(committed.redF())");
+  expect_missing(inspector,
+                 "changed({static_cast<float>(initial.redF())");
   expect_missing(inspector, "document_->set_scene_settings(");
   expect_missing(inspector, "document_->set_light(");
 
@@ -1176,6 +1193,8 @@ TEST(UiLayoutGuardrailTests,
       read_source_file("src/ui/qt_viewport_panel.hpp");
   const std::string panel =
       read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string presenter_header =
+      read_source_file("src/ui/qt_viewport_context_menu.hpp");
   const std::string presenter =
       read_source_file("src/ui/qt_viewport_context_menu.cpp");
 
@@ -1189,6 +1208,10 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel, "interaction_controller_.pick_context_menu_target(");
   expect_contains(panel, "should_open_viewport_context_menu(");
   expect_contains(panel, "context_menu_presenter_.show(");
+  expect_contains(panel, "qt_event_target_belongs_to_tool_settings(target)");
+  expect_contains(panel, "QStringLiteral(\"floating.tool_settings\")");
+  expect_contains(panel, "editor.modeling().available_actions(query)");
+  expect_missing(panel, "modeling.context_actions(query)");
 
   const std::size_t process =
       panel.find("void QtViewportPanel::process_viewport_input(");
@@ -1211,13 +1234,18 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_LT(release_capture, show);
 
   expect_contains(presenter,
-                  "modeling.context_actions(query)");
+                  "editor.modeling().available_actions(query)");
   expect_contains(presenter,
                   "editor.commands().command_id_for_tool_activation(");
   expect_contains(presenter,
                   "editor.commands().command_id_for_modeling_action(");
   expect_contains(presenter, "editor.commands().execute(command_id)");
   expect_contains(presenter, "input_router.set_selection_mode(");
+  expect_contains(presenter, "is_generic_context_action(action.action_id)");
+  expect_contains(presenter, "menu.addSeparator()");
+  expect_missing(presenter_header, "ModelingSessionService");
+  expect_missing(presenter, "ModelingSessionService");
+  expect_missing(presenter, "modeling.context_actions(");
   expect_missing(presenter, "ImGui");
 }
 
@@ -1235,6 +1263,9 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(menu, "editor.commands().execute(command_id)");
   expect_contains(menu, "editor.commands().available()");
   expect_contains(menu, "command->shortcut");
+  expect_contains(menu, "command_id_for_tool_activation(");
+  expect_contains(menu, "context.editor.commands().execute(command_id)");
+  expect_missing(menu, "context.editor.tools().activate(tool_id)");
   expect_contains(menu, "QLatin1Char('\\t')");
   expect_contains(menu, "entry.action->setText(action_text(");
   for (std::string_view axis_key :
@@ -1256,6 +1287,8 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(commands, "keybindings_.dispatch(chord, context)");
   expect_contains(commands, "keybindings_.resolve_sequence({chord}, context)");
   expect_contains(commands, "dispatch_viewport_input_binding(");
+  expect_contains(commands,
+                  "return api_.modeling().can_execute_tool(tool_id)");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -1267,6 +1300,8 @@ TEST(UiLayoutGuardrailTests,
   const std::string viewport_sources =
       read_source_file("src/ui/qt_viewport_panel.cpp") +
       read_source_file("src/ui/qt_viewport_surface.cpp");
+  const std::string input_policy =
+      read_source_file("src/ui/viewport_host_interaction_policy.hpp");
 
   expect_contains(adapter_header, "std::optional<QuaderInputChord>");
   expect_contains(adapter, "quader_pressed_input_chord_from_qt_event(");
@@ -1286,6 +1321,33 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(viewport_sources, "quader_mouse_input_chord_from_qt_event(");
   expect_contains(viewport_sources, "quader_wheel_input_from_qt_event(");
   expect_contains(viewport_sources, "dispatch_viewport_input_binding(");
+  expect_contains(viewport_sources,
+                  "dispatch_ordered_viewport_input_edges(");
+  expect_contains(viewport_sources,
+                  "has_pending_keybinding_chord()");
+  expect_contains(input_policy,
+                  "dispatch_ordered_viewport_input_edges(");
+  expect_contains(input_policy, "dispatch_viewport_input_edge(");
+  expect_contains(input_policy, "viewport_wheel_chords_share_event(");
+}
+
+TEST(UiLayoutGuardrailTests,
+     ViewportHoverCacheTracksResolvedGridSnapState) {
+  const std::string panel =
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string hover_header =
+      read_source_file("src/ui/viewport_hover_controller.hpp");
+  const std::string hover_source =
+      read_source_file("src/ui/viewport_hover_controller.cpp");
+
+  expect_contains(panel, "const bool resolved_grid_snap_enabled");
+  expect_contains(panel,
+                  ".grid_snap_enabled = resolved_grid_snap_enabled");
+  expect_contains(hover_header, "bool grid_snap_enabled = true");
+  expect_contains(hover_source,
+                  "grid_snap_enabled == other.grid_snap_enabled");
+  expect_contains(hover_source,
+                  ".grid_snap_enabled = request.grid_snap_enabled");
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -1456,6 +1518,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel, "current == pane_state.frame");
   expect_contains(panel,
                   "should_cancel_modal_tool_for_external_pointer({");
+  expect_contains(panel, "should_dispatch_viewport_tool_activation({");
   expect_contains(panel, "ViewportToolId::LinearArray");
   expect_contains(panel, "current_tool_status.insert_edge_loop_dragging");
   expect_contains(panel,

@@ -8,11 +8,12 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Polygon Document Package
 
-Canonical Quader polygon document model and operations.
+Native compatibility declarations for the canonical portable polygon core.
 
-This package is app-owned native source under the `quader_modeling_polygon` target. It keeps the
-legacy-compatible `quader_poly` namespace/API, but it is no longer an external SDK extraction
-boundary.
+The implementation lives under
+`src/sdk/core/modeling/internal/mesh/polygon` and is compiled into both the native and SDK targets
+from one CMake source list. These headers temporarily keep existing native include paths stable;
+guardrails require them to remain byte-identical to the canonical internal headers.
 
 Owns:
 
@@ -27,8 +28,8 @@ Owns:
 
 ## Internal Decomposition
 
-`quader_modeling_polygon` is built from focused `.cpp` files with explicit CMake entries. Shared
-declarations and helper types live in private headers under `src/mesh/polygon/internal`.
+`quader_modeling_polygon` is built from the canonical portable `.cpp` files. No native polygon
+implementation `.cpp` files belong in this directory.
 
 Current owner slices:
 
@@ -44,5 +45,5 @@ Current owner slices:
 - `quader_poly_document_*_helpers.cpp`: private topology, hull, OpenMesh, knife, UV, picking, bridge,
   bevel, dissolve, copy, and surface-operation helpers.
 
-Future slices should keep adding normal `.cpp` files plus narrow internal headers. Do not add new
-permanent `.inc` implementation shards.
+Future implementation slices belong in the canonical portable package, not beside these
+compatibility declarations.

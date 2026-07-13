@@ -44,14 +44,46 @@ quader::QVec3 project_poly_point_to_plane(quader::QVec3 point, const quader_geom
 	return to_poly_vec3(quader_geometry::project_point_to_plane(to_geometry_vec3(point), plane));
 }
 
+quader::QVec3 camera_axis(quader::QVec3 axis, quader::QVec3 fallback,
+		bool affine_model_space)
+{
+	if (vec3_is_tiny(axis)) {
+		return fallback;
+	}
+	return affine_model_space ? axis : normalized_axis(axis);
+}
+
+quader::QVec3 vector_from_camera_components(
+		quader::QVec3 right,
+		quader::QVec3 up,
+		quader::QVec3 forward,
+		quader::QVec3 components)
+{
+	const quader::QVec3 up_cross_forward = quader::cross(up, forward);
+	const float determinant = quader::dot(right, up_cross_forward);
+	constexpr float kAffineDeterminantEpsilon = 1.0e-12F;
+	if (!std::isfinite(determinant) ||
+		std::abs(determinant) <= kAffineDeterminantEpsilon) {
+		return {};
+	}
+	return (up_cross_forward * components.x +
+		quader::cross(forward, right) * components.y +
+		quader::cross(right, up) * components.z) /
+		determinant;
+}
+
 } // namespace
 
 bool project_viewport_point(const ViewportCameraState& camera, quader::QVec3 point, quader::QVec2& out_screen)
 {
 	const quader::QVec3 origin = camera.transform.origin;
-	const quader::QVec3 right = vec3_is_tiny(camera.transform.x_axis) ? quader::QVec3 { 1.0F, 0.0F, 0.0F } : normalized_axis(camera.transform.x_axis);
-	const quader::QVec3 up = vec3_is_tiny(camera.transform.y_axis) ? quader::QVec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(camera.transform.y_axis);
-	const quader::QVec3 forward = vec3_is_tiny(camera.transform.z_axis) ? quader::QVec3 { 0.0F, 0.0F, -1.0F } : normalized_axis(vec3_scale(camera.transform.z_axis, -1.0));
+	const quader::QVec3 right = camera_axis(camera.transform.x_axis,
+		{1.0F, 0.0F, 0.0F}, camera.affine_model_space);
+	const quader::QVec3 up = camera_axis(camera.transform.y_axis,
+		{0.0F, 1.0F, 0.0F}, camera.affine_model_space);
+	const quader::QVec3 forward = camera_axis(
+		vec3_scale(camera.transform.z_axis, -1.0),
+		{0.0F, 0.0F, -1.0F}, camera.affine_model_space);
 	const double width = std::max(1.0, static_cast<double>(camera.viewport_size.x));
 	const double height = std::max(1.0, static_cast<double>(camera.viewport_size.y));
 	const double aspect = width / height;
@@ -88,16 +120,22 @@ bool viewport_point_is_behind_camera(const ViewportCameraState& camera, quader::
   if (camera.projection == CameraProjection::Orthographic) {
     return false;
   }
-        const quader::QVec3 forward = vec3_is_tiny(camera.transform.z_axis) ? quader::QVec3 { 0.0F, 0.0F, -1.0F } : normalized_axis(vec3_scale(camera.transform.z_axis, -1.0));
+	const quader::QVec3 forward = camera_axis(
+		vec3_scale(camera.transform.z_axis, -1.0),
+		{0.0F, 0.0F, -1.0F}, camera.affine_model_space);
 	return vec3_dot(point - camera.transform.origin, forward) <= 0.0001F;
 }
 
 quader_poly::Ray ray_from_viewport_screen_point(const ViewportCameraState& camera, quader::QVec2 screen)
 {
 	const quader::QVec3 origin = camera.transform.origin;
-	const quader::QVec3 right = vec3_is_tiny(camera.transform.x_axis) ? quader::QVec3 { 1.0F, 0.0F, 0.0F } : normalized_axis(camera.transform.x_axis);
-	const quader::QVec3 up = vec3_is_tiny(camera.transform.y_axis) ? quader::QVec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(camera.transform.y_axis);
-	const quader::QVec3 forward = vec3_is_tiny(camera.transform.z_axis) ? quader::QVec3 { 0.0F, 0.0F, -1.0F } : normalized_axis(vec3_scale(camera.transform.z_axis, -1.0));
+	const quader::QVec3 right = camera_axis(camera.transform.x_axis,
+		{1.0F, 0.0F, 0.0F}, camera.affine_model_space);
+	const quader::QVec3 up = camera_axis(camera.transform.y_axis,
+		{0.0F, 1.0F, 0.0F}, camera.affine_model_space);
+	const quader::QVec3 forward = camera_axis(
+		vec3_scale(camera.transform.z_axis, -1.0),
+		{0.0F, 0.0F, -1.0F}, camera.affine_model_space);
 	const double width = std::max(1.0, static_cast<double>(camera.viewport_size.x));
 	const double height = std::max(1.0, static_cast<double>(camera.viewport_size.y));
 	const double aspect = width / height;
@@ -106,19 +144,30 @@ quader_poly::Ray ray_from_viewport_screen_point(const ViewportCameraState& camer
         if (camera.projection == CameraProjection::Orthographic) {
           const double half_height =
               std::max(0.0001, camera.orthographic_size * 0.5);
-          return {
-              origin + vec3_scale(right, ndc_x * half_height * aspect) +
-                  vec3_scale(up, ndc_y * half_height),
-              forward,
-          };
+		  if (camera.affine_model_space) {
+			const quader::QVec3 offset = vector_from_camera_components(
+				right, up, forward,
+				{static_cast<float>(ndc_x * half_height * aspect),
+				 static_cast<float>(ndc_y * half_height), 0.0F});
+			const quader::QVec3 direction = normalize(
+				vector_from_camera_components(right, up, forward,
+					{0.0F, 0.0F, 1.0F}));
+			return {origin + offset, direction};
+		  }
+          return {origin + vec3_scale(right, ndc_x * half_height * aspect) +
+                      vec3_scale(up, ndc_y * half_height),
+                  forward};
         }
 
         const double fov = std::clamp(camera.fov_degrees, 1.0, 179.0) * std::acos(-1.0) / 180.0;
 	const double tangent = std::tan(fov * 0.5);
-	quader::QVec3 direction =
-		forward +
-		vec3_scale(right, ndc_x * tangent * aspect) +
-		vec3_scale(up, ndc_y * tangent);
+	quader::QVec3 direction = camera.affine_model_space
+		? vector_from_camera_components(
+			right, up, forward,
+			{static_cast<float>(ndc_x * tangent * aspect),
+			 static_cast<float>(ndc_y * tangent), 1.0F})
+		: forward + vec3_scale(right, ndc_x * tangent * aspect) +
+			vec3_scale(up, ndc_y * tangent);
 	direction = vec3_is_tiny(direction) ? forward : normalized_axis(direction);
 	return { origin, direction };
 }

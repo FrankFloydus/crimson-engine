@@ -674,6 +674,10 @@ void QuaderCommandsApi::Impl::register_commands() {
   register_modeling_tool_public_command(quader_command::kApplyMaterial,
                                         "apply_active_material",
                                         "Apply Material");
+  register_command(
+      quader_command::kModelingCopyPivotFromActive, "Copy Pivot From Active",
+      [this] { return api_.modeling().copy_pivot_from_active(); }, {},
+      [this] { return api_.modeling().can_copy_pivot_from_active(); });
 #ifndef NDEBUG
   register_command(quader_command::kDevCopySelectionJson,
                    "Dev: Copy Selection JSON",
@@ -785,10 +789,14 @@ void QuaderCommandsApi::Impl::register_commands() {
     if (!modeling_action_registers_dedicated_command(*tool)) {
       continue;
     }
-    register_command(command_id, std::string(tool->label()),
-                     [this, tool_id = std::string(tool->id())] {
-                       return api_.modeling().execute_tool(tool_id);
-                     });
+    register_command(
+        command_id, std::string(tool->label()),
+        [this, tool_id = std::string(tool->id())] {
+          return api_.modeling().execute_tool(tool_id);
+        },
+        {}, [this, tool_id = std::string(tool->id())] {
+          return api_.modeling().can_execute_tool(tool_id);
+        });
   }
   for (const ViewportTool *tool : viewport_tool_catalog()) {
     if (tool == nullptr) {

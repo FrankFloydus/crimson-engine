@@ -58,7 +58,7 @@ ViewportToolResult PointSequenceTool::handle_event(
       handle_result(
           context, "Knife point",
           preview_port->accept_knife_point(
-              point_context->make_event_at(pointer.mouse_local, false)));
+              point_context->make_event_at(pointer.left_click_local, false)));
     }
     if (pointer.finalize_pressed && commit_port != nullptr) {
       const ModelingCommandResult command =

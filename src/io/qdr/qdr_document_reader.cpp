@@ -332,6 +332,7 @@ ProjectDocument project_document_from_app_payload(const Json &payload) {
   std::vector<std::pair<EntityId, EntityId>> parent_links;
   std::set<EntityId> entities_with_explicit_editor_object_ids;
   EntityId active_selection = kInvalidEntityId;
+  bool active_selection_seen = false;
   for (const Json &entity_json :
        field_or_default(payload, "entities", empty_array)) {
     const EntityId requested_id = entity_json.value("id", kInvalidEntityId);
@@ -422,6 +423,11 @@ ProjectDocument project_document_from_app_payload(const Json &payload) {
       document.scene().set_selected(entity, true);
     }
     if (entity_json.value("active", false)) {
+      if (active_selection_seen) {
+        throw std::runtime_error(
+            "QDR project document contains multiple active selections.");
+      }
+      active_selection_seen = true;
       active_selection = entity;
     }
     parent_links.emplace_back(entity,

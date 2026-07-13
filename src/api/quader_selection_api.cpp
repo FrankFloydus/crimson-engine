@@ -293,10 +293,7 @@ QuaderApiVoidResult QuaderSelectionApi::invert() {
 }
 
 QuaderApiVoidResult QuaderSelectionApi::set_mode(QuaderSelectionMode mode) {
-  return mutations_.run_modeling_result(
-      project_session(session_).selection().set_mode(
-          to_modeling_selection_mode(mode)),
-      "Set Selection Mode");
+  return mutations_.set_selection_mode(to_modeling_selection_mode(mode));
 }
 
 QuaderApiResult<QuaderSelectionSummary>

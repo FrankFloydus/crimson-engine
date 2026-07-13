@@ -11,7 +11,9 @@
 #include "scene/document/project_document.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace quader {
@@ -103,13 +105,29 @@ public:
   [[nodiscard]] ProjectAssetMutationResult
   replace_standalone_mesh(AssetId mesh, MeshAsset replacement);
   void replace_document(ProjectDocument document);
+  void set_document_replacement_finalizer(
+      std::function<void(ProjectSession &)> finalizer);
   void mark_clean();
 
 private:
+  /**
+   * Tracks revision writes owned by one live operation projection.
+   */
+  struct PreviewContentCheckpoint {
+    ProjectContentRevisionStamp expected_stamp;
+    bool began_clean = false;
+    bool contaminated = false;
+  };
+
   void rebuild_services();
+  void begin_modeling_preview_checkpoint();
+  void observe_before_modeling_preview_projection();
+  void record_after_modeling_preview_projection();
+  void finish_modeling_preview_checkpoint(bool restored_by_cancel);
 
   ProjectDocument document_;
   ProjectContentRevisionStamp clean_stamp_;
+  std::optional<PreviewContentCheckpoint> preview_content_checkpoint_;
   std::unique_ptr<EditorHistoryService> history_;
   std::unique_ptr<DocumentCommandService> document_commands_;
   std::unique_ptr<AssetCommandService> asset_commands_;
@@ -118,6 +136,7 @@ private:
   std::unique_ptr<PivotToolService> pivot_;
   std::unique_ptr<LinearArrayToolService> linear_array_;
   std::unique_ptr<NativeViewportToolCoordinator> native_tools_;
+  std::function<void(ProjectSession &)> document_replacement_finalizer_;
 };
 
 /**

@@ -1004,7 +1004,8 @@ bool EditorRuntime::set_insert_edge_loop_preview_from_pick(
 		double vertex_radius,
 		double edge_radius,
 		bool snap_enabled,
-		bool dragging)
+		bool dragging,
+		int target_object_id)
 {
 	quader_poly::PickOptions pick_options =
 		selection_pick_options_from_radii(vertex_radius, edge_radius);
@@ -1015,7 +1016,8 @@ bool EditorRuntime::set_insert_edge_loop_preview_from_pick(
 		grid_size,
 		pick_options,
 		snap_enabled,
-		dragging);
+		dragging,
+		target_object_id);
 }
 
 bool EditorRuntime::update_insert_edge_loop_drag_factor(
@@ -1053,7 +1055,8 @@ bool EditorRuntime::update_knife_preview_from_pick(
 		const ViewportCameraState& camera,
 		double grid_size,
 		bool snap_enabled,
-		bool constrain_axis)
+		bool constrain_axis,
+		int target_object_id)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.EditorRuntime.update_knife_preview_from_pick");
 	return quader_editor_core::update_knife_preview_from_pick(
@@ -1064,7 +1067,49 @@ bool EditorRuntime::update_knife_preview_from_pick(
 		camera,
 		grid_size,
 		snap_enabled,
-		constrain_axis);
+		constrain_axis,
+		target_object_id);
+}
+
+bool EditorRuntime::update_insert_edge_loop_drag_factor_from_world(
+		EditorSession& session,
+		std::optional<float> resolved_factor)
+{
+	if (!resolved_factor.has_value()) {
+		clear_insert_edge_loop_preview(
+			state_.insert_edge_loop, state_.hover,
+			state_.insert_edge_loop.object_id, state_.insert_edge_loop.edge,
+			state_.insert_edge_loop.factor, true);
+		return false;
+	}
+	return set_insert_edge_loop_preview(
+		state_.insert_edge_loop, session.objects(), state_.hover,
+		state_.insert_edge_loop.object_id, state_.insert_edge_loop.edge,
+		*resolved_factor, true);
+}
+
+bool EditorRuntime::update_knife_preview_from_hit(
+		EditorSession& session,
+		const PickHitRecord& hit,
+		const ViewportCameraState& camera,
+		double grid_size,
+		bool snap_enabled,
+		bool constrain_axis)
+{
+	QDR_PROFILE_SCOPE("qdr_editor_core.EditorRuntime.update_knife_preview_from_hit");
+	return quader_editor_core::update_knife_preview_from_hit(
+		session, state_.knife, state_.hover, hit, camera, grid_size,
+		snap_enabled, constrain_axis);
+}
+
+bool EditorRuntime::set_insert_edge_loop_preview_from_hit(
+		EditorSession& session,
+		const PickHitRecord& hit,
+		std::optional<float> resolved_factor,
+		bool dragging)
+{
+	return session.set_insert_edge_loop_preview_from_hit(
+		state_.insert_edge_loop, state_.hover, hit, resolved_factor, dragging);
 }
 
 void EditorRuntime::refresh_knife_intersection_preview(EditorSession& session, const ViewportCameraState& camera)

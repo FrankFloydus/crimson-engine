@@ -93,6 +93,7 @@ struct ViewportInputResult {
     bool consumed = false;
     bool camera_changed = false;
     bool shortcut_handled = false;
+    bool tool_activation_requested = false;
     bool tool_changed = false;
     bool selection_mode_changed = false;
     bool grid_preset_changed = false;

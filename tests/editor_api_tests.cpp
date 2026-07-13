@@ -800,6 +800,107 @@ TEST(EditorApiTests, ProjectDocumentCommandsRouteThroughProjectApi) {
       [](quader::QuaderProjectApi &project) { return project.save_as({}); });
 }
 
+TEST(EditorApiTests,
+     DirtyProjectReplacementCancelPreservesStateAndDiscardUsesOneBoundary) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  create_selected_box(editor, "Dirty Replacement Box");
+  ASSERT_TRUE(editor.project().dirty());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  const quader::QuaderHistorySnapshot before = editor.query().history();
+
+  editor.project().set_runtime_hooks(quader::QuaderProjectRuntimeHooks{
+      .confirm_dirty_project_replacement =
+          [](std::string_view) {
+            return quader::QuaderDirtyProjectDecision::Cancel;
+          },
+  });
+  const quader::QuaderApiVoidResult canceled = editor.project().new_project();
+  ASSERT_TRUE(canceled.ok()) << canceled.error_message();
+  EXPECT_FALSE(canceled.changed());
+  EXPECT_TRUE(entity_named(editor, "Dirty Replacement Box").has_value());
+  EXPECT_TRUE(editor.project().dirty());
+  EXPECT_TRUE(editor.tools().active_settings().active);
+  EXPECT_EQ(editor.query().history().undo_label, before.undo_label);
+
+  editor.project().set_runtime_hooks(quader::QuaderProjectRuntimeHooks{
+      .confirm_dirty_project_replacement =
+          [](std::string_view) {
+            return quader::QuaderDirtyProjectDecision::Discard;
+          },
+  });
+  const quader::QuaderApiVoidResult discarded = editor.project().new_project();
+  ASSERT_TRUE(discarded.ok()) << discarded.error_message();
+  EXPECT_TRUE(discarded.changed());
+  EXPECT_FALSE(entity_named(editor, "Dirty Replacement Box").has_value());
+  EXPECT_FALSE(editor.project().dirty());
+  EXPECT_FALSE(editor.tools().active_settings().active);
+  EXPECT_FALSE(editor.history().can_undo());
+}
+
+TEST(EditorApiTests,
+     DirtyOpenPreflightsBeforeReadingAndRereadsAfterSavingTheTarget) {
+  {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    create_selected_box(editor, "Canceled Dirty Open Box");
+    int confirmations = 0;
+    editor.project().set_runtime_hooks(quader::QuaderProjectRuntimeHooks{
+        .confirm_dirty_project_replacement =
+            [&confirmations](std::string_view action_id) {
+              ++confirmations;
+              EXPECT_EQ(action_id, "project.open");
+              return quader::QuaderDirtyProjectDecision::Cancel;
+            },
+    });
+    const std::filesystem::path missing =
+        project_test_path("dirty-open-cancel-missing");
+    std::filesystem::remove(missing);
+
+    const quader::QuaderApiVoidResult canceled = editor.project().open(missing);
+    ASSERT_TRUE(canceled.ok()) << canceled.error_message();
+    EXPECT_FALSE(canceled.changed());
+    EXPECT_EQ(confirmations, 1);
+    EXPECT_TRUE(entity_named(editor, "Canceled Dirty Open Box").has_value());
+    EXPECT_TRUE(editor.project().dirty());
+  }
+
+  const std::filesystem::path path =
+      project_test_path("dirty-open-save-same-target");
+  std::filesystem::remove(path);
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  create_selected_box(editor, "Saved Open Baseline");
+  ASSERT_TRUE(editor.project().save_as(path).ok());
+  const quader::QuaderApiResult<quader::QuaderEntityRef> unsaved =
+      editor.scene().create_entity(
+          quader::QuaderCreateEntityArgs{.name = "Saved During Open Preflight"});
+  ASSERT_TRUE(unsaved.ok()) << unsaved.error_message();
+  ASSERT_TRUE(editor.project().dirty());
+  editor.project().set_runtime_hooks(quader::QuaderProjectRuntimeHooks{
+      .confirm_dirty_project_replacement =
+          [](std::string_view action_id) {
+            EXPECT_EQ(action_id, "project.open");
+            return quader::QuaderDirtyProjectDecision::Save;
+          },
+  });
+
+  const quader::QuaderApiVoidResult opened = editor.project().open(path);
+  ASSERT_TRUE(opened.ok()) << opened.error_message();
+  EXPECT_TRUE(opened.changed());
+  EXPECT_TRUE(entity_named(editor, "Saved During Open Preflight").has_value());
+  EXPECT_FALSE(editor.project().dirty());
+
+  CommandTestHarness disk_harness;
+  const quader::QuaderApiVoidResult disk_opened =
+      disk_harness.editor.project().open(path);
+  ASSERT_TRUE(disk_opened.ok()) << disk_opened.error_message();
+  EXPECT_TRUE(entity_named(disk_harness.editor,
+                           "Saved During Open Preflight")
+                  .has_value());
+  std::filesystem::remove(path);
+}
+
 TEST(EditorApiTests, ProjectSaveAsSaveAndOpenUseQdrDocumentIo) {
   const std::filesystem::path path = project_test_path("roundtrip");
   CommandTestHarness save_harness;
@@ -904,6 +1005,98 @@ TEST(EditorApiTests, ProjectSaveAsSaveAndOpenUseQdrDocumentIo) {
   EXPECT_FALSE(opened.project().dirty());
 }
 
+TEST(EditorApiTests,
+     CancelingOperationPreviewRestoresCleanProjectContentCheckpoint) {
+  const std::filesystem::path path =
+      project_test_path("cancel-preview-clean-checkpoint");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Cancel Preview Clean Box");
+  ASSERT_TRUE(editor.project().save_as(path).ok());
+  ASSERT_FALSE(editor.project().dirty());
+  const quader::QuaderRevisionStamp clean_revisions = editor.revisions();
+  const std::optional<quader::QuaderMeshSnapshot> before =
+      editor.query().mesh(box.mesh);
+  ASSERT_TRUE(before.has_value());
+
+  const quader::QuaderApiVoidResult preview = editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("half_cut"));
+  ASSERT_TRUE(preview.ok()) << preview.error_message();
+  ASSERT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
+
+  const quader::QuaderApiVoidResult canceled =
+      editor.tools().cancel_active_tool_preview();
+  ASSERT_TRUE(canceled.ok()) << canceled.error_message();
+  EXPECT_TRUE(canceled.changed());
+  EXPECT_FALSE(editor.project().dirty());
+  const quader::QuaderRevisionStamp restored_revisions = editor.revisions();
+  EXPECT_TRUE(restored_revisions.scene_revision >
+                  clean_revisions.scene_revision ||
+              restored_revisions.asset_revision >
+                  clean_revisions.asset_revision);
+  const std::optional<quader::QuaderMeshSnapshot> after =
+      editor.query().mesh(box.mesh);
+  ASSERT_TRUE(after.has_value());
+  EXPECT_EQ(after->vertex_count, before->vertex_count);
+  EXPECT_EQ(after->primitive_count, before->primitive_count);
+
+  std::error_code ignored;
+  std::filesystem::remove(path, ignored);
+}
+
+TEST(EditorApiTests, CommittingOperationPreviewMakesCleanProjectDirty) {
+  const std::filesystem::path path =
+      project_test_path("commit-preview-dirty-checkpoint");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  (void)create_selected_box(editor, "Commit Preview Dirty Box");
+  ASSERT_TRUE(editor.project().save_as(path).ok());
+  ASSERT_FALSE(editor.project().dirty());
+
+  const quader::QuaderApiVoidResult preview = editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("half_cut"));
+  ASSERT_TRUE(preview.ok()) << preview.error_message();
+  const quader::QuaderApiVoidResult committed =
+      editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  EXPECT_TRUE(committed.changed());
+  EXPECT_TRUE(editor.project().dirty());
+
+  std::error_code ignored;
+  std::filesystem::remove(path, ignored);
+}
+
+TEST(EditorApiTests,
+     CancelingOperationPreviewDoesNotHideAnInterveningSceneEdit) {
+  const std::filesystem::path path =
+      project_test_path("cancel-preview-concurrent-edit");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Cancel Preview Concurrent Edit Box");
+  ASSERT_TRUE(editor.project().save_as(path).ok());
+  ASSERT_FALSE(editor.project().dirty());
+
+  const quader::QuaderApiVoidResult preview = editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("half_cut"));
+  ASSERT_TRUE(preview.ok()) << preview.error_message();
+  ASSERT_TRUE(editor.scene().set_visible(box.entity, false).ok());
+  ASSERT_TRUE(editor.project().dirty());
+
+  const quader::QuaderApiVoidResult canceled =
+      editor.tools().cancel_active_tool_preview();
+  ASSERT_TRUE(canceled.ok()) << canceled.error_message();
+  EXPECT_TRUE(editor.project().dirty());
+  const std::optional<quader::QuaderEntitySnapshot> after =
+      editor.query().entity(box.entity);
+  ASSERT_TRUE(after.has_value());
+  EXPECT_FALSE(after->visible);
+
+  std::error_code ignored;
+  std::filesystem::remove(path, ignored);
+}
+
 TEST(EditorApiTests, ProjectNewCommandOpensCleanUnsavedEmptyProject) {
   const std::filesystem::path path = project_test_path("new-command");
   CommandTestHarness harness;
@@ -924,6 +1117,13 @@ TEST(EditorApiTests, ProjectNewCommandOpensCleanUnsavedEmptyProject) {
   ASSERT_TRUE(dirty_entity.ok()) << dirty_entity.error_message();
   EXPECT_TRUE(editor.project().dirty());
   EXPECT_GT(user_entity_count(editor), 1u);
+
+  editor.project().set_runtime_hooks(quader::QuaderProjectRuntimeHooks{
+      .confirm_dirty_project_replacement =
+          [](std::string_view) {
+            return quader::QuaderDirtyProjectDecision::Discard;
+          },
+  });
 
   const quader::QuaderApiVoidResult created =
       editor.commands().execute(quader::quader_command::kProjectNew);
@@ -1715,6 +1915,79 @@ TEST(EditorApiTests, InputBindingsSupportPunctuationAndMouseChords) {
             quader::QuaderViewportKeybindingDispatch::Kind::Command);
   EXPECT_EQ(mouse_dispatch.command_id,
             quader::quader_command::kEditRedo.string());
+
+  quader::QuaderCreateEntityArgs wheel_undo_seed;
+  wheel_undo_seed.name = "Wheel Undo Binding Seed";
+  ASSERT_TRUE(editor.scene().create_entity(wheel_undo_seed).ok());
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(quader::quader_command::kEditUndo, "WheelUp")
+                  .ok());
+  const quader::QuaderViewportKeybindingDispatch wheel_command_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          quader::QuaderInputChord{
+              .device = quader::QuaderInputDevice::Mouse,
+              .gesture = quader::QuaderInputGesture::WheelUp,
+          },
+          state, true, false);
+  EXPECT_EQ(wheel_command_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(wheel_command_dispatch.command_id,
+            quader::quader_command::kEditUndo.string());
+
+  const std::string rotate_target =
+      editor.commands().command_id_for_tool_activation("rotate");
+  ASSERT_TRUE(editor.preferences().set_shortcut(rotate_target, "WheelDown").ok());
+  const quader::QuaderViewportKeybindingDispatch wheel_tool_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          quader::QuaderInputChord{
+              .device = quader::QuaderInputDevice::Mouse,
+              .gesture = quader::QuaderInputGesture::WheelDown,
+          },
+          state, true, false);
+  EXPECT_EQ(wheel_tool_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(wheel_tool_dispatch.shortcut.kind,
+            quader::ViewportShortcutKind::ActivateTool);
+  EXPECT_EQ(wheel_tool_dispatch.shortcut.tool, quader::ViewportToolId::Rotate);
+}
+
+TEST(EditorApiTests,
+     PendingMultiChordDispatchOwnsAStatelessViewportActionContinuation) {
+  const std::filesystem::path path =
+      keybinding_test_path("pending-viewport-action-continuation");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  quader::QuaderCreateEntityArgs undo_seed;
+  undo_seed.name = "Pending Binding Seed";
+  ASSERT_TRUE(editor.scene().create_entity(undo_seed).ok());
+  ASSERT_TRUE(editor.preferences()
+                  .set_shortcut(quader::quader_command::kEditUndo, "Ctrl+K D")
+                  .ok());
+
+  quader::ViewportToolState state;
+  const auto prefix = editor.commands().dispatch_viewport_input_binding(
+      quader::QuaderInputChord{
+          .primary = true,
+          .device = quader::QuaderInputDevice::Keyboard,
+          .key = quader::QuaderKeyCode::K,
+      },
+      state, true, false);
+  EXPECT_EQ(prefix.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  EXPECT_TRUE(editor.commands().has_pending_keybinding_chord());
+
+  const auto continuation = editor.commands().dispatch_viewport_input_binding(
+      quader::QuaderInputChord{
+          .device = quader::QuaderInputDevice::Keyboard,
+          .key = quader::QuaderKeyCode::D,
+      },
+      state, true, false);
+  EXPECT_EQ(continuation.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(continuation.command_id,
+            quader::quader_command::kEditUndo.string());
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
 }
 
 TEST(EditorApiTests, ViewportNavigationActionsUseMouseInputBindings) {
@@ -2537,6 +2810,74 @@ TEST(EditorApiTests, HistoryUndoCancelsActiveBevelPreviewBeforeDocumentHistory) 
     EXPECT_EQ(restored->primitive_count, before->primitive_count);
 }
 
+TEST(EditorApiTests, ProjectSaveRejectsUncommittedModelingAndNativePreviews) {
+  {
+    const std::filesystem::path path = project_test_path("preview-save");
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    create_selected_box(editor, "Unsaved Preview Box");
+    ASSERT_TRUE(
+        editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+    ASSERT_TRUE(editor.selection().select_all().ok());
+    ASSERT_TRUE(editor.commands()
+                    .execute(editor.commands().command_id_for_modeling_action(
+                        "bevel_edges"))
+                    .ok());
+
+    const quader::QuaderApiVoidResult saved = editor.project().save_as(path);
+    EXPECT_FALSE(saved.ok());
+    EXPECT_FALSE(std::filesystem::exists(path));
+    EXPECT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
+  }
+
+  {
+    const std::filesystem::path path = project_test_path("pivot-save");
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    create_selected_box(editor, "Unsaved Pivot Box");
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+
+    const quader::QuaderApiVoidResult saved = editor.project().save_as(path);
+    EXPECT_FALSE(saved.ok());
+    EXPECT_FALSE(std::filesystem::exists(path));
+    EXPECT_TRUE(editor.tools().active_settings().active);
+  }
+}
+
+TEST(EditorApiTests,
+     SelectionModeChangeCancelsPreviewBeforeApplyingTheNewMode) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Preview Mode Change Box");
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_all().ok());
+  const std::optional<quader::QuaderMeshSnapshot> before =
+      editor.query().mesh(box.mesh);
+  ASSERT_TRUE(before.has_value());
+
+  const quader::QuaderApiVoidResult preview = editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("bevel_edges"));
+  ASSERT_TRUE(preview.ok()) << preview.error_message();
+  ASSERT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
+
+  const quader::QuaderApiVoidResult changed =
+      editor.selection().set_mode(quader::QuaderSelectionMode::Face);
+  ASSERT_TRUE(changed.ok()) << changed.error_message();
+  EXPECT_TRUE(changed.changed());
+  EXPECT_FALSE(editor.modeling().can_cancel_active_tool_or_preview());
+  EXPECT_EQ(editor.selection().summary().mode,
+            quader::QuaderSelectionMode::Face);
+  const std::optional<quader::QuaderMeshSnapshot> restored =
+      editor.query().mesh(box.mesh);
+  ASSERT_TRUE(restored.has_value());
+  EXPECT_EQ(restored->vertex_count, before->vertex_count);
+  EXPECT_EQ(restored->primitive_count, before->primitive_count);
+  EXPECT_FALSE(editor.commands()
+                   .execute(quader::quader_command::kModelingCancelActivePreview)
+                   .ok());
+}
+
 TEST(EditorApiTests, HistoryRedoIsUnavailableWhileActivePreviewCanBeCanceled) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
@@ -2573,6 +2914,68 @@ TEST(EditorApiTests, HistoryRedoIsUnavailableWhileActivePreviewCanBeCanceled) {
         quader::quader_command::kModelingCancelActivePreview);
     ASSERT_TRUE(canceled.ok()) << canceled.error_message();
     EXPECT_TRUE(editor.history().can_redo());
+}
+
+TEST(EditorApiTests,
+     ModelingCommandDescriptorsUseTheModelingOwnersExactAvailability) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+
+  const std::optional<quader::QuaderCommandDescriptor> without_selection =
+      command_descriptor(editor,
+                         quader::quader_command::kModelingRemoveDoubles);
+  ASSERT_TRUE(without_selection.has_value());
+  EXPECT_FALSE(editor.modeling().can_execute_tool("remove_doubles"));
+  EXPECT_FALSE(without_selection->enabled);
+  const quader::QuaderApiVoidResult rejected =
+      editor.commands().execute(
+          quader::quader_command::kModelingRemoveDoubles);
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
+
+  create_selected_box(editor, "Remove Doubles Availability Box");
+  const std::optional<quader::QuaderCommandDescriptor> with_selection =
+      command_descriptor(editor,
+                         quader::quader_command::kModelingRemoveDoubles);
+  ASSERT_TRUE(with_selection.has_value());
+  EXPECT_TRUE(editor.modeling().can_execute_tool("remove_doubles"));
+  EXPECT_TRUE(with_selection->enabled);
+}
+
+TEST(EditorApiTests,
+     HistoryUndoCancelsNativeToolPreviewBeforeChangingDocumentHistory) {
+  const auto run = [](quader::ViewportToolId tool, std::string name) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    create_selected_box(editor, name);
+    const quader::QuaderHistorySnapshot before = editor.query().history();
+    ASSERT_TRUE(editor.tools().activate(tool).ok());
+    if (tool == quader::ViewportToolId::Pivot) {
+      ASSERT_TRUE(
+          editor.tools().execute_action("pivot", "pivot.align.next").ok());
+    }
+
+    EXPECT_TRUE(editor.history().can_undo());
+    EXPECT_FALSE(editor.history().can_redo());
+    EXPECT_TRUE(editor.query().history().can_undo);
+    EXPECT_FALSE(editor.query().history().can_redo);
+
+    const quader::QuaderApiVoidResult cancel =
+        editor.commands().execute(quader::quader_command::kEditUndo);
+    ASSERT_TRUE(cancel.ok()) << cancel.error_message();
+    EXPECT_TRUE(cancel.changed());
+    EXPECT_FALSE(editor.tools().active_settings().active);
+    EXPECT_TRUE(entity_named(editor, name).has_value());
+    EXPECT_EQ(editor.query().history().undo_label, before.undo_label);
+
+    const quader::QuaderApiVoidResult undo =
+        editor.commands().execute(quader::quader_command::kEditUndo);
+    ASSERT_TRUE(undo.ok()) << undo.error_message();
+    EXPECT_FALSE(entity_named(editor, name).has_value());
+  };
+
+  run(quader::ViewportToolId::Pivot, "Undo Pivot Preview Box");
+  run(quader::ViewportToolId::LinearArray, "Undo Array Preview Box");
 }
 
 TEST(EditorApiTests, HistoryUndoAfterSliceQuadFinalizeRestoresPreOperationMeshAndSelection) {
@@ -5461,6 +5864,301 @@ TEST(EditorApiTests, LinearArrayToolApplyUsesTheAtomicModelingCommand) {
 }
 
 TEST(EditorApiTests,
+     NativeToolActivationCancelsOperationPreviewBeforeTakingItsSnapshot) {
+  for (const quader::ViewportToolId native_tool :
+       {quader::ViewportToolId::Pivot,
+        quader::ViewportToolId::LinearArray}) {
+    SCOPED_TRACE(static_cast<int>(native_tool));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const quader::QuaderModelingObjectRef box =
+        create_selected_box(editor, "Native Activation Preview Source");
+    const std::filesystem::path clean_path = project_test_path(
+        native_tool == quader::ViewportToolId::Pivot
+            ? "native-activation-pivot-preview"
+            : "native-activation-array-preview");
+    ASSERT_TRUE(editor.project().save_as(clean_path).ok());
+    ASSERT_FALSE(editor.project().dirty());
+    const std::optional<quader::QuaderMeshSnapshot> mesh_before =
+        editor.query().mesh(box.mesh);
+    ASSERT_TRUE(mesh_before.has_value());
+    const quader::QuaderHistorySnapshot history_before =
+        editor.query().history();
+
+    const quader::QuaderApiVoidResult preview = editor.commands().execute(
+        editor.commands().command_id_for_modeling_action("half_cut"));
+    ASSERT_TRUE(preview.ok()) << preview.error_message();
+    ASSERT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
+
+    const quader::QuaderApiVoidResult activated =
+        editor.tools().activate(native_tool);
+    ASSERT_TRUE(activated.ok()) << activated.error_message();
+    EXPECT_TRUE(activated.changed());
+    EXPECT_FALSE(editor.modeling().can_cancel_active_tool_or_preview());
+    EXPECT_FALSE(editor.project().dirty());
+    EXPECT_TRUE(editor.tools().active_settings().active);
+    EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
+
+    const std::optional<quader::QuaderMeshSnapshot> mesh_after =
+        editor.query().mesh(box.mesh);
+    ASSERT_TRUE(mesh_after.has_value());
+    EXPECT_EQ(mesh_after->vertex_count, mesh_before->vertex_count);
+    EXPECT_EQ(mesh_after->primitive_count, mesh_before->primitive_count);
+    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    std::error_code ignored;
+    std::filesystem::remove(clean_path, ignored);
+  }
+}
+
+TEST(EditorApiTests,
+     RuntimeToolActivationCancelsOperationPreviewThroughOwnerBoundary) {
+  const std::filesystem::path clean_path =
+      project_test_path("runtime-activation-operation-preview");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Runtime Activation Preview Source");
+  ASSERT_TRUE(editor.project().save_as(clean_path).ok());
+  ASSERT_FALSE(editor.project().dirty());
+  const std::optional<quader::QuaderMeshSnapshot> mesh_before =
+      editor.query().mesh(box.mesh);
+  ASSERT_TRUE(mesh_before.has_value());
+  const quader::QuaderHistorySnapshot history_before = editor.query().history();
+
+  const quader::QuaderApiVoidResult preview = editor.commands().execute(
+      editor.commands().command_id_for_modeling_action("half_cut"));
+  ASSERT_TRUE(preview.ok()) << preview.error_message();
+  ASSERT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
+
+  const quader::QuaderApiVoidResult activated =
+      editor.tools().activate(quader::ViewportToolId::Move);
+  ASSERT_TRUE(activated.ok()) << activated.error_message();
+  EXPECT_TRUE(activated.changed());
+  EXPECT_EQ(editor.tools().active_tool(), "move");
+  EXPECT_FALSE(editor.modeling().can_cancel_active_tool_or_preview());
+  EXPECT_FALSE(editor.tools().active_settings().active);
+  EXPECT_FALSE(editor.project().dirty());
+  EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
+
+  const std::optional<quader::QuaderMeshSnapshot> mesh_after =
+      editor.query().mesh(box.mesh);
+  ASSERT_TRUE(mesh_after.has_value());
+  EXPECT_EQ(mesh_after->vertex_count, mesh_before->vertex_count);
+  EXPECT_EQ(mesh_after->primitive_count, mesh_before->primitive_count);
+
+  std::error_code ignored;
+  std::filesystem::remove(clean_path, ignored);
+}
+
+TEST(EditorApiTests,
+     UnavailableRuntimeActivationPreservesTheExistingNativePreview) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef left =
+      create_selected_box(editor, "Runtime Preflight Group Left");
+  const quader::QuaderModelingObjectRef right =
+      create_selected_box(editor, "Runtime Preflight Group Right");
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({left.entity, right.entity}, right.entity)
+                  .ok());
+  const quader::QuaderApiResult<quader::QuaderEntityRef> group =
+      editor.scene().group_selection("Runtime Preflight Group");
+  ASSERT_TRUE(group.ok()) << group.error_message();
+
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  ASSERT_TRUE(
+      editor.tools().execute_action("pivot", "pivot.align.next").ok());
+  const std::optional<quader::QVec3> pivot_before =
+      editor.query().selection_transform_pivot();
+  ASSERT_TRUE(pivot_before.has_value());
+
+  EXPECT_FALSE(editor.tools().can_activate(quader::ViewportToolId::Cut));
+  const std::optional<quader::QuaderCommandDescriptor> cut_command =
+      command_descriptor(editor, quader::quader_command::kToolsActivateCut);
+  ASSERT_TRUE(cut_command.has_value());
+  EXPECT_FALSE(cut_command->enabled);
+
+  const quader::QuaderApiVoidResult rejected =
+      editor.tools().activate(quader::ViewportToolId::Cut);
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
+  EXPECT_EQ(editor.tools().active_tool(), "pivot");
+  const quader::QuaderToolSettingsTarget settings =
+      editor.tools().active_settings();
+  EXPECT_TRUE(settings.active);
+  EXPECT_EQ(settings.tool_id, "pivot");
+  const std::optional<quader::QVec3> pivot_after =
+      editor.query().selection_transform_pivot();
+  ASSERT_TRUE(pivot_after.has_value());
+  expect_vec3_near(*pivot_after, *pivot_before);
+}
+
+TEST(EditorApiTests,
+     PivotActivationCancelsSceneTransformDragBeforeTakingItsSnapshot) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Native Activation Drag Source");
+  const quader::QuaderHistorySnapshot history_before = editor.query().history();
+
+  const quader::QuaderViewportCamera camera{
+      .orthographic = true,
+      .origin = {0.0f, 0.0f, 10.0f},
+      .x_axis = {1.0f, 0.0f, 0.0f},
+      .y_axis = {0.0f, 1.0f, 0.0f},
+      .z_axis = {0.0f, 0.0f, 1.0f},
+      .viewport_size = {100.0f, 100.0f},
+      .orthographic_size = 100.0,
+      .fov_degrees = 60.0,
+  };
+  const quader::QuaderRay ray{
+      .origin = {0.0f, 0.0f, 10.0f},
+      .direction = {0.0f, 0.0f, -1.0f},
+  };
+  const auto drag = editor.modeling().begin_transform_drag({
+      .tool = quader::QuaderTransformTool::Move,
+      .operation = quader::QuaderTransformOperation::Transform,
+      .axis = quader::QuaderTransformAxis::X,
+      .screen_position = {0.0f, 0.0f},
+      .screen_pivot = {0.0f, 0.0f},
+      .screen_tip = {10.0f, 0.0f},
+      .has_world_direction = true,
+      .world_direction = {1.0f, 0.0f, 0.0f},
+      .ray = ray,
+      .camera = camera,
+      .grid_size = 1.0,
+      .vertex_snap_radius = 0.0,
+      .grid_snap_enabled = false,
+  });
+  ASSERT_TRUE(drag.ok()) << drag.error_message();
+  ASSERT_TRUE(drag.value().active);
+  const auto updated = editor.modeling().update_transform_drag({
+      .screen_position = {2.0f, 0.0f},
+      .ray = ray,
+      .camera = camera,
+      .grid_size = 1.0,
+      .vertex_snap_radius = 0.0,
+      .grid_snap_enabled = false,
+  });
+  ASSERT_TRUE(updated.ok()) << updated.error_message();
+  ASSERT_TRUE(updated.value().changed);
+  ASSERT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
+
+  const quader::QuaderApiVoidResult activated =
+      editor.tools().activate(quader::ViewportToolId::Pivot);
+  ASSERT_TRUE(activated.ok()) << activated.error_message();
+  EXPECT_FALSE(editor.modeling().can_cancel_active_tool_or_preview());
+  const std::optional<quader::QuaderEntitySnapshot> restored =
+      editor.query().entity(box.entity);
+  ASSERT_TRUE(restored.has_value());
+  expect_vec3_near(restored->transform.position, {});
+  const std::optional<quader::QVec3> pivot =
+      editor.query().selection_transform_pivot();
+  ASSERT_TRUE(pivot.has_value());
+  expect_vec3_near(*pivot, {});
+  EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
+}
+
+TEST(EditorApiTests,
+     NativeToolActivationCancelsRuntimeModalAndPriorNativeState) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  create_selected_box(editor, "Native Activation Modal Source");
+  const quader::QuaderHistorySnapshot history_before = editor.query().history();
+
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Box).ok());
+  ASSERT_TRUE(editor.query().tool_status().modal_tool_owns_viewport);
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::LinearArray).ok());
+  EXPECT_FALSE(editor.query().tool_status().modal_tool_owns_viewport);
+  EXPECT_EQ(editor.query().tool_status().active_tool,
+            quader::QuaderViewportTool::Select);
+  EXPECT_EQ(editor.tools().active_tool(), "linear_array");
+
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  EXPECT_EQ(editor.tools().active_tool(), "pivot");
+  EXPECT_TRUE(editor.render().tool_preview_meshes().empty());
+  ASSERT_TRUE(
+      editor.tools().execute_action("pivot", "pivot.align.next").ok());
+
+  ASSERT_TRUE(
+      editor.tools().activate(quader::ViewportToolId::LinearArray).ok());
+  EXPECT_EQ(editor.tools().active_tool(), "linear_array");
+  const std::optional<quader::QuaderEntitySnapshot> unchanged =
+      entity_named(editor, "Native Activation Modal Source");
+  ASSERT_TRUE(unchanged.has_value());
+  expect_vec3_near(unchanged->transform.position, {});
+  EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
+}
+
+TEST(EditorApiTests,
+     UnavailableNativeActivationPreservesTheExistingPreview) {
+  {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const quader::QuaderModelingObjectRef box =
+        create_selected_box(editor, "Preserved Modeling Preview Source");
+    const std::optional<quader::QuaderMeshSnapshot> before =
+        editor.query().mesh(box.mesh);
+    ASSERT_TRUE(before.has_value());
+    ASSERT_TRUE(
+        editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+    ASSERT_TRUE(editor.selection().select_all().ok());
+    ASSERT_TRUE(editor.commands()
+                    .execute(editor.commands().command_id_for_modeling_action(
+                        "bevel_edges"))
+                    .ok());
+    ASSERT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
+    const std::optional<quader::QuaderMeshSnapshot> preview =
+        editor.query().mesh(box.mesh);
+    ASSERT_TRUE(preview.has_value());
+    ASSERT_GT(preview->primitive_count, before->primitive_count);
+
+    const quader::QuaderApiVoidResult rejected =
+        editor.tools().activate(quader::ViewportToolId::Pivot);
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_FALSE(rejected.changed());
+    EXPECT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
+    const quader::QuaderToolSettingsTarget settings =
+        editor.tools().active_settings();
+    EXPECT_TRUE(settings.active);
+    EXPECT_EQ(settings.tool_id, "edge_bevel");
+    const std::optional<quader::QuaderMeshSnapshot> after_rejection =
+        editor.query().mesh(box.mesh);
+    ASSERT_TRUE(after_rejection.has_value());
+    EXPECT_EQ(after_rejection->vertex_count, preview->vertex_count);
+    EXPECT_EQ(after_rejection->primitive_count, preview->primitive_count);
+  }
+
+  {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    create_selected_box(editor, "Preserved Native Preview Source");
+    ASSERT_TRUE(
+        editor.selection().set_mode(quader::QuaderSelectionMode::Group).ok());
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+    ASSERT_TRUE(
+        editor.tools().execute_action("pivot", "pivot.align.next").ok());
+    const std::optional<quader::QVec3> preview_before =
+        editor.query().selection_transform_pivot();
+    ASSERT_TRUE(preview_before.has_value());
+    ASSERT_FALSE(
+        editor.tools().can_activate(quader::ViewportToolId::LinearArray));
+
+    const quader::QuaderApiVoidResult rejected =
+        editor.tools().activate(quader::ViewportToolId::LinearArray);
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_FALSE(rejected.changed());
+    EXPECT_EQ(editor.tools().active_tool(), "pivot");
+    EXPECT_TRUE(editor.tools().active_settings().active);
+    const std::optional<quader::QVec3> preview_after =
+        editor.query().selection_transform_pivot();
+    ASSERT_TRUE(preview_after.has_value());
+    expect_vec3_near(*preview_after, *preview_before);
+  }
+}
+
+TEST(EditorApiTests,
      LinearArrayPublicApiCreatesOrderedIndependentCopiesInOneHistoryItem) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
@@ -5808,6 +6506,181 @@ TEST(EditorApiTests, PivotToolActivationReducesMultiSelectionToActiveTarget) {
 
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
   EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{second.entity});
+}
+
+TEST(EditorApiTests, PivotToolAllowsStandaloneMeshSelectedInGroupMode) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef box =
+      create_selected_box(editor, "Group Mode Leaf Pivot Box");
+  ASSERT_TRUE(editor.selection()
+                  .set_mode(quader::QuaderSelectionMode::Group)
+                  .ok());
+
+  EXPECT_TRUE(editor.tools().can_activate(quader::ViewportToolId::Pivot));
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  ASSERT_TRUE(
+      editor.tools().execute_action("pivot", "pivot.align.bottom_center").ok());
+  ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+
+  const std::optional<quader::QuaderEntitySnapshot> applied =
+      editor.query().entity(box.entity);
+  ASSERT_TRUE(applied.has_value());
+  expect_vec3_near(applied->transform.position, {0.0f, -1.0f, 0.0f});
+  const std::optional<quader::QVec3> pivot =
+      editor.query().selection_transform_pivot();
+  ASSERT_TRUE(pivot.has_value());
+  expect_vec3_near(*pivot, {0.0f, -1.0f, 0.0f});
+
+  const auto expect_stable_group_projection = [&]() {
+    const quader::QuaderSelectionSummary summary = editor.selection().summary();
+    EXPECT_EQ(summary.mode, quader::QuaderSelectionMode::Group);
+    EXPECT_EQ(summary.selected_object_count, 1u);
+    const quader::QuaderApiVoidResult repeated_group_mode =
+        editor.selection().set_mode(quader::QuaderSelectionMode::Group);
+    ASSERT_TRUE(repeated_group_mode.ok())
+        << repeated_group_mode.error_message();
+    EXPECT_FALSE(repeated_group_mode.changed());
+    EXPECT_EQ(selected_entities(editor),
+              std::vector<quader::EntityId>{box.entity});
+  };
+
+  expect_stable_group_projection();
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_stable_group_projection();
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_stable_group_projection();
+}
+
+TEST(EditorApiTests, RepeatedPivotActivationPreservesTheLivePreview) {
+  const auto run = [](bool typed_command) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const quader::QuaderModelingObjectRef box =
+        create_selected_box(editor, "Repeated Pivot Box");
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+    ASSERT_TRUE(
+        editor.tools().execute_action("pivot", "pivot.align.next").ok());
+
+    const quader::QuaderApiVoidResult repeated =
+        typed_command
+            ? editor.commands().execute(
+                  quader::quader_tool_activation_command_target_id("pivot"))
+            : editor.tools().activate(quader::ViewportToolId::Pivot);
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.changed());
+    ASSERT_TRUE(editor.tools().commit_active_tool_preview().ok());
+
+    const std::optional<quader::QuaderEntitySnapshot> applied =
+        editor.query().entity(box.entity);
+    ASSERT_TRUE(applied.has_value());
+    expect_vec3_near(applied->transform.position, {0.0f, -1.0f, 0.0f});
+  };
+
+  run(false);
+  run(true);
+}
+
+TEST(EditorApiTests, PivotIgnoresUnrelatedSceneAndAssetRevisions) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef target =
+      create_selected_box(editor, "Revision Stable Pivot Target");
+  const quader::QuaderModelingObjectRef unrelated =
+      create_selected_box(editor, "Unrelated Revision Source");
+  ASSERT_TRUE(editor.selection().select_object(target).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  ASSERT_TRUE(
+      editor.tools().execute_action("pivot", "pivot.align.next").ok());
+  const quader::QuaderToolSettingsTarget settings_before =
+      editor.tools().active_settings();
+  ASSERT_TRUE(settings_before.active);
+  ASSERT_TRUE(settings_before.preview_active);
+
+  ASSERT_TRUE(editor.scene()
+                  .rename(unrelated.entity, "Unrelated Renamed Entity")
+                  .ok());
+  const quader::QuaderApiResult<quader::QuaderAssetRef> unrelated_asset =
+      editor.assets().add_standalone_mesh(
+          triangle_mesh("Unrelated Revision Mesh"));
+  ASSERT_TRUE(unrelated_asset.ok()) << unrelated_asset.error_message();
+
+  EXPECT_EQ(editor.tools().active_tool(), "pivot");
+  const quader::QuaderToolSettingsTarget settings_after =
+      editor.tools().active_settings();
+  EXPECT_TRUE(settings_after.active);
+  EXPECT_TRUE(settings_after.preview_active);
+  EXPECT_EQ(settings_after.tool_id, "pivot");
+  ASSERT_TRUE(
+      editor.tools().execute_action("pivot", "pivot.align.prev").ok());
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+}
+
+TEST(EditorApiTests, PivotRejectsStaleSelectionAndIneligibleTargets) {
+  {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const quader::QuaderModelingObjectRef first =
+        create_selected_box(editor, "Stale Pivot A");
+    const quader::QuaderModelingObjectRef second =
+        create_selected_box(editor, "Stale Pivot B");
+    ASSERT_TRUE(editor.selection().select_object(first).ok());
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+    ASSERT_TRUE(
+        editor.tools().execute_action("pivot", "pivot.align.next").ok());
+    ASSERT_TRUE(editor.selection().select_object(second).ok());
+
+    EXPECT_EQ(editor.tools().active_tool(), "select");
+    EXPECT_FALSE(editor.tools().active_settings().active);
+    EXPECT_FALSE(editor.tools().commit_active_tool_preview().ok());
+    const std::optional<quader::QuaderEntitySnapshot> unchanged =
+        editor.query().entity(first.entity);
+    ASSERT_TRUE(unchanged.has_value());
+    expect_vec3_near(unchanged->transform.position, {});
+    EXPECT_NE(editor.query().history().undo_label, "Set Pivot");
+  }
+
+  {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const quader::QuaderApiResult<quader::QuaderEntityRef> light =
+        editor.scene().create_point_light();
+    ASSERT_TRUE(light.ok()) << light.error_message();
+    ASSERT_TRUE(editor.selection().select_object(light.value().id).ok());
+    EXPECT_FALSE(editor.tools().can_activate(quader::ViewportToolId::Pivot));
+    EXPECT_FALSE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  }
+
+  {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const quader::QuaderModelingObjectRef box =
+        create_selected_box(editor, "Locked Pivot Box");
+    ASSERT_TRUE(editor.scene().set_locked(box.entity, true).ok());
+    EXPECT_FALSE(editor.tools().can_activate(quader::ViewportToolId::Pivot));
+    EXPECT_FALSE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  }
+
+  {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const quader::QuaderModelingObjectRef box =
+        create_selected_box(editor, "Hidden Pivot Box");
+    ASSERT_TRUE(editor.scene().set_visible(box.entity, false).ok());
+    EXPECT_FALSE(editor.tools().can_activate(quader::ViewportToolId::Pivot));
+    EXPECT_FALSE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  }
+
+  {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    create_selected_box(editor, "Component Pivot Box");
+    ASSERT_TRUE(editor.modeling()
+                    .set_selection_mode(quader::QuaderSelectionMode::Vertex)
+                    .ok());
+    EXPECT_FALSE(editor.tools().can_activate(quader::ViewportToolId::Pivot));
+    EXPECT_FALSE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+  }
 }
 
 TEST(EditorApiTests, PivotQuickAlignActionsUseAxisStableBoundsPositions) {

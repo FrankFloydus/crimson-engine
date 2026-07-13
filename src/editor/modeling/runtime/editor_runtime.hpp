@@ -310,18 +310,35 @@ public:
 			double vertex_radius,
 			double edge_radius,
 			bool snap_enabled,
+			bool dragging,
+			int target_object_id = -1);
+	[[nodiscard]] bool set_insert_edge_loop_preview_from_hit(
+			EditorSession& session,
+			const PickHitRecord& hit,
+			std::optional<float> resolved_factor,
 			bool dragging);
 	[[nodiscard]] bool update_insert_edge_loop_drag_factor(
 			EditorSession& session,
 			const quader_poly::Ray& ray,
 			double grid_size,
 			bool snap_enabled);
+	[[nodiscard]] bool update_insert_edge_loop_drag_factor_from_world(
+			EditorSession& session,
+			std::optional<float> resolved_factor);
 	void reset_knife_state(bool keep_active_when_current_tool_is_knife = false);
 	void set_knife_state(KnifeToolState state);
 	void set_knife_active(bool active);
 	[[nodiscard]] bool update_knife_preview_from_pick(
 			EditorSession& session,
 			const quader_poly::Ray& ray,
+			const ViewportCameraState& camera,
+			double grid_size,
+			bool snap_enabled,
+			bool constrain_axis,
+			int target_object_id = -1);
+	[[nodiscard]] bool update_knife_preview_from_hit(
+			EditorSession& session,
+			const PickHitRecord& hit,
 			const ViewportCameraState& camera,
 			double grid_size,
 			bool snap_enabled,

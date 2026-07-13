@@ -80,7 +80,7 @@ bool ViewportToolController::activate_tool(const ViewportToolRegistry &registry,
   state.active_tool = tool;
   active_tool = next_tool;
   if (result != nullptr) {
-    result->tool_changed = changed;
+    result->tool_changed = result->tool_changed || changed;
   }
   return true;
 }
@@ -179,9 +179,14 @@ bool ViewportToolRuntime::handle_shortcut(const ViewportShortcut &shortcut,
 
   switch (shortcut.kind) {
   case ViewportShortcutKind::ActivateTool:
-    return set_active_tool(state, shortcut.tool, &result);
+    if (!set_active_tool(state, shortcut.tool, &result)) {
+      return false;
+    }
+    result.tool_activation_requested = true;
+    return true;
   case ViewportShortcutKind::SetSelectionMode:
     result.selection_mode_changed =
+        result.selection_mode_changed ||
         state.selection_mode != shortcut.selection_mode;
     state.selection_mode = shortcut.selection_mode;
     return true;

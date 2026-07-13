@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/services/modeling_session_services.hpp"
 
+#include "assets/asset_registry.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
@@ -1345,7 +1346,7 @@ bool SceneModelingSyncService::projected_mesh_signature_matches(
 bool SceneModelingSyncService::
     scene_objects_synced_for_current_modeling_content(
         const quader_editor_core::EditorSession &session,
-        const SceneDocument &scene) const {
+        const SceneDocument &scene, const AssetRegistry &assets) const {
   if (!scene_objects_sync_valid_ ||
       synced_modeling_content_revision_ != session.state().content_revision) {
     return false;
@@ -1363,7 +1364,11 @@ bool SceneModelingSyncService::
         scene.modeling_object(*entity);
     const MeshComponent *mesh = scene.mesh(*entity);
     if (modeling_object == nullptr || mesh == nullptr ||
-        mesh->mesh == kInvalidAssetId) {
+        modeling_object->object_id != object.id ||
+        modeling_object->material_slot !=
+            static_cast<std::uint32_t>(object.material_id) ||
+        mesh->mesh == kInvalidAssetId || assets.mesh(mesh->mesh) == nullptr ||
+        !projected_mesh_signature_known(object.id)) {
       return false;
     }
   }

@@ -9,6 +9,7 @@
 #include "core/localization_service.hpp"
 #include "viewport/viewport_layout.hpp"
 
+#include <QBitmap>
 #include <QFrame>
 #include <QLabel>
 #include <QPaintEvent>
@@ -26,6 +27,34 @@
 namespace quader {
 namespace {
 
+constexpr qreal kCrosshairGap = 4.0;
+constexpr qreal kCrosshairLength = 9.0;
+
+void draw_crosshair_segments(QPainter &painter, QSize size, const QPen &pen) {
+  const qreal center_x = static_cast<qreal>(size.width()) * 0.5;
+  const qreal center_y = static_cast<qreal>(size.height()) * 0.5;
+  painter.setPen(pen);
+  painter.drawLine(QPointF{center_x - kCrosshairLength, center_y},
+                   QPointF{center_x - kCrosshairGap, center_y});
+  painter.drawLine(QPointF{center_x + kCrosshairGap, center_y},
+                   QPointF{center_x + kCrosshairLength, center_y});
+  painter.drawLine(QPointF{center_x, center_y - kCrosshairLength},
+                   QPointF{center_x, center_y - kCrosshairGap});
+  painter.drawLine(QPointF{center_x, center_y + kCrosshairGap},
+                   QPointF{center_x, center_y + kCrosshairLength});
+}
+
+QBitmap crosshair_window_mask(QSize size) {
+  QBitmap mask(size);
+  mask.clear();
+  QPainter painter(&mask);
+  painter.setRenderHint(QPainter::Antialiasing, false);
+  draw_crosshair_segments(
+      painter, size,
+      QPen(Qt::color1, 3.0, Qt::SolidLine, Qt::RoundCap));
+  return mask;
+}
+
 /// Draws the fly-navigation crosshair exclusively from the active Qt palette.
 class QtViewportFlyCrosshair final : public QWidget {
 public:
@@ -34,6 +63,10 @@ public:
     setAttribute(Qt::WA_NativeWindow);
     setAttribute(Qt::WA_NoSystemBackground);
     setAttribute(Qt::WA_TransparentForMouseEvents);
+    // Native child widgets are opaque on Windows even when their background is
+    // not erased. Shape the native window to the painted arms so its untouched
+    // rectangular backing surface cannot cover the Filament viewport.
+    setMask(crosshair_window_mask(size()));
   }
 
 protected:
@@ -42,27 +75,14 @@ protected:
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, false);
 
-    const qreal center_x = static_cast<qreal>(width()) * 0.5;
-    const qreal center_y = static_cast<qreal>(height()) * 0.5;
     const auto colors = palette();
-    constexpr qreal kGap = 4.0;
-    constexpr qreal kLength = 9.0;
-    const auto draw_segments = [&](const QPen &pen) {
-      painter.setPen(pen);
-      painter.drawLine(QPointF{center_x - kLength, center_y},
-                       QPointF{center_x - kGap, center_y});
-      painter.drawLine(QPointF{center_x + kGap, center_y},
-                       QPointF{center_x + kLength, center_y});
-      painter.drawLine(QPointF{center_x, center_y - kLength},
-                       QPointF{center_x, center_y - kGap});
-      painter.drawLine(QPointF{center_x, center_y + kGap},
-                       QPointF{center_x, center_y + kLength});
-    };
-
-    draw_segments(QPen(colors.shadow().color(), 3.0,
-                       Qt::SolidLine, Qt::RoundCap));
-    draw_segments(QPen(colors.highlightedText().color(), 1.0,
-                       Qt::SolidLine, Qt::RoundCap));
+    draw_crosshair_segments(
+        painter, size(),
+        QPen(colors.shadow().color(), 3.0, Qt::SolidLine, Qt::RoundCap));
+    draw_crosshair_segments(
+        painter, size(),
+        QPen(colors.highlightedText().color(), 1.0, Qt::SolidLine,
+             Qt::RoundCap));
   }
 };
 

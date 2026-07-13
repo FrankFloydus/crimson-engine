@@ -92,29 +92,37 @@ public:
             ModelingSessionService& modeling,
             std::string label,
             ModelingSessionMemento before,
-            ModelingSessionMemento after)
+            ModelingSessionMemento after,
+            bool preserve_scene_selection = false)
         : modeling_(modeling)
         , label_(std::move(label))
         , before_(std::move(before))
-        , after_(std::move(after)) {}
+        , after_(std::move(after))
+        , preserve_scene_selection_(preserve_scene_selection) {}
 
     [[nodiscard]] const std::string& label() const override { return label_; }
 
     CommandResult undo() override {
-      return modeling_memento_command_result(
-          modeling_.restore_history_memento(before_));
+      return modeling_memento_command_result(restore(before_));
     }
 
     CommandResult redo() override {
-      return modeling_memento_command_result(
-          modeling_.restore_history_memento(after_));
+      return modeling_memento_command_result(restore(after_));
     }
 
 private:
+    ModelingCommandResult restore(const ModelingSessionMemento &memento) {
+      return preserve_scene_selection_
+                 ? modeling_.restore_history_memento_preserving_scene_selection(
+                       memento)
+                 : modeling_.restore_history_memento(memento);
+    }
+
     ModelingSessionService& modeling_;
     std::string label_;
     ModelingSessionMemento before_;
     ModelingSessionMemento after_;
+    bool preserve_scene_selection_ = false;
 };
 
 /**

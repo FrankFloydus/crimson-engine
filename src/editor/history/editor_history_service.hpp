@@ -35,6 +35,8 @@ public:
     CommandResult execute(std::unique_ptr<IUndoableCommand> command);
     CommandResult execute(std::unique_ptr<IUndoableCommand> command, UndoRedoExecuteOptions options);
     CommandResult record_executed(std::unique_ptr<IUndoableCommand> command);
+    CommandResult
+    record_executed_before_existing(std::unique_ptr<IUndoableCommand> command);
     CommandResult commit();
     CommandResult cancel();
     CommandResult discard();
@@ -43,6 +45,8 @@ public:
     [[nodiscard]] bool empty() const { return commands_.empty(); }
 
 private:
+    void preserve_or_detach_after_failed_cancel() noexcept;
+
     /**
      * Stores a transaction child command with the merge key used when it was queued.
      */
@@ -54,6 +58,7 @@ private:
     EditorHistoryService* history_ = nullptr;
     std::string label_;
     std::vector<TransactionCommand> commands_;
+    bool failed_cancel_restored_applied_state_ = false;
 };
 
 /**

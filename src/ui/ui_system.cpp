@@ -19,12 +19,14 @@
 #include "ui/inspector_panel.hpp"
 #include "ui/outliner_panel.hpp"
 #include "ui/qt_command_event_filter.hpp"
+#include "ui/qt_main_window.hpp"
 #include "ui/qt_settings_dialog.hpp"
 #include "ui/qt_tool_settings_window.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/ui_context.hpp"
 
 #include <QApplication>
+#include <QAbstractButton>
 #include <QByteArray>
 #include <QClipboard>
 #include <QDockWidget>
@@ -32,8 +34,10 @@
 #include <QLabel>
 #include <QLayout>
 #include <QMainWindow>
+#include <QMessageBox>
 #include <QMenuBar>
 #include <QRect>
+#include <QPushButton>
 #include <QStatusBar>
 #include <QWidget>
 #include <QWindow>
@@ -157,7 +161,10 @@ bool UISystem::initialize(RenderSystem &render_system,
   viewport_settings_ =
       ViewportSettings::load(settings_paths_.viewport_settings_file);
 
-  main_window_ = std::make_unique<QMainWindow>();
+  auto main_window = std::make_unique<QtMainWindow>();
+  main_window->set_close_request_handler(
+      [this]() { return allow_main_window_close(); });
+  main_window_ = std::move(main_window);
   main_window_->setObjectName(QStringLiteral("quaderMainWindow"));
   main_window_->setWindowTitle(QStringLiteral("Quader"));
   main_window_->setWindowIcon(QApplication::windowIcon());
@@ -386,6 +393,66 @@ void UISystem::install_runtime_hooks(
   if (QCoreApplication *application = QApplication::instance()) {
     application->installEventFilter(command_event_filter_.get());
   }
+}
+
+QuaderDirtyProjectDecision
+UISystem::confirm_dirty_project_replacement(std::string_view action_id) {
+  const bool opening = action_id == "project.open";
+  const bool closing = action_id == "application.close";
+  QMessageBox confirmation(
+      QMessageBox::Warning,
+      QString::fromStdString(localization_.text(
+          "ui.project.unsaved.title", "Unsaved Changes")),
+      QString::fromStdString(localization_.text(
+          opening   ? "ui.project.unsaved.open"
+          : closing ? "ui.project.unsaved.close"
+                    : "ui.project.unsaved.new",
+          opening   ? "Save changes before opening another project?"
+          : closing ? "Save changes before closing Quader?"
+                    : "Save changes before creating a new project?")),
+      QMessageBox::NoButton, main_window_.get());
+  confirmation.setObjectName(QStringLiteral("project_unsaved_confirmation"));
+  confirmation.setWindowModality(Qt::WindowModal);
+  QPushButton *save = confirmation.addButton(
+      QString::fromStdString(
+          localization_.text("ui.project.unsaved.save", "Save")),
+      QMessageBox::AcceptRole);
+  QPushButton *discard = confirmation.addButton(
+      QString::fromStdString(
+          localization_.text("ui.project.unsaved.discard", "Discard")),
+      QMessageBox::DestructiveRole);
+  QPushButton *cancel = confirmation.addButton(
+      QString::fromStdString(
+          localization_.text("ui.project.unsaved.cancel", "Cancel")),
+      QMessageBox::RejectRole);
+  confirmation.setEscapeButton(cancel);
+  confirmation.exec();
+  if (confirmation.clickedButton() == save) {
+    return QuaderDirtyProjectDecision::Save;
+  }
+  if (confirmation.clickedButton() == discard) {
+    return QuaderDirtyProjectDecision::Discard;
+  }
+  return QuaderDirtyProjectDecision::Cancel;
+}
+
+bool UISystem::allow_main_window_close() {
+  if (editor_ == nullptr || !editor_->project().dirty()) {
+    return true;
+  }
+
+  switch (confirm_dirty_project_replacement("application.close")) {
+  case QuaderDirtyProjectDecision::Discard:
+    return true;
+  case QuaderDirtyProjectDecision::Cancel:
+    return false;
+  case QuaderDirtyProjectDecision::Save: {
+    const QuaderApiVoidResult saved =
+        editor_->commands().execute(quader_command::kProjectSave);
+    return saved.ok() && !editor_->project().dirty();
+  }
+  }
+  return false;
 }
 
 void UISystem::show() {

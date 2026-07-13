@@ -234,6 +234,7 @@ struct ModelingRay {
  */
 struct ModelingViewportCamera {
   bool orthographic = false;
+  bool affine_model_space = false;
   QVec3 origin = {};
   QVec3 x_axis = {1.0f, 0.0f, 0.0f};
   QVec3 y_axis = {0.0f, 1.0f, 0.0f};

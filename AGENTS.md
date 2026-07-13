@@ -266,6 +266,13 @@ explicitly asks. Work with existing edits when they affect the task and ignore u
 Never use destructive git commands such as `git reset --hard` or `git checkout --` unless the user
 clearly requests that exact operation.
 
+## Commit And Push Scope Rule
+
+When the user says "commit and push" without explicitly limiting the scope, stage, commit, and push
+everything in the current worktree, including modified files, deleted files, and untracked files.
+Do not default to committing only task-owned changes. A partial commit is appropriate only when the
+user explicitly names the files, changes, or scope to include or exclude.
+
 ## Versioning Rule
 
 Root `VERSION` is the app version source of truth, and `vcpkg.json` `version-string` must mirror it.

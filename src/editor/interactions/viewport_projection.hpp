@@ -26,6 +26,7 @@ enum class CameraProjection {
  */
 struct ViewportCameraState {
   CameraProjection projection = CameraProjection::Perspective;
+  bool affine_model_space = false;
   quader_poly::Transform3 transform;
   quader::QVec2 viewport_size{1.0F, 1.0F};
   double orthographic_size = 1.0;

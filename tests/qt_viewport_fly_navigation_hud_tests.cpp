@@ -9,6 +9,13 @@
 #include "core/localization_service.hpp"
 #include "ui/qt_viewport_fly_navigation_hud.hpp"
 
+#include <QApplication>
+#include <QCoreApplication>
+#include <QPoint>
+#include <QRegion>
+#include <QString>
+#include <QWidget>
+
 #include <filesystem>
 #include <string>
 
@@ -68,4 +75,36 @@ TEST(QtViewportFlyNavigationHudTests,
             std::string::npos);
   EXPECT_NE(presentation.speed_label.find("Mouse centrale ripristina"),
             std::string::npos);
+}
+
+TEST(QtViewportFlyNavigationHudTests,
+     NativeCrosshairMaskExposesViewportBetweenOutlinedArms) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-fly-navigation-hud-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QWidget parent;
+  parent.resize(200, 160);
+  parent.setAttribute(Qt::WA_DontShowOnScreen, true);
+  quader::QtViewportFlyNavigationHud hud(
+      parent, quader::ViewportPaneId::Perspective);
+
+  QWidget *crosshair = parent.findChild<QWidget *>(
+      QStringLiteral("viewportFlyCrosshair_perspective"));
+  ASSERT_NE(crosshair, nullptr);
+  EXPECT_TRUE(crosshair->testAttribute(Qt::WA_NativeWindow));
+
+  const QRegion mask = crosshair->mask();
+  ASSERT_FALSE(mask.isEmpty());
+  EXPECT_FALSE(mask.contains(QPoint{0, 0}));
+  EXPECT_FALSE(mask.contains(QPoint{14, 14}));
+  EXPECT_TRUE(mask.contains(QPoint{7, 14}));
+  EXPECT_TRUE(mask.contains(QPoint{21, 14}));
+  EXPECT_TRUE(mask.contains(QPoint{14, 7}));
+  EXPECT_TRUE(mask.contains(QPoint{14, 21}));
+  EXPECT_LT(mask.boundingRect().width(), crosshair->width());
+  EXPECT_LT(mask.boundingRect().height(), crosshair->height());
 }

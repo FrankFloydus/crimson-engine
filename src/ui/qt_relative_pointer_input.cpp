@@ -11,35 +11,46 @@
 namespace quader {
 
 void QtRelativePointerStreamAccumulator::add_qt_delta(QVec2 delta) noexcept {
-  if (packet_mode_ != QtRelativePointerPacketMode::RelativeRaw) {
-    qt_deltas_.add(delta);
+  if (delta.x == 0.0f && delta.y == 0.0f) {
+    return;
   }
+  if (packet_mode_ == QtRelativePointerPacketMode::RelativeRaw) {
+    // Legacy mouse moves are coalesced independently from WM_INPUT. Mixing
+    // their absolute deltas into the raw stream can inject a cursor-sized jump,
+    // especially when camera translation increases frame/event latency.
+    return;
+  }
+  qt_deltas_.add(delta);
 }
 
 void QtRelativePointerStreamAccumulator::note_relative_raw_delta(
     QVec2 delta) noexcept {
   if (delta.x == 0.0f && delta.y == 0.0f) {
-    // Button-only raw packets must not suppress an unrelated Qt fallback move.
+    // Button-only raw packets do not prove that this device supplies motion.
     return;
   }
-  // The native filter runs before Qt translates the matching legacy move.
-  // Retain prior genuine deltas and suppress only the legacy move that follows
-  // this relative stream classification.
+  // A translated move can reach Qt before its WM_INPUT classification. Once
+  // relative raw motion is confirmed, discard any fallback delta queued during
+  // that ordering window instead of summing two representations of one move.
+  qt_deltas_.clear();
   packet_mode_ = QtRelativePointerPacketMode::RelativeRaw;
   raw_deltas_.add(delta);
 }
 
 void QtRelativePointerStreamAccumulator::note_absolute_raw_motion() noexcept {
-  // Absolute raw coordinates cannot be mixed safely with relative packets.
-  // Accept the following translated Qt move as this packet's delta instead.
+  // Absolute raw coordinates cannot provide a relative delta here. Select Qt's
+  // translated motion until a relative raw packet selects the raw source again.
+  raw_deltas_.clear();
   packet_mode_ = QtRelativePointerPacketMode::QtFallback;
 }
 
 QVec2 QtRelativePointerStreamAccumulator::take() noexcept {
-  const QVec2 raw = raw_deltas_.take();
-  const QVec2 fallback = qt_deltas_.take();
-  packet_mode_ = QtRelativePointerPacketMode::Undetermined;
-  return raw + fallback;
+  if (packet_mode_ == QtRelativePointerPacketMode::RelativeRaw) {
+    qt_deltas_.clear();
+    return raw_deltas_.take();
+  }
+  raw_deltas_.clear();
+  return qt_deltas_.take();
 }
 
 void QtRelativePointerStreamAccumulator::reset() noexcept {

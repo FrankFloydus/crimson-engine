@@ -474,6 +474,21 @@ bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
   const QMat4 child_world = preserve_world_transform
                                 ? world_transform_matrix(child)
                                 : local_transform_matrix(child);
+  std::optional<TransformComponent> preserved_local_transform;
+  if (preserve_world_transform) {
+    const TransformComponent *current_transform = transform(child);
+    const QMat4 parent_world = new_parent == kInvalidEntityId
+                                   ? scene_transform_identity_matrix()
+                                   : world_transform_matrix(new_parent);
+    if (current_transform == nullptr) {
+      return false;
+    }
+    preserved_local_transform = try_scene_local_transform_preserving_world(
+        parent_world, child_world, *current_transform);
+    if (!preserved_local_transform.has_value()) {
+      return false;
+    }
+  }
 
   if (HierarchyComponent *old_parent_hierarchy =
           mutable_hierarchy(old_parent)) {
@@ -491,16 +506,8 @@ bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
   }
 
   if (preserve_world_transform) {
-    const QMat4 parent_world = new_parent == kInvalidEntityId
-                                   ? scene_transform_identity_matrix()
-                                   : world_transform_matrix(new_parent);
     if (TransformComponent *local_transform = mutable_transform(child)) {
-      const bool custom_pivot = local_transform->custom_pivot;
-      TransformComponent next_transform = transform_component_from_matrix(
-          scene_local_matrix_from_world_matrix(parent_world, child_world),
-          local_transform->rotation_euler);
-      next_transform.custom_pivot = custom_pivot;
-      *local_transform = next_transform;
+      *local_transform = *preserved_local_transform;
     }
   }
 
@@ -511,6 +518,9 @@ bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
 }
 
 void SceneDocument::set_transform(EntityId id, TransformComponent transform) {
+  if (!scene_transform_is_finite(transform)) {
+    return;
+  }
   const entt::entity entity = require_entity(id);
   if (entity == entt::null) {
     return;
@@ -529,6 +539,9 @@ void SceneDocument::set_transforms(
     std::span<const SceneTransformAssignment> transforms) {
   bool changed = false;
   for (const SceneTransformAssignment &assignment : transforms) {
+    if (!scene_transform_is_finite(assignment.transform)) {
+      continue;
+    }
     const entt::entity entity = require_entity(assignment.entity);
     if (entity == entt::null) {
       continue;

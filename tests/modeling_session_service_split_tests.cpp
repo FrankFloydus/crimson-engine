@@ -5,7 +5,10 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "assets/asset_registry.hpp"
+#include "assets/mesh_asset_payload.hpp"
 #include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
+#include "editor/history/editor_history_service.hpp"
+#include "editor/history/modeling_memento_command.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -21,6 +24,8 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <variant>
@@ -399,8 +404,8 @@ TEST(ModelingSessionServiceSplitTests,
       quader_editor_core::PolygonObject{.id = 200, .material_id = 0},
   });
 
-  mesh_sync.sync_scene_objects_from_modeling(session, scene, assets, scene_sync,
-                                             true);
+  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
+      session, scene, assets, scene_sync, true));
 
   const MaterialComponent *first_material = scene.material(first);
   const MaterialComponent *second_material = scene.material(second);
@@ -411,7 +416,523 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_TRUE(first_material->material_slots.contains(0u));
   ASSERT_TRUE(second_material->material_slots.contains(0u));
   EXPECT_EQ(first_material->material_slots.at(0u), 11u);
-  EXPECT_EQ(second_material->material_slots.at(0u), 11u);
+  EXPECT_EQ(second_material->material_slots.at(0u), 22u);
+  EXPECT_EQ(first_material->material_for_slot(0u), 11u);
+  EXPECT_EQ(second_material->material_for_slot(0u), 22u);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     MeshSyncClonesBeforeUpdatingAnAssetSharedWithAnotherSceneEntity) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectRuntimeMap object_map;
+  SceneModelingSyncService scene_sync(object_map);
+  ModelingMeshSyncService mesh_sync;
+
+  quader_editor_core::PolygonObject object;
+  object.id = 100;
+  object.document = quader_poly::make_cube({});
+  quader_editor_core::EditorSession session({object});
+
+  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
+      session, scene, assets, scene_sync, true));
+  const std::optional<EntityId> projected =
+      object_map.entity_for_modeling_object(100);
+  ASSERT_TRUE(projected.has_value());
+  ASSERT_NE(scene.mesh(*projected), nullptr);
+  const AssetId shared_mesh = scene.mesh(*projected)->mesh;
+  ASSERT_NE(shared_mesh, kInvalidAssetId);
+  ASSERT_NE(assets.mesh(shared_mesh), nullptr);
+  const QVec3 original_first_vertex =
+      assets.mesh(shared_mesh)->vertices.front().position;
+
+  const EntityId observer = scene.create_entity("Observer", EntityKind::Mesh);
+  scene.set_mesh(observer, MeshComponent{.mesh = shared_mesh});
+
+  quader_editor_core::PolygonObject changed = object;
+  ASSERT_FALSE(changed.document.vertices.empty());
+  changed.document.vertices.front().position.x += 3.0f;
+  session.set_objects({std::move(changed)});
+  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
+      session, scene, assets, scene_sync, false));
+
+  ASSERT_NE(scene.mesh(*projected), nullptr);
+  ASSERT_NE(scene.mesh(observer), nullptr);
+  const AssetId projected_mesh = scene.mesh(*projected)->mesh;
+  EXPECT_NE(projected_mesh, shared_mesh);
+  EXPECT_EQ(scene.mesh(observer)->mesh, shared_mesh);
+  EXPECT_EQ(assets.mesh_count(), 2u);
+  ASSERT_NE(assets.mesh(shared_mesh), nullptr);
+  ASSERT_NE(assets.mesh(projected_mesh), nullptr);
+  EXPECT_FLOAT_EQ(assets.mesh(shared_mesh)->vertices.front().position.x,
+                  original_first_vertex.x);
+  EXPECT_NE(assets.mesh(projected_mesh)->vertices.front().position.x,
+            original_first_vertex.x);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     SyncValidityRequiresExactComponentSignatureAndInstalledMeshAsset) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectRuntimeMap object_map;
+  SceneModelingSyncService scene_sync(object_map);
+  ModelingMeshSyncService mesh_sync;
+
+  quader_editor_core::PolygonObject object;
+  object.id = 100;
+  object.material_id = 7;
+  object.document = quader_poly::make_cube({});
+  quader_editor_core::EditorSession session({object});
+  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
+      session, scene, assets, scene_sync, true));
+  const std::optional<EntityId> entity =
+      object_map.entity_for_modeling_object(object.id);
+  ASSERT_TRUE(entity.has_value());
+  ASSERT_NE(scene.mesh(*entity), nullptr);
+  const AssetId projected_mesh = scene.mesh(*entity)->mesh;
+
+  EXPECT_TRUE(scene_sync.scene_objects_synced_for_current_modeling_content(
+      session, scene, assets));
+  scene.set_modeling_object(
+      *entity,
+      ModelingObjectComponent{.object_id = object.id, .material_slot = 9});
+  EXPECT_FALSE(scene_sync.scene_objects_synced_for_current_modeling_content(
+      session, scene, assets));
+  scene.set_modeling_object(
+      *entity,
+      ModelingObjectComponent{.object_id = object.id, .material_slot = 7});
+  EXPECT_TRUE(scene_sync.scene_objects_synced_for_current_modeling_content(
+      session, scene, assets));
+
+  scene_sync.forget_projected_mesh_signature(object.id);
+  EXPECT_FALSE(scene_sync.scene_objects_synced_for_current_modeling_content(
+      session, scene, assets));
+  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
+      session, scene, assets, scene_sync, true));
+  ASSERT_TRUE(assets.remove_mesh(projected_mesh));
+  EXPECT_FALSE(scene_sync.scene_objects_synced_for_current_modeling_content(
+      session, scene, assets));
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     MeshSyncInvalidSecondObjectPublishesNothingFromTheValidFirstObject) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectRuntimeMap object_map;
+  SceneModelingSyncService scene_sync(object_map);
+  ModelingMeshSyncService mesh_sync;
+
+  const EntityId sentinel = scene.create_entity("Sentinel", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_selected(sentinel, true));
+  const std::vector<EntityId> entities_before = scene.entities();
+  const std::vector<EntityId> selected_before = scene.selected_entities();
+  const EntityId active_before = scene.primary_selection();
+  const std::size_t mesh_count_before = assets.mesh_count();
+
+  quader_editor_core::PolygonObject valid;
+  valid.id = 100;
+  valid.document = quader_poly::make_cube({});
+  quader_editor_core::PolygonObject invalid;
+  invalid.id = 200;
+  invalid.document = quader_poly::make_cube({});
+  ASSERT_FALSE(invalid.document.vertices.empty());
+  invalid.document.vertices.front().position.x =
+      std::numeric_limits<float>::quiet_NaN();
+  quader_editor_core::EditorSession session({valid, invalid});
+
+  EXPECT_FALSE(mesh_sync.sync_scene_objects_from_modeling(
+      session, scene, assets, scene_sync, true));
+  EXPECT_EQ(scene.entities(), entities_before);
+  EXPECT_EQ(scene.selected_entities(), selected_before);
+  EXPECT_EQ(scene.primary_selection(), active_before);
+  EXPECT_EQ(assets.mesh_count(), mesh_count_before);
+  EXPECT_FALSE(object_map.entity_for_modeling_object(valid.id).has_value());
+  EXPECT_FALSE(object_map.entity_for_modeling_object(invalid.id).has_value());
+  EXPECT_FALSE(scene_sync.projected_mesh_signature_known(valid.id));
+  EXPECT_FALSE(scene_sync.projected_mesh_signature_known(invalid.id));
+  EXPECT_FALSE(scene_sync.scene_objects_sync_valid());
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     CreateLatestRejectsInvalidProjectionBeforeSceneAssetOrSelectionMutation) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectRuntimeMap object_map;
+  SceneModelingSyncService scene_sync(object_map);
+  ModelingMeshSyncService mesh_sync;
+
+  const EntityId sentinel = scene.create_entity("Sentinel", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_selected(sentinel, true));
+  const std::vector<EntityId> entities_before = scene.entities();
+  const std::vector<EntityId> selected_before = scene.selected_entities();
+  const EntityId active_before = scene.primary_selection();
+  const std::size_t mesh_count_before = assets.mesh_count();
+
+  quader_editor_core::PolygonObject invalid;
+  invalid.id = 300;
+  invalid.document = quader_poly::make_cube({});
+  ASSERT_FALSE(invalid.document.vertices.empty());
+  invalid.document.vertices.front().position.z =
+      std::numeric_limits<float>::infinity();
+  quader_editor_core::EditorSession session({invalid});
+
+  const ModelingCreateBoxResult result =
+      mesh_sync.create_scene_object_from_latest(
+          session, scene, assets, scene_sync, "Invalid", "Created");
+  EXPECT_FALSE(result.ok);
+  EXPECT_FALSE(result.changed);
+  EXPECT_EQ(scene.entities(), entities_before);
+  EXPECT_EQ(scene.selected_entities(), selected_before);
+  EXPECT_EQ(scene.primary_selection(), active_before);
+  EXPECT_EQ(assets.mesh_count(), mesh_count_before);
+  EXPECT_FALSE(object_map.entity_for_modeling_object(invalid.id).has_value());
+  EXPECT_FALSE(scene_sync.projected_mesh_signature_known(invalid.id));
+  EXPECT_FALSE(scene_sync.scene_objects_sync_valid());
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     InvalidCreationInputsLeaveRuntimeSceneAssetsSelectionAndHistoryExact) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult baseline = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Creation Boundary Baseline",
+  });
+  ASSERT_TRUE(baseline.ok) << baseline.message;
+  ASSERT_TRUE(service
+                  .set_selection_hover({
+                      .modeling_object_id = baseline.object.modeling_object_id,
+                      .kind = ModelingActiveSelectionKind::Object,
+                  })
+                  .ok);
+
+  const ModelingSelectionSummary selection_before =
+      service.selection_summary();
+  const ModelingSelectionExport export_before = service.export_selection();
+  const ModelingHoverSummary hover_before = service.selection_hover_summary();
+  const std::vector<ModelingObjectRecord> objects_before = service.objects();
+  const std::vector<EntityId> entities_before = scene.entities();
+  const std::vector<EntityId> selected_before = scene.selected_entities();
+  const EntityId active_before = scene.primary_selection();
+  const std::uint64_t scene_revision_before = scene.revision();
+  const std::uint64_t scene_selection_revision_before =
+      scene.selection_revision();
+  const std::vector<AssetId> mesh_ids_before = assets.mesh_ids();
+  const std::uint64_t assets_revision_before = assets.revision();
+
+  const auto expect_exact_state = [&]() {
+    const ModelingSelectionSummary selection = service.selection_summary();
+    EXPECT_EQ(selection.mode, selection_before.mode);
+    EXPECT_EQ(selection.has_selection, selection_before.has_selection);
+    EXPECT_EQ(selection.active_kind, selection_before.active_kind);
+    EXPECT_EQ(selection.active_object_id, selection_before.active_object_id);
+    EXPECT_EQ(selection.selected_object_count,
+              selection_before.selected_object_count);
+    EXPECT_EQ(selection.content_revision, selection_before.content_revision);
+    EXPECT_EQ(selection.selection_revision,
+              selection_before.selection_revision);
+
+    const ModelingSelectionExport exported = service.export_selection();
+    ASSERT_EQ(exported.objects.size(), export_before.objects.size());
+    ASSERT_FALSE(exported.objects.empty());
+    EXPECT_EQ(exported.objects.front().modeling_object_id,
+              export_before.objects.front().modeling_object_id);
+    EXPECT_EQ(exported.objects.front().entity,
+              export_before.objects.front().entity);
+    EXPECT_EQ(exported.objects.front().selected,
+              export_before.objects.front().selected);
+
+    const ModelingHoverSummary hover = service.selection_hover_summary();
+    EXPECT_EQ(hover.target.kind, hover_before.target.kind);
+    EXPECT_EQ(hover.target.object_id, hover_before.target.object_id);
+    EXPECT_EQ(hover.target_selected, hover_before.target_selected);
+
+    const std::vector<ModelingObjectRecord> objects = service.objects();
+    ASSERT_EQ(objects.size(), objects_before.size());
+    ASSERT_FALSE(objects.empty());
+    EXPECT_EQ(objects.front().modeling_object_id,
+              objects_before.front().modeling_object_id);
+    EXPECT_EQ(objects.front().entity, objects_before.front().entity);
+    EXPECT_EQ(objects.front().mesh, objects_before.front().mesh);
+    EXPECT_EQ(scene.entities(), entities_before);
+    EXPECT_EQ(scene.selected_entities(), selected_before);
+    EXPECT_EQ(scene.primary_selection(), active_before);
+    EXPECT_EQ(scene.revision(), scene_revision_before);
+    EXPECT_EQ(scene.selection_revision(), scene_selection_revision_before);
+    EXPECT_EQ(assets.mesh_ids(), mesh_ids_before);
+    EXPECT_EQ(assets.revision(), assets_revision_before);
+  };
+
+  EditorHistoryService history;
+  ModelingCreateBoxRequest invalid_box;
+  invalid_box.bounds.min.x = std::numeric_limits<float>::quiet_NaN();
+  const CommandResult box_result = history.execute(
+      std::make_unique<CreateBoxFromBoundsHistoryCommand>(service,
+                                                           invalid_box));
+  EXPECT_FALSE(box_result.ok);
+  EXPECT_FALSE(box_result.changed);
+  EXPECT_FALSE(history.can_undo());
+  EXPECT_FALSE(history.can_redo());
+  expect_exact_state();
+
+  ModelingCreateMeshRequest invalid_mesh;
+  invalid_mesh.document = quader_poly::make_cube({});
+  ASSERT_FALSE(invalid_mesh.document.vertices.empty());
+  invalid_mesh.document.vertices.front().position.y =
+      std::numeric_limits<float>::infinity();
+  const CommandResult mesh_result = history.execute(
+      std::make_unique<CreateMeshHistoryCommand>(service,
+                                                  std::move(invalid_mesh)));
+  EXPECT_FALSE(mesh_result.ok);
+  EXPECT_FALSE(mesh_result.changed);
+  EXPECT_FALSE(history.can_undo());
+  EXPECT_FALSE(history.can_redo());
+  expect_exact_state();
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     CreationProjectionFailureRestoresRuntimeSelectionAndAddsNoHistory) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult baseline = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Projection Failure Baseline",
+  });
+  ASSERT_TRUE(baseline.ok) << baseline.message;
+  ASSERT_TRUE(service
+                  .set_selection_hover({
+                      .modeling_object_id = baseline.object.modeling_object_id,
+                      .kind = ModelingActiveSelectionKind::Object,
+                  })
+                  .ok);
+
+  const ModelingSelectionSummary selection_before =
+      service.selection_summary();
+  const ModelingHoverSummary hover_before = service.selection_hover_summary();
+  const std::vector<ModelingObjectRecord> objects_before = service.objects();
+  const std::vector<EntityId> entities_before = scene.entities();
+  const std::vector<EntityId> selected_before = scene.selected_entities();
+  const EntityId active_before = scene.primary_selection();
+  const std::vector<AssetId> mesh_ids_before = assets.mesh_ids();
+
+  scene.set_editor_object_id_allocator(
+      [](EditorObjectId) { return kInvalidEditorObjectId; });
+  EditorHistoryService history;
+  const CommandResult failed = history.execute(
+      std::make_unique<CreateBoxFromBoundsHistoryCommand>(
+          service,
+          ModelingCreateBoxRequest{
+              .bounds = {.min = {2.0f, 2.0f, 2.0f},
+                         .max = {4.0f, 4.0f, 4.0f}},
+              .name = "Must Roll Back",
+          }));
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed);
+  EXPECT_FALSE(history.can_undo());
+  EXPECT_FALSE(history.can_redo());
+
+  const ModelingSelectionSummary selection_after =
+      service.selection_summary();
+  EXPECT_EQ(selection_after.active_object_id,
+            selection_before.active_object_id);
+  EXPECT_EQ(selection_after.selected_object_count,
+            selection_before.selected_object_count);
+  EXPECT_EQ(selection_after.content_revision,
+            selection_before.content_revision);
+  EXPECT_EQ(selection_after.selection_revision,
+            selection_before.selection_revision);
+  const ModelingHoverSummary hover_after = service.selection_hover_summary();
+  EXPECT_EQ(hover_after.target.kind, hover_before.target.kind);
+  EXPECT_EQ(hover_after.target.object_id, hover_before.target.object_id);
+  EXPECT_EQ(hover_after.target_selected, hover_before.target_selected);
+  const std::vector<ModelingObjectRecord> objects_after = service.objects();
+  ASSERT_EQ(objects_after.size(), objects_before.size());
+  ASSERT_FALSE(objects_after.empty());
+  EXPECT_EQ(objects_after.front().modeling_object_id,
+            objects_before.front().modeling_object_id);
+  EXPECT_EQ(objects_after.front().entity, objects_before.front().entity);
+  EXPECT_EQ(scene.entities(), entities_before);
+  EXPECT_EQ(scene.selected_entities(), selected_before);
+  EXPECT_EQ(scene.primary_selection(), active_before);
+  EXPECT_EQ(assets.mesh_ids(), mesh_ids_before);
+
+  ModelingCreateMeshRequest valid_mesh;
+  valid_mesh.document = quader_poly::make_cube({});
+  valid_mesh.name = "Must Also Roll Back";
+  const CommandResult failed_mesh = history.execute(
+      std::make_unique<CreateMeshHistoryCommand>(service,
+                                                  std::move(valid_mesh)));
+  EXPECT_FALSE(failed_mesh.ok);
+  EXPECT_FALSE(failed_mesh.changed);
+  EXPECT_FALSE(history.can_undo());
+  EXPECT_FALSE(history.can_redo());
+  const ModelingSelectionSummary selection_after_mesh =
+      service.selection_summary();
+  EXPECT_EQ(selection_after_mesh.active_object_id,
+            selection_before.active_object_id);
+  EXPECT_EQ(selection_after_mesh.selected_object_count,
+            selection_before.selected_object_count);
+  EXPECT_EQ(selection_after_mesh.content_revision,
+            selection_before.content_revision);
+  EXPECT_EQ(selection_after_mesh.selection_revision,
+            selection_before.selection_revision);
+  const ModelingHoverSummary hover_after_mesh =
+      service.selection_hover_summary();
+  EXPECT_EQ(hover_after_mesh.target.kind, hover_before.target.kind);
+  EXPECT_EQ(hover_after_mesh.target.object_id, hover_before.target.object_id);
+  EXPECT_EQ(hover_after_mesh.target_selected, hover_before.target_selected);
+  EXPECT_EQ(service.objects().size(), objects_before.size());
+  EXPECT_EQ(scene.entities(), entities_before);
+  EXPECT_EQ(scene.selected_entities(), selected_before);
+  EXPECT_EQ(scene.primary_selection(), active_before);
+  EXPECT_EQ(assets.mesh_ids(), mesh_ids_before);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     FailedBoxCommitRestoresTheReadyPreviewForAnExactRetry) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingBoxToolEvent start{
+      .screen_position = {300.0f, 240.0f},
+      .ray = {.origin = {0.0f, 4.0f, 0.0f},
+              .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+  };
+  const ModelingBoxToolEvent footprint_end{
+      .screen_position = {420.0f, 240.0f},
+      .ray = {.origin = {2.0f, 4.0f, 2.0f},
+              .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+  };
+  const ModelingBoxToolEvent height_end{
+      .screen_position = {420.0f, 340.0f},
+      .ray = start.ray,
+      .grid_size = 1.0,
+  };
+
+  ASSERT_TRUE(service.activate_box_tool().ok);
+  ASSERT_TRUE(service.begin_box_footprint(start).ok);
+  ASSERT_TRUE(service.update_box_footprint(footprint_end).ok);
+  ASSERT_TRUE(service.begin_box_height(start).ok);
+  ASSERT_TRUE(service.update_box_height(height_end).ok);
+  const ModelingBoxPreview preview_before = service.box_preview();
+  ASSERT_TRUE(preview_before.valid);
+  ASSERT_EQ(preview_before.drag_state, ModelingBoxDragState::Height);
+  const ModelingSelectionSummary selection_before =
+      service.selection_summary();
+  const std::vector<EntityId> entities_before = scene.entities();
+  const std::vector<EntityId> selected_before = scene.selected_entities();
+  const std::vector<AssetId> mesh_ids_before = assets.mesh_ids();
+
+  scene.set_editor_object_id_allocator(
+      [](EditorObjectId) { return kInvalidEditorObjectId; });
+  const ModelingCreateBoxResult failed = service.commit_box("Failed Commit");
+  EXPECT_FALSE(failed.ok);
+  EXPECT_FALSE(failed.changed);
+  const ModelingBoxPreview preview_after = service.box_preview();
+  EXPECT_TRUE(preview_after.valid);
+  EXPECT_EQ(preview_after.drag_state, preview_before.drag_state);
+  EXPECT_EQ(preview_after.corner_count, preview_before.corner_count);
+  EXPECT_DOUBLE_EQ(preview_after.distance, preview_before.distance);
+  EXPECT_EQ(service.selection_summary().content_revision,
+            selection_before.content_revision);
+  EXPECT_EQ(service.selection_summary().selection_revision,
+            selection_before.selection_revision);
+  EXPECT_EQ(scene.entities(), entities_before);
+  EXPECT_EQ(scene.selected_entities(), selected_before);
+  EXPECT_EQ(assets.mesh_ids(), mesh_ids_before);
+
+  scene.set_editor_object_id_allocator({});
+  const ModelingCreateBoxResult retried = service.commit_box("Retried Commit");
+  ASSERT_TRUE(retried.ok) << retried.message;
+  EXPECT_TRUE(retried.changed);
+  EXPECT_EQ(service.box_preview().drag_state, ModelingBoxDragState::Idle);
+}
+
+TEST(ModelingSessionServiceSplitTests,
+     HistoryMementoRestoresSharedMeshCloneIdentityAcrossUndoRedo) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Shared History Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  const MeshComponent *source_mesh = scene.mesh(box.object.entity);
+  ASSERT_NE(source_mesh, nullptr);
+  const AssetId shared_mesh = source_mesh->mesh;
+  ASSERT_NE(shared_mesh, kInvalidAssetId);
+  const MeshAsset *shared_asset = assets.mesh(shared_mesh);
+  ASSERT_NE(shared_asset, nullptr);
+  ASSERT_FALSE(shared_asset->vertices.empty());
+  const QVec3 original_first_vertex = shared_asset->vertices.front().position;
+
+  const EntityId observer =
+      scene.create_entity("Shared History Observer", EntityKind::Mesh);
+  scene.set_mesh(observer, MeshComponent{.mesh = shared_mesh});
+  const std::size_t original_mesh_count = assets.mesh_count();
+
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
+  ASSERT_TRUE(service.select_all().ok);
+  EditorHistoryService history;
+  const CommandResult moved = history.execute(
+      std::make_unique<MoveSelectionHistoryCommand>(
+          service, QVec3{2.0f, 0.0f, 0.0f}));
+  ASSERT_TRUE(moved.ok) << moved.message;
+  ASSERT_TRUE(moved.changed);
+
+  ASSERT_NE(scene.mesh(box.object.entity), nullptr);
+  const AssetId cloned_mesh = scene.mesh(box.object.entity)->mesh;
+  ASSERT_NE(cloned_mesh, shared_mesh);
+  EXPECT_EQ(scene.mesh(observer)->mesh, shared_mesh);
+  ASSERT_EQ(assets.mesh_count(), original_mesh_count + 1U);
+  ASSERT_NE(assets.mesh(cloned_mesh), nullptr);
+  const QVec3 changed_first_vertex =
+      assets.mesh(cloned_mesh)->vertices.front().position;
+  EXPECT_NE(changed_first_vertex.x, original_first_vertex.x);
+
+  CommandResult restored = history.undo();
+  ASSERT_TRUE(restored.ok) << restored.message;
+  ASSERT_NE(scene.mesh(box.object.entity), nullptr);
+  ASSERT_NE(scene.mesh(observer), nullptr);
+  EXPECT_EQ(scene.mesh(box.object.entity)->mesh, shared_mesh);
+  EXPECT_EQ(scene.mesh(observer)->mesh, shared_mesh);
+  EXPECT_EQ(assets.mesh_count(), original_mesh_count);
+  EXPECT_EQ(assets.mesh(cloned_mesh), nullptr);
+  ASSERT_NE(assets.mesh(shared_mesh), nullptr);
+  expect_vec3_eq(assets.mesh(shared_mesh)->vertices.front().position,
+                 original_first_vertex);
+
+  restored = history.redo();
+  ASSERT_TRUE(restored.ok) << restored.message;
+  ASSERT_NE(scene.mesh(box.object.entity), nullptr);
+  ASSERT_NE(scene.mesh(observer), nullptr);
+  EXPECT_EQ(scene.mesh(box.object.entity)->mesh, cloned_mesh);
+  EXPECT_EQ(scene.mesh(observer)->mesh, shared_mesh);
+  EXPECT_EQ(assets.mesh_count(), original_mesh_count + 1U);
+  ASSERT_NE(assets.mesh(cloned_mesh), nullptr);
+  expect_vec3_eq(assets.mesh(cloned_mesh)->vertices.front().position,
+                 changed_first_vertex);
+
+  restored = history.undo();
+  ASSERT_TRUE(restored.ok) << restored.message;
+  EXPECT_EQ(scene.mesh(box.object.entity)->mesh, shared_mesh);
+  EXPECT_EQ(assets.mesh_count(), original_mesh_count);
+  restored = history.redo();
+  ASSERT_TRUE(restored.ok) << restored.message;
+  EXPECT_EQ(scene.mesh(box.object.entity)->mesh, cloned_mesh);
+  EXPECT_EQ(assets.mesh_count(), original_mesh_count + 1U);
 }
 
 TEST(ModelingSessionServiceSplitTests,

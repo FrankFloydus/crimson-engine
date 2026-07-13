@@ -14,6 +14,7 @@
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_document_writer.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "scene/components.hpp"
 
 #include <algorithm>
@@ -204,6 +205,11 @@ bool has_valid_obj_export_mesh(const ProjectSessionReadView &view) {
   return false;
 }
 
+bool project_has_uncommitted_preview(const ProjectSession &session) {
+  return session.native_tools().has_pending_tool() ||
+         session.modeling().can_cancel_active_tool_or_preview();
+}
+
 } // namespace
 
 QuaderProjectApi::QuaderProjectApi(QuaderApiSession session)
@@ -211,6 +217,10 @@ QuaderProjectApi::QuaderProjectApi(QuaderApiSession session)
 
 QuaderApiVoidResult QuaderProjectApi::new_project() {
   ProjectSession &session = project_session(session_);
+  if (std::optional<QuaderApiVoidResult> blocked =
+          dirty_replacement_preflight("project.new")) {
+    return std::move(*blocked);
+  }
   session.replace_document(ProjectDocument{});
   path_.clear();
   return project_runtime_status(session, true, "New project created.");
@@ -233,6 +243,11 @@ QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
         return unsupported("Project open requires a path.");
     }
 
+    if (std::optional<QuaderApiVoidResult> blocked =
+            dirty_replacement_preflight("project.open")) {
+      return std::move(*blocked);
+    }
+
     QdrProjectReadResult read =
         QdrDocumentReader::read_project_document(target);
     if (!read.ok) {
@@ -253,6 +268,10 @@ QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
 
 QuaderApiVoidResult QuaderProjectApi::save() {
     QDR_PROFILE_FUNCTION();
+    if (project_has_uncommitted_preview(read_project_session(session_))) {
+      return unsupported(
+          "Commit or cancel the active preview before saving the project.");
+    }
     if (path_.empty()) {
       return save_as({});
     }
@@ -262,6 +281,10 @@ QuaderApiVoidResult QuaderProjectApi::save() {
 QuaderApiVoidResult
 QuaderProjectApi::save_as(const std::filesystem::path &path) {
   QDR_PROFILE_FUNCTION();
+  if (project_has_uncommitted_preview(read_project_session(session_))) {
+    return unsupported(
+        "Commit or cancel the active preview before saving the project.");
+  }
   std::filesystem::path target = path;
   if (target.empty()) {
     if (!runtime_hooks_.choose_save_as_path) {
@@ -312,30 +335,25 @@ QuaderProjectApi::export_selected_meshes_as_obj(
                                      "OBJ export requires a path.");
   }
 
-  for (const SelectedObjExportMesh &mesh : meshes) {
-    const ObjMeshWriteResult validation =
-        ObjMeshWriter::validate_mesh(mesh.mesh);
-    if (!validation.ok) {
-      return project_obj_export_status(session, false,
-                                       validation.message.empty()
-                                           ? "OBJ export failed."
-                                           : validation.message);
-    }
-  }
-
   QuaderObjExportResult result{
       .paths = export_paths_for_selection(target, meshes),
   };
+  std::vector<ObjMeshWriteRequest> requests;
+  requests.reserve(meshes.size());
   for (std::size_t index = 0; index < meshes.size(); ++index) {
-    const ObjMeshWriteResult write =
-        ObjMeshWriter::write_mesh(result.paths[index], meshes[index].mesh,
-                                  meshes[index].name);
-    if (!write.ok) {
-      return project_obj_export_status(session, false,
-                                       write.message.empty()
-                                           ? "OBJ export failed."
-                                           : write.message);
-    }
+    requests.push_back(ObjMeshWriteRequest{
+        .path = result.paths[index],
+        .mesh = &meshes[index].mesh,
+        .object_name = meshes[index].name,
+    });
+  }
+  const ObjMeshWriteResult write =
+      ObjMeshWriter::write_meshes_atomic(requests);
+  if (!write.ok) {
+    return project_obj_export_status(session, false,
+                                     write.message.empty()
+                                         ? "OBJ export failed."
+                                         : write.message);
   }
 
   return project_obj_export_status(
@@ -421,6 +439,39 @@ QuaderProjectApi::choose_export_obj_path() const {
   return runtime_hooks_.choose_export_obj_path
              ? runtime_hooks_.choose_export_obj_path()
              : std::nullopt;
+}
+
+std::optional<QuaderApiVoidResult>
+QuaderProjectApi::dirty_replacement_preflight(std::string_view action_id) {
+  ProjectSession &session = project_session(session_);
+  if (!session.dirty()) {
+    return std::nullopt;
+  }
+  if (!runtime_hooks_.confirm_dirty_project_replacement) {
+    return quader_api_failure_status(
+        session, "Unsaved project changes require Save, Discard, or Cancel.");
+  }
+
+  switch (runtime_hooks_.confirm_dirty_project_replacement(action_id)) {
+  case QuaderDirtyProjectDecision::Discard:
+    return std::nullopt;
+  case QuaderDirtyProjectDecision::Cancel:
+    return project_runtime_status(session, false,
+                                  "Project replacement canceled.");
+  case QuaderDirtyProjectDecision::Save: {
+    QuaderApiVoidResult saved = save();
+    if (!saved.ok()) {
+      return saved;
+    }
+    if (session.dirty()) {
+      return project_runtime_status(session, false,
+                                    "Project replacement canceled.");
+    }
+    return std::nullopt;
+  }
+  }
+  return project_runtime_status(session, false,
+                                "Project replacement canceled.");
 }
 
 } // namespace quader

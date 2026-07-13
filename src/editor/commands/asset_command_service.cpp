@@ -7,6 +7,7 @@
 #include "editor/commands/asset_command_service.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "assets/mesh_asset_payload.hpp"
 #include "editor/commands/add_asset_command.hpp"
 #include "editor/commands/replace_asset_command.hpp"
 #include "editor/history/editor_history_service.hpp"
@@ -25,10 +26,6 @@ void assign_asset_command_status(AssetCommandResult &target,
   target.ok = source.ok;
   target.changed = source.changed;
   target.message = std::move(source.message);
-}
-
-bool same_vec2(QVec2 left, QVec2 right) {
-  return left.x == right.x && left.y == right.y;
 }
 
 bool same_vec3(QVec3 left, QVec3 right) {
@@ -50,48 +47,6 @@ bool same_texture_payload(const TextureAsset &left,
          left.color_space == right.color_space && left.width == right.width &&
          left.height == right.height && left.source_path == right.source_path &&
          left.generated == right.generated;
-}
-
-bool same_mesh_vertex(const MeshVertex &left, const MeshVertex &right) {
-  return same_vec3(left.position, right.position) &&
-         same_vec3(left.normal, right.normal) && same_vec2(left.uv, right.uv) &&
-         left.rgba == right.rgba;
-}
-
-bool same_mesh_vertices(const std::vector<MeshVertex> &left,
-                        const std::vector<MeshVertex> &right) {
-  return left.size() == right.size() &&
-         std::equal(left.begin(), left.end(), right.begin(), same_mesh_vertex);
-}
-
-bool same_mesh_primitive_span(const MeshPrimitiveSpan &left,
-                              const MeshPrimitiveSpan &right) {
-  return left.index_offset == right.index_offset &&
-         left.index_count == right.index_count &&
-         left.material_slot == right.material_slot;
-}
-
-bool same_mesh_primitive_payload(const MeshAsset &left,
-                                 const MeshAsset &right) {
-  const std::vector<MeshPrimitiveSpan> left_spans =
-      normalized_mesh_primitive_spans(left);
-  const std::vector<MeshPrimitiveSpan> right_spans =
-      normalized_mesh_primitive_spans(right);
-  return left_spans.size() == right_spans.size() &&
-         std::equal(left_spans.begin(), left_spans.end(), right_spans.begin(),
-                    same_mesh_primitive_span);
-}
-
-bool same_mesh_payload(const MeshAsset &left, const MeshAsset &right) {
-  return left.name == right.name &&
-         same_mesh_vertices(left.vertices, right.vertices) &&
-         left.indices == right.indices &&
-         same_mesh_primitive_payload(left, right) &&
-         left.has_stable_cpu_topology == right.has_stable_cpu_topology &&
-         left.has_authored_polygon_document ==
-             right.has_authored_polygon_document &&
-         (!left.has_authored_polygon_document ||
-          left.authored_polygon_document == right.authored_polygon_document);
 }
 
 bool scene_references_modeling_owned_mesh(const SceneDocument *scene,
@@ -117,6 +72,13 @@ AssetCommandService::AssetCommandService(AssetRegistry &assets,
     : assets_(assets), history_(history), scene_(scene) {}
 
 AssetCreateResult AssetCommandService::add_mesh(MeshAsset mesh) {
+  const AssetRegistryValidationResult validation = assets_.validate_mesh(mesh);
+  if (!validation.ok) {
+    AssetCreateResult result;
+    assign_asset_command_status(
+        result, asset_command_invalid_request_result(validation.message));
+    return result;
+  }
   auto command =
       std::make_unique<AddMeshAssetCommand>(assets_, std::move(mesh));
   AddMeshAssetCommand *add_command = command.get();
@@ -188,7 +150,7 @@ AssetCommandService::update_mesh(
   if (current == nullptr) {
     return asset_command_invalid_request_result("Mesh asset does not exist");
   }
-  MeshAsset replacement = *current;
+  MeshAsset replacement = clone_mesh_asset_payload(*current);
   update(replacement);
   return replace_mesh_with_label(mesh, std::move(replacement),
                                  std::move(label));
@@ -242,15 +204,21 @@ AssetCommandService::replace_mesh_with_label(AssetId mesh,
     return asset_command_invalid_request_result(
         "Mesh asset is owned by a modeling object");
   }
+  const AssetRegistryValidationResult validation =
+      assets_.validate_mesh(replacement);
+  if (!validation.ok) {
+    return asset_command_invalid_request_result(validation.message);
+  }
   const MeshAsset *current = assets_.mesh(mesh);
   if (current == nullptr) {
     return asset_command_invalid_request_result("Mesh asset does not exist");
   }
-  if (same_mesh_payload(*current, replacement)) {
+  if (mesh_asset_payload_equal(*current, replacement)) {
     return asset_command_unchanged_result("Mesh unchanged");
   }
   return history_.execute(std::make_unique<ReplaceMeshAssetCommand>(
-      assets_, mesh, *current, std::move(replacement), std::move(label)));
+      assets_, mesh, clone_mesh_asset_payload(*current),
+      clone_mesh_asset_payload(replacement), std::move(label)));
 }
 
 AssetCommandResult

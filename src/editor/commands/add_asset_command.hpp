@@ -34,6 +34,11 @@ public:
   }
 
   AssetCommandResult redo() override {
+    const AssetRegistryValidationResult validation =
+        assets().validate_mesh(mesh_);
+    if (!validation.ok) {
+      return asset_command_invalid_request_result(validation.message);
+    }
     const AssetId added = assets().add_mesh(asset_, mesh_);
     if (added == kInvalidAssetId) {
       return asset_command_invalid_request_result(

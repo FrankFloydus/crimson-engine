@@ -9,6 +9,159 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-07-13 - Pivot Apply And Cross-App State Ownership Audit
+
+Task/context: the native Pivot tool visually moved its preview but Apply left the transform gizmo
+at the original origin; Tool Settings Previous/Next canceled the tool, repeated `P` activation was
+unreliable, and activating Pivot on a newly created off-origin mesh put its handle at the raw entity
+origin instead of the Move gizmo's visible bounds center. After restoring the ImGui-main lifecycle,
+ten parallel audit passes reviewed state truth, history atomicity, tools/selection, input/cache
+invalidation, scene/assets, persistence, render snapshots, Qt/public routing, build guardrails, and
+end-to-end determinism.
+
+Pivot invariant:
+
+- The retained Tool Settings QWidget and its exact top-level native `QWindow` are internal Pivot
+  interaction targets. Their mouse events never trigger outside-tool cancellation; unrelated
+  windows remain external.
+- `P` remains a canonical keybinding/typed-tool activation. A handled activation request is
+  independent of a tool-ID change, so it can restore a stale native session without restarting a
+  live preview. Apply rebases the mesh/group origin through `PivotToolService`, commits one history
+  item, resets modeling projection, and immediately refreshes the transform-gizmo pivot. Undo and
+  redo move the gizmo with the persisted pivot while world geometry and descendants stay fixed.
+- `scene_transform_pivot.*` is the one committed visible-pivot owner used by Move queries, persistent
+  Pivot activation, Copy Pivot validation, and scene transform previews: a custom pivot is the
+  parent-aware world origin; otherwise it is the visible entity/hierarchy bounds center. Fresh
+  meshes may bake off-origin coordinates into vertices while retaining an identity transform, so
+  the raw entity origin is never a valid substitute for their default visible pivot.
+- Persistent Pivot initializes its preview at the exact currently visible Move pivot and keeps its
+  no-drag comparison against the committed visible pivot. A released Quick Pivot can therefore be
+  baked intentionally by Apply; successful Apply clears the temporary override so it cannot mask
+  the persisted pivot or Undo. Cancel preserves the temporary Quick Pivot.
+- Persistent Pivot sessions retain the captured entity UUID, parent, mode, active target,
+  visibility, lock, and editability contract. Scene or asset revision changes revalidate those
+  target-specific invariants instead of canceling merely because unrelated state changed. Project
+  replacement, selection-mode changes, Undo, or explicit cancel clear native and modeling
+  previews before another owner mutates state.
+
+State ownership invariant:
+
+- Project New/Open/Exit/native close share Save/Discard/Cancel policy. Open preflights before its
+  read, Save never persists an uncommitted preview, and replacement cancels old-document transient
+  state before installing the new document. Scene and asset replacement epochs advance beyond the
+  old document, default assets are rebound by their complete semantic contract, and history is
+  cleared once.
+- Transform, hierarchy, asset, and history mutations validate completely before application.
+  Non-finite/singular transforms, malformed asset payloads, failed recursive duplicates, and
+  multi-command cancel failures roll back atomically. Authored polygon payloads are deep snapshots;
+  shared scene meshes use clone-on-write; mixed mesh/light duplicate history preserves both runtime
+  object count and exact scene selection.
+- Runtime tool activation preflights before canceling competing state, then cancels previews only
+  through their native/modeling owners. Invalid activation preserves the current preview. Scene
+  transform capture distinguishes an empty selection from an unsafe singular hierarchy and never
+  falls back to an identity inverse; Group/Ungroup preflight every reparent before mutation.
+- Modeling-to-scene projection prebuilds and validates the complete plan before publishing assets,
+  entities, or selection. Creation failures restore the runtime, scene, assets, selection, preview,
+  and history checkpoint. Sync validity checks the exact modeling ID, material slot, installed mesh
+  asset, and known signature; asset allocators never publish the invalid ID sentinel.
+- Native and SDK geometry, polygon, and portable QDR targets compile the one canonical
+  `src/sdk/core/modeling/internal` implementation. Duplicate native `.cpp` owners are removed,
+  compatibility headers are parity-guarded, and the richer plane-cut behavior is canonical. The
+  SDK-only manifest disables native host dependencies and its clean install/consumer check rejects
+  Qt or other host leakage.
+- QDR writes validate document identity/references before replacement and reject multiple active
+  selections. Multi-file OBJ export validates/stages every destination and restores all prior
+  files on failure. Ordered viewport input processes every same-frame edge, pending chords own
+  their continuation, wheel bindings precede zoom fallback, and hover cache keys include resolved
+  grid-snap state.
+
+Verification:
+
+- 69 focused Pivot/Copy/activation/projection/asset/hierarchy regressions passed.
+- Native `quader_tests` passed 876/876, modeling-domain tests passed 508/508, guardrails passed
+  183/183, and full CTest passed 6/6, including SDK consumer/parity checks.
+- The final native `quader` v0.0.104 executable and dependency-tracked runtime resources built
+  successfully after this record was added.
+
+## 2026-07-12 - Pivot Tool Settings And Repeated Activation Preserve Its Lifecycle
+
+Task/context: applying the persistent Pivot tool appeared to restore its original position,
+Previous/Next in Tool Settings closed the tool, and pressing `P` could not reactivate Pivot.
+
+Root cause:
+
+- `QtViewportPanel` installs an application-wide mouse event filter. It treated Tool Settings
+  controls as outside-pointer events, so a frame could cancel the native Pivot session between a
+  button press and its Apply, Previous, or Next click handler.
+- Viewport shortcut handling reported only whether the selected tool ID changed. A valid repeated
+  `P` activation was handled while Pivot was already selected, but Qt received no request to
+  activate the native tool owner again.
+
+Invariant:
+
+- QObject descendants of the retained `floating.tool_settings` window are tool-owned interaction
+  targets and never queue outside-modal cancellation. Other dialogs, docks, menus, and outside
+  pointer events remain external and keep their normal cancellation behavior.
+- A handled `ActivateTool` shortcut emits `tool_activation_requested` independently of
+  `tool_changed`. Qt dispatches editor tool activation only when the selected ID changed or the
+  editor's active tool does not match the requested tool. This restarts a stale/ended native Pivot
+  session without resetting a live moved preview when `P` is pressed twice. `P` remains the
+  catalog/keybinding-system shortcut; no raw Qt key branch owns Pivot activation.
+
+Affected owners/files:
+
+- `src/ui/qt_viewport_panel.*`
+- `src/editor/tools/viewport_tool_runtime.cpp`
+- `src/viewport/viewport_input_types.hpp`
+- `tests/qt_viewport_pane_activation_tests.cpp` and
+  `tests/viewport_tool_catalog_tests.cpp`
+
+Verification: 15 focused Pivot lifecycle/keybinding/policy tests passed, as did the 263-test
+affected viewport/input/UI set and 45 affected UI/public-API guardrails. Full CTest passed 6/6
+entries, and the final v0.0.102 native `quader` executable built successfully.
+
+## 2026-07-12 - Copy Pivot From Active Is A Native Atomic Pivot Rebase
+
+Task/context: Object mode needed a native operation that transfers the active mesh's visible pivot
+offset to every other selected editable mesh without moving geometry, descendants, or selection.
+
+Invariant:
+
+- `PivotToolService` owns this workflow. It is exposed through `QuaderModelingApi`, the typed
+  `modeling.copy_pivot_from_active` command, and a native public action; it is not an
+  `EditorOperation`, portable SDK operation, runtime metadata entry, QDR feature, or Lua binding.
+- The source pivot is the custom world origin when present and otherwise Quader's visible
+  world-bounds center. Its offset from the average of the world bounds center and world
+  mean-vertex center is transferred through source inverse rotation and target rotation. World
+  centers include scale, the rotation basis excludes scale, and the offset is never normalized by
+  mesh size. Authored polygon vertices are preferred for the mean, with stable CPU vertices as the
+  fallback.
+- This is the reference add-on's absolute-offset rule: congruent translated/rotated meshes map an
+  authored AABB lower-left pivot to the corresponding target lower-left. Differently sized targets
+  retain the same absolute offset from their hybrid center rather than normalizing to target size.
+- Object mode, one visible active mesh, and at least one other selected mesh are required. Selected
+  non-mesh entities are ignored; every mesh target is validated before mutation. A locked source
+  is valid because it is read-only, while a locked, hidden, missing, non-finite, or non-editable
+  target rejects the entire operation.
+- Targets are applied parent-before-child with entity ID as the stable tie-break. Each rebase plan
+  is resolved immediately before application, reuses geometry and child compensation plus
+  shared-asset clone-on-write, and participates in one atomic history item named
+  `Copy Pivot From Active`. Undo and redo preserve stable asset IDs, world geometry, descendant
+  world transforms, scene selection, and the active entity. Effective-pivot epsilon no-ops create
+  no history.
+
+Affected owners/files:
+
+- `src/editor/pivot/pivot_tool_service.*`
+- `src/api/quader_modeling_api.*`, `src/api/quader_command_ids.hpp`, and
+  `src/api/quader_commands_api.cpp`
+- `src/ui/qt_viewport_context_menu.*`, locales, and native app tests
+
+Verification: 15/15 `CopyPivotFromActiveTests.*` passed, including the congruent AABB lower-left,
+hierarchy-visible-pivot, mirrored-parent, nonuniform-scale, atomic-failure, and undo/redo cases. The
+89 affected public-API/UI guardrails and 14 localization tests passed; all three native test targets
+built, full CTest passed 6/6 entries, and the final v0.0.101 `quader` executable built successfully.
+
 ## 2026-07-12 - Settings Uses An Explicit Apply Transaction
 
 Task/context: committing a viewport numeric setting with Enter appeared to randomly reset every
@@ -3775,3 +3928,57 @@ Verification:
   concurrent guardrail run also hit a temporary recursive-directory race with the SDK-only build;
   the complete standalone guardrail rerun passed. Desktop automation cannot hold RMB continuously,
   so final physical held-pan feel remains a human smoke check.
+
+## 2026-07-13 - Transformed Knife, Edge Loop, and Qt Fly Regression Closure
+
+Task/context: Knife snapped away from transformed surfaces, Insert Edge Loop highlighted far from
+the pointer and crossed doorway/non-quad topology, RMB/WASD fly navigation could jump, and its
+crosshair presented as an opaque native gray quad. Comparison with `main` showed that the intended
+tool behavior still belonged to the established modeling operations; the regressions were in the
+current host projection/input integration. A first attempted topology fix was
+too strict and blanked every preview that reached mixed topology; live flipped/interior testing
+exposed that regression and the traversal was restored exactly to `main`.
+
+Invariant:
+
+- Discrete tool actions consume the physical coordinate captured with the click. Knife also
+  resolves a fresh hover from that click ray before accepting a point, so a later move in the same
+  semantic frame cannot commit stale hover state.
+- Scene picking is authoritative in world space. The host resolves the exact object/component,
+  transforms the hit and ray into its modeling document, and attaches the object ID to overlays so
+  render projection reapplies the scene transform. Grid/edge/face snapping and Knife axis
+  constraints are solved in world space; affine camera projection uses the proper inverse basis and
+  covector axes, including rotation and non-uniform scale.
+- Insert Edge Loop retains the working `main` traversal: it previews the valid connected quad
+  segment and stops when continuation reaches triangle/ngon topology instead of erasing the whole
+  preview. Host picking remains two-sided, so a camera inside a mesh with flipped face winding can
+  still acquire the edge and publish the preview.
+- Captured motion has exactly one authoritative source. A confirmed nonzero relative raw packet
+  persists across frame drains, discards any Qt delta queued before native classification, and
+  excludes later legacy/warp moves; an absolute raw packet explicitly switches to Qt fallback.
+  Fallback recenter state preserves physical motion that overtakes a delayed synthetic center event
+  without later applying the inverse warp as a camera snap.
+- The fly crosshair remains a native child but owns pixels only under its four masked arms. Fusion
+  palette colors draw a narrow outline and inner line; the center, arm gaps, and surrounding quad
+  are transparent.
+
+Owners:
+
+- `src/editor/modeling/services/modeling_session_service.cpp` and
+  `src/editor/interactions/*` own host world/local adaptation and overlay identity.
+- `src/editor/tools/base/*` owns captured semantic click consumption.
+- `src/sdk/core/modeling/internal/mesh/polygon/quader_poly_document_knife_helpers.cpp` owns loop-strip
+  topology traversal policy.
+- `src/ui/qt_relative_pointer_input.*` owns Windows raw/Qt relative-motion reconciliation;
+  `src/ui/qt_viewport_fly_navigation_hud.cpp` owns native crosshair composition.
+
+Verification:
+
+- Focused live-path coverage passes 22/22, including transformed Insert picking, mixed-topology
+  preview, inside/flipped-winding preview, queued physical clicks, and held RMB+WASD with delayed
+  Qt/raw delivery.
+- Insert Edge Loop operation coverage passes 14/14; runtime Knife/Insert/affine-projection coverage
+  passes 15/15; relevant guardrails pass.
+- Full CTest passes 6/6 executables, and native `quader` v0.0.106 builds successfully.
+- Real Windows held-RMB raw-input feel and native crosshair composition remain a final human GPU
+  smoke check because the headless harness cannot reproduce continuous physical capture.

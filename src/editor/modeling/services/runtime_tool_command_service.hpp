@@ -10,6 +10,8 @@
 
 #include <editor/modeling/runtime/runtime_command.hpp>
 
+#include <optional>
+
 namespace quader {
 
 /**
@@ -24,11 +26,25 @@ public:
   set_active_tool(ModelingViewportTool tool);
 
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
-  update_insert_edge_loop_hover(const ModelingToolRayEvent &event);
+  update_insert_edge_loop_hover(const ModelingToolRayEvent &event,
+                                int target_object_id = -1,
+                                std::optional<quader_editor_core::PickHitRecord>
+                                    resolved_hit = std::nullopt,
+                                std::optional<float> resolved_factor =
+                                    std::nullopt);
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
-  begin_insert_edge_loop_drag(const ModelingToolRayEvent &event);
+  begin_insert_edge_loop_drag(const ModelingToolRayEvent &event,
+                              int target_object_id = -1,
+                              std::optional<quader_editor_core::PickHitRecord>
+                                  resolved_hit = std::nullopt,
+                              std::optional<float> resolved_factor =
+                                  std::nullopt);
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
-  update_insert_edge_loop_drag(const ModelingToolRayEvent &event);
+  update_insert_edge_loop_drag(const ModelingToolRayEvent &event,
+                               int target_object_id = -1,
+                               std::optional<float> resolved_factor =
+                                   std::nullopt,
+                               bool resolved_factor_from_world = false);
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
   commit_insert_edge_loop_drag();
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand

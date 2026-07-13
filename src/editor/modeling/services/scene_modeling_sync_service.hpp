@@ -15,6 +15,7 @@
 
 namespace quader {
 
+class AssetRegistry;
 class SceneDocument;
 
 /**
@@ -42,7 +43,7 @@ public:
 
   [[nodiscard]] bool scene_objects_synced_for_current_modeling_content(
       const quader_editor_core::EditorSession &session,
-      const SceneDocument &scene) const;
+      const SceneDocument &scene, const AssetRegistry &assets) const;
 
 private:
   ModelingObjectRuntimeMap &object_map_;

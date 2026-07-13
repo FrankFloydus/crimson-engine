@@ -15,7 +15,11 @@
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
+#include "scene/scene_document.hpp"
 
+#include <editor/modeling/runtime/tool_runtime_policy.hpp>
+
+#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <cstdlib>
@@ -29,6 +33,56 @@ namespace {
 
 ProjectSession &project_session(QuaderApiSession session) {
   return QuaderApiSessionInternalAccess::project_session(session);
+}
+
+CommandResult runtime_tool_activation_preflight(
+    const ProjectSession &session, const ViewportTool &tool) {
+  const quader_editor_core::ViewportInteractionTool requested_tool =
+      quader_editor_core::viewport_interaction_tool_from_id(tool.id());
+  if (requested_tool == quader_editor_core::ViewportInteractionTool::Unknown) {
+    return command_invalid_result("Unknown viewport tool.");
+  }
+  if (!quader_editor_core::viewport_tool_requires_selected_objects(
+          requested_tool)) {
+    return command_unchanged_result();
+  }
+
+  const std::vector<EntityId> selected_entities =
+      session.scene().selected_entities();
+  std::size_t selected_object_count = 0;
+  if (!selected_entities.empty()) {
+    // Runtime activation promotes scene selection first. In particular, a
+    // selected group must not inherit stale selected mesh objects from the
+    // runtime session when deciding whether Cut or Mirror can activate.
+    selected_object_count = static_cast<std::size_t>(std::count_if(
+        selected_entities.begin(), selected_entities.end(),
+        [&session](EntityId entity) {
+          return session.scene().modeling_object(entity) != nullptr;
+        }));
+  } else {
+    const ModelingSelectionExport exported =
+        session.modeling().export_selection();
+    selected_object_count = static_cast<std::size_t>(std::count_if(
+        exported.objects.begin(), exported.objects.end(),
+        [](const ModelingSelectionExportObject &object) {
+          return object.selected;
+        }));
+  }
+  const quader_editor_core::ViewportToolActivationRequest request{
+      .requested_tool = requested_tool,
+      // Cut and Mirror promote eligible scene/runtime object selection before
+      // applying the runtime activation policy.
+      .selection_mode = quader_editor_core::SelectionMode::Object,
+      .selected_object_count = selected_object_count,
+      .selected_cut_target_object_count = selected_object_count,
+  };
+  if (!quader_editor_core::viewport_tool_activation_has_selection_prerequisite(
+          request)) {
+    return command_invalid_result(std::string(
+        quader_editor_core::viewport_tool_selection_prerequisite_message(
+            requested_tool)));
+  }
+  return command_unchanged_result();
 }
 
 bool is_cut_mode_setting(std::string_view tool_id, std::string_view name) {
@@ -309,10 +363,32 @@ QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
   if (tool == nullptr) {
     return quader_api_failure_status(session, "Unknown viewport tool.");
   }
-  (void)session.native_tools().cancel_active();
+  const CommandResult preflight =
+      runtime_tool_activation_preflight(session, *tool);
+  if (!preflight.ok) {
+    return api_status_from_command(session, preflight,
+                                   QuaderMutationKind::Runtime, tool_id);
+  }
+
+  const ModelingSessionService &modeling = session.modeling();
+  const bool repeated_without_competing_preview =
+      !session.native_tools().has_pending_tool() &&
+      modeling.tool_status().active_tool == tool->modeling_tool() &&
+      !modeling.can_cancel_active_preview_for_undo();
+  CommandResult canceled = command_unchanged_result();
+  if (!repeated_without_competing_preview) {
+    canceled =
+        session.native_tools().cancel_competing_state_for_tool_activation();
+    if (!canceled.ok) {
+      return api_status_from_command(session, canceled,
+                                     QuaderMutationKind::Runtime, tool_id);
+    }
+  }
+
   ModelingCommandResult result = tool->activate(session.modeling());
+  const bool changed = result.changed || canceled.changed;
   return quader_api_void_status(session, result.ok,
-                                result.changed, std::move(result.message),
+                                changed, std::move(result.message),
                                 QuaderMutationKind::Modeling, tool_id);
 }
 
@@ -325,7 +401,8 @@ bool QuaderToolsApi::can_activate(std::string_view tool_id) const {
   if (session.native_tools().handles(tool_id)) {
     return session.native_tools().can_activate(tool_id);
   }
-  return find_viewport_tool(tool_id) != nullptr;
+  const ViewportTool *tool = find_viewport_tool(tool_id);
+  return tool != nullptr && runtime_tool_activation_preflight(session, *tool).ok;
 }
 
 bool QuaderToolsApi::can_activate(ViewportToolId tool) const {

@@ -241,17 +241,15 @@ ViewportInputRouter::handle_frame(const ViewportInputFrame &input,
     QDR_PROFILE_SCOPE("Viewport shortcuts");
     if (input.keybinding_input_consumed) {
       result.consumed = true;
-    } else {
-      for (const ViewportShortcut &shortcut : input.resolved_shortcuts) {
-        if (shortcut.kind == ViewportShortcutKind::None) {
-          continue;
-        }
-        if (handle_shortcut(shortcut, camera, result)) {
-          result.consumed = true;
-          result.shortcut_handled = true;
-          result.shortcut = shortcut;
-          break;
-        }
+    }
+    for (const ViewportShortcut &shortcut : input.resolved_shortcuts) {
+      if (shortcut.kind == ViewportShortcutKind::None) {
+        continue;
+      }
+      if (handle_shortcut(shortcut, camera, result)) {
+        result.consumed = true;
+        result.shortcut_handled = true;
+        result.shortcut = shortcut;
       }
     }
   }

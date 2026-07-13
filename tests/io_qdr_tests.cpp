@@ -17,6 +17,7 @@
 
 #include <gtest/gtest.h>
 #include <mesh/polygon/document.hpp>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -610,6 +611,27 @@ TEST(QdrDocumentIoTests, AtomicProjectWriteUsesCompactJsonWhileDebugSerializerSt
     EXPECT_TRUE(result.document.scene().exists(mesh));
 }
 
+TEST(QdrDocumentIoTests,
+     AtomicProjectWriteRejectsInvalidReferencesWithoutReplacingTarget) {
+  ScopedTempDirectory directory("invalid-project-write");
+  const std::filesystem::path path = directory.path() / "project.qdr";
+  constexpr std::string_view kOriginal = "existing valid project bytes";
+  write_text_file(path, kOriginal);
+
+  ProjectDocument document(
+      ProjectDocumentRecord{.id = 91u, .name = "Invalid Write"});
+  const EntityId entity =
+      document.scene().create_entity("Dangling Mesh", EntityKind::Mesh);
+  ASSERT_NE(entity, kInvalidEntityId);
+  document.scene().set_mesh(entity, MeshComponent{.mesh = 999u});
+  ASSERT_FALSE(document.validate_asset_references().ok());
+
+  const QdrProjectWriteResult write =
+      QdrDocumentWriter::write_project_document_atomic(path, document);
+  EXPECT_FALSE(write.ok);
+  EXPECT_EQ(read_file(path), kOriginal);
+}
+
 TEST(QdrDocumentIoTests, ProjectWriteSnapshotOwnsCopiesForBackgroundExport) {
     ProjectDocument document(ProjectDocumentRecord{.id = 93u, .name = "Snapshot Project"});
 
@@ -1037,6 +1059,33 @@ TEST(QdrDocumentIoTests, RejectsUnknownCanonicalProjectPayloadKindWithoutLegacyM
     EXPECT_EQ(result.diagnostics.front().message, result.message);
 }
 
+TEST(QdrDocumentIoTests, RejectsMultipleActiveSceneSelections) {
+  ProjectDocument document;
+  const EntityId first = document.scene().create_entity("First");
+  const EntityId second = document.scene().create_entity("Second");
+  ASSERT_TRUE(document.scene().set_selected(first, true));
+  ASSERT_TRUE(document.scene().set_selected(second, true));
+  ASSERT_TRUE(document.scene().set_active_selection(first));
+
+  nlohmann::ordered_json root = nlohmann::ordered_json::parse(
+      QdrDocumentWriter::serialize_project_document(document));
+  auto &entities = root["document"]["entities"];
+  bool marked_second = false;
+  for (auto &entity : entities) {
+    if (entity.value("id", kInvalidEntityId) == second) {
+      entity["active"] = true;
+      marked_second = true;
+    }
+  }
+  ASSERT_TRUE(marked_second);
+
+  const QdrProjectReadResult result =
+      QdrDocumentReader::deserialize_project_document(root.dump());
+  EXPECT_FALSE(result.ok);
+  EXPECT_NE(result.message.find("multiple active selections"),
+            std::string::npos);
+}
+
 TEST(QdrDocumentIoTests, RootHeaderParsingUsesSharedHelperAcrossReaderSurfaces) {
   QdrProjectReadResult missing_root_project =
       QdrDocumentReader::deserialize_project_document("[]");
@@ -1079,7 +1128,7 @@ TEST(QdrDocumentIoTests, RootHeaderParsingUsesSharedHelperAcrossReaderSurfaces) 
 
   const std::string qdr_root_header = read_source_file("src/io/qdr/qdr_root.hpp");
   const std::string legacy_reader =
-      read_source_file("src/io/qdr/qdr_document.cpp");
+      read_source_file("src/sdk/core/modeling/internal/io/qdr/qdr_document.cpp");
   const std::string project_reader =
       read_source_file("src/io/qdr/qdr_document_reader.cpp");
   EXPECT_NE(qdr_root_header.find("QdrRootHeader"), std::string::npos);
@@ -1695,12 +1744,15 @@ TEST(QdrDocumentIoTests, QdrPolygonDocumentCodecAndAtomicWriteHaveSingleOwners) 
       read_source_file({"src", "io", "qdr", "qdr_document_reader.cpp"});
   const std::string writer =
       read_source_file({"src", "io", "qdr", "qdr_document_writer.cpp"});
-  const std::string legacy =
-      read_source_file({"src", "io", "qdr", "qdr_document.cpp"});
-  const std::string codec =
-      read_source_file({"src", "io", "qdr", "qdr_polygon_document_codec.cpp"});
-  const std::string atomic =
-      read_source_file({"src", "io", "qdr", "qdr_atomic_write.cpp"});
+  const std::string legacy = read_source_file(
+      {"src", "sdk", "core", "modeling", "internal", "io", "qdr",
+       "qdr_document.cpp"});
+  const std::string codec = read_source_file(
+      {"src", "sdk", "core", "modeling", "internal", "io", "qdr",
+       "qdr_polygon_document_codec.cpp"});
+  const std::string atomic = read_source_file(
+      {"src", "sdk", "core", "modeling", "internal", "io", "qdr",
+       "qdr_atomic_write.cpp"});
 
   EXPECT_NE(reader.find("#include \"io/qdr/qdr_polygon_document_codec.hpp\""),
             std::string::npos);
@@ -1944,17 +1996,21 @@ TEST(ProjectionOwnershipGuardrailTests, ProjectionIsReadOnlyAndModelingOwnsScene
     const std::string mesh_sync =
         read_source_file({"src", "editor", "modeling", "services",
                           "modeling_mesh_sync_service.cpp"});
-    EXPECT_NE(mesh_sync.find("void reconcile_modeling_object_scene_nodes"),
+    EXPECT_NE(mesh_sync.find("bool reconcile_modeling_object_scene_nodes"),
               std::string::npos);
-    EXPECT_NE(mesh_sync.find("void project_modeling_meshes_to_scene"),
+    EXPECT_NE(mesh_sync.find("bool project_modeling_meshes_to_scene"),
               std::string::npos);
     EXPECT_NE(mesh_sync.find("scene.create_entity"), std::string::npos);
     EXPECT_NE(mesh_sync.find("scene.destroy_entity"), std::string::npos);
     EXPECT_NE(mesh_sync.find("assets.add_mesh"), std::string::npos);
     EXPECT_NE(mesh_sync.find("assets.replace_mesh"), std::string::npos);
-    EXPECT_NE(mesh_sync.find("projected_mesh_signature_known(object.id)"),
+    EXPECT_NE(mesh_sync.find("build_projected_mesh_plans"),
               std::string::npos);
-    EXPECT_NE(mesh_sync.find("Modeling mesh sync replace changed mesh asset"),
+    EXPECT_NE(mesh_sync.find("install_projected_mesh_assets"),
+              std::string::npos);
+    EXPECT_NE(mesh_sync.find("rollback_projected_mesh_installs"),
+              std::string::npos);
+    EXPECT_NE(mesh_sync.find("remember_projected_mesh_signature"),
               std::string::npos);
 
     const char *forbidden_projection_mutations[] = {

@@ -54,12 +54,24 @@ struct QuaderObjExportResult {
 };
 
 /**
+ * Selects how the native shell resolves dirty content before replacing the
+ * current project document.
+ */
+enum class QuaderDirtyProjectDecision {
+  Save,
+  Discard,
+  Cancel,
+};
+
+/**
  * Represents Quader Project Runtime Hooks value used by the native shell.
  */
 struct QuaderProjectRuntimeHooks {
   std::function<std::optional<std::filesystem::path>()> choose_open_path;
   std::function<std::optional<std::filesystem::path>()> choose_save_as_path;
   std::function<std::optional<std::filesystem::path>()> choose_export_obj_path;
+  std::function<QuaderDirtyProjectDecision(std::string_view action_id)>
+      confirm_dirty_project_replacement;
 };
 
 /**

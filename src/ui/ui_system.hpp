@@ -49,6 +49,7 @@ class RenderOverlaySnapshotCache;
 class RenderSystem;
 class SceneDocument;
 class SceneRenderBridge;
+enum class QuaderDirtyProjectDecision;
 
 /**
  * Owns Quader's retained Qt Widgets shell and all top-level presentation
@@ -72,6 +73,11 @@ public:
                              PivotToolService &pivot,
                              LinearArrayToolService &linear_array,
                              AssetId default_material);
+  void set_default_material(AssetId default_material) {
+    default_material_ = default_material;
+  }
+  [[nodiscard]] QuaderDirtyProjectDecision
+  confirm_dirty_project_replacement(std::string_view action_id);
   void show();
   void shutdown();
 
@@ -110,6 +116,7 @@ private:
   void handle_settings_dialog_change(QtSettingsChangeKind kind);
   void synchronize_settings_surfaces(bool refresh_dialog);
   void show_settings_dialog();
+  [[nodiscard]] bool allow_main_window_close();
   [[nodiscard]] bool panel_visible(UIPanelId id) const;
   void set_panel_visible(UIPanelId id, bool visible);
 

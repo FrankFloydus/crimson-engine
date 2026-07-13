@@ -434,6 +434,8 @@ public:
   QuaderApiVoidResult duplicate_meshes();
   QuaderApiVoidResult combine_meshes();
   QuaderApiVoidResult remove_doubles();
+  [[nodiscard]] bool can_copy_pivot_from_active() const;
+  QuaderApiVoidResult copy_pivot_from_active();
   [[nodiscard]] bool can_align_selected_meshes() const;
   [[nodiscard]] bool can_distribute_selected_meshes() const;
   QuaderApiVoidResult align_selected_meshes(

@@ -23,6 +23,7 @@ bool ViewportHoverWorkKey::matches(const ViewportHoverWorkKey& other) const {
          selection_mode == other.selection_mode &&
          box_drag_state == other.box_drag_state &&
          grid_preset == other.grid_preset &&
+         grid_snap_enabled == other.grid_snap_enabled &&
          mouse_local.x == other.mouse_local.x &&
          mouse_local.y == other.mouse_local.y &&
          viewport_size.x == other.viewport_size.x &&
@@ -60,6 +61,7 @@ ViewportHoverWorkKey ViewportHoverController::make_key(
       .selection_mode = request.selection_mode,
       .box_drag_state = request.box_drag_state,
       .grid_preset = request.grid_preset,
+      .grid_snap_enabled = request.grid_snap_enabled,
       .mouse_local = request.mouse_local,
       .viewport_size = request.viewport_size,
       .camera_eye = overlay_camera.eye,

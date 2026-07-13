@@ -12,6 +12,7 @@
 #include "editor/commands/document/document_command_result.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <algorithm>
 #include <memory>
@@ -87,6 +88,10 @@ public:
         return document_command_invalid_request_result(
             "Transform preview is not active");
       }
+      if (!scene_transform_is_finite(transform)) {
+        return document_command_invalid_request_result(
+            "Transform contains non-finite values");
+      }
       DocumentTransformEdit *edit = edit_for(entity);
       if (edit == nullptr || !scene_.exists(entity) ||
           scene_.is_effectively_locked(entity)) {
@@ -113,22 +118,46 @@ public:
             "Transform preview is not active");
       }
 
-      bool changed = false;
-      std::vector<SceneTransformAssignment> assignments;
-      assignments.reserve(edits.size());
+      /**
+       * Holds one fully validated transform before the preview mutates state.
+       */
+      struct StagedTransform {
+        DocumentTransformEdit *stored_edit = nullptr;
+        TransformComponent after;
+      };
+
+      std::vector<StagedTransform> staged;
+      staged.reserve(edits.size());
+      std::unordered_map<EntityId, std::size_t> staged_index_by_entity;
+      staged_index_by_entity.reserve(edits.size());
       for (const DocumentTransformEdit &edit : edits) {
+        if (!scene_transform_is_finite(edit.after)) {
+          return document_command_invalid_request_result(
+              "Transform contains non-finite values");
+        }
         DocumentTransformEdit *stored_edit = edit_for(edit.entity);
         if (stored_edit == nullptr || !scene_.exists(edit.entity) ||
             scene_.is_effectively_locked(edit.entity)) {
           return document_command_missing_entity_result();
         }
+        const auto [it, inserted] = staged_index_by_entity.emplace(
+            edit.entity, staged.size());
+        if (inserted) {
+          staged.push_back({.stored_edit = stored_edit, .after = edit.after});
+        } else {
+          staged[it->second].after = edit.after;
+        }
+      }
+
+      bool changed = false;
+      std::vector<SceneTransformAssignment> assignments;
+      assignments.reserve(staged.size());
+      for (const StagedTransform &entry : staged) {
         changed = changed || !document_command_same_transform(
-                                 stored_edit->after, edit.after);
-        stored_edit->after = edit.after;
-        assignments.push_back(SceneTransformAssignment{
-            .entity = edit.entity,
-            .transform = edit.after,
-        });
+                                 entry.stored_edit->after, entry.after);
+        entry.stored_edit->after = entry.after;
+        assignments.push_back({.entity = entry.stored_edit->entity,
+                               .transform = entry.after});
       }
       scene_.set_transforms(assignments);
       return changed ? document_command_changed_result()
@@ -166,14 +195,14 @@ public:
               "Transform preview is not active");
         }
 
+        if (!finish_targets_are_valid()) {
+          return reject_invalid_finish();
+        }
+
         bool changed = false;
         std::vector<SceneTransformAssignment> assignments;
         assignments.reserve(edits_.size());
         for (const DocumentTransformEdit& edit : edits_) {
-          if (!scene_.exists(edit.entity) ||
-              scene_.is_effectively_locked(edit.entity)) {
-            continue;
-          }
           changed = changed ||
                     !document_command_same_transform(edit.before, edit.after);
           assignments.push_back({.entity = edit.entity,
@@ -191,15 +220,15 @@ public:
               "Transform preview is not active");
         }
 
+        if (!finish_targets_are_valid()) {
+          return reject_invalid_finish();
+        }
+
         std::vector<DocumentTransformEdit> changed_edits;
         changed_edits.reserve(edits_.size());
         std::vector<SceneTransformAssignment> assignments;
         assignments.reserve(edits_.size());
         for (const DocumentTransformEdit& edit : edits_) {
-          if (!scene_.exists(edit.entity) ||
-              scene_.is_effectively_locked(edit.entity)) {
-            continue;
-          }
           assignments.push_back({.entity = edit.entity,
                                  .transform = edit.after});
           if (!document_command_same_transform(edit.before, edit.after)) {
@@ -219,6 +248,27 @@ public:
     }
 
 private:
+  [[nodiscard]] bool finish_targets_are_valid() const {
+    return std::all_of(edits_.begin(), edits_.end(), [this](const auto &edit) {
+      return scene_.exists(edit.entity) &&
+             !scene_.is_effectively_locked(edit.entity);
+    });
+  }
+
+  DocumentCommandResult reject_invalid_finish() {
+    std::vector<SceneTransformAssignment> assignments;
+    assignments.reserve(edits_.size());
+    for (const DocumentTransformEdit &edit : edits_) {
+      if (scene_.exists(edit.entity)) {
+        assignments.push_back(
+            {.entity = edit.entity, .transform = edit.before});
+      }
+    }
+    scene_.set_transforms(assignments);
+    active_ = false;
+    return document_command_missing_entity_result();
+  }
+
   DocumentTransformEdit *edit_for(EntityId entity) {
     const auto it = edit_index_by_entity_.find(entity);
     if (it == edit_index_by_entity_.end() || it->second >= edits_.size()) {

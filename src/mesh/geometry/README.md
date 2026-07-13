@@ -10,6 +10,9 @@ file except through prior written authorization from Francesco Di Blasi.
 
 Portable geometry and mesh-processing helpers.
 
+The implementation is canonical under `src/sdk/core/modeling/internal/mesh/geometry`; this native
+header path remains as a compatibility declaration surface and is guardrail-checked for parity.
+
 Owns:
 
 - Quader-owned vector, ray, line, plane, segment, triangle, rect, and bounds types;

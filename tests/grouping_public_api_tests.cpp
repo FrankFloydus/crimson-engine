@@ -758,6 +758,7 @@ TEST(GroupingPublicApiTests, DuplicateMixedMeshAndLightHierarchyCopiesStateAndUn
 
   scenario.when().execute(quader_command::kDuplicateSelection);
   scenario.then().command().ok_changed();
+  EXPECT_EQ(scenario.modeling_object_count(), 2u);
   const EntityId duplicate_group =
       selected_entity_excluding(scenario.api(), source_group);
   ASSERT_NE(duplicate_group, kInvalidEntityId);
@@ -777,13 +778,18 @@ TEST(GroupingPublicApiTests, DuplicateMixedMeshAndLightHierarchyCopiesStateAndUn
 
   scenario.when().undo();
   EXPECT_FALSE(entity_by_id(scenario.api(), duplicate_group).has_value());
+  EXPECT_EQ(scenario.modeling_object_count(), 1u);
+  scenario.then().scene().selected_aliases({"group"});
   scenario.then().history().redo_label("Duplicate Selection");
 
   scenario.when().redo();
   const EntityId redone_duplicate_group =
       selected_entity_excluding(scenario.api(), source_group);
   ASSERT_NE(redone_duplicate_group, kInvalidEntityId);
+  EXPECT_EQ(scenario.modeling_object_count(), 2u);
   EXPECT_EQ(children_of(scenario.api(), redone_duplicate_group).size(), 2u);
+  EXPECT_EQ(selected_entities(scenario.api()),
+            std::vector<EntityId>{redone_duplicate_group});
 }
 
 TEST(GroupingPublicApiTests, DeleteMixedMeshAndLightHierarchyUndoRedoRestoresSceneComponents) {

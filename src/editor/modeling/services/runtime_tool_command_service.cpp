@@ -100,9 +100,18 @@ quader_editor_core::EditorRuntimeCommand make_command(
 }
 
 quader_editor_core::InsertEdgeLoopPickRuntimeCommandSettings
-insert_edge_loop_pick_settings(const ModelingToolRayEvent &event) {
+insert_edge_loop_pick_settings(const ModelingToolRayEvent &event,
+                               int target_object_id,
+                               std::optional<quader_editor_core::PickHitRecord>
+                                   resolved_hit,
+                               std::optional<float> resolved_factor,
+                               bool resolved_factor_from_world) {
   quader_editor_core::InsertEdgeLoopPickRuntimeCommandSettings settings;
   settings.ray = to_runtime(event.ray);
+  settings.target_object_id = target_object_id;
+  settings.resolved_hit = std::move(resolved_hit);
+  settings.resolved_factor = resolved_factor;
+  settings.resolved_factor_from_world = resolved_factor_from_world;
   settings.grid_size = event.grid_size;
   settings.vertex_radius = event.vertex_radius;
   settings.edge_radius = event.edge_radius;
@@ -170,26 +179,38 @@ RuntimeToolCommandService::set_active_tool(ModelingViewportTool tool) {
 
 quader_editor_core::EditorRuntimeCommand
 RuntimeToolCommandService::update_insert_edge_loop_hover(
-    const ModelingToolRayEvent &event) {
+    const ModelingToolRayEvent &event, int target_object_id,
+    std::optional<quader_editor_core::PickHitRecord> resolved_hit,
+    std::optional<float> resolved_factor) {
   return make_command(
       quader_editor_core::EditorRuntimeCommandId::UpdateInsertEdgeLoopHover,
-      insert_edge_loop_pick_settings(event));
+      insert_edge_loop_pick_settings(event, target_object_id,
+                                     std::move(resolved_hit),
+                                     resolved_factor, true));
 }
 
 quader_editor_core::EditorRuntimeCommand
 RuntimeToolCommandService::begin_insert_edge_loop_drag(
-    const ModelingToolRayEvent &event) {
+    const ModelingToolRayEvent &event, int target_object_id,
+    std::optional<quader_editor_core::PickHitRecord> resolved_hit,
+    std::optional<float> resolved_factor) {
   return make_command(
       quader_editor_core::EditorRuntimeCommandId::BeginInsertEdgeLoopDrag,
-      insert_edge_loop_pick_settings(event));
+      insert_edge_loop_pick_settings(event, target_object_id,
+                                     std::move(resolved_hit),
+                                     resolved_factor, true));
 }
 
 quader_editor_core::EditorRuntimeCommand
 RuntimeToolCommandService::update_insert_edge_loop_drag(
-    const ModelingToolRayEvent &event) {
+    const ModelingToolRayEvent &event, int target_object_id,
+    std::optional<float> resolved_factor,
+    bool resolved_factor_from_world) {
   return make_command(
       quader_editor_core::EditorRuntimeCommandId::UpdateInsertEdgeLoopDrag,
-      insert_edge_loop_pick_settings(event));
+      insert_edge_loop_pick_settings(event, target_object_id, std::nullopt,
+                                     resolved_factor,
+                                     resolved_factor_from_world));
 }
 
 quader_editor_core::EditorRuntimeCommand

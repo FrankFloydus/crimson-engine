@@ -110,6 +110,8 @@ inline constexpr QuaderCommandId kModelingBevelVertices{
     "modeling.bevel_vertices"};
 inline constexpr QuaderCommandId kModelingCombineMeshes{
     "modeling.combine_meshes"};
+inline constexpr QuaderCommandId kModelingCopyPivotFromActive{
+    "modeling.copy_pivot_from_active"};
 inline constexpr QuaderCommandId kModelingMergeVerticesToActive{
     "modeling.merge_vertices_to_active"};
 inline constexpr QuaderCommandId kModelingMergeVerticesToCenter{
@@ -279,6 +281,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kModelingDissolveVertices,
     kModelingBevelVertices,
     kModelingCombineMeshes,
+    kModelingCopyPivotFromActive,
     kModelingMergeVerticesToActive,
     kModelingMergeVerticesToCenter,
     kModelingRemoveDoubles,

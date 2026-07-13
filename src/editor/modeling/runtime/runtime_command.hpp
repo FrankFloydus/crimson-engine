@@ -112,6 +112,10 @@ struct PickSelectRuntimeCommandSettings {
  */
 struct InsertEdgeLoopPickRuntimeCommandSettings {
 	quader_poly::Ray ray;
+	int target_object_id = -1;
+	std::optional<PickHitRecord> resolved_hit;
+	std::optional<float> resolved_factor;
+	bool resolved_factor_from_world = false;
 	double grid_size = 1.0;
 	double vertex_radius = 0.0;
 	double edge_radius = 0.0;

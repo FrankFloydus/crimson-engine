@@ -27,6 +27,7 @@ struct ViewportHoverWorkKey {
     ViewportSelectionMode selection_mode = ViewportSelectionMode::Object;
     ModelingBoxDragState box_drag_state = ModelingBoxDragState::Idle;
     int grid_preset = 0;
+    bool grid_snap_enabled = true;
     QVec2 mouse_local = {};
     QVec2 viewport_size = {};
     QVec3 camera_eye = {};
@@ -62,6 +63,7 @@ struct ViewportHoverWorkRequest {
   ViewportSelectionMode selection_mode = ViewportSelectionMode::Object;
   ModelingBoxDragState box_drag_state = ModelingBoxDragState::Idle;
   int grid_preset = 0;
+  bool grid_snap_enabled = true;
   QVec2 mouse_local = {};
   QVec2 viewport_size = {};
   ViewportModifiers modifiers = {};

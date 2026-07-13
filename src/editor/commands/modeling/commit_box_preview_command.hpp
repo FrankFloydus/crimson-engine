@@ -17,6 +17,7 @@
 namespace quader {
 
 class SceneDocument;
+class AssetRegistry;
 
 /**
  * Owns the undoable transaction for committing a viewport box preview.
@@ -24,7 +25,8 @@ class SceneDocument;
 class CommitBoxPreviewCommand final : public IUndoableCommand {
 public:
   CommitBoxPreviewCommand(ModelingSessionService &modeling,
-                          SceneDocument &scene, std::string name,
+                          SceneDocument &scene, AssetRegistry &assets,
+                          std::string name,
                           AssetId default_material);
 
   [[nodiscard]] const std::string &label() const override;
@@ -43,6 +45,7 @@ private:
 
   ModelingSessionService &modeling_;
   SceneDocument &scene_;
+  AssetRegistry &assets_;
   std::string name_;
   AssetId default_material_ = kInvalidAssetId;
   std::string label_ = "Create Box";

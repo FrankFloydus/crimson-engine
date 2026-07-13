@@ -190,6 +190,10 @@ private:
     for (const DocumentEntitySnapshot &child : snapshot.children) {
       if (restore_or_reuse_duplicate_snapshot_tree(
               child, restored, remapped_entities) == kInvalidEntityId) {
+        if (scene().exists(restored)) {
+          (void)scene().destroy_entity(restored);
+        }
+        document_command_erase_snapshot_remaps(snapshot, remapped_entities);
         return kInvalidEntityId;
       }
     }

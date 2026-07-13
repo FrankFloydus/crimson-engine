@@ -14,7 +14,6 @@
 #include "diagnostics/profile.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/interactions/tool_drag_math.hpp"
-#include "editor/modeling/services/modeling_action_catalog.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
@@ -448,47 +447,100 @@ bool apply_keybinding_dispatch(QuaderEditorApi &editor,
   return false;
 }
 
+bool input_chord_is_suppressed(
+    const std::vector<QuaderInputChord> &suppressed,
+    const QuaderInputChord &chord) {
+  return std::find(suppressed.begin(), suppressed.end(), chord) !=
+         suppressed.end();
+}
+
+void suppress_input_chord(std::vector<QuaderInputChord> &suppressed,
+                          const QuaderInputChord &chord) {
+  if (!input_chord_is_suppressed(suppressed, chord)) {
+    suppressed.push_back(chord);
+  }
+}
+
+bool release_suppressed_input_chord(
+    std::vector<QuaderInputChord> &suppressed,
+    const QuaderInputChord &chord) {
+  const auto found = std::find(suppressed.begin(), suppressed.end(), chord);
+  if (found == suppressed.end()) {
+    return false;
+  }
+  suppressed.erase(found);
+  return true;
+}
+
 void resolve_keybindings(QuaderEditorApi &editor,
                          const ViewportToolState &state,
-                         ViewportInputFrame &input) {
+                         ViewportInputFrame &input,
+                         std::vector<QuaderInputChord> &suppressed_chords) {
   input.resolved_shortcuts.clear();
   input.navigation_bindings = {};
   if (!input.viewport_focused || input.text_input_active) {
     editor.commands().reset_pending_keybinding_chord();
+    suppressed_chords.clear();
     return;
   }
 
+  dispatch_ordered_viewport_input_edges(
+      input.pressed_input_chords, input.wheel_input_chords,
+      [&](const QuaderInputChord &chord, ViewportInputEdgeKind kind) {
+        const bool pending_before =
+            editor.commands().has_pending_keybinding_chord();
+        bool stateful_dispatch_handled = false;
+        const bool handled = dispatch_viewport_input_edge(
+            chord, kind,
+            [&]() { return pending_before; },
+            [&](const QuaderInputChord &candidate,
+                ViewportInputEdgeKind edge_kind) {
+              ViewportInputActionKind action = ViewportInputActionKind::None;
+              if (!resolve_action(editor, state, input, candidate, action)) {
+                return false;
+              }
+              if (edge_kind == ViewportInputEdgeKind::Wheel) {
+                mark_navigation_down(input.navigation_bindings, action);
+              } else {
+                mark_action_pressed(input, action);
+              }
+              return true;
+            },
+            [&](const QuaderInputChord &candidate, ViewportInputEdgeKind) {
+              stateful_dispatch_handled = apply_keybinding_dispatch(
+                  editor,
+                  editor.commands().dispatch_viewport_input_binding(
+                      candidate, state, input.viewport_focused,
+                      input.text_input_active, keybinding_context(input)),
+                  input);
+              return stateful_dispatch_handled;
+            });
+        if (pending_before) {
+          input.keybinding_input_consumed = true;
+        }
+        if (kind == ViewportInputEdgeKind::Pressed &&
+            (pending_before || stateful_dispatch_handled)) {
+          suppress_input_chord(suppressed_chords, chord);
+        }
+        return handled;
+      });
+
   for (const QuaderInputChord &chord : input.active_input_chords) {
+    if (input_chord_is_suppressed(suppressed_chords, chord)) {
+      continue;
+    }
     ViewportInputActionKind action = ViewportInputActionKind::None;
     if (resolve_action(editor, state, input, chord, action)) {
       mark_action_down(input, action);
     }
   }
   for (const QuaderInputChord &chord : input.released_input_chords) {
+    if (release_suppressed_input_chord(suppressed_chords, chord)) {
+      continue;
+    }
     ViewportInputActionKind action = ViewportInputActionKind::None;
     if (resolve_action(editor, state, input, chord, action)) {
       mark_action_released(input, action);
-    }
-  }
-  for (const QuaderInputChord &chord : input.wheel_input_chords) {
-    ViewportInputActionKind action = ViewportInputActionKind::None;
-    if (resolve_action(editor, state, input, chord, action)) {
-      mark_navigation_down(input.navigation_bindings, action);
-    }
-  }
-  for (const QuaderInputChord &chord : input.pressed_input_chords) {
-    ViewportInputActionKind action = ViewportInputActionKind::None;
-    if (resolve_action(editor, state, input, chord, action)) {
-      mark_action_pressed(input, action);
-      continue;
-    }
-    if (apply_keybinding_dispatch(
-            editor,
-            editor.commands().dispatch_viewport_input_binding(
-                chord, state, input.viewport_focused, input.text_input_active,
-                keybinding_context(input)),
-            input)) {
-      break;
     }
   }
   sync_fly_direction(input);
@@ -959,6 +1011,33 @@ void append_linear_array_handle_overlay(ViewportOverlayFrame &frame,
 }
 
 } // namespace
+
+bool qt_event_target_belongs_to_tool_settings(const QObject *target) {
+  for (const QObject *current = target; current != nullptr;
+       current = current->parent()) {
+    if (current->objectName() == QStringLiteral("floating.tool_settings")) {
+      return true;
+    }
+  }
+
+  // Top-level QWidget mouse events can be delivered to the separate
+  // QWidgetWindow returned by windowHandle(). That native window is not a
+  // QObject child of the widget, so QObject ancestry alone cannot associate
+  // it with Tool Settings. Match only the exact window handle of a marked
+  // top-level widget; other dialogs and windows remain outside interactions.
+  const auto *target_window = qobject_cast<const QWindow *>(target);
+  if (target_window == nullptr ||
+      qobject_cast<QApplication *>(QCoreApplication::instance()) == nullptr) {
+    return false;
+  }
+  for (const QWidget *top_level : QApplication::topLevelWidgets()) {
+    if (top_level != nullptr && top_level->windowHandle() == target_window &&
+        top_level->objectName() == QStringLiteral("floating.tool_settings")) {
+      return true;
+    }
+  }
+  return false;
+}
 
 QtViewportPanel::QtViewportPanel(QWidget *parent) : QWidget(parent) {
   setObjectName(QStringLiteral("viewportWorkspace"));
@@ -1959,6 +2038,10 @@ bool QtViewportPanel::pane_interaction_locked() const {
 
 bool QtViewportPanel::is_viewport_internal_event_target(
     const QObject *target) const {
+  if (qt_event_target_belongs_to_tool_settings(target)) {
+    return true;
+  }
+
   const auto pane_owns_object = [this](const QObject *object) {
     for (const QObject *current = object; current != nullptr;
          current = current->parent()) {
@@ -2287,20 +2370,21 @@ void QtViewportPanel::process_viewport_input(
   input.pan_navigation_active = input_router_.pan_navigating();
   ViewportModelingToolPortAdapter preview_port_adapter(modeling);
   const ViewportToolPorts preview_ports = preview_port_adapter.ports();
+  const bool resolved_grid_snap_enabled = viewport_grid_snap_active(
+      active_viewport_settings(), input.modifiers.primary);
   const ModelingToolSettingsTarget tool_settings =
       modeling.tool_settings_target();
   input.modal_tool_active =
       input_router_.has_active_modal_preview(
-          *preview_ports.preview,
-          viewport_grid_snap_active(active_viewport_settings(),
-                                    input.modifiers.primary)) ||
+          *preview_ports.preview, resolved_grid_snap_enabled) ||
       modeling.modal_tool_owns_viewport();
   input.active_tool_owns_viewport = input_router_.active_tool_owns_viewport();
   modal_tool_owns_viewport_snapshot_ =
       input.active_tool_owns_viewport || input.modal_tool_active;
   input.operation_preview_active = tool_settings.operation_preview_active;
   input.grid_preset = workspace_->grid_preset();
-  resolve_keybindings(editor, input_router_.state(), input);
+  resolve_keybindings(editor, input_router_.state(), input,
+                      suppressed_keybinding_chords_);
 
   ViewportCameraController &camera = workspace_->camera(*input_pane);
   const ViewportInputResult result = input_router_.handle_frame(input, camera);
@@ -2417,23 +2501,32 @@ void QtViewportPanel::process_viewport_input(
     selection_overlay_cache_.mark_dirty();
   }
 
-  if (result.tool_changed) {
-    hover_controller_.invalidate();
-    selection_overlay_cache_.mark_dirty();
+  if (result.tool_activation_requested) {
     const ViewportTool *active_tool = input_router_.active_tool();
-    const QuaderApiVoidResult activation =
-        active_tool != nullptr
-            ? editor.tools().activate(input_router_.state().active_tool)
-            : QuaderApiVoidResult{.ok = false,
-                                  .changed = false,
-                                  .message = "No active viewport tool."};
-    if (!activation.ok) {
-      log_command_failure("Viewport tool activation", activation);
-      input_router_.set_active_tool(ViewportToolId::Select);
-      (void)editor.tools().activate(ViewportToolId::Select);
+    const bool editor_tool_matches_requested =
+        active_tool != nullptr &&
+        editor.tools().active_tool() == active_tool->id();
+    if (should_dispatch_viewport_tool_activation({
+            .activation_requested = true,
+            .tool_changed = result.tool_changed,
+            .editor_tool_matches_requested = editor_tool_matches_requested,
+        })) {
+      hover_controller_.invalidate();
+      selection_overlay_cache_.mark_dirty();
+      const QuaderApiVoidResult activation =
+          active_tool != nullptr
+              ? editor.tools().activate(input_router_.state().active_tool)
+              : QuaderApiVoidResult{.ok = false,
+                                    .changed = false,
+                                    .message = "No active viewport tool."};
+      if (!activation.ok) {
+        log_command_failure("Viewport tool activation", activation);
+        input_router_.set_active_tool(ViewportToolId::Select);
+        (void)editor.tools().activate(ViewportToolId::Select);
+      }
+      input_router_.clear_modal_tool_state();
+      interaction_controller_.reset(&editor);
     }
-    input_router_.clear_modal_tool_state();
-    interaction_controller_.reset(&editor);
   }
 
   if (!preview_shortcut_consumed) {
@@ -2495,9 +2588,7 @@ void QtViewportPanel::process_viewport_input(
   auto modal_tool_owns_viewport = [&]() {
     return input_router_.active_tool_owns_viewport() ||
            input_router_.has_active_modal_preview(
-               *preview_ports.preview,
-               viewport_grid_snap_active(active_viewport_settings(),
-                                         input.modifiers.primary)) ||
+               *preview_ports.preview, resolved_grid_snap_enabled) ||
            modeling.modal_tool_owns_viewport();
   };
   auto cancel_active_modal_tool = [&](bool exit_tool) {
@@ -2622,8 +2713,7 @@ void QtViewportPanel::process_viewport_input(
         if (sample.left_down && drag_handle.visible) {
           (void)linear_array->set_endpoint(
               linear_array_drag_point(camera, input.mouse_local, drag_handle),
-              viewport_grid_snap_active(active_viewport_settings(),
-                                        input.modifiers.primary),
+              resolved_grid_snap_enabled,
               viewport_grid_world_size_for_preset(input.grid_preset));
           hover_controller_.invalidate();
           selection_overlay_cache_.mark_dirty();
@@ -2740,10 +2830,10 @@ void QtViewportPanel::process_viewport_input(
             .box_drag_state =
                 input_router_
                     .box_preview(*preview_ports.preview,
-                                 viewport_grid_snap_active(
-                                     settings, input.modifiers.primary))
+                                 resolved_grid_snap_enabled)
                     .drag_state,
             .grid_preset = input_router_.state().grid_preset,
+            .grid_snap_enabled = resolved_grid_snap_enabled,
             .mouse_local = input.mouse_local,
             .viewport_size = input.viewport_size,
             .modifiers = input.modifiers,
@@ -2774,8 +2864,7 @@ void QtViewportPanel::process_viewport_input(
             settings.float_value(ViewportFloatSettingId::PickVertexRadius),
         .edge_radius =
             settings.float_value(ViewportFloatSettingId::PickEdgeRadius),
-        .snap_enabled =
-            viewport_grid_snap_active(settings, input.modifiers.primary),
+        .snap_enabled = resolved_grid_snap_enabled,
         .constrain_axis = input.modifiers.shift,
         .dragging = dragging,
     };
@@ -2818,8 +2907,7 @@ void QtViewportPanel::process_viewport_input(
     return modeling_box_event(
         camera, input,
         viewport_grid_world_size_for_preset(input_router_.state().grid_preset),
-        viewport_grid_snap_active(active_viewport_settings(),
-                                  input.modifiers.primary));
+        resolved_grid_snap_enabled);
   };
   box_context.commit_preview = [&](std::string name, AssetId material) {
     const QuaderApiResult<QuaderModelingObjectRef> result =
@@ -2897,9 +2985,7 @@ void QtViewportPanel::process_viewport_input(
                   },
           });
   active_box_preview_ = input_router_.box_preview(
-      *preview_ports.preview,
-      viewport_grid_snap_active(active_viewport_settings(),
-                                input.modifiers.primary));
+      *preview_ports.preview, resolved_grid_snap_enabled);
   interaction_controller_.handle_after_active_tool(
       editor, interaction_frame, active_tool_result, before_tool);
 
@@ -2922,15 +3008,15 @@ void QtViewportPanel::process_viewport_input(
     const QuaderSelectionSummary summary =
         interaction_controller_.pick_context_menu_target(editor,
                                                          context_frame);
-    const ModelingActionQuery query{
-        .surface = ModelingActionSurface::ViewportContextMenu,
+    const QuaderActionQuery query{
+        .surface = QuaderActionSurface::ViewportContextMenu,
         .modal_tool_owns_viewport = modal_tool_owns_viewport(),
         .include_disabled = true,
         .include_hidden = false,
     };
-    const std::vector<ModelingActionItem> actions =
-        summary.has_selection ? modeling.context_actions(query)
-                              : std::vector<ModelingActionItem>{};
+    const std::vector<QuaderActionItem> actions =
+        summary.has_selection ? editor.modeling().available_actions(query)
+                              : std::vector<QuaderActionItem>{};
     pending_context_menu_request.target_hit = summary.has_selection;
     pending_context_menu_request.has_actions = !actions.empty();
     show_context_menu =
@@ -2962,7 +3048,7 @@ void QtViewportPanel::process_viewport_input(
   if (show_context_menu) {
     context_menu_presenter_.show(
         *pane_state.surface_container, context_menu_global_point, editor,
-        modeling, input_router_, *localization_, modal_tool_owns_viewport());
+        input_router_, *localization_, modal_tool_owns_viewport());
   }
   if (show_delete_popup &&
       delete_popup_presenter_.show(

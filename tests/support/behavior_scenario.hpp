@@ -62,6 +62,7 @@ public:
   [[nodiscard]] QuaderModelingObjectRef object(std::string_view alias) const;
   [[nodiscard]] ModelingObjectId modeling_object(std::string_view alias) const;
   [[nodiscard]] BehaviorSnapshot snapshot(std::string label = {}) const;
+  [[nodiscard]] std::size_t modeling_object_count() const;
   void remember(std::string_view alias, QuaderModelingObjectRef object);
   void remember(std::string_view alias, QuaderEntityRef entity);
   void remember(std::string_view alias, EntityId entity);

@@ -9,6 +9,7 @@
 #include "assets/mesh_asset.hpp"
 
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -23,6 +24,15 @@ struct ObjMeshWriteResult {
 };
 
 /**
+ * Describes one destination in an atomic OBJ mesh write batch.
+ */
+struct ObjMeshWriteRequest {
+  std::filesystem::path path;
+  const MeshAsset *mesh = nullptr;
+  std::string object_name;
+};
+
+/**
  * Owns Wavefront OBJ writing for exported mesh geometry.
  */
 class ObjMeshWriter final {
@@ -33,6 +43,8 @@ public:
   [[nodiscard]] static ObjMeshWriteResult
   write_mesh(const std::filesystem::path &path, const MeshAsset &mesh,
              std::string_view object_name);
+  [[nodiscard]] static ObjMeshWriteResult
+  write_meshes_atomic(std::span<const ObjMeshWriteRequest> requests);
 };
 
 } // namespace quader

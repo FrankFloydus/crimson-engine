@@ -8,6 +8,105 @@
 
 using namespace quader_poly;
 
+namespace {
+
+/// Owns a fixture where a quad strip continues into a triangle or ngon.
+struct NonQuadLoopPathFixture {
+	Document document;
+	Edge seed;
+	Edge shared_edge;
+	ElementId non_quad_face = kInvalidElementId;
+};
+
+NonQuadLoopPathFixture make_nonquad_loop_path_fixture(
+	std::size_t non_quad_side_count) {
+	NonQuadLoopPathFixture fixture;
+	const ElementId bottom_left =
+		add_vertex(fixture.document, { 0.0F, 0.0F, 0.0F });
+	const ElementId bottom_right =
+		add_vertex(fixture.document, { 1.0F, 0.0F, 0.0F });
+	const ElementId shared_right =
+		add_vertex(fixture.document, { 1.0F, 1.0F, 0.0F });
+	const ElementId shared_left =
+		add_vertex(fixture.document, { 0.0F, 1.0F, 0.0F });
+	EXPECT_NE(add_face(fixture.document,
+	                   std::array<ElementId, 4>{ bottom_left, bottom_right,
+	                                              shared_right, shared_left }),
+	          kInvalidElementId);
+
+	std::vector<ElementId> non_quad_vertices { shared_left, shared_right };
+	if (non_quad_side_count == 3U) {
+		non_quad_vertices.push_back(
+			add_vertex(fixture.document, { 0.5F, 2.0F, 0.0F }));
+	} else {
+		EXPECT_EQ(non_quad_side_count, 5U);
+		non_quad_vertices.push_back(
+			add_vertex(fixture.document, { 1.25F, 1.75F, 0.0F }));
+		non_quad_vertices.push_back(
+			add_vertex(fixture.document, { 0.5F, 2.25F, 0.0F }));
+		non_quad_vertices.push_back(
+			add_vertex(fixture.document, { -0.25F, 1.75F, 0.0F }));
+	}
+	fixture.non_quad_face = add_face(fixture.document, non_quad_vertices);
+	EXPECT_NE(fixture.non_quad_face, kInvalidElementId);
+
+	fixture.seed = make_edge(bottom_left, bottom_right);
+	fixture.shared_edge = make_edge(shared_left, shared_right);
+	EXPECT_EQ(qdr_test::edge_incidence_count(fixture.document,
+	                                         fixture.shared_edge),
+	          2);
+	qdr_test::expect_valid_polygon_document(
+		fixture.document, "quad-to-non-quad edge-loop fixture");
+	return fixture;
+}
+
+void expect_nonquad_path_preview_stops_after_quad(std::size_t non_quad_side_count) {
+	const NonQuadLoopPathFixture fixture =
+		make_nonquad_loop_path_fixture(non_quad_side_count);
+
+	const OverlayData preview =
+		build_edge_loop_preview(fixture.document, fixture.seed, 0.5F);
+
+	ASSERT_EQ(preview.lines.size(), 1U);
+	EXPECT_TRUE(qdr_test::vec_nearly_equal(
+		preview.lines.front().start, { 0.5F, 0.0F, 0.0F }));
+	EXPECT_TRUE(qdr_test::vec_nearly_equal(
+		preview.lines.front().end, { 0.5F, 1.0F, 0.0F }));
+}
+
+void expect_nonquad_path_commit_splits_quad(std::size_t non_quad_side_count) {
+	NonQuadLoopPathFixture fixture =
+		make_nonquad_loop_path_fixture(non_quad_side_count);
+	const std::size_t vertex_count_before = fixture.document.vertices.size();
+	const std::size_t face_count_before = fixture.document.faces.size();
+	const Face* non_quad_face_before =
+		find_face(fixture.document, fixture.non_quad_face);
+	ASSERT_NE(non_quad_face_before, nullptr);
+	const std::vector<ElementId> non_quad_vertices_before =
+		non_quad_face_before->vertices;
+	Selection selection =
+		qdr_test::edge_selection({ fixture.seed }, fixture.seed);
+
+	const OperationResult result =
+		insert_edge_loop(fixture.document, selection, 0.5F);
+
+	EXPECT_TRUE(result.changed);
+	EXPECT_EQ(fixture.document.vertices.size(), vertex_count_before + 2U);
+	EXPECT_EQ(fixture.document.faces.size(), face_count_before + 1U);
+	const Face* non_quad_face_after =
+		find_face(fixture.document, fixture.non_quad_face);
+	ASSERT_NE(non_quad_face_after, nullptr);
+	EXPECT_EQ(non_quad_face_after->vertices, non_quad_vertices_before);
+	ASSERT_EQ(selection.edges.size(), 1U);
+	EXPECT_TRUE(qdr_test::edge_positions_match_unordered(
+		fixture.document,
+		selection.edges.front(),
+		{ 0.5F, 0.0F, 0.0F },
+		{ 0.5F, 1.0F, 0.0F }));
+}
+
+} // namespace
+
 TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopSplitsAQuadThroughTheSelectedEdgeFactor) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document(7);
 	Face* face = find_face(fixture.document, fixture.face);
@@ -92,6 +191,26 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopTraversesAClosedCube
         EXPECT_TRUE(selection.edges.size() == 4U);
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 	EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+	 InsertEdgeLoopPreviewStopsAfterQuadAtTrianglePath) {
+	expect_nonquad_path_preview_stops_after_quad(3U);
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+	 InsertEdgeLoopCommitSplitsQuadAtTrianglePath) {
+	expect_nonquad_path_commit_splits_quad(3U);
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+	 InsertEdgeLoopPreviewStopsAfterQuadAtNgonPath) {
+	expect_nonquad_path_preview_stops_after_quad(5U);
+}
+
+TEST(QdrDocumentOperationInsertEdgeLoopTests,
+	 InsertEdgeLoopCommitSplitsQuadAtNgonPath) {
+	expect_nonquad_path_commit_splits_quad(5U);
 }
 
 TEST(QdrDocumentOperationInsertEdgeLoopTests, InsertEdgeLoopAllowsUnrelatedNonManifoldTopology) {

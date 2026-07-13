@@ -718,8 +718,8 @@ private:
 
   QtColorSwatchButton *
   add_color_button(Section &section, std::string stable_id,
-                   const QString &label, QVec3 value,
-                   std::function<void(QVec3, std::string)> changed) {
+                    const QString &label, QVec3 value,
+                    std::function<void(QVec3)> changed) {
     const QColor initial = QColor::fromRgbF(std::clamp(value.x, 0.0f, 1.0f),
                                             std::clamp(value.y, 0.0f, 1.0f),
                                             std::clamp(value.z, 0.0f, 1.0f));
@@ -733,66 +733,33 @@ private:
         button, &QtColorSwatchButton::clicked, &panel_,
         [this, stable_id, initial, button,
          changed = std::move(changed)]() mutable {
-          const std::vector<EntityId> edit_selection = selection_;
-          const EntityId edit_primary = primary_;
-          const std::span<const EntityId> selection_span(edit_selection.data(),
-                                                         edit_selection.size());
-          const std::string merge_key =
-              active_continuous_edit_.ensure_merge_key(stable_id, edit_primary,
-                                                       selection_span);
-          continuous_edit_active_ = true;
-          active_continuous_id_ = stable_id;
-
           QColorDialog dialog(initial, &panel_);
           dialog.setObjectName(stable_name(stable_id + ".dialog"));
           dialog.setOption(QColorDialog::DontUseNativeDialog, true);
           active_color_dialog_ = &dialog;
           QPointer<QtColorSwatchButton> guarded_button(button);
-          QColor last_applied = initial;
-          bool color_changed = false;
           QObject::connect(
               &dialog, &QColorDialog::currentColorChanged, &dialog,
-              [this, &last_applied, &color_changed, guarded_button, merge_key,
-               edit_primary, edit_selection, stable_id,
-               changed](const QColor &color) {
-                if (!color.isValid() || color == last_applied) {
+              [guarded_button](const QColor &color) {
+                if (!color.isValid()) {
                   return;
                 }
-                last_applied = color;
-                color_changed = true;
-                const QVec3 next{
-                    static_cast<float>(color.redF()),
-                    static_cast<float>(color.greenF()),
-                    static_cast<float>(color.blueF()),
-                };
-                const std::array<float, 3> staged{next.x, next.y, next.z};
-                const std::span<const EntityId> edit_selection_span(
-                    edit_selection.data(), edit_selection.size());
-                active_continuous_edit_.stage(
-                    stable_id, edit_primary, edit_selection_span,
-                    std::span<const float>(staged.data(), staged.size()));
-                changed(next, merge_key);
                 if (guarded_button != nullptr) {
                   guarded_button->set_swatch_color(color);
                 }
               });
 
           const int result = dialog.exec();
-          if (result != QDialog::Accepted && color_changed) {
-            changed({static_cast<float>(initial.redF()),
-                     static_cast<float>(initial.greenF()),
-                     static_cast<float>(initial.blueF())},
-                    merge_key);
-            if (guarded_button != nullptr) {
-              guarded_button->set_swatch_color(initial);
-            }
+          const QColor committed = dialog.currentColor();
+          if (result == QDialog::Accepted && committed.isValid() &&
+              committed != initial) {
+            changed({static_cast<float>(committed.redF()),
+                     static_cast<float>(committed.greenF()),
+                     static_cast<float>(committed.blueF())});
+          } else if (guarded_button != nullptr) {
+            guarded_button->set_swatch_color(initial);
           }
           active_color_dialog_ = nullptr;
-          if (active_continuous_id_ == stable_id) {
-            active_continuous_edit_.reset();
-            continuous_edit_active_ = false;
-            active_continuous_id_.clear();
-          }
           force_rebuild_ = true;
         });
     return button;
@@ -1269,17 +1236,15 @@ private:
     add_color_button(environment, "environment.clear_color",
                      localized("ui.inspector.clear_color", "Clear Color"),
                      settings->environment.clear_color,
-                     [this, entity](QVec3 color, std::string merge_key) {
+                     [this, entity](QVec3 color) {
                        apply_scene_settings(
-                           entity,
-                           [color](SceneSettingsComponent &next) {
+                           entity, [color](SceneSettingsComponent &next) {
                              next.environment.clear_color = {
                                  std::clamp(color.x, 0.0f, 1.0f),
                                  std::clamp(color.y, 0.0f, 1.0f),
                                  std::clamp(color.z, 0.0f, 1.0f),
                              };
-                           },
-                           std::move(merge_key));
+                           });
                      });
     add_continuous_number(environment, "environment.intensity",
                           localized("ui.inspector.intensity", "Intensity"),
@@ -1600,17 +1565,15 @@ private:
         });
     add_color_button(section, "light.color",
                      localized("ui.inspector.color", "Color"), light->color,
-                     [this, entity](QVec3 color, std::string merge_key) {
+                     [this, entity](QVec3 color) {
                        apply_light_component(
-                           entity,
-                           [color](LightComponent &next) {
+                           entity, [color](LightComponent &next) {
                              next.color = {
                                  std::clamp(color.x, 0.0f, 1.0f),
                                  std::clamp(color.y, 0.0f, 1.0f),
                                  std::clamp(color.z, 0.0f, 1.0f),
                              };
-                           },
-                           std::move(merge_key));
+                           });
                      });
     add_continuous_number(section, "light.intensity",
                           localized("ui.inspector.intensity", "Intensity"),

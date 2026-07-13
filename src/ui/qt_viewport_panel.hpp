@@ -50,6 +50,14 @@ class SceneDocument;
 class SceneRenderBridge;
 
 /**
+ * Returns whether an application event target belongs to the retained Tool
+ * Settings window. Its controls are part of an active viewport tool rather
+ * than an outside interaction that should cancel that tool.
+ */
+[[nodiscard]] bool
+qt_event_target_belongs_to_tool_settings(const QObject *target);
+
+/**
  * Qt Widgets host for Quader's embedded one-to-four pane viewport workspace.
  * ViewportWorkspaceService remains the sole owner of pane/layout state.
  */
@@ -198,6 +206,7 @@ private:
   bool modal_tool_owns_viewport_snapshot_ = false;
   bool pending_external_pointer_event_ = false;
   bool pending_external_pointer_left_release_only_ = true;
+  std::vector<QuaderInputChord> suppressed_keybinding_chords_;
   bool last_fly_navigation_active_ = false;
   const SceneDocument *viewport_info_cached_document_ = nullptr;
   const AssetRegistry *viewport_info_cached_assets_ = nullptr;

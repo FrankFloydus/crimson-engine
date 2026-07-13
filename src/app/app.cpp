@@ -135,6 +135,14 @@ bool App::initialize(QApplication &application,
   const ProjectDefaultAssets default_assets =
       ProjectAssetBootstrapService{}.bootstrap_default_assets(project_session_);
   default_material_ = default_assets.default_material;
+  project_session_.mark_clean();
+  project_session_.set_document_replacement_finalizer(
+      [this](ProjectSession &session) {
+        const ProjectDefaultAssets replacement_defaults =
+            ProjectAssetBootstrapService{}.bootstrap_default_assets(session);
+        default_material_ = replacement_defaults.default_material;
+        ui_.set_default_material(default_material_);
+      });
   editor_ = std::make_unique<QuaderEditorApi>(
       QuaderApiSessionInternalAccess::from_project_session(project_session_));
   ui_.install_runtime_hooks(
@@ -160,6 +168,10 @@ bool App::initialize(QApplication &application,
             return platform_save_obj_file_dialog(
                 obj_export_file_dialog_options(ui_.native_window_handle(),
                                                editor_->project()));
+          },
+      .confirm_dirty_project_replacement =
+          [this](std::string_view action_id) {
+            return ui_.confirm_dirty_project_replacement(action_id);
           },
   });
 

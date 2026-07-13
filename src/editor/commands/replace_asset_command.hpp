@@ -31,6 +31,11 @@ public:
 
 private:
   AssetCommandResult apply(const MeshAsset &mesh) {
+    const AssetRegistryValidationResult validation =
+        assets().validate_mesh(mesh);
+    if (!validation.ok) {
+      return asset_command_invalid_request_result(validation.message);
+    }
     if (!assets().replace_mesh(asset_, mesh)) {
       return asset_command_invalid_request_result("Mesh asset does not exist");
     }

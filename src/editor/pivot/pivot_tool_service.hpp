@@ -8,10 +8,12 @@
 
 #include "core/command_result.hpp"
 #include "core/types.hpp"
+#include "editor/modeling/modeling_types.hpp"
 #include "editor/pivot/pivot_types.hpp"
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace quader {
@@ -32,7 +34,7 @@ public:
                    EditorHistoryService &history,
                    ModelingSessionService &modeling);
 
-  [[nodiscard]] bool persistent_active() const { return persistent_.has_value(); }
+  [[nodiscard]] bool persistent_active() const;
   [[nodiscard]] PivotSnapSettings snap_settings() const { return snap_settings_; }
   [[nodiscard]] PivotHandleState handle_state() const;
   [[nodiscard]] SelectionPivotOverride selection_pivot_override() const;
@@ -42,10 +44,14 @@ public:
   [[nodiscard]] std::optional<QVec3> persistent_preview_position() const;
   [[nodiscard]] bool
   can_activate_persistent(const EditorSelectionService &selection) const;
+  [[nodiscard]] bool can_copy_pivot_from_active(
+      const EditorSelectionService &selection) const;
 
   CommandResult activate_persistent(EditorSelectionService &selection);
   CommandResult cancel_persistent();
   CommandResult apply_persistent();
+  CommandResult
+  copy_pivot_from_active(const EditorSelectionService &selection);
   CommandResult set_snap_enabled(std::string_view setting_id, bool enabled);
   CommandResult execute_align_action(std::string_view action_id);
   void set_persistent_preview_position(QVec3 world_position);
@@ -73,7 +79,14 @@ private:
       PivotTargetKind kind = PivotTargetKind::Mesh;
       QVec3 original_world_position = {};
       QVec3 preview_world_position = {};
+      std::string target_uuid;
+      EntityId target_parent = kInvalidEntityId;
+      ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
       std::uint64_t selection_revision = 0;
+      QVec3 target_bounds_min = {};
+      QVec3 target_bounds_max = {};
+      std::uint64_t validated_scene_revision = 0;
+      std::uint64_t validated_asset_revision = 0;
   };
 
   /**
@@ -90,6 +103,9 @@ private:
   active_selection_target(const EditorSelectionService &selection) const;
   [[nodiscard]] PivotTargetKind target_kind(EntityId target,
                                             const EditorSelectionService &selection) const;
+  [[nodiscard]] bool target_is_eligible(EntityId target,
+                                        PivotTargetKind kind) const;
+  [[nodiscard]] bool persistent_session_is_valid() const;
   [[nodiscard]] std::optional<SceneBounds> target_bounds() const;
   [[nodiscard]] CommandResult align_to_world_position(QVec3 world_position);
 
@@ -98,7 +114,7 @@ private:
   EditorHistoryService &history_;
   ModelingSessionService &modeling_;
   PivotSnapSettings snap_settings_;
-  std::optional<PersistentSession> persistent_;
+  mutable std::optional<PersistentSession> persistent_;
   QuickState quick_;
   std::uint64_t selection_pivot_revision_ = 0;
 };

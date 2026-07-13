@@ -548,7 +548,8 @@ std::optional<PickHitRecord> nearest_surface_hit(
 		const quader_poly::Ray& ray,
 		const quader_poly::PickOptions& options,
 		std::span<const PickObjectBounds> object_bounds,
-		std::span<const PickObjectFaceGeometry> face_geometry = {});
+		std::span<const PickObjectFaceGeometry> face_geometry = {},
+		int target_object_id = -1);
 bool component_pick_is_occluded_by_surface(
 		const std::vector<PolygonObject>& objects,
 		int object_index,
@@ -574,7 +575,8 @@ bool pick_nearest_object(
 		int& hit_index,
 		quader_poly::PickResult& hit,
 		std::span<const PickObjectBounds> object_bounds = {},
-		std::span<const PickObjectFaceGeometry> face_geometry = {})
+		std::span<const PickObjectFaceGeometry> face_geometry = {},
+		int target_object_id = -1)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.pick_nearest_object");
 	hit_index = -1;
@@ -584,9 +586,13 @@ bool pick_nearest_object(
             (options.mode == quader_poly::SelectionMode::Vertex ||
              options.mode == quader_poly::SelectionMode::Edge)
                 ? nearest_surface_hit(objects, ray, options, object_bounds,
-                                      face_geometry)
+                                      face_geometry, target_object_id)
                 : std::optional<PickHitRecord>{};
         for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
+		if (target_object_id >= 0 &&
+			objects[index].id != target_object_id) {
+			continue;
+		}
 		if (!ray_intersects_object_pick_bounds(
 					objects[index],
 					ray,
@@ -785,13 +791,18 @@ std::optional<PickHitRecord> nearest_surface_hit(
 		const quader_poly::Ray& ray,
 		const quader_poly::PickOptions& options,
 		std::span<const PickObjectBounds> object_bounds,
-		std::span<const PickObjectFaceGeometry> face_geometry)
+		std::span<const PickObjectFaceGeometry> face_geometry,
+		int target_object_id)
 {
 	quader_poly::PickOptions surface_options = options;
         surface_options.mode = quader_poly::SelectionMode::Face;
-        const PickRequest surface_request { ray, surface_options };
+	const PickRequest surface_request {ray, surface_options, target_object_id};
 	std::optional<PickHitRecord> nearest;
 	for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
+		if (target_object_id >= 0 &&
+			objects[index].id != target_object_id) {
+			continue;
+		}
 		if (!ray_intersects_object_pick_bounds(
 					objects[index],
 					ray,
@@ -986,9 +997,14 @@ std::optional<PickHitRecord> pick_nearest(const std::vector<PolygonObject>& obje
                     (request.options.mode ==
                          quader_poly::SelectionMode::Vertex ||
                      request.options.mode == quader_poly::SelectionMode::Edge)
-                ? nearest_surface_hit(objects, request.ray, request.options, {})
+                ? nearest_surface_hit(objects, request.ray, request.options, {},
+                                      {}, request.target_object_id)
                 : std::optional<PickHitRecord>{};
         for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
+		if (request.target_object_id >= 0 &&
+			objects[index].id != request.target_object_id) {
+			continue;
+		}
 		if (!ray_intersects_object_pick_bounds(objects[index], request.ray, request.options, nullptr)) {
 			continue;
 		}
@@ -1022,7 +1038,9 @@ std::optional<PickHitRecord> pick_nearest(
 	QDR_PROFILE_SCOPE("qdr_editor_core.pick_nearest.cached");
 	int hit_index = -1;
 	quader_poly::PickResult hit;
-	if (!pick_nearest_object(objects, request.ray, request.options, hit_index, hit, object_bounds, face_geometry) || hit_index < 0) {
+	if (!pick_nearest_object(objects, request.ray, request.options, hit_index,
+			hit, object_bounds, face_geometry, request.target_object_id) ||
+		hit_index < 0) {
 		return std::nullopt;
 	}
 	return make_pick_hit_record(objects[static_cast<std::size_t>(hit_index)], hit_index, request, hit);
@@ -1037,9 +1055,14 @@ std::vector<PickHitRecord> pick_all(const std::vector<PolygonObject>& objects, c
                     (request.options.mode ==
                          quader_poly::SelectionMode::Vertex ||
                      request.options.mode == quader_poly::SelectionMode::Edge)
-                ? nearest_surface_hit(objects, request.ray, request.options, {})
+                ? nearest_surface_hit(objects, request.ray, request.options, {},
+                                      {}, request.target_object_id)
                 : std::optional<PickHitRecord>{};
         for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
+		if (request.target_object_id >= 0 &&
+			objects[index].id != request.target_object_id) {
+			continue;
+		}
 		if (!ray_intersects_object_pick_bounds(objects[index], request.ray, request.options, nullptr)) {
 			continue;
 		}
@@ -1080,9 +1103,14 @@ std::vector<PickHitRecord> pick_all(
                          quader_poly::SelectionMode::Vertex ||
                      request.options.mode == quader_poly::SelectionMode::Edge)
                 ? nearest_surface_hit(objects, request.ray, request.options,
-                                      object_bounds, face_geometry)
+                                      object_bounds, face_geometry,
+                                      request.target_object_id)
                 : std::optional<PickHitRecord>{};
         for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
+		if (request.target_object_id >= 0 &&
+			objects[index].id != request.target_object_id) {
+			continue;
+		}
 		if (!ray_intersects_object_pick_bounds(
 					objects[index],
 					request.ray,

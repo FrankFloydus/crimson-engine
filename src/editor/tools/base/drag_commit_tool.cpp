@@ -52,7 +52,7 @@ ViewportToolResult DragCommitTool::handle_event(
   if (pointer.can_interact && pointer.left_clicked) {
     const ModelingCommandResult begin_command =
         preview_port.begin_insert_edge_loop_drag(
-            point_context.make_event_at(pointer.mouse_local, true));
+            point_context.make_event_at(pointer.left_click_local, true));
     handle_result(context, "Insert edge loop begin", begin_command);
     const bool can_commit =
         begin_command.ok &&

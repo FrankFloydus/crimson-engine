@@ -82,6 +82,7 @@ struct QtViewportSurface::InputAccumulator {
   bool hovered = false;
   bool focused = false;
   bool suppress_warp_event = false;
+  bool warp_motion_overtook_target = false;
   QPoint warp_target_local;
   QPoint capture_restore_global;
   bool left_pressed = false;
@@ -360,6 +361,8 @@ void QtViewportSurface::set_pointer_capture(bool captured) {
         QtPointerCaptureFailure::Enable);
     ++pointer_capture_generation_;
 
+    input_->suppress_warp_event = false;
+    input_->warp_motion_overtook_target = false;
     input_->mouse_delta = {};
     const bool raw_input_active =
         relative_pointer_input_.start_raw_input(native_window_handle());
@@ -396,10 +399,21 @@ void QtViewportSurface::set_pointer_capture(bool captured) {
     }
     unsetCursor();
     const QPoint restore = input_->capture_restore_global;
-    input_->warp_target_local = mapFromGlobal(restore);
-    input_->suppress_warp_event = true;
-    QCursor::setPos(restore);
     const QPoint local = mapFromGlobal(restore);
+    const qreal scale = devicePixelRatio();
+    input_->warp_target_local = local;
+    input_->suppress_warp_event = true;
+    input_->warp_motion_overtook_target = false;
+    input_->mouse_local = {
+        static_cast<float>(local.x() * scale),
+        static_cast<float>(local.y() * scale),
+    };
+    input_->mouse_screen = {
+        static_cast<float>(restore.x() * scale),
+        static_cast<float>(restore.y() * scale),
+    };
+    input_->has_mouse_position = true;
+    QCursor::setPos(restore);
     input_->hovered =
         local.x() >= 0 && local.y() >= 0 && local.x() < width() &&
         local.y() < height();
@@ -750,18 +764,25 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
     const QPoint event_local = event.position().toPoint();
     const QPoint delta = event_local - input_->warp_target_local;
     if (std::abs(delta.x()) <= 2 && std::abs(delta.y()) <= 2) {
-      input_->mouse_local = local;
-      input_->mouse_screen = screen;
-      input_->has_mouse_position = true;
-      input_->hovered = pointer_captured() ||
-                        (event_local.x() >= 0 && event_local.y() >= 0 &&
-                         event_local.x() < width() &&
-                         event_local.y() < height());
+      if (!input_->warp_motion_overtook_target) {
+        input_->mouse_local = local;
+        input_->mouse_screen = screen;
+        input_->has_mouse_position = true;
+        input_->hovered = pointer_captured() ||
+                          (event_local.x() >= 0 && event_local.y() >= 0 &&
+                           event_local.x() < width() &&
+                           event_local.y() < height());
+      }
       input_->modifiers = viewport_modifiers(event.modifiers());
       input_->suppress_warp_event = false;
+      input_->warp_motion_overtook_target = false;
       return;
     }
-    input_->suppress_warp_event = false;
+    // Physical motion may be delivered before the queued synthetic center
+    // event. Keep waiting for the target while processing this genuine move
+    // against the last physical baseline; otherwise the later warp becomes a
+    // cursor-sized fallback delta.
+    input_->warp_motion_overtook_target = true;
   }
   if (input_->has_mouse_position) {
     const QVec2 absolute_delta = local - input_->mouse_local;
@@ -809,12 +830,20 @@ bool QtViewportSurface::apply_native_mouse_grab(bool captured) {
 
 void QtViewportSurface::recenter_captured_pointer() {
   if (input_ == nullptr || !pointer_captured() || width() <= 0 ||
-      height() <= 0) {
+      height() <= 0 || !relative_pointer_input_.capture_requires_recenter()) {
+    return;
+  }
+  if (input_->suppress_warp_event) {
+    // Do not queue another indistinguishable center event while the previous
+    // one can still arrive after genuine physical motion.
     return;
   }
   const QPoint local(width() / 2, height() / 2);
   const QPoint global = mapToGlobal(local);
   const qreal scale = devicePixelRatio();
+  // SetCursorPos changes the platform cursor before Qt necessarily delivers
+  // the translated center event. Use the target as the fallback baseline now
+  // so a physical move that overtakes that event contributes only its delta.
   input_->mouse_local = {
       static_cast<float>(local.x() * scale),
       static_cast<float>(local.y() * scale),
@@ -829,6 +858,7 @@ void QtViewportSurface::recenter_captured_pointer() {
   }
   input_->warp_target_local = local;
   input_->suppress_warp_event = true;
+  input_->warp_motion_overtook_target = false;
   QCursor::setPos(global);
 }
 

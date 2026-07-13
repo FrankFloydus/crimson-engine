@@ -13,6 +13,7 @@
 #include "scene/scene_bounds.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -27,6 +28,17 @@ class DocumentCommandService;
 class EditorHistoryService;
 class IUndoableCommand;
 class SceneDocument;
+
+/**
+ * Reports operation-preview projection boundaries to the project checkpoint
+ * owner without exposing project-session state to the modeling package.
+ */
+struct ModelingOperationPreviewCheckpointHooks {
+  std::function<void()> begin;
+  std::function<void()> observe_before_projection;
+  std::function<void()> record_after_projection;
+  std::function<void(bool restored_by_cancel)> finish;
+};
 
 /**
  * Stores an opaque Modeling Session Memento restore point for editor-owned
@@ -60,7 +72,9 @@ private:
  */
 class ModelingSessionService {
 public:
-  ModelingSessionService(SceneDocument &scene, AssetRegistry &assets);
+  ModelingSessionService(
+      SceneDocument &scene, AssetRegistry &assets,
+      ModelingOperationPreviewCheckpointHooks preview_checkpoint_hooks = {});
   ~ModelingSessionService();
 
   ModelingSessionService(const ModelingSessionService &) = delete;
@@ -100,6 +114,9 @@ public:
   capture_active_preview_history_memento() const;
   ModelingCommandResult
   restore_history_memento(const ModelingSessionMemento &memento);
+  ModelingCommandResult restore_history_memento_preserving_scene_selection(
+      const ModelingSessionMemento &memento);
+  void clear_transient_state_for_document_replacement();
   void reset_from_scene();
 
   ModelingCommandResult duplicate_selected_hierarchy_for_group_drag(
@@ -123,6 +140,7 @@ public:
   [[nodiscard]] bool transform_drag_active() const;
   [[nodiscard]] bool can_cancel_active_tool_or_preview() const;
   [[nodiscard]] bool can_cancel_active_preview_for_undo() const;
+  ModelingCommandResult cancel_competing_state_for_native_tool_activation();
   [[nodiscard]] ModelingToolStatus tool_status() const;
   [[nodiscard]] ModelingLiveStatus live_status() const;
   [[nodiscard]] ModelingToolSettingsTarget tool_settings_target() const;

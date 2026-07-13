@@ -11,7 +11,9 @@
 #include "diagnostics/profile.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
+#include "editor/selection/editor_selection_service.hpp"
 
 #include <memory>
 
@@ -254,6 +256,24 @@ QuaderApiVoidResult QuaderApiMutationRunner::cancel_modeling_preview() {
 }
 
 QuaderApiVoidResult
+QuaderApiMutationRunner::set_selection_mode(ModelingSelectionMode mode) {
+  bool changed = false;
+  if (session_.native_tools().has_pending_tool()) {
+    const CommandResult canceled = session_.native_tools().cancel_active();
+    if (!canceled.ok) {
+      return status_from(canceled, QuaderMutationKind::Runtime,
+                         "Set Selection Mode");
+    }
+    changed = canceled.changed;
+  }
+
+  ModelingCommandResult result = session_.selection().set_mode(mode);
+  result.changed = result.changed || changed;
+  return status_from(std::move(result), QuaderMutationKind::Modeling,
+                     "Set Selection Mode");
+}
+
+QuaderApiVoidResult
 QuaderApiMutationRunner::run_asset_result(CommandResult result,
                                           std::string_view label) {
   return status_from(std::move(result), QuaderMutationKind::Asset, label);
@@ -272,6 +292,9 @@ QuaderApiMutationRunner::run_asset_failure(std::string message) {
 }
 
 bool QuaderApiMutationRunner::can_undo() const {
+  if (session_.native_tools().has_pending_tool()) {
+    return true;
+  }
   if (session_.modeling().can_cancel_active_preview_for_undo()) {
     return true;
   }
@@ -279,6 +302,9 @@ bool QuaderApiMutationRunner::can_undo() const {
 }
 
 bool QuaderApiMutationRunner::can_redo() const {
+  if (session_.native_tools().has_pending_tool()) {
+    return false;
+  }
   if (session_.modeling().can_cancel_active_preview_for_undo()) {
     return false;
   }
@@ -286,6 +312,10 @@ bool QuaderApiMutationRunner::can_redo() const {
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::undo() {
+  if (session_.native_tools().has_pending_tool()) {
+    return status_from(session_.native_tools().cancel_active(),
+                       QuaderMutationKind::Runtime, "Undo");
+  }
   if (session_.modeling().can_cancel_active_preview_for_undo()) {
     const ModelingCommandResult cancel =
         cancel_active_tool_or_preview_for_undo();

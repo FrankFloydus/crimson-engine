@@ -16,6 +16,8 @@
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
 #include "render/overlay/viewport_transform_gizmo_overlay_builder.hpp"
 #include "editor/session/project_session.hpp"
+#include "scene/scene_bounds.hpp"
+#include "ui/viewport_hover_controller.hpp"
 #include "ui/viewport_host_interaction_policy.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
@@ -26,6 +28,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <unordered_set>
 #include <vector>
@@ -1237,6 +1240,380 @@ TEST(ViewportInteractionControllerTests,
               3u);
 }
 
+TEST(ViewportInteractionControllerTests,
+     PersistentPivotRejectsUnstableMeshBeforeActivation) {
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok);
+    const quader::AssetId mesh =
+        harness.session.scene().mesh(box.entity)->mesh;
+    ASSERT_TRUE(harness.session.assets().update_mesh(
+        mesh, [](quader::MeshAsset &asset) {
+          asset.has_stable_cpu_topology = false;
+        }));
+
+    EXPECT_FALSE(
+        harness.editor.tools().can_activate(quader::ViewportToolId::Pivot));
+    EXPECT_FALSE(
+        harness.editor.tools().activate(quader::ViewportToolId::Pivot).ok);
+    EXPECT_FALSE(harness.session.pivot().persistent_active());
+}
+
+TEST(ViewportInteractionControllerTests,
+     FailedPivotActivationPreservesMultiSelectionAndActiveObject) {
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef first = create_unit_box(harness);
+    const quader::QuaderModelingObjectRef invalid = create_unit_box(harness);
+    ASSERT_TRUE(harness.editor.selection()
+                    .select_objects({first.entity, invalid.entity},
+                                    invalid.entity)
+                    .ok);
+    const quader::AssetId mesh =
+        harness.session.scene().mesh(invalid.entity)->mesh;
+    ASSERT_TRUE(harness.session.assets().update_mesh(
+        mesh, [](quader::MeshAsset &asset) {
+          for (quader::MeshVertex &vertex : asset.vertices) {
+            vertex.position.x = std::numeric_limits<float>::max();
+          }
+        }));
+    const std::vector<quader::EntityId> selected_before =
+        harness.session.scene().selected_entities();
+    const quader::EntityId active_before =
+        harness.session.scene().primary_selection();
+
+    EXPECT_FALSE(
+        harness.editor.tools().can_activate(quader::ViewportToolId::Pivot));
+    EXPECT_FALSE(
+        harness.editor.tools().activate(quader::ViewportToolId::Pivot).ok);
+    EXPECT_FALSE(harness.session.pivot().persistent_active());
+    EXPECT_EQ(harness.session.scene().selected_entities(), selected_before);
+    EXPECT_EQ(harness.session.scene().primary_selection(), active_before);
+}
+
+TEST(ViewportInteractionControllerTests,
+     PersistentPivotRejectsSingularWorldTransformBeforeActivation) {
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+    quader::TransformComponent singular =
+        *harness.session.scene().transform(box.entity);
+    singular.scale = {1.0f, 0.0f, 1.0f};
+    harness.session.scene().set_transform(box.entity, singular);
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok);
+
+    EXPECT_FALSE(
+        harness.editor.tools().can_activate(quader::ViewportToolId::Pivot));
+    EXPECT_FALSE(
+        harness.editor.tools().activate(quader::ViewportToolId::Pivot).ok);
+    EXPECT_FALSE(harness.session.pivot().persistent_active());
+}
+
+TEST(ViewportInteractionControllerTests,
+     PersistentPivotNeverPublishesANonFinitePreview) {
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef box =
+        create_box_at(harness, {4.0f, -2.0f, 3.0f});
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok);
+    harness.session.history().clear();
+    ASSERT_TRUE(
+        harness.editor.tools().activate(quader::ViewportToolId::Pivot).ok);
+    const std::optional<quader::QVec3> before =
+        harness.session.pivot().persistent_preview_position();
+    ASSERT_TRUE(before.has_value());
+
+    harness.session.pivot().set_persistent_preview_position(
+        {std::numeric_limits<float>::quiet_NaN(), 2.0f, 3.0f});
+    const std::optional<quader::QVec3> after =
+        harness.session.pivot().persistent_preview_position();
+    ASSERT_TRUE(after.has_value());
+    EXPECT_NEAR(after->x, before->x, 0.001f);
+    EXPECT_NEAR(after->y, before->y, 0.001f);
+    EXPECT_NEAR(after->z, before->z, 0.001f);
+    const quader::PivotHandleState handle =
+        harness.session.pivot().handle_state();
+    EXPECT_TRUE(std::isfinite(handle.world_position.x));
+    EXPECT_TRUE(std::isfinite(handle.world_position.y));
+    EXPECT_TRUE(std::isfinite(handle.world_position.z));
+
+    ASSERT_TRUE(harness.editor.tools().commit_active_tool_preview().ok);
+    EXPECT_FALSE(harness.editor.history().can_undo());
+    EXPECT_FALSE(harness.session.scene().transform(box.entity)->custom_pivot);
+}
+
+TEST(ViewportInteractionControllerTests,
+     PivotActivationSurvivesTheQtPostActivationInteractionReset) {
+    ViewportInteractionHarness harness;
+    ASSERT_TRUE(harness.settings.set_bool_value(
+        quader::ViewportBoolSettingId::GridSnap, false));
+    ASSERT_TRUE(harness.settings.set_bool_value(
+        quader::ViewportBoolSettingId::VertexSnap, false));
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok);
+    ASSERT_TRUE(
+        harness.editor.tools().activate(quader::ViewportToolId::Move).ok);
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    const quader_editor_core::TransformGizmoFrame *gizmo =
+        harness.controller.transform_gizmo_frame();
+    ASSERT_NE(gizmo, nullptr);
+    const quader_editor_core::TransformGizmoAxisPrimitive *axis =
+        find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+    ASSERT_NE(axis, nullptr);
+    const quader::QVec2 press_position = axis->screen_tip;
+    const quader::QVec2 drag_position =
+        press_position + quader::QVec2{72.0f, 0.0f};
+    const quader::TransformComponent before =
+        *harness.session.scene().transform(box.entity);
+
+    harness.input.mouse_local = press_position;
+    harness.input.mouse_screen = press_position;
+    ASSERT_TRUE(harness.controller
+                    .handle_before_active_tool(
+                        harness.editor,
+                        harness.frame(true, true, false, press_position))
+                    .gizmo_consumed);
+    harness.input.mouse_local = drag_position;
+    harness.input.mouse_screen = drag_position;
+    ASSERT_TRUE(harness.controller
+                    .handle_before_active_tool(
+                        harness.editor,
+                        harness.frame(false, true, false, press_position))
+                    .gizmo_consumed);
+    ASSERT_TRUE(harness.controller.dragging());
+    EXPECT_GT(quader::length(
+                  harness.session.scene().transform(box.entity)->position -
+                  before.position),
+              0.001f);
+
+    const quader::QuaderApiVoidResult activated =
+        harness.editor.tools().activate(quader::ViewportToolId::Pivot);
+    ASSERT_TRUE(activated.ok) << activated.message;
+    ASSERT_TRUE(harness.session.pivot().persistent_active());
+    EXPECT_TRUE(harness.controller.dragging());
+    expect_transform_near(*harness.session.scene().transform(box.entity),
+                          before);
+    const std::uint64_t scene_revision_after_activation =
+        harness.session.scene().revision();
+    const std::uint64_t asset_revision_after_activation =
+        harness.session.assets().revision();
+
+    // Qt clears its local interaction state immediately after dispatching the
+    // native activation. The resulting second modeling cancel is a no-op and
+    // must not invalidate the newly captured Pivot session.
+    harness.controller.reset(&harness.editor);
+
+    EXPECT_FALSE(harness.controller.dragging());
+    EXPECT_TRUE(harness.session.pivot().persistent_active());
+    EXPECT_EQ(harness.editor.tools().active_tool(), "pivot");
+    EXPECT_TRUE(harness.session.pivot().handle_state().visible);
+    EXPECT_EQ(harness.session.scene().revision(),
+              scene_revision_after_activation);
+    EXPECT_EQ(harness.session.assets().revision(),
+              asset_revision_after_activation);
+    expect_transform_near(*harness.session.scene().transform(box.entity),
+                          before);
+}
+
+TEST(ViewportInteractionControllerTests,
+     PersistentPivotStartsAtMovePivotForFreshOffOriginMesh) {
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef box =
+        create_box_at(harness, {4.0f, -2.0f, 3.0f});
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok);
+    harness.session.history().clear();
+
+    const quader::TransformComponent transform_before =
+        *harness.session.scene().transform(box.entity);
+    const quader::AssetId mesh_before =
+        harness.session.scene().mesh(box.entity)->mesh;
+    const std::uint64_t scene_revision_before =
+        harness.session.scene().revision();
+    const std::uint64_t asset_revision_before =
+        harness.session.assets().revision();
+    const std::optional<quader::SceneBounds> bounds_before =
+        quader::entity_world_bounds(harness.session.scene(),
+                                    harness.session.assets(), box.entity);
+    ASSERT_TRUE(bounds_before.has_value());
+    EXPECT_FALSE(transform_before.custom_pivot);
+
+    ASSERT_TRUE(
+        harness.editor.tools().activate(quader::ViewportToolId::Move).ok);
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    const quader_editor_core::TransformGizmoFrame *move =
+        harness.controller.transform_gizmo_frame();
+    ASSERT_NE(move, nullptr);
+    const quader::QVec3 move_pivot = move->info.pivot;
+    EXPECT_NEAR(move_pivot.x, 4.0f, 0.001f);
+    EXPECT_NEAR(move_pivot.y, -2.0f, 0.001f);
+    EXPECT_NEAR(move_pivot.z, 3.0f, 0.001f);
+    EXPECT_GT(quader::length(move_pivot), 0.1f);
+
+    ASSERT_TRUE(
+        harness.editor.tools().activate(quader::ViewportToolId::Pivot).ok);
+    const quader::PivotHandleState pivot =
+        harness.session.pivot().handle_state();
+    ASSERT_TRUE(pivot.visible);
+    ASSERT_TRUE(pivot.editing);
+    ASSERT_TRUE(pivot.persistent);
+    EXPECT_EQ(pivot.target, box.entity);
+    EXPECT_NEAR(pivot.world_position.x, move_pivot.x, 0.001f);
+    EXPECT_NEAR(pivot.world_position.y, move_pivot.y, 0.001f);
+    EXPECT_NEAR(pivot.world_position.z, move_pivot.z, 0.001f);
+    const std::optional<quader::QVec3> preview =
+        harness.session.pivot().persistent_preview_position();
+    ASSERT_TRUE(preview.has_value());
+    EXPECT_NEAR(preview->x, move_pivot.x, 0.001f);
+    EXPECT_NEAR(preview->y, move_pivot.y, 0.001f);
+    EXPECT_NEAR(preview->z, move_pivot.z, 0.001f);
+
+    const quader::QuaderApiVoidResult applied =
+        harness.editor.tools().commit_active_tool_preview();
+    ASSERT_TRUE(applied.ok) << applied.message;
+    EXPECT_FALSE(harness.session.pivot().persistent_active());
+    EXPECT_FALSE(harness.session.pivot().handle_state().visible);
+    EXPECT_FALSE(harness.editor.tools().active_settings().active);
+    EXPECT_FALSE(harness.editor.history().can_undo());
+    ASSERT_NE(harness.session.scene().transform(box.entity), nullptr);
+    expect_transform_near(*harness.session.scene().transform(box.entity),
+                          transform_before);
+    EXPECT_FALSE(harness.session.scene().transform(box.entity)->custom_pivot);
+    ASSERT_NE(harness.session.scene().mesh(box.entity), nullptr);
+    EXPECT_EQ(harness.session.scene().mesh(box.entity)->mesh, mesh_before);
+    EXPECT_EQ(harness.session.scene().revision(), scene_revision_before);
+    EXPECT_EQ(harness.session.assets().revision(), asset_revision_before);
+    const std::optional<quader::SceneBounds> bounds_after =
+        quader::entity_world_bounds(harness.session.scene(),
+                                    harness.session.assets(), box.entity);
+    ASSERT_TRUE(bounds_after.has_value());
+    EXPECT_NEAR(bounds_after->min.x, bounds_before->min.x, 0.001f);
+    EXPECT_NEAR(bounds_after->min.y, bounds_before->min.y, 0.001f);
+    EXPECT_NEAR(bounds_after->min.z, bounds_before->min.z, 0.001f);
+    EXPECT_NEAR(bounds_after->max.x, bounds_before->max.x, 0.001f);
+    EXPECT_NEAR(bounds_after->max.y, bounds_before->max.y, 0.001f);
+    EXPECT_NEAR(bounds_after->max.z, bounds_before->max.z, 0.001f);
+}
+
+TEST(ViewportInteractionControllerTests,
+     PersistentPivotBakesAndClearsTheVisibleQuickPivotOverride) {
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef box =
+        create_box_at(harness, {4.0f, -2.0f, 3.0f});
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok);
+    const std::optional<quader::SceneBounds> bounds_before =
+        quader::entity_world_bounds(harness.session.scene(),
+                                    harness.session.assets(), box.entity);
+    ASSERT_TRUE(bounds_before.has_value());
+    harness.session.history().clear();
+
+    const quader::QVec3 quick_position{5.0f, -1.0f, 4.0f};
+    harness.session.pivot().begin_quick(quick_position);
+    harness.session.pivot().end_quick_edit();
+    const std::optional<quader::QVec3> quick_query =
+        harness.editor.query().selection_transform_pivot();
+    ASSERT_TRUE(quick_query.has_value());
+    EXPECT_NEAR(quick_query->x, quick_position.x, 0.001f);
+    EXPECT_NEAR(quick_query->y, quick_position.y, 0.001f);
+    EXPECT_NEAR(quick_query->z, quick_position.z, 0.001f);
+
+    ASSERT_TRUE(
+        harness.editor.tools().activate(quader::ViewportToolId::Pivot).ok);
+    const quader::PivotHandleState handle =
+        harness.session.pivot().handle_state();
+    ASSERT_TRUE(handle.visible);
+    EXPECT_NEAR(handle.world_position.x, quick_position.x, 0.001f);
+    EXPECT_NEAR(handle.world_position.y, quick_position.y, 0.001f);
+    EXPECT_NEAR(handle.world_position.z, quick_position.z, 0.001f);
+
+    const quader::QuaderApiVoidResult applied =
+        harness.editor.tools().commit_active_tool_preview();
+    ASSERT_TRUE(applied.ok) << applied.message;
+    ASSERT_TRUE(applied.changed);
+    EXPECT_FALSE(harness.session.pivot().selection_pivot_override().valid);
+    ASSERT_TRUE(harness.session.scene().transform(box.entity)->custom_pivot);
+    std::optional<quader::QVec3> committed =
+        harness.editor.query().selection_transform_pivot();
+    ASSERT_TRUE(committed.has_value());
+    EXPECT_NEAR(committed->x, quick_position.x, 0.001f);
+    EXPECT_NEAR(committed->y, quick_position.y, 0.001f);
+    EXPECT_NEAR(committed->z, quick_position.z, 0.001f);
+    const std::optional<quader::SceneBounds> bounds_after =
+        quader::entity_world_bounds(harness.session.scene(),
+                                    harness.session.assets(), box.entity);
+    ASSERT_TRUE(bounds_after.has_value());
+    EXPECT_NEAR(bounds_after->min.x, bounds_before->min.x, 0.001f);
+    EXPECT_NEAR(bounds_after->min.y, bounds_before->min.y, 0.001f);
+    EXPECT_NEAR(bounds_after->min.z, bounds_before->min.z, 0.001f);
+    EXPECT_NEAR(bounds_after->max.x, bounds_before->max.x, 0.001f);
+    EXPECT_NEAR(bounds_after->max.y, bounds_before->max.y, 0.001f);
+    EXPECT_NEAR(bounds_after->max.z, bounds_before->max.z, 0.001f);
+
+    ASSERT_TRUE(harness.editor.history().undo().ok);
+    EXPECT_FALSE(harness.session.scene().transform(box.entity)->custom_pivot);
+    committed = harness.editor.query().selection_transform_pivot();
+    ASSERT_TRUE(committed.has_value());
+    EXPECT_NEAR(committed->x, 4.0f, 0.001f);
+    EXPECT_NEAR(committed->y, -2.0f, 0.001f);
+    EXPECT_NEAR(committed->z, 3.0f, 0.001f);
+}
+
+TEST(ViewportInteractionControllerTests,
+     PersistentPivotApplyRefreshesTransformGizmoAndUndoRedo) {
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef box = create_unit_box(harness);
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok);
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok);
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    const quader_editor_core::TransformGizmoFrame *gizmo =
+        harness.controller.transform_gizmo_frame();
+    ASSERT_NE(gizmo, nullptr);
+    EXPECT_FLOAT_EQ(gizmo->info.pivot.x, 0.0f);
+    EXPECT_FLOAT_EQ(gizmo->info.pivot.y, 0.0f);
+    EXPECT_FLOAT_EQ(gizmo->info.pivot.z, 0.0f);
+
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Pivot).ok);
+    harness.router.set_active_tool(quader::ViewportToolId::Pivot);
+    harness.session.pivot().set_persistent_preview_position(
+        {0.0f, 1.0f, 0.0f});
+    const quader::QuaderApiVoidResult applied =
+        harness.editor.tools().commit_active_tool_preview();
+    ASSERT_TRUE(applied.ok) << applied.message;
+    ASSERT_TRUE(applied.changed);
+
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok);
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    gizmo = harness.controller.transform_gizmo_frame();
+    ASSERT_NE(gizmo, nullptr);
+    EXPECT_FLOAT_EQ(gizmo->info.pivot.x, 0.0f);
+    EXPECT_FLOAT_EQ(gizmo->info.pivot.y, 1.0f);
+    EXPECT_FLOAT_EQ(gizmo->info.pivot.z, 0.0f);
+
+    ASSERT_TRUE(harness.editor.history().undo().ok);
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    gizmo = harness.controller.transform_gizmo_frame();
+    ASSERT_NE(gizmo, nullptr);
+    EXPECT_FLOAT_EQ(gizmo->info.pivot.x, 0.0f);
+    EXPECT_FLOAT_EQ(gizmo->info.pivot.y, 0.0f);
+    EXPECT_FLOAT_EQ(gizmo->info.pivot.z, 0.0f);
+
+    ASSERT_TRUE(harness.editor.history().redo().ok);
+    (void)harness.controller.handle_before_active_tool(harness.editor,
+                                                       harness.frame());
+    gizmo = harness.controller.transform_gizmo_frame();
+    ASSERT_NE(gizmo, nullptr);
+    EXPECT_FLOAT_EQ(gizmo->info.pivot.x, 0.0f);
+    EXPECT_FLOAT_EQ(gizmo->info.pivot.y, 1.0f);
+    EXPECT_FLOAT_EQ(gizmo->info.pivot.z, 0.0f);
+}
+
 TEST(ViewportInteractionControllerTests, HoverSurvivesNavigationSuppressionAndClearsWhenPointerLeaves) {
     ViewportInteractionHarness harness;
     const quader::QuaderModelingObjectRef box = create_unit_box(harness);
@@ -1926,6 +2303,142 @@ TEST(ViewportHostInteractionPolicyTests,
   request.left_button_release_only = false;
   request.insert_edge_loop_dragging = true;
   EXPECT_TRUE(should_cancel_modal_tool_for_external_pointer(request));
+}
+
+TEST(ViewportHostInteractionPolicyTests,
+     RepeatedShortcutDoesNotRestartAnAlreadyActiveEditorTool) {
+  using quader::should_dispatch_viewport_tool_activation;
+
+  EXPECT_FALSE(should_dispatch_viewport_tool_activation({}));
+  EXPECT_TRUE(should_dispatch_viewport_tool_activation({
+      .activation_requested = true,
+      .tool_changed = true,
+      .editor_tool_matches_requested = true,
+  }));
+  EXPECT_TRUE(should_dispatch_viewport_tool_activation({
+      .activation_requested = true,
+      .tool_changed = false,
+      .editor_tool_matches_requested = false,
+  }));
+  EXPECT_FALSE(should_dispatch_viewport_tool_activation({
+      .activation_requested = true,
+      .tool_changed = false,
+      .editor_tool_matches_requested = true,
+  }));
+}
+
+TEST(ViewportHostInteractionPolicyTests,
+     OrderedEdgesDispatchEverySameFrameKeyboardPress) {
+  const std::vector<quader::QuaderInputChord> pressed{
+      {.device = quader::QuaderInputDevice::Keyboard,
+       .key = quader::QuaderKeyCode::W},
+      {.device = quader::QuaderInputDevice::Keyboard,
+       .key = quader::QuaderKeyCode::E},
+  };
+  std::vector<quader::QuaderKeyCode> dispatched;
+
+  quader::dispatch_ordered_viewport_input_edges(
+      pressed, {},
+      [&](const quader::QuaderInputChord &chord,
+          quader::ViewportInputEdgeKind kind) {
+        EXPECT_EQ(kind, quader::ViewportInputEdgeKind::Pressed);
+        dispatched.push_back(chord.key);
+        return true;
+      });
+
+  EXPECT_EQ(dispatched,
+            (std::vector{quader::QuaderKeyCode::W,
+                         quader::QuaderKeyCode::E}));
+}
+
+TEST(ViewportHostInteractionPolicyTests,
+     PendingChordOwnsContinuationBeforeStatelessQuickAction) {
+  const quader::QuaderInputChord continuation{
+      .device = quader::QuaderInputDevice::Keyboard,
+      .key = quader::QuaderKeyCode::D,
+  };
+  int stateless_action_attempts = 0;
+  int stateful_dispatches = 0;
+
+  EXPECT_TRUE(quader::dispatch_viewport_input_edge(
+      continuation, quader::ViewportInputEdgeKind::Pressed,
+      []() { return true; },
+      [&](const quader::QuaderInputChord &,
+          quader::ViewportInputEdgeKind) {
+        ++stateless_action_attempts;
+        return true;
+      },
+      [&](const quader::QuaderInputChord &chord,
+          quader::ViewportInputEdgeKind kind) {
+        EXPECT_EQ(chord, continuation);
+        EXPECT_EQ(kind, quader::ViewportInputEdgeKind::Pressed);
+        ++stateful_dispatches;
+        return false;
+      }));
+  EXPECT_EQ(stateless_action_attempts, 0);
+  EXPECT_EQ(stateful_dispatches, 1);
+}
+
+TEST(ViewportHostInteractionPolicyTests,
+     DirectionalWheelBindingPrecedesGenericWheelFallback) {
+  const quader::QuaderInputChord generic{
+      .device = quader::QuaderInputDevice::Mouse,
+      .gesture = quader::QuaderInputGesture::Wheel,
+  };
+  const quader::QuaderInputChord up{
+      .device = quader::QuaderInputDevice::Mouse,
+      .gesture = quader::QuaderInputGesture::WheelUp,
+  };
+  const std::vector<quader::QuaderInputChord> wheel{generic, up};
+  std::vector<quader::QuaderInputGesture> dispatched;
+
+  quader::dispatch_ordered_viewport_input_edges(
+      {}, wheel,
+      [&](const quader::QuaderInputChord &chord,
+          quader::ViewportInputEdgeKind kind) {
+        EXPECT_EQ(kind, quader::ViewportInputEdgeKind::Wheel);
+        dispatched.push_back(chord.gesture);
+        return chord.gesture == quader::QuaderInputGesture::WheelUp;
+      });
+  EXPECT_EQ(dispatched,
+            (std::vector{quader::QuaderInputGesture::WheelUp}));
+
+  dispatched.clear();
+  quader::dispatch_ordered_viewport_input_edges(
+      {}, wheel,
+      [&](const quader::QuaderInputChord &chord,
+          quader::ViewportInputEdgeKind) {
+        dispatched.push_back(chord.gesture);
+        return chord.gesture == quader::QuaderInputGesture::Wheel;
+      });
+  EXPECT_EQ(dispatched,
+            (std::vector{quader::QuaderInputGesture::WheelUp,
+                         quader::QuaderInputGesture::Wheel}));
+}
+
+TEST(ViewportHoverControllerTests,
+     ResolvedGridSnapToggleInvalidatesStationaryBoxHover) {
+  quader::ViewportHoverController controller;
+  quader::ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  quader::ViewportHoverWorkRequest request{
+      .active_tool = quader::ViewportToolId::Box,
+      .grid_preset = 6,
+      .grid_snap_enabled = true,
+      .mouse_local = {320.0f, 240.0f},
+      .viewport_size = {800.0f, 600.0f},
+  };
+
+  const quader::ViewportHoverWorkKey snapped =
+      controller.make_key(camera, request);
+  EXPECT_TRUE(controller.claim(snapped));
+  EXPECT_FALSE(controller.claim(snapped));
+
+  request.grid_snap_enabled = false;
+  const quader::ViewportHoverWorkKey unsnapped =
+      controller.make_key(camera, request);
+  EXPECT_FALSE(snapped.matches(unsnapped));
+  EXPECT_TRUE(controller.claim(unsnapped));
 }
 
 TEST(ViewportHostInteractionPolicyTests,

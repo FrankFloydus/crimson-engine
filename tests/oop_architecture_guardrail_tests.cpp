@@ -987,8 +987,10 @@ TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPrevie
             std::string::npos);
   EXPECT_NE(service_source.find("has_selected_ancestor(document, entity)"),
             std::string::npos);
+  EXPECT_NE(service_source.find("try_scene_matrix_inverse(world_transform)"),
+            std::string::npos);
   EXPECT_NE(service_source.find(
-                "transform_point(inverse(world_transform), world_pivot)"),
+                "transform_point(*world_inverse, world_pivot)"),
             std::string::npos);
   EXPECT_NE(service_source.find("selected_transform_pivot("), std::string::npos);
   EXPECT_NE(service_source.find("pin_target_local_pivot_to_world_point("),
@@ -1154,6 +1156,37 @@ TEST(OopArchitectureGuardrailTests,
   EXPECT_NE(install_hooks.find("editor.preferences().set_runtime_hooks("),
             std::string::npos);
   EXPECT_EQ(ui_refresh.find("set_runtime_hooks("), std::string::npos);
+}
+
+TEST(OopArchitectureGuardrailTests,
+     VisiblePivotResolutionHasOneSceneOwner) {
+  const std::string resolver = read_file(
+      source_root() / "src/scene/scene_transform_pivot.cpp");
+  const std::string pivot_service = read_file(
+      source_root() / "src/editor/pivot/pivot_tool_service.cpp");
+  const std::string query_api =
+      read_file(source_root() / "src/api/quader_query_api.cpp");
+  const std::string transform_drag = read_file(
+      source_root() / "src/editor/transform/scene_transform_drag_service.cpp");
+
+  EXPECT_NE(resolver.find("resolve_entity_visible_pivot("),
+            std::string::npos);
+  EXPECT_NE(resolver.find("resolve_entity_transform_visible_pivot("),
+            std::string::npos);
+  EXPECT_NE(resolver.find("resolve_scene_selection_visible_pivot("),
+            std::string::npos);
+  EXPECT_NE(resolver.find("transform->custom_pivot"), std::string::npos);
+  EXPECT_NE(resolver.find("entity_hierarchy_world_bounds("),
+            std::string::npos);
+  EXPECT_NE(pivot_service.find("resolve_entity_transform_visible_pivot("),
+            std::string::npos);
+  EXPECT_NE(query_api.find("resolve_scene_selection_visible_pivot("),
+            std::string::npos);
+  EXPECT_NE(transform_drag.find("resolve_scene_selection_visible_pivot("),
+            std::string::npos);
+  EXPECT_EQ(query_api.find("single_object_selection_custom_pivot("),
+            std::string::npos);
+  EXPECT_EQ(pivot_service.find("QVec3 world_origin_of("), std::string::npos);
 }
 
 TEST(OopArchitectureGuardrailTests, RenderCodeDoesNotCallDocumentOrAssetMutators) {

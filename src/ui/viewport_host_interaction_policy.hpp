@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_input_types.hpp"
+
 #include <cstddef>
 #include <span>
 
@@ -77,6 +79,87 @@ struct ViewportExternalPointerCancelRequest {
   }
   return !request.insert_edge_loop_dragging && !request.cut_dragging &&
          !request.mirror_dragging;
+}
+
+/// Supplies router and editor state for a tool-activation dispatch decision.
+struct ViewportToolActivationDispatchRequest {
+  bool activation_requested = false;
+  bool tool_changed = false;
+  bool editor_tool_matches_requested = false;
+};
+
+/// Restarts a tool only when its shortcut requests a real editor transition.
+[[nodiscard]] constexpr bool should_dispatch_viewport_tool_activation(
+    const ViewportToolActivationDispatchRequest &request) {
+  return request.activation_requested &&
+         (request.tool_changed || !request.editor_tool_matches_requested);
+}
+
+/// Identifies the semantic edge represented by one canonical input chord.
+enum class ViewportInputEdgeKind {
+  Pressed,
+  Wheel,
+};
+
+/// Returns whether Qt's generic/directional wheel chords describe one event.
+[[nodiscard]] inline bool viewport_wheel_chords_share_event(
+    const QuaderInputChord &generic, const QuaderInputChord &directional) {
+  if (generic.gesture != QuaderInputGesture::Wheel ||
+      (directional.gesture != QuaderInputGesture::WheelUp &&
+       directional.gesture != QuaderInputGesture::WheelDown)) {
+    return false;
+  }
+  QuaderInputChord normalized_directional = directional;
+  normalized_directional.gesture = QuaderInputGesture::Wheel;
+  return generic == normalized_directional;
+}
+
+/**
+ * Dispatches discrete viewport edges deterministically. Keyboard presses keep
+ * arrival order. A directional vertical-wheel binding gets first refusal over
+ * its generic Wheel fallback so one physical event cannot trigger both.
+ */
+template <typename DispatchEdge>
+void dispatch_ordered_viewport_input_edges(
+    std::span<const QuaderInputChord> pressed,
+    std::span<const QuaderInputChord> wheel, DispatchEdge &&dispatch_edge) {
+  for (const QuaderInputChord &chord : pressed) {
+    (void)dispatch_edge(chord, ViewportInputEdgeKind::Pressed);
+  }
+
+  for (std::size_t index = 0; index < wheel.size();) {
+    if (index + 1u < wheel.size() &&
+        viewport_wheel_chords_share_event(wheel[index], wheel[index + 1u])) {
+      if (!dispatch_edge(wheel[index + 1u], ViewportInputEdgeKind::Wheel)) {
+        (void)dispatch_edge(wheel[index], ViewportInputEdgeKind::Wheel);
+      }
+      index += 2u;
+      continue;
+    }
+    (void)dispatch_edge(wheel[index], ViewportInputEdgeKind::Wheel);
+    ++index;
+  }
+}
+
+/**
+ * Gives a pending multi-chord sequence ownership of its continuation before a
+ * stateless single-chord action is considered.
+ */
+template <typename HasPendingChord, typename TryStatelessAction,
+          typename DispatchBinding>
+[[nodiscard]] bool dispatch_viewport_input_edge(
+    const QuaderInputChord &chord, ViewportInputEdgeKind kind,
+    HasPendingChord &&has_pending_chord,
+    TryStatelessAction &&try_stateless_action,
+    DispatchBinding &&dispatch_binding) {
+  if (has_pending_chord()) {
+    (void)dispatch_binding(chord, kind);
+    return true;
+  }
+  if (try_stateless_action(chord, kind)) {
+    return true;
+  }
+  return dispatch_binding(chord, kind);
 }
 
 /// Lists semantic contributors that can require the renderer's overlay pass.

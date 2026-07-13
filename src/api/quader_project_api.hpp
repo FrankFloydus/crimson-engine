@@ -41,6 +41,8 @@ private:
     choose_save_as_path() const;
     [[nodiscard]] std::optional<std::filesystem::path>
     choose_export_obj_path() const;
+    [[nodiscard]] std::optional<QuaderApiVoidResult>
+    dirty_replacement_preflight(std::string_view action_id);
 
     QuaderApiSession session_;
     std::filesystem::path path_;

@@ -21,6 +21,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -32,6 +33,69 @@ namespace {
 using test::guardrail::read_source_file;
 using test::guardrail::source_root;
 using test::guardrail::source_slice;
+
+void expect_point_tool_click_uses_queued_press_coordinate(
+    ViewportToolId tool_id, bool expected_dragging) {
+  SceneDocument document;
+  AssetRegistry assets;
+  ModelingSessionService modeling(document, assets);
+  ViewportModelingToolPortAdapter tool_ports(modeling);
+  ViewportToolState state;
+  state.active_tool = tool_id;
+  ViewportCameraController camera;
+  ViewportModalToolState modal_state;
+
+  constexpr float kDevicePixelRatio = 2.0f;
+  const QVec2 queued_press_physical{
+      75.0f * kDevicePixelRatio,
+      50.0f * kDevicePixelRatio,
+  };
+  const QVec2 later_frame_mouse_physical{900.0f, 700.0f};
+  QVec2 dispatched_position{};
+  bool dispatched_dragging = false;
+  int dispatch_count = 0;
+  ViewportPointToolContext point_context;
+  point_context.make_event_at = [&](QVec2 position, bool dragging) {
+    ++dispatch_count;
+    dispatched_position = position;
+    dispatched_dragging = dragging;
+    return ModelingToolRayEvent{
+        .screen_position = position,
+        .dragging = dragging,
+    };
+  };
+  ViewportToolContext context{
+      .state = state,
+      .camera = camera,
+      .ports = tool_ports.ports(),
+      .modal_state = &modal_state,
+      .point = &point_context,
+  };
+
+  const ViewportTool *tool = find_viewport_tool(tool_id);
+  ASSERT_NE(tool, nullptr);
+  const ViewportToolResult result = tool->handle_event(
+      context,
+      ViewportToolEvent{
+          .kind = ViewportToolEventKind::Frame,
+          .tool = tool_id,
+          .pointer =
+              {
+                  .left_clicked = true,
+                  .can_interact = true,
+                  .suppress_hover_work = true,
+                  .mouse_local = later_frame_mouse_physical,
+                  .left_click_local = queued_press_physical,
+                  .viewport_size = {1600.0f, 1200.0f},
+              },
+      });
+
+  EXPECT_TRUE(result.handled);
+  ASSERT_EQ(dispatch_count, 1);
+  EXPECT_FLOAT_EQ(dispatched_position.x, queued_press_physical.x);
+  EXPECT_FLOAT_EQ(dispatched_position.y, queued_press_physical.y);
+  EXPECT_EQ(dispatched_dragging, expected_dragging);
+}
 
 TEST(ViewportToolCatalogTests, CatalogContainsExpectedInteractiveToolContracts) {
   ASSERT_EQ(viewport_tool_catalog().size(), viewport_tool_descriptors().size());
@@ -209,6 +273,28 @@ TEST(ViewportToolRuntimeTests, RuntimeDispatchesShortcutStateChanges) {
     EXPECT_FALSE(result.focus_document_requested);
 }
 
+TEST(ViewportToolRuntimeTests,
+     RepeatedPivotShortcutRequestsNativeToolActivation) {
+  ViewportToolRuntime runtime;
+  ViewportToolState state;
+  ViewportCameraController camera;
+  ViewportShortcut shortcut;
+  shortcut.kind = ViewportShortcutKind::ActivateTool;
+  shortcut.tool = ViewportToolId::Pivot;
+
+  ViewportInputResult result;
+  ASSERT_TRUE(runtime.handle_shortcut(shortcut, state, camera, result));
+  EXPECT_TRUE(result.tool_activation_requested);
+  EXPECT_TRUE(result.tool_changed);
+  EXPECT_EQ(state.active_tool, ViewportToolId::Pivot);
+
+  result = {};
+  ASSERT_TRUE(runtime.handle_shortcut(shortcut, state, camera, result));
+  EXPECT_TRUE(result.tool_activation_requested);
+  EXPECT_FALSE(result.tool_changed);
+  EXPECT_EQ(state.active_tool, ViewportToolId::Pivot);
+}
+
 TEST(ViewportToolRuntimeTests, RuntimeRoutesToolEventsToActiveTool) {
     ViewportToolRuntime runtime;
     ViewportToolState state;
@@ -244,6 +330,191 @@ TEST(ViewportToolRuntimeTests, RuntimeRoutesToolEventsToActiveTool) {
     EXPECT_EQ(state.active_tool, ViewportToolId::Select);
     ASSERT_NE(runtime.active_tool(), nullptr);
     EXPECT_EQ(runtime.active_tool()->viewport_tool(), ViewportToolId::Select);
+}
+
+TEST(ViewportToolRuntimeTests,
+     KnifeClickUsesQueuedPhysicalPressCoordinateWhenMouseMoveSharesFrame) {
+  expect_point_tool_click_uses_queued_press_coordinate(ViewportToolId::Knife,
+                                                       false);
+}
+
+TEST(ViewportToolRuntimeTests,
+     InsertEdgeLoopClickUsesQueuedPhysicalPressCoordinateWhenMouseMoveSharesFrame) {
+  expect_point_tool_click_uses_queued_press_coordinate(
+      ViewportToolId::InsertEdgeLoop, true);
+}
+
+TEST(ViewportToolRuntimeTests,
+     InsertEdgeLoopHoverPublishesPreviewBeforeANonQuadTermination) {
+  SceneDocument document;
+  AssetRegistry assets;
+  ModelingSessionService modeling(document, assets);
+
+  quader_poly::Document source;
+  const quader_poly::ElementId bottom_left =
+      quader_poly::add_vertex(source, {0.0F, 0.0F, 0.0F});
+  const quader_poly::ElementId bottom_right =
+      quader_poly::add_vertex(source, {1.0F, 0.0F, 0.0F});
+  const quader_poly::ElementId shared_right =
+      quader_poly::add_vertex(source, {1.0F, 1.0F, 0.0F});
+  const quader_poly::ElementId shared_left =
+      quader_poly::add_vertex(source, {0.0F, 1.0F, 0.0F});
+  const quader_poly::ElementId triangle_tip =
+      quader_poly::add_vertex(source, {0.5F, 2.0F, 0.0F});
+  ASSERT_NE(quader_poly::add_face(
+                source, std::array{bottom_left, bottom_right, shared_right,
+                                   shared_left}),
+            quader_poly::kInvalidElementId);
+  ASSERT_NE(quader_poly::add_face(
+                source, std::array{shared_left, shared_right, triangle_tip}),
+            quader_poly::kInvalidElementId);
+
+  const ModelingCreateBoxResult mesh = modeling.create_mesh({
+      .document = source,
+      .name = "Quad Strip With Non-Quad Termination",
+  });
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+
+  ViewportToolRuntime runtime;
+  ViewportToolState state;
+  ViewportCameraController camera;
+  ViewportModelingToolPortAdapter tool_ports(modeling);
+  ASSERT_TRUE(runtime.set_active_tool(state, ViewportToolId::InsertEdgeLoop));
+  ASSERT_TRUE(runtime.activate_active_tool(modeling).ok);
+
+  ViewportPointToolContext point_context;
+  point_context.make_event_at = [](QVec2 position, bool dragging) {
+    return ModelingToolRayEvent{
+        .screen_position = position,
+        .ray =
+            {
+                .origin = {0.5F, 0.0F, 5.0F},
+                .direction = {0.0F, 0.0F, -1.0F},
+            },
+        .camera =
+            {
+                .orthographic = true,
+                .origin = {0.5F, 0.0F, 5.0F},
+                .x_axis = {1.0F, 0.0F, 0.0F},
+                .y_axis = {0.0F, 1.0F, 0.0F},
+                .z_axis = {0.0F, 0.0F, 1.0F},
+                .viewport_size = {100.0F, 100.0F},
+                .orthographic_size = 100.0,
+                .fov_degrees = 60.0,
+            },
+        .grid_size = 1.0,
+        .vertex_radius = 0.3,
+        .edge_radius = 0.2,
+        .snap_enabled = false,
+        .dragging = dragging,
+    };
+  };
+  ViewportToolContext context{
+      .state = state,
+      .camera = camera,
+      .ports = tool_ports.ports(),
+      .point = &point_context,
+  };
+
+  const ViewportToolResult result = runtime.handle_active_tool_event(
+      state, context,
+      ViewportToolEvent{
+          .kind = ViewportToolEventKind::Frame,
+          .tool = ViewportToolId::InsertEdgeLoop,
+          .pointer =
+              {
+                  .hovered = true,
+                  .can_interact = true,
+                  .mouse_local = {50.0F, 50.0F},
+                  .viewport_size = {100.0F, 100.0F},
+              },
+      });
+
+  EXPECT_TRUE(result.handled);
+  EXPECT_TRUE(modeling.tool_status().insert_edge_loop_has_preview);
+}
+
+TEST(ViewportToolRuntimeTests,
+     InsertEdgeLoopHoverFromInsideFlippedMeshPublishesPreview) {
+  SceneDocument document;
+  AssetRegistry assets;
+  ModelingSessionService modeling(document, assets);
+
+  quader_poly::Document source = quader_poly::make_cube({});
+  for (quader_poly::Face &face : source.faces) {
+    std::reverse(face.vertices.begin(), face.vertices.end());
+    std::reverse(face.uvs.begin(), face.uvs.end());
+  }
+  const ModelingCreateBoxResult mesh = modeling.create_mesh({
+      .document = source,
+      .name = "Inside Flipped Edge Loop Source",
+  });
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+
+  ViewportToolRuntime runtime;
+  ViewportToolState state;
+  ViewportCameraController camera;
+  ViewportModelingToolPortAdapter tool_ports(modeling);
+  ASSERT_TRUE(runtime.set_active_tool(state, ViewportToolId::InsertEdgeLoop));
+  ASSERT_TRUE(runtime.activate_active_tool(modeling).ok);
+
+  constexpr float kInvSqrtTwo = 0.70710678118F;
+  ViewportPointToolContext point_context;
+  point_context.make_event_at = [](QVec2 position, bool dragging) {
+    return ModelingToolRayEvent{
+        .screen_position = position,
+        .ray =
+            {
+                .origin = {0.0F, 0.0F, 0.0F},
+                .direction = {kInvSqrtTwo, 0.0F, kInvSqrtTwo},
+            },
+        .camera =
+            {
+                .orthographic = false,
+                .origin = {0.0F, 0.0F, 0.0F},
+                .x_axis = {kInvSqrtTwo, 0.0F, -kInvSqrtTwo},
+                .y_axis = {0.0F, 1.0F, 0.0F},
+                .z_axis = {-kInvSqrtTwo, 0.0F, -kInvSqrtTwo},
+                .viewport_size = {800.0F, 600.0F},
+                .orthographic_size = 100.0,
+                .fov_degrees = 60.0,
+            },
+        .grid_size = 1.0,
+        .vertex_radius = 0.2,
+        .edge_radius = 0.2,
+        .snap_enabled = false,
+        .dragging = dragging,
+    };
+  };
+  ViewportToolContext context{
+      .state = state,
+      .camera = camera,
+      .ports = tool_ports.ports(),
+      .point = &point_context,
+  };
+
+  const ViewportToolResult result = runtime.handle_active_tool_event(
+      state, context,
+      ViewportToolEvent{
+          .kind = ViewportToolEventKind::Frame,
+          .tool = ViewportToolId::InsertEdgeLoop,
+          .pointer =
+              {
+                  .hovered = true,
+                  .can_interact = true,
+                  .mouse_local = {400.0F, 300.0F},
+                  .viewport_size = {800.0F, 600.0F},
+              },
+      });
+
+  EXPECT_TRUE(result.handled);
+  EXPECT_TRUE(modeling.tool_status().insert_edge_loop_has_preview);
+  const ViewportOverlayFrame overlay = modeling.selection_overlay_frame();
+  EXPECT_TRUE(std::ranges::any_of(
+      overlay.lines, [](const ViewportOverlayLine &line) {
+        return line.source == ViewportOverlaySource::Tool ||
+               line.layer == ViewportOverlayLayer::HoverEdge;
+      }));
 }
 
 TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
@@ -584,10 +855,8 @@ TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalToo
             std::string::npos);
   EXPECT_NE(viewport_panel.find("make_tool_event_at"), std::string::npos);
   EXPECT_NE(viewport_panel.find("snap_enabled ="), std::string::npos);
-  EXPECT_NE(
-      viewport_panel.find(
-          "viewport_grid_snap_active(settings, input.modifiers.primary)"),
-      std::string::npos);
+  EXPECT_NE(viewport_panel.find("snap_enabled = resolved_grid_snap_enabled"),
+            std::string::npos);
   EXPECT_NE(viewport_panel.find("vertex_radius ="), std::string::npos);
   EXPECT_NE(viewport_panel.find(
                 "settings.float_value(ViewportFloatSettingId::PickVertexRadius)"),

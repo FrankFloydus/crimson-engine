@@ -242,6 +242,7 @@ add_library(quader_document STATIC
     src/scene/document/project_document.cpp
     src/scene/scene_bounds.cpp
     src/scene/scene_document.cpp
+    src/scene/scene_transform_pivot.cpp
 )
 
 quader_configure_core_module(quader_document)
@@ -443,7 +444,14 @@ endif()
 
 find_package(lodepng CONFIG REQUIRED)
 
-set(QUADER_MATERIAL_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/materials")
+if(CMAKE_CONFIGURATION_TYPES)
+    set(QUADER_RUNTIME_DEPLOY_DIR "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+else()
+    set(QUADER_RUNTIME_DEPLOY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+endif()
+
+set(QUADER_MATERIAL_OUTPUT_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/materials")
 file(MAKE_DIRECTORY "${QUADER_MATERIAL_OUTPUT_DIR}")
 
 function(quader_compile_material target_name input_file output_name)
@@ -462,14 +470,17 @@ function(quader_compile_material target_name input_file output_name)
 endfunction()
 
 set(QUADER_FILAMENT_MATERIAL_TARGETS)
+set(QUADER_FILAMENT_MATERIAL_OUTPUTS)
 set(QUADER_FILAMENT_MATERIAL_COPY_COMMANDS)
 macro(quader_register_filament_material target_name input_file output_name)
     quader_compile_material("${target_name}" "${input_file}" "${output_name}")
     list(APPEND QUADER_FILAMENT_MATERIAL_TARGETS "${target_name}")
+    list(APPEND QUADER_FILAMENT_MATERIAL_OUTPUTS
+        "${${target_name}_OUTPUT}")
     list(APPEND QUADER_FILAMENT_MATERIAL_COPY_COMMANDS
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                 "${${target_name}_OUTPUT}"
-                "$<TARGET_FILE_DIR:quader>/materials/${output_name}.filamat")
+                "${QUADER_RUNTIME_DEPLOY_DIR}/materials/${output_name}.filamat")
 endmacro()
 
 set(QUADER_DEFAULT_MATERIAL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/modeling_assets/materials/default")
@@ -762,44 +773,107 @@ foreach(_quader_public_example IN LISTS QUADER_PUBLIC_CPP_EXAMPLES)
     target_link_libraries("quader_example_${_quader_public_example_name}" PRIVATE quader_runtime)
 endforeach()
 
-add_custom_command(TARGET quader POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/materials"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/materials/default"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/icons"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/ibl"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/locales"
-    COMMAND "${CMAKE_COMMAND}" -E remove_directory "$<TARGET_FILE_DIR:quader>/fonts"
-    COMMAND "${CMAKE_COMMAND}" -E remove_directory "$<TARGET_FILE_DIR:quader>/styles"
-    COMMAND "${CMAKE_COMMAND}" -E remove_directory "$<TARGET_FILE_DIR:quader>/ui"
-    COMMAND "${CMAKE_COMMAND}" -E remove_directory "$<TARGET_FILE_DIR:quader>/shaders"
+file(GLOB_RECURSE QUADER_RUNTIME_IBL_INPUTS
+    CONFIGURE_DEPENDS
+    LIST_DIRECTORIES false
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/ibl/*")
+file(GLOB QUADER_RUNTIME_LOCALE_INPUTS
+    CONFIGURE_DEPENDS
+    LIST_DIRECTORIES false
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/locales/*")
+
+set(QUADER_RUNTIME_RESOURCE_INPUTS
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/logo.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/point_light.png"
+    "${QUADER_DEFAULT_ALBEDO_TEXTURE}"
+    "${QUADER_DEFAULT_ROUGHNESS_TEXTURE}"
+    ${QUADER_FILAMENT_MATERIAL_OUTPUTS}
+    ${QUADER_RUNTIME_IBL_INPUTS}
+    ${QUADER_RUNTIME_LOCALE_INPUTS})
+list(SORT QUADER_RUNTIME_RESOURCE_INPUTS)
+
+set(QUADER_RUNTIME_RESOURCE_STAMP_ROOT
+    "${CMAKE_CURRENT_BINARY_DIR}/runtime-resource-stamps")
+file(MAKE_DIRECTORY "${QUADER_RUNTIME_RESOURCE_STAMP_ROOT}")
+set(QUADER_RUNTIME_RESOURCE_MANIFEST
+    "${QUADER_RUNTIME_RESOURCE_STAMP_ROOT}/manifest.txt")
+string(JOIN "\n" QUADER_RUNTIME_RESOURCE_MANIFEST_CONTENT
+    ${QUADER_RUNTIME_RESOURCE_INPUTS})
+file(GENERATE
+    OUTPUT "${QUADER_RUNTIME_RESOURCE_MANIFEST}"
+    CONTENT "${QUADER_RUNTIME_RESOURCE_MANIFEST_CONTENT}\n")
+
+if(CMAKE_CONFIGURATION_TYPES)
+    set(QUADER_RUNTIME_RESOURCE_STAMP_DIR
+        "${QUADER_RUNTIME_RESOURCE_STAMP_ROOT}/$<CONFIG>")
+else()
+    set(QUADER_RUNTIME_RESOURCE_STAMP_DIR
+        "${QUADER_RUNTIME_RESOURCE_STAMP_ROOT}")
+endif()
+set(QUADER_RUNTIME_RESOURCE_STAMP
+    "${QUADER_RUNTIME_RESOURCE_STAMP_DIR}/deploy.stamp")
+
+add_custom_command(
+    OUTPUT "${QUADER_RUNTIME_RESOURCE_STAMP}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "${QUADER_RUNTIME_RESOURCE_STAMP_DIR}"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory
+            "${QUADER_RUNTIME_DEPLOY_DIR}/materials"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory
+            "${QUADER_RUNTIME_DEPLOY_DIR}/icons"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory
+            "${QUADER_RUNTIME_DEPLOY_DIR}/ibl"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory
+            "${QUADER_RUNTIME_DEPLOY_DIR}/locales"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory
+            "${QUADER_RUNTIME_DEPLOY_DIR}/fonts"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory
+            "${QUADER_RUNTIME_DEPLOY_DIR}/styles"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory
+            "${QUADER_RUNTIME_DEPLOY_DIR}/ui"
+    COMMAND "${CMAKE_COMMAND}" -E remove_directory
+            "${QUADER_RUNTIME_DEPLOY_DIR}/shaders"
     COMMAND "${CMAKE_COMMAND}" -E rm -f
-            "$<TARGET_FILE_DIR:quader>/SDL3.dll"
-            "$<TARGET_FILE_DIR:quader>/rmlui.dll"
-            "$<TARGET_FILE_DIR:quader>/rmlui_debugger.dll"
-            "$<TARGET_FILE_DIR:quader>/quader_platform_sdl_win32.lib"
-            "$<TARGET_FILE_DIR:quader>/quader_ui_imgui.lib"
-            "$<TARGET_FILE_DIR:quader>/materials/imgui.filamat"
-            "$<TARGET_FILE_DIR:quader>/icons/empty_icon.png"
-            "$<TARGET_FILE_DIR:quader>/icons/hide_icon.png"
-            "$<TARGET_FILE_DIR:quader>/icons/lock_icon.png"
-            "$<TARGET_FILE_DIR:quader>/icons/mesh_icon.png"
-            "$<TARGET_FILE_DIR:quader>/icons/quader-logo@2x.png"
-            "$<TARGET_FILE_DIR:quader>/icons/show_icon.png"
-            "$<TARGET_FILE_DIR:quader>/icons/unlock_icon.png"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/SDL3.dll"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/rmlui.dll"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/rmlui_debugger.dll"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/quader_platform_sdl_win32.lib"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/quader_ui_imgui.lib"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "${QUADER_RUNTIME_DEPLOY_DIR}/materials/default"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory
+            "${QUADER_RUNTIME_DEPLOY_DIR}/icons"
     ${QUADER_FILAMENT_MATERIAL_COPY_COMMANDS}
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/logo.png"
-            "$<TARGET_FILE_DIR:quader>/icons/logo.png"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/icons/logo.png"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/point_light.png"
-            "$<TARGET_FILE_DIR:quader>/icons/point_light.png"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/icons/point_light.png"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/ibl"
-            "$<TARGET_FILE_DIR:quader>/ibl"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/ibl"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/locales"
-            "$<TARGET_FILE_DIR:quader>/locales"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/locales"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${QUADER_DEFAULT_ALBEDO_TEXTURE}"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/materials/default/default_albedo.png"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${QUADER_DEFAULT_ROUGHNESS_TEXTURE}"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/materials/default/default_roughness.png"
+    COMMAND "${CMAKE_COMMAND}" -E touch
+            "${QUADER_RUNTIME_RESOURCE_STAMP}"
+    DEPENDS
+        "${QUADER_RUNTIME_RESOURCE_MANIFEST}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt"
+        ${QUADER_RUNTIME_RESOURCE_INPUTS}
+    COMMENT "Synchronizing Quader runtime resources"
     VERBATIM)
+
+add_custom_target(quader_runtime_resources
+    DEPENDS "${QUADER_RUNTIME_RESOURCE_STAMP}")
+add_dependencies(quader quader_runtime_resources)
 
 if(QUADER_ENABLE_SENTRY AND WIN32)
     add_custom_command(TARGET quader POST_BUILD
@@ -810,17 +884,6 @@ if(QUADER_ENABLE_SENTRY AND WIN32)
                 "${QUADER_SENTRY_CRASHPAD_ZDLL}"
                 "$<TARGET_FILE_DIR:quader>/z.dll"
         VERBATIM)
-endif()
-
-if(EXISTS "${QUADER_DEFAULT_ALBEDO_TEXTURE}" AND EXISTS "${QUADER_DEFAULT_ROUGHNESS_TEXTURE}")
-    add_custom_command(TARGET quader POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${QUADER_DEFAULT_ALBEDO_TEXTURE}"
-            "$<TARGET_FILE_DIR:quader>/materials/default/default_albedo.png"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${QUADER_DEFAULT_ROUGHNESS_TEXTURE}"
-            "$<TARGET_FILE_DIR:quader>/materials/default/default_roughness.png"
-    VERBATIM)
 endif()
 
 endif()
@@ -854,6 +917,7 @@ if(QUADER_BUILD_TESTS)
         tests/localization_tests.cpp
         tests/math_types_tests.cpp
         tests/mesh_arrangement_tests.cpp
+        tests/copy_pivot_from_active_tests.cpp
         tests/obj_export_tests.cpp
         tests/outliner_panel_tests.cpp
         tests/ui_panel_manager_tests.cpp

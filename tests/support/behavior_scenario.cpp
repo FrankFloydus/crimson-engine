@@ -216,6 +216,10 @@ BehaviorSnapshot BehaviorScenario::snapshot(std::string label) const {
     return result;
 }
 
+std::size_t BehaviorScenario::modeling_object_count() const {
+  return session_.modeling().objects().size();
+}
+
 void BehaviorScenario::remember(std::string_view alias, QuaderModelingObjectRef object) {
     aliases_.insert_or_assign(std::string(alias), object);
 }

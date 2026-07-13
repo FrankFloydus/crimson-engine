@@ -38,7 +38,7 @@ private:
 };
 
 /**
- * Selects the Qt or raw source for the next translated pointer packet.
+ * Selects the authoritative motion source for the current pointer capture.
  */
 enum class QtRelativePointerPacketMode : std::uint8_t {
   Undetermined,
@@ -47,9 +47,22 @@ enum class QtRelativePointerPacketMode : std::uint8_t {
 };
 
 /**
- * Routes each raw packet and its following legacy Qt move without counting a
- * relative packet twice. Genuine raw and absolute-device Qt motion are both
- * retained and summed until the next frame drains them.
+ * Raw relative input is independent of the bounded desktop cursor, so only
+ * the translated Qt fallback needs periodic cursor recentering.
+ */
+[[nodiscard]] constexpr bool
+qt_relative_pointer_capture_requires_recenter(
+    bool raw_input_active,
+    QtRelativePointerPacketMode raw_motion_mode) noexcept {
+  return !raw_input_active ||
+         raw_motion_mode != QtRelativePointerPacketMode::RelativeRaw;
+}
+
+/**
+ * Keeps one authoritative motion source for the capture. Once Windows reports
+ * relative raw motion, translated Qt mouse moves are ignored until an absolute
+ * raw device packet explicitly selects the Qt fallback. This avoids relying on
+ * a one-to-one relationship between WM_INPUT and coalesced WM_MOUSEMOVE events.
  */
 class QtRelativePointerStreamAccumulator final {
 public:
@@ -134,6 +147,10 @@ public:
   }
   [[nodiscard]] std::uint32_t last_native_error() const noexcept {
     return platform_input_.last_native_error();
+  }
+  [[nodiscard]] bool capture_requires_recenter() const noexcept {
+    return qt_relative_pointer_capture_requires_recenter(
+        raw_input_active(), stream_deltas_.packet_mode());
   }
 
   void add_fallback_delta(QVec2 delta) noexcept {

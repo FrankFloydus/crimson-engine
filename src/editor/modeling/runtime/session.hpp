@@ -555,6 +555,7 @@ struct PolyToolResult {
 struct PickRequest {
   quader_poly::Ray ray;
   quader_poly::PickOptions options;
+  int target_object_id = -1;
 };
 
 /**
@@ -1783,6 +1784,11 @@ void rebuild_knife_overlay(KnifeToolState &state);
 bool update_knife_preview_from_pick(
     EditorSession &session, KnifeToolState &state, SelectionHoverState &hover,
     const quader_poly::Ray &ray, const ViewportCameraState &camera,
+    double grid_size, bool snap_enabled, bool constrain_axis,
+    int target_object_id = -1);
+bool update_knife_preview_from_hit(
+    EditorSession &session, KnifeToolState &state, SelectionHoverState &hover,
+    const PickHitRecord &hit, const ViewportCameraState &camera,
     double grid_size, bool snap_enabled, bool constrain_axis);
 void refresh_knife_intersection_preview(EditorSession &session,
                                         KnifeToolState &state,
@@ -2113,6 +2119,10 @@ public:
       InsertEdgeLoopToolState &state, SelectionHoverState &hover,
       const quader_poly::Ray &ray, double grid_size,
       quader_poly::PickOptions pick_options, bool snap_enabled,
+      bool dragging, int target_object_id = -1) const;
+  bool set_insert_edge_loop_preview_from_hit(
+      InsertEdgeLoopToolState &state, SelectionHoverState &hover,
+      const PickHitRecord &hit, std::optional<float> resolved_factor,
       bool dragging) const;
   bool update_insert_edge_loop_drag_factor(InsertEdgeLoopToolState &state,
                                            SelectionHoverState &hover,

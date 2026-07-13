@@ -229,6 +229,9 @@ soften_selected_edge_normals(Document &document, const Selection &selection);
                                                const Selection &selection);
 [[nodiscard]] PlaneCutResult plane_cut(const Document &document,
                                        const PlaneCutRequest &request);
+[[nodiscard]] OperationResult plane_surface_cut(Document &document,
+                                                Selection &selection,
+                                                const PlaneCutRequest &request);
 [[nodiscard]] OperationResult
 insert_edge_loop(Document &document, Selection &selection, float factor = 0.5F);
 [[nodiscard]] OperationResult slice_selected_quads(Document &document,

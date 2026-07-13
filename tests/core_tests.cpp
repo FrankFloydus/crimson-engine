@@ -16,6 +16,7 @@
 #include "core/public_command_targets.hpp"
 #include "core/undo_redo_manager.hpp"
 #include "editor/commands/asset_command_service.hpp"
+#include "editor/array/linear_array_tool_service.hpp"
 #include "editor/commands/document/apply_entity_transform_command.hpp"
 #include "editor/commands/document/batch_document_command.hpp"
 #include "editor/commands/document/create_entity_command.hpp"
@@ -42,6 +43,7 @@
 #include "editor/session/project_asset_bootstrap_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/tools/viewport_tool.hpp"
+#include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
 #include "render/filament_material_library.hpp"
@@ -70,6 +72,7 @@
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_entity_naming.hpp"
+#include "scene/scene_transform.hpp"
 #include "scene/transform_pivot.hpp"
 #include "support/guardrail_file_scan.hpp"
 #include "ui/console_model.hpp"
@@ -100,6 +103,7 @@
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -2506,7 +2510,8 @@ TEST(PolygonOperationRegistryTests, MetadataComesFromDescriptorOwner) {
   const std::string descriptor =
       read_source_file("src/mesh/polygon/poly_operation_descriptor.hpp");
   const std::string registry = read_source_file(
-      "src/mesh/polygon/operations/poly_operation_registry.cpp");
+      "src/sdk/core/modeling/internal/mesh/polygon/operations/"
+      "poly_operation_registry.cpp");
 
   EXPECT_NE(descriptor.find("kPolyOperationDescriptors"), std::string::npos);
   EXPECT_NE(registry.find("poly_operation_descriptors()"), std::string::npos);
@@ -2517,7 +2522,7 @@ TEST(PolygonOperationRegistryTests, MetadataComesFromDescriptorOwner) {
   const std::filesystem::path source_root =
       std::filesystem::path(QUADER_SOURCE_DIR);
   const std::filesystem::path operations_dir =
-      source_root / "src/mesh/polygon/operations";
+      source_root / "src/sdk/core/modeling/internal/mesh/polygon/operations";
   ASSERT_TRUE(std::filesystem::exists(operations_dir));
   for (const std::filesystem::directory_entry &entry :
        std::filesystem::directory_iterator(operations_dir)) {
@@ -3411,7 +3416,7 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
                 "session.assets().add_texture(std::move(roughness));"),
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
-      bootstrap_source, "set_material_texture_slot(default_material, "
+      bootstrap_source, "set_material_texture_slot(expected_default, "
                         "material_texture_slot::kBaseColor, albedo_texture)"));
   EXPECT_EQ(
       bootstrap_source.find(
@@ -4737,6 +4742,89 @@ TEST(SceneDocumentTests, ReparentCanPreserveWorldTransformAndDestroyChildren) {
   EXPECT_FALSE(scene.exists(leaf));
   EXPECT_TRUE(scene.exists(child));
   EXPECT_TRUE(scene.selected_entities().empty());
+}
+
+TEST(SceneDocumentTests,
+     PreserveWorldReparentAcceptsMinimumNonuniformParentScale) {
+  SceneDocument scene;
+  const EntityId parent = scene.create_empty("Small Scale Parent");
+  const EntityId child = scene.create_entity("Small Scale Child");
+
+  constexpr float kSharedRotation = 0.35f;
+  TransformComponent parent_transform;
+  parent_transform.position = {3.0f, -5.0f, 2.0f};
+  parent_transform.rotation_euler = {0.0f, 0.0f, kSharedRotation};
+  parent_transform.scale = {0.001f, 0.002f, 0.004f};
+  scene.set_transform(parent, parent_transform);
+
+  TransformComponent child_transform;
+  child_transform.position = {-7.0f, 11.0f, 5.0f};
+  child_transform.rotation_euler = {0.0f, 0.0f, kSharedRotation};
+  child_transform.scale = {0.003f, 0.010f, 0.028f};
+  child_transform.custom_pivot = true;
+  scene.set_transform(child, child_transform);
+
+  const QMat4 world_before = scene.world_transform_matrix(child);
+  ASSERT_TRUE(scene.set_parent(child, parent, true));
+  const QMat4 world_after_parent = scene.world_transform_matrix(child);
+  for (std::size_t index = 0; index < world_before.values.size(); ++index) {
+    EXPECT_NEAR(world_after_parent.values[index], world_before.values[index],
+                0.00002f);
+  }
+  ASSERT_NE(scene.transform(child), nullptr);
+  EXPECT_NEAR(scene.transform(child)->scale.x, 3.0f, 0.0001f);
+  EXPECT_NEAR(scene.transform(child)->scale.y, 5.0f, 0.0001f);
+  EXPECT_NEAR(scene.transform(child)->scale.z, 7.0f, 0.0001f);
+  EXPECT_TRUE(scene.transform(child)->custom_pivot);
+
+  ASSERT_TRUE(scene.set_parent(child, kInvalidEntityId, true));
+  const QMat4 world_after_unparent = scene.world_transform_matrix(child);
+  for (std::size_t index = 0; index < world_before.values.size(); ++index) {
+    EXPECT_NEAR(world_after_unparent.values[index], world_before.values[index],
+                0.00002f);
+  }
+  ASSERT_NE(scene.transform(child), nullptr);
+  EXPECT_TRUE(scene.transform(child)->custom_pivot);
+}
+
+TEST(SceneDocumentTests,
+     PreserveWorldReparentRejectsSingularParentWithoutMutation) {
+  SceneDocument scene;
+  const EntityId parent = scene.create_empty("Shearing Parent");
+  const EntityId child = scene.create_entity("Preserved Child");
+  ASSERT_NE(parent, kInvalidEntityId);
+  ASSERT_NE(child, kInvalidEntityId);
+
+  TransformComponent parent_transform;
+  parent_transform.position = {3.0f, -2.0f, 1.0f};
+  parent_transform.rotation_euler = {0.15f, -0.25f, 0.6f};
+  parent_transform.scale = {0.0f, 0.75f, 1.4f};
+  scene.set_transform(parent, parent_transform);
+
+  TransformComponent child_transform;
+  child_transform.position = {-5.0f, 4.0f, 2.0f};
+  child_transform.rotation_euler = {-0.2f, 0.35f, -0.4f};
+  child_transform.scale = {0.8f, 1.1f, 1.3f};
+  child_transform.custom_pivot = true;
+  scene.set_transform(child, child_transform);
+
+  const QMat4 world_before = scene.world_transform_matrix(child);
+  const TransformComponent local_before = *scene.transform(child);
+  const std::uint64_t scene_revision_before = scene.revision();
+  const std::uint64_t transform_revision_before = scene.transform_revision();
+
+  EXPECT_FALSE(scene.set_parent(child, parent, true));
+
+  EXPECT_EQ(scene.parent(child), kInvalidEntityId);
+  ASSERT_NE(scene.transform(child), nullptr);
+  expect_vec3_near(scene.transform(child)->position, local_before.position);
+  expect_vec3_near(scene.transform(child)->rotation_euler,
+                   local_before.rotation_euler);
+  expect_vec3_near(scene.transform(child)->scale, local_before.scale);
+  EXPECT_EQ(scene.transform(child)->custom_pivot, local_before.custom_pivot);
+  EXPECT_EQ(scene.world_transform_matrix(child).values, world_before.values);
+  EXPECT_EQ(scene.revision(), scene_revision_before);
+  EXPECT_EQ(scene.transform_revision(), transform_revision_before);
 }
 
 TEST(SceneBoundsTests, ComputesSelectedWorldBoundsFromSpatialTransforms) {
@@ -6422,7 +6510,7 @@ TEST(ViewportInputRouterTests, ExternalSelectionModeSyncUpdatesToolState) {
 }
 
 TEST(ViewportInputRouterTests,
-     ConsumedCommandKeybindingDoesNotRouteViewportShortcut) {
+     ConsumedEarlierEdgeDoesNotDiscardLaterViewportShortcut) {
   ViewportInputRouter router;
   ViewportCameraController camera;
   ViewportInputFrame input;
@@ -6435,9 +6523,35 @@ TEST(ViewportInputRouterTests,
   const auto result = router.handle_frame(input, camera);
 
   EXPECT_TRUE(result.consumed);
-  EXPECT_FALSE(result.shortcut_handled);
-  EXPECT_FALSE(result.focus_document_requested);
-  EXPECT_EQ(result.shortcut.kind, ViewportShortcutKind::None);
+  EXPECT_TRUE(result.shortcut_handled);
+  EXPECT_TRUE(result.focus_document_requested);
+  EXPECT_EQ(result.shortcut.kind, ViewportShortcutKind::FocusDocument);
+}
+
+TEST(ViewportInputRouterTests,
+     SameFrameToolShortcutsApplyInOrderWithoutDroppingTheSecond) {
+  ViewportInputRouter router;
+  ViewportCameraController camera;
+  ViewportInputFrame input;
+  input.viewport_focused = true;
+  input.viewport_size = {800.0f, 600.0f};
+  input.resolved_shortcuts = {
+      {.kind = ViewportShortcutKind::ActivateTool,
+       .context = ViewportShortcutContext::Viewport,
+       .tool = ViewportToolId::Move},
+      {.kind = ViewportShortcutKind::ActivateTool,
+       .context = ViewportShortcutContext::Viewport,
+       .tool = ViewportToolId::Rotate},
+  };
+
+  const ViewportInputResult result = router.handle_frame(input, camera);
+
+  EXPECT_TRUE(result.consumed);
+  EXPECT_TRUE(result.shortcut_handled);
+  EXPECT_TRUE(result.tool_activation_requested);
+  EXPECT_TRUE(result.tool_changed);
+  EXPECT_EQ(router.state().active_tool, ViewportToolId::Rotate);
+  EXPECT_EQ(result.shortcut.tool, ViewportToolId::Rotate);
 }
 
 TEST(ViewportInputRouterTests,
@@ -7104,6 +7218,39 @@ TEST(AssetRegistryTests,
   EXPECT_EQ(registry.material_ids(), std::vector<AssetId>({35u, 40u}));
 }
 
+TEST(AssetRegistryTests,
+     ExhaustedAllocatorNeverPublishesTheInvalidSentinelForAnyAssetKind) {
+  AssetRegistry registry;
+  TextureAsset terminal_texture;
+  terminal_texture.name = "Terminal Texture";
+  ASSERT_EQ(registry.add_texture(std::numeric_limits<AssetId>::max() - 1u,
+                                 std::move(terminal_texture)),
+            std::numeric_limits<AssetId>::max() - 1u);
+  TextureAsset final_texture;
+  final_texture.name = "Final Texture";
+  ASSERT_EQ(registry.add_texture(std::move(final_texture)),
+            std::numeric_limits<AssetId>::max());
+  const std::uint64_t revision_before = registry.revision();
+
+  EXPECT_EQ(registry.add_mesh(make_test_triangle_mesh("Rejected Mesh")),
+            kInvalidAssetId);
+  EXPECT_EQ(registry.add_material(
+                make_default_quader_material("Rejected Material")),
+            kInvalidAssetId);
+  TextureAsset rejected_texture;
+  rejected_texture.name = "Rejected Texture";
+  EXPECT_EQ(registry.add_texture(std::move(rejected_texture)),
+            kInvalidAssetId);
+
+  EXPECT_EQ(registry.mesh_count(), 0u);
+  EXPECT_EQ(registry.material_count(), 0u);
+  EXPECT_EQ(registry.texture_count(), 2u);
+  EXPECT_EQ(registry.mesh(kInvalidAssetId), nullptr);
+  EXPECT_EQ(registry.material(kInvalidAssetId), nullptr);
+  EXPECT_EQ(registry.texture(kInvalidAssetId), nullptr);
+  EXPECT_EQ(registry.revision(), revision_before);
+}
+
 TEST(AssetRegistryTests, NormalizesMaterialTextureSlotsAtRegistryBoundary) {
   AssetRegistry registry;
   TextureAsset base_color;
@@ -7169,6 +7316,61 @@ TEST(AssetRegistryTests,
   ASSERT_NE(registry.material(material_id), nullptr);
   EXPECT_FALSE(
       registry.material(material_id)->texture_slots.contains("unsupported"));
+}
+
+TEST(AssetRegistryTests,
+     RejectsMalformedOrNonFiniteMeshAndMaterialMutationsAtomically) {
+  AssetRegistry registry;
+  const AssetId mesh = registry.add_mesh(make_test_triangle_mesh("Stable Mesh"));
+  const AssetId material =
+      registry.add_material(make_default_quader_material("Stable Material"));
+  ASSERT_NE(mesh, kInvalidAssetId);
+  ASSERT_NE(material, kInvalidAssetId);
+
+  const std::uint64_t registry_revision = registry.revision();
+  const MeshAssetRevision mesh_revision = registry.mesh_revision(mesh);
+  const MaterialAssetRevision material_revision =
+      registry.material_revision(material);
+
+  MeshAsset non_finite_mesh = make_test_triangle_mesh("Non-finite Mesh");
+  non_finite_mesh.vertices.front().position.x =
+      std::numeric_limits<float>::quiet_NaN();
+  EXPECT_EQ(registry.add_mesh(std::move(non_finite_mesh)), kInvalidAssetId);
+
+  MeshAsset malformed_mesh = make_test_triangle_mesh("Malformed Mesh");
+  malformed_mesh.indices.back() = 999u;
+  EXPECT_FALSE(registry.replace_mesh(mesh, std::move(malformed_mesh)));
+  EXPECT_FALSE(registry.update_mesh(mesh, [](MeshAsset &asset) {
+    asset.vertices.front().normal.y =
+        std::numeric_limits<float>::infinity();
+  }));
+
+  MaterialDocument non_finite_material =
+      make_default_quader_material("Non-finite Material");
+  non_finite_material.base_color.z =
+      std::numeric_limits<float>::quiet_NaN();
+  EXPECT_EQ(registry.add_material(std::move(non_finite_material)),
+            kInvalidAssetId);
+
+  MaterialDocument invalid_replacement =
+      make_default_quader_material("Invalid Replacement");
+  invalid_replacement.roughness = std::numeric_limits<float>::infinity();
+  EXPECT_FALSE(
+      registry.replace_material(material, std::move(invalid_replacement)));
+  EXPECT_FALSE(registry.update_material(material, [](MaterialDocument &asset) {
+    asset.metallic = std::numeric_limits<float>::quiet_NaN();
+  }));
+
+  EXPECT_EQ(registry.revision(), registry_revision);
+  EXPECT_EQ(registry.mesh_revision(mesh).value, mesh_revision.value);
+  EXPECT_EQ(registry.material_revision(material).value,
+            material_revision.value);
+  ASSERT_NE(registry.mesh(mesh), nullptr);
+  ASSERT_NE(registry.material(material), nullptr);
+  EXPECT_EQ(registry.mesh(mesh)->name, "Stable Mesh");
+  EXPECT_EQ(registry.mesh(mesh)->indices.back(), 2u);
+  EXPECT_EQ(registry.material(material)->name, "Stable Material");
+  EXPECT_FLOAT_EQ(registry.material(material)->metallic, 0.0f);
 }
 
 TEST(AssetRegistryTests,
@@ -7352,6 +7554,140 @@ TEST(AssetCommandServiceTests,
   EXPECT_FALSE(history.can_undo());
   ASSERT_NE(assets.mesh(mesh), nullptr);
   EXPECT_EQ(assets.mesh(mesh)->name, "Owned Mesh");
+}
+
+TEST(AssetCommandServiceTests,
+     AuthoredPolygonUpdatesUseContentEqualityAndIsolatedHistorySnapshots) {
+  AssetRegistry assets;
+  EditorHistoryService history;
+  AssetCommandService commands(assets, history);
+
+  MeshAsset authored = make_test_triangle_mesh("Authored Mesh");
+  authored.has_authored_polygon_document = true;
+  authored.authored_polygon_document =
+      std::make_shared<quader_poly::Document>();
+  authored.authored_polygon_document->vertices = {
+      {.id = 1u, .position = {0.0f, 0.0f, 0.0f}},
+      {.id = 2u, .position = {1.0f, 0.0f, 0.0f}},
+      {.id = 3u, .position = {0.0f, 1.0f, 0.0f}},
+  };
+  authored.authored_polygon_document->faces = {
+      {.id = 1u, .vertices = {1u, 2u, 3u}},
+  };
+  authored.authored_polygon_document->next_vertex_id = 4u;
+  authored.authored_polygon_document->next_face_id = 2u;
+  const std::shared_ptr<quader_poly::Document> caller_document =
+      authored.authored_polygon_document;
+
+  const AssetId mesh = assets.add_mesh(std::move(authored));
+  ASSERT_NE(mesh, kInvalidAssetId);
+  caller_document->vertices.front().position.x = 50.0f;
+  ASSERT_NE(assets.mesh(mesh), nullptr);
+  ASSERT_TRUE(assets.mesh(mesh)->authored_polygon_document);
+  EXPECT_FLOAT_EQ(
+      assets.mesh(mesh)->authored_polygon_document->vertices.front().position.x,
+      0.0f);
+
+  const std::uint64_t revision_before = assets.revision();
+  const MeshAssetRevision mesh_revision_before = assets.mesh_revision(mesh);
+  AssetCommandResult update = commands.update_mesh(mesh, [](MeshAsset &asset) {
+    ASSERT_TRUE(asset.authored_polygon_document);
+    asset.authored_polygon_document->vertices.front().position.x = 2.5f;
+  });
+  ASSERT_TRUE(update.ok) << update.message;
+  EXPECT_TRUE(update.changed);
+  EXPECT_GT(assets.revision(), revision_before);
+  EXPECT_GT(assets.mesh_revision(mesh).value, mesh_revision_before.value);
+  EXPECT_FLOAT_EQ(
+      assets.mesh(mesh)->authored_polygon_document->vertices.front().position.x,
+      2.5f);
+  ASSERT_NE(history.undo_label(), nullptr);
+  EXPECT_EQ(*history.undo_label(), "Update Mesh");
+
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_FLOAT_EQ(
+      assets.mesh(mesh)->authored_polygon_document->vertices.front().position.x,
+      0.0f);
+  ASSERT_TRUE(history.redo().ok);
+  EXPECT_FLOAT_EQ(
+      assets.mesh(mesh)->authored_polygon_document->vertices.front().position.x,
+      2.5f);
+
+  const std::uint64_t revision_before_noop = assets.revision();
+  const MeshAssetRevision mesh_revision_before_noop =
+      assets.mesh_revision(mesh);
+  AssetCommandResult no_op = commands.update_mesh(mesh, [](MeshAsset &asset) {
+    asset.authored_polygon_document =
+        std::make_shared<quader_poly::Document>(
+            *asset.authored_polygon_document);
+  });
+  EXPECT_TRUE(no_op.ok) << no_op.message;
+  EXPECT_FALSE(no_op.changed);
+  EXPECT_EQ(assets.revision(), revision_before_noop);
+  EXPECT_EQ(assets.mesh_revision(mesh).value,
+            mesh_revision_before_noop.value);
+
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_FLOAT_EQ(
+      assets.mesh(mesh)->authored_polygon_document->vertices.front().position.x,
+      0.0f);
+  EXPECT_FALSE(history.can_undo());
+}
+
+TEST(AssetCommandServiceTests,
+     InvalidMeshAndMaterialCommandsDoNotChangeAssetsOrHistory) {
+  AssetRegistry assets;
+  EditorHistoryService history;
+  AssetCommandService commands(assets, history);
+  const AssetId mesh = assets.add_mesh(make_test_triangle_mesh("Stable Mesh"));
+  const AssetId material =
+      assets.add_material(make_default_quader_material("Stable Material"));
+  ASSERT_NE(mesh, kInvalidAssetId);
+  ASSERT_NE(material, kInvalidAssetId);
+  const std::uint64_t revision = assets.revision();
+
+  MeshAsset invalid_add = make_test_triangle_mesh("Invalid Add");
+  invalid_add.vertices.front().uv.x =
+      std::numeric_limits<float>::quiet_NaN();
+  EXPECT_FALSE(commands.add_mesh(std::move(invalid_add)).ok);
+
+  MeshAsset invalid_replace = make_test_triangle_mesh("Invalid Replace");
+  invalid_replace.indices.push_back(0u);
+  EXPECT_FALSE(commands.replace_mesh(mesh, std::move(invalid_replace)).ok);
+  EXPECT_FALSE(commands
+                   .update_mesh(mesh, [](MeshAsset &asset) {
+                     asset.vertices.front().position.z =
+                         std::numeric_limits<float>::infinity();
+                   })
+                   .ok);
+
+  MaterialDocument invalid_material_add =
+      make_default_quader_material("Invalid Add");
+  invalid_material_add.metallic =
+      std::numeric_limits<float>::quiet_NaN();
+  EXPECT_FALSE(commands.add_material(std::move(invalid_material_add)).ok);
+
+  MaterialDocument invalid_material_replace =
+      make_default_quader_material("Invalid Replace");
+  invalid_material_replace.base_color.x =
+      std::numeric_limits<float>::infinity();
+  EXPECT_FALSE(commands
+                   .replace_material(material,
+                                     std::move(invalid_material_replace))
+                   .ok);
+  EXPECT_FALSE(commands
+                   .update_material(material, [](MaterialDocument &asset) {
+                     asset.roughness =
+                         std::numeric_limits<float>::quiet_NaN();
+                   })
+                   .ok);
+
+  EXPECT_EQ(assets.revision(), revision);
+  EXPECT_FALSE(history.can_undo());
+  ASSERT_NE(assets.mesh(mesh), nullptr);
+  ASSERT_NE(assets.material(material), nullptr);
+  EXPECT_EQ(assets.mesh(mesh)->name, "Stable Mesh");
+  EXPECT_EQ(assets.material(material)->name, "Stable Material");
 }
 
 TEST(AssetProjectArchitectureTests,
@@ -7841,6 +8177,10 @@ TEST(ProjectSessionTests,
     ASSERT_NE(entity, kInvalidEntityId);
   }
   const std::uint64_t previous_scene_revision = session.scene().revision();
+  for (int i = 0; i < 8; ++i) {
+    ASSERT_NE(session.assets().add_mesh(MeshAsset{}), kInvalidAssetId);
+  }
+  const std::uint64_t previous_asset_revision = session.assets().revision();
   session.mark_clean();
   EXPECT_FALSE(session.dirty());
 
@@ -7850,14 +8190,150 @@ TEST(ProjectSessionTests,
   ASSERT_NE(light, kInvalidEntityId);
   replacement.scene().set_light(light,
                                 LightComponent{.type = LightType::Point});
+  MeshAsset loaded_mesh;
+  loaded_mesh.name = "Loaded Mesh";
+  const AssetId replacement_mesh =
+      replacement.assets().add_mesh(1u, std::move(loaded_mesh));
+  ASSERT_EQ(replacement_mesh, 1u);
   ASSERT_LT(replacement.scene().revision(), previous_scene_revision);
+  ASSERT_LT(replacement.assets().revision(), previous_asset_revision);
 
   session.replace_document(std::move(replacement));
 
   EXPECT_GT(session.scene().revision(), previous_scene_revision);
+  EXPECT_GT(session.assets().revision(), previous_asset_revision);
+  EXPECT_GT(session.assets().mesh_revision(replacement_mesh).value,
+            previous_asset_revision);
   EXPECT_FALSE(session.dirty());
   ASSERT_NE(session.scene().light(light), nullptr);
   EXPECT_EQ(session.scene().light(light)->type, LightType::Point);
+}
+
+TEST(ProjectSessionTests,
+     ReplaceDocumentClearsPersistentQuickAndLinearArrayToolState) {
+  {
+    ProjectSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_project_session(session));
+    const QuaderApiResult<QuaderModelingObjectRef> source =
+        editor.modeling().create_box(
+            QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                         .max = {1.0f, 1.0f, 1.0f}},
+            "Old Pivot Source");
+    ASSERT_TRUE(source.ok()) << source.error_message();
+    ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::Pivot).ok());
+    session.pivot().set_persistent_preview_position({3.0f, 4.0f, 5.0f});
+    session.pivot().begin_quick({6.0f, 7.0f, 8.0f});
+    ASSERT_TRUE(session.pivot().persistent_active());
+    ASSERT_TRUE(session.pivot().selection_pivot_override().valid);
+
+    ProjectDocument replacement;
+    const EntityId replacement_light = replacement.scene().create_entity_with_id(
+        source.value().entity, "Replacement Light", EntityKind::Light);
+    ASSERT_EQ(replacement_light, source.value().entity);
+    replacement.scene().set_light(replacement_light,
+                                  LightComponent{.type = LightType::Point});
+    TransformComponent replacement_transform =
+        *replacement.scene().transform(replacement_light);
+    replacement_transform.position = {9.0f, 8.0f, 7.0f};
+    replacement.scene().set_transform(replacement_light,
+                                      replacement_transform);
+
+    session.replace_document(std::move(replacement));
+
+    EXPECT_FALSE(session.pivot().persistent_active());
+    EXPECT_FALSE(session.pivot().selection_pivot_override().valid);
+    EXPECT_FALSE(session.native_tools().has_pending_tool());
+    EXPECT_FALSE(editor.tools().active_settings().active);
+    const QuaderApiVoidResult applied =
+        editor.tools().commit_active_tool_preview();
+    EXPECT_FALSE(applied.ok());
+    ASSERT_NE(session.scene().transform(replacement_light), nullptr);
+    expect_vec3_near(session.scene().transform(replacement_light)->position,
+                     {9.0f, 8.0f, 7.0f});
+  }
+
+  {
+    ProjectSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_project_session(session));
+    const QuaderApiResult<QuaderModelingObjectRef> source =
+        editor.modeling().create_box(
+            QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                         .max = {1.0f, 1.0f, 1.0f}},
+            "Old Array Source");
+    ASSERT_TRUE(source.ok()) << source.error_message();
+    ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::LinearArray).ok());
+    ASSERT_TRUE(session.linear_array().has_session());
+
+    ProjectDocument replacement;
+    const EntityId replacement_light = replacement.scene().create_entity_with_id(
+        source.value().entity, "Replacement Array Light", EntityKind::Light);
+    ASSERT_EQ(replacement_light, source.value().entity);
+    replacement.scene().set_light(replacement_light,
+                                  LightComponent{.type = LightType::Point});
+
+    session.replace_document(std::move(replacement));
+
+    EXPECT_FALSE(session.linear_array().has_session());
+    EXPECT_FALSE(session.native_tools().has_pending_tool());
+    EXPECT_TRUE(editor.render().tool_preview_meshes().empty());
+    EXPECT_FALSE(editor.tools().commit_active_tool_preview().ok());
+  }
+}
+
+TEST(ProjectSessionTests,
+     ReplaceDocumentClearsSceneTransformPreviewBeforeInstallingReplacement) {
+  ProjectSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_project_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> source =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Old Transform Preview Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+
+  QuaderApiResult<QuaderTransformDragPreview> begin =
+      editor.modeling().begin_transform_drag(
+          test_api_x_move_drag_begin_request());
+  ASSERT_TRUE(begin.ok()) << begin.error_message();
+  ASSERT_TRUE(begin.value().active);
+  ASSERT_TRUE(begin.value().scene_transform);
+  QuaderApiResult<QuaderTransformDragPreview> update =
+      editor.modeling().update_transform_drag(
+          test_api_x_move_drag_update_request(2.0f));
+  ASSERT_TRUE(update.ok()) << update.error_message();
+  ASSERT_NE(session.scene().transform(source.value().entity), nullptr);
+  EXPECT_NEAR(session.scene().transform(source.value().entity)->position.x,
+              2.0f, 0.001f);
+
+  ProjectDocument replacement;
+  const EntityId replacement_entity = replacement.scene().create_entity_with_id(
+      source.value().entity, "Replacement Entity", EntityKind::Empty);
+  ASSERT_EQ(replacement_entity, source.value().entity);
+  TransformComponent replacement_transform =
+      *replacement.scene().transform(replacement_entity);
+  replacement_transform.position = {99.0f, 8.0f, 7.0f};
+  replacement.scene().set_transform(replacement_entity,
+                                    replacement_transform);
+
+  session.replace_document(std::move(replacement));
+
+  EXPECT_FALSE(session.modeling().transform_drag_active());
+  ASSERT_NE(session.scene().transform(replacement_entity), nullptr);
+  expect_vec3_near(session.scene().transform(replacement_entity)->position,
+                   {99.0f, 8.0f, 7.0f});
+
+  const QuaderApiVoidResult late_cancel =
+      editor.modeling().cancel_transform_drag();
+  ASSERT_TRUE(late_cancel.ok()) << late_cancel.error_message();
+  EXPECT_FALSE(late_cancel.changed());
+  ASSERT_NE(session.scene().transform(replacement_entity), nullptr);
+  expect_vec3_near(session.scene().transform(replacement_entity)->position,
+                   {99.0f, 8.0f, 7.0f});
 }
 
 TEST(ProjectSessionTests, PublicHistoryIgnoresUntrackedModelingSessionHistory) {
@@ -8076,6 +8552,81 @@ TEST(ProjectSessionTests,
   EXPECT_FALSE(
       material_texture_slot_asset(*material, material_texture_slot::kRoughness)
           .has_value());
+
+  const std::uint64_t revision = session.assets().revision();
+  const ProjectDefaultAssets repeated =
+      ProjectAssetBootstrapService{}.bootstrap_default_assets(session);
+  EXPECT_EQ(repeated.albedo_texture, defaults.albedo_texture);
+  EXPECT_EQ(repeated.roughness_texture, defaults.roughness_texture);
+  EXPECT_EQ(repeated.default_material, defaults.default_material);
+  EXPECT_EQ(session.assets().revision(), revision);
+}
+
+TEST(ProjectSessionTests,
+     DocumentReplacementFinalizerRebindsCurrentDefaultAssetsBeforeCleanStamp) {
+  ProjectSession session;
+  ProjectDefaultAssets current =
+      ProjectAssetBootstrapService{}.bootstrap_default_assets(session);
+  ASSERT_NE(current.default_material, kInvalidAssetId);
+  const AssetId previous_default = current.default_material;
+  session.mark_clean();
+  session.set_document_replacement_finalizer(
+      [&current](ProjectSession &replaced) {
+        current = ProjectAssetBootstrapService{}.bootstrap_default_assets(
+            replaced);
+      });
+
+  ProjectDocument replacement;
+  MaterialDocument unrelated = make_default_quader_material("Unrelated");
+  ASSERT_EQ(replacement.assets().add_material(previous_default,
+                                              std::move(unrelated)),
+            previous_default);
+  session.replace_document(std::move(replacement));
+
+  EXPECT_NE(current.default_material, previous_default);
+  const MaterialDocument *material =
+      session.assets().material(current.default_material);
+  ASSERT_NE(material, nullptr);
+  EXPECT_EQ(material->name, "Default Quader");
+  EXPECT_FALSE(session.dirty());
+}
+
+TEST(ProjectSessionTests,
+     DefaultAssetBootstrapDoesNotAliasAuthoredAssetsByDisplayName) {
+  ProjectSession session;
+
+  TextureAsset authored_albedo;
+  authored_albedo.name = std::string(kDefaultMaterialAlbedoTextureName);
+  authored_albedo.source_path =
+      std::string(kDefaultMaterialAlbedoTexturePackagePath);
+  authored_albedo.usage = TextureUsage::Normal;
+  authored_albedo.color_space = TextureColorSpace::Linear;
+  const AssetId authored_albedo_id =
+      session.assets().add_texture(std::move(authored_albedo));
+
+  MaterialDocument authored_material =
+      make_default_quader_material("Default Quader");
+  authored_material.metallic = 1.0f;
+  const AssetId authored_material_id =
+      session.assets().add_material(std::move(authored_material));
+
+  const ProjectDefaultAssets defaults =
+      ProjectAssetBootstrapService{}.bootstrap_default_assets(session);
+  EXPECT_NE(defaults.albedo_texture, authored_albedo_id);
+  EXPECT_NE(defaults.default_material, authored_material_id);
+  ASSERT_NE(session.assets().texture(defaults.albedo_texture), nullptr);
+  EXPECT_EQ(session.assets().texture(defaults.albedo_texture)->usage,
+            TextureUsage::BaseColor);
+  ASSERT_NE(session.assets().material(defaults.default_material), nullptr);
+  EXPECT_FLOAT_EQ(session.assets().material(defaults.default_material)->metallic,
+                  0.0f);
+
+  const std::uint64_t revision = session.assets().revision();
+  const ProjectDefaultAssets repeated =
+      ProjectAssetBootstrapService{}.bootstrap_default_assets(session);
+  EXPECT_EQ(repeated.albedo_texture, defaults.albedo_texture);
+  EXPECT_EQ(repeated.default_material, defaults.default_material);
+  EXPECT_EQ(session.assets().revision(), revision);
 }
 
 TEST(AssetProjectArchitectureTests,
@@ -8254,6 +8805,80 @@ TEST(EditorHistoryServiceTests,
   ASSERT_TRUE(history.redo().ok);
   EXPECT_EQ(first, 1);
   EXPECT_EQ(second, 2);
+}
+
+TEST(EditorHistoryServiceTests,
+     FailedTransactionCancelRollsBackCompletedUndosAndCanBeRetried) {
+  EditorHistoryService history;
+  int first = 0;
+  int second = 0;
+  bool fail_first_undo = true;
+
+  EditorTransaction transaction = history.begin_transaction("Failing Cancel");
+  ASSERT_TRUE(transaction
+                  .execute(std::make_unique<TestValueCommand>(
+                      "First", first, 0, 1, &fail_first_undo))
+                  .ok);
+  ASSERT_TRUE(transaction
+                  .execute(std::make_unique<TestValueCommand>("Second", second,
+                                                               0, 2))
+                  .ok);
+
+  const CommandResult failed = transaction.cancel();
+  EXPECT_FALSE(failed.ok);
+  EXPECT_TRUE(transaction.active());
+  EXPECT_EQ(first, 1);
+  EXPECT_EQ(second, 2);
+
+  fail_first_undo = false;
+  const CommandResult retried = transaction.cancel();
+  ASSERT_TRUE(retried.ok) << retried.message;
+  EXPECT_FALSE(transaction.active());
+  EXPECT_EQ(first, 0);
+  EXPECT_EQ(second, 0);
+  EXPECT_FALSE(history.can_undo());
+  EXPECT_FALSE(history.can_redo());
+}
+
+TEST(EditorHistoryServiceTests,
+     FailedRaiiTransactionCancelPreservesAppliedStateInHistory) {
+  EditorHistoryService history;
+  int first = 0;
+  int second = 0;
+  bool fail_first_undo = true;
+  {
+    EditorTransaction transaction =
+        history.begin_transaction("Failing Destructor Cancel");
+    ASSERT_TRUE(transaction
+                    .execute(std::make_unique<TestValueCommand>(
+                        "First", first, 0, 1, &fail_first_undo))
+                    .ok);
+    ASSERT_TRUE(transaction
+                    .execute(std::make_unique<TestValueCommand>(
+                        "Second", second, 0, 2))
+                    .ok);
+  }
+
+  EXPECT_EQ(first, 1);
+  EXPECT_EQ(second, 2);
+  EXPECT_TRUE(history.can_undo());
+  EXPECT_FALSE(history.can_redo());
+  ASSERT_NE(history.undo_label(), nullptr);
+  EXPECT_EQ(*history.undo_label(), "Failing Destructor Cancel");
+
+  fail_first_undo = false;
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_EQ(first, 0);
+  EXPECT_EQ(second, 0);
+
+  int next = 0;
+  const CommandResult executed = history.execute(
+      std::make_unique<TestValueCommand>("Next", next, 0, 3));
+  ASSERT_TRUE(executed.ok) << executed.message;
+  EXPECT_EQ(next, 3);
+  EXPECT_TRUE(history.can_undo());
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_EQ(next, 0);
 }
 
 TEST(DocumentCommandTests, TypedCommandsExecuteDirectlyThroughUndoRedoManager) {
@@ -8507,6 +9132,153 @@ TEST(DocumentCommandTests,
   ASSERT_TRUE(history.redo().ok);
   ASSERT_NE(scene.transform(entity), nullptr);
   EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 4.0f);
+}
+
+TEST(DocumentCommandTests,
+     NonFiniteTransformsAndSingularParentReparentAreRejectedAtomically) {
+  SceneDocument scene;
+  EditorHistoryService history;
+  DocumentCommandService commands(scene, history);
+  const EntityId child = scene.create_entity("Child");
+  const TransformComponent before = *scene.transform(child);
+  const std::uint64_t before_transform_revision = scene.transform_revision();
+
+  TransformComponent invalid = before;
+  invalid.position.x = std::numeric_limits<float>::quiet_NaN();
+  const DocumentCommandResult invalid_result =
+      commands.set_transform(child, invalid);
+  EXPECT_FALSE(invalid_result.ok);
+  EXPECT_FALSE(history.can_undo());
+  EXPECT_EQ(scene.transform_revision(), before_transform_revision);
+  ASSERT_NE(scene.transform(child), nullptr);
+  EXPECT_TRUE(scene_transform_is_finite(*scene.transform(child)));
+
+  scene.set_transform(child, invalid);
+  EXPECT_EQ(scene.transform_revision(), before_transform_revision);
+  EXPECT_TRUE(scene_transform_is_finite(*scene.transform(child)));
+
+  const EntityId singular_parent = scene.create_entity("Singular Parent");
+  TransformComponent singular = *scene.transform(singular_parent);
+  singular.scale = {0.0f, 1.0f, 1.0f};
+  scene.set_transform(singular_parent, singular);
+  const std::uint64_t reparent_revision = scene.transform_revision();
+  EXPECT_FALSE(scene.set_parent(child, singular_parent, true));
+  EXPECT_EQ(scene.parent(child), kInvalidEntityId);
+  EXPECT_EQ(scene.transform_revision(), reparent_revision);
+  ASSERT_NE(scene.transform(child), nullptr);
+  EXPECT_TRUE(scene_transform_is_finite(*scene.transform(child)));
+  EXPECT_FLOAT_EQ(scene.transform(child)->position.x, before.position.x);
+}
+
+TEST(DocumentCommandTests,
+     WorldTransformRejectsSingularParentWithoutIdentityFallback) {
+  SceneDocument scene;
+  EditorHistoryService history;
+  DocumentCommandService commands(scene, history);
+  SceneTransformDragService transforms;
+  const EntityId parent = scene.create_empty("Nonuniform Parent");
+  const EntityId child = scene.create_entity("World Transform Child");
+
+  TransformComponent parent_transform;
+  parent_transform.position = {2.0f, -3.0f, 1.0f};
+  parent_transform.rotation_euler = {0.2f, -0.3f, 0.4f};
+  parent_transform.scale = {0.0f, 0.7f, 1.5f};
+  scene.set_transform(parent, parent_transform);
+  TransformComponent child_transform;
+  child_transform.position = {1.0f, 2.0f, -1.0f};
+  child_transform.rotation_euler = {-0.15f, 0.25f, -0.2f};
+  child_transform.scale = {0.8f, 1.1f, 0.9f};
+  child_transform.custom_pivot = true;
+  scene.set_transform(child, child_transform);
+  ASSERT_TRUE(scene.set_parent(child, parent, false));
+  ASSERT_TRUE(scene.set_selected(child, true));
+  ASSERT_TRUE(scene.set_active_selection(child));
+
+  const TransformComponent local_before = *scene.transform(child);
+  const QMat4 world_before = scene.world_transform_matrix(child);
+  const std::uint64_t revision_before = scene.revision();
+  const std::uint64_t transform_revision_before = scene.transform_revision();
+  const QMat4 world_rotation = compose_transform(QTransform{
+      .rotation = quat_from_euler_radians({0.35f, -0.2f, 0.3f}),
+  });
+
+  const DocumentCommandResult result = transforms.transform_selected_by_world_delta(
+      commands, scene, world_rotation, "Rejected World Transform");
+
+  EXPECT_FALSE(result.ok);
+  EXPECT_FALSE(result.changed);
+  EXPECT_EQ(scene.parent(child), parent);
+  ASSERT_NE(scene.transform(child), nullptr);
+  expect_vec3_near(scene.transform(child)->position, local_before.position);
+  expect_vec3_near(scene.transform(child)->rotation_euler,
+                   local_before.rotation_euler);
+  expect_vec3_near(scene.transform(child)->scale, local_before.scale);
+  EXPECT_EQ(scene.transform(child)->custom_pivot, local_before.custom_pivot);
+  EXPECT_EQ(scene.world_transform_matrix(child).values, world_before.values);
+  EXPECT_EQ(scene.revision(), revision_before);
+  EXPECT_EQ(scene.transform_revision(), transform_revision_before);
+  EXPECT_FALSE(history.can_undo());
+  EXPECT_FALSE(history.can_redo());
+}
+
+TEST(DocumentCommandTests,
+     FailedTransformBatchPreviewDoesNotLeaveHiddenStagedEdits) {
+  SceneDocument scene;
+  const EntityId first = scene.create_entity("First");
+  const EntityId second = scene.create_entity("Second");
+  EditorHistoryService history;
+  SceneTransformPreviewTransaction transaction(scene, {first, second},
+                                                "Batch Preview");
+
+  TransformComponent first_after = *scene.transform(first);
+  first_after.position.x = 4.0f;
+  TransformComponent second_after = *scene.transform(second);
+  second_after.position.x = 8.0f;
+  ASSERT_TRUE(scene.set_locked(second, true));
+
+  const DocumentCommandResult preview = transaction.preview_transforms({
+      {.entity = first,
+       .before = *scene.transform(first),
+       .after = first_after},
+      {.entity = second,
+       .before = *scene.transform(second),
+       .after = second_after},
+  });
+  EXPECT_FALSE(preview.ok);
+  ASSERT_NE(scene.transform(first), nullptr);
+  EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 0.0f);
+
+  ASSERT_TRUE(scene.set_locked(second, false));
+  const DocumentCommandResult committed = transaction.commit(history);
+  ASSERT_TRUE(committed.ok) << committed.message;
+  EXPECT_FALSE(committed.changed);
+  EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(second)->position.x, 0.0f);
+  EXPECT_FALSE(history.can_undo());
+}
+
+TEST(DocumentCommandTests,
+     TransformPreviewCommitRestoresBeforeStateWhenTargetBecomesLocked) {
+  SceneDocument scene;
+  const EntityId entity = scene.create_entity("Brush");
+  EditorHistoryService history;
+  SceneTransformPreviewTransaction transaction(scene, {entity},
+                                                "Move Preview");
+
+  TransformComponent after = *scene.transform(entity);
+  after.position.x = 6.0f;
+  ASSERT_TRUE(transaction.preview_transform(entity, after).ok);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 6.0f);
+  ASSERT_TRUE(scene.set_locked(entity, true));
+
+  const DocumentCommandResult committed = transaction.commit(history);
+  EXPECT_FALSE(committed.ok);
+  EXPECT_FALSE(transaction.active());
+  ASSERT_NE(scene.transform(entity), nullptr);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+  ASSERT_NE(scene.lock(entity), nullptr);
+  EXPECT_TRUE(scene.lock(entity)->locked);
+  EXPECT_FALSE(history.can_undo());
 }
 
 TEST(DocumentCommandTests,
@@ -9129,6 +9901,67 @@ TEST(DocumentCommandTests, TypedLifecycleCommandsRestoreSceneSnapshots) {
   EXPECT_FALSE(scene.exists(restored));
 }
 
+TEST(DocumentCommandTests,
+     DuplicateHierarchyAllocationFailureRollsBackPartialSnapshotTree) {
+  SceneDocument scene;
+  const EntityId source = scene.create_entity("Source", EntityKind::Mesh);
+  const EntityId child = scene.create_entity("Child", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_parent(child, source, false));
+  const std::vector<EntityId> before_entities = scene.entities();
+  const std::uint64_t before_selection_revision = scene.selection_revision();
+
+  int allocations = 0;
+  scene.set_editor_object_id_allocator(
+      [&allocations](EditorObjectId) {
+        ++allocations;
+        return allocations == 1 ? EditorObjectId{1000}
+                                : kInvalidEditorObjectId;
+      });
+
+  UndoRedoManager undo_redo;
+  const UndoRedoResult result = undo_redo.execute(
+      std::make_unique<DuplicateEntityCommand>(scene, source));
+  EXPECT_FALSE(result.ok);
+  EXPECT_EQ(scene.entities(), before_entities);
+  EXPECT_EQ(scene.children(source), std::vector<EntityId>{child});
+  EXPECT_FALSE(undo_redo.can_undo());
+  EXPECT_FALSE(undo_redo.can_redo());
+  EXPECT_GT(scene.selection_revision(), before_selection_revision);
+}
+
+TEST(DocumentCommandTests,
+     DuplicateSelectedHierarchyRedoFailureRollsBackPartialRestoredTree) {
+  SceneDocument scene;
+  EditorHistoryService history;
+  DocumentCommandService commands(scene, history);
+  const EntityId source = scene.create_entity("Source", EntityKind::Mesh);
+  const EntityId child = scene.create_entity("Child", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_parent(child, source, false));
+  ASSERT_TRUE(scene.set_selected(source, true));
+
+  const DocumentDuplicateHierarchyResult duplicated =
+      commands.duplicate_selected_hierarchy();
+  ASSERT_TRUE(duplicated.ok) << duplicated.message;
+  ASSERT_EQ(duplicated.duplicate_roots.size(), 1u);
+  const EntityId duplicate_root = duplicated.duplicate_roots.front();
+  ASSERT_TRUE(history.undo().ok);
+  ASSERT_FALSE(scene.exists(duplicate_root));
+  const std::vector<EntityId> after_undo = scene.entities();
+
+  int allocations = 0;
+  scene.set_editor_object_id_allocator(
+      [&allocations](EditorObjectId requested) {
+        ++allocations;
+        return allocations == 1 ? requested : kInvalidEditorObjectId;
+      });
+  const CommandResult redo = history.redo();
+  EXPECT_FALSE(redo.ok);
+  EXPECT_EQ(scene.entities(), after_undo);
+  EXPECT_EQ(scene.children(source), std::vector<EntityId>{child});
+  EXPECT_FALSE(history.can_undo());
+  EXPECT_TRUE(history.can_redo());
+}
+
 TEST(DocumentCommandTests, DuplicateMintsEditorObjectIdsOnceAndRedoReusesThem) {
   SceneDocument scene;
   UndoRedoManager undo_redo;
@@ -9540,6 +10373,212 @@ TEST(DocumentCommandServiceTests, DefaultGroupNameStaysLiteralGroup) {
   ASSERT_NE(scene.name(second_group.group_entity), nullptr);
   EXPECT_EQ(scene.name(second_group.group_entity)->name, "Group");
   EXPECT_NE(first_group.group_entity, second_group.group_entity);
+}
+
+TEST(DocumentCommandServiceTests,
+     GroupSelectionPreservesWorldTransformsWithMinimumNonuniformScale) {
+  SceneDocument scene;
+  EditorHistoryService history;
+  DocumentCommandService commands(scene, history);
+
+  constexpr float kSharedRotation = 0.35f;
+  const EntityId first = scene.create_entity("Small Group First");
+  const EntityId second = scene.create_entity("Small Group Second");
+  ASSERT_NE(first, kInvalidEntityId);
+  ASSERT_NE(second, kInvalidEntityId);
+
+  TransformComponent first_transform;
+  first_transform.position = {-4.0f, 3.0f, 2.0f};
+  first_transform.rotation_euler = {0.0f, 0.0f, kSharedRotation};
+  first_transform.scale = {0.002f, 0.006f, 0.016f};
+  scene.set_transform(first, first_transform);
+
+  TransformComponent second_transform;
+  second_transform.position = {7.0f, -6.0f, 5.0f};
+  second_transform.rotation_euler = {0.0f, 0.0f, kSharedRotation};
+  second_transform.scale = {0.004f, 0.010f, 0.024f};
+  scene.set_transform(second, second_transform);
+  ASSERT_TRUE(scene.set_selected(first, true));
+  ASSERT_TRUE(scene.set_selected(second, true));
+  ASSERT_TRUE(scene.set_active_selection(second));
+
+  const QMat4 first_world_before = scene.world_transform_matrix(first);
+  const QMat4 second_world_before = scene.world_transform_matrix(second);
+  const auto expect_world_near = [](const QMat4 &actual,
+                                    const QMat4 &expected) {
+    for (std::size_t index = 0; index < expected.values.size(); ++index) {
+      EXPECT_NEAR(actual.values[index], expected.values[index], 0.00002f);
+    }
+  };
+
+  TransformComponent group_transform;
+  group_transform.position = {2.0f, -1.0f, 4.0f};
+  group_transform.rotation_euler = {0.0f, 0.0f, kSharedRotation};
+  group_transform.scale = {0.001f, 0.002f, 0.004f};
+  const DocumentGroupSelectionResult grouped =
+      commands.group_selection("Small Scale Group", group_transform);
+  ASSERT_TRUE(grouped.ok) << grouped.message;
+  ASSERT_TRUE(grouped.changed);
+  ASSERT_TRUE(scene.exists(grouped.group_entity));
+  EXPECT_EQ(scene.parent(first), grouped.group_entity);
+  EXPECT_EQ(scene.parent(second), grouped.group_entity);
+  expect_world_near(scene.world_transform_matrix(first), first_world_before);
+  expect_world_near(scene.world_transform_matrix(second), second_world_before);
+
+  ASSERT_TRUE(history.undo().ok);
+  EXPECT_FALSE(scene.exists(grouped.group_entity));
+  EXPECT_EQ(scene.parent(first), kInvalidEntityId);
+  EXPECT_EQ(scene.parent(second), kInvalidEntityId);
+  expect_world_near(scene.world_transform_matrix(first), first_world_before);
+  expect_world_near(scene.world_transform_matrix(second), second_world_before);
+
+  ASSERT_TRUE(history.redo().ok);
+  ASSERT_TRUE(scene.exists(grouped.group_entity));
+  EXPECT_EQ(scene.parent(first), grouped.group_entity);
+  EXPECT_EQ(scene.parent(second), grouped.group_entity);
+  expect_world_near(scene.world_transform_matrix(first), first_world_before);
+  expect_world_near(scene.world_transform_matrix(second), second_world_before);
+}
+
+TEST(DocumentCommandServiceTests,
+     GroupSelectionPreflightsLaterSingularRootWithoutPartialMutation) {
+  SceneDocument scene;
+  EditorHistoryService history;
+  DocumentCommandService commands(scene, history);
+  const EntityId representable = scene.create_entity("Representable Root");
+  const EntityId sheared = scene.create_entity("Later Sheared Root");
+  ASSERT_LT(representable, sheared);
+
+  TransformComponent representable_transform;
+  representable_transform.position = {-4.0f, 2.0f, 1.0f};
+  representable_transform.rotation_euler = {0.0f, 0.0f, 0.6f};
+  representable_transform.scale = {1.5f, 0.8f, 1.2f};
+  scene.set_transform(representable, representable_transform);
+
+  TransformComponent sheared_transform;
+  sheared_transform.position = {6.0f, -3.0f, 2.0f};
+  sheared_transform.rotation_euler = {0.2f, -0.1f, -0.45f};
+  sheared_transform.scale = {0.0f, 1.3f, 0.7f};
+  scene.set_transform(sheared, sheared_transform);
+  ASSERT_TRUE(scene.set_selected(representable, true));
+  ASSERT_TRUE(scene.set_selected(sheared, true));
+  ASSERT_TRUE(scene.set_active_selection(sheared));
+
+  TransformComponent group_transform;
+  group_transform.position = {2.0f, -1.0f, 3.0f};
+  group_transform.rotation_euler = {0.0f, 0.0f, 0.6f};
+  group_transform.scale = {2.0f, 0.75f, 1.4f};
+  const QMat4 representable_world_before =
+      scene.world_transform_matrix(representable);
+  const QMat4 sheared_world_before = scene.world_transform_matrix(sheared);
+  const std::vector<EntityId> selection_before = scene.selected_entities();
+  const EntityId active_before = scene.primary_selection();
+  const std::size_t entity_count_before = scene.entities().size();
+  const std::uint64_t revision_before = scene.revision();
+  const std::uint64_t transform_revision_before = scene.transform_revision();
+
+  const DocumentGroupSelectionResult result =
+      commands.group_selection("Rejected Group", group_transform);
+
+  EXPECT_FALSE(result.ok);
+  EXPECT_FALSE(result.changed);
+  EXPECT_EQ(result.group_entity, kInvalidEntityId);
+  EXPECT_EQ(scene.entities().size(), entity_count_before);
+  EXPECT_EQ(scene.parent(representable), kInvalidEntityId);
+  EXPECT_EQ(scene.parent(sheared), kInvalidEntityId);
+  EXPECT_EQ(scene.world_transform_matrix(representable).values,
+            representable_world_before.values);
+  EXPECT_EQ(scene.world_transform_matrix(sheared).values,
+            sheared_world_before.values);
+  EXPECT_EQ(scene.selected_entities(), selection_before);
+  EXPECT_EQ(scene.primary_selection(), active_before);
+  EXPECT_EQ(scene.revision(), revision_before);
+  EXPECT_EQ(scene.transform_revision(), transform_revision_before);
+  EXPECT_FALSE(history.can_undo());
+  EXPECT_FALSE(history.can_redo());
+}
+
+TEST(DocumentCommandServiceTests,
+     UngroupSelectionPreflightsLaterSingularChildWithoutPartialMutation) {
+  SceneDocument scene;
+  EditorHistoryService history;
+  DocumentCommandService commands(scene, history);
+  const EntityId valid_group = scene.create_empty("Valid First Group");
+  const EntityId valid_child = scene.create_entity("Valid Child");
+  const EntityId sheared_group = scene.create_empty("Sheared Later Group");
+  const EntityId sheared_child = scene.create_entity("Sheared Child");
+  ASSERT_LT(valid_group, sheared_group);
+
+  TransformComponent valid_group_transform;
+  valid_group_transform.position = {-3.0f, 2.0f, 1.0f};
+  valid_group_transform.rotation_euler = {0.0f, 0.0f, 0.25f};
+  scene.set_transform(valid_group, valid_group_transform);
+  TransformComponent valid_child_transform;
+  valid_child_transform.position = {1.0f, 2.0f, -1.0f};
+  valid_child_transform.rotation_euler = {0.1f, -0.15f, -0.2f};
+  scene.set_transform(valid_child, valid_child_transform);
+  ASSERT_TRUE(scene.set_parent(valid_child, valid_group, false));
+
+  TransformComponent sheared_group_transform;
+  sheared_group_transform.position = {5.0f, -4.0f, 2.0f};
+  sheared_group_transform.rotation_euler = {0.1f, -0.2f, 0.6f};
+  sheared_group_transform.scale = {2.0f, 0.7f, 1.5f};
+  scene.set_transform(sheared_group, sheared_group_transform);
+  TransformComponent sheared_child_transform;
+  sheared_child_transform.position = {-2.0f, 1.0f, 3.0f};
+  sheared_child_transform.rotation_euler = {-0.25f, 0.3f, -0.45f};
+  sheared_child_transform.scale = {0.0f, 1.2f, 0.9f};
+  scene.set_transform(sheared_child, sheared_child_transform);
+  ASSERT_TRUE(scene.set_parent(sheared_child, sheared_group, false));
+
+  ASSERT_TRUE(scene.set_selected(valid_group, true));
+  ASSERT_TRUE(scene.set_selected(sheared_group, true));
+  ASSERT_TRUE(scene.set_active_selection(sheared_group));
+  const QMat4 valid_child_world_before =
+      scene.world_transform_matrix(valid_child);
+  const QMat4 sheared_child_world_before =
+      scene.world_transform_matrix(sheared_child);
+  const TransformComponent valid_child_local_before =
+      *scene.transform(valid_child);
+  const TransformComponent sheared_child_local_before =
+      *scene.transform(sheared_child);
+  const std::vector<EntityId> selection_before = scene.selected_entities();
+  const EntityId active_before = scene.primary_selection();
+  const std::size_t entity_count_before = scene.entities().size();
+  const std::uint64_t revision_before = scene.revision();
+  const std::uint64_t transform_revision_before = scene.transform_revision();
+
+  const DocumentCommandResult result = commands.ungroup_selection();
+
+  EXPECT_FALSE(result.ok);
+  EXPECT_FALSE(result.changed);
+  EXPECT_TRUE(scene.exists(valid_group));
+  EXPECT_TRUE(scene.exists(sheared_group));
+  EXPECT_EQ(scene.entities().size(), entity_count_before);
+  EXPECT_EQ(scene.parent(valid_child), valid_group);
+  EXPECT_EQ(scene.parent(sheared_child), sheared_group);
+  EXPECT_EQ(scene.world_transform_matrix(valid_child).values,
+            valid_child_world_before.values);
+  EXPECT_EQ(scene.world_transform_matrix(sheared_child).values,
+            sheared_child_world_before.values);
+  expect_vec3_near(scene.transform(valid_child)->position,
+                   valid_child_local_before.position);
+  expect_vec3_near(scene.transform(valid_child)->rotation_euler,
+                   valid_child_local_before.rotation_euler);
+  expect_vec3_near(scene.transform(valid_child)->scale,
+                   valid_child_local_before.scale);
+  expect_vec3_near(scene.transform(sheared_child)->position,
+                   sheared_child_local_before.position);
+  expect_vec3_near(scene.transform(sheared_child)->rotation_euler,
+                   sheared_child_local_before.rotation_euler);
+  expect_vec3_near(scene.transform(sheared_child)->scale,
+                   sheared_child_local_before.scale);
+  EXPECT_EQ(scene.selected_entities(), selection_before);
+  EXPECT_EQ(scene.primary_selection(), active_before);
+  EXPECT_EQ(scene.revision(), revision_before);
+  EXPECT_EQ(scene.transform_revision(), transform_revision_before);
+  EXPECT_FALSE(history.can_undo());
+  EXPECT_FALSE(history.can_redo());
 }
 
 TEST(DocumentCommandServiceTests,
@@ -10888,6 +11927,135 @@ TEST(ModelingSessionServiceTests, InsertEdgeLoopUsesViewportPickRadius) {
   ASSERT_TRUE(command.ok) << command.message;
   EXPECT_TRUE(command.changed);
   EXPECT_FALSE(service.tool_status().insert_edge_loop_active);
+}
+
+TEST(ModelingSessionServiceTests,
+     InsertEdgeLoopUsesWorldPickAndGridForTransformedObject) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Transformed Edge Loop Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+
+  constexpr float kHalfPi = 1.57079632679f;
+  TransformComponent transform;
+  transform.position = {8.0f, 6.0f, 2.0f};
+  transform.rotation_euler = {0.0f, 0.0f, kHalfPi};
+  transform.scale = {2.0f, 0.75f, 1.5f};
+  scene.set_transform(box.object.entity, transform);
+  const QMat4 world_from_object =
+      scene.world_transform_matrix(box.object.entity);
+
+  const auto event_at_local_edge = [&](float local_y) {
+    const QVec3 world =
+        transform_point(world_from_object, {1.0f, local_y, 1.0f});
+    ModelingToolRayEvent event = test_insert_edge_loop_event();
+    event.ray.origin = world + QVec3{0.0f, 0.0f, 5.0f};
+    event.camera.origin = {world.x, world.y, 10.0f};
+    event.grid_size = 0.5;
+    event.snap_enabled = true;
+    return event;
+  };
+
+  ModelingCommandResult command =
+      service.activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop);
+  ASSERT_TRUE(command.ok) << command.message;
+  command = service.begin_insert_edge_loop_drag(event_at_local_edge(-0.4f));
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(service.tool_status().insert_edge_loop_has_preview);
+
+  command = service.update_insert_edge_loop_drag(event_at_local_edge(-0.2f));
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(service.tool_status().insert_edge_loop_has_preview);
+  command = service.commit_insert_edge_loop_drag();
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+
+  const std::optional<MeshAsset> mesh =
+      service.compile_object_mesh(box.object.modeling_object_id);
+  ASSERT_TRUE(mesh.has_value());
+  const auto has_local_y = [&](float expected) {
+    return std::any_of(mesh->vertices.begin(), mesh->vertices.end(),
+                       [expected](const MeshVertex &vertex) {
+                         return std::abs(vertex.position.y - expected) <
+                                0.001f;
+                       });
+  };
+  EXPECT_TRUE(has_local_y(-1.0f / 3.0f));
+  EXPECT_FALSE(has_local_y(0.0f));
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeAcceptUsesClickRayAndWorldEdgeSnapOnTransformedObject) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Transformed Knife Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+
+  constexpr float kHalfPi = 1.57079632679f;
+  TransformComponent transform;
+  transform.position = {5.0f, -4.0f, 2.0f};
+  transform.rotation_euler = {0.0f, 0.0f, kHalfPi};
+  transform.scale = {2.0f, 0.5f, 1.5f};
+  scene.set_transform(box.object.entity, transform);
+  const QMat4 world_from_object =
+      scene.world_transform_matrix(box.object.entity);
+
+  const auto event_at_local_surface = [&](QVec3 local) {
+    const QVec3 world = transform_point(world_from_object, local);
+    ModelingToolRayEvent event;
+    event.ray = {
+        .origin = world + QVec3{0.0f, 0.0f, 5.0f},
+        .direction = {0.0f, 0.0f, -1.0f},
+    };
+    event.camera = test_orthographic_viewport_camera();
+    event.camera.origin = {world.x, world.y, 10.0f};
+    event.grid_size = 0.5;
+    event.vertex_radius = 0.05;
+    event.edge_radius = 0.12;
+    event.snap_enabled = true;
+    return event;
+  };
+
+  ModelingCommandResult command =
+      service.activate_viewport_tool(ModelingViewportTool::Knife);
+  ASSERT_TRUE(command.ok) << command.message;
+  const QVec3 stale_local{-0.25f, 0.0f, 1.0f};
+  command = service.update_knife_hover(event_at_local_surface(stale_local));
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+
+  const QVec3 click_surface_local{0.25f, 0.8f, 1.0f};
+  command = service.accept_knife_point(
+      event_at_local_surface(click_surface_local));
+  ASSERT_TRUE(command.ok) << command.message;
+  ASSERT_TRUE(command.changed);
+  EXPECT_FALSE(service.tool_status().knife_has_current);
+
+  const QVec3 expected_world =
+      transform_point(world_from_object, {0.25f, 1.0f, 1.0f});
+  const QVec3 stale_world = transform_point(world_from_object, stale_local);
+  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const auto has_point_near = [&](QVec3 expected) {
+    return std::any_of(frame.points.begin(), frame.points.end(),
+                       [expected](const ViewportOverlayPoint &point) {
+                         return length_squared(point.position - expected) <
+                                0.0001f;
+                       });
+  };
+  EXPECT_TRUE(has_point_near(expected_world));
+  EXPECT_FALSE(has_point_near(stale_world));
 }
 
 TEST(ModelingSessionServiceTests,

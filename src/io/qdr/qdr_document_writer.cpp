@@ -317,6 +317,26 @@ QdrProjectWriteResult QdrDocumentWriter::write_project_document_atomic(
 QdrProjectWriteResult QdrDocumentWriter::write_project_document_atomic(
     const std::filesystem::path &path, const ProjectDocument &document) {
   QDR_PROFILE_FUNCTION();
+  const ProjectDocumentIdentityReport identity =
+      document.validate_object_identity_invariants();
+  if (!identity.ok()) {
+    return {
+        .ok = false,
+        .message = identity.issues.empty()
+                       ? "Project object identity validation failed."
+                       : identity.issues.front().message,
+    };
+  }
+  const ProjectDocumentAssetReferenceReport asset_references =
+      document.validate_asset_references();
+  if (!asset_references.ok()) {
+    return {
+        .ok = false,
+        .message = asset_references.issues.empty()
+                       ? "Project asset reference validation failed."
+                       : asset_references.issues.front().message,
+    };
+  }
   return write_project_document_atomic(
       path, qdr_project_write_snapshot_from_document(document));
 }

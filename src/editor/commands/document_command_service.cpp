@@ -27,6 +27,7 @@
 #include "editor/commands/document/set_visibility_command.hpp"
 #include "editor/commands/document/ungroup_selection_command.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -716,6 +717,10 @@ DocumentCommandService::set_scene_settings(EntityId entity,
 DocumentCommandResult
 DocumentCommandService::set_transform(EntityId entity,
                                       TransformComponent transform) {
+  if (!scene_transform_is_finite(transform)) {
+    return document_command_invalid_request_result(
+        "Transform contains non-finite values");
+  }
   const TransformComponent *current_transform = scene_.transform(entity);
   if (!current_transform) {
     return document_command_missing_entity_result();
@@ -736,6 +741,13 @@ DocumentCommandService::set_transforms(std::vector<DocumentTransformEdit> edits,
                                        std::string label) {
   if (label.empty()) {
     label = "Set Transform";
+  }
+  if (std::any_of(edits.begin(), edits.end(), [](const auto &edit) {
+        return !scene_transform_is_finite(edit.before) ||
+               !scene_transform_is_finite(edit.after);
+      })) {
+    return document_command_invalid_request_result(
+        "Transform contains non-finite values");
   }
   edits = normalized_transform_edits(scene_, std::move(edits));
   if (edits.empty()) {
@@ -874,6 +886,9 @@ DocumentCommandResult DocumentCommandService::apply_scene_batch(
       break;
     }
     case DocumentSceneBatchOperationKind::SetTransform: {
+      if (!scene_transform_is_finite(operation.transform)) {
+        return failure("Batch transform contains non-finite values.");
+      }
       std::optional<std::reference_wrapper<DocumentSceneBatchEntityState>>
           state = simulated_state(operation.entity);
       if (!state.has_value()) {
