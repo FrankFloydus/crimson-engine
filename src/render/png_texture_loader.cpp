@@ -16,6 +16,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <span>
+#include <string_view>
 #include <vector>
 
 namespace quader {
@@ -56,18 +58,11 @@ to_texture_format(PngTextureColorSpace color_space) {
              : filament::Texture::InternalFormat::RGBA8;
 }
 
-} // namespace
-
-filament::Texture *
-load_png_texture(filament::Engine &engine, const std::filesystem::path &path,
-                 PngTextureLoadOptions options) {
-  std::vector<unsigned char> pixels;
-  unsigned width = 0u;
-  unsigned height = 0u;
-  const unsigned error = lodepng::decode(pixels, width, height, path.string());
-  if (error != 0u || pixels.empty() || width == 0u || height == 0u) {
-    LOG_WARN("Unable to load {} {}: {}", options.label, path.string(),
-             lodepng_error_text(error));
+filament::Texture *upload_png_texture(
+    filament::Engine &engine, const std::vector<unsigned char> &pixels,
+    unsigned width, unsigned height, PngTextureLoadOptions options,
+    std::string_view source) {
+  if (pixels.empty() || width == 0u || height == 0u) {
     return nullptr;
   }
 
@@ -95,18 +90,76 @@ load_png_texture(filament::Engine &engine, const std::filesystem::path &path,
           .build(engine);
   if (texture == nullptr) {
     LOG_WARN("Unable to create render texture for {} {}", options.label,
-             path.string());
+             source);
     return nullptr;
   }
 
-  texture->setImage(engine, 0, FilamentBufferDescriptorFactory::rgba_pixels(
-                                   upload_pixels.data(), upload_pixels.size()));
+  texture->setImage(engine, 0,
+                    FilamentBufferDescriptorFactory::rgba_pixels(
+                        upload_pixels.data(), upload_pixels.size()));
   if (levels > 1u) {
     texture->generateMipmaps(engine);
   }
-  LOG_INFO("Loaded {} '{}' ({}x{})", options.label, path.string(), width,
-           height);
+  LOG_INFO("Loaded {} '{}' ({}x{})", options.label, source, width, height);
   return texture;
+}
+
+} // namespace
+
+filament::Texture *
+load_png_texture(filament::Engine &engine, const std::filesystem::path &path,
+                 PngTextureLoadOptions options) {
+  std::vector<unsigned char> pixels;
+  unsigned width = 0u;
+  unsigned height = 0u;
+  const unsigned error = lodepng::decode(pixels, width, height, path.string());
+  if (error != 0u || pixels.empty() || width == 0u || height == 0u) {
+    LOG_WARN("Unable to load {} {}: {}", options.label, path.string(),
+             lodepng_error_text(error));
+    return nullptr;
+  }
+  return upload_png_texture(engine, pixels, width, height, options,
+                            path.string());
+}
+
+filament::Texture *
+load_png_texture(filament::Engine &engine,
+                 std::span<const std::byte> encoded_file_bytes,
+                 PngTextureLoadOptions options) {
+  if (encoded_file_bytes.empty()) {
+    return nullptr;
+  }
+  std::vector<unsigned char> pixels;
+  unsigned width = 0u;
+  unsigned height = 0u;
+  const auto *bytes = reinterpret_cast<const unsigned char *>(
+      encoded_file_bytes.data());
+  const unsigned error = lodepng::decode(
+      pixels, width, height, bytes, encoded_file_bytes.size());
+  if (error != 0u || pixels.empty() || width == 0u || height == 0u) {
+    LOG_WARN("Unable to load {} from encoded project bytes: {}",
+             options.label, lodepng_error_text(error));
+    return nullptr;
+  }
+  return upload_png_texture(engine, pixels, width, height, options,
+                            "project material bytes");
+}
+
+filament::Texture *load_rgba_texture(
+    filament::Engine &engine, std::span<const std::byte> rgba8_pixels,
+    std::uint32_t width, std::uint32_t height,
+    PngTextureLoadOptions options) {
+  const std::uint64_t expected = static_cast<std::uint64_t>(width) *
+                                 static_cast<std::uint64_t>(height) *
+                                 kRgbaChannelCount;
+  if (width == 0u || height == 0u || expected != rgba8_pixels.size()) {
+    return nullptr;
+  }
+  const auto *first = reinterpret_cast<const unsigned char *>(
+      rgba8_pixels.data());
+  std::vector<unsigned char> pixels(first, first + rgba8_pixels.size());
+  return upload_png_texture(engine, pixels, width, height, options,
+                            "decoded project material pixels");
 }
 
 } // namespace quader

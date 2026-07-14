@@ -15,7 +15,7 @@ ProjectIoResult<std::filesystem::path> ProjectAssetResolver::resolve_existing(
         ProjectIoErrorCode::InvalidArgument,
         "Project asset resolver has no open project filesystem.");
   }
-  if (reference.stable_id.empty() ||
+  if (!reference.stable_id.valid() ||
       reference.kind == ProjectAssetKind::Unknown ||
       !reference.path.valid()) {
     return ProjectIoResult<std::filesystem::path>::failure(

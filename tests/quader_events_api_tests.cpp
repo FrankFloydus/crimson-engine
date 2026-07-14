@@ -26,14 +26,20 @@ TEST(QuaderEventsApiTests, PublishesStableLifecycleEventCatalog) {
 
     EXPECT_TRUE(events.available());
     EXPECT_EQ(events.event_names(),
-              (std::vector<std::string>{
-                  std::string(quader_event::kProjectOpened),
-                  std::string(quader_event::kProjectClosed),
-                  std::string(quader_event::kSceneOpened),
+      (std::vector<std::string>{
+          std::string(quader_event::kProjectOpened),
+          std::string(quader_event::kProjectClosed),
+          std::string(quader_event::kProjectAssetsChanged),
+          std::string(quader_event::kActiveProjectMaterialChanged),
+          std::string(quader_event::kSceneOpened),
                   std::string(quader_event::kActiveSceneChanged),
                   std::string(quader_event::kSceneDirtyChanged),
                   std::string(quader_event::kSceneSaved),
                   std::string(quader_event::kSceneClosed),
+                  std::string(quader_event::kStandardMaterialOpened),
+                  std::string(quader_event::kStandardMaterialDirtyChanged),
+                  std::string(quader_event::kStandardMaterialSaved),
+                  std::string(quader_event::kStandardMaterialClosed),
               }));
 }
 

@@ -6,7 +6,10 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <span>
 
 namespace filament {
 class Engine;
@@ -36,5 +39,14 @@ struct PngTextureLoadOptions {
 [[nodiscard]] filament::Texture *
 load_png_texture(filament::Engine &engine, const std::filesystem::path &path,
                  PngTextureLoadOptions options = {});
+[[nodiscard]] filament::Texture *
+load_png_texture(filament::Engine &engine,
+                 std::span<const std::byte> encoded_file_bytes,
+                 PngTextureLoadOptions options = {});
+[[nodiscard]] filament::Texture *
+load_rgba_texture(filament::Engine &engine,
+                  std::span<const std::byte> rgba8_pixels,
+                  std::uint32_t width, std::uint32_t height,
+                  PngTextureLoadOptions options = {});
 
 } // namespace quader

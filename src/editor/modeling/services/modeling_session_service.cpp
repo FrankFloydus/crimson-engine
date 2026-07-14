@@ -993,8 +993,8 @@ public:
     session_.mark_clean();
     session_.clear_history();
     runtime_.reset_document_state(session_);
-    scene_sync_service_.mark_scene_objects_synced(
-        session_.state().content_revision);
+    mesh_sync_service_.establish_loaded_scene_sync_baseline(
+        session_, scene_sync_service_);
     if (!preserve_scene_owned_group_selection) {
       (void)selection_projection_service_.project_object_selection_from_scene(
           session_, scene_, object_registry_, true);
@@ -1548,6 +1548,131 @@ public:
   [[nodiscard]] bool modal_tool_owns_viewport() const {
     return modal_tool_runtime_.owns_viewport(
         from_runtime_viewport_tool(runtime_.active_tool()));
+  }
+
+  ModelingCommandResult apply_active_material(MaterialReference material) {
+    if (!material.valid()) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "The active material is unavailable.",
+      };
+    }
+
+    const ModelingSelectionSummary summary = selection_summary();
+    if (summary.mode != ModelingSelectionMode::Object &&
+        summary.mode != ModelingSelectionMode::Face) {
+      return {
+          .ok = false,
+          .changed = false,
+          .message = "Apply Material works in object or face mode.",
+      };
+    }
+
+    const ModelingSelectionExport selection = export_selection();
+    if (summary.mode == ModelingSelectionMode::Object &&
+        summary.selected_object_count == 0u) {
+      return {.ok = false,
+              .changed = false,
+              .message =
+                  "Select one or more meshes before applying material."};
+    }
+    if (summary.mode == ModelingSelectionMode::Face &&
+        summary.selected_face_count == 0u) {
+      return {.ok = false,
+              .changed = false,
+              .message =
+                  "Select one or more faces before applying material."};
+    }
+
+    bool component_changed = false;
+    const std::uint64_t content_before = session_.state().content_revision;
+    if (summary.mode == ModelingSelectionMode::Object) {
+      const quader_editor_core::CommandResult assigned =
+          session_.assign_material_to_selection(0u);
+      if (!assigned.ok) {
+        return {.ok = false,
+                .changed = false,
+                .message = assigned.message};
+      }
+      for (const ModelingSelectionExportObject &object : selection.objects) {
+        if (!object.selected || object.entity == kInvalidEntityId ||
+            !scene_.exists(object.entity)) {
+          continue;
+        }
+        const MaterialComponent desired{.material = material};
+        component_changed =
+            mesh_sync_service_.set_entity_material(scene_, object.entity,
+                                                   desired) ||
+            component_changed;
+      }
+    } else {
+      for (const ModelingSelectionExportObject &object : selection.objects) {
+        if (object.selected_faces.empty() ||
+            object.entity == kInvalidEntityId ||
+            !scene_.exists(object.entity)) {
+          continue;
+        }
+
+        MaterialComponent desired;
+        if (const MaterialComponent *existing =
+                scene_.material(object.entity)) {
+          desired = *existing;
+        }
+
+        std::uint32_t slot = 0u;
+        if (desired.material != material) {
+          const auto bound = std::min_element(
+              desired.material_slots.begin(), desired.material_slots.end(),
+              [&](const auto &left, const auto &right) {
+                const bool left_matches = left.second == material;
+                const bool right_matches = right.second == material;
+                if (left_matches != right_matches) {
+                  return left_matches;
+                }
+                return left.first < right.first;
+              });
+          if (bound != desired.material_slots.end() &&
+              bound->second == material) {
+            slot = bound->first;
+          } else {
+            slot = 1u;
+            while (desired.material_slots.contains(slot)) {
+              ++slot;
+            }
+            desired.material_slots.emplace(slot, material);
+          }
+        }
+
+        for (const ModelingSelectionExportFace &face :
+             object.selected_faces) {
+          const quader_editor_core::CommandResult assigned =
+              session_.assign_material_to_face(
+                  object.modeling_object_id, face.id, slot);
+          if (!assigned.ok) {
+            return {.ok = false,
+                    .changed = false,
+                    .message = assigned.message};
+          }
+        }
+
+        component_changed =
+            mesh_sync_service_.set_entity_material(scene_, object.entity,
+                                                   desired) ||
+            component_changed;
+      }
+    }
+
+    const bool geometry_changed =
+        session_.state().content_revision != content_before;
+    if (geometry_changed) {
+      sync_scene_objects_from_modeling();
+    }
+    sync_scene_selection_from_modeling();
+    return {
+        .ok = true,
+        .changed = geometry_changed || component_changed,
+    };
   }
 
   [[nodiscard]] bool transform_drag_active() const {
@@ -3322,14 +3447,27 @@ public:
         RuntimeToolCommandService::accept_poly_point(), false);
   }
 
-  ModelingCommandResult commit_poly_tool() {
+  ModelingCommandResult commit_poly_tool(MaterialReference material = {}) {
     const std::uint64_t content_before = session_.state().content_revision;
+    const std::size_t object_count_before = session_.objects().size();
     const quader_editor_core::EditorRuntimeCommandResult runtime_result =
         quader_editor_core::execute_runtime_command(
             session_, runtime_, RuntimeToolCommandService::commit_poly());
     if (session_.state().content_revision != content_before ||
         runtime_result.command.changed) {
       sync_scene_objects_from_modeling(runtime_result.command.changed);
+    }
+    if (runtime_result.command.ok && runtime_result.command.changed &&
+        material.valid() && session_.objects().size() > object_count_before) {
+      const quader_editor_core::PolygonObject &created =
+          session_.objects().back();
+      const std::optional<EntityId> entity =
+          object_registry_.entity_for_modeling_object(created.id);
+      if (entity.has_value() && scene_.exists(*entity)) {
+        (void)mesh_sync_service_.set_entity_material(
+            scene_, *entity, MaterialComponent{.material = material});
+        object_registry_.remember_scene_entity(created.id, scene_, *entity);
+      }
     }
     sync_scene_selection_from_modeling();
     invalidate_selection_overlay_caches();
@@ -3400,6 +3538,12 @@ public:
         runtime_result.command.message);
     if (!created.ok) {
       restore_creation_projection_checkpoint(std::move(checkpoint));
+    } else if (request.material.valid()) {
+      (void)mesh_sync_service_.set_entity_material(
+          scene_, created.object.entity,
+          MaterialComponent{.material = request.material});
+      object_registry_.remember_scene_entity(created.object.modeling_object_id,
+                                             scene_, created.object.entity);
     }
     return created;
   }
@@ -3553,6 +3697,12 @@ public:
         request.name.empty() ? "Mesh" : request.name, runtime_result.message);
     if (!created.ok) {
       restore_creation_projection_checkpoint(std::move(checkpoint));
+    } else if (request.material.valid()) {
+      (void)mesh_sync_service_.set_entity_material(
+          scene_, created.object.entity,
+          MaterialComponent{.material = request.material});
+      object_registry_.remember_scene_entity(created.object.modeling_object_id,
+                                             scene_, created.object.entity);
     }
     return created;
   }
@@ -4791,6 +4941,11 @@ ModelingSessionService::apply_active_material(std::uint32_t material_slot) {
   return impl_->apply_active_material(material_slot);
 }
 
+ModelingCommandResult
+ModelingSessionService::apply_active_material(MaterialReference material) {
+  return impl_->apply_active_material(material);
+}
+
 bool ModelingSessionService::modal_tool_owns_viewport() const {
   return impl_->modal_tool_owns_viewport();
 }
@@ -5101,6 +5256,11 @@ ModelingCommandResult ModelingSessionService::accept_poly_point() {
 
 ModelingCommandResult ModelingSessionService::commit_poly_tool() {
   return impl_->commit_poly_tool();
+}
+
+ModelingCommandResult
+ModelingSessionService::commit_poly_tool(MaterialReference material) {
+  return impl_->commit_poly_tool(material);
 }
 
 ModelingCommandResult ModelingSessionService::activate_box_tool() {

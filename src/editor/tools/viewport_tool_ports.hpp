@@ -145,6 +145,7 @@ struct ViewportModelingToolPortCallbacks {
   std::function<void()> mark_overlay_dirty;
   std::function<void(ViewportSelectionMode)> set_selection_mode;
   std::function<void(ModelingSelectionMode)> set_app_selection_mode;
+  std::function<MaterialReference()> active_material;
   std::function<void(std::string_view, const ModelingCommandResult &)>
       handle_tool_command_result;
 };

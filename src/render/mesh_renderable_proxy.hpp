@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "assets/material_reference.hpp"
 #include "core/types.hpp"
 
 #include <filament/IndexBuffer.h>
@@ -34,7 +35,7 @@ struct MeshRenderableProxy {
     utils::Entity entity;
     EntityId source_entity = kInvalidEntityId;
     AssetId mesh = kInvalidAssetId;
-    AssetId material = kInvalidAssetId;
+    MaterialReference material;
     std::uint64_t mesh_revision = 0;
     std::uint64_t material_revision = 0;
     bool cast_shadows = false;
@@ -52,7 +53,7 @@ struct MeshRenderableProxy {
       other.entity.clear();
       source_entity = std::exchange(other.source_entity, kInvalidEntityId);
       mesh = std::exchange(other.mesh, kInvalidAssetId);
-      material = std::exchange(other.material, kInvalidAssetId);
+      material = std::exchange(other.material, MaterialReference{});
       mesh_revision = std::exchange(other.mesh_revision, 0);
       material_revision = std::exchange(other.material_revision, 0);
       cast_shadows = std::exchange(other.cast_shadows, false);

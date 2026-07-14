@@ -83,6 +83,10 @@ struct QuaderProjectRuntimeHooks {
   std::function<std::optional<std::filesystem::path>()> choose_export_obj_path;
   std::function<QuaderDirtyProjectDecision(std::string_view action_id)>
       confirm_dirty_project_replacement;
+  /// Resolves a retained material-editor draft before project replacement.
+  /// Returning false cancels the project command without discarding content.
+  std::function<bool(std::string_view action_id)>
+      prepare_material_document_close;
 };
 
 /**

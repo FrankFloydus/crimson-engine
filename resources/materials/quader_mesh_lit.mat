@@ -15,6 +15,14 @@ material {
             name : roughnessTexture
         },
         {
+            type : sampler2d,
+            name : metallicTexture
+        },
+        {
+            type : sampler2d,
+            name : normalTexture
+        },
+        {
             type : float4,
             name : baseColorFactor
         },
@@ -25,6 +33,14 @@ material {
         {
             type : float,
             name : roughnessFactor
+        },
+        {
+            type : float,
+            name : normalStrength
+        },
+        {
+            type : float,
+            name : normalYSign
         },
         {
             type : float4,
@@ -150,11 +166,17 @@ fragment {
         vec2 uv = vec2(getUV0().x, 1.0 - getUV0().y);
         vec4 baseSample = texture(materialParams_baseColorTexture, uv);
         float roughnessSample = texture(materialParams_roughnessTexture, uv).r;
+        float metallicSample = texture(materialParams_metallicTexture, uv).r;
+        vec3 normalSample = texture(materialParams_normalTexture, uv).xyz * 2.0 - 1.0;
+        normalSample.y *= materialParams.normalYSign;
+        normalSample.xy *= max(materialParams.normalStrength, 0.0);
+        normalSample = normalize(normalSample);
         vec3 baseColor = baseSample.rgb * materialParams.baseColorFactor.rgb;
         baseColor = applySurfaceGrid(baseColor);
 
         material.baseColor = vec4(baseColor, baseSample.a * materialParams.baseColorFactor.a);
         material.roughness = clamp(roughnessSample * materialParams.roughnessFactor, 0.04, 1.0);
-        material.metallic = clamp(materialParams.metallicFactor, 0.0, 1.0);
+        material.metallic = clamp(metallicSample * materialParams.metallicFactor, 0.0, 1.0);
+        material.normal = normalSample;
     }
 }

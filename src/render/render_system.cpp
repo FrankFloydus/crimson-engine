@@ -8,6 +8,7 @@
 
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
+#include "render/material_preview_renderer.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "render/viewport_renderer.hpp"
 
@@ -122,6 +123,7 @@ bool RenderSystem::initialize(void *native_window,
     return fail("Unable to create Filament engine");
   }
   LOG_INFO("Filament engine created");
+  resource_root_ = executable_dir;
 
   if (native_window != nullptr) {
     swap_chain_ = engine_->createSwapChain(native_window);
@@ -182,6 +184,7 @@ void RenderSystem::shutdown() {
     presentation_frame_tracker_.reset();
     performance_renderer_ = nullptr;
     renderer_clear_color_ = {};
+    resource_root_.clear();
     filament::Engine::destroy(&engine_);
 }
 
@@ -359,6 +362,16 @@ void RenderSystem::initialize_viewport_renderer(
                                ViewportRenderSurface::Texture);
 }
 
+bool RenderSystem::initialize_material_preview_renderer(
+    MaterialPreviewRenderer &preview_renderer) {
+  if (engine_ == nullptr || !material_library_.initialized()) {
+    return false;
+  }
+  return preview_renderer.initialize(
+      *engine_, material_library_.quader_mesh(),
+      material_library_.quader_mesh_lit(), resource_root_);
+}
+
 void RenderSystem::initialize_viewport_renderer(
     ViewportRenderer &viewport_renderer, std::uint8_t grid_layer_mask,
     ViewportRenderSurface surface) {
@@ -385,6 +398,15 @@ void RenderSystem::render_viewport(ViewportRenderer &viewport_renderer,
     return;
   }
   viewport_renderer.render(*surface.renderer_);
+}
+
+void RenderSystem::render_material_preview(
+    MaterialPreviewRenderer &preview_renderer,
+    RenderAdditionalSwapChain &surface) {
+  if (surface.renderer_ == nullptr || !preview_renderer.initialized()) {
+    return;
+  }
+  preview_renderer.render(*surface.renderer_);
 }
 
 void RenderSystem::apply_scene_settings(

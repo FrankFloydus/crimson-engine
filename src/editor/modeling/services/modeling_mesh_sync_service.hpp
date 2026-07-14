@@ -18,6 +18,7 @@
 namespace quader {
 
 class AssetRegistry;
+struct MaterialComponent;
 struct ModelingObjectSceneIdentity;
 class SceneDocument;
 struct SceneTransformAssignment;
@@ -40,6 +41,9 @@ public:
   void apply_scene_identity_to_entity(
       SceneDocument &scene, EntityId entity,
       const ModelingObjectSceneIdentity &identity) const;
+  [[nodiscard]] bool set_entity_material(
+      SceneDocument &scene, EntityId entity,
+      const MaterialComponent &material) const;
   [[nodiscard]] bool restore_history_mesh_assets(
       AssetRegistry &assets,
       const std::unordered_map<AssetId, MeshAsset> &mesh_assets) const;
@@ -52,6 +56,9 @@ public:
   void apply_scene_transforms(
       SceneDocument &scene,
       std::span<const SceneTransformAssignment> transforms) const;
+  void establish_loaded_scene_sync_baseline(
+      const quader_editor_core::EditorSession &session,
+      SceneModelingSyncService &scene_sync) const;
   [[nodiscard]] bool sync_scene_objects_from_modeling(
       const quader_editor_core::EditorSession &session, SceneDocument &scene,
       AssetRegistry &assets, SceneModelingSyncService &scene_sync,

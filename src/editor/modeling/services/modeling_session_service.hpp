@@ -141,6 +141,7 @@ public:
   ModelingCommandResult mirror_selection(ModelingMirrorAxis axis);
   ModelingCommandResult flip_selection(ModelingFlipOrientation orientation);
   ModelingCommandResult apply_active_material(std::uint32_t material_slot = 0);
+  ModelingCommandResult apply_active_material(MaterialReference material);
   [[nodiscard]] bool modal_tool_owns_viewport() const;
   [[nodiscard]] bool transform_drag_active() const;
   [[nodiscard]] bool can_cancel_active_tool_or_preview() const;
@@ -234,6 +235,7 @@ public:
   ModelingCommandResult update_poly_hover(const ModelingToolRayEvent &event);
   ModelingCommandResult accept_poly_point();
   ModelingCommandResult commit_poly_tool();
+  ModelingCommandResult commit_poly_tool(MaterialReference material);
   ModelingCommandResult activate_box_tool();
   ModelingCreateBoxResult
   create_box_from_bounds(const ModelingCreateBoxRequest &request);

@@ -66,6 +66,7 @@ void SceneRenderSyncService::shutdown() {
     light_cache_.shutdown();
     synced_revision_ = 0;
     synced_asset_revision_ = 0;
+    synced_project_material_revision_ = 0;
     synced_scene_binding_ = {};
     has_scene_binding_ = false;
     has_synced_ = false;
@@ -97,6 +98,7 @@ void SceneRenderSyncService::bind_scene(
   synced_scene_binding_ = scene_binding;
   synced_revision_ = 0;
   synced_asset_revision_ = 0;
+  synced_project_material_revision_ = 0;
   has_scene_binding_ = true;
   has_synced_ = false;
 }
@@ -119,12 +121,16 @@ bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
         synced_revision_ == snapshot.scene_revision;
     const bool assets_unchanged =
         has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
-        synced_asset_revision_ == snapshot.asset_revision;
+        synced_asset_revision_ == snapshot.asset_revision &&
+        synced_project_material_revision_ ==
+            snapshot.project_material_revision;
     if (document_unchanged && assets_unchanged) {
       return false;
     }
     if (document_unchanged && !render_asset_revisions_changed(snapshot)) {
       synced_asset_revision_ = snapshot.asset_revision;
+      synced_project_material_revision_ =
+          snapshot.project_material_revision;
       return false;
     }
 
@@ -134,6 +140,7 @@ bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
     }
     synced_revision_ = snapshot.scene_revision;
     synced_asset_revision_ = snapshot.asset_revision;
+    synced_project_material_revision_ = snapshot.project_material_revision;
     synced_scene_binding_ = snapshot.scene_binding;
     has_synced_ = true;
     return true;
@@ -163,7 +170,8 @@ bool SceneRenderSyncService::can_sync_transforms_only(
       snapshot.dirty.visibility_changed ||
       snapshot.dirty.mesh_bindings_changed ||
       snapshot.dirty.render_components_changed ||
-      snapshot.dirty.assets_changed) {
+      snapshot.dirty.assets_changed ||
+      snapshot.dirty.project_materials_changed) {
     return false;
   }
 

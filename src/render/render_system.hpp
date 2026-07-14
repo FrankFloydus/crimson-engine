@@ -37,6 +37,7 @@ enum class SwapChainPresentationColorSpace {
 };
 
 class RenderSystem;
+class MaterialPreviewRenderer;
 class SceneRenderBridge;
 class ViewportRenderer;
 enum class ViewportRenderSurface;
@@ -115,9 +116,13 @@ public:
     void initialize_viewport_renderer(ViewportRenderer &viewport_renderer,
                                       std::uint8_t grid_layer_mask,
                                       ViewportRenderSurface surface);
+    [[nodiscard]] bool initialize_material_preview_renderer(
+        MaterialPreviewRenderer &preview_renderer);
     void render_viewport(ViewportRenderer &viewport_renderer);
     void render_viewport(ViewportRenderer &viewport_renderer,
                          RenderAdditionalSwapChain &surface);
+    void render_material_preview(MaterialPreviewRenderer &preview_renderer,
+                                 RenderAdditionalSwapChain &surface);
     void apply_scene_settings(const SceneSettingsComponent &settings);
 
   private:
@@ -143,6 +148,7 @@ public:
     RenderFramePerformanceStats frame_performance_stats_;
     RenderPresentationFrameTracker presentation_frame_tracker_;
     std::array<double, 4> renderer_clear_color_ = {};
+    std::filesystem::path resource_root_;
 };
 
 } // namespace quader

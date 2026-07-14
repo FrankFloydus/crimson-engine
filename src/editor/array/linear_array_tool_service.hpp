@@ -7,6 +7,7 @@
 #pragma once
 
 #include "assets/asset_revision.hpp"
+#include "assets/material_reference.hpp"
 #include "core/command_result.hpp"
 #include "core/types.hpp"
 #include "editor/modeling/linear_array_layout.hpp"
@@ -66,7 +67,7 @@ struct LinearArrayHandleState {
 struct LinearArrayPreviewSource {
   EntityId source_entity = kInvalidEntityId;
   AssetId mesh = kInvalidAssetId;
-  AssetId material = kInvalidAssetId;
+  MaterialReference material;
   std::vector<QMat4> generated_world_transforms;
 };
 
@@ -118,7 +119,7 @@ private:
     std::string uuid;
     EntityId parent = kInvalidEntityId;
     AssetId mesh = kInvalidAssetId;
-    AssetId material = kInvalidAssetId;
+    MaterialReference material;
     MeshAssetRevision mesh_revision;
     MaterialAssetRevision material_revision;
     QMat4 world_transform;

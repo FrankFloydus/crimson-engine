@@ -229,14 +229,28 @@ texture_color_space_name(TextureColorSpace color_space) {
 }
 
 [[nodiscard]] Json material_component_json(const MaterialComponent &material) {
-  Json result{{"material", material.material}};
-  std::vector<std::pair<std::uint32_t, AssetId>> slots(
+  const auto reference_json = [](MaterialReference reference) -> Json {
+    if (reference.project_owned()) {
+      return {{"kind", "project"},
+              {"id", std::string(reference.project_asset().str())}};
+    }
+    if (reference.embedded()) {
+      return {{"kind", "embedded"},
+              {"id", reference.embedded_asset()}};
+    }
+    return {{"kind", "none"}};
+  };
+  Json result{{"material", reference_json(material.material)}};
+  std::vector<std::pair<std::uint32_t, MaterialReference>> slots(
       material.material_slots.begin(), material.material_slots.end());
-  std::sort(slots.begin(), slots.end());
+  std::sort(slots.begin(), slots.end(), [](const auto &left,
+                                           const auto &right) {
+    return left.first < right.first;
+  });
   if (!slots.empty()) {
     Json slot_json = Json::object();
-    for (const auto &[slot, asset] : slots) {
-      slot_json[std::to_string(slot)] = asset;
+    for (const auto &[slot, reference] : slots) {
+      slot_json[std::to_string(slot)] = reference_json(reference);
     }
     result["slots"] = std::move(slot_json);
   }
@@ -459,11 +473,19 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
 }
 
 [[nodiscard]] Json object_json(const ProjectObjectRecord &object) {
+  Json material = {{"kind", "none"}};
+  if (object.material.project_owned()) {
+    material = {{"kind", "project"},
+                {"id", std::string(object.material.project_asset().str())}};
+  } else if (object.material.embedded()) {
+    material = {{"kind", "embedded"},
+                {"id", object.material.embedded_asset()}};
+  }
   return {
       {"editorObjectId", object.id},
       {"sceneEntity", object.scene_entity},
       {"mesh", object.mesh},
-      {"material", object.material},
+      {"material", std::move(material)},
       {"modelingObject", object.modeling_object},
       {"authoredName", object.authored_name},
       {"visible", object.visible},

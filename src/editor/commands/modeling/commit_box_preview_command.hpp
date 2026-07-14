@@ -27,7 +27,7 @@ public:
   CommitBoxPreviewCommand(ModelingSessionService &modeling,
                           SceneDocument &scene, AssetRegistry &assets,
                           std::string name,
-                          AssetId default_material);
+                          MaterialReference default_material);
 
   [[nodiscard]] const std::string &label() const override;
   CommandResult undo() override;
@@ -47,7 +47,7 @@ private:
   SceneDocument &scene_;
   AssetRegistry &assets_;
   std::string name_;
-  AssetId default_material_ = kInvalidAssetId;
+  MaterialReference default_material_;
   std::string label_ = "Create Box";
   ModelingSessionMemento before_;
   ModelingSessionMemento after_;

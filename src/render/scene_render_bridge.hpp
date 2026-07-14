@@ -70,6 +70,8 @@ public:
                     filament::Material &overlay_icon_material,
                     std::filesystem::path resource_root);
     void shutdown();
+    void set_project_material_resolver(
+        const RenderProjectMaterialResolver *resolver);
     void bind_scene(RenderSceneBindingKey scene_binding);
     void sync(const SceneDocument &document, const AssetRegistry &assets,
               std::uint64_t frame_index = 0,
@@ -111,6 +113,7 @@ public:
     RenderSceneSnapshot previous_scene_snapshot_;
     bool has_previous_scene_snapshot_ = false;
     RenderSceneBindingKey scene_binding_;
+    const RenderProjectMaterialResolver *project_material_resolver_ = nullptr;
     bool has_scene_binding_ = false;
     std::uint64_t tool_preview_submission_revision_ = 0;
 };

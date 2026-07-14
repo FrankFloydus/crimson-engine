@@ -20,7 +20,8 @@ namespace quader {
 
 inline constexpr std::string_view kQuaderProjectManifestFormat =
     "quader.project";
-inline constexpr std::uint32_t kQuaderProjectManifestVersion = 1u;
+inline constexpr std::uint32_t kQuaderProjectManifestVersion = 2u;
+inline constexpr std::uint32_t kOldestQuaderProjectManifestVersion = 1u;
 
 /// Maps a persistent scene identity to its project-relative file location.
 struct ProjectSceneCatalogEntry {
@@ -43,7 +44,8 @@ public:
       ProjectId id, std::string name,
       std::vector<ProjectSceneCatalogEntry> scenes,
       std::vector<ProjectRelativePath> open_scene_paths,
-      std::optional<ProjectRelativePath> active_scene_path);
+      std::optional<ProjectRelativePath> active_scene_path,
+      std::optional<ProjectAssetId> active_material_id = std::nullopt);
 
   [[nodiscard]] const ProjectId &id() const noexcept { return id_; }
   [[nodiscard]] const std::string &name() const noexcept { return name_; }
@@ -57,6 +59,10 @@ public:
   [[nodiscard]] const std::optional<ProjectRelativePath> &
   active_scene_path() const noexcept {
     return active_scene_path_;
+  }
+  [[nodiscard]] const std::optional<ProjectAssetId> &
+  active_material_id() const noexcept {
+    return active_material_id_;
   }
 
   [[nodiscard]] const ProjectSceneCatalogEntry *
@@ -75,6 +81,8 @@ public:
   [[nodiscard]] ProjectIoResult<void> set_workspace(
       std::vector<ProjectRelativePath> open_scene_paths,
       std::optional<ProjectRelativePath> active_scene_path);
+  [[nodiscard]] ProjectIoResult<void>
+  set_active_material(std::optional<ProjectAssetId> material_id);
 
 private:
   ProjectId id_;
@@ -82,6 +90,7 @@ private:
   std::vector<ProjectSceneCatalogEntry> scenes_;
   std::vector<ProjectRelativePath> open_scene_paths_;
   std::optional<ProjectRelativePath> active_scene_path_;
+  std::optional<ProjectAssetId> active_material_id_;
 };
 
 /// Bundles a validated project filesystem with its loaded manifest.

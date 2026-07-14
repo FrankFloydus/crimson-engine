@@ -45,6 +45,24 @@ QtAuxiliaryWindowState::load(const std::filesystem::path &path) {
   state.tool_settings_visible =
       settings.value(QStringLiteral("visible"), false).toBool();
   settings.endGroup();
+
+  settings.beginGroup(QStringLiteral("MaterialBrowser"));
+  state.material_browser_geometry =
+      settings.value(QStringLiteral("geometry")).toByteArray();
+  state.material_browser_grid_mode =
+      settings.value(QStringLiteral("gridMode"), true).toBool();
+  state.material_browser_tile_size =
+      settings.value(QStringLiteral("tileSize"), 128).toInt();
+  settings.endGroup();
+
+  settings.beginGroup(QStringLiteral("StandardMaterialEditor"));
+  state.standard_material_editor_geometry =
+      settings.value(QStringLiteral("geometry")).toByteArray();
+  state.standard_material_preview_mesh =
+      settings.value(QStringLiteral("previewMesh"), 0).toInt();
+  state.standard_material_preview_shading =
+      settings.value(QStringLiteral("previewShading"), 2).toInt();
+  settings.endGroup();
   return state;
 }
 
@@ -64,6 +82,21 @@ bool QtAuxiliaryWindowState::save(const std::filesystem::path &path) const {
   settings.beginGroup(QStringLiteral("ToolSettingsWindow"));
   settings.setValue(QStringLiteral("geometry"), tool_settings_geometry);
   settings.setValue(QStringLiteral("visible"), tool_settings_visible);
+  settings.endGroup();
+
+  settings.beginGroup(QStringLiteral("MaterialBrowser"));
+  settings.setValue(QStringLiteral("geometry"), material_browser_geometry);
+  settings.setValue(QStringLiteral("gridMode"), material_browser_grid_mode);
+  settings.setValue(QStringLiteral("tileSize"), material_browser_tile_size);
+  settings.endGroup();
+
+  settings.beginGroup(QStringLiteral("StandardMaterialEditor"));
+  settings.setValue(QStringLiteral("geometry"),
+                    standard_material_editor_geometry);
+  settings.setValue(QStringLiteral("previewMesh"),
+                    standard_material_preview_mesh);
+  settings.setValue(QStringLiteral("previewShading"),
+                    standard_material_preview_shading);
   settings.endGroup();
   settings.sync();
   return settings.status() == QSettings::NoError;

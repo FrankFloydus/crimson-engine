@@ -20,10 +20,14 @@ namespace quader {
 class QuaderEditorApi;
 
 using QtViewportToolStateProvider = std::function<ViewportToolState()>;
+using QtApplicationCommandInputOwnerProvider = std::function<bool()>;
 
 [[nodiscard]] ViewportToolState
 qt_command_dispatch_tool_state(const QtViewportToolStateProvider &provider,
                                int grid_preset);
+
+[[nodiscard]] bool qt_application_command_input_owner_active(
+    const QtApplicationCommandInputOwnerProvider &provider);
 
 /**
  * Routes application-level Qt key presses through Quader's canonical command
@@ -39,6 +43,9 @@ public:
   QtCommandEventFilter(const QtCommandEventFilter &) = delete;
   QtCommandEventFilter &operator=(const QtCommandEventFilter &) = delete;
 
+  void set_command_input_owner_provider(
+      QtApplicationCommandInputOwnerProvider provider);
+
 protected:
   bool eventFilter(QObject *watched, QEvent *event) override;
 
@@ -51,6 +58,7 @@ private:
 
   QuaderEditorApi *editor_ = nullptr;
   QtViewportToolStateProvider tool_state_provider_;
+  QtApplicationCommandInputOwnerProvider command_input_owner_provider_;
 };
 
 } // namespace quader

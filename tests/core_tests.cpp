@@ -1535,9 +1535,23 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
   EXPECT_NE(source.find("material.roughness = clamp(roughnessSample * "
                         "materialParams.roughnessFactor"),
             std::string::npos);
-  EXPECT_NE(
-      source.find("material.metallic = clamp(materialParams.metallicFactor"),
-      std::string::npos);
+  EXPECT_NE(source.find("name : metallicTexture"), std::string::npos);
+  EXPECT_NE(source.find("name : normalTexture"), std::string::npos);
+  EXPECT_NE(source.find(
+                "texture(materialParams_metallicTexture, uv).r"),
+            std::string::npos);
+  EXPECT_NE(source.find(
+                "texture(materialParams_normalTexture, uv).xyz"),
+            std::string::npos);
+  EXPECT_NE(source.find("normalSample.y *= materialParams.normalYSign"),
+            std::string::npos);
+  EXPECT_NE(source.find("normalSample.xy *= "
+                        "max(materialParams.normalStrength, 0.0)"),
+            std::string::npos);
+  EXPECT_NE(source.find("material.metallic = clamp(metallicSample * "
+                        "materialParams.metallicFactor"),
+            std::string::npos);
+  EXPECT_NE(source.find("material.normal = normalSample"), std::string::npos);
   EXPECT_EQ(source.find("editor_unlit"), std::string::npos);
 }
 
@@ -3410,7 +3424,15 @@ TEST(SceneRenderBridgeTests, BindsNormalsAndBuildsPrimitiveSpans) {
   const std::string source =
       read_source_file("src/render/mesh_renderable_factory.cpp");
 
-  EXPECT_NE(source.find("tangent_frame_from_normal(vertex.normal)"),
+  EXPECT_NE(source.find("mesh_tangent_frames(mesh)"),
+            std::string::npos);
+  EXPECT_NE(source.find("tangent_frame_from_basis("),
+            std::string::npos);
+  EXPECT_NE(source.find("delta1.x * delta2.y - delta1.y * delta2.x"),
+            std::string::npos);
+  EXPECT_NE(source.find("!std::isfinite(determinant)"),
+            std::string::npos);
+  EXPECT_NE(source.find("std::fabs(determinant) <= 0.000001f"),
             std::string::npos);
   EXPECT_NE(source.find("filament::VertexAttribute::TANGENTS"),
             std::string::npos);
@@ -4803,7 +4825,7 @@ TEST(ViewportRendererTests,
       app_source.find("ui_.prepare_viewports(render_bridge_, "
                       "render_overlay_snapshot_cache_)");
   const std::size_t render_viewports =
-      app_source.find("ui_.render_viewports()");
+      app_source.find("ui_.render_surfaces(render_scene_viewports)");
   ASSERT_NE(process_input, std::string::npos);
   ASSERT_NE(sync_scene, std::string::npos);
   ASSERT_NE(prepare_viewports, std::string::npos);
@@ -7974,7 +7996,7 @@ TEST(AssetRegistryTests,
      RejectsInvalidMaterialTextureReferencesAtRegistryBoundary) {
   AssetRegistry registry;
   MaterialDocument unsupported = make_default_quader_material("Unsupported");
-  unsupported.texture_slots.emplace("normalTexture", 99u);
+  unsupported.texture_slots.emplace("emissiveTexture", 99u);
   EXPECT_EQ(registry.add_material(std::move(unsupported)), kInvalidAssetId);
 
   MaterialDocument missing = make_default_quader_material("Missing Texture");
@@ -8088,7 +8110,7 @@ TEST(AssetRegistryTests,
   EXPECT_FALSE(result.ok);
   EXPECT_EQ(result.message, "Material texture slot is empty");
 
-  result = registry.set_material_texture(material, "normalTexture", texture);
+  result = registry.set_material_texture(material, "emissiveTexture", texture);
   EXPECT_FALSE(result.ok);
   EXPECT_EQ(result.message, "Unsupported material texture slot");
 
@@ -16282,7 +16304,7 @@ TEST(MaterialDocumentTests,
 
 TEST(MaterialDocumentTests,
      MaterialTextureSlotPolicyOwnsAliasesAndSupportedSlots) {
-  ASSERT_EQ(material_texture_slot_descriptors().size(), 2u);
+  ASSERT_EQ(material_texture_slot_descriptors().size(), 4u);
   EXPECT_EQ(std::string_view(material_texture_slot_descriptors()[0].id),
             std::string_view(material_texture_slot::kBaseColor));
   EXPECT_EQ(
@@ -16293,6 +16315,16 @@ TEST(MaterialDocumentTests,
   EXPECT_EQ(
       std::string_view(material_texture_slot_descriptors()[1].legacy_alias),
       std::string_view("roughness"));
+  EXPECT_EQ(std::string_view(material_texture_slot_descriptors()[2].id),
+            std::string_view(material_texture_slot::kMetallic));
+  EXPECT_EQ(
+      std::string_view(material_texture_slot_descriptors()[2].legacy_alias),
+      std::string_view("metallic"));
+  EXPECT_EQ(std::string_view(material_texture_slot_descriptors()[3].id),
+            std::string_view(material_texture_slot::kNormal));
+  EXPECT_EQ(
+      std::string_view(material_texture_slot_descriptors()[3].legacy_alias),
+      std::string_view("normal"));
 
   ASSERT_TRUE(canonical_material_texture_slot("baseColor").has_value());
   EXPECT_EQ(*canonical_material_texture_slot("baseColor"),
@@ -16301,12 +16333,18 @@ TEST(MaterialDocumentTests,
                   .has_value());
   EXPECT_EQ(*canonical_material_texture_slot(material_texture_slot::kRoughness),
             material_texture_slot::kRoughness);
-  EXPECT_FALSE(canonical_material_texture_slot("normalTexture").has_value());
+  ASSERT_TRUE(canonical_material_texture_slot("normal").has_value());
+  EXPECT_EQ(*canonical_material_texture_slot("normal"),
+            material_texture_slot::kNormal);
+  EXPECT_FALSE(
+      canonical_material_texture_slot("emissiveTexture").has_value());
 
   MaterialDocument material;
   material.texture_slots["baseColor"] = 41u;
   material.texture_slots["roughness"] = 42u;
-  material.texture_slots["normalTexture"] = 43u;
+  material.texture_slots["metallic"] = 43u;
+  material.texture_slots["normal"] = 44u;
+  material.texture_slots["emissiveTexture"] = 45u;
   normalize_material_texture_slots(material);
 
   ASSERT_TRUE(
@@ -16315,9 +16353,13 @@ TEST(MaterialDocumentTests,
       material.texture_slots.contains(material_texture_slot::kRoughness));
   EXPECT_EQ(material.texture_slots.at(material_texture_slot::kBaseColor), 41u);
   EXPECT_EQ(material.texture_slots.at(material_texture_slot::kRoughness), 42u);
+  EXPECT_EQ(material.texture_slots.at(material_texture_slot::kMetallic), 43u);
+  EXPECT_EQ(material.texture_slots.at(material_texture_slot::kNormal), 44u);
   EXPECT_FALSE(material.texture_slots.contains("baseColor"));
   EXPECT_FALSE(material.texture_slots.contains("roughness"));
-  EXPECT_FALSE(material.texture_slots.contains("normalTexture"));
+  EXPECT_FALSE(material.texture_slots.contains("metallic"));
+  EXPECT_FALSE(material.texture_slots.contains("normal"));
+  EXPECT_FALSE(material.texture_slots.contains("emissiveTexture"));
 }
 
 TEST(MaterialDocumentTests,

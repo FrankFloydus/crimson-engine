@@ -7,8 +7,11 @@
 #include "editor/session/project_session.hpp"
 
 #include "editor/session/project_asset_bootstrap_service.hpp"
+#include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
+#include "assets/default_material_catalog.hpp"
+#include "io/project/project_material_provisioner.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_document_writer.hpp"
 
@@ -16,8 +19,17 @@
 #include <cctype>
 #include <cstddef>
 #include <limits>
+#include <set>
 #include <string_view>
+#include <system_error>
 #include <utility>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 namespace quader {
 namespace {
@@ -73,32 +85,220 @@ PersistedWorkspaceState workspace_state_for(
   return state;
 }
 
+std::filesystem::path default_runtime_resource_root() {
+#if defined(_WIN32)
+  std::wstring path(32'768u, L'\0');
+  const DWORD count =
+      ::GetModuleFileNameW(nullptr, path.data(),
+                           static_cast<DWORD>(path.size()));
+  if (count != 0u && count < path.size()) {
+    path.resize(count);
+    return std::filesystem::path(path).parent_path();
+  }
+#endif
+  return std::filesystem::current_path();
+}
+
+std::optional<ProjectAssetId> default_project_material_id() {
+  return ProjectAssetId::parse(kDefaultProjectMaterialId);
+}
+
+void append_project_material_reference(
+    MaterialReference reference, std::set<ProjectAssetId> &ids) {
+  if (reference.project_owned()) {
+    ids.insert(reference.project_asset());
+  }
+}
+
+std::set<ProjectAssetId>
+project_material_references(const QdrProjectWriteSnapshot &snapshot) {
+  std::set<ProjectAssetId> ids;
+  for (const QdrProjectEntityWriteSnapshot &entity : snapshot.entities) {
+    if (!entity.material.has_value()) {
+      continue;
+    }
+    append_project_material_reference(entity.material->material, ids);
+    for (const auto &[slot, material] : entity.material->material_slots) {
+      (void)slot;
+      append_project_material_reference(material, ids);
+    }
+  }
+  for (const ProjectObjectRecord &record : snapshot.object_records) {
+    append_project_material_reference(record.material, ids);
+  }
+  return ids;
+}
+
+/// Reports validated scene snapshot extraction before an atomic QDR write.
+struct SceneWriteSnapshotResult final {
+  bool ok = false;
+  std::string message;
+  QdrProjectWriteSnapshot snapshot;
+};
+
+SceneWriteSnapshotResult scene_write_snapshot(
+    const SceneContentDocument &document,
+    const ProjectMaterialCatalog &materials) {
+  const SceneContentDocumentIdentityReport identity =
+      document.validate_object_identity_invariants();
+  if (!identity.ok()) {
+    return {.message = identity.issues.empty()
+                           ? "Scene object identity validation failed."
+                           : identity.issues.front().message};
+  }
+  const SceneContentDocumentAssetReferenceReport references =
+      document.validate_asset_references();
+  if (!references.ok()) {
+    return {.message = references.issues.empty()
+                           ? "Scene asset reference validation failed."
+                           : references.issues.front().message};
+  }
+
+  QdrProjectWriteSnapshot snapshot =
+      qdr_project_write_snapshot_from_document(document);
+  for (const ProjectAssetId &id : project_material_references(snapshot)) {
+    const ProjectMaterialCatalogEntry *material = materials.find(id);
+    if (material == nullptr) {
+      return {.message = "Scene references missing project material " +
+                         std::string(id.str()) + "."};
+    }
+    snapshot.project_asset_dependencies.push_back({
+        .stable_id = id,
+        .kind = ProjectAssetKind::Material,
+        .path = material->path,
+    });
+  }
+  return {
+      .ok = true,
+      .snapshot = std::move(snapshot),
+  };
+}
+
+std::optional<std::string> validate_scene_project_dependencies(
+    const SceneContentDocument &document,
+    std::span<const ProjectAssetReference> dependencies,
+    const ProjectMaterialCatalog &materials,
+    const ProjectFileSystem &file_system) {
+  std::set<ProjectAssetId> declared_materials;
+  ProjectAssetResolver resolver(file_system);
+  for (const ProjectAssetReference &dependency : dependencies) {
+    if (dependency.kind == ProjectAssetKind::Material) {
+      if (materials.find(dependency.stable_id) == nullptr) {
+        return "Scene dependency references missing project material " +
+               std::string(dependency.stable_id.str()) + ".";
+      }
+      declared_materials.insert(dependency.stable_id);
+      continue;
+    }
+    const ProjectIoResult<std::filesystem::path> resolved =
+        resolver.resolve_existing(dependency);
+    if (!resolved.ok()) {
+      return "Scene project dependency is unavailable: " +
+             resolved.error().message;
+    }
+  }
+
+  const QdrProjectWriteSnapshot snapshot =
+      qdr_project_write_snapshot_from_document(document);
+  for (const ProjectAssetId &id : project_material_references(snapshot)) {
+    if (!declared_materials.contains(id)) {
+      return "Scene project material reference has no dependency record: " +
+             std::string(id.str()) + ".";
+    }
+    if (materials.find(id) == nullptr) {
+      return "Scene references missing project material " +
+             std::string(id.str()) + ".";
+    }
+  }
+  return std::nullopt;
+}
+
+void rollback_new_project(
+    const ProjectWorkspaceStorage &workspace,
+    const ProjectMaterialProvisioningChanges &material_changes) {
+  ProjectMaterialProvisioner::rollback(material_changes);
+  std::error_code ignored;
+  std::filesystem::remove(workspace.manifest_path, ignored);
+  ignored.clear();
+  std::filesystem::remove(workspace.file_system.root() / "Scenes", ignored);
+}
+
 } // namespace
 
 ProjectSession::ProjectSession() {
+  resource_root_ = default_runtime_resource_root();
   (void)ProjectAssetBootstrapService{}.bootstrap_default_assets(fallback_scene_);
   fallback_scene_.mark_clean();
+  standard_material_editor_ =
+      std::make_unique<StandardMaterialEditSessionService>(*this);
 }
 
 ProjectSession::~ProjectSession() = default;
 
 ProjectSessionResult ProjectSession::create(const std::filesystem::path &root,
                                             bool discard_existing_dirty) {
-  if (has_project() && has_dirty_scenes() && !discard_existing_dirty) {
-    return failure("Project contains unsaved scene changes.");
-  }
-  for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {
-    if (scene && !cancel_transient_state(*scene)) {
-      return failure("Could not cancel an open scene preview.");
-    }
-  }
-  if (has_project() && has_dirty_scenes() && !discard_existing_dirty) {
-    return failure("Project contains unsaved scene changes.");
+  if (has_project() && (has_dirty_scenes() || has_dirty_material()) &&
+      !discard_existing_dirty) {
+    return failure("Project contains unsaved document changes.");
   }
   ProjectIoResult<ProjectWorkspaceStorage> created =
       ProjectManifestStore::create_in_empty_directory(root);
   if (!created.ok()) {
     return failure(created.error().message);
+  }
+  ProjectWorkspaceStorage candidate = created.take_value();
+  ProjectIoResult<ProjectMaterialCatalog> initial_catalog =
+      ProjectMaterialCatalog::scan(candidate.file_system);
+  if (!initial_catalog.ok()) {
+    rollback_new_project(candidate, {});
+    return failure(initial_catalog.error().message);
+  }
+  ProjectIoResult<ProjectMaterialProvisioningChanges> provisioned =
+      ProjectMaterialProvisioner::ensure_default(
+          candidate.file_system, resource_root_, initial_catalog.value());
+  if (!provisioned.ok()) {
+    rollback_new_project(candidate, {});
+    return failure(provisioned.error().message);
+  }
+  ProjectMaterialProvisioningChanges material_changes =
+      provisioned.take_value();
+  ProjectIoResult<ProjectMaterialCatalog> scanned =
+      ProjectMaterialCatalog::scan(candidate.file_system);
+  if (!scanned.ok()) {
+    rollback_new_project(candidate, material_changes);
+    return failure(scanned.error().message);
+  }
+  ProjectMaterialCatalog candidate_catalog = scanned.take_value();
+  const std::optional<ProjectAssetId> default_material =
+      default_project_material_id();
+  if (!default_material.has_value() ||
+      candidate_catalog.find(*default_material) == nullptr) {
+    rollback_new_project(candidate, material_changes);
+    return failure("Built-in default project material is unavailable.");
+  }
+  ProjectIoResult<void> selected =
+      candidate.manifest.set_active_material(*default_material);
+  if (!selected.ok()) {
+    rollback_new_project(candidate, material_changes);
+    return failure(selected.error().message);
+  }
+  ProjectIoResult<void> manifest_saved =
+      ProjectManifestStore::save_atomic(candidate);
+  if (!manifest_saved.ok()) {
+    rollback_new_project(candidate, material_changes);
+    return failure(manifest_saved.error().message);
+  }
+
+  for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {
+    if (scene && !cancel_transient_state(*scene)) {
+      rollback_new_project(candidate, material_changes);
+      return failure("Could not cancel an open scene preview.");
+    }
+  }
+  if (has_project() && (has_dirty_scenes() || has_dirty_material()) &&
+      !discard_existing_dirty) {
+    rollback_new_project(candidate, material_changes);
+    return failure("Project contains unsaved scene changes.");
   }
 
   constexpr std::string_view kSceneName = "Untitled Scene";
@@ -112,18 +312,25 @@ ProjectSessionResult ProjectSession::create(const std::filesystem::path &root,
   const SceneSessionId first_id = first_scene->session_id;
 
   release_open_scene_ids();
-  workspace_ = created.take_value();
+  (void)standard_material_editor_->close(true);
+  workspace_ = std::move(candidate);
+  material_catalog_ = std::move(candidate_catalog);
   open_scenes_.push_back(std::move(first_scene));
   active_scene_id_ = first_id;
   ++activation_generation_;
-  return success(true, "Quader project created.", first_id);
+  ProjectSessionResult result =
+      success(true, "Quader project created.", first_id);
+  result.warnings.assign(material_catalog_.warnings().begin(),
+                         material_catalog_.warnings().end());
+  return result;
 }
 
 ProjectSessionResult
 ProjectSession::open(const std::filesystem::path &manifest_path,
                      bool discard_existing_dirty) {
-  if (has_project() && has_dirty_scenes() && !discard_existing_dirty) {
-    return failure("Project contains unsaved scene changes.");
+  if (has_project() && (has_dirty_scenes() || has_dirty_material()) &&
+      !discard_existing_dirty) {
+    return failure("Project contains unsaved document changes.");
   }
   ProjectIoResult<ProjectWorkspaceStorage> opened =
       ProjectManifestStore::open(manifest_path);
@@ -132,18 +339,61 @@ ProjectSession::open(const std::filesystem::path &manifest_path,
   }
 
   ProjectWorkspaceStorage candidate = opened.take_value();
+  ProjectIoResult<ProjectMaterialCatalog> initial_catalog =
+      ProjectMaterialCatalog::scan(candidate.file_system);
+  if (!initial_catalog.ok()) {
+    return failure(initial_catalog.error().message);
+  }
+  ProjectIoResult<ProjectMaterialProvisioningChanges> provisioned =
+      ProjectMaterialProvisioner::ensure_default(
+          candidate.file_system, resource_root_, initial_catalog.value());
+  if (!provisioned.ok()) {
+    return failure(provisioned.error().message);
+  }
+  ProjectMaterialProvisioningChanges material_changes =
+      provisioned.take_value();
+  ProjectIoResult<ProjectMaterialCatalog> rescanned =
+      ProjectMaterialCatalog::scan(candidate.file_system);
+  if (!rescanned.ok()) {
+    ProjectMaterialProvisioner::rollback(material_changes);
+    return failure(rescanned.error().message);
+  }
+  ProjectMaterialCatalog candidate_catalog = rescanned.take_value();
+  const std::optional<ProjectAssetId> default_material =
+      default_project_material_id();
+  if (!default_material.has_value() ||
+      candidate_catalog.find(*default_material) == nullptr) {
+    ProjectMaterialProvisioner::rollback(material_changes);
+    return failure("Built-in default project material is unavailable.");
+  }
+  std::optional<ProjectAssetId> requested_material =
+      candidate.manifest.active_material_id();
+  if (!requested_material.has_value() ||
+      candidate_catalog.find(*requested_material) == nullptr) {
+    requested_material = default_material;
+  }
+  ProjectIoResult<void> selected =
+      candidate.manifest.set_active_material(requested_material);
+  if (!selected.ok()) {
+    ProjectMaterialProvisioner::rollback(material_changes);
+    return failure(selected.error().message);
+  }
   const std::optional<ProjectRelativePath> requested_active =
       candidate.manifest.active_scene_path();
   for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {
     if (scene && !cancel_transient_state(*scene)) {
+      ProjectMaterialProvisioner::rollback(material_changes);
       return failure("Could not cancel an open scene preview.");
     }
   }
-  if (has_project() && has_dirty_scenes() && !discard_existing_dirty) {
+  if (has_project() && (has_dirty_scenes() || has_dirty_material()) &&
+      !discard_existing_dirty) {
+    ProjectMaterialProvisioner::rollback(material_changes);
     return failure("Project contains unsaved scene changes.");
   }
   std::vector<std::unique_ptr<OpenSceneSession>> scenes;
-  std::vector<std::string> warnings;
+  std::vector<std::string> warnings(candidate_catalog.warnings().begin(),
+                                    candidate_catalog.warnings().end());
   scenes.reserve(candidate.manifest.open_scene_paths().size());
   for (const ProjectRelativePath &path :
        candidate.manifest.open_scene_paths()) {
@@ -158,6 +408,14 @@ ProjectSession::open(const std::filesystem::path &manifest_path,
         QdrDocumentReader::read_project_document(absolute.value());
     if (!read.ok) {
       warnings.push_back(path.portable_string() + ": " + read.message);
+      continue;
+    }
+    if (const std::optional<std::string> dependency_error =
+            validate_scene_project_dependencies(
+                read.document, read.project_asset_dependencies,
+                candidate_catalog, candidate.file_system)) {
+      warnings.push_back(path.portable_string() + ": " +
+                         *dependency_error);
       continue;
     }
     const ProjectSceneCatalogEntry *catalog =
@@ -180,17 +438,21 @@ ProjectSession::open(const std::filesystem::path &manifest_path,
     }
     scenes.push_back(std::move(scene));
   }
-  return install_workspace(std::move(candidate), std::move(scenes),
-                           requested_active,
-                           std::move(warnings));
+  ProjectSessionResult installed = install_workspace(
+      std::move(candidate), std::move(candidate_catalog),
+      std::move(scenes), requested_active, std::move(warnings));
+  if (!installed.ok) {
+    ProjectMaterialProvisioner::rollback(material_changes);
+  }
+  return installed;
 }
 
 ProjectSessionResult ProjectSession::close(bool discard_dirty) {
   if (!workspace_) {
     return success(false, "No project is open.");
   }
-  if (!discard_dirty && has_dirty_scenes()) {
-    return failure("Project contains unsaved scene changes.");
+  if (!discard_dirty && (has_dirty_scenes() || has_dirty_material())) {
+    return failure("Project contains unsaved document changes.");
   }
   for (const std::unique_ptr<OpenSceneSession> &scene : open_scenes_) {
     if (scene && !cancel_transient_state(*scene)) {
@@ -198,7 +460,9 @@ ProjectSessionResult ProjectSession::close(bool discard_dirty) {
     }
   }
   release_open_scene_ids();
+  (void)standard_material_editor_->close(true);
   workspace_.reset();
+  material_catalog_ = {};
   ++activation_generation_;
   return success(true, "Project closed.");
 }
@@ -258,6 +522,12 @@ ProjectSessionResult ProjectSession::open_scene(ProjectRelativePath path) {
       QdrDocumentReader::read_project_document(absolute.value());
   if (!read.ok) {
     return failure(read.message.empty() ? "Scene open failed." : read.message);
+  }
+  if (const std::optional<std::string> dependency_error =
+          validate_scene_project_dependencies(
+              read.document, read.project_asset_dependencies,
+              material_catalog_, workspace_->file_system)) {
+    return failure(*dependency_error);
   }
 
   const ProjectSceneCatalogEntry *catalog = find_catalog_scene(path);
@@ -375,9 +645,14 @@ ProjectSessionResult ProjectSession::save(SceneSessionId id) {
     return failure(absolute.error().message);
   }
   const SceneContentRevisionStamp stamp = scene->session->content_revision_stamp();
+  SceneWriteSnapshotResult snapshot = scene_write_snapshot(
+      scene->session->document(), material_catalog_);
+  if (!snapshot.ok) {
+    return failure(snapshot.message);
+  }
   const QdrProjectWriteResult written =
       QdrDocumentWriter::write_project_document_atomic(
-          absolute.value(), scene->session->document(), scene->scene_id.bytes());
+          absolute.value(), snapshot.snapshot, scene->scene_id.bytes());
   if (!written.ok) {
     return failure(written.message.empty() ? "Scene save failed."
                                            : written.message);
@@ -416,9 +691,14 @@ ProjectSessionResult ProjectSession::save_as(SceneSessionId id,
 
   const SceneId new_scene_id = SceneId::generate();
   const SceneContentRevisionStamp stamp = scene->session->content_revision_stamp();
+  SceneWriteSnapshotResult snapshot = scene_write_snapshot(
+      scene->session->document(), material_catalog_);
+  if (!snapshot.ok) {
+    return failure(snapshot.message);
+  }
   const QdrProjectWriteResult written =
       QdrDocumentWriter::write_project_document_atomic(
-          absolute.value(), scene->session->document(), new_scene_id.bytes());
+          absolute.value(), snapshot.snapshot, new_scene_id.bytes());
   if (!written.ok) {
     return failure(written.message.empty() ? "Scene save failed."
                                            : written.message);
@@ -547,11 +827,102 @@ ProjectSessionResult ProjectSession::close_scene(SceneSessionId id,
                                                : std::nullopt);
 }
 
+ProjectSessionResult
+ProjectSession::set_active_material(ProjectAssetId material_id) {
+  if (!workspace_) {
+    return failure("Open or create a project before selecting a material.");
+  }
+  if (!material_id.valid() || material_catalog_.find(material_id) == nullptr) {
+    return failure("Project material is missing or unavailable.");
+  }
+  if (workspace_->manifest.active_material_id() == material_id) {
+    return success(false, "Project material is already active.");
+  }
+  ProjectManifest candidate = workspace_->manifest;
+  ProjectIoResult<void> selected =
+      candidate.set_active_material(material_id);
+  if (!selected.ok()) {
+    return failure(selected.error().message);
+  }
+  PersistedWorkspaceState state =
+      workspace_state_for(open_scenes_, active_scene_id_);
+  ProjectSessionResult persisted =
+      persist_manifest(*workspace_, std::move(candidate),
+                       std::move(state.open_paths),
+                       std::move(state.active_path));
+  if (!persisted.ok) {
+    return persisted;
+  }
+  return success(true, "Active project material changed.");
+}
+
+ProjectSessionResult ProjectSession::install_material_catalog(
+    ProjectMaterialCatalog material_catalog,
+    std::optional<ProjectAssetId> active_material) {
+  if (!workspace_) {
+    return failure("Open or create a project before updating materials.");
+  }
+  const std::optional<ProjectAssetId> default_material =
+      default_project_material_id();
+  if (!default_material.has_value() ||
+      material_catalog.find(*default_material) == nullptr) {
+    return failure("Built-in default project material is unavailable.");
+  }
+  const std::optional<ProjectAssetId> requested =
+      active_material.has_value() ? active_material
+                                  : workspace_->manifest.active_material_id();
+  if (!requested.has_value() || material_catalog.find(*requested) == nullptr) {
+    return failure("Active project material is missing from the new catalog.");
+  }
+
+  if (workspace_->manifest.active_material_id() != requested) {
+    ProjectManifest candidate = workspace_->manifest;
+    ProjectIoResult<void> selected = candidate.set_active_material(requested);
+    if (!selected.ok()) {
+      return failure(selected.error().message);
+    }
+    PersistedWorkspaceState state =
+        workspace_state_for(open_scenes_, active_scene_id_);
+    ProjectSessionResult persisted = persist_manifest(
+        *workspace_, std::move(candidate), std::move(state.open_paths),
+        std::move(state.active_path));
+    if (!persisted.ok) {
+      return persisted;
+    }
+  }
+  material_catalog_ = std::move(material_catalog);
+  return success(true, "Project material catalog updated.");
+}
+
+void ProjectSession::set_resource_root(
+    std::filesystem::path resource_root) {
+  if (!resource_root.empty()) {
+    resource_root_ = std::move(resource_root);
+  }
+}
+
 bool ProjectSession::has_dirty_scenes() const {
   return std::any_of(open_scenes_.begin(), open_scenes_.end(),
                      [](const std::unique_ptr<OpenSceneSession> &scene) {
                        return scene && scene->dirty();
                      });
+}
+
+bool ProjectSession::has_dirty_material() const {
+  const StandardMaterialEditSnapshot *draft =
+      standard_material_editor_ ? standard_material_editor_->current()
+                                : nullptr;
+  return draft != nullptr && draft->dirty;
+}
+
+StandardMaterialEditSessionService &
+ProjectSession::standard_material_editor() {
+  return *standard_material_editor_;
+}
+
+const StandardMaterialEditSessionService &
+ProjectSession::standard_material_editor() const {
+  return *standard_material_editor_;
 }
 
 const std::filesystem::path &ProjectSession::root() const noexcept {
@@ -560,6 +931,42 @@ const std::filesystem::path &ProjectSession::root() const noexcept {
 
 const std::filesystem::path &ProjectSession::manifest_path() const noexcept {
   return workspace_ ? workspace_->manifest_path : empty_path_;
+}
+
+std::optional<ProjectAssetId>
+ProjectSession::active_material_id() const noexcept {
+  if (!workspace_ ||
+      !workspace_->manifest.active_material_id().has_value()) {
+    return std::nullopt;
+  }
+  const ProjectAssetId id =
+      *workspace_->manifest.active_material_id();
+  return material_catalog_.find(id) != nullptr
+             ? std::optional<ProjectAssetId>(id)
+             : std::nullopt;
+}
+
+ProjectIoResult<ProjectMaterialPreview>
+ProjectSession::material_preview(ProjectAssetId material_id) const {
+  if (!workspace_) {
+    return ProjectIoResult<ProjectMaterialPreview>::failure(
+        ProjectIoErrorCode::InvalidWorkspaceState,
+        "No project is open.");
+  }
+  return material_catalog_.read_preview(workspace_->file_system,
+                                        material_id);
+}
+
+ProjectIoResult<ProjectMaterialTextureData>
+ProjectSession::material_texture(ProjectAssetId material_id,
+                                 StandardMaterialTextureSlot slot) const {
+  if (!workspace_.has_value()) {
+    return ProjectIoResult<ProjectMaterialTextureData>::failure(
+        ProjectIoErrorCode::InvalidWorkspaceState,
+        "No project is open.");
+  }
+  return material_catalog_.read_texture(workspace_->file_system, material_id,
+                                        slot);
 }
 
 OpenSceneSession *ProjectSession::find(SceneSessionId id) {
@@ -628,7 +1035,6 @@ std::unique_ptr<OpenSceneSession> ProjectSession::make_scene(
     SceneId scene_id, std::string display_name,
     std::optional<ProjectRelativePath> path, SceneContentDocument document) {
   auto session = std::make_unique<SceneSession>(std::move(document));
-  (void)ProjectAssetBootstrapService{}.bootstrap_default_assets(*session);
   session->mark_clean();
   return std::make_unique<OpenSceneSession>(OpenSceneSession{
       .session_id = allocate_session_id(),
@@ -641,6 +1047,7 @@ std::unique_ptr<OpenSceneSession> ProjectSession::make_scene(
 
 ProjectSessionResult ProjectSession::install_workspace(
     ProjectWorkspaceStorage workspace,
+    ProjectMaterialCatalog material_catalog,
     std::vector<std::unique_ptr<OpenSceneSession>> scenes,
     std::optional<ProjectRelativePath> requested_active,
     std::vector<std::string> warnings) {
@@ -672,7 +1079,9 @@ ProjectSessionResult ProjectSession::install_workspace(
   }
 
   release_open_scene_ids();
+  (void)standard_material_editor_->close(true);
   workspace_ = std::move(workspace);
+  material_catalog_ = std::move(material_catalog);
   open_scenes_ = std::move(scenes);
   active_scene_id_ = candidate_active;
   ++activation_generation_;

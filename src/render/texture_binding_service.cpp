@@ -31,6 +31,10 @@ void TextureBindingService::initialize(filament::Engine &engine,
       create_solid_texture(255, 255, 255, 255, TextureColorSpace::Srgb);
   fallback_roughness_texture_ =
       create_solid_texture(255, 255, 255, 255, TextureColorSpace::Linear);
+  fallback_metallic_texture_ =
+      create_solid_texture(255, 255, 255, 255, TextureColorSpace::Linear);
+  fallback_normal_texture_ =
+      create_solid_texture(128, 128, 255, 255, TextureColorSpace::Linear);
 }
 
 void TextureBindingService::shutdown() {
@@ -44,6 +48,8 @@ void TextureBindingService::shutdown() {
     texture_cache_.clear();
     destroy_texture(fallback_albedo_texture_);
     destroy_texture(fallback_roughness_texture_);
+    destroy_texture(fallback_metallic_texture_);
+    destroy_texture(fallback_normal_texture_);
     scene_binding_ = {};
     resource_root_.clear();
     engine_ = nullptr;
@@ -106,14 +112,18 @@ filament::Texture *TextureBindingService::resolve_texture(
   const TextureCacheKey cache_key{
       .scene_binding = scene_binding_,
       .id = texture->texture_id,
-      .revision = texture->texture.revision.value,
+      .project_id = texture->project_texture_id,
+      .revision = texture->project_owned() ? texture->content_revision
+                                           : texture->texture.revision.value,
       .color_space = texture->texture.color_space,
   };
   if (const auto cached = texture_cache_.find(cache_key);
       cached != texture_cache_.end()) {
     return cached->second ? cached->second : fallback;
   }
-  filament::Texture *loaded = load_texture_asset(texture->texture);
+  filament::Texture *loaded = texture->project_owned()
+                                  ? load_project_texture_asset(*texture)
+                                  : load_texture_asset(texture->texture);
   texture_cache_[cache_key] = loaded;
   return loaded ? loaded : fallback;
 }
@@ -138,6 +148,32 @@ TextureBindingService::load_texture_asset(const TextureAsset &texture) {
           .generate_mipmaps = true,
           .label = "material texture",
       });
+}
+
+filament::Texture *TextureBindingService::load_project_texture_asset(
+    const RenderTextureAssetSnapshot &texture) {
+  if (!engine_) {
+    return nullptr;
+  }
+  const PngTextureLoadOptions options{
+      .color_space = texture.texture.color_space == TextureColorSpace::Srgb
+                         ? PngTextureColorSpace::Srgb
+                         : PngTextureColorSpace::Linear,
+      .generate_mipmaps = true,
+      .label = "project material texture",
+  };
+  if (texture.decoded_rgba8 != nullptr &&
+      !texture.decoded_rgba8->empty()) {
+    return load_rgba_texture(*engine_, *texture.decoded_rgba8, texture.width,
+                             texture.height, options);
+  }
+  if (texture.encoded_file_bytes == nullptr ||
+      texture.encoded_file_bytes->empty()) {
+    return nullptr;
+  }
+  return load_png_texture(
+      *engine_, std::span<const std::byte>(*texture.encoded_file_bytes),
+      options);
 }
 
 filament::Texture *

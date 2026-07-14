@@ -31,6 +31,12 @@ platform_open_scene_file_dialog(const PlatformFileDialogOptions &options);
 [[nodiscard]] std::optional<std::filesystem::path>
 platform_save_scene_file_dialog(const PlatformFileDialogOptions &options);
 [[nodiscard]] std::optional<std::filesystem::path>
+platform_open_material_file_dialog(const PlatformFileDialogOptions &options);
+[[nodiscard]] std::optional<std::filesystem::path>
+platform_save_material_file_dialog(const PlatformFileDialogOptions &options);
+[[nodiscard]] std::optional<std::filesystem::path>
+platform_open_texture_file_dialog(const PlatformFileDialogOptions &options);
+[[nodiscard]] std::optional<std::filesystem::path>
 platform_save_obj_file_dialog(const PlatformFileDialogOptions &options);
 
 } // namespace quader

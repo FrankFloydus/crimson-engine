@@ -1239,6 +1239,54 @@ TEST(OopArchitectureGuardrailTests, RenderCodeDoesNotCallDocumentOrAssetMutators
 }
 
 TEST(OopArchitectureGuardrailTests,
+     ProjectMaterialsKeepStableIdentityAcrossSceneIoAndRenderBoundaries) {
+  const std::string components =
+      read_file(source_root() / "src/scene/components.hpp");
+  const std::string qdr_schema =
+      read_file(source_root() / "src/io/qdr/schema/qdr_scene.fbs");
+  const std::string resolver =
+      read_file(source_root() / "src/render/project_material_resolver.hpp");
+  const std::string evaluation = read_file(
+      source_root() / "src/render/material_evaluation_snapshot.hpp");
+  const std::string extraction =
+      read_file(source_root() / "src/render/scene_render_extraction.cpp");
+  const std::string app =
+      read_file(source_root() / "src/app/app.cpp");
+  const std::string ui_system =
+      read_file(source_root() / "src/ui/ui_system.cpp");
+
+  EXPECT_NE(components.find("MaterialReference material"),
+            std::string::npos);
+  EXPECT_NE(qdr_schema.find("project_material_id:string"),
+            std::string::npos);
+  EXPECT_NE(qdr_schema.find("project_asset_dependencies"),
+            std::string::npos);
+  EXPECT_NE(resolver.find("ProjectAssetId id"), std::string::npos);
+  EXPECT_NE(resolver.find("catalog_revision"), std::string::npos);
+  EXPECT_NE(resolver.find("RenderMaterialEvaluationSnapshot evaluation"),
+            std::string::npos);
+  EXPECT_NE(evaluation.find("RenderMaterialEvaluationPayload"),
+            std::string::npos);
+  EXPECT_NE(evaluation.find("std::variant<std::monostate, "
+                            "RenderStandardMaterialEvaluationSnapshot>"),
+            std::string::npos);
+  EXPECT_EQ(evaluation.find("ProjectMaterialDocument"), std::string::npos);
+  EXPECT_EQ(evaluation.find("#include \"io/project/"), std::string::npos);
+  EXPECT_EQ(evaluation.find("#include <Q"), std::string::npos);
+  EXPECT_EQ(resolver.find("#include \"editor/session/"), std::string::npos);
+  EXPECT_EQ(resolver.find("#include \"io/project/"), std::string::npos);
+  EXPECT_NE(extraction.find("material.project_catalog_revision"),
+            std::string::npos);
+  EXPECT_NE(app.find("texture_cache_.find(definition.id)"),
+            std::string::npos);
+  EXPECT_NE(app.find(".emplace(\n                             definition.id,"),
+            std::string::npos);
+  EXPECT_NE(ui_system.find("project_identity"), std::string::npos);
+  EXPECT_NE(ui_system.find("manifest_path().generic_string()"),
+            std::string::npos);
+}
+
+TEST(OopArchitectureGuardrailTests,
      RenderSnapshotBoundaryOwnsSceneAndOverlayExtraction) {
   const std::string render_sources =
       source_text_under(source_root() / "src/render");

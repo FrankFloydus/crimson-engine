@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "assets/material_reference.hpp"
 #include "core/types.hpp"
 #include "core/scene_environment_catalog.hpp"
 #include "math/types.hpp"
@@ -161,10 +162,11 @@ struct MeshComponent {
  * Represents a Material Component value used by the scene graph document layer.
  */
 struct MaterialComponent {
-  AssetId material = kInvalidAssetId;
-  std::unordered_map<std::uint32_t, AssetId> material_slots;
+  MaterialReference material;
+  std::unordered_map<std::uint32_t, MaterialReference> material_slots;
 
-  [[nodiscard]] AssetId material_for_slot(std::uint32_t slot) const {
+  [[nodiscard]] MaterialReference
+  material_for_slot(std::uint32_t slot) const {
     const auto found = material_slots.find(slot);
     return found == material_slots.end() ? material : found->second;
   }

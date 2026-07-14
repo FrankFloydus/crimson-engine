@@ -54,6 +54,7 @@ private:
   AppFrameClock frame_clock_;
   RenderSystem render_system_;
   SceneRenderBridge render_bridge_;
+  std::unique_ptr<RenderProjectMaterialResolver> project_material_resolver_;
   UISystem ui_;
   ProjectSession project_session_;
   RenderOverlaySnapshotCache render_overlay_snapshot_cache_;

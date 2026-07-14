@@ -8,6 +8,7 @@
 
 #include "editor/session/scene_session.hpp"
 #include "io/project/project_manifest.hpp"
+#include "io/project/project_material_catalog.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -18,6 +19,8 @@
 #include <vector>
 
 namespace quader {
+
+class StandardMaterialEditSessionService;
 
 /// Owns one heap-stable scene document resident in the project workspace.
 struct OpenSceneSession final {
@@ -74,6 +77,13 @@ public:
   [[nodiscard]] ProjectSessionResult save_all();
   [[nodiscard]] ProjectSessionResult close_scene(SceneSessionId id,
                                                  bool discard_dirty = false);
+  [[nodiscard]] ProjectSessionResult
+  set_active_material(ProjectAssetId material_id);
+  [[nodiscard]] ProjectSessionResult install_material_catalog(
+      ProjectMaterialCatalog material_catalog,
+      std::optional<ProjectAssetId> active_material = std::nullopt);
+
+  void set_resource_root(std::filesystem::path resource_root);
 
   [[nodiscard]] bool has_project() const noexcept {
     return workspace_.has_value();
@@ -82,6 +92,10 @@ public:
     return find(active_scene_id_) != nullptr;
   }
   [[nodiscard]] bool has_dirty_scenes() const;
+  [[nodiscard]] bool has_dirty_material() const;
+  [[nodiscard]] StandardMaterialEditSessionService &standard_material_editor();
+  [[nodiscard]] const StandardMaterialEditSessionService &
+  standard_material_editor() const;
   [[nodiscard]] const ProjectWorkspaceStorage *workspace() const noexcept {
     return workspace_ ? &*workspace_ : nullptr;
   }
@@ -90,6 +104,16 @@ public:
   }
   [[nodiscard]] const std::filesystem::path &root() const noexcept;
   [[nodiscard]] const std::filesystem::path &manifest_path() const noexcept;
+  [[nodiscard]] const ProjectMaterialCatalog &material_catalog() const noexcept {
+    return material_catalog_;
+  }
+  [[nodiscard]] std::optional<ProjectAssetId>
+  active_material_id() const noexcept;
+  [[nodiscard]] ProjectIoResult<ProjectMaterialPreview>
+  material_preview(ProjectAssetId material_id) const;
+  [[nodiscard]] ProjectIoResult<ProjectMaterialTextureData>
+  material_texture(ProjectAssetId material_id,
+                   StandardMaterialTextureSlot slot) const;
   [[nodiscard]] std::span<const std::unique_ptr<OpenSceneSession>>
   open_scenes() const noexcept {
     return open_scenes_;
@@ -120,6 +144,7 @@ private:
              SceneContentDocument document);
   [[nodiscard]] ProjectSessionResult install_workspace(
       ProjectWorkspaceStorage workspace,
+      ProjectMaterialCatalog material_catalog,
       std::vector<std::unique_ptr<OpenSceneSession>> scenes,
       std::optional<ProjectRelativePath> requested_active,
       std::vector<std::string> warnings);
@@ -145,6 +170,10 @@ private:
   SceneSessionId active_scene_id_;
   std::uint64_t activation_generation_ = 0u;
   SceneSession fallback_scene_;
+  ProjectMaterialCatalog material_catalog_;
+  std::unique_ptr<StandardMaterialEditSessionService>
+      standard_material_editor_;
+  std::filesystem::path resource_root_;
   std::filesystem::path empty_path_;
 };
 

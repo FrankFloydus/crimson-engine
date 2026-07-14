@@ -154,8 +154,12 @@ TEST(QdrBinarySceneCodecTests,
   ASSERT_TRUE(path.ok()) << path.error().message;
   QdrProjectWriteSnapshot snapshot =
       qdr_project_write_snapshot_from_document(simple_scene());
+  const std::optional<ProjectAssetId> dependency_id =
+      ProjectAssetId::parse(
+          "85fdfec9-795e-4afe-bf74-13555ee79cb4");
+  ASSERT_TRUE(dependency_id.has_value());
   snapshot.project_asset_dependencies.push_back({
-      .stable_id = "85fdfec9-795e-4afe-bf74-13555ee79cb4",
+      .stable_id = *dependency_id,
       .kind = ProjectAssetKind::Material,
       .path = path.value(),
   });
@@ -168,7 +172,7 @@ TEST(QdrBinarySceneCodecTests,
   ASSERT_TRUE(read.ok) << read.message;
   ASSERT_EQ(read.project_asset_dependencies.size(), 1u);
   EXPECT_EQ(read.project_asset_dependencies.front().stable_id,
-            "85fdfec9-795e-4afe-bf74-13555ee79cb4");
+            *dependency_id);
   EXPECT_EQ(read.project_asset_dependencies.front().kind,
             ProjectAssetKind::Material);
   EXPECT_EQ(read.project_asset_dependencies.front().path.portable_string(),
@@ -336,7 +340,7 @@ TEST(QdrBinarySceneCodecTests, RejectsUnsupportedMetadataSchema) {
   ASSERT_TRUE(parsed.ok) << parsed.message;
   std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
   ASSERT_FALSE(chunks.empty());
-  chunks.front().schema_version = 2u;
+  chunks.front().schema_version = 3u;
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(

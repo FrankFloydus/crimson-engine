@@ -12,10 +12,13 @@
 #include "core/types.hpp"
 #include "math/types.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
+#include "render/project_material_resolver.hpp"
 #include "render/render_scene_binding.hpp"
 #include "scene/components.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -31,8 +34,18 @@ namespace quader {
 struct RenderTextureAssetSnapshot {
   std::string slot;
   AssetId texture_id = kInvalidAssetId;
+  ProjectAssetId project_texture_id;
+  std::uint64_t content_revision = 0u;
   TextureAsset texture;
+  std::shared_ptr<const std::vector<std::byte>> encoded_file_bytes;
+  std::shared_ptr<const std::vector<std::byte>> decoded_rgba8;
+  std::uint32_t width = 0u;
+  std::uint32_t height = 0u;
   bool present = false;
+
+  [[nodiscard]] bool project_owned() const noexcept {
+    return project_texture_id.valid();
+  }
 };
 
 /**
@@ -40,8 +53,12 @@ struct RenderTextureAssetSnapshot {
  * live asset registry to proxy caches.
  */
 struct RenderMaterialAssetSnapshot {
+  MaterialReference reference;
   AssetId material_id = kInvalidAssetId;
+  std::uint64_t project_catalog_revision = 0u;
   MaterialDocument document;
+  float normal_strength = 1.0f;
+  bool directx_normal = false;
   std::uint64_t revision = 0;
   bool present = false;
   std::vector<RenderTextureAssetSnapshot> textures;
@@ -91,6 +108,7 @@ struct RenderSceneMeshRecord {
   RenderMeshAssetSnapshot mesh;
   MeshComponent mesh_component;
   RenderMaterialBindingSnapshot material;
+  MaterialReference material_reference;
   AssetId material_id = kInvalidAssetId;
   std::uint64_t material_revision = 0;
   QMat4 world_transform;
@@ -129,11 +147,13 @@ struct RenderSceneSnapshotDirtyState {
   bool mesh_bindings_changed = true;
   bool render_components_changed = true;
   bool assets_changed = true;
+  bool project_materials_changed = true;
 
   [[nodiscard]] bool any_dirty() const {
     return scene_changed || selection_changed || visibility_changed ||
            transforms_changed || mesh_bindings_changed ||
-           render_components_changed || assets_changed;
+           render_components_changed || assets_changed ||
+           project_materials_changed;
   }
 };
 
@@ -162,6 +182,7 @@ struct RenderSceneSnapshot {
   std::uint64_t mesh_binding_revision = 0;
   std::uint64_t render_component_revision = 0;
   std::uint64_t asset_revision = 0;
+  std::uint64_t project_material_revision = 0;
   RenderSceneSnapshotDirtyState dirty;
   bool reused_previous_records = false;
   std::vector<RenderSceneMeshRecord> meshes;
@@ -177,6 +198,8 @@ struct RenderSceneSnapshotBuildOptions {
   const RenderSceneSnapshot *previous = nullptr;
   std::uint64_t frame_index = 0;
   RenderSceneBindingKey scene_binding;
+  const RenderProjectMaterialResolver *project_material_resolver = nullptr;
+  std::uint64_t project_material_revision = 0u;
 };
 
 /**

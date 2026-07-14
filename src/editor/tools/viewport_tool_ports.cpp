@@ -190,7 +190,11 @@ ModelingCommandResult ViewportModelingToolPortAdapter::commit_knife_tool() {
 }
 
 ModelingCommandResult ViewportModelingToolPortAdapter::commit_poly_tool() {
-  return modeling_.commit_poly_tool();
+  const MaterialReference material = callbacks_.active_material
+                                         ? callbacks_.active_material()
+                                         : MaterialReference{};
+  return material.valid() ? modeling_.commit_poly_tool(material)
+                          : modeling_.commit_poly_tool();
 }
 
 ModelingCommandResult

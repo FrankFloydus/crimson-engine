@@ -77,6 +77,15 @@ public:
     return active != nullptr ? active->session.get() : nullptr;
   }
 
+  [[nodiscard]] static ProjectSession *
+  project_session(QuaderApiSession session) noexcept {
+    if (!session.valid() ||
+        session.binding_->kind != QuaderApiSession::OwnerKind::Project) {
+      return nullptr;
+    }
+    return static_cast<ProjectSession *>(session.binding_->owner);
+  }
+
   [[nodiscard]] static SceneSession &
   scene_session(QuaderApiSession session) noexcept {
     if (SceneSession *active = active_scene_session(session)) {

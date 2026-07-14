@@ -15,8 +15,10 @@
 #include "api/quader_object_handle.hpp"
 #include "api/quader_preferences_api.hpp"
 #include "api/quader_project_api.hpp"
+#include "api/quader_project_assets_api.hpp"
 #include "api/quader_render_api.hpp"
 #include "api/quader_scene_documents_api.hpp"
+#include "api/quader_standard_material_documents_api.hpp"
 #include "api/quader_tools_api.hpp"
 #include "api/quader_ui_api.hpp"
 #include "api/quader_viewport_api.hpp"
@@ -55,6 +57,12 @@ public:
 
     [[nodiscard]] QuaderProjectApi& project();
     [[nodiscard]] const QuaderProjectApi& project() const;
+    [[nodiscard]] QuaderProjectAssetsApi &project_assets();
+    [[nodiscard]] const QuaderProjectAssetsApi &project_assets() const;
+    [[nodiscard]] QuaderStandardMaterialDocumentsApi &
+    standard_material_documents();
+    [[nodiscard]] const QuaderStandardMaterialDocumentsApi &
+    standard_material_documents() const;
     [[nodiscard]] QuaderSceneDocumentsApi &scene_documents();
     [[nodiscard]] const QuaderSceneDocumentsApi &scene_documents() const;
     [[nodiscard]] QuaderSceneApi& scene();

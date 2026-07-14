@@ -61,6 +61,7 @@ public:
     MaterialBindingService *material_binding_ = nullptr;
     std::uint64_t synced_revision_ = 0;
     std::uint64_t synced_asset_revision_ = 0;
+    std::uint64_t synced_project_material_revision_ = 0;
     RenderSceneBindingKey synced_scene_binding_;
     bool has_scene_binding_ = false;
     bool has_synced_ = false;

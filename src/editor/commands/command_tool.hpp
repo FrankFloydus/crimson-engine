@@ -25,6 +25,7 @@ class EditorSelectionService;
 struct ModelingCommandExecutionContext {
     ModelingSessionService& modeling;
     EditorSelectionService* selection = nullptr;
+    MaterialReference active_material;
 };
 
 /**

@@ -27,19 +27,21 @@ public:
   DispatchedModelingToolHistoryCommand(
       ModelingSessionService &modeling, EditorSelectionService &selection,
       const ModelingCommandDispatcher &dispatcher, std::string tool_id,
-      std::string label)
+      std::string label, MaterialReference active_material)
       : ModelingMementoCommand(modeling, std::move(label)),
         selection_(selection), dispatcher_(dispatcher),
-        tool_id_(std::move(tool_id)) {}
+        tool_id_(std::move(tool_id)), active_material_(active_material) {}
 
 private:
   ModelingCommandResult execute_initial() override {
-    return dispatcher_.execute(tool_id_, modeling(), &selection_);
+    return dispatcher_.execute(tool_id_, modeling(), &selection_,
+                               active_material_);
   }
 
     EditorSelectionService& selection_;
     const ModelingCommandDispatcher& dispatcher_;
     std::string tool_id_;
+    MaterialReference active_material_;
 };
 
 /**
@@ -79,7 +81,8 @@ std::string command_label(const CommandTool *tool, std::string_view tool_id) {
 
 ModelingCommandResult ModelingCommandExecutionService::execute(
     EditorHistoryService &history, ModelingSessionService &modeling,
-    EditorSelectionService &selection, std::string_view tool_id) {
+    EditorSelectionService &selection, std::string_view tool_id,
+    MaterialReference active_material) {
   const CommandTool *tool = dispatcher_.find(tool_id);
   if (tool == nullptr) {
     return {.ok = false, .message = "Command tool is not registered."};
@@ -94,7 +97,7 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
   }
 
   const ModelingCommandAvailability available =
-      dispatcher_.availability(tool_id, modeling, &selection);
+      dispatcher_.availability(tool_id, modeling, &selection, active_material);
   if (!available.enabled) {
     return {
         .ok = false,
@@ -106,13 +109,13 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
 
   if (tool->history_policy().mode !=
       ModelingCommandHistoryMode::ModelingUndoRedo) {
-    return dispatcher_.execute(*tool, modeling, &selection);
+    return dispatcher_.execute(*tool, modeling, &selection, active_material);
   }
 
   return from_command_result(
       history.execute(std::make_unique<DispatchedModelingToolHistoryCommand>(
           modeling, selection, dispatcher_, std::string(tool_id),
-          command_label(tool, tool_id))));
+          command_label(tool, tool_id), active_material)));
 }
 
 ModelingCommandResult ModelingCommandExecutionService::execute_untracked(
@@ -173,14 +176,16 @@ ModelingCommandResult ModelingCommandExecutionService::cancel_preview(
 
 ModelingCommandAvailability ModelingCommandExecutionService::availability(
     ModelingSessionService &modeling, std::string_view tool_id,
-    EditorSelectionService *selection) const {
+    EditorSelectionService *selection,
+    MaterialReference active_material) const {
   if (tool_id == std::string_view("delete_selection") &&
       scene_aware_delete_handles_selection(
           modeling.selection_summary(),
           modeling.has_selected_scene_aware_delete_root())) {
     return ModelingCommandAvailability::available();
   }
-  return dispatcher_.availability(tool_id, modeling, selection);
+  return dispatcher_.availability(tool_id, modeling, selection,
+                                  active_material);
 }
 
 ModelingCommandHistoryPolicy ModelingCommandExecutionService::history_policy(

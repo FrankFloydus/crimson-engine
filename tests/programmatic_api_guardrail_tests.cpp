@@ -67,6 +67,10 @@ bool is_internal_api_header(const std::filesystem::path &path) {
          relative == "src/api/quader_events_api_internal_access.hpp" ||
          relative == "src/api/quader_project_api_internal_access.hpp" ||
          relative ==
+             "src/api/quader_project_assets_api_internal_access.hpp" ||
+         relative ==
+             "src/api/quader_standard_material_documents_api_internal_access.hpp" ||
+         relative ==
              "src/api/quader_scene_documents_api_internal_access.hpp" ||
          relative == "src/api/quader_api_type_conversions.hpp" ||
          relative == "src/api/quader_polygon_document_internal_access.hpp" ||
@@ -2138,4 +2142,62 @@ TEST(ProgrammaticApiGuardrailTests, ApiStatusStampsUseSharedInternalHelper) {
   EXPECT_EQ(
       modeling_api.find(".modeling_content_revision = summary.content_revision"),
       std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests,
+     ProjectMaterialBrowserUsesThePublicProjectAssetsApi) {
+  const std::string editor_api =
+      read_file(source_root() / "src/api/quader_editor_api.hpp");
+  const std::string project_assets_api =
+      read_file(source_root() / "src/api/quader_project_assets_api.hpp");
+  const std::string ui_system =
+      read_file(source_root() / "src/ui/ui_system.cpp");
+  const std::string browser =
+      read_file(source_root() / "src/ui/qt_material_browser_window.cpp");
+
+  EXPECT_NE(editor_api.find("QuaderProjectAssetsApi &project_assets()"),
+            std::string::npos);
+  EXPECT_NE(project_assets_api.find("materials() const"), std::string::npos);
+  EXPECT_NE(project_assets_api.find("active_material() const"),
+            std::string::npos);
+  EXPECT_NE(project_assets_api.find("set_active_material("),
+            std::string::npos);
+  EXPECT_NE(project_assets_api.find("material_preview("),
+            std::string::npos);
+
+  EXPECT_NE(ui_system.find("editor_->project_assets().materials()"),
+            std::string::npos);
+  EXPECT_NE(ui_system.find("editor_->project_assets().active_material()"),
+            std::string::npos);
+  EXPECT_NE(ui_system.find("editor_->project_assets().set_active_material("),
+            std::string::npos);
+  EXPECT_EQ(ui_system.find("material_catalog()"), std::string::npos);
+  EXPECT_EQ(browser.find("ProjectSession"), std::string::npos);
+  EXPECT_EQ(browser.find("AssetRegistry"), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests,
+     StandardMaterialEditorUsesTypedPublicDocumentApi) {
+  const std::string editor_api =
+      read_file(source_root() / "src/api/quader_editor_api.hpp");
+  const std::string documents_api = read_file(
+      source_root() / "src/api/quader_standard_material_documents_api.hpp");
+  const std::string ui_system =
+      read_file(source_root() / "src/ui/ui_system.cpp");
+  const std::string editor_window = read_file(
+      source_root() / "src/ui/qt_standard_material_editor_window.cpp");
+
+  EXPECT_NE(editor_api.find("standard_material_documents()"),
+            std::string::npos);
+  for (const std::string_view operation : {
+           "new_material()", "preview() const", "open(ProjectAssetId",
+           "set_base_color(",
+           "set_normal_convention(", "import_texture(", "save_as(",
+       }) {
+    EXPECT_NE(documents_api.find(operation), std::string::npos) << operation;
+  }
+  EXPECT_NE(ui_system.find("editor_->standard_material_documents()"),
+            std::string::npos);
+  EXPECT_EQ(editor_window.find("ProjectSession"), std::string::npos);
+  EXPECT_EQ(editor_window.find("ProjectMaterialCatalog"), std::string::npos);
 }

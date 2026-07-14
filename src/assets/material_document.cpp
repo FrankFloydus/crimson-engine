@@ -12,7 +12,7 @@
 namespace quader {
 namespace {
 
-constexpr std::array<MaterialTextureSlotDescriptor, 2>
+constexpr std::array<MaterialTextureSlotDescriptor, 4>
     kMaterialTextureSlotDescriptors{{
         {
             .id = material_texture_slot::kBaseColor,
@@ -21,6 +21,14 @@ constexpr std::array<MaterialTextureSlotDescriptor, 2>
         {
             .id = material_texture_slot::kRoughness,
             .legacy_alias = "roughness",
+        },
+        {
+            .id = material_texture_slot::kMetallic,
+            .legacy_alias = "metallic",
+        },
+        {
+            .id = material_texture_slot::kNormal,
+            .legacy_alias = "normal",
         },
     }};
 

@@ -359,22 +359,25 @@ SceneContentDocument::validate_asset_references() const {
       });
     }
     if (const MaterialComponent *material = scene_.material(entity);
-        material != nullptr &&
-        assets_.material(material->material) == nullptr) {
+        material != nullptr && material->material.embedded() &&
+        assets_.material(material->material.embedded_asset()) == nullptr) {
       report.issues.push_back(SceneContentDocumentAssetReferenceIssue{
           .entity = entity,
-          .asset = material->material,
+          .asset = material->material.embedded_asset(),
           .message = "entity references a missing material asset.",
       });
     }
     if (const MaterialComponent *material = scene_.material(entity)) {
-      for (const auto &[slot, materialId] : material->material_slots) {
+      for (const auto &[slot, material_reference] : material->material_slots) {
         (void)slot;
-        if (materialId == kInvalidAssetId ||
-            assets_.material(materialId) == nullptr) {
+        if (!material_reference.valid() ||
+            (material_reference.embedded() &&
+             assets_.material(material_reference.embedded_asset()) ==
+                 nullptr)) {
           report.issues.push_back(SceneContentDocumentAssetReferenceIssue{
               .entity = entity,
-              .asset = materialId,
+              .asset = material_reference.embedded_asset(),
+              .project_asset = material_reference.project_asset(),
               .message =
                   "entity material slot references a missing material asset.",
           });
@@ -423,12 +426,12 @@ SceneContentDocument::validate_asset_references(ProjectObjectRecord record) cons
         .message = "object record references a missing mesh asset.",
     });
   }
-  if (record.material != kInvalidAssetId &&
-      assets_.material(record.material) == nullptr) {
+  if (record.material.embedded() &&
+      assets_.material(record.material.embedded_asset()) == nullptr) {
     report.issues.push_back(SceneContentDocumentAssetReferenceIssue{
         .entity = record.scene_entity,
         .object_id = record.id,
-        .asset = record.material,
+        .asset = record.material.embedded_asset(),
         .message = "object record references a missing material asset.",
     });
   }
@@ -616,7 +619,7 @@ void SceneContentDocument::hydrate_record_from_scene(
           scene_.material(record.scene_entity)) {
     record.material = material->material;
   } else {
-    record.material = kInvalidAssetId;
+    record.material = MaterialReference{};
   }
 }
 

@@ -281,7 +281,7 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_TRUE(identity->mesh.has_value());
   EXPECT_EQ(identity->mesh->mesh, 99);
   ASSERT_TRUE(identity->material.has_value());
-  EXPECT_EQ(identity->material->material, 42);
+  EXPECT_EQ(identity->material->material.embedded_asset(), AssetId{42u});
 
   ASSERT_TRUE(scene.destroy_entity(entity));
   object_map.unbind_object(300);
@@ -377,7 +377,8 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_TRUE(duplicate_mesh->display_collision);
   EXPECT_EQ(duplicate_mesh->body_type, MeshPhysicsBodyType::RigidBody);
   ASSERT_NE(scene.material(duplicate), nullptr);
-  EXPECT_EQ(scene.material(duplicate)->material, 44);
+  EXPECT_EQ(scene.material(duplicate)->material.embedded_asset(),
+            AssetId{44u});
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -411,14 +412,14 @@ TEST(ModelingSessionServiceSplitTests,
   const MaterialComponent *second_material = scene.material(second);
   ASSERT_NE(first_material, nullptr);
   ASSERT_NE(second_material, nullptr);
-  EXPECT_EQ(first_material->material, 11u);
-  EXPECT_EQ(second_material->material, 22u);
-  ASSERT_TRUE(first_material->material_slots.contains(0u));
-  ASSERT_TRUE(second_material->material_slots.contains(0u));
-  EXPECT_EQ(first_material->material_slots.at(0u), 11u);
-  EXPECT_EQ(second_material->material_slots.at(0u), 22u);
-  EXPECT_EQ(first_material->material_for_slot(0u), 11u);
-  EXPECT_EQ(second_material->material_for_slot(0u), 22u);
+  EXPECT_EQ(first_material->material.embedded_asset(), AssetId{11u});
+  EXPECT_EQ(second_material->material.embedded_asset(), AssetId{22u});
+  EXPECT_FALSE(first_material->material_slots.contains(0u));
+  EXPECT_FALSE(second_material->material_slots.contains(0u));
+  EXPECT_EQ(first_material->material_for_slot(0u).embedded_asset(),
+            AssetId{11u});
+  EXPECT_EQ(second_material->material_for_slot(0u).embedded_asset(),
+            AssetId{22u});
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -1438,7 +1439,7 @@ TEST(ModelingSessionServiceSplitTests,
   const std::size_t existing_material_check =
       mesh_sync.find("existing_material != nullptr");
   ASSERT_NE(existing_material_check, std::string::npos);
-  EXPECT_NE(mesh_sync.find("existing_material->material != kInvalidAssetId",
+  EXPECT_NE(mesh_sync.find("existing_material->material.valid()",
                            existing_material_check),
             std::string::npos);
   EXPECT_LT(existing_material_check,

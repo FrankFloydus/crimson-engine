@@ -46,7 +46,8 @@ namespace {
 
 namespace fb = ::quader::qdr::fb;
 
-constexpr std::uint16_t kSceneChunkSchemaVersion = 1u;
+constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 2u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 [[nodiscard]] fb::Vec2 to_fb(QVec2 value) {
@@ -531,18 +532,38 @@ struct EncodedGeometrySet final {
 encode_material_component(flatbuffers::FlatBufferBuilder &builder,
                           const MaterialComponent &material) {
   std::vector<std::pair<std::uint32_t, AssetId>> sorted_slots;
+  std::vector<std::pair<std::uint32_t, ProjectAssetId>>
+      sorted_project_slots;
   sorted_slots.reserve(material.material_slots.size());
-  for (const auto &[slot, asset] : material.material_slots) {
-    sorted_slots.emplace_back(slot, asset);
+  sorted_project_slots.reserve(material.material_slots.size());
+  for (const auto &[slot, reference] : material.material_slots) {
+    if (reference.embedded()) {
+      sorted_slots.emplace_back(slot, reference.embedded_asset());
+    } else if (reference.project_owned()) {
+      sorted_project_slots.emplace_back(slot, reference.project_asset());
+    }
   }
   std::sort(sorted_slots.begin(), sorted_slots.end());
+  std::sort(sorted_project_slots.begin(), sorted_project_slots.end());
   std::vector<fb::MaterialSlotBinding> slots;
   slots.reserve(sorted_slots.size());
   for (const auto [slot, asset] : sorted_slots) {
     slots.emplace_back(slot, asset);
   }
+  std::vector<flatbuffers::Offset<fb::ProjectMaterialSlotBinding>>
+      project_slots;
+  project_slots.reserve(sorted_project_slots.size());
+  for (const auto &[slot, asset] : sorted_project_slots) {
+    project_slots.push_back(fb::CreateProjectMaterialSlotBinding(
+        builder, slot, builder.CreateString(asset.str())));
+  }
   return fb::CreateMaterialComponent(
-      builder, material.material, builder.CreateVectorOfStructs(slots));
+      builder, material.material.embedded_asset(),
+      builder.CreateVectorOfStructs(slots),
+      material.material.project_owned()
+          ? builder.CreateString(material.material.project_asset().str())
+          : flatbuffers::Offset<flatbuffers::String>{},
+      builder.CreateVector(project_slots));
 }
 
 [[nodiscard]] flatbuffers::Offset<fb::SceneSettingsComponent>
@@ -689,9 +710,13 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
   objects.reserve(snapshot.object_records.size());
   for (const ProjectObjectRecord &record : snapshot.object_records) {
     objects.push_back(fb::CreateObjectRecord(
-        builder, record.id, record.scene_entity, record.mesh, record.material,
+        builder, record.id, record.scene_entity, record.mesh,
+        record.material.embedded_asset(),
         record.modeling_object, builder.CreateString(record.authored_name),
-        record.visible, record.material_slot));
+        record.visible, record.material_slot,
+        record.material.project_owned()
+            ? builder.CreateString(record.material.project_asset().str())
+            : flatbuffers::Offset<flatbuffers::String>{}));
   }
 
   std::vector<ProjectAssetReference> sorted_dependencies =
@@ -699,23 +724,23 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
   std::sort(sorted_dependencies.begin(), sorted_dependencies.end(),
             [](const ProjectAssetReference &left,
                const ProjectAssetReference &right) {
-              return std::tuple(left.stable_id, left.kind,
+              return std::tuple(left.stable_id.str(), left.kind,
                                 left.path.portable_string()) <
-                     std::tuple(right.stable_id, right.kind,
+                     std::tuple(right.stable_id.str(), right.kind,
                                 right.path.portable_string());
             });
   std::set<std::string> dependency_ids;
   std::vector<flatbuffers::Offset<fb::ProjectAssetDependency>> dependencies;
   dependencies.reserve(sorted_dependencies.size());
   for (const ProjectAssetReference &dependency : sorted_dependencies) {
-    if (dependency.stable_id.empty() || !dependency.path.valid() ||
+    if (!dependency.stable_id.valid() || !dependency.path.valid() ||
         dependency.kind == ProjectAssetKind::Unknown ||
-        !dependency_ids.insert(dependency.stable_id).second) {
+        !dependency_ids.insert(std::string(dependency.stable_id.str())).second) {
       throw std::runtime_error(
           "QDR project asset dependency is incomplete or duplicated.");
     }
     dependencies.push_back(fb::CreateProjectAssetDependency(
-        builder, builder.CreateString(dependency.stable_id),
+        builder, builder.CreateString(dependency.stable_id.str()),
         builder.CreateString(dependency.path.portable_string()),
         to_fb(dependency.kind)));
   }
@@ -753,7 +778,8 @@ require_scene_metadata_chunk(
   if (metadata == nullptr) {
     throw std::runtime_error("QDR scene is missing its metadata chunk.");
   }
-  if (metadata->schema_version != kSceneChunkSchemaVersion) {
+  if (metadata->schema_version < kMinimumSceneChunkSchemaVersion ||
+      metadata->schema_version > kSceneChunkSchemaVersion) {
     throw std::runtime_error(
         "QDR scene metadata requires an unsupported schema version.");
   }
@@ -1095,7 +1121,18 @@ referenced_mesh_asset_ids(const fb::ScenePayload &payload) {
 
 [[nodiscard]] MaterialComponent
 decode_material_component(const fb::MaterialComponent &value) {
-  MaterialComponent material{.material = value.material()};
+  MaterialComponent material{.material = MaterialReference(value.material())};
+  if (const flatbuffers::String *project_id = value.project_material_id();
+      project_id != nullptr && !project_id->str().empty()) {
+    const std::optional<ProjectAssetId> parsed =
+        ProjectAssetId::parse(project_id->string_view());
+    if (!parsed.has_value() || material.material.valid()) {
+      throw std::runtime_error(
+          "QDR entity material contains an invalid or ambiguous primary "
+          "material reference.");
+    }
+    material.material = MaterialReference::project(*parsed);
+  }
   if (const auto *slots = value.material_slots()) {
     for (std::size_t index = 0u; index < slots->size(); ++index) {
       const fb::MaterialSlotBinding *slot = slots->Get(index);
@@ -1104,6 +1141,21 @@ decode_material_component(const fb::MaterialComponent &value) {
                .second) {
         throw std::runtime_error(
             "QDR entity material contains duplicate slot bindings.");
+      }
+    }
+  }
+  if (const auto *slots = value.project_material_slots()) {
+    for (std::size_t index = 0u; index < slots->size(); ++index) {
+      const fb::ProjectMaterialSlotBinding *slot = slots->Get(index);
+      const std::optional<ProjectAssetId> parsed = ProjectAssetId::parse(
+          string_from_fb(slot->project_material_id()));
+      if (!parsed.has_value() ||
+          !material.material_slots
+               .emplace(slot->slot(), MaterialReference::project(*parsed))
+               .second) {
+        throw std::runtime_error(
+            "QDR entity material contains an invalid, ambiguous, or duplicate "
+            "project slot binding.");
       }
     }
   }
@@ -1163,18 +1215,20 @@ decode_project_asset_dependencies(const fb::ScenePayload &payload) {
   for (std::size_t index = 0u; index < stored_dependencies->size(); ++index) {
     const fb::ProjectAssetDependency *stored =
         stored_dependencies->Get(index);
-    const std::string stable_id = string_from_fb(stored->stable_id());
+    const std::optional<ProjectAssetId> stable_id =
+        ProjectAssetId::parse(string_from_fb(stored->stable_id()));
     const ProjectAssetKind kind = project_asset_kind_from_fb(stored->kind());
     const ProjectIoResult<ProjectRelativePath> path =
         ProjectRelativePath::parse_portable(
             string_from_fb(stored->project_relative_path()));
-    if (stable_id.empty() || kind == ProjectAssetKind::Unknown || !path.ok() ||
-        !stable_ids.insert(stable_id).second) {
+    if (!stable_id.has_value() || kind == ProjectAssetKind::Unknown ||
+        !path.ok() ||
+        !stable_ids.insert(std::string(stable_id->str())).second) {
       throw std::runtime_error(
           "QDR project asset dependency is invalid or duplicated.");
     }
     dependencies.push_back({
-        .stable_id = stable_id,
+        .stable_id = *stable_id,
         .kind = kind,
         .path = path.value(),
     });
@@ -1406,7 +1460,7 @@ void decode_entities(SceneContentDocument &document,
       }
       if (const fb::MaterialComponent *value = stored->material()) {
         MaterialComponent material = decode_material_component(*value);
-        if (material.material != kInvalidAssetId) {
+        if (material.material.valid()) {
           document.scene().set_material(entity, std::move(material));
         }
       }
@@ -1455,12 +1509,24 @@ void decode_entities(SceneContentDocument &document,
           .id = stored->editor_object_id(),
           .scene_entity = stored->scene_entity(),
           .mesh = stored->mesh(),
-          .material = stored->material(),
+          .material = MaterialReference(stored->material()),
           .modeling_object = stored->modeling_object(),
           .authored_name = string_from_fb(stored->authored_name()),
           .visible = stored->visible(),
           .material_slot = stored->material_slot(),
       };
+      if (const flatbuffers::String *project_id =
+              stored->project_material_id();
+          project_id != nullptr && !project_id->str().empty()) {
+        const std::optional<ProjectAssetId> parsed =
+            ProjectAssetId::parse(project_id->string_view());
+        if (!parsed.has_value() || record.material.valid()) {
+          throw std::runtime_error(
+              "QDR object record contains an invalid or ambiguous material "
+              "reference.");
+        }
+        record.material = MaterialReference::project(*parsed);
+      }
       const SceneContentDocumentAssetReferenceReport reference_report =
           document.validate_asset_references(record);
       if (!reference_report.ok()) {

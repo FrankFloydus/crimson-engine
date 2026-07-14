@@ -24,7 +24,7 @@ enum class ProjectAssetKind : std::uint8_t {
 
 /// Pairs a stable project-asset identity with its portable storage location.
 struct ProjectAssetReference final {
-  std::string stable_id;
+  ProjectAssetId stable_id;
   ProjectAssetKind kind = ProjectAssetKind::Unknown;
   ProjectRelativePath path;
 };

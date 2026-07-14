@@ -366,7 +366,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(viewport_source, "setAutoFillBackground(true)");
 
   const std::size_t render_viewports =
-      viewport_source.find("std::size_t QtViewportPanel::render_viewports()");
+      viewport_source.find("QtViewportPanel::render_viewports(bool");
   const std::size_t startup_gate = viewport_source.find(
       "qt_startup_presentation_action(", render_viewports);
   const std::size_t reveal_surface =
@@ -1528,6 +1528,28 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
+     QtApplicationCommandsYieldToFocusedStandardMaterialEditor) {
+  const std::string filter_header =
+      read_source_file("src/ui/qt_command_event_filter.hpp");
+  const std::string filter =
+      read_source_file("src/ui/qt_command_event_filter.cpp");
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+
+  expect_contains(filter_header, "QtApplicationCommandInputOwnerProvider");
+  expect_contains(filter, "qt_application_command_input_owner_active(");
+  expect_contains(ui_system,
+                  "standard_material_editor_window_->isActiveWindow()");
+
+  const std::size_t ownership_check =
+      filter.find("if (qt_application_command_input_owner_active(");
+  const std::size_t command_dispatch =
+      filter.find("dispatch_viewport_input_binding(");
+  ASSERT_NE(ownership_check, std::string::npos);
+  ASSERT_NE(command_dispatch, std::string::npos);
+  EXPECT_LT(ownership_check, command_dispatch);
+}
+
+TEST(UiLayoutGuardrailTests,
      QtApplicationCommandsPreserveCurrentViewportToolContext) {
   const std::string filter_header =
       read_source_file("src/ui/qt_command_event_filter.hpp");
@@ -1577,4 +1599,53 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(panel,
                   "should_enable_viewport_overlay_pass({");
   expect_contains(panel, ".tool_overlay_visible = tool_overlay_visible");
+}
+
+TEST(UiLayoutGuardrailTests,
+     StandardMaterialPreviewUsesOneRetainedSurfaceAndPresentationCycle) {
+  const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
+  const std::string app = read_source_file("src/app/app.cpp");
+  const std::string surface =
+      read_source_file("src/ui/qt_material_preview_surface.cpp");
+
+  const std::size_t create_container =
+      ui_system.find("QWidget::createWindowContainer(\n"
+                     "      material_preview_surface_");
+  const std::size_t initialize_surface = ui_system.find(
+      "material_preview_surface_->initialize(render_system)");
+  ASSERT_NE(create_container, std::string::npos);
+  ASSERT_NE(initialize_surface, std::string::npos);
+  EXPECT_LT(create_container, initialize_surface)
+      << "the native child must exist before preview renderer initialization";
+  expect_contains(surface, "return true;\n}");
+  expect_contains(surface, "if (!swap_chain_ && native_surface_available_");
+  expect_contains(surface, "if (isExposed())");
+
+  const std::size_t begin =
+      ui_system.find("render_system_->begin_presentation_frame()");
+  const std::size_t scene =
+      ui_system.find("viewport_panel_->render_viewports(false)");
+  const std::size_t preview =
+      ui_system.find("material_preview_surface_->render_frame()");
+  const std::size_t complete =
+      ui_system.find("render_system_->complete_presentation_frame(submitted)");
+  ASSERT_NE(begin, std::string::npos);
+  ASSERT_NE(scene, std::string::npos);
+  ASSERT_NE(preview, std::string::npos);
+  ASSERT_NE(complete, std::string::npos);
+  EXPECT_LT(begin, scene);
+  EXPECT_LT(scene, preview);
+  EXPECT_LT(preview, complete);
+  expect_contains(app, "ui_.render_surfaces(render_scene_viewports)");
+  expect_contains(ui_system, "!standard_material_editor_window_");
+  expect_contains(ui_system, "->isMinimized()");
+  expect_contains(ui_system, "material_preview_surface_->isExposed()");
+
+  const std::size_t preview_shutdown =
+      ui_system.find("material_preview_surface_->shutdown()");
+  const std::size_t main_window_shutdown = ui_system.find("main_window_.reset()");
+  ASSERT_NE(preview_shutdown, std::string::npos);
+  ASSERT_NE(main_window_shutdown, std::string::npos);
+  EXPECT_LT(preview_shutdown, main_window_shutdown);
+  expect_contains(ui_system, "material_preview_surface_->reset_preview()");
 }

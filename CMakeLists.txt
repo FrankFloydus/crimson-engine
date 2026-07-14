@@ -227,10 +227,13 @@ add_library(quader_assets STATIC
     src/assets/asset_registry.cpp
     src/assets/bake_service.cpp
     src/assets/material_document.cpp
+    src/assets/project_asset_id.cpp
 )
 
 quader_configure_core_module(quader_assets)
-target_link_libraries(quader_assets PUBLIC quader_core_utilities)
+target_link_libraries(quader_assets
+    PUBLIC quader_core_utilities
+    PRIVATE stduuid)
 
 add_library(quader_mesh_io STATIC
     src/io/mesh/obj_writer.cpp
@@ -283,6 +286,9 @@ add_library(quader_project_qdr_io STATIC
     src/io/project/project_types.cpp
     src/io/project/project_file_system.cpp
     src/io/project/project_manifest.cpp
+    src/io/project/project_material_catalog.cpp
+    src/io/project/project_material_provisioner.cpp
+    src/io/project/qmat_codec.cpp
     src/io/project/recent_project_store.cpp
     src/io/qdr/qdr_atomic_write.cpp
     src/io/qdr/qdr_binary_container.cpp
@@ -324,6 +330,7 @@ target_compile_definitions(quader_project_qdr_io
     PRIVATE QUADER_QDR_ENABLE_ZSTD=1)
 target_link_libraries(quader_project_qdr_io
     PUBLIC
+        quader_assets
         quader_document
     PRIVATE
         Taskflow::Taskflow
@@ -349,12 +356,16 @@ if(QUADER_BUILD_QDR_TOOLS)
 endif()
 
 add_library(quader_project_session STATIC
+    src/editor/material/project_image_decoder.cpp
+    src/editor/material/standard_material_edit_session_service.cpp
     src/editor/session/project_session.cpp)
 quader_configure_core_module(quader_project_session)
 target_link_libraries(quader_project_session
     PUBLIC
         quader_editor_services
-        quader_project_qdr_io)
+        quader_project_qdr_io
+    PRIVATE
+        Qt6::Gui)
 
 add_library(quader_core_ui_support STATIC
     src/ui/console_model.cpp
@@ -366,6 +377,7 @@ quader_configure_core_module(quader_core_ui_support)
 target_link_libraries(quader_core_ui_support PUBLIC quader_core_utilities)
 
 add_library(quader_viewport_services STATIC
+    src/viewport/material_preview_state.cpp
     src/viewport/viewport_camera_controller.cpp
     src/viewport/host_viewport_contract_adapter.cpp
     src/viewport/modeling_sdk_viewport_input_adapter.cpp
@@ -417,6 +429,8 @@ add_library(quader_api STATIC
     src/api/quader_object_handle.cpp
     src/api/quader_preferences_api.cpp
     src/api/quader_project_api.cpp
+    src/api/quader_project_assets_api.cpp
+    src/api/quader_standard_material_documents_api.cpp
     src/api/quader_query_api.cpp
     src/api/quader_scene_api.cpp
     src/api/quader_scene_documents_api.cpp
@@ -549,8 +563,11 @@ endmacro()
 set(QUADER_DEFAULT_MATERIAL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/modeling_assets/materials/default")
 set(QUADER_DEFAULT_ALBEDO_TEXTURE "${QUADER_DEFAULT_MATERIAL_SOURCE_DIR}/default_albedo.png")
 set(QUADER_DEFAULT_ROUGHNESS_TEXTURE "${QUADER_DEFAULT_MATERIAL_SOURCE_DIR}/default_roughness.png")
+set(QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE
+    "${QUADER_DEFAULT_MATERIAL_SOURCE_DIR}/default_material.qmat")
 quader_require_existing_path("${QUADER_DEFAULT_ALBEDO_TEXTURE}" "app-owned default material albedo texture")
 quader_require_existing_path("${QUADER_DEFAULT_ROUGHNESS_TEXTURE}" "app-owned default material roughness texture")
+quader_require_existing_path("${QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE}" "app-owned default project material template")
 
 quader_register_filament_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh)
 quader_register_filament_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit)
@@ -596,6 +613,8 @@ add_library(quader_render STATIC
     src/api/quader_render_api.cpp
     src/render/light_renderable_cache.cpp
     src/render/material_binding_service.cpp
+    src/render/material_preview_mesh_library.cpp
+    src/render/material_preview_renderer.cpp
     src/render/material_compiler_service.cpp
     src/render/mesh_renderable_cache.cpp
     src/render/mesh_renderable_factory.cpp
@@ -673,6 +692,9 @@ add_library(quader_ui STATIC
     src/ui/qt_color_swatch_button.cpp
     src/ui/qt_input_adapter.cpp
     src/ui/qt_main_menu.cpp
+    src/ui/qt_material_browser_window.cpp
+    src/ui/qt_material_preview_surface.cpp
+    src/ui/qt_standard_material_editor_window.cpp
     src/ui/qt_navigation_gizmo.cpp
     src/ui/qt_project_home_page.cpp
     src/ui/qt_relative_pointer_input.cpp
@@ -860,6 +882,7 @@ set(QUADER_RUNTIME_RESOURCE_INPUTS
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/point_light.png"
     "${QUADER_DEFAULT_ALBEDO_TEXTURE}"
     "${QUADER_DEFAULT_ROUGHNESS_TEXTURE}"
+    "${QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE}"
     ${QUADER_FILAMENT_MATERIAL_OUTPUTS}
     ${QUADER_RUNTIME_IBL_INPUTS}
     ${QUADER_RUNTIME_LOCALE_INPUTS})
@@ -935,6 +958,9 @@ add_custom_command(
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${QUADER_DEFAULT_ROUGHNESS_TEXTURE}"
             "${QUADER_RUNTIME_DEPLOY_DIR}/materials/default/default_roughness.png"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE}"
+            "${QUADER_RUNTIME_DEPLOY_DIR}/materials/default/default_material.qmat"
     COMMAND "${CMAKE_COMMAND}" -E touch
             "${QUADER_RUNTIME_RESOURCE_STAMP}"
     DEPENDS
@@ -999,6 +1025,9 @@ if(QUADER_BUILD_TESTS)
         tests/qt_auxiliary_window_state_tests.cpp
         tests/qt_command_event_filter_tests.cpp
         tests/qt_input_adapter_tests.cpp
+        tests/qt_material_browser_window_tests.cpp
+        tests/qt_material_preview_surface_tests.cpp
+        tests/qt_standard_material_editor_window_tests.cpp
         tests/qt_navigation_gizmo_tests.cpp
         tests/qt_project_workspace_tests.cpp
         tests/qt_relative_pointer_input_tests.cpp
@@ -1017,6 +1046,12 @@ if(QUADER_BUILD_TESTS)
         tests/programmatic_behavior_scenario_tests.cpp
         tests/grouping_public_api_tests.cpp
         tests/io_qdr_tests.cpp
+        tests/project_material_behavior_tests.cpp
+        tests/project_material_manifest_tests.cpp
+        tests/project_material_storage_tests.cpp
+        tests/project_image_decoder_tests.cpp
+        tests/material_preview_domain_tests.cpp
+        tests/standard_material_documents_tests.cpp
         tests/project_workspace_storage_tests.cpp
         tests/project_session_workspace_tests.cpp
         tests/qdr_binary_container_tests.cpp
@@ -1041,6 +1076,7 @@ if(QUADER_BUILD_TESTS)
         PRIVATE
             QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest)
+    add_dependencies(quader_tests quader_runtime_resources)
     add_test(NAME quader_tests COMMAND quader_tests)
 
     add_executable(quader_modeling_sdk_parity_tests

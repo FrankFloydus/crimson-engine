@@ -13,14 +13,21 @@
 namespace quader {
 
 /**
- * Owns the persisted geometry and logical visibility of Qt auxiliary windows.
- * The main-window dock layout remains in QMainWindow's versioned binary state.
+ * Owns persisted Qt auxiliary-window geometry, logical visibility, and local
+ * presentation preferences. The main-window dock layout remains in
+ * QMainWindow's versioned binary state.
  */
 struct QtAuxiliaryWindowState {
   QByteArray settings_dialog_geometry;
   bool settings_dialog_visible = false;
   QByteArray tool_settings_geometry;
   bool tool_settings_visible = false;
+  QByteArray material_browser_geometry;
+  bool material_browser_grid_mode = true;
+  int material_browser_tile_size = 128;
+  QByteArray standard_material_editor_geometry;
+  int standard_material_preview_mesh = 0;
+  int standard_material_preview_shading = 2;
 
   [[nodiscard]] static QtAuxiliaryWindowState
   load(const std::filesystem::path &path);

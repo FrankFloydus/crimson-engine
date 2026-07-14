@@ -1,0 +1,646 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+#include "editor/material/standard_material_edit_session_service.hpp"
+
+#include "editor/session/project_session.hpp"
+#include "io/qdr/qdr_atomic_write.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <fstream>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
+
+namespace quader {
+namespace {
+
+constexpr std::size_t slot_index(StandardMaterialTextureSlot slot) {
+  return static_cast<std::size_t>(slot);
+}
+
+StandardMaterialEditResult failure(std::string message) {
+  return {.message = std::move(message)};
+}
+
+StandardMaterialEditResult success(bool changed, std::string message = {}) {
+  return {.ok = true, .changed = changed, .message = std::move(message)};
+}
+
+bool finite_unit(float value) {
+  return std::isfinite(value) && value >= 0.0f && value <= 1.0f;
+}
+
+std::string lowercase_ascii(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char character) {
+                   return static_cast<char>(std::tolower(character));
+                 });
+  return value;
+}
+
+bool valid_material_path(const ProjectRelativePath &path) {
+  if (!path.valid() || lowercase_ascii(path.native_path().extension().string()) !=
+                           ".qmat") {
+    return false;
+  }
+  const auto first = path.native_path().begin();
+  return first != path.native_path().end() &&
+         lowercase_ascii(first->string()) == "materials";
+}
+
+std::string sanitized_stem(std::string_view source) {
+  std::string result;
+  result.reserve(source.size());
+  for (unsigned char character : source) {
+    if (std::isalnum(character) != 0 || character == '-' || character == '_') {
+      result.push_back(static_cast<char>(character));
+    } else if (!result.empty() && result.back() != '_') {
+      result.push_back('_');
+    }
+  }
+  while (!result.empty() && result.back() == '_') {
+    result.pop_back();
+  }
+  return result.empty() ? std::string("texture") : result;
+}
+
+ProjectIoResult<ProjectRelativePath> unique_texture_path(
+    const ProjectFileSystem &file_system, std::string_view source_stem,
+    std::string_view extension, ProjectAssetId id) {
+  std::string suffix(id.str().substr(0u, 8u));
+  std::string path = "Textures/" + sanitized_stem(source_stem) + "_" + suffix;
+  if (!extension.empty()) {
+    path += extension.front() == '.' ? std::string(extension)
+                                     : "." + std::string(extension);
+  }
+  ProjectIoResult<ProjectRelativePath> relative =
+      ProjectRelativePath::parse_portable(path);
+  if (!relative.ok()) {
+    return relative;
+  }
+  ProjectIoResult<std::filesystem::path> absolute =
+      file_system.resolve(relative.value());
+  if (!absolute.ok()) {
+    return ProjectIoResult<ProjectRelativePath>::failure(
+        absolute.error().code, absolute.error().message,
+        absolute.error().path);
+  }
+  std::error_code error;
+  if (std::filesystem::exists(absolute.value(), error) || error) {
+    return ProjectIoResult<ProjectRelativePath>::failure(
+        error ? ProjectIoErrorCode::IoFailure
+              : ProjectIoErrorCode::PathCaseCollision,
+        error ? "Could not inspect imported texture path: " + error.message()
+              : "Imported texture path already exists.",
+        absolute.value());
+  }
+  return relative;
+}
+
+ProjectIoResult<std::string> read_existing_bytes(
+    const std::filesystem::path &path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input.is_open()) {
+    return ProjectIoResult<std::string>::failure(
+        ProjectIoErrorCode::IoFailure, "Could not back up material file.",
+        path);
+  }
+  return ProjectIoResult<std::string>::success(
+      std::string(std::istreambuf_iterator<char>(input),
+                  std::istreambuf_iterator<char>()));
+}
+
+ProjectIoResult<void> write_bytes_atomic(const std::filesystem::path &path,
+                                         std::span<const std::byte> bytes) {
+  const std::string_view view(reinterpret_cast<const char *>(bytes.data()),
+                              bytes.size());
+  const quader_io::QdrAtomicWriteResult written =
+      quader_io::write_qdr_text_atomic(path, view);
+  return written.ok ? ProjectIoResult<void>::success()
+                    : ProjectIoResult<void>::failure(
+                          ProjectIoErrorCode::IoFailure, written.message, path);
+}
+
+void restore_qmat(const std::filesystem::path &path,
+                  const std::optional<std::string> &backup) {
+  if (backup.has_value()) {
+    (void)quader_io::write_qdr_text_atomic(path, *backup);
+    return;
+  }
+  std::error_code ignored;
+  std::filesystem::remove(path, ignored);
+}
+
+} // namespace
+
+/// Owns mutable draft state and staged source images for one edit session.
+struct StandardMaterialEditSessionService::Draft final {
+  /// Retains one failed dependency result until the texture identity changes.
+  struct CachedPreviewError final {
+    ProjectAssetId texture_id;
+    ProjectIoError error;
+  };
+
+  StandardMaterialEditSnapshot snapshot;
+  std::array<std::optional<ProjectImportedImage>, 4> pending;
+  std::array<std::optional<StandardMaterialTexturePreview>, 4>
+      decoded_previews;
+  std::array<std::optional<CachedPreviewError>, 4> preview_errors;
+};
+
+StandardMaterialEditSessionService::StandardMaterialEditSessionService(
+    ProjectSession &project)
+    : project_(&project) {}
+
+StandardMaterialEditSessionService::~StandardMaterialEditSessionService() =
+    default;
+
+const StandardMaterialEditSnapshot *
+StandardMaterialEditSessionService::current() const noexcept {
+  return current_ ? &current_->snapshot : nullptr;
+}
+
+MaterialEditSessionId
+StandardMaterialEditSessionService::allocate_session_id() {
+  ++generation_;
+  if (generation_ == 0u) {
+    ++generation_;
+  }
+  return MaterialEditSessionId::from_generation(generation_);
+}
+
+void StandardMaterialEditSessionService::reset_with(
+    ProjectMaterialDocument document,
+    std::optional<ProjectRelativePath> path,
+    std::uint64_t source_content_revision) {
+  Draft draft;
+  draft.snapshot.session_id = allocate_session_id();
+  draft.snapshot.document = std::move(document);
+  draft.snapshot.path = std::move(path);
+  draft.snapshot.source_content_revision = source_content_revision;
+  draft.snapshot.draft_revision = 1u;
+  draft.snapshot.clean_revision = 1u;
+  current_ = std::make_unique<Draft>(std::move(draft));
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::new_material() {
+  if (current_ && current_->snapshot.dirty) {
+    return failure("Current Standard Material has unsaved changes.");
+  }
+  ProjectMaterialDocument document;
+  document.id = ProjectAssetId::generate();
+  document.name = "Untitled Material";
+  document.kind = ProjectMaterialKind::Standard;
+  document.material_version = kStandardMaterialVersion;
+  document.payload = ProjectStandardMaterialDefinition{};
+  reset_with(std::move(document), std::nullopt, 0u);
+  return success(true, "New Standard Material created.");
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::open(ProjectAssetId id) {
+  if (current_ && current_->snapshot.document.id == id) {
+    return success(false, "Standard Material is already open.");
+  }
+  if (current_ && current_->snapshot.dirty) {
+    return failure("Current Standard Material has unsaved changes.");
+  }
+  if (project_ == nullptr || !project_->has_project()) {
+    return failure("Open a project before editing materials.");
+  }
+  const ProjectMaterialCatalogEntry *entry =
+      project_->material_catalog().find(id);
+  if (entry == nullptr) {
+    return failure("Project material is missing or unavailable.");
+  }
+  if (entry->material.kind != ProjectMaterialKind::Standard ||
+      entry->material.standard_material() == nullptr) {
+    return failure("The selected QMAT is not a supported Standard Material.");
+  }
+  reset_with(entry->material, entry->path, entry->content_revision);
+  return success(true, "Standard Material opened.");
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::open(ProjectRelativePath path) {
+  if (project_ == nullptr || !project_->has_project()) {
+    return failure("Open a project before editing materials.");
+  }
+  const auto found = std::ranges::find_if(
+      project_->material_catalog().entries(),
+      [&path](const ProjectMaterialCatalogEntry &entry) {
+        return entry.path == path;
+      });
+  if (found == project_->material_catalog().entries().end()) {
+    return failure("Selected QMAT is not present in the project catalog.");
+  }
+  return open(found->material.id);
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::close(bool discard_dirty) {
+  if (!current_) {
+    return success(false, "No Standard Material is open.");
+  }
+  if (current_->snapshot.dirty && !discard_dirty) {
+    return failure("Standard Material contains unsaved changes.");
+  }
+  current_.reset();
+  return success(true, "Standard Material closed.");
+}
+
+ProjectStandardMaterialDefinition *
+StandardMaterialEditSessionService::standard() noexcept {
+  return current_ ? current_->snapshot.document.standard_material() : nullptr;
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::mark_changed() {
+  if (!current_) {
+    return failure("No Standard Material is open.");
+  }
+  current_->snapshot.dirty = true;
+  ++current_->snapshot.draft_revision;
+  if (current_->snapshot.draft_revision == 0u) {
+    ++current_->snapshot.draft_revision;
+  }
+  return success(true, "Standard Material changed.");
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::set_name(std::string name) {
+  if (!current_) {
+    return failure("No Standard Material is open.");
+  }
+  if (name.empty() || name.size() > 256u) {
+    return failure("Material name must contain 1 to 256 characters.");
+  }
+  if (current_->snapshot.document.name == name) {
+    return success(false);
+  }
+  current_->snapshot.document.name = std::move(name);
+  return mark_changed();
+}
+
+StandardMaterialEditResult StandardMaterialEditSessionService::set_base_color(
+    std::array<float, 3> color) {
+  ProjectStandardMaterialDefinition *material = standard();
+  if (material == nullptr || !finite_unit(color[0]) ||
+      !finite_unit(color[1]) || !finite_unit(color[2])) {
+    return failure("Albedo values must be finite values from 0 to 1.");
+  }
+  if (material->base_color == color) {
+    return success(false);
+  }
+  material->base_color = color;
+  return mark_changed();
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::set_roughness(float value) {
+  ProjectStandardMaterialDefinition *material = standard();
+  if (material == nullptr || !finite_unit(value)) {
+    return failure("Roughness must be a finite value from 0 to 1.");
+  }
+  if (material->roughness == value) {
+    return success(false);
+  }
+  material->roughness = value;
+  return mark_changed();
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::set_metallic(float value) {
+  ProjectStandardMaterialDefinition *material = standard();
+  if (material == nullptr || !finite_unit(value)) {
+    return failure("Metallic must be a finite value from 0 to 1.");
+  }
+  if (material->metallic == value) {
+    return success(false);
+  }
+  material->metallic = value;
+  return mark_changed();
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::set_normal_strength(float value) {
+  ProjectStandardMaterialDefinition *material = standard();
+  if (material == nullptr || !std::isfinite(value) || value < 0.0f ||
+      value > 2.0f) {
+    return failure("Normal strength must be a finite value from 0 to 2.");
+  }
+  if (material->normal_strength == value) {
+    return success(false);
+  }
+  material->normal_strength = value;
+  return mark_changed();
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::set_normal_convention(
+    NormalMapConvention convention) {
+  ProjectStandardMaterialDefinition *material = standard();
+  if (material == nullptr) {
+    return failure("No Standard Material is open.");
+  }
+  if (material->normal_convention == convention) {
+    return success(false);
+  }
+  material->normal_convention = convention;
+  return mark_changed();
+}
+
+StandardMaterialEditResult StandardMaterialEditSessionService::import_texture(
+    StandardMaterialTextureSlot slot,
+    const std::filesystem::path &source_path) {
+  ProjectStandardMaterialDefinition *material = standard();
+  if (material == nullptr || slot_index(slot) >= 4u) {
+    return failure("No Standard Material is open.");
+  }
+  ProjectIoResult<ProjectImportedImage> imported =
+      ProjectImageDecoder::read_import(source_path);
+  if (!imported.ok()) {
+    return failure(imported.error().message);
+  }
+  ProjectImportedImage value = imported.take_value();
+  current_->decoded_previews[slot_index(slot)] =
+      StandardMaterialTexturePreview{
+          .color_space = slot == StandardMaterialTextureSlot::Albedo
+                             ? ProjectTextureColorSpace::Srgb
+                             : ProjectTextureColorSpace::Linear,
+          .content_revision = current_->snapshot.draft_revision + 1u,
+          .rgba8 = std::make_shared<const std::vector<std::byte>>(
+              value.decoded.rgba8),
+          .width = value.decoded.width,
+          .height = value.decoded.height,
+      };
+  current_->preview_errors[slot_index(slot)].reset();
+  current_->pending[slot_index(slot)] = std::move(value);
+  current_->snapshot.pending_texture_sources[slot_index(slot)] = source_path;
+  return mark_changed();
+}
+
+StandardMaterialEditResult StandardMaterialEditSessionService::clear_texture(
+    StandardMaterialTextureSlot slot) {
+  ProjectStandardMaterialDefinition *material = standard();
+  if (material == nullptr || slot_index(slot) >= 4u) {
+    return failure("No Standard Material is open.");
+  }
+  std::optional<ProjectMaterialTextureSlot> *texture = material->texture(slot);
+  const bool had_pending = current_->pending[slot_index(slot)].has_value();
+  if (texture == nullptr || (!texture->has_value() && !had_pending)) {
+    return success(false);
+  }
+  texture->reset();
+  current_->pending[slot_index(slot)].reset();
+  current_->decoded_previews[slot_index(slot)].reset();
+  current_->preview_errors[slot_index(slot)].reset();
+  current_->snapshot.pending_texture_sources[slot_index(slot)].reset();
+  return mark_changed();
+}
+
+ProjectIoResult<std::optional<StandardMaterialTexturePreview>>
+StandardMaterialEditSessionService::texture_preview(
+    StandardMaterialTextureSlot slot) {
+  if (!current_ || slot_index(slot) >= 4u) {
+    return ProjectIoResult<
+        std::optional<StandardMaterialTexturePreview>>::failure(
+        ProjectIoErrorCode::InvalidWorkspaceState,
+        "No Standard Material is open.");
+  }
+  const std::size_t index = slot_index(slot);
+  if (current_->pending[index].has_value()) {
+    return ProjectIoResult<
+        std::optional<StandardMaterialTexturePreview>>::success(
+        current_->decoded_previews[index]);
+  }
+  ProjectStandardMaterialDefinition *material = standard();
+  std::optional<ProjectMaterialTextureSlot> *definition =
+      material != nullptr ? material->texture(slot) : nullptr;
+  if (definition == nullptr || !definition->has_value()) {
+    return ProjectIoResult<
+        std::optional<StandardMaterialTexturePreview>>::success(std::nullopt);
+  }
+  if (current_->decoded_previews[index].has_value() &&
+      current_->decoded_previews[index]->id == (*definition)->id) {
+    return ProjectIoResult<
+        std::optional<StandardMaterialTexturePreview>>::success(
+        current_->decoded_previews[index]);
+  }
+  if (current_->preview_errors[index].has_value() &&
+      current_->preview_errors[index]->texture_id == (*definition)->id) {
+    const ProjectIoError &cached = current_->preview_errors[index]->error;
+    return ProjectIoResult<
+        std::optional<StandardMaterialTexturePreview>>::failure(
+        cached.code, cached.message, cached.path);
+  }
+  ProjectIoResult<ProjectMaterialTextureData> texture =
+      project_->material_texture(current_->snapshot.document.id, slot);
+  if (!texture.ok()) {
+    current_->preview_errors[index] = Draft::CachedPreviewError{
+        .texture_id = (*definition)->id,
+        .error = texture.error(),
+    };
+    return ProjectIoResult<
+        std::optional<StandardMaterialTexturePreview>>::failure(
+        texture.error().code, texture.error().message, texture.error().path);
+  }
+  ProjectIoResult<ProjectDecodedImage> decoded =
+      ProjectImageDecoder::decode(texture.value().encoded_bytes);
+  if (!decoded.ok()) {
+    current_->preview_errors[index] = Draft::CachedPreviewError{
+        .texture_id = (*definition)->id,
+        .error = decoded.error(),
+    };
+    return ProjectIoResult<
+        std::optional<StandardMaterialTexturePreview>>::failure(
+        decoded.error().code, decoded.error().message, decoded.error().path);
+  }
+  current_->preview_errors[index].reset();
+  current_->decoded_previews[index] = StandardMaterialTexturePreview{
+      .id = texture.value().id,
+      .color_space = texture.value().color_space,
+      .content_revision = texture.value().content_revision,
+      .rgba8 = std::make_shared<const std::vector<std::byte>>(
+          decoded.value().rgba8),
+      .width = decoded.value().width,
+      .height = decoded.value().height,
+  };
+  return ProjectIoResult<
+      std::optional<StandardMaterialTexturePreview>>::success(
+      current_->decoded_previews[index]);
+}
+
+StandardMaterialEditResult StandardMaterialEditSessionService::save() {
+  if (!current_) {
+    return failure("No Standard Material is open.");
+  }
+  if (!current_->snapshot.path.has_value()) {
+    return failure("Unsaved Standard Material requires Save As.");
+  }
+  return save_to(*current_->snapshot.path, false);
+}
+
+StandardMaterialEditResult
+StandardMaterialEditSessionService::save_as(ProjectRelativePath path) {
+  return save_to(std::move(path), true);
+}
+
+StandardMaterialEditResult StandardMaterialEditSessionService::save_to(
+    ProjectRelativePath path, bool save_as) {
+  if (!current_ || project_ == nullptr || !project_->has_project() ||
+      project_->workspace() == nullptr) {
+    return failure("Open a project and Standard Material before saving.");
+  }
+  if (!valid_material_path(path)) {
+    return failure("Standard Materials must be saved below Materials/ as .qmat files.");
+  }
+  const ProjectFileSystem &file_system = project_->workspace()->file_system;
+  ProjectIoResult<std::filesystem::path> qmat_absolute =
+      file_system.resolve_for_write(path);
+  if (!qmat_absolute.ok()) {
+    return failure(qmat_absolute.error().message);
+  }
+  std::error_code error;
+  const bool target_exists =
+      std::filesystem::exists(qmat_absolute.value(), error);
+  if (error) {
+    return failure("Could not inspect Standard Material destination: " +
+                   error.message());
+  }
+  if (save_as && target_exists) {
+    return failure("Save As cannot overwrite another project material.");
+  }
+
+  std::optional<std::string> qmat_backup;
+  if (!save_as && target_exists) {
+    ProjectIoResult<QmatDecodedFile> source = QmatCodec::read(file_system, path);
+    if (!source.ok()) {
+      return failure(source.error().message);
+    }
+    if (source.value().content_revision !=
+        current_->snapshot.source_content_revision) {
+      return failure("Standard Material changed on disk; reopen it before saving.");
+    }
+    ProjectIoResult<std::string> backup =
+        read_existing_bytes(qmat_absolute.value());
+    if (!backup.ok()) {
+      return failure(backup.error().message);
+    }
+    qmat_backup = backup.take_value();
+  }
+
+  ProjectMaterialDocument document = current_->snapshot.document;
+  if (save_as) {
+    document.id = ProjectAssetId::generate();
+  }
+  ProjectStandardMaterialDefinition *material = document.standard_material();
+  if (material == nullptr) {
+    return failure("Only Standard Material drafts can be saved here.");
+  }
+
+  std::vector<std::filesystem::path> created_textures;
+  const auto rollback = [&]() {
+    restore_qmat(qmat_absolute.value(), qmat_backup);
+    std::error_code ignored;
+    for (auto iterator = created_textures.rbegin();
+         iterator != created_textures.rend(); ++iterator) {
+      std::filesystem::remove(*iterator, ignored);
+      ignored.clear();
+    }
+  };
+  for (std::size_t index = 0u; index < current_->pending.size(); ++index) {
+    if (!current_->pending[index].has_value()) {
+      continue;
+    }
+    const StandardMaterialTextureSlot slot =
+        static_cast<StandardMaterialTextureSlot>(index);
+    const ProjectImportedImage &imported = *current_->pending[index];
+    const ProjectAssetId texture_id = ProjectAssetId::generate();
+    ProjectIoResult<ProjectRelativePath> texture_path = unique_texture_path(
+        file_system, imported.source_stem, imported.source_extension,
+        texture_id);
+    if (!texture_path.ok()) {
+      rollback();
+      return failure(texture_path.error().message);
+    }
+    ProjectIoResult<std::filesystem::path> texture_absolute =
+        file_system.resolve_for_write(texture_path.value());
+    if (!texture_absolute.ok()) {
+      rollback();
+      return failure(texture_absolute.error().message);
+    }
+    ProjectIoResult<void> written =
+        write_bytes_atomic(texture_absolute.value(), imported.encoded_bytes);
+    if (!written.ok()) {
+      rollback();
+      return failure(written.error().message);
+    }
+    created_textures.push_back(texture_absolute.value());
+    std::optional<ProjectMaterialTextureSlot> *target = material->texture(slot);
+    if (target == nullptr) {
+      rollback();
+      return failure("Unsupported Standard Material texture slot.");
+    }
+    *target = ProjectMaterialTextureSlot{
+        .id = texture_id,
+        .project_relative_path =
+            texture_path.take_value().portable_string(),
+        .color_space = slot == StandardMaterialTextureSlot::Albedo
+                           ? ProjectTextureColorSpace::Srgb
+                           : ProjectTextureColorSpace::Linear,
+    };
+  }
+
+  ProjectIoResult<void> qmat_written =
+      QmatCodec::write_atomic(file_system, path, document);
+  if (!qmat_written.ok()) {
+    rollback();
+    return failure(qmat_written.error().message);
+  }
+  ProjectIoResult<ProjectMaterialCatalog> scanned =
+      ProjectMaterialCatalog::scan(file_system);
+  if (!scanned.ok()) {
+    rollback();
+    return failure(scanned.error().message);
+  }
+  const bool activate = save_as || !current_->snapshot.path.has_value();
+  ProjectSessionResult installed = project_->install_material_catalog(
+      scanned.take_value(), activate ? std::optional(document.id)
+                                     : std::nullopt);
+  if (!installed.ok) {
+    rollback();
+    return failure(installed.message);
+  }
+  const ProjectMaterialCatalogEntry *saved =
+      project_->material_catalog().find(document.id);
+  if (saved == nullptr) {
+    rollback();
+    return failure("Saved Standard Material is missing from the catalog.");
+  }
+  current_->snapshot.document = saved->material;
+  current_->snapshot.path = saved->path;
+  current_->snapshot.source_content_revision = saved->content_revision;
+  current_->snapshot.dirty = false;
+  ++current_->snapshot.draft_revision;
+  if (current_->snapshot.draft_revision == 0u) {
+    ++current_->snapshot.draft_revision;
+  }
+  current_->snapshot.clean_revision = current_->snapshot.draft_revision;
+  current_->pending.fill(std::nullopt);
+  current_->decoded_previews.fill(std::nullopt);
+  current_->preview_errors.fill(std::nullopt);
+  current_->snapshot.pending_texture_sources.fill(std::nullopt);
+  return success(true, save_as ? "Standard Material saved as a new asset."
+                               : "Standard Material saved.");
+}
+
+} // namespace quader

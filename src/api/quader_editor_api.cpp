@@ -8,7 +8,9 @@
 
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_project_api_internal_access.hpp"
+#include "api/quader_project_assets_api_internal_access.hpp"
 #include "api/quader_scene_documents_api_internal_access.hpp"
+#include "api/quader_standard_material_documents_api_internal_access.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
@@ -31,6 +33,8 @@ public:
     explicit Impl(QuaderApiSession session)
         : api(session)
         , project(session)
+        , project_assets(session)
+        , standard_material_documents(session)
         , scene_documents(session)
         , tools(session)
 #ifndef NDEBUG
@@ -53,6 +57,8 @@ public:
         : project_session_owner(&project_session)
         , api(project_api_session(project_session))
         , project(project_session)
+        , project_assets(project_api_session(project_session))
+        , standard_material_documents(project_api_session(project_session))
         , scene_documents(project_session)
         , tools(project_api_session(project_session))
 #ifndef NDEBUG
@@ -96,8 +102,22 @@ public:
       QuaderSceneDocumentsApiInternalAccess::attach_events(scene_documents,
                                                            events);
       QuaderProjectApiInternalAccess::attach_events(project, events);
+      QuaderProjectAssetsApiInternalAccess::attach_events(project_assets,
+                                                          events);
+      QuaderStandardMaterialDocumentsApiInternalAccess::attach_events(
+          standard_material_documents, events);
       QuaderProjectApiInternalAccess::attach_scene_documents(project,
                                                               scene_documents);
+      project_assets_sync_subscription = events.subscribe(
+          quader_event::kProjectOpened, [this](const QuaderEvent &) {
+            QuaderProjectAssetsApiInternalAccess::publish_assets_changed(
+                project_assets);
+          });
+      project_assets_close_subscription = events.subscribe(
+          quader_event::kProjectClosed, [this](const QuaderEvent &) {
+            QuaderProjectAssetsApiInternalAccess::publish_assets_changed(
+                project_assets);
+          });
       const auto callback = [this](QuaderApiSession session) {
         rebind(session);
       };
@@ -126,6 +146,8 @@ public:
       }
       api.rebind(session, binding_identity);
       project.rebind_session(session);
+      project_assets.rebind_session(session);
+      standard_material_documents.rebind_session(session);
       tools.rebind_session(session);
 #ifndef NDEBUG
       dev_tools.rebind_session(session);
@@ -142,6 +164,8 @@ public:
     ProjectSession *project_session_owner = nullptr;
     QuaderApi api;
     QuaderProjectApi project;
+    QuaderProjectAssetsApi project_assets;
+    QuaderStandardMaterialDocumentsApi standard_material_documents;
     QuaderSceneDocumentsApi scene_documents;
     QuaderViewportApi viewports;
     QuaderToolsApi tools;
@@ -153,6 +177,8 @@ public:
     QuaderUIApi ui;
     QuaderEventsApi events;
     QuaderEventSubscription dirty_sync_subscription;
+    QuaderEventSubscription project_assets_sync_subscription;
+    QuaderEventSubscription project_assets_close_subscription;
     QuaderRenderApi render;
     std::function<void(QuaderApiSession)> host_scene_binding_changed;
 };
@@ -191,6 +217,24 @@ QuaderProjectApi& QuaderEditorApi::project() {
 
 const QuaderProjectApi& QuaderEditorApi::project() const {
     return impl_->project;
+}
+
+QuaderProjectAssetsApi &QuaderEditorApi::project_assets() {
+  return impl_->project_assets;
+}
+
+const QuaderProjectAssetsApi &QuaderEditorApi::project_assets() const {
+  return impl_->project_assets;
+}
+
+QuaderStandardMaterialDocumentsApi &
+QuaderEditorApi::standard_material_documents() {
+  return impl_->standard_material_documents;
+}
+
+const QuaderStandardMaterialDocumentsApi &
+QuaderEditorApi::standard_material_documents() const {
+  return impl_->standard_material_documents;
 }
 
 QuaderSceneDocumentsApi &QuaderEditorApi::scene_documents() {

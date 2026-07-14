@@ -166,6 +166,7 @@ struct QtMainMenu::Impl {
     tool_actions.clear();
     align_menu = nullptr;
     navigation_gizmo_action = nullptr;
+    material_browser_action = nullptr;
   }
 
   void prepare_rebuild() {
@@ -187,6 +188,7 @@ struct QtMainMenu::Impl {
   std::vector<QPointer<QMenu>> top_level_menus;
   QMenu *align_menu = nullptr;
   QAction *navigation_gizmo_action = nullptr;
+  QAction *material_browser_action = nullptr;
   std::vector<CommandAction> command_actions;
   std::vector<BoolSettingAction> bool_setting_actions;
   std::vector<LayoutAction> layout_actions;
@@ -501,6 +503,18 @@ struct QtMainMenu::Impl {
                            .set_navigation_gizmo_visible(visible);
                      });
     menu->addSeparator();
+    material_browser_action = menu->addAction(qtext(
+        context.localization, "ui.menu.view.material_browser",
+        "Material Browser"));
+    material_browser_action->setObjectName(
+        QStringLiteral("action_material_browser"));
+    QObject::connect(material_browser_action, &QAction::triggered,
+                     connection_context.get(), [this]() {
+                       if (context.show_material_browser) {
+                         context.show_material_browser();
+                       }
+                     });
+    menu->addSeparator();
     QMenu *panels = menu->addMenu(
         qtext(context.localization, "ui.menu.view.toolbars", "Toolbars"));
     panels->setObjectName(QStringLiteral("menu_panels"));
@@ -633,6 +647,15 @@ void QtMainMenu::refresh() {
     const QSignalBlocker blocker(impl_->navigation_gizmo_action);
     impl_->navigation_gizmo_action->setChecked(
         impl_->context.editor.preferences().navigation_gizmo_visible());
+  }
+  if (impl_->material_browser_action != nullptr) {
+    impl_->material_browser_action->setText(qtext(
+        impl_->context.localization, "ui.menu.view.material_browser",
+        "Material Browser"));
+    impl_->material_browser_action->setEnabled(
+        impl_->context.material_browser_available
+            ? impl_->context.material_browser_available()
+            : false);
   }
   if (impl_->align_menu != nullptr) {
     impl_->align_menu->menuAction()->setVisible(

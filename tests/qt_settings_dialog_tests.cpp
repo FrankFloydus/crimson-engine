@@ -575,17 +575,38 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   LocalizationService localization = loaded_localization();
   QMenuBar menu_bar;
   QtMainMenu menu;
+  int material_browser_requests = 0;
+  bool material_browser_available = false;
   menu.initialize(menu_bar,
                   QtMainMenuContext{
                       .editor = editor,
                       .modeling = session.modeling(),
                       .viewport_settings = viewport_settings,
                       .localization = localization,
+                      .show_material_browser =
+                          [&material_browser_requests]() {
+                            ++material_browser_requests;
+                          },
+                      .material_browser_available =
+                          [&material_browser_available]() {
+                            return material_browser_available;
+                          },
                   });
   auto *pivot_action =
       menu_bar.findChild<QAction *>(QStringLiteral("tool_pivot"));
   ASSERT_NE(pivot_action, nullptr);
   EXPECT_TRUE(pivot_action->text().contains(QStringLiteral("\tP")));
+  auto *material_browser_action = menu_bar.findChild<QAction *>(
+      QStringLiteral("action_material_browser"));
+  ASSERT_NE(material_browser_action, nullptr);
+  EXPECT_FALSE(material_browser_action->isEnabled());
+  material_browser_available = true;
+  menu.refresh();
+  EXPECT_TRUE(material_browser_action->isEnabled());
+  EXPECT_EQ(material_browser_action->text(),
+            QStringLiteral("Material Browser"));
+  material_browser_action->trigger();
+  EXPECT_EQ(material_browser_requests, 1);
 
   ASSERT_TRUE(editor.preferences()
                   .set_shortcut(quader_command::kToolsActivatePivot,

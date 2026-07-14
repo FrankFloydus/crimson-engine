@@ -39,9 +39,17 @@ bool same_point(QVec3 left, QVec3 right) {
   return left.x == right.x && left.y == right.y && left.z == right.z;
 }
 
-AssetId entity_material(const SceneDocument &scene, EntityId entity) {
+MaterialReference entity_material(const SceneDocument &scene,
+                                  EntityId entity) {
   const MaterialComponent *material = scene.material(entity);
-  return material != nullptr ? material->material : kInvalidAssetId;
+  return material != nullptr ? material->material : MaterialReference{};
+}
+
+MaterialAssetRevision embedded_material_revision(
+    const AssetRegistry &assets, MaterialReference material) {
+  return material.embedded()
+             ? assets.material_revision(material.embedded_asset())
+             : MaterialAssetRevision{};
 }
 
 double sanitized_grid_size(double grid_size) {
@@ -183,7 +191,7 @@ bool RadialArrayToolService::compute_session_sources_are_valid(
         mesh == nullptr || mesh->mesh != source.mesh || mesh_asset == nullptr ||
         mesh_asset->revision != source.mesh_revision ||
         entity_material(scene_, source.entity) != source.material ||
-        assets_.material_revision(source.material) !=
+        embedded_material_revision(assets_, source.material) !=
             source.material_revision ||
         !same_matrix(scene_.world_transform_matrix(source.entity),
                      source.world_transform)) {
@@ -294,7 +302,8 @@ CommandResult RadialArrayToolService::activate(double fallback_grid_size) {
         .material = entity_material(scene_, entity),
         .mesh_revision = mesh_asset->revision,
         .material_revision =
-            assets_.material_revision(entity_material(scene_, entity)),
+            embedded_material_revision(assets_,
+                                       entity_material(scene_, entity)),
         .world_transform = scene_.world_transform_matrix(entity),
         .visible_pivot_world = *visible_pivot,
     });

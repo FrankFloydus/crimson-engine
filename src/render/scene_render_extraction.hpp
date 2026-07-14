@@ -43,7 +43,9 @@ normalized_render_mesh_primitive_spans(const RenderMeshAssetSnapshot &mesh);
 coalesced_render_mesh_primitive_spans(const RenderMeshAssetSnapshot &mesh);
 [[nodiscard]] RenderMaterialBindingSnapshot
 build_render_material_binding_snapshot(const AssetRegistry &assets,
-                                       const MaterialComponent *material);
+                                       const MaterialComponent *material,
+                                       const RenderProjectMaterialResolver *
+                                           project_material_resolver = nullptr);
 [[nodiscard]] std::uint64_t render_material_binding_signature(
     const RenderMaterialBindingSnapshot &material);
 [[nodiscard]] RenderSceneSnapshot
@@ -53,10 +55,12 @@ build_render_scene_snapshot(const SceneDocument &document,
 [[nodiscard]] bool try_refresh_render_scene_snapshot_transforms(
     RenderSceneSnapshot &snapshot, const SceneDocument &document,
     const AssetRegistry &assets, std::uint64_t frame_index = 0,
-    RenderSceneBindingKey scene_binding = {});
+    RenderSceneBindingKey scene_binding = {},
+    std::uint64_t project_material_revision = 0u);
 [[nodiscard]] bool render_scene_snapshot_matches_sources(
     const RenderSceneSnapshot &snapshot, const SceneDocument &document,
-    const AssetRegistry &assets, RenderSceneBindingKey scene_binding = {});
+    const AssetRegistry &assets, RenderSceneBindingKey scene_binding = {},
+    std::uint64_t project_material_revision = 0u);
 [[nodiscard]] SceneRenderExtractionPlan build_scene_render_extraction_plan(
     const SceneDocument &document, const AssetRegistry &assets);
 [[nodiscard]] std::vector<RenderToolPreviewMeshRecord>

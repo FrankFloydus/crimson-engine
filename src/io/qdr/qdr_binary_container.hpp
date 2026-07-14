@@ -23,7 +23,7 @@ inline constexpr std::array<std::byte, 4> kQdrBinaryMagic{
     static_cast<std::byte>('Q'), static_cast<std::byte>('D'),
     static_cast<std::byte>('R'), static_cast<std::byte>('B')};
 inline constexpr std::uint16_t kQdrBinaryContainerMajor = 1;
-inline constexpr std::uint16_t kQdrBinaryContainerMinor = 0;
+inline constexpr std::uint16_t kQdrBinaryContainerMinor = 1;
 inline constexpr std::uint32_t kQdrBinaryEndianMarker = 0x01020304u;
 inline constexpr std::size_t kQdrBinaryHeaderSize = 64u;
 inline constexpr std::size_t kQdrBinaryDirectoryEntrySize = 64u;

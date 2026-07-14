@@ -1451,7 +1451,8 @@ void QtViewportPanel::refresh_cached_selection_overlay_frame(
       modeling.selection_overlay_frame(overlay_options), key);
 }
 
-std::size_t QtViewportPanel::render_viewports() {
+std::size_t
+QtViewportPanel::render_viewports(bool account_presentation_frame) {
   QDR_PROFILE_FUNCTION();
   const bool diagnostics_enabled = viewport_frame_diagnostics_enabled();
   const ViewportProbeClock::time_point render_start =
@@ -1492,7 +1493,9 @@ std::size_t QtViewportPanel::render_viewports() {
     update_focused_pane_indicator();
     return 0u;
   }
-  render_system_->begin_presentation_frame();
+  if (account_presentation_frame) {
+    render_system_->begin_presentation_frame();
+  }
   const std::vector<ViewportPanePlacement> active_placements =
       workspace_->active_pane_placements();
   const std::size_t submitted = qt_submit_viewport_render_frames(
@@ -1502,7 +1505,9 @@ std::size_t QtViewportPanel::render_viewports() {
         return workspace_->pane_visible(pane_state.id) &&
                pane_state.surface->render_frame();
       });
-  render_system_->complete_presentation_frame(submitted);
+  if (account_presentation_frame) {
+    render_system_->complete_presentation_frame(submitted);
+  }
   if (diagnostics_enabled) {
     const ViewportProbeClock::time_point now = ViewportProbeClock::now();
     g_viewport_probe.render_ms += elapsed_milliseconds(render_start, now);
@@ -2974,6 +2979,12 @@ void QtViewportPanel::process_viewport_input(
     input_router_.set_selection_mode(app_selection_mode_to_viewport(
         to_modeling_selection_mode(editor.selection().summary().mode)));
     selection_overlay_cache_.mark_dirty();
+  };
+  tool_callbacks.active_material = [&editor]() {
+    const QuaderApiResult<QuaderProjectMaterialInfo> active =
+        editor.project_assets().active_material();
+    return active.ok ? MaterialReference::project(active.value().id)
+                     : MaterialReference{};
   };
   tool_callbacks.handle_tool_command_result =
       [&](std::string_view label, const ModelingCommandResult &command) {

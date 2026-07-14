@@ -37,7 +37,7 @@ CommandResult command_result_from(const ModelingCreateBoxResult &result) {
 
 CommitBoxPreviewCommand::CommitBoxPreviewCommand(
     ModelingSessionService &modeling, SceneDocument &scene,
-    AssetRegistry &assets, std::string name, AssetId default_material)
+    AssetRegistry &assets, std::string name, MaterialReference default_material)
     : modeling_(modeling), scene_(scene), assets_(assets), name_(std::move(name)),
       default_material_(default_material) {}
 
@@ -85,8 +85,9 @@ CommandResult CommitBoxPreviewCommand::undo() {
 }
 
 CommandResult CommitBoxPreviewCommand::execute_initial() {
-  if (default_material_ == kInvalidAssetId ||
-      assets_.material(default_material_) == nullptr) {
+  if (!default_material_.valid() ||
+      (default_material_.embedded() &&
+       assets_.material(default_material_.embedded_asset()) == nullptr)) {
     return command_invalid_result(
         "Default material asset is missing from the current project");
   }
@@ -104,7 +105,7 @@ CommandResult CommitBoxPreviewCommand::execute_initial() {
     return rollback_initial(selection);
   }
 
-  if (default_material_ != kInvalidAssetId) {
+  if (default_material_.valid()) {
     std::optional<MaterialComponent> before_material;
     if (const MaterialComponent *material =
             scene_.material(committed_.object.entity)) {
@@ -131,8 +132,9 @@ CommandResult CommitBoxPreviewCommand::execute_initial() {
 }
 
 CommandResult CommitBoxPreviewCommand::redo_recorded() {
-  if (default_material_ == kInvalidAssetId ||
-      assets_.material(default_material_) == nullptr) {
+  if (!default_material_.valid() ||
+      (default_material_.embedded() &&
+       assets_.material(default_material_.embedded_asset()) == nullptr)) {
     return command_invalid_result(
         "Default material asset is missing from the current project");
   }

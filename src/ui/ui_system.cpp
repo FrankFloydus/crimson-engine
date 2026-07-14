@@ -14,6 +14,7 @@
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
+#include "platform/platform_file_dialog.hpp"
 #include "platform/window_placement.hpp"
 #include "quader_app_version.hpp"
 #include "scene/scene_document.hpp"
@@ -22,9 +23,12 @@
 #include "ui/outliner_panel.hpp"
 #include "ui/qt_command_event_filter.hpp"
 #include "ui/qt_main_window.hpp"
+#include "ui/qt_material_browser_window.hpp"
+#include "ui/qt_material_preview_surface.hpp"
 #include "ui/qt_project_home_page.hpp"
 #include "ui/qt_scene_workspace.hpp"
 #include "ui/qt_settings_dialog.hpp"
+#include "ui/qt_standard_material_editor_window.hpp"
 #include "ui/qt_tool_settings_window.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/ui_context.hpp"
@@ -33,6 +37,7 @@
 #include <QAbstractButton>
 #include <QByteArray>
 #include <QClipboard>
+#include <QColor>
 #include <QDockWidget>
 #include <QIcon>
 #include <QLabel>
@@ -48,12 +53,15 @@
 #include <QWindow>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -64,6 +72,43 @@ namespace quader {
 namespace {
 
 constexpr int kQtWindowStateVersion = 1;
+
+constexpr std::array<QuaderStandardMaterialTextureSlot, 4>
+    kMaterialTextureSlots{
+        QuaderStandardMaterialTextureSlot::Albedo,
+        QuaderStandardMaterialTextureSlot::Roughness,
+        QuaderStandardMaterialTextureSlot::Metallic,
+        QuaderStandardMaterialTextureSlot::Normal,
+};
+
+QuaderStandardMaterialTextureSlot domain_texture_slot(
+    QtStandardMaterialTextureSlot slot) {
+  return kMaterialTextureSlots[static_cast<std::size_t>(slot)];
+}
+
+MaterialPreviewMeshKind preview_mesh_kind(
+    QtStandardMaterialPreviewMesh mesh) {
+  return static_cast<MaterialPreviewMeshKind>(mesh);
+}
+
+MaterialPreviewShadingMode preview_shading_mode(
+    QtStandardMaterialPreviewShading shading) {
+  return static_cast<MaterialPreviewShadingMode>(shading);
+}
+
+std::optional<ProjectRelativePath> project_relative_dialog_path(
+    const std::filesystem::path &selected,
+    const std::filesystem::path &project_root) {
+  if (selected.empty() || project_root.empty()) {
+    return std::nullopt;
+  }
+  const std::filesystem::path relative =
+      selected.lexically_normal().lexically_relative(
+          project_root.lexically_normal());
+  ProjectIoResult<ProjectRelativePath> parsed =
+      ProjectRelativePath::parse(relative);
+  return parsed.ok() ? std::optional(parsed.take_value()) : std::nullopt;
+}
 
 QuaderApiVoidResult runtime_status(bool changed, std::string message = {}) {
   return {
@@ -263,6 +308,114 @@ bool UISystem::initialize(RenderSystem &render_system,
   create_docks();
 
   settings_dialog_ = new QtSettingsDialog(main_window_.get());
+  material_browser_window_ =
+      new QtMaterialBrowserWindow(main_window_.get());
+  material_browser_window_->set_presentation_state_changed_callback(
+      [this]() { save_auxiliary_window_state(); });
+  material_browser_window_->set_activate_material_callback(
+      [this](QString stable_id) {
+        if (editor_ == nullptr) {
+          return;
+        }
+        const std::optional<ProjectAssetId> id =
+            ProjectAssetId::parse(stable_id.toStdString());
+        if (!id.has_value()) {
+          return;
+        }
+        const QuaderApiVoidResult result =
+            editor_->project_assets().set_active_material(*id);
+        present_lifecycle_result(result);
+        refresh_project_workspace();
+      });
+  material_browser_window_->set_open_material_callback(
+      [this](QString stable_id) {
+        open_standard_material(stable_id.toStdString());
+      });
+  material_browser_window_->hide();
+  standard_material_editor_window_ =
+      new QtStandardMaterialEditorWindow(main_window_.get());
+  material_preview_surface_ = new QtMaterialPreviewSurface();
+  QWidget *preview_container = QWidget::createWindowContainer(
+      material_preview_surface_, standard_material_editor_window_);
+  preview_container->setObjectName(
+      QStringLiteral("standardMaterialEditor.previewSurfaceContainer"));
+  preview_container->setFocusPolicy(Qt::StrongFocus);
+  standard_material_editor_window_->install_preview_widget(preview_container);
+  if (!material_preview_surface_->initialize(render_system)) {
+    LOG_ERROR("Unable to initialize the Standard Material preview surface");
+    standard_material_editor_window_->install_preview_widget(nullptr);
+    material_preview_surface_ = nullptr;
+  }
+  standard_material_editor_window_->set_file_action_callback(
+      [this](QtStandardMaterialEditorFileAction action) {
+        handle_standard_material_file_action(action);
+      });
+  standard_material_editor_window_->set_name_edited_callback(
+      [this](QString name) {
+        if (editor_ == nullptr) {
+          return;
+        }
+        const QuaderApiVoidResult result =
+            editor_->standard_material_documents().set_name(
+                name.toStdString());
+        present_lifecycle_result(result);
+        refresh_standard_material_editor();
+      });
+  standard_material_editor_window_->set_albedo_edited_callback(
+      [this](QColor color) {
+        if (editor_ == nullptr) {
+          return;
+        }
+        const QuaderApiVoidResult result =
+            editor_->standard_material_documents().set_base_color(
+                {static_cast<float>(color.redF()),
+                 static_cast<float>(color.greenF()),
+                 static_cast<float>(color.blueF())});
+        present_lifecycle_result(result);
+        refresh_standard_material_editor();
+      });
+  standard_material_editor_window_->set_scalar_edited_callback(
+      [this](QtStandardMaterialScalar scalar, double value) {
+        handle_standard_material_scalar(scalar, value);
+      });
+  standard_material_editor_window_->set_normal_convention_edited_callback(
+      [this](bool direct_x) {
+        if (editor_ == nullptr) {
+          return;
+        }
+        const QuaderApiVoidResult result =
+            editor_->standard_material_documents().set_normal_convention(
+                direct_x ? QuaderNormalMapConvention::DirectX
+                         : QuaderNormalMapConvention::OpenGL);
+        present_lifecycle_result(result);
+        refresh_standard_material_editor();
+      });
+  standard_material_editor_window_->set_texture_action_callback(
+      [this](QtStandardMaterialTextureSlot slot,
+             QtStandardMaterialTextureAction action) {
+        handle_standard_material_texture(slot, action);
+      });
+  standard_material_editor_window_
+      ->set_presentation_state_changed_callback(
+          [this]() {
+            if (material_preview_surface_ != nullptr) {
+              (void)material_preview_surface_->set_preview_mesh(
+                  preview_mesh_kind(
+                      standard_material_editor_window_->preview_mesh()));
+              (void)material_preview_surface_->set_preview_shading(
+                  preview_shading_mode(
+                      standard_material_editor_window_->preview_shading()));
+            }
+            save_auxiliary_window_state();
+          });
+  standard_material_editor_window_->set_preview_reset_callback([this]() {
+    if (material_preview_surface_ != nullptr) {
+      (void)material_preview_surface_->reset_preview();
+    }
+  });
+  standard_material_editor_window_->set_close_request_handler(
+      [this]() { return resolve_standard_material_document(true); });
+  standard_material_editor_window_->hide();
   tool_settings_window_ = new QtToolSettingsWindow(main_window_.get());
   tool_settings_window_->set_localization(localization_);
   tool_settings_window_->hide();
@@ -333,6 +486,12 @@ void UISystem::install_runtime_hooks(
               [this]() {
                 (void)save_viewport_settings();
                 synchronize_settings_surfaces(true);
+              },
+          .show_material_browser = [this]() { show_material_browser(); },
+          .material_browser_available =
+              [this]() {
+                return !home_visible_ && editor_ != nullptr &&
+                       editor_->project().has_project();
               },
       });
 
@@ -479,6 +638,11 @@ void UISystem::install_runtime_hooks(
         return viewport_panel_ != nullptr ? viewport_panel_->tool_state()
                                           : ViewportToolState{};
       });
+  command_event_filter_->set_command_input_owner_provider([this]() {
+    return standard_material_editor_window_ != nullptr &&
+           standard_material_editor_window_->isVisible() &&
+           standard_material_editor_window_->isActiveWindow();
+  });
   if (QCoreApplication *application = QApplication::instance()) {
     application->installEventFilter(command_event_filter_.get());
   }
@@ -527,6 +691,87 @@ void UISystem::refresh_project_workspace() {
     (void)scene_workspace_->set_scene_tabs(std::move(tabs), active);
   }
 
+  if (editor_->project().has_project() &&
+      material_browser_window_ != nullptr) {
+    const QuaderApiResult<std::vector<QuaderProjectMaterialInfo>> materials =
+        editor_->project_assets().materials();
+    const QuaderApiResult<QuaderProjectMaterialInfo> active_material =
+        editor_->project_assets().active_material();
+    if (materials.ok && active_material.ok) {
+      std::uint64_t signature = 1469598103934665603ull;
+      const auto mix = [&signature](std::uint64_t value) {
+        signature ^= value;
+        signature *= 1099511628211ull;
+      };
+      const QuaderProjectMetadata project = editor_->project().metadata();
+      const std::string project_identity =
+          project.uuid + '\n' +
+          editor_->project().manifest_path().generic_string();
+      for (const char character : project_identity) {
+        mix(static_cast<unsigned char>(character));
+      }
+      for (const QuaderProjectMaterialInfo &material : materials.value()) {
+        for (const char character : material.id.str()) {
+          mix(static_cast<unsigned char>(character));
+        }
+        mix(static_cast<std::uint64_t>(material.kind));
+        mix(material.content_revision);
+        mix(static_cast<std::uint64_t>(material.qmat_size_bytes));
+      }
+      const std::string active_id(active_material.value().id.str());
+      if (signature != material_browser_catalog_signature_) {
+        std::vector<QtMaterialBrowserItem> items;
+        items.reserve(materials.value().size());
+        for (const QuaderProjectMaterialInfo &material : materials.value()) {
+          QByteArray preview_bytes;
+          std::uint64_t preview_revision = material.content_revision;
+          const QuaderApiResult<QuaderProjectMaterialPreview> preview =
+              editor_->project_assets().material_preview(material.id);
+          if (preview.ok && !preview.value().encoded_bytes.empty()) {
+            preview_revision = preview.value().content_revision;
+            preview_bytes = QByteArray(
+                reinterpret_cast<const char *>(
+                    preview.value().encoded_bytes.data()),
+                static_cast<qsizetype>(
+                    preview.value().encoded_bytes.size()));
+          }
+          items.push_back(QtMaterialBrowserItem{
+              .stable_id = QString::fromStdString(
+                  std::string(material.id.str())),
+              .name = QString::fromStdString(material.name),
+              .project_relative_path =
+                  QString::fromStdString(material.project_relative_path),
+              .type_display_name = QString::fromStdString(
+                  localization_.text(
+                      material.kind == QuaderProjectMaterialKind::Standard
+                          ? "ui.material_browser.standard_material_type"
+                          : "ui.material_browser.graph_material_type",
+                      material.kind == QuaderProjectMaterialKind::Standard
+                          ? "Standard Material"
+                          : "Graph Material")),
+              .qmat_size_bytes =
+                  static_cast<qint64>(material.qmat_size_bytes),
+              .encoded_albedo = std::move(preview_bytes),
+              .fallback_color = QColor::fromRgbF(
+                  material.base_color[0], material.base_color[1],
+                  material.base_color[2]),
+              .content_revision = preview_revision,
+          });
+        }
+        material_browser_window_->set_materials(
+            std::move(items), QString::fromStdString(active_id));
+        material_browser_catalog_signature_ = signature;
+        material_browser_active_id_ = active_id;
+      } else if (active_id != material_browser_active_id_) {
+        material_browser_window_->set_active_material(
+            QString::fromStdString(active_id));
+        material_browser_active_id_ = active_id;
+      }
+    }
+  }
+
+  refresh_standard_material_editor();
+
   if (editor_->project().has_project()) {
     show_workspace();
   } else {
@@ -535,7 +780,18 @@ void UISystem::refresh_project_workspace() {
 }
 
 void UISystem::show_home() {
+  const bool presentation_changed = !home_visible_;
   home_visible_ = true;
+  if (presentation_changed && material_browser_window_ != nullptr) {
+    material_browser_window_->hide();
+    material_browser_window_->clear_materials();
+    material_browser_catalog_signature_ = 0;
+    material_browser_active_id_.clear();
+  }
+  if (standard_material_editor_window_ != nullptr) {
+    standard_material_editor_window_->hide();
+    standard_material_editor_window_->clear_document();
+  }
   if (central_stack_ != nullptr && project_home_page_ != nullptr) {
     central_stack_->setCurrentWidget(project_home_page_);
   }
@@ -545,9 +801,13 @@ void UISystem::show_home() {
       dock->hide();
     }
   }
+  if (presentation_changed && main_menu_ != nullptr) {
+    main_menu_->refresh();
+  }
 }
 
 void UISystem::show_workspace() {
+  const bool presentation_changed = home_visible_;
   if (!viewport_initialized_ && viewport_panel_ != nullptr &&
       render_system_ != nullptr) {
     if (!viewport_panel_->initialize(*render_system_)) {
@@ -564,6 +824,9 @@ void UISystem::show_workspace() {
     central_stack_->setCurrentWidget(scene_workspace_);
   }
   panels_.apply_settings(settings_);
+  if (presentation_changed && main_menu_ != nullptr) {
+    main_menu_->refresh();
+  }
 }
 
 QuaderDirtyProjectDecision
@@ -642,9 +905,18 @@ UISystem::confirm_dirty_scene(const QuaderSceneDocumentInfo &scene,
   return QuaderDirtySceneDecision::Cancel;
 }
 
+bool UISystem::prepare_standard_material_project_transition(
+    std::string_view action_id) {
+  (void)action_id;
+  return resolve_standard_material_document(true);
+}
+
 bool UISystem::allow_main_window_close() {
   if (editor_ == nullptr || !editor_->project().has_project()) {
     return true;
+  }
+  if (!resolve_standard_material_document(true)) {
+    return false;
   }
   const QuaderApiVoidResult closed = editor_->project().close();
   return closed.ok() && !editor_->project().has_project();
@@ -678,6 +950,9 @@ void UISystem::shutdown() {
   if (viewport_panel_ != nullptr) {
     viewport_panel_->shutdown();
   }
+  if (material_preview_surface_ != nullptr) {
+    material_preview_surface_->shutdown();
+  }
   panels_.set_visibility_changed_callback({});
   main_menu_.reset();
   main_window_.reset();
@@ -692,6 +967,9 @@ void UISystem::shutdown() {
   inspector_panel_ = nullptr;
   console_panel_ = nullptr;
   settings_dialog_ = nullptr;
+  material_browser_window_ = nullptr;
+  material_preview_surface_ = nullptr;
+  standard_material_editor_window_ = nullptr;
   tool_settings_window_ = nullptr;
   status_message_ = nullptr;
   status_version_ = nullptr;
@@ -813,14 +1091,39 @@ void UISystem::prepare_viewports(
 }
 
 std::size_t UISystem::render_viewports() {
-  return !home_visible_ && viewport_panel_ != nullptr
-             ? viewport_panel_->render_viewports()
-             : 0u;
+  return render_surfaces(true);
+}
+
+std::size_t UISystem::render_surfaces(bool render_scene_viewports) {
+  if (render_system_ == nullptr) {
+    return 0u;
+  }
+  render_system_->begin_presentation_frame();
+  std::size_t submitted = 0u;
+  if (render_scene_viewports && !home_visible_ && viewport_panel_ != nullptr) {
+    submitted += viewport_panel_->render_viewports(false);
+  }
+  if (material_preview_surface_ != nullptr &&
+      standard_material_editor_window_ != nullptr &&
+      standard_material_editor_window_->isVisible() &&
+      material_preview_surface_->render_frame()) {
+    ++submitted;
+  }
+  render_system_->complete_presentation_frame(submitted);
+  return submitted;
 }
 
 bool UISystem::needs_continuous_rendering() const {
-  return !home_visible_ && viewport_panel_ != nullptr &&
-         viewport_panel_->needs_continuous_rendering();
+  const bool scene_continuous =
+      !home_visible_ && viewport_panel_ != nullptr &&
+      viewport_panel_->needs_continuous_rendering();
+  const bool preview_visible = material_preview_surface_ != nullptr &&
+                               standard_material_editor_window_ != nullptr &&
+                               standard_material_editor_window_->isVisible() &&
+                               !standard_material_editor_window_
+                                    ->isMinimized() &&
+                               material_preview_surface_->isExposed();
+  return scene_continuous || preview_visible;
 }
 
 void *UISystem::native_window_handle() const {
@@ -936,6 +1239,38 @@ void UISystem::restore_window_state() {
       !auxiliary_window_state_.tool_settings_geometry.isEmpty()) {
     (void)tool_settings_window_->restoreGeometry(
         auxiliary_window_state_.tool_settings_geometry);
+  }
+  if (material_browser_window_ != nullptr) {
+    if (!auxiliary_window_state_.material_browser_geometry.isEmpty()) {
+      (void)material_browser_window_->restoreGeometry(
+          auxiliary_window_state_.material_browser_geometry);
+    }
+    material_browser_window_->restore_presentation_state(
+        auxiliary_window_state_.material_browser_grid_mode
+            ? QtMaterialBrowserViewMode::Grid
+            : QtMaterialBrowserViewMode::List,
+        auxiliary_window_state_.material_browser_tile_size);
+  }
+  if (standard_material_editor_window_ != nullptr) {
+    if (!auxiliary_window_state_.standard_material_editor_geometry.isEmpty()) {
+      (void)standard_material_editor_window_->restoreGeometry(
+          auxiliary_window_state_.standard_material_editor_geometry);
+    }
+    const int preview_mesh = std::clamp(
+        auxiliary_window_state_.standard_material_preview_mesh, 0, 4);
+    const int preview_shading = std::clamp(
+        auxiliary_window_state_.standard_material_preview_shading, 0, 2);
+    standard_material_editor_window_->restore_presentation_state(
+        static_cast<QtStandardMaterialPreviewMesh>(preview_mesh),
+        static_cast<QtStandardMaterialPreviewShading>(preview_shading));
+    if (material_preview_surface_ != nullptr) {
+      (void)material_preview_surface_->set_preview_mesh(
+          preview_mesh_kind(
+              standard_material_editor_window_->preview_mesh()));
+      (void)material_preview_surface_->set_preview_shading(
+          preview_shading_mode(
+              standard_material_editor_window_->preview_shading()));
+    }
   }
 }
 
@@ -1108,6 +1443,24 @@ void UISystem::save_auxiliary_window_state() {
     auxiliary_window_state_.tool_settings_geometry =
         tool_settings_window_->saveGeometry();
   }
+  if (material_browser_window_ != nullptr) {
+    auxiliary_window_state_.material_browser_geometry =
+        material_browser_window_->saveGeometry();
+    auxiliary_window_state_.material_browser_grid_mode =
+        material_browser_window_->view_mode() ==
+        QtMaterialBrowserViewMode::Grid;
+    auxiliary_window_state_.material_browser_tile_size =
+        material_browser_window_->tile_size();
+  }
+  if (standard_material_editor_window_ != nullptr) {
+    auxiliary_window_state_.standard_material_editor_geometry =
+        standard_material_editor_window_->saveGeometry();
+    auxiliary_window_state_.standard_material_preview_mesh =
+        static_cast<int>(standard_material_editor_window_->preview_mesh());
+    auxiliary_window_state_.standard_material_preview_shading =
+        static_cast<int>(
+            standard_material_editor_window_->preview_shading());
+  }
   (void)auxiliary_window_state_.save(
       settings_paths_.qt_auxiliary_window_state_file);
 }
@@ -1173,6 +1526,462 @@ void UISystem::present_lifecycle_result(const QuaderApiStatus &result) {
               : result.message));
 }
 
+void UISystem::present_standard_material_error(std::string_view message) {
+  if (message.empty()) {
+    return;
+  }
+  QMessageBox::warning(
+      standard_material_editor_window_ != nullptr
+          ? static_cast<QWidget *>(standard_material_editor_window_)
+          : static_cast<QWidget *>(main_window_.get()),
+      QString::fromStdString(localization_.text(
+          "ui.standard_material_editor.error_title",
+          "Standard Material Operation Failed")),
+      QString::fromUtf8(message.data(), static_cast<qsizetype>(message.size())));
+}
+
+void UISystem::refresh_standard_material_editor() {
+  if (standard_material_editor_window_ == nullptr) {
+    return;
+  }
+  if (editor_ == nullptr || !editor_->project().has_project()) {
+    standard_material_editor_window_->clear_document();
+    standard_material_editor_window_->hide();
+    return;
+  }
+
+  const QuaderApiResult<QuaderStandardMaterialDocumentInfo> current =
+      editor_->standard_material_documents().current();
+  if (!current.ok) {
+    if (standard_material_editor_window_->has_document()) {
+      standard_material_editor_window_->clear_document();
+      standard_material_editor_window_->hide();
+    }
+    return;
+  }
+
+  const QuaderStandardMaterialDocumentInfo &source = current.value();
+  QtStandardMaterialEditorDocument document{
+      .stable_id = QString::fromStdString(std::string(source.id.str())),
+      .name = QString::fromStdString(source.name),
+      .project_relative_path =
+          source.path.has_value()
+              ? QString::fromStdString(source.path->portable_string())
+              : QString{},
+      .albedo = QColor::fromRgbF(source.material.base_color[0],
+                                 source.material.base_color[1],
+                                 source.material.base_color[2]),
+      .roughness = source.material.roughness,
+      .metallic = source.material.metallic,
+      .normal_strength = source.material.normal_strength,
+      .direct_x_normal = source.material.normal_convention ==
+                         QuaderNormalMapConvention::DirectX,
+      .dirty = source.dirty,
+  };
+
+  for (std::size_t index = 0u; index < kMaterialTextureSlots.size(); ++index) {
+    QtStandardMaterialTexturePresentation &target = document.textures[index];
+    if (source.pending_texture_sources[index].has_value()) {
+      const std::filesystem::path &pending =
+          *source.pending_texture_sources[index];
+      std::string label = localization_.text(
+          "ui.standard_material_editor.texture.pending",
+          "Pending: {name}");
+      constexpr std::string_view kNameToken = "{name}";
+      if (const std::size_t token = label.find(kNameToken);
+          token != std::string::npos) {
+        label.replace(token, kNameToken.size(),
+                      pending.filename().string());
+      }
+      target.project_relative_path = QString::fromStdString(label);
+      target.diagnostic = QString::fromStdWString(pending.wstring());
+      continue;
+    }
+    const std::optional<QuaderStandardMaterialTextureReference> *saved =
+        source.material.texture(kMaterialTextureSlots[index]);
+    if (saved != nullptr && saved->has_value()) {
+      target.project_relative_path =
+          QString::fromStdString((*saved)->project_relative_path);
+    }
+  }
+  if (material_preview_surface_ != nullptr) {
+    const QuaderApiResult<QuaderStandardMaterialPreviewInfo> preview =
+        editor_->standard_material_documents().preview();
+    StandardMaterialPreviewSnapshot snapshot{
+        .project_material_id = source.id,
+        .kind = RenderMaterialEvaluationKind::Standard,
+        .identity_revision =
+            render_project_asset_identity_revision(source.id) ^
+            (static_cast<std::uint64_t>(source.session_id.generation()) <<
+             32u),
+        .content_revision = source.draft_revision,
+        .payload = RenderStandardMaterialEvaluationSnapshot{
+            .base_color = {source.material.base_color[0],
+                           source.material.base_color[1],
+                           source.material.base_color[2]},
+            .roughness = source.material.roughness,
+            .metallic = source.material.metallic,
+            .normal_strength = source.material.normal_strength,
+            .directx_normal = source.material.normal_convention ==
+                              QuaderNormalMapConvention::DirectX,
+        },
+    };
+    RenderStandardMaterialEvaluationSnapshot *preview_standard =
+        snapshot.standard_material();
+    if (preview_standard != nullptr && preview.ok()) {
+      for (std::size_t index = 0u; index < preview.value().textures.size();
+           ++index) {
+        if (!preview.value().texture_diagnostics[index].empty()) {
+          if (!document.status_message.isEmpty()) {
+            document.status_message += QStringLiteral("; ");
+          }
+          document.status_message += QString::fromStdString(
+              preview.value().texture_diagnostics[index]);
+        }
+        if (!preview.value().textures[index].has_value()) {
+          continue;
+        }
+        const QuaderStandardMaterialPreviewTexture &texture =
+            *preview.value().textures[index];
+        preview_standard->textures[index] = MaterialPreviewTextureSnapshot{
+            .project_texture_id = texture.id.value_or(ProjectAssetId{}),
+            .identity_revision =
+                texture.id.has_value()
+                    ? render_project_asset_identity_revision(*texture.id)
+                    : snapshot.identity_revision ^
+                          (0x9e3779b97f4a7c15ull + index),
+            .content_revision = texture.content_revision,
+            .color_space = texture.color_space ==
+                                   QuaderProjectTextureColorSpace::Srgb
+                               ? TextureColorSpace::Srgb
+                               : TextureColorSpace::Linear,
+            .decoded_rgba8 = texture.rgba8,
+            .width = texture.width,
+            .height = texture.height,
+        };
+      }
+    }
+    material_preview_surface_->set_material(std::move(snapshot));
+  }
+  standard_material_editor_window_->set_document(std::move(document));
+}
+
+void UISystem::open_standard_material(std::string_view stable_id) {
+  if (editor_ == nullptr || standard_material_editor_window_ == nullptr ||
+      !editor_->project().has_project()) {
+    return;
+  }
+  const std::optional<ProjectAssetId> id = ProjectAssetId::parse(stable_id);
+  if (!id.has_value()) {
+    present_standard_material_error("Material identity is invalid.");
+    return;
+  }
+
+  const QuaderApiResult<std::vector<QuaderProjectMaterialInfo>> materials =
+      editor_->project_assets().materials();
+  if (!materials.ok) {
+    present_standard_material_error(materials.message);
+    return;
+  }
+  const auto found = std::find_if(
+      materials.value().begin(), materials.value().end(),
+      [&id](const QuaderProjectMaterialInfo &material) {
+        return material.id == *id;
+      });
+  if (found == materials.value().end()) {
+    present_standard_material_error("Project material is unavailable.");
+    return;
+  }
+  const std::map<QuaderProjectMaterialKind, std::function<void()>>
+      editor_registry{
+      {QuaderProjectMaterialKind::Standard,
+       [this, material_id = *id]() {
+         open_standard_material_document(material_id);
+       }},
+  };
+  const auto editor = editor_registry.find(found->kind);
+  if (editor == editor_registry.end()) {
+    present_standard_material_error(
+        localization_.text("ui.standard_material_editor.graph_unavailable",
+                           "Graph Material editing is not available yet."));
+    return;
+  }
+  editor->second();
+}
+
+void UISystem::open_standard_material_document(ProjectAssetId id) {
+  const QuaderApiResult<QuaderStandardMaterialDocumentInfo> current =
+      editor_->standard_material_documents().current();
+  if (current.ok && current.value().id == id) {
+    refresh_standard_material_editor();
+    standard_material_editor_window_->show();
+    standard_material_editor_window_->raise();
+    standard_material_editor_window_->activateWindow();
+    return;
+  }
+  if (!resolve_standard_material_document(false)) {
+    return;
+  }
+  const QuaderApiResult<QuaderStandardMaterialDocumentInfo> opened =
+      editor_->standard_material_documents().open(id);
+  present_lifecycle_result(opened);
+  if (opened.ok && material_preview_surface_ != nullptr) {
+    (void)material_preview_surface_->reset_preview();
+  }
+  refresh_standard_material_editor();
+  if (!opened.ok) {
+    return;
+  }
+  standard_material_editor_window_->show();
+  standard_material_editor_window_->raise();
+  standard_material_editor_window_->activateWindow();
+}
+
+void UISystem::open_standard_material_from_dialog() {
+  if (editor_ == nullptr || !editor_->project().has_project()) {
+    return;
+  }
+  PlatformFileDialogOptions options;
+  options.owner_window_handle = native_window_handle();
+  options.initial_directory = editor_->project().root() / "Materials";
+  const std::optional<std::filesystem::path> selected =
+      platform_open_material_file_dialog(options);
+  if (!selected.has_value()) {
+    return;
+  }
+  const std::optional<ProjectRelativePath> relative =
+      project_relative_dialog_path(*selected, editor_->project().root());
+  if (!relative.has_value()) {
+    present_standard_material_error(localization_.text(
+        "ui.standard_material_editor.path_outside_project",
+        "Choose a material inside the current project."));
+    return;
+  }
+  const QuaderApiResult<std::vector<QuaderProjectMaterialInfo>> materials =
+      editor_->project_assets().materials();
+  if (!materials.ok) {
+    present_standard_material_error(materials.message);
+    return;
+  }
+  const std::string portable_path = relative->portable_string();
+  const auto found = std::find_if(
+      materials.value().begin(), materials.value().end(),
+      [&portable_path](const QuaderProjectMaterialInfo &material) {
+        return material.project_relative_path == portable_path;
+      });
+  if (found == materials.value().end()) {
+    present_standard_material_error(localization_.text(
+        "ui.standard_material_editor.not_in_catalog",
+        "The selected QMAT is not present in the project material catalog."));
+    return;
+  }
+  open_standard_material(found->id.str());
+}
+
+void UISystem::new_standard_material() {
+  if (editor_ == nullptr || standard_material_editor_window_ == nullptr ||
+      !editor_->project().has_project() ||
+      !resolve_standard_material_document(false)) {
+    return;
+  }
+  const QuaderApiResult<QuaderStandardMaterialDocumentInfo> created =
+      editor_->standard_material_documents().new_material();
+  present_lifecycle_result(created);
+  if (created.ok && material_preview_surface_ != nullptr) {
+    (void)material_preview_surface_->reset_preview();
+  }
+  refresh_standard_material_editor();
+  if (created.ok) {
+    standard_material_editor_window_->show();
+    standard_material_editor_window_->raise();
+    standard_material_editor_window_->activateWindow();
+  }
+}
+
+bool UISystem::save_standard_material(bool save_as) {
+  if (editor_ == nullptr || !editor_->project().has_project()) {
+    return false;
+  }
+  const QuaderApiResult<QuaderStandardMaterialDocumentInfo> current =
+      editor_->standard_material_documents().current();
+  if (!current.ok) {
+    present_standard_material_error(current.message);
+    return false;
+  }
+
+  QuaderApiVoidResult result;
+  if (!save_as && current.value().path.has_value()) {
+    result = editor_->standard_material_documents().save();
+  } else {
+    PlatformFileDialogOptions options;
+    options.owner_window_handle = native_window_handle();
+    options.initial_directory = editor_->project().root() / "Materials";
+    if (current.value().path.has_value()) {
+      const std::filesystem::path filename =
+          current.value().path->native_path().filename();
+      options.initial_file_name =
+          filename.stem().string() + "_copy" + filename.extension().string();
+      options.initial_directory =
+          editor_->project().root() /
+          current.value().path->native_path().parent_path();
+    } else {
+      options.initial_file_name = "untitled_material.qmat";
+    }
+    const std::optional<std::filesystem::path> selected =
+        platform_save_material_file_dialog(options);
+    if (!selected.has_value()) {
+      return false;
+    }
+    const std::optional<ProjectRelativePath> relative =
+        project_relative_dialog_path(*selected, editor_->project().root());
+    if (!relative.has_value()) {
+      present_standard_material_error(localization_.text(
+          "ui.standard_material_editor.path_outside_project",
+          "Choose a material inside the current project."));
+      return false;
+    }
+    result = editor_->standard_material_documents().save_as(*relative);
+  }
+  present_lifecycle_result(result);
+  refresh_project_workspace();
+  return result.ok;
+}
+
+bool UISystem::resolve_standard_material_document(bool close_after) {
+  if (editor_ == nullptr || !editor_->project().has_project()) {
+    return true;
+  }
+  const QuaderApiResult<QuaderStandardMaterialDocumentInfo> current =
+      editor_->standard_material_documents().current();
+  if (!current.ok) {
+    return true;
+  }
+
+  bool discard = false;
+  if (current.value().dirty) {
+    std::string message = localization_.text(
+        "ui.standard_material_editor.unsaved_message",
+        "{name} has unsaved changes. Save it?");
+    constexpr std::string_view kNameToken = "{name}";
+    if (const std::size_t token = message.find(kNameToken);
+        token != std::string::npos) {
+      message.replace(token, kNameToken.size(), current.value().name);
+    }
+    QMessageBox confirmation(
+        QMessageBox::Warning,
+        QString::fromStdString(localization_.text(
+            "ui.standard_material_editor.unsaved_title",
+            "Unsaved Standard Material")),
+        QString::fromStdString(message), QMessageBox::NoButton,
+        standard_material_editor_window_ != nullptr
+            ? static_cast<QWidget *>(standard_material_editor_window_)
+            : static_cast<QWidget *>(main_window_.get()));
+    confirmation.setObjectName(
+        QStringLiteral("standard_material_unsaved_confirmation"));
+    confirmation.setWindowModality(Qt::WindowModal);
+    QPushButton *save = confirmation.addButton(
+        QString::fromStdString(localization_.text(
+            "ui.standard_material_editor.unsaved_save", "Save")),
+        QMessageBox::AcceptRole);
+    QPushButton *discard_button = confirmation.addButton(
+        QString::fromStdString(localization_.text(
+            "ui.standard_material_editor.unsaved_discard", "Discard")),
+        QMessageBox::DestructiveRole);
+    QPushButton *cancel = confirmation.addButton(
+        QString::fromStdString(localization_.text(
+            "ui.standard_material_editor.unsaved_cancel", "Cancel")),
+        QMessageBox::RejectRole);
+    confirmation.setEscapeButton(cancel);
+    confirmation.exec();
+    if (confirmation.clickedButton() == save) {
+      if (!save_standard_material(false)) {
+        return false;
+      }
+    } else if (confirmation.clickedButton() == discard_button) {
+      discard = true;
+    } else {
+      return false;
+    }
+  }
+
+  if (discard || close_after) {
+    const QuaderApiVoidResult closed =
+        editor_->standard_material_documents().close(discard);
+    present_lifecycle_result(closed);
+    refresh_standard_material_editor();
+    return closed.ok;
+  }
+  return true;
+}
+
+void UISystem::handle_standard_material_file_action(
+    QtStandardMaterialEditorFileAction action) {
+  switch (action) {
+  case QtStandardMaterialEditorFileAction::New:
+    new_standard_material();
+    return;
+  case QtStandardMaterialEditorFileAction::Open:
+    open_standard_material_from_dialog();
+    return;
+  case QtStandardMaterialEditorFileAction::Save:
+    (void)save_standard_material(false);
+    return;
+  case QtStandardMaterialEditorFileAction::SaveAs:
+    (void)save_standard_material(true);
+    return;
+  }
+}
+
+void UISystem::handle_standard_material_scalar(
+    QtStandardMaterialScalar scalar, double value) {
+  if (editor_ == nullptr) {
+    return;
+  }
+  QuaderApiVoidResult result;
+  switch (scalar) {
+  case QtStandardMaterialScalar::Roughness:
+    result = editor_->standard_material_documents().set_roughness(
+        static_cast<float>(value));
+    break;
+  case QtStandardMaterialScalar::Metallic:
+    result = editor_->standard_material_documents().set_metallic(
+        static_cast<float>(value));
+    break;
+  case QtStandardMaterialScalar::NormalStrength:
+    result = editor_->standard_material_documents().set_normal_strength(
+        static_cast<float>(value));
+    break;
+  }
+  present_lifecycle_result(result);
+  refresh_standard_material_editor();
+}
+
+void UISystem::handle_standard_material_texture(
+    QtStandardMaterialTextureSlot slot,
+    QtStandardMaterialTextureAction action) {
+  if (editor_ == nullptr || !editor_->project().has_project()) {
+    return;
+  }
+  QuaderApiVoidResult result;
+  if (action == QtStandardMaterialTextureAction::Clear) {
+    result = editor_->standard_material_documents().clear_texture(
+        domain_texture_slot(slot));
+  } else {
+    PlatformFileDialogOptions options;
+    options.owner_window_handle = native_window_handle();
+    options.initial_directory = editor_->project().root() / "Textures";
+    const std::optional<std::filesystem::path> selected =
+        platform_open_texture_file_dialog(options);
+    if (!selected.has_value()) {
+      return;
+    }
+    result = editor_->standard_material_documents().import_texture(
+        domain_texture_slot(slot), *selected);
+  }
+  present_lifecycle_result(result);
+  refresh_standard_material_editor();
+}
+
 void UISystem::refresh_localized_chrome() {
   const auto text = [this](std::string_view key, std::string_view fallback) {
     return QString::fromStdString(localization_.text(key, fallback));
@@ -1219,6 +2028,122 @@ void UISystem::refresh_localized_chrome() {
             "Create a new scene or open one from this project."),
     });
   }
+  if (material_browser_window_ != nullptr) {
+    material_browser_window_->set_labels(QtMaterialBrowserLabels{
+        .window_title =
+            text("ui.material_browser.title", "Material Browser"),
+        .search_placeholder = text("ui.material_browser.search",
+                                   "Search materials"),
+        .grid = text("ui.material_browser.grid", "Grid"),
+        .list = text("ui.material_browser.list", "List"),
+        .tile_size =
+            text("ui.material_browser.tile_size", "Preview size"),
+        .name_column = text("ui.material_browser.name", "Name"),
+        .type_column = text("ui.material_browser.type", "Type"),
+        .size_column = text("ui.material_browser.size", "Size"),
+        .material_type = text(
+            "ui.material_browser.standard_material_type",
+            "Standard Material"),
+        .empty_catalog = text("ui.material_browser.empty",
+                              "No materials in this project"),
+        .no_results = text("ui.material_browser.no_results",
+                           "No materials match this search"),
+    });
+    material_browser_catalog_signature_ = 0u;
+  }
+  if (standard_material_editor_window_ != nullptr) {
+    standard_material_editor_window_->set_labels(
+        QtStandardMaterialEditorLabels{
+            .window_title = text("ui.standard_material_editor.title",
+                                 "Standard Material Editor"),
+            .file_menu = text("ui.standard_material_editor.file", "File"),
+            .new_material =
+                text("ui.standard_material_editor.file.new", "New"),
+            .open_material = text("ui.standard_material_editor.file.open",
+                                  "Open..."),
+            .save_material =
+                text("ui.standard_material_editor.file.save", "Save"),
+            .save_material_as = text(
+                "ui.standard_material_editor.file.save_as", "Save As..."),
+            .close_window =
+                text("ui.standard_material_editor.file.close", "Close"),
+            .view_menu = text("ui.standard_material_editor.view", "View"),
+            .preview_mesh_menu = text(
+                "ui.standard_material_editor.view.preview_mesh",
+                "Preview Mesh"),
+            .reset_preview = text(
+                "ui.standard_material_editor.view.reset_preview",
+                "Reset Preview"),
+            .sphere = text("ui.standard_material_editor.mesh.sphere",
+                           "Sphere"),
+            .box = text("ui.standard_material_editor.mesh.box", "Box"),
+            .rounded_box = text(
+                "ui.standard_material_editor.mesh.rounded_box",
+                "Rounded Box"),
+            .cylinder = text("ui.standard_material_editor.mesh.cylinder",
+                             "Cylinder"),
+            .plane =
+                text("ui.standard_material_editor.mesh.plane", "Plane"),
+            .wireframe = text(
+                "ui.standard_material_editor.shading.wireframe",
+                "Wireframe"),
+            .shaded = text("ui.standard_material_editor.shading.shaded",
+                           "Shaded"),
+            .rendered = text(
+                "ui.standard_material_editor.shading.rendered",
+                "Rendered"),
+            .preview_unavailable = text(
+                "ui.standard_material_editor.preview_unavailable",
+                "Material preview is unavailable"),
+            .properties_group = text(
+                "ui.standard_material_editor.properties", "Material"),
+            .name = text("ui.standard_material_editor.name", "Name"),
+            .type = text("ui.standard_material_editor.type", "Type"),
+            .standard_material = text(
+                "ui.standard_material_editor.standard_material",
+                "Standard Material"),
+            .albedo = text("ui.standard_material_editor.albedo", "Albedo"),
+            .albedo_texture = text(
+                "ui.standard_material_editor.albedo_texture",
+                "Albedo Texture"),
+            .roughness = text("ui.standard_material_editor.roughness",
+                              "Roughness"),
+            .roughness_texture = text(
+                "ui.standard_material_editor.roughness_texture",
+                "Roughness Texture"),
+            .metallic =
+                text("ui.standard_material_editor.metallic", "Metallic"),
+            .metallic_texture = text(
+                "ui.standard_material_editor.metallic_texture",
+                "Metallic Texture"),
+            .normal_strength = text(
+                "ui.standard_material_editor.normal_strength",
+                "Normal Strength"),
+            .normal_texture = text(
+                "ui.standard_material_editor.normal_texture",
+                "Normal Texture"),
+            .direct_x_normal = text(
+                "ui.standard_material_editor.directx_normal",
+                "DirectX normal map (invert green channel)"),
+            .choose_color = text(
+                "ui.standard_material_editor.choose_color",
+                "Choose Color..."),
+            .choose_albedo_title = text(
+                "ui.standard_material_editor.choose_albedo_title",
+                "Choose Albedo Color"),
+            .browse_texture = text(
+                "ui.standard_material_editor.texture.browse", "Browse..."),
+            .clear_texture = text(
+                "ui.standard_material_editor.texture.clear", "Clear"),
+            .no_texture = text(
+                "ui.standard_material_editor.texture.none", "No texture"),
+            .untitled_material = text(
+                "ui.standard_material_editor.untitled",
+                "Untitled Material"),
+            .unsaved =
+                text("ui.standard_material_editor.unsaved", "Unsaved"),
+        });
+  }
 }
 
 void UISystem::handle_settings_dialog_change(QtSettingsChangeKind kind) {
@@ -1259,6 +2184,16 @@ void UISystem::show_settings_dialog() {
     auxiliary_window_state_.settings_dialog_visible = true;
     save_auxiliary_window_state();
   }
+}
+
+void UISystem::show_material_browser() {
+  if (material_browser_window_ == nullptr || home_visible_ ||
+      editor_ == nullptr || !editor_->project().has_project()) {
+    return;
+  }
+  material_browser_window_->show();
+  material_browser_window_->raise();
+  material_browser_window_->activateWindow();
 }
 
 bool UISystem::panel_visible(UIPanelId id) const {

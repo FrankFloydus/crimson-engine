@@ -94,23 +94,34 @@ filament::math::mat4f make_transform(const QMat4 &transform) {
   return result;
 }
 
-filament::math::float4 tangent_frame_from_normal(QVec3 normal) {
+filament::math::float4 tangent_frame_from_basis(
+    QVec3 normal, QVec3 authored_tangent = {}, QVec3 authored_bitangent = {}) {
   if (length(normal) <= 0.000001f) {
     normal = {0.0f, 1.0f, 0.0f};
   } else {
     normal = normalize(normal);
   }
 
-  const QVec3 reference = std::fabs(normal.y) < 0.999f
-                              ? QVec3{0.0f, 1.0f, 0.0f}
-                              : QVec3{1.0f, 0.0f, 0.0f};
-  QVec3 tangent = cross(reference, normal);
+  QVec3 tangent = authored_tangent - normal * dot(normal, authored_tangent);
   if (length(tangent) <= 0.000001f) {
-    tangent = {1.0f, 0.0f, 0.0f};
+    const QVec3 reference = std::fabs(normal.y) < 0.999f
+                                ? QVec3{0.0f, 1.0f, 0.0f}
+                                : QVec3{1.0f, 0.0f, 0.0f};
+    tangent = cross(reference, normal);
+    if (length(tangent) <= 0.000001f) {
+      tangent = {1.0f, 0.0f, 0.0f};
+    } else {
+      tangent = normalize(tangent);
+    }
   } else {
     tangent = normalize(tangent);
   }
-  const QVec3 bitangent = cross(normal, tangent);
+  const float handedness =
+      length(authored_bitangent) > 0.000001f &&
+              dot(cross(normal, tangent), authored_bitangent) < 0.0f
+          ? -1.0f
+          : 1.0f;
+  const QVec3 bitangent = cross(normal, tangent) * handedness;
   const filament::math::mat3f tangent_frame{
       to_filament(tangent),
       to_filament(bitangent),
@@ -119,6 +130,56 @@ filament::math::float4 tangent_frame_from_normal(QVec3 normal) {
   const filament::math::quatf packed =
       filament::math::mat3f::packTangentFrame(tangent_frame, sizeof(float));
   return {packed.x, packed.y, packed.z, packed.w};
+}
+
+std::vector<filament::math::float4>
+mesh_tangent_frames(const RenderMeshAssetSnapshot &mesh) {
+  std::vector<QVec3> tangents(mesh.vertices.size());
+  std::vector<QVec3> bitangents(mesh.vertices.size());
+  for (std::size_t index = 0u; index + 2u < mesh.indices.size(); index += 3u) {
+    const std::uint32_t i0 = mesh.indices[index];
+    const std::uint32_t i1 = mesh.indices[index + 1u];
+    const std::uint32_t i2 = mesh.indices[index + 2u];
+    if (i0 >= mesh.vertices.size() || i1 >= mesh.vertices.size() ||
+        i2 >= mesh.vertices.size()) {
+      continue;
+    }
+    const MeshVertex &v0 = mesh.vertices[i0];
+    const MeshVertex &v1 = mesh.vertices[i1];
+    const MeshVertex &v2 = mesh.vertices[i2];
+    const QVec3 edge1 = v1.position - v0.position;
+    const QVec3 edge2 = v2.position - v0.position;
+    const QVec2 delta1 = v1.uv - v0.uv;
+    const QVec2 delta2 = v2.uv - v0.uv;
+    const float determinant = delta1.x * delta2.y - delta1.y * delta2.x;
+    if (!std::isfinite(determinant) || std::fabs(determinant) <= 0.000001f) {
+      continue;
+    }
+    const float reciprocal = 1.0f / determinant;
+    const QVec3 tangent =
+        (edge1 * delta2.y - edge2 * delta1.y) * reciprocal;
+    const QVec3 bitangent =
+        (edge2 * delta1.x - edge1 * delta2.x) * reciprocal;
+    if (!std::isfinite(tangent.x) || !std::isfinite(tangent.y) ||
+        !std::isfinite(tangent.z) || !std::isfinite(bitangent.x) ||
+        !std::isfinite(bitangent.y) || !std::isfinite(bitangent.z)) {
+      continue;
+    }
+    tangents[i0] += tangent;
+    tangents[i1] += tangent;
+    tangents[i2] += tangent;
+    bitangents[i0] += bitangent;
+    bitangents[i1] += bitangent;
+    bitangents[i2] += bitangent;
+  }
+
+  std::vector<filament::math::float4> frames;
+  frames.reserve(mesh.vertices.size());
+  for (std::size_t index = 0u; index < mesh.vertices.size(); ++index) {
+    frames.push_back(tangent_frame_from_basis(
+        mesh.vertices[index].normal, tangents[index], bitangents[index]));
+  }
+  return frames;
 }
 
 filament::Box compute_bounds(const RenderMeshAssetSnapshot &mesh) {
@@ -216,7 +277,8 @@ MeshRenderableProxy MeshRenderableFactory::create(
   proxy.source_entity = entity_id;
   proxy.mesh = mesh.mesh_id;
   proxy.mesh_revision = mesh.mesh_revision;
-  proxy.material = material ? material->component.material : kInvalidAssetId;
+  proxy.material =
+      material ? material->component.material : MaterialReference{};
   proxy.material_revision = material ? material->revision : 0;
   proxy.cast_shadows = cast_shadows;
   proxy.double_sided = double_sided;
@@ -224,11 +286,14 @@ MeshRenderableProxy MeshRenderableFactory::create(
   std::vector<RenderVertex> vertices;
   {
     QDR_PROFILE_SCOPE("Mesh renderable build vertices");
+    const std::vector<filament::math::float4> tangent_frames =
+        mesh_tangent_frames(mesh);
     vertices.reserve(mesh.vertices.size());
-    for (const MeshVertex &vertex : mesh.vertices) {
+    for (std::size_t index = 0u; index < mesh.vertices.size(); ++index) {
+      const MeshVertex &vertex = mesh.vertices[index];
       vertices.push_back({
           to_filament(vertex.position),
-          tangent_frame_from_normal(vertex.normal),
+          tangent_frames[index],
           {vertex.uv.x, vertex.uv.y},
           vertex.rgba,
       });

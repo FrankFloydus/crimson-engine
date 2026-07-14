@@ -1,0 +1,29 @@
+{
+  "format": "quader.material",
+  "version": 2,
+  "id": "1d8d1fd2-2953-4cb4-a66b-1f879259b50d",
+  "name": "Default Material",
+  "materialType": "standard",
+  "materialVersion": 1,
+  "payload": {
+    "model": "metallicRoughness",
+    "parameters": {
+      "baseColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "roughness": 1.0,
+      "metallic": 0.0,
+      "normalStrength": 1.0,
+      "normalConvention": "opengl"
+    },
+    "textureSlots": {
+      "baseColorTexture": {
+        "id": "c27c1daf-a1d0-41b6-b205-39bf3cb5ee87",
+        "path": "Textures/default_albedo.png",
+        "colorSpace": "srgb"
+      }
+    }
+  }
+}

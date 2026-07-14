@@ -4290,3 +4290,106 @@ Verification:
   from 3,715.057 ms to 63.134 ms in Debug (58.84x) and from 229.369 ms to 3.806 ms in Release
   (60.27x). The referenced/unreferenced fixture contains 12 unique payloads but decodes and compiles
   only the five referenced payloads; seven remain lazy.
+
+## 2026-07-14 - Project Materials Are External Stable Assets
+
+Invariant:
+
+- Project materials and textures remain external project files. Scenes persist `MaterialReference`
+  UUIDs and dependency path hints, never QMAT or PNG payloads; embedded numeric materials remain a
+  separate compatibility case for standalone and QDR 1.0 scenes.
+- `ProjectMaterialCatalog` validates and deterministically scans project QMAT files. The reserved
+  default QMAT/albedo pair is provisioned transactionally, is fatal when corrupt or conflicting,
+  and is never overwritten. QPROJ v2 owns the active material UUID and persists it before the
+  in-memory active material changes.
+- Material/render/preview caches are qualified by project identity, catalog/material content
+  revision, and preview revision. A texture-byte cache may not key only by texture UUID because
+  separate materials can legally point that UUID at different project paths.
+- Slot zero is represented by the component's primary `MaterialReference`; nonzero face slots are
+  stored in `material_slots`. Object-mode Apply Material resets every face to zero and removes
+  obsolete overrides; Face mode reuses the lowest matching slot or allocates the lowest free slot.
+  One command captures one material for undo/redo across every selected object.
+- Public `edit.apply_material` must route to the custom `assign_material` command tool. The legacy
+  `apply_active_material` host descriptor remains face-oriented metadata and will incorrectly make
+  the Object-mode shortcut unavailable if used as the public command's execution tool.
+- The retained Material Browser consumes `QuaderProjectAssetsApi` only. It is a parent-owned
+  `Qt::Tool`, shares one model/proxy/selection across Grid and List, resets search when shown, and
+  persists only geometry, view mode, and tile size.
+- Hydrating a saved scene must establish mesh-sync baselines without marking it dirty; otherwise
+  restored selection/picking can regress even though the rendered mesh is visible.
+
+Owners:
+
+- `src/assets/material_document.*`, `src/io/project/qmat_codec.*`,
+  `project_material_catalog.*`, and `default_project_material_provisioner.*` own material data,
+  validation, discovery, and transactional defaults.
+- `src/editor/session/project_session.*`, `src/api/quader_project_assets_api.*`, and
+  `src/io/qdr/qdr_scene_binary_codec.*` own active state, public intent, and stable scene
+  references/dependencies.
+- `src/render/project_material_snapshot_resolver.*`, `src/app/app.cpp`, and
+  `src/ui/qt_material_browser_window.*` own qualified rendering, encoded preview bytes, and Qt
+  presentation respectively.
+
+Verification:
+
+- QMAT/catalog/provisioning, manifest migration, QDR 1.0/1.1, dependency failure, creation/apply,
+  undo/redo, Qt model/lifecycle, and project-replacement tests pass in the full six-target CTest.
+  The C++ style gate passes all 517 translation units and the native Debug `quader` v0.0.113 build
+  succeeds.
+- The Vulkan/Fusion smoke creates the default QMAT/albedo layout, opens Grid/List/Search, activates
+  the material, creates and applies it in Object mode, saves/reopens a scene, ray-picks its restored
+  mesh, creates a second scene without a crash, switches resident tabs, and restores both saved
+  tabs in order with the prior active scene. The final log contains no warnings, errors, asserts,
+  or Sentry envelopes.
+
+## 2026-07-14 - Standard Material Editing Uses Typed Draft And Render Boundaries
+
+Invariant:
+
+- QMAT v2 identifies `materialType: standard` and versions its typed payload independently from
+  common material identity. QMAT v1 remains an implicit Standard Material input, while future
+  Graph Materials extend the tagged document and editor registry without reusing compatibility
+  fields or changing UUID-based scene references.
+- `StandardMaterialEditSessionService` owns one generational draft, staged source images, decoded
+  preview cache, optimistic source revision, and dirty checkpoint. Imported texture bytes remain
+  untouched until Save; QMAT/catalog/manifest installation is transactional, and rollback restores
+  the original QMAT and removes only texture files created by that attempt.
+- Public material APIs expose Quader value types instead of asset-owner definitions. Invalid public
+  enum values fail rather than falling through to Albedo/OpenGL. Retargeting publishes the closing
+  document identity before the replacement opens, and saved/closed/assets/active events retain
+  their project, material, session, and path payloads.
+- Both saved materials and unsaved drafts adapt into `RenderMaterialEvaluationSnapshot`, whose
+  tagged payload contains Standard PBR data now and reserves Graph dispatch without admitting Qt,
+  QMAT, project paths, or editor owners into render code. Project/material/texture identities and
+  content revisions qualify renderer caches.
+- The retained Standard Material preview is a real isolated Filament surface. Its QWindow container
+  exists before renderer initialization, hidden-window initialization does not require an immediate
+  swapchain, and SurfaceCreated/expose/render paths retry swapchain creation. Scene viewports and the
+  visible preview submit within one presentation accounting cycle; minimized or unexposed previews
+  do not request high-refresh continuous frames.
+- Preview navigation is semantic and isolated: left drag tumbles the test object, wheel zooms within
+  clamps, double-click resets, and scene selection/tools never enter the preview. Changing the edited
+  material resets its inspection pose; changing preview mesh or shading does not rebuild material
+  draft state.
+- Project image ingestion preserves exact encoded source bytes, converts readable still images
+  (including the packaged 16-bit SDR PNG) to immutable RGBA8 for rendering, and rejects animation,
+  HDR/EXR or floating-point images, malformed data, inputs over 64 MiB, and dimensions over 8K.
+
+Owners:
+
+- `src/assets/project_material_document.hpp`, `src/io/project/qmat_codec.*`, and
+  `src/editor/material/standard_material_edit_session_service.*` own typed QMAT data, staged edits,
+  and atomic persistence.
+- `src/api/quader_standard_material_documents_api.*` owns public intent and lifecycle events;
+  `src/ui/qt_standard_material_editor_window.*` and `src/ui/ui_system.*` own retained stock-Qt
+  presentation and dirty-draft decisions.
+- `src/render/material_evaluation_snapshot.hpp`, `material_preview_renderer.*`,
+  `material_preview_mesh_library.*`, and `src/ui/qt_material_preview_surface.*` own the typed render
+  seam, isolated preview scene, deterministic test meshes, and native child-surface lifecycle.
+
+Verification:
+
+- Focused Standard Material document, QMAT, image-decoder, preview-domain, Qt editor/surface, render
+  extraction, event, transaction rollback, and architecture/API/UI guardrail suites pass. The native
+  GPU smoke must confirm the rebuilt executable displays preview pixels rather than the retained
+  unavailable placeholder before this entry is considered fully verified.

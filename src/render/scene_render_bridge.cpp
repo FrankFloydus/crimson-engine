@@ -68,9 +68,20 @@ void SceneRenderBridge::shutdown() {
   previous_scene_snapshot_ = {};
   has_previous_scene_snapshot_ = false;
   scene_binding_ = {};
+  project_material_resolver_ = nullptr;
   has_scene_binding_ = false;
   engine_ = nullptr;
   scene_ = nullptr;
+}
+
+void SceneRenderBridge::set_project_material_resolver(
+    const RenderProjectMaterialResolver *resolver) {
+  if (project_material_resolver_ == resolver) {
+    return;
+  }
+  project_material_resolver_ = resolver;
+  previous_scene_snapshot_ = {};
+  has_previous_scene_snapshot_ = false;
 }
 
 void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
@@ -105,9 +116,14 @@ void SceneRenderBridge::sync(const SceneDocument &document,
     return;
   }
   bind_scene(scene_binding);
+  const std::uint64_t project_material_revision =
+      project_material_resolver_ != nullptr
+          ? project_material_resolver_->revision()
+          : 0u;
   if (has_previous_scene_snapshot_ && render_scene_snapshot_matches_sources(
                                           previous_scene_snapshot_, document,
-                                          assets, scene_binding)) {
+                                          assets, scene_binding,
+                                          project_material_revision)) {
     // Keep draining retired GPU proxies while making unchanged camera-only
     // frames O(1) at the scene-extraction boundary.
     (void)sync_service_.sync(previous_scene_snapshot_);
@@ -116,7 +132,7 @@ void SceneRenderBridge::sync(const SceneDocument &document,
   if (has_previous_scene_snapshot_ &&
       try_refresh_render_scene_snapshot_transforms(
           previous_scene_snapshot_, document, assets, frame_index,
-          scene_binding)) {
+          scene_binding, project_material_revision)) {
     (void)sync_service_.sync(previous_scene_snapshot_);
     return;
   }
@@ -125,7 +141,9 @@ void SceneRenderBridge::sync(const SceneDocument &document,
       {.previous = has_previous_scene_snapshot_ ? &previous_scene_snapshot_
                                                 : nullptr,
        .frame_index = frame_index,
-       .scene_binding = scene_binding});
+       .scene_binding = scene_binding,
+       .project_material_resolver = project_material_resolver_,
+       .project_material_revision = project_material_revision});
   sync(std::move(snapshot));
 }
 

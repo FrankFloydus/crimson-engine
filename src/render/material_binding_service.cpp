@@ -137,10 +137,24 @@ MaterialBindingService::create_mesh_material_instance(
             assets, material, material_texture_slot::kRoughness,
             texture_binding_->fallback_roughness_texture()),
         sampler);
+    material_instance->setParameter(
+        material_texture_slot::kMetallic,
+        texture_binding_->resolve_texture(
+            assets, material, material_texture_slot::kMetallic,
+            texture_binding_->fallback_metallic_texture()),
+        sampler);
+    material_instance->setParameter(
+        material_texture_slot::kNormal,
+        texture_binding_->resolve_texture(
+            assets, material, material_texture_slot::kNormal,
+            texture_binding_->fallback_normal_texture()),
+        sampler);
     material_instance->setParameter("metallicFactor",
                                     material ? material->metallic : 0.0f);
     material_instance->setParameter("roughnessFactor",
                                     material ? material->roughness : 1.0f);
+    material_instance->setParameter("normalStrength", 1.0f);
+    material_instance->setParameter("normalYSign", 1.0f);
   }
   return material_instance;
 }
@@ -187,11 +201,30 @@ MaterialBindingService::create_mesh_material_instance(
             texture_binding_->fallback_roughness_texture()),
         sampler);
     material_instance->setParameter(
+        material_texture_slot::kMetallic,
+        texture_binding_->resolve_texture(
+            material, material_texture_slot::kMetallic,
+            texture_binding_->fallback_metallic_texture()),
+        sampler);
+    material_instance->setParameter(
+        material_texture_slot::kNormal,
+        texture_binding_->resolve_texture(
+            material, material_texture_slot::kNormal,
+            texture_binding_->fallback_normal_texture()),
+        sampler);
+    material_instance->setParameter(
         "metallicFactor",
         material && material->present ? material->document.metallic : 0.0f);
     material_instance->setParameter(
         "roughnessFactor",
         material && material->present ? material->document.roughness : 1.0f);
+    material_instance->setParameter(
+        "normalStrength",
+        material && material->present ? material->normal_strength : 1.0f);
+    material_instance->setParameter(
+        "normalYSign",
+        material && material->present && material->directx_normal ? -1.0f
+                                                                  : 1.0f);
   }
   return material_instance;
 }

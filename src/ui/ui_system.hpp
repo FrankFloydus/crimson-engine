@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 
 class QDockWidget;
 class QLabel;
@@ -40,15 +41,23 @@ class LinearArrayToolService;
 class ModelingSessionService;
 class OutlinerPanel;
 class PivotToolService;
+class ProjectAssetId;
 class RadialArrayToolService;
 class ViewportPointPlacementService;
 class QtSettingsDialog;
 class QtCommandEventFilter;
+class QtMaterialBrowserWindow;
+class QtMaterialPreviewSurface;
+class QtStandardMaterialEditorWindow;
 class QtToolSettingsWindow;
 class QtViewportPanel;
 class QtProjectHomePage;
 class QtSceneWorkspace;
 enum class QtSettingsChangeKind;
+enum class QtStandardMaterialEditorFileAction : std::uint8_t;
+enum class QtStandardMaterialScalar : std::uint8_t;
+enum class QtStandardMaterialTextureAction : std::uint8_t;
+enum class QtStandardMaterialTextureSlot : std::uint8_t;
 class QuaderEditorApi;
 struct QuaderApiStatus;
 class RenderOverlaySnapshotCache;
@@ -91,6 +100,8 @@ public:
   [[nodiscard]] QuaderDirtySceneDecision
   confirm_dirty_scene(const QuaderSceneDocumentInfo &scene,
                       std::string_view action_id);
+  [[nodiscard]] bool
+  prepare_standard_material_project_transition(std::string_view action_id);
   void refresh_project_workspace();
   void show_home();
   void show_workspace();
@@ -103,6 +114,7 @@ public:
   void prepare_viewports(SceneRenderBridge &render_bridge,
                          RenderOverlaySnapshotCache &snapshot_cache);
   [[nodiscard]] std::size_t render_viewports();
+  [[nodiscard]] std::size_t render_surfaces(bool render_scene_viewports);
   [[nodiscard]] bool needs_continuous_rendering() const;
 
   [[nodiscard]] QMainWindow *main_window() const { return main_window_.get(); }
@@ -129,10 +141,26 @@ private:
   void synchronize_auxiliary_window_visibility();
   void refresh_status_bar();
   void present_lifecycle_result(const QuaderApiStatus &result);
+  void present_standard_material_error(std::string_view message);
   void refresh_localized_chrome();
+  void refresh_standard_material_editor();
+  void open_standard_material(std::string_view stable_id);
+  void open_standard_material_document(ProjectAssetId id);
+  void open_standard_material_from_dialog();
+  void new_standard_material();
+  [[nodiscard]] bool save_standard_material(bool save_as);
+  [[nodiscard]] bool resolve_standard_material_document(bool close_after);
+  void handle_standard_material_file_action(
+      QtStandardMaterialEditorFileAction action);
+  void handle_standard_material_scalar(QtStandardMaterialScalar scalar,
+                                       double value);
+  void handle_standard_material_texture(
+      QtStandardMaterialTextureSlot slot,
+      QtStandardMaterialTextureAction action);
   void handle_settings_dialog_change(QtSettingsChangeKind kind);
   void synchronize_settings_surfaces(bool refresh_dialog);
   void show_settings_dialog();
+  void show_material_browser();
   [[nodiscard]] bool allow_main_window_close();
   [[nodiscard]] bool panel_visible(UIPanelId id) const;
   void set_panel_visible(UIPanelId id, bool visible);
@@ -148,6 +176,9 @@ private:
   InspectorPanel *inspector_panel_ = nullptr;
   ConsolePanel *console_panel_ = nullptr;
   QtSettingsDialog *settings_dialog_ = nullptr;
+  QtMaterialBrowserWindow *material_browser_window_ = nullptr;
+  QtMaterialPreviewSurface *material_preview_surface_ = nullptr;
+  QtStandardMaterialEditorWindow *standard_material_editor_window_ = nullptr;
   QtToolSettingsWindow *tool_settings_window_ = nullptr;
   QLabel *status_message_ = nullptr;
   QLabel *status_version_ = nullptr;
@@ -180,6 +211,8 @@ private:
   std::uint64_t inspector_scene_revision_ = 0;
   std::uint64_t inspector_modeling_content_revision_ = 0;
   std::uint64_t inspector_modeling_selection_revision_ = 0;
+  std::uint64_t material_browser_catalog_signature_ = 0;
+  std::string material_browser_active_id_;
   std::string outliner_locale_;
   std::string inspector_locale_;
   bool outliner_refresh_valid_ = false;

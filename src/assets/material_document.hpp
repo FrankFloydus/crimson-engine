@@ -22,6 +22,8 @@ namespace quader {
 namespace material_texture_slot {
 inline constexpr const char *kBaseColor = "baseColorTexture";
 inline constexpr const char *kRoughness = "roughnessTexture";
+inline constexpr const char *kMetallic = "metallicTexture";
+inline constexpr const char *kNormal = "normalTexture";
 } // namespace material_texture_slot
 
 /**

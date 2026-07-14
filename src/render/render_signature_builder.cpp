@@ -135,7 +135,13 @@ namespace {
 
 void add_material_document_signature(RenderSignatureBuilder &signature,
                                      const AssetRegistry &assets,
-                                     AssetId material_id) {
+                                     MaterialReference reference) {
+  signature.add_value(static_cast<std::uint64_t>(reference.kind()));
+  if (reference.project_owned()) {
+    signature.add_string(reference.project_asset().str());
+    return;
+  }
+  const AssetId material_id = reference.embedded_asset();
   const MaterialDocument *material = assets.material(material_id);
   signature.add_value(material_id);
   if (!material) {

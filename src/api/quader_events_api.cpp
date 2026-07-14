@@ -16,14 +16,20 @@
 namespace quader {
 namespace {
 
-constexpr std::array<std::string_view, 7> kEventNames{
+constexpr std::array<std::string_view, 13> kEventNames{
     quader_event::kProjectOpened,
     quader_event::kProjectClosed,
+    quader_event::kProjectAssetsChanged,
+    quader_event::kActiveProjectMaterialChanged,
     quader_event::kSceneOpened,
     quader_event::kActiveSceneChanged,
     quader_event::kSceneDirtyChanged,
     quader_event::kSceneSaved,
     quader_event::kSceneClosed,
+    quader_event::kStandardMaterialOpened,
+    quader_event::kStandardMaterialDirtyChanged,
+    quader_event::kStandardMaterialSaved,
+    quader_event::kStandardMaterialClosed,
 };
 
 [[nodiscard]] bool is_supported_event_name(std::string_view event_name) {

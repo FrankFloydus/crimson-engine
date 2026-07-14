@@ -10,9 +10,11 @@
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
+#include "editor/material/project_image_decoder.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "platform/platform_file_dialog.hpp"
+#include "assets/material_document.hpp"
 
 #include <QApplication>
 #include <QGuiApplication>
@@ -22,11 +24,14 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -37,6 +42,170 @@ constexpr int kIdleFrameIntervalMs = 16;
 constexpr double kFallbackDisplayRefreshRateHz = 60.0;
 constexpr double kMinimumDisplayRefreshRateHz = 30.0;
 constexpr double kMaximumDisplayRefreshRateHz = 240.0;
+
+/// Adapts validated project material snapshots to the renderer boundary.
+class ProjectSessionRenderMaterialResolver final
+    : public RenderProjectMaterialResolver {
+public:
+  explicit ProjectSessionRenderMaterialResolver(ProjectSession &project)
+      : project_(&project) {}
+
+  [[nodiscard]] std::uint64_t revision() const noexcept override {
+    if (project_ == nullptr || !project_->has_project() ||
+        project_->manifest() == nullptr) {
+      return 0u;
+    }
+    std::uint64_t hash = 1469598103934665603ull;
+    for (const char character : project_->manifest()->id().str()) {
+      hash ^= static_cast<unsigned char>(character);
+      hash *= 1099511628211ull;
+    }
+    hash ^= project_->material_catalog().content_revision();
+    hash *= 1099511628211ull;
+    return hash;
+  }
+
+  [[nodiscard]] std::optional<RenderProjectMaterialSnapshot>
+  resolve(ProjectAssetId id) const override {
+    if (project_ == nullptr || !project_->has_project()) {
+      return std::nullopt;
+    }
+    const ProjectMaterialCatalogEntry *entry =
+        project_->material_catalog().find(id);
+    if (entry == nullptr) {
+      return std::nullopt;
+    }
+
+    const ProjectStandardMaterialDefinition *standard =
+        entry->material.standard_material();
+    if (standard == nullptr) {
+      return std::nullopt;
+    }
+
+    RenderProjectMaterialSnapshot result{
+        .evaluation =
+            RenderMaterialEvaluationSnapshot{
+                .project_material_id = id,
+                .kind = RenderMaterialEvaluationKind::Standard,
+                .identity_revision = revision() ^
+                                     render_project_asset_identity_revision(id),
+                .content_revision = entry->content_revision,
+                .payload = RenderStandardMaterialEvaluationSnapshot{
+                    .base_color = {standard->base_color[0],
+                                   standard->base_color[1],
+                                   standard->base_color[2]},
+                    .roughness = standard->roughness,
+                    .metallic = standard->metallic,
+                    .normal_strength = standard->normal_strength,
+                    .directx_normal =
+                        standard->normal_convention ==
+                        NormalMapConvention::DirectX,
+                },
+            },
+        .catalog_revision = revision(),
+    };
+    RenderStandardMaterialEvaluationSnapshot *render_standard =
+        result.evaluation.standard_material();
+    if (render_standard == nullptr) {
+      return std::nullopt;
+    }
+
+    const std::uint64_t resolver_revision = revision();
+    if (cached_revision_ != resolver_revision) {
+      texture_cache_.clear();
+      cached_revision_ = resolver_revision;
+    }
+    /// Maps one typed Standard Material dependency to its render sampler.
+    struct SlotBinding final {
+      StandardMaterialTextureSlot slot;
+      const std::optional<ProjectMaterialTextureSlot> *texture;
+      RenderStandardMaterialTextureSlot render_slot;
+    };
+    const std::array<SlotBinding, 4> bindings{
+        SlotBinding{StandardMaterialTextureSlot::Albedo,
+                    &standard->base_color_texture,
+                    RenderStandardMaterialTextureSlot::Albedo},
+        SlotBinding{StandardMaterialTextureSlot::Roughness,
+                    &standard->roughness_texture,
+                    RenderStandardMaterialTextureSlot::Roughness},
+        SlotBinding{StandardMaterialTextureSlot::Metallic,
+                    &standard->metallic_texture,
+                    RenderStandardMaterialTextureSlot::Metallic},
+        SlotBinding{StandardMaterialTextureSlot::Normal,
+                    &standard->normal_texture,
+                    RenderStandardMaterialTextureSlot::Normal},
+    };
+    for (const SlotBinding &binding : bindings) {
+      if (!binding.texture->has_value()) {
+        continue;
+      }
+      const ProjectMaterialTextureSlot &definition = **binding.texture;
+      auto cached = texture_cache_.find(definition.id);
+      if (cached == texture_cache_.end()) {
+        const ProjectIoResult<ProjectMaterialTextureData> texture =
+            project_->material_texture(id, binding.slot);
+        if (texture.ok()) {
+          const ProjectIoResult<ProjectDecodedImage> decoded =
+              ProjectImageDecoder::decode(texture.value().encoded_bytes);
+          if (decoded.ok()) {
+            cached = texture_cache_
+                         .emplace(
+                             definition.id,
+                             CachedTexture{
+                                 .content_revision =
+                                     texture.value().content_revision,
+                                 .encoded = std::make_shared<
+                                     const std::vector<std::byte>>(
+                                     texture.value().encoded_bytes),
+                                 .decoded = std::make_shared<
+                                     const std::vector<std::byte>>(
+                                     decoded.value().rgba8),
+                                 .width = decoded.value().width,
+                                 .height = decoded.value().height,
+                             })
+                         .first;
+          }
+        }
+      }
+      if (cached == texture_cache_.end()) {
+        continue;
+      }
+      render_standard->textures[static_cast<std::size_t>(
+          binding.render_slot)] = RenderMaterialTextureEvaluationSnapshot{
+          .project_texture_id = definition.id,
+          .identity_revision =
+              revision() ^
+              render_project_asset_identity_revision(definition.id),
+          .content_revision = cached->second.content_revision,
+          .color_space = definition.color_space ==
+                                 ProjectTextureColorSpace::Srgb
+                             ? TextureColorSpace::Srgb
+                             : TextureColorSpace::Linear,
+          .encoded_file_bytes = cached->second.encoded,
+          .decoded_rgba8 = cached->second.decoded,
+          .width = cached->second.width,
+          .height = cached->second.height,
+      };
+    }
+    return result;
+  }
+
+private:
+  /// Retains immutable encoded texture bytes for one catalog revision.
+  struct CachedTexture final {
+    std::uint64_t content_revision = 0u;
+    std::shared_ptr<const std::vector<std::byte>> encoded;
+    std::shared_ptr<const std::vector<std::byte>> decoded;
+    std::uint32_t width = 0u;
+    std::uint32_t height = 0u;
+  };
+
+  ProjectSession *project_ = nullptr;
+  mutable std::uint64_t cached_revision_ = 0u;
+  mutable std::unordered_map<ProjectAssetId, CachedTexture,
+                             ProjectAssetIdHash>
+      texture_cache_;
+};
 
 int presentation_frame_interval_ms(const QMainWindow *window) {
   const QScreen *screen =
@@ -133,6 +302,7 @@ bool App::initialize(QApplication &application,
   running_ = false;
   application_ = &application;
   const std::filesystem::path executable_dir = executable_path.parent_path();
+  project_session_.set_resource_root(executable_dir);
   window_settings_path_ = AppWindowSettings::resolve_path(executable_dir);
   window_settings_ = AppWindowSettings::load(window_settings_path_);
 
@@ -147,6 +317,10 @@ bool App::initialize(QApplication &application,
   LOG_INFO("Initializing scene render bridge");
   render_system_.initialize_scene_render_bridge(render_bridge_,
                                                 executable_dir);
+  project_material_resolver_ =
+      std::make_unique<ProjectSessionRenderMaterialResolver>(project_session_);
+  render_bridge_.set_project_material_resolver(
+      project_material_resolver_.get());
   LOG_INFO("Scene render bridge initialized");
 
   LOG_INFO("Initializing Qt Widgets UI system");
@@ -182,6 +356,11 @@ bool App::initialize(QApplication &application,
       .confirm_dirty_project_replacement =
           [this](std::string_view action_id) {
             return ui_.confirm_dirty_project_replacement(action_id);
+          },
+      .prepare_material_document_close =
+          [this](std::string_view action_id) {
+            return ui_.prepare_standard_material_project_transition(
+                action_id);
           },
   });
   editor_->scene_documents().set_runtime_hooks(
@@ -257,14 +436,18 @@ void App::shutdown() {
   render_overlay_snapshot_cache_.reset();
   editor_.reset();
   render_bridge_.shutdown();
+  project_material_resolver_.reset();
   render_system_.shutdown();
   application_ = nullptr;
 }
 
 void App::bind_active_scene(SceneSession &scene) {
-  const ProjectDefaultAssets defaults =
-      ProjectAssetBootstrapService{}.bootstrap_default_assets(scene);
-  default_material_ = defaults.default_material;
+  default_material_ = kInvalidAssetId;
+  if (!project_session_.has_project()) {
+    const ProjectDefaultAssets defaults =
+        ProjectAssetBootstrapService{}.bootstrap_default_assets(scene);
+    default_material_ = defaults.default_material;
+  }
   scene.set_document_replacement_finalizer(
       [this](SceneSession &replacement) { bind_active_scene(replacement); });
   render_overlay_snapshot_cache_.reset();
@@ -376,10 +559,10 @@ bool App::render_frame(const FrameTiming &frame_timing) {
     ui_.prepare_viewports(render_bridge_, render_overlay_snapshot_cache_);
   }
   const auto viewport_prepare_end = std::chrono::steady_clock::now();
-  const std::size_t submitted = active_scene != nullptr &&
-                                        ui_.can_render_viewports()
-                                    ? ui_.render_viewports()
-                                    : 0u;
+  const bool render_scene_viewports =
+      active_scene != nullptr && ui_.can_render_viewports();
+  const std::size_t submitted =
+      ui_.render_surfaces(render_scene_viewports);
   const auto viewport_render_end = std::chrono::steady_clock::now();
   if (std::getenv("QUADER_FRAME_DIAGNOSTICS") != nullptr) {
     /// Accumulates opt-in frame-stage timings for periodic diagnostic logs.

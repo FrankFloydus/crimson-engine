@@ -678,7 +678,7 @@ void QuaderCommandsApi::Impl::register_commands() {
       quader_command::kUngroupSelection, "Ungroup Selection",
       [this] { return api_.scene().ungroup_selection(); }, "Shift+Ctrl+G");
   register_modeling_tool_public_command(quader_command::kApplyMaterial,
-                                        "apply_active_material",
+                                        "assign_material",
                                         "Apply Material");
   register_command(
       quader_command::kModelingCopyPivotFromActive, "Copy Pivot From Active",

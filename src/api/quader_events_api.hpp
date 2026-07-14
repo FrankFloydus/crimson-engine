@@ -22,12 +22,24 @@ namespace quader_event {
 
 inline constexpr std::string_view kProjectOpened = "project.opened";
 inline constexpr std::string_view kProjectClosed = "project.closed";
+inline constexpr std::string_view kProjectAssetsChanged =
+    "project.assets_changed";
+inline constexpr std::string_view kActiveProjectMaterialChanged =
+    "project.active_material_changed";
 inline constexpr std::string_view kSceneOpened = "scene.opened";
 inline constexpr std::string_view kActiveSceneChanged =
     "scene.active_changed";
 inline constexpr std::string_view kSceneDirtyChanged = "scene.dirty_changed";
 inline constexpr std::string_view kSceneSaved = "scene.saved";
 inline constexpr std::string_view kSceneClosed = "scene.closed";
+inline constexpr std::string_view kStandardMaterialOpened =
+    "standard_material.opened";
+inline constexpr std::string_view kStandardMaterialDirtyChanged =
+    "standard_material.dirty_changed";
+inline constexpr std::string_view kStandardMaterialSaved =
+    "standard_material.saved";
+inline constexpr std::string_view kStandardMaterialClosed =
+    "standard_material.closed";
 
 } // namespace quader_event
 
@@ -43,12 +55,17 @@ struct QuaderEvent {
     std::optional<ProjectId> project_id;
     std::string project_name;
     std::optional<std::string> project_root;
+    std::optional<ProjectAssetId> project_asset_id;
     std::optional<SceneSessionId> scene_session_id;
     std::optional<SceneId> scene_id;
     std::string scene_name;
     std::optional<std::string> scene_path;
     std::optional<bool> scene_dirty;
     std::optional<bool> scene_active;
+    std::optional<MaterialEditSessionId> material_edit_session_id;
+    std::string material_name;
+    std::optional<std::string> material_path;
+    std::optional<bool> material_dirty;
 };
 
 /**

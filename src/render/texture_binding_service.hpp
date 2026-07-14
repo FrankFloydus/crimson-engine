@@ -54,6 +54,14 @@ public:
       return fallback_roughness_texture_;
     }
 
+    filament::Texture *fallback_metallic_texture() const {
+      return fallback_metallic_texture_;
+    }
+
+    filament::Texture *fallback_normal_texture() const {
+      return fallback_normal_texture_;
+    }
+
     filament::Texture *resolve_texture(const AssetRegistry &assets,
                                        const MaterialDocument *material,
                                        const char *slot_name,
@@ -69,11 +77,13 @@ public:
     struct TextureCacheKey {
       RenderSceneBindingKey scene_binding;
       AssetId id = kInvalidAssetId;
+      ProjectAssetId project_id;
       std::uint64_t revision = 0;
       TextureColorSpace color_space = TextureColorSpace::Srgb;
 
       bool operator==(const TextureCacheKey &other) const {
         return scene_binding == other.scene_binding && id == other.id &&
+               project_id == other.project_id &&
                revision == other.revision &&
                color_space == other.color_space;
       }
@@ -96,6 +106,7 @@ public:
           combine(std::hash<std::uint64_t>{}(
               key.scene_binding.binding_revision));
           combine(std::hash<AssetId>{}(key.id));
+          combine(ProjectAssetIdHash{}(key.project_id));
           combine(std::hash<std::uint64_t>{}(key.revision));
           combine(color_space);
           return hash;
@@ -103,6 +114,8 @@ public:
     };
 
     filament::Texture *load_texture_asset(const TextureAsset &texture);
+    filament::Texture *load_project_texture_asset(
+        const RenderTextureAssetSnapshot &texture);
     filament::Texture *create_solid_texture(std::uint8_t r, std::uint8_t g,
                                             std::uint8_t b, std::uint8_t a,
                                             TextureColorSpace color_space);
@@ -116,6 +129,8 @@ public:
     RenderSceneBindingKey scene_binding_;
     filament::Texture *fallback_albedo_texture_ = nullptr;
     filament::Texture *fallback_roughness_texture_ = nullptr;
+    filament::Texture *fallback_metallic_texture_ = nullptr;
+    filament::Texture *fallback_normal_texture_ = nullptr;
 };
 
 } // namespace quader

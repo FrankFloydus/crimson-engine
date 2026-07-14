@@ -37,4 +37,16 @@ TEST(QtCommandEventFilterTests, DispatchContextHasCanonicalFallback) {
   EXPECT_EQ(state.grid_preset, 4);
 }
 
+TEST(QtCommandEventFilterTests,
+     ApplicationCommandsYieldToFocusedToolWindowContext) {
+  EXPECT_FALSE(quader::qt_application_command_input_owner_active({}));
+
+  int queries = 0;
+  EXPECT_TRUE(quader::qt_application_command_input_owner_active([&queries]() {
+    ++queries;
+    return true;
+  }));
+  EXPECT_EQ(queries, 1);
+}
+
 } // namespace

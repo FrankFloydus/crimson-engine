@@ -61,11 +61,21 @@ qt_command_dispatch_tool_state(const QtViewportToolStateProvider &provider,
   return state;
 }
 
+bool qt_application_command_input_owner_active(
+    const QtApplicationCommandInputOwnerProvider &provider) {
+  return provider && provider();
+}
+
 QtCommandEventFilter::QtCommandEventFilter(
     QuaderEditorApi &editor, QtViewportToolStateProvider tool_state_provider,
     QObject *parent)
     : QObject(parent), editor_(&editor),
       tool_state_provider_(std::move(tool_state_provider)) {}
+
+void QtCommandEventFilter::set_command_input_owner_provider(
+    QtApplicationCommandInputOwnerProvider provider) {
+  command_input_owner_provider_ = std::move(provider);
+}
 
 bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
   if (editor_ == nullptr || event == nullptr) {
@@ -82,6 +92,13 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     if (modal_or_popup_owns_input()) {
       // QColorDialog, QMessageBox, QMenu and other transient owners must keep
       // Delete, tool, undo and chord keys inside their own interaction scope.
+      reset_pending_chord();
+      return QObject::eventFilter(watched, event);
+    }
+    if (qt_application_command_input_owner_active(
+            command_input_owner_provider_)) {
+      // Retained tool windows own their window-scoped document shortcuts.
+      // Yield before resolving the same chord as an active scene command.
       reset_pending_chord();
       return QObject::eventFilter(watched, event);
     }

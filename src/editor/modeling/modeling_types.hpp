@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "assets/material_reference.hpp"
 #include "assets/mesh_asset.hpp"
 #include "core/types.hpp"
 #include "math/types.hpp"
@@ -309,6 +310,7 @@ struct ModelingCreateBoxRequest {
       .max = {1.0f, 1.0f, 1.0f},
   };
   std::string name = "Box";
+  MaterialReference material;
 };
 
 /**
@@ -319,6 +321,7 @@ struct ModelingCreateMeshRequest {
   quader_poly::Document document;
   std::string name = "Mesh";
   std::uint32_t material_slot = 0;
+  MaterialReference material;
 };
 
 /**
@@ -656,7 +659,7 @@ struct ModelingInteractionSettings {
  */
 struct ModelingToolPreviewMesh {
   EntityId source_entity = kInvalidEntityId;
-  AssetId material = kInvalidAssetId;
+  MaterialReference material;
   MeshAsset mesh;
   QMat4 transform;
   std::vector<QMat4> instance_transforms;

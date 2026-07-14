@@ -5606,7 +5606,7 @@ TEST(EditorApiTests, PublicAssetMutationsRejectDanglingReferences) {
 
     quader::QuaderMaterialAsset unsupported_material;
     unsupported_material.name = "Unsupported Texture Slot Material";
-    unsupported_material.texture_slots.emplace("normalTexture", 9000u);
+    unsupported_material.texture_slots.emplace("emissiveTexture", 9000u);
     const quader::QuaderApiResult<quader::QuaderAssetRef> unsupported_added =
         editor.assets().add_material(unsupported_material);
     EXPECT_FALSE(unsupported_added.ok());
@@ -5627,7 +5627,8 @@ TEST(EditorApiTests, PublicAssetMutationsRejectDanglingReferences) {
 
     const quader::QuaderApiVoidResult unsupported_slot =
         editor.assets().set_material_texture(
-            valid_material.value().id, "normalTexture", texture_ref.value().id);
+            valid_material.value().id, "emissiveTexture",
+            texture_ref.value().id);
     EXPECT_FALSE(unsupported_slot.ok());
     EXPECT_EQ(unsupported_slot.error_message(),
               "Unsupported material texture slot");

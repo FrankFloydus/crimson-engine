@@ -1548,10 +1548,14 @@ TEST(BuildGuardrailTests, DefaultMaterialMetadataMatchesRuntimePackagePath) {
   const std::string app_source = read_source_file("src/app/app.cpp");
   const std::string bootstrap_source = read_source_file(
       "src/editor/session/project_asset_bootstrap_service.cpp");
+  const std::string provisioner_source = read_source_file(
+      "src/io/project/project_material_provisioner.cpp");
   const std::string host_contract =
       read_source_file("src/editor/metadata/host_contract.cpp");
   const std::string default_catalog =
       read_source_file("src/assets/default_material_catalog.hpp");
+  const std::string project_material_template = read_source_file(
+      "resources/modeling_assets/materials/default/default_material.qmat");
 
   expect_contains(
       root_c_make,
@@ -1559,9 +1563,16 @@ TEST(BuildGuardrailTests, DefaultMaterialMetadataMatchesRuntimePackagePath) {
   expect_contains(
       root_c_make,
       "${QUADER_RUNTIME_DEPLOY_DIR}/materials/default/default_roughness.png");
+  expect_contains(
+      root_c_make,
+      "${QUADER_RUNTIME_DEPLOY_DIR}/materials/default/default_material.qmat");
   expect_contains(default_catalog, "kDefaultMaterialAlbedoTexturePackagePath");
   expect_contains(default_catalog,
                   "kDefaultMaterialRoughnessTexturePackagePath");
+  expect_contains(default_catalog, "kDefaultProjectMaterialId");
+  expect_contains(default_catalog, "kDefaultProjectAlbedoTextureId");
+  expect_contains(default_catalog, "kDefaultProjectMaterialTemplatePath");
+  expect_contains(default_catalog, "kDefaultProjectAlbedoTemplatePath");
   expect_contains(app_source, "ProjectAssetBootstrapService");
   expect_contains(bootstrap_source, "default_material_catalog.hpp");
   expect_contains(bootstrap_source, "kDefaultMaterialAlbedoTexturePackagePath");
@@ -1570,6 +1581,10 @@ TEST(BuildGuardrailTests, DefaultMaterialMetadataMatchesRuntimePackagePath) {
   expect_contains(host_contract, "default_material_catalog.hpp");
   expect_contains(host_contract, "kDefaultMaterialAlbedoTexturePackagePath");
   expect_contains(host_contract, "kDefaultMaterialRoughnessTexturePackagePath");
+  expect_contains(provisioner_source, "kDefaultProjectMaterialTemplatePath");
+  expect_contains(provisioner_source, "kDefaultProjectAlbedoTemplatePath");
+  expect_contains(project_material_template, "\"baseColorTexture\"");
+  expect_missing(project_material_template, "\"roughnessTexture\"");
   expect_missing(host_contract, "assets/materials/default/");
   expect_missing(app_source, "default_material_catalog.hpp");
   expect_missing(app_source, "\"materials/default/default_albedo.png\"");

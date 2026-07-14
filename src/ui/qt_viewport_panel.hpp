@@ -103,7 +103,8 @@ public:
   [[nodiscard]] QuaderApiVoidResult
   frame_selection(const ModelingSessionService &modeling,
                   ViewportPaneId pane_id);
-  [[nodiscard]] std::size_t render_viewports();
+  [[nodiscard]] std::size_t
+  render_viewports(bool account_presentation_frame = true);
   [[nodiscard]] bool needs_continuous_rendering() const;
   [[nodiscard]] bool focus_active_pane();
   [[nodiscard]] const ViewportToolState &tool_state() const {

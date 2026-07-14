@@ -55,6 +55,22 @@ bool use_test_profile(const std::filesystem::path &profile) {
 #endif
 }
 
+bool use_qt_plugin_path(const char *executable_path) {
+  std::error_code error;
+  const std::filesystem::path executable_directory =
+      std::filesystem::absolute(executable_path, error).parent_path();
+  if (error || executable_directory.empty()) {
+    return false;
+  }
+#if defined(_WIN32)
+  return _putenv_s("QT_PLUGIN_PATH", executable_directory.string().c_str()) ==
+         0;
+#else
+  return ::setenv("QT_PLUGIN_PATH", executable_directory.string().c_str(), 1) ==
+         0;
+#endif
+}
+
 bool remove_test_profile(const std::filesystem::path &profile) {
   std::error_code error;
   std::filesystem::remove_all(profile, error);
@@ -65,6 +81,11 @@ bool remove_test_profile(const std::filesystem::path &profile) {
 
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
+
+  if (!use_qt_plugin_path(argv[0])) {
+    std::cerr << "Could not configure the Qt test plugin path.\n";
+    return 2;
+  }
 
   const std::optional<std::filesystem::path> profile = create_test_profile();
   if (!profile.has_value()) {

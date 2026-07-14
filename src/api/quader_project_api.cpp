@@ -578,7 +578,8 @@ bool QuaderProjectApi::has_project() const {
 
 bool QuaderProjectApi::dirty() const {
   if (project_session_ != nullptr) {
-    return project_session_->has_dirty_scenes();
+    return project_session_->has_dirty_scenes() ||
+           project_session_->has_dirty_material();
   }
   return read_scene_session(session_).dirty();
 }
@@ -669,7 +670,8 @@ QuaderProjectApi::close_open_scenes(std::string_view action_id) {
     };
   }
   if (scene_documents_ == nullptr) {
-    const bool dirty = project_session_->has_dirty_scenes();
+    const bool dirty = project_session_->has_dirty_scenes() ||
+                       project_session_->has_dirty_material();
     return {
         .status = dirty
                       ? quader_api_failure_status(
@@ -682,6 +684,26 @@ QuaderProjectApi::close_open_scenes(std::string_view action_id) {
     };
   }
   const auto prepared = scene_documents_->prepare_project_close(action_id);
+  if (prepared.value().proceed && project_session_->has_dirty_material()) {
+    if (runtime_hooks_.prepare_material_document_close &&
+        runtime_hooks_.prepare_material_document_close(action_id) &&
+        !project_session_->has_dirty_material()) {
+      return {
+          .status = quader_api_status_from_result(prepared),
+          .proceed = true,
+      };
+    }
+    return {
+        .status = quader_api_failure_status(
+            scene_session(session_),
+            runtime_hooks_.prepare_material_document_close
+                ? "Project replacement was canceled by the Standard "
+                  "Material editor."
+                : "A dirty Standard Material draft must be saved or "
+                  "discarded before replacing the project."),
+        .proceed = false,
+    };
+  }
   return {
       .status = quader_api_status_from_result(prepared),
       .proceed = prepared.value().proceed,

@@ -104,12 +104,12 @@ projected_mesh_signature(const quader_editor_core::PolygonObject &object) {
   return hash;
 }
 
-std::unordered_map<std::uint32_t, AssetId>
+std::unordered_map<std::uint32_t, MaterialReference>
 material_slots_for_live_modeling_nodes(
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
-    std::optional<AssetId> &first_modeling_material) {
+    std::optional<MaterialReference> &first_modeling_material) {
   QDR_PROFILE_FUNCTION();
-  std::unordered_map<std::uint32_t, AssetId> material_by_slot;
+  std::unordered_map<std::uint32_t, MaterialReference> material_by_slot;
   const std::vector<std::pair<int, EntityId>> entities_by_object =
       object_map.object_entity_bindings_by_modeling_object();
 
@@ -122,7 +122,7 @@ material_slots_for_live_modeling_nodes(
         scene.modeling_object(entity);
     const MaterialComponent *material = scene.material(entity);
     if (modeling_object == nullptr || material == nullptr ||
-        material->material == kInvalidAssetId) {
+        !material->material.valid()) {
       continue;
     }
     if (!first_modeling_material) {
@@ -136,12 +136,13 @@ material_slots_for_live_modeling_nodes(
 
 std::optional<MaterialComponent> material_component_for_modeling_slot(
     std::uint32_t material_slot,
-    const std::unordered_map<std::uint32_t, AssetId> &material_by_slot,
-    std::optional<AssetId> first_modeling_material,
+    const std::unordered_map<std::uint32_t, MaterialReference>
+        &material_by_slot,
+    std::optional<MaterialReference> first_modeling_material,
     const MaterialComponent *existing_material) {
-  AssetId primary_material = kInvalidAssetId;
+  MaterialReference primary_material;
   if (existing_material != nullptr &&
-      existing_material->material != kInvalidAssetId) {
+      existing_material->material.valid()) {
     primary_material = existing_material->material;
   } else if (const auto material = material_by_slot.find(material_slot);
              material != material_by_slot.end()) {
@@ -149,13 +150,18 @@ std::optional<MaterialComponent> material_component_for_modeling_slot(
   } else if (first_modeling_material.has_value()) {
     primary_material = *first_modeling_material;
   }
-  if (primary_material == kInvalidAssetId) {
+  if (!primary_material.valid()) {
     return std::nullopt;
   }
-  std::unordered_map<std::uint32_t, AssetId> resolved_slots =
+  std::unordered_map<std::uint32_t, MaterialReference> resolved_slots =
       existing_material != nullptr ? existing_material->material_slots
-                                   : material_by_slot;
-  resolved_slots[material_slot] = primary_material;
+                                   : std::unordered_map<
+                                         std::uint32_t,
+                                         MaterialReference>{};
+  // Slot 0 is represented by MaterialComponent::material. Keeping a second
+  // slot-0 binding creates a stale override when the primary changes and
+  // makes the first real face override allocate slot 2 instead of slot 1.
+  resolved_slots.erase(0u);
   return MaterialComponent{
       .material = primary_material,
       .material_slots = std::move(resolved_slots),
@@ -344,8 +350,9 @@ bool install_projected_mesh_assets(AssetRegistry &assets,
 
 void sync_material_slot_bindings(
     SceneDocument &scene, EntityId entity, std::uint32_t material_slot,
-    const std::unordered_map<std::uint32_t, AssetId> &material_by_slot,
-    std::optional<AssetId> first_modeling_material) {
+    const std::unordered_map<std::uint32_t, MaterialReference>
+        &material_by_slot,
+    std::optional<MaterialReference> first_modeling_material) {
   QDR_PROFILE_FUNCTION();
   const MaterialComponent *current_material = scene.material(entity);
   const std::optional<MaterialComponent> next_material =
@@ -419,8 +426,8 @@ bool reconcile_modeling_object_scene_nodes(
   ModelingObjectRuntimeMap &object_map = scene_sync.object_map();
   created_entities.clear();
 
-  std::optional<AssetId> first_modeling_material;
-  const std::unordered_map<std::uint32_t, AssetId> material_by_slot =
+  std::optional<MaterialReference> first_modeling_material;
+  const std::unordered_map<std::uint32_t, MaterialReference> material_by_slot =
       material_slots_for_live_modeling_nodes(scene, object_map,
                                              first_modeling_material);
 
@@ -510,8 +517,8 @@ void finalize_reconciled_modeling_object_scene_nodes(
     const quader_editor_core::EditorSession &session, SceneDocument &scene,
     SceneModelingSyncService &scene_sync) {
   ModelingObjectRuntimeMap &object_map = scene_sync.object_map();
-  std::optional<AssetId> first_modeling_material;
-  const std::unordered_map<std::uint32_t, AssetId> material_by_slot =
+  std::optional<MaterialReference> first_modeling_material;
+  const std::unordered_map<std::uint32_t, MaterialReference> material_by_slot =
       material_slots_for_live_modeling_nodes(scene, object_map,
                                              first_modeling_material);
   std::unordered_set<int> live_objects;
@@ -642,6 +649,17 @@ void ModelingMeshSyncService::apply_scene_identity_to_entity(
   apply_complete_scene_identity_to_entity(scene, entity, identity);
 }
 
+bool ModelingMeshSyncService::set_entity_material(
+    SceneDocument &scene, EntityId entity,
+    const MaterialComponent &material) const {
+  const MaterialComponent *current = scene.material(entity);
+  if (current != nullptr && *current == material) {
+    return false;
+  }
+  scene.set_material(entity, material);
+  return true;
+}
+
 bool ModelingMeshSyncService::restore_history_mesh_assets(
     AssetRegistry &assets,
     const std::unordered_map<AssetId, MeshAsset> &mesh_assets) const {
@@ -730,6 +748,17 @@ void ModelingMeshSyncService::apply_scene_transforms(
     SceneDocument &scene,
     std::span<const SceneTransformAssignment> transforms) const {
   scene.set_transforms(transforms);
+}
+
+void ModelingMeshSyncService::establish_loaded_scene_sync_baseline(
+    const quader_editor_core::EditorSession &session,
+    SceneModelingSyncService &scene_sync) const {
+  scene_sync.invalidate_scene_objects();
+  for (const quader_editor_core::PolygonObject &object : session.objects()) {
+    scene_sync.remember_projected_mesh_signature(
+        object.id, projected_mesh_signature(object));
+  }
+  scene_sync.mark_scene_objects_synced(session.state().content_revision);
 }
 
 bool ModelingMeshSyncService::sync_scene_objects_from_modeling(

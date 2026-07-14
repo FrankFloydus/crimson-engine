@@ -32,6 +32,13 @@ constexpr wchar_t kProjectDefaultExtension[] = L"qproj";
 constexpr wchar_t kSceneFileFilter[] =
     L"Quader Scenes (*.qdr)\0*.qdr\0All Files (*.*)\0*.*\0";
 constexpr wchar_t kSceneDefaultExtension[] = L"qdr";
+constexpr wchar_t kMaterialFileFilter[] =
+    L"Quader Materials (*.qmat)\0*.qmat\0All Files (*.*)\0*.*\0";
+constexpr wchar_t kMaterialDefaultExtension[] = L"qmat";
+constexpr wchar_t kTextureFileFilter[] =
+    L"Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.tif;*.tiff;*.tga)\0"
+    L"*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp;*.tif;*.tiff;*.tga\0"
+    L"All Files (*.*)\0*.*\0";
 constexpr wchar_t kObjFileFilter[] =
     L"Wavefront OBJ (*.obj)\0*.obj\0All Files (*.*)\0*.*\0";
 constexpr wchar_t kObjDefaultExtension[] = L"obj";
@@ -202,6 +209,62 @@ platform_save_scene_file_dialog(const PlatformFileDialogOptions &options) {
       kSceneDefaultExtension);
   dialog.Flags |= OFN_OVERWRITEPROMPT;
   if (GetSaveFileNameW(&dialog) == FALSE) {
+    return std::nullopt;
+  }
+  return std::filesystem::path(buffer.data());
+#else
+  (void)options;
+  return std::nullopt;
+#endif
+}
+
+std::optional<std::filesystem::path>
+platform_open_material_file_dialog(const PlatformFileDialogOptions &options) {
+#if defined(_WIN32)
+  std::vector<wchar_t> buffer = path_buffer(options.initial_file_name);
+  const std::wstring initial_directory = options.initial_directory.wstring();
+  OPENFILENAMEW dialog = base_open_file_name(
+      options, buffer, initial_directory, kMaterialFileFilter,
+      kMaterialDefaultExtension);
+  dialog.Flags |= OFN_FILEMUSTEXIST;
+  if (GetOpenFileNameW(&dialog) == FALSE) {
+    return std::nullopt;
+  }
+  return std::filesystem::path(buffer.data());
+#else
+  (void)options;
+  return std::nullopt;
+#endif
+}
+
+std::optional<std::filesystem::path>
+platform_save_material_file_dialog(const PlatformFileDialogOptions &options) {
+#if defined(_WIN32)
+  std::vector<wchar_t> buffer = path_buffer(options.initial_file_name);
+  const std::wstring initial_directory = options.initial_directory.wstring();
+  OPENFILENAMEW dialog = base_open_file_name(
+      options, buffer, initial_directory, kMaterialFileFilter,
+      kMaterialDefaultExtension);
+  dialog.Flags |= OFN_OVERWRITEPROMPT;
+  if (GetSaveFileNameW(&dialog) == FALSE) {
+    return std::nullopt;
+  }
+  return std::filesystem::path(buffer.data());
+#else
+  (void)options;
+  return std::nullopt;
+#endif
+}
+
+std::optional<std::filesystem::path>
+platform_open_texture_file_dialog(const PlatformFileDialogOptions &options) {
+#if defined(_WIN32)
+  std::vector<wchar_t> buffer = path_buffer(options.initial_file_name);
+  const std::wstring initial_directory = options.initial_directory.wstring();
+  OPENFILENAMEW dialog = base_open_file_name(
+      options, buffer, initial_directory, kTextureFileFilter, nullptr);
+  dialog.Flags |= OFN_FILEMUSTEXIST;
+  if (GetOpenFileNameW(&dialog) == FALSE) {
     return std::nullopt;
   }
   return std::filesystem::path(buffer.data());

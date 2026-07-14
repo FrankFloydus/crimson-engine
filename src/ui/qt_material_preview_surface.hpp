@@ -1,0 +1,88 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+#pragma once
+
+#include "render/material_preview_renderer.hpp"
+#include "render/render_system.hpp"
+#include "viewport/material_preview_state.hpp"
+
+#include <QPointF>
+#include <QWindow>
+
+#include <cstdint>
+#include <functional>
+#include <utility>
+
+class QExposeEvent;
+class QMouseEvent;
+class QResizeEvent;
+class QWheelEvent;
+
+namespace quader {
+
+/**
+ * Hosts an isolated Standard Material preview in a Qt-native child surface.
+ * It owns no project, scene-document, or viewport-workspace state.
+ */
+class QtMaterialPreviewSurface final : public QWindow {
+public:
+  explicit QtMaterialPreviewSurface(QWindow *parent = nullptr);
+  ~QtMaterialPreviewSurface() override;
+
+  QtMaterialPreviewSurface(const QtMaterialPreviewSurface &) = delete;
+  QtMaterialPreviewSurface &
+  operator=(const QtMaterialPreviewSurface &) = delete;
+
+  [[nodiscard]] bool initialize(RenderSystem &render_system);
+  void shutdown();
+
+  [[nodiscard]] bool render_frame();
+  [[nodiscard]] bool ready_to_render() const;
+  void synchronize_render_size();
+
+  void set_material(StandardMaterialPreviewSnapshot snapshot);
+  [[nodiscard]] const MaterialPreviewState &preview_state() const noexcept {
+    return preview_state_;
+  }
+  bool set_preview_mesh(MaterialPreviewMeshKind mesh);
+  bool set_preview_shading(MaterialPreviewShadingMode shading);
+  bool reset_preview();
+
+  void set_surface_changed_callback(std::function<void()> callback) {
+    surface_changed_callback_ = std::move(callback);
+  }
+
+protected:
+  bool event(QEvent *event) override;
+  void exposeEvent(QExposeEvent *event) override;
+  void resizeEvent(QResizeEvent *event) override;
+  void mousePressEvent(QMouseEvent *event) override;
+  void mouseReleaseEvent(QMouseEvent *event) override;
+  void mouseDoubleClickEvent(QMouseEvent *event) override;
+  void mouseMoveEvent(QMouseEvent *event) override;
+  void wheelEvent(QWheelEvent *event) override;
+
+private:
+  void apply_interaction(const MaterialPreviewInteractionFrame &input);
+  void publish_state_change();
+  void recreate_swap_chain();
+  [[nodiscard]] void *native_window_handle() const;
+
+  RenderSystem *render_system_ = nullptr;
+  RenderAdditionalSwapChain swap_chain_;
+  MaterialPreviewRenderer renderer_;
+  MaterialPreviewState preview_state_;
+  MaterialPreviewInputRouter input_router_;
+  std::function<void()> surface_changed_callback_;
+  QPointF last_tumble_position_;
+  bool initialized_ = false;
+  bool native_surface_available_ = false;
+  bool tumble_active_ = false;
+  std::uintptr_t swap_chain_native_id_ = 0u;
+};
+
+} // namespace quader

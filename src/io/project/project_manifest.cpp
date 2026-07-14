@@ -135,7 +135,8 @@ ProjectIoResult<ProjectManifest> ProjectManifest::hydrate(
     ProjectId id, std::string name,
     std::vector<ProjectSceneCatalogEntry> scenes,
     std::vector<ProjectRelativePath> open_scene_paths,
-    std::optional<ProjectRelativePath> active_scene_path) {
+    std::optional<ProjectRelativePath> active_scene_path,
+    std::optional<ProjectAssetId> active_material_id) {
   ProjectIoResult<ProjectManifest> created = create(std::move(id), std::move(name));
   if (!created.ok()) {
     return created;
@@ -156,6 +157,13 @@ ProjectIoResult<ProjectManifest> ProjectManifest::hydrate(
     return ProjectIoResult<ProjectManifest>::failure(
         workspace.error().code, workspace.error().message,
         workspace.error().path);
+  }
+  ProjectIoResult<void> active_material =
+      manifest.set_active_material(std::move(active_material_id));
+  if (!active_material.ok()) {
+    return ProjectIoResult<ProjectManifest>::failure(
+        active_material.error().code, active_material.error().message,
+        active_material.error().path);
   }
   return ProjectIoResult<ProjectManifest>::success(std::move(manifest));
 }
@@ -274,6 +282,17 @@ ProjectIoResult<void> ProjectManifest::set_workspace(
 
   open_scene_paths_ = std::move(canonical_paths);
   active_scene_path_ = std::move(canonical_active);
+  return ProjectIoResult<void>::success();
+}
+
+ProjectIoResult<void> ProjectManifest::set_active_material(
+    std::optional<ProjectAssetId> material_id) {
+  if (material_id.has_value() && !material_id->valid()) {
+    return ProjectIoResult<void>::failure(
+        ProjectIoErrorCode::InvalidUuid,
+        "Active project material requires a valid UUID.");
+  }
+  active_material_id_ = std::move(material_id);
   return ProjectIoResult<void>::success();
 }
 
@@ -495,6 +514,11 @@ std::string ProjectManifestStore::serialize(const ProjectManifest &manifest) {
   if (manifest.active_scene_path().has_value()) {
     active_scene = manifest.active_scene_path()->portable_string();
   }
+  Json active_material = nullptr;
+  if (manifest.active_material_id().has_value()) {
+    active_material =
+        std::string(manifest.active_material_id()->str());
+  }
 
   return Json{
       {"format", std::string(kQuaderProjectManifestFormat)},
@@ -509,6 +533,7 @@ std::string ProjectManifestStore::serialize(const ProjectManifest &manifest) {
        Json{
            {"openScenes", std::move(open_scenes)},
            {"activeScene", std::move(active_scene)},
+           {"activeMaterial", std::move(active_material)},
        }},
   }.dump(2);
 }
@@ -531,9 +556,15 @@ ProjectManifestStore::deserialize(std::string_view text) {
           "File is not a Quader project manifest.");
     }
     if (!root.contains("version") ||
-        !root["version"].is_number_unsigned() ||
-        root["version"].get<std::uint32_t>() !=
-            kQuaderProjectManifestVersion) {
+        !root["version"].is_number_unsigned()) {
+      return ProjectIoResult<ProjectManifest>::failure(
+          ProjectIoErrorCode::UnsupportedFormat,
+          "Project manifest version is not supported.");
+    }
+    const std::uint32_t version =
+        root["version"].get<std::uint32_t>();
+    if (version < kOldestQuaderProjectManifestVersion ||
+        version > kQuaderProjectManifestVersion) {
       return ProjectIoResult<ProjectManifest>::failure(
           ProjectIoErrorCode::UnsupportedFormat,
           "Project manifest version is not supported.");
@@ -615,9 +646,30 @@ ProjectManifestStore::deserialize(std::string_view text) {
       active_scene = path.take_value();
     }
 
+    std::optional<ProjectAssetId> active_material;
+    if (version >= 2u) {
+      const Json &workspace_json = root["workspace"];
+      if (workspace_json.contains("activeMaterial")) {
+        const Json &material_json = workspace_json["activeMaterial"];
+        if (!material_json.is_null()) {
+          if (!material_json.is_string()) {
+            return malformed_manifest(
+                "Active material UUID must be a string or null.");
+          }
+          active_material = ProjectAssetId::parse(
+              material_json.get<std::string>());
+          if (!active_material.has_value()) {
+            return malformed_manifest(
+                "Active material UUID is invalid.");
+          }
+        }
+      }
+    }
+
     return ProjectManifest::hydrate(
         project_id.take_value(), root["project"]["name"].get<std::string>(),
-        std::move(scenes), std::move(open_scenes), std::move(active_scene));
+        std::move(scenes), std::move(open_scenes), std::move(active_scene),
+        std::move(active_material));
   } catch (const std::exception &exception) {
     return malformed_manifest(std::string("Could not parse project manifest: ") +
                               exception.what());

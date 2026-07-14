@@ -6,10 +6,10 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "assets/project_asset_id.hpp"
+
+#include <array>
 #include <compare>
-#include <array>
-#include <cstddef>
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -38,9 +38,12 @@ enum class ProjectIoErrorCode {
   FileNotRegular,
   DirectoryNotFound,
   ManifestMalformed,
+  MaterialMalformed,
   UnsupportedFormat,
   DuplicateScene,
+  DuplicateAsset,
   SceneNotFound,
+  AssetNotFound,
   InvalidWorkspaceState,
   IoFailure,
 };
@@ -197,6 +200,33 @@ private:
       : slot_(slot), generation_(generation) {}
 
   std::uint32_t slot_ = invalid_slot();
+  std::uint32_t generation_ = 0u;
+};
+
+/// Identifies the current Standard Material draft with a runtime generation.
+class MaterialEditSessionId final {
+public:
+  MaterialEditSessionId() = default;
+
+  [[nodiscard]] static MaterialEditSessionId
+  from_generation(std::uint32_t generation) noexcept {
+    return MaterialEditSessionId(generation);
+  }
+
+  [[nodiscard]] bool valid() const noexcept { return generation_ != 0u; }
+  [[nodiscard]] std::uint32_t generation() const noexcept {
+    return generation_;
+  }
+
+  friend bool operator==(const MaterialEditSessionId &,
+                         const MaterialEditSessionId &) = default;
+  friend auto operator<=>(const MaterialEditSessionId &,
+                          const MaterialEditSessionId &) = default;
+
+private:
+  explicit MaterialEditSessionId(std::uint32_t generation)
+      : generation_(generation) {}
+
   std::uint32_t generation_ = 0u;
 };
 

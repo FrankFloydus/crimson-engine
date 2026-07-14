@@ -52,6 +52,26 @@ namespace {
 using quader::test::guardrail::read_source_file;
 using quader::test::guardrail::source_slice;
 
+/// Supplies deterministic project-material snapshots to render tests.
+class TestProjectMaterialResolver final
+    : public RenderProjectMaterialResolver {
+public:
+  [[nodiscard]] std::uint64_t revision() const noexcept override {
+    return revision_value;
+  }
+
+  [[nodiscard]] std::optional<RenderProjectMaterialSnapshot>
+  resolve(ProjectAssetId id) const override {
+    return material.has_value() &&
+                   material->evaluation.project_material_id == id
+               ? material
+               : std::nullopt;
+  }
+
+  std::uint64_t revision_value = 1u;
+  std::optional<RenderProjectMaterialSnapshot> material;
+};
+
 ViewportOverlayCamera test_overlay_camera() {
   return {
       .eye = {0.0f, 0.0f, 0.0f},
@@ -591,7 +611,181 @@ TEST(RenderHotPathTests, SceneSnapshotSourceMatchTracksOwnerRevisions) {
 
   (void)assets.add_mesh(make_overlay_triangle_mesh());
   EXPECT_FALSE(render_scene_snapshot_matches_sources(snapshot, document,
-                                                     assets));
+                                                      assets));
+}
+
+TEST(RenderSceneSnapshotTests,
+     ResolvesProjectMaterialsAndCarriesStableTextureContent) {
+  const ProjectAssetId material_id =
+      *ProjectAssetId::parse("11111111-1111-4111-8111-111111111111");
+  const ProjectAssetId texture_id =
+      *ProjectAssetId::parse("22222222-2222-4222-8222-222222222222");
+  const auto encoded_texture =
+      std::make_shared<const std::vector<std::byte>>(
+          std::vector<std::byte>{std::byte{0x89}, std::byte{0x50},
+                                 std::byte{0x4e}, std::byte{0x47}});
+  TestProjectMaterialResolver resolver;
+  resolver.revision_value = 17u;
+  resolver.material = RenderProjectMaterialSnapshot{
+      .evaluation =
+          RenderMaterialEvaluationSnapshot{
+              .project_material_id = material_id,
+              .kind = RenderMaterialEvaluationKind::Standard,
+              .identity_revision = 19u,
+              .content_revision = 23u,
+              .payload = RenderStandardMaterialEvaluationSnapshot{
+                  .base_color = {0.25f, 0.5f, 0.75f},
+                  .roughness = 0.35f,
+                  .metallic = 0.65f,
+                  .textures = {RenderMaterialTextureEvaluationSnapshot{
+                      .project_texture_id = texture_id,
+                      .identity_revision = 27u,
+                      .content_revision = 31u,
+                      .color_space = TextureColorSpace::Srgb,
+                      .encoded_file_bytes = encoded_texture,
+                  }},
+              },
+          },
+      .catalog_revision = 29u,
+  };
+
+  const MaterialReference reference = MaterialReference::project(material_id);
+  const MaterialComponent component{.material = reference};
+  const RenderMaterialBindingSnapshot binding =
+      build_render_material_binding_snapshot(AssetRegistry{}, &component,
+                                             &resolver);
+
+  ASSERT_TRUE(binding.present);
+  EXPECT_EQ(binding.component.material, reference);
+  EXPECT_EQ(binding.primary_material.reference, reference);
+  EXPECT_EQ(binding.primary_material.material_id, kInvalidAssetId);
+  EXPECT_TRUE(binding.primary_material.present);
+  EXPECT_EQ(binding.primary_material.revision, 23u);
+  EXPECT_EQ(binding.primary_material.project_catalog_revision, 29u);
+  EXPECT_FLOAT_EQ(binding.primary_material.document.base_color.x, 0.25f);
+  EXPECT_FLOAT_EQ(binding.primary_material.document.base_color.y, 0.5f);
+  EXPECT_FLOAT_EQ(binding.primary_material.document.base_color.z, 0.75f);
+  EXPECT_FLOAT_EQ(binding.primary_material.document.roughness, 0.35f);
+  EXPECT_FLOAT_EQ(binding.primary_material.document.metallic, 0.65f);
+
+  const RenderTextureAssetSnapshot *texture =
+      binding.primary_material.texture_for_slot(
+          material_texture_slot::kBaseColor);
+  ASSERT_NE(texture, nullptr);
+  EXPECT_TRUE(texture->project_owned());
+  EXPECT_TRUE(texture->present);
+  EXPECT_EQ(texture->project_texture_id, texture_id);
+  EXPECT_EQ(texture->content_revision, 31u);
+  EXPECT_EQ(texture->texture.color_space, TextureColorSpace::Srgb);
+  EXPECT_EQ(texture->encoded_file_bytes, encoded_texture);
+
+  const std::uint64_t original_signature = binding.revision;
+  resolver.material->catalog_revision += 1u;
+  const RenderMaterialBindingSnapshot changed_catalog =
+      build_render_material_binding_snapshot(AssetRegistry{}, &component,
+                                             &resolver);
+  EXPECT_NE(changed_catalog.revision, original_signature);
+
+  resolver.material->evaluation.standard_material()
+      ->textures.front()
+      .content_revision += 1u;
+  const RenderMaterialBindingSnapshot changed_texture =
+      build_render_material_binding_snapshot(AssetRegistry{}, &component,
+                                             &resolver);
+  EXPECT_NE(changed_texture.revision, original_signature);
+
+  resolver.material.reset();
+  const RenderMaterialBindingSnapshot unresolved =
+      build_render_material_binding_snapshot(AssetRegistry{}, &component,
+                                             &resolver);
+  EXPECT_TRUE(unresolved.present);
+  EXPECT_EQ(unresolved.primary_material.reference, reference);
+  EXPECT_FALSE(unresolved.primary_material.present);
+  EXPECT_NE(unresolved.revision, 0u);
+}
+
+TEST(RenderSceneSnapshotTests,
+     ProjectMaterialRevisionInvalidatesReuseAndTransformRefresh) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const ProjectAssetId material_id =
+      *ProjectAssetId::parse("33333333-3333-4333-8333-333333333333");
+  TestProjectMaterialResolver resolver;
+  resolver.revision_value = 41u;
+  resolver.material = RenderProjectMaterialSnapshot{
+      .evaluation =
+          RenderMaterialEvaluationSnapshot{
+              .project_material_id = material_id,
+              .kind = RenderMaterialEvaluationKind::Standard,
+              .identity_revision = 42u,
+              .content_revision = 43u,
+              .payload = RenderStandardMaterialEvaluationSnapshot{},
+          },
+      .catalog_revision = 47u,
+  };
+
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId entity =
+      document.create_entity("Project Material Mesh", EntityKind::Mesh);
+  document.set_mesh(entity, MeshComponent{.mesh = mesh});
+  document.set_material(
+      entity,
+      MaterialComponent{.material = MaterialReference::project(material_id)});
+
+  RenderSceneSnapshot initial = build_render_scene_snapshot(
+      document, assets, {.project_material_resolver = &resolver});
+  ASSERT_EQ(initial.meshes.size(), 1u);
+  EXPECT_EQ(initial.project_material_revision, 41u);
+  EXPECT_TRUE(initial.meshes.front().material_reference.project_owned());
+  EXPECT_TRUE(render_scene_snapshot_matches_sources(initial, document, assets,
+                                                    {}, 41u));
+  EXPECT_FALSE(render_scene_snapshot_matches_sources(initial, document, assets,
+                                                     {}, 42u));
+
+  const RenderSceneSnapshot unchanged = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &initial, .project_material_resolver = &resolver});
+  EXPECT_TRUE(unchanged.reused_previous_records);
+  EXPECT_FALSE(unchanged.dirty.any_dirty());
+
+  resolver.revision_value = 53u;
+  resolver.material->evaluation.content_revision = 59u;
+  const RenderSceneSnapshot changed = build_render_scene_snapshot(
+      document, assets,
+      {.previous = &unchanged, .project_material_resolver = &resolver});
+  EXPECT_FALSE(changed.reused_previous_records);
+  EXPECT_TRUE(changed.dirty.project_materials_changed);
+  EXPECT_TRUE(changed.meshes.front().material_dirty);
+
+  document.set_transform(
+      entity, TransformComponent{.position = {1.0f, 2.0f, 3.0f}});
+  EXPECT_FALSE(try_refresh_render_scene_snapshot_transforms(
+      initial, document, assets, 2u, {}, resolver.revision_value));
+}
+
+TEST(RenderSceneSnapshotTests,
+     ToolPreviewSnapshotsKeepEmbeddedMaterialBindings) {
+  AssetRegistry assets;
+  const AssetId material =
+      assets.add_material(make_default_quader_material("Preview Material"));
+  const std::vector<RenderToolPreviewMeshRecord> records =
+      build_render_tool_preview_snapshot(
+          {ToolPreviewMesh{
+              .source_entity = 7u,
+              .material = material,
+              .mesh = make_overlay_triangle_mesh(),
+          }},
+          assets);
+
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records.front().material_id, material);
+  ASSERT_TRUE(records.front().material.present);
+  EXPECT_EQ(records.front().material.component.material, material);
+  EXPECT_TRUE(
+      records.front().material.primary_material.reference.embedded());
+  EXPECT_EQ(records.front().material.primary_material.material_id, material);
+  EXPECT_EQ(records.front().material_revision,
+            records.front().material.revision);
 }
 
 TEST(RenderHotPathTests, MeshSurfaceGridSignatureIsNarrowAndStable) {

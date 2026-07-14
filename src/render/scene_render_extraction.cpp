@@ -21,6 +21,10 @@
 namespace quader {
 namespace {
 
+RenderMaterialAssetSnapshot build_render_material_asset_snapshot(
+    const AssetRegistry &assets, MaterialReference reference,
+    const RenderProjectMaterialResolver *resolver);
+
 RenderTextureAssetSnapshot build_render_texture_asset_snapshot(
     const AssetRegistry &assets, std::string_view slot, AssetId texture_id) {
   RenderTextureAssetSnapshot snapshot{
@@ -37,6 +41,7 @@ RenderTextureAssetSnapshot build_render_texture_asset_snapshot(
 RenderMaterialAssetSnapshot build_render_material_asset_snapshot(
     const AssetRegistry &assets, AssetId material_id) {
   RenderMaterialAssetSnapshot snapshot{
+      .reference = MaterialReference(material_id),
       .material_id = material_id,
   };
   const MaterialDocument *material = assets.material(material_id);
@@ -63,7 +68,13 @@ RenderMaterialAssetSnapshot build_render_material_asset_snapshot(
 void add_render_material_asset_signature(
     RenderSignatureBuilder &signature,
     const RenderMaterialAssetSnapshot &material) {
-  signature.add_value(material.material_id);
+  signature.add_value(static_cast<std::uint64_t>(material.reference.kind()));
+  if (material.reference.project_owned()) {
+    signature.add_string(material.reference.project_asset().str());
+    signature.add_value(material.project_catalog_revision);
+  } else {
+    signature.add_value(material.material_id);
+  }
   if (!material.present) {
     signature.add_value(0);
     return;
@@ -72,16 +83,20 @@ void add_render_material_asset_signature(
   signature.add_value(material.revision);
   for (const MaterialTextureSlotDescriptor &descriptor :
        material_texture_slot_descriptors()) {
-    const std::optional<AssetId> texture_id =
-        material_texture_slot_asset(material.document, descriptor.id);
-    if (!texture_id.has_value()) {
-      continue;
-    }
-    signature.add_string(descriptor.id).add_value(*texture_id);
     const RenderTextureAssetSnapshot *texture =
         material.texture_for_slot(descriptor.id);
-    signature.add_value(texture && texture->present ? texture->texture.revision.value
-                                                    : 0u);
+    if (texture == nullptr) {
+      continue;
+    }
+    signature.add_string(descriptor.id);
+    if (texture->project_owned()) {
+      signature.add_string(texture->project_texture_id.str())
+          .add_value(texture->content_revision);
+    } else {
+      signature.add_value(texture->texture_id)
+          .add_value(texture->texture.revision.value);
+    }
+    signature.add_bool(texture->present);
   }
 }
 
@@ -116,6 +131,8 @@ RenderSceneSnapshotDirtyState scene_snapshot_dirty_state(
       .render_components_changed = previous->render_component_revision !=
                                    snapshot.render_component_revision,
       .assets_changed = previous->asset_revision != snapshot.asset_revision,
+      .project_materials_changed = previous->project_material_revision !=
+                                   snapshot.project_material_revision,
   };
 }
 
@@ -154,7 +171,7 @@ void mark_mesh_dirty(RenderSceneMeshRecord &record,
                           record.mesh.mesh_revision ||
                       previous->mesh.present != record.mesh.present;
   record.material_dirty =
-      previous->material_id != record.material_id ||
+      previous->material_reference != record.material_reference ||
       previous->material_revision != record.material_revision;
   record.transform_dirty =
       previous->transform_revision != record.transform_revision;
@@ -184,7 +201,9 @@ void mark_light_dirty(RenderSceneLightRecord &record,
          previous->mesh_binding_revision == snapshot.mesh_binding_revision &&
          previous->render_component_revision ==
              snapshot.render_component_revision &&
-         previous->asset_revision == snapshot.asset_revision;
+         previous->asset_revision == snapshot.asset_revision &&
+         previous->project_material_revision ==
+             snapshot.project_material_revision;
 }
 
 void reuse_previous_render_records(RenderSceneSnapshot &snapshot,
@@ -210,6 +229,13 @@ void reuse_previous_render_records(RenderSceneSnapshot &snapshot,
 
 const RenderTextureAssetSnapshot *
 RenderMaterialAssetSnapshot::texture_for_slot(std::string_view slot) const {
+  if (reference.project_owned()) {
+    const auto found =
+        std::ranges::find_if(textures, [slot](const auto &texture) {
+          return texture.slot == slot;
+        });
+    return found == textures.end() ? nullptr : &*found;
+  }
   const std::optional<AssetId> texture_id =
       material_texture_slot_asset(document, slot);
   if (!texture_id.has_value()) {
@@ -299,15 +325,16 @@ std::vector<MeshPrimitiveSpan> coalesced_render_mesh_primitive_spans(
 }
 
 RenderMaterialBindingSnapshot build_render_material_binding_snapshot(
-    const AssetRegistry &assets, const MaterialComponent *material) {
+    const AssetRegistry &assets, const MaterialComponent *material,
+    const RenderProjectMaterialResolver *project_material_resolver) {
   RenderMaterialBindingSnapshot snapshot;
   if (!material) {
     return snapshot;
   }
 
   snapshot.component = *material;
-  snapshot.primary_material =
-      build_render_material_asset_snapshot(assets, material->material);
+  snapshot.primary_material = build_render_material_asset_snapshot(
+      assets, material->material, project_material_resolver);
   snapshot.present = true;
 
   std::vector<std::uint32_t> slots;
@@ -321,7 +348,8 @@ RenderMaterialBindingSnapshot build_render_material_binding_snapshot(
   for (const std::uint32_t slot : slots) {
     snapshot.material_slots.emplace_back(
         slot, build_render_material_asset_snapshot(
-                  assets, material->material_slots.at(slot)));
+                  assets, material->material_slots.at(slot),
+                  project_material_resolver));
   }
 
   snapshot.revision = render_material_binding_signature(snapshot);
@@ -358,6 +386,12 @@ RenderSceneSnapshot build_render_scene_snapshot(
   snapshot.mesh_binding_revision = document.mesh_binding_revision();
   snapshot.render_component_revision = document.render_component_revision();
   snapshot.asset_revision = assets.revision();
+  snapshot.project_material_revision =
+      options.project_material_revision != 0u
+          ? options.project_material_revision
+          : options.project_material_resolver != nullptr
+                ? options.project_material_resolver->revision()
+                : 0u;
   const RenderSceneSnapshot *const previous =
       options.previous != nullptr &&
               options.previous->scene_binding == snapshot.scene_binding
@@ -381,7 +415,8 @@ RenderSceneSnapshot build_render_scene_snapshot(
       const MaterialComponent *scene_material =
           document.material(entity_id);
       const RenderMaterialBindingSnapshot material =
-          build_render_material_binding_snapshot(assets, scene_material);
+          build_render_material_binding_snapshot(
+              assets, scene_material, options.project_material_resolver);
       const MeshAsset *asset = assets.mesh(component->mesh);
       RenderSceneMeshRecord entry{
           .entity_id = entity_id,
@@ -389,8 +424,11 @@ RenderSceneSnapshot build_render_scene_snapshot(
                         : RenderMeshAssetSnapshot{.mesh_id = component->mesh},
           .mesh_component = *component,
           .material = material,
-          .material_id = scene_material ? scene_material->material
-                                            : kInvalidAssetId,
+          .material_reference =
+              scene_material ? scene_material->material : MaterialReference{},
+          .material_id = scene_material
+                             ? scene_material->material.embedded_asset()
+                             : kInvalidAssetId,
           .material_revision = material.revision,
           .world_transform = world_transform,
           .transform_revision =
@@ -424,13 +462,102 @@ RenderSceneSnapshot build_render_scene_snapshot(
   return snapshot;
 }
 
+namespace {
+
+RenderTextureAssetSnapshot build_render_project_texture_snapshot(
+    const RenderMaterialTextureEvaluationSnapshot &texture,
+    std::string_view slot) {
+  RenderTextureAssetSnapshot snapshot{
+      .slot = std::string(slot),
+      .project_texture_id = texture.project_texture_id,
+      .content_revision = texture.content_revision,
+      .encoded_file_bytes = texture.encoded_file_bytes,
+      .decoded_rgba8 = texture.decoded_rgba8,
+      .width = texture.width,
+      .height = texture.height,
+      .present = texture.project_texture_id.valid() && texture.present(),
+  };
+  snapshot.texture.color_space = texture.color_space;
+  return snapshot;
+}
+
+RenderMaterialAssetSnapshot build_render_project_material_asset_snapshot(
+    MaterialReference reference,
+    const RenderProjectMaterialResolver *resolver) {
+  RenderMaterialAssetSnapshot snapshot{
+      .reference = reference,
+  };
+  if (!reference.project_owned() || resolver == nullptr) {
+    return snapshot;
+  }
+
+  const std::optional<RenderProjectMaterialSnapshot> resolved =
+      resolver->resolve(reference.project_asset());
+  if (!resolved.has_value() ||
+      resolved->evaluation.project_material_id != reference.project_asset()) {
+    return snapshot;
+  }
+
+  const RenderStandardMaterialEvaluationSnapshot *standard =
+      resolved->evaluation.standard_material();
+  if (standard == nullptr) {
+    return snapshot;
+  }
+  snapshot.document.base_color = standard->base_color;
+  snapshot.document.roughness = standard->roughness;
+  snapshot.document.metallic = standard->metallic;
+  snapshot.normal_strength = standard->normal_strength;
+  snapshot.directx_normal = standard->directx_normal;
+  snapshot.revision = resolved->evaluation.content_revision;
+  snapshot.project_catalog_revision = resolved->catalog_revision;
+  snapshot.present = true;
+  /// Maps each typed Standard sampler to the existing render binding slot.
+  struct TextureBinding final {
+    RenderStandardMaterialTextureSlot slot;
+    std::string_view render_slot;
+  };
+  constexpr std::array<TextureBinding, 4> kTextureBindings{
+      TextureBinding{RenderStandardMaterialTextureSlot::Albedo,
+                     material_texture_slot::kBaseColor},
+      TextureBinding{RenderStandardMaterialTextureSlot::Roughness,
+                     material_texture_slot::kRoughness},
+      TextureBinding{RenderStandardMaterialTextureSlot::Metallic,
+                     material_texture_slot::kMetallic},
+      TextureBinding{RenderStandardMaterialTextureSlot::Normal,
+                     material_texture_slot::kNormal},
+  };
+  for (const TextureBinding &binding : kTextureBindings) {
+    const RenderMaterialTextureEvaluationSnapshot &texture =
+        standard->texture(binding.slot);
+    if (texture.present()) {
+      snapshot.textures.push_back(build_render_project_texture_snapshot(
+          texture, binding.render_slot));
+    }
+  }
+  return snapshot;
+}
+
+RenderMaterialAssetSnapshot build_render_material_asset_snapshot(
+    const AssetRegistry &assets, MaterialReference reference,
+    const RenderProjectMaterialResolver *resolver) {
+  if (reference.project_owned()) {
+    return build_render_project_material_asset_snapshot(reference, resolver);
+  }
+  return build_render_material_asset_snapshot(assets,
+                                               reference.embedded_asset());
+}
+
+} // namespace
+
 bool try_refresh_render_scene_snapshot_transforms(
     RenderSceneSnapshot &snapshot, const SceneDocument &document,
     const AssetRegistry &assets, std::uint64_t frame_index,
-    RenderSceneBindingKey scene_binding) {
+    RenderSceneBindingKey scene_binding,
+    std::uint64_t project_material_revision) {
   QDR_PROFILE_FUNCTION();
   if (snapshot.scene_binding != scene_binding ||
       snapshot.asset_revision != assets.revision() ||
+      snapshot.project_material_revision != project_material_revision ||
       snapshot.selection_revision != document.selection_revision() ||
       snapshot.visibility_revision != document.visibility_revision() ||
       snapshot.mesh_binding_revision != document.mesh_binding_revision() ||
@@ -452,6 +579,8 @@ bool try_refresh_render_scene_snapshot_transforms(
   const std::uint64_t previous_render_component_revision =
       snapshot.render_component_revision;
   const std::uint64_t previous_asset_revision = snapshot.asset_revision;
+  const std::uint64_t previous_project_material_revision =
+      snapshot.project_material_revision;
 
   snapshot.frame_index = frame_index;
   snapshot.scene_revision = document.revision();
@@ -461,6 +590,7 @@ bool try_refresh_render_scene_snapshot_transforms(
   snapshot.mesh_binding_revision = document.mesh_binding_revision();
   snapshot.render_component_revision = document.render_component_revision();
   snapshot.asset_revision = assets.revision();
+  snapshot.project_material_revision = project_material_revision;
   snapshot.dirty = {
       .scene_changed = previous_scene_revision != snapshot.scene_revision,
       .selection_changed =
@@ -474,6 +604,9 @@ bool try_refresh_render_scene_snapshot_transforms(
       .render_components_changed = previous_render_component_revision !=
                                    snapshot.render_component_revision,
       .assets_changed = previous_asset_revision != snapshot.asset_revision,
+      .project_materials_changed =
+          previous_project_material_revision !=
+          snapshot.project_material_revision,
   };
   snapshot.reused_previous_records = false;
 
@@ -506,7 +639,8 @@ bool try_refresh_render_scene_snapshot_transforms(
 
 bool render_scene_snapshot_matches_sources(
     const RenderSceneSnapshot &snapshot, const SceneDocument &document,
-    const AssetRegistry &assets, RenderSceneBindingKey scene_binding) {
+    const AssetRegistry &assets, RenderSceneBindingKey scene_binding,
+    std::uint64_t project_material_revision) {
   return snapshot.scene_binding == scene_binding &&
          snapshot.scene_revision == document.revision() &&
          snapshot.selection_revision == document.selection_revision() &&
@@ -515,7 +649,8 @@ bool render_scene_snapshot_matches_sources(
          snapshot.mesh_binding_revision == document.mesh_binding_revision() &&
          snapshot.render_component_revision ==
              document.render_component_revision() &&
-         snapshot.asset_revision == assets.revision();
+         snapshot.asset_revision == assets.revision() &&
+         snapshot.project_material_revision == project_material_revision;
 }
 
 SceneRenderExtractionPlan build_scene_render_extraction_plan(

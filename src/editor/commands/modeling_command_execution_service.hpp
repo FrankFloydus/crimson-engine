@@ -25,7 +25,8 @@ public:
   ModelingCommandResult execute(EditorHistoryService &history,
                                 ModelingSessionService &modeling,
                                 EditorSelectionService &selection,
-                                std::string_view tool_id);
+                                std::string_view tool_id,
+                                MaterialReference active_material = {});
 
   ModelingCommandResult
   execute_untracked(ModelingSessionService &modeling, std::string_view tool_id,
@@ -48,7 +49,8 @@ public:
 
   [[nodiscard]] ModelingCommandAvailability
   availability(ModelingSessionService &modeling, std::string_view tool_id,
-               EditorSelectionService *selection = nullptr) const;
+               EditorSelectionService *selection = nullptr,
+               MaterialReference active_material = {}) const;
 
   [[nodiscard]] ModelingCommandHistoryPolicy
   history_policy(std::string_view tool_id) const;

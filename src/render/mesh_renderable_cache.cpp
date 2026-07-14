@@ -23,7 +23,7 @@ bool mesh_proxy_needs_rebuild(
   return existing == proxies.end() ||
          existing->second.mesh != mesh.mesh.mesh_id ||
          existing->second.mesh_revision != mesh.mesh.mesh_revision ||
-         existing->second.material != mesh.material_id ||
+         existing->second.material != mesh.material_reference ||
          existing->second.cast_shadows != cast_shadows ||
          existing->second.double_sided != mesh.double_sided() ||
          existing->second.material_revision != mesh.material_revision;

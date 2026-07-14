@@ -45,7 +45,7 @@ struct ProjectObjectRecord {
   EditorObjectId id = kInvalidEditorObjectId;
   EntityId scene_entity = kInvalidEntityId;
   AssetId mesh = kInvalidAssetId;
-  AssetId material = kInvalidAssetId;
+  MaterialReference material;
   ModelingObjectId modeling_object = kInvalidModelingObjectId;
   std::string authored_name;
   bool visible = true;
@@ -79,6 +79,7 @@ struct SceneContentDocumentAssetReferenceIssue {
   EntityId entity = kInvalidEntityId;
   EditorObjectId object_id = kInvalidEditorObjectId;
   AssetId asset = kInvalidAssetId;
+  ProjectAssetId project_asset;
   std::string message;
 };
 

@@ -41,6 +41,17 @@ SceneSession &scene_session(QuaderApiSession session) {
   return QuaderApiSessionInternalAccess::scene_session(session);
 }
 
+MaterialReference active_project_material(QuaderApiSession session) {
+  ProjectSession *project =
+      QuaderApiSessionInternalAccess::project_session(session);
+  if (project == nullptr) {
+    return {};
+  }
+  const std::optional<ProjectAssetId> id = project->active_material_id();
+  return id.has_value() ? MaterialReference::project(*id)
+                        : MaterialReference{};
+}
+
 QuaderApiResult<QuaderModelingObjectRef>
 result_from_create(QuaderApiVoidResult status, QuaderModelingObjectRef value) {
   return quader_api_result_from_status(status, value);
@@ -983,6 +994,7 @@ QuaderModelingApi::create_box(const QuaderCreateBoxArgs &args) {
       ModelingCreateBoxRequest{
           .bounds = to_modeling_bounds(args.bounds),
           .name = args.name,
+          .material = active_project_material(session_),
       });
   CreateBoxFromBoundsHistoryCommand *create_command = command.get();
   QuaderApiVoidResult status =
@@ -1022,9 +1034,13 @@ QuaderModelingApi::create_box_mesh(QuaderBounds bounds, std::string name) {
 QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::commit_box_preview(std::string name,
                                       AssetId default_material) {
+  MaterialReference material = active_project_material(session_);
+  if (!material.valid() && default_material != kInvalidAssetId) {
+    material = MaterialReference(default_material);
+  }
   auto command = std::make_unique<CommitBoxPreviewCommand>(
       scene_session(session_).modeling(), scene_session(session_).scene(),
-      scene_session(session_).assets(), std::move(name), default_material);
+      scene_session(session_).assets(), std::move(name), material);
   CommitBoxPreviewCommand *commit_command = command.get();
   QuaderApiVoidResult status = mutations_.run_modeling_undoable_command(
       std::move(command), "Create Box");
@@ -1044,6 +1060,7 @@ QuaderModelingApi::create_mesh(QuaderPolygonDocument document,
   request.document = QuaderPolygonDocumentInternalAccess::to_backend(document);
   request.name = std::move(args.name);
   request.material_slot = args.material_slot;
+  request.material = active_project_material(session_);
   auto command = std::make_unique<CreateMeshHistoryCommand>(
       scene_session(session_).modeling(), std::move(request));
   CreateMeshHistoryCommand *create_command = command.get();
@@ -1696,6 +1713,13 @@ QuaderModelingApi::duplicate_selected_hierarchy_for_group_drag() {
 
 QuaderApiVoidResult
 QuaderModelingApi::apply_active_material(std::uint32_t material_slot) {
+  const MaterialReference material = active_project_material(session_);
+  if (material.valid()) {
+    return mutations_.run_modeling_command(
+        std::make_unique<ApplyActiveMaterialHistoryCommand>(
+            scene_session(session_).modeling(), material),
+        "Apply Active Material");
+  }
   return mutations_.run_modeling_command(
       std::make_unique<ApplyActiveMaterialHistoryCommand>(
           scene_session(session_).modeling(), material_slot),

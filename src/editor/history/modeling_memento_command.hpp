@@ -421,12 +421,20 @@ public:
       : ModelingMementoCommand(modeling, "Apply Material"),
         material_slot_(material_slot) {}
 
+  ApplyActiveMaterialHistoryCommand(ModelingSessionService &modeling,
+                                    MaterialReference material)
+      : ModelingMementoCommand(modeling, "Apply Material"),
+        material_(material) {}
+
 private:
   ModelingCommandResult execute_initial() override {
-    return modeling().apply_active_material(material_slot_);
+    return material_.valid()
+               ? modeling().apply_active_material(material_)
+               : modeling().apply_active_material(material_slot_);
   }
 
   std::uint32_t material_slot_ = 0;
+  MaterialReference material_;
 };
 
 /**
