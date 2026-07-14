@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "io/mesh/obj_writer.hpp"
 #include "scene/components.hpp"
 
@@ -38,12 +38,12 @@ struct ObjExportHarness {
  * Owns an internal session fixture for non-modeling mesh entity setup.
  */
 struct InternalObjExportHarness {
-  quader::ProjectSession session;
+  quader::SceneSession session;
   quader::QuaderEditorApi editor;
 
   InternalObjExportHarness()
       : session(),
-        editor(quader::QuaderApiSessionInternalAccess::from_project_session(
+        editor(quader::QuaderApiSessionInternalAccess::from_scene_session(
             session)) {}
 };
 
@@ -109,7 +109,7 @@ create_selected_box(quader::QuaderEditorApi &editor, std::string name) {
 }
 
 quader::EntityId create_selected_plain_mesh_with_asset(
-    quader::ProjectSession &session, quader::QuaderEditorApi &editor,
+    quader::SceneSession &session, quader::QuaderEditorApi &editor,
     std::string name, quader::MeshAsset mesh) {
   mesh.name = name + " Mesh";
   const quader::AssetId mesh_id = session.assets().add_mesh(std::move(mesh));
@@ -120,7 +120,7 @@ quader::EntityId create_selected_plain_mesh_with_asset(
   return entity;
 }
 
-quader::EntityId create_selected_plain_mesh(quader::ProjectSession &session,
+quader::EntityId create_selected_plain_mesh(quader::SceneSession &session,
                                             quader::QuaderEditorApi &editor,
                                             std::string name) {
   return create_selected_plain_mesh_with_asset(

@@ -12,6 +12,7 @@
 #include "core/types.hpp"
 #include "math/types.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
+#include "render/render_scene_binding.hpp"
 #include "scene/components.hpp"
 
 #include <cstdint>
@@ -153,6 +154,7 @@ using OverlaySnapshot = RenderOverlaySelectionSnapshot;
  */
 struct RenderSceneSnapshot {
   std::uint64_t frame_index = 0;
+  RenderSceneBindingKey scene_binding;
   std::uint64_t scene_revision = 0;
   std::uint64_t selection_revision = 0;
   std::uint64_t visibility_revision = 0;
@@ -174,6 +176,7 @@ struct RenderSceneSnapshot {
 struct RenderSceneSnapshotBuildOptions {
   const RenderSceneSnapshot *previous = nullptr;
   std::uint64_t frame_index = 0;
+  RenderSceneBindingKey scene_binding;
 };
 
 /**

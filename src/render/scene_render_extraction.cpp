@@ -98,7 +98,8 @@ bool same_mesh_component(const MeshComponent &left,
 
 RenderSceneSnapshotDirtyState scene_snapshot_dirty_state(
     const RenderSceneSnapshot &snapshot, const RenderSceneSnapshot *previous) {
-  if (previous == nullptr) {
+  if (previous == nullptr ||
+      previous->scene_binding != snapshot.scene_binding) {
     return {};
   }
 
@@ -175,6 +176,7 @@ void mark_light_dirty(RenderSceneLightRecord &record,
 [[nodiscard]] bool can_reuse_previous_render_records(
     const RenderSceneSnapshot &snapshot, const RenderSceneSnapshot *previous) {
   return previous != nullptr &&
+         previous->scene_binding == snapshot.scene_binding &&
          previous->scene_revision == snapshot.scene_revision &&
          previous->selection_revision == snapshot.selection_revision &&
          previous->visibility_revision == snapshot.visibility_revision &&
@@ -348,6 +350,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
   QDR_PROFILE_FUNCTION();
   RenderSceneSnapshot snapshot;
   snapshot.frame_index = options.frame_index;
+  snapshot.scene_binding = options.scene_binding;
   snapshot.scene_revision = document.revision();
   snapshot.selection_revision = document.selection_revision();
   snapshot.visibility_revision = document.visibility_revision();
@@ -355,9 +358,14 @@ RenderSceneSnapshot build_render_scene_snapshot(
   snapshot.mesh_binding_revision = document.mesh_binding_revision();
   snapshot.render_component_revision = document.render_component_revision();
   snapshot.asset_revision = assets.revision();
-  snapshot.dirty = scene_snapshot_dirty_state(snapshot, options.previous);
-  if (can_reuse_previous_render_records(snapshot, options.previous)) {
-    reuse_previous_render_records(snapshot, *options.previous);
+  const RenderSceneSnapshot *const previous =
+      options.previous != nullptr &&
+              options.previous->scene_binding == snapshot.scene_binding
+          ? options.previous
+          : nullptr;
+  snapshot.dirty = scene_snapshot_dirty_state(snapshot, previous);
+  if (can_reuse_previous_render_records(snapshot, previous)) {
+    reuse_previous_render_records(snapshot, *previous);
     return snapshot;
   }
 
@@ -389,7 +397,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
               RenderSignatureBuilder::light_transform_signature(
                   world_transform),
       };
-      mark_mesh_dirty(entry, previous_mesh_record(options.previous, entity_id));
+      mark_mesh_dirty(entry, previous_mesh_record(previous, entity_id));
       if (entry.renderable()) {
         snapshot.live_mesh_entities.insert(entity_id);
       }
@@ -408,8 +416,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
               RenderSignatureBuilder::light_transform_signature(
                   world_transform),
       };
-      mark_light_dirty(entry,
-                       previous_light_record(options.previous, entity_id));
+      mark_light_dirty(entry, previous_light_record(previous, entity_id));
       snapshot.lights.push_back(entry);
     }
   }
@@ -419,9 +426,11 @@ RenderSceneSnapshot build_render_scene_snapshot(
 
 bool try_refresh_render_scene_snapshot_transforms(
     RenderSceneSnapshot &snapshot, const SceneDocument &document,
-    const AssetRegistry &assets, std::uint64_t frame_index) {
+    const AssetRegistry &assets, std::uint64_t frame_index,
+    RenderSceneBindingKey scene_binding) {
   QDR_PROFILE_FUNCTION();
-  if (snapshot.asset_revision != assets.revision() ||
+  if (snapshot.scene_binding != scene_binding ||
+      snapshot.asset_revision != assets.revision() ||
       snapshot.selection_revision != document.selection_revision() ||
       snapshot.visibility_revision != document.visibility_revision() ||
       snapshot.mesh_binding_revision != document.mesh_binding_revision() ||
@@ -497,8 +506,9 @@ bool try_refresh_render_scene_snapshot_transforms(
 
 bool render_scene_snapshot_matches_sources(
     const RenderSceneSnapshot &snapshot, const SceneDocument &document,
-    const AssetRegistry &assets) {
-  return snapshot.scene_revision == document.revision() &&
+    const AssetRegistry &assets, RenderSceneBindingKey scene_binding) {
+  return snapshot.scene_binding == scene_binding &&
+         snapshot.scene_revision == document.revision() &&
          snapshot.selection_revision == document.selection_revision() &&
          snapshot.visibility_revision == document.visibility_revision() &&
          snapshot.transform_revision == document.transform_revision() &&

@@ -9,14 +9,16 @@
 #include "api/quader_editor_api.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -33,6 +35,28 @@ std::filesystem::path stress_project_path() {
   }
   return std::filesystem::path(
       LR"(C:\Users\Drako\Desktop\my_first_project.qdr)");
+}
+
+bool stress_input_is_legacy_json(const std::filesystem::path &path) {
+  std::ifstream stream(path, std::ios::binary);
+  char character = '\0';
+  while (stream.get(character)) {
+    if (std::isspace(static_cast<unsigned char>(character)) != 0) {
+      continue;
+    }
+    return character == '{' || character == '[';
+  }
+  return false;
+}
+
+void expect_legacy_json_unsupported(
+    const quader::QdrProjectReadResult &read) {
+  ASSERT_FALSE(read.ok);
+  ASSERT_FALSE(read.diagnostics.empty());
+  EXPECT_EQ(read.diagnostics.front().code,
+            "qdr.binary.unsupported_format");
+  EXPECT_NE(read.message.find("Legacy JSON"), std::string::npos);
+  std::cout << "[local-stress] legacy_json_policy=unsupported\n";
 }
 
 template <typename Step>
@@ -120,17 +144,21 @@ TEST(LocalStressTests, MyFirstProjectLargeWorkflow) {
     timed_stress_step("qdr_read", [&] {
       read = quader::QdrDocumentReader::read_project_document(project_path);
     });
+    if (stress_input_is_legacy_json(project_path)) {
+      expect_legacy_json_unsupported(read);
+      return;
+    }
     ASSERT_TRUE(read.ok) << read.message;
 
-    quader::ProjectSessionService sessions;
-    std::unique_ptr<quader::ProjectSession> session;
+    quader::SceneSessionService sessions;
+    std::unique_ptr<quader::SceneSession> session;
     timed_stress_step("session_open", [&] {
       session = sessions.open_session(std::move(read.document));
     });
     ASSERT_NE(session, nullptr);
 
     quader::QuaderEditorApi editor(
-        quader::QuaderApiSessionInternalAccess::from_project_session(*session));
+        quader::QuaderApiSessionInternalAccess::from_scene_session(*session));
     const std::vector<quader::QuaderEntitySnapshot> loaded_entities =
         editor.query().entities();
     std::cout << "[local-stress] entity_count=" << loaded_entities.size()
@@ -205,7 +233,8 @@ TEST(LocalStressTests, MyFirstProjectLargeWorkflow) {
     std::filesystem::remove(save_path, remove_error);
     timed_stress_step("save_after_transform_and_invert", [&] {
       const quader::QuaderApiVoidResult saved =
-          editor.project().save_as(save_path);
+          editor.scene_documents().save_as_native_path(
+              *editor.scene_documents().active_scene_id(), save_path);
       ASSERT_TRUE(saved.ok()) << saved.error_message();
     });
     EXPECT_TRUE(std::filesystem::exists(save_path));
@@ -236,14 +265,18 @@ TEST(LocalStressTests, MyFirstProjectRepeatedAllSelectionDragSamples) {
 
   quader::QdrProjectReadResult read =
       quader::QdrDocumentReader::read_project_document(project_path);
+  if (stress_input_is_legacy_json(project_path)) {
+    expect_legacy_json_unsupported(read);
+    return;
+  }
   ASSERT_TRUE(read.ok) << read.message;
 
-  quader::ProjectSessionService sessions;
-  std::unique_ptr<quader::ProjectSession> session =
+  quader::SceneSessionService sessions;
+  std::unique_ptr<quader::SceneSession> session =
       sessions.open_session(std::move(read.document));
   ASSERT_NE(session, nullptr);
   quader::QuaderEditorApi editor(
-      quader::QuaderApiSessionInternalAccess::from_project_session(*session));
+      quader::QuaderApiSessionInternalAccess::from_scene_session(*session));
   const quader::QuaderApiVoidResult selected = editor.selection().select_all();
   ASSERT_TRUE(selected.ok()) << selected.error_message();
   const std::size_t selected_count = selected_entity_count(editor);

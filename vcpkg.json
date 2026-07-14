@@ -1,6 +1,6 @@
 {
   "name": "quader-app",
-  "version-string": "0.0.110",
+  "version-string": "0.0.112",
   "builtin-baseline": "d0c191d142b7bc048141ddfb618aa9ae5dba0233",
   "dependencies": [],
   "default-features": [
@@ -12,6 +12,7 @@
       "description": "Dependencies used only by the native Quader editor host.",
       "dependencies": [
         "entt",
+        "flatbuffers",
         "glm",
         {
           "name": "qtbase",
@@ -26,6 +27,7 @@
         "spdlog",
         "stduuid",
         "taskflow",
+        "zstd",
         "zlib"
       ]
     },

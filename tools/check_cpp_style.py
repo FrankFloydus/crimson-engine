@@ -144,6 +144,16 @@ def generate_cmake_compile_database() -> None:
 	run(command)
 
 
+def generate_cmake_build_prerequisites() -> None:
+	run([
+		"cmake",
+		"--build",
+		str(TIDY_BUILD_DIR),
+		"--target",
+		"quader_qdr_flatbuffers_generated",
+	])
+
+
 def run_clang_tidy(
 	run_clang_tidy_path: str,
 	clang_tidy_path: str,
@@ -196,6 +206,7 @@ def main() -> int:
 
 		if not args.skip_compile_db:
 			generate_cmake_compile_database()
+		generate_cmake_build_prerequisites()
 
 		run_clang_tidy(
 			run_clang_tidy_path,

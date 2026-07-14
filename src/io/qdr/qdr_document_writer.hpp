@@ -6,11 +6,15 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "io/qdr/qdr_project_write_snapshot.hpp"
-#include "scene/document/project_document.hpp"
+#include "io/qdr/qdr_scene_binary_codec.hpp"
+#include "scene/document/scene_content_document.hpp"
 
+#include <array>
+#include <cstddef>
 #include <filesystem>
+#include <span>
 #include <string>
+#include <vector>
 
 namespace quader {
 
@@ -27,16 +31,33 @@ struct QdrProjectWriteResult {
  */
 class QdrDocumentWriter final {
 public:
-  [[nodiscard]] static std::string
-  serialize_project_document(const QdrProjectWriteSnapshot &snapshot);
-  [[nodiscard]] static std::string
-  serialize_project_document(const ProjectDocument &document);
+  [[nodiscard]] static QdrSceneBinaryEncodeResult
+  serialize_project_document_with_stats(
+      const QdrProjectWriteSnapshot &snapshot);
+  [[nodiscard]] static QdrSceneBinaryEncodeResult
+  serialize_project_document_with_stats(
+      const QdrProjectWriteSnapshot &snapshot,
+      std::array<std::byte, 16> scene_uuid);
+  [[nodiscard]] static std::vector<std::byte>
+  serialize_project_document_bytes(const QdrProjectWriteSnapshot &snapshot);
+  [[nodiscard]] static std::vector<std::byte> serialize_project_document_bytes(
+      const QdrProjectWriteSnapshot &snapshot,
+      std::array<std::byte, 16> scene_uuid);
+  [[nodiscard]] static std::vector<std::byte>
+  serialize_project_document_bytes(const SceneContentDocument &document);
   [[nodiscard]] static QdrProjectWriteResult
   write_project_document_atomic(const std::filesystem::path &path,
                                 const QdrProjectWriteSnapshot &snapshot);
+  [[nodiscard]] static QdrProjectWriteResult write_project_document_atomic(
+      const std::filesystem::path &path,
+      const QdrProjectWriteSnapshot &snapshot,
+      std::array<std::byte, 16> scene_uuid);
   [[nodiscard]] static QdrProjectWriteResult
   write_project_document_atomic(const std::filesystem::path &path,
-                                const ProjectDocument &document);
+                                const SceneContentDocument &document);
+  [[nodiscard]] static QdrProjectWriteResult write_project_document_atomic(
+      const std::filesystem::path &path, const SceneContentDocument &document,
+      std::array<std::byte, 16> scene_uuid);
 };
 
 } // namespace quader

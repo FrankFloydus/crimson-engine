@@ -12,7 +12,7 @@
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "scene/components.hpp"
 
 #include <mesh/polygon/document.hpp>
@@ -92,7 +92,8 @@ private:
     [[nodiscard]] QVec3 world_position(EntityId entity) const;
     [[nodiscard]] ViewportOverlayFrame selection_overlay_frame() const;
 
-    ProjectSession session_;
+    SceneSession session_;
+    QuaderApiSession api_session_;
     QuaderEditorApi editor_;
     std::unordered_map<std::string, QuaderModelingObjectRef> aliases_;
     QuaderApiStatus last_status_;

@@ -11,7 +11,7 @@
 #include "api/quader_api_mutation_runner.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 
 #include <memory>
@@ -20,8 +20,8 @@
 namespace quader {
 namespace {
 
-ProjectSession &project_session(QuaderApiSession session) {
-  return QuaderApiSessionInternalAccess::project_session(session);
+SceneSession &scene_session(QuaderApiSession session) {
+  return QuaderApiSessionInternalAccess::scene_session(session);
 }
 
 QuaderApiResult<QuaderSelectionSummary>
@@ -95,7 +95,7 @@ QuaderApiVoidResult
 QuaderSelectionApi::select_objects(std::span<const EntityId> entities,
                                    EntityId active) {
   return mutations_.run_document_result(
-      project_session(session_).selection().set_scene_selection(entities,
+      scene_session(session_).selection().set_scene_selection(entities,
                                                                 active),
       "Select Objects");
 }
@@ -110,7 +110,7 @@ QuaderSelectionApi::select_objects(std::initializer_list<EntityId> entities,
 QuaderApiVoidResult QuaderSelectionApi::select_objects_for_inspection(
     std::span<const EntityId> entities, EntityId active) {
   return mutations_.run_document_result(
-      project_session(session_).selection().set_inspection_scene_selection(
+      scene_session(session_).selection().set_inspection_scene_selection(
           entities, active),
       "Select Objects");
 }
@@ -124,7 +124,7 @@ QuaderApiVoidResult QuaderSelectionApi::select_objects_for_inspection(
 QuaderApiVoidResult
 QuaderSelectionApi::select_object(EntityId entity, QuaderSelectionEdit edit) {
   return mutations_.run_document_result(
-      project_session(session_).selection().edit_scene_selection(
+      scene_session(session_).selection().edit_scene_selection(
           entity, to_editor_selection_edit(edit)),
       "Select Objects");
 }
@@ -132,6 +132,9 @@ QuaderSelectionApi::select_object(EntityId entity, QuaderSelectionEdit edit) {
 QuaderApiVoidResult
 QuaderSelectionApi::select_object(QuaderModelingObjectRef object,
                                   QuaderSelectionEdit edit) {
+  if (!mutations_.belongs_to_active_scene(object.scene_session_id)) {
+    return mutations_.stale_scene_reference_status("Modeling object");
+  }
   return select_object(object.entity, edit);
 }
 
@@ -141,16 +144,22 @@ QuaderApiVoidResult QuaderSelectionApi::select_objects(
   std::vector<EntityId> entities;
   entities.reserve(objects.size());
   for (const QuaderModelingObjectRef &object : objects) {
+    if (!mutations_.belongs_to_active_scene(object.scene_session_id)) {
+      return mutations_.stale_scene_reference_status("Modeling object");
+    }
     entities.push_back(object.entity);
   }
   return mutations_.run_document_result(
-      project_session(session_).selection().edit_scene_selection(
+      scene_session(session_).selection().edit_scene_selection(
           entities, to_editor_selection_edit(edit)),
       "Select Objects");
 }
 
 QuaderApiVoidResult QuaderSelectionApi::select_components(
     const QuaderComponentSelectionArgs &args) {
+  if (!mutations_.belongs_to_active_scene(args.object.scene_session_id)) {
+    return mutations_.stale_scene_reference_status("Modeling object");
+  }
   ModelingComponentSelectionRequest request;
   request.modeling_object_id = args.object.modeling_object_id;
   request.edit = to_modeling_edit(args.edit);
@@ -193,7 +202,7 @@ QuaderApiVoidResult QuaderSelectionApi::select_components(
   }
 
   return mutations_.run_modeling_result(
-      project_session(session_).selection().set_component_selection(request),
+      scene_session(session_).selection().set_component_selection(request),
       "Select Components");
 }
 
@@ -278,18 +287,18 @@ QuaderSelectionApi::select_faces(QuaderModelingObjectRef object,
 
 QuaderApiVoidResult QuaderSelectionApi::clear() {
   return mutations_.run_modeling_result(
-      project_session(session_).selection().clear(), "Clear Selection");
+      scene_session(session_).selection().clear(), "Clear Selection");
 }
 
 QuaderApiVoidResult QuaderSelectionApi::select_all() {
   QDR_PROFILE_FUNCTION();
   return mutations_.run_modeling_result(
-      project_session(session_).selection().select_all(), "Select All");
+      scene_session(session_).selection().select_all(), "Select All");
 }
 
 QuaderApiVoidResult QuaderSelectionApi::invert() {
   return mutations_.run_modeling_result(
-      project_session(session_).selection().invert(), "Invert Selection");
+      scene_session(session_).selection().invert(), "Invert Selection");
 }
 
 QuaderApiVoidResult QuaderSelectionApi::set_mode(QuaderSelectionMode mode) {
@@ -299,7 +308,7 @@ QuaderApiVoidResult QuaderSelectionApi::set_mode(QuaderSelectionMode mode) {
 QuaderApiResult<QuaderSelectionSummary>
 QuaderSelectionApi::pick_select(const QuaderPickSelectRequest &request) {
   QDR_PROFILE_FUNCTION();
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   const bool document_selection_mode =
       selection_mode_uses_scene_document(session.selection().mode());
   const ModelingSelectionSummary before = session.selection().summary();
@@ -324,7 +333,7 @@ QuaderSelectionApi::capture_box_selection_baseline() const {
   return QuaderSelectionBoxBaseline(
       std::shared_ptr<const QuaderSelectionBoxBaseline::Impl>(
           new QuaderSelectionBoxBaseline::Impl(
-              project_session(session_)
+              scene_session(session_)
                   .selection()
                   .capture_box_selection_baseline())));
 }
@@ -332,7 +341,7 @@ QuaderSelectionApi::capture_box_selection_baseline() const {
 QuaderApiResult<QuaderSelectionSummary>
 QuaderSelectionApi::box_select(const QuaderBoxSelectRequest &request) {
   QDR_PROFILE_FUNCTION();
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   const bool document_selection_mode =
       selection_mode_uses_scene_document(session.selection().mode());
   const ModelingSelectionSummary before = session.selection().summary();
@@ -356,7 +365,7 @@ QuaderApiResult<QuaderSelectionSummary>
 QuaderSelectionApi::box_select(const QuaderBoxSelectRequest &request,
                                const QuaderSelectionBoxBaseline &baseline) {
   QDR_PROFILE_FUNCTION();
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   const bool document_selection_mode =
       selection_mode_uses_scene_document(session.selection().mode());
   const ModelingSelectionSummary before = session.selection().summary();
@@ -383,12 +392,12 @@ QuaderSelectionApi::box_select(const QuaderBoxSelectRequest &request,
 QuaderApiResult<QuaderHoverSummary> QuaderSelectionApi::hover(const QuaderHoverRequest& request) {
     QDR_PROFILE_FUNCTION();
     QuaderApiVoidResult status = mutations_.run_modeling_result(
-        project_session(session_).selection().update_hover(
+        scene_session(session_).selection().update_hover(
             to_modeling_hover_request(request)),
         "Update Hover");
     return hover_result_from_status(
         std::move(status),
-        project_session(session_).selection().hover_summary());
+        scene_session(session_).selection().hover_summary());
 }
 
 QuaderApiResult<QuaderHoverSummary>
@@ -413,23 +422,23 @@ QuaderSelectionApi::hover_face(QuaderModelingObjectRef object,
 
 QuaderApiVoidResult QuaderSelectionApi::clear_hover() {
   return mutations_.run_modeling_result(
-      project_session(session_).selection().clear_hover(), "Clear Hover");
+      scene_session(session_).selection().clear_hover(), "Clear Hover");
 }
 
 QuaderSelectionSummary QuaderSelectionApi::summary() const {
   return to_api_selection_summary(
-      project_session(session_).selection().summary());
+      scene_session(session_).selection().summary());
 }
 
 QuaderHoverSummary QuaderSelectionApi::hover_summary() const {
   return to_api_hover_summary(
-      project_session(session_).selection().hover_summary());
+      scene_session(session_).selection().hover_summary());
 }
 
 QuaderHoverSummary
 QuaderSelectionApi::preview_hover(const QuaderHoverRequest &request) const {
   return to_api_hover_summary(
-      project_session(session_).selection().preview_hover(
+      scene_session(session_).selection().preview_hover(
           to_modeling_hover_request(request)));
 }
 
@@ -438,6 +447,10 @@ QuaderSelectionApi::direct_hover(QuaderModelingObjectRef object,
                                  QuaderActiveSelectionKind kind,
                                  QuaderElementId vertex, QuaderElementId edge_a,
                                  QuaderElementId edge_b, QuaderElementId face) {
+  if (!mutations_.belongs_to_active_scene(object.scene_session_id)) {
+    return quader_api_result_from_status<QuaderHoverSummary>(
+        mutations_.stale_scene_reference_status("Modeling object"), {});
+  }
   ModelingDirectHoverRequest request;
   request.modeling_object_id = object.modeling_object_id;
   request.vertex_id = vertex;
@@ -460,9 +473,9 @@ QuaderSelectionApi::direct_hover(QuaderModelingObjectRef object,
     break;
   }
   QuaderApiVoidResult status = mutations_.run_modeling_result(
-      project_session(session_).selection().set_hover(request), "Update Hover");
+      scene_session(session_).selection().set_hover(request), "Update Hover");
   return hover_result_from_status(
-      std::move(status), project_session(session_).selection().hover_summary());
+      std::move(status), scene_session(session_).selection().hover_summary());
 }
 
 } // namespace quader

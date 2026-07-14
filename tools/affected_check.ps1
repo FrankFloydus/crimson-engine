@@ -572,21 +572,17 @@ function Add-PathPlan {
         return
     }
 
-    if ($Path -match '^src/sdk/core/modeling/internal/io/qdr/') {
-        Add-BuildTarget "quader_qdr_document_io" "canonical QDR source changed"
-        Add-BuildTarget "quader_modeling_sdk_consumer_tests" "canonical QDR source changed"
-        Add-BuildTarget "quader_tests" "canonical QDR source changed"
-        Add-PolygonModelingLoopFilter "QdrIoDocumentTests.*" "native QDR document parity tests"
-        Add-QuaderTestsFilter "Qdr*:ProjectionOwnershipGuardrailTests.*" "QDR app IO parity tests"
+    if ($Path -match '^src/sdk/core/modeling/(src/qdr_document\.cpp|include/quader/modeling/io/qdr_document\.hpp)$') {
+        Add-BuildTarget "quader_modeling_sdk_qdr_document" "portable binary QDR source changed"
+        Add-BuildTarget "quader_modeling_sdk_consumer_tests" "portable binary QDR source changed"
+        Add-BuildTarget "quader_tests" "portable binary QDR source changed"
+        Add-QuaderTestsFilter "Qdr*:ProjectionOwnershipGuardrailTests.*" "native binary QDR integration tests"
         return
     }
 
     if ($Path -match '^src/io/qdr/') {
-        Add-BuildTarget "quader_qdr_document_io" "QDR IO source changed"
-        Add-BuildTarget "quader_qdr_runtime_io" "QDR IO source changed"
+        Add-BuildTarget "quader_project_qdr_io" "native binary QDR IO source changed"
         Add-BuildTarget "quader_tests" "QDR IO source changed"
-        Add-PolygonModelingLoopFilter "QdrIoDocumentTests.*" "QDR document IO modeling-domain tests"
-        Add-RuntimeModelingLoopFilter "QdrRuntimeIoCompatTests.*" "QDR runtime IO modeling-domain tests"
         Add-QuaderTestsFilter "Qdr*:ProjectionOwnershipGuardrailTests.*" "QDR app IO tests"
         return
     }
@@ -722,34 +718,25 @@ function Remove-RedundantBuildTargets {
         "quader_modeling_polygon",
         "quader_geometry",
         "quader_editor_metadata",
-        "quader_qdr_shared_io",
-        "quader_qdr_document_io",
-        "quader_qdr_runtime_io"
+        "quader_project_qdr_io",
+        "quader_modeling_sdk_qdr_document"
     )
     $quaderTestsDependencies = $quaderDependencies
     $modelingDomainDependencies = @(
         "quader_modeling_runtime",
         "quader_modeling_polygon",
         "quader_geometry",
-        "quader_editor_metadata",
-        "quader_qdr_shared_io",
-        "quader_qdr_document_io",
-        "quader_qdr_runtime_io"
+        "quader_editor_metadata"
     )
     $polygonLoopDependencies = @(
         "quader_modeling_polygon",
-        "quader_geometry",
-        "quader_qdr_shared_io",
-        "quader_qdr_document_io"
+        "quader_geometry"
     )
     $runtimeLoopDependencies = @(
         "quader_modeling_runtime",
         "quader_modeling_polygon",
         "quader_geometry",
-        "quader_editor_metadata",
-        "quader_qdr_shared_io",
-        "quader_qdr_document_io",
-        "quader_qdr_runtime_io"
+        "quader_editor_metadata"
     )
     $metadataLoopDependencies = @(
         "quader_editor_metadata"

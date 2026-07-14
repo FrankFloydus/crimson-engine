@@ -8,13 +8,16 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # QDR IO Package Guide
 
-`src/io/qdr` owns QDR document/runtime IO and compatibility behavior.
+`src/io/qdr` owns native binary scene IO, validation, atomic replacement, and
+developer inspection tools.
 
 ## QDR Rules
 
-- Keep QDR reader/writer changes round-trip safe for supported document data.
-- Preserve format compatibility unless a task explicitly asks for a breaking change.
-- Keep runtime compatibility adapters thin; they should translate between QDR data and native app
-  owners, not own editor behavior.
-- Add or update QDR fixtures and tests for schema, compatibility, or serialization changes.
+- Keep QDR reader/writer changes round-trip safe for supported binary scene data.
+- Legacy JSON `.qdr` input is unsupported. Do not add JSON readers, migrations, format dispatch,
+  runtime compatibility adapters, or the retired compatibility targets back.
+- Keep native scene hydration/extraction around the SDK-owned binary authored-topology codec; SDK
+  QDR APIs consume and return byte spans/vectors only.
+- JSON from `qdr_dump --json` is write-only developer inspection output, not a persistence format.
+- Add or update QDR fixtures and tests for binary schema or serialization changes.
 - Do not add editor save/load workflow tests until the editor save/load surface exists.

@@ -4178,3 +4178,115 @@ Verification:
   changes.
 - The affected workflow and final full CTest both pass all 6 executables; the complete native test
   executable passes 922 tests. The full Debug preset and native `quader` v0.0.110 build succeed.
+
+## 2026-07-14 - Project Workspaces Preserve Identity Across UI, Storage, APIs, Rendering, And QDR
+
+Task/context: The one-file project model became a folder-backed project with multiple resident
+scene sessions and binary scene persistence. The transition exposed several boundaries where a
+valid local identifier or revision is not sufficient without its owning project/scene context.
+
+Invariant:
+
+- Install a Qt item-view model before calling section-indexed `QHeaderView` operations such as
+  `setSectionResizeMode(logicalIndex, ...)`. Before the model supplies sections, Qt has no valid
+  logical-to-visual mapping and its Debug runtime asserts in `adjustedVisualIndex`.
+- Do not reset the recent-project model when the projected entries are unchanged. Home is refreshed
+  every app frame, and an unconditional model reset clears the current row between pointer events,
+  disabling removal and preventing double-click/Return activation from completing.
+- Project replacement is staged: a failed create/open leaves the current workspace, tabs, active
+  session, and identities intact. Structural workspace mutations update the manifest atomically;
+  the in-memory manifest is committed only after the write succeeds, and tab order, activation,
+  scene path/ID, and catalog mutations roll back on failure. Path uniqueness includes physical
+  identity through canonical/equivalent locations, so case variants and in-root symlink/junction
+  aliases focus an existing tab or reject a colliding Save As instead of creating parallel owners.
+- Stable public API facade objects resolve the active `SceneSession` for every invocation; they do
+  not retain a prior scene owner. Entity/modeling references and `QuaderObjectHandle` values carry
+  their `SceneSessionId`, so an inactive, closed, or generation-reused scene cannot accidentally
+  address an equal numeric ID in another session.
+- Every renderer-neutral cache boundary uses `RenderSceneBindingKey`, composed from the packed
+  `SceneSessionId`, project activation generation, and render binding revision. Scene snapshots,
+  sync early-outs, material/texture bindings, overlays, and proxy reuse must compare this key so
+  two scenes with equal document revisions and equal entity/asset numbers cannot reuse each
+  other's records when the shared viewport switches tabs.
+- A scene-binding change is also a strict Filament resource-lifetime boundary. Destroy tool-preview
+  proxies and retire every outgoing mesh proxy/material instance before releasing scene-qualified
+  textures; `FEngine::prepare` commits all live surface material instances, including detached
+  ones, and rejects any texture pointer that has already been destroyed. Without explicit texture
+  reference tracking, replaced texture revisions remain cached until the safe scene-bind or
+  shutdown boundary instead of being evicted while paced proxy retirement is pending.
+- Constructing a `SceneSession` from an existing `SceneContentDocument` must immediately call
+  `ModelingSessionService::reset_from_scene()` after all session services are wired. QDR hydration
+  restores scene entities, authored mesh assets, and modeling components, but rendering those
+  owners does not populate the separate portable modeling runtime or its entity map. An installed
+  session with an empty runtime renders loaded meshes while viewport object picking silently misses
+  every modeled entity.
+- Every `SceneSession` owns an independent viewport workspace. A new Perspective camera keeps the
+  canonical controller pose (eye `6,5,8`, distance `sqrt(125)`); the host's 64-unit focus distance
+  is for axis/orthographic resets and must not overwrite Perspective framing. A positive distance
+  alone is not a sufficient regression assertion because it can still reduce the finite grid to a
+  barely visible patch.
+- QDRB separates logical mesh identity from immutable geometry payload identity. Snapshot encoding
+  emits one `QDRG` chunk per semantically unique geometry and lets independent mesh assets refer to
+  it. Reading owns one shared immutable file buffer; uncompressed chunks borrow spans from it and
+  compressed chunks decompress/checksum once on first access. Hydration decodes and compiles each
+  referenced unique geometry once, while unreferenced geometry chunks remain untouched.
+- Portable modeling QDR is binary-only: its public APIs accept and return byte spans/vectors, and
+  its one compiled owner is `src/sdk/core/modeling/src/qdr_document.cpp`. Do not restore the
+  retired JSON document/root/migration codecs, runtime compatibility adapters, mirrored internal
+  headers, or `quader_qdr_shared_io`/`quader_qdr_document_io`/`quader_qdr_runtime_io` targets.
+  Native durable replacement belongs in `src/io/qdr/qdr_atomic_write.cpp`; JSON emitted by
+  `qdr_dump --json` is write-only developer inspection output, never a persistence reader.
+- Native tests that exercise `RecentProjectStore` through editor APIs replace `LOCALAPPDATA` in the
+  test executable's custom main before any project/API construction, reject an unsandboxed run,
+  and remove only that isolated profile afterward. Tests must never write disposable project paths
+  into the user's real recent-project file.
+
+Owners:
+
+- `src/ui/qt_project_home_page.cpp` owns recent-project view/model construction order.
+- `src/editor/session/project_session.*` and `src/io/project/` own transactional workspace state,
+  atomic manifests, and physical project-path identity.
+- `src/api/` and `src/editor/session/scene_session.*` own per-call active-session resolution and
+  scene-qualified public references. `SceneSession::rebuild_services` also owns the invariant that
+  an existing document's modeling runtime and entity map are hydrated before the session is
+  exposed.
+- `src/render/render_scene_binding.hpp`, render extraction/sync/binding caches, and
+  `src/api/quader_render_api.*` own activation-safe renderer identity. `SceneRenderBridge`,
+  `SceneRenderSyncService`, and `TextureBindingService` own the corresponding proxy-before-texture
+  destruction order.
+- `src/viewport/viewport_workspace_service.*` owns canonical per-scene camera initialization;
+  `tests/quader_tests_main.cpp` owns native-test profile isolation.
+- `src/io/qdr/qdr_scene_binary_codec.*`, `qdr_binary_container.*`, and the portable modeling QDR
+  byte codec own geometry deduplication, backing-store lifetime, lazy chunk decoding, and the
+  binary-only SDK/native format boundary.
+
+Verification:
+
+- `QtProjectWorkspaceTests` constructs the Home page under a Debug Qt application, protecting the
+  model-before-header ordering that previously asserted at startup. It also sends real Qt mouse
+  and Return events and re-submits an unchanged recent projection, proving selection survives the
+  app refresh loop.
+- `ProjectSessionWorkspace` and `ProjectWorkspaceStorage` cover manifest-write rollback, failed
+  project replacement, physical path aliases, per-call cached facades, and wrong/closed scene
+  handle generations. The save-close-reopen selection regression creates two spatially separated
+  modeled boxes and ray-picks both after reopening, proving the installed runtime/map is populated
+  rather than merely checking that the scene still renders.
+- `RenderExtractionTests` cover binding-key propagation and equal-revision cross-scene cache
+  isolation, full retired-proxy draining before texture invalidation, preview cleanup ordering, and
+  safe retention of old texture revisions. `QdrBinarySceneCodecTests` cover equivalent-geometry
+  deduplication, copy-on-write splitting, and unreferenced compressed geometry remaining
+  undecoded.
+- Perspective reset tests compare the complete camera state and pose, and the GPU smoke verifies a
+  newly created tab renders the normal grid before any Home command. The saved-textured-scene to
+  New Scene GPU regression also keeps running at presentation rate, renders the new tab's grid,
+  survives repeated tab cycling, and produces no new Sentry dump. The full native test process
+  verifies its recent-project store lives below the isolated test profile.
+- Binary-boundary cleanup passes all 32 SDK consumer tests, 512 modeling-domain tests, and 189
+  guardrails; the SDK-only install/external-consumer configure/build test also passes without the
+  former SDK-bundled JSON dependency.
+- The refreshed standard benchmark reports are
+  `build/qdr-scene-workspace-standard-{debug,release}.json`. The repetitive fixture is 156,112
+  bytes versus the 2,703,035-byte JSON baseline (94.22% smaller, 17.31x), with load p50 improving
+  from 3,715.057 ms to 63.134 ms in Debug (58.84x) and from 229.369 ms to 3.806 ms in Release
+  (60.27x). The referenced/unreferenced fixture contains 12 unique payloads but decodes and compiles
+  only the five referenced payloads; seven remain lazy.

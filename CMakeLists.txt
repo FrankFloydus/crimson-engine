@@ -93,6 +93,8 @@ if(QUADER_BUILD_NATIVE_APP)
     find_package(EnTT CONFIG REQUIRED)
     find_package(stduuid CONFIG REQUIRED)
     find_package(Taskflow CONFIG REQUIRED)
+    find_package(flatbuffers CONFIG REQUIRED)
+    find_package(zstd CONFIG REQUIRED)
     find_package(Qt6 CONFIG REQUIRED COMPONENTS Core Gui Widgets)
     if(QUADER_ENABLE_SENTRY)
         find_package(sentry CONFIG REQUIRED)
@@ -198,7 +200,6 @@ target_link_libraries(quader_modeling
         quader_modeling_runtime
         quader_editor_metadata
     PRIVATE
-        quader_qdr_runtime_io
         quader_modeling_profile
 )
 
@@ -239,7 +240,7 @@ quader_configure_core_module(quader_mesh_io)
 target_link_libraries(quader_mesh_io PUBLIC quader_assets)
 
 add_library(quader_document STATIC
-    src/scene/document/project_document.cpp
+    src/scene/document/scene_content_document.cpp
     src/scene/scene_bounds.cpp
     src/scene/scene_document.cpp
     src/scene/scene_transform_pivot.cpp
@@ -264,7 +265,7 @@ add_library(quader_editor_services STATIC
     src/editor/placement/viewport_point_placement_service.cpp
     src/editor/selection/editor_selection_service.cpp
     src/editor/session/project_asset_bootstrap_service.cpp
-    src/editor/session/project_session.cpp
+    src/editor/session/scene_session.cpp
     src/editor/tools/native_viewport_tool_coordinator.cpp
 )
 
@@ -278,24 +279,82 @@ target_link_libraries(quader_editor_services
         quader_modeling_profile)
 
 add_library(quader_project_qdr_io STATIC
+    src/io/project/project_asset_resolver.cpp
+    src/io/project/project_types.cpp
+    src/io/project/project_file_system.cpp
+    src/io/project/project_manifest.cpp
+    src/io/project/recent_project_store.cpp
+    src/io/qdr/qdr_atomic_write.cpp
+    src/io/qdr/qdr_binary_container.cpp
     src/io/qdr/qdr_document_reader.cpp
     src/io/qdr/qdr_document_writer.cpp
-    src/io/qdr/qdr_project_codecs.cpp
     src/io/qdr/qdr_project_write_snapshot.cpp
+    src/io/qdr/qdr_scene_binary_codec.cpp
 )
+
+set(QUADER_QDR_GENERATED_DIR "${QUADER_GENERATED_DIR}/qdr")
+set(QUADER_QDR_GENERATED_HEADER
+    "${QUADER_QDR_GENERATED_DIR}/qdr_scene_generated.h")
+add_custom_command(
+    OUTPUT "${QUADER_QDR_GENERATED_HEADER}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${QUADER_QDR_GENERATED_DIR}"
+    COMMAND flatbuffers::flatc --cpp --scoped-enums
+            -o "${QUADER_QDR_GENERATED_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/io/qdr/schema/qdr_scene.fbs"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/io/qdr/schema/qdr_scene.fbs"
+    VERBATIM)
+add_custom_target(quader_qdr_flatbuffers_generated
+    DEPENDS "${QUADER_QDR_GENERATED_HEADER}")
+add_dependencies(quader_project_qdr_io quader_qdr_flatbuffers_generated)
+
+if(TARGET zstd::libzstd_shared)
+    set(QUADER_ZSTD_TARGET zstd::libzstd_shared)
+elseif(TARGET zstd::libzstd_static)
+    set(QUADER_ZSTD_TARGET zstd::libzstd_static)
+else()
+    message(FATAL_ERROR "The zstd package did not expose a supported CMake target.")
+endif()
 
 quader_configure_core_module(quader_project_qdr_io)
 target_include_directories(quader_project_qdr_io
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty"
+        "${QUADER_QDR_GENERATED_DIR}")
+target_compile_definitions(quader_project_qdr_io
+    PRIVATE QUADER_QDR_ENABLE_ZSTD=1)
 target_link_libraries(quader_project_qdr_io
     PUBLIC
         quader_document
-        quader_qdr_shared_io
     PRIVATE
         Taskflow::Taskflow
+        flatbuffers::flatbuffers
         quader_modeling
         quader_modeling_profile
-        quader_qdr_document_io)
+        quader_modeling_sdk_qdr_document
+        stduuid
+        ${QUADER_ZSTD_TARGET})
+
+if(QUADER_BUILD_QDR_TOOLS)
+    add_executable(qdr_validate tools/qdr_validate_main.cpp)
+    target_compile_features(qdr_validate PRIVATE cxx_std_20)
+    target_link_libraries(qdr_validate PRIVATE quader_project_qdr_io)
+
+    add_executable(qdr_dump
+        tools/qdr_dump_main.cpp
+        src/io/qdr/qdr_debug_dump.cpp)
+    target_compile_features(qdr_dump PRIVATE cxx_std_20)
+    target_include_directories(qdr_dump PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
+    target_link_libraries(qdr_dump PRIVATE quader_project_qdr_io)
+endif()
+
+add_library(quader_project_session STATIC
+    src/editor/session/project_session.cpp)
+quader_configure_core_module(quader_project_session)
+target_link_libraries(quader_project_session
+    PUBLIC
+        quader_editor_services
+        quader_project_qdr_io)
 
 add_library(quader_core_ui_support STATIC
     src/ui/console_model.cpp
@@ -341,6 +400,7 @@ target_link_libraries(quader_core
         quader_document
         quader_editor_services
         quader_mesh_io
+        quader_project_session
         quader_project_qdr_io
         quader_viewport_services)
 
@@ -359,6 +419,7 @@ add_library(quader_api STATIC
     src/api/quader_project_api.cpp
     src/api/quader_query_api.cpp
     src/api/quader_scene_api.cpp
+    src/api/quader_scene_documents_api.cpp
     src/api/quader_selection_api.cpp
     src/api/quader_script.cpp
     src/api/quader_tools_api.cpp
@@ -400,7 +461,6 @@ set(QUADER_FILAMENT_LIB_NAMES
     abseil
     camutils
     shaders
-    zstd
 )
 
 function(quader_require_existing_path required_path description)
@@ -614,7 +674,9 @@ add_library(quader_ui STATIC
     src/ui/qt_input_adapter.cpp
     src/ui/qt_main_menu.cpp
     src/ui/qt_navigation_gizmo.cpp
+    src/ui/qt_project_home_page.cpp
     src/ui/qt_relative_pointer_input.cpp
+    src/ui/qt_scene_workspace.cpp
     src/ui/qt_semantic_axis_colors.hpp
     src/ui/qt_auxiliary_window_state.cpp
     src/ui/qt_settings_dialog.cpp
@@ -693,6 +755,14 @@ if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
     quader_enable_common_pch(qdr_fixture_performance_baseline)
     target_compile_features(qdr_fixture_performance_baseline PRIVATE cxx_std_20)
     target_link_libraries(qdr_fixture_performance_baseline PRIVATE quader_runtime)
+
+    add_executable(qdr_scene_workspace_performance
+        benchmarks/modeling/qdr_scene_workspace_performance.cpp)
+    quader_enable_common_pch(qdr_scene_workspace_performance)
+    target_compile_features(qdr_scene_workspace_performance PRIVATE cxx_std_20)
+    target_link_libraries(qdr_scene_workspace_performance
+        PRIVATE
+            quader_runtime)
 endif()
 
 if(QUADER_ENABLE_SENTRY AND WIN32)
@@ -914,6 +984,7 @@ if(QUADER_BUILD_TESTS)
 
     if(QUADER_BUILD_NATIVE_APP)
     add_executable(quader_tests
+        tests/quader_tests_main.cpp
         tests/app_frame_clock_tests.cpp
         tests/core_tests.cpp
         tests/linear_array_tests.cpp
@@ -929,6 +1000,7 @@ if(QUADER_BUILD_TESTS)
         tests/qt_command_event_filter_tests.cpp
         tests/qt_input_adapter_tests.cpp
         tests/qt_navigation_gizmo_tests.cpp
+        tests/qt_project_workspace_tests.cpp
         tests/qt_relative_pointer_input_tests.cpp
         tests/qt_settings_controller_tests.cpp
         tests/qt_settings_dialog_tests.cpp
@@ -940,10 +1012,15 @@ if(QUADER_BUILD_TESTS)
         tests/qt_viewport_delete_popup_tests.cpp
         tests/qstr_tests.cpp
         tests/editor_api_tests.cpp
+        tests/quader_events_api_tests.cpp
         tests/programmatic_api_tests.cpp
         tests/programmatic_behavior_scenario_tests.cpp
         tests/grouping_public_api_tests.cpp
         tests/io_qdr_tests.cpp
+        tests/project_workspace_storage_tests.cpp
+        tests/project_session_workspace_tests.cpp
+        tests/qdr_binary_container_tests.cpp
+        tests/qdr_binary_scene_codec_tests.cpp
         tests/modeling_session_service_split_tests.cpp
         tests/modeling_tool_catalog_tests.cpp
         tests/render_extraction_tests.cpp
@@ -963,7 +1040,7 @@ if(QUADER_BUILD_TESTS)
     target_compile_definitions(quader_tests
         PRIVATE
             QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-    target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest GTest::gtest_main)
+    target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest)
     add_test(NAME quader_tests COMMAND quader_tests)
 
     add_executable(quader_modeling_sdk_parity_tests

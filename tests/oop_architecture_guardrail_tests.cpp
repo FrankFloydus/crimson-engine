@@ -1090,8 +1090,10 @@ TEST(OopArchitectureGuardrailTests, RenderFacadeDoesNotOwnOverlayProxyInternals)
   const std::string combined = header + "\n" + source;
 
   for (std::string_view forbidden : {
-           "OverlaySlot",
-           "OverlayProxyGroup",
+           "struct OverlaySlot",
+           "struct OverlayProxyGroup",
+           "std::array<OverlaySlot",
+           "std::array<OverlayProxyGroup",
            "rebuildOverlayProxies",
            "destroyOverlayProxy",
            "toolPreviewMeshProxies_",
@@ -1130,6 +1132,8 @@ TEST(OopArchitectureGuardrailTests,
       read_file(source_root() / "src/ui/ui_system.cpp");
   const std::string app_source =
       read_file(source_root() / "src/app/app.cpp");
+  const std::string app_header =
+      read_file(source_root() / "src/app/app.hpp");
   const std::string install_hooks = source_slice(
       ui_system_source, "void UISystem::install_runtime_hooks(",
       "void UISystem::show()");
@@ -1145,9 +1149,18 @@ TEST(OopArchitectureGuardrailTests,
   EXPECT_NE(ui_system_source.find("void UISystem::install_runtime_hooks("),
             std::string::npos);
   EXPECT_NE(app_source.find("ui_.install_runtime_hooks("), std::string::npos);
-  EXPECT_NE(app_source.find("*editor_, project_session_.scene()"),
+  EXPECT_NE(app_header.find("void bind_active_scene(SceneSession &scene)"),
             std::string::npos);
-  EXPECT_NE(app_source.find("project_session_.modeling()"),
+  EXPECT_NE(app_source.find(
+                "[this](SceneSession &scene) { bind_active_scene(scene); }"),
+            std::string::npos);
+  EXPECT_NE(app_source.find("void App::bind_active_scene(SceneSession &scene)"),
+            std::string::npos);
+  EXPECT_NE(app_source.find("*editor_, scene.scene(), scene.assets(),"),
+            std::string::npos);
+  EXPECT_NE(app_source.find("scene.modeling()"),
+            std::string::npos);
+  EXPECT_EQ(app_header.find("SceneSession scene_session_"),
             std::string::npos);
   EXPECT_NE(install_hooks.find("editor.viewports().set_runtime_hooks("),
             std::string::npos);

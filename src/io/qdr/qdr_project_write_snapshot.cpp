@@ -50,10 +50,6 @@ entity_write_snapshot(const SceneDocument &scene, EntityId entity) {
   if (const LockComponent *lock = scene.lock(entity)) {
     snapshot.lock = *lock;
   }
-  if (const SelectionComponent *selection = scene.selection(entity)) {
-    snapshot.selection = *selection;
-    snapshot.active = scene.primary_selection() == entity;
-  }
   if (const ModelingObjectComponent *object = scene.modeling_object(entity)) {
     snapshot.modeling_object = *object;
   }
@@ -76,7 +72,7 @@ entity_write_snapshot(const SceneDocument &scene, EntityId entity) {
 } // namespace
 
 QdrProjectWriteSnapshot
-qdr_project_write_snapshot_from_document(const ProjectDocument &document) {
+qdr_project_write_snapshot_from_document(const SceneContentDocument &document) {
   const SceneDocument &scene = document.scene();
   const AssetRegistry &assets = document.assets();
 

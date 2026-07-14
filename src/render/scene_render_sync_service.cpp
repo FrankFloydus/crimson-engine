@@ -13,6 +13,8 @@
 
 #include <filament/TransformManager.h>
 
+#include <unordered_set>
+
 namespace quader {
 namespace {
 
@@ -64,11 +66,39 @@ void SceneRenderSyncService::shutdown() {
     light_cache_.shutdown();
     synced_revision_ = 0;
     synced_asset_revision_ = 0;
+    synced_scene_binding_ = {};
+    has_scene_binding_ = false;
     has_synced_ = false;
     engine_ = nullptr;
     scene_ = nullptr;
     mesh_cache_ = nullptr;
     material_binding_ = nullptr;
+}
+
+void SceneRenderSyncService::bind_scene(
+    RenderSceneBindingKey scene_binding) {
+  if (!initialized() ||
+      (has_scene_binding_ && synced_scene_binding_ == scene_binding)) {
+    return;
+  }
+
+  const std::unordered_set<EntityId> no_scene_entities;
+  mesh_cache_->remove_except(no_scene_entities);
+  light_cache_.remove_except(no_scene_entities);
+  // Material instances retain their bound texture pointers even after their
+  // renderables leave the Filament scene. A scene switch invalidates the
+  // scene-qualified texture cache, so every retired mesh proxy must release
+  // its material instances before MaterialBindingService destroys those
+  // textures. The normal paced retirement budget remains appropriate for
+  // same-scene rebuilds, but cannot cross this ownership boundary.
+  mesh_cache_->drain_retired_destroy_queue(
+      mesh_cache_->retired_proxy_count());
+  material_binding_->bind_scene(scene_binding);
+  synced_scene_binding_ = scene_binding;
+  synced_revision_ = 0;
+  synced_asset_revision_ = 0;
+  has_scene_binding_ = true;
+  has_synced_ = false;
 }
 
 bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
@@ -82,10 +112,14 @@ bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
             kRetiredMeshProxyDestroyBudgetPerSync);
     }
 
+    bind_scene(snapshot.scene_binding);
+
     const bool document_unchanged =
-        has_synced_ && synced_revision_ == snapshot.scene_revision;
+        has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
+        synced_revision_ == snapshot.scene_revision;
     const bool assets_unchanged =
-        has_synced_ && synced_asset_revision_ == snapshot.asset_revision;
+        has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
+        synced_asset_revision_ == snapshot.asset_revision;
     if (document_unchanged && assets_unchanged) {
       return false;
     }
@@ -100,6 +134,7 @@ bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
     }
     synced_revision_ = snapshot.scene_revision;
     synced_asset_revision_ = snapshot.asset_revision;
+    synced_scene_binding_ = snapshot.scene_binding;
     has_synced_ = true;
     return true;
 }
@@ -123,7 +158,8 @@ bool SceneRenderSyncService::render_asset_revisions_changed(
 
 bool SceneRenderSyncService::can_sync_transforms_only(
     const RenderSceneSnapshot &snapshot) const {
-  if (!snapshot.dirty.transforms_changed ||
+  if (!has_synced_ || synced_scene_binding_ != snapshot.scene_binding ||
+      !snapshot.dirty.transforms_changed ||
       snapshot.dirty.visibility_changed ||
       snapshot.dirty.mesh_bindings_changed ||
       snapshot.dirty.render_components_changed ||

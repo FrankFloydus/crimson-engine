@@ -143,17 +143,22 @@ RenderOverlayBoundsSnapshot translated_bounds(
 RenderOverlaySelectedObjectSnapshot
 build_render_overlay_selected_object_snapshot(const SceneDocument &document,
                                               const AssetRegistry &assets,
-                                              bool visible) {
+                                              bool visible,
+                                              RenderSceneBindingKey
+                                                  scene_binding) {
   return build_render_overlay_selected_object_snapshot(
-      document, assets, visible, default_persistent_overlay_style());
+      document, assets, visible, default_persistent_overlay_style(),
+      scene_binding);
 }
 
 RenderOverlaySelectedObjectSnapshot
 build_render_overlay_selected_object_snapshot(
     const SceneDocument &document, const AssetRegistry &assets, bool visible,
-    ViewportPersistentOverlayStyleSnapshot style) {
+    ViewportPersistentOverlayStyleSnapshot style,
+    RenderSceneBindingKey scene_binding) {
   QDR_PROFILE_FUNCTION();
   RenderOverlaySelectedObjectSnapshot snapshot{
+      .scene_binding = scene_binding,
       .scene_revision = document.revision(),
       .asset_revision = assets.revision(),
       .selection_revision = document.selection_revision(),
@@ -181,17 +186,22 @@ build_render_overlay_selected_object_snapshot(
 RenderOverlaySceneWireframeSnapshot
 build_render_overlay_scene_wireframe_snapshot(const SceneDocument &document,
                                               const AssetRegistry &assets,
-                                              std::uint8_t layer_mask) {
+                                              std::uint8_t layer_mask,
+                                              RenderSceneBindingKey
+                                                  scene_binding) {
   return build_render_overlay_scene_wireframe_snapshot(
-      document, assets, layer_mask, default_persistent_overlay_style());
+      document, assets, layer_mask, default_persistent_overlay_style(),
+      scene_binding);
 }
 
 RenderOverlaySceneWireframeSnapshot
 build_render_overlay_scene_wireframe_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
-    std::uint8_t layer_mask, ViewportPersistentOverlayStyleSnapshot style) {
+    std::uint8_t layer_mask, ViewportPersistentOverlayStyleSnapshot style,
+    RenderSceneBindingKey scene_binding) {
   QDR_PROFILE_FUNCTION();
   RenderOverlaySceneWireframeSnapshot snapshot{
+      .scene_binding = scene_binding,
       .scene_revision = document.revision(),
       .asset_revision = assets.revision(),
       .style = style,
@@ -217,12 +227,13 @@ namespace {
 template <typename SelectedMeshBoundsResolver>
 RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
     const SceneDocument &document, const AssetRegistry &assets,
-    ViewportOverlayFrame tool_overlays,
+    ViewportOverlayFrame tool_overlays, RenderSceneBindingKey scene_binding,
     SelectedMeshBoundsResolver &&selected_mesh_bounds,
     std::vector<EntityId> *selected_mesh_entities = nullptr,
     std::vector<EntityId> *group_entities = nullptr) {
   QDR_PROFILE_FUNCTION();
   RenderOverlaySelectionSnapshot snapshot{
+      .scene_binding = scene_binding,
       .scene_revision = document.revision(),
       .asset_revision = assets.revision(),
       .selection_revision = document.selection_revision(),
@@ -313,9 +324,10 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
 
 RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
-    ViewportOverlayFrame tool_overlays) {
+    ViewportOverlayFrame tool_overlays,
+    RenderSceneBindingKey scene_binding) {
   return build_render_overlay_selection_snapshot_impl(
-      document, assets, std::move(tool_overlays),
+      document, assets, std::move(tool_overlays), scene_binding,
       [&](EntityId entity) -> std::optional<RenderOverlayBoundsSnapshot> {
         if (const std::optional<SceneBounds> bounds =
                 entity_world_bounds(document, assets, entity)) {
@@ -330,9 +342,10 @@ RenderOverlaySnapshotCache::update_persistent(
     const SceneDocument &document, const AssetRegistry &assets,
     bool selected_object_overlay_visible,
     std::uint8_t scene_wireframe_layer_mask,
-    ViewportPersistentOverlayStyleSnapshot style) {
+    ViewportPersistentOverlayStyleSnapshot style,
+    RenderSceneBindingKey scene_binding) {
   QDR_PROFILE_FUNCTION();
-  bind_sources(document, assets);
+  bind_sources(document, assets, scene_binding);
 
   const bool selected_transform_is_relevant =
       has_selected_object_snapshot_ && selected_object_snapshot_.visible &&
@@ -358,7 +371,8 @@ RenderOverlaySnapshotCache::update_persistent(
   const bool selected_object_changed = !selected_snapshot_matches;
   if (selected_object_changed) {
     selected_object_snapshot_ = build_render_overlay_selected_object_snapshot(
-        document, assets, selected_object_overlay_visible, style);
+        document, assets, selected_object_overlay_visible, style,
+        scene_binding);
     has_selected_object_snapshot_ = true;
     ++stats_.selected_object_build_count;
   } else {
@@ -381,7 +395,7 @@ RenderOverlaySnapshotCache::update_persistent(
   const bool scene_wireframe_changed = !wireframe_snapshot_matches;
   if (scene_wireframe_changed) {
     scene_wireframe_snapshot_ = build_render_overlay_scene_wireframe_snapshot(
-        document, assets, scene_wireframe_layer_mask, style);
+        document, assets, scene_wireframe_layer_mask, style, scene_binding);
     has_scene_wireframe_snapshot_ = true;
     ++stats_.scene_wireframe_build_count;
   } else if (!wireframe_sources_are_relevant) {
@@ -402,9 +416,10 @@ RenderOverlaySnapshotCache::update_persistent(
 
 const RenderOverlaySelectionSnapshot &
 RenderOverlaySnapshotCache::selection_snapshot(
-    const SceneDocument &document, const AssetRegistry &assets) {
+    const SceneDocument &document, const AssetRegistry &assets,
+    RenderSceneBindingKey scene_binding) {
   QDR_PROFILE_FUNCTION();
-  bind_sources(document, assets);
+  bind_sources(document, assets, scene_binding);
   const bool snapshot_matches =
       has_selection_snapshot_ &&
       selection_snapshot_.scene_revision == document.revision() &&
@@ -413,7 +428,7 @@ RenderOverlaySnapshotCache::selection_snapshot(
       (!can_refresh_selection_transforms(document, assets) ||
        !refresh_selection_transforms(document, assets))) {
     selection_snapshot_ = build_render_overlay_selection_snapshot_impl(
-        document, assets, {},
+        document, assets, {}, scene_binding,
         [&](EntityId entity) {
           return selected_mesh_world_bounds(document, assets, entity);
         },
@@ -427,17 +442,21 @@ RenderOverlaySnapshotCache::selection_snapshot(
 void RenderOverlaySnapshotCache::reset() {
   source_document_ = nullptr;
   source_assets_ = nullptr;
+  source_scene_binding_ = {};
   invalidate_snapshots();
   stats_ = {};
 }
 
 void RenderOverlaySnapshotCache::bind_sources(
-    const SceneDocument &document, const AssetRegistry &assets) {
-  if (source_document_ == &document && source_assets_ == &assets) {
+    const SceneDocument &document, const AssetRegistry &assets,
+    RenderSceneBindingKey scene_binding) {
+  if (source_document_ == &document && source_assets_ == &assets &&
+      source_scene_binding_ == scene_binding) {
     return;
   }
   source_document_ = &document;
   source_assets_ = &assets;
+  source_scene_binding_ = scene_binding;
   invalidate_snapshots();
 }
 

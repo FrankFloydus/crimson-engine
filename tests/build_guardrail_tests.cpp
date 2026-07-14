@@ -440,6 +440,10 @@ third_party_license_expectations() {
       {"", "OpenMesh", "licenses/openmesh-BSD-3-Clause.txt", false},
       {"", "earcut.hpp", "licenses/earcut-hpp-ISC.txt", false},
       {"", "nlohmann/json", "licenses/nlohmann-json-MIT.txt", false},
+      {"flatbuffers", "FlatBuffers", "licenses/flatbuffers-Apache-2.0.txt",
+       true},
+      {"zstd", "Zstandard",
+       "licenses/zstd-BSD-3-Clause-OR-GPL-2.0-only.txt", true},
       {"entt", "EnTT", "licenses/entt-MIT.txt", true},
       {"glm", "OpenGL Mathematics (GLM)", "licenses/glm-MIT.txt", true},
       {"qtbase", "Qt Base", "licenses/qtbase-LGPL-3.0-only.txt", true},
@@ -639,11 +643,14 @@ TEST(BuildGuardrailTests, FormerSdkBoundaryIsAbsorbedIntoAppBuild) {
   expect_contains(build_files, "src/editor/metadata");
   expect_contains(build_files, "src/io/qdr");
   expect_contains(build_files, "resources/modeling_assets/materials/default");
-  expect_contains(build_files, "quader_qdr_document_io");
-  expect_contains(build_files, "quader_qdr_runtime_io");
+  expect_contains(build_files, "quader_modeling_sdk_qdr_document");
+  expect_contains(build_files, "quader_project_qdr_io");
   expect_contains(build_files,
                   "qdr_custom_engine_modeling_runtime_smoke_tests");
-  expect_contains(build_files, "qdr_runtime_io_compat_tests");
+  expect_missing(build_files, "qdr_runtime_io_compat_tests");
+  expect_missing(build_files, "quader_qdr_shared_io");
+  expect_missing(build_files, "quader_qdr_document_io");
+  expect_missing(build_files, "quader_qdr_runtime_io");
   expect_contains(build_files,
                   "tests/modeling_domain/editor_metadata/"
                   "qdr_editor_metadata_operation_catalog_tests.cpp");
@@ -1135,8 +1142,7 @@ TEST(BuildGuardrailTests, ArchitectureReviewNamesRealModelingDomainTargets) {
       "quader_geometry",
       "quader_modeling_polygon",
       "quader_modeling_runtime",
-      "quader_qdr_document_io",
-      "quader_qdr_runtime_io",
+      "quader_modeling_sdk_qdr_document",
       "quader_editor_metadata",
       "quader_modeling_domain_tests",
       "quader_modeling_domain_polygon_loop_tests",
@@ -1186,6 +1192,25 @@ TEST(BuildGuardrailTests, AppOwnedModelingSdkBoundaryIsAdditiveAndGuarded) {
   expect_missing(build_files, "QUADER_BUILD_SDK_TESTS");
 }
 
+TEST(BuildGuardrailTests, QuaderTestsSandboxPerUserStorage) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string test_main =
+      read_source_file("tests/quader_tests_main.cpp");
+  const std::string app_target =
+      source_slice(root_c_make, "add_executable(quader_tests",
+                   "add_test(NAME quader_tests COMMAND quader_tests)");
+
+  expect_contains(app_target, "tests/quader_tests_main.cpp");
+  expect_contains(app_target,
+                  "target_link_libraries(quader_tests PRIVATE quader_runtime "
+                  "GTest::gtest)");
+  expect_missing(app_target, "GTest::gtest_main");
+  expect_contains(test_main, "quader-tests-local-app-data-");
+  expect_contains(test_main, "_putenv_s(\"LOCALAPPDATA\"");
+  expect_contains(test_main, "const int test_result = RUN_ALL_TESTS()");
+  expect_contains(test_main, "std::filesystem::remove_all(profile, error)");
+}
+
 TEST(BuildGuardrailTests,
      PortableModelingCoreIsTheOnlyCompiledPolygonAndQdrTruth) {
   const std::string modeling_c_make =
@@ -1198,14 +1223,12 @@ TEST(BuildGuardrailTests,
                   "src/sdk/core/modeling/src/polygon_document.cpp\n"
                   "    ${QUADER_CANONICAL_POLYGON_SOURCES})");
   expect_contains(modeling_c_make,
-                  "add_library(quader_qdr_shared_io STATIC "
-                  "${QUADER_CANONICAL_QDR_SHARED_SOURCES})");
-  expect_contains(modeling_c_make,
-                  "add_library(quader_qdr_document_io STATIC "
-                  "${QUADER_CANONICAL_QDR_DOCUMENT_SOURCE})");
-  expect_contains(modeling_c_make,
-                  "src/sdk/core/modeling/src/qdr_document.cpp\n"
-                  "    ${QUADER_CANONICAL_QDR_SOURCES})");
+                  "add_library(quader_modeling_sdk_qdr_document STATIC\n"
+                  "    src/sdk/core/modeling/src/qdr_document.cpp)");
+  expect_missing(modeling_c_make, "quader_qdr_shared_io");
+  expect_missing(modeling_c_make, "quader_qdr_document_io");
+  expect_missing(modeling_c_make, "quader_qdr_runtime_io");
+  expect_missing(modeling_c_make, "QUADER_CANONICAL_QDR_");
   expect_missing(modeling_c_make, "src/mesh/polygon/*.cpp");
   expect_missing(modeling_c_make, "src/mesh/geometry/geometry.cpp");
 
@@ -1213,15 +1236,26 @@ TEST(BuildGuardrailTests,
                   .empty());
   EXPECT_TRUE(files_with_extension(source_path("src/mesh/polygon"), ".cpp")
                   .empty());
-  for (std::string_view retired_native_source : {
-           "src/io/qdr/qdr_atomic_write.cpp",
-           "src/io/qdr/qdr_root.cpp",
-           "src/io/qdr/qdr_polygon_document_codec.cpp",
-           "src/io/qdr/qdr_document.cpp",
+  EXPECT_TRUE(std::filesystem::exists(
+      source_path("src/io/qdr/qdr_atomic_write.cpp")));
+  for (std::string_view retired_json_path : {
+           "src/io/qdr/qdr_document.hpp",
+           "src/io/qdr/qdr_format.hpp",
+           "src/io/qdr/qdr_polygon_document_codec.hpp",
+           "src/io/qdr/qdr_project_codecs.cpp",
+           "src/io/qdr/qdr_project_codecs.hpp",
+           "src/io/qdr/qdr_root.hpp",
+           "src/io/qdr/qdr_runtime_io_compat.cpp",
+           "src/io/qdr/qdr_runtime_io_compat.hpp",
+           "src/sdk/core/modeling/internal/thirdparty/nlohmann/json.hpp",
        }) {
-    EXPECT_FALSE(std::filesystem::exists(source_path(retired_native_source)))
-        << retired_native_source;
+    EXPECT_FALSE(std::filesystem::exists(source_path(retired_json_path)))
+        << retired_json_path;
   }
+  const std::filesystem::path retired_sdk_qdr =
+      source_path("src/sdk/core/modeling/internal/io/qdr");
+  EXPECT_TRUE(files_with_extension(retired_sdk_qdr, ".cpp").empty());
+  EXPECT_TRUE(files_with_extension(retired_sdk_qdr, ".hpp").empty());
 
   const std::filesystem::path native_mesh = source_path("src/mesh");
   const std::filesystem::path canonical_mesh =
@@ -1235,20 +1269,15 @@ TEST(BuildGuardrailTests,
     EXPECT_EQ(read_file(native_header), read_file(canonical_header)) << relative;
   }
 
-  for (std::string_view portable_qdr_header : {
-           "qdr_atomic_write.hpp",
-           "qdr_diagnostic.hpp",
-           "qdr_document.hpp",
-           "qdr_format.hpp",
-           "qdr_polygon_document_codec.hpp",
-           "qdr_root.hpp",
-       }) {
-    EXPECT_EQ(read_source_file("src/io/qdr/" +
-                               std::string(portable_qdr_header)),
-              read_source_file("src/sdk/core/modeling/internal/io/qdr/" +
-                               std::string(portable_qdr_header)))
-        << portable_qdr_header;
-  }
+  const std::string sdk_qdr_header = read_source_file(
+      "src/sdk/core/modeling/include/quader/modeling/io/qdr_document.hpp");
+  const std::string sdk_qdr_source =
+      read_source_file("src/sdk/core/modeling/src/qdr_document.cpp");
+  expect_contains(sdk_qdr_header, "Result<std::vector<std::byte>>");
+  expect_contains(sdk_qdr_header, "std::span<const std::byte>");
+  expect_missing(sdk_qdr_header, "std::string serialize_qdr");
+  expect_missing(sdk_qdr_source, "nlohmann");
+  expect_missing(sdk_qdr_source, "legacy_session");
 }
 
 TEST(BuildGuardrailTests,
@@ -1292,8 +1321,9 @@ TEST(BuildGuardrailTests,
   expect_contains(manifest, "\"native-app\"");
   expect_contains(manifest, "\"tests\"");
   for (std::string_view native_only_dependency : {
-           "entt", "glm", "lodepng", "qtbase", "sentry-native",
-           "spdlog", "stduuid", "taskflow", "zlib",
+           "entt", "flatbuffers", "glm", "lodepng", "qtbase",
+           "sentry-native", "spdlog", "stduuid", "taskflow", "zstd",
+           "zlib",
        }) {
     expect_contains(native_feature,
                     "\"" + std::string(native_only_dependency) + "\"");
@@ -1309,11 +1339,53 @@ TEST(BuildGuardrailTests,
                   "SDK-only configure installed native app package");
 }
 
+TEST(BuildGuardrailTests,
+     BinaryQdrDependenciesStayNativePrivateAndSchemaGenerated) {
+  const std::string root_c_make = read_source_file("CMakeLists.txt");
+  const std::string manifest = read_source_file("vcpkg.json");
+  const std::string native_feature =
+      source_slice(manifest, "\"native-app\": {", "\"tests\": {");
+  const std::string tests_feature =
+      source_slice(manifest, "\"tests\": {", "\n    }\n  }\n}");
+  const std::string qdr_target = source_slice(
+      root_c_make, "add_library(quader_project_qdr_io STATIC",
+      "add_library(quader_project_session STATIC");
+  const std::string generated_include = source_slice(
+      qdr_target, "target_include_directories(quader_project_qdr_io",
+      "target_compile_definitions(quader_project_qdr_io");
+  const std::string qdr_links = source_slice(
+      qdr_target, "target_link_libraries(quader_project_qdr_io",
+      "add_library(quader_project_session STATIC");
+  const std::string qdr_public_links =
+      source_slice(qdr_links, "PUBLIC", "PRIVATE");
+
+  expect_contains(root_c_make, "find_package(flatbuffers CONFIG REQUIRED)");
+  expect_contains(root_c_make, "find_package(zstd CONFIG REQUIRED)");
+  expect_contains(root_c_make,
+                  "COMMAND flatbuffers::flatc --cpp --scoped-enums");
+  expect_contains(root_c_make,
+                  "src/io/qdr/schema/qdr_scene.fbs");
+  expect_contains(qdr_target,
+                  "add_dependencies(quader_project_qdr_io "
+                  "quader_qdr_flatbuffers_generated)");
+  expect_contains(generated_include, "PRIVATE");
+  expect_contains(generated_include, "${QUADER_QDR_GENERATED_DIR}");
+  expect_missing(generated_include, "PUBLIC");
+  expect_contains(qdr_links, "flatbuffers::flatbuffers");
+  expect_contains(qdr_links, "${QUADER_ZSTD_TARGET}");
+  expect_missing(qdr_public_links, "flatbuffers::flatbuffers");
+  expect_missing(qdr_public_links, "${QUADER_ZSTD_TARGET}");
+  expect_contains(native_feature, "\"flatbuffers\"");
+  expect_contains(native_feature, "\"zstd\"");
+  expect_missing(tests_feature, "\"flatbuffers\"");
+  expect_missing(tests_feature, "\"zstd\"");
+}
+
 TEST(BuildGuardrailTests, ModelingSdkPublicHeadersStayNativeOwnerFree) {
   const std::vector<std::string> banned_needles = {
       "SceneDocument",
-      "ProjectDocument",
-      "ProjectSession",
+      "SceneContentDocument",
+      "SceneSession",
       "AssetRegistry",
       "ModelingSessionService",
       "SceneRenderBridge",
@@ -1323,7 +1395,9 @@ TEST(BuildGuardrailTests, ModelingSdkPublicHeadersStayNativeOwnerFree) {
       "ImGui",
       "filament",
       "entt",
+      "flatbuffers",
       "nlohmann",
+      "zstd",
       "#include <mesh/",
       "#include \"mesh/",
       "#include <io/qdr/",
@@ -2025,8 +2099,25 @@ TEST(BuildGuardrailTests, QtShellUsesMainWindowDocksAndStableNames) {
   expect_contains(ui_system_source,
                   "main_window_->setObjectName(QStringLiteral("
                   "\"quaderMainWindow\"))");
+  expect_contains(ui_system_header, "class QStackedWidget");
+  expect_contains(ui_system_header, "QStackedWidget *central_stack_");
+  expect_contains(ui_system_header, "QtProjectHomePage *project_home_page_");
+  expect_contains(ui_system_header, "QtSceneWorkspace *scene_workspace_");
+  expect_contains(ui_system_source, "#include <QStackedWidget>");
   expect_contains(ui_system_source,
-                  "main_window_->setCentralWidget(viewport_panel_)");
+                  "central_stack_ = new QStackedWidget(main_window_.get())");
+  expect_contains(ui_system_source,
+                  "project_home_page_ = new QtProjectHomePage(central_stack_)");
+  expect_contains(ui_system_source,
+                  "scene_workspace_ = new QtSceneWorkspace(central_stack_)");
+  expect_contains(ui_system_source,
+                  "scene_workspace_->set_viewport_widget(viewport_panel_)");
+  expect_contains(ui_system_source,
+                  "central_stack_->addWidget(project_home_page_)");
+  expect_contains(ui_system_source,
+                  "central_stack_->addWidget(scene_workspace_)");
+  expect_contains(ui_system_source,
+                  "main_window_->setCentralWidget(central_stack_)");
   expect_contains(ui_system_source, "QMainWindow::AllowNestedDocks");
   expect_contains(ui_system_source, "QMainWindow::AllowTabbedDocks");
 
@@ -2097,6 +2188,10 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
 TEST(BuildGuardrailTests, QtViewportKeepsMultiPaneLayoutWorkspace) {
   const std::string viewport_api_source =
       read_source_file("src/api/quader_viewport_api.cpp");
+  const std::string scene_session_header =
+      read_source_file("src/editor/session/scene_session.hpp");
+  const std::string editor_api_source =
+      read_source_file("src/api/quader_editor_api.cpp");
   const std::string main_menu_source =
       read_source_file("src/ui/qt_main_menu.cpp");
   const std::string viewport_panel_header =
@@ -2109,11 +2204,24 @@ TEST(BuildGuardrailTests, QtViewportKeepsMultiPaneLayoutWorkspace) {
       read_source_file("src/ui/qt_viewport_surface.cpp");
 
   expect_contains(viewport_api_source,
-                  "ViewportWorkspaceService "
-                  "workspace{ViewportWorkspaceLayoutPolicy::MultiPane}");
+                  "ViewportWorkspaceService owned_workspace{");
+  expect_contains(viewport_api_source,
+                  "ViewportWorkspaceLayoutPolicy::MultiPane");
+  expect_contains(viewport_api_source,
+                  "ViewportWorkspaceService *workspace = &owned_workspace");
+  expect_contains(viewport_api_source, "impl_->workspace = &next");
+  expect_contains(scene_session_header,
+                  "ViewportWorkspaceService viewport_workspace_{");
+  expect_contains(scene_session_header,
+                  "ViewportWorkspaceLayoutPolicy::MultiPane");
+  expect_contains(editor_api_source,
+                  "QuaderViewportApiRuntimeAccess::bind_scene_workspace(");
+  expect_contains(editor_api_source, "scene.viewport_workspace()");
   expect_missing(viewport_api_source,
                  "ViewportWorkspaceService "
                  "workspace{ViewportWorkspaceLayoutPolicy::SinglePaneOnly}");
+  expect_missing(scene_session_header,
+                 "ViewportWorkspaceLayoutPolicy::SinglePaneOnly");
   expect_contains(main_menu_source,
                   "context.editor.viewports().set_layout(layout)");
   expect_contains(viewport_panel_header,
@@ -2439,6 +2547,57 @@ TEST(BuildGuardrailTests, EditorAggregateStaysOutOfDocumentApiTarget) {
 }
 
 TEST(BuildGuardrailTests,
+     ProjectApiOwnsLifecycleWhileSceneDocumentsOwnSaveCommands) {
+  const std::string project_header =
+      read_source_file("src/api/quader_project_api.hpp");
+  const std::string project_source =
+      read_source_file("src/api/quader_project_api.cpp");
+  const std::string command_ids =
+      read_source_file("src/api/quader_command_ids.hpp");
+  const std::string command_registration =
+      read_source_file("src/api/quader_commands_api.cpp");
+  const std::string editor_command_catalog =
+      read_source_file("src/editor/commands/editor_command_registry.cpp");
+  const std::string project_public_surface = source_slice(
+      project_header, "class QuaderProjectApi final {", "private:");
+  const std::string typed_command_catalog = source_slice(
+      command_ids,
+      "inline constexpr QuaderCommandId kTypedCommandIds[] = {",
+      "[[nodiscard]] inline constexpr std::span<const QuaderCommandId>");
+
+  EXPECT_FALSE(std::regex_search(project_public_surface,
+                                 std::regex(R"(\bsave\s*\()")))
+      << "QuaderProjectApi must not expose scene persistence";
+  EXPECT_FALSE(std::regex_search(project_public_surface,
+                                 std::regex(R"(\bsave_as\s*\()")))
+      << "QuaderProjectApi must not expose scene Save As";
+  expect_missing(project_source, "QuaderProjectApi::save(");
+  expect_missing(project_source, "QuaderProjectApi::save_as(");
+
+  for (const std::string &product_catalog :
+       {command_ids, command_registration, editor_command_catalog}) {
+    expect_missing(product_catalog, "kProjectSave");
+    expect_missing(product_catalog, "project.save");
+  }
+
+  for (const std::string_view command : {
+           "kSceneDocumentSave",
+           "kSceneDocumentSaveAs",
+           "kSceneDocumentSaveAll",
+       }) {
+    expect_contains(command_ids, std::string(command));
+    expect_contains(typed_command_catalog, std::string(command));
+    expect_contains(command_registration, std::string(command));
+  }
+  expect_contains(command_ids, "\"scene_document.save\"");
+  expect_contains(command_ids, "\"scene_document.save_as\"");
+  expect_contains(command_ids, "\"scene_document.save_all\"");
+  expect_contains(command_registration, "scene_documents_.save_active()");
+  expect_contains(command_registration, "scene_documents_.save_as(*id)");
+  expect_contains(command_registration, "scene_documents_.save_all()");
+}
+
+TEST(BuildGuardrailTests,
      ViewportWorkspaceServiceStaysViewportOwnedAndRuntimeFree) {
   const std::string root_c_make = read_source_file("CMakeLists.txt");
   const std::string header =
@@ -2498,7 +2657,7 @@ TEST(WindowGuardrailTests,
   expect_contains(ui_source, "std::make_unique<QtMainWindow>()");
   expect_contains(ui_source,
                   "main_window_->setMinimumSize(kPlatformWindowMinimumWidth,");
-  expect_contains(ui_source, "main_window_->setCentralWidget(viewport_panel_)");
+  expect_contains(ui_source, "main_window_->setCentralWidget(central_stack_)");
   expect_missing(ui_source, "Qt::FramelessWindowHint");
   expect_missing(ui_source, "setWindowFlags(");
   expect_contains(window_placement_header,
@@ -2654,4 +2813,20 @@ TEST(DependencyLicenseGuardrailTests, AppThirdPartyManifestHasLicenseEvidence) {
     expect_contains(manifest, std::string(expectation->manifest_needle));
     expect_contains(manifest, std::string(expectation->license_path));
   }
+}
+
+TEST(DependencyLicenseGuardrailTests,
+     BinaryQdrDependenciesDocumentSelectedPermissiveLicenses) {
+  const std::string manifest =
+      read_source_file("thirdparty/THIRD_PARTY_MANIFEST.md");
+  const std::string flatbuffers_license =
+      read_source_file("thirdparty/licenses/flatbuffers-Apache-2.0.txt");
+  const std::string zstd_license = read_source_file(
+      "thirdparty/licenses/zstd-BSD-3-Clause-OR-GPL-2.0-only.txt");
+
+  expect_contains(flatbuffers_license, "Apache License");
+  expect_contains(flatbuffers_license, "Version 2.0, January 2004");
+  expect_contains(zstd_license, "ZSTD is dual licensed under BSD and GPLv2");
+  expect_contains(zstd_license, "BSD License");
+  expect_contains(manifest, "Quader uses the BSD-3-Clause option");
 }

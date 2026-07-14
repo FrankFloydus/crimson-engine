@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <limits>
 #include <optional>
@@ -152,12 +153,13 @@ TEST(ModelingSdkParityTests,
   const std::filesystem::path native_qdr = unique_temp_qdr_path();
   std::filesystem::remove(native_qdr);
   const quader::QuaderApiVoidResult saved =
-      editor.project().save_as(native_qdr);
+      editor.scene_documents().save_as_native_path(
+          *editor.scene_documents().active_scene_id(), native_qdr);
   ASSERT_TRUE(saved.ok()) << saved.error_message();
   EXPECT_TRUE(std::filesystem::exists(native_qdr));
   std::filesystem::remove(native_qdr);
 
-  Result<std::string> sdk_qdr =
+  Result<std::vector<std::byte>> sdk_qdr =
       serialize_single_document_as_qdr(*sdk_committed_document);
   ASSERT_TRUE(sdk_qdr.ok()) << sdk_qdr.error_message();
   Result<QdrDocumentDto> sdk_round_trip =

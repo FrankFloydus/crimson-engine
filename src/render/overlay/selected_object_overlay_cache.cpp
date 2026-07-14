@@ -277,6 +277,7 @@ void SelectedObjectOverlayCache::shutdown() {
 
     destroy_face_entries();
     synced_states_.clear();
+    synced_scene_binding_ = {};
     synced_scene_revision_ = 0;
     synced_asset_revision_ = 0;
     synced_selection_revision_ = 0;
@@ -299,6 +300,21 @@ void SelectedObjectOverlayCache::sync(
         return;
     }
 
+    if (has_synced_ && synced_scene_binding_ != snapshot.scene_binding) {
+      destroy_face_entries();
+      synced_states_.clear();
+      synced_scene_binding_ = {};
+      synced_scene_revision_ = 0;
+      synced_asset_revision_ = 0;
+      synced_selection_revision_ = 0;
+      synced_visibility_revision_ = 0;
+      synced_transform_revision_ = 0;
+      synced_mesh_binding_revision_ = 0;
+      synced_face_style_signature_ = 0;
+      synced_face_fills_enabled_ = false;
+      has_synced_ = false;
+    }
+
     if (!snapshot.visible) {
       set_visible(false);
       return;
@@ -306,7 +322,8 @@ void SelectedObjectOverlayCache::sync(
     set_visible(true);
     const bool face_style_changed = selected_object_face_style_changed(
         has_synced_, synced_face_style_signature_, snapshot.style);
-    if (has_synced_ && synced_asset_revision_ == snapshot.asset_revision &&
+    if (has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
+        synced_asset_revision_ == snapshot.asset_revision &&
         synced_selection_revision_ == snapshot.selection_revision &&
         synced_visibility_revision_ == snapshot.visibility_revision &&
         synced_mesh_binding_revision_ == snapshot.mesh_binding_revision &&
@@ -318,6 +335,7 @@ void SelectedObjectOverlayCache::sync(
         synced_transform_revision_ = snapshot.transform_revision;
       }
       synced_scene_revision_ = snapshot.scene_revision;
+      synced_scene_binding_ = snapshot.scene_binding;
       return;
     }
 
@@ -325,7 +343,8 @@ void SelectedObjectOverlayCache::sync(
         selected_entity_states(snapshot);
     const bool face_fills_enabled =
         selected_object_face_fills_enabled_for_selection_count(states.size());
-    if (has_synced_ && !face_style_changed &&
+    if (has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
+        !face_style_changed &&
         synced_face_fills_enabled_ == face_fills_enabled &&
         states == synced_states_) {
       if (synced_transform_revision_ != snapshot.transform_revision) {
@@ -334,6 +353,7 @@ void SelectedObjectOverlayCache::sync(
         }
       }
       synced_scene_revision_ = snapshot.scene_revision;
+      synced_scene_binding_ = snapshot.scene_binding;
       synced_asset_revision_ = snapshot.asset_revision;
       synced_selection_revision_ = snapshot.selection_revision;
       synced_visibility_revision_ = snapshot.visibility_revision;
@@ -380,6 +400,7 @@ void SelectedObjectOverlayCache::sync(
     }
 
     synced_states_ = states;
+    synced_scene_binding_ = snapshot.scene_binding;
     synced_scene_revision_ = snapshot.scene_revision;
     synced_asset_revision_ = snapshot.asset_revision;
     synced_selection_revision_ = snapshot.selection_revision;

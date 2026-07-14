@@ -123,9 +123,13 @@ TEST(QdrEditorMetadataConsumerSmokeTests, CustomEngineShellCanAssembleChromeFrom
 		}
 	}
 
-	EXPECT_TRUE(menu_items.size() == 14U);
+	EXPECT_TRUE(menu_items.size() == 18U);
 	EXPECT_TRUE(contains_target(menu_items, "open_editor"));
-	EXPECT_TRUE(contains_target(menu_items, "save_as_document"));
+	EXPECT_TRUE(contains_target(menu_items, "save_scene_as"));
+	EXPECT_TRUE(contains_target(menu_items, "save_all_scenes"));
+	EXPECT_TRUE(contains_target(menu_items, "close_scene"));
+	EXPECT_TRUE(contains_target(menu_items, "next_scene"));
+	EXPECT_TRUE(contains_target(menu_items, "previous_scene"));
 	EXPECT_TRUE(contains_target(menu_items, "layout_four_view_quad"));
 	EXPECT_TRUE(contains_target(menu_items, "viewport_settings"));
 

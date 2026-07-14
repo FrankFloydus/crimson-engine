@@ -8,7 +8,7 @@
 
 #include "api/quader_api_result.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 
 #include <string>
 #include <string_view>
@@ -23,7 +23,7 @@ quader_api_changed_mutation_kind(bool ok, bool changed,
 }
 
 inline QuaderRevisionStamp
-quader_api_current_revisions(const ProjectSession &session) {
+quader_api_current_revisions(const SceneSession &session) {
   const ModelingSelectionSummary modeling =
       session.modeling().selection_summary();
   return {
@@ -36,7 +36,7 @@ quader_api_current_revisions(const ProjectSession &session) {
 }
 
 inline QuaderApiVoidResult
-quader_api_void_status(const ProjectSession &session, bool ok, bool changed,
+quader_api_void_status(const SceneSession &session, bool ok, bool changed,
                        std::string message, QuaderMutationKind changed_kind,
                        std::string_view fallback_message = {}) {
   return {
@@ -51,7 +51,7 @@ quader_api_void_status(const ProjectSession &session, bool ok, bool changed,
 }
 
 inline QuaderApiVoidResult
-quader_api_failure_status(const ProjectSession &session, std::string message) {
+quader_api_failure_status(const SceneSession &session, std::string message) {
   return quader_api_void_status(session, false, false, std::move(message),
                                 QuaderMutationKind::None);
 }

@@ -12,6 +12,7 @@
 #include "api/quader_dev_tools_api.hpp"
 #endif
 #include "api/quader_project_api.hpp"
+#include "api/quader_scene_documents_api.hpp"
 #include "api/quader_preferences_api.hpp"
 #include "api/quader_tools_api.hpp"
 #include "api/quader_viewport_api.hpp"
@@ -212,10 +213,12 @@ class QuaderCommandsApi::Impl final {
 public:
 #ifndef NDEBUG
     Impl(QuaderApi& api, QuaderProjectApi& project,
+         QuaderSceneDocumentsApi &scene_documents,
          QuaderViewportApi& viewports, QuaderToolsApi& tools,
          QuaderPreferencesApi& preferences, QuaderDevToolsApi& dev_tools);
 #else
     Impl(QuaderApi& api, QuaderProjectApi& project,
+         QuaderSceneDocumentsApi &scene_documents,
          QuaderViewportApi& viewports, QuaderToolsApi& tools,
          QuaderPreferencesApi& preferences);
 #endif
@@ -292,6 +295,7 @@ public:
 
     QuaderApi& api_;
     QuaderProjectApi& project_;
+    QuaderSceneDocumentsApi &scene_documents_;
     QuaderViewportApi& viewports_;
     QuaderToolsApi& tools_;
     QuaderPreferencesApi& preferences_;
@@ -304,7 +308,8 @@ public:
 };
 
 QuaderCommandsApi::Impl::Impl(
-    QuaderApi &api, QuaderProjectApi &project, QuaderViewportApi &viewports,
+    QuaderApi &api, QuaderProjectApi &project,
+    QuaderSceneDocumentsApi &scene_documents, QuaderViewportApi &viewports,
     QuaderToolsApi &tools, QuaderPreferencesApi &preferences
 #ifndef NDEBUG
     ,
@@ -313,6 +318,7 @@ QuaderCommandsApi::Impl::Impl(
     )
     : api_(api)
     , project_(project)
+    , scene_documents_(scene_documents)
     , viewports_(viewports)
     , tools_(tools)
     , preferences_(preferences)
@@ -694,16 +700,57 @@ void QuaderCommandsApi::Impl::register_commands() {
                    [this] { return api_.modeling().cancel_preview(); });
   register_command(
       quader_command::kProjectNew, "New Project",
-      [this] { return project_.new_project(); }, "Ctrl+N");
+      [this] { return project_.new_project(); });
   register_command(
       quader_command::kProjectOpen, "Open Project",
-      [this] { return project_.open({}); }, "Ctrl+O");
+      [this] { return project_.open({}); });
   register_command(
-      quader_command::kProjectSave, "Save Project",
-      [this] { return project_.save(); }, "Ctrl+S");
+      quader_command::kProjectClose, "Close Project",
+      [this] { return project_.close(); }, {},
+      [this] { return project_.has_project(); });
   register_command(
-      quader_command::kProjectSaveAs, "Save Project As",
-      [this] { return project_.save_as({}); }, "Ctrl+Shift+S");
+      quader_command::kSceneDocumentNew, "New Scene",
+      [this] {
+        return quader_api_status_from_result(scene_documents_.new_scene());
+      },
+      "Ctrl+N", [this] { return project_.has_project(); });
+  register_command(
+      quader_command::kSceneDocumentOpen, "Open Scene",
+      [this] {
+        return quader_api_status_from_result(scene_documents_.open());
+      },
+      "Ctrl+O", [this] { return project_.has_project(); });
+  register_command(
+      quader_command::kSceneDocumentSave, "Save Scene",
+      [this] { return scene_documents_.save_active(); }, "Ctrl+S",
+      [this] { return scene_documents_.has_active_scene(); });
+  register_command(
+      quader_command::kSceneDocumentSaveAs, "Save Scene As",
+      [this] {
+        const std::optional<SceneSessionId> id =
+            scene_documents_.active_scene_id();
+        return id.has_value()
+                   ? scene_documents_.save_as(*id)
+                   : failure("No scene is active.");
+      },
+      "Ctrl+Alt+S", [this] { return scene_documents_.has_active_scene(); });
+  register_command(
+      quader_command::kSceneDocumentSaveAll, "Save All Scenes",
+      [this] { return scene_documents_.save_all(); }, "Ctrl+Shift+S",
+      [this] { return scene_documents_.has_dirty_scenes(); });
+  register_command(
+      quader_command::kSceneDocumentClose, "Close Scene",
+      [this] { return scene_documents_.close_active(); }, "Ctrl+W",
+      [this] { return scene_documents_.has_active_scene(); });
+  register_command(quader_command::kSceneDocumentNext, "Next Scene",
+                   [this] { return scene_documents_.activate_next(); },
+                   "Ctrl+Tab",
+                   [this] { return scene_documents_.open_scenes().size() > 1u; });
+  register_command(
+      quader_command::kSceneDocumentPrevious, "Previous Scene",
+      [this] { return scene_documents_.activate_previous(); },
+      "Ctrl+Shift+Tab",
+      [this] { return scene_documents_.open_scenes().size() > 1u; });
   register_command(
       quader_command::kProjectExportSelectionObj, "Export Selection OBJ",
       [this] {
@@ -955,20 +1002,22 @@ QuaderApiVoidResult QuaderCommandsApi::Impl::failure(std::string message) const 
 #ifndef NDEBUG
 QuaderCommandsApi::QuaderCommandsApi(QuaderApi &api,
                                      QuaderProjectApi &project,
+                                     QuaderSceneDocumentsApi &scene_documents,
                                      QuaderViewportApi &viewports,
                                      QuaderToolsApi &tools,
                                      QuaderPreferencesApi &preferences,
                                      QuaderDevToolsApi &dev_tools)
-    : impl_(std::make_unique<Impl>(api, project, viewports, tools, preferences,
-                                   dev_tools)) {}
+    : impl_(std::make_unique<Impl>(api, project, scene_documents, viewports,
+                                   tools, preferences, dev_tools)) {}
 #else
 QuaderCommandsApi::QuaderCommandsApi(QuaderApi &api,
                                      QuaderProjectApi &project,
+                                     QuaderSceneDocumentsApi &scene_documents,
                                      QuaderViewportApi &viewports,
                                      QuaderToolsApi &tools,
                                      QuaderPreferencesApi &preferences)
-    : impl_(std::make_unique<Impl>(api, project, viewports, tools,
-                                   preferences)) {}
+    : impl_(std::make_unique<Impl>(api, project, scene_documents, viewports,
+                                   tools, preferences)) {}
 #endif
 
 QuaderCommandsApi::~QuaderCommandsApi() = default;

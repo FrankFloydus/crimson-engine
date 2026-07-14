@@ -6,12 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "app/app.hpp"
 
-#include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
+#include "editor/session/quader_editor_api_session_access.hpp"
 #include "platform/platform_file_dialog.hpp"
 
 #include <QApplication>
@@ -53,14 +53,6 @@ int presentation_frame_interval_ms(const QMainWindow *window) {
 }
 
 std::filesystem::path
-default_project_save_file_name(const QuaderProjectApi &project) {
-  std::string name = project.metadata().name.empty() ? "Untitled Project"
-                                                     : project.metadata().name;
-  name.append(".qdr");
-  return std::filesystem::path(std::move(name));
-}
-
-std::filesystem::path
 default_obj_export_file_name(const QuaderProjectApi &project) {
   std::string name = project.metadata().name.empty() ? "Selection"
                                                      : project.metadata().name;
@@ -77,8 +69,41 @@ project_file_dialog_options(void *owner_window_handle,
   if (!current_path.empty()) {
     options.initial_directory = current_path.parent_path();
     options.initial_file_name = current_path.filename();
+  }
+  return options;
+}
+
+PlatformFileDialogOptions
+project_folder_dialog_options(void *owner_window_handle,
+                              const QuaderProjectApi &project) {
+  PlatformFileDialogOptions options;
+  options.owner_window_handle = owner_window_handle;
+  if (!project.root().empty()) {
+    options.initial_directory = project.root().parent_path();
+  }
+  return options;
+}
+
+PlatformFileDialogOptions
+scene_file_dialog_options(void *owner_window_handle,
+                          const QuaderProjectApi &project,
+                          const QuaderSceneDocumentInfo *scene = nullptr) {
+  PlatformFileDialogOptions options;
+  options.owner_window_handle = owner_window_handle;
+  if (project.root().empty()) {
+    return options;
+  }
+  options.initial_directory = project.root() / "Scenes";
+  if (scene == nullptr) {
+    return options;
+  }
+  if (scene->path.has_value()) {
+    const std::filesystem::path relative = scene->path->native_path();
+    options.initial_directory = project.root() / relative.parent_path();
+    options.initial_file_name = relative.filename();
   } else {
-    options.initial_file_name = default_project_save_file_name(project);
+    options.initial_file_name =
+        std::filesystem::path(scene->name + ".qdr");
   }
   return options;
 }
@@ -88,9 +113,8 @@ obj_export_file_dialog_options(void *owner_window_handle,
                                const QuaderProjectApi &project) {
   PlatformFileDialogOptions options;
   options.owner_window_handle = owner_window_handle;
-  const std::filesystem::path &current_path = project.path();
-  if (!current_path.empty()) {
-    options.initial_directory = current_path.parent_path();
+  if (!project.root().empty()) {
+    options.initial_directory = project.root();
   }
   options.initial_file_name = default_obj_export_file_name(project);
   return options;
@@ -132,35 +156,20 @@ bool App::initialize(QApplication &application,
     return false;
   }
 
-  const ProjectDefaultAssets default_assets =
-      ProjectAssetBootstrapService{}.bootstrap_default_assets(project_session_);
-  default_material_ = default_assets.default_material;
-  project_session_.mark_clean();
-  project_session_.set_document_replacement_finalizer(
-      [this](ProjectSession &session) {
-        const ProjectDefaultAssets replacement_defaults =
-            ProjectAssetBootstrapService{}.bootstrap_default_assets(session);
-        default_material_ = replacement_defaults.default_material;
-        ui_.set_default_material(default_material_);
-      });
-  editor_ = std::make_unique<QuaderEditorApi>(
-      QuaderApiSessionInternalAccess::from_project_session(project_session_));
-  ui_.install_runtime_hooks(
-      *editor_, project_session_.scene(), project_session_.assets(),
-      project_session_.modeling(), project_session_.selection(),
-      project_session_.pivot(), project_session_.linear_array(),
-      project_session_.radial_array(), project_session_.point_placement(),
-      default_material_);
+  editor_ = std::make_unique<QuaderEditorApi>(project_session_);
+  QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      *editor_, [this](SceneSession &scene) { bind_active_scene(scene); });
+  bind_active_scene(project_session_.fallback_scene());
   editor_->project().set_runtime_hooks(QuaderProjectRuntimeHooks{
-      .choose_open_path =
+      .choose_create_root =
+          [this]() {
+            return platform_choose_project_folder_dialog(
+                project_folder_dialog_options(ui_.native_window_handle(),
+                                              editor_->project()));
+          },
+      .choose_open_manifest_path =
           [this]() {
             return platform_open_project_file_dialog(
-                project_file_dialog_options(ui_.native_window_handle(),
-                                            editor_->project()));
-          },
-      .choose_save_as_path =
-          [this]() {
-            return platform_save_project_file_dialog(
                 project_file_dialog_options(ui_.native_window_handle(),
                                             editor_->project()));
           },
@@ -175,6 +184,35 @@ bool App::initialize(QApplication &application,
             return ui_.confirm_dirty_project_replacement(action_id);
           },
   });
+  editor_->scene_documents().set_runtime_hooks(
+      QuaderSceneDocumentsRuntimeHooks{
+          .choose_open_scene_path =
+              [this]() {
+                return platform_open_scene_file_dialog(
+                    scene_file_dialog_options(ui_.native_window_handle(),
+                                              editor_->project()));
+              },
+          .choose_save_scene_as_path =
+              [this](SceneSessionId id) {
+                std::optional<QuaderSceneDocumentInfo> selected;
+                for (const QuaderSceneDocumentInfo &scene :
+                     editor_->scene_documents().open_scenes()) {
+                  if (scene.session_id == id) {
+                    selected = scene;
+                    break;
+                  }
+                }
+                return platform_save_scene_file_dialog(
+                    scene_file_dialog_options(
+                        ui_.native_window_handle(), editor_->project(),
+                        selected.has_value() ? &*selected : nullptr));
+              },
+          .confirm_dirty_scene =
+              [this](const QuaderSceneDocumentInfo &scene,
+                     std::string_view action_id) {
+                return ui_.confirm_dirty_scene(scene, action_id);
+              },
+      });
 
   apply_window_settings();
   ui_.show();
@@ -221,6 +259,21 @@ void App::shutdown() {
   render_bridge_.shutdown();
   render_system_.shutdown();
   application_ = nullptr;
+}
+
+void App::bind_active_scene(SceneSession &scene) {
+  const ProjectDefaultAssets defaults =
+      ProjectAssetBootstrapService{}.bootstrap_default_assets(scene);
+  default_material_ = defaults.default_material;
+  scene.set_document_replacement_finalizer(
+      [this](SceneSession &replacement) { bind_active_scene(replacement); });
+  render_overlay_snapshot_cache_.reset();
+  if (editor_ != nullptr) {
+    ui_.install_runtime_hooks(
+        *editor_, scene.scene(), scene.assets(), scene.modeling(),
+        scene.selection(), scene.pivot(), scene.linear_array(),
+        scene.radial_array(), scene.point_placement(), default_material_);
+  }
 }
 
 void App::apply_window_settings() {
@@ -296,29 +349,35 @@ bool App::render_frame(const FrameTiming &frame_timing) {
 
   ui_.refresh(frame_timing, render_system_.frame_performance_stats());
   const auto ui_refresh_end = std::chrono::steady_clock::now();
-  {
+  const OpenSceneSession *active_scene = project_session_.active_scene();
+  if (active_scene != nullptr) {
     QDR_PROFILE_SCOPE("UI process viewport input");
     ui_.process_viewport_input();
   }
   const auto viewport_input_end = std::chrono::steady_clock::now();
-  {
+  if (active_scene != nullptr) {
     QDR_PROFILE_SCOPE("Render sync scene");
     (void)QuaderRenderApiRuntimeAccess::sync_scene(editor_->render(),
                                                    render_bridge_);
   }
   const auto scene_sync_end = std::chrono::steady_clock::now();
-  const ProjectSessionReadView session_view = project_session_.read_view();
-  if (const EntityId root = session_view.scene.scene_root();
-      root != kInvalidEntityId) {
-    if (const SceneSettingsComponent *settings =
-            session_view.scene.scene_settings(root)) {
-      render_system_.apply_scene_settings(*settings);
+  if (active_scene != nullptr && active_scene->session != nullptr) {
+    const SceneSessionReadView session_view = active_scene->session->read_view();
+    if (const EntityId root = session_view.scene.scene_root();
+        root != kInvalidEntityId) {
+      if (const SceneSettingsComponent *settings =
+              session_view.scene.scene_settings(root)) {
+        render_system_.apply_scene_settings(*settings);
+      }
     }
   }
   const auto scene_settings_end = std::chrono::steady_clock::now();
-  ui_.prepare_viewports(render_bridge_, render_overlay_snapshot_cache_);
+  if (active_scene != nullptr) {
+    ui_.prepare_viewports(render_bridge_, render_overlay_snapshot_cache_);
+  }
   const auto viewport_prepare_end = std::chrono::steady_clock::now();
-  const std::size_t submitted = ui_.can_render_viewports()
+  const std::size_t submitted = active_scene != nullptr &&
+                                        ui_.can_render_viewports()
                                     ? ui_.render_viewports()
                                     : 0u;
   const auto viewport_render_end = std::chrono::steady_clock::now();

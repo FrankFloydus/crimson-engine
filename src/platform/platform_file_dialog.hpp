@@ -23,7 +23,13 @@ struct PlatformFileDialogOptions {
 [[nodiscard]] std::optional<std::filesystem::path>
 platform_open_project_file_dialog(const PlatformFileDialogOptions &options);
 [[nodiscard]] std::optional<std::filesystem::path>
+platform_choose_project_folder_dialog(const PlatformFileDialogOptions &options);
+[[nodiscard]] std::optional<std::filesystem::path>
 platform_save_project_file_dialog(const PlatformFileDialogOptions &options);
+[[nodiscard]] std::optional<std::filesystem::path>
+platform_open_scene_file_dialog(const PlatformFileDialogOptions &options);
+[[nodiscard]] std::optional<std::filesystem::path>
+platform_save_scene_file_dialog(const PlatformFileDialogOptions &options);
 [[nodiscard]] std::optional<std::filesystem::path>
 platform_save_obj_file_dialog(const PlatformFileDialogOptions &options);
 

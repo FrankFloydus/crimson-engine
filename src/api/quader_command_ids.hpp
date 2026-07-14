@@ -48,10 +48,21 @@ inline constexpr QuaderCommandId kDevCopySelectionJson{
 
 inline constexpr QuaderCommandId kProjectNew{"project.new"};
 inline constexpr QuaderCommandId kProjectOpen{"project.open"};
-inline constexpr QuaderCommandId kProjectSave{"project.save"};
-inline constexpr QuaderCommandId kProjectSaveAs{"project.save_as"};
+inline constexpr QuaderCommandId kProjectClose{"project.close"};
 inline constexpr QuaderCommandId kProjectExportSelectionObj{
     "project.export_selection_obj"};
+
+inline constexpr QuaderCommandId kSceneDocumentNew{"scene_document.new"};
+inline constexpr QuaderCommandId kSceneDocumentOpen{"scene_document.open"};
+inline constexpr QuaderCommandId kSceneDocumentSave{"scene_document.save"};
+inline constexpr QuaderCommandId kSceneDocumentSaveAs{
+    "scene_document.save_as"};
+inline constexpr QuaderCommandId kSceneDocumentSaveAll{
+    "scene_document.save_all"};
+inline constexpr QuaderCommandId kSceneDocumentClose{"scene_document.close"};
+inline constexpr QuaderCommandId kSceneDocumentNext{"scene_document.next"};
+inline constexpr QuaderCommandId kSceneDocumentPrevious{
+    "scene_document.previous"};
 
 inline constexpr QuaderCommandId kSceneCreatePointLight{
     "scene.create_point_light"};
@@ -257,9 +268,16 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
 #endif
     kProjectNew,
     kProjectOpen,
-    kProjectSave,
-    kProjectSaveAs,
+    kProjectClose,
     kProjectExportSelectionObj,
+    kSceneDocumentNew,
+    kSceneDocumentOpen,
+    kSceneDocumentSave,
+    kSceneDocumentSaveAs,
+    kSceneDocumentSaveAll,
+    kSceneDocumentClose,
+    kSceneDocumentNext,
+    kSceneDocumentPrevious,
     kSceneCreatePointLight,
     kSceneCreateDirectionalLight,
     kViewportFrameSelection,

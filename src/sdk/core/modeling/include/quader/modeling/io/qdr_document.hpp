@@ -9,9 +9,10 @@
 #include <quader/modeling/mesh/polygon_document.hpp>
 #include <quader/modeling/result.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace quader::modeling {
@@ -57,11 +58,27 @@ struct QdrDocumentDto {
   std::uint64_t selection_revision = 0;
 };
 
-[[nodiscard]] Result<std::string>
+/**
+ * Encodes only the durable authored topology of a polygon document.
+ *
+ * Selection and runtime revision state are intentionally excluded so the
+ * resulting payload can be used as a stable, deduplicated geometry blob.
+ */
+[[nodiscard]] Result<std::vector<std::byte>>
+serialize_qdr_authored_topology(const PolygonDocument &document);
+
+/**
+ * Decodes one authored-topology payload into a polygon document with cleared
+ * selection and baseline runtime revisions.
+ */
+[[nodiscard]] Result<PolygonDocument>
+deserialize_qdr_authored_topology(std::span<const std::byte> bytes);
+
+[[nodiscard]] Result<std::vector<std::byte>>
 serialize_qdr_document(const QdrDocumentDto &document);
 [[nodiscard]] Result<QdrDocumentDto>
-deserialize_qdr_document(std::string_view text);
-[[nodiscard]] Result<std::string>
+deserialize_qdr_document(std::span<const std::byte> bytes);
+[[nodiscard]] Result<std::vector<std::byte>>
 serialize_single_document_as_qdr(const PolygonDocument &document);
 
 } // namespace quader::modeling

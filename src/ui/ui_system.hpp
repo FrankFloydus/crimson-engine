@@ -27,6 +27,7 @@
 class QDockWidget;
 class QLabel;
 class QMainWindow;
+class QStackedWidget;
 class QWidget;
 
 namespace quader {
@@ -45,13 +46,18 @@ class QtSettingsDialog;
 class QtCommandEventFilter;
 class QtToolSettingsWindow;
 class QtViewportPanel;
+class QtProjectHomePage;
+class QtSceneWorkspace;
 enum class QtSettingsChangeKind;
 class QuaderEditorApi;
+struct QuaderApiStatus;
 class RenderOverlaySnapshotCache;
 class RenderSystem;
 class SceneDocument;
 class SceneRenderBridge;
 enum class QuaderDirtyProjectDecision;
+enum class QuaderDirtySceneDecision;
+struct QuaderSceneDocumentInfo;
 
 /**
  * Owns Quader's retained Qt Widgets shell and all top-level presentation
@@ -82,6 +88,12 @@ public:
   }
   [[nodiscard]] QuaderDirtyProjectDecision
   confirm_dirty_project_replacement(std::string_view action_id);
+  [[nodiscard]] QuaderDirtySceneDecision
+  confirm_dirty_scene(const QuaderSceneDocumentInfo &scene,
+                      std::string_view action_id);
+  void refresh_project_workspace();
+  void show_home();
+  void show_workspace();
   void show();
   void shutdown();
 
@@ -116,6 +128,7 @@ private:
   void save_auxiliary_window_state();
   void synchronize_auxiliary_window_visibility();
   void refresh_status_bar();
+  void present_lifecycle_result(const QuaderApiStatus &result);
   void refresh_localized_chrome();
   void handle_settings_dialog_change(QtSettingsChangeKind kind);
   void synchronize_settings_surfaces(bool refresh_dialog);
@@ -127,6 +140,9 @@ private:
   std::unique_ptr<QMainWindow> main_window_;
   std::unique_ptr<QtMainMenu> main_menu_;
   std::unique_ptr<QtCommandEventFilter> command_event_filter_;
+  QStackedWidget *central_stack_ = nullptr;
+  QtProjectHomePage *project_home_page_ = nullptr;
+  QtSceneWorkspace *scene_workspace_ = nullptr;
   QtViewportPanel *viewport_panel_ = nullptr;
   OutlinerPanel *outliner_panel_ = nullptr;
   InspectorPanel *inspector_panel_ = nullptr;
@@ -168,6 +184,8 @@ private:
   std::string inspector_locale_;
   bool outliner_refresh_valid_ = false;
   bool inspector_refresh_valid_ = false;
+  bool home_visible_ = true;
+  bool viewport_initialized_ = false;
 };
 
 } // namespace quader

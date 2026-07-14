@@ -144,6 +144,8 @@ public:
     EntityId entity_id(entt::entity entity) const;
 
     std::uint64_t revision() const { return revision_; }
+    /** Revision of scene data that is persisted in a scene document. */
+    std::uint64_t content_revision() const { return content_revision_; }
     std::uint64_t selection_revision() const { return selection_revision_; }
     std::uint64_t visibility_revision() const { return visibility_revision_; }
     std::uint64_t transform_revision() const { return transform_revision_; }
@@ -164,6 +166,7 @@ private:
   SelectionComponent *mutable_selection(EntityId id);
 
   void mark_dirty();
+  void mark_transient_dirty();
   EditorObjectId allocate_editor_object_id(EditorObjectId requested);
   entt::entity require_entity(EntityId id) const;
   bool is_selected(EntityId id) const;
@@ -178,6 +181,7 @@ private:
   EditorObjectId next_editor_object_id_ = 1;
   EntityId active_selection_ = kInvalidEntityId;
   std::uint64_t revision_ = 0;
+  std::uint64_t content_revision_ = 0;
   std::uint64_t selection_revision_ = 0;
   std::uint64_t visibility_revision_ = 0;
   std::uint64_t transform_revision_ = 0;

@@ -44,7 +44,7 @@
 #include "editor/projection/selection_overlay_projection.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/project_asset_bootstrap_service.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "editor/tools/viewport_tool.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
@@ -71,7 +71,7 @@
 #include "render/viewport_overlay_policy.hpp"
 #include "render/viewport_render_target.hpp"
 #include "render/viewport_renderer.hpp"
-#include "scene/document/project_document.hpp"
+#include "scene/document/scene_content_document.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_entity_naming.hpp"
@@ -3011,9 +3011,9 @@ TEST(RadialArrayLayoutTests,
 
 TEST(RadialArrayToolServiceTests,
      CenterLockBuildsTransformOnlyPreviewAndCommitUsesIdenticalMatrices) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   const QuaderApiResult<QuaderModelingObjectRef> source =
       editor.modeling().create_box(
           QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
@@ -3089,9 +3089,9 @@ TEST(RadialArrayToolServiceTests,
 
 TEST(RadialArrayToolServiceTests,
      VisiblePivotPolicyChangeInvalidatesTheCapturedPreview) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   const QuaderApiResult<QuaderModelingObjectRef> source =
       editor.modeling().create_box(
           QuaderBounds{.min = {0.0f, -1.0f, -1.0f},
@@ -3119,9 +3119,9 @@ TEST(RadialArrayToolServiceTests,
 
 TEST(RadialArrayToolServiceTests,
      CommitPreservesParentMaterialSelectabilityAndCustomPivot) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   const QuaderApiResult<QuaderEntityRef> parent =
       editor.scene().create_entity(QuaderCreateEntityArgs{
           .name = "Radial Durable Parent",
@@ -3178,9 +3178,9 @@ TEST(RadialArrayToolServiceTests,
 
 TEST(RadialArrayToolServiceTests,
      RepeatSpacingReexpandsAfterZeroThroughPublicToolSettings) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   const QuaderApiResult<QuaderModelingObjectRef> source =
       editor.modeling().create_box(
           QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
@@ -3252,9 +3252,9 @@ TEST(RadialArrayToolServiceTests,
 
 TEST(RadialArrayToolServiceTests,
      MaterialRevisionChangeInvalidatesTheLivePreviewSession) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   const QuaderApiResult<QuaderModelingObjectRef> source =
       editor.modeling().create_box(
           QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
@@ -4120,30 +4120,34 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
 }
 
 TEST(SceneRenderBridgeTests,
-     TextureBindingServiceEvictsObsoleteTextureRevisions) {
+     TextureBindingServiceRetainsRevisionsUntilSceneCacheRelease) {
   const std::string texture_header =
       read_source_file("src/render/texture_binding_service.hpp");
   const std::string texture_source =
       read_source_file("src/render/texture_binding_service.cpp");
 
-  EXPECT_NE(texture_header.find("void evict_obsolete_texture_revisions(const "
-                                "TextureCacheKey &current_key);"),
+  EXPECT_EQ(texture_header.find("evict_obsolete_texture_revisions"),
             std::string::npos);
-  EXPECT_NE(texture_source.find("evict_obsolete_texture_revisions(cache_key);"),
+  EXPECT_EQ(texture_source.find("evict_obsolete_texture_revisions"),
+            std::string::npos)
+      << "A replaced texture revision can remain referenced by a paced, "
+         "retired material instance.";
+
+  const std::size_t bind_scene =
+      texture_source.find("void TextureBindingService::bind_scene(");
+  const std::size_t resolve_texture =
+      texture_source.find("TextureBindingService::resolve_texture(");
+  ASSERT_NE(bind_scene, std::string::npos);
+  ASSERT_NE(resolve_texture, std::string::npos);
+  ASSERT_LT(bind_scene, resolve_texture);
+  const std::string binding_release =
+      texture_source.substr(bind_scene, resolve_texture - bind_scene);
+  EXPECT_NE(binding_release.find("destroy_texture(texture)"),
             std::string::npos);
-  EXPECT_NE(texture_source.find(
-                "void TextureBindingService::evict_obsolete_texture_revisions"),
-            std::string::npos);
-  EXPECT_NE(texture_source.find("it->first.id == current_key.id"),
-            std::string::npos);
-  EXPECT_NE(
-      texture_source.find("it->first.color_space == current_key.color_space"),
-      std::string::npos);
-  EXPECT_NE(texture_source.find("it->first.revision != current_key.revision"),
-            std::string::npos);
-  EXPECT_NE(texture_source.find("destroy_texture(it->second);"),
-            std::string::npos);
-  EXPECT_NE(texture_source.find("texture_cache_.erase(it)"), std::string::npos);
+  EXPECT_NE(binding_release.find("texture_cache_.clear()"),
+            std::string::npos)
+      << "Retained revisions must still be reclaimed at the safe scene "
+         "ownership boundary.";
 }
 
 TEST(SceneRenderBridgeTests,
@@ -4978,19 +4982,27 @@ TEST(AppStartupTests, DelegatesDefaultAssetsAndUsesSessionReadView) {
       "src/editor/session/project_asset_bootstrap_service.cpp");
   const std::string build_source = read_source_file("CMakeLists.txt");
 
-  EXPECT_NE(app_source.find("ProjectAssetBootstrapService{}."
-                            "bootstrap_default_assets(project_session_)"),
+  EXPECT_NE(app_header.find("void bind_active_scene(SceneSession &scene)"),
             std::string::npos);
-  EXPECT_NE(app_source.find("const ProjectSessionReadView session_view = "
-                            "project_session_.read_view();"),
+  EXPECT_NE(app_header.find("ProjectSession project_session_"),
+            std::string::npos);
+  EXPECT_EQ(app_header.find("SceneSession scene_session_"), std::string::npos);
+  EXPECT_NE(app_source.find("ProjectAssetBootstrapService{}."
+                            "bootstrap_default_assets(scene)"),
+            std::string::npos);
+  EXPECT_NE(app_source.find("const SceneSessionReadView session_view = "
+                            "active_scene->session->read_view();"),
             std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       app_source,
-      "ui_.install_runtime_hooks(*editor_, project_session_.scene(), "
-      "project_session_.assets(), project_session_.modeling(), "
-      "project_session_.selection(), project_session_.pivot(), "
-      "project_session_.linear_array(), project_session_.radial_array(), "
-      "project_session_.point_placement(), default_material_)"));
+      "QuaderEditorApiSessionAccess::set_scene_binding_changed_callback("
+      "*editor_, [this](SceneSession &scene) { bind_active_scene(scene); })"));
+  EXPECT_TRUE(source_contains_compact(
+      app_source,
+      "ui_.install_runtime_hooks(*editor_, scene.scene(), scene.assets(), "
+      "scene.modeling(), scene.selection(), scene.pivot(), "
+      "scene.linear_array(), scene.radial_array(), "
+      "scene.point_placement(), default_material_)"));
   EXPECT_NE(app_source.find("ui_.prepare_viewports(render_bridge_, "
                             "render_overlay_snapshot_cache_)"),
             std::string::npos);
@@ -6040,6 +6052,36 @@ TEST(ViewportWorkspaceServiceTests,
   EXPECT_EQ(const_workspace.view(ViewportPaneId::Perspective),
             ViewportView::Front);
   EXPECT_EQ(viewport_view_for_camera(const_pane.camera), ViewportView::Front);
+}
+
+TEST(ViewportWorkspaceServiceTests,
+     PerspectiveResetRestoresTheCanonicalCameraStateAndPose) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(1280.0f, 720.0f);
+  camera.focus_bounds({20.0f, -3.0f, -8.0f}, {24.0f, 5.0f, 12.0f});
+  camera.set_view_direction({1.0f, -0.25f, 0.5f});
+  camera.set_clip_planes(0.25f, 250.0f);
+
+  reset_viewport_camera_for_view(camera, ViewportView::Perspective);
+
+  const ViewportCameraController canonical;
+  const ViewportCameraState &actual = camera.state();
+  const ViewportCameraState &expected = canonical.state();
+  EXPECT_EQ(actual.projection, expected.projection);
+  EXPECT_FLOAT_EQ(actual.yaw_radians, expected.yaw_radians);
+  EXPECT_FLOAT_EQ(actual.pitch_radians, expected.pitch_radians);
+  EXPECT_FLOAT_EQ(actual.distance, expected.distance);
+  EXPECT_FLOAT_EQ(actual.orthographic_size, expected.orthographic_size);
+  EXPECT_FLOAT_EQ(actual.fov_degrees, expected.fov_degrees);
+  EXPECT_FLOAT_EQ(actual.near_plane, expected.near_plane);
+  EXPECT_FLOAT_EQ(actual.far_plane, expected.far_plane);
+  expect_vec3_near(actual.target, expected.target);
+  expect_vec3_near(camera.pose().eye, canonical.pose().eye);
+  expect_vec3_near(camera.pose().target, canonical.pose().target);
+  expect_vec3_near(camera.pose().up, canonical.pose().up);
+  EXPECT_NE(actual.distance,
+            static_cast<float>(
+                viewport_host_defaults().focus_origin_distance));
 }
 
 TEST(ViewportWorkspaceServiceTests,
@@ -8372,8 +8414,8 @@ TEST(AssetProjectArchitectureTests,
   EXPECT_EQ(textures.get(texture_id)->usage, TextureUsage::Mask);
 }
 
-TEST(ProjectDocumentTests, OwnsSceneAssetsAndStableObjectRecords) {
-  ProjectDocument document(ProjectDocumentRecord{
+TEST(SceneContentDocumentTests, OwnsSceneAssetsAndStableObjectRecords) {
+  SceneContentDocument document(SceneContentDocumentRecord{
       .id = 17,
       .name = "Authored Project",
   });
@@ -8426,9 +8468,9 @@ TEST(ProjectDocumentTests, OwnsSceneAssetsAndStableObjectRecords) {
   EXPECT_EQ(document.revision(), 4u);
 }
 
-TEST(ProjectDocumentTests,
+TEST(SceneContentDocumentTests,
      BulkUpsertsImportedObjectRecordsAfterOneSceneRecordSync) {
-  ProjectDocument document(ProjectDocumentRecord{
+  SceneContentDocument document(SceneContentDocumentRecord{
       .id = 23,
       .name = "Imported Batch Project",
   });
@@ -8481,8 +8523,8 @@ TEST(ProjectDocumentTests,
   EXPECT_EQ(second_record->authored_name, "Authored Second");
 }
 
-TEST(ProjectDocumentTests, ValidatesAssetReferencesAtDocumentOwner) {
-  ProjectDocument document(ProjectDocumentRecord{
+TEST(SceneContentDocumentTests, ValidatesAssetReferencesAtDocumentOwner) {
+  SceneContentDocument document(SceneContentDocumentRecord{
       .id = 21,
       .name = "Reference Validation Project",
   });
@@ -8494,7 +8536,7 @@ TEST(ProjectDocumentTests, ValidatesAssetReferencesAtDocumentOwner) {
                                             .material_slots = {{2u, 406u}},
                                         });
 
-  const ProjectDocumentAssetReferenceReport scene_report =
+  const SceneContentDocumentAssetReferenceReport scene_report =
       document.validate_asset_references();
   ASSERT_FALSE(scene_report.ok());
   ASSERT_GE(scene_report.issues.size(), 3u);
@@ -8503,7 +8545,7 @@ TEST(ProjectDocumentTests, ValidatesAssetReferencesAtDocumentOwner) {
   EXPECT_NE(scene_report.issues[1].message.find("missing material asset"),
             std::string::npos);
 
-  const ProjectDocumentAssetReferenceReport record_report =
+  const SceneContentDocumentAssetReferenceReport record_report =
       document.validate_asset_references(ProjectObjectRecord{
           .id = 99u,
           .scene_entity = kInvalidEntityId,
@@ -8516,27 +8558,27 @@ TEST(ProjectDocumentTests, ValidatesAssetReferencesAtDocumentOwner) {
             std::string::npos);
 
   const std::string project_document_source =
-      read_source_file("src/scene/document/project_document.cpp");
-  const std::string qdr_reader_source =
-      read_source_file("src/io/qdr/qdr_document_reader.cpp");
+      read_source_file("src/scene/document/scene_content_document.cpp");
+  const std::string qdr_codec_source =
+      read_source_file("src/io/qdr/qdr_scene_binary_codec.cpp");
   EXPECT_NE(project_document_source.find(
-                "ProjectDocument::validate_asset_references"),
+                "SceneContentDocument::validate_asset_references"),
             std::string::npos);
-  EXPECT_NE(qdr_reader_source.find("document.validate_asset_references()"),
+  EXPECT_NE(qdr_codec_source.find("document.validate_asset_references()"),
             std::string::npos);
   EXPECT_NE(
-      qdr_reader_source.find("document.validate_asset_references(record)"),
+      qdr_codec_source.find("document.validate_asset_references(record)"),
       std::string::npos);
-  EXPECT_EQ(qdr_reader_source.find("document.assets().mesh(mesh->mesh)"),
+  EXPECT_EQ(qdr_codec_source.find("document.assets().mesh(mesh->mesh)"),
             std::string::npos);
   EXPECT_EQ(
-      qdr_reader_source.find("document.assets().material(material->material)"),
+      qdr_codec_source.find("document.assets().material(material->material)"),
       std::string::npos);
 }
 
-TEST(ProjectDocumentTests,
+TEST(SceneContentDocumentTests,
      RejectsEditorObjectIdCollisionsBetweenSceneEntities) {
-  ProjectDocument document(ProjectDocumentRecord{
+  SceneContentDocument document(SceneContentDocumentRecord{
       .id = 19,
       .name = "Identity Collision Project",
   });
@@ -8563,16 +8605,16 @@ TEST(ProjectDocumentTests,
   EXPECT_EQ(document.entity_for_object_id(first_object), first);
   EXPECT_EQ(document.entity_for_object_id(second_object), second);
 
-  const ProjectDocumentIdentityReport report =
+  const SceneContentDocumentIdentityReport report =
       document.validate_object_identity_invariants();
   EXPECT_TRUE(report.ok()) << (report.issues.empty()
                                    ? std::string{}
                                    : report.issues.front().message);
 }
 
-TEST(ProjectDocumentTests,
+TEST(SceneContentDocumentTests,
      MirrorsEverySceneEntityIntoStableEditorObjectRecords) {
-  ProjectDocument document(ProjectDocumentRecord{
+  SceneContentDocument document(SceneContentDocumentRecord{
       .id = 18,
       .name = "Identity Project",
   });
@@ -8609,16 +8651,16 @@ TEST(ProjectDocumentTests,
   ASSERT_TRUE(group_record.has_value());
   EXPECT_EQ(group_record->modeling_object, kInvalidModelingObjectId);
 
-  const ProjectDocumentIdentityReport report =
+  const SceneContentDocumentIdentityReport report =
       document.validate_object_identity_invariants();
   EXPECT_TRUE(report.ok()) << (report.issues.empty()
                                    ? std::string{}
                                    : report.issues.front().message);
 }
 
-TEST(ProjectDocumentTests,
-     SceneEntitiesReserveStableObjectIdsFromProjectDocumentAuthority) {
-  ProjectDocument document(ProjectDocumentRecord{
+TEST(SceneContentDocumentTests,
+     SceneEntitiesReserveStableObjectIdsFromSceneContentDocumentAuthority) {
+  SceneContentDocument document(SceneContentDocumentRecord{
       .id = 20,
       .name = "Identity Authority Project",
   });
@@ -8650,21 +8692,21 @@ TEST(ProjectDocumentTests,
       });
   EXPECT_EQ(after_imported, 100u);
 
-  ProjectDocument moved(std::move(document));
+  SceneContentDocument moved(std::move(document));
   const EntityId after_move =
       moved.scene().create_entity("After Move", EntityKind::Mesh);
   ASSERT_NE(after_move, kInvalidEntityId);
   EXPECT_EQ(moved.scene().editor_object_id(after_move), 101u);
 
-  const ProjectDocumentIdentityReport report =
+  const SceneContentDocumentIdentityReport report =
       moved.validate_object_identity_invariants();
   EXPECT_TRUE(report.ok()) << (report.issues.empty()
                                    ? std::string{}
                                    : report.issues.front().message);
 }
 
-TEST(ProjectDocumentTests, ConstObjectRecordQueriesDoNotMutateProjectRevision) {
-  ProjectDocument document(ProjectDocumentRecord{
+TEST(SceneContentDocumentTests, ConstObjectRecordQueriesDoNotMutateProjectRevision) {
+  SceneContentDocument document(SceneContentDocumentRecord{
       .id = 21,
       .name = "Const Projection Project",
   });
@@ -8695,9 +8737,9 @@ TEST(ProjectDocumentTests, ConstObjectRecordQueriesDoNotMutateProjectRevision) {
   EXPECT_EQ(document.revision(), revision_before_queries + 1u);
 }
 
-TEST(ProjectDocumentTests,
-     ExplicitObjectRecordSyncParticipatesInProjectSessionDirtyState) {
-  ProjectSession session;
+TEST(SceneContentDocumentTests,
+     ExplicitObjectRecordSyncParticipatesInSceneSessionDirtyState) {
+  SceneSession session;
   const EntityId entity =
       session.scene().create_entity("Session Projected Mesh", EntityKind::Mesh);
   ASSERT_NE(entity, kInvalidEntityId);
@@ -8715,11 +8757,11 @@ TEST(ProjectDocumentTests,
   EXPECT_FALSE(session.dirty());
 }
 
-TEST(ProjectSessionTests,
+TEST(SceneSessionTests,
      DirtyStateAggregatesProjectSceneAssetAndModelingContentRevisions) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
 
   EXPECT_FALSE(editor.project().dirty());
 
@@ -8806,9 +8848,9 @@ TEST(ProjectSessionTests,
   EXPECT_TRUE(editor.project().dirty());
 }
 
-TEST(ProjectSessionTests,
+TEST(SceneSessionTests,
      ReplaceDocumentAdvancesSceneRevisionPastPreviousDocument) {
-  ProjectSession session;
+  SceneSession session;
   for (int i = 0; i < 8; ++i) {
     const EntityId entity =
         session.scene().create_entity("Previous Entity " + std::to_string(i));
@@ -8822,7 +8864,7 @@ TEST(ProjectSessionTests,
   session.mark_clean();
   EXPECT_FALSE(session.dirty());
 
-  ProjectDocument replacement;
+  SceneContentDocument replacement;
   const EntityId light =
       replacement.scene().create_entity("Loaded Light", EntityKind::Light);
   ASSERT_NE(light, kInvalidEntityId);
@@ -8847,12 +8889,12 @@ TEST(ProjectSessionTests,
   EXPECT_EQ(session.scene().light(light)->type, LightType::Point);
 }
 
-TEST(ProjectSessionTests,
+TEST(SceneSessionTests,
      ReplaceDocumentClearsPersistentQuickAndArrayToolState) {
   {
-    ProjectSession session;
+    SceneSession session;
     QuaderEditorApi editor(
-        QuaderApiSessionInternalAccess::from_project_session(session));
+        QuaderApiSessionInternalAccess::from_scene_session(session));
     const QuaderApiResult<QuaderModelingObjectRef> source =
         editor.modeling().create_box(
             QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
@@ -8866,7 +8908,7 @@ TEST(ProjectSessionTests,
     ASSERT_TRUE(session.pivot().persistent_active());
     ASSERT_TRUE(session.pivot().selection_pivot_override().valid);
 
-    ProjectDocument replacement;
+    SceneContentDocument replacement;
     const EntityId replacement_light = replacement.scene().create_entity_with_id(
         source.value().entity, "Replacement Light", EntityKind::Light);
     ASSERT_EQ(replacement_light, source.value().entity);
@@ -8893,9 +8935,9 @@ TEST(ProjectSessionTests,
   }
 
   {
-    ProjectSession session;
+    SceneSession session;
     QuaderEditorApi editor(
-        QuaderApiSessionInternalAccess::from_project_session(session));
+        QuaderApiSessionInternalAccess::from_scene_session(session));
     const QuaderApiResult<QuaderModelingObjectRef> source =
         editor.modeling().create_box(
             QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
@@ -8906,7 +8948,7 @@ TEST(ProjectSessionTests,
     ASSERT_TRUE(editor.tools().activate(ViewportToolId::LinearArray).ok());
     ASSERT_TRUE(session.linear_array().has_session());
 
-    ProjectDocument replacement;
+    SceneContentDocument replacement;
     const EntityId replacement_light = replacement.scene().create_entity_with_id(
         source.value().entity, "Replacement Array Light", EntityKind::Light);
     ASSERT_EQ(replacement_light, source.value().entity);
@@ -8922,9 +8964,9 @@ TEST(ProjectSessionTests,
   }
 
   {
-    ProjectSession session;
+    SceneSession session;
     QuaderEditorApi editor(
-        QuaderApiSessionInternalAccess::from_project_session(session));
+        QuaderApiSessionInternalAccess::from_scene_session(session));
     const QuaderApiResult<QuaderModelingObjectRef> source =
         editor.modeling().create_box(
             QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
@@ -8939,7 +8981,7 @@ TEST(ProjectSessionTests,
     ASSERT_TRUE(session.radial_array().lock_center().ok);
     ASSERT_TRUE(session.radial_array().preview_state().active);
 
-    ProjectDocument replacement;
+    SceneContentDocument replacement;
     const EntityId replacement_light = replacement.scene().create_entity_with_id(
         source.value().entity, "Replacement Radial Light", EntityKind::Light);
     ASSERT_EQ(replacement_light, source.value().entity);
@@ -8955,11 +8997,11 @@ TEST(ProjectSessionTests,
   }
 }
 
-TEST(ProjectSessionTests,
+TEST(SceneSessionTests,
      ReplaceDocumentClearsSceneTransformPreviewBeforeInstallingReplacement) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   const QuaderApiResult<QuaderModelingObjectRef> source =
       editor.modeling().create_box(
           QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
@@ -8981,7 +9023,7 @@ TEST(ProjectSessionTests,
   EXPECT_NEAR(session.scene().transform(source.value().entity)->position.x,
               2.0f, 0.001f);
 
-  ProjectDocument replacement;
+  SceneContentDocument replacement;
   const EntityId replacement_entity = replacement.scene().create_entity_with_id(
       source.value().entity, "Replacement Entity", EntityKind::Empty);
   ASSERT_EQ(replacement_entity, source.value().entity);
@@ -9007,10 +9049,10 @@ TEST(ProjectSessionTests,
                    {99.0f, 8.0f, 7.0f});
 }
 
-TEST(ProjectSessionTests, PublicHistoryIgnoresUntrackedModelingSessionHistory) {
-  ProjectSession session;
+TEST(SceneSessionTests, PublicHistoryIgnoresUntrackedModelingSessionHistory) {
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   const auto entity_named = [&](std::string_view name) {
     const std::vector<QuaderEntitySnapshot> entities =
         editor.query().entities();
@@ -9057,11 +9099,11 @@ TEST(ProjectSessionTests, PublicHistoryIgnoresUntrackedModelingSessionHistory) {
             editor.revisions().modeling_content_revision);
 }
 
-TEST(ProjectSessionTests,
+TEST(SceneSessionTests,
      QuickPivotOverrideFeedsTransformPivotAndClearsOnSelectionChange) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   const QuaderApiResult<QuaderModelingObjectRef> first =
       editor.modeling().create_box(
           QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
@@ -9105,11 +9147,11 @@ TEST(ProjectSessionTests,
   EXPECT_FALSE(editor.query().selection_transform_pivot().has_value());
 }
 
-TEST(ProjectSessionTests,
+TEST(SceneSessionTests,
      ServiceCreatesSessionsWithDocumentAssetsAndCommandsWiredTogether) {
-  ProjectSessionService service;
-  std::unique_ptr<ProjectSession> session =
-      service.create_session(ProjectDocumentRecord{
+  SceneSessionService service;
+  std::unique_ptr<SceneSession> session =
+      service.create_session(SceneContentDocumentRecord{
           .id = 42,
           .name = "Architecture Session",
       });
@@ -9136,7 +9178,7 @@ TEST(ProjectSessionTests,
   ASSERT_TRUE(session->history().undo().ok);
   EXPECT_FALSE(session->scene().exists(entity));
 
-  ProjectDocument existing(ProjectDocumentRecord{
+  SceneContentDocument existing(SceneContentDocumentRecord{
       .id = 99,
       .name = "Opened Session",
   });
@@ -9147,7 +9189,7 @@ TEST(ProjectSessionTests,
           .scene_entity = authored_entity,
           .authored_name = "Authored Mesh",
       });
-  std::unique_ptr<ProjectSession> opened =
+  std::unique_ptr<SceneSession> opened =
       service.open_session(std::move(existing));
   ASSERT_NE(opened, nullptr);
   EXPECT_EQ(opened->document().id(), 99u);
@@ -9156,20 +9198,20 @@ TEST(ProjectSessionTests,
   EXPECT_EQ(opened->document().entity_for_object_id(object), authored_entity);
 }
 
-TEST(ProjectSessionTests, ReadViewExposesConstProjectSceneAndAssetState) {
+TEST(SceneSessionTests, ReadViewExposesConstProjectSceneAndAssetState) {
   static_assert(
-      std::is_same_v<decltype(std::declval<ProjectSessionReadView>().document),
-                     const ProjectDocument &>);
+      std::is_same_v<decltype(std::declval<SceneSessionReadView>().document),
+                     const SceneContentDocument &>);
   static_assert(
-      std::is_same_v<decltype(std::declval<ProjectSessionReadView>().scene),
+      std::is_same_v<decltype(std::declval<SceneSessionReadView>().scene),
                      const SceneDocument &>);
   static_assert(
-      std::is_same_v<decltype(std::declval<ProjectSessionReadView>().assets),
+      std::is_same_v<decltype(std::declval<SceneSessionReadView>().assets),
                      const AssetRegistry &>);
 
-  ProjectSession session;
-  const ProjectContentRevisionStamp before = session.content_revision_stamp();
-  const ProjectSessionReadView view = session.read_view();
+  SceneSession session;
+  const SceneContentRevisionStamp before = session.content_revision_stamp();
+  const SceneSessionReadView view = session.read_view();
 
   EXPECT_EQ(&view.document, &std::as_const(session).document());
   EXPECT_EQ(&view.scene, &std::as_const(session).scene());
@@ -9182,16 +9224,16 @@ TEST(ProjectSessionTests, ReadViewExposesConstProjectSceneAndAssetState) {
   EXPECT_EQ(session.content_revision_stamp(), before);
 }
 
-TEST(ProjectSessionTests,
+TEST(SceneSessionTests,
      DefaultAssetBootstrapServiceCreatesRuntimeDefaultMaterial) {
-  ProjectSession session;
+  SceneSession session;
   const ProjectDefaultAssets defaults =
       ProjectAssetBootstrapService{}.bootstrap_default_assets(session);
 
   ASSERT_NE(defaults.albedo_texture, kInvalidAssetId);
   ASSERT_NE(defaults.roughness_texture, kInvalidAssetId);
   ASSERT_NE(defaults.default_material, kInvalidAssetId);
-  const ProjectSessionReadView view = session.read_view();
+  const SceneSessionReadView view = session.read_view();
   EXPECT_EQ(view.assets.texture_count(), 2u);
   EXPECT_EQ(view.assets.material_count(), 1u);
 
@@ -9233,21 +9275,21 @@ TEST(ProjectSessionTests,
   EXPECT_EQ(session.assets().revision(), revision);
 }
 
-TEST(ProjectSessionTests,
+TEST(SceneSessionTests,
      DocumentReplacementFinalizerRebindsCurrentDefaultAssetsBeforeCleanStamp) {
-  ProjectSession session;
+  SceneSession session;
   ProjectDefaultAssets current =
       ProjectAssetBootstrapService{}.bootstrap_default_assets(session);
   ASSERT_NE(current.default_material, kInvalidAssetId);
   const AssetId previous_default = current.default_material;
   session.mark_clean();
   session.set_document_replacement_finalizer(
-      [&current](ProjectSession &replaced) {
+      [&current](SceneSession &replaced) {
         current = ProjectAssetBootstrapService{}.bootstrap_default_assets(
             replaced);
       });
 
-  ProjectDocument replacement;
+  SceneContentDocument replacement;
   MaterialDocument unrelated = make_default_quader_material("Unrelated");
   ASSERT_EQ(replacement.assets().add_material(previous_default,
                                               std::move(unrelated)),
@@ -9262,9 +9304,9 @@ TEST(ProjectSessionTests,
   EXPECT_FALSE(session.dirty());
 }
 
-TEST(ProjectSessionTests,
+TEST(SceneSessionTests,
      DefaultAssetBootstrapDoesNotAliasAuthoredAssetsByDisplayName) {
-  ProjectSession session;
+  SceneSession session;
 
   TextureAsset authored_albedo;
   authored_albedo.name = std::string(kDefaultMaterialAlbedoTextureName);
@@ -9309,11 +9351,12 @@ TEST(AssetProjectArchitectureTests,
   const std::string registry_source =
       read_source_file("src/assets/asset_registry.hpp");
   const std::string project_document_source =
-      read_source_file("src/scene/document/project_document.hpp");
+      read_source_file("src/scene/document/scene_content_document.hpp");
+  const std::string scene_session_source =
+      read_source_file("src/editor/session/scene_session.hpp");
   const std::string project_session_source =
       read_source_file("src/editor/session/project_session.hpp");
-  const std::string project_session_compat_source =
-      read_source_file("src/scene/document/project_session.hpp");
+  const std::string app_header = read_source_file("src/app/app.hpp");
 
   EXPECT_NE(asset_document_source.find("struct AssetDocumentBase"),
             std::string::npos);
@@ -9369,18 +9412,27 @@ TEST(AssetProjectArchitectureTests,
       std::string::npos);
   EXPECT_EQ(project_document_source.find("mutable std::unordered_map"),
             std::string::npos);
-  EXPECT_NE(project_session_source.find("class ProjectSession"),
+  EXPECT_NE(project_document_source.find("class SceneContentDocument"),
             std::string::npos);
-  EXPECT_NE(project_session_source.find("class ProjectSessionService final"),
+  EXPECT_NE(scene_session_source.find("class SceneSession"),
+            std::string::npos);
+  EXPECT_NE(scene_session_source.find("struct SceneSessionReadView final"),
+            std::string::npos);
+  EXPECT_NE(scene_session_source.find("class SceneSessionService final"),
             std::string::npos);
   EXPECT_NE(
-      project_session_source.find("open_session(ProjectDocument document)"),
+      scene_session_source.find("open_session(SceneContentDocument document)"),
       std::string::npos);
-  EXPECT_NE(project_session_compat_source.find(
-                "#include \"editor/session/project_session.hpp\""),
+  EXPECT_NE(project_session_source.find("class ProjectSession final"),
             std::string::npos);
-  EXPECT_EQ(project_session_compat_source.find("class ProjectSession"),
+  EXPECT_NE(project_session_source.find(
+                "std::vector<std::unique_ptr<OpenSceneSession>> open_scenes_"),
             std::string::npos);
+  EXPECT_NE(app_header.find("void bind_active_scene(SceneSession &scene)"),
+            std::string::npos);
+  EXPECT_NE(app_header.find("ProjectSession project_session_"),
+            std::string::npos);
+  EXPECT_EQ(app_header.find("SceneSession scene_session_"), std::string::npos);
 }
 
 TEST(DocumentCommandServiceTests, RecordsUndoRedoForNativeSceneEdits) {
@@ -10072,9 +10124,9 @@ TEST(DocumentCommandTests,
 
 TEST(DocumentCommandTests,
      SceneTransformDragServiceFiltersTargetsAndRecordsScenePreviewThroughApi) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   SceneDocument &scene = session.scene();
 
   const EntityId parent = scene.create_entity("Parent");
@@ -10235,9 +10287,9 @@ TEST(DocumentCommandTests,
      SceneTransformDragServicePreviewsInspectorPrimaryTransformsBeforeCommit) {
   constexpr float kHalfPi = 1.57079632679f;
 
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   SceneDocument &scene = session.scene();
   AssetRegistry &assets = session.assets();
 
@@ -10300,9 +10352,9 @@ TEST(DocumentCommandTests,
 
 TEST(DocumentCommandTests,
      SceneTransformDragServiceInspectorMoveUsesSharedTargetPolicy) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   SceneDocument &scene = session.scene();
 
   const EntityId parent = scene.create_entity("Parent");
@@ -10353,9 +10405,9 @@ TEST(
     SceneTransformDragServiceInspectorRotateAndScalePinParentedSelectionPivot) {
   constexpr float kHalfPi = 1.57079632679f;
 
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   SceneDocument &scene = session.scene();
   AssetRegistry &assets = session.assets();
 
@@ -11378,7 +11430,7 @@ TEST(DocumentCommandServiceTests,
 
 TEST(DocumentCommandServiceTests,
      GroupsAreSceneOwnedEditorObjectsNotModelingObjects) {
-  ProjectSession session;
+  SceneSession session;
 
   const DocumentCreateEntityResult first_created =
       session.document_commands().create_entity("First", EntityKind::Mesh,
@@ -11409,7 +11461,7 @@ TEST(DocumentCommandServiceTests,
   EXPECT_EQ(record->scene_entity, group);
   EXPECT_EQ(record->modeling_object, kInvalidModelingObjectId);
 
-  const ProjectDocumentIdentityReport report =
+  const SceneContentDocumentIdentityReport report =
       session.document().validate_object_identity_invariants();
   EXPECT_TRUE(report.ok()) << (report.issues.empty()
                                    ? std::string{}
@@ -15112,9 +15164,9 @@ TEST(ModelingSessionServiceTests,
 
 TEST(ModelingSessionServiceTests,
      PublicTransformDragObjectSelectionRecordsSceneTransformHistory) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
 
   const QuaderApiResult<QuaderModelingObjectRef> box =
       editor.modeling().create_box({
@@ -15158,9 +15210,9 @@ TEST(ModelingSessionServiceTests,
 
 TEST(ModelingSessionServiceTests,
      PublicTransformDragFaceSelectionRecordsModelingHistory) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
 
   const QuaderApiResult<QuaderModelingObjectRef> box =
       editor.modeling().create_box({
@@ -16284,10 +16336,8 @@ TEST(MaterialDocumentTests,
       read_source_file("src/editor/commands/replace_asset_command.hpp");
   const std::string document_command_source =
       read_source_file("src/editor/commands/document_command_service.cpp");
-  const std::string qdr_reader_source =
-      read_source_file("src/io/qdr/qdr_document_reader.cpp");
-  const std::string qdr_writer_source =
-      read_source_file("src/io/qdr/qdr_document_writer.cpp");
+  const std::string qdr_codec_source =
+      read_source_file("src/io/qdr/qdr_scene_binary_codec.cpp");
   const std::string texture_binding_source =
       read_source_file("src/render/texture_binding_service.cpp");
   const std::string render_signature_source =
@@ -16339,9 +16389,9 @@ TEST(MaterialDocumentTests,
   EXPECT_EQ(set_texture_source.find(".texture(texture)"), std::string::npos);
   EXPECT_EQ(assign_material_source.find(".assets().material(material)"),
             std::string::npos);
-  EXPECT_NE(qdr_reader_source.find("set_material_texture_slot(material, slot"),
+  EXPECT_NE(qdr_codec_source.find("set_material_texture_slot(material, slot"),
             std::string::npos);
-  EXPECT_NE(qdr_writer_source.find("material_texture_slot_descriptors()"),
+  EXPECT_NE(qdr_codec_source.find("material_texture_slot_descriptors()"),
             std::string::npos);
   EXPECT_NE(texture_binding_source.find(
                 "material_texture_slot_asset(*material, slot_name)"),

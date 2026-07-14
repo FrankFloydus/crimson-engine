@@ -36,6 +36,9 @@ public:
   [[nodiscard]] std::string current_selection_json() const;
   QuaderApiVoidResult copy_selection_json_to_clipboard();
 
+  /** Rebinds this host facade after the active scene session changes. */
+  void rebind_session(QuaderApiSession session) { session_ = session; }
+
 private:
   QuaderApiSession session_;
   QuaderDevToolsRuntimeHooks hooks_;

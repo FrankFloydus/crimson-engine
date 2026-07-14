@@ -78,7 +78,7 @@ AuthoredPolygonPayload MeshSyncApi::authored_polygon(ObjectId object) const {
 IoApi::IoApi(std::shared_ptr<ModelingApiContext> context)
     : context_(std::move(context)) {}
 
-std::string IoApi::serialize_qdr() const {
+std::vector<std::byte> IoApi::serialize_qdr() const {
   std::vector<ObjectId> objects;
   for (const SessionObjectSummary &summary : context_->session.objects()) {
     objects.push_back(summary.id);
@@ -86,17 +86,19 @@ std::string IoApi::serialize_qdr() const {
   return serialize_qdr(objects);
 }
 
-std::string IoApi::serialize_qdr(ObjectId object) const {
+std::vector<std::byte> IoApi::serialize_qdr(ObjectId object) const {
   std::vector<ObjectId> objects{object};
   return serialize_qdr(objects);
 }
 
-std::string IoApi::serialize_qdr(std::span<const ObjectId> objects) const {
+std::vector<std::byte>
+IoApi::serialize_qdr(std::span<const ObjectId> objects) const {
   QdrDocumentDto dto;
   for (const ObjectId object : objects) {
     Result<PolygonDocument> document = context_->session.document_copy(object);
     if (!document.ok()) {
-      return handle_value_failure(*context_, document.error(), std::string{});
+      return handle_value_failure(*context_, document.error(),
+                                  std::vector<std::byte>{});
     }
     const MeshSummary summary = MeshHandle(context_, object).summary();
     dto.objects.push_back({
@@ -107,25 +109,28 @@ std::string IoApi::serialize_qdr(std::span<const ObjectId> objects) const {
     });
   }
   dto.active_object = objects.empty() ? ObjectId{} : objects.front();
-  Result<std::string> text = serialize_qdr_document(dto);
-  if (!text.ok()) {
-    return handle_value_failure(*context_, text.error(), std::string{});
+  Result<std::vector<std::byte>> bytes = serialize_qdr_document(dto);
+  if (!bytes.ok()) {
+    return handle_value_failure(*context_, bytes.error(),
+                                std::vector<std::byte>{});
   }
-  return std::move(text).value();
+  return std::move(bytes).value();
 }
 
-MeshHandle IoApi::deserialize_qdr_object(std::string_view text,
+MeshHandle IoApi::deserialize_qdr_object(std::span<const std::byte> bytes,
                                          std::string name) {
   Result<MeshHandle> result =
-      CheckedIoApi(context_).deserialize_qdr_object(text, name);
+      CheckedIoApi(context_).deserialize_qdr_object(bytes, name);
   if (!result.ok()) {
     return handle_value_failure(*context_, result.error(), MeshHandle{});
   }
   return std::move(result).value();
 }
 
-std::vector<MeshHandle> IoApi::deserialize_qdr_document(std::string_view text) {
-  Result<QdrDocumentDto> dto = quader::modeling::deserialize_qdr_document(text);
+std::vector<MeshHandle>
+IoApi::deserialize_qdr_document(std::span<const std::byte> bytes) {
+  Result<QdrDocumentDto> dto =
+      quader::modeling::deserialize_qdr_document(bytes);
   if (!dto.ok()) {
     return handle_value_failure(*context_, dto.error(),
                                 std::vector<MeshHandle>{});
@@ -161,40 +166,47 @@ std::string IoApi::serialize_obj(std::span<const ObjectId> objects) const {
 CheckedIoApi::CheckedIoApi(std::shared_ptr<ModelingApiContext> context)
     : context_(std::move(context)) {}
 
-Result<std::string> CheckedIoApi::serialize_qdr() const {
+Result<std::vector<std::byte>> CheckedIoApi::serialize_qdr() const {
   try {
-    return Result<std::string>::success(IoApi(context_).serialize_qdr());
+    return Result<std::vector<std::byte>>::success(
+        IoApi(context_).serialize_qdr());
   } catch (const ModelingException &exception) {
-    return Result<std::string>::failure(exception.error());
+    return Result<std::vector<std::byte>>::failure(exception.error());
   }
 }
 
-Result<std::string> CheckedIoApi::serialize_qdr(ObjectId object) const {
+Result<std::vector<std::byte>>
+CheckedIoApi::serialize_qdr(ObjectId object) const {
   try {
-    return Result<std::string>::success(IoApi(context_).serialize_qdr(object));
+    return Result<std::vector<std::byte>>::success(
+        IoApi(context_).serialize_qdr(object));
   } catch (const ModelingException &exception) {
-    return Result<std::string>::failure(exception.error());
+    return Result<std::vector<std::byte>>::failure(exception.error());
   }
 }
 
-Result<std::string>
+Result<std::vector<std::byte>>
 CheckedIoApi::serialize_qdr(std::span<const ObjectId> objects) const {
   try {
-    return Result<std::string>::success(IoApi(context_).serialize_qdr(objects));
+    return Result<std::vector<std::byte>>::success(
+        IoApi(context_).serialize_qdr(objects));
   } catch (const ModelingException &exception) {
-    return Result<std::string>::failure(exception.error());
+    return Result<std::vector<std::byte>>::failure(exception.error());
   }
 }
 
 Result<MeshHandle>
-CheckedIoApi::deserialize_qdr_object(std::string_view text, std::string name) {
-  Result<QdrDocumentDto> dto = quader::modeling::deserialize_qdr_document(text);
+CheckedIoApi::deserialize_qdr_object(std::span<const std::byte> bytes,
+                                     std::string name) {
+  Result<QdrDocumentDto> dto =
+      quader::modeling::deserialize_qdr_document(bytes);
   if (!dto.ok()) {
     return Result<MeshHandle>::failure(dto.error());
   }
   if (dto.value().objects.empty()) {
     return Result<MeshHandle>::failure(
-        make_error(ErrorCode::InvalidArgument, "QDR text contains no objects."));
+        make_error(ErrorCode::InvalidArgument,
+                   "QDR payload contains no objects."));
   }
   QdrObjectDto object = std::move(dto.value().objects.front());
   return CheckedModelingApi(context_).add_document(
@@ -202,10 +214,10 @@ CheckedIoApi::deserialize_qdr_object(std::string_view text, std::string name) {
 }
 
 Result<std::vector<MeshHandle>>
-CheckedIoApi::deserialize_qdr_document(std::string_view text) {
+CheckedIoApi::deserialize_qdr_document(std::span<const std::byte> bytes) {
   try {
     return Result<std::vector<MeshHandle>>::success(
-        IoApi(context_).deserialize_qdr_document(text));
+        IoApi(context_).deserialize_qdr_document(bytes));
   } catch (const ModelingException &exception) {
     return Result<std::vector<MeshHandle>>::failure(exception.error());
   }

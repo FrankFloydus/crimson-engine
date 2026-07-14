@@ -16,7 +16,7 @@
 
 namespace quader {
 
-class QuaderQueryApi;
+class QuaderApi;
 class QuaderRenderApiRuntimeAccess;
 
 /**
@@ -31,7 +31,12 @@ struct QuaderRenderOverlaySubmission {
  */
 class QuaderRenderApi final {
 public:
-    QuaderRenderApi(QuaderApiSession session, QuaderQueryApi& query);
+    QuaderRenderApi(QuaderApiSession session, QuaderApi& api);
+
+    /** Rebinds this host facade after the active scene session changes. */
+    void rebind_session(QuaderApiSession session,
+                        std::uint64_t scene_session_id = 1u,
+                        std::uint64_t activation_generation = 1u);
 
     [[nodiscard]] QuaderOverlayFrame selection_overlay_frame() const;
     [[nodiscard]] std::vector<QuaderToolPreviewMesh>
@@ -44,12 +49,15 @@ public:
     runtime_status(std::string message = {}) const;
 
     QuaderApiSession session_;
-    QuaderQueryApi& query_;
+    QuaderApi* api_ = nullptr;
     const void* native_array_preview_sync_bridge_ = nullptr;
     std::uint64_t native_array_preview_bridge_submission_revision_ = 0;
     std::uint64_t native_array_preview_revision_ = 0;
     std::uint64_t native_array_preview_asset_revision_ = 0;
     std::uint8_t native_array_preview_kind_ = 0;
+    std::uint64_t scene_session_id_ = 1u;
+    std::uint64_t activation_generation_ = 1u;
+    std::uint64_t scene_binding_revision_ = 1;
 };
 
 } // namespace quader

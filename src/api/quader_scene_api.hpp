@@ -110,6 +110,7 @@ private:
     };
 
     QuaderSceneApi* scene_ = nullptr;
+    SceneSessionId scene_session_id_;
     std::string label_;
     std::vector<Operation> operations_;
     bool committed_ = false;

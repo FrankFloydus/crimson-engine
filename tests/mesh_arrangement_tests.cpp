@@ -7,7 +7,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_mesh_arrangement_catalog.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "scene/scene_bounds.hpp"
 #include "viewport/viewport_input_types.hpp"
 
@@ -24,11 +24,11 @@ constexpr float kEpsilon = 0.001f;
 
 /// Owns an isolated editor session for native mesh arrangement behavior tests.
 struct ArrangementHarness {
-  quader::ProjectSession session;
+  quader::SceneSession session;
   quader::QuaderEditorApi editor;
 
   ArrangementHarness()
-      : editor(quader::QuaderApiSessionInternalAccess::from_project_session(
+      : editor(quader::QuaderApiSessionInternalAccess::from_scene_session(
             session)) {}
 };
 

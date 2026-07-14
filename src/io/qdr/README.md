@@ -6,48 +6,51 @@ No permission is granted to use, copy, modify, distribute, or sublicense this
 file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 -->
-# QDR IO Module
+# Native QDR Scene IO
 
-Portable Quader persistence owned by the native app.
+The native `.qdr` scene format is a binary `QDRB` container. It stores one
+scene's graph, embedded assets, and object records; project workspace metadata
+belongs in `.qproj` and reusable project assets will live in separate files.
 
-Owns:
+The fixed little-endian container header carries the persistent 128-bit scene
+UUID and a 64-bit chunk-directory location/count. Every directory record has
+64-bit offsets and sizes, schema/codec/critical flags, CRC32, and a deterministic
+content hash. Readers validate bounds, arithmetic, overlaps, codec limits,
+checksums, hashes, FlatBuffers, and domain references before returning a scene.
 
-- canonical `.qdr` or `.quader` format
-- versioned read/write
-- migrations
-- fixture-backed golden, migration, and malformed-file tests
-- optional debug JSON format
-- stable file DTOs that are converted into editor runtime state instead of
-  serializing live `EditorSession` internals directly
+Chunk schema v1 contains:
 
-The stable DTO boundary is `<io/qdr/qdr_document.hpp>` plus the
-`quader_qdr_document_io` target. It depends on portable document types only.
-The root schema is versioned with `format: "quader.qdr"`, `version: 1`, and a
-canonical `document` payload. Readers still accept the old v1 `session` payload
-key as a migration alias, but writers must not emit it.
+- one uncompressed `QDRS` FlatBuffer with scene metadata;
+- one `QDRG` FlatBuffer per unique embedded geometry payload;
+- compiled-mesh fallback arrays stored directly in `QDRG`;
+- SDK-owned deterministic `QGEO` packed/CSR authored topology embedded in the
+  `QDRG` wrapper, so the native container delegates durable polygon semantics
+  to the portable modeling core.
 
-Project-document persistence emits texture assets referenced by material
-`textureSlots` in `assets.textures`. Readers reject material texture slots that
-point at missing or invalid texture asset ids. Hot project saves intentionally
-skip temporary-file self-parse validation before the atomic replace; save
-performance depends on not parsing the just-serialized payload on every save.
-Project writer changes must keep focused round-trip coverage in
-`tests/io_qdr_tests.cpp` proving serialized and atomic-saved project payloads
-can still be read back.
+Identical geometry is emitted once and referenced by logical mesh assets.
+Geometry chunks of at least 64 KiB use Zstandard level 1 only when it saves at
+least ten percent. Metadata remains directly readable. Selection, hover,
+viewport, history, tools, previews, and other transient editor state are never
+serialized.
 
-The legacy `<io/qdr/qdr_runtime_io_compat.hpp>` API remains as a modeling-runtime
-compatibility adapter for callers that still save or load `SessionState`. It
-converts through `QdrDocument` and must not add canonical schema fields or
-serialize live editor runtime state such as dirty flags, undo history, redo
-history, active tools, or preview/transient data.
+The container keeps one immutable backing byte buffer. Compressed chunks are
+decompressed and checksum-verified on first access, so unreferenced geometry or
+future derived-cache chunks do not add hydration work. Codec results expose
+phase timings, logical/unique geometry counts, compression byte counts, and
+unique decode/compile counts for developer benchmarks.
 
-Real fixture-backed golden, migration, and malformed-file coverage lives in
-`tests/modeling_domain/qdr_io_document_tests.cpp` with fixtures under
-`tests/modeling_domain/fixtures/io`.
-Compatibility coverage for the session-state adapter lives in
-`tests/modeling_domain/qdr_runtime_io_compat_tests.cpp` and is registered into
-the `quader_modeling_domain_tests` aggregate. Native project reader/writer
-coverage lives in `tests/io_qdr_tests.cpp`. Live editor runtime fields remain
-excluded from the durable schema.
+`QdrDocumentReader` and `QdrDocumentWriter` remain the native adapter surface.
+Outer project sessions must pass their persistent `std::array<std::byte, 16>`
+scene UUID to the explicit atomic-write overload and consume
+`QdrProjectReadResult::scene_uuid` on open. The overload without a UUID exists
+only for standalone compatibility.
 
-Engine asset formats wrap or import/export this portable data.
+Scene metadata also has a versioned project-asset dependency catalog carrying
+stable ID, asset kind, and validated project-relative path. It is empty in this
+slice. `ProjectAssetResolver` is the minimal resolution seam and delegates all
+containment, case-collision, and link-escape enforcement to `ProjectFileSystem`;
+it intentionally does not implement an asset registry or importer.
+
+Legacy JSON project QDR files are intentionally unsupported and are rejected
+before JSON parsing. Portable modeling-document QDR under the SDK boundary is a
+separate interchange contract and is not owned by this native scene container.

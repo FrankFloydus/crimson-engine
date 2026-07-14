@@ -21,7 +21,9 @@ file except through prior written authorization from Francesco Di Blasi.
 
 ## Placement Rules
 
-- Geometry/document/QDR tests use `geometry`, `polygon`, `qdr_document`, or `qdr_runtime`.
+- Geometry and polygon-document tests use `geometry` or `polygon`; runtime tests use `runtime`.
+  Portable binary QDR belongs to the SDK consumer suite, while native QDRB scene IO belongs to
+  root app tests. Do not restore the retired JSON `qdr_document`/`qdr_runtime` categories.
 - Polygon operation tests: `tests/modeling_domain/operation/qdr_document_operation_<feature>_tests.cpp`
   with `QdrDocumentOperation...` suites.
 - Runtime operation tests: `tests/modeling_domain/operation/qdr_modeling_runtime_operation_<feature>_tests.cpp`

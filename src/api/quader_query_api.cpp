@@ -12,7 +12,7 @@
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "editor/selection/editor_selection_service.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
@@ -26,8 +26,8 @@
 namespace quader {
 namespace {
 
-const ProjectSession &read_project_session(QuaderApiSession session) {
-  return QuaderApiSessionInternalAccess::read_project_session(session);
+const SceneSession &read_scene_session(QuaderApiSession session) {
+  return QuaderApiSessionInternalAccess::read_scene_session(session);
 }
 
 QuaderBounds api_bounds(const SceneBounds &bounds) {
@@ -37,9 +37,11 @@ QuaderBounds api_bounds(const SceneBounds &bounds) {
   };
 }
 
-QuaderModelingObjectRef object_ref_for_entity(const ProjectSession &session,
-                                              EntityId entity) {
+QuaderModelingObjectRef object_ref_for_entity(
+    const SceneSession &session, SceneSessionId scene_session_id,
+    EntityId entity) {
   QuaderModelingObjectRef ref;
+  ref.scene_session_id = scene_session_id;
   ref.entity = entity;
   ref.entity_uuid = session.scene().uuid(entity);
   ref.editor_object_id = session.scene().editor_object_id(entity);
@@ -56,7 +58,7 @@ QuaderModelingObjectRef object_ref_for_entity(const ProjectSession &session,
   return ref;
 }
 
-QuaderEntitySnapshot entity_snapshot_for(const ProjectSession &session,
+QuaderEntitySnapshot entity_snapshot_for(const SceneSession &session,
                                          EntityId entity) {
   const SceneDocument &scene = session.scene();
   QuaderEntitySnapshot snapshot;
@@ -129,7 +131,7 @@ QuaderQueryApi::QuaderQueryApi(QuaderApiSession session, QuaderApiMutationRunner
     , mutations_(mutations) {}
 
 std::vector<QuaderEntitySnapshot> QuaderQueryApi::entities() const {
-  const ProjectSession &session = read_project_session(session_);
+  const SceneSession &session = read_scene_session(session_);
   std::vector<QuaderEntitySnapshot> result;
   const std::vector<EntityId> ids = session.scene().entities();
   result.reserve(ids.size());
@@ -140,7 +142,7 @@ std::vector<QuaderEntitySnapshot> QuaderQueryApi::entities() const {
 }
 
 std::vector<QuaderEntitySnapshot> QuaderQueryApi::entity_tree() const {
-  const ProjectSession &session = read_project_session(session_);
+  const SceneSession &session = read_scene_session(session_);
   std::vector<QuaderEntitySnapshot> result;
   const std::vector<EntityId> ids = session.scene().entity_tree_order();
   result.reserve(ids.size());
@@ -151,7 +153,7 @@ std::vector<QuaderEntitySnapshot> QuaderQueryApi::entity_tree() const {
 }
 
 std::optional<QuaderEntitySnapshot> QuaderQueryApi::entity(EntityId id) const {
-  const ProjectSession &session = read_project_session(session_);
+  const SceneSession &session = read_scene_session(session_);
   if (!session.scene().exists(id)) {
     return std::nullopt;
   }
@@ -159,7 +161,7 @@ std::optional<QuaderEntitySnapshot> QuaderQueryApi::entity(EntityId id) const {
 }
 
 std::optional<QuaderMeshSnapshot> QuaderQueryApi::mesh(AssetId id) const {
-  const MeshAsset *mesh = read_project_session(session_).assets().mesh(id);
+  const MeshAsset *mesh = read_scene_session(session_).assets().mesh(id);
   if (mesh == nullptr) {
     return std::nullopt;
   }
@@ -168,7 +170,7 @@ std::optional<QuaderMeshSnapshot> QuaderQueryApi::mesh(AssetId id) const {
 
 std::optional<QuaderMaterialAsset> QuaderQueryApi::material(AssetId id) const {
   const MaterialDocument *material =
-      read_project_session(session_).assets().material(id);
+      read_scene_session(session_).assets().material(id);
   if (material == nullptr) {
     return std::nullopt;
   }
@@ -177,7 +179,7 @@ std::optional<QuaderMaterialAsset> QuaderQueryApi::material(AssetId id) const {
 
 std::optional<QuaderTextureAsset> QuaderQueryApi::texture(AssetId id) const {
   const TextureAsset *texture =
-      read_project_session(session_).assets().texture(id);
+      read_scene_session(session_).assets().texture(id);
   if (texture == nullptr) {
     return std::nullopt;
   }
@@ -187,7 +189,7 @@ std::optional<QuaderTextureAsset> QuaderQueryApi::texture(AssetId id) const {
 std::vector<QuaderModelingObjectRecord>
 QuaderQueryApi::modeling_objects() const {
   const std::vector<ModelingObjectRecord> records =
-      read_project_session(session_).modeling().objects();
+      read_scene_session(session_).modeling().objects();
   std::vector<QuaderModelingObjectRecord> result;
   result.reserve(records.size());
   for (const ModelingObjectRecord &record : records) {
@@ -198,11 +200,12 @@ QuaderQueryApi::modeling_objects() const {
 
 std::optional<QuaderModelingObjectRef>
 QuaderQueryApi::modeling_object_for_entity(EntityId entity) const {
-  const ProjectSession &session = read_project_session(session_);
+  const SceneSession &session = read_scene_session(session_);
   if (!session.scene().exists(entity)) {
     return std::nullopt;
   }
-  QuaderModelingObjectRef ref = object_ref_for_entity(session, entity);
+  QuaderModelingObjectRef ref = object_ref_for_entity(
+      session, mutations_.scene_session_id(), entity);
   if (ref.modeling_object_id == kInvalidModelingObjectId) {
     return std::nullopt;
   }
@@ -212,28 +215,30 @@ QuaderQueryApi::modeling_object_for_entity(EntityId entity) const {
 std::optional<QuaderModelingObjectRef> QuaderQueryApi::modeling_object_for_id(
     QuaderModelingObjectId modeling_object_id) const {
   const std::optional<EntityId> entity =
-      read_project_session(session_).modeling().entity_for_modeling_object(
+      read_scene_session(session_).modeling().entity_for_modeling_object(
           modeling_object_id);
   if (!entity.has_value()) {
     return std::nullopt;
   }
-  return object_ref_for_entity(read_project_session(session_), *entity);
+  return object_ref_for_entity(read_scene_session(session_),
+                               mutations_.scene_session_id(), *entity);
 }
 
 std::optional<QuaderMeshAsset>
 QuaderQueryApi::compiled_object_mesh(QuaderModelingObjectRef object) const {
-  if (object.modeling_object_id == kInvalidModelingObjectId) {
+  if (!mutations_.belongs_to_active_scene(object.scene_session_id) ||
+      object.modeling_object_id == kInvalidModelingObjectId) {
     return std::nullopt;
   }
   const std::optional<MeshAsset> mesh =
-      read_project_session(session_).modeling().compile_object_mesh(
+      read_scene_session(session_).modeling().compile_object_mesh(
           object.modeling_object_id);
   return mesh ? std::optional<QuaderMeshAsset>{to_api_mesh_asset(*mesh)}
               : std::nullopt;
 }
 
 std::optional<QVec3> QuaderQueryApi::selection_center() const {
-  const ProjectSession &session = read_project_session(session_);
+  const SceneSession &session = read_scene_session(session_);
   const QuaderSelectionSummary summary = selection();
   if (summary.active_kind == QuaderActiveSelectionKind::Object ||
       summary.active_kind == QuaderActiveSelectionKind::Light) {
@@ -246,7 +251,7 @@ std::optional<QVec3> QuaderQueryApi::selection_center() const {
 }
 
 std::optional<QVec3> QuaderQueryApi::selection_transform_pivot() const {
-  const ProjectSession &session = read_project_session(session_);
+  const SceneSession &session = read_scene_session(session_);
   const SelectionPivotOverride pivot =
       session.pivot().selection_pivot_override();
   if (pivot.valid) {
@@ -266,16 +271,16 @@ std::optional<QVec3> QuaderQueryApi::selection_transform_pivot() const {
 
 QuaderSelectionSummary QuaderQueryApi::selection() const {
   return to_api_selection_summary(
-      read_project_session(session_).selection().summary());
+      read_scene_session(session_).selection().summary());
 }
 
 QuaderToolStatus QuaderQueryApi::tool_status() const {
   return to_api_tool_status(
-      read_project_session(session_).modeling().tool_status());
+      read_scene_session(session_).modeling().tool_status());
 }
 
 QuaderAssetSnapshot QuaderQueryApi::assets() const {
-  const AssetRegistry &assets = read_project_session(session_).assets();
+  const AssetRegistry &assets = read_scene_session(session_).assets();
   return {
       .mesh_count = assets.mesh_count(),
       .material_count = assets.material_count(),
@@ -290,11 +295,11 @@ QuaderHistorySnapshot QuaderQueryApi::history() const {
 
 QuaderOverlayFrame QuaderQueryApi::selection_overlay() const {
   return to_api_overlay_frame(
-      read_project_session(session_).modeling().selection_overlay_frame());
+      read_scene_session(session_).modeling().selection_overlay_frame());
 }
 
 QuaderRevisionStamp QuaderQueryApi::revisions() const {
-  return quader_api_current_revisions(read_project_session(session_));
+  return quader_api_current_revisions(read_scene_session(session_));
 }
 
 QuaderApiSnapshot QuaderQueryApi::snapshot() const {

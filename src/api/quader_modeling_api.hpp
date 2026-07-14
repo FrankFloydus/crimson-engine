@@ -102,6 +102,7 @@ private:
 
   std::optional<QuaderApiSession> session_;
   QuaderApiMutationRunner *mutations_ = nullptr;
+  SceneSessionId scene_session_id_;
   std::string default_label_;
   QuaderApiVoidResult begin_status_;
 };

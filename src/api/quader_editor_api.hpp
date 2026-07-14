@@ -16,13 +16,17 @@
 #include "api/quader_preferences_api.hpp"
 #include "api/quader_project_api.hpp"
 #include "api/quader_render_api.hpp"
+#include "api/quader_scene_documents_api.hpp"
 #include "api/quader_tools_api.hpp"
 #include "api/quader_ui_api.hpp"
 #include "api/quader_viewport_api.hpp"
 
+#include <functional>
 #include <memory>
 
 namespace quader {
+
+class ProjectSession;
 
 /**
  * Whole-editor public front door for native app user intent.
@@ -38,6 +42,7 @@ namespace quader {
 class QuaderEditorApi final {
 public:
     explicit QuaderEditorApi(QuaderApiSession session);
+    explicit QuaderEditorApi(ProjectSession &project_session);
     ~QuaderEditorApi();
 
     QuaderEditorApi(const QuaderEditorApi&) = delete;
@@ -50,6 +55,8 @@ public:
 
     [[nodiscard]] QuaderProjectApi& project();
     [[nodiscard]] const QuaderProjectApi& project() const;
+    [[nodiscard]] QuaderSceneDocumentsApi &scene_documents();
+    [[nodiscard]] const QuaderSceneDocumentsApi &scene_documents() const;
     [[nodiscard]] QuaderSceneApi& scene();
     [[nodiscard]] const QuaderSceneApi& scene() const;
     [[nodiscard]] QuaderModelingApi& modeling();
@@ -89,6 +96,11 @@ public:
     [[nodiscard]] QuaderRevisionStamp revisions() const;
 
 private:
+    void rebind(QuaderApiSession session);
+    void set_scene_binding_changed_callback(
+        std::function<void(QuaderApiSession)> callback);
+
+    friend class QuaderEditorApiSessionAccess;
     class Impl;
     std::unique_ptr<Impl> impl_;
 };

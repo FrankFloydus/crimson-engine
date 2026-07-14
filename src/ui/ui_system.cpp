@@ -22,6 +22,8 @@
 #include "ui/outliner_panel.hpp"
 #include "ui/qt_command_event_filter.hpp"
 #include "ui/qt_main_window.hpp"
+#include "ui/qt_project_home_page.hpp"
+#include "ui/qt_scene_workspace.hpp"
 #include "ui/qt_settings_dialog.hpp"
 #include "ui/qt_tool_settings_window.hpp"
 #include "ui/qt_viewport_panel.hpp"
@@ -41,6 +43,7 @@
 #include <QRect>
 #include <QPushButton>
 #include <QStatusBar>
+#include <QStackedWidget>
 #include <QWidget>
 #include <QWindow>
 
@@ -176,10 +179,87 @@ bool UISystem::initialize(RenderSystem &render_system,
                                QMainWindow::AllowTabbedDocks |
                                QMainWindow::AnimatedDocks);
 
-  viewport_panel_ = new QtViewportPanel(main_window_.get());
+  central_stack_ = new QStackedWidget(main_window_.get());
+  central_stack_->setObjectName(QStringLiteral("mainCentralStack"));
+  project_home_page_ = new QtProjectHomePage(central_stack_);
+  scene_workspace_ = new QtSceneWorkspace(central_stack_);
+  viewport_panel_ = new QtViewportPanel(scene_workspace_);
   viewport_panel_->set_viewport_settings(viewport_settings_);
   viewport_panel_->set_localization(localization_);
-  main_window_->setCentralWidget(viewport_panel_);
+  scene_workspace_->set_viewport_widget(viewport_panel_);
+  central_stack_->addWidget(project_home_page_);
+  central_stack_->addWidget(scene_workspace_);
+  central_stack_->setCurrentWidget(project_home_page_);
+  main_window_->setCentralWidget(central_stack_);
+
+  project_home_page_->set_new_project_requested_callback([this]() {
+    if (editor_ != nullptr) {
+      const QuaderApiVoidResult result = editor_->project().create();
+      present_lifecycle_result(result);
+      refresh_project_workspace();
+    }
+  });
+  project_home_page_->set_open_project_requested_callback([this]() {
+    if (editor_ != nullptr) {
+      const QuaderApiVoidResult result = editor_->project().open({});
+      present_lifecycle_result(result);
+      refresh_project_workspace();
+    }
+  });
+  project_home_page_->set_open_recent_project_requested_callback(
+      [this](QString manifest_path) {
+        if (editor_ != nullptr) {
+          const QuaderApiVoidResult result = editor_->project().open(
+              std::filesystem::path(manifest_path.toStdWString()));
+          present_lifecycle_result(result);
+          refresh_project_workspace();
+        }
+      });
+  project_home_page_->set_remove_recent_project_requested_callback(
+      [this](QString manifest_path) {
+        if (editor_ != nullptr) {
+          const QuaderApiVoidResult result =
+              editor_->project().remove_recent_project(
+                  std::filesystem::path(manifest_path.toStdWString()));
+          present_lifecycle_result(result);
+          refresh_project_workspace();
+        }
+      });
+  scene_workspace_->set_new_scene_requested_callback([this]() {
+    if (editor_ != nullptr) {
+      const QuaderApiResult<SceneSessionId> result =
+          editor_->scene_documents().new_scene();
+      present_lifecycle_result(result);
+      refresh_project_workspace();
+    }
+  });
+  scene_workspace_->set_open_scene_requested_callback([this]() {
+    if (editor_ != nullptr) {
+      const QuaderApiResult<SceneSessionId> result =
+          editor_->scene_documents().open();
+      present_lifecycle_result(result);
+      refresh_project_workspace();
+    }
+  });
+  scene_workspace_->set_activate_scene_requested_callback(
+      [this](QtSceneSessionId id) {
+        if (editor_ != nullptr) {
+          const QuaderApiVoidResult result =
+              editor_->scene_documents().activate(
+                  SceneSessionId::from_packed(id));
+          present_lifecycle_result(result);
+          refresh_project_workspace();
+        }
+      });
+  scene_workspace_->set_close_scene_requested_callback(
+      [this](QtSceneSessionId id) {
+        if (editor_ != nullptr) {
+          const QuaderApiVoidResult result = editor_->scene_documents().close(
+              SceneSessionId::from_packed(id));
+          present_lifecycle_result(result);
+          refresh_project_workspace();
+        }
+      });
   create_docks();
 
   settings_dialog_ = new QtSettingsDialog(main_window_.get());
@@ -197,13 +277,11 @@ bool UISystem::initialize(RenderSystem &render_system,
   main_window_->statusBar()->addWidget(status_message_, 1);
   main_window_->statusBar()->addPermanentWidget(status_version_);
 
+  refresh_localized_chrome();
   restore_window_state();
   panels_.apply_settings(settings_);
-  if (!viewport_panel_->initialize(render_system)) {
-    shutdown();
-    return false;
-  }
   initialized_ = true;
+  show_home();
   return true;
 }
 
@@ -390,6 +468,12 @@ void UISystem::install_runtime_hooks(
           },
   });
 
+  if (command_event_filter_ != nullptr) {
+    if (QCoreApplication *application = QApplication::instance()) {
+      application->removeEventFilter(command_event_filter_.get());
+    }
+    command_event_filter_.reset();
+  }
   command_event_filter_ = std::make_unique<QtCommandEventFilter>(
       editor, [this]() {
         return viewport_panel_ != nullptr ? viewport_panel_->tool_state()
@@ -398,6 +482,88 @@ void UISystem::install_runtime_hooks(
   if (QCoreApplication *application = QApplication::instance()) {
     application->installEventFilter(command_event_filter_.get());
   }
+  refresh_project_workspace();
+}
+
+void UISystem::refresh_project_workspace() {
+  if (editor_ == nullptr || project_home_page_ == nullptr ||
+      scene_workspace_ == nullptr) {
+    return;
+  }
+
+  if (home_visible_) {
+    std::vector<QtRecentProjectItem> recent;
+    for (const QuaderRecentProject &project :
+         editor_->project().recent_projects()) {
+      recent.push_back({
+          .name = QString::fromStdString(project.name),
+          .manifest_path =
+              QString::fromStdWString(project.manifest_path.wstring()),
+          .available = project.available,
+      });
+    }
+    project_home_page_->set_recent_projects(std::move(recent));
+  }
+
+  std::vector<QtSceneTabItem> tabs;
+  std::optional<QtSceneSessionId> active;
+  for (const QuaderSceneDocumentInfo &scene :
+       editor_->scene_documents().open_scenes()) {
+    tabs.push_back({
+        .session_id = scene.session_id.packed(),
+        .name = QString::fromStdString(scene.name),
+        .project_relative_path =
+            scene.path.has_value()
+                ? QString::fromStdString(scene.path->portable_string())
+                : QString{},
+        .dirty = scene.dirty,
+    });
+    if (scene.active) {
+      active = scene.session_id.packed();
+    }
+  }
+  if (scene_workspace_->scene_tabs() != tabs ||
+      scene_workspace_->active_scene() != active) {
+    (void)scene_workspace_->set_scene_tabs(std::move(tabs), active);
+  }
+
+  if (editor_->project().has_project()) {
+    show_workspace();
+  } else {
+    show_home();
+  }
+}
+
+void UISystem::show_home() {
+  home_visible_ = true;
+  if (central_stack_ != nullptr && project_home_page_ != nullptr) {
+    central_stack_->setCurrentWidget(project_home_page_);
+  }
+  for (UIPanelId id :
+       {UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Console}) {
+    if (QDockWidget *dock = panels_.dock(id)) {
+      dock->hide();
+    }
+  }
+}
+
+void UISystem::show_workspace() {
+  if (!viewport_initialized_ && viewport_panel_ != nullptr &&
+      render_system_ != nullptr) {
+    if (!viewport_panel_->initialize(*render_system_)) {
+      LOG_ERROR("Unable to initialize the native viewport surface");
+      return;
+    }
+    viewport_initialized_ = true;
+    if (main_window_ != nullptr && main_window_->isVisible()) {
+      prepare_startup_presentation();
+    }
+  }
+  home_visible_ = false;
+  if (central_stack_ != nullptr && scene_workspace_ != nullptr) {
+    central_stack_->setCurrentWidget(scene_workspace_);
+  }
+  panels_.apply_settings(settings_);
 }
 
 QuaderDirtyProjectDecision
@@ -441,28 +607,54 @@ UISystem::confirm_dirty_project_replacement(std::string_view action_id) {
   return QuaderDirtyProjectDecision::Cancel;
 }
 
-bool UISystem::allow_main_window_close() {
-  if (editor_ == nullptr || !editor_->project().dirty()) {
-    return true;
+QuaderDirtySceneDecision
+UISystem::confirm_dirty_scene(const QuaderSceneDocumentInfo &scene,
+                              std::string_view action_id) {
+  (void)action_id;
+  QMessageBox confirmation(
+      QMessageBox::Warning,
+      QString::fromStdString(localization_.text(
+          "ui.scene.unsaved.title", "Unsaved Scene")),
+      QString::fromStdString(scene.name + " has unsaved changes. Save it?"),
+      QMessageBox::NoButton, main_window_.get());
+  confirmation.setObjectName(QStringLiteral("scene_unsaved_confirmation"));
+  confirmation.setWindowModality(Qt::WindowModal);
+  QPushButton *save = confirmation.addButton(
+      QString::fromStdString(
+          localization_.text("ui.scene.unsaved.save", "Save")),
+      QMessageBox::AcceptRole);
+  QPushButton *discard = confirmation.addButton(
+      QString::fromStdString(
+          localization_.text("ui.scene.unsaved.discard", "Discard")),
+      QMessageBox::DestructiveRole);
+  QPushButton *cancel = confirmation.addButton(
+      QString::fromStdString(
+          localization_.text("ui.scene.unsaved.cancel", "Cancel")),
+      QMessageBox::RejectRole);
+  confirmation.setEscapeButton(cancel);
+  confirmation.exec();
+  if (confirmation.clickedButton() == save) {
+    return QuaderDirtySceneDecision::Save;
   }
+  if (confirmation.clickedButton() == discard) {
+    return QuaderDirtySceneDecision::Discard;
+  }
+  return QuaderDirtySceneDecision::Cancel;
+}
 
-  switch (confirm_dirty_project_replacement("application.close")) {
-  case QuaderDirtyProjectDecision::Discard:
+bool UISystem::allow_main_window_close() {
+  if (editor_ == nullptr || !editor_->project().has_project()) {
     return true;
-  case QuaderDirtyProjectDecision::Cancel:
-    return false;
-  case QuaderDirtyProjectDecision::Save: {
-    const QuaderApiVoidResult saved =
-        editor_->commands().execute(quader_command::kProjectSave);
-    return saved.ok() && !editor_->project().dirty();
   }
-  }
-  return false;
+  const QuaderApiVoidResult closed = editor_->project().close();
+  return closed.ok() && !editor_->project().has_project();
 }
 
 void UISystem::show() {
   if (main_window_ != nullptr && !main_window_->isVisible()) {
-    prepare_startup_presentation();
+    if (!home_visible_) {
+      prepare_startup_presentation();
+    }
     main_window_->show();
   }
 }
@@ -493,6 +685,9 @@ void UISystem::shutdown() {
   startup_presentation_started_ = {};
   startup_expected_maximized_ = false;
   viewport_panel_ = nullptr;
+  central_stack_ = nullptr;
+  project_home_page_ = nullptr;
+  scene_workspace_ = nullptr;
   outliner_panel_ = nullptr;
   inspector_panel_ = nullptr;
   console_panel_ = nullptr;
@@ -511,12 +706,14 @@ void UISystem::shutdown() {
   radial_array_ = nullptr;
   point_placement_ = nullptr;
   initialized_ = false;
+  viewport_initialized_ = false;
 }
 
 void UISystem::refresh(const FrameTiming &frame_timing,
                        RenderFramePerformanceStats render_performance) {
   frame_timing_ = frame_timing;
   render_performance_ = render_performance;
+  refresh_project_workspace();
   if (viewport_panel_ != nullptr) {
     viewport_panel_->set_render_performance_stats(render_performance_);
   }
@@ -594,7 +791,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
 }
 
 void UISystem::process_viewport_input() {
-  if (!initialized_ || viewport_panel_ == nullptr || editor_ == nullptr ||
+  if (home_visible_ || !initialized_ || viewport_panel_ == nullptr || editor_ == nullptr ||
       document_ == nullptr || assets_ == nullptr || modeling_ == nullptr) {
     return;
   }
@@ -606,7 +803,7 @@ void UISystem::process_viewport_input() {
 void UISystem::prepare_viewports(
     SceneRenderBridge &render_bridge,
     RenderOverlaySnapshotCache &snapshot_cache) {
-  if (!initialized_ || editor_ == nullptr || document_ == nullptr ||
+  if (home_visible_ || !initialized_ || editor_ == nullptr || document_ == nullptr ||
       assets_ == nullptr || modeling_ == nullptr) {
     return;
   }
@@ -616,11 +813,13 @@ void UISystem::prepare_viewports(
 }
 
 std::size_t UISystem::render_viewports() {
-  return viewport_panel_ != nullptr ? viewport_panel_->render_viewports() : 0u;
+  return !home_visible_ && viewport_panel_ != nullptr
+             ? viewport_panel_->render_viewports()
+             : 0u;
 }
 
 bool UISystem::needs_continuous_rendering() const {
-  return viewport_panel_ != nullptr &&
+  return !home_visible_ && viewport_panel_ != nullptr &&
          viewport_panel_->needs_continuous_rendering();
 }
 
@@ -633,7 +832,7 @@ void *UISystem::native_window_handle() const {
 }
 
 bool UISystem::can_render_viewports() const {
-  return main_window_ != nullptr && main_window_->isVisible() &&
+  return !home_visible_ && main_window_ != nullptr && main_window_->isVisible() &&
          !main_window_->isMinimized() && main_window_->updatesEnabled() &&
          viewport_panel_ != nullptr &&
          !viewport_panel_->startup_presentation_blocked();
@@ -948,7 +1147,36 @@ void UISystem::refresh_status_bar() {
       editor_->commands().last_status())));
 }
 
+void UISystem::present_lifecycle_result(const QuaderApiStatus &result) {
+  if (status_message_ != nullptr && !result.message.empty()) {
+    status_message_->setText(QString::fromStdString(result.message));
+  }
+
+  const bool restored_scene_warning =
+      result.ok() && result.message.find("restored scenes were skipped") !=
+                         std::string::npos;
+  if (result.ok() && !restored_scene_warning) {
+    return;
+  }
+
+  QMessageBox::warning(
+      main_window_.get(),
+      QString::fromStdString(localization_.text(
+          restored_scene_warning ? "ui.project.open_warning.title"
+                                 : "ui.lifecycle.error.title",
+          restored_scene_warning ? "Project Opened with Warnings"
+                                 : "Quader Operation Failed")),
+      QString::fromStdString(
+          result.message.empty()
+              ? localization_.text("ui.status.command_failed",
+                                   "Command failed.")
+              : result.message));
+}
+
 void UISystem::refresh_localized_chrome() {
+  const auto text = [this](std::string_view key, std::string_view fallback) {
+    return QString::fromStdString(localization_.text(key, fallback));
+  };
   const auto update_title = [this](UIPanelId id) {
     if (QDockWidget *dock = panels_.dock(id)) {
       dock->setWindowTitle(QString::fromStdString(localization_.text(
@@ -958,6 +1186,39 @@ void UISystem::refresh_localized_chrome() {
   update_title(UIPanelId::Outliner);
   update_title(UIPanelId::Inspector);
   update_title(UIPanelId::Console);
+  if (project_home_page_ != nullptr) {
+    project_home_page_->set_labels(QtProjectHomeLabels{
+        .title = text("ui.home.title", "Welcome to Quader"),
+        .new_project =
+            text("ui.home.new_project", "New Quader Project"),
+        .open_project = text("ui.home.open_project", "Open Project"),
+        .recent_projects =
+            text("ui.home.recent_projects", "Recent Projects"),
+        .recent_name_column = text("ui.home.recent_name", "Name"),
+        .recent_location_column =
+            text("ui.home.recent_location", "Location"),
+        .no_recent_projects =
+            text("ui.home.no_recent_projects", "No recent projects"),
+        .unavailable_project =
+            text("ui.home.unavailable_project", "Project is unavailable"),
+        .remove_recent_project = text("ui.home.remove_recent_project",
+                                      "Remove from Recent"),
+    });
+  }
+  if (scene_workspace_ != nullptr) {
+    scene_workspace_->set_labels(QtSceneWorkspaceLabels{
+        .untitled_scene =
+            text("ui.workspace.untitled_scene", "Untitled Scene"),
+        .unsaved_scene =
+            text("ui.workspace.unsaved_scene", "Unsaved scene"),
+        .new_scene = text("ui.workspace.new_scene", "New Scene"),
+        .open_scene = text("ui.workspace.open_scene", "Open Scene"),
+        .empty_title = text("ui.workspace.empty_title", "No scenes open"),
+        .empty_description = text(
+            "ui.workspace.empty_description",
+            "Create a new scene or open one from this project."),
+    });
+  }
 }
 
 void UISystem::handle_settings_dialog_change(QtSettingsChangeKind kind) {

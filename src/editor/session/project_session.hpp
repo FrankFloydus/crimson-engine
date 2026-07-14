@@ -6,67 +6,50 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "editor/commands/document_command_service.hpp"
-#include "editor/history/editor_history_service.hpp"
-#include "scene/document/project_document.hpp"
+#include "editor/session/scene_session.hpp"
+#include "io/project/project_manifest.hpp"
 
 #include <cstdint>
-#include <functional>
+#include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <vector>
 
 namespace quader {
 
-class AssetCommandService;
-class EditorSelectionService;
-class LinearArrayToolService;
-class ModelingSessionService;
-class NativeViewportToolCoordinator;
-class PivotToolService;
-class RadialArrayToolService;
-class ViewportPointPlacementService;
+/// Owns one heap-stable scene document resident in the project workspace.
+struct OpenSceneSession final {
+  SceneSessionId session_id;
+  SceneId scene_id;
+  std::string display_name;
+  std::optional<ProjectRelativePath> path;
+  std::unique_ptr<SceneSession> session;
+  bool identity_dirty = false;
 
-/**
- * Stores the persisted-content revision stamp used by the project session dirty-state boundary.
- */
-struct ProjectContentRevisionStamp {
-  std::uint64_t project_revision = 0;
-  std::uint64_t scene_revision = 0;
-  std::uint64_t asset_revision = 0;
-  std::uint64_t modeling_content_revision = 0;
-
-  [[nodiscard]] bool
-  operator==(const ProjectContentRevisionStamp &) const = default;
+  [[nodiscard]] bool saved() const noexcept { return path.has_value(); }
+  [[nodiscard]] bool dirty() const {
+    return identity_dirty || (session != nullptr && session->dirty());
+  }
 };
 
-/**
- * Stores the result of project-owned asset mutations that depend on scene ownership.
- */
-struct ProjectAssetMutationResult {
-  bool ok = true;
+/// Reports a project or scene-document lifecycle operation outcome.
+struct ProjectSessionResult final {
+  bool ok = false;
   bool changed = false;
   std::string message;
+  std::optional<SceneSessionId> scene_session_id;
+  std::vector<std::string> warnings;
 };
 
 /**
- * Stores const project-session owner references for read-only consumers.
+ * Owns one folder-backed project and its ordered, independently persisted scene
+ * sessions. SceneSession pointers remain stable until their tab is closed.
  */
-struct ProjectSessionReadView final {
-  const ProjectDocument &document;
-  const SceneDocument &scene;
-  const AssetRegistry &assets;
-  const ModelingSessionService &modeling;
-  const EditorSelectionService &selection;
-};
-
-/**
- * Owns project session behavior within the editor session ownership layer.
- */
-class ProjectSession {
+class ProjectSession final {
 public:
   ProjectSession();
-  explicit ProjectSession(ProjectDocument document);
   ~ProjectSession();
 
   ProjectSession(const ProjectSession &) = delete;
@@ -74,91 +57,95 @@ public:
   ProjectSession(ProjectSession &&) = delete;
   ProjectSession &operator=(ProjectSession &&) = delete;
 
-  ProjectDocument &document() { return document_; }
-  const ProjectDocument &document() const { return document_; }
+  [[nodiscard]] ProjectSessionResult
+  create(const std::filesystem::path &root,
+         bool discard_existing_dirty = false);
+  [[nodiscard]] ProjectSessionResult
+  open(const std::filesystem::path &manifest_path,
+       bool discard_existing_dirty = false);
+  [[nodiscard]] ProjectSessionResult close(bool discard_dirty = false);
 
-  SceneDocument &scene() { return document_.scene(); }
-  const SceneDocument &scene() const { return document_.scene(); }
+  [[nodiscard]] ProjectSessionResult new_scene();
+  [[nodiscard]] ProjectSessionResult open_scene(ProjectRelativePath path);
+  [[nodiscard]] ProjectSessionResult activate(SceneSessionId id);
+  [[nodiscard]] ProjectSessionResult save(SceneSessionId id);
+  [[nodiscard]] ProjectSessionResult save_as(SceneSessionId id,
+                                             ProjectRelativePath path);
+  [[nodiscard]] ProjectSessionResult save_all();
+  [[nodiscard]] ProjectSessionResult close_scene(SceneSessionId id,
+                                                 bool discard_dirty = false);
 
-  AssetRegistry &assets() { return document_.assets(); }
-  const AssetRegistry &assets() const { return document_.assets(); }
-
-  EditorHistoryService &history() { return *history_; }
-  const EditorHistoryService &history() const { return *history_; }
-
-  DocumentCommandService &document_commands() { return *document_commands_; }
-  AssetCommandService &asset_commands() { return *asset_commands_; }
-  ModelingSessionService &modeling() { return *modeling_; }
-  const ModelingSessionService &modeling() const { return *modeling_; }
-  EditorSelectionService &selection() { return *selection_; }
-  const EditorSelectionService &selection() const { return *selection_; }
-  PivotToolService &pivot() { return *pivot_; }
-  const PivotToolService &pivot() const { return *pivot_; }
-  LinearArrayToolService &linear_array() { return *linear_array_; }
-  const LinearArrayToolService &linear_array() const { return *linear_array_; }
-  RadialArrayToolService &radial_array() { return *radial_array_; }
-  const RadialArrayToolService &radial_array() const { return *radial_array_; }
-  ViewportPointPlacementService &point_placement() {
-    return *point_placement_;
+  [[nodiscard]] bool has_project() const noexcept {
+    return workspace_.has_value();
   }
-  const ViewportPointPlacementService &point_placement() const {
-    return *point_placement_;
+  [[nodiscard]] bool has_active_scene() const noexcept {
+    return find(active_scene_id_) != nullptr;
   }
-  NativeViewportToolCoordinator &native_tools() { return *native_tools_; }
-  const NativeViewportToolCoordinator &native_tools() const {
-    return *native_tools_;
+  [[nodiscard]] bool has_dirty_scenes() const;
+  [[nodiscard]] const ProjectWorkspaceStorage *workspace() const noexcept {
+    return workspace_ ? &*workspace_ : nullptr;
   }
+  [[nodiscard]] const ProjectManifest *manifest() const noexcept {
+    return workspace_ ? &workspace_->manifest : nullptr;
+  }
+  [[nodiscard]] const std::filesystem::path &root() const noexcept;
+  [[nodiscard]] const std::filesystem::path &manifest_path() const noexcept;
+  [[nodiscard]] std::span<const std::unique_ptr<OpenSceneSession>>
+  open_scenes() const noexcept {
+    return open_scenes_;
+  }
+  [[nodiscard]] SceneSessionId active_scene_id() const noexcept {
+    return active_scene_id_;
+  }
+  [[nodiscard]] std::uint64_t activation_generation() const noexcept {
+    return activation_generation_;
+  }
+  [[nodiscard]] OpenSceneSession *find(SceneSessionId id);
+  [[nodiscard]] const OpenSceneSession *find(SceneSessionId id) const;
+  [[nodiscard]] OpenSceneSession *active_scene();
+  [[nodiscard]] const OpenSceneSession *active_scene() const;
 
-  [[nodiscard]] ProjectSessionReadView read_view() const;
-  [[nodiscard]] ProjectContentRevisionStamp content_revision_stamp() const;
-  [[nodiscard]] bool dirty() const;
-  [[nodiscard]] ProjectAssetMutationResult
-  replace_standalone_mesh(AssetId mesh, MeshAsset replacement);
-  void replace_document(ProjectDocument document);
-  void set_document_replacement_finalizer(
-      std::function<void(ProjectSession &)> finalizer);
-  void mark_clean();
+  /** Inert binding used only while the workspace intentionally has zero tabs. */
+  [[nodiscard]] SceneSession &fallback_scene() noexcept {
+    return fallback_scene_;
+  }
 
 private:
-  /**
-   * Tracks revision writes owned by one live operation projection.
-   */
-  struct PreviewContentCheckpoint {
-    ProjectContentRevisionStamp expected_stamp;
-    bool began_clean = false;
-    bool contaminated = false;
-  };
+  [[nodiscard]] SceneSessionId allocate_session_id();
+  void release_session_id(SceneSessionId id);
+  void release_open_scene_ids();
+  [[nodiscard]] std::unique_ptr<OpenSceneSession>
+  make_scene(SceneId scene_id, std::string display_name,
+             std::optional<ProjectRelativePath> path,
+             SceneContentDocument document);
+  [[nodiscard]] ProjectSessionResult install_workspace(
+      ProjectWorkspaceStorage workspace,
+      std::vector<std::unique_ptr<OpenSceneSession>> scenes,
+      std::optional<ProjectRelativePath> requested_active,
+      std::vector<std::string> warnings);
+  [[nodiscard]] ProjectSessionResult persist_workspace();
+  [[nodiscard]] ProjectSessionResult persist_manifest(
+      ProjectWorkspaceStorage &workspace, ProjectManifest manifest,
+      std::vector<ProjectRelativePath> open_paths,
+      std::optional<ProjectRelativePath> active_path);
+  [[nodiscard]] bool cancel_transient_state(OpenSceneSession &scene);
+  [[nodiscard]] bool path_is_open(const ProjectRelativePath &path,
+                                  SceneSessionId *id = nullptr) const;
+  [[nodiscard]] const ProjectSceneCatalogEntry *
+  find_catalog_scene(const ProjectRelativePath &path) const;
+  [[nodiscard]] bool scene_id_is_open(const SceneId &scene_id,
+                                      const ProjectRelativePath *except_path =
+                                          nullptr) const;
+  [[nodiscard]] std::string unique_untitled_name() const;
 
-  void rebuild_services();
-  void begin_modeling_preview_checkpoint();
-  void observe_before_modeling_preview_projection();
-  void record_after_modeling_preview_projection();
-  void finish_modeling_preview_checkpoint(bool restored_by_cancel);
-
-  ProjectDocument document_;
-  ProjectContentRevisionStamp clean_stamp_;
-  std::optional<PreviewContentCheckpoint> preview_content_checkpoint_;
-  std::unique_ptr<EditorHistoryService> history_;
-  std::unique_ptr<DocumentCommandService> document_commands_;
-  std::unique_ptr<AssetCommandService> asset_commands_;
-  std::unique_ptr<ModelingSessionService> modeling_;
-  std::unique_ptr<EditorSelectionService> selection_;
-  std::unique_ptr<PivotToolService> pivot_;
-  std::unique_ptr<LinearArrayToolService> linear_array_;
-  std::unique_ptr<RadialArrayToolService> radial_array_;
-  std::unique_ptr<ViewportPointPlacementService> point_placement_;
-  std::unique_ptr<NativeViewportToolCoordinator> native_tools_;
-  std::function<void(ProjectSession &)> document_replacement_finalizer_;
-};
-
-/**
- * Coordinates project session creation for editor-owned session composition.
- */
-class ProjectSessionService final {
-public:
-  std::unique_ptr<ProjectSession> create_session() const;
-  std::unique_ptr<ProjectSession> create_session(ProjectDocumentRecord record) const;
-  std::unique_ptr<ProjectSession> open_session(ProjectDocument document) const;
+  std::optional<ProjectWorkspaceStorage> workspace_;
+  std::vector<std::unique_ptr<OpenSceneSession>> open_scenes_;
+  std::vector<std::uint32_t> slot_generations_;
+  std::vector<std::uint32_t> free_slots_;
+  SceneSessionId active_scene_id_;
+  std::uint64_t activation_generation_ = 0u;
+  SceneSession fallback_scene_;
+  std::filesystem::path empty_path_;
 };
 
 } // namespace quader

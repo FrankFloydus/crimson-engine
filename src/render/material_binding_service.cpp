@@ -81,6 +81,12 @@ void MaterialBindingService::shutdown() {
   texture_binding_ = nullptr;
 }
 
+void MaterialBindingService::bind_scene(RenderSceneBindingKey scene_binding) {
+  if (texture_binding_ != nullptr) {
+    texture_binding_->bind_scene(scene_binding);
+  }
+}
+
 std::uint64_t MaterialBindingService::material_revision(
     const AssetRegistry &assets, const MaterialComponent *material) const {
   return RenderSignatureBuilder::material_signature(assets, material);

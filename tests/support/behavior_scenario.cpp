@@ -128,7 +128,8 @@ api_transform_drag_update(QVec2 screen_position) {
 
 BehaviorScenario::BehaviorScenario()
     : session_(),
-      editor_(QuaderApiSessionInternalAccess::from_project_session(session_)) {
+      api_session_(QuaderApiSessionInternalAccess::from_scene_session(session_)),
+      editor_(api_session_) {
   last_status_.ok = true;
 }
 
@@ -296,6 +297,8 @@ void BehaviorScenario::remember_selected_copy_alias() {
 QuaderModelingObjectRef
 BehaviorScenario::object_for_entity(EntityId entity) const {
   QuaderModelingObjectRef result;
+  result.scene_session_id =
+      QuaderApiSessionInternalAccess::scene_session_id(api_session_);
   result.entity = entity;
   result.entity_uuid = session_.scene().uuid(entity);
   result.editor_object_id = session_.scene().editor_object_id(entity);

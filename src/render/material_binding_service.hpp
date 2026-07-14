@@ -50,6 +50,8 @@ public:
              rendered_mesh_material_ != nullptr && texture_binding_ != nullptr;
     }
 
+    void bind_scene(RenderSceneBindingKey scene_binding);
+
     std::uint64_t material_revision(const AssetRegistry &assets,
                                     const MaterialComponent *material) const;
     std::uint64_t

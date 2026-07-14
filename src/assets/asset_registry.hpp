@@ -14,8 +14,10 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace quader {
@@ -42,12 +44,29 @@ struct AssetRegistryMutationResult {
 };
 
 /**
+ * Describes one mesh asset without forcing its deferred geometry payload to
+ * hydrate.
+ */
+struct MeshAssetDescriptor final {
+  AssetId id = kInvalidAssetId;
+  MeshAssetRevision revision;
+  std::string name;
+  bool has_stable_cpu_topology = true;
+  bool has_authored_polygon_document = false;
+  bool materialized = true;
+};
+
+/**
  * Owns Asset Registry lookup and registration for the asset document and registry layer.
  */
 class AssetRegistry {
 public:
   AssetId add_mesh(MeshAsset mesh);
   AssetId add_mesh(AssetId id, MeshAsset mesh);
+  AssetId add_deferred_mesh(AssetId id, std::string name,
+                            bool has_stable_cpu_topology,
+                            bool has_authored_polygon_document,
+                            std::function<MeshAsset()> loader);
   AssetId add_material(MaterialDocument material);
   AssetId add_material(AssetId id, MaterialDocument material);
   AssetId add_texture(TextureAsset texture);
@@ -72,6 +91,10 @@ public:
   validate_material(const MaterialDocument &material) const;
 
   const MeshAsset *mesh(AssetId id) const;
+  [[nodiscard]] bool has_mesh(AssetId id) const;
+  [[nodiscard]] bool mesh_materialized(AssetId id) const;
+  [[nodiscard]] std::optional<MeshAssetDescriptor>
+  mesh_descriptor(AssetId id) const;
   const MaterialDocument *material(AssetId id) const;
   const TextureAsset *texture(AssetId id) const;
   MeshAssetRevision mesh_revision(AssetId id) const;
@@ -88,11 +111,22 @@ public:
   void advance_revision_for_replacement(std::uint64_t previous_revision);
 
 private:
+  /**
+   * Owns the immutable metadata and one-shot loader for a mesh whose geometry
+   * has not been requested yet.
+   */
+  struct DeferredMesh final {
+    bool has_stable_cpu_topology = true;
+    bool has_authored_polygon_document = false;
+    std::function<MeshAsset()> loader;
+  };
+
   void mark_dirty();
 
   AssetId next_id_ = 1;
   std::uint64_t revision_ = 0;
-  MeshAssetStore meshes_;
+  mutable MeshAssetStore meshes_;
+  mutable std::unordered_map<AssetId, DeferredMesh> deferred_meshes_;
   MaterialAssetStore materials_;
   TextureAssetStore textures_;
 };

@@ -9,7 +9,6 @@
 #include "api/quader_api_mutation_runner.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_object_handle.hpp"
-#include "editor/commands/editor_command_service.hpp"
 
 namespace quader {
 
@@ -19,21 +18,13 @@ namespace quader {
 class QuaderApi::Impl final {
 public:
   explicit Impl(QuaderApiSession api_session)
-      : session(api_session),
-        project_session(
-            QuaderApiSessionInternalAccess::project_session(api_session)),
-        history(project_session.history()),
-        editor_commands(history, project_session.document_commands()),
-        mutations(project_session, history, editor_commands, modeling_commands),
+      : session(api_session), mutations(api_session),
         scene(api_session, mutations), modeling(api_session, mutations),
         selection(api_session, mutations), assets(api_session, mutations),
         history_api(api_session, mutations), query(api_session, mutations) {}
 
   QuaderApiSession session;
-  ProjectSession &project_session;
-  EditorHistoryService &history;
-  EditorCommandService editor_commands;
-  ModelingCommandExecutionService modeling_commands;
+  std::function<void(bool)> dirty_changed_callback;
   QuaderApiMutationRunner mutations;
   QuaderSceneApi scene;
   QuaderModelingApi modeling;
@@ -50,6 +41,22 @@ QuaderApi::~QuaderApi() = default;
 
 QuaderApi::QuaderApi(QuaderApi&&) noexcept = default;
 QuaderApi& QuaderApi::operator=(QuaderApi&&) noexcept = default;
+
+void QuaderApi::rebind(QuaderApiSession session,
+                       std::uint64_t) {
+  QuaderApiSessionInternalAccess::rebind(impl_->session, session);
+  impl_->mutations.synchronize_dirty_state();
+}
+
+void QuaderApi::set_dirty_changed_callback(
+    std::function<void(bool)> callback) {
+  impl_->dirty_changed_callback = std::move(callback);
+  impl_->mutations.set_dirty_changed_callback(impl_->dirty_changed_callback);
+}
+
+void QuaderApi::synchronize_dirty_state() {
+  impl_->mutations.synchronize_dirty_state();
+}
 
 QuaderSceneApi& QuaderApi::scene() {
     return impl_->scene;
@@ -115,6 +122,11 @@ QuaderObjectHandle QuaderApi::object(QuaderModelingObjectRef ref) {
 
 QuaderApiSession QuaderApi::session() const {
     return impl_->session;
+}
+
+std::uint64_t QuaderApi::scene_binding_identity() const {
+  return QuaderApiSessionInternalAccess::scene_session_id(impl_->session)
+      .packed();
 }
 
 QuaderApiMutationRunner& QuaderApi::mutations() {

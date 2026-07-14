@@ -21,3 +21,5 @@ file except through prior written authorization from Francesco Di Blasi.
   the SDK.
 - Prefer additive SDK contracts and tests before moving existing polygon or runtime source files.
 - SDK consumer tests must include the umbrella header and link SDK targets only.
+- Portable QDR is a binary byte/span contract. Do not add JSON readers, writers, migration
+  helpers, or native runtime compatibility targets under this boundary.

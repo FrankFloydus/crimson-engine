@@ -1084,12 +1084,23 @@ void QtViewportPanel::shutdown() {
 }
 
 void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
+  if (workspace_ != &workspace) {
+    interaction_controller_.reset(interaction_editor_);
+    hover_controller_.invalidate();
+    selection_overlay_cache_.mark_dirty();
+    viewport_info_scene_stats_valid_ = false;
+    displayed_placements_.clear();
+    input_router_.clear_modal_drag_state();
+    pivot_handle_dragging_ = false;
+    linear_array_handle_dragging_ = false;
+    modal_tool_dragging_ = false;
+    modal_tool_owns_viewport_snapshot_ = false;
+  }
   workspace_ = &workspace;
   for (Pane &pane_state : panes_) {
     pane_state.navigation_gizmo->set_camera(
         &workspace.camera(pane_state.id));
   }
-  displayed_placements_.clear();
   refresh_workspace_layout();
 }
 

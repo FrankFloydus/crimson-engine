@@ -7,6 +7,7 @@
 #pragma once
 
 #include "core/types.hpp"
+#include "io/project/project_types.hpp"
 #include "math/types.hpp"
 #include "core/scene_environment_catalog.hpp"
 
@@ -155,6 +156,7 @@ struct QuaderRevisionStamp {
  * Represents a Quader Entity Ref value used by the public Quader API surface.
  */
 struct QuaderEntityRef {
+  SceneSessionId scene_session_id;
   EntityId id = kInvalidEntityId;
   std::string uuid;
   QuaderEditorObjectId editor_object_id = kInvalidQuaderEditorObjectId;
@@ -179,6 +181,7 @@ struct QuaderAssetRef {
  * Represents a Quader Modeling Object Ref value used by the public Quader API surface.
  */
 struct QuaderModelingObjectRef {
+  SceneSessionId scene_session_id;
   EntityId entity = kInvalidEntityId;
   std::string entity_uuid;
   QuaderEditorObjectId editor_object_id = kInvalidQuaderEditorObjectId;

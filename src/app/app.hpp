@@ -45,6 +45,7 @@ public:
 private:
   void apply_window_settings();
   void save_window_settings();
+  void bind_active_scene(SceneSession &scene);
   bool render_frame(const FrameTiming &frame_timing);
   void schedule_next_frame();
 

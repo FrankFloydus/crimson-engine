@@ -6,7 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <quader/modeling/modeling.hpp>
 
+#include <cstddef>
 #include <string>
+#include <vector>
 
 int main() {
   using namespace quader::modeling;
@@ -26,7 +28,8 @@ int main() {
   if (!mesh.ok() || mesh.value().indices.empty()) {
     return 4;
   }
-  Result<std::string> qdr = serialize_single_document_as_qdr(box);
+  Result<std::vector<std::byte>> qdr =
+      serialize_single_document_as_qdr(box);
   if (!qdr.ok()) {
     return 5;
   }

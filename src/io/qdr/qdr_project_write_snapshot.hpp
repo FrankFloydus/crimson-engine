@@ -9,7 +9,8 @@
 #include "assets/material_document.hpp"
 #include "assets/mesh_asset.hpp"
 #include "assets/texture_asset.hpp"
-#include "scene/document/project_document.hpp"
+#include "io/project/project_asset_resolver.hpp"
+#include "scene/document/scene_content_document.hpp"
 
 #include <mesh/polygon/document_model.hpp>
 
@@ -64,8 +65,6 @@ struct QdrProjectEntityWriteSnapshot final {
   std::optional<TransformComponent> transform;
   std::optional<VisibilityComponent> visibility;
   std::optional<LockComponent> lock;
-  std::optional<SelectionComponent> selection;
-  bool active = false;
   std::optional<ModelingObjectComponent> modeling_object;
   std::optional<MeshComponent> mesh;
   std::optional<MaterialComponent> material;
@@ -86,9 +85,10 @@ struct QdrProjectWriteSnapshot final {
   std::vector<QdrProjectTextureAssetWriteSnapshot> textures;
   std::vector<QdrProjectEntityWriteSnapshot> entities;
   std::vector<ProjectObjectRecord> object_records;
+  std::vector<ProjectAssetReference> project_asset_dependencies;
 };
 
 [[nodiscard]] QdrProjectWriteSnapshot
-qdr_project_write_snapshot_from_document(const ProjectDocument &document);
+qdr_project_write_snapshot_from_document(const SceneContentDocument &document);
 
 } // namespace quader

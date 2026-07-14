@@ -11,7 +11,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_api_status_internal.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -23,12 +23,12 @@ namespace {
 
 using Json = nlohmann::ordered_json;
 
-const ProjectSession &read_project_session(QuaderApiSession session) {
-  return QuaderApiSessionInternalAccess::read_project_session(session);
+const SceneSession &read_scene_session(QuaderApiSession session) {
+  return QuaderApiSessionInternalAccess::read_scene_session(session);
 }
 
-ProjectSession &project_session(QuaderApiSession session) {
-  return QuaderApiSessionInternalAccess::project_session(session);
+SceneSession &scene_session(QuaderApiSession session) {
+  return QuaderApiSessionInternalAccess::scene_session(session);
 }
 
 std::string_view selection_mode_name(ModelingSelectionMode mode) {
@@ -247,12 +247,12 @@ void QuaderDevToolsApi::set_runtime_hooks(QuaderDevToolsRuntimeHooks hooks) {
 
 std::string QuaderDevToolsApi::current_selection_json() const {
   const ModelingSelectionExport selection =
-      read_project_session(session_).modeling().export_selection();
+      read_scene_session(session_).modeling().export_selection();
   return selection_export_json(selection).dump(2);
 }
 
 QuaderApiVoidResult QuaderDevToolsApi::copy_selection_json_to_clipboard() {
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   if (!hooks_.set_clipboard_text) {
     return quader_api_failure_status(
         session, "Dev tools clipboard runtime is not attached.");

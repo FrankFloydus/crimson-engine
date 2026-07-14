@@ -1359,6 +1359,59 @@ TEST(RenderOverlaySnapshotCacheTests,
   EXPECT_EQ(cache.stats().selection_world_bounds_translation_reuse_count, 1u);
 }
 
+TEST(RenderOverlaySnapshotCacheTests,
+     SceneBindingChangeInvalidatesEqualRevisionOverlaySnapshots) {
+  SceneDocument document;
+  AssetRegistry assets;
+  RenderOverlaySnapshotCache cache;
+  const RenderSceneBindingKey first_binding{
+      .scene_session_id = 0x100000000ull,
+      .activation_generation = 7u,
+      .binding_revision = 11u,
+  };
+  const RenderSceneBindingKey second_binding{
+      .scene_session_id = first_binding.scene_session_id,
+      .activation_generation = first_binding.activation_generation + 1u,
+      .binding_revision = first_binding.binding_revision + 1u,
+  };
+
+  const RenderOverlaySelectionSnapshot &first =
+      cache.selection_snapshot(document, assets, first_binding);
+  EXPECT_EQ(first.scene_binding, first_binding);
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+  (void)cache.selection_snapshot(document, assets, first_binding);
+  EXPECT_EQ(cache.stats().selection_build_count, 1u);
+
+  const RenderOverlaySelectionSnapshot &rebound =
+      cache.selection_snapshot(document, assets, second_binding);
+  EXPECT_EQ(rebound.scene_binding, second_binding);
+  EXPECT_EQ(cache.stats().selection_build_count, 2u);
+
+  const RenderOverlayPersistentSnapshotUpdate initial =
+      cache.update_persistent(document, assets, true, 1u, {},
+                              second_binding);
+  EXPECT_TRUE(initial.selected_object_changed);
+  EXPECT_TRUE(initial.scene_wireframe_changed);
+  const RenderOverlayPersistentSnapshotUpdate unchanged =
+      cache.update_persistent(document, assets, true, 1u, {},
+                              second_binding);
+  EXPECT_FALSE(unchanged.changed());
+
+  const RenderSceneBindingKey third_binding{
+      .scene_session_id = first_binding.scene_session_id + 1u,
+      .activation_generation = second_binding.activation_generation + 1u,
+      .binding_revision = second_binding.binding_revision + 1u,
+  };
+  const RenderOverlayPersistentSnapshotUpdate switched =
+      cache.update_persistent(document, assets, true, 1u, {}, third_binding);
+  EXPECT_TRUE(switched.selected_object_changed);
+  EXPECT_TRUE(switched.scene_wireframe_changed);
+  ASSERT_NE(switched.selected_object, nullptr);
+  ASSERT_NE(switched.scene_wireframe, nullptr);
+  EXPECT_EQ(switched.selected_object->scene_binding, third_binding);
+  EXPECT_EQ(switched.scene_wireframe->scene_binding, third_binding);
+}
+
 TEST(RenderOverlaySnapshotTests, SceneOverlayBuildersConsumeSnapshotsOnly) {
   const std::string builder_source = read_source_file(
       "src/render/overlay/viewport_scene_overlay_builder.cpp");
@@ -1416,6 +1469,83 @@ TEST(RenderOverlaySnapshotTests, SceneOverlayBuildersConsumeSnapshotsOnly) {
                 "using RenderSelectedObjectOverlaySnapshotRecord"),
             std::string::npos);
   EXPECT_NE(render_snapshot_header.find("using OverlaySnapshot"),
+            std::string::npos);
+}
+
+TEST(RenderSceneBindingGuardrailTests,
+     SceneAndOverlayEarlyOutsQualifyReuseBySceneActivation) {
+  const std::string binding_header =
+      read_source_file("src/render/render_scene_binding.hpp");
+  const std::string extraction_source =
+      read_source_file("src/render/scene_render_extraction.cpp");
+  const std::string sync_source =
+      read_source_file("src/render/scene_render_sync_service.cpp");
+  const std::string bridge_source =
+      read_source_file("src/render/scene_render_bridge.cpp");
+  const std::string selected_cache_source = read_source_file(
+      "src/render/overlay/selected_object_overlay_cache.cpp");
+  const std::string wireframe_cache_source = read_source_file(
+      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
+  const std::string texture_cache_source =
+      read_source_file("src/render/texture_binding_service.cpp");
+  const std::string render_api_source =
+      read_source_file("src/api/quader_render_api.cpp");
+
+  EXPECT_NE(binding_header.find("scene_session_id"), std::string::npos);
+  EXPECT_NE(binding_header.find("activation_generation"), std::string::npos);
+  EXPECT_NE(binding_header.find("binding_revision"), std::string::npos);
+  EXPECT_NE(extraction_source.find(
+                "previous->scene_binding == snapshot.scene_binding"),
+            std::string::npos);
+  EXPECT_NE(sync_source.find(
+                "synced_scene_binding_ != snapshot.scene_binding"),
+            std::string::npos);
+  const std::size_t retire_scene_meshes =
+      sync_source.find("mesh_cache_->remove_except(no_scene_entities)");
+  const std::size_t destroy_retired_materials = sync_source.find(
+      "mesh_cache_->drain_retired_destroy_queue(\n"
+      "      mesh_cache_->retired_proxy_count())");
+  const std::size_t invalidate_scene_textures =
+      sync_source.find("material_binding_->bind_scene(scene_binding)");
+  ASSERT_NE(retire_scene_meshes, std::string::npos);
+  ASSERT_NE(destroy_retired_materials, std::string::npos);
+  ASSERT_NE(invalidate_scene_textures, std::string::npos);
+  EXPECT_LT(retire_scene_meshes, destroy_retired_materials);
+  EXPECT_LT(destroy_retired_materials, invalidate_scene_textures)
+      << "A scene switch must destroy retired material instances before "
+         "invalidating the textures they still reference.";
+  const std::size_t clear_tool_previews =
+      bridge_source.find("tool_preview_cache_.clear()");
+  const std::size_t clear_viewport_overlays =
+      bridge_source.find("overlay_cache_.clear_slot(index)");
+  const std::size_t bind_scene_resources =
+      bridge_source.find("sync_service_.bind_scene(scene_binding)");
+  ASSERT_NE(clear_tool_previews, std::string::npos);
+  ASSERT_NE(clear_viewport_overlays, std::string::npos);
+  ASSERT_NE(bind_scene_resources, std::string::npos);
+  EXPECT_LT(clear_tool_previews, bind_scene_resources);
+  EXPECT_LT(clear_viewport_overlays, bind_scene_resources)
+      << "Preview and overlay material instances must be destroyed before "
+         "the outgoing scene texture cache is invalidated.";
+  EXPECT_NE(bridge_source.find("bind_scene(snapshot.scene_binding)"),
+            std::string::npos);
+  EXPECT_NE(selected_cache_source.find(
+                "synced_scene_binding_ != snapshot.scene_binding"),
+            std::string::npos);
+  EXPECT_NE(wireframe_cache_source.find(
+                "synced_scene_binding_ != snapshot.scene_binding"),
+            std::string::npos);
+  EXPECT_NE(texture_cache_source.find("texture_cache_.clear()"),
+            std::string::npos);
+  EXPECT_EQ(texture_cache_source.find("evict_obsolete_texture_revisions"),
+            std::string::npos)
+      << "Without texture reference tracking, old revisions must remain "
+         "alive until the scene cache is safely released.";
+  EXPECT_NE(render_api_source.find(".scene_session_id ="),
+            std::string::npos);
+  EXPECT_NE(render_api_source.find(".activation_generation ="),
+            std::string::npos);
+  EXPECT_NE(render_api_source.find(".binding_revision ="),
             std::string::npos);
 }
 
@@ -1613,6 +1743,72 @@ TEST(SceneDocumentRevisionTests,
       document.render_component_revision();
   document.advance_revision_for_replacement(document.revision());
   EXPECT_GT(document.render_component_revision(), before_replacement);
+}
+
+TEST(RenderSceneSnapshotTests,
+     EqualRevisionScenesCannotReuseRecordsAcrossBindings) {
+  SceneDocument first_document;
+  AssetRegistry first_assets;
+  SceneDocument second_document;
+  AssetRegistry second_assets;
+
+  MeshAsset first_geometry = make_overlay_triangle_mesh();
+  MeshAsset second_geometry = make_overlay_triangle_mesh();
+  second_geometry.vertices.front().position.x += 100.0f;
+  const AssetId first_mesh = first_assets.add_mesh(std::move(first_geometry));
+  const AssetId second_mesh =
+      second_assets.add_mesh(std::move(second_geometry));
+  ASSERT_EQ(first_mesh, second_mesh);
+
+  const EntityId first_entity =
+      first_document.create_entity("Same Id, First Scene", EntityKind::Mesh);
+  const EntityId second_entity = second_document.create_entity(
+      "Same Id, Second Scene", EntityKind::Mesh);
+  ASSERT_EQ(first_entity, second_entity);
+  first_document.set_mesh(first_entity, MeshComponent{.mesh = first_mesh});
+  second_document.set_mesh(second_entity,
+                           MeshComponent{.mesh = second_mesh});
+  ASSERT_EQ(first_document.revision(), second_document.revision());
+  ASSERT_EQ(first_assets.revision(), second_assets.revision());
+
+  const RenderSceneBindingKey first_binding{
+      .scene_session_id = 0x100000000ull,
+      .activation_generation = 23u,
+      .binding_revision = 31u,
+  };
+  const RenderSceneBindingKey second_binding{
+      .scene_session_id = 0x100000001ull,
+      .activation_generation = 24u,
+      .binding_revision = 32u,
+  };
+  const RenderSceneSnapshot first = build_render_scene_snapshot(
+      first_document, first_assets, {.scene_binding = first_binding});
+  ASSERT_EQ(first.meshes.size(), 1u);
+
+  RenderSceneSnapshot second = build_render_scene_snapshot(
+      second_document, second_assets,
+      {.previous = &first, .scene_binding = second_binding});
+  ASSERT_EQ(second.meshes.size(), 1u);
+  EXPECT_EQ(second.scene_binding, second_binding);
+  EXPECT_FALSE(second.reused_previous_records);
+  EXPECT_TRUE(second.dirty.any_dirty());
+  EXPECT_NE(second.meshes.front().mesh.vertices.data(),
+            first.meshes.front().mesh.vertices.data());
+  EXPECT_FLOAT_EQ(second.meshes.front().mesh.vertices.front().position.x,
+                  first.meshes.front().mesh.vertices.front().position.x +
+                      100.0f);
+  EXPECT_TRUE(render_scene_snapshot_matches_sources(
+      second, second_document, second_assets, second_binding));
+  EXPECT_FALSE(render_scene_snapshot_matches_sources(
+      second, second_document, second_assets, first_binding));
+
+  second_document.set_transform(
+      second_entity,
+      TransformComponent{.position = {3.0f, 4.0f, 5.0f}});
+  EXPECT_FALSE(try_refresh_render_scene_snapshot_transforms(
+      second, second_document, second_assets, 2u, first_binding));
+  EXPECT_TRUE(try_refresh_render_scene_snapshot_transforms(
+      second, second_document, second_assets, 2u, second_binding));
 }
 
 TEST(RenderSceneSnapshotTests,

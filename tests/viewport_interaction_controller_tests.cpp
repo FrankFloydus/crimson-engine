@@ -15,7 +15,7 @@
 #include "render/overlay/viewport_box_overlay_builder.hpp"
 #include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
 #include "render/overlay/viewport_transform_gizmo_overlay_builder.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "scene/scene_bounds.hpp"
 #include "ui/viewport_hover_controller.hpp"
 #include "ui/viewport_host_interaction_policy.hpp"
@@ -38,7 +38,7 @@ namespace {
 
 /// Owns a complete viewport interaction harness for one synthetic controller scenario.
 struct ViewportInteractionHarness {
-    quader::ProjectSession session;
+    quader::SceneSession session;
     quader::QuaderEditorApi editor;
     quader::ViewportInputRouter router;
     quader::ViewportCameraController camera;
@@ -50,7 +50,7 @@ struct ViewportInteractionHarness {
         billboard_pick_candidates;
 
     ViewportInteractionHarness()
-        : editor(quader::QuaderApiSessionInternalAccess::from_project_session(
+        : editor(quader::QuaderApiSessionInternalAccess::from_scene_session(
               session)) {
       camera.set_viewport_size(800.0f, 600.0f);
       camera.focus_origin(8.0f);

@@ -15,6 +15,7 @@
 #include <quader/modeling/session/modeling_session.hpp>
 #include <quader/modeling/tools/tool_payload.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -1175,13 +1176,15 @@ private:
 class IoApi {
 public:
   IoApi() = default;
-  [[nodiscard]] std::string serialize_qdr() const;
-  [[nodiscard]] std::string serialize_qdr(ObjectId object) const;
-  [[nodiscard]] std::string serialize_qdr(std::span<const ObjectId> objects) const;
-  [[nodiscard]] MeshHandle deserialize_qdr_object(std::string_view text,
-                                                  std::string name = "Mesh");
+  [[nodiscard]] std::vector<std::byte> serialize_qdr() const;
+  [[nodiscard]] std::vector<std::byte> serialize_qdr(ObjectId object) const;
+  [[nodiscard]] std::vector<std::byte>
+  serialize_qdr(std::span<const ObjectId> objects) const;
+  [[nodiscard]] MeshHandle deserialize_qdr_object(
+      std::span<const std::byte> bytes,
+      std::string name = "Mesh");
   [[nodiscard]] std::vector<MeshHandle>
-  deserialize_qdr_document(std::string_view text);
+  deserialize_qdr_document(std::span<const std::byte> bytes);
   [[nodiscard]] std::string serialize_obj(ObjectId object) const;
   [[nodiscard]] std::string serialize_obj(std::span<const ObjectId> objects) const;
 
@@ -1199,14 +1202,16 @@ private:
 class CheckedIoApi {
 public:
   CheckedIoApi() = default;
-  [[nodiscard]] Result<std::string> serialize_qdr() const;
-  [[nodiscard]] Result<std::string> serialize_qdr(ObjectId object) const;
-  [[nodiscard]] Result<std::string>
+  [[nodiscard]] Result<std::vector<std::byte>> serialize_qdr() const;
+  [[nodiscard]] Result<std::vector<std::byte>>
+  serialize_qdr(ObjectId object) const;
+  [[nodiscard]] Result<std::vector<std::byte>>
   serialize_qdr(std::span<const ObjectId> objects) const;
   [[nodiscard]] Result<MeshHandle>
-  deserialize_qdr_object(std::string_view text, std::string name = "Mesh");
+  deserialize_qdr_object(std::span<const std::byte> bytes,
+                         std::string name = "Mesh");
   [[nodiscard]] Result<std::vector<MeshHandle>>
-  deserialize_qdr_document(std::string_view text);
+  deserialize_qdr_document(std::span<const std::byte> bytes);
   [[nodiscard]] Result<std::string> serialize_obj(ObjectId object) const;
   [[nodiscard]] Result<std::string>
   serialize_obj(std::span<const ObjectId> objects) const;

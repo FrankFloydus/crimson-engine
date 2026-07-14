@@ -10,7 +10,7 @@
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/modeling/linear_array_layout.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "math/glm_bridge.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "scene/scene_document.hpp"
@@ -56,9 +56,9 @@ TEST(LinearArrayLayoutTests, PreservesOrientationAndIncludesSharedEndpoint) {
 
 TEST(LinearArrayToolServiceTests,
      MultiSourcePreviewCommitAndWheelAdjustmentUseIdenticalMatrices) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   const QuaderApiResult<QuaderModelingObjectRef> primary =
       editor.modeling().create_box(
           QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
@@ -145,9 +145,9 @@ TEST(LinearArrayToolServiceTests,
 
 TEST(LinearArrayToolServiceTests,
      AnySourceWorldTransformChangeInvalidatesTheCapturedPreview) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   const QuaderApiResult<QuaderModelingObjectRef> source =
       editor.modeling().create_box(
           QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
@@ -170,9 +170,9 @@ TEST(LinearArrayToolServiceTests,
 
 TEST(LinearArrayToolServiceTests,
      UnchangedNativeArrayPreviewDoesNotResubmitRenderExtraction) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   const QuaderApiResult<QuaderModelingObjectRef> source =
       editor.modeling().create_box(
           QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
@@ -223,9 +223,9 @@ TEST(LinearArrayToolServiceTests,
 
 TEST(LinearArrayToolServiceTests,
      CancelAndReactivateCannotReuseAnOldRenderPreviewRevision) {
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   const QuaderApiResult<QuaderModelingObjectRef> first =
       editor.modeling().create_box(
           QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},

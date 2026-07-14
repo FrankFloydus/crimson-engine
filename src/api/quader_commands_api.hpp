@@ -25,6 +25,7 @@ class QuaderApi;
 class QuaderDevToolsApi;
 #endif
 class QuaderProjectApi;
+class QuaderSceneDocumentsApi;
 class QuaderPreferencesApi;
 class QuaderToolsApi;
 class QuaderViewportApi;
@@ -79,11 +80,13 @@ class QuaderCommandsApi final {
 public:
 #ifndef NDEBUG
     QuaderCommandsApi(QuaderApi& api, QuaderProjectApi& project,
+                      QuaderSceneDocumentsApi &scene_documents,
                       QuaderViewportApi& viewports, QuaderToolsApi& tools,
                       QuaderPreferencesApi& preferences,
                       QuaderDevToolsApi& dev_tools);
 #else
     QuaderCommandsApi(QuaderApi& api, QuaderProjectApi& project,
+                      QuaderSceneDocumentsApi &scene_documents,
                       QuaderViewportApi& viewports, QuaderToolsApi& tools,
                       QuaderPreferencesApi& preferences);
 #endif

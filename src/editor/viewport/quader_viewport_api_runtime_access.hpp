@@ -18,6 +18,8 @@ class QuaderViewportApiRuntimeAccess final {
 public:
     [[nodiscard]] static ViewportWorkspaceService& workspace(QuaderViewportApi& api);
     [[nodiscard]] static const ViewportWorkspaceService& workspace(const QuaderViewportApi& api);
+    static void bind_scene_workspace(QuaderViewportApi &api,
+                                     ViewportWorkspaceService &workspace);
 };
 
 } // namespace quader

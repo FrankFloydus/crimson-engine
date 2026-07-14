@@ -52,10 +52,11 @@ build_render_scene_snapshot(const SceneDocument &document,
                             RenderSceneSnapshotBuildOptions options = {});
 [[nodiscard]] bool try_refresh_render_scene_snapshot_transforms(
     RenderSceneSnapshot &snapshot, const SceneDocument &document,
-    const AssetRegistry &assets, std::uint64_t frame_index = 0);
+    const AssetRegistry &assets, std::uint64_t frame_index = 0,
+    RenderSceneBindingKey scene_binding = {});
 [[nodiscard]] bool render_scene_snapshot_matches_sources(
     const RenderSceneSnapshot &snapshot, const SceneDocument &document,
-    const AssetRegistry &assets);
+    const AssetRegistry &assets, RenderSceneBindingKey scene_binding = {});
 [[nodiscard]] SceneRenderExtractionPlan build_scene_render_extraction_plan(
     const SceneDocument &document, const AssetRegistry &assets);
 [[nodiscard]] std::vector<RenderToolPreviewMeshRecord>

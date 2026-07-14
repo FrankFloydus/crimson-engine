@@ -12,7 +12,7 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/metadata/host_contract.hpp"
 #include "scene/scene_document.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
@@ -518,9 +518,9 @@ TEST(ViewportToolRuntimeTests,
 }
 
 TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
-    ProjectSession session;
+    SceneSession session;
     QuaderEditorApi editor(
-        QuaderApiSessionInternalAccess::from_project_session(session));
+        QuaderApiSessionInternalAccess::from_scene_session(session));
     ViewportToolState state;
     ViewportCameraController camera;
     ViewportModalToolState modal_state;

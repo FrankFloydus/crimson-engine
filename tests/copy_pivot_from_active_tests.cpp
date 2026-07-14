@@ -9,7 +9,7 @@
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "math/glm_bridge.hpp"
 #include "mesh/polygon/document_model.hpp"
 #include "scene/scene_bounds.hpp"
@@ -31,11 +31,11 @@ constexpr float kEpsilon = 0.002f;
 
 /// Owns an isolated native editor session for copy-pivot behavior tests.
 struct CopyPivotHarness {
-  quader::ProjectSession session;
+  quader::SceneSession session;
   quader::QuaderEditorApi editor;
 
   CopyPivotHarness()
-      : editor(quader::QuaderApiSessionInternalAccess::from_project_session(
+      : editor(quader::QuaderApiSessionInternalAccess::from_scene_session(
             session)) {}
 };
 

@@ -11,7 +11,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 
 #include <memory>
 #include <optional>
@@ -263,7 +263,7 @@ QuaderScriptResult QuaderScript::run() {
       const ModelingSessionMemento after = mutations.capture_modeling_memento();
       const CommandResult recorded_modeling = transaction.record_executed(
           std::make_unique<RecordedModelingMementoCommand>(
-              QuaderApiSessionInternalAccess::project_session(api_.session())
+              QuaderApiSessionInternalAccess::scene_session(api_.session())
                   .modeling(),
               script_transaction_label(label_), before, after));
       if (!recorded_modeling.ok) {

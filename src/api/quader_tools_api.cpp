@@ -11,7 +11,7 @@
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/modeling/operations/operation_schema.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
@@ -33,12 +33,12 @@
 namespace quader {
 namespace {
 
-ProjectSession &project_session(QuaderApiSession session) {
-  return QuaderApiSessionInternalAccess::project_session(session);
+SceneSession &scene_session(QuaderApiSession session) {
+  return QuaderApiSessionInternalAccess::scene_session(session);
 }
 
 CommandResult runtime_tool_activation_preflight(
-    const ProjectSession &session, const ViewportTool &tool) {
+    const SceneSession &session, const ViewportTool &tool) {
   const quader_editor_core::ViewportInteractionTool requested_tool =
       quader_editor_core::viewport_interaction_tool_from_id(tool.id());
   if (requested_tool == quader_editor_core::ViewportInteractionTool::Unknown) {
@@ -228,7 +228,7 @@ QuaderToolSettingsTarget radial_array_tool_settings_target(
   return result;
 }
 
-QuaderApiVoidResult api_status_from_command(ProjectSession &session,
+QuaderApiVoidResult api_status_from_command(SceneSession &session,
                                             CommandResult result,
                                             QuaderMutationKind mutation,
                                             std::string_view fallback) {
@@ -414,7 +414,7 @@ QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
     return hooks_.activate(tool_id);
   }
 
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   if (session.native_tools().handles(tool_id)) {
     const double grid_size =
         hooks_.grid_world_size ? hooks_.grid_world_size() : 1.0;
@@ -461,7 +461,7 @@ QuaderApiVoidResult QuaderToolsApi::activate(ViewportToolId tool) {
 }
 
 bool QuaderToolsApi::can_activate(std::string_view tool_id) const {
-  const ProjectSession &session = project_session(session_);
+  const SceneSession &session = scene_session(session_);
   if (session.native_tools().handles(tool_id)) {
     return session.native_tools().can_activate(tool_id);
   }
@@ -474,7 +474,7 @@ bool QuaderToolsApi::can_activate(ViewportToolId tool) const {
 }
 
 QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
-  const ProjectSession &session = project_session(session_);
+  const SceneSession &session = scene_session(session_);
   if (session.radial_array().active()) {
     return radial_array_tool_settings_target(session.radial_array());
   }
@@ -492,7 +492,7 @@ QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
 QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  std::string_view name,
                                                  double value) {
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   const bool radial_array_tool =
       tool_id.empty() || tool_id == kRadialArrayToolId;
   if (radial_array_tool && name == kRadialArrayDegreesSetting) {
@@ -596,7 +596,7 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
   const std::string text(value);
   const double numeric = std::strtod(text.c_str(), &end);
   if (end == text.c_str() || (end != nullptr && *end != '\0')) {
-    return quader_api_failure_status(project_session(session_),
+    return quader_api_failure_status(scene_session(session_),
                                      "Invalid tool setting value.");
   }
   return set_setting(tool_id, name, numeric);
@@ -604,7 +604,7 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
 
 QuaderApiVoidResult QuaderToolsApi::execute_action(std::string_view tool_id,
                                                     std::string_view action_id) {
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   if (tool_id == kPivotToolId) {
     return api_status_from_command(
         session, session.pivot().execute_align_action(action_id),
@@ -614,7 +614,7 @@ QuaderApiVoidResult QuaderToolsApi::execute_action(std::string_view tool_id,
 }
 
 QuaderApiVoidResult QuaderToolsApi::commit_active_tool_preview() {
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   if (session.native_tools().has_pending_tool()) {
     const bool linear_array = session.linear_array().has_session();
     const bool radial_array = session.radial_array().has_session();
@@ -633,7 +633,7 @@ QuaderApiVoidResult QuaderToolsApi::commit_active_tool_preview() {
 }
 
 QuaderApiVoidResult QuaderToolsApi::cancel_active_tool_preview() {
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   if (session.native_tools().has_pending_tool()) {
     return api_status_from_command(
         session, session.native_tools().cancel_active(),
@@ -650,15 +650,15 @@ QuaderApiVoidResult QuaderToolsApi::cancel_modal_tool() {
     return hooks_.cancel_modal_tool();
   }
   ModelingCommandResult result =
-      project_session(session_).modeling().cancel_active_modal_tool();
-  return quader_api_void_status(project_session(session_), result.ok,
+      scene_session(session_).modeling().cancel_active_modal_tool();
+  return quader_api_void_status(scene_session(session_), result.ok,
                                 result.changed, std::move(result.message),
                                 QuaderMutationKind::Modeling,
                                 "Cancel Modal Tool");
 }
 
 std::string QuaderToolsApi::active_tool() const {
-  const ProjectSession &session = project_session(session_);
+  const SceneSession &session = scene_session(session_);
   if (const std::string_view native_tool =
           session.native_tools().active_tool_id();
       !native_tool.empty()) {

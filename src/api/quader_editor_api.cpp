@@ -7,10 +7,21 @@
 #include "api/quader_editor_api.hpp"
 
 #include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_project_api_internal_access.hpp"
+#include "api/quader_scene_documents_api_internal_access.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
+#include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 
 namespace quader {
+namespace {
+
+QuaderApiSession project_api_session(ProjectSession &project_session) {
+  return QuaderApiSessionInternalAccess::from_project_session(project_session);
+}
+
+} // namespace
 
 /**
  * Owns Impl behavior within the public Quader API surface.
@@ -20,16 +31,47 @@ public:
     explicit Impl(QuaderApiSession session)
         : api(session)
         , project(session)
+        , scene_documents(session)
         , tools(session)
 #ifndef NDEBUG
         , dev_tools(session)
         , preferences()
-        , commands(api, project, viewports, tools, preferences, dev_tools)
+        , commands(api, project, scene_documents, viewports, tools,
+                   preferences, dev_tools)
 #else
         , preferences()
-        , commands(api, project, viewports, tools, preferences)
+        , commands(api, project, scene_documents, viewports, tools,
+                   preferences)
 #endif
-        , render(session, api.query()) {
+        , render(session, api) {
+      attach_document_lifecycle();
+      rebind(session);
+      install_tool_hooks();
+    }
+
+    explicit Impl(ProjectSession &project_session)
+        : project_session_owner(&project_session)
+        , api(project_api_session(project_session))
+        , project(project_session)
+        , scene_documents(project_session)
+        , tools(project_api_session(project_session))
+#ifndef NDEBUG
+        , dev_tools(project_api_session(project_session))
+        , preferences()
+        , commands(api, project, scene_documents, viewports, tools,
+                   preferences, dev_tools)
+#else
+        , preferences()
+        , commands(api, project, scene_documents, viewports, tools,
+                   preferences)
+#endif
+        , render(project_api_session(project_session), api) {
+      attach_document_lifecycle();
+      rebind(project_api_session(project_session));
+      install_tool_hooks();
+    }
+
+    void install_tool_hooks() {
       preferences.attach_commands(commands);
       tools.set_runtime_hooks(QuaderToolsRuntimeHooks{
           .commit_active_tool_preview =
@@ -43,8 +85,64 @@ public:
       });
     }
 
+    void attach_document_lifecycle() {
+      api.set_dirty_changed_callback([this](bool) {
+        QuaderSceneDocumentsApiInternalAccess::publish_dirty_changed(
+            scene_documents);
+      });
+      dirty_sync_subscription = events.subscribe(
+          quader_event::kSceneDirtyChanged,
+          [this](const QuaderEvent &) { api.synchronize_dirty_state(); });
+      QuaderSceneDocumentsApiInternalAccess::attach_events(scene_documents,
+                                                           events);
+      QuaderProjectApiInternalAccess::attach_events(project, events);
+      QuaderProjectApiInternalAccess::attach_scene_documents(project,
+                                                              scene_documents);
+      const auto callback = [this](QuaderApiSession session) {
+        rebind(session);
+      };
+      QuaderSceneDocumentsApiInternalAccess::set_binding_changed_callback(
+          scene_documents, callback);
+      QuaderProjectApiInternalAccess::set_binding_changed_callback(project,
+                                                                   callback);
+    }
+
+    void rebind(QuaderApiSession session) {
+      SceneSession &scene =
+          QuaderApiSessionInternalAccess::scene_session(session);
+      std::uint64_t binding_identity = 1u;
+      std::uint64_t activation_generation = 1u;
+      if (project_session_owner != nullptr) {
+        binding_identity = 0u;
+        activation_generation =
+            project_session_owner->activation_generation();
+        for (const std::unique_ptr<OpenSceneSession> &candidate :
+             project_session_owner->open_scenes()) {
+          if (candidate != nullptr && candidate->session.get() == &scene) {
+            binding_identity = candidate->session_id.packed();
+            break;
+          }
+        }
+      }
+      api.rebind(session, binding_identity);
+      project.rebind_session(session);
+      tools.rebind_session(session);
+#ifndef NDEBUG
+      dev_tools.rebind_session(session);
+#endif
+      render.rebind_session(session, binding_identity,
+                            activation_generation);
+      QuaderViewportApiRuntimeAccess::bind_scene_workspace(
+          viewports, scene.viewport_workspace());
+      if (host_scene_binding_changed) {
+        host_scene_binding_changed(session);
+      }
+    }
+
+    ProjectSession *project_session_owner = nullptr;
     QuaderApi api;
     QuaderProjectApi project;
+    QuaderSceneDocumentsApi scene_documents;
     QuaderViewportApi viewports;
     QuaderToolsApi tools;
 #ifndef NDEBUG
@@ -54,16 +152,30 @@ public:
     QuaderCommandsApi commands;
     QuaderUIApi ui;
     QuaderEventsApi events;
+    QuaderEventSubscription dirty_sync_subscription;
     QuaderRenderApi render;
+    std::function<void(QuaderApiSession)> host_scene_binding_changed;
 };
 
 QuaderEditorApi::QuaderEditorApi(QuaderApiSession session)
     : impl_(std::make_unique<Impl>(session)) {}
 
+QuaderEditorApi::QuaderEditorApi(ProjectSession &project_session)
+    : impl_(std::make_unique<Impl>(project_session)) {}
+
 QuaderEditorApi::~QuaderEditorApi() = default;
 
 QuaderEditorApi::QuaderEditorApi(QuaderEditorApi&&) noexcept = default;
 QuaderEditorApi& QuaderEditorApi::operator=(QuaderEditorApi&&) noexcept = default;
+
+void QuaderEditorApi::rebind(QuaderApiSession session) {
+  impl_->rebind(session);
+}
+
+void QuaderEditorApi::set_scene_binding_changed_callback(
+    std::function<void(QuaderApiSession)> callback) {
+  impl_->host_scene_binding_changed = std::move(callback);
+}
 
 QuaderApi& QuaderEditorApi::api() {
     return impl_->api;
@@ -79,6 +191,14 @@ QuaderProjectApi& QuaderEditorApi::project() {
 
 const QuaderProjectApi& QuaderEditorApi::project() const {
     return impl_->project;
+}
+
+QuaderSceneDocumentsApi &QuaderEditorApi::scene_documents() {
+  return impl_->scene_documents;
+}
+
+const QuaderSceneDocumentsApi &QuaderEditorApi::scene_documents() const {
+  return impl_->scene_documents;
 }
 
 QuaderSceneApi& QuaderEditorApi::scene() {
@@ -226,9 +346,9 @@ class QuaderStandaloneEditor::Impl final {
 public:
   Impl()
       : session(),
-        editor(QuaderApiSessionInternalAccess::from_project_session(session)) {}
+        editor(QuaderApiSessionInternalAccess::from_scene_session(session)) {}
 
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor;
 };
 

@@ -6,7 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <quader/modeling/modeling.hpp>
 
-#include <string>
+#include <cstddef>
+#include <vector>
 
 int main() {
   using namespace quader::modeling;
@@ -17,7 +18,7 @@ int main() {
     return 1;
   }
 
-  std::string serialized = quader.io().serialize_qdr(box.id());
+  std::vector<std::byte> serialized = quader.io().serialize_qdr(box.id());
   if (serialized.empty()) {
     return 2;
   }

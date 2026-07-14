@@ -41,6 +41,9 @@ public:
 
     [[nodiscard]] std::string active_tool() const;
 
+    /** Rebinds this host facade after the active scene session changes. */
+    void rebind_session(QuaderApiSession session) { session_ = session; }
+
   private:
     QuaderApiSession session_;
     QuaderToolsRuntimeHooks hooks_;

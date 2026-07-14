@@ -64,6 +64,10 @@ bool is_internal_api_header(const std::filesystem::path &path) {
   return relative == "src/api/quader_api_mutation_runner.hpp" ||
          relative == "src/api/quader_api_status_internal.hpp" ||
          relative == "src/api/quader_api_session_internal_access.hpp" ||
+         relative == "src/api/quader_events_api_internal_access.hpp" ||
+         relative == "src/api/quader_project_api_internal_access.hpp" ||
+         relative ==
+             "src/api/quader_scene_documents_api_internal_access.hpp" ||
          relative == "src/api/quader_api_type_conversions.hpp" ||
          relative == "src/api/quader_polygon_document_internal_access.hpp" ||
          relative ==
@@ -370,7 +374,7 @@ TEST(ProgrammaticApiGuardrailTests, ObjectHandleQueriesRouteThroughPublicQueryAp
   EXPECT_NE(handle.find("api_->query().compiled_object_mesh(ref_)"),
             std::string::npos);
   EXPECT_EQ(handle.find("QuaderApiSessionInternalAccess"), std::string::npos);
-  EXPECT_EQ(handle.find("ProjectSession"), std::string::npos);
+  EXPECT_EQ(handle.find("SceneSession"), std::string::npos);
   EXPECT_EQ(handle.find("ModelingSessionService"), std::string::npos);
 }
 
@@ -515,7 +519,7 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersAvoidInternalOwnerContracts)
         << relative;
 
     for (std::string_view token : {
-             "ProjectSession",
+             "SceneSession",
              "EditorHistoryService",
              "SceneDocument",
              "AssetRegistry",
@@ -625,7 +629,7 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersDoNotExposeMutableInternalOw
   }
 }
 
-TEST(ProgrammaticApiGuardrailTests, ReadOnlyApiPathsUseConstProjectSessionAccess) {
+TEST(ProgrammaticApiGuardrailTests, ReadOnlyApiPathsUseConstSceneSessionAccess) {
   const std::string internal_access = read_file(
       source_root() / "src/api/quader_api_session_internal_access.hpp");
   const std::string query_api =
@@ -635,13 +639,13 @@ TEST(ProgrammaticApiGuardrailTests, ReadOnlyApiPathsUseConstProjectSessionAccess
   const std::string history_api =
       read_file(source_root() / "src/api/quader_history_api.cpp");
 
-  EXPECT_NE(internal_access.find("const ProjectSession &"),
+  EXPECT_NE(internal_access.find("const SceneSession &"),
             std::string::npos);
-  EXPECT_NE(internal_access.find("read_project_session("),
+  EXPECT_NE(internal_access.find("read_scene_session("),
             std::string::npos);
   for (const std::string &source : {query_api, render_api, history_api}) {
-    EXPECT_NE(source.find("read_project_session("), std::string::npos);
-    EXPECT_EQ(source.find("ProjectSession &project_session("),
+    EXPECT_NE(source.find("read_scene_session("), std::string::npos);
+    EXPECT_EQ(source.find("SceneSession &scene_session("),
               std::string::npos);
   }
   EXPECT_NE(render_api.find(".read_view()"), std::string::npos);
@@ -649,7 +653,7 @@ TEST(ProgrammaticApiGuardrailTests, ReadOnlyApiPathsUseConstProjectSessionAccess
             std::string::npos);
   EXPECT_EQ(render_api.find("bridge.sync(build_render_scene_snapshot("),
             std::string::npos);
-  EXPECT_NE(render_api.find("bridge.sync(session.scene, session.assets)"),
+  EXPECT_NE(render_api.find("bridge.sync(session.scene, session.assets"),
             std::string::npos);
 }
 
@@ -910,7 +914,7 @@ TEST(ProgrammaticApiGuardrailTests, PublicSelectionApiDelegatesEntityEditPolicyT
   EXPECT_EQ(api_source.find("session_.scene().selected_entities()"),
             std::string::npos);
   EXPECT_NE(api_source.find(
-                "project_session(session_).selection().edit_scene_selection("),
+                "scene_session(session_).selection().edit_scene_selection("),
             std::string::npos);
   EXPECT_NE(service_source.find("EditorSelectionService::edit_scene_selection("),
             std::string::npos);
@@ -1617,78 +1621,32 @@ TEST(ProgrammaticApiGuardrailTests, DocumentBatchTransformPlanningUsesSimulatedL
             std::string::npos);
 }
 
-TEST(ProgrammaticApiGuardrailTests, RepeatedCodecAndCutHelpersStayWithTheirOwners) {
-  const std::string codecs_header =
-      read_file(source_root() / "src/io/qdr/qdr_project_codecs.hpp");
-  const std::string codecs_source =
-      read_file(source_root() / "src/io/qdr/qdr_project_codecs.cpp");
+TEST(ProgrammaticApiGuardrailTests,
+     BinaryQdrAndCutHelpersStayWithTheirOwners) {
   const std::string qdr_reader =
       read_file(source_root() / "src/io/qdr/qdr_document_reader.cpp");
   const std::string qdr_writer =
       read_file(source_root() / "src/io/qdr/qdr_document_writer.cpp");
+  const std::string qdr_debug_dump =
+      read_file(source_root() / "src/io/qdr/qdr_debug_dump.cpp");
   const std::string session_ops = read_file(
       source_root() / "src/editor/modeling/runtime/session_operations.cpp");
 
-  EXPECT_NE(codecs_header.find("qdr_scene_tone_mapping_name"), std::string::npos);
-  EXPECT_NE(codecs_header.find("qdr_scene_tone_mapping_from_name"),
+  for (const std::string *codec : {&qdr_reader, &qdr_writer}) {
+    EXPECT_EQ(codec->find("nlohmann"), std::string::npos);
+    EXPECT_EQ(codec->find("from_json"), std::string::npos);
+    EXPECT_EQ(codec->find("legacy"), std::string::npos);
+  }
+  EXPECT_NE(qdr_reader.find("read_qdr_binary_container"), std::string::npos);
+  EXPECT_NE(qdr_writer.find("encode_qdr_scene_binary"), std::string::npos);
+  EXPECT_NE(qdr_debug_dump.find("Developer inspection output"),
             std::string::npos);
-  EXPECT_NE(codecs_header.find("qdr_transform_component_to_json"),
-            std::string::npos);
-  EXPECT_NE(codecs_header.find("qdr_transform_component_from_json"),
-            std::string::npos);
-  EXPECT_NE(codecs_header.find("qdr_mesh_component_to_json"), std::string::npos);
-  EXPECT_NE(codecs_header.find("qdr_mesh_component_from_json"), std::string::npos);
-  EXPECT_NE(codecs_header.find("qdr_material_component_to_json"),
-            std::string::npos);
-  EXPECT_NE(codecs_header.find("qdr_material_component_from_json"),
-            std::string::npos);
-  EXPECT_NE(codecs_header.find("qdr_light_component_to_json"), std::string::npos);
-  EXPECT_NE(codecs_header.find("qdr_light_component_from_json"), std::string::npos);
-  EXPECT_NE(codecs_header.find("qdr_scene_settings_component_to_json"),
-            std::string::npos);
-  EXPECT_NE(codecs_header.find("qdr_scene_settings_component_from_json"),
-            std::string::npos);
-  EXPECT_NE(codecs_source.find("qdr_scene_tone_mapping_name"), std::string::npos);
-  EXPECT_NE(codecs_source.find("qdr_scene_tone_mapping_from_name"),
-            std::string::npos);
-  EXPECT_NE(codecs_source.find("qdr_transform_component_to_json"),
-            std::string::npos);
-  EXPECT_NE(codecs_source.find("qdr_scene_settings_component_from_json"),
-            std::string::npos);
-  EXPECT_EQ(qdr_reader.find("SceneToneMapping sceneToneMappingFromName"),
-            std::string::npos);
-  EXPECT_EQ(qdr_reader.find("SceneToneMapping scene_tone_mapping_from_name"),
-            std::string::npos);
-  EXPECT_EQ(qdr_writer.find("sceneToneMappingName(SceneToneMapping"),
-            std::string::npos);
-  EXPECT_EQ(qdr_writer.find("scene_tone_mapping_name(SceneToneMapping"),
-            std::string::npos);
-  EXPECT_EQ(qdr_reader.find("TransformComponent transform_component_from_json"),
-            std::string::npos);
-  EXPECT_EQ(qdr_reader.find("transformComponentFromJson"), std::string::npos);
-  EXPECT_EQ(qdr_reader.find("MeshComponent mesh_component_from_json"),
-            std::string::npos);
-  EXPECT_EQ(qdr_reader.find("meshComponentFromJson"), std::string::npos);
-  EXPECT_EQ(qdr_reader.find("MaterialComponent material_component_from_json"),
-            std::string::npos);
-  EXPECT_EQ(qdr_reader.find("materialComponentFromJson"), std::string::npos);
-  EXPECT_EQ(qdr_reader.find("LightComponent light_component_from_json"),
-            std::string::npos);
-  EXPECT_EQ(qdr_reader.find("lightComponentFromJson"), std::string::npos);
-  EXPECT_EQ(qdr_writer.find(
-                "nlohmann::ordered_json transform_component_to_json"),
-            std::string::npos);
-  EXPECT_EQ(qdr_writer.find("transformComponentToJson"), std::string::npos);
-  EXPECT_EQ(qdr_writer.find("nlohmann::ordered_json mesh_component_to_json"),
-            std::string::npos);
-  EXPECT_EQ(qdr_writer.find("meshComponentToJson"), std::string::npos);
-  EXPECT_EQ(qdr_writer.find(
-                "nlohmann::ordered_json material_component_to_json"),
-            std::string::npos);
-  EXPECT_EQ(qdr_writer.find("materialComponentToJson"), std::string::npos);
-  EXPECT_EQ(qdr_writer.find("nlohmann::ordered_json light_component_to_json"),
-            std::string::npos);
-  EXPECT_EQ(qdr_writer.find("lightComponentToJson"), std::string::npos);
+  EXPECT_EQ(qdr_debug_dump.find("from_json"), std::string::npos);
+  EXPECT_EQ(qdr_debug_dump.find("LegacyDefault"), std::string::npos);
+  EXPECT_FALSE(std::filesystem::exists(
+      source_root() / "src/io/qdr/qdr_project_codecs.cpp"));
+  EXPECT_FALSE(std::filesystem::exists(
+      source_root() / "src/io/qdr/qdr_project_codecs.hpp"));
   EXPECT_EQ(session_ops.find("to_plane_cut_mode("), std::string::npos);
   EXPECT_EQ(session_ops.find("plane_cut_request_from_state("),
             std::string::npos);
@@ -1702,9 +1660,8 @@ TEST(ProgrammaticApiGuardrailTests, EditorHistoryBoundaryHidesCoreUndoRedoManage
   const std::vector<std::filesystem::path> editor_history_clients = {
       source_root() / "src/api/quader_api.cpp",
       source_root() / "src/api/quader_scene_api.cpp",
-      source_root() / "src/scene/document/project_session.hpp",
-      source_root() / "src/editor/session/project_session.hpp",
-      source_root() / "src/editor/session/project_session.cpp",
+      source_root() / "src/editor/session/scene_session.hpp",
+      source_root() / "src/editor/session/scene_session.cpp",
       source_root() / "src/editor/commands/document_command_service.hpp",
       source_root() / "src/editor/commands/document_command_service.cpp",
       source_root() /
@@ -1732,20 +1689,14 @@ TEST(ProgrammaticApiGuardrailTests, EditorHistoryBoundaryHidesCoreUndoRedoManage
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicBehaviorTestsUseApiOrScenarioDsl) {
-    const std::vector<std::string_view> forbidden = {
+    const std::vector<std::string_view> forbidden_substrings = {
             "\"editor/commands/",
             "\"editor/modeling/services/modeling_session_service.hpp\"",
             "\"editor/selection/",
             "\"editor/tools/",
             "\"api/quader_api_session_internal_access.hpp\"",
             "\"scene/scene_document.hpp\"",
-            "\"scene/document/project_session.hpp\"",
-            "ModelingSessionService",
-            "DocumentCommandService",
-            "SceneDocument",
-            "AssetRegistry",
-            "ProjectSession",
-            "QuaderApiSessionInternalAccess",
+            "\"scene/document/scene_session.hpp\"",
             "session.scene().",
             "session.selection().",
             "session.modeling().",
@@ -1757,12 +1708,30 @@ TEST(ProgrammaticApiGuardrailTests, PublicBehaviorTestsUseApiOrScenarioDsl) {
             "execute_instant_operation",
             "execute_context_action",
     };
+    const std::vector<std::string_view> forbidden_identifiers = {
+            "ModelingSessionService",
+            "DocumentCommandService",
+            "SceneDocument",
+            "AssetRegistry",
+            "SceneSession",
+            "QuaderApiSessionInternalAccess",
+    };
 
     for (const std::filesystem::path &file : public_behavior_test_files()) {
       const std::string source = read_file(file);
       const std::string relative = normalized_relative(file);
 
-      for (const std::string &line : lines_containing(source, forbidden)) {
+      for (const std::string &line : split_lines(source)) {
+        const bool contains_forbidden_identifier =
+            std::any_of(forbidden_identifiers.begin(),
+                        forbidden_identifiers.end(),
+                        [&](std::string_view identifier) {
+                          return contains_identifier_token(line, identifier);
+                        });
+        if (!contains_any(line, forbidden_substrings) &&
+            !contains_forbidden_identifier) {
+          continue;
+        }
         EXPECT_TRUE(allowed_public_behavior_harness_use(relative, line))
             << relative << ": " << line;
       }
@@ -1770,9 +1739,9 @@ TEST(ProgrammaticApiGuardrailTests, PublicBehaviorTestsUseApiOrScenarioDsl) {
 
     const std::string behavior_scenario =
         read_file(source_root() / "tests/support/behavior_scenario.hpp");
-    EXPECT_EQ(behavior_scenario.find("ProjectSession& session()"),
+    EXPECT_EQ(behavior_scenario.find("SceneSession& session()"),
               std::string::npos);
-    EXPECT_EQ(behavior_scenario.find("const ProjectSession& session()"),
+    EXPECT_EQ(behavior_scenario.find("const SceneSession& session()"),
               std::string::npos);
     EXPECT_NE(behavior_scenario.find("BehaviorWhen &dispatch_viewport_shortcut"),
               std::string::npos);
@@ -1856,8 +1825,8 @@ TEST(ProgrammaticApiGuardrailTests, PublicExamplesDoNotStartFromInternalOwnerHea
             "render/scene_render_bridge.hpp",
             "ui/ui_system.hpp",
             "platform/platform_window.hpp",
-            "scene/document/project_session.hpp",
-            "editor/session/project_session.hpp",
+            "scene/document/scene_session.hpp",
+            "editor/session/scene_session.hpp",
             "core/undo_redo_manager.hpp",
             "editor/selection/",
             "mesh/polygon/",
@@ -1870,7 +1839,7 @@ TEST(ProgrammaticApiGuardrailTests, PublicExamplesDoNotStartFromInternalOwnerHea
             "EditorSession",
             "SceneRenderBridge",
             "UndoRedoManager",
-            "ProjectSession",
+            "SceneSession",
         }))
         << relative;
   }

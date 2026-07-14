@@ -67,20 +67,47 @@ void SceneRenderBridge::shutdown() {
 
   previous_scene_snapshot_ = {};
   has_previous_scene_snapshot_ = false;
+  scene_binding_ = {};
+  has_scene_binding_ = false;
   engine_ = nullptr;
   scene_ = nullptr;
 }
 
+void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
+  if (has_scene_binding_ && scene_binding_ == scene_binding) {
+    return;
+  }
+
+  scene_binding_ = scene_binding;
+  has_scene_binding_ = true;
+  previous_scene_snapshot_ = {};
+  has_previous_scene_snapshot_ = false;
+  ++tool_preview_submission_revision_;
+  // Preview and viewport-overlay proxies may own material instances that
+  // still reference the outgoing scene's texture cache. Destroy them before
+  // the scene sync service invalidates those textures.
+  tool_preview_cache_.clear();
+  for (std::size_t index = 0u;
+       index < OverlayRenderableCache::kMaxViewportOverlaySlots; ++index) {
+    overlay_cache_.clear_slot(index);
+  }
+  if (sync_service_.initialized()) {
+    sync_service_.bind_scene(scene_binding);
+  }
+}
+
 void SceneRenderBridge::sync(const SceneDocument &document,
                              const AssetRegistry &assets,
-                             std::uint64_t frame_index) {
+                             std::uint64_t frame_index,
+                             RenderSceneBindingKey scene_binding) {
   QDR_PROFILE_FUNCTION();
   if (!engine_ || !scene_ || !sync_service_.initialized()) {
     return;
   }
+  bind_scene(scene_binding);
   if (has_previous_scene_snapshot_ && render_scene_snapshot_matches_sources(
                                           previous_scene_snapshot_, document,
-                                          assets)) {
+                                          assets, scene_binding)) {
     // Keep draining retired GPU proxies while making unchanged camera-only
     // frames O(1) at the scene-extraction boundary.
     (void)sync_service_.sync(previous_scene_snapshot_);
@@ -88,7 +115,8 @@ void SceneRenderBridge::sync(const SceneDocument &document,
   }
   if (has_previous_scene_snapshot_ &&
       try_refresh_render_scene_snapshot_transforms(
-          previous_scene_snapshot_, document, assets, frame_index)) {
+          previous_scene_snapshot_, document, assets, frame_index,
+          scene_binding)) {
     (void)sync_service_.sync(previous_scene_snapshot_);
     return;
   }
@@ -96,7 +124,8 @@ void SceneRenderBridge::sync(const SceneDocument &document,
       document, assets,
       {.previous = has_previous_scene_snapshot_ ? &previous_scene_snapshot_
                                                 : nullptr,
-       .frame_index = frame_index});
+       .frame_index = frame_index,
+       .scene_binding = scene_binding});
   sync(std::move(snapshot));
 }
 
@@ -105,6 +134,7 @@ void SceneRenderBridge::sync(RenderSceneSnapshot snapshot) {
   if (!engine_ || !scene_ || !sync_service_.initialized()) {
     return;
   }
+  bind_scene(snapshot.scene_binding);
   (void)sync_service_.sync(snapshot);
   previous_scene_snapshot_ = std::move(snapshot);
   has_previous_scene_snapshot_ = true;
@@ -123,6 +153,7 @@ void SceneRenderBridge::sync_scene_asset_overlays(
     const RenderOverlaySelectedObjectSnapshot &selected_object_snapshot,
     const RenderOverlaySceneWireframeSnapshot &wireframe_snapshot) {
   QDR_PROFILE_FUNCTION();
+  bind_scene(selected_object_snapshot.scene_binding);
   if (engine_ && scene_ && selected_object_overlay_cache_.initialized()) {
     selected_object_overlay_cache_.sync(selected_object_snapshot);
   }

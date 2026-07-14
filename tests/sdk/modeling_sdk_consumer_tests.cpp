@@ -11,14 +11,42 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <optional>
+#include <span>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace {
 
 using namespace quader::modeling;
+
+static_assert(std::is_same_v<
+              decltype(serialize_qdr_document(
+                  std::declval<const QdrDocumentDto &>())),
+              Result<std::vector<std::byte>>>);
+static_assert(std::is_same_v<
+              decltype(deserialize_qdr_document(
+                  std::declval<std::span<const std::byte>>())),
+              Result<QdrDocumentDto>>);
+static_assert(std::is_same_v<
+              decltype(serialize_qdr_authored_topology(
+                  std::declval<const PolygonDocument &>())),
+              Result<std::vector<std::byte>>>);
+static_assert(std::is_same_v<
+              decltype(deserialize_qdr_authored_topology(
+                  std::declval<std::span<const std::byte>>())),
+              Result<PolygonDocument>>);
+static_assert(std::is_same_v<
+              decltype(std::declval<const IoApi &>().serialize_qdr()),
+              std::vector<std::byte>>);
+static_assert(std::is_same_v<
+              decltype(std::declval<const CheckedIoApi &>().serialize_qdr()),
+              Result<std::vector<std::byte>>>);
 
 /**
  * Stores SDK mesh bounds for deterministic golden checks.
@@ -72,6 +100,277 @@ authored_position(const AuthoredPolygonPayload &payload, VertexId vertex) {
   return std::nullopt;
 }
 
+void write_u32_le(std::vector<std::byte> &bytes, std::size_t offset,
+                  std::uint32_t value) {
+  ASSERT_LE(offset + 4U, bytes.size());
+  for (unsigned int index = 0; index < 4; ++index) {
+    bytes[offset + index] =
+        std::byte{static_cast<std::uint8_t>(value >> (index * 8U))};
+  }
+}
+
+[[nodiscard]] std::vector<std::byte> byte_string(std::string_view value) {
+  std::vector<std::byte> bytes;
+  bytes.reserve(value.size());
+  for (const char item : value) {
+    bytes.push_back(std::byte{static_cast<std::uint8_t>(item)});
+  }
+  return bytes;
+}
+
+[[nodiscard]] bool has_magic(std::span<const std::byte> bytes,
+                             std::string_view magic) {
+  if (bytes.size() < magic.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < magic.size(); ++index) {
+    if (bytes[index] !=
+        std::byte{static_cast<std::uint8_t>(magic[index])}) {
+      return false;
+    }
+  }
+  return true;
+}
+
+TEST(ModelingSdkConsumerTests,
+     BinaryQdrPreservesMetadataGenerationsAndPolygonStateDeterministically) {
+  Result<PolygonDocument> polygon_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(polygon_result.ok()) << polygon_result.error_message();
+  PolygonDocument polygon = std::move(polygon_result).value();
+  ASSERT_FALSE(polygon.face_ids().empty());
+  ASSERT_FALSE(polygon.edge_ids().empty());
+  ASSERT_TRUE(polygon.select_face(polygon.face_ids().front()).ok());
+  ASSERT_TRUE(polygon.shade_selected_faces_smooth().ok());
+  ASSERT_TRUE(polygon.select_edge(polygon.edge_ids().front()).ok());
+  ASSERT_TRUE(polygon.harden_selected_edge_normals().ok());
+  ASSERT_TRUE(polygon.select_edge(polygon.edge_ids().back()).ok());
+
+  std::string material_name{"Mat\0erial", 9};
+  material_name.append("\xC3\xA9", 2);
+  const std::string object_name{"Mesh\0A", 6};
+  const MaterialId material_id = make_id<MaterialTag>(17U, 3U);
+  const ObjectId object_id = make_id<ObjectTag>(41U, 9U);
+
+  QdrDocumentDto document;
+  document.materials.push_back({.id = material_id, .name = material_name});
+  document.objects.push_back({
+      .id = object_id,
+      .material = material_id,
+      .selected = true,
+      .name = object_name,
+      .document = polygon,
+  });
+  document.active_object = object_id;
+  document.selection_mode = QdrSelectionMode::Edge;
+  document.content_revision = 101U;
+  document.selection_revision = 202U;
+
+  Result<std::vector<std::byte>> first = serialize_qdr_document(document);
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  Result<std::vector<std::byte>> second = serialize_qdr_document(document);
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  EXPECT_EQ(first.value(), second.value());
+  EXPECT_TRUE(has_magic(first.value(), "QDRM"));
+  EXPECT_FALSE(has_magic(first.value(), "{"));
+
+  Result<QdrDocumentDto> decoded = deserialize_qdr_document(first.value());
+  ASSERT_TRUE(decoded.ok()) << decoded.error_message();
+  ASSERT_EQ(decoded.value().materials.size(), 1U);
+  ASSERT_EQ(decoded.value().objects.size(), 1U);
+  EXPECT_EQ(decoded.value().materials.front().id, material_id);
+  EXPECT_EQ(decoded.value().materials.front().name, material_name);
+  EXPECT_EQ(decoded.value().objects.front().id, object_id);
+  EXPECT_EQ(decoded.value().objects.front().material, material_id);
+  EXPECT_TRUE(decoded.value().objects.front().selected);
+  EXPECT_EQ(decoded.value().objects.front().name, object_name);
+  EXPECT_EQ(decoded.value().active_object, object_id);
+  EXPECT_EQ(decoded.value().selection_mode, QdrSelectionMode::Edge);
+  EXPECT_EQ(decoded.value().content_revision, 101U);
+  EXPECT_EQ(decoded.value().selection_revision, 202U);
+
+  const PolygonDocument &decoded_polygon = decoded.value().objects.front().document;
+  EXPECT_EQ(decoded_polygon.vertex_count(), polygon.vertex_count());
+  EXPECT_EQ(decoded_polygon.face_count(), polygon.face_count());
+  EXPECT_EQ(decoded_polygon.content_revision(), polygon.content_revision());
+  EXPECT_EQ(decoded_polygon.selection_revision(), polygon.selection_revision());
+  const PolygonSelectionSnapshot selection = decoded_polygon.selection();
+  EXPECT_EQ(selection.kind, SelectionKind::Edge);
+  ASSERT_TRUE(selection.has_active);
+  EXPECT_EQ(selection.active_edge, polygon.selection().active_edge);
+  EXPECT_EQ(selection.edges, polygon.selection().edges);
+
+  Result<std::vector<std::byte>> canonical =
+      serialize_qdr_document(decoded.value());
+  ASSERT_TRUE(canonical.ok()) << canonical.error_message();
+  EXPECT_EQ(canonical.value(), first.value());
+}
+
+TEST(ModelingSdkConsumerTests,
+     AuthoredTopologyPayloadIsSelectionNeutralAndRoundTripsDeterministically) {
+  Result<PolygonDocument> polygon_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(polygon_result.ok()) << polygon_result.error_message();
+  PolygonDocument polygon = std::move(polygon_result).value();
+  ASSERT_TRUE(polygon.select_edge(polygon.edge_ids().front()).ok());
+
+  Result<std::vector<std::byte>> before =
+      serialize_qdr_authored_topology(polygon);
+  ASSERT_TRUE(before.ok()) << before.error_message();
+  ASSERT_TRUE(has_magic(before.value(), "QGEO"));
+
+  ASSERT_TRUE(polygon.select_edge(polygon.edge_ids().back()).ok());
+  Result<std::vector<std::byte>> after_selection =
+      serialize_qdr_authored_topology(polygon);
+  ASSERT_TRUE(after_selection.ok()) << after_selection.error_message();
+  EXPECT_EQ(after_selection.value(), before.value());
+
+  Result<PolygonDocument> decoded =
+      deserialize_qdr_authored_topology(before.value());
+  ASSERT_TRUE(decoded.ok()) << decoded.error_message();
+  EXPECT_TRUE(decoded.value().selection().vertices.empty());
+  EXPECT_TRUE(decoded.value().selection().edges.empty());
+  EXPECT_TRUE(decoded.value().selection().faces.empty());
+  EXPECT_FALSE(decoded.value().selection().has_active);
+  EXPECT_EQ(decoded.value().content_revision(), 1U);
+  EXPECT_EQ(decoded.value().selection_revision(), 0U);
+
+  Result<std::vector<std::byte>> reencoded =
+      serialize_qdr_authored_topology(decoded.value());
+  ASSERT_TRUE(reencoded.ok()) << reencoded.error_message();
+  EXPECT_EQ(reencoded.value(), before.value());
+
+  ASSERT_TRUE(decoded.value().select_all_vertices().ok());
+  ASSERT_TRUE(decoded.value().translate_selection({1.0F, 0.0F, 0.0F}).ok());
+  Result<std::vector<std::byte>> changed =
+      serialize_qdr_authored_topology(decoded.value());
+  ASSERT_TRUE(changed.ok()) << changed.error_message();
+  EXPECT_NE(changed.value(), before.value());
+}
+
+TEST(ModelingSdkConsumerTests,
+     BinaryQdrSupportsEmptyDocumentsAndEmptyAuthoredTopology) {
+  const QdrDocumentDto empty_document;
+  Result<std::vector<std::byte>> encoded_document =
+      serialize_qdr_document(empty_document);
+  ASSERT_TRUE(encoded_document.ok()) << encoded_document.error_message();
+  EXPECT_TRUE(has_magic(encoded_document.value(), "QDRM"));
+  Result<QdrDocumentDto> decoded_document =
+      deserialize_qdr_document(encoded_document.value());
+  ASSERT_TRUE(decoded_document.ok()) << decoded_document.error_message();
+  EXPECT_TRUE(decoded_document.value().objects.empty());
+  EXPECT_TRUE(decoded_document.value().materials.empty());
+
+  const PolygonDocument empty_polygon;
+  Result<std::vector<std::byte>> encoded_topology =
+      serialize_qdr_authored_topology(empty_polygon);
+  ASSERT_TRUE(encoded_topology.ok()) << encoded_topology.error_message();
+  Result<PolygonDocument> decoded_topology =
+      deserialize_qdr_authored_topology(encoded_topology.value());
+  ASSERT_TRUE(decoded_topology.ok()) << decoded_topology.error_message();
+  EXPECT_EQ(decoded_topology.value().vertex_count(), 0U);
+  EXPECT_EQ(decoded_topology.value().face_count(), 0U);
+}
+
+TEST(ModelingSdkConsumerTests,
+     BinaryQdrRejectsLegacyTextTruncationBadVersionsAndMalformedPackedArrays) {
+  Result<QdrDocumentDto> legacy = deserialize_qdr_document(
+      byte_string(R"json({"format":"quader.qdr","version":3})json"));
+  ASSERT_FALSE(legacy.ok());
+  ASSERT_FALSE(legacy.error().diagnostics.empty());
+  EXPECT_EQ(legacy.error().diagnostics.front().code,
+            "qdr.binary.unsupported_format");
+
+  Result<PolygonDocument> polygon_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(polygon_result.ok()) << polygon_result.error_message();
+  Result<std::vector<std::byte>> topology =
+      serialize_qdr_authored_topology(polygon_result.value());
+  ASSERT_TRUE(topology.ok()) << topology.error_message();
+  ASSERT_GE(topology.value().size(), 56U);
+  EXPECT_EQ(std::to_integer<std::uint8_t>(topology.value()[4]), 1U);
+  EXPECT_EQ(std::to_integer<std::uint8_t>(topology.value()[5]), 0U);
+  EXPECT_EQ(std::to_integer<std::uint8_t>(topology.value()[8]), 56U);
+
+  for (std::size_t size = 0; size < topology.value().size(); ++size) {
+    SCOPED_TRACE(size);
+    EXPECT_FALSE(deserialize_qdr_authored_topology(
+                     std::span<const std::byte>{topology.value().data(), size})
+                     .ok());
+  }
+
+  std::vector<std::byte> bad_version = topology.value();
+  write_u32_le(bad_version, 4, 2U);
+  EXPECT_FALSE(deserialize_qdr_authored_topology(bad_version).ok());
+
+  std::vector<std::byte> huge_vertex_count = topology.value();
+  write_u32_le(huge_vertex_count, 32,
+               std::numeric_limits<std::uint32_t>::max());
+  EXPECT_FALSE(deserialize_qdr_authored_topology(huge_vertex_count).ok());
+
+  std::vector<std::byte> nonfinite_position = topology.value();
+  const std::size_t positions_offset =
+      56U + polygon_result.value().vertex_count() * 4U;
+  write_u32_le(nonfinite_position, positions_offset, 0x7FC00000U);
+  EXPECT_FALSE(deserialize_qdr_authored_topology(nonfinite_position).ok());
+
+  std::vector<std::byte> bad_face_offsets = topology.value();
+  const std::size_t face_offsets_offset =
+      56U + polygon_result.value().vertex_count() * 16U +
+      polygon_result.value().face_count() * 4U;
+  write_u32_le(bad_face_offsets, face_offsets_offset + 4U, 0U);
+  EXPECT_FALSE(deserialize_qdr_authored_topology(bad_face_offsets).ok());
+
+  std::vector<std::byte> trailing = topology.value();
+  trailing.push_back(std::byte{0});
+  EXPECT_FALSE(deserialize_qdr_authored_topology(trailing).ok());
+
+  Result<std::vector<std::byte>> empty_document =
+      serialize_qdr_document(QdrDocumentDto{});
+  ASSERT_TRUE(empty_document.ok()) << empty_document.error_message();
+  std::vector<std::byte> bad_checksum = empty_document.value();
+  bad_checksum[48] ^= std::byte{1};
+  EXPECT_FALSE(deserialize_qdr_document(bad_checksum).ok());
+
+  std::uint32_t random_state = 0xC0DEC0DEU;
+  for (std::size_t attempt = 0; attempt < 64; ++attempt) {
+    std::vector<std::byte> random_bytes(attempt);
+    for (std::byte &value : random_bytes) {
+      random_state = random_state * 1664525U + 1013904223U;
+      value = std::byte{static_cast<std::uint8_t>(random_state >> 24U)};
+    }
+    EXPECT_FALSE(deserialize_qdr_document(random_bytes).ok());
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     BinaryQdrRejectsMismatchedStableIdGenerationsAndDuplicateIds) {
+  Result<PolygonDocument> polygon = PolygonDocument::make_box({});
+  ASSERT_TRUE(polygon.ok()) << polygon.error_message();
+
+  QdrDocumentDto mismatched_material;
+  mismatched_material.materials.push_back(
+      {.id = make_id<MaterialTag>(4U, 2U), .name = "Material"});
+  mismatched_material.objects.push_back({
+      .id = make_id<ObjectTag>(1U, 5U),
+      .material = make_id<MaterialTag>(4U, 3U),
+      .name = "Object",
+      .document = polygon.value(),
+  });
+  mismatched_material.active_object = mismatched_material.objects.front().id;
+  EXPECT_FALSE(serialize_qdr_document(mismatched_material).ok());
+
+  QdrDocumentDto duplicate_objects;
+  duplicate_objects.objects.push_back({
+      .id = make_id<ObjectTag>(7U, 1U),
+      .name = "First",
+      .document = polygon.value(),
+  });
+  duplicate_objects.objects.push_back({
+      .id = make_id<ObjectTag>(7U, 2U),
+      .name = "Second",
+      .document = polygon.value(),
+  });
+  EXPECT_FALSE(serialize_qdr_document(duplicate_objects).ok());
+}
+
 TEST(ModelingSdkConsumerTests,
      UmbrellaHeaderRunsStandaloneDocumentOperationAndQdrRoundTrip) {
   Result<PolygonDocument> document_result =
@@ -95,7 +394,8 @@ TEST(ModelingSdkConsumerTests,
   EXPECT_FALSE(mesh.value().vertices.empty());
   EXPECT_FALSE(mesh.value().indices.empty());
 
-  Result<std::string> qdr = serialize_single_document_as_qdr(document);
+  Result<std::vector<std::byte>> qdr =
+      serialize_single_document_as_qdr(document);
   ASSERT_TRUE(qdr.ok()) << qdr.error_message();
   Result<QdrDocumentDto> round_trip = deserialize_qdr_document(qdr.value());
   ASSERT_TRUE(round_trip.ok()) << round_trip.error_message();
@@ -134,7 +434,8 @@ TEST(ModelingSdkConsumerTests, GoldenBoxMeshFixtureStaysDeterministic) {
   expect_vec3_near(bounds->min, {0.0F, 0.0F, 0.0F});
   expect_vec3_near(bounds->max, {2.0F, 3.0F, 4.0F});
 
-  Result<std::string> qdr = serialize_single_document_as_qdr(document);
+  Result<std::vector<std::byte>> qdr =
+      serialize_single_document_as_qdr(document);
   ASSERT_TRUE(qdr.ok()) << qdr.error_message();
   Result<QdrDocumentDto> round_trip = deserialize_qdr_document(qdr.value());
   ASSERT_TRUE(round_trip.ok()) << round_trip.error_message();
@@ -215,7 +516,8 @@ TEST(ModelingSdkConsumerTests,
     ASSERT_FALSE(mesh.value().vertices.empty());
     ASSERT_FALSE(mesh.value().indices.empty());
 
-    Result<std::string> qdr = serialize_single_document_as_qdr(document);
+    Result<std::vector<std::byte>> qdr =
+        serialize_single_document_as_qdr(document);
     ASSERT_TRUE(qdr.ok()) << qdr.error_message();
     Result<QdrDocumentDto> round_trip = deserialize_qdr_document(qdr.value());
     ASSERT_TRUE(round_trip.ok()) << round_trip.error_message();
@@ -347,7 +649,7 @@ TEST(ModelingSdkConsumerTests,
   EXPECT_FALSE(mesh_payload.vertices.empty());
   EXPECT_FALSE(mesh_payload.indices.empty());
 
-  std::string qdr = quader.io().serialize_qdr(mesh.id());
+  std::vector<std::byte> qdr = quader.io().serialize_qdr(mesh.id());
   ASSERT_FALSE(qdr.empty());
   MeshHandle imported = quader.io().deserialize_qdr_object(qdr, "Imported");
   ASSERT_TRUE(imported.valid());

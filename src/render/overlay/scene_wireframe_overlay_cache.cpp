@@ -390,6 +390,7 @@ void SceneWireframeOverlayCache::shutdown() {
     }
     entries_.clear();
     synced_states_.clear();
+    synced_scene_binding_ = {};
     synced_scene_revision_ = 0;
     synced_asset_revision_ = 0;
     synced_wire_style_signature_ = 0;
@@ -408,6 +409,20 @@ void SceneWireframeOverlayCache::sync(
     return;
   }
 
+  if (has_synced_ && synced_scene_binding_ != snapshot.scene_binding) {
+    for (auto &[entity_id, entry] : entries_) {
+      (void)entity_id;
+      destroy_entry(entry);
+    }
+    entries_.clear();
+    synced_states_.clear();
+    synced_scene_binding_ = {};
+    synced_scene_revision_ = 0;
+    synced_asset_revision_ = 0;
+    synced_wire_style_signature_ = 0;
+    has_synced_ = false;
+  }
+
   set_layer_mask(snapshot.layer_mask);
   if (snapshot.layer_mask == 0u) {
     return;
@@ -421,7 +436,8 @@ void SceneWireframeOverlayCache::sync(
   const bool wire_style_changed = scene_wireframe_style_changed(
       has_synced_, synced_wire_style_signature_, snapshot.style);
 
-  if (has_synced_ && synced_scene_revision_ == snapshot.scene_revision &&
+  if (has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
+      synced_scene_revision_ == snapshot.scene_revision &&
       synced_asset_revision_ == snapshot.asset_revision &&
       !clip_planes_changed && !wire_style_changed) {
     return;
@@ -429,10 +445,12 @@ void SceneWireframeOverlayCache::sync(
 
   const std::vector<WireframeEntityState> states =
       wireframe_entity_states(snapshot);
-  if (has_synced_ && !wire_style_changed &&
+  if (has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
+      !wire_style_changed &&
       synced_asset_revision_ == snapshot.asset_revision &&
       states == synced_states_) {
     update_entry_transforms(snapshot);
+    synced_scene_binding_ = snapshot.scene_binding;
     synced_scene_revision_ = snapshot.scene_revision;
     return;
   }
@@ -471,6 +489,7 @@ void SceneWireframeOverlayCache::sync(
 
   remove_except(live_entities);
   synced_states_ = states;
+  synced_scene_binding_ = snapshot.scene_binding;
   synced_scene_revision_ = snapshot.scene_revision;
   synced_asset_revision_ = snapshot.asset_revision;
   synced_wire_style_signature_ = snapshot.style.wire_signature;

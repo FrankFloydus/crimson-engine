@@ -44,6 +44,7 @@ public:
              mesh_cache_ != nullptr && material_binding_ != nullptr;
     }
 
+    void bind_scene(RenderSceneBindingKey scene_binding);
     bool sync(const RenderSceneSnapshot &snapshot);
     bool render_asset_revisions_changed(
         const RenderSceneSnapshot &snapshot) const;
@@ -60,6 +61,8 @@ public:
     MaterialBindingService *material_binding_ = nullptr;
     std::uint64_t synced_revision_ = 0;
     std::uint64_t synced_asset_revision_ = 0;
+    RenderSceneBindingKey synced_scene_binding_;
+    bool has_scene_binding_ = false;
     bool has_synced_ = false;
     LightRenderableCache light_cache_;
 };

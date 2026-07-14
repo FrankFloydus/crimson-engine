@@ -7,7 +7,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "mesh/polygon/document_model.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
@@ -482,11 +482,11 @@ sorted_entities(std::vector<quader::EntityId> entities) {
   return entities;
 }
 
-FixtureCounts analyze_fixture(const quader::ProjectDocument &document) {
-  const quader::ProjectDocumentIdentityReport identity =
+FixtureCounts analyze_fixture(const quader::SceneContentDocument &document) {
+  const quader::SceneContentDocumentIdentityReport identity =
       document.validate_object_identity_invariants();
   require(identity.ok(), "Fixture object identity validation failed.");
-  const quader::ProjectDocumentAssetReferenceReport references =
+  const quader::SceneContentDocumentAssetReferenceReport references =
       document.validate_asset_references();
   require(references.ok(), "Fixture asset-reference validation failed.");
 
@@ -879,7 +879,7 @@ void hash_overlay_plan(std::uint64_t &checksum,
 }
 
 OverlayRun run_overlay_workload(quader::QuaderEditorApi &editor,
-                                quader::ProjectSession &session,
+                                quader::SceneSession &session,
                                 const FixtureCounts &fixture,
                                 int frame_count) {
   const quader::QuaderApiVoidResult selected = editor.selection().select_all();
@@ -1438,8 +1438,8 @@ BenchmarkReport run_benchmark(const BenchmarkOptions &options) {
               report.fixture.selectable_entities,
           "Fixture already has every eligible entity selected.");
 
-  quader::ProjectSessionService sessions;
-  std::unique_ptr<quader::ProjectSession> session;
+  quader::SceneSessionService sessions;
+  std::unique_ptr<quader::SceneSession> session;
   const Clock::time_point open_begin = Clock::now();
   session = sessions.open_session(std::move(loaded.document));
   const Clock::time_point open_end = Clock::now();
@@ -1448,7 +1448,7 @@ BenchmarkReport run_benchmark(const BenchmarkOptions &options) {
       {elapsed_milliseconds(open_begin, open_end)});
 
   quader::QuaderEditorApi editor(
-      quader::QuaderApiSessionInternalAccess::from_project_session(*session));
+      quader::QuaderApiSessionInternalAccess::from_scene_session(*session));
   report.session_initial_selection_count =
       session->scene().selected_entities().size();
   const quader::QuaderApiVoidResult object_mode =

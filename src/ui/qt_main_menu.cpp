@@ -250,14 +250,34 @@ struct QtMainMenu::Impl {
   void build_file_menu() {
     QMenu *menu = add_top_level_menu("ui.menu.file", "File");
     menu->setObjectName(QStringLiteral("menu_file"));
-    add_command_action(*menu, quader_command::kProjectNew, "ui.menu.file.new",
-                       "New");
-    add_command_action(*menu, quader_command::kProjectOpen,
-                       "ui.menu.file.open", "Open...");
-    add_command_action(*menu, quader_command::kProjectSave,
-                       "ui.menu.file.save", "Save");
-    add_command_action(*menu, quader_command::kProjectSaveAs,
-                       "ui.menu.file.save_as", "Save As...");
+    add_command_action(*menu, quader_command::kSceneDocumentNew,
+                       "ui.menu.file.new_scene", "New Scene");
+    add_command_action(*menu, quader_command::kSceneDocumentOpen,
+                       "ui.menu.file.open_scene", "Open Scene...");
+    add_command_action(*menu, quader_command::kSceneDocumentSave,
+                       "ui.menu.file.save_scene", "Save Scene");
+    add_command_action(*menu, quader_command::kSceneDocumentSaveAs,
+                       "ui.menu.file.save_scene_as", "Save Scene As...");
+    add_command_action(*menu, quader_command::kSceneDocumentSaveAll,
+                       "ui.menu.file.save_all_scenes", "Save All Scenes");
+    add_command_action(*menu, quader_command::kSceneDocumentClose,
+                       "ui.menu.file.close_scene", "Close Scene");
+    menu->addSeparator();
+    add_command_action(*menu, quader_command::kSceneDocumentNext,
+                       "ui.menu.file.next_scene", "Next Scene");
+    add_command_action(*menu, quader_command::kSceneDocumentPrevious,
+                       "ui.menu.file.previous_scene", "Previous Scene");
+    menu->addSeparator();
+    QMenu *project_menu = menu->addMenu(
+        qtext(context.localization, "ui.menu.file.project", "Project"));
+    project_menu->setObjectName(QStringLiteral("menu_file_project"));
+    add_command_action(*project_menu, quader_command::kProjectNew,
+                       "ui.menu.file.new_project", "New Project...");
+    add_command_action(*project_menu, quader_command::kProjectOpen,
+                       "ui.menu.file.open_project", "Open Project...");
+    add_command_action(*project_menu, quader_command::kProjectClose,
+                       "ui.menu.file.close_project", "Close Project");
+    menu->addSeparator();
     add_command_action(*menu, quader_command::kProjectExportSelectionObj,
                        "ui.menu.file.export_obj", "Export OBJ...");
     menu->addSeparator();

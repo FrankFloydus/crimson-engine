@@ -14,18 +14,19 @@
 namespace quader_io {
 
 /**
- * Stores the shared QDR atomic text write result.
+ * Stores the native QDR atomic write result.
  */
 struct QdrAtomicWriteResult {
     bool ok = false;
     std::string message;
 };
 
-using QdrAtomicWriteValidator = std::function<QdrAtomicWriteResult(const std::filesystem::path& temp_path)>;
+using QdrAtomicWriteValidator =
+    std::function<QdrAtomicWriteResult(const std::filesystem::path &temp_path)>;
 
 [[nodiscard]] QdrAtomicWriteResult write_qdr_text_atomic(
         const std::filesystem::path& target,
-        std::string_view text,
+        std::string_view bytes,
         QdrAtomicWriteValidator validate_temp = {});
 
 } // namespace quader_io

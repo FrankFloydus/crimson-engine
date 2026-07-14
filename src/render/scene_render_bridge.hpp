@@ -70,8 +70,10 @@ public:
                     filament::Material &overlay_icon_material,
                     std::filesystem::path resource_root);
     void shutdown();
+    void bind_scene(RenderSceneBindingKey scene_binding);
     void sync(const SceneDocument &document, const AssetRegistry &assets,
-              std::uint64_t frame_index = 0);
+              std::uint64_t frame_index = 0,
+              RenderSceneBindingKey scene_binding = {});
     void sync(RenderSceneSnapshot snapshot);
     void update_mesh_surface_grid(float grid_world_spacing,
                                   const ViewportSettings &settings);
@@ -108,6 +110,8 @@ public:
     SceneRenderSyncService sync_service_;
     RenderSceneSnapshot previous_scene_snapshot_;
     bool has_previous_scene_snapshot_ = false;
+    RenderSceneBindingKey scene_binding_;
+    bool has_scene_binding_ = false;
     std::uint64_t tool_preview_submission_revision_ = 0;
 };
 

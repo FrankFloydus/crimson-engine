@@ -179,13 +179,13 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(main_window, "void closeEvent(QCloseEvent *event) override");
   expect_contains(main_window, "!close_request_handler_()");
   expect_contains(ui_source, "return allow_main_window_close()");
+  expect_contains(ui_source, "confirm_dirty_scene(");
   expect_contains(ui_source,
-                  "confirm_dirty_project_replacement(\"application.close\")");
-  expect_contains(ui_source,
-                  "editor_->commands().execute(quader_command::kProjectSave)");
-  expect_contains(ui_source, "!editor_->project().dirty()");
+                  "const QuaderApiVoidResult closed = editor_->project().close()");
+  expect_contains(ui_source, "!editor_->project().has_project()");
+  expect_missing(ui_source, "quader_command::kProjectSave");
   expect_contains(ui_source, "QStringLiteral(\"quaderMainWindow\")");
-  expect_contains(ui_source, "setCentralWidget(viewport_panel_)");
+  expect_contains(ui_source, "setCentralWidget(central_stack_)");
   expect_contains(ui_source, "QMainWindow::AllowNestedDocks");
   expect_contains(ui_source, "QMainWindow::AllowTabbedDocks");
 
@@ -882,6 +882,20 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(menu, "QStringLiteral(\"panel_%1\")");
   expect_contains(menu, "QStringLiteral(\"layout_%1\")");
   expect_contains(menu, "viewport_layout_stable_id(option.id)");
+}
+
+TEST(UiLayoutGuardrailTests,
+     FileMenuRoutesDocumentWorkflowsThroughSceneCommands) {
+  const std::string menu = read_source_file("src/ui/qt_main_menu.cpp");
+  for (std::string_view scene_command :
+       {"kSceneDocumentNew", "kSceneDocumentOpen", "kSceneDocumentSave",
+        "kSceneDocumentSaveAs", "kSceneDocumentSaveAll",
+        "kSceneDocumentClose", "kSceneDocumentNext",
+        "kSceneDocumentPrevious"}) {
+    expect_contains(menu, scene_command);
+  }
+  expect_missing(menu, "kProjectSave");
+  expect_missing(menu, "kProjectSaveAs");
 }
 
 TEST(UiLayoutGuardrailTests, QtViewportSupportsOneThroughFourPaneLayouts) {

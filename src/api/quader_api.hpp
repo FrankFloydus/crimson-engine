@@ -15,10 +15,13 @@
 #include "api/quader_api_session.hpp"
 #include "api/quader_script.hpp"
 
+#include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace quader {
 
+class QuaderEditorApi;
 class QuaderObjectHandle;
 class QuaderApiMutationRunner;
 
@@ -63,9 +66,15 @@ public:
     [[nodiscard]] QuaderObjectHandle object(QuaderModelingObjectRef ref);
 
 private:
+    friend class QuaderEditorApi;
     friend class QuaderObjectHandle;
     friend class QuaderScript;
 
+    void rebind(QuaderApiSession session,
+                std::uint64_t scene_binding_identity = 1u);
+    void set_dirty_changed_callback(std::function<void(bool)> callback);
+    void synchronize_dirty_state();
+    [[nodiscard]] std::uint64_t scene_binding_identity() const;
     [[nodiscard]] QuaderApiSession session() const;
     [[nodiscard]] QuaderApiMutationRunner& mutations();
 

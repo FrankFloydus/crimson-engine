@@ -12,7 +12,7 @@ file except through prior written authorization from Francesco Di Blasi.
 
 ## Scene Rules
 
-- `SceneDocument`, `ProjectDocument`, `ProjectSession`, scene components, and scene bounds own scene
+- `SceneDocument`, `SceneContentDocument`, `SceneSession`, scene components, and scene bounds own scene
   state and invariants.
 - User-triggered create, destroy, parent, select, rename, transform, visibility, lock, and material
   changes should route through document commands, services, or public API batches.

@@ -60,6 +60,10 @@ public:
   set_selection_overlay(QuaderRenderApi &api, SceneRenderBridge &bridge,
                         std::size_t viewport_index, std::uint8_t layer_mask,
                         ViewportOverlayCamera camera);
+
+private:
+  [[nodiscard]] static RenderSceneBindingKey
+  scene_binding(const QuaderRenderApi &api);
 };
 
 } // namespace quader

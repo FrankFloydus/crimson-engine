@@ -9,7 +9,7 @@
 #include "assets/default_material_catalog.hpp"
 #include "assets/material_document.hpp"
 #include "assets/texture_asset.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 
 #include <string>
 #include <string_view>
@@ -18,7 +18,7 @@
 namespace quader {
 
 ProjectDefaultAssets ProjectAssetBootstrapService::bootstrap_default_assets(
-    ProjectSession &session) const {
+    SceneSession &session) const {
   const auto find_texture = [&](std::string_view name,
                                 std::string_view package_path,
                                 TextureUsage usage,

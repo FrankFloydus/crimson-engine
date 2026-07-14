@@ -57,8 +57,12 @@ public:
     QuaderApiResult<QuaderHoverSummary> hover_face(QuaderElementId face);
 
   private:
+    [[nodiscard]] bool bound_to_active_scene() const;
+    [[nodiscard]] QuaderApiVoidResult unavailable_status() const;
+
     QuaderApi* api_ = nullptr;
     QuaderModelingObjectRef ref_;
+    SceneSessionId scene_session_id_;
 };
 
 } // namespace quader

@@ -86,13 +86,13 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractSelectionModeCatalogExpo
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutTargetsResolveToDescriptorOnlyCatalogs) {
 	const std::span<const qhc::HostShortcutDescriptor> shortcuts = qhc::shortcut_catalog();
-	EXPECT_TRUE(shortcuts.size() == 44U);
+	EXPECT_TRUE(shortcuts.size() == 48U);
 
 	for (const qhc::HostShortcutDescriptor& shortcut : shortcuts) {
 		EXPECT_FALSE(shortcut.id.empty());
 		EXPECT_FALSE(shortcut.key.empty());
 		EXPECT_FALSE(shortcut.target_id.empty());
-		EXPECT_FALSE(shortcut.alt);
+		EXPECT_EQ(shortcut.alt, shortcut.id == "save_scene_as");
                 EXPECT_TRUE(shortcut.registration_policy ==
                             qhc::HostShortcutRegistrationPolicy::QuaderLocal);
 
@@ -162,33 +162,57 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogPreserves
 	EXPECT_TRUE(redo_shift_z.shift);
 	EXPECT_TRUE(same_text(redo_shift_z.target_id, "redo"));
 
-	const qhc::HostShortcutDescriptor& new_document = require_shortcut("new_document");
-        EXPECT_TRUE(new_document.context == qhc::HostShortcutContext::Global);
-        EXPECT_TRUE(same_text(new_document.key, "N"));
-	EXPECT_TRUE(new_document.primary_modifier);
-        EXPECT_TRUE(new_document.registration_policy ==
+	const qhc::HostShortcutDescriptor& new_scene = require_shortcut("new_scene");
+        EXPECT_TRUE(new_scene.context == qhc::HostShortcutContext::Global);
+        EXPECT_TRUE(same_text(new_scene.key, "N"));
+	EXPECT_TRUE(new_scene.primary_modifier);
+        EXPECT_TRUE(new_scene.registration_policy ==
                     qhc::HostShortcutRegistrationPolicy::QuaderLocal);
 
-        const qhc::HostShortcutDescriptor& open_document = require_shortcut("open_document");
-	EXPECT_TRUE(same_text(open_document.key, "O"));
-	EXPECT_TRUE(open_document.primary_modifier);
-        EXPECT_TRUE(open_document.registration_policy ==
+        const qhc::HostShortcutDescriptor& open_scene = require_shortcut("open_scene");
+	EXPECT_TRUE(same_text(open_scene.key, "O"));
+	EXPECT_TRUE(open_scene.primary_modifier);
+        EXPECT_TRUE(open_scene.registration_policy ==
                     qhc::HostShortcutRegistrationPolicy::QuaderLocal);
 
-        const qhc::HostShortcutDescriptor& save_document = require_shortcut("save_document");
-	EXPECT_TRUE(same_text(save_document.key, "S"));
-	EXPECT_TRUE(save_document.primary_modifier);
-	EXPECT_FALSE(save_document.shift);
-        EXPECT_TRUE(save_document.registration_policy ==
+        const qhc::HostShortcutDescriptor& save_scene = require_shortcut("save_scene");
+	EXPECT_TRUE(same_text(save_scene.key, "S"));
+	EXPECT_TRUE(save_scene.primary_modifier);
+	EXPECT_FALSE(save_scene.alt);
+	EXPECT_FALSE(save_scene.shift);
+        EXPECT_TRUE(save_scene.registration_policy ==
                     qhc::HostShortcutRegistrationPolicy::QuaderLocal);
 
-        const qhc::HostShortcutDescriptor& save_as_document = require_shortcut("save_as_document");
-	EXPECT_TRUE(same_text(save_as_document.key, "S"));
-	EXPECT_TRUE(save_as_document.primary_modifier);
-	EXPECT_TRUE(save_as_document.shift);
-	EXPECT_TRUE(same_text(save_as_document.target_id, "save_as_document"));
-        EXPECT_TRUE(save_as_document.registration_policy ==
+        const qhc::HostShortcutDescriptor& save_scene_as = require_shortcut("save_scene_as");
+	EXPECT_TRUE(same_text(save_scene_as.key, "S"));
+	EXPECT_TRUE(save_scene_as.primary_modifier);
+	EXPECT_TRUE(save_scene_as.alt);
+	EXPECT_FALSE(save_scene_as.shift);
+	EXPECT_TRUE(same_text(save_scene_as.target_id, "save_scene_as"));
+        EXPECT_TRUE(save_scene_as.registration_policy ==
                     qhc::HostShortcutRegistrationPolicy::QuaderLocal);
+
+        const qhc::HostShortcutDescriptor& save_all_scenes = require_shortcut("save_all_scenes");
+	EXPECT_TRUE(same_text(save_all_scenes.key, "S"));
+	EXPECT_TRUE(save_all_scenes.primary_modifier);
+	EXPECT_FALSE(save_all_scenes.alt);
+	EXPECT_TRUE(save_all_scenes.shift);
+	EXPECT_TRUE(same_text(save_all_scenes.target_id, "save_all_scenes"));
+
+        const qhc::HostShortcutDescriptor& close_scene = require_shortcut("close_scene");
+	EXPECT_TRUE(same_text(close_scene.key, "W"));
+	EXPECT_TRUE(close_scene.primary_modifier);
+	EXPECT_FALSE(close_scene.shift);
+
+        const qhc::HostShortcutDescriptor& next_scene = require_shortcut("next_scene");
+	EXPECT_TRUE(same_text(next_scene.key, "Tab"));
+	EXPECT_TRUE(next_scene.primary_modifier);
+	EXPECT_FALSE(next_scene.shift);
+
+        const qhc::HostShortcutDescriptor& previous_scene = require_shortcut("previous_scene");
+	EXPECT_TRUE(same_text(previous_scene.key, "Tab"));
+	EXPECT_TRUE(previous_scene.primary_modifier);
+	EXPECT_TRUE(previous_scene.shift);
 
         const qhc::HostShortcutDescriptor& delete_key = require_shortcut("delete");
 	EXPECT_TRUE(same_text(delete_key.key, "Delete"));

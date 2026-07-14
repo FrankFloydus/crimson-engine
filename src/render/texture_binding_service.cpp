@@ -44,8 +44,22 @@ void TextureBindingService::shutdown() {
     texture_cache_.clear();
     destroy_texture(fallback_albedo_texture_);
     destroy_texture(fallback_roughness_texture_);
+    scene_binding_ = {};
     resource_root_.clear();
     engine_ = nullptr;
+}
+
+void TextureBindingService::bind_scene(
+    RenderSceneBindingKey scene_binding) {
+  if (scene_binding_ == scene_binding) {
+    return;
+  }
+  for (auto &[key, texture] : texture_cache_) {
+    (void)key;
+    destroy_texture(texture);
+  }
+  texture_cache_.clear();
+  scene_binding_ = scene_binding;
 }
 
 filament::Texture *TextureBindingService::resolve_texture(
@@ -64,6 +78,7 @@ filament::Texture *TextureBindingService::resolve_texture(
     return fallback;
   }
   const TextureCacheKey cache_key{
+      .scene_binding = scene_binding_,
       .id = *texture_id,
       .revision = texture->revision.value,
       .color_space = texture->color_space,
@@ -74,7 +89,6 @@ filament::Texture *TextureBindingService::resolve_texture(
   }
   filament::Texture *loaded = load_texture_asset(*texture);
   texture_cache_[cache_key] = loaded;
-  evict_obsolete_texture_revisions(cache_key);
   return loaded ? loaded : fallback;
 }
 
@@ -90,6 +104,7 @@ filament::Texture *TextureBindingService::resolve_texture(
     return fallback;
   }
   const TextureCacheKey cache_key{
+      .scene_binding = scene_binding_,
       .id = texture->texture_id,
       .revision = texture->texture.revision.value,
       .color_space = texture->texture.color_space,
@@ -100,7 +115,6 @@ filament::Texture *TextureBindingService::resolve_texture(
   }
   filament::Texture *loaded = load_texture_asset(texture->texture);
   texture_cache_[cache_key] = loaded;
-  evict_obsolete_texture_revisions(cache_key);
   return loaded ? loaded : fallback;
 }
 
@@ -157,20 +171,6 @@ void TextureBindingService::destroy_texture(filament::Texture *&texture) {
     engine_->destroy(texture);
   }
   texture = nullptr;
-}
-
-void TextureBindingService::evict_obsolete_texture_revisions(
-    const TextureCacheKey &current_key) {
-  for (auto it = texture_cache_.begin(); it != texture_cache_.end();) {
-    if (it->first.id == current_key.id &&
-        it->first.color_space == current_key.color_space &&
-        it->first.revision != current_key.revision) {
-      destroy_texture(it->second);
-      it = texture_cache_.erase(it);
-    } else {
-      ++it;
-    }
-  }
 }
 
 } // namespace quader

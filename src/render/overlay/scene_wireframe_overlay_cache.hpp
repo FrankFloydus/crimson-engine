@@ -130,6 +130,7 @@ private:
     filament::Material *line_material_ = nullptr;
     std::unordered_map<EntityId, Entry> entries_;
     std::vector<WireframeEntityState> synced_states_;
+    RenderSceneBindingKey synced_scene_binding_;
     std::uint64_t synced_scene_revision_ = 0;
     std::uint64_t synced_asset_revision_ = 0;
     std::uint64_t synced_wire_style_signature_ = 0;

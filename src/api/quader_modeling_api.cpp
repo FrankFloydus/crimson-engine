@@ -20,7 +20,7 @@
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/transform/mesh_arrangement_service.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
@@ -37,8 +37,8 @@
 namespace quader {
 namespace {
 
-ProjectSession &project_session(QuaderApiSession session) {
-  return QuaderApiSessionInternalAccess::project_session(session);
+SceneSession &scene_session(QuaderApiSession session) {
+  return QuaderApiSessionInternalAccess::scene_session(session);
 }
 
 QuaderApiResult<QuaderModelingObjectRef>
@@ -47,7 +47,7 @@ result_from_create(QuaderApiVoidResult status, QuaderModelingObjectRef value) {
 }
 
 QuaderApiResult<QuaderTransformDragPreview>
-result_from_transform_drag_preview(const ProjectSession &session,
+result_from_transform_drag_preview(const SceneSession &session,
                                    ModelingTransformDragPreview preview) {
   QuaderApiResult<QuaderTransformDragPreview> result;
   result.ok = preview.ok;
@@ -83,7 +83,7 @@ QuaderTransform3 scale_transform(QVec3 scale) {
 
 QuaderApiVoidResult invalid_api_status(QuaderApiSession session,
                                        std::string message) {
-  return quader_api_failure_status(project_session(session),
+  return quader_api_failure_status(scene_session(session),
                                    std::move(message));
 }
 
@@ -185,19 +185,19 @@ QuaderComponentRef active_component(QuaderModelingObjectRef object,
   return active;
 }
 
-bool entity_selection_owns_transforms(ProjectSession &session) {
+bool entity_selection_owns_transforms(SceneSession &session) {
   const ModelingSelectionSummary summary = session.selection().summary();
   return summary.has_selection &&
          selection_mode_uses_scene_document(summary.mode);
 }
 
-bool copy_pivot_from_active_is_available(const ProjectSession &session) {
+bool copy_pivot_from_active_is_available(const SceneSession &session) {
   return !session.native_tools().has_pending_tool() &&
          !session.modeling().can_cancel_active_tool_or_preview() &&
          session.pivot().can_copy_pivot_from_active(session.selection());
 }
 
-QuaderActionItem copy_pivot_from_active_action(const ProjectSession &session) {
+QuaderActionItem copy_pivot_from_active_action(const SceneSession &session) {
   const ModelingSelectionSummary summary = session.selection().summary();
   const QuaderActionVisibility visibility =
       summary.mode != ModelingSelectionMode::Object
@@ -231,7 +231,7 @@ bool action_is_included(const QuaderActionItem &action,
 
 void inject_copy_pivot_from_active(QuaderActionSet &action_set,
                                    const QuaderActionQuery &query,
-                                   const ProjectSession &session) {
+                                   const SceneSession &session) {
   QuaderActionItem action = copy_pivot_from_active_action(session);
   if (!action_is_included(action, query)) {
     return;
@@ -323,7 +323,7 @@ mesh_arrangement_options(QuaderMeshArrangementOptions options) {
 }
 
 MeshArrangementSelectionContext
-mesh_arrangement_selection_context(ProjectSession &session) {
+mesh_arrangement_selection_context(SceneSession &session) {
   const ModelingSelectionSummary summary =
       session.modeling().selection_summary();
   const std::optional<EntityId> active_mesh =
@@ -343,11 +343,13 @@ QuaderPreviewHandle::QuaderPreviewHandle(
     std::optional<QuaderApiSession> session, QuaderApiMutationRunner &mutations,
     std::string default_label, QuaderApiVoidResult begin_status)
     : session_(std::move(session)), mutations_(&mutations),
+      scene_session_id_(mutations.scene_session_id()),
       default_label_(std::move(default_label)),
       begin_status_(std::move(begin_status)) {}
 
 bool QuaderPreviewHandle::valid() const {
   return session_.has_value() && session_->valid() && mutations_ != nullptr &&
+         mutations_->belongs_to_active_scene(scene_session_id_) &&
          begin_status_.ok();
 }
 
@@ -357,6 +359,10 @@ const QuaderApiVoidResult &QuaderPreviewHandle::begin_result() const {
 
 QuaderApiVoidResult
 QuaderPreviewHandle::update(const QuaderPreviewSettings &settings) {
+  if (mutations_ != nullptr &&
+      !mutations_->belongs_to_active_scene(scene_session_id_)) {
+    return mutations_->stale_scene_reference_status("Preview handle");
+  }
   if (!valid()) {
     return begin_status_;
   }
@@ -381,6 +387,10 @@ QuaderPreviewHandle::update(QuaderMergeByDistanceArgs args) {
 }
 
 QuaderApiVoidResult QuaderPreviewHandle::commit(std::string label) {
+  if (mutations_ != nullptr &&
+      !mutations_->belongs_to_active_scene(scene_session_id_)) {
+    return mutations_->stale_scene_reference_status("Preview handle");
+  }
   if (!valid()) {
     return begin_status_;
   }
@@ -392,6 +402,10 @@ QuaderApiVoidResult QuaderPreviewHandle::commit(std::string label) {
 }
 
 QuaderApiVoidResult QuaderPreviewHandle::cancel() {
+  if (mutations_ != nullptr &&
+      !mutations_->belongs_to_active_scene(scene_session_id_)) {
+    return mutations_->stale_scene_reference_status("Preview handle");
+  }
   if (!valid()) {
     return begin_status_;
   }
@@ -410,6 +424,7 @@ QuaderModelingObjectRef QuaderModelingSelection::object() const {
 
 bool QuaderModelingSelection::valid_context() const {
   return session_.has_value() && session_->valid() && mutations_ != nullptr &&
+         mutations_->belongs_to_active_scene(object_.scene_session_id) &&
          object_.modeling_object_id != kInvalidQuaderModelingObjectId &&
          object_.entity != kInvalidEntityId;
 }
@@ -431,6 +446,10 @@ std::size_t QuaderModelingSelection::count() const {
 
 QuaderApiVoidResult
 QuaderModelingSelection::apply(QuaderSelectionEdit edit) const {
+  if (mutations_ != nullptr &&
+      !mutations_->belongs_to_active_scene(object_.scene_session_id)) {
+    return mutations_->stale_scene_reference_status("Modeling selection");
+  }
   if (!valid_context()) {
     return invalid_api_status(session_, "Invalid modeling selection.");
   }
@@ -903,6 +922,7 @@ QuaderModelingObjectId QuaderMeshHandle::id() const {
 
 bool QuaderMeshHandle::valid() const {
   if (!session_.has_value() || !session_->valid() || mutations_ == nullptr ||
+      !mutations_->belongs_to_active_scene(ref_.scene_session_id) ||
       ref_.modeling_object_id == kInvalidQuaderModelingObjectId) {
     return false;
   }
@@ -959,7 +979,7 @@ QuaderModelingApi::QuaderModelingApi(QuaderApiSession session,
 QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::create_box(const QuaderCreateBoxArgs &args) {
   auto command = std::make_unique<CreateBoxFromBoundsHistoryCommand>(
-      project_session(session_).modeling(),
+      scene_session(session_).modeling(),
       ModelingCreateBoxRequest{
           .bounds = to_modeling_bounds(args.bounds),
           .name = args.name,
@@ -1003,8 +1023,8 @@ QuaderApiResult<QuaderModelingObjectRef>
 QuaderModelingApi::commit_box_preview(std::string name,
                                       AssetId default_material) {
   auto command = std::make_unique<CommitBoxPreviewCommand>(
-      project_session(session_).modeling(), project_session(session_).scene(),
-      project_session(session_).assets(), std::move(name), default_material);
+      scene_session(session_).modeling(), scene_session(session_).scene(),
+      scene_session(session_).assets(), std::move(name), default_material);
   CommitBoxPreviewCommand *commit_command = command.get();
   QuaderApiVoidResult status = mutations_.run_modeling_undoable_command(
       std::move(command), "Create Box");
@@ -1025,7 +1045,7 @@ QuaderModelingApi::create_mesh(QuaderPolygonDocument document,
   request.name = std::move(args.name);
   request.material_slot = args.material_slot;
   auto command = std::make_unique<CreateMeshHistoryCommand>(
-      project_session(session_).modeling(), std::move(request));
+      scene_session(session_).modeling(), std::move(request));
   CreateMeshHistoryCommand *create_command = command.get();
   QuaderApiVoidResult status =
       mutations_.run_modeling_command(std::move(command), "Create Mesh");
@@ -1040,7 +1060,11 @@ QuaderModelingApi::create_mesh(QuaderPolygonDocument document,
 
 QuaderApiResult<QuaderLinearArrayResult>
 QuaderModelingApi::create_linear_array(const QuaderLinearArrayArgs &args) {
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
+  if (!mutations_.belongs_to_active_scene(args.source.scene_session_id)) {
+    return quader_api_result_from_status<QuaderLinearArrayResult>(
+        mutations_.stale_scene_reference_status("Linear Array source"), {});
+  }
   const SceneDocument &scene = session.scene();
   const ModelingObjectComponent *modeling =
       scene.modeling_object(args.source.entity);
@@ -1101,7 +1125,7 @@ QuaderModelingApi::create_linear_array(const QuaderLinearArrayArgs &args) {
 
 QuaderApiResult<QuaderRadialArrayResult>
 QuaderModelingApi::create_radial_array(const QuaderRadialArrayArgs &args) {
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   const SceneDocument &scene = session.scene();
   if (args.sources.empty()) {
     return quader_api_result_from_status<QuaderRadialArrayResult>(
@@ -1124,6 +1148,11 @@ QuaderModelingApi::create_radial_array(const QuaderRadialArrayArgs &args) {
   };
   request.sources.reserve(args.sources.size());
   for (const QuaderModelingObjectRef &source : args.sources) {
+    if (!mutations_.belongs_to_active_scene(source.scene_session_id)) {
+      return quader_api_result_from_status<QuaderRadialArrayResult>(
+          mutations_.stale_scene_reference_status("Radial Array source"),
+          {});
+    }
     const ModelingObjectComponent *modeling =
         scene.modeling_object(source.entity);
     const MeshComponent *mesh = scene.mesh(source.entity);
@@ -1207,7 +1236,7 @@ QuaderModelingApi::mesh(QuaderModelingObjectId object_id) const {
         QuaderMeshHandle(session_, mutations_, {}));
   }
   return quader_api_result_from_status<QuaderMeshHandle>(
-      quader_api_void_status(project_session(session_), true, false, {},
+      quader_api_void_status(scene_session(session_), true, false, {},
                              QuaderMutationKind::None),
       QuaderMeshHandle(session_, mutations_, *object));
 }
@@ -1254,12 +1283,12 @@ QuaderApiVoidResult QuaderModelingApi::remove_doubles() {
 }
 
 bool QuaderModelingApi::can_copy_pivot_from_active() const {
-  const ProjectSession &session = project_session(session_);
+  const SceneSession &session = scene_session(session_);
   return copy_pivot_from_active_is_available(session);
 }
 
 QuaderApiVoidResult QuaderModelingApi::copy_pivot_from_active() {
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   if (session.native_tools().has_pending_tool() ||
       session.modeling().can_cancel_active_tool_or_preview()) {
     return mutations_.run_document_command(
@@ -1273,7 +1302,7 @@ QuaderApiVoidResult QuaderModelingApi::copy_pivot_from_active() {
 }
 
 bool QuaderModelingApi::can_align_selected_meshes() const {
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   MeshArrangementService arrangement(
       session.scene(), session.assets(),
       mesh_arrangement_selection_context(session),
@@ -1282,7 +1311,7 @@ bool QuaderModelingApi::can_align_selected_meshes() const {
 }
 
 bool QuaderModelingApi::can_distribute_selected_meshes() const {
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   MeshArrangementService arrangement(
       session.scene(), session.assets(),
       mesh_arrangement_selection_context(session),
@@ -1299,7 +1328,7 @@ QuaderApiVoidResult QuaderModelingApi::align_selected_meshes(
     return invalid_api_status(session_,
                               "Mesh alignment needs the X, Y, or Z axis.");
   }
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   MeshArrangementService arrangement(
       session.scene(), session.assets(),
       mesh_arrangement_selection_context(session),
@@ -1320,7 +1349,7 @@ QuaderApiVoidResult QuaderModelingApi::distribute_selected_meshes(
     return invalid_api_status(
         session_, "Mesh distribution needs the X, Y, or Z axis.");
   }
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   MeshArrangementService arrangement(
       session.scene(), session.assets(),
       mesh_arrangement_selection_context(session),
@@ -1340,7 +1369,7 @@ QuaderModelingApi::begin_preview(std::string_view action_id) {
 QuaderApiVoidResult
 QuaderModelingApi::update_preview(const QuaderPreviewSettings &settings) {
   return mutations_.run_modeling_result(
-      project_session(session_).modeling().set_interaction_settings(
+      scene_session(session_).modeling().set_interaction_settings(
           to_modeling_interaction_settings(settings.interaction)),
       "Update Operation Preview");
 }
@@ -1354,7 +1383,7 @@ QuaderApiVoidResult QuaderModelingApi::cancel_preview() {
 }
 
 bool QuaderModelingApi::can_cancel_active_tool_or_preview() const {
-  return project_session(session_)
+  return scene_session(session_)
       .modeling()
       .can_cancel_active_tool_or_preview();
 }
@@ -1362,14 +1391,14 @@ bool QuaderModelingApi::can_cancel_active_tool_or_preview() const {
 QuaderApiVoidResult
 QuaderModelingApi::begin_transform_preview(bool duplicate_selected) {
   return mutations_.run_modeling_result(
-      project_session(session_).modeling().begin_transform_preview(
+      scene_session(session_).modeling().begin_transform_preview(
           duplicate_selected),
       "Begin Transform Preview");
 }
 
 QuaderApiVoidResult QuaderModelingApi::update_transform_translate(QVec3 delta) {
   return mutations_.run_modeling_result(
-      project_session(session_).modeling().update_transform_translate_preview(
+      scene_session(session_).modeling().update_transform_translate_preview(
           delta),
       "Update Transform Preview");
 }
@@ -1378,7 +1407,7 @@ QuaderApiVoidResult
 QuaderModelingApi::update_transform_matrix(const QuaderTransform3 &transform,
                                            QVec3 pivot) {
   return mutations_.run_modeling_result(
-      project_session(session_).modeling().update_transform_matrix_preview(
+      scene_session(session_).modeling().update_transform_matrix_preview(
           to_modeling_transform3(transform), pivot),
       "Update Transform Preview");
 }
@@ -1387,7 +1416,7 @@ QuaderApiVoidResult
 QuaderModelingApi::update_transform_extrude(QVec3 offset,
                                             float closed_edge_ledge_size) {
   return mutations_.run_modeling_result(
-      project_session(session_).modeling().update_transform_extrude_preview(
+      scene_session(session_).modeling().update_transform_extrude_preview(
           offset, closed_edge_ledge_size),
       "Update Transform Preview");
 }
@@ -1396,7 +1425,7 @@ QuaderApiVoidResult
 QuaderModelingApi::update_transform_inset(const QuaderTransform3 &transform,
                                           QVec3 pivot) {
   return mutations_.run_modeling_result(
-      project_session(session_).modeling().update_transform_inset_preview(
+      scene_session(session_).modeling().update_transform_inset_preview(
           to_modeling_transform3(transform), pivot),
       "Update Transform Preview");
 }
@@ -1405,13 +1434,13 @@ QuaderApiVoidResult
 QuaderModelingApi::commit_transform_preview(std::string label) {
   return mutations_.run_modeling_command(
       std::make_unique<CommitTransformPreviewHistoryCommand>(
-          project_session(session_).modeling()),
+          scene_session(session_).modeling()),
       label.empty() ? "Commit Transform Preview" : label);
 }
 
 QuaderApiVoidResult QuaderModelingApi::cancel_transform_preview() {
   return mutations_.run_modeling_result(
-      project_session(session_).modeling().cancel_transform_preview(),
+      scene_session(session_).modeling().cancel_transform_preview(),
       "Cancel Transform Preview");
 }
 
@@ -1420,8 +1449,8 @@ QuaderModelingApi::begin_transform_drag(
     const QuaderTransformDragBeginRequest &request) {
   QDR_PROFILE_FUNCTION();
   return result_from_transform_drag_preview(
-      project_session(session_),
-      project_session(session_).modeling().begin_transform_drag(
+      scene_session(session_),
+      scene_session(session_).modeling().begin_transform_drag(
           to_modeling_transform_drag_begin_request(request)));
 }
 
@@ -1430,8 +1459,8 @@ QuaderModelingApi::update_transform_drag(
     const QuaderTransformDragUpdateRequest &request) {
   QDR_PROFILE_FUNCTION();
   return result_from_transform_drag_preview(
-      project_session(session_),
-      project_session(session_).modeling().update_transform_drag(
+      scene_session(session_),
+      scene_session(session_).modeling().update_transform_drag(
           to_modeling_transform_drag_update_request(request)));
 }
 
@@ -1439,19 +1468,19 @@ QuaderApiResult<QuaderTransformDragPreview>
 QuaderModelingApi::commit_transform_drag() {
   QDR_PROFILE_FUNCTION();
   return result_from_transform_drag_preview(
-      project_session(session_),
-      project_session(session_).modeling().commit_transform_drag(
-          project_session(session_).history()));
+      scene_session(session_),
+      scene_session(session_).modeling().commit_transform_drag(
+          scene_session(session_).history()));
 }
 
 QuaderApiVoidResult QuaderModelingApi::cancel_transform_drag() {
   return mutations_.run_modeling_result(
-      project_session(session_).modeling().cancel_transform_drag(),
+      scene_session(session_).modeling().cancel_transform_drag(),
       "Cancel Transform Drag");
 }
 
 QuaderApiVoidResult QuaderModelingApi::move_selection(QVec3 delta) {
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   if (entity_selection_owns_transforms(session)) {
     SceneTransformDragService transforms;
     return mutations_.run_document_result(
@@ -1479,7 +1508,7 @@ QuaderApiVoidResult QuaderModelingApi::scale_selection(QVec3 scale,
 QuaderApiVoidResult
 QuaderModelingApi::transform_selection(const QuaderTransform3 &transform,
                                        QVec3 pivot) {
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   if (entity_selection_owns_transforms(session)) {
     SceneTransformDragService transforms;
     return mutations_.run_document_result(
@@ -1498,7 +1527,7 @@ QuaderModelingApi::transform_selection(const QuaderTransform3 &transform,
 
 bool QuaderModelingApi::can_duplicate_selected_entity_hierarchy() const {
   QDR_PROFILE_FUNCTION();
-  const ProjectSession &session = project_session(session_);
+  const SceneSession &session = scene_session(session_);
   const QuaderSelectionSummary selection = selection_summary();
   if (!selection.has_selection ||
       (selection.mode != QuaderSelectionMode::Object &&
@@ -1517,7 +1546,7 @@ bool QuaderModelingApi::can_duplicate_selected_entity_hierarchy() const {
 
 QuaderApiVoidResult QuaderModelingApi::duplicate_selected_entity_hierarchy() {
   QDR_PROFILE_FUNCTION();
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   EditorTransaction transaction =
       mutations_.begin_transaction("Duplicate Selection");
   if (!transaction.active()) {
@@ -1587,7 +1616,7 @@ QuaderApiVoidResult QuaderModelingApi::duplicate_selected_entity_hierarchy() {
 QuaderApiVoidResult
 QuaderModelingApi::duplicate_selected_hierarchy_for_group_drag() {
   QDR_PROFILE_FUNCTION();
-  ProjectSession &session = project_session(session_);
+  SceneSession &session = scene_session(session_);
   EditorTransaction transaction =
       mutations_.begin_transaction("Duplicate Group Selection");
   if (!transaction.active()) {
@@ -1669,7 +1698,7 @@ QuaderApiVoidResult
 QuaderModelingApi::apply_active_material(std::uint32_t material_slot) {
   return mutations_.run_modeling_command(
       std::make_unique<ApplyActiveMaterialHistoryCommand>(
-          project_session(session_).modeling(), material_slot),
+          scene_session(session_).modeling(), material_slot),
       "Apply Active Material");
 }
 
@@ -1677,17 +1706,20 @@ QuaderApiVoidResult QuaderModelingApi::assign_material_slot_to_selection(
     std::uint32_t material_slot) {
   return mutations_.run_modeling_command(
       std::make_unique<AssignMaterialSlotToSelectionHistoryCommand>(
-          project_session(session_).modeling(), material_slot),
+          scene_session(session_).modeling(), material_slot),
       "Assign Material Slot");
 }
 
 QuaderApiVoidResult
 QuaderModelingApi::assign_material_slot_to_face(QuaderModelingObjectRef object,
-                                                QuaderElementId face,
-                                                std::uint32_t material_slot) {
+                                                 QuaderElementId face,
+                                                 std::uint32_t material_slot) {
+  if (!mutations_.belongs_to_active_scene(object.scene_session_id)) {
+    return mutations_.stale_scene_reference_status("Modeling object");
+  }
   return mutations_.run_modeling_command(
       std::make_unique<AssignMaterialSlotToFaceHistoryCommand>(
-          project_session(session_).modeling(), object.modeling_object_id, face,
+          scene_session(session_).modeling(), object.modeling_object_id, face,
           material_slot),
       "Assign Face Material Slot");
 }
@@ -1696,16 +1728,16 @@ QuaderApiVoidResult
 QuaderModelingApi::cut_selected_meshes_by_hovered_face_plane() {
   return mutations_.run_modeling_command(
       std::make_unique<CutSelectedMeshesByHoveredFacePlaneHistoryCommand>(
-          project_session(session_).modeling()),
+          scene_session(session_).modeling()),
       "Cut By Face Plane");
 }
 
 QuaderActionSet
 QuaderModelingApi::available_action_set(const QuaderActionQuery &query) const {
   QuaderActionSet result = to_api_action_set(
-      project_session(session_).modeling().context_action_set(
+      scene_session(session_).modeling().context_action_set(
           to_modeling_action_query(query)));
-  inject_copy_pivot_from_active(result, query, project_session(session_));
+  inject_copy_pivot_from_active(result, query, scene_session(session_));
   return result;
 }
 
@@ -1722,7 +1754,7 @@ QuaderModelingApi::available_actions(const QuaderActionQuery &query) const {
 std::vector<QuaderInstantOperationDescriptor>
 QuaderModelingApi::instant_operations() const {
   const std::vector<ModelingInstantOperationDescriptor> operations =
-      project_session(session_).modeling().instant_operations();
+      scene_session(session_).modeling().instant_operations();
   std::vector<QuaderInstantOperationDescriptor> result;
   result.reserve(operations.size());
   for (const ModelingInstantOperationDescriptor &operation : operations) {
@@ -1733,12 +1765,12 @@ QuaderModelingApi::instant_operations() const {
 
 QuaderSelectionSummary QuaderModelingApi::selection_summary() const {
   return to_api_selection_summary(
-      project_session(session_).selection().summary());
+      scene_session(session_).selection().summary());
 }
 
 std::vector<QuaderModelingObjectRecord> QuaderModelingApi::objects() const {
   const std::vector<ModelingObjectRecord> records =
-      project_session(session_).modeling().objects();
+      scene_session(session_).modeling().objects();
   std::vector<QuaderModelingObjectRecord> result;
   result.reserve(records.size());
   for (const ModelingObjectRecord &record : records) {
@@ -1750,14 +1782,15 @@ std::vector<QuaderModelingObjectRecord> QuaderModelingApi::objects() const {
 QuaderModelingObjectRef QuaderModelingApi::ref_from_record(
     const QuaderModelingObjectRecord &record) const {
   QuaderModelingObjectRef ref;
+  ref.scene_session_id = mutations_.scene_session_id();
   ref.entity = record.entity;
-  ref.entity_uuid = project_session(session_).scene().uuid(record.entity);
+  ref.entity_uuid = scene_session(session_).scene().uuid(record.entity);
   ref.editor_object_id =
-      project_session(session_).scene().editor_object_id(record.entity);
+      scene_session(session_).scene().editor_object_id(record.entity);
   ref.modeling_object_id = record.modeling_object_id;
   ref.mesh = record.mesh;
   if (const MaterialComponent *material =
-          project_session(session_).scene().material(record.entity)) {
+          scene_session(session_).scene().material(record.entity)) {
     ref.material = material->material;
   }
   return ref;

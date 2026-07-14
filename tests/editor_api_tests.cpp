@@ -512,24 +512,23 @@ std::filesystem::path project_test_path(std::string_view name) {
 }
 
 std::string read_text_file(const std::filesystem::path &path) {
-  std::ifstream file(path);
-  std::string text;
-  std::string line;
-  while (std::getline(file, line)) {
-    text += line;
-    text += '\n';
-  }
-  return text;
+  std::ifstream file(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(file),
+          std::istreambuf_iterator<char>()};
 }
 
-bool contains_json_string_pair(std::string_view text, std::string_view key,
-                               std::string_view value) {
-  const std::string compact =
-      "\"" + std::string(key) + "\":\"" + std::string(value) + "\"";
-  const std::string pretty =
-      "\"" + std::string(key) + "\": \"" + std::string(value) + "\"";
-  return text.find(compact) != std::string_view::npos ||
-         text.find(pretty) != std::string_view::npos;
+quader::QuaderApiVoidResult
+save_scene_as_native(quader::QuaderEditorApi &editor,
+                     const std::filesystem::path &path) {
+  return editor.scene_documents().save_as_native_path(
+      *editor.scene_documents().active_scene_id(), path);
+}
+
+quader::QuaderApiVoidResult
+open_scene_native(quader::QuaderEditorApi &editor,
+                  const std::filesystem::path &path) {
+  return quader::quader_api_status_from_result(
+      editor.scene_documents().open_native_path(path));
 }
 
 quader::QuaderMeshAsset triangle_mesh(std::string name) {
@@ -637,11 +636,37 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
                     .has_value());
     EXPECT_TRUE(command_descriptor(editor, quader::quader_command::kProjectOpen)
                     .has_value());
-    EXPECT_TRUE(command_descriptor(editor, quader::quader_command::kProjectSave)
+    EXPECT_TRUE(command_descriptor(editor, quader::quader_command::kProjectClose)
                     .has_value());
-    EXPECT_TRUE(
-        command_descriptor(editor, quader::quader_command::kProjectSaveAs)
+    EXPECT_FALSE(command_descriptor(editor, quader::QuaderCommandId{"project.save"})
+                     .has_value());
+    EXPECT_FALSE(
+        command_descriptor(editor, quader::QuaderCommandId{"project.save_as"})
             .has_value());
+    EXPECT_TRUE(command_descriptor(
+                    editor, quader::quader_command::kSceneDocumentNew)
+                    .has_value());
+    EXPECT_TRUE(command_descriptor(
+                    editor, quader::quader_command::kSceneDocumentOpen)
+                    .has_value());
+    EXPECT_TRUE(command_descriptor(
+                    editor, quader::quader_command::kSceneDocumentSave)
+                    .has_value());
+    EXPECT_TRUE(command_descriptor(
+                    editor, quader::quader_command::kSceneDocumentSaveAs)
+                    .has_value());
+    EXPECT_TRUE(command_descriptor(
+                    editor, quader::quader_command::kSceneDocumentSaveAll)
+                    .has_value());
+    EXPECT_TRUE(command_descriptor(
+                    editor, quader::quader_command::kSceneDocumentClose)
+                    .has_value());
+    EXPECT_TRUE(command_descriptor(
+                    editor, quader::quader_command::kSceneDocumentNext)
+                    .has_value());
+    EXPECT_TRUE(command_descriptor(
+                    editor, quader::quader_command::kSceneDocumentPrevious)
+                    .has_value());
     const std::optional<quader::QuaderCommandDescriptor> export_obj =
         command_descriptor(editor,
                            quader::quader_command::kProjectExportSelectionObj);
@@ -658,16 +683,40 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
               "Ctrl+Z");
     EXPECT_EQ(
         editor.commands().shortcut_for(quader::quader_command::kProjectNew),
-        "Ctrl+N");
+        "");
     EXPECT_EQ(
         editor.commands().shortcut_for(quader::quader_command::kProjectOpen),
-        "Ctrl+O");
+        "");
     EXPECT_EQ(
-        editor.commands().shortcut_for(quader::quader_command::kProjectSave),
-        "Ctrl+S");
+        editor.commands().shortcut_for(quader::QuaderCommandId{"project.save"}),
+        "");
     EXPECT_EQ(
-        editor.commands().shortcut_for(quader::quader_command::kProjectSaveAs),
-        "Ctrl+Shift+S");
+        editor.commands().shortcut_for(quader::QuaderCommandId{"project.save_as"}),
+        "");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kSceneDocumentNew),
+              "Ctrl+N");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kSceneDocumentOpen),
+              "Ctrl+O");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kSceneDocumentSave),
+              "Ctrl+S");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kSceneDocumentSaveAs),
+              "Ctrl+Alt+S");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kSceneDocumentSaveAll),
+              "Ctrl+Shift+S");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kSceneDocumentClose),
+              "Ctrl+W");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kSceneDocumentNext),
+              "Ctrl+Tab");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kSceneDocumentPrevious),
+              "Ctrl+Shift+Tab");
     EXPECT_EQ(editor.commands().shortcut_for(
                   quader::quader_command::kProjectExportSelectionObj),
               "");
@@ -771,7 +820,7 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     expect_same_api_status(*editor.commands().last_status(), undo);
 }
 
-TEST(EditorApiTests, ProjectDocumentCommandsRouteThroughProjectApi) {
+TEST(EditorApiTests, ProjectLifecycleCommandsRouteThroughProjectApi) {
   auto compare_project_command = [](quader::QuaderCommandId command_id,
                                     auto direct_call) {
     CommandTestHarness command_harness;
@@ -792,12 +841,60 @@ TEST(EditorApiTests, ProjectDocumentCommandsRouteThroughProjectApi) {
   compare_project_command(
       quader::quader_command::kProjectOpen,
       [](quader::QuaderProjectApi &project) { return project.open({}); });
-  compare_project_command(
-      quader::quader_command::kProjectSave,
-      [](quader::QuaderProjectApi &project) { return project.save(); });
-  compare_project_command(
-      quader::quader_command::kProjectSaveAs,
-      [](quader::QuaderProjectApi &project) { return project.save_as({}); });
+}
+
+TEST(EditorApiTests, SceneDocumentCommandsRouteThroughSceneDocumentsApi) {
+  auto compare_scene_command = [](quader::QuaderCommandId command_id,
+                                  auto direct_call,
+                                  bool make_dirty = false) {
+    CommandTestHarness command_harness;
+    quader::QuaderEditorApi &command_editor = command_harness.editor;
+    CommandTestHarness direct_harness;
+    quader::QuaderEditorApi &direct_editor = direct_harness.editor;
+    if (make_dirty) {
+      (void)create_selected_box(command_editor, "Command Dirty Scene");
+      (void)create_selected_box(direct_editor, "Direct Dirty Scene");
+    }
+
+    const quader::QuaderApiVoidResult command_result =
+        command_editor.commands().execute(command_id);
+    const quader::QuaderApiStatus direct_result =
+        quader::quader_api_status_from_result(direct_call(direct_editor));
+    expect_same_api_status(command_result, direct_result);
+  };
+
+  compare_scene_command(
+      quader::quader_command::kSceneDocumentNew,
+      [](quader::QuaderEditorApi &editor) {
+        return editor.scene_documents().new_scene();
+      });
+  compare_scene_command(
+      quader::quader_command::kSceneDocumentOpen,
+      [](quader::QuaderEditorApi &editor) {
+        return editor.scene_documents().open();
+      });
+  compare_scene_command(
+      quader::quader_command::kSceneDocumentSave,
+      [](quader::QuaderEditorApi &editor) {
+        return editor.scene_documents().save_active();
+      });
+  compare_scene_command(
+      quader::quader_command::kSceneDocumentSaveAs,
+      [](quader::QuaderEditorApi &editor) {
+        return editor.scene_documents().save_as(
+            *editor.scene_documents().active_scene_id());
+      });
+  compare_scene_command(
+      quader::quader_command::kSceneDocumentSaveAll,
+      [](quader::QuaderEditorApi &editor) {
+        return editor.scene_documents().save_all();
+      },
+      true);
+  compare_scene_command(
+      quader::quader_command::kSceneDocumentClose,
+      [](quader::QuaderEditorApi &editor) {
+        return editor.scene_documents().close_active();
+      });
 }
 
 TEST(EditorApiTests,
@@ -871,7 +968,7 @@ TEST(EditorApiTests,
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   create_selected_box(editor, "Saved Open Baseline");
-  ASSERT_TRUE(editor.project().save_as(path).ok());
+  ASSERT_TRUE(save_scene_as_native(editor, path).ok());
   const quader::QuaderApiResult<quader::QuaderEntityRef> unsaved =
       editor.scene().create_entity(
           quader::QuaderCreateEntityArgs{.name = "Saved During Open Preflight"});
@@ -953,30 +1050,23 @@ TEST(EditorApiTests, ProjectSaveAsSaveAndOpenUseQdrDocumentIo) {
   ASSERT_NE(light.value().id, quader::kInvalidEntityId);
   EXPECT_TRUE(editor.project().dirty());
 
-  const quader::QuaderApiVoidResult saved = editor.project().save_as(path);
+  const quader::QuaderApiVoidResult saved =
+      save_scene_as_native(editor, path);
   ASSERT_TRUE(saved.ok()) << saved.error_message();
   EXPECT_TRUE(saved.changed());
-  EXPECT_EQ(editor.project().path(), path);
   EXPECT_FALSE(editor.project().dirty());
   EXPECT_TRUE(std::filesystem::exists(path));
   const std::string saved_text = read_text_file(path);
-  EXPECT_TRUE(
-      contains_json_string_pair(saved_text, "kind", "quader.project-document"));
-  EXPECT_NE(saved_text.find("\"sceneSettings\""), std::string::npos);
-  EXPECT_TRUE(
-      contains_json_string_pair(saved_text, "environmentId", "pillars_2k"));
-  EXPECT_NE(saved_text.find("\"postProcess\""), std::string::npos);
-  EXPECT_NE(saved_text.find("\"light\""), std::string::npos);
-  EXPECT_NE(saved_text.find("\"Persisted Key Light\""), std::string::npos);
-  EXPECT_EQ(saved_text.find("\"session\""), std::string::npos);
+  ASSERT_GE(saved_text.size(), 4u);
+  EXPECT_EQ(saved_text.substr(0u, 4u), "QDRB");
 
   CommandTestHarness open_harness;
   quader::QuaderEditorApi &opened = open_harness.editor;
   const quader::QuaderRevisionStamp before_open_revisions = opened.revisions();
-  const quader::QuaderApiVoidResult open_result = opened.project().open(path);
+  const quader::QuaderApiVoidResult open_result =
+      open_scene_native(opened, path);
   ASSERT_TRUE(open_result.ok()) << open_result.error_message();
   EXPECT_TRUE(open_result.changed());
-  EXPECT_EQ(opened.project().path(), path);
   EXPECT_FALSE(opened.project().dirty());
   EXPECT_GT(opened.revisions().scene_revision,
             before_open_revisions.scene_revision);
@@ -992,15 +1082,18 @@ TEST(EditorApiTests, ProjectSaveAsSaveAndOpenUseQdrDocumentIo) {
   EXPECT_FLOAT_EQ(opened_light->transform.position.y, 4.0f);
   EXPECT_FLOAT_EQ(opened_light->transform.position.z, 5.0f);
   expect_light_eq(opened_light->light, light_args.light);
-  EXPECT_EQ(selected_entities(opened),
-            std::vector<quader::EntityId>{opened_light->id});
+  EXPECT_TRUE(selected_entities(opened).empty())
+      << "selection is transient and must not be stored in a scene file";
 
-  const quader::QuaderApiVoidResult moved =
-      opened.modeling().move_selection({0.25f, 0.0f, 0.0f});
+  quader::QuaderTransform moved_transform = opened_light->transform;
+  moved_transform.position.x += 0.25f;
+  const quader::QuaderApiVoidResult moved = opened.scene().set_transform(
+      opened_light->id, moved_transform);
   ASSERT_TRUE(moved.ok()) << moved.error_message();
   EXPECT_TRUE(moved.changed());
   EXPECT_TRUE(opened.project().dirty());
-  const quader::QuaderApiVoidResult saved_again = opened.project().save();
+  const quader::QuaderApiVoidResult saved_again =
+      opened.scene_documents().save_active();
   ASSERT_TRUE(saved_again.ok()) << saved_again.error_message();
   EXPECT_FALSE(opened.project().dirty());
 }
@@ -1013,7 +1106,7 @@ TEST(EditorApiTests,
   quader::QuaderEditorApi &editor = harness.editor;
   const quader::QuaderModelingObjectRef box =
       create_selected_box(editor, "Cancel Preview Clean Box");
-  ASSERT_TRUE(editor.project().save_as(path).ok());
+  ASSERT_TRUE(save_scene_as_native(editor, path).ok());
   ASSERT_FALSE(editor.project().dirty());
   const quader::QuaderRevisionStamp clean_revisions = editor.revisions();
   const std::optional<quader::QuaderMeshSnapshot> before =
@@ -1051,7 +1144,7 @@ TEST(EditorApiTests, CommittingOperationPreviewMakesCleanProjectDirty) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   (void)create_selected_box(editor, "Commit Preview Dirty Box");
-  ASSERT_TRUE(editor.project().save_as(path).ok());
+  ASSERT_TRUE(save_scene_as_native(editor, path).ok());
   ASSERT_FALSE(editor.project().dirty());
 
   const quader::QuaderApiVoidResult preview = editor.commands().execute(
@@ -1075,7 +1168,7 @@ TEST(EditorApiTests,
   quader::QuaderEditorApi &editor = harness.editor;
   const quader::QuaderModelingObjectRef box =
       create_selected_box(editor, "Cancel Preview Concurrent Edit Box");
-  ASSERT_TRUE(editor.project().save_as(path).ok());
+  ASSERT_TRUE(save_scene_as_native(editor, path).ok());
   ASSERT_FALSE(editor.project().dirty());
 
   const quader::QuaderApiVoidResult preview = editor.commands().execute(
@@ -1103,9 +1196,9 @@ TEST(EditorApiTests, ProjectNewCommandOpensCleanUnsavedEmptyProject) {
   quader::QuaderEditorApi &editor = harness.editor;
   (void)create_selected_box(editor, "Project New Saved Box");
 
-  const quader::QuaderApiVoidResult saved = editor.project().save_as(path);
+  const quader::QuaderApiVoidResult saved =
+      save_scene_as_native(editor, path);
   ASSERT_TRUE(saved.ok()) << saved.error_message();
-  EXPECT_EQ(editor.project().path(), path);
   EXPECT_FALSE(editor.project().dirty());
   EXPECT_TRUE(editor.history().can_undo());
   EXPECT_FALSE(selected_entities(editor).empty());
@@ -1140,18 +1233,16 @@ TEST(EditorApiTests, ProjectNewCommandOpensCleanUnsavedEmptyProject) {
   EXPECT_FALSE(editor.query().history().can_redo);
 }
 
-TEST(EditorApiTests, ProjectCommandsUseRuntimePathHooksForEmptyPaths) {
-  const std::filesystem::path path = project_test_path("runtime-hooks");
+TEST(EditorApiTests, SceneSaveCommandUsesRuntimePathHookForUnsavedScene) {
+  const std::filesystem::path path = project_test_path("scene-runtime-hooks");
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   int save_path_requests = 0;
-  int open_path_requests = 0;
-  editor.project().set_runtime_hooks(quader::QuaderProjectRuntimeHooks{
-      .choose_open_path = [&]() -> std::optional<std::filesystem::path> {
-        ++open_path_requests;
-        return path;
-      },
-      .choose_save_as_path = [&]() -> std::optional<std::filesystem::path> {
+  editor.scene_documents().set_runtime_hooks(
+      quader::QuaderSceneDocumentsRuntimeHooks{
+      .choose_save_scene_as_path =
+          [&](quader::SceneSessionId)
+              -> std::optional<std::filesystem::path> {
         ++save_path_requests;
         return path;
       },
@@ -1159,16 +1250,31 @@ TEST(EditorApiTests, ProjectCommandsUseRuntimePathHooksForEmptyPaths) {
 
   (void)create_selected_box(editor, "Hook Saved Box");
   const quader::QuaderApiVoidResult saved =
-      editor.commands().execute(quader::quader_command::kProjectSave);
+      editor.commands().execute(quader::quader_command::kSceneDocumentSave);
   ASSERT_TRUE(saved.ok()) << saved.error_message();
   EXPECT_EQ(save_path_requests, 1);
-  EXPECT_EQ(editor.project().path(), path);
   EXPECT_TRUE(std::filesystem::exists(path));
+  EXPECT_FALSE(editor.scene_documents().active_scene()->dirty);
+}
+
+TEST(EditorApiTests, ProjectOpenCommandUsesRuntimePathHookForEmptyPath) {
+  const std::filesystem::path path = project_test_path("open-runtime-hook");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  (void)create_selected_box(editor, "Hook Saved Box");
+  ASSERT_TRUE(save_scene_as_native(editor, path).ok());
 
   ASSERT_TRUE(
       editor.commands().execute(quader::quader_command::kProjectNew).ok());
   EXPECT_FALSE(entity_named(editor, "Hook Saved Box").has_value());
 
+  int open_path_requests = 0;
+  editor.project().set_runtime_hooks(quader::QuaderProjectRuntimeHooks{
+      .choose_open_path = [&]() -> std::optional<std::filesystem::path> {
+        ++open_path_requests;
+        return path;
+      },
+  });
   const quader::QuaderApiVoidResult opened =
       editor.commands().execute(quader::quader_command::kProjectOpen);
   ASSERT_TRUE(opened.ok()) << opened.error_message();
@@ -1554,13 +1660,21 @@ TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithAndWithoutViewportFocus)
   create_selected_box(editor, "Global Undo Shortcut Box");
 
   quader::ViewportToolState state;
+  const quader::QuaderViewportKeybindingDispatch new_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+N"), state, false, false);
+  ASSERT_EQ(new_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(new_dispatch.command_id,
+            quader::quader_command::kSceneDocumentNew.string());
+
   const quader::QuaderViewportKeybindingDispatch open_dispatch =
       editor.commands().dispatch_viewport_input_binding(
           single_input_chord("Ctrl+O"), state, false, false);
   ASSERT_EQ(open_dispatch.kind,
             quader::QuaderViewportKeybindingDispatch::Kind::Command);
   EXPECT_EQ(open_dispatch.command_id,
-            quader::quader_command::kProjectOpen.string());
+            quader::quader_command::kSceneDocumentOpen.string());
 
   const quader::QuaderViewportKeybindingDispatch save_dispatch =
       editor.commands().dispatch_viewport_input_binding(
@@ -1568,15 +1682,47 @@ TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithAndWithoutViewportFocus)
   ASSERT_EQ(save_dispatch.kind,
             quader::QuaderViewportKeybindingDispatch::Kind::Command);
   EXPECT_EQ(save_dispatch.command_id,
-            quader::quader_command::kProjectSave.string());
+            quader::quader_command::kSceneDocumentSave.string());
 
   const quader::QuaderViewportKeybindingDispatch save_as_dispatch =
       editor.commands().dispatch_viewport_input_binding(
-          single_input_chord("Ctrl+Shift+S"), state, false, false);
+          single_input_chord("Ctrl+Alt+S"), state, false, false);
   ASSERT_EQ(save_as_dispatch.kind,
             quader::QuaderViewportKeybindingDispatch::Kind::Command);
   EXPECT_EQ(save_as_dispatch.command_id,
-            quader::quader_command::kProjectSaveAs.string());
+            quader::quader_command::kSceneDocumentSaveAs.string());
+
+  const quader::QuaderViewportKeybindingDispatch save_all_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Shift+S"), state, false, false);
+  ASSERT_EQ(save_all_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(save_all_dispatch.command_id,
+            quader::quader_command::kSceneDocumentSaveAll.string());
+
+  const quader::QuaderViewportKeybindingDispatch close_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+W"), state, false, false);
+  ASSERT_EQ(close_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(close_dispatch.command_id,
+            quader::quader_command::kSceneDocumentClose.string());
+
+  const quader::QuaderViewportKeybindingDispatch next_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Tab"), state, false, false);
+  ASSERT_EQ(next_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(next_dispatch.command_id,
+            quader::quader_command::kSceneDocumentNext.string());
+
+  const quader::QuaderViewportKeybindingDispatch previous_dispatch =
+      editor.commands().dispatch_viewport_input_binding(
+          single_input_chord("Ctrl+Shift+Tab"), state, false, false);
+  ASSERT_EQ(previous_dispatch.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(previous_dispatch.command_id,
+            quader::quader_command::kSceneDocumentPrevious.string());
 
   const quader::QuaderViewportKeybindingDispatch focused_copy_dispatch =
       editor.commands().dispatch_viewport_input_binding(
@@ -2884,7 +3030,8 @@ TEST(EditorApiTests, ProjectSaveRejectsUncommittedModelingAndNativePreviews) {
                         "bevel_edges"))
                     .ok());
 
-    const quader::QuaderApiVoidResult saved = editor.project().save_as(path);
+    const quader::QuaderApiVoidResult saved =
+        save_scene_as_native(editor, path);
     EXPECT_FALSE(saved.ok());
     EXPECT_FALSE(std::filesystem::exists(path));
     EXPECT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
@@ -2897,7 +3044,8 @@ TEST(EditorApiTests, ProjectSaveRejectsUncommittedModelingAndNativePreviews) {
     create_selected_box(editor, "Unsaved Pivot Box");
     ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
 
-    const quader::QuaderApiVoidResult saved = editor.project().save_as(path);
+    const quader::QuaderApiVoidResult saved =
+        save_scene_as_native(editor, path);
     EXPECT_FALSE(saved.ok());
     EXPECT_FALSE(std::filesystem::exists(path));
     EXPECT_TRUE(editor.tools().active_settings().active);
@@ -5506,18 +5654,19 @@ TEST(EditorApiTests, DirectApiStatusesUseFullRevisionStamp) {
     quader::QuaderEditorApi& editor = harness.editor;
 
     const quader::QuaderRevisionStamp initial = editor.revisions();
-    const quader::QuaderApiVoidResult project_unsupported =
-        editor.project().save();
-    EXPECT_FALSE(project_unsupported.ok());
-    EXPECT_EQ(project_unsupported.revisions.project_revision,
+    const quader::QuaderApiVoidResult scene_save_failure =
+        editor.scene_documents().save_as_native_path(
+            *editor.scene_documents().active_scene_id(), {});
+    EXPECT_FALSE(scene_save_failure.ok());
+    EXPECT_EQ(scene_save_failure.revisions.project_revision,
               initial.project_revision);
-    EXPECT_EQ(project_unsupported.revisions.scene_revision,
+    EXPECT_EQ(scene_save_failure.revisions.scene_revision,
               initial.scene_revision);
-    EXPECT_EQ(project_unsupported.revisions.asset_revision,
+    EXPECT_EQ(scene_save_failure.revisions.asset_revision,
               initial.asset_revision);
-    EXPECT_EQ(project_unsupported.revisions.modeling_content_revision,
+    EXPECT_EQ(scene_save_failure.revisions.modeling_content_revision,
               initial.modeling_content_revision);
-    EXPECT_EQ(project_unsupported.revisions.modeling_selection_revision,
+    EXPECT_EQ(scene_save_failure.revisions.modeling_selection_revision,
               initial.modeling_selection_revision);
 
     const quader::QuaderApiVoidResult unknown_setting =
@@ -6134,7 +6283,7 @@ TEST(EditorApiTests,
         native_tool == quader::ViewportToolId::Pivot
             ? "native-activation-pivot-preview"
             : "native-activation-array-preview");
-    ASSERT_TRUE(editor.project().save_as(clean_path).ok());
+    ASSERT_TRUE(save_scene_as_native(editor, clean_path).ok());
     ASSERT_FALSE(editor.project().dirty());
     const std::optional<quader::QuaderMeshSnapshot> mesh_before =
         editor.query().mesh(box.mesh);
@@ -6175,7 +6324,7 @@ TEST(EditorApiTests,
   quader::QuaderEditorApi &editor = harness.editor;
   const quader::QuaderModelingObjectRef box =
       create_selected_box(editor, "Runtime Activation Preview Source");
-  ASSERT_TRUE(editor.project().save_as(clean_path).ok());
+  ASSERT_TRUE(save_scene_as_native(editor, clean_path).ok());
   ASSERT_FALSE(editor.project().dirty());
   const std::optional<quader::QuaderMeshSnapshot> mesh_before =
       editor.query().mesh(box.mesh);

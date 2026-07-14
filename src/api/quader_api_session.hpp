@@ -6,6 +6,10 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include <cstdint>
+#include <memory>
+#include <utility>
+
 namespace quader {
 
 class QuaderApiSessionInternalAccess;
@@ -15,15 +19,31 @@ class QuaderApiSessionInternalAccess;
  */
 class QuaderApiSession final {
 public:
-    [[nodiscard]] bool valid() const noexcept { return session_ != nullptr; }
+    QuaderApiSession() = default;
+    [[nodiscard]] bool valid() const noexcept {
+      return binding_ != nullptr && binding_->owner != nullptr;
+    }
 
 private:
     friend class QuaderApiSessionInternalAccess;
 
-    explicit QuaderApiSession(void* session) noexcept
-        : session_(session) {}
+    /// Identifies which native owner an opaque API session resolves through.
+    enum class OwnerKind : std::uint8_t {
+      Scene,
+      Project,
+    };
 
-    void* session_ = nullptr;
+    /// Stores the opaque owner pointer and its resolution strategy.
+    struct Binding final {
+      void *owner = nullptr;
+      OwnerKind kind = OwnerKind::Scene;
+      std::uint32_t standalone_generation = 1u;
+    };
+
+    explicit QuaderApiSession(std::shared_ptr<Binding> binding) noexcept
+        : binding_(std::move(binding)) {}
+
+    std::shared_ptr<Binding> binding_;
 };
 
 } // namespace quader

@@ -104,13 +104,17 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractUIGroupsAndShellTargetsAreDi
 	EXPECT_TRUE(qhc::find_ui_group_descriptor("operation_settings") != nullptr);
 
 	const std::span<const qhc::HostInteractionDescriptor> interactions = qhc::interaction_catalog();
-	EXPECT_TRUE(interactions.size() == 39U);
+	EXPECT_TRUE(interactions.size() == 43U);
         EXPECT_TRUE(has_interaction_kind(
             "open_editor", qhc::HostInteractionKind::EditorAction));
         EXPECT_TRUE(has_interaction_kind(
             "apply_active_material", qhc::HostInteractionKind::EditorAction));
         EXPECT_TRUE(has_interaction_kind(
-            "save_as_document", qhc::HostInteractionKind::EditorAction));
+            "save_scene_as", qhc::HostInteractionKind::EditorAction));
+        EXPECT_TRUE(has_interaction_kind(
+            "save_all_scenes", qhc::HostInteractionKind::EditorAction));
+        EXPECT_TRUE(has_interaction_kind(
+            "previous_scene", qhc::HostInteractionKind::EditorAction));
         EXPECT_TRUE(has_interaction_kind(
             "layout_four_view_quad", qhc::HostInteractionKind::ViewportAction));
         EXPECT_TRUE(has_interaction_kind(
@@ -143,7 +147,7 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractUIGroupsAndShellTargetsAreDi
 
 TEST(QdrEditorMetadataUiPlacementTests, HostContractUIPlacementsResolveToKnownDescriptorOnlyTargets) {
 	const std::span<const qhc::HostUiPlacementDescriptor> placements = qhc::ui_placement_catalog();
-	EXPECT_TRUE(placements.size() == 32U);
+	EXPECT_TRUE(placements.size() == 36U);
 
 	for (const qhc::HostUiPlacementDescriptor& placement : placements) {
 		EXPECT_FALSE(placement.id.empty());
@@ -198,12 +202,17 @@ TEST(QdrEditorMetadataUiPlacementTests, HostContractMainMenuPlacementPreservesEd
 	EXPECT_TRUE(open_editor.order == 0U);
 	EXPECT_FALSE(open_editor.separator_before);
 
-	const qhc::HostUiPlacementDescriptor& new_document = require_placement("menu_new_document");
-	EXPECT_TRUE(same_text(new_document.group_id, "file"));
-	EXPECT_FALSE(new_document.separator_before);
-	EXPECT_TRUE(new_document.order < require_placement("menu_open_document").order);
-	EXPECT_TRUE(require_placement("menu_open_document").order < require_placement("menu_save_document").order);
-	EXPECT_TRUE(require_placement("menu_save_document").order < require_placement("menu_save_as_document").order);
+	const qhc::HostUiPlacementDescriptor& new_scene = require_placement("menu_new_scene");
+	EXPECT_TRUE(same_text(new_scene.group_id, "file"));
+	EXPECT_FALSE(new_scene.separator_before);
+	EXPECT_TRUE(new_scene.order < require_placement("menu_open_scene").order);
+	EXPECT_TRUE(require_placement("menu_open_scene").order < require_placement("menu_save_scene").order);
+	EXPECT_TRUE(require_placement("menu_save_scene").order < require_placement("menu_save_scene_as").order);
+	EXPECT_TRUE(require_placement("menu_save_scene_as").order < require_placement("menu_save_all_scenes").order);
+	EXPECT_TRUE(require_placement("menu_save_all_scenes").order < require_placement("menu_close_scene").order);
+	EXPECT_TRUE(require_placement("menu_close_scene").order < require_placement("menu_next_scene").order);
+	EXPECT_TRUE(require_placement("menu_next_scene").separator_before);
+	EXPECT_TRUE(require_placement("menu_next_scene").order < require_placement("menu_previous_scene").order);
 
 	const qhc::HostUiPlacementDescriptor& layout = require_placement("menu_layout_single_view");
 	EXPECT_TRUE(same_text(layout.group_id, "viewport_layout"));

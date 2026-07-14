@@ -7,6 +7,7 @@
 #pragma once
 
 #include "api/quader_api_result.hpp"
+#include "api/quader_api_session.hpp"
 #include "core/command_result.hpp"
 #include "editor/commands/document/document_command_result.hpp"
 #include "editor/commands/editor_command_service.hpp"
@@ -14,12 +15,13 @@
 #include "editor/commands/modeling_command_execution_service.hpp"
 
 #include <memory>
+#include <functional>
 #include <string>
 #include <string_view>
 
 namespace quader {
 
-class ProjectSession;
+class SceneSession;
 class ModelingSessionMemento;
 enum class ModelingSelectionMode;
 
@@ -28,10 +30,16 @@ enum class ModelingSelectionMode;
  */
 class QuaderApiMutationRunner final {
 public:
-  QuaderApiMutationRunner(ProjectSession &session,
-                          EditorHistoryService &history,
-                          EditorCommandService &editor_commands,
-                          ModelingCommandExecutionService &modeling_commands);
+  explicit QuaderApiMutationRunner(QuaderApiSession session);
+
+  void set_dirty_changed_callback(std::function<void(bool)> callback);
+  void synchronize_dirty_state();
+  [[nodiscard]] bool available() const;
+  [[nodiscard]] SceneSessionId scene_session_id() const;
+  [[nodiscard]] bool
+  belongs_to_active_scene(SceneSessionId scene_session_id) const;
+  [[nodiscard]] QuaderApiVoidResult
+  stale_scene_reference_status(std::string_view reference_kind) const;
 
   [[nodiscard]] QuaderRevisionStamp current_revisions() const;
   [[nodiscard]] EditorTransaction begin_transaction(std::string label);
@@ -82,16 +90,21 @@ public:
 private:
   [[nodiscard]] QuaderApiVoidResult
   status_from(CommandResult result, QuaderMutationKind kind,
-              std::string_view fallback_message = {}) const;
+              std::string_view fallback_message = {});
   [[nodiscard]] QuaderApiVoidResult
   status_from(ModelingCommandResult result, QuaderMutationKind kind,
-              std::string_view fallback_message = {}) const;
+              std::string_view fallback_message = {});
+  void observe_dirty_state();
   [[nodiscard]] ModelingCommandResult cancel_active_tool_or_preview_for_undo();
+  [[nodiscard]] SceneSession &scene_session() const;
+  [[nodiscard]] EditorHistoryService &history() const;
+  [[nodiscard]] EditorCommandService editor_commands() const;
 
-  ProjectSession &session_;
-  EditorHistoryService &history_;
-  EditorCommandService &editor_commands_;
-  ModelingCommandExecutionService &modeling_commands_;
+  QuaderApiSession session_;
+  ModelingCommandExecutionService modeling_commands_;
+  std::function<void(bool)> dirty_changed_callback_;
+  SceneSessionId observed_scene_session_id_;
+  bool observed_dirty_ = false;
 };
 
 } // namespace quader

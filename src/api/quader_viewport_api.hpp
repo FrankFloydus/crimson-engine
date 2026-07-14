@@ -62,6 +62,7 @@ public:
     [[nodiscard]] QuaderViewportHandle pane(ViewportPaneId pane);
 
 private:
+    friend class QuaderEditorApi;
     friend class QuaderViewportApiRuntimeAccess;
 
     class Impl;

@@ -43,7 +43,16 @@ enum class QuaderNotificationLevel {
  */
 struct QuaderProjectMetadata {
     std::uint64_t id = 0;
+    std::string uuid;
     std::string name;
+};
+
+/// Describes one recent project entry for the Home surface.
+struct QuaderRecentProject final {
+  std::string uuid;
+  std::string name;
+  std::filesystem::path manifest_path;
+  bool available = false;
 };
 
 /**
@@ -67,8 +76,10 @@ enum class QuaderDirtyProjectDecision {
  * Represents Quader Project Runtime Hooks value used by the native shell.
  */
 struct QuaderProjectRuntimeHooks {
+  std::function<std::optional<std::filesystem::path>()> choose_create_root;
+  std::function<std::optional<std::filesystem::path>()>
+      choose_open_manifest_path;
   std::function<std::optional<std::filesystem::path>()> choose_open_path;
-  std::function<std::optional<std::filesystem::path>()> choose_save_as_path;
   std::function<std::optional<std::filesystem::path>()> choose_export_obj_path;
   std::function<QuaderDirtyProjectDecision(std::string_view action_id)>
       confirm_dirty_project_replacement;

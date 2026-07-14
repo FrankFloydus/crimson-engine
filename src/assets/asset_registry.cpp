@@ -37,6 +37,30 @@ AssetId AssetRegistry::add_mesh(AssetId id, MeshAsset mesh) {
   return id;
 }
 
+AssetId AssetRegistry::add_deferred_mesh(
+    AssetId id, std::string name, bool has_stable_cpu_topology,
+    bool has_authored_polygon_document, std::function<MeshAsset()> loader) {
+  if (id == kInvalidAssetId || meshes_.contains(id) || !loader) {
+    return kInvalidAssetId;
+  }
+  MeshAsset descriptor;
+  descriptor.name = std::move(name);
+  descriptor.has_stable_cpu_topology = has_stable_cpu_topology;
+  if (meshes_.add(id, std::move(descriptor)) == kInvalidAssetId) {
+    return kInvalidAssetId;
+  }
+  deferred_meshes_.emplace(
+      id, DeferredMesh{
+              .has_stable_cpu_topology = has_stable_cpu_topology,
+              .has_authored_polygon_document =
+                  has_authored_polygon_document,
+              .loader = std::move(loader),
+          });
+  next_id_ = std::max(next_id_, id + 1u);
+  mark_dirty();
+  return id;
+}
+
 AssetId AssetRegistry::add_material(MaterialDocument material) {
   if (next_id_ == kInvalidAssetId || !validate_material(material).ok) {
     return kInvalidAssetId;
@@ -89,6 +113,7 @@ bool AssetRegistry::remove_mesh(AssetId id) {
   if (!meshes_.remove(id)) {
     return false;
   }
+  deferred_meshes_.erase(id);
   mark_dirty();
   return true;
 }
@@ -114,6 +139,7 @@ bool AssetRegistry::replace_mesh(AssetId id, MeshAsset mesh) {
       !meshes_.replace(id, isolate_mesh_asset_payload(std::move(mesh)))) {
     return false;
   }
+  deferred_meshes_.erase(id);
   mark_dirty();
   return true;
 }
@@ -140,7 +166,7 @@ bool AssetRegistry::replace_texture(AssetId id, TextureAsset texture) {
 
 bool AssetRegistry::update_mesh(
     AssetId id, const std::function<void(MeshAsset &)> &update) {
-  const MeshAsset *existing = meshes_.get(id);
+  const MeshAsset *existing = mesh(id);
   if (existing == nullptr) {
     return false;
   }
@@ -306,7 +332,63 @@ bool AssetRegistry::update_texture(
 }
 
 const MeshAsset* AssetRegistry::mesh(AssetId id) const {
+  const auto deferred = deferred_meshes_.find(id);
+  if (deferred == deferred_meshes_.end()) {
     return meshes_.get(id);
+  }
+  const MeshAsset *descriptor = meshes_.get(id);
+  if (descriptor == nullptr) {
+    deferred_meshes_.erase(deferred);
+    return nullptr;
+  }
+
+  MeshAsset materialized = deferred->second.loader();
+  materialized.name = descriptor->name;
+  materialized.has_stable_cpu_topology =
+      deferred->second.has_stable_cpu_topology;
+  if (materialized.has_authored_polygon_document !=
+      deferred->second.has_authored_polygon_document) {
+    return nullptr;
+  }
+  if (!validate_mesh(materialized).ok) {
+    return nullptr;
+  }
+  const MeshAssetRevision revision = descriptor->revision;
+  MeshAsset *stored = const_cast<MeshAsset *>(descriptor);
+  *stored = isolate_mesh_asset_payload(std::move(materialized));
+  stored->id = id;
+  stored->revision = revision;
+  deferred_meshes_.erase(deferred);
+  return stored;
+}
+
+bool AssetRegistry::has_mesh(AssetId id) const { return meshes_.contains(id); }
+
+bool AssetRegistry::mesh_materialized(AssetId id) const {
+  return meshes_.contains(id) && !deferred_meshes_.contains(id);
+}
+
+std::optional<MeshAssetDescriptor>
+AssetRegistry::mesh_descriptor(AssetId id) const {
+  const MeshAsset *stored = meshes_.get(id);
+  if (stored == nullptr) {
+    return std::nullopt;
+  }
+  const auto deferred = deferred_meshes_.find(id);
+  return MeshAssetDescriptor{
+      .id = id,
+      .revision = stored->revision,
+      .name = stored->name,
+      .has_stable_cpu_topology =
+          deferred == deferred_meshes_.end()
+              ? stored->has_stable_cpu_topology
+              : deferred->second.has_stable_cpu_topology,
+      .has_authored_polygon_document =
+          deferred == deferred_meshes_.end()
+              ? stored->has_authored_polygon_document
+              : deferred->second.has_authored_polygon_document,
+      .materialized = deferred == deferred_meshes_.end(),
+  };
 }
 
 const MaterialDocument* AssetRegistry::material(AssetId id) const {

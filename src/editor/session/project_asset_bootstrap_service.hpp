@@ -6,11 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "scene/document/project_document.hpp"
+#include "scene/document/scene_content_document.hpp"
 
 namespace quader {
 
-class ProjectSession;
+class SceneSession;
 
 /**
  * Stores the project default asset identifiers created during asset bootstrap.
@@ -27,7 +27,7 @@ struct ProjectDefaultAssets final {
 class ProjectAssetBootstrapService final {
 public:
   [[nodiscard]] ProjectDefaultAssets
-  bootstrap_default_assets(ProjectSession &session) const;
+  bootstrap_default_assets(SceneSession &session) const;
 };
 
 } // namespace quader

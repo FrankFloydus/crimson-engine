@@ -10,7 +10,6 @@
 #include <editor/modeling/runtime/session.hpp>
 #include <editor/interactions/interaction_api.hpp>
 #include <editor/metadata/host_contract.hpp>
-#include <io/qdr/qdr_runtime_io_compat.hpp>
 #include <mesh/polygon/document.hpp>
 
 #include <fstream>
@@ -119,15 +118,6 @@ TEST(QdrCustomEngineModelingRuntimeSmokeTests, CustomEngineConsumerCanRunAModeli
 	EXPECT_FALSE(gizmo.axes.empty());
 	EXPECT_FALSE(gizmo.planes.empty());
 
-	const std::string serialized = quader_io::serialize_session_state(session.state());
-	EXPECT_TRUE(serialized.find("\"format\": \"quader.qdr\"") != std::string::npos);
-
-	const quader_io::ReadResult read = quader_io::deserialize_session_state(serialized);
-	EXPECT_TRUE(read.ok);
-
-	const qec::EditorSession loaded(read.state);
-	EXPECT_TRUE(loaded.objects().size() == session.objects().size());
-	require_compilable_meshes(loaded);
 }
 
 #ifdef QUADER_CUSTOM_ENGINE_SMOKE_SOURCE_PATH

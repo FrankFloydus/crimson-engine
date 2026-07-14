@@ -210,8 +210,6 @@ Current modeling-domain targets that stay valid during SDK adapter migration:
 - `quader_geometry`
 - `quader_modeling_polygon`
 - `quader_modeling_runtime`
-- `quader_qdr_document_io`
-- `quader_qdr_runtime_io`
 - `quader_editor_metadata`
 - `quader_modeling_domain_tests`
 - `quader_modeling_domain_polygon_loop_tests`
@@ -281,8 +279,8 @@ Required state:
 
 Current native behavior is correct for the app, but not portable:
 
-- QDR project read/write headers expose `ProjectDocument`;
-- reader hydration touches `ProjectDocument`, `AssetRegistry`, and `SceneDocument`;
+- QDR scene read/write headers expose `SceneContentDocument`;
+- reader hydration touches `SceneContentDocument`, `AssetRegistry`, and `SceneDocument`;
 - QDR reader includes editor projection to compile polygon documents into mesh assets;
 - OBJ writer consumes `MeshAsset`;
 - durable replace logic has native Win32 policy.
@@ -499,6 +497,8 @@ Actions:
    `MaterialPayload` records.
 6. Add banned symbol/include guardrails for SDK public headers:
    - `SceneDocument`
+   - `SceneContentDocument`
+   - `SceneSession`
    - `ProjectDocument`
    - `ProjectSession`
    - `AssetRegistry`
@@ -562,13 +562,13 @@ Goal: separate portable document interchange from native project persistence.
 Actions:
 
 1. Create portable QDR document IO under the SDK boundary.
-2. Move or wrap portable pieces:
-   - `qdr_document`
-   - `qdr_polygon_document_codec`
-   - `qdr_root`
-   - `qdr_diagnostic`
-3. Keep native project save/load under native IO:
-   - `ProjectDocument` hydration/extraction;
+2. Keep the portable SDK surface binary-only through
+   `quader_modeling_sdk_qdr_document`, with `std::vector<std::byte>` writes and
+   `std::span<const std::byte>` reads. The retired JSON document/root/migration
+   codecs and native runtime compatibility targets do not ship.
+3. Keep native scene save/load and project-workspace persistence under native IO:
+   - `SceneContentDocument` hydration/extraction;
+   - folder-backed `ProjectSession` and `.qproj` manifest persistence;
    - `AssetRegistry` hydration/extraction;
    - `SceneDocument` entity/component wiring;
    - app material/texture packaging;
@@ -837,7 +837,8 @@ cmake --build --preset vs2026-debug --target quader
 
 - Do not move `ModelingSessionService` into the SDK.
 - Do not rename `QuaderEditorApi` or `QuaderApi` into the SDK API.
-- Do not expose `SceneDocument`, `ProjectDocument`, `ProjectSession`, `AssetRegistry`,
+- Do not expose `SceneDocument`, `SceneContentDocument`, `SceneSession`, `ProjectDocument`,
+  `ProjectSession`, `AssetRegistry`,
   `SceneRenderBridge`, `ViewportOverlayFrame`, or native command IDs from SDK public headers.
 - Do not create a top-level copied SDK package.
 - Do not add old SDK-specific presets.

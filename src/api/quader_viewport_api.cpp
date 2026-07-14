@@ -19,16 +19,23 @@ namespace quader {
  */
 class QuaderViewportApi::Impl final {
 public:
-    ViewportWorkspaceService workspace{ViewportWorkspaceLayoutPolicy::MultiPane};
+    ViewportWorkspaceService owned_workspace{
+        ViewportWorkspaceLayoutPolicy::MultiPane};
+    ViewportWorkspaceService *workspace = &owned_workspace;
     QuaderViewportRuntimeHooks hooks;
 };
 
 ViewportWorkspaceService& QuaderViewportApiRuntimeAccess::workspace(QuaderViewportApi& api) {
-    return api.impl_->workspace;
+    return *api.impl_->workspace;
 }
 
 const ViewportWorkspaceService& QuaderViewportApiRuntimeAccess::workspace(const QuaderViewportApi& api) {
-    return api.impl_->workspace;
+    return *api.impl_->workspace;
+}
+
+void QuaderViewportApiRuntimeAccess::bind_scene_workspace(
+    QuaderViewportApi &api, ViewportWorkspaceService &next) {
+  api.impl_->workspace = &next;
 }
 
 QuaderViewportApi::QuaderViewportApi()
@@ -44,36 +51,36 @@ void QuaderViewportApi::set_runtime_hooks(QuaderViewportRuntimeHooks hooks) {
 }
 
 ViewportLayoutId QuaderViewportApi::layout() const {
-    return impl_->workspace.layout();
+    return impl_->workspace->layout();
 }
 
 QuaderApiVoidResult QuaderViewportApi::set_layout(ViewportLayoutId layout) {
-  if (!impl_->workspace.supports_layout(layout)) {
+  if (!impl_->workspace->supports_layout(layout)) {
     return unavailable("The active viewport workspace policy does not support "
                        "the requested layout.");
   }
-  return runtime_status(impl_->workspace.set_layout(layout));
+  return runtime_status(impl_->workspace->set_layout(layout));
 }
 
 std::size_t QuaderViewportApi::active_pane_count() const {
-  return impl_->workspace.active_pane_placements().size();
+  return impl_->workspace->active_pane_placements().size();
 }
 
 ViewportPaneId QuaderViewportApi::focused_pane() const {
-  return impl_->workspace.focused_pane();
+  return impl_->workspace->focused_pane();
 }
 
 int QuaderViewportApi::grid_preset() const {
-  return impl_->workspace.grid_preset();
+  return impl_->workspace->grid_preset();
 }
 
 QuaderApiVoidResult QuaderViewportApi::set_grid_preset(int preset) {
-  return runtime_status(impl_->workspace.set_grid_preset(preset));
+  return runtime_status(impl_->workspace->set_grid_preset(preset));
 }
 
 QuaderShadingMode QuaderViewportApi::shading_mode(ViewportPaneId pane) const {
   return quader_api_from_viewport_shading_mode(
-      impl_->workspace.shading_mode(pane));
+      impl_->workspace->shading_mode(pane));
 }
 
 QuaderApiVoidResult
@@ -83,17 +90,17 @@ QuaderViewportApi::set_shading_mode(ViewportPaneId pane,
     return unavailable(
         "XRay shading mode is not supported by the native viewport.");
   }
-  return runtime_status(impl_->workspace.set_shading_mode(
+  return runtime_status(impl_->workspace->set_shading_mode(
       pane, quader_api_to_viewport_shading_mode(mode)));
 }
 
 ViewportView QuaderViewportApi::view(ViewportPaneId pane) const {
-    return impl_->workspace.view(pane);
+    return impl_->workspace->view(pane);
 }
 
 QuaderApiVoidResult QuaderViewportApi::set_view(ViewportPaneId pane,
                                                 ViewportView view) {
-  return runtime_status(impl_->workspace.set_view(pane, view));
+  return runtime_status(impl_->workspace->set_view(pane, view));
 }
 
 QuaderApiVoidResult QuaderViewportApi::frame_all(ViewportPaneId pane) {
@@ -112,7 +119,7 @@ QuaderApiVoidResult QuaderViewportApi::focus_origin(ViewportPaneId pane) {
   if (impl_->hooks.focus_origin) {
     return impl_->hooks.focus_origin(pane);
   }
-  return runtime_status(impl_->workspace.focus_origin(pane));
+  return runtime_status(impl_->workspace->focus_origin(pane));
 }
 
 bool QuaderViewportApi::can_spawn_window() const {

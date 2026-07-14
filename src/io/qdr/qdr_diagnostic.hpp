@@ -6,7 +6,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include <algorithm>
 #include <cstddef>
 #include <filesystem>
 #include <optional>
@@ -27,16 +26,8 @@ enum class QdrDiagnosticSeverity {
 };
 
 /**
- * Identifies a line and column inside a QDR text payload.
- */
-struct QdrTextLocation {
-  std::size_t line = 1u;
-  std::size_t column = 1u;
-};
-
-/**
- * Stores a structured QDR diagnostic. The path field is an RFC 6901 JSON
- * pointer; an empty path identifies the document root.
+ * Stores a structured QDR diagnostic. The path field identifies a semantic
+ * field or chunk; an empty path identifies the document root.
  */
 struct QdrDiagnostic {
   std::string code;
@@ -95,21 +86,5 @@ public:
 private:
   QdrDiagnostic diagnostic_;
 };
-
-[[nodiscard]] inline QdrTextLocation
-qdr_text_location_from_parse_byte(std::string_view text, std::size_t byte) {
-  const std::size_t target =
-      std::min(byte == 0u ? 0u : byte - 1u, text.size());
-  QdrTextLocation location;
-  for (std::size_t index = 0u; index < target; ++index) {
-    if (text[index] == '\n') {
-      ++location.line;
-      location.column = 1u;
-    } else {
-      ++location.column;
-    }
-  }
-  return location;
-}
 
 } // namespace quader_io

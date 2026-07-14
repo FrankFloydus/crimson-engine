@@ -7,12 +7,9 @@
 #include "test_support.hpp"
 
 #include <editor/modeling/runtime/session.hpp>
-#include <io/qdr/qdr_runtime_io_compat.hpp>
 #include <mesh/polygon/document.hpp>
 
-#include <string>
-
-TEST(QdrModelingDomainSmoke, AppOwnedModelingDomainLinkThroughDocumentEditorCoreAndIO) {
+TEST(QdrModelingDomainSmoke, AppOwnedModelingDomainLinksDocumentAndEditorCore) {
 	quader_poly::CubePrimitiveSpec spec;
 	spec.width = 128.0F;
 	spec.height = 32.0F;
@@ -32,12 +29,4 @@ TEST(QdrModelingDomainSmoke, AppOwnedModelingDomainLinkThroughDocumentEditorCore
 	EXPECT_TRUE(create.ok);
 	EXPECT_TRUE(create.changed);
 	EXPECT_TRUE(session.objects().size() == 1U);
-
-	const quader_io::QdrDocument qdr_document = quader_io::document_from_session_state(session.state());
-	const std::string serialized = quader_io::serialize_document(qdr_document);
-	EXPECT_TRUE(serialized.find("\"format\": \"quader.qdr\"") != std::string::npos);
-
-	const quader_io::QdrReadResult read = quader_io::deserialize_document(serialized);
-	EXPECT_TRUE(read.ok);
-	EXPECT_TRUE(read.document.objects.size() == 1U);
 }

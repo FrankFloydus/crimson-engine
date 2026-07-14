@@ -9,7 +9,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
-#include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "ui/inspector_panel.hpp"
 #include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_main_menu.hpp"
@@ -398,9 +398,9 @@ TEST(InspectorPanelTests,
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
 
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   const QuaderApiResult<QuaderEntityRef> light =
       editor.scene().create_point_light(
           QuaderCreatePointLightArgs{.name = "Inspector Color Light",
@@ -555,9 +555,9 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
 
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   const std::filesystem::path keybindings =
       std::filesystem::temp_directory_path() /
       "quader-main-menu-effective-tool-shortcut.json";
@@ -612,9 +612,9 @@ TEST(QtMainMenuTests, RebuildAndDestructionReleaseOwnedHierarchy) {
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
 
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   ViewportSettings viewport_settings = ViewportSettings::defaults();
   LocalizationService localization = loaded_localization();
   QMenuBar menu_bar;
@@ -674,9 +674,9 @@ TEST(QtMainWindowTests, MenuExitAndNativeCloseShareOneRequestBoundary) {
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
 
-  ProjectSession session;
+  SceneSession session;
   QuaderEditorApi editor(
-      QuaderApiSessionInternalAccess::from_project_session(session));
+      QuaderApiSessionInternalAccess::from_scene_session(session));
   ViewportSettings viewport_settings = ViewportSettings::defaults();
   LocalizationService localization = loaded_localization();
 

@@ -16,16 +16,6 @@ file(GLOB QUADER_CANONICAL_POLYGON_SOURCES CONFIGURE_DEPENDS
     "${QUADER_MODELING_SDK_INTERNAL_DIR}/mesh/polygon/*.cpp"
     "${QUADER_MODELING_SDK_INTERNAL_DIR}/mesh/polygon/operations/*.cpp")
 
-set(QUADER_CANONICAL_QDR_SHARED_SOURCES
-    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_atomic_write.cpp"
-    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_polygon_document_codec.cpp"
-    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_root.cpp")
-set(QUADER_CANONICAL_QDR_DOCUMENT_SOURCE
-    "${QUADER_MODELING_SDK_INTERNAL_DIR}/io/qdr/qdr_document.cpp")
-set(QUADER_CANONICAL_QDR_SOURCES
-    ${QUADER_CANONICAL_QDR_SHARED_SOURCES}
-    ${QUADER_CANONICAL_QDR_DOCUMENT_SOURCE})
-
 add_library(quader_modeling_profile INTERFACE)
 
 if(QUADER_ENABLE_TRACY)
@@ -213,50 +203,6 @@ target_include_directories(quader_editor_metadata
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(quader_editor_metadata PRIVATE quader_modeling_runtime)
 
-add_library(quader_qdr_shared_io STATIC ${QUADER_CANONICAL_QDR_SHARED_SOURCES})
-quader_enable_common_pch(quader_qdr_shared_io)
-target_compile_features(quader_qdr_shared_io PRIVATE cxx_std_20)
-target_include_directories(quader_qdr_shared_io
-    PRIVATE
-        "${QUADER_MODELING_SDK_INTERNAL_DIR}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
-        "${QUADER_APP_THIRDPARTY_DIR}")
-target_link_libraries(quader_qdr_shared_io
-    PRIVATE
-        quader_modeling_polygon
-        quader_modeling_profile)
-
-add_library(quader_qdr_document_io STATIC ${QUADER_CANONICAL_QDR_DOCUMENT_SOURCE})
-quader_enable_common_pch(quader_qdr_document_io)
-target_compile_features(quader_qdr_document_io PUBLIC cxx_std_20)
-target_include_directories(quader_qdr_document_io
-    PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    PRIVATE
-        "${QUADER_MODELING_SDK_INTERNAL_DIR}"
-        "${QUADER_APP_THIRDPARTY_DIR}")
-target_link_libraries(quader_qdr_document_io
-    PUBLIC
-        quader_modeling_polygon
-    PRIVATE
-        quader_qdr_shared_io
-        quader_modeling_profile)
-
-add_library(quader_qdr_runtime_io STATIC
-    src/io/qdr/qdr_runtime_io_compat.cpp)
-add_library(quader_qdr_modeling_runtime_io ALIAS quader_qdr_runtime_io)
-quader_enable_common_pch(quader_qdr_runtime_io)
-target_compile_features(quader_qdr_runtime_io PUBLIC cxx_std_20)
-target_include_directories(quader_qdr_runtime_io
-    PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(quader_qdr_runtime_io
-    PUBLIC
-        quader_qdr_document_io
-        quader_modeling_runtime
-    PRIVATE
-        quader_modeling_profile)
-
 function(quader_configure_modeling_sdk_target target)
     quader_enable_common_pch(${target})
     target_compile_features(${target} PUBLIC cxx_std_20)
@@ -290,8 +236,7 @@ target_link_libraries(quader_modeling_sdk_polygon
         quader_modeling_sdk_geometry)
 
 add_library(quader_modeling_sdk_qdr_document STATIC
-    src/sdk/core/modeling/src/qdr_document.cpp
-    ${QUADER_CANONICAL_QDR_SOURCES})
+    src/sdk/core/modeling/src/qdr_document.cpp)
 add_library(quader::modeling_sdk_qdr_document ALIAS quader_modeling_sdk_qdr_document)
 set_target_properties(quader_modeling_sdk_qdr_document PROPERTIES
     EXPORT_NAME modeling_sdk_qdr_document)
@@ -390,9 +335,7 @@ set(QUADER_MODELING_DOMAIN_TEST_CATEGORIES
     geometry
     polygon
     runtime
-    editor_metadata
-    qdr_document
-    qdr_runtime)
+    editor_metadata)
 
 function(quader_add_modeling_domain_test_source category target)
     if(NOT category IN_LIST QUADER_MODELING_DOMAIN_TEST_CATEGORIES)
@@ -416,8 +359,7 @@ function(quader_configure_modeling_domain_test_compile target)
             "QUADER_CUSTOM_ENGINE_SMOKE_SOURCE_PATH=\"${QUADER_MODELING_DOMAIN_TEST_ROOT}/qdr_custom_engine_modeling_runtime_smoke_tests.cpp\""
             "QUADER_MODELING_DOMAIN_TEST_ROOT_PATH=\"${QUADER_MODELING_DOMAIN_TEST_ROOT}\""
             "QUADER_HOST_CONTRACT_HEADER_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/src/editor/metadata/host_contract.hpp\""
-            "QUADER_HOST_CONTRACT_SOURCE_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/src/editor/metadata/host_contract.cpp\""
-            "QUADER_QDR_TEST_FIXTURE_DIR=\"${QUADER_MODELING_DOMAIN_TEST_ROOT}/fixtures/io\"")
+            "QUADER_HOST_CONTRACT_SOURCE_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/src/editor/metadata/host_contract.cpp\"")
     target_include_directories(${target}
         PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -435,8 +377,6 @@ function(quader_link_modeling_domain_test target)
             quader_modeling_polygon
             quader_modeling_runtime
             quader_editor_metadata
-            quader_qdr_document_io
-            quader_qdr_runtime_io
             GTest::gtest
             GTest::gtest_main)
 endfunction()
@@ -488,9 +428,6 @@ if(QUADER_BUILD_TESTS)
     if(QUADER_USE_OPENMESH_TOPOLOGY)
         quader_add_modeling_domain_test_source(polygon qdr_document_openmesh_topology_query_tests tests/modeling_domain/qdr_document_openmesh_topology_query_tests.cpp)
     endif()
-
-    quader_add_modeling_domain_test_source(qdr_document qdr_io_document_tests tests/modeling_domain/qdr_io_document_tests.cpp)
-    quader_add_modeling_domain_test_source(qdr_runtime qdr_runtime_io_compat_tests tests/modeling_domain/qdr_runtime_io_compat_tests.cpp)
 
     quader_add_modeling_domain_test_source(runtime qdr_modeling_runtime_overlay_tests tests/modeling_domain/qdr_modeling_runtime_overlay_tests.cpp)
     quader_add_modeling_domain_test_source(runtime qdr_modeling_runtime_picking_tests tests/modeling_domain/qdr_modeling_runtime_picking_tests.cpp)
@@ -637,25 +574,20 @@ if(QUADER_BUILD_TESTS)
 
     quader_add_modeling_domain_loop_target(quader_modeling_domain_polygon_loop_tests
         $<TARGET_OBJECTS:quader_modeling_domain_geometry_test_objects>
-        $<TARGET_OBJECTS:quader_modeling_domain_polygon_test_objects>
-        $<TARGET_OBJECTS:quader_modeling_domain_qdr_document_test_objects>)
+        $<TARGET_OBJECTS:quader_modeling_domain_polygon_test_objects>)
     target_link_libraries(quader_modeling_domain_polygon_loop_tests
         PRIVATE
             quader_geometry
-            quader_modeling_polygon
-            quader_qdr_document_io)
+            quader_modeling_polygon)
     quader_add_modeling_domain_loop_target(quader_modeling_domain_runtime_loop_tests
         $<TARGET_OBJECTS:quader_modeling_domain_smoke_test_objects>
-        $<TARGET_OBJECTS:quader_modeling_domain_runtime_test_objects>
-        $<TARGET_OBJECTS:quader_modeling_domain_qdr_runtime_test_objects>)
+        $<TARGET_OBJECTS:quader_modeling_domain_runtime_test_objects>)
     target_link_libraries(quader_modeling_domain_runtime_loop_tests
         PRIVATE
             quader_geometry
             quader_modeling_polygon
             quader_modeling_runtime
-            quader_editor_metadata
-            quader_qdr_document_io
-            quader_qdr_runtime_io)
+            quader_editor_metadata)
     quader_add_modeling_domain_loop_target(quader_modeling_domain_metadata_loop_tests
         $<TARGET_OBJECTS:quader_modeling_domain_editor_metadata_test_objects>)
     target_link_libraries(quader_modeling_domain_metadata_loop_tests

@@ -412,7 +412,7 @@ bool SceneDocument::set_selected(EntityId id, bool selected) {
     if (was_selected != selected ||
         previous_active_selection != active_selection_) {
       ++selection_revision_;
-      mark_dirty();
+      mark_transient_dirty();
     }
     return true;
   }
@@ -426,7 +426,7 @@ bool SceneDocument::set_active_selection(EntityId id) {
   if (active_selection_ != id) {
     active_selection_ = id;
     ++selection_revision_;
-    mark_dirty();
+    mark_transient_dirty();
   }
   return true;
 }
@@ -445,7 +445,7 @@ void SceneDocument::clear_selection() {
   }
   if (changed) {
     ++selection_revision_;
-    mark_dirty();
+    mark_transient_dirty();
   }
 }
 
@@ -1025,6 +1025,8 @@ QMat4 SceneDocument::world_transform_matrix(EntityId id) const {
 void SceneDocument::advance_revision_for_replacement(
     std::uint64_t previous_revision) {
   revision_ = std::max(revision_ + 1u, previous_revision + 1u);
+  content_revision_ =
+      std::max(content_revision_ + 1u, previous_revision + 1u);
   selection_revision_ = std::max(selection_revision_ + 1u, revision_);
   visibility_revision_ = std::max(visibility_revision_ + 1u, revision_);
   transform_revision_ = std::max(transform_revision_ + 1u, revision_);
@@ -1045,7 +1047,12 @@ EntityId SceneDocument::entity_id(entt::entity entity) const {
   return it == ids_by_entity_.end() ? kInvalidEntityId : it->second;
 }
 
-void SceneDocument::mark_dirty() { ++revision_; }
+void SceneDocument::mark_dirty() {
+  ++revision_;
+  ++content_revision_;
+}
+
+void SceneDocument::mark_transient_dirty() { ++revision_; }
 
 EditorObjectId
 SceneDocument::allocate_editor_object_id(EditorObjectId requested) {
