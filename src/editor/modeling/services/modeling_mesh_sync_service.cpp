@@ -378,6 +378,7 @@ void apply_durable_scene_identity_to_entity(
   {
     QDR_PROFILE_SCOPE("Modeling mesh sync apply identity visibility");
     scene.set_visible(entity, identity.visibility.visible);
+    scene.set_selectable(entity, identity.visibility.selectable);
   }
   {
     QDR_PROFILE_SCOPE("Modeling mesh sync apply identity lock");

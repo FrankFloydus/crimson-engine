@@ -176,7 +176,7 @@ private:
 };
 
 /**
- * Creates one source-inclusive linear array as a single modeling history item.
+ * Creates one or more source-inclusive linear arrays as one history item.
  */
 class LinearArrayHistoryCommand final : public ModelingMementoCommand {
 public:
@@ -201,6 +201,34 @@ private:
 
   ModelingLinearArrayRequest request_;
   ModelingLinearArrayResult created_;
+};
+
+/**
+ * Creates one or more source-inclusive radial arrays as one history item.
+ */
+class RadialArrayHistoryCommand final : public ModelingMementoCommand {
+public:
+  RadialArrayHistoryCommand(ModelingSessionService &modeling,
+                            ModelingRadialArrayRequest request)
+      : ModelingMementoCommand(modeling, "Radial Array"),
+        request_(std::move(request)) {}
+
+  [[nodiscard]] const ModelingRadialArrayResult &created() const {
+    return created_;
+  }
+
+private:
+  ModelingCommandResult execute_initial() override {
+    created_ = modeling().create_radial_array(request_);
+    return {
+        .ok = created_.ok,
+        .changed = created_.changed,
+        .message = created_.message,
+    };
+  }
+
+  ModelingRadialArrayRequest request_;
+  ModelingRadialArrayResult created_;
 };
 
 /**

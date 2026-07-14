@@ -379,7 +379,11 @@ bool SceneDocument::set_visible(EntityId id, bool visible) {
 
 bool SceneDocument::set_selectable(EntityId id, bool selectable) {
   if (VisibilityComponent *component = mutable_visibility(id)) {
+    if (component->selectable == selectable) {
+      return true;
+    }
     component->selectable = selectable;
+    ++visibility_revision_;
     mark_dirty();
     return true;
   }

@@ -142,6 +142,12 @@ void rectangle_insert_vertex(std::unordered_map<int, std::unordered_set<int>>& v
 	}
 }
 
+const RectangleSelectionUniverse &rectangle_request_universe(
+    const RectangleSelectionRequest &request) {
+  return request.universe_view != nullptr ? *request.universe_view
+                                          : request.universe;
+}
+
 RectangleSelectionResult rectangle_select_objects(const RectangleSelectionRequest& request)
 {
 	RectangleSelectionResult result;
@@ -188,6 +194,7 @@ RectangleSelectionResult rectangle_select_objects(const RectangleSelectionReques
 
 RectangleSelectionResult rectangle_select_faces(const RectangleSelectionRequest& request)
 {
+	const RectangleSelectionUniverse& universe = rectangle_request_universe(request);
 	RectangleSelectionResult result;
         result.selection.mode = SelectionMode::Face;
         std::unordered_set<RectangleFaceKey, RectangleFaceKeyHash> selected_faces;
@@ -216,7 +223,7 @@ RectangleSelectionResult rectangle_select_faces(const RectangleSelectionRequest&
                 }
         }
 	result.selection.selected_faces.reserve(selected_faces.size());
-	for (const RectangleSelectionFace face : request.universe.faces) {
+	for (const RectangleSelectionFace face : universe.faces) {
 		if (rectangle_face_is_valid(face) && selected_faces.find(rectangle_face_key(face)) != selected_faces.end()) {
 			result.selection.selected_faces.push_back(face);
 		}
@@ -231,6 +238,7 @@ RectangleSelectionResult rectangle_select_faces(const RectangleSelectionRequest&
 
 RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest& request)
 {
+	const RectangleSelectionUniverse& universe = rectangle_request_universe(request);
 	RectangleSelectionResult result;
         result.selection.mode = SelectionMode::Edge;
         std::unordered_map<int, std::unordered_set<RectangleEdgeKey, RectangleEdgeKeyHash>> selected_edges_by_object;
@@ -243,7 +251,7 @@ RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest&
 			if (full_object_id < 0) {
 				continue;
 			}
-			for (const RectangleSelectionEdge edge : request.universe.edges) {
+			for (const RectangleSelectionEdge edge : universe.edges) {
 				if (edge.object_id == full_object_id) {
 					rectangle_insert_edge(selected_edges_by_object, edge);
 				}
@@ -271,8 +279,8 @@ RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest&
         }
 
 	std::unordered_map<int, int> edge_count_by_object;
-	edge_count_by_object.reserve(request.universe.object_ids.size());
-	for (const RectangleSelectionEdge edge : request.universe.edges) {
+	edge_count_by_object.reserve(universe.object_ids.size());
+	for (const RectangleSelectionEdge edge : universe.edges) {
 		if (rectangle_edge_is_valid(edge)) {
 			edge_count_by_object[edge.object_id]++;
 		}
@@ -286,12 +294,12 @@ RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest&
 		}
 	}
 
-	for (const int object_id : request.universe.object_ids) {
+	for (const int object_id : universe.object_ids) {
 		if (full_object_ids.find(object_id) != full_object_ids.end()) {
 			result.selection.selected_edge_full_object_ids.push_back(object_id);
 		}
 	}
-	for (const RectangleSelectionEdge edge : request.universe.edges) {
+	for (const RectangleSelectionEdge edge : universe.edges) {
 		if (!rectangle_edge_is_valid(edge) || full_object_ids.find(edge.object_id) != full_object_ids.end()) {
 			continue;
 		}
@@ -310,6 +318,7 @@ RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest&
 
 RectangleSelectionResult rectangle_select_vertices(const RectangleSelectionRequest& request)
 {
+	const RectangleSelectionUniverse& universe = rectangle_request_universe(request);
 	RectangleSelectionResult result;
         result.selection.mode = SelectionMode::Vertex;
         std::unordered_map<int, std::unordered_set<int>> selected_vertices_by_object;
@@ -322,7 +331,7 @@ RectangleSelectionResult rectangle_select_vertices(const RectangleSelectionReque
 			if (full_object_id < 0) {
 				continue;
 			}
-			for (const RectangleSelectionVertex vertex : request.universe.vertices) {
+			for (const RectangleSelectionVertex vertex : universe.vertices) {
 				if (vertex.object_id == full_object_id) {
 					rectangle_insert_vertex(selected_vertices_by_object, vertex);
 				}
@@ -350,8 +359,8 @@ RectangleSelectionResult rectangle_select_vertices(const RectangleSelectionReque
         }
 
 	std::unordered_map<int, int> vertex_count_by_object;
-	vertex_count_by_object.reserve(request.universe.object_ids.size());
-	for (const RectangleSelectionVertex vertex : request.universe.vertices) {
+	vertex_count_by_object.reserve(universe.object_ids.size());
+	for (const RectangleSelectionVertex vertex : universe.vertices) {
 		if (rectangle_vertex_is_valid(vertex)) {
 			vertex_count_by_object[vertex.object_id]++;
 		}
@@ -365,12 +374,12 @@ RectangleSelectionResult rectangle_select_vertices(const RectangleSelectionReque
 		}
 	}
 
-	for (const int object_id : request.universe.object_ids) {
+	for (const int object_id : universe.object_ids) {
 		if (full_object_ids.find(object_id) != full_object_ids.end()) {
 			result.selection.selected_vertex_full_object_ids.push_back(object_id);
 		}
 	}
-	for (const RectangleSelectionVertex vertex : request.universe.vertices) {
+	for (const RectangleSelectionVertex vertex : universe.vertices) {
 		if (!rectangle_vertex_is_valid(vertex) || full_object_ids.find(vertex.object_id) != full_object_ids.end()) {
 			continue;
 		}

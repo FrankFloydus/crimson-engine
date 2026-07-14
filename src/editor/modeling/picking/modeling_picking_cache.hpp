@@ -30,7 +30,10 @@ struct ModelingPickingCache {
   bool face_geometry_valid = false;
   std::uint64_t content_revision = 0;
   std::uint64_t selection_revision = 0;
-  std::uint64_t scene_revision = 0;
+  std::uint64_t scene_transform_revision = 0;
+  std::uint64_t scene_visibility_revision = 0;
+  std::uint64_t scene_mesh_binding_revision = 0;
+  std::uint64_t object_map_revision = 0;
   std::vector<quader_editor_core::PolygonObject> objects;
   std::vector<quader_editor_core::PickObjectBounds> bounds;
   std::vector<quader_editor_core::PickObjectFaceGeometry> face_geometry;

@@ -9,8 +9,10 @@
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
+#include "editor/array/radial_array_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
+#include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "platform/window_placement.hpp"
 #include "quader_app_version.hpp"
@@ -209,7 +211,8 @@ void UISystem::install_runtime_hooks(
     QuaderEditorApi &editor, SceneDocument &document, AssetRegistry &assets,
     ModelingSessionService &modeling, EditorSelectionService &selection,
     PivotToolService &pivot, LinearArrayToolService &linear_array,
-    AssetId default_material) {
+    RadialArrayToolService &radial_array,
+    ViewportPointPlacementService &point_placement, AssetId default_material) {
   editor_ = &editor;
   document_ = &document;
   assets_ = &assets;
@@ -217,6 +220,8 @@ void UISystem::install_runtime_hooks(
   selection_ = &selection;
   pivot_ = &pivot;
   linear_array_ = &linear_array;
+  radial_array_ = &radial_array;
+  point_placement_ = &point_placement;
   default_material_ = default_material;
   outliner_refresh_valid_ = false;
   inspector_refresh_valid_ = false;
@@ -503,6 +508,8 @@ void UISystem::shutdown() {
   selection_ = nullptr;
   pivot_ = nullptr;
   linear_array_ = nullptr;
+  radial_array_ = nullptr;
+  point_placement_ = nullptr;
   initialized_ = false;
 }
 
@@ -592,7 +599,8 @@ void UISystem::process_viewport_input() {
     return;
   }
   viewport_panel_->process_input(*editor_, *document_, *assets_, *modeling_,
-                                 default_material_, pivot_, linear_array_);
+                                 default_material_, pivot_, linear_array_,
+                                 radial_array_, point_placement_);
 }
 
 void UISystem::prepare_viewports(
@@ -604,7 +612,7 @@ void UISystem::prepare_viewports(
   }
   viewport_panel_->prepare_viewports(*editor_, render_bridge, snapshot_cache,
                                      *document_, *assets_, *modeling_, pivot_,
-                                     linear_array_);
+                                     linear_array_, radial_array_);
 }
 
 std::size_t UISystem::render_viewports() {

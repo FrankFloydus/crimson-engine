@@ -8,9 +8,11 @@
 
 #include "diagnostics/profile.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
+#include "editor/array/radial_array_tool_service.hpp"
 #include "editor/commands/asset_command_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
+#include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 
@@ -61,8 +63,12 @@ void ProjectSession::rebuild_services() {
   linear_array_ = std::make_unique<LinearArrayToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_,
       *selection_);
+  radial_array_ = std::make_unique<RadialArrayToolService>(
+      document_.scene(), document_.assets(), *history_, *modeling_,
+      *selection_);
+  point_placement_ = std::make_unique<ViewportPointPlacementService>();
   native_tools_ = std::make_unique<NativeViewportToolCoordinator>(
-      *pivot_, *linear_array_, *selection_, *modeling_);
+      *pivot_, *linear_array_, *radial_array_, *selection_, *modeling_);
 }
 
 ProjectSessionReadView ProjectSession::read_view() const {

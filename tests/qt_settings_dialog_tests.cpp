@@ -31,7 +31,9 @@
 #include <QEventLoop>
 #include <QKeyEvent>
 #include <QListWidget>
+#include <QMenu>
 #include <QMenuBar>
+#include <QPointer>
 #include <QPushButton>
 #include <QTimer>
 
@@ -600,6 +602,68 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
   EXPECT_EQ(editor.tools().active_tool(), "pivot");
 
   std::filesystem::remove(keybindings);
+}
+
+TEST(QtMainMenuTests, RebuildAndDestructionReleaseOwnedHierarchy) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-main-menu-lifetime-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  ProjectSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_project_session(session));
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  QMenuBar menu_bar;
+  QPointer<QAction> retained_action;
+  QPointer<QMenu> retained_menu;
+
+  {
+    QtMainMenu menu;
+    menu.initialize(menu_bar,
+                    QtMainMenuContext{
+                        .editor = editor,
+                        .modeling = session.modeling(),
+                        .viewport_settings = viewport_settings,
+                        .localization = localization,
+                    });
+
+    const qsizetype menu_count = menu_bar.findChildren<QMenu *>().size();
+    const qsizetype action_count = menu_bar.findChildren<QAction *>().size();
+    ASSERT_GT(menu_count, 0);
+    ASSERT_GT(action_count, 0);
+
+    for (int rebuild = 0; rebuild < 5; ++rebuild) {
+      retained_menu =
+          menu_bar.findChild<QMenu *>(QStringLiteral("menu_file"));
+      retained_action =
+          menu_bar.findChild<QAction *>(QStringLiteral("action_exit"));
+      ASSERT_FALSE(retained_menu.isNull());
+      ASSERT_FALSE(retained_action.isNull());
+
+      menu.rebuild();
+
+      EXPECT_TRUE(retained_menu.isNull());
+      EXPECT_TRUE(retained_action.isNull());
+      EXPECT_EQ(menu_bar.findChildren<QMenu *>().size(), menu_count);
+      EXPECT_EQ(menu_bar.findChildren<QAction *>().size(), action_count);
+    }
+
+    retained_menu =
+        menu_bar.findChild<QMenu *>(QStringLiteral("menu_file"));
+    retained_action =
+        menu_bar.findChild<QAction *>(QStringLiteral("action_exit"));
+    ASSERT_FALSE(retained_menu.isNull());
+    ASSERT_FALSE(retained_action.isNull());
+  }
+
+  EXPECT_TRUE(retained_menu.isNull());
+  EXPECT_TRUE(retained_action.isNull());
+  EXPECT_TRUE(menu_bar.actions().isEmpty());
+  EXPECT_TRUE(menu_bar.findChildren<QMenu *>().isEmpty());
 }
 
 TEST(QtMainWindowTests, MenuExitAndNativeCloseShareOneRequestBoundary) {

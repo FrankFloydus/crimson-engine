@@ -52,6 +52,8 @@ bool ModelingObjectRuntimeMap::empty() const {
   return entities_by_object_.empty();
 }
 
+std::uint64_t ModelingObjectRuntimeMap::revision() const { return revision_; }
+
 std::optional<EntityId> ModelingObjectRuntimeMap::entity_for_modeling_object(
     int modeling_object_id) const {
   const auto it = entities_by_object_.find(modeling_object_id);
@@ -156,6 +158,14 @@ std::vector<ModelingObjectRecord> ModelingObjectRuntimeMap::records(const SceneD
 }
 
 void ModelingObjectRuntimeMap::bind(int modeling_object_id, EntityId entity) {
+  const auto current_entity = entities_by_object_.find(modeling_object_id);
+  const auto current_object = objects_by_entity_.find(entity);
+  if (current_entity != entities_by_object_.end() &&
+      current_entity->second == entity &&
+      current_object != objects_by_entity_.end() &&
+      current_object->second == modeling_object_id) {
+    return;
+  }
   if (const auto existing_entity = entities_by_object_.find(modeling_object_id);
       existing_entity != entities_by_object_.end() &&
       existing_entity->second != entity) {
@@ -175,6 +185,7 @@ void ModelingObjectRuntimeMap::bind(int modeling_object_id, EntityId entity) {
   }
   entities_by_object_[modeling_object_id] = entity;
   objects_by_entity_[entity] = modeling_object_id;
+  ++revision_;
 }
 
 void ModelingObjectRuntimeMap::remember_scene_entity(int modeling_object_id,
@@ -201,12 +212,18 @@ void ModelingObjectRuntimeMap::unbind_object(int modeling_object_id) {
   }
   objects_by_entity_.erase(it->second);
   entities_by_object_.erase(it);
+  ++revision_;
 }
 
 void ModelingObjectRuntimeMap::clear() {
+  const bool bindings_changed =
+      !entities_by_object_.empty() || !objects_by_entity_.empty();
   entities_by_object_.clear();
   objects_by_entity_.clear();
   scene_identity_by_object_.clear();
+  if (bindings_changed) {
+    ++revision_;
+  }
 }
 
 } // namespace quader

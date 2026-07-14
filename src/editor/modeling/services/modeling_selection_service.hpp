@@ -49,6 +49,10 @@ public:
   void invalidate_picking_cache() const;
   [[nodiscard]] std::uint64_t
   transformed_picking_projection_build_count() const;
+  [[nodiscard]] std::uint64_t
+  rectangle_picking_projection_build_count() const;
+  [[nodiscard]] std::uint64_t
+  rectangle_selection_resolution_build_count() const;
   [[nodiscard]] const std::vector<quader_editor_core::PolygonObject> &
   cached_scene_transformed_objects_for_picking(
       const quader_editor_core::EditorSession &session,
@@ -81,7 +85,7 @@ public:
   [[nodiscard]] quader_editor_core::RectangleSelectionState
   rectangle_selection_state(
       const quader_editor_core::EditorSession &session) const;
-  [[nodiscard]] quader_editor_core::RectangleSelectionUniverse
+  [[nodiscard]] const quader_editor_core::RectangleSelectionUniverse &
   rectangle_selection_universe(
       const quader_editor_core::EditorSession &session) const;
   [[nodiscard]] quader_editor_core::RectangleProjectedHitsRequest
@@ -117,8 +121,60 @@ public:
                     const quader_poly::Selection &right);
 
 private:
+  /**
+   * Caches screen-space rectangle candidates for one geometry/camera key.
+   */
+  struct RectangleProjectionCache {
+    bool valid = false;
+    std::uint64_t content_revision = 0;
+    std::uint64_t scene_transform_revision = 0;
+    std::uint64_t scene_visibility_revision = 0;
+    std::uint64_t scene_mesh_binding_revision = 0;
+    std::uint64_t object_map_revision = 0;
+    quader_editor_core::SelectionMode selection_mode =
+        quader_editor_core::SelectionMode::Object;
+    ModelingViewportCamera camera;
+    quader_editor_core::RectangleProjectedHitsRequest request;
+  };
+
+  /**
+   * Caches stable topology IDs used to resolve component hit sets.
+   */
+  struct RectangleUniverseCache {
+    bool valid = false;
+    std::uint64_t content_revision = 0;
+    quader_editor_core::RectangleSelectionUniverse universe;
+  };
+
+  /**
+   * Caches the last resolved live marquee hit set and its baseline.
+   */
+  struct RectangleResolutionCache {
+    bool valid = false;
+    std::uint64_t projected_candidates_revision = 0;
+    std::uint64_t content_revision = 0;
+    std::uint64_t selection_revision = 0;
+    quader_editor_core::SelectionEditOperation operation =
+        quader_editor_core::SelectionEditOperation::Replace;
+    quader_editor_core::RectangleSelectionState baseline;
+    quader_editor_core::RectangleSelectionHits hits;
+  };
+
+  [[nodiscard]] const quader_editor_core::RectangleProjectedHitsRequest &
+  cached_rectangle_projected_hits_request(
+      const quader_editor_core::EditorSession &session,
+      const SceneDocument &scene,
+      const ModelingObjectRuntimeMap &object_map,
+      quader_editor_core::SelectionMode selection_mode,
+      const ModelingBoxSelectRequest &request) const;
+
   mutable ModelingPickingCache picking_cache_;
+  mutable RectangleProjectionCache rectangle_projection_cache_;
+  mutable RectangleUniverseCache rectangle_universe_cache_;
+  mutable RectangleResolutionCache rectangle_resolution_cache_;
   mutable std::uint64_t transformed_picking_projection_build_count_ = 0;
+  mutable std::uint64_t rectangle_picking_projection_build_count_ = 0;
+  mutable std::uint64_t rectangle_selection_resolution_build_count_ = 0;
 };
 
 } // namespace quader

@@ -229,6 +229,14 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("ui.viewport.delete_popup.window_title", "Delete"), "Elimina");
     EXPECT_EQ(localization.text("ui.panel.tool_settings", "Tool Settings"),
               "Impostazioni strumento");
+    EXPECT_EQ(localization.text("viewport.tool.radial_array.label",
+                                "Radial Array"),
+              "Serie radiale");
+    EXPECT_EQ(localization.text("radial_array.copies", "Number of Copies"),
+              "Numero di copie");
+    EXPECT_EQ(localization.text("radial_array.repeat_spacing",
+                                "Repeat Spacing"),
+              "Distanza tra ripetizioni");
     EXPECT_EQ(localization.text("ui.action.apply", "Apply"), "Applica");
     EXPECT_EQ(localization.text("ui.action.cancel", "Cancel"), "Annulla");
     EXPECT_TRUE(localization.select_locale("en-US"));
@@ -243,6 +251,14 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_EQ(localization.text("ui.viewport.delete_popup.window_title", "Delete"), "Delete");
     EXPECT_EQ(localization.text("ui.panel.tool_settings", "Tool Settings"),
               "Tool Settings");
+    EXPECT_EQ(localization.text("viewport.tool.radial_array.label",
+                                "Radial Array"),
+              "Radial Array");
+    EXPECT_EQ(localization.text("radial_array.copies", "Number of Copies"),
+              "Number of Copies");
+    EXPECT_EQ(localization.text("radial_array.repeat_spacing",
+                                "Repeat Spacing"),
+              "Repeat Spacing");
     EXPECT_EQ(localization.text("ui.action.apply", "Apply"), "Apply");
     EXPECT_EQ(localization.text("ui.action.cancel", "Cancel"), "Cancel");
 }

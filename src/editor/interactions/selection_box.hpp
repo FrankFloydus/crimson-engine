@@ -63,6 +63,9 @@ struct RectangleProjectedFace {
 	std::vector<int> vertex_indices;
 	bool has_screen_position = false;
 	quader::QVec2 screen_position;
+	bool has_screen_bounds = false;
+	quader::QVec2 screen_min;
+	quader::QVec2 screen_max;
 	std::vector<quader::QVec2> screen_vertices;
 };
 

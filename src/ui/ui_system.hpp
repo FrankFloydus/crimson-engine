@@ -39,6 +39,8 @@ class LinearArrayToolService;
 class ModelingSessionService;
 class OutlinerPanel;
 class PivotToolService;
+class RadialArrayToolService;
+class ViewportPointPlacementService;
 class QtSettingsDialog;
 class QtCommandEventFilter;
 class QtToolSettingsWindow;
@@ -72,6 +74,8 @@ public:
                              EditorSelectionService &selection,
                              PivotToolService &pivot,
                              LinearArrayToolService &linear_array,
+                             RadialArrayToolService &radial_array,
+                             ViewportPointPlacementService &point_placement,
                              AssetId default_material);
   void set_default_material(AssetId default_material) {
     default_material_ = default_material;
@@ -145,6 +149,8 @@ private:
   EditorSelectionService *selection_ = nullptr;
   PivotToolService *pivot_ = nullptr;
   LinearArrayToolService *linear_array_ = nullptr;
+  RadialArrayToolService *radial_array_ = nullptr;
+  ViewportPointPlacementService *point_placement_ = nullptr;
   AssetId default_material_ = kInvalidAssetId;
   FrameTiming frame_timing_{};
   RenderFramePerformanceStats render_performance_{};

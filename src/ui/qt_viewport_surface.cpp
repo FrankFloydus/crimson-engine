@@ -107,7 +107,7 @@ struct QtViewportSurface::InputAccumulator {
   ViewportModifiers modifiers = {};
   std::vector<QuaderInputChord> pressed;
   std::vector<QuaderInputChord> released;
-  std::vector<QuaderInputChord> wheel;
+  std::vector<QuaderWheelInputEdge> wheel;
   std::unordered_map<int, QuaderInputChord> active_keys;
   std::optional<QuaderInputChord> middle_drag;
   std::optional<QuaderInputChord> right_drag;
@@ -267,7 +267,7 @@ QtViewportSurface::take_input_frame(float delta_seconds,
   frame.input.modifiers = input_->modifiers;
   frame.input.pressed_input_chords = std::move(input_->pressed);
   frame.input.released_input_chords = std::move(input_->released);
-  frame.input.wheel_input_chords = std::move(input_->wheel);
+  frame.input.wheel_input_edges = std::move(input_->wheel);
   frame.input.active_input_chords.reserve(input_->active_keys.size() + 2u);
   for (const auto &[key, chord] : input_->active_keys) {
     (void)key;
@@ -878,9 +878,8 @@ void QtViewportSurface::record_wheel(QWheelEvent &event) {
   const QtWheelInputTranslation translation =
       quader_wheel_input_from_qt_event(event);
   input_->mouse_wheel += translation.mouse_wheel;
-  input_->wheel.insert(input_->wheel.end(),
-                       translation.wheel_input_chords.begin(),
-                       translation.wheel_input_chords.end());
+  input_->wheel.insert(input_->wheel.end(), translation.wheel_input_edges.begin(),
+                       translation.wheel_input_edges.end());
 }
 
 void QtViewportSurface::recreate_swap_chain() {

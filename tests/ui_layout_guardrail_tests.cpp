@@ -636,6 +636,8 @@ TEST(UiLayoutGuardrailTests,
       read_source_file("src/ui/qt_tool_settings_window.hpp");
   const std::string tool =
       read_source_file("src/ui/qt_tool_settings_window.cpp");
+  const std::string number_slider_header =
+      read_source_file("src/ui/qt_tool_settings_number_slider.hpp");
   const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
 
   expect_contains(settings_header,
@@ -680,13 +682,20 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(tool, "QStringLiteral(\"tool_settings.apply\")");
   expect_contains(tool, "QStringLiteral(\"tool_settings.cancel\")");
   expect_contains(tool, "new QCheckBox");
-  expect_contains(tool, "new QSlider(Qt::Horizontal, row)");
+  expect_contains(number_slider_header,
+                  "class QtToolSettingsNumberSlider final : public QSlider");
+  expect_contains(tool,
+                  "new QtToolSettingsNumberSlider(Qt::Horizontal, row)");
   expect_contains(tool, "slider->setTracking(true)");
   expect_contains(tool, "const QSignalBlocker spin_blocker(spin)");
   expect_contains(tool, "const QSignalBlocker slider_blocker(slider)");
   expect_contains(tool,
                   "std::max(4, decimal_places_for_step(control.step))");
-  expect_contains(tool, "dispatch_number(spin->value())");
+  expect_contains(tool, "constexpr int kLiveNumberDispatchIntervalMs = 16");
+  expect_contains(tool, "binding.pending_number_value = value");
+  expect_contains(tool, "flush_number_dispatch(control_index)");
+  expect_contains(tool,
+                  "dispatch_number(control_index, spin->value(),");
   expect_contains(tool, "new QDoubleSpinBox");
   expect_contains(tool, "new QRadioButton");
   expect_contains(tool, "new QPushButton");
@@ -1308,6 +1317,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(adapter, "quader_mouse_input_chord_from_qt_event(");
   expect_contains(adapter, "quader_wheel_input_chord_from_qt_event(");
   expect_contains(adapter_header, "QtWheelInputTranslation");
+  expect_contains(adapter_header, "std::vector<QuaderWheelInputEdge>");
   expect_contains(adapter, "quader_wheel_input_from_qt_event(");
   expect_contains(adapter, "event.modifiers()");
   expect_missing(adapter, "QAction");
@@ -1329,6 +1339,35 @@ TEST(UiLayoutGuardrailTests,
                   "dispatch_ordered_viewport_input_edges(");
   expect_contains(input_policy, "dispatch_viewport_input_edge(");
   expect_contains(input_policy, "viewport_wheel_chords_share_event(");
+  expect_contains(input_policy, "accumulate_discrete_wheel_steps(");
+}
+
+TEST(UiLayoutGuardrailTests,
+     ArrayWheelRoutingConsumesEventsAndFiltersNavigationDelta) {
+  const std::string panel =
+      read_source_file("src/ui/qt_viewport_panel.cpp");
+  const std::string input_policy =
+      read_source_file("src/ui/viewport_host_interaction_policy.hpp");
+
+  // Raw Qt wheel magnitude is useful for detecting activity, but camera input
+  // is rebuilt only from edges that resolve to a zoom semantic action.
+  expect_contains(panel, "input.mouse_wheel = 0.0f;");
+  expect_contains(panel,
+                  "action == ViewportInputActionKind::ZoomToCursor");
+  expect_contains(panel, "input.mouse_wheel +=");
+
+  // Array actions consume even fractional or clamped events. Completion is
+  // physical-event scoped so a generic Wheel remap remains one event while an
+  // unrelated next event clears stale high-resolution motion.
+  expect_contains(panel, "input.keybinding_input_consumed = true;");
+  expect_contains(panel, "finish_array_wheel_event(");
+  expect_contains(input_policy, "CompleteWheelEvent");
+  expect_contains(input_policy,
+                  "complete_wheel_event(wheel.subspan(index, 2u))");
+
+  EXPECT_EQ(count_occurrences(panel,
+                              "reconcile_bounded_wheel_remainder("),
+            2u);
 }
 
 TEST(UiLayoutGuardrailTests,

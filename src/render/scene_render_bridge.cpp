@@ -51,6 +51,7 @@ void SceneRenderBridge::initialize(
 }
 
 void SceneRenderBridge::shutdown() {
+  ++tool_preview_submission_revision_;
   if (engine_) {
     tool_preview_cache_.shutdown();
     sync_service_.shutdown();
@@ -148,6 +149,7 @@ ViewportOverlayFrame SceneRenderBridge::build_scene_overlay_frame(
 void SceneRenderBridge::set_tool_preview_meshes(
     std::vector<RenderToolPreviewMeshRecord> meshes) {
   QDR_PROFILE_FUNCTION();
+  ++tool_preview_submission_revision_;
   if (!engine_ || !scene_ || !tool_preview_cache_.initialized()) {
     return;
   }

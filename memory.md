@@ -3982,3 +3982,199 @@ Verification:
 - Full CTest passes 6/6 executables, and native `quader` v0.0.106 builds successfully.
 - Real Windows held-RMB raw-input feel and native crosshair composition remain a final human GPU
   smoke check because the headless harness cannot reproduce continuous physical capture.
+
+## 2026-07-13 - Native Radial Array Operation
+
+Task/context: add a Plasticity-style total-sweep Radial Array as a native editor tool and public
+modeling facade operation, including shared point placement, live multi-source preview, repeats,
+atomic commit/history, and Shift+Wheel copy adjustment.
+
+Invariant:
+
+- Radial Array is editor-owned, requires Object mode plus visible, selectable, unlocked modeling
+  meshes, and captures one shared center and plane normal. It never adds a portable modeling SDK
+  operation.
+- Center placement ranks vertex, edge midpoint, face center, arbitrary surface, then active-grid
+  candidates. Arbitrary surface hits use Box-compatible, world-anchored planar grid snapping so a
+  coplanar wall remains one continuous lattice; mesh hits retain a resolved world normal.
+  Perspective grid placement uses XZ and orthographic placement uses the displayed plane. Pivot
+  uses the same cached placement owner with its original nearest-candidate policy preserved.
+- Total-sweep layout includes both endpoints for a partial sweep and omits the duplicate seam for
+  360 degrees. Copies rotate their orientation around the captured normal. Rings are source-major,
+  use projected visible-pivot directions with deterministic on-axis fallback, and preserve each
+  source as base-ring angle zero.
+- Preview and commit consume the same radial-layout matrices. Every desired child-local transform
+  is precomputed and round-tripped before mutation; parent scaling that would require shear rejects
+  the whole request. Linear and Radial Array share the atomic transformed-duplicate owner for
+  identity/property copying, batching, rollback, selection synchronization, and result assembly.
+- Tool sessions reject stale selection, mode, visibility/selectability/lock, parent, identity,
+  asset revision, material revision, or world-transform state. Source-inclusive output is capped at
+  1024 elements, with dynamic UI maxima and consumed Shift+Wheel clamping; over-limit API requests
+  fail without mutation.
+- The pre-click quad marker is interaction-pane-local. Once locked, the marker and transform-only
+  previews render in every pane. Apply remains visible but disabled until lock; Escape cancels and
+  Space/Enter/Apply commits one history command.
+
+Owners:
+
+- `src/editor/modeling/radial_array_layout.hpp` owns renderer-neutral radial matrix generation.
+- `src/editor/array/radial_array_tool_service.*` owns the placement/preview session and source
+  snapshots; `src/editor/placement/viewport_point_placement_service.*` owns shared cached snapping.
+- `src/editor/modeling/services/modeling_session_service.cpp` owns generalized atomic transformed
+  duplication; `src/api/quader_modeling_api.*` owns the native public facade.
+- Viewport tool catalogs, the native coordinator, Qt input/settings surfaces, render extraction,
+  and localized resources adapt those editor-owned records without becoming modeling owners.
+
+Verification:
+
+- Focused radial layout, placement, lifecycle, API, history, 1024-boundary, shear, and preview/commit
+  parity suites pass.
+- Dependency-matrix and type-documentation architecture guardrails pass, and full CTest passes 6/6
+  executables with 905/905 native app tests.
+- Native `quader` v0.0.107 builds and boots with Fusion/Vulkan, four native swapchains, and no
+  error/critical/fatal log entries. Both desktop capture paths returned an all-black frame and the
+  Windows controller repeatedly failed to activate the freshly discovered Quader window, so the
+  physical grid/tilted-face/multi-source/repeats/Shift+Wheel pass remains a human smoke check; those
+  workflows are covered by the synthetic viewport, placement, tool-service, and API tests.
+
+## 2026-07-14 - Qt Callback And Menu Ownership Follows Controller Lifetime
+
+Invariant:
+
+- A Qt functor that captures a non-`QObject` controller must use a `QObject` connection context
+  whose lifetime is owned by that controller. A longer-lived widget or application object is not a
+  safe context merely because it owns the signal sender.
+- `QtMainMenu` explicitly releases its tracked top-level menus before rebuilding and when its
+  controller is destroyed. `QMenuBar::clear()` alone does not release bar-owned menu hierarchies.
+- `App` scopes its `QApplication::aboutToQuit` callback through the app-owned frame timer, so
+  shutdown destroys the connection before the captured `App` object can become stale.
+
+## 2026-07-14 - Native Numeric Tool Controls Preserve Precision And Active Edits
+
+Invariant:
+
+- Tool-setting synchronization updates numeric bounds and button state in place. It does not
+  rebuild an unchanged control row, overwrite a slider while its handle is down, or overwrite a
+  focused spin box while the user is editing; otherwise the next frame cancels native Qt capture
+  and makes a drag appear to stick.
+- The shared numeric slider keeps integral domains exact and ordinary floating domains linear.
+  Wide floating domains use one monotonic signed nonlinear mapping with native style geometry, so
+  useful low values receive meaningful physical travel without changing the modeled value range.
+- A groove press is a continuous absolute scrub until release, while a handle press retains stock
+  `QSlider` dragging. Repeat spacing remains reversible through zero; zero collapses outer rings but
+  later nonzero edits regenerate them from the unchanged source snapshot.
+- Tool UI limits come from operation schemas rather than duplicated panel constants. Edge Bevel
+  width currently owns the `0..512` contract in its operation schema.
+
+Owners:
+
+- `src/ui/qt_tool_settings_number_slider.*` owns numeric-to-slider mapping and pointer behavior.
+- `src/ui/qt_tool_settings_window.cpp` owns non-destructive widget synchronization.
+- `src/editor/modeling/operations/operation_schema.hpp` owns operation parameter limits.
+
+Verification:
+
+- The merged focused pass succeeds for 17 placement/radial/slider/menu/API tests, 2 source
+  guardrails, all 4 Edge Bevel runtime tests, and all 53 editor-metadata tests. The slider tests
+  dispatch real Qt press/move/release events to both the groove and handle paths.
+- Full CTest passes 6/6 executables, and native `quader` v0.0.108 builds successfully.
+- Automated boot reaches the Qt event loop with four Filament native swapchains and no
+  error/critical/fatal log entries. Its screen-copy step captured a different foreground window,
+  so that PNG is not accepted as visual evidence; a final physical feel check remains appropriate.
+
+## 2026-07-14 - Live Numeric Previews And Box Selection Are Revision-Gated
+
+Task/context: Edge Bevel width/segment drags stalled the Qt event loop, and a live selection box
+lost substantial frame rate as soon as it crossed a dense mesh. Tracing proved there was no Qt
+signal loop or per-frame control reconstruction: each raw slider sample synchronously rebuilt one
+topology preview, while every marquee sample rebuilt screen-space mesh candidates and repeatedly
+resolved an unchanged component selection.
+
+Invariant:
+
+- Slider visuals remain immediate, but continuous numeric drags publish only their latest value at
+  a 16 ms presentation interval. Release synchronously flushes the exact final value. Spin-box and
+  keyboard edits remain immediate, and a retained active editor is not overwritten by frame
+  synchronization.
+- Picking geometry is keyed only by modeling content, object-map identity, world transforms,
+  visibility/selectability, mesh binding, and camera state. Selection-only and broad scene
+  revisions never retransform unchanged mesh vertices.
+- Rectangle candidates are projected once for a stable camera and geometry state. The builder
+  emits only the candidate kind needed by the active selection mode, reuses the topology universe,
+  and broad-phases projected face/edge/object bounds before exact crossing tests.
+- A changed marquee endpoint with the same baseline, edit operation, projected candidates, hit set,
+  and current selection revision does not reconstruct selection state, resynchronize the scene, or
+  invalidate overlay caches. Camera/content/transform/visibility/selectability/object-map changes
+  invalidate the appropriate cache immediately.
+- `SceneDocument::visibility_revision()` includes selectability changes and remains stable for
+  no-op assignments, so visibility-sensitive caches neither miss real changes nor churn on repeats.
+
+Owners:
+
+- `src/ui/qt_tool_settings_window.cpp` owns latest-value scheduling and final-value flushing for all
+  descriptor-driven numeric tool controls.
+- `src/editor/modeling/services/modeling_selection_service.*` owns transformed geometry,
+  screen-space rectangle candidate, universe, and hit-resolution caches.
+- `src/editor/modeling/runtime/modeling_object_runtime_map.*` and `src/scene/scene_document.*`
+  publish the narrow identity and visibility revision gates used by picking.
+- `src/editor/interactions/select_tool.cpp` owns exact containment/crossing semantics after the
+  cached broad phase.
+
+Verification:
+
+- In Debug, one raw Edge Bevel width move fell from 6.6-7.3 ms to 0.47-0.51 ms; three segment moves
+  fell from 8.2-8.6 ms each to 0.15-0.21 ms each. The single final preview flush remains explicit
+  and measured at 6.4-6.7 ms on the simple cube fixture.
+- On a 24x24x24 segmented cube, 32 stable face-marquee updates fell from 2,324 ms to 121 ms, a
+  19.2x reduction. Regression counters require exactly one transformed projection, one projected
+  candidate build, and one selection resolution until camera or geometry state changes.
+- All 8 native Qt numeric-slider tests, 7 focused scene/box/preview tests, and all 287 runtime
+  modeling tests pass. Full CTest passes 6/6 executables, and native `quader` v0.0.109 builds and
+  reaches the Qt/Fusion/Vulkan event loop with four swapchains and no logged errors. The automated
+  screenshot captured a different foreground application, so it is not accepted as visual proof.
+
+## 2026-07-14 - Linear Array Uses One Shared Span Across Multiple Sources
+
+Invariant:
+
+- Interactive Linear Array accepts one or more visible, unlocked modeling meshes in Object mode.
+  Sources are ordered by entity ID with the prior primary last; one A/B handle remains anchored to
+  that primary, and its world displacement is applied independently to every source. This preserves
+  the selected formation and makes the final primary-derived copy active after commit.
+- Preview and commit consume the same renderer-neutral linear-layout matrices. One preview record is
+  published per source, originals are omitted, and commit uses one atomic transformed-duplicate
+  batch and one history item while retaining each source's parent, identity, material, durable
+  properties, and custom pivot without copying children.
+- Every source snapshot guards selection, primary, UUID, parent, visibility, locking, runtime map,
+  mesh/material identity and revisions, and world transform. A change to any source cancels the
+  whole session before mutation.
+- Linear Array is capped at 1,024 source-inclusive elements. The count setting maximum is dynamic,
+  and Shift+Wheel Up/Down resolves through `activeTool.linear_array`, accumulates a signed semantic
+  delta, clamps at the current limits, and remains consumed instead of also zooming.
+- Array preview revisions are monotonic across tool sessions. Unchanged frames borrow the cached
+  transform arrays and skip render extraction/submission; asset or renderer submissions, tool
+  edits, cancellation/reactivation, and source changes invalidate that fast path. Source validity
+  scans are gated by session generation plus scene, asset, runtime-object-map, and selection-mode
+  revisions, so preview and handle reads do not repeatedly walk every source on a stable frame.
+- Visible-pivot policy is part of Radial Array source validity. Custom-pivot changes and
+  hierarchy/bounds changes cancel the captured preview before commit can recompute a different
+  pivot.
+
+Owners:
+
+- `src/editor/modeling/linear_array_layout.hpp` owns deterministic shared-span world matrices.
+- `src/editor/array/linear_array_tool_service.*` owns source ordering, snapshots, the shared handle,
+  dynamic limits, preview caching, and count adjustment.
+- `src/editor/modeling/services/modeling_session_service.cpp` owns atomic source-major duplication;
+  viewport input and render adapters only translate semantic actions and preview records.
+- `src/api/quader_render_api.*` and `src/render/scene_render_bridge.*` own revision-gated native-array
+  preview submission and renderer-lifecycle invalidation.
+
+Verification:
+
+- The focused pass succeeds for 14 Linear/Radial layout, stale-source, render-cache, multi-source,
+  API, and Shift+Wheel binding tests. It includes cancel/reactivate without an intermediate render
+  frame, asset revision invalidation, exact tiny-transform cancellation, and visible-pivot policy
+  changes.
+- The affected workflow and final full CTest both pass all 6 executables; the complete native test
+  executable passes 922 tests. The full Debug preset and native `quader` v0.0.110 build succeed.

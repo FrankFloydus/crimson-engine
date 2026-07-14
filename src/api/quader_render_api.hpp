@@ -45,6 +45,11 @@ public:
 
     QuaderApiSession session_;
     QuaderQueryApi& query_;
+    const void* native_array_preview_sync_bridge_ = nullptr;
+    std::uint64_t native_array_preview_bridge_submission_revision_ = 0;
+    std::uint64_t native_array_preview_revision_ = 0;
+    std::uint64_t native_array_preview_asset_revision_ = 0;
+    std::uint8_t native_array_preview_kind_ = 0;
 };
 
 } // namespace quader

@@ -30,6 +30,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <span>
 #include <unordered_set>
 #include <vector>
 
@@ -2281,9 +2282,9 @@ TEST(ViewportHostInteractionPolicyTests,
   request.modal_tool_owns_viewport = false;
   EXPECT_FALSE(should_cancel_modal_tool_for_external_pointer(request));
   request.modal_tool_owns_viewport = true;
-  request.linear_array_active = true;
+  request.persistent_native_tool_active = true;
   EXPECT_FALSE(should_cancel_modal_tool_for_external_pointer(request));
-  request.linear_array_active = false;
+  request.persistent_native_tool_active = false;
   request.navigation_active = true;
   EXPECT_FALSE(should_cancel_modal_tool_for_external_pointer(request));
 
@@ -2340,8 +2341,9 @@ TEST(ViewportHostInteractionPolicyTests,
   quader::dispatch_ordered_viewport_input_edges(
       pressed, {},
       [&](const quader::QuaderInputChord &chord,
-          quader::ViewportInputEdgeKind kind) {
+          quader::ViewportInputEdgeKind kind, double wheel_step_delta) {
         EXPECT_EQ(kind, quader::ViewportInputEdgeKind::Pressed);
+        EXPECT_DOUBLE_EQ(wheel_step_delta, 0.0);
         dispatched.push_back(chord.key);
         return true;
       });
@@ -2389,14 +2391,18 @@ TEST(ViewportHostInteractionPolicyTests,
       .device = quader::QuaderInputDevice::Mouse,
       .gesture = quader::QuaderInputGesture::WheelUp,
   };
-  const std::vector<quader::QuaderInputChord> wheel{generic, up};
+  const std::vector<quader::QuaderWheelInputEdge> wheel{
+      {.chord = generic, .step_delta = 2.0},
+      {.chord = up, .step_delta = 2.0},
+  };
   std::vector<quader::QuaderInputGesture> dispatched;
 
   quader::dispatch_ordered_viewport_input_edges(
       {}, wheel,
       [&](const quader::QuaderInputChord &chord,
-          quader::ViewportInputEdgeKind kind) {
+          quader::ViewportInputEdgeKind kind, double wheel_step_delta) {
         EXPECT_EQ(kind, quader::ViewportInputEdgeKind::Wheel);
+        EXPECT_DOUBLE_EQ(wheel_step_delta, 2.0);
         dispatched.push_back(chord.gesture);
         return chord.gesture == quader::QuaderInputGesture::WheelUp;
       });
@@ -2407,13 +2413,107 @@ TEST(ViewportHostInteractionPolicyTests,
   quader::dispatch_ordered_viewport_input_edges(
       {}, wheel,
       [&](const quader::QuaderInputChord &chord,
-          quader::ViewportInputEdgeKind) {
+          quader::ViewportInputEdgeKind, double wheel_step_delta) {
+        EXPECT_DOUBLE_EQ(wheel_step_delta, 2.0);
         dispatched.push_back(chord.gesture);
         return chord.gesture == quader::QuaderInputGesture::Wheel;
       });
   EXPECT_EQ(dispatched,
             (std::vector{quader::QuaderInputGesture::WheelUp,
                          quader::QuaderInputGesture::Wheel}));
+}
+
+TEST(ViewportHostInteractionPolicyTests,
+     OrderedWheelDispatchCompletesEachPhysicalEventAfterFallback) {
+  const quader::QuaderInputChord generic{
+      .device = quader::QuaderInputDevice::Mouse,
+      .gesture = quader::QuaderInputGesture::Wheel,
+  };
+  const quader::QuaderInputChord up{
+      .device = quader::QuaderInputDevice::Mouse,
+      .gesture = quader::QuaderInputGesture::WheelUp,
+  };
+  const quader::QuaderInputChord down{
+      .device = quader::QuaderInputDevice::Mouse,
+      .gesture = quader::QuaderInputGesture::WheelDown,
+  };
+  const std::vector<quader::QuaderWheelInputEdge> wheel{
+      {.chord = generic, .step_delta = 0.6},
+      {.chord = up, .step_delta = 0.6},
+      {.chord = generic, .step_delta = -0.4},
+      {.chord = down, .step_delta = -0.4},
+  };
+  std::vector<quader::QuaderInputGesture> dispatched;
+  std::vector<double> completed_deltas;
+
+  quader::dispatch_ordered_viewport_input_edges(
+      {}, wheel,
+      [&](const quader::QuaderInputChord &chord,
+          quader::ViewportInputEdgeKind kind, double) {
+        EXPECT_EQ(kind, quader::ViewportInputEdgeKind::Wheel);
+        dispatched.push_back(chord.gesture);
+        // Models a user remap to generic Wheel: each directional candidate
+        // falls through before the generic chord handles the same event.
+        return chord.gesture == quader::QuaderInputGesture::Wheel;
+      },
+      [&](std::span<const quader::QuaderWheelInputEdge> physical_event) {
+        ASSERT_EQ(physical_event.size(), 2u);
+        EXPECT_EQ(physical_event[0].chord.gesture,
+                  quader::QuaderInputGesture::Wheel);
+        completed_deltas.push_back(physical_event[0].step_delta);
+      });
+
+  EXPECT_EQ(dispatched,
+            (std::vector{quader::QuaderInputGesture::WheelUp,
+                         quader::QuaderInputGesture::Wheel,
+                         quader::QuaderInputGesture::WheelDown,
+                         quader::QuaderInputGesture::Wheel}));
+  EXPECT_EQ(completed_deltas, (std::vector<double>{0.6, -0.4}));
+}
+
+TEST(ViewportHostInteractionPolicyTests,
+     DiscreteWheelStepsRetainFractionalSignedMotion) {
+  double remainder = 0.0;
+  EXPECT_EQ(quader::accumulate_discrete_wheel_steps(0.4, remainder), 0);
+  EXPECT_NEAR(remainder, 0.4, 0.000000001);
+  EXPECT_EQ(quader::accumulate_discrete_wheel_steps(0.6, remainder), 1);
+  EXPECT_DOUBLE_EQ(remainder, 0.0);
+
+  EXPECT_EQ(quader::accumulate_discrete_wheel_steps(-0.25, remainder), 0);
+  EXPECT_NEAR(remainder, -0.25, 0.000000001);
+  EXPECT_EQ(quader::accumulate_discrete_wheel_steps(0.25, remainder), 0);
+  EXPECT_DOUBLE_EQ(remainder, 0.0);
+
+  EXPECT_EQ(quader::accumulate_discrete_wheel_steps(-2.25, remainder), -2);
+  EXPECT_NEAR(remainder, -0.25, 0.000000001);
+}
+
+TEST(ViewportHostInteractionPolicyTests,
+     ArrayWheelRemainderResetsOnUnmatchedPhysicalEvent) {
+  double remainder = 0.6;
+  quader::finish_array_wheel_event(true, remainder);
+  EXPECT_DOUBLE_EQ(remainder, 0.6);
+
+  quader::finish_array_wheel_event(false, remainder);
+  EXPECT_DOUBLE_EQ(remainder, 0.0);
+}
+
+TEST(ViewportHostInteractionPolicyTests,
+     BoundedWheelRemainderDropsOnlyOutwardMotion) {
+  double remainder = 0.6;
+  quader::reconcile_bounded_wheel_remainder(false, true, remainder);
+  EXPECT_DOUBLE_EQ(remainder, 0.0);
+
+  remainder = -0.6;
+  quader::reconcile_bounded_wheel_remainder(false, true, remainder);
+  EXPECT_DOUBLE_EQ(remainder, -0.6);
+
+  quader::reconcile_bounded_wheel_remainder(true, false, remainder);
+  EXPECT_DOUBLE_EQ(remainder, 0.0);
+
+  remainder = 0.6;
+  quader::reconcile_bounded_wheel_remainder(true, false, remainder);
+  EXPECT_DOUBLE_EQ(remainder, 0.6);
 }
 
 TEST(ViewportHoverControllerTests,
@@ -2460,8 +2560,19 @@ TEST(ViewportHostInteractionPolicyTests,
       ViewportOverlayPassVisibilityRequest{.pivot_handle_visible = true}));
   EXPECT_TRUE(should_enable_viewport_overlay_pass(
       ViewportOverlayPassVisibilityRequest{
-          .linear_array_handle_visible = true,
+          .native_tool_overlay_visible = true,
       }));
+}
+
+TEST(ViewportHostInteractionPolicyTests,
+     PointPlacementMarkerIsPaneLocalUntilItIsLocked) {
+  using quader::should_show_point_placement_overlay;
+
+  EXPECT_FALSE(should_show_point_placement_overlay(false, false, true));
+  EXPECT_TRUE(should_show_point_placement_overlay(true, false, true));
+  EXPECT_FALSE(should_show_point_placement_overlay(true, false, false));
+  EXPECT_TRUE(should_show_point_placement_overlay(true, true, true));
+  EXPECT_TRUE(should_show_point_placement_overlay(true, true, false));
 }
 
 TEST(ViewportHostInteractionPolicyTests,

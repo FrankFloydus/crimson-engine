@@ -18,10 +18,13 @@
 #include <QActionGroup>
 #include <QMenu>
 #include <QMenuBar>
+#include <QObject>
+#include <QPointer>
 #include <QSignalBlocker>
 
 #include <array>
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -142,8 +145,46 @@ struct QtMainMenu::Impl {
 
   explicit Impl(QtMainMenuContext value) : context(std::move(value)) {}
 
-  QMenuBar *menu_bar = nullptr;
+  ~Impl() { release_menu_hierarchy(); }
+
+  void release_menu_hierarchy() {
+    // The functors capture Impl (and, for aboutToShow, QtMainMenu). Destroy the
+    // exact-lifetime context before deleting any sender so no direct or queued
+    // callback can observe a partially released hierarchy.
+    connection_context.reset();
+    for (const QPointer<QMenu> &menu : top_level_menus) {
+      if (menu_bar != nullptr && menu != nullptr) {
+        menu_bar->removeAction(menu->menuAction());
+      }
+      delete menu.data();
+    }
+    top_level_menus.clear();
+    command_actions.clear();
+    bool_setting_actions.clear();
+    layout_actions.clear();
+    panel_actions.clear();
+    tool_actions.clear();
+    align_menu = nullptr;
+    navigation_gizmo_action = nullptr;
+  }
+
+  void prepare_rebuild() {
+    release_menu_hierarchy();
+    connection_context = std::make_unique<QObject>();
+  }
+
+  QMenu *add_top_level_menu(std::string_view key,
+                            std::string_view fallback) {
+    QMenu *menu =
+        menu_bar->addMenu(qtext(context.localization, key, fallback));
+    top_level_menus.emplace_back(menu);
+    return menu;
+  }
+
+  QPointer<QMenuBar> menu_bar;
   QtMainMenuContext context;
+  std::unique_ptr<QObject> connection_context = std::make_unique<QObject>();
+  std::vector<QPointer<QMenu>> top_level_menus;
   QMenu *align_menu = nullptr;
   QAction *navigation_gizmo_action = nullptr;
   std::vector<CommandAction> command_actions;
@@ -160,7 +201,7 @@ struct QtMainMenu::Impl {
         QStringLiteral("command_%1")
             .arg(QString::fromStdString(
                 stable_object_suffix(command_id.string()))));
-    QObject::connect(action, &QAction::triggered, menu_bar,
+    QObject::connect(action, &QAction::triggered, connection_context.get(),
                      [this, command_id]() {
                        (void)context.editor.commands().execute(command_id);
                      });
@@ -183,7 +224,7 @@ struct QtMainMenu::Impl {
             .arg(QString::fromUtf8(key.data(),
                                    static_cast<qsizetype>(key.size()))));
     action->setCheckable(true);
-    QObject::connect(action, &QAction::toggled, menu_bar,
+    QObject::connect(action, &QAction::toggled, connection_context.get(),
                      [this, setting](bool checked) {
                        if (context.viewport_settings.set_bool_value(setting,
                                                                     checked)) {
@@ -207,8 +248,7 @@ struct QtMainMenu::Impl {
   }
 
   void build_file_menu() {
-    QMenu *menu = menu_bar->addMenu(
-        qtext(context.localization, "ui.menu.file", "File"));
+    QMenu *menu = add_top_level_menu("ui.menu.file", "File");
     menu->setObjectName(QStringLiteral("menu_file"));
     add_command_action(*menu, quader_command::kProjectNew, "ui.menu.file.new",
                        "New");
@@ -224,7 +264,8 @@ struct QtMainMenu::Impl {
     QAction *exit_action =
         menu->addAction(qtext(context.localization, "ui.menu.file.exit", "Exit"));
     exit_action->setObjectName(QStringLiteral("action_exit"));
-    QObject::connect(exit_action, &QAction::triggered, menu_bar,
+    QObject::connect(exit_action, &QAction::triggered,
+                     connection_context.get(),
                      [this]() {
                        if (context.request_quit) {
                          context.request_quit();
@@ -233,8 +274,7 @@ struct QtMainMenu::Impl {
   }
 
   void build_edit_menu() {
-    QMenu *menu = menu_bar->addMenu(
-        qtext(context.localization, "ui.menu.edit", "Edit"));
+    QMenu *menu = add_top_level_menu("ui.menu.edit", "Edit");
     menu->setObjectName(QStringLiteral("menu_edit"));
     add_command_action(*menu, quader_command::kEditUndo, "ui.menu.edit.undo",
                        "Undo");
@@ -282,7 +322,8 @@ struct QtMainMenu::Impl {
     QAction *settings = menu->addAction(qtext(
         context.localization, "ui.menu.edit.settings", "Settings"));
     settings->setObjectName(QStringLiteral("action_settings"));
-    QObject::connect(settings, &QAction::triggered, menu_bar, [this]() {
+    QObject::connect(settings, &QAction::triggered, connection_context.get(),
+                     [this]() {
       if (context.show_settings) {
         context.show_settings();
       }
@@ -290,16 +331,17 @@ struct QtMainMenu::Impl {
   }
 
   void build_align_menu() {
-    align_menu = menu_bar->addMenu(
-        qtext(context.localization, "ui.menu.align", "Align"));
+    align_menu = add_top_level_menu("ui.menu.align", "Align");
     align_menu->setObjectName(QStringLiteral("menu_align"));
     QAction *snap = align_menu->addAction(qtext(
         context.localization, "ui.menu.align.snap_to_grid", "Snap to Grid"));
     snap->setObjectName(QStringLiteral("action_align_snap_to_grid"));
     snap->setCheckable(true);
-    QObject::connect(snap, &QAction::toggled, menu_bar, [this](bool checked) {
-      (void)context.editor.preferences().set_grid_snap_enabled(checked);
-    });
+    QObject::connect(
+        snap, &QAction::toggled, connection_context.get(),
+        [this](bool checked) {
+          (void)context.editor.preferences().set_grid_snap_enabled(checked);
+        });
     bool_setting_actions.push_back(
         {snap, ViewportBoolSettingId::GridSnap});
     align_menu->addSeparator();
@@ -352,16 +394,14 @@ struct QtMainMenu::Impl {
   }
 
   void build_cleanup_menu() {
-    QMenu *menu = menu_bar->addMenu(
-        qtext(context.localization, "ui.menu.cleanup", "Clean Up"));
+    QMenu *menu = add_top_level_menu("ui.menu.cleanup", "Clean Up");
     menu->setObjectName(QStringLiteral("menu_cleanup"));
     add_command_action(*menu, quader_command::kModelingRemoveDoubles,
                        "ui.menu.cleanup.remove_doubles", "Remove Doubles");
   }
 
   void build_tools_menu() {
-    QMenu *menu = menu_bar->addMenu(
-        qtext(context.localization, "ui.menu.tools", "Tools"));
+    QMenu *menu = add_top_level_menu("ui.menu.tools", "Tools");
     menu->setObjectName(QStringLiteral("menu_tools"));
     ToolMenuGroup current_group = ToolMenuGroup::Navigation;
     bool first = true;
@@ -385,7 +425,7 @@ struct QtMainMenu::Impl {
       const ViewportToolId tool_id = tool->viewport_tool();
       const std::string command_id =
           context.editor.commands().command_id_for_tool_activation(tool->id());
-      QObject::connect(action, &QAction::triggered, menu_bar,
+      QObject::connect(action, &QAction::triggered, connection_context.get(),
                        [this, command_id]() {
                          (void)context.editor.commands().execute(command_id);
                        });
@@ -400,8 +440,7 @@ struct QtMainMenu::Impl {
   }
 
   void build_create_menu() {
-    QMenu *menu = menu_bar->addMenu(
-        qtext(context.localization, "ui.menu.create", "Create"));
+    QMenu *menu = add_top_level_menu("ui.menu.create", "Create");
     menu->setObjectName(QStringLiteral("menu_create"));
     add_command_action(*menu, quader_command::kSceneCreatePointLight,
                        "ui.menu.create.point_light", "Point Light");
@@ -411,8 +450,7 @@ struct QtMainMenu::Impl {
   }
 
   void build_view_menu() {
-    QMenu *menu = menu_bar->addMenu(
-        qtext(context.localization, "ui.menu.view", "View"));
+    QMenu *menu = add_top_level_menu("ui.menu.view", "View");
     menu->setObjectName(QStringLiteral("menu_view"));
     add_bool_setting_action(*menu, ViewportBoolSettingId::ShowGrid,
                             "ui.menu.view.grid", "Grid");
@@ -436,7 +474,8 @@ struct QtMainMenu::Impl {
     navigation_gizmo_action->setObjectName(
         QStringLiteral("action_navigation_gizmo"));
     navigation_gizmo_action->setCheckable(true);
-    QObject::connect(navigation_gizmo_action, &QAction::toggled, menu_bar,
+    QObject::connect(navigation_gizmo_action, &QAction::toggled,
+                     connection_context.get(),
                      [this](bool visible) {
                        (void)context.editor.preferences()
                            .set_navigation_gizmo_visible(visible);
@@ -454,7 +493,7 @@ struct QtMainMenu::Impl {
           QStringLiteral("panel_%1")
               .arg(QString::fromUtf8(ui_panel_stable_id(id))));
       action->setCheckable(true);
-      QObject::connect(action, &QAction::toggled, menu_bar,
+      QObject::connect(action, &QAction::toggled, connection_context.get(),
                        [this, id](bool visible) {
                          if (context.set_panel_visible) {
                            context.set_panel_visible(id, visible);
@@ -465,8 +504,7 @@ struct QtMainMenu::Impl {
   }
 
   void build_layout_menu() {
-    QMenu *menu = menu_bar->addMenu(
-        qtext(context.localization, "ui.menu.layout", "Layout"));
+    QMenu *menu = add_top_level_menu("ui.menu.layout", "Layout");
     menu->setObjectName(QStringLiteral("menu_layout"));
     auto *group = new QActionGroup(menu);
     group->setExclusive(true);
@@ -479,7 +517,7 @@ struct QtMainMenu::Impl {
               .arg(QString::fromUtf8(viewport_layout_stable_id(option.id).data())));
       action->setCheckable(true);
       group->addAction(action);
-      QObject::connect(action, &QAction::triggered, menu_bar,
+      QObject::connect(action, &QAction::triggered, connection_context.get(),
                        [this, layout = option.id]() {
                          (void)context.editor.viewports().set_layout(layout);
                        });
@@ -501,14 +539,7 @@ void QtMainMenu::rebuild() {
   if (!impl_ || impl_->menu_bar == nullptr) {
     return;
   }
-  impl_->menu_bar->clear();
-  impl_->command_actions.clear();
-  impl_->bool_setting_actions.clear();
-  impl_->layout_actions.clear();
-  impl_->panel_actions.clear();
-  impl_->tool_actions.clear();
-  impl_->align_menu = nullptr;
-  impl_->navigation_gizmo_action = nullptr;
+  impl_->prepare_rebuild();
   impl_->build_file_menu();
   impl_->build_edit_menu();
   impl_->build_align_menu();
@@ -519,7 +550,8 @@ void QtMainMenu::rebuild() {
   impl_->build_layout_menu();
   for (QAction *top_level_action : impl_->menu_bar->actions()) {
     if (QMenu *menu = top_level_action->menu()) {
-      QObject::connect(menu, &QMenu::aboutToShow, impl_->menu_bar,
+      QObject::connect(menu, &QMenu::aboutToShow,
+                       impl_->connection_context.get(),
                        [this]() { refresh(); });
     }
   }
@@ -527,7 +559,7 @@ void QtMainMenu::rebuild() {
 }
 
 void QtMainMenu::refresh() {
-  if (!impl_) {
+  if (!impl_ || impl_->menu_bar == nullptr) {
     return;
   }
   const std::vector<QuaderCommandDescriptor> commands =

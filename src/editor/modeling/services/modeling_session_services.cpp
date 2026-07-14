@@ -43,6 +43,85 @@
 namespace quader {
 namespace {
 
+bool same_vector(QVec2 left, QVec2 right) {
+  return left.x == right.x && left.y == right.y;
+}
+
+bool same_vector(QVec3 left, QVec3 right) {
+  return left.x == right.x && left.y == right.y && left.z == right.z;
+}
+
+bool same_viewport_camera(const ModelingViewportCamera &left,
+                          const ModelingViewportCamera &right) {
+  return left.orthographic == right.orthographic &&
+         left.affine_model_space == right.affine_model_space &&
+         same_vector(left.origin, right.origin) &&
+         same_vector(left.x_axis, right.x_axis) &&
+         same_vector(left.y_axis, right.y_axis) &&
+         same_vector(left.z_axis, right.z_axis) &&
+         same_vector(left.viewport_size, right.viewport_size) &&
+         left.orthographic_size == right.orthographic_size &&
+         left.fov_degrees == right.fov_degrees;
+}
+
+bool same_rectangle_face(const quader_editor_core::RectangleSelectionFace &left,
+                         const quader_editor_core::RectangleSelectionFace &right) {
+  return left.object_id == right.object_id &&
+         left.face_index == right.face_index &&
+         left.vertex_indices == right.vertex_indices;
+}
+
+bool same_rectangle_edge(const quader_editor_core::RectangleSelectionEdge &left,
+                         const quader_editor_core::RectangleSelectionEdge &right) {
+  return left.object_id == right.object_id && left.a_index == right.a_index &&
+         left.b_index == right.b_index;
+}
+
+bool same_rectangle_vertex(
+    const quader_editor_core::RectangleSelectionVertex &left,
+    const quader_editor_core::RectangleSelectionVertex &right) {
+  return left.object_id == right.object_id &&
+         left.vertex_index == right.vertex_index;
+}
+
+template <typename Value, typename Equal>
+bool same_rectangle_values(const std::vector<Value> &left,
+                           const std::vector<Value> &right, Equal equal) {
+  return left.size() == right.size() &&
+         std::equal(left.begin(), left.end(), right.begin(), equal);
+}
+
+bool same_rectangle_selection_state(
+    const quader_editor_core::RectangleSelectionState &left,
+    const quader_editor_core::RectangleSelectionState &right) {
+  return left.mode == right.mode &&
+         left.active_object_id == right.active_object_id &&
+         left.active_face_index == right.active_face_index &&
+         left.selected_object_ids == right.selected_object_ids &&
+         same_rectangle_values(left.selected_faces, right.selected_faces,
+                               same_rectangle_face) &&
+         same_rectangle_values(left.selected_edges, right.selected_edges,
+                               same_rectangle_edge) &&
+         left.active_edge_vertex_indices == right.active_edge_vertex_indices &&
+         left.selected_edge_full_object_ids ==
+             right.selected_edge_full_object_ids &&
+         same_rectangle_values(left.selected_vertices, right.selected_vertices,
+                               same_rectangle_vertex) &&
+         left.active_vertex_indices == right.active_vertex_indices &&
+         left.selected_vertex_full_object_ids ==
+             right.selected_vertex_full_object_ids;
+}
+
+bool same_rectangle_hits(
+    const quader_editor_core::RectangleSelectionHits &left,
+    const quader_editor_core::RectangleSelectionHits &right) {
+  return left.object_ids == right.object_ids &&
+         same_rectangle_values(left.faces, right.faces, same_rectangle_face) &&
+         same_rectangle_values(left.edges, right.edges, same_rectangle_edge) &&
+         same_rectangle_values(left.vertices, right.vertices,
+                               same_rectangle_vertex);
+}
+
 void append_overlay_frame(
     quader_editor_core::SelectionOverlayFrame &target,
     const quader_editor_core::SelectionOverlayFrame &source) {
@@ -617,11 +696,24 @@ ModelingSelectionSummary ModelingSelectionService::selection_summary(
 
 void ModelingSelectionService::invalidate_picking_cache() const {
   picking_cache_ = {};
+  rectangle_projection_cache_ = {};
+  rectangle_universe_cache_ = {};
+  rectangle_resolution_cache_ = {};
 }
 
 std::uint64_t
 ModelingSelectionService::transformed_picking_projection_build_count() const {
   return transformed_picking_projection_build_count_;
+}
+
+std::uint64_t
+ModelingSelectionService::rectangle_picking_projection_build_count() const {
+  return rectangle_picking_projection_build_count_;
+}
+
+std::uint64_t
+ModelingSelectionService::rectangle_selection_resolution_build_count() const {
+  return rectangle_selection_resolution_build_count_;
 }
 
 const std::vector<quader_editor_core::PolygonObject> &
@@ -631,27 +723,52 @@ ModelingSelectionService::cached_scene_transformed_objects_for_picking(
     const ModelingObjectRuntimeMap &object_registry) const {
   const std::uint64_t content_revision = session.state().content_revision;
   const std::uint64_t selection_revision = session.state().selection_revision;
-  const std::uint64_t scene_revision = scene.revision();
+  const std::uint64_t scene_transform_revision = scene.transform_revision();
+  const std::uint64_t scene_visibility_revision = scene.visibility_revision();
+  const std::uint64_t scene_mesh_binding_revision =
+      scene.mesh_binding_revision();
+  const std::uint64_t object_map_revision = object_registry.revision();
   const bool geometry_changed =
       !picking_cache_.objects_valid ||
       picking_cache_.content_revision != content_revision ||
-      picking_cache_.scene_revision != scene_revision;
-  if (picking_cache_.objects_valid &&
-      picking_cache_.content_revision == content_revision &&
-      picking_cache_.selection_revision == selection_revision &&
-      picking_cache_.scene_revision == scene_revision) {
+      picking_cache_.scene_transform_revision != scene_transform_revision ||
+      picking_cache_.scene_visibility_revision != scene_visibility_revision ||
+      picking_cache_.scene_mesh_binding_revision !=
+          scene_mesh_binding_revision ||
+      picking_cache_.object_map_revision != object_map_revision;
+  if (!geometry_changed &&
+      picking_cache_.selection_revision == selection_revision) {
     return picking_cache_.objects;
   }
 
-  const std::vector<quader_editor_core::PolygonObject> runtime_objects =
-      session.objects();
-  ++transformed_picking_projection_build_count_;
-  picking_cache_.objects =
-      PickingCacheProjection::scene_transformed_objects_for_picking(
-          runtime_objects, scene, object_registry);
+  if (geometry_changed) {
+    ++transformed_picking_projection_build_count_;
+    picking_cache_.objects =
+        PickingCacheProjection::scene_transformed_objects_for_picking(
+            session.objects(), scene, object_registry);
+  } else {
+    std::unordered_map<int, const quader_editor_core::PolygonObject *>
+        runtime_objects_by_id;
+    runtime_objects_by_id.reserve(session.objects().size());
+    for (const quader_editor_core::PolygonObject &object : session.objects()) {
+      runtime_objects_by_id.emplace(object.id, &object);
+    }
+    for (quader_editor_core::PolygonObject &cached : picking_cache_.objects) {
+      const auto runtime = runtime_objects_by_id.find(cached.id);
+      if (runtime == runtime_objects_by_id.end()) {
+        continue;
+      }
+      cached.selected = runtime->second->selected;
+      cached.component_edit_target = runtime->second->component_edit_target;
+      cached.selection = runtime->second->selection;
+    }
+  }
   picking_cache_.content_revision = content_revision;
   picking_cache_.selection_revision = selection_revision;
-  picking_cache_.scene_revision = scene_revision;
+  picking_cache_.scene_transform_revision = scene_transform_revision;
+  picking_cache_.scene_visibility_revision = scene_visibility_revision;
+  picking_cache_.scene_mesh_binding_revision = scene_mesh_binding_revision;
+  picking_cache_.object_map_revision = object_map_revision;
   picking_cache_.objects_valid = true;
   if (geometry_changed) {
     picking_cache_.bounds_valid = false;
@@ -891,9 +1008,15 @@ ModelingSelectionService::rectangle_selection_state(
   return selection;
 }
 
-quader_editor_core::RectangleSelectionUniverse
+const quader_editor_core::RectangleSelectionUniverse &
 ModelingSelectionService::rectangle_selection_universe(
     const quader_editor_core::EditorSession &session) const {
+  const std::uint64_t content_revision = session.state().content_revision;
+  if (rectangle_universe_cache_.valid &&
+      rectangle_universe_cache_.content_revision == content_revision) {
+    return rectangle_universe_cache_.universe;
+  }
+
   quader_editor_core::RectangleSelectionUniverse universe;
   for (const quader_editor_core::PolygonObject &object : session.objects()) {
     universe.object_ids.push_back(object.id);
@@ -915,7 +1038,10 @@ ModelingSelectionService::rectangle_selection_universe(
       universe.vertices.push_back({object.id, static_cast<int>(vertex.id)});
     }
   }
-  return universe;
+  rectangle_universe_cache_.valid = true;
+  rectangle_universe_cache_.content_revision = content_revision;
+  rectangle_universe_cache_.universe = std::move(universe);
+  return rectangle_universe_cache_.universe;
 }
 
 quader_editor_core::RectangleProjectedHitsRequest
@@ -935,8 +1061,9 @@ ModelingSelectionService::rectangle_projected_hits_request(
   for (const quader_editor_core::PolygonObject &object : picking_objects) {
     std::unordered_map<int, QVec2> projected_vertices;
     projected_vertices.reserve(object.document.vertices.size());
-    quader_editor_core::RectangleProjectedObject projected_object;
-    projected_object.object_id = object.id;
+    quader_editor_core::RectangleProjectedObject projected_object{
+        .object_id = object.id,
+    };
     for (const quader_poly::Vertex &vertex : object.document.vertices) {
       QVec2 screen;
       if (!quader_editor_core::project_viewport_point(camera, vertex.position,
@@ -944,9 +1071,13 @@ ModelingSelectionService::rectangle_projected_hits_request(
         continue;
       }
       projected_vertices.emplace(static_cast<int>(vertex.id), screen);
-      include_projected_object_point(projected_object, screen);
+      if (selection_mode == quader_editor_core::SelectionMode::Object) {
+        include_projected_object_point(projected_object, screen);
+      }
     }
-    if (projected_object.has_screen_bounds) {
+
+    if (selection_mode == quader_editor_core::SelectionMode::Object &&
+        projected_object.has_screen_bounds) {
       projected_object.has_screen_center = true;
       projected_object.screen_center = {
           (projected_object.screen_min.x + projected_object.screen_max.x) *
@@ -956,54 +1087,107 @@ ModelingSelectionService::rectangle_projected_hits_request(
       };
     }
 
-    for (const quader_poly::Face &face : object.document.faces) {
-      quader_editor_core::RectangleProjectedFace projected_face;
-      projected_face.object_id = object.id;
-      projected_face.face_index = static_cast<int>(face.id);
-      projected_face.vertex_indices.reserve(face.vertices.size());
-      projected_face.screen_vertices.reserve(face.vertices.size());
-      QVec2 center{};
-      bool all_projected = !face.vertices.empty();
-      for (const quader_poly::ElementId vertex_id : face.vertices) {
-        projected_face.vertex_indices.push_back(static_cast<int>(vertex_id));
-        const auto found = projected_vertices.find(static_cast<int>(vertex_id));
-        if (found == projected_vertices.end()) {
-          all_projected = false;
-          continue;
+    if (selection_mode == quader_editor_core::SelectionMode::Object) {
+      for (const quader_poly::Face &face : object.document.faces) {
+        std::vector<QVec2> screen_vertices;
+        screen_vertices.reserve(face.vertices.size());
+        bool all_projected = !face.vertices.empty();
+        for (const quader_poly::ElementId vertex_id : face.vertices) {
+          const auto found =
+              projected_vertices.find(static_cast<int>(vertex_id));
+          if (found == projected_vertices.end()) {
+            all_projected = false;
+            break;
+          }
+          screen_vertices.push_back(found->second);
         }
-        center = center + found->second;
-        projected_face.screen_vertices.push_back(found->second);
+        if (all_projected) {
+          projected_object.screen_polygons.push_back(
+              std::move(screen_vertices));
+        }
       }
-      if (all_projected && !projected_face.screen_vertices.empty()) {
-        projected_face.has_screen_position = true;
-        projected_face.screen_position =
-            center / static_cast<float>(projected_face.screen_vertices.size());
-        projected_object.screen_polygons.push_back(
-            projected_face.screen_vertices);
-      } else {
-        projected_face.screen_vertices.clear();
+      for (const quader_poly::Edge edge :
+           quader_poly::document_edges(object.document)) {
+        const auto a = projected_vertices.find(static_cast<int>(edge.a));
+        const auto b = projected_vertices.find(static_cast<int>(edge.b));
+        if (a != projected_vertices.end() && b != projected_vertices.end()) {
+          projected_object.screen_segments.push_back({a->second, b->second});
+        }
       }
-      hits_request.faces.push_back(std::move(projected_face));
+      hits_request.objects.push_back(std::move(projected_object));
+      continue;
     }
 
-    for (const quader_poly::Edge edge :
-         quader_poly::document_edges(object.document)) {
-      quader_editor_core::RectangleProjectedEdge projected_edge;
-      projected_edge.object_id = object.id;
-      projected_edge.a_index = static_cast<int>(edge.a);
-      projected_edge.b_index = static_cast<int>(edge.b);
-      const auto a = projected_vertices.find(static_cast<int>(edge.a));
-      const auto b = projected_vertices.find(static_cast<int>(edge.b));
-      if (a != projected_vertices.end() && b != projected_vertices.end()) {
-        projected_edge.has_screen_start = true;
-        projected_edge.screen_start = a->second;
-        projected_edge.has_screen_end = true;
-        projected_edge.screen_end = b->second;
-        projected_edge.has_screen_position = true;
-        projected_edge.screen_position = (a->second + b->second) * 0.5f;
-        projected_object.screen_segments.push_back({a->second, b->second});
+    if (selection_mode == quader_editor_core::SelectionMode::Face) {
+      for (const quader_poly::Face &face : object.document.faces) {
+        quader_editor_core::RectangleProjectedFace projected_face;
+        projected_face.object_id = object.id;
+        projected_face.face_index = static_cast<int>(face.id);
+        projected_face.vertex_indices.reserve(face.vertices.size());
+        projected_face.screen_vertices.reserve(face.vertices.size());
+        QVec2 center{};
+        bool all_projected = !face.vertices.empty();
+        for (const quader_poly::ElementId vertex_id : face.vertices) {
+          projected_face.vertex_indices.push_back(
+              static_cast<int>(vertex_id));
+          const auto found =
+              projected_vertices.find(static_cast<int>(vertex_id));
+          if (found == projected_vertices.end()) {
+            all_projected = false;
+            continue;
+          }
+          center = center + found->second;
+          projected_face.screen_vertices.push_back(found->second);
+          if (!projected_face.has_screen_bounds) {
+            projected_face.has_screen_bounds = true;
+            projected_face.screen_min = found->second;
+            projected_face.screen_max = found->second;
+          } else {
+            projected_face.screen_min.x =
+                std::min(projected_face.screen_min.x, found->second.x);
+            projected_face.screen_min.y =
+                std::min(projected_face.screen_min.y, found->second.y);
+            projected_face.screen_max.x =
+                std::max(projected_face.screen_max.x, found->second.x);
+            projected_face.screen_max.y =
+                std::max(projected_face.screen_max.y, found->second.y);
+          }
+        }
+        if (all_projected && !projected_face.screen_vertices.empty()) {
+          projected_face.has_screen_position = true;
+          projected_face.screen_position = center / static_cast<float>(
+                                                      projected_face
+                                                          .screen_vertices
+                                                          .size());
+        } else {
+          projected_face.screen_vertices.clear();
+          projected_face.has_screen_bounds = false;
+        }
+        hits_request.faces.push_back(std::move(projected_face));
       }
-      hits_request.edges.push_back(projected_edge);
+      continue;
+    }
+
+    if (selection_mode == quader_editor_core::SelectionMode::Edge) {
+      for (const quader_poly::Edge edge :
+           quader_poly::document_edges(object.document)) {
+        quader_editor_core::RectangleProjectedEdge projected_edge;
+        projected_edge.object_id = object.id;
+        projected_edge.a_index = static_cast<int>(edge.a);
+        projected_edge.b_index = static_cast<int>(edge.b);
+        const auto a = projected_vertices.find(static_cast<int>(edge.a));
+        const auto b = projected_vertices.find(static_cast<int>(edge.b));
+        if (a != projected_vertices.end() && b != projected_vertices.end()) {
+          projected_edge.has_screen_start = true;
+          projected_edge.screen_start = a->second;
+          projected_edge.has_screen_end = true;
+          projected_edge.screen_end = b->second;
+          projected_edge.has_screen_position = true;
+          projected_edge.screen_position = (a->second + b->second) * 0.5f;
+        }
+        hits_request.edges.push_back(projected_edge);
+      }
+      continue;
     }
 
     for (const quader_poly::Vertex &vertex : object.document.vertices) {
@@ -1017,23 +1201,70 @@ ModelingSelectionService::rectangle_projected_hits_request(
       }
       hits_request.vertices.push_back(projected_vertex);
     }
-
-    hits_request.objects.push_back(std::move(projected_object));
   }
   return hits_request;
+}
+
+const quader_editor_core::RectangleProjectedHitsRequest &
+ModelingSelectionService::cached_rectangle_projected_hits_request(
+    const quader_editor_core::EditorSession &session,
+    const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
+    quader_editor_core::SelectionMode selection_mode,
+    const ModelingBoxSelectRequest &request) const {
+  const std::uint64_t content_revision = session.state().content_revision;
+  const std::uint64_t scene_transform_revision = scene.transform_revision();
+  const std::uint64_t scene_visibility_revision = scene.visibility_revision();
+  const std::uint64_t scene_mesh_binding_revision =
+      scene.mesh_binding_revision();
+  const std::uint64_t object_map_revision = object_map.revision();
+  const bool rebuild =
+      !rectangle_projection_cache_.valid ||
+      rectangle_projection_cache_.content_revision != content_revision ||
+      rectangle_projection_cache_.scene_transform_revision !=
+          scene_transform_revision ||
+      rectangle_projection_cache_.scene_visibility_revision !=
+          scene_visibility_revision ||
+      rectangle_projection_cache_.scene_mesh_binding_revision !=
+          scene_mesh_binding_revision ||
+      rectangle_projection_cache_.object_map_revision != object_map_revision ||
+      rectangle_projection_cache_.selection_mode != selection_mode ||
+      !same_viewport_camera(rectangle_projection_cache_.camera,
+                            request.camera);
+  if (rebuild) {
+    const std::vector<quader_editor_core::PolygonObject> &picking_objects =
+        cached_scene_transformed_objects_for_picking(session, scene,
+                                                     object_map);
+    rectangle_projection_cache_.request = rectangle_projected_hits_request(
+        picking_objects, selection_mode, request);
+    rectangle_projection_cache_.valid = true;
+    rectangle_projection_cache_.content_revision = content_revision;
+    rectangle_projection_cache_.scene_transform_revision =
+        scene_transform_revision;
+    rectangle_projection_cache_.scene_visibility_revision =
+        scene_visibility_revision;
+    rectangle_projection_cache_.scene_mesh_binding_revision =
+        scene_mesh_binding_revision;
+    rectangle_projection_cache_.object_map_revision = object_map_revision;
+    rectangle_projection_cache_.selection_mode = selection_mode;
+    rectangle_projection_cache_.camera = request.camera;
+    ++rectangle_picking_projection_build_count_;
+  }
+  rectangle_projection_cache_.request.match =
+      rectangle_selection_match(request.rule, request.start, request.end);
+  rectangle_projection_cache_.request.rect =
+      quader_editor_core::normalized_screen_rect(request.start, request.end);
+  return rectangle_projection_cache_.request;
 }
 
 std::vector<int> ModelingSelectionService::box_pick_object_ids(
     const quader_editor_core::EditorSession &session,
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
     const ModelingBoxSelectRequest &request) const {
-  const std::vector<quader_editor_core::PolygonObject> picking_objects =
-      scene_transformed_objects_for_picking(session, scene, object_registry);
   const quader_editor_core::RectangleSelectionHits hits =
       quader_editor_core::rectangle_hits_from_projected_candidates(
-          rectangle_projected_hits_request(
-              picking_objects, quader_editor_core::SelectionMode::Object,
-              request));
+          cached_rectangle_projected_hits_request(
+              session, scene, object_registry,
+              quader_editor_core::SelectionMode::Object, request));
   return hits.object_ids;
 }
 
@@ -1181,23 +1412,48 @@ ModelingSelectionApplyResult ModelingSelectionService::apply_rectangle_selection
     const ModelingObjectRuntimeMap &object_registry,
     const ModelingBoxSelectRequest &request,
     const quader_editor_core::RectangleSelectionState &baseline) const {
-  const std::vector<quader_editor_core::PolygonObject> picking_objects =
-      scene_transformed_objects_for_picking(session, scene, object_registry);
-  const quader_editor_core::RectangleProjectedHitsRequest hits_request =
-      rectangle_projected_hits_request(picking_objects, session.selection_mode(),
-                                       request);
   quader_editor_core::RectangleSelectionRequest rectangle_request;
   rectangle_request.current_selection = baseline;
-  rectangle_request.operation = to_runtime_selection_edit(request.edit);
-  rectangle_request.universe = rectangle_selection_universe(session);
+  const quader_editor_core::SelectionEditOperation operation =
+      to_runtime_selection_edit(request.edit);
+  rectangle_request.operation = operation;
+  rectangle_request.universe_view = &rectangle_selection_universe(session);
   rectangle_request.hits =
       quader_editor_core::rectangle_hits_from_projected_candidates(
-          hits_request);
+          cached_rectangle_projected_hits_request(
+              session, scene, object_registry, session.selection_mode(),
+              request));
 
+  if (rectangle_resolution_cache_.valid &&
+      rectangle_resolution_cache_.projected_candidates_revision ==
+          rectangle_picking_projection_build_count_ &&
+      rectangle_resolution_cache_.content_revision ==
+          session.state().content_revision &&
+      rectangle_resolution_cache_.selection_revision ==
+          session.state().selection_revision &&
+      rectangle_resolution_cache_.operation == operation &&
+      same_rectangle_selection_state(rectangle_resolution_cache_.baseline,
+                                     baseline) &&
+      same_rectangle_hits(rectangle_resolution_cache_.hits,
+                          rectangle_request.hits)) {
+    return {};
+  }
+
+  ++rectangle_selection_resolution_build_count_;
   const quader_editor_core::RectangleSelectionResult result =
       quader_editor_core::apply_rectangle_selection(rectangle_request);
   const std::uint64_t selection_before = session.state().selection_revision;
   const bool applied = apply_rectangle_selection(session, result.selection);
+  rectangle_resolution_cache_.valid = true;
+  rectangle_resolution_cache_.projected_candidates_revision =
+      rectangle_picking_projection_build_count_;
+  rectangle_resolution_cache_.content_revision =
+      session.state().content_revision;
+  rectangle_resolution_cache_.selection_revision =
+      session.state().selection_revision;
+  rectangle_resolution_cache_.operation = operation;
+  rectangle_resolution_cache_.baseline = baseline;
+  rectangle_resolution_cache_.hits = rectangle_request.hits;
   return {
       .applied = applied,
       .changed = session.state().selection_revision != selection_before,

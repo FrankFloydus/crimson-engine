@@ -13,6 +13,8 @@
 #include "editor/commands/document_command_service.hpp"
 #include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
 #include "editor/history/editor_history_service.hpp"
+#include "editor/modeling/linear_array_layout.hpp"
+#include "editor/modeling/radial_array_layout.hpp"
 #include "editor/modeling/services/modeling_hierarchy_duplicate_service.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
@@ -26,6 +28,7 @@
 #include "scene/scene_document.hpp"
 #include "scene/scene_entity_naming.hpp"
 #include "scene/scene_transform.hpp"
+#include "scene/scene_transform_pivot.hpp"
 
 #include <algorithm>
 #include <array>
@@ -62,6 +65,21 @@ namespace {
 quader::QVec3 to_runtime(QVec3 value) { return {value.x, value.y, value.z}; }
 
 quader::QVec2 to_runtime(QVec2 value) { return {value.x, value.y}; }
+
+bool transformed_duplicate_world_matches(const QMat4 &left,
+                                         const QMat4 &right) {
+  constexpr float kAbsoluteTolerance = 0.0001f;
+  constexpr float kRelativeTolerance = 0.00001f;
+  for (std::size_t index = 0; index < left.values.size(); ++index) {
+    const float magnitude =
+        std::max(std::abs(left.values[index]), std::abs(right.values[index]));
+    if (std::abs(left.values[index] - right.values[index]) >
+        kAbsoluteTolerance + kRelativeTolerance * magnitude) {
+      return false;
+    }
+  }
+  return true;
+}
 
 quader_poly::Ray to_runtime(const ModelingRay &ray) {
   return {
@@ -570,6 +588,21 @@ class ModelingSessionService::Impl : private ModelingTransformDragPort {
     quader_editor_core::EditorRuntimeState runtime;
   };
 
+  /// Precomputes one source's identity and representable local transforms.
+  struct TransformedDuplicateSourcePlan {
+    EntityId source_entity = kInvalidEntityId;
+    int source_modeling_object_id = kInvalidModelingObjectId;
+    ModelingObjectSceneIdentity identity;
+    std::vector<TransformComponent> duplicate_local_transforms;
+    std::vector<QMat4> expected_duplicate_world_transforms;
+  };
+
+  /// Returns source-grouped elements from one atomic duplicate batch.
+  struct TransformedDuplicateBatchResult {
+    ModelingCommandResult command;
+    std::vector<std::vector<ModelingObjectRecord>> source_elements;
+  };
+
 public:
   Impl(SceneDocument &scene, AssetRegistry &assets,
        ModelingOperationPreviewCheckpointHooks preview_checkpoint_hooks)
@@ -597,6 +630,10 @@ public:
   [[nodiscard]] std::optional<int>
   modeling_object_for_entity(EntityId entity) const {
     return object_registry_.modeling_object_for_entity(entity);
+  }
+
+  [[nodiscard]] std::uint64_t modeling_object_map_revision() const {
+    return object_registry_.revision();
   }
 
   [[nodiscard]] std::optional<MeshAsset>
@@ -732,6 +769,16 @@ public:
   [[nodiscard]] std::uint64_t
   transformed_picking_projection_build_count() const {
     return selection_service_.transformed_picking_projection_build_count();
+  }
+
+  [[nodiscard]] std::uint64_t
+  rectangle_picking_projection_build_count() const {
+    return selection_service_.rectangle_picking_projection_build_count();
+  }
+
+  [[nodiscard]] std::uint64_t
+  rectangle_selection_resolution_build_count() const {
+    return selection_service_.rectangle_selection_resolution_build_count();
   }
 
   [[nodiscard]] static std::unordered_set<int> live_modeling_object_ids(
@@ -2597,8 +2644,10 @@ public:
           restored_preview_base, selection.changed);
       return selection_summary();
     }
-    sync_scene_selection_from_modeling();
-    invalidate_selection_overlay_caches();
+    if (selection.changed) {
+      sync_scene_selection_from_modeling();
+      invalidate_selection_overlay_caches();
+    }
     return selection_summary();
   }
 
@@ -3508,10 +3557,186 @@ public:
     return created;
   }
 
+  TransformedDuplicateBatchResult execute_transformed_duplicate_batch(
+      std::span<const TransformedDuplicateSourcePlan> source_plans,
+      std::string_view operation_name, std::string success_message) {
+    const auto failure = [](std::string message) {
+      return TransformedDuplicateBatchResult{
+          .command = {
+              .ok = false,
+              .changed = false,
+              .message = std::move(message),
+          },
+      };
+    };
+    if (source_plans.empty() ||
+        source_plans.front().duplicate_local_transforms.empty()) {
+      return failure(std::string(operation_name) +
+                     " needs at least one transformed copy.");
+    }
+
+    const std::size_t copies_per_source =
+        source_plans.front().duplicate_local_transforms.size();
+    std::vector<int> source_object_ids;
+    source_object_ids.reserve(source_plans.size());
+    for (const TransformedDuplicateSourcePlan &source : source_plans) {
+      if (source.source_entity == kInvalidEntityId ||
+          source.source_modeling_object_id == kInvalidModelingObjectId ||
+          source.duplicate_local_transforms.size() != copies_per_source ||
+          (!source.expected_duplicate_world_transforms.empty() &&
+           source.expected_duplicate_world_transforms.size() !=
+               copies_per_source)) {
+        return failure(std::string(operation_name) +
+                       " transformed-copy plan is invalid.");
+      }
+      source_object_ids.push_back(source.source_modeling_object_id);
+    }
+
+    const ModelingSessionMemento rollback = capture_history_memento();
+    const auto rollback_after_failure =
+        [&](std::string message) -> TransformedDuplicateBatchResult {
+      const ModelingCommandResult restored = restore_history_memento(rollback);
+      if (!restored.ok) {
+        return TransformedDuplicateBatchResult{
+            .command = {
+                .ok = false,
+                .changed = true,
+                .message =
+                    std::move(message) +
+                    " The pre-operation state could not be restored: " +
+                    (restored.message.empty() ? "unknown rollback failure."
+                                              : restored.message),
+            },
+        };
+      }
+      return failure(std::move(message));
+    };
+    const quader_editor_core::DuplicateObjectsResult duplicated =
+        session_.duplicate_objects(
+            quader_editor_core::DuplicateObjectsRequest{
+                .source_object_ids = source_object_ids,
+                .copies_per_source =
+                    static_cast<std::uint32_t>(copies_per_source),
+                .geometry_offset = {},
+                .selection_policy =
+                    quader_editor_core::DuplicateObjectSelectionPolicy::
+                        SourcesAndDuplicates,
+            });
+    const std::size_t expected_duplicate_count =
+        source_plans.size() * copies_per_source;
+    if (!duplicated.command.ok || !duplicated.command.changed ||
+        duplicated.duplicate_object_ids.size() != expected_duplicate_count) {
+      if (duplicated.command.changed) {
+        return rollback_after_failure(
+            duplicated.command.message.empty()
+                ? std::string("Modeling runtime did not create the ") +
+                      std::string(operation_name) + "."
+                : duplicated.command.message);
+      }
+      return failure(
+          duplicated.command.message.empty()
+              ? std::string("Modeling runtime did not create the ") +
+                    std::string(operation_name) + "."
+              : duplicated.command.message);
+    }
+    if (!try_sync_scene_objects_from_modeling(true)) {
+      return rollback_after_failure(std::string(operation_name) +
+                                    " could not synchronize its mesh copies.");
+    }
+
+    const auto object_record = [&](int modeling_object_id, EntityId entity) {
+      ModelingObjectRecord record;
+      record.modeling_object_id = modeling_object_id;
+      record.entity = entity;
+      if (const MeshComponent *mesh = scene_.mesh(entity)) {
+        record.mesh = mesh->mesh;
+      }
+      if (const NameComponent *name = scene_.name(entity)) {
+        record.name = name->name;
+      }
+      return record;
+    };
+
+    SceneEntityNameAllocator names(scene_);
+    std::vector<SceneTransformAssignment> transform_assignments;
+    transform_assignments.reserve(expected_duplicate_count);
+    TransformedDuplicateBatchResult result{
+        .command = {
+            .ok = true,
+            .changed = true,
+            .message = std::move(success_message),
+        },
+    };
+    result.source_elements.reserve(source_plans.size());
+    for (std::size_t source_index = 0; source_index < source_plans.size();
+         ++source_index) {
+      const TransformedDuplicateSourcePlan &source =
+          source_plans[source_index];
+      std::vector<ModelingObjectRecord> elements;
+      elements.reserve(copies_per_source + 1u);
+      elements.push_back(object_record(source.source_modeling_object_id,
+                                       source.source_entity));
+      for (std::size_t copy_index = 0; copy_index < copies_per_source;
+           ++copy_index) {
+        const std::size_t duplicate_index =
+            source_index * copies_per_source + copy_index;
+        const int object_id =
+            duplicated.duplicate_object_ids[duplicate_index];
+        const std::optional<EntityId> entity =
+            object_registry_.entity_for_modeling_object(object_id);
+        if (!entity.has_value() || !scene_.exists(*entity)) {
+          return rollback_after_failure(std::string(operation_name) +
+                                        " could not create a scene mesh copy.");
+        }
+
+        mesh_sync_service_.apply_scene_identity_to_duplicate_entity(
+            scene_, *entity, source.identity);
+        const std::string base_name =
+            source.identity.name.empty() ? "Mesh" : source.identity.name;
+        (void)scene_.rename_entity(*entity, names.next_name(base_name));
+        transform_assignments.push_back({
+            .entity = *entity,
+            .transform = source.duplicate_local_transforms[copy_index],
+        });
+        object_registry_.remember_scene_entity(object_id, scene_, *entity);
+        elements.push_back(object_record(object_id, *entity));
+      }
+      result.source_elements.push_back(std::move(elements));
+    }
+
+    mesh_sync_service_.apply_scene_transforms(scene_, transform_assignments);
+    for (std::size_t source_index = 0; source_index < source_plans.size();
+         ++source_index) {
+      const TransformedDuplicateSourcePlan &source =
+          source_plans[source_index];
+      for (std::size_t copy_index = 0; copy_index < copies_per_source;
+           ++copy_index) {
+        const std::size_t duplicate_index =
+            source_index * copies_per_source + copy_index;
+        const int object_id =
+            duplicated.duplicate_object_ids[duplicate_index];
+        const std::optional<EntityId> entity =
+            object_registry_.entity_for_modeling_object(object_id);
+        if (!entity.has_value() ||
+            (!source.expected_duplicate_world_transforms.empty() &&
+             !transformed_duplicate_world_matches(
+                 scene_.world_transform_matrix(*entity),
+                 source.expected_duplicate_world_transforms[copy_index]))) {
+          return rollback_after_failure(
+              std::string(operation_name) +
+              " could not preserve a generated world transform.");
+        }
+        object_registry_.remember_scene_entity(object_id, scene_, *entity);
+      }
+    }
+
+    sync_scene_selection_from_modeling();
+    invalidate_selection_overlay_caches();
+    return result;
+  }
+
   ModelingLinearArrayResult
   create_linear_array(const ModelingLinearArrayRequest &request) {
-    constexpr std::uint32_t kMinimumCount = 2u;
-    constexpr std::uint32_t kMaximumCount = 128u;
     const auto finite_vector = [](QVec3 value) {
       return std::isfinite(value.x) && std::isfinite(value.y) &&
              std::isfinite(value.z);
@@ -3524,159 +3749,341 @@ public:
       };
     };
 
-    if (request.count < kMinimumCount || request.count > kMaximumCount) {
+    if (request.sources.empty()) {
+      return failure("Linear Array needs at least one source mesh.");
+    }
+    if (request.count < kLinearArrayLayoutMinimumCount ||
+        request.count > kLinearArrayLayoutMaximumCount) {
       return failure("Linear Array count must be between 2 and 128.");
     }
-    if (!finite_vector(request.endpoint_world)) {
-      return failure("Linear Array endpoint must be finite.");
+    if (request.sources.size() >
+        static_cast<std::size_t>(kLinearArrayLayoutMaximumElements) /
+            request.count) {
+      return failure("Linear Array is limited to 1024 total elements.");
     }
-    if (request.source_entity == kInvalidEntityId ||
-        request.source_modeling_object_id == kInvalidModelingObjectId ||
-        !scene_.exists(request.source_entity)) {
-      return failure("Linear Array source mesh was not found.");
+    if (!finite_vector(request.span_world)) {
+      return failure("Linear Array span must be finite.");
     }
     if (selection_mode() != ModelingSelectionMode::Object) {
       return failure("Linear Array only works in object mode.");
     }
 
-    const ModelingObjectComponent *source_modeling =
-        scene_.modeling_object(request.source_entity);
-    const MeshComponent *source_mesh = scene_.mesh(request.source_entity);
-    const TransformComponent *source_transform =
-        scene_.transform(request.source_entity);
-    const std::optional<EntityId> mapped_entity =
-        object_registry_.entity_for_modeling_object(
-            request.source_modeling_object_id);
-    if (source_modeling == nullptr || source_mesh == nullptr ||
-        source_transform == nullptr ||
-        source_modeling->object_id != request.source_modeling_object_id ||
-        !mapped_entity.has_value() || *mapped_entity != request.source_entity ||
-        assets_.mesh(source_mesh->mesh) == nullptr) {
-      return failure("Linear Array source is not a live modeling mesh.");
-    }
-    if (!scene_.is_effectively_visible(request.source_entity) ||
-        scene_.is_effectively_locked(request.source_entity)) {
-      return failure("Linear Array source must be visible and unlocked.");
+    std::vector<int> source_ids;
+    source_ids.reserve(request.sources.size());
+    std::unordered_set<EntityId> source_entities;
+    source_entities.reserve(request.sources.size());
+    std::unordered_set<int> source_object_ids;
+    source_object_ids.reserve(request.sources.size());
+    for (const ModelingArraySource &source : request.sources) {
+      if (source.entity == kInvalidEntityId ||
+          source.modeling_object_id == kInvalidModelingObjectId ||
+          !scene_.exists(source.entity)) {
+        return failure("Linear Array source mesh was not found.");
+      }
+      if (!source_entities.insert(source.entity).second ||
+          !source_object_ids.insert(source.modeling_object_id).second) {
+        return failure("Linear Array source meshes must be unique.");
+      }
+
+      const ModelingObjectComponent *modeling =
+          scene_.modeling_object(source.entity);
+      const MeshComponent *mesh = scene_.mesh(source.entity);
+      const TransformComponent *transform = scene_.transform(source.entity);
+      const std::optional<EntityId> mapped_entity =
+          object_registry_.entity_for_modeling_object(
+              source.modeling_object_id);
+      if (modeling == nullptr || mesh == nullptr || transform == nullptr ||
+          modeling->object_id != source.modeling_object_id ||
+          !mapped_entity.has_value() || *mapped_entity != source.entity ||
+          assets_.mesh(mesh->mesh) == nullptr) {
+        return failure("Linear Array source is not a live modeling mesh.");
+      }
+      if (!scene_.is_effectively_visible(source.entity) ||
+          scene_.is_effectively_locked(source.entity)) {
+        return failure("Linear Array sources must be visible and unlocked.");
+      }
+      source_ids.push_back(source.modeling_object_id);
     }
 
-    const std::array<int, 1> source_ids = {
-        request.source_modeling_object_id,
-    };
     const std::vector<ModelingObjectSceneIdentity> source_identities =
         object_registry_.capture_scene_identities_for_modeling_objects(
-            scene_, source_ids);
-    if (source_identities.size() != 1u) {
-      return failure("Linear Array source scene identity was not found.");
-    }
-    const ModelingObjectSceneIdentity &source_identity =
-        source_identities.front();
-
-    const QVec3 source_world_origin = transform_point(
-        scene_.world_transform_matrix(request.source_entity), QVec3{});
-    const EntityId parent = scene_.parent(request.source_entity);
-    const QMat4 parent_world =
-        parent == kInvalidEntityId ? QMat4{}
-                                   : scene_.world_transform_matrix(parent);
-    const QVec3 local_span = transform_vector(
-        inverse(parent_world), request.endpoint_world - source_world_origin);
-    if (!finite_vector(source_world_origin) || !finite_vector(local_span)) {
-      return failure("Linear Array source transform is not invertible.");
+            scene_, std::span<const int>(source_ids.data(), source_ids.size()));
+    if (source_identities.size() != request.sources.size()) {
+      return failure("Linear Array source scene identities were not found.");
     }
 
-    std::vector<TransformComponent> duplicate_transforms;
-    duplicate_transforms.reserve(request.count - 1u);
-    for (std::uint32_t index = 1u; index < request.count; ++index) {
-      const float factor = static_cast<float>(index) /
-                           static_cast<float>(request.count - 1u);
-      TransformComponent transform = *source_transform;
-      transform.position = source_transform->position + local_span * factor;
-      if (!finite_vector(transform.position)) {
-        return failure("Linear Array generated a non-finite transform.");
-      }
-      duplicate_transforms.push_back(transform);
-    }
-
-    const ModelingSessionMemento rollback = capture_history_memento();
-    const quader_editor_core::DuplicateObjectsResult duplicated =
-        session_.duplicate_objects(
-            quader_editor_core::DuplicateObjectsRequest{
-                .source_object_ids = {request.source_modeling_object_id},
-                .copies_per_source = request.count - 1u,
-                .geometry_offset = {},
-                .selection_policy =
-                    quader_editor_core::DuplicateObjectSelectionPolicy::
-                        SourcesAndDuplicates,
-            });
-    if (!duplicated.command.ok || !duplicated.command.changed ||
-        duplicated.duplicate_object_ids.size() != duplicate_transforms.size()) {
-      if (duplicated.command.changed) {
-        (void)restore_history_memento(rollback);
-      }
-      return failure(duplicated.command.message.empty()
-                         ? "Modeling runtime did not create the linear array."
-                         : duplicated.command.message);
-    }
-
-    sync_scene_objects_from_modeling(true);
-    SceneEntityNameAllocator names(scene_);
-    std::vector<SceneTransformAssignment> transform_assignments;
-    transform_assignments.reserve(duplicate_transforms.size());
-    std::vector<ModelingObjectRecord> elements;
-    elements.reserve(request.count);
-
-    const auto append_record = [&](int object_id, EntityId entity) {
-      ModelingObjectRecord record;
-      record.modeling_object_id = object_id;
-      record.entity = entity;
-      if (const MeshComponent *mesh = scene_.mesh(entity)) {
-        record.mesh = mesh->mesh;
-      }
-      if (const NameComponent *name = scene_.name(entity)) {
-        record.name = name->name;
-      }
-      elements.push_back(std::move(record));
-    };
-    append_record(request.source_modeling_object_id, request.source_entity);
-
-    for (std::size_t index = 0;
-         index < duplicated.duplicate_object_ids.size(); ++index) {
-      const int object_id = duplicated.duplicate_object_ids[index];
-      const std::optional<EntityId> entity =
-          object_registry_.entity_for_modeling_object(object_id);
-      if (!entity.has_value() || !scene_.exists(*entity)) {
-        (void)restore_history_memento(rollback);
-        return failure("Linear Array could not create a scene mesh copy.");
+    std::vector<TransformedDuplicateSourcePlan> plans;
+    plans.reserve(request.sources.size());
+    for (std::size_t source_index = 0;
+         source_index < request.sources.size(); ++source_index) {
+      const ModelingArraySource &source = request.sources[source_index];
+      const ModelingObjectSceneIdentity &identity =
+          source_identities[source_index];
+      if (identity.entity != source.entity) {
+        return failure("Linear Array source scene identity is stale.");
       }
 
-      mesh_sync_service_.apply_scene_identity_to_duplicate_entity(
-          scene_, *entity, source_identity);
-      const std::string base_name =
-          source_identity.name.empty() ? "Mesh" : source_identity.name;
-      (void)scene_.rename_entity(*entity, names.next_name(base_name));
-      transform_assignments.push_back({
-          .entity = *entity,
-          .transform = duplicate_transforms[index],
+      const TransformComponent *source_transform =
+          scene_.transform(source.entity);
+      if (source_transform == nullptr) {
+        return failure("Linear Array source transform was not found.");
+      }
+      const LinearArrayLayoutResult layout = build_linear_array_layout({
+          .source_world_transform =
+              scene_.world_transform_matrix(source.entity),
+          .span_world = request.span_world,
+          .count = request.count,
       });
-      object_registry_.remember_scene_entity(object_id, scene_, *entity);
-      append_record(object_id, *entity);
+      if (!layout.ok ||
+          layout.generated_world_transforms.size() != request.count - 1u) {
+        return failure(layout.message.empty()
+                           ? "Linear Array layout could not be generated."
+                           : layout.message);
+      }
+
+      const EntityId parent = scene_.parent(source.entity);
+      const QMat4 parent_world =
+          parent == kInvalidEntityId ? scene_transform_identity_matrix()
+                                     : scene_.world_transform_matrix(parent);
+      TransformedDuplicateSourcePlan prepared{
+          .source_entity = source.entity,
+          .source_modeling_object_id = source.modeling_object_id,
+          .identity = identity,
+          .expected_duplicate_world_transforms =
+              layout.generated_world_transforms,
+      };
+      prepared.duplicate_local_transforms.reserve(
+          layout.generated_world_transforms.size());
+      for (const QMat4 &desired_world : layout.generated_world_transforms) {
+        const std::optional<TransformComponent> local_transform =
+            try_scene_local_transform_preserving_world(
+                parent_world, desired_world, *source_transform);
+        if (!local_transform.has_value()) {
+          return failure(
+              "Linear Array source parent transform is not invertible.");
+        }
+        const QMat4 recomposed_world = scene_transform_multiply(
+            parent_world,
+            compose_transform(local_transform->spatial_transform()));
+        if (!transformed_duplicate_world_matches(recomposed_world,
+                                                 desired_world)) {
+          return failure(
+              "Linear Array transform cannot be represented under its "
+              "source parent without shear.");
+        }
+        prepared.duplicate_local_transforms.push_back(*local_transform);
+      }
+      plans.push_back(std::move(prepared));
     }
 
-    mesh_sync_service_.apply_scene_transforms(scene_, transform_assignments);
-    for (const int object_id : duplicated.duplicate_object_ids) {
-      const std::optional<EntityId> entity =
-          object_registry_.entity_for_modeling_object(object_id);
-      if (entity.has_value()) {
-        object_registry_.remember_scene_entity(object_id, scene_, *entity);
-      }
-    }
-    sync_scene_selection_from_modeling();
-    invalidate_selection_overlay_caches();
-    return {
-        .ok = true,
-        .changed = true,
-        .message = "Created linear array.",
-        .elements = std::move(elements),
+    TransformedDuplicateBatchResult duplicated =
+        execute_transformed_duplicate_batch(plans, "Linear Array",
+                                            "Created linear array.");
+    ModelingLinearArrayResult result{
+        .ok = duplicated.command.ok,
+        .changed = duplicated.command.changed,
+        .message = std::move(duplicated.command.message),
     };
+    result.source_arrays.reserve(duplicated.source_elements.size());
+    for (std::vector<ModelingObjectRecord> &elements :
+         duplicated.source_elements) {
+      ModelingLinearArraySourceResult source_result;
+      source_result.source = elements.front();
+      source_result.elements = std::move(elements);
+      result.source_arrays.push_back(std::move(source_result));
+    }
+    return result;
+  }
+
+  ModelingRadialArrayResult
+  create_radial_array(const ModelingRadialArrayRequest &request) {
+    const auto failure = [](std::string message) {
+      return ModelingRadialArrayResult{
+          .ok = false,
+          .changed = false,
+          .message = std::move(message),
+      };
+    };
+    const auto finite_vector = [](QVec3 value) {
+      return std::isfinite(value.x) && std::isfinite(value.y) &&
+             std::isfinite(value.z);
+    };
+
+    if (request.sources.empty()) {
+      return failure("Radial Array needs at least one source mesh.");
+    }
+    if (selection_mode() != ModelingSelectionMode::Object) {
+      return failure("Radial Array only works in object mode.");
+    }
+    if (!finite_vector(request.center_world) ||
+        !finite_vector(request.plane_normal_world) ||
+        length_squared(request.plane_normal_world) <= 0.000000000001f) {
+      return failure("Radial Array center and plane normal must be valid.");
+    }
+    if (!std::isfinite(request.degrees) || request.degrees < 0.0 ||
+        request.degrees > 360.0) {
+      return failure("Radial Array degrees must be between 0 and 360.");
+    }
+    if (request.copies < kRadialArrayLayoutMinimumCopies ||
+        request.copies > kRadialArrayLayoutMaximumCopies) {
+      return failure("Radial Array copies must be between 2 and 128.");
+    }
+    if (request.repeats == 0u ||
+        request.repeats >
+            kRadialArrayLayoutMaximumElements / request.copies) {
+      return failure("Radial Array repeat count is too large.");
+    }
+    if (!std::isfinite(request.repeat_spacing) ||
+        request.repeat_spacing < 0.0 ||
+        request.repeat_spacing > kRadialArrayLayoutMaximumRepeatSpacing) {
+      return failure(
+          "Radial Array repeat spacing must be between 0 and 16384.");
+    }
+
+    const std::size_t elements_per_source =
+        static_cast<std::size_t>(request.copies) * request.repeats;
+    if (request.sources.size() >
+        static_cast<std::size_t>(kRadialArrayLayoutMaximumElements) /
+            elements_per_source) {
+      return failure("Radial Array is limited to 1024 total elements.");
+    }
+
+    std::vector<int> source_object_ids;
+    source_object_ids.reserve(request.sources.size());
+    std::unordered_set<EntityId> source_entities;
+    source_entities.reserve(request.sources.size());
+    std::unordered_set<int> unique_source_object_ids;
+    unique_source_object_ids.reserve(request.sources.size());
+    for (const ModelingArraySource &source : request.sources) {
+      if (source.entity == kInvalidEntityId ||
+          source.modeling_object_id == kInvalidModelingObjectId ||
+          !scene_.exists(source.entity)) {
+        return failure("Radial Array source mesh was not found.");
+      }
+      if (!source_entities.insert(source.entity).second ||
+          !unique_source_object_ids.insert(source.modeling_object_id).second) {
+        return failure("Radial Array source meshes must be unique.");
+      }
+
+      const ModelingObjectComponent *modeling =
+          scene_.modeling_object(source.entity);
+      const MeshComponent *mesh = scene_.mesh(source.entity);
+      const TransformComponent *transform = scene_.transform(source.entity);
+      const std::optional<EntityId> mapped_entity =
+          object_registry_.entity_for_modeling_object(
+              source.modeling_object_id);
+      if (modeling == nullptr || mesh == nullptr || transform == nullptr ||
+          modeling->object_id != source.modeling_object_id ||
+          !mapped_entity.has_value() || *mapped_entity != source.entity ||
+          assets_.mesh(mesh->mesh) == nullptr) {
+        return failure("Radial Array source is not a live modeling mesh.");
+      }
+      if (!scene_.is_effectively_visible(source.entity) ||
+          scene_.is_effectively_locked(source.entity)) {
+        return failure("Radial Array sources must be visible and unlocked.");
+      }
+      source_object_ids.push_back(source.modeling_object_id);
+    }
+
+    const std::vector<ModelingObjectSceneIdentity> source_identities =
+        object_registry_.capture_scene_identities_for_modeling_objects(
+            scene_, std::span<const int>(source_object_ids.data(),
+                                         source_object_ids.size()));
+    if (source_identities.size() != request.sources.size()) {
+      return failure("Radial Array source scene identities were not found.");
+    }
+
+    std::vector<TransformedDuplicateSourcePlan> prepared_sources;
+    prepared_sources.reserve(request.sources.size());
+    for (std::size_t source_index = 0;
+         source_index < request.sources.size(); ++source_index) {
+      const ModelingArraySource &source = request.sources[source_index];
+      const ModelingObjectSceneIdentity &identity =
+          source_identities[source_index];
+      if (identity.entity != source.entity) {
+        return failure("Radial Array source scene identity is stale.");
+      }
+
+      const TransformComponent *source_transform =
+          scene_.transform(source.entity);
+      const std::optional<QVec3> source_pivot =
+          resolve_entity_transform_visible_pivot(scene_, assets_,
+                                                 source.entity);
+      if (source_transform == nullptr || !source_pivot.has_value()) {
+        return failure("Radial Array source has no valid visible pivot.");
+      }
+      const QMat4 source_world = scene_.world_transform_matrix(source.entity);
+      const RadialArrayLayoutResult layout = build_radial_array_layout({
+          .source_world_transform = source_world,
+          .source_pivot_world = *source_pivot,
+          .center_world = request.center_world,
+          .plane_normal_world = request.plane_normal_world,
+          .degrees = request.degrees,
+          .copies = request.copies,
+          .repeats = request.repeats,
+          .repeat_spacing = request.repeat_spacing,
+      });
+      if (!layout.ok ||
+          layout.generated_world_transforms.size() !=
+              elements_per_source - 1u) {
+        return failure(layout.message.empty()
+                           ? "Radial Array layout could not be generated."
+                           : layout.message);
+      }
+
+      const EntityId parent = scene_.parent(source.entity);
+      const QMat4 parent_world =
+          parent == kInvalidEntityId ? scene_transform_identity_matrix()
+                                     : scene_.world_transform_matrix(parent);
+      TransformedDuplicateSourcePlan prepared{
+          .source_entity = source.entity,
+          .source_modeling_object_id = source.modeling_object_id,
+          .identity = identity,
+          .expected_duplicate_world_transforms =
+              layout.generated_world_transforms,
+      };
+      prepared.duplicate_local_transforms.reserve(
+          layout.generated_world_transforms.size());
+      for (const QMat4 &desired_world :
+           layout.generated_world_transforms) {
+        const std::optional<TransformComponent> local_transform =
+            try_scene_local_transform_preserving_world(
+                parent_world, desired_world, *source_transform);
+        if (!local_transform.has_value()) {
+          return failure(
+              "Radial Array source parent transform is not invertible.");
+        }
+        const QMat4 recomposed_world = scene_transform_multiply(
+            parent_world,
+            compose_transform(local_transform->spatial_transform()));
+        if (!transformed_duplicate_world_matches(recomposed_world,
+                                                 desired_world)) {
+          return failure(
+              "Radial Array transform cannot be represented under its "
+              "source parent without shear.");
+        }
+        prepared.duplicate_local_transforms.push_back(*local_transform);
+      }
+      prepared_sources.push_back(std::move(prepared));
+    }
+
+    TransformedDuplicateBatchResult duplicated =
+        execute_transformed_duplicate_batch(prepared_sources, "Radial Array",
+                                            "Created radial array.");
+    ModelingRadialArrayResult result{
+        .ok = duplicated.command.ok,
+        .changed = duplicated.command.changed,
+        .message = std::move(duplicated.command.message),
+    };
+    result.source_arrays.reserve(duplicated.source_elements.size());
+    for (std::vector<ModelingObjectRecord> &elements :
+         duplicated.source_elements) {
+      ModelingRadialArraySourceResult source_result;
+      source_result.source = elements.front();
+      source_result.elements = std::move(elements);
+      result.source_arrays.push_back(std::move(source_result));
+    }
+    return result;
   }
 
   ModelingCommandResult set_object_selection(std::span<const EntityId> entities,
@@ -4210,6 +4617,10 @@ ModelingSessionService::modeling_object_for_entity(EntityId entity) const {
   return impl_->modeling_object_for_entity(entity);
 }
 
+std::uint64_t ModelingSessionService::modeling_object_map_revision() const {
+  return impl_->modeling_object_map_revision();
+}
+
 std::optional<MeshAsset>
 ModelingSessionService::compile_object_mesh(int modeling_object_id) const {
   return impl_->compile_object_mesh(modeling_object_id);
@@ -4268,6 +4679,16 @@ ModelingSessionService::tool_preview_meshes() const {
 std::uint64_t
 ModelingSessionService::transformed_picking_projection_build_count() const {
   return impl_->transformed_picking_projection_build_count();
+}
+
+std::uint64_t
+ModelingSessionService::rectangle_picking_projection_build_count() const {
+  return impl_->rectangle_picking_projection_build_count();
+}
+
+std::uint64_t
+ModelingSessionService::rectangle_selection_resolution_build_count() const {
+  return impl_->rectangle_selection_resolution_build_count();
 }
 
 ModelingSessionMemento ModelingSessionService::capture_history_memento() const {
@@ -4737,6 +5158,11 @@ ModelingSessionService::create_mesh(const ModelingCreateMeshRequest &request) {
 ModelingLinearArrayResult ModelingSessionService::create_linear_array(
     const ModelingLinearArrayRequest &request) {
   return impl_->create_linear_array(request);
+}
+
+ModelingRadialArrayResult ModelingSessionService::create_radial_array(
+    const ModelingRadialArrayRequest &request) {
+  return impl_->create_radial_array(request);
 }
 
 ModelingCommandResult

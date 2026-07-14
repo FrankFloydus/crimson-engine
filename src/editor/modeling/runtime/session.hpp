@@ -704,6 +704,9 @@ struct RectangleSelectionRequest {
   RectangleSelectionState current_selection;
   SelectionEditOperation operation = SelectionEditOperation::Replace;
   RectangleSelectionUniverse universe;
+  // Optional borrowed universe for synchronous hot paths. When set, selection
+  // resolution reads this value instead of copying the owning fallback above.
+  const RectangleSelectionUniverse *universe_view = nullptr;
   RectangleSelectionHits hits;
 };
 

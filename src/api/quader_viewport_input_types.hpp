@@ -28,6 +28,7 @@ enum class ViewportToolId {
     Mirror,
     Pivot,
     LinearArray,
+    RadialArray,
 };
 
 /**
@@ -181,6 +182,10 @@ enum class ViewportInputActionKind {
     ToolConstraintX,
     ToolConstraintY,
     ToolConstraintZ,
+    LinearArrayIncreaseCopies,
+    LinearArrayDecreaseCopies,
+    RadialArrayIncreaseCopies,
+    RadialArrayDecreaseCopies,
 };
 
 /**

@@ -2232,6 +2232,10 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
         std::string_view::npos) {
       state.active_tool = quader::ViewportToolId::LinearArray;
     }
+    if (descriptor.when.find("activeTool.radial_array") !=
+        std::string_view::npos) {
+      state.active_tool = quader::ViewportToolId::RadialArray;
+    }
     EXPECT_TRUE(
         has_keybinding(rules, descriptor.target_id, descriptor.shortcut))
         << descriptor.target_id << " / " << descriptor.shortcut;
@@ -2274,6 +2278,62 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
         << descriptor.target_id;
     EXPECT_EQ(resolved_action, descriptor.action) << descriptor.target_id;
   }
+}
+
+TEST(EditorApiTests,
+     ArrayWheelBindingsResolveOnlyForTheActiveNonNavigatingTool) {
+  const std::filesystem::path path =
+      keybinding_test_path("radial-array-wheel-bindings");
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+
+  quader::ViewportToolState state{
+      .active_tool = quader::ViewportToolId::RadialArray,
+  };
+  quader::ViewportInputActionKind action =
+      quader::ViewportInputActionKind::None;
+  ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
+      *quader::quader_input_parse_chord("Shift+WheelUp"), state, true, false,
+      action));
+  EXPECT_EQ(action,
+            quader::ViewportInputActionKind::RadialArrayIncreaseCopies);
+
+  action = quader::ViewportInputActionKind::None;
+  ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
+      *quader::quader_input_parse_chord("Shift+WheelDown"), state, true,
+      false, action));
+  EXPECT_EQ(action,
+            quader::ViewportInputActionKind::RadialArrayDecreaseCopies);
+
+  state.active_tool = quader::ViewportToolId::LinearArray;
+  action = quader::ViewportInputActionKind::None;
+  ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
+      *quader::quader_input_parse_chord("Shift+WheelUp"), state, true, false,
+      action));
+  EXPECT_EQ(action,
+            quader::ViewportInputActionKind::LinearArrayIncreaseCopies);
+
+  action = quader::ViewportInputActionKind::None;
+  ASSERT_TRUE(editor.commands().resolve_viewport_input_action(
+      *quader::quader_input_parse_chord("Shift+WheelDown"), state, true,
+      false, action));
+  EXPECT_EQ(action,
+            quader::ViewportInputActionKind::LinearArrayDecreaseCopies);
+
+  state.active_tool = quader::ViewportToolId::Select;
+  action = quader::ViewportInputActionKind::None;
+  EXPECT_FALSE(editor.commands().resolve_viewport_input_action(
+      *quader::quader_input_parse_chord("Shift+WheelUp"), state, true, false,
+      action));
+
+  state.active_tool = quader::ViewportToolId::RadialArray;
+  action = quader::ViewportInputActionKind::None;
+  EXPECT_FALSE(editor.commands().resolve_viewport_input_action(
+      *quader::quader_input_parse_chord("Shift+WheelUp"), state, true, false,
+      action, quader::QuaderViewportKeybindingContext{
+                  .navigation_active = true,
+              }));
 }
 
 TEST(EditorApiTests, ViewportModalToolGesturesUseKeybindingTargets) {
@@ -5768,7 +5828,126 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     LinearArrayToolRequiresOneMeshAndKeepsEndpointFixedWhenCountChanges) {
+     RadialArraySettingsStayAvailableWhileTheCenterIsBeingPlaced) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  (void)create_selected_box(editor, "Radial Array Settings Source");
+
+  const quader::QuaderApiVoidResult activated =
+      editor.tools().activate(quader::ViewportToolId::RadialArray);
+  ASSERT_TRUE(activated.ok()) << activated.error_message();
+  EXPECT_EQ(editor.tools().active_tool(), "radial_array");
+
+  quader::QuaderToolSettingsTarget settings =
+      editor.tools().active_settings();
+  ASSERT_TRUE(settings.active);
+  EXPECT_FALSE(settings.preview_active);
+  EXPECT_EQ(settings.tool_id, "radial_array");
+  EXPECT_EQ(settings.title, "Radial Array");
+  EXPECT_TRUE(settings.apply_visible);
+  EXPECT_FALSE(settings.can_apply);
+  EXPECT_TRUE(settings.can_cancel);
+
+  const quader::QuaderToolSettingControl *degrees =
+      find_tool_setting_control(settings, "radial_array.degrees");
+  const quader::QuaderToolSettingControl *copies =
+      find_tool_setting_control(settings, "radial_array.copies");
+  const quader::QuaderToolSettingControl *repeats =
+      find_tool_setting_control(settings, "radial_array.repeats");
+  const quader::QuaderToolSettingControl *spacing =
+      find_tool_setting_control(settings, "radial_array.repeat_spacing");
+  ASSERT_NE(degrees, nullptr);
+  ASSERT_NE(copies, nullptr);
+  ASSERT_NE(repeats, nullptr);
+  ASSERT_NE(spacing, nullptr);
+  EXPECT_DOUBLE_EQ(degrees->number_value, 360.0);
+  EXPECT_DOUBLE_EQ(degrees->min_value, 0.0);
+  EXPECT_DOUBLE_EQ(degrees->max_value, 360.0);
+  EXPECT_DOUBLE_EQ(copies->number_value, 8.0);
+  EXPECT_DOUBLE_EQ(copies->min_value, 2.0);
+  EXPECT_DOUBLE_EQ(copies->max_value, 128.0);
+  EXPECT_DOUBLE_EQ(repeats->number_value, 1.0);
+  EXPECT_DOUBLE_EQ(repeats->min_value, 1.0);
+  EXPECT_DOUBLE_EQ(repeats->max_value, 128.0);
+  EXPECT_DOUBLE_EQ(spacing->number_value, 1.0);
+  EXPECT_DOUBLE_EQ(spacing->min_value, 0.0);
+  EXPECT_DOUBLE_EQ(spacing->max_value, 16384.0);
+  EXPECT_DOUBLE_EQ(spacing->step, 0.001);
+
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("radial_array", "radial_array.degrees", 270.0)
+                  .ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("radial_array", "radial_array.copies", 16.0)
+                  .ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("radial_array", "radial_array.repeats", 2.0)
+                  .ok());
+  ASSERT_TRUE(
+      editor.tools()
+          .set_setting("radial_array", "radial_array.repeat_spacing", 2.5)
+          .ok());
+
+  settings = editor.tools().active_settings();
+  const quader::QuaderToolSettingControl *changed_degrees =
+      find_tool_setting_control(settings, "radial_array.degrees");
+  const quader::QuaderToolSettingControl *changed_copies =
+      find_tool_setting_control(settings, "radial_array.copies");
+  const quader::QuaderToolSettingControl *changed_repeats =
+      find_tool_setting_control(settings, "radial_array.repeats");
+  const quader::QuaderToolSettingControl *changed_spacing =
+      find_tool_setting_control(settings, "radial_array.repeat_spacing");
+  ASSERT_NE(changed_degrees, nullptr);
+  ASSERT_NE(changed_copies, nullptr);
+  ASSERT_NE(changed_repeats, nullptr);
+  ASSERT_NE(changed_spacing, nullptr);
+  EXPECT_DOUBLE_EQ(changed_degrees->number_value, 270.0);
+  EXPECT_DOUBLE_EQ(changed_copies->number_value, 16.0);
+  EXPECT_DOUBLE_EQ(changed_repeats->number_value, 2.0);
+  EXPECT_DOUBLE_EQ(changed_repeats->max_value, 64.0);
+  EXPECT_DOUBLE_EQ(changed_spacing->number_value, 2.5);
+
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+}
+
+TEST(EditorApiTests, EdgeBevelToolSettingsUseOperationSchemaWidthLimits) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  (void)create_selected_box(editor, "Edge Bevel Schema Settings Source");
+  ASSERT_TRUE(
+      editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_all().ok());
+  ASSERT_TRUE(editor.commands()
+                  .execute(editor.commands().command_id_for_modeling_action(
+                      "bevel_edges"))
+                  .ok());
+
+  const quader::QuaderToolSettingsTarget settings =
+      editor.tools().active_settings();
+  const quader::QuaderToolSettingControl *width = find_tool_setting_control(
+      settings, "operation.edge_bevel.width");
+  ASSERT_NE(width, nullptr);
+  EXPECT_DOUBLE_EQ(width->min_value, 0.0);
+  EXPECT_DOUBLE_EQ(width->max_value, 512.0);
+  EXPECT_DOUBLE_EQ(width->step, 0.001);
+
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("edge_bevel", "operation.edge_bevel.width",
+                               900.0)
+                  .ok());
+  const quader::QuaderToolSettingsTarget normalized_settings =
+      editor.tools().active_settings();
+  const quader::QuaderToolSettingControl *normalized =
+      find_tool_setting_control(normalized_settings,
+                                "operation.edge_bevel.width");
+  ASSERT_NE(normalized, nullptr);
+  EXPECT_DOUBLE_EQ(normalized->number_value, 512.0);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+}
+
+TEST(EditorApiTests,
+     LinearArrayToolAcceptsMultipleMeshesAndKeepsSharedEndpointFixed) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
 
@@ -5784,13 +5963,13 @@ TEST(EditorApiTests,
       create_selected_box(editor, "Linear Array Tool Source");
   const quader::QuaderModelingObjectRef second =
       create_selected_box(editor, "Linear Array Tool Second");
-  ASSERT_TRUE(editor.selection()
-                  .select_objects({source.entity, second.entity}, second.entity)
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(second.entity,
+                                 {.position = {10.0f, 0.0f, 0.0f}})
                   .ok());
-  EXPECT_FALSE(editor.tools().can_activate(quader::ViewportToolId::LinearArray));
-  EXPECT_FALSE(
-      editor.tools().activate(quader::ViewportToolId::LinearArray).ok());
-  ASSERT_TRUE(editor.selection().select_object(source).ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({source.entity, second.entity}, source.entity)
+                  .ok());
   ASSERT_TRUE(editor.tools().can_activate(quader::ViewportToolId::LinearArray));
   const quader::QuaderApiVoidResult activated =
       editor.tools().activate(quader::ViewportToolId::LinearArray);
@@ -5816,25 +5995,36 @@ TEST(EditorApiTests,
 
   std::vector<quader::QuaderToolPreviewMesh> previews =
       editor.render().tool_preview_meshes();
-  ASSERT_EQ(previews.size(), 1u);
-  EXPECT_EQ(previews.front().source_entity, source.entity);
-  ASSERT_EQ(previews.front().instance_transforms.size(), 3u);
-  EXPECT_NEAR(previews.front().instance_transforms[0].values[12], 2.0f,
+  ASSERT_EQ(previews.size(), 2u);
+  EXPECT_EQ(previews[0].source_entity, second.entity);
+  EXPECT_EQ(previews[1].source_entity, source.entity);
+  ASSERT_EQ(previews[0].instance_transforms.size(), 3u);
+  ASSERT_EQ(previews[1].instance_transforms.size(), 3u);
+  EXPECT_NEAR(previews[0].instance_transforms[0].values[12], 22.0f,
               kTestPositionEpsilon);
-  EXPECT_NEAR(previews.front().instance_transforms[1].values[12], 4.0f,
+  EXPECT_NEAR(previews[0].instance_transforms[1].values[12], 34.0f,
               kTestPositionEpsilon);
-  EXPECT_NEAR(previews.front().instance_transforms[2].values[12], 6.0f,
+  EXPECT_NEAR(previews[0].instance_transforms[2].values[12], 46.0f,
+              kTestPositionEpsilon);
+  EXPECT_NEAR(previews[1].instance_transforms[0].values[12], 12.0f,
+              kTestPositionEpsilon);
+  EXPECT_NEAR(previews[1].instance_transforms[2].values[12], 36.0f,
               kTestPositionEpsilon);
 
   const quader::QuaderApiVoidResult changed_count = editor.tools().set_setting(
       "linear_array", "linear_array.count", 6.0);
   ASSERT_TRUE(changed_count.ok()) << changed_count.error_message();
   previews = editor.render().tool_preview_meshes();
-  ASSERT_EQ(previews.size(), 1u);
-  ASSERT_EQ(previews.front().instance_transforms.size(), 5u);
-  EXPECT_NEAR(previews.front().instance_transforms.front().values[12], 1.2f,
+  ASSERT_EQ(previews.size(), 2u);
+  ASSERT_EQ(previews[0].instance_transforms.size(), 5u);
+  ASSERT_EQ(previews[1].instance_transforms.size(), 5u);
+  EXPECT_NEAR(previews[0].instance_transforms.front().values[12], 17.2f,
               kTestPositionEpsilon);
-  EXPECT_NEAR(previews.front().instance_transforms.back().values[12], 6.0f,
+  EXPECT_NEAR(previews[0].instance_transforms.back().values[12], 46.0f,
+              kTestPositionEpsilon);
+  EXPECT_NEAR(previews[1].instance_transforms.front().values[12], 7.2f,
+              kTestPositionEpsilon);
+  EXPECT_NEAR(previews[1].instance_transforms.back().values[12], 36.0f,
               kTestPositionEpsilon);
 
   const quader::QuaderApiVoidResult canceled =
@@ -5848,7 +6038,18 @@ TEST(EditorApiTests,
 TEST(EditorApiTests, LinearArrayToolApplyUsesTheAtomicModelingCommand) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
-  (void)create_selected_box(editor, "Linear Array Apply Source");
+  const quader::QuaderModelingObjectRef primary =
+      create_selected_box(editor, "Linear Array Apply Primary");
+  const quader::QuaderModelingObjectRef second =
+      create_selected_box(editor, "Linear Array Apply Second");
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(second.entity,
+                                 {.position = {10.0f, 0.0f, 0.0f}})
+                  .ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({primary.entity, second.entity},
+                                  primary.entity)
+                  .ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::LinearArray).ok());
   ASSERT_TRUE(editor.tools()
                   .set_setting("linear_array", "linear_array.count", 3.0)
@@ -5857,10 +6058,66 @@ TEST(EditorApiTests, LinearArrayToolApplyUsesTheAtomicModelingCommand) {
       editor.tools().commit_active_tool_preview();
   ASSERT_TRUE(applied.ok()) << applied.error_message();
   EXPECT_TRUE(applied.changed());
-  EXPECT_EQ(user_entity_count(editor), 3u);
-  EXPECT_EQ(selected_entities(editor).size(), 3u);
+  EXPECT_EQ(user_entity_count(editor), 6u);
+  EXPECT_EQ(selected_entities(editor).size(), 6u);
   EXPECT_EQ(editor.query().history().undo_label, "Linear Array");
   EXPECT_EQ(editor.tools().active_tool(), "select");
+
+  std::vector<float> positions;
+  std::optional<quader::QuaderEntitySnapshot> active;
+  for (const quader::QuaderEntitySnapshot &entity : editor.query().entities()) {
+    if (entity.is_scene_root) {
+      continue;
+    }
+    positions.push_back(entity.transform.position.x);
+    if (entity.active) {
+      active = entity;
+    }
+  }
+  std::sort(positions.begin(), positions.end());
+  ASSERT_EQ(positions.size(), 6u);
+  EXPECT_NEAR(positions[0], 0.0f, kTestPositionEpsilon);
+  EXPECT_NEAR(positions[1], 10.0f, kTestPositionEpsilon);
+  EXPECT_NEAR(positions[2], 18.0f, kTestPositionEpsilon);
+  EXPECT_NEAR(positions[3], 28.0f, kTestPositionEpsilon);
+  EXPECT_NEAR(positions[4], 36.0f, kTestPositionEpsilon);
+  EXPECT_NEAR(positions[5], 46.0f, kTestPositionEpsilon);
+  ASSERT_TRUE(active.has_value());
+  EXPECT_NEAR(active->transform.position.x, 36.0f, kTestPositionEpsilon);
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(user_entity_count(editor), 2u);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(user_entity_count(editor), 6u);
+  EXPECT_EQ(selected_entities(editor).size(), 6u);
+}
+
+TEST(EditorApiTests, LinearArrayToolEnforcesTheShared1024ElementLimit) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  std::vector<quader::EntityId> sources;
+  for (int index = 0; index < 9; ++index) {
+    sources.push_back(create_selected_box(
+                          editor, "Linear Limit Source " +
+                                      std::to_string(index))
+                          .entity);
+  }
+  ASSERT_TRUE(editor.selection().select_objects(sources, sources.back()).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::LinearArray).ok());
+
+  const quader::QuaderToolSettingsTarget settings =
+      editor.tools().active_settings();
+  const quader::QuaderToolSettingControl *count =
+      find_tool_setting_control(settings, "linear_array.count");
+  ASSERT_NE(count, nullptr);
+  EXPECT_DOUBLE_EQ(count->max_value, 113.0);
+  const quader::QuaderApiVoidResult oversized = editor.tools().set_setting(
+      "linear_array", "linear_array.count", 114.0);
+  EXPECT_FALSE(oversized.ok());
+  EXPECT_FALSE(oversized.changed());
+  EXPECT_EQ(user_entity_count(editor), 9u);
+  EXPECT_EQ(editor.tools().active_tool(), "linear_array");
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
 }
 
 TEST(EditorApiTests,
@@ -6304,14 +6561,20 @@ TEST(EditorApiTests, LinearArrayAllowsZeroSpanOverlap) {
   }
 }
 
-TEST(EditorApiTests, LinearArrayRejectsStaleSourceBeforeApply) {
+TEST(EditorApiTests, LinearArrayRejectsAnyStaleSourceBeforeApply) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
-  const quader::QuaderModelingObjectRef source =
+  const quader::QuaderModelingObjectRef primary =
       create_selected_box(editor, "Stale Linear Array Source");
+  const quader::QuaderModelingObjectRef changed_source =
+      create_selected_box(editor, "Changed Linear Array Source");
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({primary.entity, changed_source.entity},
+                                  primary.entity)
+                  .ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::LinearArray).ok());
   ASSERT_TRUE(editor.scene()
-                  .set_transform(source.entity,
+                  .set_transform(changed_source.entity,
                                  {.position = {1.0f, 0.0f, 0.0f}})
                   .ok());
   EXPECT_EQ(editor.tools().active_tool(), "select");
@@ -6319,8 +6582,234 @@ TEST(EditorApiTests, LinearArrayRejectsStaleSourceBeforeApply) {
   const quader::QuaderApiVoidResult applied =
       editor.tools().commit_active_tool_preview();
   EXPECT_FALSE(applied.ok());
-  EXPECT_EQ(user_entity_count(editor), 1u);
+  EXPECT_EQ(user_entity_count(editor), 2u);
   EXPECT_FALSE(editor.tools().active_settings().active);
+}
+
+TEST(EditorApiTests,
+     RadialArrayPublicApiPreservesSourceRingAndAngleOrderAtomically) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef first =
+      create_selected_box(editor, "Radial Array First Source");
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(first.entity,
+                                 {.position = {2.0f, 0.0f, 0.0f}})
+                  .ok());
+  const quader::QuaderModelingObjectRef second =
+      create_selected_box(editor, "Radial Array Second Source");
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(second.entity,
+                                 {.position = {0.0f, 0.0f, 3.0f}})
+                  .ok());
+
+  const quader::QuaderApiResult<quader::QuaderRadialArrayResult> array =
+      editor.modeling().create_radial_array(quader::QuaderRadialArrayArgs{
+          .sources = {second, first},
+          .center_world = {},
+          .plane_normal_world = {0.0f, 1.0f, 0.0f},
+          .degrees = 180.0,
+          .copies = 3u,
+          .repeats = 2u,
+          .repeat_spacing = 1.0,
+      });
+  ASSERT_TRUE(array.ok()) << array.error_message();
+  ASSERT_TRUE(array.changed());
+  ASSERT_EQ(array.value().source_arrays.size(), 2u);
+  EXPECT_EQ(array.value().source_arrays[0].source.entity, second.entity);
+  EXPECT_EQ(array.value().source_arrays[1].source.entity, first.entity);
+  EXPECT_EQ(editor.query().history().undo_label, "Radial Array");
+
+  const std::array<std::array<quader::QVec3, 6>, 2> expected_positions = {{
+      {{{0.0f, 0.0f, 3.0f},
+        {3.0f, 0.0f, 0.0f},
+        {0.0f, 0.0f, -3.0f},
+        {0.0f, 0.0f, 4.0f},
+        {4.0f, 0.0f, 0.0f},
+        {0.0f, 0.0f, -4.0f}}},
+      {{{2.0f, 0.0f, 0.0f},
+        {0.0f, 0.0f, -2.0f},
+        {-2.0f, 0.0f, 0.0f},
+        {3.0f, 0.0f, 0.0f},
+        {0.0f, 0.0f, -3.0f},
+        {-3.0f, 0.0f, 0.0f}}},
+  }};
+  std::vector<quader::QuaderEntitySnapshot> created_snapshots;
+  for (std::size_t source_index = 0;
+       source_index < array.value().source_arrays.size(); ++source_index) {
+    const quader::QuaderRadialArraySourceResult &source_array =
+        array.value().source_arrays[source_index];
+    ASSERT_EQ(source_array.elements.size(), 6u);
+    EXPECT_EQ(source_array.elements.front().entity,
+              source_array.source.entity);
+    for (std::size_t element_index = 0;
+         element_index < source_array.elements.size(); ++element_index) {
+      const std::optional<quader::QuaderEntitySnapshot> snapshot =
+          editor.query().entity(source_array.elements[element_index].entity);
+      ASSERT_TRUE(snapshot.has_value());
+      expect_vec3_near(snapshot->transform.position,
+                       expected_positions[source_index][element_index]);
+      if (element_index > 0u) {
+        created_snapshots.push_back(*snapshot);
+      }
+    }
+  }
+
+  const quader::QuaderApiVoidResult undo = editor.history().undo();
+  ASSERT_TRUE(undo.ok()) << undo.error_message();
+  EXPECT_TRUE(editor.query().entity(first.entity).has_value());
+  EXPECT_TRUE(editor.query().entity(second.entity).has_value());
+  for (const quader::QuaderEntitySnapshot &snapshot : created_snapshots) {
+    EXPECT_FALSE(editor.query().entity(snapshot.id).has_value());
+  }
+
+  const quader::QuaderApiVoidResult redo = editor.history().redo();
+  ASSERT_TRUE(redo.ok()) << redo.error_message();
+  for (const quader::QuaderEntitySnapshot &snapshot : created_snapshots) {
+    const std::optional<quader::QuaderEntitySnapshot> restored =
+        editor.query().entity(snapshot.id);
+    ASSERT_TRUE(restored.has_value());
+    EXPECT_EQ(restored->uuid, snapshot.uuid);
+    EXPECT_EQ(restored->editor_object_id, snapshot.editor_object_id);
+    expect_vec3_near(restored->transform.position,
+                     snapshot.transform.position);
+  }
+}
+
+TEST(EditorApiTests, RadialArrayRejectsDuplicateSourcesAndOversizedBatches) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderModelingObjectRef source =
+      create_selected_box(editor, "Radial Array Validation Source");
+  const quader::QuaderHistorySnapshot history_before =
+      editor.query().history();
+
+  const quader::QuaderApiResult<quader::QuaderRadialArrayResult> duplicate =
+      editor.modeling().create_radial_array(quader::QuaderRadialArrayArgs{
+          .sources = {source, source},
+      });
+  EXPECT_FALSE(duplicate.ok());
+  EXPECT_FALSE(duplicate.changed());
+  EXPECT_EQ(user_entity_count(editor), 1u);
+
+  const quader::QuaderApiResult<quader::QuaderRadialArrayResult> oversized =
+      editor.modeling().create_radial_array(quader::QuaderRadialArrayArgs{
+          .sources = {source},
+          .copies = 128u,
+          .repeats = 9u,
+      });
+  EXPECT_FALSE(oversized.ok());
+  EXPECT_FALSE(oversized.changed());
+  EXPECT_EQ(user_entity_count(editor), 1u);
+  const quader::QuaderHistorySnapshot history_after =
+      editor.query().history();
+  EXPECT_EQ(history_after.can_undo, history_before.can_undo);
+  EXPECT_EQ(history_after.can_redo, history_before.can_redo);
+  EXPECT_EQ(history_after.undo_label, history_before.undo_label);
+  EXPECT_EQ(history_after.redo_label, history_before.redo_label);
+}
+
+TEST(EditorApiTests, RadialArrayAccepts1024ElementsAndRejects1025Atomically) {
+  {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    const quader::QuaderModelingObjectRef source =
+        create_selected_box(editor, "Radial Array Exact Limit Source");
+    const quader::QuaderApiResult<quader::QuaderRadialArrayResult> exact =
+        editor.modeling().create_radial_array(quader::QuaderRadialArrayArgs{
+            .sources = {source},
+            .center_world = {},
+            .copies = 2u,
+            .repeats = 512u,
+            .repeat_spacing = 0.0,
+        });
+    ASSERT_TRUE(exact.ok()) << exact.error_message();
+    ASSERT_EQ(exact.value().source_arrays.size(), 1u);
+    EXPECT_EQ(exact.value().source_arrays.front().elements.size(), 1024u);
+    EXPECT_EQ(user_entity_count(editor), 1024u);
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(user_entity_count(editor), 1u);
+  }
+
+  {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    std::vector<quader::QuaderModelingObjectRef> sources;
+    for (int index = 0; index < 5; ++index) {
+      sources.push_back(create_selected_box(
+          editor, "Radial Array Oversized Source " + std::to_string(index)));
+    }
+    const quader::QuaderHistorySnapshot history_before =
+        editor.query().history();
+    const quader::QuaderApiResult<quader::QuaderRadialArrayResult> oversized =
+        editor.modeling().create_radial_array(quader::QuaderRadialArrayArgs{
+            .sources = sources,
+            .center_world = {},
+            .copies = 5u,
+            .repeats = 41u,
+        });
+    EXPECT_FALSE(oversized.ok());
+    EXPECT_FALSE(oversized.changed());
+    EXPECT_EQ(user_entity_count(editor), 5u);
+    const quader::QuaderHistorySnapshot history_after =
+        editor.query().history();
+    EXPECT_EQ(history_after.undo_label, history_before.undo_label);
+    EXPECT_EQ(history_after.redo_label, history_before.redo_label);
+  }
+}
+
+TEST(EditorApiTests,
+     RadialArrayRejectsParentShearWithoutMutatingTheSceneOrHistory) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const quader::QuaderApiResult<quader::QuaderEntityRef> parent =
+      editor.scene().create_entity(quader::QuaderCreateEntityArgs{
+          .name = "Radial Array Nonuniform Parent",
+          .kind = quader::QuaderEntityKind::Empty,
+          .transform = {.rotation_euler = {0.3f, 0.2f, 0.1f},
+                        .scale = {2.0f, 1.0f, 0.5f}},
+      });
+  ASSERT_TRUE(parent.ok()) << parent.error_message();
+  const quader::QuaderModelingObjectRef source =
+      create_selected_box(editor, "Radial Array Shear Source");
+  ASSERT_TRUE(
+      editor.scene().reparent(source.entity, parent.value().id, false).ok());
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(source.entity,
+                                 {.position = {2.0f, 0.5f, -1.0f},
+                                  .rotation_euler = {0.2f, 0.4f, 0.1f},
+                                  .scale = {1.0f, 0.8f, 1.2f}})
+                  .ok());
+  const std::optional<quader::QuaderEntitySnapshot> source_before =
+      editor.query().entity(source.entity);
+  ASSERT_TRUE(source_before.has_value());
+  const quader::QuaderHistorySnapshot history_before = editor.query().history();
+  const std::size_t entities_before = user_entity_count(editor);
+
+  const quader::QuaderApiResult<quader::QuaderRadialArrayResult> array =
+      editor.modeling().create_radial_array(quader::QuaderRadialArrayArgs{
+          .sources = {source},
+          .center_world = {},
+          .plane_normal_world = {0.0f, 1.0f, 0.0f},
+          .degrees = 90.0,
+          .copies = 2u,
+      });
+  EXPECT_FALSE(array.ok());
+  EXPECT_FALSE(array.changed());
+  EXPECT_EQ(user_entity_count(editor), entities_before);
+  const std::optional<quader::QuaderEntitySnapshot> source_after =
+      editor.query().entity(source.entity);
+  ASSERT_TRUE(source_after.has_value());
+  EXPECT_EQ(source_after->parent, source_before->parent);
+  expect_vec3_near(source_after->transform.position,
+                   source_before->transform.position);
+  expect_vec3_near(source_after->transform.rotation_euler,
+                   source_before->transform.rotation_euler);
+  expect_vec3_near(source_after->transform.scale,
+                   source_before->transform.scale);
+  const quader::QuaderHistorySnapshot history_after = editor.query().history();
+  EXPECT_EQ(history_after.undo_label, history_before.undo_label);
+  EXPECT_EQ(history_after.redo_label, history_before.redo_label);
 }
 
 TEST(EditorApiTests, DefaultSingleMeshTransformPivotUsesSelectedBoundsCenter) {

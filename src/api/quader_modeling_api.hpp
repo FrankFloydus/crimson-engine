@@ -420,6 +420,8 @@ public:
                      QuaderCreateMeshArgs args = {});
   QuaderApiResult<QuaderLinearArrayResult>
   create_linear_array(const QuaderLinearArrayArgs &args);
+  QuaderApiResult<QuaderRadialArrayResult>
+  create_radial_array(const QuaderRadialArrayArgs &args);
   [[nodiscard]] QuaderMeshHandle mesh(QuaderModelingObjectRef object) const;
   [[nodiscard]] QuaderApiResult<QuaderMeshHandle>
   mesh(QuaderModelingObjectId object_id) const;

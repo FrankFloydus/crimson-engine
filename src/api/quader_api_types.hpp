@@ -204,6 +204,34 @@ struct QuaderLinearArrayResult {
 };
 
 /**
+ * Describes one atomic radial-array operation for independent source meshes.
+ */
+struct QuaderRadialArrayArgs {
+  std::vector<QuaderModelingObjectRef> sources;
+  QVec3 center_world = {};
+  QVec3 plane_normal_world = {0.0f, 1.0f, 0.0f};
+  double degrees = 360.0;
+  std::uint32_t copies = 8u;
+  std::uint32_t repeats = 1u;
+  double repeat_spacing = 1.0;
+};
+
+/**
+ * Returns one source and its source-inclusive ring/angle element order.
+ */
+struct QuaderRadialArraySourceResult {
+  QuaderModelingObjectRef source;
+  std::vector<QuaderModelingObjectRef> elements;
+};
+
+/**
+ * Returns radial-array groups in caller source order.
+ */
+struct QuaderRadialArrayResult {
+  std::vector<QuaderRadialArraySourceResult> source_arrays;
+};
+
+/**
  * Represents a Quader Component Ref value used by the public Quader API surface.
  */
 struct QuaderComponentRef {

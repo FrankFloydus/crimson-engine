@@ -90,6 +90,7 @@ public:
   entity_for_modeling_object(int modeling_object_id) const;
   [[nodiscard]] std::optional<int>
   modeling_object_for_entity(EntityId entity) const;
+  [[nodiscard]] std::uint64_t modeling_object_map_revision() const;
   [[nodiscard]] std::optional<MeshAsset>
   compile_object_mesh(int modeling_object_id) const;
   [[nodiscard]] std::optional<EntityId>
@@ -109,6 +110,10 @@ public:
   tool_preview_meshes() const;
   [[nodiscard]] std::uint64_t
   transformed_picking_projection_build_count() const;
+  [[nodiscard]] std::uint64_t
+  rectangle_picking_projection_build_count() const;
+  [[nodiscard]] std::uint64_t
+  rectangle_selection_resolution_build_count() const;
   [[nodiscard]] ModelingSessionMemento capture_history_memento() const;
   [[nodiscard]] ModelingSessionMemento
   capture_active_preview_history_memento() const;
@@ -243,6 +248,8 @@ public:
   ModelingCreateBoxResult create_mesh(const ModelingCreateMeshRequest &request);
   ModelingLinearArrayResult
   create_linear_array(const ModelingLinearArrayRequest &request);
+  ModelingRadialArrayResult
+  create_radial_array(const ModelingRadialArrayRequest &request);
   void project_object_selection_from_scene(bool force_object_mode = false);
   ModelingCommandResult
   set_object_selection(std::span<const EntityId> entities,

@@ -24,6 +24,8 @@ class LinearArrayToolService;
 class ModelingSessionService;
 class NativeViewportToolCoordinator;
 class PivotToolService;
+class RadialArrayToolService;
+class ViewportPointPlacementService;
 
 /**
  * Stores the persisted-content revision stamp used by the project session dirty-state boundary.
@@ -94,6 +96,14 @@ public:
   const PivotToolService &pivot() const { return *pivot_; }
   LinearArrayToolService &linear_array() { return *linear_array_; }
   const LinearArrayToolService &linear_array() const { return *linear_array_; }
+  RadialArrayToolService &radial_array() { return *radial_array_; }
+  const RadialArrayToolService &radial_array() const { return *radial_array_; }
+  ViewportPointPlacementService &point_placement() {
+    return *point_placement_;
+  }
+  const ViewportPointPlacementService &point_placement() const {
+    return *point_placement_;
+  }
   NativeViewportToolCoordinator &native_tools() { return *native_tools_; }
   const NativeViewportToolCoordinator &native_tools() const {
     return *native_tools_;
@@ -135,6 +145,8 @@ private:
   std::unique_ptr<EditorSelectionService> selection_;
   std::unique_ptr<PivotToolService> pivot_;
   std::unique_ptr<LinearArrayToolService> linear_array_;
+  std::unique_ptr<RadialArrayToolService> radial_array_;
+  std::unique_ptr<ViewportPointPlacementService> point_placement_;
   std::unique_ptr<NativeViewportToolCoordinator> native_tools_;
   std::function<void(ProjectSession &)> document_replacement_finalizer_;
 };

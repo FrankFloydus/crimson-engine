@@ -313,15 +313,25 @@ quader_wheel_input_from_qt_event(const QWheelEvent &event) {
     return translation;
   }
 
-  if (directional->gesture == QuaderInputGesture::WheelUp ||
-      directional->gesture == QuaderInputGesture::WheelDown) {
-    translation.mouse_wheel =
-        static_cast<float>(wheel_delta(event).y()) / 120.0f;
+  const QPoint delta = wheel_delta(event);
+  const bool vertical =
+      directional->gesture == QuaderInputGesture::WheelUp ||
+      directional->gesture == QuaderInputGesture::WheelDown;
+  const double step_delta =
+      static_cast<double>(vertical ? delta.y() : delta.x()) / 120.0;
+  if (vertical) {
+    translation.mouse_wheel = static_cast<float>(step_delta);
     QuaderInputChord generic = *directional;
     generic.gesture = QuaderInputGesture::Wheel;
-    translation.wheel_input_chords.push_back(generic);
+    translation.wheel_input_edges.push_back({
+        .chord = generic,
+        .step_delta = step_delta,
+    });
   }
-  translation.wheel_input_chords.push_back(*directional);
+  translation.wheel_input_edges.push_back({
+      .chord = *directional,
+      .step_delta = step_delta,
+  });
   return translation;
 }
 

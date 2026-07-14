@@ -7,6 +7,7 @@
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 
 #include "editor/array/linear_array_tool_service.hpp"
+#include "editor/array/radial_array_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
@@ -15,18 +16,23 @@ namespace quader {
 
 NativeViewportToolCoordinator::NativeViewportToolCoordinator(
     PivotToolService &pivot, LinearArrayToolService &linear_array,
-    EditorSelectionService &selection, ModelingSessionService &modeling)
-    : pivot_(pivot), linear_array_(linear_array), selection_(selection),
-      modeling_(modeling) {}
+    RadialArrayToolService &radial_array, EditorSelectionService &selection,
+    ModelingSessionService &modeling)
+    : pivot_(pivot), linear_array_(linear_array), radial_array_(radial_array),
+      selection_(selection), modeling_(modeling) {}
 
 bool NativeViewportToolCoordinator::handles(std::string_view tool_id) const {
-  return tool_id == kPivotToolId || tool_id == kLinearArrayToolId;
+  return tool_id == kPivotToolId || tool_id == kLinearArrayToolId ||
+         tool_id == kRadialArrayToolId;
 }
 
 bool NativeViewportToolCoordinator::can_activate(
     std::string_view tool_id) const {
   if (tool_id == kLinearArrayToolId) {
     return linear_array_.can_activate();
+  }
+  if (tool_id == kRadialArrayToolId) {
+    return radial_array_.can_activate();
   }
   if (tool_id == kPivotToolId) {
     return pivot_.can_activate_persistent(selection_);
@@ -35,12 +41,16 @@ bool NativeViewportToolCoordinator::can_activate(
 }
 
 bool NativeViewportToolCoordinator::has_pending_tool() const {
-  return linear_array_.has_session() || pivot_.persistent_active();
+  return linear_array_.has_session() || radial_array_.has_session() ||
+         pivot_.persistent_active();
 }
 
 std::string_view NativeViewportToolCoordinator::active_tool_id() const {
   if (linear_array_.active()) {
     return kLinearArrayToolId;
+  }
+  if (radial_array_.active()) {
+    return kRadialArrayToolId;
   }
   if (pivot_.persistent_active()) {
     return kPivotToolId;
@@ -57,6 +67,10 @@ CommandResult NativeViewportToolCoordinator::activate(
     if (linear_array_.active()) {
       return command_unchanged_result();
     }
+  } else if (tool_id == kRadialArrayToolId) {
+    if (radial_array_.active()) {
+      return command_unchanged_result();
+    }
   } else if (tool_id == kPivotToolId) {
     if (pivot_.persistent_active()) {
       return command_unchanged_result();
@@ -65,7 +79,9 @@ CommandResult NativeViewportToolCoordinator::activate(
   if (!can_activate(tool_id)) {
     return command_invalid_result(
         tool_id == kLinearArrayToolId
-            ? "Select exactly one visible, unlocked mesh in object mode."
+            ? "Select one or more visible, unlocked meshes in object mode."
+        : tool_id == kRadialArrayToolId
+            ? "Select one or more visible, unlocked meshes in object mode."
             : "Select one visible, unlocked mesh or group in object mode.");
   }
 
@@ -75,10 +91,14 @@ CommandResult NativeViewportToolCoordinator::activate(
     return canceled;
   }
 
-  CommandResult activated =
-      tool_id == kLinearArrayToolId
-          ? linear_array_.activate(grid_world_size)
-          : pivot_.activate_persistent(selection_);
+  CommandResult activated;
+  if (tool_id == kLinearArrayToolId) {
+    activated = linear_array_.activate(grid_world_size);
+  } else if (tool_id == kRadialArrayToolId) {
+    activated = radial_array_.activate(grid_world_size);
+  } else {
+    activated = pivot_.activate_persistent(selection_);
+  }
   activated.changed = activated.changed || canceled.changed;
   return activated;
 }
@@ -113,6 +133,9 @@ CommandResult NativeViewportToolCoordinator::commit_active() {
   if (linear_array_.has_session()) {
     return linear_array_.apply();
   }
+  if (radial_array_.has_session()) {
+    return radial_array_.apply();
+  }
   if (pivot_.persistent_active()) {
     return pivot_.apply_persistent();
   }
@@ -128,22 +151,33 @@ CommandResult NativeViewportToolCoordinator::cancel_prior_native_state() {
   if (!linear_array.ok) {
     return linear_array;
   }
+  const CommandResult radial_array = radial_array_.cancel();
+  if (!radial_array.ok) {
+    return {
+        .ok = false,
+        .changed = linear_array.changed || radial_array.changed,
+        .message = radial_array.message,
+    };
+  }
   const CommandResult pivot = pivot_.cancel_persistent();
   if (!pivot.ok) {
     return {
         .ok = false,
-        .changed = linear_array.changed || pivot.changed,
+        .changed = linear_array.changed || radial_array.changed ||
+                   pivot.changed,
         .message = pivot.message,
     };
   }
   return {
       .ok = true,
-      .changed = linear_array.changed || pivot.changed,
+      .changed = linear_array.changed || radial_array.changed ||
+                 pivot.changed,
   };
 }
 
 void NativeViewportToolCoordinator::reset_transient_state() {
   (void)linear_array_.cancel();
+  (void)radial_array_.cancel();
   (void)pivot_.cancel_persistent();
   pivot_.clear_quick_override();
 }

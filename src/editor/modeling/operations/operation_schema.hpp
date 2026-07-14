@@ -376,7 +376,7 @@ inline constexpr EdgeBevelOperationSchema edge_bevel_operation_schema() {
       EditorOperationId::EdgeBevel,
       "edge_bevel",
       "Edge Bevel",
-      {"width", "Width", 1.0, 0.0625, 16384.0, 1.0, true},
+      {"width", "Width", 1.0, 0.0, 512.0, 0.001, true},
       {"profile", "Profile", 0.5, 0.0, 1.0, 0.01, true},
       {"segments", "Segments", 1, 1, 16, 1, true},
       quader_poly::BevelProfileType::Offset,

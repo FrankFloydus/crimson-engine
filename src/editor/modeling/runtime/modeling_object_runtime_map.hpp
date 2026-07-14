@@ -10,6 +10,7 @@
 #include "editor/modeling/modeling_types.hpp"
 #include "scene/components.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
@@ -45,6 +46,7 @@ class ModelingObjectRuntimeMap {
 public:
     [[nodiscard]] std::size_t size() const;
     [[nodiscard]] bool empty() const;
+    [[nodiscard]] std::uint64_t revision() const;
     [[nodiscard]] std::optional<EntityId>
     entity_for_modeling_object(int modeling_object_id) const;
     [[nodiscard]] std::optional<int>
@@ -76,6 +78,7 @@ private:
   std::unordered_map<EntityId, int> objects_by_entity_;
   std::unordered_map<int, ModelingObjectSceneIdentity>
       scene_identity_by_object_;
+  std::uint64_t revision_ = 0;
 };
 
 } // namespace quader

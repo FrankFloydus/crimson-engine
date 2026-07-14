@@ -184,6 +184,17 @@ struct QuaderInputChord {
     }
 };
 
+/**
+ * Couples one canonical wheel chord with the signed physical step magnitude
+ * captured for the same event. A full conventional wheel notch is 1.0; high
+ * resolution devices may contribute fractional steps that consumers retain
+ * across frames.
+ */
+struct QuaderWheelInputEdge {
+  QuaderInputChord chord;
+  double step_delta = 0.0;
+};
+
 inline bool operator==(const QuaderInputChord& left, const QuaderInputChord& right) {
   return left.primary == right.primary && left.shift == right.shift &&
          left.alt == right.alt && left.device == right.device &&

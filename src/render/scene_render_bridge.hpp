@@ -84,6 +84,9 @@ public:
         const ViewportSceneOverlayFrameRequest &request) const;
     void
     set_tool_preview_meshes(std::vector<RenderToolPreviewMeshRecord> meshes);
+    [[nodiscard]] std::uint64_t tool_preview_submission_revision() const {
+      return tool_preview_submission_revision_;
+    }
     void set_overlay_frame(ViewportOverlayFrame frame,
                            ViewportOverlayCamera camera);
     void set_overlay_frame(std::size_t viewport_index, std::uint8_t layer_mask,
@@ -105,6 +108,7 @@ public:
     SceneRenderSyncService sync_service_;
     RenderSceneSnapshot previous_scene_snapshot_;
     bool has_previous_scene_snapshot_ = false;
+    std::uint64_t tool_preview_submission_revision_ = 0;
 };
 
 } // namespace quader

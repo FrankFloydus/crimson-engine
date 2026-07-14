@@ -16,6 +16,7 @@ class EditorSelectionService;
 class LinearArrayToolService;
 class ModelingSessionService;
 class PivotToolService;
+class RadialArrayToolService;
 
 /**
  * Routes native editor-owned viewport tools through one lifecycle boundary.
@@ -24,6 +25,7 @@ class NativeViewportToolCoordinator final {
 public:
   NativeViewportToolCoordinator(PivotToolService &pivot,
                                 LinearArrayToolService &linear_array,
+                                RadialArrayToolService &radial_array,
                                 EditorSelectionService &selection,
                                 ModelingSessionService &modeling);
 
@@ -43,6 +45,7 @@ private:
 
   PivotToolService &pivot_;
   LinearArrayToolService &linear_array_;
+  RadialArrayToolService &radial_array_;
   EditorSelectionService &selection_;
   ModelingSessionService &modeling_;
 };

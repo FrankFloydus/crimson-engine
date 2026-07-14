@@ -26,7 +26,7 @@ namespace quader {
  */
 struct QtWheelInputTranslation {
   float mouse_wheel = 0.0f;
-  std::vector<QuaderInputChord> wheel_input_chords;
+  std::vector<QuaderWheelInputEdge> wheel_input_edges;
 };
 
 /**

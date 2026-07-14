@@ -7,7 +7,7 @@
 #pragma once
 
 #include "api/quader_viewport_input_types.hpp"
-#include "editor/input/quader_input_binding.hpp"
+#include "api/quader_input_types.hpp"
 #include "math/types.hpp"
 
 #include <vector>
@@ -62,6 +62,8 @@ struct ViewportInputFrame {
   bool tool_constraint_x_pressed = false;
   bool tool_constraint_y_pressed = false;
   bool tool_constraint_z_pressed = false;
+  int linear_array_copy_delta = 0;
+  int radial_array_copy_delta = 0;
   bool middle_pressed = false;
   bool middle_down = false;
   bool middle_released = false;
@@ -80,7 +82,7 @@ struct ViewportInputFrame {
   std::vector<QuaderInputChord> pressed_input_chords;
   std::vector<QuaderInputChord> active_input_chords;
   std::vector<QuaderInputChord> released_input_chords;
-  std::vector<QuaderInputChord> wheel_input_chords;
+  std::vector<QuaderWheelInputEdge> wheel_input_edges;
   bool keybinding_input_consumed = false;
   std::vector<ViewportShortcut> resolved_shortcuts;
   ViewportNavigationInput navigation_bindings = {};

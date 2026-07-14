@@ -235,6 +235,8 @@ inline constexpr QuaderCommandId kToolsActivateMirror{"tools.activate.mirror"};
 inline constexpr QuaderCommandId kToolsActivatePivot{"tools.activate.pivot"};
 inline constexpr QuaderCommandId kToolsActivateLinearArray{
     "tools.activate.linear_array"};
+inline constexpr QuaderCommandId kToolsActivateRadialArray{
+    "tools.activate.radial_array"};
 
 inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kEditUndo,
@@ -356,6 +358,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kToolsActivateMirror,
     kToolsActivatePivot,
     kToolsActivateLinearArray,
+    kToolsActivateRadialArray,
 };
 
 [[nodiscard]] inline constexpr std::span<const QuaderCommandId>

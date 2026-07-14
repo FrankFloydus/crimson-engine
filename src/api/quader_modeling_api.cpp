@@ -31,6 +31,7 @@
 
 #include <memory>
 #include <span>
+#include <unordered_set>
 #include <utility>
 
 namespace quader {
@@ -1069,9 +1070,14 @@ QuaderModelingApi::create_linear_array(const QuaderLinearArrayArgs &args) {
   auto command = std::make_unique<LinearArrayHistoryCommand>(
       session.modeling(),
       ModelingLinearArrayRequest{
-          .source_entity = args.source.entity,
-          .source_modeling_object_id = args.source.modeling_object_id,
-          .endpoint_world = args.endpoint_world,
+          .sources = {{
+              .entity = args.source.entity,
+              .modeling_object_id = args.source.modeling_object_id,
+          }},
+          .span_world =
+              args.endpoint_world -
+              transform_point(scene.world_transform_matrix(args.source.entity),
+                              {}),
           .count = args.count,
       });
   LinearArrayHistoryCommand *array_command = command.get();
@@ -1079,12 +1085,100 @@ QuaderModelingApi::create_linear_array(const QuaderLinearArrayArgs &args) {
       mutations_.run_modeling_command(std::move(command), "Linear Array");
 
   QuaderLinearArrayResult created;
-  if (status.ok && status.changed) {
-    created.elements.reserve(array_command->created().elements.size());
+  if (status.ok && status.changed &&
+      !array_command->created().source_arrays.empty()) {
+    const ModelingLinearArraySourceResult &source_array =
+        array_command->created().source_arrays.front();
+    created.elements.reserve(source_array.elements.size());
     for (const ModelingObjectRecord &record :
-         array_command->created().elements) {
+         source_array.elements) {
       created.elements.push_back(
           ref_from_record(to_api_modeling_object_record(record)));
+    }
+  }
+  return quader_api_result_from_status(status, std::move(created));
+}
+
+QuaderApiResult<QuaderRadialArrayResult>
+QuaderModelingApi::create_radial_array(const QuaderRadialArrayArgs &args) {
+  ProjectSession &session = project_session(session_);
+  const SceneDocument &scene = session.scene();
+  if (args.sources.empty()) {
+    return quader_api_result_from_status<QuaderRadialArrayResult>(
+        invalid_api_status(session_,
+                           "Radial Array needs at least one source mesh."),
+        {});
+  }
+
+  std::unordered_set<EntityId> source_entities;
+  source_entities.reserve(args.sources.size());
+  std::unordered_set<QuaderModelingObjectId> source_modeling_objects;
+  source_modeling_objects.reserve(args.sources.size());
+  ModelingRadialArrayRequest request{
+      .center_world = args.center_world,
+      .plane_normal_world = args.plane_normal_world,
+      .degrees = args.degrees,
+      .copies = args.copies,
+      .repeats = args.repeats,
+      .repeat_spacing = args.repeat_spacing,
+  };
+  request.sources.reserve(args.sources.size());
+  for (const QuaderModelingObjectRef &source : args.sources) {
+    const ModelingObjectComponent *modeling =
+        scene.modeling_object(source.entity);
+    const MeshComponent *mesh = scene.mesh(source.entity);
+    const MaterialComponent *material = scene.material(source.entity);
+    const bool source_matches =
+        source.entity != kInvalidEntityId && scene.exists(source.entity) &&
+        modeling != nullptr && mesh != nullptr &&
+        modeling->object_id == source.modeling_object_id &&
+        (source.entity_uuid.empty() ||
+         scene.uuid(source.entity) == source.entity_uuid) &&
+        (source.editor_object_id == kInvalidQuaderEditorObjectId ||
+         scene.editor_object_id(source.entity) == source.editor_object_id) &&
+        (source.mesh == kInvalidAssetId || mesh->mesh == source.mesh) &&
+        (source.material == kInvalidAssetId ||
+         (material != nullptr && material->material == source.material));
+    if (!source_matches) {
+      return quader_api_result_from_status<QuaderRadialArrayResult>(
+          invalid_api_status(session_,
+                             "Radial Array source reference is stale."),
+          {});
+    }
+    if (!source_entities.insert(source.entity).second ||
+        !source_modeling_objects.insert(source.modeling_object_id).second) {
+      return quader_api_result_from_status<QuaderRadialArrayResult>(
+          invalid_api_status(
+              session_, "Radial Array source references must be unique."),
+          {});
+    }
+    request.sources.push_back({
+        .entity = source.entity,
+        .modeling_object_id = source.modeling_object_id,
+    });
+  }
+
+  auto command = std::make_unique<RadialArrayHistoryCommand>(
+      session.modeling(), std::move(request));
+  RadialArrayHistoryCommand *array_command = command.get();
+  QuaderApiVoidResult status =
+      mutations_.run_modeling_command(std::move(command), "Radial Array");
+
+  QuaderRadialArrayResult created;
+  if (status.ok && status.changed) {
+    created.source_arrays.reserve(
+        array_command->created().source_arrays.size());
+    for (const ModelingRadialArraySourceResult &source_result :
+         array_command->created().source_arrays) {
+      QuaderRadialArraySourceResult api_source_result;
+      api_source_result.source = ref_from_record(
+          to_api_modeling_object_record(source_result.source));
+      api_source_result.elements.reserve(source_result.elements.size());
+      for (const ModelingObjectRecord &record : source_result.elements) {
+        api_source_result.elements.push_back(
+            ref_from_record(to_api_modeling_object_record(record)));
+      }
+      created.source_arrays.push_back(std::move(api_source_result));
     }
   }
   return quader_api_result_from_status(status, std::move(created));

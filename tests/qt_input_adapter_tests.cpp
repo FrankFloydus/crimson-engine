@@ -371,10 +371,12 @@ TEST(QtInputAdapterTests,
     const quader::QtWheelInputTranslation translation =
         quader_wheel_input_from_qt_event(event);
     EXPECT_FLOAT_EQ(translation.mouse_wheel, 0.0f);
-    ASSERT_EQ(translation.wheel_input_chords.size(), 1u);
-    expect_mouse_chord(translation.wheel_input_chords.front(),
+    ASSERT_EQ(translation.wheel_input_edges.size(), 1u);
+    expect_mouse_chord(translation.wheel_input_edges.front().chord,
                        QuaderMouseButton::None, expected_gesture);
-    EXPECT_TRUE(translation.wheel_input_chords.front().primary);
+    EXPECT_TRUE(translation.wheel_input_edges.front().chord.primary);
+    EXPECT_DOUBLE_EQ(translation.wheel_input_edges.front().step_delta,
+                     delta.x() / 120.0);
   }
 }
 
@@ -386,19 +388,35 @@ TEST(QtInputAdapterTests,
       quader_wheel_input_from_qt_event(event);
 
   EXPECT_FLOAT_EQ(translation.mouse_wheel, 1.0f);
-  ASSERT_EQ(translation.wheel_input_chords.size(), 2u);
-  expect_mouse_chord(translation.wheel_input_chords[0],
+  ASSERT_EQ(translation.wheel_input_edges.size(), 2u);
+  expect_mouse_chord(translation.wheel_input_edges[0].chord,
                      QuaderMouseButton::None, QuaderInputGesture::Wheel);
-  expect_mouse_chord(translation.wheel_input_chords[1],
+  expect_mouse_chord(translation.wheel_input_edges[1].chord,
                      QuaderMouseButton::None, QuaderInputGesture::WheelUp);
-  EXPECT_TRUE(translation.wheel_input_chords[0].shift);
-  EXPECT_TRUE(translation.wheel_input_chords[1].shift);
+  EXPECT_TRUE(translation.wheel_input_edges[0].chord.shift);
+  EXPECT_TRUE(translation.wheel_input_edges[1].chord.shift);
+  EXPECT_DOUBLE_EQ(translation.wheel_input_edges[0].step_delta, 1.0);
+  EXPECT_DOUBLE_EQ(translation.wheel_input_edges[1].step_delta, 1.0);
 
   const QWheelEvent smooth = wheel_event(QPoint{0, -9}, {});
   const quader::QtWheelInputTranslation smooth_translation =
       quader_wheel_input_from_qt_event(smooth);
   EXPECT_FLOAT_EQ(smooth_translation.mouse_wheel, -0.075f);
-  ASSERT_EQ(smooth_translation.wheel_input_chords.size(), 2u);
-  EXPECT_EQ(smooth_translation.wheel_input_chords[1].gesture,
+  ASSERT_EQ(smooth_translation.wheel_input_edges.size(), 2u);
+  EXPECT_EQ(smooth_translation.wheel_input_edges[1].chord.gesture,
             QuaderInputGesture::WheelDown);
+  EXPECT_DOUBLE_EQ(smooth_translation.wheel_input_edges[0].step_delta,
+                   -0.075);
+  EXPECT_DOUBLE_EQ(smooth_translation.wheel_input_edges[1].step_delta,
+                   -0.075);
+
+  const QWheelEvent two_notches = wheel_event({}, QPoint{0, 240});
+  const quader::QtWheelInputTranslation two_notch_translation =
+      quader_wheel_input_from_qt_event(two_notches);
+  EXPECT_FLOAT_EQ(two_notch_translation.mouse_wheel, 2.0f);
+  ASSERT_EQ(two_notch_translation.wheel_input_edges.size(), 2u);
+  EXPECT_DOUBLE_EQ(two_notch_translation.wheel_input_edges[0].step_delta,
+                   2.0);
+  EXPECT_DOUBLE_EQ(two_notch_translation.wheel_input_edges[1].step_delta,
+                   2.0);
 }

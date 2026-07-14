@@ -43,11 +43,13 @@ class LinearArrayToolService;
 class ModelingSessionService;
 class LocalizationService;
 class PivotToolService;
+class RadialArrayToolService;
 class QuaderEditorApi;
 class RenderOverlaySnapshotCache;
 class QtViewportFlyNavigationHud;
 class SceneDocument;
 class SceneRenderBridge;
+class ViewportPointPlacementService;
 
 /**
  * Returns whether an application event target belongs to the retained Tool
@@ -84,14 +86,17 @@ public:
   void process_input(QuaderEditorApi &editor, SceneDocument &document,
                      AssetRegistry &assets, ModelingSessionService &modeling,
                      AssetId default_material, PivotToolService *pivot,
-                     LinearArrayToolService *linear_array);
+                     LinearArrayToolService *linear_array,
+                     RadialArrayToolService *radial_array,
+                     ViewportPointPlacementService *point_placement);
   void prepare_viewports(QuaderEditorApi &editor,
                          SceneRenderBridge &render_bridge,
                          RenderOverlaySnapshotCache &snapshot_cache,
                          SceneDocument &document, AssetRegistry &assets,
                          ModelingSessionService &modeling,
                          PivotToolService *pivot,
-                         LinearArrayToolService *linear_array);
+                         LinearArrayToolService *linear_array,
+                         RadialArrayToolService *radial_array);
   [[nodiscard]] QuaderApiVoidResult frame_all(const SceneDocument &document,
                                               const AssetRegistry &assets,
                                               ViewportPaneId pane_id);
@@ -154,7 +159,9 @@ private:
                               AssetRegistry &assets,
                               ModelingSessionService &modeling,
                               AssetId default_material, PivotToolService *pivot,
-                              LinearArrayToolService *linear_array);
+                              LinearArrayToolService *linear_array,
+                              RadialArrayToolService *radial_array,
+                              ViewportPointPlacementService *point_placement);
   void refresh_cached_selection_overlay_frame(ModelingSessionService &modeling,
                                               const SceneDocument &document,
                                               const AssetRegistry &assets);
@@ -207,6 +214,8 @@ private:
   bool pending_external_pointer_event_ = false;
   bool pending_external_pointer_left_release_only_ = true;
   std::vector<QuaderInputChord> suppressed_keybinding_chords_;
+  double linear_array_wheel_remainder_ = 0.0;
+  double radial_array_wheel_remainder_ = 0.0;
   bool last_fly_navigation_active_ = false;
   const SceneDocument *viewport_info_cached_document_ = nullptr;
   const AssetRegistry *viewport_info_cached_assets_ = nullptr;

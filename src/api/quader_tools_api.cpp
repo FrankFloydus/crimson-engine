@@ -9,6 +9,8 @@
 
 #include "api/quader_api_status_internal.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
+#include "editor/array/radial_array_tool_service.hpp"
+#include "editor/modeling/operations/operation_schema.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -159,6 +161,7 @@ pivot_tool_settings_target(const PivotToolService &pivot) {
       .preview_active = true,
       .tool_id = std::string(kPivotToolId),
       .title = "Pivot",
+      .apply_visible = true,
       .can_apply = true,
       .can_cancel = true,
   };
@@ -184,12 +187,44 @@ QuaderToolSettingsTarget linear_array_tool_settings_target(
       .preview_active = true,
       .tool_id = std::string(kLinearArrayToolId),
       .title = "Linear Array",
+      .apply_visible = true,
       .can_apply = true,
       .can_cancel = true,
   };
   result.controls.push_back(number_control(
       std::string(kLinearArrayCountSetting), "Num Copies", linear_array.count(),
-      kLinearArrayMinimumCount, kLinearArrayMaximumCount, 1.0));
+      kLinearArrayMinimumCount, linear_array.maximum_count(), 1.0));
+  return result;
+}
+
+QuaderToolSettingsTarget radial_array_tool_settings_target(
+    const RadialArrayToolService &radial_array) {
+  const bool center_locked = radial_array.center_locked();
+  QuaderToolSettingsTarget result{
+      .active = true,
+      .preview_active = center_locked,
+      .tool_id = std::string(kRadialArrayToolId),
+      .title = "Radial Array",
+      .apply_visible = true,
+      .can_apply = center_locked,
+      .can_cancel = true,
+  };
+  result.controls.push_back(number_control(
+      std::string(kRadialArrayDegreesSetting), "Degrees",
+      radial_array.degrees(), kRadialArrayMinimumDegrees,
+      kRadialArrayMaximumDegrees, 1.0));
+  result.controls.push_back(number_control(
+      std::string(kRadialArrayCopiesSetting), "Number of Copies",
+      radial_array.copies(), kRadialArrayMinimumCopies,
+      radial_array.maximum_copies(), 1.0));
+  result.controls.push_back(number_control(
+      std::string(kRadialArrayRepeatsSetting), "Repeats",
+      radial_array.repeats(), kRadialArrayMinimumRepeats,
+      radial_array.maximum_repeats(), 1.0));
+  result.controls.push_back(number_control(
+      std::string(kRadialArrayRepeatSpacingSetting), "Repeat Spacing",
+      radial_array.repeat_spacing(), kRadialArrayMinimumRepeatSpacing,
+      kRadialArrayMaximumRepeatSpacing, 0.001));
   return result;
 }
 
@@ -247,8 +282,21 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
   result.title = target.label.empty()
                      ? fallback_tool_settings_label(target.kind)
                      : target.label;
+  result.apply_visible = target.operation_preview_active;
   result.can_apply = target.operation_preview_active;
   result.can_cancel = target.operation_preview_active;
+
+  constexpr quader_editor_core::BridgeOperationSchema kBridge =
+      quader_editor_core::bridge_operation_schema();
+  constexpr quader_editor_core::EdgeBevelOperationSchema kEdgeBevel =
+      quader_editor_core::edge_bevel_operation_schema();
+  constexpr quader_editor_core::ThickenOperationSchema kThicken =
+      quader_editor_core::thicken_operation_schema();
+  constexpr quader_editor_core::SliceQuadOperationSchema kSliceQuad =
+      quader_editor_core::slice_quad_operation_schema();
+  constexpr quader_editor_core::MergeByDistanceOperationSchema
+      kMergeByDistance =
+          quader_editor_core::merge_by_distance_operation_schema();
 
   switch (target.kind) {
   case ModelingToolSettingsTargetKind::Cut: {
@@ -268,26 +316,35 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
         }));
     break;
   }
-  case ModelingToolSettingsTargetKind::EdgeBevel:
+  case ModelingToolSettingsTargetKind::EdgeBevel: {
     result.controls.push_back(number_control(
         "operation.edge_bevel.width", "Width", settings.edge_bevel_width,
-        0.0625, 16384.0, 0.001));
+        kEdgeBevel.width.minimum, kEdgeBevel.width.maximum,
+        kEdgeBevel.width.step));
     result.controls.push_back(number_control(
         "operation.edge_bevel.segments", "Segments",
-        settings.edge_bevel_segments, 1.0, 16.0, 1.0));
+        settings.edge_bevel_segments,
+        static_cast<double>(kEdgeBevel.segments.minimum),
+        static_cast<double>(kEdgeBevel.segments.maximum),
+        static_cast<double>(kEdgeBevel.segments.step)));
     result.controls.push_back(number_control(
         "operation.edge_bevel.profile", "Profile",
-        settings.edge_bevel_profile, 0.0, 1.0, 0.01));
+        settings.edge_bevel_profile, kEdgeBevel.profile.minimum,
+        kEdgeBevel.profile.maximum, kEdgeBevel.profile.step));
     break;
+  }
   case ModelingToolSettingsTargetKind::Bridge:
-    result.controls.push_back(number_control("operation.bridge.steps", "Steps",
-                                             settings.bridge_steps, 1.0, 64.0,
-                                             1.0));
+    result.controls.push_back(number_control(
+        "operation.bridge.steps", "Steps", settings.bridge_steps,
+        static_cast<double>(kBridge.steps.minimum),
+        static_cast<double>(kBridge.steps.maximum),
+        static_cast<double>(kBridge.steps.step)));
     break;
   case ModelingToolSettingsTargetKind::Thicken:
     result.controls.push_back(number_control(
         "operation.thicken.thickness", "Distance",
-        settings.thicken_thickness, -4.0, 4.0, 0.001));
+        settings.thicken_thickness, kThicken.thickness.minimum,
+        kThicken.thickness.maximum, kThicken.thickness.step));
     result.controls.push_back(toggle_control("operation.thicken.from_center",
                                              "From Center",
                                              settings.thicken_from_center));
@@ -295,15 +352,22 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
   case ModelingToolSettingsTargetKind::SliceQuad:
     result.controls.push_back(number_control(
         "operation.slice_quad.x_slices", "X", settings.slice_quad_x_slices,
-        0.0, 64.0, 1.0));
+        static_cast<double>(kSliceQuad.x_slices.minimum),
+        static_cast<double>(kSliceQuad.x_slices.maximum),
+        static_cast<double>(kSliceQuad.x_slices.step)));
     result.controls.push_back(number_control(
         "operation.slice_quad.y_slices", "Y", settings.slice_quad_y_slices,
-        0.0, 64.0, 1.0));
+        static_cast<double>(kSliceQuad.y_slices.minimum),
+        static_cast<double>(kSliceQuad.y_slices.maximum),
+        static_cast<double>(kSliceQuad.y_slices.step)));
     break;
   case ModelingToolSettingsTargetKind::MergeByDistance:
     result.controls.push_back(number_control(
         "operation.merge_by_distance.tolerance", "Tolerance",
-        settings.merge_by_distance_tolerance, 0.0, 128.0, 0.0001));
+        settings.merge_by_distance_tolerance,
+        kMergeByDistance.tolerance.minimum,
+        kMergeByDistance.tolerance.maximum,
+        kMergeByDistance.tolerance.step));
     break;
   case ModelingToolSettingsTargetKind::HalfCut: {
     const int axis = static_cast<int>(settings.half_cut_axis);
@@ -411,6 +475,9 @@ bool QuaderToolsApi::can_activate(ViewportToolId tool) const {
 
 QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
   const ProjectSession &session = project_session(session_);
+  if (session.radial_array().active()) {
+    return radial_array_tool_settings_target(session.radial_array());
+  }
   if (session.linear_array().active()) {
     return linear_array_tool_settings_target(session.linear_array());
   }
@@ -426,10 +493,57 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
                                                  std::string_view name,
                                                  double value) {
   ProjectSession &session = project_session(session_);
+  const bool radial_array_tool =
+      tool_id.empty() || tool_id == kRadialArrayToolId;
+  if (radial_array_tool && name == kRadialArrayDegreesSetting) {
+    if (!std::isfinite(value) || value < kRadialArrayMinimumDegrees ||
+        value > kRadialArrayMaximumDegrees) {
+      return quader_api_failure_status(session,
+                                       "Invalid Radial Array degrees.");
+    }
+    return api_status_from_command(
+        session, session.radial_array().set_degrees(value),
+        QuaderMutationKind::Runtime, "Set Radial Array Degrees");
+  }
+  if (radial_array_tool && name == kRadialArrayCopiesSetting) {
+    if (!std::isfinite(value) || std::round(value) != value ||
+        value < static_cast<double>(kRadialArrayMinimumCopies) ||
+        value > static_cast<double>(session.radial_array().maximum_copies())) {
+      return quader_api_failure_status(session,
+                                       "Invalid Radial Array copy count.");
+    }
+    return api_status_from_command(
+        session,
+        session.radial_array().set_copies(static_cast<std::uint32_t>(value)),
+        QuaderMutationKind::Runtime, "Set Radial Array Copies");
+  }
+  if (radial_array_tool && name == kRadialArrayRepeatsSetting) {
+    if (!std::isfinite(value) || std::round(value) != value ||
+        value < static_cast<double>(kRadialArrayMinimumRepeats) ||
+        value > static_cast<double>(session.radial_array().maximum_repeats())) {
+      return quader_api_failure_status(session,
+                                       "Invalid Radial Array repeats.");
+    }
+    return api_status_from_command(
+        session,
+        session.radial_array().set_repeats(static_cast<std::uint32_t>(value)),
+        QuaderMutationKind::Runtime, "Set Radial Array Repeats");
+  }
+  if (radial_array_tool && name == kRadialArrayRepeatSpacingSetting) {
+    if (!std::isfinite(value) || value < kRadialArrayMinimumRepeatSpacing ||
+        value > kRadialArrayMaximumRepeatSpacing) {
+      return quader_api_failure_status(
+          session, "Invalid Radial Array repeat spacing.");
+    }
+    return api_status_from_command(
+        session, session.radial_array().set_repeat_spacing(value),
+        QuaderMutationKind::Runtime, "Set Radial Array Repeat Spacing");
+  }
   if ((tool_id.empty() || tool_id == kLinearArrayToolId) &&
       name == kLinearArrayCountSetting) {
-    if (!std::isfinite(value) || std::round(value) != value || value < 0.0 ||
-        value > static_cast<double>(kLinearArrayMaximumCount)) {
+    if (!std::isfinite(value) || std::round(value) != value ||
+        value < static_cast<double>(kLinearArrayMinimumCount) ||
+        value > static_cast<double>(session.linear_array().maximum_count())) {
       return quader_api_failure_status(session,
                                        "Invalid Linear Array count.");
     }
@@ -503,11 +617,14 @@ QuaderApiVoidResult QuaderToolsApi::commit_active_tool_preview() {
   ProjectSession &session = project_session(session_);
   if (session.native_tools().has_pending_tool()) {
     const bool linear_array = session.linear_array().has_session();
+    const bool radial_array = session.radial_array().has_session();
+    const bool modeling_array = linear_array || radial_array;
     return api_status_from_command(
         session, session.native_tools().commit_active(),
-        linear_array ? QuaderMutationKind::Modeling
-                     : QuaderMutationKind::Document,
-        linear_array ? "Apply Linear Array" : "Apply Pivot");
+        modeling_array ? QuaderMutationKind::Modeling
+                       : QuaderMutationKind::Document,
+        radial_array ? "Apply Radial Array"
+                     : linear_array ? "Apply Linear Array" : "Apply Pivot");
   }
   if (hooks_.commit_active_tool_preview) {
     return hooks_.commit_active_tool_preview();

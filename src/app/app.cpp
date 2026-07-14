@@ -149,6 +149,7 @@ bool App::initialize(QApplication &application,
       *editor_, project_session_.scene(), project_session_.assets(),
       project_session_.modeling(), project_session_.selection(),
       project_session_.pivot(), project_session_.linear_array(),
+      project_session_.radial_array(), project_session_.point_placement(),
       default_material_);
   editor_->project().set_runtime_hooks(QuaderProjectRuntimeHooks{
       .choose_open_path =
@@ -186,7 +187,7 @@ bool App::initialize(QApplication &application,
                        schedule_next_frame();
                      }
                    });
-  QObject::connect(application_, &QApplication::aboutToQuit, application_,
+  QObject::connect(application_, &QApplication::aboutToQuit, frame_timer_.get(),
                    [this]() { running_ = false; });
   running_ = true;
   return true;

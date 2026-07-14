@@ -1985,6 +1985,10 @@ TEST(BuildGuardrailTests, AppLoopRunsOnQApplicationEvents) {
   expect_contains(app_source, "#include <QTimer>");
   expect_contains(app_source, "&QTimer::timeout");
   expect_contains(app_source, "&QApplication::aboutToQuit");
+  expect_contains(app_source,
+                  "&QApplication::aboutToQuit, frame_timer_.get()");
+  expect_missing(app_source,
+                 "&QApplication::aboutToQuit, application_");
   expect_contains(app_source, "return application_->exec()");
   expect_contains(app_source, "frame_timer_->start(0)");
 

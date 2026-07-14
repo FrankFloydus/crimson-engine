@@ -466,10 +466,12 @@ public:
 
 	[[nodiscard]] bool projected_object_matches(const RectangleProjectedObject& object, const RectangleProjectedHitsRequest& request) const
 	{
+          if (object.has_screen_bounds &&
+              !rect_intersects_bounds(request.rect, object.screen_min,
+                                      object.screen_max)) {
+            return false;
+          }
           if (request.match == RectangleSelectionMatch::Contain) {
-            if (!object.screen_points.empty()) {
-              return all_points_inside_rect(request.rect, object.screen_points);
-            }
             if (object.has_screen_bounds) {
               return bounds_inside_rect(request.rect, object.screen_min,
                                         object.screen_max);
@@ -507,7 +509,16 @@ public:
 
 	[[nodiscard]] bool projected_face_matches(const RectangleProjectedFace& face, const RectangleProjectedHitsRequest& request) const
 	{
+          if (face.has_screen_bounds &&
+              !rect_intersects_bounds(request.rect, face.screen_min,
+                                      face.screen_max)) {
+            return false;
+          }
           if (request.match == RectangleSelectionMatch::Contain) {
+            if (face.has_screen_bounds) {
+              return bounds_inside_rect(request.rect, face.screen_min,
+                                        face.screen_max);
+            }
             if (!face.screen_vertices.empty()) {
               return all_points_inside_rect(request.rect, face.screen_vertices);
             }
@@ -541,6 +552,15 @@ public:
 	[[nodiscard]] bool projected_edge_matches(const RectangleProjectedEdge& edge, const RectangleProjectedHitsRequest& request) const
 	{
 		const bool has_segment = edge.has_screen_start && edge.has_screen_end;
+                if (has_segment &&
+                    !rect_intersects_bounds(
+                        request.rect,
+                        {std::min(edge.screen_start.x, edge.screen_end.x),
+                         std::min(edge.screen_start.y, edge.screen_end.y)},
+                        {std::max(edge.screen_start.x, edge.screen_end.x),
+                         std::max(edge.screen_start.y, edge.screen_end.y)})) {
+                  return false;
+                }
                 if (request.match == RectangleSelectionMatch::Contain) {
                   if (has_segment) {
                     return rect_contains(request.rect, edge.screen_start) &&
@@ -574,8 +594,8 @@ public:
                   for (const RectangleProjectedFace &face : request.faces) {
                     if (face.object_id >= 0 && face.face_index >= 0 &&
                         projected_face_matches(face, request)) {
-                      hits.faces.push_back({face.object_id, face.face_index,
-                                            face.vertex_indices});
+                      hits.faces.push_back(
+                          {face.object_id, face.face_index, {}});
                     }
                   }
                   return hits;

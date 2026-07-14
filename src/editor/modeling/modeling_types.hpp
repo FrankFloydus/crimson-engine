@@ -735,23 +735,69 @@ struct ModelingCreateBoxResult {
 };
 
 /**
- * Describes one native world-space linear array commit.
+ * Identifies one live native modeling source for a transformed array commit.
+ */
+struct ModelingArraySource {
+  EntityId entity = kInvalidEntityId;
+  int modeling_object_id = -1;
+};
+
+/**
+ * Describes one atomic, source-inclusive native linear array commit.
  */
 struct ModelingLinearArrayRequest {
-  EntityId source_entity = kInvalidEntityId;
-  int source_modeling_object_id = -1;
-  QVec3 endpoint_world = {};
+  std::vector<ModelingArraySource> sources;
+  QVec3 span_world = {};
   std::uint32_t count = 4;
 };
 
 /**
- * Returns source and created objects in start-to-end array order.
+ * Returns one source and its source-inclusive start-to-end element order.
+ */
+struct ModelingLinearArraySourceResult {
+  ModelingObjectRecord source;
+  std::vector<ModelingObjectRecord> elements;
+};
+
+/**
+ * Returns linear-array groups in the request's source order.
  */
 struct ModelingLinearArrayResult {
   bool ok = false;
   bool changed = false;
   std::string message;
+  std::vector<ModelingLinearArraySourceResult> source_arrays;
+};
+
+/**
+ * Describes one atomic, source-inclusive native radial array commit.
+ */
+struct ModelingRadialArrayRequest {
+  std::vector<ModelingArraySource> sources;
+  QVec3 center_world = {};
+  QVec3 plane_normal_world = {0.0f, 1.0f, 0.0f};
+  double degrees = 360.0;
+  std::uint32_t copies = 8u;
+  std::uint32_t repeats = 1u;
+  double repeat_spacing = 1.0;
+};
+
+/**
+ * Returns one source and its source-inclusive ring/angle element order.
+ */
+struct ModelingRadialArraySourceResult {
+  ModelingObjectRecord source;
   std::vector<ModelingObjectRecord> elements;
+};
+
+/**
+ * Returns radial-array groups in the request's source order.
+ */
+struct ModelingRadialArrayResult {
+  bool ok = false;
+  bool changed = false;
+  std::string message;
+  std::vector<ModelingRadialArraySourceResult> source_arrays;
 };
 
 } // namespace quader

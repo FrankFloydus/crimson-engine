@@ -255,11 +255,13 @@ target_link_libraries(quader_document
 
 add_library(quader_editor_services STATIC
     src/editor/array/linear_array_tool_service.cpp
+    src/editor/array/radial_array_tool_service.cpp
     src/editor/commands/asset_command_service.cpp
     src/editor/commands/document_command_service.cpp
     src/editor/commands/modeling_command_execution_service.cpp
     src/editor/history/editor_history_service.cpp
     src/editor/pivot/pivot_tool_service.cpp
+    src/editor/placement/viewport_point_placement_service.cpp
     src/editor/selection/editor_selection_service.cpp
     src/editor/session/project_asset_bootstrap_service.cpp
     src/editor/session/project_session.cpp
@@ -271,6 +273,7 @@ target_link_libraries(quader_editor_services
     PUBLIC
         quader_document
         quader_modeling
+        quader_viewport_services
     PRIVATE
         quader_modeling_profile)
 
@@ -913,6 +916,7 @@ if(QUADER_BUILD_TESTS)
     add_executable(quader_tests
         tests/app_frame_clock_tests.cpp
         tests/core_tests.cpp
+        tests/linear_array_tests.cpp
         tests/local_stress_tests.cpp
         tests/localization_tests.cpp
         tests/math_types_tests.cpp
@@ -952,6 +956,9 @@ if(QUADER_BUILD_TESTS)
         tests/support/modeling_test_events.cpp
     )
     quader_enable_common_pch(quader_tests)
+    if(MSVC)
+        target_compile_options(quader_tests PRIVATE /bigobj)
+    endif()
     target_include_directories(quader_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
     target_compile_definitions(quader_tests
         PRIVATE

@@ -114,6 +114,7 @@ public:
     void set_clip_planes(float near_plane, float far_plane);
 
     const ViewportCameraState& state() const { return state_; }
+    QVec2 viewport_size() const { return {viewport_width_, viewport_height_}; }
     float fly_speed() const { return fly_speed_; }
     bool fly_speed_is_default() const;
     ViewportCameraPose pose() const;

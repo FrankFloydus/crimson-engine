@@ -31,12 +31,15 @@
 #include "editor/commands/document/ungroup_selection_command.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "editor/commands/editor_command_service.hpp"
+#include "editor/array/radial_array_tool_service.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/history/scene_transform_preview_transaction.hpp"
 #include "editor/metadata/host_contract.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
+#include "editor/modeling/radial_array_layout.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/projection/selection_overlay_projection.hpp"
 #include "editor/selection/editor_selection_service.hpp"
@@ -2654,6 +2657,632 @@ TEST(ViewportGridPlacementPolicyTests,
   expect_vec3_near(front.axes.v_axis, {0.0f, 1.0f, 0.0f});
 }
 
+TEST(ViewportPointPlacementServiceTests,
+     ActiveGridPlaneTracksPerspectiveAndLockedOrthographicViews) {
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+
+  ViewportPointPlacementPlane plane =
+      viewport_active_grid_placement_plane(camera);
+  expect_vec3_near(normalize(cross(plane.u_axis, plane.v_axis)),
+                   {0.0f, 1.0f, 0.0f});
+
+  camera.view_axis(ViewportViewAxis::X, 1);
+  plane = viewport_active_grid_placement_plane(camera);
+  expect_vec3_near(normalize(cross(plane.u_axis, plane.v_axis)),
+                   {1.0f, 0.0f, 0.0f});
+
+  camera.view_axis(ViewportViewAxis::Z, 1);
+  plane = viewport_active_grid_placement_plane(camera);
+  expect_vec3_near(normalize(cross(plane.u_axis, plane.v_axis)),
+                   {0.0f, 0.0f, 1.0f});
+}
+
+TEST(ViewportPointPlacementServiceTests,
+     RadialSnapsArbitraryWallHitsToAContinuousPlanarGrid) {
+  AssetRegistry assets;
+  SceneDocument scene;
+  MeshAsset mesh;
+  mesh.name = "Planar Wall";
+  mesh.vertices = {
+      MeshVertex{.position = {2.0f, -10.0f, -10.0f}},
+      MeshVertex{.position = {2.0f, 10.0f, -10.0f}},
+      MeshVertex{.position = {2.0f, 10.0f, 10.0f}},
+      MeshVertex{.position = {2.0f, -10.0f, 10.0f}},
+  };
+  mesh.indices = {0u, 1u, 2u, 0u, 2u, 3u};
+  const AssetId mesh_id = assets.add_mesh(std::move(mesh));
+  ASSERT_NE(mesh_id, kInvalidAssetId);
+  const EntityId entity = scene.create_entity("Planar Wall", EntityKind::Mesh);
+  scene.set_mesh(entity, MeshComponent{.mesh = mesh_id});
+
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.view_axis(ViewportViewAxis::X, 1);
+  ViewportPointPlacementService placement;
+  const auto resolve_surface = [&](QVec3 raw_world_position) {
+    const ViewportScreenPoint screen =
+        camera.project_world_point(raw_world_position);
+    EXPECT_TRUE(screen.visible);
+    return placement.resolve(
+        scene, assets, camera,
+        ViewportPointPlacementRequest{
+            .mouse_local = screen.position,
+            .active_grid = viewport_active_grid_placement_plane(camera),
+            .grid_size = 1.0f,
+            .policy = ViewportPointPlacementPolicy::radial_array(),
+        });
+  };
+
+  const ViewportPointPlacementResult first =
+      resolve_surface({2.0f, 1.4f, -2.6f});
+  ASSERT_TRUE(first.valid);
+  EXPECT_EQ(first.snap_kind, ViewportPointSnapKind::Surface);
+  EXPECT_EQ(first.entity, entity);
+  expect_vec3_near(first.world_position, {2.0f, 1.0f, -3.0f});
+  expect_vec3_near(first.world_normal, {1.0f, 0.0f, 0.0f});
+
+  const ViewportPointPlacementResult second =
+      resolve_surface({2.0f, 2.4f, -1.6f});
+  ASSERT_TRUE(second.valid);
+  EXPECT_EQ(second.snap_kind, ViewportPointSnapKind::Surface);
+  EXPECT_EQ(second.entity, entity);
+  expect_vec3_near(second.world_position, {2.0f, 2.0f, -2.0f});
+  expect_vec3_near(second.world_normal, {1.0f, 0.0f, 0.0f});
+}
+
+TEST(ViewportPointPlacementServiceTests,
+     RadialSnapsToEachLockedOrthographicActiveGrid) {
+  AssetRegistry assets;
+  SceneDocument scene;
+  ViewportPointPlacementService placement;
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+
+  const auto resolve_grid = [&](ViewportViewAxis axis, QVec3 raw_world) {
+    camera.view_axis(axis, 1);
+    const ViewportScreenPoint screen = camera.project_world_point(raw_world);
+    EXPECT_TRUE(screen.visible);
+    return placement.resolve(
+        scene, assets, camera,
+        ViewportPointPlacementRequest{
+            .mouse_local = screen.position,
+            .active_grid = viewport_active_grid_placement_plane(camera),
+            .grid_size = 1.0f,
+            .policy = ViewportPointPlacementPolicy::radial_array(),
+        });
+  };
+
+  const ViewportPointPlacementResult yz =
+      resolve_grid(ViewportViewAxis::X, {0.0f, 1.4f, -2.6f});
+  ASSERT_TRUE(yz.valid);
+  EXPECT_EQ(yz.snap_kind, ViewportPointSnapKind::Grid);
+  expect_vec3_near(yz.world_position, {0.0f, 1.0f, -3.0f});
+  expect_vec3_near(yz.world_normal, {1.0f, 0.0f, 0.0f});
+
+  const ViewportPointPlacementResult xz =
+      resolve_grid(ViewportViewAxis::Y, {1.4f, 0.0f, -2.6f});
+  ASSERT_TRUE(xz.valid);
+  EXPECT_EQ(xz.snap_kind, ViewportPointSnapKind::Grid);
+  expect_vec3_near(xz.world_position, {1.0f, 0.0f, -3.0f});
+  expect_vec3_near(xz.world_normal, {0.0f, 1.0f, 0.0f});
+
+  const ViewportPointPlacementResult xy =
+      resolve_grid(ViewportViewAxis::Z, {1.4f, -2.6f, 0.0f});
+  ASSERT_TRUE(xy.valid);
+  EXPECT_EQ(xy.snap_kind, ViewportPointSnapKind::Grid);
+  expect_vec3_near(xy.world_position, {1.0f, -3.0f, 0.0f});
+  expect_vec3_near(xy.world_normal, {0.0f, 0.0f, 1.0f});
+}
+
+TEST(ViewportPointPlacementServiceTests,
+     RadialUsesStrictLandmarkPriorityWhilePivotKeepsNearestCandidate) {
+  AssetRegistry assets;
+  SceneDocument scene;
+  MeshAsset mesh;
+  mesh.name = "Snap Priority";
+  mesh.vertices = {
+      MeshVertex{.position = {0.4f, 0.0f, 0.0f}},
+      MeshVertex{.position = {-0.2f, 0.3f, 0.0f}},
+      MeshVertex{.position = {-0.2f, -0.3f, 0.0f}},
+  };
+  mesh.indices = {0u, 1u, 2u};
+  const AssetId mesh_id = assets.add_mesh(std::move(mesh));
+  ASSERT_NE(mesh_id, kInvalidAssetId);
+  const EntityId entity =
+      scene.create_entity("Snap Priority", EntityKind::Mesh);
+  scene.set_mesh(entity, MeshComponent{.mesh = mesh_id});
+
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.view_axis(ViewportViewAxis::Z, 1);
+  ViewportPointPlacementService placement;
+  ViewportPointPlacementRequest request{
+      .mouse_local = {400.0f, 300.0f},
+      .active_grid = viewport_active_grid_placement_plane(camera),
+      .grid_size = 1.0f,
+      .policy = ViewportPointPlacementPolicy::radial_array(),
+  };
+  // Admit every landmark so this assertion isolates kind priority from the
+  // production snap-radius threshold.
+  request.policy.snap_radius_pixels = 256.0f;
+
+  const ViewportPointPlacementResult radial =
+      placement.resolve(scene, assets, camera, request);
+  ASSERT_TRUE(radial.valid);
+  EXPECT_EQ(radial.snap_kind, ViewportPointSnapKind::Vertex);
+  EXPECT_EQ(radial.entity, entity);
+  expect_vec3_near(radial.world_normal, {0.0f, 0.0f, 1.0f});
+
+  request.policy = ViewportPointPlacementPolicy::pivot(PivotSnapSettings{});
+  request.fallback_plane = ViewportPointPlacementPlane{
+      .origin = {},
+      .u_axis = {1.0f, 0.0f, 0.0f},
+      .v_axis = {0.0f, 1.0f, 0.0f},
+  };
+  const ViewportPointPlacementResult pivot =
+      placement.resolve(scene, assets, camera, request);
+  ASSERT_TRUE(pivot.valid);
+  EXPECT_EQ(pivot.snap_kind, ViewportPointSnapKind::FaceCenter);
+  EXPECT_EQ(pivot.entity, entity);
+  expect_vec3_near(pivot.world_position, {});
+}
+
+TEST(ViewportPointPlacementServiceTests,
+     RadialFallsBackFromArbitrarySurfaceToGridWhenMeshBecomesLocked) {
+  AssetRegistry assets;
+  SceneDocument scene;
+  MeshAsset mesh;
+  mesh.name = "Surface Placement";
+  mesh.vertices = {
+      MeshVertex{.position = {-10.0f, -8.0f, 0.0f}},
+      MeshVertex{.position = {9.0f, -7.0f, 0.0f}},
+      MeshVertex{.position = {2.0f, 10.0f, 0.0f}},
+  };
+  mesh.indices = {0u, 1u, 2u};
+  const AssetId mesh_id = assets.add_mesh(std::move(mesh));
+  ASSERT_NE(mesh_id, kInvalidAssetId);
+  const EntityId entity =
+      scene.create_entity("Surface Placement", EntityKind::Mesh);
+  scene.set_mesh(entity, MeshComponent{.mesh = mesh_id});
+
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.view_axis(ViewportViewAxis::Z, 1);
+  ViewportPointPlacementService placement;
+  const ViewportPointPlacementRequest request{
+      .mouse_local = {400.0f, 300.0f},
+      .active_grid = viewport_active_grid_placement_plane(camera),
+      .grid_size = 1.0f,
+      .policy = ViewportPointPlacementPolicy::radial_array(),
+  };
+
+  ViewportPointPlacementResult result =
+      placement.resolve(scene, assets, camera, request);
+  ASSERT_TRUE(result.valid);
+  EXPECT_EQ(result.snap_kind, ViewportPointSnapKind::Surface);
+  EXPECT_EQ(result.entity, entity);
+  expect_vec3_near(result.world_position, {});
+  expect_vec3_near(result.world_normal, {0.0f, 0.0f, 1.0f});
+
+  ASSERT_TRUE(scene.set_locked(entity, true));
+  result = placement.resolve(scene, assets, camera, request);
+  ASSERT_TRUE(result.valid);
+  EXPECT_EQ(result.snap_kind, ViewportPointSnapKind::Grid);
+  EXPECT_EQ(result.entity, kInvalidEntityId);
+  expect_vec3_near(result.world_position, {});
+  expect_vec3_near(result.world_normal, {0.0f, 0.0f, 1.0f});
+}
+
+TEST(ViewportPointPlacementServiceTests,
+     PivotParallelFreeDragPreservesTheProvidedCurrentPosition) {
+  AssetRegistry assets;
+  SceneDocument scene;
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.view_axis(ViewportViewAxis::X, 1);
+  ViewportPointPlacementPolicy policy =
+      ViewportPointPlacementPolicy::pivot(PivotSnapSettings{});
+  policy.vertex = false;
+  policy.edge_midpoint = false;
+  policy.face_center = false;
+  policy.grid = false;
+  const QVec3 current_position = {2.0f, 3.0f, 4.0f};
+  ViewportPointPlacementService placement;
+
+  const ViewportPointPlacementResult result = placement.resolve(
+      scene, assets, camera,
+      ViewportPointPlacementRequest{
+          .mouse_local = {400.0f, 300.0f},
+          .active_grid = {},
+          .grid_size = 1.0f,
+          .policy = policy,
+          .fallback_plane = ViewportPointPlacementPlane{
+              .origin = current_position,
+          },
+      });
+
+  ASSERT_TRUE(result.valid);
+  EXPECT_EQ(result.snap_kind, ViewportPointSnapKind::None);
+  expect_vec3_near(result.world_position, current_position);
+}
+
+TEST(RadialArrayLayoutTests,
+     UsesTotalSweepRotatesOrientationAndOrdersAdditionalRings) {
+  const QMat4 source_world = compose_transform(QTransform{
+      .position = {2.0f, 0.0f, 0.0f},
+  });
+  const RadialArrayLayoutResult partial = build_radial_array_layout({
+      .source_world_transform = source_world,
+      .source_pivot_world = {2.0f, 0.0f, 0.0f},
+      .center_world = {},
+      .plane_normal_world = {0.0f, 1.0f, 0.0f},
+      .degrees = 180.0,
+      .copies = 3u,
+      .repeats = 1u,
+      .repeat_spacing = 1.0,
+  });
+  ASSERT_TRUE(partial.ok) << partial.message;
+  ASSERT_EQ(partial.generated_world_transforms.size(), 2u);
+  expect_vec3_near(
+      transform_point(partial.generated_world_transforms[0], {}),
+      {0.0f, 0.0f, -2.0f});
+  expect_vec3_near(
+      transform_point(partial.generated_world_transforms[1], {}),
+      {-2.0f, 0.0f, 0.0f});
+  expect_vec3_near(
+      transform_vector(partial.generated_world_transforms[0],
+                       {1.0f, 0.0f, 0.0f}),
+      {0.0f, 0.0f, -1.0f});
+
+  const RadialArrayLayoutResult closed = build_radial_array_layout({
+      .source_world_transform = source_world,
+      .source_pivot_world = {2.0f, 0.0f, 0.0f},
+      .center_world = {},
+      .plane_normal_world = {0.0f, 1.0f, 0.0f},
+      .degrees = 360.0,
+      .copies = 4u,
+      .repeats = 2u,
+      .repeat_spacing = 1.0,
+  });
+  ASSERT_TRUE(closed.ok) << closed.message;
+  ASSERT_EQ(closed.generated_world_transforms.size(), 7u);
+  expect_vec3_near(transform_point(closed.generated_world_transforms[2], {}),
+                   {0.0f, 0.0f, 2.0f});
+  expect_vec3_near(transform_point(closed.generated_world_transforms[3], {}),
+                   {3.0f, 0.0f, 0.0f});
+
+  const RadialArrayLayoutResult zero_spacing = build_radial_array_layout({
+      .source_world_transform = source_world,
+      .source_pivot_world = {2.0f, 0.0f, 0.0f},
+      .center_world = {},
+      .plane_normal_world = {0.0f, 1.0f, 0.0f},
+      .degrees = 360.0,
+      .copies = 4u,
+      .repeats = 2u,
+      .repeat_spacing = 0.0,
+  });
+  ASSERT_TRUE(zero_spacing.ok) << zero_spacing.message;
+  expect_vec3_near(
+      transform_point(zero_spacing.generated_world_transforms[3], {}),
+      {2.0f, 0.0f, 0.0f});
+}
+
+TEST(RadialArrayLayoutTests,
+     ResolvesAxisCenteredFallbackOnArbitraryPlaneNormals) {
+  const QVec3 tilted_normal = normalize(QVec3{1.0f, 1.0f, 1.0f});
+  const QVec3 source_position = {2.0f, -2.0f, 0.0f};
+  const RadialArrayLayoutResult tilted = build_radial_array_layout({
+      .source_world_transform = compose_transform(QTransform{
+          .position = source_position,
+      }),
+      .source_pivot_world = source_position,
+      .center_world = {},
+      .plane_normal_world = tilted_normal,
+      .degrees = 360.0,
+      .copies = 4u,
+      .repeats = 1u,
+      .repeat_spacing = 1.0,
+  });
+  ASSERT_TRUE(tilted.ok) << tilted.message;
+  for (const QMat4 &world : tilted.generated_world_transforms) {
+    EXPECT_NEAR(dot(transform_point(world, {}), tilted_normal), 0.0f,
+                0.001f);
+  }
+
+  const RadialArrayLayoutResult axis_centered = build_radial_array_layout({
+      .source_world_transform = QMat4{},
+      .source_pivot_world = {},
+      .center_world = {},
+      .plane_normal_world = {1.0f, 0.0f, 0.0f},
+      .degrees = 180.0,
+      .copies = 2u,
+      .repeats = 2u,
+      .repeat_spacing = 2.0,
+  });
+  ASSERT_TRUE(axis_centered.ok) << axis_centered.message;
+  expect_vec3_near(axis_centered.outward_direction_world,
+                   {0.0f, 1.0f, 0.0f});
+  ASSERT_EQ(axis_centered.generated_world_transforms.size(), 3u);
+  expect_vec3_near(
+      transform_point(axis_centered.generated_world_transforms[1], {}),
+      {0.0f, 2.0f, 0.0f});
+}
+
+TEST(RadialArrayToolServiceTests,
+     CenterLockBuildsTransformOnlyPreviewAndCommitUsesIdenticalMatrices) {
+  ProjectSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_project_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> source =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Radial Preview Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(source.value().entity,
+                                 {.position = {2.0f, 0.0f, 0.0f}})
+                  .ok());
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::RadialArray).ok());
+
+  RadialArrayToolService &tool = session.radial_array();
+  ASSERT_TRUE(tool.update_center_candidate({}, {0.0f, 1.0f, 0.0f}, 1.0).ok);
+  EXPECT_TRUE(tool.center_state().visible);
+  EXPECT_FALSE(tool.center_state().locked);
+  EXPECT_FALSE(tool.preview_state().active);
+  EXPECT_TRUE(editor.render().tool_preview_meshes().empty());
+  ASSERT_TRUE(tool.adjust_copies(3).ok);
+  EXPECT_EQ(tool.copies(), 11u);
+  ASSERT_TRUE(tool.adjust_copies(-100).ok);
+  EXPECT_EQ(tool.copies(), 2u);
+  EXPECT_EQ(tool.maximum_repeats(), 512u);
+  EXPECT_FALSE(tool.adjust_copies(-1).changed);
+  ASSERT_TRUE(tool.set_degrees(180.0).ok);
+  ASSERT_TRUE(tool.set_copies(3u).ok);
+  ASSERT_TRUE(tool.set_repeats(2u).ok);
+  ASSERT_TRUE(tool.set_repeat_spacing(0.75).ok);
+  ASSERT_TRUE(tool.lock_center().ok);
+  EXPECT_DOUBLE_EQ(tool.repeat_spacing(), 0.75);
+
+  const RadialArrayPreviewState preview = tool.preview_state();
+  ASSERT_TRUE(preview.active);
+  ASSERT_EQ(preview.sources.size(), 1u);
+  ASSERT_EQ(preview.sources.front().generated_world_transforms.size(), 5u);
+  const std::vector<QMat4> preview_world =
+      preview.sources.front().generated_world_transforms;
+  const std::vector<QuaderToolPreviewMesh> render_preview =
+      editor.render().tool_preview_meshes();
+  ASSERT_EQ(render_preview.size(), 1u);
+  EXPECT_EQ(render_preview.front().source_entity, source.value().entity);
+  EXPECT_EQ(render_preview.front().instance_transforms.size(), 5u);
+
+  const QuaderApiVoidResult committed =
+      editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  ASSERT_TRUE(committed.changed());
+  EXPECT_FALSE(tool.has_session());
+  EXPECT_EQ(editor.query().history().undo_label, "Radial Array");
+
+  std::vector<EntityId> generated;
+  for (const EntityId entity : session.scene().entities()) {
+    if (entity != source.value().entity &&
+        session.scene().modeling_object(entity) != nullptr) {
+      generated.push_back(entity);
+    }
+  }
+  std::sort(generated.begin(), generated.end());
+  ASSERT_EQ(generated.size(), preview_world.size());
+  for (std::size_t index = 0; index < generated.size(); ++index) {
+    const QMat4 committed_world =
+        session.scene().world_transform_matrix(generated[index]);
+    for (std::size_t component = 0;
+         component < committed_world.values.size(); ++component) {
+      EXPECT_NEAR(committed_world.values[component],
+                  preview_world[index].values[component], 0.0001f);
+    }
+  }
+  EXPECT_EQ(session.scene().selected_entities().size(), 6u);
+  EXPECT_EQ(session.scene().primary_selection(), generated.back());
+}
+
+TEST(RadialArrayToolServiceTests,
+     VisiblePivotPolicyChangeInvalidatesTheCapturedPreview) {
+  ProjectSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_project_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> source =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {0.0f, -1.0f, -1.0f},
+                       .max = {2.0f, 1.0f, 1.0f}},
+          "Radial Visible Pivot Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::RadialArray).ok());
+
+  RadialArrayToolService &tool = session.radial_array();
+  ASSERT_TRUE(tool.update_center_candidate({}, {0.0f, 1.0f, 0.0f}, 1.0).ok);
+  ASSERT_TRUE(tool.lock_center().ok);
+  ASSERT_TRUE(tool.preview_state().active);
+
+  TransformComponent transform =
+      *session.scene().transform(source.value().entity);
+  transform.custom_pivot = true;
+  session.scene().set_transform(source.value().entity, transform);
+  const CommandResult refreshed = tool.refresh();
+  EXPECT_TRUE(refreshed.ok);
+  EXPECT_TRUE(refreshed.changed);
+  EXPECT_FALSE(tool.has_session());
+  EXPECT_FALSE(tool.preview_state().active);
+}
+
+TEST(RadialArrayToolServiceTests,
+     CommitPreservesParentMaterialSelectabilityAndCustomPivot) {
+  ProjectSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_project_session(session));
+  const QuaderApiResult<QuaderEntityRef> parent =
+      editor.scene().create_entity(QuaderCreateEntityArgs{
+          .name = "Radial Durable Parent",
+          .kind = QuaderEntityKind::Empty,
+      });
+  ASSERT_TRUE(parent.ok()) << parent.error_message();
+  const QuaderApiResult<QuaderModelingObjectRef> source =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Radial Durable Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(
+      editor.scene().reparent(source.value().entity, parent.value().id, false)
+          .ok());
+  TransformComponent source_transform =
+      *session.scene().transform(source.value().entity);
+  source_transform.position = {2.0f, 0.0f, 0.0f};
+  source_transform.custom_pivot = true;
+  session.scene().set_transform(source.value().entity, source_transform);
+  ASSERT_TRUE(session.scene().set_selectable(source.value().entity, false));
+  const QuaderApiResult<QuaderAssetRef> material =
+      editor.assets().add_material(QuaderMaterialArgs{
+          .name = "Radial Durable Material",
+      });
+  ASSERT_TRUE(material.ok()) << material.error_message();
+  ASSERT_TRUE(editor.assets()
+                  .assign_material_to_entity(source.value().entity,
+                                             material.value().id)
+                  .ok());
+
+  const QuaderApiResult<QuaderRadialArrayResult> array =
+      editor.modeling().create_radial_array(QuaderRadialArrayArgs{
+          .sources = {source.value()},
+          .center_world = {},
+          .degrees = 180.0,
+          .copies = 2u,
+      });
+  ASSERT_TRUE(array.ok()) << array.error_message();
+  ASSERT_EQ(array.value().source_arrays.size(), 1u);
+  ASSERT_EQ(array.value().source_arrays.front().elements.size(), 2u);
+  const EntityId copy =
+      array.value().source_arrays.front().elements.back().entity;
+  ASSERT_NE(session.scene().visibility(copy), nullptr);
+  EXPECT_FALSE(session.scene().visibility(copy)->selectable);
+  EXPECT_EQ(session.scene().parent(copy), parent.value().id);
+  ASSERT_NE(session.scene().material(copy), nullptr);
+  EXPECT_EQ(session.scene().material(copy)->material, material.value().id);
+  ASSERT_NE(session.scene().transform(copy), nullptr);
+  EXPECT_TRUE(session.scene().transform(copy)->custom_pivot);
+  ASSERT_NE(session.scene().mesh(copy), nullptr);
+  EXPECT_NE(session.scene().mesh(copy)->mesh, source.value().mesh);
+}
+
+TEST(RadialArrayToolServiceTests,
+     RepeatSpacingReexpandsAfterZeroThroughPublicToolSettings) {
+  ProjectSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_project_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> source =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Radial Spacing Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(source.value().entity,
+                                 {.position = {2.0f, 0.0f, 0.0f}})
+                  .ok());
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::RadialArray).ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("radial_array", "radial_array.copies", 4.0)
+                  .ok());
+  ASSERT_TRUE(editor.tools()
+                  .set_setting("radial_array", "radial_array.repeats", 2.0)
+                  .ok());
+  ASSERT_TRUE(
+      editor.tools()
+          .set_setting("radial_array", "radial_array.repeat_spacing", 2.5)
+          .ok());
+
+  RadialArrayToolService &tool = session.radial_array();
+  ASSERT_TRUE(tool.update_center_candidate({}, {0.0f, 1.0f, 0.0f}, 1.0).ok);
+  ASSERT_TRUE(tool.lock_center().ok);
+
+  const auto outer_ring_origin = [](const RadialArrayPreviewState &preview) {
+    EXPECT_TRUE(preview.active);
+    EXPECT_EQ(preview.sources.size(), 1u);
+    if (!preview.active || preview.sources.size() != 1u) {
+      return QVec3{};
+    }
+    const std::vector<QMat4> &transforms =
+        preview.sources.front().generated_world_transforms;
+    EXPECT_EQ(transforms.size(), 7u);
+    return transforms.size() == 7u ? transform_point(transforms[3], {})
+                                   : QVec3{};
+  };
+
+  const RadialArrayPreviewState initial = tool.preview_state();
+  expect_vec3_near(outer_ring_origin(initial), {4.5f, 0.0f, 0.0f});
+
+  ASSERT_TRUE(
+      editor.tools()
+          .set_setting("radial_array", "radial_array.repeat_spacing", 0.0)
+          .ok());
+  const RadialArrayPreviewState collapsed = tool.preview_state();
+  EXPECT_GT(collapsed.revision, initial.revision);
+  expect_vec3_near(outer_ring_origin(collapsed), {2.0f, 0.0f, 0.0f});
+
+  ASSERT_TRUE(
+      editor.tools()
+          .set_setting("radial_array", "radial_array.repeat_spacing", 1.25)
+          .ok());
+  const RadialArrayPreviewState expanded = tool.preview_state();
+  EXPECT_GT(expanded.revision, collapsed.revision);
+  expect_vec3_near(outer_ring_origin(expanded), {3.25f, 0.0f, 0.0f});
+
+  const QuaderToolSettingsTarget settings = editor.tools().active_settings();
+  const auto spacing = std::find_if(
+      settings.controls.begin(), settings.controls.end(),
+      [](const QuaderToolSettingControl &control) {
+        return control.id == "radial_array.repeat_spacing";
+      });
+  ASSERT_NE(spacing, settings.controls.end());
+  EXPECT_DOUBLE_EQ(spacing->number_value, 1.25);
+}
+
+TEST(RadialArrayToolServiceTests,
+     MaterialRevisionChangeInvalidatesTheLivePreviewSession) {
+  ProjectSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_project_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> source =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Radial Material Revision Source");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  const QuaderApiResult<QuaderAssetRef> material =
+      editor.assets().add_material(QuaderMaterialArgs{
+          .name = "Radial Revision Material",
+      });
+  ASSERT_TRUE(material.ok()) << material.error_message();
+  ASSERT_TRUE(editor.assets()
+                  .assign_material_to_entity(source.value().entity,
+                                             material.value().id)
+                  .ok());
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::RadialArray).ok());
+  ASSERT_TRUE(session.radial_array().has_session());
+
+  ASSERT_TRUE(editor.assets()
+                  .set_material_base_color(material.value().id,
+                                           {0.2f, 0.4f, 0.6f})
+                  .ok());
+  const CommandResult refresh = session.radial_array().refresh();
+  EXPECT_TRUE(refresh.changed);
+  EXPECT_FALSE(session.radial_array().has_session());
+}
+
 TEST(SceneRenderBridgeTests, UsesDepthStampedFaceFillForOverlayTriangles) {
   const std::string bridge_source =
       read_source_file("src/render/scene_render_bridge.cpp");
@@ -4360,7 +4989,8 @@ TEST(AppStartupTests, DelegatesDefaultAssetsAndUsesSessionReadView) {
       "ui_.install_runtime_hooks(*editor_, project_session_.scene(), "
       "project_session_.assets(), project_session_.modeling(), "
       "project_session_.selection(), project_session_.pivot(), "
-      "project_session_.linear_array(), default_material_)"));
+      "project_session_.linear_array(), project_session_.radial_array(), "
+      "project_session_.point_placement(), default_material_)"));
   EXPECT_NE(app_source.find("ui_.prepare_viewports(render_bridge_, "
                             "render_overlay_snapshot_cache_)"),
             std::string::npos);
@@ -4543,6 +5173,14 @@ TEST(SceneDocumentTests, TracksDomainRevisionsForOverlayCacheInvalidation) {
       scene.visibility_revision();
   ASSERT_TRUE(scene.set_visible(entity, false));
   EXPECT_EQ(scene.visibility_revision(), unchanged_visibility_revision);
+
+  const std::uint64_t selectable_revision = scene.visibility_revision();
+  ASSERT_TRUE(scene.set_selectable(entity, false));
+  EXPECT_GT(scene.visibility_revision(), selectable_revision);
+  const std::uint64_t unchanged_selectable_revision =
+      scene.visibility_revision();
+  ASSERT_TRUE(scene.set_selectable(entity, false));
+  EXPECT_EQ(scene.visibility_revision(), unchanged_selectable_revision);
 
   scene.set_mesh(entity, MeshComponent{.mesh = 7});
   EXPECT_GT(scene.mesh_binding_revision(), mesh_before);
@@ -8210,7 +8848,7 @@ TEST(ProjectSessionTests,
 }
 
 TEST(ProjectSessionTests,
-     ReplaceDocumentClearsPersistentQuickAndLinearArrayToolState) {
+     ReplaceDocumentClearsPersistentQuickAndArrayToolState) {
   {
     ProjectSession session;
     QuaderEditorApi editor(
@@ -8278,6 +8916,39 @@ TEST(ProjectSessionTests,
     session.replace_document(std::move(replacement));
 
     EXPECT_FALSE(session.linear_array().has_session());
+    EXPECT_FALSE(session.native_tools().has_pending_tool());
+    EXPECT_TRUE(editor.render().tool_preview_meshes().empty());
+    EXPECT_FALSE(editor.tools().commit_active_tool_preview().ok());
+  }
+
+  {
+    ProjectSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_project_session(session));
+    const QuaderApiResult<QuaderModelingObjectRef> source =
+        editor.modeling().create_box(
+            QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                         .max = {1.0f, 1.0f, 1.0f}},
+            "Old Radial Array Source");
+    ASSERT_TRUE(source.ok()) << source.error_message();
+    ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::RadialArray).ok());
+    ASSERT_TRUE(session.radial_array()
+                    .update_center_candidate({}, {0.0f, 1.0f, 0.0f}, 1.0)
+                    .ok);
+    ASSERT_TRUE(session.radial_array().lock_center().ok);
+    ASSERT_TRUE(session.radial_array().preview_state().active);
+
+    ProjectDocument replacement;
+    const EntityId replacement_light = replacement.scene().create_entity_with_id(
+        source.value().entity, "Replacement Radial Light", EntityKind::Light);
+    ASSERT_EQ(replacement_light, source.value().entity);
+    replacement.scene().set_light(replacement_light,
+                                  LightComponent{.type = LightType::Point});
+
+    session.replace_document(std::move(replacement));
+
+    EXPECT_FALSE(session.radial_array().has_session());
     EXPECT_FALSE(session.native_tools().has_pending_tool());
     EXPECT_TRUE(editor.render().tool_preview_meshes().empty());
     EXPECT_FALSE(editor.tools().commit_active_tool_preview().ok());
@@ -11518,6 +12189,88 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(box_preview.has_value());
   EXPECT_NE(mesh_position_fingerprint(*front_preview),
             mesh_position_fingerprint(*box_preview));
+}
+
+TEST(ModelingSessionServiceTests,
+     RepeatedLiveBoxSelectionDoesNotReprojectStableMeshGeometry) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+
+  quader_poly::CubePrimitiveSpec dense_cube;
+  dense_cube.width = 2.0f;
+  dense_cube.height = 2.0f;
+  dense_cube.depth = 2.0f;
+  dense_cube.width_segments = 24;
+  dense_cube.height_segments = 24;
+  dense_cube.depth_segments = 24;
+  const ModelingCreateBoxResult mesh = service.create_mesh({
+      .document = quader_poly::make_cube(dense_cube),
+      .name = "Live Box Selection Dense Cube",
+  });
+  ASSERT_TRUE(mesh.ok) << mesh.message;
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
+  ASSERT_TRUE(service.clear_selection().ok);
+
+  const ModelingSelectionBoxBaseline baseline =
+      service.capture_box_selection_baseline();
+  ModelingBoxSelectRequest request{
+      .camera = test_orthographic_viewport_camera(),
+      .start = {35.0f, 35.0f},
+      .end = {65.0f, 65.0f},
+      .edit = ModelingSelectionEdit::Replace,
+      .rule = ModelingBoxSelectionRule::Crossing,
+  };
+  const std::uint64_t builds_before =
+      service.transformed_picking_projection_build_count();
+  const std::uint64_t rectangle_builds_before =
+      service.rectangle_picking_projection_build_count();
+  const std::uint64_t resolutions_before =
+      service.rectangle_selection_resolution_build_count();
+  const ModelingSelectionSummary first = service.box_select(request, baseline);
+  ASSERT_GT(first.selected_face_count, 0u);
+  const std::uint64_t builds_after_first =
+      service.transformed_picking_projection_build_count();
+  EXPECT_EQ(builds_after_first, builds_before + 1u);
+  const std::uint64_t rectangle_builds_after_first =
+      service.rectangle_picking_projection_build_count();
+  const std::uint64_t resolutions_after_first =
+      service.rectangle_selection_resolution_build_count();
+  EXPECT_EQ(rectangle_builds_after_first, rectangle_builds_before + 1u);
+  EXPECT_EQ(resolutions_after_first, resolutions_before + 1u);
+
+  for (int sample = 0; sample < 32; ++sample) {
+    request.end.x = 65.0f + static_cast<float>(sample) * 0.01f;
+    const ModelingSelectionSummary repeated =
+        service.box_select(request, baseline);
+    EXPECT_EQ(repeated.selected_face_count, first.selected_face_count);
+  }
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            builds_after_first);
+  EXPECT_EQ(service.rectangle_picking_projection_build_count(),
+            rectangle_builds_after_first);
+  EXPECT_EQ(service.rectangle_selection_resolution_build_count(),
+            resolutions_after_first);
+
+  request.camera.orthographic_size += 1.0;
+  (void)service.box_select(request, baseline);
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            builds_after_first);
+  EXPECT_EQ(service.rectangle_picking_projection_build_count(),
+            rectangle_builds_after_first + 1u);
+  EXPECT_EQ(service.rectangle_selection_resolution_build_count(),
+            resolutions_after_first + 1u);
+
+  ASSERT_TRUE(scene.set_selectable(mesh.object.entity, false));
+  const ModelingSelectionSummary unselectable =
+      service.box_select(request, baseline);
+  EXPECT_EQ(unselectable.selected_face_count, 0u);
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            builds_after_first + 1u);
+  EXPECT_EQ(service.rectangle_picking_projection_build_count(),
+            rectangle_builds_after_first + 2u);
+  EXPECT_EQ(service.rectangle_selection_resolution_build_count(),
+            resolutions_after_first + 2u);
 }
 
 TEST(ModelingSessionServiceTests,

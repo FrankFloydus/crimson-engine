@@ -128,6 +128,7 @@ struct QuaderToolSettingsTarget {
   std::string tool_id;
   std::string title;
   std::vector<QuaderToolSettingControl> controls;
+  bool apply_visible = false;
   bool can_apply = false;
   bool can_cancel = false;
 };

@@ -22,9 +22,9 @@ TEST(QdrModelingRuntimeOperationEdgeBevelTests, EdgeBevelOperationSchemaNormaliz
 	EXPECT_TRUE(std::string(bevel.profile.id) == "profile");
 	EXPECT_TRUE(std::string(bevel.segments.id) == "segments");
 	EXPECT_NEAR(bevel.width.default_value, 1.0, 0.0001);
-	EXPECT_NEAR(bevel.width.minimum, 0.0625, 0.0001);
-	EXPECT_NEAR(bevel.width.maximum, 16384.0, 0.0001);
-	EXPECT_NEAR(bevel.width.step, 1.0, 0.0001);
+	EXPECT_NEAR(bevel.width.minimum, 0.0, 0.0001);
+	EXPECT_NEAR(bevel.width.maximum, 512.0, 0.0001);
+	EXPECT_NEAR(bevel.width.step, 0.001, 0.0001);
 	EXPECT_NEAR(bevel.profile.default_value, 0.5, 0.0001);
 	EXPECT_TRUE(bevel.segments.default_value == 1);
 	EXPECT_TRUE(bevel.segments.maximum == 16);
@@ -44,6 +44,11 @@ TEST(QdrModelingRuntimeOperationEdgeBevelTests, EdgeBevelOperationSchemaNormaliz
 	EXPECT_TRUE(normalized.segments == bevel.segments.minimum);
         EXPECT_TRUE(normalized.profile_type ==
                     static_cast<int>(quader_poly::BevelProfileType::Offset));
+
+	const quader_editor_core::EdgeBevelOperationSettings low =
+		quader_editor_core::normalize_edge_bevel_operation_settings(
+			{ -1.0, 0.5, 0, 1 });
+	EXPECT_NEAR(low.width, 0.0, 0.0001);
 
         const quader_editor_core::EdgeBevelOperationSettings high =
 		quader_editor_core::normalize_edge_bevel_operation_settings({ 20000.0, 2.0, 999, 999 });

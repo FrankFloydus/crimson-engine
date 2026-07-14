@@ -332,6 +332,42 @@ viewport_input_action_binding_catalog() {
           .weight = 40,
           .action = ViewportInputActionKind::ToolConstraintZ,
       },
+      {
+          .target_id = viewport_input_action_target_id(
+              "linear_array.increase_copies"),
+          .shortcut = "Shift+WheelUp",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "activeTool.linear_array",
+          .weight = 40,
+          .action = ViewportInputActionKind::LinearArrayIncreaseCopies,
+      },
+      {
+          .target_id = viewport_input_action_target_id(
+              "linear_array.decrease_copies"),
+          .shortcut = "Shift+WheelDown",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "activeTool.linear_array",
+          .weight = 40,
+          .action = ViewportInputActionKind::LinearArrayDecreaseCopies,
+      },
+      {
+          .target_id = viewport_input_action_target_id(
+              "radial_array.increase_copies"),
+          .shortcut = "Shift+WheelUp",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "activeTool.radial_array",
+          .weight = 40,
+          .action = ViewportInputActionKind::RadialArrayIncreaseCopies,
+      },
+      {
+          .target_id = viewport_input_action_target_id(
+              "radial_array.decrease_copies"),
+          .shortcut = "Shift+WheelDown",
+          .when = "viewportFocus && !textInputActive && !navigation.active && "
+                  "activeTool.radial_array",
+          .weight = 40,
+          .action = ViewportInputActionKind::RadialArrayDecreaseCopies,
+      },
   };
 }
 

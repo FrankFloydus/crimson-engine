@@ -10,6 +10,7 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_query_api.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
+#include "editor/array/radial_array_tool_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
@@ -46,20 +47,46 @@ void append_overlay_frame(ViewportOverlayFrame &frame,
 
 void append_linear_array_preview(
     const ProjectSession &session,
+    const LinearArrayPreviewState &preview,
     std::vector<ModelingToolPreviewMesh> &previews) {
-  const LinearArrayPreviewState preview = session.linear_array().preview_state();
-  const MeshAsset *mesh =
-      preview.active ? session.assets().mesh(preview.mesh) : nullptr;
-  if (mesh == nullptr) {
+  if (!preview.active) {
     return;
   }
-  previews.push_back(ModelingToolPreviewMesh{
-      .source_entity = preview.source_entity,
-      .material = preview.material,
-      .mesh = *mesh,
-      .transform = {},
-      .instance_transforms = preview.copy_world_transforms,
-  });
+  for (const LinearArrayPreviewSource &source : preview.sources) {
+    const MeshAsset *mesh = session.assets().mesh(source.mesh);
+    if (mesh == nullptr || source.generated_world_transforms.empty()) {
+      continue;
+    }
+    previews.push_back(ModelingToolPreviewMesh{
+        .source_entity = source.source_entity,
+        .material = source.material,
+        .mesh = *mesh,
+        .transform = {},
+        .instance_transforms = source.generated_world_transforms,
+    });
+  }
+}
+
+void append_radial_array_preview(
+    const ProjectSession &session,
+    const RadialArrayPreviewState &preview,
+    std::vector<ModelingToolPreviewMesh> &previews) {
+  if (!preview.active) {
+    return;
+  }
+  for (const RadialArrayPreviewSource &source : preview.sources) {
+    const MeshAsset *mesh = session.assets().mesh(source.mesh);
+    if (mesh == nullptr || source.generated_world_transforms.empty()) {
+      continue;
+    }
+    previews.push_back(ModelingToolPreviewMesh{
+        .source_entity = source.source_entity,
+        .material = source.material,
+        .mesh = *mesh,
+        .transform = {},
+        .instance_transforms = source.generated_world_transforms,
+    });
+  }
 }
 
 } // namespace
@@ -81,9 +108,37 @@ QuaderApiVoidResult
 QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
                                                  SceneRenderBridge &bridge) {
   const ProjectSession &project = read_project_session(api.session_);
+  const LinearArrayPreviewState &linear_preview =
+      project.linear_array().preview_state();
+  const RadialArrayPreviewState &radial_preview =
+      project.radial_array().preview_state();
+
+  std::uint8_t native_array_kind = 0;
+  std::uint64_t native_array_revision = 0;
+  const std::uint64_t native_array_asset_revision =
+      project.assets().revision();
+  if (linear_preview.active != radial_preview.active) {
+    native_array_kind = linear_preview.active ? 1u : 2u;
+    native_array_revision = linear_preview.active ? linear_preview.revision
+                                                  : radial_preview.revision;
+  }
+  if (native_array_kind != 0u &&
+      api.native_array_preview_sync_bridge_ == &bridge &&
+      api.native_array_preview_bridge_submission_revision_ ==
+          bridge.tool_preview_submission_revision() &&
+      api.native_array_preview_kind_ == native_array_kind &&
+      api.native_array_preview_revision_ == native_array_revision &&
+      api.native_array_preview_asset_revision_ ==
+          native_array_asset_revision) {
+    return api.runtime_status("Render tool previews unchanged.");
+  }
+
   std::vector<ModelingToolPreviewMesh> modeling_preview_meshes =
       project.modeling().tool_preview_meshes();
-  append_linear_array_preview(project, modeling_preview_meshes);
+  append_linear_array_preview(project, linear_preview,
+                              modeling_preview_meshes);
+  append_radial_array_preview(project, radial_preview,
+                              modeling_preview_meshes);
   const ProjectSessionReadView session = project.read_view();
   std::vector<ToolPreviewMesh> render_preview_meshes;
   render_preview_meshes.reserve(modeling_preview_meshes.size());
@@ -101,6 +156,20 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(QuaderRenderApi &api,
   bridge.set_tool_preview_meshes(
       build_render_tool_preview_snapshot(render_preview_meshes,
                                          session.assets));
+  if (native_array_kind != 0u) {
+    api.native_array_preview_sync_bridge_ = &bridge;
+    api.native_array_preview_bridge_submission_revision_ =
+        bridge.tool_preview_submission_revision();
+    api.native_array_preview_revision_ = native_array_revision;
+    api.native_array_preview_asset_revision_ = native_array_asset_revision;
+    api.native_array_preview_kind_ = native_array_kind;
+  } else {
+    api.native_array_preview_sync_bridge_ = nullptr;
+    api.native_array_preview_bridge_submission_revision_ = 0;
+    api.native_array_preview_revision_ = 0;
+    api.native_array_preview_asset_revision_ = 0;
+    api.native_array_preview_kind_ = 0;
+  }
   return api.runtime_status("Render tool previews synchronized.");
 }
 
@@ -175,7 +244,10 @@ QuaderRenderApi::tool_preview_meshes() const {
   const ProjectSession &session = read_project_session(session_);
   std::vector<ModelingToolPreviewMesh> previews =
       session.modeling().tool_preview_meshes();
-  append_linear_array_preview(session, previews);
+  append_linear_array_preview(session, session.linear_array().preview_state(),
+                              previews);
+  append_radial_array_preview(session, session.radial_array().preview_state(),
+                              previews);
   std::vector<QuaderToolPreviewMesh> result;
   result.reserve(previews.size());
   for (const ModelingToolPreviewMesh &preview : previews) {
