@@ -123,9 +123,15 @@ mirror_ray_settings(const ModelingToolRayEvent &event, bool dragging) {
 }
 
 quader_editor_core::BoxRayRuntimeCommandSettings
-box_ray_settings(const ModelingBoxToolEvent &event) {
+box_ray_settings(
+    const ModelingBoxToolEvent &event,
+    std::optional<quader_editor_core::PickHitRecord> resolved_surface_hit =
+        std::nullopt,
+    bool surface_hit_resolved = false) {
   quader_editor_core::BoxRayRuntimeCommandSettings settings;
   settings.ray = to_runtime(event.ray);
+  settings.resolved_surface_hit = std::move(resolved_surface_hit);
+  settings.surface_hit_resolved = surface_hit_resolved;
   settings.grid_size = event.grid_size;
   settings.snap_enabled = event.snap_enabled;
   return settings;
@@ -342,17 +348,21 @@ quader_editor_core::EditorRuntimeCommand RuntimeToolCommandService::cancel_poly(
 }
 
 quader_editor_core::EditorRuntimeCommand
-RuntimeToolCommandService::update_box_hover(const ModelingBoxToolEvent &event) {
+RuntimeToolCommandService::update_box_hover(
+    const ModelingBoxToolEvent &event,
+    std::optional<quader_editor_core::PickHitRecord> resolved_surface_hit) {
   return make_command(quader_editor_core::EditorRuntimeCommandId::UpdateBoxHover,
-                      box_ray_settings(event));
+                      box_ray_settings(event, std::move(resolved_surface_hit),
+                                       true));
 }
 
 quader_editor_core::EditorRuntimeCommand
 RuntimeToolCommandService::begin_box_footprint(
-    const ModelingBoxToolEvent &event) {
+    const ModelingBoxToolEvent &event,
+    std::optional<quader_editor_core::PickHitRecord> resolved_surface_hit) {
   return make_command(
       quader_editor_core::EditorRuntimeCommandId::BeginBoxFootprint,
-      box_ray_settings(event));
+      box_ray_settings(event, std::move(resolved_surface_hit), true));
 }
 
 quader_editor_core::EditorRuntimeCommand

@@ -3319,6 +3319,12 @@ public:
   }
 
   [[nodiscard]] std::optional<quader_editor_core::PickHitRecord>
+  pick_box_surface(const ModelingBoxToolEvent &event) const {
+    return selection_service_.pick_surface_hit(session_, scene_,
+                                               object_registry_, event.ray);
+  }
+
+  [[nodiscard]] std::optional<quader_editor_core::PickHitRecord>
   knife_pick_target(const ModelingToolRayEvent &event,
                     int target_object_id = -1) const {
     constexpr std::array kModes{
@@ -3884,13 +3890,15 @@ public:
   }
 
   ModelingBoxPreview update_box_hover(const ModelingBoxToolEvent &event) {
-    return execute_box_preview_command(
-        RuntimeToolCommandService::update_box_hover(event), event.snap_enabled);
+    return execute_box_preview_command(RuntimeToolCommandService::update_box_hover(
+                                           event, pick_box_surface(event)),
+                                       event.snap_enabled);
   }
 
   ModelingBoxPreview begin_box_footprint(const ModelingBoxToolEvent &event) {
     ModelingBoxPreview preview = execute_box_preview_command(
-        RuntimeToolCommandService::begin_box_footprint(event),
+        RuntimeToolCommandService::begin_box_footprint(
+            event, pick_box_surface(event)),
         event.snap_enabled);
     if (preview.ok) {
       selection_projection_service_.restore_scene_selection(

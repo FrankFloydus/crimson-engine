@@ -193,16 +193,24 @@ bool box_runtime_status_changed(const EditorRuntimeStatus& before, const EditorR
 		before.hover_active != after.hover_active;
 }
 
-std::optional<PickHitRecord> box_surface_hit(EditorSession& session, const quader_poly::Ray& ray)
+std::optional<PickHitRecord> box_surface_hit(
+		EditorSession& session,
+		const BoxRayRuntimeCommandSettings& settings)
 {
+	if (settings.surface_hit_resolved) {
+		return settings.resolved_surface_hit;
+	}
 	quader_poly::PickOptions options;
-        options.mode = quader_poly::SelectionMode::Face;
-        return session.pick_nearest({ ray, options });
+	options.mode = quader_poly::SelectionMode::Face;
+	return session.pick_nearest({ settings.ray, options });
 }
 
-BoxToolStateResult set_box_construction_plane_from_ray(EditorSession& session, EditorRuntime& runtime, const quader_poly::Ray& ray)
+BoxToolStateResult set_box_construction_plane_from_ray(
+		EditorSession& session,
+		EditorRuntime& runtime,
+		const BoxRayRuntimeCommandSettings& settings)
 {
-	const std::optional<PickHitRecord> hit = box_surface_hit(session, ray);
+	const std::optional<PickHitRecord> hit = box_surface_hit(session, settings);
 	if (hit.has_value() && quader::length_squared(hit->local_normal) > 0.000001F) {
 		return runtime.set_box_construction_plane(hit->local_position, hit->local_normal);
 	}
@@ -241,8 +249,9 @@ CommandResult update_box_hover(
           return {true, false, ""};
         }
 
-        runtime.set_box_grid_size(settings.grid_size);
-	const BoxToolStateResult plane_result = set_box_construction_plane_from_ray(session, runtime, settings.ray);
+	runtime.set_box_grid_size(settings.grid_size);
+	const BoxToolStateResult plane_result =
+		set_box_construction_plane_from_ray(session, runtime, settings);
 	if (!plane_result.ok) {
 		return box_state_result_to_command(before, runtime, plane_result, "Box hover failed.");
 	}
@@ -265,7 +274,8 @@ CommandResult begin_box_footprint(
 	const EditorRuntimeStatus before = runtime.status();
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 	runtime.set_box_grid_size(settings.grid_size);
-	const BoxToolStateResult plane_result = set_box_construction_plane_from_ray(session, runtime, settings.ray);
+	const BoxToolStateResult plane_result =
+		set_box_construction_plane_from_ray(session, runtime, settings);
 	if (!plane_result.ok) {
 		return box_state_result_to_command(before, runtime, plane_result, "Box footprint failed.");
 	}

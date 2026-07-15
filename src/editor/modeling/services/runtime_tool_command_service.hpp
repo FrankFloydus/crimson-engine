@@ -91,9 +91,13 @@ public:
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand cancel_poly();
 
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
-  update_box_hover(const ModelingBoxToolEvent &event);
+  update_box_hover(
+      const ModelingBoxToolEvent &event,
+      std::optional<quader_editor_core::PickHitRecord> resolved_surface_hit);
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
-  begin_box_footprint(const ModelingBoxToolEvent &event);
+  begin_box_footprint(
+      const ModelingBoxToolEvent &event,
+      std::optional<quader_editor_core::PickHitRecord> resolved_surface_hit);
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
   update_box_footprint(const ModelingBoxToolEvent &event);
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand

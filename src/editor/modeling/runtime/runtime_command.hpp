@@ -193,6 +193,10 @@ struct ViewFlipRuntimeCommandSettings {
  */
 struct BoxRayRuntimeCommandSettings {
 	quader_poly::Ray ray;
+	// Authoritative only when surface_hit_resolved is true; an empty value then
+	// represents a host-resolved miss and must not fall back to raw geometry.
+	std::optional<PickHitRecord> resolved_surface_hit;
+	bool surface_hit_resolved = false;
 	double grid_size = 1.0;
 	bool snap_enabled = true;
 };

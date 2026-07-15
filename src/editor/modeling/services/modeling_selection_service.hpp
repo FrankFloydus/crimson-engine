@@ -102,6 +102,11 @@ public:
                  const SceneDocument &scene,
                  const ModelingObjectRuntimeMap &object_map,
                  const ModelingPickSelectRequest &request) const;
+  [[nodiscard]] std::optional<quader_editor_core::PickHitRecord>
+  pick_surface_hit(const quader_editor_core::EditorSession &session,
+                   const SceneDocument &scene,
+                   const ModelingObjectRuntimeMap &object_map,
+                   const ModelingRay &ray) const;
   [[nodiscard]] quader_editor_core::SelectionHoverUpdateResult
   selection_hover(
       const quader_editor_core::EditorSession &session,

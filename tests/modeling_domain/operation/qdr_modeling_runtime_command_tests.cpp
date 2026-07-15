@@ -1209,6 +1209,31 @@ TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeDrivesBoxFootprin
 	EXPECT_TRUE(session.history_status().can_undo);
 }
 
+TEST(QdrModelingRuntimeCommandTests,
+     ResolvedBoxSurfaceMissDoesNotFallBackToRawSessionGeometry) {
+	qec::EditorSession session;
+	ASSERT_TRUE(session.create_box_from_bounds(
+		{ -1.0F, -1.0F, -1.0F }, { 1.0F, 1.0F, 1.0F }).changed);
+	qec::EditorRuntime runtime;
+	qec::EditorRuntimeCommand command = box_ray_command(
+		qec::EditorRuntimeCommandId::UpdateBoxHover,
+		{ { 0.0F, 2.0F, 5.0F }, { 0.0F, -1.5F, -4.0F } }, false);
+	auto& settings =
+		std::get<qec::BoxRayRuntimeCommandSettings>(command.settings);
+	settings.surface_hit_resolved = true;
+	settings.resolved_surface_hit.reset();
+
+	const qec::EditorRuntimeCommandResult result =
+		qec::execute_runtime_command(session, runtime, command);
+	ASSERT_TRUE(result.command.ok);
+	const qec::BoxPreviewDescriptor preview =
+		runtime.box_preview_descriptor(false);
+	ASSERT_TRUE(preview.ok);
+	EXPECT_NEAR(preview.normal.x, 0.0F, 0.0001F);
+	EXPECT_NEAR(preview.normal.y, 1.0F, 0.0001F);
+	EXPECT_NEAR(preview.normal.z, 0.0F, 0.0001F);
+}
+
 TEST(QdrModelingRuntimeCommandTests, EditorRuntimeCommandFacadeCreatesABoxFromBoundsThroughHistory) {
 	qec::EditorSession session;
 	qec::EditorRuntime runtime;

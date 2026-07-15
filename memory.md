@@ -4580,6 +4580,25 @@ Verification:
   passes 6/6, including the native app, modeling domain, SDK consumer, SDK parity, SDK-only
   configure/build, and guardrail targets.
 
+## 2026-07-15 - Primitive Placement Uses Scene-Aware Surface Hits
+
+Invariant:
+
+- Create Primitive hover and footprint-begin resolve surfaces through the
+  native scene-aware picking projection. Hidden or non-selectable entities are
+  excluded, world and hierarchy transforms are applied, and back-facing/open
+  mesh planes remain valid construction surfaces.
+- The runtime command receives both an optional resolved world-space hit and
+  an explicit resolution flag. A host-resolved miss must fall back to the
+  ground plane and must never re-query raw modeling geometry, which may still
+  contain hidden objects or authored coordinates from before a scene transform.
+- Continuous hover uses the selection owner's cached local face geometry plus
+  object transforms; it does not rebuild world-baked triangles every frame.
+
+Owners: `ModelingSelectionService::pick_surface_hit`,
+`RuntimeToolCommandService`, and the Box runtime command seam. Regressions live
+in `PrimitiveCreationToolServiceTests` and `QdrModelingRuntimeCommandTests`.
+
 ## 2026-07-15 - Cross-Domain Stability And Transaction Boundaries
 
 Invariant:

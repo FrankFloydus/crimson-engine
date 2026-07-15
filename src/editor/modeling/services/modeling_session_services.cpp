@@ -1253,6 +1253,28 @@ std::optional<int> ModelingSelectionService::pick_object_id(
   return hit->object_id;
 }
 
+std::optional<quader_editor_core::PickHitRecord>
+ModelingSelectionService::pick_surface_hit(
+    const quader_editor_core::EditorSession &session,
+    const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
+    const ModelingRay &ray) const {
+  const std::vector<quader_editor_core::PolygonObject> &cached_objects =
+      cached_local_picking_objects(session, scene, object_registry);
+  quader_poly::PickOptions pick_options =
+      quader_editor_core::selection_pick_options_from_radii(0.0, 0.0);
+  pick_options.mode = quader_poly::SelectionMode::Face;
+  return quader_editor_core::pick_nearest(
+      cached_objects,
+      quader_editor_core::PickRequest{
+          .ray = to_runtime_ray(ray),
+          .options = pick_options,
+      },
+      cached_pick_object_bounds(session, scene, object_registry),
+      cached_local_pick_face_geometry(session, scene, object_registry,
+                                      pick_options),
+      cached_local_picking_transforms(session, scene, object_registry));
+}
+
 quader_editor_core::SelectionHoverUpdateResult
 ModelingSelectionService::selection_hover(
     const quader_editor_core::EditorSession &session,
