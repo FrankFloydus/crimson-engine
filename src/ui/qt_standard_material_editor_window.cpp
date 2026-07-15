@@ -1183,7 +1183,8 @@ void QtStandardMaterialEditorWindow::refresh_labels() {
   properties_group_->setTitle(labels_.properties_group);
   name_label_->setText(labels_.name);
   albedo_label_->setText(labels_.albedo);
-  albedo_button_->setText(labels_.choose_color);
+  albedo_button_->setText({});
+  albedo_button_->setAccessibleName(labels_.albedo);
   roughness_label_->setText(labels_.roughness);
   metallic_label_->setText(labels_.metallic);
   normal_strength_label_->setText(labels_.normal_strength);

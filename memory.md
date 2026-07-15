@@ -4390,6 +4390,9 @@ Invariant:
   square decoded texture previews. Clicking a valid preview opens one retained tool inspector with
   zoom/pan/reset and filename, detected container/RGBA8 interpretation, color space, dimensions,
   and encoded byte size. The browser, editor, and inspector tool windows omit maximize behavior.
+- Staged texture rows display only the native filename; their full source path remains diagnostic
+  metadata. The albedo color swatch is visually text-free while retaining an accessible Albedo
+  name and the localized color-dialog title.
 - Every Standard Material slider is integer-backed at 100 steps per unit with an explicit single
   step of one, so scalar and texture-transform dragging can emit only exact `0.01` increments.
 - Standard Material File actions are text-only like the main app menu. Every texture Browse button

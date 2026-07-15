@@ -1626,16 +1626,8 @@ void UISystem::refresh_standard_material_editor() {
     if (source.pending_texture_sources[index].has_value()) {
       const std::filesystem::path &pending =
           *source.pending_texture_sources[index];
-      std::string label = localization_.text(
-          "ui.standard_material_editor.texture.pending",
-          "Pending: {name}");
-      constexpr std::string_view kNameToken = "{name}";
-      if (const std::size_t token = label.find(kNameToken);
-          token != std::string::npos) {
-        label.replace(token, kNameToken.size(),
-                      pending.filename().string());
-      }
-      target.project_relative_path = QString::fromStdString(label);
+      target.project_relative_path =
+          QString::fromStdWString(pending.filename().wstring());
       target.diagnostic = QString::fromStdWString(pending.wstring());
       continue;
     }
@@ -2271,9 +2263,6 @@ void UISystem::refresh_localized_chrome() {
             .direct_x_normal = text(
                 "ui.standard_material_editor.directx_normal",
                 "DirectX"),
-            .choose_color = text(
-                "ui.standard_material_editor.choose_color",
-                "Choose Color..."),
             .choose_albedo_title = text(
                 "ui.standard_material_editor.choose_albedo_title",
                 "Choose Albedo Color"),

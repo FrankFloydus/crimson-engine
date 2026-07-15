@@ -196,7 +196,6 @@ struct QtStandardMaterialEditorLabels final {
   QString normal_strength = QStringLiteral("Normal Strength");
   QString normal_texture = QStringLiteral("Normal Texture");
   QString direct_x_normal = QStringLiteral("DirectX");
-  QString choose_color = QStringLiteral("Choose Color...");
   QString choose_albedo_title = QStringLiteral("Choose Albedo Color");
   QString browse_texture = QStringLiteral("Browse...");
   QString clear_texture = QStringLiteral("Clear");

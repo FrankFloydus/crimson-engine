@@ -3936,6 +3936,19 @@ TEST(ViewportContextMenuPolicyTests, BlocksModalToolsMissingActionsAndDrags) {
   EXPECT_FALSE(should_open_viewport_context_menu(request));
 }
 
+TEST(StandardMaterialEditorPresentationTests,
+     PendingTexturePathUsesOnlyTheNativeFilename) {
+  const std::string ui_system_source =
+      read_source_file("src/ui/ui_system.cpp");
+
+  EXPECT_NE(ui_system_source.find("pending.filename().wstring()"),
+            std::string::npos);
+  EXPECT_EQ(ui_system_source.find(
+                "ui.standard_material_editor.texture.pending"),
+            std::string::npos);
+  EXPECT_EQ(ui_system_source.find("Pending: {name}"), std::string::npos);
+}
+
 TEST(ViewportContextMenuPolicyTests,
      BlocksCapturedFlyDragEvenWhenCursorReturnsToPressPoint) {
   const ViewportContextMenuOpenRequest request{

@@ -207,6 +207,8 @@ TEST(QtStandardMaterialEditorWindowTests,
                 QStringLiteral("standardMaterialEditor.type")),
             nullptr);
   EXPECT_EQ(albedo->swatch_color(), QColor(205, 127, 50));
+  EXPECT_TRUE(albedo->text().isEmpty());
+  EXPECT_EQ(albedo->accessibleName(), QStringLiteral("Albedo"));
   EXPECT_DOUBLE_EQ(roughness->value(), 0.35);
   EXPECT_DOUBLE_EQ(metallic->value(), 0.8);
   EXPECT_DOUBLE_EQ(normal_strength->value(), 1.25);
@@ -436,6 +438,8 @@ TEST(QtStandardMaterialEditorWindowTests,
       *window, "standardMaterialEditor.environment.pillars_2k");
   QAction *show_background = find_action(
       *window, "standardMaterialEditor.environment.showBackground");
+  EXPECT_EQ(find_action(*window, "standardMaterialEditor.view.showGrid"),
+            nullptr);
   ASSERT_NE(rounded_box, nullptr);
   ASSERT_NE(shading, nullptr);
   ASSERT_NE(reset, nullptr);
