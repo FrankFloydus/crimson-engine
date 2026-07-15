@@ -6,10 +6,13 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/session/project_session.hpp"
 
+#include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/commands/document/document_command_result.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <gtest/gtest.h>
 
@@ -22,6 +25,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace quader;
@@ -80,6 +84,12 @@ std::vector<char> read_file_bytes(const std::filesystem::path &path) {
   EXPECT_TRUE(stream.is_open()) << path.string();
   return {std::istreambuf_iterator<char>(stream),
           std::istreambuf_iterator<char>()};
+}
+
+void expect_vec3_eq(QVec3 actual, QVec3 expected) {
+  EXPECT_FLOAT_EQ(actual.x, expected.x);
+  EXPECT_FLOAT_EQ(actual.y, expected.y);
+  EXPECT_FLOAT_EQ(actual.z, expected.z);
 }
 
 /// Temporarily replaces a manifest file with a directory to force write failure.
@@ -1148,6 +1158,329 @@ TEST(ProjectSessionWorkspace, ActiveSceneApisReportUnavailableWithZeroTabs) {
   const QuaderApiVoidResult undo = editor.history().undo();
   EXPECT_FALSE(undo.ok());
   EXPECT_EQ(undo.error_message(), "No scene is active.");
+}
+
+TEST(ProjectSessionWorkspace,
+     ProjectClipboardPastesLinkedInstancesInSourceSceneWithUndoRedo) {
+  ScopedProjectSessionDirectory temporary("linked-instance-clipboard");
+  ProjectSession project;
+  const ProjectSessionResult created =
+      project.create(temporary.make_empty_child("LinkedInstanceClipboard"));
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(created.scene_session_id.has_value());
+
+  QuaderEditorApi editor(project);
+  const QuaderApiResult<QuaderModelingObjectRef> mesh =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Clipboard Instance Member");
+  ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+  ASSERT_TRUE(editor.modeling().create_instance().ok());
+
+  OpenSceneSession *scene = project.active_scene();
+  ASSERT_NE(scene, nullptr);
+  std::vector<EntityId> selected = scene->session->scene().selected_entities();
+  ASSERT_EQ(selected.size(), 1u);
+  const EntityId source_occurrence = selected.front();
+  const InstanceOccurrenceComponent *source_component =
+      scene->session->scene().instance_occurrence(source_occurrence);
+  ASSERT_NE(source_component, nullptr);
+  const EntityId source_definition = source_component->definition;
+
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(source_occurrence,
+                                 QuaderTransform{
+                                     .position = {7.0f, 2.0f, -5.0f},
+                                     .rotation_euler = {0.0f, 0.4f, 0.0f},
+                                 })
+                  .ok());
+  const TransformComponent source_transform =
+      *scene->session->scene().transform(source_occurrence);
+
+  const QuaderApiVoidResult copied =
+      editor.commands().execute(quader_command::kCopySelection);
+  ASSERT_TRUE(copied.ok()) << copied.error_message();
+  EXPECT_FALSE(copied.changed());
+  const QuaderApiVoidResult pasted =
+      editor.commands().execute(quader_command::kPasteSelection);
+  ASSERT_TRUE(pasted.ok()) << pasted.error_message();
+  ASSERT_TRUE(pasted.changed());
+
+  selected = scene->session->scene().selected_entities();
+  ASSERT_EQ(selected.size(), 1u);
+  const EntityId pasted_occurrence = selected.front();
+  ASSERT_NE(pasted_occurrence, source_occurrence);
+  const InstanceOccurrenceComponent *pasted_component =
+      scene->session->scene().instance_occurrence(pasted_occurrence);
+  ASSERT_NE(pasted_component, nullptr);
+  EXPECT_EQ(pasted_component->definition, source_definition);
+  const TransformComponent *pasted_transform =
+      scene->session->scene().transform(pasted_occurrence);
+  ASSERT_NE(pasted_transform, nullptr);
+  expect_vec3_eq(pasted_transform->position, source_transform.position);
+  expect_vec3_eq(pasted_transform->rotation_euler,
+                 source_transform.rotation_euler);
+  EXPECT_EQ(editor.query().history().undo_label, "Paste Instances");
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_TRUE(scene->session->scene().exists(source_occurrence));
+  EXPECT_FALSE(scene->session->scene().exists(pasted_occurrence));
+  EXPECT_EQ(scene->session->scene().selected_entities(),
+            std::vector<EntityId>{source_occurrence});
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_TRUE(scene->session->scene().exists(pasted_occurrence));
+  EXPECT_EQ(scene->session->scene()
+                .instance_occurrence(pasted_occurrence)
+                ->definition,
+            source_definition);
+  EXPECT_EQ(scene->session->scene().selected_entities(),
+            std::vector<EntityId>{pasted_occurrence});
+}
+
+TEST(ProjectSessionWorkspace,
+     ProjectClipboardImportsIndependentCrossSceneDefinitionWithSharedPayload) {
+  ScopedProjectSessionDirectory temporary("cross-scene-instance-clipboard");
+  ProjectSession project;
+  const ProjectSessionResult created = project.create(
+      temporary.make_empty_child("CrossSceneInstanceClipboard"));
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(created.scene_session_id.has_value());
+  const SceneSessionId source_scene_id = *created.scene_session_id;
+
+  QuaderEditorApi editor(project);
+  const QuaderApiResult<QuaderModelingObjectRef> mesh =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-2.0f, -1.0f, -3.0f},
+                       .max = {2.0f, 1.0f, 3.0f}},
+          "Cross Scene Canonical Member");
+  ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+  ASSERT_TRUE(editor.modeling().create_instance().ok());
+
+  OpenSceneSession *source_scene = project.find(source_scene_id);
+  ASSERT_NE(source_scene, nullptr);
+  const EntityId source_occurrence =
+      source_scene->session->scene().selected_entities().front();
+  const EntityId source_definition =
+      source_scene->session->scene()
+          .instance_occurrence(source_occurrence)
+          ->definition;
+  const EntityId source_member =
+      source_scene->session->scene().children(source_definition).front();
+  const AssetId source_mesh_id =
+      source_scene->session->scene().mesh(source_member)->mesh;
+  const std::shared_ptr<const MeshGeometryPayload> source_payload =
+      source_scene->session->assets().mesh(source_mesh_id)->geometry_payload();
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(source_occurrence,
+                                 QuaderTransform{
+                                     .position = {-4.0f, 3.0f, 9.0f},
+                                     .rotation_euler = {0.2f, 0.5f, -0.1f},
+                                     .scale = {1.5f, 0.75f, 2.0f},
+                                 })
+                  .ok());
+  const QMat4 source_world =
+      source_scene->session->scene().world_transform_matrix(source_occurrence);
+  ASSERT_TRUE(editor.modeling().copy_selection().ok());
+
+  const QuaderApiResult<SceneSessionId> destination_created =
+      editor.scene_documents().new_scene();
+  ASSERT_TRUE(destination_created.ok()) << destination_created.error_message();
+  const SceneSessionId destination_scene_id = destination_created.value();
+  ASSERT_NE(destination_scene_id, source_scene_id);
+
+  const QuaderApiVoidResult pasted = editor.modeling().paste_selection();
+  ASSERT_TRUE(pasted.ok()) << pasted.error_message();
+  ASSERT_TRUE(pasted.changed());
+  OpenSceneSession *destination_scene = project.find(destination_scene_id);
+  ASSERT_NE(destination_scene, nullptr);
+  std::vector<EntityId> selected =
+      destination_scene->session->scene().selected_entities();
+  ASSERT_EQ(selected.size(), 1u);
+  const EntityId destination_occurrence = selected.front();
+  const InstanceOccurrenceComponent *destination_component =
+      destination_scene->session->scene().instance_occurrence(
+          destination_occurrence);
+  ASSERT_NE(destination_component, nullptr);
+  const EntityId destination_definition = destination_component->definition;
+  EXPECT_TRUE(destination_scene->session->scene()
+                  .is_instance_definition_entity(destination_definition));
+  const std::vector<EntityId> destination_members =
+      destination_scene->session->scene().children(destination_definition);
+  ASSERT_EQ(destination_members.size(), 1u);
+  const EntityId destination_member = destination_members.front();
+  const AssetId destination_mesh_id =
+      destination_scene->session->scene().mesh(destination_member)->mesh;
+  const MeshAsset *destination_mesh =
+      destination_scene->session->assets().mesh(destination_mesh_id);
+  ASSERT_NE(destination_mesh, nullptr);
+  EXPECT_EQ(destination_mesh->geometry_payload().get(), source_payload.get());
+  expect_vec3_eq(
+      transform_point(destination_scene->session->scene()
+                          .world_transform_matrix(destination_occurrence),
+                      {}),
+      transform_point(source_world, {}));
+
+  // Cross-scene definitions are independent editor state even though their
+  // immutable geometry payload is shared until a topology edit detaches it.
+  const TransformComponent destination_member_transform =
+      *destination_scene->session->scene().transform(destination_member);
+  TransformComponent source_member_transform =
+      *source_scene->session->scene().transform(source_member);
+  source_member_transform.position.x += 12.0f;
+  ASSERT_TRUE(source_scene->session->document_commands()
+                  .set_transform(source_member, source_member_transform)
+                  .ok);
+  const TransformComponent *destination_member_after =
+      destination_scene->session->scene().transform(destination_member);
+  ASSERT_NE(destination_member_after, nullptr);
+  expect_vec3_eq(destination_member_after->position,
+                 destination_member_transform.position);
+  expect_vec3_eq(destination_member_after->rotation_euler,
+                 destination_member_transform.rotation_euler);
+  expect_vec3_eq(destination_member_after->scale,
+                 destination_member_transform.scale);
+
+  EXPECT_EQ(editor.query().history().undo_label, "Paste Instances");
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_FALSE(destination_scene->session->scene().exists(
+      destination_occurrence));
+  EXPECT_FALSE(destination_scene->session->scene().exists(
+      destination_definition));
+  EXPECT_TRUE(source_scene->session->scene().exists(source_occurrence));
+  EXPECT_TRUE(source_scene->session->scene().exists(source_definition));
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_TRUE(destination_scene->session->scene().exists(
+      destination_occurrence));
+  EXPECT_TRUE(destination_scene->session->scene().exists(
+      destination_definition));
+  EXPECT_EQ(destination_scene->session->scene()
+                .instance_occurrence(destination_occurrence)
+                ->definition,
+            destination_definition);
+}
+
+TEST(ProjectSessionWorkspace,
+     ProjectClipboardKeepsOrdinarySameSceneMeshCopyPasteWorking) {
+  ScopedProjectSessionDirectory temporary("ordinary-modeling-clipboard");
+  ProjectSession project;
+  const ProjectSessionResult created = project.create(
+      temporary.make_empty_child("OrdinaryModelingClipboard"));
+  ASSERT_TRUE(created.ok) << created.message;
+
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.modeling()
+                  .create_box(QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                                           .max = {1.0f, 1.0f, 1.0f}},
+                              "Ordinary Clipboard Mesh")
+                  .ok());
+  OpenSceneSession *scene = project.active_scene();
+  ASSERT_NE(scene, nullptr);
+  ASSERT_EQ(scene->session->modeling().objects().size(), 1u);
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader_command::kCopySelection)
+                  .ok());
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader_command::kPasteSelection)
+                  .ok());
+  EXPECT_EQ(scene->session->modeling().objects().size(), 2u);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(scene->session->modeling().objects().size(), 1u);
+}
+
+TEST(ProjectSessionWorkspace,
+     SceneInstanceEditContextsPersistPerTabAndCleanUpWithTheirScene) {
+  ScopedProjectSessionDirectory temporary("instance-edit-tab-context");
+  const std::filesystem::path original_project =
+      temporary.make_empty_child("InstanceEditTabs");
+  const std::filesystem::path replacement_project =
+      temporary.make_empty_child("InstanceEditTabsReplacement");
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(original_project).ok());
+  editor.scene_documents().set_runtime_hooks({
+      .confirm_dirty_scene =
+          [](const QuaderSceneDocumentInfo &, std::string_view) {
+            return QuaderDirtySceneDecision::Discard;
+          },
+  });
+  const std::optional<SceneSessionId> first_id =
+      editor.scene_documents().active_scene_id();
+  ASSERT_TRUE(first_id.has_value());
+
+  const auto create_and_enter =
+      [&](std::string name) -> std::pair<EntityId, EntityId> {
+    const QuaderApiResult<QuaderModelingObjectRef> mesh =
+        editor.modeling().create_box(
+            QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                         .max = {1.0f, 1.0f, 1.0f}},
+            std::move(name));
+    EXPECT_TRUE(mesh.ok()) << mesh.error_message();
+    const QuaderApiResult<QuaderInstanceCreateResult> created =
+        editor.modeling().create_instance_from_selection();
+    EXPECT_TRUE(created.ok()) << created.error_message();
+    const EntityId occurrence = created.value().occurrence.root.id;
+    const EntityId definition = created.value().definition.root.id;
+    const QuaderApiVoidResult entered =
+        editor.modeling().enter_instance_edit(occurrence);
+    EXPECT_TRUE(entered.ok()) << entered.error_message();
+    return {occurrence, definition};
+  };
+
+  const auto [first_occurrence, first_definition] =
+      create_and_enter("First Tab Instance Member");
+  const QuaderInstanceEditState first_state =
+      editor.modeling().instance_edit_state();
+  ASSERT_TRUE(first_state.active);
+  EXPECT_EQ(first_state.occurrence.scene_session_id, *first_id);
+
+  const QuaderApiResult<SceneSessionId> second_created =
+      editor.scene_documents().new_scene();
+  ASSERT_TRUE(second_created.ok()) << second_created.error_message();
+  const SceneSessionId second_id = second_created.value();
+  EXPECT_FALSE(editor.modeling().instance_edit_state().active);
+  const auto [second_occurrence, second_definition] =
+      create_and_enter("Second Tab Instance Member");
+  const QuaderInstanceEditState second_state =
+      editor.modeling().instance_edit_state();
+  ASSERT_TRUE(second_state.active);
+  EXPECT_EQ(second_state.occurrence.scene_session_id, second_id);
+
+  ASSERT_TRUE(editor.scene_documents().activate(*first_id).ok());
+  const QuaderInstanceEditState restored_first =
+      editor.modeling().instance_edit_state();
+  ASSERT_TRUE(restored_first.active);
+  EXPECT_EQ(restored_first.occurrence.scene_session_id, *first_id);
+  EXPECT_EQ(restored_first.occurrence.id, first_occurrence);
+  EXPECT_EQ(restored_first.definition.id, first_definition);
+
+  ASSERT_TRUE(editor.scene_documents().activate(second_id).ok());
+  const QuaderInstanceEditState restored_second =
+      editor.modeling().instance_edit_state();
+  ASSERT_TRUE(restored_second.active);
+  EXPECT_EQ(restored_second.occurrence.id, second_occurrence);
+  EXPECT_EQ(restored_second.definition.id, second_definition);
+  ASSERT_TRUE(editor.scene_documents().close(second_id).ok());
+  ASSERT_EQ(editor.scene_documents().active_scene_id(), first_id);
+  const QuaderInstanceEditState first_after_sibling_close =
+      editor.modeling().instance_edit_state();
+  ASSERT_TRUE(first_after_sibling_close.active);
+  EXPECT_EQ(first_after_sibling_close.occurrence.id, first_occurrence);
+
+  // Removing the occurrence invalidates and lazily clears only this scene's
+  // transient edit context.
+  ASSERT_TRUE(editor.scene().destroy(first_occurrence).ok());
+  EXPECT_FALSE(editor.modeling().instance_edit_state().active);
+  EXPECT_FALSE(editor.query().entity(first_occurrence).has_value());
+  EXPECT_FALSE(editor.query().entity(first_definition).has_value());
+
+  (void)create_and_enter("Replacement Cleanup Instance Member");
+  ASSERT_TRUE(editor.modeling().instance_edit_state().active);
+  const QuaderApiVoidResult replaced =
+      editor.project().create(replacement_project);
+  ASSERT_TRUE(replaced.ok()) << replaced.error_message();
+  ASSERT_TRUE(replaced.changed());
+  EXPECT_FALSE(editor.modeling().instance_edit_state().active);
 }
 
 } // namespace

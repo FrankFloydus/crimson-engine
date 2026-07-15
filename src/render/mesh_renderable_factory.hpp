@@ -9,6 +9,7 @@
 #include "core/types.hpp"
 #include "math/types.hpp"
 #include "render/mesh_renderable_proxy.hpp"
+#include "render/instance_batch_planner.hpp"
 #include "render/render_layers.hpp"
 #include "render/scene_render_extraction.hpp"
 
@@ -16,6 +17,8 @@
 #include <filament/Scene.h>
 
 #include <cstdint>
+#include <memory>
+#include <span>
 
 namespace quader {
 
@@ -27,11 +30,12 @@ class ViewportSettings;
  */
 class MeshRenderableFactory {
 public:
-    MeshRenderableFactory() = default;
+    MeshRenderableFactory();
     MeshRenderableFactory(const MeshRenderableFactory&) = delete;
     MeshRenderableFactory& operator=(const MeshRenderableFactory&) = delete;
     MeshRenderableFactory(MeshRenderableFactory&&) = delete;
     MeshRenderableFactory& operator=(MeshRenderableFactory&&) = delete;
+    ~MeshRenderableFactory();
 
     void initialize(filament::Engine &engine, filament::Scene &scene,
                     MaterialBindingService &material_binding);
@@ -54,6 +58,24 @@ public:
         const MeshRenderableProxy &prototype, const QMat4 &world_transform,
         std::uint8_t layer_mask = kViewportRenderedSceneLayerMask,
         std::uint8_t channel = kViewportDefaultRenderableChannel);
+    MeshRenderableProxy create_explicit_instances(
+        const RenderMeshAssetSnapshot &mesh,
+        const RenderMaterialBindingSnapshot *material,
+        MeshPrimitiveSpan primitive, std::span<const QMat4> world_transforms,
+        const RenderInstanceBounds &world_bounds, bool cast_shadows,
+        bool receive_shadows, bool double_sided, std::uint8_t layer_mask,
+        bool editor_unlit = false, bool depth_only = false,
+        std::uint8_t channel = kViewportDefaultRenderableChannel,
+        std::uint8_t presentation_flags = 0u);
+    MeshRenderableProxy create_instance_selection_fill(
+        const RenderMeshAssetSnapshot &mesh, filament::Material &material,
+        std::span<const QMat4> world_transforms,
+        const RenderInstanceBounds &world_bounds, std::uint32_t color,
+        std::uint16_t blend_order);
+    bool update_explicit_instances(
+        const MeshRenderableProxy &proxy,
+        std::span<const QMat4> world_transforms,
+        const RenderInstanceBounds &world_bounds);
     void update_transform(const MeshRenderableProxy &proxy,
                           const QMat4 &world_transform);
     void update_surface_grid(const MeshRenderableProxy &proxy,
@@ -66,10 +88,27 @@ public:
     static std::uint64_t mesh_asset_signature(std::uint64_t hash,
                                               const MeshAsset &mesh);
 
+    /// Reports shared GPU geometry resources, reuse, and upload bytes.
+    struct GeometryCacheStats final {
+      std::size_t resource_count = 0u;
+      std::uint64_t cache_hit_count = 0u;
+      std::uint64_t upload_count = 0u;
+      std::uint64_t uploaded_vertex_bytes = 0u;
+      std::uint64_t uploaded_index_bytes = 0u;
+    };
+
+    [[nodiscard]] GeometryCacheStats geometry_cache_stats() const;
+
   private:
+    struct GeometryCacheState;
+    bool acquire_geometry(const RenderMeshAssetSnapshot &mesh,
+                          MeshRenderableProxy &proxy);
+    void release_geometry(MeshRenderableProxy &proxy);
+
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
     MaterialBindingService *material_binding_ = nullptr;
+    std::unique_ptr<GeometryCacheState> geometry_cache_;
 };
 
 } // namespace quader

@@ -39,6 +39,9 @@ struct ViewportContextMenuHoverRequest {
 
 [[nodiscard]] bool is_viewport_context_menu_click_gesture(
     const ViewportContextMenuOpenRequest &request);
+[[nodiscard]] bool viewport_context_menu_has_available_actions(
+    bool has_modeling_actions, bool can_create_instance,
+    bool can_flatten_instance);
 [[nodiscard]] bool should_open_viewport_context_menu(
     const ViewportContextMenuOpenRequest &request);
 [[nodiscard]] bool should_preserve_viewport_context_menu_hover(

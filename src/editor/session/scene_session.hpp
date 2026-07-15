@@ -8,6 +8,7 @@
 
 #include "editor/commands/document_command_service.hpp"
 #include "editor/history/editor_history_service.hpp"
+#include "editor/instances/instance_edit_context.hpp"
 #include "scene/document/scene_content_document.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
@@ -26,6 +27,7 @@ class ModelingSessionService;
 class NativeViewportToolCoordinator;
 class PivotToolService;
 class RadialArrayToolService;
+class SceneInstanceService;
 class ViewportPointPlacementService;
 
 /**
@@ -93,6 +95,8 @@ public:
   const ModelingSessionService &modeling() const { return *modeling_; }
   EditorSelectionService &selection() { return *selection_; }
   const EditorSelectionService &selection() const { return *selection_; }
+  SceneInstanceService &instances() { return *instances_; }
+  const SceneInstanceService &instances() const { return *instances_; }
   PivotToolService &pivot() { return *pivot_; }
   const PivotToolService &pivot() const { return *pivot_; }
   LinearArrayToolService &linear_array() { return *linear_array_; }
@@ -148,6 +152,8 @@ private:
   std::unique_ptr<AssetCommandService> asset_commands_;
   std::unique_ptr<ModelingSessionService> modeling_;
   std::unique_ptr<EditorSelectionService> selection_;
+  InstanceEditContext instance_edit_context_;
+  std::unique_ptr<SceneInstanceService> instances_;
   std::unique_ptr<PivotToolService> pivot_;
   std::unique_ptr<LinearArrayToolService> linear_array_;
   std::unique_ptr<RadialArrayToolService> radial_array_;

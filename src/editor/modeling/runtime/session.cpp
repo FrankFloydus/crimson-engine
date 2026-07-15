@@ -3601,7 +3601,6 @@ DuplicateObjectsResult duplicate_objects(std::vector<PolygonObject> &objects,
       copy.id = next_object_id++;
       copy.selected = true;
       copy.selection = quader_poly::Selection();
-      translate_document_vertices(copy.document, request.geometry_offset);
       result.duplicate_object_ids.push_back(copy.id);
       result.selected_object_ids.push_back(copy.id);
       objects.push_back(std::move(copy));
@@ -3678,7 +3677,9 @@ CommandResult paste_objects(std::vector<PolygonObject> &objects,
     pasted.id = next_object_id++;
     pasted.selected = true;
     pasted.selection = quader_poly::Selection();
-    translate_document_vertices(pasted.document, paste_delta);
+    if (quader::length_squared(paste_delta) > 0.0000001F) {
+      translate_document_vertices(pasted.document, paste_delta);
+    }
     pasted_ids.push_back(pasted.id);
     objects.push_back(std::move(pasted));
   }

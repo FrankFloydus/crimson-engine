@@ -33,6 +33,21 @@ enum class SelectionMode {
 };
 
 /**
+ * Opaque identity of one immutable authored-topology publication.
+ *
+ * Copies that share topology report the same identity. Selection-only changes
+ * and no-op operations retain it; the first real geometry mutation publishes
+ * a different identity without exposing native storage details.
+ */
+struct PolygonContentIdentity final {
+  std::uint64_t value = 0;
+
+  [[nodiscard]] constexpr bool valid() const noexcept { return value != 0; }
+  friend constexpr bool operator==(const PolygonContentIdentity &,
+                                   const PolygonContentIdentity &) = default;
+};
+
+/**
  * Defines the bounds and material used to create a box document.
  */
 struct BoxSpec {
@@ -84,8 +99,12 @@ public:
 
   [[nodiscard]] std::size_t vertex_count() const;
   [[nodiscard]] std::size_t face_count() const;
+  [[nodiscard]] PolygonContentIdentity content_identity() const noexcept;
   [[nodiscard]] std::uint64_t content_revision() const;
   [[nodiscard]] std::uint64_t selection_revision() const;
+  /** Returns whether two facades currently reference the same immutable topology. */
+  [[nodiscard]] bool
+  shares_topology_with(const PolygonDocument &other) const noexcept;
   [[nodiscard]] std::vector<VertexId> vertex_ids() const;
   [[nodiscard]] std::vector<EdgeKey> edge_ids() const;
   [[nodiscard]] std::vector<FaceId> face_ids() const;

@@ -10,6 +10,7 @@
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
 #include "editor/commands/asset_command_service.hpp"
+#include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
@@ -37,6 +38,7 @@ SceneSession::~SceneSession() = default;
 
 void SceneSession::rebuild_services() {
   QDR_PROFILE_FUNCTION();
+  instance_edit_context_.clear();
   history_ = std::make_unique<EditorHistoryService>();
   document_commands_ = std::make_unique<DocumentCommandService>(
       document_.scene(), *history_, &document_.assets());
@@ -58,14 +60,34 @@ void SceneSession::rebuild_services() {
       });
   selection_ = std::make_unique<EditorSelectionService>(
       document_.scene(), *document_commands_, *modeling_);
+  instances_ = std::make_unique<SceneInstanceService>(
+      document_.scene(), document_.assets(), *document_commands_, *history_,
+      *modeling_, instance_edit_context_, document_.name());
+  modeling_->set_instance_edit_scope_provider([this]() {
+    if (!instances_) {
+      return ModelingInstanceEditScope{};
+    }
+    const SceneInstanceEditState state = instances_->instance_edit_state();
+    return ModelingInstanceEditScope{
+        .occurrence = state.occurrence,
+        .definition = state.definition,
+    };
+  });
+  selection_->set_scene_selection_scope_policy(
+      [this](EntityId entity) {
+        return instances_->resolve_selection_target(entity);
+      },
+      [this](EntityId entity) {
+        return instances_->is_selectable_in_current_scope(entity);
+      });
   pivot_ = std::make_unique<PivotToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_);
   linear_array_ = std::make_unique<LinearArrayToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_,
-      *selection_);
+      *selection_, *instances_);
   radial_array_ = std::make_unique<RadialArrayToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_,
-      *selection_);
+      *selection_, *instances_);
   point_placement_ = std::make_unique<ViewportPointPlacementService>();
   native_tools_ = std::make_unique<NativeViewportToolCoordinator>(
       *pivot_, *linear_array_, *radial_array_, *selection_, *modeling_);
@@ -159,6 +181,7 @@ void SceneSession::replace_document(SceneContentDocument document) {
   const std::uint64_t previous_asset_revision = document_.assets().revision();
   modeling_->clear_transient_state_for_document_replacement();
   native_tools_->reset_transient_state();
+  instance_edit_context_.clear();
   preview_content_checkpoint_.reset();
   document_ = std::move(document);
   {

@@ -363,7 +363,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
           selection.has_value() &&
           !is_component_selection_mode(
               to_modeling_selection_mode(selection->mode)) &&
-          frame.input.modifiers.shift;
+          (frame.input.modifiers.shift || frame.input.modifiers.alt);
       pending_drag_ = PendingGizmoDrag{
           .begin_request =
               {

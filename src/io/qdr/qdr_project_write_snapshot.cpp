@@ -21,13 +21,9 @@ mesh_asset_write_snapshot(AssetId id, const MeshAsset &mesh) {
       .name = mesh.name,
       .has_stable_cpu_topology = mesh.has_stable_cpu_topology,
       .has_authored_polygon_document = mesh.has_authored_polygon_document,
-      .vertices = mesh.vertices,
-      .indices = mesh.indices,
-      .primitives = mesh.primitives,
+      .geometry = mesh.geometry_payload(),
+      .authored_polygon_document = mesh.authored_polygon_document,
   };
-  if (mesh.has_authored_polygon_document && mesh.authored_polygon_document) {
-    snapshot.authored_polygon_document = *mesh.authored_polygon_document;
-  }
   return snapshot;
 }
 
@@ -61,6 +57,14 @@ entity_write_snapshot(const SceneDocument &scene, EntityId entity) {
   }
   if (const LightComponent *light = scene.light(entity)) {
     snapshot.light = *light;
+  }
+  if (const InstanceDefinitionComponent *definition =
+          scene.instance_definition(entity)) {
+    snapshot.instance_definition = *definition;
+  }
+  if (const InstanceOccurrenceComponent *occurrence =
+          scene.instance_occurrence(entity)) {
+    snapshot.instance_occurrence = *occurrence;
   }
   if (const SceneSettingsComponent *settings = scene.scene_settings(entity)) {
     snapshot.scene_root = scene.is_scene_root(entity);

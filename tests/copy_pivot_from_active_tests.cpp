@@ -95,13 +95,14 @@ quader::EntityId create_plain_cpu_mesh(CopyPivotHarness &harness,
                                        std::string name) {
   quader::MeshAsset mesh;
   mesh.name = name + " Mesh";
-  mesh.vertices = {
+  quader::MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices = {
       {.position = {}, .normal = {0.0f, 1.0f, 0.0f}},
       {.position = {4.0f, 0.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f}},
       {.position = {0.0f, 2.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f}},
       {.position = {0.0f, 0.0f, 3.0f}, .normal = {0.0f, 1.0f, 0.0f}},
   };
-  mesh.indices = {0u, 1u, 2u, 0u, 3u, 1u};
+  geometry.indices = {0u, 1u, 2u, 0u, 3u, 1u};
   const quader::AssetId mesh_id =
       harness.session.assets().add_mesh(std::move(mesh));
   const quader::EntityId entity = harness.session.scene().create_entity(
@@ -163,8 +164,8 @@ world_vertices(const CopyPivotHarness &harness, quader::EntityId entity) {
   const quader::QMat4 world =
       harness.session.scene().world_transform_matrix(entity);
   std::vector<quader::QVec3> result;
-  result.reserve(mesh->vertices.size());
-  for (const quader::MeshVertex &vertex : mesh->vertices) {
+  result.reserve(mesh->geometry().vertices.size());
+  for (const quader::MeshVertex &vertex : mesh->geometry().vertices) {
     result.push_back(quader::transform_point(world, vertex.position));
   }
   return result;
@@ -232,10 +233,10 @@ quader::QVec3 local_mean(const quader::MeshAsset &mesh) {
     }
     count = mesh.authored_polygon_document->vertices.size();
   } else {
-    for (const quader::MeshVertex &vertex : mesh.vertices) {
+    for (const quader::MeshVertex &vertex : mesh.geometry().vertices) {
       sum += vertex.position;
     }
-    count = mesh.vertices.size();
+    count = mesh.geometry().vertices.size();
   }
   EXPECT_GT(count, 0u);
   return count == 0u ? quader::QVec3{}
@@ -542,8 +543,8 @@ TEST(CopyPivotFromActiveTests,
 
   ASSERT_TRUE(harness.session.assets().update_mesh(
       mesh_id(harness, source.entity), [](quader::MeshAsset &mesh) {
-        ASSERT_FALSE(mesh.vertices.empty());
-        mesh.vertices.front().position = {1.0f, 1.0f, 1.0f};
+        ASSERT_FALSE(mesh.geometry().vertices.empty());
+        mesh.edit_geometry().vertices.front().position = {1.0f, 1.0f, 1.0f};
       }));
 
   const quader::MeshAsset *source_mesh =
@@ -553,11 +554,11 @@ TEST(CopyPivotFromActiveTests,
   ASSERT_EQ(source_mesh->authored_polygon_document->vertices.size(), 4u);
   ASSERT_FALSE(harness.session.scene().transform(source.entity)->custom_pivot);
   quader::QVec3 cpu_sum;
-  for (const quader::MeshVertex &vertex : source_mesh->vertices) {
+  for (const quader::MeshVertex &vertex : source_mesh->geometry().vertices) {
     cpu_sum += vertex.position;
   }
   const quader::QVec3 cpu_mean =
-      cpu_sum / static_cast<float>(source_mesh->vertices.size());
+      cpu_sum / static_cast<float>(source_mesh->geometry().vertices.size());
   EXPECT_GT(quader::length(cpu_mean - local_mean(*source_mesh)), 0.1f);
 
   const quader::QVec3 source_visible_pivot =

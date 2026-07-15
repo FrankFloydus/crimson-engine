@@ -22,6 +22,7 @@
 #include <ranges>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -39,7 +40,8 @@ namespace {
 [[nodiscard]] MeshAsset triangle_mesh(std::string name) {
   MeshAsset mesh;
   mesh.name = std::move(name);
-  mesh.vertices = {
+  MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices = {
       {.position = {0.0f, 0.0f, 0.0f},
        .normal = {0.0f, 0.0f, 1.0f},
        .uv = {0.0f, 0.0f}},
@@ -50,17 +52,17 @@ namespace {
        .normal = {0.0f, 0.0f, 1.0f},
        .uv = {0.0f, 1.0f}},
   };
-  mesh.indices = {0u, 1u, 2u};
-  mesh.primitives = {{.index_offset = 0u,
-                      .index_count = 3u,
-                      .material_slot = 0u}};
+  geometry.indices = {0u, 1u, 2u};
+  geometry.primitives = {{.index_offset = 0u,
+                          .index_count = 3u,
+                          .material_slot = 0u}};
   return mesh;
 }
 
 [[nodiscard]] MeshAsset authored_triangle_mesh(std::string name,
                                                float x_offset) {
   MeshAsset mesh = triangle_mesh(std::move(name));
-  for (MeshVertex &vertex : mesh.vertices) {
+  for (MeshVertex &vertex : mesh.edit_geometry().vertices) {
     vertex.position.x += x_offset;
   }
   auto document = std::make_shared<quader_poly::Document>();
@@ -76,8 +78,7 @@ namespace {
   face.vertices = {1u, 2u, 3u};
   face.uvs = {{0.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}};
   document->faces.push_back(std::move(face));
-  mesh.has_authored_polygon_document = true;
-  mesh.authored_polygon_document = std::move(document);
+  mesh.replace_authored_polygon_document(std::move(*document));
   return mesh;
 }
 
@@ -145,6 +146,224 @@ TEST(QdrBinarySceneCodecTests, RoundTripPreservesExplicitUuidAndSceneData) {
   EXPECT_NE(read.document.assets().mesh(10u), nullptr);
   EXPECT_TRUE(read.document.scene().selected_entities().empty())
       << "selection is transient and must not be stored in QDR";
+}
+
+TEST(QdrBinarySceneCodecTests,
+     RoundTripPreservesSceneLocalInstanceDefinitionAndOccurrence) {
+  SceneContentDocument document = simple_scene();
+  SceneDocument &scene = document.scene();
+  const EntityId definition = scene.create_entity_with_id(
+      200u, "Instance Definition", EntityKind::Generic);
+  const EntityId member =
+      scene.create_entity_with_id(201u, "Definition Member", EntityKind::Mesh);
+  ASSERT_NE(definition, kInvalidEntityId);
+  ASSERT_NE(member, kInvalidEntityId);
+  scene.set_mesh(member, MeshComponent{.mesh = 10u});
+  ASSERT_TRUE(scene.set_parent(member, definition, false));
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+
+  const EntityId occurrence = scene.create_entity_with_id(
+      202u, "Instance Occurrence", EntityKind::Instance);
+  ASSERT_NE(occurrence, kInvalidEntityId);
+  scene.set_transform(
+      occurrence,
+      TransformComponent{.position = {3.0f, 2.0f, 1.0f},
+                         .rotation_euler = {0.0f, 0.5f, 0.0f},
+                         .scale = {2.0f, 2.0f, 2.0f}});
+  ASSERT_TRUE(scene.set_instance_occurrence(
+      occurrence, InstanceOccurrenceComponent{.definition = definition}));
+
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          QdrDocumentWriter::serialize_project_document_bytes(
+              qdr_project_write_snapshot_from_document(document),
+              test_uuid()));
+  ASSERT_TRUE(read.ok) << read.message;
+  EXPECT_TRUE(
+      read.document.scene().is_instance_definition_entity(definition));
+  EXPECT_EQ(read.document.scene().parent(member), definition);
+  const InstanceOccurrenceComponent *decoded_occurrence =
+      read.document.scene().instance_occurrence(occurrence);
+  ASSERT_NE(decoded_occurrence, nullptr);
+  EXPECT_EQ(decoded_occurrence->definition, definition);
+  EXPECT_EQ(read.document.scene().kind(occurrence), EntityKind::Instance);
+  ASSERT_NE(read.document.scene().transform(occurrence), nullptr);
+  EXPECT_FLOAT_EQ(
+      read.document.scene().transform(occurrence)->position.x, 3.0f);
+}
+
+TEST(QdrBinarySceneCodecTests, ReadsSchemaOneAndTwoScenesWithoutInstances) {
+  const quader_io::QdrBinaryContainerReadResult parsed =
+      parse_written_scene(simple_scene());
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  for (const std::uint16_t schema_version : {1u, 2u}) {
+    std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
+    const auto metadata = std::ranges::find_if(
+        chunks, [](const quader_io::QdrBinaryChunkInput &chunk) {
+          return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
+        });
+    ASSERT_NE(metadata, chunks.end());
+    metadata->schema_version = schema_version;
+    const QdrProjectReadResult read =
+        QdrDocumentReader::deserialize_project_document(
+            quader_io::build_qdr_binary_container(test_uuid(),
+                                                  std::move(chunks)));
+    ASSERT_TRUE(read.ok) << "schema " << schema_version << ": "
+                         << read.message;
+    EXPECT_EQ(read.document.assets().mesh_count(), 1u);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests, RejectsOccurrenceWithMissingDefinition) {
+  QdrProjectWriteSnapshot snapshot =
+      qdr_project_write_snapshot_from_document(simple_scene());
+  snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
+      .id = 300u,
+      .name = "Broken Occurrence",
+      .kind = EntityKind::Instance,
+      .instance_occurrence =
+          InstanceOccurrenceComponent{.definition = 999u},
+  });
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          QdrDocumentWriter::serialize_project_document_bytes(snapshot,
+                                                               test_uuid()));
+  ASSERT_FALSE(read.ok);
+  EXPECT_NE(read.message.find("invalid instance occurrence"),
+            std::string::npos);
+}
+
+TEST(QdrBinarySceneCodecTests, RejectsEmptyInstanceDefinition) {
+  QdrProjectWriteSnapshot snapshot =
+      qdr_project_write_snapshot_from_document(simple_scene());
+  snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
+      .id = 301u,
+      .name = "Empty Definition",
+      .kind = EntityKind::Generic,
+      .instance_definition = InstanceDefinitionComponent{},
+  });
+  const QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(
+          QdrDocumentWriter::serialize_project_document_bytes(snapshot,
+                                                               test_uuid()));
+  ASSERT_FALSE(read.ok);
+  EXPECT_NE(read.message.find("invalid or empty instance definition"),
+            std::string::npos);
+}
+
+TEST(QdrBinarySceneCodecTests,
+     RejectsDualInstanceMarkersAndOccurrenceWithNonInstanceKind) {
+  {
+    QdrProjectWriteSnapshot snapshot =
+        qdr_project_write_snapshot_from_document(simple_scene());
+    snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
+        .id = 302u,
+        .name = "Dual Instance Marker",
+        .kind = EntityKind::Instance,
+        .instance_definition = InstanceDefinitionComponent{},
+        .instance_occurrence =
+            InstanceOccurrenceComponent{.definition = 302u},
+    });
+    const QdrProjectReadResult read =
+        QdrDocumentReader::deserialize_project_document(
+            QdrDocumentWriter::serialize_project_document_bytes(snapshot,
+                                                                 test_uuid()));
+    ASSERT_FALSE(read.ok);
+    EXPECT_NE(read.message.find("both an instance definition"),
+              std::string::npos);
+  }
+
+  {
+    QdrProjectWriteSnapshot snapshot =
+        qdr_project_write_snapshot_from_document(simple_scene());
+    snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
+        .id = 303u,
+        .name = "Wrong Kind Occurrence",
+        .kind = EntityKind::Mesh,
+        .instance_occurrence =
+            InstanceOccurrenceComponent{.definition = 999u},
+    });
+    const QdrProjectReadResult read =
+        QdrDocumentReader::deserialize_project_document(
+            QdrDocumentWriter::serialize_project_document_bytes(snapshot,
+                                                                 test_uuid()));
+    ASSERT_FALSE(read.ok);
+    EXPECT_NE(read.message.find("non-instance entity kind"),
+              std::string::npos);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     RejectsNestedDefinitionsAndOccurrenceRootsWithChildren) {
+  {
+    QdrProjectWriteSnapshot snapshot =
+        qdr_project_write_snapshot_from_document(simple_scene());
+    snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
+        .id = 310u,
+        .name = "Outer Definition",
+        .kind = EntityKind::Empty,
+        .instance_definition = InstanceDefinitionComponent{},
+    });
+    snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
+        .id = 311u,
+        .name = "Nested Definition",
+        .kind = EntityKind::Empty,
+        .parent = 310u,
+        .instance_definition = InstanceDefinitionComponent{},
+    });
+    snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
+        .id = 312u,
+        .name = "Nested Member",
+        .kind = EntityKind::Mesh,
+        .parent = 311u,
+        .mesh = MeshComponent{.mesh = 10u},
+    });
+    const QdrProjectReadResult read =
+        QdrDocumentReader::deserialize_project_document(
+            QdrDocumentWriter::serialize_project_document_bytes(snapshot,
+                                                                 test_uuid()));
+    ASSERT_FALSE(read.ok);
+    EXPECT_NE(read.message.find("definitions cannot be nested"),
+              std::string::npos);
+  }
+
+  {
+    QdrProjectWriteSnapshot snapshot =
+        qdr_project_write_snapshot_from_document(simple_scene());
+    snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
+        .id = 320u,
+        .name = "Leaf Definition",
+        .kind = EntityKind::Empty,
+        .instance_definition = InstanceDefinitionComponent{},
+    });
+    snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
+        .id = 321u,
+        .name = "Leaf Member",
+        .kind = EntityKind::Mesh,
+        .parent = 320u,
+        .mesh = MeshComponent{.mesh = 10u},
+    });
+    snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
+        .id = 322u,
+        .name = "Nonleaf Occurrence",
+        .kind = EntityKind::Instance,
+        .instance_occurrence =
+            InstanceOccurrenceComponent{.definition = 320u},
+    });
+    snapshot.entities.push_back(QdrProjectEntityWriteSnapshot{
+        .id = 323u,
+        .name = "Illegal Occurrence Child",
+        .kind = EntityKind::Empty,
+        .parent = 322u,
+    });
+    const QdrProjectReadResult read =
+        QdrDocumentReader::deserialize_project_document(
+            QdrDocumentWriter::serialize_project_document_bytes(snapshot,
+                                                                 test_uuid()));
+    ASSERT_FALSE(read.ok);
+    EXPECT_NE(read.message.find("invalid instance occurrence"),
+              std::string::npos);
+  }
 }
 
 TEST(QdrBinarySceneCodecTests,
@@ -340,7 +559,7 @@ TEST(QdrBinarySceneCodecTests, RejectsUnsupportedMetadataSchema) {
   ASSERT_TRUE(parsed.ok) << parsed.message;
   std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
   ASSERT_FALSE(chunks.empty());
-  chunks.front().schema_version = 3u;
+  chunks.front().schema_version = 4u;
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(
@@ -388,6 +607,7 @@ TEST(QdrBinarySceneCodecTests, DeduplicatesEquivalentGeometryPayloads) {
       qdr_project_write_snapshot_from_document(document), test_uuid());
 
   EXPECT_EQ(encoded.logical_geometry_count, 2u);
+  EXPECT_EQ(encoded.geometry_encode_count, 1u);
   EXPECT_EQ(encoded.unique_geometry_count, 1u);
   QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(encoded.bytes);
@@ -395,6 +615,69 @@ TEST(QdrBinarySceneCodecTests, DeduplicatesEquivalentGeometryPayloads) {
   EXPECT_EQ(read.stats.unique_geometry_decoded_count, 1u);
   EXPECT_NE(read.document.assets().mesh(10u), nullptr);
   EXPECT_NE(read.document.assets().mesh(11u), nullptr);
+  EXPECT_EQ(read.document.assets().mesh(10u)->geometry_token(),
+            read.document.assets().mesh(11u)->geometry_token());
+}
+
+TEST(QdrBinarySceneCodecTests,
+     ReusesOnePinnedGeometryForTwoHundredLogicalAssetsAcrossRoundTrip) {
+  SceneContentDocument document(
+      SceneContentDocumentRecord{.id = 77u, .name = "Pinned geometry"});
+  MeshAsset prototype = authored_triangle_mesh("Prototype", 0.0f);
+  for (std::uint64_t index = 0u; index < 200u; ++index) {
+    const AssetId asset_id = 1000u + index;
+    MeshAsset logical = prototype;
+    logical.name = "Logical " + std::to_string(index);
+    ASSERT_EQ(document.assets().add_mesh(asset_id, std::move(logical)),
+              asset_id);
+    const EntityId entity = document.scene().create_entity_with_id(
+        2000u + index, "Occurrence " + std::to_string(index),
+        EntityKind::Mesh);
+    ASSERT_NE(entity, kInvalidEntityId);
+    document.scene().set_mesh(entity, MeshComponent{.mesh = asset_id});
+  }
+
+  const QdrSceneBinaryEncodeResult encoded = encode_qdr_scene_binary(
+      qdr_project_write_snapshot_from_document(document), test_uuid());
+  ASSERT_EQ(encoded.logical_geometry_count, 200u);
+  EXPECT_EQ(encoded.geometry_encode_count, 1u);
+  EXPECT_EQ(encoded.unique_geometry_count, 1u);
+
+  QdrProjectReadResult read =
+      QdrDocumentReader::deserialize_project_document(encoded.bytes);
+  ASSERT_TRUE(read.ok) << read.message;
+  ASSERT_EQ(read.document.assets().mesh_count(), 200u);
+  std::unordered_set<std::uintptr_t> geometry_tokens;
+  std::unordered_set<const quader_poly::Document *> authored_tokens;
+  for (std::uint64_t index = 0u; index < 200u; ++index) {
+    const MeshAsset *mesh = read.document.assets().mesh(1000u + index);
+    ASSERT_NE(mesh, nullptr);
+    geometry_tokens.insert(mesh->geometry_token());
+    authored_tokens.insert(mesh->authored_polygon_document.get());
+  }
+  EXPECT_EQ(geometry_tokens.size(), 1u);
+  EXPECT_EQ(authored_tokens.size(), 1u);
+
+  ASSERT_TRUE(read.document.assets().update_mesh(1000u, [](MeshAsset &mesh) {
+    mesh.edit_geometry().vertices.front().position.x = 4.0f;
+    mesh.edit_authored_polygon_document().vertices.front().position.x = 4.0f;
+  }));
+  geometry_tokens.clear();
+  authored_tokens.clear();
+  for (std::uint64_t index = 0u; index < 200u; ++index) {
+    const MeshAsset *mesh = read.document.assets().mesh(1000u + index);
+    ASSERT_NE(mesh, nullptr);
+    geometry_tokens.insert(mesh->geometry_token());
+    authored_tokens.insert(mesh->authored_polygon_document.get());
+  }
+  EXPECT_EQ(geometry_tokens.size(), 2u);
+  EXPECT_EQ(authored_tokens.size(), 2u);
+  EXPECT_FLOAT_EQ(read.document.assets()
+                      .mesh(1001u)
+                      ->geometry()
+                      .vertices.front()
+                      .position.x,
+                  0.0f);
 }
 
 TEST(QdrBinarySceneCodecTests, ProducesDeterministicSameBuildBytes) {
@@ -422,7 +705,7 @@ TEST(QdrBinarySceneCodecTests,
   ASSERT_EQ(deduplicated.unique_geometry_count, 1u);
 
   ASSERT_TRUE(document.assets().update_mesh(11u, [](MeshAsset &mesh) {
-    mesh.vertices.front().position.x = 3.0f;
+    mesh.edit_geometry().vertices.front().position.x = 3.0f;
   }));
   const QdrSceneBinaryEncodeResult split = encode_qdr_scene_binary(
       qdr_project_write_snapshot_from_document(document), test_uuid());
@@ -435,10 +718,10 @@ TEST(QdrBinarySceneCodecTests,
   const MeshAsset *second = read.document.assets().mesh(11u);
   ASSERT_NE(first, nullptr);
   ASSERT_NE(second, nullptr);
-  ASSERT_FALSE(first->vertices.empty());
-  ASSERT_FALSE(second->vertices.empty());
-  EXPECT_FLOAT_EQ(first->vertices.front().position.x, 0.0f);
-  EXPECT_FLOAT_EQ(second->vertices.front().position.x, 3.0f);
+  ASSERT_FALSE(first->geometry().vertices.empty());
+  ASSERT_FALSE(second->geometry().vertices.empty());
+  EXPECT_FLOAT_EQ(first->geometry().vertices.front().position.x, 0.0f);
+  EXPECT_FLOAT_EQ(second->geometry().vertices.front().position.x, 3.0f);
 }
 
 TEST(QdrBinarySceneCodecTests, CompressesLargeRepetitiveGeometryAdaptively) {
@@ -446,10 +729,12 @@ TEST(QdrBinarySceneCodecTests, CompressesLargeRepetitiveGeometryAdaptively) {
       .id = 8u, .name = "Compression"});
   MeshAsset mesh;
   mesh.name = "Large";
-  mesh.vertices.resize(6000u);
-  for (std::size_t index = 0; index < mesh.vertices.size(); ++index) {
-    mesh.vertices[index].normal = {0.0f, 1.0f, 0.0f};
-    mesh.vertices[index].rgba = 0xffffffffu;
+  MeshGeometryPayload &geometry_payload = mesh.edit_geometry();
+  geometry_payload.vertices.resize(6000u);
+  for (std::size_t index = 0; index < geometry_payload.vertices.size();
+       ++index) {
+    geometry_payload.vertices[index].normal = {0.0f, 1.0f, 0.0f};
+    geometry_payload.vertices[index].rgba = 0xffffffffu;
   }
   (void)document.assets().add_mesh(20u, std::move(mesh));
 

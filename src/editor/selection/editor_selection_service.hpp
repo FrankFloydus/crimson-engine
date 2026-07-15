@@ -14,6 +14,7 @@
 #include "editor/selection/scene_selection_application.hpp"
 #include "scene/components.hpp"
 
+#include <functional>
 #include <optional>
 #include <span>
 #include <vector>
@@ -77,6 +78,9 @@ struct EditorSelectionBoxBaseline {
  */
 class EditorSelectionService final {
 public:
+  using SceneSelectionTargetResolver = std::function<EntityId(EntityId)>;
+  using SceneSelectionScopeFilter = std::function<bool(EntityId)>;
+
   EditorSelectionService(SceneDocument &scene,
                          DocumentCommandService &document_commands,
                          ModelingSessionService &modeling);
@@ -86,6 +90,9 @@ public:
   [[nodiscard]] ModelingSelectionSummary summary() const;
   [[nodiscard]] ModelingHoverSummary hover_summary() const;
   [[nodiscard]] ModelingSelectionMode mode() const;
+  void set_scene_selection_scope_policy(
+      SceneSelectionTargetResolver resolver,
+      SceneSelectionScopeFilter filter);
 
   DocumentCommandResult set_scene_selection(std::span<const EntityId> entities,
                                             EntityId active = kInvalidEntityId);
@@ -122,6 +129,9 @@ public:
   ModelingCommandResult clear_hover();
 
 private:
+  [[nodiscard]] bool scene_target_selectable(EntityId entity) const;
+  [[nodiscard]] std::vector<EntityId>
+  scene_bulk_candidates(ModelingSelectionMode mode) const;
   [[nodiscard]] EditorSelectionTarget
   target_from_summary(const ModelingSelectionSummary &summary) const;
   [[nodiscard]] ModelingSelectionSummary
@@ -141,6 +151,8 @@ private:
   SceneDocument &scene_;
   DocumentCommandService &document_commands_;
   ModelingSessionService &modeling_;
+  SceneSelectionTargetResolver scene_target_resolver_;
+  SceneSelectionScopeFilter scene_scope_filter_;
 };
 
 } // namespace quader

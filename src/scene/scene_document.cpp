@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <random>
 #include <unordered_set>
 #include <string_view>
@@ -68,6 +69,65 @@ bool same_transform(const TransformComponent &left,
          left.scale.x == right.scale.x && left.scale.y == right.scale.y &&
          left.scale.z == right.scale.z &&
          left.custom_pivot == right.custom_pivot;
+}
+
+bool is_supported_instance_member_subtree(const SceneDocument &scene,
+                                          EntityId root) {
+  for (const EntityId entity : scene.descendants(root, true)) {
+    if (scene.is_instance_definition_entity(entity) ||
+        scene.instance_occurrence(entity) != nullptr ||
+        scene.light(entity) != nullptr) {
+      return false;
+    }
+    switch (scene.kind(entity)) {
+    case EntityKind::Mesh:
+      if (scene.mesh(entity) == nullptr) {
+        return false;
+      }
+      break;
+    case EntityKind::Empty:
+      if (scene.mesh(entity) != nullptr ||
+          scene.modeling_object(entity) != nullptr) {
+        return false;
+      }
+      break;
+    case EntityKind::Light:
+    case EntityKind::Generic:
+    case EntityKind::Instance:
+      return false;
+    }
+  }
+  return true;
+}
+
+bool destruction_preserves_instance_graph(
+    const SceneDocument &scene,
+    const std::unordered_set<EntityId> &destroyed_entities) {
+  for (const EntityId entity : scene.entities()) {
+    if (!scene.is_instance_definition_entity(entity)) {
+      continue;
+    }
+    const bool definition_destroyed = destroyed_entities.contains(entity);
+    if (definition_destroyed) {
+      for (const EntityId occurrence :
+           scene.instance_occurrences_for_definition(entity)) {
+        if (!destroyed_entities.contains(occurrence)) {
+          return false;
+        }
+      }
+      continue;
+    }
+
+    const std::vector<EntityId> members = scene.children(entity);
+    if (!scene.instance_occurrences_for_definition(entity).empty() &&
+        std::none_of(members.begin(), members.end(),
+                     [&](EntityId member) {
+                       return !destroyed_entities.contains(member);
+                     })) {
+      return false;
+    }
+  }
+  return true;
 }
 
 } // namespace
@@ -168,6 +228,12 @@ bool SceneDocument::destroy_entity(EntityId id) {
     return false;
   }
 
+  const std::unordered_set<EntityId> destroy_set(to_destroy.begin(),
+                                                  to_destroy.end());
+  if (!destruction_preserves_instance_graph(*this, destroy_set)) {
+    return false;
+  }
+
   const bool active_destroyed =
       std::find(to_destroy.begin(), to_destroy.end(), active_selection_) !=
       to_destroy.end();
@@ -229,6 +295,10 @@ bool SceneDocument::destroy_entities(std::span<const EntityId> ids) {
     }
   }
   if (to_destroy.empty()) {
+    return false;
+  }
+
+  if (!destruction_preserves_instance_graph(*this, destroy_set)) {
     return false;
   }
 
@@ -356,6 +426,20 @@ bool SceneDocument::set_editor_object_id(EntityId id,
 }
 
 bool SceneDocument::set_entity_kind(EntityId id, EntityKind kind) {
+  if (instance_occurrence(id) != nullptr && kind != EntityKind::Instance) {
+    return false;
+  }
+  if (is_instance_definition_entity(id) && kind != EntityKind::Empty &&
+      kind != EntityKind::Generic) {
+    return false;
+  }
+  if (is_instance_definition_member(id) && kind != EntityKind::Mesh &&
+      kind != EntityKind::Empty) {
+    return false;
+  }
+  if (kind == EntityKind::Instance && instance_occurrence(id) == nullptr) {
+    return false;
+  }
   if (EntityKindComponent *component = mutable_entity_kind(id)) {
     component->kind = kind;
     mark_dirty();
@@ -464,6 +548,36 @@ bool SceneDocument::set_parent(EntityId child, EntityId new_parent,
   if (child == new_parent || is_descendant_of(new_parent, child)) {
     return false;
   }
+  if (instance_occurrence(new_parent) != nullptr) {
+    return false;
+  }
+  if (instance_occurrence(child) != nullptr &&
+      containing_instance_definition(new_parent) != kInvalidEntityId) {
+    return false;
+  }
+  if (is_instance_definition_entity(child) &&
+      containing_instance_definition(new_parent) != kInvalidEntityId) {
+    return false;
+  }
+
+  const EntityId old_definition = containing_instance_definition(child);
+  const EntityId new_definition =
+      containing_instance_definition(new_parent);
+  if (old_definition != kInvalidEntityId && old_definition != child &&
+      new_definition != old_definition &&
+      !instance_occurrences_for_definition(old_definition).empty()) {
+    const bool extracts_redundant_top_level_member =
+        new_definition == kInvalidEntityId && parent(child) == old_definition &&
+        children(old_definition).size() > 1u;
+    if (!extracts_redundant_top_level_member) {
+      return false;
+    }
+  }
+  if (new_definition != kInvalidEntityId && new_definition != child &&
+      old_definition != new_definition &&
+      !is_supported_instance_member_subtree(*this, child)) {
+    return false;
+  }
 
   HierarchyComponent *child_hierarchy = mutable_hierarchy(child);
   if (!child_hierarchy) {
@@ -568,16 +682,94 @@ void SceneDocument::set_transforms(
 void SceneDocument::set_modeling_object(EntityId id,
                                         ModelingObjectComponent object) {
   const entt::entity entity = require_entity(id);
-  if (entity == entt::null) {
+  if (entity == entt::null || instance_occurrence(id) != nullptr ||
+      is_instance_definition_entity(id)) {
     return;
   }
   registry_.emplace_or_replace<ModelingObjectComponent>(entity, object);
   mark_dirty();
 }
 
+bool SceneDocument::set_instance_definition(EntityId id) {
+  const entt::entity entity = require_entity(id);
+  if (entity == entt::null || is_scene_root(id) ||
+      instance_occurrence(id) != nullptr ||
+      containing_instance_definition(parent(id)) != kInvalidEntityId ||
+      mesh(id) != nullptr || modeling_object(id) != nullptr ||
+      material(id) != nullptr || light(id) != nullptr) {
+    return false;
+  }
+  for (const EntityId child : children(id)) {
+    if (!is_supported_instance_member_subtree(*this, child)) {
+      return false;
+    }
+  }
+  if (registry_.all_of<InstanceDefinitionComponent>(entity)) {
+    return true;
+  }
+  registry_.emplace<InstanceDefinitionComponent>(entity);
+  ++render_component_revision_;
+  mark_dirty();
+  return true;
+}
+
+bool SceneDocument::clear_instance_definition(EntityId id) {
+  const entt::entity entity = require_entity(id);
+  if (entity == entt::null ||
+      !registry_.all_of<InstanceDefinitionComponent>(entity) ||
+      !instance_occurrences_for_definition(id).empty()) {
+    return false;
+  }
+  registry_.remove<InstanceDefinitionComponent>(entity);
+  ++render_component_revision_;
+  mark_dirty();
+  return true;
+}
+
+bool SceneDocument::set_instance_occurrence(
+    EntityId id, InstanceOccurrenceComponent occurrence) {
+  const entt::entity entity = require_entity(id);
+  if (entity == entt::null || occurrence.definition == kInvalidEntityId ||
+      occurrence.definition == id ||
+      !is_instance_definition_entity(occurrence.definition) ||
+      is_instance_definition_entity(id) || has_children(id) ||
+      containing_instance_definition(id) != kInvalidEntityId ||
+      mesh(id) != nullptr || modeling_object(id) != nullptr ||
+      material(id) != nullptr || light(id) != nullptr) {
+    return false;
+  }
+  if (const InstanceOccurrenceComponent *current = instance_occurrence(id);
+      current != nullptr && *current == occurrence &&
+      kind(id) == EntityKind::Instance) {
+    return true;
+  }
+  registry_.emplace_or_replace<InstanceOccurrenceComponent>(entity,
+                                                             occurrence);
+  registry_.emplace_or_replace<EntityKindComponent>(
+      entity, EntityKindComponent{.kind = EntityKind::Instance});
+  ++render_component_revision_;
+  mark_dirty();
+  return true;
+}
+
+bool SceneDocument::clear_instance_occurrence(EntityId id) {
+  const entt::entity entity = require_entity(id);
+  if (entity == entt::null ||
+      !registry_.all_of<InstanceOccurrenceComponent>(entity)) {
+    return false;
+  }
+  registry_.remove<InstanceOccurrenceComponent>(entity);
+  registry_.emplace_or_replace<EntityKindComponent>(
+      entity, EntityKindComponent{.kind = EntityKind::Generic});
+  ++render_component_revision_;
+  mark_dirty();
+  return true;
+}
+
 void SceneDocument::set_mesh(EntityId id, MeshComponent mesh) {
   const entt::entity entity = require_entity(id);
-  if (entity == entt::null) {
+  if (entity == entt::null || instance_occurrence(id) != nullptr ||
+      is_instance_definition_entity(id)) {
     return;
   }
   registry_.emplace_or_replace<MeshComponent>(entity, mesh);
@@ -590,7 +782,8 @@ void SceneDocument::set_mesh(EntityId id, MeshComponent mesh) {
 
 void SceneDocument::set_material(EntityId id, MaterialComponent material) {
   const entt::entity entity = require_entity(id);
-  if (entity == entt::null) {
+  if (entity == entt::null || instance_occurrence(id) != nullptr ||
+      is_instance_definition_entity(id)) {
     return;
   }
   registry_.emplace_or_replace<MaterialComponent>(entity, material);
@@ -611,7 +804,9 @@ bool SceneDocument::clear_material(EntityId id) {
 
 void SceneDocument::set_light(EntityId id, LightComponent light) {
   const entt::entity entity = require_entity(id);
-  if (entity == entt::null) {
+  if (entity == entt::null || instance_occurrence(id) != nullptr ||
+      is_instance_definition_entity(id) ||
+      is_instance_definition_member(id)) {
     return;
   }
   registry_.emplace_or_replace<LightComponent>(entity, light);
@@ -749,6 +944,22 @@ SceneDocument::modeling_object(EntityId id) const {
              : registry_.try_get<ModelingObjectComponent>(entity);
 }
 
+const InstanceDefinitionComponent *
+SceneDocument::instance_definition(EntityId id) const {
+  const entt::entity entity = require_entity(id);
+  return entity == entt::null
+             ? nullptr
+             : registry_.try_get<InstanceDefinitionComponent>(entity);
+}
+
+const InstanceOccurrenceComponent *
+SceneDocument::instance_occurrence(EntityId id) const {
+  const entt::entity entity = require_entity(id);
+  return entity == entt::null
+             ? nullptr
+             : registry_.try_get<InstanceOccurrenceComponent>(entity);
+}
+
 const MeshComponent* SceneDocument::mesh(EntityId id) const {
   const entt::entity entity = require_entity(id);
   return entity == entt::null ? nullptr
@@ -874,6 +1085,38 @@ std::vector<EntityRecord> SceneDocument::entity_records_tree_order() const {
   return records;
 }
 
+std::vector<EntityRecord>
+SceneDocument::entity_records_for_instance_definition(
+    EntityId definition) const {
+  std::vector<EntityRecord> records;
+  if (!is_instance_definition_entity(definition)) {
+    return records;
+  }
+
+  const EntityId active = primary_selection();
+  const std::vector<EntityId> members = descendants(definition, false);
+  records.reserve(members.size());
+  std::function<void(EntityId, int, bool, bool)> append_member =
+      [&](EntityId member, int depth, bool parent_visible,
+          bool parent_locked) {
+        EntityRecord record = make_entity_record(member, depth, active);
+        if (depth == 0) {
+          record.parent = kInvalidEntityId;
+        }
+        record.effectively_visible = parent_visible && record.visible;
+        record.effectively_locked = parent_locked || record.locked;
+        records.push_back(record);
+        for (const EntityId child : children(member)) {
+          append_member(child, depth + 1, record.effectively_visible,
+                        record.effectively_locked);
+        }
+      };
+  for (const EntityId member : children(definition)) {
+    append_member(member, 0, true, false);
+  }
+  return records;
+}
+
 std::vector<EntityId> SceneDocument::selected_entities() const {
   std::vector<EntityId> ids;
   for (auto [entity, selection, identity] :
@@ -949,6 +1192,46 @@ bool SceneDocument::is_descendant_of(EntityId entity,
     current = parent(current);
   }
   return false;
+}
+
+bool SceneDocument::is_instance_definition_entity(EntityId entity) const {
+  return instance_definition(entity) != nullptr;
+}
+
+EntityId SceneDocument::containing_instance_definition(EntityId entity) const {
+  if (entity == kInvalidEntityId || !exists(entity)) {
+    return kInvalidEntityId;
+  }
+  EntityId current = entity;
+  std::size_t guard = entities_.size() + 1u;
+  while (current != kInvalidEntityId && guard-- > 0u) {
+    if (is_instance_definition_entity(current)) {
+      return current;
+    }
+    current = parent(current);
+  }
+  return kInvalidEntityId;
+}
+
+bool SceneDocument::is_instance_definition_member(EntityId entity) const {
+  const EntityId definition = containing_instance_definition(entity);
+  return definition != kInvalidEntityId && definition != entity;
+}
+
+std::vector<EntityId> SceneDocument::instance_occurrences_for_definition(
+    EntityId definition) const {
+  std::vector<EntityId> result;
+  if (!is_instance_definition_entity(definition)) {
+    return result;
+  }
+  for (const EntityId entity : entities()) {
+    const InstanceOccurrenceComponent *occurrence =
+        instance_occurrence(entity);
+    if (occurrence != nullptr && occurrence->definition == definition) {
+      result.push_back(entity);
+    }
+  }
+  return result;
 }
 
 EntityKind SceneDocument::kind(EntityId id) const {
@@ -1143,6 +1426,8 @@ EntityRecord SceneDocument::make_entity_record(EntityId id, int depth,
   record.is_scene_root = is_scene_root(id);
   record.has_scene_settings = scene_settings(id) != nullptr;
   record.has_modeling_object = modeling_object(id) != nullptr;
+  record.is_instance_definition = is_instance_definition_entity(id);
+  record.has_instance_occurrence = instance_occurrence(id) != nullptr;
   return record;
 }
 
@@ -1161,6 +1446,12 @@ void SceneDocument::append_entity_records(
     EntityId id, int depth, EntityId active,
     std::vector<EntityRecord> &records) const {
   if (require_entity(id) == entt::null) {
+    return;
+  }
+  // Instance definitions and their canonical children are internal scene
+  // content. They remain in entities()/entity_tree_order() for persistence and
+  // extraction, but never appear in the ordinary outliner projection.
+  if (is_instance_definition_entity(id)) {
     return;
   }
   records.push_back(make_entity_record(id, depth, active));

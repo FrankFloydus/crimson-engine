@@ -74,6 +74,8 @@ inline constexpr std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> kV
 
 inline constexpr std::uint32_t kOverlaySelectionFaceColor = 0x081facffU;
 inline constexpr std::uint32_t kOverlaySelectionWireColor = 0xff1fd3ffU;
+inline constexpr std::uint32_t kOverlayInstanceSelectionFillColor =
+    rgba8(201, 92, 88, 89);
 inline constexpr std::uint32_t kOverlayWireframeXrayColor = rgba8(238, 242, 247, 230);
 inline constexpr std::uint32_t kOverlaySourceWireColor = 0xebffe05cU;
 inline constexpr std::uint32_t kOverlayOpenEdgeColor = 0xff00ffffU;

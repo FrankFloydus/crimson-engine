@@ -5,6 +5,7 @@ material {
     depthWrite : false,
     depthCulling : false,
     doubleSided : true,
+    instanced : true,
     vertexDomain : device,
     requires : [
         color,

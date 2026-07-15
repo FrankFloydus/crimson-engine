@@ -118,12 +118,67 @@ TEST(QdrModelingRuntimeOperationDuplicateTests, DuplicateOperationCreatesFreshSe
 		EXPECT_TRUE(copy != nullptr);
 		EXPECT_FALSE(source->document.vertices.empty());
 		EXPECT_FALSE(copy->document.vertices.empty());
-		EXPECT_NEAR(copy->document.vertices.front().position.x - source->document.vertices.front().position.x, -2.0F, 0.0001);
-		EXPECT_NEAR(copy->document.vertices.front().position.y - source->document.vertices.front().position.y, 0.5F, 0.0001);
-		EXPECT_NEAR(copy->document.vertices.front().position.z - source->document.vertices.front().position.z, 3.0F, 0.0001);
+		EXPECT_NEAR(copy->document.vertices.front().position.x - source->document.vertices.front().position.x, 0.0F, 0.0001);
+		EXPECT_NEAR(copy->document.vertices.front().position.y - source->document.vertices.front().position.y, 0.0F, 0.0001);
+		EXPECT_NEAR(copy->document.vertices.front().position.z - source->document.vertices.front().position.z, 0.0F, 0.0001);
+		EXPECT_TRUE(copy->document.shares_storage_with(source->document));
 	}
 
 	
+}
+
+TEST(QdrModelingRuntimeOperationDuplicateTests,
+     PolygonObjectCopiesShareTopologyUntilTheFirstTopologyEdit) {
+	quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
+	const int source_id = session.objects().front().id;
+	ASSERT_TRUE(session
+	                .duplicate_selected_objects(
+	                    quader_editor_core::DuplicateMeshesOperationSettings{})
+	                .ok);
+	const quader_editor_core::PolygonObject* source = find_object(session, source_id);
+	const quader_editor_core::PolygonObject* copy =
+		find_object(session, session.selected_object_ids().front());
+	ASSERT_NE(source, nullptr);
+	ASSERT_NE(copy, nullptr);
+	EXPECT_TRUE(source->document.shares_storage_with(copy->document));
+
+	const std::uintptr_t shared_storage = source->document.storage_token();
+	const quader_editor_core::CommandResult zero_translate =
+		quader_editor_core::translate_selected(
+			session.objects(), quader_editor_core::SelectionMode::Object,
+			{}, false);
+	EXPECT_TRUE(zero_translate.ok);
+	EXPECT_FALSE(zero_translate.changed);
+	EXPECT_EQ(session.objects().front().document.storage_token(),
+	          shared_storage);
+	EXPECT_EQ(session.objects().back().document.storage_token(),
+	          shared_storage);
+
+	const quader_editor_core::CommandResult identity_transform =
+		quader_editor_core::transform_selected(
+			session.objects(), quader_editor_core::SelectionMode::Object,
+			quader_poly::Transform3{}, {}, false, false);
+	EXPECT_TRUE(identity_transform.ok);
+	EXPECT_FALSE(identity_transform.changed);
+	EXPECT_TRUE(session.objects().front().document.shares_storage_with(
+		session.objects().back().document));
+
+	const quader::QVec3 source_position = source->document.vertices.front().position;
+	auto copy_it = std::find_if(
+		session.objects().begin(), session.objects().end(),
+		[copy_id = copy->id](const quader_editor_core::PolygonObject& object) {
+			return object.id == copy_id;
+		});
+	ASSERT_NE(copy_it, session.objects().end());
+	copy_it->selected = false;
+	EXPECT_TRUE(session.objects().front().document.shares_storage_with(
+		copy_it->document));
+	copy_it->document.edit().vertices.front().position.x += 1.0F;
+	EXPECT_FALSE(session.objects().front().document.shares_storage_with(
+		copy_it->document));
+	EXPECT_TRUE(qdr_test::vec_nearly_equal(
+		session.objects().front().document.vertices.front().position,
+		source_position));
 }
 
 TEST(QdrModelingRuntimeOperationDuplicateTests, DuplicateOperationCreatesFreshSelectedObjectIdsOperationSettingsDuplicateInPlaceByDefault) {

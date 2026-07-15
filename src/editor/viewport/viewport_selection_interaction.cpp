@@ -166,6 +166,33 @@ bool entity_is_selected(const QuaderEditorApi &editor, EntityId entity) {
   return snapshot.has_value() && snapshot->selected;
 }
 
+std::optional<EntityId>
+active_selected_instance(const QuaderEditorApi &editor) {
+  for (const QuaderEntitySnapshot &entity : editor.query().entities()) {
+    if (entity.active && entity.selected &&
+        entity.kind == QuaderEntityKind::Instance &&
+        entity.has_instance_occurrence) {
+      return entity.id;
+    }
+  }
+  return std::nullopt;
+}
+
+bool plain_instance_edit_double_click(const ViewportInteractionFrame &frame,
+                                      const QuaderSelectionSummary &summary) {
+  return frame.left_click_count >= 2 &&
+         summary.mode == QuaderSelectionMode::Object &&
+         !frame.input.modifiers.primary && !frame.input.modifiers.shift &&
+         !frame.input.modifiers.alt && !frame.input.text_input_active &&
+         !frame.input.navigation_active &&
+         !frame.input.operation_preview_active &&
+         !frame.input.modal_tool_active &&
+         !frame.input.active_tool_owns_viewport &&
+         !frame.input_result.consumed &&
+         !frame.input_result.navigation_active &&
+         !frame.input_result.camera_changed;
+}
+
 std::optional<EntityId> pick_scene_billboard_entity(
     const ViewportInteractionFrame &frame, QVec2 local_mouse) {
   EntityId best_entity = kInvalidEntityId;
@@ -312,6 +339,8 @@ void ViewportSelectionInteraction::handle_frame(
       gizmo_consumed;
   const bool can_use_selection_fallback =
       selection_fallback_active && !frame.input.text_input_active &&
+      !frame.input.modal_tool_active &&
+      !frame.input.active_tool_owns_viewport &&
       !frame.input_result.navigation_active &&
       !frame.input_result.camera_changed && !gizmo_consumed &&
       !tool_result.handled;
@@ -438,6 +467,19 @@ void ViewportSelectionInteraction::handle_frame(
           std::max(1, frame.left_click_count));
       paint_selection_active_ =
           is_component_selection_mode(to_modeling_selection_mode(summary.mode));
+      if (plain_instance_edit_double_click(frame, summary)) {
+        if (const std::optional<EntityId> occurrence =
+                active_selected_instance(editor)) {
+          const QuaderApiVoidResult entered =
+              editor.modeling().enter_instance_edit(*occurrence);
+          if (!entered.ok()) {
+            LOG_ERROR("Instance edit entry failed: {}",
+                      entered.error_message().empty()
+                          ? "Instance edit entry failed."
+                          : entered.error_message());
+          }
+        }
+      }
       suppress_hover_after_selection(frame.left_click_local,
                                      hovered_before_selection);
     }

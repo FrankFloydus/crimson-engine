@@ -21,6 +21,7 @@
 namespace quader {
 
 class StandardMaterialEditSessionService;
+class ProjectClipboardService;
 
 /// Owns one heap-stable scene document resident in the project workspace.
 struct OpenSceneSession final {
@@ -96,6 +97,8 @@ public:
   [[nodiscard]] StandardMaterialEditSessionService &standard_material_editor();
   [[nodiscard]] const StandardMaterialEditSessionService &
   standard_material_editor() const;
+  [[nodiscard]] ProjectClipboardService &clipboard();
+  [[nodiscard]] const ProjectClipboardService &clipboard() const;
   [[nodiscard]] const ProjectWorkspaceStorage *workspace() const noexcept {
     return workspace_ ? &*workspace_ : nullptr;
   }
@@ -173,6 +176,7 @@ private:
   ProjectMaterialCatalog material_catalog_;
   std::unique_ptr<StandardMaterialEditSessionService>
       standard_material_editor_;
+  std::unique_ptr<ProjectClipboardService> clipboard_;
   std::filesystem::path resource_root_;
   std::filesystem::path empty_path_;
 };

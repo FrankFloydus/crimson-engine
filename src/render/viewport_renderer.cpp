@@ -305,7 +305,9 @@ void ViewportRenderer::apply_scene_settings(
   apply_tone_mapping(settings.post_process.tone_mapping,
                      post_processing_enabled);
   render_pass_coordinator_.set_background_color(
-      viewport_clear_color(settings.environment, rendered_mode));
+      instance_edit_context_active_
+          ? instance_edit_background_
+          : viewport_clear_color(settings.environment, rendered_mode));
 
   filament::View::AmbientOcclusionOptions ao;
   ao.enabled =
@@ -377,7 +379,13 @@ void ViewportRenderer::update_ground_grid(
   render_pass_coordinator_.set_grid_visible(visible);
   update_visible_layers();
   grid_renderer_.update(controller, width(), height(), grid_world_spacing,
-                        settings, visible);
+                        settings, visible, instance_edit_context_active_);
+}
+
+void ViewportRenderer::set_instance_edit_context_active(
+    bool active, ViewportSettingColor background) {
+  instance_edit_context_active_ = active;
+  instance_edit_background_ = background;
 }
 
 void ViewportRenderer::set_overlay_visible(bool visible) {

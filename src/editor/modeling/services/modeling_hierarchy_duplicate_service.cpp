@@ -230,13 +230,13 @@ ModelingHierarchyDuplicateService::duplicate_selected_entity_hierarchy(
     };
   }
 
+  if (runtime.set_selection_mode) {
+    (void)runtime.set_selection_mode(result_selection_mode);
+  }
   {
     QDR_PROFILE_SCOPE("Duplicate select duplicate roots");
     (void)document_commands.select_entities(duplicated.duplicate_roots,
                                             duplicated.duplicate_roots.front());
-  }
-  if (runtime.set_selection_mode) {
-    (void)runtime.set_selection_mode(result_selection_mode);
   }
   return {.ok = true, .changed = true, .message = "Selection duplicated."};
 }

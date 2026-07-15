@@ -47,7 +47,7 @@ ToolPreviewMeshProjection::box_preview_mesh_from_descriptor(
   MeshAsset mesh = MeshProjectionService::compile_polygon_document_mesh(
       objects.front().document);
   mesh.name = "Box Preview";
-  if (mesh.vertices.empty() || mesh.indices.empty()) {
+  if (mesh.geometry().vertices.empty() || mesh.geometry().indices.empty()) {
     return std::nullopt;
   }
   return mesh;
@@ -77,7 +77,7 @@ ToolPreviewMeshProjection::mirror_preview_meshes(
     }
     MeshAsset mesh = MeshProjectionService::compile_polygon_document_mesh(
         documents[document_index++]);
-    if (mesh.vertices.empty() || mesh.indices.empty()) {
+    if (mesh.geometry().vertices.empty() || mesh.geometry().indices.empty()) {
       continue;
     }
 

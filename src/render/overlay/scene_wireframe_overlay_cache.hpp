@@ -6,25 +6,19 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "core/types.hpp"
+#include "render/instance_batch_planner.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
-#include "viewport/viewport_camera_clip_planes.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
-
-#include <utils/Entity.h>
 
 namespace filament {
 class Engine;
-class IndexBuffer;
 class Material;
-class MaterialInstance;
 class Scene;
-class VertexBuffer;
 } // namespace filament
 
 namespace quader {
@@ -35,108 +29,111 @@ namespace quader {
   return !has_synced || synced_signature != style.wire_signature;
 }
 
+/// Carries the renderer-neutral full-scene wire plan and sharing counts.
+struct SceneWireframeOverlayBatchPlan final {
+  RenderInstanceBatchPlan batches;
+  std::size_t participant_count = 0u;
+  std::size_t unique_geometry_style_count = 0u;
+};
+
 /**
- * Caches full-scene wireframe renderables outside the transient viewport overlay frame.
+ * Groups ordinary meshes and expanded formal-instance members by immutable
+ * topology/style, then chunks each compatible group at the backend limit.
  */
-class SceneWireframeOverlayCache {
+[[nodiscard]] SceneWireframeOverlayBatchPlan
+plan_scene_wireframe_overlay_batches(
+    const RenderOverlaySceneWireframeSnapshot &snapshot,
+    std::size_t max_instances_per_chunk);
+
+/// Reports resources and submissions for the persistent full-scene wire path.
+struct SceneWireframeOverlayCacheStats final {
+  std::size_t participant_count = 0u;
+  std::size_t chunk_count = 0u;
+  std::size_t unique_geometry_resource_count = 0u;
+  std::uint64_t derived_vertex_bytes = 0u;
+  std::uint64_t derived_index_bytes = 0u;
+  std::uint64_t geometry_upload_count = 0u;
+  std::uint64_t geometry_reuse_count = 0u;
+  std::uint64_t rebuild_count = 0u;
+  std::uint64_t transform_update_count = 0u;
+};
+
+/**
+ * Owns explicit Filament instance batches for the persistent scene wireframe.
+ * Identical immutable topology/style inputs share one derived local edge-ribbon
+ * VB/IB; participant transforms live only in device-cap-sized InstanceBuffers.
+ */
+class SceneWireframeOverlayCache final {
 public:
-    SceneWireframeOverlayCache() = default;
-    SceneWireframeOverlayCache(const SceneWireframeOverlayCache&) = delete;
-    SceneWireframeOverlayCache& operator=(const SceneWireframeOverlayCache&) = delete;
-    SceneWireframeOverlayCache(SceneWireframeOverlayCache&&) = delete;
-    SceneWireframeOverlayCache& operator=(SceneWireframeOverlayCache&&) = delete;
-    ~SceneWireframeOverlayCache();
+  SceneWireframeOverlayCache();
+  SceneWireframeOverlayCache(const SceneWireframeOverlayCache &) = delete;
+  SceneWireframeOverlayCache &
+  operator=(const SceneWireframeOverlayCache &) = delete;
+  ~SceneWireframeOverlayCache();
 
-    void initialize(filament::Engine &engine, filament::Scene &scene,
-                    filament::Material &line_material);
-    void shutdown();
+  void initialize(filament::Engine &engine, filament::Scene &scene,
+                  filament::Material &line_material,
+                  std::size_t max_instances_per_chunk);
+  void shutdown();
+  void clear();
+  void sync(const RenderOverlaySceneWireframeSnapshot &snapshot);
 
-    bool initialized() const {
-      return engine_ != nullptr && scene_ != nullptr &&
-             line_material_ != nullptr;
-    }
+  [[nodiscard]] bool initialized() const {
+    return engine_ != nullptr && scene_ != nullptr &&
+           line_material_ != nullptr;
+  }
 
-    void sync(const RenderOverlaySceneWireframeSnapshot &snapshot);
+  [[nodiscard]] const SceneWireframeOverlayCacheStats &stats() const {
+    return stats_;
+  }
 
-    /**
-     * Owns one persistent wireframe line renderable and its GPU buffers.
-     */
-    struct Proxy {
-        Proxy() = default;
-        Proxy(const Proxy&) = delete;
-        Proxy& operator=(const Proxy&) = delete;
-        Proxy(Proxy&& other) noexcept;
-        Proxy& operator=(Proxy&& other) noexcept;
-
-        utils::Entity entity;
-        filament::VertexBuffer *vertex_buffer = nullptr;
-        filament::IndexBuffer *index_buffer = nullptr;
-        filament::MaterialInstance *material_instance = nullptr;
-        std::uint32_t vertex_count = 0;
-        std::uint32_t index_count = 0;
-    };
-
-    /**
-     * Tracks the cached wireframe proxy for one visible scene mesh entity.
-     */
-    struct Entry {
-        Entry() = default;
-        Entry(const Entry&) = delete;
-        Entry& operator=(const Entry&) = delete;
-        Entry(Entry&&) noexcept = default;
-        Entry& operator=(Entry&&) noexcept = delete;
-
-        utils::Entity transform_root;
-        AssetId mesh_id = kInvalidAssetId;
-        std::uint64_t mesh_revision = 0;
-        bool selected = false;
-        Proxy line_proxy;
-    };
+  [[nodiscard]] std::size_t max_instances_per_chunk() const {
+    return max_instances_per_chunk_;
+  }
 
 private:
-    /**
-     * Captures the visible scene mesh inputs that require wireframe geometry rebuilds.
-     */
-    struct WireframeEntityState {
-      EntityId entity = kInvalidEntityId;
-      AssetId mesh_id = kInvalidAssetId;
-      std::uint64_t mesh_revision = 0;
-      bool selected = false;
+  struct PreparedPlan;
+  struct WireGeometryResource;
+  struct WireBatchProxy;
 
-      bool operator==(const WireframeEntityState &) const = default;
-    };
+  [[nodiscard]] PreparedPlan prepare(
+      const RenderOverlaySceneWireframeSnapshot &snapshot) const;
+  bool rebuild(const PreparedPlan &prepared,
+               const RenderOverlaySceneWireframeSnapshot &snapshot);
+  bool update_transforms(const PreparedPlan &prepared);
+  WireGeometryResource *acquire_geometry(
+      const RenderOverlayMeshSnapshot &mesh,
+      const ViewportPersistentOverlayStyleSnapshot &style);
+  WireBatchProxy create_batch(
+      const RenderOverlayMeshSnapshot &mesh,
+      const RenderInstanceBatchChunk &chunk,
+      const ViewportPersistentOverlayStyleSnapshot &style,
+      ViewportCameraClipPlanes clip_planes);
+  bool update_batch(WireBatchProxy &proxy,
+                    const RenderInstanceBatchChunk &chunk);
+  void destroy_batch(WireBatchProxy &proxy);
+  void destroy_geometry_resources();
+  void prune_unused_geometry_resources();
+  void update_clip_planes(ViewportCameraClipPlanes clip_planes);
+  void set_layer_mask(std::uint8_t layer_mask);
 
-    std::vector<WireframeEntityState>
-    wireframe_entity_states(
-        const RenderOverlaySceneWireframeSnapshot &snapshot) const;
-    Entry create_entry(
-        const RenderOverlayMeshSnapshot &mesh,
-        const ViewportPersistentOverlayStyleSnapshot &style);
-    void destroy_entry(Entry &entry);
-    void destroy_proxy(Proxy &proxy, bool remove_from_scene);
-    void destroy_transform_root(Entry &entry);
-    void set_proxy_layer_mask(const Proxy &proxy,
-                              std::uint8_t layer_mask) const;
-    void set_layer_mask(std::uint8_t layer_mask);
-    void set_proxy_clip_planes(ViewportCameraClipPlanes clip_planes);
-    void update_entry_transform(const Entry &entry,
-                                const QMat4 &world_transform) const;
-    void update_entry_transforms(
-        const RenderOverlaySceneWireframeSnapshot &snapshot);
-    void remove_except(const std::unordered_set<EntityId> &live_entities);
-
-    filament::Engine* engine_ = nullptr;
-    filament::Scene* scene_ = nullptr;
-    filament::Material *line_material_ = nullptr;
-    std::unordered_map<EntityId, Entry> entries_;
-    std::vector<WireframeEntityState> synced_states_;
-    RenderSceneBindingKey synced_scene_binding_;
-    std::uint64_t synced_scene_revision_ = 0;
-    std::uint64_t synced_asset_revision_ = 0;
-    std::uint64_t synced_wire_style_signature_ = 0;
-    ViewportCameraClipPlanes synced_clip_planes_;
-    std::uint8_t layer_mask_ = 0u;
-    bool has_synced_ = false;
+  filament::Engine *engine_ = nullptr;
+  filament::Scene *scene_ = nullptr;
+  filament::Material *line_material_ = nullptr;
+  std::size_t max_instances_per_chunk_ = 1u;
+  RenderInstanceBatchPlan plan_;
+  std::vector<WireBatchProxy> proxies_;
+  std::unordered_map<std::uint64_t,
+                     std::vector<std::unique_ptr<WireGeometryResource>>>
+      geometry_resources_;
+  RenderSceneBindingKey synced_scene_binding_;
+  std::uint64_t synced_scene_revision_ = 0u;
+  std::uint64_t synced_asset_revision_ = 0u;
+  std::uint64_t synced_wire_style_signature_ = 0u;
+  ViewportCameraClipPlanes synced_clip_planes_;
+  std::uint8_t layer_mask_ = 0u;
+  bool has_synced_ = false;
+  SceneWireframeOverlayCacheStats stats_;
 };
 
 } // namespace quader

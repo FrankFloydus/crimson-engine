@@ -24,6 +24,11 @@ inline constexpr ViewportSettingColor kDefaultViewportGridYAxisColor = {
     0.29f, 0.58f, 0.0f, 0.72f};
 inline constexpr ViewportSettingColor kDefaultViewportGridZAxisColor = {
     0.059f, 0.612f, 1.0f, 0.72f};
+inline constexpr ViewportSettingColor
+    kDefaultViewportInstanceEditBackgroundColor = {
+        0.34f, 0.36f, 0.37f, 1.0f};
+inline constexpr ViewportSettingColor kDefaultViewportInstanceEditContextColor = {
+    0.38f, 0.40f, 0.42f, 0.45f};
 inline constexpr float kDefaultViewportGridMinorLineSize = 0.325f;
 inline constexpr float kDefaultViewportGridMajorLineSize = 0.250f;
 inline constexpr float kDefaultViewportGridAxisLineSize = 1.0f;

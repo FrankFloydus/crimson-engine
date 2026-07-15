@@ -74,10 +74,11 @@ struct TransformComponent {
  * Enumerates EntityKind values used by the scene layer.
  */
 enum class EntityKind {
-    Empty,
-    Mesh,
-    Light,
-    Generic,
+    Empty = 0,
+    Mesh = 1,
+    Light = 2,
+    Generic = 3,
+    Instance = 4,
 };
 
 /**
@@ -123,6 +124,28 @@ struct SelectionComponent {
 struct ModelingObjectComponent {
   ModelingObjectId object_id = kInvalidModelingObjectId;
   std::uint32_t material_slot = 0;
+};
+
+/**
+ * Marks an internal, scene-local instance definition root.
+ *
+ * Canonical definition members are derived from this entity's hierarchy
+ * children. The marker intentionally carries no second member list.
+ */
+struct InstanceDefinitionComponent {
+  // Keep this marker non-empty because EnTT may otherwise use empty-type
+  // optimization and expose no addressable component value.
+  bool internal = true;
+};
+
+/**
+ * Makes a leaf scene entity an occurrence of a scene-local definition.
+ */
+struct InstanceOccurrenceComponent {
+  EntityId definition = kInvalidEntityId;
+
+  [[nodiscard]] bool
+  operator==(const InstanceOccurrenceComponent &) const = default;
 };
 
 /**

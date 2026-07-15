@@ -14,12 +14,31 @@
 
 namespace quader {
 
+quader_poly::Document &MeshAsset::edit_authored_polygon_document() {
+  auto editable = authored_polygon_document
+                      ? std::make_shared<quader_poly::Document>(
+                            *authored_polygon_document)
+                      : std::make_shared<quader_poly::Document>();
+  authored_polygon_document = editable;
+  has_authored_polygon_document = true;
+  return *editable;
+}
+
+void MeshAsset::replace_authored_polygon_document(
+    quader_poly::Document document) {
+  authored_polygon_document =
+      std::make_shared<const quader_poly::Document>(std::move(document));
+  has_authored_polygon_document = true;
+}
+
 AssetId AssetRegistry::add_mesh(MeshAsset mesh) {
   if (next_id_ == kInvalidAssetId || !validate_mesh(mesh).ok) {
     return kInvalidAssetId;
   }
   const AssetId id = next_id_++;
-  meshes_.add(id, isolate_mesh_asset_payload(std::move(mesh)));
+  mesh = isolate_mesh_asset_payload(std::move(mesh));
+  intern_mesh_payload(mesh);
+  meshes_.add(id, std::move(mesh));
   mark_dirty();
   return id;
 }
@@ -32,7 +51,9 @@ AssetId AssetRegistry::add_mesh(AssetId id, MeshAsset mesh) {
     return kInvalidAssetId;
   }
   next_id_ = std::max(next_id_, id + 1u);
-  meshes_.add(id, isolate_mesh_asset_payload(std::move(mesh)));
+  mesh = isolate_mesh_asset_payload(std::move(mesh));
+  intern_mesh_payload(mesh);
+  meshes_.add(id, std::move(mesh));
   mark_dirty();
   return id;
 }
@@ -135,8 +156,12 @@ bool AssetRegistry::remove_texture(AssetId id) {
 }
 
 bool AssetRegistry::replace_mesh(AssetId id, MeshAsset mesh) {
-  if (!validate_mesh(mesh).ok ||
-      !meshes_.replace(id, isolate_mesh_asset_payload(std::move(mesh)))) {
+  if (!validate_mesh(mesh).ok) {
+    return false;
+  }
+  mesh = isolate_mesh_asset_payload(std::move(mesh));
+  intern_mesh_payload(mesh);
+  if (!meshes_.replace(id, std::move(mesh))) {
     return false;
   }
   deferred_meshes_.erase(id);
@@ -172,8 +197,12 @@ bool AssetRegistry::update_mesh(
   }
   MeshAsset updated = clone_mesh_asset_payload(*existing);
   update(updated);
-  if (!validate_mesh(updated).ok ||
-      !meshes_.replace(id, isolate_mesh_asset_payload(std::move(updated)))) {
+  if (!validate_mesh(updated).ok) {
+    return false;
+  }
+  updated = isolate_mesh_asset_payload(std::move(updated));
+  intern_mesh_payload(updated);
+  if (!meshes_.replace(id, std::move(updated))) {
     return false;
   }
   mark_dirty();
@@ -255,18 +284,19 @@ AssetRegistry::validate_mesh(const MeshAsset &mesh) const {
            std::isfinite(value.z);
   };
 
-  for (const MeshVertex &vertex : mesh.vertices) {
+  const MeshGeometryPayload &geometry = mesh.geometry();
+  for (const MeshVertex &vertex : geometry.vertices) {
     if (!finite_vec3(vertex.position) || !finite_vec3(vertex.normal) ||
         !finite_vec2(vertex.uv)) {
       return {.ok = false, .message = "Mesh vertex data must be finite"};
     }
   }
-  if (mesh.indices.size() % 3u != 0u) {
+  if (geometry.indices.size() % 3u != 0u) {
     return {.ok = false,
             .message = "Mesh indices must describe complete triangles"};
   }
-  for (const std::uint32_t index : mesh.indices) {
-    if (index >= mesh.vertices.size()) {
+  for (const std::uint32_t index : geometry.indices) {
+    if (index >= geometry.vertices.size()) {
       return {.ok = false,
               .message = "Mesh index references a missing vertex"};
     }
@@ -353,9 +383,11 @@ const MeshAsset* AssetRegistry::mesh(AssetId id) const {
   if (!validate_mesh(materialized).ok) {
     return nullptr;
   }
+  materialized = isolate_mesh_asset_payload(std::move(materialized));
+  intern_mesh_payload(materialized);
   const MeshAssetRevision revision = descriptor->revision;
   MeshAsset *stored = const_cast<MeshAsset *>(descriptor);
-  *stored = isolate_mesh_asset_payload(std::move(materialized));
+  *stored = std::move(materialized);
   stored->id = id;
   stored->revision = revision;
   deferred_meshes_.erase(deferred);
@@ -409,6 +441,74 @@ MaterialAssetRevision AssetRegistry::material_revision(AssetId id) const {
 
 TextureAssetRevision AssetRegistry::texture_revision(AssetId id) const {
   return textures_.revision(id);
+}
+
+void AssetRegistry::intern_mesh_payload(MeshAsset &mesh) const {
+  std::shared_ptr<const MeshGeometryPayload> geometry = mesh.geometry_payload();
+  const std::uint64_t content_id = geometry->content_id().value;
+  auto &geometry_candidates = mesh_geometry_pool_[content_id];
+  for (auto candidate = geometry_candidates.begin();
+       candidate != geometry_candidates.end();) {
+    std::shared_ptr<const MeshGeometryPayload> existing = candidate->lock();
+    if (!existing) {
+      candidate = geometry_candidates.erase(candidate);
+      continue;
+    }
+    if (existing.get() != geometry.get() &&
+        mesh_geometry_payload_equal(*existing, *geometry)) {
+      mesh.share_geometry(existing);
+      geometry = std::move(existing);
+      break;
+    }
+    if (existing.get() == geometry.get()) {
+      break;
+    }
+    ++candidate;
+  }
+  if (std::none_of(
+          geometry_candidates.begin(), geometry_candidates.end(),
+          [&geometry](const auto &candidate) {
+            const std::shared_ptr<const MeshGeometryPayload> existing =
+                candidate.lock();
+            return existing && existing.get() == geometry.get();
+          })) {
+    geometry_candidates.emplace_back(geometry);
+  }
+
+  if (!mesh.has_authored_polygon_document ||
+      !mesh.authored_polygon_document) {
+    return;
+  }
+  auto &authored_candidates = authored_topology_pool_[content_id];
+  std::shared_ptr<const quader_poly::Document> authored =
+      mesh.authored_polygon_document;
+  for (auto candidate = authored_candidates.begin();
+       candidate != authored_candidates.end();) {
+    std::shared_ptr<const quader_poly::Document> existing = candidate->lock();
+    if (!existing) {
+      candidate = authored_candidates.erase(candidate);
+      continue;
+    }
+    if (existing.get() == authored.get()) {
+      break;
+    }
+    if (mesh_asset_payload_detail::same_polygon_document(*existing,
+                                                         *authored)) {
+      mesh.share_authored_polygon_document(existing);
+      authored = std::move(existing);
+      break;
+    }
+    ++candidate;
+  }
+  if (std::none_of(
+          authored_candidates.begin(), authored_candidates.end(),
+          [&authored](const auto &candidate) {
+            const std::shared_ptr<const quader_poly::Document> existing =
+                candidate.lock();
+            return existing && existing.get() == authored.get();
+          })) {
+    authored_candidates.emplace_back(authored);
+  }
 }
 
 void AssetRegistry::advance_revision_for_replacement(

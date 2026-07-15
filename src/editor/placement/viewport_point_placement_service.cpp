@@ -406,28 +406,29 @@ void ViewportPointPlacementService::refresh_cache(
       continue;
     }
     const MeshAsset *mesh = assets.mesh(component->mesh);
-    if (mesh == nullptr || mesh->vertices.empty()) {
+    if (mesh == nullptr || mesh->geometry().vertices.empty()) {
       continue;
     }
+    const MeshGeometryPayload &geometry = mesh->geometry();
 
     const bool effectively_locked = document.is_effectively_locked(entity);
     const QMat4 world = document.world_transform_matrix(entity);
     std::vector<QVec3> world_vertices;
-    world_vertices.reserve(mesh->vertices.size());
-    for (const MeshVertex &vertex : mesh->vertices) {
+    world_vertices.reserve(geometry.vertices.size());
+    for (const MeshVertex &vertex : geometry.vertices) {
       world_vertices.push_back(transform_point(world, vertex.position));
     }
 
-    std::vector<QVec3> vertex_normal_sums(mesh->vertices.size());
+    std::vector<QVec3> vertex_normal_sums(geometry.vertices.size());
     std::vector<EdgeNormalAccumulator> edge_accumulators;
     std::unordered_map<std::uint64_t, std::size_t> edge_indices;
-    edge_indices.reserve(mesh->indices.size());
+    edge_indices.reserve(geometry.indices.size());
 
-    for (std::size_t index = 0; index + 2u < mesh->indices.size();
+    for (std::size_t index = 0; index + 2u < geometry.indices.size();
          index += 3u) {
-      const std::uint32_t ia = mesh->indices[index];
-      const std::uint32_t ib = mesh->indices[index + 1u];
-      const std::uint32_t ic = mesh->indices[index + 2u];
+      const std::uint32_t ia = geometry.indices[index];
+      const std::uint32_t ib = geometry.indices[index + 1u];
+      const std::uint32_t ic = geometry.indices[index + 2u];
       if (ia >= world_vertices.size() || ib >= world_vertices.size() ||
           ic >= world_vertices.size()) {
         continue;

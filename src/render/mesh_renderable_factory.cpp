@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/mesh_renderable_factory.hpp"
 
+#include "core/color_space.hpp"
 #include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
@@ -25,6 +26,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <span>
+#include <unordered_map>
 #include <vector>
 
 namespace quader {
@@ -42,19 +46,14 @@ struct RenderVertex {
     std::uint32_t color;
 };
 
-void destroy_mesh_renderable_proxy_resources(filament::Engine &engine,
-                                             filament::Scene *scene,
-                                             MeshRenderableProxy &proxy,
-                                             bool remove_from_scene);
-
 /**
  * Cleans up partially constructed Filament mesh resources until ownership is handed to the proxy.
  */
 class MeshRenderableCreationGuard {
 public:
-    MeshRenderableCreationGuard(filament::Engine& engine, filament::Scene& scene, MeshRenderableProxy& proxy)
-        : engine_(engine)
-        , scene_(scene)
+    MeshRenderableCreationGuard(MeshRenderableFactory &factory,
+                                MeshRenderableProxy &proxy)
+        : factory_(factory)
         , proxy_(proxy) {}
 
     MeshRenderableCreationGuard(const MeshRenderableCreationGuard&) = delete;
@@ -64,8 +63,11 @@ public:
 
     ~MeshRenderableCreationGuard() {
         if (active_) {
-          destroy_mesh_renderable_proxy_resources(engine_, &scene_, proxy_,
-                                                  scene_added_);
+          if (scene_added_) {
+            factory_.destroy(proxy_);
+          } else {
+            factory_.destroy_detached(proxy_);
+          }
         }
     }
 
@@ -76,8 +78,7 @@ public:
     }
 
 private:
-    filament::Engine& engine_;
-    filament::Scene& scene_;
+    MeshRenderableFactory &factory_;
     MeshRenderableProxy& proxy_;
     bool scene_added_ = false;
     bool active_ = true;
@@ -182,6 +183,24 @@ mesh_tangent_frames(const RenderMeshAssetSnapshot &mesh) {
   return frames;
 }
 
+std::vector<RenderVertex>
+build_render_vertices(const RenderMeshAssetSnapshot &mesh) {
+  const std::vector<filament::math::float4> tangent_frames =
+      mesh_tangent_frames(mesh);
+  std::vector<RenderVertex> vertices;
+  vertices.reserve(mesh.vertices.size());
+  for (std::size_t index = 0u; index < mesh.vertices.size(); ++index) {
+    const MeshVertex &vertex = mesh.vertices[index];
+    vertices.push_back({
+        to_filament(vertex.position),
+        tangent_frames[index],
+        {vertex.uv.x, vertex.uv.y},
+        vertex.rgba,
+    });
+  }
+  return vertices;
+}
+
 filament::Box compute_bounds(const RenderMeshAssetSnapshot &mesh) {
   if (mesh.vertices.empty()) {
     return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
@@ -212,16 +231,58 @@ filament::Box compute_bounds(const RenderMeshAssetSnapshot &mesh) {
   return box;
 }
 
-void destroy_mesh_renderable_proxy_resources(filament::Engine &engine,
-                                             filament::Scene *scene,
-                                             MeshRenderableProxy &proxy,
-                                             bool remove_from_scene) {
+bool same_vertex(const MeshVertex &left, const MeshVertex &right) {
+  return left.position.x == right.position.x &&
+         left.position.y == right.position.y &&
+         left.position.z == right.position.z &&
+         left.normal.x == right.normal.x && left.normal.y == right.normal.y &&
+         left.normal.z == right.normal.z && left.uv.x == right.uv.x &&
+         left.uv.y == right.uv.y && left.rgba == right.rgba;
+}
+
+std::uint64_t geometry_payload_signature(
+    const RenderMeshAssetSnapshot &mesh) {
+  if (mesh.geometry_content_id.value != 0u) {
+    return mesh.geometry_content_id.value;
+  }
+  RenderSignatureBuilder signature;
+  signature.add_size(mesh.vertices.size());
+  for (const MeshVertex &vertex : mesh.vertices) {
+    signature.add_vec3(vertex.position)
+        .add_vec3(vertex.normal)
+        .add_vec2(vertex.uv)
+        .add_value(vertex.rgba);
+  }
+  signature.add_size(mesh.indices.size());
+  for (const std::uint32_t index : mesh.indices) {
+    signature.add_value(index);
+  }
+  return signature.value();
+}
+
+filament::Box filament_bounds(const RenderInstanceBounds &bounds) {
+  if (!bounds.present) {
+    return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
+  }
+  filament::Box box;
+  box.set(to_filament(bounds.min), to_filament(bounds.max));
+  return box;
+}
+
+void destroy_renderable_component_resources(filament::Engine &engine,
+                                            filament::Scene *scene,
+                                            MeshRenderableProxy &proxy,
+                                            bool remove_from_scene) {
   if (proxy.entity) {
     if (remove_from_scene && scene != nullptr) {
       scene->remove(proxy.entity);
     }
     engine.getRenderableManager().destroy(proxy.entity);
     engine.getTransformManager().destroy(proxy.entity);
+  }
+  if (proxy.instance_buffer) {
+    engine.destroy(proxy.instance_buffer);
+    proxy.instance_buffer = nullptr;
   }
   if (proxy.owns_material_instances) {
     for (filament::MaterialInstance *&material_instance :
@@ -234,14 +295,6 @@ void destroy_mesh_renderable_proxy_resources(filament::Engine &engine,
   }
   proxy.material_instances.clear();
   proxy.material_slots.clear();
-  if (proxy.owns_mesh_buffers && proxy.vertex_buffer) {
-    engine.destroy(proxy.vertex_buffer);
-    proxy.vertex_buffer = nullptr;
-  }
-  if (proxy.owns_mesh_buffers && proxy.index_buffer) {
-    engine.destroy(proxy.index_buffer);
-    proxy.index_buffer = nullptr;
-  }
   if (proxy.entity) {
     utils::EntityManager::get().destroy(proxy.entity);
     proxy.entity.clear();
@@ -250,18 +303,194 @@ void destroy_mesh_renderable_proxy_resources(filament::Engine &engine,
 
 } // namespace
 
+/// Owns shared Filament vertex/index buffers keyed by immutable geometry.
+struct MeshRenderableFactory::GeometryCacheState final {
+  /// Pins one geometry payload and all GPU buffers derived from it.
+  struct Resource final {
+    std::uint64_t id = 0u;
+    std::uint64_t signature = 0u;
+    std::shared_ptr<const MeshGeometryPayload> payload;
+    std::vector<MeshVertex> vertices;
+    std::vector<std::uint32_t> indices;
+    filament::VertexBuffer *vertex_buffer = nullptr;
+    filament::IndexBuffer *index_buffer = nullptr;
+    std::size_t reference_count = 0u;
+  };
+
+  std::uint64_t next_id = 1u;
+  std::unordered_map<std::uint64_t, std::vector<std::uint64_t>> candidates;
+  std::unordered_map<std::uint64_t, std::unique_ptr<Resource>> resources;
+  GeometryCacheStats stats;
+};
+
+MeshRenderableFactory::MeshRenderableFactory() = default;
+
+MeshRenderableFactory::~MeshRenderableFactory() { shutdown(); }
+
 void MeshRenderableFactory::initialize(
     filament::Engine &engine, filament::Scene &scene,
     MaterialBindingService &material_binding) {
+  shutdown();
   engine_ = &engine;
   scene_ = &scene;
   material_binding_ = &material_binding;
+  geometry_cache_ = std::make_unique<GeometryCacheState>();
 }
 
 void MeshRenderableFactory::shutdown() {
+    if (engine_ != nullptr && geometry_cache_ != nullptr) {
+      for (auto &[id, resource] : geometry_cache_->resources) {
+        (void)id;
+        if (resource->vertex_buffer != nullptr) {
+          engine_->destroy(resource->vertex_buffer);
+        }
+        if (resource->index_buffer != nullptr) {
+          engine_->destroy(resource->index_buffer);
+        }
+      }
+    }
+    geometry_cache_.reset();
     engine_ = nullptr;
     scene_ = nullptr;
     material_binding_ = nullptr;
+}
+
+bool MeshRenderableFactory::acquire_geometry(
+    const RenderMeshAssetSnapshot &mesh, MeshRenderableProxy &proxy) {
+  if (engine_ == nullptr || geometry_cache_ == nullptr ||
+      !mesh.renderable()) {
+    return false;
+  }
+  const std::uint64_t signature = geometry_payload_signature(mesh);
+  if (const auto found = geometry_cache_->candidates.find(signature);
+      found != geometry_cache_->candidates.end()) {
+    for (const std::uint64_t resource_id : found->second) {
+      const auto resource = geometry_cache_->resources.find(resource_id);
+      if (resource == geometry_cache_->resources.end()) {
+        continue;
+      }
+      const GeometryCacheState::Resource &candidate = *resource->second;
+      const bool same_pinned_payload =
+          candidate.payload != nullptr && mesh.geometry_payload != nullptr &&
+          (candidate.payload == mesh.geometry_payload ||
+           (candidate.payload->vertices.size() == mesh.vertices.size() &&
+            candidate.payload->indices.size() == mesh.indices.size() &&
+            std::equal(candidate.payload->vertices.begin(),
+                       candidate.payload->vertices.end(),
+                       mesh.vertices.begin(), same_vertex) &&
+            std::equal(candidate.payload->indices.begin(),
+                       candidate.payload->indices.end(),
+                       mesh.indices.begin())));
+      const bool same_fallback_payload =
+          candidate.payload == nullptr && mesh.geometry_payload == nullptr &&
+          candidate.vertices.size() == mesh.vertices.size() &&
+          candidate.indices.size() == mesh.indices.size() &&
+          std::equal(candidate.vertices.begin(), candidate.vertices.end(),
+                     mesh.vertices.begin(), same_vertex) &&
+          std::equal(candidate.indices.begin(), candidate.indices.end(),
+                     mesh.indices.begin());
+      if (!same_pinned_payload && !same_fallback_payload) {
+        continue;
+      }
+      ++resource->second->reference_count;
+      ++geometry_cache_->stats.cache_hit_count;
+      proxy.geometry_resource = resource_id;
+      proxy.vertex_buffer = candidate.vertex_buffer;
+      proxy.index_buffer = candidate.index_buffer;
+      proxy.owns_mesh_buffers = true;
+      return true;
+    }
+  }
+
+  std::vector<RenderVertex> vertices = build_render_vertices(mesh);
+  auto resource = std::make_unique<GeometryCacheState::Resource>();
+  resource->id = geometry_cache_->next_id++;
+  resource->signature = signature;
+  resource->payload = mesh.geometry_payload;
+  if (resource->payload == nullptr) {
+    resource->vertices.assign(mesh.vertices.begin(), mesh.vertices.end());
+    resource->indices.assign(mesh.indices.begin(), mesh.indices.end());
+  }
+  resource->reference_count = 1u;
+  resource->vertex_buffer =
+      filament::VertexBuffer::Builder()
+          .vertexCount(static_cast<std::uint32_t>(vertices.size()))
+          .bufferCount(1)
+          .attribute(filament::VertexAttribute::POSITION, 0,
+                     AttributeType::FLOAT3, offsetof(RenderVertex, position),
+                     sizeof(RenderVertex))
+          .attribute(filament::VertexAttribute::TANGENTS, 0,
+                     AttributeType::FLOAT4,
+                     offsetof(RenderVertex, tangent_frame),
+                     sizeof(RenderVertex))
+          .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2,
+                     offsetof(RenderVertex, uv), sizeof(RenderVertex))
+          .attribute(filament::VertexAttribute::COLOR, 0,
+                     AttributeType::UBYTE4, offsetof(RenderVertex, color),
+                     sizeof(RenderVertex))
+          .normalized(filament::VertexAttribute::COLOR)
+          .build(*engine_);
+  resource->vertex_buffer->setBufferAt(
+      *engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
+  resource->index_buffer =
+      filament::IndexBuffer::Builder()
+          .indexCount(static_cast<std::uint32_t>(mesh.indices.size()))
+          .bufferType(filament::IndexBuffer::IndexType::UINT)
+          .build(*engine_);
+  resource->index_buffer->setBuffer(
+      *engine_, FilamentBufferDescriptorFactory::span(mesh.indices));
+
+  const std::uint64_t resource_id = resource->id;
+  proxy.geometry_resource = resource_id;
+  proxy.vertex_buffer = resource->vertex_buffer;
+  proxy.index_buffer = resource->index_buffer;
+  proxy.owns_mesh_buffers = true;
+  geometry_cache_->candidates[signature].push_back(resource_id);
+  geometry_cache_->resources.emplace(resource_id, std::move(resource));
+  ++geometry_cache_->stats.upload_count;
+  geometry_cache_->stats.uploaded_vertex_bytes +=
+      static_cast<std::uint64_t>(vertices.size() * sizeof(RenderVertex));
+  geometry_cache_->stats.uploaded_index_bytes +=
+      static_cast<std::uint64_t>(mesh.indices.size_bytes());
+  geometry_cache_->stats.resource_count = geometry_cache_->resources.size();
+  return true;
+}
+
+void MeshRenderableFactory::release_geometry(MeshRenderableProxy &proxy) {
+  if (proxy.geometry_resource == 0u || geometry_cache_ == nullptr) {
+    if (engine_ != nullptr && proxy.owns_mesh_buffers) {
+      if (proxy.vertex_buffer != nullptr) {
+        engine_->destroy(proxy.vertex_buffer);
+      }
+      if (proxy.index_buffer != nullptr) {
+        engine_->destroy(proxy.index_buffer);
+      }
+    }
+    proxy.vertex_buffer = nullptr;
+    proxy.index_buffer = nullptr;
+    return;
+  }
+
+  const std::uint64_t resource_id = proxy.geometry_resource;
+  const auto found = geometry_cache_->resources.find(resource_id);
+  if (found != geometry_cache_->resources.end() &&
+      found->second->reference_count > 0u) {
+    --found->second->reference_count;
+  }
+  // Geometry payloads are immutable and remain resident for this Engine's
+  // lifetime. Keeping zero-reference resources in the cache ensures a batch
+  // layout or material-only rebuild cannot trigger a redundant GPU upload.
+  // MeshRenderableFactory::shutdown() destroys every resident resource.
+  proxy.geometry_resource = 0u;
+  proxy.vertex_buffer = nullptr;
+  proxy.index_buffer = nullptr;
+  geometry_cache_->stats.resource_count = geometry_cache_->resources.size();
+}
+
+MeshRenderableFactory::GeometryCacheStats
+MeshRenderableFactory::geometry_cache_stats() const {
+  return geometry_cache_ != nullptr ? geometry_cache_->stats
+                                    : GeometryCacheStats{};
 }
 
 MeshRenderableProxy MeshRenderableFactory::create(
@@ -272,7 +501,7 @@ MeshRenderableProxy MeshRenderableFactory::create(
     std::uint8_t channel) {
   QDR_PROFILE_FUNCTION();
   MeshRenderableProxy proxy;
-  MeshRenderableCreationGuard creation_guard(*engine_, *scene_, proxy);
+  MeshRenderableCreationGuard creation_guard(*this, proxy);
   proxy.entity = utils::EntityManager::get().create();
   proxy.source_entity = entity_id;
   proxy.mesh = mesh.mesh_id;
@@ -283,52 +512,11 @@ MeshRenderableProxy MeshRenderableFactory::create(
   proxy.cast_shadows = cast_shadows;
   proxy.double_sided = double_sided;
 
-  std::vector<RenderVertex> vertices;
   {
-    QDR_PROFILE_SCOPE("Mesh renderable build vertices");
-    const std::vector<filament::math::float4> tangent_frames =
-        mesh_tangent_frames(mesh);
-    vertices.reserve(mesh.vertices.size());
-    for (std::size_t index = 0u; index < mesh.vertices.size(); ++index) {
-      const MeshVertex &vertex = mesh.vertices[index];
-      vertices.push_back({
-          to_filament(vertex.position),
-          tangent_frames[index],
-          {vertex.uv.x, vertex.uv.y},
-          vertex.rgba,
-      });
+    QDR_PROFILE_SCOPE("Mesh renderable acquire shared geometry");
+    if (!acquire_geometry(mesh, proxy)) {
+      return proxy;
     }
-  }
-
-  {
-    QDR_PROFILE_SCOPE("Mesh renderable upload vertex/index buffers");
-    proxy.vertex_buffer =
-        filament::VertexBuffer::Builder()
-            .vertexCount(static_cast<std::uint32_t>(vertices.size()))
-            .bufferCount(1)
-            .attribute(filament::VertexAttribute::POSITION, 0,
-                       AttributeType::FLOAT3, offsetof(RenderVertex, position),
-                       sizeof(RenderVertex))
-            .attribute(
-                filament::VertexAttribute::TANGENTS, 0, AttributeType::FLOAT4,
-                offsetof(RenderVertex, tangent_frame), sizeof(RenderVertex))
-            .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2,
-                       offsetof(RenderVertex, uv), sizeof(RenderVertex))
-            .attribute(filament::VertexAttribute::COLOR, 0,
-                       AttributeType::UBYTE4, offsetof(RenderVertex, color),
-                       sizeof(RenderVertex))
-            .normalized(filament::VertexAttribute::COLOR)
-            .build(*engine_);
-    proxy.vertex_buffer->setBufferAt(
-        *engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
-
-    proxy.index_buffer =
-        filament::IndexBuffer::Builder()
-            .indexCount(static_cast<std::uint32_t>(mesh.indices.size()))
-            .bufferType(filament::IndexBuffer::IndexType::UINT)
-            .build(*engine_);
-    proxy.index_buffer->setBuffer(
-        *engine_, FilamentBufferDescriptorFactory::span(mesh.indices));
   }
 
   const std::vector<MeshPrimitiveSpan> primitive_spans =
@@ -387,7 +575,7 @@ MeshRenderableProxy MeshRenderableFactory::create_shared_instance(
   MeshRenderableProxy proxy;
   proxy.owns_mesh_buffers = false;
   proxy.owns_material_instances = false;
-  MeshRenderableCreationGuard creation_guard(*engine_, *scene_, proxy);
+  MeshRenderableCreationGuard creation_guard(*this, proxy);
   proxy.entity = utils::EntityManager::get().create();
   proxy.source_entity = entity_id;
   proxy.mesh = prototype.mesh;
@@ -429,6 +617,194 @@ MeshRenderableProxy MeshRenderableFactory::create_shared_instance(
   creation_guard.mark_scene_added();
   creation_guard.release();
   return proxy;
+}
+
+MeshRenderableProxy MeshRenderableFactory::create_explicit_instances(
+    const RenderMeshAssetSnapshot &mesh,
+    const RenderMaterialBindingSnapshot *material,
+    MeshPrimitiveSpan primitive, std::span<const QMat4> world_transforms,
+    const RenderInstanceBounds &world_bounds, bool cast_shadows,
+    bool receive_shadows, bool double_sided, std::uint8_t layer_mask,
+    bool editor_unlit, bool depth_only, std::uint8_t channel,
+    std::uint8_t presentation_flags) {
+  QDR_PROFILE_FUNCTION();
+  MeshRenderableProxy proxy;
+  if (!initialized() || world_transforms.empty() ||
+      world_transforms.size() > engine_->getMaxAutomaticInstances() ||
+      primitive.index_count == 0u ||
+      static_cast<std::uint64_t>(primitive.index_offset) +
+              primitive.index_count >
+          mesh.indices.size()) {
+    return proxy;
+  }
+
+  MeshRenderableCreationGuard creation_guard(*this, proxy);
+  proxy.entity = utils::EntityManager::get().create();
+  proxy.mesh = mesh.mesh_id;
+  proxy.mesh_revision = mesh.mesh_revision;
+  proxy.material =
+      material != nullptr ? material->component.material : MaterialReference{};
+  proxy.material_revision = material != nullptr ? material->revision : 0u;
+  proxy.cast_shadows = cast_shadows;
+  proxy.double_sided = double_sided;
+  if (!acquire_geometry(mesh, proxy)) {
+    return proxy;
+  }
+
+  const RenderMaterialAssetSnapshot *primitive_material =
+      material != nullptr ? material->material_for_slot(primitive.material_slot)
+                          : nullptr;
+  filament::MaterialInstance *material_instance =
+      material_binding_->create_mesh_material_instance(
+          primitive_material, double_sided, editor_unlit);
+  if (material_instance == nullptr) {
+    return proxy;
+  }
+  material_binding_->apply_instance_edit_dim(
+      *material_instance,
+      (presentation_flags & static_cast<std::uint8_t>(
+                                RenderInstancePresentationFlag::Dimmed)) !=
+          0u);
+  if (depth_only) {
+    material_instance->setColorWrite(false);
+    material_instance->setDepthWrite(true);
+    material_instance->setDepthCulling(true);
+  }
+  proxy.material_slots.push_back(primitive.material_slot);
+  proxy.material_instances.push_back(material_instance);
+
+  std::vector<filament::math::mat4f> transforms;
+  transforms.reserve(world_transforms.size());
+  for (const QMat4 &transform : world_transforms) {
+    transforms.push_back(make_transform(transform));
+  }
+  proxy.instance_buffer =
+      filament::InstanceBuffer::Builder(transforms.size())
+          .localTransforms(transforms.data())
+          .build(*engine_);
+
+  filament::RenderableManager::Builder(1u)
+      .geometry(0u, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                proxy.vertex_buffer, proxy.index_buffer,
+                primitive.index_offset, primitive.index_count)
+      .material(0u, material_instance)
+      .instances(transforms.size(), proxy.instance_buffer)
+      .boundingBox(filament_bounds(world_bounds))
+      .layerMask(kViewportAllLayerMask, layer_mask)
+      .channel(channel)
+      .castShadows(cast_shadows)
+      .receiveShadows(receive_shadows)
+      .build(*engine_, proxy.entity);
+  engine_->getTransformManager().create(proxy.entity);
+  scene_->addEntity(proxy.entity);
+  creation_guard.mark_scene_added();
+  creation_guard.release();
+  return proxy;
+}
+
+MeshRenderableProxy MeshRenderableFactory::create_instance_selection_fill(
+    const RenderMeshAssetSnapshot &mesh, filament::Material &material,
+    std::span<const QMat4> world_transforms,
+    const RenderInstanceBounds &world_bounds, std::uint32_t color,
+    std::uint16_t blend_order) {
+  QDR_PROFILE_FUNCTION();
+  MeshRenderableProxy proxy;
+  if (!initialized() || world_transforms.empty() || !mesh.renderable() ||
+      world_transforms.size() > engine_->getMaxAutomaticInstances()) {
+    return proxy;
+  }
+
+  MeshRenderableCreationGuard creation_guard(*this, proxy);
+  proxy.entity = utils::EntityManager::get().create();
+  proxy.mesh = mesh.mesh_id;
+  proxy.mesh_revision = mesh.mesh_revision;
+  if (!acquire_geometry(mesh, proxy)) {
+    return proxy;
+  }
+
+  filament::MaterialInstance *material_instance = material.createInstance();
+  if (material_instance == nullptr) {
+    return proxy;
+  }
+  const float inverse_byte = 1.0f / 255.0f;
+  const float red = srgb_to_linear(
+      static_cast<float>(color & 0xffu) * inverse_byte);
+  const float green = srgb_to_linear(
+      static_cast<float>((color >> 8u) & 0xffu) * inverse_byte);
+  const float blue = srgb_to_linear(
+      static_cast<float>((color >> 16u) & 0xffu) * inverse_byte);
+  const float alpha =
+      static_cast<float>((color >> 24u) & 0xffu) * inverse_byte;
+  material_instance->setParameter(
+      "fillColor", filament::math::float4{red, green, blue, alpha});
+  material_instance->setColorWrite(true);
+  material_instance->setDepthWrite(false);
+  material_instance->setDepthCulling(true);
+  material_instance->setDepthFunc(
+      filament::MaterialInstance::DepthFunc::GE);
+  material_instance->setCullingMode(
+      filament::MaterialInstance::CullingMode::NONE);
+  material_instance->setTransparencyMode(
+      filament::MaterialInstance::TransparencyMode::TWO_PASSES_TWO_SIDES);
+  material_instance->setPolygonOffset(-1.0f, -1.0f);
+  proxy.material_instances.push_back(material_instance);
+
+  std::vector<filament::math::mat4f> transforms;
+  transforms.reserve(world_transforms.size());
+  for (const QMat4 &transform : world_transforms) {
+    transforms.push_back(make_transform(transform));
+  }
+  proxy.instance_buffer =
+      filament::InstanceBuffer::Builder(transforms.size())
+          .localTransforms(transforms.data())
+          .build(*engine_);
+
+  filament::RenderableManager::Builder(1u)
+      .geometry(0u, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                proxy.vertex_buffer, proxy.index_buffer, 0u,
+                static_cast<std::uint32_t>(mesh.indices.size()))
+      .material(0u, material_instance)
+      .instances(transforms.size(), proxy.instance_buffer)
+      .blendOrder(0u, blend_order)
+      .globalBlendOrderEnabled(0u, true)
+      .boundingBox(filament_bounds(world_bounds))
+      .layerMask(kViewportAllLayerMask, kViewportOverlayLayerMask)
+      .channel(kViewportDefaultRenderableChannel)
+      .castShadows(false)
+      .receiveShadows(false)
+      .build(*engine_, proxy.entity);
+  engine_->getTransformManager().create(proxy.entity);
+  scene_->addEntity(proxy.entity);
+  creation_guard.mark_scene_added();
+  creation_guard.release();
+  return proxy;
+}
+
+bool MeshRenderableFactory::update_explicit_instances(
+    const MeshRenderableProxy &proxy,
+    std::span<const QMat4> world_transforms,
+    const RenderInstanceBounds &world_bounds) {
+  QDR_PROFILE_FUNCTION();
+  if (!initialized() || proxy.instance_buffer == nullptr || !proxy.entity ||
+      proxy.instance_buffer->getInstanceCount() != world_transforms.size()) {
+    return false;
+  }
+  std::vector<filament::math::mat4f> transforms;
+  transforms.reserve(world_transforms.size());
+  for (const QMat4 &transform : world_transforms) {
+    transforms.push_back(make_transform(transform));
+  }
+  proxy.instance_buffer->setLocalTransforms(transforms.data(),
+                                             transforms.size());
+  filament::RenderableManager &renderables = engine_->getRenderableManager();
+  const filament::RenderableManager::Instance renderable =
+      renderables.getInstance(proxy.entity);
+  if (!renderable) {
+    return false;
+  }
+  renderables.setAxisAlignedBoundingBox(renderable,
+                                        filament_bounds(world_bounds));
+  return true;
 }
 
 void MeshRenderableFactory::update_transform(const MeshRenderableProxy &proxy,
@@ -479,7 +855,8 @@ void MeshRenderableFactory::destroy(MeshRenderableProxy& proxy) {
         return;
     }
 
-    destroy_mesh_renderable_proxy_resources(*engine_, scene_, proxy, true);
+    destroy_renderable_component_resources(*engine_, scene_, proxy, true);
+    release_geometry(proxy);
 }
 
 void MeshRenderableFactory::destroy_detached(MeshRenderableProxy &proxy) {
@@ -487,7 +864,8 @@ void MeshRenderableFactory::destroy_detached(MeshRenderableProxy &proxy) {
     return;
   }
 
-  destroy_mesh_renderable_proxy_resources(*engine_, nullptr, proxy, false);
+  destroy_renderable_component_resources(*engine_, nullptr, proxy, false);
+  release_geometry(proxy);
 }
 
 std::uint64_t

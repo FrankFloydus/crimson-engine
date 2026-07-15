@@ -10,6 +10,7 @@
 #include "editor/modeling/modeling_types.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/material_binding_service.hpp"
+#include "render/instance_renderable_cache.hpp"
 #include "render/mesh_renderable_cache.hpp"
 #include "render/mesh_renderable_factory.hpp"
 #include "render/render_scene_snapshot.hpp"
@@ -19,6 +20,7 @@
 #include "render/viewport_overlay_frame.hpp"
 #include "render/overlay/overlay_proxy_factory.hpp"
 #include "render/overlay/overlay_renderable_cache.hpp"
+#include "render/overlay/instance_selection_overlay_cache.hpp"
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
 #include "render/overlay/selected_object_overlay_cache.hpp"
 
@@ -47,6 +49,26 @@ struct ViewportSceneOverlayFrameRequest {
     bool point_light_gizmos_visible = false;
 };
 
+/// Aggregates render-resource sharing and explicit-batch diagnostic counters.
+struct SceneRenderResourceDiagnostics final {
+  std::size_t device_instance_limit = 1u;
+  std::size_t unique_compiled_payload_count = 0u;
+  std::uint64_t unique_compiled_payload_bytes = 0u;
+  std::size_t gpu_geometry_resource_count = 0u;
+  std::uint64_t gpu_geometry_upload_count = 0u;
+  std::uint64_t gpu_geometry_reuse_count = 0u;
+  std::uint64_t gpu_uploaded_vertex_bytes = 0u;
+  std::uint64_t gpu_uploaded_index_bytes = 0u;
+  std::size_t base_instance_participant_count = 0u;
+  std::size_t base_instance_batch_chunk_count = 0u;
+  std::size_t wire_participant_count = 0u;
+  std::size_t wire_batch_chunk_count = 0u;
+  std::size_t selection_fill_batch_chunk_count = 0u;
+  std::size_t selection_wire_batch_chunk_count = 0u;
+  std::size_t standalone_primitive_submissions = 0u;
+  std::size_t planned_primitive_submissions = 0u;
+};
+
 /**
  * Owns Scene Render Bridge behavior within the render extraction and Filament resource layer.
  */
@@ -63,6 +85,7 @@ public:
                     filament::Material &shaded_mesh_material,
                     filament::Material &rendered_mesh_material,
                     filament::Material &overlay_material,
+                    filament::Material &instance_selection_fill_material,
                     filament::Material &overlay_line_material,
                     filament::Material &selected_object_line_material,
                     filament::Material &edit_wire_line_material,
@@ -75,7 +98,8 @@ public:
     void bind_scene(RenderSceneBindingKey scene_binding);
     void sync(const SceneDocument &document, const AssetRegistry &assets,
               std::uint64_t frame_index = 0,
-              RenderSceneBindingKey scene_binding = {});
+              RenderSceneBindingKey scene_binding = {},
+              RenderInstanceEditScope instance_edit_scope = {});
     void sync(RenderSceneSnapshot snapshot);
     void update_mesh_surface_grid(float grid_world_spacing,
                                   const ViewportSettings &settings);
@@ -91,6 +115,7 @@ public:
     [[nodiscard]] std::uint64_t tool_preview_submission_revision() const {
       return tool_preview_submission_revision_;
     }
+    [[nodiscard]] SceneRenderResourceDiagnostics diagnostics() const;
     void set_overlay_frame(ViewportOverlayFrame frame,
                            ViewportOverlayCamera camera);
     void set_overlay_frame(std::size_t viewport_index, std::uint8_t layer_mask,
@@ -104,9 +129,11 @@ public:
     MaterialBindingService material_binding_;
     MeshRenderableFactory mesh_factory_;
     MeshRenderableCache mesh_cache_;
+    InstanceRenderableCache instance_cache_;
     ToolPreviewRenderableCache tool_preview_cache_;
     OverlayProxyFactory overlay_proxy_factory_;
     OverlayRenderableCache overlay_cache_;
+    InstanceSelectionOverlayCache instance_selection_overlay_cache_;
     SceneWireframeOverlayCache scene_wireframe_overlay_cache_;
     SelectedObjectOverlayCache selected_object_overlay_cache_;
     SceneRenderSyncService sync_service_;

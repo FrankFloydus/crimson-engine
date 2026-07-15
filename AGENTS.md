@@ -281,12 +281,22 @@ Use unpadded `x.y.z` numeric format; the app displays it as `vX.Y.Z`.
 Before final handoff builds after project-file changes, follow the app version bump rule in this
 section.
 
-For now, keep major/minor fixed at `0.0` and bump only the patch/build component. Patch must stay
-within `1..9999`; if it is already `9999`, stop and ask before rolling minor or major.
+Starting from the explicit `0.1.0` baseline, keep major/minor fixed at `0.1` and bump only the
+patch/build component. Patch must stay within `0..9999`; if it is already `9999`, stop and ask
+before rolling minor or major.
 
-After the initial `0.0.1` versioning implementation, agents must bump both `VERSION` and
-`vcpkg.json` once before the final handoff `quader` build when a task changes project files. Do not
-bump for planning, review, inspection-only, failed/no-change, or explanation-only turns.
+Agents must bump both `VERSION` and `vcpkg.json` once before the final handoff `quader` build when
+a task changes project files. Do not bump for planning, review, inspection-only, failed/no-change,
+or explanation-only turns.
+
+## Fast Iteration Mode
+
+Only when the user's current request explicitly asks for `fast iteration mode`, skip automated
+tests and affected-check runs, implement the requested changes, and build the native `quader`
+executable as quickly as possible for manual testing. Still report build failures and do not claim
+untested behavior as verified. This exception applies only to the request that names the mode; when
+the user does not explicitly request it, follow the normal testing and verification workflow in
+this guide.
 
 ## Expected Commands
 

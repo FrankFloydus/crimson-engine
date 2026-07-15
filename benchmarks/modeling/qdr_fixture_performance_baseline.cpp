@@ -450,17 +450,18 @@ GeometryCounts geometry_counts(const quader::AssetRegistry &assets,
     require(mesh != nullptr,
             "Fixture references missing mesh asset " +
                 std::to_string(mesh_id) + ".");
-    counts.compiled_vertices += mesh->vertices.size();
-    counts.indices += mesh->indices.size();
-    require(mesh->indices.size() % 3U == 0U,
+    const quader::MeshGeometryPayload &geometry = mesh->geometry();
+    counts.compiled_vertices += geometry.vertices.size();
+    counts.indices += geometry.indices.size();
+    require(geometry.indices.size() % 3U == 0U,
             "Mesh asset " + std::to_string(mesh_id) +
                 " has a non-triangular compiled index count.");
-    for (const std::uint32_t index : mesh->indices) {
-      require(index < mesh->vertices.size(),
+    for (const std::uint32_t index : geometry.indices) {
+      require(index < geometry.vertices.size(),
               "Mesh asset " + std::to_string(mesh_id) +
                   " has an out-of-range compiled index.");
     }
-    counts.triangles += mesh->indices.size() / 3U;
+    counts.triangles += geometry.indices.size() / 3U;
     if (mesh->has_authored_polygon_document &&
         mesh->authored_polygon_document != nullptr) {
       ++counts.authored_meshes;

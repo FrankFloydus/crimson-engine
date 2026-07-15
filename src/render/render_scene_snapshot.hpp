@@ -13,6 +13,7 @@
 #include "math/types.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/project_material_resolver.hpp"
+#include "render/instance_batch_planner.hpp"
 #include "render/render_scene_binding.hpp"
 #include "scene/components.hpp"
 
@@ -27,6 +28,19 @@
 #include <vector>
 
 namespace quader {
+
+/// Identifies the active occurrence and definition for edit-mode presentation.
+struct RenderInstanceEditScope final {
+  EntityId occurrence = kInvalidEntityId;
+  EntityId definition = kInvalidEntityId;
+
+  [[nodiscard]] bool active() const {
+    return occurrence != kInvalidEntityId && definition != kInvalidEntityId;
+  }
+
+  friend bool operator==(const RenderInstanceEditScope &,
+                         const RenderInstanceEditScope &) = default;
+};
 
 /**
  * Captures one render-visible texture asset dependency for a material snapshot.
@@ -89,6 +103,9 @@ struct RenderMaterialBindingSnapshot {
 struct RenderMeshAssetSnapshot {
   AssetId mesh_id = kInvalidAssetId;
   std::uint64_t mesh_revision = 0;
+  std::shared_ptr<const MeshGeometryPayload> geometry_payload;
+  std::uintptr_t geometry_token = 0u;
+  MeshGeometryContentId geometry_content_id;
   std::span<const MeshVertex> vertices;
   std::span<const std::uint32_t> indices;
   std::span<const MeshPrimitiveSpan> primitives;
@@ -98,6 +115,37 @@ struct RenderMeshAssetSnapshot {
 
   [[nodiscard]] bool renderable() const {
     return present && !vertices.empty() && !indices.empty();
+  }
+};
+
+/// Stores one scene occurrence transform consumed by explicit GPU instancing.
+struct RenderSceneInstanceOccurrenceRecord final {
+  EntityId entity_id = kInvalidEntityId;
+  std::uint64_t occurrence = 0u;
+  QMat4 world_transform;
+  bool selected = false;
+  bool dimmed = false;
+};
+
+/**
+ * Describes one compatible primitive payload and all of its visible scene
+ * occurrences. Definition/member identities are diagnostic only and never
+ * participate in the batch key.
+ */
+struct RenderSceneInstancePrimitiveRecord final {
+  EntityId definition_entity = kInvalidEntityId;
+  EntityId member_entity = kInvalidEntityId;
+  QMat4 member_from_definition;
+  RenderInstancePrimitiveKey key;
+  RenderMeshAssetSnapshot mesh;
+  MeshPrimitiveSpan primitive;
+  RenderMaterialBindingSnapshot material;
+  RenderInstanceBounds local_bounds;
+  std::vector<RenderSceneInstanceOccurrenceRecord> occurrences;
+
+  [[nodiscard]] bool renderable() const {
+    return mesh.renderable() && primitive.index_count > 0u &&
+           !occurrences.empty();
   }
 };
 
@@ -184,9 +232,11 @@ struct RenderSceneSnapshot {
   std::uint64_t render_component_revision = 0;
   std::uint64_t asset_revision = 0;
   std::uint64_t project_material_revision = 0;
+  RenderInstanceEditScope instance_edit_scope;
   RenderSceneSnapshotDirtyState dirty;
   bool reused_previous_records = false;
   std::vector<RenderSceneMeshRecord> meshes;
+  std::vector<RenderSceneInstancePrimitiveRecord> instance_primitives;
   std::vector<RenderSceneLightRecord> lights;
   std::unordered_set<EntityId> live_mesh_entities;
   std::unordered_set<EntityId> live_light_entities;
@@ -201,6 +251,7 @@ struct RenderSceneSnapshotBuildOptions {
   RenderSceneBindingKey scene_binding;
   const RenderProjectMaterialResolver *project_material_resolver = nullptr;
   std::uint64_t project_material_revision = 0u;
+  RenderInstanceEditScope instance_edit_scope;
 };
 
 /**
@@ -216,7 +267,8 @@ struct RenderToolPreviewMeshRecord {
   std::vector<QMat4> instance_transforms;
 
   [[nodiscard]] bool renderable() const {
-    return !mesh.vertices.empty() && !mesh.indices.empty();
+    return !mesh.geometry().vertices.empty() &&
+           !mesh.geometry().indices.empty();
   }
 };
 

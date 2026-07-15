@@ -15,6 +15,7 @@
 #include <QMetaObject>
 #include <QModelIndex>
 #include <QItemSelectionModel>
+#include <QLabel>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QStackedWidget>
@@ -181,6 +182,9 @@ TEST(QtProjectWorkspaceTests,
       [&activated](quader::QtSceneSessionId id) { activated = id; });
   workspace.set_close_scene_requested_callback(
       [&closed](quader::QtSceneSessionId id) { closed = id; });
+  int exit_instance_edit_requests = 0;
+  workspace.set_exit_instance_edit_requested_callback(
+      [&exit_instance_edit_requests]() { ++exit_instance_edit_requests; });
 
   EXPECT_TRUE(workspace.set_scene_tabs(
       {{.session_id = 41, .name = QStringLiteral("One")},
@@ -196,6 +200,33 @@ TEST(QtProjectWorkspaceTests,
       &workspace.tab_bar(), "tabCloseRequested", Qt::DirectConnection,
       Q_ARG(int, 1)));
   EXPECT_EQ(closed, 42u);
+
+  QWidget *breadcrumb_bar = workspace.findChild<QWidget *>(
+      QStringLiteral("sceneWorkspace.instanceBreadcrumb"));
+  auto *scene_crumb = workspace.findChild<QToolButton *>(
+      QStringLiteral("sceneWorkspace.instanceBreadcrumb.scene"));
+  auto *instance_crumb = workspace.findChild<QLabel *>(
+      QStringLiteral("sceneWorkspace.instanceBreadcrumb.instance"));
+  ASSERT_NE(breadcrumb_bar, nullptr);
+  ASSERT_NE(scene_crumb, nullptr);
+  ASSERT_NE(instance_crumb, nullptr);
+  EXPECT_TRUE(breadcrumb_bar->isHidden());
+  const int unchanged_tab_count = workspace.tab_bar().count();
+  workspace.set_instance_edit_breadcrumb(quader::QtInstanceEditBreadcrumb{
+      .scene_name = QStringLiteral("Two"),
+      .instance_name = QStringLiteral("Cylinder Instance"),
+  });
+  EXPECT_FALSE(breadcrumb_bar->isHidden());
+  EXPECT_EQ(workspace.tab_bar().count(), unchanged_tab_count)
+      << "instance editing adds a lower row rather than replacing scene tabs";
+  EXPECT_EQ(scene_crumb->text(), QStringLiteral("Two"));
+  EXPECT_EQ(instance_crumb->text(), QStringLiteral("Cylinder Instance"));
+  EXPECT_FALSE(scene_crumb->accessibleName().isEmpty());
+  EXPECT_FALSE(instance_crumb->accessibleName().isEmpty());
+  scene_crumb->click();
+  EXPECT_EQ(exit_instance_edit_requests, 1);
+  workspace.set_instance_edit_breadcrumb(std::nullopt);
+  EXPECT_TRUE(breadcrumb_bar->isHidden());
 
   auto *new_scene = workspace.findChild<QToolButton *>(
       QStringLiteral("sceneWorkspace.newScene"));

@@ -195,10 +195,10 @@ BehaviorSnapshot BehaviorScenario::snapshot(std::string label) const {
         if (const MeshAsset* mesh = session_.assets().mesh(entity.mesh)) {
           MeshSnapshot mesh_snapshot;
           mesh_snapshot.mesh = entity.mesh;
-          mesh_snapshot.vertex_count = mesh->vertices.size();
-          mesh_snapshot.index_count = mesh->indices.size();
-          mesh_snapshot.positions.reserve(mesh->vertices.size());
-          for (const MeshVertex &vertex : mesh->vertices) {
+          mesh_snapshot.vertex_count = mesh->geometry().vertices.size();
+          mesh_snapshot.index_count = mesh->geometry().indices.size();
+          mesh_snapshot.positions.reserve(mesh->geometry().vertices.size());
+          for (const MeshVertex &vertex : mesh->geometry().vertices) {
             mesh_snapshot.positions.push_back(vertex.position);
           }
           if (const std::optional<SceneBounds> bounds =

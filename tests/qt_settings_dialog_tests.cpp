@@ -29,7 +29,9 @@
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QEventLoop>
+#include <QFocusEvent>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
@@ -181,6 +183,10 @@ TEST(QtSettingsDialogTests,
       dialog.findChild<QComboBox *>(QStringLiteral("settingsLocale"));
   auto *mesh_major_swatch = dialog.findChild<QPushButton *>(
       QStringLiteral("viewportSetting_MeshGridMajorColor"));
+  auto *instance_background_swatch = dialog.findChild<QPushButton *>(
+      QStringLiteral("viewportSetting_InstanceEditBackgroundColor"));
+  auto *instance_context_swatch = dialog.findChild<QPushButton *>(
+      QStringLiteral("viewportSetting_InstanceEditContextColor"));
 
   ASSERT_NE(category_list, nullptr);
   ASSERT_NE(button_box, nullptr);
@@ -192,6 +198,8 @@ TEST(QtSettingsDialogTests,
   ASSERT_NE(show_info, nullptr);
   ASSERT_NE(locale_combo, nullptr);
   ASSERT_NE(mesh_major_swatch, nullptr);
+  ASSERT_NE(instance_background_swatch, nullptr);
+  ASSERT_NE(instance_context_swatch, nullptr);
   EXPECT_EQ(dialog.findChild<QPushButton *>(
                 QStringLiteral("settingsResetDefaults")),
             nullptr);
@@ -387,6 +395,70 @@ TEST(QtSettingsDialogTests,
   QCoreApplication::processEvents();
   EXPECT_FALSE(dialog.isVisible());
   EXPECT_EQ(changes.size(), commits_before_clean_ok);
+}
+
+TEST(InspectorPanelTests,
+     InstanceNameCommitsOnEnterAndFocusLoss) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-inspector-instance-name-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> box =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Custom Mesh Name");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.modeling().create_instance().ok());
+
+  const EntityId occurrence = session.scene().primary_selection();
+  ASSERT_NE(occurrence, kInvalidEntityId);
+  ASSERT_NE(session.scene().instance_occurrence(occurrence), nullptr);
+  ASSERT_NE(session.scene().name(occurrence), nullptr);
+  EXPECT_EQ(session.scene().name(occurrence)->name, "Custom Mesh Name");
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  UIInspectorPreviewContext preview{.document = session.scene(),
+                                    .assets = session.assets()};
+  UIContext context{
+      .intent = {.editor = editor},
+      .scene = {.document = session.scene(),
+                .assets = session.assets(),
+                .modeling = session.modeling(),
+                .selection = session.selection()},
+      .inspector_preview = &preview,
+      .preferences = {.ui = ui_settings, .viewport = viewport_settings},
+      .localization = localization,
+  };
+
+  InspectorPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.refresh(context);
+  auto *name = panel.findChild<QLineEdit *>(
+      QStringLiteral("inspector.general.name"));
+  ASSERT_NE(name, nullptr);
+
+  name->setText(QStringLiteral("Renamed With Enter"));
+  send_key(*name, Qt::Key_Return);
+  ASSERT_NE(session.scene().name(occurrence), nullptr);
+  EXPECT_EQ(session.scene().name(occurrence)->name, "Renamed With Enter");
+
+  name->setText(QStringLiteral("Renamed On Focus Loss"));
+  QFocusEvent focus_out(QEvent::FocusOut, Qt::TabFocusReason);
+  QCoreApplication::sendEvent(name, &focus_out);
+  QCoreApplication::processEvents();
+  ASSERT_NE(session.scene().name(occurrence), nullptr);
+  EXPECT_EQ(session.scene().name(occurrence)->name,
+            "Renamed On Focus Loss");
 }
 
 TEST(InspectorPanelTests,
@@ -607,6 +679,17 @@ TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {
             QStringLiteral("Material Browser"));
   material_browser_action->trigger();
   EXPECT_EQ(material_browser_requests, 1);
+  auto *create_instance_action = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_edit_create_instance"));
+  auto *flatten_instance_action = menu_bar.findChild<QAction *>(
+      QStringLiteral("command_edit_flatten_instance"));
+  ASSERT_NE(create_instance_action, nullptr);
+  ASSERT_NE(flatten_instance_action, nullptr);
+  EXPECT_EQ(create_instance_action->text(), QStringLiteral("Create Instance"));
+  EXPECT_EQ(flatten_instance_action->text(),
+            QStringLiteral("Flatten Instance"));
+  EXPECT_TRUE(create_instance_action->isEnabled());
+  EXPECT_FALSE(flatten_instance_action->isEnabled());
 
   ASSERT_TRUE(editor.preferences()
                   .set_shortcut(quader_command::kToolsActivatePivot,

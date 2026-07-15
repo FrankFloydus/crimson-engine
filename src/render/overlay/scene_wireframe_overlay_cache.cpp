@@ -11,15 +11,17 @@
 #include "math/glm_bridge.hpp"
 #include "mesh/polygon/document_model.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
-#include "render/filament_utils.hpp"
-#include "render/render_layers.hpp"
-#include "render/overlay/overlay_renderable_builder.hpp"
 #include "render/overlay/overlay_mesh_types.hpp"
+#include "render/overlay/overlay_renderable_builder.hpp"
+#include "render/render_layers.hpp"
+#include "render/render_signature_builder.hpp"
 #include "render/viewport_overlay_policy.hpp"
 
 #include <backend/DriverEnums.h>
+#include <filament/Box.h>
 #include <filament/Engine.h>
 #include <filament/IndexBuffer.h>
+#include <filament/InstanceBuffer.h>
 #include <filament/Material.h>
 #include <filament/MaterialInstance.h>
 #include <filament/RenderableManager.h>
@@ -30,28 +32,24 @@
 #include <utils/EntityManager.h>
 
 #include <algorithm>
-#include <cstddef>
-#include <cstdint>
+#include <bit>
 #include <limits>
 #include <span>
 #include <unordered_set>
 #include <utility>
-#include <vector>
 
 namespace quader {
 namespace {
 
 using AttributeType = filament::backend::ElementType;
 
-/**
- * Stores one shader-expanded persistent wireframe line vertex.
- */
-struct SceneWireframeLineVertex {
-    OverlayFloat4 position;
-    OverlayFloat4 start;
-    OverlayFloat4 end;
-    OverlayFloat4 control;
-    std::uint32_t color = 0u;
+/// Stores one shader-expanded authored edge-ribbon vertex for scene wires.
+struct SceneWireframeLineVertex final {
+  OverlayFloat4 position;
+  OverlayFloat4 start;
+  OverlayFloat4 end;
+  OverlayFloat4 control;
+  std::uint32_t color = 0u;
 };
 
 filament::math::mat4f make_transform(const QMat4 &transform) {
@@ -62,6 +60,16 @@ filament::math::mat4f make_transform(const QMat4 &transform) {
       result[column][row] = glm_transform[column][row];
     }
   }
+  return result;
+}
+
+filament::Box filament_bounds(const RenderInstanceBounds &bounds) {
+  if (!bounds.present) {
+    return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
+  }
+  filament::Box result;
+  result.set({bounds.min.x, bounds.min.y, bounds.min.z},
+             {bounds.max.x, bounds.max.y, bounds.max.z});
   return result;
 }
 
@@ -116,290 +124,338 @@ void configure_overlay_material(filament::MaterialInstance &material,
 }
 
 std::uint64_t edge_key(std::uint32_t a, std::uint32_t b) {
-  const std::uint32_t lo = std::min(a, b);
-  const std::uint32_t hi = std::max(a, b);
-  return (static_cast<std::uint64_t>(lo) << 32u) |
-         static_cast<std::uint64_t>(hi);
+  const std::uint32_t low = std::min(a, b);
+  const std::uint32_t high = std::max(a, b);
+  return (static_cast<std::uint64_t>(low) << 32u) | high;
 }
 
-void append_wireframe_line_quad(std::vector<SceneWireframeLineVertex> &vertices,
-                                std::vector<std::uint32_t> &indices,
-                                QVec3 start, QVec3 end,
-                                std::uint32_t color_rgba) {
+std::uint32_t wire_color(
+    const RenderOverlayMeshSnapshot &mesh,
+    const ViewportPersistentOverlayStyleSnapshot &style) {
+  return mesh.selected ? style.selection_wire_color
+                       : kOverlayWireframeXrayColor;
+}
+
+ViewportOverlayLayer wire_layer(const RenderOverlayMeshSnapshot &mesh) {
+  return mesh.selected ? ViewportOverlayLayer::SelectedEdge
+                       : ViewportOverlayLayer::WireframeXray;
+}
+
+float wire_width(const RenderOverlayMeshSnapshot &mesh,
+                 const ViewportPersistentOverlayStyleSnapshot &style) {
+  return mesh.selected
+             ? style.selection_edge_line_width_pixels
+             : viewport_overlay_line_width_pixels(wire_layer(mesh), 0.0f);
+}
+
+std::uint64_t topology_token(const RenderOverlayMeshSnapshot &mesh) {
+  if (mesh.authored_topology_payload != nullptr) {
+    return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
+        mesh.authored_topology_payload.get()));
+  }
+  if (!mesh.authored_vertices.empty() || !mesh.authored_faces.empty()) {
+    return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
+        mesh.authored_vertices.data()));
+  }
+  return 0u;
+}
+
+std::uint64_t geometry_identity(const RenderOverlayMeshSnapshot &mesh) {
+  if (mesh.geometry_payload != nullptr) {
+    return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
+        mesh.geometry_payload.get()));
+  }
+  if (mesh.geometry_content_id.value != 0u) {
+    return mesh.geometry_content_id.value;
+  }
+  return RenderSignatureBuilder{}
+      .add_value(mesh.mesh_id)
+      .add_value(mesh.mesh_revision)
+      .value();
+}
+
+std::uint64_t wire_geometry_signature(
+    const RenderOverlayMeshSnapshot &mesh,
+    const ViewportPersistentOverlayStyleSnapshot &style) {
+  return RenderSignatureBuilder{}
+      .add_value(geometry_identity(mesh))
+      .add_value(mesh.geometry_content_id.value)
+      .add_value(topology_token(mesh))
+      .add_value(wire_color(mesh, style))
+      .value();
+}
+
+RenderInstancePrimitiveKey wire_key(
+    const RenderOverlayMeshSnapshot &mesh,
+    const ViewportPersistentOverlayStyleSnapshot &style) {
+  return {
+      // These exact runtime tokens deliberately avoid grouping on a content
+      // hash. The remaining exact style fields distinguish the derived VB and
+      // its per-batch material state without scene or AssetId identity.
+      .geometry_payload = geometry_identity(mesh),
+      .material_payload = topology_token(mesh),
+      .index_offset = wire_color(mesh, style),
+      .index_count = std::bit_cast<std::uint32_t>(wire_width(mesh, style)),
+      .layer_mask = static_cast<std::uint8_t>(wire_layer(mesh)),
+      .channel = kViewportDefaultRenderableChannel,
+      .double_sided = true,
+      .editor_unlit = true,
+  };
+}
+
+RenderInstanceBounds local_bounds(
+    std::span<const MeshVertex> vertices) {
+  RenderInstanceBounds bounds;
+  for (const MeshVertex &vertex : vertices) {
+    if (!bounds.present) {
+      bounds.min = vertex.position;
+      bounds.max = vertex.position;
+      bounds.present = true;
+      continue;
+    }
+    bounds.min.x = std::min(bounds.min.x, vertex.position.x);
+    bounds.min.y = std::min(bounds.min.y, vertex.position.y);
+    bounds.min.z = std::min(bounds.min.z, vertex.position.z);
+    bounds.max.x = std::max(bounds.max.x, vertex.position.x);
+    bounds.max.y = std::max(bounds.max.y, vertex.position.y);
+    bounds.max.z = std::max(bounds.max.z, vertex.position.z);
+  }
+  return bounds;
+}
+
+std::uint64_t participant_token(const RenderOverlayMeshSnapshot &mesh) {
+  return mesh.participant_token != 0u ? mesh.participant_token : mesh.entity;
+}
+
+std::vector<RenderInstancePrimitiveOccurrence> wire_occurrences(
+    const RenderOverlaySceneWireframeSnapshot &snapshot) {
+  std::vector<RenderInstancePrimitiveOccurrence> occurrences;
+  occurrences.reserve(snapshot.meshes.size());
+  for (const RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
+    if (!mesh.has_triangle_geometry() ||
+        participant_token(mesh) == 0u) {
+      continue;
+    }
+    occurrences.push_back({
+        .key = wire_key(mesh, snapshot.style),
+        .occurrence = participant_token(mesh),
+        .world_transform = mesh.world_transform,
+        .local_bounds = local_bounds(mesh.vertices),
+    });
+  }
+  return occurrences;
+}
+
+const RenderOverlayMeshSnapshot *record_for_chunk(
+    const RenderOverlaySceneWireframeSnapshot &snapshot,
+    const RenderInstanceBatchChunk &chunk) {
+  const auto found = std::ranges::find_if(
+      snapshot.meshes, [&](const RenderOverlayMeshSnapshot &mesh) {
+        return mesh.has_triangle_geometry() &&
+               wire_key(mesh, snapshot.style) == chunk.key;
+      });
+  return found == snapshot.meshes.end() ? nullptr : &*found;
+}
+
+void append_line_quad(std::vector<SceneWireframeLineVertex> &vertices,
+                      std::vector<std::uint32_t> &indices, QVec3 start,
+                      QVec3 end, std::uint32_t color_rgba) {
   const std::uint32_t color = rgba8_srgb_to_linear(color_rgba);
   const std::uint32_t offset = static_cast<std::uint32_t>(vertices.size());
-  const OverlayFloat4 start_value{start.x, start.y, start.z, 1.0f};
-  const OverlayFloat4 end_value{end.x, end.y, end.z, 1.0f};
-  const OverlayFloat4 device_origin{0.0f, 0.0f, 0.0f, 1.0f};
-  vertices.push_back({device_origin,
-                      start_value,
-                      end_value,
-                      {-1.0f, -1.0f, 0.0f, 0.0f},
-                      color});
-  vertices.push_back({device_origin,
-                      start_value,
-                      end_value,
-                      {-1.0f, 1.0f, 1.0f, 0.0f},
-                      color});
-  vertices.push_back(
-      {device_origin, start_value, end_value, {1.0f, 1.0f, 1.0f, 0.0f}, color});
-  vertices.push_back({device_origin,
-                      start_value,
-                      end_value,
-                      {1.0f, -1.0f, 0.0f, 0.0f},
-                      color});
-  indices.push_back(offset);
-  indices.push_back(offset + 1u);
-  indices.push_back(offset + 2u);
-  indices.push_back(offset);
-  indices.push_back(offset + 2u);
-  indices.push_back(offset + 3u);
+  const OverlayFloat4 origin{0.0f, 0.0f, 0.0f, 1.0f};
+  const OverlayFloat4 a{start.x, start.y, start.z, 1.0f};
+  const OverlayFloat4 b{end.x, end.y, end.z, 1.0f};
+  vertices.push_back({origin, a, b, {-1.0f, -1.0f, 0.0f, 0.0f}, color});
+  vertices.push_back({origin, a, b, {-1.0f, 1.0f, 1.0f, 0.0f}, color});
+  vertices.push_back({origin, a, b, {1.0f, 1.0f, 1.0f, 0.0f}, color});
+  vertices.push_back({origin, a, b, {1.0f, -1.0f, 0.0f, 0.0f}, color});
+  indices.insert(indices.end(), {offset, offset + 1u, offset + 2u, offset,
+                                 offset + 2u, offset + 3u});
 }
 
-const RenderOverlayMeshSnapshot *find_wireframe_mesh_snapshot(
-    const std::vector<RenderOverlayMeshSnapshot> &meshes, EntityId entity) {
-  const auto found =
-      std::find_if(meshes.begin(), meshes.end(),
-                   [entity](const RenderOverlayMeshSnapshot &mesh) {
-                     return mesh.entity == entity;
-                   });
-  return found == meshes.end() ? nullptr : &*found;
-}
-
-filament::Box bounds_for_mesh_vertices(std::span<const MeshVertex> vertices) {
-  if (vertices.empty()) {
-    return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
-  }
-
-  QVec3 min_value{
-      std::numeric_limits<float>::max(),
-      std::numeric_limits<float>::max(),
-      std::numeric_limits<float>::max(),
-  };
-  QVec3 max_value{
-      std::numeric_limits<float>::lowest(),
-      std::numeric_limits<float>::lowest(),
-      std::numeric_limits<float>::lowest(),
-  };
-  for (const MeshVertex &vertex : vertices) {
-    min_value.x = std::min(min_value.x, vertex.position.x);
-    min_value.y = std::min(min_value.y, vertex.position.y);
-    min_value.z = std::min(min_value.z, vertex.position.z);
-    max_value.x = std::max(max_value.x, vertex.position.x);
-    max_value.y = std::max(max_value.y, vertex.position.y);
-    max_value.z = std::max(max_value.z, vertex.position.z);
-  }
-
-  filament::Box box;
-  box.set(to_filament(min_value), to_filament(max_value));
-  return box;
-}
-
-bool append_authored_polygon_wireframe_lines(
-    const RenderOverlayMeshSnapshot &mesh, std::uint32_t color,
-    std::vector<SceneWireframeLineVertex> &vertices,
-    std::vector<std::uint32_t> &indices) {
+bool append_authored_edges(const RenderOverlayMeshSnapshot &mesh,
+                           std::uint32_t color,
+                           std::vector<SceneWireframeLineVertex> &vertices,
+                           std::vector<std::uint32_t> &indices) {
   if (!mesh.has_authored_polygon_geometry()) {
     return false;
   }
-
   std::unordered_map<quader_poly::ElementId, QVec3> positions;
   positions.reserve(mesh.authored_vertices.size());
   for (const quader_poly::Vertex &vertex : mesh.authored_vertices) {
     positions.emplace(vertex.id, vertex.position);
   }
-
-  std::unordered_set<std::uint64_t> emitted_edges;
+  std::unordered_set<std::uint64_t> emitted;
   for (const quader_poly::Face &face : mesh.authored_faces) {
-    if (face.vertices.size() < 2u) {
-      continue;
-    }
-    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+    for (std::size_t index = 0u; index < face.vertices.size(); ++index) {
+      if (face.vertices.size() < 2u) {
+        break;
+      }
       const quader_poly::ElementId a_id = face.vertices[index];
       const quader_poly::ElementId b_id =
           face.vertices[(index + 1u) % face.vertices.size()];
-      const std::uint64_t key = edge_key(static_cast<std::uint32_t>(a_id),
-                                         static_cast<std::uint32_t>(b_id));
-      if (!emitted_edges.insert(key).second) {
+      if (!emitted.insert(edge_key(a_id, b_id)).second) {
         continue;
       }
       const auto a = positions.find(a_id);
       const auto b = positions.find(b_id);
-      if (a == positions.end() || b == positions.end()) {
-        continue;
+      if (a != positions.end() && b != positions.end()) {
+        append_line_quad(vertices, indices, a->second, b->second, color);
       }
-      append_wireframe_line_quad(vertices, indices, a->second, b->second,
-                                 color);
     }
   }
-  return !emitted_edges.empty();
+  return !emitted.empty();
 }
 
-void append_triangle_mesh_wireframe_lines(
-    const RenderOverlayMeshSnapshot &mesh, std::uint32_t color,
-    std::vector<SceneWireframeLineVertex> &vertices,
-    std::vector<std::uint32_t> &indices) {
-  std::unordered_set<std::uint64_t> emitted_edges;
-  emitted_edges.reserve(mesh.indices.size());
-  auto append_edge = [&](std::uint32_t a, std::uint32_t b) {
-    if (a >= mesh.vertices.size() || b >= mesh.vertices.size() || a == b) {
+void append_triangle_edges(const RenderOverlayMeshSnapshot &mesh,
+                           std::uint32_t color,
+                           std::vector<SceneWireframeLineVertex> &vertices,
+                           std::vector<std::uint32_t> &indices) {
+  std::unordered_set<std::uint64_t> emitted;
+  emitted.reserve(mesh.indices.size());
+  const auto append_edge = [&](std::uint32_t a, std::uint32_t b) {
+    if (a >= mesh.vertices.size() || b >= mesh.vertices.size() || a == b ||
+        !emitted.insert(edge_key(a, b)).second) {
       return;
     }
-    if (!emitted_edges.insert(edge_key(a, b)).second) {
-      return;
-    }
-    append_wireframe_line_quad(vertices, indices, mesh.vertices[a].position,
-                               mesh.vertices[b].position, color);
+    append_line_quad(vertices, indices, mesh.vertices[a].position,
+                     mesh.vertices[b].position, color);
   };
-
-  for (std::size_t index = 0; index + 2u < mesh.indices.size(); index += 3u) {
+  for (std::size_t index = 0u; index + 2u < mesh.indices.size(); index += 3u) {
     append_edge(mesh.indices[index], mesh.indices[index + 1u]);
     append_edge(mesh.indices[index + 1u], mesh.indices[index + 2u]);
     append_edge(mesh.indices[index + 2u], mesh.indices[index]);
   }
 }
 
-SceneWireframeOverlayCache::Proxy
-create_proxy(filament::Engine &engine, filament::Scene &scene,
-             filament::Material &material,
-             filament::TransformManager::Instance parent_transform,
-             ViewportOverlayLayer layer,
-             const std::vector<SceneWireframeLineVertex> &vertices,
-             const std::vector<std::uint32_t> &indices,
-             const filament::Box &bounds, std::uint8_t layer_mask,
-             ViewportCameraClipPlanes clip_planes,
-             float line_width_pixels) {
-  SceneWireframeOverlayCache::Proxy proxy;
-  if (vertices.empty() || indices.empty()) {
-    return proxy;
-  }
-
-  const std::uint16_t blend_order =
-      static_cast<std::uint16_t>(viewport_overlay_draw_order(layer) * 64);
-  const OverlayRenderState state = OverlayRenderableBuilder::make_state(
-      layer, ViewportOverlayGeometryKind::Lines, blend_order);
-
-  proxy.entity = utils::EntityManager::get().create();
-  proxy.vertex_count = static_cast<std::uint32_t>(vertices.size());
-  proxy.index_count = static_cast<std::uint32_t>(indices.size());
-  proxy.material_instance = material.createInstance();
-  configure_overlay_material(*proxy.material_instance, state);
-  proxy.material_instance->setParameter("lineWidth", line_width_pixels);
-  proxy.material_instance->setParameter("featherPixels",
-                                        kOverlayLineFeatherPixels);
-  proxy.material_instance->setParameter("nearPlane", clip_planes.near_plane);
-
-  proxy.vertex_buffer =
-      filament::VertexBuffer::Builder()
-          .vertexCount(proxy.vertex_count)
-          .bufferCount(1)
-          .attribute(filament::VertexAttribute::POSITION, 0,
-                     AttributeType::FLOAT4,
-                     offsetof(SceneWireframeLineVertex, position),
-                     sizeof(SceneWireframeLineVertex))
-          .attribute(filament::VertexAttribute::CUSTOM0, 0,
-                     AttributeType::FLOAT4,
-                     offsetof(SceneWireframeLineVertex, start),
-                     sizeof(SceneWireframeLineVertex))
-          .attribute(filament::VertexAttribute::CUSTOM1, 0,
-                     AttributeType::FLOAT4,
-                     offsetof(SceneWireframeLineVertex, end),
-                     sizeof(SceneWireframeLineVertex))
-          .attribute(filament::VertexAttribute::CUSTOM2, 0,
-                     AttributeType::FLOAT4,
-                     offsetof(SceneWireframeLineVertex, control),
-                     sizeof(SceneWireframeLineVertex))
-          .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4,
-                     offsetof(SceneWireframeLineVertex, color),
-                     sizeof(SceneWireframeLineVertex))
-          .normalized(filament::VertexAttribute::COLOR)
-          .build(engine);
-  proxy.vertex_buffer->setBufferAt(
-      engine, 0, FilamentBufferDescriptorFactory::vector(vertices));
-
-  proxy.index_buffer = filament::IndexBuffer::Builder()
-                           .indexCount(proxy.index_count)
-                           .bufferType(filament::IndexBuffer::IndexType::UINT)
-                           .build(engine);
-  proxy.index_buffer->setBuffer(
-      engine, FilamentBufferDescriptorFactory::vector(indices));
-
-  filament::RenderableManager::Builder(1)
-      .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
-                proxy.vertex_buffer, proxy.index_buffer)
-      .material(0, proxy.material_instance)
-      .blendOrder(0, state.blend_order)
-      .globalBlendOrderEnabled(0, true)
-      .layerMask(kViewportAllLayerMask, layer_mask)
-      .boundingBox(bounds)
-      .culling(false)
-      .castShadows(false)
-      .receiveShadows(false)
-      .build(engine, proxy.entity);
-  engine.getTransformManager().create(proxy.entity, parent_transform);
-  scene.addEntity(proxy.entity);
-  return proxy;
+bool same_geometry_resource(
+    const RenderOverlayMeshSnapshot &mesh,
+    const ViewportPersistentOverlayStyleSnapshot &style,
+    const std::shared_ptr<const MeshGeometryPayload> &payload,
+    const std::shared_ptr<const quader_poly::Document> &authored,
+    std::uint32_t color) {
+  return payload.get() == mesh.geometry_payload.get() &&
+         authored.get() == mesh.authored_topology_payload.get() &&
+         color == wire_color(mesh, style);
 }
 
 } // namespace
 
-SceneWireframeOverlayCache::Proxy::Proxy(Proxy &&other) noexcept
-    : entity(other.entity),
-      vertex_buffer(std::exchange(other.vertex_buffer, nullptr)),
-      index_buffer(std::exchange(other.index_buffer, nullptr)),
-      material_instance(std::exchange(other.material_instance, nullptr)),
-      vertex_count(std::exchange(other.vertex_count, 0u)),
-      index_count(std::exchange(other.index_count, 0u)) {
-  other.entity.clear();
-}
+/// Couples a full-scene wire batch plan with its source mesh records.
+struct SceneWireframeOverlayCache::PreparedPlan final {
+  SceneWireframeOverlayBatchPlan planned;
+  std::vector<const RenderOverlayMeshSnapshot *> records;
+};
 
-SceneWireframeOverlayCache::Proxy& SceneWireframeOverlayCache::Proxy::operator=(Proxy&& other) noexcept {
-    if (this == &other) {
-        return *this;
-    }
-    entity = other.entity;
+/// Owns one derived local edge-ribbon resource for a topology/style pair.
+struct SceneWireframeOverlayCache::WireGeometryResource final {
+  std::uint64_t signature = 0u;
+  std::shared_ptr<const MeshGeometryPayload> payload;
+  std::shared_ptr<const quader_poly::Document> authored_topology;
+  std::uint32_t color = 0u;
+  filament::VertexBuffer *vertex_buffer = nullptr;
+  filament::IndexBuffer *index_buffer = nullptr;
+  std::uint32_t index_count = 0u;
+  std::uint64_t vertex_bytes = 0u;
+  std::uint64_t index_bytes = 0u;
+};
+
+/// Owns one Filament renderable and instance buffer for a scene-wire chunk.
+struct SceneWireframeOverlayCache::WireBatchProxy final {
+  WireBatchProxy() = default;
+  WireBatchProxy(const WireBatchProxy &) = delete;
+  WireBatchProxy &operator=(const WireBatchProxy &) = delete;
+  WireBatchProxy(WireBatchProxy &&other) noexcept
+      : entity(other.entity),
+        instance_buffer(std::exchange(other.instance_buffer, nullptr)),
+        material_instance(std::exchange(other.material_instance, nullptr)),
+        geometry(std::exchange(other.geometry, nullptr)) {
     other.entity.clear();
-    vertex_buffer = std::exchange(other.vertex_buffer, nullptr);
-    index_buffer = std::exchange(other.index_buffer, nullptr);
-    material_instance = std::exchange(other.material_instance, nullptr);
-    vertex_count = std::exchange(other.vertex_count, 0u);
-    index_count = std::exchange(other.index_count, 0u);
-    return *this;
+  }
+  WireBatchProxy &operator=(WireBatchProxy &&) = delete;
+
+  utils::Entity entity;
+  filament::InstanceBuffer *instance_buffer = nullptr;
+  filament::MaterialInstance *material_instance = nullptr;
+  WireGeometryResource *geometry = nullptr;
+};
+
+SceneWireframeOverlayCache::SceneWireframeOverlayCache() = default;
+
+SceneWireframeOverlayBatchPlan plan_scene_wireframe_overlay_batches(
+    const RenderOverlaySceneWireframeSnapshot &snapshot,
+    std::size_t max_instances_per_chunk) {
+  const std::vector<RenderInstancePrimitiveOccurrence> occurrences =
+      wire_occurrences(snapshot);
+  std::vector<RenderInstancePrimitiveKey> unique_geometry;
+  unique_geometry.reserve(occurrences.size());
+  for (const RenderInstancePrimitiveOccurrence &occurrence : occurrences) {
+    if (std::ranges::find(unique_geometry, occurrence.key) ==
+        unique_geometry.end()) {
+      unique_geometry.push_back(occurrence.key);
+    }
+  }
+  return {
+      .batches = plan_render_instance_batches(occurrences,
+                                              max_instances_per_chunk),
+      .participant_count = occurrences.size(),
+      .unique_geometry_style_count = unique_geometry.size(),
+  };
 }
 
-SceneWireframeOverlayCache::~SceneWireframeOverlayCache() {
-    shutdown();
-}
+SceneWireframeOverlayCache::~SceneWireframeOverlayCache() { shutdown(); }
 
-void SceneWireframeOverlayCache::initialize(filament::Engine &engine,
-                                            filament::Scene &scene,
-                                            filament::Material &line_material) {
+void SceneWireframeOverlayCache::initialize(
+    filament::Engine &engine, filament::Scene &scene,
+    filament::Material &line_material,
+    std::size_t max_instances_per_chunk) {
+  shutdown();
   engine_ = &engine;
   scene_ = &scene;
   line_material_ = &line_material;
+  max_instances_per_chunk_ =
+      std::max<std::size_t>(1u, max_instances_per_chunk);
 }
 
 void SceneWireframeOverlayCache::shutdown() {
-    if (!engine_) {
-        return;
-    }
+  clear();
+  destroy_geometry_resources();
+  engine_ = nullptr;
+  scene_ = nullptr;
+  line_material_ = nullptr;
+  max_instances_per_chunk_ = 1u;
+  synced_scene_binding_ = {};
+  synced_scene_revision_ = 0u;
+  synced_asset_revision_ = 0u;
+  synced_wire_style_signature_ = 0u;
+  synced_clip_planes_ = {};
+  layer_mask_ = 0u;
+  has_synced_ = false;
+  stats_ = {};
+}
 
-    for (auto& [entityId, entry] : entries_) {
-        (void)entityId;
-        destroy_entry(entry);
-    }
-    entries_.clear();
-    synced_states_.clear();
-    synced_scene_binding_ = {};
-    synced_scene_revision_ = 0;
-    synced_asset_revision_ = 0;
-    synced_wire_style_signature_ = 0;
-    synced_clip_planes_ = {};
-    layer_mask_ = 0u;
-    has_synced_ = false;
-    engine_ = nullptr;
-    scene_ = nullptr;
-    line_material_ = nullptr;
+void SceneWireframeOverlayCache::clear() {
+  for (WireBatchProxy &proxy : proxies_) {
+    destroy_batch(proxy);
+  }
+  proxies_.clear();
+  plan_ = {};
+  stats_.participant_count = 0u;
+  stats_.chunk_count = 0u;
+}
+
+SceneWireframeOverlayCache::PreparedPlan
+SceneWireframeOverlayCache::prepare(
+    const RenderOverlaySceneWireframeSnapshot &snapshot) const {
+  PreparedPlan prepared;
+  prepared.planned = plan_scene_wireframe_overlay_batches(
+      snapshot, max_instances_per_chunk_);
+  prepared.records.reserve(prepared.planned.batches.chunks.size());
+  for (const RenderInstanceBatchChunk &chunk :
+       prepared.planned.batches.chunks) {
+    prepared.records.push_back(record_for_chunk(snapshot, chunk));
+  }
+  return prepared;
 }
 
 void SceneWireframeOverlayCache::sync(
@@ -408,18 +464,9 @@ void SceneWireframeOverlayCache::sync(
   if (!initialized()) {
     return;
   }
-
   if (has_synced_ && synced_scene_binding_ != snapshot.scene_binding) {
-    for (auto &[entity_id, entry] : entries_) {
-      (void)entity_id;
-      destroy_entry(entry);
-    }
-    entries_.clear();
-    synced_states_.clear();
-    synced_scene_binding_ = {};
-    synced_scene_revision_ = 0;
-    synced_asset_revision_ = 0;
-    synced_wire_style_signature_ = 0;
+    clear();
+    destroy_geometry_resources();
     has_synced_ = false;
   }
 
@@ -427,196 +474,367 @@ void SceneWireframeOverlayCache::sync(
   if (snapshot.layer_mask == 0u) {
     return;
   }
-  const bool clip_planes_changed =
+  const bool clip_changed =
       !has_synced_ || synced_clip_planes_ != snapshot.clip_planes;
-  if (clip_planes_changed) {
-    set_proxy_clip_planes(snapshot.clip_planes);
-  }
-  synced_clip_planes_ = snapshot.clip_planes;
-  const bool wire_style_changed = scene_wireframe_style_changed(
+  const bool style_changed = scene_wireframe_style_changed(
       has_synced_, synced_wire_style_signature_, snapshot.style);
-
   if (has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
       synced_scene_revision_ == snapshot.scene_revision &&
-      synced_asset_revision_ == snapshot.asset_revision &&
-      !clip_planes_changed && !wire_style_changed) {
+      synced_asset_revision_ == snapshot.asset_revision && !clip_changed &&
+      !style_changed) {
     return;
   }
 
-  const std::vector<WireframeEntityState> states =
-      wireframe_entity_states(snapshot);
-  if (has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
-      !wire_style_changed &&
-      synced_asset_revision_ == snapshot.asset_revision &&
-      states == synced_states_) {
-    update_entry_transforms(snapshot);
-    synced_scene_binding_ = snapshot.scene_binding;
-    synced_scene_revision_ = snapshot.scene_revision;
+  const PreparedPlan prepared = prepare(snapshot);
+  const RenderInstanceBatchUpdateKind update =
+      classify_instance_batch_update(plan_, prepared.planned.batches);
+  bool synchronized = false;
+  if (!style_changed &&
+      update == RenderInstanceBatchUpdateKind::TransformsOnly) {
+    synchronized = update_transforms(prepared);
+    if (synchronized) {
+      plan_ = prepared.planned.batches;
+      ++stats_.transform_update_count;
+    }
+  } else if (!style_changed &&
+             update == RenderInstanceBatchUpdateKind::Unchanged) {
+    synchronized = true;
+  }
+  if (!synchronized) {
+    synchronized = rebuild(prepared, snapshot);
+  }
+  if (!synchronized) {
     return;
   }
-
-  std::unordered_set<EntityId> live_entities;
-  live_entities.reserve(states.size());
-  for (const WireframeEntityState &state : states) {
-    QDR_PROFILE_SCOPE("Scene wireframe overlay sync entity");
-    live_entities.insert(state.entity);
-    auto existing = entries_.find(state.entity);
-    const bool rebuild =
-        existing == entries_.end() ||
-        existing->second.mesh_id != state.mesh_id ||
-        existing->second.mesh_revision != state.mesh_revision ||
-        existing->second.selected != state.selected ||
-        (state.selected && wire_style_changed);
-    if (rebuild) {
-      if (existing != entries_.end()) {
-        destroy_entry(existing->second);
-        entries_.erase(existing);
-      }
-      const RenderOverlayMeshSnapshot *mesh =
-          find_wireframe_mesh_snapshot(snapshot.meshes, state.entity);
-      if (mesh == nullptr) {
-        continue;
-      }
-      Entry entry = create_entry(*mesh, snapshot.style);
-      existing = entries_.emplace(state.entity, std::move(entry)).first;
-    }
-    const RenderOverlayMeshSnapshot *mesh =
-        find_wireframe_mesh_snapshot(snapshot.meshes, state.entity);
-    if (mesh != nullptr) {
-      update_entry_transform(existing->second, mesh->world_transform);
-    }
+  if (clip_changed) {
+    update_clip_planes(snapshot.clip_planes);
   }
-
-  remove_except(live_entities);
-  synced_states_ = states;
   synced_scene_binding_ = snapshot.scene_binding;
   synced_scene_revision_ = snapshot.scene_revision;
   synced_asset_revision_ = snapshot.asset_revision;
   synced_wire_style_signature_ = snapshot.style.wire_signature;
+  synced_clip_planes_ = snapshot.clip_planes;
   has_synced_ = true;
+  stats_.participant_count = prepared.planned.participant_count;
+  stats_.chunk_count = prepared.planned.batches.chunks.size();
 }
 
-std::vector<SceneWireframeOverlayCache::WireframeEntityState>
-SceneWireframeOverlayCache::wireframe_entity_states(
-    const RenderOverlaySceneWireframeSnapshot &snapshot) const {
+bool SceneWireframeOverlayCache::rebuild(
+    const PreparedPlan &prepared,
+    const RenderOverlaySceneWireframeSnapshot &snapshot) {
   QDR_PROFILE_FUNCTION();
-  std::vector<WireframeEntityState> states;
-  states.reserve(snapshot.meshes.size());
-  for (const RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
-    if (!mesh.has_triangle_geometry() || mesh.mesh_id == kInvalidAssetId) {
-      continue;
+  std::vector<WireBatchProxy> created;
+  created.reserve(prepared.planned.batches.chunks.size());
+  for (std::size_t index = 0u;
+       index < prepared.planned.batches.chunks.size(); ++index) {
+    const RenderOverlayMeshSnapshot *record = prepared.records[index];
+    if (record == nullptr) {
+      for (WireBatchProxy &proxy : created) {
+        destroy_batch(proxy);
+      }
+      return false;
     }
-    states.push_back({
-        .entity = mesh.entity,
-        .mesh_id = mesh.mesh_id,
-        .mesh_revision = mesh.mesh_revision,
-        .selected = mesh.selected,
-    });
+    WireBatchProxy proxy = create_batch(
+        *record, prepared.planned.batches.chunks[index], snapshot.style,
+        snapshot.clip_planes);
+    if (!proxy.entity || proxy.instance_buffer == nullptr) {
+      destroy_batch(proxy);
+      for (WireBatchProxy &existing : created) {
+        destroy_batch(existing);
+      }
+      return false;
+    }
+    created.push_back(std::move(proxy));
   }
-  return states;
+
+  for (WireBatchProxy &proxy : proxies_) {
+    destroy_batch(proxy);
+  }
+  proxies_.swap(created);
+  plan_ = prepared.planned.batches;
+  ++stats_.rebuild_count;
+  stats_.participant_count = prepared.planned.participant_count;
+  stats_.chunk_count = proxies_.size();
+  prune_unused_geometry_resources();
+  return true;
 }
 
-SceneWireframeOverlayCache::Entry SceneWireframeOverlayCache::create_entry(
+bool SceneWireframeOverlayCache::update_transforms(
+    const PreparedPlan &prepared) {
+  if (prepared.planned.batches.chunks.size() != proxies_.size()) {
+    return false;
+  }
+  for (std::size_t index = 0u; index < proxies_.size(); ++index) {
+    if (!update_batch(proxies_[index],
+                      prepared.planned.batches.chunks[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+SceneWireframeOverlayCache::WireGeometryResource *
+SceneWireframeOverlayCache::acquire_geometry(
     const RenderOverlayMeshSnapshot &mesh,
     const ViewportPersistentOverlayStyleSnapshot &style) {
-  QDR_PROFILE_FUNCTION();
-  Entry entry;
-  entry.mesh_id = mesh.mesh_id;
-  if (!mesh.has_triangle_geometry()) {
-    return entry;
+  const std::uint64_t signature = wire_geometry_signature(mesh, style);
+  auto &bucket = geometry_resources_[signature];
+  const std::uint32_t color = wire_color(mesh, style);
+  for (const std::unique_ptr<WireGeometryResource> &resource : bucket) {
+    if (same_geometry_resource(mesh, style, resource->payload,
+                               resource->authored_topology,
+                               resource->color)) {
+      ++stats_.geometry_reuse_count;
+      return resource.get();
+    }
   }
-  entry.mesh_revision = mesh.mesh_revision;
-  entry.selected = mesh.selected;
-  entry.transform_root = utils::EntityManager::get().create();
-  filament::TransformManager &transforms = engine_->getTransformManager();
-  transforms.create(entry.transform_root);
-  const filament::TransformManager::Instance parent_transform =
-      transforms.getInstance(entry.transform_root);
 
-  const ViewportOverlayLayer layer = mesh.selected
-                                         ? ViewportOverlayLayer::SelectedEdge
-                                         : ViewportOverlayLayer::WireframeXray;
-  const std::uint32_t color =
-      mesh.selected ? style.selection_wire_color : kOverlayWireframeXrayColor;
-  const float line_width_pixels =
-      mesh.selected
-          ? style.selection_edge_line_width_pixels
-          : viewport_overlay_line_width_pixels(layer, 0.0f);
-  std::vector<SceneWireframeLineVertex> line_vertices;
-  std::vector<std::uint32_t> line_indices;
-  if (!append_authored_polygon_wireframe_lines(mesh, color, line_vertices,
-                                               line_indices)) {
-    append_triangle_mesh_wireframe_lines(mesh, color, line_vertices,
-                                         line_indices);
+  std::vector<SceneWireframeLineVertex> vertices;
+  std::vector<std::uint32_t> indices;
+  if (!append_authored_edges(mesh, color, vertices, indices)) {
+    append_triangle_edges(mesh, color, vertices, indices);
   }
-  const filament::Box bounds = bounds_for_mesh_vertices(mesh.vertices);
-  entry.line_proxy =
-      create_proxy(*engine_, *scene_, *line_material_, parent_transform, layer,
-                   line_vertices, line_indices, bounds, layer_mask_,
-                   synced_clip_planes_, line_width_pixels);
-  update_entry_transform(entry, mesh.world_transform);
-  return entry;
+  if (vertices.empty() || indices.empty()) {
+    return nullptr;
+  }
+
+  auto resource = std::make_unique<WireGeometryResource>();
+  resource->signature = signature;
+  resource->payload = mesh.geometry_payload;
+  resource->authored_topology = mesh.authored_topology_payload;
+  resource->color = color;
+  resource->index_count = static_cast<std::uint32_t>(indices.size());
+  resource->vertex_bytes =
+      vertices.size() * sizeof(SceneWireframeLineVertex);
+  resource->index_bytes = indices.size() * sizeof(std::uint32_t);
+  resource->vertex_buffer =
+      filament::VertexBuffer::Builder()
+          .vertexCount(static_cast<std::uint32_t>(vertices.size()))
+          .bufferCount(1u)
+          .attribute(filament::VertexAttribute::POSITION, 0u,
+                     AttributeType::FLOAT4,
+                     offsetof(SceneWireframeLineVertex, position),
+                     sizeof(SceneWireframeLineVertex))
+          .attribute(filament::VertexAttribute::CUSTOM0, 0u,
+                     AttributeType::FLOAT4,
+                     offsetof(SceneWireframeLineVertex, start),
+                     sizeof(SceneWireframeLineVertex))
+          .attribute(filament::VertexAttribute::CUSTOM1, 0u,
+                     AttributeType::FLOAT4,
+                     offsetof(SceneWireframeLineVertex, end),
+                     sizeof(SceneWireframeLineVertex))
+          .attribute(filament::VertexAttribute::CUSTOM2, 0u,
+                     AttributeType::FLOAT4,
+                     offsetof(SceneWireframeLineVertex, control),
+                     sizeof(SceneWireframeLineVertex))
+          .attribute(filament::VertexAttribute::COLOR, 0u,
+                     AttributeType::UBYTE4,
+                     offsetof(SceneWireframeLineVertex, color),
+                     sizeof(SceneWireframeLineVertex))
+          .normalized(filament::VertexAttribute::COLOR)
+          .build(*engine_);
+  resource->vertex_buffer->setBufferAt(
+      *engine_, 0u, FilamentBufferDescriptorFactory::vector(vertices));
+  resource->index_buffer =
+      filament::IndexBuffer::Builder()
+          .indexCount(resource->index_count)
+          .bufferType(filament::IndexBuffer::IndexType::UINT)
+          .build(*engine_);
+  resource->index_buffer->setBuffer(
+      *engine_, FilamentBufferDescriptorFactory::vector(indices));
+
+  WireGeometryResource *result = resource.get();
+  stats_.derived_vertex_bytes += resource->vertex_bytes;
+  stats_.derived_index_bytes += resource->index_bytes;
+  ++stats_.geometry_upload_count;
+  bucket.push_back(std::move(resource));
+  stats_.unique_geometry_resource_count = geometry_resources_.size();
+  std::size_t resource_count = 0u;
+  for (const auto &[key, resources] : geometry_resources_) {
+    (void)key;
+    resource_count += resources.size();
+  }
+  stats_.unique_geometry_resource_count = resource_count;
+  return result;
 }
 
-void SceneWireframeOverlayCache::destroy_entry(Entry &entry) {
-  destroy_proxy(entry.line_proxy, true);
-  destroy_transform_root(entry);
+SceneWireframeOverlayCache::WireBatchProxy
+SceneWireframeOverlayCache::create_batch(
+    const RenderOverlayMeshSnapshot &mesh,
+    const RenderInstanceBatchChunk &chunk,
+    const ViewportPersistentOverlayStyleSnapshot &style,
+    ViewportCameraClipPlanes clip_planes) {
+  WireBatchProxy proxy;
+  proxy.geometry = acquire_geometry(mesh, style);
+  if (proxy.geometry == nullptr || chunk.world_transforms.empty() ||
+      chunk.world_transforms.size() > max_instances_per_chunk_) {
+    return proxy;
+  }
+
+  const ViewportOverlayLayer layer = wire_layer(mesh);
+  const std::uint16_t blend_order = static_cast<std::uint16_t>(
+      viewport_overlay_draw_order(layer) * 64u);
+  const OverlayRenderState state = OverlayRenderableBuilder::make_state(
+      layer, ViewportOverlayGeometryKind::Lines, blend_order);
+
+  proxy.entity = utils::EntityManager::get().create();
+  proxy.material_instance = line_material_->createInstance();
+  if (proxy.material_instance == nullptr) {
+    return proxy;
+  }
+  configure_overlay_material(*proxy.material_instance, state);
+  proxy.material_instance->setParameter("lineWidth", wire_width(mesh, style));
+  proxy.material_instance->setParameter("featherPixels",
+                                        kOverlayLineFeatherPixels);
+  proxy.material_instance->setParameter("nearPlane",
+                                        clip_planes.near_plane);
+
+  std::vector<filament::math::mat4f> transforms;
+  transforms.reserve(chunk.world_transforms.size());
+  for (const QMat4 &transform : chunk.world_transforms) {
+    transforms.push_back(make_transform(transform));
+  }
+  proxy.instance_buffer =
+      filament::InstanceBuffer::Builder(transforms.size())
+          .localTransforms(transforms.data())
+          .build(*engine_);
+  filament::RenderableManager::Builder(1u)
+      .geometry(0u, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                proxy.geometry->vertex_buffer, proxy.geometry->index_buffer,
+                0u, proxy.geometry->index_count)
+      .material(0u, proxy.material_instance)
+      .instances(transforms.size(), proxy.instance_buffer)
+      .blendOrder(0u, state.blend_order)
+      .globalBlendOrderEnabled(0u, true)
+      .layerMask(kViewportAllLayerMask, layer_mask_)
+      .channel(kViewportDefaultRenderableChannel)
+      .boundingBox(filament_bounds(chunk.world_bounds))
+      .culling(false)
+      .castShadows(false)
+      .receiveShadows(false)
+      .build(*engine_, proxy.entity);
+  engine_->getTransformManager().create(proxy.entity);
+  scene_->addEntity(proxy.entity);
+  return proxy;
 }
 
-void SceneWireframeOverlayCache::destroy_proxy(Proxy &proxy,
-                                               bool remove_from_scene) {
-  if (!engine_) {
+bool SceneWireframeOverlayCache::update_batch(
+    WireBatchProxy &proxy, const RenderInstanceBatchChunk &chunk) {
+  if (proxy.instance_buffer == nullptr || !proxy.entity ||
+      proxy.instance_buffer->getInstanceCount() !=
+          chunk.world_transforms.size()) {
+    return false;
+  }
+  std::vector<filament::math::mat4f> transforms;
+  transforms.reserve(chunk.world_transforms.size());
+  for (const QMat4 &transform : chunk.world_transforms) {
+    transforms.push_back(make_transform(transform));
+  }
+  proxy.instance_buffer->setLocalTransforms(transforms.data(),
+                                             transforms.size());
+  filament::RenderableManager &renderables = engine_->getRenderableManager();
+  const filament::RenderableManager::Instance instance =
+      renderables.getInstance(proxy.entity);
+  if (!instance) {
+    return false;
+  }
+  renderables.setAxisAlignedBoundingBox(instance,
+                                        filament_bounds(chunk.world_bounds));
+  return true;
+}
+
+void SceneWireframeOverlayCache::destroy_batch(WireBatchProxy &proxy) {
+  if (engine_ == nullptr) {
     return;
   }
-
   if (proxy.entity) {
-    if (remove_from_scene && scene_ != nullptr) {
+    if (scene_ != nullptr) {
       scene_->remove(proxy.entity);
     }
     engine_->getRenderableManager().destroy(proxy.entity);
     engine_->getTransformManager().destroy(proxy.entity);
   }
-  if (proxy.material_instance) {
+  if (proxy.instance_buffer != nullptr) {
+    engine_->destroy(proxy.instance_buffer);
+    proxy.instance_buffer = nullptr;
+  }
+  if (proxy.material_instance != nullptr) {
     engine_->destroy(proxy.material_instance);
     proxy.material_instance = nullptr;
-  }
-  if (proxy.vertex_buffer) {
-    engine_->destroy(proxy.vertex_buffer);
-    proxy.vertex_buffer = nullptr;
-  }
-  if (proxy.index_buffer) {
-    engine_->destroy(proxy.index_buffer);
-    proxy.index_buffer = nullptr;
   }
   if (proxy.entity) {
     utils::EntityManager::get().destroy(proxy.entity);
     proxy.entity.clear();
   }
-  proxy.vertex_count = 0u;
-  proxy.index_count = 0u;
+  proxy.geometry = nullptr;
 }
 
-void SceneWireframeOverlayCache::destroy_transform_root(Entry &entry) {
-  if (!engine_ || !entry.transform_root) {
-    return;
+void SceneWireframeOverlayCache::destroy_geometry_resources() {
+  if (engine_ != nullptr) {
+    for (auto &[signature, bucket] : geometry_resources_) {
+      (void)signature;
+      for (const std::unique_ptr<WireGeometryResource> &resource : bucket) {
+        if (resource->vertex_buffer != nullptr) {
+          engine_->destroy(resource->vertex_buffer);
+        }
+        if (resource->index_buffer != nullptr) {
+          engine_->destroy(resource->index_buffer);
+        }
+      }
+    }
   }
-  engine_->getTransformManager().destroy(entry.transform_root);
-  utils::EntityManager::get().destroy(entry.transform_root);
-  entry.transform_root.clear();
+  geometry_resources_.clear();
+  stats_.unique_geometry_resource_count = 0u;
+  stats_.derived_vertex_bytes = 0u;
+  stats_.derived_index_bytes = 0u;
 }
 
-void SceneWireframeOverlayCache::set_proxy_layer_mask(
-    const Proxy &proxy, std::uint8_t layer_mask) const {
-  if (!engine_ || !proxy.entity) {
-    return;
+void SceneWireframeOverlayCache::prune_unused_geometry_resources() {
+  std::unordered_set<const WireGeometryResource *> live;
+  live.reserve(proxies_.size());
+  for (const WireBatchProxy &proxy : proxies_) {
+    if (proxy.geometry != nullptr) {
+      live.insert(proxy.geometry);
+    }
   }
-  filament::RenderableManager &renderables = engine_->getRenderableManager();
-  const filament::RenderableManager::Instance instance =
-      renderables.getInstance(proxy.entity);
-  if (!instance) {
-    return;
+  std::size_t resource_count = 0u;
+  for (auto bucket_it = geometry_resources_.begin();
+       bucket_it != geometry_resources_.end();) {
+    auto &bucket = bucket_it->second;
+    for (auto it = bucket.begin(); it != bucket.end();) {
+      WireGeometryResource &resource = **it;
+      if (live.contains(&resource)) {
+        ++resource_count;
+        ++it;
+        continue;
+      }
+      if (resource.vertex_buffer != nullptr) {
+        engine_->destroy(resource.vertex_buffer);
+      }
+      if (resource.index_buffer != nullptr) {
+        engine_->destroy(resource.index_buffer);
+      }
+      stats_.derived_vertex_bytes -= resource.vertex_bytes;
+      stats_.derived_index_bytes -= resource.index_bytes;
+      it = bucket.erase(it);
+    }
+    if (bucket.empty()) {
+      bucket_it = geometry_resources_.erase(bucket_it);
+    } else {
+      ++bucket_it;
+    }
   }
-  renderables.setLayerMask(instance, kViewportAllLayerMask, layer_mask);
+  stats_.unique_geometry_resource_count = resource_count;
+}
+
+void SceneWireframeOverlayCache::update_clip_planes(
+    ViewportCameraClipPlanes clip_planes) {
+  for (WireBatchProxy &proxy : proxies_) {
+    if (proxy.material_instance != nullptr) {
+      proxy.material_instance->setParameter("nearPlane",
+                                            clip_planes.near_plane);
+    }
+  }
 }
 
 void SceneWireframeOverlayCache::set_layer_mask(std::uint8_t layer_mask) {
@@ -624,68 +842,18 @@ void SceneWireframeOverlayCache::set_layer_mask(std::uint8_t layer_mask) {
     return;
   }
   layer_mask_ = layer_mask;
-  for (auto &[entityId, entry] : entries_) {
-    (void)entityId;
-    set_proxy_layer_mask(entry.line_proxy, layer_mask_);
+  if (engine_ == nullptr) {
+    return;
   }
-}
-
-void SceneWireframeOverlayCache::set_proxy_clip_planes(
-    ViewportCameraClipPlanes clip_planes) {
-  for (auto &[entityId, entry] : entries_) {
-    (void)entityId;
-    if (entry.line_proxy.material_instance == nullptr) {
+  filament::RenderableManager &renderables = engine_->getRenderableManager();
+  for (const WireBatchProxy &proxy : proxies_) {
+    if (!proxy.entity) {
       continue;
     }
-    entry.line_proxy.material_instance->setParameter(
-        "nearPlane", clip_planes.near_plane);
-  }
-}
-
-void SceneWireframeOverlayCache::update_entry_transform(
-    const Entry &entry, const QMat4 &world_transform) const {
-  if (!engine_ || !entry.transform_root) {
-    return;
-  }
-  filament::TransformManager &transforms = engine_->getTransformManager();
-  filament::TransformManager::Instance instance =
-      transforms.getInstance(entry.transform_root);
-  if (!instance) {
-    transforms.create(entry.transform_root);
-    instance = transforms.getInstance(entry.transform_root);
-  }
-  transforms.setTransform(instance, make_transform(world_transform));
-}
-
-void SceneWireframeOverlayCache::update_entry_transforms(
-    const RenderOverlaySceneWireframeSnapshot &snapshot) {
-  QDR_PROFILE_FUNCTION();
-  if (!engine_) {
-    return;
-  }
-  filament::TransformManager &transforms = engine_->getTransformManager();
-  transforms.openLocalTransformTransaction();
-  for (const WireframeEntityState &state : synced_states_) {
-    const auto existing = entries_.find(state.entity);
-    if (existing != entries_.end()) {
-      const RenderOverlayMeshSnapshot *mesh =
-          find_wireframe_mesh_snapshot(snapshot.meshes, state.entity);
-      if (mesh != nullptr) {
-        update_entry_transform(existing->second, mesh->world_transform);
-      }
-    }
-  }
-  transforms.commitLocalTransformTransaction();
-}
-
-void SceneWireframeOverlayCache::remove_except(
-    const std::unordered_set<EntityId> &live_entities) {
-  for (auto it = entries_.begin(); it != entries_.end();) {
-    if (!live_entities.contains(it->first)) {
-      destroy_entry(it->second);
-      it = entries_.erase(it);
-    } else {
-      ++it;
+    const filament::RenderableManager::Instance instance =
+        renderables.getInstance(proxy.entity);
+    if (instance) {
+      renderables.setLayerMask(instance, kViewportAllLayerMask, layer_mask_);
     }
   }
 }

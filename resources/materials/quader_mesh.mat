@@ -1,5 +1,8 @@
 material {
     name : QuaderDefaultMesh,
+    blending : transparent,
+    depthWrite : true,
+    instanced : true,
     shadingModel : unlit,
     requires : [
         uv0,
@@ -57,6 +60,14 @@ material {
         {
             type : float,
             name : surfaceGridEnabled
+        },
+        {
+            type : float,
+            name : instanceEditDim
+        },
+        {
+            type : float4,
+            name : instanceEditContextColor
         }
     ]
 }
@@ -160,6 +171,18 @@ fragment {
                 + materialParams.textureTransformOffset;
     }
 
+    vec4 applyInstanceEditDim(vec3 baseColor, float sourceAlpha) {
+        float amount = clamp(materialParams.instanceEditDim, 0.0, 1.0);
+        float luminance = dot(baseColor, vec3(0.2126, 0.7152, 0.0722));
+        vec3 contextColor = mix(vec3(luminance),
+                                materialParams.instanceEditContextColor.rgb,
+                                0.88);
+        float contextAlpha = clamp(materialParams.instanceEditContextColor.a,
+                                   0.05, 1.0);
+        return vec4(mix(baseColor, contextColor, amount),
+                    mix(sourceAlpha, contextAlpha, amount));
+    }
+
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
 
@@ -168,7 +191,8 @@ fragment {
         vec4 baseSample = texture(materialParams_baseColorTexture, uv);
         vec3 baseColor = baseSample.rgb * materialParams.baseColorFactor.rgb;
         baseColor = applySurfaceGrid(baseColor);
-
-        material.baseColor = vec4(baseColor, baseSample.a * materialParams.baseColorFactor.a);
+        vec4 edited = applyInstanceEditDim(
+                baseColor, baseSample.a * materialParams.baseColorFactor.a);
+        material.baseColor = vec4(edited.rgb * edited.a, edited.a);
     }
 }

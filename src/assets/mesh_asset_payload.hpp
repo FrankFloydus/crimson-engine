@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -97,19 +98,29 @@ inline bool same_primitives(const MeshAsset &left, const MeshAsset &right) {
 
 } // namespace mesh_asset_payload_detail
 
+/** Compares compiled geometry independently of logical asset metadata. */
+inline bool mesh_geometry_payload_equal(const MeshGeometryPayload &left,
+                                        const MeshGeometryPayload &right) {
+  using namespace mesh_asset_payload_detail;
+  return left.vertices.size() == right.vertices.size() &&
+         std::equal(left.vertices.begin(), left.vertices.end(),
+                    right.vertices.begin(), same_vertex) &&
+         left.indices == right.indices &&
+         left.primitives == right.primitives;
+}
+
+/** Returns a deterministic in-process content hash for geometry interning. */
+inline std::uint64_t
+mesh_geometry_payload_hash(const MeshGeometryPayload &geometry) {
+  return geometry.content_id().value;
+}
+
 /**
- * Returns an ownership-isolated mesh payload, including its authored polygon
- * document. Asset stores and history snapshots use this at mutation boundaries
- * so callers cannot mutate retained state through a shared document pointer.
+ * Returns an O(1) mesh snapshot. Compiled and authored topology are immutable
+ * shared state; either payload detaches only through its explicit edit method.
  */
 inline MeshAsset clone_mesh_asset_payload(const MeshAsset &source) {
-  MeshAsset clone = source;
-  if (source.authored_polygon_document) {
-    clone.authored_polygon_document =
-        std::make_shared<quader_poly::Document>(
-            *source.authored_polygon_document);
-  }
-  return clone;
+  return source;
 }
 
 /**
@@ -117,9 +128,14 @@ inline MeshAsset clone_mesh_asset_payload(const MeshAsset &source) {
  * vertex and index buffers.
  */
 inline MeshAsset isolate_mesh_asset_payload(MeshAsset source) {
+  (void)source.geometry_payload();
+  // A caller can assign a shared_ptr<Document> to the public const pointer and
+  // retain a mutable alias. Publish an immutable snapshot at registry mutation
+  // boundaries; the registry can still intern equal snapshots immediately so
+  // retained assets/history share one canonical topology payload.
   if (source.authored_polygon_document) {
     source.authored_polygon_document =
-        std::make_shared<quader_poly::Document>(
+        std::make_shared<const quader_poly::Document>(
             *source.authored_polygon_document);
   }
   return source;
@@ -129,10 +145,9 @@ inline MeshAsset isolate_mesh_asset_payload(MeshAsset source) {
 inline bool mesh_asset_payload_equal(const MeshAsset &left,
                                      const MeshAsset &right) {
   using namespace mesh_asset_payload_detail;
-  return left.name == right.name && left.vertices.size() == right.vertices.size() &&
-         std::equal(left.vertices.begin(), left.vertices.end(),
-                    right.vertices.begin(), same_vertex) &&
-         left.indices == right.indices && same_primitives(left, right) &&
+  return left.name == right.name &&
+         mesh_geometry_payload_equal(left.geometry(), right.geometry()) &&
+         same_primitives(left, right) &&
          left.has_stable_cpu_topology == right.has_stable_cpu_topology &&
          same_authored_document(left, right);
 }

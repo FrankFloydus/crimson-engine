@@ -20,6 +20,7 @@ namespace quader {
 struct QdrSceneBinaryEncodeResult final {
   std::vector<std::byte> bytes;
   std::size_t logical_geometry_count = 0;
+  std::size_t geometry_encode_count = 0;
   std::size_t unique_geometry_count = 0;
   std::size_t compressed_geometry_count = 0;
   std::uint64_t uncompressed_geometry_bytes = 0;

@@ -41,7 +41,7 @@ public:
     void update(const ViewportCameraController &controller,
                 std::uint32_t viewport_width, std::uint32_t viewport_height,
                 float grid_world_spacing, const ViewportSettings &settings,
-                bool visible);
+                bool visible, bool instance_edit_context = false);
 
     bool visible() const {
         return visible_;

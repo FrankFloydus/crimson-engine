@@ -79,6 +79,8 @@ QtSceneWorkspaceLabels QtSceneWorkspaceLabels::defaults() {
       .empty_title = QStringLiteral("No scenes open"),
       .empty_description =
           QStringLiteral("Create a new scene or open one from this project."),
+      .return_to_scene = QStringLiteral("Return to scene %1"),
+      .editing_instance = QStringLiteral("Editing instance %1"),
   };
 }
 
@@ -194,6 +196,33 @@ QtSceneWorkspace::QtSceneWorkspace(QWidget *parent) : QWidget(parent) {
   tabs_layout->addWidget(new_scene_button_);
   root_layout->addWidget(tabs_row);
 
+  instance_edit_bar_ = new QWidget(this);
+  instance_edit_bar_->setObjectName(
+      QStringLiteral("sceneWorkspace.instanceBreadcrumb"));
+  auto *instance_edit_layout = new QHBoxLayout(instance_edit_bar_);
+  instance_edit_layout->setContentsMargins(6, 2, 6, 2);
+  instance_edit_layout->setSpacing(4);
+
+  instance_scene_crumb_ = new QToolButton(instance_edit_bar_);
+  instance_scene_crumb_->setObjectName(
+      QStringLiteral("sceneWorkspace.instanceBreadcrumb.scene"));
+  instance_scene_crumb_->setAutoRaise(true);
+  instance_edit_layout->addWidget(instance_scene_crumb_);
+
+  instance_separator_ = new QLabel(QStringLiteral("\u203a"),
+                                   instance_edit_bar_);
+  instance_separator_->setObjectName(
+      QStringLiteral("sceneWorkspace.instanceBreadcrumb.separator"));
+  instance_edit_layout->addWidget(instance_separator_);
+
+  instance_name_crumb_ = new QLabel(instance_edit_bar_);
+  instance_name_crumb_->setObjectName(
+      QStringLiteral("sceneWorkspace.instanceBreadcrumb.instance"));
+  instance_edit_layout->addWidget(instance_name_crumb_);
+  instance_edit_layout->addStretch(1);
+  instance_edit_bar_->hide();
+  root_layout->addWidget(instance_edit_bar_);
+
   content_stack_ = new QStackedWidget(this);
   content_stack_->setObjectName(QStringLiteral("sceneWorkspace.content"));
 
@@ -267,8 +296,15 @@ QtSceneWorkspace::QtSceneWorkspace(QWidget *parent) : QWidget(parent) {
                        close_scene_requested_(*session_id);
                      }
                    });
+  QObject::connect(instance_scene_crumb_, &QToolButton::clicked, this,
+                   [this]() {
+                     if (exit_instance_edit_requested_) {
+                       exit_instance_edit_requested_();
+                     }
+                   });
 
   refresh_labels();
+  refresh_instance_edit_breadcrumb();
   refresh_content_page();
 }
 
@@ -354,6 +390,20 @@ void QtSceneWorkspace::set_close_scene_requested_callback(
   close_scene_requested_ = std::move(callback);
 }
 
+void QtSceneWorkspace::set_exit_instance_edit_requested_callback(
+    RequestCallback callback) {
+  exit_instance_edit_requested_ = std::move(callback);
+}
+
+void QtSceneWorkspace::set_instance_edit_breadcrumb(
+    std::optional<QtInstanceEditBreadcrumb> breadcrumb) {
+  if (instance_edit_breadcrumb_ == breadcrumb) {
+    return;
+  }
+  instance_edit_breadcrumb_ = std::move(breadcrumb);
+  refresh_instance_edit_breadcrumb();
+}
+
 std::optional<QtSceneSessionId> QtSceneWorkspace::active_scene() const {
   return session_id_at(tab_bar_->currentIndex());
 }
@@ -425,6 +475,30 @@ void QtSceneWorkspace::refresh_labels() {
   empty_new_scene_button_->setAccessibleName(labels_.new_scene);
   empty_open_scene_button_->setText(labels_.open_scene);
   empty_open_scene_button_->setAccessibleName(labels_.open_scene);
+  refresh_instance_edit_breadcrumb();
+}
+
+void QtSceneWorkspace::refresh_instance_edit_breadcrumb() {
+  const bool visible = instance_edit_breadcrumb_.has_value();
+  instance_edit_bar_->setVisible(visible);
+  if (!visible) {
+    instance_scene_crumb_->setText({});
+    instance_name_crumb_->clear();
+    return;
+  }
+
+  const QtInstanceEditBreadcrumb &breadcrumb = *instance_edit_breadcrumb_;
+  instance_scene_crumb_->setText(breadcrumb.scene_name);
+  const QString return_text = labels_.return_to_scene.arg(
+      breadcrumb.scene_name);
+  instance_scene_crumb_->setToolTip(return_text);
+  instance_scene_crumb_->setAccessibleName(return_text);
+
+  instance_name_crumb_->setText(breadcrumb.instance_name);
+  const QString editing_text = labels_.editing_instance.arg(
+      breadcrumb.instance_name);
+  instance_name_crumb_->setToolTip(editing_text);
+  instance_name_crumb_->setAccessibleName(editing_text);
 }
 
 void QtSceneWorkspace::refresh_content_page() {

@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <new>
 #include <span>
 #include <stdexcept>
@@ -1119,39 +1120,43 @@ encode_polygon_state(const PolygonDocument &polygon) {
 
   PolygonDocument polygon = decode_authored_topology(geometry);
   PolygonDocumentImpl &impl = PolygonDocumentNativeAccess::impl(polygon);
-  if (vertex_count > impl.document.vertices.size() ||
-      face_count > impl.document.faces.size() ||
-      edge_count > quader_poly::document_edges(impl.document).size()) {
+  const quader_poly::Document &document = *impl.document;
+  if (vertex_count > document.vertices.size() ||
+      face_count > document.faces.size() ||
+      edge_count > quader_poly::document_edges(document).size()) {
     malformed("Polygon selection count exceeds its live topology.");
   }
   impl.content_revision = content_revision;
   impl.selection_revision = selection_revision;
-  impl.selection.mode = mode;
-  impl.selection.has_active = has_active != 0;
-  impl.selection.active_kind = active_kind;
-  impl.selection.active_vertex = active_vertex;
-  impl.selection.active_edge = {active_edge_a, active_edge_b};
-  impl.selection.active_face = active_face;
-  impl.selection.vertices.reserve(vertex_count);
+  quader_poly::Selection selection;
+  selection.mode = mode;
+  selection.has_active = has_active != 0;
+  selection.active_kind = active_kind;
+  selection.active_vertex = active_vertex;
+  selection.active_edge = {active_edge_a, active_edge_b};
+  selection.active_face = active_face;
+  selection.vertices.reserve(vertex_count);
   for (std::uint32_t index = 0; index < vertex_count; ++index) {
-    impl.selection.vertices.push_back(read_u32_at(
+    selection.vertices.push_back(read_u32_at(
         vertices, static_cast<std::size_t>(index) * 4U, "selected vertex"));
   }
-  impl.selection.edges.reserve(edge_count);
+  selection.edges.reserve(edge_count);
   for (std::uint32_t index = 0; index < edge_count; ++index) {
-    impl.selection.edges.push_back({
+    selection.edges.push_back({
         read_u32_at(edges, static_cast<std::size_t>(index) * 8U,
                     "selected edge"),
         read_u32_at(edges, static_cast<std::size_t>(index) * 8U + 4U,
                     "selected edge"),
     });
   }
-  impl.selection.faces.reserve(face_count);
+  selection.faces.reserve(face_count);
   for (std::uint32_t index = 0; index < face_count; ++index) {
-    impl.selection.faces.push_back(read_u32_at(
+    selection.faces.push_back(read_u32_at(
         faces, static_cast<std::size_t>(index) * 4U, "selected face"));
   }
-  validate_selection(impl.document, impl.selection, true);
+  validate_selection(document, selection, true);
+  impl.selection = std::make_shared<const quader_poly::Selection>(
+      std::move(selection));
   return polygon;
 }
 

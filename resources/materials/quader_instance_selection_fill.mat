@@ -1,0 +1,23 @@
+material {
+    name : QuaderInstanceSelectionFill,
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : false,
+    depthCulling : true,
+    doubleSided : true,
+    instanced : true,
+    parameters : [
+        {
+            type : float4,
+            name : fillColor
+        }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        float alpha = clamp(materialParams.fillColor.a, 0.0, 1.0);
+        material.baseColor = vec4(materialParams.fillColor.rgb * alpha, alpha);
+    }
+}

@@ -51,8 +51,9 @@ bool finite_vector(QVec3 value) {
 }
 
 bool mesh_has_editable_finite_geometry(const MeshAsset &mesh) {
-  if (!mesh.has_stable_cpu_topology || mesh.vertices.empty() ||
-      !std::all_of(mesh.vertices.begin(), mesh.vertices.end(),
+  const MeshGeometryPayload &geometry = mesh.geometry();
+  if (!mesh.has_stable_cpu_topology || geometry.vertices.empty() ||
+      !std::all_of(geometry.vertices.begin(), geometry.vertices.end(),
                    [](const MeshVertex &vertex) {
                      return finite_vector(vertex.position);
                    })) {
@@ -142,15 +143,12 @@ struct PivotRebaseRequest {
 };
 
 void offset_mesh_vertices(MeshAsset &mesh, QVec3 local_delta) {
-  for (MeshVertex &vertex : mesh.vertices) {
+  for (MeshVertex &vertex : mesh.edit_geometry().vertices) {
     vertex.position = vertex.position - local_delta;
   }
   if (mesh.authored_polygon_document != nullptr) {
-    mesh.authored_polygon_document =
-        std::make_shared<quader_poly::Document>(
-            *mesh.authored_polygon_document);
     for (quader_poly::Vertex &vertex :
-         mesh.authored_polygon_document->vertices) {
+         mesh.edit_authored_polygon_document().vertices) {
       vertex.position = vertex.position - local_delta;
     }
   }
@@ -658,8 +656,9 @@ std::optional<QVec3> local_mean_vertex(const MeshAsset &mesh) {
       sum += vertex.position;
     }
   } else {
-    count = mesh.vertices.size();
-    for (const MeshVertex &vertex : mesh.vertices) {
+    const MeshGeometryPayload &geometry = mesh.geometry();
+    count = geometry.vertices.size();
+    for (const MeshVertex &vertex : geometry.vertices) {
       if (!finite_vector(vertex.position)) {
         return std::nullopt;
       }
@@ -808,7 +807,8 @@ CopyPivotSelection collect_copy_pivot_selection(
     if (mesh == nullptr) {
       return {.message = "Pivot target mesh asset does not exist."};
     }
-    if (!mesh->has_stable_cpu_topology || mesh->vertices.empty()) {
+    if (!mesh->has_stable_cpu_topology ||
+        mesh->geometry().vertices.empty()) {
       return {.message =
                   "Pivot target mesh does not have editable CPU mesh data."};
     }

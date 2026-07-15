@@ -24,6 +24,23 @@
 namespace quader {
 
 /**
+ * Identifies the transient scene-local definition projection used while an
+ * occurrence is being edited. This is presentation/input state, not document
+ * state.
+ */
+struct ModelingInstanceEditScope final {
+  EntityId occurrence = kInvalidEntityId;
+  EntityId definition = kInvalidEntityId;
+
+  [[nodiscard]] bool active() const noexcept {
+    return occurrence != kInvalidEntityId && definition != kInvalidEntityId;
+  }
+
+  friend bool operator==(const ModelingInstanceEditScope &,
+                         const ModelingInstanceEditScope &) = default;
+};
+
+/**
  * Enumerates ModelingCommandId values used by the modeling layer.
  */
 enum class ModelingCommandId {

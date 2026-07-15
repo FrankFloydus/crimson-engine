@@ -45,8 +45,18 @@ struct QtSceneWorkspaceLabels {
   QString open_scene;
   QString empty_title;
   QString empty_description;
+  QString return_to_scene;
+  QString editing_instance;
 
   [[nodiscard]] static QtSceneWorkspaceLabels defaults();
+};
+
+/// Transient presentation state for the instance-edit breadcrumb row.
+struct QtInstanceEditBreadcrumb {
+  QString scene_name;
+  QString instance_name;
+
+  bool operator==(const QtInstanceEditBreadcrumb &) const = default;
 };
 
 /**
@@ -92,6 +102,15 @@ public:
   void set_open_scene_requested_callback(RequestCallback callback);
   void set_activate_scene_requested_callback(SceneRequestCallback callback);
   void set_close_scene_requested_callback(SceneRequestCallback callback);
+  void set_exit_instance_edit_requested_callback(RequestCallback callback);
+
+  /** Shows or hides the compact row below the unchanged scene tab bar. */
+  void set_instance_edit_breadcrumb(
+      std::optional<QtInstanceEditBreadcrumb> breadcrumb);
+  [[nodiscard]] const std::optional<QtInstanceEditBreadcrumb> &
+  instance_edit_breadcrumb() const {
+    return instance_edit_breadcrumb_;
+  }
 
   [[nodiscard]] const std::vector<QtSceneTabItem> &scene_tabs() const {
     return scenes_;
@@ -106,12 +125,17 @@ private:
   session_id_at(int index) const;
   void rebuild_tabs(std::optional<QtSceneSessionId> active_scene);
   void refresh_labels();
+  void refresh_instance_edit_breadcrumb();
   void refresh_content_page();
 
   QtSceneWorkspaceLabels labels_ = QtSceneWorkspaceLabels::defaults();
   std::vector<QtSceneTabItem> scenes_;
   QTabBar *tab_bar_ = nullptr;
   QToolButton *new_scene_button_ = nullptr;
+  QWidget *instance_edit_bar_ = nullptr;
+  QToolButton *instance_scene_crumb_ = nullptr;
+  QLabel *instance_separator_ = nullptr;
+  QLabel *instance_name_crumb_ = nullptr;
   QStackedWidget *content_stack_ = nullptr;
   QWidget *empty_page_ = nullptr;
   QLabel *empty_title_label_ = nullptr;
@@ -125,6 +149,8 @@ private:
   RequestCallback open_scene_requested_;
   SceneRequestCallback activate_scene_requested_;
   SceneRequestCallback close_scene_requested_;
+  RequestCallback exit_instance_edit_requested_;
+  std::optional<QtInstanceEditBreadcrumb> instance_edit_breadcrumb_;
 };
 
 } // namespace quader

@@ -4342,6 +4342,81 @@ Verification:
   tabs in order with the prior active scene. The final log contains no warnings, errors, asserts,
   or Sentry envelopes.
 
+## 2026-07-15 - Scene-Local Instances And Shared Geometry Batching
+
+Invariant:
+
+- A formal instance is one hidden scene-local definition root containing canonical Mesh/Empty
+  members plus one or more leaf occurrence roots. Occurrences own only outer scene state and refer
+  to the definition; definitions cannot nest, cross scenes, become empty while referenced, or be
+  destroyed while a surviving occurrence refers to them.
+- Instance editing is transient `SceneSession` state. Entry clears the occurrence selection and
+  scopes selection/picking/tools to canonical members displayed through the active occurrence
+  transform. Exit restores Object mode and the occurrence selection. Tab switches retain each
+  scene's context; invalid occurrence/definition state performs the same automatic cleanup.
+- Create/Flatten are document commands. Duplicate, Alt-drag, arrays, and same-scene paste preserve
+  the definition link. Cross-scene paste clones an independent destination definition. Flattening
+  the final occurrence adopts the canonical members; partial flatten makes independent COW member
+  copies so surviving occurrences remain linked.
+- `PolygonDocument` and the native runtime wrapper share immutable authored topology with separate
+  selection. Selection and no-op operations do not detach; the first real topology edit publishes
+  a new content identity. Scene hydration must preserve that shared pointer instead of copying the
+  SDK document.
+- Logical mesh assets keep distinct `AssetId`s while sharing immutable compiled geometry payloads.
+  QDR snapshots, picking caches, render snapshots, and history pin those payloads. QDR scene schema
+  3 stores definition/occurrence components, keeps schema 1/2 readable, memoizes geometry identity,
+  and restores shared payloads across logical assets.
+- Base meshes, formal occurrences, and compatible ordinary duplicates are planned by primitive
+  payload/material/pass state and submitted through explicit Filament `InstanceBuffer`s. The
+  device instance limit applies per compatible chunk, not globally: a cap of 64 produces
+  `64 + 64 + 64 + 8` for 200 participants. Transform-only changes update instance transforms and
+  aggregate bounds without geometry uploads.
+- Selected occurrences retain the existing orange/yellow instanced wire and add the transient
+  muted-red `#C95C58` fill at 35% opacity. The depth-tested/no-depth-write fill draws before the
+  wire and never mutates materials, persistence, history, or dirty state. The wire is generated
+  from authored polygon boundaries, never render triangles, so transforming an occurrence cannot
+  expose triangulation diagonals. Persistent overlay caches include occurrence transforms in their
+  signatures and active-member overlays compose through the edited occurrence transform.
+- Shift-drag and Alt-drag of an occurrence create one linked occurrence before movement, select
+  that new occurrence immediately, and leave the source stationary. Undo restores the source and
+  its selection. Scene-aware selection summaries keep an occurrence-only selection actionable so
+  the viewport RMB menu exposes Flatten even when no runtime modeling object is selected.
+- Instance edit mode applies a whole-viewport background treatment and renders context geometry
+  with a configurable translucent/desaturated color; the active definition remains normally lit
+  and all regular modeling/component overlays remain available. Both edit background and context
+  colors are user viewport settings.
+- A single-root custom name survives Create Instance and final Flatten. Partial flatten transfers
+  the occurrence name to its independent result. Inspector instance-name edits commit on Enter or
+  focus loss. Linked flatten may temporarily extract only a redundant direct definition member;
+  the scene invariant still rejects extracting the last canonical member.
+
+Owners:
+
+- `src/editor/instances/scene_instance_service.hpp` owns instance commands and edit context;
+  `src/editor/instances/project_clipboard_service.*` owns project-scoped linked/cloned clipboard
+  behavior; `src/scene/scene_document.*` enforces the live graph invariants.
+- `src/sdk/core/modeling/.../polygon_document.*`,
+  `src/editor/modeling/runtime/cow_polygon_document.hpp`, `src/assets/mesh_asset*`, and
+  `src/editor/modeling/services/modeling_mesh_sync_service.*` own authored/compiled COW state.
+- `src/render/instance_batch_planner.*`, `instance_renderable_cache.*`,
+  `mesh_renderable_factory.*`, and the render-owned instance/wire overlay caches own explicit GPU
+  batching, device chunking, shared buffers, transform updates, and diagnostics.
+- `src/io/qdr/qdr_scene_binary_codec.*` owns schema-3 persistence and validation;
+  `src/ui/qt_scene_workspace.*` owns the separate lower breadcrumb row while the existing scene tab
+  bar remains unchanged.
+
+Verification:
+
+- Focused SDK/COW, scene-instance, clipboard, array, selection/edit, render planner/overlay,
+  malformed/round-trip QDR, guarded double-click, authored-edge wire, Shift/Alt duplication,
+  naming/focus-loss, context-menu, settings-color, and edit-overlay tests pass. The complete native
+  executable passes 1085/1085 tests; repeated `SceneInstance*` and `EditorApiTests.*` runs pass
+  260/260 and 770/770 respectively.
+- The complete six-entry CTest preset and full Debug build pass, including SDK-only configuration,
+  SDK consumer/parity, modeling-domain, guardrail, native app, and all three modeling performance
+  benchmark targets. The final native v0.1.0 build and Vulkan/Fusion smoke are recorded in the task
+  handoff.
+
 ## 2026-07-14 - Standard Material Editing Uses Typed Draft And Render Boundaries
 
 Invariant:

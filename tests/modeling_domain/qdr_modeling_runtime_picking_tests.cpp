@@ -27,7 +27,7 @@ quader_editor_core::PolygonObject cube_object(int id, quader::QVec3 offset = {})
 	quader_editor_core::PolygonObject object;
 	object.id = id;
 	object.document = quader_poly::make_cube({});
-	for (quader_poly::Vertex& vertex : object.document.vertices) {
+	for (quader_poly::Vertex& vertex : object.document.edit().vertices) {
 		vertex.position.x += offset.x;
 		vertex.position.y += offset.y;
 		vertex.position.z += offset.z;

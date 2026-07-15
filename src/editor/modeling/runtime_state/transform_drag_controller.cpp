@@ -11,14 +11,16 @@ namespace quader {
 TransformDragPreviewRouting
 TransformDragController::preview_routing(bool duplicate_selected,
                                          bool object_selection_mode,
-                                         bool transform_operation) {
+                                         bool transform_operation,
+                                         bool scene_transform_selection) {
   const bool duplicate_scene_transform_preview =
       duplicate_selected && object_selection_mode && transform_operation;
   TransformDragPreviewRouting routing;
   routing.preview_driven = !duplicate_scene_transform_preview &&
                            (duplicate_selected || !object_selection_mode);
   routing.needs_runtime_preview_transaction =
-      routing.preview_driven || duplicate_selected;
+      routing.preview_driven ||
+      (duplicate_selected && !scene_transform_selection);
   routing.scene_transform_preview_eligible =
       (duplicate_scene_transform_preview || !routing.preview_driven) &&
       transform_operation;

@@ -56,10 +56,11 @@ private:
  * Enumerates Quader Entity Kind values used by the public Quader API surface.
  */
 enum class QuaderEntityKind {
-    Empty,
-    Mesh,
-    Light,
-    Generic,
+    Empty = 0,
+    Mesh = 1,
+    Light = 2,
+    Generic = 3,
+    Instance = 4,
 };
 
 /**

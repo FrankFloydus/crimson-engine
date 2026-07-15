@@ -11,6 +11,7 @@
 #include "api/quader_api_mutation_runner.hpp"
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
+#include "editor/instances/scene_instance_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/history/editor_history_service.hpp"
@@ -28,6 +29,18 @@ namespace {
 
 const SceneSession &read_scene_session(QuaderApiSession session) {
   return QuaderApiSessionInternalAccess::read_scene_session(session);
+}
+
+bool entity_visible_in_scene_query(const SceneDocument &scene, EntityId entity,
+                                   EntityId active_definition) {
+  if (scene.is_instance_definition_entity(entity)) {
+    return false;
+  }
+  if (!scene.is_instance_definition_member(entity)) {
+    return true;
+  }
+  return active_definition != kInvalidEntityId &&
+         scene.containing_instance_definition(entity) == active_definition;
 }
 
 QuaderBounds api_bounds(const SceneBounds &bounds) {
@@ -106,16 +119,24 @@ QuaderEntitySnapshot entity_snapshot_for(const SceneSession &session,
     snapshot.has_modeling_object = true;
     snapshot.modeling_object_id = object->object_id;
   }
+  snapshot.is_instance_definition =
+      scene.is_instance_definition_entity(entity);
+  if (const InstanceOccurrenceComponent *occurrence =
+          scene.instance_occurrence(entity)) {
+    snapshot.has_instance_occurrence = true;
+    snapshot.instance_definition = occurrence->definition;
+  }
   return snapshot;
 }
 
 QuaderMeshSnapshot mesh_snapshot_for(AssetId id, const MeshAsset &mesh) {
   QuaderMeshSnapshot snapshot;
+  const MeshGeometryPayload &geometry = mesh.geometry();
   snapshot.mesh = id;
   snapshot.revision = mesh.revision.value;
-  snapshot.vertex_count = mesh.vertices.size();
-  snapshot.index_count = mesh.indices.size();
-  snapshot.primitive_count = mesh.primitives.size();
+  snapshot.vertex_count = geometry.vertices.size();
+  snapshot.index_count = geometry.indices.size();
+  snapshot.primitive_count = geometry.primitives.size();
   snapshot.stable_cpu_topology = mesh.has_stable_cpu_topology;
   if (const std::optional<SceneBounds> bounds = local_mesh_bounds(mesh)) {
     snapshot.has_bounds = true;
@@ -133,9 +154,17 @@ QuaderQueryApi::QuaderQueryApi(QuaderApiSession session, QuaderApiMutationRunner
 std::vector<QuaderEntitySnapshot> QuaderQueryApi::entities() const {
   const SceneSession &session = read_scene_session(session_);
   std::vector<QuaderEntitySnapshot> result;
+  const SceneInstanceEditState edit_state =
+      session.instances().instance_edit_state();
+  const EntityId active_definition =
+      edit_state.active ? edit_state.definition : kInvalidEntityId;
   const std::vector<EntityId> ids = session.scene().entities();
   result.reserve(ids.size());
   for (const EntityId id : ids) {
+    if (!entity_visible_in_scene_query(session.scene(), id,
+                                       active_definition)) {
+      continue;
+    }
     result.push_back(entity_snapshot_for(session, id));
   }
   return result;
@@ -144,9 +173,17 @@ std::vector<QuaderEntitySnapshot> QuaderQueryApi::entities() const {
 std::vector<QuaderEntitySnapshot> QuaderQueryApi::entity_tree() const {
   const SceneSession &session = read_scene_session(session_);
   std::vector<QuaderEntitySnapshot> result;
+  const SceneInstanceEditState edit_state =
+      session.instances().instance_edit_state();
+  const EntityId active_definition =
+      edit_state.active ? edit_state.definition : kInvalidEntityId;
   const std::vector<EntityId> ids = session.scene().entity_tree_order();
   result.reserve(ids.size());
   for (const EntityId id : ids) {
+    if (!entity_visible_in_scene_query(session.scene(), id,
+                                       active_definition)) {
+      continue;
+    }
     result.push_back(entity_snapshot_for(session, id));
   }
   return result;
@@ -239,6 +276,9 @@ QuaderQueryApi::compiled_object_mesh(QuaderModelingObjectRef object) const {
 
 std::optional<QVec3> QuaderQueryApi::selection_center() const {
   const SceneSession &session = read_scene_session(session_);
+  if (session.instances().instance_edit_state().active) {
+    return session.modeling().selection_center();
+  }
   const QuaderSelectionSummary summary = selection();
   if (summary.active_kind == QuaderActiveSelectionKind::Object ||
       summary.active_kind == QuaderActiveSelectionKind::Light) {
@@ -256,6 +296,9 @@ std::optional<QVec3> QuaderQueryApi::selection_transform_pivot() const {
       session.pivot().selection_pivot_override();
   if (pivot.valid) {
     return pivot.world_position;
+  }
+  if (session.instances().instance_edit_state().active) {
+    return session.modeling().selection_center();
   }
   const ModelingSelectionMode mode = session.selection().mode();
   if (mode == ModelingSelectionMode::Object ||

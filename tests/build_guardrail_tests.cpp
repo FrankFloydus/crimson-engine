@@ -2491,9 +2491,9 @@ TEST(BuildGuardrailTests, AppVersionMetadataUsesRootVersionSource) {
       std::regex(R"((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))")));
   ASSERT_EQ(version_match.size(), 4U);
   EXPECT_EQ(version_match[1].str(), "0");
-  EXPECT_EQ(version_match[2].str(), "0");
+  EXPECT_EQ(version_match[2].str(), "1");
   const int patch = std::stoi(version_match[3].str());
-  EXPECT_GE(patch, 1);
+  EXPECT_GE(patch, 0);
   EXPECT_LE(patch, 9999);
 
   const std::string root_c_make = read_source_file("CMakeLists.txt");
@@ -2533,12 +2533,18 @@ TEST(BuildGuardrailTests, AppVersionMetadataUsesRootVersionSource) {
                   "Root `VERSION` is the app version source of truth");
   expect_contains(agents,
                   "`vcpkg.json` `version-string` must mirror it");
-  expect_contains(agents, "major/minor fixed at `0.0`");
-  expect_contains(agents, "within `1..9999`");
+  expect_contains(agents, "major/minor fixed at `0.1`");
+  expect_contains(agents, "within `0..9999`");
   expect_contains(agents, "before the final handoff `quader` build");
   expect_contains(agents, "Do not");
-  expect_contains(agents, "planning, review, inspection-only, "
-                          "failed/no-change, or explanation-only");
+  expect_contains(agents, "planning, review, inspection-only, failed/no-change,");
+  expect_contains(agents, "or explanation-only turns");
+  expect_contains(agents, "## Fast Iteration Mode");
+  expect_contains(agents, "explicitly asks for `fast iteration mode`");
+  expect_contains(agents, "skip automated");
+  expect_contains(agents, "tests and affected-check runs");
+  expect_contains(agents, "build the native `quader`");
+  expect_contains(agents, "applies only to the request that names the mode");
 }
 
 TEST(BuildGuardrailTests, EditorAggregateStaysOutOfDocumentApiTarget) {

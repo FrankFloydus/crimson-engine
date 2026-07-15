@@ -62,6 +62,8 @@ public:
                             float grid_world_spacing,
                             const ViewportSettings &settings,
                             bool visible = true);
+    void set_instance_edit_context_active(bool active,
+                                          ViewportSettingColor background);
     void set_overlay_visible(bool visible);
     void set_scene_visible(bool visible);
     void set_scene_layer_mask(std::uint8_t layer_mask);
@@ -105,6 +107,8 @@ public:
     std::uint32_t height_ = 1u;
     SceneToneMapping color_grading_tone_mapping_ = SceneToneMapping::Aces;
     bool has_color_grading_tone_mapping_ = false;
+    bool instance_edit_context_active_ = false;
+    ViewportSettingColor instance_edit_background_;
 };
 
 } // namespace quader

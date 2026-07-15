@@ -10,6 +10,7 @@
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/modeling/runtime_state/transform_drag_controller.hpp"
 #include "editor/modeling/services/modeling_history_bridge.hpp"
+#include "editor/history/editor_history_service.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
 #include "math/types.hpp"
 
@@ -22,7 +23,7 @@
 namespace quader {
 
 class AssetRegistry;
-class EditorHistoryService;
+class DocumentCommandService;
 class ModelingSessionMemento;
 class SceneDocument;
 
@@ -35,6 +36,8 @@ public:
   virtual ~ModelingTransformDragPort() = default;
 
   [[nodiscard]] virtual bool has_scene_transform_selection() const = 0;
+  [[nodiscard]] virtual QMat4
+  scene_selection_display_from_scene() const = 0;
   [[nodiscard]] virtual quader_editor_core::Bounds3
   transform_drag_bounds() const = 0;
   virtual void invalidate_selection_overlay_caches() const = 0;
@@ -70,6 +73,8 @@ struct ModelingTransformDragServiceContext {
   quader_editor_core::EditorRuntime &runtime;
   ModelingHistoryBridge &history_bridge;
   ModelingTransformDragPort &port;
+  DocumentCommandService *document_commands = nullptr;
+  EditorHistoryService *history = nullptr;
 };
 
 /**
@@ -106,6 +111,7 @@ private:
 
   TransformDragController controller_;
   SceneTransformDragService scene_transform_drag_service_;
+  std::optional<EditorTransaction> scene_duplicate_transaction_;
 };
 
 } // namespace quader

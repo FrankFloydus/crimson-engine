@@ -44,6 +44,8 @@ struct EntityRecord {
   bool is_scene_root = false;
   bool has_scene_settings = false;
   bool has_modeling_object = false;
+  bool is_instance_definition = false;
+  bool has_instance_occurrence = false;
 };
 
 /**
@@ -92,6 +94,11 @@ public:
     void set_transform(EntityId id, TransformComponent transform);
     void set_transforms(std::span<const SceneTransformAssignment> transforms);
     void set_modeling_object(EntityId id, ModelingObjectComponent object);
+    bool set_instance_definition(EntityId id);
+    bool clear_instance_definition(EntityId id);
+    bool set_instance_occurrence(EntityId id,
+                                 InstanceOccurrenceComponent occurrence);
+    bool clear_instance_occurrence(EntityId id);
     void set_mesh(EntityId id, MeshComponent mesh);
     void set_material(EntityId id, MaterialComponent material);
     bool clear_material(EntityId id);
@@ -109,6 +116,8 @@ public:
     const LockComponent* lock(EntityId id) const;
     const SelectionComponent* selection(EntityId id) const;
     const ModelingObjectComponent *modeling_object(EntityId id) const;
+    const InstanceDefinitionComponent *instance_definition(EntityId id) const;
+    const InstanceOccurrenceComponent *instance_occurrence(EntityId id) const;
     const MeshComponent* mesh(EntityId id) const;
     const MaterialComponent* material(EntityId id) const;
     const LightComponent* light(EntityId id) const;
@@ -124,6 +133,9 @@ public:
     std::vector<EntityId> entity_tree_order() const;
     std::vector<EntityRecord> entity_records() const;
     std::vector<EntityRecord> entity_records_tree_order() const;
+    /** Projects only canonical members while an instance definition is edited. */
+    std::vector<EntityRecord>
+    entity_records_for_instance_definition(EntityId definition) const;
     std::vector<EntityId> selected_entities() const;
     EntityId primary_selection() const;
     EntityId parent(EntityId id) const;
@@ -133,6 +145,11 @@ public:
     EntityId entity_for_editor_object_id(EditorObjectId editor_object_id) const;
     bool has_children(EntityId id) const;
     bool is_descendant_of(EntityId entity, EntityId possible_ancestor) const;
+    bool is_instance_definition_entity(EntityId entity) const;
+    EntityId containing_instance_definition(EntityId entity) const;
+    bool is_instance_definition_member(EntityId entity) const;
+    std::vector<EntityId>
+    instance_occurrences_for_definition(EntityId definition) const;
     EntityKind kind(EntityId id) const;
     bool is_effectively_visible(EntityId id) const;
     bool is_effectively_locked(EntityId id) const;

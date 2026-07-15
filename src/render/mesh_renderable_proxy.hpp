@@ -10,6 +10,7 @@
 #include "core/types.hpp"
 
 #include <filament/IndexBuffer.h>
+#include <filament/InstanceBuffer.h>
 #include <filament/MaterialInstance.h>
 #include <filament/VertexBuffer.h>
 #include <utils/Entity.h>
@@ -38,12 +39,14 @@ struct MeshRenderableProxy {
     MaterialReference material;
     std::uint64_t mesh_revision = 0;
     std::uint64_t material_revision = 0;
+    std::uint64_t geometry_resource = 0;
     bool cast_shadows = false;
     bool double_sided = false;
     bool owns_mesh_buffers = true;
     bool owns_material_instances = true;
     filament::VertexBuffer *vertex_buffer = nullptr;
     filament::IndexBuffer *index_buffer = nullptr;
+    filament::InstanceBuffer *instance_buffer = nullptr;
     std::vector<std::uint32_t> material_slots;
     std::vector<filament::MaterialInstance *> material_instances;
 
@@ -56,6 +59,7 @@ struct MeshRenderableProxy {
       material = std::exchange(other.material, MaterialReference{});
       mesh_revision = std::exchange(other.mesh_revision, 0);
       material_revision = std::exchange(other.material_revision, 0);
+      geometry_resource = std::exchange(other.geometry_resource, 0);
       cast_shadows = std::exchange(other.cast_shadows, false);
       double_sided = std::exchange(other.double_sided, false);
       owns_mesh_buffers = std::exchange(other.owns_mesh_buffers, true);
@@ -63,6 +67,7 @@ struct MeshRenderableProxy {
           std::exchange(other.owns_material_instances, true);
       vertex_buffer = std::exchange(other.vertex_buffer, nullptr);
       index_buffer = std::exchange(other.index_buffer, nullptr);
+      instance_buffer = std::exchange(other.instance_buffer, nullptr);
       material_slots = std::move(other.material_slots);
       material_instances = std::move(other.material_instances);
     }

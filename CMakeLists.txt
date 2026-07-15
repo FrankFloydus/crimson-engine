@@ -19,11 +19,11 @@ string(REGEX REPLACE "^([0-9]+)\\.([0-9]+)\\.([0-9]+)$" "\\1;\\2;\\3" QUADER_APP
 list(GET QUADER_APP_VERSION_PARTS 0 QUADER_APP_VERSION_MAJOR)
 list(GET QUADER_APP_VERSION_PARTS 1 QUADER_APP_VERSION_MINOR)
 list(GET QUADER_APP_VERSION_PARTS 2 QUADER_APP_VERSION_PATCH)
-if(NOT QUADER_APP_VERSION_MAJOR STREQUAL "0" OR NOT QUADER_APP_VERSION_MINOR STREQUAL "0")
-    message(FATAL_ERROR "For now, Quader app versions must keep major and minor at 0.0.")
+if(NOT QUADER_APP_VERSION_MAJOR STREQUAL "0" OR NOT QUADER_APP_VERSION_MINOR STREQUAL "1")
+    message(FATAL_ERROR "For now, Quader app versions must keep major and minor at 0.1.")
 endif()
-if(QUADER_APP_VERSION_PATCH LESS 1 OR QUADER_APP_VERSION_PATCH GREATER 9999)
-    message(FATAL_ERROR "Quader app version patch must be between 1 and 9999.")
+if(QUADER_APP_VERSION_PATCH GREATER 9999)
+    message(FATAL_ERROR "Quader app version patch must be between 0 and 9999.")
 endif()
 
 project(QuaderApp VERSION ${QUADER_APP_VERSION} LANGUAGES CXX)
@@ -356,6 +356,7 @@ if(QUADER_BUILD_QDR_TOOLS)
 endif()
 
 add_library(quader_project_session STATIC
+    src/editor/instances/project_clipboard_service.cpp
     src/editor/material/project_image_decoder.cpp
     src/editor/material/standard_material_edit_session_service.cpp
     src/editor/session/project_session.cpp)
@@ -572,6 +573,7 @@ quader_require_existing_path("${QUADER_DEFAULT_PROJECT_MATERIAL_TEMPLATE}" "app-
 quader_register_filament_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh)
 quader_register_filament_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit)
 quader_register_filament_material(vertex_color_overlay_material resources/materials/vertex_color_overlay.mat vertex_color_overlay)
+quader_register_filament_material(quader_instance_selection_fill_material resources/materials/quader_instance_selection_fill.mat quader_instance_selection_fill)
 quader_register_filament_material(quader_overlay_line_material resources/materials/quader_overlay_line.mat quader_overlay_line)
 quader_register_filament_material(quader_selected_object_line_material resources/materials/quader_selected_object_line.mat quader_selected_object_line)
 quader_register_filament_material(quader_edit_wire_line_material resources/materials/quader_edit_wire_line.mat quader_edit_wire_line)
@@ -610,6 +612,8 @@ add_library(quader_render STATIC
     src/render/filament_buffer_descriptor_factory.cpp
     src/render/filament_environment_library.cpp
     src/render/filament_material_library.cpp
+    src/render/instance_batch_planner.cpp
+    src/render/instance_renderable_cache.cpp
     src/api/quader_render_api.cpp
     src/render/light_renderable_cache.cpp
     src/render/material_binding_service.cpp
@@ -627,6 +631,7 @@ add_library(quader_render STATIC
     src/render/overlay/render_overlay_snapshot.cpp
     src/render/overlay/overlay_renderable_builder.cpp
     src/render/overlay/overlay_renderable_cache.cpp
+    src/render/overlay/instance_selection_overlay_cache.cpp
     src/render/overlay/scene_wireframe_overlay_cache.cpp
     src/render/overlay/selected_object_overlay_cache.cpp
     src/render/overlay/viewport_box_overlay_builder.cpp

@@ -8,12 +8,15 @@
 
 #include <editor/interactions/tool_identity.hpp>
 #include <editor/modeling/operations/operation_schema.hpp>
+#include <editor/modeling/runtime/cow_polygon_document.hpp>
 #include <editor/modeling/runtime/tool_constants.hpp>
+#include <math/types.hpp>
 #include <mesh/polygon/document.hpp>
 #include <mesh/polygon/document_operations.hpp>
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -198,7 +201,7 @@ struct PolygonObject {
   int id = -1;
   int material_id = 0;
   bool selected = false;
-  quader_poly::Document document;
+  CowPolygonDocument document;
   quader_poly::Selection selection;
   bool component_edit_target = false;
 };
@@ -261,12 +264,33 @@ struct PickObjectBounds {
 };
 
 /**
+ * Carries one participant's affine transform without baking it into shared
+ * authored topology.
+ */
+struct PickObjectTransform {
+  int object_id = -1;
+  quader::QMat4 world_from_object;
+  quader::QMat4 object_from_world;
+};
+
+/**
  * Represents a Pick Object Face Geometry value used by the modeling runtime
  * domain.
  */
 struct PickObjectFaceGeometry {
   int object_id = -1;
   std::vector<quader_poly::PickFaceTriangle> triangles;
+
+  std::shared_ptr<const std::vector<quader_poly::PickFaceTriangle>>
+      shared_triangles;
+
+  [[nodiscard]] std::span<const quader_poly::PickFaceTriangle>
+  triangle_span() const noexcept {
+    return shared_triangles
+               ? std::span<const quader_poly::PickFaceTriangle>(
+                     *shared_triangles)
+               : std::span<const quader_poly::PickFaceTriangle>(triangles);
+  }
 };
 
 /**
@@ -573,6 +597,7 @@ struct ApplyPickSelectionRequest {
   bool preserve_selection_on_miss = false;
   std::span<const PickObjectBounds> object_bounds;
   std::span<const PickObjectFaceGeometry> face_geometry;
+  std::span<const PickObjectTransform> object_transforms;
 };
 
 /**
@@ -1333,13 +1358,15 @@ std::optional<PickHitRecord>
 pick_nearest(const std::vector<PolygonObject> &objects,
              const PickRequest &request,
              std::span<const PickObjectBounds> object_bounds,
-             std::span<const PickObjectFaceGeometry> face_geometry);
+             std::span<const PickObjectFaceGeometry> face_geometry,
+             std::span<const PickObjectTransform> object_transforms = {});
 std::vector<PickHitRecord> pick_all(const std::vector<PolygonObject> &objects,
                                     const PickRequest &request);
 std::vector<PickHitRecord>
 pick_all(const std::vector<PolygonObject> &objects, const PickRequest &request,
          std::span<const PickObjectBounds> object_bounds,
-         std::span<const PickObjectFaceGeometry> face_geometry);
+         std::span<const PickObjectFaceGeometry> face_geometry,
+         std::span<const PickObjectTransform> object_transforms = {});
 quader_poly::PickOptions selection_pick_options_from_radii(double vertex_radius,
                                                            double edge_radius);
 std::vector<PickObjectFaceGeometry>
@@ -1510,7 +1537,8 @@ SelectionHoverUpdateResult update_selection_hover(
     quader_poly::PickOptions pick_options = quader_poly::PickOptions(),
     std::span<const PickObjectBounds> object_bounds = {},
     std::span<const PickObjectFaceGeometry> face_geometry = {},
-    bool face_plane_hover = false);
+    bool face_plane_hover = false,
+    std::span<const PickObjectTransform> object_transforms = {});
 bool selection_hover_target_matches_selection(
     std::span<const PolygonObject> objects, SelectionMode mode,
     const SelectionHoverState &hover);
@@ -1557,7 +1585,8 @@ bool pick_select(
     quader_poly::PickOptions pick_options = quader_poly::PickOptions(),
     bool allow_component_fallback = true,
     std::span<const PickObjectBounds> object_bounds = {},
-    std::span<const PickObjectFaceGeometry> face_geometry = {});
+    std::span<const PickObjectFaceGeometry> face_geometry = {},
+    std::span<const PickObjectTransform> object_transforms = {});
 ApplyPickSelectionResult
 apply_pick_selection(EditorSession &session,
                      std::vector<PolygonObject> picking_objects,
@@ -1573,21 +1602,24 @@ bool pick_select_all_faces(
     int &active_object_id,
     quader_poly::PickOptions pick_options = quader_poly::PickOptions(),
     std::span<const PickObjectBounds> object_bounds = {},
-    std::span<const PickObjectFaceGeometry> face_geometry = {});
+    std::span<const PickObjectFaceGeometry> face_geometry = {},
+    std::span<const PickObjectTransform> object_transforms = {});
 bool pick_select_edge_loop(
     std::vector<PolygonObject> &objects, SelectionMode &mode,
     SelectionEditOperation operation, const quader_poly::Ray &ray,
     int &active_object_id,
     quader_poly::PickOptions pick_options = quader_poly::PickOptions(),
     std::span<const PickObjectBounds> object_bounds = {},
-    std::span<const PickObjectFaceGeometry> face_geometry = {});
+    std::span<const PickObjectFaceGeometry> face_geometry = {},
+    std::span<const PickObjectTransform> object_transforms = {});
 bool pick_select_all_vertices(
     std::vector<PolygonObject> &objects, SelectionMode &mode,
     SelectionEditOperation operation, const quader_poly::Ray &ray,
     int &active_object_id,
     quader_poly::PickOptions pick_options = quader_poly::PickOptions(),
     std::span<const PickObjectBounds> object_bounds = {},
-    std::span<const PickObjectFaceGeometry> face_geometry = {});
+    std::span<const PickObjectFaceGeometry> face_geometry = {},
+    std::span<const PickObjectTransform> object_transforms = {});
 
 Bounds3 document_bounds(const std::vector<PolygonObject> &objects);
 Bounds3 selection_bounds(const std::vector<PolygonObject> &objects,

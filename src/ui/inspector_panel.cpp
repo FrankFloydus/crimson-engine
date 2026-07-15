@@ -872,7 +872,7 @@ private:
               name);
       if (!scene_root) {
         const EntityId entity = primary_;
-        QObject::connect(name, &QLineEdit::returnPressed, &panel_,
+        QObject::connect(name, &QLineEdit::editingFinished, &panel_,
                          [this, name, entity]() {
                            if (!rebuilding_) {
                              (void)editor_->scene().rename(

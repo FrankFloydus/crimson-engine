@@ -24,7 +24,8 @@ class TransformDragController {
 public:
   [[nodiscard]] static TransformDragPreviewRouting
   preview_routing(bool duplicate_selected, bool object_selection_mode,
-                  bool transform_operation);
+                  bool transform_operation,
+                  bool scene_transform_selection = false);
 
   void set_preview_driven(bool preview_driven, bool duplicate_selected);
   void clear();

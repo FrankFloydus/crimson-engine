@@ -11,7 +11,8 @@ enum EntityKind : ubyte {
   Empty = 0,
   Mesh = 1,
   Light = 2,
-  Generic = 3
+  Generic = 3,
+  Instance = 4
 }
 
 enum MeshCollisionType : ubyte {
@@ -258,6 +259,13 @@ table SceneSettingsComponent {
   post_process:ScenePostProcessSettings;
 }
 
+table InstanceDefinitionComponent {
+}
+
+table InstanceOccurrenceComponent {
+  definition:ulong;
+}
+
 table Entity {
   id:ulong;
   uuid:string;
@@ -274,6 +282,8 @@ table Entity {
   light:LightComponent;
   scene_root:bool = false;
   scene_settings:SceneSettingsComponent;
+  instance_definition:InstanceDefinitionComponent;
+  instance_occurrence:InstanceOccurrenceComponent;
 }
 
 table ObjectRecord {

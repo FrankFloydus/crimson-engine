@@ -7,6 +7,7 @@
 #include "editor/session/project_session.hpp"
 
 #include "editor/session/project_asset_bootstrap_service.hpp"
+#include "editor/instances/project_clipboard_service.hpp"
 #include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
@@ -231,6 +232,7 @@ ProjectSession::ProjectSession() {
   fallback_scene_.mark_clean();
   standard_material_editor_ =
       std::make_unique<StandardMaterialEditSessionService>(*this);
+  clipboard_ = std::make_unique<ProjectClipboardService>();
 }
 
 ProjectSession::~ProjectSession() = default;
@@ -463,6 +465,7 @@ ProjectSessionResult ProjectSession::close(bool discard_dirty) {
   (void)standard_material_editor_->close(true);
   workspace_.reset();
   material_catalog_ = {};
+  clipboard_->clear();
   ++activation_generation_;
   return success(true, "Project closed.");
 }
@@ -925,6 +928,12 @@ ProjectSession::standard_material_editor() const {
   return *standard_material_editor_;
 }
 
+ProjectClipboardService &ProjectSession::clipboard() { return *clipboard_; }
+
+const ProjectClipboardService &ProjectSession::clipboard() const {
+  return *clipboard_;
+}
+
 const std::filesystem::path &ProjectSession::root() const noexcept {
   return workspace_ ? workspace_->file_system.root() : empty_path_;
 }
@@ -1080,6 +1089,7 @@ ProjectSessionResult ProjectSession::install_workspace(
 
   release_open_scene_ids();
   (void)standard_material_editor_->close(true);
+  clipboard_->clear();
   workspace_ = std::move(workspace);
   material_catalog_ = std::move(material_catalog);
   open_scenes_ = std::move(scenes);

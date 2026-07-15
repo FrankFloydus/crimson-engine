@@ -114,6 +114,7 @@ public:
   rectangle_picking_projection_build_count() const;
   [[nodiscard]] std::uint64_t
   rectangle_selection_resolution_build_count() const;
+  [[nodiscard]] std::uint64_t local_face_geometry_build_count() const;
   [[nodiscard]] ModelingSessionMemento capture_history_memento() const;
   [[nodiscard]] ModelingSessionMemento
   capture_active_preview_history_memento() const;
@@ -123,6 +124,8 @@ public:
       const ModelingSessionMemento &memento);
   void clear_transient_state_for_document_replacement();
   void reset_from_scene();
+  void set_instance_edit_scope_provider(
+      std::function<ModelingInstanceEditScope()> provider);
 
   ModelingCommandResult duplicate_selected_hierarchy_for_group_drag(
       DocumentCommandService &document_commands);
@@ -184,6 +187,10 @@ public:
   record_repeatable_transform(const ModelingRepeatTransform &transform);
   ModelingTransformDragPreview
   begin_transform_drag(const ModelingTransformDragBeginRequest &request);
+  ModelingTransformDragPreview begin_transform_drag(
+      const ModelingTransformDragBeginRequest &request,
+      DocumentCommandService &document_commands,
+      EditorHistoryService &history);
   ModelingTransformDragPreview
   update_transform_drag(const ModelingTransformDragUpdateRequest &request);
   ModelingTransformDragPreview commit_transform_drag();

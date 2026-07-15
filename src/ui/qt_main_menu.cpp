@@ -313,6 +313,11 @@ struct QtMainMenu::Impl {
     add_command_action(*menu, quader_command::kDuplicateSelection,
                        "ui.menu.edit.duplicate", "Duplicate");
     menu->addSeparator();
+    add_command_action(*menu, quader_command::kEditCreateInstance,
+                       "ui.menu.edit.create_instance", "Create Instance");
+    add_command_action(*menu, quader_command::kEditFlattenInstance,
+                       "ui.menu.edit.flatten_instance", "Flatten Instance");
+    menu->addSeparator();
     add_command_action(*menu, quader_command::kModelingFlipHorizontal,
                        "ui.menu.edit.flip_horizontal", "Flip Horizontal");
     add_command_action(*menu, quader_command::kModelingFlipVertical,

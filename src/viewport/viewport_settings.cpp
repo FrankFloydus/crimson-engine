@@ -62,6 +62,7 @@ constexpr std::string_view key(std::string_view suffix) {
 const std::array<ViewportSettingsSectionDescriptor, kViewportSettingsSectionCount> kSections{{
         {ViewportSettingsSectionId::Grid, "Grid", false},
         {ViewportSettingsSectionId::Selection, "Selection", false},
+        {ViewportSettingsSectionId::InstanceEditing, "Instance Editing", false},
         {ViewportSettingsSectionId::Overlay, "Overlay", false},
         {ViewportSettingsSectionId::Vertices, "Vertices", false},
         {ViewportSettingsSectionId::Picking, "Picking", false},
@@ -78,6 +79,8 @@ const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kCo
         {ViewportColorSettingId::GridZAxis, ViewportSettingsSectionId::Grid, "Z QAxis", key("GridZAxisColor"), kDefaultViewportGridZAxisColor},
         {ViewportColorSettingId::SelectionFace, ViewportSettingsSectionId::Selection, "Face Fill", key("SelectionFaceColor"), abgr8(kOverlaySelectionFaceColor)},
         {ViewportColorSettingId::SelectionWire, ViewportSettingsSectionId::Selection, "Wire", key("SelectionWireColor"), abgr8(kOverlaySelectionWireColor)},
+        {ViewportColorSettingId::InstanceEditBackground, ViewportSettingsSectionId::InstanceEditing, "Background", key("InstanceEditBackgroundColor"), kDefaultViewportInstanceEditBackgroundColor},
+        {ViewportColorSettingId::InstanceEditContext, ViewportSettingsSectionId::InstanceEditing, "Context Mesh", key("InstanceEditContextColor"), kDefaultViewportInstanceEditContextColor},
         {ViewportColorSettingId::SourceWire, ViewportSettingsSectionId::Overlay, "Source Wire", key("SourceWireColor"), abgr8(kOverlaySourceWireColor)},
         {ViewportColorSettingId::OpenEdge, ViewportSettingsSectionId::Overlay, "Open Edge", key("OpenEdgeColor"), abgr8(kOverlayOpenEdgeColor)},
         {ViewportColorSettingId::DiagnosticEdge, ViewportSettingsSectionId::Overlay, "Diagnostic Edge", key("DiagnosticEdgeColor"), abgr8(kOverlayDiagnosticEdgeColor)},

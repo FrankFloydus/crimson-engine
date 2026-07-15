@@ -10,6 +10,7 @@
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
 #include "render/scene_render_extraction.hpp"
 
+#include <unordered_set>
 #include <utility>
 
 namespace quader {
@@ -23,6 +24,7 @@ void SceneRenderBridge::initialize(
     filament::Material &shaded_mesh_material,
     filament::Material &rendered_mesh_material,
     filament::Material &overlay_material,
+    filament::Material &instance_selection_fill_material,
     filament::Material &overlay_line_material,
     filament::Material &selected_object_line_material,
     filament::Material &edit_wire_line_material,
@@ -37,6 +39,7 @@ void SceneRenderBridge::initialize(
                                texture_binding_);
   mesh_factory_.initialize(engine, scene, material_binding_);
   mesh_cache_.initialize(mesh_factory_);
+  instance_cache_.initialize(mesh_factory_, engine.getMaxAutomaticInstances());
   tool_preview_cache_.initialize(mesh_factory_, material_binding_);
   overlay_proxy_factory_.initialize(engine, scene, overlay_material,
                                     overlay_line_material,
@@ -44,10 +47,15 @@ void SceneRenderBridge::initialize(
                                     overlay_point_material,
                                     overlay_icon_material, resource_root);
   overlay_cache_.initialize(overlay_proxy_factory_);
+  instance_selection_overlay_cache_.initialize(
+      engine, scene, mesh_factory_, instance_selection_fill_material,
+      selected_object_line_material, engine.getMaxAutomaticInstances());
   scene_wireframe_overlay_cache_.initialize(engine, scene,
-                                            selected_object_line_material);
+                                            selected_object_line_material,
+                                            engine.getMaxAutomaticInstances());
   selected_object_overlay_cache_.initialize(engine, scene, overlay_material);
-  sync_service_.initialize(engine, scene, mesh_cache_, material_binding_);
+  sync_service_.initialize(engine, scene, mesh_cache_, instance_cache_,
+                           material_binding_);
 }
 
 void SceneRenderBridge::shutdown() {
@@ -57,7 +65,9 @@ void SceneRenderBridge::shutdown() {
     sync_service_.shutdown();
     selected_object_overlay_cache_.shutdown();
     scene_wireframe_overlay_cache_.shutdown();
+    instance_selection_overlay_cache_.shutdown();
     mesh_cache_.shutdown();
+    instance_cache_.shutdown();
     overlay_cache_.shutdown();
     overlay_proxy_factory_.shutdown();
     mesh_factory_.shutdown();
@@ -98,6 +108,7 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   // still reference the outgoing scene's texture cache. Destroy them before
   // the scene sync service invalidates those textures.
   tool_preview_cache_.clear();
+  instance_selection_overlay_cache_.clear(true);
   for (std::size_t index = 0u;
        index < OverlayRenderableCache::kMaxViewportOverlaySlots; ++index) {
     overlay_cache_.clear_slot(index);
@@ -110,7 +121,8 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
 void SceneRenderBridge::sync(const SceneDocument &document,
                              const AssetRegistry &assets,
                              std::uint64_t frame_index,
-                             RenderSceneBindingKey scene_binding) {
+                             RenderSceneBindingKey scene_binding,
+                             RenderInstanceEditScope instance_edit_scope) {
   QDR_PROFILE_FUNCTION();
   if (!engine_ || !scene_ || !sync_service_.initialized()) {
     return;
@@ -123,7 +135,8 @@ void SceneRenderBridge::sync(const SceneDocument &document,
   if (has_previous_scene_snapshot_ && render_scene_snapshot_matches_sources(
                                           previous_scene_snapshot_, document,
                                           assets, scene_binding,
-                                          project_material_revision)) {
+                                          project_material_revision,
+                                          instance_edit_scope)) {
     // Keep draining retired GPU proxies while making unchanged camera-only
     // frames O(1) at the scene-extraction boundary.
     (void)sync_service_.sync(previous_scene_snapshot_);
@@ -132,7 +145,8 @@ void SceneRenderBridge::sync(const SceneDocument &document,
   if (has_previous_scene_snapshot_ &&
       try_refresh_render_scene_snapshot_transforms(
           previous_scene_snapshot_, document, assets, frame_index,
-          scene_binding, project_material_revision)) {
+          scene_binding, project_material_revision,
+          instance_edit_scope)) {
     (void)sync_service_.sync(previous_scene_snapshot_);
     return;
   }
@@ -143,7 +157,8 @@ void SceneRenderBridge::sync(const SceneDocument &document,
        .frame_index = frame_index,
        .scene_binding = scene_binding,
        .project_material_resolver = project_material_resolver_,
-       .project_material_revision = project_material_revision});
+       .project_material_revision = project_material_revision,
+       .instance_edit_scope = instance_edit_scope});
   sync(std::move(snapshot));
 }
 
@@ -165,6 +180,70 @@ void SceneRenderBridge::update_mesh_surface_grid(
     return;
   }
   mesh_cache_.update_surface_grid(grid_world_spacing, settings);
+  instance_cache_.update_surface_grid(grid_world_spacing, settings);
+}
+
+SceneRenderResourceDiagnostics SceneRenderBridge::diagnostics() const {
+  SceneRenderResourceDiagnostics result;
+  result.device_instance_limit = instance_cache_.max_instances_per_chunk();
+
+  std::unordered_set<const MeshGeometryPayload *> payloads;
+  const auto add_payload = [&](const RenderMeshAssetSnapshot &mesh) {
+    if (mesh.geometry_payload != nullptr &&
+        payloads.insert(mesh.geometry_payload.get()).second) {
+      result.unique_compiled_payload_bytes +=
+          mesh.geometry_payload->byte_size();
+    }
+  };
+  if (has_previous_scene_snapshot_) {
+    for (const RenderSceneMeshRecord &mesh : previous_scene_snapshot_.meshes) {
+      add_payload(mesh.mesh);
+      if (mesh.renderable()) {
+        result.standalone_primitive_submissions +=
+            coalesced_render_mesh_primitive_spans(mesh.mesh).size() * 3u;
+      }
+    }
+    for (const RenderSceneInstancePrimitiveRecord &primitive :
+         previous_scene_snapshot_.instance_primitives) {
+      add_payload(primitive.mesh);
+    }
+  }
+  result.unique_compiled_payload_count = payloads.size();
+
+  const MeshRenderableFactory::GeometryCacheStats geometry =
+      mesh_factory_.geometry_cache_stats();
+  const InstanceRenderableCacheStats instances = instance_cache_.stats();
+  const SceneWireframeOverlayCacheStats wire =
+      scene_wireframe_overlay_cache_.stats();
+  const InstanceSelectionOverlayCacheStats selection =
+      instance_selection_overlay_cache_.stats();
+  result.gpu_geometry_resource_count =
+      geometry.resource_count + wire.unique_geometry_resource_count +
+      selection.unique_wire_geometry_resource_count;
+  result.gpu_geometry_upload_count =
+      geometry.upload_count + wire.geometry_upload_count +
+      selection.wire_geometry_upload_count;
+  result.gpu_geometry_reuse_count =
+      geometry.cache_hit_count + wire.geometry_reuse_count +
+      selection.wire_geometry_reuse_count;
+  result.gpu_uploaded_vertex_bytes =
+      geometry.uploaded_vertex_bytes + wire.derived_vertex_bytes +
+      selection.wire_derived_vertex_bytes;
+  result.gpu_uploaded_index_bytes =
+      geometry.uploaded_index_bytes + wire.derived_index_bytes +
+      selection.wire_derived_index_bytes;
+  result.base_instance_participant_count = instances.participant_count;
+  result.base_instance_batch_chunk_count = instances.chunk_count;
+  result.wire_participant_count = wire.participant_count;
+  result.wire_batch_chunk_count = wire.chunk_count;
+  result.selection_fill_batch_chunk_count = selection.fill_chunk_count;
+  result.selection_wire_batch_chunk_count = selection.wire_chunk_count;
+  result.planned_primitive_submissions =
+      result.standalone_primitive_submissions +
+      result.base_instance_batch_chunk_count + result.wire_batch_chunk_count +
+      result.selection_fill_batch_chunk_count +
+      result.selection_wire_batch_chunk_count;
+  return result;
 }
 
 void SceneRenderBridge::sync_scene_asset_overlays(
@@ -174,6 +253,9 @@ void SceneRenderBridge::sync_scene_asset_overlays(
   bind_scene(selected_object_snapshot.scene_binding);
   if (engine_ && scene_ && selected_object_overlay_cache_.initialized()) {
     selected_object_overlay_cache_.sync(selected_object_snapshot);
+  }
+  if (engine_ && scene_ && instance_selection_overlay_cache_.initialized()) {
+    instance_selection_overlay_cache_.sync(selected_object_snapshot);
   }
   if (engine_ && scene_ && scene_wireframe_overlay_cache_.initialized()) {
     scene_wireframe_overlay_cache_.sync(wireframe_snapshot);

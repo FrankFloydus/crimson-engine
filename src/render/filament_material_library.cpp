@@ -35,6 +35,9 @@ bool FilamentMaterialLibrary::initialize(
     LOG_INFO("Loading vertex color overlay material");
     vertex_color_overlay_material_ =
         load(material_dir / std::string(kVertexColorOverlayMaterialFile));
+    LOG_INFO("Loading instance selection fill material");
+    instance_selection_fill_material_ =
+        load(material_dir / std::string(kInstanceSelectionFillMaterialFile));
     LOG_INFO("Loading overlay line material");
     overlay_line_material_ =
         load(material_dir / std::string(kOverlayLineMaterialFile));
@@ -70,6 +73,7 @@ void FilamentMaterialLibrary::shutdown() {
     destroy(quader_mesh_material_);
     destroy(quader_mesh_lit_material_);
     destroy(vertex_color_overlay_material_);
+    destroy(instance_selection_fill_material_);
     destroy(overlay_line_material_);
     destroy(selected_object_line_material_);
     destroy(edit_wire_line_material_);

@@ -95,13 +95,10 @@ bool finite_vector(QVec3 value) {
          std::isfinite(value.z);
 }
 
-ParentTranslationBasis
-parent_translation_basis(const SceneDocument &document, EntityId parent) {
-  if (parent == kInvalidEntityId) {
-    return {};
-  }
+ParentTranslationBasis parent_translation_basis(
+    const QMat4 &display_parent_world) {
   const std::optional<QMat4> parent_from_world =
-      try_scene_matrix_inverse(document.world_transform_matrix(parent));
+      try_scene_matrix_inverse(display_parent_world);
   if (!parent_from_world.has_value()) {
     return {.valid = false};
   }
@@ -136,12 +133,14 @@ std::optional<TransformComponent> transformed_target_from_world_delta(
     const QMat4 &world_transform_delta) {
   const QMat4 preview_world_transform =
       scene_transform_multiply(world_transform_delta, target.world_transform);
+  const QMat4 preview_scene_transform = scene_transform_multiply(
+      target.scene_from_display, preview_world_transform);
   const EntityId parent = document.parent(target.entity);
   const QMat4 parent_world_transform =
       parent == kInvalidEntityId ? scene_transform_identity_matrix()
                                  : document.world_transform_matrix(parent);
   return try_scene_local_transform_preserving_world(
-      parent_world_transform, preview_world_transform, target.transform);
+      parent_world_transform, preview_scene_transform, target.transform);
 }
 
 void pin_target_local_pivot_to_world_point(
@@ -153,8 +152,10 @@ void pin_target_local_pivot_to_world_point(
   const QMat4 parent_world = parent == kInvalidEntityId
                                  ? scene_transform_identity_matrix()
                                  : document.world_transform_matrix(parent);
+  const QVec3 scene_pivot =
+      transform_point(target.scene_from_display, world_pivot);
   const QVec3 parent_space_pivot =
-      transform_point(inverse(parent_world), world_pivot);
+      transform_point(inverse(parent_world), scene_pivot);
   transform.position =
       parent_space_pivot -
       transform_point(compose_transform(spatial), target.local_pivot);
@@ -291,12 +292,13 @@ SceneTransformDragService& SceneTransformDragService::operator=(SceneTransformDr
 
 bool SceneTransformDragService::begin(SceneDocument &document,
                                       QVec3 world_pivot, bool start_preview,
-                                      std::string label) {
+                                      std::string label,
+                                      QMat4 display_from_scene) {
   reset();
   label_ = std::move(label);
   world_pivot_ = world_pivot;
 
-  if (capture_targets(document, world_pivot) !=
+  if (capture_targets(document, world_pivot, display_from_scene) !=
       CaptureTargetsStatus::Captured) {
     reset();
     return false;
@@ -583,7 +585,8 @@ void SceneTransformDragService::reset() {
 
 SceneTransformDragService::CaptureTargetsStatus
 SceneTransformDragService::capture_targets(SceneDocument &document,
-                                           QVec3 world_pivot) {
+                                           QVec3 world_pivot,
+                                           QMat4 display_from_scene) {
   targets_.clear();
   if (!finite_vector(world_pivot)) {
     return CaptureTargetsStatus::Invalid;
@@ -592,6 +595,11 @@ SceneTransformDragService::capture_targets(SceneDocument &document,
   targets_.reserve(selected.size());
   std::unordered_map<EntityId, ParentTranslationBasis> basis_by_parent;
   basis_by_parent.reserve(selected.size());
+  const std::optional<QMat4> scene_from_display =
+      try_scene_matrix_inverse(display_from_scene);
+  if (!scene_from_display.has_value()) {
+    return CaptureTargetsStatus::Invalid;
+  }
   for (const EntityId entity : selected) {
     if (document.is_effectively_locked(entity)) {
       continue;
@@ -604,17 +612,25 @@ SceneTransformDragService::capture_targets(SceneDocument &document,
       const EntityId parent = document.parent(entity);
       const auto [basis_it, inserted] = basis_by_parent.try_emplace(parent);
       if (inserted) {
-        basis_it->second = parent_translation_basis(document, parent);
+        const QMat4 scene_parent_world =
+            parent == kInvalidEntityId
+                ? scene_transform_identity_matrix()
+                : document.world_transform_matrix(parent);
+        basis_it->second = parent_translation_basis(scene_transform_multiply(
+            display_from_scene, scene_parent_world));
       }
       const ParentTranslationBasis &basis = basis_it->second;
-      const QMat4 world_transform = document.world_transform_matrix(entity);
+      const QMat4 scene_world_transform =
+          document.world_transform_matrix(entity);
+      const QMat4 world_transform = scene_transform_multiply(
+          display_from_scene, scene_world_transform);
       const QMat4 parent_world =
           parent == kInvalidEntityId
               ? scene_transform_identity_matrix()
               : document.world_transform_matrix(parent);
       const std::optional<TransformComponent> translation_preview_transform =
           try_scene_local_transform_preserving_world(
-              parent_world, world_transform, *selected_transform);
+              parent_world, scene_world_transform, *selected_transform);
       if (!translation_preview_transform.has_value()) {
         targets_.clear();
         return CaptureTargetsStatus::Invalid;
@@ -631,6 +647,7 @@ SceneTransformDragService::capture_targets(SceneDocument &document,
           .translation_preview_transform = *translation_preview_transform,
           .local_pivot = transform_point(*world_inverse, world_pivot),
           .world_transform = world_transform,
+          .scene_from_display = *scene_from_display,
           .parent_space_world_x = basis.world_x,
           .parent_space_world_y = basis.world_y,
           .parent_space_world_z = basis.world_z,
@@ -771,20 +788,23 @@ QuaderApiVoidResult SceneTransformDragService::
 
 DocumentCommandResult SceneTransformDragService::move_selected_by_world_delta(
     DocumentCommandService &document_commands, SceneDocument &document,
-    QVec3 world_delta, std::string label) {
+    QVec3 world_delta, std::string label, QMat4 display_from_scene) {
   const QMat4 world_transform_delta =
       from_glm(glm::translate(glm::mat4{1.0f}, to_glm(world_delta)));
   return transform_selected_by_world_delta(
-      document_commands, document, world_transform_delta, std::move(label));
+      document_commands, document, world_transform_delta, std::move(label),
+      display_from_scene);
 }
 
 DocumentCommandResult
 SceneTransformDragService::transform_selected_by_world_delta(
     DocumentCommandService &document_commands, SceneDocument &document,
-    const QMat4 &world_transform_delta, std::string label) {
+    const QMat4 &world_transform_delta, std::string label,
+    QMat4 display_from_scene) {
   reset();
   label_ = label.empty() ? "Transform Selection" : std::move(label);
-  const CaptureTargetsStatus capture = capture_targets(document, {});
+  const CaptureTargetsStatus capture =
+      capture_targets(document, {}, display_from_scene);
   if (capture != CaptureTargetsStatus::Captured) {
     reset();
     if (capture == CaptureTargetsStatus::Invalid) {

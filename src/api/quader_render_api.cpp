@@ -12,6 +12,7 @@
 #include "api/quader_query_api.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/array/radial_array_tool_service.hpp"
+#include "editor/instances/scene_instance_service.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
@@ -122,9 +123,13 @@ RenderSceneBindingKey QuaderRenderApiRuntimeAccess::scene_binding(
 QuaderApiVoidResult
 QuaderRenderApiRuntimeAccess::sync_scene(QuaderRenderApi &api,
                                          SceneRenderBridge &bridge) {
-  const SceneSessionReadView session =
-      read_scene_session(api.session_).read_view();
-  bridge.sync(session.scene, session.assets, 0, scene_binding(api));
+  const SceneSession &scene_session = read_scene_session(api.session_);
+  const SceneSessionReadView session = scene_session.read_view();
+  const SceneInstanceEditState edit_state =
+      scene_session.instances().instance_edit_state();
+  bridge.sync(session.scene, session.assets, 0, scene_binding(api),
+              {.occurrence = edit_state.occurrence,
+               .definition = edit_state.definition});
   return api.runtime_status("Render scene synchronized.");
 }
 

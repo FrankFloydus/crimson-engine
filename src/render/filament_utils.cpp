@@ -12,7 +12,8 @@
 namespace quader {
 
 filament::Box compute_bounds(const MeshAsset &mesh) {
-  if (mesh.vertices.empty()) {
+  const MeshGeometryPayload &geometry = mesh.geometry();
+  if (geometry.vertices.empty()) {
     return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
   }
 
@@ -27,7 +28,7 @@ filament::Box compute_bounds(const MeshAsset &mesh) {
       std::numeric_limits<float>::lowest(),
   };
 
-  for (const MeshVertex &vertex : mesh.vertices) {
+  for (const MeshVertex &vertex : geometry.vertices) {
     min_value.x = std::min(min_value.x, vertex.position.x);
     min_value.y = std::min(min_value.y, vertex.position.y);
     min_value.z = std::min(min_value.z, vertex.position.z);

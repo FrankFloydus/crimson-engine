@@ -40,6 +40,8 @@ struct DocumentEntitySnapshot {
   LockComponent lock;
   SelectionComponent selection;
   std::optional<ModelingObjectComponent> modeling_object;
+  bool instance_definition = false;
+  std::optional<InstanceOccurrenceComponent> instance_occurrence;
   std::optional<MeshComponent> mesh;
   std::optional<MaterialComponent> material;
   std::optional<LightComponent> light;
@@ -152,6 +154,12 @@ document_command_capture_entity_snapshot(const SceneDocument &scene,
           scene.modeling_object(entity)) {
     snapshot.modeling_object = *component;
   }
+  snapshot.instance_definition =
+      scene.instance_definition(entity) != nullptr;
+  if (const InstanceOccurrenceComponent *component =
+          scene.instance_occurrence(entity)) {
+    snapshot.instance_occurrence = *component;
+  }
   if (const MeshComponent *component = scene.mesh(entity)) {
     snapshot.mesh = *component;
   }
@@ -178,7 +186,14 @@ inline void document_command_apply_entity_snapshot_components(
     const DocumentEntitySnapshot &snapshot, bool include_modeling_object) {
   scene.set_transform(entity, snapshot.transform);
   scene.set_visible(entity, snapshot.visibility.visible);
+  scene.set_selectable(entity, snapshot.visibility.selectable);
   scene.set_locked(entity, snapshot.lock.locked);
+  if (snapshot.instance_definition) {
+    (void)scene.set_instance_definition(entity);
+  }
+  if (snapshot.instance_occurrence.has_value()) {
+    (void)scene.set_instance_occurrence(entity, *snapshot.instance_occurrence);
+  }
   if (snapshot.mesh.has_value()) {
     scene.set_mesh(entity, *snapshot.mesh);
   }
@@ -200,6 +215,7 @@ inline void document_command_apply_entity_snapshot_common_state(
   scene.rename_entity(entity, std::move(name));
   scene.set_transform(entity, snapshot.transform);
   scene.set_visible(entity, snapshot.visibility.visible);
+  scene.set_selectable(entity, snapshot.visibility.selectable);
   scene.set_locked(entity, snapshot.lock.locked);
   scene.set_entity_kind(entity, snapshot.kind);
 }

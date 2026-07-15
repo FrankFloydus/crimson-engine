@@ -8,6 +8,7 @@
 #include "api/quader_editor_api.hpp"
 #include "assets/texture_asset.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
+#include "editor/array/radial_array_tool_service.hpp"
 #include "editor/modeling/linear_array_layout.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/scene_session.hpp"
@@ -30,6 +31,29 @@ void expect_vec3_near(QVec3 actual, QVec3 expected) {
   EXPECT_NEAR(actual.x, expected.x, 0.0001f);
   EXPECT_NEAR(actual.y, expected.y, 0.0001f);
   EXPECT_NEAR(actual.z, expected.z, 0.0001f);
+}
+
+void expect_matrix_near(const QMat4 &actual, const QMat4 &expected) {
+  for (std::size_t component = 0; component < actual.values.size();
+       ++component) {
+    EXPECT_NEAR(actual.values[component], expected.values[component], 0.0001f);
+  }
+}
+
+QMat4 effective_instance_member_world(const SceneDocument &scene,
+                                      EntityId occurrence,
+                                      EntityId definition,
+                                      EntityId member) {
+  const std::optional<QMat4> definition_inverse =
+      try_scene_matrix_inverse(scene.world_transform_matrix(definition));
+  EXPECT_TRUE(definition_inverse.has_value());
+  if (!definition_inverse.has_value()) {
+    return {};
+  }
+  return scene_transform_multiply(
+      scene.world_transform_matrix(occurrence),
+      scene_transform_multiply(*definition_inverse,
+                               scene.world_transform_matrix(member)));
 }
 
 TEST(LinearArrayLayoutTests, PreservesOrientationAndIncludesSharedEndpoint) {
@@ -242,8 +266,8 @@ TEST(LinearArrayToolServiceTests,
                   .select_objects({first.value().entity}, first.value().entity)
                   .ok());
 
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::LinearArray).ok());
   LinearArrayToolService &tool = session.linear_array();
-  ASSERT_TRUE(tool.activate(1.0).ok);
   SceneRenderBridge bridge;
   ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(editor.render(),
                                                                bridge)
@@ -264,6 +288,257 @@ TEST(LinearArrayToolServiceTests,
   const LinearArrayPreviewState &preview = tool.preview_state();
   ASSERT_EQ(preview.sources.size(), 1u);
   EXPECT_EQ(preview.sources.front().source_entity, second.value().entity);
+}
+
+TEST(LinearArrayToolServiceTests,
+     LinkedInstanceOccurrencesPreviewMembersAndUndoAsOneHistoryItem) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const QuaderApiResult<QuaderEntityRef> parent =
+      editor.scene().create_entity(QuaderCreateEntityArgs{
+          .name = "Linear Instance Parent",
+          .kind = QuaderEntityKind::Empty,
+      });
+  const QuaderApiResult<QuaderModelingObjectRef> first =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Linear Instance Member A");
+  const QuaderApiResult<QuaderModelingObjectRef> second =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-0.5f, -0.5f, -0.5f},
+                       .max = {0.5f, 0.5f, 0.5f}},
+          "Linear Instance Member B");
+  ASSERT_TRUE(parent.ok()) << parent.error_message();
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(second.value().entity,
+                                 {.position = {4.0f, 0.0f, 0.0f}})
+                  .ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_objects(
+                      {first.value().entity, second.value().entity},
+                      first.value().entity)
+                  .ok());
+  ASSERT_TRUE(editor.modeling().create_instance().ok());
+
+  ASSERT_EQ(session.scene().selected_entities().size(), 1u);
+  const EntityId occurrence = session.scene().selected_entities().front();
+  const InstanceOccurrenceComponent *source_component =
+      session.scene().instance_occurrence(occurrence);
+  ASSERT_NE(source_component, nullptr);
+  const EntityId definition = source_component->definition;
+  const std::vector<EntityId> members = session.scene().children(definition);
+  ASSERT_EQ(members.size(), 2u);
+
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(parent.value().id,
+                                 {.position = {7.0f, 1.0f, -2.0f}})
+                  .ok());
+  ASSERT_TRUE(editor.scene().reparent(occurrence, parent.value().id, false).ok());
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(occurrence,
+                                 {.position = {3.0f, 2.0f, 1.0f}})
+                  .ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({occurrence}, occurrence)
+                  .ok());
+
+  LinearArrayToolService &tool = session.linear_array();
+  ASSERT_TRUE(tool.activate(1.0).ok);
+  ASSERT_TRUE(tool.set_count(3u).ok);
+  const LinearArrayHandleState handle = tool.handle_state();
+  ASSERT_TRUE(handle.visible);
+  ASSERT_TRUE(tool.set_endpoint(handle.source_world + QVec3{8.0f, 0.0f, 0.0f},
+                                false, 1.0)
+                  .ok);
+  const LinearArrayPreviewState preview = tool.preview_state();
+  ASSERT_TRUE(preview.active);
+  ASSERT_EQ(preview.sources.size(), members.size());
+  for (const LinearArrayPreviewSource &source : preview.sources) {
+    EXPECT_EQ(source.source_entity, occurrence);
+    EXPECT_EQ(source.generated_world_transforms.size(), 2u);
+  }
+
+  const QuaderApiVoidResult committed =
+      editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  ASSERT_TRUE(committed.changed());
+  ASSERT_NE(session.history().undo_label(), nullptr);
+  EXPECT_EQ(*session.history().undo_label(), "Linear Array");
+
+  const std::vector<EntityId> selected = session.scene().selected_entities();
+  ASSERT_EQ(selected.size(), 3u);
+  std::vector<EntityId> copies;
+  for (const EntityId entity : selected) {
+    if (entity != occurrence) {
+      copies.push_back(entity);
+    }
+  }
+  ASSERT_EQ(copies.size(), 2u);
+  ASSERT_NE(session.scene().name(occurrence), nullptr);
+  const std::string source_name = session.scene().name(occurrence)->name;
+  for (std::size_t copy_index = 0; copy_index < copies.size(); ++copy_index) {
+    const EntityId copy = copies[copy_index];
+    const InstanceOccurrenceComponent *component =
+        session.scene().instance_occurrence(copy);
+    ASSERT_NE(component, nullptr);
+    EXPECT_EQ(component->definition, definition);
+    EXPECT_EQ(session.scene().parent(copy), parent.value().id);
+    ASSERT_NE(session.scene().visibility(copy), nullptr);
+    EXPECT_TRUE(session.scene().visibility(copy)->visible);
+    ASSERT_NE(session.scene().lock(copy), nullptr);
+    EXPECT_FALSE(session.scene().lock(copy)->locked);
+    ASSERT_NE(session.scene().name(copy), nullptr);
+    EXPECT_NE(session.scene().name(copy)->name.find(source_name),
+              std::string::npos);
+
+    for (const EntityId member : members) {
+      const MeshComponent *member_mesh = session.scene().mesh(member);
+      ASSERT_NE(member_mesh, nullptr);
+      const auto source = std::find_if(
+          preview.sources.begin(), preview.sources.end(),
+          [member_mesh](const LinearArrayPreviewSource &candidate) {
+            return candidate.mesh == member_mesh->mesh;
+          });
+      ASSERT_NE(source, preview.sources.end());
+      expect_matrix_near(
+          effective_instance_member_world(session.scene(), copy, definition,
+                                          member),
+          source->generated_world_transforms[copy_index]);
+    }
+  }
+
+  ASSERT_TRUE(session.history().undo().ok);
+  EXPECT_EQ(session.scene().selected_entities(),
+            std::vector<EntityId>{occurrence});
+  for (const EntityId copy : copies) {
+    EXPECT_FALSE(session.scene().exists(copy));
+  }
+  ASSERT_TRUE(session.history().redo().ok);
+  EXPECT_EQ(session.scene().selected_entities().size(), 3u);
+  for (const EntityId copy : copies) {
+    ASSERT_TRUE(session.scene().exists(copy));
+    ASSERT_NE(session.scene().instance_occurrence(copy), nullptr);
+    EXPECT_EQ(session.scene().instance_occurrence(copy)->definition,
+              definition);
+  }
+}
+
+TEST(RadialArrayToolServiceTests,
+     LinkedInstanceOccurrencesUsePreviewMatricesAndStableRedoIdentities) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> member =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Radial Instance Member");
+  ASSERT_TRUE(member.ok()) << member.error_message();
+  ASSERT_TRUE(editor.modeling().create_instance().ok());
+
+  ASSERT_EQ(session.scene().selected_entities().size(), 1u);
+  const EntityId occurrence = session.scene().selected_entities().front();
+  const InstanceOccurrenceComponent *source_component =
+      session.scene().instance_occurrence(occurrence);
+  ASSERT_NE(source_component, nullptr);
+  const EntityId definition = source_component->definition;
+  const std::vector<EntityId> members = session.scene().children(definition);
+  ASSERT_EQ(members.size(), 1u);
+  ASSERT_TRUE(editor.scene()
+                  .set_transform(occurrence,
+                                 {.position = {4.0f, 0.0f, 0.0f}})
+                  .ok());
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({occurrence}, occurrence)
+                  .ok());
+
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::RadialArray).ok());
+  RadialArrayToolService &tool = session.radial_array();
+  ASSERT_TRUE(tool.update_center_candidate({}, {0.0f, 1.0f, 0.0f}, 1.0).ok);
+  ASSERT_TRUE(tool.set_degrees(180.0).ok);
+  ASSERT_TRUE(tool.set_copies(3u).ok);
+  ASSERT_TRUE(tool.lock_center().ok);
+  const RadialArrayPreviewState preview = tool.preview_state();
+  ASSERT_TRUE(preview.active);
+  ASSERT_EQ(preview.sources.size(), 1u);
+  ASSERT_EQ(preview.sources.front().generated_world_transforms.size(), 2u);
+
+  const QuaderApiVoidResult committed =
+      editor.tools().commit_active_tool_preview();
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  ASSERT_TRUE(committed.changed());
+  ASSERT_NE(session.history().undo_label(), nullptr);
+  EXPECT_EQ(*session.history().undo_label(), "Radial Array");
+
+  const std::vector<EntityId> selected = session.scene().selected_entities();
+  ASSERT_EQ(selected.size(), 3u);
+  std::vector<EntityId> copies;
+  for (const EntityId entity : selected) {
+    if (entity != occurrence) {
+      copies.push_back(entity);
+    }
+  }
+  ASSERT_EQ(copies.size(), 2u);
+  for (std::size_t index = 0; index < copies.size(); ++index) {
+    const InstanceOccurrenceComponent *component =
+        session.scene().instance_occurrence(copies[index]);
+    ASSERT_NE(component, nullptr);
+    EXPECT_EQ(component->definition, definition);
+    expect_matrix_near(
+        effective_instance_member_world(session.scene(), copies[index],
+                                        definition, members.front()),
+        preview.sources.front().generated_world_transforms[index]);
+  }
+
+  ASSERT_TRUE(session.history().undo().ok);
+  EXPECT_EQ(session.scene().selected_entities(),
+            std::vector<EntityId>{occurrence});
+  for (const EntityId copy : copies) {
+    EXPECT_FALSE(session.scene().exists(copy));
+  }
+  ASSERT_TRUE(session.history().redo().ok);
+  EXPECT_EQ(session.scene().selected_entities().size(), 3u);
+  for (const EntityId copy : copies) {
+    ASSERT_TRUE(session.scene().exists(copy));
+    ASSERT_NE(session.scene().instance_occurrence(copy), nullptr);
+    EXPECT_EQ(session.scene().instance_occurrence(copy)->definition,
+              definition);
+  }
+}
+
+TEST(LinearArrayToolServiceTests,
+     MixedOrdinaryMeshesAndOccurrencesAreRejectedExplicitly) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  const QuaderApiResult<QuaderModelingObjectRef> member =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Mixed Array Instance Member");
+  ASSERT_TRUE(member.ok()) << member.error_message();
+  ASSERT_TRUE(editor.modeling().create_instance().ok());
+  const EntityId occurrence = session.scene().selected_entities().front();
+  const QuaderApiResult<QuaderModelingObjectRef> ordinary =
+      editor.modeling().create_box(
+          QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
+                       .max = {1.0f, 1.0f, 1.0f}},
+          "Mixed Array Ordinary Mesh");
+  ASSERT_TRUE(ordinary.ok()) << ordinary.error_message();
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({occurrence, ordinary.value().entity},
+                                  occurrence)
+                  .ok());
+
+  EXPECT_FALSE(session.linear_array().can_activate());
+  EXPECT_FALSE(session.radial_array().can_activate());
+  const QuaderApiVoidResult activated =
+      editor.tools().activate(ViewportToolId::LinearArray);
+  EXPECT_FALSE(activated.ok());
 }
 
 } // namespace

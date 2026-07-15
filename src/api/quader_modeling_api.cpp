@@ -16,6 +16,8 @@
 #include "diagnostics/profile.hpp"
 #include "editor/commands/modeling/commit_box_preview_command.hpp"
 #include "editor/history/modeling_memento_command.hpp"
+#include "editor/instances/project_clipboard_service.hpp"
+#include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
@@ -25,6 +27,7 @@
 #include "editor/transform/mesh_arrangement_service.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
 #include "math/glm_bridge.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -39,6 +42,20 @@ namespace {
 
 SceneSession &scene_session(QuaderApiSession session) {
   return QuaderApiSessionInternalAccess::scene_session(session);
+}
+
+QuaderEntityRef instance_entity_ref(const SceneSession &session,
+                                    SceneSessionId scene_session_id,
+                                    EntityId entity) {
+  if (entity == kInvalidEntityId || !session.scene().exists(entity)) {
+    return {};
+  }
+  return {
+      .scene_session_id = scene_session_id,
+      .id = entity,
+      .uuid = session.scene().uuid(entity),
+      .editor_object_id = session.scene().editor_object_id(entity),
+  };
 }
 
 MaterialReference active_project_material(QuaderApiSession session) {
@@ -1264,10 +1281,33 @@ QuaderModelingApi::set_selection_mode(QuaderSelectionMode mode) {
 }
 
 bool QuaderModelingApi::can_execute_tool(std::string_view tool_id) const {
+  if (ProjectSession *project =
+          QuaderApiSessionInternalAccess::project_session(session_)) {
+    if (tool_id == "copy_selection" &&
+        project->clipboard().selection_contains_instance(*project)) {
+      return project->clipboard().can_copy_instance_selection(*project);
+    }
+    if (tool_id == "paste_selection") {
+      if (project->clipboard().has_instance_payload()) {
+        return project->clipboard().can_paste_instance_selection(*project);
+      }
+      if (project->clipboard().has_ordinary_payload() &&
+          !project->clipboard().ordinary_payload_belongs_to(
+              project->active_scene_id())) {
+        return false;
+      }
+    }
+  }
   return mutations_.can_run_tracked_modeling_tool(tool_id);
 }
 
 QuaderApiVoidResult QuaderModelingApi::execute_tool(std::string_view tool_id) {
+  if (tool_id == "copy_selection") {
+    return copy_selection();
+  }
+  if (tool_id == "paste_selection") {
+    return paste_selection();
+  }
   return mutations_.run_tracked_modeling_tool(tool_id);
 }
 
@@ -1276,10 +1316,40 @@ QuaderApiVoidResult QuaderModelingApi::delete_selection() {
 }
 
 QuaderApiVoidResult QuaderModelingApi::copy_selection() {
-  return mutations_.run_tracked_modeling_tool("copy_selection");
+  ProjectSession *project =
+      QuaderApiSessionInternalAccess::project_session(session_);
+  if (project != nullptr &&
+      project->clipboard().selection_contains_instance(*project)) {
+    return mutations_.run_document_command(
+        project->clipboard().copy_instance_selection(*project),
+        "Copy Instances");
+  }
+
+  QuaderApiVoidResult copied =
+      mutations_.run_tracked_modeling_tool("copy_selection");
+  if (project != nullptr && copied.ok()) {
+    project->clipboard().note_ordinary_copy(project->active_scene_id());
+  }
+  return copied;
 }
 
 QuaderApiVoidResult QuaderModelingApi::paste_selection() {
+  if (ProjectSession *project =
+          QuaderApiSessionInternalAccess::project_session(session_)) {
+    if (project->clipboard().has_instance_payload()) {
+      return mutations_.run_document_command(
+          project->clipboard().paste_instance_selection(*project),
+          "Paste Instances");
+    }
+    if (project->clipboard().has_ordinary_payload() &&
+        !project->clipboard().ordinary_payload_belongs_to(
+            project->active_scene_id())) {
+      return invalid_api_status(
+          session_,
+          "Ordinary mesh clipboard data belongs to another scene. Copy the "
+          "mesh in this scene before pasting.");
+    }
+  }
   return mutations_.run_tracked_modeling_tool("paste_selection");
 }
 
@@ -1465,10 +1535,11 @@ QuaderApiResult<QuaderTransformDragPreview>
 QuaderModelingApi::begin_transform_drag(
     const QuaderTransformDragBeginRequest &request) {
   QDR_PROFILE_FUNCTION();
+  SceneSession &session = scene_session(session_);
   return result_from_transform_drag_preview(
-      scene_session(session_),
-      scene_session(session_).modeling().begin_transform_drag(
-          to_modeling_transform_drag_begin_request(request)));
+      session, session.modeling().begin_transform_drag(
+                   to_modeling_transform_drag_begin_request(request),
+                   session.document_commands(), session.history()));
 }
 
 QuaderApiResult<QuaderTransformDragPreview>
@@ -1500,10 +1571,14 @@ QuaderApiVoidResult QuaderModelingApi::move_selection(QVec3 delta) {
   SceneSession &session = scene_session(session_);
   if (entity_selection_owns_transforms(session)) {
     SceneTransformDragService transforms;
+    const QMat4 display_from_scene =
+        session.instances().active_edit_display_from_scene().value_or(
+            scene_transform_identity_matrix());
     return mutations_.run_document_result(
         transforms.move_selected_by_world_delta(session.document_commands(),
                                                 session.scene(), delta,
-                                                "Move Selection"),
+                                                "Move Selection",
+                                                display_from_scene),
         "Move Selection");
   }
 
@@ -1528,11 +1603,14 @@ QuaderModelingApi::transform_selection(const QuaderTransform3 &transform,
   SceneSession &session = scene_session(session_);
   if (entity_selection_owns_transforms(session)) {
     SceneTransformDragService transforms;
+    const QMat4 display_from_scene =
+        session.instances().active_edit_display_from_scene().value_or(
+            scene_transform_identity_matrix());
     return mutations_.run_document_result(
         transforms.transform_selected_by_world_delta(
             session.document_commands(), session.scene(),
             world_transform_delta_from_api_transform(transform, pivot),
-            "Transform Selection"),
+            "Transform Selection", display_from_scene),
         "Transform Selection");
   }
 
@@ -1709,6 +1787,145 @@ QuaderModelingApi::duplicate_selected_hierarchy_for_group_drag() {
     return mutations_.run_document_command(transaction.commit(),
                                            "Duplicate Group Selection");
   }
+}
+
+bool QuaderModelingApi::can_create_instance() const {
+  const SceneSession &session = scene_session(session_);
+  return !session.native_tools().has_pending_tool() &&
+         session.instances().can_create_instance();
+}
+
+QuaderApiVoidResult QuaderModelingApi::create_instance() {
+  return quader_api_status_from_result(create_instance_from_selection());
+}
+
+bool QuaderModelingApi::can_create_instance_from_selection() const {
+  return can_create_instance();
+}
+
+QuaderApiResult<QuaderInstanceCreateResult>
+QuaderModelingApi::create_instance_from_selection() {
+  SceneSession &session = scene_session(session_);
+  if (session.native_tools().has_pending_tool()) {
+    return quader_api_result_from_status<QuaderInstanceCreateResult>(
+        mutations_.run_document_command(
+            command_invalid_result(
+                "Apply or cancel the active tool before creating an instance."),
+            "Create Instance"));
+  }
+  const SceneInstanceMutationResult mutation =
+      session.instances().create_instance();
+  const QuaderApiVoidResult status = mutations_.run_document_command(
+      mutation.command_result(), "Create Instance");
+  QuaderInstanceCreateResult value;
+  value.definition.scene_session_id = mutations_.scene_session_id();
+  value.definition.root = instance_entity_ref(
+      session, mutations_.scene_session_id(), mutation.definition);
+  if (session.scene().exists(mutation.definition)) {
+    for (const EntityId member : session.scene().children(mutation.definition)) {
+      value.definition.members.push_back(instance_entity_ref(
+          session, mutations_.scene_session_id(), member));
+    }
+  }
+  value.occurrence.scene_session_id = mutations_.scene_session_id();
+  value.occurrence.root = instance_entity_ref(
+      session, mutations_.scene_session_id(), mutation.occurrence);
+  value.occurrence.definition = value.definition.root;
+  return quader_api_result_from_status(status, std::move(value));
+}
+
+bool QuaderModelingApi::can_flatten_instance() const {
+  return can_flatten_selected_instances();
+}
+
+QuaderApiVoidResult QuaderModelingApi::flatten_instance() {
+  return quader_api_status_from_result(flatten_selected_instances());
+}
+
+bool QuaderModelingApi::can_flatten_selected_instances() const {
+  const SceneSession &session = scene_session(session_);
+  return !session.native_tools().has_pending_tool() &&
+         session.instances().can_flatten_selected_instances();
+}
+
+QuaderApiResult<QuaderInstanceFlattenResult>
+QuaderModelingApi::flatten_selected_instances() {
+  SceneSession &session = scene_session(session_);
+  if (session.native_tools().has_pending_tool()) {
+    return quader_api_result_from_status<QuaderInstanceFlattenResult>(
+        mutations_.run_document_command(
+            command_invalid_result(
+                "Apply or cancel the active tool before flattening an instance."),
+            "Flatten Instance"));
+  }
+  const SceneInstanceMutationResult mutation =
+      session.instances().flatten_selected_instances();
+  const QuaderApiVoidResult status = mutations_.run_document_command(
+      mutation.command_result(), "Flatten Instance");
+  QuaderInstanceFlattenResult value;
+  value.scene_session_id = mutations_.scene_session_id();
+  value.definition = instance_entity_ref(
+      session, mutations_.scene_session_id(), mutation.definition);
+  value.root_entities.reserve(mutation.entities.size());
+  for (const EntityId entity : mutation.entities) {
+    value.root_entities.push_back(instance_entity_ref(
+        session, mutations_.scene_session_id(), entity));
+  }
+  return quader_api_result_from_status(status, std::move(value));
+}
+
+bool QuaderModelingApi::can_enter_instance_edit(EntityId occurrence) const {
+  const SceneSession &session = scene_session(session_);
+  return !session.native_tools().has_pending_tool() &&
+         session.instances().can_enter_instance_edit(occurrence);
+}
+
+QuaderApiVoidResult
+QuaderModelingApi::enter_instance_edit(EntityId occurrence) {
+  SceneSession &session = scene_session(session_);
+  if (session.native_tools().has_pending_tool()) {
+    return mutations_.run_document_command(
+        command_invalid_result(
+            "Apply or cancel the active tool before editing an instance."),
+        "Enter Instance Edit");
+  }
+  const SceneInstanceMutationResult result =
+      session.instances().enter_instance_edit(occurrence);
+  return mutations_.run_runtime_result(result.command_result(),
+                                       "Enter Instance Edit");
+}
+
+bool QuaderModelingApi::can_exit_instance_edit() const {
+  return scene_session(session_).instances().can_exit_instance_edit();
+}
+
+QuaderApiVoidResult QuaderModelingApi::exit_instance_edit() {
+  SceneSession &session = scene_session(session_);
+  if (session.native_tools().has_pending_tool()) {
+    const CommandResult canceled = session.native_tools().cancel_active();
+    if (!canceled.ok) {
+      return mutations_.run_runtime_result(canceled, "Exit Instance Edit");
+    }
+  }
+  const SceneInstanceMutationResult result =
+      session.instances().exit_instance_edit();
+  return mutations_.run_runtime_result(result.command_result(),
+                                       "Exit Instance Edit");
+}
+
+QuaderInstanceEditState QuaderModelingApi::instance_edit_state() const {
+  const SceneSession &session = scene_session(session_);
+  const SceneInstanceEditState state =
+      session.instances().instance_edit_state();
+  return {
+      .active = state.active,
+      .occurrence = instance_entity_ref(session, mutations_.scene_session_id(),
+                                        state.occurrence),
+      .definition = instance_entity_ref(session, mutations_.scene_session_id(),
+                                        state.definition),
+      .scene_name = state.scene_name,
+      .instance_name = state.instance_name,
+  };
 }
 
 QuaderApiVoidResult

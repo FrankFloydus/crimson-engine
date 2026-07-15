@@ -21,13 +21,14 @@ MeshAsset
 mesh_asset_from_compiled_mesh(const quader_poly::CompiledMesh &compiled) {
   MeshAsset mesh;
   mesh.name = "Mesh";
-  mesh.vertices.reserve(compiled.vertices.size());
-  mesh.indices = compiled.indices;
-  mesh.primitives.reserve(compiled.primitives.size());
+  MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices.reserve(compiled.vertices.size());
+  geometry.indices = compiled.indices;
+  geometry.primitives.reserve(compiled.primitives.size());
   mesh.has_stable_cpu_topology = true;
 
   for (const quader_poly::CompiledVertex &vertex : compiled.vertices) {
-    mesh.vertices.push_back(MeshVertex{
+    geometry.vertices.push_back(MeshVertex{
         .position = from_runtime(vertex.position),
         .normal = from_runtime(vertex.normal),
         .uv = {vertex.uv0.x, vertex.uv0.y},
@@ -35,7 +36,7 @@ mesh_asset_from_compiled_mesh(const quader_poly::CompiledMesh &compiled) {
     });
   }
   for (const quader_poly::CompiledPrimitive &primitive : compiled.primitives) {
-    mesh.primitives.push_back(MeshPrimitiveSpan{
+    geometry.primitives.push_back(MeshPrimitiveSpan{
         .index_offset = primitive.index_offset,
         .index_count = primitive.index_count,
         .material_slot = primitive.material_slot,
@@ -63,9 +64,9 @@ MeshAsset MeshProjectionService::compile_object_mesh(
     const quader_editor_core::PolygonObject &object) {
   QDR_PROFILE_FUNCTION();
   MeshAsset mesh = compile_polygon_document_mesh(object.document);
-  mesh.has_authored_polygon_document = true;
-  mesh.authored_polygon_document =
-      std::make_shared<quader_poly::Document>(object.document);
+  // Keep the runtime's immutable authored pin. Geometry edits publish a new
+  // CowPolygonDocument payload before this projection is reached.
+  mesh.share_authored_polygon_document(object.document.topology_payload());
   return mesh;
 }
 

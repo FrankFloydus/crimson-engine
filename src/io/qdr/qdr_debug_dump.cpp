@@ -354,15 +354,18 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
     const QdrProjectMeshAssetWriteSnapshot &mesh) {
   Json geometry;
   if (mesh.has_authored_polygon_document &&
-      mesh.authored_polygon_document.has_value()) {
+      mesh.authored_polygon_document) {
     geometry = {
         {"kind", "authoredPolygon"},
         {"polygonDocument",
          authored_polygon_json(*mesh.authored_polygon_document)},
     };
   } else {
+    static const MeshGeometryPayload empty_geometry;
+    const MeshGeometryPayload &payload =
+        mesh.geometry ? *mesh.geometry : empty_geometry;
     Json vertices = Json::array();
-    for (const MeshVertex &vertex : mesh.vertices) {
+    for (const MeshVertex &vertex : payload.vertices) {
       vertices.push_back({
           {"position", vec3_json(vertex.position)},
           {"normal", vec3_json(vertex.normal)},
@@ -371,7 +374,7 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
       });
     }
     Json primitives = Json::array();
-    for (const MeshPrimitiveSpan &primitive : mesh.primitives) {
+    for (const MeshPrimitiveSpan &primitive : payload.primitives) {
       primitives.push_back({
           {"indexOffset", primitive.index_offset},
           {"indexCount", primitive.index_count},
@@ -381,7 +384,7 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
     geometry = {
         {"kind", "compiledMesh"},
         {"vertices", std::move(vertices)},
-        {"indices", mesh.indices},
+        {"indices", payload.indices},
         {"primitives", std::move(primitives)},
     };
   }

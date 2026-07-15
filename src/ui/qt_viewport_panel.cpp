@@ -1228,6 +1228,8 @@ void QtViewportPanel::prepare_viewports(
       settings.bool_value(ViewportBoolSettingId::ShowInfo);
   const bool navigation_gizmo_visible =
       editor.preferences().navigation_gizmo_visible();
+  const bool instance_edit_context_active =
+      editor.modeling().instance_edit_state().active;
   const ViewportPaneId focused_pane = workspace_->focused_pane();
   for (Pane &pane_state : panes_) {
     pane_state.navigation_gizmo->set_camera(
@@ -1319,6 +1321,9 @@ void QtViewportPanel::prepare_viewports(
     workspace_->set_pane_render_size(pane_state.id, render_size);
     ViewportWorkspacePaneState &pane_workspace =
         workspace_->pane(pane_state.id);
+    pane_state.surface->renderer().set_instance_edit_context_active(
+        instance_edit_context_active,
+        settings.color(ViewportColorSettingId::InstanceEditBackground));
 
     if (const EntityId root = document.scene_root(); root != kInvalidEntityId) {
       if (const SceneSettingsComponent *scene_settings =
@@ -3117,7 +3122,11 @@ void QtViewportPanel::process_viewport_input(
         summary.has_selection ? editor.modeling().available_actions(query)
                               : std::vector<QuaderActionItem>{};
     pending_context_menu_request.target_hit = summary.has_selection;
-    pending_context_menu_request.has_actions = !actions.empty();
+    pending_context_menu_request.has_actions =
+        summary.has_selection && viewport_context_menu_has_available_actions(
+                                     !actions.empty(),
+                                     editor.modeling().can_create_instance(),
+                                     editor.modeling().can_flatten_instance());
     show_context_menu =
         should_open_viewport_context_menu(pending_context_menu_request) &&
         localization_ != nullptr;

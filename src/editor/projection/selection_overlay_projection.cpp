@@ -11,6 +11,7 @@
 #include "math/glm_bridge.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <optional>
 #include <unordered_map>
@@ -323,12 +324,42 @@ struct ProjectionObjectState {
     QMat4 world_transform;
 };
 
+bool instance_edit_member_visible(const SceneDocument &scene, EntityId member,
+                                  EntityId definition) {
+  EntityId current = member;
+  std::size_t guard = scene.entities().size() + 1u;
+  while (current != kInvalidEntityId && current != definition && guard-- > 0u) {
+    if (const VisibilityComponent *visibility = scene.visibility(current);
+        visibility != nullptr && !visibility->visible) {
+      return false;
+    }
+    current = scene.parent(current);
+  }
+  return current == definition;
+}
+
+std::optional<QMat4> instance_edit_member_world_transform(
+    const SceneDocument &scene, ModelingInstanceEditScope scope,
+    EntityId member) {
+  const std::optional<QMat4> definition_inverse =
+      try_scene_matrix_inverse(scene.world_transform_matrix(scope.definition));
+  if (!definition_inverse.has_value()) {
+    return std::nullopt;
+  }
+  return scene_transform_multiply(
+      scene.world_transform_matrix(scope.occurrence),
+      scene_transform_multiply(*definition_inverse,
+                               scene.world_transform_matrix(member)));
+}
+
 /**
  * Memoizes scene lookup results for object ids while building a selection overlay frame.
  */
 class ProjectionObjectStateCache {
 public:
-    ProjectionObjectStateCache() {
+    explicit ProjectionObjectStateCache(
+        ModelingInstanceEditScope instance_edit_scope = {})
+        : instance_edit_scope_(instance_edit_scope) {
         states_.reserve(64);
     }
 
@@ -356,10 +387,30 @@ public:
       if (!entity.has_value()) {
         state.visible = false;
       } else {
-        state.visible = scene.is_effectively_visible(*entity);
-        if (state.visible && scene.transform(*entity) != nullptr) {
-          state.has_world_transform = true;
-          state.world_transform = scene.world_transform_matrix(*entity);
+        const bool active_member =
+            instance_edit_scope_.active() &&
+            scene.containing_instance_definition(*entity) ==
+                instance_edit_scope_.definition;
+        if (active_member) {
+          state.visible =
+              scene.is_effectively_visible(instance_edit_scope_.occurrence) &&
+              instance_edit_member_visible(
+                  scene, *entity, instance_edit_scope_.definition);
+          if (state.visible) {
+            const std::optional<QMat4> world =
+                instance_edit_member_world_transform(
+                    scene, instance_edit_scope_, *entity);
+            state.has_world_transform = world.has_value();
+            if (world.has_value()) {
+              state.world_transform = *world;
+            }
+          }
+        } else {
+          state.visible = scene.is_effectively_visible(*entity);
+          if (state.visible && scene.transform(*entity) != nullptr) {
+            state.has_world_transform = true;
+            state.world_transform = scene.world_transform_matrix(*entity);
+          }
         }
       }
       const auto [inserted, _] = states_.emplace(object_id, state);
@@ -373,6 +424,7 @@ private:
   std::unordered_map<int, ProjectionObjectState> states_;
   int last_object_id_ = -1;
   const ProjectionObjectState *last_state_ = nullptr;
+  ModelingInstanceEditScope instance_edit_scope_;
 };
 
 QVec3 transform_object_point(const ProjectionObjectState &state, QVec3 point) {
@@ -387,14 +439,15 @@ ViewportOverlayFrame
 SelectionOverlayProjection::project_selection_overlay_frame(
     const quader_editor_core::SelectionOverlayFrame &frame,
     const ModelingObjectRuntimeMap &object_registry,
-    const SceneDocument &scene, quader_editor_core::SelectionMode mode) {
+    const SceneDocument &scene, quader_editor_core::SelectionMode mode,
+    ModelingInstanceEditScope instance_edit_scope) {
   QDR_PROFILE_FUNCTION();
   ViewportOverlayFrame result;
   result.triangles.reserve(frame.triangles.size());
   result.lines.reserve(frame.lines.size());
   result.points.reserve(frame.points.size());
   result.hover_target_selected = frame.hover_target_selected;
-  ProjectionObjectStateCache object_state_cache;
+  ProjectionObjectStateCache object_state_cache(instance_edit_scope);
 
   {
     QDR_PROFILE_SCOPE("Selection overlay project triangles");
@@ -481,10 +534,11 @@ void SelectionOverlayProjection::append_projected_overlay_lines(
     const std::vector<quader_editor_core::SelectionOverlayLine> &lines,
     const ModelingObjectRuntimeMap &object_registry, const SceneDocument &scene,
     ViewportOverlayLayer layer, ViewportOverlayStyleRole style_role,
-    ViewportOverlaySource source) {
+    ViewportOverlaySource source,
+    ModelingInstanceEditScope instance_edit_scope) {
   QDR_PROFILE_FUNCTION();
   frame.lines.reserve(frame.lines.size() + lines.size());
-  ProjectionObjectStateCache object_state_cache;
+  ProjectionObjectStateCache object_state_cache(instance_edit_scope);
   for (const quader_editor_core::SelectionOverlayLine &line : lines) {
     const ProjectionObjectState &object_state =
         object_state_cache.state_for(line.object_id, object_registry, scene);

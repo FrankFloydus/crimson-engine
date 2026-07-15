@@ -284,6 +284,13 @@ QuaderApiVoidResult QuaderApiMutationRunner::run_modeling_command(
                      QuaderMutationKind::Modeling, label);
 }
 
+QuaderApiVoidResult
+QuaderApiMutationRunner::run_runtime_result(CommandResult result,
+                                            std::string_view label) {
+  QDR_PROFILE_FUNCTION();
+  return status_from(std::move(result), QuaderMutationKind::Runtime, label);
+}
+
 QuaderApiVoidResult QuaderApiMutationRunner::run_modeling_undoable_command(
     std::unique_ptr<IUndoableCommand> command, std::string_view label) {
   QDR_PROFILE_FUNCTION();

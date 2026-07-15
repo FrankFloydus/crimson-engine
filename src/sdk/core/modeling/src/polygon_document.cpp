@@ -165,6 +165,16 @@ void bump_selection(PolygonDocumentImpl &impl, bool changed) {
   }
 }
 
+void commit_selection(PolygonDocumentImpl &impl,
+                      quader_poly::Selection selection, bool changed) {
+  if (!changed) {
+    return;
+  }
+  impl.selection = std::make_shared<const quader_poly::Selection>(
+      std::move(selection));
+  bump_selection(impl, true);
+}
+
 [[nodiscard]] Result<OperationResult>
 validate_vertex_id(const quader_poly::Document &document, VertexId id) {
   if (!id.valid()) {
@@ -333,11 +343,19 @@ template <typename Operation>
 [[nodiscard]] Result<OperationResult>
 apply_operation(PolygonDocumentImpl &impl, Operation operation,
                 bool material_change = false) {
+  quader_poly::Document document = *impl.document;
+  quader_poly::Selection selection = *impl.selection;
   quader_poly::OperationResult native_result =
-      operation(impl.document, impl.selection);
+      operation(document, selection);
   OperationResult result = adapt_operation_result(native_result);
   if (material_change && result.changed) {
     result.dirty.materials = true;
+  }
+  if (result.changed) {
+    impl.document = std::make_shared<const quader_poly::Document>(
+        std::move(document));
+    impl.selection = std::make_shared<const quader_poly::Selection>(
+        std::move(selection));
   }
   bump_content(impl, result.changed);
   bump_selection(impl, result.changed);
@@ -416,11 +434,16 @@ Result<PolygonDocument> PolygonDocument::make_face(std::span<const Vec3> points,
 }
 
 std::size_t PolygonDocument::vertex_count() const {
-  return impl_->document.vertices.size();
+  return impl_->document->vertices.size();
 }
 
 std::size_t PolygonDocument::face_count() const {
-  return impl_->document.faces.size();
+  return impl_->document->faces.size();
+}
+
+PolygonContentIdentity PolygonDocument::content_identity() const noexcept {
+  return PolygonContentIdentity{static_cast<std::uint64_t>(
+      reinterpret_cast<std::uintptr_t>(impl_->document.get()))};
 }
 
 std::uint64_t PolygonDocument::content_revision() const {
@@ -431,10 +454,15 @@ std::uint64_t PolygonDocument::selection_revision() const {
   return impl_->selection_revision;
 }
 
+bool PolygonDocument::shares_topology_with(
+    const PolygonDocument &other) const noexcept {
+  return impl_ && other.impl_ && impl_->document == other.impl_->document;
+}
+
 std::vector<VertexId> PolygonDocument::vertex_ids() const {
   std::vector<VertexId> ids;
-  ids.reserve(impl_->document.vertices.size());
-  for (const quader_poly::Vertex &vertex : impl_->document.vertices) {
+  ids.reserve(impl_->document->vertices.size());
+  for (const quader_poly::Vertex &vertex : impl_->document->vertices) {
     ids.push_back(vertex_id(vertex.id));
   }
   return ids;
@@ -443,7 +471,7 @@ std::vector<VertexId> PolygonDocument::vertex_ids() const {
 std::vector<EdgeKey> PolygonDocument::edge_ids() const {
   std::vector<EdgeKey> ids;
   const std::vector<quader_poly::Edge> native_edges =
-      quader_poly::document_edges(impl_->document);
+      quader_poly::document_edges(*impl_->document);
   ids.reserve(native_edges.size());
   for (const quader_poly::Edge edge : native_edges) {
     ids.push_back(edge_id(edge));
@@ -453,8 +481,8 @@ std::vector<EdgeKey> PolygonDocument::edge_ids() const {
 
 std::vector<FaceId> PolygonDocument::face_ids() const {
   std::vector<FaceId> ids;
-  ids.reserve(impl_->document.faces.size());
-  for (const quader_poly::Face &face : impl_->document.faces) {
+  ids.reserve(impl_->document->faces.size());
+  for (const quader_poly::Face &face : impl_->document->faces) {
     ids.push_back(face_id(face.id));
   }
   return ids;
@@ -462,8 +490,8 @@ std::vector<FaceId> PolygonDocument::face_ids() const {
 
 std::vector<EdgeKey> PolygonDocument::hard_edge_ids() const {
   std::vector<EdgeKey> ids;
-  ids.reserve(impl_->document.hard_normal_edges.size());
-  for (const quader_poly::Edge edge : impl_->document.hard_normal_edges) {
+  ids.reserve(impl_->document->hard_normal_edges.size());
+  for (const quader_poly::Edge edge : impl_->document->hard_normal_edges) {
     ids.push_back(edge_id(edge));
   }
   return ids;
@@ -483,7 +511,7 @@ std::vector<EdgeKey> PolygonDocument::soft_edge_ids() const {
 std::vector<FaceId>
 PolygonDocument::face_ids_by_material_slot(std::uint32_t material_slot) const {
   std::vector<FaceId> ids;
-  for (const quader_poly::Face &face : impl_->document.faces) {
+  for (const quader_poly::Face &face : impl_->document->faces) {
     if (face.material_slot == material_slot) {
       ids.push_back(face_id(face.id));
     }
@@ -506,9 +534,9 @@ PolygonDocument::face_ids_by_normal(Vec3 direction, float tolerance) const {
       native_direction.z / length,
   };
   std::vector<FaceId> ids;
-  for (const quader_poly::Face &face : impl_->document.faces) {
+  for (const quader_poly::Face &face : impl_->document->faces) {
     const quader::QVec3 normal =
-        quader_poly::face_normal(impl_->document, face);
+        quader_poly::face_normal(*impl_->document, face);
     const float facing = (normal.x * normalized.x) +
                          (normal.y * normalized.y) +
                          (normal.z * normalized.z);
@@ -521,24 +549,24 @@ PolygonDocument::face_ids_by_normal(Vec3 direction, float tolerance) const {
 
 PolygonSelectionSnapshot PolygonDocument::selection() const {
   PolygonSelectionSnapshot snapshot;
-  snapshot.kind = selection_kind_from_native(impl_->selection.mode);
-  snapshot.has_active = impl_->selection.has_active;
-  snapshot.vertices.reserve(impl_->selection.vertices.size());
-  for (const quader_poly::ElementId id : impl_->selection.vertices) {
+  snapshot.kind = selection_kind_from_native(impl_->selection->mode);
+  snapshot.has_active = impl_->selection->has_active;
+  snapshot.vertices.reserve(impl_->selection->vertices.size());
+  for (const quader_poly::ElementId id : impl_->selection->vertices) {
     snapshot.vertices.push_back(vertex_id(id));
   }
-  snapshot.edges.reserve(impl_->selection.edges.size());
-  for (const quader_poly::Edge edge : impl_->selection.edges) {
+  snapshot.edges.reserve(impl_->selection->edges.size());
+  for (const quader_poly::Edge edge : impl_->selection->edges) {
     snapshot.edges.push_back(edge_id(edge));
   }
-  snapshot.faces.reserve(impl_->selection.faces.size());
-  for (const quader_poly::ElementId id : impl_->selection.faces) {
+  snapshot.faces.reserve(impl_->selection->faces.size());
+  for (const quader_poly::ElementId id : impl_->selection->faces) {
     snapshot.faces.push_back(face_id(id));
   }
-  if (impl_->selection.has_active) {
-    snapshot.active_vertex = vertex_id(impl_->selection.active_vertex);
-    snapshot.active_edge = edge_id(impl_->selection.active_edge);
-    snapshot.active_face = face_id(impl_->selection.active_face);
+  if (impl_->selection->has_active) {
+    snapshot.active_vertex = vertex_id(impl_->selection->active_vertex);
+    snapshot.active_edge = edge_id(impl_->selection->active_edge);
+    snapshot.active_face = face_id(impl_->selection->active_face);
   }
   return snapshot;
 }
@@ -546,15 +574,15 @@ PolygonSelectionSnapshot PolygonDocument::selection() const {
 Result<AuthoredPolygonPayload> PolygonDocument::authored_payload() const {
   AuthoredPolygonPayload payload;
   payload.content_revision = impl_->content_revision;
-  payload.vertices.reserve(impl_->document.vertices.size());
-  payload.positions.reserve(impl_->document.vertices.size());
-  for (const quader_poly::Vertex &vertex : impl_->document.vertices) {
+  payload.vertices.reserve(impl_->document->vertices.size());
+  payload.positions.reserve(impl_->document->vertices.size());
+  for (const quader_poly::Vertex &vertex : impl_->document->vertices) {
     payload.vertices.push_back(vertex_id(vertex.id));
     payload.positions.push_back(from_native(vertex.position));
   }
 
-  payload.faces.reserve(impl_->document.faces.size());
-  for (const quader_poly::Face &face : impl_->document.faces) {
+  payload.faces.reserve(impl_->document->faces.size());
+  for (const quader_poly::Face &face : impl_->document->faces) {
     AuthoredPolygonFacePayload face_payload;
     face_payload.id = face_id(face.id);
     face_payload.material = material_id(face.material_slot);
@@ -569,7 +597,7 @@ Result<AuthoredPolygonPayload> PolygonDocument::authored_payload() const {
 
 Result<MeshPayload> PolygonDocument::compile_mesh() const {
   const quader_poly::CompiledMesh compiled =
-      quader_poly::compile_document(impl_->document);
+      quader_poly::compile_document(*impl_->document);
   MeshPayload payload;
   payload.content_revision = impl_->content_revision;
   payload.vertices.reserve(compiled.vertices.size());
@@ -595,10 +623,10 @@ Result<MeshPayload> PolygonDocument::compile_mesh() const {
 
 Result<OperationResult> PolygonDocument::validate() const {
   const quader_poly::PolygonDocumentValidationReport document_report =
-      quader_poly::validate_polygon_document(impl_->document);
+      quader_poly::validate_polygon_document(*impl_->document);
   const quader_poly::PolygonSelectionLivenessReport selection_report =
-      quader_poly::validate_polygon_selection_liveness(impl_->document,
-                                                       impl_->selection);
+      quader_poly::validate_polygon_selection_liveness(*impl_->document,
+                                                       *impl_->selection);
 
   OperationResult result;
   result.success = document_report.ok() && selection_report.ok();
@@ -636,32 +664,33 @@ Result<OperationResult> PolygonDocument::validate() const {
 
 Result<OperationResult>
 PolygonDocument::set_selection_mode(SelectionMode mode) {
-  auto &selection = impl_->selection;
+  quader_poly::Selection selection = *impl_->selection;
   const quader_poly::SelectionMode previous = selection.mode;
   switch (mode) {
   case SelectionMode::Vertex:
-    quader_poly::convert_selection_mode(impl_->document, selection,
+    quader_poly::convert_selection_mode(*impl_->document, selection,
                                         quader_poly::SelectionMode::Vertex);
     break;
   case SelectionMode::Edge:
-    quader_poly::convert_selection_mode(impl_->document, selection,
+    quader_poly::convert_selection_mode(*impl_->document, selection,
                                         quader_poly::SelectionMode::Edge);
     break;
   case SelectionMode::Face:
-    quader_poly::convert_selection_mode(impl_->document, selection,
+    quader_poly::convert_selection_mode(*impl_->document, selection,
                                         quader_poly::SelectionMode::Face);
     break;
   }
 
   const bool changed = selection.mode != previous;
-  bump_selection(*impl_, changed);
+  commit_selection(*impl_, std::move(selection), changed);
   return operation_success(selection_only_result(changed, "Selection mode updated."));
 }
 
 Result<OperationResult> PolygonDocument::clear_selection() {
-  const bool changed = !impl_->selection.empty() || impl_->selection.has_active;
-  impl_->selection.clear();
-  bump_selection(*impl_, changed);
+  quader_poly::Selection selection = *impl_->selection;
+  const bool changed = !selection.empty() || selection.has_active;
+  selection.clear();
+  commit_selection(*impl_, std::move(selection), changed);
   return operation_success(selection_only_result(changed, "Selection cleared."));
 }
 
@@ -669,27 +698,28 @@ Result<OperationResult>
 PolygonDocument::select_vertices(std::span<const VertexId> ids,
                                  SelectionEdit edit) {
   for (const VertexId id : ids) {
-    Result<OperationResult> validation = validate_vertex_id(impl_->document, id);
+    Result<OperationResult> validation = validate_vertex_id(*impl_->document, id);
     if (!validation.ok()) {
       return validation;
     }
   }
+  quader_poly::Selection selection = *impl_->selection;
   if (edit == SelectionEdit::Replace ||
-      impl_->selection.mode != quader_poly::SelectionMode::Vertex) {
-    impl_->selection.clear();
-    impl_->selection.mode = quader_poly::SelectionMode::Vertex;
+      selection.mode != quader_poly::SelectionMode::Vertex) {
+    selection.clear();
+    selection.mode = quader_poly::SelectionMode::Vertex;
   }
   std::vector<quader_poly::ElementId> native_ids;
   native_ids.reserve(ids.size());
   for (const VertexId id : ids) {
     native_ids.push_back(id.index);
   }
-  apply_edit(impl_->selection.vertices,
+  apply_edit(selection.vertices,
              std::span<const quader_poly::ElementId>(native_ids.data(),
                                                      native_ids.size()),
              edit);
-  update_active_selection(impl_->selection);
-  bump_selection(*impl_, true);
+  update_active_selection(selection);
+  commit_selection(*impl_, std::move(selection), true);
   return operation_success(selection_only_result(true, "Vertices selected."));
 }
 
@@ -698,27 +728,28 @@ PolygonDocument::select_edges(std::span<const EdgeKey> edges,
                               SelectionEdit edit) {
   for (const EdgeKey edge : edges) {
     Result<OperationResult> validation =
-        validate_edge_key(impl_->document, edge);
+        validate_edge_key(*impl_->document, edge);
     if (!validation.ok()) {
       return validation;
     }
   }
+  quader_poly::Selection selection = *impl_->selection;
   if (edit == SelectionEdit::Replace ||
-      impl_->selection.mode != quader_poly::SelectionMode::Edge) {
-    impl_->selection.clear();
-    impl_->selection.mode = quader_poly::SelectionMode::Edge;
+      selection.mode != quader_poly::SelectionMode::Edge) {
+    selection.clear();
+    selection.mode = quader_poly::SelectionMode::Edge;
   }
   std::vector<quader_poly::Edge> native_edges;
   native_edges.reserve(edges.size());
   for (const EdgeKey edge : edges) {
     native_edges.push_back(native_edge(edge));
   }
-  apply_edit(impl_->selection.edges,
+  apply_edit(selection.edges,
              std::span<const quader_poly::Edge>(native_edges.data(),
                                                 native_edges.size()),
              edit);
-  update_active_selection(impl_->selection);
-  bump_selection(*impl_, true);
+  update_active_selection(selection);
+  commit_selection(*impl_, std::move(selection), true);
   return operation_success(selection_only_result(true, "Edges selected."));
 }
 
@@ -726,72 +757,76 @@ Result<OperationResult>
 PolygonDocument::select_faces(std::span<const FaceId> ids,
                               SelectionEdit edit) {
   for (const FaceId id : ids) {
-    Result<OperationResult> validation = validate_face_id(impl_->document, id);
+    Result<OperationResult> validation = validate_face_id(*impl_->document, id);
     if (!validation.ok()) {
       return validation;
     }
   }
+  quader_poly::Selection selection = *impl_->selection;
   if (edit == SelectionEdit::Replace ||
-      impl_->selection.mode != quader_poly::SelectionMode::Face) {
-    impl_->selection.clear();
-    impl_->selection.mode = quader_poly::SelectionMode::Face;
+      selection.mode != quader_poly::SelectionMode::Face) {
+    selection.clear();
+    selection.mode = quader_poly::SelectionMode::Face;
   }
   std::vector<quader_poly::ElementId> native_ids;
   native_ids.reserve(ids.size());
   for (const FaceId id : ids) {
     native_ids.push_back(id.index);
   }
-  apply_edit(impl_->selection.faces,
+  apply_edit(selection.faces,
              std::span<const quader_poly::ElementId>(native_ids.data(),
                                                      native_ids.size()),
              edit);
-  update_active_selection(impl_->selection);
-  bump_selection(*impl_, true);
+  update_active_selection(selection);
+  commit_selection(*impl_, std::move(selection), true);
   return operation_success(selection_only_result(true, "Faces selected."));
 }
 
 Result<OperationResult> PolygonDocument::select_vertex(VertexId id) {
-  Result<OperationResult> validation = validate_vertex_id(impl_->document, id);
+  Result<OperationResult> validation = validate_vertex_id(*impl_->document, id);
   if (!validation.ok()) {
     return validation;
   }
-  impl_->selection.clear();
-  impl_->selection.mode = quader_poly::SelectionMode::Vertex;
-  impl_->selection.vertices = {id.index};
-  impl_->selection.has_active = true;
-  impl_->selection.active_kind = quader_poly::ElementKind::Vertex;
-  impl_->selection.active_vertex = id.index;
-  bump_selection(*impl_, true);
+  quader_poly::Selection selection = *impl_->selection;
+  selection.clear();
+  selection.mode = quader_poly::SelectionMode::Vertex;
+  selection.vertices = {id.index};
+  selection.has_active = true;
+  selection.active_kind = quader_poly::ElementKind::Vertex;
+  selection.active_vertex = id.index;
+  commit_selection(*impl_, std::move(selection), true);
   return operation_success(selection_only_result(true, "Vertex selected."));
 }
 
 Result<OperationResult> PolygonDocument::select_edge(EdgeKey edge) {
-  Result<OperationResult> validation = validate_edge_key(impl_->document, edge);
+  Result<OperationResult> validation = validate_edge_key(*impl_->document, edge);
   if (!validation.ok()) {
     return validation;
   }
-  impl_->selection.clear();
-  impl_->selection.mode = quader_poly::SelectionMode::Edge;
-  impl_->selection.edges = {quader_poly::make_edge(edge.a.index, edge.b.index)};
-  impl_->selection.has_active = true;
-  impl_->selection.active_kind = quader_poly::ElementKind::Edge;
-  impl_->selection.active_edge = impl_->selection.edges.front();
-  bump_selection(*impl_, true);
+  quader_poly::Selection selection = *impl_->selection;
+  selection.clear();
+  selection.mode = quader_poly::SelectionMode::Edge;
+  selection.edges = {quader_poly::make_edge(edge.a.index, edge.b.index)};
+  selection.has_active = true;
+  selection.active_kind = quader_poly::ElementKind::Edge;
+  selection.active_edge = selection.edges.front();
+  commit_selection(*impl_, std::move(selection), true);
   return operation_success(selection_only_result(true, "Edge selected."));
 }
 
 Result<OperationResult> PolygonDocument::select_face(FaceId id) {
-  Result<OperationResult> validation = validate_face_id(impl_->document, id);
+  Result<OperationResult> validation = validate_face_id(*impl_->document, id);
   if (!validation.ok()) {
     return validation;
   }
-  impl_->selection.clear();
-  impl_->selection.mode = quader_poly::SelectionMode::Face;
-  impl_->selection.faces = {id.index};
-  impl_->selection.has_active = true;
-  impl_->selection.active_kind = quader_poly::ElementKind::Face;
-  impl_->selection.active_face = id.index;
-  bump_selection(*impl_, true);
+  quader_poly::Selection selection = *impl_->selection;
+  selection.clear();
+  selection.mode = quader_poly::SelectionMode::Face;
+  selection.faces = {id.index};
+  selection.has_active = true;
+  selection.active_kind = quader_poly::ElementKind::Face;
+  selection.active_face = id.index;
+  commit_selection(*impl_, std::move(selection), true);
   return operation_success(selection_only_result(true, "Face selected."));
 }
 
@@ -828,12 +863,12 @@ PolygonDocument::apply_selection(const PolygonSelectionSnapshot &selection,
 }
 
 Result<OperationResult> PolygonDocument::translate_selection(Vec3 delta) {
-  quader_poly::OperationResult result =
-      quader_poly::translate_selection(impl_->document, impl_->selection,
-                                       to_native(delta));
-  bump_content(*impl_, result.changed);
-  bump_selection(*impl_, result.changed);
-  return operation_success(adapt_operation_result(result));
+  return apply_operation(
+      *impl_, [delta](quader_poly::Document &document,
+                      quader_poly::Selection &selection) {
+        return quader_poly::translate_selection(document, selection,
+                                                to_native(delta));
+      });
 }
 
 Result<OperationResult>
@@ -859,20 +894,18 @@ PolygonDocument::assign_selected_face_material_slot(std::uint32_t material_slot)
 Result<OperationResult>
 PolygonDocument::assign_face_material_slot(FaceId id,
                                            std::uint32_t material_slot) {
-  Result<OperationResult> validation = validate_face_id(impl_->document, id);
+  Result<OperationResult> validation = validate_face_id(*impl_->document, id);
   if (!validation.ok()) {
     return validation;
   }
-  const quader_poly::OperationResult native_result =
-      quader_poly::assign_face_material_slot(impl_->document, id.index,
-                                             material_slot);
-  OperationResult result = adapt_operation_result(native_result);
-  if (result.changed) {
-    result.dirty.materials = true;
-  }
-  bump_content(*impl_, result.changed);
-  bump_selection(*impl_, result.changed);
-  return operation_success(std::move(result));
+  return apply_operation(
+      *impl_,
+      [id, material_slot](quader_poly::Document &document,
+                          quader_poly::Selection &) {
+        return quader_poly::assign_face_material_slot(document, id.index,
+                                                      material_slot);
+      },
+      true);
 }
 
 Result<OperationResult>
@@ -929,8 +962,8 @@ Result<OperationResult> PolygonDocument::connect_selected_edges() {
 }
 
 Result<OperationResult> PolygonDocument::snap_selected_edges_to_active() {
-  quader_poly::Document &document = impl_->document;
-  quader_poly::Selection &selection = impl_->selection;
+  const quader_poly::Document &document = *impl_->document;
+  const quader_poly::Selection &selection = *impl_->selection;
   if (selection.mode != quader_poly::SelectionMode::Edge ||
       selection.edges.empty()) {
     return operation_success(
@@ -1029,8 +1062,10 @@ Result<OperationResult> PolygonDocument::snap_selected_edges_to_active() {
 
   OperationResult result;
   result.message = "Selected edges snapped to active edge.";
+  quader_poly::Document updated_document = document;
   for (const auto &[vertex_id, desired] : targets) {
-    quader_poly::Vertex *vertex = quader_poly::find_vertex(document, vertex_id);
+    quader_poly::Vertex *vertex =
+        quader_poly::find_vertex(updated_document, vertex_id);
     if (vertex == nullptr) {
       continue;
     }
@@ -1047,10 +1082,12 @@ Result<OperationResult> PolygonDocument::snap_selected_edges_to_active() {
     return operation_success(std::move(result));
   }
 
-  quader_poly::clear_face_uvs(document);
+  quader_poly::clear_face_uvs(updated_document);
   result.modified = result.affected;
   result.dirty.geometry = true;
   result.dirty.selection = true;
+  impl_->document = std::make_shared<const quader_poly::Document>(
+      std::move(updated_document));
   bump_content(*impl_, true);
   bump_selection(*impl_, true);
   return operation_success(std::move(result));
@@ -1279,8 +1316,10 @@ Result<OperationResult> PolygonDocument::detach_selected_faces() {
 }
 
 Result<ExtractedPolygonDocument> PolygonDocument::extract_selected_faces() {
+  quader_poly::Document source_document = *impl_->document;
+  quader_poly::Selection source_selection = *impl_->selection;
   quader_poly::ExtractFacesResult native_result =
-      quader_poly::extract_selected_faces(impl_->document, impl_->selection);
+      quader_poly::extract_selected_faces(source_document, source_selection);
   OperationResult receipt;
   receipt.changed = native_result.changed;
   receipt.message = native_result.message;
@@ -1291,6 +1330,12 @@ Result<ExtractedPolygonDocument> PolygonDocument::extract_selected_faces() {
   receipt.dirty.geometry = native_result.changed;
   receipt.dirty.topology = native_result.changed;
   receipt.dirty.selection = native_result.changed;
+  if (receipt.changed) {
+    impl_->document = std::make_shared<const quader_poly::Document>(
+        std::move(source_document));
+    impl_->selection = std::make_shared<const quader_poly::Selection>(
+        std::move(source_selection));
+  }
   bump_content(*impl_, receipt.changed);
   bump_selection(*impl_, receipt.changed);
   ExtractedPolygonDocument result{

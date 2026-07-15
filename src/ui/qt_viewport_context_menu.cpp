@@ -7,6 +7,7 @@
 #include "ui/qt_viewport_context_menu.hpp"
 
 #include "api/quader_api_type_conversions.hpp"
+#include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
@@ -75,6 +76,17 @@ void QtViewportContextMenuPresenter::show(
   menu.setObjectName(QStringLiteral("viewport_operations_context_menu"));
   menu.setToolTipsVisible(true);
 
+  QAction *create_instance_action = menu.addAction(QString::fromStdString(
+      localization.text("ui.menu.edit.create_instance", "Create Instance")));
+  create_instance_action->setObjectName(QStringLiteral("create_instance"));
+  create_instance_action->setEnabled(editor.modeling().can_create_instance());
+  QAction *flatten_instance_action = menu.addAction(QString::fromStdString(
+      localization.text("ui.menu.edit.flatten_instance", "Flatten Instance")));
+  flatten_instance_action->setObjectName(QStringLiteral("flatten_instance"));
+  flatten_instance_action->setEnabled(
+      editor.modeling().can_flatten_instance());
+  menu.addSeparator();
+
   std::vector<std::pair<QAction *, const QuaderActionItem *>> menu_actions;
   menu_actions.reserve(actions.size());
   bool separated_generic_actions = false;
@@ -105,6 +117,22 @@ void QtViewportContextMenuPresenter::show(
 
   QAction *selected_action = menu.exec(global_point);
   if (selected_action == nullptr) {
+    return;
+  }
+  if (selected_action == create_instance_action ||
+      selected_action == flatten_instance_action) {
+    const QuaderCommandId command =
+        selected_action == create_instance_action
+            ? quader_command::kEditCreateInstance
+            : quader_command::kEditFlattenInstance;
+    const QuaderApiVoidResult result = editor.commands().execute(command);
+    if (!result.ok()) {
+      LOG_ERROR("Instance command '{}' failed: {}", command.string(),
+                result.error_message().empty() ? "Operation failed."
+                                               : result.error_message());
+    }
+    input_router.set_selection_mode(app_selection_mode_to_viewport(
+        to_modeling_selection_mode(editor.selection().summary().mode)));
     return;
   }
   const auto selected = std::find_if(

@@ -31,6 +31,7 @@ struct ViewportSettingColor {
 enum class ViewportSettingsSectionId {
     Grid,
     Selection,
+    InstanceEditing,
     Overlay,
     Vertices,
     Picking,
@@ -51,6 +52,8 @@ enum class ViewportColorSettingId {
     GridZAxis,
     SelectionFace,
     SelectionWire,
+    InstanceEditBackground,
+    InstanceEditContext,
     SourceWire,
     OpenEdge,
     DiagnosticEdge,

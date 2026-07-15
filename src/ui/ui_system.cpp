@@ -309,6 +309,15 @@ bool UISystem::initialize(RenderSystem &render_system,
           refresh_project_workspace();
         }
       });
+  scene_workspace_->set_exit_instance_edit_requested_callback([this]() {
+    if (editor_ == nullptr) {
+      return;
+    }
+    const QuaderApiVoidResult result =
+        editor_->commands().execute(quader_command::kEditExitInstanceEdit);
+    present_lifecycle_result(result);
+    refresh_project_workspace();
+  });
   create_docks();
 
   settings_dialog_ = new QtSettingsDialog(main_window_.get());
@@ -705,6 +714,17 @@ void UISystem::refresh_project_workspace() {
   if (scene_workspace_->scene_tabs() != tabs ||
       scene_workspace_->active_scene() != active) {
     (void)scene_workspace_->set_scene_tabs(std::move(tabs), active);
+  }
+
+  const QuaderInstanceEditState instance_edit =
+      editor_->modeling().instance_edit_state();
+  if (instance_edit.active) {
+    scene_workspace_->set_instance_edit_breadcrumb(QtInstanceEditBreadcrumb{
+        .scene_name = QString::fromStdString(instance_edit.scene_name),
+        .instance_name = QString::fromStdString(instance_edit.instance_name),
+    });
+  } else {
+    scene_workspace_->set_instance_edit_breadcrumb(std::nullopt);
   }
 
   if (editor_->project().has_project() &&
@@ -2156,6 +2176,10 @@ void UISystem::refresh_localized_chrome() {
         .empty_description = text(
             "ui.workspace.empty_description",
             "Create a new scene or open one from this project."),
+        .return_to_scene = text("ui.workspace.return_to_scene",
+                                "Return to scene %1"),
+        .editing_instance = text("ui.workspace.editing_instance",
+                                 "Editing instance %1"),
     });
   }
   if (material_browser_window_ != nullptr) {

@@ -11,6 +11,7 @@
 #include <mesh/geometry/geometry.hpp>
 
 #include <cmath>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace quader_editor_core {
@@ -129,13 +130,11 @@ bool transform_object_vertices(PolygonObject &object, SelectionMode mode,
                                const quader_poly::Transform3 &transform,
                                quader::QVec3 pivot,
                                bool preserve_object_uvs) {
-  if (preserve_object_uvs) {
-    quader_poly::ensure_face_uvs(object.document);
-  }
   const std::unordered_set<quader_poly::ElementId> vertex_ids =
       transform_vertex_ids_for_object(object, mode);
-  bool object_changed = false;
-  for (quader_poly::Vertex &vertex : object.document.vertices) {
+  std::unordered_map<quader_poly::ElementId, quader::QVec3> updates;
+  updates.reserve(vertex_ids.size());
+  for (const quader_poly::Vertex &vertex : object.document.vertices) {
     if (!vertex_ids.contains(vertex.id)) {
       continue;
     }
@@ -145,13 +144,25 @@ bool transform_object_vertices(PolygonObject &object, SelectionMode mode,
         kTransformPointEpsilon) {
       continue;
     }
-    vertex.position = after;
-    object_changed = true;
+    updates.emplace(vertex.id, after);
   }
-  if (object_changed && !preserve_object_uvs) {
-    quader_poly::clear_face_uvs(object.document);
+  if (updates.empty()) {
+    return false;
   }
-  return object_changed;
+
+  quader_poly::Document &editable = object.document.edit();
+  if (preserve_object_uvs) {
+    quader_poly::ensure_face_uvs(editable);
+  }
+  for (quader_poly::Vertex &vertex : editable.vertices) {
+    if (const auto update = updates.find(vertex.id); update != updates.end()) {
+      vertex.position = update->second;
+    }
+  }
+  if (!preserve_object_uvs) {
+    quader_poly::clear_face_uvs(editable);
+  }
+  return true;
 }
 
 } // namespace
@@ -205,6 +216,10 @@ Bounds3 selection_bounds(const std::vector<PolygonObject>& objects, SelectionMod
 
 CommandResult translate_selected(std::vector<PolygonObject>& objects, SelectionMode mode, quader::QVec3 delta, bool texture_lock_enabled)
 {
+	if (quader_geometry::length_squared(to_geometry_vec3(delta)) <=
+	    kTransformPointEpsilon) {
+		return ok_result(false);
+	}
 	bool changed = false;
 	for (PolygonObject& object : objects) {
 		if (!object.selected) {
@@ -212,13 +227,16 @@ CommandResult translate_selected(std::vector<PolygonObject>& objects, SelectionM
 		}
                 const bool preserve_object_uvs =
                     mode == SelectionMode::Object && texture_lock_enabled;
-                if (preserve_object_uvs) {
-			quader_poly::ensure_face_uvs(object.document);
-		}
                 quader_poly::Selection selection =
                     mode == SelectionMode::Object
                         ? all_vertex_selection(object.document)
                         : object.selection;
+		if (quader_poly::selected_vertex_ids(object.document, selection).empty()) {
+			continue;
+		}
+		if (preserve_object_uvs) {
+			quader_poly::ensure_face_uvs(object.document.edit());
+		}
                 const quader_poly::OperationResult result = quader_poly::translate_selection(object.document, selection, delta);
 		if (result.changed) {
 			if (!preserve_object_uvs) {

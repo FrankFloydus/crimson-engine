@@ -422,7 +422,8 @@ quader::MeshAsset make_authored_mesh(
 quader::MeshAsset make_small_compiled_mesh(std::string name) {
   quader::MeshAsset mesh;
   mesh.name = std::move(name);
-  mesh.vertices = {
+  quader::MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices = {
       {.position = {0.0f, 0.0f, 0.0f},
        .normal = {0.0f, 0.0f, 1.0f},
        .uv = {0.0f, 0.0f}},
@@ -433,10 +434,10 @@ quader::MeshAsset make_small_compiled_mesh(std::string name) {
        .normal = {0.0f, 0.0f, 1.0f},
        .uv = {0.0f, 1.0f}},
   };
-  mesh.indices = {0u, 1u, 2u};
-  mesh.primitives = {{.index_offset = 0u,
-                      .index_count = 3u,
-                      .material_slot = 0u}};
+  geometry.indices = {0u, 1u, 2u};
+  geometry.primitives = {{.index_offset = 0u,
+                          .index_count = 3u,
+                          .material_slot = 0u}};
   return mesh;
 }
 

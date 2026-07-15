@@ -32,6 +32,7 @@ struct SceneTransformDragTarget {
   TransformComponent translation_preview_transform;
   QVec3 local_pivot = {};
   QMat4 world_transform;
+  QMat4 scene_from_display;
   QVec3 parent_space_world_x = {1.0f, 0.0f, 0.0f};
   QVec3 parent_space_world_y = {0.0f, 1.0f, 0.0f};
   QVec3 parent_space_world_z = {0.0f, 0.0f, 1.0f};
@@ -53,7 +54,8 @@ public:
 
     [[nodiscard]] bool begin(SceneDocument &document, QVec3 world_pivot,
                              bool start_preview,
-                             std::string label = "Transform Selection");
+                             std::string label = "Transform Selection",
+                             QMat4 display_from_scene = {});
     [[nodiscard]] bool begin_move_selected_to_primary_position_preview(
         SceneDocument &document, EntityId primary,
         std::string label = "Transform Selection");
@@ -102,11 +104,13 @@ public:
     DocumentCommandResult
     move_selected_by_world_delta(DocumentCommandService &document_commands,
                                  SceneDocument &document, QVec3 world_delta,
-                                 std::string label = "Move Selection");
+                                 std::string label = "Move Selection",
+                                 QMat4 display_from_scene = {});
     DocumentCommandResult transform_selected_by_world_delta(
         DocumentCommandService &document_commands, SceneDocument &document,
         const QMat4 &world_transform_delta,
-        std::string label = "Transform Selection");
+        std::string label = "Transform Selection",
+        QMat4 display_from_scene = {});
 
   private:
     /// Distinguishes an empty selection from an unsafe transform capture.
@@ -117,7 +121,8 @@ public:
     };
 
     [[nodiscard]] CaptureTargetsStatus
-    capture_targets(SceneDocument &document, QVec3 world_pivot);
+    capture_targets(SceneDocument &document, QVec3 world_pivot,
+                    QMat4 display_from_scene = {});
     [[nodiscard]] const TransformComponent *
     captured_primary_transform(const SceneDocument &document,
                                EntityId primary) const;

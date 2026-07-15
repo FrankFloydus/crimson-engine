@@ -113,6 +113,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -494,8 +495,9 @@ void expect_vec3_near(QVec3 actual, QVec3 expected) {
 
 double mesh_position_fingerprint(const MeshAsset &mesh) {
   double value = 0.0;
-  for (std::size_t index = 0; index < mesh.vertices.size(); ++index) {
-    const QVec3 &position = mesh.vertices[index].position;
+  const std::vector<MeshVertex> &vertices = mesh.geometry().vertices;
+  for (std::size_t index = 0; index < vertices.size(); ++index) {
+    const QVec3 &position = vertices[index].position;
     const double weight = static_cast<double>(index + 1);
     value += weight * (static_cast<double>(position.x * position.x) * 0.31 +
                        static_cast<double>(position.y * position.y) * 0.53 +
@@ -790,7 +792,8 @@ test_api_x_move_drag_update_request(float screen_x) {
 MeshAsset make_test_triangle_mesh(std::string name = "Test Mesh") {
   MeshAsset mesh;
   mesh.name = std::move(name);
-  mesh.vertices = {
+  MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices = {
       MeshVertex{.position = {-0.5f, 0.0f, 0.0f},
                  .normal = {0.0f, 1.0f, 0.0f},
                  .uv = {0.0f, 0.0f}},
@@ -801,8 +804,8 @@ MeshAsset make_test_triangle_mesh(std::string name = "Test Mesh") {
                  .normal = {0.0f, 1.0f, 0.0f},
                  .uv = {0.5f, 1.0f}},
   };
-  mesh.indices = {0u, 1u, 2u};
-  mesh.primitives = {MeshPrimitiveSpan{
+  geometry.indices = {0u, 1u, 2u};
+  geometry.primitives = {MeshPrimitiveSpan{
       .index_offset = 0u, .index_count = 3u, .material_slot = 0u}};
   return mesh;
 }
@@ -1118,14 +1121,15 @@ TEST(WindowPlacementTests, PreservesMinimumSizeWithoutConnectedWorkAreas) {
 TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   const ViewportSettings settings = ViewportSettings::defaults();
 
-  ASSERT_EQ(viewport_settings_sections().size(), 6u);
+  ASSERT_EQ(viewport_settings_sections().size(), 7u);
   EXPECT_EQ(viewport_settings_sections()[0].label, "Grid");
   EXPECT_FALSE(viewport_settings_sections()[0].default_expanded);
   EXPECT_EQ(viewport_settings_sections()[1].label, "Selection");
-  EXPECT_EQ(viewport_settings_sections()[2].label, "Overlay");
-  EXPECT_EQ(viewport_settings_sections()[3].label, "Vertices");
-  EXPECT_EQ(viewport_settings_sections()[4].label, "Picking");
-  EXPECT_EQ(viewport_settings_sections()[5].label, "Gizmo");
+  EXPECT_EQ(viewport_settings_sections()[2].label, "Instance Editing");
+  EXPECT_EQ(viewport_settings_sections()[3].label, "Overlay");
+  EXPECT_EQ(viewport_settings_sections()[4].label, "Vertices");
+  EXPECT_EQ(viewport_settings_sections()[5].label, "Picking");
+  EXPECT_EQ(viewport_settings_sections()[6].label, "Gizmo");
 
   expect_color_near(settings.color(ViewportColorSettingId::SelectionWire),
                     overlay_policy_setting_color(kOverlaySelectionWireColor));
@@ -1139,6 +1143,12 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
                     {0.02f, 0.02f, 0.02f, 1.0f});
   expect_color_near(settings.color(ViewportColorSettingId::MeshGridMajor),
                     {1.0f, 0.84f, 0.22f, 1.0f});
+  expect_color_near(
+      settings.color(ViewportColorSettingId::InstanceEditBackground),
+      {0.34f, 0.36f, 0.37f, 1.0f});
+  expect_color_near(
+      settings.color(ViewportColorSettingId::InstanceEditContext),
+      {0.38f, 0.40f, 0.42f, 0.45f});
   const SceneSettingsComponent scene_settings_defaults;
   expect_vec3_near(scene_settings_defaults.environment.clear_color,
                    {2.0f / 255.0f, 2.0f / 255.0f, 2.0f / 255.0f});
@@ -1522,10 +1532,12 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
             std::string::npos);
   EXPECT_NE(shaded_source.find("texture(materialParams_baseColorTexture, uv)"),
             std::string::npos);
-  EXPECT_NE(
-      shaded_source.find("material.baseColor = vec4(baseColor, baseSample.a * "
-                         "materialParams.baseColorFactor.a)"),
-      std::string::npos);
+  EXPECT_NE(shaded_source.find(
+                "baseColor, baseSample.a * materialParams.baseColorFactor.a"),
+            std::string::npos);
+  EXPECT_NE(shaded_source.find(
+                "material.baseColor = vec4(edited.rgb * edited.a, edited.a)"),
+            std::string::npos);
   EXPECT_EQ(shaded_source.find("roughnessTexture"), std::string::npos);
   EXPECT_EQ(shaded_source.find("editor_unlit"), std::string::npos);
   EXPECT_NE(source.find("shadingModel : lit"), std::string::npos);
@@ -1542,8 +1554,11 @@ TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
             std::string::npos);
   EXPECT_NE(source.find("baseSample.rgb * materialParams.baseColorFactor.rgb"),
             std::string::npos);
-  EXPECT_NE(source.find("material.baseColor = vec4(baseColor, baseSample.a * "
-                        "materialParams.baseColorFactor.a)"),
+  EXPECT_NE(source.find(
+                "baseColor, baseSample.a * materialParams.baseColorFactor.a"),
+            std::string::npos);
+  EXPECT_NE(source.find(
+                "material.baseColor = vec4(edited.rgb * edited.a, edited.a)"),
             std::string::npos);
   EXPECT_NE(source.find("material.roughness = clamp(roughnessSample * "
                         "materialParams.roughnessFactor"),
@@ -2113,18 +2128,23 @@ TEST(ViewportOverlayPolicyTests,
   const std::string source = read_source_file(
       "src/editor/modeling/services/modeling_session_service.cpp");
 
-  const std::size_t object_mode = source.find("session_.selection_mode()");
-  ASSERT_NE(object_mode, std::string::npos);
-  const std::size_t object_selection =
-      source.find("quader_editor_core::SelectionMode::Object", object_mode);
-  ASSERT_NE(object_selection, std::string::npos);
-  const std::size_t scene_bounds = source.find(
-      "selected_transform_world_bounds(scene_, assets_)", object_selection);
-  ASSERT_NE(scene_bounds, std::string::npos);
+  const std::size_t drag_bounds = source.find("transform_drag_bounds() const");
+  const std::size_t drag_bounds_end =
+      source.find("try_sync_scene_objects_from_modeling", drag_bounds);
+  ASSERT_NE(drag_bounds, std::string::npos);
+  ASSERT_NE(drag_bounds_end, std::string::npos);
+  const std::string drag_bounds_source =
+      source.substr(drag_bounds, drag_bounds_end - drag_bounds);
+  const std::size_t projected_world_bounds =
+      drag_bounds_source.find("selection_bounds()");
   const std::size_t runtime_bounds =
-      source.find("session_.selection_bounds()", object_selection);
+      drag_bounds_source.find("session_.selection_bounds()");
+  ASSERT_NE(projected_world_bounds, std::string::npos);
   ASSERT_NE(runtime_bounds, std::string::npos);
-  EXPECT_LT(scene_bounds, runtime_bounds);
+  EXPECT_LT(projected_world_bounds, runtime_bounds);
+  EXPECT_NE(source.find(
+                "selection_projection_service_.world_selection_bounds("),
+            std::string::npos);
 }
 
 TEST(ViewportOverlayPolicyTests,
@@ -2135,9 +2155,9 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_TRUE(source_contains_compact(cache_source,
                                       "ViewportOverlayLayer::SelectedEdge : "
                                       "ViewportOverlayLayer::WireframeXray"));
-  EXPECT_NE(cache_source.find(
-                "style.selection_wire_color : kOverlayWireframeXrayColor"),
-            std::string::npos);
+  EXPECT_TRUE(source_contains_compact(
+      cache_source, "return mesh.selected ? style.selection_wire_color : "
+                    "kOverlayWireframeXrayColor;"));
   EXPECT_NE(cache_source.find("style.selection_edge_line_width_pixels"),
             std::string::npos);
 }
@@ -2450,8 +2470,6 @@ TEST(ViewportPersistentOverlayStyleSnapshotTests,
 
   for (const std::string_view policy_call : {
            "OverlayRenderableBuilder::make_state(",
-           ".blendOrder(0, state.blend_order)",
-           ".globalBlendOrderEnabled(0, true)",
            ".culling(false)",
        }) {
     EXPECT_NE(selected_cache.find(policy_call), std::string::npos)
@@ -2459,6 +2477,12 @@ TEST(ViewportPersistentOverlayStyleSnapshotTests,
     EXPECT_NE(wireframe_cache.find(policy_call), std::string::npos)
         << policy_call;
   }
+  EXPECT_TRUE(source_contains_compact(
+      selected_cache, ".blendOrder(0, state.blend_order)"
+                      ".globalBlendOrderEnabled(0, true)"));
+  EXPECT_TRUE(source_contains_compact(
+      wireframe_cache, ".blendOrder(0u, state.blend_order)"
+                       ".globalBlendOrderEnabled(0u, true)"));
 }
 
 TEST(ViewportOverlayStyleResolverTests, SupportsSelectionModeScopedOverrides) {
@@ -2711,13 +2735,14 @@ TEST(ViewportPointPlacementServiceTests,
   SceneDocument scene;
   MeshAsset mesh;
   mesh.name = "Planar Wall";
-  mesh.vertices = {
+  MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices = {
       MeshVertex{.position = {2.0f, -10.0f, -10.0f}},
       MeshVertex{.position = {2.0f, 10.0f, -10.0f}},
       MeshVertex{.position = {2.0f, 10.0f, 10.0f}},
       MeshVertex{.position = {2.0f, -10.0f, 10.0f}},
   };
-  mesh.indices = {0u, 1u, 2u, 0u, 2u, 3u};
+  geometry.indices = {0u, 1u, 2u, 0u, 2u, 3u};
   const AssetId mesh_id = assets.add_mesh(std::move(mesh));
   ASSERT_NE(mesh_id, kInvalidAssetId);
   const EntityId entity = scene.create_entity("Planar Wall", EntityKind::Mesh);
@@ -2808,12 +2833,13 @@ TEST(ViewportPointPlacementServiceTests,
   SceneDocument scene;
   MeshAsset mesh;
   mesh.name = "Snap Priority";
-  mesh.vertices = {
+  MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices = {
       MeshVertex{.position = {0.4f, 0.0f, 0.0f}},
       MeshVertex{.position = {-0.2f, 0.3f, 0.0f}},
       MeshVertex{.position = {-0.2f, -0.3f, 0.0f}},
   };
-  mesh.indices = {0u, 1u, 2u};
+  geometry.indices = {0u, 1u, 2u};
   const AssetId mesh_id = assets.add_mesh(std::move(mesh));
   ASSERT_NE(mesh_id, kInvalidAssetId);
   const EntityId entity =
@@ -2861,12 +2887,13 @@ TEST(ViewportPointPlacementServiceTests,
   SceneDocument scene;
   MeshAsset mesh;
   mesh.name = "Surface Placement";
-  mesh.vertices = {
+  MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices = {
       MeshVertex{.position = {-10.0f, -8.0f, 0.0f}},
       MeshVertex{.position = {9.0f, -7.0f, 0.0f}},
       MeshVertex{.position = {2.0f, 10.0f, 0.0f}},
   };
-  mesh.indices = {0u, 1u, 2u};
+  geometry.indices = {0u, 1u, 2u};
   const AssetId mesh_id = assets.add_mesh(std::move(mesh));
   ASSERT_NE(mesh_id, kInvalidAssetId);
   const EntityId entity =
@@ -3777,7 +3804,9 @@ TEST(RenderProxyLifecycleTests, RenderableProxyHandlesAreMoveOnly) {
       std::string::npos);
   EXPECT_NE(mesh_factory_source.find("class MeshRenderableCreationGuard"),
             std::string::npos);
-  EXPECT_NE(mesh_factory_source.find("destroy_mesh_renderable_proxy_resources"),
+  EXPECT_NE(mesh_factory_source.find("destroy_renderable_component_resources"),
+            std::string::npos);
+  EXPECT_NE(mesh_factory_source.find("release_geometry(proxy)"),
             std::string::npos);
   EXPECT_NE(mesh_factory_source.find("creation_guard.release()"),
             std::string::npos);
@@ -3903,6 +3932,29 @@ TEST(ViewportContextMenuPolicyTests,
       .press_screen = {200.0f, 180.0f},
       .release_screen = {201.0f, 181.0f},
   }));
+}
+
+TEST(ViewportContextMenuPolicyTests,
+     InstanceOnlyCreateOrFlattenActionKeepsRightClickMenuAvailable) {
+  const auto opens_with = [](bool has_modeling_actions,
+                             bool can_create_instance,
+                             bool can_flatten_instance) {
+    return should_open_viewport_context_menu({
+        .right_press_tracked = true,
+        .right_released = true,
+        .release_inside_viewport = true,
+        .target_hit = true,
+        .has_actions = viewport_context_menu_has_available_actions(
+            has_modeling_actions, can_create_instance, can_flatten_instance),
+        .press_screen = {200.0f, 180.0f},
+        .release_screen = {201.0f, 181.0f},
+    });
+  };
+
+  EXPECT_FALSE(opens_with(false, false, false));
+  EXPECT_TRUE(opens_with(false, true, false));
+  EXPECT_TRUE(opens_with(false, false, true));
+  EXPECT_TRUE(opens_with(true, false, false));
 }
 
 TEST(ViewportContextMenuPolicyTests, BlocksModalToolsMissingActionsAndDrags) {
@@ -4400,7 +4452,7 @@ TEST(ModelingSessionServiceTests,
                 "std::optional<MeshAsset> box_preview_mesh_from_descriptor"),
             std::string::npos);
   EXPECT_NE(source.find("cached_pick_object_bounds()"), std::string::npos);
-  EXPECT_NE(source.find("cached_pick_face_geometry(pick_options)"),
+  EXPECT_NE(source.find("cached_pick_face_geometry(options)"),
             std::string::npos);
   EXPECT_NE(
       split_source.find("ModelingSelectionService::apply_pick_selection("),
@@ -4414,7 +4466,8 @@ TEST(ModelingSessionServiceTests,
   EXPECT_NE(split_source.find(
                 "cached_pick_object_bounds(session, scene, object_registry)"),
             std::string::npos);
-  EXPECT_NE(split_source.find("cached_pick_face_geometry(session, scene,"),
+  EXPECT_NE(
+      split_source.find("cached_local_pick_face_geometry(session, scene,"),
             std::string::npos);
   EXPECT_NE(split_source.find("object_registry, pick_options)"),
             std::string::npos);
@@ -4813,7 +4866,8 @@ TEST(ViewportRendererTests,
   EXPECT_EQ(render_function.find("scene_->remove"), std::string::npos);
   EXPECT_TRUE(source_contains_compact(
       renderer_source, "grid_renderer_.update(controller, width(), height(), "
-                       "grid_world_spacing, settings, visible)"));
+                       "grid_world_spacing, settings, visible, "
+                       "instance_edit_context_active_)"));
   EXPECT_TRUE(source_contains_compact(
       grid_renderer_source,
       ".layerMask(kViewportAllLayerMask, grid_layer_mask_)"));
@@ -5364,6 +5418,71 @@ TEST(SceneDocumentTests, PromotesPrimarySelectionWhenActiveEntityIsDestroyed) {
   EXPECT_EQ(scene.selected_entities().front(), first);
 }
 
+TEST(SceneDocumentTests,
+     InstanceGraphRejectsDanglingDefinitionsUnsupportedMembersAndEmptying) {
+  SceneDocument scene;
+  const EntityId definition = scene.create_empty("Definition");
+  ASSERT_TRUE(scene.set_instance_definition(definition));
+
+  const EntityId member = scene.create_entity("Member", EntityKind::Mesh);
+  scene.set_mesh(member, MeshComponent{.mesh = 11u});
+  scene.set_modeling_object(
+      member, ModelingObjectComponent{.object_id = 7, .material_slot = 0u});
+  ASSERT_TRUE(scene.set_parent(member, definition, false));
+
+  const EntityId occurrence =
+      scene.create_entity("Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(scene.set_instance_occurrence(
+      occurrence, InstanceOccurrenceComponent{.definition = definition}));
+
+  EXPECT_FALSE(scene.destroy_entity(definition));
+  EXPECT_TRUE(scene.exists(definition));
+  ASSERT_NE(scene.instance_occurrence(occurrence), nullptr);
+  EXPECT_EQ(scene.kind(occurrence), EntityKind::Instance);
+
+  EXPECT_FALSE(scene.set_parent(member, kInvalidEntityId, true));
+  EXPECT_EQ(scene.parent(member), definition);
+  EXPECT_FALSE(scene.destroy_entity(member));
+  EXPECT_TRUE(scene.exists(member));
+
+  const EntityId light = scene.create_entity("Unsupported Light");
+  scene.set_light(light, LightComponent{});
+  EXPECT_FALSE(scene.set_parent(light, definition, false));
+  EXPECT_EQ(scene.parent(light), kInvalidEntityId);
+
+  scene.set_material(occurrence, MaterialComponent{});
+  scene.set_modeling_object(
+      occurrence,
+      ModelingObjectComponent{.object_id = 99, .material_slot = 0u});
+  scene.set_light(occurrence, LightComponent{});
+  EXPECT_EQ(scene.material(occurrence), nullptr);
+  EXPECT_EQ(scene.modeling_object(occurrence), nullptr);
+  EXPECT_EQ(scene.light(occurrence), nullptr);
+  EXPECT_FALSE(scene.set_entity_kind(member, EntityKind::Light));
+  EXPECT_EQ(scene.kind(member), EntityKind::Mesh);
+
+  const EntityId second = scene.create_empty("Second Member");
+  ASSERT_TRUE(scene.set_parent(second, definition, false));
+  const EntityId extracted =
+      scene.create_entity("Extracted Duplicate", EntityKind::Mesh);
+  scene.set_mesh(extracted, MeshComponent{.mesh = 12u});
+  scene.set_modeling_object(
+      extracted, ModelingObjectComponent{.object_id = 8, .material_slot = 0u});
+  ASSERT_TRUE(scene.set_parent(extracted, definition, false));
+  EXPECT_TRUE(scene.set_parent(extracted, kInvalidEntityId, true));
+  EXPECT_EQ(scene.parent(extracted), kInvalidEntityId);
+  EXPECT_TRUE(scene.destroy_entity(member));
+  EXPECT_TRUE(scene.exists(definition));
+  EXPECT_TRUE(scene.exists(occurrence));
+
+  const std::array<EntityId, 2u> instance_roots{definition, occurrence};
+  EXPECT_TRUE(scene.destroy_entities(instance_roots));
+  EXPECT_FALSE(scene.exists(definition));
+  EXPECT_FALSE(scene.exists(second));
+  EXPECT_FALSE(scene.exists(occurrence));
+  EXPECT_TRUE(scene.destroy_entity(extracted));
+}
+
 TEST(SceneDocumentTests, TracksHierarchyTreeOrderAndInheritedState) {
   SceneDocument scene;
   const EntityId group = scene.create_empty("Empty");
@@ -5528,7 +5647,7 @@ TEST(SceneDocumentTests,
 TEST(SceneBoundsTests, ComputesSelectedWorldBoundsFromSpatialTransforms) {
   AssetRegistry assets;
   MeshAsset cube;
-  cube.vertices = {
+  cube.edit_geometry().vertices = {
       {.position = {-1.0f, -1.0f, -1.0f}},
       {.position = {1.0f, 1.0f, 1.0f}},
   };
@@ -5574,7 +5693,7 @@ TEST(SceneBoundsTests, ComputesSelectedWorldBoundsFromSpatialTransforms) {
 TEST(SceneBoundsTests, CentersBottomOriginMeshOnItsSelectedWorldBounds) {
   AssetRegistry assets;
   MeshAsset bottom_origin_box;
-  bottom_origin_box.vertices = {
+  bottom_origin_box.edit_geometry().vertices = {
       {.position = {-1.0f, 0.0f, -1.0f}},
       {.position = {1.0f, 2.0f, 1.0f}},
   };
@@ -7947,6 +8066,81 @@ TEST(AssetRegistryTests,
 }
 
 TEST(AssetRegistryTests,
+     InternsTwoHundredEqualMeshAssetsAndDetachesOnlyTheEditedAsset) {
+  AssetRegistry registry;
+  MeshAsset prototype = make_test_triangle_mesh("Shared Prototype");
+  quader_poly::Document authored;
+  authored.vertices = {
+      {.id = 1u, .position = {-0.5f, 0.0f, 0.0f}},
+      {.id = 2u, .position = {0.5f, 0.0f, 0.0f}},
+      {.id = 3u, .position = {0.0f, 0.0f, 1.0f}},
+  };
+  authored.faces = {{.id = 1u, .vertices = {1u, 2u, 3u}}};
+  authored.next_vertex_id = 4u;
+  authored.next_face_id = 2u;
+  prototype.replace_authored_polygon_document(std::move(authored));
+
+  std::vector<AssetId> ids;
+  ids.reserve(200u);
+  for (std::size_t index = 0u; index < 200u; ++index) {
+    MeshAsset logical_asset = prototype;
+    logical_asset.name = "Logical Mesh " + std::to_string(index);
+    const AssetId id = registry.add_mesh(std::move(logical_asset));
+    ASSERT_NE(id, kInvalidAssetId);
+    ids.push_back(id);
+  }
+  ASSERT_EQ(registry.mesh_count(), 200u);
+
+  std::unordered_set<std::uintptr_t> geometry_tokens;
+  std::unordered_set<std::uint64_t> content_ids;
+  std::unordered_set<const quader_poly::Document *> authored_tokens;
+  std::size_t unique_geometry_bytes = 0u;
+  for (const AssetId id : ids) {
+    const MeshAsset *mesh = registry.mesh(id);
+    ASSERT_NE(mesh, nullptr);
+    if (geometry_tokens.insert(mesh->geometry_token()).second) {
+      unique_geometry_bytes += mesh->geometry_byte_size();
+    }
+    content_ids.insert(mesh->geometry_content_id().value);
+    authored_tokens.insert(mesh->authored_polygon_document.get());
+  }
+  EXPECT_EQ(geometry_tokens.size(), 1u);
+  EXPECT_EQ(content_ids.size(), 1u);
+  EXPECT_EQ(authored_tokens.size(), 1u);
+  EXPECT_EQ(unique_geometry_bytes, prototype.geometry_byte_size());
+
+  ASSERT_TRUE(registry.update_mesh(ids.front(), [](MeshAsset &mesh) {
+    mesh.edit_geometry().vertices.front().position.x = -2.0f;
+    mesh.edit_authored_polygon_document().vertices.front().position.x = -2.0f;
+  }));
+
+  geometry_tokens.clear();
+  content_ids.clear();
+  authored_tokens.clear();
+  unique_geometry_bytes = 0u;
+  for (const AssetId id : ids) {
+    const MeshAsset *mesh = registry.mesh(id);
+    ASSERT_NE(mesh, nullptr);
+    if (geometry_tokens.insert(mesh->geometry_token()).second) {
+      unique_geometry_bytes += mesh->geometry_byte_size();
+    }
+    content_ids.insert(mesh->geometry_content_id().value);
+    authored_tokens.insert(mesh->authored_polygon_document.get());
+  }
+  EXPECT_EQ(geometry_tokens.size(), 2u);
+  EXPECT_EQ(content_ids.size(), 2u);
+  EXPECT_EQ(authored_tokens.size(), 2u);
+  EXPECT_EQ(unique_geometry_bytes, prototype.geometry_byte_size() * 2u);
+  ASSERT_NE(registry.mesh(ids[1]), nullptr);
+  EXPECT_FLOAT_EQ(
+      registry.mesh(ids[1])->geometry().vertices.front().position.x, -0.5f);
+  EXPECT_FLOAT_EQ(registry.mesh(ids[1])
+                      ->authored_polygon_document->vertices.front()
+                      .position.x,
+                  -0.5f);
+}
+
+TEST(AssetRegistryTests,
      ExhaustedAllocatorNeverPublishesTheInvalidSentinelForAnyAssetKind) {
   AssetRegistry registry;
   TextureAsset terminal_texture;
@@ -8061,15 +8255,15 @@ TEST(AssetRegistryTests,
       registry.material_revision(material);
 
   MeshAsset non_finite_mesh = make_test_triangle_mesh("Non-finite Mesh");
-  non_finite_mesh.vertices.front().position.x =
+  non_finite_mesh.edit_geometry().vertices.front().position.x =
       std::numeric_limits<float>::quiet_NaN();
   EXPECT_EQ(registry.add_mesh(std::move(non_finite_mesh)), kInvalidAssetId);
 
   MeshAsset malformed_mesh = make_test_triangle_mesh("Malformed Mesh");
-  malformed_mesh.indices.back() = 999u;
+  malformed_mesh.edit_geometry().indices.back() = 999u;
   EXPECT_FALSE(registry.replace_mesh(mesh, std::move(malformed_mesh)));
   EXPECT_FALSE(registry.update_mesh(mesh, [](MeshAsset &asset) {
-    asset.vertices.front().normal.y =
+    asset.edit_geometry().vertices.front().normal.y =
         std::numeric_limits<float>::infinity();
   }));
 
@@ -8096,7 +8290,7 @@ TEST(AssetRegistryTests,
   ASSERT_NE(registry.mesh(mesh), nullptr);
   ASSERT_NE(registry.material(material), nullptr);
   EXPECT_EQ(registry.mesh(mesh)->name, "Stable Mesh");
-  EXPECT_EQ(registry.mesh(mesh)->indices.back(), 2u);
+  EXPECT_EQ(registry.mesh(mesh)->geometry().indices.back(), 2u);
   EXPECT_EQ(registry.material(material)->name, "Stable Material");
   EXPECT_FLOAT_EQ(registry.material(material)->metallic, 0.0f);
 }
@@ -8247,7 +8441,7 @@ TEST(AssetCommandServiceTests,
   const AssetId mesh = assets.add_mesh(make_test_triangle_mesh("Source Mesh"));
   ASSERT_NE(mesh, kInvalidAssetId);
   MeshAsset replacement = make_test_triangle_mesh("Replacement Mesh");
-  replacement.vertices.push_back(MeshVertex{
+  replacement.edit_geometry().vertices.push_back(MeshVertex{
       .position = {2.0f, 0.0f, 0.0f},
       .normal = {0.0f, 1.0f, 0.0f},
       .uv = {0.0f, 0.0f},
@@ -8255,9 +8449,9 @@ TEST(AssetCommandServiceTests,
   AssetCommandResult mesh_replace =
       commands.replace_mesh(mesh, std::move(replacement));
   ASSERT_TRUE(mesh_replace.ok) << mesh_replace.message;
-  EXPECT_EQ(assets.mesh(mesh)->vertices.size(), 4u);
+  EXPECT_EQ(assets.mesh(mesh)->geometry().vertices.size(), 4u);
   ASSERT_TRUE(history.undo().ok);
-  EXPECT_EQ(assets.mesh(mesh)->vertices.size(), 3u);
+  EXPECT_EQ(assets.mesh(mesh)->geometry().vertices.size(), 3u);
   EXPECT_EQ(assets.mesh(mesh)->name, "Source Mesh");
   ASSERT_TRUE(history.redo().ok);
   EXPECT_EQ(assets.mesh(mesh)->name, "Replacement Mesh");
@@ -8291,21 +8485,19 @@ TEST(AssetCommandServiceTests,
   AssetCommandService commands(assets, history);
 
   MeshAsset authored = make_test_triangle_mesh("Authored Mesh");
-  authored.has_authored_polygon_document = true;
-  authored.authored_polygon_document =
-      std::make_shared<quader_poly::Document>();
-  authored.authored_polygon_document->vertices = {
+  const auto caller_document = std::make_shared<quader_poly::Document>();
+  caller_document->vertices = {
       {.id = 1u, .position = {0.0f, 0.0f, 0.0f}},
       {.id = 2u, .position = {1.0f, 0.0f, 0.0f}},
       {.id = 3u, .position = {0.0f, 1.0f, 0.0f}},
   };
-  authored.authored_polygon_document->faces = {
+  caller_document->faces = {
       {.id = 1u, .vertices = {1u, 2u, 3u}},
   };
-  authored.authored_polygon_document->next_vertex_id = 4u;
-  authored.authored_polygon_document->next_face_id = 2u;
-  const std::shared_ptr<quader_poly::Document> caller_document =
-      authored.authored_polygon_document;
+  caller_document->next_vertex_id = 4u;
+  caller_document->next_face_id = 2u;
+  authored.has_authored_polygon_document = true;
+  authored.authored_polygon_document = caller_document;
 
   const AssetId mesh = assets.add_mesh(std::move(authored));
   ASSERT_NE(mesh, kInvalidAssetId);
@@ -8320,7 +8512,7 @@ TEST(AssetCommandServiceTests,
   const MeshAssetRevision mesh_revision_before = assets.mesh_revision(mesh);
   AssetCommandResult update = commands.update_mesh(mesh, [](MeshAsset &asset) {
     ASSERT_TRUE(asset.authored_polygon_document);
-    asset.authored_polygon_document->vertices.front().position.x = 2.5f;
+    asset.edit_authored_polygon_document().vertices.front().position.x = 2.5f;
   });
   ASSERT_TRUE(update.ok) << update.message;
   EXPECT_TRUE(update.changed);
@@ -8345,9 +8537,7 @@ TEST(AssetCommandServiceTests,
   const MeshAssetRevision mesh_revision_before_noop =
       assets.mesh_revision(mesh);
   AssetCommandResult no_op = commands.update_mesh(mesh, [](MeshAsset &asset) {
-    asset.authored_polygon_document =
-        std::make_shared<quader_poly::Document>(
-            *asset.authored_polygon_document);
+    asset.replace_authored_polygon_document(*asset.authored_polygon_document);
   });
   EXPECT_TRUE(no_op.ok) << no_op.message;
   EXPECT_FALSE(no_op.changed);
@@ -8375,16 +8565,16 @@ TEST(AssetCommandServiceTests,
   const std::uint64_t revision = assets.revision();
 
   MeshAsset invalid_add = make_test_triangle_mesh("Invalid Add");
-  invalid_add.vertices.front().uv.x =
+  invalid_add.edit_geometry().vertices.front().uv.x =
       std::numeric_limits<float>::quiet_NaN();
   EXPECT_FALSE(commands.add_mesh(std::move(invalid_add)).ok);
 
   MeshAsset invalid_replace = make_test_triangle_mesh("Invalid Replace");
-  invalid_replace.indices.push_back(0u);
+  invalid_replace.edit_geometry().indices.push_back(0u);
   EXPECT_FALSE(commands.replace_mesh(mesh, std::move(invalid_replace)).ok);
   EXPECT_FALSE(commands
                    .update_mesh(mesh, [](MeshAsset &asset) {
-                     asset.vertices.front().position.z =
+                     asset.edit_geometry().vertices.front().position.z =
                          std::numeric_limits<float>::infinity();
                    })
                    .ok);
@@ -10460,7 +10650,7 @@ TEST(
   AssetRegistry &assets = session.assets();
 
   MeshAsset mesh;
-  mesh.vertices = {
+  mesh.edit_geometry().vertices = {
       {.position = {0.0f, 1.0f, 0.0f}},
       {.position = {0.0f, 3.0f, 0.0f}},
   };
@@ -12374,6 +12564,69 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
+     TwoHundredSharedDuplicatesBuildOneLocalPickingGeometryAndTransformWithoutRebuild) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  EditorHistoryService history;
+  DocumentCommandService document_commands(scene, history);
+  ModelingSessionService service(scene, assets);
+
+  const ModelingCreateBoxResult source = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f},
+                 .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Shared Picking Box",
+  });
+  ASSERT_TRUE(source.ok) << source.message;
+  std::vector<EntityId> participants{source.object.entity};
+  participants.reserve(200u);
+  for (std::size_t index = 1u; index < 200u; ++index) {
+    const ModelingCommandResult duplicated =
+        service.duplicate_selected_entity_hierarchy(document_commands);
+    ASSERT_TRUE(duplicated.ok) << duplicated.message;
+    ASSERT_TRUE(duplicated.changed);
+    const EntityId duplicate = scene.primary_selection();
+    ASSERT_NE(duplicate, kInvalidEntityId);
+    TransformComponent transform;
+    transform.position = {static_cast<float>(index) * 3.0f, 0.0f, 0.0f};
+    scene.set_transform(duplicate, transform);
+    participants.push_back(duplicate);
+  }
+  ASSERT_EQ(service.objects().size(), 200u);
+
+  const std::uint64_t geometry_builds_before =
+      service.local_face_geometry_build_count();
+  const std::uint64_t projection_builds_before =
+      service.transformed_picking_projection_build_count();
+  const float last_x = 3.0f * 199.0f;
+  const std::optional<EntityId> first_hit =
+      service.pick_object_entity(ModelingPickSelectRequest{
+          .ray = {.origin = {last_x, 0.0f, 5.0f},
+                  .direction = {0.0f, 0.0f, -1.0f}},
+      });
+  ASSERT_TRUE(first_hit.has_value());
+  EXPECT_EQ(*first_hit, participants.back());
+  EXPECT_EQ(service.local_face_geometry_build_count(),
+            geometry_builds_before + 1u);
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            projection_builds_before + 1u);
+
+  TransformComponent moved = *scene.transform(participants.back());
+  moved.position.x = 700.0f;
+  scene.set_transform(participants.back(), moved);
+  const std::optional<EntityId> moved_hit =
+      service.pick_object_entity(ModelingPickSelectRequest{
+          .ray = {.origin = {700.0f, 0.0f, 5.0f},
+                  .direction = {0.0f, 0.0f, -1.0f}},
+      });
+  ASSERT_TRUE(moved_hit.has_value());
+  EXPECT_EQ(*moved_hit, participants.back());
+  EXPECT_EQ(service.local_face_geometry_build_count(),
+            geometry_builds_before + 1u);
+  EXPECT_EQ(service.transformed_picking_projection_build_count(),
+            projection_builds_before + 2u);
+}
+
+TEST(ModelingSessionServiceTests,
      ContextActionsExposeFacePanelAndKeepBridgeDisabledForOneFace) {
   SceneDocument scene;
   AssetRegistry assets;
@@ -12658,8 +12911,8 @@ TEST(ModelingSessionServiceTests, CreatesBoxThroughRuntimeWhenAvailable) {
   const MeshAsset *stored_mesh = assets.mesh(result.object.mesh);
   ASSERT_NE(stored_mesh, nullptr);
   EXPECT_EQ(stored_mesh->name, "Test Box");
-  EXPECT_FALSE(stored_mesh->vertices.empty());
-  EXPECT_FALSE(stored_mesh->indices.empty());
+  EXPECT_FALSE(stored_mesh->geometry().vertices.empty());
+  EXPECT_FALSE(stored_mesh->geometry().indices.empty());
   EXPECT_TRUE(stored_mesh->has_stable_cpu_topology);
   const std::optional<SceneBounds> selected_bounds =
       selected_world_bounds(scene, assets);
@@ -12711,8 +12964,9 @@ TEST(ModelingSessionServiceTests, InsertEdgeLoopDragCommitsMesh) {
   const std::optional<MeshAsset> after =
       service.compile_object_mesh(box.object.modeling_object_id);
   ASSERT_TRUE(after.has_value());
-  EXPECT_GT(after->vertices.size(), before->vertices.size());
-  EXPECT_GT(after->indices.size(), before->indices.size());
+  EXPECT_GT(after->geometry().vertices.size(),
+            before->geometry().vertices.size());
+  EXPECT_GT(after->geometry().indices.size(), before->geometry().indices.size());
 }
 
 TEST(ModelingSessionServiceTests,
@@ -12751,7 +13005,8 @@ TEST(ModelingSessionServiceTests,
   std::optional<MeshAsset> after =
       service.compile_object_mesh(box.object.modeling_object_id);
   ASSERT_TRUE(after.has_value());
-  EXPECT_GT(after->vertices.size(), before->vertices.size());
+  EXPECT_GT(after->geometry().vertices.size(),
+            before->geometry().vertices.size());
 }
 
 TEST(ModelingSessionServiceTests, InsertEdgeLoopUsesViewportPickRadius) {
@@ -12833,7 +13088,8 @@ TEST(ModelingSessionServiceTests,
       service.compile_object_mesh(box.object.modeling_object_id);
   ASSERT_TRUE(mesh.has_value());
   const auto has_local_y = [&](float expected) {
-    return std::any_of(mesh->vertices.begin(), mesh->vertices.end(),
+    return std::any_of(mesh->geometry().vertices.begin(),
+                       mesh->geometry().vertices.end(),
                        [expected](const MeshVertex &vertex) {
                          return std::abs(vertex.position.y - expected) <
                                 0.001f;
@@ -13113,8 +13369,8 @@ TEST(ModelingSessionServiceTests, CutAndMirrorEmitDrawnPlaneOverlay) {
       ASSERT_FALSE(preview_meshes.empty());
       EXPECT_EQ(preview_meshes.front().source_entity, box.object.entity);
       EXPECT_EQ(preview_meshes.front().material, preview_material);
-      EXPECT_GT(preview_meshes.front().mesh.vertices.size(), 0u);
-      EXPECT_GT(preview_meshes.front().mesh.indices.size(), 0u);
+      EXPECT_GT(preview_meshes.front().mesh.geometry().vertices.size(), 0u);
+      EXPECT_GT(preview_meshes.front().mesh.geometry().indices.size(), 0u);
     }
     (void)service.cancel_active_modal_tool();
   };
@@ -14426,12 +14682,14 @@ TEST(ModelingSessionServiceTests,
                    source_transform.position);
   expect_vec3_near(scene.transform(duplicate_entity)->rotation_euler,
                    source_transform.rotation_euler);
-  ASSERT_EQ(duplicate_mesh_asset->vertices.size(),
-            source_mesh_asset->vertices.size());
-  for (std::size_t index = 0; index < source_mesh_asset->vertices.size();
+  ASSERT_EQ(duplicate_mesh_asset->geometry().vertices.size(),
+            source_mesh_asset->geometry().vertices.size());
+  for (std::size_t index = 0;
+       index < source_mesh_asset->geometry().vertices.size();
        ++index) {
-    expect_vec3_near(duplicate_mesh_asset->vertices[index].position,
-                     source_mesh_asset->vertices[index].position);
+    expect_vec3_near(
+        duplicate_mesh_asset->geometry().vertices[index].position,
+        source_mesh_asset->geometry().vertices[index].position);
   }
   const MaterialComponent *duplicate_material =
       scene.material(duplicate_entity);
@@ -14520,20 +14778,21 @@ TEST(ModelingSessionServiceTests, TransformPreviewZeroDeltaRestoresSceneMesh) {
   ASSERT_NE(mesh_component, nullptr);
   const MeshAsset *source_mesh = assets.mesh(mesh_component->mesh);
   ASSERT_NE(source_mesh, nullptr);
-  const std::size_t source_index_count = source_mesh->indices.size();
+  const std::size_t source_index_count =
+      source_mesh->geometry().indices.size();
 
   ASSERT_TRUE(service.begin_transform_preview(false).ok);
   ASSERT_TRUE(
       service.update_transform_extrude_preview({0.0f, 0.0f, 1.0f}, 1.0f).ok);
   const MeshAsset *extruded_mesh = assets.mesh(mesh_component->mesh);
   ASSERT_NE(extruded_mesh, nullptr);
-  ASSERT_GT(extruded_mesh->indices.size(), source_index_count);
+  ASSERT_GT(extruded_mesh->geometry().indices.size(), source_index_count);
 
   ASSERT_TRUE(
       service.update_transform_extrude_preview({0.0f, 0.0f, 0.0f}, 1.0f).ok);
   const MeshAsset *restored_mesh = assets.mesh(mesh_component->mesh);
   ASSERT_NE(restored_mesh, nullptr);
-  EXPECT_EQ(restored_mesh->indices.size(), source_index_count);
+  EXPECT_EQ(restored_mesh->geometry().indices.size(), source_index_count);
 
   ASSERT_TRUE(service.cancel_transform_preview().ok);
 }
@@ -15734,7 +15993,8 @@ TEST(ModelingSessionServiceTests,
   const std::optional<MeshAsset> after_first =
       service.compile_object_mesh(box.object.modeling_object_id);
   ASSERT_TRUE(after_first.has_value());
-  ASSERT_GT(after_first->indices.size(), before->indices.size());
+  ASSERT_GT(after_first->geometry().indices.size(),
+            before->geometry().indices.size());
 
   command = service.repeat_last_action();
   ASSERT_TRUE(command.ok) << command.message;
@@ -15743,7 +16003,8 @@ TEST(ModelingSessionServiceTests,
   const std::optional<MeshAsset> after_repeat =
       service.compile_object_mesh(box.object.modeling_object_id);
   ASSERT_TRUE(after_repeat.has_value());
-  EXPECT_GT(after_repeat->indices.size(), after_first->indices.size());
+  EXPECT_GT(after_repeat->geometry().indices.size(),
+            after_first->geometry().indices.size());
 }
 
 TEST(ModelingSessionServiceTests,

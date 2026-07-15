@@ -76,6 +76,44 @@ struct QuaderMergeByDistanceArgs {
 };
 
 /**
+ * Describes the transient scene-local instance editing scope.
+ */
+struct QuaderInstanceEditState final {
+  bool active = false;
+  QuaderEntityRef occurrence;
+  QuaderEntityRef definition;
+  std::string scene_name;
+  std::string instance_name;
+};
+
+/// Describes one scene-local hidden instance definition and its members.
+struct QuaderInstanceDefinitionInfo final {
+  SceneSessionId scene_session_id;
+  QuaderEntityRef root;
+  std::vector<QuaderEntityRef> members;
+};
+
+/// Describes one visible occurrence and its scene-local definition.
+struct QuaderInstanceOccurrenceInfo final {
+  SceneSessionId scene_session_id;
+  QuaderEntityRef root;
+  QuaderEntityRef definition;
+};
+
+/// Returns the definition and first occurrence produced by Create Instance.
+struct QuaderInstanceCreateResult {
+  QuaderInstanceDefinitionInfo definition;
+  QuaderInstanceOccurrenceInfo occurrence;
+};
+
+/// Returns the ordinary roots produced by flattening selected occurrences.
+struct QuaderInstanceFlattenResult {
+  SceneSessionId scene_session_id;
+  QuaderEntityRef definition;
+  std::vector<QuaderEntityRef> root_entities;
+};
+
+/**
  * Handle to the currently active native modeling operation preview.
  */
 class QuaderPreviewHandle {
@@ -480,6 +518,22 @@ public:
   [[nodiscard]] bool can_duplicate_selected_entity_hierarchy() const;
   QuaderApiVoidResult duplicate_selected_entity_hierarchy();
   QuaderApiVoidResult duplicate_selected_hierarchy_for_group_drag();
+  [[nodiscard]] bool can_create_instance() const;
+  QuaderApiVoidResult create_instance();
+  /** Public intent names used by UI, scripts, and automation. */
+  [[nodiscard]] bool can_create_instance_from_selection() const;
+  QuaderApiResult<QuaderInstanceCreateResult>
+  create_instance_from_selection();
+  [[nodiscard]] bool can_flatten_instance() const;
+  QuaderApiVoidResult flatten_instance();
+  [[nodiscard]] bool can_flatten_selected_instances() const;
+  QuaderApiResult<QuaderInstanceFlattenResult>
+  flatten_selected_instances();
+  [[nodiscard]] bool can_enter_instance_edit(EntityId occurrence) const;
+  QuaderApiVoidResult enter_instance_edit(EntityId occurrence);
+  [[nodiscard]] bool can_exit_instance_edit() const;
+  QuaderApiVoidResult exit_instance_edit();
+  [[nodiscard]] QuaderInstanceEditState instance_edit_state() const;
 
   QuaderApiVoidResult apply_active_material(std::uint32_t material_slot = 0);
   QuaderApiVoidResult

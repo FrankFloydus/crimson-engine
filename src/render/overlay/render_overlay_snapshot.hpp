@@ -16,6 +16,7 @@
 #include "viewport/viewport_camera_clip_planes.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -37,8 +38,13 @@ class SceneDocument;
  */
 struct RenderOverlayMeshSnapshot {
   EntityId entity = kInvalidEntityId;
+  /** Distinguishes expanded definition members that share one occurrence. */
+  std::uint64_t participant_token = 0u;
   AssetId mesh_id = kInvalidAssetId;
   std::uint64_t mesh_revision = 0;
+  std::shared_ptr<const MeshGeometryPayload> geometry_payload;
+  MeshGeometryContentId geometry_content_id;
+  std::shared_ptr<const quader_poly::Document> authored_topology_payload;
   QMat4 world_transform;
   bool selected = false;
   std::span<const MeshVertex> vertices;
@@ -49,6 +55,62 @@ struct RenderOverlayMeshSnapshot {
   [[nodiscard]] bool has_triangle_geometry() const {
     return !vertices.empty() && indices.size() >= 3u;
   }
+
+  [[nodiscard]] bool has_authored_polygon_geometry() const {
+    return !authored_vertices.empty() && !authored_faces.empty();
+  }
+};
+
+/// Identifies transient selected-instance overlay records by visual purpose.
+enum class RenderOverlaySemantic : std::uint8_t {
+  InstanceSelectionFill,
+  InstanceSelectionWire,
+};
+
+/// Carries selected-occurrence fill state without Filament resource handles.
+struct RenderOverlayInstanceSelectionFillRecord final {
+  RenderOverlaySemantic semantic =
+      RenderOverlaySemantic::InstanceSelectionFill;
+  EntityId occurrence = kInvalidEntityId;
+  EntityId definition = kInvalidEntityId;
+  EntityId member = kInvalidEntityId;
+  AssetId mesh_id = kInvalidAssetId;
+  std::uint64_t mesh_revision = 0u;
+  std::shared_ptr<const MeshGeometryPayload> geometry_payload;
+  MeshGeometryContentId geometry_content_id;
+  QMat4 world_transform;
+  std::span<const MeshVertex> vertices;
+  std::span<const std::uint32_t> indices;
+  std::uint32_t color = kOverlayInstanceSelectionFillColor;
+  bool depth_test = true;
+  bool depth_write = false;
+  float polygon_offset_scale = -1.0f;
+  float polygon_offset_constant = -1.0f;
+  std::uint16_t blend_order = 0u;
+  ViewportOverlayLayer draws_before = ViewportOverlayLayer::SourceWire;
+};
+
+/// Carries the crisp selected-occurrence wire drawn after its translucent fill.
+struct RenderOverlayInstanceSelectionWireRecord final {
+  RenderOverlaySemantic semantic =
+      RenderOverlaySemantic::InstanceSelectionWire;
+  EntityId occurrence = kInvalidEntityId;
+  EntityId definition = kInvalidEntityId;
+  EntityId member = kInvalidEntityId;
+  AssetId mesh_id = kInvalidAssetId;
+  std::uint64_t mesh_revision = 0u;
+  std::shared_ptr<const MeshGeometryPayload> geometry_payload;
+  MeshGeometryContentId geometry_content_id;
+  std::shared_ptr<const quader_poly::Document> authored_topology_payload;
+  QMat4 world_transform;
+  std::span<const MeshVertex> vertices;
+  std::span<const std::uint32_t> indices;
+  std::span<const quader_poly::Vertex> authored_vertices;
+  std::span<const quader_poly::Face> authored_faces;
+  std::uint32_t color = kOverlaySelectionWireColor;
+  float line_width_pixels = kOverlaySelectionWireLineWidthPixels;
+  std::uint16_t blend_order = static_cast<std::uint16_t>(7u * 64u);
+  ViewportOverlayLayer layer = ViewportOverlayLayer::SourceWire;
 
   [[nodiscard]] bool has_authored_polygon_geometry() const {
     return !authored_vertices.empty() && !authored_faces.empty();
@@ -89,6 +151,10 @@ struct RenderOverlaySelectedObjectSnapshot {
   ViewportCameraClipPlanes clip_planes;
   bool visible = true;
   std::vector<RenderOverlayMeshSnapshot> meshes;
+  std::vector<RenderOverlayInstanceSelectionFillRecord>
+      instance_selection_fills;
+  std::vector<RenderOverlayInstanceSelectionWireRecord>
+      instance_selection_wires;
 };
 
 /**

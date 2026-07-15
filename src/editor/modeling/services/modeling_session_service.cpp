@@ -607,7 +607,10 @@ public:
   Impl(SceneDocument &scene, AssetRegistry &assets,
        ModelingOperationPreviewCheckpointHooks preview_checkpoint_hooks)
       : scene_(scene), assets_(assets), scene_sync_service_(object_registry_),
-        preview_checkpoint_hooks_(std::move(preview_checkpoint_hooks)) {}
+        preview_checkpoint_hooks_(std::move(preview_checkpoint_hooks)) {
+    selection_service_.set_app_selection_mode_provider(
+        [this]() { return app_selection_mode_; });
+  }
 
   [[nodiscard]] ModelingCommandDescriptor box_tool_command() const {
     return make_box_tool_descriptor();
@@ -653,6 +656,11 @@ public:
     if (!object_id.has_value()) {
       return std::nullopt;
     }
+    if (const std::optional<EntityId> participant =
+            selection_service_.scene_target_for_picking_participant(
+                *object_id)) {
+      return participant;
+    }
     return object_registry_.entity_for_modeling_object(*object_id);
   }
 
@@ -663,8 +671,11 @@ public:
     std::vector<EntityId> entities;
     entities.reserve(object_ids.size());
     for (const int object_id : object_ids) {
-      const std::optional<EntityId> entity =
-          object_registry_.entity_for_modeling_object(object_id);
+      std::optional<EntityId> entity =
+          selection_service_.scene_target_for_picking_participant(object_id);
+      if (!entity.has_value()) {
+        entity = object_registry_.entity_for_modeling_object(object_id);
+      }
       if (!entity.has_value() || std::find(entities.begin(), entities.end(),
                                            *entity) != entities.end()) {
         continue;
@@ -675,13 +686,109 @@ public:
   }
 
   [[nodiscard]] std::optional<QVec3> selection_center() const {
-    return selection_projection_service_.world_selection_center(
-        session_, scene_, assets_, object_registry_);
+    if (const std::optional<SceneBounds> bounds = selection_bounds()) {
+      return bounds_center(*bounds);
+    }
+    return std::nullopt;
   }
 
   [[nodiscard]] std::optional<SceneBounds> selection_bounds() const {
+    const ModelingInstanceEditScope edit_scope =
+        instance_edit_scope_provider_ ? instance_edit_scope_provider_()
+                                      : ModelingInstanceEditScope{};
+    if (edit_scope.occurrence != kInvalidEntityId &&
+        edit_scope.definition != kInvalidEntityId) {
+      std::optional<SceneBounds> bounds;
+      for (const quader_editor_core::PolygonObject &object :
+           session_.objects()) {
+        if (!object.selected && object.selection.empty() &&
+            object.id != session_.active_object_id()) {
+          continue;
+        }
+        const std::optional<EntityId> entity =
+            object_registry_.entity_for_modeling_object(object.id);
+        if (!entity.has_value() ||
+            scene_.containing_instance_definition(*entity) !=
+                edit_scope.definition) {
+          continue;
+        }
+        const std::optional<QMat4> world =
+            modeling_object_world_transform(object.id);
+        if (!world.has_value()) {
+          continue;
+        }
+        const bool whole_object =
+            session_.selection_mode() ==
+            quader_editor_core::SelectionMode::Object;
+        const std::vector<quader_poly::ElementId> selected_vertices =
+            whole_object ? std::vector<quader_poly::ElementId>{}
+                         : quader_poly::selected_vertex_ids(object.document,
+                                                            object.selection);
+        const auto include_vertex = [&](const quader_poly::Vertex &vertex) {
+          const QVec3 point = transform_point(*world, vertex.position);
+          if (!bounds.has_value()) {
+            bounds = SceneBounds{.min = point, .max = point};
+          } else {
+            include_point(*bounds, point);
+          }
+        };
+        if (whole_object) {
+          for (const quader_poly::Vertex &vertex : object.document.vertices) {
+            include_vertex(vertex);
+          }
+        } else {
+          for (const quader_poly::ElementId vertex_id : selected_vertices) {
+            if (const quader_poly::Vertex *vertex =
+                    quader_poly::find_vertex(object.document, vertex_id)) {
+              include_vertex(*vertex);
+            }
+          }
+        }
+      }
+      return bounds;
+    }
     return selection_projection_service_.world_selection_bounds(
         session_, scene_, assets_, object_registry_);
+  }
+
+  DocumentCommandResult
+  translate_scene_selection_by_world_delta(QVec3 world_delta,
+                                           std::string label) {
+    if (quader::length_squared(world_delta) <= 0.0000001f) {
+      return document_command_unchanged_result();
+    }
+    SceneTransformDragService placement;
+    if (!placement.begin(scene_, selection_center().value_or(QVec3{}), true,
+                         std::move(label),
+                         scene_selection_display_from_scene())) {
+      return document_command_invalid_request_result(
+          "Scene placement could not begin.");
+    }
+    const DocumentCommandResult moved =
+        placement.preview_world_translation_delta(scene_, world_delta);
+    if (!moved.ok) {
+      (void)placement.cancel();
+      return moved;
+    }
+    return placement.accept();
+  }
+
+  DocumentCommandResult transform_scene_selection_by_world_delta(
+      const QMat4 &world_delta, std::string label) {
+    SceneTransformDragService placement;
+    if (!placement.begin(scene_, selection_center().value_or(QVec3{}), true,
+                         std::move(label),
+                         scene_selection_display_from_scene())) {
+      return document_command_invalid_request_result(
+          "Scene transform could not begin.");
+    }
+    const DocumentCommandResult transformed =
+        placement.preview_world_transform_delta(scene_, world_delta);
+    if (!transformed.ok) {
+      (void)placement.cancel();
+      return transformed;
+    }
+    return placement.accept();
   }
 
   [[nodiscard]] ModelingSelectionMode selection_mode() const {
@@ -779,6 +886,10 @@ public:
   [[nodiscard]] std::uint64_t
   rectangle_selection_resolution_build_count() const {
     return selection_service_.rectangle_selection_resolution_build_count();
+  }
+
+  [[nodiscard]] std::uint64_t local_face_geometry_build_count() const {
+    return selection_service_.local_face_geometry_build_count();
   }
 
   [[nodiscard]] static std::unordered_set<int> live_modeling_object_ids(
@@ -975,7 +1086,10 @@ public:
       object.selected = !preserve_scene_owned_group_selection &&
                         scene_.selection(entity) != nullptr &&
                         scene_.selection(entity)->selected;
-      object.document = *mesh->authored_polygon_document;
+      // AssetRegistry interns authored topology independently from logical
+      // AssetId. Adopt that immutable pin so loading 200 ordinary duplicates
+      // keeps one runtime topology allocation and one picking/compile key.
+      object.document.share(mesh->authored_polygon_document);
       state.objects.push_back(std::move(object));
       object_registry_.bind(modeling_object->object_id, entity);
       object_registry_.remember_scene_entity(modeling_object->object_id, scene_,
@@ -1001,6 +1115,12 @@ public:
     }
     session_.mark_clean();
     invalidate_selection_overlay_caches();
+  }
+
+  void set_instance_edit_scope_provider(
+      std::function<ModelingInstanceEditScope()> provider) {
+    instance_edit_scope_provider_ = provider;
+    selection_service_.set_instance_edit_scope_provider(std::move(provider));
   }
 
   void sync_object_selection_from_scene(bool force_object_mode = false) {
@@ -1263,10 +1383,34 @@ public:
     }
 
     if (mode == ModelingSelectionMode::Group) {
+      std::vector<EntityId> retained_scene_selection;
+      retained_scene_selection.reserve(scene_.selected_entities().size());
+      for (const EntityId entity : scene_.selected_entities()) {
+        if (scene_.instance_occurrence(entity) == nullptr &&
+            !scene_.is_instance_definition_entity(entity) &&
+            !scene_.is_instance_definition_member(entity)) {
+          retained_scene_selection.push_back(entity);
+        }
+      }
+      const bool removed_instance_scope_selection =
+          retained_scene_selection.size() != scene_.selected_entities().size();
+      if (removed_instance_scope_selection) {
+        const EntityId previous_active = scene_.primary_selection();
+        const EntityId retained_active =
+            std::find(retained_scene_selection.begin(),
+                      retained_scene_selection.end(), previous_active) !=
+                    retained_scene_selection.end()
+                ? previous_active
+                : (retained_scene_selection.empty()
+                       ? kInvalidEntityId
+                       : retained_scene_selection.back());
+        restore_scene_selection(retained_scene_selection, retained_active);
+      }
       ModelingCommandResult result =
           selection_service_.set_group_selection_mode(session_,
                                                       app_selection_mode_);
-      result.changed = result.changed || canceled_preview;
+      result.changed = result.changed || canceled_preview ||
+                       removed_instance_scope_selection;
       if (result.changed) {
         invalidate_selection_overlay_caches();
       }
@@ -1277,12 +1421,17 @@ public:
     std::vector<EntityId> scene_only_selection;
     scene_only_selection.reserve(scene_.selected_entities().size());
     for (const EntityId entity : scene_.selected_entities()) {
-      if (scene_.modeling_object(entity) == nullptr) {
+      if (scene_.modeling_object(entity) == nullptr &&
+          (mode == ModelingSelectionMode::Object ||
+           scene_.instance_occurrence(entity) == nullptr)) {
         scene_only_selection.push_back(entity);
       }
     }
     const EntityId active_scene_only_selection =
-        scene_.modeling_object(scene_.primary_selection()) == nullptr
+        scene_.modeling_object(scene_.primary_selection()) == nullptr &&
+                (mode == ModelingSelectionMode::Object ||
+                 scene_.instance_occurrence(scene_.primary_selection()) ==
+                     nullptr)
             ? scene_.primary_selection()
             : kInvalidEntityId;
     if (!scene_only_selection.empty()) {
@@ -1304,11 +1453,29 @@ public:
   }
 
   ModelingCommandResult select_all() {
+    if (const std::optional<ModelingCommandResult> scoped =
+            selection_service_.select_all_in_instance_edit_scope(
+                session_, scene_, object_registry_, false)) {
+      if (scoped->changed) {
+        sync_scene_selection_from_modeling();
+        invalidate_selection_overlay_caches();
+      }
+      return *scoped;
+    }
     return execute_runtime_no_settings(
         quader_editor_core::EditorRuntimeCommandId::SelectAll, false);
   }
 
   ModelingCommandResult invert_selection() {
+    if (const std::optional<ModelingCommandResult> scoped =
+            selection_service_.select_all_in_instance_edit_scope(
+                session_, scene_, object_registry_, true)) {
+      if (scoped->changed) {
+        sync_scene_selection_from_modeling();
+        invalidate_selection_overlay_caches();
+      }
+      return *scoped;
+    }
     return execute_runtime_no_settings(
         quader_editor_core::EditorRuntimeCommandId::InvertSelection, false);
   }
@@ -1384,13 +1551,31 @@ public:
   }
 
   ModelingCommandResult copy_selection() {
-    return execute_runtime_command(clipboard_service_.make_copy_command(),
-                                   false);
+    ModelingCommandResult result = execute_runtime_command(
+        clipboard_service_.make_copy_command(), false);
+    if (result.ok) {
+      clipboard_scene_identities_ =
+          capture_selected_duplicate_scene_identities();
+      clipboard_world_center_ = selection_center();
+    }
+    return result;
   }
 
   ModelingCommandResult paste_selection() {
-    const quader_editor_core::EditorRuntimeCommand command =
+    quader_editor_core::EditorRuntimeCommand command =
         clipboard_service_.make_paste_command();
+    if (auto *paste_settings = std::get_if<
+            quader_editor_core::PasteCopiedMeshesRuntimeCommandSettings>(
+            &command.settings);
+        paste_settings != nullptr && !runtime_.clipboard_objects().empty()) {
+      const quader_editor_core::Bounds3 copied_bounds =
+          quader_editor_core::document_bounds(runtime_.clipboard_objects());
+      if (!copied_bounds.empty) {
+        paste_settings->target_center = {
+            (copied_bounds.min + copied_bounds.max) * 0.5f, true};
+      }
+    }
+    const std::optional<QVec3> paste_target = selection_center();
     const std::uint64_t content_before = session_.state().content_revision;
     const quader_editor_core::EditorRuntimeCommandResult result =
         quader_editor_core::execute_runtime_command(session_, runtime_,
@@ -1399,6 +1584,26 @@ public:
       sync_scene_objects_from_modeling();
     }
     sync_scene_selection_from_modeling();
+    if (result.command.ok && result.command.changed &&
+        !clipboard_scene_identities_.empty()) {
+      apply_scene_identities_to_selected_duplicates(
+          clipboard_scene_identities_);
+      sync_scene_selection_from_modeling();
+      const QVec3 paste_delta =
+          paste_target.has_value() && clipboard_world_center_.has_value()
+              ? *paste_target - *clipboard_world_center_
+              : QVec3{1.0f, 0.0f, 1.0f};
+      const DocumentCommandResult placed =
+          translate_scene_selection_by_world_delta(paste_delta,
+                                                   "Place Pasted Meshes");
+      if (!placed.ok) {
+        return {
+            .ok = false,
+            .changed = true,
+            .message = placed.message,
+        };
+      }
+    }
     return {
         .ok = result.command.ok,
         .changed = result.command.changed,
@@ -1768,7 +1973,25 @@ public:
   ModelingCommandResult execute_runtime_operation_command(
       quader_editor_core::EditorOperationId runtime_operation,
       quader_editor_core::EditorOperationCommandPhase phase,
-      quader_editor_core::EditorOperationSettings settings) {
+      quader_editor_core::EditorOperationSettings settings,
+      bool preserve_duplicate_scene_identity = true) {
+    const bool ordinary_duplicate =
+        runtime_operation ==
+            quader_editor_core::EditorOperationId::DuplicateMeshes &&
+        phase == quader_editor_core::EditorOperationCommandPhase::Execute &&
+        preserve_duplicate_scene_identity;
+    const std::vector<ModelingObjectSceneIdentity> duplicate_scene_identities =
+        ordinary_duplicate ? capture_selected_duplicate_scene_identities()
+                           : std::vector<ModelingObjectSceneIdentity>{};
+    QVec3 duplicate_world_offset;
+    if (ordinary_duplicate) {
+      if (const auto *duplicate_settings =
+              std::get_if<quader_editor_core::DuplicateMeshesOperationSettings>(
+                  &settings)) {
+        duplicate_world_offset = quader_editor_core::
+            duplicate_meshes_offset_from_settings(*duplicate_settings);
+      }
+    }
     const bool begins_preview =
         phase == quader_editor_core::EditorOperationCommandPhase::BeginPreview;
     const bool projects_active_preview =
@@ -1788,6 +2011,14 @@ public:
     operation_command.settings = std::move(settings);
     const quader_editor_core::EditorOperationCommand command =
         RuntimeOperationExecutor::make_command(operation_command);
+    if (ordinary_duplicate) {
+      auto *duplicate_settings =
+          std::get_if<quader_editor_core::DuplicateMeshesOperationSettings>(
+              &operation_command.settings);
+      if (duplicate_settings != nullptr) {
+        duplicate_settings->explicit_offset = {{}, true};
+      }
+    }
 
     const quader_editor_core::PreviewTransactionStatus preview_before =
         session_.preview_transaction_status();
@@ -1852,6 +2083,23 @@ public:
     }
     if (sync_plan.sync_selection) {
       sync_scene_selection_from_modeling();
+    }
+    if (ordinary_duplicate && result.command.ok && result.command.changed) {
+      apply_scene_identities_to_selected_duplicates(
+          duplicate_scene_identities);
+      sync_scene_selection_from_modeling();
+      if (quader::length_squared(duplicate_world_offset) > 0.0000001f) {
+        const DocumentCommandResult placed =
+            translate_scene_selection_by_world_delta(duplicate_world_offset,
+                                                     "Place Duplicate");
+        if (!placed.ok) {
+          result.command = {
+              .ok = false,
+              .changed = true,
+              .message = placed.message,
+          };
+        }
+      }
     }
     clear_inactive_operation_preview_metadata();
     if ((begins_preview || projects_active_preview) &&
@@ -1977,7 +2225,56 @@ public:
     }
     if (session_.selection_mode() ==
         quader_editor_core::SelectionMode::Object) {
-      return quader_editor_core::execute_repeatable_transform(session_, action);
+      bool duplicated = false;
+      if (action.duplicate_selected) {
+        const ModelingCommandResult duplicate = begin_transform_preview(true);
+        if (!duplicate.ok) {
+          return {false, duplicate.changed, duplicate.message};
+        }
+        duplicated = duplicate.changed;
+      }
+
+      DocumentCommandResult transformed;
+      if (action.tool ==
+          quader_editor_core::ViewportInteractionTool::Move) {
+        transformed = translate_scene_selection_by_world_delta(
+            action.move_delta, "Repeat Move");
+      } else {
+        const QVec3 pivot = selection_center().value_or(QVec3{});
+        if (action.tool ==
+            quader_editor_core::ViewportInteractionTool::Rotate) {
+          const quader_poly::Transform3 rotation =
+              quader_editor_core::rotation_transform(
+                  action.axis,
+                  action.rotate_angle_degrees * std::acos(-1.0) / 180.0);
+          transformed = transform_scene_selection_by_world_delta(
+              world_affine_from_transform(rotation, pivot), "Repeat Rotate");
+        } else if (action.tool ==
+                   quader_editor_core::ViewportInteractionTool::Scale) {
+          transformed = transform_scene_selection_by_world_delta(
+              world_affine_from_transform(
+                  quader_editor_core::scale_transform(action.scale), pivot),
+              "Repeat Scale");
+        } else {
+          transformed = document_command_invalid_request_result(
+              "Unsupported repeat transform tool.");
+        }
+      }
+
+      if (!transformed.ok) {
+        if (action.duplicate_selected) {
+          (void)cancel_transform_preview();
+        }
+        return {false, duplicated, transformed.message};
+      }
+      if (action.duplicate_selected) {
+        const ModelingCommandResult committed = commit_transform_preview();
+        if (!committed.ok) {
+          return {false, true, committed.message};
+        }
+        duplicated = duplicated || committed.changed;
+      }
+      return {true, duplicated || transformed.changed, {}};
     }
 
     quader_editor_core::CommandResult begin_result =
@@ -2298,7 +2595,7 @@ public:
       }
       const QMat4 survivor_from_object =
           from_glm(survivor_from_world * to_glm(*object_world));
-      for (quader_poly::Vertex &vertex : object.document.vertices) {
+      for (quader_poly::Vertex &vertex : object.document.edit().vertices) {
         vertex.position =
             transform_point(survivor_from_object, vertex.position);
       }
@@ -2555,22 +2852,17 @@ public:
 
   ModelingCommandResult execute_runtime_operation(
       quader_editor_core::EditorOperationId runtime_operation,
-      quader_editor_core::EditorOperationSettings settings) {
+      quader_editor_core::EditorOperationSettings settings,
+      bool preserve_duplicate_scene_identity = true) {
     return execute_runtime_operation_command(
         runtime_operation,
         quader_editor_core::EditorOperationCommandPhase::Execute,
-        std::move(settings));
+        std::move(settings), preserve_duplicate_scene_identity);
   }
 
   ModelingCommandResult
   execute_instant_operation(ModelingInstantOperationId operation,
                             bool preserve_duplicate_scene_identity = true) {
-    const std::vector<ModelingObjectSceneIdentity> duplicate_scene_identities =
-        operation == ModelingInstantOperationId::DuplicateMeshes &&
-                preserve_duplicate_scene_identity
-            ? capture_selected_duplicate_scene_identities()
-            : std::vector<ModelingObjectSceneIdentity>{};
-
     const std::optional<RuntimeOperationExecutor::OperationCommand> command =
         runtime_operation_executor_.operation_for_instant_command(
             operation, interaction_settings_service_.settings());
@@ -2580,12 +2872,9 @@ public:
                   "Instant operation is not mapped to a runtime operation."};
     }
 
-    ModelingCommandResult result =
-        execute_runtime_operation(command->operation, command->settings);
-    if (result.ok && result.changed &&
-        operation == ModelingInstantOperationId::DuplicateMeshes) {
-      apply_scene_identities_to_selected_duplicates(duplicate_scene_identities);
-    }
+    ModelingCommandResult result = execute_runtime_operation(
+        command->operation, command->settings,
+        preserve_duplicate_scene_identity);
     return result;
   }
 
@@ -2692,9 +2981,11 @@ public:
   }
 
   ModelingTransformDragPreview
-  begin_transform_drag(const ModelingTransformDragBeginRequest &request) {
+  begin_transform_drag(const ModelingTransformDragBeginRequest &request,
+                       DocumentCommandService *document_commands = nullptr,
+                       EditorHistoryService *history = nullptr) {
     return transform_drag_service_.begin_transform_drag(
-        transform_drag_context(), request);
+        transform_drag_context(document_commands, history), request);
   }
 
   ModelingTransformDragPreview
@@ -2778,16 +3069,9 @@ public:
 
   ModelingCommandResult
   update_selection_hover(const ModelingHoverRequest &request) {
-    const std::vector<quader_editor_core::PolygonObject> &picking_objects =
-        cached_scene_transformed_objects_for_picking();
-    const quader_poly::PickOptions pick_options =
-        pick_options_from_request(request);
     const quader_editor_core::SelectionHoverUpdateResult hover =
-        quader_editor_core::update_selection_hover(
-            picking_objects, session_.selection_mode(), runtime_.hover(),
-            to_runtime(request.ray), request.selected_modifier_pressed,
-            pick_options, cached_pick_object_bounds(),
-            cached_pick_face_geometry(pick_options), request.face_plane_hover);
+        selection_service_.selection_hover(
+            session_, scene_, object_registry_, runtime_.hover(), request);
     runtime_.apply_hover_update(hover);
     return {
         .ok = true,
@@ -2801,16 +3085,9 @@ public:
 
   [[nodiscard]] ModelingHoverSummary
   preview_selection_hover(const ModelingHoverRequest &request) const {
-    const std::vector<quader_editor_core::PolygonObject> &picking_objects =
-        cached_scene_transformed_objects_for_picking();
-    const quader_poly::PickOptions pick_options =
-        pick_options_from_request(request);
     const quader_editor_core::SelectionHoverUpdateResult hover =
-        quader_editor_core::update_selection_hover(
-            picking_objects, session_.selection_mode(), runtime_.hover(),
-            to_runtime(request.ray), request.selected_modifier_pressed,
-            pick_options, cached_pick_object_bounds(),
-            cached_pick_face_geometry(pick_options), request.face_plane_hover);
+        selection_service_.selection_hover(
+            session_, scene_, object_registry_, runtime_.hover(), request);
     return from_runtime_hover_summary(session_, hover.hover, hover.changed);
   }
 
@@ -4263,6 +4540,28 @@ public:
 
   ModelingCommandResult
   set_component_selection(const ModelingComponentSelectionRequest &request) {
+    const std::optional<EntityId> requested_entity =
+        object_registry_.entity_for_modeling_object(request.modeling_object_id);
+    const ModelingInstanceEditScope edit_scope =
+        instance_edit_scope_provider_ ? instance_edit_scope_provider_()
+                                      : ModelingInstanceEditScope{};
+    if (requested_entity.has_value()) {
+      const EntityId definition =
+          scene_.containing_instance_definition(*requested_entity);
+      const bool active_edit =
+          edit_scope.occurrence != kInvalidEntityId &&
+          edit_scope.definition != kInvalidEntityId;
+      if ((definition != kInvalidEntityId &&
+           (!active_edit || definition != edit_scope.definition)) ||
+          (active_edit && definition != edit_scope.definition)) {
+        return {
+            .ok = false,
+            .changed = false,
+            .message =
+                "Component selection is outside the active instance scope.",
+        };
+      }
+    }
     const bool restored_preview_base =
         restore_active_operation_preview_base_for_selection_edit();
     auto finish_after_preview_restore =
@@ -4534,7 +4833,9 @@ private:
     return transform_preview_service_.has_transform_preview(session_);
   }
 
-  [[nodiscard]] ModelingTransformDragServiceContext transform_drag_context() {
+  [[nodiscard]] ModelingTransformDragServiceContext
+  transform_drag_context(DocumentCommandService *document_commands = nullptr,
+                         EditorHistoryService *history = nullptr) {
     return {
         .scene = scene_,
         .assets = assets_,
@@ -4542,6 +4843,8 @@ private:
         .runtime = runtime_,
         .history_bridge = history_bridge_,
         .port = *this,
+        .document_commands = document_commands,
+        .history = history,
     };
   }
 
@@ -4555,6 +4858,27 @@ private:
     return false;
   }
 
+  [[nodiscard]] QMat4
+  scene_selection_display_from_scene() const override {
+    const ModelingInstanceEditScope edit_scope =
+        instance_edit_scope_provider_ ? instance_edit_scope_provider_()
+                                      : ModelingInstanceEditScope{};
+    const InstanceOccurrenceComponent *occurrence =
+        scene_.instance_occurrence(edit_scope.occurrence);
+    const std::optional<QMat4> definition_inverse =
+        occurrence != nullptr &&
+                occurrence->definition == edit_scope.definition
+            ? try_scene_matrix_inverse(
+                  scene_.world_transform_matrix(edit_scope.definition))
+            : std::nullopt;
+    if (!definition_inverse.has_value()) {
+      return scene_transform_identity_matrix();
+    }
+    return scene_transform_multiply(
+        scene_.world_transform_matrix(edit_scope.occurrence),
+        *definition_inverse);
+  }
+
   [[nodiscard]] std::optional<QMat4>
   modeling_object_world_transform(int modeling_object_id) const override {
     const std::optional<EntityId> entity =
@@ -4562,7 +4886,16 @@ private:
     if (!entity.has_value() || !scene_.exists(*entity)) {
       return std::nullopt;
     }
-    return scene_.world_transform_matrix(*entity);
+    const QMat4 scene_world = scene_.world_transform_matrix(*entity);
+    const ModelingInstanceEditScope edit_scope =
+        instance_edit_scope_provider_ ? instance_edit_scope_provider_()
+                                      : ModelingInstanceEditScope{};
+    if (scene_.containing_instance_definition(*entity) !=
+        edit_scope.definition) {
+      return scene_world;
+    }
+    return scene_transform_multiply(scene_selection_display_from_scene(),
+                                    scene_world);
   }
 
   [[nodiscard]] quader_editor_core::Bounds3
@@ -4576,12 +4909,8 @@ private:
       };
     };
 
-    if (session_.selection_mode() ==
-        quader_editor_core::SelectionMode::Object) {
-      if (const std::optional<SceneBounds> scene_bounds =
-              selected_transform_world_bounds(scene_, assets_)) {
-        return to_runtime_bounds(*scene_bounds);
-      }
+    if (const std::optional<SceneBounds> scene_bounds = selection_bounds()) {
+      return to_runtime_bounds(*scene_bounds);
     }
 
     quader_editor_core::Bounds3 bounds = session_.selection_bounds();
@@ -4661,8 +4990,62 @@ private:
   ModelingCreateBoxResult
   create_scene_object_from_latest(const std::string &name,
                                   const std::string &message) {
-    return mesh_sync_service_.create_scene_object_from_latest(
+    ModelingCreateBoxResult created =
+        mesh_sync_service_.create_scene_object_from_latest(
         session_, scene_, assets_, scene_sync_service_, name, message);
+    const ModelingInstanceEditScope edit_scope =
+        instance_edit_scope_provider_ ? instance_edit_scope_provider_()
+                                      : ModelingInstanceEditScope{};
+    if (!created.ok || !created.changed ||
+        edit_scope.definition == kInvalidEntityId) {
+      return created;
+    }
+    const auto cleanup_failed_instance_member = [&]() {
+      mesh_sync_service_.rollback_created_scene_object(
+          scene_, assets_, scene_sync_service_,
+          created.object.modeling_object_id, created.object.entity,
+          created.object.mesh);
+      return ModelingCreateBoxResult{
+          .ok = false,
+          .changed = false,
+          .message =
+              "Created mesh could not be added to the active instance.",
+      };
+    };
+    const InstanceOccurrenceComponent *occurrence =
+        scene_.instance_occurrence(edit_scope.occurrence);
+    const TransformComponent *created_transform =
+        scene_.transform(created.object.entity);
+    const std::optional<QMat4> occurrence_inverse =
+        occurrence != nullptr &&
+                occurrence->definition == edit_scope.definition
+            ? try_scene_matrix_inverse(
+                  scene_.world_transform_matrix(edit_scope.occurrence))
+            : std::nullopt;
+    if (!scene_.is_instance_definition_entity(edit_scope.definition) ||
+        created_transform == nullptr || !occurrence_inverse.has_value()) {
+      return cleanup_failed_instance_member();
+    }
+    const QMat4 definition_world =
+        scene_.world_transform_matrix(edit_scope.definition);
+    const QMat4 definition_local_world = scene_transform_multiply(
+        *occurrence_inverse,
+        scene_.world_transform_matrix(created.object.entity));
+    const std::optional<TransformComponent> member_local =
+        try_scene_local_transform_preserving_world(
+            definition_world,
+            scene_transform_multiply(definition_world,
+                                     definition_local_world),
+            *created_transform);
+    if (!member_local.has_value() ||
+        !mesh_sync_service_.place_created_scene_object(
+            scene_, created.object.entity, edit_scope.definition,
+            *member_local)) {
+      return cleanup_failed_instance_member();
+    }
+    object_registry_.remember_scene_entity(created.object.modeling_object_id,
+                                           scene_, created.object.entity);
+    return created;
   }
 
   [[nodiscard]] ModelingBoxPreview
@@ -4723,9 +5106,12 @@ private:
   ModelingTransformDragService transform_drag_service_;
   ModalToolRuntime modal_tool_runtime_;
   ModelingClipboardService clipboard_service_;
+  std::vector<ModelingObjectSceneIdentity> clipboard_scene_identities_;
+  std::optional<QVec3> clipboard_world_center_;
   ModelingHistoryBridge history_bridge_;
   std::optional<SceneWorkspacePreviewState> scene_workspace_preview_;
   ModelingOperationPreviewCheckpointHooks preview_checkpoint_hooks_;
+  std::function<ModelingInstanceEditScope()> instance_edit_scope_provider_;
   ModelingSelectionMode app_selection_mode_ = ModelingSelectionMode::Object;
 
   quader_editor_core::EditorSession session_;
@@ -4841,6 +5227,10 @@ ModelingSessionService::rectangle_selection_resolution_build_count() const {
   return impl_->rectangle_selection_resolution_build_count();
 }
 
+std::uint64_t ModelingSessionService::local_face_geometry_build_count() const {
+  return impl_->local_face_geometry_build_count();
+}
+
 ModelingSessionMemento ModelingSessionService::capture_history_memento() const {
   return impl_->capture_history_memento();
 }
@@ -4866,6 +5256,11 @@ void ModelingSessionService::clear_transient_state_for_document_replacement() {
 }
 
 void ModelingSessionService::reset_from_scene() { impl_->reset_from_scene(); }
+
+void ModelingSessionService::set_instance_edit_scope_provider(
+    std::function<ModelingInstanceEditScope()> provider) {
+  impl_->set_instance_edit_scope_provider(std::move(provider));
+}
 
 void ModelingSessionService::project_object_selection_from_scene(
     bool force_object_mode) {
@@ -5074,6 +5469,13 @@ ModelingTransformDragPreview ModelingSessionService::begin_transform_drag(
     const ModelingTransformDragBeginRequest &request) {
   QDR_PROFILE_FUNCTION();
   return impl_->begin_transform_drag(request);
+}
+
+ModelingTransformDragPreview ModelingSessionService::begin_transform_drag(
+    const ModelingTransformDragBeginRequest &request,
+    DocumentCommandService &document_commands, EditorHistoryService &history) {
+  QDR_PROFILE_FUNCTION();
+  return impl_->begin_transform_drag(request, &document_commands, &history);
 }
 
 ModelingTransformDragPreview ModelingSessionService::update_transform_drag(

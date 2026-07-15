@@ -24,6 +24,12 @@ bool is_viewport_context_menu_click_gesture(
          drag_distance_squared <= request.max_click_distance_squared;
 }
 
+bool viewport_context_menu_has_available_actions(
+    bool has_modeling_actions, bool can_create_instance,
+    bool can_flatten_instance) {
+  return has_modeling_actions || can_create_instance || can_flatten_instance;
+}
+
 bool should_open_viewport_context_menu(
     const ViewportContextMenuOpenRequest &request) {
   return is_viewport_context_menu_click_gesture(request) &&

@@ -190,17 +190,18 @@ bool rollback_installed_writes(std::span<StagedObjWrite> writes) {
 } // namespace
 
 ObjMeshWriteResult ObjMeshWriter::validate_mesh(const MeshAsset &mesh) {
-  if (mesh.vertices.empty()) {
+  const MeshGeometryPayload &geometry = mesh.geometry();
+  if (geometry.vertices.empty()) {
     return {false, "OBJ export failed: mesh has no vertices."};
   }
-  if (mesh.indices.empty()) {
+  if (geometry.indices.empty()) {
     return {false, "OBJ export failed: mesh has no indices."};
   }
-  if ((mesh.indices.size() % 3U) != 0U) {
+  if ((geometry.indices.size() % 3U) != 0U) {
     return {false,
             "OBJ export failed: mesh indices are not triangle-aligned."};
   }
-  for (const MeshVertex &vertex : mesh.vertices) {
+  for (const MeshVertex &vertex : geometry.vertices) {
     if (!std::isfinite(vertex.position.x) ||
         !std::isfinite(vertex.position.y) ||
         !std::isfinite(vertex.position.z) ||
@@ -211,8 +212,8 @@ ObjMeshWriteResult ObjMeshWriter::validate_mesh(const MeshAsset &mesh) {
       return {false, "OBJ export failed: mesh vertex data is not finite."};
     }
   }
-  for (const std::uint32_t index : mesh.indices) {
-    if (index >= mesh.vertices.size()) {
+  for (const std::uint32_t index : geometry.indices) {
+    if (index >= geometry.vertices.size()) {
       return {false, "OBJ export failed: mesh index is out of bounds."};
     }
   }
@@ -227,23 +228,24 @@ std::string ObjMeshWriter::serialize_mesh(const MeshAsset &mesh,
   stream << std::setprecision(9);
   stream << "# Quader OBJ export\n";
   stream << "o " << sanitized_obj_name(object_name) << '\n';
+  const MeshGeometryPayload &geometry = mesh.geometry();
 
-  for (const MeshVertex &vertex : mesh.vertices) {
+  for (const MeshVertex &vertex : geometry.vertices) {
     stream << "v " << vertex.position.x << ' ' << vertex.position.y << ' '
            << vertex.position.z << '\n';
   }
-  for (const MeshVertex &vertex : mesh.vertices) {
+  for (const MeshVertex &vertex : geometry.vertices) {
     stream << "vt " << vertex.uv.x << ' ' << vertex.uv.y << '\n';
   }
-  for (const MeshVertex &vertex : mesh.vertices) {
+  for (const MeshVertex &vertex : geometry.vertices) {
     stream << "vn " << vertex.normal.x << ' ' << vertex.normal.y << ' '
            << vertex.normal.z << '\n';
   }
 
-  for (std::size_t index = 0; index < mesh.indices.size(); index += 3U) {
-    const std::uint32_t a = mesh.indices[index] + 1U;
-    const std::uint32_t b = mesh.indices[index + 1U] + 1U;
-    const std::uint32_t c = mesh.indices[index + 2U] + 1U;
+  for (std::size_t index = 0; index < geometry.indices.size(); index += 3U) {
+    const std::uint32_t a = geometry.indices[index] + 1U;
+    const std::uint32_t b = geometry.indices[index + 1U] + 1U;
+    const std::uint32_t c = geometry.indices[index + 2U] + 1U;
     stream << "f " << a << '/' << a << '/' << a << ' ' << b << '/' << b
            << '/' << b << ' ' << c << '/' << c << '/' << c << '\n';
   }

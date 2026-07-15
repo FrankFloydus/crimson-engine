@@ -10,12 +10,15 @@
 #include "diagnostics/profile.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/render_signature_builder.hpp"
+#include "scene/scene_transform.hpp"
 #include "scene/scene_document.hpp"
 #include "render/tool_preview_renderable_cache.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <optional>
+#include <span>
 #include <utility>
 
 namespace quader {
@@ -203,12 +206,14 @@ void mark_light_dirty(RenderSceneLightRecord &record,
              snapshot.render_component_revision &&
          previous->asset_revision == snapshot.asset_revision &&
          previous->project_material_revision ==
-             snapshot.project_material_revision;
+             snapshot.project_material_revision &&
+         previous->instance_edit_scope == snapshot.instance_edit_scope;
 }
 
 void reuse_previous_render_records(RenderSceneSnapshot &snapshot,
                                    const RenderSceneSnapshot &previous) {
   snapshot.meshes = previous.meshes;
+  snapshot.instance_primitives = previous.instance_primitives;
   snapshot.lights = previous.lights;
   snapshot.live_mesh_entities = previous.live_mesh_entities;
   snapshot.live_light_entities = previous.live_light_entities;
@@ -260,13 +265,18 @@ RenderMaterialBindingSnapshot::material_for_slot(std::uint32_t slot) const {
 
 RenderMeshAssetSnapshot render_mesh_asset_snapshot(AssetId mesh_id,
                                                    const MeshAsset &asset) {
+  const std::shared_ptr<const MeshGeometryPayload> geometry =
+      asset.geometry_payload();
   RenderMeshAssetSnapshot snapshot{
       .mesh_id = mesh_id,
+      .geometry_payload = geometry,
+      .geometry_token = asset.geometry_token(),
+      .geometry_content_id = asset.geometry_content_id(),
   };
   snapshot.mesh_revision = asset.revision.value;
-  snapshot.vertices = asset.vertices;
-  snapshot.indices = asset.indices;
-  snapshot.primitives = asset.primitives;
+  snapshot.vertices = geometry->vertices;
+  snapshot.indices = geometry->indices;
+  snapshot.primitives = geometry->primitives;
   snapshot.present = true;
   snapshot.has_stable_cpu_topology = asset.has_stable_cpu_topology;
   snapshot.has_authored_polygon_document = asset.has_authored_polygon_document;
@@ -372,6 +382,26 @@ std::uint64_t render_material_binding_signature(
   return signature.value();
 }
 
+bool ordinary_meshes_are_instance_compatible(
+    const RenderSceneMeshRecord &left,
+    const RenderSceneMeshRecord &right);
+std::uint64_t instance_occurrence_token(EntityId definition,
+                                        EntityId member,
+                                        EntityId occurrence);
+bool selected(const SceneDocument &document, EntityId entity);
+bool definition_member_is_visible(const SceneDocument &document,
+                                  EntityId member,
+                                  EntityId definition);
+void append_instance_primitive_records(
+    RenderSceneSnapshot &snapshot, const RenderSceneMeshRecord &source,
+    EntityId definition, EntityId member, const QMat4 &member_from_definition,
+    std::span<const RenderSceneInstanceOccurrenceRecord> occurrences);
+RenderSceneMeshRecord make_render_scene_mesh_record(
+    const SceneDocument &document, const AssetRegistry &assets,
+    EntityId entity_id, const MeshComponent &component,
+    const RenderProjectMaterialResolver *project_material_resolver,
+    const RenderSceneSnapshot *previous);
+
 RenderSceneSnapshot build_render_scene_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
     RenderSceneSnapshotBuildOptions options) {
@@ -392,6 +422,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
           : options.project_material_resolver != nullptr
                 ? options.project_material_resolver->revision()
                 : 0u;
+  snapshot.instance_edit_scope = options.instance_edit_scope;
   const RenderSceneSnapshot *const previous =
       options.previous != nullptr &&
               options.previous->scene_binding == snapshot.scene_binding
@@ -403,43 +434,27 @@ RenderSceneSnapshot build_render_scene_snapshot(
     return snapshot;
   }
 
+  std::vector<RenderSceneMeshRecord> ordinary_meshes;
   for (const EntityId entity_id : document.entities()) {
     QDR_PROFILE_SCOPE("Scene render extract entity");
     if (!document.is_effectively_visible(entity_id)) {
       continue;
     }
 
+    // Definition roots/members are internal canonical data, and occurrence
+    // leaves are rendered only through the explicit instance plan below.
+    if (document.is_instance_definition_entity(entity_id) ||
+        document.is_instance_definition_member(entity_id) ||
+        document.instance_occurrence(entity_id) != nullptr) {
+      continue;
+    }
+
     const QMat4 world_transform = document.world_transform_matrix(entity_id);
 
     if (const MeshComponent *component = document.mesh(entity_id)) {
-      const MaterialComponent *scene_material =
-          document.material(entity_id);
-      const RenderMaterialBindingSnapshot material =
-          build_render_material_binding_snapshot(
-              assets, scene_material, options.project_material_resolver);
-      const MeshAsset *asset = assets.mesh(component->mesh);
-      RenderSceneMeshRecord entry{
-          .entity_id = entity_id,
-          .mesh = asset ? render_mesh_asset_snapshot(component->mesh, *asset)
-                        : RenderMeshAssetSnapshot{.mesh_id = component->mesh},
-          .mesh_component = *component,
-          .material = material,
-          .material_reference =
-              scene_material ? scene_material->material : MaterialReference{},
-          .material_id = scene_material
-                             ? scene_material->material.embedded_asset()
-                             : kInvalidAssetId,
-          .material_revision = material.revision,
-          .world_transform = world_transform,
-          .transform_revision =
-              RenderSignatureBuilder::light_transform_signature(
-                  world_transform),
-      };
-      mark_mesh_dirty(entry, previous_mesh_record(previous, entity_id));
-      if (entry.renderable()) {
-        snapshot.live_mesh_entities.insert(entity_id);
-      }
-      snapshot.meshes.push_back(std::move(entry));
+      ordinary_meshes.push_back(make_render_scene_mesh_record(
+          document, assets, entity_id, *component,
+          options.project_material_resolver, previous));
     }
 
     if (const LightComponent *component = document.light(entity_id)) {
@@ -459,7 +474,297 @@ RenderSceneSnapshot build_render_scene_snapshot(
     }
   }
 
+  // Preserve the legacy single-mesh cache for unique payloads, but route two
+  // or more fully compatible ordinary objects through explicit GPU instancing.
+  // Compatibility is payload-based and deliberately excludes scene/asset IDs.
+  std::vector<bool> batched_ordinary(ordinary_meshes.size(), false);
+  for (std::size_t first = 0u; first < ordinary_meshes.size(); ++first) {
+    if (batched_ordinary[first]) {
+      continue;
+    }
+    std::vector<std::size_t> compatible{first};
+    for (std::size_t candidate = first + 1u;
+         candidate < ordinary_meshes.size(); ++candidate) {
+      if (!batched_ordinary[candidate] &&
+          ordinary_meshes_are_instance_compatible(ordinary_meshes[first],
+                                                   ordinary_meshes[candidate])) {
+        compatible.push_back(candidate);
+      }
+    }
+    if (compatible.size() < 2u && !options.instance_edit_scope.active()) {
+      RenderSceneMeshRecord &record = ordinary_meshes[first];
+      if (record.renderable()) {
+        snapshot.live_mesh_entities.insert(record.entity_id);
+      }
+      snapshot.meshes.push_back(std::move(record));
+      continue;
+    }
+    std::vector<RenderSceneInstanceOccurrenceRecord> occurrences;
+    occurrences.reserve(compatible.size());
+    for (const std::size_t index : compatible) {
+      RenderSceneMeshRecord &record = ordinary_meshes[index];
+      batched_ordinary[index] = true;
+      occurrences.push_back({
+          .entity_id = record.entity_id,
+          .occurrence = instance_occurrence_token(
+              kInvalidEntityId, record.entity_id, record.entity_id),
+          .world_transform = record.world_transform,
+          .selected = selected(document, record.entity_id),
+          .dimmed = options.instance_edit_scope.active(),
+      });
+    }
+    append_instance_primitive_records(
+        snapshot, ordinary_meshes[first], kInvalidEntityId,
+        kInvalidEntityId, QMat4{}, occurrences);
+  }
+
+  // Expand every visible occurrence from its hidden canonical definition.
+  // The canonical member-to-definition transform is shared by all placements;
+  // per-frame occurrence transforms remain the only mutable GPU payload.
+  for (const EntityId definition : document.entities()) {
+    if (!document.is_instance_definition_entity(definition)) {
+      continue;
+    }
+    const std::optional<QMat4> definition_inverse =
+        try_scene_matrix_inverse(document.world_transform_matrix(definition));
+    if (!definition_inverse.has_value()) {
+      continue;
+    }
+    std::vector<EntityId> visible_occurrences;
+    for (const EntityId occurrence :
+         document.instance_occurrences_for_definition(definition)) {
+      if (document.is_effectively_visible(occurrence)) {
+        visible_occurrences.push_back(occurrence);
+      }
+    }
+    if (visible_occurrences.empty()) {
+      continue;
+    }
+    for (const EntityId member : document.descendants(definition, false)) {
+      if (document.containing_instance_definition(member) != definition ||
+          !definition_member_is_visible(document, member, definition)) {
+        continue;
+      }
+      const MeshComponent *component = document.mesh(member);
+      if (component == nullptr) {
+        continue;
+      }
+      RenderSceneMeshRecord source = make_render_scene_mesh_record(
+          document, assets, member, *component,
+          options.project_material_resolver, nullptr);
+      const QMat4 member_from_definition = scene_transform_multiply(
+          *definition_inverse, document.world_transform_matrix(member));
+      std::vector<RenderSceneInstanceOccurrenceRecord> occurrences;
+      occurrences.reserve(visible_occurrences.size());
+      for (const EntityId occurrence : visible_occurrences) {
+        occurrences.push_back({
+            .entity_id = occurrence,
+            .occurrence =
+                instance_occurrence_token(definition, member, occurrence),
+            .world_transform = scene_transform_multiply(
+                document.world_transform_matrix(occurrence),
+                member_from_definition),
+            .selected = selected(document, occurrence),
+            .dimmed = options.instance_edit_scope.active() &&
+                       occurrence != options.instance_edit_scope.occurrence,
+        });
+      }
+      append_instance_primitive_records(
+          snapshot, source, definition, member, member_from_definition,
+          occurrences);
+    }
+  }
+
   return snapshot;
+}
+
+RenderInstanceBounds mesh_instance_bounds(
+    const RenderMeshAssetSnapshot &mesh) {
+  if (mesh.vertices.empty()) {
+    return {};
+  }
+  RenderInstanceBounds bounds{
+      .min = {std::numeric_limits<float>::max(),
+              std::numeric_limits<float>::max(),
+              std::numeric_limits<float>::max()},
+      .max = {std::numeric_limits<float>::lowest(),
+              std::numeric_limits<float>::lowest(),
+              std::numeric_limits<float>::lowest()},
+      .present = true,
+  };
+  for (const MeshVertex &vertex : mesh.vertices) {
+    bounds.min.x = std::min(bounds.min.x, vertex.position.x);
+    bounds.min.y = std::min(bounds.min.y, vertex.position.y);
+    bounds.min.z = std::min(bounds.min.z, vertex.position.z);
+    bounds.max.x = std::max(bounds.max.x, vertex.position.x);
+    bounds.max.y = std::max(bounds.max.y, vertex.position.y);
+    bounds.max.z = std::max(bounds.max.z, vertex.position.z);
+  }
+  return bounds;
+}
+
+std::uint64_t render_material_payload_signature(
+    const RenderMaterialAssetSnapshot *material) {
+  if (material == nullptr || !material->present) {
+    return 0u;
+  }
+  RenderSignatureBuilder signature;
+  signature.add_vec3(material->document.base_color)
+      .add_float(material->document.roughness)
+      .add_float(material->document.metallic)
+      .add_float(material->normal_strength)
+      .add_bool(material->directx_normal)
+      .add_vec2(material->texture_transform.center)
+      .add_vec2(material->texture_transform.scale)
+      .add_vec2(material->texture_transform.offset)
+      .add_float(material->texture_transform.rotation_degrees)
+      .add_value(material->revision)
+      .add_size(material->textures.size());
+  for (const RenderTextureAssetSnapshot &texture : material->textures) {
+    signature.add_string(texture.slot)
+        .add_bool(texture.present)
+        .add_value(texture.content_revision)
+        .add_value(texture.texture.revision.value)
+        .add_value(static_cast<std::uint64_t>(texture.texture.usage))
+        .add_value(static_cast<std::uint64_t>(texture.texture.color_space))
+        .add_value(texture.width != 0u ? texture.width : texture.texture.width)
+        .add_value(texture.height != 0u ? texture.height
+                                       : texture.texture.height)
+        .add_string(texture.texture.source_path.generic_string())
+        .add_value(reinterpret_cast<std::uintptr_t>(
+            texture.encoded_file_bytes.get()))
+        .add_value(reinterpret_cast<std::uintptr_t>(
+            texture.decoded_rgba8.get()));
+  }
+  return signature.value();
+}
+
+std::vector<std::uint64_t> primitive_material_payloads(
+    const RenderSceneMeshRecord &mesh) {
+  std::vector<std::uint64_t> payloads;
+  const std::vector<MeshPrimitiveSpan> primitives =
+      coalesced_render_mesh_primitive_spans(mesh.mesh);
+  payloads.reserve(primitives.size());
+  for (const MeshPrimitiveSpan &primitive : primitives) {
+    payloads.push_back(render_material_payload_signature(
+        mesh.material.material_for_slot(primitive.material_slot)));
+  }
+  return payloads;
+}
+
+bool ordinary_meshes_are_instance_compatible(
+    const RenderSceneMeshRecord &left,
+    const RenderSceneMeshRecord &right) {
+  if (!left.renderable() || !right.renderable() ||
+      left.mesh.geometry_content_id.value == 0u ||
+      left.mesh.geometry_content_id != right.mesh.geometry_content_id ||
+      left.mesh.geometry_payload.get() != right.mesh.geometry_payload.get() ||
+      left.cast_shadows() != right.cast_shadows() ||
+      left.double_sided() != right.double_sided()) {
+    return false;
+  }
+  const std::vector<MeshPrimitiveSpan> left_primitives =
+      coalesced_render_mesh_primitive_spans(left.mesh);
+  const std::vector<MeshPrimitiveSpan> right_primitives =
+      coalesced_render_mesh_primitive_spans(right.mesh);
+  return left_primitives == right_primitives &&
+         primitive_material_payloads(left) ==
+             primitive_material_payloads(right);
+}
+
+std::uint64_t instance_occurrence_token(EntityId definition,
+                                        EntityId member,
+                                        EntityId occurrence) {
+  return RenderSignatureBuilder{}
+      .add_value(definition)
+      .add_value(member)
+      .add_value(occurrence)
+      .value();
+}
+
+bool selected(const SceneDocument &document, EntityId entity) {
+  const SelectionComponent *selection = document.selection(entity);
+  return selection != nullptr && selection->selected;
+}
+
+bool definition_member_is_visible(const SceneDocument &document,
+                                  EntityId member,
+                                  EntityId definition) {
+  EntityId current = member;
+  std::size_t guard = document.entities().size() + 1u;
+  while (current != kInvalidEntityId && current != definition && guard-- > 0u) {
+    if (const VisibilityComponent *visibility = document.visibility(current);
+        visibility != nullptr && !visibility->visible) {
+      return false;
+    }
+    current = document.parent(current);
+  }
+  return current == definition;
+}
+
+void append_instance_primitive_records(
+    RenderSceneSnapshot &snapshot, const RenderSceneMeshRecord &source,
+    EntityId definition, EntityId member, const QMat4 &member_from_definition,
+    std::span<const RenderSceneInstanceOccurrenceRecord> occurrences) {
+  if (!source.renderable() || occurrences.empty()) {
+    return;
+  }
+  const RenderInstanceBounds local_bounds = mesh_instance_bounds(source.mesh);
+  for (const MeshPrimitiveSpan &primitive :
+       coalesced_render_mesh_primitive_spans(source.mesh)) {
+    const std::uint64_t material_payload =
+        render_material_payload_signature(
+            source.material.material_for_slot(primitive.material_slot));
+    snapshot.instance_primitives.push_back({
+        .definition_entity = definition,
+        .member_entity = member,
+        .member_from_definition = member_from_definition,
+        .key = {.geometry_payload = static_cast<std::uint64_t>(
+                    source.mesh.geometry_token),
+                .material_payload = material_payload,
+                .index_offset = primitive.index_offset,
+                .index_count = primitive.index_count,
+                .cast_shadows = source.cast_shadows(),
+                .receive_shadows = true,
+                .double_sided = source.double_sided()},
+        .mesh = source.mesh,
+        .primitive = primitive,
+        .material = source.material,
+        .local_bounds = local_bounds,
+        .occurrences = {occurrences.begin(), occurrences.end()},
+    });
+  }
+}
+
+RenderSceneMeshRecord make_render_scene_mesh_record(
+    const SceneDocument &document, const AssetRegistry &assets,
+    EntityId entity_id, const MeshComponent &component,
+    const RenderProjectMaterialResolver *project_material_resolver,
+    const RenderSceneSnapshot *previous) {
+  const MaterialComponent *scene_material = document.material(entity_id);
+  const RenderMaterialBindingSnapshot material =
+      build_render_material_binding_snapshot(
+          assets, scene_material, project_material_resolver);
+  const MeshAsset *asset = assets.mesh(component.mesh);
+  const QMat4 world_transform = document.world_transform_matrix(entity_id);
+  RenderSceneMeshRecord entry{
+      .entity_id = entity_id,
+      .mesh = asset ? render_mesh_asset_snapshot(component.mesh, *asset)
+                    : RenderMeshAssetSnapshot{.mesh_id = component.mesh},
+      .mesh_component = component,
+      .material = material,
+      .material_reference =
+          scene_material ? scene_material->material : MaterialReference{},
+      .material_id = scene_material
+                         ? scene_material->material.embedded_asset()
+                         : kInvalidAssetId,
+      .material_revision = material.revision,
+      .world_transform = world_transform,
+      .transform_revision =
+          RenderSignatureBuilder::light_transform_signature(world_transform),
+  };
+  mark_mesh_dirty(entry, previous_mesh_record(previous, entity_id));
+  return entry;
 }
 
 namespace {
@@ -554,11 +859,13 @@ bool try_refresh_render_scene_snapshot_transforms(
     RenderSceneSnapshot &snapshot, const SceneDocument &document,
     const AssetRegistry &assets, std::uint64_t frame_index,
     RenderSceneBindingKey scene_binding,
-    std::uint64_t project_material_revision) {
+    std::uint64_t project_material_revision,
+    RenderInstanceEditScope instance_edit_scope) {
   QDR_PROFILE_FUNCTION();
   if (snapshot.scene_binding != scene_binding ||
       snapshot.asset_revision != assets.revision() ||
       snapshot.project_material_revision != project_material_revision ||
+      snapshot.instance_edit_scope != instance_edit_scope ||
       snapshot.selection_revision != document.selection_revision() ||
       snapshot.visibility_revision != document.visibility_revision() ||
       snapshot.mesh_binding_revision != document.mesh_binding_revision() ||
@@ -592,6 +899,7 @@ bool try_refresh_render_scene_snapshot_transforms(
   snapshot.render_component_revision = document.render_component_revision();
   snapshot.asset_revision = assets.revision();
   snapshot.project_material_revision = project_material_revision;
+  snapshot.instance_edit_scope = instance_edit_scope;
   snapshot.dirty = {
       .scene_changed = previous_scene_revision != snapshot.scene_revision,
       .selection_changed =
@@ -624,6 +932,28 @@ bool try_refresh_render_scene_snapshot_transforms(
     record.world_transform = world_transform;
     record.transform_revision = transform_revision;
   }
+  for (RenderSceneInstancePrimitiveRecord &record :
+       snapshot.instance_primitives) {
+    if (record.definition_entity != kInvalidEntityId) {
+      const std::optional<QMat4> definition_inverse = try_scene_matrix_inverse(
+          document.world_transform_matrix(record.definition_entity));
+      if (!definition_inverse.has_value()) {
+        return false;
+      }
+      record.member_from_definition = scene_transform_multiply(
+          *definition_inverse,
+          document.world_transform_matrix(record.member_entity));
+    }
+    for (RenderSceneInstanceOccurrenceRecord &occurrence :
+         record.occurrences) {
+      occurrence.world_transform =
+          record.definition_entity != kInvalidEntityId
+              ? scene_transform_multiply(
+                    document.world_transform_matrix(occurrence.entity_id),
+                    record.member_from_definition)
+              : document.world_transform_matrix(occurrence.entity_id);
+    }
+  }
   for (RenderSceneLightRecord &record : snapshot.lights) {
     const QMat4 world_transform =
         document.world_transform_matrix(record.entity_id);
@@ -641,7 +971,8 @@ bool try_refresh_render_scene_snapshot_transforms(
 bool render_scene_snapshot_matches_sources(
     const RenderSceneSnapshot &snapshot, const SceneDocument &document,
     const AssetRegistry &assets, RenderSceneBindingKey scene_binding,
-    std::uint64_t project_material_revision) {
+    std::uint64_t project_material_revision,
+    RenderInstanceEditScope instance_edit_scope) {
   return snapshot.scene_binding == scene_binding &&
          snapshot.scene_revision == document.revision() &&
          snapshot.selection_revision == document.selection_revision() &&
@@ -651,7 +982,8 @@ bool render_scene_snapshot_matches_sources(
          snapshot.render_component_revision ==
              document.render_component_revision() &&
          snapshot.asset_revision == assets.revision() &&
-         snapshot.project_material_revision == project_material_revision;
+         snapshot.project_material_revision == project_material_revision &&
+         snapshot.instance_edit_scope == instance_edit_scope;
 }
 
 SceneRenderExtractionPlan build_scene_render_extraction_plan(

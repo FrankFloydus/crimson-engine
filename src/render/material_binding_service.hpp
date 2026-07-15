@@ -71,6 +71,8 @@ public:
     void apply_mesh_surface_grid(filament::MaterialInstance &material_instance,
                                  float grid_world_spacing,
                                  const ViewportSettings &settings) const;
+    void apply_instance_edit_dim(
+        filament::MaterialInstance &material_instance, bool dimmed) const;
 
   private:
     filament::Material *shaded_mesh_material_ = nullptr;

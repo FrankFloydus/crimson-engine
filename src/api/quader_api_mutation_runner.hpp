@@ -63,6 +63,8 @@ public:
                                           std::string_view label);
   QuaderApiVoidResult run_modeling_result(ModelingCommandResult result,
                                           std::string_view label);
+  QuaderApiVoidResult run_runtime_result(CommandResult result,
+                                         std::string_view label);
   QuaderApiVoidResult
   run_modeling_command(std::unique_ptr<ModelingMementoCommand> command,
                        std::string_view label);

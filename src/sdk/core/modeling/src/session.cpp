@@ -459,7 +459,7 @@ ModelingSession::combine_objects(std::span<const ObjectId> object_ids,
   result.dirty.geometry = true;
   result.dirty.selection = true;
 
-  quader_poly::Document &survivor_document =
+  quader_poly::Document survivor_document =
       PolygonDocumentNativeAccess::document(survivor->document);
   for (ObjectId source_id : unique_ids) {
     if (source_id == survivor_id) {
@@ -508,7 +508,13 @@ ModelingSession::combine_objects(std::span<const ObjectId> object_ids,
   if (!name.empty()) {
     survivor->name = std::move(name);
   }
-  PolygonDocumentNativeAccess::selection(survivor->document).clear();
+  PolygonDocumentNativeAccess::replace_document(
+      survivor->document, std::move(survivor_document));
+  quader_poly::Selection survivor_selection =
+      PolygonDocumentNativeAccess::selection(survivor->document);
+  survivor_selection.clear();
+  PolygonDocumentNativeAccess::replace_selection(
+      survivor->document, std::move(survivor_selection));
   PolygonDocumentImpl &survivor_impl =
       PolygonDocumentNativeAccess::impl(survivor->document);
   ++survivor_impl.content_revision;

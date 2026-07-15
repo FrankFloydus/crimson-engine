@@ -193,16 +193,17 @@ RenderSignatureBuilder::material_signature(const AssetRegistry &assets,
 std::uint64_t
 RenderSignatureBuilder::mesh_asset_signature(std::uint64_t seed,
                                              const MeshAsset &mesh) {
+  const MeshGeometryPayload &geometry = mesh.geometry();
   RenderSignatureBuilder signature(seed);
-  signature.add_size(mesh.vertices.size());
-  for (const MeshVertex &vertex : mesh.vertices) {
+  signature.add_size(geometry.vertices.size());
+  for (const MeshVertex &vertex : geometry.vertices) {
     signature.add_vec3(vertex.position)
         .add_vec3(vertex.normal)
         .add_vec2(vertex.uv)
         .add_value(vertex.rgba);
   }
-  signature.add_size(mesh.indices.size());
-  for (const std::uint32_t index : mesh.indices) {
+  signature.add_size(geometry.indices.size());
+  for (const std::uint32_t index : geometry.indices) {
     signature.add_value(index);
   }
   const std::vector<MeshPrimitiveSpan> primitive_spans =

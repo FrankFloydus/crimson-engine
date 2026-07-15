@@ -15,6 +15,7 @@
 #include <mesh/polygon/document_model.hpp>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -22,18 +23,16 @@
 namespace quader {
 
 /**
- * Captures one mesh asset for QDR project export without retaining live asset
- * registry or polygon-document pointers.
+ * Captures one mesh asset for QDR project export by pinning its immutable
+ * compiled and authored topology payloads.
  */
 struct QdrProjectMeshAssetWriteSnapshot final {
   AssetId id = kInvalidAssetId;
   std::string name;
   bool has_stable_cpu_topology = true;
   bool has_authored_polygon_document = false;
-  std::vector<MeshVertex> vertices;
-  std::vector<std::uint32_t> indices;
-  std::vector<MeshPrimitiveSpan> primitives;
-  std::optional<quader_poly::Document> authored_polygon_document;
+  std::shared_ptr<const MeshGeometryPayload> geometry;
+  std::shared_ptr<const quader_poly::Document> authored_polygon_document;
 };
 
 /**
@@ -71,6 +70,8 @@ struct QdrProjectEntityWriteSnapshot final {
   std::optional<LightComponent> light;
   bool scene_root = false;
   std::optional<SceneSettingsComponent> scene_settings;
+  std::optional<InstanceDefinitionComponent> instance_definition;
+  std::optional<InstanceOccurrenceComponent> instance_occurrence;
 };
 
 /**

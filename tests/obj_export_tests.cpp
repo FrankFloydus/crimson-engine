@@ -81,7 +81,8 @@ command_descriptor(const quader::QuaderEditorApi &editor,
 
 quader::MeshAsset valid_internal_triangle_mesh() {
   quader::MeshAsset mesh;
-  mesh.vertices = {
+  quader::MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices = {
       {.position = {0.0f, 0.0f, 0.0f},
        .normal = {0.0f, 1.0f, 0.0f},
        .uv = {0.0f, 0.0f}},
@@ -92,7 +93,7 @@ quader::MeshAsset valid_internal_triangle_mesh() {
        .normal = {0.0f, 1.0f, 0.0f},
        .uv = {0.0f, 1.0f}},
   };
-  mesh.indices = {0, 1, 2};
+  geometry.indices = {0, 1, 2};
   return mesh;
 }
 
@@ -332,7 +333,7 @@ TEST(ObjExportTests,
   InternalObjExportHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   quader::MeshAsset invalid = valid_internal_triangle_mesh();
-  invalid.indices = {0, 1};
+  invalid.edit_geometry().indices = {0, 1};
   const std::uint64_t asset_revision_before =
       harness.session.assets().revision();
   const quader::EntityId entity = create_selected_plain_mesh_with_asset(
@@ -407,7 +408,7 @@ TEST(ObjExportTests, ObjWriterRejectsMalformedMeshData) {
   EXPECT_FALSE(std::filesystem::exists(empty_path));
 
   quader::MeshAsset non_triangle = valid_internal_triangle_mesh();
-  non_triangle.indices = {0, 1};
+  non_triangle.edit_geometry().indices = {0, 1};
   const std::filesystem::path non_triangle_path = root / "non-triangle.obj";
   const quader::ObjMeshWriteResult non_triangle_result =
       quader::ObjMeshWriter::write_mesh(non_triangle_path, non_triangle,
@@ -418,7 +419,7 @@ TEST(ObjExportTests, ObjWriterRejectsMalformedMeshData) {
   EXPECT_FALSE(std::filesystem::exists(non_triangle_path));
 
   quader::MeshAsset out_of_bounds = valid_internal_triangle_mesh();
-  out_of_bounds.indices = {0, 1, 3};
+  out_of_bounds.edit_geometry().indices = {0, 1, 3};
   const std::filesystem::path out_of_bounds_path =
       root / "out-of-bounds.obj";
   const quader::ObjMeshWriteResult out_of_bounds_result =
@@ -430,7 +431,7 @@ TEST(ObjExportTests, ObjWriterRejectsMalformedMeshData) {
   EXPECT_FALSE(std::filesystem::exists(out_of_bounds_path));
 
   quader::MeshAsset non_finite = valid_internal_triangle_mesh();
-  non_finite.vertices.front().position.x =
+  non_finite.edit_geometry().vertices.front().position.x =
       std::numeric_limits<float>::quiet_NaN();
   const std::filesystem::path non_finite_path = root / "non-finite.obj";
   const quader::ObjMeshWriteResult non_finite_result =

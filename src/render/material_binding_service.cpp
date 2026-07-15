@@ -79,6 +79,8 @@ std::uint64_t mesh_surface_grid_signature(
       settings.color(ViewportColorSettingId::MeshGridMinor);
   const ViewportSettingColor major =
       settings.color(ViewportColorSettingId::MeshGridMajor);
+  const ViewportSettingColor instance_context =
+      settings.color(ViewportColorSettingId::InstanceEditContext);
   RenderSignatureBuilder signature;
   signature.add_float(std::max(grid_world_spacing, 0.0001f))
       .add_float(minor.r)
@@ -89,6 +91,10 @@ std::uint64_t mesh_surface_grid_signature(
       .add_float(major.g)
       .add_float(major.b)
       .add_float(major.a)
+      .add_float(instance_context.r)
+      .add_float(instance_context.g)
+      .add_float(instance_context.b)
+      .add_float(instance_context.a)
       .add_float(
           settings.float_value(ViewportFloatSettingId::GridMinorLineSize))
       .add_float(
@@ -163,6 +169,7 @@ MaterialBindingService::create_mesh_material_instance(
   bind_standard_material_texture_transform(
       *material_instance, RenderStandardMaterialTextureTransformSnapshot{});
   bind_default_mesh_surface_grid(*this, material_instance);
+  apply_instance_edit_dim(*material_instance, false);
   if (!editor_unlit) {
     material_instance->setParameter(
         material_texture_slot::kRoughness,
@@ -231,6 +238,7 @@ MaterialBindingService::create_mesh_material_instance(
           ? material->texture_transform
           : RenderStandardMaterialTextureTransformSnapshot{});
   bind_default_mesh_surface_grid(*this, material_instance);
+  apply_instance_edit_dim(*material_instance, false);
   if (!editor_unlit) {
     material_instance->setParameter(
         material_texture_slot::kRoughness,
@@ -290,6 +298,15 @@ void MaterialBindingService::apply_mesh_surface_grid(
   material_instance.setParameter(
       "surfaceGridEnabled",
       settings.bool_value(ViewportBoolSettingId::ShowMeshGrid) ? 1.0f : 0.0f);
+  material_instance.setParameter(
+      "instanceEditContextColor",
+      setting_color(
+          settings.color(ViewportColorSettingId::InstanceEditContext)));
+}
+
+void MaterialBindingService::apply_instance_edit_dim(
+    filament::MaterialInstance &material_instance, bool dimmed) const {
+  material_instance.setParameter("instanceEditDim", dimmed ? 1.0f : 0.0f);
 }
 
 } // namespace quader

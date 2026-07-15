@@ -38,6 +38,9 @@ public:
     filament::Material &vertex_color_overlay() {
       return *vertex_color_overlay_material_;
     }
+    filament::Material &instance_selection_fill() {
+      return *instance_selection_fill_material_;
+    }
     filament::Material &overlay_line() { return *overlay_line_material_; }
     filament::Material &selected_object_line() {
       return *selected_object_line_material_;
@@ -55,6 +58,7 @@ public:
     filament::Material *quader_mesh_material_ = nullptr;
     filament::Material *quader_mesh_lit_material_ = nullptr;
     filament::Material *vertex_color_overlay_material_ = nullptr;
+    filament::Material *instance_selection_fill_material_ = nullptr;
     filament::Material *overlay_line_material_ = nullptr;
     filament::Material *selected_object_line_material_ = nullptr;
     filament::Material *edit_wire_line_material_ = nullptr;

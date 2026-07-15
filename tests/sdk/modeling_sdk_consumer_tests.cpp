@@ -407,6 +407,48 @@ TEST(ModelingSdkConsumerTests,
   EXPECT_NE(obj.value().find("o SDK_Mesh"), std::string::npos);
 }
 
+TEST(ModelingSdkConsumerTests,
+     PolygonCopiesShareTopologyUntilOneCopyMutatesGeometry) {
+  Result<PolygonDocument> source_result = PolygonDocument::make_box({});
+  ASSERT_TRUE(source_result.ok()) << source_result.error_message();
+  PolygonDocument source = std::move(source_result).value();
+  PolygonDocument copy = source;
+  const PolygonContentIdentity shared_identity = source.content_identity();
+
+  ASSERT_TRUE(shared_identity.valid());
+  EXPECT_TRUE(source.shares_topology_with(copy));
+  EXPECT_EQ(copy.content_identity(), shared_identity);
+  PolygonDocument no_op = source;
+  Result<OperationResult> no_op_translate =
+      no_op.translate_selection({1.0F, 0.0F, 0.0F});
+  ASSERT_TRUE(no_op_translate.ok()) << no_op_translate.error_message();
+  EXPECT_FALSE(no_op_translate.value().changed);
+  EXPECT_TRUE(source.shares_topology_with(no_op));
+  EXPECT_EQ(no_op.content_identity(), shared_identity);
+
+  ASSERT_TRUE(copy.select_face(copy.face_ids().front()).ok());
+  EXPECT_TRUE(source.shares_topology_with(copy));
+  EXPECT_EQ(copy.content_identity(), shared_identity);
+  EXPECT_TRUE(source.selection().faces.empty());
+  EXPECT_EQ(copy.selection().faces.size(), 1U);
+
+  Result<OperationResult> translated =
+      copy.translate_selection({2.0F, 0.0F, 0.0F});
+  ASSERT_TRUE(translated.ok()) << translated.error_message();
+  ASSERT_TRUE(translated.value().changed);
+  EXPECT_FALSE(source.shares_topology_with(copy));
+  EXPECT_EQ(source.content_identity(), shared_identity);
+  EXPECT_NE(copy.content_identity(), shared_identity);
+  EXPECT_EQ(source.vertex_count(), copy.vertex_count());
+
+  PolygonDocument assigned;
+  assigned = source;
+  EXPECT_TRUE(assigned.shares_topology_with(source));
+  ASSERT_TRUE(assigned.select_face(assigned.face_ids().back()).ok());
+  EXPECT_TRUE(assigned.shares_topology_with(source));
+  EXPECT_TRUE(source.selection().faces.empty());
+}
+
 TEST(ModelingSdkConsumerTests, GoldenBoxMeshFixtureStaysDeterministic) {
   Result<PolygonDocument> document_result =
       PolygonDocument::make_box({.min = {0.0F, 0.0F, 0.0F},

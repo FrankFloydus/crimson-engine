@@ -667,6 +667,18 @@ void QuaderCommandsApi::Impl::register_commands() {
       [this] { return api_.modeling().duplicate_selected_entity_hierarchy(); },
       "Ctrl+D", [this] { return duplicate_selection_available(api_); });
   register_command(
+      quader_command::kEditCreateInstance, "Create Instance",
+      [this] { return api_.modeling().create_instance(); }, {},
+      [this] { return api_.modeling().can_create_instance(); });
+  register_command(
+      quader_command::kEditFlattenInstance, "Flatten Instance",
+      [this] { return api_.modeling().flatten_instance(); }, {},
+      [this] { return api_.modeling().can_flatten_instance(); });
+  register_command(
+      quader_command::kEditExitInstanceEdit, "Exit Instance Edit",
+      [this] { return api_.modeling().exit_instance_edit(); }, {},
+      [this] { return api_.modeling().can_exit_instance_edit(); });
+  register_command(
       quader_command::kGroupSelection, "Group Selection",
       [this] {
         const QuaderApiResult<QuaderEntityRef> result =

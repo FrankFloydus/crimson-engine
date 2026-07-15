@@ -31,6 +31,21 @@ public:
         }
 
         std::unordered_map<EntityId, EntityId> remapped_entities;
+        if (orphan_definition_snapshot_.has_value()) {
+          const EntityId definition_parent =
+              orphan_definition_snapshot_->original_parent !=
+                          kInvalidEntityId &&
+                      scene().exists(
+                          orphan_definition_snapshot_->original_parent)
+                  ? orphan_definition_snapshot_->original_parent
+                  : kInvalidEntityId;
+          definition_ = document_command_restore_entity_snapshot_tree(
+              scene(), *orphan_definition_snapshot_, definition_parent,
+              remapped_entities);
+          if (definition_ == kInvalidEntityId || !scene().exists(definition_)) {
+            return document_command_missing_entity_result();
+          }
+        }
         const EntityId parent =
             snapshot_->original_parent != kInvalidEntityId &&
                     scene().exists(snapshot_->original_parent)
@@ -39,6 +54,10 @@ public:
         entity_ = document_command_restore_entity_snapshot_tree(
             scene(), *snapshot_, parent, remapped_entities);
         if (entity_ == kInvalidEntityId || !scene().exists(entity_)) {
+          if (definition_ != kInvalidEntityId && scene().exists(definition_)) {
+            (void)scene().destroy_entity(definition_);
+            definition_ = kInvalidEntityId;
+          }
           return document_command_missing_entity_result();
         }
         document_command_apply_selection(
@@ -57,16 +76,37 @@ public:
       if (!snapshot_.has_value()) {
         return document_command_missing_entity_result();
       }
+      orphan_definition_snapshot_.reset();
+      definition_ = kInvalidEntityId;
+      if (const InstanceOccurrenceComponent *occurrence =
+              scene().instance_occurrence(entity_);
+          occurrence != nullptr &&
+          scene().instance_occurrences_for_definition(occurrence->definition)
+                  .size() == 1u) {
+        definition_ = occurrence->definition;
+        orphan_definition_snapshot_ =
+            document_command_capture_entity_snapshot(scene(), definition_);
+        if (!orphan_definition_snapshot_.has_value()) {
+          return document_command_missing_entity_result();
+        }
+      }
       if (!scene().destroy_entity(entity_)) {
         return document_command_missing_entity_result();
       }
+      if (definition_ != kInvalidEntityId && scene().exists(definition_) &&
+          !scene().destroy_entity(definition_)) {
+        return document_command_missing_entity_result();
+      }
       entity_ = kInvalidEntityId;
+      definition_ = kInvalidEntityId;
       return document_command_changed_result();
     }
 
 private:
   EntityId entity_ = kInvalidEntityId;
+  EntityId definition_ = kInvalidEntityId;
   std::optional<DocumentEntitySnapshot> snapshot_;
+  std::optional<DocumentEntitySnapshot> orphan_definition_snapshot_;
   DocumentSelectionState before_selection_;
 };
 

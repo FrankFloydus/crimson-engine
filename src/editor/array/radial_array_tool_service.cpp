@@ -8,12 +8,16 @@
 
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset.hpp"
+#include "editor/array/linked_instance_array_command.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/history/modeling_memento_command.hpp"
+#include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/radial_array_layout.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
+#include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_transform.hpp"
 #include "scene/scene_transform_pivot.hpp"
 
 #include <algorithm>
@@ -62,9 +66,10 @@ double sanitized_grid_size(double grid_size) {
 
 RadialArrayToolService::RadialArrayToolService(
     SceneDocument &scene, AssetRegistry &assets, EditorHistoryService &history,
-    ModelingSessionService &modeling, EditorSelectionService &selection)
+    ModelingSessionService &modeling, EditorSelectionService &selection,
+    SceneInstanceService &instances)
     : scene_(scene), assets_(assets), history_(history), modeling_(modeling),
-      selection_(selection) {}
+      selection_(selection), instances_(instances) {}
 
 void RadialArrayToolService::clear_preview_cache() {
   cached_preview_revision_ = 0;
@@ -76,9 +81,11 @@ std::uint64_t RadialArrayToolService::issue_revision() {
 }
 
 bool RadialArrayToolService::valid_source_selection(
-    std::vector<EntityId> &ordered_sources, EntityId &primary_source) const {
+    std::vector<EntityId> &ordered_sources, EntityId &primary_source,
+    bool &instance_occurrences) const {
   ordered_sources.clear();
   primary_source = kInvalidEntityId;
+  instance_occurrences = false;
   if (selection_.mode() != ModelingSelectionMode::Object) {
     return false;
   }
@@ -91,17 +98,38 @@ bool RadialArrayToolService::valid_source_selection(
                 primary_source) == ordered_sources.end()) {
     return false;
   }
+  instance_occurrences =
+      scene_.instance_occurrence(ordered_sources.front()) != nullptr;
   for (const EntityId source : ordered_sources) {
+    const TransformComponent *transform = scene_.transform(source);
+    const bool active_definition_member =
+        instances_.is_in_active_definition_scope(source);
+    if (!scene_.exists(source) || transform == nullptr ||
+        (!active_definition_member && !scene_.is_effectively_visible(source)) ||
+        scene_.is_effectively_locked(source)) {
+      ordered_sources.clear();
+      primary_source = kInvalidEntityId;
+      return false;
+    }
+    if (instance_occurrences) {
+      EntityId definition = kInvalidEntityId;
+      std::vector<InstanceArrayPreviewMeshSnapshot> meshes;
+      if (!capture_instance_array_preview_meshes(
+              scene_, assets_, source, definition, meshes)) {
+        ordered_sources.clear();
+        primary_source = kInvalidEntityId;
+        return false;
+      }
+      continue;
+    }
+
     const ModelingObjectComponent *modeling = scene_.modeling_object(source);
     const MeshComponent *mesh = scene_.mesh(source);
-    const TransformComponent *transform = scene_.transform(source);
-    if (!scene_.exists(source) || modeling == nullptr || mesh == nullptr ||
-        transform == nullptr ||
+    if (modeling == nullptr || mesh == nullptr ||
+        scene_.instance_occurrence(source) != nullptr ||
         modeling->object_id == kInvalidModelingObjectId ||
         modeling_.modeling_object_for_entity(source) != modeling->object_id ||
-        assets_.mesh(mesh->mesh) == nullptr ||
-        !scene_.is_effectively_visible(source) ||
-        scene_.is_effectively_locked(source)) {
+        assets_.mesh(mesh->mesh) == nullptr) {
       ordered_sources.clear();
       primary_source = kInvalidEntityId;
       return false;
@@ -120,7 +148,8 @@ bool RadialArrayToolService::valid_source_selection(
 bool RadialArrayToolService::can_activate() const {
   std::vector<EntityId> sources;
   EntityId primary = kInvalidEntityId;
-  return valid_source_selection(sources, primary);
+  bool instance_occurrences = false;
+  return valid_source_selection(sources, primary, instance_occurrences);
 }
 
 bool RadialArrayToolService::session_sources_are_valid(
@@ -167,18 +196,48 @@ bool RadialArrayToolService::compute_session_sources_are_valid(
   }
 
   for (const SourceSnapshot &source : session.sources) {
+    const bool active_definition_member =
+        instances_.is_in_active_definition_scope(source.entity);
     if (!scene_.exists(source.entity) ||
         scene_.uuid(source.entity) != source.uuid ||
         scene_.parent(source.entity) != source.parent ||
-        !scene_.is_effectively_visible(source.entity) ||
+        (!active_definition_member &&
+         !scene_.is_effectively_visible(source.entity)) ||
         scene_.is_effectively_locked(source.entity)) {
       return false;
     }
     const std::optional<QVec3> visible_pivot =
-        resolve_entity_transform_visible_pivot(scene_, assets_, source.entity);
+        source_visible_pivot(source.entity);
     if (!visible_pivot.has_value() ||
         !same_point(*visible_pivot, source.visible_pivot_world)) {
       return false;
+    }
+    if (session.instance_occurrences) {
+      EntityId definition = kInvalidEntityId;
+      std::vector<InstanceArrayPreviewMeshSnapshot> meshes;
+      if (!capture_instance_array_preview_meshes(
+              scene_, assets_, source.entity, definition, meshes) ||
+          definition != source.instance_definition ||
+          meshes.size() != source.instance_meshes.size() ||
+          !same_matrix(scene_.world_transform_matrix(source.entity),
+                       source.world_transform)) {
+        return false;
+      }
+      for (std::size_t index = 0; index < meshes.size(); ++index) {
+        const InstanceArrayPreviewMeshSnapshot &current = meshes[index];
+        const InstanceArrayPreviewMeshSnapshot &captured =
+            source.instance_meshes[index];
+        if (current.member != captured.member ||
+            current.mesh != captured.mesh ||
+            current.material != captured.material ||
+            current.mesh_revision != captured.mesh_revision ||
+            current.material_revision != captured.material_revision ||
+            !same_matrix(current.member_from_definition,
+                         captured.member_from_definition)) {
+          return false;
+        }
+      }
+      continue;
     }
     const ModelingObjectComponent *modeling =
         scene_.modeling_object(source.entity);
@@ -193,7 +252,9 @@ bool RadialArrayToolService::compute_session_sources_are_valid(
         entity_material(scene_, source.entity) != source.material ||
         embedded_material_revision(assets_, source.material) !=
             source.material_revision ||
-        !same_matrix(scene_.world_transform_matrix(source.entity),
+        !same_matrix(instances_
+                         .effective_member_world_transform(source.entity)
+                         .value_or(scene_.world_transform_matrix(source.entity)),
                      source.world_transform)) {
       return false;
     }
@@ -263,18 +324,43 @@ std::uint32_t RadialArrayToolService::maximum_repeats() const {
              : kRadialArrayMaximumRepeats;
 }
 
+std::optional<QVec3>
+RadialArrayToolService::source_visible_pivot(EntityId entity) const {
+  const std::optional<QMat4> effective_world =
+      instances_.effective_member_world_transform(entity);
+  if (!effective_world.has_value()) {
+    return resolve_entity_transform_visible_pivot(scene_, assets_, entity);
+  }
+  const MeshComponent *component = scene_.mesh(entity);
+  const MeshAsset *mesh =
+      component != nullptr ? assets_.mesh(component->mesh) : nullptr;
+  if (mesh == nullptr) {
+    return std::nullopt;
+  }
+  const std::optional<SceneBounds> bounds =
+      world_bounds_from_local_mesh_bounds(*effective_world,
+                                          local_mesh_bounds(*mesh));
+  return bounds.has_value() ? std::optional<QVec3>{bounds_center(*bounds)}
+                            : std::optional<QVec3>{
+                                  transform_point(*effective_world, {})};
+}
+
 CommandResult RadialArrayToolService::activate(double fallback_grid_size) {
   std::vector<EntityId> ordered_sources;
   EntityId primary_source = kInvalidEntityId;
-  if (!valid_source_selection(ordered_sources, primary_source)) {
+  bool instance_occurrences = false;
+  if (!valid_source_selection(ordered_sources, primary_source,
+                              instance_occurrences)) {
     return command_invalid_result(
-        "Select one or more visible, unlocked meshes in object mode.");
+        "Select visible, unlocked meshes or instance occurrences in object "
+        "mode; mixed arrays are not supported.");
   }
 
   Session next;
   next.generation = issue_revision();
   next.revision = next.generation;
   next.primary_source = primary_source;
+  next.instance_occurrences = instance_occurrences;
   next.selection_revision = scene_.selection_revision();
   next.fallback_grid_size = sanitized_grid_size(fallback_grid_size);
   next.repeat_spacing = next.fallback_grid_size;
@@ -283,12 +369,33 @@ CommandResult RadialArrayToolService::activate(double fallback_grid_size) {
                                             kRadialArrayDefaultRepeats));
   next.sources.reserve(ordered_sources.size());
   for (const EntityId entity : ordered_sources) {
+    const std::optional<QVec3> visible_pivot =
+        source_visible_pivot(entity);
+    if (instance_occurrences) {
+      EntityId definition = kInvalidEntityId;
+      std::vector<InstanceArrayPreviewMeshSnapshot> instance_meshes;
+      if (!visible_pivot.has_value() ||
+          !capture_instance_array_preview_meshes(
+              scene_, assets_, entity, definition, instance_meshes)) {
+        return command_invalid_result(
+            "Radial Array instance source was not found.");
+      }
+      next.sources.push_back(SourceSnapshot{
+          .entity = entity,
+          .modeling_object_id = kInvalidModelingObjectId,
+          .uuid = scene_.uuid(entity),
+          .parent = scene_.parent(entity),
+          .world_transform = scene_.world_transform_matrix(entity),
+          .visible_pivot_world = *visible_pivot,
+          .instance_definition = definition,
+          .instance_meshes = std::move(instance_meshes),
+      });
+      continue;
+    }
     const ModelingObjectComponent *modeling = scene_.modeling_object(entity);
     const MeshComponent *mesh = scene_.mesh(entity);
     const MeshAsset *mesh_asset =
         mesh != nullptr ? assets_.mesh(mesh->mesh) : nullptr;
-    const std::optional<QVec3> visible_pivot =
-        resolve_entity_transform_visible_pivot(scene_, assets_, entity);
     if (modeling == nullptr || mesh == nullptr || mesh_asset == nullptr ||
         !visible_pivot.has_value()) {
       return command_invalid_result("Radial Array source mesh was not found.");
@@ -304,7 +411,9 @@ CommandResult RadialArrayToolService::activate(double fallback_grid_size) {
         .material_revision =
             embedded_material_revision(assets_,
                                        entity_material(scene_, entity)),
-        .world_transform = scene_.world_transform_matrix(entity),
+        .world_transform =
+            instances_.effective_member_world_transform(entity).value_or(
+                scene_.world_transform_matrix(entity)),
         .visible_pivot_world = *visible_pivot,
     });
   }
@@ -355,6 +464,33 @@ CommandResult RadialArrayToolService::apply() {
   const Session committed = *session_;
   session_.reset();
   clear_preview_cache();
+  if (committed.instance_occurrences) {
+    std::vector<LinkedInstanceArraySource> sources;
+    sources.reserve(committed.sources.size());
+    for (const SourceSnapshot &source : committed.sources) {
+      RadialArrayLayoutResult layout = build_radial_array_layout({
+          .source_world_transform = source.world_transform,
+          .source_pivot_world = source.visible_pivot_world,
+          .center_world = committed.center_world,
+          .plane_normal_world = committed.plane_normal_world,
+          .degrees = committed.degrees,
+          .copies = committed.copies,
+          .repeats = committed.repeats,
+          .repeat_spacing = committed.repeat_spacing,
+      });
+      if (!layout.ok) {
+        return command_invalid_result(layout.message);
+      }
+      sources.push_back(LinkedInstanceArraySource{
+          .source = source.entity,
+          .generated_world_transforms =
+              std::move(layout.generated_world_transforms),
+      });
+    }
+    return history_.execute(std::make_unique<LinkedInstanceArrayCommand>(
+        scene_, "Radial Array", std::move(sources)));
+  }
+
   ModelingRadialArrayRequest request{
       .center_world = committed.center_world,
       .plane_normal_world = committed.plane_normal_world,
@@ -570,6 +706,25 @@ const RadialArrayPreviewState &RadialArrayToolService::preview_state() const {
       cached_preview_revision_ = 0;
       cached_preview_ = {};
       return cached_preview_;
+    }
+    if (session_->instance_occurrences) {
+      for (const InstanceArrayPreviewMeshSnapshot &mesh :
+           source.instance_meshes) {
+        std::vector<QMat4> member_world;
+        member_world.reserve(layout.generated_world_transforms.size());
+        for (const QMat4 &occurrence_world :
+             layout.generated_world_transforms) {
+          member_world.push_back(scene_transform_multiply(
+              occurrence_world, mesh.member_from_definition));
+        }
+        preview.sources.push_back({
+            .source_entity = source.entity,
+            .mesh = mesh.mesh,
+            .material = mesh.material,
+            .generated_world_transforms = std::move(member_world),
+        });
+      }
+      continue;
     }
     preview.sources.push_back({
         .source_entity = source.entity,

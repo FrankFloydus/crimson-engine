@@ -423,6 +423,104 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
+     MeshSyncCompilesTwoHundredSharedTopologyDuplicatesOnlyOnce) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingObjectRuntimeMap object_map;
+  SceneModelingSyncService scene_sync(object_map);
+  ModelingMeshSyncService mesh_sync;
+
+  quader_editor_core::PolygonObject prototype;
+  prototype.id = 1;
+  prototype.document = quader_poly::make_cube({});
+  std::vector<quader_editor_core::PolygonObject> objects;
+  objects.reserve(200u);
+  for (int id = 1; id <= 200; ++id) {
+    quader_editor_core::PolygonObject duplicate = prototype;
+    duplicate.id = id;
+    objects.push_back(std::move(duplicate));
+  }
+  quader_editor_core::EditorSession session(objects);
+
+  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
+      session, scene, assets, scene_sync, true));
+  const ModelingMeshSyncStats first = mesh_sync.last_sync_stats();
+  EXPECT_EQ(first.participant_count, 200u);
+  EXPECT_EQ(first.unique_topology_count, 1u);
+  EXPECT_GT(first.unique_authored_topology_bytes, 0u);
+  EXPECT_GT(first.unique_compiled_payload_bytes, 0u);
+  EXPECT_EQ(first.compiled_topology_count, 1u);
+  EXPECT_EQ(first.reused_compilation_count, 199u);
+  ASSERT_EQ(assets.mesh_count(), 200u);
+
+  std::unordered_set<std::uintptr_t> geometry_tokens;
+  std::unordered_set<const quader_poly::Document *> authored_tokens;
+  for (const AssetId mesh_id : assets.mesh_ids()) {
+    const MeshAsset *mesh = assets.mesh(mesh_id);
+    ASSERT_NE(mesh, nullptr);
+    geometry_tokens.insert(mesh->geometry_token());
+    authored_tokens.insert(mesh->authored_polygon_document.get());
+  }
+  EXPECT_EQ(geometry_tokens.size(), 1u);
+  EXPECT_EQ(authored_tokens.size(), 1u);
+
+  // Rehydrate from the scene/asset boundary. Logical assets remain distinct,
+  // but every runtime object must adopt the same interned authored topology
+  // instead of allocating one native document per entity.
+  {
+    ModelingSessionService hydrated(scene, assets);
+    hydrated.reset_from_scene();
+    ASSERT_EQ(hydrated.objects().size(), 200u);
+    authored_tokens.clear();
+    for (const ModelingObjectRecord &record : hydrated.objects()) {
+      const std::optional<MeshAsset> projected =
+          hydrated.compile_object_mesh(record.modeling_object_id);
+      ASSERT_TRUE(projected.has_value());
+      ASSERT_TRUE(projected->authored_polygon_document);
+      authored_tokens.insert(projected->authored_polygon_document.get());
+    }
+    EXPECT_EQ(authored_tokens.size(), 1u);
+  }
+
+  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
+      session, scene, assets, scene_sync, false));
+  const ModelingMeshSyncStats unchanged = mesh_sync.last_sync_stats();
+  EXPECT_TRUE(unchanged.skipped_unchanged);
+  EXPECT_EQ(unchanged.unique_topology_count, 1u);
+  EXPECT_EQ(unchanged.unique_authored_topology_bytes,
+            first.unique_authored_topology_bytes);
+  EXPECT_EQ(unchanged.unique_compiled_payload_bytes,
+            first.unique_compiled_payload_bytes);
+  EXPECT_EQ(unchanged.compiled_topology_count, 0u);
+
+  objects = session.objects();
+  objects.front().document.edit().vertices.front().position.x += 0.25f;
+  session.set_objects(std::move(objects));
+  ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
+      session, scene, assets, scene_sync, true));
+  const ModelingMeshSyncStats edited = mesh_sync.last_sync_stats();
+  EXPECT_EQ(edited.participant_count, 200u);
+  EXPECT_EQ(edited.unique_topology_count, 2u);
+  EXPECT_EQ(edited.unique_authored_topology_bytes,
+            first.unique_authored_topology_bytes * 2u);
+  EXPECT_EQ(edited.unique_compiled_payload_bytes,
+            first.unique_compiled_payload_bytes * 2u);
+  EXPECT_EQ(edited.compiled_topology_count, 1u);
+  EXPECT_EQ(edited.reused_compilation_count, 0u);
+
+  geometry_tokens.clear();
+  authored_tokens.clear();
+  for (const AssetId mesh_id : assets.mesh_ids()) {
+    const MeshAsset *mesh = assets.mesh(mesh_id);
+    ASSERT_NE(mesh, nullptr);
+    geometry_tokens.insert(mesh->geometry_token());
+    authored_tokens.insert(mesh->authored_polygon_document.get());
+  }
+  EXPECT_EQ(geometry_tokens.size(), 2u);
+  EXPECT_EQ(authored_tokens.size(), 2u);
+}
+
+TEST(ModelingSessionServiceSplitTests,
      MeshSyncClonesBeforeUpdatingAnAssetSharedWithAnotherSceneEntity) {
   SceneDocument scene;
   AssetRegistry assets;
@@ -445,14 +543,14 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_NE(shared_mesh, kInvalidAssetId);
   ASSERT_NE(assets.mesh(shared_mesh), nullptr);
   const QVec3 original_first_vertex =
-      assets.mesh(shared_mesh)->vertices.front().position;
+      assets.mesh(shared_mesh)->geometry().vertices.front().position;
 
   const EntityId observer = scene.create_entity("Observer", EntityKind::Mesh);
   scene.set_mesh(observer, MeshComponent{.mesh = shared_mesh});
 
   quader_editor_core::PolygonObject changed = object;
   ASSERT_FALSE(changed.document.vertices.empty());
-  changed.document.vertices.front().position.x += 3.0f;
+  changed.document.edit().vertices.front().position.x += 3.0f;
   session.set_objects({std::move(changed)});
   ASSERT_TRUE(mesh_sync.sync_scene_objects_from_modeling(
       session, scene, assets, scene_sync, false));
@@ -465,9 +563,10 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(assets.mesh_count(), 2u);
   ASSERT_NE(assets.mesh(shared_mesh), nullptr);
   ASSERT_NE(assets.mesh(projected_mesh), nullptr);
-  EXPECT_FLOAT_EQ(assets.mesh(shared_mesh)->vertices.front().position.x,
-                  original_first_vertex.x);
-  EXPECT_NE(assets.mesh(projected_mesh)->vertices.front().position.x,
+  EXPECT_FLOAT_EQ(
+      assets.mesh(shared_mesh)->geometry().vertices.front().position.x,
+      original_first_vertex.x);
+  EXPECT_NE(assets.mesh(projected_mesh)->geometry().vertices.front().position.x,
             original_first_vertex.x);
 }
 
@@ -537,7 +636,7 @@ TEST(ModelingSessionServiceSplitTests,
   invalid.id = 200;
   invalid.document = quader_poly::make_cube({});
   ASSERT_FALSE(invalid.document.vertices.empty());
-  invalid.document.vertices.front().position.x =
+  invalid.document.edit().vertices.front().position.x =
       std::numeric_limits<float>::quiet_NaN();
   quader_editor_core::EditorSession session({valid, invalid});
 
@@ -573,7 +672,7 @@ TEST(ModelingSessionServiceSplitTests,
   invalid.id = 300;
   invalid.document = quader_poly::make_cube({});
   ASSERT_FALSE(invalid.document.vertices.empty());
-  invalid.document.vertices.front().position.z =
+  invalid.document.edit().vertices.front().position.z =
       std::numeric_limits<float>::infinity();
   quader_editor_core::EditorSession session({invalid});
 
@@ -876,8 +975,9 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_NE(shared_mesh, kInvalidAssetId);
   const MeshAsset *shared_asset = assets.mesh(shared_mesh);
   ASSERT_NE(shared_asset, nullptr);
-  ASSERT_FALSE(shared_asset->vertices.empty());
-  const QVec3 original_first_vertex = shared_asset->vertices.front().position;
+  ASSERT_FALSE(shared_asset->geometry().vertices.empty());
+  const QVec3 original_first_vertex =
+      shared_asset->geometry().vertices.front().position;
 
   const EntityId observer =
       scene.create_entity("Shared History Observer", EntityKind::Mesh);
@@ -900,7 +1000,7 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_EQ(assets.mesh_count(), original_mesh_count + 1U);
   ASSERT_NE(assets.mesh(cloned_mesh), nullptr);
   const QVec3 changed_first_vertex =
-      assets.mesh(cloned_mesh)->vertices.front().position;
+      assets.mesh(cloned_mesh)->geometry().vertices.front().position;
   EXPECT_NE(changed_first_vertex.x, original_first_vertex.x);
 
   CommandResult restored = history.undo();
@@ -912,8 +1012,9 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(assets.mesh_count(), original_mesh_count);
   EXPECT_EQ(assets.mesh(cloned_mesh), nullptr);
   ASSERT_NE(assets.mesh(shared_mesh), nullptr);
-  expect_vec3_eq(assets.mesh(shared_mesh)->vertices.front().position,
-                 original_first_vertex);
+  expect_vec3_eq(
+      assets.mesh(shared_mesh)->geometry().vertices.front().position,
+      original_first_vertex);
 
   restored = history.redo();
   ASSERT_TRUE(restored.ok) << restored.message;
@@ -923,8 +1024,9 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(scene.mesh(observer)->mesh, shared_mesh);
   EXPECT_EQ(assets.mesh_count(), original_mesh_count + 1U);
   ASSERT_NE(assets.mesh(cloned_mesh), nullptr);
-  expect_vec3_eq(assets.mesh(cloned_mesh)->vertices.front().position,
-                 changed_first_vertex);
+  expect_vec3_eq(
+      assets.mesh(cloned_mesh)->geometry().vertices.front().position,
+      changed_first_vertex);
 
   restored = history.undo();
   ASSERT_TRUE(restored.ok) << restored.message;
@@ -1282,9 +1384,17 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_NE(selection_service.find(
                 "cached_pick_object_bounds(session, scene, object_registry)"),
             std::string::npos);
-  EXPECT_NE(selection_service.find("cached_pick_face_geometry(session, scene,"),
+  EXPECT_NE(selection_service.find("cached_local_pick_face_geometry("),
             std::string::npos);
   EXPECT_NE(selection_service.find("object_registry, pick_options)"),
+            std::string::npos);
+  EXPECT_NE(selection_service.find("cached_local_picking_transforms("),
+            std::string::npos);
+  EXPECT_NE(selection_service.find(".object_bounds = pick_bounds"),
+            std::string::npos);
+  EXPECT_NE(selection_service.find(".face_geometry = pick_face_geometry"),
+            std::string::npos);
+  EXPECT_NE(selection_service.find(".object_transforms = object_transforms"),
             std::string::npos);
   EXPECT_NE(selection_service.find("quader_editor_core::apply_pick_selection("),
             std::string::npos);
@@ -1315,10 +1425,13 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_NE(
       runtime_header.find("std::span<const PickObjectBounds> object_bounds"),
       std::string::npos);
-  EXPECT_NE(
-      runtime_picking.find("pick_nearest_object(objects, ray, options, "
-                           "hit_index, hit, object_bounds, face_geometry)"),
-      std::string::npos);
+  EXPECT_NE(runtime_header.find(
+                "std::span<const PickObjectTransform> object_transforms"),
+            std::string::npos);
+  EXPECT_NE(runtime_picking.find("request.object_bounds"), std::string::npos);
+  EXPECT_NE(runtime_picking.find("request.face_geometry"), std::string::npos);
+  EXPECT_NE(runtime_picking.find("request.object_transforms"),
+            std::string::npos);
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -1379,8 +1492,11 @@ TEST(ModelingSessionServiceSplitTests,
   const std::string projection =
       read_source_file("src/editor/selection/selection_projection_service.cpp");
 
-  EXPECT_NE(
+  EXPECT_EQ(
       facade.find("selection_projection_service_.world_selection_center("),
+      std::string::npos);
+  EXPECT_NE(
+      facade.find("selection_projection_service_.world_selection_bounds("),
       std::string::npos);
   EXPECT_NE(facade.find("session_, scene_, assets_, object_registry_)"),
             std::string::npos);
@@ -1498,7 +1614,17 @@ TEST(ModelingSessionServiceSplitTests,
             std::string::npos);
   EXPECT_EQ(facade.find("quader_editor_core::begin_move_drag("),
             std::string::npos);
-  EXPECT_EQ(facade.find("SceneTransformDragService"), std::string::npos);
+  const std::size_t delegated_begin =
+      facade.find("return transform_drag_service_.begin_transform_drag(");
+  const std::size_t delegated_cancel =
+      facade.find("return transform_drag_service_.cancel_transform_drag(",
+                  delegated_begin);
+  ASSERT_NE(delegated_begin, std::string::npos);
+  ASSERT_NE(delegated_cancel, std::string::npos);
+  EXPECT_EQ(facade.substr(delegated_begin,
+                          delegated_cancel - delegated_begin)
+                .find("SceneTransformDragService"),
+            std::string::npos);
   EXPECT_NE(service.find("quader_editor_core::begin_move_drag("),
             std::string::npos);
   EXPECT_NE(service.find("quader_editor_core::begin_rotate_drag("),
@@ -1648,7 +1774,12 @@ TEST(ModelingSessionServiceSplitTests,
             std::string::npos);
   EXPECT_EQ(command.find("for (const EntityId entity : scene.entities())"),
             std::string::npos);
-  EXPECT_NE(command.find("scene_.destroy_entities(state_.current_roots)"),
+  EXPECT_NE(command.find(
+                "std::vector<EntityId> destroyed = state_.current_roots"),
+            std::string::npos);
+  EXPECT_NE(command.find("state_.current_definition_roots"),
+            std::string::npos);
+  EXPECT_NE(command.find("scene_.destroy_entities(destroyed)"),
             std::string::npos);
   EXPECT_EQ(command.find("scene_.destroy_entity(root)"), std::string::npos);
   EXPECT_NE(command.find("runtime.entity_for_modeling_object(snapshot.modeling_"
@@ -1753,6 +1884,13 @@ TEST(ModelingSessionServiceSplitTests, ServicesOwnIndependentModelingState) {
   EXPECT_FALSE(duplicate_object_transform.preview_driven);
   EXPECT_TRUE(duplicate_object_transform.needs_runtime_preview_transaction);
   EXPECT_TRUE(duplicate_object_transform.scene_transform_preview_eligible);
+  const TransformDragPreviewRouting duplicate_scene_object_transform =
+      TransformDragController::preview_routing(true, true, true, true);
+  EXPECT_FALSE(duplicate_scene_object_transform.preview_driven);
+  EXPECT_FALSE(
+      duplicate_scene_object_transform.needs_runtime_preview_transaction);
+  EXPECT_TRUE(
+      duplicate_scene_object_transform.scene_transform_preview_eligible);
   const TransformDragPreviewRouting component_transform =
       TransformDragController::preview_routing(false, false, true);
   EXPECT_TRUE(component_transform.preview_driven);

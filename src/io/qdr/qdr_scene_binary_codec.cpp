@@ -47,7 +47,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 2u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 3u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 [[nodiscard]] fb::Vec2 to_fb(QVec2 value) {
@@ -90,6 +90,8 @@ constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
     return fb::EntityKind::Light;
   case EntityKind::Generic:
     return fb::EntityKind::Generic;
+  case EntityKind::Instance:
+    return fb::EntityKind::Instance;
   }
   throw std::runtime_error("Cannot encode an unknown scene entity kind.");
 }
@@ -104,6 +106,8 @@ constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
     return EntityKind::Light;
   case fb::EntityKind::Generic:
     return EntityKind::Generic;
+  case fb::EntityKind::Instance:
+    return EntityKind::Instance;
   default:
     throw std::runtime_error("QDR scene contains an unknown entity kind.");
   }
@@ -374,21 +378,26 @@ scene_uuid_from_id(std::uint64_t scene_id) {
 
 [[nodiscard]] std::vector<MeshPrimitiveSpan> normalized_primitives(
     const QdrProjectMeshAssetWriteSnapshot &mesh) {
+  if (!mesh.geometry) {
+    return {};
+  }
+  const MeshGeometryPayload &geometry = *mesh.geometry;
   std::vector<MeshPrimitiveSpan> primitives;
-  primitives.reserve(mesh.primitives.empty() ? 1u : mesh.primitives.size());
-  for (const MeshPrimitiveSpan primitive : mesh.primitives) {
+  primitives.reserve(geometry.primitives.empty() ? 1u
+                                                 : geometry.primitives.size());
+  for (const MeshPrimitiveSpan primitive : geometry.primitives) {
     const std::uint64_t end = static_cast<std::uint64_t>(primitive.index_offset) +
                               primitive.index_count;
     if (primitive.index_count != 0u &&
-        primitive.index_offset < mesh.indices.size() &&
-        end <= mesh.indices.size()) {
+        primitive.index_offset < geometry.indices.size() &&
+        end <= geometry.indices.size()) {
       primitives.push_back(primitive);
     }
   }
-  if (primitives.empty() && !mesh.indices.empty()) {
+  if (primitives.empty() && !geometry.indices.empty()) {
     primitives.push_back({
         .index_offset = 0u,
-        .index_count = static_cast<std::uint32_t>(mesh.indices.size()),
+        .index_count = static_cast<std::uint32_t>(geometry.indices.size()),
         .material_slot = 0u,
     });
   }
@@ -405,6 +414,10 @@ scene_uuid_from_id(std::uint64_t scene_id) {
 [[nodiscard]] std::vector<std::byte> encode_geometry(
     const QdrProjectMeshAssetWriteSnapshot &mesh) {
   QDR_PROFILE_FUNCTION();
+  if (!mesh.geometry) {
+    throw std::runtime_error("QDR mesh snapshot has no geometry payload.");
+  }
+  const MeshGeometryPayload &geometry = *mesh.geometry;
   flatbuffers::FlatBufferBuilder builder;
 
   std::vector<fb::PolygonVertex> polygon_vertices;
@@ -425,7 +438,7 @@ scene_uuid_from_id(std::uint64_t scene_id) {
   std::uint32_t next_vertex_id = 1u;
   std::uint32_t next_face_id = 1u;
   if (mesh.has_authored_polygon_document &&
-      mesh.authored_polygon_document.has_value()) {
+      mesh.authored_polygon_document) {
     kind = fb::GeometryKind::AuthoredPolygon;
     quader::modeling::PolygonDocument sdk_document =
         quader::modeling::PolygonDocumentNativeAccess::from_native(
@@ -441,12 +454,12 @@ scene_uuid_from_id(std::uint64_t scene_id) {
     authored_payload = builder.CreateVector(
         reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size());
   } else {
-    mesh_vertices.reserve(mesh.vertices.size());
-    for (const MeshVertex &vertex : mesh.vertices) {
+    mesh_vertices.reserve(geometry.vertices.size());
+    for (const MeshVertex &vertex : geometry.vertices) {
       mesh_vertices.emplace_back(to_fb(vertex.position), to_fb(vertex.normal),
                                  to_fb(vertex.uv), vertex.rgba);
     }
-    mesh_indices = mesh.indices;
+    mesh_indices = geometry.indices;
     const std::vector<MeshPrimitiveSpan> primitives =
         normalized_primitives(mesh);
     mesh_primitives.reserve(primitives.size());
@@ -477,8 +490,30 @@ scene_uuid_from_id(std::uint64_t scene_id) {
 struct EncodedGeometrySet final {
   std::vector<std::uint64_t> chunk_ids_by_mesh;
   std::vector<quader_io::QdrBinaryChunkInput> chunks;
+  std::size_t encode_count = 0;
   double encode_ms = 0.0;
   double deduplication_ms = 0.0;
+};
+
+/// Identifies one pinned compiled/authored payload pair during QDR encoding.
+struct PinnedGeometryIdentity final {
+  const MeshGeometryPayload *geometry = nullptr;
+  const quader_poly::Document *authored = nullptr;
+
+  [[nodiscard]] bool operator==(const PinnedGeometryIdentity &) const =
+      default;
+};
+
+/// Hashes pinned geometry identity by immutable payload addresses.
+struct PinnedGeometryIdentityHash final {
+  [[nodiscard]] std::size_t
+  operator()(const PinnedGeometryIdentity &identity) const noexcept {
+    const std::size_t geometry =
+        std::hash<const void *>{}(identity.geometry);
+    const std::size_t authored = std::hash<const void *>{}(identity.authored);
+    return geometry ^ (authored + 0x9e3779b9U + (geometry << 6U) +
+                       (geometry >> 2U));
+  }
 };
 
 [[nodiscard]] EncodedGeometrySet encode_unique_geometry(
@@ -487,11 +522,30 @@ struct EncodedGeometrySet final {
   EncodedGeometrySet result;
   result.chunk_ids_by_mesh.resize(snapshot.meshes.size());
   std::unordered_map<std::uint64_t, std::vector<std::size_t>> candidates;
+  std::unordered_map<PinnedGeometryIdentity, std::uint64_t,
+                     PinnedGeometryIdentityHash>
+      pinned_chunks;
 
   for (std::size_t mesh_index = 0u; mesh_index < snapshot.meshes.size();
        ++mesh_index) {
+    const QdrProjectMeshAssetWriteSnapshot &mesh =
+        snapshot.meshes[mesh_index];
+    const PinnedGeometryIdentity identity{
+        .geometry = mesh.geometry.get(),
+        .authored = mesh.has_authored_polygon_document
+                        ? mesh.authored_polygon_document.get()
+                        : nullptr,
+    };
+    if (identity.geometry != nullptr) {
+      if (const auto found = pinned_chunks.find(identity);
+          found != pinned_chunks.end()) {
+        result.chunk_ids_by_mesh[mesh_index] = found->second;
+        continue;
+      }
+    }
     const auto encode_started = std::chrono::steady_clock::now();
-    std::vector<std::byte> bytes = encode_geometry(snapshot.meshes[mesh_index]);
+    std::vector<std::byte> bytes = encode_geometry(mesh);
+    ++result.encode_count;
     result.encode_ms += std::chrono::duration<double, std::milli>(
                             std::chrono::steady_clock::now() - encode_started)
                             .count();
@@ -520,6 +574,9 @@ struct EncodedGeometrySet final {
       candidates[hash].push_back(result.chunks.size() - 1u);
     }
     result.chunk_ids_by_mesh[mesh_index] = chunk_id;
+    if (identity.geometry != nullptr) {
+      pinned_chunks.emplace(identity, chunk_id);
+    }
     result.deduplication_ms +=
         std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - deduplication_started)
@@ -607,7 +664,7 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
         builder, mesh.id, builder.CreateString(mesh.name),
         mesh.has_stable_cpu_topology,
         mesh.has_authored_polygon_document &&
-            mesh.authored_polygon_document.has_value(),
+            static_cast<bool>(mesh.authored_polygon_document),
         geometry_chunk_ids.at(index)));
   }
 
@@ -699,11 +756,23 @@ encode_scene_settings(flatbuffers::FlatBufferBuilder &builder,
     if (entity.scene_settings.has_value()) {
       settings = encode_scene_settings(builder, *entity.scene_settings);
     }
+    flatbuffers::Offset<fb::InstanceDefinitionComponent>
+        instance_definition;
+    if (entity.instance_definition.has_value()) {
+      instance_definition = fb::CreateInstanceDefinitionComponent(builder);
+    }
+    flatbuffers::Offset<fb::InstanceOccurrenceComponent>
+        instance_occurrence;
+    if (entity.instance_occurrence.has_value()) {
+      instance_occurrence = fb::CreateInstanceOccurrenceComponent(
+          builder, entity.instance_occurrence->definition);
+    }
     entities.push_back(fb::CreateEntity(
         builder, entity.id, builder.CreateString(entity.uuid),
         entity.editor_object_id, builder.CreateString(entity.name),
         to_fb(entity.kind), entity.parent, transform, visibility, lock,
-        modeling_object, mesh, material, light, entity.scene_root, settings));
+        modeling_object, mesh, material, light, entity.scene_root, settings,
+        instance_definition, instance_occurrence));
   }
 
   std::vector<flatbuffers::Offset<fb::ObjectRecord>> objects;
@@ -930,11 +999,12 @@ decode_polygon_document(const fb::GeometryPayload &payload) {
 [[nodiscard]] MeshAsset decode_compiled_mesh(
     const fb::GeometryPayload &payload) {
   MeshAsset mesh;
+  MeshGeometryPayload &geometry = mesh.edit_geometry();
   if (const auto *vertices = payload.mesh_vertices()) {
-    mesh.vertices.reserve(vertices->size());
+    geometry.vertices.reserve(vertices->size());
     for (std::size_t index = 0u; index < vertices->size(); ++index) {
       const fb::MeshVertex *vertex = vertices->Get(index);
-      mesh.vertices.push_back({
+      geometry.vertices.push_back({
           .position = from_fb(vertex->position()),
           .normal = from_fb(vertex->normal(), {0.0f, 1.0f, 0.0f}),
           .uv = from_fb(vertex->uv()),
@@ -943,38 +1013,38 @@ decode_polygon_document(const fb::GeometryPayload &payload) {
     }
   }
   if (const auto *indices = payload.mesh_indices()) {
-    mesh.indices.assign(indices->begin(), indices->end());
+    geometry.indices.assign(indices->begin(), indices->end());
   }
-  for (const std::uint32_t index : mesh.indices) {
-    if (index >= mesh.vertices.size()) {
+  for (const std::uint32_t index : geometry.indices) {
+    if (index >= geometry.vertices.size()) {
       throw std::runtime_error(
           "QDR compiled geometry index references a missing vertex.");
     }
   }
   if (const auto *primitives = payload.mesh_primitives()) {
-    mesh.primitives.reserve(primitives->size());
+    geometry.primitives.reserve(primitives->size());
     for (std::size_t index = 0u; index < primitives->size(); ++index) {
       const fb::MeshPrimitive *primitive = primitives->Get(index);
       const std::uint64_t end =
           static_cast<std::uint64_t>(primitive->index_offset()) +
           primitive->index_count();
       if (primitive->index_count() == 0u ||
-          primitive->index_offset() >= mesh.indices.size() ||
-          end > mesh.indices.size()) {
+          primitive->index_offset() >= geometry.indices.size() ||
+          end > geometry.indices.size()) {
         throw std::runtime_error(
             "QDR compiled geometry contains an invalid primitive span.");
       }
-      mesh.primitives.push_back({
+      geometry.primitives.push_back({
           .index_offset = primitive->index_offset(),
           .index_count = primitive->index_count(),
           .material_slot = primitive->material_slot(),
       });
     }
   }
-  if (mesh.primitives.empty() && !mesh.indices.empty()) {
-    mesh.primitives.push_back({
+  if (geometry.primitives.empty() && !geometry.indices.empty()) {
+    geometry.primitives.push_back({
         .index_offset = 0u,
-        .index_count = static_cast<std::uint32_t>(mesh.indices.size()),
+        .index_count = static_cast<std::uint32_t>(geometry.indices.size()),
         .material_slot = 0u,
     });
   }
@@ -1401,6 +1471,8 @@ void decode_assets(
 void decode_entities(SceneContentDocument &document,
                      const fb::ScenePayload &payload) {
   std::vector<std::pair<EntityId, EntityId>> parent_links;
+  std::vector<EntityId> instance_definitions;
+  std::vector<std::pair<EntityId, EntityId>> instance_occurrences;
   std::set<EntityId> explicit_object_id_entities;
   if (const auto *entities = payload.entities()) {
     parent_links.reserve(entities->size());
@@ -1483,6 +1555,29 @@ void decode_entities(SceneContentDocument &document,
               "QDR scene contains invalid scene-root settings.");
         }
       }
+      const bool has_instance_definition =
+          stored->instance_definition() != nullptr;
+      const fb::InstanceOccurrenceComponent *stored_occurrence =
+          stored->instance_occurrence();
+      if (has_instance_definition && stored_occurrence != nullptr) {
+        throw std::runtime_error(
+            "QDR entity cannot be both an instance definition and an "
+            "occurrence.");
+      }
+      if (has_instance_definition) {
+        instance_definitions.push_back(entity);
+      }
+      if (stored_occurrence != nullptr) {
+        if (from_fb(stored->kind()) != EntityKind::Instance) {
+          throw std::runtime_error(
+              "QDR instance occurrence has a non-instance entity kind.");
+        }
+        instance_occurrences.emplace_back(entity,
+                                          stored_occurrence->definition());
+      } else if (from_fb(stored->kind()) == EntityKind::Instance) {
+        throw std::runtime_error(
+            "QDR instance entity is missing its occurrence component.");
+      }
       parent_links.emplace_back(entity, stored->parent());
     }
   }
@@ -1496,6 +1591,32 @@ void decode_entities(SceneContentDocument &document,
   }
   if (document.ensure_scene_root() == kInvalidEntityId) {
     throw std::runtime_error("QDR scene could not establish its scene root.");
+  }
+
+  const std::set<EntityId> definition_ids(instance_definitions.begin(),
+                                          instance_definitions.end());
+  for (const EntityId definition : instance_definitions) {
+    EntityId ancestor = document.scene().parent(definition);
+    std::size_t remaining = document.scene().entities().size();
+    while (ancestor != kInvalidEntityId && remaining-- > 0u) {
+      if (definition_ids.contains(ancestor)) {
+        throw std::runtime_error(
+            "QDR instance definitions cannot be nested.");
+      }
+      ancestor = document.scene().parent(ancestor);
+    }
+    if (document.scene().children(definition).empty() ||
+        !document.scene().set_instance_definition(definition)) {
+      throw std::runtime_error(
+          "QDR scene contains an invalid or empty instance definition.");
+    }
+  }
+  for (const auto [entity, definition] : instance_occurrences) {
+    if (!document.scene().set_instance_occurrence(
+            entity, InstanceOccurrenceComponent{.definition = definition})) {
+      throw std::runtime_error(
+          "QDR scene contains an invalid instance occurrence.");
+    }
   }
 
   std::set<EditorObjectId> object_ids;
@@ -1590,6 +1711,7 @@ QdrSceneBinaryEncodeResult encode_qdr_scene_binary(
   }
   QdrSceneBinaryEncodeResult result{
       .logical_geometry_count = snapshot.meshes.size(),
+      .geometry_encode_count = geometry.encode_count,
       .unique_geometry_count = geometry.chunks.size(),
       .geometry_encode_ms = geometry.encode_ms,
       .geometry_deduplication_ms = geometry.deduplication_ms,

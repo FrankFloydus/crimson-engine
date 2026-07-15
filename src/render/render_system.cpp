@@ -349,6 +349,7 @@ void RenderSystem::initialize_scene_render_bridge(
   render_bridge.initialize(*engine_, *scene_, material_library_.quader_mesh(),
                            material_library_.quader_mesh_lit(),
                            material_library_.vertex_color_overlay(),
+                           material_library_.instance_selection_fill(),
                            material_library_.overlay_line(),
                            material_library_.selected_object_line(),
                            material_library_.edit_wire_line(),

@@ -317,6 +317,7 @@ struct OutlinerPanel::Impl {
   struct TreeCache {
     bool valid = false;
     std::uint64_t scene_revision = 0;
+    EntityId instance_scope_definition = kInvalidEntityId;
     std::vector<EntityRecord> records;
     std::unordered_map<EntityId, std::size_t> record_index_by_entity;
     std::unordered_map<EntityId, std::vector<EntityId>> children_by_entity;
@@ -397,6 +398,10 @@ struct OutlinerPanel::Impl {
     editor_ = &context.intent.editor;
     document_ = &context.scene.document;
     localization_ = &context.localization;
+    const QuaderInstanceEditState instance_edit =
+        editor_->modeling().instance_edit_state();
+    instance_scope_definition_ =
+        instance_edit.active ? instance_edit.definition.id : kInvalidEntityId;
 
     panel_.setWindowTitle(qt_text(
         localization_->text(ui_panel_localization_key(UIPanelId::Outliner),
@@ -449,12 +454,17 @@ private:
 
   void refresh_model_if_needed() {
     if (document_ == nullptr ||
-        (cache_.valid && cache_.scene_revision == document_->revision())) {
+        (cache_.valid && cache_.scene_revision == document_->revision() &&
+         cache_.instance_scope_definition == instance_scope_definition_)) {
       return;
     }
 
     cache_.scene_revision = document_->revision();
-    cache_.records = document_->entity_records_tree_order();
+    cache_.instance_scope_definition = instance_scope_definition_;
+    cache_.records = instance_scope_definition_ != kInvalidEntityId
+                         ? document_->entity_records_for_instance_definition(
+                               instance_scope_definition_)
+                         : document_->entity_records_tree_order();
     cache_.record_index_by_entity.clear();
     cache_.record_index_by_entity.reserve(cache_.records.size());
     cache_.children_by_entity.clear();
@@ -467,7 +477,9 @@ private:
             entity_record.id);
       }
     }
-    cache_.roots = document_->root_entities();
+    cache_.roots = instance_scope_definition_ != kInvalidEntityId
+                       ? document_->children(instance_scope_definition_)
+                       : document_->root_entities();
     cache_.valid = true;
 
     std::erase_if(collapsed_entities_, [this](EntityId entity) {
@@ -791,6 +803,7 @@ private:
   std::unordered_map<EntityId, QStandardItem *> item_by_entity_;
   std::unordered_set<EntityId> collapsed_entities_;
   EntityId outliner_anchor_ = kInvalidEntityId;
+  EntityId instance_scope_definition_ = kInvalidEntityId;
   std::uint64_t synced_selection_revision_ = 0;
   bool syncing_expansion_ = false;
   bool syncing_model_ = false;

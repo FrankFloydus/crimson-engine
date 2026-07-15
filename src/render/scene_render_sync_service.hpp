@@ -20,6 +20,7 @@ namespace quader {
 class AssetRegistry;
 class MaterialBindingService;
 class MeshRenderableCache;
+class InstanceRenderableCache;
 class SceneDocument;
 
 /**
@@ -36,12 +37,14 @@ public:
 
     void initialize(filament::Engine &engine, filament::Scene &scene,
                     MeshRenderableCache &mesh_cache,
+                    InstanceRenderableCache &instance_cache,
                     MaterialBindingService &material_binding);
     void shutdown();
 
     bool initialized() const {
       return engine_ != nullptr && scene_ != nullptr &&
-             mesh_cache_ != nullptr && material_binding_ != nullptr;
+             mesh_cache_ != nullptr && instance_cache_ != nullptr &&
+             material_binding_ != nullptr;
     }
 
     void bind_scene(RenderSceneBindingKey scene_binding);
@@ -58,10 +61,12 @@ public:
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
     MeshRenderableCache *mesh_cache_ = nullptr;
+    InstanceRenderableCache *instance_cache_ = nullptr;
     MaterialBindingService *material_binding_ = nullptr;
     std::uint64_t synced_revision_ = 0;
     std::uint64_t synced_asset_revision_ = 0;
     std::uint64_t synced_project_material_revision_ = 0;
+    RenderInstanceEditScope synced_instance_edit_scope_;
     RenderSceneBindingKey synced_scene_binding_;
     bool has_scene_binding_ = false;
     bool has_synced_ = false;

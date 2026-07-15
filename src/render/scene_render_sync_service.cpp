@@ -9,6 +9,7 @@
 #include "core/logger.hpp"
 #include "diagnostics/profile.hpp"
 #include "render/material_binding_service.hpp"
+#include "render/instance_renderable_cache.hpp"
 #include "render/mesh_renderable_cache.hpp"
 
 #include <filament/TransformManager.h>
@@ -50,10 +51,12 @@ SceneRenderSyncService::~SceneRenderSyncService() {
 
 void SceneRenderSyncService::initialize(
     filament::Engine &engine, filament::Scene &scene,
-    MeshRenderableCache &mesh_cache, MaterialBindingService &material_binding) {
+    MeshRenderableCache &mesh_cache, InstanceRenderableCache &instance_cache,
+    MaterialBindingService &material_binding) {
   engine_ = &engine;
   scene_ = &scene;
   mesh_cache_ = &mesh_cache;
+  instance_cache_ = &instance_cache;
   material_binding_ = &material_binding;
   light_cache_.initialize(engine, scene);
 }
@@ -67,12 +70,14 @@ void SceneRenderSyncService::shutdown() {
     synced_revision_ = 0;
     synced_asset_revision_ = 0;
     synced_project_material_revision_ = 0;
+    synced_instance_edit_scope_ = {};
     synced_scene_binding_ = {};
     has_scene_binding_ = false;
     has_synced_ = false;
     engine_ = nullptr;
     scene_ = nullptr;
     mesh_cache_ = nullptr;
+    instance_cache_ = nullptr;
     material_binding_ = nullptr;
 }
 
@@ -85,6 +90,7 @@ void SceneRenderSyncService::bind_scene(
 
   const std::unordered_set<EntityId> no_scene_entities;
   mesh_cache_->remove_except(no_scene_entities);
+  instance_cache_->clear();
   light_cache_.remove_except(no_scene_entities);
   // Material instances retain their bound texture pointers even after their
   // renderables leave the Filament scene. A scene switch invalidates the
@@ -99,6 +105,7 @@ void SceneRenderSyncService::bind_scene(
   synced_revision_ = 0;
   synced_asset_revision_ = 0;
   synced_project_material_revision_ = 0;
+  synced_instance_edit_scope_ = {};
   has_scene_binding_ = true;
   has_synced_ = false;
 }
@@ -118,7 +125,8 @@ bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
 
     const bool document_unchanged =
         has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
-        synced_revision_ == snapshot.scene_revision;
+        synced_revision_ == snapshot.scene_revision &&
+        synced_instance_edit_scope_ == snapshot.instance_edit_scope;
     const bool assets_unchanged =
         has_synced_ && synced_scene_binding_ == snapshot.scene_binding &&
         synced_asset_revision_ == snapshot.asset_revision &&
@@ -141,6 +149,7 @@ bool SceneRenderSyncService::sync(const RenderSceneSnapshot &snapshot) {
     synced_revision_ = snapshot.scene_revision;
     synced_asset_revision_ = snapshot.asset_revision;
     synced_project_material_revision_ = snapshot.project_material_revision;
+    synced_instance_edit_scope_ = snapshot.instance_edit_scope;
     synced_scene_binding_ = snapshot.scene_binding;
     has_synced_ = true;
     return true;
@@ -159,6 +168,10 @@ bool SceneRenderSyncService::render_asset_revisions_changed(
     if (mesh_cache_->needs_rebuild(mesh_entry)) {
       return true;
     }
+  }
+  if (instance_cache_->classify_update(snapshot.instance_primitives) ==
+      RenderInstanceBatchUpdateKind::Rebuild) {
+    return true;
   }
   return false;
 }
@@ -187,6 +200,10 @@ bool SceneRenderSyncService::can_sync_transforms_only(
       return false;
     }
   }
+  if (instance_cache_->classify_update(snapshot.instance_primitives) ==
+      RenderInstanceBatchUpdateKind::Rebuild) {
+    return false;
+  }
   for (const RenderSceneLightRecord &light : snapshot.lights) {
     if (light.light_dirty || light_cache_.needs_rebuild(light)) {
       return false;
@@ -207,6 +224,11 @@ void SceneRenderSyncService::sync_dirty_transforms(
         mesh_cache_->sync_mesh(mesh);
       }
     }
+  }
+
+  {
+    QDR_PROFILE_SCOPE("Scene render update instance transforms");
+    (void)instance_cache_->sync(snapshot.instance_primitives);
   }
 
   for (const RenderSceneLightRecord &light : snapshot.lights) {
@@ -235,6 +257,11 @@ void SceneRenderSyncService::rebuild(const RenderSceneSnapshot &snapshot) {
         continue;
       }
       mesh_cache_->sync_mesh(mesh_entry);
+    }
+
+    {
+      QDR_PROFILE_SCOPE("Scene render sync explicit instance batches");
+      (void)instance_cache_->sync(snapshot.instance_primitives);
     }
 
     for (const RenderSceneLightRecord &light_entry : snapshot.lights) {

@@ -10,17 +10,15 @@
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <optional>
 
 namespace quader {
 namespace {
-
-QVec3 from_runtime(quader::QVec3 value) { return {value.x, value.y, value.z}; }
-
-quader::QVec3 to_runtime(QVec3 value) { return {value.x, value.y, value.z}; }
 
 constexpr std::uint64_t kPickGeometryHashSeed = 1469598103934665603ull;
 constexpr std::uint64_t kPickGeometryHashPrime = 1099511628211ull;
@@ -71,34 +69,174 @@ void include_pick_bounds_point(quader_editor_core::PickObjectBounds &bounds,
   bounds.max.z = std::max(bounds.max.z, point.z);
 }
 
+bool hierarchy_flag_allows_member(const SceneDocument &scene, EntityId member,
+                                  EntityId definition, bool selectable) {
+  EntityId current = member;
+  while (current != kInvalidEntityId && current != definition) {
+    if (const VisibilityComponent *visibility = scene.visibility(current);
+        visibility != nullptr &&
+        (!visibility->visible || (selectable && !visibility->selectable))) {
+      return false;
+    }
+    if (selectable) {
+      if (const LockComponent *lock = scene.lock(current);
+          lock != nullptr && lock->locked) {
+        return false;
+      }
+    }
+    current = scene.parent(current);
+  }
+  return current == definition;
+}
+
+bool occurrence_is_pickable(const SceneDocument &scene, EntityId occurrence) {
+  if (!scene.exists(occurrence) || !scene.is_effectively_visible(occurrence) ||
+      scene.is_effectively_locked(occurrence)) {
+    return false;
+  }
+  const VisibilityComponent *visibility = scene.visibility(occurrence);
+  return visibility == nullptr || visibility->selectable;
+}
+
+std::optional<QMat4> instance_member_world_transform(
+    const SceneDocument &scene, EntityId definition, EntityId occurrence,
+    EntityId member) {
+  if (!scene.exists(definition) || !scene.exists(occurrence) ||
+      !scene.exists(member)) {
+    return std::nullopt;
+  }
+  const std::optional<QMat4> inverse_definition =
+      try_scene_matrix_inverse(scene.world_transform_matrix(definition));
+  if (!inverse_definition.has_value()) {
+    return std::nullopt;
+  }
+  const QMat4 definition_from_member = scene_transform_multiply(
+      *inverse_definition, scene.world_transform_matrix(member));
+  return scene_transform_multiply(scene.world_transform_matrix(occurrence),
+                                  definition_from_member);
+}
+
+bool append_picking_participant(
+    ModelingPickingProjection &projection,
+    quader_editor_core::PolygonObject object,
+    const QMat4 &world_from_object) {
+  const std::optional<QMat4> object_from_world =
+      try_scene_matrix_inverse(world_from_object);
+  if (!object_from_world.has_value()) {
+    return false;
+  }
+  const int object_id = object.id;
+  projection.objects.push_back(std::move(object));
+  projection.object_transforms.push_back({
+      .object_id = object_id,
+      .world_from_object = world_from_object,
+      .object_from_world = *object_from_world,
+  });
+  return true;
+}
+
 } // namespace
 
-std::vector<quader_editor_core::PolygonObject>
+ModelingPickingProjection
 PickingCacheProjection::scene_transformed_objects_for_picking(
     const std::vector<quader_editor_core::PolygonObject> &objects,
-    const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map) {
+    const SceneDocument &scene, const ModelingObjectRuntimeMap &object_map,
+    ModelingInstanceEditScope instance_edit_scope,
+    ModelingSelectionMode app_selection_mode,
+    const std::function<int(EntityId)> &instance_participant_id) {
   QDR_PROFILE_FUNCTION();
-  std::vector<quader_editor_core::PolygonObject> transformed;
-  transformed.reserve(objects.size());
-  for (quader_editor_core::PolygonObject object : objects) {
+  ModelingPickingProjection projection;
+  projection.objects.reserve(objects.size());
+  projection.object_transforms.reserve(objects.size());
+
+  const bool edit_scope_valid =
+      instance_edit_scope.active() &&
+      scene.is_instance_definition_entity(instance_edit_scope.definition) &&
+      occurrence_is_pickable(scene, instance_edit_scope.occurrence) &&
+      scene.instance_occurrence(instance_edit_scope.occurrence) != nullptr &&
+      scene.instance_occurrence(instance_edit_scope.occurrence)->definition ==
+          instance_edit_scope.definition;
+
+  for (const quader_editor_core::PolygonObject &source : objects) {
     const std::optional<EntityId> entity =
-        object_map.entity_for_modeling_object(object.id);
+        object_map.entity_for_modeling_object(source.id);
     if (!entity.has_value()) {
       continue;
     }
+
+    const EntityId definition =
+        scene.containing_instance_definition(*entity);
+    const bool definition_member =
+        definition != kInvalidEntityId && definition != *entity;
+
+    if (instance_edit_scope.active()) {
+      if (!edit_scope_valid || !definition_member ||
+          definition != instance_edit_scope.definition ||
+          !hierarchy_flag_allows_member(scene, *entity, definition, true)) {
+        continue;
+      }
+      const std::optional<QMat4> world_from_object =
+          instance_member_world_transform(
+              scene, definition, instance_edit_scope.occurrence, *entity);
+      if (!world_from_object.has_value()) {
+        continue;
+      }
+      quader_editor_core::PolygonObject object = source;
+      (void)append_picking_participant(projection, std::move(object),
+                                       *world_from_object);
+      continue;
+    }
+
+    if (definition_member) {
+      // Formal instances are atomic Object-mode targets. Component and Group
+      // modes must not expose their canonical member topology outside edit.
+      if (app_selection_mode != ModelingSelectionMode::Object ||
+          !instance_participant_id ||
+          !hierarchy_flag_allows_member(scene, *entity, definition, false)) {
+        continue;
+      }
+      std::vector<EntityId> occurrences =
+          scene.instance_occurrences_for_definition(definition);
+      std::sort(occurrences.begin(), occurrences.end());
+      for (const EntityId occurrence : occurrences) {
+        if (!occurrence_is_pickable(scene, occurrence)) {
+          continue;
+        }
+        const std::optional<QMat4> world_from_object =
+            instance_member_world_transform(scene, definition, occurrence,
+                                            *entity);
+        if (!world_from_object.has_value()) {
+          continue;
+        }
+        const int participant_id = instance_participant_id(occurrence);
+        if (participant_id <= 0) {
+          continue;
+        }
+        quader_editor_core::PolygonObject object = source;
+        object.id = participant_id;
+        object.selected = scene.selection(occurrence) != nullptr &&
+                          scene.selection(occurrence)->selected;
+        object.component_edit_target = false;
+        object.selection = {};
+        if (append_picking_participant(projection, std::move(object),
+                                       *world_from_object)) {
+          projection.scene_target_by_participant.insert_or_assign(
+              participant_id, occurrence);
+        }
+      }
+      continue;
+    }
+
     const VisibilityComponent *visibility = scene.visibility(*entity);
     if (!scene.is_effectively_visible(*entity) ||
         (visibility != nullptr && !visibility->selectable)) {
       continue;
     }
-    const QMat4 world_from_object = scene.world_transform_matrix(*entity);
-    for (quader_poly::Vertex &vertex : object.document.vertices) {
-      vertex.position = to_runtime(
-          transform_point(world_from_object, from_runtime(vertex.position)));
-    }
-    transformed.push_back(std::move(object));
+    quader_editor_core::PolygonObject object = source;
+    (void)append_picking_participant(
+        projection, std::move(object), scene.world_transform_matrix(*entity));
   }
-  return transformed;
+  return projection;
 }
 
 quader_editor_core::PickObjectBounds
@@ -113,18 +251,39 @@ PickingCacheProjection::build_object_pick_bounds(
   return bounds;
 }
 
-std::uint64_t PickingCacheProjection::object_face_geometry_signature(
+quader_editor_core::PickObjectBounds
+PickingCacheProjection::transform_object_pick_bounds(
+    const quader_editor_core::PickObjectBounds &local_bounds,
+    int participant_id, const QMat4 &world_from_object) {
+  quader_editor_core::PickObjectBounds world_bounds;
+  world_bounds.object_id = participant_id;
+  if (local_bounds.empty) {
+    return world_bounds;
+  }
+  const std::array<QVec3, 8> corners{{
+      {local_bounds.min.x, local_bounds.min.y, local_bounds.min.z},
+      {local_bounds.max.x, local_bounds.min.y, local_bounds.min.z},
+      {local_bounds.min.x, local_bounds.max.y, local_bounds.min.z},
+      {local_bounds.max.x, local_bounds.max.y, local_bounds.min.z},
+      {local_bounds.min.x, local_bounds.min.y, local_bounds.max.z},
+      {local_bounds.max.x, local_bounds.min.y, local_bounds.max.z},
+      {local_bounds.min.x, local_bounds.max.y, local_bounds.max.z},
+      {local_bounds.max.x, local_bounds.max.y, local_bounds.max.z},
+  }};
+  for (const QVec3 corner : corners) {
+    include_pick_bounds_point(
+        world_bounds, transform_point(world_from_object, corner));
+  }
+  return world_bounds;
+}
+
+std::uint64_t PickingCacheProjection::local_face_geometry_signature(
     const quader_editor_core::PolygonObject &object,
     quader_poly::PickOptions pick_options) {
   QDR_PROFILE_FUNCTION();
-  std::uint64_t hash = mix_pick_geometry_hash(kPickGeometryHashSeed, object.id);
-  hash = mix_pick_geometry_hash(hash, static_cast<int>(pick_options.mode));
-  hash = mix_pick_geometry_hash(hash, pick_options.vertex_radius);
-  hash = mix_pick_geometry_hash(hash, pick_options.edge_radius);
+  std::uint64_t hash = kPickGeometryHashSeed;
   hash = mix_pick_geometry_hash(hash, pick_options.has_hidden_material_slot);
   hash = mix_pick_geometry_hash(hash, pick_options.hidden_material_slot);
-  hash = mix_pick_geometry_hash(hash, pick_options.pick_backfaces);
-  hash = mix_pick_geometry_hash(hash, pick_options.prefer_front_facing_faces);
   hash = mix_pick_geometry_hash(
       hash, static_cast<std::uint64_t>(object.document.vertices.size()));
   hash = mix_pick_geometry_hash(
@@ -143,6 +302,21 @@ std::uint64_t PickingCacheProjection::object_face_geometry_signature(
     }
   }
   return hash;
+}
+
+std::uint64_t PickingCacheProjection::object_face_geometry_signature(
+    const quader_editor_core::PolygonObject &object,
+    quader_poly::PickOptions pick_options) {
+  QDR_PROFILE_FUNCTION();
+  std::uint64_t hash = mix_pick_geometry_hash(kPickGeometryHashSeed, object.id);
+  hash = mix_pick_geometry_hash(hash, static_cast<int>(pick_options.mode));
+  hash = mix_pick_geometry_hash(hash, pick_options.vertex_radius);
+  hash = mix_pick_geometry_hash(hash, pick_options.edge_radius);
+  hash = mix_pick_geometry_hash(hash, pick_options.pick_backfaces);
+  hash = mix_pick_geometry_hash(hash,
+                                pick_options.prefer_front_facing_faces);
+  return mix_pick_geometry_hash(
+      hash, local_face_geometry_signature(object, pick_options));
 }
 
 } // namespace quader

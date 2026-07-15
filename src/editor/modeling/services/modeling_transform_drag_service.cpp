@@ -8,6 +8,7 @@
 
 #include "core/i_undoable_command.hpp"
 #include "diagnostics/profile.hpp"
+#include "editor/commands/document_command_service.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/preview/transform_preview_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -27,6 +28,23 @@
 
 namespace quader {
 namespace {
+
+bool selected_scene_targets_are_instance_occurrences(
+    const SceneDocument &scene) {
+  const std::vector<EntityId> selected = scene.selected_entities();
+  return !selected.empty() &&
+         std::all_of(selected.begin(), selected.end(), [&](EntityId entity) {
+           return scene.instance_occurrence(entity) != nullptr &&
+                  !scene.is_effectively_locked(entity);
+         });
+}
+
+bool scene_selection_contains_instance_occurrence(const SceneDocument &scene) {
+  const std::vector<EntityId> selected = scene.selected_entities();
+  return std::any_of(selected.begin(), selected.end(), [&](EntityId entity) {
+    return scene.instance_occurrence(entity) != nullptr;
+  });
+}
 
 quader::QVec3 to_runtime(QVec3 value) { return {value.x, value.y, value.z}; }
 
@@ -387,7 +405,8 @@ ModelingTransformDragService::begin_transform_drag(
     const ModelingTransformDragBeginRequest &request) {
   QDR_PROFILE_FUNCTION();
   if (context.runtime.transform_drag_active() ||
-      TransformPreviewService::has_transform_preview(context.session)) {
+      TransformPreviewService::has_transform_preview(context.session) ||
+      scene_duplicate_transaction_.has_value()) {
     QDR_PROFILE_SCOPE("Modeling transform drag cancel active preview");
     (void)cancel_transform_drag(context);
   }
@@ -400,6 +419,18 @@ ModelingTransformDragService::begin_transform_drag(
   const bool runtime_has_selection = context.session.has_selection();
   const bool scene_transform_selection =
       !runtime_has_selection && context.port.has_scene_transform_selection();
+  const bool duplicate_scene_occurrences =
+      request.duplicate_selected && scene_transform_selection &&
+      selected_scene_targets_are_instance_occurrences(context.scene);
+  if (request.duplicate_selected && !duplicate_scene_occurrences &&
+      (scene_transform_selection ||
+       scene_selection_contains_instance_occurrence(context.scene))) {
+    return {
+        .ok = false,
+        .message =
+            "This scene selection does not support linked drag duplication.",
+    };
+  }
   const quader_editor_core::SelectionMode drag_selection_mode =
       scene_transform_selection ? quader_editor_core::SelectionMode::Object
                                 : context.session.selection_mode();
@@ -414,7 +445,45 @@ ModelingTransformDragService::begin_transform_drag(
       TransformDragController::preview_routing(
           request.duplicate_selected,
           drag_selection_mode == quader_editor_core::SelectionMode::Object,
-          operation == quader_editor_core::TransformDragOperation::Transform);
+          operation == quader_editor_core::TransformDragOperation::Transform,
+          scene_transform_selection);
+
+  if (duplicate_scene_occurrences) {
+    if (context.document_commands == nullptr || context.history == nullptr) {
+      return {
+          .ok = false,
+          .message = "Linked instance drag duplication requires editor "
+                     "history ownership.",
+      };
+    }
+    scene_duplicate_transaction_.emplace(
+        context.history->begin_transaction("Duplicate Instance"));
+    if (!scene_duplicate_transaction_->active()) {
+      scene_duplicate_transaction_.reset();
+      return {
+          .ok = false,
+          .message = "Could not start linked instance drag duplication while "
+                     "another editor transaction is active.",
+      };
+    }
+
+    const DocumentDuplicateHierarchyResult duplicated =
+        context.document_commands->duplicate_selected_hierarchy();
+    if (!duplicated.ok || !duplicated.changed ||
+        duplicated.duplicate_roots.empty()) {
+      const CommandResult canceled = scene_duplicate_transaction_->cancel();
+      scene_duplicate_transaction_.reset();
+      return {
+          .ok = false,
+          .message = !canceled.ok
+                         ? canceled.message
+                         : (duplicated.message.empty()
+                                ? "Could not duplicate the selected instance."
+                                : duplicated.message),
+      };
+    }
+    context.port.invalidate_selection_overlay_caches();
+  }
 
   {
     QDR_PROFILE_SCOPE("Modeling transform drag begin runtime state");
@@ -479,7 +548,8 @@ ModelingTransformDragService::begin_transform_drag(
         QDR_PROFILE_SCOPE(
             "Modeling transform drag begin scene transform preview");
         return scene_transform_drag_service_.begin(
-            context.scene, request.pivot, true, "Transform Selection");
+            context.scene, request.pivot, true, "Transform Selection",
+            context.port.scene_selection_display_from_scene());
       }())) {
     (void)cancel_transform_drag(context);
     return {
@@ -580,7 +650,7 @@ ModelingTransformDragService::begin_transform_drag(
     }
     context.runtime.set_transform_drag_scale_state(begin_result.state);
   } else {
-    clear_runtime_state(context);
+    (void)cancel_transform_drag(context);
     return {.ok = false,
             .message = "Transform drag only supports move, rotate, or scale."};
   }
@@ -619,8 +689,25 @@ ModelingTransformDragService::commit_transform_drag(
     ModelingTransformDragServiceContext context, EditorHistoryService *history) {
   QDR_PROFILE_FUNCTION();
   const bool was_preview_driven = controller_.preview_driven();
+  const bool scene_duplicate_transaction_active =
+      scene_duplicate_transaction_.has_value() &&
+      scene_duplicate_transaction_->active();
+  if (scene_duplicate_transaction_active && history == nullptr) {
+    const ModelingCommandResult canceled = cancel_transform_drag(context);
+    return {
+        .ok = false,
+        .changed = canceled.changed,
+        .preview_driven = was_preview_driven,
+        .message = canceled.ok
+                       ? "Linked instance drag duplication requires editor "
+                         "history when committing."
+                       : canceled.message,
+    };
+  }
   const bool finish_preview_transaction =
-      was_preview_driven || controller_.duplicate_selected();
+      was_preview_driven ||
+      (controller_.duplicate_selected() &&
+       !scene_duplicate_transaction_active);
   const quader_editor_core::TransformDragState repeat_drag =
       context.runtime.transform_drag_state();
   ModelingSessionMemento preview_before =
@@ -698,6 +785,10 @@ ModelingTransformDragService::commit_transform_drag(
                                 : scene_transform_drag_service_.accept();
     }();
     if (!scene_commit.ok) {
+      if (scene_duplicate_transaction_.has_value()) {
+        (void)scene_duplicate_transaction_->cancel();
+        scene_duplicate_transaction_.reset();
+      }
       clear_runtime_state(context);
       return {
           .ok = false,
@@ -711,6 +802,23 @@ ModelingTransformDragService::commit_transform_drag(
     if (scene_commit.changed) {
       context.port.invalidate_selection_overlay_caches();
     }
+  }
+
+  if (scene_duplicate_transaction_.has_value()) {
+    const CommandResult transaction_commit =
+        scene_duplicate_transaction_->commit();
+    scene_duplicate_transaction_.reset();
+    if (!transaction_commit.ok) {
+      clear_runtime_state(context);
+      return {
+          .ok = false,
+          .preview_driven = was_preview_driven,
+          .message = transaction_commit.message.empty()
+                         ? "Could not record linked instance drag history."
+                         : transaction_commit.message,
+      };
+    }
+    changed = changed || transaction_commit.changed;
   }
 
   ModelingTransformDragPreview preview =
@@ -732,6 +840,10 @@ ModelingCommandResult ModelingTransformDragService::cancel_transform_drag(
     const DocumentCommandResult scene_cancel =
         scene_transform_drag_service_.cancel();
     if (!scene_cancel.ok) {
+      if (scene_duplicate_transaction_.has_value()) {
+        (void)scene_duplicate_transaction_->cancel();
+        scene_duplicate_transaction_.reset();
+      }
       clear_runtime_state(context);
       return {
           .ok = false,
@@ -749,11 +861,34 @@ ModelingCommandResult ModelingTransformDragService::cancel_transform_drag(
     context.port.invalidate_selection_overlay_caches();
   }
   context.port.sync_scene_objects_from_modeling(finish.before.active);
-  context.port.sync_scene_selection_from_modeling();
+  if (finish.before.active) {
+    context.port.sync_scene_selection_from_modeling();
+  }
+  bool duplicate_canceled = false;
+  if (scene_duplicate_transaction_.has_value()) {
+    const CommandResult transaction_cancel =
+        scene_duplicate_transaction_->cancel();
+    scene_duplicate_transaction_.reset();
+    if (!transaction_cancel.ok) {
+      clear_runtime_state(context);
+      return {
+          .ok = false,
+          .changed = false,
+          .message = transaction_cancel.message.empty()
+                         ? "Could not cancel linked instance drag duplication."
+                         : transaction_cancel.message,
+      };
+    }
+    duplicate_canceled = transaction_cancel.changed;
+    if (duplicate_canceled) {
+      context.port.invalidate_selection_overlay_caches();
+    }
+  }
   clear_runtime_state(context);
   return {
       .ok = true,
-      .changed = (active_before && finish.restored) || was_scene_preview_active,
+      .changed = (active_before && finish.restored) ||
+                 was_scene_preview_active || duplicate_canceled,
   };
 }
 

@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -121,12 +122,21 @@ private:
     std::function<MeshAsset()> loader;
   };
 
+  void intern_mesh_payload(MeshAsset &mesh) const;
   void mark_dirty();
 
   AssetId next_id_ = 1;
   std::uint64_t revision_ = 0;
   mutable MeshAssetStore meshes_;
   mutable std::unordered_map<AssetId, DeferredMesh> deferred_meshes_;
+  mutable std::unordered_map<
+      std::uint64_t,
+      std::vector<std::weak_ptr<const MeshGeometryPayload>>>
+      mesh_geometry_pool_;
+  mutable std::unordered_map<
+      std::uint64_t,
+      std::vector<std::weak_ptr<const quader_poly::Document>>>
+      authored_topology_pool_;
   MaterialAssetStore materials_;
   TextureAssetStore textures_;
 };

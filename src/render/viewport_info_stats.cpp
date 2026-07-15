@@ -131,7 +131,8 @@ collect_viewport_info_scene_stats(const SceneDocument &document,
     }
 
     const MeshAsset *mesh = assets.mesh(mesh_component->mesh);
-    if (mesh == nullptr || mesh->vertices.empty() || mesh->indices.empty()) {
+    if (mesh == nullptr || mesh->geometry().vertices.empty() ||
+        mesh->geometry().indices.empty()) {
       continue;
     }
 

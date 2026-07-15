@@ -10,9 +10,11 @@
 #include "diagnostics/profile.hpp"
 #include "mesh/polygon/document_model.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
+#include "render/render_signature_builder.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_transform.hpp"
 
 #include <optional>
 #include <utility>
@@ -29,11 +31,11 @@ default_persistent_overlay_style() {
 }
 
 std::span<const MeshVertex> mesh_vertices(const MeshAsset &mesh) {
-  return {mesh.vertices.data(), mesh.vertices.size()};
+  return {mesh.geometry().vertices.data(), mesh.geometry().vertices.size()};
 }
 
 std::span<const std::uint32_t> mesh_indices(const MeshAsset &mesh) {
-  return {mesh.indices.data(), mesh.indices.size()};
+  return {mesh.geometry().indices.data(), mesh.geometry().indices.size()};
 }
 
 std::span<const quader_poly::Vertex>
@@ -67,15 +69,21 @@ mesh_snapshot_for_entity(const SceneDocument &document,
     return std::nullopt;
   }
   const MeshAsset *asset = assets.mesh(scene_mesh->mesh);
-  if (asset == nullptr || asset->vertices.empty() ||
-      asset->indices.size() < 3u) {
+  if (asset == nullptr || asset->geometry().vertices.empty() ||
+      asset->geometry().indices.size() < 3u) {
     return std::nullopt;
   }
   const SelectionComponent *selection = document.selection(entity);
+  const std::shared_ptr<const MeshGeometryPayload> geometry_payload =
+      asset->geometry_payload();
   return RenderOverlayMeshSnapshot{
       .entity = entity,
+      .participant_token = entity,
       .mesh_id = scene_mesh->mesh,
       .mesh_revision = asset->revision.value,
+      .geometry_payload = geometry_payload,
+      .geometry_content_id = asset->geometry_content_id(),
+      .authored_topology_payload = asset->authored_polygon_document,
       .world_transform = document.world_transform_matrix(entity),
       .selected = selection != nullptr && selection->selected,
       .vertices = mesh_vertices(*asset),
@@ -131,6 +139,175 @@ QVec3 affine_translation_delta(const QMat4 &current, const QMat4 &previous) {
   };
 }
 
+bool instance_definition_member_visible(const SceneDocument &document,
+                                        EntityId member,
+                                        EntityId definition) {
+  EntityId current = member;
+  std::size_t guard = document.entities().size() + 1u;
+  while (current != kInvalidEntityId && current != definition && guard-- > 0u) {
+    if (const VisibilityComponent *visibility = document.visibility(current);
+        visibility != nullptr && !visibility->visible) {
+      return false;
+    }
+    current = document.parent(current);
+  }
+  return current == definition;
+}
+
+std::uint64_t instance_overlay_participant_token(EntityId occurrence,
+                                                 EntityId member) {
+  return RenderSignatureBuilder{}
+      .add_value(0x77697265696e7374ULL)
+      .add_value(occurrence)
+      .add_value(member)
+      .value();
+}
+
+void append_instance_wireframe_meshes(
+    RenderOverlaySceneWireframeSnapshot &snapshot,
+    const SceneDocument &document, const AssetRegistry &assets,
+    EntityId occurrence) {
+  const InstanceOccurrenceComponent *instance =
+      document.instance_occurrence(occurrence);
+  if (instance == nullptr || !document.is_effectively_visible(occurrence) ||
+      !document.is_instance_definition_entity(instance->definition)) {
+    return;
+  }
+  const std::optional<QMat4> definition_inverse = try_scene_matrix_inverse(
+      document.world_transform_matrix(instance->definition));
+  if (!definition_inverse.has_value()) {
+    return;
+  }
+  const QMat4 occurrence_world = document.world_transform_matrix(occurrence);
+  const SelectionComponent *selection = document.selection(occurrence);
+  const bool selected = selection != nullptr && selection->selected;
+  for (const EntityId member :
+       document.descendants(instance->definition, false)) {
+    if (document.containing_instance_definition(member) !=
+            instance->definition ||
+        !instance_definition_member_visible(document, member,
+                                            instance->definition)) {
+      continue;
+    }
+    const MeshComponent *mesh_component = document.mesh(member);
+    if (mesh_component == nullptr) {
+      continue;
+    }
+    const MeshAsset *mesh = assets.mesh(mesh_component->mesh);
+    if (mesh == nullptr || mesh->geometry().vertices.empty() ||
+        mesh->geometry().indices.size() < 3u) {
+      continue;
+    }
+    const QMat4 member_from_definition = scene_transform_multiply(
+        *definition_inverse, document.world_transform_matrix(member));
+    const std::shared_ptr<const MeshGeometryPayload> geometry_payload =
+        mesh->geometry_payload();
+    snapshot.meshes.push_back({
+        .entity = occurrence,
+        .participant_token =
+            instance_overlay_participant_token(occurrence, member),
+        .mesh_id = mesh_component->mesh,
+        .mesh_revision = mesh->revision.value,
+        .geometry_payload = geometry_payload,
+        .geometry_content_id = mesh->geometry_content_id(),
+        .authored_topology_payload = mesh->authored_polygon_document,
+        .world_transform = scene_transform_multiply(occurrence_world,
+                                                    member_from_definition),
+        .selected = selected,
+        .vertices = mesh_vertices(*mesh),
+        .indices = mesh_indices(*mesh),
+        .authored_vertices = authored_vertices(*mesh),
+        .authored_faces = authored_faces(*mesh),
+    });
+  }
+}
+
+void append_instance_selection_fills(
+    RenderOverlaySelectedObjectSnapshot &snapshot,
+    const SceneDocument &document, const AssetRegistry &assets,
+    EntityId occurrence) {
+  const InstanceOccurrenceComponent *instance =
+      document.instance_occurrence(occurrence);
+  if (instance == nullptr || !document.is_effectively_visible(occurrence) ||
+      !document.is_instance_definition_entity(instance->definition)) {
+    return;
+  }
+  const std::optional<QMat4> definition_inverse = try_scene_matrix_inverse(
+      document.world_transform_matrix(instance->definition));
+  if (!definition_inverse.has_value()) {
+    return;
+  }
+  const QMat4 occurrence_world =
+      document.world_transform_matrix(occurrence);
+  for (const EntityId member :
+       document.descendants(instance->definition, false)) {
+    if (document.containing_instance_definition(member) !=
+            instance->definition ||
+        !instance_definition_member_visible(document, member,
+                                            instance->definition)) {
+      continue;
+    }
+    const MeshComponent *mesh_component = document.mesh(member);
+    if (mesh_component == nullptr) {
+      continue;
+    }
+    const MeshAsset *mesh = assets.mesh(mesh_component->mesh);
+    if (mesh == nullptr || mesh->geometry().vertices.empty() ||
+        mesh->geometry().indices.size() < 3u) {
+      continue;
+    }
+    const QMat4 member_from_definition = scene_transform_multiply(
+        *definition_inverse, document.world_transform_matrix(member));
+    const std::shared_ptr<const MeshGeometryPayload> geometry_payload =
+        mesh->geometry_payload();
+    const QMat4 world_transform = scene_transform_multiply(
+        occurrence_world, member_from_definition);
+    snapshot.instance_selection_fills.push_back({
+        .occurrence = occurrence,
+        .definition = instance->definition,
+        .member = member,
+        .mesh_id = mesh_component->mesh,
+        .mesh_revision = mesh->revision.value,
+        .geometry_payload = geometry_payload,
+        .geometry_content_id = mesh->geometry_content_id(),
+        .world_transform = world_transform,
+        .vertices = mesh_vertices(*mesh),
+        .indices = mesh_indices(*mesh),
+        .color = kOverlayInstanceSelectionFillColor,
+        .depth_test = true,
+        .depth_write = false,
+        .polygon_offset_scale = -1.0f,
+        .polygon_offset_constant = -1.0f,
+        .blend_order = static_cast<std::uint16_t>(
+            viewport_overlay_draw_order(
+                ViewportOverlayLayer::SelectedVisibleFace) *
+            64),
+        .draws_before = ViewportOverlayLayer::SourceWire,
+    });
+    snapshot.instance_selection_wires.push_back({
+        .occurrence = occurrence,
+        .definition = instance->definition,
+        .member = member,
+        .mesh_id = mesh_component->mesh,
+        .mesh_revision = mesh->revision.value,
+        .geometry_payload = geometry_payload,
+        .geometry_content_id = mesh->geometry_content_id(),
+        .authored_topology_payload = mesh->authored_polygon_document,
+        .world_transform = world_transform,
+        .vertices = mesh_vertices(*mesh),
+        .indices = mesh_indices(*mesh),
+        .authored_vertices = authored_vertices(*mesh),
+        .authored_faces = authored_faces(*mesh),
+        .color = kOverlaySelectionWireColor,
+        .line_width_pixels = kOverlaySelectionWireLineWidthPixels,
+        .blend_order = static_cast<std::uint16_t>(
+            viewport_overlay_draw_order(ViewportOverlayLayer::SourceWire) *
+            64),
+        .layer = ViewportOverlayLayer::SourceWire,
+    });
+  }
+}
+
 RenderOverlayBoundsSnapshot translated_bounds(
     RenderOverlayBoundsSnapshot bounds, QVec3 delta) {
   bounds.min += delta;
@@ -175,6 +352,10 @@ build_render_overlay_selected_object_snapshot(
   const std::vector<EntityId> selected = document.selected_entities();
   snapshot.meshes.reserve(selected.size());
   for (const EntityId entity : selected) {
+    if (document.instance_occurrence(entity) != nullptr) {
+      append_instance_selection_fills(snapshot, document, assets, entity);
+      continue;
+    }
     if (std::optional<RenderOverlayMeshSnapshot> mesh =
             mesh_snapshot_for_entity(document, assets, entity)) {
       snapshot.meshes.push_back(*mesh);
@@ -214,6 +395,10 @@ build_render_overlay_scene_wireframe_snapshot(
   const std::vector<EntityId> entities = document.entities();
   snapshot.meshes.reserve(entities.size());
   for (const EntityId entity : entities) {
+    if (document.instance_occurrence(entity) != nullptr) {
+      append_instance_wireframe_meshes(snapshot, document, assets, entity);
+      continue;
+    }
     if (std::optional<RenderOverlayMeshSnapshot> mesh =
             mesh_snapshot_for_entity(document, assets, entity)) {
       snapshot.meshes.push_back(*mesh);
@@ -349,8 +534,10 @@ RenderOverlaySnapshotCache::update_persistent(
 
   const bool selected_transform_is_relevant =
       has_selected_object_snapshot_ && selected_object_snapshot_.visible &&
-      selected_object_face_fills_enabled_for_selection_count(
-          selected_object_snapshot_.meshes.size());
+      (selected_object_face_fills_enabled_for_selection_count(
+           selected_object_snapshot_.meshes.size()) ||
+       !selected_object_snapshot_.instance_selection_fills.empty() ||
+       !selected_object_snapshot_.instance_selection_wires.empty());
   const bool selected_transform_matches =
       !selected_transform_is_relevant ||
       selected_object_snapshot_.transform_revision ==

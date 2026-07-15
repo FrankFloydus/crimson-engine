@@ -266,12 +266,13 @@ quader::MeshAsset make_grid_mesh(int width_segments, int depth_segments,
                                  float spacing) {
   quader::MeshAsset mesh;
   mesh.name = "Phase 8 Benchmark Grid";
+  quader::MeshGeometryPayload &geometry = mesh.edit_geometry();
   const std::size_t vertex_count =
       static_cast<std::size_t>(width_segments + 1) *
       static_cast<std::size_t>(depth_segments + 1);
-  mesh.vertices.reserve(vertex_count);
-  mesh.indices.reserve(static_cast<std::size_t>(width_segments) *
-                       static_cast<std::size_t>(depth_segments) * 6U);
+  geometry.vertices.reserve(vertex_count);
+  geometry.indices.reserve(static_cast<std::size_t>(width_segments) *
+                           static_cast<std::size_t>(depth_segments) * 6U);
 
   const auto grid_index = [depth_segments](int x, int z) {
     return static_cast<std::uint32_t>(x * (depth_segments + 1) + z);
@@ -282,7 +283,7 @@ quader::MeshAsset make_grid_mesh(int width_segments, int depth_segments,
     const float px = -width * 0.5F + static_cast<float>(x) * spacing;
     for (int z = 0; z <= depth_segments; ++z) {
       const float pz = -depth * 0.5F + static_cast<float>(z) * spacing;
-      mesh.vertices.push_back(quader::MeshVertex{
+      geometry.vertices.push_back(quader::MeshVertex{
           .position = {px, 0.0F, pz},
           .normal = {0.0F, 1.0F, 0.0F},
           .uv = {static_cast<float>(x) / static_cast<float>(width_segments),
@@ -297,12 +298,12 @@ quader::MeshAsset make_grid_mesh(int width_segments, int depth_segments,
       const std::uint32_t b = grid_index(x, z + 1);
       const std::uint32_t c = grid_index(x + 1, z + 1);
       const std::uint32_t d = grid_index(x + 1, z);
-      mesh.indices.insert(mesh.indices.end(), {a, b, c, a, c, d});
+      geometry.indices.insert(geometry.indices.end(), {a, b, c, a, c, d});
     }
   }
-  mesh.primitives.push_back(quader::MeshPrimitiveSpan{
+  geometry.primitives.push_back(quader::MeshPrimitiveSpan{
       .index_offset = 0,
-      .index_count = static_cast<std::uint32_t>(mesh.indices.size()),
+      .index_count = static_cast<std::uint32_t>(geometry.indices.size()),
       .material_slot = 0,
   });
   return mesh;
@@ -566,13 +567,16 @@ std::vector<Measurement> run_benchmarks(const BenchmarkOptions &options) {
       const std::optional<quader::MeshAsset> mesh =
           quader::ToolPreviewMeshProjection::box_preview_mesh_from_descriptor(
               descriptor);
-      return mesh ? mesh->vertices.size() + mesh->indices.size() : 0ULL;
+      return mesh ? mesh->geometry().vertices.size() +
+                        mesh->geometry().indices.size()
+                  : 0ULL;
     });
     const std::optional<quader::MeshAsset> cached_mesh =
         quader::ToolPreviewMeshProjection::box_preview_mesh_from_descriptor(
             descriptor);
     const std::uint64_t cached_checksum =
-        cached_mesh ? cached_mesh->vertices.size() + cached_mesh->indices.size()
+        cached_mesh ? cached_mesh->geometry().vertices.size() +
+                          cached_mesh->geometry().indices.size()
                     : 0ULL;
     const TimedResult after = measure(options.iterations,
                                       [&](int) { return cached_checksum; });
@@ -606,7 +610,8 @@ std::vector<Measurement> run_benchmarks(const BenchmarkOptions &options) {
         const quader::MeshAsset mesh =
             quader::MeshProjectionService::compile_polygon_document_mesh(
                 document);
-        checksum += mesh.vertices.size() + mesh.indices.size();
+        checksum +=
+            mesh.geometry().vertices.size() + mesh.geometry().indices.size();
       }
       return checksum;
     });
@@ -616,7 +621,8 @@ std::vector<Measurement> run_benchmarks(const BenchmarkOptions &options) {
     for (const quader_poly::Document &document : cached_documents) {
       const quader::MeshAsset mesh =
           quader::MeshProjectionService::compile_polygon_document_mesh(document);
-      cached_checksum += mesh.vertices.size() + mesh.indices.size();
+      cached_checksum +=
+          mesh.geometry().vertices.size() + mesh.geometry().indices.size();
     }
     const TimedResult after = measure(options.iterations,
                                       [&](int) { return cached_checksum; });

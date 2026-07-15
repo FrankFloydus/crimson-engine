@@ -25,6 +25,8 @@ inline EntityKind to_scene_entity_kind(QuaderEntityKind kind) {
     return EntityKind::Mesh;
   case QuaderEntityKind::Light:
     return EntityKind::Light;
+  case QuaderEntityKind::Instance:
+    return EntityKind::Instance;
   case QuaderEntityKind::Generic:
     return EntityKind::Generic;
   }
@@ -39,6 +41,8 @@ inline QuaderEntityKind to_api_entity_kind(EntityKind kind) {
     return QuaderEntityKind::Mesh;
   case EntityKind::Light:
     return QuaderEntityKind::Light;
+  case EntityKind::Instance:
+    return QuaderEntityKind::Instance;
   case EntityKind::Generic:
     return QuaderEntityKind::Generic;
   }
@@ -1069,16 +1073,17 @@ to_mesh_primitive_span(const QuaderMeshPrimitiveSpan &primitive) {
 
 inline QuaderMeshAsset to_api_mesh_asset(const MeshAsset &mesh) {
   QuaderMeshAsset result;
+  const MeshGeometryPayload &geometry = mesh.geometry();
   result.id = mesh.id;
   result.revision = mesh.revision.value;
   result.name = mesh.name;
-  result.vertices.reserve(mesh.vertices.size());
-  for (const MeshVertex &vertex : mesh.vertices) {
+  result.vertices.reserve(geometry.vertices.size());
+  for (const MeshVertex &vertex : geometry.vertices) {
     result.vertices.push_back(to_api_mesh_vertex(vertex));
   }
-  result.indices = mesh.indices;
-  result.primitives.reserve(mesh.primitives.size());
-  for (const MeshPrimitiveSpan &primitive : mesh.primitives) {
+  result.indices = geometry.indices;
+  result.primitives.reserve(geometry.primitives.size());
+  for (const MeshPrimitiveSpan &primitive : geometry.primitives) {
     result.primitives.push_back(to_api_mesh_primitive_span(primitive));
   }
   result.has_stable_cpu_topology = mesh.has_stable_cpu_topology;
@@ -1088,17 +1093,18 @@ inline QuaderMeshAsset to_api_mesh_asset(const MeshAsset &mesh) {
 
 inline MeshAsset to_mesh_asset(const QuaderMeshAsset &mesh) {
   MeshAsset result;
+  MeshGeometryPayload &geometry = result.edit_geometry();
   result.id = mesh.id;
   result.revision.value = mesh.revision;
   result.name = mesh.name;
-  result.vertices.reserve(mesh.vertices.size());
+  geometry.vertices.reserve(mesh.vertices.size());
   for (const QuaderMeshVertex &vertex : mesh.vertices) {
-    result.vertices.push_back(to_mesh_vertex(vertex));
+    geometry.vertices.push_back(to_mesh_vertex(vertex));
   }
-  result.indices = mesh.indices;
-  result.primitives.reserve(mesh.primitives.size());
+  geometry.indices = mesh.indices;
+  geometry.primitives.reserve(mesh.primitives.size());
   for (const QuaderMeshPrimitiveSpan &primitive : mesh.primitives) {
-    result.primitives.push_back(to_mesh_primitive_span(primitive));
+    geometry.primitives.push_back(to_mesh_primitive_span(primitive));
   }
   result.has_stable_cpu_topology = mesh.has_stable_cpu_topology;
   result.has_authored_polygon_document = mesh.has_authored_polygon_document;

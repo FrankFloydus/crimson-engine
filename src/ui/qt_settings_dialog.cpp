@@ -60,6 +60,8 @@ std::string_view section_stable_id(ViewportSettingsSectionId section) {
     return "grid";
   case ViewportSettingsSectionId::Selection:
     return "selection";
+  case ViewportSettingsSectionId::InstanceEditing:
+    return "instance_editing";
   case ViewportSettingsSectionId::Overlay:
     return "overlay";
   case ViewportSettingsSectionId::Vertices:

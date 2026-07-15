@@ -10,6 +10,7 @@
 #include "assets/material_reference.hpp"
 #include "core/command_result.hpp"
 #include "core/types.hpp"
+#include "editor/array/instance_array_source.hpp"
 #include "editor/modeling/linear_array_layout.hpp"
 #include "math/types.hpp"
 
@@ -26,6 +27,7 @@ class AssetRegistry;
 class EditorHistoryService;
 class EditorSelectionService;
 class ModelingSessionService;
+class SceneInstanceService;
 class SceneDocument;
 
 inline constexpr std::string_view kLinearArrayToolId = "linear_array";
@@ -88,7 +90,8 @@ public:
   LinearArrayToolService(SceneDocument &scene, AssetRegistry &assets,
                          EditorHistoryService &history,
                          ModelingSessionService &modeling,
-                         EditorSelectionService &selection);
+                         EditorSelectionService &selection,
+                         SceneInstanceService &instances);
 
   [[nodiscard]] bool active() const;
   [[nodiscard]] bool has_session() const { return session_.has_value(); }
@@ -123,6 +126,8 @@ private:
     MeshAssetRevision mesh_revision;
     MaterialAssetRevision material_revision;
     QMat4 world_transform;
+    EntityId instance_definition = kInvalidEntityId;
+    std::vector<InstanceArrayPreviewMeshSnapshot> instance_meshes;
   };
 
   /// Stores one shared-span live-preview transaction.
@@ -137,11 +142,13 @@ private:
     std::uint64_t generation = 0;
     std::uint64_t revision = 0;
     bool dragging = false;
+    bool instance_occurrences = false;
   };
 
   [[nodiscard]] bool
   valid_source_selection(std::vector<EntityId> &ordered_sources,
-                         EntityId &primary_source) const;
+                         EntityId &primary_source,
+                         bool &instance_occurrences) const;
   [[nodiscard]] bool session_sources_are_valid(const Session &session) const;
   [[nodiscard]] bool
   compute_session_sources_are_valid(const Session &session) const;
@@ -155,6 +162,7 @@ private:
   EditorHistoryService &history_;
   ModelingSessionService &modeling_;
   EditorSelectionService &selection_;
+  SceneInstanceService &instances_;
   std::optional<Session> session_;
   std::uint64_t revision_counter_ = 0;
   mutable std::uint64_t validated_session_generation_ = 0;

@@ -41,7 +41,8 @@ using quader::test::guardrail::source_slice;
 [[nodiscard]] MeshAsset make_triangle_mesh(std::string name) {
   MeshAsset mesh;
   mesh.name = std::move(name);
-  mesh.vertices = {
+  MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices = {
       MeshVertex{.position = {0.0f, 0.0f, 0.0f},
                  .normal = {0.0f, 1.0f, 0.0f},
                  .uv = {0.0f, 0.0f}},
@@ -52,10 +53,10 @@ using quader::test::guardrail::source_slice;
                  .normal = {0.0f, 1.0f, 0.0f},
                  .uv = {0.0f, 1.0f}},
   };
-  mesh.indices = {0u, 1u, 2u};
-  mesh.primitives = {{.index_offset = 0u,
-                      .index_count = 3u,
-                      .material_slot = 2u}};
+  geometry.indices = {0u, 1u, 2u};
+  geometry.primitives = {{.index_offset = 0u,
+                          .index_count = 3u,
+                          .material_slot = 2u}};
   return mesh;
 }
 
@@ -272,7 +273,7 @@ TEST(QdrDocumentIoTests, SceneWriteSnapshotOwnsImmutableCopies) {
   ASSERT_TRUE(document.scene().rename_entity(entity, "Mutated Entity"));
   ASSERT_TRUE(document.assets().update_mesh(mesh_id, [](MeshAsset &mesh) {
     mesh.name = "Mutated Mesh";
-    mesh.authored_polygon_document->faces.front().material_slot = 9u;
+    mesh.edit_authored_polygon_document().faces.front().material_slot = 9u;
   }));
 
   const std::vector<std::byte> bytes =

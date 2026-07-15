@@ -29,6 +29,133 @@ constexpr double kDefaultEdgePickRadius = 0.10;
 constexpr double kMinPickRadius = 0.001;
 constexpr double kMaxPickRadius = 2.0;
 
+quader::QVec3 affine_transform_point(const quader::QMat4 &matrix,
+                                     quader::QVec3 point) {
+  const auto &m = matrix.values;
+  const float x = m[0] * point.x + m[4] * point.y + m[8] * point.z + m[12];
+  const float y = m[1] * point.x + m[5] * point.y + m[9] * point.z + m[13];
+  const float z = m[2] * point.x + m[6] * point.y + m[10] * point.z + m[14];
+  const float w = m[3] * point.x + m[7] * point.y + m[11] * point.z + m[15];
+  if (std::abs(w) <= kTransformPointEpsilon) {
+    return {x, y, z};
+  }
+  return {x / w, y / w, z / w};
+}
+
+quader::QVec3 affine_transform_vector(const quader::QMat4 &matrix,
+                                      quader::QVec3 vector) {
+  const auto &m = matrix.values;
+  return {
+      m[0] * vector.x + m[4] * vector.y + m[8] * vector.z,
+      m[1] * vector.x + m[5] * vector.y + m[9] * vector.z,
+      m[2] * vector.x + m[6] * vector.y + m[10] * vector.z,
+  };
+}
+
+quader::QVec3 affine_transform_covector(const quader::QMat4 &matrix,
+                                        quader::QVec3 covector) {
+  const auto &m = matrix.values;
+  return {
+      m[0] * covector.x + m[1] * covector.y + m[2] * covector.z,
+      m[4] * covector.x + m[5] * covector.y + m[6] * covector.z,
+      m[8] * covector.x + m[9] * covector.y + m[10] * covector.z,
+  };
+}
+
+const PickObjectTransform *cached_transform_for_object(
+    std::span<const PickObjectTransform> object_transforms, int object_index,
+    const PolygonObject &object) {
+  if (object_index >= 0 &&
+      object_index < static_cast<int>(object_transforms.size()) &&
+      object_transforms[static_cast<std::size_t>(object_index)].object_id ==
+          object.id) {
+    return &object_transforms[static_cast<std::size_t>(object_index)];
+  }
+  for (const PickObjectTransform &transform : object_transforms) {
+    if (transform.object_id == object.id) {
+      return &transform;
+    }
+  }
+  return nullptr;
+}
+
+quader_poly::Ray object_space_pick_ray(
+    const quader_poly::Ray &world_ray,
+    const PickObjectTransform *object_transform) {
+  if (object_transform == nullptr) {
+    return world_ray;
+  }
+  const quader::QVec3 local_direction = quader::normalize_or_zero(
+      affine_transform_vector(object_transform->object_from_world,
+                              world_ray.direction));
+  return {
+      affine_transform_point(object_transform->object_from_world,
+                             world_ray.origin),
+      local_direction,
+  };
+}
+
+quader::QVec3 pick_world_position(
+    quader::QVec3 local_position,
+    const PickObjectTransform *object_transform) {
+  return object_transform == nullptr
+             ? local_position
+             : affine_transform_point(object_transform->world_from_object,
+                                      local_position);
+}
+
+float world_ray_distance(const quader_poly::Ray &world_ray,
+                         quader::QVec3 world_position) {
+  const quader::QVec3 direction =
+      quader::normalize_or_zero(world_ray.direction);
+  return quader::dot(world_position - world_ray.origin, direction);
+}
+
+float world_pick_distance(const quader_poly::Ray &world_ray,
+                          quader::QVec3 world_position) {
+  const quader::QVec3 direction =
+      quader::normalize_or_zero(world_ray.direction);
+  const quader::QVec3 offset = world_position - world_ray.origin;
+  const float distance = quader::dot(offset, direction);
+  const quader::QVec3 closest = world_ray.origin + direction * distance;
+  return quader::length(world_position - closest);
+}
+
+quader::QVec3 pick_world_normal(
+    quader::QVec3 local_normal,
+    const PickObjectTransform *object_transform) {
+  if (object_transform == nullptr) {
+    return local_normal;
+  }
+  return quader::normalize_or_zero(
+      affine_transform_covector(object_transform->object_from_world,
+                                local_normal));
+}
+
+void apply_world_pick_metrics(quader_poly::PickResult &hit,
+                              const quader_poly::Ray &world_ray,
+                              const PickObjectTransform *object_transform) {
+  if (!hit.hit) {
+    return;
+  }
+  hit.distance = world_ray_distance(
+      world_ray, pick_world_position(hit.position, object_transform));
+}
+
+float object_space_pick_radius(
+    float world_radius, const PickObjectTransform *object_transform) {
+  if (object_transform == nullptr) {
+    return world_radius;
+  }
+  const float x = quader::length(affine_transform_vector(
+      object_transform->object_from_world, {world_radius, 0.0F, 0.0F}));
+  const float y = quader::length(affine_transform_vector(
+      object_transform->object_from_world, {0.0F, world_radius, 0.0F}));
+  const float z = quader::length(affine_transform_vector(
+      object_transform->object_from_world, {0.0F, 0.0F, world_radius}));
+  return std::max({x, y, z});
+}
+
 /**
  * Stores the active source-wire component pick used by component hover and selection.
  */
@@ -353,7 +480,8 @@ std::optional<SourceWireComponentPick> pick_active_source_wire_component(
 		quader_poly::PickOptions options,
 		int candidate_object_id,
 		bool prefer_selected_target,
-		std::span<const PickObjectBounds> object_bounds = {})
+		std::span<const PickObjectBounds> object_bounds = {},
+		std::span<const PickObjectTransform> object_transforms = {})
 {
   if (mode == SelectionMode::Object || mode == SelectionMode::Face) {
     return std::nullopt;
@@ -370,8 +498,7 @@ std::optional<SourceWireComponentPick> pick_active_source_wire_component(
             kTransformPointEpsilon * kTransformPointEpsilon) {
           return std::nullopt;
         }
-        const quader_poly::Ray pick_ray { ray.origin, direction };
-	const quader_geometry::QRay3<float> geometry_pick_ray = to_geometry_ray(pick_ray);
+        const quader_poly::Ray world_pick_ray { ray.origin, direction };
 	std::optional<SourceWireComponentPick> best_selected;
 	std::optional<SourceWireComponentPick> best_unselected;
 
@@ -382,11 +509,21 @@ std::optional<SourceWireComponentPick> pick_active_source_wire_component(
 		}
 		if (!ray_intersects_object_pick_bounds(
 					object,
-					pick_ray,
+					world_pick_ray,
 					options,
 					cached_bounds_for_object(object_bounds, object_index, object))) {
 			continue;
 		}
+
+                const PickObjectTransform *object_transform =
+                    cached_transform_for_object(object_transforms,
+                                                object_index, object);
+                const quader_poly::Ray pick_ray =
+                    object_space_pick_ray(world_pick_ray, object_transform);
+		const quader_geometry::QRay3<float> geometry_pick_ray =
+                    to_geometry_ray(pick_ray);
+                const float local_radius =
+                    object_space_pick_radius(radius, object_transform);
 
                 if (options.mode == quader_poly::SelectionMode::Vertex) {
                   for (const quader_poly::Vertex &vertex :
@@ -411,9 +548,9 @@ std::optional<SourceWireComponentPick> pick_active_source_wire_component(
                     if (!closest.valid) {
                       continue;
                     }
-                    const float pick_distance =
+                    const float local_pick_distance =
                         std::sqrt(closest.distance_squared);
-                    if (pick_distance > radius) {
+                    if (local_pick_distance > local_radius) {
                       continue;
                     }
 
@@ -427,6 +564,12 @@ std::optional<SourceWireComponentPick> pick_active_source_wire_component(
                             object, pick_ray, options, hit)) {
                       continue;
                     }
+                    const quader::QVec3 world_position =
+                        pick_world_position(hit.position, object_transform);
+                    hit.distance =
+                        world_ray_distance(world_pick_ray, world_position);
+                    const float pick_distance =
+                        world_pick_distance(world_pick_ray, world_position);
                     keep_source_wire_candidate(
                         best_selected, best_unselected,
                         {
@@ -462,8 +605,9 @@ std::optional<SourceWireComponentPick> pick_active_source_wire_component(
                         if (!closest.valid || closest.ray_distance < 0.0F) {
 				continue;
 			}
-			const float pick_distance = std::sqrt(closest.distance_squared);
-			if (pick_distance > radius) {
+			const float local_pick_distance =
+                            std::sqrt(closest.distance_squared);
+			if (local_pick_distance > local_radius) {
 				continue;
 			}
 
@@ -482,6 +626,12 @@ std::optional<SourceWireComponentPick> pick_active_source_wire_component(
 			if (source_wire_component_is_occluded_by_object_faces(object, pick_ray, options, hit)) {
 				continue;
 			}
+			const quader::QVec3 world_position =
+                            pick_world_position(hit.position, object_transform);
+			hit.distance =
+                            world_ray_distance(world_pick_ray, world_position);
+			const float pick_distance =
+                            world_pick_distance(world_pick_ray, world_position);
 			keep_source_wire_candidate(
 				best_selected,
 				best_unselected,
@@ -528,19 +678,34 @@ bool ray_intersects_object_pick_bounds(
 quader_poly::PickResult pick_object_element(
 		const PolygonObject& object,
 		int object_index,
-		const quader_poly::Ray& ray,
+		const quader_poly::Ray& world_ray,
 		const quader_poly::PickOptions& options,
-		std::span<const PickObjectFaceGeometry> face_geometry)
+		std::span<const PickObjectFaceGeometry> face_geometry,
+		std::span<const PickObjectTransform> object_transforms)
 {
+  const PickObjectTransform *object_transform = cached_transform_for_object(
+      object_transforms, object_index, object);
+  const quader_poly::Ray ray =
+      object_space_pick_ray(world_ray, object_transform);
+  quader_poly::PickOptions local_options = options;
+  local_options.vertex_radius =
+      object_space_pick_radius(options.vertex_radius, object_transform);
+  local_options.edge_radius =
+      object_space_pick_radius(options.edge_radius, object_transform);
+  quader_poly::PickResult hit;
   if (options.mode == quader_poly::SelectionMode::Face) {
     if (const PickObjectFaceGeometry *cached_geometry =
             cached_face_geometry_for_object(face_geometry, object_index,
                                             object)) {
-      return quader_poly::pick_face_geometry(cached_geometry->triangles, ray,
-                                             options);
+      hit = quader_poly::pick_face_geometry(cached_geometry->triangle_span(),
+                                            ray, local_options);
+      apply_world_pick_metrics(hit, world_ray, object_transform);
+      return hit;
     }
   }
-        return quader_poly::pick_element(object.document, ray, options);
+  hit = quader_poly::pick_element(object.document, ray, local_options);
+  apply_world_pick_metrics(hit, world_ray, object_transform);
+  return hit;
 }
 
 std::optional<PickHitRecord> nearest_surface_hit(
@@ -549,7 +714,8 @@ std::optional<PickHitRecord> nearest_surface_hit(
 		const quader_poly::PickOptions& options,
 		std::span<const PickObjectBounds> object_bounds,
 		std::span<const PickObjectFaceGeometry> face_geometry = {},
-		int target_object_id = -1);
+		int target_object_id = -1,
+		std::span<const PickObjectTransform> object_transforms = {});
 bool component_pick_is_occluded_by_surface(
 		const std::vector<PolygonObject>& objects,
 		int object_index,
@@ -576,7 +742,8 @@ bool pick_nearest_object(
 		quader_poly::PickResult& hit,
 		std::span<const PickObjectBounds> object_bounds = {},
 		std::span<const PickObjectFaceGeometry> face_geometry = {},
-		int target_object_id = -1)
+		int target_object_id = -1,
+		std::span<const PickObjectTransform> object_transforms = {})
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.pick_nearest_object");
 	hit_index = -1;
@@ -586,7 +753,8 @@ bool pick_nearest_object(
             (options.mode == quader_poly::SelectionMode::Vertex ||
              options.mode == quader_poly::SelectionMode::Edge)
                 ? nearest_surface_hit(objects, ray, options, object_bounds,
-                                      face_geometry, target_object_id)
+                                      face_geometry, target_object_id,
+                                      object_transforms)
                 : std::optional<PickHitRecord>{};
         for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
 		if (target_object_id >= 0 &&
@@ -600,7 +768,9 @@ bool pick_nearest_object(
 					cached_bounds_for_object(object_bounds, index, objects[index]))) {
 			continue;
 		}
-		const quader_poly::PickResult candidate = pick_object_element(objects[index], index, ray, options, face_geometry);
+		const quader_poly::PickResult candidate = pick_object_element(
+                    objects[index], index, ray, options, face_geometry,
+                    object_transforms);
 		if (candidate.hit &&
 				!component_pick_is_occluded_by_surface(objects, index, candidate, surface_hit) &&
 				(hit_index < 0 || candidate.distance < hit.distance)) {
@@ -688,20 +858,6 @@ bool face_contains_vertex(const quader_poly::Face& face, quader_poly::ElementId 
 	return std::ranges::find(face.vertices, vertex_id) != face.vertices.end();
 }
 
-float pick_distance_from_ray(const quader_poly::Ray& ray, quader::QVec3 position)
-{
-	const quader_geometry::QRay3<float> geometry_ray = to_geometry_ray(ray);
-        if (quader_geometry::length_squared(geometry_ray.direction) <=
-            kTransformPointEpsilon * kTransformPointEpsilon) {
-          return 0.0F;
-        }
-        const float distance_squared =
-            quader_geometry::point_ray_distance_squared<float>(
-                to_geometry_vec3(position), geometry_ray,
-                kTransformPointEpsilon);
-        return std::isfinite(distance_squared) ? std::sqrt(distance_squared) : 0.0F;
-}
-
 quader::QVec3 averaged_vertex_normal(const quader_poly::Document& document, quader_poly::ElementId vertex_id)
 {
 	quader::QVec3 normal;
@@ -765,8 +921,15 @@ std::string pick_hit_signature(int object_id, const quader_poly::PickResult& hit
 	return signature;
 }
 
-PickHitRecord make_pick_hit_record(const PolygonObject& object, int object_index, const PickRequest& request, const quader_poly::PickResult& hit)
+PickHitRecord make_pick_hit_record(
+    const PolygonObject &object, int object_index, const PickRequest &request,
+    const quader_poly::PickResult &hit,
+    const PickObjectTransform *object_transform = nullptr)
 {
+  const quader::QVec3 world_position =
+      pick_world_position(hit.position, object_transform);
+  const quader::QVec3 world_normal = pick_world_normal(
+      pick_hit_normal(object.document, hit), object_transform);
   return {
       true,
       object.id,
@@ -776,12 +939,12 @@ PickHitRecord make_pick_hit_record(const PolygonObject& object, int object_index
       hit.vertex_id,
       hit.edge,
       hit.face_id,
-      hit.position,
-      pick_hit_normal(object.document, hit),
-      hit.distance,
+      world_position,
+      world_normal,
+      world_ray_distance(request.ray, world_position),
       hit.kind == quader_poly::ElementKind::Face
           ? 0.0F
-          : pick_distance_from_ray(request.ray, hit.position),
+          : world_pick_distance(request.ray, world_position),
       pick_hit_signature(object.id, hit),
   };
 }
@@ -792,7 +955,8 @@ std::optional<PickHitRecord> nearest_surface_hit(
 		const quader_poly::PickOptions& options,
 		std::span<const PickObjectBounds> object_bounds,
 		std::span<const PickObjectFaceGeometry> face_geometry,
-		int target_object_id)
+		int target_object_id,
+		std::span<const PickObjectTransform> object_transforms)
 {
 	quader_poly::PickOptions surface_options = options;
         surface_options.mode = quader_poly::SelectionMode::Face;
@@ -810,12 +974,17 @@ std::optional<PickHitRecord> nearest_surface_hit(
 					cached_bounds_for_object(object_bounds, index, objects[index]))) {
 			continue;
 		}
-		const quader_poly::PickResult surface_hit = pick_object_element(objects[index], index, ray, surface_options, face_geometry);
+		const quader_poly::PickResult surface_hit = pick_object_element(
+                    objects[index], index, ray, surface_options, face_geometry,
+                    object_transforms);
 		if (!surface_hit.hit) {
 			continue;
 		}
 
-		PickHitRecord record = make_pick_hit_record(objects[index], index, surface_request, surface_hit);
+		PickHitRecord record = make_pick_hit_record(
+                    objects[index], index, surface_request, surface_hit,
+                    cached_transform_for_object(object_transforms, index,
+                                                objects[index]));
                 if (!nearest.has_value() ||
                     record.ray_distance < nearest->ray_distance ||
                     (std::abs(record.ray_distance - nearest->ray_distance) <=
@@ -1033,17 +1202,23 @@ std::optional<PickHitRecord> pick_nearest(
 		const std::vector<PolygonObject>& objects,
 		const PickRequest& request,
 		std::span<const PickObjectBounds> object_bounds,
-		std::span<const PickObjectFaceGeometry> face_geometry)
+		std::span<const PickObjectFaceGeometry> face_geometry,
+		std::span<const PickObjectTransform> object_transforms)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.pick_nearest.cached");
 	int hit_index = -1;
 	quader_poly::PickResult hit;
 	if (!pick_nearest_object(objects, request.ray, request.options, hit_index,
-			hit, object_bounds, face_geometry, request.target_object_id) ||
+			hit, object_bounds, face_geometry, request.target_object_id,
+                        object_transforms) ||
 		hit_index < 0) {
 		return std::nullopt;
 	}
-	return make_pick_hit_record(objects[static_cast<std::size_t>(hit_index)], hit_index, request, hit);
+	return make_pick_hit_record(
+            objects[static_cast<std::size_t>(hit_index)], hit_index, request,
+            hit, cached_transform_for_object(
+                     object_transforms, hit_index,
+                     objects[static_cast<std::size_t>(hit_index)]));
 }
 
 std::vector<PickHitRecord> pick_all(const std::vector<PolygonObject>& objects, const PickRequest& request)
@@ -1093,7 +1268,8 @@ std::vector<PickHitRecord> pick_all(
 		const std::vector<PolygonObject>& objects,
 		const PickRequest& request,
 		std::span<const PickObjectBounds> object_bounds,
-		std::span<const PickObjectFaceGeometry> face_geometry)
+		std::span<const PickObjectFaceGeometry> face_geometry,
+		std::span<const PickObjectTransform> object_transforms)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.pick_all.cached");
 	std::vector<PickHitRecord> hits;
@@ -1104,7 +1280,8 @@ std::vector<PickHitRecord> pick_all(
                      request.options.mode == quader_poly::SelectionMode::Edge)
                 ? nearest_surface_hit(objects, request.ray, request.options,
                                       object_bounds, face_geometry,
-                                      request.target_object_id)
+                                      request.target_object_id,
+                                      object_transforms)
                 : std::optional<PickHitRecord>{};
         for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
 		if (request.target_object_id >= 0 &&
@@ -1119,9 +1296,14 @@ std::vector<PickHitRecord> pick_all(
 			continue;
 		}
 		const quader_poly::PickResult hit =
-			pick_object_element(objects[index], index, request.ray, request.options, face_geometry);
+			pick_object_element(objects[index], index, request.ray,
+                                        request.options, face_geometry,
+                                        object_transforms);
 		if (hit.hit && !component_pick_is_occluded_by_surface(objects, index, hit, surface_hit)) {
-			hits.push_back(make_pick_hit_record(objects[index], index, request, hit));
+			hits.push_back(make_pick_hit_record(
+                            objects[index], index, request, hit,
+                            cached_transform_for_object(
+                                object_transforms, index, objects[index])));
 		}
 	}
         std::sort(hits.begin(), hits.end(),
@@ -1525,7 +1707,8 @@ SelectionHoverUpdateResult update_selection_hover(
 		quader_poly::PickOptions pick_options,
 		std::span<const PickObjectBounds> object_bounds,
 		std::span<const PickObjectFaceGeometry> face_geometry,
-                bool face_plane_hover)
+                bool face_plane_hover,
+                std::span<const PickObjectTransform> object_transforms)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_selection_hover");
 	apply_editor_surface_pick_policy(pick_options);
@@ -1538,7 +1721,8 @@ SelectionHoverUpdateResult update_selection_hover(
           quader_poly::PickOptions options = pick_options;
           options.mode = quader_poly::SelectionMode::Face;
           if (pick_nearest_object(objects, ray, options, hit_index, hit,
-                                  object_bounds, face_geometry) &&
+                                  object_bounds, face_geometry, -1,
+                                  object_transforms) &&
               hit_index >= 0 && hit.kind == quader_poly::ElementKind::Face) {
             next.object_id = objects[hit_index].id;
             next.kind = SelectionHoverKind::Face;
@@ -1554,7 +1738,8 @@ SelectionHoverUpdateResult update_selection_hover(
           quader_poly::PickOptions options = pick_options;
           options.mode = quader_poly::SelectionMode::Face;
           if (pick_nearest_object(objects, ray, options, hit_index, hit,
-                                  object_bounds, face_geometry) &&
+                                  object_bounds, face_geometry, -1,
+                                  object_transforms) &&
               hit_index >= 0) {
             next.object_id = objects[hit_index].id;
             if (next.object_id > 0) {
@@ -1571,19 +1756,22 @@ SelectionHoverUpdateResult update_selection_hover(
                   pick_active_source_wire_component(
                       objects, mode, ray, options,
                       current_hover.candidate_object_id,
-                      selected_modifier_pressed, object_bounds)) {
+                      selected_modifier_pressed, object_bounds,
+                      object_transforms)) {
             hit_index = source_wire_hit->object_index;
             hit = source_wire_hit->hit;
             component_hover = true;
           } else {
             component_hover =
                 pick_nearest_object(objects, ray, options, hit_index, hit,
-                                    object_bounds, face_geometry);
+                                    object_bounds, face_geometry, -1,
+                                    object_transforms);
           }
           if (!component_hover) {
             options.mode = quader_poly::SelectionMode::Face;
             pick_nearest_object(objects, ray, options, hit_index, hit,
-                                object_bounds, face_geometry);
+                                object_bounds, face_geometry, -1,
+                                object_transforms);
           }
           if (hit_index >= 0) {
             next.object_id = objects[hit_index].id;
@@ -1677,7 +1865,8 @@ bool pick_select(
 		quader_poly::PickOptions pick_options,
 		bool allow_component_fallback,
 		std::span<const PickObjectBounds> object_bounds,
-		std::span<const PickObjectFaceGeometry> face_geometry)
+		std::span<const PickObjectFaceGeometry> face_geometry,
+		std::span<const PickObjectTransform> object_transforms)
 {
   const bool replace_selection = operation == SelectionEditOperation::Replace;
   const bool add_selection_value = operation == SelectionEditOperation::Add;
@@ -1707,19 +1896,23 @@ bool pick_select(
 						ray,
 						options,
 						-1,
-						remove_selection_value)) {
+						remove_selection_value, object_bounds,
+                                                object_transforms)) {
 			hit_index = source_wire_hit->object_index;
 			hit = source_wire_hit->hit;
 			component_hit = true;
 		}
 	}
 	if (!component_hit) {
-		component_hit = pick_nearest_object(objects, ray, options, hit_index, hit, object_bounds, face_geometry);
+		component_hit = pick_nearest_object(
+                    objects, ray, options, hit_index, hit, object_bounds,
+                    face_geometry, -1, object_transforms);
 	}
 	if (!component_hit && component_mode && allow_component_fallback) {
           options.mode = quader_poly::SelectionMode::Face;
           pick_nearest_object(objects, ray, options, hit_index, hit,
-                              object_bounds, face_geometry);
+                              object_bounds, face_geometry, -1,
+                              object_transforms);
 	}
 
 	if (hit_index < 0) {
@@ -1873,7 +2066,8 @@ bool pick_select_all_faces(
 		int& active_object_id,
 		quader_poly::PickOptions pick_options,
 		std::span<const PickObjectBounds> object_bounds,
-		std::span<const PickObjectFaceGeometry> face_geometry)
+		std::span<const PickObjectFaceGeometry> face_geometry,
+		std::span<const PickObjectTransform> object_transforms)
 {
   const bool replace_selection = operation == SelectionEditOperation::Replace;
   const bool remove_selection_value =
@@ -1891,7 +2085,7 @@ bool pick_select_all_faces(
   quader_poly::PickOptions options = pick_options;
   options.mode = quader_poly::SelectionMode::Face;
   if (!pick_nearest_object(objects, ray, options, hit_index, hit, object_bounds,
-                           face_geometry)) {
+                           face_geometry, -1, object_transforms)) {
     if (replace_selection) {
       clear_selection(objects, active_object_id);
     }
@@ -1957,7 +2151,8 @@ bool pick_select_edge_loop(
 		int& active_object_id,
 		quader_poly::PickOptions pick_options,
 		std::span<const PickObjectBounds> object_bounds,
-		std::span<const PickObjectFaceGeometry> face_geometry)
+		std::span<const PickObjectFaceGeometry> face_geometry,
+		std::span<const PickObjectTransform> object_transforms)
 {
   const bool replace_selection = operation == SelectionEditOperation::Replace;
   const bool remove_selection_value =
@@ -1978,23 +2173,29 @@ bool pick_select_edge_loop(
   if (const std::optional<SourceWireComponentPick> source_wire_hit =
           pick_active_source_wire_component(objects, SelectionMode::Edge, ray,
                                             options, -1,
-                                            remove_selection_value)) {
+                                            remove_selection_value,
+                                            object_bounds,
+                                            object_transforms)) {
     hit_index = source_wire_hit->object_index;
     hit = source_wire_hit->hit;
     component_hit = true;
   }
   if ((!component_hit &&
        !pick_nearest_object(objects, ray, options, hit_index, hit,
-                            object_bounds, face_geometry)) ||
+                            object_bounds, face_geometry, -1,
+                            object_transforms)) ||
       hit.kind != quader_poly::ElementKind::Edge) {
     if (replace_selection) {
       clear_selection(objects, active_object_id);
     }
     return false;
   }
+        const quader_poly::Ray local_ray = object_space_pick_ray(
+            ray, cached_transform_for_object(object_transforms, hit_index,
+                                             objects[hit_index]));
         const quader_poly::ElementId context_face_id =
-            edge_loop_context_face_id(objects[hit_index].document, hit, ray,
-                                      options);
+            edge_loop_context_face_id(objects[hit_index].document, hit,
+                                      local_ray, options);
         const std::vector<quader_poly::Edge> loop_edges =
             quader_poly::edge_loop_edges(objects[hit_index].document, hit.edge,
                                          context_face_id);
@@ -2061,7 +2262,8 @@ bool pick_select_all_vertices(
 		int& active_object_id,
 		quader_poly::PickOptions pick_options,
 		std::span<const PickObjectBounds> object_bounds,
-		std::span<const PickObjectFaceGeometry> face_geometry)
+		std::span<const PickObjectFaceGeometry> face_geometry,
+		std::span<const PickObjectTransform> object_transforms)
 {
   const bool replace_selection = operation == SelectionEditOperation::Replace;
   const bool remove_selection_value =
@@ -2082,14 +2284,17 @@ bool pick_select_all_vertices(
   if (const std::optional<SourceWireComponentPick> source_wire_hit =
           pick_active_source_wire_component(objects, SelectionMode::Vertex, ray,
                                             options, -1,
-                                            remove_selection_value)) {
+                                            remove_selection_value,
+                                            object_bounds,
+                                            object_transforms)) {
     hit_index = source_wire_hit->object_index;
     hit = source_wire_hit->hit;
     component_hit = true;
   }
   if ((!component_hit &&
        !pick_nearest_object(objects, ray, options, hit_index, hit,
-                            object_bounds, face_geometry)) ||
+                            object_bounds, face_geometry, -1,
+                            object_transforms)) ||
       hit.kind != quader_poly::ElementKind::Vertex) {
     if (replace_selection) {
       clear_selection(objects, active_object_id);
@@ -2173,9 +2378,10 @@ bool pick_selection_request_hits_target(
 		const std::vector<PolygonObject>& picking_objects,
 		SelectionMode mode,
 		const quader_poly::Ray& ray,
-		const quader_poly::PickOptions& pick_options,
-		std::span<const PickObjectBounds> object_bounds,
-		std::span<const PickObjectFaceGeometry> face_geometry)
+	const quader_poly::PickOptions& pick_options,
+	std::span<const PickObjectBounds> object_bounds,
+	std::span<const PickObjectFaceGeometry> face_geometry,
+	std::span<const PickObjectTransform> object_transforms)
 {
 	const SelectionHoverUpdateResult hovered =
 			update_selection_hover(
@@ -2186,7 +2392,7 @@ bool pick_selection_request_hits_target(
 					false,
 					pick_options,
 					object_bounds,
-					face_geometry);
+					face_geometry, false, object_transforms);
 	return hovered.hover.object_id > 0;
 }
 
@@ -2251,7 +2457,8 @@ ApplyPickSelectionResult apply_pick_selection(
             result.hit =
                 pick_select(picking_objects, mode, operation, request.ray,
                             active_object_id, request.pick_options, false,
-                            request.object_bounds, request.face_geometry);
+                            request.object_bounds, request.face_geometry,
+                            request.object_transforms);
             result.changed = apply_picked_selection_to_session(
                 session, picking_objects, mode, active_object_id);
           }
@@ -2268,7 +2475,8 @@ ApplyPickSelectionResult apply_pick_selection(
             session_has_component_selection(session, mode) &&
             pick_selection_request_hits_target(
                 picking_objects, mode, request.ray, request.pick_options,
-                request.object_bounds, request.face_geometry)) {
+                request.object_bounds, request.face_geometry,
+                request.object_transforms)) {
           result.applied = false;
           result.hit = true;
           return result;
@@ -2280,7 +2488,7 @@ ApplyPickSelectionResult apply_pick_selection(
           const SelectionHoverUpdateResult hovered = update_selection_hover(
               picking_objects, mode, {}, request.ray, false,
               request.pick_options, request.object_bounds,
-              request.face_geometry);
+              request.face_geometry, false, request.object_transforms);
           bool hit_already_selected = false;
           if (mode == SelectionMode::Object && hovered.hover.object_id > 0) {
             hit_already_selected =
@@ -2304,23 +2512,24 @@ ApplyPickSelectionResult apply_pick_selection(
           result.hit = pick_select_all_faces(
               picking_objects, mode, operation, request.ray, active_object_id,
               request.pick_options, request.object_bounds,
-              request.face_geometry);
+              request.face_geometry, request.object_transforms);
         } else if ((multi_click || edge_loop_select) &&
                    mode == SelectionMode::Edge) {
           result.hit = pick_select_edge_loop(
               picking_objects, mode, operation, request.ray, active_object_id,
               request.pick_options, request.object_bounds,
-              request.face_geometry);
+              request.face_geometry, request.object_transforms);
         } else if (multi_click && mode == SelectionMode::Vertex) {
           result.hit = pick_select_all_vertices(
               picking_objects, mode, operation, request.ray, active_object_id,
               request.pick_options, request.object_bounds,
-              request.face_geometry);
+              request.face_geometry, request.object_transforms);
         } else {
           result.hit =
               pick_select(picking_objects, mode, operation, request.ray,
                           active_object_id, request.pick_options, true,
-                          request.object_bounds, request.face_geometry);
+                          request.object_bounds, request.face_geometry,
+                          request.object_transforms);
         }
         if (result.hit || !request.preserve_selection_on_miss) {
 		result.changed = apply_picked_selection_to_session(session, picking_objects, mode, active_object_id);

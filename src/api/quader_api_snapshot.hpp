@@ -37,6 +37,9 @@ struct QuaderEntitySnapshot {
   bool is_scene_root = false;
   bool has_scene_settings = false;
   bool has_modeling_object = false;
+  bool is_instance_definition = false;
+  bool has_instance_occurrence = false;
+  EntityId instance_definition = kInvalidEntityId;
   AssetId mesh = kInvalidAssetId;
   AssetId material = kInvalidAssetId;
   QuaderLightComponent light;

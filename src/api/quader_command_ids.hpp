@@ -37,6 +37,10 @@ inline constexpr QuaderCommandId kDeleteSelection{"edit.delete"};
 inline constexpr QuaderCommandId kCopySelection{"edit.copy"};
 inline constexpr QuaderCommandId kPasteSelection{"edit.paste"};
 inline constexpr QuaderCommandId kDuplicateSelection{"edit.duplicate"};
+inline constexpr QuaderCommandId kEditCreateInstance{"edit.create_instance"};
+inline constexpr QuaderCommandId kEditFlattenInstance{"edit.flatten_instance"};
+inline constexpr QuaderCommandId kEditExitInstanceEdit{
+    "edit.exit_instance_edit"};
 inline constexpr QuaderCommandId kGroupSelection{"edit.group"};
 inline constexpr QuaderCommandId kUngroupSelection{"edit.ungroup"};
 inline constexpr QuaderCommandId kApplyMaterial{"edit.apply_material"};
@@ -260,6 +264,9 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kCopySelection,
     kPasteSelection,
     kDuplicateSelection,
+    kEditCreateInstance,
+    kEditFlattenInstance,
+    kEditExitInstanceEdit,
     kGroupSelection,
     kUngroupSelection,
     kApplyMaterial,

@@ -16,6 +16,7 @@
 #include "scene/scene_entity_naming.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -31,6 +32,20 @@ namespace {
 
 constexpr std::uint64_t kProjectedMeshSignatureSeed = 1469598103934665603ull;
 constexpr std::uint64_t kProjectedMeshSignaturePrime = 1099511628211ull;
+
+std::uint64_t authored_topology_byte_size(
+    const quader_poly::Document &document) {
+  std::uint64_t bytes = sizeof(quader_poly::Document) +
+                        document.vertices.size() * sizeof(quader_poly::Vertex) +
+                        document.faces.size() * sizeof(quader_poly::Face) +
+                        document.hard_normal_edges.size() *
+                            sizeof(quader_poly::Edge);
+  for (const quader_poly::Face &face : document.faces) {
+    bytes += face.vertices.size() * sizeof(quader_poly::ElementId);
+    bytes += face.uvs.size() * sizeof(QVec2);
+  }
+  return bytes;
+}
 
 std::uint64_t mix_projected_mesh_signature(std::uint64_t hash,
                                            std::uint64_t value) {
@@ -68,8 +83,10 @@ std::uint64_t mix_projected_mesh_signature(std::uint64_t hash, QVec3 value) {
 
 std::uint64_t
 projected_mesh_signature(const quader_editor_core::PolygonObject &object) {
-  std::uint64_t hash =
-      mix_projected_mesh_signature(kProjectedMeshSignatureSeed, object.id);
+  // Object identity is deliberately excluded. Independently editable
+  // duplicates with the same immutable topology must resolve to the same
+  // compiled-content signature until one of them performs a real edit.
+  std::uint64_t hash = kProjectedMeshSignatureSeed;
   hash = mix_projected_mesh_signature(
       hash, static_cast<std::uint64_t>(object.document.vertices.size()));
   hash = mix_projected_mesh_signature(
@@ -222,13 +239,26 @@ const ProjectedMeshPlan *find_projected_mesh_plan(
 std::optional<std::vector<ProjectedMeshPlan>> build_projected_mesh_plans(
     const quader_editor_core::EditorSession &session,
     const SceneDocument &scene, const AssetRegistry &assets,
-    const SceneModelingSyncService &scene_sync) {
+    const SceneModelingSyncService &scene_sync,
+    ModelingMeshSyncStats &stats) {
+  stats = {};
   std::vector<ProjectedMeshPlan> plans;
   plans.reserve(session.objects().size());
   std::unordered_set<int> planned_objects;
+  std::unordered_map<std::uintptr_t, std::uint64_t>
+      signature_by_topology_storage;
+  std::unordered_map<std::uintptr_t, MeshAsset> compiled_by_topology_storage;
+  std::unordered_set<std::uintptr_t> accounted_compiled_payloads;
   SceneEntityNameAllocator scene_names(scene);
 
+  const auto account_compiled_payload = [&](const MeshAsset &mesh) {
+    if (accounted_compiled_payloads.insert(mesh.geometry_token()).second) {
+      stats.unique_compiled_payload_bytes += mesh.geometry_byte_size();
+    }
+  };
+
   for (const quader_editor_core::PolygonObject &object : session.objects()) {
+    ++stats.participant_count;
     if (!planned_objects.insert(object.id).second) {
       return std::nullopt;
     }
@@ -236,7 +266,18 @@ std::optional<std::vector<ProjectedMeshPlan>> build_projected_mesh_plans(
     ProjectedMeshPlan plan;
     plan.modeling_object_id = object.id;
     plan.material_slot = static_cast<std::uint32_t>(object.material_id);
-    plan.signature = projected_mesh_signature(object);
+    const std::uintptr_t topology_storage = object.document.storage_token();
+    const auto cached_signature =
+        signature_by_topology_storage.find(topology_storage);
+    if (cached_signature != signature_by_topology_storage.end()) {
+      plan.signature = cached_signature->second;
+    } else {
+      plan.signature = projected_mesh_signature(object);
+      signature_by_topology_storage.emplace(topology_storage, plan.signature);
+      ++stats.unique_topology_count;
+      stats.unique_authored_topology_bytes +=
+          authored_topology_byte_size(object.document.read());
+    }
 
     const std::optional<EntityId> existing =
         scene_sync.object_map().entity_for_modeling_object(object.id);
@@ -268,11 +309,31 @@ std::optional<std::vector<ProjectedMeshPlan>> build_projected_mesh_plans(
         scene_sync.projected_mesh_signature_matches(object.id,
                                                     plan.signature)) {
       plan.installed_mesh = current_mesh;
+      account_compiled_payload(*assets.mesh(current_mesh));
       plans.push_back(std::move(plan));
       continue;
     }
 
-    MeshAsset projected = MeshProjectionService::compile_object_mesh(object);
+    MeshAsset projected;
+    const auto cached_projection =
+        compiled_by_topology_storage.find(topology_storage);
+    if (cached_projection != compiled_by_topology_storage.end()) {
+      projected = clone_mesh_asset_payload(cached_projection->second);
+      ++stats.reused_compilation_count;
+    } else {
+      const auto compile_begin = std::chrono::steady_clock::now();
+      projected = MeshProjectionService::compile_object_mesh(object);
+      stats.compile_time_microseconds +=
+          static_cast<std::uint64_t>(std::chrono::duration_cast<
+                                         std::chrono::microseconds>(
+                                         std::chrono::steady_clock::now() -
+                                         compile_begin)
+                                         .count());
+      compiled_by_topology_storage.emplace(
+          topology_storage, clone_mesh_asset_payload(projected));
+      ++stats.compiled_topology_count;
+    }
+    account_compiled_payload(projected);
     projected.name = plan.scene_name;
     if (!assets.validate_mesh(projected).ok) {
       return std::nullopt;
@@ -750,6 +811,35 @@ void ModelingMeshSyncService::apply_scene_transforms(
   scene.set_transforms(transforms);
 }
 
+bool ModelingMeshSyncService::place_created_scene_object(
+    SceneDocument &scene, EntityId entity, EntityId parent,
+    const TransformComponent &local_transform) const {
+  if (!scene.exists(entity) || !scene.exists(parent) ||
+      !scene.set_parent(entity, parent, false)) {
+    return false;
+  }
+  scene.set_transform(entity, local_transform);
+  return true;
+}
+
+void ModelingMeshSyncService::rollback_created_scene_object(
+    SceneDocument &scene, AssetRegistry &assets,
+    SceneModelingSyncService &scene_sync, int modeling_object_id,
+    EntityId entity, AssetId mesh) const {
+  ModelingObjectRuntimeMap &object_map = scene_sync.object_map();
+  if (object_map.entity_for_modeling_object(modeling_object_id) == entity) {
+    object_map.unbind_object(modeling_object_id);
+  }
+  if (scene.exists(entity)) {
+    (void)scene.destroy_entity(entity);
+  }
+  if (mesh != kInvalidAssetId) {
+    (void)assets.remove_mesh(mesh);
+  }
+  scene_sync.forget_projected_mesh_signature(modeling_object_id);
+  scene_sync.invalidate_scene_objects();
+}
+
 void ModelingMeshSyncService::establish_loaded_scene_sync_baseline(
     const quader_editor_core::EditorSession &session,
     SceneModelingSyncService &scene_sync) const {
@@ -768,11 +858,36 @@ bool ModelingMeshSyncService::sync_scene_objects_from_modeling(
   QDR_PROFILE_FUNCTION();
   if (!force && scene_sync.scene_objects_synced_for_current_modeling_content(
                     session, scene, assets)) {
+    last_sync_stats_ = {};
+    last_sync_stats_.participant_count = session.objects().size();
+    last_sync_stats_.skipped_unchanged = true;
+    std::unordered_set<std::uintptr_t> authored_payloads;
+    std::unordered_set<std::uintptr_t> compiled_payloads;
+    for (const quader_editor_core::PolygonObject &object : session.objects()) {
+      if (authored_payloads.insert(object.document.storage_token()).second) {
+        ++last_sync_stats_.unique_topology_count;
+        last_sync_stats_.unique_authored_topology_bytes +=
+            authored_topology_byte_size(object.document.read());
+      }
+      const std::optional<EntityId> entity =
+          scene_sync.object_map().entity_for_modeling_object(object.id);
+      const MeshComponent *component =
+          entity.has_value() ? scene.mesh(*entity) : nullptr;
+      const MeshAsset *mesh = component != nullptr
+                                  ? assets.mesh(component->mesh)
+                                  : nullptr;
+      if (mesh != nullptr &&
+          compiled_payloads.insert(mesh->geometry_token()).second) {
+        last_sync_stats_.unique_compiled_payload_bytes +=
+            mesh->geometry_byte_size();
+      }
+    }
     return true;
   }
 
   std::optional<std::vector<ProjectedMeshPlan>> mesh_plans =
-      build_projected_mesh_plans(session, scene, assets, scene_sync);
+      build_projected_mesh_plans(session, scene, assets, scene_sync,
+                                 last_sync_stats_);
   if (!mesh_plans.has_value()) {
     scene_sync.invalidate_scene_objects();
     return false;

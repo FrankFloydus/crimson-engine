@@ -8,7 +8,10 @@
 #include "assets/mesh_asset.hpp"
 #include "assets/texture_asset.hpp"
 #include "core/color_space.hpp"
+#include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
+#include "editor/projection/selection_overlay_projection.hpp"
 #include "render/light_renderable_cache.hpp"
+#include "render/instance_batch_planner.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_factory.hpp"
 #include "render/render_signature_builder.hpp"
@@ -23,6 +26,8 @@
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/overlay/overlay_renderable_cache.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
+#include "render/overlay/instance_selection_overlay_cache.hpp"
+#include "render/overlay/scene_wireframe_overlay_cache.hpp"
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_bounds.hpp"
@@ -103,7 +108,8 @@ ViewportOverlayCamera test_perspective_overlay_camera() {
 MeshAsset make_overlay_triangle_mesh() {
   MeshAsset mesh;
   mesh.name = "Overlay Triangle";
-  mesh.vertices = {
+  MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices = {
       MeshVertex{.position = {-0.5f, 0.0f, 0.0f},
                  .normal = {0.0f, 1.0f, 0.0f},
                  .uv = {0.0f, 0.0f}},
@@ -114,8 +120,8 @@ MeshAsset make_overlay_triangle_mesh() {
                  .normal = {0.0f, 1.0f, 0.0f},
                  .uv = {0.5f, 1.0f}},
   };
-  mesh.indices = {0u, 1u, 2u};
-  mesh.primitives = {MeshPrimitiveSpan{
+  geometry.indices = {0u, 1u, 2u};
+  geometry.primitives = {MeshPrimitiveSpan{
       .index_offset = 0u, .index_count = 3u, .material_slot = 0u}};
   return mesh;
 }
@@ -123,7 +129,8 @@ MeshAsset make_overlay_triangle_mesh() {
 MeshAsset make_authored_quad_mesh() {
   MeshAsset mesh;
   mesh.name = "Authored Quad";
-  mesh.vertices = {
+  MeshGeometryPayload &geometry = mesh.edit_geometry();
+  geometry.vertices = {
       MeshVertex{.position = {-1.0f, 0.0f, -1.0f},
                  .normal = {0.0f, 1.0f, 0.0f},
                  .uv = {0.0f, 0.0f}},
@@ -137,15 +144,15 @@ MeshAsset make_authored_quad_mesh() {
                  .normal = {0.0f, 1.0f, 0.0f},
                  .uv = {0.0f, 1.0f}},
   };
-  mesh.indices = {0u, 1u, 2u, 0u, 2u, 3u};
-  mesh.primitives = {MeshPrimitiveSpan{
+  geometry.indices = {0u, 1u, 2u, 0u, 2u, 3u};
+  geometry.primitives = {MeshPrimitiveSpan{
       .index_offset = 0u, .index_count = 6u, .material_slot = 0u}};
   quader_poly::Document document;
   document.vertices = {
-      {.id = 1u, .position = mesh.vertices[0].position},
-      {.id = 2u, .position = mesh.vertices[1].position},
-      {.id = 3u, .position = mesh.vertices[2].position},
-      {.id = 4u, .position = mesh.vertices[3].position},
+      {.id = 1u, .position = geometry.vertices[0].position},
+      {.id = 2u, .position = geometry.vertices[1].position},
+      {.id = 3u, .position = geometry.vertices[2].position},
+      {.id = 4u, .position = geometry.vertices[3].position},
   };
   document.faces.push_back({.id = 1u, .vertices = {1u, 2u, 3u, 4u}});
   mesh.has_authored_polygon_document = true;
@@ -439,14 +446,15 @@ TEST(RenderSignatureBuilderTests, BuildsOverlayFrameLayerSignaturesInOnePass) {
 
 TEST(MeshAssetTests, CoalescesContiguousPrimitiveSpansByMaterialSlotForRenderSubmission) {
     MeshAsset mesh;
-    mesh.indices = {
+    MeshGeometryPayload &geometry = mesh.edit_geometry();
+    geometry.indices = {
             0u, 1u, 2u,
             3u, 4u, 5u,
             6u, 7u, 8u,
             9u, 10u, 11u,
             12u, 13u, 14u,
     };
-    mesh.primitives = {
+    geometry.primitives = {
         MeshPrimitiveSpan{
             .index_offset = 0u, .index_count = 3u, .material_slot = 0u},
         MeshPrimitiveSpan{
@@ -549,7 +557,7 @@ TEST(RenderSceneSnapshotTests, BuildsVisibleMeshLightAndMaterialRecords) {
             assets.mesh_revision(mesh).value);
   ASSERT_NE(assets.mesh(mesh), nullptr);
   EXPECT_EQ(renderable_entry->mesh.vertices.data(),
-            assets.mesh(mesh)->vertices.data());
+            assets.mesh(mesh)->geometry().vertices.data());
   EXPECT_EQ(renderable_entry->material_id, material);
   EXPECT_EQ(renderable_entry->material_revision,
             render_material_binding_signature(renderable_entry->material));
@@ -827,6 +835,14 @@ TEST(RenderHotPathTests, MeshSurfaceGridSignatureIsNarrowAndStable) {
   ASSERT_TRUE(recolored.set_color(ViewportColorSettingId::MeshGridMinor,
                                   {0.2f, 0.4f, 0.6f, 0.8f}));
   EXPECT_NE(mesh_surface_grid_signature(1.0f, recolored), initial);
+
+  ViewportSettings instance_context_recolored = defaults;
+  ASSERT_TRUE(instance_context_recolored.set_color(
+      ViewportColorSettingId::InstanceEditContext,
+      {0.15f, 0.25f, 0.35f, 0.30f}));
+  EXPECT_NE(mesh_surface_grid_signature(1.0f, instance_context_recolored),
+            initial)
+      << "the configurable edit-context tint must invalidate material state";
 }
 
 TEST(RenderHotPathTests, SrgbByteLookupPreservesReferenceConversion) {
@@ -1553,8 +1569,9 @@ TEST(RenderOverlaySnapshotCacheTests,
   EXPECT_EQ(cache.stats().selection_world_bounds_translation_reuse_count, 1u);
 
   ASSERT_TRUE(assets.update_mesh(mesh, [](MeshAsset &updated) {
-    updated.vertices.front().position = {-4.0f, -3.0f, -2.0f};
-    updated.vertices.back().position = {6.0f, 5.0f, 7.0f};
+    MeshGeometryPayload &geometry = updated.edit_geometry();
+    geometry.vertices.front().position = {-4.0f, -3.0f, -2.0f};
+    geometry.vertices.back().position = {6.0f, 5.0f, 7.0f};
   }));
   const std::optional<SceneBounds> expected =
       entity_world_bounds(document, assets, entity);
@@ -1812,9 +1829,9 @@ TEST(RenderSceneSnapshotTests, BuildsValueSpanRecordsAndTracksDirtyState) {
   EXPECT_EQ(renderable_record->mesh.mesh_revision,
             assets.mesh(mesh)->revision.value);
   EXPECT_EQ(renderable_record->mesh.vertices.data(),
-            assets.mesh(mesh)->vertices.data());
+            assets.mesh(mesh)->geometry().vertices.data());
   EXPECT_EQ(renderable_record->mesh.indices.size(),
-            assets.mesh(mesh)->indices.size());
+            assets.mesh(mesh)->geometry().indices.size());
   EXPECT_EQ(renderable_record->material_id, material);
   EXPECT_EQ(renderable_record->material_revision,
             render_material_binding_signature(renderable_record->material));
@@ -1874,7 +1891,7 @@ TEST(RenderSceneSnapshotTests, BuildsValueSpanRecordsAndTracksDirtyState) {
   EXPECT_FALSE(moved_record->binding_dirty);
 
   MeshAsset replacement = make_overlay_triangle_mesh();
-  replacement.vertices.front().rgba = 0xff00ffffu;
+  replacement.edit_geometry().vertices.front().rgba = 0xff00ffffu;
   ASSERT_TRUE(assets.replace_mesh(mesh, std::move(replacement)));
   const RenderSceneSnapshot replaced =
       build_render_scene_snapshot(document, assets,
@@ -1966,7 +1983,7 @@ TEST(RenderSceneSnapshotTests,
 
   MeshAsset first_geometry = make_overlay_triangle_mesh();
   MeshAsset second_geometry = make_overlay_triangle_mesh();
-  second_geometry.vertices.front().position.x += 100.0f;
+  second_geometry.edit_geometry().vertices.front().position.x += 100.0f;
   const AssetId first_mesh = first_assets.add_mesh(std::move(first_geometry));
   const AssetId second_mesh =
       second_assets.add_mesh(std::move(second_geometry));
@@ -2036,7 +2053,10 @@ TEST(RenderSceneSnapshotTests,
   document.set_mesh(first, MeshComponent{.mesh = mesh});
   document.set_material(first, MaterialComponent{.material = material});
   const EntityId second = document.create_entity("Second", EntityKind::Mesh);
-  document.set_mesh(second, MeshComponent{.mesh = mesh});
+  // Keep this transform-refresh fixture on the standalone-record path. Equal
+  // ordinary payloads are now intentionally folded into explicit instance
+  // batches and have dedicated coverage below.
+  document.set_mesh(second, MeshComponent{.mesh = alternate_mesh});
   document.set_material(second, MaterialComponent{.material = material});
   const EntityId light = document.create_entity("Light", EntityKind::Light);
   document.set_light(light, LightComponent{.type = LightType::Point});
@@ -2109,7 +2129,7 @@ TEST(RenderSceneSnapshotTests,
   document.set_light(light, changed_light);
   expect_rejected_and_rebuild("light edit");
 
-  document.set_mesh(second, MeshComponent{.mesh = alternate_mesh});
+  document.set_mesh(second, MeshComponent{.mesh = mesh});
   expect_rejected_and_rebuild("mesh binding edit");
 
   const EntityId created =
@@ -2128,7 +2148,7 @@ TEST(RenderSceneSnapshotTests,
   expect_rejected_and_rebuild("hierarchy edit");
 
   MeshAsset replacement = make_authored_quad_mesh();
-  replacement.vertices.front().rgba = 0xff00ffffu;
+  replacement.edit_geometry().vertices.front().rgba = 0xff00ffffu;
   ASSERT_TRUE(assets.replace_mesh(alternate_mesh, std::move(replacement)));
   expect_rejected_and_rebuild("asset edit");
 
@@ -3524,4 +3544,772 @@ TEST(ViewportRenderPassCoordinatorTests, SeparatesSceneAndOverlayLayerMasks) {
     EXPECT_EQ(coordinator.scene_visible_layer_mask(), 0u);
     EXPECT_EQ(coordinator.overlay_visible_layer_mask(), grid_layer_mask);
     EXPECT_EQ(coordinator.visible_layer_mask(), grid_layer_mask);
+}
+
+TEST(RenderInstanceBatchPlannerTests,
+     ChunksTwoHundredPrimitiveOccurrencesAtDeviceLimit) {
+  RenderInstancePrimitiveKey key{
+      .geometry_payload = 101u,
+      .material_payload = 202u,
+      .index_offset = 0u,
+      .index_count = 36u,
+      .layer_mask = kViewportRenderedSceneLayerMask,
+      .cast_shadows = true,
+      .receive_shadows = true,
+  };
+  const RenderInstanceBounds local_bounds{
+      .min = {-1.0f, -1.0f, -1.0f},
+      .max = {1.0f, 1.0f, 1.0f},
+      .present = true,
+  };
+  std::vector<RenderInstancePrimitiveOccurrence> occurrences;
+  occurrences.reserve(200u);
+  for (std::uint64_t index = 0u; index < 200u; ++index) {
+    QMat4 transform;
+    transform.values[12] = static_cast<float>(index * 2u);
+    occurrences.push_back({
+        .key = key,
+        .occurrence = 1'000u + index,
+        .world_transform = transform,
+        .local_bounds = local_bounds,
+    });
+  }
+
+  const RenderInstanceBatchPlan plan =
+      plan_render_instance_batches(occurrences, 64u);
+
+  ASSERT_EQ(plan.chunks.size(), 4u);
+  EXPECT_EQ(plan.occurrence_count, 200u);
+  EXPECT_EQ(plan.chunks[0].world_transforms.size(), 64u);
+  EXPECT_EQ(plan.chunks[1].world_transforms.size(), 64u);
+  EXPECT_EQ(plan.chunks[2].world_transforms.size(), 64u);
+  EXPECT_EQ(plan.chunks[3].world_transforms.size(), 8u);
+  EXPECT_EQ(plan.chunks[0].occurrences.front(), 1'000u);
+  EXPECT_EQ(plan.chunks[3].occurrences.back(), 1'199u);
+  ASSERT_TRUE(plan.chunks[0].world_bounds.present);
+  EXPECT_FLOAT_EQ(plan.chunks[0].world_bounds.min.x, -1.0f);
+  EXPECT_FLOAT_EQ(plan.chunks[0].world_bounds.max.x, 127.0f);
+  ASSERT_TRUE(plan.chunks[3].world_bounds.present);
+  EXPECT_FLOAT_EQ(plan.chunks[3].world_bounds.min.x, 383.0f);
+  EXPECT_FLOAT_EQ(plan.chunks[3].world_bounds.max.x, 399.0f);
+}
+
+TEST(RenderInstanceBatchPlannerTests,
+     GroupsByPayloadAndClassifiesTransformOnlyUpdates) {
+  const RenderInstancePrimitiveKey first_key{
+      .geometry_payload = 11u,
+      .material_payload = 22u,
+      .index_count = 3u,
+  };
+  RenderInstancePrimitiveKey second_key = first_key;
+  second_key.material_payload = 33u;
+  const RenderInstanceBounds bounds{
+      .min = {0.0f, 0.0f, 0.0f},
+      .max = {1.0f, 1.0f, 1.0f},
+      .present = true,
+  };
+  std::vector<RenderInstancePrimitiveOccurrence> occurrences{
+      {.key = first_key, .occurrence = 7u, .local_bounds = bounds},
+      {.key = second_key, .occurrence = 9u, .local_bounds = bounds},
+      {.key = first_key, .occurrence = 8u, .local_bounds = bounds},
+  };
+  const RenderInstanceBatchPlan before =
+      plan_render_instance_batches(occurrences, 64u);
+  ASSERT_EQ(before.chunks.size(), 2u);
+  EXPECT_EQ(before.chunks[0].occurrences,
+            (std::vector<std::uint64_t>{7u, 8u}));
+  EXPECT_EQ(before.chunks[1].occurrences,
+            (std::vector<std::uint64_t>{9u}));
+  EXPECT_EQ(classify_instance_batch_update(before, before),
+            RenderInstanceBatchUpdateKind::Unchanged);
+
+  occurrences[2].world_transform.values[13] = 5.0f;
+  const RenderInstanceBatchPlan moved =
+      plan_render_instance_batches(occurrences, 64u);
+  EXPECT_EQ(classify_instance_batch_update(before, moved),
+            RenderInstanceBatchUpdateKind::TransformsOnly);
+
+  occurrences[2].key.index_count = 6u;
+  const RenderInstanceBatchPlan changed_payload =
+      plan_render_instance_batches(occurrences, 64u);
+  EXPECT_EQ(classify_instance_batch_update(moved, changed_payload),
+            RenderInstanceBatchUpdateKind::Rebuild);
+}
+
+TEST(RenderInstanceBatchPlannerTests,
+     CoversOneSixtyFourSixtyFiveAndTwoHundredOccurrences) {
+  const RenderInstancePrimitiveKey key{
+      .geometry_payload = 5u,
+      .material_payload = 6u,
+      .index_count = 3u,
+  };
+  const RenderInstanceBounds bounds{
+      .min = {-0.5f, -0.5f, -0.5f},
+      .max = {0.5f, 0.5f, 0.5f},
+      .present = true,
+  };
+  /// Describes one participant count and its expected device-cap chunks.
+  struct Case final {
+    std::size_t occurrence_count;
+    std::vector<std::size_t> chunk_sizes;
+  };
+  const std::array<Case, 4u> cases{{
+      {1u, {1u}},
+      {64u, {64u}},
+      {65u, {64u, 1u}},
+      {200u, {64u, 64u, 64u, 8u}},
+  }};
+  for (const Case &test_case : cases) {
+    std::vector<RenderInstancePrimitiveOccurrence> occurrences;
+    occurrences.reserve(test_case.occurrence_count);
+    for (std::size_t index = 0u; index < test_case.occurrence_count; ++index) {
+      QMat4 transform;
+      transform.values[12] = static_cast<float>(index);
+      occurrences.push_back({
+          .key = key,
+          .occurrence = static_cast<std::uint64_t>(index + 1u),
+          .world_transform = transform,
+          .local_bounds = bounds,
+      });
+    }
+    const RenderInstanceBatchPlan plan =
+        plan_render_instance_batches(occurrences, 64u);
+    ASSERT_EQ(plan.chunks.size(), test_case.chunk_sizes.size());
+    for (std::size_t index = 0u; index < test_case.chunk_sizes.size(); ++index) {
+      EXPECT_EQ(plan.chunks[index].occurrences.size(),
+                test_case.chunk_sizes[index]);
+    }
+  }
+}
+
+TEST(RenderInstanceBatchPlannerTests,
+     SplitsMaterialAndDimPresentationPayloads) {
+  RenderInstancePrimitiveKey base{
+      .geometry_payload = 17u,
+      .material_payload = 29u,
+      .index_count = 3u,
+  };
+  RenderInstancePrimitiveKey second_material = base;
+  second_material.material_payload = 30u;
+  RenderInstancePrimitiveKey dimmed = base;
+  dimmed.presentation_flags =
+      static_cast<std::uint8_t>(RenderInstancePresentationFlag::Dimmed);
+  const RenderInstanceBounds bounds{
+      .min = {-1.0f, -1.0f, -1.0f},
+      .max = {1.0f, 1.0f, 1.0f},
+      .present = true,
+  };
+  const std::array<RenderInstancePrimitiveOccurrence, 3u> occurrences{{
+      {.key = base, .occurrence = 1u, .local_bounds = bounds},
+      {.key = second_material, .occurrence = 2u, .local_bounds = bounds},
+      {.key = dimmed, .occurrence = 3u, .local_bounds = bounds},
+  }};
+
+  const RenderInstanceBatchPlan plan =
+      plan_render_instance_batches(occurrences, 64u);
+  ASSERT_EQ(plan.chunks.size(), 3u);
+  for (const RenderInstanceBatchChunk &chunk : plan.chunks) {
+    EXPECT_EQ(chunk.occurrences.size(), 1u);
+  }
+}
+
+TEST(RenderInstanceBatchPlannerTests,
+     MortonSortsCompatibleOccurrencesBeforeChunking) {
+  const RenderInstancePrimitiveKey key{
+      .geometry_payload = 41u,
+      .material_payload = 43u,
+      .index_count = 3u,
+  };
+  const RenderInstanceBounds bounds{
+      .min = {0.0f, 0.0f, 0.0f},
+      .max = {1.0f, 1.0f, 1.0f},
+      .present = true,
+  };
+  std::array<RenderInstancePrimitiveOccurrence, 4u> occurrences;
+  const std::array<float, 4u> positions{{30.0f, 0.0f, 20.0f, 10.0f}};
+  for (std::size_t index = 0u; index < occurrences.size(); ++index) {
+    QMat4 transform;
+    transform.values[12] = positions[index];
+    occurrences[index] = {
+        .key = key,
+        .occurrence = static_cast<std::uint64_t>(index + 1u),
+        .world_transform = transform,
+        .local_bounds = bounds,
+    };
+  }
+
+  const RenderInstanceBatchPlan plan =
+      plan_render_instance_batches(occurrences, 2u);
+  ASSERT_EQ(plan.chunks.size(), 2u);
+  EXPECT_EQ(plan.chunks[0].occurrences,
+            (std::vector<std::uint64_t>{2u, 4u}));
+  EXPECT_EQ(plan.chunks[1].occurrences,
+            (std::vector<std::uint64_t>{3u, 1u}));
+  EXPECT_FLOAT_EQ(plan.chunks[0].world_bounds.min.x, 0.0f);
+  EXPECT_FLOAT_EQ(plan.chunks[0].world_bounds.max.x, 11.0f);
+  EXPECT_FLOAT_EQ(plan.chunks[1].world_bounds.min.x, 20.0f);
+  EXPECT_FLOAT_EQ(plan.chunks[1].world_bounds.max.x, 31.0f);
+}
+
+TEST(RenderSceneWireframeBatchPlannerTests,
+     TwoHundredOrdinaryLogicalAssetsShareOnePayloadAndFourChunksPerPass) {
+  SceneDocument document;
+  AssetRegistry assets;
+  std::vector<AssetId> logical_assets;
+  logical_assets.reserve(200u);
+  std::uintptr_t shared_geometry_token = 0u;
+  for (std::size_t index = 0u; index < 200u; ++index) {
+    const AssetId asset = assets.add_mesh(make_overlay_triangle_mesh());
+    ASSERT_NE(asset, kInvalidAssetId);
+    const MeshAsset *mesh = assets.mesh(asset);
+    ASSERT_NE(mesh, nullptr);
+    if (index == 0u) {
+      shared_geometry_token = mesh->geometry_token();
+    }
+    EXPECT_EQ(mesh->geometry_token(), shared_geometry_token);
+    logical_assets.push_back(asset);
+
+    const EntityId entity = document.create_entity(
+        "Shared Mesh " + std::to_string(index + 1u), EntityKind::Mesh);
+    document.set_mesh(entity, MeshComponent{.mesh = asset});
+    document.set_transform(
+        entity,
+        TransformComponent{
+            .position = {static_cast<float>(index) * 2.0f, 0.0f, 0.0f},
+        });
+  }
+
+  const RenderSceneSnapshot scene =
+      build_render_scene_snapshot(document, assets);
+  EXPECT_TRUE(scene.meshes.empty())
+      << "compatible ordinary duplicates must not leave single-mesh proxies";
+  ASSERT_EQ(scene.instance_primitives.size(), 1u);
+  const RenderSceneInstancePrimitiveRecord &primitive =
+      scene.instance_primitives.front();
+  ASSERT_EQ(primitive.occurrences.size(), 200u);
+  EXPECT_EQ(primitive.key.geometry_payload, shared_geometry_token);
+
+  std::vector<RenderInstancePrimitiveOccurrence> base_occurrences;
+  base_occurrences.reserve(primitive.occurrences.size());
+  for (const RenderSceneInstanceOccurrenceRecord &occurrence :
+       primitive.occurrences) {
+    base_occurrences.push_back({
+        .key = primitive.key,
+        .occurrence = occurrence.occurrence,
+        .world_transform = occurrence.world_transform,
+        .local_bounds = primitive.local_bounds,
+    });
+  }
+  const RenderInstanceBatchPlan base_plan =
+      plan_render_instance_batches(base_occurrences, 64u);
+  ASSERT_EQ(base_plan.chunks.size(), 4u);
+  EXPECT_EQ(base_plan.chunks[0].occurrences.size(), 64u);
+  EXPECT_EQ(base_plan.chunks[1].occurrences.size(), 64u);
+  EXPECT_EQ(base_plan.chunks[2].occurrences.size(), 64u);
+  EXPECT_EQ(base_plan.chunks[3].occurrences.size(), 8u);
+
+  const RenderOverlaySceneWireframeSnapshot wire_snapshot =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
+  ASSERT_EQ(wire_snapshot.meshes.size(), 200u);
+  for (const RenderOverlayMeshSnapshot &mesh : wire_snapshot.meshes) {
+    ASSERT_NE(mesh.geometry_payload, nullptr);
+    EXPECT_EQ(reinterpret_cast<std::uintptr_t>(mesh.geometry_payload.get()),
+              shared_geometry_token);
+  }
+  const SceneWireframeOverlayBatchPlan wire_plan =
+      plan_scene_wireframe_overlay_batches(wire_snapshot, 64u);
+  EXPECT_EQ(wire_plan.participant_count, 200u);
+  EXPECT_EQ(wire_plan.unique_geometry_style_count, 1u);
+  ASSERT_EQ(wire_plan.batches.chunks.size(), 4u);
+  EXPECT_EQ(wire_plan.batches.chunks[0].occurrences.size(), 64u);
+  EXPECT_EQ(wire_plan.batches.chunks[1].occurrences.size(), 64u);
+  EXPECT_EQ(wire_plan.batches.chunks[2].occurrences.size(), 64u);
+  EXPECT_EQ(wire_plan.batches.chunks[3].occurrences.size(), 8u);
+}
+
+TEST(RenderSceneWireframeBatchPlannerTests,
+     CoversDeviceBoundaryStylesAndTransformOnlyUpdates) {
+  AssetRegistry assets;
+  const AssetId asset = assets.add_mesh(make_overlay_triangle_mesh());
+  const MeshAsset *mesh = assets.mesh(asset);
+  ASSERT_NE(mesh, nullptr);
+  const std::shared_ptr<const MeshGeometryPayload> payload =
+      mesh->geometry_payload();
+
+  const std::array<std::pair<std::size_t, std::vector<std::size_t>>, 4u>
+      cases{{
+          {1u, {1u}},
+          {64u, {64u}},
+          {65u, {64u, 1u}},
+          {200u, {64u, 64u, 64u, 8u}},
+      }};
+  for (const auto &[participant_count, expected_chunks] : cases) {
+    RenderOverlaySceneWireframeSnapshot snapshot{.layer_mask = 1u};
+    snapshot.meshes.reserve(participant_count);
+    for (std::size_t index = 0u; index < participant_count; ++index) {
+      QMat4 transform;
+      transform.values[12] = static_cast<float>(index * 2u);
+      snapshot.meshes.push_back({
+          .entity = static_cast<EntityId>(index + 1u),
+          .participant_token = static_cast<std::uint64_t>(index + 1u),
+          .mesh_id = asset,
+          .mesh_revision = mesh->revision.value,
+          .geometry_payload = payload,
+          .geometry_content_id = mesh->geometry_content_id(),
+          .world_transform = transform,
+          .vertices = payload->vertices,
+          .indices = payload->indices,
+      });
+    }
+    const SceneWireframeOverlayBatchPlan plan =
+        plan_scene_wireframe_overlay_batches(snapshot, 64u);
+    ASSERT_EQ(plan.batches.chunks.size(), expected_chunks.size());
+    for (std::size_t index = 0u; index < expected_chunks.size(); ++index) {
+      EXPECT_EQ(plan.batches.chunks[index].occurrences.size(),
+                expected_chunks[index]);
+    }
+
+    RenderOverlaySceneWireframeSnapshot moved = snapshot;
+    for (RenderOverlayMeshSnapshot &record : moved.meshes) {
+      record.world_transform.values[13] += 10.0f;
+    }
+    const SceneWireframeOverlayBatchPlan moved_plan =
+        plan_scene_wireframe_overlay_batches(moved, 64u);
+    EXPECT_EQ(classify_instance_batch_update(plan.batches,
+                                             moved_plan.batches),
+              RenderInstanceBatchUpdateKind::TransformsOnly);
+  }
+
+  RenderOverlaySceneWireframeSnapshot styled{.layer_mask = 1u};
+  styled.meshes.reserve(200u);
+  for (std::size_t index = 0u; index < 200u; ++index) {
+    styled.meshes.push_back({
+        .entity = static_cast<EntityId>(index + 1u),
+        .participant_token = static_cast<std::uint64_t>(index + 1u),
+        .mesh_id = asset,
+        .mesh_revision = mesh->revision.value,
+        .geometry_payload = payload,
+        .geometry_content_id = mesh->geometry_content_id(),
+        .selected = index == 0u,
+        .vertices = payload->vertices,
+        .indices = payload->indices,
+    });
+  }
+  const SceneWireframeOverlayBatchPlan split =
+      plan_scene_wireframe_overlay_batches(styled, 64u);
+  EXPECT_EQ(split.unique_geometry_style_count, 2u);
+  EXPECT_EQ(split.batches.chunks.size(), 5u)
+      << "one selected style chunk plus four unselected chunks";
+}
+
+TEST(RenderSceneWireframeBatchPlannerTests,
+     ExpandsFormalOccurrenceMembersAtComposedWorldTransforms) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId definition =
+      document.create_entity("Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId member =
+      document.create_entity("Member", EntityKind::Mesh);
+  document.set_mesh(member, MeshComponent{.mesh = mesh});
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+  document.set_transform(
+      member, TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+  const EntityId occurrence =
+      document.create_entity("Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(
+      occurrence, InstanceOccurrenceComponent{.definition = definition}));
+  document.set_transform(
+      occurrence, TransformComponent{.position = {10.0f, 0.0f, 0.0f}});
+
+  const RenderOverlaySceneWireframeSnapshot snapshot =
+      build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
+  ASSERT_EQ(snapshot.meshes.size(), 1u);
+  EXPECT_EQ(snapshot.meshes.front().entity, occurrence);
+  EXPECT_NE(snapshot.meshes.front().participant_token, 0u);
+  EXPECT_FLOAT_EQ(snapshot.meshes.front().world_transform.values[12], 12.0f);
+  const SceneWireframeOverlayBatchPlan plan =
+      plan_scene_wireframe_overlay_batches(snapshot, 64u);
+  EXPECT_EQ(plan.participant_count, 1u);
+  EXPECT_EQ(plan.unique_geometry_style_count, 1u);
+  ASSERT_EQ(plan.batches.chunks.size(), 1u);
+}
+
+TEST(RenderSceneWireframeBatchPlannerTests,
+     UsesInstancedDeviceDomainEndpointExpansionMaterial) {
+  const std::string material =
+      read_source_file("resources/materials/quader_selected_object_line.mat");
+  const std::string cache = read_source_file(
+      "src/render/overlay/scene_wireframe_overlay_cache.cpp");
+  EXPECT_NE(material.find("instanced : true"), std::string::npos);
+  EXPECT_NE(material.find("getWorldFromModelMatrix"), std::string::npos);
+  EXPECT_NE(material.find("getResolution"), std::string::npos);
+  EXPECT_NE(cache.find("filament::InstanceBuffer::Builder"),
+            std::string::npos);
+  EXPECT_NE(cache.find(".instances(transforms.size(), proxy.instance_buffer)"),
+            std::string::npos);
+}
+
+TEST(RenderInstanceEditPresentationTests,
+     ClassifiesActiveOccurrenceAndDimsEveryOtherParticipant) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+
+  const EntityId definition =
+      document.create_entity("Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId member =
+      document.create_entity("Canonical Mesh", EntityKind::Mesh);
+  document.set_mesh(member, MeshComponent{.mesh = mesh});
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+
+  const EntityId active =
+      document.create_entity("Active Occurrence", EntityKind::Instance);
+  const EntityId sibling =
+      document.create_entity("Sibling Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(
+      active, InstanceOccurrenceComponent{.definition = definition}));
+  ASSERT_TRUE(document.set_instance_occurrence(
+      sibling, InstanceOccurrenceComponent{.definition = definition}));
+  ASSERT_TRUE(document.set_selected(active, true));
+
+  const RenderInstanceEditScope scope{
+      .occurrence = active,
+      .definition = definition,
+  };
+  const RenderSceneSnapshot snapshot = build_render_scene_snapshot(
+      document, assets, {.instance_edit_scope = scope});
+
+  ASSERT_EQ(snapshot.instance_edit_scope, scope);
+  ASSERT_EQ(snapshot.instance_primitives.size(), 1u);
+  const RenderSceneInstancePrimitiveRecord &primitive =
+      snapshot.instance_primitives.front();
+  EXPECT_EQ(primitive.key.presentation_flags, 0u)
+      << "selection remains overlay-only and never contaminates the base key";
+  ASSERT_EQ(primitive.occurrences.size(), 2u);
+  const auto active_record = std::ranges::find_if(
+      primitive.occurrences,
+      [active](const auto &occurrence) {
+        return occurrence.entity_id == active;
+      });
+  const auto sibling_record = std::ranges::find_if(
+      primitive.occurrences,
+      [sibling](const auto &occurrence) {
+        return occurrence.entity_id == sibling;
+      });
+  ASSERT_NE(active_record, primitive.occurrences.end());
+  ASSERT_NE(sibling_record, primitive.occurrences.end());
+  EXPECT_TRUE(active_record->selected);
+  EXPECT_FALSE(active_record->dimmed);
+  EXPECT_FALSE(sibling_record->selected);
+  EXPECT_TRUE(sibling_record->dimmed);
+}
+
+TEST(RenderInstanceEditPresentationTests,
+     EmitsSelectedOccurrenceFillBeforeWireWithExactRenderPolicy) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+
+  const EntityId definition =
+      document.create_entity("Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId member =
+      document.create_entity("Canonical Mesh", EntityKind::Mesh);
+  document.set_mesh(member, MeshComponent{.mesh = mesh});
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+  document.set_transform(
+      member, TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+
+  const EntityId occurrence =
+      document.create_entity("Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(
+      occurrence, InstanceOccurrenceComponent{.definition = definition}));
+  document.set_transform(
+      occurrence, TransformComponent{.position = {10.0f, 0.0f, 0.0f}});
+  ASSERT_TRUE(document.set_selected(occurrence, true));
+
+  const RenderOverlaySelectedObjectSnapshot overlay =
+      build_render_overlay_selected_object_snapshot(document, assets, true);
+  EXPECT_TRUE(overlay.meshes.empty());
+  ASSERT_EQ(overlay.instance_selection_fills.size(), 1u);
+  ASSERT_EQ(overlay.instance_selection_wires.size(), 1u);
+  const RenderOverlayInstanceSelectionFillRecord &fill =
+      overlay.instance_selection_fills.front();
+  const RenderOverlayInstanceSelectionWireRecord &wire =
+      overlay.instance_selection_wires.front();
+  EXPECT_EQ(fill.semantic, RenderOverlaySemantic::InstanceSelectionFill);
+  EXPECT_EQ(fill.occurrence, occurrence);
+  EXPECT_EQ(fill.definition, definition);
+  EXPECT_EQ(fill.member, member);
+  EXPECT_EQ(fill.color, rgba8(201, 92, 88, 89));
+  EXPECT_TRUE(fill.depth_test);
+  EXPECT_FALSE(fill.depth_write);
+  EXPECT_FLOAT_EQ(fill.polygon_offset_scale, -1.0f);
+  EXPECT_FLOAT_EQ(fill.polygon_offset_constant, -1.0f);
+  EXPECT_EQ(fill.draws_before, ViewportOverlayLayer::SourceWire);
+  EXPECT_LT(fill.blend_order,
+            viewport_overlay_draw_order(ViewportOverlayLayer::SourceWire) *
+                64);
+  EXPECT_FLOAT_EQ(fill.world_transform.values[12], 12.0f);
+  EXPECT_EQ(wire.semantic, RenderOverlaySemantic::InstanceSelectionWire);
+  EXPECT_EQ(wire.occurrence, occurrence);
+  EXPECT_EQ(wire.definition, definition);
+  EXPECT_EQ(wire.member, member);
+  EXPECT_EQ(wire.color, kOverlaySelectionWireColor);
+  EXPECT_FLOAT_EQ(wire.line_width_pixels,
+                  kOverlaySelectionWireLineWidthPixels);
+  EXPECT_EQ(wire.layer, ViewportOverlayLayer::SourceWire);
+  EXPECT_GT(wire.blend_order, fill.blend_order);
+  EXPECT_EQ(wire.blend_order,
+            viewport_overlay_draw_order(ViewportOverlayLayer::SourceWire) *
+                64);
+  EXPECT_FLOAT_EQ(wire.world_transform.values[12], 12.0f);
+}
+
+TEST(RenderInstanceEditPresentationTests,
+     UnselectedOccurrencesEmitNoFillAndCompatibleSelectionsBatchTogether) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+
+  const EntityId definition =
+      document.create_entity("Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId member =
+      document.create_entity("Canonical Mesh", EntityKind::Mesh);
+  document.set_mesh(member, MeshComponent{.mesh = mesh});
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+
+  std::array<EntityId, 3u> occurrences{};
+  for (std::size_t index = 0u; index < occurrences.size(); ++index) {
+    occurrences[index] = document.create_entity(
+        "Occurrence " + std::to_string(index + 1u), EntityKind::Instance);
+    ASSERT_TRUE(document.set_instance_occurrence(
+        occurrences[index],
+        InstanceOccurrenceComponent{.definition = definition}));
+    document.set_transform(
+        occurrences[index],
+        TransformComponent{
+            .position = {static_cast<float>(index) * 10.0f, 0.0f, 0.0f},
+        });
+  }
+
+  const RenderOverlaySelectedObjectSnapshot unselected =
+      build_render_overlay_selected_object_snapshot(document, assets, true);
+  EXPECT_TRUE(unselected.instance_selection_fills.empty());
+  EXPECT_TRUE(unselected.instance_selection_wires.empty());
+
+  ASSERT_TRUE(document.set_selected(occurrences[0], true));
+  ASSERT_TRUE(document.set_selected(occurrences[2], true));
+  const RenderSceneSnapshot selected_base =
+      build_render_scene_snapshot(document, assets);
+  ASSERT_EQ(selected_base.instance_primitives.size(), 1u);
+  ASSERT_EQ(selected_base.instance_primitives.front().occurrences.size(), 3u)
+      << "selection overlays must not split the compatible base batch";
+
+  const RenderOverlaySelectedObjectSnapshot selected =
+      build_render_overlay_selected_object_snapshot(document, assets, true);
+  ASSERT_EQ(selected.instance_selection_fills.size(), 2u);
+  ASSERT_EQ(selected.instance_selection_wires.size(), 2u);
+  EXPECT_TRUE(std::ranges::none_of(
+      selected.instance_selection_fills,
+      [&](const RenderOverlayInstanceSelectionFillRecord &fill) {
+        return fill.occurrence == occurrences[1];
+      }));
+  EXPECT_TRUE(std::ranges::none_of(
+      selected.instance_selection_wires,
+      [&](const RenderOverlayInstanceSelectionWireRecord &wire) {
+        return wire.occurrence == occurrences[1];
+      }));
+  EXPECT_EQ(selected.instance_selection_fills[0].geometry_content_id,
+            selected.instance_selection_fills[1].geometry_content_id);
+  EXPECT_EQ(selected.instance_selection_wires[0].geometry_content_id,
+            selected.instance_selection_wires[1].geometry_content_id);
+
+  const InstanceSelectionOverlayBatchPlans batches =
+      plan_instance_selection_overlay_batches(selected, 64u);
+  ASSERT_EQ(batches.fills.chunks.size(), 1u);
+  ASSERT_EQ(batches.wires.chunks.size(), 1u);
+  EXPECT_EQ(batches.fills.chunks.front().occurrences.size(), 2u);
+  EXPECT_EQ(batches.wires.chunks.front().occurrences.size(), 2u);
+  EXPECT_EQ(batches.fills.occurrence_count, 2u);
+  EXPECT_EQ(batches.wires.occurrence_count, 2u);
+}
+
+TEST(RenderInstanceEditPresentationTests,
+     SelectedInstanceWireUsesAuthoredBoundariesWithoutTriangleDiagonal) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_authored_quad_mesh());
+
+  const EntityId definition =
+      document.create_entity("Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId member = document.create_entity("Quad", EntityKind::Mesh);
+  document.set_mesh(member, MeshComponent{.mesh = mesh});
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+  const EntityId occurrence =
+      document.create_entity("Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(
+      occurrence, InstanceOccurrenceComponent{.definition = definition}));
+  ASSERT_TRUE(document.set_selected(occurrence, true));
+
+  const RenderOverlaySelectedObjectSnapshot overlay =
+      build_render_overlay_selected_object_snapshot(document, assets, true);
+  ASSERT_EQ(overlay.instance_selection_wires.size(), 1u);
+  const RenderOverlayInstanceSelectionWireRecord &wire =
+      overlay.instance_selection_wires.front();
+  ASSERT_TRUE(wire.has_authored_polygon_geometry());
+  ASSERT_EQ(wire.indices.size(), 6u)
+      << "the shaded fill remains compiled as two triangles";
+
+  const std::vector<InstanceSelectionWireEdge> edges =
+      instance_selection_wire_edges(wire);
+  ASSERT_EQ(edges.size(), 4u)
+      << "only the authored quad boundary belongs in the selection wire";
+  const auto is_point = [](QVec3 value, float x, float z) {
+    return value.x == x && value.y == 0.0f && value.z == z;
+  };
+  const bool contains_compiled_diagonal = std::ranges::any_of(
+      edges, [&](const InstanceSelectionWireEdge &edge) {
+        return (is_point(edge.start, -1.0f, -1.0f) &&
+                is_point(edge.end, 1.0f, 1.0f)) ||
+               (is_point(edge.start, 1.0f, 1.0f) &&
+                is_point(edge.end, -1.0f, -1.0f));
+      });
+  EXPECT_FALSE(contains_compiled_diagonal);
+}
+
+TEST(RenderInstanceEditPresentationTests,
+     TransformOnlyMoveRefreshesPersistentSelectedFillAndWire) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+
+  const EntityId definition =
+      document.create_entity("Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId member =
+      document.create_entity("Canonical Mesh", EntityKind::Mesh);
+  document.set_mesh(member, MeshComponent{.mesh = mesh});
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+  document.set_transform(
+      member, TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+
+  const EntityId occurrence =
+      document.create_entity("Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(
+      occurrence, InstanceOccurrenceComponent{.definition = definition}));
+  document.set_transform(
+      occurrence, TransformComponent{.position = {10.0f, 0.0f, 0.0f}});
+  ASSERT_TRUE(document.set_selected(occurrence, true));
+
+  RenderOverlaySnapshotCache cache;
+  const RenderOverlayPersistentSnapshotUpdate initial =
+      cache.update_persistent(document, assets, true, 0u, {});
+  ASSERT_TRUE(initial.selected_object_changed);
+  ASSERT_NE(initial.selected_object, nullptr);
+  ASSERT_EQ(initial.selected_object->instance_selection_fills.size(), 1u);
+  ASSERT_EQ(initial.selected_object->instance_selection_wires.size(), 1u);
+  const MeshGeometryContentId content_id =
+      initial.selected_object->instance_selection_fills.front()
+          .geometry_content_id;
+  EXPECT_FLOAT_EQ(initial.selected_object->instance_selection_fills.front()
+                      .world_transform.values[12],
+                  12.0f);
+  EXPECT_FLOAT_EQ(initial.selected_object->instance_selection_wires.front()
+                      .world_transform.values[12],
+                  12.0f);
+
+  document.set_transform(
+      occurrence, TransformComponent{.position = {30.0f, 0.0f, 0.0f}});
+  const RenderOverlayPersistentSnapshotUpdate moved =
+      cache.update_persistent(document, assets, true, 0u, {});
+  ASSERT_TRUE(moved.selected_object_changed)
+      << "selected instance overlays must not freeze during gizmo drags";
+  ASSERT_NE(moved.selected_object, nullptr);
+  ASSERT_EQ(moved.selected_object->instance_selection_fills.size(), 1u);
+  ASSERT_EQ(moved.selected_object->instance_selection_wires.size(), 1u);
+  EXPECT_EQ(moved.selected_object->instance_selection_fills.front()
+                .geometry_content_id,
+            content_id);
+  EXPECT_EQ(moved.selected_object->instance_selection_wires.front()
+                .geometry_content_id,
+            content_id);
+  EXPECT_FLOAT_EQ(moved.selected_object->instance_selection_fills.front()
+                      .world_transform.values[12],
+                  32.0f);
+  EXPECT_FLOAT_EQ(moved.selected_object->instance_selection_wires.front()
+                      .world_transform.values[12],
+                  32.0f);
+  EXPECT_EQ(cache.stats().selected_object_build_count, 2u);
+
+  const RenderOverlayPersistentSnapshotUpdate stable =
+      cache.update_persistent(document, assets, true, 0u, {});
+  EXPECT_FALSE(stable.selected_object_changed);
+  EXPECT_EQ(cache.stats().selected_object_build_count, 2u);
+}
+
+TEST(RenderInstanceEditPresentationTests,
+     ActiveCanonicalMemberOverlayProjectsThroughOccurrenceTransform) {
+  SceneDocument document;
+  const EntityId definition =
+      document.create_entity("Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  document.set_transform(
+      definition, TransformComponent{.position = {100.0f, 0.0f, 0.0f}});
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId member =
+      document.create_entity("Canonical Mesh", EntityKind::Mesh);
+  document.set_mesh(member, MeshComponent{.mesh = 1u});
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+  document.set_transform(
+      member, TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+  const EntityId occurrence =
+      document.create_entity("Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(
+      occurrence, InstanceOccurrenceComponent{.definition = definition}));
+  document.set_transform(
+      occurrence, TransformComponent{.position = {10.0f, 0.0f, 0.0f}});
+
+  constexpr int kObjectId = 77;
+  ModelingObjectRuntimeMap object_map;
+  object_map.bind(kObjectId, member);
+  quader_editor_core::SelectionOverlayFrame runtime_frame;
+  runtime_frame.lines.push_back({
+      .layer = quader_editor_core::SelectionOverlayLayer::SourceWire,
+      .start = {0.0f, 0.0f, 0.0f},
+      .end = {1.0f, 0.0f, 0.0f},
+      .object_id = kObjectId,
+  });
+
+  const ViewportOverlayFrame outside_edit =
+      SelectionOverlayProjection::project_selection_overlay_frame(
+          runtime_frame, object_map, document,
+          quader_editor_core::SelectionMode::Edge);
+  EXPECT_TRUE(outside_edit.lines.empty())
+      << "hidden canonical definition geometry is not directly rendered";
+
+  const ViewportOverlayFrame in_edit =
+      SelectionOverlayProjection::project_selection_overlay_frame(
+          runtime_frame, object_map, document,
+          quader_editor_core::SelectionMode::Edge,
+          ModelingInstanceEditScope{
+              .occurrence = occurrence,
+              .definition = definition,
+          });
+  ASSERT_EQ(in_edit.lines.size(), 1u);
+  EXPECT_FLOAT_EQ(in_edit.lines.front().start.x, 12.0f);
+  EXPECT_FLOAT_EQ(in_edit.lines.front().end.x, 13.0f);
+  EXPECT_EQ(in_edit.lines.front().source,
+            ViewportOverlaySource::ComponentSelection);
 }

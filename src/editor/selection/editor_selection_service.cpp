@@ -118,13 +118,41 @@ ModelingSelectionMode EditorSelectionService::mode() const {
   return modeling_.selection_mode();
 }
 
+void EditorSelectionService::set_scene_selection_scope_policy(
+    SceneSelectionTargetResolver resolver, SceneSelectionScopeFilter filter) {
+  scene_target_resolver_ = std::move(resolver);
+  scene_scope_filter_ = std::move(filter);
+}
+
 DocumentCommandResult
 EditorSelectionService::set_scene_selection(std::span<const EntityId> entities,
                                             EntityId active) {
   QDR_PROFILE_FUNCTION();
   const ModelingSelectionSummary before = modeling_.selection_summary();
-  SceneSelectionState selection =
-      make_user_scene_selection(scene_, entities, active);
+  SceneSelectionState selection;
+  if (scene_target_resolver_ || scene_scope_filter_) {
+    std::vector<EntityId> resolved;
+    resolved.reserve(entities.size());
+    EntityId resolved_active = kInvalidEntityId;
+    for (const EntityId entity : entities) {
+      const EntityId target = scene_target_resolver_
+                                  ? scene_target_resolver_(entity)
+                                  : entity;
+      if (target == kInvalidEntityId ||
+          (scene_scope_filter_ && !scene_scope_filter_(target)) ||
+          std::find(resolved.begin(), resolved.end(), target) !=
+              resolved.end()) {
+        continue;
+      }
+      resolved.push_back(target);
+      if (entity == active || target == active) {
+        resolved_active = target;
+      }
+    }
+    selection = make_scene_selection(scene_, resolved, resolved_active);
+  } else {
+    selection = make_user_scene_selection(scene_, entities, active);
+  }
   DocumentCommandResult result = document_commands_.select_entities(
       std::move(selection.selected), selection.active,
       SceneSelectionApplicationMode::UndoableCommand);
@@ -187,6 +215,32 @@ EditorSelectionService::set_mode(ModelingSelectionMode mode) {
   return modeling_.set_selection_mode(mode);
 }
 
+bool EditorSelectionService::scene_target_selectable(EntityId entity) const {
+  if (entity == kInvalidEntityId || !scene_.exists(entity)) {
+    return false;
+  }
+  return scene_scope_filter_ ? scene_scope_filter_(entity)
+                             : scene_entity_selectable_for_user_selection(
+                                   scene_, entity);
+}
+
+std::vector<EntityId>
+EditorSelectionService::scene_bulk_candidates(ModelingSelectionMode mode) const {
+  if (!scene_scope_filter_ || mode != ModelingSelectionMode::Object) {
+    return user_selectable_scene_entities_for_mode(
+        scene_, scene_selection_bulk_mode(mode));
+  }
+
+  std::vector<EntityId> candidates;
+  for (const EntityId entity : scene_.entities()) {
+    if (scene_.is_scene_root(entity) || !scene_scope_filter_(entity)) {
+      continue;
+    }
+    candidates.push_back(entity);
+  }
+  return candidates;
+}
+
 ModelingCommandResult EditorSelectionService::select_all() {
   QDR_PROFILE_FUNCTION();
   const ModelingSelectionMode selection_mode = modeling_.selection_mode();
@@ -198,8 +252,7 @@ ModelingCommandResult EditorSelectionService::select_all() {
   std::vector<EntityId> selected;
   {
     QDR_PROFILE_SCOPE("Selection collect scene select all entities");
-    selected = user_selectable_scene_entities_for_mode(
-        scene_, scene_selection_bulk_mode(selection_mode));
+    selected = scene_bulk_candidates(selection_mode);
   }
   const EntityId active = selected.empty() ? kInvalidEntityId : selected.back();
   return modeling_command_result_from_document(
@@ -214,8 +267,7 @@ ModelingCommandResult EditorSelectionService::invert() {
 
   const std::vector<EntityId> current = scene_.selected_entities();
   std::vector<EntityId> selected;
-  for (const EntityId entity : user_selectable_scene_entities_for_mode(
-           scene_, scene_selection_bulk_mode(selection_mode))) {
+  for (const EntityId entity : scene_bulk_candidates(selection_mode)) {
     if (std::find(current.begin(), current.end(), entity) == current.end()) {
       selected.push_back(entity);
     }
@@ -400,7 +452,7 @@ EditorSelectionTarget EditorSelectionService::target_from_summary(
 ModelingSelectionSummary EditorSelectionService::scene_pick_selection(
     EntityId target_entity, ModelingSelectionMode mode,
     const ModelingPickSelectRequest &request) {
-  if (!scene_entity_selectable_for_user_selection(scene_, target_entity)) {
+  if (!scene_target_selectable(target_entity)) {
     target_entity = kInvalidEntityId;
   }
   const bool remove_selection =
@@ -443,7 +495,7 @@ ModelingSelectionSummary EditorSelectionService::scene_pick_selection(
         resolved.active);
   }
 
-  const ModelingSelectionSummary current = modeling_.selection_summary();
+  const ModelingSelectionSummary current = summary();
   return current.mode == mode ? current : scene_summary_for(mode);
 }
 
@@ -458,8 +510,15 @@ ModelingSelectionSummary EditorSelectionService::scene_box_selection(
       (baseline != nullptr && baseline->mode == mode)
           ? baseline->active_entity
           : scene_.primary_selection();
-  const std::vector<EntityId> selectable =
-      user_selectable_scene_entities(scene_, target_entities);
+  std::vector<EntityId> selectable;
+  selectable.reserve(target_entities.size());
+  for (const EntityId entity : target_entities) {
+    if (scene_target_selectable(entity) &&
+        std::find(selectable.begin(), selectable.end(), entity) ==
+            selectable.end()) {
+      selectable.push_back(entity);
+    }
+  }
   const SceneSelectionState resolved =
       resolve_scene_selection_edit(previous_selected, previous_active,
                                    selectable, to_scene_selection_edit(edit));
@@ -471,7 +530,7 @@ ModelingSelectionSummary EditorSelectionService::scene_box_selection(
         resolved.active);
   }
 
-  const ModelingSelectionSummary current = modeling_.selection_summary();
+  const ModelingSelectionSummary current = summary();
   return current.mode == mode ? current : scene_summary_for(mode);
 }
 

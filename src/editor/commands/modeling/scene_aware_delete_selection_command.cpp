@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -25,10 +26,12 @@ namespace {
  */
 struct SceneAwareDeleteState {
     std::vector<DocumentEntitySnapshot> roots;
+    std::vector<DocumentEntitySnapshot> orphan_definitions;
     DocumentSelectionState before_selection;
     ModelingSelectionMode before_mode = ModelingSelectionMode::Object;
     std::vector<int> modeling_object_ids;
     std::vector<EntityId> current_roots;
+    std::vector<EntityId> current_definition_roots;
     ModelingSessionMemento before_modeling;
     ModelingSessionMemento after_modeling;
     bool captured = false;
@@ -168,6 +171,7 @@ private:
     }
 
     state_.roots.reserve(roots.size());
+    std::unordered_set<EntityId> deleted_entities;
     for (const EntityId root : roots) {
       std::optional<DocumentEntitySnapshot> snapshot =
           document_command_capture_entity_snapshot(scene_, root);
@@ -178,8 +182,73 @@ private:
       }
       state_.roots.push_back(std::move(*snapshot));
       state_.current_roots.push_back(root);
+      const std::vector<EntityId> descendants = scene_.descendants(root, true);
+      deleted_entities.insert(descendants.begin(), descendants.end());
+    }
+
+    std::unordered_set<EntityId> affected_definitions;
+    for (const EntityId deleted : deleted_entities) {
+      const EntityId definition =
+          scene_.containing_instance_definition(deleted);
+      if (definition != kInvalidEntityId && definition != deleted) {
+        affected_definitions.insert(definition);
+      }
+    }
+    for (const EntityId definition : affected_definitions) {
+      const std::vector<EntityId> top_level_members =
+          scene_.children(definition);
+      if (!top_level_members.empty() &&
+          std::ranges::all_of(top_level_members, [&](EntityId member) {
+            return deleted_entities.contains(member);
+          })) {
+        return {
+            .ok = false,
+            .changed = false,
+            .message =
+                "An instance definition must retain at least one member.",
+        };
+      }
+    }
+
+    std::unordered_set<EntityId> captured_definitions;
+    for (const EntityId deleted : deleted_entities) {
+      const InstanceOccurrenceComponent *occurrence =
+          scene_.instance_occurrence(deleted);
+      if (occurrence == nullptr ||
+          !captured_definitions.insert(occurrence->definition).second) {
+        continue;
+      }
+      const std::vector<EntityId> occurrences =
+          scene_.instance_occurrences_for_definition(occurrence->definition);
+      const bool survives = std::ranges::any_of(
+          occurrences, [&](EntityId candidate) {
+            return !deleted_entities.contains(candidate);
+          });
+      if (survives) {
+        continue;
+      }
+      std::optional<DocumentEntitySnapshot> definition_snapshot =
+          document_command_capture_entity_snapshot(scene_,
+                                                   occurrence->definition);
+      if (!definition_snapshot.has_value()) {
+        return {.ok = false,
+                .changed = false,
+                .message = "Instance definition is missing."};
+      }
+      state_.orphan_definitions.push_back(std::move(*definition_snapshot));
+      state_.current_definition_roots.push_back(occurrence->definition);
     }
     state_.modeling_object_ids = snapshot_modeling_object_ids(state_.roots);
+    const std::vector<int> orphan_modeling_ids =
+        snapshot_modeling_object_ids(state_.orphan_definitions);
+    state_.modeling_object_ids.insert(state_.modeling_object_ids.end(),
+                                      orphan_modeling_ids.begin(),
+                                      orphan_modeling_ids.end());
+    std::ranges::sort(state_.modeling_object_ids);
+    state_.modeling_object_ids.erase(
+        std::unique(state_.modeling_object_ids.begin(),
+                    state_.modeling_object_ids.end()),
+        state_.modeling_object_ids.end());
     state_.before_modeling = runtime_.capture_modeling_memento();
     state_.captured = true;
     return {.ok = true, .changed = !state_.roots.empty()};
@@ -201,8 +270,12 @@ private:
   }
 
   ModelingCommandResult destroy_scene_aware_delete_roots() {
-    const bool changed = scene_.destroy_entities(state_.current_roots);
+    std::vector<EntityId> destroyed = state_.current_roots;
+    destroyed.insert(destroyed.end(), state_.current_definition_roots.begin(),
+                     state_.current_definition_roots.end());
+    const bool changed = scene_.destroy_entities(destroyed);
     state_.current_roots.clear();
+    state_.current_definition_roots.clear();
     invalidate_selection_overlay_caches();
     return {.ok = true, .changed = changed};
   }
@@ -269,6 +342,23 @@ private:
     }
 
     std::unordered_map<EntityId, EntityId> remapped_entities;
+    std::vector<EntityId> restored_definitions;
+    restored_definitions.reserve(state_.orphan_definitions.size());
+    for (const DocumentEntitySnapshot &snapshot :
+         state_.orphan_definitions) {
+      const EntityId parent = snapshot.original_parent != kInvalidEntityId &&
+                                      scene_.exists(snapshot.original_parent)
+                                  ? snapshot.original_parent
+                                  : kInvalidEntityId;
+      const EntityId restored = restore_scene_delete_snapshot(
+          scene_, runtime_, snapshot, parent, remapped_entities);
+      if (restored == kInvalidEntityId) {
+        return {.ok = false,
+                .changed = false,
+                .message = "Instance definition could not be restored."};
+      }
+      restored_definitions.push_back(restored);
+    }
     std::vector<EntityId> restored_roots;
     restored_roots.reserve(state_.roots.size());
     for (const DocumentEntitySnapshot &snapshot : state_.roots) {
@@ -287,6 +377,7 @@ private:
     }
 
     state_.current_roots = std::move(restored_roots);
+    state_.current_definition_roots = std::move(restored_definitions);
     if (runtime_.set_app_selection_mode) {
       runtime_.set_app_selection_mode(state_.before_mode);
     }
